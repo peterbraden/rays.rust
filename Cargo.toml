@@ -1,0 +1,8 @@
+[package]
+
+name = "rays"
+version = "0.0.1"
+
+[dependencies]
+image = "*"
+nalgebra = "*"

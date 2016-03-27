@@ -1,27 +1,20 @@
 extern crate image;
 extern crate nalgebra as na;
 
-mod camera;
 mod ray;
+mod scene;
+mod camera;
+
 
 use na::Vec3;
 
 fn main() {
     println!("Hello, world!");
-    let WIDTH = 50;
-    let HEIGHT = 100;
+    let s = scene::Scene::demo();
 
-    let c = camera::Camera::new(
-        Vec3::new(0f64,0f64,0f64),
-        Vec3::new(0f64,0f64,1f64),
-        Vec3::new(0f64,1f64,0f64),
-        35.0,
-        WIDTH, HEIGHT
-    );
-
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH{
-          println!("{:?}", c.get_ray(x, y));
+    for y in 0..s.height {
+        for x in 0..s.width {
+          println!("{:?}", s.camera.get_ray(x, y));
         }
     }
 }

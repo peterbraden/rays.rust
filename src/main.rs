@@ -5,9 +5,10 @@ mod ray;
 mod color;
 mod scene;
 mod camera;
-
+mod trace;
 
 use na::Vec3;
+use trace::trace;
 
 
 fn poorMansPaint(s: scene::Scene) { //, RenderContext ctx){
@@ -25,7 +26,7 @@ fn main() {
 
     for y in 0..s.height {
         for x in 0..s.width {
-          //println!("{:?}", s.camera.get_ray(x, y));
+          let c = trace( s.camera.get_ray(x, y), 0, &s);  
         }
     }
     poorMansPaint(s);

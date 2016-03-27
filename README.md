@@ -1,4 +1,6 @@
 # rays.rust
+[![Build
+Status](https://travis-ci.org/peterbraden/rays.rust.svg?branch=master)](https://travis-ci.org/peterbraden/rays.rust)
 A rust implementation of a raytracer.
 
 This is the latest in a series of raytracers I've implemented to learn languages

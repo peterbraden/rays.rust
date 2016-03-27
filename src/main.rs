@@ -1,4 +1,4 @@
-extern crate image;
+//extern crate image;
 extern crate nalgebra as na;
 
 mod ray;

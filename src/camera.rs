@@ -49,3 +49,38 @@ impl Camera {
         }
     }
 }
+
+
+macro_rules! assert_approx_eq(
+    ($a:expr, $b:expr) => ({
+    let (a, b) = (&$a, &$b);
+    assert!((*a - *b).abs() < 1.0e-6, "{} is not approximately equal to {}", *a, *b);
+}));
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use na::Vec3;
+
+    #[test]
+    fn get_ray() {
+        let width = 200;
+        let height = 100;
+
+        let c = Camera::new(
+            Vec3::new(0f64,0f64,0f64),
+            Vec3::new(0f64, 1f64, -1f64),
+            Vec3::new(0f64,1f64,0f64),
+            35.0,
+            width, height
+        );
+        
+        assert_approx_eq!(c.get_ray(10, 10).ro.x, 0f64);
+        assert_approx_eq!(c.get_ray(10, 10).ro.y, 1f64);
+        assert_approx_eq!(c.get_ray(10, 10).ro.z, -1f64);
+
+        assert_approx_eq!(c.get_ray(10, 10).rd.x, 4.5012398439372845f64);
+        assert_approx_eq!(c.get_ray(10, 10).rd.y, 7.501426591114969f64);
+        assert_approx_eq!(c.get_ray(10, 10).rd.z, 8.915640153488065f64);
+    }
+}

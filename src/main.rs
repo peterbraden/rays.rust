@@ -6,6 +6,7 @@ mod color;
 mod scene;
 mod camera;
 mod trace;
+mod rendercontext;
 
 use na::Vec3;
 use trace::trace;

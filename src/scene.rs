@@ -10,8 +10,8 @@ pub struct Scene {
 
 impl Scene {
     pub fn demo () -> Scene {
-        let width = 100i32;
-        let height = 50i32;
+        let width = 20i32;
+        let height = 10i32;
     
         let c = camera::Camera::new(
             Vec3::new(0f64,0f64,0f64),

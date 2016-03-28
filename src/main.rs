@@ -4,6 +4,8 @@ extern crate nalgebra as na;
 mod ray;
 mod color;
 mod intersection;
+mod sceneobject;
+mod sphere;
 mod scenegraph;
 mod scene;
 mod camera;

@@ -1,6 +1,7 @@
 use camera;
 use na::Vec3;
 use scenegraph::SceneGraph;
+use sphere::Sphere;
 
 
 pub struct Scene {
@@ -24,6 +25,8 @@ impl Scene {
         );
 
         let o = SceneGraph::new();
+        let s = Sphere::new(Vec3::new(0f64, 0f64, 0f64), 1f64);
+
 
 
         return Scene {

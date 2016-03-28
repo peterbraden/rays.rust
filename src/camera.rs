@@ -2,15 +2,15 @@ use na::{Vec3, Norm, Cross};
 use ray::Ray;
 
 pub struct Camera {
-    up: Vec3<f64>,
+//    up: Vec3<f64>,
     location: Vec3<f64>,
-    lookat: Vec3<f64>,
+//    lookat: Vec3<f64>,
 
     camx: Vec3<f64>,
     camy: Vec3<f64>,
     camz: Vec3<f64>,
 
-    angle: f64,
+ //angle: f64,
     tax: f64,
     tay: f64
 }
@@ -22,10 +22,10 @@ impl Camera {
         let camx = up.cross(&camz).normalize();
 
         Camera {
-            lookat: lookat,
+  //          lookat: lookat,
             location: location,
-            up: up,
-            angle: angle,
+  //          up: up,
+  //          angle: angle,
 
             camz: camz,
             camx: camx,

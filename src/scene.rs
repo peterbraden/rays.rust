@@ -1,11 +1,13 @@
 use camera;
 use na::Vec3;
+use scenegraph::SceneGraph;
 
 
 pub struct Scene {
     pub width: i32,
     pub height: i32,
-    pub camera: camera::Camera 
+    pub camera: camera::Camera,
+    pub objects: SceneGraph
 }
 
 impl Scene {
@@ -21,10 +23,14 @@ impl Scene {
             width, height
         );
 
+        let o = SceneGraph::new();
+
+
         return Scene {
             width: width,
             height: height,
-            camera: c
+            camera: c,
+            objects: o
         };
     }
 }

@@ -3,6 +3,8 @@ extern crate nalgebra as na;
 
 mod ray;
 mod color;
+mod intersection;
+mod scenegraph;
 mod scene;
 mod camera;
 mod trace;

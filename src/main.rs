@@ -8,16 +8,14 @@ mod camera;
 mod trace;
 mod rendercontext;
 
-use na::Vec3;
 use trace::trace;
 use rendercontext::RenderContext;
 
 
-fn poorMansPaint(ctx: &RenderContext) {
+fn poor_mans_paint(ctx: &RenderContext) {
     for y in 0 .. ctx.height {
         for x in 0 .. ctx.width {
-          let c = color::Color::new(0,0,0);
-          print!("{} ", c);
+          print!("{} ", ctx.get_pixel(x, y));
         }
         print!("\n");
     }
@@ -30,8 +28,8 @@ fn main() {
     for y in 0..s.height {
         for x in 0..s.width {
             let c = trace( s.camera.get_ray(x, y), 0, &s);  
-            rc.setPixel(x, y, c);
+            rc.set_pixel(x, y, c);
         }
     }
-    poorMansPaint(&rc);
+    poor_mans_paint(&rc);
 }

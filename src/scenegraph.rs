@@ -12,8 +12,7 @@ impl SceneGraph {
         }
     }
 
-    pub fn nearestIntersection(&self, r: Ray, max:f64, min:f64) -> Intersection {
-        let nil = Vec3::new(0f64,0f64,0f64);
-        Intersection { dist: max, point: nil, normal: nil } 
+    pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
+        return None
     }
 }

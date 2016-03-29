@@ -2,6 +2,7 @@ use sceneobject::SceneObject;
 use na::{Vec3, Norm, Dot};
 use ray::Ray;
 use intersection::Intersection;
+use material::Material;
 
 pub struct Sphere {
     center: Vec3<f64>,
@@ -19,19 +20,22 @@ impl Sphere{
 
 
 impl SceneObject for Sphere {
-    fn intersects(&self, r: &Ray) -> Option<Intersection> {
+    fn intersects(self, r: &Ray) -> Option<Intersection> {
         let dst = r.ro - self.center;
         let b = dst.dot(&r.rd.normalize());
         let c = dst.dot(&dst) - self.radius * self.radius;
         let d = b * b - c;
 
-        if (d > 0f64) {
+        if d > 0f64 {
             let dist = -b - d.sqrt();
             let point = r.ro + (r.rd.normalize() * dist);
 
             return Some(
                 Intersection {
-                    dist: dist, point: point,  normal: (point - self.center).normalize()
+                    dist: dist, 
+                    point: point,
+                    normal: (point - self.center).normalize(),
+                    object: Box::new(self)
                 })
         }
 
@@ -52,5 +56,9 @@ impl SceneObject for Sphere {
   pt = vec3_add(ro, vec3_scale(vec3_norm(rd), dist));
   return (Intersection) {dist, pt, normal(pt), this};
   */
+    }
+
+    fn get_material(self) -> Material {
+        Material::demo()
     }
 }

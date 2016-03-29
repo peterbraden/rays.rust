@@ -8,7 +8,9 @@ pub struct Scene {
     pub width: i32,
     pub height: i32,
     pub camera: camera::Camera,
-    pub objects: SceneGraph
+    pub objects: SceneGraph,
+
+    pub ambient: f64,
 }
 
 impl Scene {
@@ -33,7 +35,8 @@ impl Scene {
             width: width,
             height: height,
             camera: c,
-            objects: o
+            objects: o,
+            ambient: 0.01f64,
         };
     }
 }

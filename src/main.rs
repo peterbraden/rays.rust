@@ -3,6 +3,7 @@ extern crate nalgebra as na;
 
 mod ray;
 mod color;
+mod material;
 mod intersection;
 mod sceneobject;
 mod sphere;
@@ -31,7 +32,7 @@ fn main() {
 
     for y in 0..s.height {
         for x in 0..s.width {
-            let c = trace( s.camera.get_ray(x, y), 0, &s);  
+            let c = trace( &s.camera.get_ray(x, y), 0, &s);  
             rc.set_pixel(x, y, c);
         }
     }

@@ -20,7 +20,7 @@ impl Sphere{
 
 
 impl SceneObject for Sphere {
-    fn intersects(self, r: &Ray) -> Option<Intersection> {
+    fn intersects(&self, r: &Ray) -> Option<Intersection> {
         let dst = r.ro - self.center;
         let b = dst.dot(&r.rd.normalize());
         let c = dst.dot(&dst) - self.radius * self.radius;
@@ -35,30 +35,14 @@ impl SceneObject for Sphere {
                     dist: dist, 
                     point: point,
                     normal: (point - self.center).normalize(),
-                    object: Box::new(self)
+                    object: self
                 })
         }
 
         return None;
-        /*
-  float b = vec3_mul_inner(dst, vec3_norm(rd)); // dot product.
-  float c = vec3_mul_inner(dst, dst) - radius * radius;
-  float d = b*b-c;
-  float dist;
-
-  if (d > 0){
-    dist = -b - sqrt(d);
-  } else {
-    dist = -1;
-  }
-
-  // Project point along ray
-  pt = vec3_add(ro, vec3_scale(vec3_norm(rd), dist));
-  return (Intersection) {dist, pt, normal(pt), this};
-  */
     }
 
-    fn get_material(self) -> Material {
+    fn get_material(&self) -> Material {
         Material::demo()
     }
 }

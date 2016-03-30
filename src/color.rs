@@ -1,6 +1,6 @@
 use na::Vec3;
 use std::fmt;
-use std::ops::Mul;
+use std::ops::{Mul, Add};
 
 #[derive(Debug, Copy, Clone)]
 pub struct Color {
@@ -18,6 +18,9 @@ impl Color {
         Color::new(0f64,0f64,0f64)
     }
 
+    pub fn white() -> Color {
+        return Color::new(255f64,255f64,255f64);
+    }
 }
 
 
@@ -32,5 +35,13 @@ impl Mul<f64> for Color {
 
     fn mul(self, _rhs: f64) -> Color {
         Color {rgb: self.rgb * _rhs }
+    }
+}
+
+impl Add<Color> for Color {
+    type Output = Color;
+
+    fn add(self, _rhs: Color) -> Color {
+        Color {rgb: self.rgb + _rhs.rgb }
     }
 }

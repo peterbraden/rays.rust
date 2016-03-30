@@ -11,12 +11,13 @@ pub struct Scene {
     pub objects: SceneGraph,
 
     pub ambient: f64,
+    pub maxDepth: i32,
 }
 
 impl Scene {
     pub fn demo () -> Scene {
-        let width = 20i32;
-        let height = 20i32;
+        let width = 30;
+        let height = 30;
     
         let c = camera::Camera::new(
             Vec3::new(0f64,0f64,0f64),
@@ -38,6 +39,7 @@ impl Scene {
             camera: c,
             objects: o,
             ambient: 0.5f64,
+            maxDepth: 2,
         };
     }
 }

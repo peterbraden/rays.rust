@@ -1,14 +1,16 @@
 use color::Color;
 
 pub struct Material {
-    pub pigment: Color
+    pub pigment: Color,
+    pub reflection: f64,
 }
 
 impl Material {
 
     pub fn demo() -> Material {
         Material {
-            pigment: Color::new(0.5f64, 0.5f64, 0.5f64)
+            pigment: Color::new(0.5f64, 0.5f64, 0.5f64),
+            reflection: 0.2,
         }
     }
 }

@@ -20,7 +20,12 @@ use rendercontext::RenderContext;
 fn poor_mans_paint(ctx: &RenderContext) {
     for y in 0 .. ctx.height {
         for x in 0 .. ctx.width {
-          print!("{} ", ctx.get_pixel(x, y));
+            let c = ctx.get_pixel(x, y);
+            if (c.rgb[0] < 0.1) { // Just use red channel ...
+                print!("_");
+            } else {
+                print!("X");
+            } 
         }
         print!("\n");
     }
@@ -32,7 +37,7 @@ fn main() {
 
     for y in 0..s.height {
         for x in 0..s.width {
-            let c = trace( &s.camera.get_ray(x, y), 0, &s);  
+            let c = trace( &s.camera.get_ray(x as f64 / (s.width as f64), y as f64 / (s.height as f64)), 0, &s);  
             rc.set_pixel(x, y, c);
         }
     }

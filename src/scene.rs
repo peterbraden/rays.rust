@@ -16,20 +16,20 @@ pub struct Scene {
 impl Scene {
     pub fn demo () -> Scene {
         let width = 20i32;
-        let height = 10i32;
+        let height = 20i32;
     
         let c = camera::Camera::new(
             Vec3::new(0f64,0f64,0f64),
-            Vec3::new(0f64,5f64,-10f64),
+            Vec3::new(0f64,1f64,-5f64),
             Vec3::new(0f64,1f64,0f64),
-            35.0,
+            0.9,
             width, height
         );
 
-        let o = SceneGraph::new();
-        let s = Sphere::new(Vec3::new(0f64, 0f64, 0f64), 1f64);
+        let mut o = SceneGraph::new();
+        let s = Sphere::new(Vec3::new(0f64, 0f64, 0f64), 2f64);
 
-        //o.push(s);
+        o.push(Box::new(s));
 
 
         return Scene {
@@ -37,7 +37,7 @@ impl Scene {
             height: height,
             camera: c,
             objects: o,
-            ambient: 0.01f64,
+            ambient: 0.5f64,
         };
     }
 }

@@ -38,9 +38,9 @@ impl Camera {
         }
     }
 
-    pub fn get_ray(&self, x: i32, y: i32) -> Ray {
-        let xdir = self.camx * (x as f64 - 0.5) * self.tax;
-        let ydir = self.camy * (y as f64 - 0.5) * self.tay;
+    pub fn get_ray(&self, x: f64, y: f64) -> Ray {
+        let xdir = self.camx * (x - 0.5) * self.tax;
+        let ydir = self.camy * (y - 0.5) * self.tay;
         let dest = self.camz + xdir + ydir;
 
         Ray {

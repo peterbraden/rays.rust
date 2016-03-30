@@ -17,6 +17,7 @@ impl Color {
     pub fn black() -> Color {
         Color::new(0f64,0f64,0f64)
     }
+
 }
 
 

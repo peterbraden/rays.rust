@@ -16,9 +16,15 @@ pub fn trace (r: &Ray, depth: i32, s: &Scene) -> Color {
 }
 
 fn trace_closest(r: &Ray, intersection: Intersection, depth: i32, s: &Scene) -> Color {
-    
+
     let closest = intersection.object;
-    let ambient = closest.get_material().pigment * s.ambient;
+    let ambient = ambient(intersection, s); 
 
     return ambient
+    //return Color::new(255f64,255f64,255f64);
+}
+
+
+fn ambient(intersection: Intersection, s: &Scene) -> Color {
+    return intersection.object.get_material().pigment * s.ambient;
 }

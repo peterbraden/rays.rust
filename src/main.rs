@@ -23,9 +23,11 @@ fn poor_mans_paint(ctx: &RenderContext) {
             let c = ctx.get_pixel(x, y);
             if (c.rgb[0] < 0.1) { // Just use red channel ...
                 print!("_");
+            } else if (c.rgb[0] < 0.3) {
+                print!(".");
             } else {
                 print!("X");
-            } 
+            }
         }
         print!("\n");
     }

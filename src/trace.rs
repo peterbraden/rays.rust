@@ -10,28 +10,37 @@ pub fn trace (r: &Ray, depth: i32, s: &Scene) -> Color {
     let closest = s.objects.nearest_intersection(r, f64::INFINITY, 0f64);
 
     match closest {
-        Some(x) => return trace_closest(r, x, depth, s),
+        Some(x) => return trace_intersection(r, x, depth, s),
         None => return Color::black(),
     }
 }
 
-fn trace_closest(r: &Ray, intersection: Intersection, depth: i32, s: &Scene) -> Color {
+fn trace_intersection(r: &Ray, intersection: Intersection, depth: i32, s: &Scene) -> Color {
 
-    let closest = intersection.object;
     let mut out = ambient(&intersection, s);
 
 
-    if (depth < s.maxDepth){
+    if (depth < s.max_depth){
         out = out + reflection(r, intersection, depth, s);
     }
 
     return out;
 }
 
-
 fn ambient(intersection: &Intersection, s: &Scene) -> Color {
     return intersection.object.get_material().pigment * s.ambient;
 }
+
+fn specular () {
+
+}
+
+// Lambertian
+fn diffuse () {
+
+}
+
+
 
 fn reflection(r: &Ray, intersection: Intersection, depth: i32, s: &Scene) -> Color {
 

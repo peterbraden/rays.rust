@@ -11,7 +11,7 @@ pub struct Scene {
     pub objects: SceneGraph,
 
     pub ambient: f64,
-    pub maxDepth: i32,
+    pub max_depth: i32,
 }
 
 impl Scene {
@@ -28,10 +28,12 @@ impl Scene {
         );
 
         let mut o = SceneGraph::new();
-        let s = Sphere::new(Vec3::new(0f64, 0f64, 0f64), 2f64);
 
-        o.push(Box::new(s));
+        let s1 = Sphere::new(Vec3::new(0f64, 0f64, 0f64), 2f64);
+        o.push(Box::new(s1));
 
+        let s2 = Sphere::new(Vec3::new(3f64, 0f64, 5f64), 3f64);
+        o.push(Box::new(s2));
 
         return Scene {
             width: width,
@@ -39,7 +41,7 @@ impl Scene {
             camera: c,
             objects: o,
             ambient: 0.5f64,
-            maxDepth: 2,
+            max_depth: 2,
         };
     }
 }

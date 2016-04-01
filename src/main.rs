@@ -12,15 +12,16 @@ mod scene;
 mod camera;
 mod trace;
 mod rendercontext;
+mod paint;
 
 use trace::trace;
 use rendercontext::RenderContext;
 
 
 fn poor_mans_paint(ctx: &RenderContext) {
-    for y in 0 .. ctx.height {
-        for x in 0 .. ctx.width {
-            let c = ctx.get_pixel(x, y);
+    for y in 0 .. 20 {
+        for x in 0 .. 20 {
+            let c = ctx.get_pixel(((x as f32/20.0) * ctx.width as f32) as u32 , ((y as f32 / 20.0) * ctx.height as f32) as u32);
             if (c.rgb[0] < 0.1) { // Just use red channel ...
                 print!("_");
             } else if (c.rgb[0] < 0.3) {
@@ -44,4 +45,5 @@ fn main() {
         }
     }
     poor_mans_paint(&rc);
+    paint::to_png(&rc);
 }

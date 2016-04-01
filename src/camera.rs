@@ -17,7 +17,7 @@ pub struct Camera {
 
 
 impl Camera {
-    pub fn new(lookat: Vec3<f64>, location:Vec3<f64>, up:Vec3<f64>, angle: f64, height: i32, width: i32) -> Camera {
+    pub fn new(lookat: Vec3<f64>, location:Vec3<f64>, up:Vec3<f64>, angle: f64, height: u32, width: u32) -> Camera {
         let camz = (lookat - location).normalize();
         let camx = up.cross(&camz).normalize();
 

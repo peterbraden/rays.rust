@@ -19,14 +19,19 @@ impl Color {
     }
 
     pub fn white() -> Color {
-        return Color::new(255f64,255f64,255f64);
+        return Color::new(1f64,1f64,1f64);
+    }
+
+
+    pub fn to_u8(&self) -> (u8, u8, u8) {
+        return ((self.rgb[0] * 255f64) as u8, (self.rgb[1] * 255f64) as u8, (self.rgb[2] * 255f64) as u8);
     }
 }
 
 
 impl fmt::Display for Color {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "#{:0>2x}{:0>2x}{:0>2x}", self.rgb.x as i32, self.rgb.y as i32, self.rgb.z as i32)
+        write!(f, "#{:0>2x}{:0>2x}{:0>2x}", (self.rgb.x * 255f64) as i32, (self.rgb.y * 255f64) as i32, (self.rgb.z * 255f64) as i32)
     }
 }
 

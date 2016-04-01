@@ -5,8 +5,8 @@ use sphere::Sphere;
 
 
 pub struct Scene {
-    pub width: i32,
-    pub height: i32,
+    pub width: u32,
+    pub height: u32,
     pub camera: camera::Camera,
     pub objects: SceneGraph,
 
@@ -16,8 +16,8 @@ pub struct Scene {
 
 impl Scene {
     pub fn demo () -> Scene {
-        let width = 30;
-        let height = 30;
+        let width = 200;
+        let height = 200;
     
         let c = camera::Camera::new(
             Vec3::new(0f64,0f64,0f64),

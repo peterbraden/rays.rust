@@ -22,7 +22,7 @@ impl SceneGraph {
         for o in &self.items {
             match o.intersects(r) {
                 Some(x) => {
-                    if (x.dist < cdist) {
+                    if x.dist < cdist {
                         cdist = x.dist;
                         closest = Some(x);
                     }

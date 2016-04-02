@@ -6,6 +6,7 @@ mod color;
 mod material;
 mod intersection;
 mod sceneobject;
+mod light;
 mod sphere;
 mod scenegraph;
 mod scene;
@@ -22,9 +23,9 @@ fn poor_mans_paint(ctx: &RenderContext) {
     for y in 0 .. 20 {
         for x in 0 .. 20 {
             let c = ctx.get_pixel(((x as f32/20.0) * ctx.width as f32) as u32 , ((y as f32 / 20.0) * ctx.height as f32) as u32);
-            if (c.rgb[0] < 0.1) { // Just use red channel ...
+            if c.rgb[0] < 0.1 { // Just use red channel ...
                 print!("_");
-            } else if (c.rgb[0] < 0.3) {
+            } else if c.rgb[0] < 0.3 {
                 print!(".");
             } else {
                 print!("X");

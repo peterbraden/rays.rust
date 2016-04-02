@@ -20,10 +20,31 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: i32, s: &Scene
     let mut out = ambient(&intersection, s);
 
 
-    if (depth < s.max_depth){
+    if depth < s.max_depth {
         out = out + reflection(r, intersection, depth, s);
     }
 
+    for light in &s.lights { 
+        //let light_vec = light.position - &intersection.point;
+    }
+/*
+    for light in scene.lights {
+
+
+        // Shadow..
+        match scene.objects.nearest_intersection(
+                Ray {ro: intersection.point, rd: light_vec}, 0.05
+            ) {
+            Some(x) => (
+                    // Point in shadow...
+                ),
+            None => (
+                    
+                ),
+        })
+    
+    }
+*/
     return out;
 }
 
@@ -32,6 +53,7 @@ fn ambient(intersection: &Intersection, s: &Scene) -> Color {
 }
 
 fn specular () {
+
 
 }
 

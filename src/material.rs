@@ -12,7 +12,7 @@ impl Material {
         Material {
             pigment: Color::new(0.5f64, 0.5f64, 0.5f64),
             reflection: 0.2,
-            phong: 40f64,
+            phong: 80f64,
         }
     }
 }

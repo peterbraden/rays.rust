@@ -22,19 +22,8 @@ impl Color {
         return Color::new(1f64,1f64,1f64);
     }
 
-
-    pub fn limit(self) -> Color {
-        return Color {
-            rgb: Vec3::new(
-                self.rgb[0].min(1f64),
-                self.rgb[1].min(1f64),
-                self.rgb[2].min(1f64),
-                )
-        }
-    }
-
     pub fn to_u8(&self) -> (u8, u8, u8) {
-        return ((self.rgb[0] * 255f64) as u8, (self.rgb[1] * 255f64) as u8, (self.rgb[2] * 255f64) as u8);
+        return ((self.rgb[0] * 255f64).min(255f64) as u8, (self.rgb[1] * 255f64).min(255f64) as u8, (self.rgb[2] * 255f64).min(255f64) as u8);
     }
 }
 

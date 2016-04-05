@@ -9,6 +9,7 @@ pub struct Intersection<'a> {
 }
 
 impl <'a> Intersection<'a> {
+    /*
     pub fn new(dist: f64, point: Vec3<f64>, normal: Vec3<f64>, object: &'a SceneObject) -> Intersection<'a> {
         return Intersection {
             dist: dist,
@@ -17,4 +18,5 @@ impl <'a> Intersection<'a> {
             object: object,
         }
     }
+    */
 }

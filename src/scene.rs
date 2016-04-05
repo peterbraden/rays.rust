@@ -14,6 +14,11 @@ pub struct Scene {
 
     pub ambient: f64,
     pub max_depth: i32,
+
+
+    pub reflection: bool,
+    pub specular: bool,
+    pub diffuse: bool,
 }
 
 impl Scene {
@@ -50,9 +55,13 @@ impl Scene {
             height: height,
             camera: c,
             objects: o,
-            ambient: 0.2f64,
+            ambient: 0.02f64,
             max_depth: 2,
-            lights: l
+            lights: l,
+
+            reflection: true,
+            specular: true,
+            diffuse: true,
         };
     }
 }

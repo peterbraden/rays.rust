@@ -1,5 +1,4 @@
 use color::Color;
-use std::u8;
 // The render context is the data structure
 // that holds state about the current render.
 // 
@@ -26,7 +25,7 @@ impl RenderContext {
     pub fn get_pixel(&self, x:u32, y:u32) -> Color {
         return self.image[ (y*self.width + x) as usize ]
     }
-
+/*
     pub fn get_pixel_array(&self) -> Vec<u8> {
         let len = (self.width * self.height) as usize;
         let mut out: Vec<u8> = vec![0; len * 3];
@@ -41,4 +40,5 @@ impl RenderContext {
 
         return out;
     }
+    */
 }

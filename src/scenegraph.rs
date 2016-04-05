@@ -1,6 +1,5 @@
 use ray::Ray;
 use intersection::Intersection;
-use na::Vec3;
 use sceneobject::SceneObject;
 
 pub struct SceneGraph {

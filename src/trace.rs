@@ -27,24 +27,24 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: i32, s: &Scene
         let shadow_intersection = s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), 0.1, None); 
 
         match shadow_intersection {
-            Some(x) => (
+            Some(_) => (
                     // Point in shadow...
                 ),
             None => (
-                out = out + trace_for_light(&r, &light_vec, &light, &intersection, depth, &s)
+                out = out + trace_for_light(&r, &light_vec, &light, &intersection, &s)
                 ),
         }
     }
-    /*
-    if depth < s.max_depth {
-        out = out + reflection(r, &intersection, depth, s);
+
+    if s.reflection && depth < s.max_depth {
+        out = out + reflection(r, &intersection, depth + 1, s);
     }
-    */
+
     return out;
 }
 
-fn trace_for_light(r: &Ray, light_vec: &Vec3<f64>, l: &Light, intersection: &Intersection, depth: i32, s: &Scene) -> Color {
-    return diffuse(&intersection, &light_vec, &l) + specular(r, intersection, light_vec);
+fn trace_for_light(r: &Ray, light_vec: &Vec3<f64>, l: &Light, intersection: &Intersection, s: &Scene) -> Color {
+    return diffuse(&intersection, &light_vec, &l, s) + specular(r, intersection, light_vec, s);
 }
 
 
@@ -52,7 +52,10 @@ fn ambient(intersection: &Intersection, s: &Scene) -> Color {
     return intersection.object.get_material().pigment * s.ambient;
 }
 
-fn specular (r: &Ray, intersection: &Intersection, light_vec: &Vec3<f64>) -> Color {
+fn specular (r: &Ray, intersection: &Intersection, light_vec: &Vec3<f64>, s: &Scene) -> Color {
+    if !s.specular {
+        return Color::black();
+    }
     let ln = light_vec.normalize();
     let refl = ln - (intersection.normal * (2.0 * intersection.normal.dot(&ln) ) ); 
     let dp = refl.dot(&r.rd);
@@ -66,9 +69,11 @@ fn specular (r: &Ray, intersection: &Intersection, light_vec: &Vec3<f64>) -> Col
 }
 
 // Lambertian
-fn diffuse (i: &Intersection, light_vec: &Vec3<f64>, light: &Light) -> Color {
-    let diffuse_scale = (light_vec.normalize().dot(&i.normal) * light.intensity)
-;
+fn diffuse (i: &Intersection, light_vec: &Vec3<f64>, light: &Light, s: &Scene) -> Color {
+    if !s.diffuse {
+        return Color::black();
+    }
+    let diffuse_scale = light_vec.normalize().dot(&i.normal) * light.intensity;
     if diffuse_scale.is_sign_positive() {
         return i.object.get_material().pigment * diffuse_scale;
     }

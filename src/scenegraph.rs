@@ -13,16 +13,24 @@ impl SceneGraph {
         }
     }
 
-    pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
+    pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
         // Naive approach first
         let mut cdist = max;
         let mut closest = None;
 
         
         for o in &self.items {
+            match exclude {
+                Some(x) => {
+                    if &*x as *const _  == &**o {
+                        continue;
+                    }
+                }
+                None => (),
+            }
             match o.intersects(r) {
                 Some(x) => {
-                    if x.dist < cdist {
+                    if x.dist < cdist && x.dist > min {
                         cdist = x.dist;
                         closest = Some(x);
                     }

@@ -22,9 +22,9 @@ impl Scene {
         let height = 200;
     
         let c = camera::Camera::new(
-            Vec3::new(0f64,0f64,0f64),
-            Vec3::new(0f64,1f64,-5f64),
-            Vec3::new(0f64,1f64,0f64),
+            Vec3::new(0f64,0f64,0f64), //loc
+            Vec3::new(0f64,1f64,-5f64), // lookat
+            Vec3::new(0f64,1f64,0f64), // up
             0.9,
             width, height
         );
@@ -41,6 +41,7 @@ impl Scene {
             Light {
                 position: Vec3::new(-3f64, 10f64, 0f64),
                 color: Color::white(),
+                intensity: 0.9,
             }
         );
 
@@ -49,7 +50,7 @@ impl Scene {
             height: height,
             camera: c,
             objects: o,
-            ambient: 0.5f64,
+            ambient: 0.2f64,
             max_depth: 2,
             lights: l
         };

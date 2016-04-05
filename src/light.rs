@@ -4,4 +4,5 @@ use color::Color;
 pub struct Light {
     pub position: Vec3<f64>,
     pub color: Color,
+    pub intensity: f64,
 }

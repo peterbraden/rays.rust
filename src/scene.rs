@@ -2,6 +2,7 @@ use camera;
 use na::Vec3;
 use scenegraph::SceneGraph;
 use sphere::Sphere;
+use checkeredplane::CheckeredPlane;
 use light::Light;
 use color::Color;
 
@@ -27,8 +28,8 @@ impl Scene {
         let height = 200;
     
         let c = camera::Camera::new(
-            Vec3::new(0f64,0f64,0f64), //loc
-            Vec3::new(0f64,1f64,-5f64), // lookat
+            Vec3::new(0f64,0f64,0f64), //lookat
+            Vec3::new(5f64,5f64,-10f64), // loc
             Vec3::new(0f64,1f64,0f64), // up
             0.9,
             width, height
@@ -36,11 +37,15 @@ impl Scene {
 
         let mut o = SceneGraph::new();
 
-        let s1 = Sphere::new(Vec3::new(0f64, 0f64, 0f64), 2f64);
+        let s1 = Sphere::new(Vec3::new(0f64, 2f64, 0f64), 2f64);
         o.push(Box::new(s1));
 
-        let s2 = Sphere::new(Vec3::new(3f64, 0f64, 5f64), 3f64);
+        let s2 = Sphere::new(Vec3::new(3f64, 3f64, 5f64), 3f64);
         o.push(Box::new(s2));
+
+
+        let floor = CheckeredPlane { y: 0.0 };
+        o.push(Box::new(floor));
 
         let l = vec!(
             Light {

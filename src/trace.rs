@@ -7,24 +7,27 @@ use intersection::Intersection;
 use sceneobject::SceneObject;
 use light::Light;
 
-pub fn trace (r: &Ray, depth: i32, s: &Scene) -> Color {
+
+// Returns num rays cast, Color
+pub fn trace (r: &Ray, depth: i32, s: &Scene) -> (u64, Color) {
     
     let closest = s.objects.nearest_intersection(r, f64::INFINITY, 0f64, None);
 
     match closest {
         Some(x) => return trace_intersection(r, x, depth, s),
-        None => return Color::black(),
+        None => return (1, Color::black()),
     }
 }
 
-fn trace_intersection(r: &Ray, intersection: Intersection, depth: i32, s: &Scene) -> Color {
+fn trace_intersection(r: &Ray, intersection: Intersection, depth: i32, s: &Scene) -> (u64, Color) {
 
     let mut out = ambient(&intersection, s);
+    let mut cast = 1;
 
     for light in &s.lights { 
         let light_vec = light.position - intersection.point;
         let shadow_ray = Ray {ro: intersection.point, rd: light_vec};
-        let shadow_intersection = s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), 0.1, None); 
+        let shadow_intersection = s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), 0.1, Some(intersection.object)); 
 
         match shadow_intersection {
             Some(_) => (
@@ -37,10 +40,12 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: i32, s: &Scene
     }
 
     if s.reflection && depth < s.max_depth {
-        out = out + reflection(r, &intersection, depth + 1, s);
+        let (c, refl) = reflection(r, out, &intersection, depth + 1, s);
+        out = refl;
+        cast = cast + c;
     }
 
-    return out;
+    return (cast, out);
 }
 
 fn trace_for_light(r: &Ray, light_vec: &Vec3<f64>, l: &Light, intersection: &Intersection, s: &Scene) -> Color {
@@ -53,7 +58,8 @@ fn ambient(intersection: &Intersection, s: &Scene) -> Color {
 }
 
 fn specular (r: &Ray, intersection: &Intersection, light_vec: &Vec3<f64>, s: &Scene) -> Color {
-    if !s.specular {
+    let phong = intersection.object.get_material(intersection.point).phong;
+    if !s.specular || phong == 0. {
         return Color::black();
     }
     let ln = light_vec.normalize();
@@ -61,7 +67,7 @@ fn specular (r: &Ray, intersection: &Intersection, light_vec: &Vec3<f64>, s: &Sc
     let dp = refl.dot(&r.rd);
 
     if dp > 0f64 {
-        let spec_scale = dp.powf(intersection.object.get_material(intersection.point).phong);
+        let spec_scale = dp.powf(phong);
         return Color::white() * spec_scale;
     }
 
@@ -82,12 +88,15 @@ fn diffuse (i: &Intersection, light_vec: &Vec3<f64>, light: &Light, s: &Scene) -
 
 
 
-fn reflection(r: &Ray, intersection: &Intersection, depth: i32, s: &Scene) -> Color {
+fn reflection(r: &Ray, out: Color, intersection: &Intersection, depth: i32, s: &Scene) -> (u64, Color) {
 
     let refl = Ray {
         ro: intersection.point,
         rd: r.rd - (intersection.normal * 2.0 * (intersection.normal * r.rd)),
     };
 
-    return trace(&refl, depth + 1, s) * intersection.object.get_material(intersection.point).reflection; 
+    let (c, col) = trace(&refl, depth + 1, s);
+    let scal = intersection.object.get_material(intersection.point).reflection;
+
+    return (c, (out * (1. - scal)) + (col * scal) );
 }

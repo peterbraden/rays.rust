@@ -21,6 +21,9 @@ impl Color {
     pub fn white() -> Color {
         return Color::new(1f64,1f64,1f64);
     }
+    pub fn red() -> Color {
+        return Color::new(1f64,0f64,0f64);
+    }
 
     pub fn to_u8(&self) -> (u8, u8, u8) {
         return ((self.rgb[0] * 255f64).min(255f64) as u8, (self.rgb[1] * 255f64).min(255f64) as u8, (self.rgb[2] * 255f64).min(255f64) as u8);

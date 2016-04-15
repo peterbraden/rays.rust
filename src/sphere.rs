@@ -55,7 +55,7 @@ impl SceneObject for Sphere {
             })
     }
 
-    fn get_material(&self, point: Vec3<f64>) -> Material {
+    fn get_material(&self, _: Vec3<f64>) -> Material {
         Material::demo()
     }
 }

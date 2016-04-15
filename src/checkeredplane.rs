@@ -28,8 +28,8 @@ impl SceneObject for CheckeredPlane {
         None
     }
 
-    fn get_material(&self, point: Vec3<f64>) -> Material {
-        Material::demo()
+    fn get_material(&self, pt: Vec3<f64>) -> Material {
+        Material::checker_demo(pt, 2., 2.)
     }
 }
 

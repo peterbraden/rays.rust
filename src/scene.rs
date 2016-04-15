@@ -49,7 +49,7 @@ impl Scene {
 
         let l = vec!(
             Light {
-                position: Vec3::new(-3f64, 10f64, 0f64),
+                position: Vec3::new(-10f64, 30f64, 0f64),
                 color: Color::white(),
                 intensity: 0.9,
             }
@@ -60,8 +60,8 @@ impl Scene {
             height: height,
             camera: c,
             objects: o,
-            ambient: 0.02f64,
-            max_depth: 2,
+            ambient: 0.2f64,
+            max_depth: 3,
             lights: l,
 
             reflection: true,

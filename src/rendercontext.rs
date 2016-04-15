@@ -1,3 +1,5 @@
+extern crate time;
+
 use color::Color;
 // The render context is the data structure
 // that holds state about the current render.
@@ -6,7 +8,10 @@ use color::Color;
 pub struct RenderContext {
     image: Vec<Color>,
     pub width: u32,
-    pub height: u32
+    pub height: u32,
+    pub rays_cast: u64,
+
+    pub start_time: f64,
 }
 
 impl RenderContext {
@@ -14,7 +19,9 @@ impl RenderContext {
         return RenderContext {
             image: vec![Color::black(); (width*height) as usize],
             width: width,
-            height: height
+            height: height,
+            rays_cast: 0,
+            start_time: time::precise_time_s(),
         }
     }
 
@@ -41,4 +48,14 @@ impl RenderContext {
         return out;
     }
     */
+    pub fn print_stats(&self) {
+        let elapsed = time::precise_time_s() - self.start_time;
+
+        print!("\n==========================================\n");
+        print!("| Rays Cast: {}\n", self.rays_cast);
+        print!("| Elapsed Time (s): {:.4}\n", elapsed);
+        print!("| Rays per sec: {:.2}\n", self.rays_cast as f64 / elapsed);
+        print!("==========================================\n");
+
+    }
 }

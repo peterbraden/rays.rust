@@ -1,7 +1,10 @@
+#![allow(dead_code)]
+
 //extern crate image;
 extern crate nalgebra as na;
 
 mod ray;
+mod bbox;
 mod color;
 mod material;
 mod intersection;

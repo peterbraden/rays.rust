@@ -1,15 +1,45 @@
 use na::{Vec3};
-use ray::Ray;
+use std::fmt;
+//use ray::Ray;
 
 // Axis aligned bounding box
+#[derive(Debug, Copy, Clone)]
 pub struct BBox {
-    min: Vec3<f64>,
+    min: Vec3<f64>, // Point closest to origin
     max: Vec3<f64>,
 }
 
 impl BBox {
     pub fn new(min: Vec3<f64>, max: Vec3<f64>) -> BBox {
         BBox {min: min, max: max}
+    }
+
+    pub fn for_octant(octant: u8, bounds: &BBox) -> BBox {
+        // octant is Z, Y, X
+        // => 000 is aligned to z,y,x min boundaries
+        // => 111 is aligned to z,y,x max
+        // => 001 is aligned to z,y min, x max.
+        // Calc offset from min.
+        let xoffs = octant & 1;
+        let yoffs = octant & 2;
+        let zoffs = octant % 4;
+
+        let xdiff = bounds.max.x - bounds.min.x;
+        let ydiff = bounds.max.y - bounds.min.y;
+        let zdiff = bounds.max.z - bounds.min.z;
+
+        let xmin = bounds.min.x + (if xoffs !=0 { xdiff * 0.5 } else { 0f64 });
+        let ymin = bounds.min.y + (if yoffs !=0 { ydiff * 0.5 } else { 0f64 });
+        let zmin = bounds.min.z + (if zoffs !=0 { zdiff * 0.5 } else { 0f64 });
+
+        let xmax = bounds.min.x + (if xoffs !=0 { xdiff } else { xdiff * 0.5 });
+        let ymax = bounds.min.y + (if yoffs !=0 { ydiff } else { ydiff * 0.5 });
+        let zmax = bounds.min.z + (if zoffs !=0 { zdiff } else { zdiff * 0.5 });
+
+        return BBox {
+            min: Vec3::new(xmin, ymin, zmin),
+            max: Vec3::new(xmax, ymax, zmax),
+        }
     }
 
     pub fn intersects(&self, ro: &Vec3<f64>, invrd: &Vec3<f64>) -> bool {
@@ -38,51 +68,47 @@ impl BBox {
         )
     }
 
-    /*
-    pub fn intersectsBBox(&self, bbox: BBox) -> bool{
 
+    pub fn intersects_bbox(&self, b: &BBox) -> bool{
+          if &self.max.x < &b.min.x { return false; } // self is left of b
+          if &self.min.x > &b.max.x { return false; }// self is right of b
+          if &self.max.y < &b.min.y { return false; }// self is above b
+          if &self.min.y > &b.max.y { return false; }// self is below b
+          if &self.max.z < &b.min.z { return false; }// self is behind b
+          if &self.min.z > &b.max.z { return false; }// self is in front of b
+          return true; // boxes overlap
     }
-    */
+
+    pub fn loosen(self, b: &BBox) -> BBox {
+        let mut o = self.clone();
+
+        if &self.min.x > &b.min.x { o.min.x = b.min.x; } 
+        if &self.max.x < &b.max.x { o.max.x = b.max.x; }
+        if &self.min.y > &b.min.y { o.min.y = b.min.y; }
+        if &self.max.y < &b.max.y { o.max.y = b.max.y; }
+        if &self.min.z > &b.min.z { o.min.z = b.min.z; }
+        if &self.max.z < &b.max.z { o.max.z = b.max.z; }
+
+        return o;
+    }
 }
 
+
+impl fmt::Display for BBox {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "[ {},{},{} -> {},{},{} ]",
+                &self.min.x,
+                &self.min.y,
+                &self.min.x,
+                &self.max.x,
+                &self.max.y,
+                &self.max.z)
+    }
+}
 /*
-typedef struct BBox{
-  vec3 min; // Point closest to origin
-  vec3 max; // Opposing point
-  BBox(vec3 l, vec3 g) : min(l), max(g) {};
-} BBox;
-}
 
-
-bool intersectsBBox(vec3 ro, vec3 invrd, BBox b){
-  //http://tavianator.com/fast-branchless-raybounding-box-intersections/
-
-  double tx1 = (b.min.x - ro.x)*invrd.x;
-  double tx2 = (b.max.x - ro.x)*invrd.x;
-
-  double tmin = fmin(tx1, tx2);
-  double tmax = fmax(tx1, tx2);
-
-  double ty1 = (b.min.y - ro.y)*invrd.y;
-  double ty2 = (b.max.y - ro.y)*invrd.y;
-
-  tmin = fmax(tmin, fmin(ty1, ty2));
-  tmax = fmin(tmax, fmax(ty1, ty2));
-
-  return tmax >= tmin;
-}
 vec3 vec3_invert(vec3 rd){
   return (vec3) {1.0/rd.x, 1.0/rd.y, 1.0/rd.z}; 
-};
-
-bool intersectsBBox(BBox a, BBox b){
-  if (a.max.x < b.min.x) return false; // a is left of b
-  if (a.min.x > b.max.x) return false; // a is right of b
-  if (a.max.y < b.min.y) return false; // a is above b
-  if (a.min.y > b.max.y) return false; // a is below b
-  if (a.max.z < b.min.z) return false; // a is behind b
-  if (a.min.z > b.max.z) return false; // a is in front of b
-  return true; // boxes overlap
 };
 
 bool contains(BBox a, vec3 pt){

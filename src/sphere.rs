@@ -3,6 +3,7 @@ use na::{Vec3, Norm, Dot};
 use ray::Ray;
 use intersection::Intersection;
 use material::Material;
+use bbox::BBox;
 
 #[derive(PartialEq)]
 pub struct Sphere {
@@ -53,6 +54,19 @@ impl SceneObject for Sphere {
                 normal: (point - self.center).normalize(),
                 object: self
             })
+    }
+
+    fn bounds(&self) -> BBox {
+        BBox::new(
+            Vec3::new(&self.center.x - &self.radius, 
+                      &self.center.y - &self.radius, 
+                      &self.center.z - &self.radius
+                      ),
+            Vec3::new(&self.center.x + &self.radius, 
+                      &self.center.y + &self.radius, 
+                      &self.center.z + &self.radius
+                      ),
+          )
     }
 
     fn get_material(&self, _: Vec3<f64>) -> Material {

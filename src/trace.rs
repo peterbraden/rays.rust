@@ -28,6 +28,7 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: i32, s: &Scene
         let light_vec = light.position - intersection.point;
         let shadow_ray = Ray {ro: intersection.point, rd: light_vec};
         let shadow_intersection = s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), 0.1, Some(intersection.object)); 
+        cast = cast + 1;
 
         match shadow_intersection {
             Some(_) => (

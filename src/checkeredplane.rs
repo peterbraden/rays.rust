@@ -3,6 +3,7 @@ use na::{Vec3, Norm, Dot};
 use ray::Ray;
 use intersection::Intersection;
 use material::Material;
+use bbox::BBox;
 
 pub struct CheckeredPlane {
     pub y: f64
@@ -30,6 +31,13 @@ impl SceneObject for CheckeredPlane {
 
     fn get_material(&self, pt: Vec3<f64>) -> Material {
         Material::checker_demo(pt, 2., 2.)
+    }
+
+    fn bounds(&self) -> BBox {
+        BBox::new(
+            Vec3::new(0.,0.,0.),
+            Vec3::new(0.,0.,0.),
+          )
     }
 }
 

@@ -27,7 +27,7 @@ impl SceneGraphNode {
         let mut children: [Option<Box<SceneGraphNode>>; 8] = Default::default();
         
         for i in 0..8 {
-            if depth < max_depth {
+            if depth < max_depth && items.len() > 1 {
                 // Does child node have any objects in?
                 let cbox = BBox::for_octant(i, &b);
                 let item_iter = items.into_iter();
@@ -49,14 +49,33 @@ impl SceneGraphNode {
             mid: (&b).mid(), 
             bounds: b,
             children: children, 
-            items: vec![],
+            items: items.into_iter().cloned().collect(),
         }
     }
 }
 
 impl fmt::Display for SceneGraphNode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "\n {} Node -[]", &self.depth)
+        let mut c = "".to_string();
+        let mut p = "".to_string();
+
+        for _ in -1.. self.depth{
+            p = p + "  ";
+        }
+        p = p + "|-";
+
+        for i in 0..8 {
+            match self.children[i as usize].as_ref() {
+                Some (ref r) => {
+                    c = c + "\n" + &p + " " + &r.to_string();
+                    
+                },
+                None => {
+                    //c = c + "\n" + &p + " None";
+                },
+            }
+        }
+        write!(f, "Node -[{}]{}", self.items.len(), c)
     }
 }
 
@@ -76,11 +95,11 @@ impl SceneGraph {
         }
     }
 
-    pub fn partition(&mut self) {
+    pub fn partition(&mut self, max_depth: i64) {
         self.root = Some(
                         SceneGraphNode::new(
                             0,
-                            1, 
+                            max_depth, 
                             (&self.scene_bounds).clone(),
                             &self.items,
                             )
@@ -119,12 +138,16 @@ impl SceneGraph {
             self.scene_bounds = self.scene_bounds.loosen( &x.bounds() );
             &self.items.push(x);
         }
-        self.partition();
+        self.partition(8);
     }
 }
 
 impl fmt::Display for SceneGraph {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "SceneGraph \n objects: {} \n bounded: {}->\n", &self.items.len(), &self.scene_bounds)
+        write!(f, "SceneGraph \n objects: {} \n bounded: {}\n{}\n",
+                &self.items.len(), 
+                &self.scene_bounds,
+                &self.root.as_ref().unwrap()
+            )
     }
 }

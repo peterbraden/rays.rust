@@ -12,6 +12,7 @@ mod sceneobject;
 mod light;
 mod sphere;
 mod checkeredplane;
+mod octree;
 mod scenegraph;
 mod scene;
 mod camera;

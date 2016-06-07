@@ -79,7 +79,7 @@ impl BBox {
           return true; // boxes overlap
     }
 
-    pub fn loosen(self, b: &BBox) -> BBox {
+    pub fn union(self, b: &BBox) -> BBox {
         let mut o = self.clone();
 
         if &self.min.x > &b.min.x { o.min.x = b.min.x; } 
@@ -88,6 +88,19 @@ impl BBox {
         if &self.max.y < &b.max.y { o.max.y = b.max.y; }
         if &self.min.z > &b.min.z { o.min.z = b.min.z; }
         if &self.max.z < &b.max.z { o.max.z = b.max.z; }
+
+        return o;
+    }
+
+    pub fn union_point(self, p: &Vec3<f64>) -> BBox{
+        let mut o = self.clone();
+
+        if &self.min.x > &p.x { o.min.x = p.x; } 
+        if &self.max.x < &p.x { o.max.x = p.x; }
+        if &self.min.y > &p.y { o.min.y = p.y; }
+        if &self.max.y < &p.y { o.max.y = p.y; }
+        if &self.min.z > &p.z { o.min.z = p.z; }
+        if &self.max.z < &p.z { o.max.z = p.z; }
 
         return o;
     }

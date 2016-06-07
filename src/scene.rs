@@ -63,7 +63,6 @@ impl Scene {
             },
         );
 
-        //print!("{}", o);
 
         return Scene {
             width: width,

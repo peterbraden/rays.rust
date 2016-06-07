@@ -91,6 +91,17 @@ impl BBox {
 
         return o;
     }
+
+
+    pub fn contains(self, b: &BBox) -> bool {
+        if self.min.x > b.min.x  { return false; }
+        if self.min.y > b.min.y  { return false; }
+        if self.min.z > b.min.z  { return false; }
+        if self.max.x < b.max.x  { return false; }
+        if self.max.y < b.max.y  { return false; }
+        if self.max.z < b.max.z  { return false; }
+        return true;
+    }
 }
 
 

@@ -3,6 +3,8 @@ use na::{Vec3};
 use sceneobject::SceneObject;
 use std::rc::Rc;
 use std::fmt;
+use ray::Ray;
+use intersection::Intersection;
 
 pub struct OctreeNode {
     depth: i64,
@@ -23,7 +25,15 @@ impl OctreeNode {
 
         // Rust arrays suck - this defaults them to 'None'
         let mut children: [Option<Box<OctreeNode>>; 8] = Default::default();
-        
+/*
+        let contained: Vec<Rc<SceneObject>> =
+                items
+                    .into_iter()
+                    .cloned()
+                    .filter( |x| {b.contains( &x.bounds() )})
+                    .collect();
+  */     
+
         for i in 0..8 {
             // Does child node have any objects in?
             if depth < max_depth && items.len() > 1 {
@@ -50,6 +60,46 @@ impl OctreeNode {
             children: children, 
             items: items.into_iter().cloned().collect(),
         }
+    }
+
+
+    pub fn is_leaf(&self) -> bool {
+        for i in 0..8 {
+            match self.children[i as usize] {
+                Some(_) => { return false },
+                None => {}
+            }
+        }
+        return true;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        return self.items.len() > 0;
+    }
+
+    pub fn len(&self) -> usize {
+        return self.items.len()
+    }
+
+    
+
+
+    // Iterate through items. Should only do on leaf if multiple items.
+    pub fn items_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
+        let mut cdist = max;
+        let mut closest = None;
+        for o in &self.items {
+            match o.intersects(r) {
+                Some(x) => {
+                    if x.dist < cdist && x.dist > min {
+                        cdist = x.dist;
+                        closest = Some(x);
+                    }
+                },
+                None => (),
+            }
+        }
+        return closest;
     }
 
 }

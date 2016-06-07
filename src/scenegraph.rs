@@ -37,7 +37,16 @@ impl SceneGraph {
     }
 
     pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
-        // Naive approach first
+        match self.root {
+            Some (ref root) => { return root.items_intersection(r, max, min); }
+            None => { return None; }
+                //return self.naive_intersection(r,max,min,exclude); }
+        }
+        
+    }
+
+
+    pub fn naive_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
         let mut cdist = max;
         let mut closest = None;
         
@@ -69,6 +78,8 @@ impl SceneGraph {
             &self.items.push(x);
         }
         self.partition(8);
+        print!("{}", self);
+
     }
 }
 

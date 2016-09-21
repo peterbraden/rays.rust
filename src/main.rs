@@ -2,6 +2,7 @@
 
 //extern crate image;
 extern crate nalgebra as na;
+extern crate rand;
 
 mod ray;
 mod bbox;

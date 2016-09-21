@@ -37,12 +37,12 @@ impl SceneGraph {
     }
 
     pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
-        match self.root {
-            Some (ref root) => { return root.items_intersection(r, max, min); }
-            None => { return None; }
-                //return self.naive_intersection(r,max,min,exclude); }
-        }
+        //match self.root {
+        //    Some (ref root) => { return root.items_intersection(r, max, min); }
+        //    None => { return None; }
+        //}
         
+        return self.naive_intersection(r,max,min,exclude);
     }
 
 
@@ -61,7 +61,7 @@ impl SceneGraph {
             }
             match o.intersects(r) {
                 Some(x) => {
-                    if x.dist < cdist && x.dist > min {
+                    if x.dist < cdist && x.dist >= min {
                         cdist = x.dist;
                         closest = Some(x);
                     }

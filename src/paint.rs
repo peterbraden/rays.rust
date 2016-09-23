@@ -19,17 +19,18 @@ pub fn poor_mans(ctx: &RenderContext) {
     for y in 0 .. h {
         for x in 0 .. w {
             let c = ctx.get_pixel(((x as f32/ w as f32) * ctx.width as f32) as u32 , (((h - 1 - y) as f32 / h as f32) * ctx.height as f32) as u32);
-            if c.rgb[0] < 0.05 { // Just use red channel ...
+            let cx = (c.rgb[0] + c.rgb[1] + c.rgb[2]) / 3.;
+            if cx < 0.05 {
                 print!(" ");
-            } else if c.rgb[0] < 0.1 {
+            } else if cx < 0.1 {
                 print!("▁");
-            } else if c.rgb[0] < 0.2 {
+            } else if cx < 0.2 {
                 print!("▂");
-            } else if c.rgb[0] < 0.3 {
+            } else if cx < 0.3 {
                 print!("▃");
-            } else if c.rgb[0] < 0.4 {
+            } else if cx < 0.4 {
                 print!("▄");
-            } else if c.rgb[0] < 0.5 {
+            } else if cx < 0.5 {
                 print!("▅");
             } else {
                 print!("█");

@@ -5,6 +5,8 @@ use sphere::Sphere;
 use checkeredplane::CheckeredPlane;
 use light::Light;
 use color::Color;
+use std::rc::Rc;
+use sceneobject::SceneObject;
 
 pub struct Scene {
     pub width: u32,
@@ -24,12 +26,12 @@ pub struct Scene {
 
 impl Scene {
     pub fn demo () -> Scene {
-        let width = 200;
-        let height = 200;
+        let width = 400;
+        let height = 400;
     
         let c = camera::Camera::new(
             Vec3::new(0f64,0f64,0f64), //lookat
-            Vec3::new(5f64,5f64,-10f64), // loc
+            Vec3::new(5f64,10f64,-20f64), // loc
             Vec3::new(0f64,1f64,0f64), // up
             0.9,
             width, height
@@ -38,22 +40,42 @@ impl Scene {
         let mut o = SceneGraph::new();
 
         let s1 = Sphere::new(Vec3::new(0f64, 2f64, 0f64), 2f64);
-        o.push(Box::new(s1));
-
         let s2 = Sphere::new(Vec3::new(3f64, 3f64, 5f64), 3f64);
-        o.push(Box::new(s2));
+        let s3 = Sphere::new(Vec3::new(-6f64, 6f64, 5f64), 6f64);
+        let floor = CheckeredPlane { y: 1f64 };
+
+        let objects: Vec<Rc<SceneObject>> = vec!(Rc::new(s1), Rc::new(s2), Rc::new(s3), Rc::new(floor));
+        o.push(objects);
 
 
-        let floor = CheckeredPlane { y: 0.0 };
-        o.push(Box::new(floor));
 
         let l = vec!(
             Light {
-                position: Vec3::new(-10f64, 30f64, 0f64),
+                position: Vec3::new(10f64, 10f64, 0f64),
                 color: Color::white(),
                 intensity: 0.9,
-            }
+            },
+            /*
+            Light {
+                position: Vec3::new(0f64, 50f64, 50f64),
+                color: Color::red(),
+                intensity: 0.9,
+            },
+
+            Light {
+                position: Vec3::new(-50f64, 50f64, -50f64),
+                color: Color::green(),
+                intensity: 0.9,
+            },
+
+            Light {
+                position: Vec3::new(50f64, 50f64, -50f64),
+                color: Color::blue(),
+                intensity: 0.9,
+            },
+            */
         );
+
 
         return Scene {
             width: width,
@@ -61,7 +83,7 @@ impl Scene {
             camera: c,
             objects: o,
             ambient: 0.2f64,
-            max_depth: 3,
+            max_depth: 2,
             lights: l,
 
             reflection: true,

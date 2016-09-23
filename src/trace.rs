@@ -28,6 +28,7 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: i32, s: &Scene
         let light_vec = light.position - intersection.point;
         let shadow_ray = Ray {ro: intersection.point, rd: light_vec};
         let shadow_intersection = s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), 0.1, Some(intersection.object)); 
+        cast = cast + 1;
 
         match shadow_intersection {
             Some(_) => (
@@ -81,7 +82,7 @@ fn diffuse (i: &Intersection, light_vec: &Vec3<f64>, light: &Light, s: &Scene) -
     }
     let diffuse_scale = light_vec.normalize().dot(&i.normal) * light.intensity;
     if diffuse_scale.is_sign_positive() {
-        return i.object.get_material(i.point).pigment * diffuse_scale;
+        return light.color * i.object.get_material(i.point).pigment * diffuse_scale;
     }
     return Color::black()
 }
@@ -92,7 +93,7 @@ fn reflection(r: &Ray, out: Color, intersection: &Intersection, depth: i32, s: &
 
     let refl = Ray {
         ro: intersection.point,
-        rd: r.rd - (intersection.normal * 2.0 * (intersection.normal * r.rd)),
+        rd: r.rd - (intersection.normal * 2.0 * intersection.normal.dot(&r.rd)),
     };
 
     let (c, col) = trace(&refl, depth + 1, s);

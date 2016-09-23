@@ -1,7 +1,11 @@
+#![allow(dead_code)]
+
 //extern crate image;
 extern crate nalgebra as na;
+extern crate rand;
 
 mod ray;
+mod bbox;
 mod color;
 mod material;
 mod intersection;
@@ -9,6 +13,7 @@ mod sceneobject;
 mod light;
 mod sphere;
 mod checkeredplane;
+mod octree;
 mod scenegraph;
 mod scene;
 mod camera;

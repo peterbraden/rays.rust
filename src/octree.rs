@@ -90,8 +90,9 @@ impl OctreeNode {
         let mut closest = None;
         for o in &self.items {
             match o.intersects(r) {
+
                 Some(x) => {
-                    if x.dist < cdist && x.dist > min {
+                    if x.dist < cdist && x.dist >= min {
                         cdist = x.dist;
                         closest = Some(x);
                     }
@@ -103,7 +104,6 @@ impl OctreeNode {
     }
 
 }
-
 
 
 impl fmt::Display for OctreeNode {

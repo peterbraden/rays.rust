@@ -83,7 +83,7 @@ impl Scene {
             camera: c,
             objects: o,
             ambient: 0.2f64,
-            max_depth: 2,
+            max_depth: 1,
             lights: l,
 
             reflection: true,

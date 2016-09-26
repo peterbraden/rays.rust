@@ -37,13 +37,31 @@ impl SceneGraph {
     }
 
     pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
-        //match self.root {
-        //    Some (ref root) => { return root.items_intersection(r, max, min); }
-        //    None => { return None; }
-        //}
-        
-        return self.naive_intersection(r,max,min,exclude);
+        let naive = self.naive_intersection(r,max,min,exclude);
+        let tree = self.tree_nearest_intersection(r,max,min,exclude);
+
+        if naive != tree {
+            println!("Intersection doesn't match for {} ({} {})", r, max, min);
+            match naive{
+                Some(_) => (println!("- naive: {}", naive.unwrap())),
+                None => (println!("- naive: none")),
+            }
+            match tree{
+                Some(_) => (println!("- tree: {}", tree.unwrap())),
+                None => (println!("- tree: none")),
+            }
+        }
+
+        return self.tree_nearest_intersection(r,max,min,exclude);
     }
+
+    pub fn tree_nearest_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
+        match self.root {
+            Some (ref root) => { return root.items_intersection(r, max, min); }
+            None => { return None; }
+        }
+    }
+
 
 
     pub fn naive_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
@@ -78,7 +96,7 @@ impl SceneGraph {
             &self.items.push(x);
         }
         self.partition(8);
-        print!("{}", self);
+        //print!("{}", self);
 
     }
 }

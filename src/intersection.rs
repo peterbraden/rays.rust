@@ -1,5 +1,7 @@
 use na::Vec3;
 use sceneobject::SceneObject;
+use std::cmp;
+use std::fmt;
 
 pub struct Intersection<'a> {
     pub dist: f64,
@@ -19,4 +21,16 @@ impl <'a> Intersection<'a> {
         }
     }
     */
+}
+
+impl<'a> cmp::PartialEq for Intersection<'a> {
+    fn eq(&self, other: &Intersection) -> bool {
+        &self.point == &other.point
+    }
+}
+
+impl<'a> fmt::Display for Intersection<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "(Intersection p:{} d:{})", self.point, self.dist)
+    }
 }

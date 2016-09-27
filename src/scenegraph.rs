@@ -95,13 +95,7 @@ impl SceneGraph {
             self.scene_bounds = self.scene_bounds.union( &x.geometry.bounds() );
             &self.items.push(x);
         }
-<<<<<<< HEAD
         self.partition(8);
-=======
-        self.partition(2);
-        //print!("{}", self);
-
->>>>>>> 1d1ab25... Octree algorithm
     }
 }
 

@@ -13,12 +13,9 @@ and explore algorithms. Probably not interesting to anyone else.
 - [JS Raytracer](https://github.com/peterbraden/js-raytracer)
 
 
-<<<<<<< HEAD
 ## Install / Run
 ```
 cargo run demo/demo.json
 ```
-=======
 ## References
 - [An Efficient Parametric Algorithm for Octree Traversal, J. Revelles, C. Urena, M. Lastra](http://wscg.zcu.cz/wscg2000/Papers_2000/X31.pdf)
->>>>>>> 1d1ab25... Octree algorithm

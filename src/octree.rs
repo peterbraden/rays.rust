@@ -34,13 +34,8 @@ impl OctreeNode {
                 let item_iter = items.into_iter();
                 let inside = item_iter
                                     .cloned()
-<<<<<<< HEAD
                                     .filter( |x| { cbox.intersects_bbox( &x.geometry.bounds() ) } )
                                     .collect::<Vec<Arc<SceneObject>>>();
-=======
-                                    //.filter( |x| { cbox.intersects_bbox( &x.bounds() ) } )
-                                    .collect::<Vec<Rc<SceneObject>>>();
->>>>>>> 1d1ab25... Octree algorithm
 
                 if inside.len() > 0 {
                     let node = OctreeNode::new( depth + 1, max_depth, cbox, &inside);

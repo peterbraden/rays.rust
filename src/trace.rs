@@ -2,12 +2,8 @@ use color::Color;
 use ray::Ray;
 use scene::Scene;
 use intersection::Intersection;
-<<<<<<< HEAD
 use std::f64;
-=======
 use light::Light;
-
->>>>>>> 1d1ab25... Octree algorithm
 
 // Returns num rays cast, Color
 pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {

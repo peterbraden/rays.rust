@@ -37,6 +37,7 @@ impl SceneGraph {
     }
 
     pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
+        /*
         let naive = self.naive_intersection(r,max,min,exclude);
         let tree = self.tree_nearest_intersection(r,max,min);
 
@@ -51,8 +52,9 @@ impl SceneGraph {
                 None => (println!("- tree: none")),
             }
         }
+        */
 
-        return self.tree_nearest_intersection(r,max,min);
+        return self.naive_intersection(r,max,min, exclude);
     }
 
     pub fn tree_nearest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {

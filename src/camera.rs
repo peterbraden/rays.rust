@@ -2,7 +2,7 @@ use na::{Vector3, Norm, Cross, Dot, PerspectiveMatrix3};
 use ray::Ray;
 
 pub struct Camera {
-    transform: PerspectiveMatrix3<f64>,
+//    transform: PerspectiveMatrix3<f64>,
 
 //    up: Vector3<f64>,
     location: Vector3<f64>,
@@ -23,13 +23,14 @@ impl Camera {
         let camz = (lookat - location).normalize();
         let camx = up.cross(&camz).normalize();
 
+        /*
         let transform = PerspectiveMatrix3::new(
             (height as f64 / width as f64) // aspect
             // fovy
             // znear
             // zfar
         );
-
+*/
 
         Camera {
   //          lookat: lookat,
@@ -49,16 +50,16 @@ impl Camera {
     }
 
     pub fn get_ray(&self, x: f64, y: f64) -> Ray {
-        //let xdir = self.camx * (x - 0.5) * self.tax;
-        //let ydir = self.camy * (y - 0.5) * self.tay;
-        //let dest = self.camz + xdir + ydir;
+        let xdir = self.camx * (x - 0.5) * self.tax;
+        let ydir = self.camy * (y - 0.5) * self.tay;
+        let dest = self.camz + xdir + ydir;
 
-        let v = Vector3::new(x, y, 0.);
-        let dir = self.transform.project_vector(v);
+        //let v = Vector3::new(x, y, 0.);
+        //let dir = self.transform.project_vector(v);
 
         Ray {
             ro: self.location,
-            rd: dir
+            rd: dest
         }
     }
 

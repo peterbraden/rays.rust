@@ -1,5 +1,5 @@
 use sceneobject::SceneObject;
-use na::{Vec3, Norm, Dot};
+use na::{Vector3, Norm, Dot};
 use ray::Ray;
 use intersection::Intersection;
 use material::Material;
@@ -13,7 +13,7 @@ impl SceneObject for CheckeredPlane {
 
     fn intersects(&self, r: &Ray) -> Option<Intersection> {
         let rdn = r.rd.normalize();
-        let mut norm = Vec3::new(0., 1., 0.);
+        let mut norm = Vector3::new(0., 1., 0.);
         let denom = norm.dot(&rdn);
 
         if denom.abs() > 0. {
@@ -36,14 +36,14 @@ impl SceneObject for CheckeredPlane {
         None
     }
 
-    fn get_material(&self, pt: Vec3<f64>) -> Material {
+    fn get_material(&self, pt: Vector3<f64>) -> Material {
         Material::checker_demo(pt, 2., 2.)
     }
 
     fn bounds(&self) -> BBox {
         BBox::new(
-            Vec3::new(0.,0.,0.),
-            Vec3::new(0.,0.,0.),
+            Vector3::new(0.,0.,0.),
+            Vector3::new(0.,0.,0.),
           )
     }
 }

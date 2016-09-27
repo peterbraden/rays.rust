@@ -1,5 +1,5 @@
 use color::Color;
-use na::{Vec3, Norm, Dot};
+use na::{Vector3, Norm, Dot};
 use ray::Ray;
 use scene::Scene;
 use std::f64;
@@ -48,7 +48,7 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: i32, s: &Scene
     return (cast, out);
 }
 
-fn trace_for_light(r: &Ray, light_vec: &Vec3<f64>, l: &Light, intersection: &Intersection, s: &Scene) -> Color {
+fn trace_for_light(r: &Ray, light_vec: &Vector3<f64>, l: &Light, intersection: &Intersection, s: &Scene) -> Color {
     return diffuse(&intersection, &light_vec, &l, s) + specular(r, intersection, light_vec, s);
 }
 
@@ -57,7 +57,7 @@ fn ambient(intersection: &Intersection, s: &Scene) -> Color {
     return intersection.object.get_material(intersection.point).pigment * s.ambient;
 }
 
-fn specular (r: &Ray, intersection: &Intersection, light_vec: &Vec3<f64>, s: &Scene) -> Color {
+fn specular (r: &Ray, intersection: &Intersection, light_vec: &Vector3<f64>, s: &Scene) -> Color {
     let phong = intersection.object.get_material(intersection.point).phong;
     if !s.specular || phong == 0. {
         return Color::black();
@@ -75,7 +75,7 @@ fn specular (r: &Ray, intersection: &Intersection, light_vec: &Vec3<f64>, s: &Sc
 }
 
 // Lambertian
-fn diffuse (i: &Intersection, light_vec: &Vec3<f64>, light: &Light, s: &Scene) -> Color {
+fn diffuse (i: &Intersection, light_vec: &Vector3<f64>, light: &Light, s: &Scene) -> Color {
     if !s.diffuse {
         return Color::black();
     }

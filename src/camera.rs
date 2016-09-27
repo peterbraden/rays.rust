@@ -1,16 +1,16 @@
-use na::{Vec3, Norm, Cross, Dot, PerspectiveMatrix3};
+use na::{Vector3, Norm, Cross, Dot, PerspectiveMatrix3};
 use ray::Ray;
 
 pub struct Camera {
     transform: PerspectiveMatrix3<f64>,
 
-//    up: Vec3<f64>,
-    location: Vec3<f64>,
-//    lookat: Vec3<f64>,
+//    up: Vector3<f64>,
+    location: Vector3<f64>,
+//    lookat: Vector3<f64>,
 
-    camx: Vec3<f64>,
-    camy: Vec3<f64>,
-    camz: Vec3<f64>,
+    camx: Vector3<f64>,
+    camy: Vector3<f64>,
+    camz: Vector3<f64>,
 
  //angle: f64,
     tax: f64,
@@ -19,7 +19,7 @@ pub struct Camera {
 
 
 impl Camera {
-    pub fn new(lookat: Vec3<f64>, location:Vec3<f64>, up:Vec3<f64>, angle: f64, height: u32, width: u32) -> Camera {
+    pub fn new(lookat: Vector3<f64>, location:Vector3<f64>, up:Vector3<f64>, angle: f64, height: u32, width: u32) -> Camera {
         let camz = (lookat - location).normalize();
         let camx = up.cross(&camz).normalize();
 
@@ -40,7 +40,7 @@ impl Camera {
             camz: camz,
             camx: camx,
             camy: camx.cross(
-                &(Vec3::new(0f64,0f64,0f64) - camz)
+                &(Vector3::new(0f64,0f64,0f64) - camz)
                 ).normalize(),
 
             tax: angle.tan(), // recip of len
@@ -53,7 +53,7 @@ impl Camera {
         //let ydir = self.camy * (y - 0.5) * self.tay;
         //let dest = self.camz + xdir + ydir;
 
-        let v = Vec3::new(x, y, 0.);
+        let v = Vector3::new(x, y, 0.);
         let dir = self.transform.project_vector(v);
 
         Ray {
@@ -64,7 +64,7 @@ impl Camera {
 
     // Inverse of get ray
     // BROKEN
-    pub fn get_coord_for_point(&self, point: Vec3<f64>) -> (f64,f64) {
+    pub fn get_coord_for_point(&self, point: Vector3<f64>) -> (f64,f64) {
         // Generate ray
         let rd = (point - self.location).normalize();
         let dir = rd - self.camz;
@@ -90,16 +90,16 @@ macro_rules! assert_approx_eq(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use na::Vec3;
+    use na::Vector3;
 
     #[test]
     fn get_ray() {
         let width = 200;
         let height = 100;
         let c = Camera::new(
-            Vec3::new(0f64,0f64,0f64),
-            Vec3::new(0f64, 1f64, -1f64),
-            Vec3::new(0f64,1f64,0f64),
+            Vector3::new(0f64,0f64,0f64),
+            Vector3::new(0f64, 1f64, -1f64),
+            Vector3::new(0f64,1f64,0f64),
             35.0 , // 35 radians?
             width, height
         );
@@ -118,9 +118,9 @@ mod tests {
         let width = 100;
         let height = 100;
         let c = Camera::new(
-            Vec3::new(0f64,0f64,0f64),
-            Vec3::new(0f64, 0f64, -10f64),
-            Vec3::new(0f64,1f64,0f64),
+            Vector3::new(0f64,0f64,0f64),
+            Vector3::new(0f64, 0f64, -10f64),
+            Vector3::new(0f64,1f64,0f64),
             0.61,
             width, height
         );

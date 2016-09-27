@@ -1,5 +1,5 @@
 use camera;
-use na::Vec3;
+use na::Vector3;
 use scenegraph::SceneGraph;
 use sphere::Sphere;
 use checkeredplane::CheckeredPlane;
@@ -30,18 +30,18 @@ impl Scene {
         let height = 100;
     
         let c = camera::Camera::new(
-            Vec3::new(0f64,0f64,0f64), //lookat
-            Vec3::new(5f64,10f64,-20f64), // loc
-            Vec3::new(0f64,1f64,0f64), // up
+            Vector3::new(0f64,0f64,0f64), //lookat
+            Vector3::new(5f64,10f64,-20f64), // loc
+            Vector3::new(0f64,1f64,0f64), // up
             0.9,
             width, height
         );
 
         let mut o = SceneGraph::new();
 
-        let s1 = Sphere::new(Vec3::new(0f64, 2f64, 0f64), 2f64);
-        let s2 = Sphere::new(Vec3::new(3f64, 3f64, 5f64), 3f64);
-        let s3 = Sphere::new(Vec3::new(-6f64, 6f64, 5f64), 6f64);
+        let s1 = Sphere::new(Vector3::new(0f64, 2f64, 0f64), 2f64);
+        let s2 = Sphere::new(Vector3::new(3f64, 3f64, 5f64), 3f64);
+        let s3 = Sphere::new(Vector3::new(-6f64, 6f64, 5f64), 6f64);
         let floor = CheckeredPlane { y: 1f64 };
 
         let objects: Vec<Rc<SceneObject>> = vec!(Rc::new(s1), Rc::new(s2), Rc::new(s3), /*Rc::new(floor)*/);
@@ -51,25 +51,25 @@ impl Scene {
 
         let l = vec!(
             Light {
-                position: Vec3::new(10f64, 10f64, 0f64),
+                position: Vector3::new(10f64, 10f64, 0f64),
                 color: Color::white(),
                 intensity: 0.9,
             },
             /*
             Light {
-                position: Vec3::new(0f64, 50f64, 50f64),
+                position: Vector3::new(0f64, 50f64, 50f64),
                 color: Color::red(),
                 intensity: 0.9,
             },
 
             Light {
-                position: Vec3::new(-50f64, 50f64, -50f64),
+                position: Vector3::new(-50f64, 50f64, -50f64),
                 color: Color::green(),
                 intensity: 0.9,
             },
 
             Light {
-                position: Vec3::new(50f64, 50f64, -50f64),
+                position: Vector3::new(50f64, 50f64, -50f64),
                 color: Color::blue(),
                 intensity: 0.9,
             },

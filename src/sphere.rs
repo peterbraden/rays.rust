@@ -1,5 +1,5 @@
 use sceneobject::SceneObject;
-use na::{Vec3, Norm, Dot};
+use na::{Vector3, Norm, Dot};
 use ray::Ray;
 use intersection::Intersection;
 use material::Material;
@@ -7,13 +7,13 @@ use bbox::BBox;
 
 #[derive(PartialEq)]
 pub struct Sphere {
-    center: Vec3<f64>,
+    center: Vector3<f64>,
     radius: f64,
     material: Material
 }
 
 impl Sphere{
-    pub fn new(center:Vec3<f64>, radius: f64) -> Sphere {
+    pub fn new(center:Vector3<f64>, radius: f64) -> Sphere {
         Sphere {
             center: center,
             radius: radius,
@@ -60,18 +60,18 @@ impl SceneObject for Sphere {
 
     fn bounds(&self) -> BBox {
         BBox::new(
-            Vec3::new(&self.center.x - &self.radius, 
+            Vector3::new(&self.center.x - &self.radius, 
                       &self.center.y - &self.radius, 
                       &self.center.z - &self.radius
                       ),
-            Vec3::new(&self.center.x + &self.radius, 
+            Vector3::new(&self.center.x + &self.radius, 
                       &self.center.y + &self.radius, 
                       &self.center.z + &self.radius
                       ),
           )
     }
 
-    fn get_material(&self, _: Vec3<f64>) -> Material {
+    fn get_material(&self, _: Vector3<f64>) -> Material {
         return self.material.clone();
     }
 }

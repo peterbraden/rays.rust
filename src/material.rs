@@ -1,5 +1,5 @@
 use color::Color;
-use na::Vec3;
+use na::Vector3;
 use rand;
 
 #[derive(PartialEq, Clone)]
@@ -22,7 +22,7 @@ impl Material {
     }
 
 
-    pub fn checker_demo(pt: Vec3<f64>, xsize: f64, zsize: f64) -> Material {
+    pub fn checker_demo(pt: Vector3<f64>, xsize: f64, zsize: f64) -> Material {
         let zig = if (pt[0].abs() / xsize) as i32 % 2 == 0 { pt[0] > 0. } else { pt[0] <= 0. };
         let zag = if (pt[2].abs() / zsize) as i32 % 2 == 0 { pt[2] > 0. } else { pt[2] <= 0. };
         // zig XOR zag

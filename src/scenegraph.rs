@@ -38,7 +38,7 @@ impl SceneGraph {
 
     pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
         let naive = self.naive_intersection(r,max,min,exclude);
-        let tree = self.tree_nearest_intersection(r,max,min,exclude);
+        let tree = self.tree_nearest_intersection(r,max,min);
 
         if naive != tree {
             println!("Intersection doesn't match for {} ({} {})", r, max, min);
@@ -52,12 +52,12 @@ impl SceneGraph {
             }
         }
 
-        return self.tree_nearest_intersection(r,max,min,exclude);
+        return self.tree_nearest_intersection(r,max,min);
     }
 
-    pub fn tree_nearest_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
+    pub fn tree_nearest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
         match self.root {
-            Some (ref root) => { return root.items_intersection(r, max, min); }
+            Some (ref root) => { return root.intersection(r, max, min); }
             None => { return None; }
         }
     }
@@ -95,7 +95,13 @@ impl SceneGraph {
             self.scene_bounds = self.scene_bounds.union( &x.geometry.bounds() );
             &self.items.push(x);
         }
+<<<<<<< HEAD
         self.partition(8);
+=======
+        self.partition(2);
+        //print!("{}", self);
+
+>>>>>>> 1d1ab25... Octree algorithm
     }
 }
 

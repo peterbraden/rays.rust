@@ -11,3 +11,7 @@ and explore algorithms. Probably not interesting to anyone else.
 
 - [Rays (c++)](https://github.com/peterbraden/rays)
 - [JS Raytracer](https://github.com/peterbraden/js-raytracer)
+
+
+## References
+- [An Efficient Parametric Algorithm for Octree Traversal, J. Revelles, C. Urena, M. Lastra](http://wscg.zcu.cz/wscg2000/Papers_2000/X31.pdf)

@@ -4,7 +4,6 @@ use ray::Ray;
 use scene::Scene;
 use std::f64;
 use intersection::Intersection;
-use sceneobject::SceneObject;
 use light::Light;
 
 

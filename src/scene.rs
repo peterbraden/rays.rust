@@ -26,8 +26,8 @@ pub struct Scene {
 
 impl Scene {
     pub fn demo () -> Scene {
-        let width = 400;
-        let height = 400;
+        let width = 100;
+        let height = 100;
     
         let c = camera::Camera::new(
             Vec3::new(0f64,0f64,0f64), //lookat
@@ -44,7 +44,7 @@ impl Scene {
         let s3 = Sphere::new(Vec3::new(-6f64, 6f64, 5f64), 6f64);
         let floor = CheckeredPlane { y: 1f64 };
 
-        let objects: Vec<Rc<SceneObject>> = vec!(Rc::new(s1), Rc::new(s2), Rc::new(s3), Rc::new(floor));
+        let objects: Vec<Rc<SceneObject>> = vec!(Rc::new(s1), Rc::new(s2), Rc::new(s3), /*Rc::new(floor)*/);
         o.push(objects);
 
 

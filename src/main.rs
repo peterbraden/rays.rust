@@ -20,6 +20,7 @@ mod camera;
 mod trace;
 mod rendercontext;
 mod paint;
+mod wireframe;
 
 use trace::trace;
 use rendercontext::RenderContext;
@@ -36,6 +37,7 @@ fn main() {
         }
     }
 
+    wireframe::wireframe(&s, &mut rc);
     paint::to_png(&rc);
     paint::poor_mans(&rc);
     rc.print_stats();

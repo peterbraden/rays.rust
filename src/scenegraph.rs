@@ -36,6 +36,10 @@ impl SceneGraph {
                         );
     }
 
+    pub fn items(&self) -> &Vec<Rc<SceneObject>>{
+        &self.items
+    }
+
     pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
         /*
         let naive = self.naive_intersection(r,max,min,exclude);

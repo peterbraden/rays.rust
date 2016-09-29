@@ -26,12 +26,12 @@ pub struct Scene {
 
 impl Scene {
     pub fn demo () -> Scene {
-        let width = 100;
-        let height = 100;
+        let width = 400;
+        let height = 400;
     
         let c = camera::Camera::new(
             Vector3::new(0f64,0f64,0f64), //lookat
-            Vector3::new(-10f64,10f64,-10f64), // loc
+            Vector3::new(-3f64,5f64,-15f64), // loc
             Vector3::new(0f64,1f64,0f64), // up
             0.8,
             width, height
@@ -40,8 +40,8 @@ impl Scene {
         let mut o = SceneGraph::new();
 
         let s1 = Sphere::new(Vector3::new(0f64, 2f64, 0f64), 2f64);
-        let s2 = Sphere::new(Vector3::new(3f64, 3f64, 5f64), 3f64);
-        let s3 = Sphere::new(Vector3::new(-6f64, 6f64, 5f64), 6f64);
+        let s2 = Sphere::new(Vector3::new(3f64, 3f64, 0f64), 1f64);
+        let s3 = Sphere::new(Vector3::new(-3f64, 5f64, 0f64), 1f64);
         let floor = CheckeredPlane { y: 0f64 };
 
         let objects: Vec<Rc<SceneObject>> = vec!(Rc::new(s1), Rc::new(s2), Rc::new(s3), Rc::new(floor));

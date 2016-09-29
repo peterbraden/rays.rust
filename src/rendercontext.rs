@@ -26,6 +26,10 @@ impl RenderContext {
     }
 
     pub fn set_pixel(&mut self, x: u32, y: u32, c:Color) {
+        if (y*self.width + x) > self.width * self.height {
+            return;
+        }
+
         self.image[ (y*self.width + x) as usize ] = c;
     }
 

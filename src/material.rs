@@ -21,6 +21,14 @@ impl Material {
         }
     }
 
+    pub fn gray() -> Material {
+        Material {
+            pigment: Color::new(0.5,0.5,0.5),
+            reflection: 0.2,
+            phong: 80f64,
+        }
+    }
+
 
     pub fn checker_demo(pt: Vector3<f64>, xsize: f64, zsize: f64) -> Material {
         let zig = if (pt[0].abs() / xsize) as i32 % 2 == 0 { pt[0] > 0. } else { pt[0] <= 0. };

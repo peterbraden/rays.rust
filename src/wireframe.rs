@@ -13,6 +13,11 @@ pub fn wireframe(s: &Scene, ctx: &mut RenderContext){
         let b = obj.bounds();
         draw_bbox(b, obj.get_material(b.min).pigment, s, ctx);
     }
+
+    for b in s.objects.partitions() {
+        draw_bbox(b, Color::white(), s, ctx)
+    }
+
 }
 
 pub fn draw_bbox(b:BBox, c:Color,  s: &Scene, rc:&mut RenderContext) {

@@ -54,6 +54,21 @@ impl OctreeNode {
         }
     }
 
+    pub fn bounds(&self) -> BBox {
+        return self.bounds;
+    }
+
+    pub fn partitions(&self) -> Vec<BBox> {
+        let mut bboxes = Vec::new();
+        bboxes.push(self.bounds);
+        for i in 0..8 {
+            match self.children[i as usize] {
+                Some(ref c) => bboxes.extend_from_slice(&c.partitions()),
+                None => {}
+            }
+        }
+        return bboxes;
+    }
 
     pub fn is_leaf(&self) -> bool {
         for i in 0..8 {

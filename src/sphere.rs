@@ -20,6 +20,14 @@ impl Sphere{
             material: Material::demo()
         }
     }
+
+    pub fn new_with_material(center:Vector3<f64>, radius: f64, material: Material) -> Sphere {
+        Sphere {
+            center: center,
+            radius: radius,
+            material: material
+        }
+    }
 }
 
 

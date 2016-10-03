@@ -36,6 +36,18 @@ impl SceneGraph {
                         );
     }
 
+
+    pub fn partitions(&self) -> Vec<BBox> {
+        let mut bboxes = Vec::new();
+        match self.root {
+            Some (ref root) => { 
+                bboxes = root.partitions();
+            }
+            None => {}
+        }
+        return bboxes;
+    }
+
     pub fn items(&self) -> &Vec<Rc<SceneObject>>{
         &self.items
     }

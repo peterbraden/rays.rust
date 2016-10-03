@@ -26,7 +26,7 @@ impl RenderContext {
     }
 
     pub fn set_pixel(&mut self, x: u32, y: u32, c:Color) {
-        if (y*self.width + x) > self.width * self.height {
+        if x >= self.width || y.saturating_mul(self.width).saturating_add(x) >= self.width * self.height {
             return;
         }
 

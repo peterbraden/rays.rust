@@ -69,9 +69,9 @@ pub fn draw_line(pt0: Vector3<f64>, pt1: Vector3<f64>, c:Color, s: &Scene, rc: &
     let mut y = y0; 
     for x in x0..x1 { 
         if steep { 
-            rc.set_pixel(y as u32, x as u32,c);
+            rc.set_pixel_opacity(y as u32, x as u32, 0.5, c);
         } else { 
-            rc.set_pixel(x as u32, y as u32,c);
+            rc.set_pixel_opacity(x as u32, y as u32, 0.5, c);
         } 
 
         error += derror; 

@@ -131,6 +131,7 @@ mod tests {
     fn get_coord_for_point(){
         let width = 100;
         let height = 100;
+
         let c = Camera::new(
             Vector3::new(0f64,0f64,0f64),
             Vector3::new(0f64, 0f64, -10f64),

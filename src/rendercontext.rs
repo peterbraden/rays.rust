@@ -33,6 +33,16 @@ impl RenderContext {
         self.image[ (y*self.width + x) as usize ] = c;
     }
 
+    pub fn set_pixel_opacity(&mut self, x: u32, y: u32, opacity:f64, c:Color) {
+        if x >= self.width || y.saturating_mul(self.width).saturating_add(x) >= self.width * self.height {
+            return;
+        }
+
+        let prev = self.image[ (y*self.width + x) as usize ];
+        self.image[ (y*self.width + x) as usize ] = (prev * (1.-opacity) + (c * opacity));
+    }
+
+
     pub fn get_pixel(&self, x:u32, y:u32) -> Color {
         return self.image[ (y*self.width + x) as usize ]
     }

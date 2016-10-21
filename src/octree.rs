@@ -26,15 +26,15 @@ impl OctreeNode {
         // Rust arrays suck - this defaults them to 'None'
         let mut children: [Option<Box<OctreeNode>>; 8] = Default::default();
 
+        // Equal subdivision. Enhancement: Use different split.
         for i in 0..8 {
             // Does child node have any objects in?
             if depth < max_depth && items.len() > 1 {
-                // Equal subdivision. Enhancement: Use different split.
                 let cbox = BBox::for_octant(i, &b);
                 let item_iter = items.into_iter();
                 let inside = item_iter
                                     .cloned()
-                                    //.filter( |x| { cbox.intersects_bbox( &x.bounds() ) } )
+                                    .filter( |x| { cbox.intersects_bbox( &x.bounds() ) } )
                                     .collect::<Vec<Rc<SceneObject>>>();
 
                 if inside.len() > 0 {

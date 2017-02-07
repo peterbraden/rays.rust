@@ -78,8 +78,6 @@ impl SceneGraph {
             &self.items.push(x);
         }
         self.partition(8);
-        print!("{}", self);
-
     }
 }
 

@@ -11,3 +11,9 @@ and explore algorithms. Probably not interesting to anyone else.
 
 - [Rays (c++)](https://github.com/peterbraden/rays)
 - [JS Raytracer](https://github.com/peterbraden/js-raytracer)
+
+
+## Install / Run
+```
+cargo run demo/demo.json
+```

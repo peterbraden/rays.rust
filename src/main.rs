@@ -1,8 +1,13 @@
 #![allow(dead_code)]
-
 //extern crate image;
 extern crate nalgebra as na;
 extern crate rand;
+extern crate clap;
+#[macro_use]
+extern crate serde_derive;
+extern crate serde_json;
+
+use clap::{Arg, App};
 
 mod ray;
 mod bbox;
@@ -16,6 +21,7 @@ mod checkeredplane;
 mod octree;
 mod scenegraph;
 mod scene;
+mod scenefile;
 mod camera;
 mod trace;
 mod rendercontext;
@@ -25,7 +31,19 @@ use trace::trace;
 use rendercontext::RenderContext;
 
 fn main() {
-    let s = scene::Scene::demo();
+    let app = App::new("Rays")
+        .version("0.1")
+        .arg(Arg::with_name("scene")
+            .value_name("FILE")
+            .help("Set scene file")
+            .takes_value(true)
+            .required(true)
+            .index(1));
+
+    let matches = app.get_matches();
+    let s = scenefile::SceneFile::from_file(
+                matches.value_of("scene").unwrap()
+            );
     let mut rc = RenderContext::new(s.width, s.height);
 
     for y in 0..s.height {

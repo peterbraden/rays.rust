@@ -1,0 +1,54 @@
+{
+  "width": 400,
+  "height": 400,
+  
+  "ambient": 0.2,
+  "specular": true,
+  "diffuse" : true,
+  "reflection": 2,
+
+  "camera": {
+    "location": [5, 10, -20],
+    "lookat" : [0,0,0],
+    "up" : [0,1,0],
+    "angle": 0.9 
+  },
+  
+  "lights" : [
+    {
+      "location": [10, 10, 0], 
+      "color": "white",
+      "intensity": 0.9
+    }
+  ],
+
+  "variables" : {},
+
+  "objects": [
+    { 
+      "type" : "sphere",
+      "location": [0,2,0],
+      "radius": 2,
+
+      "material" : {
+        "pigment": [1, 1, 0.5],
+        "reflection": 0.2,
+        "phong": 20
+      }
+    },
+    { 
+      "type" : "sphere",
+      "location": [3,3,5],
+      "radius": 3
+    },
+    { 
+      "type" : "sphere",
+      "location": [-6,6,5],
+      "radius": 6
+    },
+    { 
+      "type" : "checkeredplane",
+      "y": 1
+    }
+  ]
+}

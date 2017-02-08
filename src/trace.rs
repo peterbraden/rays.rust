@@ -8,7 +8,7 @@ use light::Light;
 
 
 // Returns num rays cast, Color
-pub fn trace (r: &Ray, depth: i32, s: &Scene) -> (u64, Color) {
+pub fn trace (r: &Ray, depth: u32, s: &Scene) -> (u64, Color) {
     
     let closest = s.objects.nearest_intersection(r, f64::INFINITY, 0f64, None);
 
@@ -18,7 +18,7 @@ pub fn trace (r: &Ray, depth: i32, s: &Scene) -> (u64, Color) {
     }
 }
 
-fn trace_intersection(r: &Ray, intersection: Intersection, depth: i32, s: &Scene) -> (u64, Color) {
+fn trace_intersection(r: &Ray, intersection: Intersection, depth: u32, s: &Scene) -> (u64, Color) {
 
     let mut out = ambient(&intersection, s);
     let mut cast = 1;
@@ -88,7 +88,7 @@ fn diffuse (i: &Intersection, light_vec: &Vector3<f64>, light: &Light, s: &Scene
 
 
 
-fn reflection(r: &Ray, out: Color, intersection: &Intersection, depth: i32, s: &Scene) -> (u64, Color) {
+fn reflection(r: &Ray, out: Color, intersection: &Intersection, depth: u32, s: &Scene) -> (u64, Color) {
 
     let refl = Ray {
         ro: intersection.point,

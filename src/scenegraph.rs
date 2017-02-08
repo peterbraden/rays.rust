@@ -113,9 +113,8 @@ impl SceneGraph {
             self.scene_bounds = self.scene_bounds.union( &x.bounds() );
             &self.items.push(x);
         }
-        self.partition(2);
-        //print!("{}", self);
 
+        self.partition(8);
     }
 }
 

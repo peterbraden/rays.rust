@@ -18,5 +18,6 @@ pub struct Scene {
     pub reflection: bool,
     pub specular: bool,
     pub diffuse: bool,
+    pub supersamples: u32,
 }
 

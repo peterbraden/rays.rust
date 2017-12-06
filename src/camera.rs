@@ -38,9 +38,9 @@ impl Camera {
         }
     }
 
-    pub fn get_ray(&self, x: f64, y: f64) -> Ray {
-        let xdir = self.camx * (x - 0.5) * self.tax;
-        let ydir = self.camy * (y - 0.5) * self.tay;
+    pub fn get_ray(&self, x: f64, y: f64, sx: f64, sy: f64) -> Ray {
+        let xdir = self.camx * (x + sx - 0.5) * self.tax;
+        let ydir = self.camy * (y + sy - 0.5) * self.tay;
         let dest = self.camz + xdir + ydir;
 
         Ray {
@@ -51,6 +51,7 @@ impl Camera {
 }
 
 
+#[cfg(test)]
 macro_rules! assert_approx_eq(
     ($a:expr, $b:expr) => ({
     let (a, b) = (&$a, &$b);

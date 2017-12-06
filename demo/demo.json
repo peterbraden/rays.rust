@@ -7,6 +7,8 @@
   "diffuse" : true,
   "reflection": 2,
 
+  "supersamples": 3,
+
   "camera": {
     "location": [5, 10, -20],
     "lookat" : [0,0,0],

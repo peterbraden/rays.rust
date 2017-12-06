@@ -76,12 +76,12 @@ mod tests {
             width, height
         );
         
-        assert_approx_eq!(c.get_ray(0.1, 0.1).ro.x, 0f64);
-        assert_approx_eq!(c.get_ray(0.1, 0.1).ro.y, 1f64);
-        assert_approx_eq!(c.get_ray(0.1, 0.1).ro.z, -1f64);
+        assert_approx_eq!(c.get_ray(0.1, 0.1, 0., 0.).ro.x, 0f64);
+        assert_approx_eq!(c.get_ray(0.1, 0.1, 0., 0.).ro.y, 1f64);
+        assert_approx_eq!(c.get_ray(0.1, 0.1, 0., 0.).ro.z, -1f64);
 
-        assert_approx_eq!(c.get_ray(0.05, 0.1).rd.x, -0.21321662418650297);
-        assert_approx_eq!(c.get_ray(0.05, 0.1).rd.y, -1.052729238967664);
-        assert_approx_eq!(c.get_ray(0.05, 0.1).rd.z, 0.361484323405431);
+        assert_approx_eq!(c.get_ray(0.05, 0.1, 0., 0.).rd.x, -0.21321662418650297);
+        assert_approx_eq!(c.get_ray(0.05, 0.1, 0., 0.).rd.y, -1.052729238967664);
+        assert_approx_eq!(c.get_ray(0.05, 0.1, 0., 0.).rd.z, 0.361484323405431);
     }
 }

@@ -48,9 +48,22 @@ fn main() {
 
     for y in 0..s.height {
         for x in 0..s.width {
-            let (rays_cast, c) = trace( &s.camera.get_ray(x as f64 / (s.width as f64), y as f64 / (s.height as f64)), 0, &s);
-            rc.rays_cast += rays_cast;
-            rc.set_pixel(x, y, c);
+            let mut pixel = color::Color::black();
+            for sx in 0..s.supersamples {
+                for sy in 0..s.supersamples {
+                    let (rays_cast, c) = trace(
+                            &s.camera.get_ray(
+                                x as f64 / (s.width as f64),
+                                y as f64 / (s.height as f64),
+                                sx as f64 / (s.supersamples as f64) * 1. / (s.width as f64),
+                                sy as f64 / (s.supersamples as f64) * 1. / (s.height as f64))
+                            , 0, &s);
+                    rc.rays_cast += rays_cast;
+                    pixel = pixel + c;
+                }
+            }
+
+            rc.set_pixel(x, y, pixel / ((s.supersamples * s.supersamples) as f64));
         }
     }
 

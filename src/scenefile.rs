@@ -1,8 +1,7 @@
 use camera;
 use na::Vec3;
 use scenegraph::SceneGraph;
-use sphere::Sphere;
-use checkeredplane::CheckeredPlane;
+use shapes::sphere::Sphere;
 use light::Light;
 use color::Color;
 use std::rc::Rc;
@@ -32,8 +31,6 @@ pub struct SceneFile {
 }
 
 impl SceneFile {
-
-
     pub fn parse_vec3(v: &Value) -> Vec3<f64> {
         return Vec3::new(v[0].as_f64().unwrap(),
                          v[1].as_f64().unwrap(),
@@ -80,8 +77,11 @@ impl SceneFile {
         );
     }
 
-    pub fn parse_checkeredplane(o: &Value) -> CheckeredPlane {
-        return CheckeredPlane { y: o["y"].as_f64().unwrap() };
+    pub fn parse_checkeredplane(o: &Value) -> SceneObject {
+        SceneObject {
+            geometry: Plane { y: o["y"].as_f64().unwrap() },
+            material: material::CHECKERED_MARBLE
+        }
     }
 
     pub fn parse_light(o: &Value) -> Light {

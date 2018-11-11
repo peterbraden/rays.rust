@@ -16,8 +16,11 @@ mod material;
 mod intersection;
 mod sceneobject;
 mod light;
-mod sphere;
-mod checkeredplane;
+mod shapes {
+    pub mod geometry;
+    pub mod sphere;
+    pub mod plane;
+}
 mod octree;
 mod scenegraph;
 mod scene;

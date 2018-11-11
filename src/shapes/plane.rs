@@ -1,16 +1,13 @@
-use sceneobject::SceneObject;
 use na::{Vec3, Norm, Dot};
 use ray::Ray;
 use intersection::Intersection;
-use material::Material;
 use bbox::BBox;
 
 pub struct CheckeredPlane {
     pub y: f64
 }
 
-impl SceneObject for CheckeredPlane {
-
+impl Geometry for Plane {
     fn intersects(&self, r: &Ray) -> Option<Intersection> {
         let rdn = r.rd.normalize();
         let mut norm = Vec3::new(0., 1., 0.);
@@ -36,10 +33,6 @@ impl SceneObject for CheckeredPlane {
         None
     }
 
-    fn get_material(&self, pt: Vec3<f64>) -> Material {
-        Material::checker_demo(pt, 2., 2.)
-    }
-
     fn bounds(&self) -> BBox {
         BBox::new(
             Vec3::new(0.,0.,0.),
@@ -47,5 +40,3 @@ impl SceneObject for CheckeredPlane {
           )
     }
 }
-
-

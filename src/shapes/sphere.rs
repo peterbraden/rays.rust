@@ -1,15 +1,13 @@
-use sceneobject::SceneObject;
+use shapes::geometry::Geometry;
 use na::{Vec3, Norm, Dot};
 use ray::Ray;
 use intersection::Intersection;
-use material::Material;
 use bbox::BBox;
 
 #[derive(PartialEq)]
 pub struct Sphere {
     center: Vec3<f64>,
     radius: f64,
-    material: Material
 }
 
 impl Sphere{
@@ -17,13 +15,12 @@ impl Sphere{
         Sphere {
             center: center,
             radius: radius,
-            material: Material::demo()
         }
     }
 }
 
 
-impl SceneObject for Sphere {
+impl Geometry for Sphere {
     fn intersects(&self, r: &Ray) -> Option<Intersection> {
         let dst = r.ro - self.center;
         let b = dst.dot(&r.rd.normalize());
@@ -69,9 +66,5 @@ impl SceneObject for Sphere {
                       &self.center.z + &self.radius
                       ),
           )
-    }
-
-    fn get_material(&self, _: Vec3<f64>) -> Material {
-        return self.material.clone();
     }
 }

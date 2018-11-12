@@ -54,11 +54,11 @@ fn trace_for_light(r: &Ray, light_vec: &Vec3<f64>, l: &Light, intersection: &Int
 
 
 fn ambient(intersection: &Intersection, s: &Scene) -> Color {
-    return intersection.object.get_material(intersection.point).pigment * s.ambient;
+    return intersection.object.medium.material_at(intersection.point).pigment * s.ambient;
 }
 
 fn specular (r: &Ray, intersection: &Intersection, light_vec: &Vec3<f64>, s: &Scene) -> Color {
-    let phong = intersection.object.get_material(intersection.point).phong;
+    let phong = intersection.object.medium.material_at(intersection.point).phong;
     if !s.specular || phong == 0. {
         return Color::black();
     }
@@ -81,7 +81,7 @@ fn diffuse (i: &Intersection, light_vec: &Vec3<f64>, light: &Light, s: &Scene) -
     }
     let diffuse_scale = light_vec.normalize().dot(&i.normal) * light.intensity;
     if diffuse_scale.is_sign_positive() {
-        return light.color * i.object.get_material(i.point).pigment * diffuse_scale;
+        return light.color * i.object.medium.material_at(i.point).pigment * diffuse_scale;
     }
     return Color::black()
 }
@@ -96,7 +96,7 @@ fn reflection(r: &Ray, out: Color, intersection: &Intersection, depth: u32, s: &
     };
 
     let (c, col) = trace(&refl, depth + 1, s);
-    let scal = intersection.object.get_material(intersection.point).reflection;
+    let scal = intersection.object.medium.material_at(intersection.point).reflection;
 
     return (c, (out * (1. - scal)) + (col * scal) );
 }

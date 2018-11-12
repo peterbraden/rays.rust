@@ -2,6 +2,7 @@ use camera;
 use na::Vec3;
 use scenegraph::SceneGraph;
 use shapes::sphere::Sphere;
+use shapes::plane::Plane;
 use light::Light;
 use color::Color;
 use std::rc::Rc;
@@ -11,6 +12,7 @@ use scene::Scene;
 use serde_json;
 use std::io::prelude::*;
 use std::fs::File;
+use material;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SceneFile {
@@ -70,17 +72,19 @@ impl SceneFile {
         return None
     }
 
-    pub fn parse_sphere(o: &Value) -> Sphere {
-        return Sphere::new(
-            SceneFile::parse_vec3(&o["location"]),
-            o["radius"].as_f64().unwrap()
-        );
+    pub fn parse_sphere(o: &Value) -> SceneObject {
+        return SceneObject {
+            geometry: Box::new(Sphere::new(
+                SceneFile::parse_vec3(&o["location"]),
+                o["radius"].as_f64().unwrap())),
+            medium: Box::new(material::Solid { m: material::POLISHED_COPPER })
+        };
     }
 
     pub fn parse_checkeredplane(o: &Value) -> SceneObject {
         SceneObject {
-            geometry: Plane { y: o["y"].as_f64().unwrap() },
-            material: material::CHECKERED_MARBLE
+            geometry: Box::new(Plane { y: o["y"].as_f64().unwrap() }),
+            medium: Box::new(material::CHECKERED_MARBLE)
         }
     }
 

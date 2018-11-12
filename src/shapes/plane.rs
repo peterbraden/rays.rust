@@ -1,14 +1,15 @@
 use na::{Vec3, Norm, Dot};
 use ray::Ray;
-use intersection::Intersection;
+use intersection::RawIntersection;
 use bbox::BBox;
+use shapes::geometry::Geometry;
 
-pub struct CheckeredPlane {
+pub struct Plane {
     pub y: f64
 }
 
 impl Geometry for Plane {
-    fn intersects(&self, r: &Ray) -> Option<Intersection> {
+    fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         let rdn = r.rd.normalize();
         let mut norm = Vec3::new(0., 1., 0.);
         let denom = norm.dot(&rdn);
@@ -21,11 +22,10 @@ impl Geometry for Plane {
                 }
 
                 return Some(
-                    Intersection {
+                    RawIntersection {
                         dist: dist, 
                         point: r.ro + (rdn * dist),
                         normal: norm,
-                        object: self
                     })
             }
         }

@@ -1,7 +1,7 @@
 use shapes::geometry::Geometry;
 use na::{Vec3, Norm, Dot};
 use ray::Ray;
-use intersection::Intersection;
+use intersection::RawIntersection;
 use bbox::BBox;
 
 #[derive(PartialEq)]
@@ -21,7 +21,7 @@ impl Sphere{
 
 
 impl Geometry for Sphere {
-    fn intersects(&self, r: &Ray) -> Option<Intersection> {
+    fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         let dst = r.ro - self.center;
         let b = dst.dot(&r.rd.normalize());
         let c = dst.dot(&dst) - self.radius * self.radius;
@@ -47,11 +47,10 @@ impl Geometry for Sphere {
         let point = r.ro + (r.rd.normalize() * dist);
 
         return Some(
-            Intersection {
+            RawIntersection {
                 dist: dist, 
                 point: point,
-                normal: (point - self.center).normalize(),
-                object: self
+                normal: (point - self.center).normalize()
             })
     }
 

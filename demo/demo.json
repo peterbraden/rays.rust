@@ -9,6 +9,31 @@
 
   "supersamples": 3,
 
+  "materials": {
+    "POLISHED_COPPER": {
+      "pigment": [0.97, 0.74, 0.62],
+      "metallic": 1.0,
+      "roughness": 0.01,
+      "reflection": 0.7,
+      "phong": 0.01
+    },
+    
+    "WHITE_MARBLE": {
+      "pigment": [0.9, 0.9, 0.9],
+      "metallic": 0.1,
+      "roughness": 0.01,
+      "reflection": 0.7,
+      "phong": 0.01
+    },
+    "BLACK_MARBLE": {
+      "pigment": [0.1, 0.1, 0.1],
+      "metallic": 0.1,
+      "roughness": 0.01,
+      "reflection": 0.7,
+      "phong": 0.01
+    }
+  },
+
   "camera": {
     "location": [5, 10, -20],
     "lookat" : [0,0,0],
@@ -31,26 +56,24 @@
       "type" : "sphere",
       "location": [0,2,0],
       "radius": 2,
-
-      "material" : {
-        "pigment": [1, 1, 0.5],
-        "reflection": 0.2,
-        "phong": 20
-      }
+      "material" : "POLISHED_COPPER"
     },
     { 
       "type" : "sphere",
       "location": [3,3,5],
-      "radius": 3
+      "radius": 3,
+      "material" : "BLACK_MARBLE"
     },
     { 
       "type" : "sphere",
       "location": [-6,6,5],
-      "radius": 6
+      "radius": 6,
+      "material" : "WHITE_MARBLE"
     },
     { 
       "type" : "checkeredplane",
-      "y": 1
+      "y": 1,
+      "material" : "WHITE_MARBLE"
     }
   ]
 }

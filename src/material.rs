@@ -3,7 +3,7 @@ use na::Vec3;
 ///
 /// See https://google.github.io/filament//Materials.md.html#materialmodels/litmodel
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Material {
     pub pigment: Color, // Attenuation due to albedo
     pub metallic: f64, // Dielectric 0 to Metallic 1
@@ -47,30 +47,3 @@ impl Medium for CheckeredYPlane {
     }
 }
 
-pub const POLISHED_COPPER: Material = Material{
-    pigment: Color::new(0.97, 0.74, 0.62),
-    metallic: 1.,
-    roughness: 0.01,
-    reflection: 0.7,
-    phong: 0.01,
-    normal_peturbation: Vec3::new( 0., 0., 0.)
-};
-
-pub const WHITE_MARBLE: Material = Material{
-    pigment: Color::new(0.9, 0.9, 0.9),
-    metallic: 0.1,
-    roughness: 0.01,
-    reflection: 0.7,
-    phong: 0.01,
-    normal_peturbation: Vec3::new( 0., 0., 0.)
-};
-pub const BLACK_MARBLE: Material = Material{
-    pigment: Color::new(0.1, 0.1, 0.1),
-    metallic: 0.1,
-    roughness: 0.01,
-    reflection: 0.7,
-    phong: 0.01,
-    normal_peturbation: Vec3::new( 0., 0., 0.)
-};
-
-pub const CHECKERED_MARBLE: CheckeredYPlane = CheckeredYPlane{ m1: WHITE_MARBLE, m2: BLACK_MARBLE, xsize: 3., zsize: 3. }; 

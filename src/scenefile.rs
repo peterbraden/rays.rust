@@ -7,12 +7,13 @@ use light::Light;
 use color::Color;
 use std::rc::Rc;
 use sceneobject::SceneObject;
-use serde_json::Value;
+use serde_json::{Value, Map};
 use scene::Scene;
 use serde_json;
 use std::io::prelude::*;
 use std::fs::File;
 use material;
+use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SceneFile {
@@ -26,6 +27,7 @@ pub struct SceneFile {
     pub supersamples: u32,
     pub camera: Value,
 
+    pub materials: Map<String, Value>,
     pub lights: Vec<Value>,
     pub objects: Vec<Value>,
 
@@ -39,6 +41,13 @@ impl SceneFile {
                          v[2].as_f64().unwrap());
     }
 
+    pub fn parse_color(v: &Value) -> Color {
+        return Color::new(v[0].as_f64().unwrap(),
+                         v[1].as_f64().unwrap(),
+                         v[2].as_f64().unwrap());
+    
+    }
+
     pub fn parse_camera(c: Value, width: u32, height: u32) -> camera::Camera {
         return camera::Camera::new(
             SceneFile::parse_vec3(&c["lookat"]),
@@ -49,10 +58,10 @@ impl SceneFile {
         );
     }
 
-    pub fn parse_objects(objs: Vec<Value>) ->Vec<Rc<SceneObject>> {
+    pub fn parse_objects(objs: Vec<Value>, materials: HashMap<String, material::Material>) ->Vec<Rc<SceneObject>> {
          let mut objects: Vec<Rc<SceneObject>> = Vec::new();
          for obj in objs {
-            match SceneFile::parse_object(obj) {
+            match SceneFile::parse_object(obj, &materials) {
                 Some(x) => objects.push(x),
                 None => {},
             }
@@ -60,32 +69,53 @@ impl SceneFile {
          return objects
     }
 
-    pub fn parse_object(o: Value) -> Option<Rc<SceneObject>> {
+    pub fn parse_object(o: Value, materials: &HashMap<String, material::Material>) -> Option<Rc<SceneObject>> {
         let t = o["type"].as_str().unwrap();
+        let m = materials.get(&o["material"].as_str().unwrap().to_string()).unwrap(); // This is pretty nasty, shame serde
+        
         if t == "sphere" {
-            return Some(Rc::new(SceneFile::parse_sphere(&o)));
+            return Some(Rc::new(SceneFile::parse_sphere(&o, m.clone())));
         }
         
         if t == "checkeredplane" {
-            return Some(Rc::new(SceneFile::parse_checkeredplane(&o)));
+            return Some(Rc::new(SceneFile::parse_checkeredplane(&o, m.clone())));
         }
         return None
     }
 
-    pub fn parse_sphere(o: &Value) -> SceneObject {
+    pub fn parse_sphere(o: &Value, m: material::Material) -> SceneObject {
         return SceneObject {
             geometry: Box::new(Sphere::new(
                 SceneFile::parse_vec3(&o["location"]),
                 o["radius"].as_f64().unwrap())),
-            medium: Box::new(material::Solid { m: material::POLISHED_COPPER })
+            medium: Box::new(material::Solid { m: m })
         };
     }
 
-    pub fn parse_checkeredplane(o: &Value) -> SceneObject {
+    pub fn parse_checkeredplane(o: &Value, m: material::Material) -> SceneObject {
         SceneObject {
             geometry: Box::new(Plane { y: o["y"].as_f64().unwrap() }),
-            medium: Box::new(material::CHECKERED_MARBLE)
+            medium: Box::new(material::Solid { m: m })
         }
+    }
+
+    pub fn parse_material(o: &Value) -> material::Material {
+        return material::Material {
+            pigment: SceneFile::parse_color(&o["pigment"]), 
+            metallic: o["metallic"].as_f64().unwrap(), 
+            roughness: o["roughness"].as_f64().unwrap(), 
+            reflection: o["reflection"].as_f64().unwrap(),
+            phong: o["phong"].as_f64().unwrap(),
+            normal_peturbation: Vec3::new(0., 0., 0.)
+        }
+    }
+
+    pub fn parse_materials(o: &Map<String, Value>) -> HashMap<String, material::Material> {
+        let mut materials = HashMap::new();
+        for m in o.iter() {
+            materials.insert(m.0.to_string(), SceneFile::parse_material(m.1));
+        }
+        return materials;
     }
 
     pub fn parse_light(o: &Value) -> Light {
@@ -106,7 +136,8 @@ impl SceneFile {
 
     pub fn from_scenefile(s: SceneFile) -> Scene {
         let mut o = SceneGraph::new();
-        let objects = SceneFile::parse_objects(s.objects);
+        let materials = SceneFile::parse_materials(&s.materials);
+        let objects = SceneFile::parse_objects(s.objects, materials);
         o.push(objects);
 
         return Scene {

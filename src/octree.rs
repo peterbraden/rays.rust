@@ -42,7 +42,7 @@ impl OctreeNode {
                 let item_iter = items.into_iter();
                 let inside = item_iter
                                     .cloned()
-                                    .filter( |x| { cbox.intersects_bbox( &x.bounds() ) } )
+                                    .filter( |x| { cbox.intersects_bbox( &x.geometry.bounds() ) } )
                                     .collect::<Vec<Rc<SceneObject>>>();
 
                 if inside.len() > 0 {

@@ -12,7 +12,7 @@ pub struct Scene {
     pub lights: Vec<Light>,
 
     pub ambient: f64,
-    pub max_depth: u32,
+    pub max_depth: u64,
 
 
     pub reflection: bool,

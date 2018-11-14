@@ -9,6 +9,56 @@
 
   "supersamples": 3,
 
+  "materials": {
+    "POLISHED_COPPER": {
+      "pigment": [0.97, 0.74, 0.62],
+      "metallic": 1.0,
+      "roughness": 0.01,
+      "reflection": 0.7,
+      "phong": 0
+    },
+    
+    "WHITE_MARBLE": {
+      "pigment": [0.9, 0.9, 0.9],
+      "metallic": 0.1,
+      "roughness": 0.01,
+      "reflection": 0.7,
+      "phong": 0
+    },
+    "BLACK_MARBLE": {
+      "pigment": [0.1, 0.1, 0.1],
+      "metallic": 0.1,
+      "roughness": 0.01,
+      "reflection": 0.7,
+      "phong": 0
+    },
+    "RED_PLASTIC": {
+      "pigment": [1, 0, 0],
+      "metallic": 0,
+      "roughness": 0.01,
+      "reflection": 0.02,
+      "phong": 10
+    },
+    "WHITE_PLASTIC": {
+      "pigment": [1, 1, 1],
+      "metallic": 0,
+      "roughness": 0.01,
+      "reflection": 0.02,
+      "phong": 10
+    }
+  },
+  "media": {
+    "SOLID_COPPER": {
+      "type": "solid",
+      "material": "POLISHED_COPPER"
+    },
+    "CHECKERED_MARBLE": {
+      "type": "checkered-y-plane",
+      "m1": "WHITE_MARBLE",
+      "m2": "BLACK_MARBLE"
+    }
+  },
+
   "camera": {
     "location": [5, 10, -20],
     "lookat" : [0,0,0],
@@ -20,7 +70,7 @@
     {
       "location": [10, 10, 0], 
       "color": "white",
-      "intensity": 0.9
+      "intensity": 0.5
     }
   ],
 
@@ -31,26 +81,30 @@
       "type" : "sphere",
       "location": [0,2,0],
       "radius": 2,
-
-      "material" : {
-        "pigment": [1, 1, 0.5],
-        "reflection": 0.2,
-        "phong": 20
-      }
+      "material" : "POLISHED_COPPER"
     },
     { 
       "type" : "sphere",
       "location": [3,3,5],
-      "radius": 3
+      "radius": 3,
+      "material" : "BLACK_MARBLE"
     },
     { 
       "type" : "sphere",
       "location": [-6,6,5],
-      "radius": 6
+      "radius": 6,
+      "material" : "RED_PLASTIC"
+    },
+    { 
+      "type" : "sphere",
+      "location": [0,12,15],
+      "radius": 12,
+      "material" : "WHITE_PLASTIC"
     },
     { 
       "type" : "checkeredplane",
-      "y": 1
+      "y": 1,
+      "medium" : "CHECKERED_MARBLE"
     }
   ]
 }

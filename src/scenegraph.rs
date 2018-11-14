@@ -74,7 +74,7 @@ impl SceneGraph {
 
     pub fn push(&mut self, s: Vec<Rc<SceneObject>>) {
         for x in s {
-            self.scene_bounds = self.scene_bounds.union( &x.bounds() );
+            self.scene_bounds = self.scene_bounds.union( &x.geometry.bounds() );
             &self.items.push(x);
         }
         self.partition(8);

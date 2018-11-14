@@ -38,6 +38,13 @@
       "roughness": 0.01,
       "reflection": 0.02,
       "phong": 10
+    },
+    "WHITE_PLASTIC": {
+      "pigment": [1, 1, 1],
+      "metallic": 0,
+      "roughness": 0.01,
+      "reflection": 0.02,
+      "phong": 10
     }
   },
   "media": {
@@ -87,6 +94,12 @@
       "location": [-6,6,5],
       "radius": 6,
       "material" : "RED_PLASTIC"
+    },
+    { 
+      "type" : "sphere",
+      "location": [0,12,15],
+      "radius": 12,
+      "material" : "WHITE_PLASTIC"
     },
     { 
       "type" : "checkeredplane",

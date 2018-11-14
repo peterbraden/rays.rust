@@ -174,7 +174,6 @@ impl SceneFile {
                 None => {}
             }
         }
-        print!("{:?}", media.keys());
         return media;
     }
 

@@ -14,9 +14,11 @@ pub struct Material {
 }
 
 pub trait Medium {
+    fn box_clone(&self) -> Box<dyn Medium>;
     fn material_at(&self, pt: Vec3<f64>) -> Material; 
 }
 
+#[derive(Clone)]
 pub struct Solid {
     pub m: Material
 }
@@ -24,13 +26,18 @@ impl Medium for Solid {
     fn material_at(&self, _pt: Vec3<f64>) -> Material {
         self.m.clone()
     }
+
+    fn box_clone(&self) -> Box<Medium>{
+        return Box::new(self.clone())
+    }
 }
 
+#[derive(Clone)]
 pub struct CheckeredYPlane {
-    m1: Material,
-    m2: Material,
-    xsize: f64,
-    zsize: f64,
+    pub m1: Material,
+    pub m2: Material,
+    pub xsize: f64,
+    pub zsize: f64,
 }
 impl CheckeredYPlane {
     pub fn new(m1: Material, m2: Material, xsize: f64, zsize: f64) -> CheckeredYPlane {
@@ -44,6 +51,10 @@ impl Medium for CheckeredYPlane {
         let zag = if (pt[2].abs() / self.zsize) as i32 % 2 == 0 { pt[2] > 0. } else { pt[2] <= 0. };
         // zig XOR zag
         return if !zig != !zag { self.m1.clone() } else { self.m2.clone() };
+    }
+
+    fn box_clone(&self) -> Box<Medium>{
+        return Box::new(self.clone())
     }
 }
 

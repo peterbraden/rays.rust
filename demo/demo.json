@@ -31,6 +31,24 @@
       "roughness": 0.01,
       "reflection": 0.7,
       "phong": 0.01
+    },
+    "RED_PLASTIC": {
+      "pigment": [1, 0, 0],
+      "metallic": 0,
+      "roughness": 0.01,
+      "reflection": 0.02,
+      "phong": 0.01
+    }
+  },
+  "media": {
+    "SOLID_COPPER": {
+      "type": "solid",
+      "material": "POLISHED_COPPER"
+    },
+    "CHECKERED_MARBLE": {
+      "type": "checkered-y-plane",
+      "m1": "WHITE_MARBLE",
+      "m2": "BLACK_MARBLE"
     }
   },
 
@@ -68,12 +86,12 @@
       "type" : "sphere",
       "location": [-6,6,5],
       "radius": 6,
-      "material" : "WHITE_MARBLE"
+      "material" : "RED_PLASTIC"
     },
     { 
       "type" : "checkeredplane",
       "y": 1,
-      "material" : "WHITE_MARBLE"
+      "medium" : "CHECKERED_MARBLE"
     }
   ]
 }

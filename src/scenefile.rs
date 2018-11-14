@@ -24,6 +24,7 @@ pub struct SceneFile {
     pub ambient: f64,
     pub specular: bool,
     pub diffuse: bool,
+    pub shadow_bias: f64,
     pub supersamples: u32,
     pub camera: Value,
 
@@ -212,6 +213,7 @@ impl SceneFile {
             reflection: s.reflection > 0,
             specular: s.specular,
             diffuse: s.diffuse,
+            shadow_bias: s.shadow_bias,
             supersamples: s.supersamples
         };
     }

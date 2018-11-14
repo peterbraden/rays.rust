@@ -9,7 +9,6 @@ use light::Light;
 
 // Returns num rays cast, Color
 pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
-    
     let closest = s.objects.nearest_intersection(r, f64::INFINITY, 0f64, None);
 
     match closest {
@@ -19,13 +18,18 @@ pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
 }
 
 fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, s: &Scene) -> (u64, Color) {
+    // Shadow bias -> Move the origin of the intersection point along the normal, in case a
+    // floating point error puts it slightly below the surface which would cause a sign flip
+    // leading to shadow acne.
+    let mut biased_intersection = intersection.clone();
+    biased_intersection.point = intersection.point + (intersection.normal * s.shadow_bias);
 
     let mut out = ambient(&intersection, s);
     let mut cast = 1;
 
     for light in &s.lights { 
-        let light_vec = light.position - intersection.point;
-        let shadow_ray = Ray {ro: intersection.point, rd: light_vec};
+        let light_vec = light.position - biased_intersection.point;
+        let shadow_ray = Ray {ro: biased_intersection.point, rd: light_vec};
         let shadow_intersection = s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), 0.1, Some(intersection.object)); 
         cast = cast + 1;
 
@@ -34,13 +38,13 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, s: &Scene
                     // Point in shadow...
                 ),
             None => (
-                out = out + trace_for_light(&r, &light_vec, &light, &intersection, &s)
+                out = out + trace_for_light(&r, &light_vec, &light, &biased_intersection, &s)
                 ),
         }
     }
 
     if s.reflection && depth < s.max_depth {
-        let (c, refl) = reflection(r, out, &intersection, depth + 1, s);
+        let (c, refl) = reflection(r, out, &biased_intersection, depth + 1, s);
         out = refl;
         cast = cast + c;
     }
@@ -79,6 +83,7 @@ fn diffuse (i: &Intersection, light_vec: &Vec3<f64>, light: &Light, s: &Scene) -
     if !s.diffuse {
         return Color::black();
     }
+
     let diffuse_scale = light_vec.normalize().dot(&i.normal) * light.intensity;
     if diffuse_scale.is_sign_positive() {
         return light.color * i.object.medium.material_at(i.point).pigment * diffuse_scale;

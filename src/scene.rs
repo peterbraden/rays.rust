@@ -14,10 +14,10 @@ pub struct Scene {
     pub ambient: f64,
     pub max_depth: u64,
 
-
     pub reflection: bool,
     pub specular: bool,
     pub diffuse: bool,
+    pub shadow_bias: f64,
     pub supersamples: u32,
 }
 

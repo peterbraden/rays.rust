@@ -7,6 +7,7 @@ pub struct RawIntersection {
     pub normal: Vec3<f64>,
 }
 
+#[derive(Clone)]
 pub struct Intersection<'a> {
     pub dist: f64,
     pub point: Vec3<f64>,

@@ -1,14 +1,16 @@
 {
   "width": 400,
   "height": 400,
+  "supersamples": 9,
   
-  "ambient": 0.2,
-  "specular": true,
+  "background": [0.5, 0.5, 0.5],
+  "ambient": 0.01,
+  "specular": false,
+  "ambient_diffuse": 1,
   "diffuse" : true,
   "shadow_bias": 0.0001,
   "reflection": 2,
 
-  "supersamples": 3,
 
   "materials": {
     "POLISHED_COPPER": {
@@ -21,31 +23,35 @@
     
     "WHITE_MARBLE": {
       "pigment": [0.9, 0.9, 0.9],
+      "albedo": 0.9,
       "metallic": 0.1,
       "roughness": 0.01,
-      "reflection": 0.7,
+      "reflection": 0.4,
       "phong": 0
     },
     "BLACK_MARBLE": {
       "pigment": [0.1, 0.1, 0.1],
+      "albedo": 0.1,
       "metallic": 0.1,
       "roughness": 0.01,
-      "reflection": 0.7,
+      "reflection": 0.4,
       "phong": 0
     },
     "RED_PLASTIC": {
       "pigment": [1, 0, 0],
+      "albedo": 0.8,
       "metallic": 0,
       "roughness": 0.01,
       "reflection": 0.02,
-      "phong": 10
+      "phong": 100
     },
     "WHITE_PLASTIC": {
       "pigment": [1, 1, 1],
+      "albedo": 0.9,
       "metallic": 0,
       "roughness": 0.01,
       "reflection": 0.02,
-      "phong": 10
+      "phong": 100
     }
   },
   "media": {
@@ -88,7 +94,7 @@
       "type" : "sphere",
       "location": [3,3,5],
       "radius": 3,
-      "material" : "BLACK_MARBLE"
+      "material" : "WHITE_PLASTIC"
     },
     { 
       "type" : "sphere",

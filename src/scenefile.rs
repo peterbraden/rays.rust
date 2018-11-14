@@ -20,9 +20,12 @@ pub struct SceneFile {
     pub width: u32,
     pub height: u32,
 
+    background: Value,
+
     pub reflection: u64,
     pub ambient: f64,
     pub specular: bool,
+    pub ambient_diffuse: u64,
     pub diffuse: bool,
     pub shadow_bias: f64,
     pub supersamples: u32,
@@ -130,9 +133,10 @@ impl SceneFile {
     pub fn parse_material(o: &Value) -> material::Material {
         return material::Material {
             pigment: SceneFile::parse_color(&o["pigment"]), 
+            albedo: SceneFile::parse_number(&o["albedo"], 0.2),
             metallic: o["metallic"].as_f64().unwrap(), 
             roughness: o["roughness"].as_f64().unwrap(), 
-            reflection: o["reflection"].as_f64().unwrap(),
+            reflection: SceneFile::parse_number(&o["reflection"], 0.),
             phong: o["phong"].as_f64().unwrap(),
             normal_peturbation: Vec3::new(0., 0., 0.)
         }
@@ -209,10 +213,12 @@ impl SceneFile {
             ambient: s.ambient,
             max_depth: s.reflection,
             lights: SceneFile::parse_lights(&s.lights),
+            background: SceneFile::parse_color(&s.background),
 
             reflection: s.reflection > 0,
             specular: s.specular,
             diffuse: s.diffuse,
+            ambient_diffuse: s.ambient_diffuse,
             shadow_bias: s.shadow_bias,
             supersamples: s.supersamples
         };

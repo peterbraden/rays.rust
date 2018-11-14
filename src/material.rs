@@ -6,6 +6,7 @@ use na::Vec3;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Material {
     pub pigment: Color, // Attenuation due to albedo
+    pub albedo: f64,
     pub metallic: f64, // Dielectric 0 to Metallic 1
     pub roughness: f64, // Glossiness
     pub reflection: f64,

@@ -20,7 +20,7 @@ pub struct SceneFile {
     pub width: u32,
     pub height: u32,
 
-    pub reflection: u32,
+    pub reflection: u64,
     pub ambient: f64,
     pub specular: bool,
     pub diffuse: bool,

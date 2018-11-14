@@ -8,7 +8,7 @@ use light::Light;
 
 
 // Returns num rays cast, Color
-pub fn trace (r: &Ray, depth: u32, s: &Scene) -> (u64, Color) {
+pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
     
     let closest = s.objects.nearest_intersection(r, f64::INFINITY, 0f64, None);
 
@@ -18,7 +18,7 @@ pub fn trace (r: &Ray, depth: u32, s: &Scene) -> (u64, Color) {
     }
 }
 
-fn trace_intersection(r: &Ray, intersection: Intersection, depth: u32, s: &Scene) -> (u64, Color) {
+fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, s: &Scene) -> (u64, Color) {
 
     let mut out = ambient(&intersection, s);
     let mut cast = 1;
@@ -88,7 +88,11 @@ fn diffuse (i: &Intersection, light_vec: &Vec3<f64>, light: &Light, s: &Scene) -
 
 
 
-fn reflection(r: &Ray, out: Color, intersection: &Intersection, depth: u32, s: &Scene) -> (u64, Color) {
+fn reflection(r: &Ray, out: Color, intersection: &Intersection, depth: u64, s: &Scene) -> (u64, Color) {
+    let scale = intersection.object.medium.material_at(intersection.point).reflection;
+    if scale < 0.0001 {
+        return (depth, out)
+    }
 
     let refl = Ray {
         ro: intersection.point,
@@ -96,7 +100,6 @@ fn reflection(r: &Ray, out: Color, intersection: &Intersection, depth: u32, s: &
     };
 
     let (c, col) = trace(&refl, depth + 1, s);
-    let scal = intersection.object.medium.material_at(intersection.point).reflection;
 
-    return (c, (out * (1. - scal)) + (col * scal) );
+    return (c, (out * (1. - scale)) + (col * scale) );
 }

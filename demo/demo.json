@@ -15,7 +15,7 @@
       "metallic": 1.0,
       "roughness": 0.01,
       "reflection": 0.7,
-      "phong": 0.01
+      "phong": 0
     },
     
     "WHITE_MARBLE": {
@@ -23,21 +23,21 @@
       "metallic": 0.1,
       "roughness": 0.01,
       "reflection": 0.7,
-      "phong": 0.01
+      "phong": 0
     },
     "BLACK_MARBLE": {
       "pigment": [0.1, 0.1, 0.1],
       "metallic": 0.1,
       "roughness": 0.01,
       "reflection": 0.7,
-      "phong": 0.01
+      "phong": 0
     },
     "RED_PLASTIC": {
       "pigment": [1, 0, 0],
       "metallic": 0,
       "roughness": 0.01,
       "reflection": 0.02,
-      "phong": 0.01
+      "phong": 10
     }
   },
   "media": {
@@ -63,7 +63,7 @@
     {
       "location": [10, 10, 0], 
       "color": "white",
-      "intensity": 0.9
+      "intensity": 0.5
     }
   ],
 

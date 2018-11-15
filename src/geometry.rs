@@ -7,8 +7,6 @@ pub fn rand() -> f64 {
     return _rand::thread_rng().gen_range(0.,1.);
 }
 
-
-
 pub fn random_point_on_unit_sphere() -> Vec3<f64>{
     let u = rand();
     let v = rand();
@@ -25,3 +23,7 @@ pub fn random_point_on_unit_sphere() -> Vec3<f64>{
     return Vec3::new(x, y, z);
 }
 
+fn schlick(cosine:f64, ref_idx:f64) -> f64 {
+    let r0 = ((1.0 - ref_idx) / (1.0 + ref_idx)).powi(2);
+    r0 + (1.0-r0) * (1.0 - cosine).powi(5)
+}

@@ -1,9 +1,9 @@
 {
-  "width": 400,
-  "height": 300,
-  "supersamples": 3,
+  "width": 800,
+  "height": 600,
+  "supersamples": 2,
   
-  "background": [0.5, 0.5, 0.5],
+  "background": [0.4, 0.4, 0.9],
   "ambient": 0.01,
   "specular": false,
   "ambient_diffuse": 1,
@@ -59,6 +59,14 @@
       "roughness": 0.01,
       "reflection": 0.02,
       "phong": 100
+    },
+    "GLASS": {
+      "pigment": [1, 1, 1],
+      "albedo": 0.9,
+      "metallic": 0,
+      "roughness": 0,
+      "reflection": 0.2,
+      "phong": 100
     }
   },
   "media": {
@@ -75,7 +83,7 @@
 
   "camera": {
     "location": [5, 7, -20],
-    "lookat" : [0,0,0],
+    "lookat" : [0,4.5,0],
     "up" : [0,1,0],
     "angle": 0.9 
   },
@@ -99,6 +107,18 @@
     },
     { 
       "type" : "sphere",
+      "location": [1 ,1, -2],
+      "radius": 1,
+      "material" : "POLISHED_COPPER"
+    },
+    { 
+      "type" : "sphere",
+      "location": [6 ,4, -6],
+      "radius": 4,
+      "material" : "GLASS"
+    },
+    { 
+      "type" : "sphere",
       "location": [3,3,5],
       "radius": 3,
       "material" : "WHITE_PLASTIC"
@@ -116,8 +136,14 @@
       "material" : "WHITE_PLASTIC"
     },
     { 
+      "type" : "sphere",
+      "location": [-25,14,15],
+      "radius": 14,
+      "material" : "WHITE_PLASTIC"
+    },
+    { 
       "type" : "checkeredplane",
-      "y": 1,
+      "y": 0,
       "medium" : "CHECKERED_MARBLE"
     }
   ]

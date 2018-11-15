@@ -2,15 +2,12 @@ use na::{Vec3, Norm, Cross};
 use ray::Ray;
 
 pub struct Camera {
-//    up: Vec3<f64>,
     location: Vec3<f64>,
-//    lookat: Vec3<f64>,
 
     camx: Vec3<f64>,
     camy: Vec3<f64>,
     camz: Vec3<f64>,
 
- //angle: f64,
     tax: f64,
     tay: f64
 }
@@ -20,24 +17,29 @@ impl Camera {
     pub fn new(lookat: Vec3<f64>, location:Vec3<f64>, up:Vec3<f64>, angle: f64, height: u32, width: u32) -> Camera {
         let camz = (lookat - location).normalize();
         let camx = up.cross(&camz).normalize();
+        let camy = camx.cross(
+                &(Vec3::new(0f64,0f64,0f64) - camz)
+                ).normalize();
 
+
+        let aspect_ratio = (height as f64) / (width as f64);
+
+        //let viewPlaneHalfWidth= (fieldOfView / 2.).tan()
+        //let viewPlaneHalfHeight = aspectRatio*viewPlaneHalfWidth
+        
         Camera {
-  //          lookat: lookat,
             location: location,
-  //          up: up,
-  //          angle: angle,
 
             camz: camz,
-            camx: camx,
-            camy: camx.cross(
-                &(Vec3::new(0f64,0f64,0f64) - camz)
-                ).normalize(),
+            camx: camx * aspect_ratio,
+            camy: camy,
 
             tax: angle.tan(),
-            tay: ((height as f64 / width as f64) * angle).tan()
+            tay: angle.tan()
         }
     }
 
+    // x, y, supersamples
     pub fn get_ray(&self, x: f64, y: f64, sx: f64, sy: f64) -> Ray {
         let xdir = self.camx * (x + sx - 0.5) * self.tax;
         let ydir = self.camy * (y + sy - 0.5) * self.tay;

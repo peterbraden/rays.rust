@@ -62,7 +62,8 @@ fn trace_for_light(r: &Ray, light_vec: &Vec3<f64>, l: &Light, intersection: &Int
 
 
 fn ambient(r: &Ray, intersection: &Intersection, s: &Scene) -> Color {
-    let ambient = Ambient { pigment: intersection.object.medium.material_at(intersection.point).pigment };
+    let m = intersection.object.medium.material_at(intersection.point);
+    let ambient = Ambient { pigment: m.pigment * s.ambient};
     let (_c, col, _r) = ambient.scatter(r, intersection, s);
     return col;
 }
@@ -70,9 +71,7 @@ fn ambient(r: &Ray, intersection: &Intersection, s: &Scene) -> Color {
 // Diffuse light due to roughness and ambient light
 // - Lambertian with randomised unit vector
 fn ambient_diffuse(r: &Ray, intersection: &Intersection, s: &Scene, depth: u64) -> (u64, Color) {
-
     let m = intersection.object.medium.material_at(intersection.point);
-
     if s.ambient_diffuse == 0 || depth > s.ambient_diffuse || m.albedo < 0.01 {
         return (0, Color::black());
     }

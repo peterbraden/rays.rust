@@ -137,6 +137,8 @@ impl SceneFile {
             metallic: o["metallic"].as_f64().unwrap(), 
             roughness: o["roughness"].as_f64().unwrap(), 
             reflection: SceneFile::parse_number(&o["reflection"], 0.),
+            opacity: SceneFile::parse_number(&o["opacity"], 1.),
+            refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.3),
             phong: o["phong"].as_f64().unwrap(),
             normal_peturbation: Vec3::new(0., 0., 0.)
         }

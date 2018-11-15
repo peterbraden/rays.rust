@@ -1,5 +1,10 @@
 use color::Color;
 use na::Vec3;
+use ray::Ray;
+use intersection::Intersection;
+use scene::Scene;
+use geometry::random_point_on_unit_sphere;
+
 ///
 /// See https://google.github.io/filament//Materials.md.html#materialmodels/litmodel
 
@@ -12,8 +17,78 @@ pub struct Material {
     pub reflection: f64,
     pub phong: f64,
     pub normal_peturbation: Vec3<f64>,
+    pub opacity: f64,
+    pub refractive_index: f64,
 }
 
+
+///
+/// In Google Filament they refer to
+/// - The Lit model (standard material model)
+/// - Subsurface model
+/// - Cloth model
+///
+/// In PBRT they refer to 
+/// - a "bidirectional reflectance distribution function (BRDF)"
+/// - a "bidirectional transmission distribution function (BTDF)
+/// - a "bidirectional scattering distribution function (BSDF)
+/// - a "bidirectional sub-surface scattering distribution function  BSSRDF"
+///
+/// In Raytracing in a weekend they call it:
+/// - a "hittable"
+///
+/// This terminology is all horrible. As what all of the above are describing is the way that a ray of
+/// light interacts with an object based on the material of that object, we will call this a
+/// "Material Model"
+///
+///  PBRT uses:
+///  - eta - the difference in refractive index of the interaction, default 1
+///
+pub trait MaterialModel {
+    /// Scatter an intersection ray.
+    /// Returns:
+    /// - u64: the count of subsequent rays cast (used to calculate total rays cast in recursive
+    ///         scenes)
+    /// - Color: the scaling of the subsequent reflections/refractions 
+    /// - Option<Ray>: 
+    ///     Some: Another ray to cast into the image, multiply by Color
+    ///     None: Return Color
+    ///
+    fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> (u64, Color, Option<Ray>);
+}
+
+
+pub struct Ambient {
+    pub pigment: Color,
+}
+impl MaterialModel for Ambient {
+    fn scatter(&self, _r: &Ray, _intersection: &Intersection, _s: &Scene) -> (u64, Color, Option<Ray>){
+        return (0, self.pigment, None);
+    }
+}
+
+/// Implement Lambertian reflection (purely diffuse) for ambient incoming light (light at a random
+/// incoming angle.)
+/// Practically, we implement random reflection within a unit sphere on the normal.
+/// This will be very noisy if we don't subsample a lot.
+pub struct AmbientLambertian {
+    pub albedo: Color,
+}
+impl MaterialModel for AmbientLambertian {
+    fn scatter(&self, _r: &Ray, intersection: &Intersection, _s: &Scene) -> (u64, Color, Option<Ray>){
+        let refl = Ray {
+            ro: intersection.point,
+            rd: intersection.normal + random_point_on_unit_sphere(),
+        };
+        return (1, self.albedo, Some(refl));
+    }
+}
+
+
+
+// ----------------------------------------------------------------------------------------------
+
+// TODO - rename texture
 pub trait Medium {
     fn box_clone(&self) -> Box<dyn Medium>;
     fn material_at(&self, pt: Vec3<f64>) -> Material; 

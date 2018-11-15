@@ -20,6 +20,13 @@
       "reflection": 0.7,
       "phong": 0
     },
+    "MATTE_COPPER": {
+      "pigment": [0.97, 0.74, 0.62],
+      "metallic": 1.0,
+      "roughness": 0.2,
+      "reflection": 0.7,
+      "phong": 0
+    },
     
     "WHITE_MARBLE": {
       "pigment": [0.9, 0.9, 0.9],
@@ -88,7 +95,7 @@
       "type" : "sphere",
       "location": [0,2,0],
       "radius": 2,
-      "material" : "POLISHED_COPPER"
+      "material" : "MATTE_COPPER"
     },
     { 
       "type" : "sphere",

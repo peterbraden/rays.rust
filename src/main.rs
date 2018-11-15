@@ -29,6 +29,7 @@ mod camera;
 mod trace;
 mod rendercontext;
 mod paint;
+mod geometry;
 
 use trace::trace;
 use rendercontext::RenderContext;

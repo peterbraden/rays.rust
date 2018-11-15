@@ -1,5 +1,5 @@
 use color::Color;
-use na::Vec3;
+use na::{Vec3, Dot};
 use ray::Ray;
 use intersection::Intersection;
 use scene::Scene;
@@ -81,6 +81,24 @@ impl MaterialModel for AmbientLambertian {
             rd: intersection.normal + random_point_on_unit_sphere(),
         };
         return (1, self.albedo, Some(refl));
+    }
+}
+
+pub struct Reflection {
+    pub reflective: Color,
+    pub roughness: f64,
+}
+
+impl MaterialModel for Reflection {
+    fn scatter(&self, r: &Ray, intersection: &Intersection, _s: &Scene) -> (u64, Color, Option<Ray>){
+        let fuzz = random_point_on_unit_sphere() * self.roughness;
+
+        let refl = Ray {
+            ro: intersection.point,
+            rd: r.rd - (intersection.normal * 2.0 * intersection.normal.dot(&r.rd) + fuzz),
+        };
+
+        return (1, self.reflective, Some(refl));
     }
 }
 

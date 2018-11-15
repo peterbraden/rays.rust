@@ -5,8 +5,7 @@ use scene::Scene;
 use intersection::Intersection;
 use std::f64;
 use light::Light;
-use geometry::random_point_on_unit_sphere;
-use material::{MaterialModel, AmbientLambertian, Ambient};
+use material::{MaterialModel, AmbientLambertian, Ambient, Reflection};
 
 // Returns num rays cast, Color
 pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
@@ -48,8 +47,8 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, s: &Scene
     }
 
     if s.reflection && depth < s.max_depth {
-        let (c, refl) = reflection(r, out, &biased_intersection, depth + 1, s);
-        out = refl;
+        let (c, refl) = reflection(r, &biased_intersection, depth + 1, s);
+        out = out + refl;
         cast = cast + c;
     }
 
@@ -113,21 +112,10 @@ fn diffuse (i: &Intersection, light_vec: &Vec3<f64>, light: &Light, s: &Scene) -
 }
 
 
-fn reflection(r: &Ray, out: Color, intersection: &Intersection, depth: u64, s: &Scene) -> (u64, Color) {
+fn reflection(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene) -> (u64, Color) {
     let m = intersection.object.medium.material_at(intersection.point);
-    let scale = m.reflection;
-    if scale < 0.0001 {
-        return (depth, out)
-    }
-
-    let fuzz =random_point_on_unit_sphere() * m.roughness;
-
-    let refl = Ray {
-        ro: intersection.point,
-        rd: r.rd - (intersection.normal * 2.0 * intersection.normal.dot(&r.rd) + fuzz),
-    };
-
-    let (c, col) = trace(&refl, depth + 1, s);
-
-    return (c, (out * (1. - scale)) + (col * scale) );
+    let model = Reflection { reflective: m.pigment * m.reflection, roughness: m.roughness};
+    let (_c, attenuate, refl) = model.scatter(r, intersection, s);
+    let (c, col) = trace(&refl.unwrap(), depth + 1, s);
+    return (c, col * attenuate)
 }

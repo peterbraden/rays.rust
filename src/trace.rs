@@ -24,8 +24,15 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, s: &Scene
     let mut biased_intersection = intersection.clone();
     biased_intersection.point = intersection.point + (intersection.normal * s.shadow_bias);
 
+    let material = intersection.object.medium.material_at(intersection.point);
+
     let mut cast = 1;
-    let mut out = ambient(r, &biased_intersection, s);
+    let mut out = Color::black();
+
+    let ambient = Ambient { pigment: material.pigment * s.ambient};
+    let (_c, a, _r) = ambient.scatter(r, &biased_intersection, s);
+    out = out + a;
+
     let (cad, ad) = ambient_diffuse(r, &biased_intersection, s, depth);
     out = out + ad;
     cast = cast + cad;
@@ -59,13 +66,6 @@ fn trace_for_light(r: &Ray, light_vec: &Vec3<f64>, l: &Light, intersection: &Int
     return diffuse(&intersection, &light_vec, &l, s) + specular(r, intersection, light_vec, s);
 }
 
-
-fn ambient(r: &Ray, intersection: &Intersection, s: &Scene) -> Color {
-    let m = intersection.object.medium.material_at(intersection.point);
-    let ambient = Ambient { pigment: m.pigment * s.ambient};
-    let (_c, col, _r) = ambient.scatter(r, intersection, s);
-    return col;
-}
 
 // Diffuse light due to roughness and ambient light
 // - Lambertian with randomised unit vector

@@ -9,7 +9,7 @@ use geometry::random_point_on_unit_sphere;
 /// See https://google.github.io/filament//Materials.md.html#materialmodels/litmodel
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Material {
+pub struct MaterialProperties {
     pub pigment: Color, // Attenuation due to albedo
     pub albedo: f64,
     pub metallic: f64, // Dielectric 0 to Metallic 1
@@ -46,24 +46,38 @@ pub struct Material {
 ///
 pub trait MaterialModel {
     /// Scatter an intersection ray.
-    /// Returns:
-    /// - u64: the count of subsequent rays cast (used to calculate total rays cast in recursive
-    ///         scenes)
-    /// - Color: the scaling of the subsequent reflections/refractions 
-    /// - Option<Ray>: 
-    ///     Some: Another ray to cast into the image, multiply by Color
-    ///     None: Return Color
-    ///
-    fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> (u64, Color, Option<Ray>);
+    fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay;
 }
+
+/// The outgoing ray, and the weight to assign the color of the traced ray.
+/// - Color: the scaling of the subsequent reflections/refractions
+/// - Option<Ray>:
+///     Some: Another ray to cast into the image, multiply by Color
+///     None: Return Color
+///
+pub struct ScatteredRay {
+    pub ray: Option<Ray>,
+    pub attenuate: Color
+}
+
+/*
+pub trait BSDFToRename{
+
+    //fn compute_interactions(&self, r: &Ray, intersection: &Intersection, s: &Scene) ->
+    //ListOf<(weight, ray)>
+
+}
+*/
+
+
 
 
 pub struct Ambient {
     pub pigment: Color,
 }
 impl MaterialModel for Ambient {
-    fn scatter(&self, _r: &Ray, _intersection: &Intersection, _s: &Scene) -> (u64, Color, Option<Ray>){
-        return (0, self.pigment, None);
+    fn scatter(&self, _r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay{
+        return ScatteredRay{ attenuate:self.pigment, ray: None };
     }
 }
 
@@ -75,12 +89,12 @@ pub struct AmbientLambertian {
     pub albedo: Color,
 }
 impl MaterialModel for AmbientLambertian {
-    fn scatter(&self, _r: &Ray, intersection: &Intersection, _s: &Scene) -> (u64, Color, Option<Ray>){
+    fn scatter(&self, _r: &Ray, intersection: &Intersection, _s: &Scene) -> ScatteredRay{
         let refl = Ray {
             ro: intersection.point,
             rd: intersection.normal + random_point_on_unit_sphere(),
         };
-        return (1, self.albedo, Some(refl));
+        return ScatteredRay{ attenuate:self.albedo, ray: Some(refl) };
     }
 }
 
@@ -90,7 +104,7 @@ pub struct Reflection {
 }
 
 impl MaterialModel for Reflection {
-    fn scatter(&self, r: &Ray, intersection: &Intersection, _s: &Scene) -> (u64, Color, Option<Ray>){
+    fn scatter(&self, r: &Ray, intersection: &Intersection, _s: &Scene) -> ScatteredRay{
         let fuzz = random_point_on_unit_sphere() * self.roughness;
 
         let refl = Ray {
@@ -98,9 +112,13 @@ impl MaterialModel for Reflection {
             rd: r.rd - (intersection.normal * 2.0 * intersection.normal.dot(&r.rd) + fuzz),
         };
 
-        return (1, self.reflective, Some(refl));
+        return ScatteredRay{ attenuate:self.reflective, ray: Some(refl) };
     }
 }
+
+
+
+
 
 
 
@@ -109,15 +127,15 @@ impl MaterialModel for Reflection {
 // TODO - rename texture
 pub trait Medium {
     fn box_clone(&self) -> Box<dyn Medium>;
-    fn material_at(&self, pt: Vec3<f64>) -> Material; 
+    fn material_at(&self, pt: Vec3<f64>) -> MaterialProperties; 
 }
 
 #[derive(Clone)]
 pub struct Solid {
-    pub m: Material
+    pub m: MaterialProperties
 }
 impl Medium for Solid {
-    fn material_at(&self, _pt: Vec3<f64>) -> Material {
+    fn material_at(&self, _pt: Vec3<f64>) -> MaterialProperties {
         self.m.clone()
     }
 
@@ -128,19 +146,19 @@ impl Medium for Solid {
 
 #[derive(Clone)]
 pub struct CheckeredYPlane {
-    pub m1: Material,
-    pub m2: Material,
+    pub m1: MaterialProperties,
+    pub m2: MaterialProperties,
     pub xsize: f64,
     pub zsize: f64,
 }
 impl CheckeredYPlane {
-    pub fn new(m1: Material, m2: Material, xsize: f64, zsize: f64) -> CheckeredYPlane {
+    pub fn new(m1: MaterialProperties, m2: MaterialProperties, xsize: f64, zsize: f64) -> CheckeredYPlane {
         CheckeredYPlane { m1, m2, xsize, zsize}
     }
 }
 
 impl Medium for CheckeredYPlane {
-    fn material_at(&self, pt: Vec3<f64>) -> Material {
+    fn material_at(&self, pt: Vec3<f64>) -> MaterialProperties {
         let zig = if (pt[0].abs() / self.xsize) as i32 % 2 == 0 { pt[0] > 0. } else { pt[0] <= 0. };
         let zag = if (pt[2].abs() / self.zsize) as i32 % 2 == 0 { pt[2] > 0. } else { pt[2] <= 0. };
         // zig XOR zag

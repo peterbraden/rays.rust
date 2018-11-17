@@ -65,17 +65,18 @@ impl SceneFile {
     
     }
 
-    pub fn parse_camera(c: Value, width: u32, height: u32) -> camera::Camera {
-        return camera::Camera::new(
+    pub fn parse_camera(c: Value, width: u32, height: u32) -> camera::FlatLensCamera {
+        return camera::FlatLensCamera::new(
             SceneFile::parse_vec3(&c["lookat"]),
             SceneFile::parse_vec3(&c["location"]),
             SceneFile::parse_vec3(&c["up"]),
             c["angle"].as_f64().unwrap(),
-            width, height
+            width, height,
+            SceneFile::parse_number(&c["aperture"], 0.2)
         );
     }
 
-    pub fn parse_objects(objs: Vec<Value>, materials: HashMap<String, material::Material>, media:&HashMap<String, Box<material::Medium>>) ->Vec<Rc<SceneObject>> {
+    pub fn parse_objects(objs: Vec<Value>, materials: HashMap<String, material::MaterialProperties>, media:&HashMap<String, Box<material::Medium>>) ->Vec<Rc<SceneObject>> {
          let mut objects: Vec<Rc<SceneObject>> = Vec::new();
          for obj in objs {
             match SceneFile::parse_object(obj, &materials, &media) {
@@ -86,7 +87,7 @@ impl SceneFile {
          return objects
     }
 
-    pub fn parse_object_medium(o: &Value, materials: &HashMap<String, material::Material>, media:&HashMap<String, Box<material::Medium>> ) -> Box<material::Medium> {
+    pub fn parse_object_medium(o: &Value, materials: &HashMap<String, material::MaterialProperties>, media:&HashMap<String, Box<material::Medium>> ) -> Box<material::Medium> {
         match &o.get("medium") {
             Some(mid) => {
                 return media.get(&SceneFile::parse_string(mid)).unwrap().box_clone();
@@ -100,7 +101,7 @@ impl SceneFile {
 
     }
 
-    pub fn parse_object(o: Value, materials: &HashMap<String, material::Material>, media:&HashMap<String, Box<material::Medium>>) -> Option<Rc<SceneObject>> {
+    pub fn parse_object(o: Value, materials: &HashMap<String, material::MaterialProperties>, media:&HashMap<String, Box<material::Medium>>) -> Option<Rc<SceneObject>> {
         let t = o["type"].as_str().unwrap();
         let m = SceneFile::parse_object_medium(&o, materials, media);
         
@@ -130,8 +131,8 @@ impl SceneFile {
         }
     }
 
-    pub fn parse_material(o: &Value) -> material::Material {
-        return material::Material {
+    pub fn parse_material(o: &Value) -> material::MaterialProperties {
+        return material::MaterialProperties {
             pigment: SceneFile::parse_color(&o["pigment"]), 
             albedo: SceneFile::parse_number(&o["albedo"], 0.2),
             metallic: o["metallic"].as_f64().unwrap(), 
@@ -144,7 +145,7 @@ impl SceneFile {
         }
     }
 
-    pub fn parse_materials(o: &Map<String, Value>) -> HashMap<String, material::Material> {
+    pub fn parse_materials(o: &Map<String, Value>) -> HashMap<String, material::MaterialProperties> {
         let mut materials = HashMap::new();
         for m in o.iter() {
             materials.insert(m.0.to_string(), SceneFile::parse_material(m.1));
@@ -152,7 +153,7 @@ impl SceneFile {
         return materials;
     }
 
-    pub fn parse_medium(o: &Value, materials: &HashMap<String, material::Material>) -> Option<Box<material::Medium>> {
+    pub fn parse_medium(o: &Value, materials: &HashMap<String, material::MaterialProperties>) -> Option<Box<material::Medium>> {
         let t = o["type"].as_str().unwrap();
         if t == "solid" {
             let m = materials.get(&SceneFile::parse_string(&o["material"])).unwrap(); 
@@ -173,7 +174,7 @@ impl SceneFile {
         return None
     }
 
-    pub fn parse_media(o: &Map<String, Value>, materials: &HashMap<String, material::Material>) -> HashMap<String, Box<material::Medium>> {
+    pub fn parse_media(o: &Map<String, Value>, materials: &HashMap<String, material::MaterialProperties>) -> HashMap<String, Box<material::Medium>> {
         let mut media = HashMap::new();
         for m in o.iter() {
             match SceneFile::parse_medium(m.1, materials){
@@ -210,7 +211,7 @@ impl SceneFile {
         return Scene {
             width: s.width,
             height: s.height,
-            camera: SceneFile::parse_camera(s.camera, s.width, s.height),
+            camera: Box::new(SceneFile::parse_camera(s.camera, s.width, s.height)),
             objects: o,
             ambient: s.ambient,
             max_depth: s.reflection,

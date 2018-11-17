@@ -1,7 +1,7 @@
 {
   "width": 400,
   "height": 300,
-  "supersamples": 3,
+  "supersamples": 9,
   
   "background": [0.6, 0.6, 0.9],
   "ambient": 0.01,
@@ -87,7 +87,8 @@
     "location": [5, 7, -20],
     "lookat" : [0,4.5,0],
     "up" : [0,1,0],
-    "angle": 0.9 
+    "angle": 1.2 ,
+    "aperture": 1
   },
   
   "lights" : [

@@ -8,7 +8,7 @@ use color::Color;
 pub struct Scene {
     pub width: u32,
     pub height: u32,
-    pub camera: camera::Camera,
+    pub camera: Box<camera::Camera>,
     pub objects: SceneGraph,
     pub lights: Vec<Light>,
 

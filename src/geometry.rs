@@ -1,4 +1,4 @@
-use na::{Vec3};
+use na::{Vec3, Vec2};
 extern crate rand as _rand;
 use geometry::_rand::Rng;
 use std::f64;
@@ -21,6 +21,12 @@ pub fn random_point_on_unit_sphere() -> Vec3<f64>{
     let y = r * sin_phi * sin_theta;
     let z = r * cos_phi;
     return Vec3::new(x, y, z);
+}
+
+pub fn random_point_on_disc(radius: f64) -> Vec2<f64>{
+    let r = radius * rand().sqrt();
+    let theta = rand() * 2.0 * f64::consts::PI;
+    return Vec2::new(r * theta.cos(), r * theta.sin());
 }
 
 fn schlick(cosine:f64, ref_idx:f64) -> f64 {

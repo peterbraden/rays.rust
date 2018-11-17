@@ -30,8 +30,8 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, s: &Scene
     let mut out = Color::black();
 
     let ambient = Ambient { pigment: material.pigment * s.ambient};
-    let (_c, a, _r) = ambient.scatter(r, &biased_intersection, s);
-    out = out + a;
+    let a = ambient.scatter(r, &biased_intersection, s);
+    out = out + a.attenuate;
 
     let (cad, ad) = ambient_diffuse(r, &biased_intersection, s, depth);
     out = out + ad;
@@ -76,9 +76,9 @@ fn ambient_diffuse(r: &Ray, intersection: &Intersection, s: &Scene, depth: u64) 
     }
 
     let model = AmbientLambertian { albedo: m.pigment * m.albedo };
-    let (_c, attenuate, refl) = model.scatter(r, intersection, s);
-    let (c, col) = trace(&refl.unwrap(), depth + 1, s);
-    return (c, col * attenuate)
+    let d = model.scatter(r, intersection, s);
+    let (c, col) = trace(&d.ray.unwrap(), depth + 1, s);
+    return (c, col * d.attenuate)
 }
 
 fn specular (r: &Ray, intersection: &Intersection, light_vec: &Vec3<f64>, s: &Scene) -> Color {
@@ -115,7 +115,7 @@ fn diffuse (i: &Intersection, light_vec: &Vec3<f64>, light: &Light, s: &Scene) -
 fn reflection(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene) -> (u64, Color) {
     let m = intersection.object.medium.material_at(intersection.point);
     let model = Reflection { reflective: m.pigment * m.reflection, roughness: m.roughness};
-    let (_c, attenuate, refl) = model.scatter(r, intersection, s);
-    let (c, col) = trace(&refl.unwrap(), depth + 1, s);
-    return (c, col * attenuate)
+    let d = model.scatter(r, intersection, s);
+    let (c, col) = trace(&d.ray.unwrap(), depth + 1, s);
+    return (c, col * d.attenuate)
 }

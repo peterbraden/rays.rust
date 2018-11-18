@@ -5,7 +5,7 @@ use scene::Scene;
 use intersection::Intersection;
 use std::f64;
 use light::Light;
-use material::{MaterialModel, AmbientLambertian, Ambient, Reflection};
+use material::{MaterialModel, AmbientLambertian, Ambient, Reflection, Dielectric};
 
 // Returns num rays cast, Color
 pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
@@ -29,36 +29,46 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, s: &Scene
     let mut cast = 1;
     let mut out = Color::black();
 
-    let ambient = Ambient { pigment: material.pigment * s.ambient};
-    let a = ambient.scatter(r, &biased_intersection, s);
-    out = out + a.attenuate;
+    if material.opacity > 0.99 {
+        let ambient = Ambient { pigment: material.pigment * s.ambient};
+        let a = ambient.scatter(r, &biased_intersection, s);
+        out = out + a.attenuate;
 
-    let (cad, ad) = ambient_diffuse(r, &biased_intersection, s, depth);
-    out = out + ad;
-    cast = cast + cad;
 
-    for light in &s.lights {
-        let light_vec = light.position - biased_intersection.point;
-        let shadow_ray = Ray {ro: biased_intersection.point, rd: light_vec};
-        let shadow_intersection = s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), 0.1, Some(intersection.object)); 
-        cast = cast + 1;
+        let (cad, ad) = ambient_diffuse(r, &biased_intersection, s, depth);
+        out = out + ad;
+        cast = cast + cad;
 
-        match shadow_intersection {
-            Some(_) => (
-                    // Point in shadow...
-                ),
-            None => (
-                out = out + trace_for_light(&r, &light_vec, &light, &biased_intersection, &s)
-                ),
+        for light in &s.lights {
+            let light_vec = light.position - biased_intersection.point;
+            let shadow_ray = Ray {ro: biased_intersection.point, rd: light_vec};
+            let shadow_intersection = s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), 0.1, Some(intersection.object)); 
+            cast = cast + 1;
+
+            match shadow_intersection {
+                Some(_) => (
+                        // Point in shadow...
+                    ),
+                None => (
+                    out = out + trace_for_light(&r, &light_vec, &light, &biased_intersection, &s)
+                    ),
+            }
+        }
+
+        if depth < s.max_depth && material.reflection > 0.001 {
+            let (c, refl) = reflection(r, &biased_intersection, depth + 1, s);
+            out = out + refl;
+            cast = cast + c;
+        }
+    } else {
+        if depth < s.max_depth {
+            let (c, refl) = refraction(r, &intersection, depth + 1, s);
+            out = out + refl;
+            cast = cast + c;
+        } else {
+            out = out + material.pigment;
         }
     }
-
-    if s.reflection && depth < s.max_depth {
-        let (c, refl) = reflection(r, &biased_intersection, depth + 1, s);
-        out = out + refl;
-        cast = cast + c;
-    }
-
     return (cast, out);
 }
 
@@ -116,6 +126,16 @@ fn reflection(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene) -> (u
     let m = intersection.object.medium.material_at(intersection.point);
     let model = Reflection { reflective: m.pigment * m.reflection, roughness: m.roughness};
     let d = model.scatter(r, intersection, s);
-    let (c, col) = trace(&d.ray.unwrap(), depth + 1, s);
+    let (c, col) = trace(&d.ray.unwrap(), depth, s);
+    return (c, col * d.attenuate)
+}
+
+fn refraction(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene) -> (u64, Color) {
+    let m = intersection.object.medium.material_at(intersection.point);
+    let model = Dielectric {
+        attenuate: m.pigment * (1.0 - m.opacity),
+        refractive_index: m.refractive_index};
+    let d = model.scatter(r, intersection, s);
+    let (c, col) = trace(&d.ray.unwrap(), depth, s);
     return (c, col * d.attenuate)
 }

@@ -63,6 +63,9 @@ fn main() {
                                 sy as f64 / (s.supersamples as f64) * 1. / (s.height as f64))
                             , 0, &s);
                     rc.rays_cast += rays_cast;
+                    if rc.rays_cast % 1000000 == 0 {
+                        rc.print_progress(x, y);
+                    }
                     pixel = pixel + c;
                 }
             }

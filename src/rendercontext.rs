@@ -58,4 +58,14 @@ impl RenderContext {
         print!("==========================================\n");
 
     }
+    
+    pub fn print_progress(&self, _x: u32, y: u32){
+        let elapsed = time::precise_time_s() - self.start_time;
+        println!("- [{:.0}s] {}M rays cast ({:.0} RPS),  y={}/{}",
+                 elapsed,
+                 self.rays_cast/1000000,
+                 self.rays_cast as f64 / elapsed,
+                 y,
+                 self.height);
+    }
 }

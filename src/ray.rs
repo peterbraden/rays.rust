@@ -1,6 +1,6 @@
 use na::Vec3;
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Ray {
     pub ro: Vec3<f64>,
     pub rd: Vec3<f64>,

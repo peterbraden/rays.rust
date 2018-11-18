@@ -23,25 +23,28 @@ impl Sphere{
 impl Geometry for Sphere {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         let dst = r.ro - self.center;
+        let a = r.rd.dot(&r.rd);
         let b = dst.dot(&r.rd.normalize());
         let c = dst.dot(&dst) - self.radius * self.radius;
 
+        /*
         if c > 0. && b > 0. {
             // Exit if r’s origin outside s (c > 0) and r pointing away from s (b > 0) 
             return None;
         }
+        */
 
-        let d = b * b - c;
+        let d = b * b - a*c;
 
         if d < 0. {
             return None
         }
 
-        let mut dist = -b - d.sqrt();
+        let mut dist = (-b - d.sqrt()) / a;
 
-        // If dist is negative, ray started inside sphere so clamp t to zero 
         if dist.is_sign_negative() {
-             dist = 0f64;
+            // If dist is negative, ray started inside sphere so find other root 
+            dist = (-b + d.sqrt()) / a;
         }
 
         let point = r.ro + (r.rd.normalize() * dist);

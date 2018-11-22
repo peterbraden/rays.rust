@@ -1,4 +1,4 @@
-use material::Medium;
+use material::texture::Medium;
 use shapes::geometry::Geometry;
 use intersection::Intersection;
 use ray::Ray;

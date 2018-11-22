@@ -1,4 +1,4 @@
-use na::{Vec3, Vec2};
+use na::{Vec3, Vec2, Dot};
 extern crate rand as _rand;
 use geometry::_rand::Rng;
 use std::f64;
@@ -33,3 +33,8 @@ pub fn schlick(cosine:f64, ref_idx:f64) -> f64 {
     let r0 = ((1.0 - ref_idx) / (1.0 + ref_idx)).powi(2);
     r0 + (1.0-r0) * (1.0 - cosine).powi(5)
 }
+
+pub fn reflect(v: Vec3<f64>, normal: Vec3<f64>) -> Vec3<f64> {
+    v - normal * 2.0 * normal.dot(&v)
+}
+

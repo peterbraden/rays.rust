@@ -1,11 +1,8 @@
 use color::Color;
-use na::{Vec3, Norm, Dot};
 use ray::Ray;
 use scene::Scene;
 use intersection::Intersection;
 use std::f64;
-use light::Light;
-use material::{MaterialModel, AmbientLambertian, Ambient, Reflection, Dielectric};
 
 // Returns num rays cast, Color
 pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
@@ -28,114 +25,23 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, s: &Scene
 
     let mut cast = 1;
     let mut out = Color::black();
+    
+    let interaction = material.scatter(r, &biased_intersection, s);
 
-    if material.opacity > 0.99 {
-        let ambient = Ambient { pigment: material.pigment * s.ambient};
-        let a = ambient.scatter(r, &biased_intersection, s);
-        out = out + a.attenuate;
-
-
-        let (cad, ad) = ambient_diffuse(r, &biased_intersection, s, depth);
-        out = out + ad;
-        cast = cast + cad;
-
-        for light in &s.lights {
-            let light_vec = light.position - biased_intersection.point;
-            let shadow_ray = Ray {ro: biased_intersection.point, rd: light_vec};
-            let shadow_intersection = s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), 0.1, Some(intersection.object)); 
-            cast = cast + 1;
-
-            match shadow_intersection {
-                Some(_) => (
-                        // Point in shadow...
-                    ),
-                None => (
-                    out = out + trace_for_light(&r, &light_vec, &light, &biased_intersection, &s)
-                    ),
-            }
-        }
-
-        if depth < s.max_depth && material.reflection > 0.001 {
-            let (c, refl) = reflection(r, &biased_intersection, depth + 1, s);
-            out = out + refl;
-            cast = cast + c;
+    if depth < s.max_depth {
+        if let Some(ray) = interaction.ray {
+            let (c, col) = trace(&ray, depth + 1, s);
+            out = out + interaction.attenuate * col;
+            cast += c;
+        } else {
+            // Wish I could if && if let
+            out = out + interaction.attenuate;
         }
     } else {
-        if depth < s.max_depth {
-            let (c, refl) = refraction(r, &intersection, depth + 1, s);
-            out = out + refl;
-            cast = cast + c;
-        } else {
-            out = out + material.pigment;
-        }
+        out = out + interaction.attenuate;
     }
+
     return (cast, out);
 }
 
-fn trace_for_light(r: &Ray, light_vec: &Vec3<f64>, l: &Light, intersection: &Intersection, s: &Scene) -> Color {
-    return diffuse(&intersection, &light_vec, &l, s) + specular(r, intersection, light_vec, s);
-}
 
-
-// Diffuse light due to roughness and ambient light
-// - Lambertian with randomised unit vector
-fn ambient_diffuse(r: &Ray, intersection: &Intersection, s: &Scene, depth: u64) -> (u64, Color) {
-    let m = intersection.object.medium.material_at(intersection.point);
-    if s.ambient_diffuse == 0 || depth > s.ambient_diffuse || m.albedo < 0.01 {
-        return (0, Color::black());
-    }
-
-    let model = AmbientLambertian { albedo: m.pigment * m.albedo };
-    let d = model.scatter(r, intersection, s);
-    let (c, col) = trace(&d.ray.unwrap(), depth + 1, s);
-    return (c, col * d.attenuate)
-}
-
-fn specular (r: &Ray, intersection: &Intersection, light_vec: &Vec3<f64>, s: &Scene) -> Color {
-    let phong = intersection.object.medium.material_at(intersection.point).phong;
-    if !s.specular || phong == 0. {
-        return Color::black();
-    }
-    let ln = light_vec.normalize();
-    let refl = ln - (intersection.normal * (2.0 * intersection.normal.dot(&ln) ) ); 
-    let dp = refl.dot(&r.rd);
-
-    if dp > 0f64 {
-        let spec_scale = dp.powf(phong);
-        return Color::white() * spec_scale;
-    }
-
-    return Color::black();
-}
-
-// Lambertian
-fn diffuse (i: &Intersection, light_vec: &Vec3<f64>, light: &Light, s: &Scene) -> Color {
-    if !s.diffuse {
-        return Color::black();
-    }
-
-    let diffuse_scale = light_vec.normalize().dot(&i.normal) * light.intensity;
-    if diffuse_scale.is_sign_positive() {
-        return light.color * i.object.medium.material_at(i.point).pigment * diffuse_scale;
-    }
-    return Color::black()
-}
-
-
-fn reflection(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene) -> (u64, Color) {
-    let m = intersection.object.medium.material_at(intersection.point);
-    let model = Reflection { reflective: m.pigment * m.reflection, roughness: m.roughness};
-    let d = model.scatter(r, intersection, s);
-    let (c, col) = trace(&d.ray.unwrap(), depth, s);
-    return (c, col * d.attenuate)
-}
-
-fn refraction(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene) -> (u64, Color) {
-    let m = intersection.object.medium.material_at(intersection.point);
-    let model = Dielectric {
-        attenuate: m.pigment * (1.0 - m.opacity),
-        refractive_index: m.refractive_index};
-    let d = model.scatter(r, intersection, s);
-    let (c, col) = trace(&d.ray.unwrap(), depth, s);
-    return (c, col * d.attenuate)
-}

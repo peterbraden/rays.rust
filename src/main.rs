@@ -12,7 +12,16 @@ use clap::{Arg, App};
 mod ray;
 mod bbox;
 mod color;
-mod material;
+mod material {
+    pub mod model;
+    pub mod dielectric;
+    pub mod metallic;
+    pub mod ambient;
+    pub mod texture;
+    pub mod lambertian;
+    pub mod diffuse_light;
+    pub mod normal;
+}
 mod intersection;
 mod sceneobject;
 mod light;

@@ -12,8 +12,13 @@ use scene::Scene;
 use serde_json;
 use std::io::prelude::*;
 use std::fs::File;
-use material;
-use std::collections::HashMap;
+use material::model::MaterialModel;
+use material::texture::{Solid, CheckeredYPlane, Medium};
+use material::metallic::Metallic;
+use material::dielectric::Dielectric;
+use material::lambertian::Lambertian;
+use material::normal::NormalShade;
+use material::diffuse_light::DiffuseLight;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SceneFile {
@@ -76,7 +81,7 @@ impl SceneFile {
         );
     }
 
-    pub fn parse_objects(objs: Vec<Value>, materials: HashMap<String, material::MaterialProperties>, media:&HashMap<String, Box<material::Medium>>) ->Vec<Rc<SceneObject>> {
+    pub fn parse_objects(objs: Vec<Value>, materials: &Map<String, Value>, media: &Map<String, Value>) ->Vec<Rc<SceneObject>> {
          let mut objects: Vec<Rc<SceneObject>> = Vec::new();
          for obj in objs {
             match SceneFile::parse_object(obj, &materials, &media) {
@@ -87,21 +92,20 @@ impl SceneFile {
          return objects
     }
 
-    pub fn parse_object_medium(o: &Value, materials: &HashMap<String, material::MaterialProperties>, media:&HashMap<String, Box<material::Medium>> ) -> Box<material::Medium> {
+    pub fn parse_object_medium(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Box<Medium> {
         match &o.get("medium") {
             Some(mid) => {
-                return media.get(&SceneFile::parse_string(mid)).unwrap().box_clone();
+                return SceneFile::parse_medium_ref(mid, materials, media).unwrap()
             },
             None => {
                 // Default is Solid
-                let m = materials.get(&SceneFile::parse_string(&o["material"])).unwrap();
-                return Box::new(material::Solid { m: m.clone() })
+                let m = SceneFile::parse_material_ref(&o["material"], materials).unwrap();
+                return Box::new(Solid { m: m })
             }
         }
-
     }
 
-    pub fn parse_object(o: Value, materials: &HashMap<String, material::MaterialProperties>, media:&HashMap<String, Box<material::Medium>>) -> Option<Rc<SceneObject>> {
+    pub fn parse_object(o: Value,  materials: &Map<String, Value>, media: &Map<String, Value>) -> Option<Rc<SceneObject>> {
         let t = o["type"].as_str().unwrap();
         let m = SceneFile::parse_object_medium(&o, materials, media);
         
@@ -115,7 +119,7 @@ impl SceneFile {
         return None
     }
 
-    pub fn parse_sphere(o: &Value, m: Box<material::Medium>) -> SceneObject {
+    pub fn parse_sphere(o: &Value, m: Box<Medium>) -> SceneObject {
         return SceneObject {
             geometry: Box::new(Sphere::new(
                 SceneFile::parse_vec3(&o["location"]),
@@ -124,14 +128,55 @@ impl SceneFile {
         };
     }
 
-    pub fn parse_checkeredplane(o: &Value, m: Box<material::Medium>) -> SceneObject {
+    pub fn parse_checkeredplane(o: &Value, m: Box<Medium>) -> SceneObject {
         SceneObject {
             geometry: Box::new(Plane { y: o["y"].as_f64().unwrap() }),
             medium: m
         }
     }
 
-    pub fn parse_material(o: &Value) -> material::MaterialProperties {
+    pub fn parse_material_ref(key: &Value, materials: &Map<String, Value> ) -> Option<Box<MaterialModel>> {
+        let props = materials.get(&SceneFile::parse_string(key)).unwrap();
+        return SceneFile::parse_material(props);
+    }
+
+    pub fn parse_material(o: &Value) -> Option<Box<MaterialModel>> {
+        let t = o["type"].as_str().unwrap();
+        if t == "metal" {
+            let metal:Metallic = Metallic {
+                reflective: SceneFile::parse_color(&o["reflective"]),
+                roughness: SceneFile::parse_number(&o["roughness"], 0.),
+            };
+            return Some(Box::new(metal));
+        }
+
+        if t == "lambertian" {
+            let d:Lambertian = Lambertian {
+                albedo:SceneFile::parse_color(&o["albedo"]), 
+            };
+            return Some(Box::new(d));
+        }
+
+        if t == "dielectric" {
+            let d:Dielectric = Dielectric {
+                refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.),
+                attenuate:SceneFile::parse_color(&o["attenuate"]), 
+            };
+            return Some(Box::new(d));
+        }
+
+        if t == "diffuse-light" {
+            let d:DiffuseLight = DiffuseLight {
+                intensity: SceneFile::parse_number(&o["intensity"], 1.),
+                color:SceneFile::parse_color(&o["color"]), 
+            };
+            return Some(Box::new(d));
+        }
+
+        if t == "normal" {
+            return Some(Box::new(NormalShade {}));
+        }
+        /*
         return material::MaterialProperties {
             pigment: SceneFile::parse_color(&o["pigment"]), 
             albedo: SceneFile::parse_number(&o["albedo"], 0.2),
@@ -143,46 +188,34 @@ impl SceneFile {
             phong: o["phong"].as_f64().unwrap(),
             normal_peturbation: Vec3::new(0., 0., 0.)
         }
+            */
+        None
     }
 
-    pub fn parse_materials(o: &Map<String, Value>) -> HashMap<String, material::MaterialProperties> {
-        let mut materials = HashMap::new();
-        for m in o.iter() {
-            materials.insert(m.0.to_string(), SceneFile::parse_material(m.1));
-        }
-        return materials;
+    pub fn parse_medium_ref(key: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Option<Box<Medium>> {
+        let props = media.get(&SceneFile::parse_string(key)).unwrap();
+        return SceneFile::parse_medium(props, materials);
     }
 
-    pub fn parse_medium(o: &Value, materials: &HashMap<String, material::MaterialProperties>) -> Option<Box<material::Medium>> {
+    pub fn parse_medium(o: &Value, materials: &Map<String, Value>) -> Option<Box<Medium>> {
         let t = o["type"].as_str().unwrap();
         if t == "solid" {
-            let m = materials.get(&SceneFile::parse_string(&o["material"])).unwrap(); 
-            return Some(Box::new(material::Solid { m: m.clone() }));
+            let m = SceneFile::parse_material_ref(&o["material"], materials).unwrap(); 
+            return Some(Box::new(Solid { m: m }));
         }
 
         if t == "checkered-y-plane" {
-            let m1 = materials.get(&SceneFile::parse_string(&o["m1"])).unwrap(); 
-            let m2 = materials.get(&SceneFile::parse_string(&o["m2"])).unwrap(); 
+            let m1 = SceneFile::parse_material_ref(&o["m1"], materials).unwrap(); 
+            let m2 = SceneFile::parse_material_ref(&o["m2"], materials).unwrap(); 
             let xsize = SceneFile::parse_number(&o["xsize"], 1.);
             let zsize = SceneFile::parse_number(&o["zsize"], 1.);
-            return Some(Box::new(material::CheckeredYPlane {
-                m1: m1.clone(), m2: m2.clone(), xsize: xsize, zsize: zsize
+            return Some(Box::new(CheckeredYPlane {
+                m1: m1, m2: m2, xsize: xsize, zsize: zsize
             }));
 
         }
 
         return None
-    }
-
-    pub fn parse_media(o: &Map<String, Value>, materials: &HashMap<String, material::MaterialProperties>) -> HashMap<String, Box<material::Medium>> {
-        let mut media = HashMap::new();
-        for m in o.iter() {
-            match SceneFile::parse_medium(m.1, materials){
-                Some(mp) => { media.insert(m.0.to_string(), mp);},
-                None => {}
-            }
-        }
-        return media;
     }
 
     pub fn parse_light(o: &Value) -> Light {
@@ -203,9 +236,7 @@ impl SceneFile {
 
     pub fn from_scenefile(s: SceneFile) -> Scene {
         let mut o = SceneGraph::new();
-        let materials = SceneFile::parse_materials(&s.materials);
-        let media = SceneFile::parse_media(&s.media, &materials);
-        let objects = SceneFile::parse_objects(s.objects, materials, &media);
+        let objects = SceneFile::parse_objects(s.objects, &s.materials, &s.media);
         o.push(objects);
 
         return Scene {

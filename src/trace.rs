@@ -42,16 +42,9 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &S
 
     let mut cast = 1;
     let mut out = Color::black();
-    
-    let subsamples = 35;
-
-    // Monte-Carlo method: We sample many times and average.
-    for _s in 0..subsamples { 
-        let (c, o) = trace_sample(r, &biased_intersection, depth, scene);
-        cast = cast + c;
-        out = out + o;
-    }
-    out = out * (1./ subsamples as f64);
+    let (c, o) = trace_sample(r, &biased_intersection, depth, scene);
+    cast = cast + c;
+    out = out + o;
 
     return (cast, out)
 }

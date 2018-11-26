@@ -63,6 +63,8 @@ fn main() {
     for y in 0..s.height {
         for x in 0..s.width {
             let mut pixel = color::Color::black();
+
+            // Monte-Carlo method: We sample many times and average.
             for sx in 0..s.supersamples {
                 for sy in 0..s.supersamples {
                     let (rays_cast, c) = trace(

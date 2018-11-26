@@ -9,7 +9,6 @@ pub trait Camera {
     fn get_ray(&self, x: f64, y: f64, sx: f64, sy: f64) -> Ray;
 }
 
-
 pub struct SimpleCamera {
     location: Vec3<f64>,
 

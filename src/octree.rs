@@ -1,7 +1,7 @@
 use bbox::BBox;
 use na::{Vec3};
 use sceneobject::SceneObject;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::fmt;
 use ray::Ray;
 use intersection::Intersection;
@@ -12,7 +12,7 @@ pub struct OctreeNode {
     mid: Vec3<f64>,
     // Octree structure:
     children: [Option<Box<OctreeNode>>; 8],
-    items: Vec<Rc<SceneObject>>,
+    items: Vec<Arc<SceneObject>>,
 }
 
 impl OctreeNode {
@@ -21,7 +21,7 @@ impl OctreeNode {
     // Create a new node, and subdivide into further nodes up until max_depth
     // or until number of children objects is 0.
     //
-    pub fn new(depth: i64, max_depth: i64, b: BBox, items: &Vec<Rc<SceneObject>>) -> OctreeNode {
+    pub fn new(depth: i64, max_depth: i64, b: BBox, items: &Vec<Arc<SceneObject>>) -> OctreeNode {
 
         // Rust arrays suck - this defaults them to 'None'
         let mut children: [Option<Box<OctreeNode>>; 8] = Default::default();
@@ -43,7 +43,7 @@ impl OctreeNode {
                 let inside = item_iter
                                     .cloned()
                                     .filter( |x| { cbox.intersects_bbox( &x.geometry.bounds() ) } )
-                                    .collect::<Vec<Rc<SceneObject>>>();
+                                    .collect::<Vec<Arc<SceneObject>>>();
 
                 if inside.len() > 0 {
                     let node = OctreeNode::new( depth + 1, max_depth, cbox, &inside);

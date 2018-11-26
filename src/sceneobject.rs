@@ -4,8 +4,8 @@ use intersection::Intersection;
 use ray::Ray;
 
 pub struct SceneObject {
-    pub geometry: Box<Geometry>,
-    pub medium: Box<Medium>,
+    pub geometry: Box<Geometry + Sync + Send>,
+    pub medium: Box<Medium + Sync + Send>,
 }
 
 impl SceneObject {

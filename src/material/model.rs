@@ -28,7 +28,7 @@ use scene::Scene;
 ///  PBRT uses:
 ///  - eta - the difference in refractive index of the interaction, default 1
 ///
-pub trait MaterialModel {
+pub trait MaterialModel: Sync{
     /// Scatter an intersection ray.
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay;
 }

@@ -1,8 +1,7 @@
 {
   "width": 320,
   "height": 240,
-  "supersamples": 3,
-  "interaction_samples": 35,
+  "supersamples": 35,
   
   "background": [0.1, 0.1, 0.3],
   "ambient": 0.01,

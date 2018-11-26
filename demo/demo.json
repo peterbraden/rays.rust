@@ -1,7 +1,7 @@
 {
-  "width": 320,
-  "height": 240,
-  "supersamples": 35,
+  "width": 640,
+  "height": 480,
+  "supersamples": 70,
   
   "background": [0.1, 0.1, 0.3],
   "ambient": 0.01,
@@ -19,6 +19,11 @@
       "type": "metal",
       "reflective": [0.97, 0.74, 0.62],
       "roughness": 0.01
+    },
+    "POLISHED_STEEL": {
+      "type": "metal",
+      "reflective": [0.8, 0.8, 0.8],
+      "roughness": 0.1
     },
     "RED_PLASTIC": {
       "type": "lambertian",
@@ -38,14 +43,23 @@
     },
     "GLASS": {
       "type": "dielectric",
-      "pigment": [1, 1, 1],
-      "albedo": 0.9,
-      "metallic": 0,
-      "roughness": 0,
-      "reflection": 0,
-      "phong": 100,
-      "opacity": 0,
-      "refractive_index": 1.5
+      "refractive_index": 1.5,
+      "attenuate": [0.8, 0.8, 0.8]
+    },
+    "RED_LIGHT": {
+      "type": "diffuse-light",
+      "color": [1,0.1,0.1],
+      "intensity": 50
+    },
+    "GREEN_LIGHT": {
+      "type": "diffuse-light",
+      "color": [0.1,1,0.1],
+      "intensity": 50
+    },
+    "BLUE_LIGHT": {
+      "type": "diffuse-light",
+      "color": [0.1,0.1,1],
+      "intensity": 50
     },
     "WHITE_LIGHT": {
       "type": "diffuse-light",
@@ -66,7 +80,7 @@
     "lookat" : [0,4.5,0],
     "up" : [0,1,0],
     "angle": 1.0 ,
-    "aperture": 0.1
+    "aperture": 0.3
   },
   
   "lights" : [
@@ -87,9 +101,27 @@
   "objects": [
     { 
       "type" : "sphere",
-      "location": [0, 5, 0],
+      "location": [0, 1, 0],
       "radius":  1,
       "material" : "WHITE_LIGHT"
+    },
+    { 
+      "type" : "sphere",
+      "location": [0, 10, 5],
+      "radius":  1,
+      "material" : "RED_LIGHT"
+    },
+    { 
+      "type" : "sphere",
+      "location": [5, 10, 0],
+      "radius":  1,
+      "material" : "BLUE_LIGHT"
+    },
+    { 
+      "type" : "sphere",
+      "location": [-5, 10, 0],
+      "radius":  1,
+      "material" : "GREEN_LIGHT"
     },
     { 
       "type" : "sphere",
@@ -101,19 +133,25 @@
       "type" : "sphere",
       "location": [0, 7, 14],
       "radius":  7,
-      "material" : "WHITE_PLASTIC"
+      "material" : "POLISHED_STEEL"
     },
     { 
       "type" : "sphere",
-      "location": [2, 1, -4],
-      "radius":  1,
+      "location": [2, 3, -4],
+      "radius":  3,
+      "material" : "GLASS"
+    },
+    { 
+      "type" : "sphere",
+      "location": [-5, 3, -6],
+      "radius":  3,
       "material" : "POLISHED_COPPER"
     },
     { 
       "type" : "sphere",
       "location": [10, 5, -2],
       "radius": 5,
-      "material" : "RED_PLASTIC"
+      "material" : "WHITE_PLASTIC"
     },
     { 
       "type" : "checkeredplane",

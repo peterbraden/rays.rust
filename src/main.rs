@@ -70,9 +70,6 @@ fn render_row(y: u32, s: &scene::Scene, rcmtx: Arc<Mutex<rendercontext::RenderCo
         let mut rc = rcmtx.lock().unwrap();
         rc.rays_cast += cast;
         rc.set_pixel(x, y, pixel / ((s.supersamples * s.supersamples) as f64));
-        if rc.rays_cast % 10000 == 0 {
-            rc.print_progress(x, y);
-        }
     }
 }
 
@@ -101,6 +98,9 @@ fn main() {
 
         let rc = rcmtx.lock().unwrap();
         paint::to_png(&rc);
+        if &rc.rays_cast % 10000 == 0 {
+            &rc.print_progress(x, y);
+        }
     });
     
     let rc = rcmtx.lock().unwrap();

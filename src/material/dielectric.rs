@@ -4,21 +4,12 @@ use material::model::{MaterialModel, ScatteredRay};
 use intersection::Intersection;
 use ray::Ray;
 use geometry::{rand, schlick, reflect};
-use na::{Vec3, Dot, Norm};
+use na::{Dot, Norm};
+use material::functions::refract;
 
 pub struct Dielectric {
     pub refractive_index: f64,
     pub attenuate: Color,
-}
-
-fn refract(v: Vec3<f64>, n: Vec3<f64>, ni_over_nt:f64) -> Option<Vec3<f64>> {
-    let uv = v.normalize();
-    let dt = uv.dot(&n);
-    let discriminant = 1.0 - ni_over_nt * ni_over_nt * (1.0 - dt*dt);
-    if discriminant > 0.0 {
-        return Some( (uv - n * dt) * ni_over_nt - n * discriminant.sqrt())
-    }
-    None
 }
 
 impl MaterialModel for Dielectric {

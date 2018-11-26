@@ -1,7 +1,8 @@
 {
-  "width": 160,
-  "height": 120,
+  "width": 320,
+  "height": 240,
   "supersamples": 3,
+  "interaction_samples": 35,
   
   "background": [0.1, 0.1, 0.3],
   "ambient": 0.01,
@@ -19,6 +20,14 @@
       "type": "metal",
       "reflective": [0.97, 0.74, 0.62],
       "roughness": 0.01
+    },
+    "RED_PLASTIC": {
+      "type": "lambertian",
+      "albedo": [0.9, 0.1, 0.1]
+    },
+    "WHITE_PLASTIC": {
+      "type": "lambertian",
+      "albedo": [0.9, 0.9, 0.9]
     },
     "WHITE_MARBLE": {
       "type": "lambertian",
@@ -42,7 +51,7 @@
     "WHITE_LIGHT": {
       "type": "diffuse-light",
       "color": [1,1,1],
-      "intensity": 4
+      "intensity": 10
     }
   },
   "media": {
@@ -79,21 +88,33 @@
   "objects": [
     { 
       "type" : "sphere",
-      "location": [10, 5, 0],
-      "radius":  5,
+      "location": [0, 5, 0],
+      "radius":  1,
       "material" : "WHITE_LIGHT"
     },
     { 
       "type" : "sphere",
       "location": [-10, 5, 0],
       "radius":  5,
-      "material" : "TEST"
+      "material" : "WHITE_PLASTIC"
     },
     { 
       "type" : "sphere",
-      "location": [1, 4, -2],
-      "radius": 4,
-      "material" : "WHITE_MARBLE"
+      "location": [0, 7, 14],
+      "radius":  7,
+      "material" : "WHITE_PLASTIC"
+    },
+    { 
+      "type" : "sphere",
+      "location": [2, 1, -4],
+      "radius":  1,
+      "material" : "POLISHED_COPPER"
+    },
+    { 
+      "type" : "sphere",
+      "location": [10, 5, -2],
+      "radius": 5,
+      "material" : "RED_PLASTIC"
     },
     { 
       "type" : "checkeredplane",

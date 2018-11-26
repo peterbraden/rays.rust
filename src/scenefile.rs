@@ -14,7 +14,7 @@ use std::io::prelude::*;
 use std::fs::File;
 use material::model::MaterialModel;
 use material::texture::{Solid, CheckeredYPlane, Medium};
-use material::metallic::Metallic;
+use material::specular::Specular;
 use material::dielectric::Dielectric;
 use material::lambertian::Lambertian;
 use material::normal::NormalShade;
@@ -143,8 +143,8 @@ impl SceneFile {
     pub fn parse_material(o: &Value) -> Option<Box<MaterialModel>> {
         let t = o["type"].as_str().unwrap();
         if t == "metal" {
-            let metal:Metallic = Metallic {
-                reflective: SceneFile::parse_color(&o["reflective"]),
+            let metal:Specular = Specular {
+                albedo: SceneFile::parse_color(&o["reflective"]),
                 roughness: SceneFile::parse_number(&o["roughness"], 0.),
             };
             return Some(Box::new(metal));

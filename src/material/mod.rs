@@ -34,10 +34,10 @@ pub trait MaterialModel {
 }
 
 /// The outgoing ray, and the weight to assign the color of the traced ray.
-/// - Attenuate: the scaling of the subsequent reflections/refractions
+/// - Color: the scaling of the subsequent reflections/refractions
 /// - Option<Ray>:
-///     Some: Another ray to cast into the image, multiply by attenuate
-///     None: Return attenuate (attenuate the background color)
+///     Some: Another ray to cast into the image, multiply by Color
+///     None: Return Color
 ///
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScatteredRay {
@@ -45,18 +45,10 @@ pub struct ScatteredRay {
     pub attenuate: Color
 }
 
-/// Some material models use a direct ray to the light sources to calculate a scatter.
-pub trait DirectMaterialModel: MaterialModel{
-    fn scatter_light(&self, inbound: &Ray, light: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay;
-}
-
-
-
 /*
 pub trait BSDFToRename{
 
     //fn compute_interactions(&self, r: &Ray, intersection: &Intersection, s: &Scene) ->
     //ListOf<(weight, ray)>
-
 }
 */

@@ -6,7 +6,7 @@ use material::model::{MaterialModel, ScatteredRay};
 use intersection::Intersection;
 use ray::Ray;
 
-pub struct Ambient {
+pub struct Diffuse {
     pub pigment: Color,
 }
 
@@ -27,7 +27,6 @@ fn specular (r: &Ray, intersection: &Intersection, light_vec: &Vec3<f64>, s: &Sc
     return Color::black();
 }
 
-// Lambertian
 fn diffuse (i: &Intersection, light_vec: &Vec3<f64>, light: &Light, s: &Scene) -> Color {
     if !s.diffuse {
         return Color::black();

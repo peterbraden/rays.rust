@@ -15,12 +15,13 @@ mod color;
 mod material {
     pub mod model;
     pub mod dielectric;
-    pub mod metallic;
+    pub mod specular;
     pub mod ambient;
     pub mod texture;
     pub mod lambertian;
     pub mod diffuse_light;
     pub mod normal;
+    pub mod functions;
 }
 mod intersection;
 mod sceneobject;

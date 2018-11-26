@@ -38,3 +38,15 @@ pub fn reflect(v: Vec3<f64>, normal: Vec3<f64>) -> Vec3<f64> {
     v - normal * 2.0 * normal.dot(&v)
 }
 
+pub fn uniform_sample_hemisphere(r1: f64, r2: f64) -> Vec3<f64>{
+    let sin_theta = (1. - r1 * r1).sqrt(); 
+    let  phi = 2. * f64::consts::PI * r2; 
+    let x = sin_theta * phi.cos(); 
+    let z = sin_theta * phi.sin(); 
+    return Vec3::new(x, r1, z); 
+}
+
+// Transform into the world of vec
+//pub fn uniform_sample_hemisphere_around(r1: f64, r2:f64, vec: Vec3<f64>) -> Vec3<f64> {
+//    let sample = uniform_sample_hemisphere();
+//}

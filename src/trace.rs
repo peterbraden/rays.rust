@@ -14,34 +14,46 @@ pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
     }
 }
 
-fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, s: &Scene) -> (u64, Color) {
-    // Shadow bias -> Move the origin of the intersection point along the normal, in case a
-    // floating point error puts it slightly below the surface which would cause a sign flip
-    // leading to shadow acne.
-    let mut biased_intersection = intersection.clone();
-    biased_intersection.point = intersection.point + (intersection.normal * s.shadow_bias);
-
-    let material = intersection.object.medium.material_at(intersection.point);
-
+fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene) -> (u64, Color){
     let mut cast = 1;
     let mut out = Color::black();
-    
-    let interaction = material.scatter(r, &biased_intersection, s);
+    let material = intersection.object.medium.material_at(intersection.point);
+    let interaction = material.scatter(r, &intersection, s);
 
     if depth < s.max_depth {
         if let Some(ray) = interaction.ray {
             let (c, col) = trace(&ray, depth + 1, s);
             out = out + interaction.attenuate * col;
             cast += c;
-        } else {
-            // Wish I could if && if let
-            out = out + interaction.attenuate;
+            return (cast, out);
         }
-    } else {
-        out = out + interaction.attenuate;
     }
-
+    out = out + (interaction.attenuate * s.background);
     return (cast, out);
+}
+
+fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &Scene) -> (u64, Color) {
+    // Shadow bias -> Move the origin of the intersection point along the normal, in case a
+    // floating point error puts it slightly below the surface which would cause a sign flip
+    // leading to shadow acne.
+    let mut biased_intersection = intersection.clone();
+    biased_intersection.point = intersection.point + (intersection.normal * scene.shadow_bias);
+
+
+    let mut cast = 1;
+    let mut out = Color::black();
+    
+    let subsamples = 35;
+
+    // Monte-Carlo method: We sample many times and average.
+    for _s in 0..subsamples { 
+        let (c, o) = trace_sample(r, &biased_intersection, depth, scene);
+        cast = cast + c;
+        out = out + o;
+    }
+    out = out * (1./ subsamples as f64);
+
+    return (cast, out)
 }
 
 

@@ -7,6 +7,7 @@ extern crate clap;
 extern crate serde_derive;
 extern crate serde_json;
 extern crate rayon;
+extern crate tobj;
 
 use clap::{Arg, App};
 use rayon::prelude::*;
@@ -32,6 +33,8 @@ mod shapes {
     pub mod geometry;
     pub mod sphere;
     pub mod plane;
+    pub mod triangle;
+    pub mod mesh;
 }
 mod octree;
 mod scenegraph;
@@ -46,7 +49,9 @@ mod geometry;
 use trace::trace;
 use rendercontext::RenderContext;
 use std::sync::{Arc, Mutex};
-use rand::Rng;
+use rand::thread_rng;
+use rand::seq::SliceRandom;
+
 
 fn render_row(y: u32, s: &scene::Scene, rcmtx: Arc<Mutex<rendercontext::RenderContext>>){
     for x in 0..s.width {
@@ -81,32 +86,43 @@ fn main() {
             .help("Set scene file")
             .takes_value(true)
             .required(true)
-            .index(1));
+            .index(1))
+        .arg(Arg::with_name("progressive_render")
+            .short("p")
+            .long("progressive-render")
+            .help("Update the output file when a chunk is completed. Good for debugging"));
 
     let matches = app.get_matches();
     let s = scenefile::SceneFile::from_file(
                 matches.value_of("scene").unwrap()
             );
-    let mut rc = RenderContext::new(s.width, s.height);
+    let rc = RenderContext::new(
+            s.width,
+            s.height,
+            matches.is_present("progressive_render"),
+            );
     let rcmtx = Arc::new(Mutex::new(rc));
     let mut rows: Vec<u32> = (0 .. s.height).collect();
-    rand::thread_rng().shuffle(&mut rows);
+
+    let mut rng = thread_rng();
+    rows.shuffle(&mut rng);
 
     rows.into_par_iter().for_each(|y| {
         // Progressive render out:
         render_row(y, &s, rcmtx.clone());
 
         let rc = rcmtx.lock().unwrap();
-        paint::to_png(&rc);
-        if &rc.rays_cast % 10000 == 0 {
-            &rc.print_progress(x, y);
+
+        if rc.progressive_render {
+            paint::to_png(&rc);
+        }
+        if y % 10 == 0 {
+            &rc.print_progress(0, y);
         }
     });
-    
-    let rc = rcmtx.lock().unwrap();
 
+    let rc = rcmtx.lock().unwrap();
     paint::to_png(&rc);
     paint::poor_mans(&rc);
     rc.print_stats();
-
 }

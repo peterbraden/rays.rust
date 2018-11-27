@@ -2,7 +2,9 @@ use camera;
 use na::Vec3;
 use scenegraph::SceneGraph;
 use shapes::sphere::Sphere;
+use shapes::triangle::Triangle;
 use shapes::plane::Plane;
+use shapes::mesh::Mesh;
 use light::Light;
 use color::Color;
 use std::sync::Arc;
@@ -55,7 +57,6 @@ impl SceneFile {
     pub fn parse_string(v: &Value) -> String {
         return v.as_str().unwrap().to_string(); // This is pretty nasty, shame serde
     }
-
 
     pub fn parse_vec3(v: &Value) -> Vec3<f64> {
         return Vec3::new(v[0].as_f64().unwrap(),
@@ -112,6 +113,14 @@ impl SceneFile {
         if t == "sphere" {
             return Some(Arc::new(SceneFile::parse_sphere(&o, m)));
         }
+
+        if t == "triangle" {
+            return Some(Arc::new(SceneFile::parse_triangle(&o, m)));
+        }
+
+        if t == "mesh" {
+            return Some(Arc::new(SceneFile::parse_mesh(&o, m)));
+        }
         
         if t == "checkeredplane" {
             return Some(Arc::new(SceneFile::parse_checkeredplane(&o, m)));
@@ -119,11 +128,30 @@ impl SceneFile {
         return None
     }
 
+
+    pub fn parse_mesh(o: &Value, m: Box<Medium + Sync + Send>) -> SceneObject {
+        return SceneObject {
+            geometry: Box::new(Mesh::from_obj(
+                SceneFile::parse_string(&o["src"]),
+            )),
+            medium: m
+        };
+    }
+
     pub fn parse_sphere(o: &Value, m: Box<Medium + Sync + Send>) -> SceneObject {
         return SceneObject {
             geometry: Box::new(Sphere::new(
                 SceneFile::parse_vec3(&o["location"]),
                 o["radius"].as_f64().unwrap())),
+            medium: m
+        };
+    }
+    pub fn parse_triangle(o: &Value, m: Box<Medium + Sync + Send>) -> SceneObject {
+        return SceneObject {
+            geometry: Box::new(Triangle::new(
+                SceneFile::parse_vec3(&o["v0"]),
+                SceneFile::parse_vec3(&o["v1"]),
+                SceneFile::parse_vec3(&o["v2"]))),
             medium: m
         };
     }

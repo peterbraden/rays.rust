@@ -1,9 +1,9 @@
 {
-  "width": 640,
-  "height": 480,
-  "supersamples": 70,
+  "width": 160,
+  "height": 120,
+  "supersamples": 35,
   
-  "background": [0.1, 0.1, 0.3],
+  "background": [0.5, 0.5, 0.5],
   "ambient": 0.01,
   "specular": false,
   "ambient_diffuse": 1,
@@ -101,56 +101,13 @@
   "objects": [
     { 
       "type" : "sphere",
-      "location": [0, 1, 0],
-      "radius":  1,
-      "material" : "WHITE_LIGHT"
-    },
-    { 
-      "type" : "sphere",
-      "location": [0, 10, 5],
-      "radius":  1,
-      "material" : "RED_LIGHT"
-    },
-    { 
-      "type" : "sphere",
-      "location": [5, 10, 0],
-      "radius":  1,
-      "material" : "BLUE_LIGHT"
-    },
-    { 
-      "type" : "sphere",
-      "location": [-5, 10, 0],
-      "radius":  1,
-      "material" : "GREEN_LIGHT"
-    },
-    { 
-      "type" : "sphere",
       "location": [-10, 5, 0],
       "radius":  5,
       "material" : "WHITE_PLASTIC"
     },
     { 
-      "type" : "sphere",
-      "location": [0, 7, 14],
-      "radius":  7,
-      "material" : "POLISHED_STEEL"
-    },
-    { 
-      "type" : "sphere",
-      "location": [2, 3, -4],
-      "radius":  3,
-      "material" : "GLASS"
-    },
-    { 
-      "type" : "sphere",
-      "location": [-5, 3, -6],
-      "radius":  3,
-      "material" : "POLISHED_COPPER"
-    },
-    { 
-      "type" : "sphere",
-      "location": [10, 5, -2],
-      "radius": 5,
+      "type" : "mesh",
+      "src": "./demo/teapot.obj",
       "material" : "WHITE_PLASTIC"
     },
     { 

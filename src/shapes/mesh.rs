@@ -20,7 +20,7 @@ pub struct Mesh {
 
 
 impl Mesh {
-    pub fn from_obj(pth: String) -> Mesh {
+    pub fn from_obj(pth: String, scale: Vec3<f64>) -> Mesh {
         let obj = tobj::load_obj(&Path::new(&pth));
         assert!(obj.is_ok());
         let (models, materials) = obj.unwrap();
@@ -34,6 +34,7 @@ impl Mesh {
                 mesh.positions
                     .chunks(3)
                     .map(|i| Vec3::new(i[0] as f64, i[1] as f64, i[2] as f64))
+                    .map(|i| i * scale)
                     .collect()
             );
             let mut tris: Vec<Triangle> = mesh.indices.chunks(3).map(|i| {

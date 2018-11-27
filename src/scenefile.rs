@@ -64,6 +64,13 @@ impl SceneFile {
                          v[2].as_f64().unwrap());
     }
 
+    pub fn parse_vec3_def(v: &Value, k: &str, def: Vec3<f64>) -> Vec3<f64> {
+        match &v.get(&k) {
+            Some(x) => SceneFile::parse_vec3(x),
+            None => return def
+        }
+    }
+
     pub fn parse_color(v: &Value) -> Color {
         return Color::new(v[0].as_f64().unwrap(),
                          v[1].as_f64().unwrap(),
@@ -133,6 +140,7 @@ impl SceneFile {
         return SceneObject {
             geometry: Box::new(Mesh::from_obj(
                 SceneFile::parse_string(&o["src"]),
+                SceneFile::parse_vec3_def(&o, "scale", Vec3::new(1., 1., 1.)),
             )),
             medium: m
         };

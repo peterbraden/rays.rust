@@ -1,15 +1,15 @@
 {
-  "width": 160,
-  "height": 120,
-  "supersamples": 2,
+  "width": 320,
+  "height": 240,
+  "supersamples": 35,
   
-  "background": [0.9, 0.9, 0.9],
+  "background": [1, 1, 1],
   "ambient": 0.01,
   "specular": false,
   "ambient_diffuse": 1,
   "diffuse" : true,
   "shadow_bias": 0.0001,
-  "reflection": 1,
+  "reflection": 4,
 
   "materials": {
     "TEST": {
@@ -22,7 +22,17 @@
     },
     "POLISHED_STEEL": {
       "type": "metal",
-      "reflective": [0.8, 0.8, 0.8],
+      "reflective": [0.77, 0.78, 0.78],
+      "roughness": 0.1
+    },
+    "BRUSHED_METAL_RED": {
+      "type": "metal",
+      "reflective": [0.8, 0.1, 0.1],
+      "roughness": 0.4
+    },
+    "GOLD": {
+      "type": "metal",
+      "reflective": [1, 0.85, 0.57],
       "roughness": 0.1
     },
     "RED_PLASTIC": {
@@ -45,6 +55,11 @@
       "type": "dielectric",
       "refractive_index": 1.5,
       "attenuate": [0.8, 0.8, 0.8]
+    },
+    "GREEN_GLASS": {
+      "type": "dielectric",
+      "refractive_index": 1.5,
+      "attenuate": [0.2, 0.8, 0.2]
     },
     "RED_LIGHT": {
       "type": "diffuse-light",
@@ -76,7 +91,7 @@
   },
 
   "camera": {
-    "location": [0, 7, -20],
+    "location": [0, 15, -20],
     "lookat" : [0,4.5,0],
     "up" : [0,1,0],
     "angle": 1.0 ,
@@ -103,7 +118,49 @@
       "type" : "mesh",
       "src": "./demo/teapot.obj",
       "scale": [5,5,5],
+      "material" : "WHITE_PLASTIC"
+    },
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [0, 2, -11],
       "material" : "POLISHED_COPPER"
+    },
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [-5, 2, -11],
+      "material" : "RED_PLASTIC"
+    },
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [5, 2, -11],
+      "material" : "POLISHED_STEEL"
+    },
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [10, 2, -11],
+      "material" : "BRUSHED_METAL_RED"
+    },
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [-10, 2, -11],
+      "material" : "GOLD"
+    },
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [-10, 2, -7],
+      "material" : "GLASS"
+    },
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [10, 2, -7],
+      "material" : "GREEN_GLASS"
     },
     { 
       "type" : "checkeredplane",

@@ -92,6 +92,7 @@ fn main() {
             .long("progressive-render")
             .help("Update the output file when a chunk is completed. Good for debugging"));
 
+    println!("- Building models");
     let matches = app.get_matches();
     let s = scenefile::SceneFile::from_file(
                 matches.value_of("scene").unwrap()
@@ -106,6 +107,7 @@ fn main() {
 
     let mut rng = thread_rng();
     rows.shuffle(&mut rng);
+    println!("- Starting Render");
 
     rows.into_par_iter().for_each(|y| {
         // Progressive render out:

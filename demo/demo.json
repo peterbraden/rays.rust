@@ -1,7 +1,8 @@
 {
   "width": 320,
   "height": 240,
-  "supersamples": 5,
+  "supersamples": 1,
+  
   "background": [1, 1, 1],
   "ambient": 0.01,
   "specular": false,

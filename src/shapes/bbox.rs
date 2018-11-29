@@ -7,8 +7,8 @@ use shapes::geometry::Geometry;
 // Axis aligned bounding box
 #[derive(Debug, Copy, Clone)]
 pub struct BBox {
-    min: Vec3<f64>, // Point closest to origin
-    max: Vec3<f64>,
+    pub min: Vec3<f64>, // Point closest to origin
+    pub max: Vec3<f64>,
 }
 
 impl BBox {
@@ -70,6 +70,10 @@ impl BBox {
         )
     }
 
+    pub fn size(&self) -> Vec3<f64> {
+        return self.max - self.min;
+    }
+
 
     pub fn intersects_bbox(&self, b: &BBox) -> bool{
           if &self.max.x < &b.min.x { return false; } // self is left of b
@@ -129,10 +133,10 @@ impl BBox {
 
 impl fmt::Display for BBox {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "[ {},{},{} -> {},{},{} ]",
+        write!(f, "(BBox {},{},{} -> {},{},{} )",
                 &self.min.x,
                 &self.min.y,
-                &self.min.x,
+                &self.min.z,
                 &self.max.x,
                 &self.max.y,
                 &self.max.z)

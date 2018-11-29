@@ -96,11 +96,6 @@ impl SceneGraph {
             &self.items.push(x);
         }
         self.partition(8);
-<<<<<<< HEAD
-=======
-        //print!("{}", self);
-
->>>>>>> fbce5f0... scenegraph equal
     }
 }
 

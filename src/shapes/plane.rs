@@ -1,7 +1,7 @@
-use na::{Vector3, Norm, Dot};
+use na::{Vector3};
 use ray::Ray;
 use intersection::RawIntersection;
-use bbox::BBox;
+use shapes::bbox::BBox;
 use shapes::geometry::Geometry;
 
 pub struct Plane {

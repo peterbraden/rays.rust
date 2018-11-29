@@ -1,5 +1,6 @@
 extern crate time;
 
+use scene::Scene;
 use color::Color;
 // The render context is the data structure
 // that holds state about the current render.
@@ -12,6 +13,17 @@ pub struct RenderContext {
     pub rays_cast: u64,
     pub start_time: f64,
     pub progressive_render: bool,
+    pub pixels_rendered: u64,
+}
+
+fn format_f64(v: f64) -> String {
+    if v > 1000000. {
+        return format!("{:.2}M", v / 1000000.);
+    }
+    if v > 1000. {
+        return format!("{:.2}K", v / 1000.);
+    }
+    return format!("{:.2}", v);
 }
 
 impl RenderContext {
@@ -23,6 +35,7 @@ impl RenderContext {
             rays_cast: 0,
             start_time: time::precise_time_s(),
             progressive_render: progressive_render,
+            pixels_rendered: 0,
         }
     }
 
@@ -32,6 +45,7 @@ impl RenderContext {
         }
 
         self.image[ (y*self.width + x) as usize ] = c;
+        self.pixels_rendered += 1;
     }
 
     pub fn get_pixel(&self, x:u32, y:u32) -> Color {
@@ -63,15 +77,27 @@ impl RenderContext {
         print!("==========================================\n");
 
     }
+
+    pub fn print_scene_stats(&self, s: &Scene){
     
-    pub fn print_progress(&self, _x: u32, y: u32){
+        print!("# ============== Scene ===================\n");
+        print!("| Objects: {}\n", s.objects);
+        print!("| - Primitives: {}\n", s.objects
+                                        .items
+                                        .iter()
+                                        .map(|x| x.geometry.primitives())
+                                        .fold(0, |acc, x| acc + x));
+        print!("# ========================================\n");
+    }
+    
+    pub fn print_progress(&self, _x: u32, _y: u32){
         let elapsed = time::precise_time_s() - self.start_time;
-        println!("- [{:.0}s] {}M rays cast ({:.0} K.RPS),  y={}/{}, {} threads",
+        println!("- [{:.0}s] {} rays cast ({} RPS), {} Rays per pixel, {}%, {} threads",
                  elapsed,
-                 self.rays_cast/1000000,
-                 (self.rays_cast as f64 / elapsed) / 1000.,
-                 y,
-                 self.height,
+                 format_f64(self.rays_cast as f64),
+                 format_f64(self.rays_cast as f64 / elapsed),
+                 format_f64(self.rays_cast as f64 / self.pixels_rendered as f64),
+                 format_f64((self.pixels_rendered as f64 / (self.width * self.height) as f64) * 100.),
                  rayon::current_num_threads());
     }
 }

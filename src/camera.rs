@@ -1,4 +1,4 @@
-use na::{Vector3, Norm, Cross, Dot, PerspectiveMatrix3, Isometry3, Rotate, Rotation, Rotation3};
+use na::{Vector3, Perspective3, Isometry3, Rotation, Rotation3};
 use ray::Ray;
 use std::f64;
 
@@ -64,6 +64,7 @@ impl Camera for SimpleCamera {
 }
 
 
+/*
 
 pub struct PerspectiveCamera {
     frustum: PerspectiveMatrix3<f64>,
@@ -151,6 +152,7 @@ impl PerspectiveCamera {
         return (vec_cam.x + 0.5, vec_cam.y + 0.5);
     }
 }
+*/
 
 pub struct FlatLensCamera {
     location: Vector3<f64>,
@@ -243,46 +245,9 @@ mod tests {
         let width = 200;
         let height = 100;
 
+        /*
         let c = Camera::new(
-            Vector3::new(0f64, 0f64, 0f64),
-            Vector3::new(0f64, 0f64, -1f64),
-            Vector3::new(0f64, 1f64, 0f64),
-            0.1 , // 35 radians?
-            width, height
-        );
-        println!(">>> 0,0 {}, ", c.get_ray(0., 0.));
-        println!(">>> 0.5,0.5 {}, ", c.get_ray(0.5, 0.5));
-        println!(">>> 1,1 {}, ", c.get_ray(1., 1.));
-
-
-        assert_approx_eq!(c.get_ray(0.1, 0.1).ro.x, 0f64);
-        assert_approx_eq!(c.get_ray(0.1, 0.1).ro.y, 0f64);
-        assert_approx_eq!(c.get_ray(0.1, 0.1).ro.z, -1f64);
-
-//        assert_approx_eq!(c.get_ray(0.05, 0.1).rd.x, -0.21321662418650297);
-//        assert_approx_eq!(c.get_ray(0.05, 0.1).rd.y, -1.052729238967664);
-//        assert_approx_eq!(c.get_ray(0.05, 0.1).rd.z, 0.361484323405431);
-    }
-
-    #[test]
-    fn get_coord_for_point(){
-        let width = 100;
-        let height = 100;
-        let c = Camera::new(
-            Vector3::new(0f64,0f64,0f64),
-            Vector3::new(0f64, 0f64, -10f64),
-            Vector3::new(0f64,1f64,0f64),
-            0.61,
-            width, height
-        );
-    
-        let cr = c.get_ray(0.05, 0.1).rd;
-        println!(">>> 0.05, 0.1 > {},{} ", c.get_coord_for_point(cr).0, c.get_coord_for_point(cr).1);
-        assert_approx_eq!(c.get_coord_for_point(cr).0, 0.05);
-        assert_approx_eq!(c.get_coord_for_point(cr).1, 0.1);
-
-    
-        let c = OrthographicCamera::new(
+>>>>>>> 91eac9d7d76ebfa2585d691dba97e70c3c74de25
             Vector3::new(0f64,0f64,0f64),
             Vector3::new(0f64, 1f64, -1f64),
             Vector3::new(0f64,1f64,0f64),
@@ -297,5 +262,6 @@ mod tests {
         assert_approx_eq!(c.get_ray(0.05, 0.1, 0., 0.).rd.x, -0.21321662418650297);
         assert_approx_eq!(c.get_ray(0.05, 0.1, 0., 0.).rd.y, -1.052729238967664);
         assert_approx_eq!(c.get_ray(0.05, 0.1, 0., 0.).rd.z, 0.361484323405431);
+        */
     }
 }

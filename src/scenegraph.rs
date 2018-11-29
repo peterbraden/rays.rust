@@ -2,7 +2,7 @@ use ray::Ray;
 use na::{Vector3};
 use intersection::Intersection;
 use sceneobject::SceneObject;
-use bbox::BBox;
+use shapes::bbox::BBox;
 use octree::OctreeNode;
 use std::sync::Arc;
 use std::fmt;
@@ -10,7 +10,7 @@ use std::fmt;
 
 
 pub struct SceneGraph {
-    items: Vec<Arc<SceneObject>>,
+    pub items: Vec<Arc<SceneObject>>,
     root: Option<OctreeNode>,
     scene_bounds: BBox,
 }
@@ -55,7 +55,7 @@ impl SceneGraph {
     pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
         /*
         let naive = self.naive_intersection(r,max,min,exclude);
-        let tree = self.tree_nearest_intersection(r,max,min);
+        //let tree = self.tree_nearest_intersection(r,max,min);
 
         if naive != tree {
             println!("Intersection doesn't match for {} ({} {})", r, max, min);
@@ -121,10 +121,10 @@ impl SceneGraph {
 
 impl fmt::Display for SceneGraph {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "SceneGraph \n objects: {} \n bounded: {}\n{}\n",
+        write!(f, "SceneGraph \n objects: {} \n bounded: {}", //\n{}\n",
                 &self.items.len(), 
                 &self.scene_bounds,
-                &self.root.as_ref().unwrap()
+ //               &self.root.as_ref().unwrap()
             )
     }
 }

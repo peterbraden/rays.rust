@@ -1,4 +1,4 @@
-use na::{Vector3, Dot, Norm};
+use na::{Vector3};
 
 pub fn refract(v: Vector3<f64>, n: Vector3<f64>, ni_over_nt:f64) -> Option<Vector3<f64>> {
     let uv = v.normalize();

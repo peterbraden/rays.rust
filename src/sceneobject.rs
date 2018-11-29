@@ -1,7 +1,6 @@
 use material::texture::Medium;
 use shapes::geometry::Geometry;
 use intersection::Intersection;
-use bbox::BBox;
 use na::Vector3;
 use ray::Ray;
 

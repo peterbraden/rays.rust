@@ -1,8 +1,8 @@
 use shapes::geometry::Geometry;
-use na::{Vector3, Norm, Dot, Cross};
+use na::{Vector3};
 use ray::Ray;
 use intersection::RawIntersection;
-use bbox::BBox;
+use shapes::bbox::BBox;
 
 #[derive(Clone)]
 pub struct Triangle {

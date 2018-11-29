@@ -1,4 +1,4 @@
-use na::{Vector3, Vector2, Dot};
+use na::{Vector3, Vector2};
 extern crate rand as _rand;
 use geometry::_rand::Rng;
 use std::f64;

@@ -1,5 +1,5 @@
 use color::Color;
-use na::{Vector3, Norm, Dot};
+use na::{Vector3};
 use ray::Ray;
 use scene::Scene;
 use intersection::Intersection;

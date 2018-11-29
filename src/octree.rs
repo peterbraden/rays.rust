@@ -1,5 +1,5 @@
-use bbox::BBox;
-use na::{Vector3, Norm};
+use shapes::bbox::BBox;
+use na::{Vector3};
 use sceneobject::SceneObject;
 use std::sync::Arc;
 use std::fmt;

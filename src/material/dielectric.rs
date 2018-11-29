@@ -4,7 +4,6 @@ use material::model::{MaterialModel, ScatteredRay};
 use intersection::Intersection;
 use ray::Ray;
 use geometry::{rand, schlick, reflect};
-use na::{Dot, Norm};
 use material::functions::refract;
 
 pub struct Dielectric {

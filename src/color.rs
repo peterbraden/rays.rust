@@ -51,7 +51,9 @@ impl Mul<Vector3<f64>> for Color {
     type Output = Color;
 
     fn mul(self, _rhs: Vector3<f64>) -> Color {
-        Color {rgb: _rhs * self.rgb }
+        Color {
+            rgb: _rhs.component_mul(&self.rgb)
+        }
     }
 }
 
@@ -59,7 +61,7 @@ impl Mul<Color> for Color {
     type Output = Color;
 
     fn mul(self, _rhs: Color) -> Color {
-        Color {rgb: _rhs.to_vec() * self.rgb }
+        Color {rgb: (_rhs * self.to_vec()).to_vec() }
     }
 }
 

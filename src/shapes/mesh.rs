@@ -5,7 +5,7 @@ use shapes::geometry::Geometry;
 use na::{Vector3};
 use ray::Ray;
 use intersection::RawIntersection;
-use bbox::BBox;
+use shapes::bbox::BBox;
 use shapes::triangle::Triangle;
 use std::vec::Vec;
 use std::sync::Arc;
@@ -16,16 +16,16 @@ pub struct Mesh {
     // TODO use BVH
     triangles: Vec<Triangle>,
 
+    bounds: BBox,
 }
-
 
 impl Mesh {
     pub fn from_obj(pth: String, scale: Vector3<f64>) -> Mesh {
         let obj = tobj::load_obj(&Path::new(&pth));
         assert!(obj.is_ok());
-        let (models, materials) = obj.unwrap();
-        println!("# of models: {}", models.len());
-        println!("# of materials: {}", materials.len());
+        let (models, _materials) = obj.unwrap();
+        //println!("# of models: {}", models.len());
+        //println!("# of materials: {}", materials.len());
 
         let mut triangles = Vec::new();
         for (_i, m) in models.iter().enumerate() {
@@ -34,7 +34,7 @@ impl Mesh {
                 mesh.positions
                     .chunks(3)
                     .map(|i| Vector3::new(i[0] as f64, i[1] as f64, i[2] as f64))
-                    .map(|i| i * scale)
+                    .map(|i| i.component_mul(&scale))
                     .collect()
             );
             let mut tris: Vec<Triangle> = mesh.indices.chunks(3).map(|i| {
@@ -46,11 +46,27 @@ impl Mesh {
             triangles.append(&mut tris);
         }
 
-        println!("# of triangles: {}", triangles.len());
+        //println!("# of triangles: {}", triangles.len());
+
+        let bounds = Mesh::bounds_of(&triangles);
 
         return Mesh {
             triangles: triangles,
+            bounds: bounds,
         };
+    }
+
+    fn bounds_of(triangles: &Vec<Triangle>) -> BBox {
+        let mut bb = BBox::new(
+            Vector3::new(0., 0., 0.),
+            Vector3::new(0., 0., 0.)
+        );
+
+        for t in triangles {
+            bb = bb.union(&t.bounds());
+        }
+
+        return bb;
     }
 
     pub fn naive_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<RawIntersection> {
@@ -78,9 +94,10 @@ impl Geometry for Mesh {
     }
 
     fn bounds(&self) -> BBox {
-        BBox::new(
-            Vector3::new(0., 0., 0.),
-            Vector3::new(0., 0., 0.)
-            )
+        return self.bounds;
+    }
+
+    fn primitives(&self) -> u64 {
+        return self.triangles.len() as u64;
     }
 }

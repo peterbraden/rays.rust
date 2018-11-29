@@ -1,8 +1,8 @@
 use shapes::geometry::Geometry;
+use na::{Vector3};
 use ray::Ray;
 use intersection::RawIntersection;
-use bbox::BBox;
-use na::{Vector3, Vector2, Dot, Norm};
+use shapes::bbox::BBox;
 
 #[derive(PartialEq)]
 pub struct Sphere {

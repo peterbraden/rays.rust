@@ -1,6 +1,8 @@
 use na::{Vector3};
 use std::fmt;
-//use ray::Ray;
+use ray::Ray;
+use intersection::RawIntersection;
+use shapes::geometry::Geometry;
 
 // Axis aligned bounding box
 #[derive(Debug, Copy, Clone)]
@@ -119,6 +121,13 @@ impl BBox {
         if self.max.z < b.max.z  { return false; }
         return true;
     }
+
+    pub fn contains_point(self, pt: Vector3<f64>) -> bool { 
+      if pt.x < self.min.x || pt.x > self.max.x { return false; }
+      if pt.y < self.min.y || pt.y > self.max.y { return false; }
+      if pt.z < self.min.z || pt.z > self.max.z { return false; }
+      return true;
+    }
 }
 
 
@@ -133,20 +142,30 @@ impl fmt::Display for BBox {
                 &self.max.z)
     }
 }
-/*
 
-vec3 vec3_invert(vec3 rd){
-  return (vec3) {1.0/rd.x, 1.0/rd.y, 1.0/rd.z}; 
-};
-
-bool contains(BBox a, vec3 pt){
-  if (pt.x < a.min.x || pt.x > a.max.x) return false;
-  if (pt.y < a.min.y || pt.y > a.max.y) return false;
-  if (pt.z < a.min.z || pt.z > a.max.z) return false;
-  return true;
+fn vec3_invert(rd: Vector3<f64>) -> Vector3<f64> {
+  return Vector3::new(1.0/rd.x, 1.0/rd.y, 1.0/rd.z); 
 }
 
 
 
 
+/*
+impl Geometry for BBox {
+    fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+        let invrd = vec3_invert(r.rd);
+        if BBox::intersects(&self, &r.ro, &invrd) {
+            let point = Vector3::new(0.,0.,0.);
+
+            return Some(RawIntersection {
+                point
+            });
+        }
+        return None;
+    }
+
+    fn bounds(&self) -> BBox {
+        return self.clone()
+    }
+}
 */

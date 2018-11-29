@@ -1,24 +1,113 @@
 {
-  "width": 400,
-  "height": 400,
+  "width": 320,
+  "height": 240,
+  "supersamples": 1,
   
-  "ambient": 0.2,
-  "specular": true,
+  "background": [1, 1, 1],
+  "ambient": 0.01,
+  "specular": false,
+  "ambient_diffuse": 1,
   "diffuse" : true,
-  "reflection": 2,
+  "shadow_bias": 0.0001,
+  "reflection": 1,
+
+  "materials": {
+    "TEST": {
+      "type": "normal"
+    },
+    "POLISHED_COPPER": {
+      "type": "metal",
+      "reflective": [0.97, 0.74, 0.62],
+      "roughness": 0.01
+    },
+    "POLISHED_STEEL": {
+      "type": "metal",
+      "reflective": [0.77, 0.78, 0.78],
+      "roughness": 0.1
+    },
+    "BRUSHED_METAL_RED": {
+      "type": "metal",
+      "reflective": [0.8, 0.1, 0.1],
+      "roughness": 0.4
+    },
+    "GOLD": {
+      "type": "metal",
+      "reflective": [1, 0.85, 0.57],
+      "roughness": 0.1
+    },
+    "RED_PLASTIC": {
+      "type": "lambertian",
+      "albedo": [0.9, 0.1, 0.1]
+    },
+    "WHITE_PLASTIC": {
+      "type": "lambertian",
+      "albedo": [0.9, 0.9, 0.9]
+    },
+    "WHITE_MARBLE": {
+      "type": "lambertian",
+      "albedo": [0.9, 0.9, 0.9]
+    },
+    "BLACK_MARBLE": {
+      "type": "lambertian",
+      "albedo": [0.1, 0.1, 0.1]
+    },
+    "GLASS": {
+      "type": "dielectric",
+      "refractive_index": 1.5,
+      "attenuate": [0.8, 0.8, 0.8]
+    },
+    "GREEN_GLASS": {
+      "type": "dielectric",
+      "refractive_index": 1.5,
+      "attenuate": [0.2, 0.8, 0.2]
+    },
+    "RED_LIGHT": {
+      "type": "diffuse-light",
+      "color": [1,0.1,0.1],
+      "intensity": 50
+    },
+    "GREEN_LIGHT": {
+      "type": "diffuse-light",
+      "color": [0.1,1,0.1],
+      "intensity": 50
+    },
+    "BLUE_LIGHT": {
+      "type": "diffuse-light",
+      "color": [0.1,0.1,1],
+      "intensity": 50
+    },
+    "WHITE_LIGHT": {
+      "type": "diffuse-light",
+      "color": [1,1,1],
+      "intensity": 10
+    }
+  },
+  "media": {
+    "CHECKERED_MARBLE": {
+      "type": "checkered-y-plane",
+      "m1": "WHITE_MARBLE",
+      "m2": "BLACK_MARBLE"
+    }
+  },
 
   "camera": {
-    "location": [5, 10, -20],
-    "lookat" : [0,0,0],
+    "location": [0, 15, -20],
+    "lookat" : [0,4.5,0],
     "up" : [0,1,0],
-    "angle": 0.9 
+    "angle": 1.0 ,
+    "aperture": 0.3
   },
   
   "lights" : [
     {
       "location": [10, 10, 0], 
       "color": "white",
-      "intensity": 0.9
+      "intensity": 0.5
+    },
+    {
+      "location": [-10, 100, 0], 
+      "color": "white",
+      "intensity": 0.1
     }
   ],
 
@@ -26,29 +115,57 @@
 
   "objects": [
     { 
-      "type" : "sphere",
-      "location": [0,2,0],
+      "type" : "mesh",
+      "src": "./demo/teapot.obj",
+      "scale": [5,5,5],
+      "material" : "WHITE_PLASTIC"
+    },
+    {
+      "type": "sphere",
       "radius": 2,
-
-      "material" : {
-        "pigment": [1, 1, 0.5],
-        "reflection": 0.2,
-        "phong": 20
-      }
+      "location": [0, 2, -11],
+      "material" : "POLISHED_COPPER"
     },
-    { 
-      "type" : "sphere",
-      "location": [3,3,5],
-      "radius": 3
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [-5, 2, -11],
+      "material" : "RED_PLASTIC"
     },
-    { 
-      "type" : "sphere",
-      "location": [-6,6,5],
-      "radius": 6
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [5, 2, -11],
+      "material" : "POLISHED_STEEL"
+    },
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [10, 2, -11],
+      "material" : "BRUSHED_METAL_RED"
+    },
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [-10, 2, -11],
+      "material" : "GOLD"
+    },
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [-10, 2, -7],
+      "material" : "GLASS"
+    },
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [10, 2, -7],
+      "material" : "GREEN_GLASS"
     },
     { 
       "type" : "checkeredplane",
-      "y": 1
+      "y": 0,
+      "medium" : "CHECKERED_MARBLE"
     }
   ]
 }

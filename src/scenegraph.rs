@@ -4,13 +4,13 @@ use intersection::Intersection;
 use sceneobject::SceneObject;
 use bbox::BBox;
 use octree::OctreeNode;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::fmt;
 
 
 
 pub struct SceneGraph {
-    items: Vec<Rc<SceneObject>>,
+    items: Vec<Arc<SceneObject>>,
     root: Option<OctreeNode>,
     scene_bounds: BBox,
 }
@@ -48,7 +48,7 @@ impl SceneGraph {
         return bboxes;
     }
 
-    pub fn items(&self) -> &Vec<Rc<SceneObject>>{
+    pub fn items(&self) -> &Vec<Arc<SceneObject>>{
         &self.items
     }
 
@@ -82,6 +82,7 @@ impl SceneGraph {
 
 
 
+
     pub fn naive_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
         let mut cdist = max;
         let mut closest = None;
@@ -108,9 +109,9 @@ impl SceneGraph {
         return closest;
     }
 
-    pub fn push(&mut self, s: Vec<Rc<SceneObject>>) {
+    pub fn push(&mut self, s: Vec<Arc<SceneObject>>) {
         for x in s {
-            self.scene_bounds = self.scene_bounds.union( &x.bounds() );
+            self.scene_bounds = self.scene_bounds.union( &x.geometry.bounds() );
             &self.items.push(x);
         }
 

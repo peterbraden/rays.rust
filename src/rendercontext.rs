@@ -10,18 +10,19 @@ pub struct RenderContext {
     pub width: u32,
     pub height: u32,
     pub rays_cast: u64,
-
     pub start_time: f64,
+    pub progressive_render: bool,
 }
 
 impl RenderContext {
-    pub fn new(width:u32, height:u32) -> RenderContext {
+    pub fn new(width:u32, height:u32, progressive_render: bool) -> RenderContext {
         return RenderContext {
             image: vec![Color::black(); (width*height) as usize],
             width: width,
             height: height,
             rays_cast: 0,
             start_time: time::precise_time_s(),
+            progressive_render: progressive_render,
         }
     }
 
@@ -61,5 +62,16 @@ impl RenderContext {
         print!("| Rays per sec: {:.2}\n", self.rays_cast as f64 / elapsed);
         print!("==========================================\n");
 
+    }
+    
+    pub fn print_progress(&self, _x: u32, y: u32){
+        let elapsed = time::precise_time_s() - self.start_time;
+        println!("- [{:.0}s] {}M rays cast ({:.0} K.RPS),  y={}/{}, {} threads",
+                 elapsed,
+                 self.rays_cast/1000000,
+                 (self.rays_cast as f64 / elapsed) / 1000.,
+                 y,
+                 self.height,
+                 rayon::current_num_threads());
     }
 }

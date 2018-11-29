@@ -1,15 +1,13 @@
-use sceneobject::SceneObject;
-use na::{Vector3, Norm, Dot};
+use shapes::geometry::Geometry;
 use ray::Ray;
-use intersection::Intersection;
-use material::Material;
+use intersection::RawIntersection;
 use bbox::BBox;
+use na::{Vector3, Vector2, Dot, Norm};
 
 #[derive(PartialEq)]
 pub struct Sphere {
     center: Vector3<f64>,
     radius: f64,
-    material: Material
 }
 
 impl Sphere{
@@ -17,52 +15,45 @@ impl Sphere{
         Sphere {
             center: center,
             radius: radius,
-            material: Material::demo()
-        }
-    }
-
-    pub fn new_with_material(center:Vector3<f64>, radius: f64, material: Material) -> Sphere {
-        Sphere {
-            center: center,
-            radius: radius,
-            material: material
         }
     }
 }
 
 
-impl SceneObject for Sphere {
-    fn intersects(&self, r: &Ray) -> Option<Intersection> {
+impl Geometry for Sphere {
+    fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         let dst = r.ro - self.center;
+        let a = r.rd.dot(&r.rd);
         let b = dst.dot(&r.rd.normalize());
         let c = dst.dot(&dst) - self.radius * self.radius;
 
+        /*
         if c > 0. && b > 0. {
             // Exit if r’s origin outside s (c > 0) and r pointing away from s (b > 0) 
             return None;
         }
+        */
 
-        let d = b * b - c;
+        let d = b * b - a*c;
 
         if d < 0. {
             return None
         }
 
-        let mut dist = -b - d.sqrt();
+        let mut dist = (-b - d.sqrt()) / a;
 
-        // If dist is negative, ray started inside sphere so clamp t to zero 
         if dist.is_sign_negative() {
-             dist = 0f64;
+            // If dist is negative, ray started inside sphere so find other root 
+            dist = (-b + d.sqrt()) / a;
         }
 
         let point = r.ro + (r.rd.normalize() * dist);
 
         return Some(
-            Intersection {
+            RawIntersection {
                 dist: dist, 
                 point: point,
-                normal: (point - self.center).normalize(),
-                object: self
+                normal: (point - self.center).normalize()
             })
     }
 
@@ -77,9 +68,5 @@ impl SceneObject for Sphere {
                       &self.center.z + &self.radius
                       ),
           )
-    }
-
-    fn get_material(&self, _: Vector3<f64>) -> Material {
-        return self.material.clone();
     }
 }

@@ -3,6 +3,13 @@ use sceneobject::SceneObject;
 use std::cmp;
 use std::fmt;
 
+pub struct RawIntersection {
+    pub dist: f64,
+    pub point: Vector3<f64>,
+    pub normal: Vector3<f64>,
+}
+
+#[derive(Clone)]
 pub struct Intersection<'a> {
     pub dist: f64,
     pub point: Vector3<f64>,

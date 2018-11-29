@@ -1,16 +1,27 @@
-use ray::Ray;
+use material::texture::Medium;
+use shapes::geometry::Geometry;
 use intersection::Intersection;
 use bbox::BBox;
-use material::Material;
 use na::Vector3;
+use ray::Ray;
 
-pub trait SceneObject {
+pub struct SceneObject {
+    pub geometry: Box<Geometry + Sync + Send>,
+    pub medium: Box<Medium + Sync + Send>,
+}
 
-    fn intersects(&self, r: &Ray) -> Option<Intersection>;
-//  fn intersectsP(&self, r: &Ray) -> bool;
-
-    fn get_material(&self, point: Vector3<f64>) -> Material;
-
-    // World space bounding box
-    fn bounds(&self) -> BBox;
+impl SceneObject {
+   pub fn intersects(&self, r: &Ray) -> Option<Intersection> { 
+       match self.geometry.intersects(r) {
+           Some(i) => {
+               return Some(Intersection {
+                  dist: i.dist, 
+                  point: i.point,
+                  normal: i.normal,
+                  object: self,
+               })
+           },
+           None => return None
+       }
+   }
 }

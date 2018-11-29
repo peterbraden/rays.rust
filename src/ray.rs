@@ -1,7 +1,7 @@
 use na::Vector3;
 use std::fmt;
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Ray {
     pub ro: Vector3<f64>,
     pub rd: Vector3<f64>,

@@ -1,6 +1,6 @@
 use na::Vector3;
 use std::fmt;
-use std::ops::{Mul, Add};
+use std::ops::{Mul, Add, Div};
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Color {
@@ -76,5 +76,13 @@ impl Add<Color> for Color {
 
     fn add(self, _rhs: Color) -> Color {
         Color {rgb: self.rgb + _rhs.rgb }
+    }
+}
+
+impl Div<f64> for Color {
+    type Output = Color;
+
+    fn div(self, _rhs: f64) -> Color {
+        Color {rgb: self.rgb / _rhs }
     }
 }

@@ -2,20 +2,25 @@ use camera;
 use na::Vector3;
 use scenegraph::SceneGraph;
 use light::Light;
+use color::Color;
 
 pub struct Scene {
     pub width: u32,
     pub height: u32,
-    pub camera: camera::Camera,
+    pub camera: Box<camera::Camera + Sync>,
     pub objects: SceneGraph,
     pub lights: Vec<Light>,
 
-    pub ambient: f64,
-    pub max_depth: u32,
+    pub background: Color,
 
+    pub ambient: f64,
+    pub max_depth: u64,
 
     pub reflection: bool,
     pub specular: bool,
+    pub ambient_diffuse: u64,
     pub diffuse: bool,
+    pub shadow_bias: f64,
+    pub supersamples: u32,
 }
 

@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+#![allow(unused_imports)]
+
 //extern crate image;
 extern crate nalgebra as na;
 extern crate rand;
@@ -44,6 +46,7 @@ mod camera;
 mod trace;
 mod rendercontext;
 mod paint;
+//mod wireframe;
 mod geometry;
 
 use trace::trace;
@@ -125,6 +128,7 @@ fn main() {
     });
 
     let rc = rcmtx.lock().unwrap();
+    //wireframe::wireframe(&s, &mut rc);
     paint::to_png(&rc);
     paint::poor_mans(&rc);
     rc.print_stats();

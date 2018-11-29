@@ -1,4 +1,4 @@
-use na::{Vector3, norm, dot};
+use na::{Vector3};
 use ray::Ray;
 use intersection::RawIntersection;
 use shapes::bbox::BBox;

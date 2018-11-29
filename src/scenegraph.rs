@@ -36,11 +36,27 @@ impl SceneGraph {
                         );
     }
 
+
+    pub fn partitions(&self) -> Vec<BBox> {
+        let mut bboxes = Vec::new();
+        match self.root {
+            Some (ref root) => { 
+                bboxes = root.partitions();
+            }
+            None => {}
+        }
+        return bboxes;
+    }
+
+    pub fn items(&self) -> &Vec<Arc<SceneObject>>{
+        &self.items
+    }
+
     pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
+        /*
         let naive = self.naive_intersection(r,max,min,exclude);
         //let tree = self.tree_nearest_intersection(r,max,min);
 
-        /*
         if naive != tree {
             println!("Intersection doesn't match for {} ({} {})", r, max, min);
             match naive{
@@ -52,10 +68,9 @@ impl SceneGraph {
                 None => (println!("- tree: none")),
             }
         }
-
-        return self.tree_nearest_intersection(r,max,min);
         */
-        return naive;
+
+        return self.naive_intersection(r,max,min, exclude);
     }
 
     pub fn tree_nearest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
@@ -64,6 +79,7 @@ impl SceneGraph {
             None => { return None; }
         }
     }
+
 
 
 
@@ -98,6 +114,7 @@ impl SceneGraph {
             self.scene_bounds = self.scene_bounds.union( &x.geometry.bounds() );
             &self.items.push(x);
         }
+
         self.partition(8);
     }
 }

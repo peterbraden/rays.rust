@@ -1,6 +1,7 @@
 use material::texture::Medium;
 use shapes::geometry::Geometry;
 use intersection::Intersection;
+use na::Vector3;
 use ray::Ray;
 
 pub struct SceneObject {
@@ -22,5 +23,4 @@ impl SceneObject {
            None => return None
        }
    }
-
 }

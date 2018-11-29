@@ -1,9 +1,8 @@
 use camera;
-//use na::Vec3;
+use na::Vector3;
 use scenegraph::SceneGraph;
 use light::Light;
 use color::Color;
-
 
 pub struct Scene {
     pub width: u32,

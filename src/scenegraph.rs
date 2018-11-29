@@ -7,8 +7,6 @@ use octree::OctreeNode;
 use std::sync::Arc;
 use std::fmt;
 
-
-
 pub struct SceneGraph {
     pub items: Vec<Arc<SceneObject>>,
     root: Option<OctreeNode>,
@@ -27,13 +25,13 @@ impl SceneGraph {
 
     pub fn partition(&mut self, max_depth: i64) {
         self.root = Some(
-                        OctreeNode::new(
-                            0,
-                            max_depth, 
-                            (&self.scene_bounds).clone(),
-                            &self.items,
-                            )
-                        );
+        OctreeNode::new(
+            0,
+            max_depth, 
+            (&self.scene_bounds).clone(),
+            &self.items,
+            )
+        );
     }
 
 
@@ -53,14 +51,13 @@ impl SceneGraph {
     }
 
     pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
-        /*
         let naive = self.naive_intersection(r,max,min,exclude);
-        //let tree = self.tree_nearest_intersection(r,max,min);
+        let tree = self.tree_nearest_intersection(r,max,min);
 
         if naive != tree {
             println!("Intersection doesn't match for {} ({} {})", r, max, min);
             match naive{
-                Some(_) => (println!("- naive: {}", naive.unwrap())),
+                Some(_) => (println!("- naive: {}", &naive.unwrap())),
                 None => (println!("- naive: none")),
             }
             match tree{
@@ -68,9 +65,8 @@ impl SceneGraph {
                 None => (println!("- tree: none")),
             }
         }
-        */
 
-        return self.naive_intersection(r,max,min, exclude);
+        return naive; 
     }
 
     pub fn tree_nearest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {

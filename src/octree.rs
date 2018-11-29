@@ -193,12 +193,12 @@ impl OctreeNode {
         }
 
         if self.is_leaf(){
-            println!("- leaf hit: {} {} {} {}", self.items.len(), ro, max, min);
+            /*println!("- leaf hit: {} {} {} {}", self.items.len(), ro, max, min);
             match self.items_intersection(ro, max, min) {
                 Some(_) => println!("- - intersects "),
                 None => println!("- - none"),
             
-            }
+            }*/
             return self.items_intersection(ro, max, min);
         }
 

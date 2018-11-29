@@ -13,7 +13,6 @@ use clap::{Arg, App};
 use rayon::prelude::*;
 
 mod ray;
-mod bbox;
 mod color;
 mod material {
     pub mod model;
@@ -30,6 +29,7 @@ mod intersection;
 mod sceneobject;
 mod light;
 mod shapes {
+    pub mod bbox;
     pub mod geometry;
     pub mod sphere;
     pub mod plane;
@@ -102,6 +102,7 @@ fn main() {
             s.height,
             matches.is_present("progressive_render"),
             );
+    rc.print_scene_stats(&s);
     let rcmtx = Arc::new(Mutex::new(rc));
     let mut rows: Vec<u32> = (0 .. s.height).collect();
 

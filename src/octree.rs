@@ -1,4 +1,4 @@
-use bbox::BBox;
+use shapes::bbox::BBox;
 use na::{Vec3};
 use sceneobject::SceneObject;
 use std::sync::Arc;

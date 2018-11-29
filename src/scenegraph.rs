@@ -2,7 +2,7 @@ use ray::Ray;
 use na::{Vec3};
 use intersection::Intersection;
 use sceneobject::SceneObject;
-use bbox::BBox;
+use shapes::bbox::BBox;
 use octree::OctreeNode;
 use std::sync::Arc;
 use std::fmt;
@@ -10,7 +10,7 @@ use std::fmt;
 
 
 pub struct SceneGraph {
-    items: Vec<Arc<SceneObject>>,
+    pub items: Vec<Arc<SceneObject>>,
     root: Option<OctreeNode>,
     scene_bounds: BBox,
 }
@@ -83,10 +83,10 @@ impl SceneGraph {
 
 impl fmt::Display for SceneGraph {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "SceneGraph \n objects: {} \n bounded: {}\n{}\n",
+        write!(f, "SceneGraph \n objects: {} \n bounded: {}", //\n{}\n",
                 &self.items.len(), 
                 &self.scene_bounds,
-                &self.root.as_ref().unwrap()
+ //               &self.root.as_ref().unwrap()
             )
     }
 }

@@ -2,7 +2,7 @@ use shapes::geometry::Geometry;
 use na::{Vec3, Norm, Dot};
 use ray::Ray;
 use intersection::RawIntersection;
-use bbox::BBox;
+use shapes::bbox::BBox;
 
 #[derive(PartialEq)]
 pub struct Sphere {

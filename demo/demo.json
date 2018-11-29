@@ -1,15 +1,14 @@
 {
   "width": 320,
   "height": 240,
-  "supersamples": 35,
-  
+  "supersamples": 5,
   "background": [1, 1, 1],
   "ambient": 0.01,
   "specular": false,
   "ambient_diffuse": 1,
   "diffuse" : true,
   "shadow_bias": 0.0001,
-  "reflection": 4,
+  "reflection": 1,
 
   "materials": {
     "TEST": {

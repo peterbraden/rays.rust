@@ -2,7 +2,7 @@ use shapes::geometry::Geometry;
 use na::{Vec3, Norm, Dot, Cross};
 use ray::Ray;
 use intersection::RawIntersection;
-use bbox::BBox;
+use shapes::bbox::BBox;
 
 #[derive(Clone)]
 pub struct Triangle {

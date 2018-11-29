@@ -1,21 +1,21 @@
 use shapes::geometry::Geometry;
-use na::{Vec3, Norm, Dot, Cross};
+use na::{Vector3, norm, dot};
 use ray::Ray;
 use intersection::RawIntersection;
 use shapes::bbox::BBox;
 
 #[derive(Clone)]
 pub struct Triangle {
-    pub v0: Vec3<f64>,
-    pub v1: Vec3<f64>,
-    pub v2: Vec3<f64>,
+    pub v0: Vector3<f64>,
+    pub v1: Vector3<f64>,
+    pub v2: Vector3<f64>,
 
-    pub normal: Vec3<f64>,
+    pub normal: Vector3<f64>,
 }
 
 impl Triangle {
 
-    pub fn new(v0: Vec3<f64>, v1: Vec3<f64>, v2: Vec3<f64>) -> Triangle{
+    pub fn new(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>) -> Triangle{
         let v0v1 = v1 - v0; 
         let  v0v2 = v2 - v0; 
 
@@ -69,12 +69,12 @@ impl Geometry for Triangle {
 
     fn bounds(&self) -> BBox {
         BBox::new(
-            Vec3::new(
+            Vector3::new(
                 self.v0.x.min(self.v1.x).min(self.v2.x),
                 self.v0.y.min(self.v1.y).min(self.v2.y),
                 self.v0.z.min(self.v1.z).min(self.v2.z),
             ),
-            Vec3::new(
+            Vector3::new(
                 self.v0.x.max(self.v1.x).max(self.v2.x),
                 self.v0.y.max(self.v1.y).max(self.v2.y),
                 self.v0.z.max(self.v1.z).max(self.v2.z),

@@ -2,7 +2,7 @@ use std::path::Path;
 use tobj;
 use std::f64;
 use shapes::geometry::Geometry;
-use na::{Vec3};
+use na::{Vector3};
 use ray::Ray;
 use intersection::RawIntersection;
 use shapes::bbox::BBox;
@@ -20,7 +20,7 @@ pub struct Mesh {
 }
 
 impl Mesh {
-    pub fn from_obj(pth: String, scale: Vec3<f64>) -> Mesh {
+    pub fn from_obj(pth: String, scale: Vector3<f64>) -> Mesh {
         let obj = tobj::load_obj(&Path::new(&pth));
         assert!(obj.is_ok());
         let (models, _materials) = obj.unwrap();
@@ -30,11 +30,11 @@ impl Mesh {
         let mut triangles = Vec::new();
         for (_i, m) in models.iter().enumerate() {
             let mesh = &m.mesh;
-            let positions: Arc<Vec<Vec3<f64>>> = Arc::new(
+            let positions: Arc<Vec<Vector3<f64>>> = Arc::new(
                 mesh.positions
                     .chunks(3)
-                    .map(|i| Vec3::new(i[0] as f64, i[1] as f64, i[2] as f64))
-                    .map(|i| i * scale)
+                    .map(|i| Vector3::new(i[0] as f64, i[1] as f64, i[2] as f64))
+                    .map(|i| i.component_mul(&scale))
                     .collect()
             );
             let mut tris: Vec<Triangle> = mesh.indices.chunks(3).map(|i| {
@@ -58,8 +58,8 @@ impl Mesh {
 
     fn bounds_of(triangles: &Vec<Triangle>) -> BBox {
         let mut bb = BBox::new(
-            Vec3::new(0., 0., 0.),
-            Vec3::new(0., 0., 0.)
+            Vector3::new(0., 0., 0.),
+            Vector3::new(0., 0., 0.)
         );
 
         for t in triangles {

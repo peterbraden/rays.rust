@@ -1,5 +1,5 @@
 use ray::Ray;
-use na::{Vec3};
+use na::{Vector3};
 use intersection::Intersection;
 use sceneobject::SceneObject;
 use shapes::bbox::BBox;
@@ -21,7 +21,7 @@ impl SceneGraph {
         SceneGraph {
             items: vec![],
             root: None, 
-            scene_bounds: BBox::new( Vec3::new(0f64,0f64,0f64), Vec3::new(0f64,0f64,0f64) ),
+            scene_bounds: BBox::new( Vector3::new(0f64,0f64,0f64), Vector3::new(0f64,0f64,0f64) ),
         }
     }
 

@@ -1,15 +1,15 @@
-use na::{Vec3};
+use na::{Vector3};
 use material::model::MaterialModel;
 
 pub trait Medium : Sync{
-    fn material_at(&self, pt: Vec3<f64>) -> &Box<MaterialModel + Sync + Send>; 
+    fn material_at(&self, pt: Vector3<f64>) -> &Box<MaterialModel + Sync + Send>; 
 }
 
 pub struct Solid {
     pub m: Box<MaterialModel + Sync + Send> 
 }
 impl Medium for Solid {
-    fn material_at(&self, _pt: Vec3<f64>) -> &Box<MaterialModel + Sync + Send> {
+    fn material_at(&self, _pt: Vector3<f64>) -> &Box<MaterialModel + Sync + Send> {
         &self.m
     }
 }
@@ -27,7 +27,7 @@ impl CheckeredYPlane {
 }
 
 impl Medium for CheckeredYPlane {
-    fn material_at(&self, pt: Vec3<f64>) -> &Box<MaterialModel + Sync + Send> {
+    fn material_at(&self, pt: Vector3<f64>) -> &Box<MaterialModel + Sync + Send> {
         let zig = if (pt[0].abs() / self.xsize) as i32 % 2 == 0 { pt[0] > 0. } else { pt[0] <= 0. };
         let zag = if (pt[2].abs() / self.zsize) as i32 % 2 == 0 { pt[2] > 0. } else { pt[2] <= 0. };
         // zig XOR zag

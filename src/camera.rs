@@ -1,4 +1,4 @@
-use na::{Vec3, Norm, Cross};
+use na::{Vector3, norm};
 use ray::Ray;
 use geometry::random_point_on_disc;
 
@@ -10,11 +10,11 @@ pub trait Camera {
 }
 
 pub struct SimpleCamera {
-    location: Vec3<f64>,
+    location: Vector3<f64>,
 
-    camx: Vec3<f64>,
-    camy: Vec3<f64>,
-    camz: Vec3<f64>,
+    camx: Vector3<f64>,
+    camy: Vector3<f64>,
+    camz: Vector3<f64>,
 
     tax: f64,
     tay: f64
@@ -22,11 +22,11 @@ pub struct SimpleCamera {
 
 
 impl SimpleCamera {
-    pub fn new(lookat: Vec3<f64>, location:Vec3<f64>, up:Vec3<f64>, angle: f64, height: u32, width: u32) -> SimpleCamera {
+    pub fn new(lookat: Vector3<f64>, location:Vector3<f64>, up:Vector3<f64>, angle: f64, height: u32, width: u32) -> SimpleCamera {
         let camz = (lookat - location).normalize();
         let camx = up.cross(&camz).normalize();
         let camy = camx.cross(
-                &(Vec3::new(0f64,0f64,0f64) - camz)
+                &(Vector3::new(0f64,0f64,0f64) - camz)
                 ).normalize();
 
 
@@ -63,11 +63,11 @@ impl Camera for SimpleCamera {
 }
 
 pub struct FlatLensCamera {
-    location: Vec3<f64>,
+    location: Vector3<f64>,
 
-    camx: Vec3<f64>,
-    camy: Vec3<f64>,
-    camz: Vec3<f64>,
+    camx: Vector3<f64>,
+    camy: Vector3<f64>,
+    camz: Vector3<f64>,
 
     tax: f64,
     tay: f64,
@@ -79,9 +79,9 @@ pub struct FlatLensCamera {
 
 impl FlatLensCamera {
     pub fn new(
-            lookat: Vec3<f64>,
-            location:Vec3<f64>,
-            up:Vec3<f64>,
+            lookat: Vector3<f64>,
+            location:Vector3<f64>,
+            up:Vector3<f64>,
             angle: f64,
             height: u32,
             width: u32,
@@ -90,7 +90,7 @@ impl FlatLensCamera {
         let camz = (lookat - location).normalize();
         let camx = up.cross(&camz).normalize();
         let camy = camx.cross(
-                &(Vec3::new(0f64,0f64,0f64) - camz)
+                &(Vector3::new(0f64,0f64,0f64) - camz)
                 ).normalize();
 
 
@@ -125,7 +125,7 @@ impl Camera for FlatLensCamera {
 
         let focal_point = self.location + pinhole_dest * self.focus;
         let point_lens = random_point_on_disc(self.aperture); 
-        let ro = self.location + Vec3::new(point_lens[0], point_lens[1], 0.0);
+        let ro = self.location + Vector3::new(point_lens[0], point_lens[1], 0.0);
 
         Ray {
             ro: ro,
@@ -146,7 +146,7 @@ macro_rules! assert_approx_eq(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use na::Vec3;
+    use na::Vector3;
 
     #[test]
     fn get_ray() {
@@ -155,9 +155,9 @@ mod tests {
 
         /*
         let c = Camera::new(
-            Vec3::new(0f64,0f64,0f64),
-            Vec3::new(0f64, 1f64, -1f64),
-            Vec3::new(0f64,1f64,0f64),
+            Vector3::new(0f64,0f64,0f64),
+            Vector3::new(0f64, 1f64, -1f64),
+            Vector3::new(0f64,1f64,0f64),
             35.0,
             width, height
         );

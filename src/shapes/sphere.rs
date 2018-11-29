@@ -1,17 +1,17 @@
 use shapes::geometry::Geometry;
-use na::{Vec3, Norm, Dot};
+use na::{Vector3, norm, dot};
 use ray::Ray;
 use intersection::RawIntersection;
 use shapes::bbox::BBox;
 
 #[derive(PartialEq)]
 pub struct Sphere {
-    center: Vec3<f64>,
+    center: Vector3<f64>,
     radius: f64,
 }
 
 impl Sphere{
-    pub fn new(center:Vec3<f64>, radius: f64) -> Sphere {
+    pub fn new(center:Vector3<f64>, radius: f64) -> Sphere {
         Sphere {
             center: center,
             radius: radius,
@@ -59,11 +59,11 @@ impl Geometry for Sphere {
 
     fn bounds(&self) -> BBox {
         BBox::new(
-            Vec3::new(&self.center.x - &self.radius, 
+            Vector3::new(&self.center.x - &self.radius, 
                       &self.center.y - &self.radius, 
                       &self.center.z - &self.radius
                       ),
-            Vec3::new(&self.center.x + &self.radius, 
+            Vector3::new(&self.center.x + &self.radius, 
                       &self.center.y + &self.radius, 
                       &self.center.z + &self.radius
                       ),

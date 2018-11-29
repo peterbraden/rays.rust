@@ -1,5 +1,5 @@
 use shapes::bbox::BBox;
-use na::{Vec3, Norm};
+use na::{Vector3, norm};
 use sceneobject::SceneObject;
 use std::sync::Arc;
 use std::fmt;
@@ -9,7 +9,7 @@ use intersection::Intersection;
 pub struct OctreeNode {
     depth: i64,
     bounds: BBox,
-    mid: Vec3<f64>,
+    mid: Vector3<f64>,
     // Octree structure:
     children: [Option<Box<OctreeNode>>; 8],
     items: Vec<Arc<SceneObject>>,
@@ -136,8 +136,8 @@ impl OctreeNode {
         }
 
         let rn = Ray {
-            ro: Vec3::new(ro0, ro1, ro2),
-            rd: Vec3::new(rd0, rd1, rd2),
+            ro: Vector3::new(ro0, ro1, ro2),
+            rd: Vector3::new(rd0, rd1, rd2),
         };
 
         let divx:f64 = 1.0 / rn.rd[0];

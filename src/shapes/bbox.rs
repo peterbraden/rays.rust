@@ -1,4 +1,4 @@
-use na::{Vec3};
+use na::{Vector3};
 use std::fmt;
 use ray::Ray;
 use intersection::RawIntersection;
@@ -7,12 +7,12 @@ use shapes::geometry::Geometry;
 // Axis aligned bounding box
 #[derive(Debug, Copy, Clone)]
 pub struct BBox {
-    pub min: Vec3<f64>, // Point closest to origin
-    pub max: Vec3<f64>,
+    pub min: Vector3<f64>, // Point closest to origin
+    pub max: Vector3<f64>,
 }
 
 impl BBox {
-    pub fn new(min: Vec3<f64>, max: Vec3<f64>) -> BBox {
+    pub fn new(min: Vector3<f64>, max: Vector3<f64>) -> BBox {
         BBox {min: min, max: max}
     }
 
@@ -39,12 +39,12 @@ impl BBox {
         let zmax = bounds.min.z + (if zoffs !=0 { zdiff } else { zdiff * 0.5 });
 
         return BBox {
-            min: Vec3::new(xmin, ymin, zmin),
-            max: Vec3::new(xmax, ymax, zmax),
+            min: Vector3::new(xmin, ymin, zmin),
+            max: Vector3::new(xmax, ymax, zmax),
         }
     }
 
-    pub fn intersects(&self, ro: &Vec3<f64>, invrd: &Vec3<f64>) -> bool {
+    pub fn intersects(&self, ro: &Vector3<f64>, invrd: &Vector3<f64>) -> bool {
         //http://tavianator.com/fast-branchless-raybounding-box-intersections/
 
         let tx1 = (self.min.x - ro.x) * invrd.x;
@@ -62,15 +62,15 @@ impl BBox {
         return tmax2 >= tmin2;
     }
 
-    pub fn mid(&self) -> Vec3<f64> {
-        Vec3::new(
+    pub fn mid(&self) -> Vector3<f64> {
+        Vector3::new(
             &self.min.x + (&self.max.x - &self.min.x)/2f64,
             &self.min.y + (&self.max.y - &self.min.y)/2f64,
             &self.min.z + (&self.max.z - &self.min.z)/2f64,
         )
     }
 
-    pub fn size(&self) -> Vec3<f64> {
+    pub fn size(&self) -> Vector3<f64> {
         return self.max - self.min;
     }
 
@@ -98,7 +98,7 @@ impl BBox {
         return o;
     }
 
-    pub fn union_point(self, p: &Vec3<f64>) -> BBox{
+    pub fn union_point(self, p: &Vector3<f64>) -> BBox{
         let mut o = self.clone();
 
         if &self.min.x > &p.x { o.min.x = p.x; } 
@@ -122,7 +122,7 @@ impl BBox {
         return true;
     }
 
-    pub fn contains_point(self, pt: Vec3<f64>) -> bool { 
+    pub fn contains_point(self, pt: Vector3<f64>) -> bool { 
       if pt.x < self.min.x || pt.x > self.max.x { return false; }
       if pt.y < self.min.y || pt.y > self.max.y { return false; }
       if pt.z < self.min.z || pt.z > self.max.z { return false; }
@@ -143,8 +143,8 @@ impl fmt::Display for BBox {
     }
 }
 
-fn vec3_invert(rd: Vec3<f64>) -> Vec3<f64> {
-  return Vec3::new(1.0/rd.x, 1.0/rd.y, 1.0/rd.z); 
+fn vec3_invert(rd: Vector3<f64>) -> Vector3<f64> {
+  return Vector3::new(1.0/rd.x, 1.0/rd.y, 1.0/rd.z); 
 }
 
 
@@ -155,7 +155,7 @@ impl Geometry for BBox {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         let invrd = vec3_invert(r.rd);
         if BBox::intersects(&self, &r.ro, &invrd) {
-            let point = Vec3::new(0.,0.,0.);
+            let point = Vector3::new(0.,0.,0.);
 
             return Some(RawIntersection {
                 point

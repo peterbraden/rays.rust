@@ -2,7 +2,7 @@ use ray::Ray;
 use intersection::RawIntersection;
 use shapes::bbox::BBox;
 
-pub trait Geometry: Sync{
+pub trait Geometry: Sync + Clone{
     fn intersects(&self, r: &Ray) -> Option<RawIntersection>;
 
     // World space bounding box

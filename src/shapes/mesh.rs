@@ -11,6 +11,7 @@ use std::vec::Vec;
 use std::sync::Arc;
 
 
+#[derive(Clone)]
 pub struct Mesh {
 
     // TODO use BVH

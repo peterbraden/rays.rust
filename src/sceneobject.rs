@@ -5,6 +5,7 @@ use na::Vector3;
 use ray::Ray;
 use shapes::bbox::BBox;
 
+#[derive(Clone)]
 pub struct SceneObject {
     pub geometry: Box<Geometry + Sync + Send>,
     pub medium: Box<Medium + Sync + Send>,

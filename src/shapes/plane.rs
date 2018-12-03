@@ -4,6 +4,7 @@ use intersection::RawIntersection;
 use shapes::bbox::BBox;
 use shapes::geometry::Geometry;
 
+#[derive(Clone)]
 pub struct Plane {
     pub y: f64
 }

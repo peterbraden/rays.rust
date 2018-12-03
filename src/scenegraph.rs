@@ -9,7 +9,7 @@ use std::fmt;
 
 pub struct SceneGraph {
     pub items: Vec<Arc<SceneObject>>,
-    root: Option<OctreeNode>,
+    root: Option<OctreeNode<SceneObject>>,
     scene_bounds: BBox,
 }
 
@@ -58,10 +58,18 @@ impl SceneGraph {
     }
 
     pub fn tree_nearest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
-        match self.root {
-            Some (ref root) => { return root.intersection(r, max, min); }
-            None => { return None; }
+        if self.root.is_some() { 
+             return match self.root.unwrap().intersection(r, max, min) {
+                Some(i) => Some(Intersection {
+                      dist: i.0.dist, 
+                      point: i.0.point,
+                      normal: i.0.normal,
+                      object: &i.1,
+                   }),
+                None => None
+            };
         }
+        return None
     }
 
 

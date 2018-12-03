@@ -171,7 +171,7 @@ impl OctreeNode {
             return self.proc_subtree(r, &rn, max, min, tx0, ty0, tz0, tx1, ty1, tz1, a);
         }
 
-        //println!("- magnitude miss {} {} {}", r, tz0.max(tx0.max(ty0)), tz1.min(tx1.min(ty1)));
+        println!("- magnitude miss {} {} {}", r, tz0.max(tx0.max(ty0)), tz1.min(tx1.min(ty1)));
         return None;
     }
     
@@ -193,12 +193,12 @@ impl OctreeNode {
         }
 
         if self.is_leaf(){
-            /*println!("- leaf hit: {} {} {} {}", self.items.len(), ro, max, min);
+            println!("- leaf hit: {} {} {} {}", self.items.len(), ro, max, min);
             match self.items_intersection(ro, max, min) {
                 Some(_) => println!("- - intersects "),
                 None => println!("- - none"),
             
-            }*/
+            }
             return self.items_intersection(ro, max, min);
         }
 

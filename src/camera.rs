@@ -9,6 +9,7 @@ pub trait Camera {
     // Given a point (x=0-1, y=0-1) as a proportion of the way into the previously sized image
     // and (sx=0-1, sy=0-1), subsamples within that pixel, generate a ray for that pixel 
     fn get_ray(&self, x: f64, y: f64, sx: f64, sy: f64) -> Ray;
+    fn get_coord_for_point(&self, point: Vector3<f64>) -> (f64,f64);
 }
 
 pub struct SimpleCamera {
@@ -60,6 +61,24 @@ impl Camera for SimpleCamera {
             ro: self.location,
             rd: dest
         }
+    }
+
+    fn get_coord_for_point(&self, point: Vector3<f64>) -> (f64,f64) {
+        let x0 = self.camx * -0.5 * self.tax;
+        let x1 = self.camx * 0.5 * self.tax;
+        let y0 = self.camy * -0.5 * self.tay;
+        let y1 = self.camy * 0.5 * self.tay;
+
+        // Vectors at corner of view
+        let tl = self.camz + x0 + y0;
+        let tr = self.camz + x1 + y0;
+        let bl = self.camz + x0 + y1;
+        let br = self.camz + x1 + y1;
+        
+        let rd = (point - self.location).normalize();
+        let x = (rd.x - tl.x) / (tr.x - tl.x);    
+        let y = (rd.y - tr.y) / (br.y - tr.y);    
+        return (x, y);
     }
 }
 
@@ -223,8 +242,41 @@ impl Camera for FlatLensCamera {
             ro: ro,
             rd: (focal_point - ro).normalize()
         }
+    }
+
+    fn get_coord_for_point(&self, point: Vector3<f64>) -> (f64,f64) {
+        let x0 = self.camx * (-0.5 * self.tax);
+        let x1 = self.camx * (0.5 * self.tax);
+        let y0 = self.camy * (-0.5 * self.tay);
+        let y1 = self.camy * (0.5 * self.tay);
+
+        // Vector direction at corner of view
+        let l = self.camz + x0;
+        let r = self.camz + x1;
+        let t = self.camz + y0;
+        let b = self.camz + y1;
+        
+        let rd = (point - self.location).normalize();
+        let x = (rd.x - l.x) / (r.x - l.x);    
+        let y = (rd.y - t.y) / (b.y - t.y);    
+
+        let xdir = self.camx * 0.5 * self.tax;
+        let ydir = self.camy * 0.5 * self.tay;
+        // As angles
+        let camd = self.camz + self.camx + self.camy;
+        let xr = &(self.camz + xdir);
+        let yr = &(self.camz + ydir);
+        let x2 = (rd.dot(&xr.normalize()).atan2(xr.norm()) * 2.)  / self.tax;
+        let y2 = (rd.dot(&yr.normalize()).atan2(yr.norm()) * 2.) / self.tay;
 
 
+        let rdx = rd.component_mul(&Vector3::new(1., 0. ,1.)).normalize();
+        let x3 = rdx.dot(&(self.camz - xdir).normalize()).acos() / self.tax;
+        let rdy = rd.component_mul(&Vector3::new(0., 1. ,1.)).normalize();
+        let y3 = rdy.dot(&(self.camz - ydir).normalize()).acos() / self.tay;
+
+        //println!("-- {} {}, {} {}", x, y, x2, y2);
+        return (x3, y3);
     }
 }
 
@@ -247,7 +299,6 @@ mod tests {
 
         /*
         let c = Camera::new(
->>>>>>> 91eac9d7d76ebfa2585d691dba97e70c3c74de25
             Vector3::new(0f64,0f64,0f64),
             Vector3::new(0f64, 1f64, -1f64),
             Vector3::new(0f64,1f64,0f64),

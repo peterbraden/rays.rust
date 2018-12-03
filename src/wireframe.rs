@@ -3,20 +3,23 @@ use scene::Scene;
 use rendercontext::RenderContext;
 use color::Color;
 use std::mem;
-use bbox::BBox;
+use shapes::bbox::BBox;
 
 
 pub fn wireframe(s: &Scene, ctx: &mut RenderContext){
     // Draw wireframe of scene / bounding boxes
 
     for obj in s.objects.items() { 
-        let b = obj.bounds();
-        draw_bbox(b, obj.get_material(b.min).pigment, s, ctx);
+        let b = obj.geometry.bounds();
+        draw_bbox(b, Color::red(), s, ctx);
     }
 
-    for b in s.objects.partitions() {
-        draw_bbox(b, Color::white(), s, ctx)
-    }
+    //for b in s.objects.partitions() {
+    //    draw_bbox(b, Color::blue(), s, ctx)
+    //}
+    //
+    draw_line(Vector3::new(0., 0., 0.), Vector3::new(10., 0., 0.), Color::blue(), s, ctx);
+    draw_line(Vector3::new(0., 0., 0.), Vector3::new(-10., 0., 0.), Color::blue(), s, ctx);
 
 }
 

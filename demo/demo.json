@@ -1,6 +1,6 @@
 {
-  "width": 320,
-  "height": 240,
+  "width": 400,
+  "height": 300,
   "supersamples": 1,
   
   "background": [1, 1, 1],
@@ -91,10 +91,10 @@
   },
 
   "camera": {
-    "location": [0, 15, -20],
-    "lookat" : [0,4.5,0],
+    "location": [12, 10, -20],
+    "lookat" : [0,5,0],
     "up" : [0,1,0],
-    "angle": 1.0 ,
+    "angle": 0.9 ,
     "aperture": 0.3
   },
   
@@ -114,58 +114,53 @@
   "variables" : {},
 
   "objects": [
-    { 
-      "type" : "mesh",
-      "src": "./demo/teapot.obj",
-      "scale": [5,5,5],
-      "material" : "WHITE_PLASTIC"
-    },
     {
       "type": "sphere",
       "radius": 2,
-      "location": [0, 2, -11],
-      "material" : "POLISHED_COPPER"
-    },
-    {
-      "type": "sphere",
-      "radius": 2,
-      "location": [-5, 2, -11],
+      "location": [-5, 2, 0],
       "material" : "RED_PLASTIC"
     },
     {
       "type": "sphere",
       "radius": 2,
-      "location": [5, 2, -11],
-      "material" : "POLISHED_STEEL"
+      "location": [-5, 8, 0],
+      "material" : "BLACK_MARBLE"
     },
     {
       "type": "sphere",
       "radius": 2,
-      "location": [10, 2, -11],
-      "material" : "BRUSHED_METAL_RED"
+      "location": [5, 2, 0],
+      "material" : "RED_PLASTIC"
     },
     {
       "type": "sphere",
       "radius": 2,
-      "location": [-10, 2, -11],
-      "material" : "GOLD"
+      "location": [5, 8, 0],
+      "material" : "BLACK_MARBLE"
     },
     {
       "type": "sphere",
       "radius": 2,
-      "location": [-10, 2, -7],
-      "material" : "GLASS"
+      "location": [-5, 2, 10],
+      "material" : "RED_PLASTIC"
     },
     {
       "type": "sphere",
       "radius": 2,
-      "location": [10, 2, -7],
-      "material" : "GREEN_GLASS"
+      "location": [-5, 8, 10],
+      "material" : "BLACK_MARBLE"
     },
-    { 
-      "type" : "checkeredplane",
-      "y": 0,
-      "medium" : "CHECKERED_MARBLE"
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [5, 2, 10],
+      "material" : "RED_PLASTIC"
+    },
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [5, 8, 10],
+      "material" : "BLACK_MARBLE"
     }
   ]
 }

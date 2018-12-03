@@ -1,5 +1,5 @@
 use camera;
-use na::Vec3;
+use na::Vector3;
 use scenegraph::SceneGraph;
 use shapes::sphere::Sphere;
 use shapes::triangle::Triangle;
@@ -59,13 +59,13 @@ impl SceneFile {
         return v.as_str().unwrap().to_string(); // This is pretty nasty, shame serde
     }
 
-    pub fn parse_vec3(v: &Value) -> Vec3<f64> {
-        return Vec3::new(v[0].as_f64().unwrap(),
+    pub fn parse_vec3(v: &Value) -> Vector3<f64> {
+        return Vector3::new(v[0].as_f64().unwrap(),
                          v[1].as_f64().unwrap(),
                          v[2].as_f64().unwrap());
     }
 
-    pub fn parse_vec3_def(v: &Value, k: &str, def: Vec3<f64>) -> Vec3<f64> {
+    pub fn parse_vec3_def(v: &Value, k: &str, def: Vector3<f64>) -> Vector3<f64> {
         match &v.get(&k) {
             Some(x) => SceneFile::parse_vec3(x),
             None => return def
@@ -145,7 +145,7 @@ impl SceneFile {
         return SceneObject {
             geometry: Box::new(Mesh::from_obj(
                 SceneFile::parse_string(&o["src"]),
-                SceneFile::parse_vec3_def(&o, "scale", Vec3::new(1., 1., 1.)),
+                SceneFile::parse_vec3_def(&o, "scale", Vector3::new(1., 1., 1.)),
             )),
             medium: m
         };
@@ -237,7 +237,7 @@ impl SceneFile {
             opacity: SceneFile::parse_number(&o["opacity"], 1.),
             refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.3),
             phong: o["phong"].as_f64().unwrap(),
-            normal_peturbation: Vec3::new(0., 0., 0.)
+            normal_peturbation: Vector3::new(0., 0., 0.)
         }
             */
         None

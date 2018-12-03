@@ -1,13 +1,11 @@
 use ray::Ray;
-use na::{Vec3};
+use na::{Vector3};
 use intersection::Intersection;
 use sceneobject::SceneObject;
 use shapes::bbox::BBox;
 use octree::OctreeNode;
 use std::sync::Arc;
 use std::fmt;
-
-
 
 pub struct SceneGraph {
     pub items: Vec<Arc<SceneObject>>,
@@ -21,19 +19,23 @@ impl SceneGraph {
         SceneGraph {
             items: vec![],
             root: None, 
-            scene_bounds: BBox::new( Vec3::new(0f64,0f64,0f64), Vec3::new(0f64,0f64,0f64) ),
+            scene_bounds: BBox::new( Vector3::new(0f64,0f64,0f64), Vector3::new(0f64,0f64,0f64) ),
         }
     }
 
     pub fn partition(&mut self, max_depth: i64) {
         self.root = Some(
-                        OctreeNode::new(
-                            0,
-                            max_depth, 
-                            (&self.scene_bounds).clone(),
-                            &self.items,
-                            )
-                        );
+        OctreeNode::new(
+            0,
+            max_depth, 
+            (&self.scene_bounds).clone(),
+            &self.items,
+            )
+        );
+    }
+
+    pub fn items(&self) -> &Vec<Arc<SceneObject>>{
+        &self.items
     }
 
     pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
@@ -61,6 +63,7 @@ impl SceneGraph {
             None => { return None; }
         }
     }
+
 
 
 

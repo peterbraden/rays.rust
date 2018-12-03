@@ -1,4 +1,4 @@
-use na::{Vec3, Vec2, Dot};
+use na::{Vector3, Vector2};
 extern crate rand as _rand;
 use geometry::_rand::Rng;
 use std::f64;
@@ -7,7 +7,7 @@ pub fn rand() -> f64 {
     return _rand::thread_rng().gen_range(0.,1.);
 }
 
-pub fn random_point_on_unit_sphere() -> Vec3<f64>{
+pub fn random_point_on_unit_sphere() -> Vector3<f64>{
     let u = rand();
     let v = rand();
     let theta = u * 2.0 * f64::consts::PI;
@@ -20,13 +20,13 @@ pub fn random_point_on_unit_sphere() -> Vec3<f64>{
     let x = r * sin_phi * cos_theta;
     let y = r * sin_phi * sin_theta;
     let z = r * cos_phi;
-    return Vec3::new(x, y, z);
+    return Vector3::new(x, y, z);
 }
 
-pub fn random_point_on_disc(radius: f64) -> Vec2<f64>{
+pub fn random_point_on_disc(radius: f64) -> Vector2<f64>{
     let r = radius * rand().sqrt();
     let theta = rand() * 2.0 * f64::consts::PI;
-    return Vec2::new(r * theta.cos(), r * theta.sin());
+    return Vector2::new(r * theta.cos(), r * theta.sin());
 }
 
 pub fn schlick(cosine:f64, ref_idx:f64) -> f64 {
@@ -34,19 +34,19 @@ pub fn schlick(cosine:f64, ref_idx:f64) -> f64 {
     r0 + (1.0-r0) * (1.0 - cosine).powi(5)
 }
 
-pub fn reflect(v: Vec3<f64>, normal: Vec3<f64>) -> Vec3<f64> {
+pub fn reflect(v: Vector3<f64>, normal: Vector3<f64>) -> Vector3<f64> {
     v - normal * 2.0 * normal.dot(&v)
 }
 
-pub fn uniform_sample_hemisphere(r1: f64, r2: f64) -> Vec3<f64>{
+pub fn uniform_sample_hemisphere(r1: f64, r2: f64) -> Vector3<f64>{
     let sin_theta = (1. - r1 * r1).sqrt(); 
     let  phi = 2. * f64::consts::PI * r2; 
     let x = sin_theta * phi.cos(); 
     let z = sin_theta * phi.sin(); 
-    return Vec3::new(x, r1, z); 
+    return Vector3::new(x, r1, z); 
 }
 
 // Transform into the world of vec
-//pub fn uniform_sample_hemisphere_around(r1: f64, r2:f64, vec: Vec3<f64>) -> Vec3<f64> {
+//pub fn uniform_sample_hemisphere_around(r1: f64, r2:f64, vec: Vector3<f64>) -> Vector3<f64> {
 //    let sample = uniform_sample_hemisphere();
 //}

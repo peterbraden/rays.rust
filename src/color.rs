@@ -1,16 +1,16 @@
-use na::Vec3;
+use na::Vector3;
 use std::fmt;
 use std::ops::{Mul, Add, Div};
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Color {
-    pub rgb: Vec3<f64>
+    pub rgb: Vector3<f64>
 }
 
 impl Color {
     pub fn new(r:f64, g:f64, b:f64) -> Color {
         return Color {
-            rgb: Vec3::new(r,g,b)
+            rgb: Vector3::new(r,g,b)
         }
     }
 
@@ -35,7 +35,7 @@ impl Color {
         return ((self.rgb[0] * 255f64).min(255f64) as u8, (self.rgb[1] * 255f64).min(255f64) as u8, (self.rgb[2] * 255f64).min(255f64) as u8);
     }
 
-    pub fn to_vec(&self) -> Vec3<f64> {
+    pub fn to_vec(&self) -> Vector3<f64> {
         return self.rgb.clone();
     }
 }
@@ -47,11 +47,13 @@ impl fmt::Display for Color {
     }
 }
 
-impl Mul<Vec3<f64>> for Color {
+impl Mul<Vector3<f64>> for Color {
     type Output = Color;
 
-    fn mul(self, _rhs: Vec3<f64>) -> Color {
-        Color {rgb: _rhs * self.rgb }
+    fn mul(self, _rhs: Vector3<f64>) -> Color {
+        Color {
+            rgb: _rhs.component_mul(&self.rgb)
+        }
     }
 }
 
@@ -59,7 +61,7 @@ impl Mul<Color> for Color {
     type Output = Color;
 
     fn mul(self, _rhs: Color) -> Color {
-        Color {rgb: _rhs.to_vec() * self.rgb }
+        Color {rgb: (_rhs * self.to_vec()).to_vec() }
     }
 }
 

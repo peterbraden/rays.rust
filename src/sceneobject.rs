@@ -1,6 +1,7 @@
 use material::texture::Medium;
 use shapes::geometry::Geometry;
 use intersection::{RawIntersection, Intersection};
+use na::Vector3;
 use ray::Ray;
 use shapes::bbox::BBox;
 
@@ -23,7 +24,6 @@ impl SceneObject {
            None => return None
        }
    }
-
 }
 impl Geometry for SceneObject {
    fn intersects(&self, r: &Ray) -> Option<RawIntersection> {

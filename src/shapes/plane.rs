@@ -1,4 +1,4 @@
-use na::{Vec3, Norm, Dot};
+use na::{Vector3};
 use ray::Ray;
 use intersection::RawIntersection;
 use shapes::bbox::BBox;
@@ -11,7 +11,7 @@ pub struct Plane {
 impl Geometry for Plane {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         let rdn = r.rd.normalize();
-        let mut norm = Vec3::new(0., 1., 0.);
+        let mut norm = Vector3::new(0., 1., 0.);
         let denom = norm.dot(&rdn);
 
         if denom.abs() > 0. {
@@ -35,8 +35,8 @@ impl Geometry for Plane {
 
     fn bounds(&self) -> BBox {
         BBox::new(
-            Vec3::new(std::f64::MIN, 0., std::f64::MIN),
-            Vec3::new(std::f64::MAX, std::f64::MIN_POSITIVE, std::f64::MAX),
+            Vector3::new(std::f64::MIN, 0., std::f64::MIN),
+            Vector3::new(std::f64::MAX, std::f64::MIN_POSITIVE, std::f64::MAX),
           )
     }
 }

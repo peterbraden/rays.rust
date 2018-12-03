@@ -5,6 +5,7 @@ use shapes::sphere::Sphere;
 use shapes::triangle::Triangle;
 use shapes::plane::Plane;
 use shapes::mesh::Mesh;
+use shapes::bbox::BBox;
 use light::Light;
 use color::Color;
 use std::sync::Arc;
@@ -128,6 +129,10 @@ impl SceneFile {
         if t == "mesh" {
             return Some(Arc::new(SceneFile::parse_mesh(&o, m)));
         }
+
+        if t == "box" {
+            return Some(Arc::new(SceneFile::parse_box(&o, m)));
+        }
         
         if t == "checkeredplane" {
             return Some(Arc::new(SceneFile::parse_checkeredplane(&o, m)));
@@ -154,6 +159,16 @@ impl SceneFile {
             medium: m
         };
     }
+
+    pub fn parse_box(o: &Value, m: Box<Medium + Sync + Send>) -> SceneObject {
+        return SceneObject {
+            geometry: Box::new(BBox::new(
+                SceneFile::parse_vec3(&o["min"]),
+                SceneFile::parse_vec3(&o["max"]))),
+            medium: m
+        };
+    }
+
     pub fn parse_triangle(o: &Value, m: Box<Medium + Sync + Send>) -> SceneObject {
         return SceneObject {
             geometry: Box::new(Triangle::new(
@@ -274,7 +289,7 @@ impl SceneFile {
         let mut o = SceneGraph::new();
         let objects = SceneFile::parse_objects(s.objects, &s.materials, &s.media);
         o.push(objects);
-
+		
         return Scene {
             width: s.width,
             height: s.height,

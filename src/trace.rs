@@ -3,7 +3,6 @@ use ray::Ray;
 use scene::Scene;
 use intersection::Intersection;
 use std::f64;
-use light::Light;
 
 // Returns num rays cast, Color
 pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {

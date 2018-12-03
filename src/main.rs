@@ -8,6 +8,8 @@ extern crate serde_derive;
 extern crate serde_json;
 extern crate rayon;
 extern crate tobj;
+extern crate ordered_float;
+
 
 use clap::{Arg, App};
 use rayon::prelude::*;

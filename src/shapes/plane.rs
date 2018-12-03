@@ -35,8 +35,8 @@ impl Geometry for Plane {
 
     fn bounds(&self) -> BBox {
         BBox::new(
-            Vec3::new(0.,0.,0.),
-            Vec3::new(0.,0.,0.),
+            Vec3::new(std::f64::MIN, 0., std::f64::MIN),
+            Vec3::new(std::f64::MAX, std::f64::MIN_POSITIVE, std::f64::MAX),
           )
     }
 }

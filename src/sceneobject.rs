@@ -1,7 +1,8 @@
 use material::texture::Medium;
 use shapes::geometry::Geometry;
-use intersection::Intersection;
+use intersection::{RawIntersection, Intersection};
 use ray::Ray;
+use shapes::bbox::BBox;
 
 pub struct SceneObject {
     pub geometry: Box<Geometry + Sync + Send>,
@@ -23,4 +24,13 @@ impl SceneObject {
        }
    }
 
+}
+impl Geometry for SceneObject {
+   fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+    return self.geometry.intersects(r);
+   }
+
+    fn bounds(&self) -> BBox {
+        return self.geometry.bounds();
+    }
 }

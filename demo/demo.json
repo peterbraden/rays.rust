@@ -1,7 +1,7 @@
 {
-  "width": 320,
-  "height": 240,
-  "supersamples": 1,
+  "width": 200,
+  "height": 180,
+  "supersamples": 2,
   
   "background": [1, 1, 1],
   "ambient": 0.01,
@@ -91,7 +91,7 @@
   },
 
   "camera": {
-    "location": [0, 15, -20],
+    "location": [5, 15, -20],
     "lookat" : [0,4.5,0],
     "up" : [0,1,0],
     "angle": 1.0 ,
@@ -120,50 +120,14 @@
       "scale": [5,5,5],
       "material" : "WHITE_PLASTIC"
     },
-    {
-      "type": "sphere",
-      "radius": 2,
-      "location": [0, 2, -11],
-      "material" : "POLISHED_COPPER"
-    },
-    {
-      "type": "sphere",
-      "radius": 2,
-      "location": [-5, 2, -11],
-      "material" : "RED_PLASTIC"
-    },
-    {
+		{
       "type": "sphere",
       "radius": 2,
       "location": [5, 2, -11],
       "material" : "POLISHED_STEEL"
     },
-    {
-      "type": "sphere",
-      "radius": 2,
-      "location": [10, 2, -11],
-      "material" : "BRUSHED_METAL_RED"
-    },
-    {
-      "type": "sphere",
-      "radius": 2,
-      "location": [-10, 2, -11],
-      "material" : "GOLD"
-    },
-    {
-      "type": "sphere",
-      "radius": 2,
-      "location": [-10, 2, -7],
-      "material" : "GLASS"
-    },
-    {
-      "type": "sphere",
-      "radius": 2,
-      "location": [10, 2, -7],
-      "material" : "GREEN_GLASS"
-    },
     { 
-      "type" : "checkeredplane",
+      "type" : "_checkeredplane",
       "y": 0,
       "medium" : "CHECKERED_MARBLE"
     }

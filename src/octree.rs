@@ -5,7 +5,10 @@ use std::sync::Arc;
 use std::fmt;
 use ray::Ray;
 use intersection::Intersection;
+use ordered_float::OrderedFloat;
 
+
+#[derive(Clone)]
 pub struct OctreeNode {
     depth: i64,
     bounds: BBox,
@@ -13,6 +16,10 @@ pub struct OctreeNode {
     // Octree structure:
     children: [Option<Box<OctreeNode>>; 8],
     items: Vec<Arc<SceneObject>>,
+}
+
+fn vec3_invert(rd: Vec3<f64>) -> Vec3<f64> {
+  return Vec3::new(1.0/rd.x, 1.0/rd.y, 1.0/rd.z); 
 }
 
 impl OctreeNode {
@@ -53,7 +60,6 @@ impl OctreeNode {
             items: items.into_iter().cloned().collect(),
         }
     }
-
 
     pub fn is_leaf(&self) -> bool {
         for i in 0..8 {
@@ -105,9 +111,40 @@ impl OctreeNode {
         }
        return z; // XY plane;
     }
-
     pub fn intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
+        return self.naive_intersection(r, max, min);
+        //return self.revelles_intersection(r, max, min);
+    }
 
+    /// Perform a breadth first search of the tree, and then sort results by distance.
+    pub fn naive_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
+        let invrd = vec3_invert(r.rd);
+        if !self.bounds.fast_intersects(&r.ro, &invrd) {
+            return None
+        }
+
+        if self.is_leaf(){
+            return self.items_intersection(r, max, min);
+        }
+        
+        let intersection = self.children
+                                .iter()
+                                .filter(|i| i.is_some())
+                                .map(|c| c.as_ref().unwrap().naive_intersection(r,max, min))
+                                .filter(|i| i.is_some())
+                                .map(|i| i.unwrap()) 
+                                .min_by_key(|i| OrderedFloat(i.dist));
+
+        return intersection;
+    }
+
+    /// Based on: 
+    /// An Efficient Parametric Algorithm for Octree Traversal (2000)
+    /// by J. Revelles , C. Ureña , M. Lastra
+    ///
+    /// Status: Broken
+    /// Note: Missing bbox intersection?
+    pub fn revelles_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
         let mut a = 0;
 
         let rd = r.rd.normalize();
@@ -153,17 +190,17 @@ impl OctreeNode {
 
 
         if tz0.max(tx0.max(ty0)) < tz1.min(tx1.min(ty1)) {
-            return self.proc_subtree(r, &rn, max, min, tx0, ty0, tz0, tx1, ty1, tz1, a);
+            return self.revelles_proc_subtree(r, &rn, max, min, tx0, ty0, tz0, tx1, ty1, tz1, a);
         }
 
         //println!("- magnitude miss {} {} {}", r, tz0.max(tx0.max(ty0)), tz1.min(tx1.min(ty1)));
         return None;
     }
     
-    pub fn proc_child(&self, ro: &Ray, r:&Ray, max:f64, min:f64, tx0:f64, ty0:f64, tz0:f64, tx1:f64, ty1:f64, tz1:f64, a:u8, i: u8)-> Option<Intersection> {
+    pub fn revelles_proc_child(&self, ro: &Ray, r:&Ray, max:f64, min:f64, tx0:f64, ty0:f64, tz0:f64, tx1:f64, ty1:f64, tz1:f64, a:u8, i: u8)-> Option<Intersection> {
         return match self.children[i as usize] {
             Some (ref x) => {
-                return x.proc_subtree(ro, r, max, min, tx0, ty0, tz0, tx1, ty1, tz1, a)
+                return x.revelles_proc_subtree(ro, r, max, min, tx0, ty0, tz0, tx1, ty1, tz1, a)
             }
             None =>  {
                 return None
@@ -171,21 +208,16 @@ impl OctreeNode {
         }
     }
 
-    pub fn proc_subtree(&self, ro:&Ray, r:&Ray, max:f64, min:f64, tx0:f64, ty0:f64, tz0:f64, tx1:f64, ty1:f64, tz1:f64, a:u8) -> Option<Intersection> {
+    pub fn revelles_proc_subtree(&self, ro:&Ray, r:&Ray, max:f64, min:f64, tx0:f64, ty0:f64, tz0:f64, tx1:f64, ty1:f64, tz1:f64, a:u8) -> Option<Intersection> {
         //println!("- node hit");
         if tx1 < 0. || ty1 < 0. || tz1 < 0. {
             return None;
         }
 
-        if self.is_leaf(){
-            println!("- leaf hit: {} {} {} {}", self.items.len(), ro, max, min);
-            match self.items_intersection(ro, max, min) {
-                Some(_) => println!("- - intersects "),
-                None => println!("- - none"),
-            
-            }
-            return self.items_intersection(ro, max, min);
-        }
+        let mut intersection: Option<Intersection> = self.leaf_intersection(ro, max, min);
+        if intersection.is_some() {
+            return intersection;
+        } 
 
         let txm = 0.5 * (tx0 + tx1);
         let tym = 0.5 * (ty0 + ty1);
@@ -198,35 +230,35 @@ impl OctreeNode {
 
             match curr_node {
                 0 => {
-                    intersection = self.proc_child(ro, r, max, min, tx0,ty0,tz0,txm,tym,tzm, a, 0);
+                    intersection = self.revelles_proc_child(ro, r, max, min, tx0,ty0,tz0,txm,tym,tzm, a, 0);
                     curr_node = self.new_node(txm,4,tym,2,tzm,1);
                     },
                 1 => { 
-                    intersection = self.proc_child(ro, r, max, min, tx0,ty0,tzm,txm,tym,tz1, a, 1^a);
+                    intersection = self.revelles_proc_child(ro, r, max, min, tx0,ty0,tzm,txm,tym,tz1, a, 1^a);
                     curr_node = self.new_node(txm,5,tym,3,tz1,8);
                     }
                 2 => { 
-                    intersection =self.proc_child(ro, r, max, min, tx0,tym,tz0,txm,ty1,tzm, a, 2^a);
+                    intersection =self.revelles_proc_child(ro, r, max, min, tx0,tym,tz0,txm,ty1,tzm, a, 2^a);
                     curr_node = self.new_node(txm,6,ty1,8,tzm,3);
                     }
                 3 => { 
-                    intersection =self.proc_child(ro, r, max, min, tx0,tym,tzm,txm,ty1,tz1, a, 3^a);
+                    intersection =self.revelles_proc_child(ro, r, max, min, tx0,tym,tzm,txm,ty1,tz1, a, 3^a);
                     curr_node = self.new_node(txm,7,ty1,8,tz1,8);
                     }
                 4 => { 
-                    intersection = self.proc_child(ro, r, max, min, txm,ty0,tz0,tx1,tym,tzm, a, 4^a);
+                    intersection = self.revelles_proc_child(ro, r, max, min, txm,ty0,tz0,tx1,tym,tzm, a, 4^a);
                     curr_node = self.new_node(tx1,8,tym,6,tzm,5);
                     }
                 5 => { 
-                    intersection = self.proc_child(ro, r, max, min, txm,ty0,tzm,tx1,tym,tz1, a, 5^a);
+                    intersection = self.revelles_proc_child(ro, r, max, min, txm,ty0,tzm,tx1,tym,tz1, a, 5^a);
                     curr_node = self.new_node(tx1,8,tym,7,tz1,8);
                     }
                 6 => { 
-                    intersection = self.proc_child(ro, r, max, min, txm,tym,tz0,tx1,ty1,tzm, a, 6^a);
+                    intersection = self.revelles_proc_child(ro, r, max, min, txm,tym,tz0,tx1,ty1,tzm, a, 6^a);
                     curr_node = self.new_node(tx1,8,ty1,8,tzm,7);
                     }
                 7 => { 
-                    intersection = self.proc_child(ro, r, max, min, txm,tym,tzm,tx1,ty1,tz1, a, 7^a);
+                    intersection = self.revelles_proc_child(ro, r, max, min, txm,tym,tzm,tx1,ty1,tz1, a, 7^a);
                     curr_node = 8;
                     }
                 _ => {}
@@ -240,6 +272,12 @@ impl OctreeNode {
         return None;
     }
 
+    pub fn leaf_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
+        if self.is_leaf(){
+            return self.items_intersection(r, max, min);
+        }
+        return None;
+    }
 
 
     // Iterate through items. Should only do on leaf if multiple items.
@@ -248,7 +286,6 @@ impl OctreeNode {
         let mut closest = None;
         for o in &self.items {
             match o.intersects(r) {
-
                 Some(x) => {
                     if x.dist < cdist && x.dist >= min {
                         cdist = x.dist;

@@ -1,4 +1,4 @@
-use na::{Vec3};
+use na::{Vec3, Norm};
 use std::fmt;
 use ray::Ray;
 use intersection::RawIntersection;
@@ -24,7 +24,7 @@ impl BBox {
         // Calc offset from min.
         let xoffs = octant & 1;
         let yoffs = octant & 2;
-        let zoffs = octant % 4;
+        let zoffs = octant & 4;
 
         let xdiff = bounds.max.x - bounds.min.x;
         let ydiff = bounds.max.y - bounds.min.y;
@@ -44,22 +44,28 @@ impl BBox {
         }
     }
 
-    pub fn intersects(&self, ro: &Vec3<f64>, invrd: &Vec3<f64>) -> bool {
+    pub fn fast_intersects(&self, ro: &Vec3<f64>, invrd: &Vec3<f64>) -> bool {
         //http://tavianator.com/fast-branchless-raybounding-box-intersections/
+        let t1 = (self.min.x - ro.x) * invrd.x;
+        let t2 = (self.max.x - ro.x) * invrd.x;
+        let t3 = (self.min.y - ro.y) * invrd.y;
+        let t4 = (self.max.y - ro.y) * invrd.y;
+        let t5 = (self.min.z - ro.z) * invrd.z;
+        let t6 = (self.max.z - ro.z) * invrd.z;
 
-        let tx1 = (self.min.x - ro.x) * invrd.x;
-        let tx2 = (self.max.x - ro.x) * invrd.x;
+        let tmin = t1.min(t2).max(t3.min(t4)).max(t5.min(t6));
+        let tmax = t1.max(t2).min(t3.max(t4)).min(t5.max(t6));
 
-        let tmin = f64::min(tx1, tx2);
-        let tmax = f64::max(tx1, tx2);
+        // if tmax < 0, ray (line) is intersecting AABB, but the whole AABB is behind us
+        if tmax < 0. {
+            return false;
+        }
 
-        let ty1 = (self.min.y - ro.y) * invrd.y;
-        let ty2 = (self.max.y - ro.y) * invrd.y;
-
-        let tmin2 = f64::max(tmin, f64::min(ty1, ty2));
-        let tmax2 = f64::min(tmax, f64::max(ty1, ty2));
-
-        return tmax2 >= tmin2;
+        // if tmin > tmax, ray doesn't intersect AABB
+        if tmin > tmax {
+            return false;
+        }
+        return true
     }
 
     pub fn mid(&self) -> Vec3<f64> {
@@ -148,24 +154,52 @@ fn vec3_invert(rd: Vec3<f64>) -> Vec3<f64> {
 }
 
 
-
-
-/*
 impl Geometry for BBox {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         let invrd = vec3_invert(r.rd);
-        if BBox::intersects(&self, &r.ro, &invrd) {
-            let point = Vec3::new(0.,0.,0.);
-
-            return Some(RawIntersection {
-                point
-            });
+        if !self.fast_intersects(&r.ro, &invrd) { 
+            return None
         }
-        return None;
+
+        let t1 = (self.min.x - r.ro.x) * invrd.x;
+        let t2 = (self.max.x - r.ro.x) * invrd.x;
+        let t3 = (self.min.y - r.ro.y) * invrd.y;
+        let t4 = (self.max.y - r.ro.y) * invrd.y;
+        let t5 = (self.min.z - r.ro.z) * invrd.z;
+        let t6 = (self.max.z - r.ro.z) * invrd.z;
+
+        let tmin = t1.min(t2).max(t3.min(t4)).max(t5.min(t6));
+        let tmax = t1.max(t2).min(t3.max(t4)).min(t5.max(t6));
+
+        // if tmax < 0, ray (line) is intersecting AABB, but the whole AABB is behind us
+        if tmax < 0. {
+            return None;
+        }
+
+        // if tmin > tmax, ray doesn't intersect AABB
+        if tmin > tmax {
+            return None;
+        }
+        let dist = tmin;
+		let point =  r.ro + (r.rd * dist);
+		let center = (self.min + self.max) * 0.5;
+		let p = point - center; 
+		let d = (self.min - self.max) * 0.5;
+		let normal = Vec3::new(
+			p.x / d.x.abs() * std::f64::EPSILON,
+			p.y / d.y.abs() * std::f64::EPSILON,
+			p.z / d.z.abs() * std::f64::EPSILON,
+		).normalize();
+		
+
+        return Some(RawIntersection {
+            point,
+            dist,
+            normal
+        });
     }
 
     fn bounds(&self) -> BBox {
         return self.clone()
     }
 }
-*/

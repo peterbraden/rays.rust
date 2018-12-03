@@ -28,6 +28,7 @@ mod material {
     pub mod diffuse_light;
     pub mod normal;
     pub mod functions;
+    pub mod legacy;
 }
 mod intersection;
 mod sceneobject;

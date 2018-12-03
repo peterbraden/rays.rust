@@ -21,6 +21,7 @@ use material::specular::Specular;
 use material::dielectric::Dielectric;
 use material::lambertian::Lambertian;
 use material::normal::NormalShade;
+use material::legacy::Whitted;
 use material::diffuse_light::DiffuseLight;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -220,6 +221,14 @@ impl SceneFile {
             let d:DiffuseLight = DiffuseLight {
                 intensity: SceneFile::parse_number(&o["intensity"], 1.),
                 color:SceneFile::parse_color(&o["color"]), 
+            };
+            return Some(Box::new(d));
+        }
+        if t == "whitted" {
+            let d: Whitted = Whitted {
+                pigment: SceneFile::parse_color(&o["pigment"]), 
+                reflection: SceneFile::parse_number(&o["reflection"], 0.),
+                phong: SceneFile::parse_number(&o["phong"], 0.),
             };
             return Some(Box::new(d));
         }

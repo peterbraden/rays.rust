@@ -137,7 +137,7 @@ impl OctreeNode {
 
         return intersection;
     }
-
+/*
     /// Based on: 
     /// An Efficient Parametric Algorithm for Octree Traversal (2000)
     /// by J. Revelles , C. Ureña , M. Lastra
@@ -270,6 +270,7 @@ impl OctreeNode {
         }
         return None;
     }
+    */
 
     pub fn leaf_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
         if self.is_leaf(){

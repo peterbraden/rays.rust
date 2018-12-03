@@ -7,7 +7,7 @@ use std::f64;
 
 // Returns num rays cast, Color
 pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
-    let closest = s.objects.nearest_intersection(r, f64::INFINITY, 0f64, None);
+    let closest = s.objects.nearest_intersection(r, f64::INFINITY, 0f64);
 
     match closest {
         Some(x) => return trace_intersection(r, x, depth, s),

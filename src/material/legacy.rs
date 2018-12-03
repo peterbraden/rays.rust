@@ -5,6 +5,7 @@ use intersection::Intersection;
 use ray::Ray;
 use na::Vector3;
 use light::Light;
+use geometry::{reflect};
 
 pub struct Whitted {
     pub pigment: Color,
@@ -39,7 +40,7 @@ impl Whitted {
     }
 
 
-    fn trace_for_light(&self, r: &Ray, light_vec: &Vector3<f64>, l: &Light, intersection: &Intersection, s: &Scene) -> Color {
+    fn trace_for_light(&self, r: &Ray, light_vec: &Vector3<f64>, l: &Light, intersection: &Intersection) -> Color {
         return self.diffuse(&intersection, &light_vec, &l) + self.specular(r, intersection, light_vec);
     }
 }
@@ -50,14 +51,22 @@ impl MaterialModel for Whitted {
         for light in &s.lights {
             let light_vec = light.position - intersection.point;
             let shadow_ray = Ray {ro: intersection.point, rd: light_vec};
-            let shadow_intersection = s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), 0.1, Some(intersection.object)); 
+            let shadow_intersection = s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), 0.1); 
 
             match shadow_intersection {
                 Some(_) => (),// Point in shadow...
                 None => (
-                    out = out + self.trace_for_light(&r, &light_vec, &light, &intersection, &s)
+                    out = out + self.trace_for_light(&r, &light_vec, &light, &intersection)
                     ),
             }
+        }
+
+        if self.reflection > 0. {
+            let refl = Ray {
+                ro: intersection.point,
+                rd: reflect(r.rd, intersection.normal)
+            };
+            return ScatteredRay{ attenuate: out * self.reflection, ray: Some(refl) };
         }
         return ScatteredRay{ attenuate: out, ray: None };
     }

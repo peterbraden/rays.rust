@@ -4,63 +4,32 @@ use sceneobject::SceneObject;
 use std::sync::Arc;
 use std::fmt;
 use ray::Ray;
-use intersection::Intersection;
+use intersection::{RawIntersection, Intersection};
 use ordered_float::OrderedFloat;
+use shapes::geometry::Geometry;
 
+#[derive(Clone)]
+pub struct Octree<T: Geometry>{
+    root: OctreeNode,
+    items: Vec<Arc<T>>,
+}
 
 #[derive(Clone)]
 pub struct OctreeNode {
-    depth: i64,
+    depth: usize,
     bounds: BBox,
-    mid: Vector3<f64>,
     // Octree structure:
     children: [Option<Box<OctreeNode>>; 8],
-    items: Vec<Arc<SceneObject>>,
+    items: Vec<usize>
 }
 
 fn vec3_invert(rd: Vector3<f64>) -> Vector3<f64> {
   return Vector3::new(1.0/rd.x, 1.0/rd.y, 1.0/rd.z); 
 }
 
+type OctreeIntersections = Option<Vec<usize>>;
+
 impl OctreeNode {
-
-    //
-    // Create a new node, and subdivide into further nodes up until max_depth
-    // or until number of children objects is 0.
-    //
-    pub fn new(depth: i64, max_depth: i64, b: BBox, items: &Vec<Arc<SceneObject>>) -> OctreeNode {
-
-        // Rust arrays suck - this defaults them to 'None'
-        let mut children: [Option<Box<OctreeNode>>; 8] = Default::default();
-
-        for i in 0..8 {
-            // Does child node have any objects in?
-            if depth < max_depth && items.len() > 1 {
-                // Equal subdivision. Enhancement: Use different split.
-                let cbox = BBox::for_octant(i, &b);
-                let item_iter = items.into_iter();
-                let inside = item_iter
-                                    .cloned()
-                                    .filter( |x| { cbox.intersects_bbox( &x.geometry.bounds() ) } )
-                                    .collect::<Vec<Arc<SceneObject>>>();
-
-                if inside.len() > 0 {
-                    let node = OctreeNode::new( depth + 1, max_depth, cbox, &inside);
-                    children[i as usize] = Some(Box::new(node));
-                }
-            }
-        }
-
-
-        OctreeNode {
-            depth: depth,
-            mid: (&b).mid(), 
-            bounds: b,
-            children: children, 
-            items: items.into_iter().cloned().collect(),
-        }
-    }
-
     pub fn is_leaf(&self) -> bool {
         for i in 0..8 {
             match self.children[i as usize] {
@@ -77,6 +46,134 @@ impl OctreeNode {
 
     pub fn len(&self) -> usize {
         return self.items.len()
+    }
+
+    /// Perform a breadth first search of the tree, and then sort results by distance.
+    pub fn naive_intersection(&self, r: &Ray, max:f64, min:f64) -> OctreeIntersections {
+        let invrd = vec3_invert(r.rd);
+        if !self.bounds.fast_intersects(&r.ro, &invrd) {
+            return None
+        }
+
+        if self.is_leaf(){
+            return Some(self.items.clone());
+        }
+
+        let intersections = self.children
+                                .iter()
+                                .filter(|i| i.is_some())
+                                .map(|c| c.as_ref().unwrap().naive_intersection(r,max, min))
+                                .filter(|i| i.is_some())
+                                .map(|i| i.unwrap())
+                                .flatten()
+                                .collect::<Vec<usize>>();
+
+        if intersections.is_empty(){
+            return None;
+        }
+        return Some(intersections);
+        
+    }
+
+}
+
+impl<T: Geometry> Octree<T> {
+
+    //
+    // Create a new node, and subdivide into further nodes up until max_depth
+    // or until number of children objects is 0.
+    //
+    pub fn new(max_depth: usize, b: BBox, items: &Vec<Arc<T>>) -> Octree<T> {
+        let items: Vec<Arc<T>> = items.into_iter().cloned().collect();
+        let indices: Vec<usize> = (0..items.len()).collect();
+        return Octree {
+            root: Octree::create_node(0, max_depth, b, indices, &items),
+            items: items,
+        };
+    }
+
+    fn create_node(depth: usize, max_depth: usize, b: BBox, items: Vec<usize>, geometries: &Vec<Arc<T>>) -> OctreeNode{
+        // Rust arrays suck - this defaults them to 'None'
+        let mut children: [Option<Box<OctreeNode>>; 8] = Default::default();
+
+        for i in 0..8 {
+            // Does child node have any objects in?
+            if depth < max_depth && items.len() > 1 {
+                // Equal subdivision. Enhancement: Use different split.
+                let cbox = BBox::for_octant(i, &b);
+                let inside = items.clone()
+                                .into_iter() 
+                                .filter( |x| { cbox.intersects_bbox( &geometries[*x].bounds() ) } )
+                                .collect::<Vec<usize>>();
+
+                if inside.len() > 0 {
+                    let node = Octree::create_node(depth + 1, max_depth, cbox, inside, geometries);
+                    children[i as usize] = Some(Box::new(node));
+                }
+            }
+        }
+
+
+        OctreeNode {
+            depth: depth,
+            bounds: b,
+            children: children, 
+            items: items,
+        }
+
+    }
+
+    pub fn raw_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<RawIntersection> {
+        return match self.closest_intersection(r, max, min) {
+            Some(tupl) => Some(tupl.1),
+            None => None
+        }
+    }
+
+
+    pub fn intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(Arc<T>, RawIntersection)> {
+        match self.closest_intersection(r, max, min) {
+            Some(tupl) => {
+               return Some((self.items[tupl.0].clone(), tupl.1))
+            },
+            None => None
+        }
+    }
+
+    fn closest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(usize, RawIntersection)> {
+        return match self.root.naive_intersection(r, max, min) {
+            Some(opts) => self.items_intersection(r,max, min, opts),
+            None => None
+        }
+    }
+
+    // Iterate through potential items. Should only do on leaf if multiple items.
+    fn items_intersection(&self, r: &Ray, max:f64, min:f64, items: Vec<usize>) -> Option<(usize, RawIntersection)> {
+        let mut cdist = max;
+        let mut closest = None;
+        for i in items {
+            match self.items[i].intersects(r) {
+                Some(x) => {
+                    if x.dist < cdist && x.dist >= min {
+                        cdist = x.dist;
+                        closest = Some((i, x));
+                    }
+                },
+                None => (),
+            }
+        }
+        return closest;
+    }
+
+/*
+    pub fn new_node(&self, txm:f64, x:u8, tym:f64, y:u8, tzm:f64, z:u8) -> u8{
+        if txm < tym {
+            if txm < tzm {return x;}  // YZ plane
+        }
+        else{
+            if tym < tzm {return y;} // XZ plane
+        }
+       return z; // XY plane;
     }
 
     pub fn first_node_index(&self, tx0:f64, ty0:f64, tz0:f64, txm:f64, tym:f64, tzm:f64) -> u8 {
@@ -101,43 +198,6 @@ impl OctreeNode {
         return answer;
     }
 
-
-    pub fn new_node(&self, txm:f64, x:u8, tym:f64, y:u8, tzm:f64, z:u8) -> u8{
-        if txm < tym {
-            if txm < tzm {return x;}  // YZ plane
-        }
-        else{
-            if tym < tzm {return y;} // XZ plane
-        }
-       return z; // XY plane;
-    }
-    pub fn intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
-        return self.naive_intersection(r, max, min);
-        //return self.revelles_intersection(r, max, min);
-    }
-
-    /// Perform a breadth first search of the tree, and then sort results by distance.
-    pub fn naive_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
-        let invrd = vec3_invert(r.rd);
-        if !self.bounds.fast_intersects(&r.ro, &invrd) {
-            return None
-        }
-
-        if self.is_leaf(){
-            return self.items_intersection(r, max, min);
-        }
-        
-        let intersection = self.children
-                                .iter()
-                                .filter(|i| i.is_some())
-                                .map(|c| c.as_ref().unwrap().naive_intersection(r,max, min))
-                                .filter(|i| i.is_some())
-                                .map(|i| i.unwrap()) 
-                                .min_by_key(|i| OrderedFloat(i.dist));
-
-        return intersection;
-    }
-/*
     /// Based on: 
     /// An Efficient Parametric Algorithm for Octree Traversal (2000)
     /// by J. Revelles , C. Ureña , M. Lastra
@@ -271,37 +331,10 @@ impl OctreeNode {
         return None;
     }
     */
-
-    pub fn leaf_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
-        if self.is_leaf(){
-            return self.items_intersection(r, max, min);
-        }
-        return None;
-    }
-
-
-    // Iterate through items. Should only do on leaf if multiple items.
-    pub fn items_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
-        let mut cdist = max;
-        let mut closest = None;
-        for o in &self.items {
-            match o.intersects(r) {
-                Some(x) => {
-                    if x.dist < cdist && x.dist >= min {
-                        cdist = x.dist;
-                        closest = Some(x);
-                    }
-                },
-                None => (),
-            }
-        }
-        return closest;
-    }
-
 }
 
-
-impl fmt::Display for OctreeNode {
+/*
+impl fmt::Display for OctreeNode<SceneObject> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut c = "".to_string();
         let mut p = "".to_string();
@@ -326,3 +359,4 @@ impl fmt::Display for OctreeNode {
     }
 }
 
+*/

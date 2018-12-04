@@ -4,12 +4,13 @@ use intersection::{RawIntersection, Intersection};
 use na::Vector3;
 use ray::Ray;
 use shapes::bbox::BBox;
+use std::sync::Arc;
 
 pub struct SceneObject {
     pub geometry: Box<Geometry + Sync + Send>,
     pub medium: Box<Medium + Sync + Send>,
 }
-
+/*
 impl SceneObject {
    pub fn intersects(&self, r: &Ray) -> Option<Intersection> { 
        match self.geometry.intersects(r) {
@@ -18,13 +19,14 @@ impl SceneObject {
                   dist: i.dist, 
                   point: i.point,
                   normal: i.normal,
-                  object: self,
+                  object: Arc::new(self),
                })
            },
            None => return None
        }
    }
-}
+}*/
+
 impl Geometry for SceneObject {
    fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
     return self.geometry.intersects(r);

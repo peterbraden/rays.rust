@@ -9,14 +9,13 @@ use shapes::bbox::BBox;
 use shapes::triangle::Triangle;
 use std::vec::Vec;
 use std::sync::Arc;
+use octree::Octree;
 
 
 pub struct Mesh {
-
-    // TODO use BVH
-    triangles: Vec<Triangle>,
-
+    triangles: Octree<Triangle>,
     bounds: BBox,
+    triangle_count: usize,
 }
 
 impl Mesh {
@@ -37,11 +36,13 @@ impl Mesh {
                     .map(|i| i.component_mul(&scale))
                     .collect()
             );
-            let mut tris: Vec<Triangle> = mesh.indices.chunks(3).map(|i| {
-                Triangle::new(
-                    positions[i[0] as usize],
-                    positions[i[1] as usize],
-                    positions[i[2] as usize])
+            let mut tris: Vec<Arc<Triangle>> = mesh.indices.chunks(3).map(|i| {
+                Arc::new(
+                    Triangle::new(
+                        positions[i[0] as usize],
+                        positions[i[1] as usize],
+                        positions[i[2] as usize])
+                    )
             }).collect();
             triangles.append(&mut tris);
         }
@@ -49,14 +50,15 @@ impl Mesh {
         //println!("# of triangles: {}", triangles.len());
 
         let bounds = Mesh::bounds_of(&triangles);
-
+        let tree = Octree::new(8, bounds, &triangles); 
         return Mesh {
-            triangles: triangles,
+            triangles: tree,
             bounds: bounds,
-        };
+            triangle_count: triangles.len()
+        }
     }
 
-    fn bounds_of(triangles: &Vec<Triangle>) -> BBox {
+    fn bounds_of(triangles: &Vec<Arc<Triangle>>) -> BBox {
         let mut bb = BBox::new(
             Vector3::new(0., 0., 0.),
             Vector3::new(0., 0., 0.)
@@ -68,29 +70,11 @@ impl Mesh {
 
         return bb;
     }
-
-    pub fn naive_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<RawIntersection> {
-        let mut cdist = max;
-        let mut closest = None;
-        
-        for o in &self.triangles {
-            match o.intersects(r) {
-                Some(x) => {
-                    if x.dist < cdist && x.dist >= min {
-                        cdist = x.dist;
-                        closest = Some(x);
-                    }
-                },
-                None => (),
-            }
-        }
-        return closest;
-    }
 }
 
 impl Geometry for Mesh {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        return self.naive_intersection(r, f64::INFINITY, 0f64);
+        return self.triangles.raw_intersection(r, f64::INFINITY, 0f64);
     }
 
     fn bounds(&self) -> BBox {
@@ -98,6 +82,6 @@ impl Geometry for Mesh {
     }
 
     fn primitives(&self) -> u64 {
-        return self.triangles.len() as u64;
+        return self.triangle_count as u64;
     }
 }

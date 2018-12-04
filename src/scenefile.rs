@@ -295,9 +295,8 @@ impl SceneFile {
     }
 
     pub fn from_scenefile(s: SceneFile) -> Scene {
-        let mut o = SceneGraph::new();
         let objects = SceneFile::parse_objects(s.objects, &s.materials, &s.media);
-        o.push(objects);
+        let o = SceneGraph::new(2, objects);
 		
         return Scene {
             width: s.width,

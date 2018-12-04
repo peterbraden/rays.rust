@@ -3,35 +3,34 @@ use na::{Vector3};
 use intersection::Intersection;
 use sceneobject::SceneObject;
 use shapes::bbox::BBox;
-use octree::OctreeNode;
+use octree::Octree;
 use std::sync::Arc;
 use std::fmt;
 
 pub struct SceneGraph {
     pub items: Vec<Arc<SceneObject>>,
-    root: Option<OctreeNode>,
+    tree: Octree<SceneObject>,
     scene_bounds: BBox,
 }
 
 impl SceneGraph {
 
-    pub fn new() -> SceneGraph {
-        SceneGraph {
-            items: vec![],
-            root: None, 
-            scene_bounds: BBox::new( Vector3::new(0f64,0f64,0f64), Vector3::new(0f64,0f64,0f64) ),
-        }
-    }
+    pub fn new(max_depth: usize, objects: Vec<Arc<SceneObject>>) -> SceneGraph {
 
-    pub fn partition(&mut self, max_depth: i64) {
-        self.root = Some(
-        OctreeNode::new(
-            0,
+        let mut items = vec![];
+        let mut scene_bounds = BBox::new( Vector3::new(0f64,0f64,0f64), Vector3::new(0f64,0f64,0f64) ); 
+        for x in objects {
+            scene_bounds = scene_bounds.union( &x.geometry.bounds() );
+            items.push(x);
+        }
+
+        let tree = Octree::new(
             max_depth, 
-            (&self.scene_bounds).clone(),
-            &self.items,
-            )
+            scene_bounds.clone(),
+            &items,
         );
+
+        SceneGraph { items, tree, scene_bounds }
     }
 
     pub fn items(&self) -> &Vec<Arc<SceneObject>>{
@@ -39,33 +38,21 @@ impl SceneGraph {
     }
 
     pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
-        let tree = self.tree_nearest_intersection(r,max,min);
-		/*
-        let naive = self.naive_intersection(r,max,min,exclude);
-        if naive != tree {
-            println!("Intersection doesn't match for {} ({} {})", r, max, min);
-            match naive{
-                Some(_) => (println!("- naive: {}", &naive.clone().unwrap())),
-                None => (println!("- naive: none")),
-            }
-            match tree{
-                Some(_) => (println!("- tree: {}", &tree.clone().unwrap())),
-                None => (println!("- tree: none")),
-            }
-        }
-		*/
-        return tree;
-    }
-
-    pub fn tree_nearest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
-        match self.root {
-            Some (ref root) => { return root.intersection(r, max, min); }
-            None => { return None; }
+        return match self.tree.intersection(r, max, min){
+            Some(tupl) =>{
+                let scene_obj = tupl.0.clone();
+                return Some(
+                            Intersection {
+                              dist: tupl.1.dist, 
+                              point: tupl.1.point,
+                              normal: tupl.1.normal,
+                              object: scene_obj,
+                           })
+            },
+            None => None
         }
     }
-
-
-
+    /*
 
     pub fn naive_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
         let mut cdist = max;
@@ -92,14 +79,7 @@ impl SceneGraph {
         }
         return closest;
     }
-
-    pub fn push(&mut self, s: Vec<Arc<SceneObject>>) {
-        for x in s {
-            self.scene_bounds = self.scene_bounds.union( &x.geometry.bounds() );
-            &self.items.push(x);
-        }
-        self.partition(2);
-    }
+*/
 }
 
 impl fmt::Display for SceneGraph {

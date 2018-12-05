@@ -29,15 +29,6 @@ pub fn random_point_on_disc(radius: f64) -> Vector2<f64>{
     return Vector2::new(r * theta.cos(), r * theta.sin());
 }
 
-pub fn schlick(cosine:f64, ref_idx:f64) -> f64 {
-    let r0 = ((1.0 - ref_idx) / (1.0 + ref_idx)).powi(2);
-    r0 + (1.0-r0) * (1.0 - cosine).powi(5)
-}
-
-pub fn reflect(v: Vector3<f64>, normal: Vector3<f64>) -> Vector3<f64> {
-    v - normal * 2.0 * normal.dot(&v)
-}
-
 pub fn uniform_sample_hemisphere(r1: f64, r2: f64) -> Vector3<f64>{
     let sin_theta = (1. - r1 * r1).sqrt(); 
     let  phi = 2. * f64::consts::PI * r2; 

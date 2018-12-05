@@ -1,4 +1,12 @@
 use na::{Vector3};
+use ray::Ray;
+use material::model::{MaterialModel, ScatteredRay};
+use geometry::{random_point_on_unit_sphere};
+use intersection::Intersection;
+use color::Color;
+use geometry::{rand};
+
+
 
 pub fn refract(v: Vector3<f64>, n: Vector3<f64>, ni_over_nt:f64) -> Option<Vector3<f64>> {
     let uv = v.normalize();
@@ -9,3 +17,82 @@ pub fn refract(v: Vector3<f64>, n: Vector3<f64>, ni_over_nt:f64) -> Option<Vecto
     }
     None
 }
+
+/// Schlick approximation of Fresnel
+pub fn schlick(cosine:f64, ref_idx:f64) -> f64 {
+    let r0 = ((1.0 - ref_idx) / (1.0 + ref_idx)).powi(2);
+    r0 + (1.0-r0) * (1.0 - cosine).powi(5)
+}
+
+pub fn reflect(v: Vector3<f64>, normal: Vector3<f64>) -> Vector3<f64> {
+    v - normal * 2.0 * normal.dot(&v)
+}
+
+/// Implement Lambertian reflection (purely diffuse) for ambient incoming light (light at a random
+/// incoming angle.)
+/// Practically, we implement random reflection within a unit sphere on the normal.
+/// This will be very noisy if we don't subsample a lot.
+pub fn scatter_lambertian(albedo: Color, intersection: &Intersection) -> ScatteredRay {
+    let refl = Ray {
+        ro: intersection.point,
+        rd: intersection.normal + random_point_on_unit_sphere(),
+    };
+    return ScatteredRay{ attenuate:albedo, ray: Some(refl) };
+
+}
+
+pub fn scatter_dielectric(
+    refractive_index: f64,
+    albedo: Color, 
+    r: &Ray,
+    intersection: &Intersection
+) -> ScatteredRay {
+
+    let mut ni_over_nt = refractive_index; // Assumes it comes from air - TODO
+    let cosine;
+    let drn = r.rd.dot(&intersection.normal);
+    let outward_normal;
+    if drn > 0.0 {
+        // when ray shoot through object back into vacuum,
+        // ni_over_nt = ref_idx, surface normal has to be inverted.
+        cosine = drn / r.rd.norm(); 
+        outward_normal = -intersection.normal
+    } else {
+        // when ray shoots into object,
+        // ni_over_nt = 1 / ref_idx.
+        cosine = - drn / r.rd.norm(); 
+        ni_over_nt = 1.0 / refractive_index; 
+        outward_normal = intersection.normal
+    };
+
+    match refract(r.rd, outward_normal, ni_over_nt) {
+        Some(refracted) => {
+            // refracted ray exists
+            // Schlick approximation of fresnel amount
+            let reflect_prob = schlick(cosine, refractive_index);
+            if rand() >= reflect_prob {
+                return ScatteredRay{
+                    attenuate: albedo,
+                    ray: Some( Ray {
+                        ro: intersection.point + (refracted * 0.001),
+                        rd: refracted
+                    }),
+                };
+            }
+        },
+        None => {
+            // refracted ray does not exist
+            //  - total internal reflection
+        }
+    }
+
+    let reflected = reflect(r.rd, intersection.normal);
+    return ScatteredRay {
+        attenuate: Color::white(),
+        ray: Some(Ray {
+            ro: intersection.point,
+            rd: reflected
+        }) 
+    };
+}
+

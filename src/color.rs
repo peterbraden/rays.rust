@@ -1,6 +1,7 @@
 use na::Vector3;
 use std::fmt;
 use std::ops::{Mul, Add, Div};
+use std::cmp::Ordering;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Color {
@@ -37,6 +38,10 @@ impl Color {
 
     pub fn to_vec(&self) -> Vector3<f64> {
         return self.rgb.clone();
+    }
+
+    pub fn min() -> Color {
+        return Color::new(1./255.,1./255.,1./255.);
     }
 }
 
@@ -86,5 +91,21 @@ impl Div<f64> for Color {
 
     fn div(self, _rhs: f64) -> Color {
         Color {rgb: self.rgb / _rhs }
+    }
+}
+
+impl PartialOrd for Color {
+    fn partial_cmp(&self, other: &Color) -> Option<Ordering> {
+        if self.rgb[0] < other.rgb[0] &&
+           self.rgb[1] < other.rgb[1] &&
+           self.rgb[2] < other.rgb[2]{
+            return Some(Ordering::Less);
+        }
+        if self.rgb[0] > other.rgb[0] &&
+           self.rgb[1] > other.rgb[1] &&
+           self.rgb[2] > other.rgb[2] {
+            return Some(Ordering::Greater);
+        }
+        return None;
     }
 }

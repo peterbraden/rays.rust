@@ -295,8 +295,13 @@ impl SceneFile {
     }
 
     pub fn from_scenefile(s: SceneFile) -> Scene {
+        let max_bounding = BBox::new( // TODO
+            Vector3::new(-1000., -1000., -1000.),
+            Vector3::new(1000., 1000., 1000.),
+        );
+
         let objects = SceneFile::parse_objects(s.objects, &s.materials, &s.media);
-        let o = SceneGraph::new(2, objects);
+        let o = SceneGraph::new(2, objects, max_bounding);
 		
         return Scene {
             width: s.width,
@@ -313,7 +318,9 @@ impl SceneFile {
             diffuse: s.diffuse,
             ambient_diffuse: s.ambient_diffuse,
             shadow_bias: s.shadow_bias,
-            supersamples: s.supersamples
+            supersamples: s.supersamples,
+            max_bounding,
+            black_threshold: Color::min(),
         };
     }
 

@@ -1,27 +1,38 @@
 use ray::Ray;
 use na::{Vector3};
-use intersection::Intersection;
+use intersection::{Intersection, RawIntersection};
 use sceneobject::SceneObject;
 use shapes::bbox::BBox;
 use octree::Octree;
 use std::sync::Arc;
 use std::fmt;
+use shapes::geometry::Geometry;
 
 pub struct SceneGraph {
     pub items: Vec<Arc<SceneObject>>,
+    pub infinite_items: Vec<Arc<SceneObject>>,
     tree: Octree<SceneObject>,
     scene_bounds: BBox,
 }
 
 impl SceneGraph {
 
-    pub fn new(max_depth: usize, objects: Vec<Arc<SceneObject>>) -> SceneGraph {
+    pub fn new(max_depth: usize, objects: Vec<Arc<SceneObject>>, max_bounding: BBox) -> SceneGraph {
 
         let mut items = vec![];
+        let mut infinite_items = vec![];
         let mut scene_bounds = BBox::new( Vector3::new(0f64,0f64,0f64), Vector3::new(0f64,0f64,0f64) ); 
         for x in objects {
-            scene_bounds = scene_bounds.union( &x.geometry.bounds() );
-            items.push(x);
+            if max_bounding.contains(&x.geometry.bounds()) {
+                scene_bounds = scene_bounds.union( &x.geometry.bounds() );
+                items.push(x);
+            } else {
+                // This object is excessively large (probably an infinite plane or skysphere
+                // Instead of trying to contain it in our scene BVH, we fall back to a naive
+                // iteration intersection.
+                // These are of course more expensive.
+                infinite_items.push(x)
+            }
         }
 
         let tree = Octree::new(
@@ -30,7 +41,7 @@ impl SceneGraph {
             &items,
         );
 
-        SceneGraph { items, tree, scene_bounds }
+        SceneGraph { items, tree, scene_bounds, infinite_items }
     }
 
     pub fn items(&self) -> &Vec<Arc<SceneObject>>{
@@ -38,7 +49,7 @@ impl SceneGraph {
     }
 
     pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
-        return match self.tree.intersection(r, max, min){
+        return match self.nearest_raw_intersection(r, max, min) {
             Some(tupl) =>{
                 let scene_obj = tupl.0.clone();
                 return Some(
@@ -50,15 +61,34 @@ impl SceneGraph {
                            })
             },
             None => None
-        }
+        };
     }
-    /*
 
-    pub fn naive_intersection(&self, r: &Ray, max:f64, min:f64, exclude: Option<&SceneObject>) -> Option<Intersection> {
+
+    pub fn nearest_raw_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(Arc<SceneObject>, RawIntersection)> { 
+        let tree_results =self.tree.intersection(r, max, min);
+        let infinites = self.naive_intersection_infinites(r, max, min);
+
+        if infinites.is_none() {
+            return tree_results;
+        }
+        if tree_results.is_none() {
+            return infinites;
+        }
+        let inf = infinites.unwrap();
+        let tree = tree_results.unwrap();
+        if inf.1.dist < tree.1.dist {
+            return Some(inf);
+        }
+        return Some(tree);
+    }
+
+    pub fn naive_intersection_infinites(&self, r: &Ray, max:f64, min:f64) -> Option<(Arc<SceneObject>, RawIntersection)> {
         let mut cdist = max;
         let mut closest = None;
         
-        for o in &self.items {
+        for o in &self.infinite_items {
+            /*
             match exclude {
                 Some(x) => {
                     if &*x as *const _  == &**o {
@@ -67,11 +97,12 @@ impl SceneGraph {
                 }
                 None => (),
             }
+            */
             match o.intersects(r) {
                 Some(x) => {
                     if x.dist < cdist && x.dist >= min {
                         cdist = x.dist;
-                        closest = Some(x);
+                        closest = Some((o.clone(), x));
                     }
                 },
                 None => (),
@@ -79,14 +110,14 @@ impl SceneGraph {
         }
         return closest;
     }
-*/
 }
 
 impl fmt::Display for SceneGraph {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "SceneGraph \n objects: {} \n bounded: {}", //\n{}\n",
+        write!(f, "SceneGraph \n| objects: {} \n| bounded: {} \n| infinite objs. {}", //\n{}\n",
                 &self.items.len(), 
                 &self.scene_bounds,
+                &self.infinite_items.len(), 
  //               &self.root.as_ref().unwrap()
             )
     }

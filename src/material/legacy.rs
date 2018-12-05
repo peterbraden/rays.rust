@@ -5,7 +5,7 @@ use intersection::Intersection;
 use ray::Ray;
 use na::Vector3;
 use light::Light;
-use geometry::{reflect};
+use material::functions::{reflect};
 
 pub struct Whitted {
     pub pigment: Color,

@@ -3,7 +3,8 @@ use scene::Scene;
 use material::model::{MaterialModel, ScatteredRay};
 use intersection::Intersection;
 use ray::Ray;
-use geometry::{random_point_on_unit_sphere, reflect};
+use geometry::{random_point_on_unit_sphere};
+use material::functions::{reflect};
 
 pub struct Specular {
     pub albedo: Color,

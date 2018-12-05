@@ -3,7 +3,7 @@
   "height": 240,
   "supersamples": 35,
   
-  "background": [0.1, 0.1, 0.15],
+  "background": [0.5, 0.5, 0.5],
   "ambient": 0.01,
   "specular": false,
   "ambient_diffuse": 1,
@@ -36,8 +36,9 @@
       "roughness": 0.1
     },
     "RED_PLASTIC": {
-      "type": "lambertian",
-      "albedo": [0.9, 0.1, 0.1]
+      "type": "dielectric",
+      "refractive_index": 1.575,
+      "attenuate": [0.9, 0.1, 0.1]
     },
     "WHITE_PLASTIC": {
       "type": "lambertian",
@@ -121,46 +122,16 @@
 
   "objects": [
     { 
-      "type" : "mesh",
+      "type" : "__mesh",
       "src": "./demo/teapot.obj",
       "scale": [5,5,5],
       "material" : "WHITE_PLASTIC"
     },
 		{
       "type": "sphere",
-      "radius": 2,
-      "location": [5, 2, -11],
-      "material" : "BLUE_LIGHT"
-    },
-		{
-      "type": "sphere",
-      "radius": 2,
-      "location": [0, 2, -11],
-      "material" : "RED_LIGHT"
-    },
-		{
-      "type": "sphere",
-      "radius": 2,
-      "location": [-5, 2, -11],
-      "material" : "GREEN_LIGHT"
-    },
-		{
-      "type": "sphere",
       "radius": 5,
-      "location": [-3, 30, 0],
-      "material" : "WHITE_LIGHT"
-    },
-		{
-      "type": "sphere",
-      "radius": 10,
-      "location": [-25, 10, 15],
-      "material" : "GOLD"
-    },
-		{
-      "type": "sphere",
-      "radius": 10,
-      "location": [0, 10, 15],
-      "material" : "BRUSHED_METAL_RED"
+      "location": [0, 5, 0],
+      "material" : "RED_PLASTIC"
     },
     { 
       "type" : "checkeredplane",

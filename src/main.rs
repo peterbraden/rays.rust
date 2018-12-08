@@ -29,6 +29,7 @@ mod material {
     pub mod normal;
     pub mod functions;
     pub mod legacy;
+    pub mod plastic;
 }
 mod intersection;
 mod sceneobject;
@@ -40,11 +41,13 @@ mod shapes {
     pub mod plane;
     pub mod triangle;
     pub mod mesh;
+    pub mod infinite;
 }
 mod octree;
 mod scenegraph;
 mod scene;
 mod scenefile;
+mod skysphere;
 mod camera;
 mod trace;
 mod rendercontext;

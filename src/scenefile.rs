@@ -8,6 +8,7 @@ use shapes::mesh::Mesh;
 use shapes::bbox::BBox;
 use light::Light;
 use color::Color;
+use skysphere::create_sky_sphere;
 use std::sync::Arc;
 use sceneobject::SceneObject;
 use serde_json::{Value, Map};
@@ -19,6 +20,7 @@ use material::model::MaterialModel;
 use material::texture::{Solid, CheckeredYPlane, Medium};
 use material::specular::Specular;
 use material::dielectric::Dielectric;
+use material::plastic::Plastic;
 use material::lambertian::Lambertian;
 use material::normal::NormalShade;
 use material::legacy::Whitted;
@@ -117,6 +119,11 @@ impl SceneFile {
 
     pub fn parse_object(o: Value,  materials: &Map<String, Value>, media: &Map<String, Value>) -> Option<Arc<SceneObject>> {
         let t = o["type"].as_str().unwrap();
+
+        if t == "skysphere" {
+            return Some(Arc::new(SceneFile::parse_skysphere(&o)));
+        }
+
         let m = SceneFile::parse_object_medium(&o, materials, media);
         
         if t == "sphere" {
@@ -139,6 +146,10 @@ impl SceneFile {
             return Some(Arc::new(SceneFile::parse_checkeredplane(&o, m)));
         }
         return None
+    }
+
+    pub fn parse_skysphere(_o: &Value) -> SceneObject {
+        return create_sky_sphere();
     }
 
 
@@ -205,6 +216,16 @@ impl SceneFile {
         if t == "lambertian" {
             let d:Lambertian = Lambertian {
                 albedo:SceneFile::parse_color(&o["albedo"]), 
+            };
+            return Some(Box::new(d));
+        }
+
+        if t == "plastic" {
+            let d:Plastic = Plastic {
+                albedo:SceneFile::parse_color(&o["albedo"]), 
+                refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.),
+                roughness: SceneFile::parse_number(&o["roughness"], 0.),
+                opacity: SceneFile::parse_number(&o["opacity"], 0.),
             };
             return Some(Box::new(d));
         }

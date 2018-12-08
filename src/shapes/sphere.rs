@@ -6,8 +6,8 @@ use shapes::bbox::BBox;
 
 #[derive(PartialEq)]
 pub struct Sphere {
-    center: Vector3<f64>,
-    radius: f64,
+	pub center: Vector3<f64>,
+	pub radius: f64,
 }
 
 impl Sphere{
@@ -46,6 +46,8 @@ impl Geometry for Sphere {
             // If dist is negative, ray started inside sphere so find other root 
             dist = (-b + d.sqrt()) / a;
         }
+	
+		if dist < 0. { return None; }
 
         let point = r.ro + (r.rd.normalize() * dist);
 

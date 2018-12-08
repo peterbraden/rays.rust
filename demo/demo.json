@@ -3,7 +3,7 @@
   "height": 240,
   "supersamples": 35,
   
-  "background": [0.5, 0.5, 0.5],
+  "background": [0.2, 0.2, 0.2],
   "ambient": 0.01,
   "specular": false,
   "ambient_diffuse": 1,
@@ -36,9 +36,10 @@
       "roughness": 0.1
     },
     "RED_PLASTIC": {
-      "type": "dielectric",
+      "type": "plastic",
       "refractive_index": 1.575,
-      "attenuate": [0.9, 0.1, 0.1]
+      "albedo": [0.9, 0.1, 0.1],
+      "opacity": 0.2
     },
     "WHITE_PLASTIC": {
       "type": "lambertian",
@@ -98,18 +99,18 @@
   },
 
   "camera": {
-    "location": [5, 15, -50],
+    "location": [5, 4.5, -50],
     "lookat" : [0,4.5,0],
     "up" : [0,1,0],
-    "angle": 0.7 ,
+    "angle": 0.5 ,
     "aperture": 0.3
   },
   
   "lights" : [
     {
-      "location": [10, 10, -10], 
+      "location": [0, 30, 0], 
       "color": "white",
-      "intensity": 0.5
+      "intensity": 1
     },
     {
       "location": [-10, 100, 0], 
@@ -131,12 +132,27 @@
       "type": "sphere",
       "radius": 5,
       "location": [0, 5, 0],
-      "material" : "RED_PLASTIC"
+      "material" : "GOLD"
+    },
+		{
+      "type": "sphere",
+      "radius": 5,
+      "location": [10, 5, 0],
+      "material" : "WHITE_PLASTIC"
+    },
+		{
+      "type": "sphere",
+      "radius": 5,
+      "location": [-10, 5, 0],
+      "material" : "BRUSHED_METAL_RED"
     },
     { 
       "type" : "checkeredplane",
       "y": 0,
       "medium" : "CHECKERED_MARBLE"
+    },
+    { 
+      "type" : "skysphere"
     }
   ]
 }

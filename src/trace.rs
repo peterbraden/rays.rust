@@ -17,20 +17,21 @@ pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
 
 fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene) -> (u64, Color){
     let mut cast = 1;
-    let mut out = Color::black();
     let material = intersection.object.medium.material_at(intersection.point);
     let interaction = material.scatter(r, &intersection, s);
 
     if depth < s.max_depth && interaction.attenuate > s.black_threshold {
         if let Some(ray) = interaction.ray {
             let (c, col) = trace(&ray, depth + 1, s);
-            out = out + interaction.attenuate * col;
             cast += c;
-            return (cast, out);
-        }
+            return (cast, interaction.attenuate * col.clamp(2.));
+        } else {
+			return (cast, interaction.attenuate)
+		}
     }
-    out = out + (interaction.attenuate * s.background);
-    return (cast, out);
+	
+	// Too many bounce, fallback to color
+    return (cast, (interaction.attenuate * s.background));
 }
 
 fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &Scene) -> (u64, Color) {
@@ -40,14 +41,10 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &S
     let mut biased_intersection = intersection.clone();
     biased_intersection.point = intersection.point + (intersection.normal * scene.shadow_bias);
 
-
     let mut cast = 1;
-    let mut out = Color::black();
     let (c, o) = trace_sample(r, &biased_intersection, depth, scene);
     cast = cast + c;
-    out = out + o;
-
-    return (cast, out)
+    return (cast, o) 
 }
 
 

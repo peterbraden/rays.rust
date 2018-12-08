@@ -81,6 +81,7 @@ impl RenderContext {
     pub fn print_scene_stats(&self, s: &Scene){
     
         print!("# ============== Scene ===================\n");
+        print!("| Output: {}x{} {} samples\n", s.width, s.height, s.supersamples);
         print!("| Objects: {}\n", s.objects);
         print!("| - Primitives: {}\n", s.objects
                                         .items

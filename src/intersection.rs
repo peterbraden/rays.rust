@@ -4,6 +4,7 @@ use std::cmp;
 use std::fmt;
 use std::sync::Arc;
 
+#[derive(Debug)]
 pub struct RawIntersection {
     pub dist: f64,
     pub point: Vector3<f64>,

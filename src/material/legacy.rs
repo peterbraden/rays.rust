@@ -5,44 +5,12 @@ use intersection::Intersection;
 use ray::Ray;
 use na::Vector3;
 use light::Light;
-use material::functions::{reflect};
+use material::functions::{reflect, diffuse, phong};
 
 pub struct Whitted {
     pub pigment: Color,
     pub reflection: f64,
     pub phong: f64,
-}
-
-impl Whitted {
-    fn specular (&self, r: &Ray, intersection: &Intersection, light_vec: &Vector3<f64>) -> Color {
-        if self.phong == 0. {
-            return Color::black();
-        }
-        let ln = light_vec.normalize();
-        let refl = ln - (intersection.normal * (2.0 * intersection.normal.dot(&ln) ) ); 
-        let dp = refl.dot(&r.rd);
-
-        if dp > 0f64 {
-            let spec_scale = dp.powf(self.phong);
-            return Color::white() * spec_scale;
-        }
-
-        return Color::black();
-    }
-
-
-    fn diffuse (&self, i: &Intersection, light_vec: &Vector3<f64>, light: &Light) -> Color {
-        let diffuse_scale = light_vec.normalize().dot(&i.normal) * light.intensity;
-        if diffuse_scale.is_sign_positive() {
-            return light.color * self.pigment * diffuse_scale;
-        }
-        return Color::black()
-    }
-
-
-    fn trace_for_light(&self, r: &Ray, light_vec: &Vector3<f64>, l: &Light, intersection: &Intersection) -> Color {
-        return self.diffuse(&intersection, &light_vec, &l) + self.specular(r, intersection, light_vec);
-    }
 }
 
 impl MaterialModel for Whitted {
@@ -56,7 +24,7 @@ impl MaterialModel for Whitted {
             match shadow_intersection {
                 Some(_) => (),// Point in shadow...
                 None => (
-                    out = out + self.trace_for_light(&r, &light_vec, &light, &intersection)
+                    out = diffuse(self.pigment, &intersection, &light_vec, &light) + phong(self.phong, &r, &intersection, &light_vec)
                     ),
             }
         }

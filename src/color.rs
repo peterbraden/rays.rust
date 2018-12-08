@@ -40,6 +40,10 @@ impl Color {
         return self.rgb.clone();
     }
 
+	pub fn clamp(&self, val: f64) -> Color {
+        return Color::new(self.rgb.x.min(val), self.rgb.y.min(val), self.rgb.z.min(val));
+	}
+
     pub fn min() -> Color {
         return Color::new(1./255.,1./255.,1./255.);
     }
@@ -83,6 +87,16 @@ impl Add<Color> for Color {
 
     fn add(self, _rhs: Color) -> Color {
         Color {rgb: self.rgb + _rhs.rgb }
+    }
+}
+
+impl Add<Vector3<f64>> for Color {
+    type Output = Color;
+
+    fn add(self, _rhs: Vector3<f64>) -> Color {
+        Color {
+            rgb: _rhs + &self.rgb
+        }
     }
 }
 

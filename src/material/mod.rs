@@ -45,6 +45,11 @@ pub struct ScatteredRay {
     pub attenuate: Color
 }
 
+pub struct ScatteredRays {
+
+
+}
+
 /*
 pub trait BSDFToRename{
 

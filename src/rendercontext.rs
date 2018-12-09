@@ -15,7 +15,6 @@ pub struct RenderContext {
     pub start_time: f64,
     pub progressive_render: bool,
     pub pixels_rendered: u64,
-    i: usize,
 }
 
 fn format_f64(v: f64) -> String {
@@ -39,7 +38,6 @@ impl RenderContext {
             start_time: time::precise_time_s(),
             progressive_render: progressive_render,
             pixels_rendered: 0,
-            i: 0,
         }
     }
 
@@ -98,7 +96,7 @@ impl RenderContext {
         print!("# ========================================\n");
     }
     
-    pub fn print_progress(&self, _x: usize, _y: usize){
+    pub fn print_progress(&self){
         let elapsed = time::precise_time_s() - self.start_time;
         println!("- [{:.0}s] {} rays cast ({} RPS), {} Rays per pixel, {}%, {} threads",
                  elapsed,
@@ -108,8 +106,21 @@ impl RenderContext {
                  format_f64((self.pixels_rendered as f64 / (self.width * self.height) as f64) * 100.),
                  rayon::current_num_threads());
     }
+
+    pub fn iter(&self) -> RenderIterator {
+        RenderIterator {
+            i: 0,
+            width: self.width,
+            height: self.height,
+        }
+    }
 }
 
+pub struct RenderIterator {
+    i: usize,
+    pub width: usize,
+    pub height: usize,
+}
 
 pub struct RenderableChunk {
     pub xmin: usize,
@@ -118,22 +129,22 @@ pub struct RenderableChunk {
     pub ymax: usize,
 }
 
-impl Iterator for RenderContext {
+impl Iterator for RenderIterator {
     type Item = RenderableChunk;
 
     fn next(&mut self) -> Option<RenderableChunk> {
+        if self.i >= self.width * self.height {
+            return None
+        }
+
         // From i (pixel index) find current chunk
         let y = self.i / self.width;
         let x = self.i % self.width;
         let chunk_size = 16;
 
-        if x >= self.width || y.saturating_mul(self.width).saturating_add(x) >= self.width * self.height {
-            return None;
-        }
-
-        if self.height - y > chunk_size {
-            if self.width - x > chunk_size {
-                self.i = self.i + chunk_size * chunk_size;
+        if self.height - y >= chunk_size {
+            if self.width - x >= chunk_size {
+                self.i = self.i + chunk_size;
                 return Some(RenderableChunk {
                     xmin: x, 
                     xmax: x + chunk_size,
@@ -141,24 +152,34 @@ impl Iterator for RenderContext {
                     ymax: y + chunk_size,
                 });
             } else {
+                // Increment down a row
+                self.i = (self.i - x) + (self.width * chunk_size);
                 // return remainder of x
-                self.i = self.i + chunk_size * (self.width - x);
                 return Some(RenderableChunk {
                     xmin: x ,
-                    xmax: self.width - 1,
+                    xmax: self.width,
                     ymin: y,
                     ymax: y + chunk_size,
                 });
             }
         } else {
-            // Return remainder of x and y
-            self.i = self.i + (self.height - y) * (self.width - x);
-            return Some(RenderableChunk {
-                xmin: x ,
-                xmax: self.width - 1,
-                ymin: y,
-                ymax: self.height - 1,
-            });
+            if self.width - x >= chunk_size {
+                self.i = self.i + chunk_size;
+                return Some(RenderableChunk {
+                    xmin: x, 
+                    xmax: x + chunk_size,
+                    ymin: y,
+                    ymax: self.height,
+                });
+            } else {
+                self.i = self.i + chunk_size * self.width;
+                return Some(RenderableChunk {
+                    xmin: x ,
+                    xmax: self.width,
+                    ymin: y,
+                    ymax: self.height,
+                });
+            }
         }
     }
 }

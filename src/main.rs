@@ -105,6 +105,12 @@ fn render_chunk(c: &rendercontext::RenderableChunk, s: &scene::Scene, rcmtx: Arc
             rc.set_pixel(x, y, pixel, samples as usize);
         }
     }
+
+    /*
+    let mut rc = rcmtx.lock().unwrap();
+    rc.rays_cast += cast;
+    rc.set_pixel(x, y, pixel, samples as usize);
+    */
 }
 
 fn main() {
@@ -132,25 +138,21 @@ fn main() {
             matches.is_present("progressive_render"),
             );
     rc.print_scene_stats(&s);
+    let mut chunks: Vec<rendercontext::RenderableChunk> = rc.iter().collect();
     let rcmtx = Arc::new(Mutex::new(rc));
-    let mut rows: Vec<usize> = (0 .. s.height).collect();
 
     let mut rng = thread_rng();
-    rows.shuffle(&mut rng);
+    chunks.shuffle(&mut rng);
     println!("- Starting Render");
-
-    rows.into_par_iter().for_each(|y| {
+    chunks.into_par_iter().for_each(|c| {
         // Progressive render out:
-        render_row(y, &s, rcmtx.clone());
+        render_chunk(&c, &s, rcmtx.clone());
 
         let rc = rcmtx.lock().unwrap();
-
         if rc.progressive_render {
             paint::to_png(&rc);
         }
-        if y % 10 == 0 {
-            &rc.print_progress(0, y);
-        }
+        &rc.print_progress();
     });
 
     let rc = rcmtx.lock().unwrap();

@@ -2,6 +2,8 @@ extern crate time;
 
 use scene::Scene;
 use color::Color;
+use trace::trace;
+
 // The render context is the data structure
 // that holds state about the current render.
 // 
@@ -16,6 +18,27 @@ pub struct RenderContext {
     pub progressive_render: bool,
     pub pixels_rendered: u64,
 }
+
+pub struct RenderIterator {
+    i: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct RenderableChunk {
+    pub xmin: usize,
+    pub xmax: usize,
+    pub ymin: usize,
+    pub ymax: usize,
+}
+
+pub struct RenderedChunk {
+    pixels: Vec<Color>,
+    samples: Vec<usize>,
+    rays_cast: u64,
+}
+
 
 fn format_f64(v: f64) -> String {
     if v > 1000000. {
@@ -50,6 +73,17 @@ impl RenderContext {
         self.image[i] = c;
         self.samples[i] = samples;
         self.pixels_rendered += 1;
+    }
+
+    pub fn apply_chunk(&mut self, c: &RenderableChunk, p: &RenderedChunk){
+        let mut i = 0;
+        for y in c.ymin .. c.ymax {
+            for x in c.xmin .. c.xmax {
+                self.set_pixel(x, y, p.pixels[i], p.samples[i]);
+                i += 1;
+            }
+        }
+        self.rays_cast += p.rays_cast;
     }
 
     pub fn get_pixel(&self, x:usize, y:usize) -> Color {
@@ -116,17 +150,29 @@ impl RenderContext {
     }
 }
 
-pub struct RenderIterator {
-    i: usize,
-    pub width: usize,
-    pub height: usize,
-}
+impl RenderableChunk {
+    pub fn width(&self) -> usize {
+        return self.xmax - self.xmin;
+    }
 
-pub struct RenderableChunk {
-    pub xmin: usize,
-    pub xmax: usize,
-    pub ymin: usize,
-    pub ymax: usize,
+    pub fn render(&self, s: &Scene) -> RenderedChunk {
+        let size = self.width() * (self.ymax - self.ymin);
+        let mut pixels: Vec<Color> = Vec::with_capacity(size);
+        let mut samples: Vec<usize> = Vec::with_capacity(size);
+        let mut rays_cast = 0;
+        for y in self.ymin .. self.ymax {
+            for x in self.xmin .. self.xmax {
+                let (cast, psamples, pixel) = render_pixel(x, y, s.supersamples as usize, &s);
+                pixels.push(pixel);
+                samples.push(psamples);
+                rays_cast += cast as u64;
+            }
+        }
+
+        return RenderedChunk {
+            pixels, samples, rays_cast
+        }
+    }   
 }
 
 impl Iterator for RenderIterator {
@@ -140,10 +186,10 @@ impl Iterator for RenderIterator {
         // From i (pixel index) find current chunk
         let y = self.i / self.width;
         let x = self.i % self.width;
-        let chunk_size = 16;
+        let chunk_size = 32;
 
-        if self.height - y >= chunk_size {
-            if self.width - x >= chunk_size {
+        if self.height - y > chunk_size {
+            if self.width - x > chunk_size {
                 self.i = self.i + chunk_size;
                 return Some(RenderableChunk {
                     xmin: x, 
@@ -163,7 +209,7 @@ impl Iterator for RenderIterator {
                 });
             }
         } else {
-            if self.width - x >= chunk_size {
+            if self.width - x > chunk_size {
                 self.i = self.i + chunk_size;
                 return Some(RenderableChunk {
                     xmin: x, 
@@ -172,7 +218,7 @@ impl Iterator for RenderIterator {
                     ymax: self.height,
                 });
             } else {
-                self.i = self.i + chunk_size * self.width;
+                self.i = (self.i - x) + chunk_size * self.width;
                 return Some(RenderableChunk {
                     xmin: x ,
                     xmax: self.width,
@@ -182,4 +228,27 @@ impl Iterator for RenderIterator {
             }
         }
     }
+}
+
+fn render_pixel(x: usize, y: usize, max_samples: usize, s: &Scene) -> (u64, usize, Color) {
+    let mut pixel = Color::black();
+    let mut cast = 0;
+    let mut samples = 0;
+
+    // Monte-Carlo method: We sample many times and average.
+    for sx in 0..max_samples {
+        for sy in 0..max_samples {
+            let (rays_cast, c) = trace(
+                    &s.camera.get_ray(
+                        x as f64 / (s.width as f64),
+                        y as f64 / (s.height as f64),
+                        sx as f64 / (max_samples as f64) * 1. / (s.width as f64),
+                        sy as f64 / (max_samples as f64) * 1. / (s.height as f64))
+                    , 0, &s);
+            cast = cast + rays_cast;
+            pixel = pixel + c;
+            samples = samples + 1;
+        }
+    }
+    return (cast, samples, pixel)
 }

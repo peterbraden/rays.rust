@@ -61,58 +61,6 @@ use std::sync::{Arc, Mutex};
 use rand::thread_rng;
 use rand::seq::SliceRandom;
 
-
-
-fn render_row(y: usize, s: &scene::Scene, rcmtx: Arc<Mutex<rendercontext::RenderContext>>){
-    for x in 0..s.width {
-        let (cast, samples, pixel) = render_pixel(x, y, s.supersamples as usize, &s);
-        let mut rc = rcmtx.lock().unwrap();
-        rc.rays_cast += cast;
-        rc.set_pixel(x, y, pixel, samples as usize);
-    }
-}
-
-
-fn render_pixel(x: usize, y: usize, max_samples: usize, s: &scene::Scene) -> (u64, usize, color::Color) {
-    let mut pixel = color::Color::black();
-    let mut cast = 0;
-    let mut samples = 0;
-
-    // Monte-Carlo method: We sample many times and average.
-    for sx in 0..max_samples {
-        for sy in 0..max_samples {
-            let (rays_cast, c) = trace(
-                    &s.camera.get_ray(
-                        x as f64 / (s.width as f64),
-                        y as f64 / (s.height as f64),
-                        sx as f64 / (max_samples as f64) * 1. / (s.width as f64),
-                        sy as f64 / (max_samples as f64) * 1. / (s.height as f64))
-                    , 0, &s);
-            cast = cast + rays_cast;
-            pixel = pixel + c;
-            samples = samples + 1;
-        }
-    }
-    return (cast, samples, pixel)
-}
-
-fn render_chunk(c: &rendercontext::RenderableChunk, s: &scene::Scene, rcmtx: Arc<Mutex<rendercontext::RenderContext>>){
-    for y in c.ymin .. c.ymax {
-        for x in c.xmin .. c.xmax {
-            let (cast, samples, pixel) = render_pixel(x, y, s.supersamples as usize, &s);
-            let mut rc = rcmtx.lock().unwrap();
-            rc.rays_cast += cast as u64;
-            rc.set_pixel(x, y, pixel, samples as usize);
-        }
-    }
-
-    /*
-    let mut rc = rcmtx.lock().unwrap();
-    rc.rays_cast += cast;
-    rc.set_pixel(x, y, pixel, samples as usize);
-    */
-}
-
 fn main() {
     let app = App::new("Rays")
         .version("0.1")
@@ -143,17 +91,22 @@ fn main() {
 
     let mut rng = thread_rng();
     chunks.shuffle(&mut rng);
-    println!("- Starting Render");
-    chunks.into_par_iter().for_each(|c| {
-        // Progressive render out:
-        render_chunk(&c, &s, rcmtx.clone());
 
-        let rc = rcmtx.lock().unwrap();
-        if rc.progressive_render {
-            paint::to_png(&rc);
-        }
-        &rc.print_progress();
-    });
+    println!("- Starting Render");
+    chunks
+        .into_par_iter()
+        //.iter()
+        .for_each(|c| {
+            let p = c.render(&s);
+            let rcmtx = rcmtx.clone();
+            let mut rc = rcmtx.lock().unwrap();
+            rc.apply_chunk(&c, &p);
+            // Progressive render out:
+            if rc.progressive_render {
+                paint::to_png(&rc);
+            }
+            &rc.print_progress();
+        });
 
     let rc = rcmtx.lock().unwrap();
     //wireframe::wireframe(&s, &mut rc);

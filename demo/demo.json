@@ -1,6 +1,6 @@
 {
-  "width": 64,
-  "height": 48,
+  "width": 640,
+  "height": 480,
   "supersamples": 3,
   
   "background": [0.2, 0.2, 0.2],
@@ -56,7 +56,7 @@
     "GLASS": {
       "type": "dielectric",
       "refractive_index": 1.5,
-      "attenuate": [0.8, 0.8, 0.8]
+      "attenuate": [0.9, 0.9, 0.9]
     },
     "GREEN_GLASS": {
       "type": "dielectric",

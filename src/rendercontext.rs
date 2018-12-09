@@ -23,6 +23,8 @@ pub struct RenderIterator {
     i: usize,
     pub width: usize,
     pub height: usize,
+    pub samples: usize,
+    pub chunk_size: usize,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -31,6 +33,7 @@ pub struct RenderableChunk {
     pub xmax: usize,
     pub ymin: usize,
     pub ymax: usize,
+    pub supersamples: usize,
 }
 
 pub struct RenderedChunk {
@@ -70,8 +73,8 @@ impl RenderContext {
         }
 
         let i:usize = (y*self.width + x) as usize;
-        self.image[i] = c;
-        self.samples[i] = samples;
+        self.image[i] = self.image[i] + c;
+        self.samples[i] = self.samples[i] + samples;
         self.pixels_rendered += 1;
     }
 
@@ -130,23 +133,32 @@ impl RenderContext {
         print!("# ========================================\n");
     }
     
-    pub fn print_progress(&self){
+    pub fn print_progress(&self, s: &Scene){
         let elapsed = time::precise_time_s() - self.start_time;
         println!("- [{:.0}s] {} rays cast ({} RPS), {} Rays per pixel, {}%, {} threads",
                  elapsed,
                  format_f64(self.rays_cast as f64),
                  format_f64(self.rays_cast as f64 / elapsed),
                  format_f64(self.rays_cast as f64 / self.pixels_rendered as f64),
-                 format_f64((self.pixels_rendered as f64 / (self.width * self.height) as f64) * 100.),
+                 format_f64((self.pixels_rendered as f64 / (self.width * self.height * s.supersamples as usize) as f64) * 100.),
                  rayon::current_num_threads());
     }
 
-    pub fn iter(&self) -> RenderIterator {
-        RenderIterator {
-            i: 0,
-            width: self.width,
-            height: self.height,
-        }
+    pub fn iter(&self, s: &Scene) -> impl Iterator<Item=RenderableChunk> + '_ {
+        let width = self.width;
+        let height = self.height;
+        let chunk_size = s.chunk_size;
+        let chunk_layers = s.supersamples / s.samples_per_chunk;
+        let samples = s.samples_per_chunk;
+        return (0 .. chunk_layers)
+                    .map(move |_x| 
+                        RenderIterator {
+                            i: 0,
+                            width,
+                            height,
+                            chunk_size,
+                            samples: samples,
+                        }).flatten();
     }
 }
 
@@ -162,7 +174,7 @@ impl RenderableChunk {
         let mut rays_cast = 0;
         for y in self.ymin .. self.ymax {
             for x in self.xmin .. self.xmax {
-                let (cast, psamples, pixel) = render_pixel(x, y, s.supersamples as usize, &s);
+                let (cast, psamples, pixel) = render_pixel(x, y, self.supersamples, &s);
                 pixels.push(pixel);
                 samples.push(psamples);
                 rays_cast += cast as u64;
@@ -186,44 +198,47 @@ impl Iterator for RenderIterator {
         // From i (pixel index) find current chunk
         let y = self.i / self.width;
         let x = self.i % self.width;
-        let chunk_size = 32;
 
-        if self.height - y > chunk_size {
-            if self.width - x > chunk_size {
-                self.i = self.i + chunk_size;
+        if self.height - y > self.chunk_size {
+            if self.width - x > self.chunk_size {
+                self.i = self.i + self.chunk_size;
                 return Some(RenderableChunk {
                     xmin: x, 
-                    xmax: x + chunk_size,
+                    xmax: x + self.chunk_size,
                     ymin: y,
-                    ymax: y + chunk_size,
+                    ymax: y + self.chunk_size,
+                    supersamples: self.samples,
                 });
             } else {
                 // Increment down a row
-                self.i = (self.i - x) + (self.width * chunk_size);
+                self.i = (self.i - x) + (self.width * self.chunk_size);
                 // return remainder of x
                 return Some(RenderableChunk {
                     xmin: x ,
                     xmax: self.width,
                     ymin: y,
-                    ymax: y + chunk_size,
+                    ymax: y + self.chunk_size,
+                    supersamples: self.samples,
                 });
             }
         } else {
-            if self.width - x > chunk_size {
-                self.i = self.i + chunk_size;
+            if self.width - x > self.chunk_size {
+                self.i = self.i + self.chunk_size;
                 return Some(RenderableChunk {
                     xmin: x, 
-                    xmax: x + chunk_size,
+                    xmax: x + self.chunk_size,
                     ymin: y,
                     ymax: self.height,
+                    supersamples: self.samples,
                 });
             } else {
-                self.i = (self.i - x) + chunk_size * self.width;
+                self.i = (self.i - x) + self.chunk_size * self.width;
                 return Some(RenderableChunk {
                     xmin: x ,
                     xmax: self.width,
                     ymin: y,
                     ymax: self.height,
+                    supersamples: self.samples,
                 });
             }
         }

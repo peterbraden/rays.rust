@@ -1,7 +1,10 @@
 {
   "width": 640,
   "height": 480,
-  "supersamples": 3,
+
+  "supersamples": 35,
+  "chunk_size": 64,
+  "samples_per_chunk": 3,
   
   "background": [0.2, 0.2, 0.2],
   "ambient": 0.01,

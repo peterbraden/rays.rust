@@ -39,7 +39,11 @@ pub struct SceneFile {
     pub ambient_diffuse: u64,
     pub diffuse: bool,
     pub shadow_bias: f64,
-    pub supersamples: u32,
+
+    pub supersamples: usize,
+    pub chunk_size: usize,
+    pub samples_per_chunk: usize,
+
     pub camera: Value,
 
     pub materials: Map<String, Value>,
@@ -340,6 +344,8 @@ impl SceneFile {
             ambient_diffuse: s.ambient_diffuse,
             shadow_bias: s.shadow_bias,
             supersamples: s.supersamples,
+            chunk_size: s.chunk_size,
+            samples_per_chunk: s.samples_per_chunk,
             max_bounding,
             black_threshold: Color::min(),
         };

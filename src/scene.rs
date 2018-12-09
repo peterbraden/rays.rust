@@ -22,7 +22,10 @@ pub struct Scene {
     pub ambient_diffuse: u64,
     pub diffuse: bool,
     pub shadow_bias: f64,
-    pub supersamples: u32,
+
+    pub supersamples: usize,
+    pub chunk_size: usize,
+    pub samples_per_chunk: usize,
 
     pub max_bounding: BBox,
     pub black_threshold: Color,

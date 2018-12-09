@@ -86,7 +86,7 @@ fn main() {
             matches.is_present("progressive_render"),
             );
     rc.print_scene_stats(&s);
-    let mut chunks: Vec<rendercontext::RenderableChunk> = rc.iter().collect();
+    let mut chunks: Vec<rendercontext::RenderableChunk> = rc.iter(&s).collect();
     let rcmtx = Arc::new(Mutex::new(rc));
 
     let mut rng = thread_rng();
@@ -105,7 +105,7 @@ fn main() {
             if rc.progressive_render {
                 paint::to_png(&rc);
             }
-            &rc.print_progress();
+            &rc.print_progress(&s);
         });
 
     let rc = rcmtx.lock().unwrap();

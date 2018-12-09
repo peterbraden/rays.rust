@@ -9,6 +9,7 @@ use shapes::bbox::BBox;
 use light::Light;
 use color::Color;
 use skysphere::create_sky_sphere;
+use procedural::box_terrain::create_box_terrain;
 use std::sync::Arc;
 use sceneobject::SceneObject;
 use serde_json::{Value, Map};
@@ -128,6 +129,10 @@ impl SceneFile {
             return Some(Arc::new(SceneFile::parse_skysphere(&o)));
         }
 
+        if t == "box_terrain" {
+            return Some(Arc::new(SceneFile::parse_box_terrain(&o)));
+        }
+
         let m = SceneFile::parse_object_medium(&o, materials, media);
         
         if t == "sphere" {
@@ -145,6 +150,10 @@ impl SceneFile {
         if t == "box" {
             return Some(Arc::new(SceneFile::parse_box(&o, m)));
         }
+
+        if t == "plane" {
+            return Some(Arc::new(SceneFile::parse_plane(&o, m)));
+        }
         
         if t == "checkeredplane" {
             return Some(Arc::new(SceneFile::parse_checkeredplane(&o, m)));
@@ -155,6 +164,11 @@ impl SceneFile {
     pub fn parse_skysphere(_o: &Value) -> SceneObject {
         return create_sky_sphere();
     }
+
+    pub fn parse_box_terrain(_o: &Value) -> SceneObject {
+        return create_box_terrain();
+    }
+
 
 
     pub fn parse_mesh(o: &Value, m: Box<Medium + Sync + Send>) -> SceneObject {
@@ -191,6 +205,15 @@ impl SceneFile {
                 SceneFile::parse_vec3(&o["v0"]),
                 SceneFile::parse_vec3(&o["v1"]),
                 SceneFile::parse_vec3(&o["v2"]))),
+            medium: m
+        };
+    }
+
+    pub fn parse_plane(o: &Value, m: Box<Medium + Sync + Send>) -> SceneObject {
+        return SceneObject {
+            geometry: Box::new(Plane {
+                y: SceneFile::parse_number(&o["y"], 0.),
+            }),
             medium: m
         };
     }

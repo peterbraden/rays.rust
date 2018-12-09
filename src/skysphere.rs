@@ -114,7 +114,7 @@ pub fn create_sky_sphere() -> SceneObject {
 			atmosphere: Sphere::new(Vector3::new(0., -6360e3 ,0.), 6420e3),
 			rayleigh_thickness: 7994.,
 			mie_thickness: 1200.,
-			sun_direction: Vector3::new(1., 1., 1.).normalize(),
+			sun_direction: Vector3::new(1., 1., 2.).normalize(),
 		}) })
     }
 }

@@ -59,10 +59,7 @@ impl Mesh {
     }
 
     fn bounds_of(triangles: &Vec<Arc<Triangle>>) -> BBox {
-        let mut bb = BBox::new(
-            Vector3::new(0., 0., 0.),
-            Vector3::new(0., 0., 0.)
-        );
+        let mut bb = BBox::min();
 
         for t in triangles {
             bb = bb.union(&t.bounds());

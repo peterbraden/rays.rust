@@ -54,6 +54,9 @@ mod rendercontext;
 mod paint;
 //mod wireframe;
 mod geometry;
+mod procedural {
+    pub mod box_terrain;
+}
 
 use trace::trace;
 use rendercontext::RenderContext;
@@ -89,8 +92,8 @@ fn main() {
     let mut chunks: Vec<rendercontext::RenderableChunk> = rc.iter(&s).collect();
     let rcmtx = Arc::new(Mutex::new(rc));
 
-    let mut rng = thread_rng();
-    chunks.shuffle(&mut rng);
+    //let mut rng = thread_rng();
+    //chunks.shuffle(&mut rng);
 
     println!("- Starting Render");
     chunks

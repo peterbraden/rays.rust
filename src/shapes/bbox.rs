@@ -16,6 +16,14 @@ impl BBox {
         BBox {min: min, max: max}
     }
 
+    pub fn min() -> BBox {
+        return BBox::new(
+            Vector3::new(0., 0., 0.),
+            Vector3::new(0., 0., 0.)
+        );
+    }
+
+
     pub fn for_octant(octant: u8, bounds: &BBox) -> BBox {
         // octant is Z, Y, X
         // => 000 is aligned to z,y,x min boundaries
@@ -183,14 +191,10 @@ impl Geometry for BBox {
         let dist = tmin;
 		let point =  r.ro + (r.rd * dist);
 		let center = (self.min + self.max) * 0.5;
-		let p = point - center; 
-		let d = (self.min - self.max) * 0.5;
-		let normal = Vector3::new(
-			p.x / d.x.abs() * std::f64::EPSILON,
-			p.y / d.y.abs() * std::f64::EPSILON,
-			p.z / d.z.abs() * std::f64::EPSILON,
-		).normalize();
-		
+		let p = (point - center).normalize().component_div(&(self.max - self.min)); 
+        let ndir = p.iamax();
+        let mut normal = Vector3::new(0.,0.,0.);
+        normal[ndir] = if p[ndir].is_sign_positive() { 1. } else { -1. };
 
         return Some(RawIntersection {
             point,

@@ -6,8 +6,8 @@ use color::Color;
 use shapes::bbox::BBox;
 
 pub struct Scene {
-    pub width: u32,
-    pub height: u32,
+    pub width: usize,
+    pub height: usize,
     pub camera: Box<camera::Camera + Sync>,
     pub objects: SceneGraph,
     pub lights: Vec<Light>,

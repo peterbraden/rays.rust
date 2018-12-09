@@ -242,8 +242,8 @@ mod tests {
 
     #[test]
     fn get_ray() {
-        let width = 200;
-        let height = 100;
+        let _width = 200;
+        let _height = 100;
 
         /*
         let c = Camera::new(

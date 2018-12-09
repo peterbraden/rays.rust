@@ -8,12 +8,14 @@ use color::Color;
 // It needs to be thread safe.
 pub struct RenderContext {
     image: Vec<Color>,
-    pub width: u32,
-    pub height: u32,
+    samples: Vec<usize>,
+    pub width: usize,
+    pub height: usize,
     pub rays_cast: u64,
     pub start_time: f64,
     pub progressive_render: bool,
     pub pixels_rendered: u64,
+    i: usize,
 }
 
 fn format_f64(v: f64) -> String {
@@ -27,29 +29,34 @@ fn format_f64(v: f64) -> String {
 }
 
 impl RenderContext {
-    pub fn new(width:u32, height:u32, progressive_render: bool) -> RenderContext {
+    pub fn new(width:usize, height:usize, progressive_render: bool) -> RenderContext {
         return RenderContext {
             image: vec![Color::black(); (width*height) as usize],
+            samples: vec![0; (width*height) as usize],
             width: width,
             height: height,
             rays_cast: 0,
             start_time: time::precise_time_s(),
             progressive_render: progressive_render,
             pixels_rendered: 0,
+            i: 0,
         }
     }
 
-    pub fn set_pixel(&mut self, x: u32, y: u32, c:Color) {
+    pub fn set_pixel(&mut self, x: usize, y: usize, c:Color, samples: usize) {
         if x >= self.width || y.saturating_mul(self.width).saturating_add(x) >= self.width * self.height {
             return;
         }
 
-        self.image[ (y*self.width + x) as usize ] = c;
+        let i:usize = (y*self.width + x) as usize;
+        self.image[i] = c;
+        self.samples[i] = samples;
         self.pixels_rendered += 1;
     }
 
-    pub fn get_pixel(&self, x:u32, y:u32) -> Color {
-        return self.image[ (y*self.width + x) as usize ]
+    pub fn get_pixel(&self, x:usize, y:usize) -> Color {
+        let i = (y*self.width + x) as usize; 
+        return self.image[i] / self.samples[i].max(1) as f64;
     }
 /*
     pub fn get_pixel_array(&self) -> Vec<u8> {
@@ -91,7 +98,7 @@ impl RenderContext {
         print!("# ========================================\n");
     }
     
-    pub fn print_progress(&self, _x: u32, _y: u32){
+    pub fn print_progress(&self, _x: usize, _y: usize){
         let elapsed = time::precise_time_s() - self.start_time;
         println!("- [{:.0}s] {} rays cast ({} RPS), {} Rays per pixel, {}%, {} threads",
                  elapsed,
@@ -100,5 +107,58 @@ impl RenderContext {
                  format_f64(self.rays_cast as f64 / self.pixels_rendered as f64),
                  format_f64((self.pixels_rendered as f64 / (self.width * self.height) as f64) * 100.),
                  rayon::current_num_threads());
+    }
+}
+
+
+pub struct RenderableChunk {
+    pub xmin: usize,
+    pub xmax: usize,
+    pub ymin: usize,
+    pub ymax: usize,
+}
+
+impl Iterator for RenderContext {
+    type Item = RenderableChunk;
+
+    fn next(&mut self) -> Option<RenderableChunk> {
+        // From i (pixel index) find current chunk
+        let y = self.i / self.width;
+        let x = self.i % self.width;
+        let chunk_size = 16;
+
+        if x >= self.width || y.saturating_mul(self.width).saturating_add(x) >= self.width * self.height {
+            return None;
+        }
+
+        if self.height - y > chunk_size {
+            if self.width - x > chunk_size {
+                self.i = self.i + chunk_size * chunk_size;
+                return Some(RenderableChunk {
+                    xmin: x, 
+                    xmax: x + chunk_size,
+                    ymin: y,
+                    ymax: y + chunk_size,
+                });
+            } else {
+                // return remainder of x
+                self.i = self.i + chunk_size * (self.width - x);
+                return Some(RenderableChunk {
+                    xmin: x ,
+                    xmax: self.width - 1,
+                    ymin: y,
+                    ymax: y + chunk_size,
+                });
+            }
+        } else {
+            // Return remainder of x and y
+            self.i = self.i + (self.height - y) * (self.width - x);
+            return Some(RenderableChunk {
+                xmin: x ,
+                xmax: self.width - 1,
+                ymin: y,
+                ymax: self.height - 1,
+            });
+        }
     }
 }

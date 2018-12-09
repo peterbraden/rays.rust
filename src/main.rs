@@ -62,28 +62,48 @@ use rand::thread_rng;
 use rand::seq::SliceRandom;
 
 
-fn render_row(y: u32, s: &scene::Scene, rcmtx: Arc<Mutex<rendercontext::RenderContext>>){
-    for x in 0..s.width {
-        let mut pixel = color::Color::black();
-        let mut cast = 0;
 
-        // Monte-Carlo method: We sample many times and average.
-        for sx in 0..s.supersamples {
-            for sy in 0..s.supersamples {
-                let (rays_cast, c) = trace(
-                        &s.camera.get_ray(
-                            x as f64 / (s.width as f64),
-                            y as f64 / (s.height as f64),
-                            sx as f64 / (s.supersamples as f64) * 1. / (s.width as f64),
-                            sy as f64 / (s.supersamples as f64) * 1. / (s.height as f64))
-                        , 0, &s);
-                cast = cast + rays_cast;
-                pixel = pixel + c;
-            }
-        }
+fn render_row(y: usize, s: &scene::Scene, rcmtx: Arc<Mutex<rendercontext::RenderContext>>){
+    for x in 0..s.width {
+        let (cast, samples, pixel) = render_pixel(x, y, s.supersamples as usize, &s);
         let mut rc = rcmtx.lock().unwrap();
         rc.rays_cast += cast;
-        rc.set_pixel(x, y, pixel / ((s.supersamples * s.supersamples) as f64));
+        rc.set_pixel(x, y, pixel, samples as usize);
+    }
+}
+
+
+fn render_pixel(x: usize, y: usize, max_samples: usize, s: &scene::Scene) -> (u64, usize, color::Color) {
+    let mut pixel = color::Color::black();
+    let mut cast = 0;
+    let mut samples = 0;
+
+    // Monte-Carlo method: We sample many times and average.
+    for sx in 0..max_samples {
+        for sy in 0..max_samples {
+            let (rays_cast, c) = trace(
+                    &s.camera.get_ray(
+                        x as f64 / (s.width as f64),
+                        y as f64 / (s.height as f64),
+                        sx as f64 / (max_samples as f64) * 1. / (s.width as f64),
+                        sy as f64 / (max_samples as f64) * 1. / (s.height as f64))
+                    , 0, &s);
+            cast = cast + rays_cast;
+            pixel = pixel + c;
+            samples = samples + 1;
+        }
+    }
+    return (cast, samples, pixel)
+}
+
+fn render_chunk(c: &rendercontext::RenderableChunk, s: &scene::Scene, rcmtx: Arc<Mutex<rendercontext::RenderContext>>){
+    for y in c.ymin .. c.ymax {
+        for x in c.xmin .. c.xmax {
+            let (cast, samples, pixel) = render_pixel(x, y, s.supersamples as usize, &s);
+            let mut rc = rcmtx.lock().unwrap();
+            rc.rays_cast += cast as u64;
+            rc.set_pixel(x, y, pixel, samples as usize);
+        }
     }
 }
 
@@ -113,7 +133,7 @@ fn main() {
             );
     rc.print_scene_stats(&s);
     let rcmtx = Arc::new(Mutex::new(rc));
-    let mut rows: Vec<u32> = (0 .. s.height).collect();
+    let mut rows: Vec<usize> = (0 .. s.height).collect();
 
     let mut rng = thread_rng();
     rows.shuffle(&mut rng);

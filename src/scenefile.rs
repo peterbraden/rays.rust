@@ -28,8 +28,8 @@ use material::diffuse_light::DiffuseLight;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SceneFile {
-    pub width: u32,
-    pub height: u32,
+    pub width: usize,
+    pub height: usize,
 
     background: Value,
 
@@ -327,7 +327,7 @@ impl SceneFile {
         return Scene {
             width: s.width,
             height: s.height,
-            camera: Box::new(SceneFile::parse_camera(s.camera, s.width, s.height)),
+            camera: Box::new(SceneFile::parse_camera(s.camera, s.width as u32, s.height as u32)),
             objects: o,
             ambient: s.ambient,
             max_depth: s.reflection,

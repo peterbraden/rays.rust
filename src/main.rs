@@ -67,7 +67,6 @@ use rand::thread_rng;
 use rand::seq::SliceRandom;
 
 fn main() {
-    let d = ocean::Ocean::new();
     let app = App::new("Rays")
         .version("0.1")
         .arg(Arg::with_name("scene")

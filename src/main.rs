@@ -11,6 +11,7 @@ extern crate serde_json;
 extern crate rayon;
 extern crate tobj;
 extern crate ordered_float;
+extern crate num_complex;
 
 
 use clap::{Arg, App};
@@ -48,6 +49,7 @@ mod scenegraph;
 mod scene;
 mod scenefile;
 mod skysphere;
+mod ocean;
 mod camera;
 mod trace;
 mod rendercontext;
@@ -65,6 +67,7 @@ use rand::thread_rng;
 use rand::seq::SliceRandom;
 
 fn main() {
+    let d = ocean::Ocean::new();
     let app = App::new("Rays")
         .version("0.1")
         .arg(Arg::with_name("scene")
@@ -87,6 +90,7 @@ fn main() {
             s.width,
             s.height,
             matches.is_present("progressive_render"),
+            matches.value_of("scene").unwrap(),
             );
     rc.print_scene_stats(&s);
     let mut chunks: Vec<rendercontext::RenderableChunk> = rc.iter(&s).collect();

@@ -33,17 +33,11 @@ pub struct SceneFile {
     pub height: usize,
 
     background: Value,
-
-    pub reflection: u64,
-    pub ambient: f64,
-    pub specular: bool,
-    pub ambient_diffuse: u64,
-    pub diffuse: bool,
-    pub shadow_bias: f64,
-
-    pub supersamples: usize,
-    pub chunk_size: usize,
-    pub samples_per_chunk: usize,
+    max_depth: Value,
+    shadow_bias: f64,
+    supersamples: usize,
+    chunk_size: usize,
+    samples_per_chunk: usize,
 
     pub camera: Value,
 
@@ -59,6 +53,13 @@ impl SceneFile {
     pub fn parse_number(v: &Value, default: f64) -> f64 {
         match v.as_f64(){
             Some(x) => return x,
+            None => return default
+        }
+    }
+    
+    pub fn parse_int(v: &Value, default: usize) -> usize {
+        match v.as_i64(){
+            Some(x) => return x as usize,
             None => return default
         }
     }
@@ -356,15 +357,9 @@ impl SceneFile {
             height: s.height,
             camera: Box::new(SceneFile::parse_camera(s.camera, s.width as u32, s.height as u32)),
             objects: o,
-            ambient: s.ambient,
-            max_depth: s.reflection,
+            max_depth: SceneFile::parse_int(&s.max_depth, 2),
             lights: SceneFile::parse_lights(&s.lights),
             background: SceneFile::parse_color(&s.background),
-
-            reflection: s.reflection > 0,
-            specular: s.specular,
-            diffuse: s.diffuse,
-            ambient_diffuse: s.ambient_diffuse,
             shadow_bias: s.shadow_bias,
             supersamples: s.supersamples,
             chunk_size: s.chunk_size,

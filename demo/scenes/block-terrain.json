@@ -1,0 +1,39 @@
+{
+  "width": 2160,
+  "height": 960,
+  "supersamples": 75,
+  "chunk_size": 64,
+  "samples_per_chunk": 2,
+  "background": [0.1, 0.1, 0.1],
+  "shadow_bias": 0.0001,
+  "max_depth": 3,
+
+  "materials": {
+    "OCEAN": {
+      "type": "metal",
+      "reflective": [0.6, 0.6, 0.7],
+      "roughness": 0.2
+    }
+  },
+
+  "camera": {
+    "location": [5, 5, -50],
+    "lookat" : [0,4.5,0],
+    "up" : [0,1,0],
+    "angle": 0.5 ,
+    "aperture": 0.1
+  },
+  "media": {},
+  "lights": [],
+  "variables": {},
+
+  "objects": [
+    {
+      "type" : "plane",
+      "y": 0,
+      "material" : "OCEAN"
+    },
+    { "type" : "skysphere" },
+    { "type" : "box_terrain" }
+  ]
+}

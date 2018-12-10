@@ -50,6 +50,16 @@ pub struct ScatteredRays {
 
 }
 
+
+/// Some scattering interactions require multiple samples in order to converge on a result, whereas
+/// some can be integrated exactly from a single ray. This enum gives a hint to the rendererer how
+/// many samples are required.
+pub enum SamplesRequired {
+    Zero, // Can be derived parametrically from the interaction. ~/repos/dotfiles/motd
+    One,  // Can be derived from a single sample, however nested rays may be required.
+    Many, // Can only be derived from a Monte-Carlo integration of many samples.
+}
+
 /*
 pub trait BSDFToRename{
 

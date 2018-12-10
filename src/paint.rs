@@ -9,7 +9,7 @@ pub fn to_png(ctx: &RenderContext) {
         image::Rgb([r,g,b])
     });
 
-    let _ = img.save(&Path::new("demo/out.png"));
+    let _ = img.save(&Path::new(&ctx.output_filename));
 }
 
 

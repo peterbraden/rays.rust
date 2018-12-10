@@ -17,6 +17,7 @@ pub struct RenderContext {
     pub start_time: f64,
     pub progressive_render: bool,
     pub pixels_rendered: u64,
+    pub output_filename: String,
 }
 
 pub struct RenderIterator {
@@ -54,7 +55,8 @@ fn format_f64(v: f64) -> String {
 }
 
 impl RenderContext {
-    pub fn new(width:usize, height:usize, progressive_render: bool) -> RenderContext {
+    pub fn new(width:usize, height:usize, progressive_render: bool, filename: &str) -> RenderContext {
+        let output_filename = String::from(filename).replace(".json", ".png");
         return RenderContext {
             image: vec![Color::black(); (width*height) as usize],
             samples: vec![0; (width*height) as usize],
@@ -64,6 +66,7 @@ impl RenderContext {
             start_time: time::precise_time_s(),
             progressive_render: progressive_render,
             pixels_rendered: 0,
+            output_filename,
         }
     }
 
@@ -121,16 +124,20 @@ impl RenderContext {
     }
 
     pub fn print_scene_stats(&self, s: &Scene){
-    
-        print!("# ============== Scene ===================\n");
-        print!("| Output: {}x{} {} samples\n", s.width, s.height, s.supersamples);
-        print!("| Objects: {}\n", s.objects);
-        print!("| - Primitives: {}\n", s.objects
+        let elapsed = time::precise_time_s() - self.start_time;
+        println!("# ============== Scene ===================");
+        println!("| Output: {}x{} {} samples", s.width, s.height, s.supersamples);
+        println!("|  -> : {}", self.output_filename);
+        println!("|");
+        println!("| ----------- Scene Objects --------------");
+        println!("| Parsed in:  {:.4}s", elapsed);
+        println!("| Objects: \n {}", s.objects);
+        println!("| - Primitives: {}\n", s.objects
                                         .items
                                         .iter()
                                         .map(|x| x.geometry.primitives())
                                         .fold(0, |acc, x| acc + x));
-        print!("# ========================================\n");
+        println!("# ========================================\n");
     }
     
     pub fn print_progress(&self, s: &Scene){

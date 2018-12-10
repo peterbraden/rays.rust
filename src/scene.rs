@@ -14,13 +14,7 @@ pub struct Scene {
 
     pub background: Color,
 
-    pub ambient: f64,
-    pub max_depth: u64,
-
-    pub reflection: bool,
-    pub specular: bool,
-    pub ambient_diffuse: u64,
-    pub diffuse: bool,
+    pub max_depth: usize,
     pub shadow_bias: f64,
 
     pub supersamples: usize,

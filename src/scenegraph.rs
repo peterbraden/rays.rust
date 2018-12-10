@@ -114,7 +114,7 @@ impl SceneGraph {
 
 impl fmt::Display for SceneGraph {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "SceneGraph \n| objects: {} \n| bounded: {} \n| infinite objs. {}", //\n{}\n",
+        write!(f, "| SceneGraph<octree> \n| objects: {} \n| bounded: {} \n| infinite objs. {}", //\n{}\n",
                 &self.items.len(), 
                 &self.scene_bounds,
                 &self.infinite_items.len(), 

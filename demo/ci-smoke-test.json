@@ -1,9 +1,9 @@
 {
-  "width": 108,
-  "height": 48,
+  "width": 80,
+  "height": 40,
 
-  "supersamples": 75,
-  "chunk_size": 64,
+  "supersamples": 7,
+  "chunk_size": 8,
   "samples_per_chunk": 2,
   
   "background": [0.1, 0.1, 0.1],
@@ -127,31 +127,31 @@
 
   "objects": [
     { 
-      "type" : "__mesh",
+      "type" : "mesh",
       "src": "./demo/teapot.obj",
       "scale": [5,5,5],
       "material" : "WHITE_PLASTIC"
     },
 		{
-      "type": "_sphere",
+      "type": "sphere",
       "radius": 2,
       "location": [0, 2, -12],
       "material" : "GOLD"
     },
 		{
-      "type": "_sphere",
+      "type": "sphere",
       "radius": 2,
       "location": [10, 2, -10],
       "material" : "WHITE_PLASTIC"
     },
 		{
-      "type": "_sphere",
+      "type": "sphere",
       "radius": 2,
       "location": [-10, 2, -10],
       "material" : "BRUSHED_METAL_RED"
     },
     { 
-      "type" : "__checkeredplane",
+      "type" : "checkeredplane",
       "y": 0,
       "medium" : "CHECKERED_MARBLE"
     },

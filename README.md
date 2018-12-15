@@ -19,7 +19,7 @@ and explore algorithms.
 
 
 ## Current work
-![demo image](demo/out.png)
+![demo image](demo/demo.png)
 
 ## Install / Run
 ```

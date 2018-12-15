@@ -87,8 +87,8 @@ fn main() {
                 matches.value_of("scene").unwrap()
             );
     let rc = RenderContext::new(
-            s.width,
-            s.height,
+            s.image.width,
+            s.image.height,
             matches.is_present("progressive_render"),
             matches.value_of("scene").unwrap(),
             );

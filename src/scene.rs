@@ -5,22 +5,27 @@ use light::Light;
 use color::Color;
 use shapes::bbox::BBox;
 
-pub struct Scene {
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ImageOpts {
     pub width: usize,
     pub height: usize,
-    pub camera: Box<camera::Camera + Sync>,
-    pub objects: SceneGraph,
-    pub lights: Vec<Light>,
+}
 
+pub struct RenderOpts {
     pub background: Color,
-
     pub max_depth: usize,
     pub shadow_bias: f64,
-
     pub supersamples: usize,
     pub chunk_size: usize,
     pub samples_per_chunk: usize,
+}
 
+pub struct Scene {
+    pub image: ImageOpts,
+    pub render: RenderOpts,
+    pub camera: Box<camera::Camera + Sync>,
+    pub objects: SceneGraph,
+    pub lights: Vec<Light>,
     pub max_bounding: BBox,
     pub black_threshold: Color,
 }

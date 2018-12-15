@@ -126,7 +126,7 @@ impl RenderContext {
     pub fn print_scene_stats(&self, s: &Scene){
         let elapsed = time::precise_time_s() - self.start_time;
         println!("# ============== Scene ===================");
-        println!("| Output: {}x{} {} samples", s.width, s.height, s.supersamples);
+        println!("| Output: {}x{} {} samples", s.image.width, s.image.height, s.render.supersamples);
         println!("|  -> : {}", self.output_filename);
         println!("|");
         println!("| ----------- Scene Objects --------------");
@@ -147,16 +147,16 @@ impl RenderContext {
                  format_f64(self.rays_cast as f64),
                  format_f64(self.rays_cast as f64 / elapsed),
                  format_f64(self.rays_cast as f64 / self.pixels_rendered as f64),
-                 format_f64((self.pixels_rendered as f64 / (self.width * self.height * s.supersamples as usize) as f64) * 100.),
+                 format_f64((self.pixels_rendered as f64 / (self.width * self.height * s.render.supersamples as usize) as f64) * 100.),
                  rayon::current_num_threads());
     }
 
     pub fn iter(&self, s: &Scene) -> impl Iterator<Item=RenderableChunk> + '_ {
         let width = self.width;
         let height = self.height;
-        let chunk_size = s.chunk_size;
-        let chunk_layers = s.supersamples / s.samples_per_chunk;
-        let samples = s.samples_per_chunk;
+        let chunk_size = s.render.chunk_size;
+        let chunk_layers = s.render.supersamples / s.render.samples_per_chunk;
+        let samples = s.render.samples_per_chunk;
         return (0 .. chunk_layers)
                     .map(move |_x| 
                         RenderIterator {
@@ -262,10 +262,10 @@ fn render_pixel(x: usize, y: usize, max_samples: usize, s: &Scene) -> (u64, usiz
         for sy in 0..max_samples {
             let (rays_cast, c) = trace(
                     &s.camera.get_ray(
-                        x as f64 / (s.width as f64),
-                        y as f64 / (s.height as f64),
-                        sx as f64 / (max_samples as f64) * 1. / (s.width as f64),
-                        sy as f64 / (max_samples as f64) * 1. / (s.height as f64))
+                        x as f64 / (s.image.width as f64),
+                        y as f64 / (s.image.height as f64),
+                        sx as f64 / (max_samples as f64) * 1. / (s.image.width as f64),
+                        sy as f64 / (max_samples as f64) * 1. / (s.image.height as f64))
                     , 0, &s);
             cast = cast + rays_cast;
             pixel = pixel + c;

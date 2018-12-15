@@ -14,7 +14,7 @@ use procedural::box_terrain::create_box_terrain;
 use std::sync::Arc;
 use sceneobject::SceneObject;
 use serde_json::{Value, Map};
-use scene::Scene;
+use scene::{Scene, ImageOpts, RenderOpts};
 use serde_json;
 use std::io::prelude::*;
 use std::fs::File;
@@ -30,23 +30,19 @@ use material::diffuse_light::DiffuseLight;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SceneFile {
-    pub width: usize,
-    pub height: usize,
-
-    background: Value,
-    max_depth: Value,
-    shadow_bias: f64,
-    supersamples: usize,
-    chunk_size: usize,
-    samples_per_chunk: usize,
-
-    pub camera: Value,
-
+    pub width: Value,
+    pub height: Value,
+    pub chunk_size: Value,
+    pub supersamples: Value, 
+    pub samples_per_chunk: Value, 
+    pub camera: Value, 
+    pub shadow_bias: Value, 
+    pub background: Value,
+    pub max_depth: Value,
     pub materials: Map<String, Value>,
     pub media: Map<String, Value>,
     pub lights: Vec<Value>,
     pub objects: Vec<Value>,
-
     pub variables: Value,
 }
 
@@ -369,18 +365,22 @@ impl SceneFile {
         let objects = SceneFile::parse_objects(s.objects, &s.materials, &s.media);
         let o = SceneGraph::new(2, objects, max_bounding);
 		
+        let width = SceneFile::parse_int(&s.width, 640);
+        let height =SceneFile::parse_int(&s.height, 480);
+
         return Scene {
-            width: s.width,
-            height: s.height,
-            camera: Box::new(SceneFile::parse_camera(s.camera, s.width as u32, s.height as u32)),
-            objects: o,
-            max_depth: SceneFile::parse_int(&s.max_depth, 2),
+            image: ImageOpts { width, height },
+            render: RenderOpts {
+                max_depth: SceneFile::parse_int(&s.max_depth, 2),
+                background: SceneFile::parse_color(&s.background),
+                shadow_bias: SceneFile::parse_number(&s.shadow_bias, 1e-7f64),
+                supersamples: SceneFile::parse_int(&s.supersamples, 35),  
+                chunk_size: SceneFile::parse_int(&s.chunk_size, 64), 
+                samples_per_chunk: SceneFile::parse_int(&s.samples_per_chunk, 2),
+            },
+            camera: Box::new(SceneFile::parse_camera(s.camera, width as u32, height as u32)),
             lights: SceneFile::parse_lights(&s.lights),
-            background: SceneFile::parse_color(&s.background),
-            shadow_bias: s.shadow_bias,
-            supersamples: s.supersamples,
-            chunk_size: s.chunk_size,
-            samples_per_chunk: s.samples_per_chunk,
+            objects: o,
             max_bounding,
             black_threshold: Color::min(),
         };

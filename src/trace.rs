@@ -11,7 +11,7 @@ pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
 
     match closest {
         Some(x) => return trace_intersection(r, x, depth, s),
-        None => return (1, s.background),
+        None => return (1, s.render.background),
     }
 }
 
@@ -20,7 +20,7 @@ fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene) -> 
     let material = intersection.object.medium.material_at(intersection.point);
     let interaction = material.scatter(r, &intersection, s);
 
-    if depth < s.max_depth as u64 && interaction.attenuate > s.black_threshold {
+    if depth < s.render.max_depth as u64 && interaction.attenuate > s.black_threshold {
         if let Some(ray) = interaction.ray {
             let (c, col) = trace(&ray, depth + 1, s);
             cast += c;
@@ -31,7 +31,7 @@ fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene) -> 
     }
 	
 	// Too many bounce, fallback to color
-    return (cast, (interaction.attenuate * s.background));
+    return (cast, (interaction.attenuate * s.render.background));
 }
 
 fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &Scene) -> (u64, Color) {
@@ -39,7 +39,7 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &S
     // floating point error puts it slightly below the surface which would cause a sign flip
     // leading to shadow acne.
     let mut biased_intersection = intersection.clone();
-    biased_intersection.point = intersection.point + (intersection.normal * scene.shadow_bias);
+    biased_intersection.point = intersection.point + (intersection.normal * scene.render.shadow_bias);
 
     let mut cast = 1;
     let (c, o) = trace_sample(r, &biased_intersection, depth, scene);

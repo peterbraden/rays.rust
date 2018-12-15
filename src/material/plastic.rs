@@ -24,7 +24,7 @@ impl MaterialModel for Plastic {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay{
         let diffuse_probability = rand();
         if diffuse_probability > self.opacity {
-            let mut diffuse_refl = Color::black() + s.background;
+            let mut diffuse_refl = Color::black() + s.render.background;
 
             for light in &s.lights {
                 let light_vec = light.position - intersection.point;

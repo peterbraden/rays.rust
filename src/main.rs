@@ -81,12 +81,14 @@ fn main() {
             .long("progressive-render")
             .help("Update the output file when a chunk is completed. Good for debugging"));
 
+    let start_time = time::precise_time_s();
     println!("- Building models");
     let matches = app.get_matches();
     let s = scenefile::SceneFile::from_file(
                 matches.value_of("scene").unwrap()
             );
     let rc = RenderContext::new(
+            start_time,
             s.image.width,
             s.image.height,
             matches.is_present("progressive_render"),

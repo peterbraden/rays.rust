@@ -55,7 +55,7 @@ fn format_f64(v: f64) -> String {
 }
 
 impl RenderContext {
-    pub fn new(width:usize, height:usize, progressive_render: bool, filename: &str) -> RenderContext {
+    pub fn new(start_time: f64, width:usize, height:usize, progressive_render: bool, filename: &str) -> RenderContext {
         let output_filename = String::from(filename).replace(".json", ".png");
         return RenderContext {
             image: vec![Color::black(); (width*height) as usize],
@@ -63,7 +63,7 @@ impl RenderContext {
             width: width,
             height: height,
             rays_cast: 0,
-            start_time: time::precise_time_s(),
+            start_time,
             progressive_render: progressive_render,
             pixels_rendered: 0,
             output_filename,

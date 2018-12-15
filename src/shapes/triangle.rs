@@ -17,7 +17,7 @@ impl Triangle {
 
     pub fn new(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>) -> Triangle{
         let v0v1 = v1 - v0; 
-        let  v0v2 = v2 - v0; 
+        let v0v2 = v2 - v0; 
 
         //let area2 = normal.length(); // Before norm
         let normal = v0v1.cross(&v0v2).normalize();  

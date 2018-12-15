@@ -24,7 +24,7 @@ fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene) -> 
         if let Some(ray) = interaction.ray {
             let (c, col) = trace(&ray, depth + 1, s);
             cast += c;
-            return (cast, interaction.attenuate * col.clamp(2.));
+            return (cast, interaction.attenuate * col); //.clamp(2.));
         } else {
 			return (cast, interaction.attenuate)
 		}

@@ -1,14 +1,14 @@
 {
-  "width": 108,
-  "height": 48,
+  "width": 608,
+  "height": 408,
 
-  "supersamples": 75,
+  "supersamples": 4,
   "chunk_size": 64,
   "samples_per_chunk": 2,
   
-  "background": [0.1, 0.1, 0.1],
+  "background": [0.5, 0.5, 0.5],
   "shadow_bias": 0.0001,
-  "max_depth": 3,
+  "max_depth": 2,
 
   "materials": {
     "TEST": {
@@ -103,7 +103,7 @@
   },
 
   "camera": {
-    "location": [5, 5, -50],
+    "location": [0, 5, -50],
     "lookat" : [0,4.5,0],
     "up" : [0,1,0],
     "angle": 0.5 ,
@@ -114,12 +114,7 @@
     {
       "location": [0, 30, 0], 
       "color": "white",
-      "intensity": 1
-    },
-    {
-      "location": [-10, 100, 0], 
-      "color": "white",
-      "intensity": 0.1
+      "intensity": 1000
     }
   ],
 
@@ -133,22 +128,10 @@
       "material" : "WHITE_PLASTIC"
     },
 		{
-      "type": "_sphere",
+      "type": "sphere",
       "radius": 2,
-      "location": [0, 2, -12],
+      "location": [0, 2, 0],
       "material" : "GOLD"
-    },
-		{
-      "type": "_sphere",
-      "radius": 2,
-      "location": [10, 2, -10],
-      "material" : "WHITE_PLASTIC"
-    },
-		{
-      "type": "_sphere",
-      "radius": 2,
-      "location": [-10, 2, -10],
-      "material" : "BRUSHED_METAL_RED"
     },
     { 
       "type" : "__checkeredplane",
@@ -156,11 +139,17 @@
       "medium" : "CHECKERED_MARBLE"
     },
     { 
-      "type" : "plane",
+      "type" : "_plane",
       "y": 0,
       "material" : "OCEAN"
     },
-    { "type" : "skysphere" },
-    { "type" : "box_terrain" }
+    { "type" : "ocean" },
+    { "type" : "skysphere" }
+  ],
+
+  "tmp": [
+    { "type" : "ocean" },
+    { "type" : "box_terrain" },
+    { "type" : "skysphere" }
   ]
 }

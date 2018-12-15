@@ -1,10 +1,11 @@
 use camera;
-use na::Vector3;
+use na::{Vector3, Vector2};
 use scenegraph::SceneGraph;
 use shapes::sphere::Sphere;
 use shapes::triangle::Triangle;
 use shapes::plane::Plane;
 use shapes::mesh::Mesh;
+use ocean::create_ocean;
 use shapes::bbox::BBox;
 use light::Light;
 use color::Color;
@@ -81,6 +82,18 @@ impl SceneFile {
         }
     }
 
+    pub fn parse_vec2(v: &Value) -> Vector2<f64> {
+        return Vector2::new(v[0].as_f64().unwrap(),
+                            v[1].as_f64().unwrap());
+    }
+
+    pub fn parse_vec2_def(v: &Value, k: &str, def: Vector2<f64>) -> Vector2<f64> {
+        match &v.get(&k) {
+            Some(x) => SceneFile::parse_vec2(x),
+            None => return def
+        }
+    }
+
     pub fn parse_color(v: &Value) -> Color {
         return Color::new(v[0].as_f64().unwrap(),
                          v[1].as_f64().unwrap(),
@@ -132,6 +145,10 @@ impl SceneFile {
 
         if t == "box_terrain" {
             return Some(Arc::new(SceneFile::parse_box_terrain(&o)));
+        }
+        if t == "ocean" {
+            let d = create_ocean(&o);
+            return Some(Arc::new(d));
         }
 
         let m = SceneFile::parse_object_medium(&o, materials, media);

@@ -12,6 +12,7 @@ extern crate rayon;
 extern crate tobj;
 extern crate ordered_float;
 extern crate num_complex;
+extern crate rustfft;
 
 
 use clap::{Arg, App};
@@ -67,7 +68,6 @@ use rand::thread_rng;
 use rand::seq::SliceRandom;
 
 fn main() {
-    let d = ocean::Ocean::new();
     let app = App::new("Rays")
         .version("0.1")
         .arg(Arg::with_name("scene")
@@ -93,7 +93,7 @@ fn main() {
             matches.value_of("scene").unwrap(),
             );
     rc.print_scene_stats(&s);
-    let mut chunks: Vec<rendercontext::RenderableChunk> = rc.iter(&s).collect();
+    let chunks: Vec<rendercontext::RenderableChunk> = rc.iter(&s).collect();
     let rcmtx = Arc::new(Mutex::new(rc));
 
     //let mut rng = thread_rng();

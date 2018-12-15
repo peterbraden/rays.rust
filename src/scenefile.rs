@@ -25,7 +25,7 @@ use material::dielectric::Dielectric;
 use material::plastic::Plastic;
 use material::lambertian::Lambertian;
 use material::normal::NormalShade;
-use material::legacy::Whitted;
+use material::legacy::{ Whitted, FlatColor };
 use material::diffuse_light::DiffuseLight;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -286,6 +286,13 @@ impl SceneFile {
             };
             return Some(Box::new(d));
         }
+        if t == "flat" {
+            let d: FlatColor = FlatColor {
+                pigment: SceneFile::parse_color(&o["color"]), 
+            };
+            return Some(Box::new(d));
+        }
+
         if t == "whitted" {
             let d: Whitted = Whitted {
                 pigment: SceneFile::parse_color(&o["pigment"]), 

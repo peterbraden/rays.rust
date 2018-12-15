@@ -2,9 +2,9 @@
   "width": 608,
   "height": 408,
 
-  "supersamples": 4,
+  "supersamples": 75,
   "chunk_size": 64,
-  "samples_per_chunk": 2,
+  "samples_per_chunk": 1,
   
   "background": [0.5, 0.5, 0.5],
   "shadow_bias": 0.0001,
@@ -13,6 +13,10 @@
   "materials": {
     "TEST": {
       "type": "normal"
+    },
+    "RED": {
+      "type": "flat",
+      "color": [1,0,0]
     },
     "POLISHED_COPPER": {
       "type": "metal",
@@ -103,11 +107,11 @@
   },
 
   "camera": {
-    "location": [0, 5, -50],
+    "location": [0, 5, -170],
     "lookat" : [0,4.5,0],
     "up" : [0,1,0],
     "angle": 0.5 ,
-    "aperture": 0.1
+    "aperture": 0.001
   },
   
   "lights" : [
@@ -127,12 +131,6 @@
       "scale": [5,5,5],
       "material" : "WHITE_PLASTIC"
     },
-		{
-      "type": "sphere",
-      "radius": 2,
-      "location": [0, 2, 0],
-      "material" : "GOLD"
-    },
     { 
       "type" : "__checkeredplane",
       "y": 0,
@@ -143,7 +141,12 @@
       "y": 0,
       "material" : "OCEAN"
     },
-    { "type" : "ocean" },
+		{
+      "type": "plane",
+      "y": -10,
+      "material" : "RED"
+    },
+    { "type" : "ocean", "resolution": 10, "fourier_size": 256, "amplitude": 1500 },
     { "type" : "skysphere" }
   ],
 

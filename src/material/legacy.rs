@@ -40,5 +40,12 @@ impl MaterialModel for Whitted {
     }
 }
 
+pub struct FlatColor {
+    pub pigment: Color,
+}
 
-
+impl MaterialModel for FlatColor {
+    fn scatter(&self, _r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay{
+        return ScatteredRay{ attenuate: self.pigment, ray: None };
+    }
+}

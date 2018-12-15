@@ -44,6 +44,7 @@ mod shapes {
     pub mod triangle;
     pub mod mesh;
     pub mod infinite;
+    pub mod repeating_mesh;
 }
 mod octree;
 mod scenegraph;

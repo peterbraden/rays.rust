@@ -18,6 +18,7 @@ use rustfft::algorithm::Radix4;
 use rustfft::FFT;
 use shapes::bbox::BBox;
 use shapes::triangle::Triangle;
+use shapes::repeating_mesh::RepeatingMesh;
 use std::vec::Vec;
 use std::sync::Arc;
 use octree::Octree;
@@ -156,9 +157,7 @@ fn get_y(x: usize, z: usize, mesh: &Vec<Complex<f64>>, fourier_grid_size: usize)
 
 
 pub struct Ocean {
-    triangles: Octree<Triangle>,
-    bounds: BBox,
-    triangle_count: usize,
+    mesh: RepeatingMesh,
 }
 
 impl Ocean {
@@ -216,13 +215,13 @@ impl Ocean {
         //print!("OCEAN {:?}", mesh_complex);
 
         // Sign correct ?
-        for x in 0 .. fourier_grid_size {
+        /*for x in 0 .. fourier_grid_size {
             for y in 0 .. fourier_grid_size {
                 if x + y % 2 == 0 {
                     mesh_complex[x* fourier_grid_size + y] = mesh_complex[x* fourier_grid_size + y] * -1.
                 }
             }
-        }
+        }*/
 
 		//DEBUG IMAGE
         let img = image::ImageBuffer::from_fn(fourier_grid_size as u32, fourier_grid_size as u32, |x, y| {
@@ -236,8 +235,8 @@ impl Ocean {
 
 		// Generate Mesh
         let mut triangles = Vec::new();
-        for x in 1 .. fourier_grid_size {
-            for z in 1 .. fourier_grid_size {
+        for x in 1 .. fourier_grid_size + 1 {
+            for z in 1 .. fourier_grid_size + 1 {
 				triangles.push(
 					Arc::new(
                     Triangle::new(
@@ -263,9 +262,11 @@ impl Ocean {
         let tree = Octree::new(8, bounds, &triangles); 
 
         return Ocean {
-            triangles: tree,
-            bounds: bounds,
-            triangle_count: triangles.len()
+            mesh: RepeatingMesh {
+                tile: tree,
+                tile_bounds: bounds,
+                triangle_count: triangles.len(),
+            }
 		};
     }
 
@@ -321,23 +322,25 @@ impl MaterialModel for OceanMaterial {
 
 impl Geometry for Ocean {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        return self.triangles.raw_intersection(r, f64::INFINITY, 0f64);
+        return self.mesh.intersects(r);
     }
 
     fn bounds(&self) -> BBox {
-        return self.bounds;
+        return self.mesh.bounds();
     }
 
     fn primitives(&self) -> u64 {
-        return self.triangle_count as u64;
+        return self.mesh.triangle_count as u64;
     }
 }
 
 pub fn create_ocean(opts: &Value) -> SceneObject {
 	let o = Ocean::new(opts);
+    let _m = Box::new(OceanMaterial {});
+    let m = Box::new(NormalShade {});
 	return SceneObject {
 		geometry: Box::new(o),
-		medium: Box::new(Solid { m:Box::new(OceanMaterial {})}),
+		medium: Box::new(Solid { m: m}),
 	}
 }
 

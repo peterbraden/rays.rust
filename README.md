@@ -2,7 +2,10 @@
 [![Build
 Status](https://travis-ci.org/peterbraden/rays.rust.svg?branch=master)](https://travis-ci.org/peterbraden/rays.rust)
 
-![demo image](demo/out.png)
+## Gallery
+
+![block terrain](demo/scenes/block-terrain.png)
+
 
 A raytracer written in rust.
 
@@ -15,6 +18,9 @@ and explore algorithms.
 - [JS Raytracer](https://github.com/peterbraden/js-raytracer)
 
 
+## Current work
+![demo image](demo/out.png)
+
 ## Install / Run
 ```
 cargo run demo/demo.json
@@ -22,3 +28,4 @@ cargo run demo/demo.json
 
 ## References
 - [An Efficient Parametric Algorithm for Octree Traversal, J. Revelles, C. Urena, M. Lastra](http://wscg.zcu.cz/wscg2000/Papers_2000/X31.pdf)
+- [Simulating Ocean Water, Tessendorf](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.161.9102&rep=rep1&type=pdf)

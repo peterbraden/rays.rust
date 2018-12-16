@@ -1,6 +1,6 @@
 {
-  "width": 608,
-  "height": 408,
+  "width": 1200,
+  "height": 400,
 
   "supersamples": 75,
   "chunk_size": 64,
@@ -107,11 +107,11 @@
   },
 
   "camera": {
-    "location": [0, 5, -170],
+    "location": [0, 5, -20],
     "lookat" : [0,4.5,0],
     "up" : [0,1,0],
-    "angle": 0.5 ,
-    "aperture": 0.001
+    "angle": 0.58 ,
+    "aperture": 0.0001
   },
   
   "lights" : [
@@ -138,15 +138,15 @@
     },
     { 
       "type" : "_plane",
-      "y": 0,
-      "material" : "OCEAN"
-    },
-		{
-      "type": "plane",
       "y": -10,
       "material" : "RED"
     },
-    { "type" : "ocean", "resolution": 10, "fourier_size": 256, "amplitude": 1500 },
+		{
+      "type": "plane",
+      "y": -1000,
+      "material" : "RED"
+    },
+    { "type" : "ocean", "resolution": 16, "fourier_size": 32, "amplitude": 1000, "wind": [40, 3]},
     { "type" : "skysphere" }
   ],
 

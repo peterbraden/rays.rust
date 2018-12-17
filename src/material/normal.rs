@@ -11,7 +11,7 @@ pub struct NormalShade {
 
 impl MaterialModel for NormalShade {
     fn scatter(&self, _r: &Ray, intersection: &Intersection, _s: &Scene) -> ScatteredRay{
-        let c = Color::white() * intersection.normal * 0.5; 
+        let c = Color::white() * intersection.normal.abs(); 
         return ScatteredRay{ attenuate: c, ray: None };
     }
 }

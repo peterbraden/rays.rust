@@ -88,6 +88,7 @@ impl Geometry for RepeatingMesh {
                     None => {
                         // In this situation the ray has gone all the way through the 
                         // bbox without hitting the mesh. Need a tiling mesh here.
+                        println!("ESCAPED RAY");
                     }
                 }
             }

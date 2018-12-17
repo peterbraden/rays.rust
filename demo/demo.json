@@ -1,6 +1,6 @@
 {
   "width": 600,
-  "height": 200,
+  "height": 600,
 
   "supersamples": 75,
   "chunk_size": 64,
@@ -107,8 +107,9 @@
   },
 
   "camera": {
-    "location": [0, 5, -20],
-    "lookat" : [0,4.5,0],
+    "location": [-20, 145, -120],
+
+    "lookat" : [0,44.5,0],
     "up" : [0,1,0],
     "angle": 0.58 ,
     "aperture": 0.0001
@@ -146,7 +147,7 @@
       "y": -1000,
       "material" : "RED"
     },
-    { "type" : "ocean", "resolution": 64, "fourier_size": 128, "amplitude": 400, "wind": [40, 0]},
+    { "type" : "ocean", "resolution": 128, "fourier_size": 128, "amplitude": 40000, "wind": [40, 0]},
     { "type" : "skysphere" }
   ],
 

@@ -13,6 +13,7 @@ use octree::Octree;
 
 pub struct RepeatingMesh {
     pub tile: Octree<Triangle>,
+    pub tile_size: Vector3<f64>,
     pub tile_bounds: BBox,
     pub triangle_count: usize,
 }
@@ -26,8 +27,8 @@ impl RepeatingMesh {
 
         // - Find out what tile is at that point
         // -- (p - min) / size to int
-        let sx = self.tile_bounds.max.x - self.tile_bounds.min.x;
-        let sz = self.tile_bounds.max.z - self.tile_bounds.min.z;
+        let sx = self.tile_size.x;
+        let sz = self.tile_size.z;
         let ix = ((point.x - self.tile_bounds.min.x) / sx).floor();
         let iz = ((point.z - self.tile_bounds.min.z) / sz).floor();
         let bbx = ix * sx;

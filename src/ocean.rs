@@ -101,6 +101,32 @@ fn amplitude(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64) -> C
     ;
 }
 
+
+fn create_amplitude_tile(
+        wind: Vector2<f64>,
+        scale: f64,
+        gravity: f64,
+        lx: f64,
+        lz: f64,
+        fourier_grid_size: usize,
+        )-> Vec<Complex<f64>> {
+    let mut h0 = vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
+
+    for j in 0 .. fourier_grid_size {
+        for i in 0 .. fourier_grid_size {
+            let ind = j * fourier_grid_size + i;
+
+            // n and m are indices into mesh space - (-N/2 .. N/2)
+            let n = (j as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
+            let m = (i as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
+
+            let k = gen_k(n, m , lx as f64, lz as f64);
+            h0[ind] = amplitude(k, wind, scale, gravity);
+        }
+    }
+    return h0
+}
+
 fn dispersion(k: Vector2<f64>, gravity: f64) -> f64 {
     let w = (k.norm() * gravity).sqrt(); // Deep water frequency relationship to magnitude
     let w_0 = 2f64 * std::f64::consts::PI / 200f64; // No idea? Rounding factor. Comes from keithlantz impl.
@@ -158,6 +184,21 @@ fn vertex_at(z: usize, x: usize, vertices: &Vec<Vector3<f64>>, fourier_grid_size
     return vertices[(z % fourier_grid_size) * fourier_grid_size + (x % fourier_grid_size)];
 }
 
+fn make_square_for(x: usize, z: usize, fourier_grid_size: usize, vertices: &Vec<Vector3<f64>>) -> (Triangle, Triangle) {
+    return (
+        Triangle::new(
+            vertex_at(z + 1, x + 1, &vertices, fourier_grid_size),
+            vertex_at(z, x + 1, &vertices, fourier_grid_size),
+            vertex_at(z + 1, x, &vertices, fourier_grid_size),
+        ),
+        Triangle::new(
+            vertex_at(z + 1, x, &vertices, fourier_grid_size),
+            vertex_at(z, x + 1, &vertices, fourier_grid_size),
+            vertex_at(z, x, &vertices, fourier_grid_size),
+        )
+    );
+}
+
 
 pub struct Ocean {
     mesh: RepeatingMesh,
@@ -181,7 +222,6 @@ impl Ocean {
         let fourier_grid_size = SceneFile::parse_number(&o["fourier_size"], 128.) as usize; //2048i32;
 
         // Tile of amplitudes
-        let mut h0 = vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
         let mut ht = vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
         let mut ht_slope_x = vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
         let mut ht_slope_z = vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
@@ -193,18 +233,7 @@ impl Ocean {
 
         println!(" - OCEAN [A={}, g={}, W={}, t={}, N={}, {}]", scale, gravity, wind, time, lx, fourier_grid_size);
 
-        for j in 0 .. fourier_grid_size {
-            for i in 0 .. fourier_grid_size {
-                let ind = j * fourier_grid_size + i;
-
-                // n and m are indices into mesh space - (-N/2 .. N/2)
-                let n = (j as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
-                let m = (i as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
-
-                let k = gen_k(n, m , lx as f64, lz as f64);
-                h0[ind] = amplitude(k, wind, scale, gravity);
-            }
-        }
+        let h0 = create_amplitude_tile(wind, scale, gravity, lx, lz, fourier_grid_size);
         let h0trans = transpose(&h0, fourier_grid_size);
 
         for j in 0 .. fourier_grid_size {
@@ -275,38 +304,39 @@ impl Ocean {
                 let x0 = x as f64 / fourier_grid_size as f64 * lx;
                 let z0 = z as f64 / fourier_grid_size as f64 * lz;
                 vertices[ind] = Vector3::new(
-                    x0 + ht_slope_dx[ind].re * sign,
+                    x0, // + ht_slope_dx[ind].re * sign,
                     ht[ind].re * sign,
-                    z0 + ht_slope_dz[ind].re * sign,
+                    z0, // + ht_slope_dz[ind].re * sign,
                 );
             }
         }
 
 		// Generate Mesh
         let mut triangles = Vec::new();
-        for x in 1 .. fourier_grid_size {
-            for z in 1 .. fourier_grid_size {
-                if x == 1 {} // Add 0 // TODO
-                if z == 1 {}
+        for x in 0 .. fourier_grid_size - 1 {
+            for z in 0 .. fourier_grid_size - 1 {
+                let (t0, t1) = make_square_for(x, z, fourier_grid_size, &vertices);
+                triangles.push(Arc::new(t0));
+                triangles.push(Arc::new(t1));
 
-				triangles.push(
-					Arc::new(
-                    Triangle::new(
-                        vertex_at(z, x, &vertices, fourier_grid_size),
-                        vertex_at(z-1, x, &vertices, fourier_grid_size),
-                        vertex_at(z, x-1, &vertices, fourier_grid_size),
-						)
-					)
-				);
-				triangles.push(
-					Arc::new(
-                    Triangle::new(
-                        vertex_at(z, x-1, &vertices, fourier_grid_size),
-                        vertex_at(z-1, x, &vertices, fourier_grid_size),
-                        vertex_at(z-1, x-1, &vertices, fourier_grid_size),
-						)
-					)
-				);
+                if x == fourier_grid_size - 2 {
+                    // Need to add the tile from end -> end + 1
+                    let (mut t0, mut t1) = make_square_for(x+1, z+1, fourier_grid_size, &vertices);
+                    t0.v0.x = t0.v0.x + lx;
+                    t0.v1.x = t0.v1.x + lx;
+                    t1.v1.x = t1.v1.x + lx;
+                    triangles.push(Arc::new(Triangle::new(t0.v0, t0.v1, t0.v2))); // Recalc normal
+                    triangles.push(Arc::new(Triangle::new(t1.v0, t1.v1, t1.v2))); 
+                }
+                if z == fourier_grid_size - 2 {
+                    // Need to add the tile from end -> end + 1
+                    let (mut t0, mut t1) = make_square_for(x, z+1, fourier_grid_size, &vertices);
+                    t0.v0.z = t0.v0.z + lz;
+                    t0.v2.z = t0.v2.z + lz;
+                    t1.v0.z = t1.v0.z + lz;
+                    triangles.push(Arc::new(Triangle::new(t0.v0, t0.v1, t0.v2))); // Recalc normal
+                    triangles.push(Arc::new(Triangle::new(t1.v0, t1.v1, t1.v2))); 
+                }
 			}
 		}
 
@@ -316,6 +346,7 @@ impl Ocean {
         return Ocean {
             mesh: RepeatingMesh {
                 tile: tree,
+                tile_size: Vector3::new(lx, 0., lz),
                 tile_bounds: bounds,
                 triangle_count: triangles.len(),
             }

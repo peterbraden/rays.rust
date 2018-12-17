@@ -142,11 +142,11 @@
       "material" : "RED"
     },
 		{
-      "type": "plane",
+      "type": "_plane",
       "y": -1000,
       "material" : "RED"
     },
-    { "type" : "ocean", "resolution": 64, "fourier_size": 64, "amplitude": 400, "wind": [40, 0]},
+    { "type" : "ocean", "resolution": 64, "fourier_size": 128, "amplitude": 400, "wind": [40, 0]},
     { "type" : "skysphere" }
   ],
 

@@ -84,13 +84,13 @@ fn randn() -> f64 {
 /// Phillips Spectrum
 fn phillips(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64) -> f64 {
     let ksq = k.x * k.x + k.y * k.y;
-    if ksq == 0. { return 0. };
+    if ksq < std::f64::MIN_POSITIVE { return 0. };
     let wind_dir = wind.normalize();
     let wk = k.normalize().dot(&wind_dir);
-    if wk < 0f64 { return 0. };  // modulate waves moving against the wind
+    //if wk < 0f64 { return 0. };  // modulate waves moving against the wind
     let wind_speed = wind.norm();
     let l = (wind_speed * wind_speed) / gravity;
-    return scale / ksq * ksq * (-1.0 / (ksq * l * l)).exp() * wk * wk ;
+    return scale * (-1.0 / (ksq * l * l)).exp() / (ksq * ksq) * wk * wk ;
 }
 
 fn amplitude(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64) -> Complex<f64> {
@@ -252,7 +252,7 @@ impl Ocean {
 		//DEBUG IMAGE
         let img = image::ImageBuffer::from_fn(fourier_grid_size as u32, fourier_grid_size as u32, |x, y| {
             let yscale = fourier_grid_size as f64 / lx; 
-            let val = (ht_slope_dx[(x * fourier_grid_size as u32 + y) as usize].re * yscale * 0.5 + 0.5).max(0.);
+            let val = (ht[(x * fourier_grid_size as u32 + y) as usize].re * yscale * 0.5 + 0.5).max(0.);
             //let val = (h0[(x * fourier_grid_size as u32 + y) as usize].re * 50. + 0.5).max(0.);
             //println!("- {}", val);
             let (r,g,b) = Color::new(val, val, val).to_u8();
@@ -267,7 +267,7 @@ impl Ocean {
             for z in 0 .. fourier_grid_size {
                 let ind = z * fourier_grid_size + x;
                 let mut sign = 1.;
-                if x + z % 2 == 0 {
+                if (x + z) % 2 == 0 {
                     // Sign correct ? Don't really understand this part
                     sign =  -1.
                 }
@@ -286,6 +286,9 @@ impl Ocean {
         let mut triangles = Vec::new();
         for x in 1 .. fourier_grid_size {
             for z in 1 .. fourier_grid_size {
+                if x == 1 {} // Add 0 // TODO
+                if z == 1 {}
+
 				triangles.push(
 					Arc::new(
                     Triangle::new(

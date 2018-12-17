@@ -1,6 +1,6 @@
 {
-  "width": 1200,
-  "height": 400,
+  "width": 600,
+  "height": 200,
 
   "supersamples": 75,
   "chunk_size": 64,
@@ -146,7 +146,7 @@
       "y": -1000,
       "material" : "RED"
     },
-    { "type" : "ocean", "resolution": 16, "fourier_size": 32, "amplitude": 1000, "wind": [40, 3]},
+    { "type" : "ocean", "resolution": 64, "fourier_size": 64, "amplitude": 400, "wind": [40, 0]},
     { "type" : "skysphere" }
   ],
 

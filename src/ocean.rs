@@ -31,6 +31,9 @@ use scenefile::SceneFile;
 use material::functions::{scatter_dielectric, refract, reflect, schlick};
 use material::model::{MaterialModel, ScatteredRay};
 use geometry;
+use rand::{SeedableRng};
+use rand::rngs::StdRng;
+
 
 
 
@@ -76,9 +79,9 @@ use geometry;
 ///
 ///
 
-fn randn() -> f64 {
+fn randn(rng: &mut StdRng) -> f64 {
     let normal = Normal::new(0.0, 1.0);
-    return normal.sample(&mut rand::thread_rng());
+    return normal.sample(rng);
 }
 
 /// Phillips Spectrum
@@ -93,10 +96,10 @@ fn phillips(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64) -> f6
     return scale * (-1.0 / (ksq * l * l)).exp() / (ksq * ksq) * wk * wk ;
 }
 
-fn amplitude(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64) -> Complex<f64> {
+fn amplitude(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64, rng: &mut StdRng) -> Complex<f64> {
     return
         1f64/(2f64.sqrt()) *
-        Complex::new(randn(), randn()) *
+        Complex::new(randn(rng), randn(rng)) *
         phillips(k, wind, scale, gravity).sqrt()
     ;
 }
@@ -109,6 +112,7 @@ fn create_amplitude_tile(
         lx: f64,
         lz: f64,
         fourier_grid_size: usize,
+        rng: &mut StdRng,
         )-> Vec<Complex<f64>> {
     let mut h0 = vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
 
@@ -121,7 +125,7 @@ fn create_amplitude_tile(
             let m = (i as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
 
             let k = gen_k(n, m , lx as f64, lz as f64);
-            h0[ind] = amplitude(k, wind, scale, gravity);
+            h0[ind] = amplitude(k, wind, scale, gravity, rng);
         }
     }
     return h0
@@ -211,6 +215,8 @@ impl Ocean {
         let wind = SceneFile::parse_vec2_def(&o, "wind", Vector2::new(40., 30.));
         let time = 4f64;
 
+        let mut rng: StdRng = SeedableRng::from_seed([0; 32]);
+
         // Mesh size
         let lx = SceneFile::parse_number(&o["resolution"], 100.);
         let lz = lx;
@@ -233,7 +239,7 @@ impl Ocean {
 
         println!(" - OCEAN [A={}, g={}, W={}, t={}, N={}, {}]", scale, gravity, wind, time, lx, fourier_grid_size);
 
-        let h0 = create_amplitude_tile(wind, scale, gravity, lx, lz, fourier_grid_size);
+        let h0 = create_amplitude_tile(wind, scale, gravity, lx, lz, fourier_grid_size, &mut rng);
         let h0trans = transpose(&h0, fourier_grid_size);
 
         for j in 0 .. fourier_grid_size {
@@ -354,6 +360,7 @@ impl Ocean {
 
         let bounds = Ocean::bounds_of(&triangles);
         let tree = Octree::new(8, bounds, &triangles); 
+        println!("> {} ", bounds);
 
         return Ocean {
             mesh: RepeatingMesh {

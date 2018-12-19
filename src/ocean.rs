@@ -321,7 +321,7 @@ impl Ocean {
 
                 if x == fourier_grid_size - 2 {
                     // Need to add the tile from end -> end + 1
-                    let (mut t0, mut t1) = make_square_for(x+1, z+1, fourier_grid_size, &vertices);
+                    let (mut t0, mut t1) = make_square_for(x+1, z, fourier_grid_size, &vertices);
                     t0.v0.x = t0.v0.x + lx;
                     t0.v1.x = t0.v1.x + lx;
                     t1.v1.x = t1.v1.x + lx;
@@ -331,6 +331,18 @@ impl Ocean {
                 if z == fourier_grid_size - 2 {
                     // Need to add the tile from end -> end + 1
                     let (mut t0, mut t1) = make_square_for(x, z+1, fourier_grid_size, &vertices);
+                    t0.v0.z = t0.v0.z + lz;
+                    t0.v2.z = t0.v2.z + lz;
+                    t1.v0.z = t1.v0.z + lz;
+                    triangles.push(Arc::new(Triangle::new(t0.v0, t0.v1, t0.v2))); // Recalc normal
+                    triangles.push(Arc::new(Triangle::new(t1.v0, t1.v1, t1.v2))); 
+                }
+
+                if z == fourier_grid_size - 2 && x == fourier_grid_size - 2 {
+                    let (mut t0, mut t1) = make_square_for(x+1, z+1, fourier_grid_size, &vertices);
+                    t0.v0.x = t0.v0.x + lx;
+                    t0.v1.x = t0.v1.x + lx;
+                    t1.v1.x = t1.v1.x + lx;
                     t0.v0.z = t0.v0.z + lz;
                     t0.v2.z = t0.v2.z + lz;
                     t1.v0.z = t1.v0.z + lz;

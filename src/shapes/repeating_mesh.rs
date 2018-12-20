@@ -86,7 +86,7 @@ impl RepeatingMesh {
         //println!(">>> {:?} {}", intersects, transformed_ray);
         
         if test_bb.intersects(r).is_some() != self.tile.bounds().intersects(&transformed_ray).is_some(){
-            panic!("WTF");
+            println!("ERR: WTF {} {}", transform, test_bb);
         }
 
         match intersects {
@@ -120,14 +120,28 @@ impl Geometry for RepeatingMesh {
         let denom = norm.dot(&rdn);
         if denom.abs() < 0. { return None }
     
-        if r.ro.y < self.tile_bounds.max.y {
-            panic!("Camera is below plane bounds...")
+        if r.ro.y > self.tile_bounds.max.y {
+            // Looking down on plane
+            // Assuming the ray is above the plane, the max y face will be the first intersected -
+            // preceding rays will intersect the previous tile
+            let (transform, dist) = self.find_tile_transform(r, denom, self.tile_bounds.max.y);
+            if dist < 0. { return None }
+            return self.intersect_tile(&r, &transform);
         }
 
-        // Assuming the ray is above the plane, the max y face will be the first intersected -
-        // preceding rays will intersect the previous tile
-        let (transform, dist) = self.find_tile_transform(r, denom, self.tile_bounds.max.y);
-        if dist < 0. { return None }
+        if r.ro.y < self.tile_bounds.min.y {
+            // Looking up at plane
+            let (transform, dist) = self.find_tile_transform(r, denom, self.tile_bounds.min.y);
+            if dist < 0. { return None }
+            return self.intersect_tile(&r, &transform);
+        }
+
+
+        // We are in the plane bounds. We need to start with the current positioned bounds.
+        // - Find out what tile is at that point
+        let ix = (r.ro.x / self.tile_size.x).floor();
+        let iz = (r.ro.z / self.tile_size.z).floor();
+        let transform = self.transform_for(ix, iz, &Vector3::new(0., 0., 0.));
 
         return self.intersect_tile(&r, &transform);
     }

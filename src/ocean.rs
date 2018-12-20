@@ -388,7 +388,7 @@ struct OceanMaterial {}
 /// Simplified dielectric with no refraction
 impl MaterialModel for OceanMaterial {
     fn scatter(&self, r: &Ray, intersection: &Intersection, _s: &Scene) -> ScatteredRay{
-		let  ni_over_nt = 1. / 1.31;
+		let ni_over_nt = 1. / 1.31;
 		let drn = r.rd.dot(&intersection.normal);
 		let cosine = - drn / r.rd.norm();
 

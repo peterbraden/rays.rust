@@ -104,8 +104,8 @@ fn main() {
 
     println!("- Starting Render");
     chunks
-        //.into_par_iter()
-        .iter()
+        .into_par_iter()
+        //.iter()
         .for_each(|c| {
             let p = c.render(&s);
             let rcmtx = rcmtx.clone();

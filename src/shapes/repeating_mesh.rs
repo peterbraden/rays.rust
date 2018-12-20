@@ -102,9 +102,6 @@ impl RepeatingMesh {
                         return self.intersect_tile(r, &t);
                     },
                     None => {
-                        // In this situation the ray has gone all the way through the 
-                        // bbox without hitting the mesh. Need a tiling mesh here.
-                        println!("ESCAPED RAY");
                         return None;
                     }
                 };

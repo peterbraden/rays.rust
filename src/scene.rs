@@ -35,6 +35,6 @@ pub struct Scene {
     pub objects: SceneGraph,
     pub lights: Vec<Light>,
     pub max_bounding: BBox,
-    pub black_threshold: Color,
+    pub black_threshold: f64,
 }
 

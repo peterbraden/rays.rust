@@ -411,7 +411,7 @@ impl MaterialModel for OceanMaterial {
 				let reflect_prob = schlick(cosine, 1.31);
 				if geometry::rand() >= reflect_prob {
 					return ScatteredRay{
-						attenuate: Color::new(0., 0.2, 0.3),
+						attenuate: Color::new(0., 0.02, 0.03),
 						ray: None, // Don't try and refract
 					};
 				}
@@ -435,8 +435,8 @@ impl MaterialModel for OceanMaterial {
 
 pub fn create_ocean(opts: &Value) -> SceneObject {
 	let o = OceanGeometry::new(opts);
-    let _m = Box::new(OceanMaterial {});
-    let m = Box::new(NormalShade {});
+    let m = Box::new(OceanMaterial {});
+    let _m = Box::new(NormalShade {});
 	return SceneObject {
 		geometry: Box::new(o),
 		medium: Box::new(Solid { m: m}),

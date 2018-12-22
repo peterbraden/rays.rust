@@ -5,12 +5,20 @@ use light::Light;
 use color::Color;
 use shapes::bbox::BBox;
 
+// TODO
+pub enum PathCulling {
+    MAX_DEPTH, // Keep recursing unti "max_depth"
+    BLACK_THRESHOLD, // Stop recursing when weight drops below threshold or "max_depth"
+    RUSSIAN_ROULETTE, // Stop recursing when < "min_depth" and rand() > luminance or "max_depth"
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ImageOpts {
     pub width: usize,
     pub height: usize,
 }
 
+#[derive(Debug)]
 pub struct RenderOpts {
     pub background: Color,
     pub max_depth: usize,

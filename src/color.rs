@@ -107,19 +107,3 @@ impl Div<f64> for Color {
         Color {rgb: self.rgb / _rhs }
     }
 }
-
-impl PartialOrd for Color {
-    fn partial_cmp(&self, other: &Color) -> Option<Ordering> {
-        if self.rgb[0] < other.rgb[0] &&
-           self.rgb[1] < other.rgb[1] &&
-           self.rgb[2] < other.rgb[2]{
-            return Some(Ordering::Less);
-        }
-        if self.rgb[0] > other.rgb[0] &&
-           self.rgb[1] > other.rgb[1] &&
-           self.rgb[2] > other.rgb[2] {
-            return Some(Ordering::Greater);
-        }
-        return None;
-    }
-}

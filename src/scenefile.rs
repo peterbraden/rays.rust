@@ -389,7 +389,7 @@ impl SceneFile {
             lights: SceneFile::parse_lights(&s.lights),
             objects: o,
             max_bounding,
-            black_threshold: Color::min(),
+            black_threshold: SceneFile::parse_number(&s.shadow_bias, 1e-7f64) ,
         };
     }
 

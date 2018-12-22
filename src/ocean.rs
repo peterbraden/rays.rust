@@ -31,67 +31,87 @@ use scenefile::SceneFile;
 use material::functions::{scatter_dielectric, refract, reflect, schlick};
 use material::model::{MaterialModel, ScatteredRay};
 use geometry;
-
-
+use rand::{SeedableRng};
+use rand::rngs::StdRng;
 
 /// Using Tessendorf algorithm, generate a mesh of triangles based on an
 /// inverse-fast-fourier transform of a set of waves based on the Phillips
 /// Spectrum.
 ///
-/// From what I've worked out from reading far too much about this, is that
-/// although the basic idea, of using the IFFT to sum amplitudes over time,
-/// is simple, there are a ton of non-obvious mathematical tricks used to
-/// make this faster.
 ///
-/// The tricky part, not mentioned in _any_ of the papers, is that we use
-/// Euler's idea of rotation being a complex number, in order to store the
-/// vertical and horizontal components of the wave - the real part of the
-/// complex number ends up being the height component.
+/// == K ==
+/// 
+/// " the vector k, called the wavevector, is a horizontal vector that points in the direction of
+/// travel of the wave, and has magnitude k related to the wavelength of the wave."
 ///
-/// Another part that could be more obvious is _what_ the k vector is.
-/// Phillips generates a weight for amplitudes based on a wind vector -
+/// K = 2Pi / wavelength
+///
 /// The k-vector is simply the point on the 2D spectrum that the amplitude
 /// applies to. Because we dot product the wind and k, waves _backwards_
 /// from the wind location are weighted to zero.
 ///
+/// ===
+///
 /// I still haven't worked out what units everything is in, or what the
 /// scale factor 'A' should represent.
 ///
-/// The Tessendorf paper is everything I hate about maths papers. Barely
-/// enough details to implement, scattered symbols with no explanation,
-/// and far more mathematical notation than is necessary. I don't understand
-/// why mathematicians feel the need to code-golf their papers in this
-/// way.
-///
-/// All the code on the internet is based on shaders - there's very little
-/// CPU based code. I think I've managed to get this mostly right, but there
-/// may be some lingering bugs.
-///
-///
 
-fn randn() -> f64 {
+
+/// Normal distribution rand (gaussian)
+fn randn(rng: &mut StdRng) -> f64 {
     let normal = Normal::new(0.0, 1.0);
-    return normal.sample(&mut rand::thread_rng());
+    return normal.sample(rng);
 }
 
 /// Phillips Spectrum
 fn phillips(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64) -> f64 {
     let ksq = k.x * k.x + k.y * k.y;
-    if ksq == 0. { return 0. };
+    if ksq < std::f64::MIN_POSITIVE { return 0. };
     let wind_dir = wind.normalize();
     let wk = k.normalize().dot(&wind_dir);
-    if wk < 0f64 { return 0. };  // modulate waves moving against the wind
     let wind_speed = wind.norm();
     let l = (wind_speed * wind_speed) / gravity;
-    return scale / ksq * ksq * (-1.0 / (ksq * l * l)).exp() * wk * wk ;
+    return scale * (-1.0 / (ksq * l * l)).exp() / (ksq * ksq) * wk * wk ;
 }
 
-fn amplitude(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64) -> Complex<f64> {
+fn amplitude(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64, rng: &mut StdRng) -> Complex<f64> {
     return
         1f64/(2f64.sqrt()) *
-        Complex::new(randn(), randn()) *
+        Complex::new(randn(rng), randn(rng)) *
         phillips(k, wind, scale, gravity).sqrt()
     ;
+}
+
+fn dispersion(k: Vector2<f64>, gravity: f64) -> f64 {
+    let w = (k.norm() * gravity).sqrt(); // Deep water frequency relationship to magnitude
+    let w_0 = 2f64 * std::f64::consts::PI / 200f64; // No idea? Rounding factor. Comes from keithlantz impl.
+    return (w / w_0).floor() * w_0;
+}
+
+fn create_amplitude_tile(
+        wind: Vector2<f64>,
+        scale: f64,
+        gravity: f64,
+        lx: f64,
+        lz: f64,
+        fourier_grid_size: usize,
+        rng: &mut StdRng,
+        )-> Vec<Complex<f64>> {
+    let mut h0 = vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
+
+    for j in 0 .. fourier_grid_size {
+        for i in 0 .. fourier_grid_size {
+            let ind = j * fourier_grid_size + i;
+
+            // n and m are indices into mesh space - (-N/2 .. N/2)
+            let n = (j as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
+            let m = (i as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
+
+            let k = gen_k(n, m , lx as f64, lz as f64);
+            h0[ind] = amplitude(k, wind, scale, gravity, rng);
+        }
+    }
+    return h0
 }
 
 fn gen_k(n: f64, m: f64, lx: f64, lz: f64) -> Vector2<f64> {
@@ -116,6 +136,7 @@ fn transpose(matr: &Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
     return out;
 }
 
+/// 2D Fast Fourier Transform (Used to test IFFT2)
 fn fft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
     let ifft = Radix4::new((size) as usize, false);
     let mut tile_clone = tile.clone();
@@ -127,6 +148,7 @@ fn fft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
     return transpose(&out, size);
 }
 
+/// Inverse 2D Fast Fourier Transform
 fn ifft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
     let ifft = Radix4::new((size) as usize, true);
     let mut tile_clone = tile.clone();
@@ -140,130 +162,208 @@ fn ifft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
     return transpose(&out, size);
 }
 
-fn to_real(x: usize, y: f64, z: usize, size: usize, lx: f64, lz: f64) -> Vector3<f64>{
-	// TODO - scale
-	return Vector3::new(
-		x as f64 / size as f64 * lx - (lx/2.),
-	    y,
-		z as f64 / size as f64 * lz - (lz/2.));
+fn vertex_at(z: usize, x: usize, vertices: &Vec<Vector3<f64>>, fourier_grid_size: usize) -> Vector3<f64>{
+    return vertices[(z % fourier_grid_size) * fourier_grid_size + (x % fourier_grid_size)];
 }
 
-fn get_y(x: usize, z: usize, mesh: &Vec<Complex<f64>>, fourier_grid_size: usize) -> f64 {
-	return mesh[
-			((x % fourier_grid_size) * fourier_grid_size as usize +
-			 (z % fourier_grid_size))
-		   as usize].re;
+fn make_square_for(x: usize, z: usize, fourier_grid_size: usize, vertices: &Vec<Vector3<f64>>) -> (Triangle, Triangle) {
+    return (
+        Triangle::new(
+            vertex_at(z + 1, x + 1, &vertices, fourier_grid_size),
+            vertex_at(z, x + 1, &vertices, fourier_grid_size),
+            vertex_at(z + 1, x, &vertices, fourier_grid_size),
+        ),
+        Triangle::new(
+            vertex_at(z + 1, x, &vertices, fourier_grid_size),
+            vertex_at(z, x + 1, &vertices, fourier_grid_size),
+            vertex_at(z, x, &vertices, fourier_grid_size),
+        )
+    );
+}
+
+pub fn create_tile(
+        fourier_grid_size:usize,
+        lx: f64,
+        lz: f64,
+        gravity: f64,
+        h0: Vec<Complex<f64>>) 
+        -> (
+            Vec<Complex<f64>>,
+            Vec<Complex<f64>>,
+            Vec<Complex<f64>>,
+            Vec<Complex<f64>>,
+            Vec<Complex<f64>>,
+        ) {
+
+    let h0trans = transpose(&h0, fourier_grid_size);
+    // Tile of amplitudes
+    let mut ht =          vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
+    let mut ht_slope_x =  vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
+    let mut ht_slope_z =  vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
+    let mut ht_slope_dx = vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
+    let mut ht_slope_dz = vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
+
+    for j in 0 .. fourier_grid_size {
+        for i in 0 .. fourier_grid_size {
+            let ind = j * fourier_grid_size + i;
+            let n = (j as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
+            let m = (i as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
+            let k = gen_k(n, m , lx as f64, lz as f64);
+            let w = dispersion(k, gravity);
+            let c0 = Complex::new(w.cos(), w.sin());
+            let c1 = Complex::new(w.cos(), -w.sin());
+
+            ht[ind] =
+                h0[ind] * c0 +
+                h0trans[ind].conj() * c1;
+
+            ht_slope_x[ind] = ht[ind] * Complex::new(0., k.x); 
+            ht_slope_z[ind] = ht[ind] * Complex::new(0., k.y); 
+
+            let len = k.norm();
+            if len > 0.00001 {
+                ht_slope_dx[ind] = ht[ind] * Complex::new(0., -k.x / len); 
+                ht_slope_dz[ind] = ht[ind] * Complex::new(0., -k.y / len); 
+            } 
+        }
+    }
+
+    ht = ifft2(ht, fourier_grid_size);
+    ht_slope_x = ifft2(ht_slope_x, fourier_grid_size);
+    ht_slope_z = ifft2(ht_slope_z, fourier_grid_size);
+    ht_slope_dx = ifft2(ht_slope_dx, fourier_grid_size);
+    ht_slope_dz = ifft2(ht_slope_dz, fourier_grid_size);
+
+    return (
+        ht,
+        ht_slope_x,
+        ht_slope_z,
+        ht_slope_dx,
+        ht_slope_dz,
+    );
 }
 
 
-pub struct Ocean {
+/// Generate a mesh from a list of vertices
+fn generate_mesh(vertices: Vec<Vector3<f64>>, size: usize, lx: f64, lz: f64) -> Vec<Arc<Triangle>> {
+    // Generate Mesh
+    let mut triangles = Vec::new();
+    for x in 0 .. size - 1 {
+        for z in 0 .. size - 1 {
+            let (t0, t1) = make_square_for(x, z, size, &vertices);
+            triangles.push(Arc::new(t0));
+            triangles.push(Arc::new(t1));
+
+            if x == size - 2 {
+                // Need to add the tile from end -> end + 1
+                let (mut t0, mut t1) = make_square_for(x+1, z, size, &vertices);
+                t0.v0.x = t0.v0.x + lx;
+                t0.v1.x = t0.v1.x + lx;
+                t1.v1.x = t1.v1.x + lx;
+                triangles.push(Arc::new(Triangle::new(t0.v0, t0.v1, t0.v2))); // Recalc normal
+                triangles.push(Arc::new(Triangle::new(t1.v0, t1.v1, t1.v2)));
+            }
+            if z == size - 2 {
+                // Need to add the tile from end -> end + 1
+                let (mut t0, mut t1) = make_square_for(x, z+1, size, &vertices);
+                t0.v0.z = t0.v0.z + lz;
+                t0.v2.z = t0.v2.z + lz;
+                t1.v0.z = t1.v0.z + lz;
+                triangles.push(Arc::new(Triangle::new(t0.v0, t0.v1, t0.v2))); // Recalc normal
+                triangles.push(Arc::new(Triangle::new(t1.v0, t1.v1, t1.v2)));
+            }
+
+            if z == size - 2 && x == size - 2 {
+                let (mut t0, mut t1) = make_square_for(x+1, z+1, size, &vertices);
+                t0.v0.x = t0.v0.x + lx;
+                t0.v1.x = t0.v1.x + lx;
+                t1.v1.x = t1.v1.x + lx;
+                t0.v0.z = t0.v0.z + lz;
+                t0.v2.z = t0.v2.z + lz;
+                t1.v0.z = t1.v0.z + lz;
+                triangles.push(Arc::new(Triangle::new(t0.v0, t0.v1, t0.v2))); // Recalc normal
+                triangles.push(Arc::new(Triangle::new(t1.v0, t1.v1, t1.v2)));
+            }
+        }
+    }
+    return triangles;
+}
+
+
+pub struct OceanGeometry {
     mesh: RepeatingMesh,
 }
 
-impl Ocean {
-    pub fn new(o: &Value) -> Ocean {
+impl OceanGeometry {
+    pub fn new(o: &Value) -> OceanGeometry {
         let scale = SceneFile::parse_number(&o["amplitude"], 1.1e2f64); // (A)
         let gravity = SceneFile::parse_number(&o["gravity"], 9.81f64);
         let wind = SceneFile::parse_vec2_def(&o, "wind", Vector2::new(40., 30.));
-        let time = 4f64;
+        let time = SceneFile::parse_number(&o["time"],4f64);
 
         // Mesh size
         let lx = SceneFile::parse_number(&o["resolution"], 100.);
         let lz = lx;
 
+        let mut rng: StdRng = SeedableRng::from_seed([0; 32]);
+
         // Size of the amplitude grid - between 16 and 2048, powers of 2
         // Titanic and Waterworld used 2048 - equivalent to 3cm resolution
         // Above 2048 numerics break down
-        let fourier_grid_size = SceneFile::parse_number(&o["fourier_size"], 128.) as usize; //2048i32;
+        // In paper this is 'N'
+        let fourier_grid_size = SceneFile::parse_number(&o["fourier_size"], 128.) as usize;
 
-        // Tile of amplitudes
-        let mut h0 = vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
-        let mut ht = vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
+        let h0 = create_amplitude_tile(wind, scale, gravity, lx, lz, fourier_grid_size, &mut rng);
+        let(
+            ht,
+            _ht_slope_x,
+            _ht_slope_z,
+            _ht_slope_dx,
+            _ht_slope_dz,
+        ) = create_tile(fourier_grid_size, lx, lz, gravity, h0); 
 
-
-        for j in 0 .. fourier_grid_size {
-            for i in 0 .. fourier_grid_size {
-                let ind = j * fourier_grid_size + i;
-                let n = (j as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
-                let m = (i as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
-                let k = gen_k(n, m , lx as f64, lz as f64);
-                h0[ind] = amplitude(k, wind, scale, gravity);
-            }
-        }
-        let h0trans = transpose(&h0, fourier_grid_size);
-
-        for j in 0 .. fourier_grid_size {
-            for i in 0 .. fourier_grid_size {
-                let ind = j * fourier_grid_size + i;
-                let n = (j as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
-                let m = (i as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
-                let k = gen_k(n, m , lx as f64, lz as f64);
-
-                let w = (k.norm() * gravity).sqrt(); // Deep water frequency relationship to magnitude
-                let wt = Complex::new(1., w * time).exp();
-
-                ht[ind] =
-                    h0[ind] * wt +
-                    h0trans[ind].conj() * wt.conj();
-
-                //println!(" - {} {} {} {} {}", m, n, mn_to_i(m, n, fourier_grid_size), k, wt);
-
-            }
-        }
-
-        let mut mesh_complex = ifft2(ht, fourier_grid_size);
-        //print!("OCEAN {:?}", mesh_complex);
-
-        // Sign correct ?
-        /*for x in 0 .. fourier_grid_size {
-            for y in 0 .. fourier_grid_size {
-                if x + y % 2 == 0 {
-                    mesh_complex[x* fourier_grid_size + y] = mesh_complex[x* fourier_grid_size + y] * -1.
-                }
-            }
-        }*/
-
-		//DEBUG IMAGE
+        /*
+		// DEBUG IMAGE
         let img = image::ImageBuffer::from_fn(fourier_grid_size as u32, fourier_grid_size as u32, |x, y| {
-            let val = (mesh_complex[(x * fourier_grid_size as u32 + y) as usize].re * 0.5 + 0.5).max(0.);
-            //let val = (h0[(x * fourier_grid_size as u32 + y) as usize].re * 50. + 0.5).max(0.);
-            //println!("- {}", val);
+            let yscale = fourier_grid_size as f64 / lx; 
+            let val = (ht[(x * fourier_grid_size as u32 + y) as usize].re * yscale * 0.5 + 0.5).max(0.);
             let (r,g,b) = Color::new(val, val, val).to_u8();
             image::Rgb([r,g,b])
         });
         let _ = img.save(&Path::new("debug-ocean.png"));
+        */
+        let mut vertices = vec![Vector3::new(0., 0., 0.); fourier_grid_size * fourier_grid_size];
 
-		// Generate Mesh
-        let mut triangles = Vec::new();
-        for x in 1 .. fourier_grid_size + 1 {
-            for z in 1 .. fourier_grid_size + 1 {
-				triangles.push(
-					Arc::new(
-                    Triangle::new(
-						to_real(x,   get_y(x,   z,   &mesh_complex, fourier_grid_size),   z, fourier_grid_size, lx, lz),
-						to_real(x,   get_y(x, z-1,   &mesh_complex, fourier_grid_size),   z-1, fourier_grid_size, lx, lz),
-						to_real(x-1, get_y(x -1, z,  &mesh_complex, fourier_grid_size),   z, fourier_grid_size, lx, lz),
-						)
-					)
-				);
-				triangles.push(
-					Arc::new(
-                    Triangle::new(
-						to_real(x-1, get_y(x-1, z,   &mesh_complex, fourier_grid_size),   z, fourier_grid_size, lx, lz),
-						to_real(x,   get_y(x,   z-1, &mesh_complex, fourier_grid_size), z-1, fourier_grid_size, lx, lz),
-						to_real(x-1, get_y(x-1, z-1, &mesh_complex, fourier_grid_size), z-1, fourier_grid_size, lx, lz),
-						)
-					)
-				);
-			}
-		}
+        for x in 0 .. fourier_grid_size {
+            for z in 0 .. fourier_grid_size {
+                let ind = z * fourier_grid_size + x;
+                let mut sign = 1.;
+                if (x + z) % 2 == 0 {
+                    // Sign correct ? Don't really understand this part
+                    sign =  -1.
+                }
 
-        let bounds = Ocean::bounds_of(&triangles);
+                let x0 = x as f64 / fourier_grid_size as f64 * lx;
+                let z0 = z as f64 / fourier_grid_size as f64 * lz;
+                vertices[ind] = Vector3::new(
+                    x0, // + ht_slope_dx[ind].re * sign,
+                    ht[ind].re * sign,
+                    z0, // + ht_slope_dz[ind].re * sign,
+                );
+            }
+        }
+
+        let triangles = generate_mesh(vertices, fourier_grid_size, lx, lz);
+        let bounds = OceanGeometry::bounds_of(&triangles);
         let tree = Octree::new(8, bounds, &triangles); 
 
-        return Ocean {
+        println!(" - OCEAN [A={}, g={}, W={}, t={}, N={}, {}]", scale, gravity, wind, time, lx, fourier_grid_size);
+        println!("  bounded:{}, triangles:{} ", bounds, triangles.len());
+
+        return OceanGeometry {
             mesh: RepeatingMesh {
                 tile: tree,
+                tile_size: Vector3::new(lx, 0., lz),
                 tile_bounds: bounds,
                 triangle_count: triangles.len(),
             }
@@ -281,12 +381,26 @@ impl Ocean {
     }
 }
 
+impl Geometry for OceanGeometry {
+    fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+        return self.mesh.intersects(r);
+    }
+
+    fn bounds(&self) -> BBox {
+        return self.mesh.bounds();
+    }
+
+    fn primitives(&self) -> u64 {
+        return self.mesh.triangle_count as u64;
+    }
+}
+
 struct OceanMaterial {}
 
 /// Simplified dielectric with no refraction
 impl MaterialModel for OceanMaterial {
     fn scatter(&self, r: &Ray, intersection: &Intersection, _s: &Scene) -> ScatteredRay{
-		let  ni_over_nt = 1. / 1.31;
+		let ni_over_nt = 1. / 1.31;
 		let drn = r.rd.dot(&intersection.normal);
 		let cosine = - drn / r.rd.norm();
 
@@ -297,7 +411,7 @@ impl MaterialModel for OceanMaterial {
 				let reflect_prob = schlick(cosine, 1.31);
 				if geometry::rand() >= reflect_prob {
 					return ScatteredRay{
-						attenuate: Color::new(0., 0.2, 0.3),
+						attenuate: Color::new(0., 0.02, 0.03),
 						ray: None, // Don't try and refract
 					};
 				}
@@ -319,25 +433,10 @@ impl MaterialModel for OceanMaterial {
 	}
 }
 
-
-impl Geometry for Ocean {
-    fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        return self.mesh.intersects(r);
-    }
-
-    fn bounds(&self) -> BBox {
-        return self.mesh.bounds();
-    }
-
-    fn primitives(&self) -> u64 {
-        return self.mesh.triangle_count as u64;
-    }
-}
-
 pub fn create_ocean(opts: &Value) -> SceneObject {
-	let o = Ocean::new(opts);
-    let _m = Box::new(OceanMaterial {});
-    let m = Box::new(NormalShade {});
+	let o = OceanGeometry::new(opts);
+    let m = Box::new(OceanMaterial {});
+    let _m = Box::new(NormalShade {});
 	return SceneObject {
 		geometry: Box::new(o),
 		medium: Box::new(Solid { m: m}),

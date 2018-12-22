@@ -4,7 +4,7 @@ use ray::Ray;
 use intersection::RawIntersection;
 use shapes::bbox::BBox;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Triangle {
     pub v0: Vector3<f64>,
     pub v1: Vector3<f64>,
@@ -26,6 +26,23 @@ impl Triangle {
             v1: v1,
             v2: v2,
             normal: normal,
+        }
+    }
+    pub fn new_with_normal(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>, normal: Vector3<f64>) -> Triangle{
+        return Triangle {
+            v0: v0,
+            v1: v1,
+            v2: v2,
+            normal: normal,
+        }
+    }
+
+    pub fn translate_vec3(&self, v: Vector3<f64>) -> Triangle {
+        return Triangle {
+            v0: self.v0 - v,
+            v1: self.v1 - v,
+            v2: self.v2 - v,
+            normal: self.normal,
         }
     }
 }

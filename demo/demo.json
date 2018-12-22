@@ -1,14 +1,14 @@
 {
-  "width": 608,
-  "height": 408,
+  "width": 1200,
+  "height": 500,
 
-  "supersamples": 75,
+  "supersamples": 5,
   "chunk_size": 64,
   "samples_per_chunk": 1,
   
-  "background": [0.5, 0.5, 0.5],
+  "background": [0.1, 0.1, 0.1],
   "shadow_bias": 0.0001,
-  "max_depth": 2,
+  "max_depth": 3,
 
   "materials": {
     "TEST": {
@@ -107,18 +107,19 @@
   },
 
   "camera": {
-    "location": [0, 5, -170],
-    "lookat" : [0,4.5,0],
+    "location": [0, 15, -120],
+
+    "lookat" : [0, 14.5,0],
     "up" : [0,1,0],
-    "angle": 0.5 ,
-    "aperture": 0.001
+    "angle": 0.90,
+    "aperture": 0.0001
   },
   
   "lights" : [
     {
-      "location": [0, 30, 0], 
+      "location": [-40, 30, -40], 
       "color": "white",
-      "intensity": 1000
+      "intensity": 10
     }
   ],
 
@@ -126,11 +127,23 @@
 
   "objects": [
     { 
-      "type" : "__mesh",
+      "type" : "_mesh",
       "src": "./demo/teapot.obj",
-      "scale": [5,5,5],
-      "material" : "WHITE_PLASTIC"
+      "scale": [10,10,10],
+      "material" : "RED_WHITTED"
     },
+		{
+      "type": "plane",
+      "y": -1000,
+      "material" : "RED"
+    },
+    { "type" : "ocean", "resolution": 128, "fourier_size": 256, "amplitude": 100000000, "wind": [5, 0]},
+    { "type" : "skysphere" }
+  ],
+
+  "tmp": [
+    { "type" : "ocean" },
+    { "type" : "box_terrain" },
     { 
       "type" : "__checkeredplane",
       "y": 0,
@@ -138,21 +151,9 @@
     },
     { 
       "type" : "_plane",
-      "y": 0,
-      "material" : "OCEAN"
-    },
-		{
-      "type": "plane",
       "y": -10,
       "material" : "RED"
     },
-    { "type" : "ocean", "resolution": 10, "fourier_size": 256, "amplitude": 1500 },
-    { "type" : "skysphere" }
-  ],
-
-  "tmp": [
-    { "type" : "ocean" },
-    { "type" : "box_terrain" },
     { "type" : "skysphere" }
   ]
 }

@@ -165,6 +165,10 @@ impl<T: Geometry> Octree<T> {
         return closest;
     }
 
+    pub fn bounds(&self) -> BBox {
+       return self.root.bounds; 
+    }
+
 /*
     pub fn new_node(&self, txm:f64, x:u8, tym:f64, y:u8, tzm:f64, z:u8) -> u8{
         if txm < tym {

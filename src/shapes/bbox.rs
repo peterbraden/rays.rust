@@ -11,6 +11,43 @@ pub struct BBox {
     pub max: Vector3<f64>,
 }
 
+// As described looking along the Z-axis from 0 to positive.
+#[derive(PartialEq, Eq, Debug)]
+pub enum BoxFace {
+    Top,
+    Left,
+    Right,
+    Front,
+    Back,
+    Bottom,
+}
+
+#[derive(Debug)]
+pub enum Octant {
+    BottomFrontLeft = 0b000,
+    BottomFrontRight = 0b001,
+    TopFrontLeft = 0b010,
+    TopFrontRight = 0b011,
+    BottomBackLeft = 0b100,
+    BottomBackRight = 0b101,
+    TopBackLeft = 0b110,
+    TopBackRight = 0b111,
+} 
+
+#[inline]
+fn find_min_max(min: &Vector3<f64>, max: &Vector3<f64>, ro: &Vector3<f64>, invrd: &Vector3<f64>) -> (f64, f64){
+    let t1 = (min.x - ro.x) * invrd.x;
+    let t2 = (max.x - ro.x) * invrd.x;
+    let t3 = (min.y - ro.y) * invrd.y;
+    let t4 = (max.y - ro.y) * invrd.y;
+    let t5 = (min.z - ro.z) * invrd.z;
+    let t6 = (max.z - ro.z) * invrd.z;
+
+    let tmin = t1.min(t2).max(t3.min(t4)).max(t5.min(t6));
+    let tmax = t1.max(t2).min(t3.max(t4)).min(t5.max(t6));
+    return (tmin, tmax);
+}
+
 impl BBox {
     pub fn new(min: Vector3<f64>, max: Vector3<f64>) -> BBox {
         BBox {min: min, max: max}
@@ -24,6 +61,8 @@ impl BBox {
     }
 
 
+    // Cast the enum here
+    // Rust is kinda annoying in that it lets you go enum -> u8 but not vice versa.
     pub fn for_octant(octant: u8, bounds: &BBox) -> BBox {
         // octant is Z, Y, X
         // => 000 is aligned to z,y,x min boundaries
@@ -54,15 +93,7 @@ impl BBox {
 
     pub fn fast_intersects(&self, ro: &Vector3<f64>, invrd: &Vector3<f64>) -> bool {
         //http://tavianator.com/fast-branchless-raybounding-box-intersections/
-        let t1 = (self.min.x - ro.x) * invrd.x;
-        let t2 = (self.max.x - ro.x) * invrd.x;
-        let t3 = (self.min.y - ro.y) * invrd.y;
-        let t4 = (self.max.y - ro.y) * invrd.y;
-        let t5 = (self.min.z - ro.z) * invrd.z;
-        let t6 = (self.max.z - ro.z) * invrd.z;
-
-        let tmin = t1.min(t2).max(t3.min(t4)).max(t5.min(t6));
-        let tmax = t1.max(t2).min(t3.max(t4)).min(t5.max(t6));
+        let (tmin, tmax) = find_min_max(&self.min, &self.max, &ro, &invrd);
 
         // if tmax < 0, ray (line) is intersecting AABB, but the whole AABB is behind us
         if tmax < 0. {
@@ -73,7 +104,79 @@ impl BBox {
         if tmin > tmax {
             return false;
         }
+
         return true
+    }
+
+
+    pub fn entry_face(&self, r: &Ray) -> Option<BoxFace> {
+        let invrd = vec3_invert(&r.rd);
+        if !self.fast_intersects(&r.ro, &invrd) { return None; }
+        let xmin = if r.rd.x >= 0. { self.min.x } else { self.max.x };
+        let ymin = if r.rd.y >= 0. { self.min.y } else { self.max.y };
+        let zmin = if r.rd.z >= 0. { self.min.z } else { self.max.z };
+
+        let tx0 = (xmin - r.ro.x) * invrd.x;
+        let ty0 = (ymin - r.ro.y) * invrd.y;
+        let tz0 = (zmin - r.ro.z) * invrd.z;
+
+        if tx0 > ty0 {
+            if tx0 > tz0 {
+                // Plane X -> Left or Right depending on ray direction
+                if r.rd.x > 0. { 
+                    return Some(BoxFace::Left);
+                }
+                return Some(BoxFace::Right);
+            }
+        } else {
+            if ty0 > tz0 {
+                // Plane Y -> Top or Bottom
+                if r.rd.y > 0. { 
+                    return Some(BoxFace::Bottom);
+                }
+                return Some(BoxFace::Top);
+            } 
+        } 
+        // Plane Z -> Front or Back
+        if r.rd.z > 0. { 
+            return Some(BoxFace::Front);
+        }
+        return Some(BoxFace::Back);
+    }
+
+    pub fn exit_face(&self, r: &Ray) -> Option<BoxFace> {
+        let invrd = vec3_invert(&r.rd);
+        if !self.fast_intersects(&r.ro, &invrd) { return None; }
+        let xmax = if r.rd.x >= 0. { self.max.x } else { self.min.x };
+        let ymax = if r.rd.y >= 0. { self.max.y } else { self.min.y };
+        let zmax = if r.rd.z >= 0. { self.max.z } else { self.min.z };
+
+        let tx1 = (xmax - r.ro.x) * invrd.x;
+        let ty1 = (ymax - r.ro.y) * invrd.y;
+        let tz1 = (zmax - r.ro.z) * invrd.z;
+
+        if tx1 < ty1 {
+            if tx1 < tz1 {
+                // Plane X -> Left or Right depending on ray direction
+                if r.rd.x > 0. { 
+                    return Some(BoxFace::Right);
+                }
+                return Some(BoxFace::Left);
+            }
+        } else {
+            if ty1 < tz1 {
+                // Plane Y -> Top or Bottom
+                if r.rd.y > 0. { 
+                    return Some(BoxFace::Top);
+                }
+                return Some(BoxFace::Bottom);
+            } 
+        } 
+        // Plane Z -> Front or Back
+        if r.rd.z > 0. { 
+            return Some(BoxFace::Back);
+        }
+        return Some(BoxFace::Front);
     }
 
     pub fn mid(&self) -> Vector3<f64> {
@@ -101,30 +204,25 @@ impl BBox {
 
     pub fn union(self, b: &BBox) -> BBox {
         let mut o = self.clone();
-
         if &self.min.x > &b.min.x { o.min.x = b.min.x; } 
         if &self.max.x < &b.max.x { o.max.x = b.max.x; }
         if &self.min.y > &b.min.y { o.min.y = b.min.y; }
         if &self.max.y < &b.max.y { o.max.y = b.max.y; }
         if &self.min.z > &b.min.z { o.min.z = b.min.z; }
         if &self.max.z < &b.max.z { o.max.z = b.max.z; }
-
         return o;
     }
 
     pub fn union_point(self, p: &Vector3<f64>) -> BBox{
         let mut o = self.clone();
-
         if &self.min.x > &p.x { o.min.x = p.x; } 
         if &self.max.x < &p.x { o.max.x = p.x; }
         if &self.min.y > &p.y { o.min.y = p.y; }
         if &self.max.y < &p.y { o.max.y = p.y; }
         if &self.min.z > &p.z { o.min.z = p.z; }
         if &self.max.z < &p.z { o.max.z = p.z; }
-
         return o;
     }
-
 
     pub fn contains(self, b: &BBox) -> bool {
         if self.min.x > b.min.x  { return false; }
@@ -142,6 +240,7 @@ impl BBox {
       if pt.z < self.min.z || pt.z > self.max.z { return false; }
       return true;
     }
+
 }
 
 
@@ -157,37 +256,18 @@ impl fmt::Display for BBox {
     }
 }
 
-fn vec3_invert(rd: Vector3<f64>) -> Vector3<f64> {
+fn vec3_invert(rd: &Vector3<f64>) -> Vector3<f64> {
   return Vector3::new(1.0/rd.x, 1.0/rd.y, 1.0/rd.z); 
 }
 
 
 impl Geometry for BBox {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        let invrd = vec3_invert(r.rd);
+        let invrd = vec3_invert(&r.rd);
         if !self.fast_intersects(&r.ro, &invrd) { 
             return None
         }
-
-        let t1 = (self.min.x - r.ro.x) * invrd.x;
-        let t2 = (self.max.x - r.ro.x) * invrd.x;
-        let t3 = (self.min.y - r.ro.y) * invrd.y;
-        let t4 = (self.max.y - r.ro.y) * invrd.y;
-        let t5 = (self.min.z - r.ro.z) * invrd.z;
-        let t6 = (self.max.z - r.ro.z) * invrd.z;
-
-        let tmin = t1.min(t2).max(t3.min(t4)).max(t5.min(t6));
-        let tmax = t1.max(t2).min(t3.max(t4)).min(t5.max(t6));
-
-        // if tmax < 0, ray (line) is intersecting AABB, but the whole AABB is behind us
-        if tmax < 0. {
-            return None;
-        }
-
-        // if tmin > tmax, ray doesn't intersect AABB
-        if tmin > tmax {
-            return None;
-        }
+        let (tmin, tmax) = find_min_max(&self.min, &self.max, &r.ro, &invrd);
         let dist = tmin;
 		let point =  r.ro + (r.rd * dist);
 		let center = (self.min + self.max) * 0.5;
@@ -206,4 +286,88 @@ impl Geometry for BBox {
     fn bounds(&self) -> BBox {
         return self.clone()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use na::{Vector3};
+    use super::{BBox, BoxFace, Ray};
+
+	#[test]
+	fn test_entry_face1() {
+        let b = BBox::new(
+            Vector3::new(1., 1., 1.),
+            Vector3::new(2., 2., 2.),
+        );
+
+        let r = Ray {
+            ro:  Vector3::new(0., 0., 0.),
+            rd:  Vector3::new(1.4, 1., 1.1),
+        };
+        
+		assert!((&b.entry_face(&r).unwrap() == &BoxFace::Bottom));
+		assert!((&b.exit_face(&r).unwrap() == &BoxFace::Right));
+	}
+
+	#[test]
+	fn test_entry_face2() {
+        let b = BBox::new(
+            Vector3::new(1., 1., 1.),
+            Vector3::new(2., 2., 2.),
+        );
+
+        let r = Ray {
+            ro:  Vector3::new(1.5, 0., 1.5),
+            rd:  Vector3::new(0., 1., 0.),
+        };
+        
+		assert!((&b.entry_face(&r).unwrap() == &BoxFace::Bottom));
+		assert!((&b.exit_face(&r).unwrap() == &BoxFace::Top));
+	}
+
+	#[test]
+	fn test_entry_face3() {
+        let b = BBox::new(
+            Vector3::new(1., 1., 1.),
+            Vector3::new(2., 2., 2.),
+        );
+
+        let r = Ray {
+            ro:  Vector3::new(1.5, 3.5, 1.5),
+            rd:  Vector3::new(0., -1., 0.),
+        };
+        
+		assert!((&b.entry_face(&r).unwrap() == &BoxFace::Top));
+		assert!((&b.exit_face(&r).unwrap() == &BoxFace::Bottom));
+	}
+
+	#[test]
+	fn test_entry_face4() {
+        let b = BBox::new(
+            Vector3::new(1., 1., 1.),
+            Vector3::new(2., 2., 2.),
+        );
+
+        let r = Ray {
+            ro:  Vector3::new(0., 3.5, 1.5),
+            rd:  (Vector3::new(3.5, 0., 1.5) - Vector3::new(0., 3.5, 1.5)).normalize(),
+        };
+        
+		assert!((&b.entry_face(&r).unwrap() == &BoxFace::Top));
+		assert!((&b.exit_face(&r).unwrap() == &BoxFace::Right));
+
+        let r2 = Ray {
+            ro:  Vector3::new(1.5, 3.5, 0.),
+            rd:  (Vector3::new(1.5, 0., 3.5) - Vector3::new(1.5,  3.5, 0.)).normalize(),
+        };
+		assert!((&b.entry_face(&r2).unwrap() == &BoxFace::Top));
+		assert!((&b.exit_face(&r2).unwrap() == &BoxFace::Back));
+
+        let r3 = Ray {
+            ro:  Vector3::new(1.5, 3.5, 2.5),
+            rd:  (Vector3::new(1.5, 0., 0.) - Vector3::new(1.5,  3.5, 2.5)).normalize(),
+        };
+		assert!((&b.entry_face(&r3).unwrap() == &BoxFace::Top));
+		assert!((&b.exit_face(&r3).unwrap() == &BoxFace::Front));
+	}
 }

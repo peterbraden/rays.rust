@@ -13,10 +13,32 @@ Status](https://travis-ci.org/peterbraden/rays.rust.svg?branch=master)](https://
 
 A raytracer written in rust.
 
-Supports Monte-Carlo global illumination, obj files.
+Supports:
 
-This is the latest in a series of raytracers I've implemented to learn languages
-and explore algorithms.
+  - Tracing (Integrator)
+    - Whitted tracing
+    - Path tracing with basic Monte-Carlo global illumination
+      - Lambertian 
+      - Specular
+      - Dielelectric
+
+  - Objects
+    - Sphere
+    - Plane
+    - Mesh
+    - OBJ file to mesh import
+    - Infinite Mesh
+
+  - Skysphere with Rayleigh and Mie Scattering
+  - Procedural Objects
+    - Ocean (Tessendorf's algorithm with Phillips spectrum)
+    - Random Cubes
+  - Multithreaded
+  - Progressive rendering
+
+
+This is the latest in a series of raytracers I've implemented to make art,
+learn languages, and explore algorithms.
 
 - [Rays (c++)](https://github.com/peterbraden/rays)
 - [JS Raytracer](https://github.com/peterbraden/js-raytracer)

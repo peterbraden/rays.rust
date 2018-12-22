@@ -2,9 +2,9 @@
   "width": 1200,
   "height": 500,
 
-  "supersamples": 99999,
+  "supersamples": 5,
   "chunk_size": 64,
-  "samples_per_chunk": 3,
+  "samples_per_chunk": 1,
   
   "background": [0.1, 0.1, 0.1],
   "shadow_bias": 0.0001,
@@ -137,7 +137,7 @@
       "y": -1000,
       "material" : "RED"
     },
-    { "type" : "ocean", "resolution": 128, "fourier_size": 1024, "amplitude": 100000000, "wind": [5, 0]},
+    { "type" : "ocean", "resolution": 128, "fourier_size": 256, "amplitude": 100000000, "wind": [5, 0]},
     { "type" : "skysphere" }
   ],
 

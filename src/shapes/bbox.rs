@@ -267,7 +267,7 @@ impl Geometry for BBox {
         if !self.fast_intersects(&r.ro, &invrd) { 
             return None
         }
-        let (tmin, tmax) = find_min_max(&self.min, &self.max, &r.ro, &invrd);
+        let (tmin, _tmax) = find_min_max(&self.min, &self.max, &r.ro, &invrd);
         let dist = tmin;
 		let point =  r.ro + (r.rd * dist);
 		let center = (self.min + self.max) * 0.5;

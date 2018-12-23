@@ -7,9 +7,9 @@ use shapes::bbox::BBox;
 
 // TODO
 pub enum PathCulling {
-    MAX_DEPTH, // Keep recursing unti "max_depth"
-    BLACK_THRESHOLD, // Stop recursing when weight drops below threshold or "max_depth"
-    RUSSIAN_ROULETTE, // Stop recursing when < "min_depth" and rand() > luminance or "max_depth"
+    MaxDepth, // Keep recursing unti "max_depth"
+    BlackThreshold, // Stop recursing when weight drops below threshold or "max_depth"
+    RussianRoulette, // Stop recursing when < "min_depth" and rand() > luminance or "max_depth"
 }
 
 #[derive(Serialize, Deserialize, Debug)]

@@ -318,8 +318,8 @@ impl OceanGeometry {
             ht,
             _ht_slope_x,
             _ht_slope_z,
-            _ht_slope_dx,
-            _ht_slope_dz,
+            ht_slope_dx,
+            ht_slope_dz,
         ) = create_tile(fourier_grid_size, lx, lz, gravity, h0); 
 
         /*
@@ -345,11 +345,24 @@ impl OceanGeometry {
 
                 let x0 = x as f64 / fourier_grid_size as f64 * lx;
                 let z0 = z as f64 / fourier_grid_size as f64 * lz;
-                vertices[ind] = Vector3::new(
-                    x0, // + ht_slope_dx[ind].re * sign,
-                    ht[ind].re * sign,
-                    z0, // + ht_slope_dz[ind].re * sign,
+                if  x > 0 &&
+                    x < fourier_grid_size - 1 &&
+                    z > 0 &&
+                    z < fourier_grid_size - 1
+                    {
+                    vertices[ind] = Vector3::new(
+                        x0 + ht_slope_dx[ind].re * sign,
+                        ht[ind].re * sign,
+                        z0 + ht_slope_dz[ind].re * sign,
+                    );
+                } else { // Dont shift edge vertices
+                    vertices[ind] = Vector3::new(
+                        x0,
+                        ht[ind].re * sign,
+                        z0,
                 );
+                
+                }
             }
         }
 
@@ -435,8 +448,8 @@ impl MaterialModel for OceanMaterial {
 
 pub fn create_ocean(opts: &Value) -> SceneObject {
 	let o = OceanGeometry::new(opts);
-    let m = Box::new(OceanMaterial {});
-    let _m = Box::new(NormalShade {});
+    let _m = Box::new(OceanMaterial {});
+    let m = Box::new(NormalShade {});
 	return SceneObject {
 		geometry: Box::new(o),
 		medium: Box::new(Solid { m: m}),

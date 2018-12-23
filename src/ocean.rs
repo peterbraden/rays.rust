@@ -296,7 +296,6 @@ pub struct OceanGeometry {
 
 impl OceanGeometry {
     pub fn new(o: &Value) -> OceanGeometry {
-        let scale = SceneFile::parse_number(&o["amplitude"], 1.1e2f64); // (A)
         let gravity = SceneFile::parse_number(&o["gravity"], 9.81f64);
         let wind = SceneFile::parse_vec2_def(&o, "wind", Vector2::new(40., 30.));
         let time = SceneFile::parse_number(&o["time"],4f64);
@@ -312,6 +311,8 @@ impl OceanGeometry {
         // Above 2048 numerics break down
         // In paper this is 'N'
         let fourier_grid_size = SceneFile::parse_number(&o["fourier_size"], 128.) as usize;
+
+        let scale = SceneFile::parse_number(&o["amplitude"], 1.) * (fourier_grid_size * fourier_grid_size) as f64; // (A)
 
         let h0 = create_amplitude_tile(wind, scale, gravity, lx, lz, fourier_grid_size, &mut rng);
         let(

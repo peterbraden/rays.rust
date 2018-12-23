@@ -82,3 +82,13 @@ impl Geometry for Mesh {
         return self.triangle_count as u64;
     }
 }
+
+type TriangleInd = (usize, usize, usize);
+
+pub struct Mesh2 {
+    vertices: Vec<Vector3<f64>>,
+    vertice_normals: Vec<Vector3<f64>>,
+    edges: Vec<TriangleInd>, // Indices into vertices
+    bounds: BBox,
+    triangle_count: usize,
+}

@@ -137,7 +137,7 @@
       "y": -1000,
       "material" : "RED"
     },
-    { "type" : "ocean", "resolution": 10, "fourier_size": 32, "amplitude": 10000, "wind": [2, 0]},
+    { "type" : "ocean", "resolution": 5, "fourier_size": 32, "amplitude": 30, "wind": [2, 0]},
     { "type" : "skysphere" }
   ],
 

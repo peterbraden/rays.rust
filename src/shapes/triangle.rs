@@ -9,7 +9,6 @@ pub struct Triangle {
     pub v0: Vector3<f64>,
     pub v1: Vector3<f64>,
     pub v2: Vector3<f64>,
-
     pub normal: Vector3<f64>,
 }
 

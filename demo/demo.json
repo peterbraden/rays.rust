@@ -107,11 +107,11 @@
   },
 
   "camera": {
-    "location": [0, 10, -30],
+    "location": [0, 5, -30],
 
     "lookat" : [0, 4, 0],
     "up" : [0,1,0],
-    "angle": 0.30,
+    "angle": 0.90,
     "aperture": 0.01
   },
   
@@ -138,7 +138,7 @@
       "material" : "RED"
     },
     { "type" : "ocean", "resolution": 5, "fourier_size": 32, "amplitude": 30, "wind": [2, 0]},
-    { "type" : "skysphere" }
+    { "type" : "skysphere", "sun_direction": [0,1,0], "brightness": 100}
   ],
 
   "tmp": [

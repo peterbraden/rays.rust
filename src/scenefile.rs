@@ -175,8 +175,8 @@ impl SceneFile {
         return None
     }
 
-    pub fn parse_skysphere(_o: &Value) -> SceneObject {
-        return create_sky_sphere();
+    pub fn parse_skysphere(o: &Value) -> SceneObject {
+        return create_sky_sphere(o);
     }
 
     pub fn parse_box_terrain(_o: &Value) -> SceneObject {

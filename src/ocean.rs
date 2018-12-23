@@ -449,8 +449,8 @@ impl MaterialModel for OceanMaterial {
 
 pub fn create_ocean(opts: &Value) -> SceneObject {
 	let o = OceanGeometry::new(opts);
-    let _m = Box::new(OceanMaterial {});
-    let m = Box::new(NormalShade {});
+    let m = Box::new(OceanMaterial {});
+    let _m = Box::new(NormalShade {});
 	return SceneObject {
 		geometry: Box::new(o),
 		medium: Box::new(Solid { m: m}),

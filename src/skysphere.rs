@@ -11,6 +11,8 @@ use geometry::{random_point_on_unit_sphere, rand};
 use material::model::{MaterialModel, ScatteredRay};
 use material::functions::{scatter_lambertian, scatter_dielectric, diffuse};
 use shapes::geometry::Geometry;
+use serde_json::{Value, Map};
+use scenefile::SceneFile;
 
 pub struct SkyMaterial {
 	atmosphere: Sphere,
@@ -18,6 +20,7 @@ pub struct SkyMaterial {
 	sun_direction: Vector3<f64>, // Normalised
 	rayleigh_thickness: f64,
 	mie_thickness: f64,
+    brightness: f64,
 }
 
 impl MaterialModel for SkyMaterial {
@@ -88,9 +91,7 @@ impl MaterialModel for SkyMaterial {
 			mie_sum = mie_sum + attenuation * mie; 
 			//} 
 		} 
-		let attenuate_vec: Vector3<f64> = (rayleigh_sum.component_mul(&beta_r) * phase_r + mie_sum .component_mul(&beta_m) * phase_m) * 20.; 
-		//let attenuate = Color { rgb: (rayleigh_sum.component_mul(&beta_r) * phase_r + mie_sum .component_mul(&beta_m) * phase_m) * 20.}; 
-		//let attenuate = Color { rgb: (rayleigh_sum.component_mul(&beta_r) * phase_r + mie_sum .component_mul(&beta_m) * phase_m) * 20.}; 
+		let attenuate_vec: Vector3<f64> = (rayleigh_sum.component_mul(&beta_r) * phase_r + mie_sum .component_mul(&beta_m) * phase_m) * self.brightness; 
 		
 		// Apply tone mapping function
 		let attenuate = Color::new(
@@ -98,23 +99,26 @@ impl MaterialModel for SkyMaterial {
             if attenuate_vec.y < 1.413f64 { (attenuate_vec.y * 0.38317f64).powf(1.0f64 / 2.2f64) } else { 1.0f64 - (-attenuate_vec.y).exp() },
             if attenuate_vec.z < 1.413f64 { (attenuate_vec.z * 0.38317f64).powf(1.0f64 / 2.2f64) } else { 1.0f64 - (-attenuate_vec.z).exp() },
 		);
-	 
-		// We use a magic number here for the intensity of the sun (20). We will make it more
-		// scientific in a future revision of this lesson/code
         return ScatteredRay { attenuate, ray: None }
     }
 }
 
 
-pub fn create_sky_sphere() -> SceneObject {
+pub fn create_sky_sphere(o: &Value) -> SceneObject {
+    let earth_location = SceneFile::parse_vec3_def(&o, "earth_location", Vector3::new(0., -6360e3, 0.));
     return SceneObject {
         geometry: Box::new(Infinite {}),
         medium: Box::new(Solid { m: Box::new(SkyMaterial {
-			earth: Sphere::new(Vector3::new(0., -6360e3, 0.), 6360e3),
-			atmosphere: Sphere::new(Vector3::new(0., -6360e3 ,0.), 6420e3),
-			rayleigh_thickness: 7994.,
-			mie_thickness: 1200.,
-			sun_direction: Vector3::new(0., 0.5, 2.).normalize(),
+			earth: Sphere::new(
+                       earth_location,
+                       SceneFile::parse_number(&o["earth_radius"], 6360e3),
+                       ),
+			atmosphere: Sphere::new(earth_location,
+                            SceneFile::parse_number(&o["atmosphere_radius"], 6420e3)),
+			rayleigh_thickness: SceneFile::parse_number(&o["rayleigh_thickness"], 7994.),
+			mie_thickness: SceneFile::parse_number(&o["mie_thickness"], 1200.),
+			sun_direction: SceneFile::parse_vec3_def(&o, "sun_direction", Vector3::new(0., 0.5, 2.)).normalize(),
+            brightness: SceneFile::parse_number(&o["brightness"], 20.)
 		}) })
     }
 }

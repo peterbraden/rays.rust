@@ -111,7 +111,7 @@
   },
 
   "camera": {
-    "location": [1, 1, -30],
+    "location": [1, 10, -30],
 
     "lookat" : [0, 0, 0],
     "up" : [0,1,0],
@@ -136,7 +136,7 @@
 
   "objects": [
     { "type" : "skysphere", "sun_direction": [0,1,-1], "brightness": 100},
-    { "type" : "ocean", "resolution": 100, "fourier_size": 512, "amplitude": 50, "wind": [20, 0], "debug": false}
+    { "type" : "ocean", "resolution": 100, "fourier_size": 512, "amplitude": 50, "wind": [2, 0], "debug": false}
   ],
 
   "tmp": [

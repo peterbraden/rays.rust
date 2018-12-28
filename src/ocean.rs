@@ -303,6 +303,7 @@ impl OceanGeometry {
         // Mesh size
         let lx = SceneFile::parse_number(&o["resolution"], 100.);
         let lz = lx;
+        let choppyness_shift = false;
 
         let mut rng: StdRng = SeedableRng::from_seed([0; 32]);
 
@@ -350,6 +351,7 @@ impl OceanGeometry {
                     x < fourier_grid_size - 1 &&
                     z > 0 &&
                     z < fourier_grid_size - 1
+                    && choppyness_shift 
                     {
                     vertices[ind] = Vector3::new(
                         x0 + ht_slope_dx[ind].re * sign,
@@ -409,7 +411,22 @@ impl Geometry for OceanGeometry {
     }
 }
 
-struct OceanMaterial {}
+struct OceanMaterial {
+    deep_color: Color,
+
+}
+
+
+impl OceanMaterial {
+    pub fn new(o: &Value) -> OceanMaterial {
+    
+        return OceanMaterial {
+            deep_color: Color::new(0., 0.2, 0.3)
+        
+        }
+    }
+
+}
 
 /// Simplified dielectric with no refraction
 impl MaterialModel for OceanMaterial {
@@ -419,13 +436,17 @@ impl MaterialModel for OceanMaterial {
 		let cosine = - drn / r.rd.norm();
 
 		match refract(r.rd, intersection.normal, ni_over_nt) {
-			Some(_refracted) => {
+			Some(refracted) => {
 				// refracted ray exists
 				// Schlick approximation of fresnel amount
 				let reflect_prob = schlick(cosine, 1.31);
 				if geometry::rand() >= reflect_prob {
+                    // Rather than refract, shade darker depending whether the ray is deeper than
+                    // 90degrees down
+                    let deep_angle = 1. / (refracted.dot(&Vector3::new(0., 1., 0.)).acos() * 0.8);
+
 					return ScatteredRay{
-						attenuate: Color::new(0., 0.2, 0.3),
+						attenuate: self.deep_color * deep_angle,
 						ray: None, // Don't try and refract
 					};
 				}
@@ -449,9 +470,10 @@ impl MaterialModel for OceanMaterial {
 
 pub fn create_ocean(opts: &Value) -> SceneObject {
 	let o = OceanGeometry::new(opts);
-    let m = Box::new(OceanMaterial {});
-    let _w = Box::new(Whitted { pigment: Color::new(0., 0.4, 0.8), reflection: 0., phong: 20.});
-    let _m = Box::new(NormalShade {});
+    let mut m: Box<MaterialModel + Sync + Send> = Box::new(OceanMaterial::new(opts));
+    if opts["debug"].as_bool().unwrap_or(false) {
+        m = Box::new(NormalShade {});
+    }
 	return SceneObject {
 		geometry: Box::new(o),
 		medium: Box::new(Solid { m: m}),

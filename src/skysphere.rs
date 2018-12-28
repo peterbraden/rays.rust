@@ -35,7 +35,7 @@ impl MaterialModel for SkyMaterial {
 		let mut ray_max = atmos_intersection.unwrap().dist; 
 
 		let earth_intersection = self.earth.intersects(r);
-		if earth_intersection.is_some(){
+		if r.ro.y > self.earth.radius && earth_intersection.is_some(){
 			ray_max = earth_intersection.unwrap().dist; 
 		}
     	let num_samples = 16; 

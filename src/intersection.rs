@@ -28,6 +28,6 @@ impl cmp::PartialEq for Intersection {
 
 impl fmt::Display for Intersection {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "(Intersection p:{} d:{})", self.point, self.dist)
+        write!(f, "(Intersection p:{} d:{} n:{})", self.point, self.dist, self.normal)
     }
 }

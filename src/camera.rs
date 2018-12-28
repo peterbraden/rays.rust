@@ -180,7 +180,11 @@ impl FlatLensCamera {
             aperture: f64
          ) -> FlatLensCamera {
         let camz = (lookat - location).normalize();
-        let camx = up.cross(&camz).normalize();
+        let mut camx = up.cross(&camz).normalize();
+        if camx.y.is_nan() {
+            // Looking vertical. In this situation we arbitrarily pick an axis.
+            camx = Vector3::new(1., 0., 0.);
+        }
         let camy = camx.cross(
                 &(Vector3::new(0f64,0f64,0f64) - camz)
                 ).normalize();

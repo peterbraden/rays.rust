@@ -18,8 +18,8 @@ impl MaterialModel for Whitted {
         let mut out = Color::black();
         for light in &s.lights {
             let light_vec = light.position - intersection.point;
-            let shadow_ray = Ray {ro: intersection.point, rd: light_vec};
-            let shadow_intersection = s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), 0.1); 
+            let shadow_ray = Ray {ro: intersection.point, rd: light_vec.normalize()};
+            let shadow_intersection = s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), 0.001); 
 
             match shadow_intersection {
                 Some(_) => (),// Point in shadow...

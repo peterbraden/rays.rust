@@ -62,7 +62,7 @@ impl RepeatingMesh {
             None => {
                 // did not intersect with this bbox? Should never happen!
                 //panic!("ERR: No intersection - {} - {} {}", self.tile.bounds(), curr_transform, transformed_ray);
-                //print!("ERR: No intersection - {} - {} {}", self.tile.bounds(), curr_transform, transformed_ray);
+                print!("ERR: No intersection - {} - {} {}", self.tile.bounds(), curr_transform, transformed_ray);
                 return None;
             }
         }
@@ -70,12 +70,6 @@ impl RepeatingMesh {
 
 
     fn intersect_tile(&self, r: &Ray, transform: &Vector3<f64>) -> Option<RawIntersection> {
-        let test_bb = BBox::new(
-            Vector3::new(transform.x, self.tile_bounds.min.y, transform.z),
-            Vector3::new(transform.x + self.tile_size.x, self.tile_bounds.max.y, transform.z + self.tile_size.z),
-        );
-        //println!(" 1. ... {:?} {} {}", test_bb.intersects(r), r, test_bb);
-
         let transformed_ray = Ray {
             ro: r.ro - transform,
             rd: r.rd,
@@ -85,10 +79,6 @@ impl RepeatingMesh {
         let intersects = self.tile.raw_intersection(&transformed_ray, f64::INFINITY, 0f64);
         //println!(">>> {:?} {}", intersects, transformed_ray);
         
-        if test_bb.intersects(r).is_some() != self.tile.bounds().intersects(&transformed_ray).is_some(){
-            println!("ERR: WTF {} {}", transform, test_bb);
-        }
-
         match intersects {
             Some(i) => {
                 let mut intersection = i.clone();

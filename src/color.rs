@@ -52,7 +52,7 @@ impl Color {
 
 impl fmt::Display for Color {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "#{:0>2x}{:0>2x}{:0>2x}", (self.rgb.x * 255f64) as i32, (self.rgb.y * 255f64) as i32, (self.rgb.z * 255f64) as i32)
+        write!(f, "#{:0>2x}{:0>2x}{:0>2x}", (self.rgb.x * 255f64) as u8, (self.rgb.y * 255f64) as u8, (self.rgb.z * 255f64) as u8)
     }
 }
 

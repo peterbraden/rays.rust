@@ -99,6 +99,13 @@ impl MaterialModel for SkyMaterial {
             if attenuate_vec.y < 1.413f64 { (attenuate_vec.y * 0.38317f64).powf(1.0f64 / 2.2f64) } else { 1.0f64 - (-attenuate_vec.y).exp() },
             if attenuate_vec.z < 1.413f64 { (attenuate_vec.z * 0.38317f64).powf(1.0f64 / 2.2f64) } else { 1.0f64 - (-attenuate_vec.z).exp() },
 		);
+        /*
+        let attenuate = Color::new(
+            attenuate_vec.x,
+            attenuate_vec.y,
+            attenuate_vec.z,
+        );*/
+
         return ScatteredRay { attenuate, ray: None }
     }
 }

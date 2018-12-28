@@ -12,6 +12,12 @@ pub struct Triangle {
     pub normal: Vector3<f64>,
 }
 
+fn panic_if_nan(v: Vector3<f64>) {
+    if v.y.is_nan() {
+        panic!("NaN in vector");
+    }
+}
+
 impl Triangle {
 
     pub fn new(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>) -> Triangle{
@@ -20,6 +26,7 @@ impl Triangle {
 
         //let area2 = normal.length(); // Before norm
         let normal = v0v1.cross(&v0v2).normalize();  
+        panic_if_nan(normal);
         return Triangle {
             v0: v0,
             v1: v1,
@@ -54,6 +61,7 @@ impl Geometry for Triangle {
         let v0v1 = self.v1 - self.v0; 
         let v0v2 = self.v2 - self.v0; 
         let pvec = r.rd.cross(&v0v2); 
+        panic_if_nan(pvec);
         let det = v0v1.dot(&pvec); 
                      
         // ray and triangle are parallel if det is close to 0
@@ -66,6 +74,7 @@ impl Geometry for Triangle {
         if u < 0. || u > 1. { return None }; 
 
         let qvec = tvec.cross(&v0v1); 
+        panic_if_nan(qvec);
         let v = r.rd.dot(&qvec) * inv_det; 
 
         if v < 0. || u + v > 1. { return None }; 

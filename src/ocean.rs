@@ -420,9 +420,9 @@ struct OceanMaterial {
 impl OceanMaterial {
     pub fn new(o: &Value) -> OceanMaterial {
     
+        let deep = SceneFile::parse_color_def(&o, "color", Color::new(0., 0.2, 0.3));
         return OceanMaterial {
-            deep_color: Color::new(0., 0.2, 0.3)
-        
+            deep_color: deep
         }
     }
 

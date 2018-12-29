@@ -99,6 +99,13 @@ impl SceneFile {
     
     }
 
+    pub fn parse_color_def(v: &Value, k: &str, def: Color) -> Color {
+        match &v.get(&k) {
+            Some(x) => SceneFile::parse_color(x),
+            None => return def
+        }
+    }
+
     pub fn parse_camera(c: Value, width: u32, height: u32) -> camera::FlatLensCamera {
         return camera::FlatLensCamera::new(
             SceneFile::parse_vec3(&c["lookat"]),

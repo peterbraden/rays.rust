@@ -1,0 +1,38 @@
+{
+  "width": 1200,
+  "height": 500,
+
+  "supersamples": 999,
+  "chunk_size": 64,
+  "samples_per_chunk": 1,
+  
+  "background": [0.1, 0.1, 0.1],
+  "shadow_bias": 0.0001,
+  "max_depth": 3,
+
+  "materials": {},
+  "media": {},
+
+  "camera": {
+    "location": [0, 5, -120],
+
+    "lookat" : [0, 4, 0],
+    "up" : [0,1,0],
+    "angle": 0.9,
+    "aperture": 0.01
+  },
+  
+  "lights" : [
+    {
+      "location": [-40, 30, -40], 
+      "color": "white",
+      "intensity": 10
+    }
+  ],
+  "variables" : {},
+  "objects": [
+    { "type" : "ocean", "resolution": 100, "fourier_size": 256, "amplitude": 50, "wind": [0.8, 0.4], "color": [0, 0.1, 0.15]},
+    { "type" : "skysphere", "sun_direction": [0,0.005,1], "brightness": 50}
+  ]
+}
+

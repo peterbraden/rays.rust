@@ -19,6 +19,15 @@ pub struct Intersection {
     pub object: Arc<SceneObject>,
 }
 
+/*
+pub struct MediumIntersection {
+    pub dist: f64,
+    pub point: Vector3<f64>,
+    pub normal: Vector3<f64>,
+    pub inside: Box<Medium + Sync + Send>,
+    pub outside: Box<Medium + Sync + Send>,
+}
+*/
 
 impl cmp::PartialEq for Intersection {
     fn eq(&self, other: &Intersection) -> bool {

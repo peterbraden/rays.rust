@@ -76,7 +76,7 @@ impl RenderContext {
         }
 
         let i:usize = (y*self.width + x) as usize;
-        self.image[i] = self.image[i] + c;
+        self.image[i] = self.image[i] + c.ignore_nan();
         self.samples[i] = self.samples[i] + samples;
         self.pixels_rendered += 1;
     }

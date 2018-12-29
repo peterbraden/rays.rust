@@ -50,8 +50,6 @@ pub trait DirectMaterialModel: MaterialModel{
     fn scatter_light(&self, inbound: &Ray, light: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay;
 }
 
-
-
 /*
 pub trait BSDFToRename{
 

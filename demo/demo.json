@@ -135,8 +135,26 @@
   "variables" : {},
 
   "objects": [
+        {
+      "type": "sphere",
+      "radius": 5,
+      "location": [0, 5, 0],
+      "material" : "GOLD"
+    },
+        {
+      "type": "sphere",
+      "radius": 5,
+      "location": [10, 5, 0],
+      "material" : "WHITE_PLASTIC"
+    },
+        {
+      "type": "sphere",
+      "radius": 5,
+      "location": [-10, 5, 0],
+      "material" : "BRUSHED_METAL_RED"
+    },
     { "type" : "skysphere", "sun_direction": [0.1,0.1,1], "brightness": 100},
-    { "type" : "ocean", "resolution": 100, "fourier_size": 512, "amplitude": 50, "wind": [2, 0], "debug": false}
+    { "type" : "ocean", "resolution": 20, "fourier_size": 512, "amplitude": 10, "wind": [20, 0], "debug": false}
   ],
 
   "tmp": [
@@ -152,6 +170,12 @@
       "src": "./demo/teapot.obj",
       "scale": [10,10,10],
       "material" : "RED_WHITTED"
+    },
+    { 
+      "type" : "mesh",
+      "src": "./demo/ship.obj",
+      "scale": [0.01,0.01,0.01],
+      "material" : "TEST"
     },
     { 
       "type" : "_plane",

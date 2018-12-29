@@ -27,6 +27,7 @@ use material::lambertian::Lambertian;
 use material::normal::NormalShade;
 use material::legacy::{ Whitted, FlatColor };
 use material::diffuse_light::DiffuseLight;
+use participatingmedia::{ParticipatingMedium, HomogenousFog, Vacuum};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SceneFile {
@@ -44,6 +45,7 @@ pub struct SceneFile {
     pub lights: Vec<Value>,
     pub objects: Vec<Value>,
     pub variables: Value,
+    pub air: Option<Value>,
 }
 
 impl SceneFile {
@@ -346,6 +348,13 @@ impl SceneFile {
 
         return None
     }
+    pub fn parse_air(o: &Option<Value>) -> Box<ParticipatingMedium>{
+        let mut air: Box<ParticipatingMedium> = Box::new(Vacuum {});
+        if o.is_some() {
+            air = Box::new(HomogenousFog { density: 0.001, color: Color::red() });
+        }
+        return air;
+    }
 
     pub fn parse_light(o: &Value) -> Light {
         return Light {
@@ -390,6 +399,7 @@ impl SceneFile {
             objects: o,
             max_bounding,
             black_threshold: SceneFile::parse_number(&s.shadow_bias, 1e-7f64) ,
+            air_medium: SceneFile::parse_air(&s.air),
         };
     }
 

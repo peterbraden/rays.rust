@@ -61,6 +61,7 @@ mod geometry;
 mod procedural {
     pub mod box_terrain;
 }
+mod participatingmedia;
 
 use trace::trace;
 use rendercontext::RenderContext;

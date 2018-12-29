@@ -47,6 +47,14 @@ impl Color {
     pub fn min() -> Color {
         return Color::new(1./255.,1./255.,1./255.);
     }
+    
+    pub fn ignore_nan(&self) -> Color {
+        return Color::new(
+            if self.rgb.x.is_nan() { 0. } else { self.rgb.x },
+            if self.rgb.y.is_nan() { 0. } else { self.rgb.y },
+            if self.rgb.z.is_nan() { 0. } else { self.rgb.z },
+        );
+    }
 }
 
 

@@ -4,6 +4,7 @@ use scenegraph::SceneGraph;
 use light::Light;
 use color::Color;
 use shapes::bbox::BBox;
+use participatingmedia::ParticipatingMedium;
 
 // TODO
 pub enum PathCulling {
@@ -36,5 +37,6 @@ pub struct Scene {
     pub lights: Vec<Light>,
     pub max_bounding: BBox,
     pub black_threshold: f64,
+    pub air_medium: Box<ParticipatingMedium>,
 }
 

@@ -26,7 +26,7 @@ impl Triangle {
 
         //let area2 = normal.length(); // Before norm
         let normal = v0v1.cross(&v0v2).normalize();  
-        panic_if_nan(normal);
+        //panic_if_nan(normal);
         return Triangle {
             v0: v0,
             v1: v1,

@@ -2,8 +2,8 @@
   "width": 1200,
   "height": 500,
 
-  "supersamples": 100,
-  "chunk_size": 64,
+  "supersamples": 300,
+  "chunk_size": 128,
   "samples_per_chunk": 1,
   
   "background": [0.1, 0.1, 0.1],
@@ -111,11 +111,11 @@
   },
 
   "camera": {
-    "location": [1, 10, -30],
+    "location": [1, 3, -30],
 
-    "lookat" : [0, 0, 0],
+    "lookat" : [0, 2, 0],
     "up" : [0,1,0],
-    "angle": 1.20,
+    "angle": 0.30,
     "aperture": 0.01
   },
   
@@ -135,7 +135,7 @@
   "variables" : {},
 
   "objects": [
-    { "type" : "skysphere", "sun_direction": [0,1,-1], "brightness": 100},
+    { "type" : "skysphere", "sun_direction": [0.1,0.1,1], "brightness": 100},
     { "type" : "ocean", "resolution": 100, "fourier_size": 512, "amplitude": 50, "wind": [2, 0], "debug": false}
   ],
 

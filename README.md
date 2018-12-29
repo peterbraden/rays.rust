@@ -6,6 +6,8 @@ Status](https://travis-ci.org/peterbraden/rays.rust.svg?branch=master)](https://
 
 ![block terrain](demo/scenes/block-terrain.png)
 ![spheres](demo/scenes/spheres/spheres.png)
+![Ocean 1](demo/scenes/ocean-1.png)
+![Ocean 1](demo/scenes/ocean-2.png)
 
 
 ## Current work

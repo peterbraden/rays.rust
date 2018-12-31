@@ -3,8 +3,8 @@
   "height": 500,
 
   "supersamples": 999,
-  "chunk_size": 64,
-  "samples_per_chunk": 1,
+  "chunk_size": 128,
+  "samples_per_chunk": 2,
   
   "background": [0.1, 0.1, 0.1],
   "shadow_bias": 0.0001,

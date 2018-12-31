@@ -4,7 +4,7 @@
 
   "supersamples": 300,
   "chunk_size": 128,
-  "samples_per_chunk": 1,
+  "samples_per_chunk": 4,
   
   "background": [0.1, 0.1, 0.1],
   "shadow_bias": 0.000001,

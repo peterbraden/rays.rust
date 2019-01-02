@@ -4,7 +4,7 @@ use ray::Ray;
 use intersection::RawIntersection;
 use shapes::bbox::BBox;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub struct Sphere {
 	pub center: Vector3<f64>,
 	pub radius: f64,

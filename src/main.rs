@@ -39,6 +39,7 @@ mod light;
 mod shapes {
     pub mod bbox;
     pub mod geometry;
+    pub mod csg;
     pub mod sphere;
     pub mod plane;
     pub mod triangle;
@@ -60,6 +61,7 @@ mod paint;
 mod geometry;
 mod procedural {
     pub mod box_terrain;
+    pub mod fireworks;
 }
 mod participatingmedia;
 

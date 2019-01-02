@@ -11,3 +11,4 @@ pub trait Geometry: Sync{
     // Number of primitives (ie triangles in mesh
     fn primitives(&self) -> u64 { 1 }
 }
+

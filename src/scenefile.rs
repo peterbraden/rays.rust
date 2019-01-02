@@ -11,6 +11,7 @@ use light::Light;
 use color::Color;
 use skysphere::create_sky_sphere;
 use procedural::box_terrain::create_box_terrain;
+use procedural::fireworks::create_firework;
 use std::sync::Arc;
 use sceneobject::SceneObject;
 use serde_json::{Value, Map};
@@ -153,6 +154,10 @@ impl SceneFile {
         }
         if t == "ocean" {
             let d = create_ocean(&o);
+            return Some(Arc::new(d));
+        }
+        if t == "firework" {
+            let d = create_firework(&o);
             return Some(Arc::new(d));
         }
 

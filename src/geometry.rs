@@ -10,6 +10,10 @@ pub fn rand() -> f64 {
 pub fn random_point_on_unit_sphere() -> Vector3<f64>{
     let u = rand();
     let v = rand();
+    return point_on_unit_sphere(u, v);
+}
+
+pub fn point_on_unit_sphere(u: f64, v: f64) -> Vector3<f64>{
     let theta = u * 2.0 * f64::consts::PI;
     let phi = (2.0 * v - 1.0).acos();
     let r = rand().cbrt();

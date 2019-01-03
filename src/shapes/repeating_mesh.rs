@@ -9,6 +9,8 @@ use std::vec::Vec;
 use std::sync::Arc;
 use octree::Octree;
 
+const MAX_DEPTH: usize = 50;
+
 /// Infinite Y-Plane mesh of repeating tiles.
 ///
 /// As we don't actually have an infinite mesh, this is achieved by working out which tile the ray 
@@ -69,7 +71,11 @@ impl RepeatingMesh {
     } 
 
 
-    fn intersect_tile(&self, r: &Ray, transform: &Vector3<f64>) -> Option<RawIntersection> {
+    fn intersect_tile(&self, r: &Ray, transform: &Vector3<f64>, depth: usize) -> Option<RawIntersection> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+
         let transformed_ray = Ray {
             ro: r.ro - transform,
             rd: r.rd,
@@ -89,7 +95,7 @@ impl RepeatingMesh {
             None => {
                 match self.find_next_tile(&transformed_ray, &transform) {
                     Some(t) => {
-                        return self.intersect_tile(r, &t);
+                        return self.intersect_tile(r, &t, depth + 1);
                     },
                     None => {
                         return None;
@@ -116,14 +122,14 @@ impl Geometry for RepeatingMesh {
             // preceding rays will intersect the previous tile
             let (transform, dist) = self.find_tile_transform(r, denom, self.tile_bounds.max.y);
             if dist < 0. { return None }
-            return self.intersect_tile(&r, &transform);
+            return self.intersect_tile(&r, &transform, 1);
         }
 
         if r.ro.y < self.tile_bounds.min.y {
             // Looking up at plane
             let (transform, dist) = self.find_tile_transform(r, denom, self.tile_bounds.min.y);
             if dist < 0. { return None }
-            return self.intersect_tile(&r, &transform);
+            return self.intersect_tile(&r, &transform, 1);
         }
 
 
@@ -133,7 +139,7 @@ impl Geometry for RepeatingMesh {
         let iz = (r.ro.z / self.tile_size.z).floor();
         let transform = self.transform_for(ix, iz, &Vector3::new(0., 0., 0.));
 
-        return self.intersect_tile(&r, &transform);
+        return self.intersect_tile(&r, &transform, 1);
     }
 
     fn bounds(&self) -> BBox {

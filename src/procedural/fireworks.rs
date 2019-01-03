@@ -95,7 +95,7 @@ pub struct FireworkMaterial {
 }
 
 impl MaterialModel for FireworkMaterial {
-    fn scatter(&self, r: &Ray, intersection: &Intersection, _s: &Scene) -> ScatteredRay{
+    fn scatter(&self, r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay{
         // Find actual particle. Kinda hacky as we already worked this out.
         let actual_intersection = self.particles.intersection(r, f64::INFINITY, 0f64);
         match actual_intersection {

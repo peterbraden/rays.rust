@@ -12,6 +12,7 @@ use color::Color;
 use skysphere::create_sky_sphere;
 use procedural::box_terrain::create_box_terrain;
 use procedural::fireworks::create_firework;
+use participatingmedia::create_fog;
 use std::sync::Arc;
 use sceneobject::SceneObject;
 use serde_json::{Value, Map};
@@ -159,6 +160,11 @@ impl SceneFile {
         if t == "firework" {
             let d = create_firework(&o);
             return Some(Arc::new(d));
+        }
+
+        if t == "fog" {
+            let f = create_fog(&o);
+            return Some(Arc::new(f));
         }
 
         let m = SceneFile::parse_object_medium(&o, materials, media);
@@ -361,12 +367,15 @@ impl SceneFile {
         return None
     }
     pub fn parse_air(o: &Option<Value>) -> Box<ParticipatingMedium>{
-        let mut air: Box<ParticipatingMedium> = Box::new(Vacuum {});
+        let air: Box<ParticipatingMedium> = Box::new(Vacuum {});
+        /*
         if o.is_some() {
             air = Box::new(HomogenousFog { density: 0.001, color: Color::red() });
         }
+        */
         return air;
     }
+
 
     pub fn parse_light(o: &Value) -> Light {
         return Light {

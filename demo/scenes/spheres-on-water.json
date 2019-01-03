@@ -1,12 +1,12 @@
 {
-  "width": 1200,
+  "width": 500,
   "height": 500,
 
-  "supersamples": 300,
+  "supersamples": 75,
   "chunk_size": 128,
   "samples_per_chunk": 1,
   
-  "background": [0.1, 0.1, 0.1],
+  "background": [0.3, 0.3, 0.3],
   "shadow_bias": 0.000001,
   "max_depth": 3,
 
@@ -111,9 +111,8 @@
   },
 
   "camera": {
-    "location": [1, 3, -30],
-
-    "lookat" : [0, 2, 0],
+    "location": [0, 5, -30],
+    "lookat" : [0, 5, 0],
     "up" : [0,1,0],
     "angle": 0.30,
     "aperture": 0.01
@@ -135,30 +134,16 @@
   "variables" : {},
 
   "objects": [
-        {
-      "type": "sphere",
-      "radius": 5,
-      "location": [0, 5, 0],
-      "material" : "GOLD"
-    },
-        {
-      "type": "sphere",
-      "radius": 5,
-      "location": [10, 5, 0],
-      "material" : "WHITE_PLASTIC"
-    },
-        {
-      "type": "sphere",
-      "radius": 5,
-      "location": [-10, 5, 0],
-      "material" : "BRUSHED_METAL_RED"
-    },
-    { "type" : "skysphere", "sun_direction": [0.1,0.1,1], "brightness": 100},
-    { "type" : "ocean", "resolution": 20, "fourier_size": 512, "amplitude": 10, "wind": [20, 0], "debug": false}
+    { "type" : "ocean", "resolution": 20, "fourier_size": 512, "amplitude": 10, "wind": [20, 0], "debug": false, "color": [0, 0.02, 0.03]},
+    { "type" : "skysphere", "sun_direction": [0.1,-0.1,1], "brightness": 100},
+    { "type" : "fog" },
+    { "type" : "firework", "center": [40, 25, 400], "time": 2, "samples": 200, "particles": 60, "radius": 13, "upward_bias": 14, "color": [1, 0.7, 0.6], "intensity": 2},
+    { "type" : "firework", "center": [-41, 26.5, 400], "time": 2, "samples": 200, "particles": 50, "radius": 14, "upward_bias": 15, "color": [1, 0.5, 0.3], "intensity": 3},
+    { "type" : "firework", "center": [1, 29.2, 401], "time": 2, "samples": 2, "particles": 200, "radius": 15, "upward_bias": 16, "color": [0.2, 0.5, 1], "intensity": 4},
+    { "type" : "firework", "center": [0, 30, 400], "time": 2, "samples": 200, "particles": 90, "radius": 15, "upward_bias": 16, "color": [1, 0.7, 0.5], "intensity": 4}
   ],
 
   "tmp": [
-    { "type" : "ocean" },
     { "type" : "box_terrain" },
     { 
       "type" : "__checkeredplane",
@@ -169,7 +154,7 @@
       "type" : "_mesh",
       "src": "./demo/teapot.obj",
       "scale": [10,10,10],
-      "material" : "RED_WHITTED"
+      "material" : "GOLD"
     },
     { 
       "type" : "mesh",

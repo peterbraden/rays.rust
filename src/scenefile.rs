@@ -210,6 +210,8 @@ impl SceneFile {
             geometry: Box::new(Mesh::from_obj(
                 SceneFile::parse_string(&o["src"]),
                 SceneFile::parse_vec3_def(&o, "scale", Vector3::new(1., 1., 1.)),
+                SceneFile::parse_vec3_def(&o, "translate", Vector3::new(0., 0., 0.)),
+                SceneFile::parse_vec3_def(&o, "rotate", Vector3::new(0., 0., 0.)),
             )),
             medium: m
         };

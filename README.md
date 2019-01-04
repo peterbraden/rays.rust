@@ -7,6 +7,7 @@
 ![spheres](demo/scenes/spheres/spheres.png)
 ![Ocean 1](demo/scenes/ocean-1.png)
 ![Ocean 2](demo/scenes/ocean-2.png)
+![Ocean 2](demo/scenes/fireworks.png)
 
 
 ## Current work
@@ -28,12 +29,14 @@ Supports:
     - Plane
     - Mesh
     - OBJ file to mesh import
-    - Infinite Mesh
+    - Infinite Repeating Mesh
 
   - Skysphere with Rayleigh and Mie Scattering
   - Procedural Objects
-    - Ocean (Tessendorf's algorithm with Phillips spectrum)
+    - [Ocean (Tessendorf's algorithm with Phillips spectrum)](./src/ocean.rs)
     - Random Cubes
+		- Fireworks
+
   - Multithreaded
   - Progressive rendering
 

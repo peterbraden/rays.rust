@@ -20,12 +20,12 @@ pub struct Intersection {
 }
 
 /*
-pub struct MediumIntersection {
+pub struct Interaction {
     pub dist: f64,
     pub point: Vector3<f64>,
     pub normal: Vector3<f64>,
-    pub inside: Box<Medium + Sync + Send>,
-    pub outside: Box<Medium + Sync + Send>,
+    pub inside: Box<Material + Sync + Send>,
+    pub outside: Box<Material + Sync + Send>,
 }
 */
 

@@ -8,7 +8,7 @@
   
   "background": [0.1, 0.1, 0.1],
   "shadow_bias": 0.0001,
-  "max_depth": 3,
+  "max_depth": 5,
 
   "materials": {
     "TEST": {
@@ -111,7 +111,7 @@
 
     "lookat" : [0, 5, 0],
     "up" : [0,1,0],
-    "angle": 0.5,
+    "angle": 0.15,
     "aperture": 0.01
   },
   
@@ -124,7 +124,25 @@
   ],
   "variables" : {},
   "objects": [
-    { "type" : "ocean", "resolution": 100, "fourier_size": 1024, "amplitude": 100, "wind": [34, 1]},
-    { "type" : "skysphere" }
+		{
+      "type": "sphere",
+      "radius": 5,
+      "location": [0, 5, 0],
+      "material" : "GOLD"
+    },
+		{
+      "type": "sphere",
+      "radius": 5,
+      "location": [10, 5, 0],
+      "material" : "WHITE_PLASTIC"
+    },
+		{
+      "type": "sphere",
+      "radius": 5,
+      "location": [-10, 5, 0],
+      "material" : "BRUSHED_METAL_RED"
+    },
+    { "type" : "skysphere", "sun_direction": [0.1,0.1,1], "brightness": 100},
+    { "type" : "ocean", "resolution": 20, "fourier_size": 512, "amplitude": 10, "wind": [20, 0], "debug": false}
   ]
 }

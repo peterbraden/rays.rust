@@ -4,6 +4,7 @@
 //extern crate image;
 extern crate nalgebra as na;
 extern crate rand;
+#[macro_use]
 extern crate clap;
 #[macro_use]
 extern crate serde_derive;
@@ -13,6 +14,7 @@ extern crate tobj;
 extern crate ordered_float;
 extern crate num_complex;
 extern crate rustfft;
+extern crate termcolor;
 
 
 use clap::{Arg, App};
@@ -83,7 +85,17 @@ fn main() {
         .arg(Arg::with_name("progressive_render")
             .short("p")
             .long("progressive-render")
-            .help("Update the output file when a chunk is completed. Good for debugging"));
+            .help("Update the output file when a chunk is completed. Good for debugging"))
+        .arg(Arg::with_name("width")
+             .short("w")
+             .long("width")
+             .takes_value(true)
+             .help("Set the width of the output image; overrides the scenefile if specified"))
+        .arg(Arg::with_name("height")
+             .short("h")
+             .long("height")
+             .takes_value(true)
+             .help("Set the height of the output image; overrides the scenefile if specified"));
 
     let start_time = time::precise_time_s();
     println!("- Building models");
@@ -91,10 +103,14 @@ fn main() {
     let s = scenefile::SceneFile::from_file(
                 matches.value_of("scene").unwrap()
             );
+    let width = value_t!(matches.value_of("width"), usize).unwrap_or(s.image.width);
+    let height = value_t!(matches.value_of("height"), usize).unwrap_or(s.image.height);
+    // TODO: Overriding here isn't picked up in the camera config that happens in the parse.
+    
     let rc = RenderContext::new(
             start_time,
-            s.image.width,
-            s.image.height,
+            width,
+            height,
             matches.is_present("progressive_render"),
             matches.value_of("scene").unwrap(),
             );

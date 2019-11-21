@@ -18,15 +18,21 @@ impl Primitive {
         // PBRT store both r0 and hitmin in ray, maybe that allows less mutation of mem,
         // but for now let's do it the simpler way.
         // TODO what if we are inside?
-        let mut intersections = Vec::new(); 
         let mut closest = self.item.intersects(r);
+        if closest.is_none() {
+            return Vec::with_capacity(0)
+        }
+
+        let mut intersections = Vec::new(); 
 
         loop {
             match closest {
-                Some(x) => {
-                    let r2 = Ray { ro: x.point * 1.00001, rd: r.rd}; // TODO scale better (avoids rep) 
+                Some(mut x) => {
+                    let r2 = Ray { ro: x.point + r.rd * 0.0000001, rd: r.rd}; // TODO scale better (avoids rep) 
+                    x.dist = (x.point - r.ro).norm();
                     intersections.push(x);
                     closest = self.item.intersects(&r2);
+                    
                 },
                 None => { break; }
             }
@@ -92,54 +98,80 @@ pub struct Difference {
 }
 
 fn _find_intersect(ia: &Vec<RawIntersection>, ib: &Vec<RawIntersection>, inda: usize, indb: usize) -> Option<RawIntersection> {
-    if inda + 1 >= ia.len() { // Out of range
-        return None
+    match ia.get(inda) {
+        Some(a) => {
+            match ib.get(indb) {
+                Some(b) => {
+                    if a.dist < b.dist {
+                        // Enter A first
+                        return Some(ia[inda]);
+                    } else {
+                        return _find_intersect_inside_b(&ia, &ib, inda, indb);
+                    }
+                
+                },
+                None => {
+                    // No B intersection
+                    return Some(ia[inda]);
+                }
+            }
+        },
+        None => { 
+            // Would never have hit A
+            return None;
+        }
     }
-    if indb + 1  >= ib.len() {
-        return Some(ia[inda]);
-    }
+}
 
-    if ia[inda].dist < ib[indb].dist {
-        // Enter A first
-        return Some(ia[inda]);
-    } else {
-        return _find_intersect_inside_b(&ia, &ib, inda, indb);
-    }
+fn _reflect_normal(i: RawIntersection) -> RawIntersection {
+    let mut j = i.clone();
+    j.normal = i.normal * -1.;
+    return j
 }
 
 fn _find_intersect_inside_b(ia: &Vec<RawIntersection>, ib:& Vec<RawIntersection>, inda: usize, indb: usize) -> Option<RawIntersection> {
     // We are inside B
     // last intersections are inda, indb
-    if inda >= ia.len() - 1 {
-        return None
+    
+    match ia.get(inda) {
+        None => { return None },
+        Some(a) => {
+            match ib.get(indb + 1) {
+                None => {
+                    // That was the last B intersection, B stretches forever.
+                    return None
+                },
+                Some(nb) => {
+                    if nb.dist < a.dist {
+                        // We exit b before hitting a => try again
+                        return _find_intersect(&ia, &ib, inda, indb + 2);
+                    }
+
+                    match ia.get(inda + 1) {
+                        Some (na) => {
+                            // We enter A inside B:
+                            // There is another A intersection.
+                            if na.dist < nb.dist {
+                                // If we exit A before exiting B
+                                return _find_intersect_inside_b(&ia, &ib, inda + 2, indb)
+                            } else {
+                                // We're inside a inside b, the b exit is smaller than a exit
+                                // Therefore as soon as we leave B we are still in A.
+                                // Therefore B exit is intersection
+                                return Some(_reflect_normal(ib[indb + 1]));
+                            }
+                        },
+                        None => {
+                            // last A intersection, A is infinite, intersect at exit of B
+                            return Some(_reflect_normal(ib[indb + 1]));
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    if ib.len() - 1 <= indb + 1 {
-        // That was the last B intersection, B stretches forever.
-        return None
-    } 
 
-    if ib[indb + 1].dist < ia[inda].dist {
-        // We exit b before hitting a => try again
-        return _find_intersect(&ia, &ib, inda, indb + 2);
-    }
-
-    // We enter a inside b.
-    if ia.len() - 1 <= inda + 1 {
-        // last A intersection, A is infinite, intersect at exit of B
-        return Some(ib[indb + 1])
-    }
-
-    // There is another A intersection.
-    if ia[inda + 1].dist < ib[indb + 1].dist {
-        // If we exit A before exiting B
-        return _find_intersect_inside_b(&ia, &ib, inda + 2, indb)
-    } else {
-        // We're inside a inside b, the b exit is smaller than a exit
-        // Therefore as soon as we leave B we are still in A.
-        // Therefore B exit is intersection
-        return Some(ib[indb + 1])
-    }
 }
 
 impl Geometry for Difference {

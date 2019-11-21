@@ -182,7 +182,8 @@ impl SceneFile {
         if t == "checkeredplane" {
             return Some(Arc::new(SceneFile::parse_checkeredplane(&o, m)));
         }
-        return None
+        panic!("Unknown Object");
+        //return None
     }
     pub fn parse_skysphere(o: &Value) -> SceneObject {
         return create_sky_sphere(o);
@@ -218,7 +219,8 @@ impl SceneFile {
         if t == "difference" {
             return Some(SceneFile::parse_difference(&o));
         }
-        return None
+        panic!("Unknown Geometry");
+        //return None
     }
 
     pub fn parse_difference(o: &Value) -> Box<dyn Geometry + Sync + Send> {

@@ -470,7 +470,7 @@ impl MaterialModel for OceanMaterial {
 
 pub fn create_ocean(opts: &Value) -> SceneObject {
 	let o = OceanGeometry::new(opts);
-    let mut m: Box<MaterialModel + Sync + Send> = Box::new(OceanMaterial::new(opts));
+    let mut m: Box<dyn MaterialModel + Sync + Send> = Box::new(OceanMaterial::new(opts));
     if opts["debug"].as_bool().unwrap_or(false) {
         m = Box::new(NormalShade {});
     }

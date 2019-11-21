@@ -4,11 +4,13 @@ use std::cmp;
 use std::fmt;
 use std::sync::Arc;
 
-#[derive(Debug, Clone)]
+// TODO PBRT DifferentialGeometry
+#[derive(Debug, Copy, Clone)]
 pub struct RawIntersection {
     pub dist: f64,
     pub point: Vector3<f64>,
     pub normal: Vector3<f64>,
+    // TODO error : rayEpsilon for float errors
 }
 
 #[derive(Clone)]

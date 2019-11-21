@@ -32,11 +32,11 @@ pub struct RenderOpts {
 pub struct Scene {
     pub image: ImageOpts,
     pub render: RenderOpts,
-    pub camera: Box<camera::Camera + Sync>,
+    pub camera: Box<dyn camera::Camera + Sync>,
     pub objects: SceneGraph,
     pub lights: Vec<Light>,
     pub max_bounding: BBox,
     pub black_threshold: f64,
-    pub air_medium: Box<ParticipatingMedium>,
+    pub air_medium: Box<dyn ParticipatingMedium>,
 }
 

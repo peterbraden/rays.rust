@@ -5,6 +5,7 @@ use shapes::sphere::Sphere;
 use shapes::triangle::Triangle;
 use shapes::plane::Plane;
 use shapes::mesh::Mesh;
+use shapes::csg::{Primitive, Difference};
 use ocean::create_ocean;
 use shapes::bbox::BBox;
 use light::Light;
@@ -30,6 +31,7 @@ use material::normal::NormalShade;
 use material::legacy::{ Whitted, FlatColor };
 use material::diffuse_light::DiffuseLight;
 use participatingmedia::{ParticipatingMedium, HomogenousFog, Vacuum};
+use shapes::geometry::Geometry;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SceneFile {
@@ -101,6 +103,7 @@ impl SceneFile {
     
     }
 
+
     pub fn parse_color_def(v: &Value, k: &str, def: Color) -> Color {
         match &v.get(&k) {
             Some(x) => SceneFile::parse_color(x),
@@ -130,7 +133,7 @@ impl SceneFile {
          return objects
     }
 
-    pub fn parse_object_medium(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Box<Medium + Sync + Send> {
+    pub fn parse_object_medium(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Box<dyn Medium + Sync + Send> {
         match &o.get("medium") {
             Some(mid) => {
                 return SceneFile::parse_medium_ref(mid, materials, media).unwrap()
@@ -167,26 +170,13 @@ impl SceneFile {
             return Some(Arc::new(f));
         }
 
+        let geom = SceneFile::parse_geometry(&o);
         let m = SceneFile::parse_object_medium(&o, materials, media);
-        
-        if t == "sphere" {
-            return Some(Arc::new(SceneFile::parse_sphere(&o, m)));
-        }
-
-        if t == "triangle" {
-            return Some(Arc::new(SceneFile::parse_triangle(&o, m)));
-        }
-
-        if t == "mesh" {
-            return Some(Arc::new(SceneFile::parse_mesh(&o, m)));
-        }
-
-        if t == "box" {
-            return Some(Arc::new(SceneFile::parse_box(&o, m)));
-        }
-
-        if t == "plane" {
-            return Some(Arc::new(SceneFile::parse_plane(&o, m)));
+        if geom.is_some(){
+            return Some(Arc::new(SceneObject {
+                geometry: geom.unwrap(),
+                medium: m
+            }));
         }
         
         if t == "checkeredplane" {
@@ -194,7 +184,6 @@ impl SceneFile {
         }
         return None
     }
-
     pub fn parse_skysphere(o: &Value) -> SceneObject {
         return create_sky_sphere(o);
     }
@@ -203,68 +192,88 @@ impl SceneFile {
         return create_box_terrain();
     }
 
+    pub fn parse_geometry (o: &Value) -> Option<Box<dyn Geometry + Sync + Send>> {
+        let t = o["type"].as_str().unwrap();
 
+        if t == "sphere" {
+            return Some(SceneFile::parse_sphere(&o));
+        }
 
-    pub fn parse_mesh(o: &Value, m: Box<Medium + Sync + Send>) -> SceneObject {
-        return SceneObject {
-            geometry: Box::new(Mesh::from_obj(
+        if t == "triangle" {
+            return Some(SceneFile::parse_triangle(&o));
+        }
+
+        if t == "mesh" {
+            return Some(SceneFile::parse_mesh(&o));
+        }
+
+        if t == "box" {
+            return Some(SceneFile::parse_box(&o));
+        }
+
+        if t == "plane" {
+            return Some(SceneFile::parse_plane(&o));
+        }
+
+        if t == "difference" {
+            return Some(SceneFile::parse_difference(&o));
+        }
+        return None
+    }
+
+    pub fn parse_difference(o: &Value) -> Box<dyn Geometry + Sync + Send> {
+        let a = SceneFile::parse_geometry(&o["a"]).unwrap(); // Panic if fails
+        let b = SceneFile::parse_geometry(&o["b"]).unwrap();
+        return Box::new(Difference { 
+            a: Primitive { item: a },
+            b: Primitive { item: b }, 
+        });
+    }
+
+    pub fn parse_mesh(o: &Value) -> Box<dyn Geometry + Sync + Send> {
+        return Box::new(Mesh::from_obj(
                 SceneFile::parse_string(&o["src"]),
-                SceneFile::parse_vec3_def(&o, "scale", Vector3::new(1., 1., 1.)),
-            )),
-            medium: m
-        };
+                SceneFile::parse_vec3_def(&o, "scale", Vector3::new(1., 1., 1.))));
     }
 
-    pub fn parse_sphere(o: &Value, m: Box<Medium + Sync + Send>) -> SceneObject {
-        return SceneObject {
-            geometry: Box::new(Sphere::new(
+    pub fn parse_sphere(o: &Value) -> Box<dyn Geometry + Sync + Send> {
+        return Box::new(Sphere::new(
                 SceneFile::parse_vec3(&o["location"]),
-                o["radius"].as_f64().unwrap())),
-            medium: m
-        };
+                o["radius"].as_f64().unwrap()));
     }
 
-    pub fn parse_box(o: &Value, m: Box<Medium + Sync + Send>) -> SceneObject {
-        return SceneObject {
-            geometry: Box::new(BBox::new(
+    pub fn parse_box(o: &Value) -> Box<dyn Geometry + Sync + Send>{
+        return Box::new(BBox::new(
                 SceneFile::parse_vec3(&o["min"]),
-                SceneFile::parse_vec3(&o["max"]))),
-            medium: m
-        };
+                SceneFile::parse_vec3(&o["max"])))
     }
 
-    pub fn parse_triangle(o: &Value, m: Box<Medium + Sync + Send>) -> SceneObject {
-        return SceneObject {
-            geometry: Box::new(Triangle::new(
+    pub fn parse_triangle(o: &Value) -> Box<dyn Geometry + Sync + Send> {
+        return Box::new(Triangle::new(
                 SceneFile::parse_vec3(&o["v0"]),
                 SceneFile::parse_vec3(&o["v1"]),
-                SceneFile::parse_vec3(&o["v2"]))),
-            medium: m
-        };
+                SceneFile::parse_vec3(&o["v2"])));
     }
 
-    pub fn parse_plane(o: &Value, m: Box<Medium + Sync + Send>) -> SceneObject {
-        return SceneObject {
-            geometry: Box::new(Plane {
+    pub fn parse_plane(o: &Value) -> Box<dyn Geometry + Sync + Send> {
+        return Box::new(Plane {
                 y: SceneFile::parse_number(&o["y"], 0.),
-            }),
-            medium: m
-        };
+            });
     }
 
-    pub fn parse_checkeredplane(o: &Value, m: Box<Medium + Sync + Send>) -> SceneObject {
+    pub fn parse_checkeredplane(o: &Value, m: Box<dyn Medium + Sync + Send>) -> SceneObject {
         SceneObject {
             geometry: Box::new(Plane { y: o["y"].as_f64().unwrap() }),
             medium: m
         }
     }
 
-    pub fn parse_material_ref(key: &Value, materials: &Map<String, Value> ) -> Option<Box<MaterialModel + Sync + Send>> {
+    pub fn parse_material_ref(key: &Value, materials: &Map<String, Value> ) -> Option<Box<dyn MaterialModel + Sync + Send>> {
         let props = materials.get(&SceneFile::parse_string(key)).unwrap();
         return SceneFile::parse_material(props);
     }
 
-    pub fn parse_material(o: &Value) -> Option<Box<MaterialModel + Sync + Send>> {
+    pub fn parse_material(o: &Value) -> Option<Box<dyn MaterialModel + Sync + Send>> {
         let t = o["type"].as_str().unwrap();
         if t == "metal" {
             let metal:Specular = Specular {
@@ -341,12 +350,12 @@ impl SceneFile {
         None
     }
 
-    pub fn parse_medium_ref(key: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Option<Box<Medium + Sync + Send>> {
+    pub fn parse_medium_ref(key: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Option<Box<dyn Medium + Sync + Send>> {
         let props = media.get(&SceneFile::parse_string(key)).unwrap();
         return SceneFile::parse_medium(props, materials);
     }
 
-    pub fn parse_medium(o: &Value, materials: &Map<String, Value>) -> Option<Box<Medium + Sync + Send>> {
+    pub fn parse_medium(o: &Value, materials: &Map<String, Value>) -> Option<Box<dyn Medium + Sync + Send>> {
         let t = o["type"].as_str().unwrap();
         if t == "solid" {
             let m = SceneFile::parse_material_ref(&o["material"], materials).unwrap(); 
@@ -366,8 +375,8 @@ impl SceneFile {
 
         return None
     }
-    pub fn parse_air(o: &Option<Value>) -> Box<ParticipatingMedium>{
-        let air: Box<ParticipatingMedium> = Box::new(Vacuum {});
+    pub fn parse_air(_o: &Option<Value>) -> Box<dyn ParticipatingMedium>{
+        let air: Box<dyn ParticipatingMedium> = Box::new(Vacuum {});
         /*
         if o.is_some() {
             air = Box::new(HomogenousFog { density: 0.001, color: Color::red() });
@@ -434,8 +443,5 @@ impl SceneFile {
         let mut contents = String::new();
         scenefile.read_to_string(&mut contents).unwrap();
         return SceneFile::from_string(contents);
-
     }
-
-
 }

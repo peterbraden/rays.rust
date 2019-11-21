@@ -1,6 +1,6 @@
 {
-  "width": 120,
-  "height": 60,
+  "width": 240,
+  "height": 120,
 
   "supersamples": 12,
   "chunk_size": 64,
@@ -135,32 +135,27 @@
 
   "objects": [
     { "type" : "skysphere"},
-    {
-      "type": "sphere",
-      "radius": 5,
-      "location": [0, 5, 0],
-      "material" : "GOLD"
+    { "type" : "difference",
+      "a": { 
+        "type" : "plane",
+        "y": 0
       },
-      {
-      "type": "sphere",
-      "radius": 5,
-      "location": [10, 5, 0],
-      "material" : "WHITE_PLASTIC"
+      "b": {
+          "type": "sphere",
+          "radius": 1,
+          "location": [0, 5, 0]
       },
-      {
-      "type": "sphere",
-      "radius": 5,
-      "location": [-10, 5, 0],
-      "material" : "BRUSHED_METAL_RED"
-      },
-      { 
-      "type" : "checkeredplane",
-      "y": 0,
       "medium" : "CHECKERED_MARBLE"
-      }
+    }
   ],
 
   "tmp": [
+    { 
+      "type" : "mesh",
+      "src": "./demo/teapot.obj",
+      "scale": [1,1,1],
+      "material" : "TEST"
+    },
     {
       "type": "sphere",
       "radius": 1,
@@ -180,11 +175,6 @@
       "material" : "BLUE_LIGHT"
     },
     { "type" : "box_terrain" },
-    { 
-      "type" : "__checkeredplane",
-      "y": 0,
-      "medium" : "CHECKERED_MARBLE"
-    },
     { 
       "type" : "_mesh",
       "src": "./demo/teapot.obj",

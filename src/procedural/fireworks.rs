@@ -141,7 +141,7 @@ pub fn create_firework(o: &Value) -> SceneObject {
                         );
     let boxed_particles = particles
                             .iter()
-                            .map(|p| Box::new(p.s.clone()) as Box<Geometry + Sync + Send>)
+                            .map(|p| Box::new(p.s.clone()) as Box<dyn Geometry + Sync + Send>)
                             .collect();
     let geom = Union::new(boxed_particles);
 

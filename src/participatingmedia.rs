@@ -43,7 +43,7 @@ pub struct HomogenousFog {
 impl ParticipatingMedium for HomogenousFog{}
 impl MaterialModel for HomogenousFog {
     fn scatter(&self, r: &Ray, i: &Intersection, _s: &Scene) -> ScatteredRay {
-        let amount = i.dist * self.density;
+       // let amount = i.dist * self.density;
         return ScatteredRay {
             ray: Some(Ray {
                 ro: i.point,
@@ -82,8 +82,8 @@ pub struct LowAltitudeFog {
     falloff: f64,
 }
 impl MaterialModel for LowAltitudeFog {
-    fn scatter(&self, _r: &Ray, i: &Intersection, _s: &Scene) -> ScatteredRay {
-        let amount = i.dist * self.density;
+    fn scatter(&self, _r: &Ray, _i: &Intersection, _s: &Scene) -> ScatteredRay {
+        //let amount = i.dist * self.density;
         // TODO
         return ScatteredRay {
             ray: None,

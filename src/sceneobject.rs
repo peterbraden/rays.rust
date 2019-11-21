@@ -7,8 +7,8 @@ use shapes::bbox::BBox;
 use std::sync::Arc;
 
 pub struct SceneObject {
-    pub geometry: Box<Geometry + Sync + Send>,
-    pub medium: Box<Medium + Sync + Send>,
+    pub geometry: Box<dyn Geometry + Sync + Send>,
+    pub medium: Box<dyn Medium + Sync + Send>,
 }
 /*
 impl SceneObject {

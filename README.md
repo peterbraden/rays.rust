@@ -4,13 +4,8 @@
 ## Gallery
 
 ![block terrain](demo/scenes/block-terrain.png)
-![spheres](demo/scenes/spheres/spheres.png)
-![Ocean 1](demo/scenes/ocean-1.png)
-![Ocean 2](demo/scenes/ocean-2.png)
 
-
-## Current work
-![demo image](demo/demo.png)
+[See full gallery of test scenes](./demo/scenes.md)
 
 A raytracer written in rust.
 
@@ -52,6 +47,7 @@ cargo run --release -- -p demo/demo.json
 - [An Efficient Parametric Algorithm for Octree Traversal, J. Revelles, C. Urena, M. Lastra](http://wscg.zcu.cz/wscg2000/Papers_2000/X31.pdf)
 - [Simulating Ocean Water, J. Tessendorf](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.161.9102&rep=rep1&type=pdf)
 - [Physically Based Raytracing, M. Pharr, W. Jakob, G. Humphreys](http://www.pbr-book.org/)
+- [Roth, S. D. (1982). Ray casting for modeling solids.](sci-hub.se/10.1016/0146-664x%2882%2990169-1)
 
 
 ## Previous Work

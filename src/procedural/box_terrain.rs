@@ -46,13 +46,13 @@ pub fn create_box_terrain() -> SceneObject {
     for x in -20 .. 20 {
         for z in -20 .. 20 {
             let y = rand() * rand();
-            let b = BBox { 
-                min: Vector3::new(
+            let b = BBox::new( 
+                Vector3::new(
                     x as f64 * cube_size, 0., z as f64 *cube_size),
-                max: Vector3::new(
+                Vector3::new(
                     x as f64 *cube_size + cube_size, y * cube_size,z as f64 * cube_size + cube_size)
 
-            };
+            );
             bounds = bounds.union(&b);
             boxes_vec.push(Arc::new(b));
         }

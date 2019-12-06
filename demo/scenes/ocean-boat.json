@@ -1,0 +1,49 @@
+
+{
+  "width": 1200,
+  "height": 1200,
+
+  "supersamples": 128,
+  "chunk_size": 128,
+  "samples_per_chunk": 1,
+  
+  "background": [0.1, 0.1, 0.1],
+  "shadow_bias": 0.0001,
+  "max_depth": 3,
+
+  "materials": {
+    "WHITE_PLASTIC": {
+      "type": "plastic",
+      "refractive_index": 1.575,
+      "albedo": [0.9, 0.9, 0.9],
+      "opacity": 0.2
+    }
+  },
+  "media": {},
+
+  "camera": {
+    "location": [0, 5, -220],
+    "lookat" : [0, 4, 0],
+    "up" : [0,1,0],
+    "angle": 0.9,
+    "aperture": 0.01
+  },
+  
+  "lights" : [],
+  "variables" : {},
+  "objects": [
+    { "type" : "ocean", "resolution": 20, "fourier_size": 256, "amplitude": 100, "wind": [0.8, 0.4], "color": [0, 0.1, 0.15]},
+    { "type" : "skysphere", "sun_direction": [0,0.005,1], "brightness": 70},
+    { 
+      "type": "rotate",
+      "item" : {
+        "type" : "mesh",
+        "src": "./demo/boat.obj",
+        "scale": [1,1,1]
+        }
+      , "roll" : -90
+      , "material" : "WHITE_PLASTIC"
+    }
+  ]
+}
+

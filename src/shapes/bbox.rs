@@ -1,14 +1,21 @@
-use na::{Vector3};
+use na::{Vector3, Point3};
+use na::geometry::Transform;
 use std::fmt;
 use ray::Ray;
 use intersection::RawIntersection;
 use shapes::geometry::Geometry;
 
-// Axis aligned bounding box
+#[derive(Debug, Copy, Clone)]
+pub struct Box {
+    pub min: Point3<f64>, // Point closest to origin
+    pub max: Point3<f64>,
+}
+
+// Box but aligned with axes 
 #[derive(Debug, Copy, Clone)]
 pub struct BBox {
-    pub min: Vector3<f64>, // Point closest to origin
-    pub max: Vector3<f64>,
+    pub min: Point3<f64>, // Point closest to origin
+    pub max: Point3<f64>,
 }
 
 // As described looking along the Z-axis from 0 to positive.
@@ -50,7 +57,7 @@ fn find_min_max(min: &Vector3<f64>, max: &Vector3<f64>, ro: &Vector3<f64>, invrd
 
 impl BBox {
     pub fn new(min: Vector3<f64>, max: Vector3<f64>) -> BBox {
-        BBox {min: min, max: max}
+        BBox {min: Point3::from(min), max: Point3::from(max)}
     }
 
     pub fn min() -> BBox {
@@ -59,7 +66,6 @@ impl BBox {
             Vector3::new(0., 0., 0.)
         );
     }
-
 
     // Cast the enum here
     // Rust is kinda annoying in that it lets you go enum -> u8 but not vice versa.
@@ -86,14 +92,14 @@ impl BBox {
         let zmax = bounds.min.z + (if zoffs !=0 { zdiff } else { zdiff * 0.5 });
 
         return BBox {
-            min: Vector3::new(xmin, ymin, zmin),
-            max: Vector3::new(xmax, ymax, zmax),
+            min: Point3::new(xmin, ymin, zmin),
+            max: Point3::new(xmax, ymax, zmax),
         }
     }
 
     pub fn fast_intersects(&self, ro: &Vector3<f64>, invrd: &Vector3<f64>) -> bool {
         //http://tavianator.com/fast-branchless-raybounding-box-intersections/
-        let (tmin, tmax) = find_min_max(&self.min, &self.max, &ro, &invrd);
+        let (tmin, tmax) = find_min_max(&self.min.coords, &self.max.coords, &ro, &invrd);
 
         // if tmax < 0, ray (line) is intersecting AABB, but the whole AABB is behind us
         if tmax < 0. {
@@ -108,6 +114,21 @@ impl BBox {
         return true
     }
 
+    pub fn transform(&self, transform: &na::Transform3<f64>) -> BBox {
+        // Transform all vertices and then return bbox of that box.
+        let mut ret = BBox::new(
+            (transform * self.min).coords,
+            (transform * self.min).coords
+        );
+        ret = ret.union_point(&(transform * &Point3::new(self.max.x, self.min.y, self.min.z)).coords);
+        ret = ret.union_point(&(transform * &Point3::new(self.min.x, self.max.y, self.min.z)).coords);
+        ret = ret.union_point(&(transform * &Point3::new(self.min.x, self.min.y, self.max.z)).coords);
+        ret = ret.union_point(&(transform * &Point3::new(self.max.x, self.max.y, self.min.z)).coords);
+        ret = ret.union_point(&(transform * &Point3::new(self.max.x, self.min.y, self.max.z)).coords);
+        ret = ret.union_point(&(transform * &Point3::new(self.min.x, self.max.y, self.max.z)).coords);
+        ret = ret.union_point(&(transform * &Point3::new(self.max.x, self.max.y, self.max.z)).coords);
+        return ret;
+    }
 
     pub fn entry_face(&self, r: &Ray) -> Option<BoxFace> {
         let invrd = vec3_invert(&r.rd);
@@ -234,7 +255,7 @@ impl BBox {
         return true;
     }
 
-    pub fn contains_point(self, pt: Vector3<f64>) -> bool { 
+    pub fn contains_point(self, pt: &Vector3<f64>) -> bool { 
       if pt.x < self.min.x || pt.x > self.max.x { return false; }
       if pt.y < self.min.y || pt.y > self.max.y { return false; }
       if pt.z < self.min.z || pt.z > self.max.z { return false; }
@@ -267,11 +288,11 @@ impl Geometry for BBox {
         if !self.fast_intersects(&r.ro, &invrd) { 
             return None
         }
-        let (tmin, _tmax) = find_min_max(&self.min, &self.max, &r.ro, &invrd);
+        let (tmin, _tmax) = find_min_max(&self.min.coords, &self.max.coords, &r.ro, &invrd);
         let dist = tmin;
 		let point =  r.ro + (r.rd * dist);
-		let center = (self.min + self.max) * 0.5;
-		let p = (point - center).normalize().component_div(&(self.max - self.min)); 
+		let center = na::center(&self.min, &self.max);
+		let p = (point - center.coords).normalize().component_div(&(self.max - self.min)); 
         let ndir = p.iamax();
         let mut normal = Vector3::new(0.,0.,0.);
         normal[ndir] = if p[ndir].is_sign_positive() { 1. } else { -1. };
@@ -285,6 +306,14 @@ impl Geometry for BBox {
 
     fn bounds(&self) -> BBox {
         return self.clone()
+    }
+
+    fn fast_intersects(&self, r: &Ray) -> bool {
+        return BBox::fast_intersects(&self, &r.ro, &vec3_invert(&r.rd));
+    }
+
+    fn inside(&self, p: &Vector3<f64>) -> bool {
+        return self.contains_point(p);
     }
 }
 

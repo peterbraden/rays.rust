@@ -39,6 +39,7 @@ mod intersection;
 mod sceneobject;
 mod light;
 mod shapes {
+    pub mod transform;
     pub mod bbox;
     pub mod geometry;
     pub mod csg;

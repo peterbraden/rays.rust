@@ -2,13 +2,13 @@
   "width": 240,
   "height": 120,
 
-  "supersamples": 12,
+  "supersamples": 20,
   "chunk_size": 64,
-  "samples_per_chunk": 2,
+  "samples_per_chunk": 1,
 
-  "background": [0.1, 0.1, 0.2],
+  "background": [0.3, 0.3, 0.3],
   "shadow_bias": 0.000001,
-  "max_depth": 6,
+  "max_depth": 2,
 
   "materials": {
     "TEST": {
@@ -111,10 +111,10 @@
   },
 
   "camera": {
-    "location": [0, 0.4, -30],
+    "location": [0, 15, -30],
     "lookat" : [0, 1, 0],
     "up" : [0,1,0],
-    "angle": 0.50,
+    "angle": 0.20,
     "aperture": 0.01
   },
   
@@ -122,12 +122,12 @@
     {
       "location": [0, 30, 0], 
       "color": "white",
-      "intensity": 20
+      "intensity": 40
     },
     {
-      "location": [0, 30, -40], 
+      "location": [2, 30, -40], 
       "color": "white",
-      "intensity": 10
+      "intensity": 20
     }
   ],
 
@@ -136,15 +136,28 @@
   "objects": [
     { "type" : "skysphere"},
     { "type" : "difference",
-      "a": { 
-        "type" : "plane",
-        "y": 0
+      "a": { "type" : "difference",
+        "a": { 
+            "type": "sphere",
+            "radius": 2,
+            "location": [0, 2, 0]
+        },
+        "b": {
+            "type": "sphere",
+            "radius": 1.5,
+            "location": [2, 3, -2]
+        }
       },
       "b": {
-          "type": "sphere",
-          "radius": 1,
-          "location": [0, 5, 0]
+        "type": "box",
+        "min": [0, 3, 0],
+        "max": [-1, 6, -3]
       },
+      "material" : "RED_WHITTED"
+    },
+    {
+      "type" : "checkeredplane",
+      "y": 0,
       "medium" : "CHECKERED_MARBLE"
     }
   ],

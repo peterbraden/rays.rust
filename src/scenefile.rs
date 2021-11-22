@@ -6,6 +6,7 @@ use shapes::triangle::Triangle;
 use shapes::plane::Plane;
 use shapes::mesh::Mesh;
 use shapes::csg::{Primitive, Difference};
+use shapes::transform::{Transform};
 use ocean::create_ocean;
 use shapes::bbox::BBox;
 use light::Light;
@@ -182,7 +183,8 @@ impl SceneFile {
         if t == "checkeredplane" {
             return Some(Arc::new(SceneFile::parse_checkeredplane(&o, m)));
         }
-        return None
+        panic!("Unknown Object");
+        //return None
     }
     pub fn parse_skysphere(o: &Value) -> SceneObject {
         return create_sky_sphere(o);
@@ -215,6 +217,10 @@ impl SceneFile {
             return Some(SceneFile::parse_plane(&o));
         }
 
+        if t == "rotate" {
+            return Some(SceneFile::parse_rotation(&o));
+        }
+
         if t == "difference" {
             return Some(SceneFile::parse_difference(&o));
         }
@@ -228,6 +234,14 @@ impl SceneFile {
             a: Primitive { item: a },
             b: Primitive { item: b }, 
         });
+    }
+
+    pub fn parse_rotation(o: &Value) -> Box<dyn Geometry + Sync + Send> {
+        let a = SceneFile::parse_geometry(&o["item"]).unwrap(); // Panic if fails
+        let roll = SceneFile::parse_number(&o["roll"], 0.).to_radians();
+        let pitch = SceneFile::parse_number(&o["pitch"], 0.).to_radians();
+        let yaw = SceneFile::parse_number(&o["yaw"], 0.).to_radians();
+        return Box::new(Transform::rotate(a, roll, pitch, yaw));
     }
 
     pub fn parse_mesh(o: &Value) -> Box<dyn Geometry + Sync + Send> {

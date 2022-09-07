@@ -18,6 +18,7 @@ pub struct Mesh {
     triangle_count: usize,
 }
 
+// A simple triangle collection mesh. 
 impl Mesh {
     pub fn from_obj(pth: String, scale: Vector3<f64>) -> Mesh {
         let obj = tobj::load_obj(&Path::new(&pth));
@@ -82,7 +83,7 @@ impl Geometry for Mesh {
         return self.triangle_count as u64;
     }
 }
-
+/*
 type TriangleInd = (usize, usize, usize);
 
 pub struct Mesh2 {
@@ -91,4 +92,18 @@ pub struct Mesh2 {
     edges: Vec<TriangleInd>, // Indices into vertices
     bounds: BBox,
     triangle_count: usize,
+}
+*/
+
+pub struct WingedEdge {
+    edge: Ray,
+
+    face_left: Triangle,
+    face_right: Triangle;
+
+    left_cw: WingedEdge,
+    left_ccw: WingedEdge,
+  
+    right_cw: WingedEdge,
+    right_ccw: WingedEdge,
 }

@@ -4,7 +4,7 @@ name = "rays"
 version = "0.0.1"
 
 [dependencies]
-image = "0.21.3"
+image = "0.23.12"
 nalgebra = "0.27.1"
 time = "0.1"
 rand = "0.6"

@@ -1,3 +1,24 @@
+/// Meshes
+///
+/// For simplicity, we'll limit the scope to triangular meshes (rather than including arbitrary
+/// polygonal meshes) and limit that scope to meshes that are manifold.
+///
+/// In order to use a mesh in a ray-tracing context, we will need to use an acceleration structure
+/// to performantly intersect with the appropriate triangle. Because of this, at render time, the
+/// mesh will need the repetition of vertices necessary to store the triangles in an Octree.
+///
+/// (POSSIBLE ENHANCEMENT: Is there a way to use the octree with indices to dynamically reconstruct
+/// triangles?)
+///
+/// Most other Mesh datastructures are optimisations to reduce the memory requirements by removing
+/// repetition of positional data using indexes of vertices. This makes a lot of sense when you
+/// care about a lot of serialisation (for example streaming to a GPU) but in our context of
+/// in-memory tracing, doesn't provide a lot of advantages.
+///
+/// ## References:
+/// 1. Fundamentals of Computer Graphics (4th Ed.) - Marschner, Steve
+
+
 use std::path::Path;
 use tobj;
 use std::f64;
@@ -83,27 +104,4 @@ impl Geometry for Mesh {
         return self.triangle_count as u64;
     }
 }
-/*
-type TriangleInd = (usize, usize, usize);
 
-pub struct Mesh2 {
-    vertices: Vec<Vector3<f64>>,
-    vertice_normals: Vec<Vector3<f64>>,
-    edges: Vec<TriangleInd>, // Indices into vertices
-    bounds: BBox,
-    triangle_count: usize,
-}
-*/
-
-pub struct WingedEdge {
-    edge: Ray,
-
-    face_left: Triangle,
-    face_right: Triangle;
-
-    left_cw: WingedEdge,
-    left_ccw: WingedEdge,
-  
-    right_cw: WingedEdge,
-    right_ccw: WingedEdge,
-}

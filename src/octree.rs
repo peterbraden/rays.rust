@@ -337,13 +337,12 @@ impl<T: Geometry> Octree<T> {
     */
 }
 
-/*
-impl fmt::Display for OctreeNode<SceneObject> {
+impl fmt::Display for OctreeNode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut c = "".to_string();
         let mut p = "".to_string();
 
-        for _ in -1.. self.depth{
+        for _ in -1 .. self.depth as i64{
             p = p + "  ";
         }
         p = p + "|-";
@@ -362,5 +361,3 @@ impl fmt::Display for OctreeNode<SceneObject> {
         write!(f, "OctreeNode -[{}]{}", self.items.len(), c)
     }
 }
-
-*/

@@ -4,7 +4,7 @@ use scenegraph::SceneGraph;
 use shapes::sphere::Sphere;
 use shapes::triangle::Triangle;
 use shapes::plane::Plane;
-use shapes::mesh::Mesh;
+use shapes::mesh::{Mesh, SmoothMesh};
 use shapes::csg::{Primitive, Difference};
 use shapes::transform::{Transform};
 use ocean::create_ocean;
@@ -209,6 +209,10 @@ impl SceneFile {
             return Some(SceneFile::parse_mesh(&o));
         }
 
+        if t == "smoothmesh" {
+            return Some(SceneFile::parse_smoothmesh(&o));
+        }
+
         if t == "box" {
             return Some(SceneFile::parse_box(&o));
         }
@@ -246,6 +250,12 @@ impl SceneFile {
 
     pub fn parse_mesh(o: &Value) -> Box<dyn Geometry + Sync + Send> {
         return Box::new(Mesh::from_obj(
+                SceneFile::parse_string(&o["src"]),
+                SceneFile::parse_vec3_def(&o, "scale", Vector3::new(1., 1., 1.))));
+    }
+
+    pub fn parse_smoothmesh(o: &Value) -> Box<dyn Geometry + Sync + Send> {
+        return Box::new(SmoothMesh::from_obj(
                 SceneFile::parse_string(&o["src"]),
                 SceneFile::parse_vec3_def(&o, "scale", Vector3::new(1., 1., 1.))));
     }

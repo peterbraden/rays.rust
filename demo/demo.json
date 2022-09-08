@@ -1,14 +1,14 @@
 {
-  "width": 240,
-  "height": 120,
+  "width": 640,
+  "height": 640,
 
   "supersamples": 20,
   "chunk_size": 64,
   "samples_per_chunk": 1,
 
-  "background": [0.3, 0.3, 0.3],
+  "background": [0.0, 0.0, 0.0],
   "shadow_bias": 0.000001,
-  "max_depth": 2,
+  "max_depth": 9,
 
   "materials": {
     "TEST": {
@@ -135,30 +135,16 @@
 
   "objects": [
     { "type" : "skysphere"},
-    { "type" : "difference",
-      "a": { "type" : "difference",
-        "a": { 
-            "type": "sphere",
-            "radius": 2,
-            "location": [0, 2, 0]
-        },
-        "b": {
-            "type": "sphere",
-            "radius": 1.5,
-            "location": [2, 3, -2]
-        }
-      },
-      "b": {
-        "type": "box",
-        "min": [0, 3, 0],
-        "max": [-1, 6, -3]
-      },
-      "material" : "RED_WHITTED"
+    { 
+      "type" : "plane",
+      "y": -1,
+      "material" : "WHITE_MARBLE"
     },
-    {
-      "type" : "checkeredplane",
-      "y": 0,
-      "medium" : "CHECKERED_MARBLE"
+    { 
+      "type" : "smoothmesh",
+      "src": "./demo/teapot-normals.obj",
+      "scale": [0.1,0.1,0.1],
+      "material" : "POLISHED_STEEL"
     }
   ],
 

@@ -27,11 +27,10 @@ use na::{Vector3};
 use ray::Ray;
 use intersection::RawIntersection;
 use shapes::bbox::BBox;
-use shapes::triangle::Triangle;
+use shapes::triangle::{Triangle, SmoothTriangle};
 use std::vec::Vec;
 use std::sync::Arc;
 use octree::Octree;
-
 
 pub struct Mesh {
     triangles: Octree<Triangle>,
@@ -92,6 +91,96 @@ impl Mesh {
 }
 
 impl Geometry for Mesh {
+    fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+        return self.triangles.raw_intersection(r, f64::INFINITY, 0f64);
+    }
+
+    fn bounds(&self) -> BBox {
+        return self.bounds;
+    }
+
+    fn primitives(&self) -> u64 {
+        return self.triangle_count as u64;
+    }
+}
+
+
+pub struct SmoothMesh {
+    triangles: Octree<SmoothTriangle>,
+    bounds: BBox,
+    triangle_count: usize,
+}
+
+impl SmoothMesh {
+    pub fn from_obj(pth: String, scale: Vector3<f64>) -> SmoothMesh {
+        let obj = tobj::load_obj(&Path::new(&pth));
+        assert!(obj.is_ok());
+        let (models, materials) = obj.unwrap();
+        println!("# of models: {}", models.len());
+        println!("# of materials: {}", materials.len());
+
+        let mut triangles = Vec::new();
+        for (_i, m) in models.iter().enumerate() {
+            let mesh = &m.mesh;
+            if mesh.normals.is_empty() {
+                print!("Normals are required for a smooth mesh - skipping {}", m.name);
+                println!("Skipping {}", m.name);
+                continue;
+            }
+            println!("> model {:?}", mesh.normals.len());
+
+            let positions: Arc<Vec<Vector3<f64>>> = Arc::new(
+                mesh.positions
+                    .chunks(3)
+                    .map(|i| Vector3::new(i[0] as f64, i[1] as f64, i[2] as f64))
+                    .map(|i| i.component_mul(&scale))
+                    .collect()
+            );
+            let normals: Arc<Vec<Vector3<f64>>> = Arc::new(
+                mesh.normals
+                    .chunks(3)
+                    .map(|i| Vector3::new(i[0] as f64, i[1] as f64, i[2] as f64))
+                    .collect()
+            );
+            let mut tris: Vec<Arc<SmoothTriangle>> = mesh.indices.chunks(3).map(|i| {
+                let n = positions[i[0] as usize];
+                Arc::new(
+                    SmoothTriangle::new(
+                        positions[i[0] as usize],
+                        positions[i[1] as usize],
+                        positions[i[2] as usize],
+                        normals[i[0] as usize],
+                        normals[i[1] as usize],
+                        normals[i[2] as usize],
+                    )
+                    )
+            }).collect();
+            triangles.append(&mut tris);
+        }
+
+        println!("# of triangles: {}", triangles.len());
+
+        let bounds = SmoothMesh::bounds_of(&triangles);
+        let tree = Octree::new(8, bounds, &triangles); 
+        return SmoothMesh {
+            triangles: tree,
+            bounds: bounds,
+            triangle_count: triangles.len()
+        }
+    }
+
+    fn bounds_of(triangles: &Vec<Arc<SmoothTriangle>>) -> BBox {
+        let mut bb = BBox::min();
+
+        for t in triangles {
+            bb = bb.union(&t.bounds());
+        }
+
+        return bb;
+    }
+}
+
+impl Geometry for SmoothMesh {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         return self.triangles.raw_intersection(r, f64::INFINITY, 0f64);
     }

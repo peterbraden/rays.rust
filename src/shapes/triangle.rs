@@ -1,3 +1,7 @@
+/// 
+/// ## References
+///
+/// 1. https://www.scratchapixel.com/lessons/3d-basic-rendering/ray-tracing-rendering-a-triangle/barycentric-coordinates
 use shapes::geometry::Geometry;
 use na::{Vector3};
 use ray::Ray;
@@ -120,6 +124,15 @@ impl Geometry for Triangle {
     }
 }
 
+
+fn triangle_area(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>) -> f64 {
+    let v0v1 = v1 - v0; 
+    let v0v2 = v2 - v0; 
+    // Magnitude of the cross product can be interpreted as the area of the parallelogram. See [1]
+    v0v1.cross(&v0v2).norm() / 2.
+}
+
+
 #[derive(Clone, Debug)]
 pub struct SmoothTriangle {
     pub v0: Vector3<f64>,
@@ -153,6 +166,17 @@ impl SmoothTriangle {
         }
     }
     */
+
+    fn interpolate_normal(&self, p: &IntersectionPoint) -> Vector3<f64>{
+        // Calculate barycentric coordinates of the intersection point
+        // Barycentric coordinate components correspond to the proportional
+        // area of the triangle between the internal point and each edge, and the
+        // entire triangle. Thus:
+        let a = triangle_area(self.v0, self.v1, p.point) / triangle_area(self.v0, self.v1, self.v2);
+        let b = triangle_area(self.v0, self.v2, p.point) / triangle_area(self.v0, self.v1, self.v2);
+        // We can skip c as a + b + c = 1
+        return self.normalv2 * a  + self.normalv1 * b + (1. - a - b) * self.normalv0; 
+    }
 }
 
 impl Geometry for SmoothTriangle {
@@ -161,7 +185,7 @@ impl Geometry for SmoothTriangle {
             Some(x) => Some(RawIntersection {
                 dist: x.dist, 
                 point: x.point,
-                normal: self.normalv1 // TODO 
+                normal: self.interpolate_normal(&x) 
             }),
             None => None
         }

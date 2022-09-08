@@ -137,13 +137,13 @@
     { "type" : "skysphere"},
     { 
       "type" : "plane",
-      "y": 0,
+      "y": -1,
       "material" : "WHITE_MARBLE"
     },
     { 
-      "type" : "mesh",
-      "src": "./demo/teapot.obj",
-      "scale": [1,1,1],
+      "type" : "smoothmesh",
+      "src": "./demo/teapot-normals.obj",
+      "scale": [0.1,0.1,0.1],
       "material" : "POLISHED_STEEL"
     }
   ],

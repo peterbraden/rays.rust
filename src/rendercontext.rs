@@ -1,4 +1,4 @@
-extern crate time;
+use std::time::{Instant};
 
 use crate::scene::Scene;
 use crate::color::Color;
@@ -14,7 +14,7 @@ pub struct RenderContext {
     pub width: usize,
     pub height: usize,
     pub rays_cast: u64,
-    pub start_time: f64,
+    pub start_time: Instant,
     pub progressive_render: bool,
     pub pixels_rendered: u64,
     pub output_filename: String,
@@ -55,7 +55,8 @@ fn format_f64(v: f64) -> String {
 }
 
 impl RenderContext {
-    pub fn new(start_time: f64, width:usize, height:usize, progressive_render: bool, filename: &str) -> RenderContext {
+    pub fn new(width:usize, height:usize, progressive_render: bool, filename: &str) -> RenderContext {
+        let start_time = Instant::now();
         let output_filename = String::from(filename).replace(".json", ".png");
         return RenderContext {
             image: vec![Color::black(); (width*height) as usize],
@@ -113,24 +114,24 @@ impl RenderContext {
     }
     */
     pub fn print_stats(&self) {
-        let elapsed = time::precise_time_s() - self.start_time;
+        let elapsed = Instant::now() - self.start_time;
 
         print!("\n==========================================\n");
         print!("| Rays Cast: {}\n", self.rays_cast);
-        print!("| Elapsed Time (s): {:.4}\n", elapsed);
-        print!("| Rays per sec: {:.2}\n", self.rays_cast as f64 / elapsed);
+        print!("| Elapsed Time: {:?}\n", elapsed);
+        print!("| Rays per sec: {:.2}\n", self.rays_cast as f64 / elapsed.as_secs_f64());
         print!("==========================================\n");
 
     }
 
     pub fn print_scene_stats(&self, s: &Scene){
-        let elapsed = time::precise_time_s() - self.start_time;
+        let elapsed = Instant::now() - self.start_time;
         println!("# ============== Scene ===================");
         println!("| Output: {}x{} {} samples", s.image.width, s.image.height, s.render.supersamples);
         println!("|  -> : {}", self.output_filename);
         println!("|");
         println!("| ----------- Scene Objects --------------");
-        println!("| Parsed in:  {:.4}s", elapsed);
+        println!("| Parsed in:  {:?}", elapsed);
         println!("| Objects: \n {}", s.objects);
         println!("| - Primitives: {}\n", s.objects
                                         .items
@@ -141,11 +142,11 @@ impl RenderContext {
     }
     
     pub fn print_progress(&self, s: &Scene){
-        let elapsed = time::precise_time_s() - self.start_time;
-        println!("- [{:.0}s] {} rays cast ({} RPS), {} Rays per pixel, {}%, {} threads",
+        let elapsed = Instant::now() - self.start_time;
+        println!("- [{:?}] {} rays cast ({} RPS), {} Rays per pixel, {}%, {} threads",
                  elapsed,
                  format_f64(self.rays_cast as f64),
-                 format_f64(self.rays_cast as f64 / elapsed),
+                 format_f64(self.rays_cast as f64 / elapsed.as_secs_f64()),
                  format_f64(self.rays_cast as f64 / self.pixels_rendered as f64),
                  format_f64((self.pixels_rendered as f64 / (self.width * self.height * s.render.supersamples as usize) as f64) * 100.),
                  rayon::current_num_threads());

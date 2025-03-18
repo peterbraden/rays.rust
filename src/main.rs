@@ -98,7 +98,6 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    let start_time = time::precise_time_s();
     println!("- Building models");
     let s = scenefile::SceneFile::from_file(
        &args.scene 
@@ -108,7 +107,6 @@ fn main() {
     // TODO: Overriding here isn't picked up in the camera config that happens in the parse.
     
     let rc = RenderContext::new(
-            start_time,
             width,
             height,
             args.progressive_render,

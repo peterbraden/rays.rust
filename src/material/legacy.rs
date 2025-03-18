@@ -23,9 +23,7 @@ impl MaterialModel for Whitted {
 
             match shadow_intersection {
                 Some(_) => (),// Point in shadow...
-                None => (
-                    out = diffuse(self.pigment, &intersection, &light_vec, &light) + phong(self.phong, &r, &intersection, &light_vec)
-                    ),
+                None => out = diffuse(self.pigment, &intersection, &light_vec, &light) + phong(self.phong, &r, &intersection, &light_vec),
             }
         }
 

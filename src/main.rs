@@ -79,7 +79,7 @@ use rand::seq::SliceRandom;
 #[command(version, about, long_about = None)]
 struct Args {
     ///Set scene file
-    #[arg(long, index=1)]
+    #[arg(index=1)]
     scene: String,
 
     ///Update the output file when a chunk is completed. Good for debugging
@@ -87,11 +87,11 @@ struct Args {
     progressive_render: bool,
 
     ///Set the width of the output image; overrides the scenefile if specified
-    #[arg(short, long)]
+    #[arg(long)]
     width: Option<usize>,
 
     ///Set the height of the output image; overrides the scenefile if specified
-    #[arg(short, long)]
+    #[arg(long)]
     height: Option<usize>,
 }
 

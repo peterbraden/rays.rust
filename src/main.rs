@@ -17,7 +17,7 @@ extern crate rustfft;
 extern crate termcolor;
 
 
-use clap::{Arg, App};
+use clap::Parser;
 use rayon::prelude::*;
 
 mod ray;
@@ -74,46 +74,45 @@ use std::sync::{Arc, Mutex};
 use rand::thread_rng;
 use rand::seq::SliceRandom;
 
+/// Rays
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    ///Set scene file
+    #[arg(long, index=1)]
+    scene: String,
+
+    ///Update the output file when a chunk is completed. Good for debugging
+    #[arg(short, long)]
+    progressive_render: bool,
+
+    ///Set the width of the output image; overrides the scenefile if specified
+    #[arg(short, long)]
+    width: Option<usize>,
+
+    ///Set the height of the output image; overrides the scenefile if specified
+    #[arg(short, long)]
+    height: Option<usize>,
+}
+
 fn main() {
-    let app = App::new("Rays")
-        .version("0.1")
-        .arg(Arg::with_name("scene")
-            .value_name("FILE")
-            .help("Set scene file")
-            .takes_value(true)
-            .required(true)
-            .index(1))
-        .arg(Arg::with_name("progressive_render")
-            .short("p")
-            .long("progressive-render")
-            .help("Update the output file when a chunk is completed. Good for debugging"))
-        .arg(Arg::with_name("width")
-             .short("w")
-             .long("width")
-             .takes_value(true)
-             .help("Set the width of the output image; overrides the scenefile if specified"))
-        .arg(Arg::with_name("height")
-             .short("h")
-             .long("height")
-             .takes_value(true)
-             .help("Set the height of the output image; overrides the scenefile if specified"));
+    let args = Args::parse();
 
     let start_time = time::precise_time_s();
     println!("- Building models");
-    let matches = app.get_matches();
     let s = scenefile::SceneFile::from_file(
-                matches.value_of("scene").unwrap()
-            );
-    let width = value_t!(matches.value_of("width"), usize).unwrap_or(s.image.width);
-    let height = value_t!(matches.value_of("height"), usize).unwrap_or(s.image.height);
+       &args.scene 
+    );
+    let width = args.width.unwrap_or(s.image.width);
+    let height = args.height.unwrap_or(s.image.height);
     // TODO: Overriding here isn't picked up in the camera config that happens in the parse.
     
     let rc = RenderContext::new(
             start_time,
             width,
             height,
-            matches.is_present("progressive_render"),
-            matches.value_of("scene").unwrap(),
+            args.progressive_render,
+            &args.scene,
             );
     rc.print_scene_stats(&s);
     let chunks: Vec<rendercontext::RenderableChunk> = rc.iter(&s).collect();

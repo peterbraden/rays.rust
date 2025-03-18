@@ -74,6 +74,10 @@ use std::sync::{Arc, Mutex};
 use rand::thread_rng;
 use rand::seq::SliceRandom;
 
+use indicatif::ProgressBar;
+use console::style;
+
+
 /// Rays
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -98,7 +102,10 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    println!("- Building models");
+    println!("{}",
+        style("# 1. - Parsing scene, building models").bold().cyan()
+    );
+
     let s = scenefile::SceneFile::from_file(
        &args.scene 
     );
@@ -112,14 +119,20 @@ fn main() {
             args.progressive_render,
             &args.scene,
             );
-    rc.print_scene_stats(&s);
+    println!("- Output: {}x{} @ {} samples -> {}", s.image.width, s.image.height, s.render.supersamples, rc.output_filename);
+    println!("- Scene Objects: {}, Primitives: {} ", s.objects.len(),  s.objects.primitives_len()); 
+
     let chunks: Vec<rendercontext::RenderableChunk> = rc.iter(&s).collect();
     let rcmtx = Arc::new(Mutex::new(rc));
 
     //let mut rng = thread_rng();
     //chunks.shuffle(&mut rng);
 
-    println!("- Starting Render");
+    println!("{}",
+        style("# 2. - Rendering ").bold().cyan()
+    );
+    let pb = ProgressBar::new_spinner();
+
     chunks
         .into_par_iter()
         //.iter()
@@ -132,8 +145,10 @@ fn main() {
             if rc.progressive_render {
                 paint::to_png(&rc);
             }
-            rc.print_progress(&s);
+            pb.set_message(rc.progress(&s));
+            pb.tick();
         });
+    pb.finish();
 
     let rc = rcmtx.lock().unwrap();
     //wireframe::wireframe(&s, &mut rc);

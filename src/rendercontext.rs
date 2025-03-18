@@ -4,6 +4,7 @@ use crate::scene::Scene;
 use crate::color::Color;
 use crate::trace::trace;
 
+
 // The render context is the data structure
 // that holds state about the current render.
 // 
@@ -124,27 +125,11 @@ impl RenderContext {
 
     }
 
-    pub fn print_scene_stats(&self, s: &Scene){
-        let elapsed = Instant::now() - self.start_time;
-        println!("# ============== Scene ===================");
-        println!("| Output: {}x{} {} samples", s.image.width, s.image.height, s.render.supersamples);
-        println!("|  -> : {}", self.output_filename);
-        println!("|");
-        println!("| ----------- Scene Objects --------------");
-        println!("| Parsed in:  {:?}", elapsed);
-        println!("| Objects: \n {}", s.objects);
-        println!("| - Primitives: {}\n", s.objects
-                                        .items
-                                        .iter()
-                                        .map(|x| x.geometry.primitives())
-                                        .fold(0, |acc, x| acc + x));
-        println!("# ========================================\n");
-    }
     
-    pub fn print_progress(&self, s: &Scene){
+    pub fn progress(&self, s: &Scene) -> String {
         let elapsed = Instant::now() - self.start_time;
-        println!("- [{:?}] {} rays cast ({} RPS), {} Rays per pixel, {}%, {} threads",
-                 elapsed,
+        return format!("{:.2}s {} rays cast ({} RPS), {} Rays per pixel, {}%, {} threads",
+                 elapsed.as_secs_f64(),
                  format_f64(self.rays_cast as f64),
                  format_f64(self.rays_cast as f64 / elapsed.as_secs_f64()),
                  format_f64(self.rays_cast as f64 / self.pixels_rendered as f64),

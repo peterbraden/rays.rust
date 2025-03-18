@@ -115,19 +115,18 @@ impl SmoothMesh {
     pub fn from_obj(pth: String, scale: Vector3<f64>) -> SmoothMesh {
         let obj = tobj::load_obj(&Path::new(&pth));
         assert!(obj.is_ok());
-        let (models, materials) = obj.unwrap();
-        println!("# of models: {}", models.len());
-        println!("# of materials: {}", materials.len());
+        let (models, _materials) = obj.unwrap();
+        //println!("# of models: {}", models.len());
+        //println!("# of materials: {}", materials.len());
 
         let mut triangles = Vec::new();
         for (_i, m) in models.iter().enumerate() {
             let mesh = &m.mesh;
             if mesh.normals.is_empty() {
-                print!("Normals are required for a smooth mesh - skipping {}", m.name);
-                println!("Skipping {}", m.name);
+                print!("!! [ Warning in STL parse ] Normals are required for a smooth mesh - skipping {}", m.name);
                 continue;
             }
-            println!("> model {:?}", mesh.normals.len());
+            //println!("> model {:?}", mesh.normals.len());
 
             let positions: Arc<Vec<Vector3<f64>>> = Arc::new(
                 mesh.positions

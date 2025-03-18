@@ -48,6 +48,17 @@ impl SceneGraph {
         &self.items
     }
 
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn primitives_len(&self) -> u64 {
+        self.items
+            .iter()
+            .map(|x| x.geometry.primitives())
+            .fold(0, |acc, x| acc + x)
+    }
+
     pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
         return match self.nearest_raw_intersection(r, max, min) {
             Some(tupl) =>{

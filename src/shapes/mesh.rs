@@ -143,7 +143,7 @@ impl SmoothMesh {
                     .collect()
             );
             let mut tris: Vec<Arc<SmoothTriangle>> = mesh.indices.chunks(3).map(|i| {
-                let n = positions[i[0] as usize];
+                let _n = positions[i[0] as usize];
                 Arc::new(
                     SmoothTriangle::new(
                         positions[i[0] as usize],

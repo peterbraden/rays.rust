@@ -134,7 +134,7 @@ fn main() {
             if rc.progressive_render {
                 paint::to_png(&rc);
             }
-            &rc.print_progress(&s);
+            rc.print_progress(&s);
         });
 
     let rc = rcmtx.lock().unwrap();

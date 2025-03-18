@@ -1,7 +1,7 @@
-use ray::Ray;
-use intersection::RawIntersection;
-use shapes::bbox::BBox;
-use na::{Vector3};
+use crate::ray::Ray;
+use crate::intersection::RawIntersection;
+use crate::shapes::bbox::BBox;
+use crate::na::{Vector3};
 
 
 // 

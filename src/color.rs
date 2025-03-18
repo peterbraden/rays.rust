@@ -1,4 +1,4 @@
-use na::Vector3;
+use crate::na::Vector3;
 use std::fmt;
 use std::ops::{Mul, Add, Div};
 use std::cmp::Ordering;

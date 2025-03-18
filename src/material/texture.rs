@@ -1,5 +1,5 @@
-use na::{Vector3};
-use material::model::MaterialModel;
+use crate::na::{Vector3};
+use crate::material::model::MaterialModel;
 
 pub trait Medium : Sync{
     fn material_at(&self, pt: Vector3<f64>) -> &Box<dyn MaterialModel + Sync + Send>; 

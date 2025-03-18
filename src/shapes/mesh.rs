@@ -22,15 +22,15 @@
 use std::path::Path;
 use tobj;
 use std::f64;
-use shapes::geometry::Geometry;
-use na::{Vector3};
-use ray::Ray;
-use intersection::RawIntersection;
-use shapes::bbox::BBox;
-use shapes::triangle::{Triangle, SmoothTriangle};
+use crate::shapes::geometry::Geometry;
+use crate::na::{Vector3};
+use crate::ray::Ray;
+use crate::intersection::RawIntersection;
+use crate::shapes::bbox::BBox;
+use crate::shapes::triangle::{Triangle, SmoothTriangle};
 use std::vec::Vec;
 use std::sync::Arc;
-use octree::Octree;
+use crate::octree::Octree;
 
 pub struct Mesh {
     triangles: Octree<Triangle>,

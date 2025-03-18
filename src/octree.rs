@@ -1,12 +1,12 @@
-use shapes::bbox::BBox;
-use na::{Vector3};
-use sceneobject::SceneObject;
+use crate::shapes::bbox::BBox;
+use crate::na::{Vector3};
+use crate::sceneobject::SceneObject;
 use std::sync::Arc;
 use std::fmt;
-use ray::Ray;
-use intersection::{RawIntersection, Intersection};
+use crate::ray::Ray;
+use crate::intersection::{RawIntersection, Intersection};
 use ordered_float::OrderedFloat;
-use shapes::geometry::Geometry;
+use crate::shapes::geometry::Geometry;
 
 #[derive(Clone)]
 pub struct Octree<T: Geometry>{

@@ -1,12 +1,12 @@
-use ray::Ray;
-use na::{Vector3};
-use intersection::{Intersection, RawIntersection};
-use sceneobject::SceneObject;
-use shapes::bbox::BBox;
-use octree::Octree;
+use crate::ray::Ray;
+use crate::na::{Vector3};
+use crate::intersection::{Intersection, RawIntersection};
+use crate::sceneobject::SceneObject;
+use crate::shapes::bbox::BBox;
+use crate::octree::Octree;
 use std::sync::Arc;
 use std::fmt;
-use shapes::geometry::Geometry;
+use crate::shapes::geometry::Geometry;
 
 pub struct SceneGraph {
     pub items: Vec<Arc<SceneObject>>,

@@ -68,8 +68,8 @@ mod procedural {
 }
 mod participatingmedia;
 
-use trace::trace;
-use rendercontext::RenderContext;
+use crate::trace::trace;
+use crate::rendercontext::RenderContext;
 use std::sync::{Arc, Mutex};
 use rand::thread_rng;
 use rand::seq::SliceRandom;

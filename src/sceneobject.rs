@@ -1,9 +1,9 @@
-use material::texture::Medium;
-use shapes::geometry::Geometry;
-use intersection::{RawIntersection, Intersection};
-use na::Vector3;
-use ray::Ray;
-use shapes::bbox::BBox;
+use crate::material::texture::Medium;
+use crate::shapes::geometry::Geometry;
+use crate::intersection::{RawIntersection, Intersection};
+use crate::na::Vector3;
+use crate::ray::Ray;
+use crate::shapes::bbox::BBox;
 use std::sync::Arc;
 
 pub struct SceneObject {

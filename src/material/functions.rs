@@ -1,11 +1,11 @@
-use na::{Vector3};
-use ray::Ray;
-use material::model::{MaterialModel, ScatteredRay};
-use geometry::{random_point_on_unit_sphere};
-use intersection::Intersection;
-use color::Color;
-use geometry::{rand};
-use light::Light;
+use crate::na::{Vector3};
+use crate::ray::Ray;
+use crate::material::model::{MaterialModel, ScatteredRay};
+use crate::geometry::{random_point_on_unit_sphere};
+use crate::intersection::Intersection;
+use crate::color::Color;
+use crate::geometry::{rand};
+use crate::light::Light;
 
 pub fn refract(v: Vector3<f64>, n: Vector3<f64>, ni_over_nt:f64) -> Option<Vector3<f64>> {
     let uv = v.normalize();

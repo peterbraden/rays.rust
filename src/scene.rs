@@ -1,10 +1,10 @@
-use camera;
-use na::Vector3;
-use scenegraph::SceneGraph;
-use light::Light;
-use color::Color;
-use shapes::bbox::BBox;
-use participatingmedia::ParticipatingMedium;
+use crate::camera;
+use crate::na::Vector3;
+use crate::scenegraph::SceneGraph;
+use crate::light::Light;
+use crate::color::Color;
+use crate::shapes::bbox::BBox;
+use crate::participatingmedia::ParticipatingMedium;
 
 // TODO
 pub enum PathCulling {

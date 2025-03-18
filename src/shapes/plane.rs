@@ -1,8 +1,8 @@
-use na::{Vector3};
-use ray::Ray;
-use intersection::RawIntersection;
-use shapes::bbox::BBox;
-use shapes::geometry::Geometry;
+use crate::na::{Vector3};
+use crate::ray::Ray;
+use crate::intersection::RawIntersection;
+use crate::shapes::bbox::BBox;
+use crate::shapes::geometry::Geometry;
 
 pub struct Plane {
     pub y: f64

@@ -1,9 +1,9 @@
-use na::{Vector3, Point3};
-use na::geometry::Transform;
+use crate::na::{Vector3, Point3};
+use crate::na::geometry::Transform;
 use std::fmt;
-use ray::Ray;
-use intersection::RawIntersection;
-use shapes::geometry::Geometry;
+use crate::ray::Ray;
+use crate::intersection::RawIntersection;
+use crate::shapes::geometry::Geometry;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Box {
@@ -319,7 +319,7 @@ impl Geometry for BBox {
 
 #[cfg(test)]
 mod tests {
-    use na::{Vector3};
+    use crate::na::{Vector3};
     use super::{BBox, BoxFace, Ray};
 
 	#[test]

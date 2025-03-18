@@ -1,9 +1,9 @@
-use color::Color;
-use ray::Ray;
-use intersection::Intersection;
-use scene::Scene;
-use material::model::{MaterialModel, ScatteredRay};
-use material::functions::scatter_lambertian;
+use crate::color::Color;
+use crate::ray::Ray;
+use crate::intersection::Intersection;
+use crate::scene::Scene;
+use crate::material::model::{MaterialModel, ScatteredRay};
+use crate::material::functions::scatter_lambertian;
 
 pub struct Lambertian {
     pub albedo: Color,

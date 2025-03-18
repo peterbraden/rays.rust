@@ -1,11 +1,11 @@
-use ray::Ray;
-use intersection::RawIntersection;
-use shapes::bbox::BBox;
-use octree::Octree;
+use crate::ray::Ray;
+use crate::intersection::RawIntersection;
+use crate::shapes::bbox::BBox;
+use crate::octree::Octree;
 use std::f64;
-use shapes::geometry::Geometry;
+use crate::shapes::geometry::Geometry;
 use std::sync::Arc;
-use na::geometry::{Affine3, Rotation3};
+use crate::na::geometry::{Affine3, Rotation3};
 
 pub struct Transform {
     pub item: Box<dyn Geometry + Sync + Send>,

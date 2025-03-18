@@ -1,10 +1,10 @@
-use color::Color;
-use scene::Scene;
-use material::model::{MaterialModel, ScatteredRay};
-use intersection::Intersection;
-use ray::Ray;
-use geometry::{rand};
-use material::functions::scatter_dielectric;
+use crate::color::Color;
+use crate::scene::Scene;
+use crate::material::model::{MaterialModel, ScatteredRay};
+use crate::intersection::Intersection;
+use crate::ray::Ray;
+use crate::geometry::{rand};
+use crate::material::functions::scatter_dielectric;
 
 pub struct Dielectric {
     pub refractive_index: f64,

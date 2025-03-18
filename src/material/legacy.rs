@@ -1,11 +1,11 @@
-use color::Color;
-use scene::Scene;
-use material::model::{MaterialModel, ScatteredRay};
-use intersection::Intersection;
-use ray::Ray;
-use na::Vector3;
-use light::Light;
-use material::functions::{reflect, diffuse, phong};
+use crate::color::Color;
+use crate::scene::Scene;
+use crate::material::model::{MaterialModel, ScatteredRay};
+use crate::intersection::Intersection;
+use crate::ray::Ray;
+use crate::na::Vector3;
+use crate::light::Light;
+use crate::material::functions::{reflect, diffuse, phong};
 
 pub struct Whitted {
     pub pigment: Color,

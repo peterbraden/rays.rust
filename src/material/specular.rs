@@ -1,10 +1,10 @@
-use color::Color;
-use scene::Scene;
-use material::model::{MaterialModel, ScatteredRay};
-use intersection::Intersection;
-use ray::Ray;
-use geometry::{random_point_on_unit_sphere};
-use material::functions::{reflect};
+use crate::color::Color;
+use crate::scene::Scene;
+use crate::material::model::{MaterialModel, ScatteredRay};
+use crate::intersection::Intersection;
+use crate::ray::Ray;
+use crate::geometry::{random_point_on_unit_sphere};
+use crate::material::functions::{reflect};
 
 pub struct Specular {
     pub albedo: Color,

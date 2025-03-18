@@ -1,8 +1,8 @@
-use na::{Vector3, Perspective3, Isometry3, Rotation, Rotation3};
-use ray::Ray;
+use crate::na::{Vector3, Perspective3, Isometry3, Rotation, Rotation3};
+use crate::ray::Ray;
 use std::f64;
 
-use geometry::random_point_on_disc;
+use crate::geometry::random_point_on_disc;
 
 
 pub trait Camera {
@@ -242,7 +242,7 @@ macro_rules! assert_approx_eq(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use na::Vector3;
+    use crate::na::Vector3;
 
     #[test]
     fn get_ray() {

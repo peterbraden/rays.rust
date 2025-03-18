@@ -1,8 +1,8 @@
-use color::Color;
-use na::{Vector3};
-use ray::Ray;
-use scene::Scene;
-use intersection::Intersection;
+use crate::color::Color;
+use crate::na::{Vector3};
+use crate::ray::Ray;
+use crate::scene::Scene;
+use crate::intersection::Intersection;
 use std::f64;
 
 // Returns num rays cast, Color

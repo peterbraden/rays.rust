@@ -2,11 +2,11 @@
 /// ## References
 ///
 /// 1. https://www.scratchapixel.com/lessons/3d-basic-rendering/ray-tracing-rendering-a-triangle/barycentric-coordinates
-use shapes::geometry::Geometry;
-use na::{Vector3};
-use ray::Ray;
-use intersection::RawIntersection;
-use shapes::bbox::BBox;
+use crate::shapes::geometry::Geometry;
+use crate::na::{Vector3};
+use crate::ray::Ray;
+use crate::intersection::RawIntersection;
+use crate::shapes::bbox::BBox;
 
 #[derive(Clone, Debug)]
 pub struct Triangle {

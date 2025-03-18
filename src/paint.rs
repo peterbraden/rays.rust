@@ -1,7 +1,7 @@
 extern crate image;
 
 use std::io::Write;
-use rendercontext::RenderContext;
+use crate::rendercontext::RenderContext;
 use std::path::Path;
 use termcolor::{BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
 

@@ -1,5 +1,5 @@
-use na::Vector3;
-use sceneobject::SceneObject;
+use crate::na::Vector3;
+use crate::sceneobject::SceneObject;
 use std::cmp;
 use std::fmt;
 use std::sync::Arc;

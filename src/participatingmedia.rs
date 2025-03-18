@@ -1,19 +1,19 @@
-use color::Color;
-use ray::Ray;
-use scene::Scene;
-use sceneobject::SceneObject;
-use material::model::{ MaterialModel, ScatteredRay };
+use crate::color::Color;
+use crate::ray::Ray;
+use crate::scene::Scene;
+use crate::sceneobject::SceneObject;
+use crate::material::model::{ MaterialModel, ScatteredRay };
 use serde_json::{Value, Map};
-use shapes::bbox::BBox;
-use intersection::{Intersection, RawIntersection};
+use crate::shapes::bbox::BBox;
+use crate::intersection::{Intersection, RawIntersection};
 extern crate rand as _rand;
-use participatingmedia::_rand::Rng;
+use crate::participatingmedia::_rand::Rng;
 use std::f64;
-use na::{Vector3};
-use shapes::geometry::Geometry;
-use material::texture::{Solid, Medium};
-use geometry::random_point_on_unit_sphere;
-use scenefile::SceneFile;
+use crate::na::{Vector3};
+use crate::shapes::geometry::Geometry;
+use crate::material::texture::{Solid, Medium};
+use crate::geometry::random_point_on_unit_sphere;
+use crate::scenefile::SceneFile;
 
 const BIG_NUMBER:f64 = 1000.;
 

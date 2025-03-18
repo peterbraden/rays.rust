@@ -1,10 +1,10 @@
-use color::Color;
-use ray::Ray;
-use intersection::Intersection;
-use scene::Scene;
-use geometry::{random_point_on_unit_sphere, rand};
-use material::model::{MaterialModel, ScatteredRay};
-use material::functions::{scatter_lambertian, scatter_dielectric, diffuse};
+use crate::color::Color;
+use crate::ray::Ray;
+use crate::intersection::Intersection;
+use crate::scene::Scene;
+use crate::geometry::{random_point_on_unit_sphere, rand};
+use crate::material::model::{MaterialModel, ScatteredRay};
+use crate::material::functions::{scatter_lambertian, scatter_dielectric, diffuse};
 
 
 /// A plastic model.

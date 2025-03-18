@@ -1,8 +1,8 @@
 extern crate time;
 
-use scene::Scene;
-use color::Color;
-use trace::trace;
+use crate::scene::Scene;
+use crate::color::Color;
+use crate::trace::trace;
 
 // The render context is the data structure
 // that holds state about the current render.

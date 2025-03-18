@@ -1,21 +1,21 @@
-use shapes::infinite::Infinite;
-use shapes::sphere::Sphere;
-use sceneobject::SceneObject;
-use material::texture::{Solid, Medium};
-use color::Color;
-use intersection::Intersection;
-use scene::Scene;
-use geometry::{random_point_on_unit_sphere, rand};
-use material::model::{MaterialModel, ScatteredRay};
-use material::functions::{scatter_lambertian, scatter_dielectric, diffuse};
-use shapes::geometry::Geometry;
-use material::lambertian::Lambertian;
-use octree::Octree;
-use shapes::bbox::BBox;
-use intersection::RawIntersection;
+use crate::shapes::infinite::Infinite;
+use crate::shapes::sphere::Sphere;
+use crate::sceneobject::SceneObject;
+use crate::material::texture::{Solid, Medium};
+use crate::color::Color;
+use crate::intersection::Intersection;
+use crate::scene::Scene;
+use crate::geometry::{random_point_on_unit_sphere, rand};
+use crate::material::model::{MaterialModel, ScatteredRay};
+use crate::material::functions::{scatter_lambertian, scatter_dielectric, diffuse};
+use crate::shapes::geometry::Geometry;
+use crate::material::lambertian::Lambertian;
+use crate::octree::Octree;
+use crate::shapes::bbox::BBox;
+use crate::intersection::RawIntersection;
 use std::f64;
-use na::{Vector3};
-use ray::Ray;
+use crate::na::{Vector3};
+use crate::ray::Ray;
 use std::sync::Arc;
 
 

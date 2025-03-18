@@ -1,6 +1,6 @@
-use na::{Vector3, Vector2};
+use crate::na::{Vector3, Vector2};
 extern crate rand as _rand;
-use geometry::_rand::Rng;
+use crate::geometry::_rand::Rng;
 use std::f64;
 
 pub fn rand() -> f64 {

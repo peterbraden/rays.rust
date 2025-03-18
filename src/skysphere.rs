@@ -1,18 +1,18 @@
-use shapes::infinite::Infinite;
-use shapes::sphere::Sphere;
-use na::{Vector3};
-use sceneobject::SceneObject;
-use material::texture::{Solid, Medium};
-use color::Color;
-use ray::Ray;
-use intersection::Intersection;
-use scene::Scene;
-use geometry::{random_point_on_unit_sphere, rand};
-use material::model::{MaterialModel, ScatteredRay};
-use material::functions::{scatter_lambertian, scatter_dielectric, diffuse};
-use shapes::geometry::Geometry;
+use crate::shapes::infinite::Infinite;
+use crate::shapes::sphere::Sphere;
+use crate::na::{Vector3};
+use crate::sceneobject::SceneObject;
+use crate::material::texture::{Solid, Medium};
+use crate::color::Color;
+use crate::ray::Ray;
+use crate::intersection::Intersection;
+use crate::scene::Scene;
+use crate::geometry::{random_point_on_unit_sphere, rand};
+use crate::material::model::{MaterialModel, ScatteredRay};
+use crate::material::functions::{scatter_lambertian, scatter_dielectric, diffuse};
+use crate::shapes::geometry::Geometry;
 use serde_json::{Value, Map};
-use scenefile::SceneFile;
+use crate::scenefile::SceneFile;
 
 pub struct SkyMaterial {
 	atmosphere: Sphere,

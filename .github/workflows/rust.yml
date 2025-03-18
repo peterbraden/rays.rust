@@ -18,5 +18,5 @@ jobs:
     - name: Run current work
       run: cargo run --release -- -p demo/demo.json
     - name: Run examples
-      run: for f in demo/*.json; do cargo run --release -- -w 60 -h 40 $f; done
+      run: for f in demo/*.json; do cargo run --release -- --width 60 --height 40 $f; done
 

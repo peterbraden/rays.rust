@@ -133,8 +133,12 @@ impl RenderContext {
                  format_f64(self.rays_cast as f64),
                  format_f64(self.rays_cast as f64 / elapsed.as_secs_f64()),
                  format_f64(self.rays_cast as f64 / self.pixels_rendered as f64),
-                 format_f64((self.pixels_rendered as f64 / (self.width * self.height * s.render.supersamples as usize) as f64) * 100.),
+                 format_f64(self.progress_percentage(s)),
                  rayon::current_num_threads());
+    }
+
+    pub fn progress_percentage(&self, s: &Scene) -> f64 {
+        (self.pixels_rendered as f64 / (self.width * self.height * s.render.supersamples as usize) as f64) * 100.
     }
 
     pub fn iter(&self, s: &Scene) -> impl Iterator<Item=RenderableChunk> + '_ {

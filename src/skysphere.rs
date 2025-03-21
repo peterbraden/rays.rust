@@ -13,6 +13,31 @@
 //
 // The implementation uses numerical integration to accumulate the scattering effects along
 // both the view ray and light rays to the sun.
+//
+// IMPLEMENTATION NOTE ON OPTICAL DEPTH ACCUMULATION:
+// ==================================================
+// There are two approaches to calculating optical depth for atmospheric scattering:
+//
+// 1. Accumulated optical depth approach (used in this implementation):
+//    - We accumulate optical depth along the entire path from the camera through the atmosphere
+//    - Each sample's tau calculation uses the total optical depth from camera to sample point
+//    - This approach produces stronger wavelength-dependent effects, particularly making sunsets 
+//      appear redder, as the accumulated optical depth grows with travel distance
+//    - Physically, this models the fact that light must travel through the entire atmosphere, and
+//      the total extinction depends on the whole path, not just local density
+//
+// 2. Per-sample optical depth approach (alternative):
+//    - Each sample point calculates extinction based only on its local optical depth
+//    - This approach tends to produce less dramatic color separation, with less reddening at sunset
+//    - While computationally simpler, it doesn't fully account for the cumulative effects of 
+//      wavelength-dependent scattering through the atmosphere
+//
+// The first approach is more physically accurate for atmospheric scattering, capturing the
+// characteristic red hues of sunset when light travels through more atmosphere.
+//
+// For this implementation, we track the accumulated optical depth separately from the
+// per-sample calculations to ensure the tau calculation properly accounts for all 
+// atmospheric material the light has traveled through.
 
 use crate::shapes::infinite::Infinite;
 use crate::shapes::sphere::Sphere;
@@ -81,6 +106,10 @@ impl SkyMaterial {
     }
     
     /// Calculate optical depth for a segment through the atmosphere
+    /// 
+    /// The optical depth represents how much a ray of light is attenuated by the medium.
+    /// For atmospheric scattering, it's calculated using the barometric formula, where 
+    /// density decreases exponentially with height.
     ///
     /// # Arguments
     /// * `height` - Height above the earth's surface in meters
@@ -88,70 +117,6 @@ impl SkyMaterial {
     /// * `segment_length` - Length of the ray segment being calculated
     fn optical_depth(&self, height: f64, thickness: f64, segment_length: f64) -> f64 {
         (-height / thickness).exp() * segment_length
-    }
-    
-    /// Calculate the scattering for a single sample point along the view ray
-    ///
-    /// # Arguments
-    /// * `sample_position` - Position of the sample in world space
-    /// * `segment_length` - Length of the ray segment
-    /// * `sun_direction` - Direction to the sun
-    /// * `beta_r` - Rayleigh scattering coefficients for RGB wavelengths
-    /// * `beta_m` - Mie scattering coefficients for RGB wavelengths
-    /// * `num_samples_light` - Number of samples for the light ray
-    fn calculate_sample_scattering(
-        &self,
-        sample_position: Vector3<f64>,
-        segment_length: f64,
-        beta_r: Vector3<f64>,
-        beta_m: Vector3<f64>,
-        num_samples_light: usize,
-    ) -> (f64, f64, Vector3<f64>, Vector3<f64>) {
-        // Calculate height above the earth's surface
-        let height = (sample_position - self.atmosphere.center).norm() - self.earth.radius;
-        
-        // Calculate Rayleigh and Mie optical depths for the view ray segment
-        let rayleigh_depth = self.optical_depth(height, self.rayleigh_thickness, segment_length);
-        let mie_depth = self.optical_depth(height, self.mie_thickness, segment_length);
-        
-        // Check if we can see the sun from this position
-        let light_ray = Ray { ro: sample_position, rd: self.sun_direction };
-        let atmosphere_intersection = self.atmosphere.intersects(&light_ray);
-        
-        if atmosphere_intersection.is_none() {
-            // No intersection with atmosphere, we're outside the atmospheric bounds
-            return (rayleigh_depth, mie_depth, Vector3::zeros(), Vector3::zeros());
-        }
-        
-        // Calculate light ray path through atmosphere
-        let light_len = atmosphere_intersection.unwrap().dist;
-        let segment_length_light = light_len / num_samples_light as f64;
-        let mut optical_depth_light_r = 0.0;
-        let mut optical_depth_light_m = 0.0;
-        
-        // Integrate along light ray to the sun
-        for j in 0..num_samples_light {
-            let sample_position_light = sample_position + (j as f64 * segment_length_light) * self.sun_direction;
-            let height_light = (sample_position_light - self.atmosphere.center).norm() - self.earth.radius;
-            
-            optical_depth_light_r += self.optical_depth(height_light, self.rayleigh_thickness, segment_length_light);
-            optical_depth_light_m += self.optical_depth(height_light, self.mie_thickness, segment_length_light);
-        }
-        
-        // Calculate the total extinction for both Rayleigh and Mie
-        let tau = beta_r * (rayleigh_depth + optical_depth_light_r) + 
-                  beta_m * 1.1 * (mie_depth + optical_depth_light_m);
-        
-        // Calculate attenuation using Beer's Law
-        let attenuation = Vector3::new((-tau.x).exp(), (-tau.y).exp(), (-tau.z).exp());
-        
-        // Return Rayleigh and Mie contributions
-        (
-            rayleigh_depth,
-            mie_depth,
-            attenuation.component_mul(&Vector3::new(rayleigh_depth, rayleigh_depth, rayleigh_depth)),
-            attenuation.component_mul(&Vector3::new(mie_depth, mie_depth, mie_depth))
-        )
     }
     
     /// Apply a tone mapping function to convert HDR values to displayable values
@@ -199,10 +164,10 @@ impl MaterialModel for SkyMaterial {
         let mut rayleigh_sum: Vector3<f64> = Vector3::zeros();
         let mut mie_sum: Vector3<f64> = Vector3::zeros();
 
-        // These variables track accumulated optical depth but we're not using them directly
-        // as we calculate contributions in the calculate_sample_scattering function
-        let mut _optical_depth_r = 0.0;
-        let mut _optical_depth_m = 0.0;
+        // Track accumulated optical depth for more physically accurate extinction calculation
+        // This is important for proper sunset colors (see implementation note at top of file)
+        let mut optical_depth_r = 0.0;
+        let mut optical_depth_m = 0.0;
 
         // Calculate the angular term (mu) between view and sun directions
         let mu = r.rd.dot(&self.sun_direction);
@@ -216,19 +181,52 @@ impl MaterialModel for SkyMaterial {
         for i in 0..num_samples {
             let sample_position = r.ro + (i as f64 * segment_length) * r.rd;
             
-            // Calculate scattering for this sample
-            let (r_depth, m_depth, r_contrib, m_contrib) = self.calculate_sample_scattering(
-                sample_position,
-                segment_length,
-                beta_r,
-                beta_m,
-                num_samples_light
-            );
+            // Calculate height above the earth's surface
+            let height = (sample_position - self.atmosphere.center).norm() - self.earth.radius;
             
-            _optical_depth_r += r_depth;
-            _optical_depth_m += m_depth;
-            rayleigh_sum = rayleigh_sum + r_contrib;
-            mie_sum = mie_sum + m_contrib;
+            // Calculate Rayleigh and Mie optical depths for this segment
+            let rayleigh_depth = self.optical_depth(height, self.rayleigh_thickness, segment_length);
+            let mie_depth = self.optical_depth(height, self.mie_thickness, segment_length);
+            
+            // Accumulate optical depth along the view ray
+            optical_depth_r += rayleigh_depth;
+            optical_depth_m += mie_depth;
+            
+            // Check if we can see the sun from this position
+            let light_ray = Ray { ro: sample_position, rd: self.sun_direction };
+            let atmosphere_intersection = self.atmosphere.intersects(&light_ray);
+            
+            if atmosphere_intersection.is_none() {
+                // No intersection with atmosphere, we're outside the atmospheric bounds
+                continue;
+            }
+            
+            // Calculate light ray path through atmosphere
+            let light_len = atmosphere_intersection.unwrap().dist;
+            let segment_length_light = light_len / num_samples_light as f64;
+            let mut optical_depth_light_r = 0.0;
+            let mut optical_depth_light_m = 0.0;
+            
+            // Integrate along light ray to the sun
+            for j in 0..num_samples_light {
+                let sample_position_light = sample_position + (j as f64 * segment_length_light) * self.sun_direction;
+                let height_light = (sample_position_light - self.atmosphere.center).norm() - self.earth.radius;
+                
+                optical_depth_light_r += self.optical_depth(height_light, self.rayleigh_thickness, segment_length_light);
+                optical_depth_light_m += self.optical_depth(height_light, self.mie_thickness, segment_length_light);
+            }
+            
+            // Calculate the total extinction for both Rayleigh and Mie
+            // CRITICAL: Use accumulated optical depth for proper sunset colors
+            let tau = beta_r * (optical_depth_r + optical_depth_light_r) + 
+                    beta_m * 1.1 * (optical_depth_m + optical_depth_light_m);
+            
+            // Calculate attenuation using Beer's Law
+            let attenuation = Vector3::new((-tau.x).exp(), (-tau.y).exp(), (-tau.z).exp());
+            
+            // Accumulate contributions for Rayleigh and Mie
+            rayleigh_sum = rayleigh_sum + attenuation.component_mul(&Vector3::new(rayleigh_depth, rayleigh_depth, rayleigh_depth));
+            mie_sum = mie_sum + attenuation.component_mul(&Vector3::new(mie_depth, mie_depth, mie_depth));
         } 
         
         // Calculate final attenuate value combining Rayleigh and Mie scattering

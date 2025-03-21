@@ -16,28 +16,19 @@
 //
 // IMPLEMENTATION NOTE ON OPTICAL DEPTH ACCUMULATION:
 // ==================================================
-// There are two approaches to calculating optical depth for atmospheric scattering:
+// Optical depth must be accumulated along the entire light path to correctly model
+// atmospheric scattering according to the Beer-Lambert law:
 //
-// 1. Accumulated optical depth approach (used in this implementation):
-//    - We accumulate optical depth along the entire path from the camera through the atmosphere
-//    - Each sample's tau calculation uses the total optical depth from camera to sample point
-//    - This approach produces stronger wavelength-dependent effects, particularly making sunsets 
-//      appear redder, as the accumulated optical depth grows with travel distance
-//    - Physically, this models the fact that light must travel through the entire atmosphere, and
-//      the total extinction depends on the whole path, not just local density
+// - We accumulate optical depth along the entire path from the camera through the atmosphere
+// - Each sample's tau calculation uses the total optical depth from camera to sample point
+// - This correctly produces the wavelength-dependent effects that make sunsets appear redder
+//   as the light travels through more atmosphere near the horizon
+// - This follows directly from the physics of light attenuation, where extinction is exponential
+//   with respect to the total optical depth along the entire path
 //
-// 2. Per-sample optical depth approach (alternative):
-//    - Each sample point calculates extinction based only on its local optical depth
-//    - This approach tends to produce less dramatic color separation, with less reddening at sunset
-//    - While computationally simpler, it doesn't fully account for the cumulative effects of 
-//      wavelength-dependent scattering through the atmosphere
-//
-// The first approach is more physically accurate for atmospheric scattering, capturing the
-// characteristic red hues of sunset when light travels through more atmosphere.
-//
-// For this implementation, we track the accumulated optical depth separately from the
-// per-sample calculations to ensure the tau calculation properly accounts for all 
-// atmospheric material the light has traveled through.
+// For this implementation, we track the accumulated optical depth during numerical integration
+// to ensure the tau calculation properly accounts for all atmospheric material the light has
+// traveled through. This is critical for realistic rendering of sunset/sunrise conditions.
 
 use crate::shapes::infinite::Infinite;
 use crate::shapes::sphere::Sphere;
@@ -217,7 +208,8 @@ impl MaterialModel for SkyMaterial {
             }
             
             // Calculate the total extinction for both Rayleigh and Mie
-            // CRITICAL: Use accumulated optical depth for proper sunset colors
+            // Use the total accumulated optical depth from both camera path and light path
+            // This is essential for correct application of the Beer-Lambert law
             let tau = beta_r * (optical_depth_r + optical_depth_light_r) + 
                     beta_m * 1.1 * (optical_depth_m + optical_depth_light_m);
             

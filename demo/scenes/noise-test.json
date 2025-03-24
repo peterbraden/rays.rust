@@ -2,7 +2,7 @@
   "width": 640,
   "height": 480,
 
-  "supersamples": 35,
+  "supersamples": 100,
   "background": [0.2, 0.2, 0.2],
 
   "chunk_size": 64,

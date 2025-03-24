@@ -145,7 +145,8 @@ pub fn create_firework(o: &Value) -> SceneObject {
                             .collect();
     let geom = Union::new(boxed_particles);
 
-    let tree = Octree::new(8, geom.bounds(), &particles.into_iter().map(Arc::new).collect());
+    let particle_arcs: Vec<Arc<Particle>> = particles.into_iter().map(Arc::new).collect();
+    let tree = Octree::new(8, geom.bounds(), &particle_arcs);
     let m = Box::new(FireworkMaterial { particles: tree, color });
 
 	SceneObject {

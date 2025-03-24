@@ -123,7 +123,7 @@ fn mn_to_i(m: i32, n: i32, size: i32) -> usize {
 }
 
 fn transpose(matr: &[Complex<f64>], size: usize) -> Vec<Complex<f64>> {
-    let mut out = matr.clone();
+    let mut out = matr.to_vec();
     for x in 0..size {
         for y in 0..size {
             out[x*size + y] = matr[y*size + x];

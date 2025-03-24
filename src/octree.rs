@@ -56,7 +56,7 @@ impl OctreeNode {
             let intersections = self.children
                                 .iter()
                                 .filter(|i| i.is_some())
-                                .filter_map(|c| c.as_ref().unwrap().naive_intersection(r,max, min))
+                                .filter_map(|c| c.as_ref().unwrap().naive_intersection(r, _max, _min))
                                 .flatten()
                                 .collect::<Vec<usize>>();
 

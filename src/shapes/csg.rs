@@ -145,7 +145,7 @@ impl Union {
     pub fn new (geometries: Vec<Box<dyn Geometry + Sync + Send>>) -> Union {
         let mut count = 0;
         let mut bounds = BBox::min() ;
-        let primitives = geometries.into_iter().map(|g| {
+        let primitives: Vec<Arc<Primitive>> = geometries.into_iter().map(|g| {
             count += 1;
             bounds = bounds.union(&g.bounds());
             Arc::new(Primitive { item: g })

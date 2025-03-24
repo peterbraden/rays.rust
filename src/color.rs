@@ -55,6 +55,25 @@ impl Color {
             if self.rgb.z.is_nan() { 0. } else { self.rgb.z },
         );
     }
+    
+    /// Blend this color with another color using the given factor
+    /// 
+    /// # Arguments
+    /// * `other` - The color to blend with
+    /// * `factor` - The blend factor (0.0 = this color only, 1.0 = other color only)
+    /// 
+    /// # Returns
+    /// A new color that is a blend of this color and the other color
+    pub fn blend(&self, other: &Color, factor: f64) -> Color {
+        let clamped_factor = factor.max(0.0).min(1.0);
+        let self_factor = 1.0 - clamped_factor;
+        
+        Color::new(
+            self.rgb.x * self_factor + other.rgb.x * clamped_factor,
+            self.rgb.y * self_factor + other.rgb.y * clamped_factor,
+            self.rgb.z * self_factor + other.rgb.z * clamped_factor,
+        )
+    }
 }
 
 

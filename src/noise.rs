@@ -416,8 +416,8 @@ mod tests {
         let has_low_density = densities.iter().any(|&d| d < 0.5);
         
         // Print min/max values for debugging
-        let min_density = densities.iter().fold(f64::MAX, |a, &b| a.min(b));
-        let max_density = densities.iter().fold(0.0, |a, &b| a.max(b));
+        let min_density = densities.iter().fold(f64::MAX, |a: f64, &b| a.min(b));
+        let max_density = densities.iter().fold(0.0, |a: f64, &b| a.max(b));
         println!("Min density: {}, Max density: {}", min_density, max_density);
         
         assert!(has_high_density && has_low_density, 

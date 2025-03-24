@@ -48,6 +48,62 @@ use crate::scenefile::SceneFile;
 const DEFAULT_NUM_SAMPLES: usize = 16;
 const DEFAULT_NUM_SAMPLES_LIGHT: usize = 8;
 
+// Default scattering coefficient values (Earth-like)
+const DEFAULT_RAYLEIGH_R: f64 = 3.8e-6;
+const DEFAULT_RAYLEIGH_G: f64 = 13.5e-6;
+const DEFAULT_RAYLEIGH_B: f64 = 33.1e-6;
+const DEFAULT_MIE_COEFFICIENT: f64 = 21.0e-6;
+const DEFAULT_MIE_ANISOTROPY: f64 = 0.76;
+
+// Preset scattering coefficients for different atmospheres
+pub struct SkyPreset {
+    pub name: &'static str,
+    pub rayleigh_r: f64,
+    pub rayleigh_g: f64,
+    pub rayleigh_b: f64,
+    pub mie_coefficient: f64,
+    pub rayleigh_thickness: f64,
+    pub mie_thickness: f64,
+    pub mie_anisotropy: f64,
+}
+
+// Presets for different atmospheric conditions
+pub const SKY_PRESETS: [SkyPreset; 3] = [
+    // Earth-like (default)
+    SkyPreset {
+        name: "earth",
+        rayleigh_r: 3.8e-6,
+        rayleigh_g: 13.5e-6,
+        rayleigh_b: 33.1e-6,
+        mie_coefficient: 21.0e-6,
+        rayleigh_thickness: 7994.0,
+        mie_thickness: 1200.0,
+        mie_anisotropy: 0.76,
+    },
+    // Earth sunset (warmer colors)
+    SkyPreset {
+        name: "sunset",
+        rayleigh_r: 3.8e-6,
+        rayleigh_g: 13.5e-6,
+        rayleigh_b: 33.1e-6,
+        mie_coefficient: 25.0e-6,
+        rayleigh_thickness: 7994.0,
+        mie_thickness: 1200.0,
+        mie_anisotropy: 0.85,
+    },
+    // Hazy (dusty/smoky atmosphere)
+    SkyPreset {
+        name: "hazy",
+        rayleigh_r: 3.8e-6,
+        rayleigh_g: 13.5e-6,
+        rayleigh_b: 33.1e-6,
+        mie_coefficient: 45.0e-6,
+        rayleigh_thickness: 7994.0,
+        mie_thickness: 1200.0,
+        mie_anisotropy: 0.9,
+    },
+];
+
 /// SkyMaterial simulates atmospheric scattering with Rayleigh and Mie models
 pub struct SkyMaterial {
     /// Sphere representing the atmospheric boundary
@@ -67,6 +123,15 @@ pub struct SkyMaterial {
     
     /// Overall brightness/intensity of the sky
     brightness: f64,
+    
+    /// Rayleigh scattering coefficients for RGB channels
+    rayleigh_coefficients: Vector3<f64>,
+    
+    /// Mie scattering coefficient (wavelength-independent)
+    mie_coefficient: f64,
+    
+    /// Mie anisotropy factor (controls the size of the glow around the sun)
+    mie_anisotropy: f64,
 }
 
 impl SkyMaterial {
@@ -128,9 +193,10 @@ impl SkyMaterial {
 
 impl MaterialModel for SkyMaterial {
     fn scatter(&self, r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay {
-        // Scattering coefficients for Rayleigh (RGB-dependent) and Mie (wavelength-independent)
-        let beta_r: Vector3<f64> = Vector3::new(3.8e-6_f64, 13.5e-6_f64, 33.1e-6_f64); 
-        let beta_m: Vector3<f64> = Vector3::new(21e-6_f64, 21e-6_f64, 21e-6_f64);
+        // Use the provided scattering coefficients
+        let beta_r: Vector3<f64> = self.rayleigh_coefficients;
+        let mie_coef = self.mie_coefficient;
+        let beta_m: Vector3<f64> = Vector3::new(mie_coef, mie_coef, mie_coef);
         
         // Check if the ray intersects the atmosphere
         let atmos_intersection = self.atmosphere.intersects(r);
@@ -165,8 +231,7 @@ impl MaterialModel for SkyMaterial {
         
         // Calculate phase functions for Rayleigh and Mie
         let phase_r = Self::rayleigh_phase(mu);
-        let g = 0.76; // Mie anisotropy factor (controls the size of the glow around the sun)
-        let phase_m = Self::mie_phase(mu, g);
+        let phase_m = Self::mie_phase(mu, self.mie_anisotropy);
         
         // Integrate along the view ray through the atmosphere
         for i in 0..num_samples {
@@ -236,6 +301,23 @@ impl MaterialModel for SkyMaterial {
     }
 }
 
+/// Get a SkyPreset by name
+/// 
+/// # Arguments
+/// * `name` - Name of the preset
+///
+/// # Returns
+/// The preset if found, or the default Earth preset
+fn get_preset_by_name(name: &str) -> &SkyPreset {
+    for preset in &SKY_PRESETS {
+        if preset.name == name {
+            return preset;
+        }
+    }
+    // Default to first preset (Earth)
+    &SKY_PRESETS[0]
+}
+
 /// Creates a sky sphere object from JSON configuration
 ///
 /// # Arguments
@@ -245,6 +327,28 @@ impl MaterialModel for SkyMaterial {
 /// A SceneObject representing the sky sphere
 pub fn create_sky_sphere(o: &Value) -> SceneObject {
     let earth_location = SceneFile::parse_vec3_def(o, "earth_location", Vector3::new(0., -6360e3, 0.));
+    
+    // Handle preset or custom scattering parameters
+    let preset_name = match o.get("preset") {
+        Some(v) => v.as_str().unwrap_or("earth"),
+        None => "earth"
+    };
+    
+    let preset = get_preset_by_name(preset_name);
+    
+    // Get rayleigh coefficients (custom or from preset)
+    let rayleigh_r = SceneFile::parse_number(&o["rayleigh_r"], preset.rayleigh_r);
+    let rayleigh_g = SceneFile::parse_number(&o["rayleigh_g"], preset.rayleigh_g);
+    let rayleigh_b = SceneFile::parse_number(&o["rayleigh_b"], preset.rayleigh_b);
+    let rayleigh_coefficients = Vector3::new(rayleigh_r, rayleigh_g, rayleigh_b);
+    
+    // Get mie coefficient and anisotropy (custom or from preset)
+    let mie_coefficient = SceneFile::parse_number(&o["mie_coefficient"], preset.mie_coefficient);
+    let mie_anisotropy = SceneFile::parse_number(&o["mie_anisotropy"], preset.mie_anisotropy);
+    
+    // Get thickness values (either custom or from preset)
+    let rayleigh_thickness = SceneFile::parse_number(&o["rayleigh_thickness"], preset.rayleigh_thickness);
+    let mie_thickness = SceneFile::parse_number(&o["mie_thickness"], preset.mie_thickness);
     
     SceneObject {
         geometry: Box::new(Infinite {}),
@@ -257,10 +361,13 @@ pub fn create_sky_sphere(o: &Value) -> SceneObject {
                 earth_location,
                 SceneFile::parse_number(&o["atmosphere_radius"], 6420e3)
             ),
-            rayleigh_thickness: SceneFile::parse_number(&o["rayleigh_thickness"], 7994.),
-            mie_thickness: SceneFile::parse_number(&o["mie_thickness"], 1200.),
+            rayleigh_thickness,
+            mie_thickness,
             sun_direction: SceneFile::parse_vec3_def(o, "sun_direction", Vector3::new(0., 0.5, 2.)).normalize(),
-            brightness: SceneFile::parse_number(&o["brightness"], 20.)
+            brightness: SceneFile::parse_number(&o["brightness"], 20.),
+            rayleigh_coefficients,
+            mie_coefficient,
+            mie_anisotropy,
         }) })
     }
 }
@@ -312,6 +419,9 @@ mod tests {
             rayleigh_thickness: 7994.,
             mie_thickness: 1200.,
             brightness: 20.0,
+            rayleigh_coefficients: Vector3::new(DEFAULT_RAYLEIGH_R, DEFAULT_RAYLEIGH_G, DEFAULT_RAYLEIGH_B),
+            mie_coefficient: DEFAULT_MIE_COEFFICIENT,
+            mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
         };
         
         // Test optical depth at different heights
@@ -369,5 +479,48 @@ mod tests {
             rd: Vector3::new(0.0, 0.0, 1.0)
         };
         assert!(sky_obj.geometry.intersects(&test_ray).is_some());
+    }
+    
+    #[test]
+    fn test_sky_presets() {
+        // Test with default preset
+        let json_str = r#"
+        {
+            "preset": "earth",
+            "sun_direction": [0, 0.5, 1],
+            "brightness": 30.0
+        }
+        "#;
+        
+        let value: Value = serde_json::from_str(json_str).unwrap();
+        let sky_obj = create_sky_sphere(&value);
+        
+        // Test with custom parameters that override preset
+        let json_str = r#"
+        {
+            "preset": "sunset",
+            "rayleigh_r": 5.0e-6,
+            "mie_coefficient": 30.0e-6,
+            "sun_direction": [0, 0.5, 1]
+        }
+        "#;
+        
+        let value: Value = serde_json::from_str(json_str).unwrap();
+        let sky_obj_custom = create_sky_sphere(&value);
+        
+        // Both should create valid objects
+        assert!(sky_obj.geometry.intersects(&Ray { ro: Vector3::new(0.0, 0.0, 0.0), rd: Vector3::new(0.0, 0.0, 1.0) }).is_some());
+        assert!(sky_obj_custom.geometry.intersects(&Ray { ro: Vector3::new(0.0, 0.0, 0.0), rd: Vector3::new(0.0, 0.0, 1.0) }).is_some());
+    }
+    
+    #[test]
+    fn test_get_preset_by_name() {
+        // Test getting existing preset
+        let preset = get_preset_by_name("sunset");
+        assert_eq!(preset.name, "sunset");
+        
+        // Test getting invalid preset (should return default Earth preset)
+        let preset = get_preset_by_name("invalid");
+        assert_eq!(preset.name, "earth");
     }
 }

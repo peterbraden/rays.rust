@@ -30,7 +30,8 @@
     },
     "GLASS": {
       "type": "dielectric",
-      "ref_idx": 1.5
+      "refractive_index": 1.5,
+      "attenuate": [0.95, 0.95, 0.95]
     },
     "WHITE_MARBLE": {
       "type": "lambertian",

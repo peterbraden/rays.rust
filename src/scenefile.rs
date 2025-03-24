@@ -404,8 +404,14 @@ impl SceneFile {
     }
 
     pub fn parse_medium_ref(key: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Option<Box<dyn Medium + Sync + Send>> {
-        let props = media.get(&SceneFile::parse_string(key)).unwrap();
-        return SceneFile::parse_medium(props, materials);
+        let medium_name = SceneFile::parse_string(key);
+        match media.get(&medium_name) {
+            Some(props) => SceneFile::parse_medium(props, materials),
+            None => {
+                eprintln!("ERROR: Medium '{}' not found in media map. This is a fatal error.", medium_name);
+                panic!("Medium '{}' not found in media map", medium_name);
+            }
+        }
     }
 
     pub fn parse_medium(o: &Value, materials: &Map<String, Value>) -> Option<Box<dyn Medium + Sync + Send>> {
@@ -513,8 +519,23 @@ impl SceneFile {
         
         if t == "noise_medium" {
             // Get the two materials to mix between
-            let m1 = SceneFile::parse_material_ref(&o["m1"], materials).unwrap();
-            let m2 = SceneFile::parse_material_ref(&o["m2"], materials).unwrap();
+            let m1_name = SceneFile::parse_string(&o["m1"]);
+            let m1 = match SceneFile::parse_material_ref(&o["m1"], materials) {
+                Some(mat) => mat,
+                None => {
+                    eprintln!("ERROR: Material '{}' not found for NoiseMedium m1. This is a fatal error.", m1_name);
+                    panic!("Material '{}' for NoiseMedium m1 not found", m1_name);
+                }
+            };
+            
+            let m2_name = SceneFile::parse_string(&o["m2"]);
+            let m2 = match SceneFile::parse_material_ref(&o["m2"], materials) {
+                Some(mat) => mat,
+                None => {
+                    eprintln!("ERROR: Material '{}' not found for NoiseMedium m2. This is a fatal error.", m2_name);
+                    panic!("Material '{}' for NoiseMedium m2 not found", m2_name);
+                }
+            };
             
             // Parse the threshold value (default to 0.5)
             let threshold = SceneFile::parse_number(&o["threshold"], 0.5);

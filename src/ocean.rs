@@ -75,11 +75,9 @@ fn phillips(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64) -> f6
 }
 
 fn amplitude(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64, rng: &mut StdRng) -> Complex<f64> {
-    return
-        1f64/(2f64.sqrt()) *
+    1f64/(2f64.sqrt()) *
         Complex::new(randn(rng), randn(rng)) *
         phillips(k, wind, scale, gravity).sqrt()
-    ;
 }
 
 fn dispersion(k: Vector2<f64>, gravity: f64) -> f64 {
@@ -474,9 +472,9 @@ pub fn create_ocean(opts: &Value) -> SceneObject {
     if opts["debug"].as_bool().unwrap_or(false) {
         m = Box::new(NormalShade {});
     }
-	return SceneObject {
+	SceneObject {
 		geometry: Box::new(o),
-		medium: Box::new(Solid { m: m}),
+		medium: Box::new(Solid { m }),
 	}
 }
 

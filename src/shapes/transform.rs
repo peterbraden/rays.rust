@@ -16,7 +16,7 @@ pub struct Transform {
 impl Transform {
     pub fn new(item: Box<dyn Geometry + Sync + Send>) -> Transform {
         return Transform {
-            item: item,
+            item,
             transform: Affine3::identity()
         };
     }
@@ -26,7 +26,7 @@ impl Transform {
         roll: f64, pitch: f64, yaw: f64
     ) -> Transform {
         return Transform {
-            item: item,
+            item,
             transform: na::convert(Rotation3::from_euler_angles(roll, pitch, yaw))
         }
     } 

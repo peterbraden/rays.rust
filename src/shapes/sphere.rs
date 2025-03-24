@@ -13,8 +13,8 @@ pub struct Sphere {
 impl Sphere{
     pub fn new(center:Vector3<f64>, radius: f64) -> Sphere {
         Sphere {
-            center: center,
-            radius: radius,
+            center,
+            radius,
         }
     }
 }
@@ -53,8 +53,8 @@ impl Geometry for Sphere {
 
         return Some(
             RawIntersection {
-                dist: dist, 
-                point: point,
+                dist, 
+                point,
                 normal: (point - self.center).normalize()
             })
     }

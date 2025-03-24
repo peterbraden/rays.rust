@@ -149,14 +149,12 @@ impl BBox {
                 }
                 return Some(BoxFace::Right);
             }
-        } else {
-            if ty0 > tz0 {
-                // Plane Y -> Top or Bottom
-                if r.rd.y > 0. { 
-                    return Some(BoxFace::Bottom);
-                }
-                return Some(BoxFace::Top);
-            } 
+        } else if ty0 > tz0 {
+            // Plane Y -> Top or Bottom
+            if r.rd.y > 0. { 
+                return Some(BoxFace::Bottom);
+            }
+            return Some(BoxFace::Top);
         } 
         // Plane Z -> Front or Back
         if r.rd.z > 0. { 
@@ -184,14 +182,12 @@ impl BBox {
                 }
                 return Some(BoxFace::Left);
             }
-        } else {
-            if ty1 < tz1 {
-                // Plane Y -> Top or Bottom
-                if r.rd.y > 0. { 
-                    return Some(BoxFace::Top);
-                }
-                return Some(BoxFace::Bottom);
-            } 
+        } else if ty1 < tz1 {
+            // Plane Y -> Top or Bottom
+            if r.rd.y > 0. { 
+                return Some(BoxFace::Top);
+            }
+            return Some(BoxFace::Bottom);
         } 
         // Plane Z -> Front or Back
         if r.rd.z > 0. { 

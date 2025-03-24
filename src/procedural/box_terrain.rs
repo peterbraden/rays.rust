@@ -27,15 +27,15 @@ pub struct BoxTerrain {
 
 impl Geometry for BoxTerrain {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        return self.boxes.raw_intersection(r, f64::INFINITY, 0f64);
+        self.boxes.raw_intersection(r, f64::INFINITY, 0f64)
     }
 
     fn bounds(&self) -> BBox {
-        return self.bounds;
+        self.bounds
     }
 
     fn primitives(&self) -> u64 {
-        return self.boxes_count as u64;
+        self.boxes_count as u64
     }
 }
 
@@ -61,7 +61,7 @@ pub fn create_box_terrain() -> SceneObject {
     let boxes = Octree::new(8, bounds, &boxes_vec);
     let terrain = BoxTerrain { boxes, boxes_count: boxes_vec.len(), bounds};
 
-    return SceneObject {
+    SceneObject {
         geometry: Box::new(terrain),
         medium: Box::new(Solid { m: Box::new(Lambertian {
             albedo: Color::new(0.75, 0.75, 0.75)

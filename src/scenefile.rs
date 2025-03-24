@@ -19,7 +19,6 @@ use std::sync::Arc;
 use crate::sceneobject::SceneObject;
 use serde_json::{Value, Map};
 use crate::scene::{Scene, ImageOpts, RenderOpts};
-use serde_json;
 use std::io::prelude::*;
 use std::fs::File;
 use crate::material::model::MaterialModel;
@@ -156,7 +155,7 @@ impl SceneFile {
                     
                     // Default case - just use the referenced material
                     let m = SceneFile::parse_material_ref(material_key, materials).unwrap();
-                    return Box::new(Solid { m: m })
+                    return Box::new(Solid { m })
                 } else {
                     // No material or medium specified
                     let default_material = Box::new(Lambertian { albedo: Color::white() });
@@ -418,7 +417,7 @@ impl SceneFile {
         let t = o["type"].as_str().unwrap();
         if t == "solid" {
             let m = SceneFile::parse_material_ref(&o["material"], materials).unwrap(); 
-            return Some(Box::new(Solid { m: m }));
+            return Some(Box::new(Solid { m }));
         }
 
         if t == "checkered-y-plane" {
@@ -427,7 +426,7 @@ impl SceneFile {
             let xsize = SceneFile::parse_number(&o["xsize"], 1.);
             let zsize = SceneFile::parse_number(&o["zsize"], 1.);
             return Some(Box::new(CheckeredYPlane {
-                m1: m1, m2: m2, xsize: xsize, zsize: zsize
+                m1, m2, xsize, zsize
             }));
         }
         

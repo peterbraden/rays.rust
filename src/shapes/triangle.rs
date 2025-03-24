@@ -32,18 +32,18 @@ impl Triangle {
         let normal = v0v1.cross(&v0v2).normalize();  
         //panic_if_nan(normal);
         return Triangle {
-            v0: v0,
-            v1: v1,
-            v2: v2,
-            normal: normal,
+            v0,
+            v1,
+            v2,
+            normal,
         }
     }
     pub fn new_with_normal(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>, normal: Vector3<f64>) -> Triangle{
         return Triangle {
-            v0: v0,
-            v1: v1,
-            v2: v2,
-            normal: normal,
+            v0,
+            v1,
+            v2,
+            normal,
         }
     }
 

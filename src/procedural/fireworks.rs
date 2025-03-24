@@ -148,8 +148,8 @@ pub fn create_firework(o: &Value) -> SceneObject {
     let tree = Octree::new(8, geom.bounds(), &particles.into_iter().map(|p| Arc::new(p)).collect());
     let m = Box::new(FireworkMaterial { particles: tree, color });
 
-	return SceneObject {
+	SceneObject {
 		geometry: Box::new(geom),
-		medium: Box::new(Solid { m: m}),
+		medium: Box::new(Solid { m }),
 	}
 }

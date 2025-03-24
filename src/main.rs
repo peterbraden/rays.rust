@@ -67,6 +67,7 @@ mod procedural {
     pub mod fireworks;
 }
 mod participatingmedia;
+mod noise;
 
 use crate::trace::trace;
 use crate::rendercontext::RenderContext;

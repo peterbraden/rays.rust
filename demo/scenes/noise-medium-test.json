@@ -1,0 +1,150 @@
+{
+  "width": 640,
+  "height": 480,
+
+  "supersamples": 35,
+  "background": [0.2, 0.2, 0.2],
+
+  "chunk_size": 64,
+  "samples_per_chunk": 2,
+  "shadow_bias": 0.0001,
+  "max_depth": 2,
+
+  "materials": {
+    "RED_PLASTIC": {
+      "type": "lambertian",
+      "albedo": [0.9, 0.1, 0.1]
+    },
+    "BLUE_PLASTIC": {
+      "type": "lambertian",
+      "albedo": [0.1, 0.1, 0.9]
+    },
+    "GREEN_PLASTIC": {
+      "type": "lambertian",
+      "albedo": [0.1, 0.9, 0.1]
+    },
+    "GOLD": {
+      "type": "metal",
+      "reflective": [1, 0.85, 0.57],
+      "roughness": 0.1
+    },
+    "GLASS": {
+      "type": "dielectric",
+      "refractive_index": 1.5,
+      "attenuate": [0.95, 0.95, 0.95]
+    },
+    "WHITE_MARBLE": {
+      "type": "lambertian",
+      "albedo": [0.9, 0.9, 0.9]
+    },
+    "BLACK_MARBLE": {
+      "type": "lambertian",
+      "albedo": [0.1, 0.1, 0.1]
+    }
+  },
+  "media": {
+    "PERLIN_NOISE_MEDIUM": {
+      "type": "noise_medium",
+      "m1": "RED_PLASTIC",
+      "m2": "BLUE_PLASTIC",
+      "noise_type": "perlin",
+      "scale": 0.2,
+      "threshold": 0.5
+    },
+    "FBM_NOISE_MEDIUM": {
+      "type": "noise_medium",
+      "m1": "GREEN_PLASTIC",
+      "m2": "GOLD",
+      "noise_type": "fbm",
+      "scale": 0.2,
+      "threshold": 0.5,
+      "octaves": 4,
+      "persistence": 0.5,
+      "lacunarity": 2.0
+    },
+    "MARBLE_NOISE_MEDIUM": {
+      "type": "noise_medium",
+      "m1": "WHITE_MARBLE",
+      "m2": "BLACK_MARBLE",
+      "noise_type": "marble",
+      "scale": 0.05,
+      "threshold": 0.5
+    },
+    "WORLEY_NOISE_MEDIUM": {
+      "type": "noise_medium",
+      "m1": "GLASS",
+      "m2": "GOLD",
+      "noise_type": "worley",
+      "scale": 0.5,
+      "threshold": 0.5,
+      "point_density": 2.0,
+      "seed": 42
+    },
+    "COMBINED_NOISE_MEDIUM": {
+      "type": "noise_medium",
+      "m1": "RED_PLASTIC",
+      "m2": "GREEN_PLASTIC",
+      "noise_type": "combined",
+      "scale": 0.1,
+      "threshold": 0.5,
+      "falloff": 0.05
+    },
+    "CHECKERED_MARBLE": {
+      "type": "checkered-y-plane",
+      "m1": "WHITE_MARBLE",
+      "m2": "BLACK_MARBLE"
+    }
+  },
+
+  "camera": {
+    "location": [5, 5, -15],
+    "lookat" : [0, 2, 0],
+    "up" : [0, 1, 0],
+    "angle": 0.8,
+    "aperture": 0.1
+  },
+  
+  "lights" : [],
+  "variables" : {},
+
+  "objects": [
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [-5, 2, 0],
+      "medium" : "PERLIN_NOISE_MEDIUM"
+    },
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [-2, 2, 4],
+      "medium" : "FBM_NOISE_MEDIUM"
+    },
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [2, 2, 4],
+      "medium" : "MARBLE_NOISE_MEDIUM"
+    },
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [5, 2, 0],
+      "medium" : "WORLEY_NOISE_MEDIUM"
+    },
+    {
+      "type": "sphere",
+      "radius": 2,
+      "location": [0, 2, -5],
+      "medium" : "COMBINED_NOISE_MEDIUM"
+    },
+    { 
+      "type" : "checkeredplane",
+      "y": 0,
+      "medium" : "CHECKERED_MARBLE"
+    },
+    { 
+      "type" : "skysphere"
+    }
+  ]
+}

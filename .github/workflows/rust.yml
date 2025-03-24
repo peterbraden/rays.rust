@@ -1,4 +1,4 @@
-name: Build, Tests and Examples
+name: Build, Tests, Lint and Examples
 
 on: [push]
 
@@ -9,6 +9,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v1
+    - name: Install Clippy
+      run: rustup component add clippy
+    - name: Run Clippy
+      run: cargo clippy -- -D errors
     - name: Build
       run: cargo build --verbose
     - name: Run tests

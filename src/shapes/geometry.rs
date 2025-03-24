@@ -28,7 +28,7 @@ pub trait Geometry: Sync{
     // than just calling intersects. This is only really for cases where you want to avoid
     // allocation of a RawIntersection object.
     fn fast_intersects(&self, r: &Ray) -> bool {
-        return self.intersects(r).is_some();
+        self.intersects(r).is_some()
     }
 
     // Number of primitives inside geometry (ie triangles in mesh, circles etc.)

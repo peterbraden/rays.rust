@@ -41,14 +41,14 @@ pub struct Mesh {
 // A simple triangle collection mesh. 
 impl Mesh {
     pub fn from_obj(pth: String, scale: Vector3<f64>) -> Mesh {
-        let obj = tobj::load_obj(&Path::new(&pth));
+        let obj = tobj::load_obj(Path::new(&pth));
         assert!(obj.is_ok());
         let (models, _materials) = obj.unwrap();
         //println!("# of models: {}", models.len());
         //println!("# of materials: {}", materials.len());
 
         let mut triangles = Vec::new();
-        for (_i, m) in models.iter().enumerate() {
+        for m in models.iter() {
             let mesh = &m.mesh;
             let positions: Arc<Vec<Vector3<f64>>> = Arc::new(
                 mesh.positions
@@ -72,9 +72,9 @@ impl Mesh {
 
         let bounds = Mesh::bounds_of(&triangles);
         let tree = Octree::new(8, bounds, &triangles); 
-        return Mesh {
+        Mesh {
             triangles: tree,
-            bounds: bounds,
+            bounds,
             triangle_count: triangles.len()
         }
     }
@@ -86,21 +86,21 @@ impl Mesh {
             bb = bb.union(&t.bounds());
         }
 
-        return bb;
+        bb
     }
 }
 
 impl Geometry for Mesh {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        return self.triangles.raw_intersection(r, f64::INFINITY, 0f64);
+        self.triangles.raw_intersection(r, f64::INFINITY, 0f64)
     }
 
     fn bounds(&self) -> BBox {
-        return self.bounds;
+        self.bounds
     }
 
     fn primitives(&self) -> u64 {
-        return self.triangle_count as u64;
+        self.triangle_count as u64
     }
 }
 
@@ -113,14 +113,14 @@ pub struct SmoothMesh {
 
 impl SmoothMesh {
     pub fn from_obj(pth: String, scale: Vector3<f64>) -> SmoothMesh {
-        let obj = tobj::load_obj(&Path::new(&pth));
+        let obj = tobj::load_obj(Path::new(&pth));
         assert!(obj.is_ok());
         let (models, _materials) = obj.unwrap();
         //println!("# of models: {}", models.len());
         //println!("# of materials: {}", materials.len());
 
         let mut triangles = Vec::new();
-        for (_i, m) in models.iter().enumerate() {
+        for m in models.iter() {
             let mesh = &m.mesh;
             if mesh.normals.is_empty() {
                 print!("!! [ Warning in STL parse ] Normals are required for a smooth mesh - skipping {}", m.name);
@@ -161,9 +161,9 @@ impl SmoothMesh {
 
         let bounds = SmoothMesh::bounds_of(&triangles);
         let tree = Octree::new(8, bounds, &triangles); 
-        return SmoothMesh {
+        SmoothMesh {
             triangles: tree,
-            bounds: bounds,
+            bounds,
             triangle_count: triangles.len()
         }
     }
@@ -175,21 +175,21 @@ impl SmoothMesh {
             bb = bb.union(&t.bounds());
         }
 
-        return bb;
+        bb
     }
 }
 
 impl Geometry for SmoothMesh {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        return self.triangles.raw_intersection(r, f64::INFINITY, 0f64);
+        self.triangles.raw_intersection(r, f64::INFINITY, 0f64)
     }
 
     fn bounds(&self) -> BBox {
-        return self.bounds;
+        self.bounds
     }
 
     fn primitives(&self) -> u64 {
-        return self.triangle_count as u64;
+        self.triangle_count as u64
     }
 }
 

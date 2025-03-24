@@ -23,7 +23,7 @@ impl Geometry for Plane {
 
                 return Some(
                     RawIntersection {
-                        dist: dist, 
+                        dist, 
                         point: r.ro + (rdn * dist),
                         normal: norm,
                     })
@@ -35,8 +35,8 @@ impl Geometry for Plane {
 
     fn bounds(&self) -> BBox {
         BBox::new(
-            Vector3::new(std::f64::MIN, 0., std::f64::MIN),
-            Vector3::new(std::f64::MAX, std::f64::MIN_POSITIVE, std::f64::MAX),
+            Vector3::new(f64::MIN, 0., f64::MIN),
+            Vector3::new(f64::MAX, f64::MIN_POSITIVE, f64::MAX),
           )
     }
 }

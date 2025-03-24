@@ -19,7 +19,6 @@ use std::sync::Arc;
 use crate::sceneobject::SceneObject;
 use serde_json::{Value, Map};
 use crate::scene::{Scene, ImageOpts, RenderOpts};
-use serde_json;
 use std::io::prelude::*;
 use std::fs::File;
 use crate::material::model::MaterialModel;
@@ -57,88 +56,85 @@ pub struct SceneFile {
 impl SceneFile {
     pub fn parse_number(v: &Value, default: f64) -> f64 {
         match v.as_f64(){
-            Some(x) => return x,
-            None => return default
+            Some(x) => x,
+            None => default
         }
     }
     
     pub fn parse_int(v: &Value, default: usize) -> usize {
         match v.as_i64(){
-            Some(x) => return x as usize,
-            None => return default
+            Some(x) => x as usize,
+            None => default
         }
     }
     
     pub fn parse_string(v: &Value) -> String {
-        return v.as_str().unwrap().to_string(); // This is pretty nasty, shame serde
+        v.as_str().unwrap().to_string()// This is pretty nasty, shame serde
     }
 
     pub fn parse_vec3(v: &Value) -> Vector3<f64> {
-        return Vector3::new(v[0].as_f64().unwrap(),
+        Vector3::new(v[0].as_f64().unwrap(),
                          v[1].as_f64().unwrap(),
-                         v[2].as_f64().unwrap());
+                         v[2].as_f64().unwrap())
     }
 
     pub fn parse_vec3_def(v: &Value, k: &str, def: Vector3<f64>) -> Vector3<f64> {
-        match &v.get(&k) {
+        match &v.get(k) {
             Some(x) => SceneFile::parse_vec3(x),
-            None => return def
+            None => def
         }
     }
 
     pub fn parse_vec2(v: &Value) -> Vector2<f64> {
-        return Vector2::new(v[0].as_f64().unwrap(),
-                            v[1].as_f64().unwrap());
+        Vector2::new(v[0].as_f64().unwrap(),
+                            v[1].as_f64().unwrap())
     }
 
     pub fn parse_vec2_def(v: &Value, k: &str, def: Vector2<f64>) -> Vector2<f64> {
-        match &v.get(&k) {
+        match &v.get(k) {
             Some(x) => SceneFile::parse_vec2(x),
-            None => return def
+            None => def
         }
     }
 
     pub fn parse_color(v: &Value) -> Color {
-        return Color::new(v[0].as_f64().unwrap(),
+        Color::new(v[0].as_f64().unwrap(),
                          v[1].as_f64().unwrap(),
-                         v[2].as_f64().unwrap());
+                         v[2].as_f64().unwrap())
     
     }
 
 
     pub fn parse_color_def(v: &Value, k: &str, def: Color) -> Color {
-        match &v.get(&k) {
+        match &v.get(k) {
             Some(x) => SceneFile::parse_color(x),
-            None => return def
+            None => def
         }
     }
 
     pub fn parse_camera(c: Value, width: u32, height: u32) -> camera::FlatLensCamera {
-        return camera::FlatLensCamera::new(
+        camera::FlatLensCamera::new(
             SceneFile::parse_vec3(&c["lookat"]),
             SceneFile::parse_vec3(&c["location"]),
             SceneFile::parse_vec3(&c["up"]),
             c["angle"].as_f64().unwrap(),
             width, height,
             SceneFile::parse_number(&c["aperture"], 0.2)
-        );
+        )
     }
 
     pub fn parse_objects(objs: Vec<Value>, materials: &Map<String, Value>, media: &Map<String, Value>) ->Vec<Arc<SceneObject>> {
          let mut objects: Vec<Arc<SceneObject>> = Vec::new();
          for obj in objs {
-            match SceneFile::parse_object(obj, &materials, &media) {
-                Some(x) => objects.push(x),
-                None => {},
-            }
+            if let Some(x) = SceneFile::parse_object(obj, materials, media) { objects.push(x) }
          }
-         return objects
+         objects
     }
 
     pub fn parse_object_medium(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Box<dyn Medium + Sync + Send> {
         match &o.get("medium") {
             Some(mid) => {
-                return SceneFile::parse_medium_ref(mid, materials, media).unwrap()
+                SceneFile::parse_medium_ref(mid, materials, media).unwrap()
             },
             None => {
                 // Check if material is specified
@@ -156,11 +152,11 @@ impl SceneFile {
                     
                     // Default case - just use the referenced material
                     let m = SceneFile::parse_material_ref(material_key, materials).unwrap();
-                    return Box::new(Solid { m: m })
+                    Box::new(Solid { m })
                 } else {
                     // No material or medium specified
                     let default_material = Box::new(Lambertian { albedo: Color::white() });
-                    return Box::new(Solid { m: default_material })
+                    Box::new(Solid { m: default_material })
                 }
             }
         }
@@ -192,9 +188,9 @@ impl SceneFile {
 
         let geom = SceneFile::parse_geometry(&o);
         let m = SceneFile::parse_object_medium(&o, materials, media);
-        if geom.is_some(){
+        if let Some(geometry) = geom {
             return Some(Arc::new(SceneObject {
-                geometry: geom.unwrap(),
+                geometry,
                 medium: m
             }));
         }
@@ -206,57 +202,57 @@ impl SceneFile {
         //return None
     }
     pub fn parse_skysphere(o: &Value) -> SceneObject {
-        return create_sky_sphere(o);
+        create_sky_sphere(o)
     }
 
     pub fn parse_box_terrain(_o: &Value) -> SceneObject {
-        return create_box_terrain();
+        create_box_terrain()
     }
 
     pub fn parse_geometry (o: &Value) -> Option<Box<dyn Geometry + Sync + Send>> {
         let t = o["type"].as_str().unwrap();
 
         if t == "sphere" {
-            return Some(SceneFile::parse_sphere(&o));
+            return Some(SceneFile::parse_sphere(o));
         }
 
         if t == "triangle" {
-            return Some(SceneFile::parse_triangle(&o));
+            return Some(SceneFile::parse_triangle(o));
         }
 
         if t == "mesh" {
-            return Some(SceneFile::parse_mesh(&o));
+            return Some(SceneFile::parse_mesh(o));
         }
 
         if t == "smoothmesh" {
-            return Some(SceneFile::parse_smoothmesh(&o));
+            return Some(SceneFile::parse_smoothmesh(o));
         }
 
         if t == "box" {
-            return Some(SceneFile::parse_box(&o));
+            return Some(SceneFile::parse_box(o));
         }
 
         if t == "plane" {
-            return Some(SceneFile::parse_plane(&o));
+            return Some(SceneFile::parse_plane(o));
         }
 
         if t == "rotate" {
-            return Some(SceneFile::parse_rotation(&o));
+            return Some(SceneFile::parse_rotation(o));
         }
 
         if t == "difference" {
-            return Some(SceneFile::parse_difference(&o));
+            return Some(SceneFile::parse_difference(o));
         }
-        return None
+        None
     }
 
     pub fn parse_difference(o: &Value) -> Box<dyn Geometry + Sync + Send> {
         let a = SceneFile::parse_geometry(&o["a"]).unwrap(); // Panic if fails
         let b = SceneFile::parse_geometry(&o["b"]).unwrap();
-        return Box::new(Difference { 
+        Box::new(Difference { 
             a: Primitive { item: a },
             b: Primitive { item: b }, 
-        });
+        })
     }
 
     pub fn parse_rotation(o: &Value) -> Box<dyn Geometry + Sync + Send> {
@@ -264,44 +260,44 @@ impl SceneFile {
         let roll = SceneFile::parse_number(&o["roll"], 0.).to_radians();
         let pitch = SceneFile::parse_number(&o["pitch"], 0.).to_radians();
         let yaw = SceneFile::parse_number(&o["yaw"], 0.).to_radians();
-        return Box::new(Transform::rotate(a, roll, pitch, yaw));
+        Box::new(Transform::rotate(a, roll, pitch, yaw))
     }
 
     pub fn parse_mesh(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        return Box::new(Mesh::from_obj(
+        Box::new(Mesh::from_obj(
                 SceneFile::parse_string(&o["src"]),
-                SceneFile::parse_vec3_def(&o, "scale", Vector3::new(1., 1., 1.))));
+                SceneFile::parse_vec3_def(o, "scale", Vector3::new(1., 1., 1.))))
     }
 
     pub fn parse_smoothmesh(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        return Box::new(SmoothMesh::from_obj(
+        Box::new(SmoothMesh::from_obj(
                 SceneFile::parse_string(&o["src"]),
-                SceneFile::parse_vec3_def(&o, "scale", Vector3::new(1., 1., 1.))));
+                SceneFile::parse_vec3_def(o, "scale", Vector3::new(1., 1., 1.))))
     }
 
     pub fn parse_sphere(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        return Box::new(Sphere::new(
+        Box::new(Sphere::new(
                 SceneFile::parse_vec3(&o["location"]),
-                o["radius"].as_f64().unwrap()));
+                o["radius"].as_f64().unwrap()))
     }
 
     pub fn parse_box(o: &Value) -> Box<dyn Geometry + Sync + Send>{
-        return Box::new(BBox::new(
+        Box::new(BBox::new(
                 SceneFile::parse_vec3(&o["min"]),
                 SceneFile::parse_vec3(&o["max"])))
     }
 
     pub fn parse_triangle(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        return Box::new(Triangle::new(
+        Box::new(Triangle::new(
                 SceneFile::parse_vec3(&o["v0"]),
                 SceneFile::parse_vec3(&o["v1"]),
-                SceneFile::parse_vec3(&o["v2"])));
+                SceneFile::parse_vec3(&o["v2"])))
     }
 
     pub fn parse_plane(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        return Box::new(Plane {
+        Box::new(Plane {
                 y: SceneFile::parse_number(&o["y"], 0.),
-            });
+            })
     }
 
     pub fn parse_checkeredplane(o: &Value, m: Box<dyn Medium + Sync + Send>) -> SceneObject {
@@ -418,7 +414,7 @@ impl SceneFile {
         let t = o["type"].as_str().unwrap();
         if t == "solid" {
             let m = SceneFile::parse_material_ref(&o["material"], materials).unwrap(); 
-            return Some(Box::new(Solid { m: m }));
+            return Some(Box::new(Solid { m }));
         }
 
         if t == "checkered-y-plane" {
@@ -427,7 +423,7 @@ impl SceneFile {
             let xsize = SceneFile::parse_number(&o["xsize"], 1.);
             let zsize = SceneFile::parse_number(&o["zsize"], 1.);
             return Some(Box::new(CheckeredYPlane {
-                m1: m1, m2: m2, xsize: xsize, zsize: zsize
+                m1, m2, xsize, zsize
             }));
         }
         
@@ -627,7 +623,7 @@ impl SceneFile {
             return Some(Box::new(noise_medium));
         }
 
-        return None
+        None
     }
     pub fn parse_air(_o: &Option<Value>) -> Box<dyn ParticipatingMedium>{
         let air: Box<dyn ParticipatingMedium> = Box::new(Vacuum {});
@@ -636,12 +632,12 @@ impl SceneFile {
             air = Box::new(HomogenousFog { density: 0.001, color: Color::red() });
         }
         */
-        return air;
+        air
     }
 
 
     pub fn parse_light(o: &Value) -> Light {
-        return Light {
+        Light {
                 position: SceneFile::parse_vec3(&o["location"]),
                 color: Color::white(),
                 intensity: o["intensity"].as_f64().unwrap(),
@@ -651,9 +647,9 @@ impl SceneFile {
     pub fn parse_lights(lights: &Vec<Value>) -> Vec<Light> {
         let mut l: Vec<Light> = Vec::new();
         for light in lights {
-            l.push(SceneFile::parse_light(&light));
+            l.push(SceneFile::parse_light(light));
         }
-        return l
+        l
     }
 
     pub fn from_scenefile(s: SceneFile) -> Scene {
@@ -668,7 +664,7 @@ impl SceneFile {
         let width = SceneFile::parse_int(&s.width, 640);
         let height =SceneFile::parse_int(&s.height, 480);
 
-        return Scene {
+        Scene {
             image: ImageOpts { width, height },
             render: RenderOpts {
                 max_depth: SceneFile::parse_int(&s.max_depth, 2),
@@ -684,18 +680,18 @@ impl SceneFile {
             max_bounding,
             black_threshold: SceneFile::parse_number(&s.shadow_bias, 1e-7f64) ,
             air_medium: SceneFile::parse_air(&s.air),
-        };
+        }
     }
 
     pub fn from_string(s: String) -> Scene {
         let scene: SceneFile = serde_json::from_str(&s).unwrap();
-        return SceneFile::from_scenefile(scene);
+        SceneFile::from_scenefile(scene)
     }
 
     pub fn from_file(filename: &str) -> Scene {
         let mut scenefile = File::open(filename).unwrap();
         let mut contents = String::new();
         scenefile.read_to_string(&mut contents).unwrap();
-        return SceneFile::from_string(contents);
+        SceneFile::from_string(contents)
     }
 }

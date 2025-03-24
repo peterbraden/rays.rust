@@ -282,8 +282,8 @@ impl MaterialModel for SkyMaterial {
             let attenuation = Vector3::new((-tau.x).exp(), (-tau.y).exp(), (-tau.z).exp());
             
             // Accumulate contributions for Rayleigh and Mie
-            rayleigh_sum = rayleigh_sum + attenuation.component_mul(&Vector3::new(rayleigh_depth, rayleigh_depth, rayleigh_depth));
-            mie_sum = mie_sum + attenuation.component_mul(&Vector3::new(mie_depth, mie_depth, mie_depth));
+            rayleigh_sum += attenuation.component_mul(&Vector3::new(rayleigh_depth, rayleigh_depth, rayleigh_depth));
+            mie_sum += attenuation.component_mul(&Vector3::new(mie_depth, mie_depth, mie_depth));
         } 
         
         // Calculate final attenuate value combining Rayleigh and Mie scattering

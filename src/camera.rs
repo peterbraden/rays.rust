@@ -37,11 +37,11 @@ impl SimpleCamera {
         //let viewPlaneHalfHeight = aspectRatio*viewPlaneHalfWidth
         
         SimpleCamera {
-            location: location,
+            location,
 
-            camz: camz,
+            camz,
             camx: camx * aspect_ratio,
-            camy: camy,
+            camy,
 
             tax: angle.tan(),
             tay: angle.tan()
@@ -197,17 +197,17 @@ impl FlatLensCamera {
         //let viewPlaneHalfHeight = aspectRatio*viewPlaneHalfWidth
         
         FlatLensCamera {
-            location: location,
+            location,
 
-            camz: camz,
+            camz,
             camx: camx * aspect_ratio,
-            camy: camy,
+            camy,
 
             tax: angle.tan(),
             tay: angle.tan(),
         
-            aperture: aperture,
-            focus: focus,
+            aperture,
+            focus,
         }
     }
 }
@@ -224,7 +224,7 @@ impl Camera for FlatLensCamera {
         let ro = self.location + Vector3::new(point_lens[0], point_lens[1], 0.0);
 
         Ray {
-            ro: ro,
+            ro,
             rd: (focal_point - ro).normalize()
         }
 

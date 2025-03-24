@@ -3,15 +3,15 @@ use crate::material::model::MaterialModel;
 use crate::noise::{PerlinNoise, WorleyNoise, combined_noise};
 
 pub trait Medium : Sync{
-    fn material_at(&self, pt: Vector3<f64>) -> &Box<dyn MaterialModel + Sync + Send>; 
+    fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send); 
 }
 
 pub struct Solid {
     pub m: Box<dyn MaterialModel + Sync + Send> 
 }
 impl Medium for Solid {
-    fn material_at(&self, _pt: Vector3<f64>) -> &Box<dyn MaterialModel + Sync + Send> {
-        &self.m
+    fn material_at(&self, _pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
+        &*self.m
     }
 }
 
@@ -28,11 +28,11 @@ impl CheckeredYPlane {
 }
 
 impl Medium for CheckeredYPlane {
-    fn material_at(&self, pt: Vector3<f64>) -> &Box<dyn MaterialModel + Sync + Send> {
+    fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
         let zig = if (pt[0].abs() / self.xsize) as i32 % 2 == 0 { pt[0] > 0. } else { pt[0] <= 0. };
         let zag = if (pt[2].abs() / self.zsize) as i32 % 2 == 0 { pt[2] > 0. } else { pt[2] <= 0. };
         // zig XOR zag
-        return if !zig != !zag { &self.m1 } else { &self.m2 };
+        if zig != zag { &*self.m1 } else { &*self.m2 }
     }
 }
 
@@ -266,15 +266,15 @@ impl NoiseMedium {
 }
 
 impl Medium for NoiseMedium {
-    fn material_at(&self, pt: Vector3<f64>) -> &Box<dyn MaterialModel + Sync + Send> {
+    fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
         // Calculate noise value at the point
         let noise_value = self.noise_value(pt);
         
         // Choose material based on noise value and threshold
         if noise_value >= self.threshold {
-            &self.m2
+            &*self.m2
         } else {
-            &self.m1
+            &*self.m1
         }
     }
 }

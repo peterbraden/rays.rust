@@ -29,10 +29,10 @@ impl SceneObject {
 
 impl Geometry for SceneObject {
    fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-    return self.geometry.intersects(r);
+    self.geometry.intersects(r)
    }
 
     fn bounds(&self) -> BBox {
-        return self.geometry.bounds();
+        self.geometry.bounds()
     }
 }

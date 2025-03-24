@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::f64;
 
 fn rand(rng: &mut StdRng) -> f64 {
-    return rng.gen_range(0.0, 1.0);
+    rng.gen_range(0.0, 1.0)
 }
 
 struct Particle {
@@ -59,9 +59,10 @@ fn trace_particle(impulse: Ray, time: f64, samples: usize, gravity: f64) -> Vec<
         };
         particles.push(p);
     }
-    return particles;
+    particles
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_particles(
         rng: &mut StdRng,
         origin: Vector3<f64>,
@@ -85,7 +86,7 @@ fn create_particles(
         };
         particles.append(&mut trace_particle(impulse, time, samples, gravity));
     }
-    return particles;
+    particles
 }
 
 
@@ -100,7 +101,7 @@ impl MaterialModel for FireworkMaterial {
         let actual_intersection = self.particles.intersection(r, f64::INFINITY, 0f64);
         match actual_intersection {
             Some((particle, _i)) => {
-                return ScatteredRay {
+                ScatteredRay {
                     attenuate: self.color * particle.intensity,
                     ray: None,
                 }
@@ -109,7 +110,7 @@ impl MaterialModel for FireworkMaterial {
                 // Should never happen
                 panic!("Firework didn't intersect")
             }
-        };
+        }
     }
 }
 
@@ -118,7 +119,7 @@ pub fn create_firework(o: &Value) -> SceneObject {
 
     let mut rng: StdRng = SeedableRng::from_seed([0; 32]);
 
-    let center = SceneFile::parse_vec3_def(&o, "center", Vector3::new(0., 10., 0.));
+    let center = SceneFile::parse_vec3_def(o, "center", Vector3::new(0., 10., 0.));
     let time = SceneFile::parse_number(&o["time"], 0.9);
     let radius = SceneFile::parse_number(&o["radius"], 10.);
     let samples = SceneFile::parse_number(&o["samples"], 10.) as usize;
@@ -126,7 +127,7 @@ pub fn create_firework(o: &Value) -> SceneObject {
     let num_particles = SceneFile::parse_number(&o["particles"], 100.) as usize;
     let upward_bias = SceneFile::parse_number(&o["upward_bias"], 2.);
     let intensity = SceneFile::parse_number(&o["intensity"], 2.);
-    let color = SceneFile::parse_color_def(&o, "color", Color::white()) * intensity;
+    let color = SceneFile::parse_color_def(o, "color", Color::white()) * intensity;
 
     let particles = create_particles(
                         &mut rng,
@@ -145,11 +146,12 @@ pub fn create_firework(o: &Value) -> SceneObject {
                             .collect();
     let geom = Union::new(boxed_particles);
 
-    let tree = Octree::new(8, geom.bounds(), &particles.into_iter().map(|p| Arc::new(p)).collect());
+    let particle_arcs: Vec<Arc<Particle>> = particles.into_iter().map(Arc::new).collect();
+    let tree = Octree::new(8, geom.bounds(), &particle_arcs);
     let m = Box::new(FireworkMaterial { particles: tree, color });
 
-	return SceneObject {
+	SceneObject {
 		geometry: Box::new(geom),
-		medium: Box::new(Solid { m: m}),
+		medium: Box::new(Solid { m }),
 	}
 }

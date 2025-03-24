@@ -31,24 +31,24 @@ impl Triangle {
         //let area2 = normal.length(); // Before norm
         let normal = v0v1.cross(&v0v2).normalize();  
         //panic_if_nan(normal);
-        return Triangle {
-            v0: v0,
-            v1: v1,
-            v2: v2,
-            normal: normal,
+        Triangle {
+            v0,
+            v1,
+            v2,
+            normal,
         }
     }
     pub fn new_with_normal(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>, normal: Vector3<f64>) -> Triangle{
-        return Triangle {
-            v0: v0,
-            v1: v1,
-            v2: v2,
-            normal: normal,
+        Triangle {
+            v0,
+            v1,
+            v2,
+            normal,
         }
     }
 
     pub fn translate_vec3(&self, v: Vector3<f64>) -> Triangle {
-        return Triangle {
+        Triangle {
             v0: self.v0 - v,
             v1: self.v1 - v,
             v2: self.v2 - v,
@@ -78,7 +78,7 @@ fn intersects_dist(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>, r: &Ray
         let tvec = r.ro - v0; 
         let u = tvec.dot(&pvec) * inv_det; 
 
-        if u < 0. || u > 1. { return None }; 
+        if !(0. ..=1.).contains(&u) { return None }; 
 
         let qvec = tvec.cross(&v0v1); 
         panic_if_nan(qvec);
@@ -92,20 +92,17 @@ fn intersects_dist(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>, r: &Ray
             let point = r.ro + (r.rd.normalize() * dist);
             return Some(IntersectionPoint { dist, point })
         }
-        return None;
+        None
 }
 
 
 impl Geometry for Triangle {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        return match intersects_dist(self.v0, self.v1, self.v2, r) {
-            Some(x) => Some(RawIntersection {
+        intersects_dist(self.v0, self.v1, self.v2, r).map(|x| RawIntersection {
                 dist: x.dist, 
                 point: x.point,
                 normal: self.normal 
-            }),
-            None => None
-        }
+            })
     }
 
     fn bounds(&self) -> BBox {
@@ -153,7 +150,7 @@ impl SmoothTriangle {
         normalv1: Vector3<f64>,
         normalv2: Vector3<f64>
     ) -> SmoothTriangle{
-        return SmoothTriangle { v0, v1, v2, normalv0, normalv1, normalv2 }
+        SmoothTriangle { v0, v1, v2, normalv0, normalv1, normalv2 }
     }
 
     /*
@@ -175,20 +172,17 @@ impl SmoothTriangle {
         let a = triangle_area(self.v0, self.v1, p.point) / triangle_area(self.v0, self.v1, self.v2);
         let b = triangle_area(self.v0, self.v2, p.point) / triangle_area(self.v0, self.v1, self.v2);
         // We can skip c as a + b + c = 1
-        return self.normalv2 * a  + self.normalv1 * b + (1. - a - b) * self.normalv0; 
+        self.normalv2 * a  + self.normalv1 * b + (1. - a - b) * self.normalv0
     }
 }
 
 impl Geometry for SmoothTriangle {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        return match intersects_dist(self.v0, self.v1, self.v2, r) {
-            Some(x) => Some(RawIntersection {
+        intersects_dist(self.v0, self.v1, self.v2, r).map(|x| RawIntersection {
                 dist: x.dist, 
                 point: x.point,
                 normal: self.interpolate_normal(&x) 
-            }),
-            None => None
-        }
+            })
     }
 
     // Copy of Triangle

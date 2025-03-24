@@ -10,28 +10,28 @@ pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
     let closest = s.objects.nearest_intersection(r, f64::INFINITY, 0f64);
 
     match closest {
-        Some(x) => return trace_intersection(r, x, depth, s),
-        None => return (1, s.render.background),
+        Some(x) => trace_intersection(r, x, depth, s),
+        None => (1, s.render.background),
     }
 }
 
 fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene) -> (u64, Color){
     let mut cast = 1;
     let material = intersection.object.medium.material_at(intersection.point);
-    let interaction = material.scatter(r, &intersection, s);
+    let interaction = material.scatter(r, intersection, s);
 
-    if depth < s.render.max_depth as u64 && interaction.attenuate.to_vec().norm() > s.black_threshold {
+    if depth < s.render.max_depth as u64 && interaction.attenuate.as_vec().norm() > s.black_threshold {
         if let Some(ray) = interaction.ray {
             let (c, col) = trace(&ray, depth + 1, s);
             cast += c;
-            return (cast, interaction.attenuate * col);//.clamp(2.)); // TODO - use emission
+            return (cast, interaction.attenuate * col); //.clamp(2.)); // TODO - use emission
         } else {
-			return (cast, interaction.attenuate)
+			return (cast, interaction.attenuate);
 		}
     }
 	
 	// Too many bounce, fallback to color
-    return (cast, (interaction.attenuate * s.render.background));
+    (cast, (interaction.attenuate * s.render.background))
 }
 
 fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &Scene) -> (u64, Color) {
@@ -43,8 +43,8 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &S
 
     let mut cast = 1;
     let (c, o) = trace_sample(r, &biased_intersection, depth, scene);
-    cast = cast + c;
-    return (cast, o) 
+    cast += c;
+    (cast, o) 
 }
 
 

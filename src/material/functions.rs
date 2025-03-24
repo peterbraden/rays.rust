@@ -36,7 +36,7 @@ pub fn scatter_lambertian(albedo: Color, intersection: &Intersection) -> Scatter
         ro: intersection.point,
         rd: intersection.normal + random_point_on_unit_sphere(),
     };
-    return ScatteredRay{ attenuate:albedo, ray: Some(refl) };
+    ScatteredRay{ attenuate:albedo, ray: Some(refl) }
 }
 
 pub fn scatter_dielectric(
@@ -46,21 +46,27 @@ pub fn scatter_dielectric(
     intersection: &Intersection
 ) -> ScatteredRay {
 
-    let mut ni_over_nt = refractive_index; // Assumes it comes from air - TODO
-    let cosine;
     let drn = r.rd.dot(&intersection.normal);
-    let outward_normal;
-    if drn > 0.0 {
+    
+    let outward_normal = if drn > 0.0 {
         // when ray shoot through object back into vacuum,
         // ni_over_nt = ref_idx, surface normal has to be inverted.
-        cosine = drn / r.rd.norm(); 
-        outward_normal = -intersection.normal
+        -intersection.normal
     } else {
         // when ray shoots into object,
-        // ni_over_nt = 1 / ref_idx.
-        cosine = - drn / r.rd.norm(); 
-        ni_over_nt = 1.0 / refractive_index; 
-        outward_normal = intersection.normal
+        intersection.normal
+    };
+    
+    let cosine = if drn > 0.0 {
+        drn / r.rd.norm()
+    } else {
+        -drn / r.rd.norm()
+    };
+    
+    let ni_over_nt = if drn > 0.0 {
+        refractive_index // Assumes it comes from air - TODO
+    } else {
+        1.0 / refractive_index
     };
 
     match refract(r.rd, outward_normal, ni_over_nt) {
@@ -85,26 +91,27 @@ pub fn scatter_dielectric(
     }
 
     let reflected = reflect(r.rd, intersection.normal);
-    return ScatteredRay {
+    ScatteredRay {
         attenuate: Color::white(),
         ray: Some(Ray {
             ro: intersection.point,
             rd: reflected
         }) 
-    };
+    }
 }
 
 
 pub fn diffuse (pigment: Color, i: &Intersection, light_vec: &Vector3<f64>, light: &Light) -> Color {
     let diffuse_scale = light_vec.normalize().dot(&i.normal) * light.intensity;
     if diffuse_scale.is_sign_positive() {
-        return light.color * pigment * diffuse_scale;
+        light.color * pigment * diffuse_scale
+    } else {
+        Color::black()
     }
-    return Color::black()
 }
 
 pub fn phong (phong: f64, r: &Ray, intersection: &Intersection, light_vec: &Vector3<f64>) -> Color {
-    if phong < std::f64::MIN_POSITIVE {
+    if phong < f64::MIN_POSITIVE {
         return Color::black();
     }
     let ln = light_vec.normalize();
@@ -116,5 +123,5 @@ pub fn phong (phong: f64, r: &Ray, intersection: &Intersection, light_vec: &Vect
         return Color::white() * spec_scale;
     }
 
-    return Color::black();
+    Color::black()
 }

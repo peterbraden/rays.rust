@@ -24,7 +24,7 @@ pub struct OctreeNode {
 }
 
 fn vec3_invert(rd: Vector3<f64>) -> Vector3<f64> {
-  return Vector3::new(1.0/rd.x, 1.0/rd.y, 1.0/rd.z); 
+  Vector3::new(1.0/rd.x, 1.0/rd.y, 1.0/rd.z) 
 }
 
 type OctreeIntersections = Option<Vec<usize>>;
@@ -32,47 +32,40 @@ type OctreeIntersections = Option<Vec<usize>>;
 impl OctreeNode {
     pub fn is_leaf(&self) -> bool {
         for i in 0..8 {
-            match self.children[i as usize] {
-                Some(_) => { return false },
-                None => {}
-            }
+            if self.children[i as usize].is_some() { return false }
         }
-        return true;
+        true
     }
 
     pub fn is_empty(&self) -> bool {
-        return self.items.len() > 0;
+        self.items.len() > 0
     }
 
     pub fn len(&self) -> usize {
-        return self.items.len()
+        self.items.len()
     }
 
     /// Perform a breadth first search of the tree, and then sort results by distance.
-    pub fn naive_intersection(&self, r: &Ray, max:f64, min:f64) -> OctreeIntersections {
+    pub fn naive_intersection(&self, r: &Ray, _max:f64, _min:f64) -> OctreeIntersections {
         let invrd = vec3_invert(r.rd);
         if !self.bounds.fast_intersects(&r.ro, &invrd) {
-            return None
-        }
-
-        if self.is_leaf(){
-            return Some(self.items.clone());
-        }
-
-        let intersections = self.children
+            None
+        } else if self.is_leaf() {
+            Some(self.items.clone())
+        } else {
+            let intersections = self.children
                                 .iter()
                                 .filter(|i| i.is_some())
-                                .map(|c| c.as_ref().unwrap().naive_intersection(r,max, min))
-                                .filter(|i| i.is_some())
-                                .map(|i| i.unwrap())
+                                .filter_map(|c| c.as_ref().unwrap().naive_intersection(r, _max, _min))
                                 .flatten()
                                 .collect::<Vec<usize>>();
 
-        if intersections.is_empty(){
-            return None;
+            if intersections.is_empty() {
+                None
+            } else {
+                Some(intersections)
+            }
         }
-        return Some(intersections);
-        
     }
 
 }
@@ -83,13 +76,13 @@ impl<T: Geometry> Octree<T> {
     // Create a new node, and subdivide into further nodes up until max_depth
     // or until number of children objects is 0.
     //
-    pub fn new(max_depth: usize, b: BBox, items: &Vec<Arc<T>>) -> Octree<T> {
-        let items: Vec<Arc<T>> = items.into_iter().cloned().collect();
+    pub fn new(max_depth: usize, b: BBox, items: &[Arc<T>]) -> Octree<T> {
+        let items: Vec<Arc<T>> = items.to_vec();
         let indices: Vec<usize> = (0..items.len()).collect();
-        return Octree {
+        Octree {
             root: Octree::create_node(0, max_depth, b, indices, &items),
-            items: items,
-        };
+            items,
+        }
     }
 
     fn create_node(depth: usize, max_depth: usize, b: BBox, items: Vec<usize>, geometries: &Vec<Arc<T>>) -> OctreeNode{
@@ -106,7 +99,7 @@ impl<T: Geometry> Octree<T> {
                                 .filter( |x| { cbox.intersects_bbox( &geometries[*x].bounds() ) } )
                                 .collect::<Vec<usize>>();
 
-                if inside.len() > 0 {
+                if !inside.is_empty() {
                     let node = Octree::create_node(depth + 1, max_depth, cbox, inside, geometries);
                     children[i as usize] = Some(Box::new(node));
                 }
@@ -115,33 +108,25 @@ impl<T: Geometry> Octree<T> {
 
 
         OctreeNode {
-            depth: depth,
+            depth,
             bounds: b,
-            children: children, 
-            items: items,
+            children, 
+            items,
         }
 
     }
 
     pub fn raw_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<RawIntersection> {
-        return match self.closest_intersection(r, max, min) {
-            Some(tupl) => Some(tupl.1),
-            None => None
-        }
+        self.closest_intersection(r, max, min).map(|tupl| tupl.1)
     }
 
 
     pub fn intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(Arc<T>, RawIntersection)> {
-        match self.closest_intersection(r, max, min) {
-            Some(tupl) => {
-               return Some((self.items[tupl.0].clone(), tupl.1))
-            },
-            None => None
-        }
+        self.closest_intersection(r, max, min).map(|tupl| (self.items[tupl.0].clone(), tupl.1))
     }
 
     fn closest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(usize, RawIntersection)> {
-        return match self.root.naive_intersection(r, max, min) {
+        match self.root.naive_intersection(r, max, min) {
             Some(opts) => self.items_intersection(r,max, min, opts),
             None => None
         }
@@ -152,21 +137,18 @@ impl<T: Geometry> Octree<T> {
         let mut cdist = max;
         let mut closest = None;
         for i in items {
-            match self.items[i].intersects(r) {
-                Some(x) => {
-                    if x.dist < cdist && x.dist >= min {
-                        cdist = x.dist;
-                        closest = Some((i, x));
-                    }
-                },
-                None => (),
+            if let Some(x) = self.items[i].intersects(r) {
+                if x.dist < cdist && x.dist >= min {
+                    cdist = x.dist;
+                    closest = Some((i, x));
+                }
             }
         }
-        return closest;
+        closest
     }
 
     pub fn bounds(&self) -> BBox {
-       return self.root.bounds; 
+       self.root.bounds 
     }
 
 /*
@@ -343,9 +325,9 @@ impl fmt::Display for OctreeNode {
         let mut p = "".to_string();
 
         for _ in -1 .. self.depth as i64{
-            p = p + "  ";
+            p += "  ";
         }
-        p = p + "|-";
+        p += "|-";
 
         for i in 0..8 {
             match self.children[i as usize].as_ref() {

@@ -14,7 +14,7 @@ impl MaterialModel for NormalShade {
     fn scatter(&self, _r: &Ray, intersection: &Intersection, _s: &Scene) -> ScatteredRay{
         let angle = intersection.normal.dot(&Vector3::new(0., 1., 0.));
         let c = Color::white() * intersection.normal.abs() * angle * angle * angle; 
-        return ScatteredRay{ attenuate: c, ray: None };
+        ScatteredRay{ attenuate: c, ray: None }
     }
 }
 

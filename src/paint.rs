@@ -7,7 +7,7 @@ use termcolor::{BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
 
 pub fn to_png(ctx: &RenderContext) {
     let img = image::ImageBuffer::from_fn(ctx.width as u32, ctx.height as u32, |x, y| {
-        let (r,g,b) = ctx.get_pixel(x as usize, ctx.height - y as usize - 1).to_u8();
+        let (r,g,b) = ctx.get_pixel(x as usize, ctx.height - y as usize - 1).as_u8();
         image::Rgb([r,g,b])
     });
 
@@ -28,7 +28,7 @@ pub fn poor_mans(ctx: &RenderContext) {
             buffer.set_color(ColorSpec::new().set_fg(Some(termcol))).expect("Could not set color");
             write!(&mut buffer, "█").expect("Could not write");
         }
-        write!(&mut buffer, "\n").expect("Could not write");
+        writeln!(&mut buffer).expect("Could not write");
     }
 
     buffer.set_color(&ColorSpec::new()).expect("Could not set color");

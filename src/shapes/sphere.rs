@@ -13,8 +13,8 @@ pub struct Sphere {
 impl Sphere{
     pub fn new(center:Vector3<f64>, radius: f64) -> Sphere {
         Sphere {
-            center: center,
-            radius: radius,
+            center,
+            radius,
         }
     }
 }
@@ -51,23 +51,23 @@ impl Geometry for Sphere {
 
         let point = r.ro + (r.rd.normalize() * dist);
 
-        return Some(
+        Some(
             RawIntersection {
-                dist: dist, 
-                point: point,
+                dist, 
+                point,
                 normal: (point - self.center).normalize()
             })
     }
 
     fn bounds(&self) -> BBox {
         BBox::new(
-            Vector3::new(&self.center.x - &self.radius, 
-                      &self.center.y - &self.radius, 
-                      &self.center.z - &self.radius
+            Vector3::new(self.center.x - self.radius, 
+                      self.center.y - self.radius, 
+                      self.center.z - self.radius
                       ),
-            Vector3::new(&self.center.x + &self.radius, 
-                      &self.center.y + &self.radius, 
-                      &self.center.z + &self.radius
+            Vector3::new(self.center.x + self.radius, 
+                      self.center.y + self.radius, 
+                      self.center.z + self.radius
                       ),
           )
     }

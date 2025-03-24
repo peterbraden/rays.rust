@@ -18,7 +18,7 @@ use crate::scenefile::SceneFile;
 const BIG_NUMBER:f64 = 1000.;
 
 pub fn rand() -> f64 {
-    return _rand::thread_rng().gen_range(0.,1.);
+    _rand::thread_rng().gen_range(0.,1.)
 }
 
 pub trait ParticipatingMedium: MaterialModel {}
@@ -27,7 +27,7 @@ pub struct Vacuum {}
 impl ParticipatingMedium for Vacuum {}
 impl MaterialModel for Vacuum {
     fn scatter(&self, _r: &Ray, _i: &Intersection, _s: &Scene) -> ScatteredRay {
-        return ScatteredRay {
+        ScatteredRay {
             ray: None,
             attenuate: Color::white(),
         }
@@ -44,7 +44,7 @@ impl ParticipatingMedium for HomogenousFog{}
 impl MaterialModel for HomogenousFog {
     fn scatter(&self, r: &Ray, i: &Intersection, _s: &Scene) -> ScatteredRay {
        // let amount = i.dist * self.density;
-        return ScatteredRay {
+        ScatteredRay {
             ray: Some(Ray {
                 ro: i.point,
                 rd: (r.rd + (random_point_on_unit_sphere() * self.scatter * rand())).normalize(),
@@ -58,19 +58,20 @@ impl Geometry for HomogenousFog {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         if rand() < self.density {
             let dist = rand().powf(3.) * BIG_NUMBER; 
-            return Some(RawIntersection {
-                dist: dist,
+            Some(RawIntersection {
+                dist,
                 point: r.ro + r.rd * dist,
                 normal: r.rd,
             })
+        } else {
+            None
         }
-        return None
     }
 
     fn bounds(&self) -> BBox {
         BBox::new(
-            Vector3::new(std::f64::MIN, std::f64::MIN, std::f64::MIN),
-            Vector3::new(std::f64::MAX, std::f64::MAX, std::f64::MAX),
+            Vector3::new(f64::MIN, f64::MIN, f64::MIN),
+            Vector3::new(f64::MAX, f64::MAX, f64::MAX),
           )
     }
 }
@@ -85,7 +86,7 @@ impl MaterialModel for LowAltitudeFog {
     fn scatter(&self, _r: &Ray, _i: &Intersection, _s: &Scene) -> ScatteredRay {
         //let amount = i.dist * self.density;
         // TODO
-        return ScatteredRay {
+        ScatteredRay {
             ray: None,
             attenuate: Color::white(),
         }
@@ -96,11 +97,11 @@ impl MaterialModel for LowAltitudeFog {
 
 pub fn create_fog(o: &Value) -> SceneObject {
     let fog = HomogenousFog {
-        color: SceneFile::parse_color_def(&o, "color", Color::new(0.1, 0.1, 0.1)),
+        color: SceneFile::parse_color_def(o, "color", Color::new(0.1, 0.1, 0.1)),
         density: SceneFile::parse_number(&o["density"], 0.2),
         scatter: SceneFile::parse_number(&o["scatter"], 0.01),
     };
-	return SceneObject {
+	SceneObject {
 		geometry: Box::new(fog.clone()),
 		medium: Box::new(Solid { m: Box::new(fog)}),
 	}

@@ -15,18 +15,18 @@ pub struct Transform {
 // Affine transformation (invertible)
 impl Transform {
     pub fn new(item: Box<dyn Geometry + Sync + Send>) -> Transform {
-        return Transform {
-            item: item,
+        Transform {
+            item,
             transform: Affine3::identity()
-        };
+        }
     }
 
     pub fn rotate(
         item:  Box<dyn Geometry + Sync + Send>,
         roll: f64, pitch: f64, yaw: f64
     ) -> Transform {
-        return Transform {
-            item: item,
+        Transform {
+            item,
             transform: na::convert(Rotation3::from_euler_angles(roll, pitch, yaw))
         }
     } 
@@ -34,9 +34,9 @@ impl Transform {
 
 impl Geometry for Transform {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        return self.item.intersects(&r.inverse_transform(&self.transform));
+        self.item.intersects(&r.inverse_transform(&self.transform))
     }
     fn bounds(&self) -> BBox {
-        return self.item.bounds().transform(&na::convert(self.transform));
+        self.item.bounds().transform(&na::convert(self.transform))
     }
 }

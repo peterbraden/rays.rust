@@ -31,16 +31,16 @@ impl fmt::Display for Ray {
 
 impl Ray {
     pub fn transform(&self, t: &Transform3<f64>) -> Ray {
-        return Ray {
+        Ray {
             ro: (t * Point3::from(self.ro)).coords,
             rd: t * self.rd
-        }; 
+        }
     }
 
     pub fn inverse_transform(&self, t: &Affine3<f64>) -> Ray {
-        return Ray {
+        Ray {
             ro: t.inverse_transform_point(&Point3::from(self.ro)).coords,
             rd: t.inverse_transform_vector(&self.rd)
-        }; 
+        }
     }
 }

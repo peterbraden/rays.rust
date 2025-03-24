@@ -13,6 +13,6 @@ pub struct Dielectric {
 
 impl MaterialModel for Dielectric {
     fn scatter(&self, r: &Ray, intersection: &Intersection, _s: &Scene) -> ScatteredRay{
-        return scatter_dielectric(self.refractive_index, self.attenuate, r, intersection);
+        scatter_dielectric(self.refractive_index, self.attenuate, r, intersection)
     }
 }

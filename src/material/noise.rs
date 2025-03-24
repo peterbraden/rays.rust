@@ -247,7 +247,7 @@ mod tests {
                 for z in 0..5 {
                     let pos = Vector3::new(x as f64, y as f64, z as f64);
                     let value = noise_texture.noise_value(pos);
-                    assert!(value >= 0.0 && value <= 1.0, "Noise value out of range: {}", value);
+                    assert!((0.0..=1.0).contains(&value), "Noise value out of range: {}", value);
                 }
             }
         }
@@ -272,7 +272,7 @@ mod tests {
                 for z in 0..5 {
                     let pos = Vector3::new(x as f64, y as f64, z as f64);
                     let value = noise_texture.noise_value(pos);
-                    assert!(value >= 0.0 && value <= 1.0, "FBM value out of range: {}", value);
+                    assert!((0.0..=1.0).contains(&value), "FBM value out of range: {}", value);
                 }
             }
         }
@@ -294,7 +294,7 @@ mod tests {
                 for z in 0..5 {
                     let pos = Vector3::new(x as f64, y as f64, z as f64);
                     let value = noise_texture.noise_value(pos);
-                    assert!(value >= 0.0 && value <= 1.0, "Marble value out of range: {}", value);
+                    assert!((0.0..=1.0).contains(&value), "Marble value out of range: {}", value);
                 }
             }
         }

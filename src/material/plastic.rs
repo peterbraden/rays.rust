@@ -29,18 +29,18 @@ impl MaterialModel for Plastic {
             for light in &s.lights {
                 let light_vec = light.position - intersection.point;
                 let shadow_ray = Ray {ro: intersection.point, rd: light_vec};
-                let shadow_intersection = s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), std::f64::MIN_POSITIVE); 
+                let shadow_intersection = s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), f64::MIN_POSITIVE); 
                 match shadow_intersection {
                     Some(_) => (),// Point in shadow...
                     None => {
-                        diffuse_refl = diffuse_refl + diffuse(self.albedo, &intersection, &light_vec, &light);
+                        diffuse_refl = diffuse_refl + diffuse(self.albedo, intersection, &light_vec, light);
                     },
                 }
             }
             
-            return scatter_lambertian(diffuse_refl, intersection);
+            scatter_lambertian(diffuse_refl, intersection)
         } else {
-            return scatter_dielectric(self.refractive_index, self.albedo, r, intersection);
+            scatter_dielectric(self.refractive_index, self.albedo, r, intersection)
         }
     }
 }

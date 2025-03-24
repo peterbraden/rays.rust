@@ -97,7 +97,7 @@ impl Mul<Color> for Color {
     type Output = Color;
 
     fn mul(self, _rhs: Color) -> Color {
-        Color {rgb: (_rhs * self.to_vec()).to_vec() }
+        Color {rgb: (_rhs * self.as_vec()).as_vec() }
     }
 }
 

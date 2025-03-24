@@ -66,6 +66,7 @@ impl Geometry for HomogenousFog {
         } else {
             None
         }
+    }
 
     fn bounds(&self) -> BBox {
         BBox::new(

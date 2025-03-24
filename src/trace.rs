@@ -20,7 +20,7 @@ fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene) -> 
     let material = intersection.object.medium.material_at(intersection.point);
     let interaction = material.scatter(r, &intersection, s);
 
-    if depth < s.render.max_depth as u64 && interaction.attenuate.to_vec().norm() > s.black_threshold {
+    if depth < s.render.max_depth as u64 && interaction.attenuate.as_vec().norm() > s.black_threshold {
         if let Some(ray) = interaction.ray {
             let (c, col) = trace(&ray, depth + 1, s);
             cast += c;

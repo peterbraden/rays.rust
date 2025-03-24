@@ -109,7 +109,7 @@ impl MaterialModel for FireworkMaterial {
                 // Should never happen
                 panic!("Firework didn't intersect")
             }
-        };
+        }
     }
 }
 

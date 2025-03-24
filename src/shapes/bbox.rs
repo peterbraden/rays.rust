@@ -237,14 +237,14 @@ impl BBox {
     }
 
 
-    pub fn intersects_bbox(&self, b: &BBox) -> bool{
-          if self.max.x < b.min.x { false } // self is left of b
-          else if self.min.x > b.max.x { false } // self is right of b
-          else if self.max.y < b.min.y { false } // self is above b
-          else if self.min.y > b.max.y { false } // self is below b
-          else if self.max.z < b.min.z { false } // self is behind b
-          else if self.min.z > b.max.z { false } // self is in front of b
-          else { true } // boxes overlap
+    pub fn intersects_bbox(&self, b: &BBox) -> bool {
+        // Check if there's any separation along any axis
+        !(self.max.x < b.min.x || // self is left of b
+          self.min.x > b.max.x || // self is right of b
+          self.max.y < b.min.y || // self is above b
+          self.min.y > b.max.y || // self is below b
+          self.max.z < b.min.z || // self is behind b
+          self.min.z > b.max.z)   // self is in front of b
     }
 
     pub fn union(self, b: &BBox) -> BBox {
@@ -270,18 +270,20 @@ impl BBox {
     }
 
     pub fn contains(self, b: &BBox) -> bool {
-        if self.min.x > b.min.x  { false }
-        else if self.min.y > b.min.y  { false }
-        else if self.min.z > b.min.z  { false }
-        else if self.max.x < b.max.x  { false }
-        else if self.max.y < b.max.y  { false }
-        else { self.max.z >= b.max.z }
+        // Check if all min/max constraints are met
+        self.min.x <= b.min.x && 
+        self.min.y <= b.min.y && 
+        self.min.z <= b.min.z && 
+        self.max.x >= b.max.x && 
+        self.max.y >= b.max.y && 
+        self.max.z >= b.max.z
     }
 
     pub fn contains_point(self, pt: &Vector3<f64>) -> bool { 
-      if pt.x < self.min.x || pt.x > self.max.x { false }
-      else if pt.y < self.min.y || pt.y > self.max.y { false }
-      else { !(pt.z < self.min.z || pt.z > self.max.z) }
+        // Point is inside if it's within all axis bounds
+        pt.x >= self.min.x && pt.x <= self.max.x &&
+        pt.y >= self.min.y && pt.y <= self.max.y &&
+        pt.z >= self.min.z && pt.z <= self.max.z
     }
 
 }

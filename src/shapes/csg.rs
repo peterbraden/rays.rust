@@ -103,11 +103,7 @@ impl Primitive {
                 None => arange.0.dist + 1. // Bigger than entry to infinite obj
             }; 
 
-            loop {
-                let brange = match other.next_intersection_range(r, bdist) {
-                    Some(brange) => brange,
-                    None => break
-                };
+            while let Some(brange) = other.next_intersection_range(r, bdist) {
                 bdist += match brange.1 {
                     Some(x) => x.dist,
                     None => brange.0.dist + 1. // Bigger than entry to infinite obj

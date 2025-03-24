@@ -4,7 +4,6 @@ use crate::intersection::Intersection;
 use crate::scene::Scene;
 
 /// See https://google.github.io/filament//Materials.md.html#materialmodels/litmodel
-
 ///
 /// In Google Filament they refer to
 /// - The Lit model (standard material model)

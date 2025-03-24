@@ -62,6 +62,7 @@ fn trace_particle(impulse: Ray, time: f64, samples: usize, gravity: f64) -> Vec<
     particles
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_particles(
         rng: &mut StdRng,
         origin: Vector3<f64>,

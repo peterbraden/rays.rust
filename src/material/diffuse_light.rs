@@ -11,8 +11,8 @@ pub struct DiffuseLight {
 
 impl MaterialModel for DiffuseLight {
     fn scatter(&self, _r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay{
-        return ScatteredRay{ 
+        ScatteredRay{ 
             attenuate:self.color * self.intensity,
-            ray: None };
+            ray: None }
     }
 }

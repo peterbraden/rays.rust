@@ -72,9 +72,9 @@ impl Mesh {
 
         let bounds = Mesh::bounds_of(&triangles);
         let tree = Octree::new(8, bounds, &triangles); 
-        return Mesh {
+        Mesh {
             triangles: tree,
-            bounds: bounds,
+            bounds,
             triangle_count: triangles.len()
         }
     }
@@ -161,9 +161,9 @@ impl SmoothMesh {
 
         let bounds = SmoothMesh::bounds_of(&triangles);
         let tree = Octree::new(8, bounds, &triangles); 
-        return SmoothMesh {
+        SmoothMesh {
             triangles: tree,
-            bounds: bounds,
+            bounds,
             triangle_count: triangles.len()
         }
     }

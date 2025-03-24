@@ -59,18 +59,18 @@ impl Geometry for HomogenousFog {
         if rand() < self.density {
             let dist = rand().powf(3.) * BIG_NUMBER; 
             return Some(RawIntersection {
-                dist: dist,
+                dist,
                 point: r.ro + r.rd * dist,
                 normal: r.rd,
             })
         }
-        return None
+        None
     }
 
     fn bounds(&self) -> BBox {
         BBox::new(
-            Vector3::new(std::f64::MIN, std::f64::MIN, std::f64::MIN),
-            Vector3::new(std::f64::MAX, std::f64::MAX, std::f64::MAX),
+            Vector3::new(f64::MIN, f64::MIN, f64::MIN),
+            Vector3::new(f64::MAX, f64::MAX, f64::MAX),
           )
     }
 }
@@ -96,11 +96,11 @@ impl MaterialModel for LowAltitudeFog {
 
 pub fn create_fog(o: &Value) -> SceneObject {
     let fog = HomogenousFog {
-        color: SceneFile::parse_color_def(&o, "color", Color::new(0.1, 0.1, 0.1)),
+        color: SceneFile::parse_color_def(o, "color", Color::new(0.1, 0.1, 0.1)),
         density: SceneFile::parse_number(&o["density"], 0.2),
         scatter: SceneFile::parse_number(&o["scatter"], 0.01),
     };
-	return SceneObject {
+	SceneObject {
 		geometry: Box::new(fog.clone()),
 		medium: Box::new(Solid { m: Box::new(fog)}),
 	}

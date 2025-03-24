@@ -32,7 +32,7 @@ impl Medium for CheckeredYPlane {
         let zig = if (pt[0].abs() / self.xsize) as i32 % 2 == 0 { pt[0] > 0. } else { pt[0] <= 0. };
         let zag = if (pt[2].abs() / self.zsize) as i32 % 2 == 0 { pt[2] > 0. } else { pt[2] <= 0. };
         // zig XOR zag
-        return if !zig != !zag { &self.m1 } else { &self.m2 };
+        if zig != zag { &self.m1 } else { &self.m2 }
     }
 }
 

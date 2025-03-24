@@ -118,7 +118,7 @@ pub fn create_firework(o: &Value) -> SceneObject {
 
     let mut rng: StdRng = SeedableRng::from_seed([0; 32]);
 
-    let center = SceneFile::parse_vec3_def(&o, "center", Vector3::new(0., 10., 0.));
+    let center = SceneFile::parse_vec3_def(o, "center", Vector3::new(0., 10., 0.));
     let time = SceneFile::parse_number(&o["time"], 0.9);
     let radius = SceneFile::parse_number(&o["radius"], 10.);
     let samples = SceneFile::parse_number(&o["samples"], 10.) as usize;
@@ -126,7 +126,7 @@ pub fn create_firework(o: &Value) -> SceneObject {
     let num_particles = SceneFile::parse_number(&o["particles"], 100.) as usize;
     let upward_bias = SceneFile::parse_number(&o["upward_bias"], 2.);
     let intensity = SceneFile::parse_number(&o["intensity"], 2.);
-    let color = SceneFile::parse_color_def(&o, "color", Color::white()) * intensity;
+    let color = SceneFile::parse_color_def(o, "color", Color::white()) * intensity;
 
     let particles = create_particles(
                         &mut rng,

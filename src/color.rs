@@ -10,7 +10,7 @@ pub struct Color {
 
 impl Color {
     pub fn new(r:f64, g:f64, b:f64) -> Color {
-        return Color {
+        Color {
             rgb: Vector3::new(r,g,b)
         }
     }
@@ -20,40 +20,40 @@ impl Color {
     }
 
     pub fn white() -> Color {
-        return Color::new(1f64,1f64,1f64);
+        Color::new(1f64,1f64,1f64)
     }
     pub fn red() -> Color {
-        return Color::new(1f64,0f64,0f64);
+        Color::new(1f64,0f64,0f64)
     }
     pub fn blue() -> Color {
-        return Color::new(0f64,0f64,01f64);
+        Color::new(0f64,0f64,01f64)
     }
     pub fn green() -> Color {
-        return Color::new(0f64,1f64,0f64);
+        Color::new(0f64,1f64,0f64)
     }
 
     pub fn to_u8(&self) -> (u8, u8, u8) {
-        return ((self.rgb[0] * 255f64).min(255f64) as u8, (self.rgb[1] * 255f64).min(255f64) as u8, (self.rgb[2] * 255f64).min(255f64) as u8);
+        ((self.rgb[0] * 255f64).min(255f64) as u8, (self.rgb[1] * 255f64).min(255f64) as u8, (self.rgb[2] * 255f64).min(255f64) as u8)
     }
 
     pub fn to_vec(&self) -> Vector3<f64> {
-        return self.rgb.clone();
+        self.rgb
     }
 
 	pub fn clamp(&self, val: f64) -> Color {
-        return Color::new(self.rgb.x.min(val), self.rgb.y.min(val), self.rgb.z.min(val));
+        Color::new(self.rgb.x.min(val), self.rgb.y.min(val), self.rgb.z.min(val))
 	}
 
     pub fn min() -> Color {
-        return Color::new(1./255.,1./255.,1./255.);
+        Color::new(1./255.,1./255.,1./255.)
     }
     
     pub fn ignore_nan(&self) -> Color {
-        return Color::new(
+        Color::new(
             if self.rgb.x.is_nan() { 0. } else { self.rgb.x },
             if self.rgb.y.is_nan() { 0. } else { self.rgb.y },
             if self.rgb.z.is_nan() { 0. } else { self.rgb.z },
-        );
+        )
     }
     
     /// Blend this color with another color using the given factor

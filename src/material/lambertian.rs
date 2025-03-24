@@ -10,7 +10,7 @@ pub struct Lambertian {
 }
 impl MaterialModel for Lambertian {
     fn scatter(&self, _r: &Ray, intersection: &Intersection, _s: &Scene) -> ScatteredRay{
-        return scatter_lambertian(self.albedo, intersection);
+        scatter_lambertian(self.albedo, intersection)
     }
 }
 

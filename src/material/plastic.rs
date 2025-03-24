@@ -38,9 +38,9 @@ impl MaterialModel for Plastic {
                 }
             }
             
-            return scatter_lambertian(diffuse_refl, intersection);
+            scatter_lambertian(diffuse_refl, intersection)
         } else {
-            return scatter_dielectric(self.refractive_index, self.albedo, r, intersection);
+            scatter_dielectric(self.refractive_index, self.albedo, r, intersection)
         }
     }
 }

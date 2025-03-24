@@ -42,10 +42,8 @@ impl PerlinNoise {
         
         // Double permutation array
         let mut perm = [0; 512];
-        for i in 0..256 {
-            perm[i] = base_perm[i];
-            perm[i + 256] = base_perm[i];
-        }
+        perm[..256].copy_from_slice(&base_perm);
+        perm[256..512].copy_from_slice(&base_perm);
         
         // 12 gradient vectors for 3D noise
         let grad3 = [

@@ -24,7 +24,7 @@ pub struct OctreeNode {
 }
 
 fn vec3_invert(rd: Vector3<f64>) -> Vector3<f64> {
-  return Vector3::new(1.0/rd.x, 1.0/rd.y, 1.0/rd.z); 
+  Vector3::new(1.0/rd.x, 1.0/rd.y, 1.0/rd.z) 
 }
 
 type OctreeIntersections = Option<Vec<usize>>;
@@ -37,29 +37,26 @@ impl OctreeNode {
                 None => {}
             }
         }
-        return true;
+        true
     }
 
     pub fn is_empty(&self) -> bool {
-        return self.items.len() > 0;
+        self.items.len() > 0
     }
 
     pub fn len(&self) -> usize {
-        return self.items.len()
+        self.items.len()
     }
 
     /// Perform a breadth first search of the tree, and then sort results by distance.
     pub fn naive_intersection(&self, r: &Ray, max:f64, min:f64) -> OctreeIntersections {
         let invrd = vec3_invert(r.rd);
         if !self.bounds.fast_intersects(&r.ro, &invrd) {
-            return None
-        }
-
-        if self.is_leaf(){
-            return Some(self.items.clone());
-        }
-
-        let intersections = self.children
+            None
+        } else if self.is_leaf() {
+            Some(self.items.clone())
+        } else {
+            let intersections = self.children
                                 .iter()
                                 .filter(|i| i.is_some())
                                 .map(|c| c.as_ref().unwrap().naive_intersection(r,max, min))
@@ -68,11 +65,12 @@ impl OctreeNode {
                                 .flatten()
                                 .collect::<Vec<usize>>();
 
-        if intersections.is_empty(){
-            return None;
+            if intersections.is_empty() {
+                None
+            } else {
+                Some(intersections)
+            }
         }
-        return Some(intersections);
-        
     }
 
 }
@@ -86,10 +84,10 @@ impl<T: Geometry> Octree<T> {
     pub fn new(max_depth: usize, b: BBox, items: &Vec<Arc<T>>) -> Octree<T> {
         let items: Vec<Arc<T>> = items.into_iter().cloned().collect();
         let indices: Vec<usize> = (0..items.len()).collect();
-        return Octree {
+        Octree {
             root: Octree::create_node(0, max_depth, b, indices, &items),
-            items: items,
-        };
+            items,
+        }
     }
 
     fn create_node(depth: usize, max_depth: usize, b: BBox, items: Vec<usize>, geometries: &Vec<Arc<T>>) -> OctreeNode{
@@ -115,16 +113,16 @@ impl<T: Geometry> Octree<T> {
 
 
         OctreeNode {
-            depth: depth,
+            depth,
             bounds: b,
-            children: children, 
-            items: items,
+            children, 
+            items,
         }
 
     }
 
     pub fn raw_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<RawIntersection> {
-        return match self.closest_intersection(r, max, min) {
+        match self.closest_intersection(r, max, min) {
             Some(tupl) => Some(tupl.1),
             None => None
         }
@@ -134,14 +132,14 @@ impl<T: Geometry> Octree<T> {
     pub fn intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(Arc<T>, RawIntersection)> {
         match self.closest_intersection(r, max, min) {
             Some(tupl) => {
-               return Some((self.items[tupl.0].clone(), tupl.1))
+               Some((self.items[tupl.0].clone(), tupl.1))
             },
             None => None
         }
     }
 
     fn closest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(usize, RawIntersection)> {
-        return match self.root.naive_intersection(r, max, min) {
+        match self.root.naive_intersection(r, max, min) {
             Some(opts) => self.items_intersection(r,max, min, opts),
             None => None
         }
@@ -162,11 +160,11 @@ impl<T: Geometry> Octree<T> {
                 None => (),
             }
         }
-        return closest;
+        closest
     }
 
     pub fn bounds(&self) -> BBox {
-       return self.root.bounds; 
+       self.root.bounds 
     }
 
 /*

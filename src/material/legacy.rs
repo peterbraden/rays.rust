@@ -23,7 +23,7 @@ impl MaterialModel for Whitted {
 
             match shadow_intersection {
                 Some(_) => (),// Point in shadow...
-                None => out = diffuse(self.pigment, &intersection, &light_vec, &light) + phong(self.phong, &r, &intersection, &light_vec),
+                None => out = diffuse(self.pigment, intersection, &light_vec, light) + phong(self.phong, r, intersection, &light_vec),
             }
         }
 
@@ -34,7 +34,7 @@ impl MaterialModel for Whitted {
             };
             return ScatteredRay{ attenuate: out * self.reflection, ray: Some(refl) };
         }
-        return ScatteredRay{ attenuate: out, ray: None };
+        ScatteredRay{ attenuate: out, ray: None }
     }
 }
 
@@ -44,6 +44,6 @@ pub struct FlatColor {
 
 impl MaterialModel for FlatColor {
     fn scatter(&self, _r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay{
-        return ScatteredRay{ attenuate: self.pigment, ray: None };
+        ScatteredRay{ attenuate: self.pigment, ray: None }
     }
 }

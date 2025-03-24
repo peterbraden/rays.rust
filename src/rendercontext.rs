@@ -62,11 +62,11 @@ impl RenderContext {
         return RenderContext {
             image: vec![Color::black(); (width*height) as usize],
             samples: vec![0; (width*height) as usize],
-            width: width,
-            height: height,
+            width,
+            height,
             rays_cast: 0,
             start_time,
-            progressive_render: progressive_render,
+            progressive_render,
             pixels_rendered: 0,
             output_filename,
         }
@@ -154,7 +154,7 @@ impl RenderContext {
                             width,
                             height,
                             chunk_size,
-                            samples: samples,
+                            samples,
                         }).flatten();
     }
 }
@@ -218,26 +218,24 @@ impl Iterator for RenderIterator {
                     supersamples: self.samples,
                 });
             }
+        } else if self.width - x > self.chunk_size {
+            self.i = self.i + self.chunk_size;
+            return Some(RenderableChunk {
+                xmin: x, 
+                xmax: x + self.chunk_size,
+                ymin: y,
+                ymax: self.height,
+                supersamples: self.samples,
+            });
         } else {
-            if self.width - x > self.chunk_size {
-                self.i = self.i + self.chunk_size;
-                return Some(RenderableChunk {
-                    xmin: x, 
-                    xmax: x + self.chunk_size,
-                    ymin: y,
-                    ymax: self.height,
-                    supersamples: self.samples,
-                });
-            } else {
-                self.i = (self.i - x) + self.chunk_size * self.width;
-                return Some(RenderableChunk {
-                    xmin: x ,
-                    xmax: self.width,
-                    ymin: y,
-                    ymax: self.height,
-                    supersamples: self.samples,
-                });
-            }
+            self.i = (self.i - x) + self.chunk_size * self.width;
+            return Some(RenderableChunk {
+                xmin: x ,
+                xmax: self.width,
+                ymin: y,
+                ymax: self.height,
+                supersamples: self.samples,
+            });
         }
     }
 }

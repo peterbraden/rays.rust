@@ -36,7 +36,7 @@ pub fn scatter_lambertian(albedo: Color, intersection: &Intersection) -> Scatter
         ro: intersection.point,
         rd: intersection.normal + random_point_on_unit_sphere(),
     };
-    return ScatteredRay{ attenuate:albedo, ray: Some(refl) };
+    ScatteredRay{ attenuate:albedo, ray: Some(refl) }
 }
 
 pub fn scatter_dielectric(
@@ -85,26 +85,27 @@ pub fn scatter_dielectric(
     }
 
     let reflected = reflect(r.rd, intersection.normal);
-    return ScatteredRay {
+    ScatteredRay {
         attenuate: Color::white(),
         ray: Some(Ray {
             ro: intersection.point,
             rd: reflected
         }) 
-    };
+    }
 }
 
 
 pub fn diffuse (pigment: Color, i: &Intersection, light_vec: &Vector3<f64>, light: &Light) -> Color {
     let diffuse_scale = light_vec.normalize().dot(&i.normal) * light.intensity;
     if diffuse_scale.is_sign_positive() {
-        return light.color * pigment * diffuse_scale;
+        light.color * pigment * diffuse_scale
+    } else {
+        Color::black()
     }
-    return Color::black()
 }
 
 pub fn phong (phong: f64, r: &Ray, intersection: &Intersection, light_vec: &Vector3<f64>) -> Color {
-    if phong < std::f64::MIN_POSITIVE {
+    if phong < f64::MIN_POSITIVE {
         return Color::black();
     }
     let ln = light_vec.normalize();
@@ -116,5 +117,5 @@ pub fn phong (phong: f64, r: &Ray, intersection: &Intersection, light_vec: &Vect
         return Color::white() * spec_scale;
     }
 
-    return Color::black();
+    Color::black()
 }

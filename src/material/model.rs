@@ -3,7 +3,6 @@ use crate::ray::Ray;
 use crate::intersection::Intersection;
 use crate::scene::Scene;
 
-///
 /// See https://google.github.io/filament//Materials.md.html#materialmodels/litmodel
 
 ///

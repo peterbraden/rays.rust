@@ -188,9 +188,9 @@ impl SceneFile {
 
         let geom = SceneFile::parse_geometry(&o);
         let m = SceneFile::parse_object_medium(&o, materials, media);
-        if geom.is_some(){
+        if let Some(geometry) = geom {
             return Some(Arc::new(SceneObject {
-                geometry: geom.unwrap(),
+                geometry,
                 medium: m
             }));
         }

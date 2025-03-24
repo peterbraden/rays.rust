@@ -135,36 +135,45 @@ impl BBox {
         if !self.fast_intersects(&r.ro, &invrd) { 
             None
         } else {
-        let xmin = if r.rd.x >= 0. { self.min.x } else { self.max.x };
-        let ymin = if r.rd.y >= 0. { self.min.y } else { self.max.y };
-        let zmin = if r.rd.z >= 0. { self.min.z } else { self.max.z };
+            let xmin = if r.rd.x >= 0. { self.min.x } else { self.max.x };
+            let ymin = if r.rd.y >= 0. { self.min.y } else { self.max.y };
+            let zmin = if r.rd.z >= 0. { self.min.z } else { self.max.z };
 
-        let tx0 = (xmin - r.ro.x) * invrd.x;
-        let ty0 = (ymin - r.ro.y) * invrd.y;
-        let tz0 = (zmin - r.ro.z) * invrd.z;
+            let tx0 = (xmin - r.ro.x) * invrd.x;
+            let ty0 = (ymin - r.ro.y) * invrd.y;
+            let tz0 = (zmin - r.ro.z) * invrd.z;
 
-        if tx0 > ty0 {
-            if tx0 > tz0 {
-                // Plane X -> Left or Right depending on ray direction
-                if r.rd.x > 0. { 
-                    Some(BoxFace::Left)
+            if tx0 > ty0 {
+                if tx0 > tz0 {
+                    // Plane X -> Left or Right depending on ray direction
+                    if r.rd.x > 0. { 
+                        Some(BoxFace::Left)
+                    } else {
+                        Some(BoxFace::Right)
+                    }
                 } else {
-                    Some(BoxFace::Right)
+                    // tz0 is largest
+                    if r.rd.z > 0. { 
+                        Some(BoxFace::Front)
+                    } else {
+                        Some(BoxFace::Back)
+                    }
+                }
+            } else if ty0 > tz0 {
+                // Plane Y -> Top or Bottom
+                if r.rd.y > 0. { 
+                    Some(BoxFace::Bottom)
+                } else {
+                    Some(BoxFace::Top)
+                }
+            } else {
+                // tz0 is largest
+                if r.rd.z > 0. { 
+                    Some(BoxFace::Front)
+                } else {
+                    Some(BoxFace::Back)
                 }
             }
-        } else if ty0 > tz0 {
-            // Plane Y -> Top or Bottom
-            if r.rd.y > 0. { 
-                Some(BoxFace::Bottom)
-            } else {
-                Some(BoxFace::Top)
-            }
-        } 
-        // Plane Z -> Front or Back
-        if r.rd.z > 0. { 
-            Some(BoxFace::Front)
-        } else {
-            Some(BoxFace::Back)
         }
     }
 
@@ -173,36 +182,45 @@ impl BBox {
         if !self.fast_intersects(&r.ro, &invrd) { 
             None 
         } else {
-        let xmax = if r.rd.x >= 0. { self.max.x } else { self.min.x };
-        let ymax = if r.rd.y >= 0. { self.max.y } else { self.min.y };
-        let zmax = if r.rd.z >= 0. { self.max.z } else { self.min.z };
+            let xmax = if r.rd.x >= 0. { self.max.x } else { self.min.x };
+            let ymax = if r.rd.y >= 0. { self.max.y } else { self.min.y };
+            let zmax = if r.rd.z >= 0. { self.max.z } else { self.min.z };
 
-        let tx1 = (xmax - r.ro.x) * invrd.x;
-        let ty1 = (ymax - r.ro.y) * invrd.y;
-        let tz1 = (zmax - r.ro.z) * invrd.z;
+            let tx1 = (xmax - r.ro.x) * invrd.x;
+            let ty1 = (ymax - r.ro.y) * invrd.y;
+            let tz1 = (zmax - r.ro.z) * invrd.z;
 
-        if tx1 < ty1 {
-            if tx1 < tz1 {
-                // Plane X -> Left or Right depending on ray direction
-                if r.rd.x > 0. { 
-                    Some(BoxFace::Right)
+            if tx1 < ty1 {
+                if tx1 < tz1 {
+                    // Plane X -> Left or Right depending on ray direction
+                    if r.rd.x > 0. { 
+                        Some(BoxFace::Right)
+                    } else {
+                        Some(BoxFace::Left)
+                    }
                 } else {
-                    Some(BoxFace::Left)
+                    // tz1 is smallest
+                    if r.rd.z > 0. { 
+                        Some(BoxFace::Back)
+                    } else {
+                        Some(BoxFace::Front)
+                    }
+                }
+            } else if ty1 < tz1 {
+                // Plane Y -> Top or Bottom
+                if r.rd.y > 0. { 
+                    Some(BoxFace::Top)
+                } else {
+                    Some(BoxFace::Bottom)
+                }
+            } else {
+                // tz1 is smallest
+                if r.rd.z > 0. { 
+                    Some(BoxFace::Back)
+                } else {
+                    Some(BoxFace::Front)
                 }
             }
-        } else if ty1 < tz1 {
-            // Plane Y -> Top or Bottom
-            if r.rd.y > 0. { 
-                Some(BoxFace::Top)
-            } else {
-                Some(BoxFace::Bottom)
-            }
-        } 
-        // Plane Z -> Front or Back
-        if r.rd.z > 0. { 
-            Some(BoxFace::Back)
-        } else {
-            Some(BoxFace::Front)
         }
     }
 
@@ -294,7 +312,7 @@ impl Geometry for BBox {
         if !self.fast_intersects(&r.ro, &invrd) { 
             None
         } else {
-            let (tmin, _tmax) = find_min_max(&self.min.coords, &self.max.coords, r.ro, invrd);
+            let (tmin, _tmax) = find_min_max(&self.min.coords, &self.max.coords, &r.ro, &invrd);
             let dist = tmin;
             let point =  r.ro + (r.rd * dist);
             let center = na::center(&self.min, &self.max);

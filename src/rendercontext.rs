@@ -47,12 +47,12 @@ pub struct RenderedChunk {
 
 fn format_f64(v: f64) -> String {
     if v > 1000000. {
-        return format!("{:.2}M", v / 1000000.);
+        format!("{:.2}M", v / 1000000.)
+    } else if v > 1000. {
+        format!("{:.2}K", v / 1000.)
+    } else {
+        format!("{:.2}", v)
     }
-    if v > 1000. {
-        return format!("{:.2}K", v / 1000.);
-    }
-    format!("{:.2}", v)
 }
 
 impl RenderContext {

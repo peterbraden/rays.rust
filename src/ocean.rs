@@ -54,8 +54,6 @@ use rand::rngs::StdRng;
 ///
 /// I still haven't worked out what units everything is in, or what the
 /// scale factor 'A' should represent.
-///
-
 
 /// Normal distribution rand (gaussian)
 fn randn(rng: &mut StdRng) -> f64 {
@@ -66,7 +64,7 @@ fn randn(rng: &mut StdRng) -> f64 {
 /// Phillips Spectrum
 fn phillips(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64) -> f64 {
     let ksq = k.x * k.x + k.y * k.y;
-    if ksq < std::f64::MIN_POSITIVE { return 0. };
+    if ksq < f64::MIN_POSITIVE { return 0. };
     let wind_dir = wind.normalize();
     let wk = k.normalize().dot(&wind_dir);
     let wind_speed = wind.norm();

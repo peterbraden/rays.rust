@@ -46,21 +46,27 @@ pub fn scatter_dielectric(
     intersection: &Intersection
 ) -> ScatteredRay {
 
-    let mut ni_over_nt = refractive_index; // Assumes it comes from air - TODO
-    let cosine;
     let drn = r.rd.dot(&intersection.normal);
-    let outward_normal;
-    if drn > 0.0 {
+    
+    let outward_normal = if drn > 0.0 {
         // when ray shoot through object back into vacuum,
         // ni_over_nt = ref_idx, surface normal has to be inverted.
-        cosine = drn / r.rd.norm(); 
-        outward_normal = -intersection.normal
+        -intersection.normal
     } else {
         // when ray shoots into object,
-        // ni_over_nt = 1 / ref_idx.
-        cosine = - drn / r.rd.norm(); 
-        ni_over_nt = 1.0 / refractive_index; 
-        outward_normal = intersection.normal
+        intersection.normal
+    };
+    
+    let cosine = if drn > 0.0 {
+        drn / r.rd.norm()
+    } else {
+        -drn / r.rd.norm()
+    };
+    
+    let ni_over_nt = if drn > 0.0 {
+        refractive_index // Assumes it comes from air - TODO
+    } else {
+        1.0 / refractive_index
     };
 
     match refract(r.rd, outward_normal, ni_over_nt) {

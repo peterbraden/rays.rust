@@ -51,7 +51,7 @@ impl Geometry for Sphere {
 
         let point = r.ro + (r.rd.normalize() * dist);
 
-        return Some(
+        Some(
             RawIntersection {
                 dist, 
                 point,
@@ -61,13 +61,13 @@ impl Geometry for Sphere {
 
     fn bounds(&self) -> BBox {
         BBox::new(
-            Vector3::new(&self.center.x - &self.radius, 
-                      &self.center.y - &self.radius, 
-                      &self.center.z - &self.radius
+            Vector3::new(self.center.x - self.radius, 
+                      self.center.y - self.radius, 
+                      self.center.z - self.radius
                       ),
-            Vector3::new(&self.center.x + &self.radius, 
-                      &self.center.y + &self.radius, 
-                      &self.center.z + &self.radius
+            Vector3::new(self.center.x + self.radius, 
+                      self.center.y + self.radius, 
+                      self.center.z + self.radius
                       ),
           )
     }

@@ -60,7 +60,7 @@ use rand::rngs::StdRng;
 /// Normal distribution rand (gaussian)
 fn randn(rng: &mut StdRng) -> f64 {
     let normal = Normal::new(0.0, 1.0);
-    return normal.sample(rng);
+    normal.sample(rng)
 }
 
 /// Phillips Spectrum
@@ -71,7 +71,7 @@ fn phillips(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64) -> f6
     let wk = k.normalize().dot(&wind_dir);
     let wind_speed = wind.norm();
     let l = (wind_speed * wind_speed) / gravity;
-    return scale * (-1.0 / (ksq * l * l)).exp() / (ksq * ksq) * wk * wk ;
+    scale * (-1.0 / (ksq * l * l)).exp() / (ksq * ksq) * wk * wk
 }
 
 fn amplitude(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64, rng: &mut StdRng) -> Complex<f64> {
@@ -83,7 +83,7 @@ fn amplitude(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64, rng:
 fn dispersion(k: Vector2<f64>, gravity: f64) -> f64 {
     let w = (k.norm() * gravity).sqrt(); // Deep water frequency relationship to magnitude
     let w_0 = 2f64 * std::f64::consts::PI / 200f64; // No idea? Rounding factor. Comes from keithlantz impl.
-    return (w / w_0).floor() * w_0;
+    (w / w_0).floor() * w_0
 }
 
 fn create_amplitude_tile(
@@ -95,7 +95,7 @@ fn create_amplitude_tile(
         fourier_grid_size: usize,
         rng: &mut StdRng,
         )-> Vec<Complex<f64>> {
-    let mut h0 = vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
+    let mut h0 = vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
 
     for j in 0 .. fourier_grid_size {
         for i in 0 .. fourier_grid_size {
@@ -105,23 +105,23 @@ fn create_amplitude_tile(
             let n = (j as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
             let m = (i as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
 
-            let k = gen_k(n, m , lx as f64, lz as f64);
+            let k = gen_k(n, m , lx, lz);
             h0[ind] = amplitude(k, wind, scale, gravity, rng);
         }
     }
-    return h0
+    h0
 }
 
 fn gen_k(n: f64, m: f64, lx: f64, lz: f64) -> Vector2<f64> {
     // <2 pi n / Lx, 2 pi m / Lz>
-    return Vector2::new(
+    Vector2::new(
         2f64 * std::f64::consts::PI * n /  lx,
         2f64 * std::f64::consts::PI * m /  lz,
-    );
+    )
 }
 
 fn mn_to_i(m: i32, n: i32, size: i32) -> usize {
-    return ((n + size/2) * size + (m + size/2)) as usize;
+    ((n + size/2) * size + (m + size/2)) as usize
 }
 
 fn transpose(matr: &Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
@@ -131,24 +131,24 @@ fn transpose(matr: &Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
             out[x*size + y] = matr[y*size + x];
         }
     }
-    return out;
+    out
 }
 
 /// 2D Fast Fourier Transform (Used to test IFFT2)
 fn fft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
-    let ifft = Radix4::new((size) as usize, false);
+    let ifft = Radix4::new(size, false);
     let mut tile_clone = tile.clone();
     let mut fft = vec![Complex::new(0., 0.); size * size];
     ifft.process_multi(&mut tile_clone[..], &mut fft[..]);
     let mut conj = transpose(&fft, size);
     let mut out =  vec![Complex::new(0., 0.); size * size];
     ifft.process_multi(&mut conj, &mut out[..]);
-    return transpose(&out, size);
+    transpose(&out, size)
 }
 
 /// Inverse 2D Fast Fourier Transform
 fn ifft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
-    let ifft = Radix4::new((size) as usize, true);
+    let ifft = Radix4::new(size, true);
     let mut tile_clone = tile.clone();
     let mut fft = vec![Complex::new(0., 0.); size * size];
     ifft.process_multi(&mut tile_clone[..], &mut fft[..]);
@@ -157,26 +157,26 @@ fn ifft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
     let mut out =  vec![Complex::new(0., 0.); size * size];
     ifft.process_multi(&mut conj[..], &mut out[..]);
 	out = out.iter().map(|x| x.unscale(size as f64)).collect();
-    return transpose(&out, size);
+    transpose(&out, size)
 }
 
 fn vertex_at(z: usize, x: usize, vertices: &Vec<Vector3<f64>>, fourier_grid_size: usize) -> Vector3<f64>{
-    return vertices[(z % fourier_grid_size) * fourier_grid_size + (x % fourier_grid_size)];
+    vertices[(z % fourier_grid_size) * fourier_grid_size + (x % fourier_grid_size)]
 }
 
 fn make_square_for(x: usize, z: usize, fourier_grid_size: usize, vertices: &Vec<Vector3<f64>>) -> (Triangle, Triangle) {
-    return (
+    (
         Triangle::new(
-            vertex_at(z + 1, x + 1, &vertices, fourier_grid_size),
-            vertex_at(z, x + 1, &vertices, fourier_grid_size),
-            vertex_at(z + 1, x, &vertices, fourier_grid_size),
+            vertex_at(z + 1, x + 1, vertices, fourier_grid_size),
+            vertex_at(z, x + 1, vertices, fourier_grid_size),
+            vertex_at(z + 1, x, vertices, fourier_grid_size),
         ),
         Triangle::new(
-            vertex_at(z + 1, x, &vertices, fourier_grid_size),
-            vertex_at(z, x + 1, &vertices, fourier_grid_size),
-            vertex_at(z, x, &vertices, fourier_grid_size),
+            vertex_at(z + 1, x, vertices, fourier_grid_size),
+            vertex_at(z, x + 1, vertices, fourier_grid_size),
+            vertex_at(z, x, vertices, fourier_grid_size),
         )
-    );
+    )
 }
 
 pub fn create_tile(
@@ -195,18 +195,18 @@ pub fn create_tile(
 
     let h0trans = transpose(&h0, fourier_grid_size);
     // Tile of amplitudes
-    let mut ht =          vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
-    let mut ht_slope_x =  vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
-    let mut ht_slope_z =  vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
-    let mut ht_slope_dx = vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
-    let mut ht_slope_dz = vec![Complex::new(0., 0.); (fourier_grid_size * fourier_grid_size) as usize];
+    let mut ht =          vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
+    let mut ht_slope_x =  vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
+    let mut ht_slope_z =  vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
+    let mut ht_slope_dx = vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
+    let mut ht_slope_dz = vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
 
     for j in 0 .. fourier_grid_size {
         for i in 0 .. fourier_grid_size {
             let ind = j * fourier_grid_size + i;
             let n = (j as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
             let m = (i as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
-            let k = gen_k(n, m , lx as f64, lz as f64);
+            let k = gen_k(n, m , lx, lz);
             let w = dispersion(k, gravity);
             let c0 = Complex::new(w.cos(), w.sin());
             let c1 = Complex::new(w.cos(), -w.sin());
@@ -232,13 +232,13 @@ pub fn create_tile(
     ht_slope_dx = ifft2(ht_slope_dx, fourier_grid_size);
     ht_slope_dz = ifft2(ht_slope_dz, fourier_grid_size);
 
-    return (
+    (
         ht,
         ht_slope_x,
         ht_slope_z,
         ht_slope_dx,
         ht_slope_dz,
-    );
+    )
 }
 
 
@@ -255,36 +255,36 @@ fn generate_mesh(vertices: Vec<Vector3<f64>>, size: usize, lx: f64, lz: f64) -> 
             if x == size - 2 {
                 // Need to add the tile from end -> end + 1
                 let (mut t0, mut t1) = make_square_for(x+1, z, size, &vertices);
-                t0.v0.x = t0.v0.x + lx;
-                t0.v1.x = t0.v1.x + lx;
-                t1.v1.x = t1.v1.x + lx;
+                t0.v0.x += lx;
+                t0.v1.x += lx;
+                t1.v1.x += lx;
                 triangles.push(Arc::new(Triangle::new(t0.v0, t0.v1, t0.v2))); // Recalc normal
                 triangles.push(Arc::new(Triangle::new(t1.v0, t1.v1, t1.v2)));
             }
             if z == size - 2 {
                 // Need to add the tile from end -> end + 1
                 let (mut t0, mut t1) = make_square_for(x, z+1, size, &vertices);
-                t0.v0.z = t0.v0.z + lz;
-                t0.v2.z = t0.v2.z + lz;
-                t1.v0.z = t1.v0.z + lz;
+                t0.v0.z += lz;
+                t0.v2.z += lz;
+                t1.v0.z += lz;
                 triangles.push(Arc::new(Triangle::new(t0.v0, t0.v1, t0.v2))); // Recalc normal
                 triangles.push(Arc::new(Triangle::new(t1.v0, t1.v1, t1.v2)));
             }
 
             if z == size - 2 && x == size - 2 {
                 let (mut t0, mut t1) = make_square_for(x+1, z+1, size, &vertices);
-                t0.v0.x = t0.v0.x + lx;
-                t0.v1.x = t0.v1.x + lx;
-                t1.v1.x = t1.v1.x + lx;
-                t0.v0.z = t0.v0.z + lz;
-                t0.v2.z = t0.v2.z + lz;
-                t1.v0.z = t1.v0.z + lz;
+                t0.v0.x += lx;
+                t0.v1.x += lx;
+                t1.v1.x += lx;
+                t0.v0.z += lz;
+                t0.v2.z += lz;
+                t1.v0.z += lz;
                 triangles.push(Arc::new(Triangle::new(t0.v0, t0.v1, t0.v2))); // Recalc normal
                 triangles.push(Arc::new(Triangle::new(t1.v0, t1.v1, t1.v2)));
             }
         }
     }
-    return triangles;
+    triangles
 }
 
 
@@ -295,7 +295,7 @@ pub struct OceanGeometry {
 impl OceanGeometry {
     pub fn new(o: &Value) -> OceanGeometry {
         let gravity = SceneFile::parse_number(&o["gravity"], 9.81f64);
-        let wind = SceneFile::parse_vec2_def(&o, "wind", Vector2::new(40., 30.));
+        let wind = SceneFile::parse_vec2_def(o, "wind", Vector2::new(40., 30.));
         let time = SceneFile::parse_number(&o["time"],4f64);
 
         // Mesh size
@@ -374,14 +374,14 @@ impl OceanGeometry {
         println!(" - OCEAN [A={}, g={}, W={}, t={}, N={}, {}]", scale, gravity, wind, time, lx, fourier_grid_size);
         println!("  bounded:{}, triangles:{} ", bounds, triangles.len());
 
-        return OceanGeometry {
+        OceanGeometry {
             mesh: RepeatingMesh {
                 tile: tree,
                 tile_size: Vector3::new(lx, 0., lz),
                 tile_bounds: bounds,
                 triangle_count: triangles.len(),
             }
-		};
+		}
     }
 
     fn bounds_of(triangles: &Vec<Arc<Triangle>>) -> BBox {
@@ -391,21 +391,21 @@ impl OceanGeometry {
             bb = bb.union(&t.bounds());
         }
 
-        return bb;
+        bb
     }
 }
 
 impl Geometry for OceanGeometry {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        return self.mesh.intersects(r);
+        self.mesh.intersects(r)
     }
 
     fn bounds(&self) -> BBox {
-        return self.mesh.bounds();
+        self.mesh.bounds()
     }
 
     fn primitives(&self) -> u64 {
-        return self.mesh.triangle_count as u64;
+        self.mesh.triangle_count as u64
     }
 }
 
@@ -418,8 +418,8 @@ struct OceanMaterial {
 impl OceanMaterial {
     pub fn new(o: &Value) -> OceanMaterial {
     
-        let deep = SceneFile::parse_color_def(&o, "color", Color::new(0., 0.2, 0.3));
-        return OceanMaterial {
+        let deep = SceneFile::parse_color_def(o, "color", Color::new(0., 0.2, 0.3));
+        OceanMaterial {
             deep_color: deep
         }
     }
@@ -456,13 +456,13 @@ impl MaterialModel for OceanMaterial {
 		}
 
 		let reflected = reflect(r.rd, intersection.normal);
-		return ScatteredRay {
+		ScatteredRay {
 			attenuate: Color::white(),
 			ray: Some(Ray {
 				ro: intersection.point,
 				rd: reflected
 			}) 
-		};
+		}
 	}
 }
 

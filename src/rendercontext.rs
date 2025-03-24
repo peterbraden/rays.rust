@@ -52,16 +52,16 @@ fn format_f64(v: f64) -> String {
     if v > 1000. {
         return format!("{:.2}K", v / 1000.);
     }
-    return format!("{:.2}", v);
+    format!("{:.2}", v)
 }
 
 impl RenderContext {
     pub fn new(width:usize, height:usize, progressive_render: bool, filename: &str) -> RenderContext {
         let start_time = Instant::now();
         let output_filename = String::from(filename).replace(".json", ".png");
-        return RenderContext {
-            image: vec![Color::black(); (width*height) as usize],
-            samples: vec![0; (width*height) as usize],
+        RenderContext {
+            image: vec![Color::black(); width*height],
+            samples: vec![0; width*height],
             width,
             height,
             rays_cast: 0,
@@ -77,9 +77,9 @@ impl RenderContext {
             return;
         }
 
-        let i:usize = (y*self.width + x) as usize;
+        let i:usize = y*self.width + x;
         self.image[i] = self.image[i] + c.ignore_nan();
-        self.samples[i] = self.samples[i] + samples;
+        self.samples[i] += samples;
         self.pixels_rendered += 1;
     }
 
@@ -95,8 +95,8 @@ impl RenderContext {
     }
 
     pub fn get_pixel(&self, x:usize, y:usize) -> Color {
-        let i = (y*self.width + x) as usize; 
-        return self.image[i] / self.samples[i].max(1) as f64;
+        let i = y*self.width + x; 
+        self.image[i] / self.samples[i].max(1) as f64
     }
 /*
     pub fn get_pixel_array(&self) -> Vec<u8> {
@@ -118,27 +118,27 @@ impl RenderContext {
         let elapsed = Instant::now() - self.start_time;
 
         print!("\n==========================================\n");
-        print!("| Rays Cast: {}\n", self.rays_cast);
-        print!("| Elapsed Time: {:?}\n", elapsed);
-        print!("| Rays per sec: {:.2}\n", self.rays_cast as f64 / elapsed.as_secs_f64());
-        print!("==========================================\n");
+        println!("| Rays Cast: {}", self.rays_cast);
+        println!("| Elapsed Time: {:?}", elapsed);
+        println!("| Rays per sec: {:.2}", self.rays_cast as f64 / elapsed.as_secs_f64());
+        println!("==========================================");
 
     }
 
     
     pub fn progress(&self, s: &Scene) -> String {
         let elapsed = Instant::now() - self.start_time;
-        return format!("{:.2}s {} rays cast ({} RPS), {} Rays per pixel, {}%, {} threads",
+        format!("{:.2}s {} rays cast ({} RPS), {} Rays per pixel, {}%, {} threads",
                  elapsed.as_secs_f64(),
                  format_f64(self.rays_cast as f64),
                  format_f64(self.rays_cast as f64 / elapsed.as_secs_f64()),
                  format_f64(self.rays_cast as f64 / self.pixels_rendered as f64),
                  format_f64(self.progress_percentage(s)),
-                 rayon::current_num_threads());
+                 rayon::current_num_threads())
     }
 
     pub fn progress_percentage(&self, s: &Scene) -> f64 {
-        (self.pixels_rendered as f64 / (self.width * self.height * s.render.supersamples as usize) as f64) * 100.
+        (self.pixels_rendered as f64 / (self.width * self.height * s.render.supersamples) as f64) * 100.
     }
 
     pub fn iter(&self, s: &Scene) -> impl Iterator<Item=RenderableChunk> + '_ {
@@ -147,15 +147,15 @@ impl RenderContext {
         let chunk_size = s.render.chunk_size;
         let chunk_layers = s.render.supersamples / s.render.samples_per_chunk;
         let samples = s.render.samples_per_chunk;
-        return (0 .. chunk_layers)
-                    .map(move |_x| 
+        (0 .. chunk_layers)
+                    .flat_map(move |_x| 
                         RenderIterator {
                             i: 0,
                             width,
                             height,
                             chunk_size,
                             samples,
-                        }).flatten();
+                        })
     }
 }
 

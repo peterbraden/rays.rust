@@ -8,7 +8,7 @@ pub struct Infinite {}
 
 impl Geometry for Infinite{
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        return Some(RawIntersection {
+        Some(RawIntersection {
             dist: std::f64::MAX,
             point: r.ro + r.rd * std::f64::MAX,
             normal: r.rd * -1.

@@ -36,7 +36,7 @@ impl RepeatingMesh {
 
     fn transform_for(&self, stepx: f64, stepz: f64, curr_transform: &Vector3<f64>) -> Vector3<f64> {
         //println!(" :  {}x{}", stepx, stepz);
-        return curr_transform + self.tile_size.component_mul(&Vector3::new(stepx, 0., stepz));
+        curr_transform + self.tile_size.component_mul(&Vector3::new(stepx, 0., stepz))
     }
 
     fn find_tile_transform(&self, r: &Ray, denom: f64,  y: f64) -> (Vector3<f64>, f64) {
@@ -50,22 +50,22 @@ impl RepeatingMesh {
         let iz = (point.z / self.tile_size.z).floor();
         //println!("NEW ---");
         let transform = self.transform_for(ix, iz, &Vector3::new(0., 0., 0.));
-        return (transform, dist);
+        (transform, dist)
     } 
 
     fn find_next_tile(&self, transformed_ray: &Ray, curr_transform: &Vector3<f64>) -> Option<Vector3<f64>> {
         match self.tile.bounds().exit_face(transformed_ray){
-            Some(BoxFace::Top) => return None,
-            Some(BoxFace::Bottom) => return None,
-            Some(BoxFace::Left) => return Some(self.transform_for(-1., 0., curr_transform)),
-            Some(BoxFace::Right) => return Some(self.transform_for(1., 0., curr_transform)), 
-            Some(BoxFace::Front) => return Some(self.transform_for(0., -1., curr_transform)),
-            Some(BoxFace::Back) => return Some(self.transform_for(0., 1., curr_transform)),
+            Some(BoxFace::Top) => None,
+            Some(BoxFace::Bottom) => None,
+            Some(BoxFace::Left) => Some(self.transform_for(-1., 0., curr_transform)),
+            Some(BoxFace::Right) => Some(self.transform_for(1., 0., curr_transform)), 
+            Some(BoxFace::Front) => Some(self.transform_for(0., -1., curr_transform)),
+            Some(BoxFace::Back) => Some(self.transform_for(0., 1., curr_transform)),
             None => {
                 // did not intersect with this bbox? Should never happen!
                 //panic!("ERR: No intersection - {} - {} {}", self.tile.bounds(), curr_transform, transformed_ray);
                 print!("ERR: No intersection - {} - {} {}", self.tile.bounds(), curr_transform, transformed_ray);
-                return None;
+                None
             }
         }
     } 
@@ -87,20 +87,20 @@ impl RepeatingMesh {
         
         match intersects {
             Some(i) => {
-                let mut intersection = i.clone();
+                let mut intersection = i;
                 // reverse the transform on the intersection
-                intersection.point = intersection.point + transform;
-                return Some(intersection);
+                intersection.point += transform;
+                Some(intersection)
             },
             None => {
-                match self.find_next_tile(&transformed_ray, &transform) {
+                match self.find_next_tile(&transformed_ray, transform) {
                     Some(t) => {
-                        return self.intersect_tile(r, &t, depth + 1);
+                        self.intersect_tile(r, &t, depth + 1)
                     },
                     None => {
-                        return None;
+                        None
                     }
-                };
+                }
             }
         }
     }
@@ -122,14 +122,14 @@ impl Geometry for RepeatingMesh {
             // preceding rays will intersect the previous tile
             let (transform, dist) = self.find_tile_transform(r, denom, self.tile_bounds.max.y);
             if dist < 0. { return None }
-            return self.intersect_tile(&r, &transform, 1);
+            return self.intersect_tile(r, &transform, 1);
         }
 
         if r.ro.y < self.tile_bounds.min.y {
             // Looking up at plane
             let (transform, dist) = self.find_tile_transform(r, denom, self.tile_bounds.min.y);
             if dist < 0. { return None }
-            return self.intersect_tile(&r, &transform, 1);
+            return self.intersect_tile(r, &transform, 1);
         }
 
 
@@ -139,7 +139,7 @@ impl Geometry for RepeatingMesh {
         let iz = (r.ro.z / self.tile_size.z).floor();
         let transform = self.transform_for(ix, iz, &Vector3::new(0., 0., 0.));
 
-        return self.intersect_tile(&r, &transform, 1);
+        self.intersect_tile(r, &transform, 1)
     }
 
     fn bounds(&self) -> BBox {

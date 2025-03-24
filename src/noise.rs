@@ -288,7 +288,7 @@ mod tests {
             for y in 0..10 {
                 for z in 0..10 {
                     let n = perlin.noise(x as f64 * 0.1, y as f64 * 0.1, z as f64 * 0.1);
-                    assert!(n >= -1.0 && n <= 1.0);
+                    assert!((-1.0..=1.0).contains(&n));
                 }
             }
         }
@@ -308,7 +308,7 @@ mod tests {
                         z as f64 * 0.1,
                         4, 0.5, 2.0
                     );
-                    assert!(n >= 0.0 && n <= 1.0);
+                    assert!((0.0..=1.0).contains(&n));
                 }
             }
         }
@@ -340,7 +340,7 @@ mod tests {
                 for z in 0..5 {
                     let pos = Vector3::new(x as f64, y as f64, z as f64);
                     let density = combined_noise::density_field(pos, &perlin, &worley, 0.1, 0.1);
-                    assert!(density >= 0.0 && density <= 1.0);
+                    assert!((0.0..=1.0).contains(&density));
                 }
             }
         }
@@ -381,13 +381,11 @@ mod tests {
         let falloff = 0.05;
         
         // Sample a few specific points
-        let positions = vec![
-            Vector3::new(0.0, 0.0, 0.0),
+        let positions = [Vector3::new(0.0, 0.0, 0.0),
             Vector3::new(5.0, 5.0, 5.0),
             Vector3::new(10.0, 0.0, 0.0),
             Vector3::new(0.0, 10.0, 0.0),
-            Vector3::new(0.0, 0.0, 10.0),
-        ];
+            Vector3::new(0.0, 0.0, 10.0)];
         
         // Get densities at each position
         let densities: Vec<f64> = positions.iter()
@@ -399,7 +397,7 @@ mod tests {
         
         // Simple sanity check - make sure all results are in the valid range
         for &density in &densities {
-            assert!(density >= 0.0 && density <= 1.0, 
+            assert!((0.0..=1.0).contains(&density), 
                     "Density should be in range [0,1], got {}", density);
         }
     }

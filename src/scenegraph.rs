@@ -37,7 +37,7 @@ impl SceneGraph {
 
         let tree = Octree::new(
             max_depth, 
-            scene_bounds.clone(),
+            scene_bounds,
             &items,
         );
 
@@ -56,14 +56,14 @@ impl SceneGraph {
         self.items
             .iter()
             .map(|x| x.geometry.primitives())
-            .fold(0, |acc, x| acc + x)
+            .sum::<u64>()
     }
 
     pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
-        return match self.nearest_raw_intersection(r, max, min) {
+        match self.nearest_raw_intersection(r, max, min) {
             Some(tupl) =>{
                 let scene_obj = tupl.0.clone();
-                return Some(
+                Some(
                             Intersection {
                               dist: tupl.1.dist, 
                               point: tupl.1.point,
@@ -72,7 +72,7 @@ impl SceneGraph {
                            })
             },
             None => None
-        };
+        }
     }
 
 
@@ -91,7 +91,7 @@ impl SceneGraph {
         if inf.1.dist < tree.1.dist {
             return Some(inf);
         }
-        return Some(tree);
+        Some(tree)
     }
 
     pub fn naive_intersection_infinites(&self, r: &Ray, max:f64, min:f64) -> Option<(Arc<SceneObject>, RawIntersection)> {
@@ -109,17 +109,14 @@ impl SceneGraph {
                 None => (),
             }
             */
-            match o.intersects(r) {
-                Some(x) => {
-                    if x.dist < cdist && x.dist >= min {
-                        cdist = x.dist;
-                        closest = Some((o.clone(), x));
-                    }
-                },
-                None => (),
+            if let Some(x) = o.intersects(r) {
+                if x.dist < cdist && x.dist >= min {
+                    cdist = x.dist;
+                    closest = Some((o.clone(), x));
+                }
             }
         }
-        return closest;
+        closest
     }
 }
 

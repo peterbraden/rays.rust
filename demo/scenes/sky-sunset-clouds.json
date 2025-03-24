@@ -1,0 +1,51 @@
+{
+  "width": 800,
+  "height": 600,
+  "chunk_size": 64,
+  "supersamples": 5,
+  "samples_per_chunk": 5, 
+  "camera": {
+    "location": [0, 100, 300],
+    "lookat": [0, 100, 0],
+    "up": [0, 1, 0],
+    "angle": 30,
+    "aperture": 0.0
+  },
+  "shadow_bias": 1e-7,
+  "background": [0.0, 0.0, 0.0],
+  "max_depth": 10,
+  "materials": {
+    "ground": {
+      "type": "lambertian",
+      "albedo": [0.3, 0.3, 0.3]
+    }
+  },
+  "media": {
+  },
+  "lights": [],
+  "variables": {},
+  "objects": [
+    {
+      "type": "skysphere",
+      "preset": "sunset"
+    },
+    {
+      "type": "clouds",
+      "base_height": 500,
+      "thickness": 200,
+      "density": 0.7,
+      "noise_scale": 0.004,
+      "height_falloff": 0.2,
+      "anisotropy": 0.4,
+      "color": [1.0, 0.9, 0.8],
+      "extent": 6000.0,
+      "worley_density": 1.5,
+      "seed": 123
+    },
+    {
+      "type": "checkeredplane",
+      "y": 0.0,
+      "material": "ground"
+    }
+  ]
+}

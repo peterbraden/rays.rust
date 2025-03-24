@@ -14,7 +14,7 @@ use crate::color::Color;
 use crate::skysphere::create_sky_sphere;
 use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
-use crate::participatingmedia::create_fog;
+use crate::participatingmedia::{create_fog, create_cloud_layer};
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
 use serde_json::{Value, Map};
@@ -169,6 +169,11 @@ impl SceneFile {
         if t == "fog" {
             let f = create_fog(&o);
             return Some(Arc::new(f));
+        }
+        
+        if t == "clouds" {
+            let clouds = create_cloud_layer(&o);
+            return Some(Arc::new(clouds));
         }
 
         let geom = SceneFile::parse_geometry(&o);

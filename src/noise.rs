@@ -9,6 +9,7 @@ use std::f64;
 use std::f64::consts::PI;
 
 /// Perlin noise generator for 3D space
+#[derive(Clone)]
 pub struct PerlinNoise {
     /// Permutation table for pseudo-random generation
     perm: [usize; 512],
@@ -68,9 +69,9 @@ impl PerlinNoise {
     /// Get noise value at a 3D point
     pub fn noise(&self, x: f64, y: f64, z: f64) -> f64 {
         // Unit cube that contains point
-        let X = x.floor() as i32 & 255;
-        let Y = y.floor() as i32 & 255;
-        let Z = z.floor() as i32 & 255;
+        let x_i = x.floor() as i32 & 255;
+        let y_i = y.floor() as i32 & 255;
+        let z_i = z.floor() as i32 & 255;
         
         // Relative coordinates of point in cube
         let x = x - x.floor();
@@ -83,22 +84,22 @@ impl PerlinNoise {
         let w = self.fade(z);
         
         // Hash coordinates of the 8 cube corners
-        let A = self.perm[X as usize] + Y as usize;
-        let AA = self.perm[A] + Z as usize;
-        let AB = self.perm[A + 1] + Z as usize;
-        let B = self.perm[(X + 1) as usize] + Y as usize;
-        let BA = self.perm[B] + Z as usize;
-        let BB = self.perm[B + 1] + Z as usize;
+        let a = self.perm[x_i as usize] + y_i as usize;
+        let aa = self.perm[a] + z_i as usize;
+        let ab = self.perm[a + 1] + z_i as usize;
+        let b = self.perm[(x_i + 1) as usize] + y_i as usize;
+        let ba = self.perm[b] + z_i as usize;
+        let bb = self.perm[b + 1] + z_i as usize;
         
         // Blend gradients from 8 corners of cube
-        let g1 = self.grad(self.perm[AA], x, y, z);
-        let g2 = self.grad(self.perm[BA], x - 1.0, y, z);
-        let g3 = self.grad(self.perm[AB], x, y - 1.0, z);
-        let g4 = self.grad(self.perm[BB], x - 1.0, y - 1.0, z);
-        let g5 = self.grad(self.perm[AA + 1], x, y, z - 1.0);
-        let g6 = self.grad(self.perm[BA + 1], x - 1.0, y, z - 1.0);
-        let g7 = self.grad(self.perm[AB + 1], x, y - 1.0, z - 1.0);
-        let g8 = self.grad(self.perm[BB + 1], x - 1.0, y - 1.0, z - 1.0);
+        let g1 = self.grad(self.perm[aa], x, y, z);
+        let g2 = self.grad(self.perm[ba], x - 1.0, y, z);
+        let g3 = self.grad(self.perm[ab], x, y - 1.0, z);
+        let g4 = self.grad(self.perm[bb], x - 1.0, y - 1.0, z);
+        let g5 = self.grad(self.perm[aa + 1], x, y, z - 1.0);
+        let g6 = self.grad(self.perm[ba + 1], x - 1.0, y, z - 1.0);
+        let g7 = self.grad(self.perm[ab + 1], x, y - 1.0, z - 1.0);
+        let g8 = self.grad(self.perm[bb + 1], x - 1.0, y - 1.0, z - 1.0);
         
         // Interpolate gradients
         let lerp1 = self.lerp(g1, g2, u);
@@ -164,6 +165,7 @@ impl PerlinNoise {
 }
 
 /// Worley noise (cellular noise) generator
+#[derive(Clone)]
 pub struct WorleyNoise {
     /// Feature points density
     point_density: f64,
@@ -345,5 +347,107 @@ mod tests {
                 }
             }
         }
+    }
+    
+    #[test]
+    fn test_cloud_height_gradient() {
+        let perlin = PerlinNoise::new();
+        let worley = WorleyNoise::new(1.0, 42);
+        
+        // Test that cloud density decreases with height due to height_falloff
+        let scale = 0.1;
+        let height_falloff = 0.2;
+        let x = 1.0;
+        let z = 1.0;
+        
+        // Sample at different heights
+        let pos_low = Vector3::new(x, 0.0, z);
+        let pos_mid = Vector3::new(x, 5.0, z);
+        let pos_high = Vector3::new(x, 10.0, z);
+        
+        let density_low = cloud_noise::cloud_density(&pos_low, &perlin, &worley, scale, height_falloff);
+        let density_mid = cloud_noise::cloud_density(&pos_mid, &perlin, &worley, scale, height_falloff);
+        let density_high = cloud_noise::cloud_density(&pos_high, &perlin, &worley, scale, height_falloff);
+        
+        // Density should decrease with height
+        assert!(density_low >= density_mid);
+        assert!(density_mid >= density_high);
+    }
+    
+    #[test]
+    fn test_cloud_density_variation() {
+        let perlin = PerlinNoise::new();
+        let worley = WorleyNoise::new(1.0, 42);
+        
+        // Cloud densities should vary with position to create realistic patterns
+        let scale = 0.1;
+        let height_falloff = 0.1;
+        let samples = 20;
+        let mut densities = Vec::new();
+        
+        // Sample along a horizontal line
+        for i in 0..samples {
+            let x = i as f64 * 0.5;
+            let pos = Vector3::new(x, 1.0, 1.0);
+            let density = cloud_noise::cloud_density(&pos, &perlin, &worley, scale, height_falloff);
+            densities.push(density);
+        }
+        
+        // Calculate variance to ensure it's not uniform
+        let mean = densities.iter().sum::<f64>() / densities.len() as f64;
+        let variance = densities.iter()
+            .map(|&x| (x - mean).powi(2))
+            .sum::<f64>() / densities.len() as f64;
+        
+        // If variance is very low, the pattern is too uniform
+        assert!(variance > 0.01);
+        
+        // Check that we have both high and low density regions
+        let has_high_density = densities.iter().any(|&d| d > 0.6);
+        let has_low_density = densities.iter().any(|&d| d < 0.4);
+        
+        assert!(has_high_density && has_low_density, 
+                "Cloud pattern should have both high and low density regions");
+    }
+    
+    #[test]
+    fn test_cloud_ascii_visualization() {
+        let perlin = PerlinNoise::new();
+        let worley = WorleyNoise::new(1.5, 42);
+        let scale = 0.03;
+        let height_falloff = 0.2;
+        
+        // Generate a small grid of density values
+        let size = 10;
+        
+        // Print header
+        println!("\nCloud pattern visualization (10x10 grid):");
+        println!("----------------------------------------");
+        
+        // Print grid with ASCII density representation
+        for y in 0..size {
+            let mut line = String::new();
+            for x in 0..size {
+                // Convert to world coordinates
+                let wx = (x as f64 / size as f64) * 2.0 - 1.0;
+                let wz = (y as f64 / size as f64) * 2.0 - 1.0;
+                
+                let pos = Vector3::new(wx * 100.0, 0.0, wz * 100.0);
+                let density = cloud_noise::cloud_density(
+                    &pos, &perlin, &worley, scale, height_falloff
+                );
+                
+                // Map density to ASCII characters
+                let char_idx = (density * 9.0).round() as usize;
+                let density_chars = " .:-=+*#%@";
+                line.push(density_chars.chars().nth(char_idx).unwrap());
+                line.push(' '); // Add space for better visibility
+            }
+            println!("{}", line);
+        }
+        println!("----------------------------------------");
+        
+        // This test always passes - it's for visual inspection
+        assert!(true);
     }
 }

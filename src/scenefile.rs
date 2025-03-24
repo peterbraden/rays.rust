@@ -23,7 +23,7 @@ use serde_json;
 use std::io::prelude::*;
 use std::fs::File;
 use crate::material::model::MaterialModel;
-use crate::material::texture::{Solid, CheckeredYPlane, Medium};
+use crate::material::texture::{Solid, CheckeredYPlane, Medium, NoiseMedium, self};
 use crate::material::specular::Specular;
 use crate::material::dielectric::Dielectric;
 use crate::material::plastic::Plastic;
@@ -509,6 +509,101 @@ impl SceneFile {
             };
             
             return Some(Box::new(Solid { m: Box::new(noise_texture) }));
+        }
+        
+        if t == "noise_medium" {
+            // Get the two materials to mix between
+            let m1 = SceneFile::parse_material_ref(&o["m1"], materials).unwrap();
+            let m2 = SceneFile::parse_material_ref(&o["m2"], materials).unwrap();
+            
+            // Parse the threshold value (default to 0.5)
+            let threshold = SceneFile::parse_number(&o["threshold"], 0.5);
+            
+            // Parse scale (default to 0.1)
+            let scale = SceneFile::parse_number(&o["scale"], 0.1);
+            
+            // Parse noise_type
+            let noise_type = match o.get("noise_type").and_then(|v| v.as_str()) {
+                Some("perlin") => texture::NoiseType::Perlin,
+                Some("fbm") => texture::NoiseType::Fbm {
+                    octaves: SceneFile::parse_int(&o["octaves"], 4) as u32,
+                    persistence: SceneFile::parse_number(&o["persistence"], 0.5),
+                    lacunarity: SceneFile::parse_number(&o["lacunarity"], 2.0),
+                },
+                Some("worley") => texture::NoiseType::Worley {
+                    point_density: SceneFile::parse_number(&o["point_density"], 1.0),
+                    seed: SceneFile::parse_int(&o["seed"], 42) as u32,
+                },
+                Some("marble") => texture::NoiseType::Marble,
+                Some("turbulence") => texture::NoiseType::Turbulence {
+                    octaves: SceneFile::parse_int(&o["octaves"], 4) as u32,
+                },
+                Some("combined") => texture::NoiseType::Combined {
+                    falloff: SceneFile::parse_number(&o["falloff"], 0.1),
+                },
+                _ => texture::NoiseType::Perlin, // Default to Perlin
+            };
+            
+            // Create the appropriate NoiseMedium based on the noise type
+            let noise_medium = match noise_type {
+                texture::NoiseType::Perlin => {
+                    NoiseMedium::new_perlin(
+                        m1,
+                        m2,
+                        scale,
+                        threshold,
+                    )
+                },
+                texture::NoiseType::Fbm { octaves, persistence, lacunarity } => {
+                    NoiseMedium::new_fbm(
+                        m1,
+                        m2,
+                        scale,
+                        threshold,
+                        octaves,
+                        persistence,
+                        lacunarity,
+                    )
+                },
+                texture::NoiseType::Worley { point_density, seed } => {
+                    NoiseMedium::new_worley(
+                        m1,
+                        m2,
+                        scale,
+                        threshold,
+                        point_density,
+                        seed,
+                    )
+                },
+                texture::NoiseType::Marble => {
+                    NoiseMedium::new_marble(
+                        m1,
+                        m2,
+                        scale,
+                        threshold,
+                    )
+                },
+                texture::NoiseType::Turbulence { octaves } => {
+                    NoiseMedium::new_turbulence(
+                        m1,
+                        m2,
+                        scale,
+                        threshold,
+                        octaves,
+                    )
+                },
+                texture::NoiseType::Combined { falloff } => {
+                    NoiseMedium::new_combined(
+                        m1,
+                        m2,
+                        scale,
+                        threshold,
+                        falloff,
+                    )
+                },
+            };
+            
+            return Some(Box::new(noise_medium));
         }
 
         return None

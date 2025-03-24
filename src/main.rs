@@ -75,6 +75,7 @@ use rand::thread_rng;
 use rand::seq::SliceRandom;
 
 use indicatif::ProgressBar;
+use indicatif::ProgressStyle;
 use console::style;
 
 
@@ -131,7 +132,8 @@ fn main() {
     println!("{}",
         style("# 2. - Rendering ").bold().cyan()
     );
-    let pb = ProgressBar::new_spinner();
+    let pb = ProgressBar::new(100);
+    pb.set_style(ProgressStyle::with_template("{spinner:.green} {prefix}{msg} [{bar:.cyan/blue}]").unwrap().progress_chars("#>-"));
 
     chunks
         .into_par_iter()
@@ -145,6 +147,7 @@ fn main() {
             if rc.progressive_render {
                 paint::to_png(&rc);
             }
+            pb.set_position(rc.progress_percentage(&s) as u64);
             pb.set_message(rc.progress(&s));
             pb.tick();
         });

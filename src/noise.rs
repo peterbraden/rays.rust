@@ -342,7 +342,7 @@ mod tests {
             for y in 0..5 {
                 for z in 0..5 {
                     let pos = Vector3::new(x as f64, y as f64, z as f64);
-                    let density = cloud_noise::cloud_density(&pos, &perlin, &worley, 0.1, 0.1);
+                    let density = cloud_noise::cloud_density(pos, &perlin, &worley, 0.1, 0.1);
                     assert!(density >= 0.0 && density <= 1.0);
                 }
             }
@@ -365,9 +365,9 @@ mod tests {
         let pos_mid = Vector3::new(x, 5.0, z);
         let pos_high = Vector3::new(x, 10.0, z);
         
-        let density_low = cloud_noise::cloud_density(&pos_low, &perlin, &worley, scale, height_falloff);
-        let density_mid = cloud_noise::cloud_density(&pos_mid, &perlin, &worley, scale, height_falloff);
-        let density_high = cloud_noise::cloud_density(&pos_high, &perlin, &worley, scale, height_falloff);
+        let density_low = cloud_noise::cloud_density(pos_low, &perlin, &worley, scale, height_falloff);
+        let density_mid = cloud_noise::cloud_density(pos_mid, &perlin, &worley, scale, height_falloff);
+        let density_high = cloud_noise::cloud_density(pos_high, &perlin, &worley, scale, height_falloff);
         
         // Density should decrease with height
         assert!(density_low >= density_mid);
@@ -389,7 +389,7 @@ mod tests {
         for i in 0..samples {
             let x = i as f64 * 0.5;
             let pos = Vector3::new(x, 1.0, 1.0);
-            let density = cloud_noise::cloud_density(&pos, &perlin, &worley, scale, height_falloff);
+            let density = cloud_noise::cloud_density(pos, &perlin, &worley, scale, height_falloff);
             densities.push(density);
         }
         
@@ -434,7 +434,7 @@ mod tests {
                 
                 let pos = Vector3::new(wx * 100.0, 0.0, wz * 100.0);
                 let density = cloud_noise::cloud_density(
-                    &pos, &perlin, &worley, scale, height_falloff
+                    pos, &perlin, &worley, scale, height_falloff
                 );
                 
                 // Map density to ASCII characters

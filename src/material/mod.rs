@@ -60,6 +60,23 @@ pub enum SamplesRequired {
     Many, // Can only be derived from a Monte-Carlo integration of many samples.
 }
 
+// Module declarations
+pub mod ambient;
+pub mod dielectric;
+pub mod diffuse_light;
+pub mod functions;
+pub mod lambertian;
+pub mod legacy;
+pub mod model;
+pub mod normal;
+pub mod noise;
+pub mod plastic;
+pub mod specular;
+pub mod texture;
+
+// Re-export noise module components for external use
+pub use noise::{NoiseTexture, NoiseType};
+
 /*
 pub trait BSDFToRename{
 

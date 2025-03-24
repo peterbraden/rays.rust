@@ -275,15 +275,13 @@ impl BBox {
         else if self.min.z > b.min.z  { false }
         else if self.max.x < b.max.x  { false }
         else if self.max.y < b.max.y  { false }
-        else if self.max.z < b.max.z  { false }
-        else { true }
+        else { self.max.z >= b.max.z }
     }
 
     pub fn contains_point(self, pt: &Vector3<f64>) -> bool { 
       if pt.x < self.min.x || pt.x > self.max.x { false }
       else if pt.y < self.min.y || pt.y > self.max.y { false }
-      else if pt.z < self.min.z || pt.z > self.max.z { false }
-      else { true }
+      else { !(pt.z < self.min.z || pt.z > self.max.z) }
     }
 
 }

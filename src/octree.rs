@@ -46,7 +46,7 @@ impl OctreeNode {
     }
 
     /// Perform a breadth first search of the tree, and then sort results by distance.
-    pub fn naive_intersection(&self, r: &Ray, max:f64, min:f64) -> OctreeIntersections {
+    pub fn naive_intersection(&self, r: &Ray, _max:f64, _min:f64) -> OctreeIntersections {
         let invrd = vec3_invert(r.rd);
         if !self.bounds.fast_intersects(&r.ro, &invrd) {
             None
@@ -76,7 +76,7 @@ impl<T: Geometry> Octree<T> {
     // Create a new node, and subdivide into further nodes up until max_depth
     // or until number of children objects is 0.
     //
-    pub fn new(max_depth: usize, b: BBox, items: &Vec<Arc<T>>) -> Octree<T> {
+    pub fn new(max_depth: usize, b: BBox, items: &[Arc<T>]) -> Octree<T> {
         let items: Vec<Arc<T>> = items.to_vec();
         let indices: Vec<usize> = (0..items.len()).collect();
         Octree {

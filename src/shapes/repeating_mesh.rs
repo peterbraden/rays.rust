@@ -144,8 +144,8 @@ impl Geometry for RepeatingMesh {
 
     fn bounds(&self) -> BBox {
         BBox::new(
-            Vector3::new(std::f64::MIN, self.tile_bounds.min.y, std::f64::MIN),
-            Vector3::new(std::f64::MAX, self.tile_bounds.max.y, std::f64::MAX),
+            Vector3::new(f64::MIN, self.tile_bounds.min.y, f64::MIN),
+            Vector3::new(f64::MAX, self.tile_bounds.max.y, f64::MAX),
           )
     }
 }

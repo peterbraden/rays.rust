@@ -54,7 +54,7 @@ use rand::rngs::StdRng;
 ///
 /// I still haven't worked out what units everything is in, or what the
 /// scale factor 'A' should represent.
-
+/// 
 /// Normal distribution rand (gaussian)
 fn randn(rng: &mut StdRng) -> f64 {
     let normal = Normal::new(0.0, 1.0);
@@ -122,7 +122,7 @@ fn mn_to_i(m: i32, n: i32, size: i32) -> usize {
     ((n + size/2) * size + (m + size/2)) as usize
 }
 
-fn transpose(matr: &Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
+fn transpose(matr: &[Complex<f64>], size: usize) -> Vec<Complex<f64>> {
     let mut out = matr.clone();
     for x in 0..size {
         for y in 0..size {
@@ -158,11 +158,11 @@ fn ifft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
     transpose(&out, size)
 }
 
-fn vertex_at(z: usize, x: usize, vertices: &Vec<Vector3<f64>>, fourier_grid_size: usize) -> Vector3<f64>{
+fn vertex_at(z: usize, x: usize, vertices: &[Vector3<f64>], fourier_grid_size: usize) -> Vector3<f64>{
     vertices[(z % fourier_grid_size) * fourier_grid_size + (x % fourier_grid_size)]
 }
 
-fn make_square_for(x: usize, z: usize, fourier_grid_size: usize, vertices: &Vec<Vector3<f64>>) -> (Triangle, Triangle) {
+fn make_square_for(x: usize, z: usize, fourier_grid_size: usize, vertices: &[Vector3<f64>]) -> (Triangle, Triangle) {
     (
         Triangle::new(
             vertex_at(z + 1, x + 1, vertices, fourier_grid_size),
@@ -177,19 +177,22 @@ fn make_square_for(x: usize, z: usize, fourier_grid_size: usize, vertices: &Vec<
     )
 }
 
+// Type definition for complex height field data
+type OceanComplexData = (
+    Vec<Complex<f64>>, // ht
+    Vec<Complex<f64>>, // ht_slope_x
+    Vec<Complex<f64>>, // ht_slope_z
+    Vec<Complex<f64>>, // ht_slope_dx
+    Vec<Complex<f64>>, // ht_slope_dz
+);
+
 pub fn create_tile(
         fourier_grid_size:usize,
         lx: f64,
         lz: f64,
         gravity: f64,
         h0: Vec<Complex<f64>>) 
-        -> (
-            Vec<Complex<f64>>,
-            Vec<Complex<f64>>,
-            Vec<Complex<f64>>,
-            Vec<Complex<f64>>,
-            Vec<Complex<f64>>,
-        ) {
+        -> OceanComplexData {
 
     let h0trans = transpose(&h0, fourier_grid_size);
     // Tile of amplitudes

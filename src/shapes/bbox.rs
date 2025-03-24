@@ -120,19 +120,21 @@ impl BBox {
             (transform * self.min).coords,
             (transform * self.min).coords
         );
-        ret = ret.union_point(&(transform * &Point3::new(self.max.x, self.min.y, self.min.z)).coords);
-        ret = ret.union_point(&(transform * &Point3::new(self.min.x, self.max.y, self.min.z)).coords);
-        ret = ret.union_point(&(transform * &Point3::new(self.min.x, self.min.y, self.max.z)).coords);
-        ret = ret.union_point(&(transform * &Point3::new(self.max.x, self.max.y, self.min.z)).coords);
-        ret = ret.union_point(&(transform * &Point3::new(self.max.x, self.min.y, self.max.z)).coords);
-        ret = ret.union_point(&(transform * &Point3::new(self.min.x, self.max.y, self.max.z)).coords);
-        ret = ret.union_point(&(transform * &Point3::new(self.max.x, self.max.y, self.max.z)).coords);
+        ret = ret.union_point(&(transform * Point3::new(self.max.x, self.min.y, self.min.z)).coords);
+        ret = ret.union_point(&(transform * Point3::new(self.min.x, self.max.y, self.min.z)).coords);
+        ret = ret.union_point(&(transform * Point3::new(self.min.x, self.min.y, self.max.z)).coords);
+        ret = ret.union_point(&(transform * Point3::new(self.max.x, self.max.y, self.min.z)).coords);
+        ret = ret.union_point(&(transform * Point3::new(self.max.x, self.min.y, self.max.z)).coords);
+        ret = ret.union_point(&(transform * Point3::new(self.min.x, self.max.y, self.max.z)).coords);
+        ret = ret.union_point(&(transform * Point3::new(self.max.x, self.max.y, self.max.z)).coords);
         ret
     }
 
     pub fn entry_face(&self, r: &Ray) -> Option<BoxFace> {
         let invrd = vec3_invert(&r.rd);
-        if !self.fast_intersects(&r.ro, &invrd) { return None; }
+        if !self.fast_intersects(&r.ro, &invrd) { 
+            None
+        } else {
         let xmin = if r.rd.x >= 0. { self.min.x } else { self.max.x };
         let ymin = if r.rd.y >= 0. { self.min.y } else { self.max.y };
         let zmin = if r.rd.z >= 0. { self.min.z } else { self.max.z };
@@ -145,27 +147,32 @@ impl BBox {
             if tx0 > tz0 {
                 // Plane X -> Left or Right depending on ray direction
                 if r.rd.x > 0. { 
-                    return Some(BoxFace::Left);
+                    Some(BoxFace::Left)
+                } else {
+                    Some(BoxFace::Right)
                 }
-                return Some(BoxFace::Right);
             }
         } else if ty0 > tz0 {
             // Plane Y -> Top or Bottom
             if r.rd.y > 0. { 
-                return Some(BoxFace::Bottom);
+                Some(BoxFace::Bottom)
+            } else {
+                Some(BoxFace::Top)
             }
-            return Some(BoxFace::Top);
         } 
         // Plane Z -> Front or Back
         if r.rd.z > 0. { 
-            return Some(BoxFace::Front);
+            Some(BoxFace::Front)
+        } else {
+            Some(BoxFace::Back)
         }
-        Some(BoxFace::Back)
     }
 
     pub fn exit_face(&self, r: &Ray) -> Option<BoxFace> {
         let invrd = vec3_invert(&r.rd);
-        if !self.fast_intersects(&r.ro, &invrd) { return None; }
+        if !self.fast_intersects(&r.ro, &invrd) { 
+            None 
+        } else {
         let xmax = if r.rd.x >= 0. { self.max.x } else { self.min.x };
         let ymax = if r.rd.y >= 0. { self.max.y } else { self.min.y };
         let zmax = if r.rd.z >= 0. { self.max.z } else { self.min.z };
@@ -178,29 +185,32 @@ impl BBox {
             if tx1 < tz1 {
                 // Plane X -> Left or Right depending on ray direction
                 if r.rd.x > 0. { 
-                    return Some(BoxFace::Right);
+                    Some(BoxFace::Right)
+                } else {
+                    Some(BoxFace::Left)
                 }
-                return Some(BoxFace::Left);
             }
         } else if ty1 < tz1 {
             // Plane Y -> Top or Bottom
             if r.rd.y > 0. { 
-                return Some(BoxFace::Top);
+                Some(BoxFace::Top)
+            } else {
+                Some(BoxFace::Bottom)
             }
-            return Some(BoxFace::Bottom);
         } 
         // Plane Z -> Front or Back
         if r.rd.z > 0. { 
-            return Some(BoxFace::Back);
+            Some(BoxFace::Back)
+        } else {
+            Some(BoxFace::Front)
         }
-        Some(BoxFace::Front)
     }
 
     pub fn mid(&self) -> Vector3<f64> {
         Vector3::new(
-            &self.min.x + (self.max.x - self.min.x)/2f64,
-            &self.min.y + (self.max.y - self.min.y)/2f64,
-            &self.min.z + (self.max.z - self.min.z)/2f64,
+            self.min.x + (self.max.x - self.min.x)/2f64,
+            self.min.y + (self.max.y - self.min.y)/2f64,
+            self.min.z + (self.max.z - self.min.z)/2f64,
         )
     }
 
@@ -210,13 +220,13 @@ impl BBox {
 
 
     pub fn intersects_bbox(&self, b: &BBox) -> bool{
-          if self.max.x < b.min.x { return false; } // self is left of b
-          if self.min.x > b.max.x { return false; }// self is right of b
-          if self.max.y < b.min.y { return false; }// self is above b
-          if self.min.y > b.max.y { return false; }// self is below b
-          if self.max.z < b.min.z { return false; }// self is behind b
-          if self.min.z > b.max.z { return false; }// self is in front of b
-          true// boxes overlap
+          if self.max.x < b.min.x { false } // self is left of b
+          else if self.min.x > b.max.x { false } // self is right of b
+          else if self.max.y < b.min.y { false } // self is above b
+          else if self.min.y > b.max.y { false } // self is below b
+          else if self.max.z < b.min.z { false } // self is behind b
+          else if self.min.z > b.max.z { false } // self is in front of b
+          else { true } // boxes overlap
     }
 
     pub fn union(self, b: &BBox) -> BBox {
@@ -242,20 +252,20 @@ impl BBox {
     }
 
     pub fn contains(self, b: &BBox) -> bool {
-        if self.min.x > b.min.x  { return false; }
-        if self.min.y > b.min.y  { return false; }
-        if self.min.z > b.min.z  { return false; }
-        if self.max.x < b.max.x  { return false; }
-        if self.max.y < b.max.y  { return false; }
-        if self.max.z < b.max.z  { return false; }
-        true
+        if self.min.x > b.min.x  { false }
+        else if self.min.y > b.min.y  { false }
+        else if self.min.z > b.min.z  { false }
+        else if self.max.x < b.max.x  { false }
+        else if self.max.y < b.max.y  { false }
+        else if self.max.z < b.max.z  { false }
+        else { true }
     }
 
     pub fn contains_point(self, pt: &Vector3<f64>) -> bool { 
-      if pt.x < self.min.x || pt.x > self.max.x { return false; }
-      if pt.y < self.min.y || pt.y > self.max.y { return false; }
-      if pt.z < self.min.z || pt.z > self.max.z { return false; }
-      true
+      if pt.x < self.min.x || pt.x > self.max.x { false }
+      else if pt.y < self.min.y || pt.y > self.max.y { false }
+      else if pt.z < self.min.z || pt.z > self.max.z { false }
+      else { true }
     }
 
 }
@@ -282,22 +292,23 @@ impl Geometry for BBox {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         let invrd = vec3_invert(&r.rd);
         if !self.fast_intersects(&r.ro, &invrd) { 
-            return None
-        }
-        let (tmin, _tmax) = find_min_max(&self.min.coords, &self.max.coords, &r.ro, &invrd);
-        let dist = tmin;
-		let point =  r.ro + (r.rd * dist);
-		let center = na::center(&self.min, &self.max);
-		let p = (point - center.coords).normalize().component_div(&(self.max - self.min)); 
-        let ndir = p.iamax();
-        let mut normal = Vector3::new(0.,0.,0.);
-        normal[ndir] = if p[ndir].is_sign_positive() { 1. } else { -1. };
+            None
+        } else {
+            let (tmin, _tmax) = find_min_max(&self.min.coords, &self.max.coords, r.ro, invrd);
+            let dist = tmin;
+            let point =  r.ro + (r.rd * dist);
+            let center = na::center(&self.min, &self.max);
+            let p = (point - center.coords).normalize().component_div(&(self.max - self.min)); 
+            let ndir = p.iamax();
+            let mut normal = Vector3::new(0.,0.,0.);
+            normal[ndir] = if p[ndir].is_sign_positive() { 1. } else { -1. };
 
-        Some(RawIntersection {
-            point,
-            dist,
-            normal
-        })
+            Some(RawIntersection {
+                point,
+                dist,
+                normal
+            })
+        }
     }
 
     fn bounds(&self) -> BBox {

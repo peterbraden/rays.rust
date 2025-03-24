@@ -108,10 +108,8 @@ impl PerlinNoise {
         let lerp5 = self.lerp(lerp1, lerp2, v);
         let lerp6 = self.lerp(lerp3, lerp4, v);
         
-        let result = self.lerp(lerp5, lerp6, w);
-        
         // Scale to [-1, 1]
-        result
+        self.lerp(lerp5, lerp6, w)
     }
     
     /// Generate fractal Brownian motion (fBm) noise
@@ -273,7 +271,7 @@ pub mod combined_noise {
         let falloff_factor = (-distance * falloff).exp();
         
         // Ensure density is in [0, 1] range
-        (raw_density * falloff_factor).max(0.0).min(1.0)
+        (raw_density * falloff_factor).clamp(0.0, 1.0)
     }
 }
 

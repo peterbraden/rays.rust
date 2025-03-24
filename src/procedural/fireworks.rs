@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::f64;
 
 fn rand(rng: &mut StdRng) -> f64 {
-    return rng.gen_range(0.0, 1.0);
+    rng.gen_range(0.0, 1.0)
 }
 
 struct Particle {
@@ -59,7 +59,7 @@ fn trace_particle(impulse: Ray, time: f64, samples: usize, gravity: f64) -> Vec<
         };
         particles.push(p);
     }
-    return particles;
+    particles
 }
 
 fn create_particles(
@@ -85,7 +85,7 @@ fn create_particles(
         };
         particles.append(&mut trace_particle(impulse, time, samples, gravity));
     }
-    return particles;
+    particles
 }
 
 
@@ -100,7 +100,7 @@ impl MaterialModel for FireworkMaterial {
         let actual_intersection = self.particles.intersection(r, f64::INFINITY, 0f64);
         match actual_intersection {
             Some((particle, _i)) => {
-                return ScatteredRay {
+                ScatteredRay {
                     attenuate: self.color * particle.intensity,
                     ray: None,
                 }
@@ -145,7 +145,7 @@ pub fn create_firework(o: &Value) -> SceneObject {
                             .collect();
     let geom = Union::new(boxed_particles);
 
-    let tree = Octree::new(8, geom.bounds(), &particles.into_iter().map(|p| Arc::new(p)).collect());
+    let tree = Octree::new(8, geom.bounds(), &particles.into_iter().map(Arc::new).collect());
     let m = Box::new(FireworkMaterial { particles: tree, color });
 
 	SceneObject {

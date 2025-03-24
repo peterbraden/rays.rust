@@ -32,11 +32,11 @@ impl Color {
         Color::new(0f64,1f64,0f64)
     }
 
-    pub fn to_u8(&self) -> (u8, u8, u8) {
+    pub fn as_u8(&self) -> (u8, u8, u8) {
         ((self.rgb[0] * 255f64).min(255f64) as u8, (self.rgb[1] * 255f64).min(255f64) as u8, (self.rgb[2] * 255f64).min(255f64) as u8)
     }
 
-    pub fn to_vec(&self) -> Vector3<f64> {
+    pub fn as_vec(&self) -> Vector3<f64> {
         self.rgb
     }
 
@@ -65,7 +65,7 @@ impl Color {
     /// # Returns
     /// A new color that is a blend of this color and the other color
     pub fn blend(&self, other: &Color, factor: f64) -> Color {
-        let clamped_factor = factor.max(0.0).min(1.0);
+        let clamped_factor = factor.clamp(0.0, 1.0);
         let self_factor = 1.0 - clamped_factor;
         
         Color::new(
@@ -122,7 +122,7 @@ impl Add<Vector3<f64>> for Color {
 
     fn add(self, _rhs: Vector3<f64>) -> Color {
         Color {
-            rgb: _rhs + &self.rgb
+            rgb: _rhs + self.rgb
         }
     }
 }

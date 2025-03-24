@@ -18,7 +18,7 @@ use crate::scenefile::SceneFile;
 const BIG_NUMBER:f64 = 1000.;
 
 pub fn rand() -> f64 {
-    return _rand::thread_rng().gen_range(0.,1.);
+    _rand::thread_rng().gen_range(0.,1.)
 }
 
 pub trait ParticipatingMedium: MaterialModel {}
@@ -27,7 +27,7 @@ pub struct Vacuum {}
 impl ParticipatingMedium for Vacuum {}
 impl MaterialModel for Vacuum {
     fn scatter(&self, _r: &Ray, _i: &Intersection, _s: &Scene) -> ScatteredRay {
-        return ScatteredRay {
+        ScatteredRay {
             ray: None,
             attenuate: Color::white(),
         }
@@ -44,7 +44,7 @@ impl ParticipatingMedium for HomogenousFog{}
 impl MaterialModel for HomogenousFog {
     fn scatter(&self, r: &Ray, i: &Intersection, _s: &Scene) -> ScatteredRay {
        // let amount = i.dist * self.density;
-        return ScatteredRay {
+        ScatteredRay {
             ray: Some(Ray {
                 ro: i.point,
                 rd: (r.rd + (random_point_on_unit_sphere() * self.scatter * rand())).normalize(),
@@ -58,14 +58,14 @@ impl Geometry for HomogenousFog {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         if rand() < self.density {
             let dist = rand().powf(3.) * BIG_NUMBER; 
-            return Some(RawIntersection {
+            Some(RawIntersection {
                 dist,
                 point: r.ro + r.rd * dist,
                 normal: r.rd,
             })
+        } else {
+            None
         }
-        None
-    }
 
     fn bounds(&self) -> BBox {
         BBox::new(
@@ -85,7 +85,7 @@ impl MaterialModel for LowAltitudeFog {
     fn scatter(&self, _r: &Ray, _i: &Intersection, _s: &Scene) -> ScatteredRay {
         //let amount = i.dist * self.density;
         // TODO
-        return ScatteredRay {
+        ScatteredRay {
             ray: None,
             attenuate: Color::white(),
         }

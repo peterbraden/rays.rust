@@ -161,7 +161,7 @@ impl RenderContext {
 
 impl RenderableChunk {
     pub fn width(&self) -> usize {
-        return self.xmax - self.xmin;
+        self.xmax - self.xmin
     }
 
     pub fn render(&self, s: &Scene) -> RenderedChunk {
@@ -171,14 +171,14 @@ impl RenderableChunk {
         let mut rays_cast = 0;
         for y in self.ymin .. self.ymax {
             for x in self.xmin .. self.xmax {
-                let (cast, psamples, pixel) = render_pixel(x, y, self.supersamples, &s);
+                let (cast, psamples, pixel) = render_pixel(x, y, self.supersamples, s);
                 pixels.push(pixel);
                 samples.push(psamples);
-                rays_cast += cast as u64;
+                rays_cast += cast;
             }
         }
 
-        return RenderedChunk {
+        RenderedChunk {
             pixels, samples, rays_cast
         }
     }   
@@ -198,44 +198,44 @@ impl Iterator for RenderIterator {
 
         if self.height - y > self.chunk_size {
             if self.width - x > self.chunk_size {
-                self.i = self.i + self.chunk_size;
-                return Some(RenderableChunk {
+                self.i += self.chunk_size;
+                Some(RenderableChunk {
                     xmin: x, 
                     xmax: x + self.chunk_size,
                     ymin: y,
                     ymax: y + self.chunk_size,
                     supersamples: self.samples,
-                });
+                })
             } else {
                 // Increment down a row
                 self.i = (self.i - x) + (self.width * self.chunk_size);
                 // return remainder of x
-                return Some(RenderableChunk {
+                Some(RenderableChunk {
                     xmin: x ,
                     xmax: self.width,
                     ymin: y,
                     ymax: y + self.chunk_size,
                     supersamples: self.samples,
-                });
+                })
             }
         } else if self.width - x > self.chunk_size {
-            self.i = self.i + self.chunk_size;
-            return Some(RenderableChunk {
+            self.i += self.chunk_size;
+            Some(RenderableChunk {
                 xmin: x, 
                 xmax: x + self.chunk_size,
                 ymin: y,
                 ymax: self.height,
                 supersamples: self.samples,
-            });
+            })
         } else {
             self.i = (self.i - x) + self.chunk_size * self.width;
-            return Some(RenderableChunk {
+            Some(RenderableChunk {
                 xmin: x ,
                 xmax: self.width,
                 ymin: y,
                 ymax: self.height,
                 supersamples: self.samples,
-            });
+            })
         }
     }
 }
@@ -254,11 +254,11 @@ fn render_pixel(x: usize, y: usize, max_samples: usize, s: &Scene) -> (u64, usiz
                         y as f64 / (s.image.height as f64),
                         sx as f64 / (max_samples as f64) * 1. / (s.image.width as f64),
                         sy as f64 / (max_samples as f64) * 1. / (s.image.height as f64))
-                    , 0, &s);
-            cast = cast + rays_cast;
+                    , 0, s);
+            cast += rays_cast;
             pixel = pixel + c;
-            samples = samples + 1;
+            samples += 1;
         }
     }
-    return (cast, samples, pixel)
+    (cast, samples, pixel)
 }

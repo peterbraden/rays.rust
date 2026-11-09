@@ -36,6 +36,10 @@ impl Geometry for SceneObject {
         self.geometry.bounds()
     }
 
+    fn is_stochastic(&self) -> bool {
+        self.geometry.is_stochastic()
+    }
+
     fn surface_area(&self) -> f64 {
         self.geometry.surface_area()
     }

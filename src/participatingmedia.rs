@@ -64,6 +64,8 @@ impl Geometry for HomogenousFog {
         }
     }
 
+    fn is_stochastic(&self) -> bool { true }
+
     fn bounds(&self) -> BBox {
         BBox::new(
             Vector3::new(f64::MIN, f64::MIN, f64::MIN),

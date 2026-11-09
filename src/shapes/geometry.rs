@@ -53,6 +53,12 @@ pub trait Geometry: Sync{
     // is problematic. 
     fn inside(&self, _: &Vector3<f64>) -> bool { false }
 
+    // Whether intersections are random, as for a participating medium, which samples where
+    // light collides in it. Such an object must be tested at most once per ray - the nearest
+    // of several samples would be biased towards nearer collisions - so the scene graph keeps
+    // it out of its octree, which can list an object in several cells.
+    fn is_stochastic(&self) -> bool { false }
+
     // Surface area, for shapes that can be sampled as area lights; 0 for those that can't.
     fn surface_area(&self) -> f64 { 0. }
 

@@ -23,7 +23,7 @@ impl SceneGraph {
         let mut infinite_items = vec![];
         let mut scene_bounds = BBox::empty();
         for x in objects {
-            if max_bounding.contains(&x.geometry.bounds()) {
+            if !x.geometry.is_stochastic() && max_bounding.contains(&x.geometry.bounds()) {
                 scene_bounds = scene_bounds.union( &x.geometry.bounds() );
                 items.push(x);
             } else {
@@ -31,6 +31,8 @@ impl SceneGraph {
                 // Instead of trying to contain it in our scene BVH, we fall back to a naive
                 // iteration intersection.
                 // These are of course more expensive.
+                // Participating media go here too: they must be tested once per ray (see
+                // `Geometry::is_stochastic`).
                 infinite_items.push(x)
             }
         }

@@ -16,6 +16,8 @@ use crate::skysphere::create_sky_sphere;
 use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
 use crate::participatingmedia::create_fog;
+use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity};
+use crate::noise::PerlinNoise;
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
 use serde_json::{Value, Map};
@@ -228,6 +230,10 @@ impl SceneFile {
             return Some(Arc::new(f));
         }
 
+        if t == "volume" {
+            return Some(Arc::new(SceneFile::parse_volume(&o)));
+        }
+
         let geom = SceneFile::parse_geometry(&o);
         let m = SceneFile::parse_object_medium(&o, materials, media);
         if let Some(geometry) = geom {
@@ -245,6 +251,33 @@ impl SceneFile {
     }
     pub fn parse_skysphere(o: &Value) -> SceneObject {
         create_sky_sphere(o)
+    }
+
+    /// A participating medium filling the box from `min` to `max`:
+    ///
+    /// `{"type": "volume", "min": [x, y, z], "max": [x, y, z], "density": σ, "albedo": colour,
+    /// "g": asymmetry, "noise": {"scale", "octaves", "threshold", "seed"}}`
+    ///
+    /// `density` is the extinction coefficient, the chance of a collision per unit distance
+    /// (default 1). Without `noise` it is constant; with it, it varies up to that maximum.
+    /// `albedo` (default white) is the fraction scattered rather than absorbed at a collision,
+    /// and `g` (default 0, -1 to 1) how strongly forwards it scatters.
+    pub fn parse_volume(o: &Value) -> SceneObject {
+        let bounds = BBox::new(SceneFile::parse_vec3(&o["min"]), SceneFile::parse_vec3(&o["max"]));
+        let max_density = SceneFile::parse_number(&o["density"], 1.);
+        let density: Box<dyn DensityField> = match o.get("noise") {
+            None => Box::new(ConstantDensity(max_density)),
+            Some(n) => Box::new(NoiseDensity {
+                perlin: SceneFile::parse_seed(n).map_or_else(PerlinNoise::new, PerlinNoise::with_seed),
+                max_density,
+                scale: SceneFile::parse_number(&n["scale"], 1.),
+                octaves: SceneFile::parse_int(&n["octaves"], 4) as u32,
+                threshold: SceneFile::parse_number(&n["threshold"], 0.5),
+            }),
+        };
+        let g = SceneFile::parse_number(&o["g"], 0.);
+        assert!(g > -1. && g < 1., "Volume g must be between -1 and 1, got {}", g);
+        create_volume(bounds, density, SceneFile::parse_color_def(o, "albedo", Color::white()), g)
     }
 
     pub fn parse_box_terrain(o: &Value) -> SceneObject {

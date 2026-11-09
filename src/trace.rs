@@ -197,6 +197,57 @@ mod tests {
         assert!(sampled_sd < unsampled_sd * 0.75, "sd {} vs {}", sampled_sd, unsampled_sd);
     }
 
+    /// A volume filling the box from -1 to 1 under a uniform white sky, with small spheres off
+    /// to the side so the octree subdivides (and would list the volume in several cells).
+    fn volume_scene(volume: &str) -> Scene {
+        SceneFile::from_string(format!(r#"{{
+            "background": [1, 1, 1], "max_depth": 10000,
+            "path_termination": "russian_roulette",
+            "camera": {{ "location": [0, 0, -5], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }},
+            "materials": {{ "M": {{ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }} }},
+            "objects": [
+                {{ "type": "volume", "min": [-1, -1, -1], "max": [1, 1, 1], {} }},
+                {{ "type": "sphere", "location": [20, 20, 20], "radius": 0.1, "material": "M" }},
+                {{ "type": "sphere", "location": [-20, 20, 20], "radius": 0.1, "material": "M" }},
+                {{ "type": "sphere", "location": [20, -20, -20], "radius": 0.1, "material": "M" }}
+            ]
+        }}"#, volume))
+    }
+
+    #[test]
+    fn test_volumes_are_kept_out_of_the_octree() {
+        let s = volume_scene(r#""density": 1"#);
+        assert_eq!(s.objects.items.len(), 3);
+        assert_eq!(s.objects.infinite_items.len(), 1);
+    }
+
+    #[test]
+    fn test_volume_furnace() {
+        // A medium that only scatters, lit evenly from every direction, looks exactly as bright
+        // as its surroundings however it scatters: every path ends in the sky with weight 1.
+        for volume in [r#""density": 2, "g": 0"#, r#""density": 5, "g": 0.85"#,
+                       r#""density": 8, "g": -0.5, "noise": { "scale": 2, "seed": 3 }"#] {
+            let s = volume_scene(volume);
+            for d in [Vector3::new(0., 0., 1.), Vector3::new(0.1, -0.2, 1.)] {
+                for _ in 0..200 {
+                    let c = trace(&Ray { ro: Vector3::new(0., 0., -5.), rd: d.normalize() }, 0, &s).1;
+                    assert!((c.rgb.x - 1.).abs() < 1e-9, "{}: {}", volume, c.rgb.x);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_absorbing_volume_follows_beer_lambert() {
+        // Albedo 0: only light that crosses the 2 units of medium uncollided arrives.
+        crate::geometry::seed_rand(1, 2);
+        let s = volume_scene(r#""density": 0.6, "albedo": [0, 0, 0]"#);
+        let n = 40_000;
+        let r = Ray { ro: Vector3::new(0., 0., -5.), rd: Vector3::new(0., 0., 1.) };
+        let mean = (0..n).map(|_| trace(&r, 0, &s).1.rgb.x).sum::<f64>() / n as f64;
+        assert!((mean - (-1.2f64).exp()).abs() < 0.01, "{}", mean);
+    }
+
     #[test]
     fn test_furnace() {
         for (depth, expected) in [(0, 0.5), (1, 0.75), (10, 1. - 0.5f64.powi(11))] {

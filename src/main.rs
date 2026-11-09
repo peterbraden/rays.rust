@@ -35,6 +35,7 @@ mod material {
     pub mod legacy;
     pub mod plastic;
     pub mod noise;
+    pub mod phase;
 }
 mod intersection;
 mod sceneobject;
@@ -71,6 +72,7 @@ mod procedural {
 }
 mod participatingmedia;
 mod noise;
+mod volume;
 
 use crate::trace::trace;
 use crate::rendercontext::RenderContext;

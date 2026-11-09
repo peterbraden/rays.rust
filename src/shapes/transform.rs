@@ -75,6 +75,10 @@ impl Geometry for Transform {
         self.item.bounds().transform(&na::convert(self.transform))
     }
 
+    fn is_stochastic(&self) -> bool {
+        self.item.is_stochastic()
+    }
+
     fn surface_area(&self) -> f64 {
         self.uniform_scale.map_or(0., |s| self.item.surface_area() * s * s)
     }

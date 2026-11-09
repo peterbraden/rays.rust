@@ -141,6 +141,12 @@ material, area light), Stanford meshes (performance), SPD (qualitative).
    reference before an 8-bit comparison. HDR FLIP needs the command-line tool or Python package.
 6. Primitives the chosen scenes need (quad and area lights for the Cornell box; see 4).
 
+Status: steps 1-5 done for the furnace (#68) and the Cornell box (#69-#72). Against Tungsten's
+Cornell box our exposure fit is 0.9914 (absolute brightness within 1%), with the remaining
+error mostly noise; the systematic part (about 0.017 RMSE) sits at the light's edges, likely
+reconstruction-filter differences. Next: area-light sampling, which would cut the noise most;
+then the Ray Tracing in One Weekend scene.
+
 ### Reading (candidates, unverified)
 
 - Goral, Torrance, Greenberg, Battaile, "Modeling the Interaction of Light Between Diffuse

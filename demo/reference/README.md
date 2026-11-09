@@ -28,3 +28,16 @@ Conversion (`cornell-box.json`, `cornell-box/*.obj`):
   image's full height at unit distance, so `angle` = atan(2 tan(19.5/2 degrees)) = 0.331018.
 - Not matched: the reference uses light sampling and adaptive sampling; we have no area-light
   sampling, so our render converges more slowly on this small light.
+
+## Comparing
+
+```
+# Fetch the references, then render and compare (the reference is averaged down to our size)
+scripts/fetch-references.sh
+cargo run --release -- demo/reference/cornell-box.json -o cornell.exr --compare references/cornell-box/TungstenRender.exr
+```
+
+At 256x256 and 1024 samples per pixel (#72): exposure fit 0.9914, RMSE 0.0280 (0.0270 after
+the fit), mean FLIP 0.078. Comparing with 256 samples per pixel (RMSE 0.0478) separates the
+RMSE into noise (about 0.715/sqrt(N) per channel) and a systematic part of about 0.017,
+which the FLIP map places at the light's edges.

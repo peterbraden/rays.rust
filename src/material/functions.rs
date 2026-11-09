@@ -6,6 +6,7 @@ use crate::intersection::Intersection;
 use crate::color::Color;
 use crate::geometry::{rand};
 use crate::light::Light;
+use crate::scene::Scene;
 
 pub fn refract(v: Vector3<f64>, n: Vector3<f64>, ni_over_nt:f64) -> Option<Vector3<f64>> {
     let uv = v.normalize();
@@ -108,6 +109,20 @@ pub fn scatter_dielectric(
     }
 }
 
+
+/// Diffuse light arriving directly from each point light that isn't in shadow. Point lights
+/// can't be hit by scattered rays, so diffuse materials must sample them explicitly.
+pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) -> Color {
+    let mut direct = Color::black();
+    for light in &s.lights {
+        let light_vec = light.position - intersection.point;
+        let shadow_ray = Ray {ro: intersection.point, rd: light_vec.normalize()};
+        if s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), f64::MIN_POSITIVE).is_none() {
+            direct = direct + diffuse(albedo, intersection, &light_vec, light);
+        }
+    }
+    direct
+}
 
 pub fn diffuse (pigment: Color, i: &Intersection, light_vec: &Vector3<f64>, light: &Light) -> Color {
     let diffuse_scale = light_vec.normalize().dot(&i.normal) * light.intensity;

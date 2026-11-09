@@ -123,6 +123,33 @@ mod tests {
     }
 
     #[test]
+    fn test_lambertian_lit_by_point_light() {
+        // Black background, so the bounce gathers nothing; the light must still reach it.
+        let s = plane_scene(r#"{ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }"#, 0.);
+        let c = trace_down(&s);
+        assert!((c.rgb[0] - 0.5).abs() < 1e-3, "{:?}", c);
+    }
+
+    #[test]
+    fn test_lambertian_shadowed_from_point_light() {
+        // One bounce at most, so only the shadowed direct term can contribute.
+        let s = SceneFile::from_string(r#"{
+            "background": [0, 0, 0], "max_depth": 1,
+            "camera": { "location": [0, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
+            "materials": { "M": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } },
+            "lights": [ { "location": [0, 10, 0], "intensity": 1 } ],
+            "objects": [
+                { "type": "plane", "y": 0, "material": "M" },
+                { "type": "sphere", "location": [0, 5, 0], "radius": 1, "material": "M" }
+            ]
+        }"#.to_string());
+        let r = Ray { ro: Vector3::new(0., 1., -0.01), rd: Vector3::new(0., -1., 0.01).normalize() };
+        for _ in 0..200 {
+            assert_eq!(trace(&r, 0, &s).1, Color::black());
+        }
+    }
+
+    #[test]
     fn test_whitted_reflection_adds_to_local_shading() {
         let s = plane_scene(r#"{ "type": "whitted", "pigment": [0.5, 0.5, 0.5], "reflection": 0.5 }"#, 0.2);
         // local diffuse 0.5 + reflection 0.5 * background 0.2

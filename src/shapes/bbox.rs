@@ -41,18 +41,25 @@ pub enum Octant {
     TopBackRight = 0b111,
 } 
 
+/// Entry and exit t for one axis' slab.
+#[inline]
+fn slab(min: f64, max: f64, ro: f64, invrd: f64) -> (f64, f64) {
+    let t1 = (min - ro) * invrd;
+    let t2 = (max - ro) * invrd;
+    if t1.is_nan() || t2.is_nan() {
+        // Ray parallel to the slab, starting on one of its faces (0 * inf): inside the closed
+        // slab. Without this, f64::min/max skip the NaN and the box is wrongly culled.
+        return (f64::NEG_INFINITY, f64::INFINITY);
+    }
+    (t1.min(t2), t1.max(t2))
+}
+
 #[inline]
 fn find_min_max(min: &Vector3<f64>, max: &Vector3<f64>, ro: &Vector3<f64>, invrd: &Vector3<f64>) -> (f64, f64){
-    let t1 = (min.x - ro.x) * invrd.x;
-    let t2 = (max.x - ro.x) * invrd.x;
-    let t3 = (min.y - ro.y) * invrd.y;
-    let t4 = (max.y - ro.y) * invrd.y;
-    let t5 = (min.z - ro.z) * invrd.z;
-    let t6 = (max.z - ro.z) * invrd.z;
-
-    let tmin = t1.min(t2).max(t3.min(t4)).max(t5.min(t6));
-    let tmax = t1.max(t2).min(t3.max(t4)).min(t5.max(t6));
-    (tmin, tmax)
+    let (x0, x1) = slab(min.x, max.x, ro.x, invrd.x);
+    let (y0, y1) = slab(min.y, max.y, ro.y, invrd.y);
+    let (z0, z1) = slab(min.z, max.z, ro.z, invrd.z);
+    (x0.max(y0).max(z0), x1.min(y1).min(z1))
 }
 
 impl BBox {
@@ -317,11 +324,22 @@ impl Geometry for BBox {
             let t = if tmin >= 0. { tmin } else { tmax };
             let point =  r.ro + (r.rd * t);
             let dist = t * r.rd.norm();
-            let center = na::center(&self.min, &self.max);
-            let p = (point - center.coords).normalize().component_div(&(self.max - self.min)); 
-            let ndir = p.iamax();
+            // The normal is that of the face the point lies on, ie. the nearest face.
+            let (mut nearest, mut axis, mut sign) = (f64::INFINITY, 0, 1.);
+            for a in 0..3 {
+                for (face, s) in [(self.min[a], -1.), (self.max[a], 1.)] {
+                    let d = (point[a] - face).abs();
+                    if d < nearest {
+                        (nearest, axis, sign) = (d, a, s);
+                    }
+                }
+            }
+            if self.min[axis] == self.max[axis] {
+                // Flat box: both faces coincide, so face the incoming ray.
+                sign = if r.rd[axis] > 0. { -1. } else { 1. };
+            }
             let mut normal = Vector3::new(0.,0.,0.);
-            normal[ndir] = if p[ndir].is_sign_positive() { 1. } else { -1. };
+            normal[axis] = sign;
 
             Some(RawIntersection {
                 point,
@@ -349,6 +367,42 @@ mod tests {
     use crate::na::{Vector3};
     use super::{BBox, BoxFace, Ray};
     use crate::shapes::geometry::Geometry;
+
+    #[test]
+    fn test_ray_on_face_plane_is_not_culled() {
+        // Parallel to x and lying exactly on the box's min.x face plane.
+        let b = BBox::new(Vector3::new(0., -1., -1.), Vector3::new(1., 1., 1.));
+        for rdx in [0., -0.] {
+            let r = Ray { ro: Vector3::new(0., 0.5, -5.), rd: Vector3::new(rdx, 0., 1.) };
+            assert!(Geometry::fast_intersects(&b, &r), "rd.x = {}", rdx);
+            assert!(b.intersects(&r).is_some());
+        }
+        // Parallel and outside the slab still misses.
+        let r = Ray { ro: Vector3::new(-0.5, 0.5, -5.), rd: Vector3::new(0., 0., 1.) };
+        assert!(!Geometry::fast_intersects(&b, &r));
+    }
+
+    #[test]
+    fn test_flat_box_normal() {
+        let b = BBox::new(Vector3::new(-1., 0., -1.), Vector3::new(1., 0., 1.));
+        let down = Ray { ro: Vector3::new(0.2, 5., 0.3), rd: Vector3::new(0., -1., 0.) };
+        assert_eq!(b.intersects(&down).unwrap().normal, Vector3::new(0., 1., 0.));
+        let up = Ray { ro: Vector3::new(0.2, -5., 0.3), rd: Vector3::new(0., 1., 0.) };
+        assert_eq!(b.intersects(&up).unwrap().normal, Vector3::new(0., -1., 0.));
+    }
+
+    #[test]
+    fn test_box_normals() {
+        let b = BBox::new(Vector3::new(-1., -2., -3.), Vector3::new(1., 2., 3.));
+        let cases = [
+            (Vector3::new(5., 0.5, 0.5), Vector3::new(-1., 0., 0.), Vector3::new(1., 0., 0.)),
+            (Vector3::new(0.5, -5., 0.5), Vector3::new(0., 1., 0.), Vector3::new(0., -1., 0.)),
+            (Vector3::new(0.5, 0.5, 9.), Vector3::new(0., 0., -1.), Vector3::new(0., 0., 1.)),
+        ];
+        for (ro, rd, n) in cases {
+            assert_eq!(b.intersects(&Ray { ro, rd }).unwrap().normal, n);
+        }
+    }
 
     #[test]
     fn test_intersects_dist_is_world_space() {

@@ -7,7 +7,8 @@
 //! q' <- 2 q q' (John C. Hart, Daniel J. Sandin and Louis H. Kauffman, "Ray tracing deterministic
 //! 3-D fractals", SIGGRAPH 1989; Inigo Quilez, "3D Julia sets",
 //! <https://iquilezles.org/articles/juliasets3d/>). Points that do not escape within the
-//! iteration limit count as in the set, so more iterations give finer detail.
+//! iteration limit count as in the set, so more iterations give finer detail. From inside the
+//! set, the ray is stepped out by the accuracy until it leaves.
 
 use crate::shapes::geometry::Geometry;
 use crate::na::{Vector3, Vector4};
@@ -74,23 +75,29 @@ impl Geometry for Julia {
             [a, b] if b > 0. => (a, b),
             _ => return None,
         };
+        let normal_at = |p: &Vector3<f64>| {
+            let h = self.accuracy;
+            let n = Vector3::new(
+                self.distance(&(p + Vector3::x() * h)) - self.distance(&(p - Vector3::x() * h)),
+                self.distance(&(p + Vector3::y() * h)) - self.distance(&(p - Vector3::y() * h)),
+                self.distance(&(p + Vector3::z() * h)) - self.distance(&(p - Vector3::z() * h)));
+            if n.norm() > 0. { n.normalize() } else { -rd }
+        };
         let mut t = a.max(0.);
-        // Starting inside the set, march out of it first.
-        while a <= 0. && t < b && self.distance(&(r.ro + rd * t)) < self.accuracy {
-            t += self.accuracy;
+        // Starting inside the set, the hit is where the ray leaves it.
+        if a <= 0. && self.distance(&r.ro) < self.accuracy {
+            while t < b && self.distance(&(r.ro + rd * t)) < self.accuracy {
+                t += self.accuracy;
+            }
+            let p = r.ro + rd * t;
+            return (t < b).then(|| RawIntersection { dist: t, point: p, normal: normal_at(&p) });
         }
         let mut steps = 0;
         while t < b && steps < 10_000 {
             let p = r.ro + rd * t;
             let d = self.distance(&p);
             if d < self.accuracy {
-                let h = self.accuracy;
-                let n = Vector3::new(
-                    self.distance(&(p + Vector3::x() * h)) - self.distance(&(p - Vector3::x() * h)),
-                    self.distance(&(p + Vector3::y() * h)) - self.distance(&(p - Vector3::y() * h)),
-                    self.distance(&(p + Vector3::z() * h)) - self.distance(&(p - Vector3::z() * h)));
-                let normal = if n.norm() > 0. { n.normalize() } else { -rd };
-                return Some(RawIntersection { dist: t, point: p, normal });
+                return Some(RawIntersection { dist: t, point: p, normal: normal_at(&p) });
             }
             t += d;
             steps += 1;
@@ -120,6 +127,13 @@ mod tests {
         assert!((i.dist - 4.).abs() < 1e-3, "{}", i.dist);
         assert!((i.normal - Vector3::new(0., 0., -1.)).norm() < 1e-2, "{}", i.normal);
         assert!(j.inside(&Vector3::new(0.5, 0., 0.)) && !j.inside(&Vector3::new(1.5, 0., 0.)));
+        // From inside, out; and both crossings of the ball.
+        let out = j.intersects(&Ray { ro: Vector3::zeros(), rd: Vector3::new(1., 0., 0.) }).unwrap();
+        assert!((out.dist - 1.).abs() < 1e-3, "{}", out.dist);
+        assert!((out.normal - Vector3::new(1., 0., 0.)).norm() < 1e-2);
+        let c = j.crossings(&Ray { ro: Vector3::new(0., 0., -5.), rd: Vector3::new(0., 0., 1.) });
+        assert_eq!(c.len(), 2);
+        assert!((c[1].dist - 6.).abs() < 1e-3, "{}", c[1].dist);
     }
 
     #[test]

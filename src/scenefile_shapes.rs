@@ -386,6 +386,81 @@ mod tests {
         assert!(inv.inside(&Vector3::new(3., 0., 0.)));
     }
 
+    /// For solid shapes, crossings must agree with `inside`: between consecutive crossings the
+    /// ray is alternately inside and outside, and each crossing's normal faces against the ray
+    /// when entering and along it when leaving. CSG depends on this.
+    #[test]
+    fn test_crossings_agree_with_inside() {
+        let sphere = |x: f64, r: f64| format!(r#"{{"type": "sphere", "location": [{}, 0, 0], "radius": {}}}"#, x, r);
+        let shapes = vec![
+            sphere(0., 1.),
+            r#"{"type": "box", "min": [-1, -0.5, -0.7], "max": [1, 0.5, 0.7]}"#.to_string(),
+            r#"{"type": "cylinder", "base": [0, -1, 0], "cap": [0.3, 1, 0], "radius": 0.6}"#.to_string(),
+            r#"{"type": "cone", "base": [0, -1, 0], "base_radius": 1, "cap": [0, 1, 0], "cap_radius": 0.2}"#.to_string(),
+            r#"{"type": "torus", "major": 1, "minor": 0.3}"#.to_string(),
+            r#"{"type": "transform", "rotate": {"roll": 40}, "scale": [1, 2, 1], "item": {"type": "torus", "major": 1, "minor": 0.3}}"#.to_string(),
+            r#"{"type": "quadric", "squares": [1, 4, 2], "constant": -1, "bounds": {"min": [-2, -2, -2], "max": [2, 2, 2]}}"#.to_string(),
+            r#"{"type": "quartic", "terms": [[1, 4, 0, 0], [-5, 2, 0, 0], [1, 0, 4, 0], [-5, 0, 2, 0], [1, 0, 0, 4], [-5, 0, 0, 2], [11.8, 0, 0, 0]],
+                "bounds": {"min": [-3, -3, -3], "max": [3, 3, 3]}}"#.to_string(),
+            r#"{"type": "prism", "height1": -0.5, "height2": 0.5, "points": [[-1, -1], [1, -1], [1, 1], [-1, 1], [-1, -1],
+                [-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5], [-0.5, -0.5]]}"#.to_string(),
+            r#"{"type": "prism", "sweep": "conic", "height1": 0.2, "height2": 1, "points": [[-1, -1], [1, -1], [0, 1]]}"#.to_string(),
+            r#"{"type": "lathe", "points": [[0.5, -1], [1, -1], [1.2, 0], [1, 1], [0.5, 1], [0.5, -1]]}"#.to_string(),
+            r#"{"type": "lathe", "spline": "bezier", "points": [[0, -1], [0.55, -1], [1, -0.55], [1, 0], [1, 0], [1, 0.55], [0.55, 1], [0, 1]]}"#.to_string(),
+            r#"{"type": "sor", "points": [[0.8, -1.2], [0.7, -1], [0.3, -0.5], [0.4, 0.3], [0.9, 1], [1, 1.2]]}"#.to_string(),
+            r#"{"type": "sphere_sweep", "spline": "cubic", "spheres": [[-1.5, 0, 0, 0.3], [-1, 0, 0, 0.3], [0, 0.8, 0, 0.5], [1, 0, 0.5, 0.3], [1.5, 0, 0, 0.3]]}"#.to_string(),
+            r#"{"type": "blob", "threshold": 0.5, "components": [{"type": "sphere", "center": [-0.5, 0, 0], "radius": 1},
+                {"type": "sphere", "center": [0.6, 0.2, 0], "radius": 0.9}, {"type": "cylinder", "base": [0, -1, 0], "cap": [0, 1, 0], "radius": 0.5}]}"#.to_string(),
+            r#"{"type": "isosurface", "function": "sqrt(x*x + y*y + z*z) - 0.8 + 0.1 * sin(6 * x)", "max_gradient": 2,
+                "contained_by": {"box": {"min": [-1, -1, -1], "max": [1, 0.5, 1]}}, "accuracy": 1e-6}"#.to_string(),
+            r#"{"type": "superellipsoid", "e": 0.4, "n": 0.7}"#.to_string(),
+            format!(r#"{{"type": "difference", "items": [{}, {}, {}]}}"#, sphere(0., 1.), sphere(1., 0.5), sphere(-0.2, 0.3)),
+            format!(r#"{{"type": "intersection", "items": [{}, {}]}}"#, sphere(-0.4, 1.), sphere(0.4, 1.)),
+            format!(r#"{{"type": "merge", "items": [{}, {}, {{"type": "cylinder", "base": [0, -1.5, 0], "cap": [0, 1.5, 0], "radius": 0.3}}]}}"#, sphere(-0.4, 1.), sphere(0.6, 0.8)),
+            format!(r#"{{"type": "intersection", "items": [{}, {{"type": "plane", "normal": [1, 1, 0], "distance": 0.2}}]}}"#, sphere(0., 1.)),
+            // (A union keeps the surfaces inside it, so only a merge is solid in this sense.)
+            format!(r#"{{"type": "difference", "items": [{{"type": "merge", "items": [{}, {}]}}, {{"type": "box", "min": [-0.3, -2, -2], "max": [0.3, 2, 2]}}]}}"#, sphere(-0.5, 1.), sphere(0.5, 1.)),
+        ];
+        crate::geometry::seed_rand(11, 0);
+        let rnd = || crate::geometry::rand() * 2. - 1.;
+        for json in &shapes {
+            let g = shape(json);
+            let b = g.bounds();
+            let (mid, size) = ((b.min.coords + b.max.coords) * 0.5, (b.max - b.min).norm());
+            let (mut rays, mut bad) = (0, Vec::new());
+            for k in 0..300 {
+                let target = mid + Vector3::new(rnd(), rnd(), rnd()).component_mul(&(b.max - b.min)) * 0.5;
+                // Most from outside, some from within the bounds.
+                let ro = if k % 4 == 0 { target } else { mid + Vector3::new(rnd(), rnd(), rnd()).normalize() * size * 2. };
+                let target2 = mid + Vector3::new(rnd(), rnd(), rnd()).component_mul(&(b.max - b.min)) * 0.5;
+                let rd = (if k % 4 == 0 { target2 - ro } else { target - ro }).normalize();
+                let r = Ray { ro, rd };
+                let c = g.crossings(&r);
+                rays += 1;
+                let mut inside = g.inside(&ro);
+                let mut prev = 0.;
+                for (n, x) in c.iter().enumerate() {
+                    let ok_order = x.dist > prev || (n == 0 && x.dist >= 0.);
+                    let entering = !inside;
+                    let ok_normal = (x.normal.dot(&rd) < 0.) == entering;
+                    // The state just after this crossing, checked where it's far enough from
+                    // the next to be clear.
+                    let next = c.get(n + 1).map_or(x.dist + 1e-3, |y| y.dist);
+                    let after = g.inside(&(ro + rd * (0.5 * (x.dist + next))));
+                    let ok_toggle = (next - x.dist) < 1e-5 || after == entering;
+                    if !(ok_order && ok_normal && ok_toggle) {
+                        bad.push(format!("crossing {} of {:?}: order {} normal {} toggle {}", n, r, ok_order, ok_normal, ok_toggle));
+                        break;
+                    }
+                    inside = entering;
+                    prev = x.dist;
+                }
+            }
+            // A few grazing rays may slip through; any more is a real disagreement.
+            assert!(bad.len() * 100 <= rays, "{}: {} of {} rays disagree, eg. {}", json, bad.len(), rays, bad[0]);
+        }
+    }
+
     #[test]
     #[should_panic(expected = "unknown name 'w'")]
     fn test_bad_function_is_reported() {

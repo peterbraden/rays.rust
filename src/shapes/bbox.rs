@@ -119,6 +119,12 @@ impl BBox {
         (entry - 0.01 * (self.max - self.min).norm().min(1e6)).max(0.)
     }
 
+    /// Where such a search should end, given where the ray leaves the bounds: a little after,
+    /// for the same reason.
+    pub fn solve_end(&self, exit: f64) -> f64 {
+        exit + 0.01 * (self.max - self.min).norm().min(1e6)
+    }
+
     pub fn fast_intersects(&self, ro: &Vector3<f64>, invrd: &Vector3<f64>) -> bool {
         //http://tavianator.com/fast-branchless-raybounding-box-intersections/
         let (tmin, tmax) = find_min_max(&self.min.coords, &self.max.coords, ro, invrd);

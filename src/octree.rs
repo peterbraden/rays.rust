@@ -38,7 +38,7 @@ impl OctreeNode {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.items.len() > 0
+        self.items.is_empty()
     }
 
     pub fn len(&self) -> usize {
@@ -89,19 +89,28 @@ impl<T: Geometry> Octree<T> {
         // Rust arrays suck - this defaults them to 'None'
         let mut children: [Option<Box<OctreeNode>>; 8] = Default::default();
 
-        for i in 0..8 {
-            // Does child node have any objects in?
-            if depth < max_depth && items.len() > 1 {
-                // Equal subdivision. Enhancement: Use different split.
+        if depth < max_depth && items.len() > 1 {
+            // Equal subdivision. Enhancement: Use different split.
+            let octants: Vec<(BBox, Vec<usize>)> = (0..8).map(|i| {
                 let cbox = BBox::for_octant(i, &b);
-                let inside = items.clone()
-                                .into_iter() 
+                let inside = items.iter()
+                                .copied()
                                 .filter( |x| { cbox.intersects_bbox( &geometries[*x].bounds() ) } )
                                 .collect::<Vec<usize>>();
+                (cbox, inside)
+            }).collect();
 
-                if !inside.is_empty() {
-                    let node = Octree::create_node(depth + 1, max_depth, cbox, inside, geometries);
-                    children[i as usize] = Some(Box::new(node));
+            // If no octant separates any items (eg. they all overlap the whole node), splitting
+            // only duplicates them; recursing would create 8^depth identical nodes.
+            let separates = octants.iter().any(|(_, inside)| inside.len() < items.len());
+
+            if separates {
+                for (i, (cbox, inside)) in octants.into_iter().enumerate() {
+                    // Does child node have any objects in?
+                    if !inside.is_empty() {
+                        let node = Octree::create_node(depth + 1, max_depth, cbox, inside, geometries);
+                        children[i] = Some(Box::new(node));
+                    }
                 }
             }
         }
@@ -126,10 +135,16 @@ impl<T: Geometry> Octree<T> {
     }
 
     fn closest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(usize, RawIntersection)> {
-        match self.root.naive_intersection(r, max, min) {
-            Some(opts) => self.items_intersection(r,max, min, opts),
-            None => None
-        }
+        self.candidates(r, max, min).and_then(|opts| self.items_intersection(r, max, min, opts))
+    }
+
+    /// Items in leaves the ray passes through. Items spanning several leaves appear once.
+    fn candidates(&self, r: &Ray, max:f64, min:f64) -> Option<Vec<usize>> {
+        self.root.naive_intersection(r, max, min).map(|mut opts| {
+            opts.sort_unstable();
+            opts.dedup();
+            opts
+        })
     }
 
     // Iterate through potential items. Should only do on leaf if multiple items.
@@ -341,5 +356,44 @@ impl fmt::Display for OctreeNode {
             }
         }
         write!(f, "OctreeNode -[{}]{}", self.items.len(), c)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn count_nodes(n: &OctreeNode) -> usize {
+        1 + n.children.iter().flatten().map(|c| count_nodes(c)).sum::<usize>()
+    }
+
+    fn cube(min: f64, max: f64) -> Arc<BBox> {
+        Arc::new(BBox::new(Vector3::new(min, min, min), Vector3::new(max, max, max)))
+    }
+
+    #[test]
+    fn test_overlapping_items_do_not_subdivide_forever() {
+        let items = vec![cube(-10., 10.), cube(-10., 10.)];
+        let tree = Octree::new(5, BBox::new(Vector3::new(-10., -10., -10.), Vector3::new(10., 10., 10.)), &items);
+        assert_eq!(count_nodes(&tree.root), 1);
+    }
+
+    #[test]
+    fn test_separable_items_still_subdivide() {
+        let items = vec![cube(-10., -9.), cube(9., 10.)];
+        let tree = Octree::new(5, BBox::new(Vector3::new(-10., -10., -10.), Vector3::new(10., 10., 10.)), &items);
+        assert!(count_nodes(&tree.root) > 1);
+        let r = Ray { ro: Vector3::new(9.5, 9.5, -20.), rd: Vector3::new(0., 0., 1.) };
+        assert_eq!(tree.candidates(&r, f64::INFINITY, 0.), Some(vec![1]));
+    }
+
+    #[test]
+    fn test_candidates_are_unique() {
+        // A large item spanning every leaf, plus small items forcing subdivision.
+        let items = vec![cube(-10., 10.), cube(-10., -9.), cube(9., 10.)];
+        let tree = Octree::new(3, BBox::new(Vector3::new(-10., -10., -10.), Vector3::new(10., 10., 10.)), &items);
+        let r = Ray { ro: Vector3::new(-20., -9.5, -9.5), rd: Vector3::new(1., 1., 1.).normalize() };
+        let c = tree.candidates(&r, f64::INFINITY, 0.).unwrap();
+        assert_eq!(c.iter().filter(|i| **i == 0).count(), 1, "{:?}", c);
     }
 }

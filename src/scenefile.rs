@@ -34,23 +34,37 @@ use crate::material::noise::{NoiseTexture, NoiseType};
 use crate::participatingmedia::{ParticipatingMedium, HomogenousFog, Vacuum};
 use crate::shapes::geometry::Geometry;
 
+/// Every field except `camera` is optional; defaults are applied in `from_scenefile`.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SceneFile {
+    #[serde(default)]
     pub width: Value,
+    #[serde(default)]
     pub height: Value,
+    #[serde(default)]
     pub chunk_size: Value,
+    #[serde(default)]
     pub supersamples: Value, 
+    #[serde(default)]
     pub samples_per_chunk: Value, 
     pub camera: Value, 
+    #[serde(default)]
     pub shadow_bias: Value, 
     #[serde(default)]
     pub black_threshold: Value,
+    #[serde(default)]
     pub background: Value,
+    #[serde(default)]
     pub max_depth: Value,
+    #[serde(default)]
     pub materials: Map<String, Value>,
+    #[serde(default)]
     pub media: Map<String, Value>,
+    #[serde(default)]
     pub lights: Vec<Value>,
+    #[serde(default)]
     pub objects: Vec<Value>,
+    #[serde(default)]
     pub variables: Value,
     pub air: Option<Value>,
 }
@@ -64,8 +78,13 @@ impl SceneFile {
     }
     
     pub fn parse_int(v: &Value, default: usize) -> usize {
-        match v.as_i64(){
-            Some(x) => x as usize,
+        if let Some(x) = v.as_u64() {
+            return x as usize;
+        }
+        match v.as_f64() {
+            // Accept whole numbers written as floats, eg. 640.0
+            Some(x) if x >= 0. && x.fract() == 0. => x as usize,
+            Some(x) => panic!("Expected a non-negative integer, got {}", x),
             None => default
         }
     }
@@ -99,7 +118,18 @@ impl SceneFile {
         }
     }
 
+    /// Parse an [r, g, b] array, or a named colour.
     pub fn parse_color(v: &Value) -> Color {
+        if let Some(name) = v.as_str() {
+            return match name {
+                "black" => Color::black(),
+                "white" => Color::white(),
+                "red" => Color::red(),
+                "green" => Color::green(),
+                "blue" => Color::blue(),
+                _ => panic!("Unknown colour name: {}", name),
+            };
+        }
         Color::new(v[0].as_f64().unwrap(),
                          v[1].as_f64().unwrap(),
                          v[2].as_f64().unwrap())
@@ -641,7 +671,7 @@ impl SceneFile {
     pub fn parse_light(o: &Value) -> Light {
         Light {
                 position: SceneFile::parse_vec3(&o["location"]),
-                color: Color::white(),
+                color: SceneFile::parse_color_def(o, "color", Color::white()),
                 intensity: o["intensity"].as_f64().unwrap(),
             }
     }
@@ -670,7 +700,7 @@ impl SceneFile {
             image: ImageOpts { width, height },
             render: RenderOpts {
                 max_depth: SceneFile::parse_int(&s.max_depth, 2),
-                background: SceneFile::parse_color(&s.background),
+                background: if s.background.is_null() { Color::black() } else { SceneFile::parse_color(&s.background) },
                 shadow_bias: SceneFile::parse_number(&s.shadow_bias, 1e-7f64),
                 supersamples: SceneFile::parse_int(&s.supersamples, 35),  
                 chunk_size: SceneFile::parse_int(&s.chunk_size, 64), 
@@ -723,9 +753,46 @@ mod tests {
             "width": 4, "height": 2, "chunk_size": 2, "supersamples": 1, "samples_per_chunk": 1,
             "shadow_bias": 0.5, "background": [0, 0, 0], "max_depth": 1,
             "camera": {{ "location": [0, 0, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }},
-            "materials": {{}}, "media": {{}}, "lights": [], "objects": [], "variables": {{}}
+            "materials": {{}}, "media": {{}}, "objects": [], "variables": {{}}
             {}
         }}"#, extra), width, height)
+    }
+
+    #[test]
+    fn test_missing_fields_use_defaults() {
+        let s = SceneFile::from_string(r#"{
+            "camera": { "location": [0, 0, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }
+        }"#.to_string());
+        assert_eq!((s.image.width, s.image.height), (640, 480));
+        assert_eq!(s.render.supersamples, 35);
+        assert_eq!(s.render.max_depth, 2);
+        assert_eq!(s.render.background, Color::black());
+        assert!(s.lights.is_empty());
+    }
+
+    #[test]
+    fn test_parse_int_accepts_whole_floats() {
+        assert_eq!(SceneFile::parse_int(&serde_json::json!(640.0), 1), 640);
+        assert_eq!(SceneFile::parse_int(&serde_json::json!(640), 1), 640);
+        assert_eq!(SceneFile::parse_int(&Value::Null, 7), 7);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_parse_int_rejects_negative() {
+        SceneFile::parse_int(&serde_json::json!(-1), 1);
+    }
+
+    #[test]
+    fn test_light_colours() {
+        let s = minimal_scene(r#", "lights": [
+            { "location": [0, 1, 0], "intensity": 1, "color": [1, 0, 0] },
+            { "location": [0, 1, 0], "intensity": 1, "color": "white" },
+            { "location": [0, 1, 0], "intensity": 1 }
+        ]"#);
+        assert_eq!(s.lights[0].color, Color::red());
+        assert_eq!(s.lights[1].color, Color::white());
+        assert_eq!(s.lights[2].color, Color::white());
     }
 
     #[test]

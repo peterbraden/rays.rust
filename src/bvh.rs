@@ -1,8 +1,8 @@
 //! # Bounding volume hierarchy
 //!
 //! A tree of bounding boxes over the primitives: each node's box encloses everything below it,
-//! so a ray that misses a box skips its whole subtree. Where the octree (`src/octree.rs`)
-//! divides *space* into fixed octants, and so stores an item in every octant it touches, a
+//! so a ray that misses a box skips its whole subtree. Where the octree this replaced divides
+//! *space* into fixed octants, and so stores an item in every octant it touches, a
 //! bounding volume hierarchy divides the *primitives* into two groups at each node: every
 //! primitive is in exactly one leaf, and the boxes adapt to where the primitives are, not to a
 //! fixed grid. Boxes may overlap, which is the price.
@@ -58,7 +58,10 @@
 //!
 //! ## Compared with the octree
 //!
-//! The octree tested a primitive spanning several octants once per octant visited (the
+//! The renderer previously used an octree, after Andrew S. Glassner, "Space Subdivision for Fast
+//! Ray Tracing", IEEE Computer Graphics and Applications 4(10), 1984,
+//! doi:10.1109/MCG.1984.6429331; it is in the history as `src/octree.rs`, with a discussion of
+//! Revelles, Ureña and Lastra's parametric traversal (WSCG 2000). The octree tested a primitive spanning several octants once per octant visited (the
 //! "mailboxing" problem Glassner noted), stored such primitives several times, and could not
 //! split items whose boxes overlapped the whole node. Here each primitive is stored and tested
 //! once per ray at most, and overlapping items are separated by their centroids.
@@ -295,7 +298,7 @@ impl Tree {
     }
 }
 
-/// A hierarchy over a collection of geometries: the drop-in for the octree.
+/// A hierarchy over a collection of geometries.
 #[derive(Clone)]
 #[allow(clippy::upper_case_acronyms)] // Abbreviations stay in capitals in this codebase.
 pub struct BVH<T: Geometry> {

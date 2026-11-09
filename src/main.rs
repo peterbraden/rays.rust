@@ -52,7 +52,6 @@ mod shapes {
     pub mod infinite;
     pub mod repeating_mesh;
 }
-mod octree;
 mod bvh;
 mod scenegraph;
 mod scene;

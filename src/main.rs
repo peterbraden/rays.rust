@@ -73,6 +73,7 @@ mod noise;
 use crate::trace::trace;
 use crate::rendercontext::RenderContext;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use rand::thread_rng;
 use rand::seq::SliceRandom;
 
@@ -132,27 +133,45 @@ fn main() {
     let pb = ProgressBar::new(100);
     pb.set_style(ProgressStyle::with_template("{spinner:.green} {prefix}{msg} [{bar:.cyan/blue}]").unwrap().progress_chars("#>-"));
 
+    // Progressive output is throttled, and encoded outside the lock so it doesn't serialise
+    // the render.
+    let progressive_interval = Duration::from_secs(1);
+    let last_progressive = Mutex::new(Instant::now());
+
     chunks
         .into_par_iter()
         //.iter()
         .for_each(|c| {
             let p = c.render(&s);
-            let rcmtx = rcmtx.clone();
-            let mut rc = rcmtx.lock().unwrap();
-            rc.apply_chunk(&c, &p);
-            // Progressive render out:
-            if rc.progressive_render {
-                paint::to_png(&rc);
+            let progressive = {
+                let mut rc = rcmtx.lock().unwrap();
+                rc.apply_chunk(&c, &p);
+                pb.set_position(rc.progress_percentage(&s) as u64);
+                pb.set_message(rc.progress(&s));
+                pb.tick();
+
+                let mut last = last_progressive.lock().unwrap();
+                if rc.progressive_render && last.elapsed() >= progressive_interval {
+                    *last = Instant::now();
+                    Some((paint::to_image(&rc), rc.output_filename.clone()))
+                } else {
+                    None
+                }
+            };
+            if let Some((img, path)) = progressive {
+                if let Err(e) = paint::save_png(&img, &path) {
+                    eprintln!("{}", e);
+                }
             }
-            pb.set_position(rc.progress_percentage(&s) as u64);
-            pb.set_message(rc.progress(&s));
-            pb.tick();
         });
     pb.finish();
 
     let rc = rcmtx.lock().unwrap();
     //wireframe::wireframe(&s, &mut rc);
-    paint::to_png(&rc);
+    if let Err(e) = paint::to_png(&rc) {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    }
     paint::poor_mans(&rc);
     rc.print_stats();
 }

@@ -704,7 +704,7 @@ impl SceneFile {
                 background: if s.background.is_null() { Color::black() } else { SceneFile::parse_color(&s.background) },
                 shadow_bias: SceneFile::parse_number(&s.shadow_bias, 1e-7f64),
                 supersamples: SceneFile::parse_int(&s.supersamples, 35),  
-                chunk_size: SceneFile::parse_int(&s.chunk_size, 64), 
+                chunk_size: SceneFile::parse_int(&s.chunk_size, 64).max(1), 
                 samples_per_chunk: SceneFile::parse_int(&s.samples_per_chunk, 2),
             },
             camera: Box::new(SceneFile::parse_camera(s.camera, width as u32, height as u32)),

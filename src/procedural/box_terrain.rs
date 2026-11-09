@@ -41,7 +41,7 @@ impl Geometry for BoxTerrain {
 
 pub fn create_box_terrain() -> SceneObject {
     let mut boxes_vec = vec![];
-    let mut bounds = BBox::min();
+    let mut bounds = BBox::empty();
     let cube_size = 3.;
     for x in -20 .. 20 {
         for z in -20 .. 20 {

@@ -21,7 +21,7 @@ impl SceneGraph {
 
         let mut items = vec![];
         let mut infinite_items = vec![];
-        let mut scene_bounds = BBox::new( Vector3::new(0f64,0f64,0f64), Vector3::new(0f64,0f64,0f64) ); 
+        let mut scene_bounds = BBox::empty();
         for x in objects {
             if max_bounding.contains(&x.geometry.bounds()) {
                 scene_bounds = scene_bounds.union( &x.geometry.bounds() );

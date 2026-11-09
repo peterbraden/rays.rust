@@ -80,7 +80,7 @@ impl Mesh {
     }
 
     fn bounds_of(triangles: &Vec<Arc<Triangle>>) -> BBox {
-        let mut bb = BBox::min();
+        let mut bb = BBox::empty();
 
         for t in triangles {
             bb = bb.union(&t.bounds());
@@ -169,7 +169,7 @@ impl SmoothMesh {
     }
 
     fn bounds_of(triangles: &Vec<Arc<SmoothTriangle>>) -> BBox {
-        let mut bb = BBox::min();
+        let mut bb = BBox::empty();
 
         for t in triangles {
             bb = bb.union(&t.bounds());

@@ -216,12 +216,19 @@ impl MaterialModel for NoiseTexture {
         
         // Blend the base material's color with the noise color based on the noise value
         let noise_influence = noise_value * self.blend_factor;
-        let blended_color = base_scatter.attenuate.blend(&self.color, noise_influence);
-        
-        // Return a new scattered ray with the blended color
-        ScatteredRay { emit: Color::black(),
-            ray: base_scatter.ray,
-            attenuate: blended_color,
+
+        match base_scatter.ray {
+            // Terminal: blend the base's final colour.
+            None => ScatteredRay { emit: Color::black(),
+                ray: None,
+                attenuate: (base_scatter.emit + base_scatter.attenuate).blend(&self.color, noise_influence),
+            },
+            // Blend the bounce weight, and tint any emitted (eg. direct) light by the noise colour.
+            Some(ray) => ScatteredRay {
+                emit: base_scatter.emit * Color::white().blend(&self.color, noise_influence),
+                ray: Some(ray),
+                attenuate: base_scatter.attenuate.blend(&self.color, noise_influence),
+            },
         }
     }
 }
@@ -231,6 +238,44 @@ mod tests {
     use super::*;
     use crate::material::lambertian::Lambertian;
     
+    #[test]
+    fn test_noise_texture_keeps_base_emission() {
+        use crate::material::legacy::Whitted;
+        use crate::scenefile::SceneFile;
+        use crate::sceneobject::SceneObject;
+        use crate::shapes::plane::Plane;
+        use crate::material::texture::Solid;
+        use crate::material::legacy::FlatColor;
+        use std::sync::Arc;
+
+        let s = SceneFile::from_string(r#"{
+            "width": 4, "height": 2, "chunk_size": 2, "supersamples": 1, "samples_per_chunk": 1,
+            "shadow_bias": 0.0001, "background": [0, 0, 0], "max_depth": 1,
+            "camera": { "location": [0, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
+            "materials": {}, "media": {}, "objects": [], "variables": {},
+            "lights": [ { "location": [0, 10, 0], "intensity": 1 } ]
+        }"#.to_string());
+        let i = Intersection {
+            dist: 1.,
+            point: Vector3::new(0., 0., 0.),
+            normal: Vector3::new(0., 1., 0.),
+            object: Arc::new(SceneObject {
+                geometry: Box::new(Plane { y: 0. }),
+                medium: Box::new(Solid { m: Box::new(FlatColor { pigment: Color::white() }) }),
+            }),
+        };
+        let r = Ray { ro: Vector3::new(0., 1., -1.), rd: Vector3::new(0., -1., 1.).normalize() };
+        let lit = |reflection: f64| {
+            let base = Box::new(Whitted { pigment: Color::white(), reflection, phong: 0. });
+            // Zero blend: the texture must not change the base's lighting.
+            let t = NoiseTexture::new_perlin(base, Color::new(1., 0., 0.), 0.1, 0.);
+            let out = t.scatter(&r, &i, &s);
+            out.emit + out.attenuate * if out.ray.is_some() { Color::black() } else { Color::white() }
+        };
+        assert!((lit(0.).rgb.x - 1.).abs() < 1e-9, "{:?}", lit(0.));
+        assert!((lit(0.5).rgb.x - 1.).abs() < 1e-9, "{:?}", lit(0.5));
+    }
+
     #[test]
     fn test_noise_texture_perlin() {
         let base_material = Box::new(Lambertian { albedo: Color::white() });

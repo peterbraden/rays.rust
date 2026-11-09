@@ -1,9 +1,11 @@
 //! # Depth
 //!
 //! A depth buffer, or z-buffer, records for each pixel the distance to the nearest surface. In
-//! a rasteriser it is how visibility is resolved: Catmull's 1974 thesis, "A Subdivision
-//! Algorithm for Computer Display of Curved Surfaces" (University of Utah), keeps the nearest
-//! depth seen at each pixel. A ray tracer resolves visibility by finding the nearest hit along
+//! a rasteriser it is how visibility is resolved, keeping the nearest depth seen at each pixel.
+//! It is commonly credited to two 1974 PhD theses arrived at independently: Wolfgang Straßer's
+//! (TU Berlin), and Edwin Catmull's, "A Subdivision Algorithm for Computer Display of Curved
+//! Surfaces" (University of Utah, <https://collections.lib.utah.edu/details?id=2111909>).
+//! A ray tracer resolves visibility by finding the nearest hit along
 //! each ray, so here depth is a by-product, written out for compositing (fog, depth of field in
 //! post), for checking a scene's layout, and for debugging geometry.
 //!

@@ -54,6 +54,7 @@ mod shapes {
     pub mod cone;
     pub mod disc;
     pub mod algebraic;
+    pub mod polygon;
 }
 mod octree;
 mod scenegraph;

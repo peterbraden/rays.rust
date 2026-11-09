@@ -9,6 +9,7 @@ use crate::shapes::cone::Cone;
 use crate::shapes::disc::Disc;
 use crate::shapes::algebraic::{Algebraic, Term, Torus};
 use crate::shapes::bbox::BBox;
+use crate::shapes::polygon::{Outline, Polygon, Prism, Sweep};
 use serde_json::Value;
 
 type Shape = Box<dyn Geometry + Sync + Send>;
@@ -86,6 +87,25 @@ impl SceneFile {
             // {"type": "poly", "terms": [[c, i, j, k], ..]} for c x^i y^j z^k; "cubic" and
             // "quartic" are poly of order 3 and 4. Optionally clipped to "bounds".
             "poly" | "cubic" | "quartic" => Box::new(Algebraic::new(poly_terms(t, o), clip_box(o))),
+            // {"type": "polygon", "points": [[x, y, z], ..]}: coplanar points; a loop closes when
+            // its first point repeats, and loops inside others are holes.
+            "polygon" => Box::new(Polygon::new(&points3(o, "points"))),
+            // {"type": "prism", "height1": 0, "height2": 1, "points": [[x, z], ..],
+            //  "spline": "linear" | "bezier", "sweep": "linear" | "conic", "open": false}
+            "prism" => {
+                let points = points2(o, "points");
+                let outline = match o["spline"].as_str().unwrap_or("linear") {
+                    "linear" => Outline::from_points(&points),
+                    "bezier" => Outline::from_bezier(&points, SceneFile::parse_int(&o["steps"], 16)),
+                    s => panic!("prism spline must be \"linear\" or \"bezier\", got {}", s),
+                };
+                let sweep = match o["sweep"].as_str().unwrap_or("linear") {
+                    "linear" => Sweep::Linear,
+                    "conic" => Sweep::Conic,
+                    s => panic!("prism sweep must be \"linear\" or \"conic\", got {}", s),
+                };
+                Box::new(Prism::new(outline, num(o, "height1"), num(o, "height2"), sweep, flag(o, "open")))
+            },
             _ => return None,
         })
     }
@@ -159,6 +179,15 @@ mod tests {
         let p2 = shape(r#"{"type": "poly", "order": 2, "coefficients": [1, 0, 0, 0, 1, 0, 0, 1, 0, -1],
             "bounds": {"min": [-2, -2, -2], "max": [2, 2, 2]}}"#);
         assert!((hit_from(&p2, [0., 0., -5.], [0., 0., 1.]).unwrap() - 4.).abs() < 1e-7);
+    }
+
+    #[test]
+    fn test_flat_shapes() {
+        let p = shape(r#"{"type": "polygon", "points": [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]]}"#);
+        assert!((hit_from(&p, [0.5, 0.5, -5.], [0., 0., 1.]).unwrap() - 5.).abs() < 1e-9);
+        let pr = shape(r#"{"type": "prism", "height1": 0, "height2": 1, "sweep": "conic",
+            "points": [[-1, -1], [1, -1], [1, 1], [-1, 1]]}"#);
+        assert!((hit_from(&pr, [-5., 0.5, 0.], [1., 0., 0.]).unwrap() - 4.5).abs() < 1e-9);
     }
 
     #[test]

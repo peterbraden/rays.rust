@@ -33,7 +33,7 @@ where
     let rd = r.rd.normalize();
     let inv = Vector3::new(1. / rd.x, 1. / rd.y, 1. / rd.z);
     let (entry, exit) = bounds.entry_exit(&r.ro, &inv)?;
-    let start = entry.max(0.).min(FAR);
+    let start = entry.clamp(0., FAR);
     let end = exit.min(FAR);
     if end <= start {
         return None;

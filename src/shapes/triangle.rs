@@ -57,13 +57,25 @@ impl Triangle {
     }
 }
 
-const SMALL: f64 = 0.0000001;
-
 struct IntersectionPoint {
     dist: f64, 
     point: Vector3<f64>,
 }
 
+/// Möller and Trumbore's test, from Tomas Möller and Ben Trumbore, "Fast, Minimum Storage
+/// Ray-Triangle Intersection", Journal of Graphics Tools 2(1), 21-28, 1997,
+/// doi:10.1080/10867651.1997.10487468 (code: <https://fileadmin.cs.lth.se/cs/Personal/Tomas_Akenine-Moller/raytri/>).
+/// It solves O + tD = (1 - u - v) V0 + u V1 + v V2 for (t, u, v) by Cramer's rule, where the
+/// determinant is det = D . (E1 x E2), with edges E1 = V1 - V0 and E2 = V2 - V0.
+///
+/// det is zero when the ray is parallel to the triangle's plane. The paper's code treats
+/// |det| < EPSILON = 1e-6 as parallel, but det = |D| |E1 x E2| cos(theta): its size depends on
+/// the ray's length and the triangle's area as much as on the angle. A fixed threshold therefore
+/// rejects every small triangle (the Stanford dragon's triangles have |E1 x E2| near 1e-7 at
+/// their native scale) and every triangle met by a shortened ray, as under a scaling transform.
+/// We reject only det = 0, as PBR 4th ed. section 6.5.3 does with Woop, Benthin and Wald's
+/// watertight test (JCGT 2(1), 2013, <https://jcgt.org/published/0002/01/05/>): a near-parallel
+/// ray gives a large 1/det, and the u, v bounds then reject it unless it really grazes the triangle.
 fn intersects_dist(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>, r: &Ray) -> Option<IntersectionPoint> {
         let v0v1 = v1 - v0; 
         let v0v2 = v2 - v0; 
@@ -71,8 +83,7 @@ fn intersects_dist(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>, r: &Ray
         panic_if_nan(pvec);
         let det = v0v1.dot(&pvec); 
                      
-        // ray and triangle are parallel if det is close to 0
-        if det.abs() < SMALL { return None }; 
+        if det == 0. { return None };
 
         let inv_det = 1. / det; 
         let tvec = r.ro - v0; 
@@ -247,6 +258,29 @@ mod tests {
         // quarter-area corner (without the square root, half would).
         assert!((mean - Vector3::new(4. / 3., 2. / 3., 0.)).norm() < 0.03, "{}", mean);
         assert!((near_a as f64 / n as f64 - 0.25).abs() < 0.01, "{}", near_a);
+    }
+
+    #[test]
+    fn test_tiny_triangles_are_hit() {
+        // A triangle 1e-4 across, as in a scanned mesh at native scale: det = 2e-8 here, which
+        // a fixed threshold of 1e-7 rejected as parallel. And the same triangle 50x larger,
+        // met by a ray shortened 50x as a scaling transform does.
+        let s = 1e-4;
+        let t = Triangle::new(Vector3::new(-s, -s, 0.), Vector3::new(s, -s, 0.), Vector3::new(0., s, 0.));
+        let r = Ray { ro: Vector3::new(0., 0., -1.), rd: Vector3::new(0., 0., 1.) };
+        assert!((t.intersects(&r).expect("hit").dist - 1.).abs() < 1e-9);
+
+        let big = Triangle::new(t.v0 * 50., t.v1 * 50., t.v2 * 50.);
+        let short = Ray { ro: Vector3::new(0., 0., -50.), rd: Vector3::new(0., 0., 1. / 50.) };
+        assert!((big.intersects(&short).expect("hit").dist - 50.).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_parallel_ray_misses() {
+        let (v0, v1, v2) = tri_verts();
+        let t = Triangle::new(v0, v1, v2);
+        let r = Ray { ro: Vector3::new(-5., 0., 0.), rd: Vector3::new(1., 0., 0.) };
+        assert!(t.intersects(&r).is_none());
     }
 
     #[test]

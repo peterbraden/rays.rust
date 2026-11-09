@@ -686,15 +686,27 @@ impl SceneFile {
     }
 
     pub fn from_string(s: String) -> Scene {
-        let scene: SceneFile = serde_json::from_str(&s).unwrap();
+        SceneFile::from_string_sized(s, None, None)
+    }
+
+    /// Parse a scene, optionally overriding the image size. Overrides must be applied before
+    /// the camera is built, as it derives its aspect ratio from the image size.
+    pub fn from_string_sized(s: String, width: Option<usize>, height: Option<usize>) -> Scene {
+        let mut scene: SceneFile = serde_json::from_str(&s).unwrap();
+        if let Some(w) = width {
+            scene.width = Value::from(w);
+        }
+        if let Some(h) = height {
+            scene.height = Value::from(h);
+        }
         SceneFile::from_scenefile(scene)
     }
 
-    pub fn from_file(filename: &str) -> Scene {
+    pub fn from_file(filename: &str, width: Option<usize>, height: Option<usize>) -> Scene {
         let mut scenefile = File::open(filename).unwrap();
         let mut contents = String::new();
         scenefile.read_to_string(&mut contents).unwrap();
-        SceneFile::from_string(contents)
+        SceneFile::from_string_sized(contents, width, height)
     }
 }
 
@@ -703,13 +715,27 @@ mod tests {
     use super::*;
 
     fn minimal_scene(extra: &str) -> Scene {
-        SceneFile::from_string(format!(r#"{{
+        minimal_scene_sized(extra, None, None)
+    }
+
+    fn minimal_scene_sized(extra: &str, width: Option<usize>, height: Option<usize>) -> Scene {
+        SceneFile::from_string_sized(format!(r#"{{
             "width": 4, "height": 2, "chunk_size": 2, "supersamples": 1, "samples_per_chunk": 1,
             "shadow_bias": 0.5, "background": [0, 0, 0], "max_depth": 1,
             "camera": {{ "location": [0, 0, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }},
             "materials": {{}}, "media": {{}}, "lights": [], "objects": [], "variables": {{}}
             {}
-        }}"#, extra))
+        }}"#, extra), width, height)
+    }
+
+    #[test]
+    fn test_size_overrides() {
+        let s = minimal_scene("");
+        assert_eq!((s.image.width, s.image.height), (4, 2));
+        let s = minimal_scene_sized("", Some(40), None);
+        assert_eq!((s.image.width, s.image.height), (40, 2));
+        let s = minimal_scene_sized("", None, Some(30));
+        assert_eq!((s.image.width, s.image.height), (4, 30));
     }
 
     #[test]

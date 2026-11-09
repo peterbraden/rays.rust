@@ -515,7 +515,7 @@ impl SceneFile {
             _ => NoiseType::Perlin, // Default to Perlin
         };
         
-        match noise_type {
+        let texture = match noise_type {
             NoiseType::Perlin => {
                 NoiseTexture::new_perlin(
                     base_material,
@@ -562,7 +562,17 @@ impl SceneFile {
                     octaves,
                 )
             },
+        };
+        match SceneFile::parse_seed(o) {
+            Some(seed) => texture.seeded(seed),
+            None => texture,
         }
+    }
+
+    /// An object's optional `"seed"`, choosing its procedural pattern. Without one, noise uses
+    /// Perlin's reference table (and Worley seed 42), as before seeds existed.
+    pub fn parse_seed(o: &Value) -> Option<u64> {
+        o.get("seed").map(|s| SceneFile::parse_int(s, 0) as u64)
     }
 
     pub fn parse_medium_ref(key: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Option<Box<dyn Medium + Sync + Send>> {
@@ -702,6 +712,10 @@ impl SceneFile {
                         falloff,
                     )
                 },
+            };
+            let noise_medium = match SceneFile::parse_seed(o) {
+                Some(seed) => noise_medium.seeded(seed),
+                None => noise_medium,
             };
             
             return Some(Box::new(noise_medium));
@@ -857,6 +871,12 @@ mod tests {
             "materials": {{}}, "media": {{}}, "objects": [], "variables": {{}}
             {}
         }}"#, extra), width, height)
+    }
+
+    #[test]
+    fn test_parse_seed() {
+        assert_eq!(SceneFile::parse_seed(&serde_json::json!({ "type": "noise" })), None);
+        assert_eq!(SceneFile::parse_seed(&serde_json::json!({ "seed": 9 })), Some(9));
     }
 
     #[test]

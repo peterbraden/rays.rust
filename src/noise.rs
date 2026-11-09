@@ -5,6 +5,7 @@
 /// Used for creating procedural textures and patterns.
 
 use crate::na::Vector3;
+use crate::geometry::Pcg32;
 use std::f64;
 use std::f64::consts::PI;
 
@@ -40,6 +41,26 @@ impl PerlinNoise {
             222, 114, 67, 29, 24, 72, 243, 141, 128, 195, 78, 66, 215, 61, 156, 180,
         ];
         
+        Self::from_permutation(base_perm)
+    }
+
+    /// Create a Perlin noise generator whose permutation table is a shuffle chosen by `seed`.
+    /// The same seed always gives the same noise; `new()` keeps Perlin's reference table.
+    pub fn with_seed(seed: u64) -> Self {
+        let mut base_perm = [0usize; 256];
+        for (i, p) in base_perm.iter_mut().enumerate() {
+            *p = i;
+        }
+        // Fisher-Yates. The modulo bias over at most 256 values is below 1e-7.
+        let mut rng = Pcg32::new(seed, 0);
+        for i in (1 .. 256).rev() {
+            let j = rng.next_u32() as usize % (i + 1);
+            base_perm.swap(i, j);
+        }
+        Self::from_permutation(base_perm)
+    }
+
+    fn from_permutation(base_perm: [usize; 256]) -> Self {
         // Double permutation array
         let mut perm = [0; 512];
         perm[..256].copy_from_slice(&base_perm);
@@ -177,6 +198,11 @@ impl WorleyNoise {
     /// Create a new Worley noise generator
     pub fn new(point_density: f64, seed: u32) -> Self {
         Self { point_density, seed }
+    }
+
+    /// The same generator with a different seed.
+    pub fn reseeded(&self, seed: u32) -> Self {
+        Self { point_density: self.point_density, seed }
     }
     
     /// Get noise value at a 3D point
@@ -341,6 +367,34 @@ mod tests {
             seen[i] = true;
         }
         assert!(seen.iter().all(|s| *s), "unused gradients: {:?}", seen);
+    }
+
+    fn perlin_samples(perlin: &PerlinNoise) -> Vec<f64> {
+        (0..64).map(|i| perlin.noise(i as f64 * 0.37, i as f64 * 0.11, -(i as f64) * 0.23)).collect()
+    }
+
+    #[test]
+    fn test_seeded_perlin_is_reproducible() {
+        assert_eq!(perlin_samples(&PerlinNoise::with_seed(7)), perlin_samples(&PerlinNoise::with_seed(7)));
+        assert_ne!(perlin_samples(&PerlinNoise::with_seed(7)), perlin_samples(&PerlinNoise::with_seed(8)));
+        assert_ne!(perlin_samples(&PerlinNoise::with_seed(7)), perlin_samples(&PerlinNoise::new()));
+    }
+
+    #[test]
+    fn test_seeded_perlin_table_is_a_permutation() {
+        let perlin = PerlinNoise::with_seed(12345);
+        let mut seen = perlin.perm[..256].to_vec();
+        seen.sort();
+        assert_eq!(seen, (0..256).collect::<Vec<_>>());
+        assert_eq!(perlin.perm[..256], perlin.perm[256..]);
+    }
+
+    #[test]
+    fn test_seeded_perlin_range() {
+        let perlin = PerlinNoise::with_seed(3);
+        for v in perlin_samples(&perlin) {
+            assert!((-1.0..=1.0).contains(&v));
+        }
     }
 
     #[test]

@@ -19,7 +19,7 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, after_light_sampling: bool) -> (u6
 
     match closest {
         Some(x) => trace_intersection(r, x, depth, s, after_light_sampling),
-        None => (1, s.render.background),
+        None => (1, s.render.background.radiance(&r.rd)),
     }
 }
 

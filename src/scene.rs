@@ -28,7 +28,7 @@ pub struct ImageOpts {
 
 #[derive(Debug)]
 pub struct RenderOpts {
-    pub background: Color,
+    pub background: Background,
     pub max_depth: usize,
     pub shadow_bias: f64,
     pub supersamples: usize,
@@ -41,6 +41,31 @@ pub struct RenderOpts {
     /// Whether diffuse surfaces sample area lights directly (next-event estimation). Off, they
     /// are found only when a scattered ray happens to hit them: unbiased, but far noisier.
     pub sample_lights: bool,
+}
+
+/// What a ray that leaves the scene sees.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Background {
+    Solid(Color),
+    /// A blend from `bottom` (looking straight down) to `top` (straight up) by elevation:
+    /// a = (y + 1) / 2 for the unit direction's y, then (1 - a) bottom + a top. From Peter
+    /// Shirley, Trevor David Black and Steve Hollasch, "Ray Tracing in One Weekend", v4.0.2, 2025,
+    /// section "Sending Rays Into the Scene"
+    /// (<https://raytracing.github.io/books/RayTracingInOneWeekend.html>).
+    Gradient { bottom: Color, top: Color },
+}
+
+impl Background {
+    /// Radiance arriving from direction `rd`.
+    pub fn radiance(&self, rd: &Vector3<f64>) -> Color {
+        match self {
+            Background::Solid(c) => *c,
+            Background::Gradient { bottom, top } => {
+                let a = 0.5 * (rd.normalize().y + 1.);
+                *bottom * (1. - a) + *top * a
+            },
+        }
+    }
 }
 
 impl RenderOpts {

@@ -33,9 +33,34 @@ fetch() {
     echo "$name: $(ls "$dir" | grep -v archive.zip | tr '\n' ' ')"
 }
 
+# fetch_file NAME URL SHA256 FILENAME  -- download one file, verify it
+fetch_file() {
+    name=$1; url=$2; sha=$3; file=$4
+    dir="$DEST/$name"
+    mkdir -p "$dir"
+    if [ ! -f "$dir/$file" ]; then
+        echo "Downloading $name from $url"
+        curl -fsSL -o "$dir/$file.part" "$url"
+        mv "$dir/$file.part" "$dir/$file"
+    fi
+    actual=$(shasum -a 256 "$dir/$file" | cut -d' ' -f1)
+    if [ "$actual" != "$sha" ]; then
+        echo "Checksum mismatch for $name: expected $sha, got $actual" >&2
+        exit 1
+    fi
+    echo "$name: $file"
+}
+
 # Benedikt Bitterli, "Cornell Box" (CC0). The pbrt-v4 archive carries the Tungsten reference
 # render (linear half-float EXR, 1024x1024) and the pbrt scene our meshes were converted from.
 fetch cornell-box \
     https://benedikt-bitterli.me/resources/pbrt-v4/cornell-box.zip \
     3ac9dcd287f7079b23dbc9eaefe19e64c942c0ec3740b328e09d44c2163b835d \
     cornell-box/TungstenRender.exr cornell-box/scene-v4.pbrt cornell-box/LICENSE.txt
+
+# Peter Shirley, Trevor David Black, Steve Hollasch, "Ray Tracing in One Weekend" v4.0.2 (CC0):
+# the "view-distant" image, 400x225, gamma-2 encoded 8-bit PNG.
+fetch_file rtiow-view-distant \
+    https://raw.githubusercontent.com/RayTracing/raytracing.github.io/v4.0.2/images/img-1.20-view-distant.png \
+    039acbc2eabf254af24543aeaffd8cda6d504ab1e9c160eae2e2c2aa515e5017 \
+    img-1.20-view-distant.png

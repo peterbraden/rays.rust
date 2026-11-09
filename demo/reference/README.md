@@ -48,3 +48,37 @@ Without area-light sampling (#72), 1024 samples per pixel gave RMSE 0.0280 and F
 RMSE now barely falls with more samples: what remains is a systematic difference of about
 0.017, which the FLIP map places at the light's front and back edges, where a radiance of 17
 makes pixels sensitive to the reconstruction filter.
+
+## Ray Tracing in One Weekend: "view-distant"
+
+- Source: Peter Shirley, Trevor David Black, Steve Hollasch, "Ray Tracing in One Weekend",
+  v4.0.2, 2025, <https://raytracing.github.io/books/RayTracingInOneWeekend.html>, listing
+  "Scene with alternate viewpoint" and image `img-1.20-view-distant.png` (400x225, 100 samples
+  per pixel, gamma-2 encoded 8-bit PNG). CC0.
+- Scene (`rtiow-view-distant.json`), as in the listing: a ground sphere, a diffuse sphere, a
+  glass sphere (index 1.5) containing an air bubble (index 1/1.5, relative to the glass), and a
+  fuzzy metal sphere (fuzz 1.0); camera at (-2, 2, 1) looking at (0, 0, -1), vertical field of
+  view 90 degrees, so `angle` = atan(2 tan(45 degrees)) = atan(2); the book's white to
+  (0.5, 0.7, 1) gradient background; gamma-2 output.
+- Differences in the models, not the scene:
+  - Metal fuzz: the book adds a point on the unit sphere to the normalised reflection; we add
+    a point within the unit ball.
+  - Fresnel: the book's Schlick term uses the incident cosine on both sides; ours uses the
+    cosine on the less dense side (#39).
+  - Quantisation: the book truncates, int(256 clamp(v, 0, 0.999)); we round, round(255 v).
+
+```
+cargo run --release -- demo/reference/rtiow-view-distant.json -o rtiow.png --compare references/rtiow-view-distant/img-1.20-view-distant.png
+```
+
+Results (8-bit references are decoded to linear with the scene's transfer function):
+
+| Comparison | Exposure fit | RMSE | Mean FLIP |
+|---|---|---|---|
+| Ours against the book | 1.0018 | 0.0080 | 0.032 |
+| Ours with the book's metal fuzz and Fresnel term | 1.0021 | 0.0074 | 0.030 |
+| Ours against ours with another seed (noise floor) | 0.9999 | 0.0072 | 0.017 |
+
+RMSE is close to the noise floor of two 100-sample renders. The FLIP map shows the rest in the
+sky as banding, consistent with truncation against rounding, and on the glass and metal spheres,
+where the model differences above make up about 0.0015 of it.

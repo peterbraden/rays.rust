@@ -1,0 +1,142 @@
+{
+  "width": 400,
+  "height": 225,
+  "chunk_size": 64,
+  "supersamples": 100,
+  "samples_per_chunk": 2,
+  "max_depth": 50,
+  "path_termination": "black",
+  "background": {
+    "type": "gradient",
+    "bottom": [
+      1,
+      1,
+      1
+    ],
+    "top": [
+      0.5,
+      0.7,
+      1.0
+    ]
+  },
+  "output": {
+    "transfer": "gamma",
+    "gamma": 2.0
+  },
+  "camera": {
+    "location": [
+      -2,
+      2,
+      1
+    ],
+    "lookat": [
+      0,
+      0,
+      -1
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 1.1071487,
+    "aperture": 0
+  },
+  "materials": {
+    "ground": {
+      "type": "lambertian",
+      "albedo": [
+        0.8,
+        0.8,
+        0.0
+      ]
+    },
+    "center": {
+      "type": "lambertian",
+      "albedo": [
+        0.1,
+        0.2,
+        0.5
+      ]
+    },
+    "left": {
+      "type": "dielectric",
+      "refractive_index": 1.5,
+      "attenuate": [
+        1,
+        1,
+        1
+      ]
+    },
+    "bubble": {
+      "type": "dielectric",
+      "refractive_index": 0.6666666666666666,
+      "attenuate": [
+        1,
+        1,
+        1
+      ]
+    },
+    "right": {
+      "type": "metal",
+      "reflective": [
+        0.8,
+        0.6,
+        0.2
+      ],
+      "roughness": 1.0
+    }
+  },
+  "objects": [
+    {
+      "type": "sphere",
+      "location": [
+        0.0,
+        -100.5,
+        -1.0
+      ],
+      "radius": 100.0,
+      "material": "ground"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.0,
+        0.0,
+        -1.2
+      ],
+      "radius": 0.5,
+      "material": "center"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -1.0,
+        0.0,
+        -1.0
+      ],
+      "radius": 0.5,
+      "material": "left"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -1.0,
+        0.0,
+        -1.0
+      ],
+      "radius": 0.4,
+      "material": "bubble"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        1.0,
+        0.0,
+        -1.0
+      ],
+      "radius": 0.5,
+      "material": "right"
+    }
+  ]
+}

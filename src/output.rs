@@ -34,6 +34,9 @@ pub enum ToneMap {
 pub enum Transfer {
     Srgb,
     Linear,
+    /// v^(1/gamma). Gamma 2, a square root, is the approximation used by "Ray Tracing in One
+    /// Weekend" (v4.0.2, section "Using Gamma Correction for Accurate Color Intensity").
+    Gamma(f64),
 }
 
 /// How linear values are mapped for display, from the scene file's "output" block, eg.
@@ -75,7 +78,8 @@ impl OutputOpts {
             transfer: match o["transfer"].as_str() {
                 None | Some("srgb") => Transfer::Srgb,
                 Some("linear") => Transfer::Linear,
-                Some(x) => panic!("Unknown output transfer '{}': expected \"srgb\" or \"linear\"", x),
+                Some("gamma") => Transfer::Gamma(SceneFile::parse_number(&o["gamma"], 2.2)),
+                Some(x) => panic!("Unknown output transfer '{}': expected \"srgb\", \"linear\" or \"gamma\"", x),
             },
         }
     }
@@ -91,7 +95,18 @@ impl OutputOpts {
         match self.transfer {
             Transfer::Srgb => srgb_oetf(v),
             Transfer::Linear => v,
+            Transfer::Gamma(g) => v.powf(1. / g),
         }.clamp(0., 1.)
+    }
+
+    /// The inverse of the transfer function, for reading display-encoded (eg. 8-bit) images
+    /// back into linear light. Exposure and tone mapping aren't undone.
+    pub fn decode(&self, v: f64) -> f64 {
+        match self.transfer {
+            Transfer::Srgb => if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) },
+            Transfer::Linear => v,
+            Transfer::Gamma(g) => v.powf(g),
+        }
     }
 
     pub fn quantise(&self, c: Color) -> [u8; 3] {
@@ -152,6 +167,20 @@ pub fn read_linear(path: &str) -> Result<LinearImage, String> {
     Ok(LinearImage { width: img.width() as usize, height: img.height() as usize, pixels })
 }
 
+/// Read a reference image as linear light. EXR is already linear; 8-bit formats (PNG, JPEG)
+/// hold display-encoded values, which are decoded with `opts`' transfer function, so the
+/// reference should be encoded the way the scene's own output is.
+pub fn read_reference(path: &str, opts: &OutputOpts) -> Result<LinearImage, String> {
+    let mut img = read_linear(path)?;
+    let linear = Path::new(path).extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("exr")).unwrap_or(false);
+    if !linear {
+        for p in img.pixels.iter_mut() {
+            *p = Color::new(opts.decode(p.rgb.x), opts.decode(p.rgb.y), opts.decode(p.rgb.z));
+        }
+    }
+    Ok(img)
+}
+
 /// The writer for `path`'s file format.
 pub fn writer_for(path: &str, opts: OutputOpts) -> Result<Box<dyn ImageWriter>, String> {
     let ext = Path::new(path).extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
@@ -165,6 +194,17 @@ pub fn writer_for(path: &str, opts: OutputOpts) -> Result<Box<dyn ImageWriter>, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_gamma_transfer_and_decode() {
+        let o = OutputOpts { transfer: Transfer::Gamma(2.), ..OutputOpts::default() };
+        assert!((o.encode(0.25) - 0.5).abs() < 1e-12);
+        for opts in [o, OutputOpts::default(), OutputOpts { transfer: Transfer::Linear, ..OutputOpts::default() }] {
+            for v in [0., 0.001, 0.18, 0.5, 1.] {
+                assert!((opts.decode(opts.encode(v)) - v).abs() < 1e-9, "{:?} {}", opts.transfer, v);
+            }
+        }
+    }
 
     #[test]
     fn test_srgb_encoding() {

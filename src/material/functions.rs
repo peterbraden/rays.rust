@@ -123,14 +123,16 @@ pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) ->
     for light in &s.lights {
         let light_vec = light.position - intersection.point;
         let shadow_ray = Ray {ro: intersection.point, rd: light_vec.normalize()};
-        if !s.objects.occluded(&shadow_ray, light_vec.norm(), f64::MIN_POSITIVE) {
-            direct = direct + diffuse(albedo, intersection, &light_vec, light);
+        let transmitted = s.objects.transmittance(&shadow_ray, light_vec.norm(), f64::MIN_POSITIVE);
+        if transmitted > 0. {
+            direct = direct + diffuse(albedo, intersection, &light_vec, light) * transmitted;
         }
     }
     if let Some(sun) = &s.sun {
         let cos = sun.direction.dot(&intersection.normal);
-        if cos > 0. && sun.visible_from(&intersection.point, s) {
-            direct = direct + albedo * sun.irradiance * (cos / std::f64::consts::PI);
+        if cos > 0. {
+            let transmitted = sun.transmittance_from(&intersection.point, s);
+            direct = direct + albedo * sun.irradiance * (cos / std::f64::consts::PI * transmitted);
         }
     }
     if s.render.sample_lights {
@@ -195,11 +197,12 @@ pub fn sample_area_light_with(point: &Vector3<f64>, s: &Scene, response: impl Fn
     }
     // Stop the shadow ray just short of the light, which would otherwise block itself.
     let shadow_ray = Ray { ro: *point, rd: w };
-    if s.objects.occluded(&shadow_ray, d * (1. - 1e-6), f64::MIN_POSITIVE) {
+    let transmitted = s.objects.transmittance(&shadow_ray, d * (1. - 1e-6), f64::MIN_POSITIVE);
+    if transmitted == 0. {
         return Color::black();
     }
     let cos_y = n_y.dot(&-w).abs();
-    response * emitted * (cos_y / d2 * light.geometry.surface_area() * n as f64)
+    response * emitted * (transmitted * cos_y / d2 * light.geometry.surface_area() * n as f64)
 }
 
 /// Light reflected by a Lambertian surface from a point light, pbrt's convention: `intensity` is

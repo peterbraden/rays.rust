@@ -40,6 +40,10 @@ impl Geometry for SceneObject {
         self.geometry.is_stochastic()
     }
 
+    fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 {
+        self.geometry.transmittance(r, min, max)
+    }
+
     fn surface_area(&self) -> f64 {
         self.geometry.surface_area()
     }

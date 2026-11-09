@@ -24,10 +24,10 @@ pub struct Sun {
 pub const SUN_SHADOW_DISTANCE: f64 = 1e30;
 
 impl Sun {
-    /// Whether nothing blocks the sun from `point`. Through a participating medium this is
-    /// random, and true with probability equal to the transmittance.
-    pub fn visible_from(&self, point: &Vector3<f64>, s: &crate::scene::Scene) -> bool {
+    /// The fraction of sunlight reaching `point`: 0 behind anything solid, and partly through
+    /// participating media (an estimate; see `SceneGraph::transmittance`).
+    pub fn transmittance_from(&self, point: &Vector3<f64>, s: &crate::scene::Scene) -> f64 {
         let shadow_ray = crate::ray::Ray { ro: *point, rd: self.direction };
-        !s.objects.occluded(&shadow_ray, SUN_SHADOW_DISTANCE, f64::MIN_POSITIVE)
+        s.objects.transmittance(&shadow_ray, SUN_SHADOW_DISTANCE, f64::MIN_POSITIVE)
     }
 }

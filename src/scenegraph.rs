@@ -87,6 +87,30 @@ impl SceneGraph {
             })
     }
 
+    /// The fraction of light that gets along the ray between `min` and `max` (world distances):
+    /// 0 if anything solid is in the way, otherwise the product of the transmittances of the
+    /// participating media it crosses (`Geometry::transmittance`), which may be a random
+    /// estimate. For shadow rays, in place of `occluded` wherever media should cast soft,
+    /// partial shadows rather than all-or-nothing ones.
+    pub fn transmittance(&self, r: &Ray, max: f64, min: f64) -> f64 {
+        if self.tree.occluded(r, max, min) {
+            return 0.;
+        }
+        // Solid objects first: if one blocks the ray, the media needn't be tracked.
+        let (media, solid): (Vec<_>, Vec<_>) = self.infinite_items.iter().partition(|o| o.is_stochastic());
+        if solid.iter().any(|o| o.transmittance(r, min, max) == 0.) {
+            return 0.;
+        }
+        let mut t = 1.;
+        for o in media {
+            t *= o.transmittance(r, min, max);
+            if t == 0. {
+                break;
+            }
+        }
+        t
+    }
+
     pub fn nearest_raw_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(Arc<SceneObject>, RawIntersection)> { 
         let tree_results =self.tree.intersection(r, max, min);
         let infinites = self.naive_intersection_infinites(r, max, min);

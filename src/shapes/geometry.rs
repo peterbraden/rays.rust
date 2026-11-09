@@ -59,6 +59,14 @@ pub trait Geometry: Sync{
     // it out of its octree, which can list an object in several cells.
     fn is_stochastic(&self) -> bool { false }
 
+    // The fraction of light that passes through this object between `min` and `max` along the
+    // ray (world distances, like `intersects`' `dist`): 0 or 1 for solid objects - by default,
+    // whether it is hit there - and in between for participating media. A medium may return a
+    // random estimate, as long as its expectation is the true transmittance.
+    fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 {
+        if self.intersects_beyond(r, min).is_some_and(|x| x.dist >= min && x.dist < max) { 0. } else { 1. }
+    }
+
     // Surface area, for shapes that can be sampled as area lights; 0 for those that can't.
     fn surface_area(&self) -> f64 { 0. }
 

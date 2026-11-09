@@ -39,6 +39,9 @@ use crate::sceneobject::SceneObject;
 use crate::shapes::bbox::BBox;
 use crate::shapes::geometry::Geometry;
 
+/// Below this estimated transmittance, ratio tracking plays Russian roulette.
+const RATIO_TRACKING_ROULETTE: f64 = 0.3;
+
 /// The extinction coefficient through a volume: the chance of a collision per unit distance.
 pub trait DensityField: Sync + Send {
     fn density(&self, p: &Vector3<f64>) -> f64;
@@ -53,6 +56,12 @@ pub trait DensityField: Sync + Send {
     fn majorant_from(&self, _p: &Vector3<f64>, _d: &Vector3<f64>) -> (f64, f64) {
         (self.majorant(), f64::INFINITY)
     }
+
+    /// A lower bound on `density` everywhere in the volume (by default 0). Transmittance
+    /// through this much is computed exactly, and only the rest estimated.
+    fn minorant(&self) -> f64 {
+        0.
+    }
 }
 
 /// The same density throughout.
@@ -61,6 +70,7 @@ pub struct ConstantDensity(pub f64);
 impl DensityField for ConstantDensity {
     fn density(&self, _p: &Vector3<f64>) -> f64 { self.0 }
     fn majorant(&self) -> f64 { self.0 }
+    fn minorant(&self) -> f64 { self.0 }
 }
 
 /// Density from fractal Perlin noise: `max_density` where the noise is highest, falling to
@@ -136,6 +146,65 @@ impl Geometry for Volume {
         None
     }
 
+    /// Residual ratio tracking (Jan Novák, Andrew Selle and Wojciech Jarosz, "Residual Ratio
+    /// Tracking for Estimating Attenuation in Participating Media", ACM Transactions on
+    /// Graphics 33(6), SIGGRAPH Asia 2014).
+    ///
+    /// Ratio tracking takes the same tentative collisions as delta tracking, but rather than
+    /// stopping at the first real one, with probability σ(x) / σ̄, it carries on and multiplies
+    /// the estimate by the chance of the collision being null, 1 - σ(x) / σ̄. The expectation is
+    /// still the transmittance exp(-∫σ), but each estimate is a fraction rather than 0 or 1, so
+    /// shadows through media are far less noisy. Where the density reaches the majorant the
+    /// factor is 0, though, and through a homogeneous medium it is no better than 0 or 1.
+    ///
+    /// So, "residual": a constant lower bound σc (`DensityField::minorant`) is attenuated
+    /// exactly, exp(-σc L), and only the residual σ(x) - σc above it is tracked, against the
+    /// majorant σ̄ - σc. Homogeneous media need no tracking at all.
+    ///
+    /// The walk must cross the whole stretch rather than stopping at a collision; once the
+    /// estimate is small, Russian roulette ends most walks early (and doubles the survivors),
+    /// which stays unbiased.
+    fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 {
+        if self.density.majorant() <= 0. {
+            return 1.;
+        }
+        let d = r.rd.normalize();
+        let invrd = Vector3::new(1. / d.x, 1. / d.y, 1. / d.z);
+        let (entry, exit) = match self.bounds.entry_exit(&r.ro, &invrd) {
+            Some(x) => x,
+            None => return 1.,
+        };
+        let stop = exit.min(max);
+        let mut t = entry.max(min);
+        if t >= stop {
+            return 1.;
+        }
+        let control = self.density.minorant();
+        let mut transmitted = (-control * (stop - t)).exp();
+        while t < stop {
+            let (majorant, length) = self.density.majorant_from(&(r.ro + d * t), &d);
+            let end = (t + length.max(t.abs().max(1.) * 1e-12)).min(stop);
+            let residual = majorant - control;
+            if residual > 0. {
+                let step = -(1. - rand()).ln() / residual;
+                if t + step < end {
+                    t += step;
+                    transmitted *= 1. - (self.density.density(&(r.ro + d * t)) - control) / residual;
+                    if transmitted < RATIO_TRACKING_ROULETTE {
+                        // Survive with probability T / threshold, carrying the threshold.
+                        if rand() * RATIO_TRACKING_ROULETTE >= transmitted {
+                            return 0.;
+                        }
+                        transmitted = RATIO_TRACKING_ROULETTE;
+                    }
+                    continue;
+                }
+            }
+            t = end;
+        }
+        transmitted
+    }
+
     fn bounds(&self) -> BBox {
         self.bounds
     }
@@ -166,12 +235,11 @@ impl VolumeMaterial {
             let d = to_light.norm();
             let w = to_light / d;
             let shadow_ray = Ray { ro: *point, rd: w };
-            if !s.objects.occluded(&shadow_ray, d, f64::MIN_POSITIVE) {
-                direct = direct + light.color * (light.intensity * phase(&w) / (d * d));
-            }
+            let transmitted = s.objects.transmittance(&shadow_ray, d, f64::MIN_POSITIVE);
+            direct = direct + light.color * (light.intensity * phase(&w) / (d * d) * transmitted);
         }
-        if let Some(sun) = s.sun.as_ref().filter(|sun| sun.visible_from(point, s)) {
-            direct = direct + sun.irradiance * phase(&sun.direction);
+        if let Some(sun) = &s.sun {
+            direct = direct + sun.irradiance * (phase(&sun.direction) * sun.transmittance_from(point, s));
         }
         if s.render.sample_lights {
             direct = direct + sample_area_light_with(point, s, |w| Color::white() * phase(w));
@@ -260,11 +328,7 @@ mod tests {
         assert_eq!(transmitted(&v, 0.5, 0.5, 100), 1.);
     }
 
-    #[test]
-    fn test_delta_tracking_matches_optical_depth_of_noise() {
-        // Transmittance through varying density is exp(-∫σ); integrate σ finely along the ray
-        // and compare with the fraction of tracked rays that get through.
-        seed_rand(4, 0);
+    fn noise_volume() -> (Volume, f64) {
         let density = NoiseDensity {
             perlin: PerlinNoise::with_seed(9), max_density: 4., scale: 3., octaves: 4, threshold: 0.45,
         };
@@ -272,8 +336,54 @@ mod tests {
         let optical_depth: f64 = (0..steps).map(|i| {
             density.density(&Vector3::new((i as f64 + 0.5) / steps as f64, 0.37, 0.61))
         }).sum::<f64>() / steps as f64;
+        (Volume { bounds: unit_box(), density: Box::new(density) }, optical_depth)
+    }
+
+    #[test]
+    fn test_ratio_tracking_matches_optical_depth_with_less_noise() {
+        seed_rand(7, 0);
+        let (v, optical_depth) = noise_volume();
+        let expected = (-optical_depth).exp();
+        let r = Ray { ro: Vector3::new(-1., 0.37, 0.61), rd: Vector3::new(1., 0., 0.) };
+        let n = 40_000;
+        let ratio: Vec<f64> = (0..n).map(|_| v.transmittance(&r, 0., f64::INFINITY)).collect();
+        let mean = ratio.iter().sum::<f64>() / n as f64;
+        let var = ratio.iter().map(|t| (t - mean).powi(2)).sum::<f64>() / n as f64;
+        assert!((mean - expected).abs() < 0.005, "{} vs {}", mean, expected);
+        // A 0-or-1 estimate of the same mean has variance T(1 - T).
+        assert!(var < 0.5 * expected * (1. - expected), "variance {} vs {}", var, expected * (1. - expected));
+        assert!(ratio.iter().all(|t| (0. ..=1.).contains(t)));
+    }
+
+    #[test]
+    fn test_ratio_tracking_respects_min_and_max() {
+        seed_rand(8, 0);
+        let v = Volume { bounds: unit_box(), density: Box::new(ConstantDensity(2.)) };
+        let r = Ray { ro: Vector3::new(-1., 0.5, 0.5), rd: Vector3::new(1., 0., 0.) };
+        let n = 40_000;
+        // From 1.2 to 1.7 along the ray: half a unit of medium.
+        let mean = (0..n).map(|_| v.transmittance(&r, 1.2, 1.7)).sum::<f64>() / n as f64;
+        assert!((mean - (-1f64).exp()).abs() < 0.005, "{}", mean);
+        assert_eq!(v.transmittance(&r, 0., 0.9), 1.);
+    }
+
+    #[test]
+    fn test_homogeneous_transmittance_is_exact() {
+        // The constant density is its own minorant: nothing left to estimate.
+        let v = Volume { bounds: unit_box(), density: Box::new(ConstantDensity(2.)) };
+        let r = Ray { ro: Vector3::new(-1., 0.5, 0.5), rd: Vector3::new(1., 0., 0.) };
+        for _ in 0..10 {
+            assert!((v.transmittance(&r, 0., f64::INFINITY) - (-2f64).exp()).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_delta_tracking_matches_optical_depth_of_noise() {
+        // Transmittance through varying density is exp(-∫σ); integrate σ finely along the ray
+        // and compare with the fraction of tracked rays that get through.
+        seed_rand(4, 0);
+        let (v, optical_depth) = noise_volume();
         assert!(optical_depth > 0.2 && optical_depth < 3., "uninformative test: {}", optical_depth);
-        let v = Volume { bounds: unit_box(), density: Box::new(density) };
         let t = transmitted(&v, 0.37, 0.61, 40_000);
         assert!((t - (-optical_depth).exp()).abs() < 0.01, "{} vs {}", t, (-optical_depth).exp());
     }

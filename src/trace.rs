@@ -281,6 +281,22 @@ mod tests {
     }
 
     #[test]
+    fn test_media_cast_soft_shadows() {
+        // An absorbing slab, 0.5 thick and of density 2, between the floor and the sun overhead
+        // lets through e^-1 of the light: on average, and in a fraction of each sample rather
+        // than all or nothing.
+        crate::geometry::seed_rand(4, 4);
+        let slab = r#", { "type": "volume", "min": [-50, 3, -50], "max": [50, 3.5, 50], "density": 2, "albedo": [0, 0, 0] }"#;
+        let s = sunlit(r#"{ "direction": [0, 1, 0], "intensity": 1 }"#, slab);
+        let n = 20_000;
+        let v: Vec<f64> = (0..n).map(|_| trace_down(&s).rgb.x).collect();
+        let full = 0.5 / std::f64::consts::PI * 0.01f64.cos();
+        let mean = v.iter().sum::<f64>() / n as f64;
+        assert!((mean / full - (-1f64).exp()).abs() < 0.01, "{}", mean / full);
+        assert!(v.iter().any(|x| *x > 0.05 * full && *x < 0.95 * full), "only all-or-nothing shadows");
+    }
+
+    #[test]
     fn test_sun_follows_the_sky() {
         let at = |dir: &str| SceneFile::parse_sun(
             &serde_json::json!({ "intensity": 1 }),

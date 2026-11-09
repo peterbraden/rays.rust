@@ -1,7 +1,6 @@
 //! A layer of procedural clouds by the "Nubis" method: a density field for `volume::Volume`,
-//! after Andrew Schneider
-//! and Nathan Vos, "The Real-time Volumetric Cloudscapes of Horizon: Zero Dawn", Advances in
-//! Real-Time Rendering, SIGGRAPH 2015, and Schneider's "Nubis" follow-ups (Advances 2017,
+//! after Andrew Schneider and Nathan Vos, "The Real-time Volumetric Cloudscapes of Horizon: Zero
+//! Dawn", Advances in Real-Time Rendering, SIGGRAPH 2015, and Schneider's "Nubis" follow-ups (Advances 2017,
 //! 2022, 2023, <https://www.guerrilla-games.com/read/nubis-realtime-volumetric-cloudscapes-in-a-nutshell>).
 //!
 //! The density at a point is built up from cheap, large-scale terms to expensive, small-scale
@@ -492,6 +491,9 @@ mod tests {
         let n = 20_000;
         let through = (0..n).filter(|_| v.intersects(&r).map_or(true, |i| i.dist >= (to - from).norm())).count() as f64 / n as f64;
         assert!((through - (-optical_depth).exp()).abs() < 0.012, "{} vs {}", through, (-optical_depth).exp());
+        // And ratio tracking, for shadow rays.
+        let ratio = (0..n).map(|_| v.transmittance(&r, 0., (to - from).norm())).sum::<f64>() / n as f64;
+        assert!((ratio - (-optical_depth).exp()).abs() < 0.006, "{} vs {}", ratio, (-optical_depth).exp());
     }
 
     #[test]

@@ -60,6 +60,7 @@ mod shapes {
     pub mod blob;
     pub mod implicit;
     pub mod julia;
+    pub mod tessellated;
 }
 mod octree;
 mod scenegraph;

@@ -83,8 +83,11 @@ impl Mesh {
             triangles.append(&mut tris);
         }
 
-        //println!("# of triangles: {}", triangles.len());
+        Mesh::new(triangles)
+    }
 
+    /// A mesh of the given triangles.
+    pub fn new(triangles: Vec<Arc<Triangle>>) -> Mesh {
         let bounds = Mesh::bounds_of(&triangles);
         let tree = Octree::new(8, bounds, &triangles); 
         let mut total = 0.;
@@ -180,7 +183,11 @@ impl SmoothMesh {
         }
 
         println!("# of triangles: {}", triangles.len());
+        SmoothMesh::new(triangles)
+    }
 
+    /// A mesh of the given triangles, with normals at their corners.
+    pub fn new(triangles: Vec<Arc<SmoothTriangle>>) -> SmoothMesh {
         let bounds = SmoothMesh::bounds_of(&triangles);
         let tree = Octree::new(8, bounds, &triangles); 
         SmoothMesh {

@@ -15,6 +15,7 @@ use crate::shapes::sweep::{SphereSweep, SweepSpline};
 use crate::shapes::blob::{Blob, Component};
 use crate::shapes::implicit::{Container, Isosurface, Superellipsoid};
 use crate::shapes::julia::Julia;
+use crate::shapes::tessellated::{self, Heights};
 use crate::expr::Expr;
 use crate::na::Vector4;
 use serde_json::Value;
@@ -186,8 +187,50 @@ impl SceneFile {
                 Box::new(Julia::new(Vector4::new(c[0], c[1], c[2], c[3]), num_def(o, "slice", 0.),
                     SceneFile::parse_int(&o["max_iteration"], 20), num_def(o, "accuracy", 1e-4)))
             },
+            // {"type": "height_field", "src": "heights.png"} or
+            // {"type": "height_field", "function": "f(x, z)", "resolution": [w, d]}, with
+            // "smooth": false, "water_level": 0. Over the unit square in x and z, heights 0 to 1.
+            "height_field" => {
+                let heights = match (o["src"].as_str(), o["function"].as_str()) {
+                    (Some(src), _) => Heights::from_image(src),
+                    (None, Some(text)) => {
+                        let f = Expr::parse(text, &["x", "z"])
+                            .unwrap_or_else(|e| panic!("height_field function \"{}\": {}", text, e));
+                        let (w, d) = resolution(o, 128);
+                        Heights::from_function(&f, w + 1, d + 1)
+                    },
+                    _ => panic!("height_field needs an image \"src\" or a \"function\" of x and z"),
+                };
+                tessellated::height_field(&heights, flag(o, "smooth"), num_def(o, "water_level", 0.))
+            },
+            // {"type": "parametric", "x": "f(u, v)", "y": "..", "z": "..", "u": [u0, u1],
+            //  "v": [v0, v1], "resolution": [nu, nv]}
+            "parametric" => {
+                let f = |k: &str| {
+                    let text = o[k].as_str().unwrap_or_else(|| panic!("parametric needs \"{}\" as a function of u and v", k));
+                    Expr::parse(text, &["u", "v"]).unwrap_or_else(|e| panic!("parametric {} \"{}\": {}", k, text, e))
+                };
+                let (x, y, z) = (f("x"), f("y"), f("z"));
+                let range = |k: &str| {
+                    let r = SceneFile::parse_vec2_def(o, k, crate::na::Vector2::new(0., 1.));
+                    (r.x, r.y)
+                };
+                let (nu, nv) = resolution(o, 64);
+                Box::new(tessellated::parametric([&x, &y, &z], range("u"), range("v"), nu, nv))
+            },
+            // {"type": "bicubic_patch", "points": [16 points, 4 rows of 4], "steps": 16}
+            "bicubic_patch" => Box::new(tessellated::bicubic_patch(&points3(o, "points"), SceneFile::parse_int(&o["steps"], 16))),
             _ => return None,
         })
+    }
+}
+
+/// A grid size, [nu, nv], under "resolution".
+fn resolution(o: &Value, def: usize) -> (usize, usize) {
+    match o["resolution"].as_array() {
+        Some(a) if a.len() == 2 => (SceneFile::parse_int(&a[0], def), SceneFile::parse_int(&a[1], def)),
+        None => (def, def),
+        _ => panic!("{} \"resolution\" is [nu, nv], got {}", o["type"], o["resolution"]),
     }
 }
 
@@ -298,6 +341,18 @@ mod tests {
         assert!((hit_from(&s, [0., 0., -5.], [0., 0., 1.]).unwrap() - 4.).abs() < 1e-5);
         let j = shape(r#"{"type": "julia_fractal", "c": [0, 0, 0, 0], "max_iteration": 30, "accuracy": 1e-5}"#);
         assert!((hit_from(&j, [0., 0., -5.], [0., 0., 1.]).unwrap() - 4.).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_tessellated_shapes() {
+        let h = shape(r#"{"type": "height_field", "function": "0.5 * x", "resolution": [10, 10], "smooth": true}"#);
+        assert!((hit_from(&h, [0.43, 5., 0.47], [0., -1., 0.]).unwrap() - (5. - 0.215)).abs() < 1e-9);
+        let p = shape(r#"{"type": "parametric", "x": "u", "y": "0", "z": "v", "u": [-1, 1], "v": [-1, 1], "resolution": [4, 4]}"#);
+        assert!((hit_from(&p, [0.3, 5., 0.2], [0., -1., 0.]).unwrap() - 5.).abs() < 1e-9);
+        let b = shape(r#"{"type": "bicubic_patch", "steps": 4, "points": [
+            [0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0], [0, 0, 1], [1, 0, 1], [2, 0, 1], [3, 0, 1],
+            [0, 0, 2], [1, 0, 2], [2, 0, 2], [3, 0, 2], [0, 0, 3], [1, 0, 3], [2, 0, 3], [3, 0, 3]]}"#);
+        assert!((hit_from(&b, [1.3, 5., 2.2], [0., -1., 0.]).unwrap() - 5.).abs() < 1e-9);
     }
 
     #[test]

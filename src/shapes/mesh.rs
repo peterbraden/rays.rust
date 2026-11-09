@@ -32,10 +32,19 @@ use std::vec::Vec;
 use std::sync::Arc;
 use crate::octree::Octree;
 
+/// A mesh as stored in a file: vertex positions, optionally a normal per vertex, and triangles
+/// indexing them.
+#[derive(Debug)]
+pub struct IndexedMesh {
+    pub positions: Vec<Vector3<f64>>,
+    pub normals: Vec<Vector3<f64>>,
+    pub triangles: Vec<[usize; 3]>,
+}
+
 /// Load the models in an OBJ file as triangles, with positions and normals sharing one index.
 /// Lines and points are dropped. A missing or broken material library is ignored, as the
 /// materials are unused.
-fn load_models(pth: &str) -> Vec<tobj::Model> {
+fn load_obj(pth: &str) -> Vec<IndexedMesh> {
     let options = tobj::LoadOptions {
         single_index: true,
         triangulate: true,
@@ -44,7 +53,27 @@ fn load_models(pth: &str) -> Vec<tobj::Model> {
     };
     let (models, _materials) = tobj::load_obj(Path::new(pth), &options)
         .unwrap_or_else(|e| panic!("Failed to load mesh {}: {}", pth, e));
-    models
+    models.iter().map(|m| {
+        let positions = to_vectors(&m.mesh.positions);
+        let mut normals = to_vectors(&m.mesh.normals);
+        if normals.len() != positions.len() {
+            if !normals.is_empty() {
+                println!("!! [ Warning in OBJ parse ] {} lacks a normal for every vertex - using face normals", m.name);
+            }
+            normals.clear();
+        }
+        let triangles = m.mesh.indices.chunks(3).map(|i| [i[0] as usize, i[1] as usize, i[2] as usize]).collect();
+        IndexedMesh { positions, normals, triangles }
+    }).collect()
+}
+
+/// Load a mesh file: OBJ (`.obj`) or PLY (`.ply`, see `crate::shapes::ply`).
+fn load(pth: &str) -> Vec<IndexedMesh> {
+    if pth.to_lowercase().ends_with(".ply") {
+        vec![crate::shapes::ply::read(pth).unwrap_or_else(|e| panic!("Failed to load mesh {}", e))]
+    } else {
+        load_obj(pth)
+    }
 }
 
 fn to_vectors(v: &[f32]) -> Vec<Vector3<f64>> {
@@ -62,25 +91,14 @@ pub struct Mesh {
 
 // A simple triangle collection mesh. 
 impl Mesh {
-    pub fn from_obj(pth: String, scale: Vector3<f64>) -> Mesh {
-        let models = load_models(&pth);
-
+    /// Load an OBJ or PLY file, scaling it by `scale`.
+    pub fn from_file(pth: String, scale: Vector3<f64>) -> Mesh {
         let mut triangles = Vec::new();
-        for m in models.iter() {
-            let mesh = &m.mesh;
-            let positions: Vec<Vector3<f64>> = to_vectors(&mesh.positions)
-                .into_iter()
-                .map(|i| i.component_mul(&scale))
-                .collect();
-            let mut tris: Vec<Arc<Triangle>> = mesh.indices.chunks(3).map(|i| {
-                Arc::new(
-                    Triangle::new(
-                        positions[i[0] as usize],
-                        positions[i[1] as usize],
-                        positions[i[2] as usize])
-                    )
-            }).collect();
-            triangles.append(&mut tris);
+        for m in load(&pth) {
+            let positions: Vec<Vector3<f64>> = m.positions.iter().map(|p| p.component_mul(&scale)).collect();
+            triangles.extend(m.triangles.iter().map(|&[a, b, c]| {
+                Arc::new(Triangle::new(positions[a], positions[b], positions[c]))
+            }));
         }
 
         //println!("# of triangles: {}", triangles.len());
@@ -146,37 +164,23 @@ pub struct SmoothMesh {
 }
 
 impl SmoothMesh {
-    pub fn from_obj(pth: String, scale: Vector3<f64>) -> SmoothMesh {
-        let models = load_models(&pth);
-
+    /// Load an OBJ or PLY file, scaling it by `scale`. Meshes without a normal for every vertex
+    /// are shaded with face normals.
+    pub fn from_file(pth: String, scale: Vector3<f64>) -> SmoothMesh {
         let mut triangles = Vec::new();
-        for m in models.iter() {
-            let mesh = &m.mesh;
-            let positions: Vec<Vector3<f64>> = to_vectors(&mesh.positions)
-                .into_iter()
-                .map(|i| i.component_mul(&scale))
-                .collect();
+        for m in load(&pth) {
+            let positions: Vec<Vector3<f64>> = m.positions.iter().map(|p| p.component_mul(&scale)).collect();
             // Normals transform by the inverse of the scale.
-            let normals: Vec<Vector3<f64>> = to_vectors(&mesh.normals)
-                .into_iter()
-                .map(|n| n.component_div(&scale).normalize())
-                .collect();
-            let per_vertex_normals = normals.len() == positions.len();
-            if !per_vertex_normals {
-                println!("!! [ Warning in OBJ parse ] {} lacks a normal for every vertex - using face normals", m.name);
-            }
-
-            let mut tris: Vec<Arc<SmoothTriangle>> = mesh.indices.chunks(3).map(|i| {
-                let (a, b, c) = (i[0] as usize, i[1] as usize, i[2] as usize);
-                let (na, nb, nc) = if per_vertex_normals {
-                    (normals[a], normals[b], normals[c])
-                } else {
+            let normals: Vec<Vector3<f64>> = m.normals.iter().map(|n| n.component_div(&scale).normalize()).collect();
+            triangles.extend(m.triangles.iter().map(|&[a, b, c]| {
+                let (na, nb, nc) = if normals.is_empty() {
                     let n = Triangle::new(positions[a], positions[b], positions[c]).normal;
                     (n, n, n)
+                } else {
+                    (normals[a], normals[b], normals[c])
                 };
                 Arc::new(SmoothTriangle::new(positions[a], positions[b], positions[c], na, nb, nc))
-            }).collect();
-            triangles.append(&mut tris);
+            }));
         }
 
         println!("# of triangles: {}", triangles.len());
@@ -235,19 +239,28 @@ mod tests {
     #[test]
     fn test_line_elements_are_ignored() {
         let p = write_obj("lines.obj", &format!("{}f 1 2 3\nl 1 4\nf 2 4 3\n", QUAD));
-        assert_eq!(Mesh::from_obj(p, ONE).primitives(), 2);
+        assert_eq!(Mesh::from_file(p, ONE).primitives(), 2);
     }
 
     #[test]
     fn test_missing_material_library_is_ignored() {
         let p = write_obj("nomtl.obj", &format!("mtllib missing.mtl\n{}f 1 2 3\n", QUAD));
-        assert_eq!(Mesh::from_obj(p, ONE).primitives(), 1);
+        assert_eq!(Mesh::from_file(p, ONE).primitives(), 1);
+    }
+
+    #[test]
+    fn test_ply_files_load_by_extension() {
+        let p = write_obj("quad.PLY", "ply\nformat ascii 1.0\nelement vertex 4\nproperty float x\n\
+            property float y\nproperty float z\nelement face 1\nproperty list uchar int vertex_indices\n\
+            end_header\n0 0 0\n1 0 0\n1 1 0\n0 1 0\n4 0 1 2 3\n");
+        assert_eq!(Mesh::from_file(p.clone(), ONE).primitives(), 2);
+        assert_eq!(SmoothMesh::from_file(p, ONE).primitives(), 2);
     }
 
     #[test]
     fn test_smooth_mesh_with_partial_normals() {
         let p = write_obj("partial.obj", &format!("{}vn 0 0 1\nf 1//1 2//1 3//1\nf 2 4 3\n", QUAD));
-        assert_eq!(SmoothMesh::from_obj(p, ONE).primitives(), 2);
+        assert_eq!(SmoothMesh::from_file(p, ONE).primitives(), 2);
     }
 
     #[test]
@@ -255,7 +268,7 @@ mod tests {
         // A plane tilted 45 degrees about z, stretched 3x in y: its true normal is
         // (1, 1/3, 0) normalised.
         let p = write_obj("tilted.obj", "v 0 0 -1\nv 0 0 1\nv -1 1 0\nvn 1 1 0\nf 1//1 2//1 3//1\n");
-        let m = SmoothMesh::from_obj(p, Vector3::new(1., 3., 1.));
+        let m = SmoothMesh::from_file(p, Vector3::new(1., 3., 1.));
         let r = Ray { ro: Vector3::new(5., 1., 0.), rd: Vector3::new(-1., 0., 0.) };
         let n = m.intersects(&r).expect("hit").normal;
         assert!((n - Vector3::new(1., 1. / 3., 0.).normalize()).norm() < 1e-6, "{}", n);

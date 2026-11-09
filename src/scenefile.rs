@@ -43,6 +43,8 @@ pub struct SceneFile {
     pub samples_per_chunk: Value, 
     pub camera: Value, 
     pub shadow_bias: Value, 
+    #[serde(default)]
+    pub black_threshold: Value,
     pub background: Value,
     pub max_depth: Value,
     pub materials: Map<String, Value>,
@@ -678,7 +680,7 @@ impl SceneFile {
             lights: SceneFile::parse_lights(&s.lights),
             objects: o,
             max_bounding,
-            black_threshold: SceneFile::parse_number(&s.shadow_bias, 1e-7f64) ,
+            black_threshold: SceneFile::parse_number(&s.black_threshold, 1e-7f64),
             air_medium: SceneFile::parse_air(&s.air),
         }
     }
@@ -693,5 +695,26 @@ impl SceneFile {
         let mut contents = String::new();
         scenefile.read_to_string(&mut contents).unwrap();
         SceneFile::from_string(contents)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn minimal_scene(extra: &str) -> Scene {
+        SceneFile::from_string(format!(r#"{{
+            "width": 4, "height": 2, "chunk_size": 2, "supersamples": 1, "samples_per_chunk": 1,
+            "shadow_bias": 0.5, "background": [0, 0, 0], "max_depth": 1,
+            "camera": {{ "location": [0, 0, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }},
+            "materials": {{}}, "media": {{}}, "lights": [], "objects": [], "variables": {{}}
+            {}
+        }}"#, extra))
+    }
+
+    #[test]
+    fn test_black_threshold_independent_of_shadow_bias() {
+        assert_eq!(minimal_scene("").black_threshold, 1e-7);
+        assert_eq!(minimal_scene(r#", "black_threshold": 0.01"#).black_threshold, 0.01);
     }
 }

@@ -35,4 +35,12 @@ impl Geometry for SceneObject {
     fn bounds(&self) -> BBox {
         self.geometry.bounds()
     }
+
+    fn surface_area(&self) -> f64 {
+        self.geometry.surface_area()
+    }
+
+    fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> {
+        self.geometry.sample_surface(u)
+    }
 }

@@ -8,10 +8,17 @@ use std::f64;
 
 // Returns num rays cast, Color
 pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
+    trace_from(r, depth, s, false)
+}
+
+/// Trace a ray. `after_light_sampling` is set for a ray scattered from a surface that has just
+/// sampled the area lights directly; their emission is then already counted, and is ignored if
+/// this ray hits one.
+fn trace_from(r: &Ray, depth: u64, s: &Scene, after_light_sampling: bool) -> (u64, Color) {
     let closest = s.objects.nearest_intersection(r, f64::INFINITY, 0f64);
 
     match closest {
-        Some(x) => trace_intersection(r, x, depth, s),
+        Some(x) => trace_intersection(r, x, depth, s, after_light_sampling),
         None => (1, s.render.background),
     }
 }
@@ -30,8 +37,11 @@ fn continuation_weight(attenuate: &Color, depth: u64, s: &Scene) -> Option<f64> 
     }
 }
 
-fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene) -> (u64, Color){
+fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene, after_light_sampling: bool) -> (u64, Color){
     let mut cast = 1;
+    if after_light_sampling && s.is_sampled_light(&intersection.object) {
+        return (cast, Color::black());
+    }
     let material = intersection.object.medium.material_at(intersection.point);
     let interaction = material.scatter(r, intersection, s);
 
@@ -40,7 +50,7 @@ fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene) -> 
         None => Color::white(),
         Some(ray) => match continuation_weight(&interaction.attenuate, depth, s) {
             Some(w) => {
-                let (c, col) = trace(&ray, depth + 1, s);
+                let (c, col) = trace_from(&ray, depth + 1, s, interaction.sampled_lights);
                 cast += c;
                 col * w
             },
@@ -52,7 +62,7 @@ fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene) -> 
     (cast, interaction.emit + interaction.attenuate * incoming)
 }
 
-fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &Scene) -> (u64, Color) {
+fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &Scene, after_light_sampling: bool) -> (u64, Color) {
     // Shadow bias -> Move the origin of the intersection point along the normal, in case a
     // floating point error puts it slightly below the surface which would cause a sign flip
     // leading to shadow acne.
@@ -61,7 +71,7 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &S
     biased_intersection.point = intersection.point + (intersection.facing_normal(r) * scene.render.shadow_bias);
 
     let mut cast = 1;
-    let (c, o) = trace_sample(r, &biased_intersection, depth, scene);
+    let (c, o) = trace_sample(r, &biased_intersection, depth, scene, after_light_sampling);
     cast += c;
     (cast, o) 
 }
@@ -141,6 +151,50 @@ mod tests {
             "lights": [ {{ "location": [0, 0, 0], "intensity": 3.141592653589793 }} ],
             "objects": [ {{ "type": "sphere", "location": [0, 0, 0], "radius": 1, "material": "M" }} ]
         }}"#, max_depth))
+    }
+
+    /// A Lambertian floor of albedo 0.5 under a 2 x 2 square emitter of radiance 1, one unit
+    /// above, facing down. Black background, so all light comes from the emitter.
+    fn under_square_light(sample_lights: bool) -> Scene {
+        SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 1, "sample_lights": {},
+            "camera": {{ "location": [0, 0.5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "materials": {{
+                "F": {{ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }},
+                "L": {{ "type": "diffuse-light", "color": [1, 1, 1], "intensity": 1 }}
+            }},
+            "objects": [
+                {{ "type": "plane", "y": 0, "material": "F" }},
+                {{ "type": "triangle", "v0": [-1, 1, -1], "v1": [1, 1, -1], "v2": [1, 1, 1], "material": "L" }},
+                {{ "type": "triangle", "v0": [-1, 1, -1], "v1": [1, 1, 1], "v2": [-1, 1, 1], "material": "L" }}
+            ]
+        }}"#, sample_lights))
+    }
+
+    /// Mean and standard deviation of n samples of the radiance from the floor below the light.
+    fn floor_radiance(s: &Scene, n: usize) -> (f64, f64) {
+        let r = Ray { ro: Vector3::new(0., 0.5, 0.), rd: Vector3::new(0., -1., 0.) };
+        let v: Vec<f64> = (0..n).map(|_| trace(&r, 0, s).1.rgb.x).collect();
+        let mean = v.iter().sum::<f64>() / n as f64;
+        let var = v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64;
+        (mean, var.sqrt())
+    }
+
+    #[test]
+    fn test_area_light_sampling_is_unbiased() {
+        // The square subtends form factor F = 4 x 0.13853 from the point below its centre (four
+        // 1 x 1 rectangles at distance 1, each seen from beneath a corner), so the reflected
+        // radiance is albedo x L x F.
+        let corner: f64 = 1. / (2. * std::f64::consts::PI) * 2. * (0.5f64.sqrt() * (0.5f64.sqrt()).atan());
+        let expected = 0.5 * 4. * corner;
+        crate::geometry::seed_rand(1, 1);
+        let (sampled, sampled_sd) = floor_radiance(&under_square_light(true), 4000);
+        let (unsampled, unsampled_sd) = floor_radiance(&under_square_light(false), 20000);
+        assert!((sampled - expected).abs() < 0.005, "light sampling {} vs {}", sampled, expected);
+        assert!((unsampled - expected).abs() < 0.01, "without {} vs {}", unsampled, expected);
+        // Less noise, though only modestly for a light this large and close, where the geometry
+        // term varies a lot across it; the gain is largest for small lights.
+        assert!(sampled_sd < unsampled_sd * 0.75, "sd {} vs {}", sampled_sd, unsampled_sd);
     }
 
     #[test]

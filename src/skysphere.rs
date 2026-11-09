@@ -301,7 +301,7 @@ impl MaterialModel for SkyMaterial {
     fn scatter(&self, r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay {
         // Linear light; display encoding happens at output.
         let v = self.radiance(r) * SKY_CALIBRATION;
-        ScatteredRay { emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
+        ScatteredRay { sampled_lights: false, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
     }
 }
 

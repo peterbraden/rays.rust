@@ -13,7 +13,11 @@ impl MaterialModel for Lambertian {
         // Shade whichever side the ray hit.
         let intersection = &intersection.facing(r);
         // Direct light from point lights is emitted; the bounce gathers indirect light.
-        ScatteredRay { emit: direct_lighting(self.albedo, intersection, s), ..scatter_lambertian(self.albedo, intersection) }
+        ScatteredRay {
+            emit: direct_lighting(self.albedo, intersection, s),
+            sampled_lights: true,
+            ..scatter_lambertian(self.albedo, intersection)
+        }
     }
 }
 

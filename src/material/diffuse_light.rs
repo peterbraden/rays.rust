@@ -3,6 +3,7 @@ use crate::scene::Scene;
 use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::intersection::Intersection;
 use crate::ray::Ray;
+use crate::na::Vector3;
 
 /// An emitting surface with constant radiance `color * intensity`. By default it emits only
 /// from the side its normal faces, as pbrt's diffuse area lights do: a quad light under a
@@ -15,10 +16,15 @@ pub struct DiffuseLight {
 }
 
 impl MaterialModel for DiffuseLight {
+    fn is_emitter(&self) -> bool { true }
+
+    fn emitted(&self, normal: &Vector3<f64>, towards: &Vector3<f64>) -> Color {
+        if towards.dot(normal) > 0. || self.two_sided { self.color * self.intensity } else { Color::black() }
+    }
+
     fn scatter(&self, r: &Ray, intersection: &Intersection, _s: &Scene) -> ScatteredRay{
-        let front = r.rd.dot(&intersection.normal) < 0.;
-        let radiance = if front || self.two_sided { self.color * self.intensity } else { Color::black() };
-        ScatteredRay{ emit: Color::black(), 
+        let radiance = self.emitted(&intersection.normal, &-r.rd);
+        ScatteredRay{ sampled_lights: false, emit: Color::black(), 
             attenuate: radiance,
             ray: None }
     }
@@ -27,7 +33,6 @@ impl MaterialModel for DiffuseLight {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::na::Vector3;
     use crate::scenefile::SceneFile;
     use crate::sceneobject::SceneObject;
     use crate::shapes::plane::Plane;

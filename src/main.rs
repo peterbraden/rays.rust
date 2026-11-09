@@ -69,7 +69,7 @@ mod geometry;
 mod procedural {
     pub mod box_terrain;
     pub mod fireworks;
-    pub mod clouds;
+    pub mod nubis_clouds;
 }
 mod participatingmedia;
 mod noise;

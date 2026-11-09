@@ -1,4 +1,5 @@
-//! A layer of procedural clouds: a density field for `volume::Volume`, after Andrew Schneider
+//! A layer of procedural clouds by the "Nubis" method: a density field for `volume::Volume`,
+//! after Andrew Schneider
 //! and Nathan Vos, "The Real-time Volumetric Cloudscapes of Horizon: Zero Dawn", Advances in
 //! Real-Time Rendering, SIGGRAPH 2015, and Schneider's "Nubis" follow-ups (Advances 2017,
 //! 2022, 2023, <https://www.guerrilla-games.com/read/nubis-realtime-volumetric-cloudscapes-in-a-nutshell>).
@@ -198,7 +199,7 @@ fn worley_fbm(w: &WorleyTexture, p: &Vector3<f64>) -> f64 {
     0.625 * cell(*p) + 0.25 * cell(p * 2.) + 0.125 * cell(p * 4.)
 }
 
-pub struct CloudLayer {
+pub struct NubisCloudLayer {
     /// Heights of the bottom and top of the layer.
     pub base: f64,
     pub top: f64,
@@ -227,10 +228,10 @@ pub struct CloudLayer {
     cells: OnceLock<WorleyTexture>,
 }
 
-impl CloudLayer {
-    pub fn new(base: f64, top: f64, center: Vector2<f64>, extent: f64, seed: u64) -> CloudLayer {
+impl NubisCloudLayer {
+    pub fn new(base: f64, top: f64, center: Vector2<f64>, extent: f64, seed: u64) -> NubisCloudLayer {
         assert!(top > base, "The cloud layer's top ({}) must be above its base ({})", top, base);
-        CloudLayer {
+        NubisCloudLayer {
             base,
             top,
             max_density: 0.05,
@@ -321,7 +322,7 @@ impl CloudLayer {
     }
 }
 
-impl DensityField for CloudLayer {
+impl DensityField for NubisCloudLayer {
     fn density(&self, p: &Vector3<f64>) -> f64 {
         self.max_density * self.fraction(p)
     }
@@ -366,12 +367,12 @@ impl DensityField for CloudLayer {
 mod tests {
     use super::*;
 
-    fn layer(seed: u64) -> CloudLayer {
-        CloudLayer::new(1000., 2000., Vector2::new(12000., 12000.), 12500., seed)
+    fn layer(seed: u64) -> NubisCloudLayer {
+        NubisCloudLayer::new(1000., 2000., Vector2::new(12000., 12000.), 12500., seed)
     }
 
     /// Fraction of a grid of points through the layer, at `y`, that are cloud.
-    fn cover_at(l: &CloudLayer, y: f64) -> f64 {
+    fn cover_at(l: &NubisCloudLayer, y: f64) -> f64 {
         let n = 60;
         let mut cloudy = 0;
         for i in 0..n {
@@ -429,7 +430,7 @@ mod tests {
 
     #[test]
     fn test_clouds_depend_on_seed() {
-        let row = |l: CloudLayer| -> Vec<f64> {
+        let row = |l: NubisCloudLayer| -> Vec<f64> {
             (0..400).map(|i| l.fraction(&Vector3::new(i as f64 * 37., 1300., 0.))).collect()
         };
         let p = row(layer(5));
@@ -438,8 +439,8 @@ mod tests {
     }
 
     /// A small, thick-coverage patch of cloud, quick to build.
-    fn patch() -> CloudLayer {
-        let mut l = CloudLayer::new(1000., 2000., Vector2::new(500., -300.), 4000., 8);
+    fn patch() -> NubisCloudLayer {
+        let mut l = NubisCloudLayer::new(1000., 2000., Vector2::new(500., -300.), 4000., 8);
         l.coverage = 0.7;
         l.max_density = 0.002;
         l

@@ -1,7 +1,7 @@
 use crate::camera;
 use crate::na::Vector3;
 use crate::scenegraph::SceneGraph;
-use crate::light::Light;
+use crate::light::{Light, Sun};
 use crate::color::Color;
 use crate::shapes::bbox::BBox;
 use crate::participatingmedia::ParticipatingMedium;
@@ -127,6 +127,8 @@ pub struct Scene {
     /// Emitting objects whose surface can be sampled, for direct lighting (next-event
     /// estimation). The same `Arc`s as in `objects`, so a hit can be recognised as one of them.
     pub area_lights: Vec<Arc<SceneObject>>,
+    /// A directional light, sampled directly by diffuse surfaces and media.
+    pub sun: Option<Sun>,
 }
 
 impl Scene {

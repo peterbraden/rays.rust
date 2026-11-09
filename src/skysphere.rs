@@ -466,7 +466,43 @@ fn get_preset_by_name(name: &str) -> &SkyPreset {
 ///
 /// # Returns
 /// A SceneObject representing the sky sphere
+impl SkyMaterial {
+    pub fn sun_direction(&self) -> Vector3<f64> {
+        self.sun_direction
+    }
+
+    /// The fraction of sunlight (per colour channel) that reaches the ground, just above the
+    /// top of the earth, through the atmosphere: exp(-τ), with the same optical depths and
+    /// extinction as `scattering` uses for light reaching each point it samples. None of it
+    /// when the sun is below the horizon.
+    pub fn sun_transmittance(&self) -> Vector3<f64> {
+        let ground = self.earth.center + Vector3::new(0., self.earth.radius + 1., 0.);
+        match self.optical_depth_to_sun(ground) {
+            Some((r, m)) => {
+                let tau = self.rayleigh_coefficients * r + Vector3::repeat(self.mie_coefficient * 1.1 * m);
+                tau.map(|t| (-t).exp())
+            },
+            None => Vector3::zeros(),
+        }
+    }
+}
+
 pub fn create_sky_sphere(o: &Value) -> SceneObject {
+    let sky = parse_sky_material(o);
+    // The lookup table is on by default; "lut": false integrates every ray exactly.
+    let m: Box<dyn MaterialModel + Sync + Send> = if o["lut"].as_bool().unwrap_or(true) {
+        Box::new(LUTSky { sky, lut: std::sync::OnceLock::new() })
+    } else {
+        Box::new(sky)
+    };
+    SceneObject {
+        geometry: Box::new(Infinite {}),
+        medium: Box::new(Solid { m }),
+    }
+}
+
+/// The sky described by a `skysphere` object.
+pub fn parse_sky_material(o: &Value) -> SkyMaterial {
     let earth_location = SceneFile::parse_vec3_def(o, "earth_location", Vector3::new(0., -6360e3, 0.));
     
     // Handle preset or custom scattering parameters
@@ -491,7 +527,7 @@ pub fn create_sky_sphere(o: &Value) -> SceneObject {
     let rayleigh_thickness = SceneFile::parse_number(&o["rayleigh_thickness"], preset.rayleigh_thickness);
     let mie_thickness = SceneFile::parse_number(&o["mie_thickness"], preset.mie_thickness);
     
-    let sky = SkyMaterial {
+    SkyMaterial {
         earth: Sphere::new(
             earth_location,
             SceneFile::parse_number(&o["earth_radius"], 6360e3),
@@ -507,16 +543,6 @@ pub fn create_sky_sphere(o: &Value) -> SceneObject {
         rayleigh_coefficients,
         mie_coefficient,
         mie_anisotropy,
-    };
-    // The lookup table is on by default; "lut": false integrates every ray exactly.
-    let m: Box<dyn MaterialModel + Sync + Send> = if o["lut"].as_bool().unwrap_or(true) {
-        Box::new(LUTSky { sky, lut: std::sync::OnceLock::new() })
-    } else {
-        Box::new(sky)
-    };
-    SceneObject {
-        geometry: Box::new(Infinite {}),
-        medium: Box::new(Solid { m }),
     }
 }
 

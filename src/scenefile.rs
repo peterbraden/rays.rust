@@ -10,9 +10,9 @@ use crate::shapes::transform::{Transform};
 use crate::na::Rotation3;
 use crate::ocean::create_ocean;
 use crate::shapes::bbox::BBox;
-use crate::light::Light;
+use crate::light::{Light, Sun};
 use crate::color::Color;
-use crate::skysphere::create_sky_sphere;
+use crate::skysphere::{create_sky_sphere, parse_sky_material};
 use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
 use crate::participatingmedia::create_fog;
@@ -86,6 +86,8 @@ pub struct SceneFile {
     pub media: Map<String, Value>,
     #[serde(default)]
     pub lights: Vec<Value>,
+    #[serde(default)]
+    pub sun: Value,
     #[serde(default)]
     pub objects: Vec<Value>,
     #[serde(default)]
@@ -783,6 +785,34 @@ impl SceneFile {
         l
     }
 
+    /// The scene's directional light: `{"direction": [x, y, z], "color": colour, "intensity": E}`,
+    /// with irradiance `color` × `intensity` (defaults white and 1) on a surface facing it, and
+    /// `direction` pointing towards it. With a skysphere in `objects`, the sun is the sky's:
+    /// it takes the sky's `sun_direction` (so `direction` is not allowed) and is reddened by the
+    /// sky's atmosphere on its way to the ground, so it sets orange as the sky does.
+    pub fn parse_sun(v: &Value, objects: &[Value]) -> Option<Sun> {
+        if v.is_null() {
+            return None;
+        }
+        let irradiance = SceneFile::parse_color_def(v, "color", Color::white())
+            * SceneFile::parse_number(&v["intensity"], 1.);
+        match objects.iter().find(|o| o["type"].as_str() == Some("skysphere")) {
+            Some(sky) => {
+                assert!(v.get("direction").is_none(),
+                    "The sun follows the skysphere's sun_direction; remove the sun's \"direction\"");
+                let sky = parse_sky_material(sky);
+                let t = sky.sun_transmittance();
+                Some(Sun { direction: sky.sun_direction(), irradiance: irradiance * Color::new(t.x, t.y, t.z) })
+            },
+            None => {
+                let d = v.get("direction").map(SceneFile::parse_vec3)
+                    .expect("A sun without a skysphere needs a \"direction\"");
+                assert!(d.norm() > 0., "The sun's direction must not be zero");
+                Some(Sun { direction: d.normalize(), irradiance })
+            },
+        }
+    }
+
     /// A colour (black if absent), or `{"type": "gradient", "bottom": colour, "top": colour}`.
     pub fn parse_background(v: &Value) -> Background {
         match v {
@@ -814,6 +844,7 @@ impl SceneFile {
             Vector3::new(1000., 1000., 1000.),
         );
 
+        let sun = SceneFile::parse_sun(&s.sun, &s.objects);
         let objects = SceneFile::parse_objects(s.objects, &s.materials, &s.media);
         // Emitters with a surface we can sample become area lights.
         let area_lights: Vec<Arc<SceneObject>> = objects.iter()
@@ -851,6 +882,7 @@ impl SceneFile {
             air_medium: SceneFile::parse_air(&s.air),
             output: OutputOpts::parse(&s.output),
             area_lights,
+            sun,
         }
     }
 

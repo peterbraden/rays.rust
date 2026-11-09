@@ -28,7 +28,8 @@ use crate::color::Color;
 use crate::geometry::rand;
 use crate::intersection::{Intersection, RawIntersection};
 use crate::material::model::{MaterialModel, ScatteredRay};
-use crate::material::phase::sample_henyey_greenstein;
+use crate::material::functions::sample_area_light_with;
+use crate::material::phase::{henyey_greenstein, sample_henyey_greenstein};
 use crate::material::texture::Solid;
 use crate::na::Vector3;
 use crate::noise::PerlinNoise;
@@ -130,15 +131,46 @@ pub struct VolumeMaterial {
     pub g: f64,
 }
 
+impl VolumeMaterial {
+    /// Light from the scene's lights scattered at `point` towards the viewer, for light that
+    /// was travelling along `incoming` (a unit vector): each light's radiance times the phase
+    /// function at the angle between `incoming` and the direction to it, times the albedo.
+    /// Point lights and the sun are delta lights, which a scattered ray can never hit, so this
+    /// is the only way they reach a medium; area lights are sampled once, as at a surface.
+    fn direct_lighting(&self, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene) -> Color {
+        let phase = |w: &Vector3<f64>| henyey_greenstein(incoming.dot(w), self.g);
+        let mut direct = Color::black();
+        for light in &s.lights {
+            let to_light = light.position - point;
+            let d = to_light.norm();
+            let w = to_light / d;
+            let shadow_ray = Ray { ro: *point, rd: w };
+            if !s.objects.occluded(&shadow_ray, d, f64::MIN_POSITIVE) {
+                direct = direct + light.color * (light.intensity * phase(&w) / (d * d));
+            }
+        }
+        if let Some(sun) = s.sun.as_ref().filter(|sun| sun.visible_from(point, s)) {
+            direct = direct + sun.irradiance * phase(&sun.direction);
+        }
+        if s.render.sample_lights {
+            direct = direct + sample_area_light_with(point, s, |w| Color::white() * phase(w));
+        }
+        self.albedo * direct
+    }
+}
+
 impl MaterialModel for VolumeMaterial {
-    fn scatter(&self, r: &Ray, i: &Intersection, _s: &Scene) -> ScatteredRay {
-        let rd = sample_henyey_greenstein(&r.rd.normalize(), self.g, rand(), rand());
+    fn scatter(&self, r: &Ray, i: &Intersection, s: &Scene) -> ScatteredRay {
+        let incoming = r.rd.normalize();
+        let rd = sample_henyey_greenstein(&incoming, self.g, rand(), rand());
         ScatteredRay {
             ray: Some(Ray { ro: i.point, rd }),
             // The direction was drawn from the phase function itself, so phase / pdf = 1.
             attenuate: self.albedo,
-            emit: Color::black(),
-            sampled_lights: false,
+            emit: self.direct_lighting(&incoming, &i.point, s),
+            // Area lights were sampled above (when enabled); the trace skips them if the
+            // scattered ray hits one, so they aren't counted twice.
+            sampled_lights: true,
         }
     }
 }

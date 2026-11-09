@@ -248,6 +248,118 @@ mod tests {
         assert!((mean - (-1.2f64).exp()).abs() < 0.01, "{}", mean);
     }
 
+    /// A floor of albedo 0.5, `objects` besides it, and the sun `sun`; black background,
+    /// direct light only.
+    fn sunlit(sun: &str, objects: &str) -> Scene {
+        SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 0, "shadow_bias": 0.0001, "sun": {},
+            "camera": {{ "location": [0, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }},
+            "materials": {{ "M": {{ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }} }},
+            "objects": [ {{ "type": "plane", "y": 0, "material": "M" }} {} ]
+        }}"#, sun, objects))
+    }
+
+    #[test]
+    fn test_sun_lights_lambertian_by_cosine() {
+        // Irradiance 3 at 60 degrees from the normal: 0.5 / π × 3 × cos 60°.
+        let s = sunlit(r#"{ "direction": [0, 1, 1.7320508075688772], "intensity": 3 }"#, "");
+        let c = trace_down(&s);
+        assert!((c.rgb.x - 0.5 / std::f64::consts::PI * 3. * 0.5).abs() < 1e-9, "{:?}", c);
+        // From below the horizon it lights nothing.
+        let below = sunlit(r#"{ "direction": [0, -1, 0], "intensity": 3 }"#, "");
+        assert_eq!(trace_down(&below).rgb.x, 0.);
+    }
+
+    #[test]
+    fn test_sun_casts_shadows_but_not_from_the_sky() {
+        let ball = r#", { "type": "sphere", "location": [0, 5, 0], "radius": 1, "material": "M" }"#;
+        assert_eq!(trace_down(&sunlit(r#"{ "direction": [0, 1, 0] }"#, ball)).rgb.x, 0.);
+        // The skysphere reports every ray hitting it, infinitely far away; it mustn't block its
+        // own sun.
+        let sky = r#", { "type": "skysphere", "sun_direction": [0, 1, 0] }"#;
+        assert!(trace_down(&sunlit(r#"{ "intensity": 1 }"#, sky)).rgb.x > 0.1);
+    }
+
+    #[test]
+    fn test_sun_follows_the_sky() {
+        let at = |dir: &str| SceneFile::parse_sun(
+            &serde_json::json!({ "intensity": 1 }),
+            &[serde_json::from_str(&format!(r#"{{ "type": "skysphere", "sun_direction": {} }}"#, dir)).unwrap()],
+        ).unwrap();
+        let high = at("[0, 1, 0]");
+        let low = at("[0, 0.05, 1]");
+        assert!((high.direction - Vector3::new(0., 1., 0.)).norm() < 1e-12);
+        assert!((low.direction - Vector3::new(0., 0.05, 1.).normalize()).norm() < 1e-12);
+        // The atmosphere dims the sun, and dims a low sun more, and its blue most of all.
+        let [hr, hg, hb] = [high.irradiance.rgb.x, high.irradiance.rgb.y, high.irradiance.rgb.z];
+        let [lr, _, lb] = [low.irradiance.rgb.x, low.irradiance.rgb.y, low.irradiance.rgb.z];
+        assert!(hr < 1. && hb < hg && hg < hr, "{:?}", high);
+        assert!(lr < hr && lb / lr < hb / hr, "high {:?} low {:?}", high, low);
+        assert_eq!(at("[0, -1, 0]").irradiance, Color::black());
+    }
+
+    #[test]
+    #[should_panic(expected = "follows the skysphere")]
+    fn test_sun_direction_conflicts_with_sky() {
+        SceneFile::parse_sun(&serde_json::json!({ "direction": [0, 1, 0] }),
+            &[serde_json::json!({ "type": "skysphere" })]);
+    }
+
+    #[test]
+    fn test_single_scattering_of_sunlight_in_a_slab() {
+        // Looking straight down into a slab of depth 1, with the sun straight overhead. Light
+        // scattered at depth z has crossed z of medium from the sun and crosses z again to the
+        // eye; isotropic scattering sends 1/4π of it per steradian back up:
+        // L = a E / 4π ∫ σ e^(-2σz) dz = a E (1 - e^(-2σ)) / 8π.
+        crate::geometry::seed_rand(5, 1);
+        let (sigma, a, e): (f64, f64, f64) = (1.3, 0.8, 2.);
+        let s = SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 0, "shadow_bias": 0.0001,
+            "sun": {{ "direction": [0, 1, 0], "intensity": {} }},
+            "camera": {{ "location": [0, 5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "objects": [ {{ "type": "volume", "min": [-1000, 0, -1000], "max": [1000, 1, 1000],
+                           "density": {}, "albedo": [{a}, {a}, {a}] }} ]
+        }}"#, e, sigma, a = a));
+        let r = Ray { ro: Vector3::new(0., 5., 0.), rd: Vector3::new(0., -1., 0.) };
+        let n = 100_000;
+        let mean = (0..n).map(|_| trace(&r, 0, &s).1.rgb.x).sum::<f64>() / n as f64;
+        let expected = a * e * (1. - (-2. * sigma).exp()) / (8. * std::f64::consts::PI);
+        assert!((mean - expected).abs() < expected * 0.02, "{} vs {}", mean, expected);
+    }
+
+    /// Mean and standard deviation of n samples through a forward-scattering cube of medium
+    /// two units below a 1 x 1 square light, facing down. Paths end only by leaving the cube: at a
+    /// depth limit, sampling lights directly counts one more scattering than finding them by
+    /// chance does, so the two would differ.
+    fn medium_under_light(sample_lights: bool, n: usize) -> (f64, f64) {
+        let s = SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 100000, "sample_lights": {},
+            "camera": {{ "location": [0, 0.5, -3], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.5 }},
+            "materials": {{ "L": {{ "type": "diffuse-light", "color": [1, 1, 1], "intensity": 1 }} }},
+            "objects": [
+                {{ "type": "volume", "min": [-0.5, 0, -0.5], "max": [0.5, 0.9, 0.5], "density": 2, "g": 0.5 }},
+                {{ "type": "triangle", "v0": [-0.5, 3, -0.5], "v1": [0.5, 3, -0.5], "v2": [0.5, 3, 0.5], "material": "L" }},
+                {{ "type": "triangle", "v0": [-0.5, 3, -0.5], "v1": [0.5, 3, 0.5], "v2": [-0.5, 3, 0.5], "material": "L" }}
+            ]
+        }}"#, sample_lights));
+        let r = Ray { ro: Vector3::new(0., 0.4, -3.), rd: Vector3::new(0., 0., 1.) };
+        let v: Vec<f64> = (0..n).map(|_| trace(&r, 0, &s).1.rgb.x).collect();
+        let mean = v.iter().sum::<f64>() / n as f64;
+        let var = v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64;
+        (mean, var.sqrt())
+    }
+
+    #[test]
+    fn test_area_light_sampling_in_media_is_unbiased() {
+        crate::geometry::seed_rand(6, 1);
+        let n = 60_000;
+        let (sampled, sampled_sd) = medium_under_light(true, n);
+        let (unsampled, unsampled_sd) = medium_under_light(false, n);
+        let se = (sampled_sd.powi(2) / n as f64 + unsampled_sd.powi(2) / n as f64).sqrt();
+        assert!((sampled - unsampled).abs() < 4. * se, "{} vs {} (se {})", sampled, unsampled, se);
+        assert!(sampled_sd < unsampled_sd * 0.75, "sd {} vs {}", sampled_sd, unsampled_sd);
+    }
+
     #[test]
     fn test_furnace() {
         for (depth, expected) in [(0, 0.5), (1, 0.75), (10, 1. - 0.5f64.powi(11))] {

@@ -330,13 +330,13 @@ impl SceneFile {
     }
 
     pub fn parse_mesh(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        Box::new(Mesh::from_obj(
+        Box::new(Mesh::from_file(
                 SceneFile::parse_string(&o["src"]),
                 SceneFile::parse_vec3_def(o, "scale", Vector3::new(1., 1., 1.))))
     }
 
     pub fn parse_smoothmesh(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        Box::new(SmoothMesh::from_obj(
+        Box::new(SmoothMesh::from_file(
                 SceneFile::parse_string(&o["src"]),
                 SceneFile::parse_vec3_def(o, "scale", Vector3::new(1., 1., 1.))))
     }

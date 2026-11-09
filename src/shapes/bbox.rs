@@ -67,10 +67,11 @@ impl BBox {
         BBox {min: Point3::from(min), max: Point3::from(max)}
     }
 
-    pub fn min() -> BBox {
+    /// The identity for union: contains nothing, so the union of it with any box is that box.
+    pub fn empty() -> BBox {
         BBox::new(
-            Vector3::new(0., 0., 0.),
-            Vector3::new(0., 0., 0.)
+            Vector3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
+            Vector3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY)
         )
     }
 

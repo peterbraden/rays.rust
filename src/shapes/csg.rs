@@ -140,7 +140,7 @@ pub struct Union {
 impl Union {
     pub fn new (geometries: Vec<Box<dyn Geometry + Sync + Send>>) -> Union {
         let mut count = 0;
-        let mut bounds = BBox::min() ;
+        let mut bounds = BBox::empty();
         let primitives: Vec<Arc<Primitive>> = geometries.into_iter().map(|g| {
             count += 1;
             bounds = bounds.union(&g.bounds());
@@ -259,6 +259,14 @@ mod tests {
         let i = bitten_sphere().intersects(&Ray { ro, rd }).expect("expected a hit");
         assert!((i.dist - dist).abs() < 1e-6, "dist {} != {}", i.dist, dist);
         assert!((i.normal - normal).norm() < 1e-6, "normal {} != {}", i.normal, normal);
+    }
+
+    #[test]
+    fn test_union_bounds_do_not_include_origin() {
+        let far = |c: f64| -> Box<dyn Geometry + Sync + Send> { Box::new(Sphere::new(Vector3::new(c, c, c), 1.)) };
+        let u = Union::new(vec![far(500.), far(503.)]);
+        assert_eq!(u.bounds().min.coords, Vector3::new(499., 499., 499.));
+        assert_eq!(u.bounds().max.coords, Vector3::new(504., 504., 504.));
     }
 
     #[test]

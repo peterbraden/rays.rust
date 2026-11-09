@@ -4,6 +4,11 @@
 Every shape modelled on POV-Ray's (see the [shape reference](../docs/shapes.md)).
 ![Shapes](./scenes/shapes.png)
 
+## CSG
+Shapes combined: union, merge, intersection, difference and clipping (see the
+[shape reference](../docs/shapes.md#combining-shapes-csg)).
+![CSG](./scenes/csg.png)
+
 ## Spheres
 Spheres demonstrating 3 different materials.
 ![Spheres](./scenes/spheres.png)

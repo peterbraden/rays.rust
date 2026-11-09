@@ -1,0 +1,439 @@
+{
+  "width": 960,
+  "height": 540,
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 4,
+  "shadow_bias": 0.0001,
+  "max_depth": 8,
+  "background": {
+    "type": "gradient",
+    "bottom": [
+      0.9,
+      0.9,
+      0.9
+    ],
+    "top": [
+      0.45,
+      0.6,
+      0.85
+    ]
+  },
+  "materials": {
+    "FLOOR": {
+      "type": "lambertian",
+      "albedo": [
+        0.7,
+        0.7,
+        0.7
+      ]
+    },
+    "LIGHT": {
+      "type": "diffuse-light",
+      "color": [
+        1,
+        1,
+        1
+      ],
+      "intensity": 6
+    },
+    "WHITE": {
+      "type": "lambertian",
+      "albedo": [
+        0.85,
+        0.85,
+        0.85
+      ]
+    },
+    "RED": {
+      "type": "lambertian",
+      "albedo": [
+        0.8,
+        0.15,
+        0.12
+      ]
+    },
+    "GREEN": {
+      "type": "lambertian",
+      "albedo": [
+        0.2,
+        0.65,
+        0.25
+      ]
+    },
+    "BLUE": {
+      "type": "lambertian",
+      "albedo": [
+        0.15,
+        0.35,
+        0.8
+      ]
+    },
+    "ORANGE": {
+      "type": "lambertian",
+      "albedo": [
+        0.9,
+        0.45,
+        0.1
+      ]
+    },
+    "PURPLE": {
+      "type": "lambertian",
+      "albedo": [
+        0.55,
+        0.25,
+        0.7
+      ]
+    },
+    "TEAL": {
+      "type": "lambertian",
+      "albedo": [
+        0.1,
+        0.6,
+        0.6
+      ]
+    },
+    "GLASS": {
+      "type": "dielectric",
+      "refractive_index": 1.5,
+      "attenuate": [
+        1,
+        1,
+        1
+      ]
+    },
+    "GOLD": {
+      "type": "metal",
+      "reflective": [
+        1,
+        0.8,
+        0.45
+      ],
+      "roughness": 0.05
+    }
+  },
+  "media": {},
+  "camera": {
+    "location": [
+      0,
+      7,
+      -9
+    ],
+    "lookat": [
+      0,
+      0.8,
+      1.5
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.6,
+    "aperture": 0
+  },
+  "lights": [],
+  "variables": {},
+  "objects": [
+    {
+      "type": "plane",
+      "y": 0,
+      "material": "FLOOR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -12,
+        30,
+        -14
+      ],
+      "radius": 7,
+      "material": "LIGHT"
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "difference",
+        "items": [
+          {
+            "type": "intersection",
+            "items": [
+              {
+                "type": "box",
+                "min": [
+                  -1,
+                  -1,
+                  -1
+                ],
+                "max": [
+                  1,
+                  1,
+                  1
+                ]
+              },
+              {
+                "type": "sphere",
+                "location": [
+                  0,
+                  0,
+                  0
+                ],
+                "radius": 1.35
+              }
+            ]
+          },
+          {
+            "type": "cylinder",
+            "base": [
+              -2,
+              0,
+              0
+            ],
+            "cap": [
+              2,
+              0,
+              0
+            ],
+            "radius": 0.6,
+            "material": "RED"
+          },
+          {
+            "type": "cylinder",
+            "base": [
+              0,
+              -2,
+              0
+            ],
+            "cap": [
+              0,
+              2,
+              0
+            ],
+            "radius": 0.6,
+            "material": "GREEN"
+          },
+          {
+            "type": "cylinder",
+            "base": [
+              0,
+              0,
+              -2
+            ],
+            "cap": [
+              0,
+              0,
+              2
+            ],
+            "radius": 0.6,
+            "material": "BLUE"
+          }
+        ]
+      },
+      "translate": [
+        4.5,
+        1.35,
+        0
+      ],
+      "rotate": {
+        "pitch": -35,
+        "roll": -25
+      },
+      "material": "WHITE"
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "union",
+        "items": [
+          {
+            "type": "sphere",
+            "location": [
+              -0.45,
+              0,
+              0
+            ],
+            "radius": 0.8
+          },
+          {
+            "type": "sphere",
+            "location": [
+              0.45,
+              0,
+              0
+            ],
+            "radius": 0.8
+          }
+        ]
+      },
+      "translate": [
+        0.9,
+        0.8,
+        -0.4
+      ],
+      "material": "GLASS"
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "merge",
+        "items": [
+          {
+            "type": "sphere",
+            "location": [
+              -0.45,
+              0,
+              0
+            ],
+            "radius": 0.8
+          },
+          {
+            "type": "sphere",
+            "location": [
+              0.45,
+              0,
+              0
+            ],
+            "radius": 0.8
+          }
+        ]
+      },
+      "translate": [
+        -1.6,
+        0.8,
+        -0.4
+      ],
+      "material": "GLASS"
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "difference",
+        "items": [
+          {
+            "type": "torus",
+            "major": 0.9,
+            "minor": 0.35
+          },
+          {
+            "type": "box",
+            "min": [
+              -0.2,
+              -1,
+              -2
+            ],
+            "max": [
+              2,
+              1,
+              0.2
+            ],
+            "material": "ORANGE"
+          }
+        ]
+      },
+      "translate": [
+        -4.7,
+        0.85,
+        0.2
+      ],
+      "rotate": {
+        "roll": -70,
+        "pitch": 150
+      },
+      "material": "PURPLE"
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "intersection",
+        "items": [
+          {
+            "type": "sphere",
+            "location": [
+              0,
+              0,
+              -0.7
+            ],
+            "radius": 1
+          },
+          {
+            "type": "sphere",
+            "location": [
+              0,
+              0,
+              0.7
+            ],
+            "radius": 1
+          }
+        ]
+      },
+      "translate": [
+        2.2,
+        0.75,
+        3.2
+      ],
+      "rotate": {
+        "pitch": 20
+      },
+      "material": "GLASS"
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "sphere",
+        "location": [
+          0,
+          0,
+          0
+        ],
+        "radius": 1,
+        "clipped_by": {
+          "type": "plane",
+          "normal": [
+            0,
+            1,
+            0
+          ],
+          "distance": 0.3
+        }
+      },
+      "translate": [
+        -1.0,
+        1.0,
+        3.4
+      ],
+      "material": "GOLD"
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "intersection",
+        "items": [
+          {
+            "type": "sphere",
+            "location": [
+              0,
+              0,
+              0
+            ],
+            "radius": 1
+          },
+          {
+            "type": "plane",
+            "normal": [
+              0.3,
+              -1,
+              0.2
+            ],
+            "distance": 0.1
+          }
+        ]
+      },
+      "translate": [
+        -4.0,
+        0.9,
+        3.6
+      ],
+      "material": "TEAL"
+    }
+  ]
+}

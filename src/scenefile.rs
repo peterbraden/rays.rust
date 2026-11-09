@@ -409,6 +409,7 @@ impl SceneFile {
             let d:DiffuseLight = DiffuseLight {
                 intensity: SceneFile::parse_number(&o["intensity"], 1.),
                 color:SceneFile::parse_color(&o["color"]), 
+                two_sided: o["two_sided"].as_bool().unwrap_or(false),
             };
             return Some(Box::new(d));
         }

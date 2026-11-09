@@ -155,7 +155,7 @@ material, area light), Stanford meshes (performance), SPD (qualitative).
 Goal: find low-cost speed-ups. A profiling pass should come first, as the renders currently
 running in the background would distort any measurement now.
 
-### Known candidates (from the code reviews; not yet measured)
+### Candidates from the code reviews (before measuring)
 
 - Sky: every ray that escapes integrates atmospheric scattering numerically (16 view samples x 8
   light samples, `skysphere.rs`). The sky depends only on direction, so it could be precomputed
@@ -176,12 +176,42 @@ running in the background would distort any measurement now.
 - Everything is `f64`. `f32` halves memory traffic but risks precision problems in large scenes
   such as the ocean and sky, which use planet-scale coordinates.
 
-### Plan
+### Measured (Instruments Time Profiler, Apple M2, release build with symbols, at #64)
 
-- Build a benchmark set (smoke test, a mesh scene, an ocean scene, a sky scene) and record
-  timings and rays per second at a fixed seed.
-- Profile with `cargo flamegraph` or Instruments to rank the candidates above by measured cost.
-- Take the cheapest wins first: sky lookup table, octree early exit and allocation removal.
+Benchmarks are scaled-down copies of demo scenes; render time excludes scene loading.
+
+| Scene | Size, samples | Render | Rays/s |
+|---|---|---|---|
+| smoke (mesh, box terrain, sky, lights) | 400x200, 8 | 3.2 s | 0.8M |
+| spheres | 320x240, 36 | 1.28 s | 7.7M |
+| sky | 400x166, 50 | 1.45 s | 7.2M |
+| ocean (`fourier_size` 256) | 240x100, 16 | 3.0-4.1 s | 0.22-0.29M |
+| fireworks | 200x200, 16 | 1.8-2.1 s | 3.2-3.8M |
+
+Where the time goes:
+
+- Octree candidate collection (`OctreeNode::naive_intersection`) is 85% of the smoke test and
+  79% of the ocean, inclusive. It allocates, clones and flattens a `Vec` per node, collects
+  every leaf along the whole ray, then sorts and deduplicates; allocation and copying alone are
+  20-25% of samples. The triangle tests themselves are about 1%.
+- In the sky scene, `exp` is 63% of samples: the atmospheric integral (16 x 8 samples per
+  escaped ray).
+- Direct-lighting shadow rays are 36% of the smoke test; they use the full nearest-hit search,
+  where an any-hit occlusion query would do.
+- Ocean scene loading is about 8% of its run (the tile build, including four unused FFTs);
+  `Arc` clone and drop per hit is about 6% of the sky scene.
+
+### Candidate changes, by measured payoff (each needs its reading first)
+
+1. Octree traversal without allocation, front to back, stopping at the nearest hit; or a BVH
+   (reading: Glassner 1984; Revelles et al., "An Efficient Parametric Algorithm for Octree
+   Traversal", 2000, which `octree.rs` has a broken, commented-out attempt at; Goldsmith and
+   Salmon 1987; MacDonald and Booth 1990).
+2. Sky lookup table (reading: Nishita et al. 1993; Bruneton and Neyret, "Precomputed
+   Atmospheric Scattering", 2008; Hillaire, "A Scalable and Production Ready Sky and Atmosphere
+   Rendering Technique", 2020).
+3. Any-hit occlusion queries for shadow rays.
+4. Skip the unused slope FFTs in the ocean build; avoid the `Arc` clone per hit.
 
 ### Reading (candidates, unverified)
 

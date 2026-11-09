@@ -1,0 +1,7 @@
+# LeftWall, converted from scene-v4.pbrt by pbrt_trianglemesh_to_obj.py
+v -1.0 0.0 1.0
+v -1.0 2.0 1.0
+v -1.0 2.0 -1.0
+v -1.0 0.0 -1.0
+f 1 2 3
+f 1 3 4

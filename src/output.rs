@@ -213,6 +213,20 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs scripts/fetch-references.sh"]
+    fn test_reads_reference_exr() {
+        // Bitterli's Cornell box reference: half-float, PIZ-compressed, from Tungsten.
+        let img = read_linear("references/cornell-box/TungstenRender.exr").unwrap();
+        assert_eq!((img.width, img.height), (1024, 1024));
+        let mean = img.pixels.iter().map(|c| c.rgb.sum() / 3.).sum::<f64>() / img.pixels.len() as f64;
+        assert!(mean > 0.05 && mean < 5., "mean {}", mean);
+        // The light (radiance 17, 12, 4) is far brighter than 1: the file is linear, not
+        // tone-mapped.
+        let brightest = img.pixels.iter().map(|c| c.rgb.x).fold(0., f64::max);
+        assert!((brightest - 17.).abs() < 0.5, "brightest red {}", brightest);
+    }
+
+    #[test]
     fn test_exr_round_trip_keeps_linear_values() {
         // Values a PNG couldn't hold: above 1, and finer than 1/255.
         let pixels = vec![Color::new(0.001, 0.5, 17.), Color::new(4., 0.25, 1e-6)];

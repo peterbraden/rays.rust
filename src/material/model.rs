@@ -32,15 +32,17 @@ pub trait MaterialModel: Sync{
 }
 
 /// The outgoing ray, and the weight to assign the color of the traced ray.
-/// - Attenuate: the scaling of the subsequent reflections/refractions
+/// The resulting colour is `emit + attenuate * incoming`, where incoming is:
 /// - Option<Ray>:
-///     Some: Another ray to cast into the image, multiply by attenuate
-///     None: Return attenuate (attenuate the background color)
+///     Some: the colour traced along the ray
+///     None: white, ie. attenuate is the final colour
+/// - Emit: light leaving the surface independent of the outgoing ray (eg. direct lighting)
 ///
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScatteredRay {
     pub ray: Option<Ray>,
-    pub attenuate: Color
+    pub attenuate: Color,
+    pub emit: Color,
 }
 
 /// Some material models use a direct ray to the light sources to calculate a scatter.

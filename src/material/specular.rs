@@ -20,7 +20,7 @@ impl MaterialModel for Specular {
             rd: reflect(r.rd, intersection.normal) + fuzz
         };
 
-        ScatteredRay{ attenuate:self.albedo, ray: Some(refl) }
+        ScatteredRay{ emit: Color::black(), attenuate:self.albedo, ray: Some(refl) }
     }
 }
 

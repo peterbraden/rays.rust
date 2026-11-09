@@ -444,7 +444,7 @@ impl MaterialModel for OceanMaterial {
                     // 90degrees down
                     let deep_angle = 1. / (refracted.dot(&Vector3::new(0., 1., 0.)).acos() * 0.8);
 
-					return ScatteredRay{
+					return ScatteredRay{ emit: Color::black(),
 						attenuate: self.deep_color * deep_angle,
 						ray: None, // Don't try and refract
 					};
@@ -457,7 +457,7 @@ impl MaterialModel for OceanMaterial {
 		}
 
 		let reflected = reflect(r.rd, intersection.normal);
-		ScatteredRay {
+		ScatteredRay { emit: Color::black(),
 			attenuate: Color::white(),
 			ray: Some(Ray {
 				ro: intersection.point,

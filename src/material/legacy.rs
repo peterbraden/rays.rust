@@ -32,9 +32,9 @@ impl MaterialModel for Whitted {
                 ro: intersection.point,
                 rd: reflect(r.rd, intersection.normal)
             };
-            return ScatteredRay{ attenuate: out * self.reflection, ray: Some(refl) };
+            return ScatteredRay{ emit: out, attenuate: Color::white() * self.reflection, ray: Some(refl) };
         }
-        ScatteredRay{ attenuate: out, ray: None }
+        ScatteredRay{ emit: out, attenuate: Color::black(), ray: None }
     }
 }
 
@@ -44,7 +44,7 @@ pub struct FlatColor {
 
 impl MaterialModel for FlatColor {
     fn scatter(&self, _r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay{
-        ScatteredRay{ attenuate: self.pigment, ray: None }
+        ScatteredRay{ emit: Color::black(), attenuate: self.pigment, ray: None }
     }
 }
 
@@ -80,7 +80,7 @@ mod tests {
             }),
         };
         let r = Ray { ro: Vector3::new(0., 1., -1.), rd: Vector3::new(0., -1., 1.).normalize() };
-        let out = m.scatter(&r, &i, &s).attenuate;
+        let out = m.scatter(&r, &i, &s).emit;
         assert!((out.rgb[0] - 2.).abs() < 1e-9, "{:?}", out);
     }
 }

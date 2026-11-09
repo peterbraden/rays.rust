@@ -62,7 +62,7 @@ impl Outline {
     /// `bezier_spline`. A loop ends when a segment ends at the loop's first point. Each curve is
     /// flattened into `steps` straight edges.
     pub fn from_bezier(points: &[P2], steps: usize) -> Outline {
-        assert!(points.len() % 4 == 0, "bezier outlines take four points per segment, got {}", points.len());
+        assert!(points.len().is_multiple_of(4), "bezier outlines take four points per segment, got {}", points.len());
         let mut loops = Vec::new();
         let mut current: Vec<P2> = Vec::new();
         for seg in points.chunks(4) {

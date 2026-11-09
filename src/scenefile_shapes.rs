@@ -10,6 +10,7 @@ use crate::shapes::disc::Disc;
 use crate::shapes::algebraic::{Algebraic, Term, Torus};
 use crate::shapes::bbox::BBox;
 use crate::shapes::polygon::{Outline, Polygon, Prism, Sweep};
+use crate::shapes::revolution::{Lathe, Sor, Spline};
 use serde_json::Value;
 
 type Shape = Box<dyn Geometry + Sync + Send>;
@@ -106,6 +107,18 @@ impl SceneFile {
                 };
                 Box::new(Prism::new(outline, num(o, "height1"), num(o, "height2"), sweep, flag(o, "open")))
             },
+            // {"type": "lathe", "points": [[radius, y], ..], "spline": "linear" | "cubic" | "bezier"}
+            "lathe" => {
+                let spline = match o["spline"].as_str().unwrap_or("linear") {
+                    "linear" => Spline::Linear,
+                    "cubic" => Spline::Cubic,
+                    "bezier" => Spline::Bezier,
+                    s => panic!("lathe spline must be \"linear\", \"cubic\" or \"bezier\", got {}", s),
+                };
+                Box::new(Lathe::new(&points2(o, "points"), spline))
+            },
+            // {"type": "sor", "points": [[radius, y], ..], "open": false}
+            "sor" => Box::new(Sor::new(&points2(o, "points"), flag(o, "open"))),
             _ => return None,
         })
     }
@@ -188,6 +201,14 @@ mod tests {
         let pr = shape(r#"{"type": "prism", "height1": 0, "height2": 1, "sweep": "conic",
             "points": [[-1, -1], [1, -1], [1, 1], [-1, 1]]}"#);
         assert!((hit_from(&pr, [-5., 0.5, 0.], [1., 0., 0.]).unwrap() - 4.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_revolved_shapes() {
+        let l = shape(r#"{"type": "lathe", "points": [[1, 0], [2, 0], [2, 1], [1, 1], [1, 0]]}"#);
+        assert!((hit_from(&l, [-5., 0.5, 0.], [1., 0., 0.]).unwrap() - 3.).abs() < 1e-9);
+        let s = shape(r#"{"type": "sor", "points": [[1, -1], [1, 0], [1, 2], [1, 3]]}"#);
+        assert!((hit_from(&s, [-5., 1., 0.], [1., 0., 0.]).unwrap() - 4.).abs() < 1e-9);
     }
 
     #[test]

@@ -53,6 +53,7 @@ mod shapes {
     pub mod repeating_mesh;
 }
 mod octree;
+mod bvh;
 mod scenegraph;
 mod scene;
 mod scenefile;

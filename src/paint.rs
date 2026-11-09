@@ -1,40 +1,21 @@
 extern crate image;
 
 use std::io::Write;
-use crate::rendercontext::RenderContext;
-use std::path::Path;
+use crate::output::{LinearImage, OutputOpts};
 use termcolor::{BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
 
-pub fn to_image(ctx: &RenderContext) -> image::RgbImage {
-    image::ImageBuffer::from_fn(ctx.width as u32, ctx.height as u32, |x, y| {
-        let (r,g,b) = ctx.get_pixel(x as usize, ctx.height - y as usize - 1).as_u8();
-        image::Rgb([r,g,b])
-    })
-}
-
-/// Write a PNG via a temporary file, so a partial image is never left at `path`.
-pub fn save_png(img: &image::RgbImage, path: &str) -> Result<(), String> {
-    let tmp = format!("{}.tmp", path);
-    img.save_with_format(Path::new(&tmp), image::ImageFormat::Png)
-        .and_then(|_| std::fs::rename(&tmp, path).map_err(image::ImageError::IoError))
-        .map_err(|e| format!("Failed to write {}: {}", path, e))
-}
-
-pub fn to_png(ctx: &RenderContext) -> Result<(), String> {
-    save_png(&to_image(ctx), &ctx.output_filename)
-}
-
-
-pub fn poor_mans(ctx: &RenderContext) {
+/// Preview the image in the terminal.
+pub fn poor_mans(img: &LinearImage, opts: &OutputOpts) {
     let bufwtr = BufferWriter::stderr(ColorChoice::Auto);
     let mut buffer = bufwtr.buffer();
-    let w = ctx.width.min(120);
-    let h = ((ctx.height as f64 / ctx.width as f64) * w as f64 * 0.5) as usize; // * 0.5 as characters are roughly twice as tall as wide
+    let w = img.width.min(120);
+    let h = ((img.height as f64 / img.width as f64) * w as f64 * 0.5) as usize; // * 0.5 as characters are roughly twice as tall as wide
 
     for y in 0 .. h {
         for x in 0 .. w {
-            let c = ctx.get_pixel(((x as f32/ w as f32) * ctx.width as f32) as usize , (((h - 1 - y) as f32 / h as f32) * ctx.height as f32) as usize);
-            let termcol = Color::Rgb((c.rgb[0] * 255.).round() as u8, (c.rgb[1] * 255.).round() as u8, (c.rgb[2] * 255.).round() as u8) ;
+            let c = img.get(((x as f32/ w as f32) * img.width as f32) as usize , ((y as f32 / h as f32) * img.height as f32) as usize);
+            let [r, g, b] = opts.quantise(c);
+            let termcol = Color::Rgb(r, g, b);
             buffer.set_color(ColorSpec::new().set_fg(Some(termcol))).expect("Could not set color");
             write!(&mut buffer, "█").expect("Could not write");
         }

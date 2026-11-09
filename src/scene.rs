@@ -5,6 +5,7 @@ use crate::light::Light;
 use crate::color::Color;
 use crate::shapes::bbox::BBox;
 use crate::participatingmedia::ParticipatingMedium;
+use crate::output::OutputOpts;
 
 /// What a path contributes when it is cut short. Paths always stop at `max_depth`, or when their
 /// weight falls below the black threshold.
@@ -60,5 +61,6 @@ pub struct Scene {
     pub max_bounding: BBox,
     pub black_threshold: f64,
     pub air_medium: Box<dyn ParticipatingMedium>,
+    pub output: OutputOpts,
 }
 

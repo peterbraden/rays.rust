@@ -19,6 +19,7 @@ use std::sync::Arc;
 use crate::sceneobject::SceneObject;
 use serde_json::{Value, Map};
 use crate::scene::{Scene, ImageOpts, RenderOpts, PathTermination};
+use crate::output::OutputOpts;
 use std::io::prelude::*;
 use std::fs::File;
 use crate::material::model::MaterialModel;
@@ -54,6 +55,8 @@ pub struct SceneFile {
     pub black_threshold: Value,
     #[serde(default)]
     pub path_termination: Value,
+    #[serde(default)]
+    pub output: Value,
     #[serde(default)]
     pub russian_roulette_depth: Value,
     #[serde(default)]
@@ -730,6 +733,7 @@ impl SceneFile {
             max_bounding,
             black_threshold: SceneFile::parse_number(&s.black_threshold, 1e-7f64),
             air_medium: SceneFile::parse_air(&s.air),
+            output: OutputOpts::parse(&s.output),
         }
     }
 

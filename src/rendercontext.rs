@@ -4,6 +4,7 @@ use crate::scene::Scene;
 use crate::color::Color;
 use crate::trace::trace;
 use crate::geometry::rand;
+use crate::output::LinearImage;
 
 
 // The render context is the data structure
@@ -98,6 +99,17 @@ impl RenderContext {
             }
         }
         self.rays_cast += p.rays_cast;
+    }
+
+    /// The current estimate as a linear image, top row first.
+    pub fn snapshot(&self) -> LinearImage {
+        let mut pixels = Vec::with_capacity(self.width * self.height);
+        for y in 0 .. self.height {
+            for x in 0 .. self.width {
+                pixels.push(self.get_pixel(x, self.height - y - 1));
+            }
+        }
+        LinearImage { width: self.width, height: self.height, pixels }
     }
 
     pub fn get_pixel(&self, x:usize, y:usize) -> Color {
@@ -318,9 +330,9 @@ mod tests {
     #[test]
     fn test_unwritable_output_is_an_error() {
         let s = scene(1, 1);
-        let mut rc = render(&s);
-        rc.output_filename = "/nonexistent-dir-for-rays-test/out.png".to_string();
-        assert!(crate::paint::to_png(&rc).is_err());
+        let rc = render(&s);
+        let w = crate::output::writer_for("out.png", s.output).unwrap();
+        assert!(w.write(&rc.snapshot(), "/nonexistent-dir-for-rays-test/out.png").is_err());
     }
 
     #[test]

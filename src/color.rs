@@ -32,9 +32,6 @@ impl Color {
         Color::new(0f64,1f64,0f64)
     }
 
-    pub fn as_u8(&self) -> (u8, u8, u8) {
-        ((self.rgb[0] * 255f64).min(255f64) as u8, (self.rgb[1] * 255f64).min(255f64) as u8, (self.rgb[2] * 255f64).min(255f64) as u8)
-    }
 
     pub fn as_vec(&self) -> Vector3<f64> {
         self.rgb

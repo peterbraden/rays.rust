@@ -15,6 +15,7 @@ use crate::color::Color;
 use crate::skysphere::{create_sky_sphere, parse_sky_material};
 use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
+use crate::procedural::clouds::CloudLayer;
 use crate::participatingmedia::create_fog;
 use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity};
 use crate::noise::PerlinNoise;
@@ -232,6 +233,10 @@ impl SceneFile {
             return Some(Arc::new(f));
         }
 
+        if t == "clouds" {
+            return Some(Arc::new(SceneFile::parse_clouds(&o)));
+        }
+
         if t == "volume" {
             return Some(Arc::new(SceneFile::parse_volume(&o)));
         }
@@ -280,6 +285,39 @@ impl SceneFile {
         let g = SceneFile::parse_number(&o["g"], 0.);
         assert!(g > -1. && g < 1., "Volume g must be between -1 and 1, got {}", g);
         create_volume(bounds, density, SceneFile::parse_color_def(o, "albedo", Color::white()), g)
+    }
+
+    /// A layer of procedural clouds (see `procedural::clouds`), as a volume from `base` to `top`
+    /// and `extent` either side of `center` ([x, z]) across:
+    ///
+    /// `{"type": "clouds", "base": 1500, "top": 3000, "extent": 20000, "coverage": 0.5,
+    /// "cloud_type": 1, "density": 0.05, "albedo": colour, "g": 0.85, "seed": 0}`
+    ///
+    /// `coverage` (0 to 1) is how much of the sky is cloud; `cloud_type` runs from stratus (0)
+    /// through stratocumulus (0.5) to cumulus (1); `density` is the extinction coefficient in
+    /// the thickest cloud. `weather_size`, `shape_size` and `detail_size` set the sizes of
+    /// cloud fields, clouds and their eroded edges, and `erosion` (0 to 1) how much the edges
+    /// are worn; they default to suit the layer's thickness.
+    pub fn parse_clouds(o: &Value) -> SceneObject {
+        let base = SceneFile::parse_number(&o["base"], 1500.);
+        let top = SceneFile::parse_number(&o["top"], 3000.);
+        let extent = SceneFile::parse_number(&o["extent"], 20000.);
+        let center = SceneFile::parse_vec2_def(o, "center", Vector2::new(0., 0.));
+        let mut layer = CloudLayer::new(base, top, center, extent, SceneFile::parse_seed(o).unwrap_or(0));
+        layer.max_density = SceneFile::parse_number(&o["density"], layer.max_density);
+        layer.coverage = SceneFile::parse_number(&o["coverage"], layer.coverage).clamp(0., 1.);
+        layer.cloud_type = SceneFile::parse_number(&o["cloud_type"], layer.cloud_type).clamp(0., 1.);
+        layer.weather_size = SceneFile::parse_number(&o["weather_size"], layer.weather_size);
+        layer.shape_size = SceneFile::parse_number(&o["shape_size"], layer.shape_size);
+        layer.detail_size = SceneFile::parse_number(&o["detail_size"], layer.detail_size);
+        layer.erosion = SceneFile::parse_number(&o["erosion"], layer.erosion).clamp(0., 1.);
+        let bounds = BBox::new(
+            Vector3::new(center.x - extent, base, center.y - extent),
+            Vector3::new(center.x + extent, top, center.y + extent),
+        );
+        let g = SceneFile::parse_number(&o["g"], 0.85);
+        assert!(g > -1. && g < 1., "Clouds' g must be between -1 and 1, got {}", g);
+        create_volume(bounds, Box::new(layer), SceneFile::parse_color_def(o, "albedo", Color::white()), g)
     }
 
     pub fn parse_box_terrain(o: &Value) -> SceneObject {

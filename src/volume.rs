@@ -46,6 +46,13 @@ pub trait DensityField: Sync + Send {
     /// An upper bound on `density` everywhere in the volume. Delta tracking is only correct if
     /// it really is a bound, and is fastest if it is close.
     fn majorant(&self) -> f64;
+
+    /// A local bound: an upper bound on `density` from `p` along the unit direction `d`, and how
+    /// far along it holds. Where a field knows it is empty or thin, tracking takes larger steps
+    /// there, or skips it altogether. By default, `majorant()` everywhere.
+    fn majorant_from(&self, _p: &Vector3<f64>, _d: &Vector3<f64>) -> (f64, f64) {
+        (self.majorant(), f64::INFINITY)
+    }
 }
 
 /// The same density throughout.
@@ -92,27 +99,41 @@ impl Geometry for Volume {
     /// The first real collision at least `min` along the ray, by delta tracking. Light that
     /// hasn't collided by `min` continues as if it had just started there, as the chance of
     /// colliding further on doesn't depend on how far it has already come.
+    ///
+    /// The majorant may vary along the ray (`DensityField::majorant_from`): within each stretch
+    /// it is constant, and a step that would leave the stretch is abandoned at its end and
+    /// resampled with the next one's majorant, which by the same memorylessness is exact (the
+    /// piecewise-constant majorants of Novák et al. 2018). Stretches with no majorant are
+    /// skipped without sampling at all.
     fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
-        let majorant = self.density.majorant();
-        if majorant <= 0. {
+        if self.density.majorant() <= 0. {
             return None;
         }
         let d = r.rd.normalize();
         let invrd = Vector3::new(1. / d.x, 1. / d.y, 1. / d.z);
         let (entry, exit) = self.bounds.entry_exit(&r.ro, &invrd)?;
         let mut t = entry.max(min);
-        loop {
-            t -= (1. - rand()).ln() / majorant;
-            if t >= exit {
-                return None;
+        while t < exit {
+            let (majorant, length) = self.density.majorant_from(&(r.ro + d * t), &d);
+            // Always advance, if only by a hair, so a stretch reported as empty at a boundary
+            // can't stall the walk.
+            let end = (t + length.max(t.abs().max(1.) * 1e-12)).min(exit);
+            if majorant > 0. {
+                let step = -(1. - rand()).ln() / majorant;
+                if t + step < end {
+                    t += step;
+                    let point = r.ro + d * t;
+                    if rand() * majorant < self.density.density(&point) {
+                        // Media have no surface; facing back along the ray keeps the shadow
+                        // bias from moving the point sideways.
+                        return Some(RawIntersection { dist: t, point, normal: -d });
+                    }
+                    continue;
+                }
             }
-            let point = r.ro + d * t;
-            if rand() * majorant < self.density.density(&point) {
-                // Media have no surface; facing back along the ray keeps the shadow bias from
-                // moving the point sideways.
-                return Some(RawIntersection { dist: t, point, normal: -d });
-            }
+            t = end;
         }
+        None
     }
 
     fn bounds(&self) -> BBox {

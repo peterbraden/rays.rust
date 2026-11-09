@@ -187,7 +187,7 @@ impl PerlinNoise {
 
 /// Hash a cell (and seed) to a number in [0, 1]. Cells are numbered by their lowest corner,
 /// converted via i64 so negative cells wrap rather than saturating to 0.
-fn worley_hash(ix: u32, iy: u32, iz: u32, s: u32) -> f64 {
+pub fn worley_hash(ix: u32, iy: u32, iz: u32, s: u32) -> f64 {
     let mut h = (ix.wrapping_mul(73856093)) ^
              (iy.wrapping_mul(19349663)) ^
              (iz.wrapping_mul(83492791)) ^

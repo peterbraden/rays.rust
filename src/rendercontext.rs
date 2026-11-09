@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::collections::HashMap;
 use rayon::prelude::*;
 use crate::output::LinearImage;
+use crate::checkpoint::{Checkpoint, CheckpointHeader};
 
 
 // The render context is the data structure
@@ -23,7 +24,10 @@ pub struct RenderContext {
     pub rays_cast: u64,
     pub start_time: Instant,
     pub progressive_render: bool,
+    /// Samples rendered by this process.
     pub samples_rendered: u64,
+    /// Samples restored from a checkpoint.
+    pub samples_resumed: u64,
     pub output_filename: String,
 }
 
@@ -82,6 +86,7 @@ impl RenderContext {
             start_time,
             progressive_render,
             samples_rendered: 0,
+            samples_resumed: 0,
             output_filename,
         }
     }
@@ -117,6 +122,28 @@ impl RenderContext {
             }
         }
         LinearImage { width: self.width, height: self.height, pixels }
+    }
+
+    /// The accumulated samples, to save and resume later.
+    pub fn checkpoint(&self, header: CheckpointHeader) -> Checkpoint {
+        Checkpoint { header, sums: self.image.clone(), samples: self.samples.clone() }
+    }
+
+    /// Continue from a checkpoint's samples: `render` then renders only what they lack. The
+    /// checkpoint must already have been checked against the scene (`Checkpoint::check`).
+    pub fn resume(&mut self, c: Checkpoint) {
+        assert_eq!((c.header.width, c.header.height), (self.width, self.height), "checkpoint size");
+        self.samples_resumed = c.samples.iter().map(|n| *n as u64).sum();
+        self.image = c.sums;
+        self.samples = c.samples;
+    }
+
+    /// How many layers of `c`'s region have been applied. Chunks are applied whole, so every
+    /// pixel in the region has the same count.
+    fn layers_applied(&self, c: &RenderableChunk, samples_per_layer: usize) -> usize {
+        let n = self.samples[c.ymin * self.width + c.xmin];
+        debug_assert!((c.ymin .. c.ymax).all(|y| (c.xmin .. c.xmax).all(|x| self.samples[y * self.width + x] == n)));
+        n / samples_per_layer
     }
 
     pub fn get_pixel(&self, x:usize, y:usize) -> Color {
@@ -163,7 +190,7 @@ impl RenderContext {
     }
 
     pub fn progress_percentage(&self, s: &Scene) -> f64 {
-        (self.samples_rendered as f64 / (self.width * self.height * s.render.samples_per_pixel()) as f64) * 100.
+        ((self.samples_resumed + self.samples_rendered) as f64 / (self.width * self.height * s.render.samples_per_pixel()) as f64) * 100.
     }
 
     pub fn iter(&self, s: &Scene) -> impl Iterator<Item=RenderableChunk> + '_ {
@@ -194,6 +221,10 @@ impl RenderContext {
 /// before the previous layer of the same region has been applied is held back until it has.
 /// Because chunks start in order, only a few (about one per thread) are ever held.
 ///
+/// Chunks whose layer has already been applied to the context, eg. restored from a checkpoint
+/// (see `checkpoint`), are skipped; the rest are added in the same order as ever, so a resumed
+/// render is identical to an uninterrupted one.
+///
 /// After each chunk is applied, `after_chunk` runs with the context locked; anything it returns
 /// is passed to `outside_lock`, eg. to write a progressive image without holding up the render.
 pub fn render<T, F, G>(s: &Scene, rc: &Mutex<RenderContext>, after_chunk: F, outside_lock: G)
@@ -201,21 +232,32 @@ where
     F: Fn(&RenderContext) -> Option<T> + Sync,
     G: Fn(T) + Sync,
 {
-    let chunks: Vec<RenderableChunk> = rc.lock().unwrap().iter(s).collect();
-    if chunks.is_empty() {
+    let (chunks, applied) = {
+        let ctx = rc.lock().unwrap();
+        let chunks: Vec<RenderableChunk> = ctx.iter(s).collect();
+        // Every layer covers the image with the same regions, in the same order.
+        let regions = chunks.len() / s.render.layers();
+        let applied: Vec<usize> = chunks[.. regions].iter()
+            .map(|c| ctx.layers_applied(c, s.render.samples_per_layer()))
+            .collect();
+        (chunks, applied)
+    };
+    let regions = applied.len();
+    // Chunk i is layer i / regions of region i % regions.
+    let todo: Vec<usize> = (0 .. chunks.len()).filter(|i| i / regions >= applied[i % regions]).collect();
+    if todo.is_empty() {
         return;
     }
-    // Every layer covers the image with the same regions, in the same order.
-    let regions = chunks.len() / s.render.layers();
     let next_chunk = AtomicUsize::new(0);
     // The next layer due for each region, and finished chunks waiting for their turn.
-    let order = Mutex::new((vec![0usize; regions], HashMap::<usize, RenderedChunk>::new()));
+    let order = Mutex::new((applied, HashMap::<usize, RenderedChunk>::new()));
 
     (0 .. rayon::current_num_threads()).into_par_iter().for_each(|_| loop {
-        let i = next_chunk.fetch_add(1, Ordering::Relaxed);
-        if i >= chunks.len() {
+        let k = next_chunk.fetch_add(1, Ordering::Relaxed);
+        if k >= todo.len() {
             break;
         }
+        let i = todo[k];
         let rendered = chunks[i].render(s);
 
         let pending = {
@@ -386,10 +428,10 @@ mod tests {
         rc
     }
 
-    /// Render on all threads through `render`, as main does.
-    fn render_parallel(seed: u64) -> Vec<Color> {
-        let s = SceneFile::from_string(format!(r#"{{
-            "width": 24, "height": 16, "chunk_size": 2, "supersamples": 32, "samples_per_chunk": 1,
+    /// A small scene exercising most of the renderer, in `supersamples` layers.
+    fn busy_scene(seed: u64, supersamples: usize) -> Scene {
+        SceneFile::from_string(format!(r#"{{
+            "width": 24, "height": 16, "chunk_size": 5, "supersamples": {}, "samples_per_chunk": 1,
             "seed": {}, "background": [0.3, 0.4, 0.5], "max_depth": 6,
             "path_termination": "russian_roulette", "russian_roulette_depth": 1,
             "camera": {{ "location": [0, 1, -5], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.5, "aperture": 0.1 }},
@@ -405,11 +447,90 @@ mod tests {
                 {{ "type": "sphere", "location": [1, 0.5, 0], "radius": 0.5, "material": "G" }},
                 {{ "type": "fog", "density": 0.02 }}
             ]
-        }}"#, seed));
-        let rc = Mutex::new(RenderContext::new(s.image.width, s.image.height, false, "test.json"));
-        super::render(&s, &rc, |_| None::<()>, |_| ());
-        let img = rc.lock().unwrap().snapshot();
-        img.pixels
+        }}"#, supersamples, seed))
+    }
+
+    /// Render on all threads through `render`, as main does, continuing from `from` if given.
+    fn render_resumed(s: &Scene, from: Option<Checkpoint>) -> RenderContext {
+        let mut rc = RenderContext::new(s.image.width, s.image.height, false, "test.json");
+        if let Some(c) = from {
+            rc.resume(c);
+        }
+        let rc = Mutex::new(rc);
+        super::render(s, &rc, |_| None::<()>, |_| ());
+        rc.into_inner().unwrap()
+    }
+
+    fn render_parallel(seed: u64) -> Vec<Color> {
+        render_resumed(&busy_scene(seed, 32), None).snapshot().pixels
+    }
+
+    fn header(s: &Scene) -> CheckpointHeader {
+        CheckpointHeader {
+            width: s.image.width, height: s.image.height, seed: s.render.seed,
+            samples_per_layer: s.render.samples_per_layer(), scene: String::new(),
+        }
+    }
+
+    /// Through the file format, as a resumed process would see it.
+    fn saved_and_loaded(c: Checkpoint, s: &Scene) -> Checkpoint {
+        let mut bytes = Vec::new();
+        c.write_to(&mut bytes).unwrap();
+        let c = Checkpoint::read_from(&mut &bytes[..]).unwrap();
+        c.check(&header(s)).unwrap();
+        c
+    }
+
+    #[test]
+    fn test_resumed_render_is_identical() {
+        let s = busy_scene(3, 4);
+        let whole = render_resumed(&s, None);
+
+        // Interrupted part way, with regions at different layers, as the parallel render
+        // leaves them: all of layer 0, layer 1 of every other region, layer 2 of the first.
+        let mut part = RenderContext::new(s.image.width, s.image.height, false, "test.json");
+        let chunks: Vec<RenderableChunk> = part.iter(&s).collect();
+        let regions = chunks.len() / s.render.layers();
+        assert!(regions > 2);
+        for (i, c) in chunks.iter().enumerate() {
+            let (layer, region) = (i / regions, i % regions);
+            if layer == 0 || (layer == 1 && region % 2 == 0) || (layer == 2 && region == 0) {
+                part.apply_chunk(c, &c.render(&s));
+            }
+        }
+        let resumed = render_resumed(&s, Some(saved_and_loaded(part.checkpoint(header(&s)), &s)));
+
+        assert!(resumed.image == whole.image, "resumed sums differ");
+        assert_eq!(resumed.samples, whole.samples);
+        assert!(resumed.snapshot().pixels == whole.snapshot().pixels);
+        assert!((resumed.progress_percentage(&s) - 100.).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_extended_render_is_identical() {
+        // Two layers, then extended to four: the same as four from the start.
+        let few = render_resumed(&busy_scene(5, 2), None);
+        let s = busy_scene(5, 4);
+        let extended = render_resumed(&s, Some(saved_and_loaded(few.checkpoint(header(&s)), &s)));
+        let whole = render_resumed(&s, None);
+        assert!(extended.image == whole.image, "extended sums differ");
+        assert_eq!(extended.samples, whole.samples);
+    }
+
+    #[test]
+    fn test_complete_checkpoint_renders_nothing() {
+        let s = busy_scene(5, 2);
+        let done = render_resumed(&s, None).checkpoint(header(&s));
+        let mut rc = RenderContext::new(s.image.width, s.image.height, false, "test.json");
+        rc.resume(done.clone());
+        let rc = Mutex::new(rc);
+        let calls = AtomicUsize::new(0);
+        super::render(&s, &rc, |_| { calls.fetch_add(1, Ordering::Relaxed); None::<()> }, |_| ());
+        let rc = rc.into_inner().unwrap();
+        assert_eq!(calls.into_inner(), 0);
+        assert_eq!((rc.rays_cast, rc.samples_rendered), (0, 0));
+        assert!(rc.image == done.sums);
+        assert!((rc.progress_percentage(&s) - 100.).abs() < 1e-9);
     }
 
     #[test]

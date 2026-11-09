@@ -65,6 +65,7 @@ mod paint;
 mod output;
 mod compare;
 mod depth;
+mod checkpoint;
 //mod wireframe;
 mod geometry;
 mod procedural {

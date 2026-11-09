@@ -214,7 +214,7 @@ impl MaterialModel for SkyMaterial {
         
         let ray_max = match self.view_ray_length(r) {
             Some(d) => d,
-            None => return ScatteredRay { attenuate: Color::black(), ray: None },
+            None => return ScatteredRay { emit: Color::black(), attenuate: Color::black(), ray: None },
         };
         
         // Setup for numerical integration
@@ -301,7 +301,7 @@ impl MaterialModel for SkyMaterial {
             Self::tone_map(attenuate_vec.z),
         );
 
-        ScatteredRay { attenuate, ray: None }
+        ScatteredRay { emit: Color::black(), attenuate, ray: None }
     }
 }
 

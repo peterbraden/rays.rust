@@ -24,21 +24,22 @@ impl MaterialModel for Plastic {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay{
         let diffuse_probability = rand();
         if diffuse_probability > self.opacity {
-            let mut diffuse_refl = Color::black() + s.render.background;
+            // Direct lighting is emitted; the bounce carries indirect light, weighted by albedo.
+            let mut direct = Color::black();
 
             for light in &s.lights {
                 let light_vec = light.position - intersection.point;
-                let shadow_ray = Ray {ro: intersection.point, rd: light_vec};
+                let shadow_ray = Ray {ro: intersection.point, rd: light_vec.normalize()};
                 let shadow_intersection = s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), f64::MIN_POSITIVE); 
                 match shadow_intersection {
                     Some(_) => (),// Point in shadow...
                     None => {
-                        diffuse_refl = diffuse_refl + diffuse(self.albedo, intersection, &light_vec, light);
+                        direct = direct + diffuse(self.albedo, intersection, &light_vec, light);
                     },
                 }
             }
             
-            scatter_lambertian(diffuse_refl, intersection)
+            ScatteredRay { emit: direct, ..scatter_lambertian(self.albedo, intersection) }
         } else {
             scatter_dielectric(self.refractive_index, self.albedo, r, intersection)
         }

@@ -36,7 +36,7 @@ pub fn scatter_lambertian(albedo: Color, intersection: &Intersection) -> Scatter
         ro: intersection.point,
         rd: intersection.normal + random_point_on_unit_sphere(),
     };
-    ScatteredRay{ attenuate:albedo, ray: Some(refl) }
+    ScatteredRay{ emit: Color::black(), attenuate:albedo, ray: Some(refl) }
 }
 
 pub fn scatter_dielectric(
@@ -75,7 +75,7 @@ pub fn scatter_dielectric(
             // Schlick approximation of fresnel amount
             let reflect_prob = schlick(cosine, refractive_index);
             if rand() >= reflect_prob {
-                return ScatteredRay{
+                return ScatteredRay{ emit: Color::black(),
                     attenuate: albedo,
                     ray: Some( Ray {
                         ro: intersection.point + (refracted * 0.001),
@@ -91,7 +91,7 @@ pub fn scatter_dielectric(
     }
 
     let reflected = reflect(r.rd, intersection.normal);
-    ScatteredRay {
+    ScatteredRay { emit: Color::black(),
         attenuate: Color::white(),
         ray: Some(Ray {
             ro: intersection.point,

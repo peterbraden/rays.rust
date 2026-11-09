@@ -219,7 +219,7 @@ impl MaterialModel for NoiseTexture {
         let blended_color = base_scatter.attenuate.blend(&self.color, noise_influence);
         
         // Return a new scattered ray with the blended color
-        ScatteredRay {
+        ScatteredRay { emit: Color::black(),
             ray: base_scatter.ray,
             attenuate: blended_color,
         }

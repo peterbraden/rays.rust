@@ -71,6 +71,10 @@ impl Geometry for Transform {
             }
         })
     }
+    fn primitives(&self) -> u64 {
+        self.item.primitives()
+    }
+
     fn bounds(&self) -> BBox {
         self.item.bounds().transform(&na::convert(self.transform))
     }
@@ -99,6 +103,19 @@ mod tests {
 
     fn unit_sphere() -> Box<dyn Geometry + Sync + Send> {
         Box::new(Sphere::new(Vector3::zeros(), 1.))
+    }
+
+    #[test]
+    fn test_primitives_are_the_items() {
+        // A stand-in for a mesh: many primitives inside one geometry.
+        struct Many;
+        impl Geometry for Many {
+            fn intersects(&self, _r: &Ray) -> Option<crate::intersection::RawIntersection> { None }
+            fn bounds(&self) -> BBox { BBox::new(Vector3::zeros(), Vector3::new(1., 1., 1.)) }
+            fn primitives(&self) -> u64 { 871414 }
+        }
+        let t = Transform::from_parts(Box::new(Many), Vector3::zeros(), Rotation3::identity(), Vector3::new(2., 2., 2.));
+        assert_eq!(t.primitives(), 871414);
     }
 
     #[test]

@@ -53,7 +53,7 @@ mod tests {
             "materials": {}, "media": {}, "lights": [], "objects": [], "variables": {}
         }"#.to_string());
         let n = Vector3::new(0., 1., 0.);
-        let i = Intersection {
+        let i = Intersection { part: 0,
             dist: 1.,
             point: Vector3::new(0., 0., 0.),
             normal: n,

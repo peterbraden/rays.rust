@@ -69,6 +69,7 @@ impl SceneGraph {
                               point: tupl.1.point,
                               normal: tupl.1.normal,
                               object: scene_obj,
+                              part: tupl.1.part,
                            })
             },
             None => None

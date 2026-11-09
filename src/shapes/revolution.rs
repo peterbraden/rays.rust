@@ -190,7 +190,7 @@ impl Geometry for Lathe {
         hits.dedup_by(|a, b| (a.0 - b.0).abs() <= 1e-9 * (1. + b.0));
         hits.into_iter().map(|(dist, seg, s)| {
             let point = r.ro + rd * dist;
-            RawIntersection { dist, point, normal: self.normal(seg, s, &point, &rd) }
+            RawIntersection { part: 0, dist, point, normal: self.normal(seg, s, &point, &rd) }
         }).collect()
     }
 
@@ -304,7 +304,7 @@ impl Geometry for Sor {
         hits.dedup_by(|a, b| (a.0 - b.0).abs() <= 1e-9 * (1. + b.0));
         hits.into_iter().map(|(t, normal)| {
             let dist = t + start;
-            RawIntersection { dist, point: r.ro + rd * dist, normal }
+            RawIntersection { part: 0, dist, point: r.ro + rd * dist, normal }
         }).collect()
     }
 

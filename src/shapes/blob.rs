@@ -200,7 +200,7 @@ impl Geometry for Blob {
                 let g: Vector3<f64> = self.components.iter().map(|c| c.gradient(&point)).sum();
                 // The field falls outwards.
                 let normal = if g.norm() > 0. { -g.normalize() } else { -rd };
-                hits.push(RawIntersection { dist, point, normal });
+                hits.push(RawIntersection { part: 0, dist, point, normal });
             }
         }
         hits

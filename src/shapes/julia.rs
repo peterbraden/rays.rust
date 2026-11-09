@@ -90,14 +90,14 @@ impl Geometry for Julia {
                 t += self.accuracy;
             }
             let p = r.ro + rd * t;
-            return (t < b).then(|| RawIntersection { dist: t, point: p, normal: normal_at(&p) });
+            return (t < b).then(|| RawIntersection { part: 0, dist: t, point: p, normal: normal_at(&p) });
         }
         let mut steps = 0;
         while t < b && steps < 10_000 {
             let p = r.ro + rd * t;
             let d = self.distance(&p);
             if d < self.accuracy {
-                return Some(RawIntersection { dist: t, point: p, normal: normal_at(&p) });
+                return Some(RawIntersection { part: 0, dist: t, point: p, normal: normal_at(&p) });
             }
             t += d;
             steps += 1;

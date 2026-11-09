@@ -63,7 +63,7 @@ impl Geometry for Sphere {
         let point = r.ro + (rd * dist);
 
         Some(
-            RawIntersection {
+            RawIntersection { part: 0,
                 dist, 
                 point,
                 normal: (point - self.center).normalize()
@@ -82,7 +82,7 @@ impl Geometry for Sphere {
             .filter(|t| *t >= 0.)
             .map(|dist| {
                 let point = r.ro + rd * dist;
-                RawIntersection { dist, point, normal: (point - self.center).normalize() }
+                RawIntersection { part: 0, dist, point, normal: (point - self.center).normalize() }
             })
             .collect()
     }

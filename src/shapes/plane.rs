@@ -22,7 +22,7 @@ impl Geometry for Plane {
                 }
 
                 return Some(
-                    RawIntersection {
+                    RawIntersection { part: 0,
                         dist, 
                         point: r.ro + (rdn * dist),
                         normal: norm,
@@ -72,7 +72,7 @@ impl Geometry for HalfSpace {
         if dist <= 0. {
             return None;
         }
-        Some(RawIntersection { dist, point: r.ro + rd * dist, normal: self.normal })
+        Some(RawIntersection { part: 0, dist, point: r.ro + rd * dist, normal: self.normal })
     }
 
     fn crossings(&self, r: &Ray) -> Vec<RawIntersection> {

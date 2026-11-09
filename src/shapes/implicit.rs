@@ -122,7 +122,7 @@ where
     }
     let at = |t: f64| r.ro + rd * t;
     let eps = accuracy * 0.5;
-    let hit = |dist: f64, normal: Vector3<f64>| Some(RawIntersection { dist, point: at(dist), normal });
+    let hit = |dist: f64, normal: Vector3<f64>| Some(RawIntersection { part: 0, dist, point: at(dist), normal });
 
     // Entering the container where the solid fills it: the container's surface.
     if !open && entry > eps && g(&at(entry)) < 0. {

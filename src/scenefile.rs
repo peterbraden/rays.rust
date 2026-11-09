@@ -5,7 +5,7 @@ use crate::shapes::sphere::Sphere;
 use crate::shapes::triangle::Triangle;
 use crate::shapes::plane::Plane;
 use crate::shapes::mesh::{Mesh, SmoothMesh};
-use crate::shapes::csg::{Csg, Op, Inverse, Clipped};
+use crate::shapes::csg::{Csg, Op, Inverse, Clipped, Tagged};
 use crate::shapes::transform::{Transform};
 use crate::na::Rotation3;
 use crate::ocean::create_ocean;
@@ -24,7 +24,7 @@ use crate::output::OutputOpts;
 use std::io::prelude::*;
 use std::fs::File;
 use crate::material::model::MaterialModel;
-use crate::material::texture::{Solid, CheckeredYPlane, Medium, NoiseMedium, self};
+use crate::material::texture::{Solid, CheckeredYPlane, Medium, NoiseMedium, PartMedia, self};
 use crate::material::specular::Specular;
 use crate::material::dielectric::Dielectric;
 use crate::material::plastic::Plastic;
@@ -89,6 +89,13 @@ pub struct SceneFile {
     #[serde(default)]
     pub variables: Value,
     pub air: Option<Value>,
+}
+
+/// While parsing an object, the media of its parts that have their own (see `csg::Tagged`), and
+/// the scene's materials and media to find them in (none when parsing a shape alone).
+pub struct Parts<'a> {
+    library: Option<(&'a Map<String, Value>, &'a Map<String, Value>)>,
+    media: Vec<Box<dyn Medium + Sync + Send>>,
 }
 
 impl SceneFile {
@@ -228,8 +235,12 @@ impl SceneFile {
             return Some(Arc::new(f));
         }
 
-        let geom = SceneFile::parse_geometry(&o);
-        let m = SceneFile::parse_object_medium(&o, materials, media);
+        let mut parts = Parts { library: Some((materials, media)), media: vec![] };
+        let geom = SceneFile::parse_geometry_in(&o, &mut parts, false);
+        let mut m = SceneFile::parse_object_medium(&o, materials, media);
+        if !parts.media.is_empty() {
+            m = Box::new(PartMedia { base: m, parts: parts.media });
+        }
         if let Some(geometry) = geom {
             return Some(Arc::new(SceneObject {
                 geometry,
@@ -251,22 +262,34 @@ impl SceneFile {
         create_box_terrain(SceneFile::parse_int(&o["seed"], 0) as u64)
     }
 
-    /// A geometry, turned inside out if it has `"inverse": true` and with its surface cut down to
-    /// the inside of `"clipped_by"` if it has one.
+    /// A geometry on its own, ignoring the materials of any parts.
     pub fn parse_geometry (o: &Value) -> Option<Box<dyn Geometry + Sync + Send>> {
-        let mut g = SceneFile::parse_bare_geometry(o)?;
+        SceneFile::parse_geometry_in(o, &mut Parts { library: None, media: vec![] }, false)
+    }
+
+    /// A geometry, turned inside out if it has `"inverse": true` and with its surface cut down to
+    /// the inside of `"clipped_by"` if it has one. A `nested` geometry - a part of another - with
+    /// a "material" or "medium" of its own becomes a numbered part of the object, its medium
+    /// collected in `parts`.
+    pub fn parse_geometry_in (o: &Value, parts: &mut Parts, nested: bool) -> Option<Box<dyn Geometry + Sync + Send>> {
+        let mut g = SceneFile::parse_bare_geometry(o, parts)?;
         if !o["clipped_by"].is_null() {
-            let by = SceneFile::parse_geometry(&o["clipped_by"])
+            let by = SceneFile::parse_geometry_in(&o["clipped_by"], parts, true)
                 .unwrap_or_else(|| panic!("clipped_by needs a shape, got {}", o["clipped_by"]));
             g = Box::new(Clipped::new(g, by));
         }
         if o["inverse"].as_bool() == Some(true) {
             g = Box::new(Inverse(g));
         }
+        if let Some((materials, media)) = parts.library
+            && nested && (o.get("material").is_some() || o.get("medium").is_some()) {
+            parts.media.push(SceneFile::parse_object_medium(o, materials, media));
+            g = Box::new(Tagged { item: g, part: parts.media.len() as u32 });
+        }
         Some(g)
     }
 
-    fn parse_bare_geometry (o: &Value) -> Option<Box<dyn Geometry + Sync + Send>> {
+    fn parse_bare_geometry (o: &Value, parts: &mut Parts) -> Option<Box<dyn Geometry + Sync + Send>> {
         let t = o["type"].as_str().unwrap();
 
         if t == "sphere" {
@@ -294,11 +317,11 @@ impl SceneFile {
         }
 
         if t == "rotate" {
-            return Some(SceneFile::parse_rotation(o));
+            return Some(SceneFile::parse_rotation(o, parts));
         }
 
         if t == "transform" {
-            return Some(SceneFile::parse_transform(o));
+            return Some(SceneFile::parse_transform(o, parts));
         }
 
         if let Some(op) = match t {
@@ -308,7 +331,7 @@ impl SceneFile {
             "difference" => Some(Op::Difference),
             _ => None,
         } {
-            return Some(SceneFile::parse_csg(op, o));
+            return Some(SceneFile::parse_csg(op, o, parts));
         }
         SceneFile::parse_shape(t, o)
     }
@@ -316,8 +339,8 @@ impl SceneFile {
     /// `{"type": "union" | "merge" | "intersection" | "difference", "items": [shapes]}`: a
     /// difference is its first shape less the others. A difference can also be written with two
     /// shapes, "a" less "b".
-    pub fn parse_csg(op: Op, o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        let shape = |v: &Value| SceneFile::parse_geometry(v)
+    pub fn parse_csg(op: Op, o: &Value, parts: &mut Parts) -> Box<dyn Geometry + Sync + Send> {
+        let mut shape = |v: &Value| SceneFile::parse_geometry_in(v, parts, true)
             .unwrap_or_else(|| panic!("{} items must be shapes, got {}", o["type"], v));
         let parts: Vec<Box<dyn Geometry + Sync + Send>> = match (o["items"].as_array(), op) {
             (Some(items), _) => items.iter().map(shape).collect(),
@@ -328,8 +351,8 @@ impl SceneFile {
         Box::new(Csg::new(op, parts))
     }
 
-    pub fn parse_rotation(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        let a = SceneFile::parse_geometry(&o["item"]).unwrap(); // Panic if fails
+    pub fn parse_rotation(o: &Value, parts: &mut Parts) -> Box<dyn Geometry + Sync + Send> {
+        let a = SceneFile::parse_geometry_in(&o["item"], parts, true).unwrap(); // Panic if fails
         let roll = SceneFile::parse_number(&o["roll"], 0.).to_radians();
         let pitch = SceneFile::parse_number(&o["pitch"], 0.).to_radians();
         let yaw = SceneFile::parse_number(&o["yaw"], 0.).to_radians();
@@ -338,8 +361,8 @@ impl SceneFile {
 
     /// `{"type": "transform", "item": {...}, "scale": 2 or [x, y, z], "rotate": {"roll", "pitch",
     /// "yaw"} in degrees, "translate": [x, y, z]}`: every part optional, applied in that order.
-    pub fn parse_transform(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        let item = SceneFile::parse_geometry(&o["item"])
+    pub fn parse_transform(o: &Value, parts: &mut Parts) -> Box<dyn Geometry + Sync + Send> {
+        let item = SceneFile::parse_geometry_in(&o["item"], parts, true)
             .unwrap_or_else(|| panic!("transform needs a geometry \"item\", got {}", o["item"]));
         let scale = match &o["scale"] {
             Value::Number(n) => { let s = n.as_f64().unwrap(); Vector3::new(s, s, s) },
@@ -877,6 +900,7 @@ impl SceneFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ray::Ray;
 
     fn minimal_scene(extra: &str) -> Scene {
         minimal_scene_sized(extra, None, None)
@@ -979,15 +1003,17 @@ mod tests {
 
     #[test]
     fn test_parse_transform() {
-        let t = SceneFile::parse_transform(&serde_json::json!({
+        let t = SceneFile::parse_geometry(&serde_json::json!({
+            "type": "transform",
             "item": { "type": "sphere", "location": [0, 0, 0], "radius": 1 },
             "scale": 2, "rotate": { "yaw": 90 }, "translate": [0, 0, 5]
-        }));
+        })).unwrap();
         let b = t.bounds();
         assert!((b.min.coords - Vector3::new(-2., -2., 3.)).norm() < 1e-9, "{}", b);
-        let per_axis = SceneFile::parse_transform(&serde_json::json!({
+        let per_axis = SceneFile::parse_geometry(&serde_json::json!({
+            "type": "transform",
             "item": { "type": "sphere", "location": [0, 0, 0], "radius": 1 }, "scale": [3, 1, 1]
-        }));
+        })).unwrap();
         assert!((per_axis.bounds().max.x - 3.).abs() < 1e-9);
     }
 
@@ -1004,6 +1030,30 @@ mod tests {
             ]
         }"#.to_string());
         assert_eq!(s.area_lights.len(), 1);
+    }
+
+    #[test]
+    fn test_parts_of_combined_shapes_keep_their_materials() {
+        // A white sphere with a bite cut by a glowing sphere: the cut face is the cutter's.
+        let s = SceneFile::from_string(r#"{
+            "camera": { "location": [0, 0, -10], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
+            "materials": { "L": { "type": "diffuse-light", "color": [1, 1, 1] },
+                           "W": { "type": "lambertian", "albedo": [1, 1, 1] } },
+            "objects": [
+                { "type": "difference", "material": "W", "items": [
+                    { "type": "sphere", "location": [0, 0, 0], "radius": 2 },
+                    { "type": "sphere", "location": [2, 0, 0], "radius": 1, "material": "L" } ] }
+            ]
+        }"#.to_string());
+        let emits = |ro: [f64; 3], rd: [f64; 3]| {
+            let i = s.objects.nearest_intersection(&Ray { ro: Vector3::from(ro), rd: Vector3::from(rd) }, f64::INFINITY, 0.).unwrap();
+            let m = &i.object.medium;
+            m.part(i.part).unwrap_or(&**m).material_at(i.point).is_emitter()
+        };
+        assert!(!emits([0., 5., 0.], [0., -1., 0.]));
+        assert!(emits([5., 0., 0.], [-1., 0., 0.]));
+        // Lights inside a combination aren't sampled as area lights.
+        assert!(s.area_lights.is_empty());
     }
 
     #[test]

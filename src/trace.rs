@@ -42,7 +42,8 @@ fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene, aft
     if after_light_sampling && s.is_sampled_light(&intersection.object) {
         return (cast, Color::black());
     }
-    let material = intersection.object.medium.material_at(intersection.point);
+    let medium = &intersection.object.medium;
+    let material = medium.part(intersection.part).unwrap_or(&**medium).material_at(intersection.point);
     let interaction = material.scatter(r, intersection, s);
 
     let incoming = match interaction.ray {

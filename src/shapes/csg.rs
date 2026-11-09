@@ -215,6 +215,50 @@ impl Geometry for Clipped {
     }
 }
 
+/// A part of a combined shape with a material of its own, numbered `part`: its hits say so,
+/// unless a part within it has already claimed them (the innermost material wins, as in POV-Ray).
+/// The object's medium then gives the part's (see `texture::PartMedia`).
+pub struct Tagged {
+    pub item: Part,
+    pub part: u32,
+}
+
+impl Tagged {
+    fn tag(&self, x: RawIntersection) -> RawIntersection {
+        if x.part == 0 { RawIntersection { part: self.part, ..x } } else { x }
+    }
+}
+
+impl Geometry for Tagged {
+    fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+        self.item.intersects(r).map(|x| self.tag(x))
+    }
+
+    fn crossings(&self, r: &Ray) -> Vec<RawIntersection> {
+        self.item.crossings(r).into_iter().map(|x| self.tag(x)).collect()
+    }
+
+    fn bounds(&self) -> BBox {
+        self.item.bounds()
+    }
+
+    fn primitives(&self) -> u64 {
+        self.item.primitives()
+    }
+
+    fn inside(&self, p: &Vector3<f64>) -> bool {
+        self.item.inside(p)
+    }
+
+    fn surface_area(&self) -> f64 {
+        self.item.surface_area()
+    }
+
+    fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> {
+        self.item.sample_surface(u)
+    }
+}
+
 /// Many shapes, each showing its nearest hit: a union of shapes that don't overlap, in an
 /// octree, for large collections such as particle systems.
 pub struct Union {
@@ -367,6 +411,15 @@ mod tests {
         // Through the bite to its inner wall at x = 1.
         assert_hit(&d, ray.ro, ray.rd, 4., v(1., 0., 0.));
         assert!(d.inside(&v(0., 0., 0.)) && !d.inside(&v(1.25, 0., 0.)));
+    }
+
+    #[test]
+    fn test_innermost_tag_wins() {
+        let inner = Tagged { item: sphere(2., 1.), part: 2 };
+        let d = Tagged { item: Box::new(Csg::new(Op::Difference, vec![sphere(0., 2.), Box::new(inner)])), part: 1 };
+        // The outer surface is the difference's own part; the bite's wall is the inner part's.
+        assert_eq!(d.intersects(&Ray { ro: v(0., 5., 0.), rd: v(0., -1., 0.) }).unwrap().part, 1);
+        assert_eq!(d.intersects(&Ray { ro: v(5., 0., 0.), rd: v(-1., 0., 0.) }).unwrap().part, 2);
     }
 
     #[test]

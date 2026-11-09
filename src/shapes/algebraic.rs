@@ -49,7 +49,7 @@ where
             let point = r.ro + rd * dist;
             let g = gradient(&point);
             let normal = if g.norm() > 0. { g.normalize() } else { -rd };
-            RawIntersection { dist, point, normal }
+            RawIntersection { part: 0, dist, point, normal }
         })
         .collect()
 }

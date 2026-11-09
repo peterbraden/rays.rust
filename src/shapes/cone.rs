@@ -102,7 +102,7 @@ impl Geometry for Cone {
 
         hits.sort_by(|a, b| a.0.total_cmp(&b.0));
         hits.dedup_by(|a, b| (a.0 - b.0).abs() <= 1e-9 * (1. + b.0));
-        hits.into_iter().map(|(dist, normal)| RawIntersection { dist, point: r.ro + rd * dist, normal }).collect()
+        hits.into_iter().map(|(dist, normal)| RawIntersection { part: 0, dist, point: r.ro + rd * dist, normal }).collect()
     }
 
     fn bounds(&self) -> BBox {

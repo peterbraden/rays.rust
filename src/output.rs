@@ -123,11 +123,41 @@ impl ImageWriter for Png {
     }
 }
 
+/// OpenEXR: the linear values as 32-bit floats, with no exposure, tone mapping or transfer
+/// function, which are display concerns. EXR is the usual format for high dynamic range
+/// renders and for reference images to compare against; see "Technical Introduction to
+/// OpenEXR" (Kainz, Bogart, Stanczyk, Hillman),
+/// <https://openexr.com/en/latest/TechnicalIntroduction.html>.
+pub struct Exr;
+
+impl ImageWriter for Exr {
+    fn write(&self, img: &LinearImage, path: &str) -> Result<(), String> {
+        let out = image::Rgb32FImage::from_fn(img.width as u32, img.height as u32, |x, y| {
+            let c = img.get(x as usize, y as usize).rgb;
+            // NaN means a broken sample; keep it out of the file.
+            let f = |v: f64| if v.is_nan() { 0. } else { v as f32 };
+            image::Rgb([f(c.x), f(c.y), f(c.z)])
+        });
+        let tmp = format!("{}.tmp", path);
+        out.save_with_format(Path::new(&tmp), image::ImageFormat::OpenExr)
+            .and_then(|_| std::fs::rename(&tmp, path).map_err(image::ImageError::IoError))
+            .map_err(|e| format!("Failed to write {}: {}", path, e))
+    }
+}
+
+/// Read a linear image, eg. an EXR reference render.
+pub fn read_linear(path: &str) -> Result<LinearImage, String> {
+    let img = image::open(Path::new(path)).map_err(|e| format!("Failed to read {}: {}", path, e))?.to_rgb32f();
+    let pixels = img.pixels().map(|p| Color::new(p[0] as f64, p[1] as f64, p[2] as f64)).collect();
+    Ok(LinearImage { width: img.width() as usize, height: img.height() as usize, pixels })
+}
+
 /// The writer for `path`'s file format.
 pub fn writer_for(path: &str, opts: OutputOpts) -> Result<Box<dyn ImageWriter>, String> {
     let ext = Path::new(path).extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
     match ext.as_deref() {
         Some("png") => Ok(Box::new(Png { opts })),
+        Some("exr") => Ok(Box::new(Exr)),
         _ => Err(format!("Unsupported output format for {}", path)),
     }
 }
@@ -178,6 +208,24 @@ mod tests {
     fn test_writer_for_extension() {
         assert!(writer_for("a/b.png", OutputOpts::default()).is_ok());
         assert!(writer_for("a/b.PNG", OutputOpts::default()).is_ok());
-        assert!(writer_for("a/b.exr", OutputOpts::default()).is_err());
+        assert!(writer_for("a/b.exr", OutputOpts::default()).is_ok());
+        assert!(writer_for("a/b.jpg", OutputOpts::default()).is_err());
+    }
+
+    #[test]
+    fn test_exr_round_trip_keeps_linear_values() {
+        // Values a PNG couldn't hold: above 1, and finer than 1/255.
+        let pixels = vec![Color::new(0.001, 0.5, 17.), Color::new(4., 0.25, 1e-6)];
+        let img = LinearImage { width: 2, height: 1, pixels: pixels.clone() };
+        let dir = std::env::temp_dir().join(format!("rays-exr-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.exr");
+        let path = path.to_str().unwrap();
+        writer_for(path, OutputOpts::default()).unwrap().write(&img, path).unwrap();
+        let back = read_linear(path).unwrap();
+        assert_eq!((back.width, back.height), (2, 1));
+        for (a, b) in back.pixels.iter().zip(&pixels) {
+            assert!((a.rgb - b.rgb).norm() <= b.rgb.norm() * 1e-6, "{:?} vs {:?}", a, b);
+        }
     }
 }

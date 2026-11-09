@@ -103,6 +103,11 @@ struct Args {
     #[arg(long)]
     height: Option<usize>,
 
+    ///Write the image here instead of alongside the scene file. The extension selects the
+    ///format: .png (8-bit, encoded for display) or .exr (linear floating point)
+    #[arg(short, long)]
+    output: Option<String>,
+
     ///Seed for the render's random numbers; overrides the scenefile if specified. The same
     ///seed gives the same image
     #[arg(long)]
@@ -122,12 +127,15 @@ fn main() {
         seed: args.seed,
     });
 
-    let rc = RenderContext::new(
+    let mut rc = RenderContext::new(
             s.image.width,
             s.image.height,
             args.progressive_render,
             &args.scene,
             );
+    if let Some(path) = &args.output {
+        rc.output_filename = path.clone();
+    }
     println!("- Output: {}x{} @ {} samples -> {}", s.image.width, s.image.height, s.render.samples_per_pixel(), rc.output_filename);
     println!("- Scene Objects: {}, Primitives: {} ", s.objects.len(),  s.objects.primitives_len()); 
 

@@ -19,6 +19,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 
 ## Command-line Options
 - `<FILE>`: Scene file (required, positional). The image is written alongside it with a `.png` extension
+- `-o, --output <FILE>`: Write the image here instead; `.png` (8-bit, display-encoded) or `.exr` (linear float)
 - `-p, --progressive-render`: Update the output file during the render (at most once a second)
 - `--width <NUM>`: Override scene file width
 - `--height <NUM>`: Override scene file height

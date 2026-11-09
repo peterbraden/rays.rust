@@ -152,7 +152,7 @@ impl<T: Geometry> Octree<T> {
         let mut cdist = max;
         let mut closest = None;
         for i in items {
-            if let Some(x) = self.items[i].intersects(r) {
+            if let Some(x) = self.items[i].intersects_beyond(r, min) {
                 if x.dist < cdist && x.dist >= min {
                     cdist = x.dist;
                     closest = Some((i, x));
@@ -369,6 +369,22 @@ mod tests {
 
     fn cube(min: f64, max: f64) -> Arc<BBox> {
         Arc::new(BBox::new(Vector3::new(min, min, min), Vector3::new(max, max, max)))
+    }
+
+    #[test]
+    fn test_min_distance_skips_only_the_near_surface() {
+        // One composite item with two parallel triangles. A shadow ray leaving the first (as
+        // after a shadow bias, slightly behind it) must still find the second.
+        use crate::shapes::csg::Union;
+        use crate::shapes::triangle::Triangle;
+        let tri = |z: f64| -> Box<dyn Geometry + Sync + Send> {
+            Box::new(Triangle::new(Vector3::new(-1., -1., z), Vector3::new(1., -1., z), Vector3::new(0., 1., z)))
+        };
+        let items = vec![Arc::new(Union::new(vec![tri(0.), tri(1.)]))];
+        let tree = Octree::new(2, BBox::new(Vector3::new(-2., -2., -2.), Vector3::new(2., 2., 2.)), &items);
+        let r = Ray { ro: Vector3::new(0.1, 0.1, -1e-12), rd: Vector3::new(0., 0., 1.) };
+        let hit = tree.raw_intersection(&r, 10., 0.001).expect("second triangle should occlude");
+        assert!((hit.dist - 1.).abs() < 1e-6, "{}", hit.dist);
     }
 
     #[test]

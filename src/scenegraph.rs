@@ -109,7 +109,7 @@ impl SceneGraph {
                 None => (),
             }
             */
-            if let Some(x) = o.intersects(r) {
+            if let Some(x) = o.intersects_beyond(r, min) {
                 if x.dist < cdist && x.dist >= min {
                     cdist = x.dist;
                     closest = Some((o.clone(), x));

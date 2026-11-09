@@ -93,6 +93,22 @@ impl OctreeNode {
         self.items.len()
     }
 
+    /// Whether any item in this subtree is hit between `min` and `max` along the ray. Unlike
+    /// `nearest`, it needn't visit children in order or find the nearest hit: it stops at the
+    /// first.
+    fn any_hit<T: Geometry>(&self, items: &[Arc<T>], r: &Ray, ray: &TraversalRay, min: f64, max: f64) -> bool {
+        if self.is_leaf() {
+            return self.items.iter().any(|&i| {
+                items[i].intersects_beyond(r, min).is_some_and(|x| x.dist >= min && x.dist < max)
+            });
+        }
+        self.children.iter().flatten().any(|child| {
+            child.bounds.entry_exit(&r.ro, &ray.invrd).is_some_and(|(entry, exit)| {
+                entry.max(0.) * ray.len < max && exit * ray.len >= min
+            }) && child.any_hit(items, r, ray, min, max)
+        })
+    }
+
     /// Find the nearest item hit in this subtree, at least `min` along the ray and nearer than
     /// `best`. Children are visited in the order the ray enters them, and the search stops at the
     /// first child that begins beyond the best hit so far: nothing in it, or in any later child,
@@ -197,6 +213,19 @@ impl<T: Geometry> Octree<T> {
         self.closest_intersection(r, max, min).map(|tupl| (self.items[tupl.0].clone(), tupl.1))
     }
 
+    /// Whether anything is hit between `min` and `max` along the ray: the predicate form of
+    /// `intersection`, for shadow rays. Pharr, Jakob and Humphreys, "Physically Based
+    /// Rendering", 4th ed., section 6.1.3, call this `IntersectP`: "often more efficient than a
+    /// full intersection test", since the search can stop at the first hit.
+    pub fn occluded(&self, r: &Ray, max: f64, min: f64) -> bool {
+        let ray = TraversalRay { invrd: vec3_invert(r.rd), len: r.rd.norm() };
+        match self.root.bounds.entry_exit(&r.ro, &ray.invrd) {
+            Some((entry, exit)) if entry.max(0.) * ray.len < max && exit * ray.len >= min =>
+                self.root.any_hit(&self.items, r, &ray, min, max),
+            _ => false,
+        }
+    }
+
     fn closest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(usize, RawIntersection)> {
         let ray = TraversalRay { invrd: vec3_invert(r.rd), len: r.rd.norm() };
         let (entry, exit) = self.root.bounds.entry_exit(&r.ro, &ray.invrd)?;
@@ -265,6 +294,32 @@ mod tests {
         let r = Ray { ro: Vector3::new(0.1, 0.1, -1e-12), rd: Vector3::new(0., 0., 1.) };
         let hit = tree.raw_intersection(&r, 10., 0.001).expect("second triangle should occlude");
         assert!((hit.dist - 1.).abs() < 1e-6, "{}", hit.dist);
+    }
+
+    #[test]
+    fn test_occluded_agrees_with_nearest() {
+        use crate::shapes::sphere::Sphere;
+        use rand::{Rng, SeedableRng};
+        use rand::rngs::StdRng;
+        let mut rng: StdRng = SeedableRng::from_seed([4; 32]);
+        let mut u = |a: f64, b: f64| a + (b - a) * rng.gen_range(0., 1.);
+        let items: Vec<Arc<Sphere>> = (0..60).map(|_| Arc::new(Sphere::new(
+            Vector3::new(u(-10., 10.), u(-10., 10.), u(-10., 10.)), u(0.2, 3.)))).collect();
+        let bounds = items.iter().fold(BBox::empty(), |b, s| b.union(&s.bounds()));
+        let tree = Octree::new(6, bounds, &items);
+        let mut blocked = 0;
+        for _ in 0..5000 {
+            let r = Ray {
+                ro: Vector3::new(u(-15., 15.), u(-15., 15.), u(-15., 15.)),
+                rd: Vector3::new(u(-1., 1.), u(-1., 1.), u(-1., 1.)) * u(0.5, 2.),
+            };
+            let (max, min) = (u(0.5, 30.), u(0., 2.));
+            let nearest = tree.closest_intersection(&r, max, min).is_some();
+            assert_eq!(tree.occluded(&r, max, min), nearest, "ray {} max {} min {}", r, max, min);
+            if nearest { blocked += 1; }
+        }
+        // A meaningful mix of blocked and clear rays.
+        assert!(blocked > 1000 && blocked < 4000, "{}", blocked);
     }
 
     #[test]

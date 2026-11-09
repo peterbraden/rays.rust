@@ -76,6 +76,15 @@ impl SceneGraph {
     }
 
 
+    /// Whether anything is hit between `min` and `max` along the ray, stopping at the first hit
+    /// found: for shadow rays (see `Octree::occluded`).
+    pub fn occluded(&self, r: &Ray, max: f64, min: f64) -> bool {
+        self.tree.occluded(r, max, min)
+            || self.infinite_items.iter().any(|o| {
+                o.intersects_beyond(r, min).is_some_and(|x| x.dist >= min && x.dist < max)
+            })
+    }
+
     pub fn nearest_raw_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(Arc<SceneObject>, RawIntersection)> { 
         let tree_results =self.tree.intersection(r, max, min);
         let infinites = self.naive_intersection_infinites(r, max, min);

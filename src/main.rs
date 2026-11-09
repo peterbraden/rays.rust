@@ -109,16 +109,11 @@ fn main() {
         style("# 1. - Parsing scene, building models").bold().cyan()
     );
 
-    let s = scenefile::SceneFile::from_file(
-       &args.scene 
-    );
-    let width = args.width.unwrap_or(s.image.width);
-    let height = args.height.unwrap_or(s.image.height);
-    // TODO: Overriding here isn't picked up in the camera config that happens in the parse.
-    
+    let s = scenefile::SceneFile::from_file(&args.scene, args.width, args.height);
+
     let rc = RenderContext::new(
-            width,
-            height,
+            s.image.width,
+            s.image.height,
             args.progressive_render,
             &args.scene,
             );

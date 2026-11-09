@@ -312,9 +312,11 @@ impl Geometry for BBox {
         if !self.fast_intersects(&r.ro, &invrd) { 
             None
         } else {
-            let (tmin, _tmax) = find_min_max(&self.min.coords, &self.max.coords, &r.ro, &invrd);
-            let dist = tmin;
-            let point =  r.ro + (r.rd * dist);
+            let (tmin, tmax) = find_min_max(&self.min.coords, &self.max.coords, &r.ro, &invrd);
+            // If the ray starts inside the box, the hit is where it exits.
+            let t = if tmin >= 0. { tmin } else { tmax };
+            let point =  r.ro + (r.rd * t);
+            let dist = t * r.rd.norm();
             let center = na::center(&self.min, &self.max);
             let p = (point - center.coords).normalize().component_div(&(self.max - self.min)); 
             let ndir = p.iamax();
@@ -346,6 +348,26 @@ impl Geometry for BBox {
 mod tests {
     use crate::na::{Vector3};
     use super::{BBox, BoxFace, Ray};
+    use crate::shapes::geometry::Geometry;
+
+    #[test]
+    fn test_intersects_dist_is_world_space() {
+        let b = BBox::new(Vector3::new(-1., -1., -1.), Vector3::new(1., 1., 1.));
+        let r = Ray { ro: Vector3::new(0., 0., -5.), rd: Vector3::new(0., 0., 2.) };
+        let i = b.intersects(&r).unwrap();
+        assert!((i.dist - 4.).abs() < 1e-9);
+        assert!((i.point - Vector3::new(0., 0., -1.)).norm() < 1e-9);
+    }
+
+    #[test]
+    fn test_intersects_from_inside_finds_exit() {
+        let b = BBox::new(Vector3::new(-1., -1., -1.), Vector3::new(1., 1., 1.));
+        let r = Ray { ro: Vector3::new(0., 0., 0.), rd: Vector3::new(0., 0., 1.) };
+        let i = b.intersects(&r).unwrap();
+        assert!((i.dist - 1.).abs() < 1e-9);
+        assert!((i.point - Vector3::new(0., 0., 1.)).norm() < 1e-9);
+        assert_eq!(i.normal, Vector3::new(0., 0., 1.));
+    }
 
 	#[test]
 	fn test_entry_face1() {

@@ -123,7 +123,7 @@ pub fn create_firework(o: &Value) -> SceneObject {
     let time = SceneFile::parse_number(&o["time"], 0.9);
     let radius = SceneFile::parse_number(&o["radius"], 10.);
     let samples = SceneFile::parse_number(&o["samples"], 10.) as usize;
-    let gravity = SceneFile::parse_number(&o["radius"], 9.8);
+    let gravity = SceneFile::parse_number(&o["gravity"], 9.8);
     let num_particles = SceneFile::parse_number(&o["particles"], 100.) as usize;
     let upward_bias = SceneFile::parse_number(&o["upward_bias"], 2.);
     let intensity = SceneFile::parse_number(&o["intensity"], 2.);

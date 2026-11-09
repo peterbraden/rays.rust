@@ -86,11 +86,12 @@ fn intersects_dist(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>, r: &Ray
 
         if v < 0. || u + v > 1. { return None }; 
                 
-        let dist = v0v2.dot(&qvec) * inv_det; 
+        // t is in multiples of rd; scale to a world-space distance.
+        let t = v0v2.dot(&qvec) * inv_det; 
                      
-        if dist > 0. {
-            let point = r.ro + (r.rd.normalize() * dist);
-            return Some(IntersectionPoint { dist, point })
+        if t > 0. {
+            let point = r.ro + (r.rd * t);
+            return Some(IntersectionPoint { dist: t * r.rd.norm(), point })
         }
         None
 }
@@ -172,7 +173,7 @@ impl SmoothTriangle {
         let a = triangle_area(self.v0, self.v1, p.point) / triangle_area(self.v0, self.v1, self.v2);
         let b = triangle_area(self.v0, self.v2, p.point) / triangle_area(self.v0, self.v1, self.v2);
         // We can skip c as a + b + c = 1
-        self.normalv2 * a  + self.normalv1 * b + (1. - a - b) * self.normalv0
+        (self.normalv2 * a  + self.normalv1 * b + (1. - a - b) * self.normalv0).normalize()
     }
 }
 
@@ -199,5 +200,38 @@ impl Geometry for SmoothTriangle {
                 self.v0.z.max(self.v1.z).max(self.v2.z),
             )
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tri_verts() -> (Vector3<f64>, Vector3<f64>, Vector3<f64>) {
+        (Vector3::new(-1., -1., 0.), Vector3::new(1., -1., 0.), Vector3::new(0., 1., 0.))
+    }
+
+    #[test]
+    fn test_intersects_dist_is_world_space() {
+        let (v0, v1, v2) = tri_verts();
+        let t = Triangle::new(v0, v1, v2);
+        let r = Ray { ro: Vector3::new(0., 0., -5.), rd: Vector3::new(0., 0., 2.) };
+        let i = t.intersects(&r).unwrap();
+        assert!((i.dist - 5.).abs() < 1e-9);
+        assert!((i.point - Vector3::new(0., 0., 0.)).norm() < 1e-9);
+    }
+
+    #[test]
+    fn test_smooth_normal_is_unit_length() {
+        let (v0, v1, v2) = tri_verts();
+        let t = SmoothTriangle::new(
+            v0, v1, v2,
+            Vector3::new(-1., 0., -1.).normalize(),
+            Vector3::new(1., 0., -1.).normalize(),
+            Vector3::new(0., 1., -1.).normalize(),
+        );
+        let r = Ray { ro: Vector3::new(0., -0.3, -5.), rd: Vector3::new(0., 0., 1.) };
+        let i = t.intersects(&r).unwrap();
+        assert!((i.normal.norm() - 1.).abs() < 1e-9);
     }
 }

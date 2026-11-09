@@ -23,7 +23,7 @@ impl MaterialModel for Whitted {
 
             match shadow_intersection {
                 Some(_) => (),// Point in shadow...
-                None => out = diffuse(self.pigment, intersection, &light_vec, light) + phong(self.phong, r, intersection, &light_vec),
+                None => out = out + diffuse(self.pigment, intersection, &light_vec, light) + phong(self.phong, r, intersection, &light_vec),
             }
         }
 
@@ -45,5 +45,42 @@ pub struct FlatColor {
 impl MaterialModel for FlatColor {
     fn scatter(&self, _r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay{
         ScatteredRay{ attenuate: self.pigment, ray: None }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scenefile::SceneFile;
+    use crate::sceneobject::SceneObject;
+    use crate::shapes::plane::Plane;
+    use crate::material::texture::Solid;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_whitted_sums_all_lights() {
+        let s = SceneFile::from_string(r#"{
+            "width": 4, "height": 2, "chunk_size": 2, "supersamples": 1, "samples_per_chunk": 1,
+            "shadow_bias": 0.0001, "background": [0, 0, 0], "max_depth": 1,
+            "camera": { "location": [0, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
+            "materials": {}, "media": {}, "objects": [], "variables": {},
+            "lights": [
+                { "location": [0, 10, 0], "intensity": 1 },
+                { "location": [0, 10, 0], "intensity": 1 }
+            ]
+        }"#.to_string());
+        let m = Whitted { pigment: Color::white(), reflection: 0., phong: 0. };
+        let i = Intersection {
+            dist: 1.,
+            point: Vector3::new(0., 0., 0.),
+            normal: Vector3::new(0., 1., 0.),
+            object: Arc::new(SceneObject {
+                geometry: Box::new(Plane { y: 0. }),
+                medium: Box::new(Solid { m: Box::new(FlatColor { pigment: Color::white() }) }),
+            }),
+        };
+        let r = Ray { ro: Vector3::new(0., 1., -1.), rd: Vector3::new(0., -1., 1.).normalize() };
+        let out = m.scatter(&r, &i, &s).attenuate;
+        assert!((out.rgb[0] - 2.).abs() < 1e-9, "{:?}", out);
     }
 }

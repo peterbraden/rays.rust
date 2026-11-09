@@ -114,7 +114,7 @@ impl Geometry for RepeatingMesh {
         let rdn = r.rd.normalize();
         let norm = Vector3::new(0., 1., 0.);
         let denom = norm.dot(&rdn);
-        if denom.abs() < 0. { return None }
+        if denom.abs() < 1e-12 { return None }
     
         if r.ro.y > self.tile_bounds.max.y {
             // Looking down on plane

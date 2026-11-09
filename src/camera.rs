@@ -221,7 +221,9 @@ impl Camera for FlatLensCamera {
 
         let focal_point = self.location + pinhole_dest * self.focus;
         let point_lens = random_point_on_disc(self.aperture); 
-        let ro = self.location + Vector3::new(point_lens[0], point_lens[1], 0.0);
+        // The lens lies in the camera's image plane. camx is scaled by the aspect ratio, so
+        // normalise it to keep the aperture circular.
+        let ro = self.location + self.camx.normalize() * point_lens[0] + self.camy * point_lens[1];
 
         Ray {
             ro,
@@ -243,6 +245,22 @@ macro_rules! assert_approx_eq(
 mod tests {
     use super::*;
     use crate::na::Vector3;
+
+    #[test]
+    fn test_lens_lies_in_image_plane() {
+        // Looking along +x, so a world-XY lens would offset rays along the view axis.
+        let c = FlatLensCamera::new(
+            Vector3::new(10., 0., 0.),
+            Vector3::new(0., 0., 0.),
+            Vector3::new(0., 1., 0.),
+            0.5, 100, 200, 1.0
+        );
+        for _ in 0..100 {
+            let r = c.get_ray(0.5, 0.5, 0., 0.);
+            assert!((r.ro - c.location).dot(&c.camz).abs() < 1e-9, "{}", r.ro);
+            assert!((r.ro - c.location).norm() <= 1.0 + 1e-9);
+        }
+    }
 
     #[test]
     fn get_ray() {

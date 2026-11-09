@@ -15,6 +15,19 @@ use crate::na::{Vector3};
 pub trait Geometry: Sync{
     fn intersects(&self, r: &Ray) -> Option<RawIntersection>;
 
+    // Nearest intersection at least `min` along the ray. A composite (eg. a mesh) reports only
+    // its nearest hit, so if that is nearer than `min` - typically the surface a shadow ray
+    // leaves from - search again from `min` rather than discarding the whole object.
+    fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
+        match self.intersects(r) {
+            Some(x) if x.dist < min => {
+                let advanced = Ray { ro: r.ro + r.rd.normalize() * min, rd: r.rd };
+                self.intersects(&advanced).map(|mut x| { x.dist += min; x })
+            },
+            x => x,
+        }
+    }
+
     // World space bounding box
     fn bounds(&self) -> BBox;
 

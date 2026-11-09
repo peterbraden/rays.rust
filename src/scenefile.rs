@@ -19,7 +19,7 @@ use crate::participatingmedia::create_fog;
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
 use serde_json::{Value, Map};
-use crate::scene::{Scene, ImageOpts, RenderOpts, PathTermination};
+use crate::scene::{Scene, ImageOpts, RenderOpts, PathTermination, Background};
 use crate::output::OutputOpts;
 use std::io::prelude::*;
 use std::fs::File;
@@ -734,6 +734,21 @@ impl SceneFile {
         l
     }
 
+    /// A colour (black if absent), or `{"type": "gradient", "bottom": colour, "top": colour}`.
+    pub fn parse_background(v: &Value) -> Background {
+        match v {
+            Value::Null => Background::Solid(Color::black()),
+            Value::Object(_) => match v["type"].as_str() {
+                Some("gradient") => Background::Gradient {
+                    bottom: SceneFile::parse_color_def(v, "bottom", Color::white()),
+                    top: SceneFile::parse_color_def(v, "top", Color::new(0.5, 0.7, 1.)),
+                },
+                t => panic!("Unknown background type {:?}: expected \"gradient\" or a colour", t),
+            },
+            _ => Background::Solid(SceneFile::parse_color(v)),
+        }
+    }
+
     pub fn parse_path_termination(v: &Value, rr_depth: &Value) -> PathTermination {
         match v.as_str() {
             None | Some("black") => PathTermination::Black,
@@ -765,7 +780,7 @@ impl SceneFile {
             image: ImageOpts { width, height },
             render: RenderOpts {
                 max_depth: SceneFile::parse_int(&s.max_depth, 2),
-                background: if s.background.is_null() { Color::black() } else { SceneFile::parse_color(&s.background) },
+                background: SceneFile::parse_background(&s.background),
                 shadow_bias: SceneFile::parse_number(&s.shadow_bias, 1e-7f64),
                 supersamples: SceneFile::parse_int(&s.supersamples, 35),  
                 chunk_size: SceneFile::parse_int(&s.chunk_size, 64).max(1), 
@@ -845,7 +860,7 @@ mod tests {
         assert_eq!((s.image.width, s.image.height), (640, 480));
         assert_eq!(s.render.supersamples, 35);
         assert_eq!(s.render.max_depth, 2);
-        assert_eq!(s.render.background, Color::black());
+        assert_eq!(s.render.background, Background::Solid(Color::black()));
         assert!(s.lights.is_empty());
     }
 
@@ -910,6 +925,16 @@ mod tests {
     fn test_missing_material_names_it() {
         let obj = serde_json::json!({ "type": "sphere", "material": "MISSING" });
         SceneFile::parse_object_medium(&obj, &noise_materials(), &Map::new());
+    }
+
+    #[test]
+    fn test_gradient_background() {
+        let g = SceneFile::parse_background(&serde_json::json!({ "type": "gradient" }));
+        // The book's colours by default: white looking down, (0.5, 0.7, 1) looking up.
+        assert_eq!(g.radiance(&Vector3::new(0., -1., 0.)), Color::white());
+        assert_eq!(g.radiance(&Vector3::new(0., 2., 0.)), Color::new(0.5, 0.7, 1.));
+        assert_eq!(g.radiance(&Vector3::new(1., 0., 0.)), Color::new(0.75, 0.85, 1.));
+        assert_eq!(SceneFile::parse_background(&serde_json::json!([0.1, 0.2, 0.3])), Background::Solid(Color::new(0.1, 0.2, 0.3)));
     }
 
     #[test]

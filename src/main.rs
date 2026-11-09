@@ -207,7 +207,7 @@ fn main() {
 /// Compare the finished render with a reference image, reporting how close they are.
 fn compare_with(img: &output::LinearImage, reference: &str, output_filename: &str, opts: &output::OutputOpts, max_flip: Option<f64>) {
     let fail = |e: String| -> ! { eprintln!("{}", e); std::process::exit(1) };
-    let reference_img = output::read_linear(reference).unwrap_or_else(|e| fail(e));
+    let reference_img = output::read_reference(reference, opts).unwrap_or_else(|e| fail(e));
     let c = compare::compare(img, &reference_img, opts).unwrap_or_else(|e| fail(e));
     let map_path = std::path::Path::new(output_filename).with_extension("flip.png");
     if let Err(e) = c.error_map.save(&map_path) {

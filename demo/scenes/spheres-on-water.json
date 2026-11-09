@@ -137,10 +137,10 @@
     { "type" : "ocean", "resolution": 20, "fourier_size": 512, "amplitude": 10, "wind": [20, 0], "debug": false, "color": [0, 0.02, 0.03]},
     { "type" : "skysphere", "sun_direction": [0.1,-0.1,1], "brightness": 100},
     { "type" : "fog" },
-    { "type" : "firework", "center": [40, 25, 400], "time": 2, "samples": 200, "particles": 60, "radius": 13, "upward_bias": 14, "color": [1, 0.7, 0.6], "intensity": 2},
-    { "type" : "firework", "center": [-41, 26.5, 400], "time": 2, "samples": 200, "particles": 50, "radius": 14, "upward_bias": 15, "color": [1, 0.5, 0.3], "intensity": 3},
-    { "type" : "firework", "center": [1, 29.2, 401], "time": 2, "samples": 2, "particles": 200, "radius": 15, "upward_bias": 16, "color": [0.2, 0.5, 1], "intensity": 4},
-    { "type" : "firework", "center": [0, 30, 400], "time": 2, "samples": 200, "particles": 90, "radius": 15, "upward_bias": 16, "color": [1, 0.7, 0.5], "intensity": 4}
+    { "type" : "firework", "gravity": 13, "center": [40, 25, 400], "time": 2, "samples": 200, "particles": 60, "radius": 13, "upward_bias": 14, "color": [1, 0.7, 0.6], "intensity": 2},
+    { "type" : "firework", "gravity": 14, "center": [-41, 26.5, 400], "time": 2, "samples": 200, "particles": 50, "radius": 14, "upward_bias": 15, "color": [1, 0.5, 0.3], "intensity": 3},
+    { "type" : "firework", "gravity": 15, "center": [1, 29.2, 401], "time": 2, "samples": 2, "particles": 200, "radius": 15, "upward_bias": 16, "color": [0.2, 0.5, 1], "intensity": 4},
+    { "type" : "firework", "gravity": 15, "center": [0, 30, 400], "time": 2, "samples": 200, "particles": 90, "radius": 15, "upward_bias": 16, "color": [1, 0.7, 0.5], "intensity": 4}
   ],
 
   "tmp": [

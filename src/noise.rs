@@ -152,7 +152,7 @@ impl PerlinNoise {
     /// Gradient function for 3D noise
     fn grad(&self, hash: usize, x: f64, y: f64, z: f64) -> f64 {
         // Use hash to pick one of the 12 gradient vectors
-        let h = hash & 11;
+        let h = hash % 12;
         let grad = &self.grad3[h];
         
         // Dot product of gradient vector with offset vector
@@ -184,15 +184,23 @@ impl WorleyNoise {
         
         // Simple hash function based on position and seed
         let hash = |px: f64, py: f64, pz: f64, s: u32| -> f64 {
-            // Use bitwise XOR on integer portion converted to u32
-            let ix = px.floor() as u32;
-            let iy = py.floor() as u32;
-            let iz = pz.floor() as u32;
-            let h = ((ix.wrapping_mul(73856093)) ^ 
+            // Use bitwise XOR on integer portion. Go via i64 so negative cells wrap rather than
+            // saturating to 0.
+            let ix = px.floor() as i64 as u32;
+            let iy = py.floor() as i64 as u32;
+            let iz = pz.floor() as i64 as u32;
+            let mut h = (ix.wrapping_mul(73856093)) ^ 
                      (iy.wrapping_mul(19349663)) ^ 
-                     (iz.wrapping_mul(83492791))).wrapping_mul(s);
+                     (iz.wrapping_mul(83492791)) ^
+                     s.wrapping_mul(0x9E37_79B9);
+            // Avalanche (murmur3 finaliser) so neighbouring cells are uncorrelated.
+            h ^= h >> 16;
+            h = h.wrapping_mul(0x85eb_ca6b);
+            h ^= h >> 13;
+            h = h.wrapping_mul(0xc2b2_ae35);
+            h ^= h >> 16;
             // Convert back to float in range [0,1]
-            (h as f64 / u32::MAX as f64).sin() * 0.5 + 0.5
+            h as f64 / u32::MAX as f64
         };
         
         // Find cell containing the point
@@ -212,8 +220,8 @@ impl WorleyNoise {
                     
                     // Random position within cell
                     let px = cx + hash(cx, cy, cz, self.seed);
-                    let py = cy + hash(cx, cy, cz, self.seed + 1);
-                    let pz = cz + hash(cx, cy, cz, self.seed + 2);
+                    let py = cy + hash(cx, cy, cz, self.seed.wrapping_add(1));
+                    let pz = cz + hash(cx, cy, cz, self.seed.wrapping_add(2));
                     
                     // Calculate distance to feature point
                     let dx = px - x;
@@ -314,6 +322,42 @@ mod tests {
         }
     }
     
+    #[test]
+    fn test_perlin_grad_uses_all_gradients() {
+        let perlin = PerlinNoise::new();
+        let mut seen = [false; 12];
+        for hash in 0..256 {
+            // Recover the index by probing with unit axes.
+            let g = Vector3::new(
+                perlin.grad(hash, 1., 0., 0.),
+                perlin.grad(hash, 0., 1., 0.),
+                perlin.grad(hash, 0., 0., 1.),
+            );
+            let i = perlin.grad3.iter().position(|v| *v == g).unwrap();
+            seen[i] = true;
+        }
+        assert!(seen.iter().all(|s| *s), "unused gradients: {:?}", seen);
+    }
+
+    #[test]
+    fn test_worley_noise_varies_in_negative_space() {
+        let worley = WorleyNoise::new(1.0, 42);
+        // Sample the centre of a row of negative cells; with a broken hash every cell has the
+        // same feature point, so all values are equal.
+        let values: Vec<f64> = (1..8).map(|i| worley.noise(-(i as f64) - 0.5, -0.5, -0.5)).collect();
+        let first = values[0];
+        assert!(values.iter().any(|v| (v - first).abs() > 1e-6), "{:?}", values);
+    }
+
+    #[test]
+    fn test_worley_noise_seed_zero_and_max() {
+        // Seed 0 must not produce a regular lattice; u32::MAX must not overflow.
+        let a = WorleyNoise::new(1.0, 0);
+        let values: Vec<f64> = (0..8).map(|i| a.noise(i as f64 + 0.5, 0.5, 0.5)).collect();
+        assert!(values.iter().any(|v| (v - values[0]).abs() > 1e-6), "{:?}", values);
+        WorleyNoise::new(1.0, u32::MAX).noise(0.5, 0.5, 0.5);
+    }
+
     #[test]
     fn test_worley_noise() {
         let worley = WorleyNoise::new(1.0, 42);

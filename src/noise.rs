@@ -136,6 +136,10 @@ impl PerlinNoise {
         }
         
         // Normalize to [0, 1]
+        if max_value == 0.0 {
+            // No octaves: no variation.
+            return 0.5;
+        }
         (result / max_value + 1.0) * 0.5
     }
     
@@ -356,6 +360,11 @@ mod tests {
         let values: Vec<f64> = (0..8).map(|i| a.noise(i as f64 + 0.5, 0.5, 0.5)).collect();
         assert!(values.iter().any(|v| (v - values[0]).abs() > 1e-6), "{:?}", values);
         WorleyNoise::new(1.0, u32::MAX).noise(0.5, 0.5, 0.5);
+    }
+
+    #[test]
+    fn test_fbm_zero_octaves_is_finite() {
+        assert_eq!(PerlinNoise::new().fbm(0.3, 0.2, 0.1, 0, 0.5, 2.0), 0.5);
     }
 
     #[test]

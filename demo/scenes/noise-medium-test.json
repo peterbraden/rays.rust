@@ -86,7 +86,7 @@
       "m2": "GREEN_PLASTIC",
       "noise_type": "combined",
       "scale": 0.1,
-      "threshold": 0.5,
+      "threshold": 0.18,
       "falloff": 0.05
     },
     "CHECKERED_MARBLE": {

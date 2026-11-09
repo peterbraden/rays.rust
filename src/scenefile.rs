@@ -171,19 +171,7 @@ impl SceneFile {
             None => {
                 // Check if material is specified
                 if let Some(material_key) = o.get("material") {
-                    // Handle direct material reference case
-                    let material_name = SceneFile::parse_string(material_key);
-                    
-                    // Check if this is a direct noise material definition
-                    if let Some(material_def) = materials.get(&material_name) {
-                        if let Some("noise") = material_def.get("type").and_then(|v| v.as_str()) {
-                            // This is a noise material, we need to parse it as a medium
-                            return SceneFile::parse_medium(material_def, materials).unwrap();
-                        }
-                    }
-                    
-                    // Default case - just use the referenced material
-                    let m = SceneFile::parse_material_ref(material_key, materials).unwrap();
+                    let m = SceneFile::require_material(material_key, materials, &format!("object {}", o["type"]));
                     Box::new(Solid { m })
                 } else {
                     // No material or medium specified
@@ -340,12 +328,24 @@ impl SceneFile {
         }
     }
 
+    /// Look up a material by name. None if there is no such material; panics if it exists but
+    /// has an unknown type.
     pub fn parse_material_ref(key: &Value, materials: &Map<String, Value> ) -> Option<Box<dyn MaterialModel + Sync + Send>> {
-        if let Some(props) = materials.get(&SceneFile::parse_string(key)) {
-            return SceneFile::parse_material(props);
+        let name = SceneFile::parse_string(key);
+        let props = materials.get(&name)?;
+        if props["type"].as_str() == Some("noise") {
+            return Some(Box::new(SceneFile::parse_noise_texture(props, materials)));
         }
-        println!("Warning: Material '{}' not found in materials map", SceneFile::parse_string(key));
-        None
+        match SceneFile::parse_material(props) {
+            Some(m) => Some(m),
+            None => panic!("Material '{}' has unknown type {}", name, props["type"]),
+        }
+    }
+
+    /// Look up a material that must exist; `context` names what references it.
+    pub fn require_material(key: &Value, materials: &Map<String, Value>, context: &str) -> Box<dyn MaterialModel + Sync + Send> {
+        SceneFile::parse_material_ref(key, materials)
+            .unwrap_or_else(|| panic!("Material {} (referenced by {}) not found in materials", key, context))
     }
 
     pub fn parse_material(o: &Value) -> Option<Box<dyn MaterialModel + Sync + Send>> {
@@ -432,6 +432,90 @@ impl SceneFile {
         None
     }
 
+    /// A noise texture over a base material. Needs the materials map to resolve the base.
+    pub fn parse_noise_texture(o: &Value, materials: &Map<String, Value>) -> NoiseTexture {
+        // Get base material by reference
+        let base_material_key = &o["base_material"];
+        let base_material = if let Some(material_name) = base_material_key.as_str() {
+            // We need to use the root-level materials map from the scene file
+            SceneFile::parse_material_ref(base_material_key, materials)
+                .unwrap_or_else(|| {
+                    println!("Warning: Using default material for noise texture because base material '{}' not found", material_name);
+                    Box::new(Lambertian { albedo: Color::white() })
+                })
+        } else {
+            // Default to white lambertian if no base material is specified
+            Box::new(Lambertian { albedo: Color::white() })
+        };
+        
+        let noise_type = match o.get("noise_type").and_then(|v| v.as_str()) {
+            Some("perlin") => NoiseType::Perlin,
+            Some("fbm") => NoiseType::Fbm {
+                octaves: SceneFile::parse_int(&o["octaves"], 4) as u32,
+                persistence: SceneFile::parse_number(&o["persistence"], 0.5),
+                lacunarity: SceneFile::parse_number(&o["lacunarity"], 2.0),
+            },
+            Some("worley") => NoiseType::Worley {
+                point_density: SceneFile::parse_number(&o["point_density"], 1.0),
+                seed: SceneFile::parse_int(&o["seed"], 42) as u32,
+            },
+            Some("marble") => NoiseType::Marble,
+            Some("turbulence") => NoiseType::Turbulence {
+                octaves: SceneFile::parse_int(&o["octaves"], 4) as u32,
+            },
+            _ => NoiseType::Perlin, // Default to Perlin
+        };
+        
+        match noise_type {
+            NoiseType::Perlin => {
+                NoiseTexture::new_perlin(
+                    base_material,
+                    SceneFile::parse_color_def(o, "color", Color::white()),
+                    SceneFile::parse_number(&o["scale"], 0.1),
+                    SceneFile::parse_number(&o["blend_factor"], 0.5),
+                )
+            },
+            NoiseType::Fbm { octaves, persistence, lacunarity } => {
+                NoiseTexture::new_fbm(
+                    base_material,
+                    SceneFile::parse_color_def(o, "color", Color::white()),
+                    SceneFile::parse_number(&o["scale"], 0.1),
+                    SceneFile::parse_number(&o["blend_factor"], 0.5),
+                    octaves,
+                    persistence,
+                    lacunarity,
+                )
+            },
+            NoiseType::Worley { point_density, seed } => {
+                NoiseTexture::new_worley(
+                    base_material,
+                    SceneFile::parse_color_def(o, "color", Color::white()),
+                    SceneFile::parse_number(&o["scale"], 0.1),
+                    SceneFile::parse_number(&o["blend_factor"], 0.5),
+                    point_density,
+                    seed,
+                )
+            },
+            NoiseType::Marble => {
+                NoiseTexture::new_marble(
+                    base_material,
+                    SceneFile::parse_color_def(o, "color", Color::white()),
+                    SceneFile::parse_number(&o["scale"], 0.1),
+                    SceneFile::parse_number(&o["blend_factor"], 0.5),
+                )
+            },
+            NoiseType::Turbulence { octaves } => {
+                NoiseTexture::new_turbulence(
+                    base_material,
+                    SceneFile::parse_color_def(o, "color", Color::white()),
+                    SceneFile::parse_number(&o["scale"], 0.1),
+                    SceneFile::parse_number(&o["blend_factor"], 0.5),
+                    octaves,
+                )
+            },
+        }
+    }
+
     pub fn parse_medium_ref(key: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Option<Box<dyn Medium + Sync + Send>> {
         let medium_name = SceneFile::parse_string(key);
         match media.get(&medium_name) {
@@ -446,13 +530,13 @@ impl SceneFile {
     pub fn parse_medium(o: &Value, materials: &Map<String, Value>) -> Option<Box<dyn Medium + Sync + Send>> {
         let t = o["type"].as_str().unwrap();
         if t == "solid" {
-            let m = SceneFile::parse_material_ref(&o["material"], materials).unwrap(); 
+            let m = SceneFile::require_material(&o["material"], materials, "solid medium");
             return Some(Box::new(Solid { m }));
         }
 
         if t == "checkered-y-plane" {
-            let m1 = SceneFile::parse_material_ref(&o["m1"], materials).unwrap(); 
-            let m2 = SceneFile::parse_material_ref(&o["m2"], materials).unwrap(); 
+            let m1 = SceneFile::require_material(&o["m1"], materials, "checkered-y-plane m1");
+            let m2 = SceneFile::require_material(&o["m2"], materials, "checkered-y-plane m2");
             let xsize = SceneFile::parse_number(&o["xsize"], 1.);
             let zsize = SceneFile::parse_number(&o["zsize"], 1.);
             return Some(Box::new(CheckeredYPlane {
@@ -461,89 +545,7 @@ impl SceneFile {
         }
         
         if t == "noise" {
-            // When noise is used as a medium, parse it here
-            // Get base material by reference
-            let base_material_key = &o["base_material"];
-            let base_material = if let Some(material_name) = base_material_key.as_str() {
-                // We need to use the root-level materials map from the scene file
-                SceneFile::parse_material_ref(base_material_key, materials)
-                    .unwrap_or_else(|| {
-                        println!("Warning: Using default material for noise texture because base material '{}' not found", material_name);
-                        Box::new(Lambertian { albedo: Color::white() })
-                    })
-            } else {
-                // Default to white lambertian if no base material is specified
-                Box::new(Lambertian { albedo: Color::white() })
-            };
-            
-            let noise_type = match o.get("noise_type").and_then(|v| v.as_str()) {
-                Some("perlin") => NoiseType::Perlin,
-                Some("fbm") => NoiseType::Fbm {
-                    octaves: SceneFile::parse_int(&o["octaves"], 4) as u32,
-                    persistence: SceneFile::parse_number(&o["persistence"], 0.5),
-                    lacunarity: SceneFile::parse_number(&o["lacunarity"], 2.0),
-                },
-                Some("worley") => NoiseType::Worley {
-                    point_density: SceneFile::parse_number(&o["point_density"], 1.0),
-                    seed: SceneFile::parse_int(&o["seed"], 42) as u32,
-                },
-                Some("marble") => NoiseType::Marble,
-                Some("turbulence") => NoiseType::Turbulence {
-                    octaves: SceneFile::parse_int(&o["octaves"], 4) as u32,
-                },
-                _ => NoiseType::Perlin, // Default to Perlin
-            };
-            
-            let noise_texture = match noise_type {
-                NoiseType::Perlin => {
-                    NoiseTexture::new_perlin(
-                        base_material,
-                        SceneFile::parse_color(&o["color"]),
-                        SceneFile::parse_number(&o["scale"], 0.1),
-                        SceneFile::parse_number(&o["blend_factor"], 0.5),
-                    )
-                },
-                NoiseType::Fbm { octaves, persistence, lacunarity } => {
-                    NoiseTexture::new_fbm(
-                        base_material,
-                        SceneFile::parse_color(&o["color"]),
-                        SceneFile::parse_number(&o["scale"], 0.1),
-                        SceneFile::parse_number(&o["blend_factor"], 0.5),
-                        octaves,
-                        persistence,
-                        lacunarity,
-                    )
-                },
-                NoiseType::Worley { point_density, seed } => {
-                    NoiseTexture::new_worley(
-                        base_material,
-                        SceneFile::parse_color(&o["color"]),
-                        SceneFile::parse_number(&o["scale"], 0.1),
-                        SceneFile::parse_number(&o["blend_factor"], 0.5),
-                        point_density,
-                        seed,
-                    )
-                },
-                NoiseType::Marble => {
-                    NoiseTexture::new_marble(
-                        base_material,
-                        SceneFile::parse_color(&o["color"]),
-                        SceneFile::parse_number(&o["scale"], 0.1),
-                        SceneFile::parse_number(&o["blend_factor"], 0.5),
-                    )
-                },
-                NoiseType::Turbulence { octaves } => {
-                    NoiseTexture::new_turbulence(
-                        base_material,
-                        SceneFile::parse_color(&o["color"]),
-                        SceneFile::parse_number(&o["scale"], 0.1),
-                        SceneFile::parse_number(&o["blend_factor"], 0.5),
-                        octaves,
-                    )
-                },
-            };
-            
-            return Some(Box::new(Solid { m: Box::new(noise_texture) }));
+            return Some(Box::new(Solid { m: Box::new(SceneFile::parse_noise_texture(o, materials)) }));
         }
         
         if t == "noise_medium" {
@@ -794,6 +796,44 @@ mod tests {
         assert_eq!(s.lights[0].color, Color::red());
         assert_eq!(s.lights[1].color, Color::white());
         assert_eq!(s.lights[2].color, Color::white());
+    }
+
+    fn noise_materials() -> Map<String, Value> {
+        serde_json::from_value(serde_json::json!({
+            "BASE": { "type": "lambertian", "albedo": [1, 1, 1] },
+            "N": { "type": "noise", "base_material": "BASE", "noise_type": "fbm", "octaves": 0 },
+            "NN": { "type": "noise", "base_material": "N" },
+            "TYPO": { "type": "Lambertian", "albedo": [1, 1, 1] }
+        })).unwrap()
+    }
+
+    #[test]
+    fn test_noise_material_composes_everywhere() {
+        let m = noise_materials();
+        let media = Map::new();
+        for medium in [
+            serde_json::json!({ "type": "solid", "material": "N" }),
+            serde_json::json!({ "type": "checkered-y-plane", "m1": "N", "m2": "NN" }),
+            serde_json::json!({ "type": "noise_medium", "m1": "N", "m2": "BASE" }),
+        ] {
+            assert!(SceneFile::parse_medium(&medium, &m).is_some(), "{}", medium);
+        }
+        assert!(SceneFile::parse_material_ref(&Value::from("NN"), &m).is_some());
+        let obj = serde_json::json!({ "type": "sphere", "material": "N" });
+        SceneFile::parse_object_medium(&obj, &m, &media);
+    }
+
+    #[test]
+    #[should_panic(expected = "Material 'TYPO' has unknown type")]
+    fn test_unknown_material_type_names_it() {
+        SceneFile::parse_material_ref(&Value::from("TYPO"), &noise_materials());
+    }
+
+    #[test]
+    #[should_panic(expected = "MISSING")]
+    fn test_missing_material_names_it() {
+        let obj = serde_json::json!({ "type": "sphere", "material": "MISSING" });
+        SceneFile::parse_object_medium(&obj, &noise_materials(), &Map::new());
     }
 
     #[test]

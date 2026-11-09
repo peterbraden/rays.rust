@@ -19,7 +19,7 @@ use crate::participatingmedia::create_fog;
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
 use serde_json::{Value, Map};
-use crate::scene::{Scene, ImageOpts, RenderOpts, PathTermination, Background};
+use crate::scene::{Scene, ImageOpts, RenderOpts, PathTermination, Background, Filter};
 use crate::output::OutputOpts;
 use std::io::prelude::*;
 use std::fs::File;
@@ -68,6 +68,8 @@ pub struct SceneFile {
     pub seed: Value,
     #[serde(default)]
     pub sample_lights: Value,
+    #[serde(default)]
+    pub filter: Value,
     #[serde(default)]
     pub output: Value,
     #[serde(default)]
@@ -788,6 +790,11 @@ impl SceneFile {
                 path_termination: SceneFile::parse_path_termination(&s.path_termination, &s.russian_roulette_depth),
                 seed: SceneFile::parse_int(&s.seed, 0) as u64,
                 sample_lights: s.sample_lights.as_bool().unwrap_or(true),
+                filter: match s.filter.as_str() {
+                    None | Some("box") => Filter::Box,
+                    Some("tent") => Filter::Tent,
+                    Some(f) => panic!("Unknown filter '{}': expected \"box\" or \"tent\"", f),
+                },
             },
             camera: Box::new(SceneFile::parse_camera(s.camera, width as u32, height as u32)),
             lights: SceneFile::parse_lights(&s.lights),

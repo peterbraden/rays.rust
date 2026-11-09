@@ -344,10 +344,10 @@ fn render_pixel(x: usize, y: usize, layer: usize, max_samples: usize, s: &Scene)
                     &s.camera.get_ray(
                         x as f64 / (s.image.width as f64),
                         y as f64 / (s.image.height as f64),
-                        // Stratified jitter within the pixel, so repeated layers sample
-                        // new positions and edges are anti-aliased.
-                        (sx as f64 + rand()) / (max_samples as f64) * 1. / (s.image.width as f64),
-                        (sy as f64 + rand()) / (max_samples as f64) * 1. / (s.image.height as f64))
+                        // Stratified jitter, so repeated layers sample new positions, warped
+                        // to the reconstruction filter, then measured from the pixel's corner.
+                        (0.5 + s.render.filter.sample((sx as f64 + rand()) / (max_samples as f64))) / (s.image.width as f64),
+                        (0.5 + s.render.filter.sample((sy as f64 + rand()) / (max_samples as f64))) / (s.image.height as f64))
                     , 0, s);
             cast += rays_cast;
             pixel = pixel + c;

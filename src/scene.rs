@@ -41,6 +41,7 @@ pub struct RenderOpts {
     /// Whether diffuse surfaces sample area lights directly (next-event estimation). Off, they
     /// are found only when a scattered ray happens to hit them: unbiased, but far noisier.
     pub sample_lights: bool,
+    pub filter: Filter,
 }
 
 /// What a ray that leaves the scene sees.
@@ -64,6 +65,34 @@ impl Background {
                 let a = 0.5 * (rd.normalize().y + 1.);
                 *bottom * (1. - a) + *top * a
             },
+        }
+    }
+}
+
+/// How samples within a pixel are combined into its value: the reconstruction filter. Each
+/// pixel's sample positions are drawn from the filter's own distribution, so every sample has
+/// the same weight; see Manfred Ernst, Marc Stamminger and Gunther Greiner, "Filter Importance
+/// Sampling", IEEE Symposium on Interactive Ray Tracing 2006, pp. 125-132, and Pharr, Jakob and
+/// Humphreys, "Physically Based Rendering", 4th ed., section 8.8.2 "FilterSampler"
+/// (<https://pbr-book.org/4ed/Sampling_and_Reconstruction/Image_Reconstruction.html>).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Filter {
+    /// Samples spread evenly over the pixel: an average of its own area.
+    Box,
+    /// A tent (triangle) of radius one pixel, falling linearly to zero at the neighbouring pixel
+    /// centres (PBR section 8.8.4): samples reach into neighbouring pixels, weighted towards the
+    /// centre. Smoother edges than the box, and the filter Bitterli's references use.
+    Tent,
+}
+
+impl Filter {
+    /// Map a uniform `u` in [0, 1) to an offset from the pixel's centre, in pixels, distributed
+    /// as the filter.
+    pub fn sample(&self, u: f64) -> f64 {
+        match self {
+            Filter::Box => u - 0.5,
+            // Inverting the tent's cumulative distribution on [-1, 1].
+            Filter::Tent => if u < 0.5 { (2. * u).sqrt() - 1. } else { 1. - (2. - 2. * u).sqrt() },
         }
     }
 }
@@ -107,3 +136,28 @@ impl Scene {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_box_filter_is_the_previous_jitter() {
+        for u in [0., 0.25, 0.999] {
+            assert!((0.5 + Filter::Box.sample(u) - u).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_tent_filter_distribution() {
+        // A tent on [-1, 1]: mean 0, variance 1/6, three quarters within half a pixel.
+        let n = 100_000;
+        let t: Vec<f64> = (0..n).map(|i| Filter::Tent.sample((i as f64 + 0.5) / n as f64)).collect();
+        let mean = t.iter().sum::<f64>() / n as f64;
+        let var = t.iter().map(|x| x * x).sum::<f64>() / n as f64;
+        let inner = t.iter().filter(|x| x.abs() < 0.5).count() as f64 / n as f64;
+        assert!(mean.abs() < 1e-6 && (var - 1. / 6.).abs() < 1e-4 && (inner - 0.75).abs() < 1e-4,
+            "mean {} var {} inner {}", mean, var, inner);
+        assert!(t.iter().all(|x| x.abs() <= 1.));
+    }
+}

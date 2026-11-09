@@ -26,8 +26,10 @@ Conversion (`cornell-box.json`, `cornell-box/*.obj`):
 - Camera: at (0, 1, 6.8) looking at (0, 1, 0), field of view 19.5 degrees (square image, so
   horizontal and vertical agree). Our camera's `angle` is defined so that tan(angle) is the
   image's full height at unit distance, so `angle` = atan(2 tan(19.5/2 degrees)) = 0.331018.
-- Not matched: the reference uses adaptive sampling and a tent reconstruction filter; each of
-  our pixels averages samples over its own area.
+- Reconstruction filter: the reference uses a tent of radius one pixel at 1024x1024. Compared at
+  full resolution, use `"filter": "tent"`. Compared at a lower resolution, the harness averages
+  the reference down, which acts as a box filter at that resolution, so keep the default box.
+- Not matched: the reference uses adaptive sampling.
 
 ## Comparing
 
@@ -45,9 +47,21 @@ At 256x256, with area-light sampling (#73):
 | 1024 | 0.9922 | 0.0172 (0.0159) | 0.018 |
 
 Without area-light sampling (#72), 1024 samples per pixel gave RMSE 0.0280 and FLIP 0.078. The
-RMSE now barely falls with more samples: what remains is a systematic difference of about
-0.017, which the FLIP map places at the light's front and back edges, where a radiance of 17
-makes pixels sensitive to the reconstruction filter.
+RMSE barely falls with more samples: what remains is a systematic difference of about 0.017,
+which the FLIP map places at the light's front and back edges.
+
+That residual is the reconstruction filter. At the reference's own resolution (1024x1024, 64
+samples per pixel, as the reference):
+
+| Filter | Exposure fit | RMSE (fitted) | Mean FLIP |
+|---|---|---|---|
+| Box | 0.9924 | 0.0360 (0.0354) | 0.038 |
+| Tent | 0.9983 | 0.0142 (0.0141) | 0.037 |
+
+With the tent filter the outline around the light disappears from the FLIP map, RMSE falls by
+2.5x and the exposure fit comes within 0.2%. FLIP at 64 samples per pixel is dominated by the
+noise in both images.
+
 
 ## Ray Tracing in One Weekend: "view-distant"
 

@@ -3,7 +3,7 @@ use crate::na::{Vector3};
 use crate::intersection::{Intersection, RawIntersection};
 use crate::sceneobject::SceneObject;
 use crate::shapes::bbox::BBox;
-use crate::octree::Octree;
+use crate::bvh::BVH;
 use std::sync::Arc;
 use std::fmt;
 use crate::shapes::geometry::Geometry;
@@ -11,13 +11,13 @@ use crate::shapes::geometry::Geometry;
 pub struct SceneGraph {
     pub items: Vec<Arc<SceneObject>>,
     pub infinite_items: Vec<Arc<SceneObject>>,
-    tree: Octree<SceneObject>,
+    tree: BVH<SceneObject>,
     scene_bounds: BBox,
 }
 
 impl SceneGraph {
 
-    pub fn new(max_depth: usize, objects: Vec<Arc<SceneObject>>, max_bounding: BBox) -> SceneGraph {
+    pub fn new(objects: Vec<Arc<SceneObject>>, max_bounding: BBox) -> SceneGraph {
 
         let mut items = vec![];
         let mut infinite_items = vec![];
@@ -35,11 +35,7 @@ impl SceneGraph {
             }
         }
 
-        let tree = Octree::new(
-            max_depth, 
-            scene_bounds,
-            &items,
-        );
+        let tree = BVH::new(&items);
 
         SceneGraph { items, tree, scene_bounds, infinite_items }
     }
@@ -70,7 +66,7 @@ impl SceneGraph {
 
 
     /// Whether anything is hit between `min` and `max` along the ray, stopping at the first hit
-    /// found: for shadow rays (see `Octree::occluded`).
+    /// found: for shadow rays (see `BVH::occluded`).
     pub fn occluded(&self, r: &Ray, max: f64, min: f64) -> bool {
         self.tree.occluded(r, max, min)
             || self.infinite_items.iter().any(|o| {
@@ -124,7 +120,7 @@ impl SceneGraph {
 
 impl fmt::Display for SceneGraph {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "| SceneGraph<octree> \n| objects: {} \n| bounded: {} \n| infinite objs. {}", //\n{}\n",
+        write!(f, "| SceneGraph<BVH> \n| objects: {} \n| bounded: {} \n| infinite objs. {}", //\n{}\n",
                 &self.items.len(), 
                 &self.scene_bounds,
                 &self.infinite_items.len(), 

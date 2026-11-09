@@ -61,6 +61,7 @@ mod shapes {
     pub mod implicit;
     pub mod julia;
     pub mod tessellated;
+    pub mod text;
 }
 mod octree;
 mod scenegraph;

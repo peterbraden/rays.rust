@@ -220,9 +220,22 @@ impl SceneFile {
             },
             // {"type": "bicubic_patch", "points": [16 points, 4 rows of 4], "steps": 16}
             "bicubic_patch" => Box::new(tessellated::bicubic_patch(&points3(o, "points"), SceneFile::parse_int(&o["steps"], 16))),
+            // {"type": "text", "font": "path/to/font.ttf", "string": "Hello", "thickness": 0.2,
+            //  "offset": [0, 0], "steps": 8}: on the baseline y = 0 from x = 0, about one unit
+            //  high, from z = 0 back to z = thickness.
+            "text" => {
+                let font = o["font"].as_str().expect("text needs a \"font\" file");
+                let string = o["string"].as_str().expect("text needs a \"string\"");
+                text_shape(font, string, o)
+            },
             _ => return None,
         })
     }
+}
+
+fn text_shape(font: &str, string: &str, o: &Value) -> Shape {
+    crate::shapes::text::text(font, string, num_def(o, "thickness", 1.),
+        SceneFile::parse_vec2_def(o, "offset", Vector2::zeros()), SceneFile::parse_int(&o["steps"], 8))
 }
 
 /// A grid size, [nu, nv], under "resolution".

@@ -5,13 +5,23 @@ use crate::rendercontext::RenderContext;
 use std::path::Path;
 use termcolor::{BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
 
-pub fn to_png(ctx: &RenderContext) {
-    let img = image::ImageBuffer::from_fn(ctx.width as u32, ctx.height as u32, |x, y| {
+pub fn to_image(ctx: &RenderContext) -> image::RgbImage {
+    image::ImageBuffer::from_fn(ctx.width as u32, ctx.height as u32, |x, y| {
         let (r,g,b) = ctx.get_pixel(x as usize, ctx.height - y as usize - 1).as_u8();
         image::Rgb([r,g,b])
-    });
+    })
+}
 
-    let _ = img.save(&Path::new(&ctx.output_filename));
+/// Write a PNG via a temporary file, so a partial image is never left at `path`.
+pub fn save_png(img: &image::RgbImage, path: &str) -> Result<(), String> {
+    let tmp = format!("{}.tmp", path);
+    img.save_with_format(Path::new(&tmp), image::ImageFormat::Png)
+        .and_then(|_| std::fs::rename(&tmp, path).map_err(image::ImageError::IoError))
+        .map_err(|e| format!("Failed to write {}: {}", path, e))
+}
+
+pub fn to_png(ctx: &RenderContext) -> Result<(), String> {
+    save_png(&to_image(ctx), &ctx.output_filename)
 }
 
 

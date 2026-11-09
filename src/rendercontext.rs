@@ -56,10 +56,15 @@ fn format_f64(v: f64) -> String {
     }
 }
 
+/// The image is written next to the scene file, with a .png extension.
+pub fn output_filename_for(scene: &str) -> String {
+    std::path::Path::new(scene).with_extension("png").to_string_lossy().into_owned()
+}
+
 impl RenderContext {
     pub fn new(width:usize, height:usize, progressive_render: bool, filename: &str) -> RenderContext {
         let start_time = Instant::now();
-        let output_filename = String::from(filename).replace(".json", ".png");
+        let output_filename = output_filename_for(filename);
         RenderContext {
             image: vec![Color::black(); width*height],
             samples: vec![0; width*height],
@@ -272,13 +277,17 @@ mod tests {
     use crate::scenefile::SceneFile;
 
     fn scene(supersamples: usize, samples_per_chunk: usize) -> Scene {
+        scene_chunked(supersamples, samples_per_chunk, 2)
+    }
+
+    fn scene_chunked(supersamples: usize, samples_per_chunk: usize, chunk_size: usize) -> Scene {
         SceneFile::from_string(format!(r#"{{
-            "width": 5, "height": 3, "chunk_size": 2,
+            "width": 5, "height": 3, "chunk_size": {},
             "supersamples": {}, "samples_per_chunk": {},
             "shadow_bias": 0.0001, "background": [0, 0, 0], "max_depth": 1,
             "camera": {{ "location": [0, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }},
             "materials": {{}}, "media": {{}}, "lights": [], "objects": [], "variables": {{}}
-        }}"#, supersamples, samples_per_chunk))
+        }}"#, chunk_size, supersamples, samples_per_chunk))
     }
 
     fn render(s: &Scene) -> RenderContext {
@@ -289,6 +298,29 @@ mod tests {
             rc.apply_chunk(&c, &p);
         }
         rc
+    }
+
+    #[test]
+    fn test_zero_chunk_size_terminates() {
+        let s = scene_chunked(1, 1, 0);
+        let rc = render(&s);
+        assert!(rc.samples.iter().all(|n| *n == 1));
+    }
+
+    #[test]
+    fn test_output_filename() {
+        assert_eq!(output_filename_for("demo/demo.json"), "demo/demo.png");
+        assert_eq!(output_filename_for("scene"), "scene.png");
+        assert_eq!(output_filename_for("scene.JSON"), "scene.png");
+        assert_eq!(output_filename_for("a/x.json.d/s.json"), "a/x.json.d/s.png");
+    }
+
+    #[test]
+    fn test_unwritable_output_is_an_error() {
+        let s = scene(1, 1);
+        let mut rc = render(&s);
+        rc.output_filename = "/nonexistent-dir-for-rays-test/out.png".to_string();
+        assert!(crate::paint::to_png(&rc).is_err());
     }
 
     #[test]

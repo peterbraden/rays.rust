@@ -10,16 +10,16 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Multithreaded rendering with progressive output
 
 ## Build Commands
-- Build and run: `cargo run --release -- -p demo/demo.json`
+- Build and run: `cargo run --release -- demo/demo.json`
 - Run tests: `cargo test`
 - Run specific test: `cargo test <test_name>`
 - Lint code: `cargo clippy`
 - Format code: `cargo fmt`
-- View sample scenes: `cargo run --release -- -p demo/scenes/<scene_file>.json`
+- View sample scenes: `cargo run --release -- demo/scenes/<scene_file>.json`
 
 ## Command-line Options
-- `-p, --scene <FILE>`: Set scene file (required)
-- `--progressive-render`: Update output file when a chunk is completed
+- `<FILE>`: Scene file (required, positional). The image is written alongside it with a `.png` extension
+- `-p, --progressive-render`: Update the output file during the render (at most once a second)
 - `--width <NUM>`: Override scene file width
 - `--height <NUM>`: Override scene file height
 

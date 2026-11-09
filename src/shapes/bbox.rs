@@ -105,6 +105,13 @@ impl BBox {
         }
     }
 
+    /// Where the ray enters and leaves the box, as multiples of the ray direction; None if it
+    /// misses, or the box is entirely behind the origin. Entry is negative if the origin is inside.
+    pub fn entry_exit(&self, ro: &Vector3<f64>, invrd: &Vector3<f64>) -> Option<(f64, f64)> {
+        let (tmin, tmax) = find_min_max(&self.min.coords, &self.max.coords, ro, invrd);
+        if tmax < 0. || tmin > tmax { None } else { Some((tmin, tmax)) }
+    }
+
     pub fn fast_intersects(&self, ro: &Vector3<f64>, invrd: &Vector3<f64>) -> bool {
         //http://tavianator.com/fast-branchless-raybounding-box-intersections/
         let (tmin, tmax) = find_min_max(&self.min.coords, &self.max.coords, ro, invrd);

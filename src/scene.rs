@@ -33,6 +33,9 @@ pub struct RenderOpts {
     pub chunk_size: usize,
     pub samples_per_chunk: usize,
     pub path_termination: PathTermination,
+    /// Seeds the random numbers used while rendering (sampling, scattering); the same seed
+    /// gives the same image.
+    pub seed: u64,
 }
 
 impl RenderOpts {

@@ -6,8 +6,6 @@ use crate::material::model::{ MaterialModel, ScatteredRay };
 use serde_json::{Value, Map};
 use crate::shapes::bbox::BBox;
 use crate::intersection::{Intersection, RawIntersection};
-extern crate rand as _rand;
-use crate::participatingmedia::_rand::Rng;
 use std::f64;
 use crate::na::{Vector3};
 use crate::shapes::geometry::Geometry;
@@ -15,9 +13,7 @@ use crate::material::texture::{Solid, Medium};
 use crate::geometry::random_point_in_unit_ball;
 use crate::scenefile::SceneFile;
 
-pub fn rand() -> f64 {
-    _rand::thread_rng().gen_range(0.,1.)
-}
+pub use crate::geometry::rand;
 
 pub trait ParticipatingMedium: MaterialModel {}
 

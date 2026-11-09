@@ -83,7 +83,7 @@ mod tests {
             "shadow_bias": 0.0001, "background": [{b}, {b}, {b}], "max_depth": {max_depth} {extra},
             "camera": {{ "location": [0, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }},
             "materials": {{ "M": {material} }}, "media": {{}}, "variables": {{}},
-            "lights": [ {{ "location": [0, 10, 0], "intensity": 1 }} ],
+            "lights": [ {{ "location": [0, 10, 0], "intensity": 314.1592653589793 }} ],
             "objects": [ {{ "type": "plane", "y": 0, "material": "M" }} ]
         }}"#, b = background, material = material, max_depth = max_depth, extra = extra))
     }
@@ -131,13 +131,30 @@ mod tests {
     }
 
     #[test]
+    fn test_point_light_falls_off_with_distance_squared() {
+        // Light 10 units above; at 20 units the irradiance is a quarter.
+        let at = |y: f64| SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 1,
+            "camera": {{ "location": [0, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }},
+            "materials": {{ "M": {{ "type": "lambertian", "albedo": [1, 1, 1] }} }},
+            "lights": [ {{ "location": [0, {}, 0], "intensity": 1 }} ],
+            "objects": [ {{ "type": "plane", "y": 0, "material": "M" }} ]
+        }}"#, y));
+        let near = trace_down(&at(10.)).rgb[0];
+        let far = trace_down(&at(20.)).rgb[0];
+        // albedo / pi * I / d^2
+        assert!((near - 1. / (std::f64::consts::PI * 100.)).abs() < 1e-6, "{}", near);
+        assert!((far * 4. - near).abs() < 1e-6, "{} {}", near, far);
+    }
+
+    #[test]
     fn test_lambertian_shadowed_from_point_light() {
         // One bounce at most, so only the shadowed direct term can contribute.
         let s = SceneFile::from_string(r#"{
             "background": [0, 0, 0], "max_depth": 1,
             "camera": { "location": [0, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
             "materials": { "M": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } },
-            "lights": [ { "location": [0, 10, 0], "intensity": 1 } ],
+            "lights": [ { "location": [0, 10, 0], "intensity": 314.1592653589793 } ],
             "objects": [
                 { "type": "plane", "y": 0, "material": "M" },
                 { "type": "sphere", "location": [0, 5, 0], "radius": 1, "material": "M" }

@@ -65,8 +65,8 @@ mod tests {
             "camera": { "location": [0, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
             "materials": {}, "media": {}, "objects": [], "variables": {},
             "lights": [
-                { "location": [0, 10, 0], "intensity": 1 },
-                { "location": [0, 10, 0], "intensity": 1 }
+                { "location": [0, 10, 0], "intensity": 314.1592653589793 },
+                { "location": [0, 10, 0], "intensity": 314.1592653589793 }
             ]
         }"#.to_string());
         let m = Whitted { pigment: Color::white(), reflection: 0., phong: 0. };

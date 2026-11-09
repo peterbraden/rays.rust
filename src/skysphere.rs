@@ -45,6 +45,11 @@ use serde_json::{Value};
 use crate::scenefile::SceneFile;
 
 // Constants for atmospheric scattering
+/// Scales the integrated radiance into the renderer's working range. Under the default sRGB
+/// output this keeps the sky looking as it did with its former built-in tone curve,
+/// (0.383 v)^(1/2.2).
+const SKY_CALIBRATION: f64 = 0.38317;
+
 const DEFAULT_NUM_SAMPLES: usize = 16;
 const DEFAULT_NUM_SAMPLES_LIGHT: usize = 8;
 
@@ -175,20 +180,6 @@ impl SkyMaterial {
         (-height / thickness).exp() * segment_length
     }
     
-    /// Apply a tone mapping function to convert HDR values to displayable values
-    ///
-    /// # Arguments
-    /// * `value` - HDR color value that may be outside the [0,1] range
-    fn tone_map(value: f64) -> f64 {
-        let threshold = 1.413f64;
-        let gamma = 1.0 / 2.2; // Standard gamma correction value
-        
-        if value < threshold {
-            (value * 0.38317f64).powf(gamma)
-        } else {
-            1.0f64 - (-value).exp()
-        }
-    }
 
     /// Distance the view ray travels through the atmosphere before leaving it, or hitting the
     /// ground if it starts above the surface. None if it misses the atmosphere entirely.
@@ -205,8 +196,9 @@ impl SkyMaterial {
     }
 }
 
-impl MaterialModel for SkyMaterial {
-    fn scatter(&self, r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay {
+impl SkyMaterial {
+    /// Linear radiance arriving along the view ray.
+    pub fn radiance(&self, r: &Ray) -> Vector3<f64> {
         // Use the provided scattering coefficients
         let beta_r: Vector3<f64> = self.rayleigh_coefficients;
         let mie_coef = self.mie_coefficient;
@@ -214,7 +206,7 @@ impl MaterialModel for SkyMaterial {
         
         let ray_max = match self.view_ray_length(r) {
             Some(d) => d,
-            None => return ScatteredRay { emit: Color::black(), attenuate: Color::black(), ray: None },
+            None => return Vector3::zeros(),
         };
         
         // Setup for numerical integration
@@ -290,18 +282,17 @@ impl MaterialModel for SkyMaterial {
             mie_sum += attenuation.component_mul(&Vector3::new(mie_depth, mie_depth, mie_depth));
         } 
         
-        // Calculate final attenuate value combining Rayleigh and Mie scattering
-        let attenuate_vec = (rayleigh_sum.component_mul(&beta_r) * phase_r + 
-                          mie_sum.component_mul(&beta_m) * phase_m) * self.brightness; 
-        
-        // Apply tone mapping function to each channel
-        let attenuate = Color::new(
-            Self::tone_map(attenuate_vec.x),
-            Self::tone_map(attenuate_vec.y),
-            Self::tone_map(attenuate_vec.z),
-        );
+        // Combine Rayleigh and Mie scattering
+        (rayleigh_sum.component_mul(&beta_r) * phase_r +
+            mie_sum.component_mul(&beta_m) * phase_m) * self.brightness
+    }
+}
 
-        ScatteredRay { emit: Color::black(), attenuate, ray: None }
+impl MaterialModel for SkyMaterial {
+    fn scatter(&self, r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay {
+        // Linear light; display encoding happens at output.
+        let v = self.radiance(r) * SKY_CALIBRATION;
+        ScatteredRay { emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
     }
 }
 
@@ -414,6 +405,26 @@ mod tests {
     }
     
     #[test]
+    fn test_sky_radiance_is_linear() {
+        let sky = |brightness: f64| SkyMaterial {
+            atmosphere: Sphere::new(Vector3::new(0., -6360e3, 0.), 6420e3),
+            earth: Sphere::new(Vector3::new(0., -6360e3, 0.), 6360e3),
+            sun_direction: Vector3::new(0., 0.5, 1.).normalize(),
+            rayleigh_thickness: 7994.,
+            mie_thickness: 1200.,
+            brightness,
+            rayleigh_coefficients: Vector3::new(DEFAULT_RAYLEIGH_R, DEFAULT_RAYLEIGH_G, DEFAULT_RAYLEIGH_B),
+            mie_coefficient: DEFAULT_MIE_COEFFICIENT,
+            mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
+        };
+        let r = Ray { ro: Vector3::new(0., 1., 0.), rd: Vector3::new(0., 0.3, 1.).normalize() };
+        let (a, b) = (sky(20.).radiance(&r), sky(40.).radiance(&r));
+        assert!(a.x > 0.);
+        // No display encoding: doubling the light doubles the value.
+        assert!((b - a * 2.).norm() < 1e-9 * b.norm());
+    }
+
+    #[test]
     fn test_view_ray_stops_at_ground() {
         let sky = SkyMaterial {
             atmosphere: Sphere::new(Vector3::new(0., -6360e3, 0.), 6420e3),
@@ -461,21 +472,6 @@ mod tests {
         // At one scale height, optical depth should be reduced by factor of e^-1
         let depth_one_scale_r = sky.optical_depth(sky.rayleigh_thickness, sky.rayleigh_thickness, segment_length);
         assert_relative_eq!(depth_one_scale_r, segment_length / std::f64::consts::E, epsilon = 1e-10);
-    }
-    
-    #[test]
-    fn test_tone_map() {
-        // Test values within the threshold
-        assert_relative_eq!(SkyMaterial::tone_map(0.0), 0.0, epsilon = 1e-10);
-        assert_relative_eq!(SkyMaterial::tone_map(1.0), (0.38317f64).powf(1.0/2.2), epsilon = 1e-5);
-        
-        // Test values above the threshold
-        assert_relative_eq!(SkyMaterial::tone_map(2.0), 1.0 - (-2.0f64).exp(), epsilon = 1e-10);
-        assert_relative_eq!(SkyMaterial::tone_map(5.0), 1.0 - (-5.0f64).exp(), epsilon = 1e-10);
-        
-        // Check monotonicity - higher values should map to higher results
-        assert!(SkyMaterial::tone_map(0.5) < SkyMaterial::tone_map(1.0));
-        assert!(SkyMaterial::tone_map(1.0) < SkyMaterial::tone_map(2.0));
     }
     
     #[test]

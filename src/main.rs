@@ -61,6 +61,7 @@ mod camera;
 mod trace;
 mod rendercontext;
 mod paint;
+mod output;
 //mod wireframe;
 mod geometry;
 mod procedural {
@@ -121,6 +122,12 @@ fn main() {
     println!("- Output: {}x{} @ {} samples -> {}", s.image.width, s.image.height, s.render.samples_per_pixel(), rc.output_filename);
     println!("- Scene Objects: {}, Primitives: {} ", s.objects.len(),  s.objects.primitives_len()); 
 
+    // Fail before rendering if the output can't be written in this format.
+    let writer = output::writer_for(&rc.output_filename, s.output).unwrap_or_else(|e| {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    });
+
     let chunks: Vec<rendercontext::RenderableChunk> = rc.iter(&s).collect();
     let rcmtx = Arc::new(Mutex::new(rc));
 
@@ -153,13 +160,13 @@ fn main() {
                 let mut last = last_progressive.lock().unwrap();
                 if rc.progressive_render && last.elapsed() >= progressive_interval {
                     *last = Instant::now();
-                    Some((paint::to_image(&rc), rc.output_filename.clone()))
+                    Some((rc.snapshot(), rc.output_filename.clone()))
                 } else {
                     None
                 }
             };
             if let Some((img, path)) = progressive {
-                if let Err(e) = paint::save_png(&img, &path) {
+                if let Err(e) = writer.write(&img, &path) {
                     eprintln!("{}", e);
                 }
             }
@@ -168,10 +175,11 @@ fn main() {
 
     let rc = rcmtx.lock().unwrap();
     //wireframe::wireframe(&s, &mut rc);
-    if let Err(e) = paint::to_png(&rc) {
+    let img = rc.snapshot();
+    if let Err(e) = writer.write(&img, &rc.output_filename) {
         eprintln!("{}", e);
         std::process::exit(1);
     }
-    paint::poor_mans(&rc);
+    paint::poor_mans(&img, &s.output);
     rc.print_stats();
 }

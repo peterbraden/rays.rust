@@ -65,6 +65,8 @@ fn randn(rng: &mut StdRng) -> f64 {
 fn phillips(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64) -> f64 {
     let ksq = k.x * k.x + k.y * k.y;
     if ksq < f64::MIN_POSITIVE { return 0. };
+    // No wind, no waves (and wind.normalize() would be NaN).
+    if wind.norm() < f64::MIN_POSITIVE { return 0. };
     let wind_dir = wind.normalize();
     let wk = k.normalize().dot(&wind_dir);
     let wind_speed = wind.norm();
@@ -103,7 +105,8 @@ fn create_amplitude_tile(
             let n = (j as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
             let m = (i as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
 
-            let k = gen_k(n, m , lx, lz);
+            // Rows (j) map to z and columns (i) to x, so k.x comes from m.
+            let k = gen_k(m, n, lx, lz);
             h0[ind] = amplitude(k, wind, scale, gravity, rng);
         }
     }
@@ -191,10 +194,10 @@ pub fn create_tile(
         lx: f64,
         lz: f64,
         gravity: f64,
+        time: f64,
         h0: Vec<Complex<f64>>) 
         -> OceanComplexData {
 
-    let h0trans = transpose(&h0, fourier_grid_size);
     // Tile of amplitudes
     let mut ht =          vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
     let mut ht_slope_x =  vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
@@ -207,14 +210,18 @@ pub fn create_tile(
             let ind = j * fourier_grid_size + i;
             let n = (j as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
             let m = (i as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
-            let k = gen_k(n, m , lx, lz);
-            let w = dispersion(k, gravity);
-            let c0 = Complex::new(w.cos(), w.sin());
-            let c1 = Complex::new(w.cos(), -w.sin());
+            // Rows (j) map to z and columns (i) to x, so k.x comes from m.
+            let k = gen_k(m, n, lx, lz);
+            let wt = dispersion(k, gravity) * time;
+            let c0 = Complex::new(wt.cos(), wt.sin());
+            let c1 = Complex::new(wt.cos(), -wt.sin());
 
+            // h(k, t) = h0(k) e^{iwt} + conj(h0(-k)) e^{-iwt}
+            let neg_k = ((fourier_grid_size - j) % fourier_grid_size) * fourier_grid_size
+                + (fourier_grid_size - i) % fourier_grid_size;
             ht[ind] =
                 h0[ind] * c0 +
-                h0trans[ind].conj() * c1;
+                h0[neg_k].conj() * c1;
 
             ht_slope_x[ind] = ht[ind] * Complex::new(0., k.x); 
             ht_slope_z[ind] = ht[ind] * Complex::new(0., k.y); 
@@ -321,7 +328,7 @@ impl OceanGeometry {
             _ht_slope_z,
             ht_slope_dx,
             ht_slope_dz,
-        ) = create_tile(fourier_grid_size, lx, lz, gravity, h0); 
+        ) = create_tile(fourier_grid_size, lx, lz, gravity, time, h0); 
 
         /*
 		// DEBUG IMAGE
@@ -481,8 +488,59 @@ pub fn create_ocean(opts: &Value) -> SceneObject {
 
 #[cfg(test)]
 mod tests {
-	use super::{fft2, ifft2, transpose};
+	use super::{fft2, ifft2, transpose, create_amplitude_tile, create_tile, phillips};
 	use rustfft::num_complex::Complex;
+	use crate::na::Vector2;
+	use rand::{SeedableRng, rngs::StdRng};
+
+	const N: usize = 32;
+	const L: f64 = 100.;
+
+	fn heights(wind: Vector2<f64>, time: f64) -> Vec<Complex<f64>> {
+		let mut rng: StdRng = SeedableRng::from_seed([0; 32]);
+		let h0 = create_amplitude_tile(wind, 1., 9.81, L, L, N, &mut rng);
+		create_tile(N, L, L, 9.81, time, h0).0
+	}
+
+	#[test]
+	fn test_height_field_is_real() {
+		// h(k) + conj(h(-k)) is Hermitian, so its inverse transform must be real.
+		for t in [0., 1.5] {
+			let h = heights(Vector2::new(20., 5.), t);
+			let max_re = h.iter().map(|c| c.re.abs()).fold(0., f64::max);
+			let max_im = h.iter().map(|c| c.im.abs()).fold(0., f64::max);
+			assert!(max_re > 0.);
+			assert!(max_im < max_re * 1e-9, "im {} re {}", max_im, max_re);
+		}
+	}
+
+	#[test]
+	fn test_time_moves_waves() {
+		let a = heights(Vector2::new(20., 5.), 0.);
+		let b = heights(Vector2::new(20., 5.), 3.);
+		assert!(a.iter().zip(&b).any(|(a, b)| (a.re - b.re).abs() > 1e-6));
+	}
+
+	#[test]
+	fn test_wind_along_x_makes_waves_along_x() {
+		// Rows are z, columns are x. Waves travelling along x vary most between columns.
+		let h = heights(Vector2::new(20., 0.), 0.);
+		let (mut dx, mut dz) = (0., 0.);
+		for z in 0..N - 1 {
+			for x in 0..N - 1 {
+				// Undo the (-1)^(x+z) shift from the centred spectrum.
+				let at = |z: usize, x: usize| h[z * N + x].re * if (x + z) % 2 == 0 { -1. } else { 1. };
+				dx += (at(z, x + 1) - at(z, x)).powi(2);
+				dz += (at(z + 1, x) - at(z, x)).powi(2);
+			}
+		}
+		assert!(dx > 2. * dz, "dx {} dz {}", dx, dz);
+	}
+
+	#[test]
+	fn test_zero_wind_is_calm() {
+		assert_eq!(phillips(Vector2::new(1., 1.), Vector2::new(0., 0.), 1., 9.81), 0.);
+	}
 
 	fn assert_eq_vecs(a: &[Complex<f64>], b: &[Complex<f64>]) {
 		for (a, b) in a.iter().zip(b) {

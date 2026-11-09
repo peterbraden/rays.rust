@@ -369,6 +369,24 @@ mod tests {
     }
 
     #[test]
+    fn test_csg_in_scene_files() {
+        let sphere = |x: f64| format!(r#"{{"type": "sphere", "location": [{}, 0, 0], "radius": 1}}"#, x);
+        let lens = shape(&format!(r#"{{"type": "intersection", "items": [{}, {}]}}"#, sphere(-0.5), sphere(0.5)));
+        assert!((hit_from(&lens, [-5., 0., 0.], [1., 0., 0.]).unwrap() - 4.5).abs() < 1e-9);
+        let merged = shape(&format!(r#"{{"type": "merge", "items": [{}, {}]}}"#, sphere(-0.5), sphere(0.5)));
+        assert!((hit_from(&merged, [0., 0., 0.], [1., 0., 0.]).unwrap() - 1.5).abs() < 1e-9);
+        // The old two-shape difference still reads.
+        let bitten = shape(&format!(r#"{{"type": "difference", "a": {}, "b": {}}}"#, sphere(0.), sphere(1.)));
+        assert!((hit_from(&bitten, [5., 0., 0.], [-1., 0., 0.]).unwrap() - 5.).abs() < 1e-9);
+        // A half-space plane, clipping a sphere to a bowl, and inverse.
+        let bowl = shape(&format!(r#"{{"type": "sphere", "location": [0, 0, 0], "radius": 1,
+            "clipped_by": {{"type": "plane", "normal": [0, 1, 0], "distance": 0}}}}"#));
+        assert!((hit_from(&bowl, [0., 5., 0.], [0., -1., 0.]).unwrap() - 6.).abs() < 1e-9);
+        let inv = shape(&format!(r#"{{"type": "union", "inverse": true, "items": [{}]}}"#, sphere(0.)));
+        assert!(inv.inside(&Vector3::new(3., 0., 0.)));
+    }
+
+    #[test]
     #[should_panic(expected = "unknown name 'w'")]
     fn test_bad_function_is_reported() {
         shape(r#"{"type": "isosurface", "function": "x + w"}"#);

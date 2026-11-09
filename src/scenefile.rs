@@ -5,7 +5,7 @@ use crate::shapes::sphere::Sphere;
 use crate::shapes::triangle::Triangle;
 use crate::shapes::plane::Plane;
 use crate::shapes::mesh::{Mesh, SmoothMesh};
-use crate::shapes::csg::{Primitive, Difference};
+use crate::shapes::csg::{Csg, Op, Inverse, Clipped};
 use crate::shapes::transform::{Transform};
 use crate::na::Rotation3;
 use crate::ocean::create_ocean;
@@ -251,7 +251,22 @@ impl SceneFile {
         create_box_terrain(SceneFile::parse_int(&o["seed"], 0) as u64)
     }
 
+    /// A geometry, turned inside out if it has `"inverse": true` and with its surface cut down to
+    /// the inside of `"clipped_by"` if it has one.
     pub fn parse_geometry (o: &Value) -> Option<Box<dyn Geometry + Sync + Send>> {
+        let mut g = SceneFile::parse_bare_geometry(o)?;
+        if !o["clipped_by"].is_null() {
+            let by = SceneFile::parse_geometry(&o["clipped_by"])
+                .unwrap_or_else(|| panic!("clipped_by needs a shape, got {}", o["clipped_by"]));
+            g = Box::new(Clipped::new(g, by));
+        }
+        if o["inverse"].as_bool() == Some(true) {
+            g = Box::new(Inverse(g));
+        }
+        Some(g)
+    }
+
+    fn parse_bare_geometry (o: &Value) -> Option<Box<dyn Geometry + Sync + Send>> {
         let t = o["type"].as_str().unwrap();
 
         if t == "sphere" {
@@ -286,19 +301,31 @@ impl SceneFile {
             return Some(SceneFile::parse_transform(o));
         }
 
-        if t == "difference" {
-            return Some(SceneFile::parse_difference(o));
+        if let Some(op) = match t {
+            "union" => Some(Op::Union),
+            "merge" => Some(Op::Merge),
+            "intersection" => Some(Op::Intersection),
+            "difference" => Some(Op::Difference),
+            _ => None,
+        } {
+            return Some(SceneFile::parse_csg(op, o));
         }
         SceneFile::parse_shape(t, o)
     }
 
-    pub fn parse_difference(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        let a = SceneFile::parse_geometry(&o["a"]).unwrap(); // Panic if fails
-        let b = SceneFile::parse_geometry(&o["b"]).unwrap();
-        Box::new(Difference { 
-            a: Primitive { item: a },
-            b: Primitive { item: b }, 
-        })
+    /// `{"type": "union" | "merge" | "intersection" | "difference", "items": [shapes]}`: a
+    /// difference is its first shape less the others. A difference can also be written with two
+    /// shapes, "a" less "b".
+    pub fn parse_csg(op: Op, o: &Value) -> Box<dyn Geometry + Sync + Send> {
+        let shape = |v: &Value| SceneFile::parse_geometry(v)
+            .unwrap_or_else(|| panic!("{} items must be shapes, got {}", o["type"], v));
+        let parts: Vec<Box<dyn Geometry + Sync + Send>> = match (o["items"].as_array(), op) {
+            (Some(items), _) => items.iter().map(shape).collect(),
+            (None, Op::Difference) if !o["a"].is_null() => vec![shape(&o["a"]), shape(&o["b"])],
+            _ => panic!("{} needs a list of \"items\"", o["type"]),
+        };
+        assert!(!parts.is_empty(), "{} needs at least one item", o["type"]);
+        Box::new(Csg::new(op, parts))
     }
 
     pub fn parse_rotation(o: &Value) -> Box<dyn Geometry + Sync + Send> {

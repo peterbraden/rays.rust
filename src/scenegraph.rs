@@ -59,20 +59,13 @@ impl SceneGraph {
             .sum::<u64>()
     }
 
-    pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
-        match self.nearest_raw_intersection(r, max, min) {
-            Some(tupl) =>{
-                let scene_obj = tupl.0.clone();
-                Some(
-                            Intersection {
-                              dist: tupl.1.dist, 
-                              point: tupl.1.point,
-                              normal: tupl.1.normal,
-                              object: scene_obj,
-                           })
-            },
-            None => None
-        }
+    pub fn nearest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection<'_>> {
+        self.nearest_raw_intersection(r, max, min).map(|(object, hit)| Intersection {
+            dist: hit.dist,
+            point: hit.point,
+            normal: hit.normal,
+            object,
+        })
     }
 
 
@@ -85,7 +78,7 @@ impl SceneGraph {
             })
     }
 
-    pub fn nearest_raw_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(Arc<SceneObject>, RawIntersection)> { 
+    pub fn nearest_raw_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(&SceneObject, RawIntersection)> { 
         let tree_results =self.tree.intersection(r, max, min);
         let infinites = self.naive_intersection_infinites(r, max, min);
 
@@ -103,7 +96,7 @@ impl SceneGraph {
         Some(tree)
     }
 
-    pub fn naive_intersection_infinites(&self, r: &Ray, max:f64, min:f64) -> Option<(Arc<SceneObject>, RawIntersection)> {
+    pub fn naive_intersection_infinites(&self, r: &Ray, max:f64, min:f64) -> Option<(&SceneObject, RawIntersection)> {
         let mut cdist = max;
         let mut closest = None;
         
@@ -121,7 +114,7 @@ impl SceneGraph {
             if let Some(x) = o.intersects_beyond(r, min) {
                 if x.dist < cdist && x.dist >= min {
                     cdist = x.dist;
-                    closest = Some((o.clone(), x));
+                    closest = Some((&**o, x));
                 }
             }
         }

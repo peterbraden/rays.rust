@@ -57,7 +57,7 @@ mod tests {
             dist: 1.,
             point: Vector3::new(0., 0., 0.),
             normal: n,
-            object: Arc::new(SceneObject {
+            object: &(SceneObject {
                 geometry: Box::new(Plane { y: 0. }),
                 medium: Box::new(Solid { m: Box::new(FlatColor { pigment: Color::white() }) }),
             }),

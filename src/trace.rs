@@ -57,7 +57,8 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &S
     // floating point error puts it slightly below the surface which would cause a sign flip
     // leading to shadow acne.
     let mut biased_intersection = intersection.clone();
-    biased_intersection.point = intersection.point + (intersection.normal * scene.render.shadow_bias);
+    // Bias towards the side the ray arrived from, which for a ray inside an object is inwards.
+    biased_intersection.point = intersection.point + (intersection.facing_normal(r) * scene.render.shadow_bias);
 
     let mut cast = 1;
     let (c, o) = trace_sample(r, &biased_intersection, depth, scene);
@@ -128,6 +129,29 @@ mod tests {
         let s = plane_scene(r#"{ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }"#, 0.);
         let c = trace_down(&s);
         assert!((c.rgb[0] - 0.5).abs() < 1e-3, "{:?}", c);
+    }
+
+    /// The inside of a unit sphere of albedo 0.5, with a point light of intensity π at its
+    /// centre, viewed from the centre.
+    fn furnace(max_depth: usize) -> Scene {
+        SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": {},
+            "camera": {{ "location": [0, 0, 0], "lookat": [0, 0, 1], "up": [0, 1, 0], "angle": 0.5 }},
+            "materials": {{ "M": {{ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }} }},
+            "lights": [ {{ "location": [0, 0, 0], "intensity": 3.141592653589793 }} ],
+            "objects": [ {{ "type": "sphere", "location": [0, 0, 0], "radius": 1, "material": "M" }} ]
+        }}"#, max_depth))
+    }
+
+    #[test]
+    fn test_furnace() {
+        for (depth, expected) in [(0, 0.5), (1, 0.75), (10, 1. - 0.5f64.powi(11))] {
+            let s = furnace(depth);
+            for d in [Vector3::new(0., 0., 1.), Vector3::new(1., 2., -3.), Vector3::new(-1., -1., 0.2)] {
+                let c = trace(&Ray { ro: Vector3::zeros(), rd: d.normalize() }, 0, &s).1;
+                assert!((c.rgb.x - expected).abs() < 1e-5, "depth {}: {} for {}, expected {}", depth, c.rgb.x, d, expected);
+            }
+        }
     }
 
     #[test]

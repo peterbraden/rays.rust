@@ -15,6 +15,8 @@ pub struct Whitted {
 
 impl MaterialModel for Whitted {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay{
+        // Shade whichever side the ray hit.
+        let intersection = &intersection.facing(r);
         let mut out = Color::black();
         for light in &s.lights {
             let light_vec = light.position - intersection.point;

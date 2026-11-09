@@ -13,6 +13,8 @@ pub struct Specular {
 
 impl MaterialModel for Specular {
     fn scatter(&self, r: &Ray, intersection: &Intersection, _s: &Scene) -> ScatteredRay{
+        // Shade whichever side the ray hit.
+        let intersection = &intersection.facing(r);
         let fuzz = random_point_in_unit_ball() * self.roughness;
 
         let refl = Ray {

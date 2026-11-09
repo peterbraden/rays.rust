@@ -347,7 +347,7 @@ type Scattering = (Vector3<f64>, Vector3<f64>);
 ///   altitude (how soon they reach the ground), and they are rarely seen, being mostly hidden by
 ///   geometry.
 /// - The sun is fixed for the scene, so it needs no dimension of its own.
-pub struct SkyViewLut {
+pub struct SkyViewLUT {
     width: usize,
     height: usize,
     /// One table per altitude in `LUT_ALTITUDES`, of Rayleigh and Mie scattering before the
@@ -364,17 +364,17 @@ const LUT_ALTITUDES: [f64; 8] = [1., 5., 15., 30., 60., 100., 150., 200.];
 const LUT_WIDTH: usize = 256;
 const LUT_HEIGHT: usize = 128;
 
-impl SkyViewLut {
-    pub fn build(sky: &SkyMaterial, width: usize, height: usize) -> SkyViewLut {
+impl SkyViewLUT {
+    pub fn build(sky: &SkyMaterial, width: usize, height: usize) -> SkyViewLUT {
         let slices = LUT_ALTITUDES.iter().map(|altitude| {
             let origin = sky.earth.center + Vector3::new(0., sky.earth.radius + altitude, 0.);
             (0 .. width * height).into_par_iter().map(|i| {
                 let (x, y) = (i % width, i / width);
-                let rd = SkyViewLut::direction(x as f64 / width as f64, y as f64 / (height - 1) as f64);
+                let rd = SkyViewLUT::direction(x as f64 / width as f64, y as f64 / (height - 1) as f64);
                 sky.scattering(&Ray { ro: origin, rd })
             }).collect()
         }).collect();
-        SkyViewLut { width, height, slices }
+        SkyViewLUT { width, height, slices }
     }
 
     /// The direction for texture coordinates u (longitude) and v (latitude), in [0, 1].
@@ -417,19 +417,19 @@ impl SkyViewLut {
     }
 }
 
-/// The sky, looked up in a `SkyViewLut` above the horizon and integrated exactly below it. The
+/// The sky, looked up in a `SkyViewLUT` above the horizon and integrated exactly below it. The
 /// table is built when the sky is first needed.
-pub struct LutSky {
+pub struct LUTSky {
     sky: SkyMaterial,
-    lut: std::sync::OnceLock<SkyViewLut>,
+    lut: std::sync::OnceLock<SkyViewLUT>,
 }
 
-impl MaterialModel for LutSky {
+impl MaterialModel for LUTSky {
     fn scatter(&self, r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay {
         let d = r.rd.normalize();
         let altitude = (r.ro - self.sky.earth.center).norm() - self.sky.earth.radius;
         let looked_up = if d.y >= 0. {
-            self.lut.get_or_init(|| SkyViewLut::build(&self.sky, LUT_WIDTH, LUT_HEIGHT)).lookup(&d, altitude)
+            self.lut.get_or_init(|| SkyViewLUT::build(&self.sky, LUT_WIDTH, LUT_HEIGHT)).lookup(&d, altitude)
         } else {
             None
         };
@@ -510,7 +510,7 @@ pub fn create_sky_sphere(o: &Value) -> SceneObject {
     };
     // The lookup table is on by default; "lut": false integrates every ray exactly.
     let m: Box<dyn MaterialModel + Sync + Send> = if o["lut"].as_bool().unwrap_or(true) {
-        Box::new(LutSky { sky, lut: std::sync::OnceLock::new() })
+        Box::new(LUTSky { sky, lut: std::sync::OnceLock::new() })
     } else {
         Box::new(sky)
     };
@@ -606,7 +606,7 @@ mod tests {
     /// directions above the horizon, for rays from each of `altitudes` metres up.
     fn lut_errors(sun: Vector3<f64>, altitudes: &[f64]) -> Vec<f64> {
         let sky = test_sky(sun);
-        let lut = SkyViewLut::build(&sky, LUT_WIDTH, LUT_HEIGHT);
+        let lut = SkyViewLUT::build(&sky, LUT_WIDTH, LUT_HEIGHT);
         altitudes.iter().map(|altitude| {
             crate::geometry::seed_rand(11, 0);
             (0..300).map(|i| {
@@ -637,7 +637,7 @@ mod tests {
     #[test]
     fn test_lut_defers_to_exact_above_its_range() {
         let sky = test_sky(Vector3::new(0., 0.5, 1.));
-        let lut = SkyViewLut::build(&sky, 8, 4);
+        let lut = SkyViewLUT::build(&sky, 8, 4);
         assert!(lut.lookup(&Vector3::new(0., 1., 0.), 500.).is_none());
     }
 

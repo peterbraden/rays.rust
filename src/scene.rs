@@ -6,6 +6,8 @@ use crate::color::Color;
 use crate::shapes::bbox::BBox;
 use crate::participatingmedia::ParticipatingMedium;
 use crate::output::OutputOpts;
+use crate::sceneobject::SceneObject;
+use std::sync::Arc;
 
 /// What a path contributes when it is cut short. Paths always stop at `max_depth`, or when their
 /// weight falls below the black threshold.
@@ -36,6 +38,9 @@ pub struct RenderOpts {
     /// Seeds the random numbers used while rendering (sampling, scattering); the same seed
     /// gives the same image.
     pub seed: u64,
+    /// Whether diffuse surfaces sample area lights directly (next-event estimation). Off, they
+    /// are found only when a scattered ray happens to hit them: unbiased, but far noisier.
+    pub sample_lights: bool,
 }
 
 impl RenderOpts {
@@ -65,5 +70,15 @@ pub struct Scene {
     pub black_threshold: f64,
     pub air_medium: Box<dyn ParticipatingMedium>,
     pub output: OutputOpts,
+    /// Emitting objects whose surface can be sampled, for direct lighting (next-event
+    /// estimation). The same `Arc`s as in `objects`, so a hit can be recognised as one of them.
+    pub area_lights: Vec<Arc<SceneObject>>,
+}
+
+impl Scene {
+    /// Whether `object` is one of the area lights that diffuse surfaces sample directly.
+    pub fn is_sampled_light(&self, object: &Arc<SceneObject>) -> bool {
+        self.render.sample_lights && self.area_lights.iter().any(|l| Arc::ptr_eq(l, object))
+    }
 }
 

@@ -21,6 +21,15 @@ impl Sphere{
 
 
 impl Geometry for Sphere {
+    fn surface_area(&self) -> f64 {
+        4. * std::f64::consts::PI * self.radius * self.radius
+    }
+
+    fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> {
+        let n = crate::geometry::point_on_unit_sphere(u[0], u[1]);
+        Some((self.center + n * self.radius, n))
+    }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         // Solve with a unit direction so that `dist` is a world-space distance even when the
         // caller's ray direction is not normalised.

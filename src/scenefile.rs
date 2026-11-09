@@ -66,6 +66,8 @@ pub struct SceneFile {
     #[serde(default)]
     pub seed: Value,
     #[serde(default)]
+    pub sample_lights: Value,
+    #[serde(default)]
     pub output: Value,
     #[serde(default)]
     pub russian_roulette_depth: Value,
@@ -724,6 +726,11 @@ impl SceneFile {
         );
 
         let objects = SceneFile::parse_objects(s.objects, &s.materials, &s.media);
+        // Emitters with a surface we can sample become area lights.
+        let area_lights: Vec<Arc<SceneObject>> = objects.iter()
+            .filter(|o| o.medium.material_at(Vector3::zeros()).is_emitter() && o.geometry.surface_area() > 0.)
+            .cloned()
+            .collect();
         let o = SceneGraph::new(2, objects, max_bounding);
 		
         let width = SceneFile::parse_int(&s.width, 640);
@@ -740,6 +747,7 @@ impl SceneFile {
                 samples_per_chunk: SceneFile::parse_int(&s.samples_per_chunk, 2),
                 path_termination: SceneFile::parse_path_termination(&s.path_termination, &s.russian_roulette_depth),
                 seed: SceneFile::parse_int(&s.seed, 0) as u64,
+                sample_lights: s.sample_lights.as_bool().unwrap_or(true),
             },
             camera: Box::new(SceneFile::parse_camera(s.camera, width as u32, height as u32)),
             lights: SceneFile::parse_lights(&s.lights),
@@ -748,6 +756,7 @@ impl SceneFile {
             black_threshold: SceneFile::parse_number(&s.black_threshold, 1e-7f64),
             air_medium: SceneFile::parse_air(&s.air),
             output: OutputOpts::parse(&s.output),
+            area_lights,
         }
     }
 

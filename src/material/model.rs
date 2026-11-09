@@ -1,4 +1,5 @@
 use crate::color::Color;
+use crate::na::Vector3;
 use crate::ray::Ray;
 use crate::intersection::Intersection;
 use crate::scene::Scene;
@@ -29,6 +30,13 @@ use crate::scene::Scene;
 pub trait MaterialModel: Sync{
     /// Scatter an intersection ray.
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay;
+
+    /// Whether this material emits light, and so can be sampled as an area light.
+    fn is_emitter(&self) -> bool { false }
+
+    /// Radiance emitted in the direction `towards` (a unit vector leaving the surface) from a
+    /// point with surface normal `normal`.
+    fn emitted(&self, _normal: &Vector3<f64>, _towards: &Vector3<f64>) -> Color { Color::black() }
 }
 
 /// The outgoing ray, and the weight to assign the color of the traced ray.
@@ -43,6 +51,10 @@ pub struct ScatteredRay {
     pub ray: Option<Ray>,
     pub attenuate: Color,
     pub emit: Color,
+    /// Set when `emit` already includes light sampled directly from the scene's area lights.
+    /// The continuation ray must then ignore emission from those lights if it hits one, or that
+    /// light would be counted twice.
+    pub sampled_lights: bool,
 }
 
 /// Some material models use a direct ray to the light sources to calculate a scatter.

@@ -47,7 +47,7 @@ pub fn scatter_lambertian(albedo: Color, intersection: &Intersection) -> Scatter
         // Normal plus a point on the unit sphere gives a cosine-weighted direction.
         rd: lambertian_direction(intersection.normal, random_point_on_unit_sphere()),
     };
-    ScatteredRay{ emit: Color::black(), attenuate:albedo, ray: Some(refl) }
+    ScatteredRay{ sampled_lights: false, emit: Color::black(), attenuate:albedo, ray: Some(refl) }
 }
 
 /// Distance to move a scattered ray's origin off the surface, onto the side it travels into.
@@ -91,7 +91,7 @@ pub fn scatter_dielectric(
 
     if let Some(refracted) = refract(r.rd, outward_normal, ni_over_nt) {
         if rand() >= reflect_prob {
-            return ScatteredRay{ emit: Color::black(),
+            return ScatteredRay{ sampled_lights: false, emit: Color::black(),
                 attenuate: albedo,
                 ray: Some( Ray {
                     ro: intersection.point - outward_normal * SURFACE_OFFSET,
@@ -103,7 +103,7 @@ pub fn scatter_dielectric(
 
     // Fresnel or total internal reflection: the ray stays on the side it arrived from.
     let reflected = reflect(r.rd, intersection.normal);
-    ScatteredRay { emit: Color::black(),
+    ScatteredRay { sampled_lights: false, emit: Color::black(),
         attenuate: Color::white(),
         ray: Some(Ray {
             ro: intersection.point + outward_normal * SURFACE_OFFSET,
@@ -113,8 +113,11 @@ pub fn scatter_dielectric(
 }
 
 
-/// Diffuse light arriving directly from each point light that isn't in shadow. Point lights
-/// can't be hit by scattered rays, so diffuse materials must sample them explicitly.
+/// Diffuse light arriving directly from the scene's lights (next-event estimation): every point
+/// light that isn't in shadow, and one sample of the area lights. Point lights can't be hit by
+/// scattered rays at all, and small area lights rarely are, so diffuse materials sample them
+/// explicitly. Materials that call this set `ScatteredRay::sampled_lights`, so the trace ignores
+/// emission from area lights hit by their continuation ray, which would count them twice.
 pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) -> Color {
     let mut direct = Color::black();
     for light in &s.lights {
@@ -124,7 +127,59 @@ pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) ->
             direct = direct + diffuse(albedo, intersection, &light_vec, light);
         }
     }
+    if s.render.sample_lights {
+        direct = direct + sample_area_light(albedo, intersection, s);
+    }
     direct
+}
+
+/// One sample of the light reflected from the area lights, following Peter Shirley, Changyaw
+/// Wang and Kurt Zimmerman, "Monte Carlo Techniques for Direct Lighting Calculations", ACM
+/// Transactions on Graphics 15(1), 1996, doi:10.1145/226150.226151.
+///
+/// Rather than integrating incoming light over directions, integrate over the lights' surfaces.
+/// For a point y on a light, with normal n_y, at distance d along the unit direction w from the
+/// shaded point x with normal n_x, a patch dA subtends solid angle cos(theta_y) dA / d^2, so
+///
+/// ```text
+/// L_direct(x) = integral over lights of (albedo / pi) L_e(y, -w) cos(theta_x) cos(theta_y) / d^2 V(x, y) dA
+/// ```
+///
+/// where V is 1 if nothing blocks the segment from x to y. Choosing one of n lights uniformly,
+/// then a point on it uniformly by area, gives density p(y) = 1 / (n area), and the estimate is
+/// the integrand divided by p(y). Lights are chosen uniformly rather than by power, and only
+/// light sampling is used: combining it with sampling the BSDF, as Veach and Guibas,
+/// "Optimally Combining Sampling Techniques for Monte Carlo Rendering", SIGGRAPH 1995, describe,
+/// would help glossy surfaces and large lights.
+fn sample_area_light(albedo: Color, intersection: &Intersection, s: &Scene) -> Color {
+    let n = s.area_lights.len();
+    if n == 0 {
+        return Color::black();
+    }
+    let light = &s.area_lights[((rand() * n as f64) as usize).min(n - 1)];
+    let (y, n_y) = match light.geometry.sample_surface([rand(), rand(), rand()]) {
+        Some(sample) => sample,
+        None => return Color::black(),
+    };
+    let to_light = y - intersection.point;
+    let d2 = to_light.norm_squared();
+    let d = d2.sqrt();
+    let w = to_light / d;
+    let cos_x = w.dot(&intersection.normal);
+    if cos_x <= 0. {
+        return Color::black();
+    }
+    let emitted = light.medium.material_at(y).emitted(&n_y, &-w);
+    if emitted == Color::black() {
+        return Color::black();
+    }
+    // Stop the shadow ray just short of the light, which would otherwise block itself.
+    let shadow_ray = Ray { ro: intersection.point, rd: w };
+    if s.objects.nearest_intersection(&shadow_ray, d * (1. - 1e-6), f64::MIN_POSITIVE).is_some() {
+        return Color::black();
+    }
+    let cos_y = n_y.dot(&-w).abs();
+    albedo * emitted * (cos_x * cos_y / d2 * light.geometry.surface_area() * n as f64 / std::f64::consts::PI)
 }
 
 /// Light reflected by a Lambertian surface from a point light, pbrt's convention: `intensity` is

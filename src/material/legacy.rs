@@ -34,9 +34,9 @@ impl MaterialModel for Whitted {
                 ro: intersection.point,
                 rd: reflect(r.rd, intersection.normal)
             };
-            return ScatteredRay{ emit: out, attenuate: Color::white() * self.reflection, ray: Some(refl) };
+            return ScatteredRay{ sampled_lights: false, emit: out, attenuate: Color::white() * self.reflection, ray: Some(refl) };
         }
-        ScatteredRay{ emit: out, attenuate: Color::black(), ray: None }
+        ScatteredRay{ sampled_lights: false, emit: out, attenuate: Color::black(), ray: None }
     }
 }
 
@@ -46,7 +46,7 @@ pub struct FlatColor {
 
 impl MaterialModel for FlatColor {
     fn scatter(&self, _r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay{
-        ScatteredRay{ emit: Color::black(), attenuate: self.pigment, ray: None }
+        ScatteredRay{ sampled_lights: false, emit: Color::black(), attenuate: self.pigment, ray: None }
     }
 }
 

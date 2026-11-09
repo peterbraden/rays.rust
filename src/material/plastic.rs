@@ -34,14 +34,15 @@ impl MaterialModel for Plastic {
             };
             if refl.rd.dot(&intersection.normal) <= 0. {
                 // Fuzz has pushed the reflection into the surface: absorb it.
-                return ScatteredRay { emit: Color::black(), attenuate: Color::black(), ray: None };
+                return ScatteredRay { sampled_lights: false, emit: Color::black(), attenuate: Color::black(), ray: None };
             }
-            return ScatteredRay { emit: Color::black(), attenuate: Color::white(), ray: Some(refl) };
+            return ScatteredRay { sampled_lights: false, emit: Color::black(), attenuate: Color::white(), ray: Some(refl) };
         }
 
         // Base: direct lighting is emitted; the bounce carries indirect light, weighted by albedo.
         ScatteredRay {
             emit: direct_lighting(self.albedo, intersection, s),
+            sampled_lights: true,
             ..scatter_lambertian(self.albedo, intersection)
         }
     }

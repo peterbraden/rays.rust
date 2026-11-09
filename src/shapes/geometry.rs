@@ -52,5 +52,12 @@ pub trait Geometry: Sync{
     // NB. We ignore 'ON' for points that are on the surface, as floating comparison
     // is problematic. 
     fn inside(&self, _: &Vector3<f64>) -> bool { false }
+
+    // Surface area, for shapes that can be sampled as area lights; 0 for those that can't.
+    fn surface_area(&self) -> f64 { 0. }
+
+    // A point uniformly distributed over the surface by area, and the surface normal there,
+    // from three uniform random numbers in [0, 1). None for shapes that can't be sampled.
+    fn sample_surface(&self, _u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> { None }
 }
 

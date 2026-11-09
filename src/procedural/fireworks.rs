@@ -103,7 +103,7 @@ impl MaterialModel for FireworkMaterial {
         let actual_intersection = self.particles.intersection(r, f64::INFINITY, 0f64);
         match actual_intersection {
             Some((particle, _i)) => {
-                ScatteredRay { emit: Color::black(),
+                ScatteredRay { sampled_lights: false, emit: Color::black(),
                     attenuate: self.color * particle.intensity,
                     ray: None,
                 }

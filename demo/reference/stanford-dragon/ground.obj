@@ -1,0 +1,7 @@
+# A 200x200 ground square at y = 0, facing up, shared with the Mitsuba reference scene.
+v -100 0 -100
+v -100 0 100
+v 100 0 100
+v 100 0 -100
+f 1 2 3
+f 1 3 4

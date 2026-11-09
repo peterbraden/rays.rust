@@ -13,6 +13,8 @@ pub struct Specular {
 
 impl MaterialModel for Specular {
     fn scatter(&self, r: &Ray, intersection: &Intersection, _s: &Scene) -> ScatteredRay{
+        // Shade whichever side the ray hit.
+        let intersection = &intersection.facing(r);
         let fuzz = random_point_in_unit_ball() * self.roughness;
 
         let refl = Ray {
@@ -22,10 +24,10 @@ impl MaterialModel for Specular {
 
         if refl.rd.dot(&intersection.normal) <= 0. {
             // Fuzz has pushed the reflection into the surface: absorb it.
-            return ScatteredRay{ emit: Color::black(), attenuate: Color::black(), ray: None };
+            return ScatteredRay{ sampled_lights: false, emit: Color::black(), attenuate: Color::black(), ray: None };
         }
 
-        ScatteredRay{ emit: Color::black(), attenuate:self.albedo, ray: Some(refl) }
+        ScatteredRay{ sampled_lights: false, emit: Color::black(), attenuate:self.albedo, ray: Some(refl) }
     }
 }
 

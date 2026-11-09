@@ -46,8 +46,7 @@
     "RED_PLASTIC": {
       "type": "plastic",
       "refractive_index": 1.575,
-      "albedo": [0.9, 0.1, 0.1],
-      "opacity": 0.2
+      "albedo": [0.9, 0.1, 0.1]
     },
     "WHITE_PLASTIC": {
       "type": "lambertian",
@@ -119,12 +118,12 @@
     {
       "location": [-40, 30, -40], 
       "color": "white",
-      "intensity": 10
+      "intensity": 120200
     }
   ],
   "variables" : {},
   "objects": [
-    { "type" : "ocean", "resolution": 100, "fourier_size": 1024, "amplitude": 100, "wind": [34, 1]},
+    { "type" : "ocean", "resolution": 100, "fourier_size": 1024, "amplitude": 9.53674e-05, "wind": [34, 1]},
     { "type" : "skysphere" }
   ]
 }

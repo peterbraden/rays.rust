@@ -219,12 +219,12 @@ impl MaterialModel for NoiseTexture {
 
         match base_scatter.ray {
             // Terminal: blend the base's final colour.
-            None => ScatteredRay { emit: Color::black(),
+            None => ScatteredRay { sampled_lights: base_scatter.sampled_lights, emit: Color::black(),
                 ray: None,
                 attenuate: (base_scatter.emit + base_scatter.attenuate).blend(&self.color, noise_influence),
             },
             // Blend the bounce weight, and tint any emitted (eg. direct) light by the noise colour.
-            Some(ray) => ScatteredRay {
+            Some(ray) => ScatteredRay { sampled_lights: base_scatter.sampled_lights,
                 emit: base_scatter.emit * Color::white().blend(&self.color, noise_influence),
                 ray: Some(ray),
                 attenuate: base_scatter.attenuate.blend(&self.color, noise_influence),
@@ -253,7 +253,7 @@ mod tests {
             "shadow_bias": 0.0001, "background": [0, 0, 0], "max_depth": 1,
             "camera": { "location": [0, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
             "materials": {}, "media": {}, "objects": [], "variables": {},
-            "lights": [ { "location": [0, 10, 0], "intensity": 1 } ]
+            "lights": [ { "location": [0, 10, 0], "intensity": 314.1592653589793 } ]
         }"#.to_string());
         let i = Intersection {
             dist: 1.,

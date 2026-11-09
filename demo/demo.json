@@ -50,8 +50,7 @@
     "RED_PLASTIC": {
       "type": "plastic",
       "refractive_index": 1.575,
-      "albedo": [0.9, 0.1, 0.1],
-      "opacity": 0.2
+      "albedo": [0.9, 0.1, 0.1]
     },
     "WHITE_PLASTIC": {
       "type": "lambertian",
@@ -122,12 +121,12 @@
     {
       "location": [0, 30, 0], 
       "color": "white",
-      "intensity": 40
+      "intensity": 105700
     },
     {
       "location": [2, 30, -40], 
       "color": "white",
-      "intensity": 20
+      "intensity": 153600
     }
   ],
 

@@ -1,3 +1,88 @@
+//! # Ocean waves
+//!
+//! An implementation of Jerry Tessendorf, "Simulating Ocean Water", SIGGRAPH course notes,
+//! 1999-2004, section 4 ("Practical Ocean Wave Algorithms"):
+//! <https://jtessen.people.clemson.edu/reports/papers_files/coursenotes2004.pdf>. Equation numbers
+//! below refer to the 2004 notes. For a gentler walk through the same ideas, see "Simulating
+//! Ocean Waves", <https://peterbraden.co.uk/article/simulation-ocean-waves/>.
+//!
+//! The sea is modelled statistically: the height of the surface is a sum of a great many sine
+//! waves, with random amplitudes whose statistics follow oceanographic measurements. The sum is
+//! evaluated with an inverse FFT over a square patch, triangulated, and tiled to infinity with a
+//! `RepeatingMesh`.
+//!
+//! ## The wavevector (4.1)
+//!
+//! "the vector k, called the wavevector, is a horizontal vector that points in the direction of
+//! travel of the wave, and has magnitude k related to the length of the wave (λ) by
+//! k = 2π/λ" (eq. 28).
+//!
+//! Each point on the 2D Fourier grid is one wavevector, ie. one wave: its direction of travel and
+//! its wavelength. The amplitude stored at that point is how much of that wave is present.
+//!
+//! ## The height field (4.3)
+//!
+//! ```text
+//! h(x, t) = Σ_k h̃(k, t) exp(i k·x)                                        (eq. 36)
+//! k = (2πn/Lx, 2πm/Lz),  -N/2 <= n < N/2,  -M/2 <= m < M/2
+//! ```
+//!
+//! In the code N = M = `fourier_size`, and Lx = Lz is the patch size in metres (the scene key is,
+//! confusingly, `resolution`). `gen_k` builds k from n and m. The surface is periodic over the
+//! patch, which is what lets it tile seamlessly; the notes warn that the repetition can show
+//! across a wide field of view.
+//!
+//! The grid stores n and m from -N/2, but the FFT expects frequency 0 at index 0. By the FFT's
+//! shift theorem, offsetting every frequency index by N/2 multiplies the output by
+//! exp(iπ(x + z)) = (-1)^(x+z), so each vertex's height is corrected by that sign. (The code
+//! uses -(-1)^(x+z), which also flips the whole surface; statistically that makes no difference.)
+//!
+//! ## The Phillips spectrum (4.3)
+//!
+//! Measured ocean wave amplitudes are close to independent Gaussian variables with a spatial
+//! spectrum P_h(k). For wind-driven waves in a fully developed sea:
+//!
+//! ```text
+//! P_h(k) = A exp(-1/(kL)²) / k⁴ |k̂·ŵ|²,   L = V²/g                          (eq. 40)
+//! ```
+//!
+//! L is the largest wave a continuous wind of speed V can raise, and ŵ the wind direction. "A is a
+//! numeric constant": the scene's `amplitude`. Heights scale with √A; the notes give it no units.
+//!
+//! The factor |k̂·ŵ|² "eliminates waves that move perpendicular to the wind direction". Being
+//! squared, it does not suppress waves travelling against the wind; they are as strong as those
+//! travelling with it.
+//!
+//! Not implemented: the notes multiply the spectrum by exp(-k²l²), with l a small length, to
+//! suppress very small waves, where the Phillips spectrum converges poorly (eq. 41).
+//!
+//! ## A random realisation (4.4)
+//!
+//! ```text
+//! h̃0(k) = 1/√2 (ξr + i ξi) √P_h(k)                                           (eq. 42)
+//! h̃(k, t) = h̃0(k) exp(iω(k)t) + h̃0*(-k) exp(-iω(k)t)                          (eq. 43)
+//! ```
+//!
+//! ξr and ξi are independent standard Gaussian draws (`randn`). Eq. 43 propagates each wave both
+//! ways and "preserves the complex conjugation property h̃*(k, t) = h̃(-k, t)", which is exactly
+//! the condition for the inverse transform, the height, to be real. Any time t can be computed
+//! directly, without stepping through earlier times.
+//!
+//! ## Dispersion (4.2)
+//!
+//! In deep water a wave's frequency depends only on its wavenumber: ω²(k) = gk (eq. 31). To make
+//! an animation loop after a time T, every frequency must be a multiple of ω0 = 2π/T (eq. 34),
+//! so the notes quantise the dispersion relation: ω̄(k) = [[ω(k)/ω0]] ω0, taking the integer
+//! part (eq. 35). See `dispersion`.
+//!
+//! ## Slopes and choppy waves (4.3, 4.6)
+//!
+//! The exact slope is another FFT: ε(x, t) = Σ_k i k h̃(k, t) exp(i k·x) (eq. 37). Choppy waves
+//! displace each point horizontally to x + λD(x, t), with D(x, t) = Σ_k -i (k/k) h̃(k, t)
+//! exp(i k·x) (eq. 44), sharpening crests and broadening troughs. Both are computed in
+//! `create_tile`, but neither is used yet: normals come from the triangles, and the displacement
+//! is switched off (`choppyness_shift`), with λ fixed at 1.
+
 extern crate rand as _rand;
 extern crate image;
 extern crate rustfft;
@@ -34,34 +119,14 @@ use crate::geometry;
 use rand::{SeedableRng};
 use rand::rngs::StdRng;
 
-/// Using Tessendorf algorithm, generate a mesh of triangles based on an
-/// inverse-fast-fourier transform of a set of waves based on the Phillips
-/// Spectrum.
-///
-///
-/// == K ==
-/// 
-/// " the vector k, called the wavevector, is a horizontal vector that points in the direction of
-/// travel of the wave, and has magnitude k related to the wavelength of the wave."
-///
-/// K = 2Pi / wavelength
-///
-/// The k-vector is simply the point on the 2D spectrum that the amplitude
-/// applies to. Because we dot product the wind and k, waves _backwards_
-/// from the wind location are weighted to zero.
-///
-/// ===
-///
-/// I still haven't worked out what units everything is in, or what the
-/// scale factor 'A' should represent.
-/// 
-/// Normal distribution rand (gaussian)
+/// A standard Gaussian draw: ξr or ξi in eq. 42.
 fn randn(rng: &mut StdRng) -> f64 {
     let normal = Normal::new(0.0, 1.0);
     normal.sample(rng)
 }
 
-/// Phillips Spectrum
+/// The Phillips spectrum P_h(k) (eq. 40). `scale` is A; `wind` is the wind velocity, giving both
+/// V and ŵ.
 fn phillips(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64) -> f64 {
     let ksq = k.x * k.x + k.y * k.y;
     if ksq < f64::MIN_POSITIVE { return 0. };
@@ -70,22 +135,31 @@ fn phillips(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64) -> f6
     let wind_dir = wind.normalize();
     let wk = k.normalize().dot(&wind_dir);
     let wind_speed = wind.norm();
+    // The largest wave the wind can raise.
     let l = (wind_speed * wind_speed) / gravity;
     scale * (-1.0 / (ksq * l * l)).exp() / (ksq * ksq) * wk * wk
 }
 
+/// A random Fourier amplitude h̃0(k) (eq. 42).
 fn amplitude(k: Vector2<f64>, wind: Vector2<f64>, scale: f64, gravity: f64, rng: &mut StdRng) -> Complex<f64> {
     1f64/(2f64.sqrt()) *
         Complex::new(randn(rng), randn(rng)) *
         phillips(k, wind, scale, gravity).sqrt()
 }
 
+/// Repeat time T of the animation, in seconds (eq. 34).
+const REPEAT_TIME: f64 = 200.;
+
+/// The frequency ω of a wave: the deep-water dispersion relation ω² = gk (eq. 31), quantised to
+/// multiples of ω0 = 2π/T so that the surface repeats after T (eqs. 34, 35). A longer T keeps
+/// ω̄ closer to ω.
 fn dispersion(k: Vector2<f64>, gravity: f64) -> f64 {
-    let w = (k.norm() * gravity).sqrt(); // Deep water frequency relationship to magnitude
-    let w_0 = 2f64 * std::f64::consts::PI / 200f64; // No idea? Rounding factor. Comes from keithlantz impl.
+    let w = (k.norm() * gravity).sqrt();
+    let w_0 = 2f64 * std::f64::consts::PI / REPEAT_TIME;
     (w / w_0).floor() * w_0
 }
 
+/// h̃0(k) for every k on the N x N grid, row-major with rows along z.
 fn create_amplitude_tile(
         wind: Vector2<f64>,
         scale: f64,
@@ -101,20 +175,19 @@ fn create_amplitude_tile(
         for i in 0 .. fourier_grid_size {
             let ind = j * fourier_grid_size + i;
 
-            // n and m are indices into mesh space - (-N/2 .. N/2)
-            let n = (j as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
-            let m = (i as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
-
-            // Rows (j) map to z and columns (i) to x, so k.x comes from m.
-            let k = gen_k(m, n, lx, lz);
+            // Column i is n, along x; row j is m, along z. Both run from -N/2.
+            let n = (i as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
+            let m = (j as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
+            let k = gen_k(n, m, lx, lz);
             h0[ind] = amplitude(k, wind, scale, gravity, rng);
         }
     }
     h0
 }
 
+/// The wavevector k = (2πn/Lx, 2πm/Lz) for grid indices n, m (below eq. 36). The vector's y
+/// component is the z axis.
 fn gen_k(n: f64, m: f64, lx: f64, lz: f64) -> Vector2<f64> {
-    // <2 pi n / Lx, 2 pi m / Lz>
     Vector2::new(
         2f64 * std::f64::consts::PI * n /  lx,
         2f64 * std::f64::consts::PI * m /  lz,
@@ -189,6 +262,8 @@ type OceanComplexData = (
     Vec<Complex<f64>>, // ht_slope_dz
 );
 
+/// The surface at time t, from the amplitudes h̃0: heights h(x, t) (eqs. 43, 36), slopes ε(x, t)
+/// (eq. 37) and choppy displacements D(x, t) (eq. 44), each on the N x N grid.
 pub fn create_tile(
         fourier_grid_size:usize,
         lx: f64,
@@ -208,24 +283,27 @@ pub fn create_tile(
     for j in 0 .. fourier_grid_size {
         for i in 0 .. fourier_grid_size {
             let ind = j * fourier_grid_size + i;
-            let n = (j as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
-            let m = (i as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
-            // Rows (j) map to z and columns (i) to x, so k.x comes from m.
-            let k = gen_k(m, n, lx, lz);
+            // Column i is n, along x; row j is m, along z (see create_amplitude_tile).
+            let n = (i as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
+            let m = (j as f64 / fourier_grid_size as f64 - 0.5) * fourier_grid_size as f64;
+            let k = gen_k(n, m, lx, lz);
             let wt = dispersion(k, gravity) * time;
             let c0 = Complex::new(wt.cos(), wt.sin());
             let c1 = Complex::new(wt.cos(), -wt.sin());
 
-            // h(k, t) = h0(k) e^{iwt} + conj(h0(-k)) e^{-iwt}
+            // h̃(k, t) = h̃0(k) e^{iωt} + h̃0*(-k) e^{-iωt} (eq. 43). The index of -k wraps n and
+            // m round, so -(-N/2) maps back to -N/2.
             let neg_k = ((fourier_grid_size - j) % fourier_grid_size) * fourier_grid_size
                 + (fourier_grid_size - i) % fourier_grid_size;
             ht[ind] =
                 h0[ind] * c0 +
                 h0[neg_k].conj() * c1;
 
+            // i k h̃ (eq. 37)
             ht_slope_x[ind] = ht[ind] * Complex::new(0., k.x); 
             ht_slope_z[ind] = ht[ind] * Complex::new(0., k.y); 
 
+            // -i (k/k) h̃ (eq. 44)
             let len = k.norm();
             if len > 0.00001 {
                 ht_slope_dx[ind] = ht[ind] * Complex::new(0., -k.x / len); 
@@ -234,11 +312,17 @@ pub fn create_tile(
         }
     }
 
-    ht = ifft2(ht, fourier_grid_size);
-    ht_slope_x = ifft2(ht_slope_x, fourier_grid_size);
-    ht_slope_z = ifft2(ht_slope_z, fourier_grid_size);
-    ht_slope_dx = ifft2(ht_slope_dx, fourier_grid_size);
-    ht_slope_dz = ifft2(ht_slope_dz, fourier_grid_size);
+    // Eq. 36 is a plain sum over the waves; ifft2 normalises by 1/N², which would make wave
+    // height depend on the grid size.
+    let sum = |t: Vec<Complex<f64>>| -> Vec<Complex<f64>> {
+        let n2 = (fourier_grid_size * fourier_grid_size) as f64;
+        ifft2(t, fourier_grid_size).into_iter().map(|x| x * n2).collect()
+    };
+    ht = sum(ht);
+    ht_slope_x = sum(ht_slope_x);
+    ht_slope_z = sum(ht_slope_z);
+    ht_slope_dx = sum(ht_slope_dx);
+    ht_slope_dz = sum(ht_slope_dz);
 
     (
         ht,
@@ -306,20 +390,25 @@ impl OceanGeometry {
         let wind = SceneFile::parse_vec2_def(o, "wind", Vector2::new(40., 30.));
         let time = SceneFile::parse_number(&o["time"],4f64);
 
-        // Mesh size
+        // Patch size in metres, Lx = Lz (eq. 36)
         let lx = SceneFile::parse_number(&o["resolution"], 100.);
         let lz = lx;
         let choppyness_shift = false;
 
-        let mut rng: StdRng = SeedableRng::from_seed([0; 32]);
+        // The random realisation of the spectrum (4.4). Seed 0, the default, is the realisation
+        // every ocean used before seeds were configurable.
+        let mut seed = [0u8; 32];
+        seed[..8].copy_from_slice(&(SceneFile::parse_int(&o["seed"], 0) as u64).to_le_bytes());
+        let mut rng: StdRng = SeedableRng::from_seed(seed);
 
-        // Size of the amplitude grid - between 16 and 2048, powers of 2
-        // Titanic and Waterworld used 2048 - equivalent to 3cm resolution
-        // Above 2048 numerics break down
-        // In paper this is 'N'
+        // N = M, the size of the Fourier grid (4.4): a power of two from 16 to 2048. Titanic and
+        // Waterworld used 2048, about 3 cm between grid points; above 2048 floating point
+        // accuracy becomes noticeable.
         let fourier_grid_size = SceneFile::parse_number(&o["fourier_size"], 128.) as usize;
 
-        let scale = SceneFile::parse_number(&o["amplitude"], 1.) * (fourier_grid_size * fourier_grid_size) as f64; // (A)
+        // The Phillips constant A (eq. 40). Heights are independent of fourier_size; the default
+        // matches the look of the former default (amplitude 1 at fourier_size 128).
+        let scale = SceneFile::parse_number(&o["amplitude"], 1. / (128. * 128.)); // (A)
 
         let h0 = create_amplitude_tile(wind, scale, gravity, lx, lz, fourier_grid_size, &mut rng);
         let(
@@ -345,9 +434,10 @@ impl OceanGeometry {
         for x in 0 .. fourier_grid_size {
             for z in 0 .. fourier_grid_size {
                 let ind = z * fourier_grid_size + x;
+                // The grid's frequencies start at -N/2, not 0; by the shift theorem the transform
+                // comes out multiplied by (-1)^(x+z), undone here (see the module docs).
                 let mut sign = 1.;
                 if (x + z) % 2 == 0 {
-                    // Sign correct ? Don't really understand this part
                     sign =  -1.
                 }
 
@@ -451,7 +541,7 @@ impl MaterialModel for OceanMaterial {
                     // 90degrees down
                     let deep_angle = 1. / (refracted.dot(&Vector3::new(0., 1., 0.)).acos() * 0.8);
 
-					return ScatteredRay{ emit: Color::black(),
+					return ScatteredRay{ sampled_lights: false, emit: Color::black(),
 						attenuate: self.deep_color * deep_angle,
 						ray: None, // Don't try and refract
 					};
@@ -464,7 +554,7 @@ impl MaterialModel for OceanMaterial {
 		}
 
 		let reflected = reflect(r.rd, intersection.normal);
-		ScatteredRay { emit: Color::black(),
+		ScatteredRay { sampled_lights: false, emit: Color::black(),
 			attenuate: Color::white(),
 			ray: Some(Ray {
 				ro: intersection.point,
@@ -497,9 +587,24 @@ mod tests {
 	const L: f64 = 100.;
 
 	fn heights(wind: Vector2<f64>, time: f64) -> Vec<Complex<f64>> {
+		heights_n(wind, time, N)
+	}
+
+	fn heights_n(wind: Vector2<f64>, time: f64, n: usize) -> Vec<Complex<f64>> {
 		let mut rng: StdRng = SeedableRng::from_seed([0; 32]);
-		let h0 = create_amplitude_tile(wind, 1., 9.81, L, L, N, &mut rng);
-		create_tile(N, L, L, 9.81, time, h0).0
+		let h0 = create_amplitude_tile(wind, 1., 9.81, L, L, n, &mut rng);
+		create_tile(n, L, L, 9.81, time, h0).0
+	}
+
+	#[test]
+	fn test_wave_height_independent_of_grid_size() {
+		let rms = |n: usize| {
+			let h = heights_n(Vector2::new(20., 5.), 0., n);
+			(h.iter().map(|c| c.re * c.re).sum::<f64>() / h.len() as f64).sqrt()
+		};
+		let (small, large) = (rms(32), rms(256));
+		let ratio = large / small;
+		assert!(ratio > 0.5 && ratio < 2., "rms {} at N=32, {} at N=256", small, large);
 	}
 
 	#[test]

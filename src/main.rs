@@ -61,6 +61,8 @@ mod camera;
 mod trace;
 mod rendercontext;
 mod paint;
+mod output;
+mod compare;
 //mod wireframe;
 mod geometry;
 mod procedural {
@@ -73,6 +75,7 @@ mod noise;
 use crate::trace::trace;
 use crate::rendercontext::RenderContext;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use rand::thread_rng;
 use rand::seq::SliceRandom;
 
@@ -100,6 +103,26 @@ struct Args {
     ///Set the height of the output image; overrides the scenefile if specified
     #[arg(long)]
     height: Option<usize>,
+
+    ///Write the image here instead of alongside the scene file. The extension selects the
+    ///format: .png (8-bit, encoded for display) or .exr (linear floating point)
+    #[arg(short, long)]
+    output: Option<String>,
+
+    ///Compare the render with this reference image (eg. a linear EXR from another renderer):
+    ///print the exposure fit, RMSE and FLIP error, and write a FLIP error map alongside the
+    ///output
+    #[arg(long)]
+    compare: Option<String>,
+
+    ///With --compare, fail (exit status 2) if the mean FLIP error exceeds this
+    #[arg(long)]
+    max_flip: Option<f64>,
+
+    ///Seed for the render's random numbers; overrides the scenefile if specified. The same
+    ///seed gives the same image
+    #[arg(long)]
+    seed: Option<u64>,
 }
 
 fn main() {
@@ -109,22 +132,31 @@ fn main() {
         style("# 1. - Parsing scene, building models").bold().cyan()
     );
 
-    let s = scenefile::SceneFile::from_file(&args.scene, args.width, args.height);
+    let s = scenefile::SceneFile::from_file(&args.scene, &scenefile::Overrides {
+        width: args.width,
+        height: args.height,
+        seed: args.seed,
+    });
 
-    let rc = RenderContext::new(
+    let mut rc = RenderContext::new(
             s.image.width,
             s.image.height,
             args.progressive_render,
             &args.scene,
             );
+    if let Some(path) = &args.output {
+        rc.output_filename = path.clone();
+    }
     println!("- Output: {}x{} @ {} samples -> {}", s.image.width, s.image.height, s.render.samples_per_pixel(), rc.output_filename);
     println!("- Scene Objects: {}, Primitives: {} ", s.objects.len(),  s.objects.primitives_len()); 
 
-    let chunks: Vec<rendercontext::RenderableChunk> = rc.iter(&s).collect();
-    let rcmtx = Arc::new(Mutex::new(rc));
+    // Fail before rendering if the output can't be written in this format.
+    let writer = output::writer_for(&rc.output_filename, s.output).unwrap_or_else(|e| {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    });
 
-    //let mut rng = thread_rng();
-    //chunks.shuffle(&mut rng);
+    let rcmtx = Mutex::new(rc);
 
     println!("{}",
         style("# 2. - Rendering ").bold().cyan()
@@ -132,27 +164,71 @@ fn main() {
     let pb = ProgressBar::new(100);
     pb.set_style(ProgressStyle::with_template("{spinner:.green} {prefix}{msg} [{bar:.cyan/blue}]").unwrap().progress_chars("#>-"));
 
-    chunks
-        .into_par_iter()
-        //.iter()
-        .for_each(|c| {
-            let p = c.render(&s);
-            let rcmtx = rcmtx.clone();
-            let mut rc = rcmtx.lock().unwrap();
-            rc.apply_chunk(&c, &p);
-            // Progressive render out:
-            if rc.progressive_render {
-                paint::to_png(&rc);
-            }
+    // Progressive output is throttled, and encoded outside the lock so it doesn't serialise
+    // the render.
+    let progressive_interval = Duration::from_secs(1);
+    let last_progressive = Mutex::new(Instant::now());
+
+    rendercontext::render(&s, &rcmtx,
+        |rc| {
             pb.set_position(rc.progress_percentage(&s) as u64);
             pb.set_message(rc.progress(&s));
             pb.tick();
+
+            let mut last = last_progressive.lock().unwrap();
+            if rc.progressive_render && last.elapsed() >= progressive_interval {
+                *last = Instant::now();
+                Some((rc.snapshot(), rc.output_filename.clone()))
+            } else {
+                None
+            }
+        },
+        |(img, path)| {
+            if let Err(e) = writer.write(&img, &path) {
+                eprintln!("{}", e);
+            }
         });
     pb.finish();
 
     let rc = rcmtx.lock().unwrap();
     //wireframe::wireframe(&s, &mut rc);
-    paint::to_png(&rc);
-    paint::poor_mans(&rc);
+    let img = rc.snapshot();
+    if let Err(e) = writer.write(&img, &rc.output_filename) {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    }
+    if let Some(reference) = &args.compare {
+        compare_with(&img, reference, &rc.output_filename, &s.output, args.max_flip);
+    }
+    paint::poor_mans(&img, &s.output);
     rc.print_stats();
+}
+
+/// Compare the finished render with a reference image, reporting how close they are.
+fn compare_with(img: &output::LinearImage, reference: &str, output_filename: &str, opts: &output::OutputOpts, max_flip: Option<f64>) {
+    let fail = |e: String| -> ! { eprintln!("{}", e); std::process::exit(1) };
+    let reference_img = output::read_linear(reference).unwrap_or_else(|e| fail(e));
+    let c = compare::compare(img, &reference_img, opts).unwrap_or_else(|e| fail(e));
+    let map_path = std::path::Path::new(output_filename).with_extension("flip.png");
+    if let Err(e) = c.error_map.save(&map_path) {
+        eprintln!("Failed to write {}: {}", map_path.display(), e);
+    }
+    // The reference at our size, encoded exactly as our PNG output is, to view side by side.
+    let reference_path = std::path::Path::new(output_filename).with_extension("reference.png");
+    let reference_path = reference_path.to_string_lossy();
+    if let Err(e) = output::ImageWriter::write(&output::Png { opts: *opts }, &c.reference, &reference_path) {
+        eprintln!("{}", e);
+    }
+    println!("{}", style("# Comparison").bold().cyan());
+    println!("- Reference: {}", reference);
+    println!("- Exposure fit: {:.4} (1 means the same brightness)", c.exposure);
+    println!("- RMSE: {:.5}, after exposure fit: {:.5}", c.rmse, c.rmse_fitted);
+    println!("- Mean FLIP error: {:.4} (error map: {})", c.flip_mean, map_path.display());
+    println!("- Reference at this size: {}", reference_path);
+    if let Some(max) = max_flip {
+        if c.flip_mean > max {
+            eprintln!("Mean FLIP error {:.4} exceeds {:.4}", c.flip_mean, max);
+            std::process::exit(2);
+        }
+    }
 }

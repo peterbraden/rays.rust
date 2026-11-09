@@ -14,3 +14,6 @@
 # More information here http://doc.crates.io/guide.html#cargotoml-vs-cargolock
 Cargo.lock
 
+
+# Reference renders fetched by scripts/fetch-references.sh
+/references/

@@ -5,12 +5,19 @@ use crate::light::Light;
 use crate::color::Color;
 use crate::shapes::bbox::BBox;
 use crate::participatingmedia::ParticipatingMedium;
+use crate::output::OutputOpts;
+use crate::sceneobject::SceneObject;
+use std::sync::Arc;
 
-// TODO
-pub enum PathCulling {
-    MaxDepth, // Keep recursing unti "max_depth"
-    BlackThreshold, // Stop recursing when weight drops below threshold or "max_depth"
-    RussianRoulette, // Stop recursing when < "min_depth" and rand() > luminance or "max_depth"
+/// What a path contributes when it is cut short. Paths always stop at `max_depth`, or when their
+/// weight falls below the black threshold.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PathTermination {
+    /// Stopped paths contribute nothing.
+    Black,
+    /// From `min_depth`, continue with probability equal to the bounce weight, scaling survivors
+    /// to compensate. Unbiased (up to `max_depth`), so `max_depth` can be raised cheaply.
+    RussianRoulette { min_depth: usize },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -27,6 +34,13 @@ pub struct RenderOpts {
     pub supersamples: usize,
     pub chunk_size: usize,
     pub samples_per_chunk: usize,
+    pub path_termination: PathTermination,
+    /// Seeds the random numbers used while rendering (sampling, scattering); the same seed
+    /// gives the same image.
+    pub seed: u64,
+    /// Whether diffuse surfaces sample area lights directly (next-event estimation). Off, they
+    /// are found only when a scattered ray happens to hit them: unbiased, but far noisier.
+    pub sample_lights: bool,
 }
 
 impl RenderOpts {
@@ -55,5 +69,16 @@ pub struct Scene {
     pub max_bounding: BBox,
     pub black_threshold: f64,
     pub air_medium: Box<dyn ParticipatingMedium>,
+    pub output: OutputOpts,
+    /// Emitting objects whose surface can be sampled, for direct lighting (next-event
+    /// estimation). The same `Arc`s as in `objects`, so a hit can be recognised as one of them.
+    pub area_lights: Vec<Arc<SceneObject>>,
+}
+
+impl Scene {
+    /// Whether `object` is one of the area lights that diffuse surfaces sample directly.
+    pub fn is_sampled_light(&self, object: &Arc<SceneObject>) -> bool {
+        self.render.sample_lights && self.area_lights.iter().any(|l| Arc::ptr_eq(l, object))
+    }
 }
 

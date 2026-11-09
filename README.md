@@ -36,7 +36,7 @@ Supports:
 
 ## Install / Run
 ```
-cargo run --release -- -p demo/demo.json
+cargo run --release -- demo/demo.json
 ```
 
 ## Blog Posts

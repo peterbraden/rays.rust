@@ -50,8 +50,7 @@
     "RED_PLASTIC": {
       "type": "plastic",
       "refractive_index": 1.575,
-      "albedo": [0.9, 0.1, 0.1],
-      "opacity": 0.2
+      "albedo": [0.9, 0.1, 0.1]
     },
     "WHITE_PLASTIC": {
       "type": "lambertian",
@@ -122,19 +121,19 @@
     {
       "location": [0, 30, 0], 
       "color": "white",
-      "intensity": 20
+      "intensity": 39270
     },
     {
       "location": [0, 30, -40], 
       "color": "white",
-      "intensity": 10
+      "intensity": 69900
     }
   ],
 
   "variables" : {},
 
   "objects": [
-    { "type" : "ocean", "resolution": 20, "fourier_size": 512, "amplitude": 10, "wind": [20, 0], "debug": false, "color": [0, 0.02, 0.03]},
+    { "type" : "ocean", "resolution": 20, "fourier_size": 512, "amplitude": 3.8147e-05, "wind": [20, 0], "debug": false, "color": [0, 0.02, 0.03]},
     { "type" : "skysphere", "sun_direction": [0.1,-0.1,1], "brightness": 100},
     { "type" : "fog" },
     { "type" : "firework", "gravity": 13, "center": [40, 25, 400], "time": 2, "samples": 200, "particles": 60, "radius": 13, "upward_bias": 14, "color": [1, 0.7, 0.6], "intensity": 2},

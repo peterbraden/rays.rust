@@ -45,11 +45,19 @@ use serde_json::{Value};
 use crate::scenefile::SceneFile;
 
 // Constants for atmospheric scattering
+/// Scales the integrated radiance into the renderer's working range. Under the default sRGB
+/// output this keeps the sky looking as it did with its former built-in tone curve,
+/// (0.383 v)^(1/2.2).
+const SKY_CALIBRATION: f64 = 0.38317;
+
 const DEFAULT_NUM_SAMPLES: usize = 16;
 const DEFAULT_NUM_SAMPLES_LIGHT: usize = 8;
 
 // Default scattering coefficient values (Earth-like)
-const DEFAULT_RAYLEIGH_R: f64 = 3.8e-6;
+// Sea-level Rayleigh scattering coefficients (per metre) at 680, 550 and 440 nm. These scale as
+// 1/wavelength^4; the red value was previously 3.8e-6, a typo that made the sky scatter too
+// little red light.
+const DEFAULT_RAYLEIGH_R: f64 = 5.8e-6;
 const DEFAULT_RAYLEIGH_G: f64 = 13.5e-6;
 const DEFAULT_RAYLEIGH_B: f64 = 33.1e-6;
 const DEFAULT_MIE_COEFFICIENT: f64 = 21.0e-6;
@@ -72,7 +80,7 @@ pub const SKY_PRESETS: [SkyPreset; 3] = [
     // Earth-like (default)
     SkyPreset {
         name: "earth",
-        rayleigh_r: 3.8e-6,
+        rayleigh_r: 5.8e-6,
         rayleigh_g: 13.5e-6,
         rayleigh_b: 33.1e-6,
         mie_coefficient: 21.0e-6,
@@ -83,7 +91,7 @@ pub const SKY_PRESETS: [SkyPreset; 3] = [
     // Earth sunset (warmer colors)
     SkyPreset {
         name: "sunset",
-        rayleigh_r: 3.8e-6,
+        rayleigh_r: 5.8e-6,
         rayleigh_g: 13.5e-6,
         rayleigh_b: 33.1e-6,
         mie_coefficient: 25.0e-6,
@@ -94,7 +102,7 @@ pub const SKY_PRESETS: [SkyPreset; 3] = [
     // Hazy (dusty/smoky atmosphere)
     SkyPreset {
         name: "hazy",
-        rayleigh_r: 3.8e-6,
+        rayleigh_r: 5.8e-6,
         rayleigh_g: 13.5e-6,
         rayleigh_b: 33.1e-6,
         mie_coefficient: 45.0e-6,
@@ -146,7 +154,9 @@ impl SkyMaterial {
         3.0 / (16.0 * std::f64::consts::PI) * (1.0 + mu * mu)
     }
     
-    /// Calculate the Mie phase function (Henyey-Greenstein approximation)
+    /// Calculate the Mie phase function. This is not Henyey-Greenstein, as previously described,
+    /// but a related form with an extra (1 + mu^2) factor:
+    /// 3(1 - g^2) (1 + mu^2) / (8 pi (2 + g^2) (1 + g^2 - 2 g mu)^(3/2)).
     /// 
     /// The Mie phase function describes the angular distribution of light
     /// scattered by particles comparable to or larger than the wavelength.
@@ -175,20 +185,6 @@ impl SkyMaterial {
         (-height / thickness).exp() * segment_length
     }
     
-    /// Apply a tone mapping function to convert HDR values to displayable values
-    ///
-    /// # Arguments
-    /// * `value` - HDR color value that may be outside the [0,1] range
-    fn tone_map(value: f64) -> f64 {
-        let threshold = 1.413f64;
-        let gamma = 1.0 / 2.2; // Standard gamma correction value
-        
-        if value < threshold {
-            (value * 0.38317f64).powf(gamma)
-        } else {
-            1.0f64 - (-value).exp()
-        }
-    }
 
     /// Distance the view ray travels through the atmosphere before leaving it, or hitting the
     /// ground if it starts above the surface. None if it misses the atmosphere entirely.
@@ -205,8 +201,31 @@ impl SkyMaterial {
     }
 }
 
-impl MaterialModel for SkyMaterial {
-    fn scatter(&self, r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay {
+impl SkyMaterial {
+    /// Rayleigh and Mie optical depths from `p` to the top of the atmosphere towards the sun, or
+    /// None if the earth is in the way.
+    fn optical_depth_to_sun(&self, p: Vector3<f64>) -> Option<(f64, f64)> {
+        let light_ray = Ray { ro: p, rd: self.sun_direction };
+        if self.earth.intersects(&light_ray).is_some() {
+            return None;
+        }
+        let light_len = self.atmosphere.intersects(&light_ray)?.dist;
+        let segment_length_light = light_len / DEFAULT_NUM_SAMPLES_LIGHT as f64;
+        let mut optical_depth_r = 0.0;
+        let mut optical_depth_m = 0.0;
+
+        // Integrate along light ray to the sun, sampling each segment's midpoint
+        for j in 0..DEFAULT_NUM_SAMPLES_LIGHT {
+            let sample = p + ((j as f64 + 0.5) * segment_length_light) * self.sun_direction;
+            let height = (sample - self.atmosphere.center).norm() - self.earth.radius;
+            optical_depth_r += self.optical_depth(height, self.rayleigh_thickness, segment_length_light);
+            optical_depth_m += self.optical_depth(height, self.mie_thickness, segment_length_light);
+        }
+        Some((optical_depth_r, optical_depth_m))
+    }
+
+    /// Linear radiance arriving along the view ray.
+    pub fn radiance(&self, r: &Ray) -> Vector3<f64> {
         // Use the provided scattering coefficients
         let beta_r: Vector3<f64> = self.rayleigh_coefficients;
         let mie_coef = self.mie_coefficient;
@@ -214,12 +233,11 @@ impl MaterialModel for SkyMaterial {
         
         let ray_max = match self.view_ray_length(r) {
             Some(d) => d,
-            None => return ScatteredRay { emit: Color::black(), attenuate: Color::black(), ray: None },
+            None => return Vector3::zeros(),
         };
         
         // Setup for numerical integration
         let num_samples = DEFAULT_NUM_SAMPLES; 
-        let num_samples_light = DEFAULT_NUM_SAMPLES_LIGHT; 
         let segment_length = ray_max / num_samples as f64; 
 
         let mut rayleigh_sum: Vector3<f64> = Vector3::zeros();
@@ -239,7 +257,8 @@ impl MaterialModel for SkyMaterial {
         
         // Integrate along the view ray through the atmosphere
         for i in 0..num_samples {
-            let sample_position = r.ro + (i as f64 * segment_length) * r.rd;
+            // The midpoint of each segment.
+            let sample_position = r.ro + ((i as f64 + 0.5) * segment_length) * r.rd;
             
             // Calculate height above the earth's surface
             let height = (sample_position - self.atmosphere.center).norm() - self.earth.radius;
@@ -252,29 +271,11 @@ impl MaterialModel for SkyMaterial {
             optical_depth_r += rayleigh_depth;
             optical_depth_m += mie_depth;
             
-            // Check if we can see the sun from this position
-            let light_ray = Ray { ro: sample_position, rd: self.sun_direction };
-            let atmosphere_intersection = self.atmosphere.intersects(&light_ray);
-            
-            if atmosphere_intersection.is_none() {
-                // No intersection with atmosphere, we're outside the atmospheric bounds
-                continue;
-            }
-            
-            // Calculate light ray path through atmosphere
-            let light_len = atmosphere_intersection.unwrap().dist;
-            let segment_length_light = light_len / num_samples_light as f64;
-            let mut optical_depth_light_r = 0.0;
-            let mut optical_depth_light_m = 0.0;
-            
-            // Integrate along light ray to the sun
-            for j in 0..num_samples_light {
-                let sample_position_light = sample_position + (j as f64 * segment_length_light) * self.sun_direction;
-                let height_light = (sample_position_light - self.atmosphere.center).norm() - self.earth.radius;
-                
-                optical_depth_light_r += self.optical_depth(height_light, self.rayleigh_thickness, segment_length_light);
-                optical_depth_light_m += self.optical_depth(height_light, self.mie_thickness, segment_length_light);
-            }
+            // Sunlight reaching this sample: none in the earth's shadow.
+            let (optical_depth_light_r, optical_depth_light_m) = match self.optical_depth_to_sun(sample_position) {
+                Some(d) => d,
+                None => continue,
+            };
             
             // Calculate the total extinction for both Rayleigh and Mie
             // Use the total accumulated optical depth from both camera path and light path
@@ -290,18 +291,17 @@ impl MaterialModel for SkyMaterial {
             mie_sum += attenuation.component_mul(&Vector3::new(mie_depth, mie_depth, mie_depth));
         } 
         
-        // Calculate final attenuate value combining Rayleigh and Mie scattering
-        let attenuate_vec = (rayleigh_sum.component_mul(&beta_r) * phase_r + 
-                          mie_sum.component_mul(&beta_m) * phase_m) * self.brightness; 
-        
-        // Apply tone mapping function to each channel
-        let attenuate = Color::new(
-            Self::tone_map(attenuate_vec.x),
-            Self::tone_map(attenuate_vec.y),
-            Self::tone_map(attenuate_vec.z),
-        );
+        // Combine Rayleigh and Mie scattering
+        (rayleigh_sum.component_mul(&beta_r) * phase_r +
+            mie_sum.component_mul(&beta_m) * phase_m) * self.brightness
+    }
+}
 
-        ScatteredRay { emit: Color::black(), attenuate, ray: None }
+impl MaterialModel for SkyMaterial {
+    fn scatter(&self, r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay {
+        // Linear light; display encoding happens at output.
+        let v = self.radiance(r) * SKY_CALIBRATION;
+        ScatteredRay { sampled_lights: false, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
     }
 }
 
@@ -414,6 +414,57 @@ mod tests {
     }
     
     #[test]
+    fn test_rayleigh_coefficients_scale_with_inverse_fourth_power() {
+        // Red, green and blue at 680, 550 and 440 nm.
+        let scale = |nm: f64| (440. / nm).powi(4) * DEFAULT_RAYLEIGH_B;
+        assert!((DEFAULT_RAYLEIGH_R / scale(680.) - 1.).abs() < 0.01, "{}", DEFAULT_RAYLEIGH_R);
+        assert!((DEFAULT_RAYLEIGH_G / scale(550.) - 1.).abs() < 0.01, "{}", DEFAULT_RAYLEIGH_G);
+    }
+
+    #[test]
+    fn test_no_sunlight_in_earths_shadow() {
+        let sky = |sun: Vector3<f64>| SkyMaterial {
+            atmosphere: Sphere::new(Vector3::new(0., -6360e3, 0.), 6420e3),
+            earth: Sphere::new(Vector3::new(0., -6360e3, 0.), 6360e3),
+            sun_direction: sun.normalize(),
+            rayleigh_thickness: 7994.,
+            mie_thickness: 1200.,
+            brightness: 20.0,
+            rayleigh_coefficients: Vector3::new(DEFAULT_RAYLEIGH_R, DEFAULT_RAYLEIGH_G, DEFAULT_RAYLEIGH_B),
+            mie_coefficient: DEFAULT_MIE_COEFFICIENT,
+            mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
+        };
+        // Just after sunset, the sun 0.02 radians below the horizon. From 100 m up, the sun ray
+        // passes only slightly beneath the ground, so integrating through it would let a little
+        // light through; the ground must block it entirely.
+        let after_sunset = sky(Vector3::new(0., -0.02, 1.));
+        assert_eq!(after_sunset.optical_depth_to_sun(Vector3::new(0., 100., 0.)), None);
+        // From 5 km up the sun is still above the horizon (the dip of the horizon there is about
+        // 0.04 radians).
+        assert!(after_sunset.optical_depth_to_sun(Vector3::new(0., 5000., 0.)).is_some());
+    }
+
+    #[test]
+    fn test_sky_radiance_is_linear() {
+        let sky = |brightness: f64| SkyMaterial {
+            atmosphere: Sphere::new(Vector3::new(0., -6360e3, 0.), 6420e3),
+            earth: Sphere::new(Vector3::new(0., -6360e3, 0.), 6360e3),
+            sun_direction: Vector3::new(0., 0.5, 1.).normalize(),
+            rayleigh_thickness: 7994.,
+            mie_thickness: 1200.,
+            brightness,
+            rayleigh_coefficients: Vector3::new(DEFAULT_RAYLEIGH_R, DEFAULT_RAYLEIGH_G, DEFAULT_RAYLEIGH_B),
+            mie_coefficient: DEFAULT_MIE_COEFFICIENT,
+            mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
+        };
+        let r = Ray { ro: Vector3::new(0., 1., 0.), rd: Vector3::new(0., 0.3, 1.).normalize() };
+        let (a, b) = (sky(20.).radiance(&r), sky(40.).radiance(&r));
+        assert!(a.x > 0.);
+        // No display encoding: doubling the light doubles the value.
+        assert!((b - a * 2.).norm() < 1e-9 * b.norm());
+    }
+
+    #[test]
     fn test_view_ray_stops_at_ground() {
         let sky = SkyMaterial {
             atmosphere: Sphere::new(Vector3::new(0., -6360e3, 0.), 6420e3),
@@ -461,21 +512,6 @@ mod tests {
         // At one scale height, optical depth should be reduced by factor of e^-1
         let depth_one_scale_r = sky.optical_depth(sky.rayleigh_thickness, sky.rayleigh_thickness, segment_length);
         assert_relative_eq!(depth_one_scale_r, segment_length / std::f64::consts::E, epsilon = 1e-10);
-    }
-    
-    #[test]
-    fn test_tone_map() {
-        // Test values within the threshold
-        assert_relative_eq!(SkyMaterial::tone_map(0.0), 0.0, epsilon = 1e-10);
-        assert_relative_eq!(SkyMaterial::tone_map(1.0), (0.38317f64).powf(1.0/2.2), epsilon = 1e-5);
-        
-        // Test values above the threshold
-        assert_relative_eq!(SkyMaterial::tone_map(2.0), 1.0 - (-2.0f64).exp(), epsilon = 1e-10);
-        assert_relative_eq!(SkyMaterial::tone_map(5.0), 1.0 - (-5.0f64).exp(), epsilon = 1e-10);
-        
-        // Check monotonicity - higher values should map to higher results
-        assert!(SkyMaterial::tone_map(0.5) < SkyMaterial::tone_map(1.0));
-        assert!(SkyMaterial::tone_map(1.0) < SkyMaterial::tone_map(2.0));
     }
     
     #[test]

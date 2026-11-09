@@ -1,0 +1,148 @@
+{
+  "width": 256,
+  "height": 256,
+  "chunk_size": 32,
+  "supersamples": 256,
+  "samples_per_chunk": 4,
+  "background": [
+    0,
+    0,
+    0
+  ],
+  "max_depth": 64,
+  "path_termination": "russian_roulette",
+  "russian_roulette_depth": 3,
+  "output": {
+    "exposure": 1.0,
+    "tonemap": "none",
+    "transfer": "srgb"
+  },
+  "camera": {
+    "location": [
+      0,
+      1,
+      6.8
+    ],
+    "lookat": [
+      0,
+      1,
+      0
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.331018,
+    "aperture": 0
+  },
+  "materials": {
+    "LeftWall": {
+      "type": "lambertian",
+      "albedo": [
+        0.63,
+        0.065,
+        0.05
+      ]
+    },
+    "RightWall": {
+      "type": "lambertian",
+      "albedo": [
+        0.14,
+        0.45,
+        0.091
+      ]
+    },
+    "Floor": {
+      "type": "lambertian",
+      "albedo": [
+        0.725,
+        0.71,
+        0.68
+      ]
+    },
+    "Ceiling": {
+      "type": "lambertian",
+      "albedo": [
+        0.725,
+        0.71,
+        0.68
+      ]
+    },
+    "BackWall": {
+      "type": "lambertian",
+      "albedo": [
+        0.725,
+        0.71,
+        0.68
+      ]
+    },
+    "ShortBox": {
+      "type": "lambertian",
+      "albedo": [
+        0.725,
+        0.71,
+        0.68
+      ]
+    },
+    "TallBox": {
+      "type": "lambertian",
+      "albedo": [
+        0.725,
+        0.71,
+        0.68
+      ]
+    },
+    "Light": {
+      "type": "diffuse-light",
+      "color": [
+        17,
+        12,
+        4
+      ],
+      "intensity": 1
+    }
+  },
+  "objects": [
+    {
+      "type": "mesh",
+      "src": "./demo/reference/cornell-box/left-wall.obj",
+      "material": "LeftWall"
+    },
+    {
+      "type": "mesh",
+      "src": "./demo/reference/cornell-box/right-wall.obj",
+      "material": "RightWall"
+    },
+    {
+      "type": "mesh",
+      "src": "./demo/reference/cornell-box/floor.obj",
+      "material": "Floor"
+    },
+    {
+      "type": "mesh",
+      "src": "./demo/reference/cornell-box/ceiling.obj",
+      "material": "Ceiling"
+    },
+    {
+      "type": "mesh",
+      "src": "./demo/reference/cornell-box/back-wall.obj",
+      "material": "BackWall"
+    },
+    {
+      "type": "mesh",
+      "src": "./demo/reference/cornell-box/short-box.obj",
+      "material": "ShortBox"
+    },
+    {
+      "type": "mesh",
+      "src": "./demo/reference/cornell-box/tall-box.obj",
+      "material": "TallBox"
+    },
+    {
+      "type": "mesh",
+      "src": "./demo/reference/cornell-box/light.obj",
+      "material": "Light"
+    }
+  ]
+}

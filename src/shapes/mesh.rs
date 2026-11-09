@@ -55,6 +55,9 @@ pub struct Mesh {
     triangles: Octree<Triangle>,
     bounds: BBox,
     triangle_count: usize,
+    /// For sampling points on the surface: each triangle with the running total of area up to
+    /// and including it.
+    areas: Vec<(Arc<Triangle>, f64)>,
 }
 
 // A simple triangle collection mesh. 
@@ -84,10 +87,16 @@ impl Mesh {
 
         let bounds = Mesh::bounds_of(&triangles);
         let tree = Octree::new(8, bounds, &triangles); 
+        let mut total = 0.;
+        let areas = triangles.iter().map(|t| {
+            total += t.surface_area();
+            (t.clone(), total)
+        }).collect();
         Mesh {
             triangles: tree,
             bounds,
-            triangle_count: triangles.len()
+            triangle_count: triangles.len(),
+            areas,
         }
     }
 
@@ -105,6 +114,19 @@ impl Mesh {
 impl Geometry for Mesh {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         self.triangles.raw_intersection(r, f64::INFINITY, 0f64)
+    }
+
+    fn surface_area(&self) -> f64 {
+        self.areas.last().map_or(0., |(_, total)| *total)
+    }
+
+    /// Choose a triangle with probability proportional to its area, by binary search on the
+    /// running totals, then a uniform point on it (Osada et al. 2002, section 4.2; see
+    /// `sample_triangle`).
+    fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> {
+        let target = u[0] * self.surface_area();
+        let i = self.areas.partition_point(|(_, total)| *total <= target).min(self.areas.len().checked_sub(1)?);
+        self.areas[i].0.sample_surface([u[1], u[2], 0.])
     }
 
     fn bounds(&self) -> BBox {

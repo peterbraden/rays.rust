@@ -10,7 +10,7 @@ pub struct Ambient {
 
 impl MaterialModel for Ambient {
     fn scatter(&self, _r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay{
-        ScatteredRay{ emit: Color::black(), attenuate:self.albedo, ray: None }
+        ScatteredRay{ sampled_lights: false, emit: Color::black(), attenuate:self.albedo, ray: None }
     }
 
 

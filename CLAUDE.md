@@ -10,18 +10,22 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Multithreaded rendering with progressive output
 
 ## Build Commands
-- Build and run: `cargo run --release -- -p demo/demo.json`
+- Build and run: `cargo run --release -- demo/demo.json`
 - Run tests: `cargo test`
 - Run specific test: `cargo test <test_name>`
 - Lint code: `cargo clippy`
 - Format code: `cargo fmt`
-- View sample scenes: `cargo run --release -- -p demo/scenes/<scene_file>.json`
+- View sample scenes: `cargo run --release -- demo/scenes/<scene_file>.json`
 
 ## Command-line Options
-- `-p, --scene <FILE>`: Set scene file (required)
-- `--progressive-render`: Update output file when a chunk is completed
+- `<FILE>`: Scene file (required, positional). The image is written alongside it with a `.png` extension
+- `-o, --output <FILE>`: Write the image here instead; `.png` (8-bit, display-encoded) or `.exr` (linear float)
+- `-p, --progressive-render`: Update the output file during the render (at most once a second)
 - `--width <NUM>`: Override scene file width
 - `--height <NUM>`: Override scene file height
+- `--seed <NUM>`: Override the scene's render seed; the same seed gives the same image
+- `--compare <FILE>`: Compare with a reference image (eg. `references/cornell-box/TungstenRender.exr`, fetched by `scripts/fetch-references.sh`): prints exposure fit, RMSE and mean FLIP error; writes `<output>.flip.png` and `<output>.reference.png`
+- `--max-flip <NUM>`: With `--compare`, exit with status 2 if the mean FLIP error exceeds this
 
 ## Code Style
 - Traits used for major abstractions (Camera, Geometry, Medium, MaterialModel)

@@ -97,7 +97,25 @@ fn intersects_dist(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>, r: &Ray
 }
 
 
+/// A point uniformly distributed over a triangle's area, following Osada, Funkhouser, Chazelle
+/// and Dobkin, "Shape Distributions", ACM Transactions on Graphics 21(4), 2002, section 4.2,
+/// eq. (1): P = (1 - sqrt(r1)) A + sqrt(r1) (1 - r2) B + sqrt(r1) r2 C. sqrt(r1) sets how far
+/// the point lies from A towards the opposite edge, and r2 where along it; the square root makes
+/// the distribution uniform by area, since the triangle widens linearly away from A.
+pub fn sample_triangle(a: Vector3<f64>, b: Vector3<f64>, c: Vector3<f64>, r1: f64, r2: f64) -> Vector3<f64> {
+    let s = r1.sqrt();
+    a * (1. - s) + b * (s * (1. - r2)) + c * (s * r2)
+}
+
 impl Geometry for Triangle {
+    fn surface_area(&self) -> f64 {
+        0.5 * (self.v1 - self.v0).cross(&(self.v2 - self.v0)).norm()
+    }
+
+    fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> {
+        Some((sample_triangle(self.v0, self.v1, self.v2, u[0], u[1]), self.normal))
+    }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         intersects_dist(self.v0, self.v1, self.v2, r).map(|x| RawIntersection {
                 dist: x.dist, 
@@ -209,6 +227,26 @@ mod tests {
 
     fn tri_verts() -> (Vector3<f64>, Vector3<f64>, Vector3<f64>) {
         (Vector3::new(-1., -1., 0.), Vector3::new(1., -1., 0.), Vector3::new(0., 1., 0.))
+    }
+
+    #[test]
+    fn test_triangle_samples_are_uniform() {
+        let (a, b, c) = (Vector3::new(0., 0., 0.), Vector3::new(4., 0., 0.), Vector3::new(0., 2., 0.));
+        crate::geometry::seed_rand(5, 0);
+        let n = 20000;
+        let mut mean = Vector3::zeros();
+        let mut near_a = 0;
+        for _ in 0..n {
+            let p = sample_triangle(a, b, c, crate::geometry::rand(), crate::geometry::rand());
+            assert!(p.x >= -1e-12 && p.y >= -1e-12 && p.x / 4. + p.y / 2. <= 1. + 1e-12, "outside: {}", p);
+            mean += p / n as f64;
+            // The quarter of the area nearest A: the triangle scaled by 1/2 about A.
+            if p.x / 4. + p.y / 2. <= 0.5 { near_a += 1; }
+        }
+        // Uniform by area: the mean is the centroid, and a quarter of the points fall in the
+        // quarter-area corner (without the square root, half would).
+        assert!((mean - Vector3::new(4. / 3., 2. / 3., 0.)).norm() < 0.03, "{}", mean);
+        assert!((near_a as f64 / n as f64 - 0.25).abs() < 0.01, "{}", near_a);
     }
 
     #[test]

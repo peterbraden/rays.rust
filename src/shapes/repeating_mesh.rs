@@ -9,7 +9,9 @@ use std::vec::Vec;
 use std::sync::Arc;
 use crate::octree::Octree;
 
-const MAX_DEPTH: usize = 50;
+/// Tiles to step through before approximating the remaining distance by the tile's mean surface.
+/// Beyond this a ray is grazing, and the surface is far enough away that detail is lost anyway.
+const MAX_TILES: usize = 200;
 
 /// Infinite Y-Plane mesh of repeating tiles.
 ///
@@ -71,38 +73,35 @@ impl RepeatingMesh {
     } 
 
 
-    fn intersect_tile(&self, r: &Ray, transform: &Vector3<f64>, depth: usize) -> Option<RawIntersection> {
-        if depth > MAX_DEPTH {
-            return None;
-        }
+    fn intersect_tile(&self, r: &Ray, first: &Vector3<f64>) -> Option<RawIntersection> {
+        let mut transform = *first;
+        for _ in 0 .. MAX_TILES {
+            let transformed_ray = Ray {
+                ro: r.ro - transform,
+                rd: r.rd,
+            };
 
-        let transformed_ray = Ray {
-            ro: r.ro - transform,
-            rd: r.rd,
-        };
-        //println!(" 2. ... {:?} {}", self.tile.bounds().intersects(&transformed_ray), transformed_ray);
-
-        let intersects = self.tile.raw_intersection(&transformed_ray, f64::INFINITY, 0f64);
-        //println!(">>> {:?} {}", intersects, transformed_ray);
-        
-        match intersects {
-            Some(i) => {
-                let mut intersection = i;
+            if let Some(mut intersection) = self.tile.raw_intersection(&transformed_ray, f64::INFINITY, 0f64) {
                 // reverse the transform on the intersection
                 intersection.point += transform;
-                Some(intersection)
-            },
-            None => {
-                match self.find_next_tile(&transformed_ray, transform) {
-                    Some(t) => {
-                        self.intersect_tile(r, &t, depth + 1)
-                    },
-                    None => {
-                        None
-                    }
-                }
+                return Some(intersection);
             }
+            transform = self.find_next_tile(&transformed_ray, &transform)?;
         }
+        self.mean_surface_intersection(r)
+    }
+
+    /// Intersection with the plane halfway through the tile's height, facing the ray.
+    fn mean_surface_intersection(&self, r: &Ray) -> Option<RawIntersection> {
+        let y = (self.tile_bounds.min.y + self.tile_bounds.max.y) * 0.5;
+        if r.rd.y.abs() < 1e-12 { return None }
+        let t = (y - r.ro.y) / r.rd.y;
+        if t <= 0. { return None }
+        Some(RawIntersection {
+            dist: t * r.rd.norm(),
+            point: r.ro + r.rd * t,
+            normal: Vector3::new(0., -r.rd.y.signum(), 0.),
+        })
     }
 }
 
@@ -122,14 +121,14 @@ impl Geometry for RepeatingMesh {
             // preceding rays will intersect the previous tile
             let (transform, dist) = self.find_tile_transform(r, denom, self.tile_bounds.max.y);
             if dist < 0. { return None }
-            return self.intersect_tile(r, &transform, 1);
+            return self.intersect_tile(r, &transform);
         }
 
         if r.ro.y < self.tile_bounds.min.y {
             // Looking up at plane
             let (transform, dist) = self.find_tile_transform(r, denom, self.tile_bounds.min.y);
             if dist < 0. { return None }
-            return self.intersect_tile(r, &transform, 1);
+            return self.intersect_tile(r, &transform);
         }
 
 
@@ -139,7 +138,7 @@ impl Geometry for RepeatingMesh {
         let iz = (r.ro.z / self.tile_size.z).floor();
         let transform = self.transform_for(ix, iz, &Vector3::new(0., 0., 0.));
 
-        self.intersect_tile(r, &transform, 1)
+        self.intersect_tile(r, &transform)
     }
 
     fn bounds(&self) -> BBox {
@@ -147,5 +146,43 @@ impl Geometry for RepeatingMesh {
             Vector3::new(f64::MIN, self.tile_bounds.min.y, f64::MIN),
             Vector3::new(f64::MAX, self.tile_bounds.max.y, f64::MAX),
           )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A unit tile of flat ground at y=0, in a slab from y=-1 to y=1.
+    fn ground() -> RepeatingMesh {
+        let tris = vec![
+            Arc::new(Triangle::new(Vector3::new(0., 0., 0.), Vector3::new(1., 0., 0.), Vector3::new(0., 0., 1.))),
+            Arc::new(Triangle::new(Vector3::new(1., 0., 0.), Vector3::new(1., 0., 1.), Vector3::new(0., 0., 1.))),
+        ];
+        let bounds = BBox::new(Vector3::new(0., -1., 0.), Vector3::new(1., 1., 1.));
+        RepeatingMesh {
+            tile: Octree::new(4, bounds, &tris),
+            tile_size: Vector3::new(1., 0., 1.),
+            tile_bounds: bounds,
+            triangle_count: 2,
+        }
+    }
+
+    #[test]
+    fn test_steep_ray_hits_first_tile() {
+        let r = Ray { ro: Vector3::new(3.3, 5., 2.6), rd: Vector3::new(0.1, -1., 0.1) };
+        let i = ground().intersects(&r).unwrap();
+        assert!(i.point.y.abs() < 1e-9);
+        assert!((i.point.x - 3.8).abs() < 1e-9, "{}", i.point);
+    }
+
+    #[test]
+    fn test_grazing_ray_crossing_many_tiles_hits() {
+        // Inside the slab, descending 1 in 500: crosses ~450 tiles before reaching y=0.
+        let r = Ray { ro: Vector3::new(0.5, 0.9, 0.5), rd: Vector3::new(1., -0.002, 0.) };
+        let i = ground().intersects(&r).expect("grazing ray should reach the surface");
+        assert!(i.point.y.abs() < 1e-6, "{}", i.point);
+        assert!((i.point.x - 450.5).abs() < 1e-3, "{}", i.point);
+        assert_eq!(i.normal, Vector3::new(0., 1., 0.));
     }
 }

@@ -1,4 +1,5 @@
 use crate::na::Vector3;
+use crate::ray::Ray;
 use crate::sceneobject::SceneObject;
 use std::cmp;
 use std::fmt;
@@ -30,6 +31,20 @@ pub struct MediumIntersection {
     pub outside: Box<Medium + Sync + Send>,
 }
 */
+
+impl Intersection {
+    /// The normal on the side of the surface the ray arrived from. Geometry reports outward
+    /// normals, which dielectrics need to tell entering from leaving; opaque materials shade
+    /// both sides alike, so they use this, eg. for the inside of a sphere.
+    pub fn facing_normal(&self, r: &Ray) -> Vector3<f64> {
+        if r.rd.dot(&self.normal) > 0. { -self.normal } else { self.normal }
+    }
+
+    /// This intersection with its normal facing the incoming ray (see `facing_normal`).
+    pub fn facing(&self, r: &Ray) -> Intersection {
+        Intersection { normal: self.facing_normal(r), ..self.clone() }
+    }
+}
 
 impl cmp::PartialEq for Intersection {
     fn eq(&self, other: &Intersection) -> bool {

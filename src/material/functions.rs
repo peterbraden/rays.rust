@@ -39,6 +39,22 @@ pub fn scatter_lambertian(albedo: Color, intersection: &Intersection) -> Scatter
     ScatteredRay{ emit: Color::black(), attenuate:albedo, ray: Some(refl) }
 }
 
+/// Distance to move a scattered ray's origin off the surface, onto the side it travels into.
+/// Must exceed the scene's shadow bias, which pushes intersection points outward.
+const SURFACE_OFFSET: f64 = 0.001;
+
+/// Probability that light is reflected rather than transmitted at a dielectric boundary.
+/// Returns 1 for total internal reflection.
+pub fn fresnel_reflectance(cos_i: f64, ni_over_nt: f64, refractive_index: f64) -> f64 {
+    let sin2_t = ni_over_nt * ni_over_nt * (1.0 - cos_i * cos_i);
+    if sin2_t >= 1.0 {
+        return 1.0;
+    }
+    let cos_t = (1.0 - sin2_t).sqrt();
+    // Schlick needs the cosine on the less dense side, ie. the larger angle.
+    schlick(cos_i.min(cos_t), refractive_index)
+}
+
 pub fn scatter_dielectric(
     refractive_index: f64,
     albedo: Color, 
@@ -47,54 +63,39 @@ pub fn scatter_dielectric(
 ) -> ScatteredRay {
 
     let drn = r.rd.dot(&intersection.normal);
+    let exiting = drn > 0.0;
     
-    let outward_normal = if drn > 0.0 {
-        // when ray shoot through object back into vacuum,
-        // ni_over_nt = ref_idx, surface normal has to be inverted.
-        -intersection.normal
-    } else {
-        // when ray shoots into object,
-        intersection.normal
-    };
+    // Normal on the side the ray arrives from. When the ray shoots through the object back
+    // into vacuum, the surface normal has to be inverted.
+    let outward_normal = if exiting { -intersection.normal } else { intersection.normal };
     
-    let cosine = if drn > 0.0 {
-        drn / r.rd.norm()
-    } else {
-        -drn / r.rd.norm()
-    };
-    
-    let ni_over_nt = if drn > 0.0 {
+    let ni_over_nt = if exiting {
         refractive_index // Assumes it comes from air - TODO
     } else {
         1.0 / refractive_index
     };
 
-    match refract(r.rd, outward_normal, ni_over_nt) {
-        Some(refracted) => {
-            // refracted ray exists
-            // Schlick approximation of fresnel amount
-            let reflect_prob = schlick(cosine, refractive_index);
-            if rand() >= reflect_prob {
-                return ScatteredRay{ emit: Color::black(),
-                    attenuate: albedo,
-                    ray: Some( Ray {
-                        ro: intersection.point + (refracted * 0.001),
-                        rd: refracted
-                    }),
-                };
-            }
-        },
-        None => {
-            // refracted ray does not exist
-            //  - total internal reflection
+    let cos_i = drn.abs() / r.rd.norm();
+    let reflect_prob = fresnel_reflectance(cos_i, ni_over_nt, refractive_index);
+
+    if let Some(refracted) = refract(r.rd, outward_normal, ni_over_nt) {
+        if rand() >= reflect_prob {
+            return ScatteredRay{ emit: Color::black(),
+                attenuate: albedo,
+                ray: Some( Ray {
+                    ro: intersection.point - outward_normal * SURFACE_OFFSET,
+                    rd: refracted
+                }),
+            };
         }
     }
 
+    // Fresnel or total internal reflection: the ray stays on the side it arrived from.
     let reflected = reflect(r.rd, intersection.normal);
     ScatteredRay { emit: Color::black(),
         attenuate: Color::white(),
         ray: Some(Ray {
-            ro: intersection.point,
+            ro: intersection.point + outward_normal * SURFACE_OFFSET,
             rd: reflected
         }) 
     }
@@ -124,4 +125,45 @@ pub fn phong (phong: f64, r: &Ray, intersection: &Intersection, light_vec: &Vect
     }
 
     Color::black()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sceneobject::SceneObject;
+    use crate::shapes::sphere::Sphere;
+    use crate::material::texture::Solid;
+    use crate::material::legacy::FlatColor;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_fresnel_continuous_at_critical_angle() {
+        // Exiting glass, just inside the critical angle (cos ~0.745), reflectance should be
+        // approaching 1 rather than jumping from ~0.04.
+        let ri: f64 = 1.5;
+        let critical = (1.0 - 1.0 / (ri * ri)).sqrt();
+        assert!(fresnel_reflectance(critical + 1e-4, ri, ri) > 0.8);
+        assert_eq!(fresnel_reflectance(critical - 1e-4, ri, ri), 1.0);
+        // Entering at normal incidence is just r0.
+        assert!((fresnel_reflectance(1.0, 1.0 / ri, ri) - 0.04).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_internal_reflection_stays_inside() {
+        // A ray inside a unit sphere grazing the top: total internal reflection. The hit point
+        // has been biased outward along the normal, as trace does.
+        let i = Intersection {
+            dist: 1.,
+            point: Vector3::new(0., 1.0001, 0.),
+            normal: Vector3::new(0., 1., 0.),
+            object: Arc::new(SceneObject {
+                geometry: Box::new(Sphere::new(Vector3::new(0., 0., 0.), 1.)),
+                medium: Box::new(Solid { m: Box::new(FlatColor { pigment: Color::white() }) }),
+            }),
+        };
+        let r = Ray { ro: Vector3::new(-1., 0.8, 0.), rd: Vector3::new(1., 0.2, 0.).normalize() };
+        let out = scatter_dielectric(1.5, Color::white(), &r, &i).ray.unwrap();
+        assert!(out.ro.norm() < 1., "reflected ray starts outside: {}", out.ro);
+        assert!(out.rd.y < 0.);
+    }
 }

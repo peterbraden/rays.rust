@@ -15,7 +15,7 @@ use crate::material::normal::NormalShade;
 use rand::{SeedableRng, Rng};
 use rand::rngs::StdRng;
 use rand::distributions::{Normal, Distribution};
-use crate::geometry::point_in_unit_ball;
+use crate::geometry::point_on_unit_sphere;
 use crate::shapes::csg::Union;
 use crate::octree::Octree;
 use crate::shapes::bbox::BBox;
@@ -80,9 +80,11 @@ fn create_particles(
     for _p in 0 .. num_particles {
         let u = rand(rng);
         let v = rand(rng);
+        // Uniform in the ball, drawing the radius from the seeded rng too.
+        let r = rand(rng).cbrt();
         let impulse = Ray {
             ro: origin,
-            rd: (point_in_unit_ball(u, v) * radius) + bias,
+            rd: (point_on_unit_sphere(u, v) * r * radius) + bias,
         };
         particles.append(&mut trace_particle(impulse, time, samples, gravity));
     }
@@ -114,12 +116,27 @@ impl MaterialModel for FireworkMaterial {
     }
 }
 
+/// Seed for a firework's particles: `seed` if given, otherwise derived from its centre so that
+/// fireworks differ from one another but render the same every time.
+fn firework_seed(o: &Value, center: &Vector3<f64>) -> [u8; 32] {
+    let s = match o["seed"].as_u64() {
+        Some(s) => s,
+        None => center.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, c| {
+            (h ^ c.to_bits()).wrapping_mul(0x0100_0000_01b3)
+        }),
+    };
+    let mut seed = [0u8; 32];
+    for (i, chunk) in seed.chunks_mut(8).enumerate() {
+        chunk.copy_from_slice(&s.wrapping_add(i as u64).to_le_bytes());
+    }
+    seed
+}
+
 // Radius is the radius of explosion at time=1.
 pub fn create_firework(o: &Value) -> SceneObject {
 
-    let mut rng: StdRng = SeedableRng::from_seed([0; 32]);
-
     let center = SceneFile::parse_vec3_def(o, "center", Vector3::new(0., 10., 0.));
+    let mut rng: StdRng = SeedableRng::from_seed(firework_seed(o, &center));
     let time = SceneFile::parse_number(&o["time"], 0.9);
     let radius = SceneFile::parse_number(&o["radius"], 10.);
     let samples = SceneFile::parse_number(&o["samples"], 10.) as usize;
@@ -154,4 +171,30 @@ pub fn create_firework(o: &Value) -> SceneObject {
 		geometry: Box::new(geom),
 		medium: Box::new(Solid { m }),
 	}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn burst(seed: [u8; 32]) -> Vec<Vector3<f64>> {
+        let mut rng: StdRng = SeedableRng::from_seed(seed);
+        create_particles(&mut rng, Vector3::new(0., 0., 0.), 1., 5., 2, 0., 20, 20, 0.)
+            .iter().map(|p| p.s.center).collect()
+    }
+
+    #[test]
+    fn test_particles_are_reproducible() {
+        assert_eq!(burst([7; 32]), burst([7; 32]));
+    }
+
+    #[test]
+    fn test_fireworks_differ() {
+        let a = serde_json::json!({ "center": [0, 10, 0] });
+        let b = serde_json::json!({ "center": [5, 10, 0] });
+        let seed = |o: &Value| firework_seed(o, &SceneFile::parse_vec3_def(o, "center", Vector3::new(0., 0., 0.)));
+        assert_ne!(burst(seed(&a)), burst(seed(&b)));
+        let c = serde_json::json!({ "center": [5, 10, 0], "seed": 3 });
+        assert_ne!(seed(&b), seed(&c));
+    }
 }

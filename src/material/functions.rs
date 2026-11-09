@@ -124,10 +124,13 @@ pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) ->
     direct
 }
 
+/// Light reflected by a Lambertian surface from a point light, pbrt's convention: `intensity` is
+/// radiant intensity, so irradiance falls off with the square of distance, and the BRDF is
+/// albedo / pi.
 pub fn diffuse (pigment: Color, i: &Intersection, light_vec: &Vector3<f64>, light: &Light) -> Color {
-    let diffuse_scale = light_vec.normalize().dot(&i.normal) * light.intensity;
-    if diffuse_scale.is_sign_positive() {
-        light.color * pigment * diffuse_scale
+    let cos = light_vec.normalize().dot(&i.normal);
+    if cos.is_sign_positive() {
+        light.color * pigment * (cos * light.intensity / (std::f64::consts::PI * light_vec.norm_squared()))
     } else {
         Color::black()
     }

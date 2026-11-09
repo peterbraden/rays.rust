@@ -253,7 +253,7 @@ mod tests {
             "shadow_bias": 0.0001, "background": [0, 0, 0], "max_depth": 1,
             "camera": { "location": [0, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
             "materials": {}, "media": {}, "objects": [], "variables": {},
-            "lights": [ { "location": [0, 10, 0], "intensity": 1 } ]
+            "lights": [ { "location": [0, 10, 0], "intensity": 314.1592653589793 } ]
         }"#.to_string());
         let i = Intersection {
             dist: 1.,

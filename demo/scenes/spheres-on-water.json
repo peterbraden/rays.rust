@@ -121,12 +121,12 @@
     {
       "location": [0, 30, 0], 
       "color": "white",
-      "intensity": 20
+      "intensity": 39270
     },
     {
       "location": [0, 30, -40], 
       "color": "white",
-      "intensity": 10
+      "intensity": 69900
     }
   ],
 

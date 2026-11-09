@@ -35,6 +35,14 @@ use crate::material::noise::{NoiseTexture, NoiseType};
 use crate::participatingmedia::{ParticipatingMedium, HomogenousFog, Vacuum};
 use crate::shapes::geometry::Geometry;
 
+/// Command-line settings that take precedence over the scene file.
+#[derive(Default)]
+pub struct Overrides {
+    pub width: Option<usize>,
+    pub height: Option<usize>,
+    pub seed: Option<u64>,
+}
+
 /// Every field except `camera` is optional; defaults are applied in `from_scenefile`.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SceneFile {
@@ -55,6 +63,8 @@ pub struct SceneFile {
     pub black_threshold: Value,
     #[serde(default)]
     pub path_termination: Value,
+    #[serde(default)]
+    pub seed: Value,
     #[serde(default)]
     pub output: Value,
     #[serde(default)]
@@ -232,8 +242,8 @@ impl SceneFile {
         create_sky_sphere(o)
     }
 
-    pub fn parse_box_terrain(_o: &Value) -> SceneObject {
-        create_box_terrain()
+    pub fn parse_box_terrain(o: &Value) -> SceneObject {
+        create_box_terrain(SceneFile::parse_int(&o["seed"], 0) as u64)
     }
 
     pub fn parse_geometry (o: &Value) -> Option<Box<dyn Geometry + Sync + Send>> {
@@ -728,6 +738,7 @@ impl SceneFile {
                 chunk_size: SceneFile::parse_int(&s.chunk_size, 64).max(1), 
                 samples_per_chunk: SceneFile::parse_int(&s.samples_per_chunk, 2),
                 path_termination: SceneFile::parse_path_termination(&s.path_termination, &s.russian_roulette_depth),
+                seed: SceneFile::parse_int(&s.seed, 0) as u64,
             },
             camera: Box::new(SceneFile::parse_camera(s.camera, width as u32, height as u32)),
             lights: SceneFile::parse_lights(&s.lights),
@@ -740,13 +751,22 @@ impl SceneFile {
     }
 
     pub fn from_string(s: String) -> Scene {
-        SceneFile::from_string_sized(s, None, None)
+        SceneFile::from_string_overridden(s, &Overrides::default())
     }
 
     /// Parse a scene, optionally overriding the image size. Overrides must be applied before
     /// the camera is built, as it derives its aspect ratio from the image size.
     pub fn from_string_sized(s: String, width: Option<usize>, height: Option<usize>) -> Scene {
+        SceneFile::from_string_overridden(s, &Overrides { width, height, seed: None })
+    }
+
+    /// Parse a scene, applying command-line overrides first.
+    pub fn from_string_overridden(s: String, o: &Overrides) -> Scene {
+        let (width, height) = (o.width, o.height);
         let mut scene: SceneFile = serde_json::from_str(&s).unwrap();
+        if let Some(seed) = o.seed {
+            scene.seed = Value::from(seed);
+        }
         if let Some(w) = width {
             scene.width = Value::from(w);
         }
@@ -756,11 +776,11 @@ impl SceneFile {
         SceneFile::from_scenefile(scene)
     }
 
-    pub fn from_file(filename: &str, width: Option<usize>, height: Option<usize>) -> Scene {
+    pub fn from_file(filename: &str, overrides: &Overrides) -> Scene {
         let mut scenefile = File::open(filename).unwrap();
         let mut contents = String::new();
         scenefile.read_to_string(&mut contents).unwrap();
-        SceneFile::from_string_sized(contents, width, height)
+        SceneFile::from_string_overridden(contents, overrides)
     }
 }
 

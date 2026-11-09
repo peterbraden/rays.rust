@@ -22,6 +22,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 - `-p, --progressive-render`: Update the output file during the render (at most once a second)
 - `--width <NUM>`: Override scene file width
 - `--height <NUM>`: Override scene file height
+- `--seed <NUM>`: Override the scene's render seed; the same seed gives the same image
 
 ## Code Style
 - Traits used for major abstractions (Camera, Geometry, Medium, MaterialModel)

@@ -102,6 +102,11 @@ struct Args {
     ///Set the height of the output image; overrides the scenefile if specified
     #[arg(long)]
     height: Option<usize>,
+
+    ///Seed for the render's random numbers; overrides the scenefile if specified. The same
+    ///seed gives the same image
+    #[arg(long)]
+    seed: Option<u64>,
 }
 
 fn main() {
@@ -111,7 +116,11 @@ fn main() {
         style("# 1. - Parsing scene, building models").bold().cyan()
     );
 
-    let s = scenefile::SceneFile::from_file(&args.scene, args.width, args.height);
+    let s = scenefile::SceneFile::from_file(&args.scene, &scenefile::Overrides {
+        width: args.width,
+        height: args.height,
+        seed: args.seed,
+    });
 
     let rc = RenderContext::new(
             s.image.width,
@@ -128,11 +137,7 @@ fn main() {
         std::process::exit(1);
     });
 
-    let chunks: Vec<rendercontext::RenderableChunk> = rc.iter(&s).collect();
-    let rcmtx = Arc::new(Mutex::new(rc));
-
-    //let mut rng = thread_rng();
-    //chunks.shuffle(&mut rng);
+    let rcmtx = Mutex::new(rc);
 
     println!("{}",
         style("# 2. - Rendering ").bold().cyan()
@@ -145,30 +150,23 @@ fn main() {
     let progressive_interval = Duration::from_secs(1);
     let last_progressive = Mutex::new(Instant::now());
 
-    chunks
-        .into_par_iter()
-        //.iter()
-        .for_each(|c| {
-            let p = c.render(&s);
-            let progressive = {
-                let mut rc = rcmtx.lock().unwrap();
-                rc.apply_chunk(&c, &p);
-                pb.set_position(rc.progress_percentage(&s) as u64);
-                pb.set_message(rc.progress(&s));
-                pb.tick();
+    rendercontext::render(&s, &rcmtx,
+        |rc| {
+            pb.set_position(rc.progress_percentage(&s) as u64);
+            pb.set_message(rc.progress(&s));
+            pb.tick();
 
-                let mut last = last_progressive.lock().unwrap();
-                if rc.progressive_render && last.elapsed() >= progressive_interval {
-                    *last = Instant::now();
-                    Some((rc.snapshot(), rc.output_filename.clone()))
-                } else {
-                    None
-                }
-            };
-            if let Some((img, path)) = progressive {
-                if let Err(e) = writer.write(&img, &path) {
-                    eprintln!("{}", e);
-                }
+            let mut last = last_progressive.lock().unwrap();
+            if rc.progressive_render && last.elapsed() >= progressive_interval {
+                *last = Instant::now();
+                Some((rc.snapshot(), rc.output_filename.clone()))
+            } else {
+                None
+            }
+        },
+        |(img, path)| {
+            if let Err(e) = writer.write(&img, &path) {
+                eprintln!("{}", e);
             }
         });
     pb.finish();

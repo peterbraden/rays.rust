@@ -3,6 +3,7 @@ use std::time::{Instant};
 use crate::scene::Scene;
 use crate::color::Color;
 use crate::trace::trace;
+use crate::geometry::rand;
 
 
 // The render context is the data structure
@@ -252,8 +253,10 @@ fn render_pixel(x: usize, y: usize, max_samples: usize, s: &Scene) -> (u64, usiz
                     &s.camera.get_ray(
                         x as f64 / (s.image.width as f64),
                         y as f64 / (s.image.height as f64),
-                        sx as f64 / (max_samples as f64) * 1. / (s.image.width as f64),
-                        sy as f64 / (max_samples as f64) * 1. / (s.image.height as f64))
+                        // Stratified jitter within the pixel, so repeated layers sample
+                        // new positions and edges are anti-aliased.
+                        (sx as f64 + rand()) / (max_samples as f64) * 1. / (s.image.width as f64),
+                        (sy as f64 + rand()) / (max_samples as f64) * 1. / (s.image.height as f64))
                     , 0, s);
             cast += rays_cast;
             pixel = pixel + c;

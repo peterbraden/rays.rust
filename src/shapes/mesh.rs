@@ -32,6 +32,17 @@ use std::vec::Vec;
 use std::sync::Arc;
 use crate::octree::Octree;
 
+/// Whether p is inside a closed mesh: a ray from it crosses the surface an odd number of times.
+/// The direction avoids the axes and diagonals, along which a ray is likeliest to run exactly
+/// through an edge or vertex.
+fn inside_closed(mesh: &dyn Geometry, p: &Vector3<f64>) -> bool {
+    if !mesh.bounds().contains_point(p) {
+        return false;
+    }
+    let rd = Vector3::new(0.5381, 0.6229, 0.5677);
+    mesh.crossings(&Ray { ro: *p, rd }).len() % 2 == 1
+}
+
 /// Load the models in an OBJ file as triangles, with positions and normals sharing one index.
 /// Lines and points are dropped. A missing or broken material library is ignored, as the
 /// materials are unused.
@@ -103,7 +114,7 @@ impl Mesh {
         }
     }
 
-    fn bounds_of(triangles: &Vec<Arc<Triangle>>) -> BBox {
+    fn bounds_of(triangles: &[Arc<Triangle>]) -> BBox {
         let mut bb = BBox::empty();
 
         for t in triangles {
@@ -138,6 +149,11 @@ impl Geometry for Mesh {
 
     fn primitives(&self) -> u64 {
         self.triangle_count as u64
+    }
+
+    /// Meaningful only for a closed mesh.
+    fn inside(&self, p: &Vector3<f64>) -> bool {
+        inside_closed(self, p)
     }
 }
 
@@ -197,7 +213,7 @@ impl SmoothMesh {
         }
     }
 
-    fn bounds_of(triangles: &Vec<Arc<SmoothTriangle>>) -> BBox {
+    fn bounds_of(triangles: &[Arc<SmoothTriangle>]) -> BBox {
         let mut bb = BBox::empty();
 
         for t in triangles {
@@ -220,6 +236,11 @@ impl Geometry for SmoothMesh {
     fn primitives(&self) -> u64 {
         self.triangle_count as u64
     }
+
+    /// Meaningful only for a closed mesh.
+    fn inside(&self, p: &Vector3<f64>) -> bool {
+        inside_closed(self, p)
+    }
 }
 
 
@@ -238,6 +259,19 @@ mod tests {
 
     const QUAD: &str = "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\n";
     const ONE: Vector3<f64> = Vector3::new(1., 1., 1.);
+
+    #[test]
+    fn test_inside_closed_mesh() {
+        // A tetrahedron.
+        let p = write_obj("tet.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 3 2\nf 1 2 4\nf 1 4 3\nf 2 3 4\n");
+        let m = Mesh::from_obj(p, ONE);
+        assert!(m.inside(&Vector3::new(0.1, 0.1, 0.1)));
+        assert!(!m.inside(&Vector3::new(0.5, 0.5, 0.5)));
+        assert!(!m.inside(&Vector3::new(-0.1, 0.1, 0.1)));
+        let c = m.crossings(&Ray { ro: Vector3::new(0.1, 0.1, -1.), rd: Vector3::new(0., 0., 1.) });
+        assert_eq!(c.len(), 2);
+        assert!((c[0].dist - 1.).abs() < 1e-9 && (c[1].dist - 1.8).abs() < 1e-9);
+    }
 
     #[test]
     fn test_line_elements_are_ignored() {

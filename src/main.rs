@@ -64,6 +64,7 @@ mod rendercontext;
 mod paint;
 mod output;
 mod compare;
+mod depth;
 //mod wireframe;
 mod geometry;
 mod procedural {
@@ -115,6 +116,11 @@ struct Args {
     ///output
     #[arg(long)]
     compare: Option<String>,
+
+    ///Also write a depth image: the distance to the nearest surface through each pixel's centre.
+    ///.exr keeps distances (misses are infinite); .png scales them for viewing, near white
+    #[arg(long)]
+    depth: Option<String>,
 
     ///With --compare, fail (exit status 2) if the mean FLIP error exceeds this
     #[arg(long)]
@@ -177,6 +183,17 @@ fn main() {
         eprintln!("{}", e);
         std::process::exit(1);
     });
+
+    if let Some(path) = &args.depth {
+        let raw = path.to_ascii_lowercase().ends_with(".exr");
+        let opts = output::OutputOpts { transfer: output::Transfer::Linear, ..output::OutputOpts::default() };
+        let img = depth::depth_image(&depth::depth(&s), s.image.width, s.image.height, raw);
+        if let Err(e) = output::writer_for(path, opts).and_then(|w| w.write(&img, path)) {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+        println!("- Depth -> {}", path);
+    }
 
     let rcmtx = Mutex::new(rc);
 

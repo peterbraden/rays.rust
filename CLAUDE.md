@@ -26,6 +26,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 - `--seed <NUM>`: Override the scene's render seed; the same seed gives the same image
 - `--compare <FILE>`: Compare with a reference image (eg. `references/cornell-box/TungstenRender.exr`, fetched by `scripts/fetch-references.sh`): prints exposure fit, RMSE and mean FLIP error; writes `<output>.flip.png` and `<output>.reference.png`
 - `--max-flip <NUM>`: With `--compare`, exit with status 2 if the mean FLIP error exceeds this
+- `--depth <FILE>`: Also write a depth image (distance to the nearest surface through each pixel centre); `.exr` keeps distances, `.png` scales them for viewing
 
 ## Code Style
 - Traits used for major abstractions (Camera, Geometry, Medium, MaterialModel)

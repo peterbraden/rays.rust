@@ -1,6 +1,6 @@
 //! Shapes made by spinning a 2D profile about the y axis: the `lathe`, whose profile is a spline
 //! in (radius, height), and the `sor` (surface of revolution), whose squared radius is a cubic in
-//! height (POV-Ray 3.7 reference, sections 2.4.1.7 "Lathe" and 2.4.1.11 "Surface of Revolution").
+//! height (POV-Ray 3.7 reference: "Lathe" and "Surface of Revolution").
 //!
 //! For a lathe segment with radius R(s) and height Y(s), a ray o + t d meets the surface where
 //! y(t) = Y(s) and |xz(t)| = R(s). Eliminating t via t = (Y(s) - o.y) / d.y and clearing the

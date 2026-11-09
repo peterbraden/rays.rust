@@ -1,5 +1,5 @@
 //! The `sphere_sweep`: the volume a sphere of varying radius sweeps out along a path (POV-Ray 3.7
-//! reference, section 2.4.1.10 "Sphere Sweep").
+//! reference, "Sphere Sweep").
 //!
 //! Between two spheres the sweep is bounded by the cone that touches both, so a linear sweep is
 //! exactly the union of its spheres and those cones. For spheres with centres d apart and radii

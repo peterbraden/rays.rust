@@ -1,5 +1,5 @@
 //! Blobs: the surface where a sum of smooth field components reaches a threshold, so that nearby
-//! components merge (POV-Ray 3.7 reference, section 2.4.1.2 "Blob").
+//! components merge (POV-Ray 3.7 reference: "Blob").
 //!
 //! As in POV-Ray, each component of radius r and strength s contributes s (1 - d^2 / r^2)^2 at
 //! distance d < r from it, and nothing beyond. A sphere component measures d from its centre; a

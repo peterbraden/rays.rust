@@ -1,6 +1,6 @@
 //! Flat outlines and the shapes built from them: the `polygon`, a flat outline in space, and the
-//! `prism`, an outline in the xz plane swept along y (POV-Ray 3.7 reference, sections 2.4.2.4
-//! "Polygon" and 2.4.1.9 "Prism").
+//! `prism`, an outline in the xz plane swept along y (POV-Ray 3.7 reference:
+//! "Polygon" and "Prism").
 //!
 //! An outline is one or more closed loops, and a point is inside if a ray from it crosses the
 //! loops an odd number of times (the even-odd rule), so a loop inside another makes a hole.

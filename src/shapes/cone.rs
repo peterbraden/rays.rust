@@ -8,7 +8,7 @@ use crate::shapes::polynomial::quadratic_roots;
 /// A truncated cone between two points, with a radius at each: `base_radius` at `base` and
 /// `cap_radius` at `cap`. With equal radii it is a cylinder. Unless `open`, the ends are closed by
 /// flat discs, so the cone is a solid that can be used in CSG and with dielectrics. The POV-Ray
-/// `cone` and `cylinder` (POV-Ray 3.7 reference, sections 2.4.1.4 "Cone" and 2.4.1.5 "Cylinder").
+/// `cone` and `cylinder` (POV-Ray 3.7 reference: "Cone" and "Cylinder").
 ///
 /// In a frame with the axis w from the base, a point at height s = (p - base).w and distance
 /// rho from the axis is on the side if rho = r(s) = base_radius + k s, with k the change in radius

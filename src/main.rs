@@ -58,6 +58,8 @@ mod shapes {
     pub mod revolution;
     pub mod sweep;
     pub mod blob;
+    pub mod implicit;
+    pub mod julia;
 }
 mod octree;
 mod scenegraph;
@@ -80,6 +82,7 @@ mod procedural {
 }
 mod participatingmedia;
 mod noise;
+mod expr;
 
 use crate::trace::trace;
 use crate::rendercontext::RenderContext;

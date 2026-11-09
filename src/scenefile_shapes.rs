@@ -13,6 +13,10 @@ use crate::shapes::polygon::{Outline, Polygon, Prism, Sweep};
 use crate::shapes::revolution::{Lathe, Sor, Spline};
 use crate::shapes::sweep::{SphereSweep, SweepSpline};
 use crate::shapes::blob::{Blob, Component};
+use crate::shapes::implicit::{Container, Isosurface, Superellipsoid};
+use crate::shapes::julia::Julia;
+use crate::expr::Expr;
+use crate::na::Vector4;
 use serde_json::Value;
 
 type Shape = Box<dyn Geometry + Sync + Send>;
@@ -153,6 +157,35 @@ impl SceneFile {
                     }).collect();
                 Box::new(Blob::new(components, num(o, "threshold")))
             },
+            // {"type": "isosurface", "function": "x*x + y*y + z*z - 1", "threshold": 0,
+            //  "contained_by": {"box": {"min": [..], "max": [..]}} or {"sphere": {"center": [..], "radius": r}},
+            //  "max_gradient": 1.1, "accuracy": 0.001, "open": false}
+            "isosurface" => {
+                let text = o["function"].as_str().expect("isosurface needs a \"function\" of x, y and z");
+                let function = Expr::parse(text, &["x", "y", "z"])
+                    .unwrap_or_else(|e| panic!("isosurface function \"{}\": {}", text, e));
+                let c = &o["contained_by"];
+                let container = if !c["sphere"].is_null() {
+                    Container::Sphere { center: vec3(&c["sphere"], "center"), radius: num(&c["sphere"], "radius") }
+                } else if !c["box"].is_null() {
+                    let (a, b) = (vec3(&c["box"], "min"), vec3(&c["box"], "max"));
+                    Container::Box(BBox::new(a.inf(&b), a.sup(&b)))
+                } else {
+                    // POV-Ray's default container.
+                    Container::Box(BBox::new(Vector3::new(-1., -1., -1.), Vector3::new(1., 1., 1.)))
+                };
+                Box::new(Isosurface::new(function, num_def(o, "threshold", 0.), container,
+                    num_def(o, "max_gradient", 1.1), num_def(o, "accuracy", 0.001), flag(o, "open")))
+            },
+            // {"type": "superellipsoid", "e": 0.5, "n": 0.5}: within the cube from -1 to 1.
+            "superellipsoid" => Box::new(Superellipsoid::new(num(o, "e"), num(o, "n"))),
+            // {"type": "julia_fractal", "c": [a, b, c, d], "slice": 0, "max_iteration": 20, "accuracy": 0.0001}
+            "julia_fractal" => {
+                let c: Vec<f64> = o["c"].as_array().map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default();
+                assert!(c.len() == 4, "julia_fractal needs a quaternion \"c\": [a, b, c, d], got {}", o["c"]);
+                Box::new(Julia::new(Vector4::new(c[0], c[1], c[2], c[3]), num_def(o, "slice", 0.),
+                    SceneFile::parse_int(&o["max_iteration"], 20), num_def(o, "accuracy", 1e-4)))
+            },
             _ => return None,
         })
     }
@@ -254,6 +287,23 @@ mod tests {
             {"type": "cylinder", "base": [5, 0, 0], "cap": [9, 0, 0], "radius": 1}]}"#);
         let expected = 10. - 2. * (0.5f64).sqrt();
         assert!((hit_from(&b, [0., 0., -10.], [0., 0., 1.]).unwrap() - expected).abs() < 1e-7);
+    }
+
+    #[test]
+    fn test_implicit_shapes() {
+        let i = shape(r#"{"type": "isosurface", "function": "x^2 + y^2 + z^2 - 1", "max_gradient": 4,
+            "contained_by": {"sphere": {"center": [0, 0, 0], "radius": 2}}, "accuracy": 1e-6}"#);
+        assert!((hit_from(&i, [0., 0., -5.], [0., 0., 1.]).unwrap() - 4.).abs() < 1e-5);
+        let s = shape(r#"{"type": "superellipsoid", "e": 1, "n": 1}"#);
+        assert!((hit_from(&s, [0., 0., -5.], [0., 0., 1.]).unwrap() - 4.).abs() < 1e-5);
+        let j = shape(r#"{"type": "julia_fractal", "c": [0, 0, 0, 0], "max_iteration": 30, "accuracy": 1e-5}"#);
+        assert!((hit_from(&j, [0., 0., -5.], [0., 0., 1.]).unwrap() - 4.).abs() < 1e-3);
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown name 'w'")]
+    fn test_bad_function_is_reported() {
+        shape(r#"{"type": "isosurface", "function": "x + w"}"#);
     }
 
     #[test]

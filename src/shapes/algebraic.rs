@@ -1,6 +1,6 @@
 //! Surfaces given implicitly by a polynomial in x, y and z, f(x, y, z) = 0: the torus, and
 //! general algebraic surfaces like POV-Ray's `quadric`, `cubic`, `quartic` and `poly` (POV-Ray
-//! 3.7 reference, sections 2.4.1.12 "Torus", 2.4.3.4 "Poly, Cubic and Quartic" and 2.4.3.5
+//! 3.7 reference: "Torus", "Poly, Cubic and Quartic" and
 //! "Quadric").
 //!
 //! Along a ray o + t d each coordinate is linear in t, so f becomes a polynomial in t whose

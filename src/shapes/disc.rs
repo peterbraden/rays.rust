@@ -6,8 +6,8 @@ use crate::shapes::bbox::BBox;
 use crate::shapes::cone::disc_bounds;
 
 /// A flat disc about `center`, perpendicular to `normal`, optionally with a central hole: an
-/// annulus between `hole_radius` and `radius`. The POV-Ray `disc` (POV-Ray 3.7 reference, section
-/// 2.4.2.1 "Disc"). It has no inside; the reported normal is `normal`, whichever side is hit.
+/// annulus between `hole_radius` and `radius`. The POV-Ray `disc` (POV-Ray 3.7 reference:
+/// "Disc"). It has no inside; the reported normal is `normal`, whichever side is hit.
 pub struct Disc {
     center: Vector3<f64>,
     normal: Vector3<f64>,

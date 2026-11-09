@@ -13,16 +13,16 @@ papers on the technique:
 
 1. Compile a reading list, verifying each reference (authors, title, venue, year, a working
    link) and that it says what we claim it says.
-2. You read the papers before implementation starts.
-3. Implement, then add citations (code comments, docs, PR descriptions) only to papers you have
-   read.
+2. Implement, citing the papers in literate docstrings and in a "Reading for review" section of
+   the PR. You read them while reviewing; work doesn't wait on the reading.
 
 The code is literate: module and item docstrings discuss the papers alongside the
 implementation. They explain the technique, give the key definitions and equations, map the
 paper's symbols to the code's variables, note where the code simplifies or departs from the
 paper, and keep open questions visible. `src/ocean.rs` (Tessendorf) is the model.
 
-The reading lists below are candidates from memory and are unverified; step 1 checks them.
+The reading lists below are candidates from memory and are unverified until step 1 checks
+them.
 
 
 ## Decisions
@@ -130,7 +130,8 @@ material, area light), Stanford meshes (performance), SPD (qualitative).
 ### Steps
 
 1. Inverse-square falloff for point lights; retune existing scenes.
-2. Analytic tests in `cargo test`: furnace test, single plane under a light.
+2. Analytic tests in `cargo test`: furnace test, single plane under a light. Done: the
+   furnace test (#68); the plane under a light is covered by the falloff test (#62).
 3. Survey sources and licences; pick the first three scenes (likely Cornell box, a Stanford
    mesh, an SPD scene) where published references come with their parameters.
 4. Fetch script (`scripts/fetch-assets`), recording source and licence per asset.

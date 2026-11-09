@@ -21,6 +21,8 @@ pub struct Plastic {
 
 impl MaterialModel for Plastic {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay{
+        // Shade whichever side the ray hit.
+        let intersection = &intersection.facing(r);
         let cos_i = (r.rd.dot(&intersection.normal) / r.rd.norm()).abs();
         let coat = fresnel_reflectance(cos_i, 1. / self.refractive_index, self.refractive_index);
 

@@ -9,7 +9,9 @@ pub struct Lambertian {
     pub albedo: Color,
 }
 impl MaterialModel for Lambertian {
-    fn scatter(&self, _r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay{
+    fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay{
+        // Shade whichever side the ray hit.
+        let intersection = &intersection.facing(r);
         // Direct light from point lights is emitted; the bounce gathers indirect light.
         ScatteredRay { emit: direct_lighting(self.albedo, intersection, s), ..scatter_lambertian(self.albedo, intersection) }
     }

@@ -234,11 +234,17 @@ pub fn create_tile(
         }
     }
 
-    ht = ifft2(ht, fourier_grid_size);
-    ht_slope_x = ifft2(ht_slope_x, fourier_grid_size);
-    ht_slope_z = ifft2(ht_slope_z, fourier_grid_size);
-    ht_slope_dx = ifft2(ht_slope_dx, fourier_grid_size);
-    ht_slope_dz = ifft2(ht_slope_dz, fourier_grid_size);
+    // The height field is the plain sum over wave modes, h(x) = sum_k h(k) e^{ikx}; ifft2
+    // normalises by 1/N^2, which would make wave height depend on the grid size.
+    let sum = |t: Vec<Complex<f64>>| -> Vec<Complex<f64>> {
+        let n2 = (fourier_grid_size * fourier_grid_size) as f64;
+        ifft2(t, fourier_grid_size).into_iter().map(|x| x * n2).collect()
+    };
+    ht = sum(ht);
+    ht_slope_x = sum(ht_slope_x);
+    ht_slope_z = sum(ht_slope_z);
+    ht_slope_dx = sum(ht_slope_dx);
+    ht_slope_dz = sum(ht_slope_dz);
 
     (
         ht,
@@ -319,7 +325,9 @@ impl OceanGeometry {
         // In paper this is 'N'
         let fourier_grid_size = SceneFile::parse_number(&o["fourier_size"], 128.) as usize;
 
-        let scale = SceneFile::parse_number(&o["amplitude"], 1.) * (fourier_grid_size * fourier_grid_size) as f64; // (A)
+        // Phillips constant (A). Heights are independent of fourier_size; the default matches the
+        // look of the former default (amplitude 1 at fourier_size 128).
+        let scale = SceneFile::parse_number(&o["amplitude"], 1. / (128. * 128.)); // (A)
 
         let h0 = create_amplitude_tile(wind, scale, gravity, lx, lz, fourier_grid_size, &mut rng);
         let(
@@ -497,9 +505,24 @@ mod tests {
 	const L: f64 = 100.;
 
 	fn heights(wind: Vector2<f64>, time: f64) -> Vec<Complex<f64>> {
+		heights_n(wind, time, N)
+	}
+
+	fn heights_n(wind: Vector2<f64>, time: f64, n: usize) -> Vec<Complex<f64>> {
 		let mut rng: StdRng = SeedableRng::from_seed([0; 32]);
-		let h0 = create_amplitude_tile(wind, 1., 9.81, L, L, N, &mut rng);
-		create_tile(N, L, L, 9.81, time, h0).0
+		let h0 = create_amplitude_tile(wind, 1., 9.81, L, L, n, &mut rng);
+		create_tile(n, L, L, 9.81, time, h0).0
+	}
+
+	#[test]
+	fn test_wave_height_independent_of_grid_size() {
+		let rms = |n: usize| {
+			let h = heights_n(Vector2::new(20., 5.), 0., n);
+			(h.iter().map(|c| c.re * c.re).sum::<f64>() / h.len() as f64).sqrt()
+		};
+		let (small, large) = (rms(32), rms(256));
+		let ratio = large / small;
+		assert!(ratio > 0.5 && ratio < 2., "rms {} at N=32, {} at N=256", small, large);
 	}
 
 	#[test]

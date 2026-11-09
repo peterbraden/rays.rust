@@ -23,7 +23,7 @@
   },
 
   "objects": [
-    { "type" : "ocean", "resolution": 20, "fourier_size": 512, "amplitude": 10, "wind": [20, 0], "debug": false, "color": [0, 0.02, 0.03]},
+    { "type" : "ocean", "resolution": 20, "fourier_size": 512, "amplitude": 3.8147e-05, "wind": [20, 0], "debug": false, "color": [0, 0.02, 0.03]},
     { "type" : "skysphere", "sun_direction": [0.1,-0.1,1], "brightness": 200},
     { "type" : "fog", "density": 0.005, "scatter": 0.3, "color": [0.9, 0.9, 0.9]},
     { "type" : "firework", "gravity": 3, "center": [14, 9.5, 100], "time": 2, "samples": 200, "particles": 60, "radius": 3, "upward_bias": 4, "color": [1, 0.7, 0.6], "intensity": 2},

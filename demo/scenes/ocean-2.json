@@ -31,7 +31,7 @@
   ],
   "variables" : {},
   "objects": [
-    { "type" : "ocean", "resolution": 100, "fourier_size": 256, "amplitude": 50, "wind": [0.8, 0.4], "color": [0, 0.1, 0.15]},
+    { "type" : "ocean", "resolution": 100, "fourier_size": 256, "amplitude": 0.000762939, "wind": [0.8, 0.4], "color": [0, 0.1, 0.15]},
     { "type" : "skysphere", "sun_direction": [0,0.005,1], "brightness": 50}
   ]
 }

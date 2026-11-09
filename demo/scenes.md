@@ -1,5 +1,9 @@
 # Test Scenes
 
+## Shapes
+Every shape modelled on POV-Ray's (see the [shape reference](../docs/shapes.md)).
+![Shapes](./scenes/shapes.png)
+
 ## Spheres
 Spheres demonstrating 3 different materials.
 ![Spheres](./scenes/spheres.png)

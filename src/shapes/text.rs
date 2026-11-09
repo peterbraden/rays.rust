@@ -5,6 +5,11 @@
 //! about one unit high (the font's em square is one unit), and extend from z = 0 back to
 //! z = `thickness`. Each glyph's outline is flattened into straight edges and swept as a prism.
 //! Characters are placed by their advance widths, without kerning.
+//!
+//! These are POV-Ray's coordinates, but POV-Ray is left-handed and this renderer right-handed,
+//! so here the text reads left to right when seen from the +z side, looking towards -z (seen from
+//! -z, as in POV-Ray, it is mirrored; turn it 180 degrees about y to face that way). A POV-Ray
+//! scene converted by negating z throughout reads as it did there.
 
 use crate::shapes::geometry::Geometry;
 use crate::na::{Rotation3, Vector2, Vector3};

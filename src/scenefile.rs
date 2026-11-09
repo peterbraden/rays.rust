@@ -18,7 +18,7 @@ use crate::participatingmedia::create_fog;
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
 use serde_json::{Value, Map};
-use crate::scene::{Scene, ImageOpts, RenderOpts};
+use crate::scene::{Scene, ImageOpts, RenderOpts, PathTermination};
 use std::io::prelude::*;
 use std::fs::File;
 use crate::material::model::MaterialModel;
@@ -52,6 +52,10 @@ pub struct SceneFile {
     pub shadow_bias: Value, 
     #[serde(default)]
     pub black_threshold: Value,
+    #[serde(default)]
+    pub path_termination: Value,
+    #[serde(default)]
+    pub russian_roulette_depth: Value,
     #[serde(default)]
     pub background: Value,
     #[serde(default)]
@@ -687,6 +691,16 @@ impl SceneFile {
         l
     }
 
+    pub fn parse_path_termination(v: &Value, rr_depth: &Value) -> PathTermination {
+        match v.as_str() {
+            None | Some("black") => PathTermination::Black,
+            Some("russian_roulette") => PathTermination::RussianRoulette {
+                min_depth: SceneFile::parse_int(rr_depth, 3),
+            },
+            Some(x) => panic!("Unknown path_termination '{}': expected \"black\" or \"russian_roulette\"", x),
+        }
+    }
+
     pub fn from_scenefile(s: SceneFile) -> Scene {
         let max_bounding = BBox::new( // TODO
             Vector3::new(-1000., -1000., -1000.),
@@ -708,6 +722,7 @@ impl SceneFile {
                 supersamples: SceneFile::parse_int(&s.supersamples, 35),  
                 chunk_size: SceneFile::parse_int(&s.chunk_size, 64).max(1), 
                 samples_per_chunk: SceneFile::parse_int(&s.samples_per_chunk, 2),
+                path_termination: SceneFile::parse_path_termination(&s.path_termination, &s.russian_roulette_depth),
             },
             camera: Box::new(SceneFile::parse_camera(s.camera, width as u32, height as u32)),
             lights: SceneFile::parse_lights(&s.lights),

@@ -6,11 +6,15 @@ use crate::color::Color;
 use crate::shapes::bbox::BBox;
 use crate::participatingmedia::ParticipatingMedium;
 
-// TODO
-pub enum PathCulling {
-    MaxDepth, // Keep recursing unti "max_depth"
-    BlackThreshold, // Stop recursing when weight drops below threshold or "max_depth"
-    RussianRoulette, // Stop recursing when < "min_depth" and rand() > luminance or "max_depth"
+/// What a path contributes when it is cut short. Paths always stop at `max_depth`, or when their
+/// weight falls below the black threshold.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PathTermination {
+    /// Stopped paths contribute nothing.
+    Black,
+    /// From `min_depth`, continue with probability equal to the bounce weight, scaling survivors
+    /// to compensate. Unbiased (up to `max_depth`), so `max_depth` can be raised cheaply.
+    RussianRoulette { min_depth: usize },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -27,6 +31,7 @@ pub struct RenderOpts {
     pub supersamples: usize,
     pub chunk_size: usize,
     pub samples_per_chunk: usize,
+    pub path_termination: PathTermination,
 }
 
 impl RenderOpts {

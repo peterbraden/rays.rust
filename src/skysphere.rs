@@ -189,6 +189,20 @@ impl SkyMaterial {
             1.0f64 - (-value).exp()
         }
     }
+
+    /// Distance the view ray travels through the atmosphere before leaving it, or hitting the
+    /// ground if it starts above the surface. None if it misses the atmosphere entirely.
+    fn view_ray_length(&self, r: &Ray) -> Option<f64> {
+        let mut ray_max = self.atmosphere.intersects(r)?.dist;
+
+        let above_surface = (r.ro - self.earth.center).norm() > self.earth.radius;
+        if above_surface {
+            if let Some(ground) = self.earth.intersects(r) {
+                ray_max = ray_max.min(ground.dist);
+            }
+        }
+        Some(ray_max)
+    }
 }
 
 impl MaterialModel for SkyMaterial {
@@ -198,20 +212,10 @@ impl MaterialModel for SkyMaterial {
         let mie_coef = self.mie_coefficient;
         let beta_m: Vector3<f64> = Vector3::new(mie_coef, mie_coef, mie_coef);
         
-        // Check if the ray intersects the atmosphere
-        let atmos_intersection = self.atmosphere.intersects(r);
-        if atmos_intersection.is_none() {
-            return ScatteredRay { attenuate: Color::black(), ray: None };
-        }
-        
-        // Maximum distance through the atmosphere
-        let mut ray_max = atmos_intersection.unwrap().dist; 
-
-        // Check if the ray intersects the earth (if we're above the surface)
-        let earth_intersection = self.earth.intersects(r);
-        if r.ro.y > self.earth.radius && earth_intersection.is_some() {
-            ray_max = earth_intersection.unwrap().dist; 
-        }
+        let ray_max = match self.view_ray_length(r) {
+            Some(d) => d,
+            None => return ScatteredRay { attenuate: Color::black(), ray: None },
+        };
         
         // Setup for numerical integration
         let num_samples = DEFAULT_NUM_SAMPLES; 
@@ -409,6 +413,27 @@ mod tests {
         assert!(phase_opposite < SkyMaterial::mie_phase(0.0, g));
     }
     
+    #[test]
+    fn test_view_ray_stops_at_ground() {
+        let sky = SkyMaterial {
+            atmosphere: Sphere::new(Vector3::new(0., -6360e3, 0.), 6420e3),
+            earth: Sphere::new(Vector3::new(0., -6360e3, 0.), 6360e3),
+            sun_direction: Vector3::new(0., 1., 0.),
+            rayleigh_thickness: 7994.,
+            mie_thickness: 1200.,
+            brightness: 20.0,
+            rayleigh_coefficients: Vector3::new(DEFAULT_RAYLEIGH_R, DEFAULT_RAYLEIGH_G, DEFAULT_RAYLEIGH_B),
+            mie_coefficient: DEFAULT_MIE_COEFFICIENT,
+            mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
+        };
+        // Camera 10m above the surface, looking straight down.
+        let down = Ray { ro: Vector3::new(0., 10., 0.), rd: Vector3::new(0., -1., 0.) };
+        assert!((sky.view_ray_length(&down).unwrap() - 10.).abs() < 1e-3);
+        // Looking up, the ray runs to the top of the atmosphere.
+        let up = Ray { ro: Vector3::new(0., 10., 0.), rd: Vector3::new(0., 1., 0.) };
+        assert!((sky.view_ray_length(&up).unwrap() - (60e3 - 10.)).abs() < 1e-3);
+    }
+
     #[test]
     fn test_optical_depth() {
         // Create a simple sky material for testing

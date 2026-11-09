@@ -314,9 +314,10 @@ impl SceneFile {
     }
 
     pub fn parse_box(o: &Value) -> Box<dyn Geometry + Sync + Send>{
-        Box::new(BBox::new(
-                SceneFile::parse_vec3(&o["min"]),
-                SceneFile::parse_vec3(&o["max"])))
+        let a = SceneFile::parse_vec3(&o["min"]);
+        let b = SceneFile::parse_vec3(&o["max"]);
+        // Accept corners in either order.
+        Box::new(BBox::new(a.inf(&b), a.sup(&b)))
     }
 
     pub fn parse_triangle(o: &Value) -> Box<dyn Geometry + Sync + Send> {
@@ -793,6 +794,14 @@ mod tests {
         assert_eq!(s.lights[0].color, Color::red());
         assert_eq!(s.lights[1].color, Color::white());
         assert_eq!(s.lights[2].color, Color::white());
+    }
+
+    #[test]
+    fn test_box_corners_in_either_order() {
+        let b = SceneFile::parse_box(&serde_json::json!({ "min": [1, 1, 1], "max": [-1, -1, -1] }));
+        let bounds = b.bounds();
+        assert_eq!(bounds.min.coords, Vector3::new(-1., -1., -1.));
+        assert_eq!(bounds.max.coords, Vector3::new(1., 1., 1.));
     }
 
     #[test]

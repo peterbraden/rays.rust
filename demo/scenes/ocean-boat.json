@@ -15,8 +15,7 @@
     "WHITE_PLASTIC": {
       "type": "plastic",
       "refractive_index": 1.575,
-      "albedo": [0.9, 0.9, 0.9],
-      "opacity": 0.2
+      "albedo": [0.9, 0.9, 0.9]
     }
   },
   "media": {},

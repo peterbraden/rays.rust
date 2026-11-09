@@ -1,11 +1,47 @@
+//! # Octree
+//!
+//! A spatial subdivision for finding the nearest object along a ray without testing every
+//! object. Following Andrew S. Glassner, "Space Subdivision for Fast Ray Tracing", IEEE Computer
+//! Graphics and Applications 4(10), October 1984, doi:10.1109/MCG.1984.6429331
+//! (<https://glassner.com/computer-graphics/graphics-research/space-subdivision-for-fast-ray-tracing/>).
+//!
+//! ## Construction
+//!
+//! The scene's bounding box is split into eight equal octants, recursively, until a node holds a
+//! single item or reaches the maximum depth. An item is stored in every octant its bounding box
+//! touches, so large items appear in many leaves. A node is not split if no octant would hold
+//! fewer items than the node itself, since splitting would only copy the same items downwards.
+//!
+//! ## Traversal
+//!
+//! Glassner's insight is that a ray only needs testing against the items in the nodes it passes
+//! through, taken in the order it passes through them: once a hit is found, nodes further along
+//! cannot contain a nearer one. He steps from leaf to leaf, finding the next node the ray enters
+//! after it misses everything in the current one.
+//!
+//! Here the same ordering is achieved recursively (`OctreeNode::nearest`): at each node, the
+//! children the ray enters are sorted by entry distance and visited nearest first, and the search
+//! stops at the first child that begins beyond the best hit so far. Because an item's reported
+//! hit may lie in a later leaf than the one being visited, the stopping test compares node entry
+//! distances with the best hit, rather than stopping at the first leaf with a hit.
+//!
+//! Each child's entry and exit come from a fresh slab test against its box. Juan Revelles,
+//! Carlos Ureña and Miguel Lastra, "An Efficient Parametric Algorithm for Octree Traversal",
+//! WSCG 2000, pp. 212-219 (<https://www.ugr.es/~curena/publ/2000-wscg>), avoid those tests: a
+//! child's entry and exit parameters follow from its parent's and their midpoints, and a small
+//! table gives the order in which the ray visits the children. (The authors note an erratum in
+//! their Table 1: the bits for X and Z are swapped.) That is the natural next step if traversal
+//! cost matters again.
+//!
+//! Not done: an item spanning several leaves is tested once per leaf the ray visits. Recording,
+//! per ray, which items have been tested would avoid the repeats.
+
 use crate::shapes::bbox::BBox;
 use crate::na::{Vector3};
-use crate::sceneobject::SceneObject;
 use std::sync::Arc;
 use std::fmt;
 use crate::ray::Ray;
-use crate::intersection::{RawIntersection, Intersection};
-use ordered_float::OrderedFloat;
+use crate::intersection::RawIntersection;
 use crate::shapes::geometry::Geometry;
 
 #[derive(Clone)]
@@ -27,7 +63,19 @@ fn vec3_invert(rd: Vector3<f64>) -> Vector3<f64> {
   Vector3::new(1.0/rd.x, 1.0/rd.y, 1.0/rd.z) 
 }
 
-type OctreeIntersections = Option<Vec<usize>>;
+/// A ray prepared for repeated box tests.
+struct TraversalRay {
+    invrd: Vector3<f64>,
+    /// Box tests give distances in multiples of the ray direction; this converts them to
+    /// world-space distances, which items report.
+    len: f64,
+}
+
+/// The nearest hit found so far in a traversal: the item's index and its intersection.
+struct Nearest {
+    dist: f64,
+    hit: Option<(usize, RawIntersection)>,
+}
 
 impl OctreeNode {
     pub fn is_leaf(&self) -> bool {
@@ -45,26 +93,41 @@ impl OctreeNode {
         self.items.len()
     }
 
-    /// Perform a breadth first search of the tree, and then sort results by distance.
-    pub fn naive_intersection(&self, r: &Ray, _max:f64, _min:f64) -> OctreeIntersections {
-        let invrd = vec3_invert(r.rd);
-        if !self.bounds.fast_intersects(&r.ro, &invrd) {
-            None
-        } else if self.is_leaf() {
-            Some(self.items.clone())
-        } else {
-            let intersections = self.children
-                                .iter()
-                                .filter(|i| i.is_some())
-                                .filter_map(|c| c.as_ref().unwrap().naive_intersection(r, _max, _min))
-                                .flatten()
-                                .collect::<Vec<usize>>();
-
-            if intersections.is_empty() {
-                None
-            } else {
-                Some(intersections)
+    /// Find the nearest item hit in this subtree, at least `min` along the ray and nearer than
+    /// `best`. Children are visited in the order the ray enters them, and the search stops at the
+    /// first child that begins beyond the best hit so far: nothing in it, or in any later child,
+    /// can be nearer.
+    fn nearest<T: Geometry>(&self, items: &[Arc<T>], r: &Ray, ray: &TraversalRay, min: f64, best: &mut Nearest) {
+        if self.is_leaf() {
+            for &i in &self.items {
+                if let Some(x) = items[i].intersects_beyond(r, min) {
+                    if x.dist >= min && x.dist < best.dist {
+                        best.dist = x.dist;
+                        best.hit = Some((i, x));
+                    }
+                }
             }
+            return;
+        }
+
+        // The children the ray passes through (beyond `min`), with their entry distances.
+        let mut order: [(f64, &OctreeNode); 8] = [(0., self); 8];
+        let mut count = 0;
+        for child in self.children.iter().flatten() {
+            if let Some((entry, exit)) = child.bounds.entry_exit(&r.ro, &ray.invrd) {
+                if exit * ray.len >= min {
+                    order[count] = (entry.max(0.) * ray.len, child);
+                    count += 1;
+                }
+            }
+        }
+        order[..count].sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+
+        for &(entry, child) in &order[..count] {
+            if entry > best.dist {
+                break;
+            }
+            child.nearest(items, r, ray, min, best);
         }
     }
 
@@ -135,203 +198,20 @@ impl<T: Geometry> Octree<T> {
     }
 
     fn closest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(usize, RawIntersection)> {
-        self.candidates(r, max, min).and_then(|opts| self.items_intersection(r, max, min, opts))
-    }
-
-    /// Items in leaves the ray passes through. Items spanning several leaves appear once.
-    fn candidates(&self, r: &Ray, max:f64, min:f64) -> Option<Vec<usize>> {
-        self.root.naive_intersection(r, max, min).map(|mut opts| {
-            opts.sort_unstable();
-            opts.dedup();
-            opts
-        })
-    }
-
-    // Iterate through potential items. Should only do on leaf if multiple items.
-    fn items_intersection(&self, r: &Ray, max:f64, min:f64, items: Vec<usize>) -> Option<(usize, RawIntersection)> {
-        let mut cdist = max;
-        let mut closest = None;
-        for i in items {
-            if let Some(x) = self.items[i].intersects_beyond(r, min) {
-                if x.dist < cdist && x.dist >= min {
-                    cdist = x.dist;
-                    closest = Some((i, x));
-                }
-            }
+        let ray = TraversalRay { invrd: vec3_invert(r.rd), len: r.rd.norm() };
+        let (entry, exit) = self.root.bounds.entry_exit(&r.ro, &ray.invrd)?;
+        if entry.max(0.) * ray.len > max || exit * ray.len < min {
+            return None;
         }
-        closest
+        let mut best = Nearest { dist: max, hit: None };
+        self.root.nearest(&self.items, r, &ray, min, &mut best);
+        best.hit
     }
 
     pub fn bounds(&self) -> BBox {
        self.root.bounds 
     }
 
-/*
-    pub fn new_node(&self, txm:f64, x:u8, tym:f64, y:u8, tzm:f64, z:u8) -> u8{
-        if txm < tym {
-            if txm < tzm {return x;}  // YZ plane
-        }
-        else{
-            if tym < tzm {return y;} // XZ plane
-        }
-       return z; // XY plane;
-    }
-
-    pub fn first_node_index(&self, tx0:f64, ty0:f64, tz0:f64, txm:f64, tym:f64, tzm:f64) -> u8 {
-        let mut answer:u8 = 0;
-
-        if tx0 > ty0 {
-            if tx0 > tz0 { // PLANE YZ
-                if tym < tx0 { answer|=2; }   // set bit at position 1
-                if tzm < tx0 { answer|=1; } // set bit at position 0
-                return answer;
-            }
-        } else {
-            if ty0 > tz0 { // PLANE XZ
-                if txm < ty0 { answer|=4; }  // set bit at position 2
-                if tzm < ty0 { answer|=1; }  // set bit at position 0
-            }
-        }
-
-        // PLANE XY
-        if txm < tz0 { answer|=4; } // set bit at position 2
-        if tym < tz0 { answer|=2; }    // set bit at position 1
-        return answer;
-    }
-
-    /// Based on: 
-    /// An Efficient Parametric Algorithm for Octree Traversal (2000)
-    /// by J. Revelles , C. Ureña , M. Lastra
-    ///
-    /// Status: Broken
-    /// Note: Missing bbox intersection?
-    pub fn revelles_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<Intersection> {
-        let mut a = 0;
-
-        let rd = r.rd.normalize();
-        let mut rd0 = rd[0];
-        let mut rd1 = rd[1];
-        let mut rd2 = rd[2];
-        let mut ro0 = r.ro[0];
-        let mut ro1 = r.ro[1];
-        let mut ro2 = r.ro[2];
-
-        // fixes for rays with negative direction
-        if rd0 < 0. {
-            ro0 = self.bounds.size()[0] - ro0;
-            rd0  = - rd0;
-            a |= 4 ; //bitwise OR (latest bits are XYZ)
-        }
-        if rd1 < 0. {
-            ro1 = self.bounds.size()[1] - ro1;
-            rd1 = - rd1;
-            a |= 2 ; 
-        }
-        if rd2 < 0. {
-            ro2 = self.bounds.size()[2] - ro2;
-            rd2 = - rd2;
-            a |= 1 ; 
-        }
-
-        let rn = Ray {
-            ro: Vector3::new(ro0, ro1, ro2),
-            rd: Vector3::new(rd0, rd1, rd2),
-        };
-
-        let divx:f64 = 1.0 / rn.rd[0];
-        let divy:f64 = 1.0 / rn.rd[1];
-        let divz:f64 = 1.0 / rn.rd[2];
-
-        let tx0:f64 = (self.bounds.min[0] - rn.ro[0]) * divx;
-        let tx1:f64 = (self.bounds.max[0] - rn.ro[0]) * divx;
-        let ty0:f64 = (self.bounds.min[1] - rn.ro[1]) * divy;
-        let ty1:f64 = (self.bounds.max[1] - rn.ro[1]) * divy;
-        let tz0:f64 = (self.bounds.min[2] - rn.ro[2]) * divz;
-        let tz1:f64 = (self.bounds.max[2] - rn.ro[2]) * divz;   
-
-
-        if tz0.max(tx0.max(ty0)) < tz1.min(tx1.min(ty1)) {
-            return self.revelles_proc_subtree(r, &rn, max, min, tx0, ty0, tz0, tx1, ty1, tz1, a);
-        }
-
-        //println!("- magnitude miss {} {} {}", r, tz0.max(tx0.max(ty0)), tz1.min(tx1.min(ty1)));
-        return None;
-    }
-    
-    pub fn revelles_proc_child(&self, ro: &Ray, r:&Ray, max:f64, min:f64, tx0:f64, ty0:f64, tz0:f64, tx1:f64, ty1:f64, tz1:f64, a:u8, i: u8)-> Option<Intersection> {
-        return match self.children[i as usize] {
-            Some (ref x) => {
-                return x.revelles_proc_subtree(ro, r, max, min, tx0, ty0, tz0, tx1, ty1, tz1, a)
-            }
-            None =>  {
-                return None
-            }
-        }
-    }
-
-    pub fn revelles_proc_subtree(&self, ro:&Ray, r:&Ray, max:f64, min:f64, tx0:f64, ty0:f64, tz0:f64, tx1:f64, ty1:f64, tz1:f64, a:u8) -> Option<Intersection> {
-        //println!("- node hit");
-        if tx1 < 0. || ty1 < 0. || tz1 < 0. {
-            return None;
-        }
-
-        if self.is_leaf(){
-            return self.items_intersection(ro, max, min);
-        }
-
-        let txm = 0.5 * (tx0 + tx1);
-        let tym = 0.5 * (ty0 + ty1);
-        let tzm = 0.5 * (tz0 + tz1);
-
-        let mut curr_node = self.first_node_index(tx0,ty0,tz0,txm,tym,tzm);
-
-        while curr_node < 8 { // TODO do-while?
-            let mut intersection: Option<Intersection> = None;
-
-            match curr_node {
-                0 => {
-                    intersection = self.revelles_proc_child(ro, r, max, min, tx0,ty0,tz0,txm,tym,tzm, a, 0);
-                    curr_node = self.new_node(txm,4,tym,2,tzm,1);
-                    },
-                1 => { 
-                    intersection = self.revelles_proc_child(ro, r, max, min, tx0,ty0,tzm,txm,tym,tz1, a, 1^a);
-                    curr_node = self.new_node(txm,5,tym,3,tz1,8);
-                    }
-                2 => { 
-                    intersection =self.revelles_proc_child(ro, r, max, min, tx0,tym,tz0,txm,ty1,tzm, a, 2^a);
-                    curr_node = self.new_node(txm,6,ty1,8,tzm,3);
-                    }
-                3 => { 
-                    intersection =self.revelles_proc_child(ro, r, max, min, tx0,tym,tzm,txm,ty1,tz1, a, 3^a);
-                    curr_node = self.new_node(txm,7,ty1,8,tz1,8);
-                    }
-                4 => { 
-                    intersection = self.revelles_proc_child(ro, r, max, min, txm,ty0,tz0,tx1,tym,tzm, a, 4^a);
-                    curr_node = self.new_node(tx1,8,tym,6,tzm,5);
-                    }
-                5 => { 
-                    intersection = self.revelles_proc_child(ro, r, max, min, txm,ty0,tzm,tx1,tym,tz1, a, 5^a);
-                    curr_node = self.new_node(tx1,8,tym,7,tz1,8);
-                    }
-                6 => { 
-                    intersection = self.revelles_proc_child(ro, r, max, min, txm,tym,tz0,tx1,ty1,tzm, a, 6^a);
-                    curr_node = self.new_node(tx1,8,ty1,8,tzm,7);
-                    }
-                7 => { 
-                    intersection = self.revelles_proc_child(ro, r, max, min, txm,tym,tzm,tx1,ty1,tz1, a, 7^a);
-                    curr_node = 8;
-                    }
-                _ => {}
-            }
-
-            match intersection {
-                Some(_) => { return intersection; },
-                None => {}
-            }
-        }
-        return None;
-    }
-    */
 }
 
 impl fmt::Display for OctreeNode {
@@ -400,16 +280,46 @@ mod tests {
         let tree = Octree::new(5, BBox::new(Vector3::new(-10., -10., -10.), Vector3::new(10., 10., 10.)), &items);
         assert!(count_nodes(&tree.root) > 1);
         let r = Ray { ro: Vector3::new(9.5, 9.5, -20.), rd: Vector3::new(0., 0., 1.) };
-        assert_eq!(tree.candidates(&r, f64::INFINITY, 0.), Some(vec![1]));
+        let hit = tree.raw_intersection(&r, f64::INFINITY, 0.).unwrap();
+        assert!((hit.dist - 29.).abs() < 1e-9, "{}", hit.dist);
+    }
+
+    /// Nearest hit by testing every item: what the octree must agree with.
+    fn brute_force(items: &[Arc<crate::shapes::sphere::Sphere>], r: &Ray, max: f64, min: f64) -> Option<(usize, f64)> {
+        items.iter().enumerate()
+            .filter_map(|(i, s)| s.intersects_beyond(r, min).map(|x| (i, x.dist)))
+            .filter(|(_, d)| *d >= min && *d < max)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
     }
 
     #[test]
-    fn test_candidates_are_unique() {
-        // A large item spanning every leaf, plus small items forcing subdivision.
-        let items = vec![cube(-10., 10.), cube(-10., -9.), cube(9., 10.)];
-        let tree = Octree::new(3, BBox::new(Vector3::new(-10., -10., -10.), Vector3::new(10., 10., 10.)), &items);
-        let r = Ray { ro: Vector3::new(-20., -9.5, -9.5), rd: Vector3::new(1., 1., 1.).normalize() };
-        let c = tree.candidates(&r, f64::INFINITY, 0.).unwrap();
-        assert_eq!(c.iter().filter(|i| **i == 0).count(), 1, "{:?}", c);
+    fn test_traversal_matches_brute_force() {
+        use crate::shapes::sphere::Sphere;
+        use rand::{Rng, SeedableRng};
+        use rand::rngs::StdRng;
+        let mut rng: StdRng = SeedableRng::from_seed([3; 32]);
+        let mut u = |a: f64, b: f64| a + (b - a) * rng.gen_range(0., 1.);
+
+        // Overlapping spheres of mixed sizes, so items span several leaves.
+        let items: Vec<Arc<Sphere>> = (0..60).map(|_| Arc::new(Sphere::new(
+            Vector3::new(u(-10., 10.), u(-10., 10.), u(-10., 10.)), u(0.2, 3.)))).collect();
+        let bounds = items.iter().fold(BBox::empty(), |b, s| b.union(&s.bounds()));
+        let tree = Octree::new(6, bounds, &items);
+        assert!(count_nodes(&tree.root) > 1);
+
+        for i in 0..5000 {
+            // Origins inside and outside the bounds; some limited by max, some by min.
+            let ro = Vector3::new(u(-15., 15.), u(-15., 15.), u(-15., 15.));
+            let rd = Vector3::new(u(-1., 1.), u(-1., 1.), u(-1., 1.)) * u(0.5, 2.);
+            let r = Ray { ro, rd };
+            let (max, min) = match i % 3 { 0 => (f64::INFINITY, 0.), 1 => (u(1., 20.), 0.), _ => (f64::INFINITY, u(0., 5.)) };
+            let expected = brute_force(&items, &r, max, min);
+            let got = tree.closest_intersection(&r, max, min).map(|(i, x)| (i, x.dist));
+            match (expected, got) {
+                (None, None) => (),
+                (Some((_, e)), Some((_, g))) => assert!((e - g).abs() < 1e-9, "ray {}: {} vs {}", r, e, g),
+                _ => panic!("ray {} max {} min {}: brute force {:?}, octree {:?}", r, max, min, expected, got),
+            }
+        }
     }
 }

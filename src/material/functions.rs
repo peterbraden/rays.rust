@@ -28,16 +28,19 @@ pub fn reflect(v: Vector3<f64>, normal: Vector3<f64>) -> Vector3<f64> {
     v - normal * 2.0 * normal.dot(&v)
 }
 
-/// Implement Lambertian reflection (purely diffuse) for ambient incoming light (light at a random
-/// incoming angle.)
-/// Practically, we implement random reflection within a unit sphere on the normal.
-/// This will be very noisy if we don't subsample a lot.
+/// A direction for diffuse reflection: the normal plus a point uniformly distributed on the
+/// unit sphere, normalised, which is distributed in proportion to the cosine of the angle from
+/// the normal.
 fn lambertian_direction(normal: Vector3<f64>, on_sphere: Vector3<f64>) -> Vector3<f64> {
     let d = normal + on_sphere;
     // The sample can (rarely) cancel the normal exactly.
     if d.norm() < 1e-9 { normal } else { d.normalize() }
 }
 
+/// Implement Lambertian reflection (purely diffuse) for ambient incoming light (light at a random
+/// incoming angle.)
+/// Practically, we reflect in a random direction about the normal, chosen by
+/// `lambertian_direction`. This will be very noisy if we don't subsample a lot.
 pub fn scatter_lambertian(albedo: Color, intersection: &Intersection) -> ScatteredRay {
     let refl = Ray {
         ro: intersection.point,

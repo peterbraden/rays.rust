@@ -12,7 +12,7 @@ use std::f64;
 use crate::na::{Vector3};
 use crate::shapes::geometry::Geometry;
 use crate::material::texture::{Solid, Medium};
-use crate::geometry::random_point_on_unit_sphere;
+use crate::geometry::random_point_in_unit_ball;
 use crate::scenefile::SceneFile;
 
 const BIG_NUMBER:f64 = 1000.;
@@ -47,7 +47,7 @@ impl MaterialModel for HomogenousFog {
         ScatteredRay { emit: Color::black(),
             ray: Some(Ray {
                 ro: i.point,
-                rd: (r.rd + (random_point_on_unit_sphere() * self.scatter * rand())).normalize(),
+                rd: (r.rd + (random_point_in_unit_ball() * self.scatter * rand())).normalize(),
             }),
             attenuate: self.color,
         }

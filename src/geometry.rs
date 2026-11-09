@@ -8,23 +8,24 @@ pub fn rand() -> f64 {
 }
 
 pub fn random_point_on_unit_sphere() -> Vector3<f64>{
-    let u = rand();
-    let v = rand();
-    point_on_unit_sphere(u, v)
+    point_on_unit_sphere(rand(), rand())
 }
 
+/// Map (u, v) in [0, 1]^2 uniformly onto the surface of the unit sphere.
 pub fn point_on_unit_sphere(u: f64, v: f64) -> Vector3<f64>{
     let theta = u * 2.0 * f64::consts::PI;
     let phi = (2.0 * v - 1.0).acos();
-    let r = rand().cbrt();
-    let sin_theta = theta.sin();
-    let cos_theta = theta.cos();
     let sin_phi = phi.sin();
-    let cos_phi = phi.cos();
-    let x = r * sin_phi * cos_theta;
-    let y = r * sin_phi * sin_theta;
-    let z = r * cos_phi;
-    Vector3::new(x, y, z)
+    Vector3::new(sin_phi * theta.cos(), sin_phi * theta.sin(), phi.cos())
+}
+
+pub fn random_point_in_unit_ball() -> Vector3<f64>{
+    point_in_unit_ball(rand(), rand())
+}
+
+/// A point uniformly distributed within the unit ball, in the direction given by (u, v).
+pub fn point_in_unit_ball(u: f64, v: f64) -> Vector3<f64>{
+    point_on_unit_sphere(u, v) * rand().cbrt()
 }
 
 pub fn random_point_on_disc(radius: f64) -> Vector2<f64>{
@@ -45,3 +46,16 @@ pub fn uniform_sample_hemisphere(r1: f64, r2: f64) -> Vector3<f64>{
 //pub fn uniform_sample_hemisphere_around(r1: f64, r2:f64, vec: Vector3<f64>) -> Vector3<f64> {
 //    let sample = uniform_sample_hemisphere();
 //}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sphere_and_ball_samplers() {
+        for _ in 0..1000 {
+            assert!((random_point_on_unit_sphere().norm() - 1.).abs() < 1e-9);
+            assert!(random_point_in_unit_ball().norm() <= 1.);
+        }
+    }
+}

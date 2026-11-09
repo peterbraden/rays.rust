@@ -175,79 +175,57 @@ pub struct Difference {
     pub b: Primitive
 }
 
-fn _find_intersect_iter(a: &Primitive, b: &Primitive, r: &Ray, adist: f64, bdist: f64) -> Option<RawIntersection> {
-    match a.next_intersection_range(r, adist) {
-        Some(ia) => {
-            match b.next_intersection_range(r, bdist) {
-                Some(ib) => {
-                    if ia.0.dist < ib.0.dist {
-                        // Enter A first
-                        Some(ia.0)
-                    } else {
-                        _find_intersect_inside_b_iter(a, b, &ia, &ib, r)
+/// Upper bound on surface crossings gathered per primitive, in case of numerical trouble.
+const MAX_CROSSINGS: usize = 64;
 
-                    }
-                }
-                None => {
-                    // No B intersection
-                    Some(ia.0)
-                }
-            }
-        },
-        None => {
-            // Would never have hit A
-            None
+/// Every surface crossing along the ray, nearest first, with world-space distances.
+fn crossings(p: &Primitive, r: &Ray) -> Vec<RawIntersection> {
+    let mut out = Vec::new();
+    let mut dist = 0.;
+    while out.len() < MAX_CROSSINGS {
+        match p.next_intersection(r, dist) {
+            Some(x) => {
+                dist = x.dist;
+                out.push(x);
+            },
+            None => break,
         }
     }
+    out
 }
 
-fn _find_intersect_inside_b_iter(
-        a: &Primitive,
-        b: &Primitive,
-        arange: &IntersectionRange, 
-        brange: &IntersectionRange,
-        r: &Ray
-    ) -> Option<RawIntersection> {
+/// Nearest point where the ray crosses the surface of A - B.
+///
+/// Whether the origin starts inside each (closed) primitive follows from the parity of its
+/// crossings, so rays starting inside A or B - eg. secondary rays leaving a carved surface -
+/// are handled. Walk the crossings in order and return the first that changes membership of
+/// A - B. Surfaces of B face into B, so their normals are reversed.
+fn difference_intersection(a: &Primitive, b: &Primitive, r: &Ray) -> Option<RawIntersection> {
+    let ca = crossings(a, r);
+    let cb = crossings(b, r);
+    let mut in_a = ca.len() % 2 == 1;
+    let mut in_b = cb.len() % 2 == 1;
+    let (mut ia, mut ib) = (0, 0);
 
-    // We are inside B
-    // last intersections are inda, indb
-    
-    match brange.1 {
-        None => {
-            // That was the last B intersection, B stretches forever.
-            None
-        },
-        Some(nb) => {
-            if nb.dist < arange.0.dist {
-                // We exit b before hitting a => try again
-                return _find_intersect_iter(a, b, r, arange.0.dist - EPSILON, nb.dist); // TODO
-            }
-
-            match arange.1 {
-                Some (exit_a) => {
-                    // We enter A inside B:
-                    if exit_a.dist < nb.dist {
-                        // If we exit A before exiting B
-                        match a.next_intersection_range(r, exit_a.dist + EPSILON){
-                            Some(narange) => {
-                                // There is another A intersection.
-                                print!("!!");
-                                _find_intersect_inside_b_iter(a, b, &narange, brange, r)
-                            },
-                            None => { None }
-                        }
-                    } else {
-                        // We're inside a inside b, the b exit is smaller than a exit
-                        // Therefore as soon as we leave B we are still in A.
-                        // Therefore B exit is intersection
-                        Some(_reflect_normal(nb))
-                    }
-                },
-                None => {
-                    // last A intersection, A is infinite, intersect at exit of B
-                    Some(_reflect_normal(nb))
-                }
-            }
+    loop {
+        let was_inside = in_a && !in_b;
+        let take_a = match (ca.get(ia), cb.get(ib)) {
+            (None, None) => return None,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (Some(x), Some(y)) => x.dist <= y.dist,
+        };
+        let hit = if take_a {
+            in_a = !in_a;
+            ia += 1;
+            ca[ia - 1]
+        } else {
+            in_b = !in_b;
+            ib += 1;
+            _reflect_normal(cb[ib - 1])
+        };
+        if (in_a && !in_b) != was_inside {
+            return Some(hit);
         }
     }
 }
@@ -255,11 +233,61 @@ fn _find_intersect_inside_b_iter(
 
 impl Geometry for Difference {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        _find_intersect_iter(&self.a, &self.b, r, 0., 0.)
-        //return self.a.apply_csg(r, difference, &self.b);
+        difference_intersection(&self.a, &self.b, r)
     }
 
     fn bounds(&self) -> BBox {
         self.a.bounds()// Can never be bigger than A
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::na::Vector3;
+    use crate::shapes::sphere::Sphere;
+
+    /// Sphere of radius 2 at the origin, with a radius 1 bite taken out at x = 2.
+    fn bitten_sphere() -> Difference {
+        Difference {
+            a: Primitive { item: Box::new(Sphere::new(Vector3::new(0., 0., 0.), 2.)) },
+            b: Primitive { item: Box::new(Sphere::new(Vector3::new(2., 0., 0.), 1.)) },
+        }
+    }
+
+    fn assert_hit(ro: Vector3<f64>, rd: Vector3<f64>, dist: f64, normal: Vector3<f64>) {
+        let i = bitten_sphere().intersects(&Ray { ro, rd }).expect("expected a hit");
+        assert!((i.dist - dist).abs() < 1e-6, "dist {} != {}", i.dist, dist);
+        assert!((i.normal - normal).norm() < 1e-6, "normal {} != {}", i.normal, normal);
+    }
+
+    #[test]
+    fn test_hits_a_outside_b() {
+        assert_hit(Vector3::new(0., 5., 0.), Vector3::new(0., -1., 0.), 3., Vector3::new(0., 1., 0.));
+    }
+
+    #[test]
+    fn test_passes_through_b_into_cavity_wall() {
+        // Enters B at x=3, would enter A at x=2 but that is inside B, so hits B's far side at x=1.
+        assert_hit(Vector3::new(5., 0., 0.), Vector3::new(-1., 0., 0.), 4., Vector3::new(1., 0., 0.));
+    }
+
+    #[test]
+    fn test_starting_inside_b() {
+        // In the cavity (inside A and B), heading into the material.
+        assert_hit(Vector3::new(1.5, 0., 0.), Vector3::new(-1., 0., 0.), 0.5, Vector3::new(1., 0., 0.));
+    }
+
+    #[test]
+    fn test_starting_inside_material() {
+        // Inside A - B, heading out through A.
+        assert_hit(Vector3::new(-1., 0., 0.), Vector3::new(-1., 0., 0.), 1., Vector3::new(-1., 0., 0.));
+        // Inside A - B, heading out through the cavity wall; the material lies at x < 1.
+        assert_hit(Vector3::new(0., 0., 0.), Vector3::new(1., 0., 0.), 1., Vector3::new(1., 0., 0.));
+    }
+
+    #[test]
+    fn test_miss() {
+        assert!(bitten_sphere().intersects(&Ray { ro: Vector3::new(0., 5., 0.), rd: Vector3::new(0., 1., 0.) }).is_none());
     }
 }

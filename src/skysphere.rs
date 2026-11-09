@@ -43,6 +43,7 @@ use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::shapes::geometry::Geometry;
 use serde_json::{Value};
 use crate::scenefile::SceneFile;
+use rayon::prelude::*;
 
 // Constants for atmospheric scattering
 /// Scales the integrated radiance into the renderer's working range. Under the default sRGB
@@ -226,6 +227,21 @@ impl SkyMaterial {
 
     /// Linear radiance arriving along the view ray.
     pub fn radiance(&self, r: &Ray) -> Vector3<f64> {
+        let (rayleigh, mie) = self.scattering(r);
+        self.apply_phase(&r.rd.normalize(), rayleigh, mie)
+    }
+
+    /// Combine in-scattered Rayleigh and Mie light (see `scattering`) for the view direction
+    /// `d`: weight each by its phase function at the angle between `d` and the sun.
+    fn apply_phase(&self, d: &Vector3<f64>, rayleigh: Vector3<f64>, mie: Vector3<f64>) -> Vector3<f64> {
+        let mu = d.dot(&self.sun_direction);
+        (rayleigh * Self::rayleigh_phase(mu) + mie * Self::mie_phase(mu, self.mie_anisotropy)) * self.brightness
+    }
+
+    /// Light scattered towards the viewer along the view ray, by Rayleigh and by Mie scattering,
+    /// before the phase functions and brightness are applied. Unlike the phase functions, which
+    /// peak sharply around the sun, these vary smoothly with direction.
+    pub fn scattering(&self, r: &Ray) -> Scattering {
         // Use the provided scattering coefficients
         let beta_r: Vector3<f64> = self.rayleigh_coefficients;
         let mie_coef = self.mie_coefficient;
@@ -233,7 +249,7 @@ impl SkyMaterial {
         
         let ray_max = match self.view_ray_length(r) {
             Some(d) => d,
-            None => return Vector3::zeros(),
+            None => return (Vector3::zeros(), Vector3::zeros()),
         };
         
         // Setup for numerical integration
@@ -248,12 +264,7 @@ impl SkyMaterial {
         let mut optical_depth_r = 0.0;
         let mut optical_depth_m = 0.0;
 
-        // Calculate the angular term (mu) between view and sun directions
-        let mu = r.rd.dot(&self.sun_direction);
         
-        // Calculate phase functions for Rayleigh and Mie
-        let phase_r = Self::rayleigh_phase(mu);
-        let phase_m = Self::mie_phase(mu, self.mie_anisotropy);
         
         // Integrate along the view ray through the atmosphere
         for i in 0..num_samples {
@@ -292,8 +303,7 @@ impl SkyMaterial {
         } 
         
         // Combine Rayleigh and Mie scattering
-        (rayleigh_sum.component_mul(&beta_r) * phase_r +
-            mie_sum.component_mul(&beta_m) * phase_m) * self.brightness
+        (rayleigh_sum.component_mul(&beta_r), mie_sum.component_mul(&beta_m))
     }
 }
 
@@ -301,6 +311,133 @@ impl MaterialModel for SkyMaterial {
     fn scatter(&self, r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay {
         // Linear light; display encoding happens at output.
         let v = self.radiance(r) * SKY_CALIBRATION;
+        ScatteredRay { sampled_lights: false, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
+    }
+}
+
+/// Rayleigh and Mie in-scattering, before their phase functions (`SkyMaterial::scattering`).
+type Scattering = (Vector3<f64>, Vector3<f64>);
+
+/// # Sky-view lookup table
+///
+/// Integrating the atmosphere for every ray that escapes the scene was the dominant cost of
+/// sky scenes (`exp` alone was 63% of samples). The sky changes slowly with direction, so it
+/// can be precomputed into a table and interpolated, following the Sky-View LUT of Sebastien
+/// Hillaire, "A Scalable and Production Ready Sky and Atmosphere Rendering Technique",
+/// Computer Graphics Forum 39(4), 2020, section 5.3, doi:10.1111/cgf.14050.
+///
+/// The table stores the Rayleigh and Mie in-scattering separately, before their phase
+/// functions are applied, indexed by latitude l (elevation above the horizon) and longitude.
+/// The phase functions depend only on the angle to the sun and are applied exactly at lookup:
+/// the Mie phase function peaks too sharply around the sun to interpolate (tabulating finished
+/// radiance put a few percent of error there). Colour changes
+/// fastest near the horizon, so rows are spaced non-linearly to put more of them there, with
+/// Hillaire's mapping v = 0.5 + 0.5 sign(l) sqrt(|l| / (pi/2)); this table covers only the
+/// upper hemisphere, so v = sqrt(l / (pi/2)).
+///
+/// Differences from the paper:
+///
+/// - Hillaire rebuilds the table for each camera position. Here rays start anywhere in the
+///   scene, and near the horizon the sky depends on altitude (a table for 1 m was 3-5% out at
+///   30 m). So there is a table for each of several altitudes, `LUT_ALTITUDES`, interpolated
+///   linearly, which is the altitude dimension of Eric Bruneton and Fabrice Neyret's
+///   "Precomputed Atmospheric Scattering", Computer Graphics Forum 27(4), 2008,
+///   doi:10.1111/j.1467-8659.2008.01245.x. Above the highest, rays are integrated exactly.
+/// - Rays below the horizon are integrated exactly. Their radiance depends strongly on
+///   altitude (how soon they reach the ground), and they are rarely seen, being mostly hidden by
+///   geometry.
+/// - The sun is fixed for the scene, so it needs no dimension of its own.
+pub struct SkyViewLUT {
+    width: usize,
+    height: usize,
+    /// One table per altitude in `LUT_ALTITUDES`, of Rayleigh and Mie scattering before the
+    /// phase functions (`SkyMaterial::scattering`).
+    slices: Vec<Vec<Scattering>>,
+}
+
+/// Heights above the ground, in metres, at which the sky is tabulated: closely spaced, since
+/// interpolating between distant altitudes is poor near the horizon (2-4% between 300 m and
+/// 1 km). Scenes keep within tens of metres of the ground; above the top, rays are integrated
+/// exactly.
+const LUT_ALTITUDES: [f64; 8] = [1., 5., 15., 30., 60., 100., 150., 200.];
+/// Longitude and latitude resolution of the table.
+const LUT_WIDTH: usize = 256;
+const LUT_HEIGHT: usize = 128;
+
+impl SkyViewLUT {
+    pub fn build(sky: &SkyMaterial, width: usize, height: usize) -> SkyViewLUT {
+        let slices = LUT_ALTITUDES.iter().map(|altitude| {
+            let origin = sky.earth.center + Vector3::new(0., sky.earth.radius + altitude, 0.);
+            (0 .. width * height).into_par_iter().map(|i| {
+                let (x, y) = (i % width, i / width);
+                let rd = SkyViewLUT::direction(x as f64 / width as f64, y as f64 / (height - 1) as f64);
+                sky.scattering(&Ray { ro: origin, rd })
+            }).collect()
+        }).collect();
+        SkyViewLUT { width, height, slices }
+    }
+
+    /// The direction for texture coordinates u (longitude) and v (latitude), in [0, 1].
+    fn direction(u: f64, v: f64) -> Vector3<f64> {
+        let l = v * v * std::f64::consts::FRAC_PI_2;
+        let phi = u * 2. * std::f64::consts::PI;
+        Vector3::new(l.cos() * phi.cos(), l.sin(), l.cos() * phi.sin())
+    }
+
+    /// Rayleigh and Mie scattering for a unit direction at or above the horizon, from
+    /// `altitude` metres up: bilinear within the two nearest altitude tables, linear between
+    /// them. None above the highest table.
+    pub fn lookup(&self, d: &Vector3<f64>, altitude: f64) -> Option<Scattering> {
+        let top = LUT_ALTITUDES.len() - 1;
+        if altitude > LUT_ALTITUDES[top] {
+            return None;
+        }
+        let a = altitude.max(LUT_ALTITUDES[0]);
+        let i = LUT_ALTITUDES.partition_point(|h| *h <= a).clamp(1, top);
+        let f = (a - LUT_ALTITUDES[i - 1]) / (LUT_ALTITUDES[i] - LUT_ALTITUDES[i - 1]);
+        let (r0, m0) = self.lookup_slice(i - 1, d);
+        let (r1, m1) = self.lookup_slice(i, d);
+        Some((r0 * (1. - f) + r1 * f, m0 * (1. - f) + m1 * f))
+    }
+
+    fn lookup_slice(&self, slice: usize, d: &Vector3<f64>) -> Scattering {
+        let l = d.y.clamp(0., 1.).asin();
+        let v = (l / std::f64::consts::FRAC_PI_2).sqrt() * (self.height - 1) as f64;
+        let u = (d.z.atan2(d.x) / (2. * std::f64::consts::PI)).rem_euclid(1.) * self.width as f64;
+
+        let (x0, y0) = (u.floor() as usize % self.width, (v.floor() as usize).min(self.height - 2));
+        let (x1, y1) = ((x0 + 1) % self.width, y0 + 1);
+        let (fx, fy) = (u - u.floor(), v - y0 as f64);
+        let texels = &self.slices[slice];
+        let mix = |pick: fn(&Scattering) -> Vector3<f64>| {
+            let t = |x: usize, y: usize| pick(&texels[y * self.width + x]);
+            (t(x0, y0) * (1. - fx) + t(x1, y0) * fx) * (1. - fy) + (t(x0, y1) * (1. - fx) + t(x1, y1) * fx) * fy
+        };
+        (mix(|p| p.0), mix(|p| p.1))
+    }
+}
+
+/// The sky, looked up in a `SkyViewLUT` above the horizon and integrated exactly below it. The
+/// table is built when the sky is first needed.
+pub struct LUTSky {
+    sky: SkyMaterial,
+    lut: std::sync::OnceLock<SkyViewLUT>,
+}
+
+impl MaterialModel for LUTSky {
+    fn scatter(&self, r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay {
+        let d = r.rd.normalize();
+        let altitude = (r.ro - self.sky.earth.center).norm() - self.sky.earth.radius;
+        let looked_up = if d.y >= 0. {
+            self.lut.get_or_init(|| SkyViewLUT::build(&self.sky, LUT_WIDTH, LUT_HEIGHT)).lookup(&d, altitude)
+        } else {
+            None
+        };
+        // The phase functions, which peak sharply around the sun, are applied exactly.
+        let v = match looked_up {
+            Some((rayleigh, mie)) => self.sky.apply_phase(&d, rayleigh, mie),
+            None => self.sky.radiance(r),
+        } * SKY_CALIBRATION;
         ScatteredRay { sampled_lights: false, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
     }
 }
@@ -354,25 +491,32 @@ pub fn create_sky_sphere(o: &Value) -> SceneObject {
     let rayleigh_thickness = SceneFile::parse_number(&o["rayleigh_thickness"], preset.rayleigh_thickness);
     let mie_thickness = SceneFile::parse_number(&o["mie_thickness"], preset.mie_thickness);
     
+    let sky = SkyMaterial {
+        earth: Sphere::new(
+            earth_location,
+            SceneFile::parse_number(&o["earth_radius"], 6360e3),
+        ),
+        atmosphere: Sphere::new(
+            earth_location,
+            SceneFile::parse_number(&o["atmosphere_radius"], 6420e3)
+        ),
+        rayleigh_thickness,
+        mie_thickness,
+        sun_direction: SceneFile::parse_vec3_def(o, "sun_direction", Vector3::new(0., 0.5, 2.)).normalize(),
+        brightness: SceneFile::parse_number(&o["brightness"], 20.),
+        rayleigh_coefficients,
+        mie_coefficient,
+        mie_anisotropy,
+    };
+    // The lookup table is on by default; "lut": false integrates every ray exactly.
+    let m: Box<dyn MaterialModel + Sync + Send> = if o["lut"].as_bool().unwrap_or(true) {
+        Box::new(LUTSky { sky, lut: std::sync::OnceLock::new() })
+    } else {
+        Box::new(sky)
+    };
     SceneObject {
         geometry: Box::new(Infinite {}),
-        medium: Box::new(Solid { m: Box::new(SkyMaterial {
-            earth: Sphere::new(
-                earth_location,
-                SceneFile::parse_number(&o["earth_radius"], 6360e3),
-            ),
-            atmosphere: Sphere::new(
-                earth_location,
-                SceneFile::parse_number(&o["atmosphere_radius"], 6420e3)
-            ),
-            rayleigh_thickness,
-            mie_thickness,
-            sun_direction: SceneFile::parse_vec3_def(o, "sun_direction", Vector3::new(0., 0.5, 2.)).normalize(),
-            brightness: SceneFile::parse_number(&o["brightness"], 20.),
-            rayleigh_coefficients,
-            mie_coefficient,
-            mie_anisotropy,
-        }) })
+        medium: Box::new(Solid { m }),
     }
 }
 
@@ -442,6 +586,59 @@ mod tests {
         // From 5 km up the sun is still above the horizon (the dip of the horizon there is about
         // 0.04 radians).
         assert!(after_sunset.optical_depth_to_sun(Vector3::new(0., 5000., 0.)).is_some());
+    }
+
+    fn test_sky(sun: Vector3<f64>) -> SkyMaterial {
+        SkyMaterial {
+            atmosphere: Sphere::new(Vector3::new(0., -6360e3, 0.), 6420e3),
+            earth: Sphere::new(Vector3::new(0., -6360e3, 0.), 6360e3),
+            sun_direction: sun.normalize(),
+            rayleigh_thickness: 7994.,
+            mie_thickness: 1200.,
+            brightness: 20.0,
+            rayleigh_coefficients: Vector3::new(DEFAULT_RAYLEIGH_R, DEFAULT_RAYLEIGH_G, DEFAULT_RAYLEIGH_B),
+            mie_coefficient: DEFAULT_MIE_COEFFICIENT,
+            mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
+        }
+    }
+
+    /// The largest error of the lookup table relative to the exact integral, over random
+    /// directions above the horizon, for rays from each of `altitudes` metres up.
+    fn lut_errors(sun: Vector3<f64>, altitudes: &[f64]) -> Vec<f64> {
+        let sky = test_sky(sun);
+        let lut = SkyViewLUT::build(&sky, LUT_WIDTH, LUT_HEIGHT);
+        altitudes.iter().map(|altitude| {
+            crate::geometry::seed_rand(11, 0);
+            (0..300).map(|i| {
+                // Half the directions within about 10 degrees of the sun, where the sky changes
+                // fastest; half anywhere above the horizon.
+                let d = crate::geometry::random_point_on_unit_sphere();
+                let d = if i % 2 == 0 { (sky.sun_direction + d * 0.17).normalize() } else { d };
+                let d = Vector3::new(d.x, d.y.abs(), d.z);
+                let exact = sky.radiance(&Ray { ro: Vector3::new(0., *altitude, 0.), rd: d });
+                let (rayleigh, mie) = lut.lookup(&d, *altitude).unwrap();
+                (sky.apply_phase(&d, rayleigh, mie) - exact).norm() / exact.norm()
+            }).fold(0., f64::max)
+        }).collect()
+    }
+
+    #[test]
+    fn test_lut_matches_exact_sky() {
+        // Between the tabulated altitudes, with the sun at the horizon: the hardest case, since
+        // the sky changes fastest there. (Measured worst errors: under 0.5% in either case.)
+        let altitudes = [3., 45., 175.];
+        for sun in [Vector3::new(0., 0.02, 1.)] {
+            for (altitude, e) in altitudes.iter().zip(lut_errors(sun, &altitudes)) {
+                assert!(e < 0.01, "sun {}, altitude {} m: relative error {}", sun, altitude, e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_lut_defers_to_exact_above_its_range() {
+        let sky = test_sky(Vector3::new(0., 0.5, 1.));
+        let lut = SkyViewLUT::build(&sky, 8, 4);
+        assert!(lut.lookup(&Vector3::new(0., 1., 0.), 500.).is_none());
     }
 
     #[test]

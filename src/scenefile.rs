@@ -7,6 +7,7 @@ use crate::shapes::plane::Plane;
 use crate::shapes::mesh::{Mesh, SmoothMesh};
 use crate::shapes::csg::{Primitive, Difference};
 use crate::shapes::transform::{Transform};
+use crate::na::Rotation3;
 use crate::ocean::create_ocean;
 use crate::shapes::bbox::BBox;
 use crate::light::Light;
@@ -279,6 +280,10 @@ impl SceneFile {
             return Some(SceneFile::parse_rotation(o));
         }
 
+        if t == "transform" {
+            return Some(SceneFile::parse_transform(o));
+        }
+
         if t == "difference" {
             return Some(SceneFile::parse_difference(o));
         }
@@ -300,6 +305,26 @@ impl SceneFile {
         let pitch = SceneFile::parse_number(&o["pitch"], 0.).to_radians();
         let yaw = SceneFile::parse_number(&o["yaw"], 0.).to_radians();
         Box::new(Transform::rotate(a, roll, pitch, yaw))
+    }
+
+    /// `{"type": "transform", "item": {...}, "scale": 2 or [x, y, z], "rotate": {"roll", "pitch",
+    /// "yaw"} in degrees, "translate": [x, y, z]}`: every part optional, applied in that order.
+    pub fn parse_transform(o: &Value) -> Box<dyn Geometry + Sync + Send> {
+        let item = SceneFile::parse_geometry(&o["item"])
+            .unwrap_or_else(|| panic!("transform needs a geometry \"item\", got {}", o["item"]));
+        let scale = match &o["scale"] {
+            Value::Number(n) => { let s = n.as_f64().unwrap(); Vector3::new(s, s, s) },
+            Value::Null => Vector3::new(1., 1., 1.),
+            v => SceneFile::parse_vec3(v),
+        };
+        let r = &o["rotate"];
+        let rotation = Rotation3::from_euler_angles(
+            SceneFile::parse_number(&r["roll"], 0.).to_radians(),
+            SceneFile::parse_number(&r["pitch"], 0.).to_radians(),
+            SceneFile::parse_number(&r["yaw"], 0.).to_radians(),
+        );
+        let translate = SceneFile::parse_vec3_def(o, "translate", Vector3::zeros());
+        Box::new(Transform::from_parts(item, translate, rotation, scale))
     }
 
     pub fn parse_mesh(o: &Value) -> Box<dyn Geometry + Sync + Send> {
@@ -885,6 +910,35 @@ mod tests {
     fn test_missing_material_names_it() {
         let obj = serde_json::json!({ "type": "sphere", "material": "MISSING" });
         SceneFile::parse_object_medium(&obj, &noise_materials(), &Map::new());
+    }
+
+    #[test]
+    fn test_parse_transform() {
+        let t = SceneFile::parse_transform(&serde_json::json!({
+            "item": { "type": "sphere", "location": [0, 0, 0], "radius": 1 },
+            "scale": 2, "rotate": { "yaw": 90 }, "translate": [0, 0, 5]
+        }));
+        let b = t.bounds();
+        assert!((b.min.coords - Vector3::new(-2., -2., 3.)).norm() < 1e-9, "{}", b);
+        let per_axis = SceneFile::parse_transform(&serde_json::json!({
+            "item": { "type": "sphere", "location": [0, 0, 0], "radius": 1 }, "scale": [3, 1, 1]
+        }));
+        assert!((per_axis.bounds().max.x - 3.).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_transformed_emitters_are_area_lights_when_uniformly_scaled() {
+        let s = SceneFile::from_string(r#"{
+            "camera": { "location": [0, 0, -10], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
+            "materials": { "L": { "type": "diffuse-light", "color": [1, 1, 1] } },
+            "objects": [
+                { "type": "transform", "scale": 2, "translate": [0, 5, 0], "material": "L",
+                  "item": { "type": "sphere", "location": [0, 0, 0], "radius": 1 } },
+                { "type": "transform", "scale": [2, 1, 1], "material": "L",
+                  "item": { "type": "sphere", "location": [0, 0, 0], "radius": 1 } }
+            ]
+        }"#.to_string());
+        assert_eq!(s.area_lights.len(), 1);
     }
 
     #[test]

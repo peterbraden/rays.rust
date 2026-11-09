@@ -185,6 +185,22 @@ impl PerlinNoise {
     }
 }
 
+/// Hash a cell (and seed) to a number in [0, 1]. Cells are numbered by their lowest corner,
+/// converted via i64 so negative cells wrap rather than saturating to 0.
+fn worley_hash(ix: u32, iy: u32, iz: u32, s: u32) -> f64 {
+    let mut h = (ix.wrapping_mul(73856093)) ^
+             (iy.wrapping_mul(19349663)) ^
+             (iz.wrapping_mul(83492791)) ^
+             s.wrapping_mul(0x9E37_79B9);
+    // Avalanche (murmur3 finaliser) so neighbouring cells are uncorrelated.
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x85eb_ca6b);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0xc2b2_ae35);
+    h ^= h >> 16;
+    h as f64 / u32::MAX as f64
+}
+
 /// Worley noise (cellular noise) generator
 #[derive(Clone)]
 pub struct WorleyNoise {
@@ -207,65 +223,38 @@ impl WorleyNoise {
     
     /// Get noise value at a 3D point
     /// 
-    /// Returns the distance to the closest feature point.
+    /// Returns the distance to the closest feature point (Worley's F1), times `point_density`.
+    /// Each unit cell has one feature point, at a position hashed from the cell and the seed;
+    /// the nearest is in the point's own cell or one of its 26 neighbours.
     pub fn noise(&self, x: f64, y: f64, z: f64) -> f64 {
-        // This is a simplified placeholder implementation
-        // A full implementation would use spatial hashing for efficiency
+        let hash = worley_hash;
+        // Find cell containing the point, and where in it the point is.
+        let (xi, yi, zi) = (x.floor(), y.floor(), z.floor());
+        let (fx, fy, fz) = (x - xi, y - yi, z - zi);
+        let (cx, cy, cz) = (xi as i64, yi as i64, zi as i64);
+        // The squared distance from the point to the nearest face of the neighbour at offset
+        // -1, 0 or +1 along an axis: no feature point there can be nearer.
+        let gap = |f: f64, d: i64| match d { -1 => f * f, 1 => (1. - f) * (1. - f), _ => 0. };
         
-        // Simple hash function based on position and seed
-        let hash = |px: f64, py: f64, pz: f64, s: u32| -> f64 {
-            // Use bitwise XOR on integer portion. Go via i64 so negative cells wrap rather than
-            // saturating to 0.
-            let ix = px.floor() as i64 as u32;
-            let iy = py.floor() as i64 as u32;
-            let iz = pz.floor() as i64 as u32;
-            let mut h = (ix.wrapping_mul(73856093)) ^ 
-                     (iy.wrapping_mul(19349663)) ^ 
-                     (iz.wrapping_mul(83492791)) ^
-                     s.wrapping_mul(0x9E37_79B9);
-            // Avalanche (murmur3 finaliser) so neighbouring cells are uncorrelated.
-            h ^= h >> 16;
-            h = h.wrapping_mul(0x85eb_ca6b);
-            h ^= h >> 13;
-            h = h.wrapping_mul(0xc2b2_ae35);
-            h ^= h >> 16;
-            // Convert back to float in range [0,1]
-            h as f64 / u32::MAX as f64
-        };
-        
-        // Find cell containing the point
-        let xi = x.floor();
-        let yi = y.floor();
-        let zi = z.floor();
-        
-        let mut min_dist = f64::MAX;
-        
-        // Check neighboring cells
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                for dz in -1..=1 {
-                    let cx = xi + dx as f64;
-                    let cy = yi + dy as f64;
-                    let cz = zi + dz as f64;
-                    
-                    // Random position within cell
-                    let px = cx + hash(cx, cy, cz, self.seed);
-                    let py = cy + hash(cx, cy, cz, self.seed.wrapping_add(1));
-                    let pz = cz + hash(cx, cy, cz, self.seed.wrapping_add(2));
-                    
-                    // Calculate distance to feature point
-                    let dx = px - x;
-                    let dy = py - y;
-                    let dz = pz - z;
-                    let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-                    
-                    min_dist = min_dist.min(dist);
-                }
+        let mut min_dist2 = f64::MAX;
+        // Own cell first, so the bound below prunes as many neighbours as possible.
+        for (dx, dy, dz) in std::iter::once((0, 0, 0)).chain(
+            (-1..=1).flat_map(|dx| (-1..=1).flat_map(move |dy| (-1..=1).map(move |dz| (dx, dy, dz))))
+                .filter(|&o| o != (0, 0, 0))
+        ) {
+            if gap(fx, dx) + gap(fy, dy) + gap(fz, dz) >= min_dist2 {
+                continue;
             }
+            let (ix, iy, iz) = ((cx + dx) as u32, (cy + dy) as u32, (cz + dz) as u32);
+            // Random position within cell, relative to the point.
+            let px = dx as f64 + hash(ix, iy, iz, self.seed) - fx;
+            let py = dy as f64 + hash(ix, iy, iz, self.seed.wrapping_add(1)) - fy;
+            let pz = dz as f64 + hash(ix, iy, iz, self.seed.wrapping_add(2)) - fz;
+            min_dist2 = min_dist2.min(px * px + py * py + pz * pz);
         }
         
         // Scale by point density
-        min_dist * self.point_density
+        min_dist2.sqrt() * self.point_density
     }
 }
 
@@ -394,6 +383,26 @@ mod tests {
         let perlin = PerlinNoise::with_seed(3);
         for v in perlin_samples(&perlin) {
             assert!((-1.0..=1.0).contains(&v));
+        }
+    }
+
+    #[test]
+    fn test_pruned_worley_matches_full_search() {
+        let w = WorleyNoise::new(1.3, 77);
+        let mut rng = Pcg32::new(1, 0);
+        for _ in 0..5000 {
+            let (x, y, z) = ((rng.next_f64() - 0.5) * 40., (rng.next_f64() - 0.5) * 40., (rng.next_f64() - 0.5) * 40.);
+            let (cx, cy, cz) = (x.floor() as i64, y.floor() as i64, z.floor() as i64);
+            let mut best = f64::MAX;
+            for dx in -1..=1 { for dy in -1..=1 { for dz in -1..=1 {
+                let (ix, iy, iz) = ((cx + dx) as u32, (cy + dy) as u32, (cz + dz) as u32);
+                let p = Vector3::new(
+                    (cx + dx) as f64 + worley_hash(ix, iy, iz, 77),
+                    (cy + dy) as f64 + worley_hash(ix, iy, iz, 78),
+                    (cz + dz) as f64 + worley_hash(ix, iy, iz, 79));
+                best = best.min((p - Vector3::new(x, y, z)).norm());
+            }}}
+            assert!((w.noise(x, y, z) - best * 1.3).abs() < 1e-9, "at ({}, {}, {})", x, y, z);
         }
     }
 

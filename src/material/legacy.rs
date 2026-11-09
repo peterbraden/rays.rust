@@ -21,11 +21,8 @@ impl MaterialModel for Whitted {
         for light in &s.lights {
             let light_vec = light.position - intersection.point;
             let shadow_ray = Ray {ro: intersection.point, rd: light_vec.normalize()};
-            let shadow_intersection = s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), 0.001); 
-
-            match shadow_intersection {
-                Some(_) => (),// Point in shadow...
-                None => out = out + diffuse(self.pigment, intersection, &light_vec, light) + phong(self.phong, r, intersection, &light_vec),
+            if !s.objects.occluded(&shadow_ray, light_vec.norm(), 0.001) {
+                out = out + diffuse(self.pigment, intersection, &light_vec, light) + phong(self.phong, r, intersection, &light_vec);
             }
         }
 

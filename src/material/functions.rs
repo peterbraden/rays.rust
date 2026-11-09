@@ -123,7 +123,7 @@ pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) ->
     for light in &s.lights {
         let light_vec = light.position - intersection.point;
         let shadow_ray = Ray {ro: intersection.point, rd: light_vec.normalize()};
-        if s.objects.nearest_intersection(&shadow_ray, light_vec.norm(), f64::MIN_POSITIVE).is_none() {
+        if !s.objects.occluded(&shadow_ray, light_vec.norm(), f64::MIN_POSITIVE) {
             direct = direct + diffuse(albedo, intersection, &light_vec, light);
         }
     }
@@ -175,7 +175,7 @@ fn sample_area_light(albedo: Color, intersection: &Intersection, s: &Scene) -> C
     }
     // Stop the shadow ray just short of the light, which would otherwise block itself.
     let shadow_ray = Ray { ro: intersection.point, rd: w };
-    if s.objects.nearest_intersection(&shadow_ray, d * (1. - 1e-6), f64::MIN_POSITIVE).is_some() {
+    if s.objects.occluded(&shadow_ray, d * (1. - 1e-6), f64::MIN_POSITIVE) {
         return Color::black();
     }
     let cos_y = n_y.dot(&-w).abs();

@@ -395,7 +395,11 @@ impl OceanGeometry {
         let lz = lx;
         let choppyness_shift = false;
 
-        let mut rng: StdRng = SeedableRng::from_seed([0; 32]);
+        // The random realisation of the spectrum (4.4). Seed 0, the default, is the realisation
+        // every ocean used before seeds were configurable.
+        let mut seed = [0u8; 32];
+        seed[..8].copy_from_slice(&(SceneFile::parse_int(&o["seed"], 0) as u64).to_le_bytes());
+        let mut rng: StdRng = SeedableRng::from_seed(seed);
 
         // N = M, the size of the Fourier grid (4.4): a power of two from 16 to 2048. Titanic and
         // Waterworld used 2048, about 3 cm between grid points; above 2048 floating point

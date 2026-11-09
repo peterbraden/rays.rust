@@ -3,7 +3,11 @@ use std::time::{Instant};
 use crate::scene::Scene;
 use crate::color::Color;
 use crate::trace::trace;
-use crate::geometry::rand;
+use crate::geometry::{rand, seed_rand};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::HashMap;
+use rayon::prelude::*;
 use crate::output::LinearImage;
 
 
@@ -25,6 +29,7 @@ pub struct RenderContext {
 
 pub struct RenderIterator {
     i: usize,
+    pub layer: usize,
     pub width: usize,
     pub height: usize,
     pub samples: usize,
@@ -38,6 +43,8 @@ pub struct RenderableChunk {
     pub ymin: usize,
     pub ymax: usize,
     pub supersamples: usize,
+    /// Which pass over the image this chunk belongs to.
+    pub layer: usize,
 }
 
 pub struct RenderedChunk {
@@ -166,15 +173,69 @@ impl RenderContext {
         let chunk_layers = s.render.layers();
         let samples = s.render.samples_per_chunk.max(1);
         (0 .. chunk_layers)
-                    .flat_map(move |_x| 
+                    .flat_map(move |layer| 
                         RenderIterator {
                             i: 0,
+                            layer,
                             width,
                             height,
                             chunk_size,
                             samples,
                         })
     }
+}
+
+/// Render every chunk of the image, all threads working at once, with output that depends only
+/// on the scene and its seed.
+///
+/// Each pixel's samples are already independent of scheduling (see `render_pixel`), but the
+/// order in which a pixel's layers are added up still matters: floating-point addition isn't
+/// associative. So chunks are handed out in order, layer by layer, and a chunk that finishes
+/// before the previous layer of the same region has been applied is held back until it has.
+/// Because chunks start in order, only a few (about one per thread) are ever held.
+///
+/// After each chunk is applied, `after_chunk` runs with the context locked; anything it returns
+/// is passed to `outside_lock`, eg. to write a progressive image without holding up the render.
+pub fn render<T, F, G>(s: &Scene, rc: &Mutex<RenderContext>, after_chunk: F, outside_lock: G)
+where
+    F: Fn(&RenderContext) -> Option<T> + Sync,
+    G: Fn(T) + Sync,
+{
+    let chunks: Vec<RenderableChunk> = rc.lock().unwrap().iter(s).collect();
+    if chunks.is_empty() {
+        return;
+    }
+    // Every layer covers the image with the same regions, in the same order.
+    let regions = chunks.len() / s.render.layers();
+    let next_chunk = AtomicUsize::new(0);
+    // The next layer due for each region, and finished chunks waiting for their turn.
+    let order = Mutex::new((vec![0usize; regions], HashMap::<usize, RenderedChunk>::new()));
+
+    (0 .. rayon::current_num_threads()).into_par_iter().for_each(|_| loop {
+        let i = next_chunk.fetch_add(1, Ordering::Relaxed);
+        if i >= chunks.len() {
+            break;
+        }
+        let rendered = chunks[i].render(s);
+
+        let pending = {
+            let mut ctx = rc.lock().unwrap();
+            let mut order = order.lock().unwrap();
+            let (next_layer, waiting) = &mut *order;
+            waiting.insert(i, rendered);
+            let region = i % regions;
+            let mut applied = false;
+            while let Some(r) = waiting.remove(&(next_layer[region] * regions + region)) {
+                ctx.apply_chunk(&chunks[next_layer[region] * regions + region], &r);
+                next_layer[region] += 1;
+                applied = true;
+            }
+            if applied { after_chunk(&ctx) } else { None }
+        };
+        if let Some(t) = pending {
+            outside_lock(t);
+        }
+    });
 }
 
 impl RenderableChunk {
@@ -187,13 +248,17 @@ impl RenderableChunk {
         let mut pixels: Vec<Color> = Vec::with_capacity(size);
         let mut samples: Vec<usize> = Vec::with_capacity(size);
         let mut rays_cast = 0;
-        for y in self.ymin .. self.ymax {
-            for x in self.xmin .. self.xmax {
-                let (cast, psamples, pixel) = render_pixel(x, y, self.supersamples, s);
-                pixels.push(pixel);
-                samples.push(psamples);
-                rays_cast += cast;
-            }
+        // Pixels are rendered in parallel too, so a layer with few chunks of uneven cost (eg. sky
+        // and a horizon of grazing rays) still keeps every thread busy. Results are collected in
+        // order, so they are the same however the work is scheduled.
+        let w = self.width();
+        let results: Vec<(u64, usize, Color)> = (0 .. size).into_par_iter()
+            .map(|i| render_pixel(self.xmin + i % w, self.ymin + i / w, self.layer, self.supersamples, s))
+            .collect();
+        for (cast, psamples, pixel) in results {
+            pixels.push(pixel);
+            samples.push(psamples);
+            rays_cast += cast;
         }
 
         RenderedChunk {
@@ -223,6 +288,7 @@ impl Iterator for RenderIterator {
                     ymin: y,
                     ymax: y + self.chunk_size,
                     supersamples: self.samples,
+                layer: self.layer,
                 })
             } else {
                 // Increment down a row
@@ -234,6 +300,7 @@ impl Iterator for RenderIterator {
                     ymin: y,
                     ymax: y + self.chunk_size,
                     supersamples: self.samples,
+                layer: self.layer,
                 })
             }
         } else if self.width - x > self.chunk_size {
@@ -244,6 +311,7 @@ impl Iterator for RenderIterator {
                 ymin: y,
                 ymax: self.height,
                 supersamples: self.samples,
+                layer: self.layer,
             })
         } else {
             self.i = (self.i - x) + self.chunk_size * self.width;
@@ -253,12 +321,18 @@ impl Iterator for RenderIterator {
                 ymin: y,
                 ymax: self.height,
                 supersamples: self.samples,
+                layer: self.layer,
             })
         }
     }
 }
 
-fn render_pixel(x: usize, y: usize, max_samples: usize, s: &Scene) -> (u64, usize, Color) {
+fn render_pixel(x: usize, y: usize, layer: usize, max_samples: usize, s: &Scene) -> (u64, usize, Color) {
+    // Every pixel and layer has its own random stream, so a render depends only on the seed,
+    // not on which thread renders which chunk.
+    let stream = ((layer * s.image.height + y) * s.image.width + x) as u64;
+    seed_rand(s.render.seed, stream);
+
     let mut pixel = Color::black();
     let mut cast = 0;
     let mut samples = 0;
@@ -310,6 +384,39 @@ mod tests {
             rc.apply_chunk(&c, &p);
         }
         rc
+    }
+
+    /// Render on all threads through `render`, as main does.
+    fn render_parallel(seed: u64) -> Vec<Color> {
+        let s = SceneFile::from_string(format!(r#"{{
+            "width": 24, "height": 16, "chunk_size": 2, "supersamples": 32, "samples_per_chunk": 1,
+            "seed": {}, "background": [0.3, 0.4, 0.5], "max_depth": 6,
+            "path_termination": "russian_roulette", "russian_roulette_depth": 1,
+            "camera": {{ "location": [0, 1, -5], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.5, "aperture": 0.1 }},
+            "materials": {{
+                "D": {{ "type": "lambertian", "albedo": [0.8, 0.8, 0.8] }},
+                "M": {{ "type": "metal", "reflective": [0.9, 0.9, 0.9], "roughness": 0.3 }},
+                "G": {{ "type": "dielectric", "refractive_index": 1.5, "attenuate": [1, 1, 1] }}
+            }},
+            "lights": [ {{ "location": [0, 5, -2], "intensity": 100 }} ],
+            "objects": [
+                {{ "type": "plane", "y": 0, "material": "D" }},
+                {{ "type": "sphere", "location": [-1, 0.5, 0], "radius": 0.5, "material": "M" }},
+                {{ "type": "sphere", "location": [1, 0.5, 0], "radius": 0.5, "material": "G" }},
+                {{ "type": "fog", "density": 0.02 }}
+            ]
+        }}"#, seed));
+        let rc = Mutex::new(RenderContext::new(s.image.width, s.image.height, false, "test.json"));
+        super::render(&s, &rc, |_| None::<()>, |_| ());
+        let img = rc.lock().unwrap().snapshot();
+        img.pixels
+    }
+
+    #[test]
+    fn test_same_seed_renders_identically() {
+        let a = render_parallel(1);
+        assert_eq!(a, render_parallel(1), "same seed, different image");
+        assert_ne!(a, render_parallel(2), "different seeds, same image");
     }
 
     #[test]

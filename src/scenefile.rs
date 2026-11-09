@@ -289,7 +289,7 @@ impl SceneFile {
         if t == "difference" {
             return Some(SceneFile::parse_difference(o));
         }
-        None
+        SceneFile::parse_shape(t, o)
     }
 
     pub fn parse_difference(o: &Value) -> Box<dyn Geometry + Sync + Send> {

@@ -50,11 +50,15 @@ mod shapes {
     pub mod mesh;
     pub mod infinite;
     pub mod repeating_mesh;
+    pub mod polynomial;
+    pub mod cone;
+    pub mod disc;
 }
 mod octree;
 mod scenegraph;
 mod scene;
 mod scenefile;
+mod scenefile_shapes;
 mod skysphere;
 mod ocean;
 mod camera;

@@ -11,6 +11,8 @@ use crate::shapes::algebraic::{Algebraic, Term, Torus};
 use crate::shapes::bbox::BBox;
 use crate::shapes::polygon::{Outline, Polygon, Prism, Sweep};
 use crate::shapes::revolution::{Lathe, Sor, Spline};
+use crate::shapes::sweep::{SphereSweep, SweepSpline};
+use crate::shapes::blob::{Blob, Component};
 use serde_json::Value;
 
 type Shape = Box<dyn Geometry + Sync + Send>;
@@ -119,6 +121,38 @@ impl SceneFile {
             },
             // {"type": "sor", "points": [[radius, y], ..], "open": false}
             "sor" => Box::new(Sor::new(&points2(o, "points"), flag(o, "open"))),
+            // {"type": "sphere_sweep", "spheres": [[x, y, z, radius], ..],
+            //  "spline": "linear" | "cubic" | "b_spline", "steps": 16}
+            "sphere_sweep" => {
+                let spheres: Vec<(Vector3<f64>, f64)> = o["spheres"].as_array()
+                    .expect("sphere_sweep needs \"spheres\": [[x, y, z, radius], ..]")
+                    .iter().map(|s| {
+                        let a: Vec<f64> = s.as_array().map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default();
+                        assert!(a.len() == 4, "sphere_sweep spheres are [x, y, z, radius], got {}", s);
+                        (Vector3::new(a[0], a[1], a[2]), a[3])
+                    }).collect();
+                let spline = match o["spline"].as_str().unwrap_or("linear") {
+                    "linear" => SweepSpline::Linear,
+                    "cubic" => SweepSpline::Cubic,
+                    "b_spline" => SweepSpline::BSpline,
+                    s => panic!("sphere_sweep spline must be \"linear\", \"cubic\" or \"b_spline\", got {}", s),
+                };
+                Box::new(SphereSweep::new(&spheres, spline, SceneFile::parse_int(&o["steps"], 16)))
+            },
+            // {"type": "blob", "threshold": 0.5, "components": [
+            //   {"type": "sphere", "center": [..], "radius": r, "strength": s},
+            //   {"type": "cylinder", "base": [..], "cap": [..], "radius": r, "strength": s}]}
+            "blob" => {
+                let components = o["components"].as_array().expect("blob needs \"components\"")
+                    .iter().map(|c| match c["type"].as_str() {
+                        Some("sphere") => Component::Sphere {
+                            center: vec3(c, "center"), radius: num(c, "radius"), strength: num_def(c, "strength", 1.) },
+                        Some("cylinder") => Component::Cylinder {
+                            base: vec3(c, "base"), cap: vec3(c, "cap"), radius: num(c, "radius"), strength: num_def(c, "strength", 1.) },
+                        _ => panic!("blob components are \"sphere\" or \"cylinder\", got {}", c),
+                    }).collect();
+                Box::new(Blob::new(components, num(o, "threshold")))
+            },
             _ => return None,
         })
     }
@@ -209,6 +243,17 @@ mod tests {
         assert!((hit_from(&l, [-5., 0.5, 0.], [1., 0., 0.]).unwrap() - 3.).abs() < 1e-9);
         let s = shape(r#"{"type": "sor", "points": [[1, -1], [1, 0], [1, 2], [1, 3]]}"#);
         assert!((hit_from(&s, [-5., 1., 0.], [1., 0., 0.]).unwrap() - 4.).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_sweep_and_blob() {
+        let s = shape(r#"{"type": "sphere_sweep", "spheres": [[0, 0, 0, 1], [4, 0, 0, 1]]}"#);
+        assert!((hit_from(&s, [2., 5., 0.], [0., -1., 0.]).unwrap() - 4.).abs() < 1e-9);
+        let b = shape(r#"{"type": "blob", "threshold": 0.25, "components": [
+            {"type": "sphere", "center": [0, 0, 0], "radius": 2, "strength": 1},
+            {"type": "cylinder", "base": [5, 0, 0], "cap": [9, 0, 0], "radius": 1}]}"#);
+        let expected = 10. - 2. * (0.5f64).sqrt();
+        assert!((hit_from(&b, [0., 0., -10.], [0., 0., 1.]).unwrap() - expected).abs() < 1e-7);
     }
 
     #[test]

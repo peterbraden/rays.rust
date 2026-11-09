@@ -56,6 +56,8 @@ mod shapes {
     pub mod algebraic;
     pub mod polygon;
     pub mod revolution;
+    pub mod sweep;
+    pub mod blob;
 }
 mod octree;
 mod scenegraph;

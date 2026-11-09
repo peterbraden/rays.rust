@@ -124,7 +124,7 @@
   ],
   "variables" : {},
   "objects": [
-    { "type" : "ocean", "resolution": 100, "fourier_size": 1024, "amplitude": 100, "wind": [34, 1]},
+    { "type" : "ocean", "resolution": 100, "fourier_size": 1024, "amplitude": 9.53674e-05, "wind": [34, 1]},
     { "type" : "skysphere" }
   ]
 }

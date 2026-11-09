@@ -32,7 +32,7 @@
   "lights" : [],
   "variables" : {},
   "objects": [
-    { "type" : "ocean", "resolution": 20, "fourier_size": 256, "amplitude": 100, "wind": [0.8, 0.4], "color": [0, 0.1, 0.15]},
+    { "type" : "ocean", "resolution": 20, "fourier_size": 256, "amplitude": 0.00152588, "wind": [0.8, 0.4], "color": [0, 0.1, 0.15]},
     { "type" : "skysphere", "sun_direction": [0,0.005,1], "brightness": 70},
     { 
       "type": "rotate",

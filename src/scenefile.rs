@@ -376,11 +376,13 @@ impl SceneFile {
         }
 
         if t == "plastic" {
+            if !o["opacity"].is_null() {
+                println!("Warning: plastic 'opacity' is ignored; plastic is opaque (use a dielectric for transparency)");
+            }
             let d:Plastic = Plastic {
                 albedo:SceneFile::parse_color(&o["albedo"]), 
-                refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.),
+                refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.5),
                 roughness: SceneFile::parse_number(&o["roughness"], 0.),
-                opacity: SceneFile::parse_number(&o["opacity"], 0.),
             };
             return Some(Box::new(d));
         }

@@ -15,7 +15,7 @@ use crate::material::normal::NormalShade;
 use rand::{SeedableRng, Rng};
 use rand::rngs::StdRng;
 use rand::distributions::{Normal, Distribution};
-use crate::geometry::point_on_unit_sphere;
+use crate::geometry::point_in_unit_ball;
 use crate::shapes::csg::Union;
 use crate::octree::Octree;
 use crate::shapes::bbox::BBox;
@@ -82,7 +82,7 @@ fn create_particles(
         let v = rand(rng);
         let impulse = Ray {
             ro: origin,
-            rd: (point_on_unit_sphere(u, v) * radius) + bias,
+            rd: (point_in_unit_ball(u, v) * radius) + bias,
         };
         particles.append(&mut trace_particle(impulse, time, samples, gravity));
     }

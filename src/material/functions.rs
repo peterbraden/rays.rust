@@ -31,10 +31,17 @@ pub fn reflect(v: Vector3<f64>, normal: Vector3<f64>) -> Vector3<f64> {
 /// incoming angle.)
 /// Practically, we implement random reflection within a unit sphere on the normal.
 /// This will be very noisy if we don't subsample a lot.
+fn lambertian_direction(normal: Vector3<f64>, on_sphere: Vector3<f64>) -> Vector3<f64> {
+    let d = normal + on_sphere;
+    // The sample can (rarely) cancel the normal exactly.
+    if d.norm() < 1e-9 { normal } else { d.normalize() }
+}
+
 pub fn scatter_lambertian(albedo: Color, intersection: &Intersection) -> ScatteredRay {
     let refl = Ray {
         ro: intersection.point,
-        rd: intersection.normal + random_point_on_unit_sphere(),
+        // Normal plus a point on the unit sphere gives a cosine-weighted direction.
+        rd: lambertian_direction(intersection.normal, random_point_on_unit_sphere()),
     };
     ScatteredRay{ emit: Color::black(), attenuate:albedo, ray: Some(refl) }
 }
@@ -135,6 +142,17 @@ mod tests {
     use crate::material::texture::Solid;
     use crate::material::legacy::FlatColor;
     use std::sync::Arc;
+
+    #[test]
+    fn test_lambertian_is_cosine_weighted() {
+        // For a cosine-weighted hemisphere, E[cos theta] = 2/3.
+        let n = Vector3::new(0., 1., 0.);
+        let samples = 100_000;
+        let mean: f64 = (0..samples)
+            .map(|_| lambertian_direction(n, random_point_on_unit_sphere()).dot(&n))
+            .sum::<f64>() / samples as f64;
+        assert!((mean - 2. / 3.).abs() < 0.01, "mean cosine {}", mean);
+    }
 
     #[test]
     fn test_fresnel_continuous_at_critical_angle() {

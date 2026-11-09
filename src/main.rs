@@ -53,6 +53,7 @@ mod shapes {
     pub mod polynomial;
     pub mod cone;
     pub mod disc;
+    pub mod algebraic;
 }
 mod octree;
 mod scenegraph;

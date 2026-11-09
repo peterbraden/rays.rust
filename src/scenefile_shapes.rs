@@ -7,6 +7,8 @@ use crate::scenefile::SceneFile;
 use crate::shapes::geometry::Geometry;
 use crate::shapes::cone::Cone;
 use crate::shapes::disc::Disc;
+use crate::shapes::algebraic::{Algebraic, Term, Torus};
+use crate::shapes::bbox::BBox;
 use serde_json::Value;
 
 type Shape = Box<dyn Geometry + Sync + Send>;
@@ -69,9 +71,55 @@ impl SceneFile {
             // {"type": "disc", "center": [..], "normal": [..], "radius": r, "hole_radius": 0}
             "disc" => Box::new(Disc::new(
                 vec3(o, "center"), vec3(o, "normal"), num(o, "radius"), num_def(o, "hole_radius", 0.))),
+            // {"type": "torus", "major": R, "minor": r}: about the y axis, centred on the origin.
+            "torus" => Box::new(Torus::new(num(o, "major"), num(o, "minor"))),
+            // {"type": "quadric", "squares": [A, B, C], "mixed": [D, E, F], "linear": [G, H, I],
+            //  "constant": J, "bounds": {"min": [..], "max": [..]}}
+            "quadric" => Box::new(Algebraic::new(
+                Algebraic::quadric_terms(
+                    SceneFile::parse_vec3_def(o, "squares", Vector3::zeros()),
+                    SceneFile::parse_vec3_def(o, "mixed", Vector3::zeros()),
+                    SceneFile::parse_vec3_def(o, "linear", Vector3::zeros()),
+                    num_def(o, "constant", 0.)),
+                clip_box(o))),
+            // {"type": "poly", "order": n, "coefficients": [..]} in POV-Ray's order, or
+            // {"type": "poly", "terms": [[c, i, j, k], ..]} for c x^i y^j z^k; "cubic" and
+            // "quartic" are poly of order 3 and 4. Optionally clipped to "bounds".
+            "poly" | "cubic" | "quartic" => Box::new(Algebraic::new(poly_terms(t, o), clip_box(o))),
             _ => return None,
         })
     }
+}
+
+/// An optional box, {"min": [..], "max": [..]}, under "bounds".
+fn clip_box(o: &Value) -> Option<BBox> {
+    let b = &o["bounds"];
+    if b.is_null() {
+        return None;
+    }
+    let (a, c) = (vec3(b, "min"), vec3(b, "max"));
+    Some(BBox::new(a.inf(&c), a.sup(&c)))
+}
+
+fn poly_terms(t: &str, o: &Value) -> Vec<Term> {
+    if let Some(terms) = o["terms"].as_array() {
+        return terms.iter().map(|term| {
+            let a = term.as_array().filter(|a| a.len() == 4)
+                .unwrap_or_else(|| panic!("{} terms are [coefficient, i, j, k], got {}", t, term));
+            let power = |x: &Value| x.as_u64().unwrap_or_else(|| panic!("{}: powers must be whole numbers, got {}", t, x)) as usize;
+            Term { coefficient: a[0].as_f64().unwrap(), powers: [power(&a[1]), power(&a[2]), power(&a[3])] }
+        }).collect();
+    }
+    let order = match t {
+        "cubic" => 3,
+        "quartic" => 4,
+        _ => SceneFile::parse_int(&o["order"], 0),
+    };
+    assert!(order >= 1, "poly needs an \"order\" (or \"terms\")");
+    let coefficients: Vec<f64> = o["coefficients"].as_array()
+        .unwrap_or_else(|| panic!("{} needs \"coefficients\" (or \"terms\")", t))
+        .iter().map(|c| c.as_f64().unwrap()).collect();
+    Algebraic::pov_terms(order, &coefficients)
 }
 
 #[cfg(test)]
@@ -97,6 +145,20 @@ mod tests {
         let d = shape(r#"{"type": "disc", "center": [0, 0, 0], "normal": [0, 0, 1], "radius": 1, "hole_radius": 0.5}"#);
         assert!(hit_from(&d, [0., 0., -5.], [0., 0., 1.]).is_none());
         assert!(hit_from(&d, [0.7, 0., -5.], [0., 0., 1.]).is_some());
+    }
+
+    #[test]
+    fn test_algebraic_shapes() {
+        let t = shape(r#"{"type": "torus", "major": 2, "minor": 0.5}"#);
+        assert!((hit_from(&t, [-10., 0., 0.], [1., 0., 0.]).unwrap() - 7.5).abs() < 1e-7);
+        let q = shape(r#"{"type": "quadric", "squares": [1, 1, 1], "constant": -1}"#);
+        assert!((hit_from(&q, [0., 0., -5.], [0., 0., 1.]).unwrap() - 4.).abs() < 1e-7);
+        // The same sphere as a poly, by terms and in POV-Ray's order.
+        let p = shape(r#"{"type": "poly", "terms": [[1, 2, 0, 0], [1, 0, 2, 0], [1, 0, 0, 2], [-1, 0, 0, 0]]}"#);
+        assert!((hit_from(&p, [0., 0., -5.], [0., 0., 1.]).unwrap() - 4.).abs() < 1e-7);
+        let p2 = shape(r#"{"type": "poly", "order": 2, "coefficients": [1, 0, 0, 0, 1, 0, 0, 1, 0, -1],
+            "bounds": {"min": [-2, -2, -2], "max": [2, 2, 2]}}"#);
+        assert!((hit_from(&p2, [0., 0., -5.], [0., 0., 1.]).unwrap() - 4.).abs() < 1e-7);
     }
 
     #[test]

@@ -18,7 +18,7 @@ pub struct RenderContext {
     pub rays_cast: u64,
     pub start_time: Instant,
     pub progressive_render: bool,
-    pub pixels_rendered: u64,
+    pub samples_rendered: u64,
     pub output_filename: String,
 }
 
@@ -68,7 +68,7 @@ impl RenderContext {
             rays_cast: 0,
             start_time,
             progressive_render,
-            pixels_rendered: 0,
+            samples_rendered: 0,
             output_filename,
         }
     }
@@ -81,7 +81,7 @@ impl RenderContext {
         let i:usize = y*self.width + x;
         self.image[i] = self.image[i] + c.ignore_nan();
         self.samples[i] += samples;
-        self.pixels_rendered += 1;
+        self.samples_rendered += samples as u64;
     }
 
     pub fn apply_chunk(&mut self, c: &RenderableChunk, p: &RenderedChunk){
@@ -129,25 +129,25 @@ impl RenderContext {
     
     pub fn progress(&self, s: &Scene) -> String {
         let elapsed = Instant::now() - self.start_time;
-        format!("{:.2}s {} rays cast ({} RPS), {} Rays per pixel, {}%, {} threads",
+        format!("{:.2}s {} rays cast ({} RPS), {} Rays per sample, {}%, {} threads",
                  elapsed.as_secs_f64(),
                  format_f64(self.rays_cast as f64),
                  format_f64(self.rays_cast as f64 / elapsed.as_secs_f64()),
-                 format_f64(self.rays_cast as f64 / self.pixels_rendered as f64),
+                 format_f64(self.rays_cast as f64 / self.samples_rendered as f64),
                  format_f64(self.progress_percentage(s)),
                  rayon::current_num_threads())
     }
 
     pub fn progress_percentage(&self, s: &Scene) -> f64 {
-        (self.pixels_rendered as f64 / (self.width * self.height * s.render.supersamples) as f64) * 100.
+        (self.samples_rendered as f64 / (self.width * self.height * s.render.samples_per_pixel()) as f64) * 100.
     }
 
     pub fn iter(&self, s: &Scene) -> impl Iterator<Item=RenderableChunk> + '_ {
         let width = self.width;
         let height = self.height;
         let chunk_size = s.render.chunk_size;
-        let chunk_layers = s.render.supersamples / s.render.samples_per_chunk;
-        let samples = s.render.samples_per_chunk;
+        let chunk_layers = s.render.layers();
+        let samples = s.render.samples_per_chunk.max(1);
         (0 .. chunk_layers)
                     .flat_map(move |_x| 
                         RenderIterator {
@@ -264,4 +264,44 @@ fn render_pixel(x: usize, y: usize, max_samples: usize, s: &Scene) -> (u64, usiz
         }
     }
     (cast, samples, pixel)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scenefile::SceneFile;
+
+    fn scene(supersamples: usize, samples_per_chunk: usize) -> Scene {
+        SceneFile::from_string(format!(r#"{{
+            "width": 5, "height": 3, "chunk_size": 2,
+            "supersamples": {}, "samples_per_chunk": {},
+            "shadow_bias": 0.0001, "background": [0, 0, 0], "max_depth": 1,
+            "camera": {{ "location": [0, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }},
+            "materials": {{}}, "media": {{}}, "lights": [], "objects": [], "variables": {{}}
+        }}"#, supersamples, samples_per_chunk))
+    }
+
+    fn render(s: &Scene) -> RenderContext {
+        let mut rc = RenderContext::new(s.image.width, s.image.height, false, "test.json");
+        let chunks: Vec<RenderableChunk> = rc.iter(s).collect();
+        for c in chunks {
+            let p = c.render(s);
+            rc.apply_chunk(&c, &p);
+        }
+        rc
+    }
+
+    #[test]
+    fn test_samples_per_pixel_meets_supersamples() {
+        for (supersamples, per_chunk) in [(35, 2), (1, 2), (8, 1), (9, 3), (4, 0)] {
+            let s = scene(supersamples, per_chunk);
+            let rc = render(&s);
+            let expected = s.render.samples_per_pixel();
+            assert!(expected >= supersamples, "{} < {}", expected, supersamples);
+            for i in 0 .. s.image.width * s.image.height {
+                assert_eq!(rc.samples[i], expected, "pixel {} for {:?}", i, (supersamples, per_chunk));
+            }
+            assert!((rc.progress_percentage(&s) - 100.).abs() < 1e-9);
+        }
+    }
 }

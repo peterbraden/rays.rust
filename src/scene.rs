@@ -29,6 +29,23 @@ pub struct RenderOpts {
     pub samples_per_chunk: usize,
 }
 
+impl RenderOpts {
+    /// Samples per pixel in each pass over the image: an n x n grid, n = samples_per_chunk.
+    pub fn samples_per_layer(&self) -> usize {
+        self.samples_per_chunk.max(1).pow(2)
+    }
+
+    /// Passes over the image needed to take at least `supersamples` samples per pixel.
+    pub fn layers(&self) -> usize {
+        self.supersamples.max(1).div_ceil(self.samples_per_layer())
+    }
+
+    /// Samples per pixel actually taken: `supersamples` rounded up to a whole number of layers.
+    pub fn samples_per_pixel(&self) -> usize {
+        self.layers() * self.samples_per_layer()
+    }
+}
+
 pub struct Scene {
     pub image: ImageOpts,
     pub render: RenderOpts,

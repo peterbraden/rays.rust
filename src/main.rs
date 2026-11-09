@@ -117,7 +117,7 @@ fn main() {
             args.progressive_render,
             &args.scene,
             );
-    println!("- Output: {}x{} @ {} samples -> {}", s.image.width, s.image.height, s.render.supersamples, rc.output_filename);
+    println!("- Output: {}x{} @ {} samples -> {}", s.image.width, s.image.height, s.render.samples_per_pixel(), rc.output_filename);
     println!("- Scene Objects: {}, Primitives: {} ", s.objects.len(),  s.objects.primitives_len()); 
 
     let chunks: Vec<rendercontext::RenderableChunk> = rc.iter(&s).collect();

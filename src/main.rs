@@ -62,6 +62,7 @@ mod trace;
 mod rendercontext;
 mod paint;
 mod output;
+mod compare;
 //mod wireframe;
 mod geometry;
 mod procedural {
@@ -107,6 +108,16 @@ struct Args {
     ///format: .png (8-bit, encoded for display) or .exr (linear floating point)
     #[arg(short, long)]
     output: Option<String>,
+
+    ///Compare the render with this reference image (eg. a linear EXR from another renderer):
+    ///print the exposure fit, RMSE and FLIP error, and write a FLIP error map alongside the
+    ///output
+    #[arg(long)]
+    compare: Option<String>,
+
+    ///With --compare, fail (exit status 2) if the mean FLIP error exceeds this
+    #[arg(long)]
+    max_flip: Option<f64>,
 
     ///Seed for the render's random numbers; overrides the scenefile if specified. The same
     ///seed gives the same image
@@ -186,6 +197,38 @@ fn main() {
         eprintln!("{}", e);
         std::process::exit(1);
     }
+    if let Some(reference) = &args.compare {
+        compare_with(&img, reference, &rc.output_filename, &s.output, args.max_flip);
+    }
     paint::poor_mans(&img, &s.output);
     rc.print_stats();
+}
+
+/// Compare the finished render with a reference image, reporting how close they are.
+fn compare_with(img: &output::LinearImage, reference: &str, output_filename: &str, opts: &output::OutputOpts, max_flip: Option<f64>) {
+    let fail = |e: String| -> ! { eprintln!("{}", e); std::process::exit(1) };
+    let reference_img = output::read_linear(reference).unwrap_or_else(|e| fail(e));
+    let c = compare::compare(img, &reference_img, opts).unwrap_or_else(|e| fail(e));
+    let map_path = std::path::Path::new(output_filename).with_extension("flip.png");
+    if let Err(e) = c.error_map.save(&map_path) {
+        eprintln!("Failed to write {}: {}", map_path.display(), e);
+    }
+    // The reference at our size, encoded exactly as our PNG output is, to view side by side.
+    let reference_path = std::path::Path::new(output_filename).with_extension("reference.png");
+    let reference_path = reference_path.to_string_lossy();
+    if let Err(e) = output::ImageWriter::write(&output::Png { opts: *opts }, &c.reference, &reference_path) {
+        eprintln!("{}", e);
+    }
+    println!("{}", style("# Comparison").bold().cyan());
+    println!("- Reference: {}", reference);
+    println!("- Exposure fit: {:.4} (1 means the same brightness)", c.exposure);
+    println!("- RMSE: {:.5}, after exposure fit: {:.5}", c.rmse, c.rmse_fitted);
+    println!("- Mean FLIP error: {:.4} (error map: {})", c.flip_mean, map_path.display());
+    println!("- Reference at this size: {}", reference_path);
+    if let Some(max) = max_flip {
+        if c.flip_mean > max {
+            eprintln!("Mean FLIP error {:.4} exceeds {:.4}", c.flip_mean, max);
+            std::process::exit(2);
+        }
+    }
 }

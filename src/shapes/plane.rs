@@ -35,8 +35,19 @@ impl Geometry for Plane {
 
     fn bounds(&self) -> BBox {
         BBox::new(
-            Vector3::new(f64::MIN, 0., f64::MIN),
-            Vector3::new(f64::MAX, f64::MIN_POSITIVE, f64::MAX),
+            Vector3::new(f64::MIN, self.y, f64::MIN),
+            Vector3::new(f64::MAX, self.y, f64::MAX),
           )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bounds_contain_plane() {
+        let p = Plane { y: 5. };
+        assert!(p.bounds().contains_point(&Vector3::new(3., 5., -2.)));
     }
 }

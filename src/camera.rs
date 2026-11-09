@@ -25,10 +25,9 @@ pub struct SimpleCamera {
 impl SimpleCamera {
     pub fn new(lookat: Vector3<f64>, location:Vector3<f64>, up:Vector3<f64>, angle: f64, width: u32, height: u32) -> SimpleCamera {
         let camz = (lookat - location).normalize();
-        let camx = up.cross(&camz).normalize();
-        let camy = camx.cross(
-                &(Vector3::new(0f64,0f64,0f64) - camz)
-                ).normalize();
+        // Right-handed: looking down -z with y up, +x is to the right.
+        let camx = camz.cross(&up).normalize();
+        let camy = camx.cross(&camz).normalize();
 
 
         let aspect_ratio = (width as f64) / (height as f64);
@@ -180,14 +179,14 @@ impl FlatLensCamera {
             aperture: f64
          ) -> FlatLensCamera {
         let camz = (lookat - location).normalize();
-        let mut camx = up.cross(&camz).normalize();
+        // Right-handed, as pbrt, Tungsten and OBJ models are: looking down -z with y up, +x is to
+        // the right of the image. (This was up x camz, which mirrored every image.)
+        let mut camx = camz.cross(&up).normalize();
         if camx.y.is_nan() {
             // Looking vertical. In this situation we arbitrarily pick an axis.
             camx = Vector3::new(1., 0., 0.);
         }
-        let camy = camx.cross(
-                &(Vector3::new(0f64,0f64,0f64) - camz)
-                ).normalize();
+        let camy = camx.cross(&camz).normalize();
 
 
         // Horizontal extent relative to vertical; applied to camx.
@@ -261,6 +260,25 @@ mod tests {
         let right = extent(c.get_ray(1., 0.5, 0., 0.));
         let top = extent(c.get_ray(0.5, 1., 0., 0.));
         assert!((right.x.abs() / top.y.abs() - 2.).abs() < 1e-9, "{} {}", right, top);
+    }
+
+    #[test]
+    fn test_camera_is_right_handed() {
+        // Looking down -z with y up: the right of the image is +x, the top is +y.
+        let c = FlatLensCamera::new(
+            Vector3::new(0., 0., -1.), Vector3::new(0., 0., 0.), Vector3::new(0., 1., 0.),
+            0.5, 100, 100, 0.
+        );
+        assert!(c.get_ray(1., 0.5, 0., 0.).rd.x > 0.);
+        assert!(c.get_ray(0., 0.5, 0., 0.).rd.x < 0.);
+        assert!(c.get_ray(0.5, 1., 0., 0.).rd.y > 0.);
+        // Turned round to look down +z, the right of the image is -x.
+        let c = FlatLensCamera::new(
+            Vector3::new(0., 0., 1.), Vector3::new(0., 0., 0.), Vector3::new(0., 1., 0.),
+            0.5, 100, 100, 0.
+        );
+        assert!(c.get_ray(1., 0.5, 0., 0.).rd.x < 0.);
+        assert!(c.get_ray(0.5, 1., 0., 0.).rd.y > 0.);
     }
 
     #[test]

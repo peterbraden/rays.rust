@@ -34,6 +34,7 @@ mod material {
     pub mod functions;
     pub mod legacy;
     pub mod plastic;
+    pub mod leaf;
     pub mod noise;
 }
 mod intersection;

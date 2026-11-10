@@ -29,6 +29,7 @@ use crate::material::texture::{Solid, CheckeredYPlane, Medium, NoiseMedium, self
 use crate::material::specular::Specular;
 use crate::material::dielectric::Dielectric;
 use crate::material::plastic::Plastic;
+use crate::material::leaf::Leaf;
 use crate::material::lambertian::Lambertian;
 use crate::material::normal::NormalShade;
 use crate::material::legacy::{ Whitted, FlatColor };
@@ -461,6 +462,19 @@ impl SceneFile {
                 roughness: SceneFile::parse_number(&o["roughness"], 0.),
             };
             return Some(Box::new(d));
+        }
+
+        if t == "leaf" {
+            let reflectance = SceneFile::parse_color_def(o, "reflectance", Color::new(0.25, 0.25, 0.25));
+            let transmittance = SceneFile::parse_color_def(o, "transmittance", Color::new(0.25, 0.25, 0.25));
+            let total = reflectance + transmittance;
+            assert!(total.rgb.max() <= 1.,
+                "A leaf can't reflect and transmit more light than it receives: reflectance + transmittance is {}", total);
+            return Some(Box::new(Leaf {
+                reflectance, transmittance,
+                refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.5),
+                roughness: SceneFile::parse_number(&o["roughness"], 0.3),
+            }));
         }
 
         if t == "dielectric" {

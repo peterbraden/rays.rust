@@ -410,6 +410,21 @@ impl SkyMaterial {
             }).collect::<Vec<Depths>>()
         });
         let top = self.atmosphere.radius - self.earth.radius;
+        // Above the atmosphere, the sunlight crosses the air (if at all) before it gets here:
+        // what reaches `p` is what reaches the point where the line to the sun enters the air.
+        let entry;
+        let p = if (p - self.earth.center).norm() > self.atmosphere.radius {
+            let o = p - self.atmosphere.center;
+            let b = o.dot(&self.sun_direction);
+            let disc = b * b - (o.norm_squared() - self.atmosphere.radius * self.atmosphere.radius);
+            if b >= 0. || disc <= 0. {
+                return Depths::default();
+            }
+            entry = p + self.sun_direction * (-b - disc.sqrt());
+            &entry
+        } else {
+            p
+        };
         let up = (p - self.earth.center).normalize();
         let altitude = (p - self.earth.center).norm() - self.earth.radius;
         let u = (altitude.max(0.) / top).sqrt().min(1.) * (SUN_TABLE_ALTITUDES - 1) as f64;
@@ -1005,6 +1020,31 @@ mod tests {
         assert!(sky.sun_transmittance(&toward).z > sky.sun_transmittance(&away).z);
         let night = sky.earth.center + Vector3::new(0., -0.3, -1.).normalize() * (sky.earth.radius + 1000.);
         assert!(sky.sun_transmittance(&night).max() < 1e-6);
+    }
+
+    #[test]
+    fn test_sun_transmittance_above_the_atmosphere() {
+        // From 400 km, with the sun 19.3° below the local horizontal: its light grazes the air
+        // 20 km up on the way (reddened), though from the top of the atmosphere at the same
+        // angle it would be behind the earth.
+        let sky = sky_at("[0, -0.3305, 0.9438]");
+        let eye = Vector3::new(0., 400_000., 0.);
+        let o = eye - sky.atmosphere.center;
+        let b = o.dot(&sky.sun_direction);
+        let entry = eye + sky.sun_direction * (-b - (b * b - o.norm_squared() + sky.atmosphere.radius.powi(2)).sqrt());
+        let exact = sky.transmittance_of(sky.optical_depth_to_sun(entry + sky.sun_direction).unwrap());
+        let t = sky.sun_transmittance(&eye);
+        // The table is coarse where the light grazes the ground (blue is 8% off here).
+        for c in 0..3 {
+            assert!((t[c] - exact[c]).abs() < 0.1 * exact[c], "{} vs {}", t, exact);
+        }
+        assert!(t.x > t.z && t.z > 0.01 && t.x < 1.);
+        // A sun whose light passes above the air, 87 km up, or never comes near it: all of it.
+        for sun in ["[0, -0.3, 0.954]", "[0, 0.1, 1]"] {
+            assert_eq!(sky_at(sun).sun_transmittance(&eye), Vector3::repeat(1.));
+        }
+        // Grazing below the ground: none.
+        assert!(sky_at("[0, -0.345, 0.938]").sun_transmittance(&eye).max() < 1e-6);
     }
 
     #[test]

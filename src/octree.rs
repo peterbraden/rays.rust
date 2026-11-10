@@ -68,6 +68,13 @@ fn vec3_invert(rd: Vector3<f64>) -> Vector3<f64> {
   Vector3::new(1.0/rd.x, 1.0/rd.y, 1.0/rd.z) 
 }
 
+/// The most copies of a node's items its octants may hold between them for the node to be split
+/// (see `Octree::create_node`). At 1200x1200 with 3 samples on 4 cores, ocean-boat rendered in
+/// about 11 s with a limit of 2, 6.5 s with 2.5 to 3.5, and 9 s with 4; the cornell box, demo and
+/// spheres-on-water scenes changed little between 2 and 4. Without the limit it took 13 s, and
+/// the cornell box three times as long.
+const MAX_SPLIT_COPIES: usize = 3;
+
 /// A ray prepared for repeated box tests.
 struct TraversalRay {
     ro: [f64; 3],
@@ -276,9 +283,18 @@ impl<T: Geometry> Octree<T> {
                 (cbox, inside)
             }).collect();
 
-            // If no octant separates any items (eg. they all overlap the whole node), splitting
-            // only duplicates them; recursing would create 8^depth identical nodes.
-            let separates = octants.iter().any(|(_, inside)| inside.len() < items.len());
+            // Splitting stops when it would copy items more than it separates them:
+            // - If no octant separates any items (eg. they all overlap the whole node), splitting
+            //   only duplicates them; recursing would create 8^depth identical nodes.
+            // - If the octants between them hold more than `MAX_SPLIT_COPIES` times the node's
+            //   items, most items straddle the split. Along a shared edge, or across a surface
+            //   flatter than the node (the ocean, split in y as well as x and z), every level
+            //   multiplied the items and the nodes a ray passes through, while barely shrinking
+            //   any leaf: a 12-triangle box became 400000 leaves, and the ocean's 131072
+            //   triangles 41 million leaf entries.
+            let copies: usize = octants.iter().map(|(_, inside)| inside.len()).sum();
+            let separates = octants.iter().any(|(_, inside)| inside.len() < items.len())
+                && copies <= MAX_SPLIT_COPIES * items.len();
 
             if separates {
                 let nodes: Vec<Option<Box<OctreeNode>>> = octants.into_par_iter().map(|(cbox, inside)| {

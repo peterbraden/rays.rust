@@ -34,8 +34,21 @@
 /// - Leaves are bent towards the sky by `leaf_bend` (0 to 1), after Wolfram Diestel's Arbaro,
 ///   a Java implementation of the paper (<https://sourceforge.net/projects/arbaro/>); the paper
 ///   (4.8) mentions orienting leaves towards the light without giving a rule.
+///
+/// Additions, for irregularity the paper's per-segment variation doesn't give:
+/// - `wander`: stems meander between their segments' joints, displaced by smooth (Perlin) noise
+///   in proportion to their length, so trunks aren't a few straight pieces. Ken Perlin, "An
+///   Image Synthesizer", SIGGRAPH '85, 287-296, doi:10.1145/325334.325247.
+/// - `roughness`: stems' cross-sections are irregular rather than circular, again from noise,
+///   and the trunk's lobes are unevenly spaced.
+/// - `lean`: the whole tree leans, as trees do towards light or away from the wind.
+/// - `branch_loss`: the fraction of branches lost, as real trees shed shaded or broken limbs.
+/// - `leaf_scale_v`: leaves vary in size.
+/// - `leaf_shape` "needles": each leaf is a tuft of needles, for conifers.
 use crate::na::{Vector3, UnitQuaternion, Unit};
 use crate::geometry::Pcg32;
+use crate::noise::PerlinNoise;
+use crate::shapes::mesh::vertex_normals;
 use crate::shapes::triangle::{Triangle, SmoothTriangle};
 use crate::shapes::geometry::Geometry;
 use crate::shapes::bbox::BBox;
@@ -129,11 +142,34 @@ pub struct TreeParams {
     pub leaf_scale_x: f64,
     /// Multiplies the number of leaves; the leaves shrink to keep their total area.
     pub leaf_quality: f64,
+    /// Variation of each leaf's size, as a fraction of it.
+    pub leaf_scale_v: f64,
     /// 0 to 1: how far leaves turn to face the sky.
     pub leaf_bend: f64,
+    pub leaf_shape: LeafShape,
     /// Tendency of stems of level 2 and above to turn upwards (or, negative, to droop).
     pub attraction_up: f64,
+    /// How far stems meander from their segments, as a fraction of their length.
+    pub wander: f64,
+    /// Irregularity of stems' cross-sections, as a fraction of their radius.
+    pub roughness: f64,
+    /// Lean of the whole tree from the vertical, in degrees.
+    pub lean: f64,
+    pub lean_v: f64,
+    /// Fraction of branches (not leaves) lost.
+    pub branch_loss: f64,
     pub stems: Vec<StemLevel>,
+}
+
+/// The shape of a leaf.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LeafShape {
+    /// A flat, pointed oval, `leaf_scale` long and `leaf_scale_x` of that wide.
+    Oval,
+    /// A tuft of five needles fanned about the leaf's direction, each `leaf_scale` long and
+    /// `leaf_scale_x` of that wide at its base.
+    Needles,
 }
 
 impl Default for TreeParams {
@@ -142,8 +178,9 @@ impl Default for TreeParams {
             shape: 0, base_size: 0.3, scale: 10., scale_v: 0., levels: 3,
             ratio: 0.015, ratio_power: 1.2, lobes: 0, lobe_depth: 0., flare: 0.5,
             trunk_scale: 1., trunk_scale_v: 0., base_splits: 0,
-            leaves: 25., leaf_scale: 0.15, leaf_scale_x: 0.6, leaf_quality: 1., leaf_bend: 0.3,
-            attraction_up: 0.5,
+            leaves: 25., leaf_scale: 0.15, leaf_scale_x: 0.6, leaf_quality: 1., leaf_scale_v: 0.2,
+            leaf_bend: 0.3, leaf_shape: LeafShape::Oval, attraction_up: 0.5,
+            wander: 0.035, roughness: 0.15, lean: 0., lean_v: 4., branch_loss: 0.08,
             stems: vec![StemLevel::default(); 4],
         }
     }
@@ -245,6 +282,8 @@ struct Stem {
     /// Number of child stems or leaves along the whole stem (before splits share them out).
     children: f64,
     leaves: bool,
+    /// Where in noise space this stem's irregularities come from, so each stem has its own.
+    noise_at: Vector3<f64>,
 }
 
 /// Where the next split, child or leaf falls: fractional parts carried along a stem, as error
@@ -259,7 +298,10 @@ struct Carry {
 struct Generator<'a> {
     p: &'a TreeParams,
     rng: Pcg32,
+    noise: PerlinNoise,
     mesh: TreeMesh,
+    /// Phase of the trunk's lobes.
+    lobe_phase: f64,
 }
 
 impl Generator<'_> {
@@ -270,6 +312,25 @@ impl Generator<'_> {
     /// `x` varied uniformly by up to `v` either way.
     fn vary(&mut self, x: f64, v: f64) -> f64 {
         x + (self.uniform() * 2. - 1.) * v
+    }
+
+    /// Two octaves of Perlin noise, about zero: mostly within +-0.5, at most +-1.
+    fn signed_noise(&self, x: f64, y: f64, z: f64) -> f64 {
+        2. * self.noise.fbm(x, y, z, 2, 0.5, 2.) - 1.
+    }
+
+    /// How far `s` meanders from its segments at fraction `z` along it. The displacement is a
+    /// smooth noise field in world space, so a stem's clones, which share its field, stay joined
+    /// where they split; it fades in over the stem's first quarter, so the stem stays attached
+    /// to its parent (or the ground).
+    fn wander(&self, s: &Stem, z: f64) -> Vector3<f64> {
+        if self.p.wander == 0. {
+            return Vector3::zeros();
+        }
+        // About three bends along every stem.
+        let n = |o: f64| self.signed_noise(s.noise_at.x + o, s.noise_at.y + 3. * z, s.noise_at.z);
+        let d = Vector3::new(n(0.), n(31.4), n(62.8));
+        d * self.p.wander * s.length * (4. * z).min(1.)
     }
 
     /// Grow a stem of `level` from `origin` along `frame`'s +y, and everything on it.
@@ -290,8 +351,9 @@ impl Generator<'_> {
             let parent_length = parent.unwrap().0;
             p.level(level + 1).branches * (0.2 + 0.8 * (length / parent_length) / length_max)
         };
+        let noise_at = Vector3::new(self.uniform(), self.uniform(), self.uniform()) * 1000.;
         let s = Stem {
-            level, length, radius, length_max, children, leaves,
+            level, length, radius, length_max, children, leaves, noise_at,
             base_length: if level == 0 { p.base_size * length } else { 0. },
         };
         let carry = Carry { splits: 0., children: self.uniform(), rotate: self.uniform() * 360. };
@@ -395,7 +457,7 @@ impl Generator<'_> {
         for k in 0 .. count {
             let z = a + (b - a) * (k as f64 + self.uniform()) / count as f64;
             let offset = z * s.length;
-            let at = pos + dir * (z - z0) * s.length;
+            let at = pos + dir * (z - z0) * s.length + self.wander(s, z);
 
             // 4.4: angles.
             let down = if cp.down_angle_v >= 0. {
@@ -413,6 +475,10 @@ impl Generator<'_> {
 
             if s.leaves {
                 self.leaf(at, f);
+                continue;
+            }
+
+            if self.uniform() < p.branch_loss {
                 continue;
             }
 
@@ -446,8 +512,18 @@ impl Generator<'_> {
             Some(r) => UnitQuaternion::identity().slerp(&r, p.leaf_bend.clamp(0., 1.)) * frame,
             None => frame,
         };
-        let length = p.leaf_scale / p.leaf_quality.max(1e-6).sqrt();
+        let length = p.leaf_scale / p.leaf_quality.max(1e-6).sqrt() * self.vary(1., p.leaf_scale_v).max(0.1);
         let half_width = 0.5 * length * p.leaf_scale_x;
+        if p.leaf_shape == LeafShape::Needles {
+            // Five needles splayed 30 degrees from the leaf's direction, evenly round it.
+            let turn = self.uniform() * 72.;
+            for k in 0 .. 5 {
+                let f = frame * rot_y(turn + 72. * k as f64) * rot_x(30.);
+                let pt = |x: f64, y: f64| at + f * Vector3::new(x * half_width, y * length, 0.);
+                self.mesh.leaves.push(Arc::new(Triangle::new(pt(-1., 0.), pt(1., 0.), pt(0., 1.))));
+            }
+            return;
+        }
         // A pointed oval: stalk, two pairs of edge points, and tip.
         let pt = |x: f64, y: f64| at + frame * Vector3::new(x * half_width, y * length, 0.);
         let base = pt(0., 0.);
@@ -465,15 +541,17 @@ impl Generator<'_> {
         let p = self.p;
         let lp = p.level(s.level);
         let n = lp.curve_res.max(1);
-        let sides = [16, 10, 6, 4][s.level.min(3)];
-        // Rings: the trunk's flared base and stems with rounded tips need more of them.
+        let sides = [20, 10, 6, 4][s.level.min(3)];
+        // Rings: enough to follow the meander, and more for the trunk's flared base and for
+        // rounded tips.
+        let per_seg = if s.level == 0 { 4 } else if s.level == 1 && p.wander > 0. { 2 } else { 1 };
         let mut rings: Vec<(Vector3<f64>, UnitQuaternion<f64>, f64, f64)> = vec![];
         for (j, w) in segs.windows(2).enumerate() {
             let ((a, fa, share), (b, _, _)) = (w[0], w[1]);
             let z0 = (first + j) as f64 / n as f64;
             // At a joint, the ring lies halfway between the two segments' directions.
             let joint = if j == 0 { fa } else { segs[j - 1].1.slerp(&fa, 0.5) };
-            let sub = if s.level == 0 && z0 < 0.125 { 8 } else if lp.taper > 1. { 3 } else { 1 };
+            let sub = if s.level == 0 && z0 < 0.125 { 8 } else if lp.taper > 1. { per_seg.max(3) } else { per_seg };
             for k in 0 .. sub {
                 let t = k as f64 / sub as f64;
                 rings.push((a + (b - a) * t, if k == 0 { joint } else { fa }, z0 + t / n as f64, share));
@@ -482,28 +560,49 @@ impl Generator<'_> {
         let (end, end_frame, end_share) = segs[segs.len() - 1];
         rings.push((end, end_frame, 1., end_share));
 
-        let ring_points: Vec<Vec<(Vector3<f64>, Vector3<f64>)>> = rings.iter().map(|(c, f, z, share)| {
+        // Bumps: noise sampled on a cylinder, each about four rings long and a sixth of the way
+        // round, so the surface is irregular without aliasing between rings.
+        let along = (per_seg * n) as f64 / 4.;
+        let mut positions = vec![];
+        let mut outs = vec![];
+        for (c, f, z, share) in &rings {
             let mut r = taper_radius(lp.taper, s.radius * share.sqrt(), s.length, *z);
             if s.level == 0 {
                 r *= flare(p.flare, *z);
             }
-            (0 .. sides).map(|i| {
+            let centre = c + self.wander(s, *z);
+            for i in 0 .. sides {
                 let theta = 2. * PI * i as f64 / sides as f64;
+                let (x, y, w) = (s.noise_at.x + theta.cos(), s.noise_at.y + z * along, s.noise_at.z + theta.sin());
+                let bump = 1. + p.roughness * self.signed_noise(x, y, w);
+                let lobed = if s.level == 0 && p.lobes > 0 {
+                    // Lobes unevenly spaced round the trunk, by warping the angle with noise.
+                    let warp = 1.5 * self.noise.noise(x + 7.7, 0.3 * y, w);
+                    1. + p.lobe_depth * (p.lobes as f64 * theta + self.lobe_phase + warp).sin()
+                } else { 1. };
                 let out = f * Vector3::new(theta.cos(), 0., theta.sin());
-                let lobed = if s.level == 0 { 1. + p.lobe_depth * (p.lobes as f64 * theta).sin() } else { 1. };
-                (c + out * r * lobed, out)
-            }).collect()
-        }).collect();
-
-        for w in ring_points.windows(2) {
+                positions.push(centre + out * r * bump * lobed);
+                outs.push(out);
+            }
+        }
+        let mut triangles = vec![];
+        for ring in 0 .. rings.len() - 1 {
             for i in 0 .. sides {
                 let j = (i + 1) % sides;
-                let (a, b, c, d) = (w[0][i], w[0][j], w[1][j], w[1][i]);
-                for [x, y, z] in [[a, b, c], [a, c, d]] {
-                    if (y.0 - x.0).cross(&(z.0 - x.0)).norm() > 1e-14 {
-                        self.mesh.bark.push(Arc::new(SmoothTriangle::new(x.0, y.0, z.0, x.1, y.1, z.1)));
-                    }
-                }
+                let (a, b, c, d) = (ring * sides + i, ring * sides + j, (ring + 1) * sides + j, (ring + 1) * sides + i);
+                // Wound so the normals face out.
+                triangles.push([a, c, b]);
+                triangles.push([a, d, c]);
+            }
+        }
+        // Normals from the surface itself, so the bumps are shaded; where it degenerates (a
+        // tapered tip), the outward direction.
+        let normals = vertex_normals(&positions, &triangles);
+        let normal = |k: usize| if normals[k] == Vector3::zeros() { outs[k] } else { normals[k] };
+        for [a, b, c] in triangles {
+            let (x, y, z) = (positions[a], positions[b], positions[c]);
+            if (y - x).cross(&(z - x)).norm() > 1e-14 {
+                self.mesh.bark.push(Arc::new(SmoothTriangle::new(x, y, z, normal(a), normal(b), normal(c))));
             }
         }
     }
@@ -511,13 +610,17 @@ impl Generator<'_> {
 
 /// Generate the tree `p` describes, chosen by `seed`, with its base at `origin`.
 pub fn generate(p: &TreeParams, seed: u64, origin: Vector3<f64>) -> TreeMesh {
-    let mut g = Generator { p, rng: Pcg32::new(seed, 0x7ee), mesh: TreeMesh { bark: vec![], leaves: vec![] } };
+    let mut g = Generator {
+        p, rng: Pcg32::new(seed, 0x7ee), noise: PerlinNoise::new(),
+        mesh: TreeMesh { bark: vec![], leaves: vec![] }, lobe_phase: 0.,
+    };
+    g.lobe_phase = g.uniform() * 2. * PI;
     let scale = g.vary(p.scale, p.scale_v).max(0.);
     let trunk = p.level(0);
     let length_max = g.vary(trunk.length, trunk.length_v);
     let length = length_max * scale;
     let radius = length * p.ratio * g.vary(p.trunk_scale, p.trunk_scale_v);
-    let frame = rot_y(g.uniform() * 360.);
+    let frame = rot_y(g.uniform() * 360.) * rot_x(g.vary(p.lean, p.lean_v));
     if length > 0. && radius > 0. {
         g.stem(0, origin, frame, length, radius, length_max, None);
     }
@@ -598,10 +701,10 @@ pub fn species(name: &str) -> Option<TreeParams> {
             ratio: 0.015, ratio_power: 1.2, lobes: 5, lobe_depth: 0.07, flare: 0.6,
             leaves: 25., leaf_scale: 0.17, leaf_scale_x: 1., attraction_up: 0.5,
             stems: vec![
-                level(0., 0., 0., 0., 0., 1., 0., 1., 3, 0., 0., 20.),
-                level(60., -50., 140., 0., 50., 0.3, 0., 1., 5, -40., 0., 50.),
-                level(45., 10., 140., 0., 30., 0.6, 0., 1., 3, -40., 0., 75.),
-                level(45., 10., 77., 0., 10., 0., 0., 1., 1, 0., 0., 0.),
+                level(0., 0., 0., 0., 0., 1., 0., 1., 6, 0., 0., 30.),
+                level(60., -50., 140., 30., 50., 0.3, 0., 1., 5, -40., 0., 50.),
+                level(45., 10., 140., 30., 30., 0.6, 0., 1., 3, -40., 0., 75.),
+                level(45., 10., 77., 30., 10., 0., 0., 1., 1, 0., 0., 0.),
             ],
             ..d
         },
@@ -611,9 +714,9 @@ pub fn species(name: &str) -> Option<TreeParams> {
             leaves: 6., leaf_scale: 0.3, leaf_scale_x: 0.5, attraction_up: 0.5,
             stems: vec![
                 level(0., 0., 0., 0., 0., 1., 0., 1.1, 10, 0., 0., 40.),
-                level(60., -40., 140., 0., 50., 0.3, 0.05, 1., 10, 0., 0., 90.),
-                level(30., 10., 140., 0., 25., 0.6, 0.1, 1., 10, -10., 0., 150.),
-                level(45., 10., 140., 0., 12., 0.4, 0., 1., 1, 0., 0., 0.),
+                level(60., -40., 140., 30., 50., 0.3, 0.05, 1., 10, 0., 0., 90.),
+                level(30., 10., 140., 30., 25., 0.6, 0.1, 1., 10, -10., 0., 150.),
+                level(45., 10., 140., 30., 12., 0.4, 0., 1., 1, 0., 0., 0.),
             ],
             ..d
         },
@@ -623,9 +726,9 @@ pub fn species(name: &str) -> Option<TreeParams> {
             base_splits: 2, leaves: 40., leaf_scale: 0.14, leaf_scale_x: 0.66, attraction_up: 0.8,
             stems: vec![
                 split(level(0., 0., 0., 0., 0., 1., 0., 0.95, 8, 0., 0., 90.), 0.4, 35., 10.),
-                split(level(30., -30., 80., 0., 40., 0.8, 0.1, 1., 10, 40., -70., 150.), 0.2, 10., 10.),
-                split(level(45., 10., 140., 0., 50., 0.25, 0.05, 1., 3, 0., 0., 30.), 0.1, 10., 10.),
-                level(45., 10., 140., 0., 0., 0.4, 0., 1., 1, 0., 0., 0.),
+                split(level(30., -30., 80., 30., 40., 0.8, 0.1, 1., 10, 40., -70., 150.), 0.2, 10., 10.),
+                split(level(45., 10., 140., 30., 50., 0.25, 0.05, 1., 3, 0., 0., 30.), 0.1, 10., 10.),
+                level(45., 10., 140., 30., 0., 0.4, 0., 1., 1, 0., 0., 0.),
             ],
             ..d
         },
@@ -646,10 +749,10 @@ pub fn species(name: &str) -> Option<TreeParams> {
             ratio: 0.015, ratio_power: 1.2, lobes: 4, lobe_depth: 0.05, flare: 0.7,
             leaves: 35., leaf_scale: 0.1, leaf_scale_x: 1., attraction_up: 1.2,
             stems: vec![
-                level(0., 0., 0., 0., 0., 1., 0., 1., 6, 0., 0., 8.),
-                level(22., 8., 140., 0., 70., 0.25, 0.05, 1., 5, -25., 0., 20.),
-                level(35., 10., 140., 0., 20., 0.45, 0.05, 1., 3, -10., 0., 40.),
-                level(40., 10., 140., 0., 0., 0., 0., 1., 1, 0., 0., 0.),
+                level(0., 0., 0., 0., 0., 1., 0., 1., 6, 0., 0., 15.),
+                level(22., 8., 140., 30., 70., 0.25, 0.05, 1., 5, -25., 0., 20.),
+                level(35., 10., 140., 30., 20., 0.45, 0.05, 1., 3, -10., 0., 40.),
+                level(40., 10., 140., 30., 0., 0., 0., 1., 1, 0., 0., 0.),
             ],
             ..d
         },
@@ -685,7 +788,7 @@ pub fn species(name: &str) -> Option<TreeParams> {
                 split(level(0., 0., 0., 0., 0., 1., 0.1, 1., 5, 0., 0., 30.), 0.3, 25., 10.),
                 level(50., 10., 140., 20., 25., 0.5, 0.1, 1., 4, -10., 0., 40.),
                 level(45., 10., 140., 20., 12., 0.5, 0.1, 1., 2, 0., 0., 30.),
-                level(45., 10., 140., 0., 0., 0., 0., 1., 1, 0., 0., 0.),
+                level(45., 10., 140., 30., 0., 0., 0., 1., 1, 0., 0., 0.),
             ],
             ..d
         },
@@ -769,12 +872,53 @@ mod tests {
         p.flare = 0.;
         p.lobe_depth = 0.;
         p.stems[0].curve_v = 0.;
+        p.wander = 0.;
+        p.roughness = 0.;
+        p.lean_v = 0.;
         let m = generate(&p, 0, Vector3::zeros());
         assert!(m.leaves.is_empty());
         let top = m.bark.iter().map(|t| t.v0.y.max(t.v1.y).max(t.v2.y)).fold(0., f64::max);
         assert!((top - 13.).abs() < 1e-9, "{}", top);
         let widest = m.bark.iter().map(|t| t.v0.xz().norm()).fold(0., f64::max);
         assert!((widest - 13. * 0.015).abs() < 1e-9, "{}", widest);
+    }
+
+    #[test]
+    fn test_trunks_meander_and_are_irregular() {
+        let mut p = params("quaking-aspen", &Value::Null);
+        p.levels = 1;
+        p.leaves = 0.;
+        p.flare = 0.;
+        p.lobe_depth = 0.;
+        p.stems[0].curve_v = 0.;
+        p.lean_v = 0.;
+        let m = generate(&p, 0, Vector3::zeros());
+        // The trunk's segments are straight and upright, so any horizontal drift of the rings'
+        // centres, and any spread of the radii about them, comes from wander and roughness.
+        let points: Vec<Vector3<f64>> = m.bark.iter().map(|t| t.v0).collect();
+        // A ring's vertices share a height: take the ring nearest `y`.
+        let at_height = |y: f64| -> Vec<Vector3<f64>> {
+            let nearest = points.iter().map(|v| v.y).min_by(|a, b| (a - y).abs().total_cmp(&(b - y).abs())).unwrap();
+            points.iter().filter(|v| (v.y - nearest).abs() < 1e-9).cloned().collect()
+        };
+        let ring = at_height(5.);
+        let centre = ring.iter().sum::<Vector3<f64>>() / ring.len() as f64;
+        assert!(centre.xz().norm() > 0.01, "trunk is straight: {}", centre);
+        let radii: Vec<f64> = ring.iter().map(|v| (v - centre).xz().norm()).collect();
+        let (lo, hi) = radii.iter().fold((f64::MAX, 0f64), |(lo, hi), &r| (lo.min(r), hi.max(r)));
+        assert!(hi / lo > 1.05, "trunk is round: {} to {}", lo, hi);
+        // The base stays put.
+        let base = at_height(0.);
+        let base_centre = base.iter().sum::<Vector3<f64>>() / base.len() as f64;
+        assert!(base_centre.xz().norm() < 0.05, "{}", base_centre);
+    }
+
+    #[test]
+    fn test_needles_are_tufts() {
+        let p = params("quaking-aspen", &serde_json::json!({ "leaf_shape": "needles" }));
+        let m = generate(&p, 1, Vector3::zeros());
+        assert_eq!(m.leaves.len() % 5, 0);
+        assert!(!m.leaves.is_empty());
     }
 
     #[test]

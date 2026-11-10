@@ -43,6 +43,7 @@ use std::fmt;
 use crate::ray::Ray;
 use crate::intersection::RawIntersection;
 use crate::shapes::geometry::Geometry;
+use rayon::prelude::*;
 
 #[derive(Clone)]
 pub struct Octree<T: Geometry>{
@@ -158,23 +159,28 @@ impl<T: Geometry> Octree<T> {
     pub fn new(max_depth: usize, b: BBox, items: &[Arc<T>]) -> Octree<T> {
         let items: Vec<Arc<T>> = items.to_vec();
         let indices: Vec<usize> = (0..items.len()).collect();
+        // Each item's bounds are tested against every octant at every level; computing them
+        // once (a triangle's takes 12 comparisons) was most of the cost of building a large mesh.
+        let bounds: Vec<BBox> = items.iter().map(|x| x.bounds()).collect();
         Octree {
-            root: Octree::create_node(0, max_depth, b, indices, &items),
+            root: Octree::<T>::create_node(0, max_depth, b, indices, &bounds),
             items,
         }
     }
 
-    fn create_node(depth: usize, max_depth: usize, b: BBox, items: Vec<usize>, geometries: &Vec<Arc<T>>) -> OctreeNode{
+    fn create_node(depth: usize, max_depth: usize, b: BBox, items: Vec<usize>, item_bounds: &[BBox]) -> OctreeNode{
         // Rust arrays suck - this defaults them to 'None'
         let mut children: [Option<Box<OctreeNode>>; 8] = Default::default();
 
         if depth < max_depth && items.len() > 1 {
             // Equal subdivision. Enhancement: Use different split.
-            let octants: Vec<(BBox, Vec<usize>)> = (0..8).map(|i| {
+            // Octants are filtered, and subtrees built, in parallel: building the ocean's tree
+            // of 131072 triangles took 2 s on one thread.
+            let octants: Vec<(BBox, Vec<usize>)> = (0..8u8).into_par_iter().map(|i| {
                 let cbox = BBox::for_octant(i, &b);
                 let inside = items.iter()
                                 .copied()
-                                .filter( |x| { cbox.intersects_bbox( &geometries[*x].bounds() ) } )
+                                .filter( |x| { cbox.intersects_bbox( &item_bounds[*x] ) } )
                                 .collect::<Vec<usize>>();
                 (cbox, inside)
             }).collect();
@@ -184,12 +190,14 @@ impl<T: Geometry> Octree<T> {
             let separates = octants.iter().any(|(_, inside)| inside.len() < items.len());
 
             if separates {
-                for (i, (cbox, inside)) in octants.into_iter().enumerate() {
+                let nodes: Vec<Option<Box<OctreeNode>>> = octants.into_par_iter().map(|(cbox, inside)| {
                     // Does child node have any objects in?
-                    if !inside.is_empty() {
-                        let node = Octree::create_node(depth + 1, max_depth, cbox, inside, geometries);
-                        children[i] = Some(Box::new(node));
-                    }
+                    (!inside.is_empty()).then(|| {
+                        Box::new(Octree::<T>::create_node(depth + 1, max_depth, cbox, inside, item_bounds))
+                    })
+                }).collect();
+                for (child, node) in children.iter_mut().zip(nodes) {
+                    *child = node;
                 }
             }
         }

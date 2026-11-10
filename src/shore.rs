@@ -225,7 +225,7 @@ pub struct Shore {
     /// No wave in the shallow band is higher, or its trough lower, than this.
     pub height_bound: f64,
     /// Mean height up the beach that waves run, above still water.
-    runup: f64,
+    pub runup: f64,
     noise: PerlinNoise,
 }
 
@@ -587,7 +587,7 @@ impl Shore {
             let slope = sample(&self.slope_bound, s, self.deep_offshore);
             // Finer than a pixel's footprint is wasted.
             let min_step = 0.005 + 0.0015 * t;
-            let step = (ft.abs() / (d.y.abs() + 1.25 * slope * horizontal)).clamp(min_step, 5.);
+            let step = (ft.abs() / (d.y.abs() + 1.25 * slope * horizontal)).min(5.).max(min_step);
             let tn = (t + step).min(tb);
             let fnext = f(tn);
             if (fnext > 0.) != above {
@@ -864,8 +864,8 @@ impl MaterialModel for ShoreWater {
 pub struct Sand {
     shore: Arc<Shore>,
     dry: Color,
-    /// How far above the run-up the sand is wet, as a fraction of it: waves reach further
-    /// at times than the run-up shown.
+    /// Height of the high-water mark, the furthest earlier waves reached, as a multiple of the
+    /// mean run-up.
     wet_reach: f64,
     noise: PerlinNoise,
 }
@@ -873,10 +873,13 @@ pub struct Sand {
 impl Sand {
     /// How wet the sand is at `p`, 0 to 1, with a ragged edge.
     fn wetness(&self, p: &Vector3<f64>) -> f64 {
+        // The high-water mark: smoother along the shore than any one wave's reach, and never
+        // below the water there now.
         let u = self.shore.beach.along_distance(p.x, p.z);
-        let edge = self.shore.runup_at(u) * (1. + self.wet_reach)
-            + 0.008 * signed_fbm(&self.noise, p.x * 1.5, 4.4, p.z * 1.5, 3);
-        1. - smoothstep(edge - 0.03, edge + 0.005, p.y)
+        let mark = self.shore.runup * self.wet_reach * (1. + 0.1 * signed_fbm(&self.noise, u * 0.01, 4.4, 0.5, 2));
+        let edge = mark.max(self.shore.runup_at(u))
+            + 0.006 * signed_fbm(&self.noise, p.x * 1.5, 4.4, p.z * 1.5, 3);
+        1. - smoothstep(edge - 0.02, edge + 0.004, p.y)
     }
 
     /// Wet sand is darker; all of it varies a little from place to place.
@@ -943,7 +946,7 @@ impl Medium for ShoreMedium {
 ///   "foam": [0.9, 0.9, 0.9],
 ///   "turbidity": 0.5,         // how murky breaking waves make the water, 0 to 1
 ///   "runup": 0.2,             // mean height the waves run up the beach (default: from the waves)
-///   "wet_reach": 0.4          // how much further than the run-up the sand is wet, as a fraction of it
+///   "wet_reach": 1.3          // height of the high-water mark, as a multiple of the run-up
 /// }
 /// ```
 pub fn create_shore(opts: &Value) -> SceneObject {
@@ -990,7 +993,7 @@ pub fn create_shore(opts: &Value) -> SceneObject {
             sand: Sand {
                 shore: shore.clone(),
                 dry: sand,
-                wet_reach: SceneFile::parse_number(&b["wet_reach"], 0.4),
+                wet_reach: SceneFile::parse_number(&b["wet_reach"], 1.3),
                 noise: PerlinNoise::new(),
             },
         }),
@@ -1134,6 +1137,11 @@ mod tests {
         let far = shore.deep_offshore + 50.;
         let hit = g.intersects(&Ray { ro: Vector3::new(3., 20., far), rd: Vector3::new(0., -1., 0.) }).unwrap();
         assert!((hit.point.y - shore.height(3., far)).abs() < 0.2, "{} vs {}", hit.point.y, shore.height(3., far));
+
+        // Along the shore just above the still water at the waterline: it never meets the
+        // waves, so marches on for kilometres, where the steps are their longest.
+        let r = Ray { ro: Vector3::new(-10., 0.05, 0.5), rd: Vector3::new(1., 0., 0.) };
+        g.intersects(&r);
 
         // From the beach, looking out to sea at a shallow angle, crossing the band.
         let hit = g.intersects(&Ray { ro: Vector3::new(0., 3., -10.), rd: Vector3::new(0., -0.05, 1.) }).unwrap();

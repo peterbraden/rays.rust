@@ -6,7 +6,6 @@
   "max_depth": 32,
   "shadow_bias": 1,
   "path_termination": "russian_roulette",
-  "output": { "glare": true },
   "materials": {
     "GROUND": { "type": "lambertian", "albedo": [0.06, 0.09, 0.15] }
   },

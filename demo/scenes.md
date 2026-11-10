@@ -15,6 +15,14 @@ Demonstrating the ocean generation.
 Procedural art with a block city skyline at sunset.
 ![block terrain](./scenes/block-terrain.png)
 
+## Trees
+Procedural trees of every built-in species (Weber and Penn's parametric model): palm, weeping
+willow, quaking aspen, black tupelo, balsam fir, Lombardy poplar, California black oak and
+shrubs. Each is
+`{"type": "tree", "species": "...", "seed": 0, "location": [x, y, z], "bark": material, "leaves": material}`,
+with optional `"params"` overriding the species' parameters (see `src/procedural/tree.rs`).
+![trees](./scenes/trees.png)
+
 ## Fireworks
 ![fireworks](./scenes/fireworks.png)
 

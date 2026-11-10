@@ -28,6 +28,7 @@ Supports:
   - Skysphere with Rayleigh and Mie Scattering
   - Procedural Objects
     - Ocean (Tessendorf's algorithm with Phillips spectrum)
+    - Trees (Weber and Penn's parametric model, with presets for several species)
     - Random Cubes
   - Multithreaded
   - Progressive rendering
@@ -47,6 +48,7 @@ cargo run --release -- demo/demo.json
 - [An Efficient Parametric Algorithm for Octree Traversal, J. Revelles, C. Urena, M. Lastra](http://wscg.zcu.cz/wscg2000/Papers_2000/X31.pdf)
 - [Simulating Ocean Water, J. Tessendorf](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.161.9102&rep=rep1&type=pdf)
 - [Physically Based Raytracing, M. Pharr, W. Jakob, G. Humphreys](http://www.pbr-book.org/)
+- [Creation and Rendering of Realistic Trees, J. Weber, J. Penn](https://doi.org/10.1145/218380.218427)
 - [Roth, S. D. (1982). Ray casting for modeling solids.](sci-hub.se/10.1016/0146-664x%2882%2990169-1)
 
 

@@ -60,10 +60,17 @@
 //! a non-linear diffusion of the surface. A = 2.4e-24 Pa⁻³ s⁻¹ is the value usually quoted for
 //! temperate ice (Cuffey and Paterson, "The Physics of Glaciers", 4th ed., 2010; to verify).
 //! Weertman's theory gives an exponent of (n+1)/2 for sliding; n is a common simplification.
+//! A_s = 5e-15 m/yr/Pa³ (our choice, an open question) gives 5 m/yr of sliding at τ = 100 kPa
+//! and 40 m/yr at 200 kPa, typical of driving stresses and speeds of valley glaciers. Real
+//! sliding depends strongly on water pressure at the bed (Braun et al. 1999 divide by the
+//! effective pressure), which is not modelled; with A_s ten times larger, thick ice at glacial
+//! maxima slid at kilometres a year and dug basins kilometres deep.
 //!
-//! The SIA assumes small surface slopes; where ice spills over a cliff (an icefall), it is
-//! invalid, and the slope term makes D, and with it the system's stiffness, enormous. So the
-//! squared slope in D is capped at `max_slope`² (0.5, about 27 degrees).
+//! The SIA overestimates speeds where the ice is thick and steep, as it neglects the
+//! longitudinal stresses that resist such flow, and these extremes also make the equations
+//! stiffest. Speeds are capped at `max_speed` (1 km/yr; few glaciers but surging and tidewater
+//! ones flow faster) by limiting D to max_speed H / |∇s|. Without the cap, ice a kilometre
+//! thick at a glacial maximum on 500 m cells needed steps of a thousandth of a year.
 //!
 //! Following Mahaffy ("A three-dimensional numerical model of ice sheets", JGR 81(6), 1976,
 //! doi:10.1029/JC081i006p01059), D is evaluated on the edges between cells, from the mean of
@@ -84,7 +91,7 @@
 //! large inflow from a thick neighbour but pass little on (its own outflow conductance being
 //! that of thin ice). On alpine terrain at glacial maxima this built transient single-cell
 //! spikes kilometres thick. Picard iteration (`picard` solves per step: re-evaluate D from the
-//! new thickness and solve again) removes them, at twice the cost.
+//! mean of the old and new thickness and solve again) removes them, at twice the cost.
 //!
 //! Jarosch, Schoof and Anslow ("Restoring mass conservation to shallow ice flow models over
 //! complex terrain", The Cryosphere 7, 2013, doi:10.5194/tc-7-229-2013) show that standard SIA
@@ -158,8 +165,8 @@ pub struct GlacierParams {
     /// Shortest ice time step, years: where `max_stiffness` would ask for less (thick, fast
     /// ice), accuracy is traded for time, the flux limiter keeping the step safe.
     pub min_step: f64,
-    /// Steepest surface slope (rise over run) used for the ice's diffusivity.
-    pub max_slope: f64,
+    /// Fastest ice, metres per year (see the module docs).
+    pub max_speed: f64,
     /// Solves per ice step: 1 for the semi-implicit (lagged diffusivity) step, more for Picard
     /// iterations towards the fully implicit one.
     pub picard: usize,
@@ -175,7 +182,7 @@ impl Default for GlacierParams {
         GlacierParams {
             glen_a: 2.4e-24 * 365.25 * 24. * 3600.,
             glen_n: 3.,
-            sliding: 5e-14,
+            sliding: 5e-15,
             density: 910.,
             gravity: 9.81,
             erosion: 1e-4,
@@ -187,10 +194,10 @@ impl Default for GlacierParams {
             balance_gradient: 0.007,
             max_accumulation: 2.,
             max_step: 10.,
-            min_step: 0.5,
-            max_slope: 0.5,
+            min_step: 0.01,
             picard: 2,
-            max_stiffness: 200.,
+            max_speed: 1000.,
+            max_stiffness: 50.,
             acceleration: 10.,
         }
     }
@@ -246,16 +253,17 @@ fn conductances(domain: &Domain, p: &GlacierParams, bed: &[f64], h: &[f64]) -> V
     let g2 = slope_squared(domain, &s);
     let rho_g_n = (p.density * p.gravity).powf(p.glen_n);
     let deform = 2. * p.glen_a / (p.glen_n + 2.);
-    let max_g2 = p.max_slope * p.max_slope;
     let mut conductance = vec![0.; domain.link_count()];
     for i in 0..n {
         let o = domain.link_offset(i);
         for (k, l) in domain.edges(i).iter().enumerate() {
             let he = 0.5 * (h[i] + h[l.to]);
             if he <= 0. { continue; }
-            let g2e = (0.5 * (g2[i] + g2[l.to])).min(max_g2);
+            let g2e = 0.5 * (g2[i] + g2[l.to]);
             let d = rho_g_n * g2e.powf((p.glen_n - 1.) / 2.)
                 * (deform * he.powf(p.glen_n + 2.) + p.sliding * he.powf(p.glen_n + 1.));
+            // Mean speed is D |∇s| / H; cap it at max_speed.
+            let d = d.min(p.max_speed * he / g2e.sqrt().max(1e-6));
             conductance[o + k] = l.width * d / l.dist;
         }
     }
@@ -328,11 +336,12 @@ pub fn flow_ice(domain: &Domain, p: &GlacierParams, bed: &[f64], ice: &mut [f64]
     }).fold(0., f64::max);
     let dt = if stiffness > 0. { max_dt.min((p.max_stiffness / stiffness).max(p.min_step)) } else { max_dt };
 
-    // Picard iteration: re-evaluate D from the latest thickness and solve again, converging
-    // towards the fully implicit step.
+    // Picard iteration: re-evaluate D and solve again. D comes from the mean of the old and
+    // latest thickness (a midpoint rule): from the latest alone, a cell the first solve drains
+    // completely would get no conductance, and the next solve would leave it unable to flow.
     let (mut x, mut iterations) = solve_ice(domain, bed, ice, balance, drain, &conductance, dt);
     for _ in 1..p.picard {
-        let h: Vec<f64> = x.iter().map(|&v| v.max(0.)).collect();
+        let h: Vec<f64> = x.iter().zip(ice.iter()).map(|(&v, &h0)| 0.5 * (v.max(0.) + h0)).collect();
         conductance = conductances(domain, p, bed, &h);
         let (next, it) = solve_ice(domain, bed, ice, balance, drain, &conductance, dt);
         x = next;
@@ -481,11 +490,11 @@ mod tests {
         let row: Vec<f64> = (0..20).map(|i| ice[10 * 20 + i]).collect();
         // Thick above the ELA, ice-free well below it.
         assert!(row[16] > 50., "{:?}", row);
-        assert!(row[..3].iter().all(|&h| h == 0.), "{:?}", row);
+        assert!(row[..2].iter().all(|&h| h == 0.), "{:?}", row);
         // The glacier flows below the ELA (cell 12) before melting away.
         assert!(row[11] > 0., "{:?}", row);
         assert!(sliding[10 * 20 + 14] > 1., "{:?}", sliding);
-        assert_eq!(sliding[10 * 20 + 2], 0.);
+        assert_eq!(sliding[10 * 20 + 1], 0.);
     }
 
     #[test]
@@ -502,5 +511,33 @@ mod tests {
         let mut bed = vec![100.; 3];
         erode(&p, &mut bed, &[0., 100., 100.], &[false, false, true], 1000.);
         assert_eq!(bed, vec![100., 100. - 1e-4 * 100. * 1000., 100.]);
+    }
+}
+
+#[cfg(test)]
+mod ice_cap_tests {
+    use super::*;
+
+    /// Uniform snowfall on a flat plateau, draining at its edges, builds an ice cap that stops
+    /// thickening once flow to the edges balances accumulation.
+    #[test]
+    fn test_ice_cap_reaches_steady_state() {
+        let p = GlacierParams::default();
+        let d = Domain::patch(45., 0., 24, 500., 6.371e6);
+        let bed = vec![3000.; d.len()];
+        let mut ice = vec![0.; d.len()];
+        let balance = vec![2.; d.len()];
+        let centre = 12 * 24 + 12;
+        let mut history = vec![];
+        for _ in 0..30 {
+            let mut t = 0.;
+            while t < 100. { t += flow_ice(&d, &p, &bed, &mut ice, &balance, &d.boundary, 100. - t).dt; }
+            history.push(ice[centre]);
+        }
+        let (late, last) = (history[24], history[29]);
+        assert!(last < 2000., "{:?}", history);
+        assert!((last - late).abs() < 0.02 * last, "{:?}", history);
+        // Domed: thickest in the middle.
+        assert!(ice[12 * 24 + 2] < ice[centre]);
     }
 }

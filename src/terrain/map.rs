@@ -9,8 +9,13 @@ use crate::na::Vector3;
 use crate::terrain::domain::Layout;
 use crate::terrain::simulation::{Terrain, ICE_FREE};
 
-/// Drainage area above which a cell is drawn as river, square metres.
+/// Drainage area above which a cell is drawn as river, square metres...
 pub const RIVER_AREA: f64 = 5e7;
+
+/// ... or, on coarse grids, a multiple of the cell's own area.
+pub fn is_river(t: &Terrain, i: usize) -> bool {
+    t.drainage[i] > RIVER_AREA.max(20. * t.domain.area[i])
+}
 
 fn mix(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
     let t = t.clamp(0., 1.);
@@ -40,7 +45,7 @@ fn cell_colour(t: &Terrain, i: usize) -> [f64; 3] {
     if t.ice[i] >= ICE_FREE {
         return mix([0.80, 0.88, 0.95], [0.95, 0.97, 1.0], t.ice[i] / 300.);
     }
-    if t.drainage[i] > RIVER_AREA {
+    if is_river(t, i) {
         return [0.20, 0.40, 0.75];
     }
     land_colour(t.bed[i])

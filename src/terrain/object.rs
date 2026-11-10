@@ -46,7 +46,7 @@ use crate::shapes::mesh::vertex_normals;
 use crate::shapes::triangle::{SmoothTriangle, Triangle};
 use crate::terrain::domain::{Domain, Layout};
 use crate::terrain::glacier::{slope_squared, GlacierParams};
-use crate::terrain::map::{land_colour, write_map, RIVER_AREA};
+use crate::terrain::map::{is_river, land_colour, write_map};
 use crate::terrain::planet::Planet;
 use crate::terrain::simulation::{Terrain, TerrainParams, ICE_FREE};
 use serde_json::Value;
@@ -140,7 +140,7 @@ impl TerrainMedium {
         let class = (0..t.domain.len()).map(|i| {
             if t.ice[i] >= ICE_FREE { ICE }
             else if t.bed[i] < 0. { SEA_FLOOR }
-            else if t.drainage[i] > RIVER_AREA { RIVER }
+            else if is_river(&t, i) { RIVER }
             else if slope2[i] > ROCK_SLOPE * ROCK_SLOPE { ROCK }
             else { BAND0 + ((t.bed[i] / BAND_HEIGHT) as usize).min(BANDS - 1) as u8 }
         }).collect();
@@ -175,7 +175,7 @@ fn glacier_params(o: &Value) -> GlacierParams {
         ("ela_equator", &mut g.ela_equator), ("ela_pole", &mut g.ela_pole),
         ("ela_amplitude", &mut g.ela_amplitude), ("period", &mut g.period),
         ("balance_gradient", &mut g.balance_gradient), ("max_accumulation", &mut g.max_accumulation),
-        ("max_step", &mut g.max_step), ("min_step", &mut g.min_step), ("max_slope", &mut g.max_slope), ("max_stiffness", &mut g.max_stiffness),
+        ("max_step", &mut g.max_step), ("min_step", &mut g.min_step), ("max_speed", &mut g.max_speed), ("max_stiffness", &mut g.max_stiffness),
         ("acceleration", &mut g.acceleration),
     ];
     for (k, v) in fields {

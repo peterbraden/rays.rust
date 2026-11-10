@@ -1007,9 +1007,9 @@ impl SceneFile {
     }
 
     /// The scene's directional light: `{"direction": [x, y, z], "color": colour, "intensity": E,
-    /// "angular_radius": degrees}`, with irradiance `color` × `intensity` (defaults white and
-    /// 1) on a surface facing it, `direction` pointing towards it, and a visible disc of the
-    /// given radius (default the sun's, 0.2666°). With a skysphere in `objects`, the sun is the
+    /// "angular_radius": degrees}`, with irradiance `color` × `intensity` (by default white
+    /// and one) on a surface facing it, `direction` pointing towards it, and a visible disc of
+    /// the given radius (default the sun's, 0.2666°). With a skysphere in `objects`, the sun is the
     /// sky's: it takes the sky's `sun_direction` (so `direction` is not allowed), `intensity`
     /// is its irradiance above the atmosphere, and it is reddened by the sky's atmosphere on
     /// its way down to each point, according to the point's altitude (scene y, in metres), so
@@ -1077,6 +1077,10 @@ impl SceneFile {
         );
 
         let sun = SceneFile::parse_sun(&s.sun, &s.objects);
+        // Aerial perspective, unless the skysphere turns it off.
+        let atmosphere = s.objects.iter()
+            .find(|o| o["type"].as_str() == Some("skysphere") && o["aerial_perspective"].as_bool() != Some(false))
+            .map(|o| Arc::new(parse_sky_material(o)));
         let objects = SceneFile::parse_objects(s.objects, &s.materials, &s.media);
         // Emitters with a surface we can sample become area lights.
         let area_lights: Vec<Arc<SceneObject>> = objects.iter()
@@ -1115,6 +1119,7 @@ impl SceneFile {
             output: OutputOpts::parse(&s.output),
             area_lights,
             sun,
+            atmosphere,
         }
     }
 

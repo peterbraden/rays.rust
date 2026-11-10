@@ -44,6 +44,7 @@ use crate::shapes::geometry::Geometry;
 use serde_json::{Value};
 use crate::scenefile::SceneFile;
 use rayon::prelude::*;
+use crate::light::{ALTITUDE_STEP, ALTITUDE_STEPS};
 
 // Constants for atmospheric scattering
 /// Scales the integrated radiance into the renderer's working range. Under the default sRGB
@@ -141,6 +142,10 @@ pub struct SkyMaterial {
     
     /// Mie anisotropy factor (controls the size of the glow around the sun)
     mie_anisotropy: f64,
+
+    /// Rayleigh and Mie optical depths towards the sun by altitude, every `ALTITUDE_STEP`
+    /// (None in the earth's shadow), for aerial perspective; built on first use.
+    sun_depths: std::sync::OnceLock<Vec<Option<(f64, f64)>>>,
 }
 
 impl SkyMaterial {
@@ -304,6 +309,62 @@ impl SkyMaterial {
         
         // Combine Rayleigh and Mie scattering
         (rayleigh_sum.component_mul(&beta_r), mie_sum.component_mul(&beta_m))
+    }
+}
+
+/// Aerial perspective: what the atmosphere does to light crossing a stretch of it.
+impl SkyMaterial {
+    /// Optical depths towards the sun from `altitude`, from a table by altitude: the sun is far
+    /// enough that, over a scene, only height above the ground matters.
+    fn sun_depth_at(&self, altitude: f64) -> Option<(f64, f64)> {
+        let table = self.sun_depths.get_or_init(|| (0..ALTITUDE_STEPS).map(|i| {
+            let p = self.earth.center + Vector3::new(0., self.earth.radius + (i as f64 * ALTITUDE_STEP).max(1.), 0.);
+            self.optical_depth_to_sun(p)
+        }).collect());
+        let x = (altitude / ALTITUDE_STEP).clamp(0., (ALTITUDE_STEPS - 1) as f64);
+        let i = (x as usize).min(ALTITUDE_STEPS - 2);
+        let f = x - i as f64;
+        match (table[i], table[i + 1]) {
+            (Some(a), Some(b)) => Some((a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f)),
+            // At the edge of the earth's shadow: whichever side we're nearer.
+            (a, b) => if f < 0.5 { a } else { b },
+        }
+    }
+
+    /// For light reaching `origin` along the unit direction `d` from `distance` away: the
+    /// fraction that crosses the air between (per channel), and the light the air scatters
+    /// towards `origin` on the way, on the same scale as the sky's radiance. This is the sky's
+    /// own integral (`scattering`), stopped at `distance`, so that far enough away an object
+    /// fades into the sky behind it. The air is lit by the sun as if nothing shadowed it.
+    pub fn segment(&self, origin: &Vector3<f64>, d: &Vector3<f64>, distance: f64) -> (Vector3<f64>, Vector3<f64>) {
+        let r = Ray { ro: *origin, rd: *d };
+        let length = match self.view_ray_length(&r) {
+            Some(l) => l.min(distance),
+            None => return (Vector3::repeat(1.), Vector3::zeros()),
+        };
+        let samples = DEFAULT_NUM_SAMPLES;
+        let step = length / samples as f64;
+        let beta_r = self.rayleigh_coefficients;
+        let beta_m = Vector3::repeat(self.mie_coefficient);
+        let (mut depth_r, mut depth_m) = (0., 0.);
+        let (mut rayleigh, mut mie) = (Vector3::zeros(), Vector3::zeros());
+        for i in 0..samples {
+            let p = origin + d * ((i as f64 + 0.5) * step);
+            let height = (p - self.earth.center).norm() - self.earth.radius;
+            let (dr, dm) = (self.optical_depth(height, self.rayleigh_thickness, step),
+                            self.optical_depth(height, self.mie_thickness, step));
+            depth_r += dr;
+            depth_m += dm;
+            if let Some((sr, sm)) = self.sun_depth_at(height) {
+                let tau = beta_r * (depth_r + sr) + beta_m * 1.1 * (depth_m + sm);
+                let attenuation = tau.map(|t| (-t).exp());
+                rayleigh += attenuation * dr;
+                mie += attenuation * dm;
+            }
+        }
+        let transmittance = (beta_r * depth_r + beta_m * 1.1 * depth_m).map(|t| (-t).exp());
+        let inscattered = self.apply_phase(d, rayleigh.component_mul(&beta_r), mie.component_mul(&beta_m)) * SKY_CALIBRATION;
+        (transmittance, inscattered)
     }
 }
 
@@ -543,6 +604,7 @@ pub fn parse_sky_material(o: &Value) -> SkyMaterial {
         rayleigh_coefficients,
         mie_coefficient,
         mie_anisotropy,
+        sun_depths: std::sync::OnceLock::new(),
     }
 }
 
@@ -550,6 +612,43 @@ pub fn parse_sky_material(o: &Value) -> SkyMaterial {
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
+
+    fn sky_at(sun: &str) -> SkyMaterial {
+        parse_sky_material(&serde_json::from_str(&format!(r#"{{ "type": "skysphere", "sun_direction": {} }}"#, sun)).unwrap())
+    }
+
+    #[test]
+    fn test_unbounded_segment_is_the_sky() {
+        // Far enough, an object fades into exactly the sky behind it.
+        let sky = sky_at("[0.3, 0.3, 1]");
+        for d in [Vector3::new(0., 0.2, 1.), Vector3::new(1., 0.05, 0.), Vector3::new(-0.3, 0.7, -0.5)] {
+            let d = d.normalize();
+            let o = Vector3::new(0., 2., 0.);
+            let (t, inscattered) = sky.segment(&o, &d, f64::INFINITY);
+            let radiance = sky.radiance(&Ray { ro: o, rd: d }) * SKY_CALIBRATION;
+            assert!(t.max() < 1.);
+            for c in 0..3 {
+                assert!((inscattered[c] / radiance[c] - 1.).abs() < 0.03, "{}: {} vs {}", d, inscattered, radiance);
+            }
+        }
+    }
+
+    #[test]
+    fn test_segment_attenuates_like_the_air() {
+        let sky = sky_at("[0, 1, 0]");
+        let o = Vector3::new(0., 1., 0.);
+        let (t, inscattered) = sky.segment(&o, &Vector3::new(1., 0., 0.), 10.);
+        assert!(t.min() > 0.999 && inscattered.max() < 1e-3, "{} {}", t, inscattered);
+        // 20 km along the ground: Beer-Lambert at sea-level density, to within the earth's
+        // curvature lifting the far end 31 m.
+        let (t, _) = sky.segment(&o, &Vector3::new(1., 0., 0.), 20000.);
+        let expected = (sky.rayleigh_coefficients + Vector3::repeat(sky.mie_coefficient * 1.1)) * -20000.;
+        for c in 0..3 {
+            assert!((t[c] / expected[c].exp() - 1.).abs() < 0.01, "{} vs {}", t, expected.map(|x| x.exp()));
+        }
+        // Blue is lost first.
+        assert!(t.z < t.y && t.y < t.x);
+    }
 
     #[test]
     fn test_rayleigh_phase() {
@@ -603,6 +702,7 @@ mod tests {
             rayleigh_coefficients: Vector3::new(DEFAULT_RAYLEIGH_R, DEFAULT_RAYLEIGH_G, DEFAULT_RAYLEIGH_B),
             mie_coefficient: DEFAULT_MIE_COEFFICIENT,
             mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
+            sun_depths: Default::default(),
         };
         // Just after sunset, the sun 0.02 radians below the horizon. From 100 m up, the sun ray
         // passes only slightly beneath the ground, so integrating through it would let a little
@@ -625,6 +725,7 @@ mod tests {
             rayleigh_coefficients: Vector3::new(DEFAULT_RAYLEIGH_R, DEFAULT_RAYLEIGH_G, DEFAULT_RAYLEIGH_B),
             mie_coefficient: DEFAULT_MIE_COEFFICIENT,
             mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
+            sun_depths: Default::default(),
         }
     }
 
@@ -679,6 +780,7 @@ mod tests {
             rayleigh_coefficients: Vector3::new(DEFAULT_RAYLEIGH_R, DEFAULT_RAYLEIGH_G, DEFAULT_RAYLEIGH_B),
             mie_coefficient: DEFAULT_MIE_COEFFICIENT,
             mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
+            sun_depths: Default::default(),
         };
         let r = Ray { ro: Vector3::new(0., 1., 0.), rd: Vector3::new(0., 0.3, 1.).normalize() };
         let (a, b) = (sky(20.).radiance(&r), sky(40.).radiance(&r));
@@ -699,6 +801,7 @@ mod tests {
             rayleigh_coefficients: Vector3::new(DEFAULT_RAYLEIGH_R, DEFAULT_RAYLEIGH_G, DEFAULT_RAYLEIGH_B),
             mie_coefficient: DEFAULT_MIE_COEFFICIENT,
             mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
+            sun_depths: Default::default(),
         };
         // Camera 10m above the surface, looking straight down.
         let down = Ray { ro: Vector3::new(0., 10., 0.), rd: Vector3::new(0., -1., 0.) };
@@ -721,6 +824,7 @@ mod tests {
             rayleigh_coefficients: Vector3::new(DEFAULT_RAYLEIGH_R, DEFAULT_RAYLEIGH_G, DEFAULT_RAYLEIGH_B),
             mie_coefficient: DEFAULT_MIE_COEFFICIENT,
             mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
+            sun_depths: Default::default(),
         };
         
         // Test optical depth at different heights

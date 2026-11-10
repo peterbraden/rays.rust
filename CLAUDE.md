@@ -6,7 +6,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Material models: Lambertian, Specular, Dielectric
 - Objects: Sphere, Plane, Mesh, OBJ file import
 - Participating media: boxes of constant or noise-driven density (delta tracking with local majorants, ratio-tracked shadows); Henyey-Greenstein or Mie (water droplet) phase; diffraction by particles (coronae, iridescence); ice-crystal halos traced through hexagonal prisms (sun dogs, 22°/46° halos, circumzenithal arc); optional similarity and Oz multiple-scattering approximations
-- Skysphere with Rayleigh and Mie Scattering
+- Skysphere with Rayleigh and Mie Scattering, and aerial perspective (distant objects attenuated and hazed by the same atmosphere)
 - Directional sun light (`"sun"`), sampled directly; follows the skysphere's sun and is reddened by its atmosphere
 - Procedural objects including Ocean (Tessendorf's algorithm with Phillips spectrum) and volumetric clouds: cumulus to stratus (`"nubis_clouds"`, after Horizon Zero Dawn's Nubis) and cirrus with fallstreaks (`"hogan_kew_cirrus"`, after Hogan and Kew)
 - Multithreaded rendering with progressive output

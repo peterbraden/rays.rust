@@ -8,6 +8,7 @@ use crate::participatingmedia::ParticipatingMedium;
 use crate::output::OutputOpts;
 use crate::sceneobject::SceneObject;
 use std::sync::Arc;
+use crate::skysphere::SkyMaterial;
 
 /// What a path contributes when it is cut short. Paths always stop at `max_depth`, or when their
 /// weight falls below the black threshold.
@@ -129,6 +130,9 @@ pub struct Scene {
     pub area_lights: Vec<Arc<SceneObject>>,
     /// A directional light, sampled directly by diffuse surfaces and media.
     pub sun: Option<Sun>,
+    /// The skysphere's atmosphere, if any, for aerial perspective: light from distant objects
+    /// is attenuated and hazed by the air it crosses.
+    pub atmosphere: Option<Arc<SkyMaterial>>,
 }
 
 impl Scene {

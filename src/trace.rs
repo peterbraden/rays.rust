@@ -13,6 +13,10 @@ pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
     trace_from(r, depth, s, false)
 }
 
+/// Segments shorter than this (scene units: metres, in sky scenes) cross too little air to
+/// matter: 100 m of sea-level air takes about half a percent of blue light.
+const AERIAL_PERSPECTIVE_FROM: f64 = 100.;
+
 /// Trace a ray. `after_light_sampling` is set for a ray scattered from a surface that has just
 /// sampled the lights directly (the area lights and the sun); their emission is then already
 /// counted, and is ignored if this ray hits one, or sees the sun.
@@ -22,7 +26,18 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, after_light_sampling: bool) -> (u6
     let reaches_sky = closest.as_ref().is_none_or(|x| x.dist >= SUN_SHADOW_DISTANCE);
 
     let (cast, color) = match closest {
-        Some(x) => trace_intersection(r, x, depth, s, after_light_sampling),
+        Some(x) => {
+            let dist = x.dist;
+            let (cast, color) = trace_intersection(r, x, depth, s, after_light_sampling);
+            match &s.atmosphere {
+                // The sky already includes the air in front of it.
+                Some(sky) if dist > AERIAL_PERSPECTIVE_FROM && !reaches_sky => {
+                    let (transmittance, inscattered) = sky.segment(&r.ro, &r.rd.normalize(), dist);
+                    (cast, color * transmittance + inscattered)
+                },
+                _ => (cast, color),
+            }
+        },
         None => (1, s.render.background.radiance(&r.rd)),
     };
     match &s.sun {
@@ -498,6 +513,31 @@ mod tests {
         let seen = trace(&towards, 0, &s).1.rgb.x;
         let disc = sun.disc_radiance(&Vector3::zeros(), &sun.direction).rgb.x;
         assert!((seen - 0.5 * disc).abs() < 1e-6 * disc, "{} vs {}", seen, 0.5 * disc);
+    }
+
+    #[test]
+    fn test_aerial_perspective() {
+        // A white emitter 30 km away is seen through 30 km of air: attenuated, and hazed by the
+        // light the air scatters; switched off, it is seen as it is.
+        let scene = |aerial: bool| SceneFile::from_string(format!(r#"{{
+            "max_depth": 1,
+            "camera": {{ "location": [0, 2, 0], "lookat": [0, 2, 1], "up": [0, 1, 0], "angle": 0.5 }},
+            "materials": {{ "L": {{ "type": "diffuse-light", "color": [1, 1, 1], "two_sided": true }} }},
+            "objects": [
+                {{ "type": "skysphere", "sun_direction": [0, 0.5, 1], "aerial_perspective": {} }},
+                {{ "type": "triangle", "v0": [-5000, -100, 30000], "v1": [5000, -100, 30000], "v2": [0, 5000, 30000], "material": "L" }}
+            ]
+        }}"#, aerial));
+        let r = Ray { ro: Vector3::new(0., 2., 0.), rd: Vector3::new(0., 0., 1.) };
+        let s = scene(true);
+        let seen = trace(&r, 0, &s).1;
+        let (t, inscattered) = s.atmosphere.as_ref().unwrap().segment(&r.ro, &r.rd, 30000.);
+        for c in 0..3 {
+            assert!((seen.rgb[c] - (t[c] + inscattered[c])).abs() < 1e-9, "{:?} vs {} + {}", seen, t, inscattered);
+        }
+        assert!(t.z < 0.5, "{}", t);
+        let plain = trace(&r, 0, &scene(false)).1;
+        assert_eq!(plain, Color::white());
     }
 
     #[test]

@@ -16,6 +16,17 @@
 //! - **Relief.** Ridged multifractal noise in the orogens and gentle hills elsewhere, so the
 //!   landscape at time zero is the "noise-based topography" that erosion then reworks.
 //!
+//! - **Bedrock.** Layers alternating between hard and soft rock, folded, with regional
+//!   variation (`erodibility`): the lithology that erosion exposes as it cuts down. Forte,
+//!   Yanites and Whipple ("Complexities of landscape evolution during incision through layered
+//!   stratigraphy with contrasts in rock strength", ESPL 41(12), 2016, doi:10.1002/esp.3947)
+//!   model rivers cutting through layers of different erodibility K; Perne et al. ("Steady
+//!   state, erosional continuity, and the topography of landscapes developed in layered rocks",
+//!   Earth Surface Dynamics 5, 2017, doi:10.5194/esurf-5-85-2017) find the layering matters
+//!   from about a threefold contrast in K. The default contrast here is 5.
+//! - **Volcanism.** Where volcanoes occur (`volcanism`): arcs beside the mountain belts, and
+//!   hotspots. See `volcano` for the volcanoes themselves.
+//!
 //! Each field is a function of the direction from the planet's centre, so it is the same planet
 //! at any resolution. The finest octave is chosen from the grid spacing (`finest`): detail below
 //! about two cells would only alias, much as a texture's mipmap level is chosen from its
@@ -42,6 +53,12 @@ pub struct PlanetParams {
     pub uplift_rate: f64,
     /// Mountain belts per planet radius (their spacing).
     pub belt_frequency: f64,
+    /// Thickness of one hard and one soft bedrock layer together, metres.
+    pub strata_thickness: f64,
+    /// Ratio of erodibility between the softest and hardest bedrock.
+    pub strata_contrast: f64,
+    /// How far layers are folded up and down, metres.
+    pub fold_amplitude: f64,
 }
 
 impl Default for PlanetParams {
@@ -53,6 +70,9 @@ impl Default for PlanetParams {
             mountain_height: 3000.,
             uplift_rate: 1e-3,
             belt_frequency: 3.,
+            strata_thickness: 600.,
+            strata_contrast: 5.,
+            fold_amplitude: 800.,
         }
     }
 }
@@ -120,6 +140,9 @@ pub struct Planet {
     continents: Octaves,
     belts: Octaves,
     relief: Octaves,
+    folds: Octaves,
+    provinces: Octaves,
+    hotspots: Octaves,
 }
 
 /// Lattice units per planet radius of the continent field.
@@ -133,7 +156,10 @@ const RIDGE_FREQUENCY: f64 = 530.;
 impl Planet {
     pub fn new(params: PlanetParams) -> Planet {
         let seed = params.seed;
-        Planet { params, continents: Octaves::new(seed, 1), belts: Octaves::new(seed, 2), relief: Octaves::new(seed, 3) }
+        Planet {
+            params, continents: Octaves::new(seed, 1), belts: Octaves::new(seed, 2), relief: Octaves::new(seed, 3),
+            folds: Octaves::new(seed, 4), provinces: Octaves::new(seed, 5), hotspots: Octaves::new(seed, 6),
+        }
     }
 
     /// Octaves needed, starting at `frequency` lattice units per radius, to reach detail of
@@ -152,6 +178,29 @@ impl Planet {
     pub fn orogeny(&self, d: &Vector3<f64>) -> f64 {
         let belt = self.belts.ridged(d, self.params.belt_frequency, 3);
         smoothstep(0.55, 0.85, belt) * smoothstep(0., 0.12, self.continent(d))
+    }
+
+    /// Relative erodibility of the bedrock at direction `d` and elevation `z` (metres): a
+    /// multiplier of the erosion coefficients, between 1/√contrast and √contrast times a
+    /// regional factor. The rock is a stack of layers alternating smoothly between hard and
+    /// soft, folded by noise, so erosion cutting down through it meets one then the other:
+    /// hard layers hold up cliffs and benches, soft ones erode into slopes and valleys.
+    /// Larger regions ("provinces") are more or less erodible overall.
+    pub fn erodibility(&self, d: &Vector3<f64>, z: f64) -> f64 {
+        let p = &self.params;
+        let fold = p.fold_amplitude * self.folds.fbm(d, RELIEF_FREQUENCY, 4);
+        let phase = (z + fold) / p.strata_thickness * std::f64::consts::TAU;
+        let province = (0.5 * self.provinces.fbm(d, RELIEF_FREQUENCY, 3)).exp();
+        p.strata_contrast.powf(0.5 * phase.sin()) * province
+    }
+
+    /// Where volcanoes occur, from 0 (never) to 1: along the flanks of mountain belts (as arcs
+    /// stand beside the ranges at subduction zones), and over scattered hotspots.
+    pub fn volcanism(&self, d: &Vector3<f64>) -> f64 {
+        let belt = self.belts.ridged(d, self.params.belt_frequency, 3);
+        let arc = smoothstep(0.4, 0.55, belt) * (1. - smoothstep(0.6, 0.75, belt));
+        let hotspot = smoothstep(0.55, 0.7, self.hotspots.fbm(d, 8., 2));
+        arc.max(hotspot)
     }
 
     /// Tectonic uplift rate, metres per year.
@@ -177,6 +226,15 @@ impl Planet {
     /// sampling `samples` points spread evenly over the planet (a Fibonacci lattice). Lets a
     /// scene ask for "some mountains" without knowing where this seed put them.
     pub fn most_mountainous(&self, samples: usize) -> (f64, f64) {
+        self.best_site(samples, |d| self.orogeny(d) + 0.1 * self.continent(d))
+    }
+
+    /// As `most_mountainous`, but for mountainous land with volcanoes.
+    pub fn most_volcanic(&self, samples: usize) -> (f64, f64) {
+        self.best_site(samples, |d| self.volcanism(d).min(self.orogeny(d)) + 0.1 * self.continent(d).min(0.2))
+    }
+
+    fn best_site(&self, samples: usize, score: impl Fn(&Vector3<f64>) -> f64) -> (f64, f64) {
         let golden = std::f64::consts::PI * (3. - 5f64.sqrt());
         let mut best = (f64::NEG_INFINITY, 0., 0.);
         for i in 0..samples {
@@ -185,7 +243,7 @@ impl Planet {
             let lat = y.asin();
             let d = Vector3::new(lat.cos() * lon.cos(), lat.sin(), -lat.cos() * lon.sin());
             let mid = (30f64.to_radians() .. 55f64.to_radians()).contains(&lat.abs());
-            let score = self.orogeny(&d) + 0.1 * self.continent(&d) + if mid { 1. } else { 0. };
+            let score = score(&d) + if mid { 1. } else { 0. };
             if score > best.0 { best = (score, lat.to_degrees(), lon.to_degrees()); }
         }
         (best.1, best.2)
@@ -227,6 +285,18 @@ mod tests {
             let (up, _, _) = crate::terrain::domain::Domain::frame(lat, lon);
             assert!(p.orogeny(&up) > 0.5);
         }
+    }
+
+    #[test]
+    fn test_rock_strength_varies_with_depth() {
+        let p = planet(2);
+        let d = Vector3::new(0.3, 0.5, 0.8).normalize();
+        let k: Vec<f64> = (0..20).map(|i| p.erodibility(&d, i as f64 * 50.)).collect();
+        let (lo, hi) = (k.iter().cloned().fold(f64::MAX, f64::min), k.iter().cloned().fold(0., f64::max));
+        // Cutting down 1 km passes through hard and soft layers.
+        assert!(hi / lo > 3., "{:?}", k);
+        let any = samples().iter().any(|d| p.volcanism(d) > 0.5);
+        assert!(any);
     }
 
     #[test]

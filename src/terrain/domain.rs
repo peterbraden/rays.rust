@@ -103,7 +103,7 @@ fn face_axes(f: usize) -> (Vector3<f64>, Vector3<f64>, Vector3<f64>) {
 
 /// The direction at face coordinates (a, b), each in [-1, 1] on the face (and beyond it, off the
 /// edge, which is how neighbours across face edges are found).
-fn sphere_dir(f: usize, a: f64, b: f64) -> Vector3<f64> {
+pub fn sphere_dir(f: usize, a: f64, b: f64) -> Vector3<f64> {
     let (n, u, v) = face_axes(f);
     (n + u * (a * FRAC_PI_4).tan() + v * (b * FRAC_PI_4).tan()).normalize()
 }
@@ -302,7 +302,7 @@ impl Domain {
         Domain { layout, radius, dirs, area, boundary: vec![false; count], link_start, links, edge_end, corners, corner_cells, quads }
     }
 
-    fn sphere_cell_at(n: usize, d: &Vector3<f64>) -> usize {
+    pub fn sphere_cell_at(n: usize, d: &Vector3<f64>) -> usize {
         let ax = d.x.abs().max(d.y.abs()).max(d.z.abs());
         let f = if d.x.abs() == ax {
             if d.x > 0. { 0 } else { 1 }

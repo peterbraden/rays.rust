@@ -7,11 +7,26 @@
 //! FastScape):
 //!
 //! 1. tectonic uplift (`planet`);
-//! 2. glaciers: mass balance, ice flow and glacial erosion, in sub-steps (`glacier`);
-//! 3. flow routing over the ice and rock surface, then river incision on ice-free ground
-//!    (`flow`, `fluvial`);
-//! 4. hillslope diffusion (`fluvial`).
+//! 2. volcanic eruptions: cones and lava flows (`volcano`);
+//! 3. glaciers: mass balance, ice flow and glacial erosion, in sub-steps (`glacier`), the
+//!    eroded rock leaving in meltwater as sediment for the rivers (Hallet, Hunter and Bogen,
+//!    "Rates of erosion and sediment evacuation by glaciers", Global and Planetary Change 12,
+//!    1996, estimate glacial erosion rates from that sediment);
+//! 4. flow routing over the ice and rock surface, then river erosion and deposition on
+//!    ice-free ground (`flow`, `fluvial`);
+//! 5. hillslope diffusion (`fluvial`).
 //!
+//! ## Geology
+//!
+//! The ground is layered. At the bottom is bedrock, whose erodibility varies with position and
+//! depth (`Planet::erodibility`: folded strata of hard and soft rock). On it lies volcanic rock
+//! (`lava`), and on top sediment (`sediment`): alluvium, lake fill, colluvium from hillslopes.
+//! Ground gained by deposition or creep is sediment; ground lost is taken from the sediment,
+//! then the lava, then the bedrock, so erosion cuts through the layers in order. Rivers and
+//! glaciers erode whatever is exposed with its own erodibility: sediment 3 times average
+//! bedrock, lava 0.3 times (both model choices; fresh basalt is strong, unconsolidated sediment
+//! weak). Uplift moves all layers together.
+
 //! Everything is a deterministic function of the parameters (including the seed) and t, and
 //! the state at t2 is the state at t1 advanced by t2 - t1. So an animation renders successive
 //! times, carrying one `Terrain` forwards rather than re-running from zero for every frame.
@@ -38,9 +53,10 @@
 
 use crate::terrain::domain::Domain;
 use crate::terrain::flow::{route, Flow};
-use crate::terrain::fluvial::{diffuse, incise, FluvialParams};
+use crate::terrain::fluvial::{diffuse, erode_and_deposit, FluvialParams};
 use crate::terrain::glacier::{erode, flow_ice, GlacierParams};
 use crate::terrain::planet::{Planet, PlanetParams};
+use crate::terrain::volcano::{erupt, vents, Vent, VolcanoParams};
 
 #[derive(Clone, Debug)]
 pub struct TerrainParams {
@@ -48,6 +64,12 @@ pub struct TerrainParams {
     pub fluvial: FluvialParams,
     /// None to disable glaciers.
     pub glacier: Option<GlacierParams>,
+    /// None to disable volcanoes.
+    pub volcano: Option<VolcanoParams>,
+    /// Erodibility of sediment, relative to average bedrock.
+    pub sediment_erodibility: f64,
+    /// Erodibility of volcanic rock, relative to average bedrock.
+    pub lava_erodibility: f64,
     /// Length of a landscape evolution step, years.
     pub step: f64,
 }
@@ -58,6 +80,9 @@ impl Default for TerrainParams {
             planet: PlanetParams::default(),
             fluvial: FluvialParams::default(),
             glacier: Some(GlacierParams::default()),
+            volcano: Some(VolcanoParams::default()),
+            sediment_erodibility: 3.,
+            lava_erodibility: 0.3,
             step: 100.,
         }
     }
@@ -72,8 +97,15 @@ pub struct Terrain {
     pub planet: Planet,
     /// Years since the noise topography.
     pub time: f64,
-    /// Bedrock elevation above sea level, metres.
+    /// Elevation of the ground (the top of the sediment, lava and bedrock beneath any ice)
+    /// above sea level, metres.
     pub bed: Vec<f64>,
+    /// Thickness of sediment at the top of the ground, metres.
+    pub sediment: Vec<f64>,
+    /// Thickness of volcanic rock beneath the sediment, metres.
+    pub lava: Vec<f64>,
+    /// Sediment flux leaving each cell in rivers at the last step, m³/yr.
+    pub sediment_flux: Vec<f64>,
     /// Ice thickness, metres.
     pub ice: Vec<f64>,
     /// Tectonic uplift rate, metres per year.
@@ -91,6 +123,7 @@ pub struct Terrain {
     pub ice_steps: usize,
     /// ... and the solver iterations they took.
     pub ice_iterations: usize,
+    vents: Vec<Vent>,
 }
 
 impl Terrain {
@@ -104,17 +137,51 @@ impl Terrain {
         let latitude = domain.dirs.iter().map(|d| d.y.clamp(-1., 1.).asin()).collect();
         let n = domain.len();
         let sea = bed.iter().map(|&b| b < 0.).collect();
+        let vents = match &params.volcano { Some(v) => vents(&planet, &domain, v), None => vec![] };
         let mut t = Terrain {
-            domain, params, planet, time: 0., bed, uplift, latitude, sea,
+            domain, params, planet, time: 0., bed, uplift, latitude, sea, vents,
+            sediment: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
             ice: vec![0.; n], drainage: vec![0.; n], sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
         t.drainage = t.route().area;
         t
     }
 
-    /// Cells that are base level: the sea, and a patch's edge.
+    /// Cells that are base level: the sea, and a patch's edge. (A volcano that rises out of
+    /// the sea becomes land.)
     pub fn outlets(&self) -> Vec<bool> {
-        (0..self.domain.len()).map(|i| self.domain.boundary[i] || self.sea[i]).collect()
+        (0..self.domain.len()).map(|i| self.domain.boundary[i] || (self.sea[i] && self.bed[i] < 0.)).collect()
+    }
+
+    /// Elevation of the top of the bedrock, beneath sediment and lava, metres.
+    pub fn bedrock(&self, i: usize) -> f64 {
+        self.bed[i] - self.sediment[i] - self.lava[i]
+    }
+
+    /// Erodibility of the material exposed at each cell, relative to average bedrock.
+    pub fn erodibility(&self) -> Vec<f64> {
+        (0..self.domain.len()).map(|i| {
+            if self.sediment[i] > 0.5 { self.params.sediment_erodibility }
+            else if self.lava[i] > 0.5 { self.params.lava_erodibility }
+            else { self.planet.erodibility(&self.domain.dirs[i], self.bedrock(i)) }
+        }).collect()
+    }
+
+    /// Update the layers for the change of ground from `before`: ground gained is sediment;
+    /// ground lost is taken from the sediment, then the lava, then the bedrock.
+    fn record(&mut self, before: &[f64]) {
+        for (((b, b0), sediment), lava) in self.bed.iter().zip(before).zip(&mut self.sediment).zip(&mut self.lava) {
+            let change = b - b0;
+            if change >= 0. {
+                *sediment += change;
+            } else {
+                let mut loss = -change;
+                let s = loss.min(*sediment);
+                *sediment -= s;
+                loss -= s;
+                *lava -= loss.min(*lava);
+            }
+        }
     }
 
     pub fn surface(&self) -> Vec<f64> {
@@ -139,20 +206,41 @@ impl Terrain {
             if !f { *b += u * dt; }
         }
 
+        if let Some(v) = &self.params.volcano {
+            erupt(&self.domain, &self.vents, v, self.time, dt, &mut self.bed, &mut self.lava, &fixed);
+        }
+
+        // Sediment glaciers erode is carried off by their meltwater, into the rivers.
+        let mut glacial = vec![0.; self.domain.len()];
         if let Some(g) = self.params.glacier.clone() {
-            self.glaciate(&g, &fixed, dt);
+            glacial = self.glaciate(&g, &fixed, dt);
         }
 
         let flow = self.route();
-        let erodibility: Vec<f64> = self.ice.iter().map(|&h| if h < ICE_FREE { 1. } else { 0. }).collect();
-        incise(&flow, &mut self.bed, &fixed, &erodibility, &self.params.fluvial, dt);
+        let surface = self.surface();
+        // Lakes are where water stands over the surface, but not those dammed only by ice: a
+        // glacier across a valley can hold up a lake kilometres deep, which would otherwise
+        // trap the glacier's sediment to that depth.
+        let ice_free = route(&self.domain, &self.bed, &fixed, &vec![1.; self.domain.len()]);
+        let lake: Vec<f64> = (0..self.domain.len())
+            .map(|i| (flow.filled[i] - surface[i]).min(ice_free.filled[i] - self.bed[i]).max(0.)).collect();
+        let erodibility: Vec<f64> = self.erodibility().iter().zip(&self.ice)
+            .map(|(&k, &h)| if h < ICE_FREE { k } else { 0. }).collect();
+        let before = self.bed.clone();
+        self.sediment_flux = erode_and_deposit(&self.domain, &flow, &mut self.bed, &fixed, &erodibility, &lake, &glacial, &self.params.fluvial, dt);
+        self.record(&before);
+        let before = self.bed.clone();
         diffuse(&self.domain, &mut self.bed, &fixed, self.params.fluvial.diffusivity, dt);
+        self.record(&before);
         self.drainage = flow.area;
         self.time += dt;
     }
 
-    fn glaciate(&mut self, g: &GlacierParams, fixed: &[bool], dt: f64) {
+    /// Returns the rate glaciers eroded each cell over the step, m³/yr.
+    fn glaciate(&mut self, g: &GlacierParams, fixed: &[bool], dt: f64) -> Vec<f64> {
         let n = self.domain.len();
+        let start = self.bed.clone();
+        let erodibility = self.erodibility();
         // Ice flows for dt / acceleration years, and erodes as if for dt.
         let ice_time = dt / g.acceleration;
         let mut done = 0.;
@@ -165,13 +253,16 @@ impl Terrain {
             // Nothing to do while it is too warm for ice anywhere.
             if balance.iter().all(|&m| m <= 0.) && self.ice.iter().all(|&h| h <= 0.) { break; }
             let step = flow_ice(&self.domain, g, &self.bed, &mut self.ice, &balance, fixed, (ice_time - done).min(g.max_step));
-            erode(g, &mut self.bed, &step.sliding, fixed, step.dt * g.acceleration);
+            let before = self.bed.clone();
+            erode(g, &mut self.bed, &step.sliding, &erodibility, fixed, step.dt * g.acceleration);
+            self.record(&before);
             for (m, s) in mean_sliding.iter_mut().zip(&step.sliding) { *m += s * step.dt / ice_time; }
             done += step.dt;
             self.ice_steps += 1;
             self.ice_iterations += step.iterations;
         }
         self.sliding = mean_sliding;
+        (0..n).map(|i| (start[i] - self.bed[i]).max(0.) * self.domain.area[i] / dt).collect()
     }
 }
 
@@ -210,6 +301,8 @@ mod tests {
     fn test_rivers_cut_valleys() {
         let mut params = TerrainParams::default();
         params.glacier = None;
+        params.volcano = None;
+        params.fluvial.deposition = 0.;
         params.fluvial.k = 1e-4;
         params.step = 1000.;
         let planet = Planet::new(params.planet.clone());

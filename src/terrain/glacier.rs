@@ -423,11 +423,12 @@ fn conjugate_gradient(apply: &dyn Fn(&[f64], &mut [f64]), precondition: &dyn Fn(
     max_iter
 }
 
-/// Lower the bed under sliding ice for `dt` years.
-pub fn erode(p: &GlacierParams, bed: &mut [f64], sliding: &[f64], fixed: &[bool], dt: f64) {
+/// Lower the bed under sliding ice for `dt` years; `erodibility` scales K_g per cell (for the
+/// rock exposed there).
+pub fn erode(p: &GlacierParams, bed: &mut [f64], sliding: &[f64], erodibility: &[f64], fixed: &[bool], dt: f64) {
     for i in 0..bed.len() {
         if !fixed[i] {
-            bed[i] -= p.erosion * sliding[i].powf(p.erosion_exponent) * dt;
+            bed[i] -= p.erosion * erodibility[i] * sliding[i].powf(p.erosion_exponent) * dt;
         }
     }
 }
@@ -509,7 +510,7 @@ mod tests {
     fn test_erosion_follows_sliding() {
         let p = GlacierParams::default();
         let mut bed = vec![100.; 3];
-        erode(&p, &mut bed, &[0., 100., 100.], &[false, false, true], 1000.);
+        erode(&p, &mut bed, &[0., 100., 100.], &[1.; 3], &[false, false, true], 1000.);
         assert_eq!(bed, vec![100., 100. - 1e-4 * 100. * 1000., 100.]);
     }
 }

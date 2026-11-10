@@ -4,6 +4,10 @@ use crate::noise::{PerlinNoise, WorleyNoise, combined_noise};
 
 pub trait Medium : Sync{
     fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send); 
+
+    /// The normal to shade with at `pt`, given the surface's: the same, unless the surface is
+    /// bump mapped (see `bump::Bumped`).
+    fn normal_at(&self, _pt: &Vector3<f64>, normal: &Vector3<f64>) -> Vector3<f64> { *normal }
 }
 
 pub struct Solid {

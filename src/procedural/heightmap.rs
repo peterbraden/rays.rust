@@ -483,6 +483,21 @@ mod tests {
     }
 
     #[test]
+    fn test_image_heightmap_interpolates() {
+        // 2 x 2: black, white on the first row (low z); white, white on the second.
+        let path = std::env::temp_dir().join(format!("rays-heightmap-test-{}.png", std::process::id()));
+        image::GrayImage::from_raw(2, 2, vec![0, 255, 255, 255]).unwrap().save(&path).unwrap();
+        let h = ImageHeight::from_file(path.to_str().unwrap(), (0., 0.), (2., 4.), 1., 3.);
+        std::fs::remove_file(&path).unwrap();
+        assert!((h.height(0., 0.) - 1.).abs() < 1e-9);
+        assert!((h.height(2., 0.) - 4.).abs() < 1e-9);
+        assert!((h.height(1., 0.) - 2.5).abs() < 1e-9);
+        assert!((h.height(0., 4.) - 4.).abs() < 1e-9);
+        // Outside the image: the nearest edge.
+        assert!((h.height(-5., -5.) - 1.).abs() < 1e-9);
+    }
+
+    #[test]
     fn test_walk_visits_cells_in_order() {
         let grid = Grid2 { min: (0., 0.), cell: 1., nx: 4, nz: 4 };
         let r = Ray { ro: Vector3::new(0.5, 0., 0.5), rd: Vector3::new(1., 0., 0.55) };

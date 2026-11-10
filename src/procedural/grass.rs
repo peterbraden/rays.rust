@@ -13,7 +13,8 @@
 //! ```
 //!
 //! - `heightmap`: as for `terrain`; use the same one so the grass sits on the ground
-//! - `density`: blades per square metre (default 600)
+//! - `density`: blades per square metre (default 600). Short grass needs many to cover the
+//!   ground: a lawn looks like turf from about 5000
 //! - `min`, `max`: [x, z] corners of the area to grow in (default: the whole heightmap)
 //! - `seed`: the same seed gives the same field
 //! - `material`: render every blade with this scene material instead (eg. for debugging)

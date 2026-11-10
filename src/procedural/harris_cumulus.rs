@@ -1055,3 +1055,65 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod diagnostics {
+    use super::*;
+
+    /// Prints a profile of a cached state: `HARRIS_STATE=<file> cargo test --release harris_profile -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn harris_profile() {
+        let path = std::env::var("HARRIS_STATE").expect("HARRIS_STATE");
+        let sim = CloudSimulation::load(SimulationParams::default(), std::path::Path::new(&path)).unwrap();
+        let (nx, ny, nz) = sim.params.size;
+        let slab = nx * nz;
+        eprintln!("t = {}", sim.time);
+        for j in (0..ny).step_by(2) {
+            let r = j * slab..(j + 1) * slab;
+            let mean = |f: &Field| f.data[r.clone()].iter().sum::<f64>() / slab as f64;
+            let cloudy = sim.cloud.data[r.clone()].iter().filter(|q| **q > 1e-5).count() as f64 / slab as f64;
+            let qs = saturation_mixing_ratio(mean(&sim.theta) * sim.exner[j], sim.pressure[j]);
+            let wmax = sim.v.data[r.clone()].iter().cloned().fold(f64::MIN, f64::max);
+            eprintln!("z {:5.0}  θ' {:+.2}  qv {:.2} g/kg  RH {:.2}  cloud {:.2}  qc max {:.2} g/kg  w max {:.1}",
+                (j as f64 + 0.5) * sim.params.cell, mean(&sim.theta) - sim.theta_env[j], mean(&sim.vapour) * 1e3,
+                mean(&sim.vapour) / qs, cloudy, sim.cloud.data[r.clone()].iter().cloned().fold(0., f64::max) * 1e3, wmax);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tuning {
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn harris_tune() {
+        let cases: Vec<(&str, f64, f64, f64, f64)> = vec![
+            // name, lapse K/km, inversion m, inversion strength K, heat flux
+            ("4.5/2200/4/200", 4.5, 2200., 4., 200.),
+            ("5/2200/4/200", 5., 2200., 4., 200.),
+            ("4/2000/5/150", 4., 2000., 5., 150.),
+        ];
+        rayon::ThreadPoolBuilder::new().build().unwrap().install(|| {
+            for (name, lapse, inv, strength, flux) in cases {
+                let mut p = SimulationParams { size: (64, 40, 64), cell: 100., ..SimulationParams::default() };
+                p.atmosphere.lapse = lapse * 1e-3;
+                p.atmosphere.inversion = inv;
+                p.atmosphere.inversion_strength = strength;
+                p.heat_flux = flux;
+                let mut sim = CloudSimulation::new(p);
+                for minutes in [10., 20., 30., 40., 50., 60.] {
+                    sim.advance_to(minutes * 60., |_| {});
+                    let (nx, ny, nz) = p.size;
+                    let slab = nx * nz;
+                    let cover = (0..slab).filter(|n| (0..ny).any(|j| sim.cloud.data[j * slab + n] > 1e-5)).count() as f64 / slab as f64;
+                    let top = (0..ny).rev().find(|j| sim.cloud.data[j * slab..(j + 1) * slab].iter().any(|q| *q > 1e-5)).map(|j| (j as f64 + 0.5) * p.cell);
+                    let wmax = sim.v.data.iter().cloned().fold(f64::MIN, f64::max);
+                    eprintln!("{} t {:3.0} min: cover {:.2} base {:?} top {:?} w {:.1} qc {:.2} g/kg", name, minutes, cover, sim.cloud_base(), top, wmax,
+                        sim.cloud.data.iter().cloned().fold(0., f64::max) * 1e3);
+                }
+            }
+        });
+    }
+}

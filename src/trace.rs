@@ -4,6 +4,7 @@ use crate::ray::Ray;
 use crate::scene::{Scene, PathTermination};
 use crate::geometry::rand;
 use crate::intersection::Intersection;
+use crate::light::SUN_SHADOW_DISTANCE;
 use std::f64;
 
 // Returns num rays cast, Color
@@ -13,14 +14,20 @@ pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
 }
 
 /// Trace a ray. `after_light_sampling` is set for a ray scattered from a surface that has just
-/// sampled the area lights directly; their emission is then already counted, and is ignored if
-/// this ray hits one.
+/// sampled the lights directly (the area lights and the sun); their emission is then already
+/// counted, and is ignored if this ray hits one, or sees the sun.
 fn trace_from(r: &Ray, depth: u64, s: &Scene, after_light_sampling: bool) -> (u64, Color) {
     let closest = s.objects.nearest_intersection(r, f64::INFINITY, 0f64);
+    // Nothing in the way, or only the skysphere, infinitely far off: the ray reaches the sky.
+    let reaches_sky = closest.as_ref().is_none_or(|x| x.dist >= SUN_SHADOW_DISTANCE);
 
-    match closest {
+    let (cast, color) = match closest {
         Some(x) => trace_intersection(r, x, depth, s, after_light_sampling),
         None => (1, s.render.background.radiance(&r.rd)),
+    };
+    match &s.sun {
+        Some(sun) if reaches_sky && !after_light_sampling => (cast, color + sun.disc_radiance(&r.ro, &r.rd.normalize())),
+        _ => (cast, color),
     }
 }
 
@@ -446,6 +453,54 @@ mod tests {
     }
 
     #[test]
+    fn test_camera_sees_the_sun_disc() {
+        let s = sunlit(r#"{ "direction": [0, 1, 0], "intensity": 3 }"#, "");
+        let sun = s.sun.as_ref().unwrap();
+        let up = Ray { ro: Vector3::new(0., 1., 0.), rd: Vector3::new(0., 1., 0.) };
+        let c = trace(&up, 0, &s).1;
+        assert!((c.rgb.x - sun.disc_radiance(&up.ro, &up.rd).rgb.x).abs() < 1e-9);
+        // The centre, limb-darkened: E / Ω / (1 - u/3).
+        let omega = 2. * std::f64::consts::PI * (1. - sun.angular_radius.cos());
+        assert!((c.rgb.x - 3. / omega / 0.8).abs() < 1e-6 * c.rgb.x, "{}", c.rgb.x);
+        // Just off the disc, nothing.
+        let off = Ray { ro: up.ro, rd: Vector3::new((2. * sun.angular_radius).sin(), (2. * sun.angular_radius).cos(), 0.) };
+        assert_eq!(trace(&off, 0, &s).1, Color::black());
+    }
+
+    #[test]
+    fn test_sun_disc_is_not_counted_twice() {
+        // A diffuse floor samples the sun directly; its bounce rays that then see the (here
+        // huge) disc must ignore it. With a black sky, every bounce adds nothing.
+        let s = SceneFile::from_string(r#"{
+            "background": [0, 0, 0], "max_depth": 3, "shadow_bias": 0.0001,
+            "sun": { "direction": [0, 1, 0.3], "intensity": 2, "angular_radius": 20 },
+            "camera": { "location": [0, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
+            "materials": { "M": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } },
+            "objects": [ { "type": "plane", "y": 0, "material": "M" } ]
+        }"#.to_string());
+        let direct = 0.5 / std::f64::consts::PI * 2. * Vector3::new(0., 1., 0.3).normalize().y;
+        for _ in 0..200 {
+            assert!((trace_down(&s).rgb.x - direct).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn test_mirror_reflects_the_sun() {
+        let s = SceneFile::from_string(r#"{
+            "background": [0, 0, 0], "max_depth": 2, "shadow_bias": 0.0001,
+            "sun": { "direction": [0, 1, 1], "intensity": 2 },
+            "camera": { "location": [0, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
+            "materials": { "M": { "type": "metal", "reflective": [0.5, 0.5, 0.5], "roughness": 0 } },
+            "objects": [ { "type": "plane", "y": 0, "material": "M" } ]
+        }"#.to_string());
+        let sun = s.sun.as_ref().unwrap();
+        let towards = Ray { ro: Vector3::new(0., 1., -1.), rd: Vector3::new(0., -1., 1.).normalize() };
+        let seen = trace(&towards, 0, &s).1.rgb.x;
+        let disc = sun.disc_radiance(&Vector3::zeros(), &sun.direction).rgb.x;
+        assert!((seen - 0.5 * disc).abs() < 1e-6 * disc, "{} vs {}", seen, 0.5 * disc);
+    }
+
+    #[test]
     fn test_sun_follows_the_sky() {
         let at = |dir: &str| SceneFile::parse_sun(
             &serde_json::json!({ "intensity": 1 }),
@@ -456,11 +511,16 @@ mod tests {
         assert!((high.direction - Vector3::new(0., 1., 0.)).norm() < 1e-12);
         assert!((low.direction - Vector3::new(0., 0.05, 1.).normalize()).norm() < 1e-12);
         // The atmosphere dims the sun, and dims a low sun more, and its blue most of all.
-        let [hr, hg, hb] = [high.irradiance.rgb.x, high.irradiance.rgb.y, high.irradiance.rgb.z];
-        let [lr, _, lb] = [low.irradiance.rgb.x, low.irradiance.rgb.y, low.irradiance.rgb.z];
+        let ground = Vector3::zeros();
+        let (high_e, low_e) = (high.irradiance_at(&ground), low.irradiance_at(&ground));
+        let [hr, hg, hb] = [high_e.rgb.x, high_e.rgb.y, high_e.rgb.z];
+        let [lr, _, lb] = [low_e.rgb.x, low_e.rgb.y, low_e.rgb.z];
         assert!(hr < 1. && hb < hg && hg < hr, "{:?}", high);
         assert!(lr < hr && lb / lr < hb / hr, "high {:?} low {:?}", high, low);
-        assert_eq!(at("[0, -1, 0]").irradiance, Color::black());
+        assert_eq!(at("[0, -1, 0]").irradiance_at(&ground), Color::black());
+        // Higher up there is less air to cross: brighter, and whiter.
+        let cloud = low.irradiance_at(&Vector3::new(0., 9000., 0.));
+        assert!(cloud.rgb.z > 1.5 * lb && cloud.rgb.z / cloud.rgb.x > lb / lr, "{:?} vs {:?}", cloud, low_e);
     }
 
     #[test]

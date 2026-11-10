@@ -10,7 +10,7 @@ use crate::shapes::transform::{Transform};
 use crate::na::Rotation3;
 use crate::ocean::create_ocean;
 use crate::shapes::bbox::BBox;
-use crate::light::{Light, Sun};
+use crate::light::{Light, Sun, ALTITUDE_STEP, ALTITUDE_STEPS};
 use crate::color::Color;
 use crate::skysphere::{create_sky_sphere, parse_sky_material};
 use crate::procedural::box_terrain::create_box_terrain;
@@ -1006,11 +1006,14 @@ impl SceneFile {
         l
     }
 
-    /// The scene's directional light: `{"direction": [x, y, z], "color": colour, "intensity": E}`,
-    /// with irradiance `color` × `intensity` (defaults white and 1) on a surface facing it, and
-    /// `direction` pointing towards it. With a skysphere in `objects`, the sun is the sky's:
-    /// it takes the sky's `sun_direction` (so `direction` is not allowed) and is reddened by the
-    /// sky's atmosphere on its way to the ground, so it sets orange as the sky does.
+    /// The scene's directional light: `{"direction": [x, y, z], "color": colour, "intensity": E,
+    /// "angular_radius": degrees}`, with irradiance `color` × `intensity` (defaults white and
+    /// 1) on a surface facing it, `direction` pointing towards it, and a visible disc of the
+    /// given radius (default the sun's, 0.2666°). With a skysphere in `objects`, the sun is the
+    /// sky's: it takes the sky's `sun_direction` (so `direction` is not allowed), `intensity`
+    /// is its irradiance above the atmosphere, and it is reddened by the sky's atmosphere on
+    /// its way down to each point, according to the point's altitude (scene y, in metres), so
+    /// it is whiter at cloud level than on the ground, and sets orange as the sky does.
     pub fn parse_sun(v: &Value, objects: &[Value]) -> Option<Sun> {
         if v.is_null() {
             return None;
@@ -1022,16 +1025,24 @@ impl SceneFile {
                 assert!(v.get("direction").is_none(),
                     "The sun follows the skysphere's sun_direction; remove the sun's \"direction\"");
                 let sky = parse_sky_material(sky);
-                let t = sky.sun_transmittance();
-                Some(Sun { direction: sky.sun_direction(), irradiance: irradiance * Color::new(t.x, t.y, t.z) })
+                let atmosphere = (0..ALTITUDE_STEPS).map(|i| {
+                    let t = sky.sun_transmittance_at(i as f64 * ALTITUDE_STEP);
+                    Color::new(t.x, t.y, t.z)
+                }).collect();
+                Some(Sun { atmosphere: Some(atmosphere), ..Sun::new(sky.sun_direction(), irradiance) })
             },
             None => {
                 let d = v.get("direction").map(SceneFile::parse_vec3)
                     .expect("A sun without a skysphere needs a \"direction\"");
                 assert!(d.norm() > 0., "The sun's direction must not be zero");
-                Some(Sun { direction: d.normalize(), irradiance })
+                Some(Sun::new(d, irradiance))
             },
-        }
+        }.map(|mut sun| {
+            if let Some(r) = v.get("angular_radius") {
+                sun.angular_radius = SceneFile::parse_number(r, 0.).to_radians().max(1e-6);
+            }
+            sun
+        })
     }
 
     /// A colour (black if absent), or `{"type": "gradient", "bottom": colour, "top": colour}`.

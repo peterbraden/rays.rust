@@ -474,8 +474,8 @@ impl VolumeMaterial {
         if let Some(sun) = &s.sun {
             let sun_phase = self.sun_phase(phase, incoming, s, scatterings);
             direct = direct + match self.approximation.oz {
-                None => sun.irradiance * sun_phase * sun.transmittance_from(point, s),
-                Some(oz) if scatterings == 0 => sun.irradiance * self.oz_sunlight(&oz, sun_phase, incoming, point, s),
+                None => sun.irradiance_at(point) * sun_phase * sun.transmittance_from(point, s),
+                Some(oz) if scatterings == 0 => sun.irradiance_at(point) * self.oz_sunlight(&oz, sun_phase, incoming, point, s),
                 // Already counted, octaves and all, at the path's first scattering.
                 Some(_) => Color::black(),
             };

@@ -19,7 +19,7 @@
     "angle": 0.9
   },
 
-  "sun": { "intensity": 4 },
+  "sun": { "intensity": 4.9 },
 
   "objects": [
     { "type": "plane", "y": 0, "material": "GROUND" },

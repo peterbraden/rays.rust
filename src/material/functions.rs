@@ -132,7 +132,7 @@ pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) ->
         let cos = sun.direction.dot(&intersection.normal);
         if cos > 0. {
             let transmitted = sun.transmittance_from(&intersection.point, s);
-            direct = direct + albedo * sun.irradiance * (cos / std::f64::consts::PI * transmitted);
+            direct = direct + albedo * sun.irradiance_at(&intersection.point) * (cos / std::f64::consts::PI * transmitted);
         }
     }
     if s.render.sample_lights {

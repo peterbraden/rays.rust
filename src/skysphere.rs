@@ -471,13 +471,13 @@ impl SkyMaterial {
         self.sun_direction
     }
 
-    /// The fraction of sunlight (per colour channel) that reaches the ground, just above the
-    /// top of the earth, through the atmosphere: exp(-τ), with the same optical depths and
-    /// extinction as `scattering` uses for light reaching each point it samples. None of it
-    /// when the sun is below the horizon.
-    pub fn sun_transmittance(&self) -> Vector3<f64> {
-        let ground = self.earth.center + Vector3::new(0., self.earth.radius + 1., 0.);
-        match self.optical_depth_to_sun(ground) {
+    /// The fraction of sunlight (per colour channel) that reaches `altitude` above the top of
+    /// the earth through the atmosphere: exp(-τ), with the same optical depths and extinction
+    /// as `scattering` uses for light reaching each point it samples. None of it when the earth
+    /// is in the way.
+    pub fn sun_transmittance_at(&self, altitude: f64) -> Vector3<f64> {
+        let point = self.earth.center + Vector3::new(0., self.earth.radius + altitude.max(1.), 0.);
+        match self.optical_depth_to_sun(point) {
             Some((r, m)) => {
                 let tau = self.rayleigh_coefficients * r + Vector3::repeat(self.mie_coefficient * 1.1 * m);
                 tau.map(|t| (-t).exp())

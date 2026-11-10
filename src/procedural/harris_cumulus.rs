@@ -50,6 +50,8 @@ const KAPPA: f64 = RD / CP;
 /// beneath the inversion.
 const RAIN_THRESHOLD: f64 = 1e-3;
 const RAIN_RATE: f64 = 1e-3;
+/// Smagorinsky's constant, C_s.
+const SMAGORINSKY: f64 = 0.18;
 /// Height (m) over which the surface layer's turbulent mixing fades.
 const MIXING_DEPTH: f64 = 300.;
 /// Density of air near the ground, kg/m³, for turning fluxes into rates.
@@ -210,7 +212,7 @@ impl Default for SimulationParams {
             cell: 100.,
             sounding: Sounding::arm(),
             forcing: Forcing::arm(),
-            patchiness: 0.5,
+            patchiness: 0.3,
             patch_size: 1500.,
             patch_period: 1800.,
             wind: Vector2::new(10., 0.),
@@ -476,6 +478,100 @@ impl CloudSimulation {
         });
     }
 
+    /// Velocity gradients at the cells' centres, from the centred velocity: [d/dx, d/dy, d/dz]
+    /// of (u, v, w).
+    fn velocity_gradients(&self) -> Vec<[Vector3<f64>; 3]> {
+        let (nx, ny, nz) = self.params.size;
+        let h = self.params.cell;
+        let centre = |i: i64, j: usize, k: i64| {
+            let (i0, k0) = (i.rem_euclid(nx as i64) as usize, k.rem_euclid(nz as i64) as usize);
+            let (i1, k1) = ((i0 + 1) % nx, (k0 + 1) % nz);
+            Vector3::new(
+                0.5 * (self.u.at(i0, j, k0) + self.u.at(i1, j, k0)),
+                0.5 * (self.v.at(i0, j, k0) + self.v.at(i0, j + 1, k0)),
+                0.5 * (self.w.at(i0, j, k0) + self.w.at(i0, j, k1)),
+            )
+        };
+        (0..nx * ny * nz).into_par_iter().map(|n| {
+            let (i, j, k) = ((n % nx) as i64, n / (nx * nz), ((n / nx) % nz) as i64);
+            let (up, down) = ((j + 1).min(ny - 1), j.saturating_sub(1));
+            [
+                (centre(i + 1, j, k) - centre(i - 1, j, k)) / (2. * h),
+                (centre(i, up, k) - centre(i, down, k)) / ((up - down) as f64 * h),
+                (centre(i, j, k + 1) - centre(i, j, k - 1)) / (2. * h),
+            ]
+        }).collect()
+    }
+
+    /// Turbulence finer than the grid (Smagorinsky's model): an eddy viscosity
+    /// ν = (C_s Δ)² |S|, from the strain rate |S| = √(2 S_ij S_ij), diffuses momentum, and heat
+    /// and water (three times as fast: a turbulent Prandtl number of 1/3). It takes away the
+    /// energy that would cascade to smaller eddies; without it the flow keeps all the work the
+    /// buoyancy does, and over an hour runs several times too fast.
+    fn subgrid(&mut self, dt: f64) {
+        let (nx, ny, nz) = self.params.size;
+        let h = self.params.cell;
+        let slab = nx * nz;
+        let grads = self.velocity_gradients();
+        // Stable for explicit diffusion: dt K / h² under 1/6 for the scalars' K = 3ν.
+        let limit = h * h / (6. * 3. * dt);
+        let nu: Vec<f64> = grads.par_iter().map(|g| {
+            // g[a][b] = d u_b / d x_a.
+            let mut s2 = 0.;
+            for a in 0..3 {
+                for b in 0..3 {
+                    let sab = 0.5 * (g[a][b] + g[b][a]);
+                    s2 += sab * sab;
+                }
+            }
+            ((SMAGORINSKY * h).powi(2) * (2. * s2).sqrt()).min(limit)
+        }).collect();
+        let c = |i: usize, j: usize, k: usize| i + nx * (k + nz * j);
+        let tau = dt / (h * h);
+        // Momentum: ν (at the face) times the Laplacian; free slip at the ground and the top.
+        let diffuse_velocity = |f: &Field, nu_face: &(dyn Fn(usize, usize, usize) -> f64 + Sync), vertical: bool| -> Vec<f64> {
+            (0..f.data.len()).into_par_iter().map(|n| {
+                let (i, j, k) = (n % nx, n / slab, (n / nx) % nz);
+                let x = f.data[n];
+                if vertical && (j == 0 || j == ny) {
+                    return x;
+                }
+                let at = |i: usize, j: usize, k: usize| f.data[i + nx * (k + nz * j)];
+                let (ip, im, kp, km) = ((i + 1) % nx, (i + nx - 1) % nx, (k + 1) % nz, (k + nz - 1) % nz);
+                let (jp, jm) = ((j + 1).min(f.sy - 1), j.saturating_sub(1));
+                let lap = at(ip, j, k) + at(im, j, k) + at(i, j, kp) + at(i, j, km) + at(i, jp, k) + at(i, jm, k) - 6. * x;
+                x + tau * nu_face(i, j, k) * lap
+            }).collect()
+        };
+        let nu_u = |i: usize, j: usize, k: usize| 0.5 * (nu[c((i + nx - 1) % nx, j, k)] + nu[c(i, j, k)]);
+        let nu_w = |i: usize, j: usize, k: usize| 0.5 * (nu[c(i, j, (k + nz - 1) % nz)] + nu[c(i, j, k)]);
+        let nu_v = |i: usize, j: usize, k: usize| 0.5 * (nu[c(i, j - 1, k)] + nu[c(i, j.min(ny - 1), k)]);
+        let u = diffuse_velocity(&self.u, &nu_u, false);
+        let w = diffuse_velocity(&self.w, &nu_w, false);
+        let v = diffuse_velocity(&self.v, &nu_v, true);
+        self.u.data = u;
+        self.v.data = v;
+        self.w.data = w;
+        // Heat and water: fluxes between cells with K = 3ν at the face; none through the
+        // ground or the top (the ground's own fluxes come in separately).
+        for f in [&mut self.theta, &mut self.vapour, &mut self.cloud] {
+            let old = f.data.clone();
+            f.data.par_iter_mut().enumerate().for_each(|(n, x)| {
+                let (i, j, k) = (n % nx, n / slab, (n / nx) % nz);
+                let here = old[n];
+                let mut change = 0.;
+                let mut flux = |m: usize| change += 1.5 * (nu[n] + nu[m]) * (old[m] - here);
+                flux(c((i + 1) % nx, j, k));
+                flux(c((i + nx - 1) % nx, j, k));
+                flux(c(i, j, (k + 1) % nz));
+                flux(c(i, j, (k + nz - 1) % nz));
+                if j + 1 < ny { flux(c(i, j + 1, k)); }
+                if j > 0 { flux(c(i, j - 1, k)); }
+                *x = here + tau * change;
+            });
+        }
+    }
+
     /// Each level's mean of `f`.
     fn level_means(&self, f: &Field) -> Vec<f64> {
         let slab = f.sx * f.sz;
@@ -680,6 +776,7 @@ impl CloudSimulation {
         let vapour = self.advect(&self.vapour, dt, false);
         let cloud = self.advect(&self.cloud, dt, false);
         (self.u, self.v, self.w, self.theta, self.vapour, self.cloud) = (u, v, w, theta, vapour, cloud);
+        self.subgrid(dt);
         self.surface_fluxes(dt);
         self.surface_mixing(dt);
         self.large_scale(dt);
@@ -1244,6 +1341,35 @@ mod diagnostics {
         for half_hours in 1..=24 {
             sim.advance_to(half_hours as f64 * 1800., |_| {});
             report(&sim);
+        }
+    }
+}
+
+#[cfg(test)]
+mod dry_convection {
+    use super::*;
+
+    /// A dry convective boundary layer, against w* scaling:
+    /// `cargo test --release harris_dry -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn harris_dry() {
+        for (vort, patch) in [(0.01, 0.5), (0., 0.)] {
+            let mut p = SimulationParams { size: (64, 30, 64), cell: 100., wind: Vector2::zeros(), vorticity: vort, patchiness: patch, ..SimulationParams::default() };
+            p.sounding = Sounding { theta: Profile::new(&[0., 3000.], &[300., 309.]), water: Profile::constant(1e-5), surface_pressure: 1e5 };
+            p.forcing = Forcing::steady(150., 0.);
+            let mut sim = CloudSimulation::new(p);
+            for minutes in [10., 20., 30., 45., 60.] {
+                sim.advance_to(minutes * 60., |_| {});
+                let means = sim.level_means(&sim.theta);
+                // Mixed layer top: where θ first exceeds the surface layer's mean by 0.5 K... use the
+                // height of the largest θ gradient above the lowest levels.
+                let zi = (2..means.len() - 1).max_by(|a, b| (means[a + 1] - means[*a]).partial_cmp(&(means[b + 1] - means[*b])).unwrap()).unwrap() as f64 * 100.;
+                let wmax = sim.v.data.iter().cloned().fold(f64::MIN, f64::max);
+                let rms = (sim.v.data.iter().map(|v| v * v).sum::<f64>() / sim.v.data.len() as f64).sqrt();
+                let wstar = (GRAVITY / 300. * 150. / (AIR_DENSITY * CP) * zi).cbrt();
+                eprintln!("vort {} patch {} t {:2.0} min: zi {:.0} w* {:.2} w max {:.2} rms {:.2} steps {}", vort, patch, minutes, zi, wstar, wmax, rms, sim.steps);
+            }
         }
     }
 }

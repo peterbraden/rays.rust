@@ -15,6 +15,7 @@ use crate::color::Color;
 use crate::skysphere::create_sky_sphere;
 use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
+use crate::procedural::tree;
 use crate::participatingmedia::create_fog;
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
@@ -180,6 +181,10 @@ impl SceneFile {
     pub fn parse_objects(objs: Vec<Value>, materials: &Map<String, Value>, media: &Map<String, Value>) ->Vec<Arc<SceneObject>> {
          let mut objects: Vec<Arc<SceneObject>> = Vec::new();
          for obj in objs {
+            if obj["type"] == "tree" {
+                objects.extend(SceneFile::parse_tree(&obj, materials));
+                continue;
+            }
             if let Some(x) = SceneFile::parse_object(obj, materials, media) { objects.push(x) }
          }
          objects
@@ -243,6 +248,38 @@ impl SceneFile {
         panic!("Unknown Object");
         //return None
     }
+    /// `{"type": "tree", "species": "quaking-aspen", "seed": 0, "location": [x, y, z],
+    /// "bark": material, "leaves": material, "params": {...}}`: a procedural tree (see
+    /// `crate::procedural::tree`), as two objects, its bark and its leaves. `params` overrides the
+    /// species' parameters. Without materials, the bark is grey-brown and the leaves green.
+    pub fn parse_tree(o: &Value, materials: &Map<String, Value>) -> Vec<Arc<SceneObject>> {
+        let species = o.get("species").map_or("quaking-aspen".to_string(), SceneFile::parse_string);
+        let p = tree::params(&species, &o["params"]);
+        let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
+        let mesh = tree::generate(&p, seed, SceneFile::parse_vec3_def(o, "location", Vector3::zeros()));
+        let material = |key: &str, default: Color| -> Box<dyn Medium + Sync + Send> {
+            let m: Box<dyn MaterialModel + Sync + Send> = match o.get(key) {
+                Some(k) => SceneFile::require_material(k, materials, &format!("tree {}", key)),
+                None => Box::new(Lambertian { albedo: default }),
+            };
+            Box::new(Solid { m })
+        };
+        let mut objects = vec![];
+        if !mesh.bark.is_empty() {
+            objects.push(Arc::new(SceneObject {
+                geometry: Box::new(tree::TriangleSet::new(&mesh.bark)),
+                medium: material("bark", Color::new(0.25, 0.2, 0.16)),
+            }));
+        }
+        if !mesh.leaves.is_empty() {
+            objects.push(Arc::new(SceneObject {
+                geometry: Box::new(tree::TriangleSet::new(&mesh.leaves)),
+                medium: material("leaves", Color::new(0.1, 0.3, 0.06)),
+            }));
+        }
+        objects
+    }
+
     pub fn parse_skysphere(o: &Value) -> SceneObject {
         create_sky_sphere(o)
     }
@@ -1044,6 +1081,27 @@ mod tests {
             ]
         }"#.to_string());
         assert_eq!(s.area_lights.len(), 1);
+    }
+
+    #[test]
+    fn test_tree_is_bark_and_leaves() {
+        let tree = |extra: &str| SceneFile::from_string(format!(r#"{{
+            "camera": {{ "location": [0, 1, -10], "lookat": [0, 1, 0], "up": [0, 1, 0], "angle": 0.5 }},
+            "materials": {{ "B": {{ "type": "lambertian", "albedo": [0.3, 0.2, 0.1] }} }},
+            "objects": [ {{ "type": "tree", "species": "shrub", "seed": 2, "location": [0, 0, 5], "bark": "B"{} }} ]
+        }}"#, extra));
+        let s = tree("");
+        assert_eq!(s.objects.len(), 2);
+        let b = s.objects.items()[0].bounds();
+        assert!(b.min.z > 2. && b.max.z < 8., "{:?}", b);
+        // Without leaves, only the bark.
+        assert_eq!(tree(r#", "params": { "leaves": 0 }"#).objects.len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unknown tree species")]
+    fn test_unknown_tree_species_names_them() {
+        SceneFile::parse_tree(&serde_json::json!({ "type": "tree", "species": "triffid" }), &Map::new());
     }
 
     #[test]

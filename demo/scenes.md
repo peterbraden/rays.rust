@@ -31,6 +31,15 @@ Norway spruces, a cedar of Lebanon and balsam firs. Trees of the same species di
 their seed.
 ![evergreens](./scenes/evergreens.png)
 
+Autumn: each tree's `"autumn"` parameter says how far through the season it is, and its `leaf`
+material gives autumn colours for shaded and sunlit leaves (`"autumn"`, `"autumn_sun"`) and a
+dead colour (`"dead"`). Exposed leaves at the top and outside of a crown turn and fall first.
+From left to right: a Lombardy poplar and a dead tree (`"dead_branches": 1`), a weeping willow
+just turning, quaking aspens, evergreens, a California black oak with some dead limbs, a black
+tupelo (scarlet in the sun, orange in shade) and, far right, an oak keeping its dead leaves
+(`"leaf_fall": 0.35`); red shrubs in front.
+![autumn](./scenes/autumn.png)
+
 ## Fireworks
 ![fireworks](./scenes/fireworks.png)
 

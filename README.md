@@ -29,7 +29,7 @@ Supports:
   - Skysphere with Rayleigh and Mie Scattering
   - Procedural Objects
     - Ocean (Tessendorf's algorithm with Phillips spectrum)
-    - Trees (Weber and Penn's parametric model, with presets for several species)
+    - Trees (Weber and Penn's parametric model, with presets for several species, autumn colours and dead branches)
     - Random Cubes
   - Multithreaded
   - Progressive rendering

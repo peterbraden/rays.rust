@@ -53,7 +53,7 @@ const RAIN_RATE: f64 = 1e-3;
 /// Smagorinsky's constant, C_s.
 const SMAGORINSKY: f64 = 0.18;
 /// Height (m) over which the surface layer's turbulent mixing fades.
-const MIXING_DEPTH: f64 = 300.;
+const MIXING_DEPTH: f64 = 100.;
 /// Density of air near the ground, kg/m³, for turning fluxes into rates.
 const AIR_DENSITY: f64 = 1.15;
 
@@ -507,7 +507,9 @@ impl CloudSimulation {
     /// ν = (C_s Δ)² |S|, from the strain rate |S| = √(2 S_ij S_ij), diffuses momentum, and heat
     /// and water (three times as fast: a turbulent Prandtl number of 1/3). It takes away the
     /// energy that would cascade to smaller eddies; without it the flow keeps all the work the
-    /// buoyancy does, and over an hour runs several times too fast.
+    /// buoyancy does, and over an hour runs several times too fast. In stable air it fades
+    /// (Lilly's correction), as real turbulence does: otherwise it would diffuse the boundary
+    /// layer's moisture up into the dry air above it.
     fn subgrid(&mut self, dt: f64) {
         let (nx, ny, nz) = self.params.size;
         let h = self.params.cell;
@@ -515,7 +517,15 @@ impl CloudSimulation {
         let grads = self.velocity_gradients();
         // Stable for explicit diffusion: dt K / h² under 1/6 for the scalars' K = 3ν.
         let limit = h * h / (6. * 3. * dt);
-        let nu: Vec<f64> = grads.par_iter().map(|g| {
+        // The buoyancy frequency N², from θ above and below.
+        let theta = &self.theta;
+        let stability = |n: usize| {
+            let j = n / slab;
+            let (up, down) = ((j + 1).min(ny - 1), j.saturating_sub(1));
+            let (a, b) = (theta.data[n % slab + up * slab], theta.data[n % slab + down * slab]);
+            GRAVITY / theta.data[n] * (a - b) / ((up - down).max(1) as f64 * h)
+        };
+        let nu: Vec<f64> = grads.par_iter().enumerate().map(|(n, g)| {
             // g[a][b] = d u_b / d x_a.
             let mut s2 = 0.;
             for a in 0..3 {
@@ -524,7 +534,11 @@ impl CloudSimulation {
                     s2 += sab * sab;
                 }
             }
-            ((SMAGORINSKY * h).powi(2) * (2. * s2).sqrt()).min(limit)
+            // Lilly's correction: stable air damps the turbulence, and above a Richardson
+            // number Ri = N² / |S|² of the Prandtl number (1/3) there is none.
+            let strain2 = 2. * s2;
+            let damping = (1. - 3. * stability(n) / strain2.max(1e-12)).max(0.).sqrt();
+            ((SMAGORINSKY * h).powi(2) * strain2.sqrt() * damping).min(limit)
         }).collect();
         let c = |i: usize, j: usize, k: usize| i + nx * (k + nz * j);
         let tau = dt / (h * h);

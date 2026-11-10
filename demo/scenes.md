@@ -1,5 +1,26 @@
 # Test Scenes
 
+## Combined demos
+These scenes use several features together.
+
+**Sculpture meadow** (`sculpture-meadow.json`): a noise heightmap shared by the terrain and two grass
+fields. The sculptures stand on instanced CSG plinths, which are bump mapped with `dents`. One is a
+marble CSG cube with gold parts, placed with transform `steps`. One is a ripple-bumped gold torus,
+sheared with a `matrix` step. One is a glass `merge`. Instanced teapots stand in the grass.
+![Sculpture meadow](./scenes/sculpture-meadow.png)
+
+**Lighthouse island** (`lighthouse-island.json`): an image heightmap
+(`scripts/gen-island-heightmap.py`) used as rock terrain, bump mapped with `wrinkles`. Dry, windswept
+grass grows above the waterline (`min_altitude`). The ocean and sunset sky surround it. The
+lighthouse is built from CSG: a cone with red bands (parts with their own material) and windows cut
+out. Instanced sailboats are placed by transform `steps`.
+![Lighthouse island](./scenes/lighthouse-island.png)
+
+**Dice** (`dice.json`, written by `scripts/gen-dice-scene.py`): one CSG die (a rounded cube less 21
+pips) defined once in `geometries` and instanced 29 times with random turns. Behind them is extruded,
+dent-bumped `text`.
+![Dice](./scenes/dice.png)
+
 ## Shapes
 Every shape modelled on POV-Ray's (see the [shape reference](../docs/shapes.md)).
 ![Shapes](./scenes/shapes.png)

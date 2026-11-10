@@ -1,0 +1,144 @@
+{
+  "width": 960,
+  "height": 540,
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 4,
+  "shadow_bias": 0.0001,
+  "max_depth": 5,
+
+  "variables": {
+    "field": {
+      "type": "noise", "min": [-150, -12], "max": [150, 260], "resolution": 900,
+      "amplitude": 0.6, "scale": 18, "octaves": 5, "seed": 7
+    }
+  },
+
+  "geometries": {
+    "teapot": { "type": "smoothmesh", "src": "./demo/teapot.obj" },
+    "plinth": {
+      "type": "difference",
+      "items": [
+        { "type": "cylinder", "base": [0, -2, 0], "cap": [0, 0.6, 0], "radius": 0.75 },
+        { "type": "torus", "major": 0.78, "minor": 0.09, "transform": [ { "translate": [0, 0.45, 0] } ] }
+      ]
+    }
+  },
+
+  "materials": {
+    "SOIL": { "type": "lambertian", "albedo": [0.12, 0.09, 0.06] },
+    "STONE": { "type": "lambertian", "albedo": [0.62, 0.6, 0.56] },
+    "MARBLE": { "type": "plastic", "albedo": [0.85, 0.84, 0.8], "roughness": 0.15 },
+    "GOLD": { "type": "metal", "reflective": [1, 0.78, 0.4], "roughness": 0.03 },
+    "COPPER": { "type": "metal", "reflective": [0.95, 0.55, 0.38], "roughness": 0.12 },
+    "GLASS": { "type": "dielectric", "refractive_index": 1.5, "attenuate": [0.96, 0.99, 0.97] },
+    "RED": { "type": "plastic", "albedo": [0.75, 0.1, 0.08], "roughness": 0.08 },
+    "BLUE": { "type": "plastic", "albedo": [0.1, 0.25, 0.7], "roughness": 0.08 }
+  },
+  "media": {},
+
+  "camera": {
+    "location": [0, 2.1, -7.5],
+    "lookat": [0, 1.0, 6],
+    "up": [0, 1, 0],
+    "angle": 0.75,
+    "aperture": 0.015
+  },
+
+  "lights": [
+    { "location": [-480, 560, 400], "color": [1, 0.93, 0.8], "intensity": 2.6e6 }
+  ],
+
+  "objects": [
+    { "type": "skysphere", "sun_direction": [-0.55, 0.65, 0.48] },
+    { "type": "terrain", "heightmap": "$field", "material": "SOIL" },
+    {
+      "type": "grass",
+      "heightmap": "$field",
+      "min": [-16, -7], "max": [16, 34],
+      "density": 600,
+      "seed": 5,
+      "species": [
+        { "preset": "meadow", "weight": 3 },
+        { "preset": "fescue", "weight": 1 },
+        { "preset": "tall", "weight": 0.4 }
+      ],
+      "conditions": {
+        "preset": "summer",
+        "species_zones": 3,
+        "patchiness": 0.25,
+        "wind": { "direction": [1, 0.3], "strength": 0.3, "gustiness": 0.5, "scale": 6 }
+      }
+    },
+
+    {
+      "type": "grass",
+      "heightmap": "$field",
+      "min": [-60, 34], "max": [60, 110],
+      "density": 120,
+      "seed": 6,
+      "species": [ { "preset": "meadow", "weight": 2 }, { "preset": "tall", "weight": 1 }, "savanna" ],
+      "conditions": { "preset": "summer", "species_zones": 8, "wind": { "direction": [1, 0.3], "strength": 0.3, "gustiness": 0.5, "scale": 6 } }
+    },
+
+    { "type": "transform", "item": "plinth", "translate": [-3.4, 0, 3], "material": "STONE",
+      "normal": { "pattern": "dents", "amount": 0.4, "scale": 0.15 } },
+    {
+      "type": "transform",
+      "item": {
+        "type": "difference",
+        "items": [
+          {
+            "type": "intersection",
+            "items": [
+              { "type": "box", "min": [-1, -1, -1], "max": [1, 1, 1] },
+              { "type": "sphere", "location": [0, 0, 0], "radius": 1.35 }
+            ]
+          },
+          { "type": "cylinder", "base": [-2, 0, 0], "cap": [2, 0, 0], "radius": 0.6, "material": "GOLD" },
+          { "type": "cylinder", "base": [0, -2, 0], "cap": [0, 2, 0], "radius": 0.6, "material": "GOLD" },
+          { "type": "cylinder", "base": [0, 0, -2], "cap": [0, 0, 2], "radius": 0.6, "material": "GOLD" }
+        ]
+      },
+      "steps": [
+        { "scale": 0.62 },
+        { "rotate": [35, 40, 0] },
+        { "translate": [-3.4, 1.55, 3] }
+      ],
+      "material": "MARBLE",
+      "normal": { "pattern": "wrinkles", "amount": 0.25, "scale": 0.4, "octaves": 5 }
+    },
+
+    { "type": "transform", "item": "plinth", "translate": [0, 0, 5.5], "material": "STONE",
+      "normal": { "pattern": "dents", "amount": 0.4, "scale": 0.15 } },
+    {
+      "type": "torus", "major": 0.75, "minor": 0.22, "material": "GOLD",
+      "normal": { "pattern": "ripples", "amount": 0.35, "scale": 0.5, "frequency": 3 },
+      "transform": [
+        { "rotate": [90, 0, 0] },
+        { "matrix": [1, 0, 0, 0.35, 1, 0, 0, 0, 1, 0, 0, 0] },
+        { "rotate": [0, 25, 0] },
+        { "translate": [0, 1.6, 5.5] }
+      ]
+    },
+
+    { "type": "transform", "item": "plinth", "translate": [3.6, 0, 3.4], "material": "STONE",
+      "normal": { "pattern": "dents", "amount": 0.4, "scale": 0.15 } },
+    {
+      "type": "merge",
+      "material": "GLASS",
+      "items": [
+        { "type": "sphere", "location": [-0.35, 0, 0], "radius": 0.55 },
+        { "type": "sphere", "location": [0.35, 0, 0], "radius": 0.55 },
+        { "type": "sphere", "location": [0, 0.5, 0], "radius": 0.45 }
+      ],
+      "transform": [ { "rotate": [0, -30, 0] }, { "translate": [3.6, 1.15, 3.4] } ]
+    },
+
+    { "type": "transform", "item": "teapot", "scale": 0.3, "rotate": { "pitch": 200 }, "translate": [-1.4, 0, 0.8], "material": "RED" },
+    { "type": "transform", "item": "teapot", "scale": 0.26, "rotate": { "pitch": 320 }, "translate": [1.7, 0, 1.6], "material": "COPPER" },
+    { "type": "transform", "item": "teapot", "scale": 0.5, "rotate": { "pitch": 60 }, "translate": [-6, 0, 9], "material": "BLUE" },
+    { "type": "transform", "item": "teapot", "scale": 0.5, "rotate": { "pitch": 110 }, "translate": [6.5, 0, 10], "material": "GOLD" },
+    { "type": "transform", "item": "teapot", "scale": 0.55, "rotate": { "pitch": 250 }, "translate": [2.2, 0, 13], "material": "RED" }
+  ]
+}

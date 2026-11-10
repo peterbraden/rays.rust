@@ -1,0 +1,574 @@
+{
+  "width": 1200,
+  "height": 600,
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 4,
+  "shadow_bias": 0.0001,
+  "max_depth": 4,
+  "background": [
+    0.1,
+    0.1,
+    0.1
+  ],
+  "variables": {
+    "island": {
+      "type": "image",
+      "src": "./demo/heightmaps/island.png",
+      "min": [
+        -60,
+        -60
+      ],
+      "max": [
+        60,
+        60
+      ],
+      "resolution": 400,
+      "base": -3,
+      "height": 14
+    }
+  },
+  "geometries": {
+    "boat": {
+      "type": "mesh",
+      "src": "./demo/boat.obj",
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    }
+  },
+  "materials": {
+    "ROCK": {
+      "type": "lambertian",
+      "albedo": [
+        0.32,
+        0.29,
+        0.25
+      ]
+    },
+    "WHITE": {
+      "type": "plastic",
+      "albedo": [
+        0.88,
+        0.87,
+        0.84
+      ],
+      "roughness": 0.3
+    },
+    "RED": {
+      "type": "plastic",
+      "albedo": [
+        0.7,
+        0.08,
+        0.06
+      ],
+      "roughness": 0.25
+    },
+    "DARK": {
+      "type": "lambertian",
+      "albedo": [
+        0.04,
+        0.04,
+        0.05
+      ]
+    },
+    "IRON": {
+      "type": "metal",
+      "reflective": [
+        0.25,
+        0.25,
+        0.27
+      ],
+      "roughness": 0.2
+    },
+    "COPPER": {
+      "type": "metal",
+      "reflective": [
+        0.95,
+        0.55,
+        0.38
+      ],
+      "roughness": 0.1
+    },
+    "GLASS": {
+      "type": "dielectric",
+      "refractive_index": 1.5,
+      "attenuate": [
+        0.97,
+        0.99,
+        0.98
+      ]
+    },
+    "LAMP": {
+      "type": "diffuse-light",
+      "color": [
+        1,
+        0.85,
+        0.55
+      ],
+      "intensity": 25
+    },
+    "HULL": {
+      "type": "plastic",
+      "albedo": [
+        0.85,
+        0.85,
+        0.82
+      ],
+      "roughness": 0.1
+    },
+    "NAVY": {
+      "type": "plastic",
+      "albedo": [
+        0.05,
+        0.1,
+        0.3
+      ],
+      "roughness": 0.1
+    }
+  },
+  "media": {},
+  "camera": {
+    "location": [
+      -4,
+      3.5,
+      -62
+    ],
+    "lookat": [
+      4,
+      8,
+      0
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.5,
+    "aperture": 0.01
+  },
+  "lights": [
+    {
+      "location": [
+        -900,
+        170,
+        350
+      ],
+      "color": [
+        1,
+        0.72,
+        0.45
+      ],
+      "intensity": 3000000.0
+    }
+  ],
+  "objects": [
+    {
+      "type": "ocean",
+      "resolution": 20,
+      "fourier_size": 256,
+      "amplitude": 0.0012,
+      "wind": [
+        0.8,
+        0.4
+      ],
+      "color": [
+        0,
+        0.08,
+        0.12
+      ]
+    },
+    {
+      "type": "skysphere",
+      "preset": "sunset",
+      "sun_direction": [
+        -0.9,
+        0.16,
+        0.35
+      ],
+      "brightness": 30
+    },
+    {
+      "type": "terrain",
+      "heightmap": "$island",
+      "material": "ROCK",
+      "normal": {
+        "pattern": "wrinkles",
+        "amount": 0.6,
+        "scale": 1.5,
+        "octaves": 5
+      }
+    },
+    {
+      "type": "grass",
+      "heightmap": "$island",
+      "min": [
+        -48,
+        -38
+      ],
+      "max": [
+        52,
+        38
+      ],
+      "density": 450,
+      "seed": 3,
+      "species": [
+        {
+          "preset": "tussock",
+          "weight": 2
+        },
+        {
+          "preset": "savanna",
+          "weight": 1.5
+        },
+        {
+          "preset": "tall",
+          "weight": 1
+        }
+      ],
+      "conditions": {
+        "preset": "windy",
+        "min_altitude": 1.2,
+        "altitude_fade": 1.0,
+        "max_slope": 38,
+        "species_zones": 6,
+        "dryness": 0.45
+      }
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "difference",
+        "items": [
+          {
+            "type": "union",
+            "items": [
+              {
+                "type": "cone",
+                "base": [
+                  0,
+                  -1,
+                  0
+                ],
+                "base_radius": 1.7,
+                "cap": [
+                  0,
+                  9,
+                  0
+                ],
+                "cap_radius": 1.05
+              },
+              {
+                "type": "intersection",
+                "material": "RED",
+                "items": [
+                  {
+                    "type": "cone",
+                    "base": [
+                      0,
+                      -1,
+                      0
+                    ],
+                    "base_radius": 1.72,
+                    "cap": [
+                      0,
+                      9,
+                      0
+                    ],
+                    "cap_radius": 1.07
+                  },
+                  {
+                    "type": "union",
+                    "items": [
+                      {
+                        "type": "box",
+                        "min": [
+                          -3,
+                          2.0,
+                          -3
+                        ],
+                        "max": [
+                          3,
+                          3.4,
+                          3
+                        ]
+                      },
+                      {
+                        "type": "box",
+                        "min": [
+                          -3,
+                          5.4,
+                          -3
+                        ],
+                        "max": [
+                          3,
+                          6.8,
+                          3
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "box",
+            "min": [
+              -0.4,
+              -0.1,
+              -2
+            ],
+            "max": [
+              0.4,
+              1.7,
+              0
+            ],
+            "material": "DARK"
+          },
+          {
+            "type": "box",
+            "min": [
+              -0.25,
+              4.0,
+              -2
+            ],
+            "max": [
+              0.25,
+              4.8,
+              0
+            ],
+            "material": "DARK"
+          },
+          {
+            "type": "box",
+            "min": [
+              -0.25,
+              7.4,
+              -2
+            ],
+            "max": [
+              0.25,
+              8.2,
+              0
+            ],
+            "material": "DARK"
+          }
+        ]
+      },
+      "translate": [
+        9,
+        11,
+        -3
+      ],
+      "material": "WHITE",
+      "normal": {
+        "pattern": "bumps",
+        "amount": 0.15,
+        "scale": 0.3
+      }
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        9,
+        20,
+        -3
+      ],
+      "cap": [
+        9,
+        20.25,
+        -3
+      ],
+      "radius": 1.55,
+      "material": "IRON"
+    },
+    {
+      "type": "torus",
+      "major": 1.5,
+      "minor": 0.04,
+      "material": "IRON",
+      "transform": [
+        {
+          "translate": [
+            9,
+            20.85,
+            -3
+          ]
+        }
+      ]
+    },
+    {
+      "type": "difference",
+      "material": "IRON",
+      "items": [
+        {
+          "type": "cylinder",
+          "base": [
+            0,
+            0,
+            0
+          ],
+          "cap": [
+            0,
+            1.5,
+            0
+          ],
+          "radius": 0.85
+        },
+        {
+          "type": "cylinder",
+          "base": [
+            0,
+            0.15,
+            0
+          ],
+          "cap": [
+            0,
+            1.35,
+            0
+          ],
+          "radius": 0.9
+        },
+        {
+          "type": "cylinder",
+          "base": [
+            0,
+            -1,
+            0
+          ],
+          "cap": [
+            0,
+            3,
+            0
+          ],
+          "radius": 0.78
+        }
+      ],
+      "transform": [
+        {
+          "translate": [
+            9,
+            20.25,
+            -3
+          ]
+        }
+      ]
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        9,
+        20.4,
+        -3
+      ],
+      "cap": [
+        9,
+        21.6,
+        -3
+      ],
+      "radius": 0.8,
+      "material": "GLASS"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        9,
+        21.0,
+        -3
+      ],
+      "radius": 0.32,
+      "material": "LAMP"
+    },
+    {
+      "type": "cone",
+      "base": [
+        9,
+        21.75,
+        -3
+      ],
+      "base_radius": 1.05,
+      "cap": [
+        9,
+        22.8,
+        -3
+      ],
+      "cap_radius": 0.12,
+      "material": "COPPER"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        9,
+        22.9,
+        -3
+      ],
+      "radius": 0.18,
+      "material": "COPPER"
+    },
+    {
+      "type": "transform",
+      "item": "boat",
+      "steps": [
+        {
+          "scale": 0.06
+        },
+        {
+          "rotate": [
+            -90,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            70,
+            0
+          ]
+        },
+        {
+          "translate": [
+            -16,
+            0.2,
+            -26
+          ]
+        }
+      ],
+      "material": "HULL"
+    },
+    {
+      "type": "transform",
+      "item": "boat",
+      "steps": [
+        {
+          "scale": 0.045
+        },
+        {
+          "rotate": [
+            -90,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            -40,
+            0
+          ]
+        },
+        {
+          "translate": [
+            24,
+            0.15,
+            -32
+          ]
+        }
+      ],
+      "material": "NAVY"
+    }
+  ]
+}

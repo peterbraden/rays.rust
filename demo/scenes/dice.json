@@ -1,0 +1,1293 @@
+{
+  "width": 960,
+  "height": 540,
+  "supersamples": 256,
+  "chunk_size": 64,
+  "samples_per_chunk": 4,
+  "shadow_bias": 0.0001,
+  "max_depth": 8,
+  "background": {
+    "type": "gradient",
+    "bottom": [
+      0.05,
+      0.05,
+      0.06
+    ],
+    "top": [
+      0.04,
+      0.045,
+      0.06
+    ]
+  },
+  "geometries": {
+    "die": {
+      "type": "difference",
+      "items": [
+        {
+          "type": "intersection",
+          "items": [
+            {
+              "type": "box",
+              "min": [
+                -1,
+                -1,
+                -1
+              ],
+              "max": [
+                1,
+                1,
+                1
+              ]
+            },
+            {
+              "type": "sphere",
+              "location": [
+                0,
+                0,
+                0
+              ],
+              "radius": 1.38
+            }
+          ]
+        },
+        {
+          "type": "sphere",
+          "location": [
+            1.06,
+            0,
+            0
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            -1.06,
+            -0.55,
+            -0.55
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            -1.06,
+            -0.55,
+            0
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            -1.06,
+            -0.55,
+            0.55
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            -1.06,
+            0.55,
+            -0.55
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            -1.06,
+            0.55,
+            0
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            -1.06,
+            0.55,
+            0.55
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            -0.55,
+            1.06,
+            -0.55
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            0.55,
+            1.06,
+            0.55
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            -0.55,
+            -1.06,
+            -0.55
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            -0.55,
+            -1.06,
+            0.55
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            0,
+            -1.06,
+            0
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            0.55,
+            -1.06,
+            -0.55
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            0.55,
+            -1.06,
+            0.55
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            -0.55,
+            -0.55,
+            1.06
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            0,
+            0,
+            1.06
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            0.55,
+            0.55,
+            1.06
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            -0.55,
+            -0.55,
+            -1.06
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            -0.55,
+            0.55,
+            -1.06
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            0.55,
+            -0.55,
+            -1.06
+          ],
+          "radius": 0.25
+        },
+        {
+          "type": "sphere",
+          "location": [
+            0.55,
+            0.55,
+            -1.06
+          ],
+          "radius": 0.25
+        }
+      ]
+    }
+  },
+  "materials": {
+    "FELT": {
+      "type": "lambertian",
+      "albedo": [
+        0.06,
+        0.28,
+        0.16
+      ]
+    },
+    "IVORY": {
+      "type": "plastic",
+      "albedo": [
+        0.9,
+        0.87,
+        0.78
+      ],
+      "roughness": 0.08
+    },
+    "RED": {
+      "type": "plastic",
+      "albedo": [
+        0.75,
+        0.06,
+        0.05
+      ],
+      "roughness": 0.05
+    },
+    "BLACK": {
+      "type": "plastic",
+      "albedo": [
+        0.03,
+        0.03,
+        0.03
+      ],
+      "roughness": 0.05
+    },
+    "GLASS": {
+      "type": "dielectric",
+      "refractive_index": 1.5,
+      "attenuate": [
+        0.85,
+        0.93,
+        1.0
+      ]
+    },
+    "GOLD": {
+      "type": "metal",
+      "reflective": [
+        1,
+        0.78,
+        0.4
+      ],
+      "roughness": 0.04
+    },
+    "LIGHT": {
+      "type": "diffuse-light",
+      "color": [
+        1,
+        0.95,
+        0.88
+      ],
+      "intensity": 7
+    },
+    "FILL": {
+      "type": "diffuse-light",
+      "color": [
+        0.7,
+        0.8,
+        1
+      ],
+      "intensity": 4
+    }
+  },
+  "media": {},
+  "variables": {},
+  "lights": [],
+  "camera": {
+    "location": [
+      0,
+      6.5,
+      -13
+    ],
+    "lookat": [
+      0,
+      1.2,
+      5
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.62,
+    "aperture": 0.12
+  },
+  "objects": [
+    {
+      "type": "box",
+      "min": [
+        -400,
+        -1,
+        -400
+      ],
+      "max": [
+        400,
+        0,
+        400
+      ],
+      "material": "FELT",
+      "normal": {
+        "pattern": "bumps",
+        "amount": 0.25,
+        "scale": 0.05
+      }
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -14,
+        26,
+        -10
+      ],
+      "radius": 6,
+      "material": "LIGHT"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        18,
+        18,
+        -16
+      ],
+      "radius": 3,
+      "material": "FILL"
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "text",
+        "font": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "string": "rays.rust",
+        "thickness": 0.5
+      },
+      "steps": [
+        {
+          "scale": 5
+        },
+        {
+          "rotate": [
+            0,
+            180,
+            0
+          ]
+        },
+        {
+          "translate": [
+            13.5,
+            0,
+            19
+          ]
+        }
+      ],
+      "material": "GOLD",
+      "normal": {
+        "pattern": "dents",
+        "amount": 0.3,
+        "scale": 0.08
+      }
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            90,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            32.43608790595406,
+            0
+          ]
+        },
+        {
+          "scale": 0.5490145606526702
+        },
+        {
+          "translate": [
+            -5.279038205251309,
+            0.5490145606526702,
+            -1.3493434523085472
+          ]
+        }
+      ],
+      "material": "IVORY"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            79.89414324851435,
+            0
+          ]
+        },
+        {
+          "scale": 0.5223439376809678
+        },
+        {
+          "translate": [
+            -9.603656470538526,
+            0.5223439376809678,
+            5.790429582352047
+          ]
+        }
+      ],
+      "material": "IVORY"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            94.2190483002674,
+            0
+          ]
+        },
+        {
+          "scale": 0.4931661323213422
+        },
+        {
+          "translate": [
+            0.7336001634962699,
+            0.4931661323213422,
+            1.4269222950632034
+          ]
+        }
+      ],
+      "material": "IVORY"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            -90,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            288.16122187546785,
+            0
+          ]
+        },
+        {
+          "scale": 0.6101721603547267
+        },
+        {
+          "translate": [
+            8.859187204759664,
+            0.6101721603547267,
+            -2.5897650922632174
+          ]
+        }
+      ],
+      "material": "IVORY"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            0,
+            0,
+            -90
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            345.93226662034846,
+            0
+          ]
+        },
+        {
+          "scale": 0.6067439006032825
+        },
+        {
+          "translate": [
+            -6.131287639615199,
+            0.6067439006032825,
+            1.9575993167925692
+          ]
+        }
+      ],
+      "material": "RED"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            -90,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            241.81252434593037,
+            0
+          ]
+        },
+        {
+          "scale": 0.6611973065991921
+        },
+        {
+          "translate": [
+            6.9705855667666725,
+            0.6611973065991921,
+            2.958289514388829
+          ]
+        }
+      ],
+      "material": "RED"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            0,
+            0,
+            90
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            302.56656459039795,
+            0
+          ]
+        },
+        {
+          "scale": 0.6663710425462708
+        },
+        {
+          "translate": [
+            -8.213075854692192,
+            0.6663710425462708,
+            11.95341382239853
+          ]
+        }
+      ],
+      "material": "RED"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            -90,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            305.2958717605085,
+            0
+          ]
+        },
+        {
+          "scale": 0.62622673489585
+        },
+        {
+          "translate": [
+            -9.855773313511866,
+            0.62622673489585,
+            1.6710667100389944
+          ]
+        }
+      ],
+      "material": "RED"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            180,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            162.49406172391338,
+            0
+          ]
+        },
+        {
+          "scale": 0.5997281180474974
+        },
+        {
+          "translate": [
+            0.16744750665503183,
+            0.5997281180474974,
+            3.623136690107712
+          ]
+        }
+      ],
+      "material": "GLASS"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            90,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            359.02039470196047,
+            0
+          ]
+        },
+        {
+          "scale": 0.6252196798899086
+        },
+        {
+          "translate": [
+            0.37744172433343337,
+            0.6252196798899086,
+            7.367969330697068
+          ]
+        }
+      ],
+      "material": "GLASS"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            90,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            43.97234469044293,
+            0
+          ]
+        },
+        {
+          "scale": 0.6038580187821743
+        },
+        {
+          "translate": [
+            -5.422611195224705,
+            0.6038580187821743,
+            9.242595861220414
+          ]
+        }
+      ],
+      "material": "GLASS"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            -90,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            251.02507732614663,
+            0
+          ]
+        },
+        {
+          "scale": 0.45641901985334454
+        },
+        {
+          "translate": [
+            8.6916150417238,
+            0.45641901985334454,
+            1.6547880719922485
+          ]
+        }
+      ],
+      "material": "BLACK"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            -90,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            6.54750910559069,
+            0
+          ]
+        },
+        {
+          "scale": 0.6337194891184814
+        },
+        {
+          "translate": [
+            7.918555582236454,
+            0.6337194891184814,
+            12.275801573477521
+          ]
+        }
+      ],
+      "material": "BLACK"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            180,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            310.094311979346,
+            0
+          ]
+        },
+        {
+          "scale": 0.643809858806287
+        },
+        {
+          "translate": [
+            -4.220070641983136,
+            0.643809858806287,
+            12.456108111489966
+          ]
+        }
+      ],
+      "material": "GOLD"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            0,
+            0,
+            90
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            68.90947373114615,
+            0
+          ]
+        },
+        {
+          "scale": 0.46943907196337403
+        },
+        {
+          "translate": [
+            7.390130701737174,
+            0.46943907196337403,
+            7.880699493638014
+          ]
+        }
+      ],
+      "material": "IVORY"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            90,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            119.27060251170711,
+            0
+          ]
+        },
+        {
+          "scale": 0.5454086586810828
+        },
+        {
+          "translate": [
+            -1.117155210376481,
+            0.5454086586810828,
+            -0.8169979751053607
+          ]
+        }
+      ],
+      "material": "IVORY"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            -90,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            358.98669439941887,
+            0
+          ]
+        },
+        {
+          "scale": 0.49239176095498877
+        },
+        {
+          "translate": [
+            -9.812070673208709,
+            0.49239176095498877,
+            -2.283244913245996
+          ]
+        }
+      ],
+      "material": "IVORY"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            0,
+            0,
+            90
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            14.721251999160735,
+            0
+          ]
+        },
+        {
+          "scale": 0.6926547019735734
+        },
+        {
+          "translate": [
+            4.742428387503367,
+            0.6926547019735734,
+            6.528557381251705
+          ]
+        }
+      ],
+      "material": "IVORY"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            90,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            157.97310790288518,
+            0
+          ]
+        },
+        {
+          "scale": 0.5694404907557605
+        },
+        {
+          "translate": [
+            -1.813575379310226,
+            0.5694404907557605,
+            12.802518153221776
+          ]
+        }
+      ],
+      "material": "IVORY"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            90,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            11.394128600136524,
+            0
+          ]
+        },
+        {
+          "scale": 0.5039299445200334
+        },
+        {
+          "translate": [
+            2.948713137105168,
+            0.5039299445200334,
+            3.8453908957299134
+          ]
+        }
+      ],
+      "material": "RED"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            0,
+            0,
+            -90
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            313.52331999472364,
+            0
+          ]
+        },
+        {
+          "scale": 0.6752380394432087
+        },
+        {
+          "translate": [
+            9.811414267079385,
+            0.6752380394432087,
+            3.447393055290604
+          ]
+        }
+      ],
+      "material": "RED"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            180,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            75.93166600744404,
+            0
+          ]
+        },
+        {
+          "scale": 0.5468681724609967
+        },
+        {
+          "translate": [
+            4.347049406875117,
+            0.5468681724609967,
+            -2.351947844709395
+          ]
+        }
+      ],
+      "material": "RED"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            0,
+            0,
+            -90
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            113.41337482137544,
+            0
+          ]
+        },
+        {
+          "scale": 0.6498761648325203
+        },
+        {
+          "translate": [
+            -3.2682083105735966,
+            0.6498761648325203,
+            7.510543998626357
+          ]
+        }
+      ],
+      "material": "RED"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            0,
+            0,
+            -90
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            240.60667774716558,
+            0
+          ]
+        },
+        {
+          "scale": 0.5200202360037226
+        },
+        {
+          "translate": [
+            -0.07219119751743008,
+            0.5200202360037226,
+            10.737752314935717
+          ]
+        }
+      ],
+      "material": "GLASS"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            90,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            247.62698552510383,
+            0
+          ]
+        },
+        {
+          "scale": 0.46512077799081786
+        },
+        {
+          "translate": [
+            9.370699267006152,
+            0.46512077799081786,
+            7.6750386782065565
+          ]
+        }
+      ],
+      "material": "GLASS"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            90,
+            0,
+            0
+          ]
+        },
+        {
+          "rotate": [
+            0,
+            4.71969976725608,
+            0
+          ]
+        },
+        {
+          "scale": 0.5027988130643256
+        },
+        {
+          "translate": [
+            -2.1911544772175766,
+            0.5027988130643256,
+            9.768211841973427
+          ]
+        }
+      ],
+      "material": "GLASS"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            0,
+            10,
+            0
+          ]
+        },
+        {
+          "scale": 0.9
+        },
+        {
+          "translate": [
+            -1.5,
+            0.9,
+            2
+          ]
+        }
+      ],
+      "material": "RED"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            0,
+            35,
+            0
+          ]
+        },
+        {
+          "scale": 0.75
+        },
+        {
+          "translate": [
+            -1.5,
+            2.55,
+            2
+          ]
+        }
+      ],
+      "material": "IVORY"
+    },
+    {
+      "type": "transform",
+      "item": "die",
+      "steps": [
+        {
+          "rotate": [
+            0,
+            70,
+            0
+          ]
+        },
+        {
+          "scale": 0.6
+        },
+        {
+          "translate": [
+            -1.5,
+            3.9,
+            2
+          ]
+        }
+      ],
+      "material": "GLASS"
+    }
+  ]
+}

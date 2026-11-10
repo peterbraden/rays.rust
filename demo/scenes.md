@@ -15,6 +15,10 @@ Demonstrating the ocean generation.
 Procedural art with a block city skyline at sunset.
 ![block terrain](./scenes/block-terrain.png)
 
+## Rocks
+A terraced sandstone outcrop, granite, limestone and basalt boulders, and a scatter of mixed pebbles.
+![rocks](./scenes/rocks.png)
+
 ## Fireworks
 ![fireworks](./scenes/fireworks.png)
 

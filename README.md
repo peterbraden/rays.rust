@@ -29,6 +29,8 @@ Supports:
   - Procedural Objects
     - Ocean (Tessendorf's algorithm with Phillips spectrum)
     - Random Cubes
+    - Rocks: bedrock outcrops, boulders and pebbles, with procedural stone materials
+      (granite, basalt, sandstone, limestone, slate, quartzite)
   - Multithreaded
   - Progressive rendering
 

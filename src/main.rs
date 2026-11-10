@@ -77,6 +77,7 @@ mod procedural {
 mod participatingmedia;
 mod noise;
 mod volume;
+mod glare;
 
 use crate::trace::trace;
 use crate::rendercontext::RenderContext;
@@ -190,7 +191,7 @@ fn main() {
             }
         },
         |(img, path)| {
-            if let Err(e) = writer.write(&img, &path) {
+            if let Err(e) = writer.write(&s.output.finish(&img), &path) {
                 eprintln!("{}", e);
             }
         });
@@ -198,7 +199,7 @@ fn main() {
 
     let rc = rcmtx.lock().unwrap();
     //wireframe::wireframe(&s, &mut rc);
-    let img = rc.snapshot();
+    let img = s.output.finish(&rc.snapshot());
     if let Err(e) = writer.write(&img, &rc.output_filename) {
         eprintln!("{}", e);
         std::process::exit(1);

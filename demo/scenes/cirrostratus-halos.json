@@ -9,7 +9,8 @@
   "path_termination": "russian_roulette",
   "output": {
     "exposure": 0.5,
-    "tonemap": "reinhard"
+    "tonemap": "reinhard",
+    "glare": true
   },
   "materials": {
     "GROUND": {

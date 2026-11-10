@@ -1077,6 +1077,8 @@ impl SceneFile {
         );
 
         let sun = SceneFile::parse_sun(&s.sun, &s.objects);
+        // The camera's view plane spans tan(angle) over the image's height.
+        let pixel_angle = s.camera["angle"].as_f64().map_or(0., |a| a.tan() / SceneFile::parse_int(&s.height, 480) as f64);
         // Aerial perspective, unless the skysphere turns it off.
         let atmosphere = s.objects.iter()
             .find(|o| o["type"].as_str() == Some("skysphere") && o["aerial_perspective"].as_bool() != Some(false))
@@ -1116,7 +1118,11 @@ impl SceneFile {
             max_bounding,
             black_threshold: SceneFile::parse_number(&s.black_threshold, 1e-7f64),
             air_medium: SceneFile::parse_air(&s.air),
-            output: OutputOpts::parse(&s.output),
+            output: OutputOpts {
+                // The camera's view plane spans tan(angle) over the image's height.
+                pixel_angle,
+                ..OutputOpts::parse(&s.output)
+            },
             area_lights,
             sun,
             atmosphere,

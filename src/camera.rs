@@ -304,7 +304,6 @@ mod tests {
 
         /*
         let c = Camera::new(
->>>>>>> 91eac9d7d76ebfa2585d691dba97e70c3c74de25
             Vector3::new(0f64,0f64,0f64),
             Vector3::new(0f64, 1f64, -1f64),
             Vector3::new(0f64,1f64,0f64),

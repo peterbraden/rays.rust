@@ -57,9 +57,9 @@ impl Triangle {
     }
 }
 
-struct IntersectionPoint {
-    dist: f64, 
-    point: Vector3<f64>,
+pub(crate) struct IntersectionPoint {
+    pub dist: f64,
+    pub point: Vector3<f64>,
 }
 
 /// Möller and Trumbore's test, from Tomas Möller and Ben Trumbore, "Fast, Minimum Storage
@@ -76,7 +76,7 @@ struct IntersectionPoint {
 /// We reject only det = 0, as PBR 4th ed. section 6.5.3 does with Woop, Benthin and Wald's
 /// watertight test (JCGT 2(1), 2013, <https://jcgt.org/published/0002/01/05/>): a near-parallel
 /// ray gives a large 1/det, and the u, v bounds then reject it unless it really grazes the triangle.
-fn intersects_dist(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>, r: &Ray) -> Option<IntersectionPoint> {
+pub(crate) fn intersects_dist(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>, r: &Ray) -> Option<IntersectionPoint> {
         let v0v1 = v1 - v0; 
         let v0v2 = v2 - v0; 
         let pvec = r.rd.cross(&v0v2); 
@@ -195,15 +195,26 @@ impl SmoothTriangle {
     */
 
     fn interpolate_normal(&self, p: &IntersectionPoint) -> Vector3<f64>{
-        // Calculate barycentric coordinates of the intersection point
-        // Barycentric coordinate components correspond to the proportional
-        // area of the triangle between the internal point and each edge, and the
-        // entire triangle. Thus:
-        let a = triangle_area(self.v0, self.v1, p.point) / triangle_area(self.v0, self.v1, self.v2);
-        let b = triangle_area(self.v0, self.v2, p.point) / triangle_area(self.v0, self.v1, self.v2);
-        // We can skip c as a + b + c = 1
-        (self.normalv2 * a  + self.normalv1 * b + (1. - a - b) * self.normalv0).normalize()
+        interpolate_normal([self.v0, self.v1, self.v2], [self.normalv0, self.normalv1, self.normalv2], p.point)
     }
+}
+
+/// The normal at `point` on a triangle, interpolated between the normals `n` at its vertices `v`
+/// (Phong's interpolation).
+pub(crate) fn interpolate_normal(v: [Vector3<f64>; 3], n: [Vector3<f64>; 3], point: Vector3<f64>) -> Vector3<f64> {
+    // Calculate barycentric coordinates of the intersection point
+    // Barycentric coordinate components correspond to the proportional
+    // area of the triangle between the internal point and each edge, and the
+    // entire triangle. Thus:
+    let a = triangle_area(v[0], v[1], point) / triangle_area(v[0], v[1], v[2]);
+    let b = triangle_area(v[0], v[2], point) / triangle_area(v[0], v[1], v[2]);
+    // We can skip c as a + b + c = 1
+    (n[2] * a  + n[1] * b + (1. - a - b) * n[0]).normalize()
+}
+
+/// The bounding box of a triangle.
+pub(crate) fn triangle_bounds(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>) -> BBox {
+    BBox::new(v0.inf(&v1).inf(&v2), v0.sup(&v1).sup(&v2))
 }
 
 impl Geometry for SmoothTriangle {

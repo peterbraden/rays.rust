@@ -5,9 +5,9 @@
 ///
 /// In order to use a mesh in a ray-tracing context, we will need to use an acceleration structure
 /// to performantly intersect with the appropriate triangle. Because of this, at render time, the
-/// mesh will need the repetition of vertices necessary to store the triangles in an Octree.
+/// mesh will need the repetition of vertices necessary to store the triangles in a BVH.
 ///
-/// (POSSIBLE ENHANCEMENT: Is there a way to use the octree with indices to dynamically reconstruct
+/// (POSSIBLE ENHANCEMENT: Is there a way to use the BVH with indices to dynamically reconstruct
 /// triangles?)
 ///
 /// Most other Mesh datastructures are optimisations to reduce the memory requirements by removing
@@ -30,7 +30,7 @@ use crate::shapes::bbox::BBox;
 use crate::shapes::triangle::{Triangle, SmoothTriangle};
 use std::vec::Vec;
 use std::sync::Arc;
-use crate::octree::Octree;
+use crate::bvh::Bvh;
 
 /// A mesh as stored in a file: vertex positions, optionally a normal per vertex, and triangles
 /// indexing them.
@@ -81,7 +81,7 @@ fn to_vectors(v: &[f32]) -> Vec<Vector3<f64>> {
 }
 
 pub struct Mesh {
-    triangles: Octree<Triangle>,
+    triangles: Bvh<Triangle>,
     bounds: BBox,
     triangle_count: usize,
     /// For sampling points on the surface: each triangle with the running total of area up to
@@ -104,7 +104,7 @@ impl Mesh {
         //println!("# of triangles: {}", triangles.len());
 
         let bounds = Mesh::bounds_of(&triangles);
-        let tree = Octree::new(8, bounds, &triangles); 
+        let tree = Bvh::new(bounds, &triangles); 
         let mut total = 0.;
         let areas = triangles.iter().map(|t| {
             total += t.surface_area();
@@ -188,7 +188,7 @@ pub fn vertex_normals(positions: &[Vector3<f64>], triangles: &[[usize; 3]]) -> V
 }
 
 pub struct SmoothMesh {
-    triangles: Octree<SmoothTriangle>,
+    triangles: Bvh<SmoothTriangle>,
     bounds: BBox,
     triangle_count: usize,
 }
@@ -218,7 +218,7 @@ impl SmoothMesh {
         println!("# of triangles: {}", triangles.len());
 
         let bounds = SmoothMesh::bounds_of(&triangles);
-        let tree = Octree::new(8, bounds, &triangles); 
+        let tree = Bvh::new(bounds, &triangles); 
         SmoothMesh {
             triangles: tree,
             bounds,

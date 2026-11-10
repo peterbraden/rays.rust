@@ -17,7 +17,7 @@ use rand::rngs::StdRng;
 use rand::distributions::{Normal, Distribution};
 use crate::geometry::point_on_unit_sphere;
 use crate::shapes::csg::Union;
-use crate::octree::Octree;
+use crate::bvh::Bvh;
 use crate::shapes::bbox::BBox;
 use crate::intersection::RawIntersection;
 use std::sync::Arc;
@@ -93,7 +93,7 @@ fn create_particles(
 
 
 pub struct FireworkMaterial {
-    particles: Octree<Particle>,
+    particles: Bvh<Particle>,
     color: Color,
 }
 
@@ -164,7 +164,7 @@ pub fn create_firework(o: &Value) -> SceneObject {
     let geom = Union::new(boxed_particles);
 
     let particle_arcs: Vec<Arc<Particle>> = particles.into_iter().map(Arc::new).collect();
-    let tree = Octree::new(8, geom.bounds(), &particle_arcs);
+    let tree = Bvh::new(geom.bounds(), &particle_arcs);
     let m = Box::new(FireworkMaterial { particles: tree, color });
 
 	SceneObject {

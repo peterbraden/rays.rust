@@ -1,7 +1,6 @@
 use crate::ray::Ray;
 use crate::intersection::RawIntersection;
 use crate::shapes::bbox::BBox;
-use crate::octree::Octree;
 use std::f64;
 use crate::shapes::geometry::Geometry;
 use std::sync::Arc;

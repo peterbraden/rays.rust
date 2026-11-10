@@ -31,7 +31,7 @@ pub fn reflect(v: Vector3<f64>, normal: Vector3<f64>) -> Vector3<f64> {
 /// A direction for diffuse reflection: the normal plus a point uniformly distributed on the
 /// unit sphere, normalised, which is distributed in proportion to the cosine of the angle from
 /// the normal.
-fn lambertian_direction(normal: Vector3<f64>, on_sphere: Vector3<f64>) -> Vector3<f64> {
+pub fn lambertian_direction(normal: Vector3<f64>, on_sphere: Vector3<f64>) -> Vector3<f64> {
     let d = normal + on_sphere;
     // The sample can (rarely) cancel the normal exactly.
     if d.norm() < 1e-9 { normal } else { d.normalize() }

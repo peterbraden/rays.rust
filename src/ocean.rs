@@ -82,6 +82,11 @@
 //! exp(i k·x) (eq. 44), sharpening crests and broadening troughs. Neither is used yet: normals
 //! come from the triangles, so slopes aren't computed, and the displacement is computed only
 //! when switched on (`choppyness_shift`, currently off), with λ fixed at 1.
+//!
+//! ## Shores
+//!
+//! All of the above is deep water. An ocean with a `beach` runs up a sloping seabed instead,
+//! with waves that shoal, refract and break: see `crate::shore`.
 
 extern crate rand as _rand;
 extern crate image;
@@ -153,14 +158,14 @@ const REPEAT_TIME: f64 = 200.;
 /// The frequency ω of a wave: the deep-water dispersion relation ω² = gk (eq. 31), quantised to
 /// multiples of ω0 = 2π/T so that the surface repeats after T (eqs. 34, 35). A longer T keeps
 /// ω̄ closer to ω.
-fn dispersion(k: Vector2<f64>, gravity: f64) -> f64 {
+pub fn dispersion(k: Vector2<f64>, gravity: f64) -> f64 {
     let w = (k.norm() * gravity).sqrt();
     let w_0 = 2f64 * std::f64::consts::PI / REPEAT_TIME;
     (w / w_0).floor() * w_0
 }
 
 /// h̃0(k) for every k on the N x N grid, row-major with rows along z.
-fn create_amplitude_tile(
+pub fn create_amplitude_tile(
         wind: Vector2<f64>,
         scale: f64,
         gravity: f64,
@@ -187,7 +192,7 @@ fn create_amplitude_tile(
 
 /// The wavevector k = (2πn/Lx, 2πm/Lz) for grid indices n, m (below eq. 36). The vector's y
 /// component is the z axis.
-fn gen_k(n: f64, m: f64, lx: f64, lz: f64) -> Vector2<f64> {
+pub fn gen_k(n: f64, m: f64, lx: f64, lz: f64) -> Vector2<f64> {
     Vector2::new(
         2f64 * std::f64::consts::PI * n /  lx,
         2f64 * std::f64::consts::PI * m /  lz,
@@ -373,79 +378,83 @@ pub struct OceanGeometry {
     mesh: RepeatingMesh,
 }
 
+/// The scene parameters of an ocean, shared by the open ocean and a shore (`crate::shore`).
+pub struct OceanParams {
+    pub gravity: f64,
+    pub wind: Vector2<f64>,
+    pub time: f64,
+    /// Patch size in metres, Lx = Lz (eq. 36)
+    pub lx: f64,
+    /// N = M, the size of the Fourier grid (4.4).
+    pub fourier_grid_size: usize,
+    /// The Phillips constant A (eq. 40).
+    pub scale: f64,
+    pub seed: u64,
+}
+
+impl OceanParams {
+    pub fn parse(o: &Value) -> OceanParams {
+        OceanParams {
+            gravity: SceneFile::parse_number(&o["gravity"], 9.81f64),
+            wind: SceneFile::parse_vec2_def(o, "wind", Vector2::new(40., 30.)),
+            time: SceneFile::parse_number(&o["time"],4f64),
+            lx: SceneFile::parse_number(&o["resolution"], 100.),
+            // A power of two from 16 to 2048. Titanic and Waterworld used 2048, about 3 cm
+            // between grid points; above 2048 floating point accuracy becomes noticeable.
+            fourier_grid_size: SceneFile::parse_number(&o["fourier_size"], 128.) as usize,
+            // Heights are independent of fourier_size; the default matches the look of the
+            // former default (amplitude 1 at fourier_size 128).
+            scale: SceneFile::parse_number(&o["amplitude"], 1. / (128. * 128.)),
+            // The random realisation of the spectrum (4.4). Seed 0, the default, is the
+            // realisation every ocean used before seeds were configurable.
+            seed: SceneFile::parse_int(&o["seed"], 0) as u64,
+        }
+    }
+
+    /// The random amplitudes h̃0(k) (eq. 42).
+    pub fn amplitudes(&self) -> Vec<Complex<f64>> {
+        let mut seed = [0u8; 32];
+        seed[..8].copy_from_slice(&self.seed.to_le_bytes());
+        let mut rng: StdRng = SeedableRng::from_seed(seed);
+        create_amplitude_tile(self.wind, self.scale, self.gravity, self.lx, self.lx, self.fourier_grid_size, &mut rng)
+    }
+}
+
+/// The height at grid vertex (x, z) of a field from `create_tile`. The grid's frequencies start
+/// at -N/2, not 0; by the shift theorem the transform comes out multiplied by (-1)^(x+z), undone
+/// here (see the module docs).
+pub fn grid_height(field: &[Complex<f64>], x: usize, z: usize, fourier_grid_size: usize) -> f64 {
+    let sign = if (x + z) % 2 == 0 { -1. } else { 1. };
+    field[z * fourier_grid_size + x].re * sign
+}
+
 impl OceanGeometry {
     pub fn new(o: &Value) -> OceanGeometry {
-        let gravity = SceneFile::parse_number(&o["gravity"], 9.81f64);
-        let wind = SceneFile::parse_vec2_def(o, "wind", Vector2::new(40., 30.));
-        let time = SceneFile::parse_number(&o["time"],4f64);
-
-        // Patch size in metres, Lx = Lz (eq. 36)
-        let lx = SceneFile::parse_number(&o["resolution"], 100.);
-        let lz = lx;
+        let p = OceanParams::parse(o);
         let choppyness_shift = false;
+        let tile = create_tile(p.fourier_grid_size, p.lx, p.lx, p.gravity, p.time, choppyness_shift, p.amplitudes());
+        println!(" - OCEAN [A={}, g={}, W={}, t={}, N={}, {}]", p.scale, p.gravity, p.wind, p.time, p.lx, p.fourier_grid_size);
+        OceanGeometry::from_tile(&tile, p.fourier_grid_size, p.lx)
+    }
 
-        // The random realisation of the spectrum (4.4). Seed 0, the default, is the realisation
-        // every ocean used before seeds were configurable.
-        let mut seed = [0u8; 32];
-        seed[..8].copy_from_slice(&(SceneFile::parse_int(&o["seed"], 0) as u64).to_le_bytes());
-        let mut rng: StdRng = SeedableRng::from_seed(seed);
-
-        // N = M, the size of the Fourier grid (4.4): a power of two from 16 to 2048. Titanic and
-        // Waterworld used 2048, about 3 cm between grid points; above 2048 floating point
-        // accuracy becomes noticeable.
-        let fourier_grid_size = SceneFile::parse_number(&o["fourier_size"], 128.) as usize;
-
-        // The Phillips constant A (eq. 40). Heights are independent of fourier_size; the default
-        // matches the look of the former default (amplitude 1 at fourier_size 128).
-        let scale = SceneFile::parse_number(&o["amplitude"], 1. / (128. * 128.)); // (A)
-
-        let h0 = create_amplitude_tile(wind, scale, gravity, lx, lz, fourier_grid_size, &mut rng);
-        let tile = create_tile(fourier_grid_size, lx, lz, gravity, time, choppyness_shift, h0);
-        let ht = tile.heights;
-
-        /*
-		// DEBUG IMAGE
-        let img = image::ImageBuffer::from_fn(fourier_grid_size as u32, fourier_grid_size as u32, |x, y| {
-            let yscale = fourier_grid_size as f64 / lx; 
-            let val = (ht[(x * fourier_grid_size as u32 + y) as usize].re * yscale * 0.5 + 0.5).max(0.);
-            let (r,g,b) = Color::new(val, val, val).to_u8();
-            image::Rgb([r,g,b])
-        });
-        let _ = img.save(&Path::new("debug-ocean.png"));
-        */
+    /// The repeating mesh through the tile's vertices.
+    pub fn from_tile(tile: &OceanTile, fourier_grid_size: usize, lx: f64) -> OceanGeometry {
+        let lz = lx;
         let mut vertices = vec![Vector3::new(0., 0., 0.); fourier_grid_size * fourier_grid_size];
 
         for x in 0 .. fourier_grid_size {
             for z in 0 .. fourier_grid_size {
                 let ind = z * fourier_grid_size + x;
-                // The grid's frequencies start at -N/2, not 0; by the shift theorem the transform
-                // comes out multiplied by (-1)^(x+z), undone here (see the module docs).
-                let mut sign = 1.;
-                if (x + z) % 2 == 0 {
-                    sign =  -1.
-                }
-
+                let sign = if (x + z) % 2 == 0 { -1. } else { 1. };
                 let x0 = x as f64 / fourier_grid_size as f64 * lx;
                 let z0 = z as f64 / fourier_grid_size as f64 * lz;
-                if  x > 0 &&
-                    x < fourier_grid_size - 1 &&
-                    z > 0 &&
-                    z < fourier_grid_size - 1
-                    && choppyness_shift 
-                    {
-                    let (dx, dz) = tile.displacement.as_ref().unwrap();
-                    vertices[ind] = Vector3::new(
-                        x0 + dx[ind].re * sign,
-                        ht[ind].re * sign,
-                        z0 + dz[ind].re * sign,
-                    );
-                } else { // Dont shift edge vertices
-                    vertices[ind] = Vector3::new(
-                        x0,
-                        ht[ind].re * sign,
-                        z0,
-                );
-                
+                let y = grid_height(&tile.heights, x, z, fourier_grid_size);
+                match &tile.displacement {
+                    // Dont shift edge vertices
+                    Some((dx, dz)) if x > 0 && x < fourier_grid_size - 1 && z > 0 && z < fourier_grid_size - 1 => {
+                        vertices[ind] = Vector3::new(x0 + dx[ind].re * sign, y, z0 + dz[ind].re * sign);
+                    },
+                    _ => vertices[ind] = Vector3::new(x0, y, z0),
                 }
             }
         }
@@ -454,7 +463,6 @@ impl OceanGeometry {
         let bounds = OceanGeometry::bounds_of(&triangles);
         let tree = Octree::new(8, bounds, &triangles); 
 
-        println!(" - OCEAN [A={}, g={}, W={}, t={}, N={}, {}]", scale, gravity, wind, time, lx, fourier_grid_size);
         println!("  bounded:{}, triangles:{} ", bounds, triangles.len());
 
         OceanGeometry {
@@ -550,6 +558,9 @@ impl MaterialModel for OceanMaterial {
 }
 
 pub fn create_ocean(opts: &Value) -> SceneObject {
+    if opts.get("beach").is_some() {
+        return crate::shore::create_shore(opts);
+    }
 	let o = OceanGeometry::new(opts);
     let mut m: Box<dyn MaterialModel + Sync + Send> = Box::new(OceanMaterial::new(opts));
     if opts["debug"].as_bool().unwrap_or(false) {

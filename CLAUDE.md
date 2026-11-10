@@ -6,7 +6,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Material models: Lambertian, Specular, Dielectric
 - Objects: Sphere, Plane, Mesh, OBJ file import
 - Skysphere with Rayleigh and Mie Scattering
-- Procedural objects including Ocean (Tessendorf's algorithm with Phillips spectrum)
+- Procedural objects including Ocean (Tessendorf's algorithm with Phillips spectrum), optionally meeting a beach (shoaling, refraction and breaking waves)
 - Multithreaded rendering with progressive output
 
 ## Build Commands

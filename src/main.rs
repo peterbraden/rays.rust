@@ -58,6 +58,7 @@ mod scene;
 mod scenefile;
 mod skysphere;
 mod ocean;
+mod shore;
 mod camera;
 mod trace;
 mod rendercontext;

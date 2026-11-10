@@ -112,6 +112,19 @@ impl BBox {
         if tmax < 0. || tmin > tmax { None } else { Some((tmin, tmax)) }
     }
 
+    /// Where a shape solved numerically along a ray should start, given where the ray enters its
+    /// bounds: a little before, so that a surface lying on the bounds is not at the very start
+    /// where rounding could lose it, but not behind the ray's origin.
+    pub fn solve_start(&self, entry: f64) -> f64 {
+        (entry - 0.01 * (self.max - self.min).norm().min(1e6)).max(0.)
+    }
+
+    /// Where such a search should end, given where the ray leaves the bounds: a little after,
+    /// for the same reason.
+    pub fn solve_end(&self, exit: f64) -> f64 {
+        exit + 0.01 * (self.max - self.min).norm().min(1e6)
+    }
+
     pub fn fast_intersects(&self, ro: &Vector3<f64>, invrd: &Vector3<f64>) -> bool {
         //http://tavianator.com/fast-branchless-raybounding-box-intersections/
         let (tmin, tmax) = find_min_max(&self.min.coords, &self.max.coords, ro, invrd);
@@ -349,7 +362,7 @@ impl Geometry for BBox {
             let mut normal = Vector3::new(0.,0.,0.);
             normal[axis] = sign;
 
-            Some(RawIntersection {
+            Some(RawIntersection { part: 0,
                 point,
                 dist,
                 normal

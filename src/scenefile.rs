@@ -5,9 +5,9 @@ use crate::shapes::sphere::Sphere;
 use crate::shapes::triangle::Triangle;
 use crate::shapes::plane::Plane;
 use crate::shapes::mesh::{Mesh, SmoothMesh};
-use crate::shapes::csg::{Primitive, Difference};
+use crate::shapes::csg::{Csg, Op, Inverse, Clipped, Tagged};
 use crate::shapes::transform::{Transform};
-use crate::na::Rotation3;
+use crate::na::{Matrix4, Rotation3, Translation3, Affine3};
 use crate::ocean::create_ocean;
 use crate::shapes::bbox::BBox;
 use crate::light::Light;
@@ -24,7 +24,7 @@ use crate::output::OutputOpts;
 use std::io::prelude::*;
 use std::fs::File;
 use crate::material::model::MaterialModel;
-use crate::material::texture::{Solid, CheckeredYPlane, Medium, NoiseMedium, self};
+use crate::material::texture::{Solid, CheckeredYPlane, Medium, NoiseMedium, PartMedia, self};
 use crate::material::specular::Specular;
 use crate::material::dielectric::Dielectric;
 use crate::material::plastic::Plastic;
@@ -135,6 +135,14 @@ pub struct SceneFile {
     #[serde(default)]
     pub variables: Value,
     pub air: Option<Value>,
+}
+
+/// While parsing an object, the media of its parts that have their own (see `csg::Tagged`), and
+/// the scene's materials and media to find them in (none when parsing a shape alone).
+pub struct Parts<'a> {
+    library: Option<(&'a Map<String, Value>, &'a Map<String, Value>)>,
+    geometries: &'a GeometryLibrary,
+    media: Vec<Box<dyn Medium + Sync + Send>>,
 }
 
 impl SceneFile {
@@ -274,8 +282,12 @@ impl SceneFile {
             return Some(Arc::new(f));
         }
 
-        let geom = SceneFile::parse_geometry(&o, geometries);
-        let m = SceneFile::parse_object_medium(&o, materials, media);
+        let mut parts = Parts { library: Some((materials, media)), geometries, media: vec![] };
+        let geom = SceneFile::parse_geometry_in(&o, &mut parts, false);
+        let mut m = SceneFile::parse_object_medium(&o, materials, media);
+        if !parts.media.is_empty() {
+            m = Box::new(PartMedia { base: m, parts: parts.media });
+        }
         if let Some(geometry) = geom {
             return Some(Arc::new(SceneObject {
                 geometry,
@@ -297,12 +309,57 @@ impl SceneFile {
         create_box_terrain(SceneFile::parse_int(&o["seed"], 0) as u64)
     }
 
-    /// A geometry definition, or the name of one in `geometries`, which is shared rather than
-    /// built again.
+    /// A geometry on its own, ignoring the materials of any parts. A string names one of
+    /// `geometries`, which is shared rather than built again.
     pub fn parse_geometry (o: &Value, geometries: &GeometryLibrary) -> Option<Box<dyn Geometry + Sync + Send>> {
-        if let Value::String(name) = o {
-            return Some(Box::new(geometries.get(name)));
+        SceneFile::parse_geometry_in(o, &mut Parts { library: None, geometries, media: vec![] }, false)
+    }
+
+    /// As `parse_geometry`, but a named geometry is returned as the shared original itself.
+    pub fn parse_shared_geometry(o: &Value, geometries: &GeometryLibrary) -> Option<SharedGeometry> {
+        SceneFile::parse_shared_in(o, &mut Parts { library: None, geometries, media: vec![] }, false)
+    }
+
+    /// As `parse_geometry_in`, but a named geometry is returned as the shared original itself,
+    /// for an instancing transform.
+    fn parse_shared_in(o: &Value, parts: &mut Parts, nested: bool) -> Option<SharedGeometry> {
+        match o {
+            Value::String(name) => Some(parts.geometries.get(name)),
+            _ => SceneFile::parse_geometry_in(o, parts, nested).map(Arc::from),
         }
+    }
+
+    /// A geometry, turned inside out if it has `"inverse": true` and with its surface cut down to
+    /// the inside of `"clipped_by"` if it has one. A `nested` geometry - a part of another - with
+    /// a "material" or "medium" of its own becomes a numbered part of the object, its medium
+    /// collected in `parts`.
+    pub fn parse_geometry_in (o: &Value, parts: &mut Parts, nested: bool) -> Option<Box<dyn Geometry + Sync + Send>> {
+        if let Value::String(name) = o {
+            return Some(Box::new(parts.geometries.get(name)));
+        }
+        let mut g = SceneFile::parse_bare_geometry(o, parts)?;
+        if !o["clipped_by"].is_null() {
+            let by = SceneFile::parse_geometry_in(&o["clipped_by"], parts, true)
+                .unwrap_or_else(|| panic!("clipped_by needs a shape, got {}", o["clipped_by"]));
+            g = Box::new(Clipped::new(g, by));
+        }
+        if o["inverse"].as_bool() == Some(true) {
+            g = Box::new(Inverse(g));
+        }
+        // Steps on the shape itself, as POV-Ray's transformations on an object: they move it
+        // whole, including any clipping.
+        if !o["transform"].is_null() {
+            g = Box::new(Transform::new(g, SceneFile::parse_steps(&o["transform"])));
+        }
+        if let Some((materials, media)) = parts.library
+            && nested && (o.get("material").is_some() || o.get("medium").is_some()) {
+            parts.media.push(SceneFile::parse_object_medium(o, materials, media));
+            g = Box::new(Tagged { item: g, part: parts.media.len() as u32 });
+        }
+        Some(g)
+    }
+
+    fn parse_bare_geometry (o: &Value, parts: &mut Parts) -> Option<Box<dyn Geometry + Sync + Send>> {
         let t = o["type"].as_str().unwrap();
 
         if t == "sphere" {
@@ -330,38 +387,42 @@ impl SceneFile {
         }
 
         if t == "rotate" {
-            return Some(SceneFile::parse_rotation(o, geometries));
+            return Some(SceneFile::parse_rotation(o, parts));
         }
 
         if t == "transform" {
-            return Some(SceneFile::parse_transform(o, geometries));
+            return Some(SceneFile::parse_transform(o, parts));
         }
 
-        if t == "difference" {
-            return Some(SceneFile::parse_difference(o, geometries));
+        if let Some(op) = match t {
+            "union" => Some(Op::Union),
+            "merge" => Some(Op::Merge),
+            "intersection" => Some(Op::Intersection),
+            "difference" => Some(Op::Difference),
+            _ => None,
+        } {
+            return Some(SceneFile::parse_csg(op, o, parts));
         }
-        None
+        SceneFile::parse_shape(t, o)
     }
 
-    /// As `parse_geometry`, but a named geometry is returned as the shared original itself.
-    pub fn parse_shared_geometry(o: &Value, geometries: &GeometryLibrary) -> Option<SharedGeometry> {
-        match o {
-            Value::String(name) => Some(geometries.get(name)),
-            _ => SceneFile::parse_geometry(o, geometries).map(Arc::from),
-        }
+    /// `{"type": "union" | "merge" | "intersection" | "difference", "items": [shapes]}`: a
+    /// difference is its first shape less the others. A difference can also be written with two
+    /// shapes, "a" less "b".
+    pub fn parse_csg(op: Op, o: &Value, parts: &mut Parts) -> Box<dyn Geometry + Sync + Send> {
+        let mut shape = |v: &Value| SceneFile::parse_geometry_in(v, parts, true)
+            .unwrap_or_else(|| panic!("{} items must be shapes, got {}", o["type"], v));
+        let parts: Vec<Box<dyn Geometry + Sync + Send>> = match (o["items"].as_array(), op) {
+            (Some(items), _) => items.iter().map(shape).collect(),
+            (None, Op::Difference) if !o["a"].is_null() => vec![shape(&o["a"]), shape(&o["b"])],
+            _ => panic!("{} needs a list of \"items\"", o["type"]),
+        };
+        assert!(!parts.is_empty(), "{} needs at least one item", o["type"]);
+        Box::new(Csg::new(op, parts))
     }
 
-    pub fn parse_difference(o: &Value, geometries: &GeometryLibrary) -> Box<dyn Geometry + Sync + Send> {
-        let a = SceneFile::parse_geometry(&o["a"], geometries).unwrap(); // Panic if fails
-        let b = SceneFile::parse_geometry(&o["b"], geometries).unwrap();
-        Box::new(Difference { 
-            a: Primitive { item: a },
-            b: Primitive { item: b }, 
-        })
-    }
-
-    pub fn parse_rotation(o: &Value, geometries: &GeometryLibrary) -> Box<dyn Geometry + Sync + Send> {
-        let a = SceneFile::parse_shared_geometry(&o["item"], geometries).unwrap(); // Panic if fails
+    pub fn parse_rotation(o: &Value, parts: &mut Parts) -> Box<dyn Geometry + Sync + Send> {
+        let a = SceneFile::parse_shared_in(&o["item"], parts, true).unwrap(); // Panic if fails
         let roll = SceneFile::parse_number(&o["roll"], 0.).to_radians();
         let pitch = SceneFile::parse_number(&o["pitch"], 0.).to_radians();
         let yaw = SceneFile::parse_number(&o["yaw"], 0.).to_radians();
@@ -371,9 +432,17 @@ impl SceneFile {
     /// `{"type": "transform", "item": {...}, "scale": 2 or [x, y, z], "rotate": {"roll", "pitch",
     /// "yaw"} in degrees, "translate": [x, y, z]}`: every part optional, applied in that order.
     /// With `"item"` the name of one of the scene's `geometries`, it's an instance of it.
-    pub fn parse_transform(o: &Value, geometries: &GeometryLibrary) -> Box<dyn Geometry + Sync + Send> {
-        let item = SceneFile::parse_shared_geometry(&o["item"], geometries)
+    ///
+    /// Or `{"type": "transform", "item": {...}, "steps": [step, ..]}`, applying each step in turn
+    /// (see `parse_steps`).
+    pub fn parse_transform(o: &Value, parts: &mut Parts) -> Box<dyn Geometry + Sync + Send> {
+        let item = SceneFile::parse_shared_in(&o["item"], parts, true)
             .unwrap_or_else(|| panic!("transform needs a geometry \"item\", got {}", o["item"]));
+        if !o["steps"].is_null() {
+            assert!(["scale", "rotate", "translate"].iter().all(|k| o[k].is_null()),
+                "transform takes \"steps\", or \"scale\", \"rotate\" and \"translate\", not both");
+            return Box::new(Transform::new(item, SceneFile::parse_steps(&o["steps"])));
+        }
         let scale = match &o["scale"] {
             Value::Number(n) => { let s = n.as_f64().unwrap(); Vector3::new(s, s, s) },
             Value::Null => Vector3::new(1., 1., 1.),
@@ -387,6 +456,62 @@ impl SceneFile {
         );
         let translate = SceneFile::parse_vec3_def(o, "translate", Vector3::zeros());
         Box::new(Transform::from_parts(item, translate, rotation, scale))
+    }
+
+    /// A list of transformation steps, applied in order:
+    /// - `{"translate": [x, y, z]}`
+    /// - `{"rotate": [x, y, z]}`: degrees about the x axis, then y, then z, each anticlockwise
+    ///   looking down the axis towards the origin (the right-hand rule). `{"roll", "pitch",
+    ///   "yaw"}` names the same angles.
+    /// - `{"scale": s}` or `{"scale": [x, y, z]}`
+    /// - `{"axis_rotate": {"axis": [x, y, z], "angle": degrees}}`: about any axis through the
+    ///   origin.
+    /// - `{"matrix": [12 numbers]}`, in POV-Ray's order: rows of the 3x3 linear part, then the
+    ///   translation, so that (x, y, z) goes to x row1 + y row2 + z row3 + row4.
+    pub fn parse_steps(v: &Value) -> Affine3<f64> {
+        let steps = v.as_array().unwrap_or_else(|| panic!("transform steps must be a list, got {}", v));
+        steps.iter().fold(Affine3::identity(), |m, step| SceneFile::parse_step(step) * m)
+    }
+
+    fn parse_step(step: &Value) -> Affine3<f64> {
+        let keys: Vec<&String> = step.as_object().map(|o| o.keys().collect()).unwrap_or_default();
+        assert!(keys.len() == 1, "each transform step has one of \"translate\", \"rotate\", \"scale\", \"axis_rotate\" or \"matrix\", got {}", step);
+        let v = &step[keys[0].as_str()];
+        let m: Matrix4<f64> = match keys[0].as_str() {
+            "translate" => Translation3::from(SceneFile::parse_vec3(v)).to_homogeneous(),
+            "rotate" => {
+                let a = if v.is_object() {
+                    Vector3::new(SceneFile::parse_number(&v["roll"], 0.), SceneFile::parse_number(&v["pitch"], 0.), SceneFile::parse_number(&v["yaw"], 0.))
+                } else {
+                    SceneFile::parse_vec3(v)
+                };
+                Rotation3::from_euler_angles(a.x.to_radians(), a.y.to_radians(), a.z.to_radians()).to_homogeneous()
+            },
+            "scale" => {
+                let s = match v {
+                    Value::Number(n) => Vector3::repeat(n.as_f64().unwrap()),
+                    _ => SceneFile::parse_vec3(v),
+                };
+                Matrix4::new_nonuniform_scaling(&s)
+            },
+            "axis_rotate" => {
+                let axis = SceneFile::parse_vec3(&v["axis"]);
+                assert!(axis.norm() > 0., "axis_rotate needs a non-zero \"axis\"");
+                Rotation3::from_axis_angle(&na::Unit::new_normalize(axis), SceneFile::parse_number(&v["angle"], 0.).to_radians()).to_homogeneous()
+            },
+            "matrix" => {
+                let n: Vec<f64> = v.as_array().map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default();
+                assert!(n.len() == 12, "a transform matrix has 12 numbers, got {}", v);
+                // Row-vector convention: the rows of POV-Ray's matrix are our columns.
+                Matrix4::new(
+                    n[0], n[3], n[6], n[9],
+                    n[1], n[4], n[7], n[10],
+                    n[2], n[5], n[8], n[11],
+                    0., 0., 0., 1.)
+            },
+            k => panic!("unknown transform step \"{}\"", k),
+        };
+        Affine3::from_matrix_unchecked(m)
     }
 
     pub fn parse_mesh(o: &Value) -> Box<dyn Geometry + Sync + Send> {
@@ -421,7 +546,13 @@ impl SceneFile {
                 SceneFile::parse_vec3(&o["v2"])))
     }
 
+    /// `{"type": "plane", "y": 0}`, a ground plane; or `{"type": "plane", "normal": [x, y, z],
+    /// "distance": d}`, POV-Ray's plane: the half-space n.p < d, which can be used in CSG.
     pub fn parse_plane(o: &Value) -> Box<dyn Geometry + Sync + Send> {
+        if !o["normal"].is_null() {
+            return Box::new(crate::shapes::plane::HalfSpace::new(
+                SceneFile::parse_vec3(&o["normal"]), SceneFile::parse_number(&o["distance"], 0.)));
+        }
         Box::new(Plane {
                 y: SceneFile::parse_number(&o["y"], 0.),
             })
@@ -951,6 +1082,7 @@ impl SceneFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ray::Ray;
 
     #[test]
     fn test_variables_are_substituted() {
@@ -1007,7 +1139,7 @@ mod tests {
         assert!(Arc::ptr_eq(&a, &lib.get("ball")));
         // A transform of a named geometry is an instance of it, not a copy.
         let t = serde_json::json!({ "type": "transform", "item": "ball", "translate": [5, 0, 0] });
-        let _instances: Vec<_> = (0 .. 3).map(|_| SceneFile::parse_transform(&t, &lib)).collect();
+        let _instances: Vec<_> = (0 .. 3).map(|_| SceneFile::parse_geometry(&t, &lib).unwrap()).collect();
         assert_eq!(Arc::strong_count(&a), 2 + 3);
         // Definitions can use each other; "pair" holds one more reference to "ball".
         assert!((lib.get("pair").bounds().max.x - 2.).abs() < 1e-9);
@@ -1047,7 +1179,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "unknown geometry \"nope\"")]
     fn test_unknown_geometry_is_an_error() {
-        SceneFile::parse_transform(&serde_json::json!({ "type": "transform", "item": "nope" }), &GeometryLibrary::empty());
+        SceneFile::parse_geometry(&serde_json::json!({ "type": "transform", "item": "nope" }), &GeometryLibrary::empty());
     }
 
     #[test]
@@ -1137,15 +1269,17 @@ mod tests {
 
     #[test]
     fn test_parse_transform() {
-        let t = SceneFile::parse_transform(&serde_json::json!({
+        let t = SceneFile::parse_geometry(&serde_json::json!({
+            "type": "transform",
             "item": { "type": "sphere", "location": [0, 0, 0], "radius": 1 },
             "scale": 2, "rotate": { "yaw": 90 }, "translate": [0, 0, 5]
-        }), &GeometryLibrary::empty());
+        }), &GeometryLibrary::empty()).unwrap();
         let b = t.bounds();
         assert!((b.min.coords - Vector3::new(-2., -2., 3.)).norm() < 1e-9, "{}", b);
-        let per_axis = SceneFile::parse_transform(&serde_json::json!({
+        let per_axis = SceneFile::parse_geometry(&serde_json::json!({
+            "type": "transform",
             "item": { "type": "sphere", "location": [0, 0, 0], "radius": 1 }, "scale": [3, 1, 1]
-        }), &GeometryLibrary::empty());
+        }), &GeometryLibrary::empty()).unwrap();
         assert!((per_axis.bounds().max.x - 3.).abs() < 1e-9);
     }
 
@@ -1162,6 +1296,81 @@ mod tests {
             ]
         }"#.to_string());
         assert_eq!(s.area_lights.len(), 1);
+    }
+
+    fn hit(g: &dyn Geometry, ro: [f64; 3], rd: [f64; 3]) -> Option<Vector3<f64>> {
+        g.intersects(&Ray { ro: Vector3::from(ro), rd: Vector3::from(rd) }).map(|i| i.point)
+    }
+
+    #[test]
+    fn test_steps_apply_in_order() {
+        let sphere = r#"{"type": "sphere", "location": [0, 0, 0], "radius": 1}"#;
+        // Moved out along x, then turned 90 degrees about y: x goes to -z.
+        let a = SceneFile::parse_geometry(&serde_json::from_str(&format!(
+            r#"{{"type": "transform", "item": {}, "steps": [{{"translate": [5, 0, 0]}}, {{"rotate": [0, 90, 0]}}]}}"#, sphere)).unwrap(), &GeometryLibrary::empty()).unwrap();
+        let p = hit(a.as_ref(), [0., 0., 10.], [0., 0., -1.]).unwrap();
+        assert!((p.z + 4.).abs() < 1e-9, "{}", p);
+        let c = (a.bounds().min.coords + a.bounds().max.coords) * 0.5;
+        assert!((c - Vector3::new(0., 0., -5.)).norm() < 1e-9, "{}", c);
+        // The other way round, it just moves along x.
+        let b = SceneFile::parse_geometry(&serde_json::from_str(&format!(
+            r#"{{"type": "transform", "item": {}, "steps": [{{"rotate": {{"pitch": 90}}}}, {{"translate": [5, 0, 0]}}]}}"#, sphere)).unwrap(), &GeometryLibrary::empty()).unwrap();
+        let c = (b.bounds().min.coords + b.bounds().max.coords) * 0.5;
+        assert!((c - Vector3::new(5., 0., 0.)).norm() < 1e-9, "{}", c);
+    }
+
+    #[test]
+    fn test_transform_on_any_shape_moves_its_clipping_too() {
+        // A bowl (sphere clipped to below y = 0), scaled up and turned upside down: a dome.
+        let dome = SceneFile::parse_geometry(&serde_json::json!({
+            "type": "sphere", "location": [0, 0, 0], "radius": 1,
+            "clipped_by": { "type": "plane", "normal": [0, 1, 0], "distance": 0 },
+            "transform": [ { "scale": 2 }, { "axis_rotate": { "axis": [1, 0, 0], "angle": 180 } } ]
+        }), &GeometryLibrary::empty()).unwrap();
+        let top = hit(dome.as_ref(), [0., 10., 0.], [0., -1., 0.]).unwrap();
+        assert!((top.y - 2.).abs() < 1e-9, "{}", top);
+        // Open underneath: up through the missing base to the inside of the dome.
+        let under = hit(dome.as_ref(), [0., -10., 0.], [0., 1., 0.]).unwrap();
+        assert!((under.y - 2.).abs() < 1e-9, "{}", under);
+    }
+
+    #[test]
+    fn test_matrix_step_is_in_pov_order() {
+        // POV-Ray's matrix <1,0,0, 0.5,1,0, 0,0,1, 3,0,0>: x' = x + 0.5 y + 3 (the second row is
+        // where y goes), others unchanged.
+        let m = SceneFile::parse_steps(&serde_json::json!([ { "matrix": [1, 0, 0, 0.5, 1, 0, 0, 0, 1, 3, 0, 0] } ]));
+        let p = m.transform_point(&crate::na::Point3::new(1., 2., 3.));
+        assert!((p.coords - Vector3::new(5., 2., 3.)).norm() < 1e-12, "{}", p);
+    }
+
+    #[test]
+    #[should_panic(expected = "each transform step has one of")]
+    fn test_step_with_two_keys_is_rejected() {
+        SceneFile::parse_steps(&serde_json::json!([ { "translate": [1, 0, 0], "scale": 2 } ]));
+    }
+
+    #[test]
+    fn test_parts_of_combined_shapes_keep_their_materials() {
+        // A white sphere with a bite cut by a glowing sphere: the cut face is the cutter's.
+        let s = SceneFile::from_string(r#"{
+            "camera": { "location": [0, 0, -10], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
+            "materials": { "L": { "type": "diffuse-light", "color": [1, 1, 1] },
+                           "W": { "type": "lambertian", "albedo": [1, 1, 1] } },
+            "objects": [
+                { "type": "difference", "material": "W", "items": [
+                    { "type": "sphere", "location": [0, 0, 0], "radius": 2 },
+                    { "type": "sphere", "location": [2, 0, 0], "radius": 1, "material": "L" } ] }
+            ]
+        }"#.to_string());
+        let emits = |ro: [f64; 3], rd: [f64; 3]| {
+            let i = s.objects.nearest_intersection(&Ray { ro: Vector3::from(ro), rd: Vector3::from(rd) }, f64::INFINITY, 0.).unwrap();
+            let m = &i.object.medium;
+            m.part(i.part).unwrap_or(&**m).material_at(i.point).is_emitter()
+        };
+        assert!(!emits([0., 5., 0.], [0., -1., 0.]));
+        assert!(emits([5., 0., 0.], [-1., 0., 0.]));
+        // Lights inside a combination aren't sampled as area lights.
+        assert!(s.area_lights.is_empty());
     }
 
     #[test]

@@ -4,6 +4,26 @@ use crate::noise::{PerlinNoise, WorleyNoise, combined_noise};
 
 pub trait Medium : Sync{
     fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send); 
+
+    /// The medium of part `k` of a combined shape (see `csg::Tagged`), if it has its own.
+    fn part(&self, _k: u32) -> Option<&(dyn Medium + Sync + Send)> { None }
+}
+
+/// The media of an object whose parts have their own: `base` for the object itself (and parts
+/// without one), and `parts[k - 1]` for part k.
+pub struct PartMedia {
+    pub base: Box<dyn Medium + Sync + Send>,
+    pub parts: Vec<Box<dyn Medium + Sync + Send>>,
+}
+
+impl Medium for PartMedia {
+    fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
+        self.base.material_at(pt)
+    }
+
+    fn part(&self, k: u32) -> Option<&(dyn Medium + Sync + Send)> {
+        if k == 0 { None } else { self.parts.get(k as usize - 1).map(|m| &**m) }
+    }
 }
 
 pub struct Solid {

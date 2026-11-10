@@ -7,9 +7,9 @@ use std::sync::Arc;
 use crate::na::geometry::{Affine3, Point3, Rotation3, Translation3};
 use crate::na::{Matrix3, Matrix4, Vector3};
 
-/// An object placed in the scene by an affine transformation: scaled, then rotated, then
-/// translated. See Pharr, Jakob and Humphreys, "Physically Based Rendering", 4th ed., section
-/// 3.9 "Transformations" and section 3.10 "Applying Transformations"
+/// An object placed in the scene by an affine transformation: any combination of scaling,
+/// rotation, shearing and translation. See Pharr, Jakob and Humphreys, "Physically Based
+/// Rendering", 4th ed., section 3.9 "Transformations" and section 3.10 "Applying Transformations"
 /// (<https://pbr-book.org/4ed/Geometry_and_Transformations/Applying_Transformations.html>).
 ///
 /// Rather than transforming the object, rays are transformed into its space by the inverse,
@@ -33,15 +33,25 @@ pub struct Transform {
     inverse: Affine3<f64>,
     /// The inverse transpose of the linear part, which maps object space normals to world space.
     normal_matrix: Matrix3<f64>,
-    /// The scale factor if the scaling is the same along every axis, which keeps area uniform,
-    /// so the transformed surface can still be sampled as an area light.
+    /// The scale factor if the transformation scales equally in every direction (a rotation,
+    /// reflection and translation besides), which keeps area uniform, so the transformed surface
+    /// can still be sampled as an area light.
     uniform_scale: Option<f64>,
 }
 
-// Affine transformation (invertible)
 impl Transform {
-    pub fn new(item: impl Into<Arc<dyn Geometry + Sync + Send>>) -> Transform {
-        Transform::from_parts(item, Vector3::zeros(), Rotation3::identity(), Vector3::new(1., 1., 1.))
+    /// `item` transformed by `transform`, which must be invertible.
+    pub fn new(item: impl Into<Arc<dyn Geometry + Sync + Send>>, transform: Affine3<f64>) -> Transform {
+        let inverse = transform.try_inverse()
+            .unwrap_or_else(|| panic!("transformation can't be undone (it flattens the object): {}", transform.matrix()));
+        let linear: Matrix3<f64> = transform.matrix().fixed_view::<3, 3>(0, 0).into();
+        let normal_matrix = inverse.matrix().fixed_view::<3, 3>(0, 0).transpose();
+        // Scaling equally in every direction: the columns are perpendicular and of equal length,
+        // ie. L^T L = s^2 I.
+        let gram = linear.transpose() * linear;
+        let s2 = gram.trace() / 3.;
+        let uniform_scale = ((gram - Matrix3::identity() * s2).norm() <= 1e-9 * s2).then(|| s2.sqrt());
+        Transform { item: item.into(), transform, inverse, normal_matrix, uniform_scale }
     }
 
     pub fn rotate(
@@ -51,25 +61,20 @@ impl Transform {
         Transform::from_parts(item, Vector3::zeros(), Rotation3::from_euler_angles(roll, pitch, yaw), Vector3::new(1., 1., 1.))
     }
 
-    /// Scale by `scale` (per axis), then rotate, then translate by `translate`. `item` may be a
-    /// `Box`, for a geometry used once, or an `Arc` shared with other instances.
+    /// Scale by `scale` (per axis), then rotate, then translate by `translate`.
     pub fn from_parts(
         item: impl Into<Arc<dyn Geometry + Sync + Send>>,
         translate: Vector3<f64>,
         rotation: Rotation3<f64>,
         scale: Vector3<f64>,
     ) -> Transform {
-        assert!(scale.x != 0. && scale.y != 0. && scale.z != 0., "transform scale must be non-zero on every axis, got {}", scale);
         let m: Matrix4<f64> = Translation3::from(translate).to_homogeneous()
             * rotation.to_homogeneous()
             * Matrix4::new_nonuniform_scaling(&scale);
-        let transform = Affine3::from_matrix_unchecked(m);
-        let inverse = transform.inverse();
-        let normal_matrix = inverse.matrix().fixed_view::<3, 3>(0, 0).transpose();
-        let uniform_scale = if scale.x == scale.y && scale.y == scale.z { Some(scale.x.abs()) } else { None };
-        Transform { item: item.into(), transform, inverse, normal_matrix, uniform_scale }
+        Transform::new(item, Affine3::from_matrix_unchecked(m))
     }
 
+    /// A world-space ray in the object's space.
     fn to_object(&self, r: &Ray) -> Ray {
         Ray {
             ro: self.inverse.transform_point(&Point3::from(r.ro)).coords,
@@ -86,12 +91,14 @@ impl Transform {
         (o, k)
     }
 
+    /// An object-space hit in world space, for the world ray `r`.
     fn to_world(&self, r: &Ray, i: RawIntersection) -> RawIntersection {
         let point = self.transform.transform_point(&Point3::from(i.point)).coords;
         RawIntersection {
             dist: (point - r.ro).norm(),
             point,
             normal: (self.normal_matrix * i.normal).normalize(),
+            ..i
         }
     }
 }
@@ -100,6 +107,14 @@ impl Geometry for Transform {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         // Intersect in object space, then map the hit back into world space.
         self.item.intersects(&self.to_object(r)).map(|i| self.to_world(r, i))
+    }
+
+    fn crossings(&self, r: &Ray) -> Vec<RawIntersection> {
+        self.item.crossings(&self.to_object(r)).into_iter().map(|i| self.to_world(r, i)).collect()
+    }
+
+    fn inside(&self, p: &Vector3<f64>) -> bool {
+        self.item.inside(&self.inverse.transform_point(&Point3::from(*p)).coords)
     }
 
     fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
@@ -120,6 +135,7 @@ impl Geometry for Transform {
         self.item.fast_intersects(&self.to_object(r))
     }
 
+    /// The item's bounds under the transformation (unlimited if they are).
     fn bounds(&self) -> BBox {
         self.item.transformed_bounds(&self.transform)
     }
@@ -132,10 +148,6 @@ impl Geometry for Transform {
         self.item.primitives()
     }
 
-    fn inside(&self, p: &Vector3<f64>) -> bool {
-        self.item.inside(&self.inverse.transform_point(&Point3::from(*p)).coords)
-    }
-
     fn surface_area(&self) -> f64 {
         self.uniform_scale.map_or(0., |s| self.item.surface_area() * s * s)
     }
@@ -145,7 +157,7 @@ impl Geometry for Transform {
         self.uniform_scale?;
         let (p, n) = self.item.sample_surface(u)?;
         let point = self.transform.transform_point(&Point3::from(p)).coords;
-        let normal = (self.transform.transform_vector(&n)).normalize();
+        let normal = (self.normal_matrix * n).normalize();
         Some((point, normal))
     }
 }
@@ -212,6 +224,56 @@ mod tests {
     }
 
     #[test]
+    fn test_crossings_and_inside_follow_the_transform() {
+        let t = Transform::from_parts(unit_sphere(), Vector3::new(0., 0., 5.), Rotation3::identity(), Vector3::new(2., 1., 1.));
+        let c = t.crossings(&Ray { ro: Vector3::new(-10., 0., 5.), rd: Vector3::new(1., 0., 0.) });
+        assert_eq!(c.len(), 2);
+        assert!((c[0].dist - 8.).abs() < 1e-9 && (c[1].dist - 12.).abs() < 1e-9);
+        assert!((c[1].normal - Vector3::new(1., 0., 0.)).norm() < 1e-9);
+        assert!(t.inside(&Vector3::new(1.5, 0., 5.)) && !t.inside(&Vector3::new(1.5, 0., 0.)));
+    }
+
+    #[test]
+    fn test_uniform_scale_survives_rotation() {
+        let t = Transform::from_parts(unit_sphere(), Vector3::new(1., 2., 3.), Rotation3::from_euler_angles(0.3, 0.2, 0.1), Vector3::repeat(3.));
+        assert!((t.surface_area() - 36. * std::f64::consts::PI).abs() < 1e-9);
+        // A shear is not uniform.
+        let shear = Matrix4::new(1., 0.5, 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.);
+        let t = Transform::new(unit_sphere(), Affine3::from_matrix_unchecked(shear));
+        assert_eq!(t.surface_area(), 0.);
+    }
+
+    #[test]
+    fn test_sheared_normals_stay_perpendicular() {
+        // x += 0.5 y turns the unit cube into a slanted box; its slanted face's normal is
+        // perpendicular to the slant.
+        let shear = Matrix4::new(1., 0.5, 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.);
+        let b: Box<dyn Geometry + Sync + Send> = Box::new(BBox::new(Vector3::zeros(), Vector3::repeat(1.)));
+        let t = Transform::new(b, Affine3::from_matrix_unchecked(shear));
+        let i = t.intersects(&Ray { ro: Vector3::new(5., 0.5, 0.5), rd: Vector3::new(-1., 0., 0.) }).unwrap();
+        assert!((i.point.x - 1.25).abs() < 1e-9, "{}", i.point);
+        let slant = Vector3::new(0.5, 1., 0.);
+        assert!(i.normal.dot(&slant).abs() < 1e-9 && i.normal.x > 0., "{}", i.normal);
+        assert!(t.inside(&Vector3::new(1.2, 0.9, 0.5)) && !t.inside(&Vector3::new(1.2, 0.1, 0.5)));
+    }
+
+    #[test]
+    #[should_panic(expected = "can't be undone")]
+    fn test_flattening_is_rejected() {
+        Transform::from_parts(unit_sphere(), Vector3::zeros(), Rotation3::identity(), Vector3::new(1., 0., 1.));
+    }
+
+    #[test]
+    fn test_unbounded_items_stay_unbounded() {
+        let plane: Box<dyn Geometry + Sync + Send> = Box::new(crate::shapes::plane::HalfSpace::new(Vector3::new(0., 1., 0.), 0.));
+        let t = Transform::rotate(plane, 0.5, 0., 0.);
+        let b = t.bounds();
+        assert!(b.min.coords.iter().all(|c| *c == f64::MIN) && b.max.coords.iter().all(|c| *c == f64::MAX));
+        // And it's still hit.
+        assert!(t.intersects(&Ray { ro: Vector3::new(0., 5., 0.), rd: Vector3::new(0., -1., 0.) }).is_some());
+    }
+
+    #[test]
     fn test_rotated_hit_is_in_world_space() {
         // A slab that is thin in x; rotating 90 degrees about y makes it thin in z.
         let slab = BBox::new(Vector3::new(-0.1, -1., -2.), Vector3::new(0.1, 1., 2.));
@@ -243,12 +305,6 @@ mod tests {
         let t = Transform::from_parts(b, Vector3::new(10., 0., 0.), Rotation3::identity(), Vector3::new(3., 1., 1.));
         assert!(t.inside(&Vector3::new(12.5, 0., 0.)));
         assert!(!t.inside(&Vector3::new(0., 0., 0.)));
-    }
-
-    #[test]
-    #[should_panic(expected = "non-zero")]
-    fn test_zero_scale_is_rejected() {
-        Transform::from_parts(unit_sphere(), Vector3::zeros(), Rotation3::identity(), Vector3::new(1., 0., 1.));
     }
 
     #[test]

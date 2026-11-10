@@ -60,6 +60,7 @@ impl SceneGraph {
             point: hit.point,
             normal: hit.normal,
             object,
+            part: hit.part,
         })
     }
 

@@ -4,7 +4,7 @@
 Rays.rust is a raytracer written in Rust with the following features:
 - Whitted tracing and path tracing with Monte-Carlo global illumination
 - Material models: Lambertian, Specular, Dielectric
-- Objects: Sphere, Plane, Mesh, OBJ file import; transforms and instancing of named "geometries"
+- Objects: Sphere, Plane, Mesh, OBJ file import, and POV-Ray's shapes (cylinder, cone, torus, blob, isosurface, text and more; see docs/shapes.md, parsed in src/scenefile_shapes.rs), combined by CSG (src/shapes/csg.rs); transforms and instancing of named "geometries"
 - Skysphere with Rayleigh and Mie Scattering
 - Procedural objects including Ocean (Tessendorf's algorithm with Phillips spectrum)
 - Multithreaded rendering with progressive output

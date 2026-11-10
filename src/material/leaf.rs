@@ -118,8 +118,8 @@ impl Leaf {
 
 /// Yellow, from carotenoids: bright in red and green, little blue.
 pub const DEFAULT_AUTUMN: LeafColor = LeafColor {
-    reflectance: Color { rgb: crate::na::Vector3::new(0.38, 0.3, 0.04) },
-    transmittance: Color { rgb: crate::na::Vector3::new(0.32, 0.24, 0.02) },
+    reflectance: Color { rgb: crate::na::Vector3::new(0.45, 0.36, 0.04) },
+    transmittance: Color { rgb: crate::na::Vector3::new(0.35, 0.28, 0.02) },
 };
 
 /// Brown and dry: it transmits far less than a living leaf.

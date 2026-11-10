@@ -36,7 +36,7 @@ use crate::material::legacy::{ Whitted, FlatColor };
 use crate::material::diffuse_light::DiffuseLight;
 use crate::material::noise::{NoiseTexture, NoiseType};
 use crate::participatingmedia::{ParticipatingMedium, HomogenousFog, Vacuum};
-use crate::shapes::geometry::Geometry;
+use crate::shapes::geometry::{Geometry, Tagged};
 
 /// Command-line settings that take precedence over the scene file.
 #[derive(Default)]
@@ -250,12 +250,14 @@ impl SceneFile {
         //return None
     }
     /// `{"type": "tree", "species": "quaking-aspen", "seed": 0, "location": [x, y, z],
-    /// "bark": name, "leaves": name or [names], "params": {...}}`: a procedural tree (see
-    /// `crate::procedural::tree`), as objects for its bark and its leaves. `params` overrides the
-    /// species' parameters. Each name is a material or, failing that, a medium (eg. a noise
-    /// texture). Given several leaf names, each leaf takes one at random, chosen by the seed, so
-    /// a canopy needn't be a single colour. Without materials, the bark is grey-brown and the
-    /// leaves green.
+    /// "bark": name, "dead_bark": name, "leaves": name or [names], "params": {...}}`: a
+    /// procedural tree (see `crate::procedural::tree`), as objects for its bark, its dead
+    /// branches' bark (default: as "bark") and its leaves. `params` overrides the species'
+    /// parameters. Each name is a material or, failing that, a medium (eg. a noise texture).
+    /// Given several leaf names, each leaf takes one at random, chosen by the seed, so a canopy
+    /// needn't be a single colour. Leaves of the `leaf` material also take their own autumn or
+    /// dead colour, by the tree's `autumn` and `dead_branches` parameters; other materials
+    /// ignore them. Without materials, the bark is grey-brown and the leaves green.
     pub fn parse_tree(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>) -> Vec<Arc<SceneObject>> {
         let species = o.get("species").map_or("quaking-aspen".to_string(), SceneFile::parse_string);
         let p = tree::params(&species, &o["params"]);
@@ -272,26 +274,45 @@ impl SceneFile {
                 panic!("Tree material {} is neither a material nor a medium", key)
             }
         };
+        // Leaf materials get each leaf's state, for its autumn or dead colour.
+        let states = Arc::new(mesh.leaf_states.clone());
+        let leaf_medium = |key: &Value| -> Box<dyn Medium + Sync + Send> {
+            match materials.get(&SceneFile::parse_string(key)) {
+                Some(props) if props["type"] == "leaf" => {
+                    let mut leaf = SceneFile::parse_leaf(props);
+                    leaf.states = Some(states.clone());
+                    Box::new(Solid { m: Box::new(leaf) })
+                },
+                _ => medium(key),
+            }
+        };
         let default = |albedo: Color| -> Box<dyn Medium + Sync + Send> {
             Box::new(Solid { m: Box::new(Lambertian { albedo }) })
         };
+        let bark = || o.get("bark").map_or_else(|| default(Color::new(0.25, 0.2, 0.16)), medium);
 
         let mut objects = vec![];
         if !mesh.bark.is_empty() {
             objects.push(Arc::new(SceneObject {
                 geometry: Box::new(tree::TriangleSet::new(&mesh.bark)),
-                medium: o.get("bark").map_or_else(|| default(Color::new(0.25, 0.2, 0.16)), medium),
+                medium: bark(),
+            }));
+        }
+        if !mesh.dead_bark.is_empty() {
+            objects.push(Arc::new(SceneObject {
+                geometry: Box::new(tree::TriangleSet::new(&mesh.dead_bark)),
+                medium: o.get("dead_bark").map_or_else(bark, medium),
             }));
         }
 
         let leaf_media: Vec<Box<dyn Medium + Sync + Send>> = match o.get("leaves") {
             None => vec![default(Color::new(0.1, 0.3, 0.06))],
-            Some(Value::Array(names)) if !names.is_empty() => names.iter().map(medium).collect(),
+            Some(Value::Array(names)) if !names.is_empty() => names.iter().map(leaf_medium).collect(),
             Some(Value::Array(_)) => panic!("A tree's \"leaves\" list is empty"),
-            Some(name) => vec![medium(name)],
+            Some(name) => vec![leaf_medium(name)],
         };
         // Deal each leaf (all its triangles) to one of the media.
-        let mut groups: Vec<Vec<Arc<Triangle>>> = vec![vec![]; leaf_media.len()];
+        let mut groups: Vec<Vec<Arc<Tagged<Triangle>>>> = vec![vec![]; leaf_media.len()];
         let mut rng = crate::geometry::Pcg32::new(seed, 0x1eaf);
         for leaf in mesh.leaves.chunks(mesh.leaf_triangles) {
             let k = ((rng.next_f64() * groups.len() as f64) as usize).min(groups.len() - 1);

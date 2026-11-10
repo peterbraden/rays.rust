@@ -47,12 +47,26 @@
 /// - `branch_loss`: the fraction of branches lost, as real trees shed shaded or broken limbs.
 /// - `leaf_scale_v`: leaves vary in size.
 /// - `leaf_shape` "needles": each leaf is a tuft of needles, for conifers.
+///
+/// And for the seasons and age (see `crate::material::leaf::Leaf` for the colours):
+/// - `autumn`: how far through autumn the tree is. Each leaf turns, then dies, then falls, at
+///   its own time: leaves on a shoot turn together, and leaves exposed at the top and outside of
+///   the crown turn first (Lee et al. 2003, cited there, found leaves in the sun senesce and
+///   redden first). A leaf's exposure, from its height in the crown and its distance out from
+///   the trunk, also tints it towards the sunlit autumn colour.
+/// - `dead_branches`: dead limbs, more of them low in the crown, where shading kills them first
+///   as a tree grows ("self-pruning"). Their bark is a separate mesh, for a weathered material,
+///   and they keep only `dead_leaves` of their leaves, dead.
+///
+/// The seasons draw their random numbers separately, so changing them doesn't change the
+/// tree's shape.
 use crate::na::{Vector3, UnitQuaternion, Unit};
 use crate::geometry::Pcg32;
 use crate::noise::PerlinNoise;
 use crate::shapes::mesh::vertex_normals;
 use crate::shapes::triangle::{Triangle, SmoothTriangle};
-use crate::shapes::geometry::Geometry;
+use crate::shapes::geometry::{Geometry, Tagged};
+use crate::material::leaf::LeafState;
 use crate::shapes::bbox::BBox;
 use crate::octree::Octree;
 use crate::ray::Ray;
@@ -160,6 +174,20 @@ pub struct TreeParams {
     pub lean_v: f64,
     /// Fraction of branches (not leaves) lost.
     pub branch_loss: f64,
+    /// How far through autumn the tree is: 0 in summer, all green; by 1, every leaf has turned,
+    /// died and (see `leaf_fall`) fallen. Each leaf does so at its own time.
+    pub autumn: f64,
+    /// Spread of the times at which leaves start to turn, as a fraction of the season: 0 for
+    /// all at once, up to 0.95.
+    pub autumn_v: f64,
+    /// Fraction of dead leaves that fall; less than 1 for species that keep their dead leaves
+    /// through winter, as young oaks and beeches do.
+    pub leaf_fall: f64,
+    /// Fraction of branches that are dead, more of them low in the crown; with everything on
+    /// them.
+    pub dead_branches: f64,
+    /// Fraction of a dead branch's leaves still hanging on it, dead.
+    pub dead_leaves: f64,
     pub stems: Vec<StemLevel>,
 }
 
@@ -183,6 +211,7 @@ impl Default for TreeParams {
             leaves: 25., leaf_scale: 0.15, leaf_scale_x: 0.6, leaf_quality: 1., leaf_scale_v: 0.2,
             leaf_bend: 0.3, leaf_shape: LeafShape::Oval, attraction_up: 0.5,
             wander: 0.035, roughness: 0.15, lean: 0., lean_v: 4., branch_loss: 0.08,
+            autumn: 0., autumn_v: 0.5, leaf_fall: 1., dead_branches: 0., dead_leaves: 0.1,
             stems: vec![StemLevel::default(); 4],
         }
     }
@@ -269,10 +298,22 @@ fn towards_vertical(frame: UnitQuaternion<f64>, degrees: f64) -> UnitQuaternion<
 /// The triangles of a generated tree.
 pub struct TreeMesh {
     pub bark: Vec<Arc<SmoothTriangle>>,
-    /// Each leaf's triangles, consecutively.
-    pub leaves: Vec<Arc<Triangle>>,
+    /// The bark of dead branches.
+    pub dead_bark: Vec<Arc<SmoothTriangle>>,
+    /// Each leaf's triangles, consecutively, tagged with the leaf's number.
+    pub leaves: Vec<Arc<Tagged<Triangle>>>,
     /// The number of triangles in each leaf.
     pub leaf_triangles: usize,
+    /// Each leaf's state, by its number.
+    pub leaf_states: Vec<LeafState>,
+}
+
+/// A leaf as grown, before the season is applied.
+struct LeafInfo {
+    centre: Vector3<f64>,
+    /// When the shoot it grows on turns, -1 to 1: its leaves turn together.
+    shoot: f64,
+    dead: bool,
 }
 
 /// One stem being grown: what its children and its mesh need to know.
@@ -289,6 +330,9 @@ struct Stem {
     leaves: bool,
     /// Where in noise space this stem's irregularities come from, so each stem has its own.
     noise_at: Vector3<f64>,
+    /// When this stem's leaves turn in autumn, -1 (early) to 1 (late).
+    shoot: f64,
+    dead: bool,
 }
 
 /// Where the next split, child or leaf falls: fractional parts carried along a stem, as error
@@ -303,8 +347,13 @@ struct Carry {
 struct Generator<'a> {
     p: &'a TreeParams,
     rng: Pcg32,
+    /// For the seasons and age, so they don't change the tree's shape.
+    season_rng: Pcg32,
     noise: PerlinNoise,
-    mesh: TreeMesh,
+    bark: Vec<Arc<SmoothTriangle>>,
+    dead_bark: Vec<Arc<SmoothTriangle>>,
+    leaves: Vec<Triangle>,
+    leaf_info: Vec<LeafInfo>,
     /// Phase of the trunk's lobes.
     lobe_phase: f64,
 }
@@ -342,7 +391,7 @@ impl Generator<'_> {
     /// `parent` is the parent's length and this stem's offset along it, None for the trunk.
     #[allow(clippy::too_many_arguments)]
     fn stem(&mut self, level: usize, origin: Vector3<f64>, frame: UnitQuaternion<f64>,
-            length: f64, radius: f64, length_max: f64, parent: Option<(f64, f64)>) {
+            length: f64, radius: f64, length_max: f64, parent: Option<(f64, f64)>, dead: bool) {
         let p = self.p;
         let leaves = level + 1 >= p.levels;
         let children = if leaves {
@@ -358,7 +407,8 @@ impl Generator<'_> {
         };
         let noise_at = Vector3::new(self.uniform(), self.uniform(), self.uniform()) * 1000.;
         let s = Stem {
-            level, length, radius, length_max, children, leaves, noise_at,
+            level, length, radius, length_max, children, leaves, noise_at, dead,
+            shoot: self.season_rng.next_f64() * 2. - 1.,
             base_length: if level == 0 { p.base_size * length } else { 0. },
         };
         // Alternating children start out level with the ground, so they make flat sprays, as a
@@ -490,7 +540,7 @@ impl Generator<'_> {
             let f = frame * rot_y(rotate) * rot_x(down);
 
             if s.leaves {
-                self.leaf(at, f);
+                self.leaf(at, f, s);
                 continue;
             }
 
@@ -514,12 +564,15 @@ impl Generator<'_> {
             if radius <= 0. {
                 continue;
             }
-            self.stem(s.level + 1, at, f, length, radius, length_max, Some((s.length, offset)));
+            // Dead limbs: more low on the trunk, where the crown shades them.
+            let p_dead = if s.level == 0 { p.dead_branches * 2. * (1. - z) } else { p.dead_branches };
+            let dead = s.dead || (p.dead_branches > 0. && self.season_rng.next_f64() < p_dead);
+            self.stem(s.level + 1, at, f, length, radius, length_max, Some((s.length, offset)), dead);
         }
     }
 
     /// A leaf with its stalk at `at`, in the plane of `frame`'s x and y axes, growing along y.
-    fn leaf(&mut self, at: Vector3<f64>, frame: UnitQuaternion<f64>) {
+    fn leaf(&mut self, at: Vector3<f64>, frame: UnitQuaternion<f64>, s: &Stem) {
         let p = self.p;
         // Face the sky: first flip a leaf facing down over (leaves have no back), then turn it
         // `leaf_bend` of the way to face straight up.
@@ -536,8 +589,9 @@ impl Generator<'_> {
             for k in 0 .. 5 {
                 let f = frame * rot_y(turn + 72. * k as f64) * rot_x(30.);
                 let pt = |x: f64, y: f64| at + f * Vector3::new(x * half_width, y * length, 0.);
-                self.mesh.leaves.push(Arc::new(Triangle::new(pt(-1., 0.), pt(1., 0.), pt(0., 1.))));
+                self.leaves.push(Triangle::new(pt(-1., 0.), pt(1., 0.), pt(0., 1.)));
             }
+            self.leaf_info.push(LeafInfo { centre: at + frame * Vector3::y() * (0.5 * length), shoot: s.shoot, dead: s.dead });
             return;
         }
         // A pointed oval: stalk, two pairs of edge points, and tip.
@@ -547,8 +601,9 @@ impl Generator<'_> {
         let (l2, r2) = (pt(-0.75, 0.65), pt(0.75, 0.65));
         let tip = pt(0., 1.);
         for [a, b, c] in [[base, r1, l1], [l1, r1, r2], [l1, r2, l2], [l2, r2, tip]] {
-            self.mesh.leaves.push(Arc::new(Triangle::new(a, b, c)));
+            self.leaves.push(Triangle::new(a, b, c));
         }
+        self.leaf_info.push(LeafInfo { centre: at + frame * Vector3::y() * (0.5 * length), shoot: s.shoot, dead: s.dead });
     }
 
     /// A tube along the segments of `s` from segment `first`: each a start point, frame and the
@@ -618,7 +673,8 @@ impl Generator<'_> {
         for [a, b, c] in triangles {
             let (x, y, z) = (positions[a], positions[b], positions[c]);
             if (y - x).cross(&(z - x)).norm() > 1e-14 {
-                self.mesh.bark.push(Arc::new(SmoothTriangle::new(x, y, z, normal(a), normal(b), normal(c))));
+                let t = Arc::new(SmoothTriangle::new(x, y, z, normal(a), normal(b), normal(c)));
+                if s.dead { self.dead_bark.push(t) } else { self.bark.push(t) }
             }
         }
     }
@@ -627,11 +683,8 @@ impl Generator<'_> {
 /// Generate the tree `p` describes, chosen by `seed`, with its base at `origin`.
 pub fn generate(p: &TreeParams, seed: u64, origin: Vector3<f64>) -> TreeMesh {
     let mut g = Generator {
-        p, rng: Pcg32::new(seed, 0x7ee), noise: PerlinNoise::new(),
-        mesh: TreeMesh {
-            bark: vec![], leaves: vec![],
-            leaf_triangles: if p.leaf_shape == LeafShape::Needles { 5 } else { 4 },
-        },
+        p, rng: Pcg32::new(seed, 0x7ee), season_rng: Pcg32::new(seed, 0x5ea5), noise: PerlinNoise::new(),
+        bark: vec![], dead_bark: vec![], leaves: vec![], leaf_info: vec![],
         lobe_phase: 0.,
     };
     g.lobe_phase = g.uniform() * 2. * PI;
@@ -642,9 +695,63 @@ pub fn generate(p: &TreeParams, seed: u64, origin: Vector3<f64>) -> TreeMesh {
     let radius = length * p.ratio * g.vary(p.trunk_scale, p.trunk_scale_v);
     let frame = rot_y(g.uniform() * 360.) * rot_x(g.vary(p.lean, p.lean_v));
     if length > 0. && radius > 0. {
-        g.stem(0, origin, frame, length, radius, length_max, None);
+        g.stem(0, origin, frame, length, radius, length_max, None, false);
     }
-    g.mesh
+    g.finish(origin)
+}
+
+impl Generator<'_> {
+    /// Apply the season to the leaves grown: each one's age and exposure, and whether it has
+    /// fallen.
+    fn finish(mut self, origin: Vector3<f64>) -> TreeMesh {
+        let p = self.p;
+        let per_leaf = if p.leaf_shape == LeafShape::Needles { 5 } else { 4 };
+        // The crown's extent, for each leaf's exposure.
+        let (mut low, mut high, mut reach) = (f64::INFINITY, f64::NEG_INFINITY, 0f64);
+        for l in &self.leaf_info {
+            low = low.min(l.centre.y);
+            high = high.max(l.centre.y);
+            reach = reach.max((l.centre - origin).xz().norm());
+        }
+        let mut leaves = vec![];
+        let mut states = vec![];
+        let info = std::mem::take(&mut self.leaf_info);
+        for (l, triangles) in info.iter().zip(self.leaves.chunks(per_leaf)) {
+            let height = if high > low { (l.centre.y - low) / (high - low) } else { 1. };
+            let out = if reach > 0. { (l.centre - origin).xz().norm() / reach } else { 1. };
+            let exposure = (0.5 * height + 0.5 * out).clamp(0., 1.);
+            // Draw every leaf's numbers, kept or not, so each keeps its own.
+            let (own, falls, kept) = (self.season_rng.next_f64() * 2. - 1., self.season_rng.next_f64(), self.season_rng.next_f64());
+            if l.dead {
+                if kept >= p.dead_leaves {
+                    continue;
+                }
+                let face = states.len() as u32;
+                states.push(LeafState { age: 2., exposure: exposure as f32 });
+                leaves.extend(triangles.iter().map(|t| Arc::new(Tagged { item: t.clone(), face })));
+                continue;
+            }
+            // When this leaf starts to turn, 0 (early) to 1 (late) of `autumn_v` into the
+            // season: mostly when its shoot does, earlier if it's exposed.
+            let timing = (0.5 + 0.35 * l.shoot + 0.15 * own - 0.8 * (exposure - 0.5)).clamp(0., 1.);
+            let start = p.autumn_v.clamp(0., 0.95) * timing;
+            // Its own progress, 0 to 1 by the end of the season. Leaves turn quickly, hold their
+            // colour for weeks, and mostly fall still coloured as they begin to brown; those
+            // that don't fall die and brown fully.
+            let u = (p.autumn - start).max(0.) / (1. - p.autumn_v.clamp(0., 0.95));
+            if u > 0.9 && falls < p.leaf_fall {
+                continue;
+            }
+            let age = if u < 0.3 { u / 0.3 } else if u < 0.8 { 1. } else { (1. + (u - 0.8) / 0.2).min(2.) };
+            let face = states.len() as u32;
+            states.push(LeafState { age: age as f32, exposure: exposure as f32 });
+            leaves.extend(triangles.iter().map(|t| Arc::new(Tagged { item: t.clone(), face })));
+        }
+        TreeMesh {
+            bark: self.bark, dead_bark: self.dead_bark, leaves,
+            leaf_triangles: per_leaf, leaf_states: states,
+        }
+    }
 }
 
 /// Merge `overrides` into `base`: objects key by key, arrays element by element, anything else
@@ -946,8 +1053,8 @@ mod tests {
         let p = params("quaking-aspen", &Value::Null);
         let (a, b, c) = (generate(&p, 3, Vector3::zeros()), generate(&p, 3, Vector3::zeros()), generate(&p, 4, Vector3::zeros()));
         assert_eq!(a.bark.len(), b.bark.len());
-        assert_eq!(a.leaves[10].v0, b.leaves[10].v0);
-        assert!(a.bark.len() != c.bark.len() || a.leaves[10].v0 != c.leaves[10].v0);
+        assert_eq!(a.leaves[10].item.v0, b.leaves[10].item.v0);
+        assert!(a.bark.len() != c.bark.len() || a.leaves[10].item.v0 != c.leaves[10].item.v0);
     }
 
     #[test]
@@ -1016,6 +1123,66 @@ mod tests {
         let m = generate(&p, 1, Vector3::zeros());
         assert_eq!(m.leaves.len() % 5, 0);
         assert!(!m.leaves.is_empty());
+    }
+
+    fn aspen(overrides: Value) -> TreeMesh {
+        generate(&params("quaking-aspen", &overrides), 4, Vector3::zeros())
+    }
+
+    #[test]
+    fn test_summer_leaves_are_green_and_all_there() {
+        let m = aspen(Value::Null);
+        assert!(m.leaf_states.iter().all(|s| s.age == 0.));
+        assert_eq!(m.leaves.len(), m.leaf_states.len() * m.leaf_triangles);
+        // Each leaf's triangles carry its number.
+        for (k, leaf) in m.leaves.chunks(m.leaf_triangles).enumerate() {
+            assert!(leaf.iter().all(|t| t.face == k as u32));
+        }
+    }
+
+    #[test]
+    fn test_seasons_and_dead_branches_keep_the_shape() {
+        let summer = aspen(Value::Null);
+        let autumn = aspen(serde_json::json!({ "autumn": 0.6 }));
+        let dying = aspen(serde_json::json!({ "dead_branches": 0.2 }));
+        assert_eq!(summer.bark.len(), autumn.bark.len());
+        assert_eq!(summer.bark[100].v0, autumn.bark[100].v0);
+        // Dead branches' bark is split out, not changed.
+        assert!(!dying.dead_bark.is_empty());
+        assert_eq!(summer.bark.len(), dying.bark.len() + dying.dead_bark.len());
+        // They keep few of their leaves, all dead.
+        assert!(dying.leaf_states.len() < summer.leaf_states.len());
+        assert!(dying.leaf_states.iter().any(|s| s.age == 2.));
+    }
+
+    #[test]
+    fn test_leaves_turn_then_fall() {
+        let count = |autumn: f64, fall: f64| aspen(serde_json::json!({ "autumn": autumn, "leaf_fall": fall })).leaf_states;
+        let summer = count(0., 1.).len();
+        let mid = count(0.5, 1.);
+        let late = count(1., 1.);
+        // Midway, some leaves are still green, some in full colour and some browning to fall,
+        // and few have fallen.
+        let (young, old) = mid.iter().fold((2f32, 0f32), |(lo, hi), s| (lo.min(s.age), hi.max(s.age)));
+        assert!(young < 0.5 && old > 1.2, "{} to {}", young, old);
+        assert!(mid.iter().filter(|s| s.age == 1.).count() > mid.len() / 4);
+        assert!(mid.len() > summer * 9 / 10, "{} of {}", mid.len(), summer);
+        // Late, most have fallen; unless the species keeps its dead leaves.
+        assert!(late.len() < summer / 2, "{} of {}", late.len(), summer);
+        let kept = count(1., 0.);
+        assert_eq!(kept.len(), summer);
+        assert!(kept.iter().all(|s| s.age <= 2.));
+        assert!(kept.iter().filter(|s| s.age == 2.).count() > summer / 2);
+    }
+
+    #[test]
+    fn test_exposed_leaves_turn_first() {
+        let m = aspen(serde_json::json!({ "autumn": 0.3 }));
+        let mean_age = |sunny: bool| {
+            let ages: Vec<f32> = m.leaf_states.iter().filter(|s| (s.exposure > 0.6) == sunny).map(|s| s.age).collect();
+            ages.iter().sum::<f32>() / ages.len() as f32
+        };
+        assert!(mean_age(true) > mean_age(false) * 1.1, "{} vs {}", mean_age(true), mean_age(false));
     }
 
     #[test]

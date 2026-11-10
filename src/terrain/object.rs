@@ -31,6 +31,7 @@
 //! Water is not part of the terrain: add a plane at y = 0 (patch) or a sphere (planet).
 
 use crate::color::Color;
+use crate::geometry::rand;
 use crate::material::lambertian::Lambertian;
 use crate::material::model::MaterialModel;
 use crate::material::texture::Medium;
@@ -120,6 +121,8 @@ pub fn mesh(t: &Terrain, place: &Placement) -> TerrainGeometry {
 pub struct TerrainMedium {
     domain: Domain,
     place: Placement,
+    /// Cell spacing in scene units.
+    jitter: f64,
     class: Vec<u8>,
     materials: Vec<Box<dyn MaterialModel + Sync + Send>>,
 }
@@ -154,13 +157,17 @@ impl TerrainMedium {
             lambertian([0.38, 0.36, 0.34]),
         ];
         for b in 0..BANDS { materials.push(lambertian(land_colour((b as f64 + 0.5) * BAND_HEIGHT))); }
-        TerrainMedium { domain: t.domain, place, class, materials }
+        let jitter = t.domain.min_spacing() / place.scale;
+        TerrainMedium { domain: t.domain, place, jitter, class, materials }
     }
 }
 
 impl Medium for TerrainMedium {
     fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
-        &*self.materials[self.class[self.place.cell_at(&self.domain, &pt)] as usize]
+        // Look up a random point within half a cell, so that, over many samples, materials
+        // blend across cell boundaries rather than showing the grid's staircase.
+        let j = Vector3::new(rand() - 0.5, rand() - 0.5, rand() - 0.5) * self.jitter;
+        &*self.materials[self.class[self.place.cell_at(&self.domain, &(pt + j))] as usize]
     }
 }
 

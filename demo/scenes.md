@@ -15,6 +15,11 @@ Demonstrating the ocean generation.
 Procedural art with a block city skyline at sunset.
 ![block terrain](./scenes/block-terrain.png)
 
+## Alpine terrain
+Mountains from seeded noise after one 100,000 year glacial cycle: tectonic uplift, river
+incision and glacial erosion (`src/terrain/`).
+![alpine terrain](./scenes/terrain-alpine.png)
+
 ## Fireworks
 ![fireworks](./scenes/fireworks.png)
 

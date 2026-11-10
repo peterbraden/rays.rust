@@ -28,6 +28,9 @@ Supports:
   - Skysphere with Rayleigh and Mie Scattering
   - Procedural Objects
     - Ocean (Tessendorf's algorithm with Phillips spectrum)
+    - Terrain evolved through time from seeded noise by tectonic uplift, river incision
+      (stream power law) and glacial erosion (shallow ice approximation), on a patch or a
+      whole planet (see `src/terrain/`)
     - Random Cubes
   - Multithreaded
   - Progressive rendering

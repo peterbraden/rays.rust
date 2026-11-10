@@ -16,7 +16,7 @@ use crate::skysphere::{create_sky_sphere, parse_sky_material};
 use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
 use crate::procedural::nubis_clouds::{NubisCloudLayer, GlobalNubis};
-use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGenus};
+use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGenus, GlobalCirrus};
 use crate::participatingmedia::create_fog;
 use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
 use crate::material::ice_halos::{Crystals, Habit};
@@ -487,6 +487,10 @@ impl SceneFile {
     /// (relative size at the cells' edges, where ice is newest), for `diffraction`; `fade`, the fraction of
     /// `extent` over which the layer fades out at its edges (default 0.3); and `time` and
     /// `evolution_period` (seconds) to animate.
+    /// `"mapping": "global"` puts the layer round the whole planet (`GlobalCirrus`), its streaks
+    /// following the planet's winds (`GlobalWind`: bands by latitude about the `pole`, plus
+    /// `eddies` of strength relative to the jets, `eddy_size` across); `"regional"` (the
+    /// default) and `"flat"` as for `nubis_clouds`.
     /// The phase function defaults to `g` 0.75, for ice crystals; `"halos"` adds sun dogs and
     /// halos (see `SceneFile::parse_halos`).
     pub fn parse_hogan_kew_cirrus(o: &Value) -> SceneObject {
@@ -507,6 +511,7 @@ impl SceneFile {
         f.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", f.wind_direction);
         f.seed = SceneFile::parse_seed(o).unwrap_or(0);
         let (base, top) = (f.base, f.top);
+        let generating = (f.cell_size, f.spectral_slope, f.coverage, f.seed);
         let mut c = HoganKewCirrus::new(f);
         c.max_density = num("density", c.max_density);
         c.generating_depth = num("generating_depth", c.generating_depth);
@@ -540,7 +545,17 @@ impl SceneFile {
             Vector3::new(center.x - extent, base, center.y - extent),
             Vector3::new(center.x + extent, top, center.y + extent),
         );
-        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(c));
+        let (bounds, field): (BBox, Arc<dyn DensityField>) = if o["mapping"].as_str() == Some("global") {
+            let planet = Planet { radius: SceneFile::parse_number(&o["earth_radius"], EARTH_RADIUS) };
+            let pole = SceneFile::parse_vec3_def(o, "pole", Vector3::z()).normalize();
+            let (cell, slope, coverage, seed) = generating;
+            let mut global = GlobalCirrus::new(c, cell, slope, coverage, seed, planet.radius, pole);
+            global.wind.eddy_size = num("eddy_size", global.wind.eddy_size);
+            global.wind.eddies = num("eddies", global.wind.eddies);
+            (SceneFile::shell(&planet, top), Arc::new(GlobalMapping { planet, field: Arc::new(global) }))
+        } else {
+            SceneFile::curved(o, bounds, Arc::new(c))
+        };
         // With diffraction, the phase function is that of the rest: refraction and reflection.
         let g = if o.get("diffraction").is_some_and(|d| d != &Value::Bool(false)) { 0.5 } else { 0.75 };
         create_volume(bounds, field, SceneFile::parse_scattering(o, g))

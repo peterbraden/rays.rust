@@ -513,6 +513,234 @@ impl DensityField for HoganKewCirrus {
     }
 }
 
+/// A periodic 3D Gaussian random field with a power-law spectrum, in two independent
+/// realisations: `GeneratingField` in three dimensions, for cirrus over a whole planet, sampled
+/// on the sphere of its generating level. In three dimensions a 1D spectral slope of -β is a
+/// spectral density ∝ k^-(β + 2).
+struct GeneratingField3 {
+    texel: f64,
+    n: usize,
+    real: Vec<f32>,
+    imaginary: Vec<f32>,
+}
+
+/// In-place 3D FFT of `data`, n on a side (a power of two), x fastest.
+fn fft3d(data: &mut [rustfft::num_complex::Complex<f64>], n: usize, inverse: bool) {
+    use rustfft::FFT;
+    let fft = rustfft::algorithm::Radix4::new(n, inverse);
+    let mut line = vec![Complex::new(0., 0.); n];
+    let mut out = vec![Complex::new(0., 0.); n];
+    // Along each axis in turn: gather a line, transform it, scatter it back.
+    for stride in [1, n, n * n] {
+        for base in 0..n * n {
+            // The line's start: every index whose coordinate along this axis is zero.
+            let start = match stride {
+                1 => base * n,
+                s if s == n => (base / n) * n * n + base % n,
+                _ => base,
+            };
+            for k in 0..n {
+                line[k] = data[start + k * stride];
+            }
+            fft.process(&mut line, &mut out);
+            for k in 0..n {
+                data[start + k * stride] = out[k];
+            }
+        }
+    }
+}
+
+impl GeneratingField3 {
+    const N: usize = 128;
+
+    fn new(seed: u64, texel: f64, outer_scale: f64, slope: f64) -> GeneratingField3 {
+        let n = Self::N;
+        let mut rng = Pcg32::new(seed, 9);
+        let mut gaussian = || {
+            let (u, v) = (1. - rng.next_f64(), rng.next_f64());
+            (-2. * u.ln()).sqrt() * (2. * PI * v).cos()
+        };
+        let k0 = 2. * PI / outer_scale;
+        let dk = 2. * PI / (n as f64 * texel);
+        let freq = |i: usize| if i <= n / 2 { i as f64 } else { i as f64 - n as f64 };
+        let mut spectrum = vec![Complex::new(0., 0.); n * n * n];
+        for z in 0..n {
+            for y in 0..n {
+                for x in 0..n {
+                    let k2 = (freq(x).powi(2) + freq(y).powi(2) + freq(z).powi(2)) * dk * dk;
+                    let amplitude = if x + y + z == 0 { 0. } else { (k2 + k0 * k0).powf(-(slope + 2.) / 2.).sqrt() };
+                    spectrum[(z * n + y) * n + x] = Complex::new(gaussian(), gaussian()) * amplitude;
+                }
+            }
+        }
+        fft3d(&mut spectrum, n, true);
+        let normalise = |v: Vec<f64>| {
+            let mean = v.iter().sum::<f64>() / v.len() as f64;
+            let sd = (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / v.len() as f64).sqrt();
+            v.into_iter().map(|x| ((x - mean) / sd) as f32).collect::<Vec<f32>>()
+        };
+        GeneratingField3 {
+            texel,
+            n,
+            real: normalise(spectrum.iter().map(|c| c.re).collect()),
+            imaginary: normalise(spectrum.iter().map(|c| c.im).collect()),
+        }
+    }
+
+    /// Trilinearly interpolated and periodic; `phase` rotates between the realisations.
+    fn at(&self, p: &Vector3<f64>, phase: (f64, f64)) -> f64 {
+        let n = self.n as i64;
+        let q = p / self.texel;
+        let (x0, y0, z0) = (q.x.floor(), q.y.floor(), q.z.floor());
+        let (fx, fy, fz) = (q.x - x0, q.y - y0, q.z - z0);
+        let (x0, y0, z0) = (x0 as i64, y0 as i64, z0 as i64);
+        let t = |dx: i64, dy: i64, dz: i64| {
+            let idx = (((z0 + dz).rem_euclid(n) * n + (y0 + dy).rem_euclid(n)) * n + (x0 + dx).rem_euclid(n)) as usize;
+            phase.0 * self.real[idx] as f64 + phase.1 * self.imaginary[idx] as f64
+        };
+        let lerp = |a: f64, b: f64, t: f64| a + (b - a) * t;
+        let plane = |dz: i64| lerp(lerp(t(0, 0, dz), t(1, 0, dz), fx), lerp(t(0, 1, dz), t(1, 1, dz), fx), fy);
+        lerp(plane(0), plane(1), fz)
+    }
+
+    fn quantile_above(&self, coverage: f64) -> f64 {
+        let mut sorted = self.real.clone();
+        sorted.sort_by(|a, b| a.total_cmp(b));
+        let i = (((1. - coverage) * sorted.len() as f64) as usize).min(sorted.len() - 1);
+        sorted[i] as f64
+    }
+}
+
+/// # Cirrus over a whole planet
+///
+/// Hogan and Kew's cirrus (`HoganKewCirrus`'s parameters and physics: the profile, the drift of
+/// falling ice under a wind that slows and turns with depth, its fall speeds and fibres) on a
+/// sphere, with nothing flat in it:
+///
+/// - The generating cells are a 3D Gaussian random field (`GeneratingField3`) sampled on the
+///   sphere of the generating level: no poles, seams or stretching.
+/// - The wind is the planet's (`GlobalWind`): the drift is taken in each point's local
+///   horizontal, along and across its own wind, so streaks follow the jets and curl round the
+///   eddies, and the fibres, looked up at the ice's source as before, follow them.
+/// - Solid noise elsewhere (fall speeds, fibres, patchiness, turbulence) at the position from
+///   the planet's centre.
+pub struct GlobalCirrus {
+    pub params: HoganKewCirrus,
+    pub wind: crate::planet::GlobalWind,
+    field: GeneratingField3,
+    threshold: f64,
+    radius: f64,
+}
+
+impl GlobalCirrus {
+    /// From the flat layer's parameters and the generating cells' size, spectral slope,
+    /// coverage and seed (as in `CirrusField`).
+    pub fn new(params: HoganKewCirrus, cell_size: f64, slope: f64, coverage: f64, seed: u64,
+               radius: f64, pole: Vector3<f64>) -> GlobalCirrus {
+        let field = GeneratingField3::new(seed, cell_size / TEXELS_PER_CELL, cell_size, slope);
+        let threshold = field.quantile_above(coverage.clamp(1e-6, 1.));
+        GlobalCirrus { params, wind: crate::planet::GlobalWind::new(pole, radius, seed.wrapping_add(17)), field, threshold, radius }
+    }
+
+    /// Where the ice at `at` left its cell, on the sphere of the generating level, and its
+    /// depth as a fraction of the layer: back along its fall in the local horizontal, along and
+    /// across the local wind, then the cells' own drift with the wind at the generating level.
+    fn source(&self, at: &crate::planet::SurfacePoint) -> (Vector3<f64>, f64) {
+        let c = &self.params;
+        let fallen = (c.top - at.altitude).clamp(0., c.top - c.base);
+        let d = fallen / (c.top - c.base);
+        let along = self.wind.direction(&at.up);
+        let across = at.up.cross(&along);
+        let i = c.wind_integral(fallen) / c.fall_speed_at(&at.position);
+        let mut shift = -(along * (i.x + c.generating_wind * c.time) + across * i.y);
+        if c.turbulence > 0. {
+            // Eddies the ice falls through: the local curl of solid noise.
+            let q = at.position / c.turbulence_size;
+            let h = 1e-3;
+            let psi = |e: Vector3<f64>| c.curl_noise.noise(q.x + e.x, q.y + e.y, q.z + e.z);
+            let grad = Vector3::new(psi(Vector3::x() * h) - psi(-Vector3::x() * h),
+                                    psi(Vector3::y() * h) - psi(-Vector3::y() * h),
+                                    psi(Vector3::z() * h) - psi(-Vector3::z() * h)) / (2. * h);
+            shift += at.up.cross(&grad) * (c.turbulence * d);
+        }
+        let generating = self.radius + c.top;
+        (((at.up * generating) + shift).normalize() * generating, d)
+    }
+
+    fn cells(&self, source: &Vector3<f64>) -> f64 {
+        let c = &self.params;
+        let w = if c.evolution_period.is_finite() { 2. * PI * c.time / c.evolution_period } else { 0. };
+        ((self.field.at(source, (w.cos(), w.sin())) - self.threshold) / c.edge).clamp(0., 1.)
+    }
+
+    /// The generating elements (see `HoganKewCirrus::fibre`), in solid noise.
+    fn fibre(&self, source: &Vector3<f64>) -> f64 {
+        let q = source / self.params.fibre_width;
+        let (mut sum, mut weight, mut amp, mut freq) = (0., 0., 1., 1.);
+        for _ in 0..3 {
+            let n = self.params.detail_noise.noise(q.x * freq, q.y * freq, q.z * freq);
+            sum += amp * n.max(0.).powi(2) * 4.;
+            weight += amp;
+            amp *= 0.5;
+            freq *= 2.2;
+        }
+        (sum / weight).min(1.)
+    }
+}
+
+impl crate::planet::PlanetField for GlobalCirrus {
+    fn density(&self, at: &crate::planet::SurfacePoint) -> f64 {
+        let c = &self.params;
+        if at.altitude < c.base || at.altitude > c.top {
+            return 0.;
+        }
+        let profile = c.profile((c.top - at.altitude) / (c.top - c.base));
+        if profile <= 0. {
+            return 0.;
+        }
+        let (source, _) = self.source(at);
+        let cells = self.cells(&source);
+        if cells <= 0. {
+            return 0.;
+        }
+        let detail = 1. - c.fibres * (1. - self.fibre(&source));
+        let patches = if c.patchiness > 0. {
+            let q = source / c.patch_size;
+            let n = c.detail_noise.fbm(q.x, q.y, q.z, 3, 0.5, 2.);
+            1. - c.patchiness * (1. - ((n - 0.4) * 5.).clamp(0., 1.))
+        } else {
+            1.
+        };
+        c.max_density * (profile * cells * detail * patches).clamp(0., 1.)
+    }
+
+    fn majorant(&self) -> f64 {
+        self.params.max_density
+    }
+
+    /// Nothing below the lowest ice or above the layer's top: zero there until the ray reaches
+    /// the layer's spheres; inside, the majorant until it leaves.
+    fn majorant_from(&self, at: &crate::planet::SurfacePoint, _p: &Vector3<f64>, d: &Vector3<f64>,
+                     planet: &crate::planet::Planet) -> (f64, f64) {
+        let (low, high) = (self.params.lowest(), self.params.top);
+        let ahead = (at.position + d * 0.01).norm() - planet.radius;
+        let to_low = crate::planet::to_sphere(&at.position, d, planet.radius + low);
+        let to_high = crate::planet::to_sphere(&at.position, d, planet.radius + high);
+        if ahead < low || ahead > high {
+            (0., to_low.min(to_high))
+        } else {
+            (self.params.max_density, to_low.min(to_high))
+        }
+    }
+
+    fn particle_radius(&self, at: &crate::planet::SurfacePoint) -> Option<f64> {
+        let c = &self.params;
+        let (source, d) = self.source(at);
+        let young = c.young_size + (1. - c.young_size) * self.cells(&source);
+        Some(c.particle_radius * (1. + c.particle_growth * d) * young)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -727,6 +955,52 @@ mod tests {
         let max = v.iter().cloned().fold(0., f64::max);
         let thin = v.iter().filter(|f| **f < 0.2 * max).count() as f64 / v.len() as f64;
         assert!(v.len() > 100 && thin > 0.5, "{} of {} thin", thin, v.len());
+    }
+
+    #[test]
+    fn test_global_cirrus() {
+        use crate::planet::{Planet, PlanetField, GlobalMapping};
+        use crate::volume::DensityField;
+        let mut f = CirrusField::new(CirrusGenus::Cirrus);
+        f.seed = 21;
+        let (cell, slope, coverage) = (f.cell_size, f.spectral_slope, f.coverage);
+        let params = HoganKewCirrus::new(f);
+        let planet = Planet { radius: 6_360_000. };
+        let global = GlobalCirrus::new(params, cell, slope, coverage, 21, planet.radius, Vector3::z());
+        // The 3D field: unit variance, and the threshold leaves the coverage above it.
+        let above = global.field.real.iter().filter(|v| **v as f64 > global.threshold).count() as f64 / global.field.real.len() as f64;
+        assert!((above - coverage).abs() < 0.01, "{}", above);
+        let field = GlobalMapping { planet, field: std::sync::Arc::new(global) };
+        let mut rng = crate::geometry::Pcg32::new(6, 0);
+        let mut cloudy = 0;
+        for _ in 0..3000 {
+            let up = crate::geometry::point_on_unit_sphere(rng.next_f64(), rng.next_f64());
+            let p = planet.center() + up * (planet.radius + 7000. + rng.next_f64() * 4000.);
+            let d = crate::geometry::point_on_unit_sphere(rng.next_f64(), rng.next_f64());
+            let density = field.density(&p);
+            assert!((0. ..=field.majorant()).contains(&density));
+            cloudy += (density > 0.) as usize;
+            // The local majorant bounds it along the ray.
+            let (m, len) = field.majorant_from(&p, &d);
+            for k in 0..10 {
+                let q = p + d * (len.min(20_000.) * k as f64 / 10.);
+                assert!(field.density(&q) <= m + 1e-12);
+            }
+        }
+        // Some cirrus, at every longitude band and near the poles alike (no seams to miss).
+        assert!(cloudy > 100, "{}", cloudy);
+    }
+
+    #[test]
+    fn test_fft3d_round_trip() {
+        let n = 8;
+        let original: Vec<Complex<f64>> = (0..n * n * n).map(|i| Complex::new((i as f64 * 0.37).sin(), (i as f64 * 0.11).cos())).collect();
+        let mut data = original.clone();
+        fft3d(&mut data, n, false);
+        fft3d(&mut data, n, true);
+        for (a, b) in original.iter().zip(&data) {
+            assert!((a - b / (n * n * n) as f64).norm() < 1e-9);
+        }
     }
 
     #[test]

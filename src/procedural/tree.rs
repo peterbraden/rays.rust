@@ -30,7 +30,9 @@
 ///   "Leonardo's Rule, Self-Similarity, and Wind-Induced Stresses in Trees", Physical Review
 ///   Letters 107, 258101, 2011, doi:10.1103/PhysRevLett.107.258101. The paper keeps the radius.
 /// - Negative `rotate` alternates children between two opposite sides (distichous, as in an
-///   elm's twigs or a palm's leaflets), each varied by `rotate_v`; its magnitude is unused.
+///   elm's twigs or a palm's leaflets), starting level with the ground so they make a flat
+///   spray; its magnitude is unused. Their variations by `rotate_v` don't accumulate, as a
+///   spiral's do, so the spray stays flat.
 /// - Leaves are bent towards the sky by `leaf_bend` (0 to 1), after Wolfram Diestel's Arbaro,
 ///   a Java implementation of the paper (<https://sourceforge.net/projects/arbaro/>); the paper
 ///   (4.8) mentions orienting leaves towards the light without giving a rule.
@@ -69,9 +71,9 @@ pub struct StemLevel {
     /// base to `down_angle - down_angle_v` at the tip.
     pub down_angle: f64,
     pub down_angle_v: f64,
-    /// Angle about the parent between one child and the next (4.4). Any negative value
-    /// alternates children between opposite sides instead: each turns 180 degrees from the
-    /// last, varied by `rotate_v`.
+    /// Angle about the parent between one child and the next (4.4), varied by `rotate_v`.
+    /// Any negative value alternates children between opposite sides instead, starting level
+    /// with the ground, so they make a flat spray.
     pub rotate: f64,
     pub rotate_v: f64,
     /// Maximum number of child stems of this level on each parent (4.4). For leaves, unused.
@@ -356,7 +358,15 @@ impl Generator<'_> {
             level, length, radius, length_max, children, leaves, noise_at,
             base_length: if level == 0 { p.base_size * length } else { 0. },
         };
-        let carry = Carry { splits: 0., children: self.uniform(), rotate: self.uniform() * 360. };
+        // Alternating children start out level with the ground, so they make flat sprays, as a
+        // fir's twigs or a palm's leaflets do; others start anywhere.
+        let rotate = if p.level(level + 1).rotate < 0. {
+            let (x, z) = (frame * Vector3::x(), frame * Vector3::z());
+            (-z.y).atan2(x.y).to_degrees()
+        } else {
+            self.uniform() * 360.
+        };
+        let carry = Carry { splits: 0., children: self.uniform(), rotate };
         self.segments(&s, 0, origin, frame, 1., carry, 0., false);
     }
 
@@ -466,12 +476,15 @@ impl Generator<'_> {
                 let r = (s.length - offset) / (s.length - s.base_length);
                 cp.down_angle + cp.down_angle_v * (1. - 2. * shape_ratio(0, r))
             };
-            carry.rotate += if cp.rotate >= 0. {
-                self.vary(cp.rotate, cp.rotate_v)
+            // A spiral's variations accumulate, as in the paper; a spray's stay about its plane.
+            let rotate = if cp.rotate >= 0. {
+                carry.rotate += self.vary(cp.rotate, cp.rotate_v);
+                carry.rotate
             } else {
-                self.vary(180., cp.rotate_v)
+                carry.rotate += 180.;
+                self.vary(carry.rotate, cp.rotate_v)
             };
-            let f = frame * rot_y(carry.rotate) * rot_x(down);
+            let f = frame * rot_y(rotate) * rot_x(down);
 
             if s.leaves {
                 self.leaf(at, f);
@@ -661,9 +674,10 @@ pub fn params(species_name: &str, overrides: &Value) -> TreeParams {
     p
 }
 
-pub const SPECIES: [&str; 8] = [
+pub const SPECIES: [&str; 13] = [
     "quaking-aspen", "black-tupelo", "california-black-oak", "weeping-willow",
     "lombardy-poplar", "balsam-fir", "palm", "shrub",
+    "scots-pine", "stone-pine", "norway-spruce", "italian-cypress", "cedar-of-lebanon",
 ];
 
 /// A `StemLevel` without splits, its arguments in the order of the paper's Table 1.
@@ -687,12 +701,14 @@ fn split(l: StemLevel, seg_splits: f64, split_angle: f64, split_angle_v: f64) ->
 /// and tuned by eye in this renderer, partly for this implementation's departures (see the
 /// module documentation): the willow carries its leaves on its hanging whips, with three levels
 /// of stems rather than four, and the oak has fewer twigs. The others are written for this
-/// renderer in
-/// the same terms, from the trees' published descriptions: the Lombardy poplar's narrow
-/// columnar crown of steep, upturned branches; the balsam fir's conical whorls of near-level
-/// branches with flat sprays of short needles; a palm's single unbranched trunk crowned by
-/// arching fronds with leaflets in two opposite rows, spiralling at the golden angle of
-/// 137.5 degrees (Prusinkiewicz and Lindenmayer, ch. 4); and a generic multi-stemmed shrub.
+/// renderer in the same terms, from the trees' published descriptions: the Lombardy poplar's
+/// narrow columnar crown of steep, upturned branches; the balsam fir's conical whorls of
+/// near-level branches with flat sprays of short needles; a palm's single unbranched trunk
+/// crowned by arching fronds with leaflets in two opposite rows, spiralling at the golden angle
+/// of 137.5 degrees (Prusinkiewicz and Lindenmayer, ch. 4); a generic multi-stemmed shrub; and
+/// the evergreens after them, each described where it is defined. Conifers' foliage uses
+/// needle tufts larger than real needles, standing in for a shoot's many needles, which at a
+/// distance read as a mass rather than individually.
 pub fn species(name: &str) -> Option<TreeParams> {
     let d = TreeParams::default();
     let p = match name {
@@ -789,6 +805,80 @@ pub fn species(name: &str) -> Option<TreeParams> {
                 level(50., 10., 140., 20., 25., 0.5, 0.1, 1., 4, -10., 0., 40.),
                 level(45., 10., 140., 20., 12., 0.5, 0.1, 1., 2, 0., 0., 30.),
                 level(45., 10., 140., 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Long bare trunk, sinuous with age; a high, irregular, flattish crown of upturned
+        // limbs, often with gaps; needles in short tufts.
+        "scots-pine" => TreeParams {
+            shape: 2, base_size: 0.5, scale: 20., scale_v: 4., levels: 3,
+            ratio: 0.018, ratio_power: 1.4, flare: 0.4, lobes: 0, lobe_depth: 0.,
+            leaves: 80., leaf_scale: 0.22, leaf_scale_x: 0.15, leaf_bend: 0., leaf_shape: LeafShape::Needles,
+            attraction_up: 0.6, wander: 0.05, branch_loss: 0.15,
+            stems: vec![
+                level(0., 0., 0., 0., 0., 1., 0., 1., 10, 0., 0., 35.),
+                split(level(70., -30., 137.5, 40., 45., 0.5, 0.15, 1., 6, -35., 0., 60.), 0.15, 25., 10.),
+                level(50., 15., 137.5, 30., 24., 0.45, 0.1, 1., 3, -15., 0., 40.),
+                level(40., 15., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // The umbrella pine: a trunk that forks into a few long limbs, rising and then spreading
+        // level under a broad, flat-topped canopy.
+        "stone-pine" => TreeParams {
+            shape: 2, base_size: 0.55, scale: 14., scale_v: 3., levels: 3,
+            ratio: 0.025, ratio_power: 1.2, flare: 0.6, lobes: 0, lobe_depth: 0.,
+            leaves: 80., leaf_scale: 0.22, leaf_scale_x: 0.15, leaf_bend: 0., leaf_shape: LeafShape::Needles,
+            attraction_up: 1.5, wander: 0.05, branch_loss: 0.1,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0., 1., 8, 0., 0., 40.), 0.25, 30., 10.),
+                split(level(50., 15., 137.5, 40., 14., 0.6, 0.1, 1., 8, 60., 0., 40.), 0.35, 25., 10.),
+                level(40., 15., 137.5, 30., 60., 0.5, 0.1, 1., 3, -20., 0., 30.),
+                level(30., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // A tall, straight, narrow cone of near-level branches, their tips turned up and their
+        // side shoots hanging in curtains.
+        "norway-spruce" => TreeParams {
+            shape: 0, base_size: 0.05, scale: 25., scale_v: 5., levels: 3,
+            ratio: 0.016, ratio_power: 1.4, flare: 0.6, lobes: 0, lobe_depth: 0.,
+            leaves: 45., leaf_scale: 0.22, leaf_scale_x: 0.15, leaf_bend: 0., leaf_shape: LeafShape::Needles,
+            attraction_up: -0.8, wander: 0.01, branch_loss: 0.05,
+            stems: vec![
+                level(0., 0., 0., 0., 0., 1., 0., 1., 8, 0., 0., 6.),
+                level(85., 15., 137.5, 30., 110., 0.3, 0.05, 1., 5, -25., 0., 25.),
+                level(75., 15., -180., 25., 25., 0.35, 0.1, 1., 3, 20., 0., 20.),
+                level(50., 15., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // A dense, dark, narrow column: many short branches held close to the trunk.
+        "italian-cypress" => TreeParams {
+            shape: 5, base_size: 0.03, scale: 15., scale_v: 3., levels: 3,
+            ratio: 0.02, ratio_power: 1.3, flare: 0.3, lobes: 0, lobe_depth: 0.,
+            leaves: 40., leaf_scale: 0.12, leaf_scale_x: 0.25, leaf_bend: 0., leaf_shape: LeafShape::Needles,
+            attraction_up: 1., wander: 0.02, branch_loss: 0.03,
+            stems: vec![
+                level(0., 0., 0., 0., 0., 1., 0., 1., 8, 0., 0., 10.),
+                level(18., 8., 137.5, 30., 160., 0.12, 0.03, 1., 3, -5., 0., 15.),
+                level(30., 10., 137.5, 40., 14., 0.6, 0.15, 1., 2, 0., 0., 20.),
+                level(30., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // A massive, often forked trunk carrying long level limbs in broad, flat tiers of
+        // foliage; needles in rosettes.
+        "cedar-of-lebanon" => TreeParams {
+            shape: 4, base_size: 0.12, scale: 20., scale_v: 4., levels: 3,
+            ratio: 0.025, ratio_power: 1.3, flare: 0.8, lobes: 4, lobe_depth: 0.08,
+            leaves: 80., leaf_scale: 0.2, leaf_scale_x: 0.15, leaf_bend: 0., leaf_shape: LeafShape::Needles,
+            attraction_up: 0.3, wander: 0.04, branch_loss: 0.15,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0., 1., 10, 0., 0., 25.), 0.12, 20., 10.),
+                level(80., 10., 137.5, 50., 28., 0.55, 0.15, 1., 7, -10., 0., 30.),
+                level(80., 15., -180., 30., 45., 0.4, 0.1, 1., 3, 0., 0., 20.),
+                level(50., 15., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
             ],
             ..d
         },

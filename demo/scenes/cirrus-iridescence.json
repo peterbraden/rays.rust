@@ -23,7 +23,7 @@
   "sun": { "intensity": 5.4 },
 
   "objects": [
-    { "type": "plane", "y": 0, "material": "GROUND" },
+    { "type": "planet", "material": "GROUND" },
     { "type": "skysphere", "sun_direction": [0, 0.4, 1] },
     { "type": "hogan_kew_cirrus", "genus": "cirrocumulus", "wind_direction": [1, 0.3], "seed": 5,
       "particle_radius": 4, "diffraction": { "spread": 0.1 } }

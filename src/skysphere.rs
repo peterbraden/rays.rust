@@ -698,6 +698,10 @@ fn get_preset_by_name(name: &str) -> &SkyPreset {
 /// # Returns
 /// A SceneObject representing the sky sphere
 impl SkyMaterial {
+    pub fn earth_radius(&self) -> f64 {
+        self.earth.radius
+    }
+
     pub fn sun_direction(&self) -> Vector3<f64> {
         self.sun_direction
     }

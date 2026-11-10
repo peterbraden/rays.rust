@@ -22,6 +22,7 @@ use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, 
 use crate::material::ice_halos::{Crystals, Habit};
 use crate::material::diffraction::DiffractionTable;
 use crate::noise::PerlinNoise;
+use crate::planet::{Planet, PlanetMapping, EARTH_RADIUS};
 use crate::material::phase::PhaseFunction;
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
@@ -237,6 +238,15 @@ impl SceneFile {
             return Some(Arc::new(f));
         }
 
+        if t == "planet" {
+            // The ground as a sphere, so that what is far away drops below the horizon.
+            let planet = Planet { radius: SceneFile::parse_number(&o["radius"], EARTH_RADIUS) };
+            return Some(Arc::new(SceneObject {
+                geometry: crate::planet::ground(&planet),
+                medium: SceneFile::parse_object_medium(&o, materials, media),
+            }));
+        }
+
         if t == "hogan_kew_cirrus" {
             return Some(Arc::new(SceneFile::parse_hogan_kew_cirrus(&o)));
         }
@@ -430,7 +440,8 @@ impl SceneFile {
             Vector3::new(center.x - extent, base, center.y - extent),
             Vector3::new(center.x + extent, top, center.y + extent),
         );
-        create_volume(bounds, Arc::new(layer), SceneFile::parse_scattering(o, 0.85))
+        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(layer));
+        create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
     }
 
     /// A layer of cirrus by Hogan and Kew's fallstreak model (see
@@ -503,9 +514,22 @@ impl SceneFile {
             Vector3::new(center.x - extent, base, center.y - extent),
             Vector3::new(center.x + extent, top, center.y + extent),
         );
+        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(c));
         // With diffraction, the phase function is that of the rest: refraction and reflection.
         let g = if o.get("diffraction").is_some_and(|d| d != &Value::Bool(false)) { 0.5 } else { 0.75 };
-        create_volume(bounds, Arc::new(c), SceneFile::parse_scattering(o, g))
+        create_volume(bounds, field, SceneFile::parse_scattering(o, g))
+    }
+
+    /// A cloud layer's field and bounds, curved round the planet (`planet::PlanetMapping`)
+    /// unless `"curved": false`: its heights become altitudes above a sphere of
+    /// `earth_radius` (default the Earth's) beneath the origin, so that it drops away with
+    /// distance, and far enough off is hidden below the horizon, as on a planet.
+    pub fn curved(o: &Value, bounds: BBox, field: Arc<dyn DensityField>) -> (BBox, Arc<dyn DensityField>) {
+        if o["curved"].as_bool() == Some(false) {
+            return (bounds, field);
+        }
+        let planet = Planet { radius: SceneFile::parse_number(&o["earth_radius"], EARTH_RADIUS) };
+        (planet.bounds_of(&bounds), Arc::new(PlanetMapping { planet, field }))
     }
 
     pub fn parse_box_terrain(o: &Value) -> SceneObject {
@@ -1034,7 +1058,11 @@ impl SceneFile {
                     let t = sky.sun_transmittance_at(i as f64 * ALTITUDE_STEP);
                     Color::new(t.x, t.y, t.z)
                 }).collect();
-                Some(Sun { atmosphere: Some(atmosphere), ..Sun::new(sky.sun_direction(), irradiance) })
+                Some(Sun {
+                    atmosphere: Some(atmosphere),
+                    planet: Some(Planet { radius: sky.earth_radius() }),
+                    ..Sun::new(sky.sun_direction(), irradiance)
+                })
             },
             None => {
                 let d = v.get("direction").map(SceneFile::parse_vec3)

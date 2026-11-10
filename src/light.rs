@@ -20,8 +20,10 @@ pub struct Sun {
     /// Angular radius of the disc, radians.
     pub angular_radius: f64,
     /// With a skysphere: the transmittance of its atmosphere towards the sun from each
-    /// altitude, every `ALTITUDE_STEP` from the ground up.
+    /// altitude, every `ALTITUDE_STEP` from the ground up, and the planet altitude is measured
+    /// above (rather than scene y).
     pub atmosphere: Option<Vec<Color>>,
+    pub planet: Option<crate::planet::Planet>,
 }
 
 /// The sun's mean angular radius, 0.2666°.
@@ -43,7 +45,7 @@ pub const SUN_SHADOW_DISTANCE: f64 = 1e30;
 impl Sun {
     /// A sun with no atmosphere and the mean angular radius.
     pub fn new(direction: Vector3<f64>, irradiance: Color) -> Sun {
-        Sun { direction: direction.normalize(), irradiance, angular_radius: SUN_ANGULAR_RADIUS, atmosphere: None }
+        Sun { direction: direction.normalize(), irradiance, angular_radius: SUN_ANGULAR_RADIUS, atmosphere: None, planet: None }
     }
 
     /// Irradiance at `point`: through the atmosphere from its altitude (scene y), if any.
@@ -51,7 +53,8 @@ impl Sun {
         match &self.atmosphere {
             None => self.irradiance,
             Some(t) => {
-                let x = (point.y / ALTITUDE_STEP).clamp(0., (t.len() - 1) as f64);
+                let altitude = self.planet.map_or(point.y, |p| p.altitude(point));
+                let x = (altitude / ALTITUDE_STEP).clamp(0., (t.len() - 1) as f64);
                 let i = (x as usize).min(t.len() - 2);
                 let f = x - i as f64;
                 self.irradiance * (t[i] * (1. - f) + t[i + 1] * f)

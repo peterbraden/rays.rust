@@ -78,6 +78,7 @@ mod participatingmedia;
 mod noise;
 mod volume;
 mod glare;
+mod planet;
 
 use crate::trace::trace;
 use crate::rendercontext::RenderContext;

@@ -45,8 +45,7 @@
   },
   "objects": [
     {
-      "type": "plane",
-      "y": 0,
+      "type": "planet",
       "material": "GROUND"
     },
     {

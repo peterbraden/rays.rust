@@ -183,7 +183,7 @@ impl SceneFile {
          let mut objects: Vec<Arc<SceneObject>> = Vec::new();
          for obj in objs {
             if obj["type"] == "tree" {
-                objects.extend(SceneFile::parse_tree(&obj, materials));
+                objects.extend(SceneFile::parse_tree(&obj, materials, media));
                 continue;
             }
             if let Some(x) = SceneFile::parse_object(obj, materials, media) { objects.push(x) }
@@ -250,33 +250,60 @@ impl SceneFile {
         //return None
     }
     /// `{"type": "tree", "species": "quaking-aspen", "seed": 0, "location": [x, y, z],
-    /// "bark": material, "leaves": material, "params": {...}}`: a procedural tree (see
-    /// `crate::procedural::tree`), as two objects, its bark and its leaves. `params` overrides the
-    /// species' parameters. Without materials, the bark is grey-brown and the leaves green.
-    pub fn parse_tree(o: &Value, materials: &Map<String, Value>) -> Vec<Arc<SceneObject>> {
+    /// "bark": name, "leaves": name or [names], "params": {...}}`: a procedural tree (see
+    /// `crate::procedural::tree`), as objects for its bark and its leaves. `params` overrides the
+    /// species' parameters. Each name is a material or, failing that, a medium (eg. a noise
+    /// texture). Given several leaf names, each leaf takes one at random, chosen by the seed, so
+    /// a canopy needn't be a single colour. Without materials, the bark is grey-brown and the
+    /// leaves green.
+    pub fn parse_tree(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>) -> Vec<Arc<SceneObject>> {
         let species = o.get("species").map_or("quaking-aspen".to_string(), SceneFile::parse_string);
         let p = tree::params(&species, &o["params"]);
         let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
         let mesh = tree::generate(&p, seed, SceneFile::parse_vec3_def(o, "location", Vector3::zeros()));
-        let material = |key: &str, default: Color| -> Box<dyn Medium + Sync + Send> {
-            let m: Box<dyn MaterialModel + Sync + Send> = match o.get(key) {
-                Some(k) => SceneFile::require_material(k, materials, &format!("tree {}", key)),
-                None => Box::new(Lambertian { albedo: default }),
-            };
-            Box::new(Solid { m })
+        let medium = |key: &Value| -> Box<dyn Medium + Sync + Send> {
+            let name = SceneFile::parse_string(key);
+            if materials.contains_key(&name) {
+                Box::new(Solid { m: SceneFile::require_material(key, materials, "tree") })
+            } else if media.contains_key(&name) {
+                SceneFile::parse_medium_ref(key, materials, media)
+                    .unwrap_or_else(|| panic!("Tree medium {} has an unknown type", key))
+            } else {
+                panic!("Tree material {} is neither a material nor a medium", key)
+            }
         };
+        let default = |albedo: Color| -> Box<dyn Medium + Sync + Send> {
+            Box::new(Solid { m: Box::new(Lambertian { albedo }) })
+        };
+
         let mut objects = vec![];
         if !mesh.bark.is_empty() {
             objects.push(Arc::new(SceneObject {
                 geometry: Box::new(tree::TriangleSet::new(&mesh.bark)),
-                medium: material("bark", Color::new(0.25, 0.2, 0.16)),
+                medium: o.get("bark").map_or_else(|| default(Color::new(0.25, 0.2, 0.16)), medium),
             }));
         }
-        if !mesh.leaves.is_empty() {
-            objects.push(Arc::new(SceneObject {
-                geometry: Box::new(tree::TriangleSet::new(&mesh.leaves)),
-                medium: material("leaves", Color::new(0.1, 0.3, 0.06)),
-            }));
+
+        let leaf_media: Vec<Box<dyn Medium + Sync + Send>> = match o.get("leaves") {
+            None => vec![default(Color::new(0.1, 0.3, 0.06))],
+            Some(Value::Array(names)) if !names.is_empty() => names.iter().map(medium).collect(),
+            Some(Value::Array(_)) => panic!("A tree's \"leaves\" list is empty"),
+            Some(name) => vec![medium(name)],
+        };
+        // Deal each leaf (all its triangles) to one of the media.
+        let mut groups: Vec<Vec<Arc<Triangle>>> = vec![vec![]; leaf_media.len()];
+        let mut rng = crate::geometry::Pcg32::new(seed, 0x1eaf);
+        for leaf in mesh.leaves.chunks(mesh.leaf_triangles) {
+            let k = ((rng.next_f64() * groups.len() as f64) as usize).min(groups.len() - 1);
+            groups[k].extend_from_slice(leaf);
+        }
+        for (triangles, medium) in groups.into_iter().zip(leaf_media) {
+            if !triangles.is_empty() {
+                objects.push(Arc::new(SceneObject {
+                    geometry: Box::new(tree::TriangleSet::new(&triangles)),
+                    medium,
+                }));
+            }
         }
         objects
     }
@@ -1113,9 +1140,33 @@ mod tests {
     }
 
     #[test]
+    fn test_tree_leaves_take_several_materials_and_media() {
+        let materials = serde_json::json!({
+            "A": { "type": "lambertian", "albedo": [0.1, 0.3, 0.1] },
+            "B": { "type": "leaf", "reflectance": [0.1, 0.2, 0.05], "transmittance": [0.1, 0.2, 0.05] }
+        });
+        let media = serde_json::json!({ "C": { "type": "solid", "material": "A" } });
+        let (materials, media) = (materials.as_object().unwrap(), media.as_object().unwrap());
+        let tree = |leaves: Value| SceneFile::parse_tree(
+            &serde_json::json!({ "type": "tree", "species": "shrub", "seed": 3, "bark": "C", "leaves": leaves }),
+            materials, media);
+        let one = tree(serde_json::json!("A"));
+        let three = tree(serde_json::json!(["A", "B", "C"]));
+        // Bark, and a leaf object per name.
+        assert_eq!(one.len(), 2);
+        assert_eq!(three.len(), 4);
+        // The leaves are shared out whole, none lost.
+        let count = |objects: &[Arc<SceneObject>]| objects[1..].iter().map(|o| o.geometry.primitives()).sum::<u64>();
+        assert_eq!(count(&one), count(&three));
+        for o in &three[1..] {
+            assert!(o.geometry.primitives() > count(&one) / 6, "{}", o.geometry.primitives());
+        }
+    }
+
+    #[test]
     #[should_panic(expected = "Unknown tree species")]
     fn test_unknown_tree_species_names_them() {
-        SceneFile::parse_tree(&serde_json::json!({ "type": "tree", "species": "triffid" }), &Map::new());
+        SceneFile::parse_tree(&serde_json::json!({ "type": "tree", "species": "triffid" }), &Map::new(), &Map::new());
     }
 
     #[test]

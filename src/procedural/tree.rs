@@ -269,7 +269,10 @@ fn towards_vertical(frame: UnitQuaternion<f64>, degrees: f64) -> UnitQuaternion<
 /// The triangles of a generated tree.
 pub struct TreeMesh {
     pub bark: Vec<Arc<SmoothTriangle>>,
+    /// Each leaf's triangles, consecutively.
     pub leaves: Vec<Arc<Triangle>>,
+    /// The number of triangles in each leaf.
+    pub leaf_triangles: usize,
 }
 
 /// One stem being grown: what its children and its mesh need to know.
@@ -625,7 +628,11 @@ impl Generator<'_> {
 pub fn generate(p: &TreeParams, seed: u64, origin: Vector3<f64>) -> TreeMesh {
     let mut g = Generator {
         p, rng: Pcg32::new(seed, 0x7ee), noise: PerlinNoise::new(),
-        mesh: TreeMesh { bark: vec![], leaves: vec![] }, lobe_phase: 0.,
+        mesh: TreeMesh {
+            bark: vec![], leaves: vec![],
+            leaf_triangles: if p.leaf_shape == LeafShape::Needles { 5 } else { 4 },
+        },
+        lobe_phase: 0.,
     };
     g.lobe_phase = g.uniform() * 2. * PI;
     let scale = g.vary(p.scale, p.scale_v).max(0.);

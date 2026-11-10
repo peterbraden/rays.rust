@@ -343,9 +343,10 @@ impl DensityField for NubisCloudLayer {
     /// to that height if the ray crosses it first.
     fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
         let map = self.weather_map();
-        // Classify by a point just along the ray, so one on a texel's edge counts as in the
-        // texel it is entering.
-        let ahead = p + d * (map.texel * 1e-9);
+        // Classify by a point a centimetre along the ray, so one on a texel's edge (or the
+        // clouds' top) counts as where it is entering, even through the rounding of a planet's
+        // mapping (a hair's breadth ahead, rays crawled across texel edges).
+        let ahead = p + d * 0.01;
         let (i, j) = match map.locate(ahead.x, ahead.z) {
             Some((i, j, _, _)) => (i, j),
             None => return (self.max_density, f64::INFINITY),

@@ -2,7 +2,7 @@
   "width": 1200,
   "height": 500,
 
-  "supersamples": 16,
+  "supersamples": 32,
   "chunk_size": 64,
   "samples_per_chunk": 4,
 
@@ -23,9 +23,9 @@
 
   "lights" : [
     {
-      "location": [-400, 300, 600],
+      "location": [-600, 700, 500],
       "color": "white",
-      "intensity": 5000000
+      "intensity": 4500000
     }
   ],
   "variables" : {},
@@ -40,6 +40,6 @@
         "slope": 0.03
       }
     },
-    { "type" : "skysphere", "sun_direction": [-0.5, 0.4, 0.75], "brightness": 30}
+    { "type" : "skysphere", "sun_direction": [-0.6, 0.7, 0.5], "brightness": 22}
   ]
 }

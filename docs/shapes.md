@@ -2,9 +2,9 @@
 
 The scene file's `objects` take these geometry types besides `sphere`, `plane`, `box`,
 `triangle`, `mesh` and `smoothmesh`. They follow POV-Ray's shapes of the same names, and use the
-same coordinates (except that POV-Ray is left-handed: see `text`). Any of them can be placed with
-a `transform`, given a `material`, and (the solid ones) combined with others: see
-[Combining shapes](#combining-shapes-csg).
+same coordinates (except that POV-Ray is left-handed: see `text`). Any of them can be moved,
+turned and stretched (see [Placing shapes](#placing-shapes)), given a `material`, and (the solid
+ones) combined with others (see [Combining shapes](#combining-shapes-csg)).
 
 ![Every shape](../demo/scenes/shapes.png)
 
@@ -68,6 +68,34 @@ These are turned into triangles when the scene loads.
 | `bicubic_patch` | `points`* (16: four rows of four), `steps: 16` | A Bezier patch. |
 | `text` | `font`* (a .ttf or .otf file), `string`*, `thickness: 1`, `offset: [0, 0]`, `steps: 8` | Letters about one unit high on the baseline y = 0 from x = 0, from z = 0 to z = thickness. In this right-handed renderer they read left to right from the +z side; turn them 180° about y (`"rotate": {"pitch": 180}`) to face a camera on the -z side. |
 
+## Placing shapes
+
+Any shape can have `"transform": [steps]`, applied in order, like POV-Ray's transformations on
+an object:
+
+```json
+{ "type": "torus", "major": 1, "minor": 0.25, "material": "GOLD",
+  "transform": [ { "scale": [1, 1, 0.5] }, { "rotate": [90, 0, 30] }, { "translate": [0, 1, 0] } ] }
+```
+
+| Step | |
+|---|---|
+| `{"translate": [x, y, z]}` | Move. |
+| `{"rotate": [x, y, z]}` | Turn by degrees about the x axis, then y, then z, each anticlockwise looking down the axis towards the origin (the right-hand rule; POV-Ray, being left-handed, turns the other way). `{"roll": x, "pitch": y, "yaw": z}` names the same angles. |
+| `{"scale": s}` or `{"scale": [x, y, z]}` | Stretch about the origin. Negative values mirror; zero is refused. |
+| `{"axis_rotate": {"axis": [x, y, z], "angle": a}}` | Turn by `a` degrees about any axis through the origin. |
+| `{"matrix": [12 numbers]}` | Any affine transformation, in POV-Ray's order: three rows of the linear part, then the translation, so (x, y, z) goes to x row₁ + y row₂ + z row₃ + row₄. It must not flatten the shape. |
+
+The steps move the shape whole, including what it is `clipped_by`. Order matters: translating
+then rotating swings the shape round the origin, while rotating then translating turns it in
+place. Uniformly scaled emitters can still be sampled as area lights after any rotation.
+
+The `{"type": "transform", "item": shape, ...}` wrapper takes the same list as `"steps"`, or the
+older fixed form `"scale"`, then `"rotate": {"roll", "pitch", "yaw"}`, then `"translate"`.
+
+Materials and bump patterns stay fixed in the world: a moved shape moves through its texture
+rather than taking it along.
+
 ## Combining shapes (CSG)
 
 | Type | Fields | |
@@ -80,7 +108,7 @@ These are turned into triangles when the scene loads.
 ![CSG](../demo/scenes/csg.png)
 
 [`demo/scenes/csg.json`](../demo/scenes/csg.json) has an example of each. Combinations nest, and
-can be placed with `transform` like any shape. Any shape can also have:
+can be placed with `transform` steps like any shape. Any shape can also have:
 
 - `"inverse": true`: turned inside out, so that its inside is everything outside it. An
   intersection with an inverse shape is a difference.

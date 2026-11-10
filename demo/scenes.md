@@ -1,5 +1,7 @@
 # Test Scenes
 
+For clouds, see the [cloud atlas](./cloud-atlas.md).
+
 ## Spheres
 Spheres demonstrating 3 different materials.
 ![Spheres](./scenes/spheres.png)

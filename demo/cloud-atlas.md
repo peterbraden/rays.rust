@@ -1,0 +1,205 @@
+# Cloud atlas
+
+The clouds rays.rust can render, arranged as in the WMO's [International Cloud
+Atlas](https://cloudatlas.wmo.int/): high clouds (cirrus, cirrocumulus, cirrostratus) from about
+6 km up, middle clouds (altocumulus, altostratus) from about 2 km, and low clouds (stratocumulus,
+stratus, cumulus) below. Each entry has a scene to render it from, what makes it, and what it
+can't do yet.
+
+Every cloud is a participating medium of the same kind (see `src/volume.rs`): delta tracking
+through a density field, lit by the sun and the sky, under the same atmosphere that reddens the
+sun and hazes the distance. Cloud layers curve with the planet's surface, so distant clouds drop
+towards the horizon and sink below it. What differs is where the density comes from. There are
+four generators:
+
+| Generator | Makes | Approach |
+|---|---|---|
+| `hogan_kew_cirrus` | cirrus, cirrostratus | Ice falling from generating cells in wind shear (Hogan & Kew 2005) |
+| `benard_altocumulus` | altocumulus, cirrocumulus | Rayleigh-Bénard convection cells in a thin layer |
+| `nubis_clouds` | cumulus, stratocumulus, stratus, altostratus | Noise-based modelling (Schneider, Horizon Zero Dawn's Nubis) |
+| `harris_cumulus` | cumulus, as they grow and die | A simulation of a sunny day (Harris et al. 2003) |
+
+Render any of them with `cargo run --release -- demo/scenes/<scene>.json`.
+
+| | Cloud | Scene |
+|---|---|---|
+| High | [Cirrus](#cirrus) | `hogan-kew-cirrus.json` |
+| | [Cirrocumulus](#cirrocumulus) | `cirrocumulus.json` |
+| | [Cirrostratus, with halos](#cirrostratus) | `cirrostratus-halos.json` |
+| Middle | [Altocumulus](#altocumulus) | `benard-altocumulus.json` |
+| | [Altocumulus undulatus](#altocumulus-undulatus) | `altocumulus-undulatus.json` |
+| | [Altostratus](#altostratus) | `altostratus.json` |
+| Low | [Stratocumulus](#stratocumulus) | `stratocumulus.json` |
+| | [Stratus](#stratus) | `stratus.json` |
+| | [Cumulus, modelled](#cumulus-modelled) | `nubis-clouds.json` |
+| | [Cumulus, simulated](#cumulus-simulated) | `harris-cumulus.json` |
+| Phenomena | [Iridescence](#iridescence) | `cirrus-iridescence.json` |
+| | [Clouds from orbit](#clouds-from-orbit) | `orbit.json` |
+
+## High clouds
+
+### Cirrus
+
+![Cirrus](./scenes/hogan-kew-cirrus.png)
+
+`hogan-kew-cirrus.json`: `{"type": "hogan_kew_cirrus", "genus": "cirrus"}`
+
+Fibrous streaks with hooked ends (cirrus fibratus and uncinus). This follows R. J. Hogan and
+S. F. Kew, "A 3D stochastic cloud model for investigating the radiative properties of inhomogeneous
+cirrus clouds" (QJRMS 2005). Ice crystals form in generating cells near the top of the layer: an
+anisotropic random field with a k^-5/3 spectrum. They then fall through wind that strengthens and
+veers with depth, so each cell trails a curved fallstreak. Fibres, a large-scale flow that bends
+the streaks, and varied fall speeds make them wispy. `time` animates the layer.
+
+### Cirrocumulus
+
+![Cirrocumulus](./scenes/cirrocumulus.png)
+
+`cirrocumulus.json`: `{"type": "benard_altocumulus", "base": 7500, "thickness": 60, "cell_size": 160}`
+
+A sheet of tiny grains or ripples, each under 1° across. Cirrocumulus forms by the same
+small-scale convection as altocumulus, only higher and finer, so it uses the altocumulus
+generator with smaller, thinner cells (see [Altocumulus](#altocumulus)). `hogan_kew_cirrus` also
+has a `"cirrocumulus"` genus, with generating cells 400 m across and little fall. It reads as a
+patchy veil more than grains, but it is what the iridescence scene uses.
+
+### Cirrostratus
+
+![Cirrostratus with halos](./scenes/cirrostratus-halos.png)
+
+`cirrostratus-halos.json`: `{"type": "hogan_kew_cirrus", "genus": "cirrostratus", "halos": true}`
+
+A thin, nearly uniform veil of ice: the cloud of halos. Light is traced through hexagonal ice
+prisms, plates, columns and randomly oriented crystals, with refraction, reflection and total
+internal reflection. The result is tabulated by viewing direction. This gives the 22° and 46°
+halos, sun dogs, the parhelic circle and the circumzenithal arc in the right places and colours
+(`src/material/ice_halos.rs`). Without `halos`, the ice scatters with a smooth forward-peaked
+phase function.
+
+## Middle clouds
+
+### Altocumulus
+
+![Altocumulus](./scenes/benard-altocumulus.png)
+
+`benard-altocumulus.json`: `{"type": "benard_altocumulus", "base": 4000, "thickness": 200}`
+
+Rounded cloudlets in a regular sheet: the "mackerel sky". A thin layer cooled at its top
+overturns in convection cells, like Rayleigh-Bénard cells in a heated fluid. Air rises in each
+cell's middle, where it condenses into a cloudlet, and sinks at its edges, leaving clear gaps.
+The cells are a jittered, warped hexagonal lattice. Each cloudlet is a flat-based dome with
+turrets, grey in the middle and bright at the edges when the sun is ahead. `coverage` takes the
+sheet from scattered cloudlets to joined ones with holes between (perlucidus); `anisotropy` and
+`wind_direction` draw the cells out into rows; `patchiness` breaks the sheet into patches.
+
+### Altocumulus undulatus
+
+![Altocumulus undulatus](./scenes/altocumulus-undulatus.png)
+
+`altocumulus-undulatus.json`: `{"type": "benard_altocumulus", "undulation": 0.8, "wind_direction": [0, 1]}`
+
+Altocumulus in parallel bands, where gravity waves ripple the layer. `undulation` raises and
+grows the cloudlets along wave crests across the wind, `wavelength` apart, and thins them in the
+troughs.
+
+### Altostratus
+
+![Altostratus](./scenes/altostratus.png)
+
+`altostratus.json`: `{"type": "nubis_clouds", "base": 3000, "top": 4500, "coverage": 1, "cloud_type": 0, "density": 0.003}`
+
+A grey or bluish sheet through which the sun shows as if through ground glass. It is Nubis's
+stratus profile at middle height, optically thin (an optical depth of a few through the sheet).
+This is an approximation: real altostratus is a smooth, often fibrous sheet, while Nubis still
+shapes it from billowing noise.
+
+## Low clouds
+
+### Stratocumulus
+
+![Stratocumulus](./scenes/stratocumulus.png)
+
+`stratocumulus.json`: `{"type": "nubis_clouds", "base": 700, "top": 1500, "coverage": 0.8, "cloud_type": 0.5}`
+
+Lumpy rolls and patches in a layer, with darker bases. This is Nubis (A. Schneider and N. Vos,
+"The Real-time Volumetric Cloudscapes of Horizon: Zero Dawn", SIGGRAPH 2015), with the
+stratocumulus height profile. A weather map says where the cloud is, Perlin-Worley noise gives
+it billowing shapes, and Worley noise erodes the edges. `cloud_type` blends the height profile
+from stratus (0) through stratocumulus (0.5) to cumulus (1).
+
+### Stratus
+
+![Stratus](./scenes/stratus.png)
+
+`stratus.json`: `{"type": "nubis_clouds", "base": 300, "top": 800, "coverage": 1, "cloud_type": 0}`
+
+A low, grey overcast: Nubis with the stratus profile and full coverage.
+
+### Cumulus, modelled
+
+![Cumulus](./scenes/nubis-clouds.png)
+
+`nubis-clouds.json`: `{"type": "nubis_clouds", "base": 1500, "top": 3000, "coverage": 0.55, "cloud_type": 1}`
+
+Fair-weather cumulus (humilis and mediocris): flat bases and rounded tops, from Nubis's
+cumulus profile, with clouds growing taller where the weather map is stronger. They cast
+shadows on the ground. They are shaped from noise, so they don't change over time.
+
+### Cumulus, simulated
+
+![Simulated cumulus](./scenes/harris-cumulus.png)
+
+`harris-cumulus.json`: `{"type": "harris_cumulus", "time": 1800, "cache": "demo/scenes/.cumulus-cache"}`
+
+Cumulus from a simulation of a sunny day. This follows M. J. Harris et al., "Simulation of Cloud
+Dynamics on Graphics Hardware" (Graphics Hardware 2003): fluid flow carrying heat, water vapour
+and cloud water, with buoyancy, condensation and latent heat. The ground heats the air in
+patches, and thermals rise through the mixed layer and condense at the lifting condensation
+level: a flat cloud base, set by the morning's humidity, not by hand. Latent heat keeps the
+cloudy air buoyant, so turrets boil up to the inversion. Their edges mix with dry air and
+evaporate, and clouds cut off from their thermals dissipate.
+
+The simulation runs on a grid (128 x 80 x 128 cells of 50 m by default, periodic, tiled across
+the sky) for `time` seconds when the scene loads, and caches its state in `cache`. An
+animation therefore simulates only from frame to frame:
+
+```bash
+scripts/animate.py demo/scenes/harris-cumulus.json --start 600 --end 3600 --frames 120 -- --width 480 --height 300
+```
+
+The grid resolves clouds down to about 100 m. Worley erosion adds finer detail at their edges.
+
+## Phenomena
+
+### Iridescence
+
+![Iridescence](./scenes/cirrus-iridescence.png)
+
+`cirrus-iridescence.json`: `{"type": "hogan_kew_cirrus", "genus": "cirrocumulus", "particle_radius": 4, "diffraction": {"spread": 0.1}}`
+
+Pastel colours near the sun, in thin cloud of small, even particles: here, young ice at the
+edges of cirrocumulus cells. Diffraction by the particles is modelled as an Airy pattern,
+averaged over their sizes and over wavelengths across each colour channel
+(`src/material/diffraction.rs`). Where particles are larger, the colours wash out. Any cloud
+generator that reports particle sizes can show it: `benard_altocumulus` (`particle_radius`) and
+`harris_cumulus` (`droplet_radius`) do.
+
+### Clouds from orbit
+
+![Orbit](./scenes/orbit.png)
+
+`orbit.json`: `{"type": "nubis_clouds", "mapping": "global"}` and `{"type": "hogan_kew_cirrus", "mapping": "global"}`
+
+Cumulus and cirrus over the whole planet, seen from 400 km. With `"mapping": "global"`, the
+weather map is a cube-sphere over the globe, with no seams or poles. Climate bands give cloudy
+tropics and storm tracks and clear subtropics. Cirrus follows a planet-wide wind field. The render
+is still noisy: from orbit, cloud detail is much smaller than a pixel.
+
+## Not yet
+
+- **Nimbostratus**: a thick, dark rain cloud. It needs precipitation.
+- **Cumulonimbus**: anvils and overshooting tops. `harris_cumulus` could grow them with a deeper
+  grid, a weaker inversion and ice microphysics.
+- **Lenticular, castellanus, mammatus and other species**: each needs its own mechanism (flow over
+  hills, mid-level convection, sinking pouches of cloud).
+- **Rain, virga and lightning.**

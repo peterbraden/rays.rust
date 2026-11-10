@@ -1,0 +1,72 @@
+{
+  "width": 960,
+  "height": 600,
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 64,
+  "path_termination": "russian_roulette",
+  "materials": {
+    "GROUND": {
+      "type": "lambertian",
+      "albedo": [
+        0.12,
+        0.16,
+        0.08
+      ]
+    }
+  },
+  "camera": {
+    "location": [
+      0,
+      2,
+      0
+    ],
+    "lookat": [
+      400,
+      1200,
+      2000
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.8
+  },
+  "sun": {
+    "intensity": 4.9
+  },
+  "objects": [
+    {
+      "type": "planet",
+      "material": "GROUND"
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        0.2,
+        0.5,
+        1
+      ]
+    },
+    {
+      "type": "nubis_clouds",
+      "base": 3000,
+      "top": 4500,
+      "extent": 80000,
+      "coverage": 1,
+      "cloud_type": 0,
+      "erosion": 0.2,
+      "density": 0.003,
+      "seed": 8,
+      "albedo": [
+        0.99,
+        0.99,
+        0.99
+      ],
+      "similarity_after": 4
+    }
+  ]
+}

@@ -25,7 +25,55 @@ use crate::geometry::Pcg32;
 use crate::noise::PerlinNoise;
 use crate::ray::Ray;
 use crate::shapes::geometry::Geometry;
+use crate::shapes::bbox::BBox;
+use crate::intersection::{Intersection, RawIntersection};
+use crate::material::model::{MaterialModel, ScatteredRay};
+use crate::material::texture::Medium;
+use crate::scene::Scene;
 use std::collections::HashMap;
+
+/// Bits of a hit's `face` left for the part's own use, eg. the leaf's number; the bits above
+/// them say which part of a multi-part object was hit.
+pub const PART_SHIFT: u32 = 22;
+
+/// One of the parts of an object made of many, each with its own material: its hits' faces
+/// say which part, in the bits from `PART_SHIFT` up, keeping the item's own face below.
+///
+/// A whole forest is one object of such parts, the bark and leaves of every placed tree, so a
+/// ray searches one acceleration structure and stops at the first tree it meets. As separate
+/// objects, one per tree part, each spanning the whole forest, every ray searched them all.
+pub struct PartOf<T: Geometry> {
+    pub item: T,
+    pub part: u32,
+}
+
+impl<T: Geometry> Geometry for PartOf<T> {
+    fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+        self.item.intersects(r).map(|i| RawIntersection { face: (self.part << PART_SHIFT) | (i.face & ((1 << PART_SHIFT) - 1)), ..i })
+    }
+
+    fn bounds(&self) -> BBox {
+        self.item.bounds()
+    }
+
+    fn primitives(&self) -> u64 {
+        self.item.primitives()
+    }
+}
+
+/// The material of an object of `PartOf` parts: each hit is scattered by its part's medium,
+/// with the part's own face.
+pub struct PartsMaterial {
+    pub parts: Vec<Box<dyn Medium + Sync + Send>>,
+}
+
+impl MaterialModel for PartsMaterial {
+    fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
+        let part = (intersection.face >> PART_SHIFT) as usize;
+        let own = Intersection { face: intersection.face & ((1 << PART_SHIFT) - 1), ..*intersection };
+        self.parts[part].material_at(intersection.point).scatter(r, &own, s)
+    }
+}
 
 /// A species' share of a forest.
 #[derive(Clone, Debug)]

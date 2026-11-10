@@ -753,7 +753,7 @@ impl Generator<'_> {
 
 /// Merge `overrides` into `base`: objects key by key, arrays element by element, anything else
 /// replaced.
-fn merge(base: &mut Value, overrides: &Value) {
+pub fn merge(base: &mut Value, overrides: &Value) {
     match (base, overrides) {
         (Value::Object(b), Value::Object(o)) => {
             for (k, v) in o {

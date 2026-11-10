@@ -134,7 +134,7 @@ impl Sounding {
         let z = [0., 900., 1000., 1300., 2500., 5500.];
         Sounding {
             theta: Profile::new(&z, &[304.5, 304.5, 305.6, 307.13, 314.0, 343.2]),
-            water: Profile::new(&z, &[15.6, 15.6, 14.0, 13.50, 3.00, 3.00]).scaled(1., 1e-3),
+            water: Profile::new(&z, &[15.0, 15.0, 14.0, 13.50, 3.00, 3.00]).scaled(1., 1e-3),
             surface_pressure: 97000.,
         }
     }
@@ -1374,6 +1374,10 @@ mod diagnostics {
         for quarters in 1..=16 {
             sim.advance_to(quarters as f64 * 900., |_| {});
             report(&sim);
+            // Keep the states for rendering, if asked: HARRIS_SAVE=<dir>.
+            if let Ok(dir) = std::env::var("HARRIS_SAVE") {
+                sim.save(&std::path::Path::new(&dir).join(format!("quarter-{:02}.state", quarters))).unwrap();
+            }
             if quarters % 4 == 0 {
                 let (nx, ny, nz) = sim.params.size;
                 let slab = nx * nz;

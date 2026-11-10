@@ -494,6 +494,8 @@ impl SceneFile {
     /// default [10, 0]) carries everything; `friction_velocity` (m/s) stirs the air near the
     /// ground; `vorticity` (confinement); `max_step` (s); `seed`.
     ///
+    /// `state` renders a state saved by `CloudSimulation::save` instead of simulating.
+    ///
     /// For rendering: `droplet_radius` (µm, default 10; sets the extinction per gram of
     /// water, and the diffraction), `detail_size`, `erosion` (0 to 1) and `edge` (g/kg of
     /// cloud water the detail can erode), `repeat` (tile the grid across the sky, default
@@ -544,7 +546,12 @@ impl SceneFile {
         }
         let time = num("time", 5400.).max(0.);
         let cache = o["cache"].as_str().map(std::path::PathBuf::from);
-        let sim = CloudSimulation::cached(p.clone(), time, cache.as_deref());
+        // A saved state, as is (eg. from the `harris_day` diagnostic), or a simulation.
+        let sim = match o["state"].as_str() {
+            Some(path) => CloudSimulation::load(p.clone(), std::path::Path::new(path))
+                .unwrap_or_else(|e| panic!("harris_cumulus: couldn't load the state {}: {}", path, e)),
+            None => CloudSimulation::cached(p.clone(), time, cache.as_deref()),
+        };
         let center = SceneFile::parse_vec2_def(o, "center", Vector2::new(0., 0.));
         let mut c = HarrisCumulus::new(&sim, num("droplet_radius", 10.), center);
         c.detail_size = num("detail_size", c.detail_size).max(1e-3);

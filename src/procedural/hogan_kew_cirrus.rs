@@ -176,6 +176,13 @@ pub struct HoganKewCirrus {
     /// size: cirrocumulus comes in patches of ripples, not an even grain.
     pub patchiness: f64,
     pub patch_size: f64,
+    /// Mean radius (µm) of the ice crystals at the generating level; how much larger, as a
+    /// fraction, they have grown by the base; and their relative size at the cells' edges,
+    /// where the ice is newest. Only diffraction depends on them: small, uniform, young
+    /// crystals near the edges give iridescence.
+    pub particle_radius: f64,
+    pub particle_growth: f64,
+    pub young_size: f64,
     /// The square, `extent` either side of `center` in x and z, that the layer fills. The
     /// density fades out over its outer `fade` (a fraction of `extent`), so the layer has no
     /// visible edge.
@@ -261,6 +268,13 @@ impl HoganKewCirrus {
             evolution_period: f64::INFINITY,
             patchiness,
             patch_size: f.cell_size * 12.,
+            particle_radius: match f.genus {
+                CirrusGenus::Cirrus => 12.,
+                CirrusGenus::Cirrostratus => 20.,
+                CirrusGenus::Cirrocumulus => 6.,
+            },
+            particle_growth: 1.,
+            young_size: 0.5,
             center: Vector2::zeros(),
             extent: f64::INFINITY,
             fade: 0.3,
@@ -312,6 +326,18 @@ impl HoganKewCirrus {
         Vector2::new(dpsi_dz, -dpsi_dx)
     }
 
+    /// `p` in the cells' frame, in which the pattern of fibres and eddies travels too, and its
+    /// (x, z) there after the eddies have displaced it, at fractional depth `d`; the source of
+    /// its ice is then back along the fall from there.
+    fn frame(&self, p: &Vector3<f64>, d: f64) -> (Vector3<f64>, Vector2<f64>) {
+        let mut x = Vector2::new(p.x, p.z) - self.wind * (self.generating_wind * self.time);
+        let framed = Vector3::new(x.x, p.y, x.y);
+        if self.turbulence > 0. {
+            x += self.curl(&framed) * (self.turbulence * d);
+        }
+        (framed, x)
+    }
+
     /// Ice density as a fraction of `max_density`, in [0, 1].
     pub fn fraction(&self, p: &Vector3<f64>) -> f64 {
         if p.y < self.base || p.y > self.top {
@@ -323,13 +349,7 @@ impl HoganKewCirrus {
         if profile <= 0. {
             return 0.;
         }
-        // Into the cells' frame, in which the pattern of fibres and eddies travels too, and
-        // back along the fall.
-        let mut x = Vector2::new(p.x, p.z) - self.wind * (self.generating_wind * self.time);
-        let framed = Vector3::new(x.x, p.y, x.y);
-        if self.turbulence > 0. {
-            x += self.curl(&framed) * (self.turbulence * d);
-        }
+        let (framed, x) = self.frame(p, d);
         let edge_fade = {
             let from_centre = (Vector2::new(p.x, p.z) - self.center).abs().max() / self.extent;
             let t = ((1. - from_centre) / self.fade.max(1e-9)).clamp(0., 1.);
@@ -374,6 +394,18 @@ impl DensityField for HoganKewCirrus {
 
     fn majorant(&self) -> f64 {
         self.max_density
+    }
+
+    /// Crystals grow as they fall, and are smallest where the ice is newest: at the edges of
+    /// the cells, traced back along the (mean) fall.
+    fn particle_radius(&self, p: &Vector3<f64>) -> Option<f64> {
+        let fallen = (self.top - p.y).clamp(0., self.top - self.base);
+        let d = fallen / (self.top - self.base);
+        let (_, x) = self.frame(p, d);
+        let source = x + self.wind * (self.shear * fallen * fallen / (2. * self.fall_speed));
+        let maturity = self.cells(source.x, source.y);
+        let young = self.young_size + (1. - self.young_size) * maturity;
+        Some(self.particle_radius * (1. + self.particle_growth * d) * young)
     }
 
     /// Nothing below `lowest`: zero there until the ray climbs to it.
@@ -548,6 +580,25 @@ mod tests {
         let inner = (0..200).map(|i| c.fraction(&Vector3::new(i as f64 * 50., 9500., 1000.))).sum::<f64>();
         let outer = (0..200).map(|i| c.fraction(&Vector3::new(19000. + i as f64 * 5., 9500., 1000.))).sum::<f64>();
         assert!(inner > 50. && outer < 0.3 * inner, "outer {} inner {}", outer, inner);
+    }
+
+    #[test]
+    fn test_crystals_grow_and_are_young_at_edges() {
+        let mut c = cirrus(CirrusGenus::Cirrus, 11);
+        c.turbulence = 0.;
+        let r = |p: Vector3<f64>| c.particle_radius(&p).unwrap();
+        // At the generating level, between young_size and 1 times the radius; larger lower down.
+        let mut sizes = vec![];
+        for i in 0..2000 {
+            let p = Vector3::new(i as f64 * 97., 9990., (i % 31) as f64 * 311.);
+            let s = r(p) / c.particle_radius;
+            assert!((c.young_size - 1e-9..=1.01).contains(&s), "{}", s);
+            sizes.push(s);
+        }
+        assert!(sizes.iter().any(|s| *s < 0.6) && sizes.iter().any(|s| *s > 0.9), "no range of sizes");
+        let low = (0..200).map(|i| r(Vector3::new(i as f64 * 97., 8100., 0.))).sum::<f64>();
+        let high = (0..200).map(|i| r(Vector3::new(i as f64 * 97., 9990., 0.))).sum::<f64>();
+        assert!(low > 1.5 * high, "{} {}", low, high);
     }
 
     #[test]

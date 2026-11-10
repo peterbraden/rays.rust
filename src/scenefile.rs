@@ -18,7 +18,8 @@ use crate::procedural::fireworks::create_firework;
 use crate::procedural::nubis_clouds::NubisCloudLayer;
 use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGenus};
 use crate::participatingmedia::create_fog;
-use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz};
+use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction};
+use crate::material::diffraction::DiffractionTable;
 use crate::noise::PerlinNoise;
 use crate::material::phase::PhaseFunction;
 use std::sync::Arc;
@@ -280,9 +281,9 @@ impl SceneFile {
     pub fn parse_volume(o: &Value) -> SceneObject {
         let bounds = BBox::new(SceneFile::parse_vec3(&o["min"]), SceneFile::parse_vec3(&o["max"]));
         let max_density = SceneFile::parse_number(&o["density"], 1.);
-        let density: Box<dyn DensityField> = match o.get("noise") {
-            None => Box::new(ConstantDensity(max_density)),
-            Some(n) => Box::new(NoiseDensity {
+        let density: Arc<dyn DensityField> = match o.get("noise") {
+            None => Arc::new(ConstantDensity(max_density)),
+            Some(n) => Arc::new(NoiseDensity {
                 perlin: SceneFile::parse_seed(n).map_or_else(PerlinNoise::new, PerlinNoise::with_seed),
                 max_density,
                 scale: SceneFile::parse_number(&n["scale"], 1.),
@@ -291,7 +292,8 @@ impl SceneFile {
             }),
         };
         create_volume(bounds, density, SceneFile::parse_color_def(o, "albedo", Color::white()),
-            SceneFile::parse_phase(o, 0.), SceneFile::parse_scattering_approximation(o))
+            SceneFile::parse_phase(o, 0.), SceneFile::parse_scattering_approximation(o),
+            SceneFile::parse_diffraction(o))
     }
 
     /// A medium's multiple-scattering approximations (`volume::ScatteringApproximation`):
@@ -315,6 +317,24 @@ impl SceneFile {
             similarity_after: o.get("similarity_after").map(|n| SceneFile::parse_int(n, 0) as u32),
             oz,
         }
+    }
+
+    /// Diffraction by the medium's particles, for iridescence and coronae: `"diffraction": true`
+    /// or `{"fraction": 0.5, "radius": 10, "spread": 0.1}`: the share of scattering diffracted,
+    /// the particles' mean radius in µm (where the medium doesn't vary it), and the relative
+    /// spread of their sizes. None if absent or false.
+    pub fn parse_diffraction(o: &Value) -> Option<Diffraction> {
+        let v = match o.get("diffraction") {
+            None | Some(Value::Bool(false)) => return None,
+            Some(v) => v,
+        };
+        let fraction = SceneFile::parse_number(&v["fraction"], 0.5);
+        assert!((0. ..=1.).contains(&fraction), "Diffraction fraction must be 0 to 1, got {}", fraction);
+        Some(Diffraction {
+            table: DiffractionTable::new(SceneFile::parse_number(&v["spread"], 0.1).max(0.)),
+            fraction,
+            radius: SceneFile::parse_number(&v["radius"], 10.),
+        })
     }
 
     /// A medium's phase function: `droplet_diameter` (µm) for water droplets, or else
@@ -362,8 +382,9 @@ impl SceneFile {
             Vector3::new(center.x - extent, base, center.y - extent),
             Vector3::new(center.x + extent, top, center.y + extent),
         );
-        create_volume(bounds, Box::new(layer), SceneFile::parse_color_def(o, "albedo", Color::white()),
-            SceneFile::parse_phase(o, 0.85), SceneFile::parse_scattering_approximation(o))
+        create_volume(bounds, Arc::new(layer), SceneFile::parse_color_def(o, "albedo", Color::white()),
+            SceneFile::parse_phase(o, 0.85), SceneFile::parse_scattering_approximation(o),
+            SceneFile::parse_diffraction(o))
     }
 
     /// A layer of cirrus by Hogan and Kew's fallstreak model (see
@@ -376,7 +397,9 @@ impl SceneFile {
     /// `spectral_slope`, `anisotropy` (the generating cells); `density`, `generating_depth`,
     /// `fall_depth`, `sublimation` (the ice); `shear`, `generating_wind`, `fall_speed`,
     /// `fall_speed_spread` (the fallstreaks); `edge`, `detail_size`, `detail`,
-    /// `turbulence_size`, `turbulence`; `patchiness` and `patch_size`; `fade`, the fraction of
+    /// `turbulence_size`, `turbulence`; `patchiness` and `patch_size`; `particle_radius` (µm, at
+    /// the generating level), `particle_growth` (relative growth by the base) and `young_size`
+    /// (relative size at the cells' edges, where ice is newest), for `diffraction`; `fade`, the fraction of
     /// `extent` over which the layer fades out at its edges (default 0.3); and `time` and
     /// `evolution_period` (seconds) to animate.
     /// The phase function defaults to `g` 0.75, for ice crystals.
@@ -415,6 +438,9 @@ impl SceneFile {
         c.time = num("time", c.time);
         c.evolution_period = num("evolution_period", c.evolution_period);
         c.patchiness = num("patchiness", c.patchiness).clamp(0., 1.);
+        c.particle_radius = num("particle_radius", c.particle_radius);
+        c.particle_growth = num("particle_growth", c.particle_growth);
+        c.young_size = num("young_size", c.young_size).clamp(0.05, 1.);
         c.patch_size = num("patch_size", c.patch_size);
         let extent = num("extent", 100000.);
         let center = SceneFile::parse_vec2_def(o, "center", Vector2::new(0., 0.));
@@ -425,8 +451,11 @@ impl SceneFile {
             Vector3::new(center.x - extent, base, center.y - extent),
             Vector3::new(center.x + extent, top, center.y + extent),
         );
-        create_volume(bounds, Box::new(c), SceneFile::parse_color_def(o, "albedo", Color::white()),
-            SceneFile::parse_phase(o, 0.75), SceneFile::parse_scattering_approximation(o))
+        let diffraction = SceneFile::parse_diffraction(o);
+        // With diffraction, the phase function is that of the rest: refraction and reflection.
+        let g = if diffraction.is_some() { 0.5 } else { 0.75 };
+        create_volume(bounds, Arc::new(c), SceneFile::parse_color_def(o, "albedo", Color::white()),
+            SceneFile::parse_phase(o, g), SceneFile::parse_scattering_approximation(o), diffraction)
     }
 
     pub fn parse_box_terrain(o: &Value) -> SceneObject {

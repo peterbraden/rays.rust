@@ -31,6 +31,8 @@ use crate::intersection::{Intersection, RawIntersection};
 use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::material::functions::sample_area_light_with;
 use crate::material::phase::PhaseFunction;
+use crate::material::diffraction::DiffractionTable;
+use std::sync::Arc;
 use crate::material::texture::Solid;
 use crate::na::Vector3;
 use crate::noise::PerlinNoise;
@@ -89,6 +91,12 @@ pub trait DensityField: Sync + Send {
     fn minorant(&self) -> f64 {
         0.
     }
+
+    /// The mean radius (micrometres) of the particles at `p`, for media whose particle size
+    /// varies; None to use the material's.
+    fn particle_radius(&self, _p: &Vector3<f64>) -> Option<f64> {
+        None
+    }
 }
 
 /// The same density throughout.
@@ -125,7 +133,7 @@ impl DensityField for NoiseDensity {
 /// A participating medium filling a box.
 pub struct Volume {
     pub bounds: BBox,
-    pub density: Box<dyn DensityField>,
+    pub density: Arc<dyn DensityField>,
 }
 
 impl Geometry for Volume {
@@ -289,11 +297,108 @@ impl Default for Oz {
 /// smoke absorbs more.
 pub struct VolumeMaterial {
     pub albedo: Color,
+    /// The phase function; with diffraction, that of the light not diffracted.
     pub phase: PhaseFunction,
     pub approximation: ScatteringApproximation,
+    pub diffraction: Option<Diffraction>,
+    /// The volume's density field, for the particle size where it has one.
+    pub field: Arc<dyn DensityField>,
+}
+
+/// Diffraction by the medium's particles (see `material::diffraction`): a `fraction` of the
+/// scattered light (a half, for particles much larger than the wavelength) goes into the
+/// wavelength-dependent diffraction lobe, whose width depends on the particles' mean radius
+/// (micrometres): the density field's `particle_radius`, or else `radius`.
+pub struct Diffraction {
+    pub table: DiffractionTable,
+    pub fraction: f64,
+    pub radius: f64,
+}
+
+/// The wavelength (µm) whose diffraction lobe directions are sampled from.
+const SAMPLED_WAVELENGTH: f64 = 0.55;
+
+/// How light scatters at one vertex: a phase function, and diffraction by particles of a
+/// radius. With diffraction, the phase function differs per colour channel.
+struct VertexPhase<'a> {
+    base: PhaseFunction,
+    diffraction: Option<(&'a Diffraction, f64)>,
+}
+
+impl VertexPhase<'_> {
+    fn eval(&self, cos: f64) -> Color {
+        match self.diffraction {
+            None => Color::white() * self.base.eval(cos),
+            Some((d, radius)) => Color::white() * ((1. - d.fraction) * self.base.eval(cos))
+                + d.table.eval_color(cos, radius) * d.fraction,
+        }
+    }
+
+    /// The density of `sample`'s directions.
+    fn pdf(&self, cos: f64) -> f64 {
+        match self.diffraction {
+            None => self.base.eval(cos),
+            Some((d, radius)) => (1. - d.fraction) * self.base.eval(cos)
+                + d.fraction * d.table.eval(cos, SAMPLED_WAVELENGTH, radius),
+        }
+    }
+
+    /// A scattered direction, and the weight per channel, phase / pdf: white unless the phase
+    /// differs between channels. The lobe is chosen in proportion to its share, then the
+    /// direction weighted by the mixture's density, which is never zero as the base phase
+    /// function covers the sphere.
+    fn sample(&self, incoming: &Vector3<f64>) -> (Vector3<f64>, Color) {
+        match self.diffraction {
+            None => (self.base.sample(incoming), Color::white()),
+            Some((d, radius)) => {
+                let dir = if rand() < d.fraction {
+                    d.table.sample(incoming, SAMPLED_WAVELENGTH, radius, rand(), rand())
+                } else {
+                    self.base.sample(incoming)
+                };
+                let cos = incoming.dot(&dir);
+                (dir, self.eval(cos) / self.pdf(cos))
+            },
+        }
+    }
 }
 
 impl VolumeMaterial {
+    /// Whether a vertex after `scatterings` earlier volume scatterings treats diffraction as no
+    /// scattering at all: delta-M truncation (W. J. Wiscombe, "The Delta-M Method: Rapid Yet
+    /// Accurate Radiative Flux Calculations for Strongly Asymmetric Phase Functions", Journal of
+    /// the Atmospheric Sciences 34, 1977). The diffraction lobe is a few degrees wide: after
+    /// the first scattering, whose colours the camera sees, light diffracted carries on almost
+    /// as if unscattered, and sampling its sharp peak from a point-like sun only makes
+    /// fireflies. So from the second scattering on, the diffracted fraction f of scattering is
+    /// removed from the extinction, σ (1 - f α), and the albedo, α (1 - f) / (1 - f α), and the
+    /// rest scatters by the base phase function.
+    fn truncated(&self, scatterings: u32) -> bool {
+        self.diffraction.is_some() && scatterings >= 1
+    }
+
+    /// How a vertex at `point`, after `scatterings` volume scatterings, scatters: isotropically
+    /// when reduced, without diffraction when truncated, and otherwise in full.
+    fn phase_at(&self, point: &Vector3<f64>, scatterings: u32) -> VertexPhase<'_> {
+        if self.reduced(scatterings) {
+            return VertexPhase { base: PhaseFunction::isotropic(), diffraction: None };
+        }
+        VertexPhase {
+            base: self.phase,
+            diffraction: self.diffraction.as_ref().filter(|_| !self.truncated(scatterings))
+                .map(|d| (d, self.field.particle_radius(point).unwrap_or(d.radius))),
+        }
+    }
+
+    /// The mean cosine of the scattering angle after `scatterings`, before any similarity
+    /// reduction: diffraction scatters almost straight on, unless truncated away.
+    fn mean_cosine(&self, scatterings: u32) -> f64 {
+        match &self.diffraction {
+            Some(d) if !self.truncated(scatterings) => (1. - d.fraction) * self.phase.mean_cosine() + d.fraction,
+            _ => self.phase.mean_cosine(),
+        }
+    }
+
     /// Whether a vertex after `scatterings` earlier volume scatterings uses the similarity
     /// relations.
     fn reduced(&self, scatterings: u32) -> bool {
@@ -305,22 +410,31 @@ impl VolumeMaterial {
         self.albedo.rgb.mean()
     }
 
-    /// The density scale for the path's segments after `scatterings` volume scatterings.
+    /// The density scale for the path's segments after `scatterings` volume scatterings:
+    /// truncation's, then similarity's on what remains.
     fn density_scale(&self, scatterings: u32) -> f64 {
-        if self.reduced(scatterings) {
-            1. - self.mean_albedo() * self.phase.mean_cosine()
-        } else {
-            1.
+        let mut scale = 1.;
+        let mut albedo = self.mean_albedo();
+        if let Some(d) = self.diffraction.as_ref().filter(|_| self.truncated(scatterings)) {
+            scale *= 1. - d.fraction * albedo;
+            albedo = albedo * (1. - d.fraction) / (1. - d.fraction * albedo);
         }
+        if self.reduced(scatterings) {
+            scale *= 1. - albedo * self.mean_cosine(scatterings);
+        }
+        scale
     }
 
-    /// The albedo at a vertex, reduced or not.
-    fn albedo_at(&self, reduced: bool) -> Color {
-        if !reduced {
-            return self.albedo;
+    /// The albedo at a vertex after `scatterings`, truncated and reduced as they apply.
+    fn albedo_at(&self, scatterings: u32) -> Color {
+        let mut a = self.albedo.rgb;
+        if let Some(d) = self.diffraction.as_ref().filter(|_| self.truncated(scatterings)) {
+            a = a.map(|a| a * (1. - d.fraction) / (1. - d.fraction * a));
         }
-        let g = self.phase.mean_cosine();
-        let a = self.albedo.rgb.map(|a| a * (1. - g) / (1. - a * g));
+        if self.reduced(scatterings) {
+            let g = self.mean_cosine(scatterings);
+            a = a.map(|a| a * (1. - g) / (1. - a * g));
+        }
         Color::new(a.x, a.y, a.z)
     }
 
@@ -330,7 +444,7 @@ impl VolumeMaterial {
     /// Point lights and the sun are delta lights, which a scattered ray can never hit, so this
     /// is the only way they reach a medium; area lights are sampled once, as at a surface.
     fn direct_lighting(&self, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene,
-                       phase: &PhaseFunction, albedo: Color, scatterings: u32) -> Color {
+                       phase: &VertexPhase, albedo: Color, scatterings: u32) -> Color {
         let p = |w: &Vector3<f64>| phase.eval(incoming.dot(w));
         let mut direct = Color::black();
         for light in &s.lights {
@@ -339,18 +453,18 @@ impl VolumeMaterial {
             let w = to_light / d;
             let shadow_ray = Ray { ro: *point, rd: w };
             let transmitted = s.objects.transmittance(&shadow_ray, d, f64::MIN_POSITIVE);
-            direct = direct + light.color * (light.intensity * p(&w) / (d * d) * transmitted);
+            direct = direct + light.color * p(&w) * (light.intensity / (d * d) * transmitted);
         }
         if let Some(sun) = &s.sun {
             direct = direct + match self.approximation.oz {
-                None => sun.irradiance * (p(&sun.direction) * sun.transmittance_from(point, s)),
-                Some(oz) if scatterings == 0 => sun.irradiance * self.oz_sunlight(&oz, incoming, point, s),
+                None => sun.irradiance * p(&sun.direction) * sun.transmittance_from(point, s),
+                Some(oz) if scatterings == 0 => sun.irradiance * self.oz_sunlight(&oz, phase, incoming, point, s),
                 // Already counted, octaves and all, at the path's first scattering.
                 Some(_) => Color::black(),
             };
         }
         if s.render.sample_lights {
-            direct = direct + sample_area_light_with(point, s, |w| Color::white() * p(w));
+            direct = direct + sample_area_light_with(point, s, p);
         }
         albedo * direct
     }
@@ -358,19 +472,19 @@ impl VolumeMaterial {
     /// Wrenninge et al.'s sum over octaves, per unit sun irradiance: Σ b^i p_i(θ) T(a^i σ),
     /// p_i the phase function with its mean cosine scaled c^i (as Henyey-Greenstein beyond the
     /// first octave).
-    fn oz_sunlight(&self, oz: &Oz, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene) -> f64 {
+    fn oz_sunlight(&self, oz: &Oz, first: &VertexPhase, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene) -> Color {
         let sun = s.sun.as_ref().unwrap();
         let cos = incoming.dot(&sun.direction);
         let saved = (path_scatterings(), path_density_scale());
-        let mut total = 0.;
+        let mut total = Color::black();
         for i in 0..oz.octaves as i32 {
             let phase = if i == 0 {
-                self.phase.eval(cos)
+                first.eval(cos)
             } else {
-                PhaseFunction::HenyeyGreenstein { g: self.phase.mean_cosine() * oz.c.powi(i) }.eval(cos)
+                Color::white() * PhaseFunction::HenyeyGreenstein { g: self.mean_cosine(saved.0) * oz.c.powi(i) }.eval(cos)
             };
             set_path(saved.0, saved.1 * oz.a.powi(i));
-            total += oz.b.powi(i) * phase * sun.transmittance_from(point, s);
+            total = total + phase * (oz.b.powi(i) * sun.transmittance_from(point, s));
         }
         set_path(saved.0, saved.1);
         total
@@ -381,15 +495,15 @@ impl MaterialModel for VolumeMaterial {
     fn scatter(&self, r: &Ray, i: &Intersection, s: &Scene) -> ScatteredRay {
         let incoming = r.rd.normalize();
         let scatterings = path_scatterings();
-        let reduced = self.reduced(scatterings);
-        let phase = if reduced { PhaseFunction::isotropic() } else { self.phase };
-        let albedo = self.albedo_at(reduced);
+        let phase = self.phase_at(&i.point, scatterings);
+        let albedo = self.albedo_at(scatterings);
         // Light leaving this vertex, towards the lights and onwards, has scattered once more.
         set_path(scatterings + 1, self.density_scale(scatterings + 1));
+        let (rd, weight) = phase.sample(&incoming);
         ScatteredRay {
-            ray: Some(Ray { ro: i.point, rd: phase.sample(&incoming) }),
-            // The direction was drawn from the phase function itself, so phase / pdf = 1.
-            attenuate: albedo,
+            ray: Some(Ray { ro: i.point, rd }),
+            // Phase / pdf: 1, unless the phase function differs between channels.
+            attenuate: albedo * weight,
             emit: self.direct_lighting(&incoming, &i.point, s, &phase, albedo, scatterings),
             // Area lights were sampled above (when enabled); the trace skips them if the
             // scattered ray hits one, so they aren't counted twice.
@@ -398,11 +512,11 @@ impl MaterialModel for VolumeMaterial {
     }
 }
 
-pub fn create_volume(bounds: BBox, density: Box<dyn DensityField>, albedo: Color, phase: PhaseFunction,
-                     approximation: ScatteringApproximation) -> SceneObject {
+pub fn create_volume(bounds: BBox, density: Arc<dyn DensityField>, albedo: Color, phase: PhaseFunction,
+                     approximation: ScatteringApproximation, diffraction: Option<Diffraction>) -> SceneObject {
     SceneObject {
-        geometry: Box::new(Volume { bounds, density }),
-        medium: Box::new(Solid { m: Box::new(VolumeMaterial { albedo, phase, approximation }) }),
+        geometry: Box::new(Volume { bounds, density: density.clone() }),
+        medium: Box::new(Solid { m: Box::new(VolumeMaterial { albedo, phase, approximation, diffraction, field: density }) }),
     }
 }
 
@@ -424,7 +538,7 @@ mod tests {
     #[test]
     fn test_constant_volume_follows_beer_lambert() {
         seed_rand(1, 0);
-        let v = Volume { bounds: unit_box(), density: Box::new(ConstantDensity(1.5)) };
+        let v = Volume { bounds: unit_box(), density: Arc::new(ConstantDensity(1.5)) };
         let t = transmitted(&v, 0.5, 0.5, 40_000);
         assert!((t - (-1.5f64).exp()).abs() < 0.01, "{}", t);
     }
@@ -432,7 +546,7 @@ mod tests {
     #[test]
     fn test_collisions_lie_within_the_box() {
         seed_rand(2, 0);
-        let v = Volume { bounds: unit_box(), density: Box::new(ConstantDensity(3.)) };
+        let v = Volume { bounds: unit_box(), density: Arc::new(ConstantDensity(3.)) };
         // Unnormalised direction: distances are still world-space.
         let r = Ray { ro: Vector3::new(-2., 0.5, 0.5), rd: Vector3::new(4., 0., 0.) };
         for _ in 0..1000 {
@@ -446,7 +560,7 @@ mod tests {
     #[test]
     fn test_ray_starting_inside_or_beyond_min() {
         seed_rand(3, 0);
-        let v = Volume { bounds: unit_box(), density: Box::new(ConstantDensity(1.)) };
+        let v = Volume { bounds: unit_box(), density: Arc::new(ConstantDensity(1.)) };
         let r = Ray { ro: Vector3::new(0.5, 0.5, 0.5), rd: Vector3::new(1., 0., 0.) };
         let n = 40_000;
         // From the centre, half a unit of medium remains; from min = 0.3 along, a fifth.
@@ -459,7 +573,7 @@ mod tests {
 
     #[test]
     fn test_empty_volume_is_clear() {
-        let v = Volume { bounds: unit_box(), density: Box::new(ConstantDensity(0.)) };
+        let v = Volume { bounds: unit_box(), density: Arc::new(ConstantDensity(0.)) };
         assert_eq!(transmitted(&v, 0.5, 0.5, 100), 1.);
     }
 
@@ -471,7 +585,7 @@ mod tests {
         let optical_depth: f64 = (0..steps).map(|i| {
             density.density(&Vector3::new((i as f64 + 0.5) / steps as f64, 0.37, 0.61))
         }).sum::<f64>() / steps as f64;
-        (Volume { bounds: unit_box(), density: Box::new(density) }, optical_depth)
+        (Volume { bounds: unit_box(), density: Arc::new(density) }, optical_depth)
     }
 
     #[test]
@@ -493,7 +607,7 @@ mod tests {
     #[test]
     fn test_ratio_tracking_respects_min_and_max() {
         seed_rand(8, 0);
-        let v = Volume { bounds: unit_box(), density: Box::new(ConstantDensity(2.)) };
+        let v = Volume { bounds: unit_box(), density: Arc::new(ConstantDensity(2.)) };
         let r = Ray { ro: Vector3::new(-1., 0.5, 0.5), rd: Vector3::new(1., 0., 0.) };
         let n = 40_000;
         // From 1.2 to 1.7 along the ray: half a unit of medium.
@@ -503,9 +617,30 @@ mod tests {
     }
 
     #[test]
+    fn test_diffraction_is_truncated_after_the_first_scattering() {
+        let m = VolumeMaterial {
+            albedo: Color::new(0.9, 0.9, 0.9),
+            phase: PhaseFunction::HenyeyGreenstein { g: 0.5 },
+            approximation: ScatteringApproximation::default(),
+            diffraction: Some(Diffraction { table: DiffractionTable::new(0.1), fraction: 0.5, radius: 5. }),
+            field: Arc::new(ConstantDensity(1.)),
+        };
+        // First scattering in full: the extinction as given, diffraction in the phase.
+        assert_eq!(m.density_scale(0), 1.);
+        assert_eq!(m.albedo_at(0), m.albedo);
+        assert!(m.phase_at(&Vector3::zeros(), 0).diffraction.is_some());
+        // After it, the diffracted half of scattering, 0.45 of extinction, is no scattering.
+        assert!((m.density_scale(1) - 0.55).abs() < 1e-12);
+        assert!((m.albedo_at(1).rgb.x - 0.45 / 0.55).abs() < 1e-12);
+        assert!(m.phase_at(&Vector3::zeros(), 1).diffraction.is_none());
+        // Scattered light is conserved: σ_s' = σ α' = 0.55 × 0.818 = 0.45 = σ α (1 - f).
+        assert!((m.density_scale(1) * m.albedo_at(1).rgb.x - 0.9 * 0.5).abs() < 1e-12);
+    }
+
+    #[test]
     fn test_homogeneous_transmittance_is_exact() {
         // The constant density is its own minorant: nothing left to estimate.
-        let v = Volume { bounds: unit_box(), density: Box::new(ConstantDensity(2.)) };
+        let v = Volume { bounds: unit_box(), density: Arc::new(ConstantDensity(2.)) };
         let r = Ray { ro: Vector3::new(-1., 0.5, 0.5), rd: Vector3::new(1., 0., 0.) };
         for _ in 0..10 {
             assert!((v.transmittance(&r, 0., f64::INFINITY) - (-2f64).exp()).abs() < 1e-12);

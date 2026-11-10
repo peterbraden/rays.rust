@@ -310,6 +310,52 @@ mod tests {
     }
 
     #[test]
+    fn test_volume_furnace_with_diffraction() {
+        // Per-channel weights vary path by path, but average to 1 in every channel.
+        crate::geometry::seed_rand(14, 1);
+        let s = volume_scene(r#""density": 3, "g": 0.5, "diffraction": { "radius": 4, "spread": 0.05 }"#);
+        let n = 20_000;
+        let mut sum = Color::black();
+        for _ in 0..n {
+            sum = sum + trace(&Ray { ro: Vector3::new(0., 0., -5.), rd: Vector3::new(0.1, 0.05, 1.).normalize() }, 0, &s).1;
+        }
+        let mean = sum / n as f64;
+        for c in [mean.rgb.x, mean.rgb.y, mean.rgb.z] {
+            assert!((c - 1.).abs() < 0.02, "{:?}", mean);
+        }
+    }
+
+    #[test]
+    fn test_diffraction_colours_single_scattering() {
+        // Looking through a thin slab 4° from the sun: single scattering, whose colour is the
+        // phase function's at 4°.
+        crate::geometry::seed_rand(15, 1);
+        let s = SceneFile::from_string(r#"{
+            "background": [0, 0, 0], "max_depth": 0, "shadow_bias": 0.0001,
+            "sun": { "direction": [0, 0, 1], "intensity": 10 },
+            "camera": { "location": [0, 0, -5], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
+            "objects": [ { "type": "volume", "min": [-1000, -1000, 0], "max": [1000, 1000, 0.05],
+                           "density": 1, "g": 0.5, "diffraction": { "radius": 5, "spread": 0.05 } } ]
+        }"#.to_string());
+        let theta: f64 = 4f64.to_radians();
+        // The sun is behind the slab (towards +z) and the camera in front, looking 4° from it.
+        let r = Ray { ro: Vector3::new(0., 0., -5.), rd: Vector3::new(0., theta.sin(), theta.cos()) };
+        let n = 20_000;
+        let mut sum = Color::black();
+        for _ in 0..n {
+            sum = sum + trace(&r, 0, &s).1;
+        }
+        let table = crate::material::diffraction::DiffractionTable::new(0.05);
+        let cos = theta.cos();
+        let hg = crate::material::phase::henyey_greenstein(cos, 0.5);
+        let expected = Color::white() * (0.5 * hg) + table.eval_color(cos, 5.) * 0.5;
+        let (got, want) = (sum.rgb.x / sum.rgb.z, expected.rgb.x / expected.rgb.z);
+        assert!(sum.rgb.z > 0., "no light");
+        assert!((got / want - 1.).abs() < 0.03, "red/blue {} vs {}", got, want);
+        assert!((want - 1.).abs() > 0.2, "uninformative angle: red/blue {}", want);
+    }
+
+    #[test]
     fn test_absorbing_volume_follows_beer_lambert() {
         // Albedo 0: only light that crosses the 2 units of medium uncollided arrives.
         crate::geometry::seed_rand(1, 2);

@@ -149,25 +149,32 @@ shadows on the ground. They are shaped from noise, so they don't change over tim
 
 ![Simulated cumulus](./scenes/harris-cumulus.png)
 
-`harris-cumulus.json`: `{"type": "harris_cumulus", "time": 1800, "cache": "demo/scenes/.cumulus-cache"}`
+`harris-cumulus.json`: `{"type": "harris_cumulus", "time": 3600, "cache": "demo/scenes/.cumulus-cache"}`
 
-Cumulus from a simulation of a sunny day. This follows M. J. Harris et al., "Simulation of Cloud
-Dynamics on Graphics Hardware" (Graphics Hardware 2003): fluid flow carrying heat, water vapour
-and cloud water, with buoyancy, condensation and latent heat. The ground heats the air in
-patches, and thermals rise through the mixed layer and condense at the lifting condensation
-level: a flat cloud base, set by the morning's humidity, not by hand. Latent heat keeps the
-cloudy air buoyant, so turrets boil up to the inversion. Their edges mix with dry air and
-evaporate, and clouds cut off from their thermals dissipate.
+Cumulus grown by simulating the air they form in, after M. J. Harris et al., "Simulation of
+Cloud Dynamics on Graphics Hardware" (Graphics Hardware 2003): fluid flow carrying heat, water
+vapour and cloud water, with buoyancy, condensation and latent heat, plus subgrid turbulence
+(Smagorinsky, with Lilly's stability correction) and rain-out of excess cloud water. The day is a
+real one: the ARM Southern Great Plains case (Oklahoma, 21 June 1997; Brown et al., QJRMS 2002),
+an intercomparison case for large-eddy models. It gives the sounding, the ground's heat and
+moisture through the day, and the air mass's slow changes.
 
-The simulation runs on a grid (128 x 80 x 128 cells of 50 m by default, periodic, tiled across
-the sky) for `time` seconds when the scene loads, and caches its state in `cache`. An
-animation therefore simulates only from frame to frame:
+The ground heats the air, and thermals rise through the boundary layer and condense at the
+lifting condensation level. That gives a flat cloud base, set by the morning's humidity rather
+than by hand. Latent heat keeps cloudy air buoyant, so turrets boil upwards; their edges mix with
+dry air and evaporate, and clouds cut off from their thermals dissipate. Through the late morning
+the field fills in, then breaks into taller towers (congestus) by midday.
+
+The simulation starts at 09:30, as the first cumulus form, and runs for `time` seconds when the
+scene loads. The grid is 64 x 44 x 64 cells of 100 m by default, periodic, and tiled across the
+sky. States are cached in `cache`, so an animation simulates only from frame to frame:
 
 ```bash
-scripts/animate.py demo/scenes/harris-cumulus.json --start 600 --end 3600 --frames 120 -- --width 480 --height 300
+scripts/animate.py demo/scenes/harris-cumulus.json --start 1800 --end 9000 --frames 72 -- --width 480 --height 300
 ```
 
-The grid resolves clouds down to about 100 m. Worley erosion adds finer detail at their edges.
+At 100 m the grid resolves clouds down to a few hundred metres. Worley erosion adds finer detail
+at their edges.
 
 ## Phenomena
 

@@ -6,8 +6,9 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Material models: Lambertian, Specular, Dielectric, Plastic, Leaf (translucent, `src/material/leaf.rs`)
 - Objects: Sphere, Plane, Mesh, OBJ file import; transforms and instancing of named "geometries"
 - Skysphere with Rayleigh and Mie Scattering
-- Procedural objects including Ocean (Tessendorf's algorithm with Phillips spectrum) and trees
-  (Weber and Penn's parametric model, `src/procedural/tree.rs`)
+- Procedural objects including Ocean (Tessendorf's algorithm with Phillips spectrum), trees
+  (Weber and Penn's parametric model, `src/procedural/tree.rs`) and forests of instanced trees
+  (`src/procedural/forest.rs`)
 - Multithreaded rendering with progressive output
 
 ## Build Commands

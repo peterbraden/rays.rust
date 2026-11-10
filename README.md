@@ -46,10 +46,36 @@ its transform, whatever the size of the mesh. Each instance has its own material
 A name can be used wherever a geometry is expected (eg. the `a` and `b` of a `difference`), and
 geometries can be built from each other. See [demo/scenes/instances.json](demo/scenes/instances.json).
 
+## Forests
+
+A `forest` covers part of a surface with trees: a few distinct trees are grown per species,
+then placed thousands of times as instances, each turned, scaled and maybe mirrored. Trees keep
+their distance from each other in proportion to their size, species grow in stands, clearings
+are left open, and steep ground stays bare. The surface can be any geometries, named or inline.
+
+```json
+"geometries": { "ground": { "type": "plane", "y": 0 }, "hill": { "type": "sphere", "location": [0, -150, 100], "radius": 170 } },
+"objects": [
+  { "type": "transform", "item": "ground", "material": "GRASS" },
+  { "type": "transform", "item": "hill", "material": "GRASS" },
+  { "type": "forest", "seed": 1, "surface": ["ground", "hill"], "area": { "min": [-200, 0], "max": [200, 400] },
+    "spacing": 9, "clearings": 0.2, "patchiness": 0.7, "max_slope": 35, "variants": 3, "autumn": 0.4,
+    "species": [
+      { "species": "scots-pine", "weight": 2, "bark": "PINE_BARK", "leaves": "NEEDLES", "params": { "autumn": 0 } },
+      { "species": "quaking-aspen", "spacing": 0.7, "bark": "PALE_BARK", "leaves": "ASPEN_LEAF" },
+      { "species": "shrub", "weight": 3, "spacing": 0.35, "scale_v": 0.3, "leaves": "SHRUB_LEAF" }
+    ] }
+]
+```
+
+See [demo/scenes/forest.json](demo/scenes/forest.json): 18,000 trees from 15 distinct ones,
+in about 600 MB.
+
   - Skysphere with Rayleigh and Mie Scattering
   - Procedural Objects
     - Ocean (Tessendorf's algorithm with Phillips spectrum)
     - Trees (Weber and Penn's parametric model, with presets for several species, autumn colours and dead branches)
+    - Forests of instanced trees over any surface
     - Random Cubes
   - Multithreaded
   - Progressive rendering

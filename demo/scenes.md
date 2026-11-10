@@ -40,6 +40,13 @@ tupelo (scarlet in the sun, orange in shade) and, far right, an oak keeping its 
 (`"leaf_fall": 0.35`); red shrubs in front.
 ![autumn](./scenes/autumn.png)
 
+## Forest
+A mixed forest of about 18,000 trees over rolling hills (spheres sunk into the ground plane):
+Scots pines, Norway spruces, quaking aspens and black tupelos turning in autumn, with a shrub
+understory. Each species is three distinct trees, instanced; species grow in stands, with
+clearings, and none on steep slopes.
+![forest](./scenes/forest.png)
+
 ## Instancing
 Twenty instances of one teapot mesh, each with its own transform and material.
 ![instances](./scenes/instances.png)

@@ -32,6 +32,7 @@ use crate::material::lambertian::Lambertian;
 use crate::material::normal::NormalShade;
 use crate::material::legacy::{ Whitted, FlatColor };
 use crate::material::diffuse_light::DiffuseLight;
+use crate::material::bump::{Bump, Bumped, Pattern};
 use crate::material::noise::{NoiseTexture, NoiseType};
 use crate::participatingmedia::{ParticipatingMedium, HomogenousFog, Vacuum};
 use crate::shapes::geometry::Geometry;
@@ -239,7 +240,39 @@ impl SceneFile {
          objects
     }
 
+    /// An object's medium, bump mapped if it has a `"normal"` (see `parse_bump`).
     pub fn parse_object_medium(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Box<dyn Medium + Sync + Send> {
+        let m = SceneFile::parse_unbumped_medium(o, materials, media);
+        if o["normal"].is_null() {
+            return m;
+        }
+        Box::new(Bumped { inner: m, bump: SceneFile::parse_bump(&o["normal"]) })
+    }
+
+    /// `{"pattern": "bumps" | "dents" | "wrinkles" | "ripples" | "waves", "amount": 0.5,
+    /// "scale": 1 or [x, y, z], "octaves": 6 (wrinkles), "frequency": 1, "phase": 0 (ripples
+    /// and waves, phase in cycles)}`.
+    pub fn parse_bump(n: &Value) -> Bump {
+        let pattern = match n["pattern"].as_str() {
+            Some("bumps") => Pattern::Bumps,
+            Some("dents") => Pattern::Dents,
+            Some("wrinkles") => Pattern::Wrinkles { octaves: SceneFile::parse_int(&n["octaves"], 6) as u32 },
+            Some("ripples") => Pattern::Ripples {
+                frequency: SceneFile::parse_number(&n["frequency"], 1.), phase: SceneFile::parse_number(&n["phase"], 0.) },
+            Some("waves") => Pattern::Waves {
+                frequency: SceneFile::parse_number(&n["frequency"], 1.), phase: SceneFile::parse_number(&n["phase"], 0.) },
+            _ => panic!("normal \"pattern\" must be \"bumps\", \"dents\", \"wrinkles\", \"ripples\" or \"waves\", got {}", n["pattern"]),
+        };
+        let scale = match &n["scale"] {
+            Value::Number(s) => Vector3::repeat(s.as_f64().unwrap()),
+            Value::Null => Vector3::repeat(1.),
+            v => SceneFile::parse_vec3(v),
+        };
+        assert!(scale.iter().all(|s| *s != 0.), "normal scale must not be zero");
+        Bump { pattern, amount: SceneFile::parse_number(&n["amount"], 0.5), scale }
+    }
+
+    fn parse_unbumped_medium(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Box<dyn Medium + Sync + Send> {
         match &o.get("medium") {
             Some(mid) => {
                 SceneFile::parse_medium_ref(mid, materials, media).unwrap()
@@ -1281,6 +1314,31 @@ mod tests {
             "item": { "type": "sphere", "location": [0, 0, 0], "radius": 1 }, "scale": [3, 1, 1]
         }), &GeometryLibrary::empty()).unwrap();
         assert!((per_axis.bounds().max.x - 3.).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_normal_bump_maps_the_object() {
+        let s = SceneFile::from_string(r#"{
+            "camera": { "location": [0, 0, -10], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
+            "objects": [
+                { "type": "sphere", "location": [0, 0, 0], "radius": 1,
+                  "normal": { "pattern": "bumps", "amount": 0.8, "scale": 0.2 } },
+                { "type": "sphere", "location": [5, 0, 0], "radius": 1 }
+            ]
+        }"#.to_string());
+        let tilt = |x: f64| {
+            let r = crate::ray::Ray { ro: Vector3::new(x + 0.3, 0.2, -5.), rd: Vector3::new(0., 0., 1.) };
+            let i = s.objects.nearest_intersection(&r, f64::INFINITY, 0.).unwrap();
+            (i.object.medium.normal_at(&i.point, &i.normal) - i.normal).norm()
+        };
+        assert!(tilt(0.) > 1e-3);
+        assert_eq!(tilt(5.), 0.);
+    }
+
+    #[test]
+    #[should_panic(expected = "normal \"pattern\" must be")]
+    fn test_unknown_normal_pattern() {
+        SceneFile::parse_bump(&serde_json::json!({ "pattern": "lumps" }));
     }
 
     #[test]

@@ -51,6 +51,8 @@ its transform, whatever the size of the mesh. Each instance has its own material
 A name can be used wherever a geometry is expected (eg. the `a` and `b` of a `difference`), and
 geometries can be built from each other. See [demo/scenes/instances.json](demo/scenes/instances.json).
 
+  - Bump mapping: bumps, dents, wrinkles, ripples and waves ([reference](./docs/bump-mapping.md))
+
   - Skysphere with Rayleigh and Mie Scattering
   - Procedural Objects
     - Ocean (Tessendorf's algorithm with Phillips spectrum)

@@ -4,6 +4,7 @@ use crate::ray::Ray;
 use crate::scene::{Scene, PathTermination};
 use crate::geometry::rand;
 use crate::intersection::Intersection;
+use crate::material::texture::Medium;
 use std::f64;
 
 // Returns num rays cast, Color
@@ -37,14 +38,27 @@ fn continuation_weight(attenuate: &Color, depth: u64, s: &Scene) -> Option<f64> 
     }
 }
 
+/// The intersection with the normal its medium shades with (tilted by bump mapping, if any). A
+/// tilt that would put the ray on the other side of the surface is dropped: dielectrics tell
+/// entering from leaving by the normal's side, and a grazing ray mustn't change that.
+fn shading<'a>(r: &Ray, intersection: &Intersection<'a>, medium: &(dyn Medium + Sync + Send)) -> Intersection<'a> {
+    let n = medium.normal_at(&intersection.point, &intersection.normal);
+    if n == intersection.normal || (n.dot(&r.rd) > 0.) != (intersection.normal.dot(&r.rd) > 0.) {
+        return *intersection;
+    }
+    Intersection { normal: n, ..*intersection }
+}
+
 fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene, after_light_sampling: bool) -> (u64, Color){
     let mut cast = 1;
     if after_light_sampling && s.is_sampled_light(intersection.object) {
         return (cast, Color::black());
     }
     let medium = &intersection.object.medium;
-    let material = medium.part(intersection.part).unwrap_or(&**medium).material_at(intersection.point);
-    let interaction = material.scatter(r, intersection, s);
+    let medium = medium.part(intersection.part).unwrap_or(&**medium);
+    let material = medium.material_at(intersection.point);
+    let shaded = shading(r, intersection, medium);
+    let interaction = material.scatter(r, &shaded, s);
 
     let incoming = match interaction.ray {
         // No continuation: attenuate is the final colour.

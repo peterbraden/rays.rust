@@ -35,6 +35,7 @@ mod material {
     pub mod legacy;
     pub mod plastic;
     pub mod noise;
+    pub mod bump;
 }
 mod intersection;
 mod sceneobject;

@@ -25,8 +25,9 @@ Supports:
     - OBJ file to mesh import
     - Infinite Mesh
 
-  - Scene files: our JSON, or NFF (Eric Haines' Neutral File Format, of the Standard
-    Procedural Database)
+  - Scene files: our JSON, NFF (Eric Haines' Neutral File Format, of the Standard
+    Procedural Database), or Tungsten's JSON (as in Bitterli's Rendering Resources), with
+    OBJ, PLY and Tungsten `.wo3` meshes
   - Skysphere with Rayleigh and Mie Scattering
   - Procedural Objects
     - Ocean (Tessendorf's algorithm with Phillips spectrum)

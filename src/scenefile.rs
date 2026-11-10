@@ -885,14 +885,20 @@ impl SceneFile {
     }
 
     /// A scene file's JSON. Files in another renderer's format are translated into ours, chosen
-    /// by extension: `.nff` (see `crate::nff`). Anything else is read as our JSON.
+    /// by extension: `.nff` (see `crate::nff`); or, for JSON, by content: Tungsten's (see
+    /// `crate::tungsten`). Anything else is read as our JSON.
     pub fn read_document(filename: &str) -> Result<Value, String> {
         let contents = std::fs::read_to_string(filename)
             .map_err(|e| format!("Can't read scene file {}: {}", filename, e))?;
         if filename.to_lowercase().ends_with(".nff") {
             return crate::nff::to_scene(&contents).map_err(|e| format!("{}: {}", filename, e));
         }
-        serde_json::from_str(&contents).map_err(|e| format!("{}: {}", filename, e))
+        let doc: Value = serde_json::from_str(&contents).map_err(|e| format!("{}: {}", filename, e))?;
+        if crate::tungsten::is_tungsten(&doc) {
+            let dir = std::path::Path::new(filename).parent().unwrap_or(std::path::Path::new(""));
+            return crate::tungsten::to_scene(&doc, dir).map_err(|e| format!("{}: {}", filename, e));
+        }
+        Ok(doc)
     }
 
     pub fn from_file(filename: &str, overrides: &Overrides) -> Scene {

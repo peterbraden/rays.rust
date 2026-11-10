@@ -49,6 +49,7 @@ mod shapes {
     pub mod triangle;
     pub mod mesh;
     pub mod ply;
+    pub mod wo3;
     pub mod infinite;
     pub mod repeating_mesh;
 }
@@ -57,6 +58,7 @@ mod scenegraph;
 mod scene;
 mod scenefile;
 mod nff;
+mod tungsten;
 mod skysphere;
 mod ocean;
 mod camera;

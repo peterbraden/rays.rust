@@ -5,7 +5,8 @@ read, and which are worth supporting. Written to feed workstream 1 of `plan.md` 
 scenes and reference comparisons): every scene converted by hand so far (`demo/reference/`) came
 from one of these formats.
 
-Status: the NFF loader is implemented (`src/nff.rs`); the rest is research.
+Status: the NFF loader (`src/nff.rs`) and the Tungsten importer (`src/tungsten.rs`, with
+`src/shapes/wo3.rs`) are implemented; the rest is research.
 
 
 ## What we can represent today
@@ -101,6 +102,12 @@ memory, except where marked.
   references, and it removes the hand conversion step for each new reference scene. The Cornell
   box imports fully; scenes using microfacet materials or textures import with warnings (and
   will not match their references until those features exist).
+- Done: `src/tungsten.rs`. Translating Tungsten's own Cornell box example reproduces every
+  vertex and face normal of the pbrt-v4 conversion in `demo/reference/cornell-box/`, and
+  rendered with the same camera and filter it matches `demo/reference/cornell-box.json` to the
+  noise floor (256x256, 256 spp: RMSE 0.0087 against 0.0089 between two seeds, exposure fit
+  0.9996). Cylinders, curves, instancing, textures and media are skipped or approximated with
+  a warning.
 
 ### pbrt-v3 / pbrt-v4
 
@@ -185,7 +192,7 @@ memory, except where marked.
    the POV-Ray shapes PR (#90), so `rings` and `tree` load once that is merged.
 2. **Tungsten importer**: directly serves the reference-comparison workstream, replacing
    hand conversion of Bitterli scenes. Includes a `.wo3` reader. Unsupported BSDFs and
-   primitives are reported, not silently dropped.
+   primitives are reported, not silently dropped. Done: `src/tungsten.rs`.
 3. MTL materials on OBJ meshes, once meshes carry per-triangle materials.
 4. A pbrt-v4 subset, once textures and a microfacet BRDF land (`plan.md` workstreams on
    materials).

@@ -240,7 +240,7 @@ impl SceneFile {
         if t == "checkeredplane" {
             return Some(Arc::new(SceneFile::parse_checkeredplane(&o, m)));
         }
-        panic!("Unknown Object");
+        panic!("Unknown object type \"{}\"", t);
         //return None
     }
     pub fn parse_skysphere(o: &Value) -> SceneObject {
@@ -863,8 +863,13 @@ impl SceneFile {
     }
 
     pub fn from_string_overridden(s: String, o: &Overrides) -> Scene {
+        SceneFile::from_value_overridden(serde_json::from_str(&s).unwrap(), o)
+    }
+
+    /// Build a scene from a scene file's JSON, applying command-line overrides first.
+    pub fn from_value_overridden(doc: Value, o: &Overrides) -> Scene {
         let (width, height) = (o.width, o.height);
-        let doc = SceneFile::substitute_variables(serde_json::from_str(&s).unwrap())
+        let doc = SceneFile::substitute_variables(doc)
             .unwrap_or_else(|e| panic!("Scene file: {}", e));
         let mut scene: SceneFile = serde_json::from_value(doc).unwrap();
         if let Some(seed) = o.seed {
@@ -879,11 +884,20 @@ impl SceneFile {
         SceneFile::from_scenefile(scene)
     }
 
+    /// A scene file's JSON. Files in another renderer's format are translated into ours, chosen
+    /// by extension: `.nff` (see `crate::nff`). Anything else is read as our JSON.
+    pub fn read_document(filename: &str) -> Result<Value, String> {
+        let contents = std::fs::read_to_string(filename)
+            .map_err(|e| format!("Can't read scene file {}: {}", filename, e))?;
+        if filename.to_lowercase().ends_with(".nff") {
+            return crate::nff::to_scene(&contents).map_err(|e| format!("{}: {}", filename, e));
+        }
+        serde_json::from_str(&contents).map_err(|e| format!("{}: {}", filename, e))
+    }
+
     pub fn from_file(filename: &str, overrides: &Overrides) -> Scene {
-        let mut scenefile = File::open(filename).unwrap();
-        let mut contents = String::new();
-        scenefile.read_to_string(&mut contents).unwrap();
-        SceneFile::from_string_overridden(contents, overrides)
+        let doc = SceneFile::read_document(filename).unwrap_or_else(|e| panic!("{}", e));
+        SceneFile::from_value_overridden(doc, overrides)
     }
 }
 

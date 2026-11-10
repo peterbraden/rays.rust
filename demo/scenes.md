@@ -4,6 +4,11 @@
 Spheres demonstrating 3 different materials.
 ![Spheres](./scenes/spheres.png)
 
+## NFF
+A scene in Eric Haines' Neutral File Format, the format of the Standard Procedural Database,
+written by hand in the style of its "balls" scene.
+![NFF balls](./scenes/nff-balls.png)
+
 ## Ocean scenes
 Demonstrating the ocean generation.
 ![Ocean 1](./scenes/ocean-1.png)

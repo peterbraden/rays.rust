@@ -18,7 +18,8 @@ Rays.rust is a raytracer written in Rust with the following features:
 - View sample scenes: `cargo run --release -- demo/scenes/<scene_file>.json`
 
 ## Command-line Options
-- `<FILE>`: Scene file (required, positional). The image is written alongside it with a `.png` extension
+- `<FILE>`: Scene file (required, positional): our JSON, or `.nff` (translated by `src/nff.rs`). The image is written alongside it with a `.png` extension
+- `--dump-scene <FILE>`: Write the scene as our JSON (for an `.nff` file, its translation)
 - `-o, --output <FILE>`: Write the image here instead; `.png` (8-bit, display-encoded) or `.exr` (linear float)
 - `-p, --progressive-render`: Update the output file during the render (at most once a second)
 - `--width <NUM>`: Override scene file width
@@ -40,7 +41,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 
 ## Project Structure
 - Modules organized by functionality (material, shapes, procedural)
-- Scene definitions stored in JSON files (in demo/ and demo/scenes/)
+- Scene definitions stored in JSON files (in demo/ and demo/scenes/); other renderers' formats are translated into that JSON (`SceneFile::read_document`; see `scene-formats.md`)
 - Rendering progress tracking via indicatif
 - Sample scenes available in demo/scenes/ with corresponding .png outputs
 

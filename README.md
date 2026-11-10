@@ -25,6 +25,8 @@ Supports:
     - OBJ file to mesh import
     - Infinite Mesh
 
+  - Scene files: our JSON, or NFF (Eric Haines' Neutral File Format, of the Standard
+    Procedural Database)
   - Skysphere with Rayleigh and Mie Scattering
   - Procedural Objects
     - Ocean (Tessendorf's algorithm with Phillips spectrum)
@@ -47,6 +49,7 @@ cargo run --release -- demo/demo.json
 - [An Efficient Parametric Algorithm for Octree Traversal, J. Revelles, C. Urena, M. Lastra](http://wscg.zcu.cz/wscg2000/Papers_2000/X31.pdf)
 - [Simulating Ocean Water, J. Tessendorf](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.161.9102&rep=rep1&type=pdf)
 - [Physically Based Raytracing, M. Pharr, W. Jakob, G. Humphreys](http://www.pbr-book.org/)
+- [Haines, E. (1987). A Proposal for Standard Graphics Environments. IEEE CG&A 7(11).](https://github.com/erich666/StandardProceduralDatabases)
 - [Roth, S. D. (1982). Ray casting for modeling solids.](sci-hub.se/10.1016/0146-664x%2882%2990169-1)
 
 

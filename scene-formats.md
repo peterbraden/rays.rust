@@ -5,7 +5,7 @@ read, and which are worth supporting. Written to feed workstream 1 of `plan.md` 
 scenes and reference comparisons): every scene converted by hand so far (`demo/reference/`) came
 from one of these formats.
 
-Status: research. Nothing below is implemented.
+Status: the NFF loader is implemented (`src/nff.rs`); the rest is research.
 
 
 ## What we can represent today
@@ -181,8 +181,8 @@ memory, except where marked.
 ## Recommendation
 
 1. **NFF loader** (small, self-contained, no dependency): gives the SPD for performance
-   benchmarking of the BVH. Cones/cylinders are skipped with a warning until a cylinder
-   primitive exists.
+   benchmarking of the BVH. Done: `src/nff.rs`. Cones and cylinders become the `cone` shape of
+   the POV-Ray shapes PR (#90), so `rings` and `tree` load once that is merged.
 2. **Tungsten importer**: directly serves the reference-comparison workstream, replacing
    hand conversion of Bitterli scenes. Includes a `.wo3` reader. Unsupported BSDFs and
    primitives are reported, not silently dropped.

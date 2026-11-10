@@ -40,6 +40,10 @@ tupelo (scarlet in the sun, orange in shade) and, far right, an oak keeping its 
 (`"leaf_fall": 0.35`); red shrubs in front.
 ![autumn](./scenes/autumn.png)
 
+## Instancing
+Twenty instances of one teapot mesh, each with its own transform and material.
+![instances](./scenes/instances.png)
+
 ## Fireworks
 ![fireworks](./scenes/fireworks.png)
 

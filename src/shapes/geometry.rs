@@ -62,6 +62,19 @@ pub trait Geometry: Sync{
 }
 
 
+/// A shared geometry is a geometry: an object can hold a geometry that other objects, or
+/// instancing `Transform`s, also use, without copying it.
+impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
+    fn intersects(&self, r: &Ray) -> Option<RawIntersection> { (**self).intersects(r) }
+    fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> { (**self).intersects_beyond(r, min) }
+    fn bounds(&self) -> BBox { (**self).bounds() }
+    fn fast_intersects(&self, r: &Ray) -> bool { (**self).fast_intersects(r) }
+    fn primitives(&self) -> u64 { (**self).primitives() }
+    fn inside(&self, p: &Vector3<f64>) -> bool { (**self).inside(p) }
+    fn surface_area(&self) -> f64 { (**self).surface_area() }
+    fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> { (**self).sample_surface(u) }
+}
+
 /// A geometry whose hits report `face`, so a composite object made of many of them (eg. the
 /// triangles of a tree's leaves) can say which part was hit; see `RawIntersection::face`.
 pub struct Tagged<T: Geometry> {

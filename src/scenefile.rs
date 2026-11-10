@@ -37,6 +37,50 @@ use crate::material::diffuse_light::DiffuseLight;
 use crate::material::noise::{NoiseTexture, NoiseType};
 use crate::participatingmedia::{ParticipatingMedium, HomogenousFog, Vacuum};
 use crate::shapes::geometry::{Geometry, Tagged};
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+/// A geometry that may be shared: by several objects, or by instancing transforms.
+pub type SharedGeometry = Arc<dyn Geometry + Sync + Send>;
+
+/// The scene file's named geometries, `"geometries": {"dragon": {"type": "mesh", ...}}`. Wherever
+/// a geometry is expected, the string `"dragon"` refers to one. Each is built once, when first
+/// referred to, and shared by every reference, so `{"type": "transform", "item": "dragon",
+/// "translate": [...]}` places another dragon for the price of a transform: object instancing.
+/// Definitions may refer to each other, but not in a cycle.
+pub struct GeometryLibrary {
+    defined: Map<String, Value>,
+    built: RefCell<HashMap<String, SharedGeometry>>,
+    active: RefCell<Vec<String>>,
+}
+
+impl GeometryLibrary {
+    pub fn new(defined: Map<String, Value>) -> GeometryLibrary {
+        GeometryLibrary { defined, built: RefCell::new(HashMap::new()), active: RefCell::new(Vec::new()) }
+    }
+
+    pub fn empty() -> GeometryLibrary {
+        GeometryLibrary::new(Map::new())
+    }
+
+    /// The named geometry, built on first use.
+    pub fn get(&self, name: &str) -> SharedGeometry {
+        if let Some(g) = self.built.borrow().get(name) {
+            return g.clone();
+        }
+        if self.active.borrow().iter().any(|a| a == name) {
+            panic!("geometries refer to each other in a cycle: {} -> {}", self.active.borrow().join(" -> "), name);
+        }
+        let def = self.defined.get(name)
+            .unwrap_or_else(|| panic!("unknown geometry \"{}\": define it in \"geometries\"", name));
+        self.active.borrow_mut().push(name.to_string());
+        let g = SceneFile::parse_shared_geometry(def, self)
+            .unwrap_or_else(|| panic!("geometry \"{}\" is not a geometry: {}", name, def));
+        self.active.borrow_mut().pop();
+        self.built.borrow_mut().insert(name.to_string(), g.clone());
+        g
+    }
+}
 
 /// Command-line settings that take precedence over the scene file.
 #[derive(Default)]
@@ -88,6 +132,8 @@ pub struct SceneFile {
     pub lights: Vec<Value>,
     #[serde(default)]
     pub objects: Vec<Value>,
+    #[serde(default)]
+    pub geometries: Map<String, Value>,
     #[serde(default)]
     pub variables: Value,
     pub air: Option<Value>,
@@ -179,14 +225,14 @@ impl SceneFile {
         )
     }
 
-    pub fn parse_objects(objs: Vec<Value>, materials: &Map<String, Value>, media: &Map<String, Value>) ->Vec<Arc<SceneObject>> {
+    pub fn parse_objects(objs: Vec<Value>, materials: &Map<String, Value>, media: &Map<String, Value>, geometries: &GeometryLibrary) ->Vec<Arc<SceneObject>> {
          let mut objects: Vec<Arc<SceneObject>> = Vec::new();
          for obj in objs {
             if obj["type"] == "tree" {
                 objects.extend(SceneFile::parse_tree(&obj, materials, media));
                 continue;
             }
-            if let Some(x) = SceneFile::parse_object(obj, materials, media) { objects.push(x) }
+            if let Some(x) = SceneFile::parse_object(obj, materials, media, geometries) { objects.push(x) }
          }
          objects
     }
@@ -210,7 +256,7 @@ impl SceneFile {
         }
     }
 
-    pub fn parse_object(o: Value,  materials: &Map<String, Value>, media: &Map<String, Value>) -> Option<Arc<SceneObject>> {
+    pub fn parse_object(o: Value,  materials: &Map<String, Value>, media: &Map<String, Value>, geometries: &GeometryLibrary) -> Option<Arc<SceneObject>> {
         let t = o["type"].as_str().unwrap();
 
         if t == "skysphere" {
@@ -234,7 +280,7 @@ impl SceneFile {
             return Some(Arc::new(f));
         }
 
-        let geom = SceneFile::parse_geometry(&o);
+        let geom = SceneFile::parse_geometry(&o, geometries);
         let m = SceneFile::parse_object_medium(&o, materials, media);
         if let Some(geometry) = geom {
             return Some(Arc::new(SceneObject {
@@ -337,7 +383,12 @@ impl SceneFile {
         create_box_terrain(SceneFile::parse_int(&o["seed"], 0) as u64)
     }
 
-    pub fn parse_geometry (o: &Value) -> Option<Box<dyn Geometry + Sync + Send>> {
+    /// A geometry definition, or the name of one in `geometries`, which is shared rather than
+    /// built again.
+    pub fn parse_geometry (o: &Value, geometries: &GeometryLibrary) -> Option<Box<dyn Geometry + Sync + Send>> {
+        if let Value::String(name) = o {
+            return Some(Box::new(geometries.get(name)));
+        }
         let t = o["type"].as_str().unwrap();
 
         if t == "sphere" {
@@ -365,30 +416,38 @@ impl SceneFile {
         }
 
         if t == "rotate" {
-            return Some(SceneFile::parse_rotation(o));
+            return Some(SceneFile::parse_rotation(o, geometries));
         }
 
         if t == "transform" {
-            return Some(SceneFile::parse_transform(o));
+            return Some(SceneFile::parse_transform(o, geometries));
         }
 
         if t == "difference" {
-            return Some(SceneFile::parse_difference(o));
+            return Some(SceneFile::parse_difference(o, geometries));
         }
         None
     }
 
-    pub fn parse_difference(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        let a = SceneFile::parse_geometry(&o["a"]).unwrap(); // Panic if fails
-        let b = SceneFile::parse_geometry(&o["b"]).unwrap();
+    /// As `parse_geometry`, but a named geometry is returned as the shared original itself.
+    pub fn parse_shared_geometry(o: &Value, geometries: &GeometryLibrary) -> Option<SharedGeometry> {
+        match o {
+            Value::String(name) => Some(geometries.get(name)),
+            _ => SceneFile::parse_geometry(o, geometries).map(Arc::from),
+        }
+    }
+
+    pub fn parse_difference(o: &Value, geometries: &GeometryLibrary) -> Box<dyn Geometry + Sync + Send> {
+        let a = SceneFile::parse_geometry(&o["a"], geometries).unwrap(); // Panic if fails
+        let b = SceneFile::parse_geometry(&o["b"], geometries).unwrap();
         Box::new(Difference { 
             a: Primitive { item: a },
             b: Primitive { item: b }, 
         })
     }
 
-    pub fn parse_rotation(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        let a = SceneFile::parse_geometry(&o["item"]).unwrap(); // Panic if fails
+    pub fn parse_rotation(o: &Value, geometries: &GeometryLibrary) -> Box<dyn Geometry + Sync + Send> {
+        let a = SceneFile::parse_shared_geometry(&o["item"], geometries).unwrap(); // Panic if fails
         let roll = SceneFile::parse_number(&o["roll"], 0.).to_radians();
         let pitch = SceneFile::parse_number(&o["pitch"], 0.).to_radians();
         let yaw = SceneFile::parse_number(&o["yaw"], 0.).to_radians();
@@ -397,8 +456,9 @@ impl SceneFile {
 
     /// `{"type": "transform", "item": {...}, "scale": 2 or [x, y, z], "rotate": {"roll", "pitch",
     /// "yaw"} in degrees, "translate": [x, y, z]}`: every part optional, applied in that order.
-    pub fn parse_transform(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        let item = SceneFile::parse_geometry(&o["item"])
+    /// With `"item"` the name of one of the scene's `geometries`, it's an instance of it.
+    pub fn parse_transform(o: &Value, geometries: &GeometryLibrary) -> Box<dyn Geometry + Sync + Send> {
+        let item = SceneFile::parse_shared_geometry(&o["item"], geometries)
             .unwrap_or_else(|| panic!("transform needs a geometry \"item\", got {}", o["item"]));
         let scale = match &o["scale"] {
             Value::Number(n) => { let s = n.as_f64().unwrap(); Vector3::new(s, s, s) },
@@ -883,7 +943,8 @@ impl SceneFile {
             Vector3::new(1000., 1000., 1000.),
         );
 
-        let objects = SceneFile::parse_objects(s.objects, &s.materials, &s.media);
+        let geometries = GeometryLibrary::new(s.geometries);
+        let objects = SceneFile::parse_objects(s.objects, &s.materials, &s.media, &geometries);
         // Emitters with a surface we can sample become area lights.
         let area_lights: Vec<Arc<SceneObject>> = objects.iter()
             .filter(|o| o.medium.material_at(Vector3::zeros()).is_emitter() && o.geometry.surface_area() > 0.)
@@ -1048,6 +1109,63 @@ mod tests {
         }}"#, extra), width, height)
     }
 
+    fn library(defs: Value) -> GeometryLibrary {
+        GeometryLibrary::new(serde_json::from_value(defs).unwrap())
+    }
+
+    #[test]
+    fn test_named_geometry_is_built_once_and_shared() {
+        let lib = library(serde_json::json!({
+            "ball": { "type": "sphere", "location": [0, 0, 0], "radius": 1 },
+            "pair": { "type": "transform", "item": "ball", "scale": 2 },
+        }));
+        let a = lib.get("ball");
+        assert!(Arc::ptr_eq(&a, &lib.get("ball")));
+        // A transform of a named geometry is an instance of it, not a copy.
+        let t = serde_json::json!({ "type": "transform", "item": "ball", "translate": [5, 0, 0] });
+        let _instances: Vec<_> = (0 .. 3).map(|_| SceneFile::parse_transform(&t, &lib)).collect();
+        assert_eq!(Arc::strong_count(&a), 2 + 3);
+        // Definitions can use each other; "pair" holds one more reference to "ball".
+        assert!((lib.get("pair").bounds().max.x - 2.).abs() < 1e-9);
+        assert_eq!(Arc::strong_count(&a), 2 + 3 + 1);
+        // A bare name is a geometry anywhere one is expected.
+        let d = serde_json::json!({ "type": "difference", "a": "pair", "b": "ball" });
+        assert!(SceneFile::parse_geometry(&d, &lib).is_some());
+    }
+
+    #[test]
+    fn test_instances_have_their_own_materials_and_transforms() {
+        let s = minimal_scene(r#",
+            "geometries": { "bulb": { "type": "sphere", "location": [0, 0, 0], "radius": 1 } },
+            "materials": {
+                "warm": { "type": "diffuse-light", "color": [1, 0.5, 0] },
+                "cool": { "type": "diffuse-light", "color": [0, 0.5, 1] }
+            },
+            "objects": [
+                { "type": "transform", "item": "bulb", "translate": [-2, 0, 0], "material": "warm" },
+                { "type": "transform", "item": "bulb", "translate": [2, 0, 0], "scale": 0.5, "material": "cool" }
+            ]"#);
+        let mut areas: Vec<f64> = s.area_lights.iter().map(|o| o.geometry.surface_area()).collect();
+        areas.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let pi4 = 4. * std::f64::consts::PI;
+        assert!((areas[0] - pi4 / 4.).abs() < 1e-9 && (areas[1] - pi4).abs() < 1e-9, "{:?}", areas);
+    }
+
+    #[test]
+    #[should_panic(expected = "geometries refer to each other in a cycle: a -> b -> a")]
+    fn test_geometry_cycle_is_an_error() {
+        library(serde_json::json!({
+            "a": { "type": "transform", "item": "b" },
+            "b": { "type": "transform", "item": "a" },
+        })).get("a");
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown geometry \"nope\"")]
+    fn test_unknown_geometry_is_an_error() {
+        SceneFile::parse_transform(&serde_json::json!({ "type": "transform", "item": "nope" }), &GeometryLibrary::empty());
+    }
+
     #[test]
     fn test_missing_fields_use_defaults() {
         let s = SceneFile::from_string(r#"{
@@ -1138,12 +1256,12 @@ mod tests {
         let t = SceneFile::parse_transform(&serde_json::json!({
             "item": { "type": "sphere", "location": [0, 0, 0], "radius": 1 },
             "scale": 2, "rotate": { "yaw": 90 }, "translate": [0, 0, 5]
-        }));
+        }), &GeometryLibrary::empty());
         let b = t.bounds();
         assert!((b.min.coords - Vector3::new(-2., -2., 3.)).norm() < 1e-9, "{}", b);
         let per_axis = SceneFile::parse_transform(&serde_json::json!({
             "item": { "type": "sphere", "location": [0, 0, 0], "radius": 1 }, "scale": [3, 1, 1]
-        }));
+        }), &GeometryLibrary::empty());
         assert!((per_axis.bounds().max.x - 3.).abs() < 1e-9);
     }
 

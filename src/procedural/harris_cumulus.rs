@@ -1341,6 +1341,18 @@ mod diagnostics {
         for half_hours in 1..=24 {
             sim.advance_to(half_hours as f64 * 1800., |_| {});
             report(&sim);
+            if half_hours % 2 == 0 {
+                let (nx, ny, nz) = sim.params.size;
+                let slab = nx * nz;
+                let (theta, vapour) = (sim.level_means(&sim.theta), sim.level_means(&sim.vapour));
+                for j in (0..ny.min(30)).step_by(3) {
+                    let r = j * slab..(j + 1) * slab;
+                    let rh_max = r.clone().map(|n| sim.vapour.data[n] / saturation_mixing_ratio(sim.theta.data[n] * sim.exner[j], sim.pressure[j]))
+                        .fold(0., f64::max);
+                    eprintln!("    z {:5.0}  θ {:.2}  qv {:.2} g/kg  RH mean {:.2} max {:.2}", (j as f64 + 0.5) * sim.params.cell, theta[j], vapour[j] * 1e3,
+                        vapour[j] / saturation_mixing_ratio(theta[j] * sim.exner[j], sim.pressure[j]), rh_max);
+                }
+            }
         }
     }
 }

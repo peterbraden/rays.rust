@@ -18,7 +18,8 @@ use crate::procedural::fireworks::create_firework;
 use crate::procedural::nubis_clouds::NubisCloudLayer;
 use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGenus};
 use crate::participatingmedia::create_fog;
-use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction};
+use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
+use crate::material::ice_halos::{Crystals, Habit};
 use crate::material::diffraction::DiffractionTable;
 use crate::noise::PerlinNoise;
 use crate::material::phase::PhaseFunction;
@@ -291,9 +292,7 @@ impl SceneFile {
                 threshold: SceneFile::parse_number(&n["threshold"], 0.5),
             }),
         };
-        create_volume(bounds, density, SceneFile::parse_color_def(o, "albedo", Color::white()),
-            SceneFile::parse_phase(o, 0.), SceneFile::parse_scattering_approximation(o),
-            SceneFile::parse_diffraction(o))
+        create_volume(bounds, density, SceneFile::parse_scattering(o, 0.))
     }
 
     /// A medium's multiple-scattering approximations (`volume::ScatteringApproximation`):
@@ -317,6 +316,55 @@ impl SceneFile {
             similarity_after: o.get("similarity_after").map(|n| SceneFile::parse_int(n, 0) as u32),
             oz,
         }
+    }
+
+    /// How a volume scatters: `albedo`, its phase function (`g` defaulting to `default_g`, or
+    /// `droplet_diameter`), approximations, `diffraction` and `halos`.
+    pub fn parse_scattering(o: &Value, default_g: f64) -> Scattering {
+        Scattering {
+            albedo: SceneFile::parse_color_def(o, "albedo", Color::white()),
+            phase: SceneFile::parse_phase(o, default_g),
+            approximation: SceneFile::parse_scattering_approximation(o),
+            diffraction: SceneFile::parse_diffraction(o),
+            halos: SceneFile::parse_halos(o),
+        }
+    }
+
+    /// Ice-crystal halos: `"halos": true` for plates (a third: sun dogs) and randomly oriented
+    /// columns (the 22° and 46° halos), or `{"crystals": [{"habit": "plate" | "column" |
+    /// "random", "fraction", "aspect", "tilt"}], "rays": 4000000}`: populations by their share
+    /// of the light, the prisms' half-height over their radius, and their tilt from horizontal
+    /// (degrees, standard deviation); and the rays traced per colour channel.
+    pub fn parse_halos(o: &Value) -> Option<Halos> {
+        let v = match o.get("halos") {
+            None | Some(Value::Bool(false)) => return None,
+            Some(v) => v,
+        };
+        let crystals = match v.get("crystals").and_then(|c| c.as_array()) {
+            None => vec![
+                Crystals { habit: Habit::Plate, fraction: 1. / 3., aspect: 0.15, tilt: 0.5 },
+                Crystals { habit: Habit::Random, fraction: 2. / 3., aspect: 1.5, tilt: 0. },
+            ],
+            Some(list) => list.iter().map(|c| {
+                let habit = match c["habit"].as_str() {
+                    Some("plate") => Habit::Plate,
+                    Some("column") => Habit::Column,
+                    Some("random") => Habit::Random,
+                    h => panic!("Unknown crystal habit {:?}: expected plate, column or random", h),
+                };
+                let aspect = SceneFile::parse_number(&c["aspect"], if habit == Habit::Plate { 0.15 } else { 1.5 });
+                Crystals { habit, fraction: SceneFile::parse_number(&c["fraction"], 1.), aspect,
+                           tilt: SceneFile::parse_number(&c["tilt"], 0.5) }
+            }).collect(),
+        };
+        assert!(!crystals.is_empty() && crystals.iter().all(|c| c.fraction >= 0. && c.aspect > 0.),
+            "Halo crystals need positive aspects and fractions");
+        Some(Halos {
+            crystals,
+            rays: SceneFile::parse_int(&v["rays"], 4_000_000).max(64),
+            seed: SceneFile::parse_seed(v).unwrap_or(0),
+            table: std::sync::OnceLock::new(),
+        })
     }
 
     /// Diffraction by the medium's particles, for iridescence and coronae: `"diffraction": true`
@@ -382,9 +430,7 @@ impl SceneFile {
             Vector3::new(center.x - extent, base, center.y - extent),
             Vector3::new(center.x + extent, top, center.y + extent),
         );
-        create_volume(bounds, Arc::new(layer), SceneFile::parse_color_def(o, "albedo", Color::white()),
-            SceneFile::parse_phase(o, 0.85), SceneFile::parse_scattering_approximation(o),
-            SceneFile::parse_diffraction(o))
+        create_volume(bounds, Arc::new(layer), SceneFile::parse_scattering(o, 0.85))
     }
 
     /// A layer of cirrus by Hogan and Kew's fallstreak model (see
@@ -402,7 +448,8 @@ impl SceneFile {
     /// (relative size at the cells' edges, where ice is newest), for `diffraction`; `fade`, the fraction of
     /// `extent` over which the layer fades out at its edges (default 0.3); and `time` and
     /// `evolution_period` (seconds) to animate.
-    /// The phase function defaults to `g` 0.75, for ice crystals.
+    /// The phase function defaults to `g` 0.75, for ice crystals; `"halos"` adds sun dogs and
+    /// halos (see `SceneFile::parse_halos`).
     pub fn parse_hogan_kew_cirrus(o: &Value) -> SceneObject {
         let genus = match o["genus"].as_str() {
             None | Some("cirrus") => CirrusGenus::Cirrus,
@@ -451,11 +498,9 @@ impl SceneFile {
             Vector3::new(center.x - extent, base, center.y - extent),
             Vector3::new(center.x + extent, top, center.y + extent),
         );
-        let diffraction = SceneFile::parse_diffraction(o);
         // With diffraction, the phase function is that of the rest: refraction and reflection.
-        let g = if diffraction.is_some() { 0.5 } else { 0.75 };
-        create_volume(bounds, Arc::new(c), SceneFile::parse_color_def(o, "albedo", Color::white()),
-            SceneFile::parse_phase(o, g), SceneFile::parse_scattering_approximation(o), diffraction)
+        let g = if o.get("diffraction").is_some_and(|d| d != &Value::Bool(false)) { 0.5 } else { 0.75 };
+        create_volume(bounds, Arc::new(c), SceneFile::parse_scattering(o, g))
     }
 
     pub fn parse_box_terrain(o: &Value) -> SceneObject {

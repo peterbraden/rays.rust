@@ -32,6 +32,8 @@ use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::material::functions::sample_area_light_with;
 use crate::material::phase::PhaseFunction;
 use crate::material::diffraction::DiffractionTable;
+use crate::material::ice_halos::{Crystals, HaloTable};
+use std::sync::OnceLock;
 use std::sync::Arc;
 use crate::material::texture::Solid;
 use crate::na::Vector3;
@@ -301,8 +303,22 @@ pub struct VolumeMaterial {
     pub phase: PhaseFunction,
     pub approximation: ScatteringApproximation,
     pub diffraction: Option<Diffraction>,
+    pub halos: Option<Halos>,
     /// The volume's density field, for the particle size where it has one.
     pub field: Arc<dyn DensityField>,
+}
+
+/// Halos from ice crystals (see `material::ice_halos`): sun dogs, the 22° and 46° halos,
+/// tangent arcs. Their scattering depends on the direction the light comes from, so it is
+/// traced for the scene's sun, `rays` rays a colour channel, when first needed, and used for
+/// direct sunlight at a path's first scattering in the medium, where halos are seen: there it
+/// replaces the base phase function (the part of scattering not diffracted). Elsewhere the
+/// base phase function stands in for it.
+pub struct Halos {
+    pub crystals: Vec<Crystals>,
+    pub rays: usize,
+    pub seed: u64,
+    pub table: OnceLock<HaloTable>,
 }
 
 /// Diffraction by the medium's particles (see `material::diffraction`): a `fraction` of the
@@ -456,9 +472,10 @@ impl VolumeMaterial {
             direct = direct + light.color * p(&w) * (light.intensity / (d * d) * transmitted);
         }
         if let Some(sun) = &s.sun {
+            let sun_phase = self.sun_phase(phase, incoming, s, scatterings);
             direct = direct + match self.approximation.oz {
-                None => sun.irradiance * p(&sun.direction) * sun.transmittance_from(point, s),
-                Some(oz) if scatterings == 0 => sun.irradiance * self.oz_sunlight(&oz, phase, incoming, point, s),
+                None => sun.irradiance * sun_phase * sun.transmittance_from(point, s),
+                Some(oz) if scatterings == 0 => sun.irradiance * self.oz_sunlight(&oz, sun_phase, incoming, point, s),
                 // Already counted, octaves and all, at the path's first scattering.
                 Some(_) => Color::black(),
             };
@@ -469,17 +486,34 @@ impl VolumeMaterial {
         albedo * direct
     }
 
+    /// The phase function for direct sunlight at a vertex seen along `incoming`: with halos,
+    /// at a path's first scattering, the traced crystals' in place of the base phase function.
+    fn sun_phase(&self, phase: &VertexPhase, incoming: &Vector3<f64>, s: &Scene, scatterings: u32) -> Color {
+        let sun = s.sun.as_ref().unwrap();
+        let cos = incoming.dot(&sun.direction);
+        let halos = match &self.halos {
+            Some(h) if scatterings == 0 && !self.reduced(scatterings) => h,
+            _ => return phase.eval(cos),
+        };
+        let table = halos.table.get_or_init(|| HaloTable::new(&sun.direction, &halos.crystals, halos.rays, halos.seed));
+        let crystals = table.eval(incoming);
+        match phase.diffraction {
+            None => crystals,
+            Some((d, radius)) => crystals * (1. - d.fraction) + d.table.eval_color(cos, radius) * d.fraction,
+        }
+    }
+
     /// Wrenninge et al.'s sum over octaves, per unit sun irradiance: Σ b^i p_i(θ) T(a^i σ),
     /// p_i the phase function with its mean cosine scaled c^i (as Henyey-Greenstein beyond the
     /// first octave).
-    fn oz_sunlight(&self, oz: &Oz, first: &VertexPhase, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene) -> Color {
+    fn oz_sunlight(&self, oz: &Oz, first: Color, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene) -> Color {
         let sun = s.sun.as_ref().unwrap();
         let cos = incoming.dot(&sun.direction);
         let saved = (path_scatterings(), path_density_scale());
         let mut total = Color::black();
         for i in 0..oz.octaves as i32 {
             let phase = if i == 0 {
-                first.eval(cos)
+                first
             } else {
                 Color::white() * PhaseFunction::HenyeyGreenstein { g: self.mean_cosine(saved.0) * oz.c.powi(i) }.eval(cos)
             };
@@ -512,11 +546,23 @@ impl MaterialModel for VolumeMaterial {
     }
 }
 
-pub fn create_volume(bounds: BBox, density: Arc<dyn DensityField>, albedo: Color, phase: PhaseFunction,
-                     approximation: ScatteringApproximation, diffraction: Option<Diffraction>) -> SceneObject {
+/// How a volume's medium scatters, besides its density.
+pub struct Scattering {
+    pub albedo: Color,
+    pub phase: PhaseFunction,
+    pub approximation: ScatteringApproximation,
+    pub diffraction: Option<Diffraction>,
+    pub halos: Option<Halos>,
+}
+
+pub fn create_volume(bounds: BBox, density: Arc<dyn DensityField>, s: Scattering) -> SceneObject {
+    let material = VolumeMaterial {
+        albedo: s.albedo, phase: s.phase, approximation: s.approximation, diffraction: s.diffraction,
+        halos: s.halos, field: density.clone(),
+    };
     SceneObject {
-        geometry: Box::new(Volume { bounds, density: density.clone() }),
-        medium: Box::new(Solid { m: Box::new(VolumeMaterial { albedo, phase, approximation, diffraction, field: density }) }),
+        geometry: Box::new(Volume { bounds, density }),
+        medium: Box::new(Solid { m: Box::new(material) }),
     }
 }
 
@@ -623,6 +669,7 @@ mod tests {
             phase: PhaseFunction::HenyeyGreenstein { g: 0.5 },
             approximation: ScatteringApproximation::default(),
             diffraction: Some(Diffraction { table: DiffractionTable::new(0.1), fraction: 0.5, radius: 5. }),
+            halos: None,
             field: Arc::new(ConstantDensity(1.)),
         };
         // First scattering in full: the extinction as given, diffraction in the phase.

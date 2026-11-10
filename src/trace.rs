@@ -356,6 +356,37 @@ mod tests {
     }
 
     #[test]
+    fn test_sun_dogs_in_a_layer_of_plates() {
+        // A thin layer of horizontal plates far overhead, the sun 20° up: looking where Bravais
+        // puts the sun dog, the layer is much brighter than at the same angle above the sun.
+        crate::geometry::seed_rand(16, 1);
+        let h: f64 = 20f64.to_radians();
+        let s = SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 0, "shadow_bias": 0.0001,
+            "sun": {{ "direction": [0, {}, {}], "intensity": 1 }},
+            "camera": {{ "location": [0, 0, 0], "lookat": [0, 1, 1], "up": [0, 1, 0], "angle": 0.5 }},
+            "objects": [ {{ "type": "volume", "min": [-1e6, 1000, -1e6], "max": [1e6, 1010, 1e6],
+                           "density": 0.001, "g": 0.5,
+                           "halos": {{ "crystals": [ {{ "habit": "plate", "aspect": 0.15, "tilt": 0.3 }} ], "rays": 300000 }} }} ]
+        }}"#, h.sin(), h.cos()));
+        let n = ice_index_for_test();
+        let n_prime = (n * n - h.sin().powi(2)).sqrt() / h.cos();
+        let offset = (2. * (n_prime * 0.5).asin() - 60f64.to_radians()).abs();
+        let look = |azimuth: f64, elevation: f64| {
+            let d = Vector3::new(azimuth.sin() * elevation.cos(), elevation.sin(), azimuth.cos() * elevation.cos());
+            let r = Ray { ro: Vector3::zeros(), rd: d };
+            (0..2000).map(|_| trace(&r, 0, &s).1.rgb.y).sum::<f64>() / 2000.
+        };
+        let dog = look(offset, h);
+        let above = look(0., h + offset);
+        assert!(dog > 5. * above, "sun dog {} vs above {}", dog, above);
+    }
+
+    fn ice_index_for_test() -> f64 {
+        crate::material::ice_halos::ice_index(0.55)
+    }
+
+    #[test]
     fn test_absorbing_volume_follows_beer_lambert() {
         // Albedo 0: only light that crosses the 2 units of medium uncollided arrives.
         crate::geometry::seed_rand(1, 2);

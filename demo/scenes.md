@@ -23,6 +23,11 @@ black oak and black tupelo, with shrubs in front. Each is
 with optional `"params"` overriding the species' parameters (see `src/procedural/tree.rs`).
 ![trees](./scenes/trees.png)
 
+Evergreens, from left to right: Italian cypresses, a forked stone (umbrella) pine, Scots pines,
+Norway spruces, a cedar of Lebanon and balsam firs. Trees of the same species differ only by
+their seed.
+![evergreens](./scenes/evergreens.png)
+
 ## Fireworks
 ![fireworks](./scenes/fireworks.png)
 

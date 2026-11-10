@@ -15,6 +15,7 @@ use crate::color::Color;
 use crate::skysphere::create_sky_sphere;
 use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
+use crate::terrain::object::create_terrain;
 use crate::participatingmedia::create_fog;
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
@@ -217,6 +218,9 @@ impl SceneFile {
         if t == "ocean" {
             let d = create_ocean(&o);
             return Some(Arc::new(d));
+        }
+        if t == "terrain" {
+            return Some(Arc::new(create_terrain(&o)));
         }
         if t == "firework" {
             let d = create_firework(&o);

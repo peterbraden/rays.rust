@@ -145,6 +145,9 @@ pub struct GlacierParams {
     pub max_accumulation: f64,
     /// Longest ice time step, years.
     pub max_step: f64,
+    /// Shortest ice time step, years: where `max_stiffness` would ask for less (thick, fast
+    /// ice), accuracy is traded for time, the flux limiter keeping the step safe.
+    pub min_step: f64,
     /// Largest ice step relative to the fastest diffusion: Δt Σc / area (see `flow_ice`).
     pub max_stiffness: f64,
     /// Morphological acceleration factor (see `simulation`): years of landscape evolution per
@@ -169,6 +172,7 @@ impl Default for GlacierParams {
             balance_gradient: 0.007,
             max_accumulation: 2.,
             max_step: 10.,
+            min_step: 0.5,
             max_stiffness: 200.,
             acceleration: 10.,
         }
@@ -239,7 +243,7 @@ pub fn flow_ice(domain: &Domain, p: &GlacierParams, bed: &[f64], ice: &mut [f64]
 
     let stiffness = (0..n).filter(|&i| !drain[i])
         .map(|i| conductance[i].iter().sum::<f64>() / domain.area[i]).fold(0., f64::max);
-    let dt = if stiffness > 0. { max_dt.min(p.max_stiffness / stiffness) } else { max_dt };
+    let dt = if stiffness > 0. { max_dt.min((p.max_stiffness / stiffness).max(p.min_step)) } else { max_dt };
 
     let diag: Vec<f64> = (0..n).map(|i| {
         if drain[i] { 1. } else { domain.area[i] / dt + conductance[i].iter().sum::<f64>() }
@@ -262,7 +266,7 @@ pub fn flow_ice(domain: &Domain, p: &GlacierParams, bed: &[f64], ice: &mut [f64]
     };
 
     let mut x: Vec<f64> = (0..n).map(|i| if drain[i] { 0. } else { ice[i] }).collect();
-    let iterations = conjugate_gradient(&apply, &diag, &rhs, &mut x, 1e-8, 1000);
+    let iterations = conjugate_gradient(&apply, &diag, &rhs, &mut x, 1e-8, 500);
 
     // The solution x may be negative where the lagged diffusivity moved more ice than a cell
     // had. Rather than clamp it (creating ice), take the fluxes the solve implies and limit

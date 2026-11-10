@@ -61,6 +61,8 @@ use crate::na::Vector3;
 use crate::na::geometry::{Affine3, Transform3};
 use crate::ray::Ray;
 use crate::shapes::bbox::BBox;
+use std::mem::MaybeUninit;
+use std::ops::Range;
 
 /// Buckets tried along the split axis.
 const BINS: usize = 16;
@@ -73,8 +75,13 @@ const MAX_LEAF: usize = 8;
 /// tessellated sphere that is within 20% of the true extent; transforming the root box's corners
 /// gives 70% too wide.
 const TRANSFORMED_BOUNDS_DEPTH: usize = 8;
-/// Deep enough for any tree built from a sane number of items.
-const STACK_SIZE: usize = 64;
+/// Beyond this depth nodes are halved by count instead of by the heuristic, which can split off
+/// one item at a time (eg. from items spaced exponentially): the tree is then at most this plus
+/// 32 deep, for up to 2^32 items, which bounds the traversal stack.
+const MAX_HEURISTIC_DEPTH: usize = 64;
+/// Traversal pushes at most one node per level (and the root): deep enough for any tree `build`
+/// makes.
+const STACK_SIZE: usize = MAX_HEURISTIC_DEPTH + 34;
 
 #[derive(Clone, Copy, Debug)]
 struct Node {
@@ -108,9 +115,25 @@ impl TraversalRay {
     }
 
     /// Where the ray enters the box, if it passes through some part of it in `[min, max]`.
+    ///
+    /// `BBox::entry_exit`, with plain comparisons in place of `f64::min` and `max`: NaN (a ray
+    /// parallel to a slab, starting on its face) is handled first, so their care with NaN was
+    /// wasted, and the box tests are most of traversal.
+    #[inline]
     fn enters(&self, b: &BBox, min: f64, max: f64) -> Option<f64> {
-        let (entry, exit) = b.entry_exit(&self.ro, &self.invrd)?;
-        let entry = entry.max(0.) * self.len;
+        let (mut entry, mut exit) = (f64::NEG_INFINITY, f64::INFINITY);
+        for a in 0..3 {
+            let t1 = (b.min[a] - self.ro[a]) * self.invrd[a];
+            let t2 = (b.max[a] - self.ro[a]) * self.invrd[a];
+            // Parallel to the slab and starting on one of its faces (0 * inf): inside the
+            // closed slab, so it limits nothing.
+            if t1.is_nan() || t2.is_nan() { continue }
+            let (near, far) = if t1 < t2 { (t1, t2) } else { (t2, t1) };
+            if near > entry { entry = near }
+            if far < exit { exit = far }
+        }
+        if exit < 0. || entry > exit { return None }
+        let entry = if entry > 0. { entry } else { 0. } * self.len;
         if entry <= max && exit * self.len >= min { Some(entry) } else { None }
     }
 }
@@ -129,7 +152,7 @@ impl Bvh {
         let mut order: Vec<usize> = (0 .. items.len()).collect();
         let mut nodes = Vec::with_capacity(2 * items.len());
         if !items.is_empty() {
-            Bvh::build_node(&mut nodes, &bounds, &centroids, &mut order, 0);
+            Bvh::build_node(&mut nodes, &bounds, &centroids, &mut order, 0, 0);
         }
 
         // Permute the items into leaf order.
@@ -141,7 +164,7 @@ impl Bvh {
 
     /// Build the node for `order[..]` (which starts at `first` in the full order), and its
     /// subtree, appending them to `nodes`.
-    fn build_node(nodes: &mut Vec<Node>, bounds: &[BBox], centroids: &[Vector3<f64>], order: &mut [usize], first: usize) {
+    fn build_node(nodes: &mut Vec<Node>, bounds: &[BBox], centroids: &[Vector3<f64>], order: &mut [usize], first: usize, depth: usize) {
         let node_bounds = order.iter().fold(BBox::empty(), |b, &i| b.union(&bounds[i]));
         let index = nodes.len();
         nodes.push(Node { bounds: node_bounds, offset: first as u32, count: order.len() as u32 });
@@ -155,6 +178,14 @@ impl Bvh {
         let (lo, width) = (centroid_bounds.min[axis], extent[axis]);
         if width.is_nan() || width <= 0. {
             // Every centroid is in the same place: no split separates anything.
+            return;
+        }
+        if depth >= MAX_HEURISTIC_DEPTH {
+            if order.len() > MAX_LEAF {
+                let mid = order.len() / 2;
+                order.select_nth_unstable_by(mid, |&a, &b| centroids[a][axis].total_cmp(&centroids[b][axis]));
+                Bvh::split_at(nodes, bounds, centroids, order, first, depth, index, mid);
+            }
             return;
         }
         let bin_of = |i: usize| (((centroids[i][axis] - lo) / width * BINS as f64) as usize).min(BINS - 1);
@@ -198,10 +229,17 @@ impl Bvh {
                 mid += 1;
             }
         }
+        Bvh::split_at(nodes, bounds, centroids, order, first, depth, index, mid);
+    }
+
+    /// Make node `index` an interior node, its children holding `order[..mid]` and `order[mid..]`.
+    #[allow(clippy::too_many_arguments)]
+    fn split_at(nodes: &mut Vec<Node>, bounds: &[BBox], centroids: &[Vector3<f64>], order: &mut [usize],
+                first: usize, depth: usize, index: usize, mid: usize) {
         let (left, right) = order.split_at_mut(mid);
-        Bvh::build_node(nodes, bounds, centroids, left, first);
+        Bvh::build_node(nodes, bounds, centroids, left, first, depth + 1);
         let second = nodes.len();
-        Bvh::build_node(nodes, bounds, centroids, right, first + mid);
+        Bvh::build_node(nodes, bounds, centroids, right, first + mid, depth + 1);
         nodes[index].offset = second as u32;
         nodes[index].count = 0;
     }
@@ -239,26 +277,45 @@ impl Bvh {
     /// nearest hit so far, which an item may use to give up early. Hits outside `[min, best)` are
     /// ignored.
     pub fn nearest(&self, r: &Ray, min: f64, max: f64, mut hit: impl FnMut(usize, f64) -> Option<RawIntersection>) -> Option<(usize, RawIntersection)> {
+        self.nearest_in_leaves(r, min, max, |items, best_dist| {
+            let mut best = None;
+            let mut best_dist = best_dist;
+            for i in items {
+                if let Some(x) = hit(i, best_dist).filter(|x| x.dist >= min && x.dist < best_dist) {
+                    best_dist = x.dist;
+                    best = Some((i, x));
+                }
+            }
+            best
+        })
+    }
+
+    /// As `nearest`, but `leaf(items, best)` searches a whole leaf's items at once (as
+    /// `triangle::may_hit` does, several at a time), returning the nearest hit among them in
+    /// `[min, best)`.
+    pub fn nearest_in_leaves(&self, r: &Ray, min: f64, max: f64,
+                             mut leaf: impl FnMut(Range<usize>, f64) -> Option<(usize, RawIntersection)>) -> Option<(usize, RawIntersection)> {
         let ray = TraversalRay::new(r);
         let mut best: Option<(usize, RawIntersection)> = None;
         let mut best_dist = max;
-        let mut stack = [(0u32, 0f64); STACK_SIZE];
-        stack[0].1 = self.nodes.first().and_then(|n| ray.enters(&n.bounds, min, best_dist))?;
+        // Uninitialised: zeroing it on every ray was a measurable cost. Only entries below `top`,
+        // all written, are read.
+        let mut stack = [MaybeUninit::<(u32, f64)>::uninit(); STACK_SIZE];
+        stack[0].write((0, self.nodes.first().and_then(|n| ray.enters(&n.bounds, min, best_dist))?));
         let mut top = 1;
 
         while top > 0 {
             top -= 1;
-            let (index, entry) = stack[top];
+            // SAFETY: stack[top] was written when top last rose past it.
+            let (index, entry) = unsafe { stack[top].assume_init() };
             if entry > best_dist {
                 continue; // a hit was found nearer than this node, since it was pushed
             }
             let node = &self.nodes[index as usize];
             if node.count > 0 {
-                for i in node.offset as usize .. (node.offset + node.count) as usize {
-                    if let Some(x) = hit(i, best_dist).filter(|x| x.dist >= min && x.dist < best_dist) {
-                        best_dist = x.dist;
-                        best = Some((i, x));
-                    }
+                if let Some((i, x)) = leaf(node.offset as usize .. (node.offset + node.count) as usize, best_dist) {
+                    best_dist = x.dist;
+                    best = Some((i, x));
                 }
                 continue;
             }
@@ -269,12 +326,12 @@ impl Bvh {
             match (ea, eb) {
                 (Some(ea), Some(eb)) => {
                     let (near, far) = if ea <= eb { ((a, ea), (b, eb)) } else { ((b, eb), (a, ea)) };
-                    stack[top] = far;
-                    stack[top + 1] = near;
+                    stack[top].write(far);
+                    stack[top + 1].write(near);
                     top += 2;
                 },
-                (Some(ea), None) => { stack[top] = (a, ea); top += 1; },
-                (None, Some(eb)) => { stack[top] = (b, eb); top += 1; },
+                (Some(ea), None) => { stack[top].write((a, ea)); top += 1; },
+                (None, Some(eb)) => { stack[top].write((b, eb)); top += 1; },
                 (None, None) => {},
             }
         }
@@ -284,24 +341,32 @@ impl Bvh {
     /// Whether any item is hit in `[min, max)` along the ray, stopping at the first found: for
     /// shadow rays. `hit(i)` says whether item `i` is hit in range.
     pub fn any_hit(&self, r: &Ray, min: f64, max: f64, mut hit: impl FnMut(usize) -> bool) -> bool {
+        self.any_hit_in_leaves(r, min, max, |mut items| items.any(&mut hit))
+    }
+
+    /// As `any_hit`, but `leaf(items)` tests a whole leaf's items at once.
+    pub fn any_hit_in_leaves(&self, r: &Ray, min: f64, max: f64, mut leaf: impl FnMut(Range<usize>) -> bool) -> bool {
         let ray = TraversalRay::new(r);
-        let mut stack = [0u32; STACK_SIZE];
-        let mut top = 0;
-        if self.nodes.first().and_then(|n| ray.enters(&n.bounds, min, max)).is_some() {
-            top = 1;
+        let mut stack = [MaybeUninit::<u32>::uninit(); STACK_SIZE];
+        if self.nodes.first().and_then(|n| ray.enters(&n.bounds, min, max)).is_none() {
+            return false;
         }
+        stack[0].write(0);
+        let mut top = 1;
         while top > 0 {
             top -= 1;
-            let node = &self.nodes[stack[top] as usize];
+            // SAFETY: stack[top] was written when top last rose past it.
+            let index = unsafe { stack[top].assume_init() };
+            let node = &self.nodes[index as usize];
             if node.count > 0 {
-                if (node.offset .. node.offset + node.count).any(|i| hit(i as usize)) {
+                if leaf(node.offset as usize .. (node.offset + node.count) as usize) {
                     return true;
                 }
                 continue;
             }
-            for child in [stack[top] + 1, node.offset] {
+            for child in [index + 1, node.offset] {
                 if ray.enters(&self.nodes[child as usize].bounds, min, max).is_some() {
-                    stack[top] = child;
+                    stack[top].write(child);
                     top += 1;
                 }
             }
@@ -376,6 +441,33 @@ mod tests {
         assert_eq!(bvh.node_count(), 1);
         let r = Ray { ro: Vector3::new(0., 0., -5.), rd: Vector3::new(0., 0., 1.) };
         assert!(bvh.nearest(&r, 0., f64::INFINITY, |i, _| items[i].intersects(&r)).is_some());
+    }
+
+    fn depth(bvh: &Bvh, index: usize) -> usize {
+        let n = &bvh.nodes[index];
+        if n.count > 0 { 1 } else { 1 + depth(bvh, index + 1).max(depth(bvh, n.offset as usize)) }
+    }
+
+    #[test]
+    fn test_depth_is_bounded() {
+        // Spheres spaced exponentially along x: each split by the heuristic separates the
+        // farthest from the rest, which would make a tree as deep as there are items, and
+        // overflow the traversal stack.
+        let original: Vec<Sphere> = (-450 .. 450).map(|i| {
+            let x = 2f64.powi(i);
+            Sphere::new(Vector3::new(x, 0., 0.), x / 4.)
+        }).collect();
+        let (bvh, items) = Bvh::build(original.clone(), |s| s.bounds());
+        assert!(depth(&bvh, 0) <= MAX_HEURISTIC_DEPTH + 34, "{}", depth(&bvh, 0));
+        assert!(depth(&bvh, 0) > MAX_HEURISTIC_DEPTH, "the case should reach the limit: {}", depth(&bvh, 0));
+        // Rays along the row and across it, from both ends and from within.
+        for (ro, rd) in [(-1., 1.), (1e140, -1.), (3e-50, 1.), (3e-50, -1.)] {
+            let r = Ray { ro: Vector3::new(ro, 0., 0.), rd: Vector3::new(rd, 0., 0.) };
+            let expected = brute_force(&original, &r, 0., f64::INFINITY);
+            let found = bvh.nearest(&r, 0., f64::INFINITY, |i, _| items[i].intersects_beyond(&r, 0.)).map(|(_, x)| x.dist);
+            assert_eq!(expected, found, "{}", r);
+            assert_eq!(bvh.any_hit(&r, 0., f64::INFINITY, |i| items[i].intersects_beyond(&r, 0.).is_some()), expected.is_some());
+        }
     }
 
     #[test]

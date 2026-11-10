@@ -72,6 +72,7 @@ mod procedural {
     pub mod box_terrain;
     pub mod fireworks;
     pub mod tree;
+    pub mod forest;
 }
 mod participatingmedia;
 mod noise;

@@ -524,11 +524,10 @@ impl MultipleScattering {
                     let y = x + d * ground.dist;
                     let normal = (y - sky.earth.center).normalize();
                     let cos = normal.dot(&sun);
-                    if cos > 0. {
-                        if let Some((sr, sm)) = sky.optical_depth_towards(y + normal, sun) {
-                            let lit = sky.transmittance_of(sr, sm) * (cos * sky.ground_albedo / std::f64::consts::PI);
-                            second += sky.transmittance_of(dr, dm).component_mul(&lit);
-                        }
+                    let to_sun = if cos > 0. { sky.optical_depth_towards(y + normal, sun) } else { None };
+                    if let Some((sr, sm)) = to_sun {
+                        let lit = sky.transmittance_of(sr, sm) * (cos * sky.ground_albedo / std::f64::consts::PI);
+                        second += sky.transmittance_of(dr, dm).component_mul(&lit);
                     }
                 }
             }

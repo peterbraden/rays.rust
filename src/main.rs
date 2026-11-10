@@ -37,6 +37,7 @@ mod material {
     pub mod noise;
     pub mod phase;
     pub mod diffraction;
+    pub mod ice_halos;
 }
 mod intersection;
 mod sceneobject;

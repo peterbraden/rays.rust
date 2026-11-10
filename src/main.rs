@@ -70,6 +70,7 @@ mod procedural {
     pub mod box_terrain;
     pub mod fireworks;
     pub mod nubis_clouds;
+    pub mod hogan_kew_cirrus;
 }
 mod participatingmedia;
 mod noise;

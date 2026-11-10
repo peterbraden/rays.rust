@@ -16,6 +16,7 @@ use crate::skysphere::{create_sky_sphere, parse_sky_material};
 use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
 use crate::procedural::nubis_clouds::NubisCloudLayer;
+use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGenus};
 use crate::participatingmedia::create_fog;
 use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz};
 use crate::noise::PerlinNoise;
@@ -234,6 +235,10 @@ impl SceneFile {
             return Some(Arc::new(f));
         }
 
+        if t == "hogan_kew_cirrus" {
+            return Some(Arc::new(SceneFile::parse_hogan_kew_cirrus(&o)));
+        }
+
         if t == "nubis_clouds" {
             return Some(Arc::new(SceneFile::parse_nubis_clouds(&o)));
         }
@@ -359,6 +364,69 @@ impl SceneFile {
         );
         create_volume(bounds, Box::new(layer), SceneFile::parse_color_def(o, "albedo", Color::white()),
             SceneFile::parse_phase(o, 0.85), SceneFile::parse_scattering_approximation(o))
+    }
+
+    /// A layer of cirrus by Hogan and Kew's fallstreak model (see
+    /// `procedural::hogan_kew_cirrus`), filling `extent` either side of `center` ([x, z]):
+    ///
+    /// `{"type": "hogan_kew_cirrus", "genus": "cirrus" | "cirrostratus" | "cirrocumulus",
+    /// "base": 8000, "top": 10000, "extent": 100000, "wind_direction": [x, z], "seed": 0}`
+    ///
+    /// The genus sets the rest, each of which can be overridden: `coverage`, `cell_size`,
+    /// `spectral_slope`, `anisotropy` (the generating cells); `density`, `generating_depth`,
+    /// `fall_depth`, `sublimation` (the ice); `shear`, `generating_wind`, `fall_speed`,
+    /// `fall_speed_spread` (the fallstreaks); `edge`, `detail_size`, `detail`,
+    /// `turbulence_size`, `turbulence`; `patchiness` and `patch_size`; `fade`, the fraction of
+    /// `extent` over which the layer fades out at its edges (default 0.3); and `time` and
+    /// `evolution_period` (seconds) to animate.
+    /// The phase function defaults to `g` 0.75, for ice crystals.
+    pub fn parse_hogan_kew_cirrus(o: &Value) -> SceneObject {
+        let genus = match o["genus"].as_str() {
+            None | Some("cirrus") => CirrusGenus::Cirrus,
+            Some("cirrostratus") => CirrusGenus::Cirrostratus,
+            Some("cirrocumulus") => CirrusGenus::Cirrocumulus,
+            Some(g) => panic!("Unknown cirrus genus '{}': expected cirrus, cirrostratus or cirrocumulus", g),
+        };
+        let mut f = CirrusField::new(genus);
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        f.base = num("base", f.base);
+        f.top = num("top", f.top);
+        f.coverage = num("coverage", f.coverage).clamp(0., 1.);
+        f.cell_size = num("cell_size", f.cell_size);
+        f.spectral_slope = num("spectral_slope", f.spectral_slope);
+        f.anisotropy = num("anisotropy", f.anisotropy);
+        f.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", f.wind_direction);
+        f.seed = SceneFile::parse_seed(o).unwrap_or(0);
+        let (base, top) = (f.base, f.top);
+        let mut c = HoganKewCirrus::new(f);
+        c.max_density = num("density", c.max_density);
+        c.generating_depth = num("generating_depth", c.generating_depth);
+        c.fall_depth = num("fall_depth", c.fall_depth);
+        c.sublimation = num("sublimation", c.sublimation);
+        c.shear = num("shear", c.shear);
+        c.generating_wind = num("generating_wind", c.generating_wind);
+        c.fall_speed = num("fall_speed", c.fall_speed);
+        c.fall_speed_spread = num("fall_speed_spread", c.fall_speed_spread).clamp(0., 0.95);
+        c.edge = num("edge", c.edge).max(1e-9);
+        c.detail_size = num("detail_size", c.detail_size);
+        c.detail = num("detail", c.detail).clamp(0., 1.);
+        c.turbulence_size = num("turbulence_size", c.turbulence_size);
+        c.turbulence = num("turbulence", c.turbulence);
+        c.time = num("time", c.time);
+        c.evolution_period = num("evolution_period", c.evolution_period);
+        c.patchiness = num("patchiness", c.patchiness).clamp(0., 1.);
+        c.patch_size = num("patch_size", c.patch_size);
+        let extent = num("extent", 100000.);
+        let center = SceneFile::parse_vec2_def(o, "center", Vector2::new(0., 0.));
+        c.extent = extent;
+        c.center = center;
+        c.fade = num("fade", c.fade).clamp(0., 1.);
+        let bounds = BBox::new(
+            Vector3::new(center.x - extent, base, center.y - extent),
+            Vector3::new(center.x + extent, top, center.y + extent),
+        );
+        create_volume(bounds, Box::new(c), SceneFile::parse_color_def(o, "albedo", Color::white()),
+            SceneFile::parse_phase(o, 0.75), SceneFile::parse_scattering_approximation(o))
     }
 
     pub fn parse_box_terrain(o: &Value) -> SceneObject {

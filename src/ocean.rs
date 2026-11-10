@@ -221,7 +221,7 @@ fn fft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
 }
 
 /// Inverse 2D Fast Fourier Transform
-fn ifft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
+pub(crate) fn ifft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
     let ifft = Radix4::new(size, true);
     let mut tile_clone = tile.clone();
     let mut fft = vec![Complex::new(0., 0.); size * size];

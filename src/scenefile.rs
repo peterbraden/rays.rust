@@ -237,7 +237,15 @@ impl SceneFile {
     pub fn parse_objects(objs: Vec<Value>, materials: &Map<String, Value>, media: &Map<String, Value>, geometries: &GeometryLibrary) ->Vec<Arc<SceneObject>> {
          let mut objects: Vec<Arc<SceneObject>> = Vec::new();
          for obj in objs {
+            // Report the objects that are slow to build (meshes, oceans), by type and source.
+            let start = std::time::Instant::now();
+            let name = format!("{}{}", obj["type"].as_str().unwrap_or("?"),
+                obj["src"].as_str().or(obj["item"]["src"].as_str()).map_or(String::new(), |s| format!(" {}", s)));
             if let Some(x) = SceneFile::parse_object(obj, materials, media, geometries) { objects.push(x) }
+            let t = start.elapsed().as_secs_f64();
+            if t >= 0.1 {
+                println!("- Built {} in {:.2} s", name, t);
+            }
          }
          objects
     }

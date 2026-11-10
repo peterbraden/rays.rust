@@ -175,6 +175,19 @@ mod tests {
     }
 
     #[test]
+    fn test_primitives_are_the_items() {
+        // A stand-in for a mesh: many primitives inside one geometry.
+        struct Many;
+        impl Geometry for Many {
+            fn intersects(&self, _r: &Ray) -> Option<crate::intersection::RawIntersection> { None }
+            fn bounds(&self) -> BBox { BBox::new(Vector3::zeros(), Vector3::new(1., 1., 1.)) }
+            fn primitives(&self) -> u64 { 871414 }
+        }
+        let t = Transform::from_parts(Box::new(Many) as Box<dyn Geometry + Sync + Send>, Vector3::zeros(), Rotation3::identity(), Vector3::new(2., 2., 2.));
+        assert_eq!(t.primitives(), 871414);
+    }
+
+    #[test]
     fn test_scaled_and_translated() {
         // A unit sphere scaled by 2 and moved to z = 5: its near side is at z = 3.
         let t = Transform::from_parts(unit_sphere(), Vector3::new(0., 0., 5.), Rotation3::identity(), Vector3::new(2., 2., 2.));

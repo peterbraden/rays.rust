@@ -4,10 +4,8 @@ use crate::na::{Vector3};
 use crate::ray::Ray;
 use crate::intersection::RawIntersection;
 use crate::shapes::bbox::{BBox, BoxFace};
-use crate::shapes::triangle::Triangle;
 use std::vec::Vec;
-use std::sync::Arc;
-use crate::octree::Octree;
+use crate::shapes::mesh::Mesh;
 
 /// Tiles to step through before approximating the remaining distance by the tile's mean surface.
 /// Beyond this a ray is grazing, and the surface is far enough away that detail is lost anyway.
@@ -27,7 +25,7 @@ const MAX_TILES: usize = 200;
 /// Tile size is only a 2D vector - Y is always 0, but we keep it this shape for easier
 /// multiplication.
 pub struct RepeatingMesh {
-    pub tile: Octree<Triangle>,
+    pub tile: Mesh,
     pub tile_size: Vector3<f64>,
     pub tile_bounds: BBox,
     pub triangle_count: usize,
@@ -56,7 +54,7 @@ impl RepeatingMesh {
     } 
 
     fn find_next_tile(&self, transformed_ray: &Ray, curr_transform: &Vector3<f64>) -> Option<Vector3<f64>> {
-        match self.tile.bounds().exit_face(transformed_ray){
+        match self.tile_bounds.exit_face(transformed_ray){
             Some(BoxFace::Top) => None,
             Some(BoxFace::Bottom) => None,
             Some(BoxFace::Left) => Some(self.transform_for(-1., 0., curr_transform)),
@@ -65,8 +63,8 @@ impl RepeatingMesh {
             Some(BoxFace::Back) => Some(self.transform_for(0., 1., curr_transform)),
             None => {
                 // did not intersect with this bbox? Should never happen!
-                //panic!("ERR: No intersection - {} - {} {}", self.tile.bounds(), curr_transform, transformed_ray);
-                print!("ERR: No intersection - {} - {} {}", self.tile.bounds(), curr_transform, transformed_ray);
+                //panic!("ERR: No intersection - {} - {} {}", self.tile_bounds, curr_transform, transformed_ray);
+                print!("ERR: No intersection - {} - {} {}", self.tile_bounds, curr_transform, transformed_ray);
                 None
             }
         }
@@ -81,7 +79,7 @@ impl RepeatingMesh {
                 rd: r.rd,
             };
 
-            if let Some(mut intersection) = self.tile.raw_intersection(&transformed_ray, f64::INFINITY, 0f64) {
+            if let Some(mut intersection) = self.tile.intersects(&transformed_ray) {
                 // reverse the transform on the intersection
                 intersection.point += transform;
                 return Some(intersection);
@@ -155,13 +153,10 @@ mod tests {
 
     /// A unit tile of flat ground at y=0, in a slab from y=-1 to y=1.
     fn ground() -> RepeatingMesh {
-        let tris = vec![
-            Arc::new(Triangle::new(Vector3::new(0., 0., 0.), Vector3::new(1., 0., 0.), Vector3::new(0., 0., 1.))),
-            Arc::new(Triangle::new(Vector3::new(1., 0., 0.), Vector3::new(1., 0., 1.), Vector3::new(0., 0., 1.))),
-        ];
+        let positions = vec![Vector3::new(0., 0., 0.), Vector3::new(1., 0., 0.), Vector3::new(0., 0., 1.), Vector3::new(1., 0., 1.)];
         let bounds = BBox::new(Vector3::new(0., -1., 0.), Vector3::new(1., 1., 1.));
         RepeatingMesh {
-            tile: Octree::new(4, bounds, &tris),
+            tile: Mesh::new(positions, vec![[0, 1, 2], [1, 3, 2]]),
             tile_size: Vector3::new(1., 0., 1.),
             tile_bounds: bounds,
             triangle_count: 2,

@@ -78,6 +78,9 @@ pub struct Terrain {
     pub ice: Vec<f64>,
     /// Tectonic uplift rate, metres per year.
     pub uplift: Vec<f64>,
+    /// Cells that were sea at time zero. Ground eroded below sea level later is a lake bed
+    /// (eg. a glacially overdeepened basin), not sea.
+    pub sea: Vec<bool>,
     /// Latitude of each cell, radians.
     pub latitude: Vec<f64>,
     /// Drainage area at the last step, square metres.
@@ -100,8 +103,9 @@ impl Terrain {
         let uplift = domain.dirs.iter().map(|d| planet.uplift(d)).collect();
         let latitude = domain.dirs.iter().map(|d| d.y.clamp(-1., 1.).asin()).collect();
         let n = domain.len();
+        let sea = bed.iter().map(|&b| b < 0.).collect();
         let mut t = Terrain {
-            domain, params, planet, time: 0., bed, uplift, latitude,
+            domain, params, planet, time: 0., bed, uplift, latitude, sea,
             ice: vec![0.; n], drainage: vec![0.; n], sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
         t.drainage = t.route().area;
@@ -110,7 +114,7 @@ impl Terrain {
 
     /// Cells that are base level: the sea, and a patch's edge.
     pub fn outlets(&self) -> Vec<bool> {
-        (0..self.domain.len()).map(|i| self.domain.boundary[i] || self.bed[i] < 0.).collect()
+        (0..self.domain.len()).map(|i| self.domain.boundary[i] || self.sea[i]).collect()
     }
 
     pub fn surface(&self) -> Vec<f64> {

@@ -61,6 +61,10 @@
 //! temperate ice (Cuffey and Paterson, "The Physics of Glaciers", 4th ed., 2010; to verify).
 //! Weertman's theory gives an exponent of (n+1)/2 for sliding; n is a common simplification.
 //!
+//! The SIA assumes small surface slopes; where ice spills over a cliff (an icefall), it is
+//! invalid, and the slope term makes D, and with it the system's stiffness, enormous. So the
+//! squared slope in D is capped at `max_slope`² (0.5, about 27 degrees).
+//!
 //! Following Mahaffy ("A three-dimensional numerical model of ice sheets", JGR 81(6), 1976,
 //! doi:10.1029/JC081i006p01059), D is evaluated on the edges between cells, from the mean of
 //! the two cells' thicknesses and squared slopes. A cell's squared slope is estimated from its
@@ -75,6 +79,12 @@
 //! is shortened until no cell exchanges more than `max_stiffness` times its own volume
 //! (Δt Σc / area); typically a few years, where an explicit scheme would need hundreds of steps.
 //! `test_halfar_dome` checks the scheme against Halfar's exact solution for a spreading dome.
+//!
+//! A lagged D is computed from the old thickness, so in one long step a thin cell can take a
+//! large inflow from a thick neighbour but pass little on (its own outflow conductance being
+//! that of thin ice). On alpine terrain at glacial maxima this built transient single-cell
+//! spikes kilometres thick. Picard iteration (`picard` solves per step: re-evaluate D from the
+//! new thickness and solve again) removes them, at twice the cost.
 //!
 //! Jarosch, Schoof and Anslow ("Restoring mass conservation to shallow ice flow models over
 //! complex terrain", The Cryosphere 7, 2013, doi:10.5194/tc-7-229-2013) show that standard SIA
@@ -148,6 +158,11 @@ pub struct GlacierParams {
     /// Shortest ice time step, years: where `max_stiffness` would ask for less (thick, fast
     /// ice), accuracy is traded for time, the flux limiter keeping the step safe.
     pub min_step: f64,
+    /// Steepest surface slope (rise over run) used for the ice's diffusivity.
+    pub max_slope: f64,
+    /// Solves per ice step: 1 for the semi-implicit (lagged diffusivity) step, more for Picard
+    /// iterations towards the fully implicit one.
+    pub picard: usize,
     /// Largest ice step relative to the fastest diffusion: Δt Σc / area (see `flow_ice`).
     pub max_stiffness: f64,
     /// Morphological acceleration factor (see `simulation`): years of landscape evolution per
@@ -173,6 +188,8 @@ impl Default for GlacierParams {
             max_accumulation: 2.,
             max_step: 10.,
             min_step: 0.5,
+            max_slope: 0.5,
+            picard: 2,
             max_stiffness: 200.,
             acceleration: 10.,
         }
@@ -221,40 +238,45 @@ pub struct IceStep {
 /// (m/yr). Cells marked `drain` lose all their ice. The step is shortened so that no cell
 /// exchanges more than `max_stiffness` times its own volume in a step (Δt Σc / area), which
 /// keeps the linear system well conditioned and the lagged diffusivity accurate.
-pub fn flow_ice(domain: &Domain, p: &GlacierParams, bed: &[f64], ice: &mut [f64], balance: &[f64], drain: &[bool], max_dt: f64) -> IceStep {
+/// Conductance c_ij = w D / d for each edge-sharing link, with D from thickness `h` over `bed`,
+/// in one flat array indexed like the domain's links (diagonal slots stay 0).
+fn conductances(domain: &Domain, p: &GlacierParams, bed: &[f64], h: &[f64]) -> Vec<f64> {
     let n = domain.len();
-    let s: Vec<f64> = (0..n).map(|i| bed[i] + ice[i]).collect();
+    let s: Vec<f64> = (0..n).map(|i| bed[i] + h[i]).collect();
     let g2 = slope_squared(domain, &s);
     let rho_g_n = (p.density * p.gravity).powf(p.glen_n);
     let deform = 2. * p.glen_a / (p.glen_n + 2.);
-
-    // Conductance c_ij = w D / d for each edge-sharing link, kept in one flat array indexed
-    // like the domain's links (diagonal slots stay 0).
+    let max_g2 = p.max_slope * p.max_slope;
     let mut conductance = vec![0.; domain.link_count()];
     for i in 0..n {
         let o = domain.link_offset(i);
         for (k, l) in domain.edges(i).iter().enumerate() {
-            let h = 0.5 * (ice[i] + ice[l.to]);
-            if h <= 0. { continue; }
-            let g2e = 0.5 * (g2[i] + g2[l.to]);
+            let he = 0.5 * (h[i] + h[l.to]);
+            if he <= 0. { continue; }
+            let g2e = (0.5 * (g2[i] + g2[l.to])).min(max_g2);
             let d = rho_g_n * g2e.powf((p.glen_n - 1.) / 2.)
-                * (deform * h.powf(p.glen_n + 2.) + p.sliding * h.powf(p.glen_n + 1.));
+                * (deform * he.powf(p.glen_n + 2.) + p.sliding * he.powf(p.glen_n + 1.));
             conductance[o + k] = l.width * d / l.dist;
         }
     }
-    let edges = |i: usize| domain.edges(i).iter().zip(&conductance[domain.link_offset(i)..]);
-    let total = |i: usize| edges(i).map(|(_, c)| c).sum::<f64>();
+    conductance
+}
 
-    let stiffness = (0..n).filter(|&i| !drain[i])
-        .map(|i| total(i) / domain.area[i]).fold(0., f64::max);
-    let dt = if stiffness > 0. { max_dt.min((p.max_stiffness / stiffness).max(p.min_step)) } else { max_dt };
+/// Solve the step's linear system for the new thickness (unclamped), given the conductances.
+/// Returns it and the solver iterations used.
+fn solve_ice(domain: &Domain, bed: &[f64], ice: &[f64], balance: &[f64], drain: &[bool], conductance: &[f64], dt: f64) -> (Vec<f64>, usize) {
+    let n = domain.len();
+    let edges = |i: usize| domain.edges(i).iter().zip(&conductance[domain.link_offset(i)..]);
 
     // The system A x = rhs. Drained cells are fixed at zero, so their rows are the identity and
     // other rows don't couple to them (keeping A symmetric).
-    let diag: Vec<f64> = (0..n).map(|i| if drain[i] { 1. } else { domain.area[i] / dt + total(i) }).collect();
+    let diag: Vec<f64> = (0..n).map(|i| {
+        if drain[i] { 1. } else { domain.area[i] / dt + edges(i).map(|(_, c)| c).sum::<f64>() }
+    }).collect();
     let rhs: Vec<f64> = (0..n).map(|i| {
         if drain[i] { return 0.; }
-        // Melt is applied after the flow (below), so that ice arriving during the step melts too.
+        // Melt is applied after the flow (in `flow_ice`), so that ice arriving during the step
+        // melts too.
         let m = balance[i].max(0.);
         let bed_term: f64 = edges(i).map(|(l, c)| c * (bed[l.to] - bed[i])).sum();
         domain.area[i] * (ice[i] / dt + m) + bed_term
@@ -292,12 +314,40 @@ pub fn flow_ice(domain: &Domain, p: &GlacierParams, bed: &[f64], ice: &mut [f64]
 
     let mut x: Vec<f64> = (0..n).map(|i| if drain[i] { 0. } else { ice[i] }).collect();
     let iterations = conjugate_gradient(&apply, &precondition, &rhs, &mut x, 1e-6, 500);
+    (x, iterations)
+}
+
+pub fn flow_ice(domain: &Domain, p: &GlacierParams, bed: &[f64], ice: &mut [f64], balance: &[f64], drain: &[bool], max_dt: f64) -> IceStep {
+    let n = domain.len();
+    let deform = 2. * p.glen_a / (p.glen_n + 2.);
+
+    let mut conductance = conductances(domain, p, bed, ice);
+    let stiffness = (0..n).filter(|&i| !drain[i]).map(|i| {
+        let o = domain.link_offset(i);
+        conductance[o .. o + domain.edges(i).len()].iter().sum::<f64>() / domain.area[i]
+    }).fold(0., f64::max);
+    let dt = if stiffness > 0. { max_dt.min((p.max_stiffness / stiffness).max(p.min_step)) } else { max_dt };
+
+    // Picard iteration: re-evaluate D from the latest thickness and solve again, converging
+    // towards the fully implicit step.
+    let (mut x, mut iterations) = solve_ice(domain, bed, ice, balance, drain, &conductance, dt);
+    for _ in 1..p.picard {
+        let h: Vec<f64> = x.iter().map(|&v| v.max(0.)).collect();
+        conductance = conductances(domain, p, bed, &h);
+        let (next, it) = solve_ice(domain, bed, ice, balance, drain, &conductance, dt);
+        x = next;
+        iterations += it;
+    }
+    let edges = |i: usize| domain.edges(i).iter().zip(&conductance[domain.link_offset(i)..]);
 
     // The solution x may be negative where the lagged diffusivity moved more ice than a cell
     // had. Rather than clamp it (creating ice), take the fluxes the solve implies and limit
     // each cell's outflow to the ice it holds, then update from the limited fluxes: positive
     // and conservative, at the cost of slowing ice that the long step would have moved too far.
-    let s_new: Vec<f64> = (0..n).map(|i| bed[i] + x[i]).collect();
+    // Fluxes come from the surface with negative thickness clamped to zero: an over-drained
+    // cell's surface is its bed, not a pit below it that its neighbours would pour ice into
+    // (which, before the clamp, built single-cell spikes of ice kilometres thick).
+    let s_new: Vec<f64> = (0..n).map(|i| bed[i] + x[i].max(0.)).collect();
     let supply: Vec<f64> = (0..n).map(|i| ice[i] + dt * balance[i].max(0.)).collect();
     let limit: Vec<f64> = (0..n).map(|i| {
         if drain[i] { return 0.; }

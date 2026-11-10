@@ -46,8 +46,8 @@ fn cell_colour(t: &Terrain, i: usize) -> [f64; 3] {
     land_colour(t.bed[i])
 }
 
-/// Write a shaded relief map of `t` to `path`; `width` pixels wide for a planet (a patch is one
-/// pixel per cell).
+/// Write a shaded relief map of `t` to `path`, about `width` pixels wide (a patch is drawn at a
+/// whole number of pixels per cell).
 pub fn write_map(t: &Terrain, path: &str, width: usize) {
     let (w, h, cells, spacing): (usize, usize, Vec<usize>, f64) = match &t.domain.layout {
         Layout::Patch { n, spacing, .. } => {
@@ -84,6 +84,10 @@ pub fn write_map(t: &Terrain, path: &str, width: usize) {
             img.put_pixel(x as u32, y as u32, image::Rgb([px(c[0]), px(c[1]), px(c[2])]));
         }
     }
+    let up = (width / w).max(1) as u32;
+    let img = if up > 1 {
+        image::imageops::resize(&img, w as u32 * up, h as u32 * up, image::imageops::FilterType::Nearest)
+    } else { img };
     img.save(path).unwrap();
 }
 
@@ -124,6 +128,9 @@ mod tests {
                 let s = std::time::Instant::now();
                 t.run_to((t.time + 1000.).min(target));
                 if std::env::var("VERBOSE").is_ok() {
+                    let k = (0..t.domain.len()).max_by(|&a, &b| t.ice[a].total_cmp(&t.ice[b])).unwrap();
+                    println!("  thickest {} ({}, {}): bed {:.0} ice {:.0} slide {:.0}; edges {:?}", k, k % n, k / n, t.bed[k], t.ice[k], t.sliding[k],
+                        t.domain.edges(k).iter().map(|l| (t.bed[l.to].round(), t.ice[l.to].round())).collect::<Vec<_>>());
                     println!("  t {} ice steps {} ({} iterations) in {:.1?} max ice {:.0} max slide {:.0}", t.time, t.ice_steps - before, t.ice_iterations - iterations, s.elapsed(),
                         t.ice.iter().cloned().fold(0., f64::max), t.sliding.iter().cloned().fold(0., f64::max));
                 }
@@ -134,7 +141,7 @@ mod tests {
             println!("  min {:.0}", t.bed.iter().cloned().fold(f64::MAX, f64::min));
             println!("t {:>8} in {:.1?}: max {:.0} m, land {}, ice {} cells, max ice {:.0} m",
                 t.time, start.elapsed(), max, land, iced, t.ice.iter().cloned().fold(0., f64::max));
-            write_map(&t, &format!("{}/patch-{:03}.png", dir, f), 0);
+            write_map(&t, &format!("{}/patch-{:03}.png", dir, f), 512);
         }
     }
 

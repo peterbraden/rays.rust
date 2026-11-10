@@ -36,7 +36,7 @@ impl Planet {
     /// Planet-local coordinates of `p`: (distance along the surface eastwards, altitude,
     /// northwards), the azimuthal equidistant projection about the origin's foot. Near the
     /// origin this is (x, y, z).
-    pub fn to_local(&self, p: &Vector3<f64>) -> Vector3<f64> {
+    pub fn local_coordinates(&self, p: &Vector3<f64>) -> Vector3<f64> {
         let v = p - self.center();
         let r = v.norm();
         let horizontal = Vector2::new(v.x, v.z);
@@ -47,8 +47,8 @@ impl Planet {
         Vector3::new(along.x, r - self.radius, along.y)
     }
 
-    /// The inverse of `to_local`.
-    pub fn from_local(&self, q: &Vector3<f64>) -> Vector3<f64> {
+    /// The inverse of `local_coordinates`.
+    pub fn scene_point(&self, q: &Vector3<f64>) -> Vector3<f64> {
         let along = Vector2::new(q.x, q.z);
         let arc = along.norm();
         let theta = arc / self.radius;
@@ -85,7 +85,7 @@ pub struct PlanetMapping {
 
 impl DensityField for PlanetMapping {
     fn density(&self, p: &Vector3<f64>) -> f64 {
-        self.field.density(&self.planet.to_local(p))
+        self.field.density(&self.planet.local_coordinates(p))
     }
 
     fn majorant(&self) -> f64 {
@@ -99,9 +99,9 @@ impl DensityField for PlanetMapping {
     /// The field's local majorant along the ray's direction in planet-local coordinates, its
     /// length converted back to the scene's, and trusted only `CURVED_STEP` at a time.
     fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
-        let q = self.planet.to_local(p);
+        let q = self.planet.local_coordinates(p);
         let eps = 1.;
-        let dq = (self.planet.to_local(&(p + d * eps)) - q) / eps;
+        let dq = (self.planet.local_coordinates(&(p + d * eps)) - q) / eps;
         let speed = dq.norm();
         if speed <= 0. {
             return (self.majorant(), CURVED_STEP);
@@ -111,7 +111,7 @@ impl DensityField for PlanetMapping {
     }
 
     fn particle_radius(&self, p: &Vector3<f64>) -> Option<f64> {
-        self.field.particle_radius(&self.planet.to_local(p))
+        self.field.particle_radius(&self.planet.local_coordinates(p))
     }
 }
 
@@ -130,17 +130,17 @@ mod tests {
         let planet = Planet { radius: EARTH_RADIUS };
         // At the origin, and nearby, local coordinates are scene coordinates.
         for p in [Vector3::zeros(), Vector3::new(30., 2., -40.), Vector3::new(0., 9000., 0.)] {
-            assert!((planet.to_local(&p) - p).norm() < 1e-3, "{}", p);
+            assert!((planet.local_coordinates(&p) - p).norm() < 1e-3, "{}", p);
         }
         // The ground 100 km out on a flat plane is 786 m above the planet.
-        let q = planet.to_local(&Vector3::new(100_000., 0., 0.));
+        let q = planet.local_coordinates(&Vector3::new(100_000., 0., 0.));
         assert!((q.y - 100_000f64.powi(2) / (2. * EARTH_RADIUS)).abs() < 1., "{}", q);
         // Round trips, near and far.
         for q in [Vector3::new(5000., 9000., -3000.), Vector3::new(-400_000., 2500., 700_000.)] {
-            assert!((planet.to_local(&planet.from_local(&q)) - q).norm() < 1e-4, "{}", q);
+            assert!((planet.local_coordinates(&planet.scene_point(&q)) - q).norm() < 1e-4, "{}", q);
         }
         // Along the surface, distances from the origin are kept exactly.
-        let far = planet.from_local(&Vector3::new(0., 0., 1_000_000.));
+        let far = planet.scene_point(&Vector3::new(0., 0., 1_000_000.));
         let angle = (far - planet.center()).normalize().dot(&Vector3::new(0., 1., 0.)).acos();
         assert!((angle * EARTH_RADIUS - 1_000_000.).abs() < 1e-3);
     }
@@ -152,7 +152,7 @@ mod tests {
         let planet = Planet { radius: EARTH_RADIUS };
         let eye = Vector3::new(0., 2., 0.);
         let hidden = |distance: f64| {
-            let cloud = planet.from_local(&Vector3::new(0., 1000., distance));
+            let cloud = planet.scene_point(&Vector3::new(0., 1000., distance));
             let r = crate::ray::Ray { ro: eye, rd: (cloud - eye).normalize() };
             ground(&planet).intersects(&r).is_some_and(|hit| hit.dist < (cloud - eye).norm())
         };
@@ -161,7 +161,7 @@ mod tests {
         // The layer, mapped, is where it should be along the way: a ray to the cloud at 80 km
         // meets 1 km of altitude there.
         let field = PlanetMapping { planet, field: Arc::new(LayerAt { low: 999., high: 1001. }) };
-        let cloud = planet.from_local(&Vector3::new(0., 1000., 80_000.));
+        let cloud = planet.scene_point(&Vector3::new(0., 1000., 80_000.));
         assert!(field.density(&cloud) > 0.);
     }
 
@@ -179,7 +179,7 @@ mod tests {
         for x in [-100_000., 0., 100_000.] {
             for z in [-100_000., 0., 100_000.] {
                 for y in [8000., 10_000.] {
-                    assert!(world.contains_point(&planet.from_local(&Vector3::new(x, y, z))), "{} {} {}", x, y, z);
+                    assert!(world.contains_point(&planet.scene_point(&Vector3::new(x, y, z))), "{} {} {}", x, y, z);
                 }
             }
         }

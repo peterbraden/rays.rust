@@ -7,6 +7,10 @@
   "shadow_bias": 0.01,
   "max_depth": 64,
   "path_termination": "russian_roulette",
+  "output": {
+    "tonemap": "reinhard",
+    "exposure": 1.0
+  },
   "materials": {
     "GROUND": {
       "type": "lambertian",

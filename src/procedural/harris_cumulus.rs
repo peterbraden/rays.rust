@@ -45,6 +45,11 @@ const RD: f64 = 287.;
 const LV: f64 = 2.5e6;
 const P0: f64 = 1e5;
 const KAPPA: f64 = RD / CP;
+/// Kessler's autoconversion: cloud water beyond this (kg/kg) turns to rain at this rate (per
+/// second), the rain falling straight out. Without it, cloud water piles up in the layer
+/// beneath the inversion.
+const RAIN_THRESHOLD: f64 = 1e-3;
+const RAIN_RATE: f64 = 1e-3;
 /// Density of air near the ground, kg/m³, for turning fluxes into rates.
 const AIR_DENSITY: f64 = 1.15;
 
@@ -361,9 +366,11 @@ impl CloudSimulation {
     }
 
     /// Brings each cell to saturation: vapour beyond it condenses, cloud water in unsaturated
-    /// air evaporates, and the latent heat goes into (or comes out of) θ. One Newton step on
-    /// the saturation curve.
-    fn condense(&mut self) {
+    /// air evaporates, and the latent heat goes into (or comes out of) θ. Then rain: cloud
+    /// water beyond `RAIN_THRESHOLD` turns to rain at `RAIN_RATE` (Kessler's autoconversion)
+    /// and falls out of the air.
+    fn condense(&mut self, dt: f64) {
+        let rain = 1. - (-RAIN_RATE * dt).exp();
         let (nx, _, nz) = self.params.size;
         let slab = nx * nz;
         let (exner, pressure) = (&self.exner, &self.pressure);
@@ -377,6 +384,9 @@ impl CloudSimulation {
                     vapour[n] += dv;
                     cloud[n] += dc;
                     theta[n] += dth;
+                    if cloud[n] > RAIN_THRESHOLD {
+                        cloud[n] -= (cloud[n] - RAIN_THRESHOLD) * rain;
+                    }
                 }
             });
     }
@@ -552,7 +562,7 @@ impl CloudSimulation {
         let cloud = self.advect(&self.cloud, dt, false);
         (self.u, self.v, self.w, self.theta, self.vapour, self.cloud) = (u, v, w, theta, vapour, cloud);
         self.surface_fluxes(dt);
-        self.condense();
+        self.condense(dt);
         self.forces(dt);
         self.project();
         self.time += dt;
@@ -572,10 +582,12 @@ impl CloudSimulation {
         }
     }
 
-    /// Height of the lowest cloud (cloud water over 1e-5), if any (for tests and reports).
+    /// Height of the lowest level at least 1% cloud (cloud water over 1e-5), if any (for
+    /// tests and reports).
     pub fn cloud_base(&self) -> Option<f64> {
         let (nx, ny, nz) = self.params.size;
-        (0..ny).find(|j| self.cloud.data[j * nx * nz..(j + 1) * nx * nz].iter().any(|q| *q > 1e-5))
+        let slab = nx * nz;
+        (0..ny).find(|j| self.cloud.data[j * slab..(j + 1) * slab].iter().filter(|q| **q > 1e-5).count() * 100 >= slab)
             .map(|j| (j as f64 + 0.5) * self.params.cell)
     }
 
@@ -1091,9 +1103,9 @@ mod tuning {
     fn harris_tune() {
         let cases: Vec<(&str, f64, f64, f64, f64)> = vec![
             // name, lapse K/km, inversion m, inversion strength K, heat flux
-            ("4.5/2200/4/200", 4.5, 2200., 4., 200.),
-            ("5/2200/4/200", 5., 2200., 4., 200.),
-            ("4/2000/5/150", 4., 2000., 5., 150.),
+            ("6/2000/5/200", 6., 2000., 5., 200.),
+            ("6.5/2200/5/200", 6.5, 2200., 5., 200.),
+            ("5.5/2000/6/200", 5.5, 2000., 6., 200.),
         ];
         rayon::ThreadPoolBuilder::new().build().unwrap().install(|| {
             for (name, lapse, inv, strength, flux) in cases {

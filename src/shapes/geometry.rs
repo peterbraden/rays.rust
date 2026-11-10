@@ -53,6 +53,10 @@ pub trait Geometry: Sync{
     // is problematic. 
     fn inside(&self, _: &Vector3<f64>) -> bool { false }
 
+    // A triangle's corners, in the order its intersection test takes them; None for other
+    // shapes. Containers of triangles use them to test several at once (see `triangle::may_hit`).
+    fn vertices(&self) -> Option<[Vector3<f64>; 3]> { None }
+
     // Surface area, for shapes that can be sampled as area lights; 0 for those that can't.
     fn surface_area(&self) -> f64 { 0. }
 

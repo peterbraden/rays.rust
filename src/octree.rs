@@ -37,10 +37,20 @@
 //! the next child is found by comparing the current one's exit planes. (The authors note an
 //! erratum in their Table 1: the bits for X and Z are swapped.)
 //!
+//! ## Triangle leaves
+//!
+//! When every item is a triangle (a mesh, or the ocean), the tree keeps a contiguous copy of the
+//! triangles, and a leaf tests them four at a time with vector instructions
+//! (`triangle::may_hit`) before testing the few that pass exactly. The copy is per triangle, not
+//! per leaf: leaves share triangles (the ocean's hold each about 30 times), so a copy per leaf
+//! would have been thirty times the size. On ocean-boat, with leaves of up to 16 or more triangles,
+//! this cut rendering by 13%; scenes with small leaves are unchanged.
+//!
 //! Not done: an item spanning several leaves is tested once per leaf the ray visits. Recording,
 //! per ray, which items have been tested would avoid the repeats.
 
 use crate::shapes::bbox::BBox;
+use crate::shapes::triangle::{EdgeTriangle, LANES, may_hit};
 use crate::na::{Vector3};
 use std::sync::Arc;
 use std::fmt;
@@ -53,6 +63,38 @@ use rayon::prelude::*;
 pub struct Octree<T: Geometry>{
     root: OctreeNode,
     items: Vec<Arc<T>>,
+    /// If every item is a triangle, the triangles in one contiguous array, in the order of
+    /// `items`, for leaves to test several at once (`triangle::may_hit`).
+    triangles: Option<Vec<EdgeTriangle>>,
+}
+
+/// An octree's items, as its leaves test them.
+struct Items<'a, T> {
+    items: &'a [Arc<T>],
+    triangles: Option<&'a [EdgeTriangle]>,
+}
+
+impl<T: Geometry> Items<'_, T> {
+    /// Call `test` with each of `indices`, in order, until it returns true, skipping (when the
+    /// items are triangles) those the ray cannot hit nearer than `limit(state)`. True if `test`
+    /// did. The limit is read before each group of triangles, so `test` may lower it.
+    fn find<S>(&self, indices: &[usize], r: &Ray, len: f64, state: &mut S,
+               limit: impl Fn(&S) -> f64, mut test: impl FnMut(&mut S, usize) -> bool) -> bool {
+        match self.triangles {
+            Some(triangles) => indices.chunks(LANES).any(|group| {
+                let mut hits = may_hit(triangles, group, r, len, limit(state));
+                while hits != 0 {
+                    let lane = hits.trailing_zeros() as usize;
+                    hits &= hits - 1;
+                    if test(state, group[lane]) {
+                        return true;
+                    }
+                }
+                false
+            }),
+            None => indices.iter().any(|&i| test(state, i)),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -200,10 +242,10 @@ impl OctreeNode {
 
     /// Whether any item in this subtree is hit between `min` and `max` along the ray. Unlike
     /// `nearest`, it needn't find the nearest hit: it stops at the first.
-    fn any_hit<T: Geometry>(&self, items: &[Arc<T>], r: &Ray, ray: &TraversalRay, span: &Span, min: f64, max: f64) -> bool {
+    fn any_hit<T: Geometry>(&self, items: &Items<T>, r: &Ray, ray: &TraversalRay, span: &Span, min: f64, max: f64) -> bool {
         if self.is_leaf() {
-            return self.items.iter().any(|&i| {
-                items[i].intersects_beyond(r, min).is_some_and(|x| x.dist >= min && x.dist < max)
+            return items.find(&self.items, r, ray.len, &mut (), |_| max, |_, i| {
+                items.items[i].intersects_beyond(r, min).is_some_and(|x| x.dist >= min && x.dist < max)
             });
         }
         let mut found = false;
@@ -222,16 +264,16 @@ impl OctreeNode {
     /// `best`. Children are visited in the order the ray enters them, and the search stops at the
     /// first child that begins beyond the best hit so far: nothing in it, or in any later child,
     /// can be nearer.
-    fn nearest<T: Geometry>(&self, items: &[Arc<T>], r: &Ray, ray: &TraversalRay, span: &Span, min: f64, best: &mut Nearest) {
+    fn nearest<T: Geometry>(&self, items: &Items<T>, r: &Ray, ray: &TraversalRay, span: &Span, min: f64, best: &mut Nearest) {
         if self.is_leaf() {
-            for &i in &self.items {
-                if let Some(x) = items[i].intersects_beyond(r, min) {
-                    if x.dist >= min && x.dist < best.dist {
-                        best.dist = x.dist;
-                        best.hit = Some((i, x));
-                    }
+            items.find(&self.items, r, ray.len, best, |best| best.dist, |best, i| {
+                if let Some(x) = items.items[i].intersects_beyond(r, min)
+                    && x.dist >= min && x.dist < best.dist {
+                    best.dist = x.dist;
+                    best.hit = Some((i, x));
                 }
-            }
+                false
+            });
             return;
         }
 
@@ -260,9 +302,14 @@ impl<T: Geometry> Octree<T> {
         // Each item's bounds are tested against every octant at every level; computing them
         // once (a triangle's takes 12 comparisons) was most of the cost of building a large mesh.
         let bounds: Vec<BBox> = items.iter().map(|x| x.bounds()).collect();
+        let triangles = items.iter()
+            .map(|x| x.vertices().map(|v| EdgeTriangle::new(&v)))
+            .collect::<Option<Vec<EdgeTriangle>>>()
+            .filter(|t| !t.is_empty());
         Octree {
             root: Octree::<T>::create_node(0, max_depth, b, indices, &bounds),
             items,
+            triangles,
         }
     }
 
@@ -339,7 +386,7 @@ impl<T: Geometry> Octree<T> {
         if exit < 0. || entry > exit || entry.max(0.) * ray.len >= max || exit * ray.len < min {
             return false;
         }
-        self.root.any_hit(&self.items, r, &ray, &span, min, max)
+        self.root.any_hit(&self.leaf_items(), r, &ray, &span, min, max)
     }
 
     fn closest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(usize, RawIntersection)> {
@@ -350,8 +397,12 @@ impl<T: Geometry> Octree<T> {
             return None;
         }
         let mut best = Nearest { dist: max, hit: None };
-        self.root.nearest(&self.items, r, &ray, &span, min, &mut best);
+        self.root.nearest(&self.leaf_items(), r, &ray, &span, min, &mut best);
         best.hit
+    }
+
+    fn leaf_items(&self) -> Items<'_, T> {
+        Items { items: &self.items, triangles: self.triangles.as_deref() }
     }
 
     pub fn bounds(&self) -> BBox {
@@ -499,6 +550,52 @@ mod tests {
             }
             assert_eq!(tree.occluded(&r, f64::INFINITY, 0.), expected.is_some(), "ray {}", r);
         }
+    }
+
+    #[test]
+    fn test_triangle_leaves_match_brute_force() {
+        // Triangles are tested in groups by `may_hit` before the exact test; the result must be
+        // exactly the exact test's. A rough surface of small triangles, as the ocean is, so that
+        // leaves hold several, and rays from above it and grazing along it.
+        use crate::shapes::triangle::Triangle;
+        use rand::{Rng, SeedableRng};
+        use rand::rngs::StdRng;
+        let mut rng: StdRng = SeedableRng::from_seed([6; 32]);
+        let mut u = |a: f64, b: f64| a + (b - a) * rng.gen_range(0., 1.);
+        let n = 24;
+        let heights: Vec<f64> = (0..(n + 1) * (n + 1)).map(|_| u(-0.2, 0.2)).collect();
+        let p = |x: usize, z: usize| Vector3::new(x as f64, heights[z * (n + 1) + x], z as f64);
+        let mut items = vec![];
+        for x in 0..n {
+            for z in 0..n {
+                items.push(Arc::new(Triangle::new(p(x, z), p(x + 1, z), p(x, z + 1))));
+                items.push(Arc::new(Triangle::new(p(x + 1, z), p(x + 1, z + 1), p(x, z + 1))));
+            }
+        }
+        let bounds = items.iter().fold(BBox::empty(), |b, t| b.union(&t.bounds()));
+        let tree = Octree::new(8, bounds, &items);
+        assert!(tree.triangles.is_some());
+        fn largest_leaf(n: &OctreeNode) -> usize {
+            n.children.iter().flatten().map(|c| largest_leaf(c)).max().unwrap_or(n.items.len())
+        }
+        assert!(largest_leaf(&tree.root) > crate::shapes::triangle::LANES, "{}", largest_leaf(&tree.root));
+
+        let mut hits = 0;
+        for i in 0..20000 {
+            let ro = Vector3::new(u(-5., 29.), u(-0.3, 4.), u(-5., 29.));
+            let rd = Vector3::new(u(-1., 1.), if i % 2 == 0 { u(-1., 0.2) } else { u(-0.02, 0.02) }, u(-1., 1.)) * u(0.5, 2.);
+            let r = Ray { ro, rd };
+            let (max, min) = match i % 3 { 0 => (f64::INFINITY, 0.), 1 => (u(1., 30.), 0.), _ => (f64::INFINITY, u(0., 5.)) };
+            let expected = items.iter().enumerate()
+                .filter_map(|(i, t)| t.intersects_beyond(&r, min).map(|x| (i, x.dist)))
+                .filter(|(_, d)| *d >= min && *d < max)
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            let got = tree.closest_intersection(&r, max, min).map(|(i, x)| (i, x.dist));
+            assert_eq!(got.map(|x| x.1), expected.map(|x| x.1), "ray {} max {} min {}", r, max, min);
+            assert_eq!(tree.occluded(&r, max, min), expected.is_some(), "ray {}", r);
+            if expected.is_some() { hits += 1 }
+        }
+        assert!(hits > 2000, "{}", hits);
     }
 
     #[test]

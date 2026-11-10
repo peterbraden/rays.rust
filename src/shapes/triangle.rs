@@ -108,6 +108,86 @@ fn intersects_dist(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>, r: &Ray
 }
 
 
+/// How many triangles `may_hit` tests at once. Four f64 lanes: two SSE2 or NEON registers, or one
+/// AVX register.
+pub const LANES: usize = 4;
+
+/// A triangle as `intersects_dist` uses it: a corner and the edges from it. Containers keep these
+/// in one contiguous array, to test several triangles at once with `may_hit`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EdgeTriangle {
+    v0: [f64; 3],
+    e1: [f64; 3],
+    e2: [f64; 3],
+}
+
+impl EdgeTriangle {
+    pub fn new(v: &[Vector3<f64>; 3]) -> EdgeTriangle {
+        // The same subtractions as `intersects_dist`, so the same edges to the last bit.
+        let (e1, e2) = (v[1] - v[0], v[2] - v[0]);
+        EdgeTriangle { v0: [v[0].x, v[0].y, v[0].z], e1: [e1.x, e1.y, e1.z], e2: [e2.x, e2.y, e2.z] }
+    }
+}
+
+/// Slack in `may_hit`'s tests, so that it never rejects a triangle `intersects_dist` would hit.
+const MAY_HIT_SLACK: f64 = 1e-9;
+
+/// Which of up to `LANES` triangles (`tris[i]` for each `i` in `indices`) the ray may hit at a
+/// world-space distance below `limit`: bit n is set for `indices[n]`.
+///
+/// This is Möller and Trumbore's test as in `intersects_dist`, for several triangles at once:
+/// arranged lane by lane, with the products and sums in the same order, and no branches, the
+/// compiler turns each line into vector instructions. It is a filter, run before the exact test
+/// rather than in place of it: each triangle it passes is tested again by its own `intersects`,
+/// which supplies the hit's normal (interpolated for a `SmoothTriangle`), and its bounds have
+/// some slack, so that a filtered render matches an unfiltered one exactly. Most triangles in a
+/// leaf are missed, so most are rejected here.
+// The comparisons are combined with `&`, not `&&` (as `contains` would), so that no lane branches.
+#[allow(clippy::manual_range_contains)]
+pub fn may_hit(tris: &[EdgeTriangle], indices: &[usize], r: &Ray, len: f64, limit: f64) -> u32 {
+    // Gather the triangles into one array per coordinate. Unused lanes keep a degenerate
+    // triangle: det = 0, which fails every test below.
+    let (mut v0x, mut v0y, mut v0z) = ([0.; LANES], [0.; LANES], [0.; LANES]);
+    let (mut e1x, mut e1y, mut e1z) = ([0.; LANES], [0.; LANES], [0.; LANES]);
+    let (mut e2x, mut e2y, mut e2z) = ([0.; LANES], [0.; LANES], [0.; LANES]);
+    for (l, &i) in indices.iter().enumerate() {
+        let t = &tris[i];
+        (v0x[l], v0y[l], v0z[l]) = (t.v0[0], t.v0[1], t.v0[2]);
+        (e1x[l], e1y[l], e1z[l]) = (t.e1[0], t.e1[1], t.e1[2]);
+        (e2x[l], e2y[l], e2z[l]) = (t.e2[0], t.e2[1], t.e2[2]);
+    }
+    let (rdx, rdy, rdz) = (r.rd.x, r.rd.y, r.rd.z);
+    let (rox, roy, roz) = (r.ro.x, r.ro.y, r.ro.z);
+
+    let mut hits = 0;
+    for l in 0..LANES {
+        // pvec = rd x e2
+        let px = rdy * e2z[l] - rdz * e2y[l];
+        let py = rdz * e2x[l] - rdx * e2z[l];
+        let pz = rdx * e2y[l] - rdy * e2x[l];
+        let det = e1x[l] * px + e1y[l] * py + e1z[l] * pz;
+        let inv_det = 1. / det;
+        // tvec = ro - v0
+        let tx = rox - v0x[l];
+        let ty = roy - v0y[l];
+        let tz = roz - v0z[l];
+        let u = (tx * px + ty * py + tz * pz) * inv_det;
+        // qvec = tvec x e1
+        let qx = ty * e1z[l] - tz * e1y[l];
+        let qy = tz * e1x[l] - tx * e1z[l];
+        let qz = tx * e1y[l] - ty * e1x[l];
+        let v = (rdx * qx + rdy * qy + rdz * qz) * inv_det;
+        let dist = (e2x[l] * qx + e2y[l] * qy + e2z[l] * qz) * inv_det * len;
+        // Comparisons with NaN (det = 0 gives inf * 0) are false, rejecting the lane.
+        let hit = (det != 0.)
+            & (u >= -MAY_HIT_SLACK) & (u <= 1. + MAY_HIT_SLACK)
+            & (v >= -MAY_HIT_SLACK) & (u + v <= 1. + MAY_HIT_SLACK)
+            & (dist > -MAY_HIT_SLACK) & (dist < limit * (1. + MAY_HIT_SLACK) + MAY_HIT_SLACK);
+        hits |= (hit as u32) << l;
+    }
+    hits
+}
+
 /// A point uniformly distributed over a triangle's area, following Osada, Funkhouser, Chazelle
 /// and Dobkin, "Shape Distributions", ACM Transactions on Graphics 21(4), 2002, section 4.2,
 /// eq. (1): P = (1 - sqrt(r1)) A + sqrt(r1) (1 - r2) B + sqrt(r1) r2 C. sqrt(r1) sets how far
@@ -133,6 +213,10 @@ impl Geometry for Triangle {
                 point: x.point,
                 normal: self.normal 
             })
+    }
+
+    fn vertices(&self) -> Option<[Vector3<f64>; 3]> {
+        Some([self.v0, self.v1, self.v2])
     }
 
     fn bounds(&self) -> BBox {
@@ -215,6 +299,10 @@ impl Geometry for SmoothTriangle {
             })
     }
 
+    fn vertices(&self) -> Option<[Vector3<f64>; 3]> {
+        Some([self.v0, self.v1, self.v2])
+    }
+
     // Copy of Triangle
     fn bounds(&self) -> BBox {
         BBox::new(
@@ -273,6 +361,59 @@ mod tests {
         let big = Triangle::new(t.v0 * 50., t.v1 * 50., t.v2 * 50.);
         let short = Ray { ro: Vector3::new(0., 0., -50.), rd: Vector3::new(0., 0., 1. / 50.) };
         assert!((big.intersects(&short).expect("hit").dist - 50.).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_may_hit_passes_every_hit() {
+        // Triangles from 1e-4 to 10 across, and rays aimed at them, some grazing their plane:
+        // the filter must pass every triangle the exact test hits within the limit, and
+        // should reject most it misses.
+        use rand::{Rng, SeedableRng};
+        use rand::rngs::StdRng;
+        let mut rng: StdRng = SeedableRng::from_seed([7; 32]);
+        let mut u = |a: f64, b: f64| a + (b - a) * rng.gen_range(0., 1.);
+        let (mut hits, mut passed_misses, mut misses) = (0, 0, 0);
+        for _ in 0..2000 {
+            let scale = 10f64.powf(u(-4., 1.));
+            let tris: Vec<Triangle> = (0..LANES).map(|_| {
+                let c = Vector3::new(u(-1., 1.), u(-1., 1.), u(-1., 1.));
+                let mut corner = || c + Vector3::new(u(-1., 1.), u(-1., 1.), u(-1., 1.)) * scale;
+                Triangle::new(corner(), corner(), corner())
+            }).collect();
+            let edges: Vec<EdgeTriangle> = tris.iter().map(|t| EdgeTriangle::new(&t.vertices().unwrap())).collect();
+            for _ in 0..20 {
+                let target = sample_triangle(tris[0].v0, tris[0].v1, tris[0].v2, u(0., 1.), u(0., 1.));
+                // Some rays nearly in the first triangle's plane.
+                let along = (tris[0].v1 - tris[0].v0).normalize();
+                let rd = if u(0., 1.) < 0.3 {
+                    along + tris[0].normal * u(-1e-6, 1e-6)
+                } else {
+                    Vector3::new(u(-1., 1.), u(-1., 1.), u(-1., 1.))
+                } * u(0.1, 10.);
+                let r = Ray { ro: target - rd * u(0.5, 2.), rd };
+                let limit = if u(0., 1.) < 0.5 { f64::INFINITY } else { u(0., 3.) };
+                // Groups of one to four triangles.
+                let n = 1 + (u(0., 1.) * LANES as f64) as usize % LANES;
+                let indices: Vec<usize> = (0..n).collect();
+                let mask = may_hit(&edges, &indices, &r, r.rd.norm(), limit);
+                assert_eq!(mask >> n, 0, "unused lanes passed");
+                for (lane, t) in tris[..n].iter().enumerate() {
+                    let passed = mask & 1 << lane != 0;
+                    match t.intersects(&r) {
+                        Some(x) if x.dist < limit => {
+                            hits += 1;
+                            assert!(passed, "lane {} hit at {} < {} but rejected", lane, x.dist, limit);
+                        },
+                        _ => {
+                            misses += 1;
+                            if passed { passed_misses += 1 }
+                        },
+                    }
+                }
+            }
+        }
+        assert!(hits > 5000, "{}", hits);
+        assert!(passed_misses * 100 < misses, "{} of {} misses passed", passed_misses, misses);
     }
 
     #[test]

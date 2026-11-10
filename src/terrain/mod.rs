@@ -4,3 +4,5 @@
 //! landscapes. See the submodules for each part and its literature.
 
 pub mod domain;
+pub mod planet;
+pub mod flow;

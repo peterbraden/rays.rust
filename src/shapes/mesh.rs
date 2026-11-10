@@ -197,15 +197,29 @@ impl SmoothMesh {
     /// Load an OBJ or PLY file, scaling it by `scale`. Meshes without a normal for every vertex
     /// get them from `vertex_normals`.
     pub fn from_file(pth: String, scale: Vector3<f64>) -> SmoothMesh {
-        let mut triangles = Vec::new();
-        for m in load(&pth) {
+        let meshes: Vec<IndexedMesh> = load(&pth).into_iter().map(|m| {
             let positions: Vec<Vector3<f64>> = m.positions.iter().map(|p| p.component_mul(&scale)).collect();
-            let normals: Vec<Vector3<f64>> = if m.normals.is_empty() {
-                // Computed from the scaled positions, so they need no further transform.
-                vertex_normals(&positions, &m.triangles)
+            // Normals transform by the inverse of the scale.
+            let normals = m.normals.iter().map(|n| n.component_div(&scale).normalize()).collect();
+            IndexedMesh { positions, normals, triangles: m.triangles }
+        }).collect();
+        let mesh = SmoothMesh::from_indexed(&meshes);
+        println!("# of triangles: {}", mesh.triangle_count);
+        mesh
+    }
+
+    /// A mesh from triangles indexing vertices, eg. generated ones. Meshes with an empty
+    /// `normals` get them from `vertex_normals`.
+    pub fn from_indexed(meshes: &[IndexedMesh]) -> SmoothMesh {
+        let mut triangles = Vec::new();
+        for m in meshes {
+            let positions = &m.positions;
+            let computed;
+            let normals = if m.normals.is_empty() {
+                computed = vertex_normals(positions, &m.triangles);
+                &computed
             } else {
-                // Normals transform by the inverse of the scale.
-                m.normals.iter().map(|n| n.component_div(&scale).normalize()).collect()
+                &m.normals
             };
             triangles.extend(m.triangles.iter().map(|&[a, b, c]| {
                 let face = Triangle::new(positions[a], positions[b], positions[c]).normal;
@@ -214,8 +228,6 @@ impl SmoothMesh {
                 Arc::new(SmoothTriangle::new(positions[a], positions[b], positions[c], na, nb, nc))
             }));
         }
-
-        println!("# of triangles: {}", triangles.len());
 
         let bounds = SmoothMesh::bounds_of(&triangles);
         let tree = Octree::new(8, bounds, &triangles); 

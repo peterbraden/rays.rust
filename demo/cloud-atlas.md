@@ -149,7 +149,7 @@ shadows on the ground. They are shaped from noise, so they don't change over tim
 
 ![Simulated cumulus](./scenes/harris-cumulus.png)
 
-`harris-cumulus.json`: `{"type": "harris_cumulus", "time": 3600, "cache": "demo/scenes/.cumulus-cache"}`
+`harris-cumulus.json`: `{"type": "harris_cumulus", "time": 3600, "follow_wind": true, "cache": "demo/scenes/.cumulus-cache"}`
 
 Cumulus grown by simulating the air they form in, after M. J. Harris et al., "Simulation of
 Cloud Dynamics on Graphics Hardware" (Graphics Hardware 2003): fluid flow carrying heat, water
@@ -170,7 +170,7 @@ scene loads. The grid is 64 x 44 x 64 cells of 100 m by default, periodic, and t
 sky. States are cached in `cache`, so an animation simulates only from frame to frame:
 
 ```bash
-scripts/animate.py demo/scenes/harris-cumulus.json --start 1800 --end 9000 --frames 72 -- --width 480 --height 300
+scripts/animate.py demo/scenes/harris-cumulus.json --start 1800 --end 9000 --frames 72 --samples 8 -- --width 480 --height 300
 ```
 
 At 100 m the grid resolves clouds down to a few hundred metres. Worley erosion adds finer detail

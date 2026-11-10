@@ -495,6 +495,8 @@ impl SceneFile {
     /// ground; `vorticity` (confinement); `max_step` (s); `seed`.
     ///
     /// `state` renders a state saved by `CloudSimulation::save` instead of simulating.
+    /// `follow_wind` renders the clouds as seen drifting with the wind, so in an animation
+    /// they stay in view as they grow and dissipate, rather than crossing the sky.
     ///
     /// For rendering: `droplet_radius` (µm, default 10; sets the extinction per gram of
     /// water, and the diffraction), `detail_size`, `erosion` (0 to 1) and `edge` (g/kg of
@@ -558,6 +560,12 @@ impl SceneFile {
         c.erosion = num("erosion", c.erosion).clamp(0., 1.);
         c.edge = num("edge", c.edge * 1000.) / 1000.;
         c.repeat = o["repeat"].as_bool().unwrap_or(c.repeat);
+        if o["follow_wind"].as_bool() == Some(true) {
+            // Seen drifting with the air: the clouds stay where they are, growing and dying in
+            // place, as in a time-lapse that tracks them.
+            c.origin -= c.drift;
+            c.drift = Vector3::zeros();
+        }
         c.extent = num("extent", c.extent);
         c.fade = num("fade", c.fade).clamp(0., 1.);
         let (nx, ny, nz) = p.size;

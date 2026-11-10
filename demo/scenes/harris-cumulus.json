@@ -24,7 +24,7 @@
   "objects": [
     { "type": "planet", "material": "GROUND" },
     { "type": "skysphere", "sun_direction": [-0.6, 0.6, -0.4] },
-    { "type": "harris_cumulus", "time": 3600, "wind": [2, 0],
+    { "type": "harris_cumulus", "time": 3600, "follow_wind": true,
       "cache": "demo/scenes/.cumulus-cache",
       "albedo": [0.99, 0.99, 0.99], "similarity_after": 4 }
   ]

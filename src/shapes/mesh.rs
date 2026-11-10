@@ -50,7 +50,8 @@ fn load_obj(pth: &str) -> Vec<IndexedMesh> {
         ignore_points: true,
         ignore_lines: true,
     };
-    let (models, _materials) = tobj::load_obj(Path::new(pth), &options)
+    let bytes = crate::assets::read(pth).unwrap_or_else(|e| panic!("Failed to load mesh: {}", e));
+    let (models, _materials) = tobj::load_obj_buf(&mut &bytes[..], &options, |_| Ok(Default::default()))
         .unwrap_or_else(|e| panic!("Failed to load mesh {}: {}", pth, e));
     models.iter().map(|m| {
         let positions = to_vectors(&m.mesh.positions);

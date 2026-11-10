@@ -327,7 +327,7 @@ impl Iterator for RenderIterator {
     }
 }
 
-fn render_pixel(x: usize, y: usize, layer: usize, max_samples: usize, s: &Scene) -> (u64, usize, Color) {
+pub(crate) fn render_pixel(x: usize, y: usize, layer: usize, max_samples: usize, s: &Scene) -> (u64, usize, Color) {
     // Every pixel and layer has its own random stream, so a render depends only on the seed,
     // not on which thread renders which chunk.
     let stream = ((layer * s.image.height + y) * s.image.width + x) as u64;

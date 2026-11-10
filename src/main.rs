@@ -1,88 +1,9 @@
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
-//extern crate image;
-extern crate nalgebra as na;
-extern crate rand;
-#[macro_use]
-extern crate clap;
-#[macro_use]
-extern crate serde_derive;
-extern crate serde_json;
-extern crate rayon;
-extern crate tobj;
-extern crate ordered_float;
-extern crate num_complex;
-extern crate rustfft;
-extern crate termcolor;
-
-
 use clap::Parser;
-use rayon::prelude::*;
 
-mod ray;
-mod color;
-mod material {
-    pub mod model;
-    pub mod dielectric;
-    pub mod specular;
-    pub mod ambient;
-    pub mod texture;
-    pub mod lambertian;
-    pub mod diffuse_light;
-    pub mod normal;
-    pub mod functions;
-    pub mod legacy;
-    pub mod plastic;
-    pub mod noise;
-    pub mod grass;
-}
-mod intersection;
-mod sceneobject;
-mod light;
-mod shapes {
-    pub mod transform;
-    pub mod bbox;
-    pub mod geometry;
-    pub mod csg;
-    pub mod sphere;
-    pub mod plane;
-    pub mod triangle;
-    pub mod mesh;
-    pub mod ply;
-    pub mod infinite;
-    pub mod repeating_mesh;
-}
-mod octree;
-mod bvh;
-mod scenegraph;
-mod scene;
-mod scenefile;
-mod skysphere;
-mod ocean;
-mod camera;
-mod trace;
-mod rendercontext;
-mod paint;
-mod output;
-mod compare;
-//mod wireframe;
-mod geometry;
-mod procedural {
-    pub mod box_terrain;
-    pub mod fireworks;
-    pub mod heightmap;
-    pub mod grass;
-}
-mod participatingmedia;
-mod noise;
-
-use crate::trace::trace;
-use crate::rendercontext::RenderContext;
-use std::sync::{Arc, Mutex};
+use rays::{compare, output, paint, rendercontext, scenefile};
+use rays::rendercontext::RenderContext;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use rand::thread_rng;
-use rand::seq::SliceRandom;
 
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;

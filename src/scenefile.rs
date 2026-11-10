@@ -226,11 +226,14 @@ impl SceneFile {
     }
 
     pub fn parse_objects(objs: Vec<Value>, materials: &Map<String, Value>, media: &Map<String, Value>, geometries: &GeometryLibrary) ->Vec<Arc<SceneObject>> {
-         let mut objects: Vec<Arc<SceneObject>> = Vec::new();
-         for obj in objs {
-            if let Some(x) = SceneFile::parse_object(obj, materials, media, geometries) { objects.push(x) }
-         }
-         objects
+        SceneFile::parse_objects_indexed(objs, materials, media, geometries).into_iter().map(|(_, o)| o).collect()
+    }
+
+    /// The objects, each with its index in `objs`.
+    pub fn parse_objects_indexed(objs: Vec<Value>, materials: &Map<String, Value>, media: &Map<String, Value>, geometries: &GeometryLibrary) -> Vec<(usize, Arc<SceneObject>)> {
+        objs.into_iter().enumerate()
+            .filter_map(|(i, obj)| SceneFile::parse_object(obj, materials, media, geometries).map(|x| (i, x)))
+            .collect()
     }
 
     pub fn parse_object_medium(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Box<dyn Medium + Sync + Send> {
@@ -844,7 +847,8 @@ impl SceneFile {
         );
 
         let geometries = GeometryLibrary::new(s.geometries);
-        let objects = SceneFile::parse_objects(s.objects, &s.materials, &s.media, &geometries);
+        let object_sources = SceneFile::parse_objects_indexed(s.objects, &s.materials, &s.media, &geometries);
+        let objects: Vec<Arc<SceneObject>> = object_sources.iter().map(|(_, o)| o.clone()).collect();
         // Emitters with a surface we can sample become area lights.
         let area_lights: Vec<Arc<SceneObject>> = objects.iter()
             .filter(|o| o.medium.material_at(Vector3::zeros()).is_emitter() && o.geometry.surface_area() > 0.)
@@ -881,6 +885,7 @@ impl SceneFile {
             air_medium: SceneFile::parse_air(&s.air),
             output: OutputOpts::parse(&s.output),
             area_lights,
+            object_sources,
         }
     }
 
@@ -957,9 +962,8 @@ impl SceneFile {
     }
 
     pub fn from_file(filename: &str, overrides: &Overrides) -> Scene {
-        let mut scenefile = File::open(filename).unwrap();
-        let mut contents = String::new();
-        scenefile.read_to_string(&mut contents).unwrap();
+        let contents = String::from_utf8(crate::assets::read(filename).unwrap_or_else(|e| panic!("{}", e)))
+            .unwrap_or_else(|e| panic!("Scene file {}: {}", filename, e));
         SceneFile::from_string_overridden(contents, overrides)
     }
 }

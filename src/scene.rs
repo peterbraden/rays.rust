@@ -127,9 +127,17 @@ pub struct Scene {
     /// Emitting objects whose surface can be sampled, for direct lighting (next-event
     /// estimation). The same `Arc`s as in `objects`, so a hit can be recognised as one of them.
     pub area_lights: Vec<Arc<SceneObject>>,
+    /// Each object with its index in the scene file's `objects` list (entries that produce no
+    /// object are skipped), so a hit can be traced back to the description it came from.
+    pub object_sources: Vec<(usize, Arc<SceneObject>)>,
 }
 
 impl Scene {
+    /// The index, in the scene file's `objects` list, of the entry this object was built from.
+    pub fn source_index(&self, object: &SceneObject) -> Option<usize> {
+        self.object_sources.iter().find(|(_, o)| std::ptr::eq(&**o, object)).map(|(i, _)| *i)
+    }
+
     /// Whether `object` is one of the area lights that diffuse surfaces sample directly.
     pub fn is_sampled_light(&self, object: &SceneObject) -> bool {
         self.render.sample_lights && self.area_lights.iter().any(|l| std::ptr::eq(&**l, object))

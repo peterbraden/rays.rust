@@ -216,7 +216,7 @@ pub fn parse(bytes: &[u8]) -> Result<IndexedMesh, String> {
 
 /// Read a PLY file.
 pub fn read(path: &str) -> Result<IndexedMesh, String> {
-    let bytes = fs::read(path).map_err(|e| format!("can't read {}: {}", path, e))?;
+    let bytes = crate::assets::read(path)?;
     parse(&bytes).map_err(|e| format!("{}: {}", path, e))
 }
 

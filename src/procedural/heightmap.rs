@@ -109,7 +109,8 @@ pub struct ImageHeight {
 
 impl ImageHeight {
     pub fn from_file(path: &str, min: (f64, f64), max: (f64, f64), base: f64, scale: f64) -> ImageHeight {
-        let img = image::open(path)
+        let bytes = crate::assets::read(path).unwrap_or_else(|e| panic!("Can't read heightmap image: {}", e));
+        let img = image::load_from_memory(&bytes)
             .unwrap_or_else(|e| panic!("Can't read heightmap image {}: {}", path, e))
             .to_luma16();
         let (w, h) = (img.width() as usize, img.height() as usize);

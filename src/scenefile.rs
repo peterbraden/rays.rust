@@ -217,7 +217,11 @@ impl SceneFile {
             return Some(Arc::new(SceneFile::parse_box_terrain(&o)));
         }
         if t == "ocean" {
-            let d = create_ocean(&o);
+            let mut d = create_ocean(&o);
+            // Any material may replace the ocean's own, eg. a dielectric to see into the water.
+            if o.get("material").is_some() || o.get("medium").is_some() {
+                d.medium = SceneFile::parse_object_medium(&o, materials, media);
+            }
             return Some(Arc::new(d));
         }
         if t == "firework" {
@@ -532,7 +536,9 @@ impl SceneFile {
     /// - `{"type": "boulder", "location": [x, y, z], "radius": 1, "angularity": 0.5}`: a boulder
     ///   sitting at `location`. Angularity runs from 0, rounded, to 1, sharply broken.
     /// - `{"type": "pebbles", "center": [x, y, z], "radius": 1, "count": 100, "size": [0.03,
-    ///   0.12]}`: pebbles scattered over a disc. `"materials": ["A", "B"]` mixes materials,
+    ///   0.12]}`: pebbles scattered over a disc, or over a rectangle `"extent": [x, z]`. The
+    ///   ground may slope, rising `"slope": [per x, per z]`; `"packing"` below 1 (eg. 0.75)
+    ///   packs them closer, leaning on each other. `"materials": ["A", "B"]` mixes materials,
     ///   one per pebble; by default a mix of stones, made wet by `"wetness"`.
     /// - `{"type": "bedrock", "center": [x, y, z], "size": [20, 20], "height": 3}`: an outcrop
     ///   rising from `center`. Also `"feature_size"`, `"strata"` (the thickness of its terraced
@@ -589,11 +595,23 @@ impl SceneFile {
                             Box::new(r) as Box<dyn MaterialModel + Sync + Send>
                         }).collect()
                 };
-                let pebbles = rock::scatter_pebbles(
-                    SceneFile::parse_vec3_def(o, "center", Vector3::zeros()),
-                    n("radius", 1.), SceneFile::parse_int(&o["count"], 100),
-                    size.x.min(size.y), size.x.max(size.y), mixed.len(), seed);
-                let meshes = rock::pebble_meshes(&pebbles, detail, seed);
+                let center = SceneFile::parse_vec3_def(o, "center", Vector3::zeros());
+                let region = match o.get("extent") {
+                    Some(e) => { let e = SceneFile::parse_vec2(e); rock::Region::Rect(e.x, e.y) },
+                    None => rock::Region::Disc(n("radius", 1.)),
+                };
+                let slope = SceneFile::parse_vec2_def(o, "slope", Vector2::zeros());
+                let field = rock::PebbleField {
+                    center, region,
+                    count: SceneFile::parse_int(&o["count"], 100),
+                    min_size: size.x.min(size.y), max_size: size.x.max(size.y),
+                    packing: n("packing", 1.),
+                    slope: (slope.x, slope.y),
+                    materials: mixed.len(),
+                    seed,
+                };
+                let pebbles = field.scatter();
+                let meshes = field.meshes(&pebbles, detail);
                 if given && names.is_empty() {
                     rock::object(&meshes, SceneFile::parse_object_medium(o, materials, media))
                 } else {

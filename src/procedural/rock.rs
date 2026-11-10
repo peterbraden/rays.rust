@@ -161,15 +161,14 @@ impl RockShape {
     }
 }
 
-/// Place a rock on the ground: turned by `yaw` (radians) about the vertical, tilted by `tilt`,
-/// and lowered so that `embed` of its height is below `ground`, at (`x`, `z`).
-pub fn place(mesh: &mut IndexedMesh, at: Vector3<f64>, yaw: f64, tilt: Vector3<f64>, embed: f64) {
-    let rotation = Rotation3::from_euler_angles(tilt.x, yaw, tilt.z);
+/// Place a rock on the ground: turned by `rotation`, then moved so that it rests at `at` on
+/// ground whose normal is `up`, with `embed` of its height below the ground.
+pub fn place(mesh: &mut IndexedMesh, at: Vector3<f64>, rotation: Rotation3<f64>, up: Vector3<f64>, embed: f64) {
     for p in mesh.positions.iter_mut() {
         *p = rotation * *p;
     }
-    let (lo, hi) = mesh.positions.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.y), hi.max(p.y)));
-    let lift = at - Vector3::new(0., lo + embed * (hi - lo), 0.);
+    let (lo, hi) = mesh.positions.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.dot(&up)), hi.max(p.dot(&up))));
+    let lift = at - up * (lo + embed * (hi - lo));
     for p in mesh.positions.iter_mut() {
         *p += lift;
     }
@@ -181,8 +180,8 @@ pub fn boulder_mesh(location: Vector3<f64>, radius: f64, angularity: f64, detail
     if let Some(d) = detail { shape.detail = d }
     let mut mesh = shape.mesh();
     let mut rng = Pcg32::new(seed, 19);
-    let yaw = rng.next_f64() * std::f64::consts::TAU;
-    place(&mut mesh, location, yaw, Vector3::zeros(), 0.12);
+    let yaw = Rotation3::from_axis_angle(&Vector3::y_axis(), rng.next_f64() * std::f64::consts::TAU);
+    place(&mut mesh, location, yaw, Vector3::y(), 0.12);
     mesh
 }
 
@@ -194,40 +193,99 @@ pub struct Pebble {
     pub material: usize,
 }
 
-/// Lay out pebbles on the ground in a disc: sizes from `min_size` to `max_size`, small ones
-/// commoner, as in sorted gravel, and none overlapping. Stops at `count`, or when no more fit.
-pub fn scatter_pebbles(center: Vector3<f64>, radius: f64, count: usize, min_size: f64, max_size: f64, materials: usize, seed: u64) -> Vec<Pebble> {
-    let mut rng = Pcg32::new(seed, 23);
-    let mut pebbles: Vec<Pebble> = Vec::new();
-    let mut attempts = 0;
-    while pebbles.len() < count && attempts < count * 30 {
-        attempts += 1;
-        let size = min_size + (max_size - min_size) * rng.next_f64().powi(2);
-        let r = (radius - size / 2.).max(0.) * rng.next_f64().sqrt();
-        let a = rng.next_f64() * std::f64::consts::TAU;
-        let c = center + Vector3::new(r * a.cos(), 0., r * a.sin());
-        let material = ((rng.next_f64() * materials as f64) as usize).min(materials.saturating_sub(1));
-        // Pebbles are longest across their x axis, so this keeps their bounding circles apart.
-        if pebbles.iter().all(|p| (p.center - c).norm() > (p.size + size) * 0.5) {
-            pebbles.push(Pebble { center: c, size, material });
-        }
-    }
-    pebbles
+/// The area pebbles are scattered over, about the field's centre.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Region {
+    Disc(f64),
+    /// Width across x, and depth across z.
+    Rect(f64, f64),
 }
 
-/// The meshes of laid-out pebbles.
-pub fn pebble_meshes(pebbles: &[Pebble], detail: Option<u32>, seed: u64) -> Vec<IndexedMesh> {
-    pebbles.iter().enumerate().map(|(i, p)| {
-        let pebble_seed = seed.wrapping_mul(1_000_003).wrapping_add(i as u64);
-        let mut shape = RockShape::pebble(p.size, pebble_seed);
-        if let Some(d) = detail { shape.detail = d }
-        let mut mesh = shape.mesh();
-        let mut rng = Pcg32::new(pebble_seed, 29);
-        let yaw = rng.next_f64() * std::f64::consts::TAU;
-        let tilt = Vector3::new(rng.next_f64() - 0.5, 0., rng.next_f64() - 0.5) * 0.25;
-        place(&mut mesh, p.center, yaw, tilt, 0.15);
-        mesh
-    }).collect()
+/// A bed of pebbles: sizes from `min_size` to `max_size`, small ones commoner, as in sorted
+/// gravel. The ground may slope: `slope` is its rise per unit of x and of z.
+#[derive(Clone, Debug)]
+pub struct PebbleField {
+    pub center: Vector3<f64>,
+    pub region: Region,
+    pub count: usize,
+    pub min_size: f64,
+    pub max_size: f64,
+    /// How closely pebbles pack: at 1, the circles around their long axes don't overlap; below
+    /// 1 they may, and the flatter pebbles overlap and lean on each other, as in shingle.
+    pub packing: f64,
+    pub slope: (f64, f64),
+    pub materials: usize,
+    pub seed: u64,
+}
+
+impl PebbleField {
+    /// The ground's normal.
+    pub fn up(&self) -> Vector3<f64> {
+        Vector3::new(-self.slope.0, 1., -self.slope.1).normalize()
+    }
+
+    /// The ground's height at (x, z).
+    fn ground(&self, x: f64, z: f64) -> f64 {
+        self.center.y + self.slope.0 * (x - self.center.x) + self.slope.1 * (z - self.center.z)
+    }
+
+    /// Lay out the pebbles. Stops at `count`, or when no more fit.
+    pub fn scatter(&self) -> Vec<Pebble> {
+        let mut rng = Pcg32::new(self.seed, 23);
+        let mut pebbles: Vec<Pebble> = Vec::new();
+        // Pebbles placed so far, by cell of a grid no finer than the largest pebble, so a new
+        // one need only be checked against its neighbours'.
+        let cell = self.max_size.max(1e-6);
+        let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+        let key = |x: f64, z: f64| ((x / cell).floor() as i64, (z / cell).floor() as i64);
+        let mut attempts = 0;
+        while pebbles.len() < self.count && attempts < self.count * 30 {
+            attempts += 1;
+            let size = self.min_size + (self.max_size - self.min_size) * rng.next_f64().powi(2);
+            let (dx, dz) = match self.region {
+                Region::Disc(radius) => {
+                    let r = (radius - size / 2.).max(0.) * rng.next_f64().sqrt();
+                    let a = rng.next_f64() * std::f64::consts::TAU;
+                    (r * a.cos(), r * a.sin())
+                },
+                Region::Rect(w, d) => ((rng.next_f64() - 0.5) * w, (rng.next_f64() - 0.5) * d),
+            };
+            let (x, z) = (self.center.x + dx, self.center.z + dz);
+            let c = Vector3::new(x, self.ground(x, z), z);
+            let material = ((rng.next_f64() * self.materials as f64) as usize).min(self.materials.saturating_sub(1));
+            let (kx, kz) = key(x, z);
+            let clear = (-1 ..= 1).all(|i| (-1 ..= 1).all(|j| {
+                grid.get(&(kx + i, kz + j)).is_none_or(|near| near.iter().all(|&n| {
+                    let p: &Pebble = &pebbles[n];
+                    (p.center - c).norm() > (p.size + size) * 0.5 * self.packing
+                }))
+            }));
+            if clear {
+                grid.entry((kx, kz)).or_default().push(pebbles.len());
+                pebbles.push(Pebble { center: c, size, material });
+            }
+        }
+        pebbles
+    }
+
+    /// The meshes of laid-out pebbles, each turned at random and tilted a little off the ground.
+    pub fn meshes(&self, pebbles: &[Pebble], detail: Option<u32>) -> Vec<IndexedMesh> {
+        let up = self.up();
+        let to_slope = Rotation3::rotation_between(&Vector3::y(), &up).unwrap_or_else(Rotation3::identity);
+        pebbles.iter().enumerate().map(|(i, p)| {
+            let pebble_seed = self.seed.wrapping_mul(1_000_003).wrapping_add(i as u64);
+            let mut shape = RockShape::pebble(p.size, pebble_seed);
+            if let Some(d) = detail { shape.detail = d }
+            let mut mesh = shape.mesh();
+            let mut rng = Pcg32::new(pebble_seed, 29);
+            let yaw = Rotation3::from_axis_angle(&Vector3::y_axis(), rng.next_f64() * std::f64::consts::TAU);
+            // Closely packed pebbles lean on each other more.
+            let lean = 0.25 + 0.5 * (1. - self.packing).max(0.);
+            let tilt = Rotation3::from_euler_angles((rng.next_f64() - 0.5) * lean, 0., (rng.next_f64() - 0.5) * lean);
+            place(&mut mesh, p.center, to_slope * tilt * yaw, up, 0.15);
+            mesh
+        }).collect()
+    }
 }
 
 /// Settings for a bedrock outcrop.
@@ -420,9 +478,32 @@ mod tests {
         assert!(hit.point.y > at.y && hit.normal.y > 0.);
     }
 
+    fn field(region: Region, count: usize, min_size: f64, max_size: f64, materials: usize, seed: u64) -> PebbleField {
+        PebbleField { center: Vector3::zeros(), region, count, min_size, max_size, packing: 1., slope: (0., 0.), materials, seed }
+    }
+
+    #[test]
+    fn test_pebbles_follow_a_sloping_rectangle() {
+        let f = PebbleField { center: Vector3::new(0., 1., 0.), slope: (0., -0.1), packing: 0.8,
+            ..field(Region::Rect(2., 4.), 400, 0.05, 0.1, 1, 3) };
+        let pebbles = f.scatter();
+        assert!(pebbles.len() > 300, "{}", pebbles.len());
+        for p in &pebbles {
+            assert!(p.center.x.abs() <= 1. && p.center.z.abs() <= 2.);
+            assert!((p.center.y - (1. - 0.1 * p.center.z)).abs() < 1e-12);
+        }
+        let meshes = f.meshes(&pebbles[.. 5], Some(1));
+        for (m, p) in meshes.iter().zip(&pebbles) {
+            // Resting on the slope: some of each pebble is below the ground, most above it.
+            let up = f.up();
+            let below = m.positions.iter().filter(|v| (*v - p.center).dot(&up) < 0.).count();
+            assert!(below > 0 && below < m.positions.len() / 2, "{}", below);
+        }
+    }
+
     #[test]
     fn test_pebbles_do_not_overlap() {
-        let pebbles = scatter_pebbles(Vector3::new(0., 0., 0.), 2., 200, 0.05, 0.2, 3, 1);
+        let pebbles = field(Region::Disc(2.), 200, 0.05, 0.2, 3, 1).scatter();
         assert!(pebbles.len() > 50, "{}", pebbles.len());
         for (i, a) in pebbles.iter().enumerate() {
             assert!(a.material < 3);
@@ -435,7 +516,7 @@ mod tests {
 
     #[test]
     fn test_assorted_finds_each_pebble() {
-        let pebbles = scatter_pebbles(Vector3::zeros(), 1., 40, 0.1, 0.2, 2, 2);
+        let pebbles = field(Region::Disc(1.), 40, 0.1, 0.2, 2, 2).scatter();
         let m = Assorted::new(vec![
             Box::new(crate::material::lambertian::Lambertian { albedo: crate::color::Color::white() }),
         ], pebbles.clone());

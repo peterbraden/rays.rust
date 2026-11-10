@@ -1124,24 +1124,27 @@ impl crate::volume::DensityField for HarrisCumulus {
     fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
         let s = self.size_m();
         let l = p - self.origin;
-        let ahead = l + d * (self.h * 1e-6);
+        // Classify by a point a centimetre along the ray, so one on a block's face counts as in
+        // the block it is entering, even through the rounding of a planet's mapping.
+        let ahead = l + d * 0.01;
         // Where the ray enters the slab (or box) of the grid, if it's outside.
         let lo = Vector3::new(if self.repeat { f64::NEG_INFINITY } else { 0. }, 0., if self.repeat { f64::NEG_INFINITY } else { 0. });
         let hi = Vector3::new(if self.repeat { f64::INFINITY } else { s.x }, s.y, if self.repeat { f64::INFINITY } else { s.z });
         if (0..3).any(|a| ahead[a] < lo[a] || ahead[a] > hi[a]) {
+            // Clear until the ray (from just ahead) enters the grid, if it ever does.
             let (mut enter, mut leave) = (0f64, f64::INFINITY);
             for a in 0..3 {
                 if d[a] == 0. {
-                    if l[a] < lo[a] || l[a] > hi[a] {
+                    if ahead[a] < lo[a] || ahead[a] > hi[a] {
                         return (0., f64::INFINITY);
                     }
                     continue;
                 }
-                let (t0, t1) = ((lo[a] - l[a]) / d[a], (hi[a] - l[a]) / d[a]);
+                let (t0, t1) = ((lo[a] - ahead[a]) / d[a], (hi[a] - ahead[a]) / d[a]);
                 enter = enter.max(t0.min(t1));
                 leave = leave.min(t0.max(t1));
             }
-            return (0., if enter <= leave && leave > 0. { enter.max(0.) } else { f64::INFINITY });
+            return (0., if enter <= leave && leave > 0. { 0.01 + enter.max(0.) } else { f64::INFINITY });
         }
         let side = BLOCK as f64 * self.h;
         let (bx, by, bz) = ((ahead.x / side).floor(), (ahead.y / side).floor(), (ahead.z / side).floor());
@@ -1308,6 +1311,38 @@ mod tests {
             }
             // Cloud water becomes extinction: 10 µm droplets, 1 g/kg, 0.15 per metre.
             assert!((f.extinction * 1e-3 - 0.15).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn test_curved_tracking_makes_progress() {
+        // Stepping by the majorant's lengths through the clouds curved over a planet, as delta
+        // tracking does, must get across: block faces and the grid's top, after the round trip
+        // through the planet's mapping, mustn't hold a ray to tiny steps.
+        use crate::volume::DensityField;
+        let mut sim = CloudSimulation::new(small((16, 12, 16), 100.));
+        for (n, q) in sim.cloud.data.iter_mut().enumerate() {
+            *q = (worley_hash(n as u32, 0, 0, 1) - 0.7).max(0.) * 3e-3;
+        }
+        let field = crate::planet::PlanetMapping {
+            planet: crate::planet::Planet { radius: crate::planet::EARTH_RADIUS },
+            field: std::sync::Arc::new(HarrisCumulus::new(&sim, 10., Vector2::zeros())),
+        };
+        for d in [Vector3::new(0.3, 0.2, 1.), Vector3::new(1., 0.05, 0.2), Vector3::new(-0.2, 0.9, 0.3)] {
+            let d = d.normalize();
+            let mut p = Vector3::new(0., 2., 0.);
+            let mut steps = 0;
+            let mut travelled = 0.;
+            while travelled < 20_000. && steps < 2_000 {
+                let (_, len) = field.majorant_from(&p, &d);
+                if !len.is_finite() {
+                    break;
+                }
+                p += d * len;
+                travelled += len;
+                steps += 1;
+            }
+            assert!(steps < 2_000, "{}: stuck after {} m", d, travelled);
         }
     }
 

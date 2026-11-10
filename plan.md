@@ -223,6 +223,19 @@ Where the time goes:
 3. Any-hit occlusion queries for shadow rays.
 4. Skip the unused slope FFTs in the ocean build; avoid the `Arc` clone per hit.
 
+### Status
+
+Done: candidates 1-3. A bounding volume hierarchy built with the surface area heuristic
+(`bvh.rs`) replaced the octree everywhere (scene, meshes, ocean, CSG unions, box terrain,
+fireworks), with any-hit queries for shadow rays and ray ranges passed through `Geometry`; the
+sky is a lookup table. The octree (`octree.rs`) is kept, unused, with its own improvements
+(Revelles et al. traversal, a limit on items copied by a split, triangle leaves tested four at
+a time with vector instructions) for comparison. Rendering on 4 cores, against the octree as it
+was: ocean-boat about 16 times faster, the cornell box and demo 6 times, spheres-on-water 5
+times. Batched
+(SIMD) triangle tests gave nothing with the BVH's small leaves; `-C target-cpu=native` gave
+nothing measurable either.
+
 ### Reading (candidates, unverified)
 
 - Glassner, "Space Subdivision for Fast Ray Tracing", IEEE CG&A 1984 (octrees).
@@ -303,8 +316,8 @@ emissive surfaces via `diffuse-light`.
 
 ### Gaps, roughly by usefulness
 
-- Transforms: translate and scale (the `Transform` intersection code already supports general
-  affine transforms; only parsing is missing), and instancing.
+- ~~Transforms: translate and scale, and instancing.~~ Done: `transform` and named
+  `geometries`.
 - Arbitrary-orientation plane, disc, quad/rectangle.
 - Area lights: quad, disc and sphere emitters with light sampling. Needed for the Cornell box and
   soft shadows. Directional (sun) light and spot light.

@@ -15,6 +15,10 @@ Demonstrating the ocean generation.
 Procedural art with a block city skyline at sunset.
 ![block terrain](./scenes/block-terrain.png)
 
+## Instancing
+Twenty instances of one teapot mesh, each with its own transform and material.
+![instances](./scenes/instances.png)
+
 ## Fireworks
 ![fireworks](./scenes/fireworks.png)
 

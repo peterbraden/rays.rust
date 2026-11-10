@@ -50,17 +50,20 @@ const KAPPA: f64 = RD / CP;
 /// beneath the inversion.
 const RAIN_THRESHOLD: f64 = 1e-3;
 const RAIN_RATE: f64 = 1e-3;
+/// Height (m) over which the surface layer's turbulent mixing fades.
+const MIXING_DEPTH: f64 = 300.;
 /// Density of air near the ground, kg/m³, for turning fluxes into rates.
 const AIR_DENSITY: f64 = 1.15;
 
-/// Pressure (Pa) at height `z` (m) in the standard atmosphere.
-pub fn pressure_at(z: f64) -> f64 {
-    P0 * (1. - 2.25577e-5 * z).max(0.01).powf(5.25588)
+/// Pressure (Pa) at height `z` (m) above ground where the pressure is `surface`, with the
+/// standard atmosphere's lapse rate.
+pub fn pressure_at(z: f64, surface: f64) -> f64 {
+    surface * (1. - 2.25577e-5 * z).max(0.01).powf(5.25588)
 }
 
-/// The Exner function (p/p₀)^κ: temperature over potential temperature.
-pub fn exner_at(z: f64) -> f64 {
-    (pressure_at(z) / P0).powf(KAPPA)
+/// The Exner function (p/p₀)^κ: temperature over potential temperature, at pressure `p`.
+pub fn exner_of(p: f64) -> f64 {
+    (p / P0).powf(KAPPA)
 }
 
 /// Saturation mixing ratio (kg/kg) over water at temperature `t` (K) and pressure `p` (Pa),
@@ -69,79 +72,128 @@ pub fn saturation_mixing_ratio(t: f64, p: f64) -> f64 {
     380.2 / p * (17.67 * (t - 273.15) / (t - 29.65)).exp()
 }
 
-/// The air the clouds grow in, before the sun gets to work.
-#[derive(Debug, Clone, Copy)]
-pub struct Atmosphere {
-    /// Potential temperature (K) of the mixed layer, and its depth (m).
-    pub surface_theta: f64,
-    pub mixed_layer: f64,
-    /// How fast θ rises (K/m) above the mixed layer, up to the inversion.
-    pub lapse: f64,
-    /// Height of the inversion's base (m), how much θ jumps (K) across it, and over what depth.
-    pub inversion: f64,
-    pub inversion_strength: f64,
-    pub inversion_depth: f64,
-    /// How fast θ rises above the inversion (K/m).
-    pub lapse_above: f64,
-    /// Water vapour mixing ratio (kg/kg) in the mixed layer, and the relative humidity above it.
-    pub humidity: f64,
-    pub humidity_above: f64,
+/// A quantity given at points (heights, or times), linear between them and constant beyond.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Profile {
+    pub at: Vec<f64>,
+    pub values: Vec<f64>,
 }
 
-impl Default for Atmosphere {
-    /// A summer's morning: 27°C at the ground, a mixed layer 1200 m deep with its condensation
-    /// level near its top, conditionally unstable air to an inversion at 3 km.
-    fn default() -> Atmosphere {
-        Atmosphere {
-            surface_theta: 300.,
-            mixed_layer: 1200.,
-            lapse: 3e-3,
-            inversion: 3000.,
-            inversion_strength: 3.,
-            inversion_depth: 200.,
-            lapse_above: 5e-3,
-            humidity: 0.012,
-            humidity_above: 0.5,
+impl Profile {
+    pub fn new(at: &[f64], values: &[f64]) -> Profile {
+        assert!(at.len() == values.len() && !at.is_empty(), "a profile needs as many values as points");
+        assert!(at.windows(2).all(|w| w[0] < w[1]), "a profile's points must increase");
+        Profile { at: at.to_vec(), values: values.to_vec() }
+    }
+
+    pub fn constant(v: f64) -> Profile {
+        Profile { at: vec![0.], values: vec![v] }
+    }
+
+    pub fn value(&self, x: f64) -> f64 {
+        let n = self.at.len();
+        if x <= self.at[0] {
+            return self.values[0];
+        }
+        if x >= self.at[n - 1] {
+            return self.values[n - 1];
+        }
+        let i = self.at.partition_point(|a| *a <= x) - 1;
+        let t = (x - self.at[i]) / (self.at[i + 1] - self.at[i]);
+        self.values[i] + (self.values[i + 1] - self.values[i]) * t
+    }
+
+    fn scaled(&self, at: f64, values: f64) -> Profile {
+        Profile { at: self.at.iter().map(|a| a * at).collect(), values: self.values.iter().map(|v| v * values).collect() }
+    }
+}
+
+/// The air at dawn: (liquid water) potential temperature and total water by height.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sounding {
+    /// K, by height (m).
+    pub theta: Profile,
+    /// kg/kg, by height (m).
+    pub water: Profile,
+    /// Pa.
+    pub surface_pressure: f64,
+}
+
+impl Sounding {
+    /// The ARM Southern Great Plains case: a summer's day of fair-weather cumulus over land
+    /// (Oklahoma, 21 June 1997), as set up for the intercomparison of A. R. Brown et al.,
+    /// "Large-eddy simulation of the diurnal cycle of shallow cumulus convection over land",
+    /// QJRMS 2002. The profiles are those of MicroHH's and DALES's `arm` cases.
+    pub fn arm() -> Sounding {
+        let z = [0., 50., 350., 650., 700., 1300., 2500., 5500.];
+        Sounding {
+            theta: Profile::new(&z, &[299.0, 301.5, 302.5, 303.53, 303.7, 307.13, 314.0, 343.2]),
+            water: Profile::new(&z, &[15.20, 15.17, 14.98, 14.80, 14.70, 13.50, 3.00, 3.00]).scaled(1., 1e-3),
+            surface_pressure: 97000.,
         }
     }
 }
 
-impl Atmosphere {
-    pub fn theta(&self, z: f64) -> f64 {
-        let above = (z - self.mixed_layer).max(0.);
-        let to_inversion = above.min((self.inversion - self.mixed_layer).max(0.));
-        let jump = ((z - self.inversion) / self.inversion_depth).clamp(0., 1.) * self.inversion_strength;
-        let beyond = (z - self.inversion - self.inversion_depth).max(0.);
-        self.surface_theta + self.lapse * to_inversion + jump + (self.lapse_above - self.lapse) * beyond
+/// What drives the day: heat and moisture from the ground, and the slow tendencies of the
+/// air mass (advection and radiation), by time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Forcing {
+    /// Sensible and latent heat fluxes from the ground, W/m², by time (s).
+    pub heat_flux: Profile,
+    pub moisture_flux: Profile,
+    /// Large-scale tendencies of θ (K/s) and total water (kg/kg/s), by time, applied in full
+    /// up to `tendency_heights.0` and fading to nothing at `tendency_heights.1` (m).
+    pub theta_tendency: Profile,
+    pub water_tendency: Profile,
+    pub tendency_heights: (f64, f64),
+}
+
+impl Forcing {
+    /// The ARM case's day, from 05:30 local time: the ground's fluxes rise after dawn to a
+    /// midday peak of 140 W/m² sensible and 500 W/m² latent (moist, green ground), and fall
+    /// again in the evening.
+    pub fn arm() -> Forcing {
+        let hours = [0., 4., 6.5, 7.5, 10., 12.5, 14.5];
+        let ls_hours = [0., 3., 6., 9., 12., 14.5];
+        Forcing {
+            heat_flux: Profile::new(&hours, &[-30., 90., 140., 140., 100., -10., -10.]).scaled(3600., 1.),
+            moisture_flux: Profile::new(&hours, &[5., 250., 450., 500., 420., 180., 0.]).scaled(3600., 1.),
+            // Advection plus radiation, K/h; advection of total water, g/kg/h.
+            theta_tendency: Profile::new(&ls_hours, &[-0.125, 0., 0., -0.08, -0.16, -0.26]).scaled(3600., 1. / 3600.),
+            water_tendency: Profile::new(&ls_hours, &[0.08, 0.02, -0.04, -0.10, -0.16, -0.30]).scaled(3600., 1e-3 / 3600.),
+            tendency_heights: (1000., 5500.),
+        }
     }
 
-    /// Water vapour: the mixed layer's, blending over 200 m into `humidity_above` relative to
-    /// saturation (and never more than the mixed layer's).
-    pub fn vapour(&self, z: f64) -> f64 {
-        let saturated = saturation_mixing_ratio(self.theta(z) * exner_at(z), pressure_at(z));
-        let blend = ((z - self.mixed_layer) / 200.).clamp(0., 1.);
-        let above = (self.humidity_above * saturated).min(self.humidity);
-        self.humidity + (above - self.humidity) * blend
+    /// Steady fluxes from the ground, and no large-scale tendencies.
+    pub fn steady(heat: f64, moisture: f64) -> Forcing {
+        Forcing {
+            heat_flux: Profile::constant(heat),
+            moisture_flux: Profile::constant(moisture),
+            theta_tendency: Profile::constant(0.),
+            water_tendency: Profile::constant(0.),
+            tendency_heights: (1000., 5500.),
+        }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct SimulationParams {
     /// Cells across (x), up (y) and along (z); x and z must be powers of two.
     pub size: (usize, usize, usize),
     /// Cell size, m.
     pub cell: f64,
-    pub atmosphere: Atmosphere,
-    /// Sensible and latent heat from the ground, W/m², on average.
-    pub heat_flux: f64,
-    pub moisture_flux: f64,
-    /// How much the ground's heating varies from place to place (0 to 1), how big the patches
+    pub sounding: Sounding,
+    pub forcing: Forcing,
+    /// How much the ground's fluxes vary from place to place (0 to 1), how big the patches
     /// are (m), and how long (s) they take to change.
     pub patchiness: f64,
     pub patch_size: f64,
     pub patch_period: f64,
     /// Steady wind, m/s along x and z, carrying everything (the grid is periodic).
     pub wind: Vector2<f64>,
+    /// Friction velocity (m/s), for the turbulence the wind stirs near the ground.
+    pub friction_velocity: f64,
     /// Vorticity confinement strength, ε in f = ε h (N x ω). Small: it feeds the flow energy,
     /// and much above 0.01 drives it faster than the buoyancy does.
     pub vorticity: f64,
@@ -151,17 +203,18 @@ pub struct SimulationParams {
 }
 
 impl Default for SimulationParams {
+    /// The ARM case's day, at 100 m: 6.4 km square and 4.4 km deep.
     fn default() -> SimulationParams {
         SimulationParams {
-            size: (128, 80, 128),
-            cell: 50.,
-            atmosphere: Atmosphere::default(),
-            heat_flux: 250.,
-            moisture_flux: 150.,
-            patchiness: 0.7,
+            size: (64, 44, 64),
+            cell: 100.,
+            sounding: Sounding::arm(),
+            forcing: Forcing::arm(),
+            patchiness: 0.5,
             patch_size: 1500.,
-            patch_period: 1200.,
-            wind: Vector2::new(2., 0.),
+            patch_period: 1800.,
+            wind: Vector2::new(10., 0.),
+            friction_velocity: 0.4,
             vorticity: 0.01,
             max_step: 4.,
             seed: 0,
@@ -253,8 +306,6 @@ pub struct CloudSimulation {
     pub theta: Field,
     pub vapour: Field,
     pub cloud: Field,
-    theta_env: Vec<f64>,
-    vapour_env: Vec<f64>,
     exner: Vec<f64>,
     pressure: Vec<f64>,
     patches: PerlinNoise,
@@ -268,7 +319,10 @@ impl CloudSimulation {
         let h = params.cell;
         let half = Vector3::new(0.5, 0.5, 0.5);
         let height = |j: usize| (j as f64 + 0.5) * h;
-        let a = params.atmosphere;
+        let sounding = params.sounding.clone();
+        let pressure: Vec<f64> = (0..ny).map(|j| pressure_at(height(j), sounding.surface_pressure)).collect();
+        let seed = params.seed as u32;
+        let patches = PerlinNoise::with_seed(params.seed.wrapping_mul(5).wrapping_add(3));
         let mut sim = CloudSimulation {
             params,
             time: 0.,
@@ -279,19 +333,18 @@ impl CloudSimulation {
             theta: Field::new(nx, ny, nz, h, half),
             vapour: Field::new(nx, ny, nz, h, half),
             cloud: Field::new(nx, ny, nz, h, half),
-            theta_env: (0..ny).map(|j| a.theta(height(j))).collect(),
-            vapour_env: (0..ny).map(|j| a.vapour(height(j))).collect(),
-            exner: (0..ny).map(|j| exner_at(height(j))).collect(),
-            pressure: (0..ny).map(|j| pressure_at(height(j))).collect(),
-            patches: PerlinNoise::with_seed(params.seed.wrapping_mul(5).wrapping_add(3)),
+            exner: pressure.iter().map(|p| exner_of(*p)).collect(),
+            pressure,
+            patches,
         };
-        // The environment, with a faint random warmth in the mixed layer to break the symmetry.
-        let seed = params.seed as u32;
+        // The sounding (unsaturated: its water all vapour), with faint random perturbations in
+        // the lowest 200 m to start convection (0.1 K and 0.025 g/kg, as in the ARM case).
         for n in 0..sim.theta.data.len() {
             let (i, j, k) = sim.theta.ijk(n);
-            let jitter = if height(j) < a.mixed_layer { (worley_hash(i as u32, j as u32, k as u32, seed) - 0.5) * 0.2 } else { 0. };
-            sim.theta.data[n] = sim.theta_env[j] + jitter;
-            sim.vapour.data[n] = sim.vapour_env[j];
+            let z = height(j);
+            let jitter = |s: u32| if z < 200. { (worley_hash(i as u32, j as u32, k as u32, seed.wrapping_add(s)) - 0.5) * 2. } else { 0. };
+            sim.theta.data[n] = sounding.theta.value(z) + 0.1 * jitter(0);
+            sim.vapour.data[n] = sounding.water.value(z) + 2.5e-5 * jitter(1);
         }
         sim
     }
@@ -341,8 +394,9 @@ impl CloudSimulation {
 
     /// Heat and moisture from the ground into the lowest level, in patches.
     fn surface_fluxes(&mut self, dt: f64) {
-        let p = self.params;
+        let p = &self.params;
         let (nx, _, nz) = p.size;
+        let (heat_flux, moisture_flux) = (p.forcing.heat_flux.value(self.time), p.forcing.moisture_flux.value(self.time));
         let h = p.cell;
         let t = self.time / p.patch_period;
         let seed = (p.seed as u32).wrapping_add(self.steps as u32 * 7919);
@@ -360,9 +414,72 @@ impl CloudSimulation {
             pattern(i, k) * (1. + (worley_hash(i as u32, k as u32, 0, seed) - 0.5) * 0.5)
         }).collect();
         for (n, f) in factors.iter().enumerate() {
-            self.theta.data[n] += p.heat_flux * f * heat;
-            self.vapour.data[n] += p.moisture_flux * f * moisture;
+            self.theta.data[n] += heat_flux * f * heat;
+            self.vapour.data[n] = (self.vapour.data[n] + moisture_flux * f * moisture).max(0.);
         }
+    }
+
+    /// Turbulence too small for the grid, near the ground: wind over rough ground stirs the
+    /// lowest air even when it is stable, as in the morning. Vertical eddy diffusion of heat
+    /// and water with K = κ u* z, the surface layer's (κ von Kármán's constant, u* the friction
+    /// velocity), fading with height over `MIXING_DEPTH`. Without it, the ground's moisture
+    /// would collect in the lowest cell as fog.
+    fn surface_mixing(&mut self, dt: f64) {
+        let (nx, ny, nz) = self.params.size;
+        let h = self.params.cell;
+        let slab = nx * nz;
+        let u_star = self.params.friction_velocity;
+        // K at the face below level j.
+        let k: Vec<f64> = (0..=ny).map(|j| {
+            let z = j as f64 * h;
+            0.4 * u_star * z * (-z / MIXING_DEPTH).exp()
+        }).collect();
+        let top = k.iter().rposition(|k| *k > 1e-3).unwrap_or(0).min(ny - 1);
+        // Sub-steps for stability.
+        let kmax = k.iter().cloned().fold(0., f64::max);
+        let steps = ((kmax * dt / (h * h)) / 0.25).ceil().max(1.) as usize;
+        let tau = dt / steps as f64 / (h * h);
+        for f in [&mut self.theta, &mut self.vapour, &mut self.cloud] {
+            for _ in 0..steps {
+                let old: Vec<f64> = f.data[..(top + 2).min(ny) * slab].to_vec();
+                f.data[..(top + 1) * slab].par_chunks_mut(slab).enumerate().for_each(|(j, level)| {
+                    for n in 0..slab {
+                        let c = old[j * slab + n];
+                        let up = if j + 1 < ny { k[j + 1] * (old[(j + 1) * slab + n] - c) } else { 0. };
+                        let down = if j > 0 { k[j] * (old[(j - 1) * slab + n] - c) } else { 0. };
+                        level[n] = c + tau * (up + down);
+                    }
+                });
+            }
+        }
+    }
+
+    /// The air mass's slow changes, the same at every point of a level: advection from
+    /// elsewhere and radiative cooling.
+    fn large_scale(&mut self, dt: f64) {
+        let f = &self.params.forcing;
+        let (dtheta, dwater) = (f.theta_tendency.value(self.time) * dt, f.water_tendency.value(self.time) * dt);
+        if dtheta == 0. && dwater == 0. {
+            return;
+        }
+        let (full, none) = f.tendency_heights;
+        let (nx, _, nz) = self.params.size;
+        let h = self.params.cell;
+        let slab = nx * nz;
+        self.theta.data.par_chunks_mut(slab).zip(self.vapour.data.par_chunks_mut(slab)).enumerate().for_each(|(j, (theta, vapour))| {
+            let z = (j as f64 + 0.5) * h;
+            let weight = 1. - ((z - full) / (none - full)).clamp(0., 1.);
+            for n in 0..slab {
+                theta[n] += dtheta * weight;
+                vapour[n] = (vapour[n] + dwater * weight).max(0.);
+            }
+        });
+    }
+
+    /// Each level's mean of `f`.
+    fn level_means(&self, f: &Field) -> Vec<f64> {
+        let slab = f.sx * f.sz;
+        f.data.par_chunks(slab).map(|c| c.iter().sum::<f64>() / slab as f64).collect()
     }
 
     /// Brings each cell to saturation: vapour beyond it condenses, cloud water in unsaturated
@@ -396,11 +513,13 @@ impl CloudSimulation {
         let (nx, ny, nz) = self.params.size;
         let slab = nx * nz;
         let h = self.params.cell;
-        // Buoyancy at the cells' centres.
+        // Buoyancy at the cells' centres, against each level's mean (a horizontally uniform
+        // part would only be balanced by pressure).
+        let (theta_mean, vapour_mean, cloud_mean) = (self.level_means(&self.theta), self.level_means(&self.vapour), self.level_means(&self.cloud));
         let buoyancy: Vec<f64> = (0..nx * ny * nz).into_par_iter().map(|n| {
             let j = n / slab;
-            GRAVITY * ((self.theta.data[n] - self.theta_env[j]) / self.theta_env[j]
-                + 0.608 * (self.vapour.data[n] - self.vapour_env[j]) - self.cloud.data[n])
+            GRAVITY * ((self.theta.data[n] - theta_mean[j]) / theta_mean[j]
+                + 0.608 * (self.vapour.data[n] - vapour_mean[j]) - (self.cloud.data[n] - cloud_mean[j]))
         }).collect();
         // Vorticity confinement: a force pushing along N x ω, N the direction in which the
         // vorticity's magnitude grows.
@@ -467,7 +586,7 @@ impl CloudSimulation {
             let (a, b) = (centre_idx(i, j - 1, k), centre_idx(i, j, k));
             *v += dt * 0.5 * (buoyancy[a] + buoyancy[b] + confinement[a].y + confinement[b].y);
         });
-        // The sponge: the top fifth relaxes towards the environment, faster further up.
+        // The sponge: the top fifth relaxes towards each level's mean, faster further up.
         let start = (ny as f64 * 0.8) as usize;
         for j in start..ny {
             let s = (j - start + 1) as f64 / (ny - start) as f64;
@@ -476,9 +595,9 @@ impl CloudSimulation {
                 self.u.data[n] *= keep;
                 self.w.data[n] *= keep;
                 self.v.data[n + slab] *= keep;
-                self.theta.data[n] = self.theta_env[j] + (self.theta.data[n] - self.theta_env[j]) * keep;
-                self.vapour.data[n] = self.vapour_env[j] + (self.vapour.data[n] - self.vapour_env[j]) * keep;
-                self.cloud.data[n] *= keep;
+                self.theta.data[n] = theta_mean[j] + (self.theta.data[n] - theta_mean[j]) * keep;
+                self.vapour.data[n] = vapour_mean[j] + (self.vapour.data[n] - vapour_mean[j]) * keep;
+                self.cloud.data[n] = cloud_mean[j] + (self.cloud.data[n] - cloud_mean[j]) * keep;
             }
         }
     }
@@ -562,6 +681,8 @@ impl CloudSimulation {
         let cloud = self.advect(&self.cloud, dt, false);
         (self.u, self.v, self.w, self.theta, self.vapour, self.cloud) = (u, v, w, theta, vapour, cloud);
         self.surface_fluxes(dt);
+        self.surface_mixing(dt);
+        self.large_scale(dt);
         self.condense(dt);
         self.forces(dt);
         self.project();
@@ -651,8 +772,8 @@ impl CloudSimulation {
         saved.sort();
         let wanted = (time * 1000.).round() as u64;
         let mut sim = saved.iter().rev().filter(|(ms, _)| *ms <= wanted)
-            .find_map(|(_, path)| CloudSimulation::load(params, path).ok())
-            .unwrap_or_else(|| CloudSimulation::new(params));
+            .find_map(|(_, path)| CloudSimulation::load(params.clone(), path).ok())
+            .unwrap_or_else(|| CloudSimulation::new(params.clone()));
         if sim.time < time - 1e-9 {
             sim.advance_to(time, report);
             let path = dir.join(format!("{}{:012}.state", prefix, wanted));
@@ -913,7 +1034,7 @@ mod tests {
     use super::*;
 
     fn small(size: (usize, usize, usize), cell: f64) -> SimulationParams {
-        SimulationParams { size, cell, wind: Vector2::zeros(), vorticity: 0., ..SimulationParams::default() }
+        SimulationParams { size, cell, wind: Vector2::zeros(), vorticity: 0., friction_velocity: 0., ..SimulationParams::default() }
     }
 
     #[test]
@@ -940,8 +1061,7 @@ mod tests {
     fn test_steady_wind_carries_a_blob() {
         let mut p = small((32, 4, 16), 10.);
         p.wind = Vector2::new(5., 0.);
-        p.heat_flux = 0.;
-        p.moisture_flux = 0.;
+        p.forcing = Forcing::steady(0., 0.);
         let mut sim = CloudSimulation::new(p);
         for x in sim.cloud.data.iter_mut() { *x = 0.; }
         let (i0, k0) = (8, 8);
@@ -965,7 +1085,8 @@ mod tests {
 
     #[test]
     fn test_condensation_conserves_water_and_energy() {
-        let (exner, p) = (exner_at(1500.), pressure_at(1500.));
+        let p = pressure_at(1500., 1e5);
+        let exner = exner_of(p);
         for (theta, vapour, cloud) in [(300., 0.02, 0.), (300., 0.005, 1e-3), (295., 0.013, 2e-4)] {
             let (dv, dc, dth) = adjust(theta, vapour, cloud, exner, p);
             // Total water is kept, and so is the liquid-water potential temperature.
@@ -984,30 +1105,39 @@ mod tests {
     }
 
     #[test]
-    fn test_atmosphere_profile() {
-        let a = Atmosphere::default();
-        assert_eq!(a.theta(500.), a.surface_theta);
-        assert!((a.theta(2000.) - a.surface_theta - a.lapse * 800.).abs() < 1e-9);
-        assert!(a.theta(3300.) > a.theta(2999.) + a.inversion_strength);
-        // The mixed layer is unsaturated at the ground and saturated near its top: its
-        // condensation level, where a thermal from the ground would form cloud.
-        let rh = |z: f64| a.vapour(z) / saturation_mixing_ratio(a.theta(z) * exner_at(z), pressure_at(z));
-        assert!(rh(0.) < 0.7);
-        assert!((0.9..1.).contains(&rh(1150.)), "{}", rh(1150.));
-        assert!(rh(2000.) <= a.humidity_above + 1e-9);
+    fn test_arm_sounding_and_forcing() {
+        let a = Sounding::arm();
+        assert_eq!(a.theta.value(1300.), 307.13);
+        assert!((a.water.value(1900.) - 8.25e-3).abs() < 1e-12);
+        assert_eq!(a.water.value(9000.), 3e-3);
+        // Unsaturated everywhere at dawn, nearly so near the ground.
+        let rh = |z: f64| {
+            let p = pressure_at(z, a.surface_pressure);
+            a.water.value(z) / saturation_mixing_ratio(a.theta.value(z) * exner_of(p), p)
+        };
+        assert!((0.75..0.95).contains(&rh(0.)), "{}", rh(0.));
+        for z in (0..50).map(|k| k as f64 * 100.) {
+            assert!(rh(z) < 1., "{}: {}", z, rh(z));
+        }
+        // The day's fluxes peak at midday (seven hours in).
+        let f = Forcing::arm();
+        assert_eq!(f.moisture_flux.value(7.5 * 3600.), 500.);
+        assert!((f.heat_flux.value(2. * 3600.) - 30.).abs() < 1e-9);
     }
 
     #[test]
     fn test_warm_bubble_rises() {
+        // In neutral, dry air.
         let mut p = small((16, 24, 16), 50.);
-        p.heat_flux = 0.;
-        p.moisture_flux = 0.;
+        p.forcing = Forcing::steady(0., 0.);
+        p.sounding = Sounding { theta: Profile::constant(300.), water: Profile::constant(1e-3), surface_pressure: 1e5 };
         let mut sim = CloudSimulation::new(p);
+        let start_theta = sim.level_means(&sim.theta);
         let height = |s: &CloudSimulation| {
             let (mut m, mut y) = (0., 0.);
             for n in 0..s.theta.data.len() {
                 let j = n / (16 * 16);
-                let excess = (s.theta.data[n] - s.theta_env[j] - 0.1).max(0.);
+                let excess = (s.theta.data[n] - start_theta[j] - 0.1).max(0.);
                 m += excess;
                 y += excess * s.theta.position(n).y;
             }
@@ -1055,15 +1185,15 @@ mod tests {
     fn test_heated_ground_grows_cumulus_at_the_condensation_level() {
         // A coarse day: thermals from the heated ground should reach the top of the mixed
         // layer and condense there.
-        let mut p = SimulationParams { size: (32, 40, 32), cell: 100., ..SimulationParams::default() };
-        p.heat_flux = 400.;
+        let mut p = SimulationParams { friction_velocity: 0.4, ..small((32, 40, 32), 100.) };
+        p.forcing = Forcing::steady(300., 400.);
         let mut sim = CloudSimulation::new(p);
-        sim.advance_to(15. * 60., |_| {});
+        sim.advance_to(60. * 60., |_| {});
         let base = sim.cloud_base().expect("no cloud formed");
-        assert!((900. ..1800.).contains(&base), "cloud base {}", base);
-        // And it is a cloud, not a fog: most of the lowest kilometre is clear.
-        let clear = sim.cloud.data[..32 * 32 * 10].iter().filter(|q| **q < 1e-5).count();
-        assert_eq!(clear, 32 * 32 * 10);
+        assert!((400. ..1600.).contains(&base), "cloud base {}", base);
+        // And it is a cloud, not a fog: the lowest 300 m are (almost all) clear.
+        let cloudy = sim.cloud.data[..32 * 32 * 3].iter().filter(|q| **q > 1e-5).count();
+        assert!(cloudy * 100 < 32 * 32 * 3, "{}", cloudy);
     }
 }
 
@@ -1072,7 +1202,19 @@ mod tests {
 mod diagnostics {
     use super::*;
 
-    /// Prints a profile of a cached state: `HARRIS_STATE=<file> cargo test --release harris_profile -- --ignored --nocapture`.
+    fn report(sim: &CloudSimulation) {
+        let (nx, ny, nz) = sim.params.size;
+        let slab = nx * nz;
+        let cover = (0..slab).filter(|n| (0..ny).any(|j| sim.cloud.data[j * slab + n] > 1e-5)).count() as f64 / slab as f64;
+        let top = (0..ny).rev().find(|j| sim.cloud.data[j * slab..(j + 1) * slab].iter().filter(|q| **q > 1e-5).count() * 100 >= slab)
+            .map(|j| (j as f64 + 0.5) * sim.params.cell);
+        let wmax = sim.v.data.iter().cloned().fold(f64::MIN, f64::max);
+        eprintln!("t {:5.2} h: cover {:.2} base {:?} top {:?} w {:.1} qc {:.2} g/kg", sim.time / 3600., cover, sim.cloud_base(), top, wmax,
+            sim.cloud.data.iter().cloned().fold(0., f64::max) * 1e3);
+    }
+
+    /// Prints a profile of a cached state (with the default parameters):
+    /// `HARRIS_STATE=<file> cargo test --release harris_profile -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn harris_profile() {
@@ -1080,52 +1222,28 @@ mod diagnostics {
         let sim = CloudSimulation::load(SimulationParams::default(), std::path::Path::new(&path)).unwrap();
         let (nx, ny, nz) = sim.params.size;
         let slab = nx * nz;
-        eprintln!("t = {}", sim.time);
-        for j in (0..ny).step_by(2) {
+        report(&sim);
+        for j in 0..ny {
             let r = j * slab..(j + 1) * slab;
             let mean = |f: &Field| f.data[r.clone()].iter().sum::<f64>() / slab as f64;
             let cloudy = sim.cloud.data[r.clone()].iter().filter(|q| **q > 1e-5).count() as f64 / slab as f64;
             let qs = saturation_mixing_ratio(mean(&sim.theta) * sim.exner[j], sim.pressure[j]);
             let wmax = sim.v.data[r.clone()].iter().cloned().fold(f64::MIN, f64::max);
-            eprintln!("z {:5.0}  θ' {:+.2}  qv {:.2} g/kg  RH {:.2}  cloud {:.2}  qc max {:.2} g/kg  w max {:.1}",
-                (j as f64 + 0.5) * sim.params.cell, mean(&sim.theta) - sim.theta_env[j], mean(&sim.vapour) * 1e3,
+            eprintln!("z {:5.0}  θ {:.2}  qv {:.2} g/kg  RH {:.2}  cloud {:.2}  qc max {:.2} g/kg  w max {:.1}",
+                (j as f64 + 0.5) * sim.params.cell, mean(&sim.theta), mean(&sim.vapour) * 1e3,
                 mean(&sim.vapour) / qs, cloudy, sim.cloud.data[r.clone()].iter().cloned().fold(0., f64::max) * 1e3, wmax);
         }
     }
-}
 
-#[cfg(test)]
-mod tuning {
-    use super::*;
-
+    /// The ARM case's day at the default resolution, reported every half hour:
+    /// `cargo test --release harris_day -- --ignored --nocapture`.
     #[test]
     #[ignore]
-    fn harris_tune() {
-        let cases: Vec<(&str, f64, f64, f64, f64)> = vec![
-            // name, lapse K/km, inversion m, inversion strength K, heat flux
-            ("6/2000/5/200", 6., 2000., 5., 200.),
-            ("6.5/2200/5/200", 6.5, 2200., 5., 200.),
-            ("5.5/2000/6/200", 5.5, 2000., 6., 200.),
-        ];
-        rayon::ThreadPoolBuilder::new().build().unwrap().install(|| {
-            for (name, lapse, inv, strength, flux) in cases {
-                let mut p = SimulationParams { size: (64, 40, 64), cell: 100., ..SimulationParams::default() };
-                p.atmosphere.lapse = lapse * 1e-3;
-                p.atmosphere.inversion = inv;
-                p.atmosphere.inversion_strength = strength;
-                p.heat_flux = flux;
-                let mut sim = CloudSimulation::new(p);
-                for minutes in [10., 20., 30., 40., 50., 60.] {
-                    sim.advance_to(minutes * 60., |_| {});
-                    let (nx, ny, nz) = p.size;
-                    let slab = nx * nz;
-                    let cover = (0..slab).filter(|n| (0..ny).any(|j| sim.cloud.data[j * slab + n] > 1e-5)).count() as f64 / slab as f64;
-                    let top = (0..ny).rev().find(|j| sim.cloud.data[j * slab..(j + 1) * slab].iter().any(|q| *q > 1e-5)).map(|j| (j as f64 + 0.5) * p.cell);
-                    let wmax = sim.v.data.iter().cloned().fold(f64::MIN, f64::max);
-                    eprintln!("{} t {:3.0} min: cover {:.2} base {:?} top {:?} w {:.1} qc {:.2} g/kg", name, minutes, cover, sim.cloud_base(), top, wmax,
-                        sim.cloud.data.iter().cloned().fold(0., f64::max) * 1e3);
-                }
-            }
-        });
+    fn harris_day() {
+        let mut sim = CloudSimulation::new(SimulationParams::default());
+        for half_hours in 1..=24 {
+            sim.advance_to(half_hours as f64 * 1800., |_| {});
+            report(&sim);
+        }
     }
 }

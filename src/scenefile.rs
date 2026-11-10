@@ -18,7 +18,7 @@ use crate::procedural::fireworks::create_firework;
 use crate::procedural::nubis_clouds::{NubisCloudLayer, GlobalNubis};
 use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGenus, GlobalCirrus};
 use crate::procedural::benard_altocumulus::BenardAltocumulus;
-use crate::procedural::harris_cumulus::{Atmosphere, CloudSimulation, HarrisCumulus, SimulationParams};
+use crate::procedural::harris_cumulus::{CloudSimulation, Forcing, HarrisCumulus, Profile, SimulationParams, Sounding};
 use crate::participatingmedia::create_fog;
 use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
 use crate::material::ice_halos::{Crystals, Habit};
@@ -476,19 +476,21 @@ impl SceneFile {
 
     /// Cumulus grown by simulating a sunny day (see `procedural::harris_cumulus`):
     ///
-    /// `{"type": "harris_cumulus", "time": 1800, "cache": "demo/scenes/.cumulus-cache"}`
+    /// `{"type": "harris_cumulus", "time": 28800, "cache": "demo/scenes/.cumulus-cache"}`
     ///
-    /// The simulation runs for `time` seconds, continuing from the latest state saved in
-    /// `cache` (a directory) at or before it, and saves its own there, so an animation's frames
-    /// simulate only from one to the next. Its grid is `grid` ([x, y, z] cells; x and z powers
-    /// of two; default [128, 80, 128]) of `cell` metres (50), periodic across the ground. The
-    /// day: `heat_flux` and `moisture_flux` from the ground (W/m², 250 and 150), varying by
+    /// The simulation runs for `time` seconds from 05:30 on the ARM case's day (default 8
+    /// hours: 13:30), continuing from the latest state saved in `cache` (a directory) at or
+    /// before it, and saves its own there, so an animation's frames simulate only from one to
+    /// the next. Its grid is `grid` ([x, y, z] cells; x and z powers of two; default
+    /// [64, 44, 64]) of `cell` metres (100), periodic across the ground.
+    ///
+    /// The day is the ARM case's (a sounding over Oklahoma, and the ground's fluxes through
+    /// the day) unless given: `sounding` ({"height": [m], "theta": [K], "water": [g/kg],
+    /// "surface_pressure": Pa}), steady `heat_flux` and `moisture_flux` (W/m²), `large_scale`
+    /// (false to drop the air mass's slow tendencies). The ground's fluxes vary by
     /// `patchiness` (0 to 1) in patches `patch_size` across that change over `patch_period`
-    /// seconds; `wind` ([x, z] m/s); `vorticity` (confinement); `max_step` (s); `seed`. The
-    /// air at dawn: `surface_theta` (K), `mixed_layer` (m), `lapse` (K/km of potential
-    /// temperature above it), `inversion` (m), `inversion_strength` (K), `inversion_depth`
-    /// (m), `lapse_above` (K/km), `humidity` (g/kg in the mixed layer) and `humidity_above`
-    /// (relative, 0 to 1).
+    /// seconds; `wind` ([x, z] m/s, default [10, 0]) carries everything; `friction_velocity`
+    /// (m/s) stirs the air near the ground; `vorticity` (confinement); `max_step` (s); `seed`.
     ///
     /// For rendering: `droplet_radius` (µm, default 10; sets the extinction per gram of
     /// water, and the diffraction), `detail_size`, `erosion` (0 to 1) and `edge` (g/kg of
@@ -503,30 +505,37 @@ impl SceneFile {
             p.size = (n(0, p.size.0), n(1, p.size.1), n(2, p.size.2));
         }
         p.cell = num("cell", p.cell);
-        p.heat_flux = num("heat_flux", p.heat_flux);
-        p.moisture_flux = num("moisture_flux", p.moisture_flux);
+        // Steady fluxes in place of the ARM case's day, if given.
+        if o.get("heat_flux").is_some() || o.get("moisture_flux").is_some() {
+            p.forcing = Forcing::steady(num("heat_flux", 200.), num("moisture_flux", 300.));
+        }
+        if o["large_scale"].as_bool() == Some(false) {
+            p.forcing.theta_tendency = Profile::constant(0.);
+            p.forcing.water_tendency = Profile::constant(0.);
+        }
         p.patchiness = num("patchiness", p.patchiness).clamp(0., 1.);
         p.patch_size = num("patch_size", p.patch_size);
         p.patch_period = num("patch_period", p.patch_period);
         p.wind = SceneFile::parse_vec2_def(o, "wind", p.wind);
+        p.friction_velocity = num("friction_velocity", p.friction_velocity).max(0.);
         p.vorticity = num("vorticity", p.vorticity).max(0.);
         p.max_step = num("max_step", p.max_step);
         p.seed = SceneFile::parse_seed(o).unwrap_or(0);
-        let a = Atmosphere::default();
-        p.atmosphere = Atmosphere {
-            surface_theta: num("surface_theta", a.surface_theta),
-            mixed_layer: num("mixed_layer", a.mixed_layer),
-            lapse: num("lapse", a.lapse * 1000.) / 1000.,
-            inversion: num("inversion", a.inversion),
-            inversion_strength: num("inversion_strength", a.inversion_strength),
-            inversion_depth: num("inversion_depth", a.inversion_depth).max(1.),
-            lapse_above: num("lapse_above", a.lapse_above * 1000.) / 1000.,
-            humidity: num("humidity", a.humidity * 1000.) / 1000.,
-            humidity_above: num("humidity_above", a.humidity_above),
-        };
-        let time = num("time", 1800.).max(0.);
+        if let Some(sounding) = o.get("sounding") {
+            let list = |k: &str| -> Vec<f64> {
+                sounding[k].as_array().unwrap_or_else(|| panic!("harris_cumulus: the sounding needs \"{}\"", k))
+                    .iter().map(|v| v.as_f64().unwrap()).collect()
+            };
+            let height = list("height");
+            p.sounding = Sounding {
+                theta: Profile::new(&height, &list("theta")),
+                water: Profile::new(&height, &list("water").iter().map(|w| w * 1e-3).collect::<Vec<f64>>()),
+                surface_pressure: SceneFile::parse_number(&sounding["surface_pressure"], 1e5),
+            };
+        }
+        let time = num("time", 8. * 3600.).max(0.);
         let cache = o["cache"].as_str().map(std::path::PathBuf::from);
-        let sim = CloudSimulation::cached(p, time, cache.as_deref());
+        let sim = CloudSimulation::cached(p.clone(), time, cache.as_deref());
         let center = SceneFile::parse_vec2_def(o, "center", Vector2::new(0., 0.));
         let mut c = HarrisCumulus::new(&sim, num("droplet_radius", 10.), center);
         c.detail_size = num("detail_size", c.detail_size).max(1e-3);

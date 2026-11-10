@@ -29,7 +29,7 @@ use crate::material::texture::{Solid, CheckeredYPlane, Medium, NoiseMedium, self
 use crate::material::specular::Specular;
 use crate::material::dielectric::Dielectric;
 use crate::material::plastic::Plastic;
-use crate::material::leaf::Leaf;
+use crate::material::leaf::{Leaf, LeafColor, DEFAULT_AUTUMN, DEFAULT_DEAD};
 use crate::material::lambertian::Lambertian;
 use crate::material::normal::NormalShade;
 use crate::material::legacy::{ Whitted, FlatColor };
@@ -432,6 +432,32 @@ impl SceneFile {
             })
     }
 
+    /// `{"type": "leaf", "reflectance": colour, "transmittance": colour, "refractive_index": 1.5,
+    /// "roughness": 0.3, "autumn": {"reflectance", "transmittance"}, "autumn_sun": {...},
+    /// "dead": {...}}`; see `Leaf`. Every colour's reflectance and transmittance must sum to at
+    /// most 1.
+    pub fn parse_leaf(o: &Value) -> Leaf {
+        let color = |v: &Value, default: LeafColor, name: &str| -> LeafColor {
+            let c = LeafColor {
+                reflectance: SceneFile::parse_color_def(v, "reflectance", default.reflectance),
+                transmittance: SceneFile::parse_color_def(v, "transmittance", default.transmittance),
+            };
+            let total = c.reflectance + c.transmittance;
+            assert!(total.rgb.max() <= 1.,
+                "A leaf can't reflect and transmit more light than it receives: {} reflectance + transmittance is {}", name, total);
+            c
+        };
+        let grey = Color::new(0.25, 0.25, 0.25);
+        let green = color(o, LeafColor { reflectance: grey, transmittance: grey }, "its");
+        let mut leaf = Leaf::new(green.reflectance, green.transmittance,
+            SceneFile::parse_number(&o["refractive_index"], 1.5),
+            SceneFile::parse_number(&o["roughness"], 0.3));
+        leaf.autumn = color(&o["autumn"], DEFAULT_AUTUMN, "autumn");
+        leaf.autumn_sun = if o["autumn_sun"].is_null() { leaf.autumn } else { color(&o["autumn_sun"], leaf.autumn, "autumn_sun") };
+        leaf.dead = color(&o["dead"], DEFAULT_DEAD, "dead");
+        leaf
+    }
+
     pub fn parse_checkeredplane(o: &Value, m: Box<dyn Medium + Sync + Send>) -> SceneObject {
         SceneObject {
             geometry: Box::new(Plane { y: o["y"].as_f64().unwrap() }),
@@ -492,16 +518,7 @@ impl SceneFile {
         }
 
         if t == "leaf" {
-            let reflectance = SceneFile::parse_color_def(o, "reflectance", Color::new(0.25, 0.25, 0.25));
-            let transmittance = SceneFile::parse_color_def(o, "transmittance", Color::new(0.25, 0.25, 0.25));
-            let total = reflectance + transmittance;
-            assert!(total.rgb.max() <= 1.,
-                "A leaf can't reflect and transmit more light than it receives: reflectance + transmittance is {}", total);
-            return Some(Box::new(Leaf {
-                reflectance, transmittance,
-                refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.5),
-                roughness: SceneFile::parse_number(&o["roughness"], 0.3),
-            }));
+            return Some(Box::new(SceneFile::parse_leaf(o)));
         }
 
         if t == "dielectric" {
@@ -1161,6 +1178,22 @@ mod tests {
         for o in &three[1..] {
             assert!(o.geometry.primitives() > count(&one) / 6, "{}", o.geometry.primitives());
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "autumn reflectance + transmittance")]
+    fn test_leaf_colours_must_be_physical() {
+        SceneFile::parse_leaf(&serde_json::json!({ "type": "leaf",
+            "autumn": { "reflectance": [0.6, 0.3, 0], "transmittance": [0.5, 0.3, 0] } }));
+    }
+
+    #[test]
+    fn test_leaf_autumn_sun_defaults_to_autumn() {
+        let leaf = SceneFile::parse_leaf(&serde_json::json!({ "type": "leaf",
+            "autumn": { "reflectance": [0.4, 0.1, 0], "transmittance": [0.3, 0.05, 0] } }));
+        assert_eq!(leaf.autumn_sun, leaf.autumn);
+        assert_eq!(leaf.autumn.reflectance, Color::new(0.4, 0.1, 0.));
+        assert_eq!(leaf.dead, DEFAULT_DEAD);
     }
 
     #[test]

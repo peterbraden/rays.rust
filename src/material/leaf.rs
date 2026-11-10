@@ -5,6 +5,7 @@ use crate::scene::Scene;
 use crate::geometry::{random_point_in_unit_ball, rand};
 use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::material::functions::{scatter_lambertian, direct_lighting, fresnel_reflectance, reflect};
+use std::sync::Arc;
 
 /// Distance to move a transmitted ray's origin, and the point its lights are sampled from,
 /// through the surface. As for dielectrics, it must exceed the scene's shadow bias, which has
@@ -32,12 +33,100 @@ const THROUGH: f64 = 0.001;
 /// Shadow rays are still all-or-nothing, so leaves cast opaque shadows: light transmitted
 /// through one leaf onto another is lost. At around 10% transmission, that's small beside the
 /// light that does arrive.
+///
+/// ## Autumn and dead leaves
+///
+/// Given `states`, each leaf (by the hit's `face`) takes a colour between three: its healthy
+/// green, its autumn colour and its dead colour. This follows what happens to the pigments, as
+/// described by David W. Lee and Kevin S. Gould, "Why Leaves Turn Red", American Scientist
+/// 90(6), 524-531, 2002, and measured through a season by David W. Lee, John O'Keefe, N. Michele
+/// Holbrook and Taylor S. Feild, "Pigment dynamics and autumn leaf senescence in a New England
+/// deciduous forest, eastern USA", Ecological Research 18(6), 677-694, 2003:
+/// - In autumn the leaf breaks down its chlorophyll, unmasking its yellow and orange
+///   carotenoids: the default `autumn` colour is yellow.
+/// - Many species also make red anthocyanins, most in leaves exposed to the sun: `autumn_sun`,
+///   the colour of a fully exposed leaf, is blended in by each leaf's exposure.
+/// - When the leaf dies, brown oxidised compounds dominate and it dries, so it transmits less:
+///   the `dead` colour. PROSPECT-D models these "brown pigments" alongside the others: Jean-
+///   Baptiste Féret et al., "PROSPECT-D: Towards modeling leaf optical properties through a
+///   complete lifecycle", Remote Sensing of Environment 193, 204-215, 2017,
+///   doi:10.1016/j.rse.2017.03.004.
+///
+/// The colours between are linear blends of reflectance and transmittance, which keeps them
+/// physically possible if the ends are.
 pub struct Leaf {
+    /// The healthy leaf's colour.
     pub reflectance: Color,
     pub transmittance: Color,
     pub refractive_index: f64,
     pub roughness: f64,
+    /// Autumn colour of a shaded leaf, and of one fully in the sun.
+    pub autumn: LeafColor,
+    pub autumn_sun: LeafColor,
+    pub dead: LeafColor,
+    /// Each leaf's state, indexed by face; without it, every leaf is healthy.
+    pub states: Option<Arc<Vec<LeafState>>>,
 }
+
+/// A colour for a leaf: how much light of each colour it reflects and transmits.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LeafColor {
+    pub reflectance: Color,
+    pub transmittance: Color,
+}
+
+impl LeafColor {
+    fn mix(&self, other: &LeafColor, t: f64) -> LeafColor {
+        let t = t.clamp(0., 1.);
+        LeafColor {
+            reflectance: self.reflectance * (1. - t) + other.reflectance * t,
+            transmittance: self.transmittance * (1. - t) + other.transmittance * t,
+        }
+    }
+}
+
+/// One leaf's state.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct LeafState {
+    /// 0 healthy, 1 in full autumn colour, 2 dead; between, a blend.
+    pub age: f32,
+    /// 0 shaded to 1 fully exposed to the sun.
+    pub exposure: f32,
+}
+
+impl Leaf {
+    /// A leaf with the default autumn (yellow) and dead (brown) colours, all healthy.
+    pub fn new(reflectance: Color, transmittance: Color, refractive_index: f64, roughness: f64) -> Leaf {
+        Leaf {
+            reflectance, transmittance, refractive_index, roughness,
+            autumn: DEFAULT_AUTUMN, autumn_sun: DEFAULT_AUTUMN, dead: DEFAULT_DEAD, states: None,
+        }
+    }
+
+    /// The colour of the leaf numbered `face`.
+    pub fn color(&self, face: u32) -> LeafColor {
+        let green = LeafColor { reflectance: self.reflectance, transmittance: self.transmittance };
+        let state = match &self.states {
+            Some(states) => states.get(face as usize).copied().unwrap_or_default(),
+            None => return green,
+        };
+        let autumn = self.autumn.mix(&self.autumn_sun, state.exposure as f64);
+        let age = state.age as f64;
+        if age <= 1. { green.mix(&autumn, age) } else { autumn.mix(&self.dead, age - 1.) }
+    }
+}
+
+/// Yellow, from carotenoids: bright in red and green, little blue.
+pub const DEFAULT_AUTUMN: LeafColor = LeafColor {
+    reflectance: Color { rgb: crate::na::Vector3::new(0.38, 0.3, 0.04) },
+    transmittance: Color { rgb: crate::na::Vector3::new(0.32, 0.24, 0.02) },
+};
+
+/// Brown and dry: it transmits far less than a living leaf.
+pub const DEFAULT_DEAD: LeafColor = LeafColor {
+    reflectance: Color { rgb: crate::na::Vector3::new(0.22, 0.14, 0.07) },
+    transmittance: Color { rgb: crate::na::Vector3::new(0.06, 0.03, 0.01) },
+};
 
 fn luminance(c: &Color) -> f64 {
     0.2126 * c.rgb.x + 0.7152 * c.rgb.y + 0.0722 * c.rgb.z
@@ -57,23 +146,25 @@ impl MaterialModel for Leaf {
             return ScatteredRay { sampled_lights: false, emit: Color::black(), attenuate: Color::white(), ray: Some(Ray { ro: near.point, rd }) };
         }
 
+        let LeafColor { reflectance, transmittance } = self.color(intersection.face);
+
         // The far side, for light transmitted through the leaf.
         let far = Intersection { point: near.point - near.normal * THROUGH, normal: -near.normal, ..near };
 
         // Direct light from both sides: lights on each side are only seen from that side.
-        let emit = direct_lighting(self.reflectance, &near, s) + direct_lighting(self.transmittance, &far, s);
+        let emit = direct_lighting(reflectance, &near, s) + direct_lighting(transmittance, &far, s);
 
         // Continue the path by reflecting or transmitting, in proportion to how much of each the
         // leaf does, and weight by the inverse of that probability.
-        let (lr, lt) = (luminance(&self.reflectance), luminance(&self.transmittance));
+        let (lr, lt) = (luminance(&reflectance), luminance(&transmittance));
         if lr + lt <= 0. {
             return ScatteredRay { sampled_lights: true, emit, attenuate: Color::black(), ray: None };
         }
         let p_reflect = lr / (lr + lt);
         let continued = if rand() < p_reflect {
-            scatter_lambertian(self.reflectance * (1. / p_reflect), &near)
+            scatter_lambertian(reflectance * (1. / p_reflect), &near)
         } else {
-            scatter_lambertian(self.transmittance * (1. / (1. - p_reflect)), &far)
+            scatter_lambertian(transmittance * (1. / (1. - p_reflect)), &far)
         };
         ScatteredRay { emit, sampled_lights: true, ..continued }
     }
@@ -131,7 +222,7 @@ mod tests {
         // Bounce weights are reflectance or transmittance over their probability: on average,
         // a bounce carries as much as the leaf scatters, R + T.
         let s = leaf_scene(LEAF, 10.);
-        let leaf = Leaf { reflectance: Color::new(0.1, 0.2, 0.05), transmittance: Color::new(0.05, 0.15, 0.02), refractive_index: 1., roughness: 0. };
+        let leaf = Leaf::new(Color::new(0.1, 0.2, 0.05), Color::new(0.05, 0.15, 0.02), 1., 0.);
         let r = Ray { ro: Vector3::new(0., 5., 0.01), rd: Vector3::new(0., -1., 0.) };
         let (object, hit) = s.objects.nearest_raw_intersection(&r, f64::INFINITY, 0.).unwrap();
         let i = Intersection { dist: hit.dist, point: hit.point, normal: hit.normal, face: hit.face, object };
@@ -150,12 +241,40 @@ mod tests {
     }
 
     #[test]
+    fn test_leaves_age_from_green_through_autumn_to_dead() {
+        let green = Color::new(0.1, 0.2, 0.05);
+        let sun = LeafColor { reflectance: Color::new(0.4, 0.05, 0.05), transmittance: Color::new(0.3, 0.02, 0.02) };
+        let state = |age: f32, exposure: f32| LeafState { age, exposure };
+        let mut leaf = Leaf::new(green, green, 1.5, 0.);
+        leaf.autumn_sun = sun;
+        leaf.states = Some(Arc::new(vec![state(0., 1.), state(1., 0.), state(1., 1.), state(2., 0.5), state(0.5, 0.)]));
+        assert_eq!(leaf.color(0).reflectance, green);
+        assert_eq!(leaf.color(1), DEFAULT_AUTUMN);
+        assert_eq!(leaf.color(2), sun);
+        assert_eq!(leaf.color(3), DEFAULT_DEAD);
+        // Halfway to autumn: halfway between the colours.
+        let half = (green + DEFAULT_AUTUMN.reflectance) / 2.;
+        assert!((leaf.color(4).reflectance.rgb - half.rgb).norm() < 1e-12);
+        // Faces without a state, and leaves without states, are healthy.
+        assert_eq!(leaf.color(99).reflectance, green);
+        leaf.states = None;
+        assert_eq!(leaf.color(3).reflectance, green);
+    }
+
+    #[test]
+    fn test_default_colours_are_physical() {
+        for c in [DEFAULT_AUTUMN, DEFAULT_DEAD] {
+            assert!((c.reflectance + c.transmittance).rgb.max() <= 1.);
+        }
+    }
+
+    #[test]
     fn test_coat_reflects_at_grazing_angles() {
         // With a coat and nothing transmitted or reflected diffusely, light arriving at a
         // grazing angle is mostly reflected; at normal incidence, about 4%.
         let s = leaf_scene(r#"{ "type": "leaf", "reflectance": [0, 0, 0], "transmittance": [0, 0, 0], "refractive_index": 1.5 }"#, 10.);
         let object = &s.objects.items()[0];
-        let leaf = Leaf { reflectance: Color::black(), transmittance: Color::black(), refractive_index: 1.5, roughness: 0. };
+        let leaf = Leaf::new(Color::black(), Color::black(), 1.5, 0.);
         let fraction = |rd: Vector3<f64>| {
             let i = Intersection { dist: 1., point: Vector3::zeros(), normal: Vector3::new(0., 1., 0.), face: 0, object };
             let r = Ray { ro: -rd, rd };

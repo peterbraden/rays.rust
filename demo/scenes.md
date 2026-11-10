@@ -16,9 +16,9 @@ Procedural art with a block city skyline at sunset.
 ![block terrain](./scenes/block-terrain.png)
 
 ## Trees
-Procedural trees of every built-in species (Weber and Penn's parametric model): palm, weeping
-willow, quaking aspen, black tupelo, balsam fir, Lombardy poplar, California black oak and
-shrubs. Each is
+Procedural trees (Weber and Penn's parametric model). From left to right: palm, weeping willow
+(with two Lombardy poplars mostly hidden behind it), quaking aspens, balsam firs, California
+black oak and black tupelo, with shrubs in front. Each is
 `{"type": "tree", "species": "...", "seed": 0, "location": [x, y, z], "bark": material, "leaves": material}`,
 with optional `"params"` overriding the species' parameters (see `src/procedural/tree.rs`).
 ![trees](./scenes/trees.png)

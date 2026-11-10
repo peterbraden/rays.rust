@@ -13,9 +13,11 @@
 //! ```
 //!
 //! for a wind shear s = du/dz (wind growing with height) and fall speed v. Crystals trail
-//! behind their cells in a curve, steepening with depth: the hooked "mares' tails" of cirrus
-//! uncinus, or long streaks (fibratus) when the cells are themselves stretched by the wind.
-//! Below the generating level the air is drier, and the crystals sublimate as they fall.
+//! behind their cells in a curve, steepening with depth. The wind usually turns with height
+//! too (`veer`), and then the trail hooks round sideways as it falls: the commas and "mares'
+//! tails" of cirrus uncinus. For a wind slowing linearly downwards and turning at a constant
+//! rate the drift has a closed form (`wind_integral`). Below the generating level the air is
+//! drier, and the crystals sublimate as they fall.
 //!
 //! Hogan and Kew fit the statistics of the generating field to radar: a power-law spectrum
 //! of fluctuations, as for turbulence, cut off at an outer scale, and stretched along the
@@ -24,13 +26,21 @@
 //! density is the generating field at its source, traced back along the fall:
 //!
 //! ```text
-//! density(p) = σ × profile(Z) × G(x - u_gen t + Δ(Z) ŵ)
+//! density(p) = σ × profile(Z) × G(warp(x - u_gen t - Δ(Z))) × fibres(...)
 //! ```
 //!
-//! averaged over a spread of fall speeds (crystals of different sizes fall at different
-//! speeds, which smears each streak along the wind), with fine detail stretched along the
-//! wind, and curl noise (Bridson, Hourihan and Nordenstam, "Curl-Noise for Procedural Fluid
-//! Flow", SIGGRAPH 2007) growing with depth for the turbulence the crystals fall through.
+//! with the fall speed varying from point to point (crystals of different sizes fall at
+//! different speeds, which frays each streak), and three things that make cirrus wispy and
+//! curved rather than streaky and solid:
+//!
+//! - Fibres. Within a cell, the ice generates in small elements a couple of hundred metres
+//!   across, and each trails into a strand along its own fall. The elements are fine,
+//!   direction-less noise at the generating level, looked up at each point's source, so the
+//!   strands follow their streaks' curves by construction, with clear air between them.
+//! - Large-scale flow: a divergence-free warp of the whole pattern, kilometres across, which
+//!   bends cells, streaks and fibres together into arcs.
+//! - Turbulence: curl noise (Bridson, Hourihan and Nordenstam, "Curl-Noise for Procedural
+//!   Fluid Flow", SIGGRAPH 2007) growing with depth, for the eddies the crystals fall through.
 //!
 //! Animation: the cells drift with the wind at the generating level, and evolve. The FFT
 //! gives two independent fields with the same spectrum (its real and imaginary parts), and
@@ -48,8 +58,6 @@ use std::f64::consts::PI;
 const FIELD_SIZE: usize = 1024;
 /// Texels of the generating field per `cell_size`.
 const TEXELS_PER_CELL: f64 = 6.;
-/// Fall speeds averaged per lookup, spread evenly across ± `fall_speed_spread`.
-const FALL_SPEEDS: usize = 4;
 
 /// The kinds of cirrus, as starting points for the parameters.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -160,11 +168,22 @@ pub struct HoganKewCirrus {
     /// Mean fall speed of the crystals, and its relative spread across crystal sizes.
     pub fall_speed: f64,
     pub fall_speed_spread: f64,
+    /// How far (radians) the wind turns between the top of the layer and its base. With speed
+    /// shear alone, ice trails straight behind its cell; when the wind's direction changes with
+    /// height too, the trail hooks round: the commas and hooks of cirrus uncinus.
+    pub veer: f64,
     /// Width of the soft edge of the cells, in standard deviations of the field.
     pub edge: f64,
-    /// Size of the fine detail, and how much it modulates the density (0 to 1).
-    pub detail_size: f64,
-    pub detail: f64,
+    /// The large-scale flow that bends cirrus into arcs: a divergence-free warp of the
+    /// horizontal, curl noise `flow_size` across, displacing by up to about `flow`.
+    pub flow_size: f64,
+    pub flow: f64,
+    /// Fibres: within a cell, ice generates in small elements about `fibre_width` across, each
+    /// of which trails into a strand of that width along its own fall; `fibres` (0 to 1) is
+    /// how completely the ice is gathered into them, from none (smooth cells) to all of it
+    /// (wisps with clear air between).
+    pub fibre_width: f64,
+    pub fibres: f64,
     /// Size of the curl-noise eddies, and how far (scene units) they displace the falling ice
     /// by the base of the layer.
     pub turbulence_size: f64,
@@ -216,7 +235,9 @@ impl CirrusField {
     /// Typical parameters for `genus`, in metres and seconds, for a layer from 8 to 10 km.
     pub fn new(genus: CirrusGenus) -> CirrusField {
         let (coverage, cell_size, spectral_slope, anisotropy) = match genus {
-            CirrusGenus::Cirrus => (0.25, 2500., 5. / 3., 3.),
+            // The streaks come from the fibres and the fall: the cells themselves only a little
+            // elongated.
+            CirrusGenus::Cirrus => (0.25, 2500., 5. / 3., 1.5),
             CirrusGenus::Cirrostratus => (0.9, 6000., 2.5, 1.5),
             CirrusGenus::Cirrocumulus => (0.5, 400., 5. / 3., 1.),
         };
@@ -238,13 +259,20 @@ impl HoganKewCirrus {
         let depth = f.top - f.base;
         // Extinction: cirrus is optically thin, an optical depth of about 0.03 to 3 overhead;
         // cirrostratus a veil the sun shines through.
-        let (max_density, generating_depth, fall_depth, sublimation, shear, fall_speed, detail, turbulence, patchiness)
+        let (max_density, generating_depth, fall_depth, sublimation, shear, fall_speed, turbulence, patchiness)
             = match f.genus {
-            // 10 m/s per km of shear, crystals falling 1 m/s: streaks trailing kilometres.
-            CirrusGenus::Cirrus => (1e-3, 0.15, 1., 1.5, 0.01, 1., 0.5, 0.15 * depth, 0.3),
-            CirrusGenus::Cirrostratus => (1.5e-4, 0.4, 1., 1., 0.003, 0.7, 0.3, 0.1 * depth, 0.3),
+            // 4 m/s per km of shear, crystals falling 1 m/s: streaks trailing several kilometres.
+            // Dense, as the fibres leave most of the volume clear.
+            CirrusGenus::Cirrus => (6e-3, 0.12, 1., 1.5, 0.004, 1., 0.15 * depth, 0.3),
+            CirrusGenus::Cirrostratus => (2e-4, 0.4, 1., 1., 0.003, 0.7, 0.1 * depth, 0.3),
             // Barely falling, and soon gone: compact cells in a thin layer near the top.
-            CirrusGenus::Cirrocumulus => (1.5e-3, 0.12, 0.25, 2., 0.002, 0.2, 0.4, 0.02 * depth, 0.8),
+            CirrusGenus::Cirrocumulus => (1.5e-3, 0.12, 0.25, 2., 0.002, 0.2, 0.02 * depth, 0.8),
+        };
+        let (veer, flow, fibres, fibre_width) = match f.genus {
+            // The wind turning 70° down through the layer: hooked trails.
+            CirrusGenus::Cirrus => (1.2, 6000., 0.95, 250.),
+            CirrusGenus::Cirrostratus => (0.2, 3000., 0.5, 300.),
+            CirrusGenus::Cirrocumulus => (0., 600., 0.2, 100.),
         };
         HoganKewCirrus {
             base: f.base,
@@ -258,10 +286,13 @@ impl HoganKewCirrus {
             shear,
             generating_wind: 20.,
             fall_speed,
-            fall_speed_spread: 0.5,
+            fall_speed_spread: 0.3,
+            veer,
             edge: 0.6,
-            detail_size: f.cell_size / 8.,
-            detail,
+            flow_size: f.cell_size * 5.,
+            flow,
+            fibre_width,
+            fibres,
             turbulence_size: f.cell_size,
             turbulence,
             time: 0.,
@@ -283,6 +314,74 @@ impl HoganKewCirrus {
             detail_noise: PerlinNoise::with_seed(f.seed.wrapping_mul(3).wrapping_add(1)),
             curl_noise: PerlinNoise::with_seed(f.seed.wrapping_mul(3).wrapping_add(2)),
         }
+    }
+
+    /// ∫ (u(z) - u_gen) dz down to depth `fallen` below the top, in the (along the wind,
+    /// across it) frame: the drift, times the fall speed, of ice relative to the cell it left.
+    /// The wind slows downwards at the shear s from a at the top, and turns at θ = veer / depth:
+    /// u(z) = (a - s z) (cos θz, sin θz), whose integral has a closed form. With θ → 0 it is
+    /// (-s Z² / 2, 0), straight back along the wind.
+    fn wind_integral(&self, fallen: f64) -> Vector2<f64> {
+        let (a, s, z) = (self.generating_wind, self.shear, fallen);
+        let theta = self.veer / (self.top - self.base);
+        let phi = theta * z;
+        let (along, across) = if phi.abs() < 1e-6 {
+            (a * z - s * z * z / 2., theta * (a * z * z / 2. - s * z * z * z / 3.))
+        } else {
+            ((a - s * z) * phi.sin() / theta + s * (1. - phi.cos()) / (theta * theta),
+             a / theta - (a - s * z) * phi.cos() / theta - s * phi.sin() / (theta * theta))
+        };
+        Vector2::new(along - a * z, across)
+    }
+
+    /// Where ice at depth `fallen`, now at `x` in the cells' frame, left its cell, for fall
+    /// speed `v`.
+    fn source(&self, x: &Vector2<f64>, fallen: f64, v: f64) -> Vector2<f64> {
+        let i = self.wind_integral(fallen) / v;
+        let across = Vector2::new(-self.wind.y, self.wind.x);
+        x - self.wind * i.x - across * i.y
+    }
+
+    /// The large-scale flow's warp of horizontal position (x, z), so that what is straight
+    /// along the wind in the generating field is curved in the sky.
+    fn warp(&self, x: &Vector2<f64>) -> Vector2<f64> {
+        if self.flow <= 0. {
+            return *x;
+        }
+        let q = x / self.flow_size;
+        let h = 1e-3;
+        let psi = |dx: f64, dz: f64| self.curl_noise.noise(q.x + dx, 3.7, q.y + dz);
+        let dpsi_dx = (psi(h, 0.) - psi(-h, 0.)) / (2. * h);
+        let dpsi_dz = (psi(0., h) - psi(0., -h)) / (2. * h);
+        x + Vector2::new(dpsi_dz, -dpsi_dx) * self.flow
+    }
+
+    /// The fall speed of the ice at `p` (in the cells' frame, so the pattern travels with
+    /// them): the mean, varied by up to `fall_speed_spread` either way by noise a few fibres
+    /// across.
+    fn fall_speed_at(&self, p: &Vector3<f64>) -> f64 {
+        if self.fall_speed_spread <= 0. {
+            return self.fall_speed;
+        }
+        let q = p / (self.fibre_width * 3.);
+        self.fall_speed * (1. + self.fall_speed_spread * self.curl_noise.noise(q.x, q.y, q.z).clamp(-1., 1.))
+    }
+
+    /// The generating elements at source position `q`, in [0, 1]: small, separate blobs of
+    /// noise, with no direction of their own and the same at every height, since each is the
+    /// head of a strand. Looked up at the source of the ice, each draws out into a strand along
+    /// its own fall, curving as the fall does.
+    fn fibre(&self, q: &Vector2<f64>) -> f64 {
+        let q = q / self.fibre_width;
+        let (mut sum, mut weight, mut amp, mut freq) = (0., 0., 1., 1.);
+        for _ in 0..3 {
+            let n = self.detail_noise.noise(q.x * freq, 0.37, q.y * freq);
+            sum += amp * n.max(0.).powi(2) * 4.;
+            weight += amp;
+            amp *= 0.5;
+            freq *= 2.2;
+        }
+        (sum / weight).min(1.)
     }
 
     /// The fraction of the generating level that is cloud.
@@ -350,6 +449,7 @@ impl HoganKewCirrus {
             return 0.;
         }
         let (framed, x) = self.frame(p, d);
+        let fall_speed = self.fall_speed_at(&framed);
         let edge_fade = {
             let from_centre = (Vector2::new(p.x, p.z) - self.center).abs().max() / self.extent;
             let t = ((1. - from_centre) / self.fade.max(1e-9)).clamp(0., 1.);
@@ -358,24 +458,16 @@ impl HoganKewCirrus {
         if edge_fade <= 0. {
             return 0.;
         }
-        let mut cells = 0.;
-        for i in 0..FALL_SPEEDS {
-            let spread = (i as f64 + 0.5) / FALL_SPEEDS as f64 * 2. - 1.;
-            let v = self.fall_speed * (1. + self.fall_speed_spread * spread);
-            let drift = self.shear * fallen * fallen / (2. * v);
-            let source = x + self.wind * drift;
-            cells += self.cells(source.x, source.y);
-        }
-        cells /= FALL_SPEEDS as f64;
+        // Where this ice came from: back along its fall, at a fall speed that varies from
+        // point to point (crystals of different sizes fall at different speeds), so that
+        // streaks fray rather than show copies of their cells. The fibres belong to the ice,
+        // so they are looked up there too, and curve with the streaks and with the flow.
+        let source = self.warp(&self.source(&x, fallen, fall_speed));
+        let cells = self.cells(source.x, source.y);
         if cells <= 0. {
             return 0.;
         }
-        // Fine fibres along the wind: noise stretched four times along it.
-        let along = Vector2::new(framed.x, framed.z).dot(&self.wind);
-        let across = Vector2::new(-self.wind.y, self.wind.x).dot(&Vector2::new(framed.x, framed.z));
-        let s = self.detail_size;
-        let fibre = self.detail_noise.fbm(along / (4. * s), p.y / s, across / s, 4, 0.5, 2.);
-        let detail = 1. - self.detail * (1. - (2. * fibre).min(1.));
+        let detail = 1. - self.fibres * (1. - self.fibre(&source));
         let patches = if self.patchiness > 0. {
             let q = Vector2::new(framed.x, framed.z) / self.patch_size;
             let n = self.detail_noise.fbm(q.x, 17.5, q.y, 3, 0.5, 2.);
@@ -401,8 +493,8 @@ impl DensityField for HoganKewCirrus {
     fn particle_radius(&self, p: &Vector3<f64>) -> Option<f64> {
         let fallen = (self.top - p.y).clamp(0., self.top - self.base);
         let d = fallen / (self.top - self.base);
-        let (_, x) = self.frame(p, d);
-        let source = x + self.wind * (self.shear * fallen * fallen / (2. * self.fall_speed));
+        let (framed, x) = self.frame(p, d);
+        let source = self.warp(&self.source(&x, fallen, self.fall_speed_at(&framed)));
         let maturity = self.cells(source.x, source.y);
         let young = self.young_size + (1. - self.young_size) * maturity;
         Some(self.particle_radius * (1. + self.particle_growth * d) * young)
@@ -462,7 +554,7 @@ mod tests {
             let mut c = HoganKewCirrus::new(f);
             c.edge = 1e-9;
             c.turbulence = 0.;
-            c.detail = 0.;
+            c.fibres = 0.;
             c.fall_speed_spread = 0.;
             c.patchiness = 0.;
             let got = cover_at(&c, 9999.);
@@ -476,9 +568,12 @@ mod tests {
         // is the generating level's, shifted (and scaled by the profile).
         let mut c = cirrus(CirrusGenus::Cirrus, 2);
         c.turbulence = 0.;
-        c.detail = 0.;
+        c.fibres = 0.;
+        c.flow = 0.;
+        c.veer = 0.;
         c.fall_speed_spread = 0.;
         c.patchiness = 0.;
+        c.shear = 0.01;
         let depth = 1200.;
         let drift = c.shear * depth * depth / (2. * c.fall_speed);
         assert!(drift > 5000., "{}", drift);
@@ -539,7 +634,7 @@ mod tests {
             sxy / n
         };
         let (along, across) = (corr(lag, 0.), corr(0., lag));
-        assert!(along > across + 0.1, "along {} across {}", along, across);
+        assert!(along > 1.5 * across, "along {} across {}", along, across);
     }
 
     #[test]
@@ -579,7 +674,7 @@ mod tests {
         assert_eq!(c.fraction(&Vector3::new(20001., 9500., 0.)), 0.);
         let inner = (0..200).map(|i| c.fraction(&Vector3::new(i as f64 * 50., 9500., 1000.))).sum::<f64>();
         let outer = (0..200).map(|i| c.fraction(&Vector3::new(19000. + i as f64 * 5., 9500., 1000.))).sum::<f64>();
-        assert!(inner > 50. && outer < 0.3 * inner, "outer {} inner {}", outer, inner);
+        assert!(inner > 10. && outer < 0.3 * inner, "outer {} inner {}", outer, inner);
     }
 
     #[test]
@@ -602,9 +697,43 @@ mod tests {
     }
 
     #[test]
+    fn test_veer_hooks_the_trail() {
+        // The drift's integral: with no veer, straight back along the wind as s Z² / 2; with
+        // it, turned aside, and agreeing with a numerical integral of the turning wind.
+        let mut c = cirrus(CirrusGenus::Cirrus, 12);
+        c.veer = 0.;
+        let straight = c.wind_integral(1500.);
+        assert!((straight.x + c.shear * 1500. * 1500. / 2.).abs() < 1e-6 && straight.y.abs() < 1e-9);
+        c.veer = 1.2;
+        let hooked = c.wind_integral(1500.);
+        let theta = c.veer / 2000.;
+        let n = 100_000;
+        let numeric = (0..n).fold(Vector2::zeros(), |acc, i| {
+            let z = (i as f64 + 0.5) / n as f64 * 1500.;
+            let speed = c.generating_wind - c.shear * z;
+            acc + (Vector2::new((theta * z).cos(), (theta * z).sin()) * speed - Vector2::new(c.generating_wind, 0.)) * (1500. / n as f64)
+        });
+        assert!((hooked - numeric).norm() < 1e-3 * numeric.norm(), "{} vs {}", hooked, numeric);
+        assert!(hooked.y.abs() > 0.3 * hooked.norm(), "barely turned: {}", hooked);
+    }
+
+    #[test]
+    fn test_fibres_leave_clear_air_between() {
+        // At the generating level, within the cells, most points are much thinner than the
+        // densest: wisps, not a fill.
+        let c = cirrus(CirrusGenus::Cirrus, 13);
+        let v: Vec<f64> = (0..20000).map(|i| c.fraction(&Vector3::new((i % 200) as f64 * 37., 9850., (i / 200) as f64 * 41.)))
+            .filter(|f| *f > 0.).collect();
+        let max = v.iter().cloned().fold(0., f64::max);
+        let thin = v.iter().filter(|f| **f < 0.2 * max).count() as f64 / v.len() as f64;
+        assert!(v.len() > 100 && thin > 0.5, "{} of {} thin", thin, v.len());
+    }
+
+    #[test]
     fn test_seeded() {
         let row = |c: HoganKewCirrus| (0..300).map(|i| c.fraction(&Vector3::new(i as f64 * 211., 9600., 0.))).collect::<Vec<f64>>();
         assert_eq!(row(cirrus(CirrusGenus::Cirrus, 7)), row(cirrus(CirrusGenus::Cirrus, 7)));
         assert_ne!(row(cirrus(CirrusGenus::Cirrus, 7)), row(cirrus(CirrusGenus::Cirrus, 8)));
     }
 }
+

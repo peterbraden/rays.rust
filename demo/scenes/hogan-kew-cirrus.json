@@ -7,7 +7,7 @@
   "shadow_bias": 0.01,
   "max_depth": 64,
   "path_termination": "russian_roulette",
-  "output": { "glare": true },
+  "output": { "tonemap": "reinhard", "exposure": 1.3, "glare": true },
 
   "materials": {
     "GROUND": { "type": "lambertian", "albedo": [0.12, 0.16, 0.08] }

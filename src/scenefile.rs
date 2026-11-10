@@ -442,7 +442,9 @@ impl SceneFile {
     /// The genus sets the rest, each of which can be overridden: `coverage`, `cell_size`,
     /// `spectral_slope`, `anisotropy` (the generating cells); `density`, `generating_depth`,
     /// `fall_depth`, `sublimation` (the ice); `shear`, `generating_wind`, `fall_speed`,
-    /// `fall_speed_spread` (the fallstreaks); `edge`, `detail_size`, `detail`,
+    /// `fall_speed_spread`, `veer` (degrees the wind turns down through the layer: hooks) (the
+    /// fallstreaks); `flow_size` and `flow` (the large-scale flow that curves them);
+    /// `fibre_width` and `fibres` (0 to 1: how wispy); `edge`,
     /// `turbulence_size`, `turbulence`; `patchiness` and `patch_size`; `particle_radius` (µm, at
     /// the generating level), `particle_growth` (relative growth by the base) and `young_size`
     /// (relative size at the cells' edges, where ice is newest), for `diffraction`; `fade`, the fraction of
@@ -478,8 +480,11 @@ impl SceneFile {
         c.fall_speed = num("fall_speed", c.fall_speed);
         c.fall_speed_spread = num("fall_speed_spread", c.fall_speed_spread).clamp(0., 0.95);
         c.edge = num("edge", c.edge).max(1e-9);
-        c.detail_size = num("detail_size", c.detail_size);
-        c.detail = num("detail", c.detail).clamp(0., 1.);
+        c.veer = num("veer", c.veer.to_degrees()).to_radians();
+        c.flow_size = num("flow_size", c.flow_size);
+        c.flow = num("flow", c.flow).max(0.);
+        c.fibre_width = num("fibre_width", c.fibre_width).max(1.);
+        c.fibres = num("fibres", c.fibres).clamp(0., 1.);
         c.turbulence_size = num("turbulence_size", c.turbulence_size);
         c.turbulence = num("turbulence", c.turbulence);
         c.time = num("time", c.time);

@@ -19,7 +19,8 @@ four generators:
 | `nubis_clouds` | cumulus, stratocumulus, stratus, altostratus | Noise-based modelling (Schneider, Horizon Zero Dawn's Nubis) |
 | `harris_cumulus` | cumulus, as they grow and die | A simulation of a sunny day (Harris et al. 2003) |
 
-Render any of them with `cargo run --release -- demo/scenes/<scene>.json`.
+Render any of them with `cargo run --release -- demo/scenes/<scene>.json`. The altostratus, stratocumulus
+and stratus images are quick previews (480 x 300, 8 samples per pixel), so they are noisy.
 
 | | Cloud | Scene |
 |---|---|---|

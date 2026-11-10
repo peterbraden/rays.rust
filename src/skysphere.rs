@@ -158,9 +158,12 @@ pub struct SkyMaterial {
     /// Mie anisotropy factor (controls the size of the glow around the sun)
     mie_anisotropy: f64,
 
+    /// Ozone's absorption coefficients per channel (zero to leave it out).
+    ozone: Vector3<f64>,
+
     /// Rayleigh and Mie optical depths towards the sun by altitude, every `ALTITUDE_STEP`
     /// (None in the earth's shadow), for aerial perspective; built on first use.
-    sun_depths: std::sync::OnceLock<Vec<Option<(f64, f64)>>>,
+    sun_depths: std::sync::OnceLock<Vec<Option<Depths>>>,
 
     /// Whether to add light scattered more than once (`MultipleScattering`), and the albedo
     /// of the earth beneath, which reflects some of it back up.
@@ -229,31 +232,37 @@ impl SkyMaterial {
 }
 
 impl SkyMaterial {
-    /// Rayleigh and Mie optical depths from `p` to the top of the atmosphere towards the sun, or
-    /// None if the earth is in the way.
-    fn optical_depth_to_sun(&self, p: Vector3<f64>) -> Option<(f64, f64)> {
+    /// Optical depths from `p` to the top of the atmosphere towards the sun, or None if the
+    /// earth is in the way.
+    fn optical_depth_to_sun(&self, p: Vector3<f64>) -> Option<Depths> {
         self.optical_depth_towards(p, self.sun_direction)
     }
 
-    /// Rayleigh and Mie optical depths from `p` to the top of the atmosphere along unit `dir`,
-    /// or None if the earth is in the way.
-    fn optical_depth_towards(&self, p: Vector3<f64>, dir: Vector3<f64>) -> Option<(f64, f64)> {
+    /// Optical depths from `p` to the top of the atmosphere along unit `dir`, or None if the
+    /// earth is in the way.
+    fn optical_depth_towards(&self, p: Vector3<f64>, dir: Vector3<f64>) -> Option<Depths> {
         let light_ray = Ray { ro: p, rd: dir };
         if self.earth.intersects(&light_ray).is_some() {
             return None;
         }
         let light_len = self.atmosphere.intersects(&light_ray)?.dist;
-        let mut optical_depth_r = 0.0;
-        let mut optical_depth_m = 0.0;
-
         // Integrate along the light ray to the sun (see `path_samples`).
-        for (t, step) in path_samples(light_len, DEFAULT_NUM_SAMPLES_LIGHT) {
-            let sample = p + t * dir;
-            let height = (sample - self.atmosphere.center).norm() - self.earth.radius;
-            optical_depth_r += self.optical_depth(height, self.rayleigh_thickness, step);
-            optical_depth_m += self.optical_depth(height, self.mie_thickness, step);
+        Some(path_samples(light_len, DEFAULT_NUM_SAMPLES_LIGHT).fold(Depths::default(), |acc, (t, step)| {
+            let height = (p + t * dir - self.atmosphere.center).norm() - self.earth.radius;
+            acc + self.depths(height, step)
+        }))
+    }
+
+    /// The Rayleigh, Mie and ozone optical depths of a step of length `step` at `height`.
+    fn depths(&self, height: f64, step: f64) -> Depths {
+        // Ozone: a tent from 10 km to 40 km, peaking at 25 km (Bruneton 2017, after the US
+        // Standard Atmosphere 1976).
+        let ozone = (1. - (height - 25_000.).abs() / 15_000.).max(0.);
+        Depths {
+            r: self.optical_depth(height, self.rayleigh_thickness, step),
+            m: self.optical_depth(height, self.mie_thickness, step),
+            o: ozone * step,
         }
-        Some((optical_depth_r, optical_depth_m))
     }
 
     /// Linear radiance arriving along the view ray.
@@ -281,94 +290,54 @@ impl SkyMaterial {
         table.lookup((p - self.earth.center).norm() - self.earth.radius, up.dot(&self.sun_direction), self)
     }
 
-    /// The scattering coefficient (per channel) times a step, from that step's Rayleigh and
-    /// Mie optical depths.
-    fn scattered(&self, rayleigh_depth: f64, mie_depth: f64) -> Vector3<f64> {
-        self.rayleigh_coefficients * rayleigh_depth + Vector3::repeat(self.mie_coefficient * mie_depth)
+    /// The scattering coefficient (per channel) times a step, from that step's optical depths.
+    /// Ozone only absorbs.
+    fn scattered(&self, d: Depths) -> Vector3<f64> {
+        self.rayleigh_coefficients * d.r + Vector3::repeat(self.mie_coefficient * d.m)
     }
 
-    /// The transmittance for accumulated Rayleigh and Mie optical depths.
-    fn transmittance_of(&self, rayleigh_depth: f64, mie_depth: f64) -> Vector3<f64> {
-        (self.rayleigh_coefficients * rayleigh_depth + Vector3::repeat(self.mie_coefficient * 1.1 * mie_depth)).map(|t| (-t).exp())
+    /// The transmittance for accumulated optical depths: Rayleigh scattering, Mie scattering
+    /// and absorption (extinction 1.1 times scattering), and ozone absorption.
+    fn transmittance_of(&self, d: Depths) -> Vector3<f64> {
+        (self.rayleigh_coefficients * d.r + Vector3::repeat(self.mie_coefficient * 1.1 * d.m) + self.ozone * d.o)
+            .map(|t| (-t).exp())
     }
 
     /// Light scattered towards the viewer along the view ray, by Rayleigh and by Mie scattering,
     /// before the phase functions and brightness are applied. Unlike the phase functions, which
     /// peak sharply around the sun, these vary smoothly with direction.
     pub fn scattering(&self, r: &Ray) -> Scattering {
-        // Use the provided scattering coefficients
-        let beta_r: Vector3<f64> = self.rayleigh_coefficients;
-        let mie_coef = self.mie_coefficient;
-        let beta_m: Vector3<f64> = Vector3::new(mie_coef, mie_coef, mie_coef);
-        
         let ray_max = match self.view_ray_length(r) {
             Some(d) => d,
             None => return (Vector3::zeros(), Vector3::zeros(), Vector3::zeros()),
         };
-        
-
-        let mut rayleigh_sum: Vector3<f64> = Vector3::zeros();
-        let mut mie_sum: Vector3<f64> = Vector3::zeros();
-        let mut multiple_sum: Vector3<f64> = Vector3::zeros();
-
-        // Track accumulated optical depth for more physically accurate extinction calculation
-        // This is important for proper sunset colors (see implementation note at top of file)
-        let mut optical_depth_r = 0.0;
-        let mut optical_depth_m = 0.0;
-
-        
-        
+        let (mut rayleigh_sum, mut mie_sum, mut multiple_sum) = (Vector3::zeros(), Vector3::zeros(), Vector3::zeros());
+        // Optical depth from the viewer, accumulated along the ray: this is what makes sunsets
+        // red (see the note at the top of the file).
+        let mut depth = Depths::default();
         // Integrate along the view ray through the atmosphere (see `path_samples`).
         for (t, step) in path_samples(ray_max, DEFAULT_NUM_SAMPLES) {
             let sample_position = r.ro + t * r.rd;
-            
-            // Calculate height above the earth's surface
             let height = (sample_position - self.atmosphere.center).norm() - self.earth.radius;
-            
-            // Calculate Rayleigh and Mie optical depths for this segment
-            let rayleigh_depth = self.optical_depth(height, self.rayleigh_thickness, step);
-            let mie_depth = self.optical_depth(height, self.mie_thickness, step);
-            
-            // Optical depth from the viewer to this sample, the middle of its step.
-            optical_depth_r += rayleigh_depth / 2.;
-            optical_depth_m += mie_depth / 2.;
-
+            let here = self.depths(height, step);
+            // From the viewer to this sample, the middle of its step.
+            depth = depth + here * 0.5;
             // Light scattered here after scattering before: from the whole sky, even in the
             // earth's shadow.
-            multiple_sum += self.transmittance_of(optical_depth_r, optical_depth_m)
-                .component_mul(&self.scattered(rayleigh_depth, mie_depth))
+            multiple_sum += self.transmittance_of(depth)
+                .component_mul(&self.scattered(here))
                 .component_mul(&self.multiple_at(&sample_position));
-            
-            // Sunlight reaching this sample: none in the earth's shadow.
-            let to_sun = self.optical_depth_to_sun(sample_position);
-            let (optical_depth_light_r, optical_depth_light_m) = match to_sun {
-                Some(d) => d,
-                None => {
-                    optical_depth_r += rayleigh_depth / 2.;
-                    optical_depth_m += mie_depth / 2.;
-                    continue;
-                },
-            };
-            
-            // Calculate the total extinction for both Rayleigh and Mie
-            // Use the total accumulated optical depth from both camera path and light path
-            // This is essential for correct application of the Beer-Lambert law
-            let tau = beta_r * (optical_depth_r + optical_depth_light_r) + 
-                    beta_m * 1.1 * (optical_depth_m + optical_depth_light_m);
-            
-            // Calculate attenuation using Beer's Law
-            let attenuation = Vector3::new((-tau.x).exp(), (-tau.y).exp(), (-tau.z).exp());
-            
-            // Accumulate contributions for Rayleigh and Mie
-            rayleigh_sum += attenuation.component_mul(&Vector3::new(rayleigh_depth, rayleigh_depth, rayleigh_depth));
-            mie_sum += attenuation.component_mul(&Vector3::new(mie_depth, mie_depth, mie_depth));
+            // Sunlight reaching this sample, none in the earth's shadow, attenuated on its way
+            // in and on its way out to the viewer (Beer-Lambert along the whole path).
+            if let Some(to_sun) = self.optical_depth_to_sun(sample_position) {
+                let attenuation = self.transmittance_of(depth + to_sun);
+                rayleigh_sum += attenuation * here.r;
+                mie_sum += attenuation * here.m;
+            }
             // And on through the rest of the step.
-            optical_depth_r += rayleigh_depth / 2.;
-            optical_depth_m += mie_depth / 2.;
-        } 
-        
-        // Combine Rayleigh and Mie scattering
-        (rayleigh_sum.component_mul(&beta_r), mie_sum.component_mul(&beta_m), multiple_sum)
+            depth = depth + here * 0.5;
+        }
+        (rayleigh_sum.component_mul(&self.rayleigh_coefficients), mie_sum * self.mie_coefficient, multiple_sum)
     }
 }
 
@@ -376,7 +345,7 @@ impl SkyMaterial {
 impl SkyMaterial {
     /// Optical depths towards the sun from `altitude`, from a table by altitude: the sun is far
     /// enough that, over a scene, only height above the ground matters.
-    fn sun_depth_at(&self, altitude: f64) -> Option<(f64, f64)> {
+    fn sun_depth_at(&self, altitude: f64) -> Option<Depths> {
         let table = self.sun_depths.get_or_init(|| (0..ALTITUDE_STEPS).map(|i| {
             let p = self.earth.center + Vector3::new(0., self.earth.radius + (i as f64 * ALTITUDE_STEP).max(1.), 0.);
             self.optical_depth_to_sun(p)
@@ -385,7 +354,7 @@ impl SkyMaterial {
         let i = (x as usize).min(ALTITUDE_STEPS - 2);
         let f = x - i as f64;
         match (table[i], table[i + 1]) {
-            (Some(a), Some(b)) => Some((a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f)),
+            (Some(a), Some(b)) => Some(a * (1. - f) + b * f),
             // At the edge of the earth's shadow: whichever side we're nearer.
             (a, b) => if f < 0.5 { a } else { b },
         }
@@ -402,33 +371,27 @@ impl SkyMaterial {
             Some(l) => l.min(distance),
             None => return (Vector3::repeat(1.), Vector3::zeros()),
         };
-        let beta_r = self.rayleigh_coefficients;
-        let beta_m = Vector3::repeat(self.mie_coefficient);
-        let (mut depth_r, mut depth_m) = (0., 0.);
+        let mut depth = Depths::default();
         let (mut rayleigh, mut mie, mut multiple) = (Vector3::zeros(), Vector3::zeros(), Vector3::zeros());
         for (t, step) in path_samples(length, DEFAULT_NUM_SAMPLES) {
             let p = origin + d * t;
             let height = (p - self.earth.center).norm() - self.earth.radius;
-            let (dr, dm) = (self.optical_depth(height, self.rayleigh_thickness, step),
-                            self.optical_depth(height, self.mie_thickness, step));
+            let here = self.depths(height, step);
             // To the middle of this step.
-            depth_r += dr / 2.;
-            depth_m += dm / 2.;
-            multiple += self.transmittance_of(depth_r, depth_m)
-                .component_mul(&self.scattered(dr, dm))
+            depth = depth + here * 0.5;
+            multiple += self.transmittance_of(depth)
+                .component_mul(&self.scattered(here))
                 .component_mul(&self.multiple_at(&p));
-            if let Some((sr, sm)) = self.sun_depth_at(height) {
-                let tau = beta_r * (depth_r + sr) + beta_m * 1.1 * (depth_m + sm);
-                let attenuation = tau.map(|t| (-t).exp());
-                rayleigh += attenuation * dr;
-                mie += attenuation * dm;
+            if let Some(to_sun) = self.sun_depth_at(height) {
+                let attenuation = self.transmittance_of(depth + to_sun);
+                rayleigh += attenuation * here.r;
+                mie += attenuation * here.m;
             }
-            depth_r += dr / 2.;
-            depth_m += dm / 2.;
+            depth = depth + here * 0.5;
         }
-        let transmittance = (beta_r * depth_r + beta_m * 1.1 * depth_m).map(|t| (-t).exp());
-        let inscattered = self.apply_phase(d, rayleigh.component_mul(&beta_r), mie.component_mul(&beta_m), multiple) * SKY_CALIBRATION;
-        (transmittance, inscattered)
+        let inscattered = self.apply_phase(d, rayleigh.component_mul(&self.rayleigh_coefficients), mie * self.mie_coefficient, multiple)
+            * SKY_CALIBRATION;
+        (self.transmittance_of(depth), inscattered)
     }
 }
 
@@ -439,6 +402,36 @@ impl MaterialModel for SkyMaterial {
         ScatteredRay { sampled_lights: false, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
     }
 }
+
+/// Optical depths along a path: the integrals of the Rayleigh and Mie scatterers' relative
+/// densities (in metres of sea-level air), and of ozone's (in metres at its peak).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Depths {
+    r: f64,
+    m: f64,
+    o: f64,
+}
+
+impl std::ops::Add for Depths {
+    type Output = Depths;
+    fn add(self, b: Depths) -> Depths {
+        Depths { r: self.r + b.r, m: self.m + b.m, o: self.o + b.o }
+    }
+}
+
+impl std::ops::Mul<f64> for Depths {
+    type Output = Depths;
+    fn mul(self, k: f64) -> Depths {
+        Depths { r: self.r * k, m: self.m * k, o: self.o * k }
+    }
+}
+
+/// Ozone's absorption coefficients (per metre, at the peak of its layer) for the red, green and
+/// blue channels (680, 550 and 440 nm): Bruneton's 2017 "Precomputed Atmospheric Scattering:
+/// a New Implementation" and Hillaire 2020 (table 1). It absorbs most in the green and orange
+/// (the Chappuis band), which keeps long, low paths from tinting green and deepens the blue of
+/// twilight.
+const OZONE_ABSORPTION: [f64; 3] = [0.650e-6, 1.881e-6, 0.085e-6];
 
 /// Rayleigh and Mie in-scattering, before their phase functions, and light scattered more than
 /// once (`SkyMaterial::scattering`).
@@ -505,19 +498,18 @@ impl MultipleScattering {
             for d in &directions {
                 let r = Ray { ro: x, rd: *d };
                 let length = match sky.view_ray_length(&r) { Some(l) => l, None => continue };
-                let (mut dr, mut dm) = (0., 0.);
+                let mut depth = Depths::default();
                 for (t, step) in path_samples(length, MS_STEPS) {
                     let y = x + d * t;
                     let h = (y - sky.earth.center).norm() - sky.earth.radius;
-                    let (a, b) = (sky.optical_depth(h, sky.rayleigh_thickness, step), sky.optical_depth(h, sky.mie_thickness, step));
-                    let t_view = sky.transmittance_of(dr + a / 2., dm + b / 2.);
-                    let scattered = t_view.component_mul(&sky.scattered(a, b));
+                    let here = sky.depths(h, step);
+                    let t_view = sky.transmittance_of(depth + here * 0.5);
+                    let scattered = t_view.component_mul(&sky.scattered(here));
                     transfer += scattered;
-                    if let Some((sr, sm)) = sky.optical_depth_towards(y, sun) {
-                        second += scattered.component_mul(&sky.transmittance_of(sr, sm)) * p_u;
+                    if let Some(to_sun) = sky.optical_depth_towards(y, sun) {
+                        second += scattered.component_mul(&sky.transmittance_of(to_sun)) * p_u;
                     }
-                    dr += a;
-                    dm += b;
+                    depth = depth + here;
                 }
                 // Sunlit ground where the direction meets it, reflected diffusely.
                 if let Some(ground) = sky.earth.intersects(&r).filter(|g| g.dist <= length * (1. + 1e-9)) {
@@ -525,9 +517,9 @@ impl MultipleScattering {
                     let normal = (y - sky.earth.center).normalize();
                     let cos = normal.dot(&sun);
                     let to_sun = if cos > 0. { sky.optical_depth_towards(y + normal, sun) } else { None };
-                    if let Some((sr, sm)) = to_sun {
-                        let lit = sky.transmittance_of(sr, sm) * (cos * sky.ground_albedo / std::f64::consts::PI);
-                        second += sky.transmittance_of(dr, dm).component_mul(&lit);
+                    if let Some(to_sun) = to_sun {
+                        let lit = sky.transmittance_of(to_sun) * (cos * sky.ground_albedo / std::f64::consts::PI);
+                        second += sky.transmittance_of(depth).component_mul(&lit);
                     }
                 }
             }
@@ -716,13 +708,7 @@ impl SkyMaterial {
     /// is in the way.
     pub fn sun_transmittance_at(&self, altitude: f64) -> Vector3<f64> {
         let point = self.earth.center + Vector3::new(0., self.earth.radius + altitude.max(1.), 0.);
-        match self.optical_depth_to_sun(point) {
-            Some((r, m)) => {
-                let tau = self.rayleigh_coefficients * r + Vector3::repeat(self.mie_coefficient * 1.1 * m);
-                tau.map(|t| (-t).exp())
-            },
-            None => Vector3::zeros(),
-        }
+        self.optical_depth_to_sun(point).map_or(Vector3::zeros(), |d| self.transmittance_of(d))
     }
 }
 
@@ -783,6 +769,7 @@ pub fn parse_sky_material(o: &Value) -> SkyMaterial {
         mie_coefficient,
         mie_anisotropy,
         sun_depths: std::sync::OnceLock::new(),
+        ozone: if o["ozone"].as_bool() == Some(false) { Vector3::zeros() } else { Vector3::from(OZONE_ABSORPTION) },
         multiple_scattering: o["multiple_scattering"].as_bool().unwrap_or(true),
         ground_albedo: SceneFile::parse_number(&o["ground_albedo"], 0.2),
         ms_table: std::sync::OnceLock::new(),
@@ -803,12 +790,27 @@ mod tests {
     }
 
     #[test]
+    fn test_ozone_absorbs_green() {
+        // The vertical column: 15 km at peak density, 1 - exp(-1.881e-6 x 15000) = 2.8% of green,
+        // little of blue. Lower suns cross more of it.
+        let with = sky_at("[0, 1, 0]");
+        let without = SkyMaterial { ozone: Vector3::zeros(), ..sky_at("[0, 1, 0]") };
+        let ratio = with.sun_transmittance_at(0.).component_div(&without.sun_transmittance_at(0.));
+        assert!((ratio.y - (-1.881e-6f64 * 15000.).exp()).abs() < 0.002, "{}", ratio);
+        assert!(ratio.z > ratio.x && ratio.x > ratio.y, "{}", ratio);
+        let (low_with, low_without) = (sky_at("[0, 0.05, 1]"), SkyMaterial { ozone: Vector3::zeros(), ..sky_at("[0, 0.05, 1]") });
+        let low = low_with.sun_transmittance_at(0.).component_div(&low_without.sun_transmittance_at(0.));
+        assert!(low.y < ratio.y - 0.05, "{} vs {}", low, ratio);
+    }
+
+    #[test]
     fn test_multiple_scattering_whitens_the_horizon() {
         // Single scattering alone integrates a green horizon from 900 m; with every order of
         // scattering it is pale, blue at least as strong as green, and the sky only brighter.
         let o = Vector3::new(0., 900., 0.);
         let horizon = Ray { ro: o, rd: Vector3::new(0., 0.002, 1.).normalize() };
-        let single = single_scattering_sky_at("[-0.6, 0.55, -0.5]").radiance(&horizon);
+        // Without ozone, which takes some of the green out by itself.
+        let single = SkyMaterial { ozone: Vector3::zeros(), ..single_scattering_sky_at("[-0.6, 0.55, -0.5]") }.radiance(&horizon);
         let full = sky_at("[-0.6, 0.55, -0.5]").radiance(&horizon);
         assert!(single.y > single.z, "expected the single-scattering horizon green: {}", single);
         assert!(full.z >= full.y && full.x > single.x, "{} vs {}", full, single);
@@ -836,37 +838,33 @@ mod tests {
     /// The sky's radiance and the sun's transmittance by brute force: thousands of even steps.
     fn brute_force(sky: &SkyMaterial, r: &Ray) -> (Vector3<f64>, Vector3<f64>) {
         let n = 4096;
-        let depth_to_sun = |p: Vector3<f64>| -> Option<(f64, f64)> {
+        let height = |p: Vector3<f64>| (p - sky.earth.center).norm() - sky.earth.radius;
+        let depth_to_sun = |p: Vector3<f64>| -> Option<Depths> {
             let lr = Ray { ro: p, rd: sky.sun_direction };
             if sky.earth.intersects(&lr).is_some() { return None; }
             let len = sky.atmosphere.intersects(&lr)?.dist;
             let step = len / n as f64;
-            Some((0..n).fold((0., 0.), |(a, b), j| {
-                let h = (p + (j as f64 + 0.5) * step * sky.sun_direction - sky.earth.center).norm() - sky.earth.radius;
-                (a + (-h / sky.rayleigh_thickness).exp() * step, b + (-h / sky.mie_thickness).exp() * step)
+            Some((0..n).fold(Depths::default(), |acc, j| {
+                acc + sky.depths(height(p + (j as f64 + 0.5) * step * sky.sun_direction), step)
             }))
         };
-        let beta_m = Vector3::repeat(sky.mie_coefficient);
-        let transmittance = |(r_, m): (f64, f64)| (sky.rayleigh_coefficients * r_ + beta_m * 1.1 * m).map(|t| (-t).exp());
         let length = sky.view_ray_length(r).unwrap();
         let step = length / n as f64;
-        let (mut dr, mut dm) = (0., 0.);
+        let mut depth = Depths::default();
         let (mut ray, mut mie) = (Vector3::zeros(), Vector3::zeros());
         for i in 0..n {
             let p = r.ro + r.rd * ((i as f64 + 0.5) * step);
-            let h = (p - sky.earth.center).norm() - sky.earth.radius;
-            let (a, b) = ((-h / sky.rayleigh_thickness).exp() * step, (-h / sky.mie_thickness).exp() * step);
-            if let Some((sr, sm)) = depth_to_sun(p) {
-                let t = transmittance((dr + a / 2. + sr, dm + b / 2. + sm));
-                ray += t * a;
-                mie += t * b;
+            let here = sky.depths(height(p), step);
+            if let Some(to_sun) = depth_to_sun(p) {
+                let t = sky.transmittance_of(depth + here * 0.5 + to_sun);
+                ray += t * here.r;
+                mie += t * here.m;
             }
-            dr += a;
-            dm += b;
+            depth = depth + here;
         }
-        let radiance = sky.apply_phase(&r.rd, ray.component_mul(&sky.rayleigh_coefficients), mie.component_mul(&beta_m), Vector3::zeros());
+        let radiance = sky.apply_phase(&r.rd, ray.component_mul(&sky.rayleigh_coefficients), mie * sky.mie_coefficient, Vector3::zeros());
         let ground = sky.earth.center + Vector3::new(0., sky.earth.radius + 1., 0.);
-        (radiance, transmittance(depth_to_sun(ground).unwrap()))
+        (radiance, sky.transmittance_of(depth_to_sun(ground).unwrap()))
     }
 
     #[test]
@@ -980,6 +978,7 @@ mod tests {
             mie_coefficient: DEFAULT_MIE_COEFFICIENT,
             mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
             sun_depths: Default::default(),
+            ozone: Vector3::zeros(),
             multiple_scattering: false,
             ground_albedo: 0.2,
             ms_table: Default::default(),
@@ -1006,6 +1005,7 @@ mod tests {
             mie_coefficient: DEFAULT_MIE_COEFFICIENT,
             mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
             sun_depths: Default::default(),
+            ozone: Vector3::zeros(),
             multiple_scattering: false,
             ground_albedo: 0.2,
             ms_table: Default::default(),
@@ -1064,6 +1064,7 @@ mod tests {
             mie_coefficient: DEFAULT_MIE_COEFFICIENT,
             mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
             sun_depths: Default::default(),
+            ozone: Vector3::zeros(),
             multiple_scattering: false,
             ground_albedo: 0.2,
             ms_table: Default::default(),
@@ -1088,6 +1089,7 @@ mod tests {
             mie_coefficient: DEFAULT_MIE_COEFFICIENT,
             mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
             sun_depths: Default::default(),
+            ozone: Vector3::zeros(),
             multiple_scattering: false,
             ground_albedo: 0.2,
             ms_table: Default::default(),
@@ -1114,6 +1116,7 @@ mod tests {
             mie_coefficient: DEFAULT_MIE_COEFFICIENT,
             mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
             sun_depths: Default::default(),
+            ozone: Vector3::zeros(),
             multiple_scattering: false,
             ground_albedo: 0.2,
             ms_table: Default::default(),

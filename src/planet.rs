@@ -467,3 +467,113 @@ mod cube_tests {
         assert!(checked > 1000);
     }
 }
+
+/// Wind over a whole planet, for clouds that follow it (cirrus streaks, drift): a direction in
+/// the local horizontal at every point. No smooth wind blows everywhere on a sphere (the
+/// "hairy ball" theorem), and the Earth's doesn't: it runs in bands by latitude (the general
+/// circulation) — easterly trade winds in the tropics, the westerly jet streams of the mid
+/// latitudes, easterlies again round the poles — meandering in eddies hundreds of kilometres
+/// across. Here, the bands, plus the surface curl of solid noise ψ, up × ∇ψ: horizontal and
+/// divergence-free (Bridson et al.'s curl noise, on the sphere), so the eddies swirl without
+/// converging.
+pub struct GlobalWind {
+    /// Unit vector of the planet's axis (north).
+    pub pole: Vector3<f64>,
+    /// Size of the eddies, and their strength relative to the strongest band (about 1).
+    pub eddy_size: f64,
+    pub eddies: f64,
+    pub radius: f64,
+    noise: crate::noise::PerlinNoise,
+}
+
+impl GlobalWind {
+    pub fn new(pole: Vector3<f64>, radius: f64, seed: u64) -> GlobalWind {
+        GlobalWind { pole: pole.normalize(), eddy_size: 800_000., eddies: 0.6, radius, noise: crate::noise::PerlinNoise::with_seed(seed) }
+    }
+
+    /// The eastward speed of the bands at latitude `lat` (radians), relative to the jets':
+    /// negative for easterlies.
+    pub fn zonal(&self, lat: f64) -> f64 {
+        let deg = lat.to_degrees().abs();
+        let band = |centre: f64, width: f64| (-((deg - centre) / width).powi(2)).exp();
+        -0.5 * band(0., 15.) + band(40., 12.) - 0.3 * band(75., 8.)
+    }
+
+    /// The local wind at the unit direction `up` (unnormalised, horizontal).
+    pub fn wind(&self, up: &Vector3<f64>) -> Vector3<f64> {
+        let lat = up.dot(&self.pole).clamp(-1., 1.).asin();
+        let east = self.pole.cross(up);
+        let east = if east.norm() > 1e-9 { east.normalize() } else { Vector3::zeros() };
+        let q = up * (self.radius / self.eddy_size);
+        let h = 1e-3;
+        let psi = |dx: Vector3<f64>| self.noise.noise(q.x + dx.x, q.y + dx.y, q.z + dx.z);
+        let grad = Vector3::new(
+            psi(Vector3::new(h, 0., 0.)) - psi(Vector3::new(-h, 0., 0.)),
+            psi(Vector3::new(0., h, 0.)) - psi(Vector3::new(0., -h, 0.)),
+            psi(Vector3::new(0., 0., h)) - psi(Vector3::new(0., 0., -h)),
+        ) / (2. * h);
+        east * self.zonal(lat) + up.cross(&grad) * self.eddies
+    }
+
+    /// The local wind's direction at `up`: a unit horizontal vector (any, where it is calm).
+    pub fn direction(&self, up: &Vector3<f64>) -> Vector3<f64> {
+        let w = self.wind(up);
+        if w.norm() > 1e-9 {
+            return w.normalize();
+        }
+        let any = if up.x.abs() < 0.9 { Vector3::x() } else { Vector3::y() };
+        up.cross(&any).normalize()
+    }
+}
+
+#[cfg(test)]
+mod wind_tests {
+    use super::*;
+
+    #[test]
+    fn test_wind_is_horizontal_and_banded() {
+        let mut w = GlobalWind::new(Vector3::z(), EARTH_RADIUS, 1);
+        let mut rng = crate::geometry::Pcg32::new(5, 0);
+        for _ in 0..2000 {
+            let up = crate::geometry::point_on_unit_sphere(rng.next_f64(), rng.next_f64());
+            assert!(w.wind(&up).dot(&up).abs() < 1e-9);
+            let d = w.direction(&up);
+            assert!((d.norm() - 1.).abs() < 1e-9 && d.dot(&up).abs() < 1e-9);
+        }
+        // Without eddies: easterly trades at the equator, westerlies at 40°.
+        w.eddies = 0.;
+        let at = |lat: f64, lon: f64| {
+            let (l, o) = (lat.to_radians(), lon.to_radians());
+            Vector3::new(l.cos() * o.cos(), l.cos() * o.sin(), l.sin())
+        };
+        let east = |up: Vector3<f64>| Vector3::z().cross(&up).normalize();
+        for lon in [0., 100., 250.] {
+            assert!(w.wind(&at(0., lon)).dot(&east(at(0., lon))) < 0.);
+            assert!(w.wind(&at(40., lon)).dot(&east(at(40., lon))) > 0.);
+            assert!(w.wind(&at(-40., lon)).dot(&east(at(-40., lon))) > 0.);
+        }
+    }
+
+    #[test]
+    fn test_eddies_are_divergence_free() {
+        // The surface divergence of up × ∇ψ, by the flux through a small loop: none.
+        let mut w = GlobalWind::new(Vector3::z(), EARTH_RADIUS, 2);
+        w.eddy_size = 400_000.;
+        let up = Vector3::new(0.3, -0.5, 0.6).normalize();
+        let (e1, e2) = { let a = up.cross(&Vector3::x()).normalize(); (a, up.cross(&a)) };
+        let r = 1e-4;
+        let n = 400;
+        let (mut flux, mut circulation) = (0., 0.);
+        for k in 0..n {
+            let a = k as f64 / n as f64 * std::f64::consts::TAU;
+            let outward = e1 * a.cos() + e2 * a.sin();
+            let tangent = -e1 * a.sin() + e2 * a.cos();
+            let wind = w.wind(&(up + outward * r).normalize());
+            flux += wind.dot(&outward);
+            circulation += wind.dot(&tangent);
+        }
+        // The wind circulates round the loop (it has curl) but none flows out (no divergence).
+        assert!(circulation.abs() > 1e-4, "{}", circulation);
+        assert!(flux.abs() < 0.01 * circulation.abs(), "flux {} circulation {}", flux, circulation);
+    }
+}

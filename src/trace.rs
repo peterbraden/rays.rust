@@ -39,7 +39,7 @@ fn continuation_weight(attenuate: &Color, depth: u64, s: &Scene) -> Option<f64> 
 
 fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene, after_light_sampling: bool) -> (u64, Color){
     let mut cast = 1;
-    if after_light_sampling && s.is_sampled_light(&intersection.object) {
+    if after_light_sampling && s.is_sampled_light(intersection.object) {
         return (cast, Color::black());
     }
     let medium = &intersection.object.medium;
@@ -67,7 +67,7 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &S
     // Shadow bias -> Move the origin of the intersection point along the normal, in case a
     // floating point error puts it slightly below the surface which would cause a sign flip
     // leading to shadow acne.
-    let mut biased_intersection = intersection.clone();
+    let mut biased_intersection = intersection;
     // Bias towards the side the ray arrived from, which for a ray inside an object is inwards.
     biased_intersection.point = intersection.point + (intersection.facing_normal(r) * scene.render.shadow_bias);
 

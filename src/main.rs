@@ -48,6 +48,7 @@ mod shapes {
     pub mod plane;
     pub mod triangle;
     pub mod mesh;
+    pub mod ply;
     pub mod infinite;
     pub mod repeating_mesh;
     pub mod polynomial;

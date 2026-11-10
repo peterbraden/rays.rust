@@ -3,7 +3,6 @@ use crate::ray::Ray;
 use crate::sceneobject::SceneObject;
 use std::cmp;
 use std::fmt;
-use std::sync::Arc;
 
 // TODO PBRT DifferentialGeometry
 #[derive(Debug, Copy, Clone)]
@@ -17,12 +16,15 @@ pub struct RawIntersection {
     // TODO error : rayEpsilon for float errors
 }
 
-#[derive(Clone)]
-pub struct Intersection {
+/// A hit on a scene object. It borrows the object from the scene rather than holding a counted
+/// reference: with every thread tracing against the same few objects, counting each hit cost an
+/// atomic increment and decrement on a shared cache line, contended across cores.
+#[derive(Clone, Copy)]
+pub struct Intersection<'a> {
     pub dist: f64,
     pub point: Vector3<f64>,
     pub normal: Vector3<f64>,
-    pub object: Arc<SceneObject>,
+    pub object: &'a SceneObject,
     /// As for `RawIntersection`.
     pub part: u32,
 }
@@ -37,7 +39,7 @@ pub struct MediumIntersection {
 }
 */
 
-impl Intersection {
+impl<'a> Intersection<'a> {
     /// The normal on the side of the surface the ray arrived from. Geometry reports outward
     /// normals, which dielectrics need to tell entering from leaving; opaque materials shade
     /// both sides alike, so they use this, eg. for the inside of a sphere.
@@ -46,18 +48,18 @@ impl Intersection {
     }
 
     /// This intersection with its normal facing the incoming ray (see `facing_normal`).
-    pub fn facing(&self, r: &Ray) -> Intersection {
-        Intersection { normal: self.facing_normal(r), ..self.clone() }
+    pub fn facing(&self, r: &Ray) -> Intersection<'a> {
+        Intersection { normal: self.facing_normal(r), ..*self }
     }
 }
 
-impl cmp::PartialEq for Intersection {
-    fn eq(&self, other: &Intersection) -> bool {
+impl cmp::PartialEq for Intersection<'_> {
+    fn eq(&self, other: &Intersection<'_>) -> bool {
         self.point == other.point
     }
 }
 
-impl fmt::Display for Intersection {
+impl fmt::Display for Intersection<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "(Intersection p:{} d:{} n:{})", self.point, self.dist, self.normal)
     }

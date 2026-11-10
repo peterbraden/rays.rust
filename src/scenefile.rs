@@ -18,6 +18,7 @@ use crate::procedural::fireworks::create_firework;
 use crate::procedural::nubis_clouds::{NubisCloudLayer, GlobalNubis};
 use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGenus, GlobalCirrus};
 use crate::procedural::benard_altocumulus::BenardAltocumulus;
+use crate::procedural::harris_cumulus::{Atmosphere, CloudSimulation, HarrisCumulus, SimulationParams};
 use crate::participatingmedia::create_fog;
 use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
 use crate::material::ice_halos::{Crystals, Habit};
@@ -252,6 +253,10 @@ impl SceneFile {
             return Some(Arc::new(SceneFile::parse_hogan_kew_cirrus(&o)));
         }
 
+        if t == "harris_cumulus" {
+            return Some(Arc::new(SceneFile::parse_harris_cumulus(&o)));
+        }
+
         if t == "benard_altocumulus" {
             return Some(Arc::new(SceneFile::parse_benard_altocumulus(&o)));
         }
@@ -466,6 +471,78 @@ impl SceneFile {
             Vector3::new(center.x + extent, top, center.y + extent),
         );
         let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(layer));
+        create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// Cumulus grown by simulating a sunny day (see `procedural::harris_cumulus`):
+    ///
+    /// `{"type": "harris_cumulus", "time": 1800, "cache": "demo/scenes/.cumulus-cache"}`
+    ///
+    /// The simulation runs for `time` seconds, continuing from the latest state saved in
+    /// `cache` (a directory) at or before it, and saves its own there, so an animation's frames
+    /// simulate only from one to the next. Its grid is `grid` ([x, y, z] cells; x and z powers
+    /// of two; default [128, 80, 128]) of `cell` metres (50), periodic across the ground. The
+    /// day: `heat_flux` and `moisture_flux` from the ground (W/m², 250 and 150), varying by
+    /// `patchiness` (0 to 1) in patches `patch_size` across that change over `patch_period`
+    /// seconds; `wind` ([x, z] m/s); `vorticity` (confinement); `max_step` (s); `seed`. The
+    /// air at dawn: `surface_theta` (K), `mixed_layer` (m), `lapse` (K/km of potential
+    /// temperature above it), `inversion` (m), `inversion_strength` (K), `inversion_depth`
+    /// (m), `lapse_above` (K/km), `humidity` (g/kg in the mixed layer) and `humidity_above`
+    /// (relative, 0 to 1).
+    ///
+    /// For rendering: `droplet_radius` (µm, default 10; sets the extinction per gram of
+    /// water, and the diffraction), `detail_size`, `erosion` (0 to 1) and `edge` (g/kg of
+    /// cloud water the detail can erode), `repeat` (tile the grid across the sky, default
+    /// true) out to `extent` from `center` ([x, z]), fading over its outer `fade`, and
+    /// `mapping` as for `nubis_clouds`.
+    pub fn parse_harris_cumulus(o: &Value) -> SceneObject {
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let mut p = SimulationParams::default();
+        if let Some(g) = o["grid"].as_array() {
+            let n = |i: usize, d: usize| g.get(i).and_then(|v| v.as_u64()).map_or(d, |v| v as usize);
+            p.size = (n(0, p.size.0), n(1, p.size.1), n(2, p.size.2));
+        }
+        p.cell = num("cell", p.cell);
+        p.heat_flux = num("heat_flux", p.heat_flux);
+        p.moisture_flux = num("moisture_flux", p.moisture_flux);
+        p.patchiness = num("patchiness", p.patchiness).clamp(0., 1.);
+        p.patch_size = num("patch_size", p.patch_size);
+        p.patch_period = num("patch_period", p.patch_period);
+        p.wind = SceneFile::parse_vec2_def(o, "wind", p.wind);
+        p.vorticity = num("vorticity", p.vorticity).max(0.);
+        p.max_step = num("max_step", p.max_step);
+        p.seed = SceneFile::parse_seed(o).unwrap_or(0);
+        let a = Atmosphere::default();
+        p.atmosphere = Atmosphere {
+            surface_theta: num("surface_theta", a.surface_theta),
+            mixed_layer: num("mixed_layer", a.mixed_layer),
+            lapse: num("lapse", a.lapse * 1000.) / 1000.,
+            inversion: num("inversion", a.inversion),
+            inversion_strength: num("inversion_strength", a.inversion_strength),
+            inversion_depth: num("inversion_depth", a.inversion_depth).max(1.),
+            lapse_above: num("lapse_above", a.lapse_above * 1000.) / 1000.,
+            humidity: num("humidity", a.humidity * 1000.) / 1000.,
+            humidity_above: num("humidity_above", a.humidity_above),
+        };
+        let time = num("time", 1800.).max(0.);
+        let cache = o["cache"].as_str().map(std::path::PathBuf::from);
+        let sim = CloudSimulation::cached(p, time, cache.as_deref());
+        let center = SceneFile::parse_vec2_def(o, "center", Vector2::new(0., 0.));
+        let mut c = HarrisCumulus::new(&sim, num("droplet_radius", 10.), center);
+        c.detail_size = num("detail_size", c.detail_size).max(1e-3);
+        c.erosion = num("erosion", c.erosion).clamp(0., 1.);
+        c.edge = num("edge", c.edge * 1000.) / 1000.;
+        c.repeat = o["repeat"].as_bool().unwrap_or(c.repeat);
+        c.extent = num("extent", c.extent);
+        c.fade = num("fade", c.fade).clamp(0., 1.);
+        let (nx, ny, nz) = p.size;
+        let half = Vector3::new(nx as f64, 0., nz as f64) * p.cell / 2.;
+        let bounds = if c.repeat {
+            BBox::new(Vector3::new(center.x - c.extent, 0., center.y - c.extent), Vector3::new(center.x + c.extent, ny as f64 * p.cell, center.y + c.extent))
+        } else {
+            BBox::new(Vector3::new(center.x, 0., center.y) - half, Vector3::new(center.x, ny as f64 * p.cell, center.y) + half)
+        };
+        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(c));
         create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
     }
 

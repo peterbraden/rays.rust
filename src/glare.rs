@@ -43,7 +43,7 @@ impl Default for Glare {
 }
 
 /// In-place 2D FFT of `data`, `width` x `height` (both powers of two), rows first.
-fn fft2d(data: &mut [Complex<f64>], width: usize, height: usize, inverse: bool) {
+pub(crate) fn fft2d(data: &mut [Complex<f64>], width: usize, height: usize, inverse: bool) {
     let rows = Radix4::new(width, inverse);
     let mut out = vec![Complex::new(0., 0.); width * height];
     rows.process_multi(data, &mut out);

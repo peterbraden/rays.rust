@@ -74,6 +74,7 @@ mod procedural {
     pub mod nubis_clouds;
     pub mod hogan_kew_cirrus;
     pub mod benard_altocumulus;
+    pub mod harris_cumulus;
 }
 mod participatingmedia;
 mod noise;

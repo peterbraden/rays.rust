@@ -1,5 +1,9 @@
 # Test Scenes
 
+## Bump mapping
+Bumps, dents, wrinkles, ripples and waves (see [bump mapping](../docs/bump-mapping.md)).
+![Bump mapping](./scenes/bumps.png)
+
 ## Spheres
 Spheres demonstrating 3 different materials.
 ![Spheres](./scenes/spheres.png)

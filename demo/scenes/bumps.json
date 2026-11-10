@@ -1,0 +1,217 @@
+{
+  "width": 960,
+  "height": 400,
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 4,
+  "shadow_bias": 0.0001,
+  "max_depth": 8,
+  "background": {
+    "type": "gradient",
+    "bottom": [
+      0.9,
+      0.9,
+      0.9
+    ],
+    "top": [
+      0.45,
+      0.6,
+      0.85
+    ]
+  },
+  "materials": {
+    "FLOOR": {
+      "type": "lambertian",
+      "albedo": [
+        0.7,
+        0.7,
+        0.7
+      ]
+    },
+    "LIGHT": {
+      "type": "diffuse-light",
+      "color": [
+        1,
+        1,
+        1
+      ],
+      "intensity": 6
+    },
+    "RED": {
+      "type": "plastic",
+      "albedo": [
+        0.8,
+        0.15,
+        0.12
+      ],
+      "roughness": 0.05
+    },
+    "WHITE": {
+      "type": "lambertian",
+      "albedo": [
+        0.85,
+        0.85,
+        0.85
+      ]
+    },
+    "STEEL": {
+      "type": "metal",
+      "reflective": [
+        0.8,
+        0.8,
+        0.85
+      ],
+      "roughness": 0.02
+    },
+    "GOLD": {
+      "type": "metal",
+      "reflective": [
+        1,
+        0.8,
+        0.45
+      ],
+      "roughness": 0.02
+    },
+    "GLASS": {
+      "type": "dielectric",
+      "refractive_index": 1.5,
+      "attenuate": [
+        1,
+        1,
+        1
+      ]
+    }
+  },
+  "media": {},
+  "camera": {
+    "location": [
+      0,
+      4,
+      -9
+    ],
+    "lookat": [
+      0,
+      0.9,
+      1.5
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.62,
+    "aperture": 0
+  },
+  "lights": [],
+  "variables": {},
+  "objects": [
+    {
+      "type": "plane",
+      "y": 0,
+      "material": "FLOOR",
+      "normal": {
+        "pattern": "waves",
+        "amount": 0.25,
+        "scale": 2,
+        "frequency": 2
+      }
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -12,
+        30,
+        -14
+      ],
+      "radius": 7,
+      "material": "LIGHT"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0,
+        1,
+        4.2
+      ],
+      "radius": 1,
+      "material": "STEEL"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        5,
+        1,
+        0
+      ],
+      "radius": 1,
+      "material": "RED",
+      "normal": {
+        "pattern": "bumps",
+        "amount": 0.6,
+        "scale": 0.15
+      }
+    },
+    {
+      "type": "sphere",
+      "location": [
+        2.5,
+        1,
+        0
+      ],
+      "radius": 1,
+      "material": "STEEL",
+      "normal": {
+        "pattern": "dents",
+        "amount": 1.5,
+        "scale": 0.25
+      }
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0,
+        1,
+        0
+      ],
+      "radius": 1,
+      "material": "WHITE",
+      "normal": {
+        "pattern": "wrinkles",
+        "amount": 0.6,
+        "scale": 0.4
+      }
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -2.5,
+        1,
+        0
+      ],
+      "radius": 1,
+      "material": "GLASS",
+      "normal": {
+        "pattern": "ripples",
+        "amount": 0.4,
+        "scale": 0.5,
+        "frequency": 4
+      }
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -5,
+        1,
+        0
+      ],
+      "radius": 1,
+      "material": "GOLD",
+      "normal": {
+        "pattern": "waves",
+        "amount": 0.5,
+        "scale": 0.6,
+        "frequency": 3
+      }
+    }
+  ]
+}

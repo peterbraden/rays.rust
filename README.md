@@ -25,6 +25,8 @@ Supports:
     - OBJ file to mesh import
     - Infinite Mesh
 
+  - Bump mapping: bumps, dents, wrinkles, ripples and waves ([reference](./docs/bump-mapping.md))
+
   - Skysphere with Rayleigh and Mie Scattering
   - Procedural Objects
     - Ocean (Tessendorf's algorithm with Phillips spectrum)

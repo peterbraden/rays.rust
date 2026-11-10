@@ -36,6 +36,7 @@ mod material {
     pub mod plastic;
     pub mod noise;
     pub mod bump;
+    pub mod grass;
 }
 mod intersection;
 mod sceneobject;
@@ -84,6 +85,8 @@ mod geometry;
 mod procedural {
     pub mod box_terrain;
     pub mod fireworks;
+    pub mod heightmap;
+    pub mod grass;
 }
 mod participatingmedia;
 mod noise;

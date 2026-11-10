@@ -7,6 +7,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Objects: Sphere, Plane, Mesh, OBJ file import, and POV-Ray's shapes (cylinder, cone, torus, blob, isosurface, text and more; see docs/shapes.md, parsed in src/scenefile_shapes.rs), combined by CSG (src/shapes/csg.rs); transforms and instancing of named "geometries"
 - Skysphere with Rayleigh and Mie Scattering
 - Procedural objects including Ocean (Tessendorf's algorithm with Phillips spectrum)
+- Heightmap terrain (flat, fractal noise or image) and procedural grass that grows on it, with species and condition presets (see `src/procedural/grass.rs`)
 - Multithreaded rendering with progressive output
 
 ## Build Commands

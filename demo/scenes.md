@@ -19,6 +19,9 @@ Procedural art with a block city skyline at sunset.
 A terraced sandstone outcrop, granite, limestone and basalt boulders, and a scatter of mixed pebbles.
 ![rocks](./scenes/rocks.png)
 
+A pebble beach in close-up at sunset: dry shingle in the foreground, wet stones at the waterline, seen through refracting water.
+![pebble beach](./scenes/pebble-beach.png)
+
 ## Fireworks
 ![fireworks](./scenes/fireworks.png)
 

@@ -10,14 +10,32 @@
 
   "background": { "type": "gradient", "bottom": [0.92, 0.93, 0.95], "top": [0.42, 0.6, 0.9] },
 
+  "variables": {
+    "ASPEN": ["ASPEN_LEAF_1", "ASPEN_LEAF_2", "ASPEN_LEAF_3"],
+    "OAK": ["OAK_LEAF_1", "OAK_LEAF_2", "OAK_LEAF_3"],
+    "WILLOW": ["WILLOW_LEAF_1", "WILLOW_LEAF_2"],
+    "NEEDLES": ["NEEDLE_1", "NEEDLE_2"]
+  },
+
   "materials": {
-    "BARK": { "type": "lambertian", "albedo": [0.3, 0.25, 0.2] },
-    "PALE_BARK": { "type": "lambertian", "albedo": [0.6, 0.6, 0.55] },
-    "ASPEN_LEAF": { "type": "lambertian", "albedo": [0.3, 0.42, 0.08] },
-    "OAK_LEAF": { "type": "lambertian", "albedo": [0.14, 0.3, 0.06] },
-    "WILLOW_LEAF": { "type": "lambertian", "albedo": [0.32, 0.45, 0.12] },
-    "FIR_NEEDLE": { "type": "lambertian", "albedo": [0.05, 0.16, 0.06] },
-    "PALM_LEAF": { "type": "lambertian", "albedo": [0.2, 0.4, 0.1] },
+    "BARK_BASE": { "type": "lambertian", "albedo": [0.26, 0.21, 0.17] },
+    "BARK": { "type": "noise", "base_material": "BARK_BASE", "noise_type": "fbm", "octaves": 4,
+      "scale": 2.5, "color": [0.42, 0.43, 0.36], "blend_factor": 0.6 },
+    "PALE_BARK_BASE": { "type": "lambertian", "albedo": [0.66, 0.65, 0.58] },
+    "PALE_BARK": { "type": "noise", "base_material": "PALE_BARK_BASE", "noise_type": "fbm", "octaves": 4,
+      "scale": 3, "color": [0.12, 0.11, 0.1], "blend_factor": 0.45 },
+
+    "ASPEN_LEAF_1": { "type": "leaf", "reflectance": [0.12, 0.22, 0.04], "transmittance": [0.09, 0.22, 0.02] },
+    "ASPEN_LEAF_2": { "type": "leaf", "reflectance": [0.15, 0.22, 0.04], "transmittance": [0.13, 0.22, 0.02] },
+    "ASPEN_LEAF_3": { "type": "leaf", "reflectance": [0.09, 0.18, 0.04], "transmittance": [0.06, 0.17, 0.02] },
+    "OAK_LEAF_1": { "type": "leaf", "reflectance": [0.06, 0.14, 0.03], "transmittance": [0.04, 0.12, 0.01] },
+    "OAK_LEAF_2": { "type": "leaf", "reflectance": [0.08, 0.15, 0.03], "transmittance": [0.06, 0.14, 0.01] },
+    "OAK_LEAF_3": { "type": "leaf", "reflectance": [0.05, 0.11, 0.03], "transmittance": [0.03, 0.09, 0.01] },
+    "WILLOW_LEAF_1": { "type": "leaf", "reflectance": [0.15, 0.24, 0.06], "transmittance": [0.12, 0.24, 0.03] },
+    "WILLOW_LEAF_2": { "type": "leaf", "reflectance": [0.13, 0.2, 0.06], "transmittance": [0.1, 0.2, 0.03] },
+    "PALM_LEAF": { "type": "leaf", "reflectance": [0.09, 0.19, 0.04], "transmittance": [0.06, 0.16, 0.02], "roughness": 0.15 },
+    "NEEDLE_1": { "type": "leaf", "reflectance": [0.04, 0.09, 0.04], "transmittance": [0.01, 0.04, 0.01], "roughness": 0.2 },
+    "NEEDLE_2": { "type": "leaf", "reflectance": [0.05, 0.11, 0.04], "transmittance": [0.02, 0.05, 0.01], "roughness": 0.2 },
     "GRASS": { "type": "lambertian", "albedo": [0.25, 0.32, 0.12] }
   },
 
@@ -30,23 +48,23 @@
   },
 
   "lights": [
-    { "location": [180, 260, -160], "color": "white", "intensity": 320000 }
+    { "location": [-220, 220, 120], "color": "white", "intensity": 320000 }
   ],
 
   "objects": [
-    { "type": "tree", "species": "california-black-oak", "seed": 2, "location": [-22, 0, 12], "bark": "BARK", "leaves": "OAK_LEAF" },
-    { "type": "tree", "species": "balsam-fir", "seed": 1, "location": [-8, 0, 34], "bark": "BARK", "leaves": "FIR_NEEDLE" },
-    { "type": "tree", "species": "balsam-fir", "seed": 4, "location": [-15, 0, 42], "bark": "BARK", "leaves": "FIR_NEEDLE",
+    { "type": "tree", "species": "california-black-oak", "seed": 2, "location": [-22, 0, 12], "bark": "BARK", "leaves": "$OAK" },
+    { "type": "tree", "species": "balsam-fir", "seed": 1, "location": [-8, 0, 34], "bark": "BARK", "leaves": "$NEEDLES" },
+    { "type": "tree", "species": "balsam-fir", "seed": 4, "location": [-15, 0, 42], "bark": "BARK", "leaves": "$NEEDLES",
       "params": { "scale": 18 } },
-    { "type": "tree", "species": "quaking-aspen", "seed": 3, "location": [5, 0, 6], "bark": "PALE_BARK", "leaves": "ASPEN_LEAF" },
-    { "type": "tree", "species": "quaking-aspen", "seed": 5, "location": [-1, 0, 13], "bark": "PALE_BARK", "leaves": "ASPEN_LEAF" },
-    { "type": "tree", "species": "lombardy-poplar", "seed": 1, "location": [22, 0, 46], "bark": "BARK", "leaves": "OAK_LEAF" },
-    { "type": "tree", "species": "lombardy-poplar", "seed": 2, "location": [28, 0, 50], "bark": "BARK", "leaves": "OAK_LEAF" },
-    { "type": "tree", "species": "weeping-willow", "seed": 3, "location": [17, 0, 14], "bark": "BARK", "leaves": "WILLOW_LEAF" },
-    { "type": "tree", "species": "black-tupelo", "seed": 1, "location": [-42, 0, 44], "bark": "BARK", "leaves": "OAK_LEAF" },
+    { "type": "tree", "species": "quaking-aspen", "seed": 3, "location": [5, 0, 6], "bark": "PALE_BARK", "leaves": "$ASPEN" },
+    { "type": "tree", "species": "quaking-aspen", "seed": 5, "location": [-1, 0, 13], "bark": "PALE_BARK", "leaves": "$ASPEN" },
+    { "type": "tree", "species": "lombardy-poplar", "seed": 1, "location": [22, 0, 46], "bark": "BARK", "leaves": "$OAK" },
+    { "type": "tree", "species": "lombardy-poplar", "seed": 2, "location": [28, 0, 50], "bark": "BARK", "leaves": "$OAK" },
+    { "type": "tree", "species": "weeping-willow", "seed": 3, "location": [17, 0, 14], "bark": "BARK", "leaves": "$WILLOW" },
+    { "type": "tree", "species": "black-tupelo", "seed": 1, "location": [-42, 0, 44], "bark": "BARK", "leaves": "$OAK" },
     { "type": "tree", "species": "palm", "seed": 2, "location": [30, 0, 6], "bark": "PALE_BARK", "leaves": "PALM_LEAF" },
-    { "type": "tree", "species": "shrub", "seed": 1, "location": [10, 0, -14], "bark": "BARK", "leaves": "OAK_LEAF" },
-    { "type": "tree", "species": "shrub", "seed": 2, "location": [-9, 0, -16], "bark": "BARK", "leaves": "OAK_LEAF",
+    { "type": "tree", "species": "shrub", "seed": 1, "location": [10, 0, -14], "bark": "BARK", "leaves": "$OAK" },
+    { "type": "tree", "species": "shrub", "seed": 2, "location": [-9, 0, -16], "bark": "BARK", "leaves": "$OAK",
       "params": { "leaf_scale": 0.09, "stems": [{}, { "branches": 30 }] } },
     { "type": "plane", "y": 0, "material": "GRASS" }
   ]

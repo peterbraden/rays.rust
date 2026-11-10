@@ -17,6 +17,7 @@ Supports:
       - Lambertian 
       - Specular
       - Dielelectric
+      - Leaf (translucent: diffuse reflection and transmission under a glossy coat)
 
   - Objects
     - Sphere

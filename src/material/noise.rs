@@ -255,7 +255,7 @@ mod tests {
             "materials": {}, "media": {}, "objects": [], "variables": {},
             "lights": [ { "location": [0, 10, 0], "intensity": 314.1592653589793 } ]
         }"#.to_string());
-        let i = Intersection {
+        let i = Intersection { face: 0,
             dist: 1.,
             point: Vector3::new(0., 0., 0.),
             normal: Vector3::new(0., 1., 0.),

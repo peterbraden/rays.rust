@@ -43,7 +43,7 @@ mod tests {
     #[test]
     fn test_emits_from_front_only_unless_two_sided() {
         let s = SceneFile::from_string(r#"{ "camera": { "location": [0, 1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 } }"#.to_string());
-        let i = Intersection {
+        let i = Intersection { face: 0,
             dist: 1.,
             point: Vector3::zeros(),
             normal: Vector3::new(0., -1., 0.),

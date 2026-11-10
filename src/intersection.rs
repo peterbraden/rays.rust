@@ -10,6 +10,9 @@ pub struct RawIntersection {
     pub dist: f64,
     pub point: Vector3<f64>,
     pub normal: Vector3<f64>,
+    /// Which part of a composite object was hit, for data kept per part, such as each leaf's
+    /// colour on a tree: pbrt's `faceIndex`. 0 for objects that don't number their parts.
+    pub face: u32,
     // TODO error : rayEpsilon for float errors
 }
 
@@ -21,6 +24,8 @@ pub struct Intersection<'a> {
     pub dist: f64,
     pub point: Vector3<f64>,
     pub normal: Vector3<f64>,
+    /// See `RawIntersection::face`.
+    pub face: u32,
     pub object: &'a SceneObject,
 }
 

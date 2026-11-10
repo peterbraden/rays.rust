@@ -63,7 +63,7 @@ impl Geometry for Sphere {
         let point = r.ro + (rd * dist);
 
         Some(
-            RawIntersection {
+            RawIntersection { face: 0,
                 dist, 
                 point,
                 normal: (point - self.center).normalize()

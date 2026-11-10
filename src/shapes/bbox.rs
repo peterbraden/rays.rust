@@ -349,7 +349,7 @@ impl Geometry for BBox {
             let mut normal = Vector3::new(0.,0.,0.);
             normal[axis] = sign;
 
-            Some(RawIntersection {
+            Some(RawIntersection { face: 0,
                 point,
                 dist,
                 normal

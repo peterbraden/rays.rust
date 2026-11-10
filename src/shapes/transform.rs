@@ -65,6 +65,7 @@ impl Geometry for Transform {
             // Normals transform by the inverse transpose of the linear part.
             let normal_matrix = self.transform.inverse().matrix().fixed_view::<3, 3>(0, 0).transpose();
             RawIntersection {
+                face: i.face,
                 dist: (point - r.ro).norm(),
                 point,
                 normal: (normal_matrix * i.normal).normalize(),

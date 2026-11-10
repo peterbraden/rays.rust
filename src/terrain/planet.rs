@@ -50,7 +50,7 @@ impl Default for PlanetParams {
             seed: 0,
             radius: 6.371e6,
             land_bias: 0.05,
-            mountain_height: 2500.,
+            mountain_height: 3000.,
             uplift_rate: 1e-3,
             belt_frequency: 3.,
         }
@@ -126,9 +126,9 @@ pub struct Planet {
 const CONTINENT_FREQUENCY: f64 = 1.2;
 /// ... of the hills ...
 const RELIEF_FREQUENCY: f64 = 12.;
-/// ... and of the mountain ridges: a base wavelength of about 40 km on an Earth-sized planet,
-/// the spacing of major valleys in real ranges.
-const RIDGE_FREQUENCY: f64 = 160.;
+/// ... and of the mountain ridges: a base wavelength of about 12 km on an Earth-sized planet,
+/// roughly the spacing of major valleys in real ranges.
+const RIDGE_FREQUENCY: f64 = 530.;
 
 impl Planet {
     pub fn new(params: PlanetParams) -> Planet {
@@ -168,7 +168,7 @@ impl Planet {
         // Ridges over a raised belt; squaring the ridged noise leaves broad lowlands between
         // sharp crests.
         let ridges = self.relief.ridged(d, RIDGE_FREQUENCY, self.octaves(RIDGE_FREQUENCY, finest).max(3));
-        let mountains = self.params.mountain_height * self.orogeny(d) * (0.25 + 0.75 * ridges * ridges);
+        let mountains = self.params.mountain_height * self.orogeny(d) * (0.2 + ridges * ridges);
         base + hills + mountains
     }
 

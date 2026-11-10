@@ -10,7 +10,7 @@ use crate::terrain::domain::Layout;
 use crate::terrain::simulation::{Terrain, ICE_FREE};
 
 /// Drainage area above which a cell is drawn as river, square metres.
-pub const RIVER_AREA: f64 = 2e7;
+pub const RIVER_AREA: f64 = 5e7;
 
 fn mix(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
     let t = t.clamp(0., 1.);
@@ -120,16 +120,18 @@ mod tests {
             let target = end * f as f64 / frames as f64;
             while t.time < target {
                 let before = t.ice_steps;
+                let iterations = t.ice_iterations;
                 let s = std::time::Instant::now();
                 t.run_to((t.time + 1000.).min(target));
                 if std::env::var("VERBOSE").is_ok() {
-                    println!("  t {} ice steps {} in {:.1?} max ice {:.0} max slide {:.0}", t.time, t.ice_steps - before, s.elapsed(),
+                    println!("  t {} ice steps {} ({} iterations) in {:.1?} max ice {:.0} max slide {:.0}", t.time, t.ice_steps - before, t.ice_iterations - iterations, s.elapsed(),
                         t.ice.iter().cloned().fold(0., f64::max), t.sliding.iter().cloned().fold(0., f64::max));
                 }
             }
             let land = t.bed.iter().filter(|&&b| b > 0.).count();
             let iced = t.ice.iter().filter(|&&h| h > ICE_FREE).count();
             let max = t.bed.iter().cloned().fold(f64::MIN, f64::max);
+            println!("  min {:.0}", t.bed.iter().cloned().fold(f64::MAX, f64::min));
             println!("t {:>8} in {:.1?}: max {:.0} m, land {}, ice {} cells, max ice {:.0} m",
                 t.time, start.elapsed(), max, land, iced, t.ice.iter().cloned().fold(0., f64::max));
             write_map(&t, &format!("{}/patch-{:03}.png", dir, f), 0);

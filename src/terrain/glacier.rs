@@ -70,7 +70,7 @@
 //! D grows as H⁵, so explicit steps must be minuscule where thick ice lies on steep slopes:
 //! fractions of a year on 400 m cells. Instead each step is semi-implicit: D is taken from the
 //! start of the step and the resulting linear system, symmetric positive definite, is solved by
-//! conjugate gradients with a Jacobi preconditioner. Very long steps are both inaccurate (D is
+//! conjugate gradients, preconditioned by an incomplete Cholesky factorisation. Very long steps are both inaccurate (D is
 //! lagged) and slow to solve (the system's condition number grows with Δt D / Δx²), so the step
 //! is shortened until no cell exchanges more than `max_stiffness` times its own volume
 //! (Δt Σc / area); typically a few years, where an explicit scheme would need hundreds of steps.
@@ -228,45 +228,70 @@ pub fn flow_ice(domain: &Domain, p: &GlacierParams, bed: &[f64], ice: &mut [f64]
     let rho_g_n = (p.density * p.gravity).powf(p.glen_n);
     let deform = 2. * p.glen_a / (p.glen_n + 2.);
 
-    // Conductance c_ij = w D / d for each link (0 for diagonals), in link order.
-    let conductance: Vec<Vec<f64>> = (0..n).into_par_iter().map(|i| {
-        domain.links(i).iter().map(|l| {
-            if l.width <= 0. { return 0.; }
+    // Conductance c_ij = w D / d for each edge-sharing link, kept in one flat array indexed
+    // like the domain's links (diagonal slots stay 0).
+    let mut conductance = vec![0.; domain.link_count()];
+    for i in 0..n {
+        let o = domain.link_offset(i);
+        for (k, l) in domain.edges(i).iter().enumerate() {
             let h = 0.5 * (ice[i] + ice[l.to]);
-            if h <= 0. { return 0.; }
+            if h <= 0. { continue; }
             let g2e = 0.5 * (g2[i] + g2[l.to]);
             let d = rho_g_n * g2e.powf((p.glen_n - 1.) / 2.)
                 * (deform * h.powf(p.glen_n + 2.) + p.sliding * h.powf(p.glen_n + 1.));
-            l.width * d / l.dist
-        }).collect()
-    }).collect();
+            conductance[o + k] = l.width * d / l.dist;
+        }
+    }
+    let edges = |i: usize| domain.edges(i).iter().zip(&conductance[domain.link_offset(i)..]);
+    let total = |i: usize| edges(i).map(|(_, c)| c).sum::<f64>();
 
     let stiffness = (0..n).filter(|&i| !drain[i])
-        .map(|i| conductance[i].iter().sum::<f64>() / domain.area[i]).fold(0., f64::max);
+        .map(|i| total(i) / domain.area[i]).fold(0., f64::max);
     let dt = if stiffness > 0. { max_dt.min((p.max_stiffness / stiffness).max(p.min_step)) } else { max_dt };
 
-    let diag: Vec<f64> = (0..n).map(|i| {
-        if drain[i] { 1. } else { domain.area[i] / dt + conductance[i].iter().sum::<f64>() }
-    }).collect();
+    // The system A x = rhs. Drained cells are fixed at zero, so their rows are the identity and
+    // other rows don't couple to them (keeping A symmetric).
+    let diag: Vec<f64> = (0..n).map(|i| if drain[i] { 1. } else { domain.area[i] / dt + total(i) }).collect();
     let rhs: Vec<f64> = (0..n).map(|i| {
         if drain[i] { return 0.; }
         // Melt is applied after the flow (below), so that ice arriving during the step melts too.
         let m = balance[i].max(0.);
-        let bed_term: f64 = domain.links(i).iter().zip(&conductance[i]).map(|(l, c)| c * (bed[l.to] - bed[i])).sum();
+        let bed_term: f64 = edges(i).map(|(l, c)| c * (bed[l.to] - bed[i])).sum();
         domain.area[i] * (ice[i] / dt + m) + bed_term
     }).collect();
+    let coupled = |i: usize, k: usize| !drain[i] && !drain[k];
     let apply = |x: &[f64], y: &mut [f64]| {
-        y.par_iter_mut().enumerate().for_each(|(i, yi)| {
-            if drain[i] { *yi = x[i]; return; }
-            let off: f64 = domain.links(i).iter().zip(&conductance[i])
-                .filter(|(l, _)| !drain[l.to])
-                .map(|(l, c)| c * x[l.to]).sum();
-            *yi = diag[i] * x[i] - off;
-        });
+        for i in 0..n {
+            if drain[i] { y[i] = x[i]; continue; }
+            let off: f64 = edges(i).filter(|(l, _)| !drain[l.to]).map(|(l, c)| c * x[l.to]).sum();
+            y[i] = diag[i] * x[i] - off;
+        }
+    };
+
+    // Incomplete Cholesky, IC(0), as the preconditioner: the factorisation A ≈ L D⁻¹ Lᵀ with
+    // L = D + (A's strictly lower part), keeping A's sparsity. Edge-sharing links on these grids
+    // form no triangles (bar the cube's corners), so the only fill dropped is in the pivots:
+    // d_i = a_ii - Σ_(k<i) a_ik² / d_k.
+    let mut pivot = vec![1.; n];
+    for i in 0..n {
+        if drain[i] { continue; }
+        let fill: f64 = edges(i).filter(|(l, _)| l.to < i && coupled(i, l.to)).map(|(l, c)| c * c / pivot[l.to]).sum();
+        pivot[i] = (diag[i] - fill).max(1e-3 * diag[i]);
+    }
+    let precondition = |r: &[f64], z: &mut [f64]| {
+        // Solve L u = r, then Lᵀ z = D u; off-diagonal entries of A are -c.
+        for i in 0..n {
+            let lower: f64 = edges(i).filter(|(l, _)| l.to < i && coupled(i, l.to)).map(|(l, c)| c * z[l.to]).sum();
+            z[i] = (r[i] + lower) / pivot[i];
+        }
+        for i in (0..n).rev() {
+            let upper: f64 = edges(i).filter(|(l, _)| l.to > i && coupled(i, l.to)).map(|(l, c)| c * z[l.to]).sum();
+            z[i] += upper / pivot[i];
+        }
     };
 
     let mut x: Vec<f64> = (0..n).map(|i| if drain[i] { 0. } else { ice[i] }).collect();
-    let iterations = conjugate_gradient(&apply, &diag, &rhs, &mut x, 1e-8, 500);
+    let iterations = conjugate_gradient(&apply, &precondition, &rhs, &mut x, 1e-6, 500);
 
     // The solution x may be negative where the lagged diffusivity moved more ice than a cell
     // had. Rather than clamp it (creating ice), take the fluxes the solve implies and limit
@@ -274,16 +299,16 @@ pub fn flow_ice(domain: &Domain, p: &GlacierParams, bed: &[f64], ice: &mut [f64]
     // and conservative, at the cost of slowing ice that the long step would have moved too far.
     let s_new: Vec<f64> = (0..n).map(|i| bed[i] + x[i]).collect();
     let supply: Vec<f64> = (0..n).map(|i| ice[i] + dt * balance[i].max(0.)).collect();
-    let limit: Vec<f64> = (0..n).into_par_iter().map(|i| {
+    let limit: Vec<f64> = (0..n).map(|i| {
         if drain[i] { return 0.; }
-        let out: f64 = domain.links(i).iter().zip(&conductance[i])
-            .map(|(l, c)| (c * dt * (s_new[i] - s_new[l.to])).max(0.)).sum();
+        let out: f64 = edges(i).map(|(l, c)| (c * dt * (s_new[i] - s_new[l.to])).max(0.)).sum();
         if out > 0. { (domain.area[i] * supply[i] / out).min(1.) } else { 1. }
     }).collect();
-    let (next, sliding): (Vec<f64>, Vec<f64>) = (0..n).into_par_iter().map(|i| {
-        if drain[i] { return (0., 0.); }
+    let mut sliding = vec![0.; n];
+    for i in 0..n {
+        if drain[i] { ice[i] = 0.; continue; }
         let (mut net, mut through) = (0., 0.);
-        for (l, c) in domain.links(i).iter().zip(&conductance[i]) {
+        for (l, c) in edges(i) {
             let q = c * dt * (s_new[i] - s_new[l.to]);
             let q = if q > 0. { q * limit[i] } else { q * limit[l.to] };
             net -= q;
@@ -295,11 +320,12 @@ pub fn flow_ice(domain: &Domain, p: &GlacierParams, bed: &[f64], ice: &mut [f64]
         // over the cell's width and the ice's mean thickness. Of that, the share due to
         // sliding is A_s / (2A/(n+2) H + A_s) (from D above).
         let mean = 0.5 * (supply[i] + h);
-        if mean < ICE_FREE { return (h, 0.); }
-        let speed = 0.5 * through / (dt * domain.area[i].sqrt() * mean);
-        (h, speed * p.sliding / (deform * mean + p.sliding))
-    }).unzip();
-    ice.copy_from_slice(&next);
+        if mean >= ICE_FREE {
+            let speed = 0.5 * through / (dt * domain.area[i].sqrt() * mean);
+            sliding[i] = speed * p.sliding / (deform * mean + p.sliding);
+        }
+        ice[i] = h;
+    }
     IceStep { dt, iterations, sliding }
 }
 
@@ -307,16 +333,17 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
-/// Solve A x = b for symmetric positive definite A (given as `apply`), with a Jacobi
-/// preconditioner `diag`, starting from `x`. Stops when the residual's norm falls to `tol`
+/// Solve A x = b for symmetric positive definite A (given as `apply`), with the preconditioner
+/// `precondition` (z = M⁻¹ r), starting from `x`. Stops when the residual's norm falls to `tol`
 /// times b's. Returns the iterations used.
-fn conjugate_gradient(apply: &dyn Fn(&[f64], &mut [f64]), diag: &[f64], b: &[f64], x: &mut [f64], tol: f64, max_iter: usize) -> usize {
+fn conjugate_gradient(apply: &dyn Fn(&[f64], &mut [f64]), precondition: &dyn Fn(&[f64], &mut [f64]), b: &[f64], x: &mut [f64], tol: f64, max_iter: usize) -> usize {
     let n = b.len();
     let mut ax = vec![0.; n];
     apply(x, &mut ax);
     let mut r: Vec<f64> = (0..n).map(|i| b[i] - ax[i]).collect();
     let target = tol * dot(b, b).sqrt().max(1e-300);
-    let mut z: Vec<f64> = (0..n).map(|i| r[i] / diag[i]).collect();
+    let mut z = vec![0.; n];
+    precondition(&r, &mut z);
     let mut p = z.clone();
     let mut rz = dot(&r, &z);
     let mut ap = vec![0.; n];
@@ -327,8 +354,8 @@ fn conjugate_gradient(apply: &dyn Fn(&[f64], &mut [f64]), diag: &[f64], b: &[f64
         for i in 0..n {
             x[i] += alpha * p[i];
             r[i] -= alpha * ap[i];
-            z[i] = r[i] / diag[i];
         }
+        precondition(&r, &mut z);
         let rz_next = dot(&r, &z);
         let beta = rz_next / rz;
         rz = rz_next;

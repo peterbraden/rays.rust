@@ -86,6 +86,8 @@ pub struct Terrain {
     pub sliding: Vec<f64>,
     /// Ice flow steps taken so far (for performance statistics).
     pub ice_steps: usize,
+    /// ... and the solver iterations they took.
+    pub ice_iterations: usize,
 }
 
 impl Terrain {
@@ -100,7 +102,7 @@ impl Terrain {
         let n = domain.len();
         let mut t = Terrain {
             domain, params, planet, time: 0., bed, uplift, latitude,
-            ice: vec![0.; n], drainage: vec![0.; n], sliding: vec![0.; n], ice_steps: 0,
+            ice: vec![0.; n], drainage: vec![0.; n], sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
         t.drainage = t.route().area;
         t
@@ -128,11 +130,9 @@ impl Terrain {
     }
 
     pub fn step(&mut self, dt: f64) {
-        let n = self.domain.len();
         let fixed = self.outlets();
-
-        for i in 0..n {
-            if !fixed[i] { self.bed[i] += self.uplift[i] * dt; }
+        for ((b, u), f) in self.bed.iter_mut().zip(&self.uplift).zip(&fixed) {
+            if !f { *b += u * dt; }
         }
 
         if let Some(g) = self.params.glacier.clone() {
@@ -162,9 +162,10 @@ impl Terrain {
             if balance.iter().all(|&m| m <= 0.) && self.ice.iter().all(|&h| h <= 0.) { break; }
             let step = flow_ice(&self.domain, g, &self.bed, &mut self.ice, &balance, fixed, (ice_time - done).min(g.max_step));
             erode(g, &mut self.bed, &step.sliding, fixed, step.dt * g.acceleration);
-            for i in 0..n { mean_sliding[i] += step.sliding[i] * step.dt / ice_time; }
+            for (m, s) in mean_sliding.iter_mut().zip(&step.sliding) { *m += s * step.dt / ice_time; }
             done += step.dt;
             self.ice_steps += 1;
+            self.ice_iterations += step.iterations;
         }
         self.sliding = mean_sliding;
     }

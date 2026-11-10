@@ -76,6 +76,8 @@ pub struct Domain {
     pub boundary: Vec<bool>,
     link_start: Vec<usize>,
     links: Vec<Link>,
+    /// Where each cell's diagonal links begin: edge-sharing links come first.
+    edge_end: Vec<usize>,
     /// Corner directions, for rendering.
     pub corners: Vec<Vector3<f64>>,
     /// The cells meeting at each corner, sorted.
@@ -119,6 +121,26 @@ impl Domain {
 
     pub fn links(&self, i: usize) -> &[Link] {
         &self.links[self.link_start[i] .. self.link_start[i + 1]]
+    }
+
+    /// Cell i's links to the neighbours it shares an edge with.
+    pub fn edges(&self, i: usize) -> &[Link] {
+        &self.links[self.link_start[i] .. self.edge_end[i]]
+    }
+
+    /// The index of cell i's first link among all cells' links, so per-link data can be kept
+    /// in one flat array: link k of cell i is at `link_offset(i) + k`.
+    pub fn link_offset(&self, i: usize) -> usize { self.link_start[i] }
+
+    /// Total links over all cells.
+    pub fn link_count(&self) -> usize { self.links.len() }
+
+    fn edge_ends(link_start: &[usize], links: &[Link]) -> Vec<usize> {
+        link_start.windows(2).map(|w| {
+            let first_diagonal = links[w[0] .. w[1]].iter().position(|l| l.width <= 0.).unwrap_or(w[1] - w[0]);
+            debug_assert!(links[w[0] + first_diagonal .. w[1]].iter().all(|l| l.width <= 0.));
+            w[0] + first_diagonal
+        }).collect()
     }
 
     /// The local "up" direction at latitude and longitude (degrees), and the east and north
@@ -193,6 +215,7 @@ impl Domain {
             layout: Layout::Patch { up, east, north, n, spacing },
             radius,
             area: vec![spacing * spacing; n * n],
+            edge_end: Domain::edge_ends(&link_start, &links),
             dirs, boundary, link_start, links, corners, corner_cells, quads,
         }
     }
@@ -275,7 +298,8 @@ impl Domain {
             }
         }
 
-        Domain { layout, radius, dirs, area, boundary: vec![false; count], link_start, links, corners, corner_cells, quads }
+        let edge_end = Domain::edge_ends(&link_start, &links);
+        Domain { layout, radius, dirs, area, boundary: vec![false; count], link_start, links, edge_end, corners, corner_cells, quads }
     }
 
     fn sphere_cell_at(n: usize, d: &Vector3<f64>) -> usize {

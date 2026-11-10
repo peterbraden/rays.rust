@@ -29,8 +29,9 @@ Supports:
   - Procedural Objects
     - Ocean (Tessendorf's algorithm with Phillips spectrum)
     - Terrain evolved through time from seeded noise by tectonic uplift, river incision and
-      deposition, glacial erosion (shallow ice approximation) and volcanism, over layered
-      geology, on a patch or a whole planet (see `src/terrain/`)
+      deposition, glacial erosion (shallow ice approximation), volcanism, deltas and
+      meandering rivers with ox-bow lakes, over layered geology, on a patch or a whole planet
+      (see `src/terrain/`)
     - Random Cubes
   - Multithreaded
   - Progressive rendering

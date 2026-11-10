@@ -471,6 +471,13 @@ processes can be animated.
 - Volcanoes (`volcano.rs`): vents from a seeded planet-wide lattice (random spacing, as de
   Bremond d'Arcs et al. 1995 found), cones, and DOWNFLOW-style lava flows (Favalli et al.
   2005); eruption rates after White et al. 2006.
+- Deltas (`marine.rs`): river sediment reaching the sea is laid at the mouth and spread by
+  depth-dependent diffusion (Kaufman et al. 1991; Rivenæs 1992) that moves only sediment; sea
+  cells built above sea level become land, so deltas prograde.
+- Meanders (`channel.rs`): a sub-grid centreline model on low-gradient reaches of large rivers
+  (Ikeda et al. 1981; Howard and Knutson 1984), confined to the valley floor, with neck
+  cutoffs leaving ox-bow lakes that fill over centuries. Rivers on patches are drawn as lines
+  at their hydraulic-geometry widths (Leopold and Maddock 1953) rather than as whole cells.
 - Time (`simulation.rs`): operator splitting, deterministic and resumable; morphological
   acceleration (MORFAC) for glacial erosion.
 - Scene object `"type": "terrain"` (`object.rs`), maps (`map.rs`), demo
@@ -486,9 +493,13 @@ processes can be animated.
 
 ### Known limitations and open questions
 
-- Sediment leaving at the sea is lost: no deltas or marine deposits. No moraines (glacial
-  debris goes straight to the rivers), no lateral erosion by meandering, so alluvial valleys
-  widen only by deposition. The sediment-to-bedrock erodibility ratio (3) and lava's (0.3) are
+- No moraines (glacial debris goes straight to the rivers). Lakes fill flat (no lake deltas:
+  filling from the inlet built kilometre-high sediment cliffs on 500 m cells). Marine
+  diffusivity constants are typical values, not fitted.
+- Meanders don't change the grid (no lateral erosion of valley walls or reworking of the
+  floodplain), are only on patches, and are reset when a reach's downstream end moves (reaches
+  are re-found every 1000 years). Howard and Knutson's nonlinear R0(r/w) is simplified to the
+  linear form; no chute cutoffs, avulsion or braiding. The sediment-to-bedrock erodibility ratio (3) and lava's (0.3) are
   model choices; no source found for typical values.
 - Volcanoes: no craters, calderas, explosive (tephra) deposits or lahars; cones are linear in
   profile; vents don't respond to tectonics or to loading.
@@ -554,6 +565,15 @@ processes can be animated.
 - Volcanoes: Favalli, Pareschi, Neri, Isola, GRL 32(3), 2005, doi:10.1029/2004GL021718; White,
   Crisp, Spera, G-cubed 7, 2006, doi:10.1029/2005GC001002; de Bremond d'Arcs, Jaupart, Sparks,
   JGR 100(B10), 1995, doi:10.1029/95JB02153.
+- Meanders: Ikeda, Parker, Sawai, J. Fluid Mech. 112, 1981, doi:10.1017/S0022112081000451;
+  Howard and Knutson, WRR 20(11), 1984, doi:10.1029/WR020i011p01659; Camporeale et al., Rev.
+  Geophys. 45, 2007, doi:10.1029/2005RG000185; Leopold and Maddock, USGS PP 252, 1953,
+  doi:10.3133/pp252; Constantine and Dunne, Geology 36(1), 2008, doi:10.1130/G24130A.1;
+  Constantine et al., Sedimentology 57(2), 2010; Constantine et al., Nature Geoscience 7, 2014,
+  doi:10.1038/ngeo2282; Langston and Tucker, ESurf 6, 2018, doi:10.5194/esurf-6-1-2018.
+- Marine: Kaufman, Grotzinger, McCormick, Kansas Geol. Survey Bull. 233, 1991; Rivenæs, Basin
+  Research 4, 1992, doi:10.1111/j.1365-2117.1992.tb00136.x; Yuan et al., EPSL 524, 2019,
+  doi:10.1016/j.epsl.2019.115728.
 - Unchecked: Halfar's solution as given by Bueler et al., J. Glaciology 51(173), 2005 (used by
   `test_halfar_dome`, which passing within 3% supports).
 

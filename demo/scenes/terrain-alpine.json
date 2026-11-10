@@ -41,7 +41,8 @@
       "time": "$time",
       "domain": { "type": "patch", "cells": 96, "spacing": 500 },
       "scale": 1000,
-      "exaggeration": 2
+      "exaggeration": 2,
+      "min_river_width": 150
     },
     { "type": "plane", "y": 0, "material": "WATER" },
     { "type": "skysphere", "sun_direction": [-0.6, 0.6, -0.2] }

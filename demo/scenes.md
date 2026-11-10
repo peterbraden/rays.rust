@@ -24,6 +24,9 @@ Volcanic mountains after the same cycle: a stratovolcano with lava flows, alluvi
 floors and filled lake basins.
 ![volcanic terrain](./scenes/terrain-volcanic.png)
 
+A coastal plain below mountains: rivers meandering to the sea, building deltas.
+![coastal terrain](./scenes/terrain-coast.png)
+
 ## Fireworks
 ![fireworks](./scenes/fireworks.png)
 

@@ -557,7 +557,8 @@ mod tests {
         let [lr, _, lb] = [low_e.rgb.x, low_e.rgb.y, low_e.rgb.z];
         assert!(hr < 1. && hb < hg && hg < hr, "{:?}", high);
         assert!(lr < hr && lb / lr < hb / hr, "high {:?} low {:?}", high, low);
-        assert_eq!(at("[0, -1, 0]").irradiance_at(&ground), Color::black());
+        // Night: the earth's shadow, so nothing to speak of.
+        assert!(at("[0, -1, 0]").irradiance_at(&ground).rgb.max() < 1e-12);
         // Higher up there is less air to cross: brighter, and whiter.
         let cloud = low.irradiance_at(&Vector3::new(0., 9000., 0.));
         assert!(cloud.rgb.z > 1.5 * lb && cloud.rgb.z / cloud.rgb.x > lb / lr, "{:?} vs {:?}", cloud, low_e);

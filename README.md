@@ -49,6 +49,8 @@ geometries can be built from each other. See [demo/scenes/instances.json](demo/s
   - Procedural Objects
     - Ocean (Tessendorf's algorithm with Phillips spectrum)
     - Random Cubes
+    - Terrain from heightmaps (fractal noise or images)
+    - Grass on any terrain: species presets (lawn, meadow, tussock, reed...) and conditions (wind, drought, frost, rain, mowing...)
   - Multithreaded
   - Progressive rendering
 

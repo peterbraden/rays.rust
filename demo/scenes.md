@@ -22,3 +22,12 @@ Twenty instances of one teapot mesh, each with its own transform and material.
 ## Fireworks
 ![fireworks](./scenes/fireworks.png)
 
+## Grass
+Procedural grass on a noise heightmap: a mix of meadow, tall and fescue species, grouped
+into zones, in a summer breeze and lit from behind so the blades glow.
+![grass meadow](./scenes/grass-meadow.png)
+
+Species and conditions side by side. Front, left to right: tall grass on a windy day, a
+summer meadow, a mown lawn with stripes. Back: reeds after rain, savanna in a drought,
+tussocks in frost.
+![grass variety](./scenes/grass-variety.png)

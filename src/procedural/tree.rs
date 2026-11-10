@@ -68,9 +68,6 @@ use crate::shapes::triangle::{Triangle, SmoothTriangle};
 use crate::shapes::geometry::{Geometry, Tagged};
 use crate::material::leaf::LeafState;
 use crate::shapes::bbox::BBox;
-use crate::octree::Octree;
-use crate::ray::Ray;
-use crate::intersection::RawIntersection;
 use serde_json::Value;
 use std::f64::consts::PI;
 use std::sync::Arc;
@@ -999,37 +996,6 @@ pub fn species(name: &str) -> Option<TreeParams> {
         _ => return None,
     };
     Some(p)
-}
-
-/// Triangles to trace, behind an octree.
-pub struct TriangleSet<T: Geometry> {
-    tree: Octree<T>,
-    bounds: BBox,
-    count: usize,
-}
-
-impl<T: Geometry> TriangleSet<T> {
-    pub fn new(items: &[Arc<T>]) -> TriangleSet<T> {
-        let mut bounds = BBox::empty();
-        for t in items {
-            bounds = bounds.union(&t.bounds());
-        }
-        TriangleSet { tree: Octree::new(8, bounds, items), bounds, count: items.len() }
-    }
-}
-
-impl<T: Geometry + Sync + Send> Geometry for TriangleSet<T> {
-    fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        self.tree.raw_intersection(r, f64::INFINITY, 0f64)
-    }
-
-    fn bounds(&self) -> BBox {
-        self.bounds
-    }
-
-    fn primitives(&self) -> u64 {
-        self.count as u64
-    }
 }
 
 #[cfg(test)]

@@ -44,6 +44,7 @@ mod shapes {
     pub mod transform;
     pub mod bbox;
     pub mod geometry;
+    pub mod geometry_set;
     pub mod csg;
     pub mod sphere;
     pub mod plane;

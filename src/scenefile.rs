@@ -37,6 +37,7 @@ use crate::material::diffuse_light::DiffuseLight;
 use crate::material::noise::{NoiseTexture, NoiseType};
 use crate::participatingmedia::{ParticipatingMedium, HomogenousFog, Vacuum};
 use crate::shapes::geometry::{Geometry, Tagged};
+use crate::shapes::geometry_set::GeometrySet;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -308,7 +309,19 @@ impl SceneFile {
         let species = o.get("species").map_or("quaking-aspen".to_string(), SceneFile::parse_string);
         let p = tree::params(&species, &o["params"]);
         let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
-        let mesh = tree::generate(&p, seed, SceneFile::parse_vec3_def(o, "location", Vector3::zeros()));
+        let location = SceneFile::parse_vec3_def(o, "location", Vector3::zeros());
+        SceneFile::tree_parts(o, &p, seed, location, materials, media).into_iter()
+            .map(|(geometry, medium)| Arc::new(SceneObject { geometry: Box::new(geometry), medium }))
+            .collect()
+    }
+
+    /// The parts of a tree with parameters `p`, chosen by `seed`, grown at `location`, each a
+    /// geometry and the medium it's made of: its bark, its dead branches' bark, and its leaves in
+    /// as many parts as `o` names leaf materials. `o` names the materials as for `parse_tree`.
+    pub fn tree_parts(o: &Value, p: &tree::TreeParams, seed: u64, location: Vector3<f64>,
+                      materials: &Map<String, Value>, media: &Map<String, Value>)
+                      -> Vec<(SharedGeometry, Box<dyn Medium + Sync + Send>)> {
+        let mesh = tree::generate(p, seed, location);
         let medium = |key: &Value| -> Box<dyn Medium + Sync + Send> {
             let name = SceneFile::parse_string(key);
             if materials.contains_key(&name) {
@@ -337,18 +350,12 @@ impl SceneFile {
         };
         let bark = || o.get("bark").map_or_else(|| default(Color::new(0.25, 0.2, 0.16)), medium);
 
-        let mut objects = vec![];
+        let mut parts: Vec<(SharedGeometry, Box<dyn Medium + Sync + Send>)> = vec![];
         if !mesh.bark.is_empty() {
-            objects.push(Arc::new(SceneObject {
-                geometry: Box::new(tree::TriangleSet::new(&mesh.bark)),
-                medium: bark(),
-            }));
+            parts.push((Arc::new(GeometrySet::new(&mesh.bark)), bark()));
         }
         if !mesh.dead_bark.is_empty() {
-            objects.push(Arc::new(SceneObject {
-                geometry: Box::new(tree::TriangleSet::new(&mesh.dead_bark)),
-                medium: o.get("dead_bark").map_or_else(bark, medium),
-            }));
+            parts.push((Arc::new(GeometrySet::new(&mesh.dead_bark)), o.get("dead_bark").map_or_else(bark, medium)));
         }
 
         let leaf_media: Vec<Box<dyn Medium + Sync + Send>> = match o.get("leaves") {
@@ -366,13 +373,10 @@ impl SceneFile {
         }
         for (triangles, medium) in groups.into_iter().zip(leaf_media) {
             if !triangles.is_empty() {
-                objects.push(Arc::new(SceneObject {
-                    geometry: Box::new(tree::TriangleSet::new(&triangles)),
-                    medium,
-                }));
+                parts.push((Arc::new(GeometrySet::new(&triangles)), medium));
             }
         }
-        objects
+        parts
     }
 
     pub fn parse_skysphere(o: &Value) -> SceneObject {

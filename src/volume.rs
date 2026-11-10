@@ -29,7 +29,7 @@ use crate::geometry::rand;
 use crate::intersection::{Intersection, RawIntersection};
 use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::material::functions::sample_area_light_with;
-use crate::material::phase::{henyey_greenstein, sample_henyey_greenstein};
+use crate::material::phase::PhaseFunction;
 use crate::material::texture::Solid;
 use crate::na::Vector3;
 use crate::noise::PerlinNoise;
@@ -213,12 +213,12 @@ impl Geometry for Volume {
 }
 
 /// What happens at a collision in a volume: the light is scattered with probability `albedo`
-/// (per colour channel), in a direction from the Henyey-Greenstein phase function with
-/// asymmetry `g`, and otherwise absorbed. Clouds scatter nearly everything (albedo ≈ 1) and
-/// mostly forwards (g ≈ 0.85); smoke absorbs more.
+/// (per colour channel), in a direction from the phase function, and otherwise absorbed.
+/// Clouds scatter nearly everything (albedo ≈ 1) and mostly forwards (mean cosine ≈ 0.85);
+/// smoke absorbs more.
 pub struct VolumeMaterial {
     pub albedo: Color,
-    pub g: f64,
+    pub phase: PhaseFunction,
 }
 
 impl VolumeMaterial {
@@ -228,7 +228,7 @@ impl VolumeMaterial {
     /// Point lights and the sun are delta lights, which a scattered ray can never hit, so this
     /// is the only way they reach a medium; area lights are sampled once, as at a surface.
     fn direct_lighting(&self, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene) -> Color {
-        let phase = |w: &Vector3<f64>| henyey_greenstein(incoming.dot(w), self.g);
+        let phase = |w: &Vector3<f64>| self.phase.eval(incoming.dot(w));
         let mut direct = Color::black();
         for light in &s.lights {
             let to_light = light.position - point;
@@ -251,7 +251,7 @@ impl VolumeMaterial {
 impl MaterialModel for VolumeMaterial {
     fn scatter(&self, r: &Ray, i: &Intersection, s: &Scene) -> ScatteredRay {
         let incoming = r.rd.normalize();
-        let rd = sample_henyey_greenstein(&incoming, self.g, rand(), rand());
+        let rd = self.phase.sample(&incoming);
         ScatteredRay {
             ray: Some(Ray { ro: i.point, rd }),
             // The direction was drawn from the phase function itself, so phase / pdf = 1.
@@ -264,10 +264,10 @@ impl MaterialModel for VolumeMaterial {
     }
 }
 
-pub fn create_volume(bounds: BBox, density: Box<dyn DensityField>, albedo: Color, g: f64) -> SceneObject {
+pub fn create_volume(bounds: BBox, density: Box<dyn DensityField>, albedo: Color, phase: PhaseFunction) -> SceneObject {
     SceneObject {
         geometry: Box::new(Volume { bounds, density }),
-        medium: Box::new(Solid { m: Box::new(VolumeMaterial { albedo, g }) }),
+        medium: Box::new(Solid { m: Box::new(VolumeMaterial { albedo, phase }) }),
     }
 }
 

@@ -49,6 +49,98 @@ pub fn sample_henyey_greenstein(incoming: &Vector3<f64>, g: f64, u1: f64, u2: f6
     (t * (sin_theta * phi.cos()) + b * (sin_theta * phi.sin()) + incoming * cos_theta).normalize()
 }
 
+/// Draine's phase function, from B. T. Draine, "Scattering by Interstellar Dust Grains. I.
+/// Optical and Ultraviolet", Astrophysical Journal 598, 2003, eq. 4: Henyey-Greenstein
+/// reshaped by (1 + α cos² θ), which adds a second, backward peak.
+///
+/// ```text
+/// p(cos θ) = HG(cos θ, g) (1 + α cos² θ) / (1 + α (1 + 2g²) / 3)
+/// ```
+pub fn draine(cos_theta: f64, g: f64, alpha: f64) -> f64 {
+    henyey_greenstein(cos_theta, g) * (1. + alpha * cos_theta * cos_theta)
+        / (1. + alpha * (1. + 2. * g * g) / 3.)
+}
+
+/// How a medium scatters, as a function of the angle between the directions of travel before
+/// and after.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PhaseFunction {
+    HenyeyGreenstein { g: f64 },
+    /// Johannes Jendersie and Eugene d'Eon, "An Approximate Mie Scattering Function for Fog and
+    /// Cloud Rendering", SIGGRAPH 2023 Talks: a blend, (1 - w) HG(g_hg) + w Draine(g_d, α),
+    /// fitted to the Mie scattering of water droplets of a given diameter. It has Mie's sharp
+    /// forward peak and its broader backward lobe, both of which a single Henyey-Greenstein
+    /// misses (the latter makes the "glory" and fogbow).
+    HgDraine { g_hg: f64, g_d: f64, alpha: f64, w_d: f64 },
+}
+
+impl PhaseFunction {
+    /// The HG + Draine fit for water droplets of diameter `d` micrometres, for 5 ≤ d ≤ 50: the
+    /// paper's fit for cloud and fog droplets, whose diameters are typically 10 to 20 µm. The
+    /// constants are the paper's, as also used by Lukas Herzberger's webgpu-sky-atmosphere
+    /// (<https://github.com/JolifantoBambla/webgpu-sky-atmosphere>, MIT licence).
+    pub fn water_droplets(d: f64) -> PhaseFunction {
+        assert!((5. ..=50.).contains(&d), "Droplet diameter must be 5 to 50 µm, got {}", d);
+        PhaseFunction::HgDraine {
+            g_hg: (-0.0990567 / (d - 1.67154)).exp(),
+            g_d: (-2.20679 / (d + 3.91029) - 0.428934).exp(),
+            alpha: (3.62489 - 8.29288 / (d + 5.52825)).exp(),
+            w_d: (-0.599085 / (d - 0.641583) - 0.665888).exp(),
+        }
+    }
+
+    pub fn isotropic() -> PhaseFunction {
+        PhaseFunction::HenyeyGreenstein { g: 0. }
+    }
+
+    /// The density, per steradian, of scattering through an angle with cosine `cos_theta`.
+    pub fn eval(&self, cos_theta: f64) -> f64 {
+        match *self {
+            PhaseFunction::HenyeyGreenstein { g } => henyey_greenstein(cos_theta, g),
+            PhaseFunction::HgDraine { g_hg, g_d, alpha, w_d } =>
+                (1. - w_d) * henyey_greenstein(cos_theta, g_hg) + w_d * draine(cos_theta, g_d, alpha),
+        }
+    }
+
+    /// The mean cosine of the scattering angle: how forward (towards 1) or backward the
+    /// scattering is on average. For Henyey-Greenstein it is g. Draine's is found from HG's
+    /// moments, <cos θ> = g and <cos³ θ> = (3g + 2g³) / 5 (from its Legendre expansion, whose
+    /// coefficients are powers of g).
+    pub fn mean_cosine(&self) -> f64 {
+        match *self {
+            PhaseFunction::HenyeyGreenstein { g } => g,
+            PhaseFunction::HgDraine { g_hg, g_d, alpha, w_d } => {
+                let g = g_d;
+                let draine = (g + alpha * (3. * g + 2. * g * g * g) / 5.) / (1. + alpha * (1. + 2. * g * g) / 3.);
+                (1. - w_d) * g_hg + w_d * draine
+            },
+        }
+    }
+
+    /// A direction scattered from `incoming` (a unit vector), distributed exactly as `eval`, using
+    /// this thread's random numbers. The Draine lobe is sampled by rejection from
+    /// Henyey-Greenstein: accept with probability (1 + α cos² θ) / (1 + α), which is at least
+    /// 1 / (1 + α) and averages (1 + α (1 + 2g²) / 3) / (1 + α).
+    pub fn sample(&self, incoming: &Vector3<f64>) -> Vector3<f64> {
+        use crate::geometry::rand;
+        match *self {
+            PhaseFunction::HenyeyGreenstein { g } => sample_henyey_greenstein(incoming, g, rand(), rand()),
+            PhaseFunction::HgDraine { g_hg, g_d, alpha, w_d } => {
+                if rand() >= w_d {
+                    return sample_henyey_greenstein(incoming, g_hg, rand(), rand());
+                }
+                loop {
+                    let d = sample_henyey_greenstein(incoming, g_d, rand(), rand());
+                    let mu = d.dot(incoming);
+                    if rand() * (1. + alpha) < 1. + alpha * mu * mu {
+                        return d;
+                    }
+                }
+            },
+        }
+    }
+}
+
 /// Two unit vectors perpendicular to the unit vector `n` and to each other, after Duff et al.,
 /// "Building an Orthonormal Basis, Revisited", Journal of Computer Graphics Techniques 6(1), 2017.
 fn orthonormal_basis(n: &Vector3<f64>) -> (Vector3<f64>, Vector3<f64>) {
@@ -117,6 +209,68 @@ mod tests {
             henyey_greenstein(lo + (hi - lo) * (i as f64 + 0.5) / steps as f64, g)
         }).sum::<f64>() * (hi - lo) / steps as f64 * 2. * PI;
         assert!((within - expected).abs() < 0.005, "{} vs {}", within, expected);
+    }
+
+    /// The integral over the sphere, and the mean cosine, by quadrature in cos θ = 1 - 2u⁴,
+    /// which crowds the points towards the forward peak (for 50 µm droplets, g ≈ 0.998).
+    fn moments(p: &PhaseFunction) -> (f64, f64) {
+        let n = 400_000;
+        let (mut total, mut mean) = (0., 0.);
+        for i in 0..n {
+            let u: f64 = (i as f64 + 0.5) / n as f64;
+            let mu = 1. - 2. * u.powi(4);
+            let w = p.eval(mu) * 2. * PI * 8. * u.powi(3) / n as f64;
+            total += w;
+            mean += w * mu;
+        }
+        (total, mean)
+    }
+
+    #[test]
+    fn test_water_droplet_phase_is_normalised_and_forward() {
+        for d in [5., 10., 20., 50.] {
+            let p = PhaseFunction::water_droplets(d);
+            let (total, mean) = moments(&p);
+            assert!((total - 1.).abs() < 2e-3, "d {}: integral {}", d, total);
+            assert!((mean - p.mean_cosine()).abs() < 2e-3, "d {}: mean cosine {} vs {}", d, mean, p.mean_cosine());
+            // Cloud droplets scatter strongly forward, more so the larger they are, with a
+            // secondary backward lobe: more light straight back than at right angles.
+            assert!(p.mean_cosine() > 0.75 && p.mean_cosine() < 0.95, "d {}: {}", d, p.mean_cosine());
+            assert!(p.eval(-1.) > p.eval(0.), "d {}: no backward lobe", d);
+        }
+        assert!(PhaseFunction::water_droplets(20.).mean_cosine() > PhaseFunction::water_droplets(5.).mean_cosine());
+    }
+
+    #[test]
+    fn test_water_droplet_sampling_follows_eval() {
+        crate::geometry::seed_rand(12, 0);
+        let p = PhaseFunction::water_droplets(15.);
+        let incoming = Vector3::new(0.3, -0.4, 0.5).normalize();
+        let n = 300_000;
+        let bands = [(-1., -0.9), (-0.5, 0.), (0.5, 0.9), (0.99, 1.)];
+        let mut counts = [0usize; 4];
+        let mut mean = 0.;
+        for _ in 0..n {
+            let mu = p.sample(&incoming).dot(&incoming);
+            mean += mu / n as f64;
+            for (k, (lo, hi)) in bands.iter().enumerate() {
+                counts[k] += (mu >= *lo && mu < *hi) as usize;
+            }
+        }
+        assert!((mean - p.mean_cosine()).abs() < 0.005, "{} vs {}", mean, p.mean_cosine());
+        for (k, (lo, hi)) in bands.iter().enumerate() {
+            let steps = 20_000;
+            let expected: f64 = (0..steps).map(|i| p.eval(lo + (hi - lo) * (i as f64 + 0.5) / steps as f64))
+                .sum::<f64>() * (hi - lo) / steps as f64 * 2. * PI;
+            let got = counts[k] as f64 / n as f64;
+            assert!((got - expected).abs() < 0.003 + 0.02 * expected, "band {:?}: {} vs {}", bands[k], got, expected);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "5 to 50")]
+    fn test_droplet_diameter_out_of_fit() {
+        PhaseFunction::water_droplets(2.);
     }
 
     #[test]

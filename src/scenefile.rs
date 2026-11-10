@@ -19,6 +19,7 @@ use crate::procedural::nubis_clouds::NubisCloudLayer;
 use crate::participatingmedia::create_fog;
 use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity};
 use crate::noise::PerlinNoise;
+use crate::material::phase::PhaseFunction;
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
 use serde_json::{Value, Map};
@@ -267,8 +268,10 @@ impl SceneFile {
     ///
     /// `density` is the extinction coefficient, the chance of a collision per unit distance
     /// (default 1). Without `noise` it is constant; with it, it varies up to that maximum.
-    /// `albedo` (default white) is the fraction scattered rather than absorbed at a collision,
-    /// and `g` (default 0, -1 to 1) how strongly forwards it scatters.
+    /// `albedo` (default white) is the fraction scattered rather than absorbed at a collision.
+    /// How it scatters is given by `g` (Henyey-Greenstein, -1 to 1, default 0) or by
+    /// `droplet_diameter` (in µm, 5 to 50: the Mie scattering of water droplets of that size;
+    /// see `PhaseFunction::water_droplets`).
     pub fn parse_volume(o: &Value) -> SceneObject {
         let bounds = BBox::new(SceneFile::parse_vec3(&o["min"]), SceneFile::parse_vec3(&o["max"]));
         let max_density = SceneFile::parse_number(&o["density"], 1.);
@@ -282,16 +285,32 @@ impl SceneFile {
                 threshold: SceneFile::parse_number(&n["threshold"], 0.5),
             }),
         };
-        let g = SceneFile::parse_number(&o["g"], 0.);
-        assert!(g > -1. && g < 1., "Volume g must be between -1 and 1, got {}", g);
-        create_volume(bounds, density, SceneFile::parse_color_def(o, "albedo", Color::white()), g)
+        create_volume(bounds, density, SceneFile::parse_color_def(o, "albedo", Color::white()),
+            SceneFile::parse_phase(o, 0.))
+    }
+
+    /// A medium's phase function: `droplet_diameter` (µm) for water droplets, or else
+    /// Henyey-Greenstein with `g` (default `default_g`).
+    pub fn parse_phase(o: &Value, default_g: f64) -> PhaseFunction {
+        match o.get("droplet_diameter") {
+            Some(d) => {
+                assert!(o.get("g").is_none(), "Give a medium either g or droplet_diameter, not both");
+                PhaseFunction::water_droplets(SceneFile::parse_number(d, 0.))
+            },
+            None => {
+                let g = SceneFile::parse_number(&o["g"], default_g);
+                assert!(g > -1. && g < 1., "g must be between -1 and 1, got {}", g);
+                PhaseFunction::HenyeyGreenstein { g }
+            },
+        }
     }
 
     /// A layer of procedural clouds by the Nubis method (see `procedural::nubis_clouds`), as a
     /// volume from `base` to `top` and `extent` either side of `center` ([x, z]) across:
     ///
     /// `{"type": "nubis_clouds", "base": 1500, "top": 3000, "extent": 20000, "coverage": 0.5,
-    /// "cloud_type": 1, "density": 0.05, "albedo": colour, "g": 0.85, "seed": 0}`
+    /// "cloud_type": 1, "density": 0.05, "albedo": colour, "g": 0.85, "seed": 0}`, with
+    /// `droplet_diameter` in place of `g` for Mie scattering (as for `volume`).
     ///
     /// `coverage` (0 to 1) is how much of the sky is cloud; `cloud_type` runs from stratus (0)
     /// through stratocumulus (0.5) to cumulus (1); `density` is the extinction coefficient in
@@ -315,9 +334,8 @@ impl SceneFile {
             Vector3::new(center.x - extent, base, center.y - extent),
             Vector3::new(center.x + extent, top, center.y + extent),
         );
-        let g = SceneFile::parse_number(&o["g"], 0.85);
-        assert!(g > -1. && g < 1., "Clouds' g must be between -1 and 1, got {}", g);
-        create_volume(bounds, Box::new(layer), SceneFile::parse_color_def(o, "albedo", Color::white()), g)
+        create_volume(bounds, Box::new(layer), SceneFile::parse_color_def(o, "albedo", Color::white()),
+            SceneFile::parse_phase(o, 0.85))
     }
 
     pub fn parse_box_terrain(o: &Value) -> SceneObject {
@@ -974,6 +992,20 @@ mod tests {
             "materials": {{}}, "media": {{}}, "objects": [], "variables": {{}}
             {}
         }}"#, extra), width, height)
+    }
+
+    #[test]
+    fn test_parse_phase() {
+        use serde_json::json;
+        assert_eq!(SceneFile::parse_phase(&json!({}), 0.3), PhaseFunction::HenyeyGreenstein { g: 0.3 });
+        assert_eq!(SceneFile::parse_phase(&json!({ "g": -0.2 }), 0.3), PhaseFunction::HenyeyGreenstein { g: -0.2 });
+        assert_eq!(SceneFile::parse_phase(&json!({ "droplet_diameter": 12 }), 0.3), PhaseFunction::water_droplets(12.));
+    }
+
+    #[test]
+    #[should_panic(expected = "not both")]
+    fn test_parse_phase_rejects_both() {
+        SceneFile::parse_phase(&serde_json::json!({ "g": 0.5, "droplet_diameter": 12 }), 0.);
     }
 
     #[test]

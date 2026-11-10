@@ -36,6 +36,7 @@ mod material {
     pub mod plastic;
     pub mod noise;
     pub mod phase;
+    pub mod diffraction;
 }
 mod intersection;
 mod sceneobject;

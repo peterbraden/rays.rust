@@ -143,7 +143,7 @@ impl PhaseFunction {
 
 /// Two unit vectors perpendicular to the unit vector `n` and to each other, after Duff et al.,
 /// "Building an Orthonormal Basis, Revisited", Journal of Computer Graphics Techniques 6(1), 2017.
-fn orthonormal_basis(n: &Vector3<f64>) -> (Vector3<f64>, Vector3<f64>) {
+pub(crate) fn orthonormal_basis(n: &Vector3<f64>) -> (Vector3<f64>, Vector3<f64>) {
     let sign = 1f64.copysign(n.z);
     let a = -1. / (sign + n.z);
     let b = n.x * n.y * a;

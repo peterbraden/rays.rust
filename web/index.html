@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rays scene builder</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+    <h1>Rays</h1>
+    <label>Scene
+        <select id="scene-picker"></select>
+    </label>
+    <label>Preview size
+        <select id="preview-size">
+            <option value="240">240</option>
+            <option value="360" selected>360</option>
+            <option value="480">480</option>
+            <option value="720">720</option>
+        </select>
+    </label>
+    <button id="download" type="button">Download JSON</button>
+    <span id="status" role="status"></span>
+</header>
+<main>
+    <section id="outline-panel" aria-label="Scene outline">
+        <div class="panel-head">
+            <h2>Scene</h2>
+            <select id="add" aria-label="Add to the scene">
+                <option value="">Add…</option>
+            </select>
+        </div>
+        <ul id="outline"></ul>
+        <div class="panel-head">
+            <h2 id="inspector-title">Properties</h2>
+            <span>
+                <button id="duplicate" type="button" hidden>Duplicate</button>
+                <button id="delete" type="button" hidden>Delete</button>
+            </span>
+        </div>
+        <form id="inspector" autocomplete="off"></form>
+    </section>
+    <section id="viewport" aria-label="Preview">
+        <canvas id="canvas" width="360" height="240"></canvas>
+        <p id="error" role="alert" hidden></p>
+        <p id="hint">Drag to orbit · Shift-drag to pan · Scroll to zoom · Click an object to select it</p>
+    </section>
+    <section id="json-panel" aria-label="Scene file">
+        <div class="panel-head">
+            <h2>Scene file</h2>
+            <span id="json-state"></span>
+        </div>
+        <textarea id="json" spellcheck="false" aria-label="Scene JSON"></textarea>
+    </section>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

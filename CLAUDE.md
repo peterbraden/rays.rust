@@ -18,6 +18,12 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Format code: `cargo fmt`
 - View sample scenes: `cargo run --release -- demo/scenes/<scene_file>.json`
 
+## Browser Scene Builder (prototype, `web/`)
+- Build the renderer for the browser: `web/build.sh` (needs `rustup target add wasm32-unknown-unknown` once); writes `web/rays.wasm`
+- Serve the repository root and open `/web/`: `python3 -m http.server 8000`, then http://localhost:8000/web/
+- The renderer is the `rays` library; the command line is its default `cli` feature. `web/wasm` builds the library without it. Code the library needs must build for `wasm32-unknown-unknown`: read files through `crate::assets`, and don't use `std::time::Instant` or threads outside rayon
+- `src/preview.rs` is the interface the page drives (build from JSON, render rows of a layer, set camera, pick)
+
 ## Command-line Options
 - `<FILE>`: Scene file (required, positional). The image is written alongside it with a `.png` extension
 - `-o, --output <FILE>`: Write the image here instead; `.png` (8-bit, display-encoded) or `.exr` (linear float)

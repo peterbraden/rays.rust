@@ -124,8 +124,11 @@ pub struct Planet {
 
 /// Lattice units per planet radius of the continent field.
 const CONTINENT_FREQUENCY: f64 = 1.2;
-/// ... and of the relief.
+/// ... of the hills ...
 const RELIEF_FREQUENCY: f64 = 12.;
+/// ... and of the mountain ridges: a base wavelength of about 40 km on an Earth-sized planet,
+/// the spacing of major valleys in real ranges.
+const RIDGE_FREQUENCY: f64 = 160.;
 
 impl Planet {
     pub fn new(params: PlanetParams) -> Planet {
@@ -160,17 +163,19 @@ impl Planet {
     pub fn elevation(&self, d: &Vector3<f64>, finest: f64) -> f64 {
         let c = self.continent(d);
         let base = if c >= 0. { 1500. * c } else { -4500. * (-6. * c).tanh() };
-        let octaves = self.octaves(RELIEF_FREQUENCY, finest);
         let land = smoothstep(-0.02, 0.05, c);
-        let hills = 150. * self.relief.fbm(d, RELIEF_FREQUENCY, octaves) * land;
-        let mountains = self.params.mountain_height * self.orogeny(d)
-            * (0.3 + 0.7 * self.relief.ridged(d, RELIEF_FREQUENCY * 2., octaves));
+        let hills = 150. * self.relief.fbm(d, RELIEF_FREQUENCY, self.octaves(RELIEF_FREQUENCY, finest)) * land;
+        // Ridges over a raised belt; squaring the ridged noise leaves broad lowlands between
+        // sharp crests.
+        let ridges = self.relief.ridged(d, RIDGE_FREQUENCY, self.octaves(RIDGE_FREQUENCY, finest).max(3));
+        let mountains = self.params.mountain_height * self.orogeny(d) * (0.25 + 0.75 * ridges * ridges);
         base + hills + mountains
     }
 
-    /// The (latitude, longitude) in degrees of the most mountainous land, sampling `samples`
-    /// points spread evenly over the planet (a Fibonacci lattice). Lets a scene ask for "some
-    /// mountains" without knowing where this seed put them.
+    /// The (latitude, longitude) in degrees of the most mountainous land at middle latitudes
+    /// (30 to 55 degrees, where mountains carry valley glaciers rather than ice sheets),
+    /// sampling `samples` points spread evenly over the planet (a Fibonacci lattice). Lets a
+    /// scene ask for "some mountains" without knowing where this seed put them.
     pub fn most_mountainous(&self, samples: usize) -> (f64, f64) {
         let golden = std::f64::consts::PI * (3. - 5f64.sqrt());
         let mut best = (f64::NEG_INFINITY, 0., 0.);
@@ -179,7 +184,8 @@ impl Planet {
             let lon = (golden * i as f64).rem_euclid(std::f64::consts::TAU);
             let lat = y.asin();
             let d = Vector3::new(lat.cos() * lon.cos(), lat.sin(), -lat.cos() * lon.sin());
-            let score = self.orogeny(&d) + 0.1 * self.continent(&d);
+            let mid = (30f64.to_radians() .. 55f64.to_radians()).contains(&lat.abs());
+            let score = self.orogeny(&d) + 0.1 * self.continent(&d) + if mid { 1. } else { 0. };
             if score > best.0 { best = (score, lat.to_degrees(), lon.to_degrees()); }
         }
         (best.1, best.2)

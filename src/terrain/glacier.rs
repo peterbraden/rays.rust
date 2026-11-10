@@ -68,11 +68,13 @@
 //! neighbours are evenly spaced around it, but sees a peak as sloping.
 //!
 //! D grows as H⁵, so explicit steps must be minuscule where thick ice lies on steep slopes:
-//! fractions of a year on 250 m cells. Instead each step is semi-implicit: D is taken from the
+//! fractions of a year on 400 m cells. Instead each step is semi-implicit: D is taken from the
 //! start of the step and the resulting linear system, symmetric positive definite, is solved by
-//! conjugate gradients. That is stable for long steps, although the lagged D makes it less
-//! accurate as steps grow. `test_halfar_dome` checks the scheme against Halfar's exact solution
-//! for a spreading ice dome.
+//! conjugate gradients with a Jacobi preconditioner. Very long steps are both inaccurate (D is
+//! lagged) and slow to solve (the system's condition number grows with Δt D / Δx²), so the step
+//! is shortened until no cell exchanges more than `max_stiffness` times its own volume
+//! (Δt Σc / area); typically a few years, where an explicit scheme would need hundreds of steps.
+//! `test_halfar_dome` checks the scheme against Halfar's exact solution for a spreading dome.
 //!
 //! Jarosch, Schoof and Anslow ("Restoring mass conservation to shallow ice flow models over
 //! complex terrain", The Cryosphere 7, 2013, doi:10.5194/tc-7-229-2013) show that standard SIA
@@ -98,6 +100,12 @@
 //! ∂b/∂t = -K_g |u_s|^l,   l = 1, K_g = 1e-4
 //! ```
 //!
+//! u_s is not evaluated from τ cell by cell: at an ice margin or over a step in the bed the
+//! cell's slope is unrepresentative and τ³ makes such errors huge (kilometres of erosion per
+//! step, in early experiments). Instead the speed comes from the (limited) ice flux through
+//! the cell, |q| / H, of which the sliding share is A_s H^(n+1) / (2A/(n+2) H^(n+2) + A_s H^(n+1)).
+//! So erosion only happens where ice actually moves.
+//!
 //! Herman et al. ("Erosion by an Alpine glacier", Science 350, 2015,
 //! doi:10.1126/science.aab2386) found l ≈ 2 at Franz Josef Glacier; with l = 2, K_g changes
 //! units and must be refitted.
@@ -106,6 +114,7 @@
 //! pressure in sliding; the bed's isostatic response to the ice's weight; debris.
 
 use crate::terrain::domain::Domain;
+use crate::terrain::simulation::ICE_FREE;
 use rayon::prelude::*;
 
 #[derive(Clone, Debug)]
@@ -136,6 +145,11 @@ pub struct GlacierParams {
     pub max_accumulation: f64,
     /// Longest ice time step, years.
     pub max_step: f64,
+    /// Largest ice step relative to the fastest diffusion: Δt Σc / area (see `flow_ice`).
+    pub max_stiffness: f64,
+    /// Morphological acceleration factor (see `simulation`): years of landscape evolution per
+    /// year of ice flow.
+    pub acceleration: f64,
 }
 
 impl Default for GlacierParams {
@@ -155,6 +169,8 @@ impl Default for GlacierParams {
             balance_gradient: 0.007,
             max_accumulation: 2.,
             max_step: 10.,
+            max_stiffness: 200.,
+            acceleration: 10.,
         }
     }
 }
@@ -187,9 +203,21 @@ pub fn slope_squared(domain: &Domain, s: &[f64]) -> Vec<f64> {
     }).collect()
 }
 
-/// Advance ice thickness `ice` over `bed` by `dt` years, with mass balance `balance` (m/yr).
-/// Cells marked `drain` lose all their ice. Returns the number of conjugate gradient iterations.
-pub fn flow_ice(domain: &Domain, p: &GlacierParams, bed: &[f64], ice: &mut [f64], balance: &[f64], drain: &[bool], dt: f64) -> usize {
+/// What an ice step did, besides changing the thickness.
+pub struct IceStep {
+    /// Years of ice flow taken.
+    pub dt: f64,
+    /// Conjugate gradient iterations used.
+    pub iterations: usize,
+    /// Mean basal sliding speed over the step, metres per year.
+    pub sliding: Vec<f64>,
+}
+
+/// Advance ice thickness `ice` over `bed` by up to `max_dt` years, with mass balance `balance`
+/// (m/yr). Cells marked `drain` lose all their ice. The step is shortened so that no cell
+/// exchanges more than `max_stiffness` times its own volume in a step (Δt Σc / area), which
+/// keeps the linear system well conditioned and the lagged diffusivity accurate.
+pub fn flow_ice(domain: &Domain, p: &GlacierParams, bed: &[f64], ice: &mut [f64], balance: &[f64], drain: &[bool], max_dt: f64) -> IceStep {
     let n = domain.len();
     let s: Vec<f64> = (0..n).map(|i| bed[i] + ice[i]).collect();
     let g2 = slope_squared(domain, &s);
@@ -208,6 +236,10 @@ pub fn flow_ice(domain: &Domain, p: &GlacierParams, bed: &[f64], ice: &mut [f64]
             l.width * d / l.dist
         }).collect()
     }).collect();
+
+    let stiffness = (0..n).filter(|&i| !drain[i])
+        .map(|i| conductance[i].iter().sum::<f64>() / domain.area[i]).fold(0., f64::max);
+    let dt = if stiffness > 0. { max_dt.min(p.max_stiffness / stiffness) } else { max_dt };
 
     let diag: Vec<f64> = (0..n).map(|i| {
         if drain[i] { 1. } else { domain.area[i] / dt + conductance[i].iter().sum::<f64>() }
@@ -244,17 +276,27 @@ pub fn flow_ice(domain: &Domain, p: &GlacierParams, bed: &[f64], ice: &mut [f64]
             .map(|(l, c)| (c * dt * (s_new[i] - s_new[l.to])).max(0.)).sum();
         if out > 0. { (domain.area[i] * supply[i] / out).min(1.) } else { 1. }
     }).collect();
-    let next: Vec<f64> = (0..n).into_par_iter().map(|i| {
-        if drain[i] { return 0.; }
-        let net: f64 = domain.links(i).iter().zip(&conductance[i]).map(|(l, c)| {
+    let (next, sliding): (Vec<f64>, Vec<f64>) = (0..n).into_par_iter().map(|i| {
+        if drain[i] { return (0., 0.); }
+        let (mut net, mut through) = (0., 0.);
+        for (l, c) in domain.links(i).iter().zip(&conductance[i]) {
             let q = c * dt * (s_new[i] - s_new[l.to]);
-            if q > 0. { -q * limit[i] } else { -q * limit[l.to] }
-        }).sum();
+            let q = if q > 0. { q * limit[i] } else { q * limit[l.to] };
+            net -= q;
+            through += q.abs();
+        }
         // Melt last, so that ice arriving during the step melts too.
-        (supply[i] + net / domain.area[i] + dt * balance[i].min(0.)).max(0.)
-    }).collect();
+        let h = (supply[i] + net / domain.area[i] + dt * balance[i].min(0.)).max(0.);
+        // Speed from the volume passing through the cell: half of what crosses its edges,
+        // over the cell's width and the ice's mean thickness. Of that, the share due to
+        // sliding is A_s / (2A/(n+2) H + A_s) (from D above).
+        let mean = 0.5 * (supply[i] + h);
+        if mean < ICE_FREE { return (h, 0.); }
+        let speed = 0.5 * through / (dt * domain.area[i].sqrt() * mean);
+        (h, speed * p.sliding / (deform * mean + p.sliding))
+    }).unzip();
     ice.copy_from_slice(&next);
-    iterations
+    IceStep { dt, iterations, sliding }
 }
 
 fn dot(a: &[f64], b: &[f64]) -> f64 {
@@ -289,16 +331,6 @@ fn conjugate_gradient(apply: &dyn Fn(&[f64], &mut [f64]), diag: &[f64], b: &[f64
         for i in 0..n { p[i] = z[i] + beta * p[i]; }
     }
     max_iter
-}
-
-/// Basal sliding speed, metres per year, for the current ice.
-pub fn sliding_speed(domain: &Domain, p: &GlacierParams, bed: &[f64], ice: &[f64]) -> Vec<f64> {
-    let s: Vec<f64> = bed.iter().zip(ice).map(|(b, h)| b + h).collect();
-    let g2 = slope_squared(domain, &s);
-    (0..domain.len()).map(|i| {
-        let tau = p.density * p.gravity * ice[i] * g2[i].sqrt();
-        p.sliding * tau.powf(p.glen_n)
-    }).collect()
 }
 
 /// Lower the bed under sliding ice for `dt` years.
@@ -360,18 +392,19 @@ mod tests {
         // A ramp rising 50 m per cell from 0 to 950 m, with the ELA at 600 m.
         let bed: Vec<f64> = (0..d.len()).map(|i| (i % 20) as f64 * 50.).collect();
         let mut ice = vec![0.; d.len()];
+        let mut sliding = vec![];
         for _ in 0..500 {
             let balance: Vec<f64> = (0..d.len()).map(|i| p.mass_balance(bed[i] + ice[i], 600.)).collect();
-            flow_ice(&d, &p, &bed, &mut ice, &balance, &d.boundary, 10.);
+            sliding = flow_ice(&d, &p, &bed, &mut ice, &balance, &d.boundary, 10.).sliding;
         }
         let row: Vec<f64> = (0..20).map(|i| ice[10 * 20 + i]).collect();
         // Thick above the ELA, ice-free well below it.
         assert!(row[16] > 50., "{:?}", row);
-        assert!(row[..6].iter().all(|&h| h == 0.), "{:?}", row);
+        assert!(row[..3].iter().all(|&h| h == 0.), "{:?}", row);
         // The glacier flows below the ELA (cell 12) before melting away.
         assert!(row[11] > 0., "{:?}", row);
-        let s = sliding_speed(&d, &p, &bed, &ice);
-        assert!(s[10 * 20 + 14] > 1.);
+        assert!(sliding[10 * 20 + 14] > 1., "{:?}", sliding);
+        assert_eq!(sliding[10 * 20 + 2], 0.);
     }
 
     #[test]

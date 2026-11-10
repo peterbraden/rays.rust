@@ -44,7 +44,6 @@ use crate::shapes::geometry::Geometry;
 use serde_json::{Value};
 use crate::scenefile::SceneFile;
 use rayon::prelude::*;
-use crate::light::{ALTITUDE_STEP, ALTITUDE_STEPS};
 
 // Constants for atmospheric scattering
 /// Scales the integrated radiance into the renderer's working range. Under the default sRGB
@@ -53,6 +52,10 @@ use crate::light::{ALTITUDE_STEP, ALTITUDE_STEPS};
 const SKY_CALIBRATION: f64 = 0.38317;
 
 const DEFAULT_NUM_SAMPLES: usize = 32;
+/// Resolution of the sun's transmittance table: altitudes (spaced quadratically, closer low
+/// down) and cosines of its angle from the zenith.
+const SUN_TABLE_ALTITUDES: usize = 64;
+const SUN_TABLE_ANGLES: usize = 256;
 const DEFAULT_NUM_SAMPLES_LIGHT: usize = 16;
 
 /// Sample points along a path of `length` through the atmosphere, as (distance, step): the
@@ -161,9 +164,9 @@ pub struct SkyMaterial {
     /// Ozone's absorption coefficients per channel (zero to leave it out).
     ozone: Vector3<f64>,
 
-    /// Rayleigh and Mie optical depths towards the sun by altitude, every `ALTITUDE_STEP`
-    /// (None in the earth's shadow), for aerial perspective; built on first use.
-    sun_depths: std::sync::OnceLock<Vec<Option<Depths>>>,
+    /// Optical depths towards the sun over altitude and sun angle (`sun_depths_at`), for aerial
+    /// perspective and sunlight anywhere on the planet; built on first use.
+    sun_table: std::sync::OnceLock<Vec<Depths>>,
 
     /// Whether to add light scattered more than once (`MultipleScattering`), and the albedo
     /// of the earth beneath, which reflects some of it back up.
@@ -216,18 +219,64 @@ impl SkyMaterial {
     }
     
 
-    /// Distance the view ray travels through the atmosphere before leaving it, or hitting the
-    /// ground if it starts above the surface. None if it misses the atmosphere entirely.
-    fn view_ray_length(&self, r: &Ray) -> Option<f64> {
-        let mut ray_max = self.atmosphere.intersects(r)?.dist;
-
-        let above_surface = (r.ro - self.earth.center).norm() > self.earth.radius;
-        if above_surface {
+    /// Where along the view ray (a unit direction) it is in the atmosphere: from where it
+    /// enters (0 if it starts inside) to where it leaves, or hits the ground if it starts above
+    /// the surface. None if it misses the atmosphere entirely. From orbit, the ray starts in
+    /// space, and the air begins at the entry.
+    fn view_ray_span(&self, r: &Ray) -> Option<(f64, f64)> {
+        let o = r.ro - self.atmosphere.center;
+        let b = o.dot(&r.rd);
+        let c = o.norm_squared() - self.atmosphere.radius * self.atmosphere.radius;
+        let disc = b * b - c;
+        if disc < 0. {
+            return None;
+        }
+        let (enter, leave) = (-b - disc.sqrt(), -b + disc.sqrt());
+        if leave <= 0. {
+            return None;
+        }
+        let start = enter.max(0.);
+        let mut end = leave;
+        if (r.ro - self.earth.center).norm() > self.earth.radius {
             if let Some(ground) = self.earth.intersects(r) {
-                ray_max = ray_max.min(ground.dist);
+                end = end.min(ground.dist);
             }
         }
-        Some(ray_max)
+        if end <= start { None } else { Some((start, end)) }
+    }
+
+    /// The distance to the end of the view ray's span through the atmosphere.
+    fn view_ray_length(&self, r: &Ray) -> Option<f64> {
+        self.view_ray_span(r).map(|(_, end)| end)
+    }
+
+    /// Sample points (distance, step) along the ray from `start` to `end`, in order, crowded
+    /// (quadratically, as `path_samples`) about the ray's closest approach to the planet, where
+    /// its air is densest: at the start for a ray looking up from inside, at the tangent point
+    /// for one grazing the limb from orbit, at the end for one looking down at the ground.
+    fn span_samples(&self, r: &Ray, start: f64, end: f64, n: usize) -> Vec<(f64, f64)> {
+        let focus = (-(r.ro - self.earth.center).dot(&r.rd)).clamp(start, end);
+        let towards_end = |a: f64, b: f64, n: usize| -> Vec<(f64, f64)> {
+            // Crowded towards b: mirror path_samples, in order of increasing distance.
+            let mut v: Vec<(f64, f64)> = path_samples(b - a, n).map(|(t, s)| (b - t, s)).collect();
+            v.reverse();
+            v
+        };
+        let away = |a: f64, b: f64, n: usize| -> Vec<(f64, f64)> {
+            path_samples(b - a, n).map(|(t, s)| (a + t, s)).collect()
+        };
+        let before = focus - start;
+        let after = end - focus;
+        if before <= 1e-9 * (end - start) {
+            away(start, end, n)
+        } else if after <= 1e-9 * (end - start) {
+            towards_end(start, end, n)
+        } else {
+            let n1 = ((n as f64 * before / (before + after)).round() as usize).clamp(1, n - 1);
+            let mut v = towards_end(start, focus, n1);
+            v.extend(away(focus, end, n - n1));
+            v
+        }
     }
 }
 
@@ -307,16 +356,16 @@ impl SkyMaterial {
     /// before the phase functions and brightness are applied. Unlike the phase functions, which
     /// peak sharply around the sun, these vary smoothly with direction.
     pub fn scattering(&self, r: &Ray) -> Scattering {
-        let ray_max = match self.view_ray_length(r) {
-            Some(d) => d,
+        let (start, end) = match self.view_ray_span(r) {
+            Some(span) => span,
             None => return (Vector3::zeros(), Vector3::zeros(), Vector3::zeros()),
         };
         let (mut rayleigh_sum, mut mie_sum, mut multiple_sum) = (Vector3::zeros(), Vector3::zeros(), Vector3::zeros());
         // Optical depth from the viewer, accumulated along the ray: this is what makes sunsets
         // red (see the note at the top of the file).
         let mut depth = Depths::default();
-        // Integrate along the view ray through the atmosphere (see `path_samples`).
-        for (t, step) in path_samples(ray_max, DEFAULT_NUM_SAMPLES) {
+        // Integrate along the view ray through the atmosphere (see `span_samples`).
+        for (t, step) in self.span_samples(r, start, end, DEFAULT_NUM_SAMPLES) {
             let sample_position = r.ro + t * r.rd;
             let height = (sample_position - self.atmosphere.center).norm() - self.earth.radius;
             let here = self.depths(height, step);
@@ -343,21 +392,37 @@ impl SkyMaterial {
 
 /// Aerial perspective: what the atmosphere does to light crossing a stretch of it.
 impl SkyMaterial {
-    /// Optical depths towards the sun from `altitude`, from a table by altitude: the sun is far
-    /// enough that, over a scene, only height above the ground matters.
-    fn sun_depth_at(&self, altitude: f64) -> Option<Depths> {
-        let table = self.sun_depths.get_or_init(|| (0..ALTITUDE_STEPS).map(|i| {
-            let p = self.earth.center + Vector3::new(0., self.earth.radius + (i as f64 * ALTITUDE_STEP).max(1.), 0.);
-            self.optical_depth_to_sun(p)
-        }).collect());
-        let x = (altitude / ALTITUDE_STEP).clamp(0., (ALTITUDE_STEPS - 1) as f64);
-        let i = (x as usize).min(ALTITUDE_STEPS - 2);
-        let f = x - i as f64;
-        match (table[i], table[i + 1]) {
-            (Some(a), Some(b)) => Some(a * (1. - f) + b * f),
-            // At the edge of the earth's shadow: whichever side we're nearer.
-            (a, b) => if f < 0.5 { a } else { b },
-        }
+    /// Optical depths towards the sun from `p`, from a table over altitude and the cosine of the
+    /// sun's angle from the local zenith (Hillaire 2020, section 4, after Bruneton and Neyret
+    /// 2008): the sun is far enough away that nothing else matters, anywhere on the planet.
+    /// In the earth's shadow the depths are huge, so the transmittance is nil, and fades to it
+    /// over one column of the table at the terminator.
+    fn sun_depths_at(&self, p: &Vector3<f64>) -> Depths {
+        let table = self.sun_table.get_or_init(|| {
+            let top = self.atmosphere.radius - self.earth.radius;
+            (0..SUN_TABLE_ALTITUDES * SUN_TABLE_ANGLES).into_par_iter().map(|k| {
+                let (i, j) = (k / SUN_TABLE_ANGLES, k % SUN_TABLE_ANGLES);
+                let altitude = top * (i as f64 / (SUN_TABLE_ALTITUDES - 1) as f64).powi(2);
+                let mu = -1. + 2. * j as f64 / (SUN_TABLE_ANGLES - 1) as f64;
+                let point = self.earth.center + Vector3::new(0., self.earth.radius + altitude.clamp(1., top - 1.), 0.);
+                self.optical_depth_towards(point, Vector3::new((1. - mu * mu).max(0.).sqrt(), mu, 0.))
+                    .unwrap_or(Depths { r: 1e7, m: 1e7, o: 0. })
+            }).collect::<Vec<Depths>>()
+        });
+        let top = self.atmosphere.radius - self.earth.radius;
+        let up = (p - self.earth.center).normalize();
+        let altitude = (p - self.earth.center).norm() - self.earth.radius;
+        let u = (altitude.max(0.) / top).sqrt().min(1.) * (SUN_TABLE_ALTITUDES - 1) as f64;
+        let v = (up.dot(&self.sun_direction).clamp(-1., 1.) + 1.) / 2. * (SUN_TABLE_ANGLES - 1) as f64;
+        let (i, j) = ((u as usize).min(SUN_TABLE_ALTITUDES - 2), (v as usize).min(SUN_TABLE_ANGLES - 2));
+        let (fu, fv) = (u - i as f64, v - j as f64);
+        let at = |i: usize, j: usize| table[i * SUN_TABLE_ANGLES + j];
+        (at(i, j) * (1. - fv) + at(i, j + 1) * fv) * (1. - fu) + (at(i + 1, j) * (1. - fv) + at(i + 1, j + 1) * fv) * fu
+    }
+
+    /// The fraction of sunlight (per channel) that reaches `p` through the atmosphere.
+    pub fn sun_transmittance(&self, p: &Vector3<f64>) -> Vector3<f64> {
+        self.transmittance_of(self.sun_depths_at(p))
     }
 
     /// For light reaching `origin` along the unit direction `d` from `distance` away: the
@@ -367,13 +432,13 @@ impl SkyMaterial {
     /// fades into the sky behind it. The air is lit by the sun as if nothing shadowed it.
     pub fn segment(&self, origin: &Vector3<f64>, d: &Vector3<f64>, distance: f64) -> (Vector3<f64>, Vector3<f64>) {
         let r = Ray { ro: *origin, rd: *d };
-        let length = match self.view_ray_length(&r) {
-            Some(l) => l.min(distance),
-            None => return (Vector3::repeat(1.), Vector3::zeros()),
+        let (start, end) = match self.view_ray_span(&r) {
+            Some((start, end)) if start < distance => (start, end.min(distance)),
+            _ => return (Vector3::repeat(1.), Vector3::zeros()),
         };
         let mut depth = Depths::default();
         let (mut rayleigh, mut mie, mut multiple) = (Vector3::zeros(), Vector3::zeros(), Vector3::zeros());
-        for (t, step) in path_samples(length, DEFAULT_NUM_SAMPLES) {
+        for (t, step) in self.span_samples(&r, start, end, DEFAULT_NUM_SAMPLES) {
             let p = origin + d * t;
             let height = (p - self.earth.center).norm() - self.earth.radius;
             let here = self.depths(height, step);
@@ -382,11 +447,9 @@ impl SkyMaterial {
             multiple += self.transmittance_of(depth)
                 .component_mul(&self.scattered(here))
                 .component_mul(&self.multiple_at(&p));
-            if let Some(to_sun) = self.sun_depth_at(height) {
-                let attenuation = self.transmittance_of(depth + to_sun);
-                rayleigh += attenuation * here.r;
-                mie += attenuation * here.m;
-            }
+            let attenuation = self.transmittance_of(depth + self.sun_depths_at(&p));
+            rayleigh += attenuation * here.r;
+            mie += attenuation * here.m;
             depth = depth + here * 0.5;
         }
         let inscattered = self.apply_phase(d, rayleigh.component_mul(&self.rayleigh_coefficients), mie * self.mie_coefficient, multiple)
@@ -497,9 +560,9 @@ impl MultipleScattering {
             let (mut second, mut transfer) = (Vector3::zeros(), Vector3::zeros());
             for d in &directions {
                 let r = Ray { ro: x, rd: *d };
-                let length = match sky.view_ray_length(&r) { Some(l) => l, None => continue };
+                let (start, length) = match sky.view_ray_span(&r) { Some(s) => s, None => continue };
                 let mut depth = Depths::default();
-                for (t, step) in path_samples(length, MS_STEPS) {
+                for (t, step) in sky.span_samples(&r, start, length, MS_STEPS) {
                     let y = x + d * t;
                     let h = (y - sky.earth.center).norm() - sky.earth.radius;
                     let here = sky.depths(h, step);
@@ -772,7 +835,7 @@ pub fn parse_sky_material(o: &Value) -> SkyMaterial {
         rayleigh_coefficients,
         mie_coefficient,
         mie_anisotropy,
-        sun_depths: std::sync::OnceLock::new(),
+        sun_table: std::sync::OnceLock::new(),
         ozone: if o["ozone"].as_bool() == Some(false) { Vector3::zeros() } else { Vector3::from(OZONE_ABSORPTION) },
         multiple_scattering: o["multiple_scattering"].as_bool().unwrap_or(true),
         ground_albedo: SceneFile::parse_number(&o["ground_albedo"], 0.2),
@@ -852,12 +915,12 @@ mod tests {
                 acc + sky.depths(height(p + (j as f64 + 0.5) * step * sky.sun_direction), step)
             }))
         };
-        let length = sky.view_ray_length(r).unwrap();
-        let step = length / n as f64;
+        let (start, end) = sky.view_ray_span(r).unwrap();
+        let step = (end - start) / n as f64;
         let mut depth = Depths::default();
         let (mut ray, mut mie) = (Vector3::zeros(), Vector3::zeros());
         for i in 0..n {
-            let p = r.ro + r.rd * ((i as f64 + 0.5) * step);
+            let p = r.ro + r.rd * (start + (i as f64 + 0.5) * step);
             let here = sky.depths(height(p), step);
             if let Some(to_sun) = depth_to_sun(p) {
                 let t = sky.transmittance_of(depth + here * 0.5 + to_sun);
@@ -894,6 +957,54 @@ mod tests {
                 assert!((t[c] / sun_t[c] - 1.).abs() < 0.01, "{}: sun {} vs {}", sun, t, sun_t);
             }
         }
+    }
+
+    #[test]
+    fn test_sky_from_orbit() {
+        // From 400 km, outside the atmosphere: the limb (grazing 10 km and 30 km up, where the
+        // air is all far from the viewer) matches brute-force integration over its span.
+        let sky = single_scattering_sky_at("[0.6, 0.3, 1]");
+        let eye = Vector3::new(0., 400_000., 0.);
+        let r_eye = sky.earth.radius + 400_000.;
+        for tangent in [10_000., 30_000.] {
+            // Down at the angle that just grazes `tangent` above the ground.
+            let below = ((sky.earth.radius + tangent) / r_eye).acos();
+            let r = Ray { ro: eye, rd: Vector3::new(0., -below.sin(), below.cos()) };
+            let (radiance, _) = brute_force(&sky, &r);
+            let ours = sky.radiance(&r);
+            for c in 0..3 {
+                assert!((ours[c] / radiance[c] - 1.).abs() < 0.03, "tangent {}: {} vs {}", tangent, ours, radiance);
+            }
+        }
+        // Space beyond the limb is black.
+        assert_eq!(sky.radiance(&Ray { ro: eye, rd: Vector3::new(0., 0.2, 1.).normalize() }), Vector3::zeros());
+        // Looking straight down, the ground is seen through the whole column of air.
+        let (t, inscattered) = sky.segment(&eye, &Vector3::new(0., -1., 0.), 400_000.);
+        let column = sky_at("[0, 1, 0]").sun_transmittance_at(0.);
+        assert!(inscattered.max() > 0.);
+        for c in 0..3 {
+            assert!((t[c] / column[c] - 1.).abs() < 0.01, "{} vs {}", t, column);
+        }
+    }
+
+    #[test]
+    fn test_sun_transmittance_anywhere_on_the_planet() {
+        let sky = sky_at("[0, 0.4, 1]");
+        let ground = Vector3::new(0., 1., 0.);
+        let exact = |p: Vector3<f64>| sky.optical_depth_to_sun(p).map_or(Vector3::zeros(), |d| sky.transmittance_of(d));
+        // Here, and 2000 km away towards the sun, where it stands higher, and away from it,
+        // where it is lower; then on the night side.
+        let toward = sky.earth.center + Vector3::new(0., 0.95, 0.3).normalize() * (sky.earth.radius + 1.);
+        let away = sky.earth.center + Vector3::new(0., 0.95, -0.3).normalize() * (sky.earth.radius + 1.);
+        for p in [ground, toward, away] {
+            let (table, e) = (sky.sun_transmittance(&p), exact(p));
+            for c in 0..3 {
+                assert!((table[c] - e[c]).abs() < 0.01 * e[c].max(0.05), "{}: {} vs {}", p, table, e);
+            }
+        }
+        assert!(sky.sun_transmittance(&toward).z > sky.sun_transmittance(&away).z);
+        let night = sky.earth.center + Vector3::new(0., -0.3, -1.).normalize() * (sky.earth.radius + 1000.);
+        assert!(sky.sun_transmittance(&night).max() < 1e-6);
     }
 
     #[test]
@@ -981,7 +1092,7 @@ mod tests {
             rayleigh_coefficients: Vector3::new(DEFAULT_RAYLEIGH_R, DEFAULT_RAYLEIGH_G, DEFAULT_RAYLEIGH_B),
             mie_coefficient: DEFAULT_MIE_COEFFICIENT,
             mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
-            sun_depths: Default::default(),
+            sun_table: Default::default(),
             ozone: Vector3::zeros(),
             multiple_scattering: false,
             ground_albedo: 0.2,
@@ -1008,7 +1119,7 @@ mod tests {
             rayleigh_coefficients: Vector3::new(DEFAULT_RAYLEIGH_R, DEFAULT_RAYLEIGH_G, DEFAULT_RAYLEIGH_B),
             mie_coefficient: DEFAULT_MIE_COEFFICIENT,
             mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
-            sun_depths: Default::default(),
+            sun_table: Default::default(),
             ozone: Vector3::zeros(),
             multiple_scattering: false,
             ground_albedo: 0.2,
@@ -1067,7 +1178,7 @@ mod tests {
             rayleigh_coefficients: Vector3::new(DEFAULT_RAYLEIGH_R, DEFAULT_RAYLEIGH_G, DEFAULT_RAYLEIGH_B),
             mie_coefficient: DEFAULT_MIE_COEFFICIENT,
             mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
-            sun_depths: Default::default(),
+            sun_table: Default::default(),
             ozone: Vector3::zeros(),
             multiple_scattering: false,
             ground_albedo: 0.2,
@@ -1092,7 +1203,7 @@ mod tests {
             rayleigh_coefficients: Vector3::new(DEFAULT_RAYLEIGH_R, DEFAULT_RAYLEIGH_G, DEFAULT_RAYLEIGH_B),
             mie_coefficient: DEFAULT_MIE_COEFFICIENT,
             mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
-            sun_depths: Default::default(),
+            sun_table: Default::default(),
             ozone: Vector3::zeros(),
             multiple_scattering: false,
             ground_albedo: 0.2,
@@ -1119,7 +1230,7 @@ mod tests {
             rayleigh_coefficients: Vector3::new(DEFAULT_RAYLEIGH_R, DEFAULT_RAYLEIGH_G, DEFAULT_RAYLEIGH_B),
             mie_coefficient: DEFAULT_MIE_COEFFICIENT,
             mie_anisotropy: DEFAULT_MIE_ANISOTROPY,
-            sun_depths: Default::default(),
+            sun_table: Default::default(),
             ozone: Vector3::zeros(),
             multiple_scattering: false,
             ground_albedo: 0.2,

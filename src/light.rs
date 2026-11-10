@@ -11,7 +11,7 @@ pub struct Light {
 /// small and bright enough that surfaces and media sample it directly (next-event estimation),
 /// with a shadow ray, as if it were a point at infinity; rays that didn't (a camera's, or a
 /// mirror's) see its disc instead (`disc_radiance`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone)]
 pub struct Sun {
     /// Unit vector pointing towards the sun.
     pub direction: Vector3<f64>,
@@ -19,19 +19,19 @@ pub struct Sun {
     pub irradiance: Color,
     /// Angular radius of the disc, radians.
     pub angular_radius: f64,
-    /// With a skysphere: the transmittance of its atmosphere towards the sun from each
-    /// altitude, every `ALTITUDE_STEP` from the ground up, and the planet altitude is measured
-    /// above (rather than scene y).
-    pub atmosphere: Option<Vec<Color>>,
-    pub planet: Option<crate::planet::Planet>,
+    /// With a skysphere: its atmosphere, which the sunlight crosses on its way to each point.
+    pub atmosphere: Option<std::sync::Arc<crate::skysphere::SkyMaterial>>,
+}
+
+impl std::fmt::Debug for Sun {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Sun {{ direction: {:?}, irradiance: {:?}, angular_radius: {}, atmosphere: {} }}",
+            self.direction, self.irradiance, self.angular_radius, self.atmosphere.is_some())
+    }
 }
 
 /// The sun's mean angular radius, 0.2666°.
 pub const SUN_ANGULAR_RADIUS: f64 = 0.004_653;
-/// Altitude between entries of `Sun::atmosphere`, and how many there are (to 40 km, above
-/// which the atmosphere barely attenuates).
-pub const ALTITUDE_STEP: f64 = 100.;
-pub const ALTITUDE_STEPS: usize = 401;
 /// The sun's linear limb-darkening coefficient in the visible: the disc's edge is about 40%
 /// as bright as its centre (D. F. Gray, "The Observation and Analysis of Stellar
 /// Photospheres", Cambridge 2005, chapter 17).
@@ -45,19 +45,17 @@ pub const SUN_SHADOW_DISTANCE: f64 = 1e30;
 impl Sun {
     /// A sun with no atmosphere and the mean angular radius.
     pub fn new(direction: Vector3<f64>, irradiance: Color) -> Sun {
-        Sun { direction: direction.normalize(), irradiance, angular_radius: SUN_ANGULAR_RADIUS, atmosphere: None, planet: None }
+        Sun { direction: direction.normalize(), irradiance, angular_radius: SUN_ANGULAR_RADIUS, atmosphere: None }
     }
 
-    /// Irradiance at `point`: through the atmosphere from its altitude (scene y), if any.
+    /// Irradiance at `point`: through the atmosphere, if any, by its altitude and the sun's
+    /// height in its sky, so anywhere on the planet; none on the night side.
     pub fn irradiance_at(&self, point: &Vector3<f64>) -> Color {
         match &self.atmosphere {
             None => self.irradiance,
-            Some(t) => {
-                let altitude = self.planet.map_or(point.y, |p| p.altitude(point));
-                let x = (altitude / ALTITUDE_STEP).clamp(0., (t.len() - 1) as f64);
-                let i = (x as usize).min(t.len() - 2);
-                let f = x - i as f64;
-                self.irradiance * (t[i] * (1. - f) + t[i + 1] * f)
+            Some(sky) => {
+                let t = sky.sun_transmittance(point);
+                self.irradiance * Color::new(t.x, t.y, t.z)
             },
         }
     }

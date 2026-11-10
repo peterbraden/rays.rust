@@ -72,7 +72,10 @@ impl Glare {
         if theta > self.radius {
             return 0.;
         }
-        (1. + (theta / self.core).powi(2)).powf(-1.5)
+        // Tapered to nothing over the outer 30%, so the halo has no visible edge (against
+        // black space, a hard cut-off shows as a disc).
+        let t = ((self.radius - theta) / (0.3 * self.radius)).clamp(0., 1.);
+        (1. + (theta / self.core).powi(2)).powf(-1.5) * t * t * (3. - 2. * t)
     }
 
     /// `img` with glare, for pixels `pixel_angle` radians across and the given exposure.

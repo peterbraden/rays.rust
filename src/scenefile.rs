@@ -10,7 +10,7 @@ use crate::shapes::transform::{Transform};
 use crate::na::Rotation3;
 use crate::ocean::create_ocean;
 use crate::shapes::bbox::BBox;
-use crate::light::{Light, Sun, ALTITUDE_STEP, ALTITUDE_STEPS};
+use crate::light::{Light, Sun};
 use crate::color::Color;
 use crate::skysphere::{create_sky_sphere, parse_sky_material};
 use crate::procedural::box_terrain::create_box_terrain;
@@ -1054,15 +1054,8 @@ impl SceneFile {
                 assert!(v.get("direction").is_none(),
                     "The sun follows the skysphere's sun_direction; remove the sun's \"direction\"");
                 let sky = parse_sky_material(sky);
-                let atmosphere = (0..ALTITUDE_STEPS).map(|i| {
-                    let t = sky.sun_transmittance_at(i as f64 * ALTITUDE_STEP);
-                    Color::new(t.x, t.y, t.z)
-                }).collect();
-                Some(Sun {
-                    atmosphere: Some(atmosphere),
-                    planet: Some(Planet { radius: sky.earth_radius() }),
-                    ..Sun::new(sky.sun_direction(), irradiance)
-                })
+                let direction = sky.sun_direction();
+                Some(Sun { atmosphere: Some(Arc::new(sky)), ..Sun::new(direction, irradiance) })
             },
             None => {
                 let d = v.get("direction").map(SceneFile::parse_vec3)

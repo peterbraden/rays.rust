@@ -52,8 +52,23 @@ use crate::light::{ALTITUDE_STEP, ALTITUDE_STEPS};
 /// (0.383 v)^(1/2.2).
 const SKY_CALIBRATION: f64 = 0.38317;
 
-const DEFAULT_NUM_SAMPLES: usize = 16;
-const DEFAULT_NUM_SAMPLES_LIGHT: usize = 8;
+const DEFAULT_NUM_SAMPLES: usize = 32;
+const DEFAULT_NUM_SAMPLES_LIGHT: usize = 16;
+
+/// Sample points along a path of `length` through the atmosphere, as (distance, step): the
+/// midpoints, in u, of n equal steps of u, where distance = length u². A ray from inside the
+/// atmosphere that runs near the ground (to the horizon, or up to the sun when it is low) crosses
+/// almost all of its air in the first few kilometres of a path that can be a thousand long:
+/// even steps of 70 km sampled that air once or twice, and integrated a dark, yellow-brown
+/// horizon where a fine integration finds it pale. Quadratic spacing puts the samples where the
+/// air is, a few hundred metres apart near the start, for no more of them.
+fn path_samples(length: f64, n: usize) -> impl Iterator<Item = (f64, f64)> {
+    (0..n).map(move |i| {
+        let (a, b) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
+        let u = (a + b) / 2.;
+        (length * u * u, length * (b * b - a * a))
+    })
+}
 
 // Default scattering coefficient values (Earth-like)
 // Sea-level Rayleigh scattering coefficients (per metre) at 680, 550 and 440 nm. These scale as
@@ -216,16 +231,15 @@ impl SkyMaterial {
             return None;
         }
         let light_len = self.atmosphere.intersects(&light_ray)?.dist;
-        let segment_length_light = light_len / DEFAULT_NUM_SAMPLES_LIGHT as f64;
         let mut optical_depth_r = 0.0;
         let mut optical_depth_m = 0.0;
 
-        // Integrate along light ray to the sun, sampling each segment's midpoint
-        for j in 0..DEFAULT_NUM_SAMPLES_LIGHT {
-            let sample = p + ((j as f64 + 0.5) * segment_length_light) * self.sun_direction;
+        // Integrate along the light ray to the sun (see `path_samples`).
+        for (t, step) in path_samples(light_len, DEFAULT_NUM_SAMPLES_LIGHT) {
+            let sample = p + t * self.sun_direction;
             let height = (sample - self.atmosphere.center).norm() - self.earth.radius;
-            optical_depth_r += self.optical_depth(height, self.rayleigh_thickness, segment_length_light);
-            optical_depth_m += self.optical_depth(height, self.mie_thickness, segment_length_light);
+            optical_depth_r += self.optical_depth(height, self.rayleigh_thickness, step);
+            optical_depth_m += self.optical_depth(height, self.mie_thickness, step);
         }
         Some((optical_depth_r, optical_depth_m))
     }
@@ -257,9 +271,6 @@ impl SkyMaterial {
             None => return (Vector3::zeros(), Vector3::zeros()),
         };
         
-        // Setup for numerical integration
-        let num_samples = DEFAULT_NUM_SAMPLES; 
-        let segment_length = ray_max / num_samples as f64; 
 
         let mut rayleigh_sum: Vector3<f64> = Vector3::zeros();
         let mut mie_sum: Vector3<f64> = Vector3::zeros();
@@ -271,26 +282,30 @@ impl SkyMaterial {
 
         
         
-        // Integrate along the view ray through the atmosphere
-        for i in 0..num_samples {
-            // The midpoint of each segment.
-            let sample_position = r.ro + ((i as f64 + 0.5) * segment_length) * r.rd;
+        // Integrate along the view ray through the atmosphere (see `path_samples`).
+        for (t, step) in path_samples(ray_max, DEFAULT_NUM_SAMPLES) {
+            let sample_position = r.ro + t * r.rd;
             
             // Calculate height above the earth's surface
             let height = (sample_position - self.atmosphere.center).norm() - self.earth.radius;
             
             // Calculate Rayleigh and Mie optical depths for this segment
-            let rayleigh_depth = self.optical_depth(height, self.rayleigh_thickness, segment_length);
-            let mie_depth = self.optical_depth(height, self.mie_thickness, segment_length);
+            let rayleigh_depth = self.optical_depth(height, self.rayleigh_thickness, step);
+            let mie_depth = self.optical_depth(height, self.mie_thickness, step);
             
-            // Accumulate optical depth along the view ray
-            optical_depth_r += rayleigh_depth;
-            optical_depth_m += mie_depth;
+            // Optical depth from the viewer to this sample, the middle of its step.
+            optical_depth_r += rayleigh_depth / 2.;
+            optical_depth_m += mie_depth / 2.;
             
             // Sunlight reaching this sample: none in the earth's shadow.
-            let (optical_depth_light_r, optical_depth_light_m) = match self.optical_depth_to_sun(sample_position) {
+            let to_sun = self.optical_depth_to_sun(sample_position);
+            let (optical_depth_light_r, optical_depth_light_m) = match to_sun {
                 Some(d) => d,
-                None => continue,
+                None => {
+                    optical_depth_r += rayleigh_depth / 2.;
+                    optical_depth_m += mie_depth / 2.;
+                    continue;
+                },
             };
             
             // Calculate the total extinction for both Rayleigh and Mie
@@ -305,6 +320,9 @@ impl SkyMaterial {
             // Accumulate contributions for Rayleigh and Mie
             rayleigh_sum += attenuation.component_mul(&Vector3::new(rayleigh_depth, rayleigh_depth, rayleigh_depth));
             mie_sum += attenuation.component_mul(&Vector3::new(mie_depth, mie_depth, mie_depth));
+            // And on through the rest of the step.
+            optical_depth_r += rayleigh_depth / 2.;
+            optical_depth_m += mie_depth / 2.;
         } 
         
         // Combine Rayleigh and Mie scattering
@@ -342,25 +360,26 @@ impl SkyMaterial {
             Some(l) => l.min(distance),
             None => return (Vector3::repeat(1.), Vector3::zeros()),
         };
-        let samples = DEFAULT_NUM_SAMPLES;
-        let step = length / samples as f64;
         let beta_r = self.rayleigh_coefficients;
         let beta_m = Vector3::repeat(self.mie_coefficient);
         let (mut depth_r, mut depth_m) = (0., 0.);
         let (mut rayleigh, mut mie) = (Vector3::zeros(), Vector3::zeros());
-        for i in 0..samples {
-            let p = origin + d * ((i as f64 + 0.5) * step);
+        for (t, step) in path_samples(length, DEFAULT_NUM_SAMPLES) {
+            let p = origin + d * t;
             let height = (p - self.earth.center).norm() - self.earth.radius;
             let (dr, dm) = (self.optical_depth(height, self.rayleigh_thickness, step),
                             self.optical_depth(height, self.mie_thickness, step));
-            depth_r += dr;
-            depth_m += dm;
+            // To the middle of this step.
+            depth_r += dr / 2.;
+            depth_m += dm / 2.;
             if let Some((sr, sm)) = self.sun_depth_at(height) {
                 let tau = beta_r * (depth_r + sr) + beta_m * 1.1 * (depth_m + sm);
                 let attenuation = tau.map(|t| (-t).exp());
                 rayleigh += attenuation * dr;
                 mie += attenuation * dm;
             }
+            depth_r += dr / 2.;
+            depth_m += dm / 2.;
         }
         let transmittance = (beta_r * depth_r + beta_m * 1.1 * depth_m).map(|t| (-t).exp());
         let inscattered = self.apply_phase(d, rayleigh.component_mul(&beta_r), mie.component_mul(&beta_m)) * SKY_CALIBRATION;
@@ -615,6 +634,67 @@ mod tests {
 
     fn sky_at(sun: &str) -> SkyMaterial {
         parse_sky_material(&serde_json::from_str(&format!(r#"{{ "type": "skysphere", "sun_direction": {} }}"#, sun)).unwrap())
+    }
+
+    /// The sky's radiance and the sun's transmittance by brute force: thousands of even steps.
+    fn brute_force(sky: &SkyMaterial, r: &Ray) -> (Vector3<f64>, Vector3<f64>) {
+        let n = 4096;
+        let depth_to_sun = |p: Vector3<f64>| -> Option<(f64, f64)> {
+            let lr = Ray { ro: p, rd: sky.sun_direction };
+            if sky.earth.intersects(&lr).is_some() { return None; }
+            let len = sky.atmosphere.intersects(&lr)?.dist;
+            let step = len / n as f64;
+            Some((0..n).fold((0., 0.), |(a, b), j| {
+                let h = (p + (j as f64 + 0.5) * step * sky.sun_direction - sky.earth.center).norm() - sky.earth.radius;
+                (a + (-h / sky.rayleigh_thickness).exp() * step, b + (-h / sky.mie_thickness).exp() * step)
+            }))
+        };
+        let beta_m = Vector3::repeat(sky.mie_coefficient);
+        let transmittance = |(r_, m): (f64, f64)| (sky.rayleigh_coefficients * r_ + beta_m * 1.1 * m).map(|t| (-t).exp());
+        let length = sky.view_ray_length(r).unwrap();
+        let step = length / n as f64;
+        let (mut dr, mut dm) = (0., 0.);
+        let (mut ray, mut mie) = (Vector3::zeros(), Vector3::zeros());
+        for i in 0..n {
+            let p = r.ro + r.rd * ((i as f64 + 0.5) * step);
+            let h = (p - sky.earth.center).norm() - sky.earth.radius;
+            let (a, b) = ((-h / sky.rayleigh_thickness).exp() * step, (-h / sky.mie_thickness).exp() * step);
+            if let Some((sr, sm)) = depth_to_sun(p) {
+                let t = transmittance((dr + a / 2. + sr, dm + b / 2. + sm));
+                ray += t * a;
+                mie += t * b;
+            }
+            dr += a;
+            dm += b;
+        }
+        let radiance = sky.apply_phase(&r.rd, ray.component_mul(&sky.rayleigh_coefficients), mie.component_mul(&beta_m));
+        let ground = sky.earth.center + Vector3::new(0., sky.earth.radius + 1., 0.);
+        (radiance, transmittance(depth_to_sun(ground).unwrap()))
+    }
+
+    #[test]
+    fn test_sky_integration_matches_brute_force() {
+        // Near the horizon, where even steps of tens of kilometres went wrong, and elsewhere;
+        // from the ground and from 900 m; the sun high and low.
+        for (sun, from, d) in [
+            ("[-0.6, 0.55, -0.5]", 900., Vector3::new(0., 0.002, 1.)),
+            ("[-0.6, 0.55, -0.5]", 2., Vector3::new(0., 0.01, 1.)),
+            ("[0, 0.31, 0.95]", 2., Vector3::new(0.4, 0.05, 1.)),
+            ("[0, 0.087, 1]", 2., Vector3::new(0., 0.3, 1.)),
+            ("[0, 0.087, 1]", 2., Vector3::new(0., 0.02, -1.)),
+        ] {
+            let sky = sky_at(sun);
+            let r = Ray { ro: Vector3::new(0., from, 0.), rd: d.normalize() };
+            let (radiance, sun_t) = brute_force(&sky, &r);
+            let ours = sky.radiance(&r);
+            for c in 0..3 {
+                assert!((ours[c] / radiance[c] - 1.).abs() < 0.03, "{} from {}: {} vs {}", sun, from, ours, radiance);
+            }
+            let t = sky.sun_transmittance_at(1.);
+            for c in 0..3 {
+                assert!((t[c] / sun_t[c] - 1.).abs() < 0.01, "{}: sun {} vs {}", sun, t, sun_t);
+            }
+        }
     }
 
     #[test]

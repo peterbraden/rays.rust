@@ -1,0 +1,42 @@
+{
+  "width": 640,
+  "height": 480,
+  "chunk_size": 32,
+  "supersamples": 256,
+  "samples_per_chunk": 4,
+  "background": [1, 1, 1],
+  "max_depth": 64,
+  "path_termination": "russian_roulette",
+  "russian_roulette_depth": 3,
+  "output": {
+    "exposure": 1.0,
+    "tonemap": "none",
+    "transfer": "srgb"
+  },
+  "camera": {
+    "location": [0, 6, 24],
+    "lookat": [0, 3.2, 0],
+    "up": [0, 1, 0],
+    "angle": 0.491952,
+    "aperture": 0
+  },
+  "materials": {
+    "Clay": { "type": "lambertian", "albedo": [0.8, 0.8, 0.8] },
+    "Ground": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }
+  },
+  "lights": [],
+  "objects": [
+    {
+      "type": "transform",
+      "item": { "type": "mesh", "src": "./references/stanford-dragon/dragon_vrip.ply" },
+      "scale": 50,
+      "translate": [0.29, -2.636, 0.23],
+      "material": "Clay"
+    },
+    {
+      "type": "mesh",
+      "src": "./demo/reference/stanford-dragon/ground.obj",
+      "material": "Ground"
+    }
+  ]
+}

@@ -330,13 +330,13 @@ impl SceneFile {
     }
 
     pub fn parse_mesh(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        Box::new(Mesh::from_obj(
+        Box::new(Mesh::from_file(
                 SceneFile::parse_string(&o["src"]),
                 SceneFile::parse_vec3_def(o, "scale", Vector3::new(1., 1., 1.))))
     }
 
     pub fn parse_smoothmesh(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        Box::new(SmoothMesh::from_obj(
+        Box::new(SmoothMesh::from_file(
                 SceneFile::parse_string(&o["src"]),
                 SceneFile::parse_vec3_def(o, "scale", Vector3::new(1., 1., 1.))))
     }
@@ -818,9 +818,55 @@ impl SceneFile {
     }
 
     /// Parse a scene, applying command-line overrides first.
+    /// Substitute the scene's variables. `"variables": {"sun": [0.1, 0.4, 1]}` defines `sun`;
+    /// the string `"$sun"`, anywhere else in the file, stands for its value. Variables may use
+    /// each other, in any order, but not in a cycle. An unknown name is an error, rather than a
+    /// string passed on to a parser expecting something else.
+    pub fn substitute_variables(mut doc: Value) -> Result<Value, String> {
+        struct Resolver { defined: Map<String, Value>, resolved: Map<String, Value>, active: Vec<String> }
+
+        impl Resolver {
+            fn variable(&mut self, name: &str) -> Result<Value, String> {
+                if let Some(v) = self.resolved.get(name) {
+                    return Ok(v.clone());
+                }
+                if self.active.iter().any(|a| a == name) {
+                    return Err(format!("variables refer to each other in a cycle: ${} -> ${}", self.active.join(" -> $"), name));
+                }
+                let mut v = self.defined.get(name).cloned().ok_or_else(|| format!("unknown variable \"${}\"", name))?;
+                self.active.push(name.to_string());
+                self.substitute(&mut v)?;
+                self.active.pop();
+                self.resolved.insert(name.to_string(), v.clone());
+                Ok(v)
+            }
+
+            fn substitute(&mut self, v: &mut Value) -> Result<(), String> {
+                match v {
+                    Value::String(s) if s.starts_with('$') => { let name = s[1 ..].to_string(); *v = self.variable(&name)? },
+                    Value::Array(items) => for i in items { self.substitute(i)? },
+                    Value::Object(fields) => for (_, f) in fields.iter_mut() { self.substitute(f)? },
+                    _ => {},
+                }
+                Ok(())
+            }
+        }
+
+        let defined = match doc.get_mut("variables").map(Value::take) {
+            Some(Value::Object(m)) => m,
+            None | Some(Value::Null) => Map::new(),
+            Some(v) => return Err(format!("\"variables\" must be an object, got {}", v)),
+        };
+        let mut r = Resolver { defined, resolved: Map::new(), active: Vec::new() };
+        r.substitute(&mut doc)?;
+        Ok(doc)
+    }
+
     pub fn from_string_overridden(s: String, o: &Overrides) -> Scene {
         let (width, height) = (o.width, o.height);
-        let mut scene: SceneFile = serde_json::from_str(&s).unwrap();
+        let doc = SceneFile::substitute_variables(serde_json::from_str(&s).unwrap())
+            .unwrap_or_else(|e| panic!("Scene file: {}", e));
+        let mut scene: SceneFile = serde_json::from_value(doc).unwrap();
         if let Some(seed) = o.seed {
             scene.seed = Value::from(seed);
         }
@@ -844,6 +890,33 @@ impl SceneFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_variables_are_substituted() {
+        let doc = serde_json::json!({
+            "variables": { "warm": [1, 0.8, "$half"], "half": 0.5, "big": { "radius": "$half" } },
+            "objects": [{ "color": "$warm", "shape": "$big", "name": "plain string" }],
+        });
+        let out = SceneFile::substitute_variables(doc).unwrap();
+        assert_eq!(out["objects"][0]["color"], serde_json::json!([1, 0.8, 0.5]));
+        assert_eq!(out["objects"][0]["shape"], serde_json::json!({ "radius": 0.5 }));
+        assert_eq!(out["objects"][0]["name"], "plain string");
+
+        // And through to the parsed scene.
+        let s = minimal_scene(r#", "variables": { "grey": [0.25, 0.25, 0.25] }, "background": "$grey""#);
+        assert_eq!(s.render.background.radiance(&Vector3::new(0., 0., 1.)), Color::new(0.25, 0.25, 0.25));
+    }
+
+    #[test]
+    fn test_variable_errors() {
+        let unknown = SceneFile::substitute_variables(serde_json::json!({ "a": "$nope" })).unwrap_err();
+        assert!(unknown.contains("unknown variable \"$nope\""), "{}", unknown);
+        let cycle = SceneFile::substitute_variables(serde_json::json!({
+            "variables": { "a": "$b", "b": ["$a"] }, "x": "$a",
+        })).unwrap_err();
+        assert_eq!(cycle, "variables refer to each other in a cycle: $a -> $b -> $a");
+        assert!(SceneFile::substitute_variables(serde_json::json!({ "variables": [1] })).is_err());
+    }
 
     fn minimal_scene(extra: &str) -> Scene {
         minimal_scene_sized(extra, None, None)

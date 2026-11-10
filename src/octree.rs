@@ -209,8 +209,8 @@ impl<T: Geometry> Octree<T> {
     }
 
 
-    pub fn intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(Arc<T>, RawIntersection)> {
-        self.closest_intersection(r, max, min).map(|tupl| (self.items[tupl.0].clone(), tupl.1))
+    pub fn intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(&T, RawIntersection)> {
+        self.closest_intersection(r, max, min).map(|(i, hit)| (&*self.items[i], hit))
     }
 
     /// Whether anything is hit between `min` and `max` along the ray: the predicate form of

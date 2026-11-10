@@ -79,9 +79,9 @@
 //!
 //! The exact slope is another FFT: ε(x, t) = Σ_k i k h̃(k, t) exp(i k·x) (eq. 37). Choppy waves
 //! displace each point horizontally to x + λD(x, t), with D(x, t) = Σ_k -i (k/k) h̃(k, t)
-//! exp(i k·x) (eq. 44), sharpening crests and broadening troughs. Both are computed in
-//! `create_tile`, but neither is used yet: normals come from the triangles, and the displacement
-//! is switched off (`choppyness_shift`), with λ fixed at 1.
+//! exp(i k·x) (eq. 44), sharpening crests and broadening troughs. Neither is used yet: normals
+//! come from the triangles, so slopes aren't computed, and the displacement is computed only
+//! when switched on (`choppyness_shift`, currently off), with λ fixed at 1.
 
 extern crate rand as _rand;
 extern crate image;
@@ -253,30 +253,32 @@ fn make_square_for(x: usize, z: usize, fourier_grid_size: usize, vertices: &[Vec
     )
 }
 
-// Type definition for complex height field data
-type OceanComplexData = (
-    Vec<Complex<f64>>, // ht
-    Vec<Complex<f64>>, // ht_slope_x
-    Vec<Complex<f64>>, // ht_slope_z
-    Vec<Complex<f64>>, // ht_slope_dx
-    Vec<Complex<f64>>, // ht_slope_dz
-);
+/// A field over the N x N Fourier grid.
+type Field = Vec<Complex<f64>>;
 
-/// The surface at time t, from the amplitudes h̃0: heights h(x, t) (eqs. 43, 36), slopes ε(x, t)
-/// (eq. 37) and choppy displacements D(x, t) (eq. 44), each on the N x N grid.
+/// A tile of the surface at time t, on the N x N grid.
+pub struct OceanTile {
+    /// Heights h(x, t) (eqs. 43, 36).
+    pub heights: Field,
+    /// Choppy displacements D(x, t) in x and z (eq. 44), if requested.
+    pub displacement: Option<(Field, Field)>,
+}
+
+/// The surface at time t, from the amplitudes h̃0. Each field is an inverse FFT, the dominant
+/// cost of building the ocean, so the choppy displacements are only computed when `choppy`.
+/// (The slopes, eq. 37, aren't computed: normals come from the triangles.)
 pub fn create_tile(
         fourier_grid_size:usize,
         lx: f64,
         lz: f64,
         gravity: f64,
         time: f64,
+        choppy: bool,
         h0: Vec<Complex<f64>>) 
-        -> OceanComplexData {
+        -> OceanTile {
 
     // Tile of amplitudes
     let mut ht =          vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
-    let mut ht_slope_x =  vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
-    let mut ht_slope_z =  vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
     let mut ht_slope_dx = vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
     let mut ht_slope_dz = vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
 
@@ -299,13 +301,9 @@ pub fn create_tile(
                 h0[ind] * c0 +
                 h0[neg_k].conj() * c1;
 
-            // i k h̃ (eq. 37)
-            ht_slope_x[ind] = ht[ind] * Complex::new(0., k.x); 
-            ht_slope_z[ind] = ht[ind] * Complex::new(0., k.y); 
-
             // -i (k/k) h̃ (eq. 44)
             let len = k.norm();
-            if len > 0.00001 {
+            if choppy && len > 0.00001 {
                 ht_slope_dx[ind] = ht[ind] * Complex::new(0., -k.x / len); 
                 ht_slope_dz[ind] = ht[ind] * Complex::new(0., -k.y / len); 
             } 
@@ -318,19 +316,10 @@ pub fn create_tile(
         let n2 = (fourier_grid_size * fourier_grid_size) as f64;
         ifft2(t, fourier_grid_size).into_iter().map(|x| x * n2).collect()
     };
-    ht = sum(ht);
-    ht_slope_x = sum(ht_slope_x);
-    ht_slope_z = sum(ht_slope_z);
-    ht_slope_dx = sum(ht_slope_dx);
-    ht_slope_dz = sum(ht_slope_dz);
-
-    (
-        ht,
-        ht_slope_x,
-        ht_slope_z,
-        ht_slope_dx,
-        ht_slope_dz,
-    )
+    OceanTile {
+        heights: sum(ht),
+        displacement: if choppy { Some((sum(ht_slope_dx), sum(ht_slope_dz))) } else { None },
+    }
 }
 
 
@@ -411,13 +400,8 @@ impl OceanGeometry {
         let scale = SceneFile::parse_number(&o["amplitude"], 1. / (128. * 128.)); // (A)
 
         let h0 = create_amplitude_tile(wind, scale, gravity, lx, lz, fourier_grid_size, &mut rng);
-        let(
-            ht,
-            _ht_slope_x,
-            _ht_slope_z,
-            ht_slope_dx,
-            ht_slope_dz,
-        ) = create_tile(fourier_grid_size, lx, lz, gravity, time, h0); 
+        let tile = create_tile(fourier_grid_size, lx, lz, gravity, time, choppyness_shift, h0);
+        let ht = tile.heights;
 
         /*
 		// DEBUG IMAGE
@@ -449,10 +433,11 @@ impl OceanGeometry {
                     z < fourier_grid_size - 1
                     && choppyness_shift 
                     {
+                    let (dx, dz) = tile.displacement.as_ref().unwrap();
                     vertices[ind] = Vector3::new(
-                        x0 + ht_slope_dx[ind].re * sign,
+                        x0 + dx[ind].re * sign,
                         ht[ind].re * sign,
-                        z0 + ht_slope_dz[ind].re * sign,
+                        z0 + dz[ind].re * sign,
                     );
                 } else { // Dont shift edge vertices
                     vertices[ind] = Vector3::new(
@@ -593,7 +578,7 @@ mod tests {
 	fn heights_n(wind: Vector2<f64>, time: f64, n: usize) -> Vec<Complex<f64>> {
 		let mut rng: StdRng = SeedableRng::from_seed([0; 32]);
 		let h0 = create_amplitude_tile(wind, 1., 9.81, L, L, n, &mut rng);
-		create_tile(n, L, L, 9.81, time, h0).0
+		create_tile(n, L, L, 9.81, time, false, h0).heights
 	}
 
 	#[test]

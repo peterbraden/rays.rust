@@ -7,7 +7,7 @@ use crate::shapes::plane::Plane;
 use crate::shapes::mesh::{Mesh, SmoothMesh};
 use crate::shapes::csg::{Csg, Op, Inverse, Clipped, Tagged};
 use crate::shapes::transform::{Transform};
-use crate::na::Rotation3;
+use crate::na::{Matrix4, Rotation3, Translation3, Affine3};
 use crate::ocean::create_ocean;
 use crate::shapes::bbox::BBox;
 use crate::light::Light;
@@ -281,6 +281,11 @@ impl SceneFile {
         if o["inverse"].as_bool() == Some(true) {
             g = Box::new(Inverse(g));
         }
+        // Steps on the shape itself, as POV-Ray's transformations on an object: they move it
+        // whole, including any clipping.
+        if !o["transform"].is_null() {
+            g = Box::new(Transform::new(g, SceneFile::parse_steps(&o["transform"])));
+        }
         if let Some((materials, media)) = parts.library
             && nested && (o.get("material").is_some() || o.get("medium").is_some()) {
             parts.media.push(SceneFile::parse_object_medium(o, materials, media));
@@ -361,9 +366,17 @@ impl SceneFile {
 
     /// `{"type": "transform", "item": {...}, "scale": 2 or [x, y, z], "rotate": {"roll", "pitch",
     /// "yaw"} in degrees, "translate": [x, y, z]}`: every part optional, applied in that order.
+    ///
+    /// Or `{"type": "transform", "item": {...}, "steps": [step, ..]}`, applying each step in turn
+    /// (see `parse_steps`).
     pub fn parse_transform(o: &Value, parts: &mut Parts) -> Box<dyn Geometry + Sync + Send> {
         let item = SceneFile::parse_geometry_in(&o["item"], parts, true)
             .unwrap_or_else(|| panic!("transform needs a geometry \"item\", got {}", o["item"]));
+        if !o["steps"].is_null() {
+            assert!(["scale", "rotate", "translate"].iter().all(|k| o[k].is_null()),
+                "transform takes \"steps\", or \"scale\", \"rotate\" and \"translate\", not both");
+            return Box::new(Transform::new(item, SceneFile::parse_steps(&o["steps"])));
+        }
         let scale = match &o["scale"] {
             Value::Number(n) => { let s = n.as_f64().unwrap(); Vector3::new(s, s, s) },
             Value::Null => Vector3::new(1., 1., 1.),
@@ -377,6 +390,62 @@ impl SceneFile {
         );
         let translate = SceneFile::parse_vec3_def(o, "translate", Vector3::zeros());
         Box::new(Transform::from_parts(item, translate, rotation, scale))
+    }
+
+    /// A list of transformation steps, applied in order:
+    /// - `{"translate": [x, y, z]}`
+    /// - `{"rotate": [x, y, z]}`: degrees about the x axis, then y, then z, each anticlockwise
+    ///   looking down the axis towards the origin (the right-hand rule). `{"roll", "pitch",
+    ///   "yaw"}` names the same angles.
+    /// - `{"scale": s}` or `{"scale": [x, y, z]}`
+    /// - `{"axis_rotate": {"axis": [x, y, z], "angle": degrees}}`: about any axis through the
+    ///   origin.
+    /// - `{"matrix": [12 numbers]}`, in POV-Ray's order: rows of the 3x3 linear part, then the
+    ///   translation, so that (x, y, z) goes to x row1 + y row2 + z row3 + row4.
+    pub fn parse_steps(v: &Value) -> Affine3<f64> {
+        let steps = v.as_array().unwrap_or_else(|| panic!("transform steps must be a list, got {}", v));
+        steps.iter().fold(Affine3::identity(), |m, step| SceneFile::parse_step(step) * m)
+    }
+
+    fn parse_step(step: &Value) -> Affine3<f64> {
+        let keys: Vec<&String> = step.as_object().map(|o| o.keys().collect()).unwrap_or_default();
+        assert!(keys.len() == 1, "each transform step has one of \"translate\", \"rotate\", \"scale\", \"axis_rotate\" or \"matrix\", got {}", step);
+        let v = &step[keys[0].as_str()];
+        let m: Matrix4<f64> = match keys[0].as_str() {
+            "translate" => Translation3::from(SceneFile::parse_vec3(v)).to_homogeneous(),
+            "rotate" => {
+                let a = if v.is_object() {
+                    Vector3::new(SceneFile::parse_number(&v["roll"], 0.), SceneFile::parse_number(&v["pitch"], 0.), SceneFile::parse_number(&v["yaw"], 0.))
+                } else {
+                    SceneFile::parse_vec3(v)
+                };
+                Rotation3::from_euler_angles(a.x.to_radians(), a.y.to_radians(), a.z.to_radians()).to_homogeneous()
+            },
+            "scale" => {
+                let s = match v {
+                    Value::Number(n) => Vector3::repeat(n.as_f64().unwrap()),
+                    _ => SceneFile::parse_vec3(v),
+                };
+                Matrix4::new_nonuniform_scaling(&s)
+            },
+            "axis_rotate" => {
+                let axis = SceneFile::parse_vec3(&v["axis"]);
+                assert!(axis.norm() > 0., "axis_rotate needs a non-zero \"axis\"");
+                Rotation3::from_axis_angle(&na::Unit::new_normalize(axis), SceneFile::parse_number(&v["angle"], 0.).to_radians()).to_homogeneous()
+            },
+            "matrix" => {
+                let n: Vec<f64> = v.as_array().map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default();
+                assert!(n.len() == 12, "a transform matrix has 12 numbers, got {}", v);
+                // Row-vector convention: the rows of POV-Ray's matrix are our columns.
+                Matrix4::new(
+                    n[0], n[3], n[6], n[9],
+                    n[1], n[4], n[7], n[10],
+                    n[2], n[5], n[8], n[11],
+                    0., 0., 0., 1.)
+            },
+            k => panic!("unknown transform step \"{}\"", k),
+        };
+        Affine3::from_matrix_unchecked(m)
     }
 
     pub fn parse_mesh(o: &Value) -> Box<dyn Geometry + Sync + Send> {
@@ -1103,6 +1172,57 @@ mod tests {
             ]
         }"#.to_string());
         assert_eq!(s.area_lights.len(), 1);
+    }
+
+    fn hit(g: &dyn Geometry, ro: [f64; 3], rd: [f64; 3]) -> Option<Vector3<f64>> {
+        g.intersects(&Ray { ro: Vector3::from(ro), rd: Vector3::from(rd) }).map(|i| i.point)
+    }
+
+    #[test]
+    fn test_steps_apply_in_order() {
+        let sphere = r#"{"type": "sphere", "location": [0, 0, 0], "radius": 1}"#;
+        // Moved out along x, then turned 90 degrees about y: x goes to -z.
+        let a = SceneFile::parse_geometry(&serde_json::from_str(&format!(
+            r#"{{"type": "transform", "item": {}, "steps": [{{"translate": [5, 0, 0]}}, {{"rotate": [0, 90, 0]}}]}}"#, sphere)).unwrap()).unwrap();
+        let p = hit(a.as_ref(), [0., 0., 10.], [0., 0., -1.]).unwrap();
+        assert!((p.z + 4.).abs() < 1e-9, "{}", p);
+        let c = (a.bounds().min.coords + a.bounds().max.coords) * 0.5;
+        assert!((c - Vector3::new(0., 0., -5.)).norm() < 1e-9, "{}", c);
+        // The other way round, it just moves along x.
+        let b = SceneFile::parse_geometry(&serde_json::from_str(&format!(
+            r#"{{"type": "transform", "item": {}, "steps": [{{"rotate": {{"pitch": 90}}}}, {{"translate": [5, 0, 0]}}]}}"#, sphere)).unwrap()).unwrap();
+        let c = (b.bounds().min.coords + b.bounds().max.coords) * 0.5;
+        assert!((c - Vector3::new(5., 0., 0.)).norm() < 1e-9, "{}", c);
+    }
+
+    #[test]
+    fn test_transform_on_any_shape_moves_its_clipping_too() {
+        // A bowl (sphere clipped to below y = 0), scaled up and turned upside down: a dome.
+        let dome = SceneFile::parse_geometry(&serde_json::json!({
+            "type": "sphere", "location": [0, 0, 0], "radius": 1,
+            "clipped_by": { "type": "plane", "normal": [0, 1, 0], "distance": 0 },
+            "transform": [ { "scale": 2 }, { "axis_rotate": { "axis": [1, 0, 0], "angle": 180 } } ]
+        })).unwrap();
+        let top = hit(dome.as_ref(), [0., 10., 0.], [0., -1., 0.]).unwrap();
+        assert!((top.y - 2.).abs() < 1e-9, "{}", top);
+        // Open underneath: up through the missing base to the inside of the dome.
+        let under = hit(dome.as_ref(), [0., -10., 0.], [0., 1., 0.]).unwrap();
+        assert!((under.y - 2.).abs() < 1e-9, "{}", under);
+    }
+
+    #[test]
+    fn test_matrix_step_is_in_pov_order() {
+        // POV-Ray's matrix <1,0,0, 0.5,1,0, 0,0,1, 3,0,0>: x' = x + 0.5 y + 3 (the second row is
+        // where y goes), others unchanged.
+        let m = SceneFile::parse_steps(&serde_json::json!([ { "matrix": [1, 0, 0, 0.5, 1, 0, 0, 0, 1, 3, 0, 0] } ]));
+        let p = m.transform_point(&crate::na::Point3::new(1., 2., 3.));
+        assert!((p.coords - Vector3::new(5., 2., 3.)).norm() < 1e-12, "{}", p);
+    }
+
+    #[test]
+    #[should_panic(expected = "each transform step has one of")]
+    fn test_step_with_two_keys_is_rejected() {
+        SceneFile::parse_steps(&serde_json::json!([ { "translate": [1, 0, 0], "scale": 2 } ]));
     }
 
     #[test]

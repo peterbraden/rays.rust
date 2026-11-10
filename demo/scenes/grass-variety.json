@@ -1,0 +1,209 @@
+{
+  "width": 960,
+  "height": 540,
+  "supersamples": 24,
+  "chunk_size": 64,
+  "samples_per_chunk": 4,
+  "shadow_bias": 0.0001,
+  "max_depth": 3,
+  "variables": {
+    "ground": {
+      "type": "noise",
+      "min": [
+        -60,
+        -20
+      ],
+      "max": [
+        60,
+        100
+      ],
+      "resolution": 480,
+      "amplitude": 0.25,
+      "scale": 6,
+      "octaves": 4,
+      "seed": 1
+    }
+  },
+  "materials": {
+    "SOIL": {
+      "type": "lambertian",
+      "albedo": [
+        0.13,
+        0.1,
+        0.07
+      ]
+    }
+  },
+  "media": {},
+  "camera": {
+    "location": [
+      0,
+      4.2,
+      -7.5
+    ],
+    "lookat": [
+      0,
+      0.3,
+      5
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.8,
+    "aperture": 0.0
+  },
+  "lights": [
+    {
+      "location": [
+        -300,
+        360,
+        480
+      ],
+      "color": [
+        1,
+        0.95,
+        0.88
+      ],
+      "intensity": 1400000.0
+    }
+  ],
+  "objects": [
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        -0.5,
+        0.6,
+        0.8
+      ]
+    },
+    {
+      "type": "plane",
+      "y": -0.3,
+      "material": "SOIL"
+    },
+    {
+      "type": "terrain",
+      "heightmap": "$ground",
+      "material": "SOIL"
+    },
+    {
+      "type": "grass",
+      "heightmap": "$ground",
+      "min": [
+        -7,
+        0
+      ],
+      "max": [
+        -2.4,
+        4
+      ],
+      "density": 6000,
+      "seed": 1,
+      "species": [
+        "lawn"
+      ],
+      "conditions": {
+        "preset": "manicured",
+        "mow_stripes": {
+          "width": 0.9,
+          "direction": [
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "type": "grass",
+      "heightmap": "$ground",
+      "min": [
+        -2.2,
+        0
+      ],
+      "max": [
+        2.2,
+        4
+      ],
+      "density": 700,
+      "seed": 2,
+      "species": [
+        "meadow"
+      ],
+      "conditions": "summer"
+    },
+    {
+      "type": "grass",
+      "heightmap": "$ground",
+      "min": [
+        2.4,
+        0
+      ],
+      "max": [
+        7,
+        4
+      ],
+      "density": 250,
+      "seed": 3,
+      "species": [
+        "tall"
+      ],
+      "conditions": "windy"
+    },
+    {
+      "type": "grass",
+      "heightmap": "$ground",
+      "min": [
+        -7,
+        4.6
+      ],
+      "max": [
+        -2.4,
+        8.6
+      ],
+      "density": 600,
+      "seed": 4,
+      "species": [
+        "tussock"
+      ],
+      "conditions": "frost"
+    },
+    {
+      "type": "grass",
+      "heightmap": "$ground",
+      "min": [
+        -2.2,
+        4.6
+      ],
+      "max": [
+        2.2,
+        8.6
+      ],
+      "density": 500,
+      "seed": 5,
+      "species": [
+        "savanna"
+      ],
+      "conditions": "drought"
+    },
+    {
+      "type": "grass",
+      "heightmap": "$ground",
+      "min": [
+        2.4,
+        4.6
+      ],
+      "max": [
+        7,
+        8.6
+      ],
+      "density": 150,
+      "seed": 6,
+      "species": [
+        "reed"
+      ],
+      "conditions": "after_rain"
+    }
+  ]
+}

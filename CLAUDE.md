@@ -9,6 +9,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Procedural objects including Ocean (Tessendorf's algorithm with Phillips spectrum), trees
   (Weber and Penn's parametric model, `src/procedural/tree.rs`) and forests of instanced trees
   (`src/procedural/forest.rs`)
+- Heightmap terrain (flat, fractal noise or image) and procedural grass that grows on it, with species and condition presets (see `src/procedural/grass.rs`)
 - Multithreaded rendering with progressive output
 
 ## Build Commands

@@ -16,6 +16,8 @@ use crate::skysphere::create_sky_sphere;
 use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
 use crate::procedural::tree;
+use crate::procedural::grass::{create_grass, GrassMedium};
+use crate::procedural::heightmap::{HeightGrid, Terrain};
 use crate::participatingmedia::create_fog;
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
@@ -280,6 +282,16 @@ impl SceneFile {
             return Some(Arc::new(d));
         }
 
+        if t == "grass" {
+            let (geometry, conditions) = create_grass(&o);
+            let medium: Box<dyn Medium + Sync + Send> = if o.get("material").is_some() || o.get("medium").is_some() {
+                SceneFile::parse_object_medium(&o, materials, media)
+            } else {
+                Box::new(GrassMedium::new(geometry.field.clone(), &conditions))
+            };
+            return Some(Arc::new(SceneObject { geometry: Box::new(geometry), medium }));
+        }
+
         if t == "fog" {
             let f = create_fog(&o);
             return Some(Arc::new(f));
@@ -530,6 +542,10 @@ impl SceneFile {
 
         if t == "difference" {
             return Some(SceneFile::parse_difference(o, geometries));
+        }
+
+        if t == "terrain" {
+            return Some(Box::new(Terrain { grid: Arc::new(HeightGrid::from_json(&o["heightmap"])) }));
         }
         None
     }
@@ -1055,7 +1071,7 @@ impl SceneFile {
             .filter(|o| o.medium.material_at(Vector3::zeros()).is_emitter() && o.geometry.surface_area() > 0.)
             .cloned()
             .collect();
-        let o = SceneGraph::new(2, objects, max_bounding);
+        let o = SceneGraph::new(objects);
 		
         let width = SceneFile::parse_int(&s.width, 640);
         let height =SceneFile::parse_int(&s.height, 480);

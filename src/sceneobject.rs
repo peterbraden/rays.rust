@@ -32,8 +32,36 @@ impl Geometry for SceneObject {
     self.geometry.intersects(r)
    }
 
+    fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
+        self.geometry.intersects_beyond(r, min)
+    }
+
+    fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
+        self.geometry.intersects_range(r, min, max)
+    }
+
+    fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
+        self.geometry.occludes(r, min, max)
+    }
+
+    fn fast_intersects(&self, r: &Ray) -> bool {
+        self.geometry.fast_intersects(r)
+    }
+
+    fn primitives(&self) -> u64 {
+        self.geometry.primitives()
+    }
+
+    fn inside(&self, p: &Vector3<f64>) -> bool {
+        self.geometry.inside(p)
+    }
+
     fn bounds(&self) -> BBox {
         self.geometry.bounds()
+    }
+
+    fn transformed_bounds(&self, t: &crate::na::geometry::Affine3<f64>) -> BBox {
+        self.geometry.transformed_bounds(t)
     }
 
     fn surface_area(&self) -> f64 {

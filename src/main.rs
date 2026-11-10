@@ -36,6 +36,7 @@ mod material {
     pub mod plastic;
     pub mod leaf;
     pub mod noise;
+    pub mod grass;
 }
 mod intersection;
 mod sceneobject;
@@ -55,6 +56,7 @@ mod shapes {
     pub mod repeating_mesh;
 }
 mod octree;
+mod bvh;
 mod scenegraph;
 mod scene;
 mod scenefile;
@@ -73,6 +75,8 @@ mod procedural {
     pub mod fireworks;
     pub mod tree;
     pub mod forest;
+    pub mod heightmap;
+    pub mod grass;
 }
 mod participatingmedia;
 mod noise;

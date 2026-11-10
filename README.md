@@ -77,6 +77,8 @@ in about 600 MB.
     - Trees (Weber and Penn's parametric model, with presets for several species, autumn colours and dead branches)
     - Forests of instanced trees over any surface
     - Random Cubes
+    - Terrain from heightmaps (fractal noise or images)
+    - Grass on any terrain: species presets (lawn, meadow, tussock, reed...) and conditions (wind, drought, frost, rain, mowing...)
   - Multithreaded
   - Progressive rendering
 

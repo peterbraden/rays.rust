@@ -17,7 +17,7 @@ use rand::rngs::StdRng;
 use rand::distributions::{Normal, Distribution};
 use crate::geometry::point_on_unit_sphere;
 use crate::shapes::csg::Union;
-use crate::octree::Octree;
+use crate::bvh::GeometryBvh;
 use crate::shapes::bbox::BBox;
 use crate::intersection::RawIntersection;
 use std::sync::Arc;
@@ -93,14 +93,14 @@ fn create_particles(
 
 
 pub struct FireworkMaterial {
-    particles: Octree<Particle>,
+    particles: GeometryBvh<Particle>,
     color: Color,
 }
 
 impl MaterialModel for FireworkMaterial {
     fn scatter(&self, r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay{
         // Find actual particle. Kinda hacky as we already worked this out.
-        let actual_intersection = self.particles.intersection(r, f64::INFINITY, 0f64);
+        let actual_intersection = self.particles.nearest(r, 0., f64::INFINITY);
         match actual_intersection {
             Some((particle, _i)) => {
                 ScatteredRay { sampled_lights: false, emit: Color::black(),
@@ -163,9 +163,7 @@ pub fn create_firework(o: &Value) -> SceneObject {
                             .collect();
     let geom = Union::new(boxed_particles);
 
-    let particle_arcs: Vec<Arc<Particle>> = particles.into_iter().map(Arc::new).collect();
-    let tree = Octree::new(8, geom.bounds(), &particle_arcs);
-    let m = Box::new(FireworkMaterial { particles: tree, color });
+    let m = Box::new(FireworkMaterial { particles: GeometryBvh::new(particles), color });
 
 	SceneObject {
 		geometry: Box::new(geom),

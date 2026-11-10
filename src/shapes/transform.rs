@@ -76,20 +76,45 @@ impl Transform {
             rd: self.inverse.transform_vector(&r.rd),
         }
     }
+
+    /// The ray in object space, and the factor that converts distances along it from world
+    /// space to object space. An affine map takes a line to a line, scaling every length along
+    /// it by the same factor: how much it stretches the direction.
+    fn to_object_scaled(&self, r: &Ray) -> (Ray, f64) {
+        let o = self.to_object(r);
+        let k = o.rd.norm() / r.rd.norm();
+        (o, k)
+    }
+
+    fn to_world(&self, r: &Ray, i: RawIntersection) -> RawIntersection {
+        let point = self.transform.transform_point(&Point3::from(i.point)).coords;
+        RawIntersection {
+            face: i.face,
+            dist: (point - r.ro).norm(),
+            point,
+            normal: (self.normal_matrix * i.normal).normalize(),
+        }
+    }
 }
 
 impl Geometry for Transform {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         // Intersect in object space, then map the hit back into world space.
-        self.item.intersects(&self.to_object(r)).map(|i| {
-            let point = self.transform.transform_point(&Point3::from(i.point)).coords;
-            RawIntersection {
-                face: i.face,
-                dist: (point - r.ro).norm(),
-                point,
-                normal: (self.normal_matrix * i.normal).normalize(),
-            }
-        })
+        self.item.intersects(&self.to_object(r)).map(|i| self.to_world(r, i))
+    }
+
+    fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
+        self.intersects_range(r, min, f64::INFINITY)
+    }
+
+    fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
+        let (o, k) = self.to_object_scaled(r);
+        self.item.intersects_range(&o, min * k, max * k).map(|i| self.to_world(r, i))
+    }
+
+    fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
+        let (o, k) = self.to_object_scaled(r);
+        self.item.occludes(&o, min * k, max * k)
     }
 
     fn fast_intersects(&self, r: &Ray) -> bool {
@@ -97,7 +122,11 @@ impl Geometry for Transform {
     }
 
     fn bounds(&self) -> BBox {
-        self.item.bounds().transform(&na::convert(self.transform))
+        self.item.transformed_bounds(&self.transform)
+    }
+
+    fn transformed_bounds(&self, t: &Affine3<f64>) -> BBox {
+        self.item.transformed_bounds(&(t * self.transform))
     }
 
     fn primitives(&self) -> u64 {
@@ -221,5 +250,19 @@ mod tests {
     #[should_panic(expected = "non-zero")]
     fn test_zero_scale_is_rejected() {
         Transform::from_parts(unit_sphere(), Vector3::zeros(), Rotation3::identity(), Vector3::new(1., 0., 1.));
+    }
+
+    #[test]
+    fn test_ranges_are_in_world_distances() {
+        // A unit sphere scaled by 3 at z = 10: hits at 7 and 13 from the origin. Object space
+        // distances along the ray are a third of those, so the range must be converted.
+        let t = Transform::from_parts(unit_sphere(), Vector3::new(0., 0., 10.), Rotation3::identity(), Vector3::new(3., 3., 3.));
+        let r = Ray { ro: Vector3::zeros(), rd: Vector3::new(0., 0., 2.) };
+        assert!((t.intersects_range(&r, 0., 100.).unwrap().dist - 7.).abs() < 1e-9);
+        assert!((t.intersects_range(&r, 8., 100.).unwrap().dist - 13.).abs() < 1e-9);
+        assert!((t.intersects_beyond(&r, 8.).unwrap().dist - 13.).abs() < 1e-9);
+        assert!(t.intersects_range(&r, 0., 6.9).is_none());
+        assert!(t.intersects_range(&r, 13.1, 100.).is_none());
+        assert!(t.occludes(&r, 0., 7.1) && !t.occludes(&r, 0., 6.9) && t.occludes(&r, 8., 13.1));
     }
 }

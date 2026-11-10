@@ -1,0 +1,55 @@
+{
+  "width": 640,
+  "height": 360,
+  "supersamples": 16,
+  "chunk_size": 64,
+  "samples_per_chunk": 4,
+  "shadow_bias": 0.0001,
+  "max_depth": 3,
+
+  "variables": {
+    "hills": {
+      "type": "noise", "min": [-30, -10], "max": [30, 50], "resolution": 240,
+      "amplitude": 2.5, "scale": 25, "octaves": 5, "seed": 4
+    }
+  },
+
+  "materials": {
+    "SOIL": { "type": "lambertian", "albedo": [0.12, 0.09, 0.06] }
+  },
+  "media": {},
+
+  "camera": {
+    "location": [0, 1.6, -6],
+    "lookat": [0, 0.2, 6],
+    "up": [0, 1, 0],
+    "angle": 0.7,
+    "aperture": 0.02
+  },
+
+  "lights": [
+    { "location": [-480, 360, 720], "color": [1, 0.93, 0.8], "intensity": 2.4e6 }
+  ],
+
+  "objects": [
+    { "type": "skysphere", "sun_direction": [-0.6, 0.45, 0.9] },
+    { "type": "terrain", "heightmap": "$hills", "material": "SOIL" },
+    {
+      "type": "grass",
+      "heightmap": "$hills",
+      "min": [-14, -6], "max": [14, 30],
+      "density": 700,
+      "seed": 2,
+      "species": [
+        { "preset": "meadow", "weight": 3 },
+        { "preset": "tall", "weight": 0.6 },
+        { "preset": "fescue", "weight": 1 }
+      ],
+      "conditions": {
+        "preset": "summer",
+        "species_zones": 4,
+        "wind": { "direction": [1, 0.4], "strength": 0.35, "gustiness": 0.6, "scale": 5 }
+      }
+    }
+  ]
+}

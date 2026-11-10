@@ -106,7 +106,7 @@ use crate::shapes::triangle::Triangle;
 use crate::shapes::repeating_mesh::RepeatingMesh;
 use std::vec::Vec;
 use std::sync::Arc;
-use crate::octree::Octree;
+use crate::shapes::mesh::Mesh;
 use crate::shapes::geometry::Geometry;
 use crate::sceneobject::SceneObject;
 use crate::material::legacy::Whitted;
@@ -452,14 +452,19 @@ impl OceanGeometry {
 
         let triangles = generate_mesh(vertices, fourier_grid_size, lx, lz);
         let bounds = OceanGeometry::bounds_of(&triangles);
-        let tree = Octree::new(8, bounds, &triangles); 
+        // Each triangle with its own corners: the tile's last row and column are copies of its
+        // first, moved by a tile's width, so not all corners are shared.
+        let tile = Mesh::new(
+            triangles.iter().flat_map(|t| [t.v0, t.v1, t.v2]).collect(),
+            (0 .. triangles.len()).map(|i| [3 * i, 3 * i + 1, 3 * i + 2]).collect(),
+        );
 
         println!(" - OCEAN [A={}, g={}, W={}, t={}, N={}, {}]", scale, gravity, wind, time, lx, fourier_grid_size);
         println!("  bounded:{}, triangles:{} ", bounds, triangles.len());
 
         OceanGeometry {
             mesh: RepeatingMesh {
-                tile: tree,
+                tile,
                 tile_size: Vector3::new(lx, 0., lz),
                 tile_bounds: bounds,
                 triangle_count: triangles.len(),

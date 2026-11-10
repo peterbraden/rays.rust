@@ -68,8 +68,10 @@ use rayon::prelude::*;
 
 /// Buckets tried along the split axis.
 const BINS: usize = 16;
-/// The cost of visiting a node, relative to intersecting an item.
-const TRAVERSAL_COST: f64 = 0.125;
+/// The cost of visiting a node, relative to intersecting an item: pbrt-v4's value. At 0.125
+/// (pbrt-v3's) splitting nearly always looked cheaper than a leaf, so most leaves held one
+/// triangle, and a 518k-triangle mesh had about 960k nodes.
+const TRAVERSAL_COST: f64 = 0.5;
 /// Leaves never hold more than this many items (unless they can't be split at all, eg. all
 /// centroids coincide), whatever the heuristic says.
 const MAX_LEAF: usize = 8;

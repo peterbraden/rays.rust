@@ -416,6 +416,44 @@ mod tests {
         assert!((n - Vector3::new(1., 1. / 3., 0.).normalize()).norm() < 1e-6, "{}", n);
     }
 
+    #[test]
+    fn test_rough_surface_matches_brute_force() {
+        // A rough surface of small triangles, as the ocean is, with rays from above it and
+        // grazing along it, limited by min and max: the mesh must find exactly the nearest
+        // triangle hit in range.
+        use rand::{Rng, SeedableRng};
+        use rand::rngs::StdRng;
+        let mut rng = StdRng::seed_from_u64(6);
+        let mut u = |a: f64, b: f64| rng.gen_range(a, b);
+        let n = 24;
+        let mut positions = vec![];
+        for z in 0 ..= n {
+            for x in 0 ..= n {
+                positions.push(Vector3::new(x as f64, u(-0.2, 0.2), z as f64));
+            }
+        }
+        let at = |x: usize, z: usize| z * (n + 1) + x;
+        let triangles: Vec<[usize; 3]> = (0 .. n).flat_map(|x| (0 .. n).map(move |z| (x, z)))
+            .flat_map(|(x, z)| [[at(x, z), at(x + 1, z), at(x, z + 1)], [at(x + 1, z), at(x + 1, z + 1), at(x, z + 1)]])
+            .collect();
+        let mesh = Mesh::new(positions.clone(), triangles.clone());
+        let mut hits = 0;
+        for i in 0 .. 20000 {
+            let ro = Vector3::new(u(-5., 29.), u(-0.3, 4.), u(-5., 29.));
+            let rd = Vector3::new(u(-1., 1.), if i % 2 == 0 { u(-1., 0.2) } else { u(-0.02, 0.02) }, u(-1., 1.)) * u(0.5, 2.);
+            let r = Ray { ro, rd };
+            let (min, max) = match i % 3 { 0 => (0., f64::INFINITY), 1 => (0., u(1., 30.)), _ => (u(0., 5.), f64::INFINITY) };
+            let expected = triangles.iter()
+                .filter_map(|t| intersects_dist(positions[t[0]], positions[t[1]], positions[t[2]], &r))
+                .map(|x| x.dist).filter(|d| *d >= min && *d < max)
+                .min_by(f64::total_cmp);
+            assert_eq!(mesh.intersects_range(&r, min, max).map(|x| x.dist), expected, "{} {} {}", r, min, max);
+            assert_eq!(mesh.occludes(&r, min, max), expected.is_some(), "{} {} {}", r, min, max);
+            if expected.is_some() { hits += 1 }
+        }
+        assert!(hits > 2000, "{}", hits);
+    }
+
     /// A unit sphere as `n` x `2n` latitude-longitude quads.
     fn tessellated_sphere(n: usize) -> (Vec<Vector3<f64>>, Mesh) {
         let p = |i: usize, j: usize| {

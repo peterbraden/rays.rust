@@ -499,6 +499,35 @@ mod tests {
     }
 
     #[test]
+    fn test_axis_aligned_boxes_and_rays_match_brute_force() {
+        // Flat and solid boxes on a grid of whole numbers, and rays with zero (and -0) direction
+        // components starting on the grid, running along faces: where box tests meet infinite
+        // and NaN slab distances, and entries equal to exits.
+        let mut rng = StdRng::seed_from_u64(5);
+        let mut int = |a: i32, b: i32| rng.gen_range(a, b + 1) as f64;
+        let original: Vec<BBox> = (0..120).map(|_| {
+            let (x, y, z) = (int(-16, 14), int(-16, 14), int(-16, 14));
+            BBox::new(Vector3::new(x, y, z), Vector3::new(x + int(0, 2), y + int(0, 2), z + int(0, 2)))
+        }).collect();
+        let (bvh, items) = Bvh::build(original.clone(), |b| *b);
+        let mut hits = 0;
+        for _ in 0..20000 {
+            let ro = Vector3::new(int(-20, 20), int(-20, 20), int(-20, 20));
+            let mut component = || [-1., -0., 0., 1.][int(0, 3) as usize];
+            let mut rd = Vector3::new(component(), component(), component());
+            if rd.iter().all(|c| *c == 0.) { rd.x = 1. }
+            let r = Ray { ro, rd };
+            let expected = original.iter().filter_map(|b| b.intersects_beyond(&r, 0.))
+                .map(|x| x.dist).min_by(f64::total_cmp);
+            let found = bvh.nearest(&r, 0., f64::INFINITY, |i, _| items[i].intersects_beyond(&r, 0.)).map(|(_, x)| x.dist);
+            assert_eq!(expected, found, "{}", r);
+            assert_eq!(bvh.any_hit(&r, 0., f64::INFINITY, |i| items[i].intersects_beyond(&r, 0.).is_some()), expected.is_some(), "{}", r);
+            if expected.is_some() { hits += 1 }
+        }
+        assert!(hits > 2000, "{}", hits);
+    }
+
+    #[test]
     fn test_empty() {
         let (bvh, _) = Bvh::build(Vec::<Sphere>::new(), |s| s.bounds());
         let r = Ray { ro: Vector3::zeros(), rd: Vector3::new(0., 0., 1.) };

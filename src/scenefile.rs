@@ -15,6 +15,8 @@ use crate::color::Color;
 use crate::skysphere::create_sky_sphere;
 use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
+use crate::procedural::rock::{self, Bedrock, Assorted};
+use crate::material::rock::{Rock, RockStyle};
 use crate::participatingmedia::create_fog;
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
@@ -221,6 +223,10 @@ impl SceneFile {
         if t == "firework" {
             let d = create_firework(&o);
             return Some(Arc::new(d));
+        }
+
+        if t == "boulder" || t == "pebbles" || t == "bedrock" {
+            return Some(Arc::new(SceneFile::parse_rock_object(&o, materials, media)));
         }
 
         if t == "fog" {
@@ -462,6 +468,10 @@ impl SceneFile {
         if t == "normal" {
             return Some(Box::new(NormalShade {}));
         }
+
+        if t == "rock" {
+            return Some(Box::new(SceneFile::parse_rock(o)));
+        }
         
         // Noise materials are handled separately in parse_object_medium
         
@@ -479,6 +489,119 @@ impl SceneFile {
         }
             */
         None
+    }
+
+    /// `{"type": "rock", "preset": "granite"}`: a procedural stone (see `material::rock`).
+    /// Presets are granite, basalt, sandstone, limestone, slate and quartzite; any field of the
+    /// preset can be overridden, eg. `"color"` or `"strata_amount"`. Also `"scale"` (the size of
+    /// the texture's features), `"seed"`, `"weathering"`, `"wetness"` (0 to 1), `"lichen"` (the
+    /// fraction of upward surfaces covered, 0 to 1) and `"lichen_color"`.
+    pub fn parse_rock(o: &Value) -> Rock {
+        let preset = RockStyle::preset(o["preset"].as_str().unwrap_or("granite"));
+        let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let c = |k: &str, d: Color| SceneFile::parse_color_def(o, k, d);
+        let style = RockStyle {
+            color: c("color", preset.color),
+            secondary: c("secondary", preset.secondary),
+            dark_grain: c("dark_grain", preset.dark_grain),
+            dark_grain_amount: n("dark_grain_amount", preset.dark_grain_amount),
+            light_grain: c("light_grain", preset.light_grain),
+            light_grain_amount: n("light_grain_amount", preset.light_grain_amount),
+            grain_size: n("grain_size", preset.grain_size),
+            strata_spacing: n("strata_spacing", preset.strata_spacing),
+            strata_color: c("strata_color", preset.strata_color),
+            strata_amount: n("strata_amount", preset.strata_amount),
+            bump: n("bump", preset.bump),
+            bump_size: n("bump_size", preset.bump_size),
+            cracks: n("cracks", preset.cracks),
+        };
+        let mut r = Rock::new(style, n("scale", 1.), SceneFile::parse_int(&o["seed"], 0) as u64);
+        r.weathering = n("weathering", r.weathering);
+        r.wetness = n("wetness", 0.).clamp(0., 1.);
+        let lichen = n("lichen", 0.);
+        if lichen > 0. {
+            let color = c("lichen_color", r.lichen_color);
+            r = r.with_lichen(lichen, color);
+        }
+        r
+    }
+
+    /// Procedural rocks, all resting on the ground (see `procedural::rock`). Each takes a
+    /// `"seed"`, and a `"material"` or `"medium"`, by default a rock material.
+    ///
+    /// - `{"type": "boulder", "location": [x, y, z], "radius": 1, "angularity": 0.5}`: a boulder
+    ///   sitting at `location`. Angularity runs from 0, rounded, to 1, sharply broken.
+    /// - `{"type": "pebbles", "center": [x, y, z], "radius": 1, "count": 100, "size": [0.03,
+    ///   0.12]}`: pebbles scattered over a disc. `"materials": ["A", "B"]` mixes materials,
+    ///   one per pebble; by default a mix of stones, made wet by `"wetness"`.
+    /// - `{"type": "bedrock", "center": [x, y, z], "size": [20, 20], "height": 3}`: an outcrop
+    ///   rising from `center`. Also `"feature_size"`, `"strata"` (the thickness of its terraced
+    ///   beds, 0 for none), `"strata_strength"` (0 to 1), `"falloff"` (the fraction of each side
+    ///   over which it slopes to the base) and `"resolution"` (vertices along a side).
+    ///
+    /// Boulders and pebbles take `"detail"`, the number of geodesic subdivisions (5 and 3).
+    pub fn parse_rock_object(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>) -> SceneObject {
+        let t = o["type"].as_str().unwrap();
+        let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
+        let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let detail = o.get("detail").map(|d| SceneFile::parse_int(d, 0) as u32);
+        let given = o.get("material").is_some() || o.get("medium").is_some();
+        let medium = |default: &str| -> Box<dyn Medium + Sync + Send> {
+            if given {
+                SceneFile::parse_object_medium(o, materials, media)
+            } else {
+                Box::new(Solid { m: Box::new(Rock::new(RockStyle::preset(default), 1., seed)) })
+            }
+        };
+        match t {
+            "boulder" => {
+                let mesh = rock::boulder_mesh(
+                    SceneFile::parse_vec3_def(o, "location", Vector3::zeros()),
+                    n("radius", 1.), n("angularity", 0.5), detail, seed);
+                rock::object(&[mesh], medium("granite"))
+            },
+            "bedrock" => {
+                let size = SceneFile::parse_vec2_def(o, "size", Vector2::new(20., 20.));
+                let b = Bedrock {
+                    center: SceneFile::parse_vec3_def(o, "center", Vector3::zeros()),
+                    size: (size.x, size.y),
+                    height: n("height", 3.),
+                    feature_size: n("feature_size", size.x.min(size.y) / 4.),
+                    strata: n("strata", 0.),
+                    strata_strength: n("strata_strength", 0.8),
+                    falloff: n("falloff", 0.25),
+                    resolution: SceneFile::parse_int(&o["resolution"], 160),
+                    seed,
+                };
+                rock::object(&[b.mesh()], medium(if b.strata > 0. { "sandstone" } else { "granite" }))
+            },
+            "pebbles" => {
+                let size = SceneFile::parse_vec2_def(o, "size", Vector2::new(0.03, 0.12));
+                let names: Vec<Value> = o["materials"].as_array().cloned().unwrap_or_default();
+                let mixed: Vec<Box<dyn MaterialModel + Sync + Send>> = if !names.is_empty() {
+                    names.iter().map(|k| SceneFile::require_material(k, materials, "pebbles")).collect()
+                } else {
+                    let wetness = n("wetness", 0.);
+                    ["granite", "basalt", "quartzite", "sandstone", "slate", "limestone"].iter().enumerate()
+                        .map(|(i, p)| {
+                            let mut r = Rock::new(RockStyle::preset(p), 0.25, seed + i as u64);
+                            r.wetness = wetness;
+                            Box::new(r) as Box<dyn MaterialModel + Sync + Send>
+                        }).collect()
+                };
+                let pebbles = rock::scatter_pebbles(
+                    SceneFile::parse_vec3_def(o, "center", Vector3::zeros()),
+                    n("radius", 1.), SceneFile::parse_int(&o["count"], 100),
+                    size.x.min(size.y), size.x.max(size.y), mixed.len(), seed);
+                let meshes = rock::pebble_meshes(&pebbles, detail, seed);
+                if given && names.is_empty() {
+                    rock::object(&meshes, SceneFile::parse_object_medium(o, materials, media))
+                } else {
+                    rock::object(&meshes, Box::new(Assorted::new(mixed, pebbles)))
+                }
+            },
+            _ => unreachable!(),
+        }
     }
 
     /// A noise texture over a base material. Needs the materials map to resolve the base.

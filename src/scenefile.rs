@@ -834,7 +834,7 @@ impl SceneFile {
             .filter(|o| o.medium.material_at(Vector3::zeros()).is_emitter() && o.geometry.surface_area() > 0.)
             .cloned()
             .collect();
-        let o = SceneGraph::new(2, objects, max_bounding);
+        let o = SceneGraph::new(objects);
 		
         let width = SceneFile::parse_int(&s.width, 640);
         let height =SceneFile::parse_int(&s.height, 480);

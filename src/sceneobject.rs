@@ -36,6 +36,10 @@ impl Geometry for SceneObject {
         self.geometry.bounds()
     }
 
+    fn transformed_bounds(&self, t: &crate::na::geometry::Affine3<f64>) -> BBox {
+        self.geometry.transformed_bounds(t)
+    }
+
     fn surface_area(&self) -> f64 {
         self.geometry.surface_area()
     }

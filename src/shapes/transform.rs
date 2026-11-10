@@ -96,7 +96,11 @@ impl Geometry for Transform {
     }
 
     fn bounds(&self) -> BBox {
-        self.item.bounds().transform(&na::convert(self.transform))
+        self.item.transformed_bounds(&self.transform)
+    }
+
+    fn transformed_bounds(&self, t: &Affine3<f64>) -> BBox {
+        self.item.transformed_bounds(&(t * self.transform))
     }
 
     fn primitives(&self) -> u64 {

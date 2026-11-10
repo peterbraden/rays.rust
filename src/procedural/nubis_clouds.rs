@@ -290,13 +290,21 @@ impl NubisCloudLayer {
 
     /// Cloud density as a fraction of `max_density`, in [0, 1].
     pub fn fraction(&self, p: &Vector3<f64>) -> f64 {
+        self.fraction_at(p.y, || self.weather_map().at(p.x, p.z), p)
+    }
+
+    /// The cloud recipe, given where its inputs come from: the height `altitude`, the weather
+    /// map's value over the point (asked for only if needed), and the position `p` at which to
+    /// evaluate the shape and detail noise. Flat layers take these from flat coordinates,
+    /// global ones from the planet (`GlobalNubis`).
+    fn fraction_at(&self, altitude: f64, weather: impl FnOnce() -> f64, p: &Vector3<f64>) -> f64 {
         // 1. Height in the layer.
-        let h = (p.y - self.base) / (self.top - self.base);
+        let h = (altitude - self.base) / (self.top - self.base);
         if !(0. ..=1.).contains(&h) {
             return 0.;
         }
         // 2. The weather map: how strongly this column of sky is cloud, from 0 (clear) to 1.
-        let cell = self.cell(self.weather_map().at(p.x, p.z));
+        let cell = self.cell(weather());
         if cell <= 0. {
             return 0.;
         }
@@ -357,6 +365,86 @@ impl DensityField for NubisCloudLayer {
                 } else {
                     (self.max_density, if to_top > 0. { edge.min(to_top) } else { edge })
                 }
+            },
+        }
+    }
+}
+
+/// # Nubis clouds over a whole planet
+///
+/// The same clouds (`NubisCloudLayer`'s profiles, Perlin-Worley shapes and erosion), with
+/// heights as altitudes above the planet and no flat coordinates anywhere: the weather map is a
+/// `CubeMap` over the globe, sampled from solid noise at each texel corner's direction, so it
+/// has no poles or seams; the shapes and detail are solid noise at the point's position
+/// relative to the planet's centre. Each texel's largest corner bounds the clouds above it, as
+/// in the flat layer: up to the sphere of their highest possible top, and nothing over them
+/// beyond it, with exits from the column (four planes) and to the sphere exact.
+///
+/// With `climate`, coverage follows the planet's broad bands of weather by latitude (about the
+/// `pole`): cloudy along the equator (the intertropical convergence zone), clear over the
+/// subtropical highs near 25°, cloudy again along the storm tracks of 40-65°.
+pub struct GlobalNubis {
+    pub layer: NubisCloudLayer,
+    pub map_size: usize,
+    pub climate: bool,
+    /// Unit vector of the planet's axis (north).
+    pub pole: Vector3<f64>,
+    pub planet_radius: f64,
+    map: OnceLock<crate::planet::CubeMap>,
+}
+
+impl GlobalNubis {
+    pub fn new(layer: NubisCloudLayer, planet_radius: f64) -> GlobalNubis {
+        GlobalNubis { layer, map_size: 1024, climate: true, pole: Vector3::z(), planet_radius, map: OnceLock::new() }
+    }
+
+    /// How much more or less cloud there is at latitude `lat` (radians), by its bands.
+    fn climate_factor(&self, lat: f64) -> f64 {
+        let deg = lat.to_degrees().abs();
+        let band = |centre: f64, width: f64| (-((deg - centre) / width).powi(2)).exp();
+        0.85 + 0.45 * band(0., 8.) - 0.4 * band(25., 9.) + 0.35 * band(52., 12.)
+    }
+
+    fn map(&self) -> &crate::planet::CubeMap {
+        self.map.get_or_init(|| {
+            let scale = self.planet_radius / self.layer.weather_size;
+            crate::planet::CubeMap::new(self.map_size, |d| {
+                let q = d * scale;
+                let w = stretched(self.layer.weather.fbm(q.x, q.y, q.z, 6, 0.5, 2.0));
+                if self.climate {
+                    (w * self.climate_factor(d.dot(&self.pole).clamp(-1., 1.).asin())).clamp(0., 1.)
+                } else {
+                    w
+                }
+            })
+        })
+    }
+}
+
+impl crate::planet::PlanetField for GlobalNubis {
+    fn density(&self, at: &crate::planet::SurfacePoint) -> f64 {
+        self.layer.max_density * self.layer.fraction_at(at.altitude, || self.map().at(&at.up), &at.position)
+    }
+
+    fn majorant(&self) -> f64 {
+        self.layer.max_density
+    }
+
+    fn majorant_from(&self, at: &crate::planet::SurfacePoint, _p: &Vector3<f64>, d: &Vector3<f64>,
+                     planet: &crate::planet::Planet) -> (f64, f64) {
+        let map = self.map();
+        // Classify by a point a centimetre along the ray, so one on a texel's edge (or the
+        // clouds' top) counts as where it is going; otherwise it finds the edge it is on, no
+        // distance away, again and again.
+        let ahead = at.position + d * 0.01;
+        let (face, i, j) = map.texel(&ahead.normalize());
+        let edge = map.cube.exit(&at.position, d, face, i, j);
+        match self.layer.column_top(map.texel_max(face, i, j)) {
+            None => (0., edge),
+            Some(top) => {
+                let to_top = crate::planet::to_sphere(&at.position, d, planet.radius + top);
+                let majorant = if ahead.norm() - planet.radius > top { 0. } else { self.layer.max_density };
+                (majorant, edge.min(to_top))
             },
         }
     }
@@ -513,6 +601,61 @@ mod tests {
         let p = Vector3::new(1.37, -2.71, 5.05);
         let period = WorleyTexture::PERIOD as f64;
         assert!((w.at(&p) - w.at(&(p + Vector3::new(period, -2. * period, period)))).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_global_clouds_bounded_and_banded() {
+        use crate::planet::{Planet, PlanetField, GlobalMapping};
+        use crate::volume::DensityField;
+        let mut layer = NubisCloudLayer::new(1500., 3000., Vector2::zeros(), 1., 3);
+        layer.weather_size = 400_000.;
+        layer.coverage = 0.6;
+        let mut g = GlobalNubis::new(layer, 6_360_000.);
+        g.map_size = 128;
+        let planet = Planet { radius: 6_360_000. };
+        let field = GlobalMapping { planet, field: std::sync::Arc::new(g) };
+        // The local majorant bounds the density along random rays through the layer.
+        let mut rng = crate::geometry::Pcg32::new(4, 0);
+        for _ in 0..1500 {
+            let up = crate::geometry::point_on_unit_sphere(rng.next_f64(), rng.next_f64());
+            let p = planet.center() + up * (planet.radius + 1000. + rng.next_f64() * 2500.);
+            let d = crate::geometry::point_on_unit_sphere(rng.next_f64(), rng.next_f64());
+            let (m, len) = field.majorant_from(&p, &d);
+            for k in 0..20 {
+                let q = p + d * (len.min(50_000.) * k as f64 / 20.);
+                assert!(field.density(&q) <= m + 1e-12, "{} > {}", field.density(&q), m);
+            }
+        }
+        // On a texel's edge, a ray across it gets a step to the far side of the next texel, not
+        // none (which stalled tracking).
+        let map_field = &field.field;
+        let corner = crate::planet::CubeSphere { size: 128 }.direction(0, 64., 70.);
+        let on_edge = planet.center() + corner * (planet.radius + 2000.);
+        for towards in [62., 66.] {
+            // Into the texel on either side of the edge.
+            let across = crate::planet::CubeSphere { size: 128 }.direction(0, towards, 70.) - corner;
+            let d = (across - corner * corner.dot(&across)).normalize();
+            let (m, len) = map_field.majorant_from(&planet.surface_point(&on_edge), &on_edge, &d, &planet);
+            assert!(len > 1000., "{}", len);
+            for k in 0..50 {
+                let q = on_edge + d * (len.min(100_000.) * k as f64 / 50.);
+                assert!(field.density(&q) <= m + 1e-12, "{} > {} towards {}", field.density(&q), m, towards);
+            }
+        }
+        // Climate: more cloud along the equator and the storm tracks than over the subtropics.
+        let g = match &field.field { f => f };
+        let cover = |lat: f64| {
+            let n = 4000;
+            (0..n).filter(|k| {
+                let lon = *k as f64 / n as f64 * std::f64::consts::TAU;
+                let (l, o) = (lat.to_radians(), lon);
+                let up = Vector3::new(l.cos() * o.cos(), l.cos() * o.sin(), l.sin());
+                let p = planet.center() + up * (planet.radius + 1800.);
+                g.density(&planet.surface_point(&p)) > 0.
+            }).count() as f64 / n as f64
+        };
+        let (equator, subtropics, storms) = (cover(0.), cover(25.), cover(52.));
+        assert!(equator > subtropics && storms > subtropics, "{} {} {}", equator, subtropics, storms);
     }
 
     #[test]

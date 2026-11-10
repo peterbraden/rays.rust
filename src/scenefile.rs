@@ -15,14 +15,14 @@ use crate::color::Color;
 use crate::skysphere::{create_sky_sphere, parse_sky_material};
 use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
-use crate::procedural::nubis_clouds::NubisCloudLayer;
+use crate::procedural::nubis_clouds::{NubisCloudLayer, GlobalNubis};
 use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGenus};
 use crate::participatingmedia::create_fog;
 use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
 use crate::material::ice_halos::{Crystals, Habit};
 use crate::material::diffraction::DiffractionTable;
 use crate::noise::PerlinNoise;
-use crate::planet::{Planet, PlanetMapping, EARTH_RADIUS};
+use crate::planet::{Planet, PlanetMapping, GlobalMapping, EARTH_RADIUS};
 use crate::material::phase::PhaseFunction;
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
@@ -423,6 +423,13 @@ impl SceneFile {
     /// the thickest cloud. `weather_size`, `shape_size` and `detail_size` set the sizes of
     /// cloud fields, clouds and their eroded edges, and `erosion` (0 to 1) how much the edges
     /// are worn; they default to suit the layer's thickness.
+    ///
+    /// `mapping` places the layer: `"regional"` (the default) curved over the planet about the
+    /// origin, `extent` across; `"flat"` (or `"curved": false`) on a flat earth; `"global"`
+    /// over the whole planet (`GlobalNubis`), with `map_size` texels along each cube face of
+    /// the weather map (default 1024), `climate` (default true) for bands of weather by
+    /// latitude about the `pole` (default [0, 0, 1]), and weather systems `weather_size`
+    /// across (default 400 km).
     pub fn parse_nubis_clouds(o: &Value) -> SceneObject {
         let base = SceneFile::parse_number(&o["base"], 1500.);
         let top = SceneFile::parse_number(&o["top"], 3000.);
@@ -436,12 +443,31 @@ impl SceneFile {
         layer.shape_size = SceneFile::parse_number(&o["shape_size"], layer.shape_size);
         layer.detail_size = SceneFile::parse_number(&o["detail_size"], layer.detail_size);
         layer.erosion = SceneFile::parse_number(&o["erosion"], layer.erosion).clamp(0., 1.);
+        if o["mapping"].as_str() == Some("global") {
+            let planet = Planet { radius: SceneFile::parse_number(&o["earth_radius"], EARTH_RADIUS) };
+            // Planetary weather: systems hundreds of kilometres across, unless told otherwise.
+            if o.get("weather_size").is_none() {
+                layer.weather_size = 400_000.;
+            }
+            let mut global = GlobalNubis::new(layer, planet.radius);
+            global.map_size = SceneFile::parse_int(&o["map_size"], global.map_size).max(2);
+            global.climate = o["climate"].as_bool().unwrap_or(true);
+            global.pole = SceneFile::parse_vec3_def(o, "pole", global.pole).normalize();
+            return create_volume(SceneFile::shell(&planet, top), Arc::new(GlobalMapping { planet, field: Arc::new(global) }),
+                SceneFile::parse_scattering(o, 0.85));
+        }
         let bounds = BBox::new(
             Vector3::new(center.x - extent, base, center.y - extent),
             Vector3::new(center.x + extent, top, center.y + extent),
         );
         let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(layer));
         create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// Bounds of the shell of atmosphere up to `top` around the whole of `planet`.
+    pub fn shell(planet: &Planet, top: f64) -> BBox {
+        let r = Vector3::repeat(planet.radius + top);
+        BBox::new(planet.center() - r, planet.center() + r)
     }
 
     /// A layer of cirrus by Hogan and Kew's fallstreak model (see
@@ -525,7 +551,7 @@ impl SceneFile {
     /// `earth_radius` (default the Earth's) beneath the origin, so that it drops away with
     /// distance, and far enough off is hidden below the horizon, as on a planet.
     pub fn curved(o: &Value, bounds: BBox, field: Arc<dyn DensityField>) -> (BBox, Arc<dyn DensityField>) {
-        if o["curved"].as_bool() == Some(false) {
+        if o["curved"].as_bool() == Some(false) || o["mapping"].as_str() == Some("flat") {
             return (bounds, field);
         }
         let planet = Planet { radius: SceneFile::parse_number(&o["earth_radius"], EARTH_RADIUS) };

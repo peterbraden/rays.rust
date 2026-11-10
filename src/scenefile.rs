@@ -476,21 +476,23 @@ impl SceneFile {
 
     /// Cumulus grown by simulating a sunny day (see `procedural::harris_cumulus`):
     ///
-    /// `{"type": "harris_cumulus", "time": 28800, "cache": "demo/scenes/.cumulus-cache"}`
+    /// `{"type": "harris_cumulus", "time": 5400, "cache": "demo/scenes/.cumulus-cache"}`
     ///
-    /// The simulation runs for `time` seconds from 05:30 on the ARM case's day (default 8
-    /// hours: 13:30), continuing from the latest state saved in `cache` (a directory) at or
-    /// before it, and saves its own there, so an animation's frames simulate only from one to
-    /// the next. Its grid is `grid` ([x, y, z] cells; x and z powers of two; default
-    /// [64, 44, 64]) of `cell` metres (100), periodic across the ground.
+    /// The simulation runs for `time` seconds (default 90 minutes), continuing from the latest
+    /// state saved in `cache` (a directory) at or before it, and saves its own there, so an
+    /// animation's frames simulate only from one to the next. Its grid is `grid` ([x, y, z]
+    /// cells; x and z powers of two; default [64, 44, 64]) of `cell` metres (100), periodic
+    /// across the ground.
     ///
-    /// The day is the ARM case's (a sounding over Oklahoma, and the ground's fluxes through
-    /// the day) unless given: `sounding` ({"height": [m], "theta": [K], "water": [g/kg],
-    /// "surface_pressure": Pa}), steady `heat_flux` and `moisture_flux` (W/m²), `large_scale`
-    /// (false to drop the air mass's slow tendencies). The ground's fluxes vary by
-    /// `patchiness` (0 to 1) in patches `patch_size` across that change over `patch_period`
-    /// seconds; `wind` ([x, z] m/s, default [10, 0]) carries everything; `friction_velocity`
-    /// (m/s) stirs the air near the ground; `vorticity` (confinement); `max_step` (s); `seed`.
+    /// The day is the ARM case's (Oklahoma, 21 June 1997), from 09:30 as its first cumulus
+    /// form (`"sounding": "arm_mid_morning"`, the default, `start` 14400 s after 05:30), or
+    /// from dawn (`"sounding": "arm"`, `start` 0), or a `sounding` of your own ({"height": [m],
+    /// "theta": [K], "water": [g/kg], "surface_pressure": Pa}). The ground's fluxes follow the
+    /// case's day unless steady `heat_flux` and `moisture_flux` (W/m²) are given; `large_scale`
+    /// false drops the air mass's slow tendencies. The fluxes vary by `patchiness` (0 to 1) in
+    /// patches `patch_size` across that change over `patch_period` seconds; `wind` ([x, z] m/s,
+    /// default [10, 0]) carries everything; `friction_velocity` (m/s) stirs the air near the
+    /// ground; `vorticity` (confinement); `max_step` (s); `seed`.
     ///
     /// For rendering: `droplet_radius` (µm, default 10; sets the extinction per gram of
     /// water, and the diffraction), `detail_size`, `erosion` (0 to 1) and `edge` (g/kg of
@@ -521,7 +523,14 @@ impl SceneFile {
         p.vorticity = num("vorticity", p.vorticity).max(0.);
         p.max_step = num("max_step", p.max_step);
         p.seed = SceneFile::parse_seed(o).unwrap_or(0);
-        if let Some(sounding) = o.get("sounding") {
+        p.start = num("start", p.start);
+        if o["sounding"].as_str() == Some("arm") {
+            // The full day, from dawn.
+            p.sounding = Sounding::arm();
+            p.start = num("start", 0.);
+        } else if let Some(name) = o["sounding"].as_str() {
+            assert!(name == "arm_mid_morning", "harris_cumulus: unknown sounding '{}': expected arm, arm_mid_morning or a profile", name);
+        } else if let Some(sounding) = o.get("sounding") {
             let list = |k: &str| -> Vec<f64> {
                 sounding[k].as_array().unwrap_or_else(|| panic!("harris_cumulus: the sounding needs \"{}\"", k))
                     .iter().map(|v| v.as_f64().unwrap()).collect()
@@ -533,7 +542,7 @@ impl SceneFile {
                 surface_pressure: SceneFile::parse_number(&sounding["surface_pressure"], 1e5),
             };
         }
-        let time = num("time", 8. * 3600.).max(0.);
+        let time = num("time", 5400.).max(0.);
         let cache = o["cache"].as_str().map(std::path::PathBuf::from);
         let sim = CloudSimulation::cached(p.clone(), time, cache.as_deref());
         let center = SceneFile::parse_vec2_def(o, "center", Vector2::new(0., 0.));

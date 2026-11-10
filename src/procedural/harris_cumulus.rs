@@ -126,6 +126,19 @@ impl Sounding {
     /// (Oklahoma, 21 June 1997), as set up for the intercomparison of A. R. Brown et al.,
     /// "Large-eddy simulation of the diurnal cycle of shallow cumulus convection over land",
     /// QJRMS 2002. The profiles are those of MicroHH's and DALES's `arm` cases.
+    /// The ARM case's air at 09:30, four hours in, as it is when cumulus first form: the
+    /// night's stable layer mixed out into a boundary layer 900 m deep (warmer and moister
+    /// from the morning's heating and evaporation), with the dawn sounding above it. With
+    /// `SimulationParams::start` at four hours, the day carries on from there.
+    pub fn arm_mid_morning() -> Sounding {
+        let z = [0., 900., 1000., 1300., 2500., 5500.];
+        Sounding {
+            theta: Profile::new(&z, &[304.5, 304.5, 305.6, 307.13, 314.0, 343.2]),
+            water: Profile::new(&z, &[15.6, 15.6, 14.0, 13.50, 3.00, 3.00]).scaled(1., 1e-3),
+            surface_pressure: 97000.,
+        }
+    }
+
     pub fn arm() -> Sounding {
         let z = [0., 50., 350., 650., 700., 1300., 2500., 5500.];
         Sounding {
@@ -202,15 +215,19 @@ pub struct SimulationParams {
     /// The largest time step (s); smaller when the flow is fast.
     pub max_step: f64,
     pub seed: u64,
+    /// The time of day (s since the forcing's start) at which the simulation begins.
+    pub start: f64,
 }
 
 impl Default for SimulationParams {
-    /// The ARM case's day, at 100 m: 6.4 km square and 4.4 km deep.
+    /// The ARM case's day from 09:30, as its first cumulus form, at 100 m: 6.4 km square and
+    /// 4.4 km deep. (From dawn, `Sounding::arm()` and `start` 0, the hours of morning convection
+    /// let the grid's numerical diffusion smear out the dry air that caps the clouds.)
     fn default() -> SimulationParams {
         SimulationParams {
             size: (64, 44, 64),
             cell: 100.,
-            sounding: Sounding::arm(),
+            sounding: Sounding::arm_mid_morning(),
             forcing: Forcing::arm(),
             patchiness: 0.3,
             patch_size: 1500.,
@@ -220,6 +237,7 @@ impl Default for SimulationParams {
             vorticity: 0.01,
             max_step: 4.,
             seed: 0,
+            start: 4. * 3600.,
         }
     }
 }
@@ -398,7 +416,7 @@ impl CloudSimulation {
     fn surface_fluxes(&mut self, dt: f64) {
         let p = &self.params;
         let (nx, _, nz) = p.size;
-        let (heat_flux, moisture_flux) = (p.forcing.heat_flux.value(self.time), p.forcing.moisture_flux.value(self.time));
+        let (heat_flux, moisture_flux) = (p.forcing.heat_flux.value(p.start + self.time), p.forcing.moisture_flux.value(p.start + self.time));
         let h = p.cell;
         let t = self.time / p.patch_period;
         let seed = (p.seed as u32).wrapping_add(self.steps as u32 * 7919);
@@ -460,7 +478,8 @@ impl CloudSimulation {
     /// elsewhere and radiative cooling.
     fn large_scale(&mut self, dt: f64) {
         let f = &self.params.forcing;
-        let (dtheta, dwater) = (f.theta_tendency.value(self.time) * dt, f.water_tendency.value(self.time) * dt);
+        let t = self.params.start + self.time;
+        let (dtheta, dwater) = (f.theta_tendency.value(t) * dt, f.water_tendency.value(t) * dt);
         if dtheta == 0. && dwater == 0. {
             return;
         }
@@ -1352,10 +1371,10 @@ mod diagnostics {
     #[ignore]
     fn harris_day() {
         let mut sim = CloudSimulation::new(SimulationParams::default());
-        for half_hours in 1..=24 {
-            sim.advance_to(half_hours as f64 * 1800., |_| {});
+        for quarters in 1..=16 {
+            sim.advance_to(quarters as f64 * 900., |_| {});
             report(&sim);
-            if half_hours % 2 == 0 {
+            if quarters % 4 == 0 {
                 let (nx, ny, nz) = sim.params.size;
                 let slab = nx * nz;
                 let (theta, vapour) = (sim.level_means(&sim.theta), sim.level_means(&sim.vapour));

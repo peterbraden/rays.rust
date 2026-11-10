@@ -37,19 +37,19 @@ use crate::volume::DensityField;
 
 /// (v - lo) / (hi - lo), clamped to [0, 1]; a step at `hi` if the range is empty, with `hi`
 /// itself below it, so a threshold of 1 on a value in [0, 1] (no coverage) passes nothing.
-fn remap(v: f64, lo: f64, hi: f64) -> f64 {
+pub(crate) fn remap(v: f64, lo: f64, hi: f64) -> f64 {
     if hi <= lo {
         return if v > hi { 1. } else { 0. };
     }
     ((v - lo) / (hi - lo)).clamp(0., 1.)
 }
 
-fn smoothstep(lo: f64, hi: f64, v: f64) -> f64 {
+pub(crate) fn smoothstep(lo: f64, hi: f64, v: f64) -> f64 {
     let t = remap(v, lo, hi);
     t * t * (3. - 2. * t)
 }
 
-fn lerp(a: f64, b: f64, t: f64) -> f64 {
+pub(crate) fn lerp(a: f64, b: f64, t: f64) -> f64 {
     a + (b - a) * t
 }
 
@@ -133,7 +133,7 @@ impl WeatherMap {
 }
 
 /// Fractal Perlin noise is in [0, 1] but rarely strays far from 0.5; stretch it to use the range.
-fn stretched(n: f64) -> f64 {
+pub(crate) fn stretched(n: f64) -> f64 {
     ((n - 0.5) * 2.2 + 0.5).clamp(0., 1.)
 }
 
@@ -141,7 +141,7 @@ fn stretched(n: f64) -> f64 {
 /// over a tile of `PERIOD` cells a side, which repeats, and interpolated trilinearly between
 /// texels: Nubis's noise textures. Searching the 27 neighbouring cells took two thirds of the
 /// render time when done for every sample; a lookup reads eight texels.
-struct WorleyTexture {
+pub(crate) struct WorleyTexture {
     texels: Vec<f32>,
 }
 
@@ -150,7 +150,7 @@ impl WorleyTexture {
     const PER_CELL: usize = 4;
     const N: usize = Self::PERIOD * Self::PER_CELL;
 
-    fn new(seed: u32) -> WorleyTexture {
+    pub(crate) fn new(seed: u32) -> WorleyTexture {
         let p = Self::PERIOD as i64;
         // Feature points per cell, with cell indices wrapped so the tile repeats seamlessly.
         let feature = |cx: i64, cy: i64, cz: i64| {
@@ -176,7 +176,7 @@ impl WorleyTexture {
     }
 
     /// The distance to the nearest feature point from `p`, in cells, interpolated.
-    fn at(&self, p: &Vector3<f64>) -> f64 {
+    pub(crate) fn at(&self, p: &Vector3<f64>) -> f64 {
         let n = Self::N as i64;
         let q = p * Self::PER_CELL as f64;
         let (x0, y0, z0) = (q.x.floor(), q.y.floor(), q.z.floor());
@@ -193,7 +193,7 @@ impl WorleyTexture {
 
 /// Inverted Worley noise (high at feature points, falling away between them), in three octaves:
 /// round, billowing cells.
-fn worley_fbm(w: &WorleyTexture, p: &Vector3<f64>) -> f64 {
+pub(crate) fn worley_fbm(w: &WorleyTexture, p: &Vector3<f64>) -> f64 {
     let cell = |q: Vector3<f64>| (1. - w.at(&q)).clamp(0., 1.);
     0.625 * cell(*p) + 0.25 * cell(p * 2.) + 0.125 * cell(p * 4.)
 }

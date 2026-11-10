@@ -17,6 +17,7 @@ use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
 use crate::procedural::nubis_clouds::{NubisCloudLayer, GlobalNubis};
 use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGenus, GlobalCirrus};
+use crate::procedural::benard_altocumulus::BenardAltocumulus;
 use crate::participatingmedia::create_fog;
 use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
 use crate::material::ice_halos::{Crystals, Habit};
@@ -251,6 +252,10 @@ impl SceneFile {
             return Some(Arc::new(SceneFile::parse_hogan_kew_cirrus(&o)));
         }
 
+        if t == "benard_altocumulus" {
+            return Some(Arc::new(SceneFile::parse_benard_altocumulus(&o)));
+        }
+
         if t == "nubis_clouds" {
             return Some(Arc::new(SceneFile::parse_nubis_clouds(&o)));
         }
@@ -461,6 +466,48 @@ impl SceneFile {
             Vector3::new(center.x + extent, top, center.y + extent),
         );
         let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(layer));
+        create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// A layer of altocumulus as Rayleigh-Bénard convection cells (see
+    /// `procedural::benard_altocumulus`), filling `extent` either side of `center` ([x, z]):
+    ///
+    /// `{"type": "benard_altocumulus", "base": 4000, "thickness": 200, "seed": 0}`
+    ///
+    /// with `density` (extinction in the densest cloud), `cell_size` (between cells' centres;
+    /// default 2.5 times the thickness), `coverage` (how far each cloudlet reaches towards its
+    /// cell's edge: around 0.5 broken, 1 joined), `regularity` (0 to 1), `anisotropy` (cells
+    /// this many times longer along the wind) and `wind_direction` ([x, z]), `undulation`
+    /// (0 to 1) and `wavelength` (waves across the wind), `patchiness` (0 to 1) and
+    /// `patch_size`, `warp` (in cells), `lumpiness` (0 to 1), `detail_size` and `erosion` (0 to
+    /// 1), `fade` (the fraction of `extent` over which the layer fades out), and
+    /// `particle_radius` (µm, for `diffraction`). `mapping` as for `nubis_clouds` (`"regional"` or `"flat"`).
+    pub fn parse_benard_altocumulus(o: &Value) -> SceneObject {
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let mut c = BenardAltocumulus::new(num("base", 4000.), num("thickness", 200.).max(1.), SceneFile::parse_seed(o).unwrap_or(0));
+        c.max_density = num("density", c.max_density);
+        c.cell_size = num("cell_size", c.cell_size).max(1.);
+        c.coverage = num("coverage", c.coverage).max(0.);
+        c.regularity = num("regularity", c.regularity).clamp(0., 1.);
+        c.anisotropy = num("anisotropy", c.anisotropy).max(0.1);
+        c.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", c.wind_direction).normalize();
+        c.undulation = num("undulation", c.undulation).clamp(0., 1.);
+        c.wavelength = num("wavelength", c.wavelength).max(1.);
+        c.patchiness = num("patchiness", c.patchiness).clamp(0., 1.);
+        c.patch_size = num("patch_size", c.patch_size).max(1.);
+        c.warp = num("warp", c.warp).max(0.);
+        c.lumpiness = num("lumpiness", c.lumpiness).clamp(0., 1.);
+        c.detail_size = num("detail_size", c.detail_size).max(1e-3);
+        c.erosion = num("erosion", c.erosion).clamp(0., 1.);
+        c.extent = num("extent", c.extent);
+        c.center = SceneFile::parse_vec2_def(o, "center", c.center);
+        c.fade = num("fade", c.fade).clamp(0., 1.);
+        c.particle_radius = o["particle_radius"].as_f64();
+        let bounds = BBox::new(
+            Vector3::new(c.center.x - c.extent, c.bottom(), c.center.y - c.extent),
+            Vector3::new(c.center.x + c.extent, c.top(), c.center.y + c.extent),
+        );
+        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(c));
         create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
     }
 

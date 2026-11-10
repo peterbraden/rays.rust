@@ -73,6 +73,7 @@ mod procedural {
     pub mod fireworks;
     pub mod nubis_clouds;
     pub mod hogan_kew_cirrus;
+    pub mod benard_altocumulus;
 }
 mod participatingmedia;
 mod noise;

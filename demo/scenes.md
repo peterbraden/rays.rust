@@ -41,10 +41,10 @@ tupelo (scarlet in the sun, orange in shade) and, far right, an oak keeping its 
 ![autumn](./scenes/autumn.png)
 
 ## Forest
-A mixed forest of about 18,000 trees over rolling hills (spheres sunk into the ground plane):
-Scots pines, Norway spruces, quaking aspens and black tupelos turning in autumn, with a shrub
-understory. Each species is three distinct trees, instanced; species grow in stands, with
-clearings, and none on steep slopes.
+A mixed forest of about 19,000 trees on heightmap terrain, seen across an autumn meadow of grass
+under the sky model's low sun: Scots pines, Norway spruces, quaking aspens and black tupelos
+turning in autumn, with a shrub understory. Each species is three distinct trees, instanced;
+species grow in stands, with clearings, and none on steep slopes.
 ![forest](./scenes/forest.png)
 
 ## Instancing

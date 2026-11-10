@@ -51,14 +51,15 @@ geometries can be built from each other. See [demo/scenes/instances.json](demo/s
 A `forest` covers part of a surface with trees: a few distinct trees are grown per species,
 then placed thousands of times as instances, each turned, scaled and maybe mirrored. Trees keep
 their distance from each other in proportion to their size, species grow in stands, clearings
-are left open, and steep ground stays bare. The surface can be any geometries, named or inline.
+are left open, and steep ground stays bare. The surface can be any geometries, named or inline:
+eg. a heightmap `terrain`, which grass can share.
 
 ```json
-"geometries": { "ground": { "type": "plane", "y": 0 }, "hill": { "type": "sphere", "location": [0, -150, 100], "radius": 170 } },
+"variables": { "land": { "type": "noise", "min": [-250, -50], "max": [250, 450], "amplitude": 90, "scale": 260 } },
+"geometries": { "land": { "type": "terrain", "heightmap": "$land" } },
 "objects": [
-  { "type": "transform", "item": "ground", "material": "GRASS" },
-  { "type": "transform", "item": "hill", "material": "GRASS" },
-  { "type": "forest", "seed": 1, "surface": ["ground", "hill"], "area": { "min": [-200, 0], "max": [200, 400] },
+  { "type": "transform", "item": "land", "material": "SOIL" },
+  { "type": "forest", "seed": 1, "surface": "land", "area": { "min": [-200, 0], "max": [200, 400] },
     "spacing": 9, "clearings": 0.2, "patchiness": 0.7, "max_slope": 35, "variants": 3, "autumn": 0.4,
     "species": [
       { "species": "scots-pine", "weight": 2, "bark": "PINE_BARK", "leaves": "NEEDLES", "params": { "autumn": 0 } },
@@ -68,8 +69,8 @@ are left open, and steep ground stays bare. The surface can be any geometries, n
 ]
 ```
 
-See [demo/scenes/forest.json](demo/scenes/forest.json): 18,000 trees from 15 distinct ones,
-in about 600 MB.
+See [demo/scenes/forest.json](demo/scenes/forest.json): 19,000 trees from 15 distinct ones on
+heightmap terrain, behind a meadow of grass.
 
   - Skysphere with Rayleigh and Mie Scattering
   - Procedural Objects

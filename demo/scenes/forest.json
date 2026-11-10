@@ -8,9 +8,10 @@
   "shadow_bias": 0.0001,
   "max_depth": 4,
 
-  "background": { "type": "gradient", "bottom": [0.93, 0.92, 0.9], "top": [0.42, 0.58, 0.88] },
 
   "variables": {
+    "land": { "type": "noise", "min": [-460, -120], "max": [460, 760], "resolution": 440,
+      "amplitude": 90, "scale": 260, "octaves": 5, "seed": 7 },
     "ASPEN": ["ASPEN_LEAF_1", "ASPEN_LEAF_2"],
     "NEEDLES": ["NEEDLE_1", "NEEDLE_2"],
     "PINE_NEEDLES": ["PINE_NEEDLE_1", "PINE_NEEDLE_2"]
@@ -46,30 +47,31 @@
   },
 
   "geometries": {
-    "plain": { "type": "plane", "y": 0 },
-    "hill": { "type": "sphere", "location": [45, -150, 150], "radius": 172 },
-    "ridge": { "type": "sphere", "location": [-80, -220, 200], "radius": 252 }
+    "land": { "type": "terrain", "heightmap": "$land" }
   },
 
   "camera": {
-    "location": [0, 40, -150],
-    "lookat": [0, 20, 90],
+    "location": [0, 9, -95],
+    "lookat": [0, 6, 120],
     "up": [0, 1, 0],
     "angle": 0.55,
     "aperture": 0.0
   },
 
   "lights": [
-    { "location": [-260, 220, 160], "color": [1, 0.92, 0.8], "intensity": 420000 }
+    { "location": [-560, 400, 420], "color": [1, 0.92, 0.8], "intensity": 2.4e6 }
   ],
 
   "objects": [
-    { "type": "transform", "item": "plain", "material": "GROUND" },
-    { "type": "transform", "item": "hill", "material": "GROUND" },
-    { "type": "transform", "item": "ridge", "material": "GROUND" },
+    { "type": "skysphere", "sun_direction": [-0.7, 0.5, 0.52] },
+    { "type": "transform", "item": "land", "material": "GROUND" },
+    { "type": "grass", "heightmap": "$land", "min": [-36, -88], "max": [36, -22], "density": 350, "seed": 5,
+      "species": [ { "preset": "meadow", "weight": 3 }, { "preset": "tall", "weight": 0.7 }, { "preset": "fescue", "weight": 1 } ],
+      "conditions": { "preset": "autumn", "species_zones": 6,
+        "wind": { "direction": [1, 0.4], "strength": 0.3, "gustiness": 0.6, "scale": 6 } } },
 
-    { "type": "forest", "seed": 3, "surface": ["plain", "hill", "ridge"],
-      "area": { "min": [-420, -60], "max": [420, 700] },
+    { "type": "forest", "seed": 3, "surface": "land",
+      "area": { "min": [-440, -25], "max": [440, 740] },
       "spacing": 9, "clearings": 0.25, "patch_size": 60, "patchiness": 0.7, "max_slope": 35,
       "variants": 3, "autumn": 0.4,
       "species": [

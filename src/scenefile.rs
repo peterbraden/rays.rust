@@ -17,7 +17,7 @@ use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
 use crate::procedural::nubis_clouds::NubisCloudLayer;
 use crate::participatingmedia::create_fog;
-use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity};
+use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz};
 use crate::noise::PerlinNoise;
 use crate::material::phase::PhaseFunction;
 use std::sync::Arc;
@@ -286,7 +286,30 @@ impl SceneFile {
             }),
         };
         create_volume(bounds, density, SceneFile::parse_color_def(o, "albedo", Color::white()),
-            SceneFile::parse_phase(o, 0.))
+            SceneFile::parse_phase(o, 0.), SceneFile::parse_scattering_approximation(o))
+    }
+
+    /// A medium's multiple-scattering approximations (`volume::ScatteringApproximation`):
+    /// `"similarity_after": N` for the similarity relations from the N-th scattering on, and
+    /// `"oz": true` or `{"octaves", "a", "b", "c"}` for Wrenninge et al.'s octaves.
+    pub fn parse_scattering_approximation(o: &Value) -> ScatteringApproximation {
+        let oz = match o.get("oz") {
+            None | Some(Value::Bool(false)) => None,
+            Some(Value::Bool(true)) => Some(Oz::default()),
+            Some(v) => {
+                let d = Oz::default();
+                Some(Oz {
+                    octaves: SceneFile::parse_int(&v["octaves"], d.octaves as usize) as u32,
+                    a: SceneFile::parse_number(&v["a"], d.a),
+                    b: SceneFile::parse_number(&v["b"], d.b),
+                    c: SceneFile::parse_number(&v["c"], d.c),
+                })
+            },
+        };
+        ScatteringApproximation {
+            similarity_after: o.get("similarity_after").map(|n| SceneFile::parse_int(n, 0) as u32),
+            oz,
+        }
     }
 
     /// A medium's phase function: `droplet_diameter` (µm) for water droplets, or else
@@ -335,7 +358,7 @@ impl SceneFile {
             Vector3::new(center.x + extent, top, center.y + extent),
         );
         create_volume(bounds, Box::new(layer), SceneFile::parse_color_def(o, "albedo", Color::white()),
-            SceneFile::parse_phase(o, 0.85))
+            SceneFile::parse_phase(o, 0.85), SceneFile::parse_scattering_approximation(o))
     }
 
     pub fn parse_box_terrain(o: &Value) -> SceneObject {

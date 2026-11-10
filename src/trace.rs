@@ -8,6 +8,7 @@ use std::f64;
 
 // Returns num rays cast, Color
 pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
+    crate::volume::begin_path();
     trace_from(r, depth, s, false)
 }
 
@@ -235,6 +236,77 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_volume_furnace_with_similarity() {
+        // With albedo 1 the reduced albedo is 1 too: still no light lost.
+        let s = volume_scene(r#""density": 6, "g": 0.85, "similarity_after": 2"#);
+        for _ in 0..200 {
+            let c = trace(&Ray { ro: Vector3::new(0., 0., -5.), rd: Vector3::new(0.1, 0., 1.).normalize() }, 0, &s).1;
+            assert!((c.rgb.x - 1.).abs() < 1e-9, "{}", c.rgb.x);
+        }
+    }
+
+    /// Mean radiance, rays cast and standard deviation looking up through a 2-unit-thick slab
+    /// of forward-scattering medium, from below, under a white sky above (and black below).
+    fn through_slab(extra: &str, n: usize) -> (f64, u64, f64) {
+        let s = SceneFile::from_string(format!(r#"{{
+            "background": {{ "type": "gradient", "bottom": [0, 0, 0], "top": [2, 2, 2] }},
+            "max_depth": 100000, "path_termination": "russian_roulette",
+            "camera": {{ "location": [0, -1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "objects": [ {{ "type": "volume", "min": [-1000, 0, -1000], "max": [1000, 2, 1000],
+                           "density": 4, "albedo": [0.98, 0.98, 0.98], "g": 0.85 {} }} ]
+        }}"#, extra));
+        let r = Ray { ro: Vector3::new(0., -1., 0.), rd: Vector3::new(0., 1., 0.) };
+        let mut cast = 0;
+        let v: Vec<f64> = (0..n).map(|_| { let (c, col) = trace(&r, 0, &s); cast += c; col.rgb.x }).collect();
+        let mean = v.iter().sum::<f64>() / n as f64;
+        let sd = (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64).sqrt();
+        (mean, cast, sd)
+    }
+
+    #[test]
+    fn test_similarity_approximates_deep_scattering_cheaply() {
+        // An optical depth of 8: nearly all light arriving has scattered many times.
+        crate::geometry::seed_rand(13, 1);
+        let n = 20_000;
+        let (exact, exact_cast, exact_sd) = through_slab("", n);
+        let (similar, similar_cast, similar_sd) = through_slab(r#", "similarity_after": 4"#, n);
+        let se = ((exact_sd.powi(2) + similar_sd.powi(2)) / n as f64).sqrt();
+        assert!((similar - exact).abs() < 0.05 * exact + 3. * se, "similarity {} vs exact {} (se {})", similar, exact, se);
+        assert!((similar_cast as f64) < 0.5 * exact_cast as f64, "rays {} vs {}", similar_cast, exact_cast);
+    }
+
+    #[test]
+    fn test_oz_single_octave_is_single_scattering() {
+        // As test_single_scattering_of_sunlight_in_a_slab, but a long path rather than depth 0:
+        // with Oz the sun is only seen from the first scattering, and with one octave exactly.
+        // The rest of the path sees a black sky, so adds nothing.
+        crate::geometry::seed_rand(5, 2);
+        let slab = |oz: &str| SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 1000, "shadow_bias": 0.0001,
+            "sun": {{ "direction": [0, 1, 0], "intensity": 2 }},
+            "camera": {{ "location": [0, 5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "objects": [ {{ "type": "volume", "min": [-1000, 0, -1000], "max": [1000, 1, 1000],
+                           "density": 1.3, "albedo": [0.8, 0.8, 0.8], "oz": {} }} ]
+        }}"#, oz));
+        let r = Ray { ro: Vector3::new(0., 5., 0.), rd: Vector3::new(0., -1., 0.) };
+        let n = 100_000;
+        let pi = std::f64::consts::PI;
+        let (sigma, a, e): (f64, f64, f64) = (1.3, 0.8, 2.);
+        let one = slab(r#"{ "octaves": 1 }"#);
+        let mean = (0..n).map(|_| trace(&r, 0, &one).1.rgb.x).sum::<f64>() / n as f64;
+        let expected = a * e * (1. - (-2. * sigma).exp()) / (8. * pi);
+        assert!((mean - expected).abs() < expected * 0.02, "{} vs {}", mean, expected);
+        // Octave i: weight b^i, sun's extinction a^i: a E b^i / 4π × (1 - e^-(1+a^i)σ) / (1 + a^i).
+        let three = slab(r#"{ "octaves": 3, "a": 0.5, "b": 0.6 }"#);
+        let mean = (0..n).map(|_| trace(&r, 0, &three).1.rgb.x).sum::<f64>() / n as f64;
+        let expected: f64 = (0..3).map(|i| {
+            let ai = 0.5f64.powi(i);
+            a * e * 0.6f64.powi(i) / (4. * pi) * (1. - (-(1. + ai) * sigma).exp()) / (1. + ai)
+        }).sum();
+        assert!((mean - expected).abs() < expected * 0.02, "{} vs {}", mean, expected);
     }
 
     #[test]

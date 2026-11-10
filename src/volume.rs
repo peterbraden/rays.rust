@@ -25,6 +25,7 @@
 //! which estimates the transmittance unbiasedly, if noisily, as either 0 or 1.
 
 use crate::color::Color;
+use std::cell::Cell;
 use crate::geometry::rand;
 use crate::intersection::{Intersection, RawIntersection};
 use crate::material::model::{MaterialModel, ScatteredRay};
@@ -38,6 +39,32 @@ use crate::scene::Scene;
 use crate::sceneobject::SceneObject;
 use crate::shapes::bbox::BBox;
 use crate::shapes::geometry::Geometry;
+
+thread_local! {
+    /// The state of the path being traced on this thread, for the multiple-scattering
+    /// approximations (`ScatteringApproximation`): how many times it has scattered in a
+    /// volume, and the factor all volumes' densities are scaled by for its next segments,
+    /// shadow rays included. Geometry is intersected without knowing which path it serves,
+    /// hence a thread-local; each thread traces one path at a time, from `begin_path`.
+    static PATH: Cell<(u32, f64)> = const { Cell::new((0, 1.)) };
+}
+
+/// Start a new path: no volume scatterings yet, and densities as given.
+pub fn begin_path() {
+    PATH.with(|p| p.set((0, 1.)));
+}
+
+fn path_density_scale() -> f64 {
+    PATH.with(|p| p.get().1)
+}
+
+fn path_scatterings() -> u32 {
+    PATH.with(|p| p.get().0)
+}
+
+fn set_path(scatterings: u32, scale: f64) {
+    PATH.with(|p| p.set((scatterings, scale)));
+}
 
 /// Below this estimated transmittance, ratio tracking plays Russian roulette.
 const RATIO_TRACKING_ROULETTE: f64 = 0.3;
@@ -116,7 +143,8 @@ impl Geometry for Volume {
     /// piecewise-constant majorants of Novák et al. 2018). Stretches with no majorant are
     /// skipped without sampling at all.
     fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
-        if self.density.majorant() <= 0. {
+        let scale = path_density_scale();
+        if self.density.majorant() * scale <= 0. {
             return None;
         }
         let d = r.rd.normalize();
@@ -129,7 +157,9 @@ impl Geometry for Volume {
             // can't stall the walk.
             let end = (t + length.max(t.abs().max(1.) * 1e-12)).min(exit);
             if majorant > 0. {
-                let step = -(1. - rand()).ln() / majorant;
+                // Scaling the density scales the majorant alike: steps shrink, and the chance
+                // of a collision being real is unchanged.
+                let step = -(1. - rand()).ln() / (majorant * scale);
                 if t + step < end {
                     t += step;
                     let point = r.ro + d * t;
@@ -165,7 +195,8 @@ impl Geometry for Volume {
     /// estimate is small, Russian roulette ends most walks early (and doubles the survivors),
     /// which stays unbiased.
     fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 {
-        if self.density.majorant() <= 0. {
+        let scale = path_density_scale();
+        if self.density.majorant() * scale <= 0. {
             return 1.;
         }
         let d = r.rd.normalize();
@@ -180,13 +211,13 @@ impl Geometry for Volume {
             return 1.;
         }
         let control = self.density.minorant();
-        let mut transmitted = (-control * (stop - t)).exp();
+        let mut transmitted = (-control * scale * (stop - t)).exp();
         while t < stop {
             let (majorant, length) = self.density.majorant_from(&(r.ro + d * t), &d);
             let end = (t + length.max(t.abs().max(1.) * 1e-12)).min(stop);
             let residual = majorant - control;
             if residual > 0. {
-                let step = -(1. - rand()).ln() / residual;
+                let step = -(1. - rand()).ln() / (residual * scale);
                 if t + step < end {
                     t += step;
                     transmitted *= 1. - (self.density.density(&(r.ro + d * t)) - control) / residual;
@@ -212,6 +243,46 @@ impl Geometry for Volume {
     fn is_stochastic(&self) -> bool { true }
 }
 
+/// Approximations that trade exactness for speed and noise in thick, bright media like
+/// clouds, where light scatters hundreds of times. Both off by default: plain path tracing.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ScatteringApproximation {
+    /// Similarity relations from this many volume scatterings on. After a few scatterings,
+    /// light in a forward-scattering medium is nearly isotropic anyway, and its spread is
+    /// governed by the "reduced" coefficients: a medium of extinction σ, albedo α and mean
+    /// cosine g behaves, at depth, like one scattering isotropically with extinction
+    /// σ (1 - α g) and albedo α (1 - g) / (1 - α g) (D. R. Wyman, M. S. Patterson and
+    /// B. C. Wilson, "Similarity relations for anisotropic scattering in Monte Carlo simulations
+    /// of deeply penetrating neutral particles", Journal of Computational Physics 81, 1989; see
+    /// Zhao, Ramamoorthi and Bala, "High-Order Similarity Relations in Radiative Transfer",
+    /// SIGGRAPH 2014). For g = 0.85 that is about seven times fewer collisions, and no spiky
+    /// phase function at the deep vertices that dominate the noise.
+    pub similarity_after: Option<u32>,
+    /// Magnus Wrenninge, Chris Kulla and Viktor Lundqvist, "Oz: The Great and Volumetric",
+    /// SIGGRAPH 2013 Talks: approximate the sunlight scattered many times by a sum of single
+    /// scatterings, octave i weighted b^i, with extinction scaled a^i (light penetrates
+    /// further) and the phase function's anisotropy c^i (it spreads out). Applied at a
+    /// path's first volume scattering; later ones then skip the sun, which would otherwise be
+    /// counted twice, but still gather light from the sky and surroundings.
+    pub oz: Option<Oz>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Oz {
+    pub octaves: u32,
+    pub a: f64,
+    pub b: f64,
+    pub c: f64,
+}
+
+impl Default for Oz {
+    /// Values in the range Wrenninge et al. and Hillaire ("Physically Based Sky, Atmosphere and
+    /// Cloud Rendering in Frostbite", SIGGRAPH 2016 course) suggest; a ≤ b keeps energy bounded.
+    fn default() -> Oz {
+        Oz { octaves: 4, a: 0.5, b: 0.5, c: 0.5 }
+    }
+}
+
 /// What happens at a collision in a volume: the light is scattered with probability `albedo`
 /// (per colour channel), in a direction from the phase function, and otherwise absorbed.
 /// Clouds scatter nearly everything (albedo ≈ 1) and mostly forwards (mean cosine ≈ 0.85);
@@ -219,16 +290,48 @@ impl Geometry for Volume {
 pub struct VolumeMaterial {
     pub albedo: Color,
     pub phase: PhaseFunction,
+    pub approximation: ScatteringApproximation,
 }
 
 impl VolumeMaterial {
+    /// Whether a vertex after `scatterings` earlier volume scatterings uses the similarity
+    /// relations.
+    fn reduced(&self, scatterings: u32) -> bool {
+        self.approximation.similarity_after.is_some_and(|n| scatterings >= n)
+    }
+
+    /// The single-scattering albedo, mean over channels, which sets the reduced extinction.
+    fn mean_albedo(&self) -> f64 {
+        self.albedo.rgb.mean()
+    }
+
+    /// The density scale for the path's segments after `scatterings` volume scatterings.
+    fn density_scale(&self, scatterings: u32) -> f64 {
+        if self.reduced(scatterings) {
+            1. - self.mean_albedo() * self.phase.mean_cosine()
+        } else {
+            1.
+        }
+    }
+
+    /// The albedo at a vertex, reduced or not.
+    fn albedo_at(&self, reduced: bool) -> Color {
+        if !reduced {
+            return self.albedo;
+        }
+        let g = self.phase.mean_cosine();
+        let a = self.albedo.rgb.map(|a| a * (1. - g) / (1. - a * g));
+        Color::new(a.x, a.y, a.z)
+    }
+
     /// Light from the scene's lights scattered at `point` towards the viewer, for light that
     /// was travelling along `incoming` (a unit vector): each light's radiance times the phase
     /// function at the angle between `incoming` and the direction to it, times the albedo.
     /// Point lights and the sun are delta lights, which a scattered ray can never hit, so this
     /// is the only way they reach a medium; area lights are sampled once, as at a surface.
-    fn direct_lighting(&self, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene) -> Color {
-        let phase = |w: &Vector3<f64>| self.phase.eval(incoming.dot(w));
+    fn direct_lighting(&self, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene,
+                       phase: &PhaseFunction, albedo: Color, scatterings: u32) -> Color {
+        let p = |w: &Vector3<f64>| phase.eval(incoming.dot(w));
         let mut direct = Color::black();
         for light in &s.lights {
             let to_light = light.position - point;
@@ -236,27 +339,58 @@ impl VolumeMaterial {
             let w = to_light / d;
             let shadow_ray = Ray { ro: *point, rd: w };
             let transmitted = s.objects.transmittance(&shadow_ray, d, f64::MIN_POSITIVE);
-            direct = direct + light.color * (light.intensity * phase(&w) / (d * d) * transmitted);
+            direct = direct + light.color * (light.intensity * p(&w) / (d * d) * transmitted);
         }
         if let Some(sun) = &s.sun {
-            direct = direct + sun.irradiance * (phase(&sun.direction) * sun.transmittance_from(point, s));
+            direct = direct + match self.approximation.oz {
+                None => sun.irradiance * (p(&sun.direction) * sun.transmittance_from(point, s)),
+                Some(oz) if scatterings == 0 => sun.irradiance * self.oz_sunlight(&oz, incoming, point, s),
+                // Already counted, octaves and all, at the path's first scattering.
+                Some(_) => Color::black(),
+            };
         }
         if s.render.sample_lights {
-            direct = direct + sample_area_light_with(point, s, |w| Color::white() * phase(w));
+            direct = direct + sample_area_light_with(point, s, |w| Color::white() * p(w));
         }
-        self.albedo * direct
+        albedo * direct
+    }
+
+    /// Wrenninge et al.'s sum over octaves, per unit sun irradiance: Σ b^i p_i(θ) T(a^i σ),
+    /// p_i the phase function with its mean cosine scaled c^i (as Henyey-Greenstein beyond the
+    /// first octave).
+    fn oz_sunlight(&self, oz: &Oz, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene) -> f64 {
+        let sun = s.sun.as_ref().unwrap();
+        let cos = incoming.dot(&sun.direction);
+        let saved = (path_scatterings(), path_density_scale());
+        let mut total = 0.;
+        for i in 0..oz.octaves as i32 {
+            let phase = if i == 0 {
+                self.phase.eval(cos)
+            } else {
+                PhaseFunction::HenyeyGreenstein { g: self.phase.mean_cosine() * oz.c.powi(i) }.eval(cos)
+            };
+            set_path(saved.0, saved.1 * oz.a.powi(i));
+            total += oz.b.powi(i) * phase * sun.transmittance_from(point, s);
+        }
+        set_path(saved.0, saved.1);
+        total
     }
 }
 
 impl MaterialModel for VolumeMaterial {
     fn scatter(&self, r: &Ray, i: &Intersection, s: &Scene) -> ScatteredRay {
         let incoming = r.rd.normalize();
-        let rd = self.phase.sample(&incoming);
+        let scatterings = path_scatterings();
+        let reduced = self.reduced(scatterings);
+        let phase = if reduced { PhaseFunction::isotropic() } else { self.phase };
+        let albedo = self.albedo_at(reduced);
+        // Light leaving this vertex, towards the lights and onwards, has scattered once more.
+        set_path(scatterings + 1, self.density_scale(scatterings + 1));
         ScatteredRay {
-            ray: Some(Ray { ro: i.point, rd }),
+            ray: Some(Ray { ro: i.point, rd: phase.sample(&incoming) }),
             // The direction was drawn from the phase function itself, so phase / pdf = 1.
-            attenuate: self.albedo,
-            emit: self.direct_lighting(&incoming, &i.point, s),
+            attenuate: albedo,
+            emit: self.direct_lighting(&incoming, &i.point, s, &phase, albedo, scatterings),
             // Area lights were sampled above (when enabled); the trace skips them if the
             // scattered ray hits one, so they aren't counted twice.
             sampled_lights: true,
@@ -264,10 +398,11 @@ impl MaterialModel for VolumeMaterial {
     }
 }
 
-pub fn create_volume(bounds: BBox, density: Box<dyn DensityField>, albedo: Color, phase: PhaseFunction) -> SceneObject {
+pub fn create_volume(bounds: BBox, density: Box<dyn DensityField>, albedo: Color, phase: PhaseFunction,
+                     approximation: ScatteringApproximation) -> SceneObject {
     SceneObject {
         geometry: Box::new(Volume { bounds, density }),
-        medium: Box::new(Solid { m: Box::new(VolumeMaterial { albedo, phase }) }),
+        medium: Box::new(Solid { m: Box::new(VolumeMaterial { albedo, phase, approximation }) }),
     }
 }
 

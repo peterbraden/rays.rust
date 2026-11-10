@@ -6,3 +6,4 @@
 pub mod domain;
 pub mod planet;
 pub mod flow;
+pub mod fluvial;

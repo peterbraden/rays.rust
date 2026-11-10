@@ -1,5 +1,8 @@
 //! # Octree
 //!
+//! Unused: the bounding volume hierarchy (`crate::bvh`) replaced it everywhere, being faster on
+//! every scene. Kept, compiled and tested, for comparison.
+//!
 //! A spatial subdivision for finding the nearest object along a ray without testing every
 //! object. Following Andrew S. Glassner, "Space Subdivision for Fast Ray Tracing", IEEE Computer
 //! Graphics and Applications 4(10), October 1984, doi:10.1109/MCG.1984.6429331

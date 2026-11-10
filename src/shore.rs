@@ -41,16 +41,31 @@
 //! - Breaking: waves cannot be higher than γh, the breaker index (McCowan's 0.78 by default).
 //!   Inside the surf zone the significant wave height is held at γh by scaling every wave down,
 //!   a "saturated" surf zone, so the energy is lost steadily all the way up the beach.
-//! - Steepening: approaching breaking, each wave's profile leans forward, its front face
-//!   steeper than its back (by skewing its phase), the look of a wave about to spill or plunge.
-//! - Foam: where waves are breaking, in streaks along the crests.
+//! - Steepening: in shallow water a crest, being deeper, travels faster than a trough, at
+//!   about √(g(h + η)). Following that along a wave's path (the method of characteristics for
+//!   Burgers' equation) gives the implicit surface η(s) = η_lin(s + κη(s)): crests move ahead
+//!   of their troughs, so front faces steepen and backs flatten, until the front would turn
+//!   vertical where κ dη_lin/ds reaches 1, which is where a wave breaks. Approaching breaking
+//!   the surface also gets the second order (Stokes) shape: peaked crests and flat troughs.
+//! - Seaward waves: nothing near a beach raises waves travelling out to sea, so the spectrum's
+//!   seaward half fades out across the band.
+//! - Run-up: the waves push a thin sheet of water up the beach, further in some places than
+//!   others, so the waterline wanders in lobes.
 //!
-//! The beach itself is part of the object: sand above the waterline, wet near it, and seen
-//! through shallow water, with light absorbed along the way down and back (Beer-Lambert). That
-//! absorption, more in red than blue, gives the turquoise of shallow water over sand.
+//! The beach itself is part of the object, and the shading follows what makes a real surf zone
+//! read:
 //!
-//! Not modelled: overturning (a height field can't curl over), run-up and backwash, reflection
-//! from the beach, and wave-driven currents.
+//! - Shallow water over sand, with light absorbed along the way down and back (Beer-Lambert).
+//!   Absorption, more in red than blue, gives the turquoise of shallow water over sand.
+//! - Breaking waves stir sand into the water, which turns murkier in the surf zone.
+//! - Foam, crisp rather than a haze: whitewater on the crests and fronts of breaking waves,
+//!   broken up by turbulence; lace, the network of threads left as a wave passes (from the cell
+//!   borders of Worley noise, Steven Worley, "A Cellular Texture Basis Function", SIGGRAPH
+//!   1996); and a line along the edge of the swash.
+//! - Sand, wet and darker just above the run-up, where its film of water gives a sheen of sky.
+//!
+//! Not modelled: overturning (a height field can't curl over), backwash, reflection from the
+//! beach, and wave-driven currents.
 
 use crate::color::Color;
 use crate::geometry::{rand, random_point_on_unit_sphere};
@@ -81,8 +96,12 @@ const TABLE_SIZE: usize = 2048;
 /// Depths are clamped to this, in metres, so wavenumbers stay finite at the waterline.
 const MIN_DEPTH: f64 = 0.01;
 
-/// The largest forward lean of a wave about to break (see `Shore::height`). Must be below 1.
-const MAX_SKEW: f64 = 0.7;
+/// How far fronts steepen at most: κ times a typical slope (see `Shore::height`). Must be
+/// below 1, where the front of a typical wave would be vertical.
+const MAX_STEEPENING: f64 = 0.75;
+
+/// How many typical (rms) slopes a steep front has.
+const STEEP_SLOPE: f64 = 2.5;
 
 /// A planar seabed rising to the shore. Positions on it are given by s, the distance offshore of
 /// the shoreline, and u, the distance along it.
@@ -195,12 +214,19 @@ pub struct Shore {
     saturation: Vec<f64>,
     /// Over the shallow band: significant wave height Hs.
     significant_height: Vec<f64>,
-    /// Over the shallow band: forward lean of the waves, 0 to `MAX_SKEW`.
-    skew: Vec<f64>,
+    /// Over the shallow band: κ, how far the surface is advected forward per metre of height.
+    shift: Vec<f64>,
+    /// Over the shallow band: coefficient of the second order term, c(η² - σ²).
+    stokes: Vec<f64>,
+    /// Over the shallow band: the variance σ² of the linear surface.
+    variance: Vec<f64>,
     /// Over the shallow band: a bound on the slope of the surface, for ray marching.
     slope_bound: Vec<f64>,
     /// No wave in the shallow band is higher, or its trough lower, than this.
     pub height_bound: f64,
+    /// Mean height up the beach that waves run, above still water.
+    runup: f64,
+    noise: PerlinNoise,
 }
 
 /// Linearly interpolate `table`, sampled evenly over s in [0, `end`].
@@ -209,6 +235,13 @@ fn sample(table: &[f64], s: f64, end: f64) -> f64 {
     let i = (x.floor() as usize).min(table.len() - 2);
     let f = x - i as f64;
     table[i] * (1. - f) + table[i + 1] * f
+}
+
+/// Fractal noise with mean 0 and standard deviation about ½, clamped to [-1, 1].
+/// (`PerlinNoise::fbm` is normalised to [0, 1], but as a sum of octaves it rarely strays far
+/// from ½: its standard deviation is about 0.08.)
+fn signed_fbm(noise: &PerlinNoise, x: f64, y: f64, z: f64, octaves: u32) -> f64 {
+    ((noise.fbm(x, y, z, octaves, 0.5, 2.) - 0.5) / 0.16).clamp(-1., 1.)
 }
 
 fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
@@ -250,12 +283,13 @@ impl Shore {
         let residual_max = residual.iter().fold(0f64, |m, h| m.max(h.abs()));
         let spacing = params.lx / n as f64;
         let mut residual_slope = 0f64;
+        let mut residual_slope_variance = 0f64;
         for z in 0..n {
             for x in 0..n {
                 let h = residual[z * n + x];
-                residual_slope = residual_slope
-                    .max((residual[z * n + (x + 1) % n] - h).abs() / spacing)
-                    .max((residual[((z + 1) % n) * n + x] - h).abs() / spacing);
+                let (sx, sz) = ((residual[z * n + (x + 1) % n] - h) / spacing, (residual[((z + 1) % n) * n + x] - h) / spacing);
+                residual_slope = residual_slope.max(sx.abs()).max(sz.abs());
+                residual_slope_variance += (sx * sx + sz * sz) / (2 * n * n) as f64;
             }
         }
 
@@ -294,7 +328,10 @@ impl Shore {
                 let shoaling = (cg_deep / group_velocity(omega, depth, g)).sqrt();
                 let cos = k_normal(depth).abs() / kappa;
                 let refraction = if cos > 1e-6 { (cos_deep / cos).sqrt() } else { 1. };
-                shoaling * refraction
+                // Nothing near a beach raises waves travelling out to sea (towards -k, so
+                // k_n < 0): fade them out across the band.
+                let seaward = if k_offshore < 0. { smoothstep(0., 1., j as f64 / (TABLE_SIZE - 1) as f64) } else { 1. };
+                shoaling * refraction * seaward
             }).collect();
 
             // Integrate k_n inwards from the edge of the band, where the phase is k_n s.
@@ -322,7 +359,9 @@ impl Shore {
 
         let mut saturation = vec![0.; TABLE_SIZE];
         let mut significant_height = vec![0.; TABLE_SIZE];
-        let mut skew = vec![0.; TABLE_SIZE];
+        let mut shift = vec![0.; TABLE_SIZE];
+        let mut stokes = vec![0.; TABLE_SIZE];
+        let mut variances = vec![0.; TABLE_SIZE];
         let mut slope_bound = vec![0.; TABLE_SIZE];
         let mut height_bound = residual_max + waves.iter().map(|w| w.amplitude).sum::<f64>();
         for j in 0..TABLE_SIZE {
@@ -335,17 +374,32 @@ impl Shore {
             let b = if hs > limit { limit / hs } else { 1. };
             significant_height[j] = hs * b;
             saturation[j] = b;
-            // Tapered to nothing at the edge of the band, to meet the open ocean.
+            // Nonlinearity grows as the waves approach breaking, tapered to nothing at the edge
+            // of the band to meet the (linear) open ocean.
             let edge_taper = 1. - smoothstep(0.8, 1., j as f64 / (TABLE_SIZE - 1) as f64);
-            skew[j] = MAX_SKEW * smoothstep(0.3, 1., hs / limit.max(1e-9)) * edge_taper;
+            let q = MAX_STEEPENING * smoothstep(0.3, 1., hs / limit.max(1e-9)) * edge_taper;
 
-            let lean = 1. + skew[j];
-            slope_bound[j] = b * (residual_slope + waves.iter().map(|w| {
-                let kappa = wavenumber((g * w.k_along.hypot(w.k_offshore)).sqrt(), depth.max(MIN_DEPTH), g);
-                w.amplitude * w.gain[j] * kappa * lean
-            }).sum::<f64>());
-            height_bound = height_bound.max(
-                b * (residual_max + waves.iter().map(|w| w.amplitude * w.gain[j]).sum::<f64>()) * lean);
+            let kappas: Vec<f64> = waves.iter()
+                .map(|w| wavenumber((g * w.k_along.hypot(w.k_offshore)).sqrt(), depth.max(MIN_DEPTH), g))
+                .collect();
+            let slope_rms = b * (residual_slope_variance + waves.iter().zip(&kappas)
+                .map(|(w, k)| (w.amplitude * w.gain[j] * k).powi(2) / 2.).sum::<f64>()).sqrt();
+            shift[j] = if slope_rms > 0. { q / (STEEP_SLOPE * slope_rms) } else { 0. };
+            let linear_hs = (hs * b).max(0.1);
+            stokes[j] = 0.5 * q / MAX_STEEPENING / linear_hs;
+            variances[j] = variance * b * b;
+
+            let linear_max = b * (residual_max + waves.iter().map(|w| w.amplitude * w.gain[j]).sum::<f64>());
+            // Not a strict bound, which (summing every wave's steepest slope) would be far
+            // steeper than the surface ever is, and make ray marching crawl: a slope this many
+            // standard deviations out is rare, and where it's exceeded, a ray marching through
+            // the surface still finds it by bisection.
+            let linear_slope = (4. * slope_rms).min(b * (residual_slope + waves.iter().zip(&kappas)
+                .map(|(w, k)| w.amplitude * w.gain[j] * k).sum::<f64>()));
+            // Steepening divides slopes by up to 1 - q (for typical slopes), and the second order
+            // term multiplies them by 1 + 2cη.
+            slope_bound[j] = linear_slope * (1. + 2. * stokes[j] * linear_max) / (1. - q);
+            height_bound = height_bound.max(linear_max + stokes[j] * linear_max * linear_max);
         }
         if saturation[TABLE_SIZE - 1] < 1. {
             println!("  WARNING: waves are already breaking at the beach's deep_depth; increase it");
@@ -361,9 +415,13 @@ impl Shore {
             lx: params.lx,
             saturation,
             significant_height,
-            skew,
+            shift,
+            stokes,
+            variance: variances,
             slope_bound,
             height_bound,
+            runup: 0.,
+            noise: PerlinNoise::new(),
         }
     }
 
@@ -384,28 +442,88 @@ impl Shore {
         }
     }
 
+    /// Set how far waves run up the beach: `runup` is the mean height above still water.
+    pub fn with_runup(mut self, runup: f64) -> Shore {
+        self.runup = runup.max(0.);
+        self.height_bound += 1.6 * self.runup;
+        self
+    }
+
+    /// Height of the run-up sheet at u along the shore: the water the waves push up the beach,
+    /// further in some places than others.
+    pub fn runup_at(&self, u: f64) -> f64 {
+        if self.runup <= 0. { return 0. }
+        // Lobes of swash, some running much further than others.
+        let n = signed_fbm(&self.noise, u * 0.06, 2.2, 0.5, 3);
+        self.runup * (0.4 + 1.2 * (0.5 + 0.5 * n))
+    }
+
+    /// The landward edge of the water: s where the highest run-up meets the beach.
+    fn landward_limit(&self) -> f64 {
+        -1.6 * self.runup / self.beach.slope
+    }
+
     /// Height of the water surface at (x, z). Offshore of the shallow band this is the open
-    /// ocean; on land, the still water level, 0.
+    /// ocean. Near the shore it rises by the run-up, which reaches up the beach as a flat
+    /// sheet; beyond that is still water level, 0, under the sand.
     pub fn height(&self, x: f64, z: f64) -> f64 {
         let s = self.beach.offshore_distance(x, z);
-        if s <= 0. { return 0. }
         let u = self.beach.along_distance(x, z);
+        let sheet = self.mean_level(x, z);
+        if s <= 0. { return sheet }
+        sheet + self.waves_height(x, z, s, u)
+    }
+
+    /// The level the waves at (x, z) are about: raised near the shore by the run-up.
+    pub fn mean_level(&self, x: f64, z: f64) -> f64 {
+        let sheet = self.runup_at(self.beach.along_distance(x, z));
+        if sheet <= 0. { return 0. }
+        let s = self.beach.offshore_distance(x, z);
+        sheet * (1. - smoothstep(0., 3. * sheet / self.beach.slope, s))
+    }
+
+    /// Height of the waves at (x, z), which is at s > 0, u on the beach.
+    fn waves_height(&self, x: f64, z: f64, s: f64, u: f64) -> f64 {
+        let end = self.deep_offshore;
+        if s >= end { return self.linear_height(x, z, s, u) }
+        let kappa = sample(&self.shift, s, end);
+        if kappa <= 0. { return self.linear_height(x, z, s, u) }
+
+        // η = η_lin(s + κη): sample the linear surface offshore of here by κη, by fixed point
+        // iteration, which converges while the front is not yet vertical.
+        let off = self.beach.offshore;
+        let mut eta = self.linear_height(x, z, s, u);
+        for _ in 0..3 {
+            let d = kappa * eta;
+            eta = 0.5 * (eta + self.linear_height(x + off.x * d, z + off.y * d, s + d, u));
+        }
+        // Second order: peaked crests and flatter troughs, keeping the mean level.
+        eta + sample(&self.stokes, s, end) * (eta * eta - sample(&self.variance, s, end))
+    }
+
+    /// The linear (superposed) wave height at (x, z), which is at s, u on the beach.
+    fn linear_height(&self, x: f64, z: f64, s: f64, u: f64) -> f64 {
+        if s <= 0. { return 0. }
         let end = self.deep_offshore;
         let deep = s >= end;
-        let (b, q) = if deep { (1., 0.) } else { (sample(&self.saturation, s, end), sample(&self.skew, s, end)) };
+        let b = if deep { 1. } else { sample(&self.saturation, s, end) };
         if b <= 0. { return 0. }
 
         let mut h = self.residual_at(x, z) * b;
+        if deep {
+            for w in &self.waves {
+                h -= w.amplitude * (w.phase0 + w.k_offshore * s + w.k_along * u).cos();
+            }
+            return h;
+        }
+        // Where s falls in the tables, the same for every wave.
+        let at = (s / end).clamp(0., 1.) * (TABLE_SIZE - 1) as f64;
+        let i = (at as usize).min(TABLE_SIZE - 2);
+        let f = at - i as f64;
         for w in &self.waves {
-            let (phase, gain) = if deep {
-                (w.k_offshore * s, 1.)
-            } else {
-                (sample(&w.phase, s, end), sample(&w.gain, s, end))
-            };
-            let psi = w.phase0 + phase + w.k_along * u;
-            // A wave moves towards decreasing phase, so its front face is where ψ runs from 0
-            // (the trough) to π (the crest). Skewing the phase by -q cos ψ shortens that face.
-            h -= w.amplitude * gain * b * (psi - q * psi.cos()).cos();
+            let phase = w.phase[i] + (w.phase[i + 1] - w.phase[i]) * f;
+            let gain = w.gain[i] + (w.gain[i + 1] - w.gain[i]) * f;
+            h -= w.amplitude * gain * b * (w.phase0 + phase + w.k_along * u).cos();
         }
         h
     }
@@ -440,9 +558,9 @@ impl Shore {
         let s0 = self.beach.offshore_distance(ro.x, ro.z);
         let ds = self.beach.offshore.dot(&Vector2::new(d.x, d.z));
         if ds.abs() < 1e-12 {
-            if s0 < 0. || s0 > self.deep_offshore { return None }
+            if s0 < self.landward_limit() || s0 > self.deep_offshore { return None }
         } else {
-            let (t0, t1) = ((0. - s0) / ds, (self.deep_offshore - s0) / ds);
+            let (t0, t1) = ((self.landward_limit() - s0) / ds, (self.deep_offshore - s0) / ds);
             ta = ta.max(t0.min(t1));
             tb = tb.min(t0.max(t1));
         }
@@ -467,17 +585,31 @@ impl Shore {
             let p = ro + d * t;
             let s = self.beach.offshore_distance(p.x, p.z);
             let slope = sample(&self.slope_bound, s, self.deep_offshore);
-            let min_step = 0.005 + 0.0005 * t;
+            // Finer than a pixel's footprint is wasted.
+            let min_step = 0.005 + 0.0015 * t;
             let step = (ft.abs() / (d.y.abs() + 1.25 * slope * horizontal)).clamp(min_step, 5.);
             let tn = (t + step).min(tb);
             let fnext = f(tn);
             if (fnext > 0.) != above {
-                let (mut lo, mut hi) = (t, tn);
-                for _ in 0..30 {
-                    let mid = 0.5 * (lo + hi);
-                    if (f(mid) > 0.) == above { lo = mid } else { hi = mid }
+                // Refine by false position, with the Illinois modification, which halves the
+                // weight of an end that is kept twice, so both ends converge.
+                let (mut a, mut fa, mut b, mut fb) = (t, ft, tn, fnext);
+                let mut side = 0;
+                for _ in 0..20 {
+                    let c = (a * fb - b * fa) / (fb - fa);
+                    let fc = f(c);
+                    if fc.abs() < 1e-6 || (b - a).abs() < 1e-6 { return Some(c) }
+                    if (fc > 0.) == (fa > 0.) {
+                        a = c; fa = fc;
+                        if side == -1 { fb *= 0.5 }
+                        side = -1;
+                    } else {
+                        b = c; fb = fc;
+                        if side == 1 { fa *= 0.5 }
+                        side = 1;
+                    }
                 }
-                return Some(0.5 * (lo + hi));
+                return Some(0.5 * (a + b));
             }
             t = tn;
             ft = fnext;
@@ -557,25 +689,80 @@ pub struct ShoreWater {
     absorption: Vector3<f64>,
     foam: Color,
     sand: Color,
+    /// How murky breaking waves make the water, 0 to 1.
+    turbidity: f64,
     noise: PerlinNoise,
 }
 
+/// Cellular noise in 2D: the distances to the nearest and second nearest of a set of points
+/// scattered one to each unit cell (Steven Worley, "A Cellular Texture Basis Function",
+/// SIGGRAPH 1996). F2 - F1 is small along the borders between cells.
+fn worley(x: f64, y: f64) -> (f64, f64) {
+    let hash = |ix: i64, iy: i64, k: u32| -> f64 {
+        let mut h = (ix as u32).wrapping_mul(73856093) ^ (iy as u32).wrapping_mul(19349663) ^ k.wrapping_mul(0x9E37_79B9);
+        h ^= h >> 16;
+        h = h.wrapping_mul(0x85eb_ca6b);
+        h ^= h >> 13;
+        h = h.wrapping_mul(0xc2b2_ae35);
+        h ^= h >> 16;
+        h as f64 / u32::MAX as f64
+    };
+    let (cx, cy) = (x.floor() as i64, y.floor() as i64);
+    let (mut f1, mut f2) = (f64::MAX, f64::MAX);
+    for dx in -1..=1 {
+        for dy in -1..=1 {
+            let (ix, iy) = (cx + dx, cy + dy);
+            let px = ix as f64 + hash(ix, iy, 1);
+            let py = iy as f64 + hash(ix, iy, 2);
+            let d = ((px - x).powi(2) + (py - y).powi(2)).sqrt();
+            if d < f1 { f2 = f1; f1 = d } else if d < f2 { f2 = d }
+        }
+    }
+    (f1, f2)
+}
+
 impl ShoreWater {
-    /// Fraction of the surface at `p` covered by foam.
-    fn foam_coverage(&self, p: &Vector3<f64>) -> f64 {
+    /// Whether the surface at `p`, with upward normal `normal`, is foam: the fraction of samples
+    /// there that see foam. Mostly 0 or 1, so foam has crisp edges.
+    fn foam_coverage(&self, p: &Vector3<f64>, normal: &Vector3<f64>) -> f64 {
         let beach = &self.shore.beach;
         let s = beach.offshore_distance(p.x, p.z);
         let breaking = self.shore.breaking(s);
-        if breaking < 1e-3 { return 0. }
+        // Depth of water here: the run-up thins to nothing at its edge.
+        let depth = p.y - beach.seabed_y(p.x, p.z);
+        let swash = 1. - smoothstep(0., 0.025, depth);
+        if breaking < 1e-3 && swash <= 0. { return 0. }
         let u = beach.along_distance(p.x, p.z);
-        // Streaks along the crests.
-        let streaks = 0.5 + 0.5 * self.noise.fbm(u * 0.08, 0.5, s * 0.5, 4, 0.5, 2.);
-        // On the crests of the breaking waves...
+        let ragged = signed_fbm(&self.noise, u * 0.15, 1.3, s * 0.5, 4);
+
+        // Whitewater: the crests and fronts of the breaking waves, with ragged edges.
         let hs = self.shore.significant_height(s).max(0.1);
-        let crest = smoothstep(0.1 * hs, 0.5 * hs, p.y);
-        // ...and a thin line where the last of each wave runs up the beach.
-        let swash = 1. - smoothstep(0., 0.06, beach.slope * s);
-        ((breaking * (0.05 + 0.95 * crest) + 0.6 * swash) * (0.2 + 1.3 * streaks)).clamp(0., 0.95)
+        let front = -(normal.x * beach.offshore.x + normal.z * beach.offshore.y) / normal.y.max(0.05);
+        let crest = if s > 0. { (p.y - self.shore.mean_level(p.x, p.z)) / hs } else { 0. };
+        // How strongly the water is breaking here, then turbulence breaking that up into
+        // clumps, holes and ragged edges at several scales.
+        // The roller covers the upper part of a broken wave, most densely on its steep front.
+        let white = breaking.sqrt() * (0.8 * smoothstep(-0.15, 0.45, crest + 0.1 * ragged)
+            + 0.5 * smoothstep(0.2, 1., front));
+        let turbulence = (0.5 + 0.5 * signed_fbm(&self.noise, u * 0.5, 2.6, s * 1.2, 5)).clamp(0., 1.);
+        let whitewater = smoothstep(0.45, 0.55, white * (0.25 + 1.1 * turbulence));
+
+        // Lace: the foam a wave leaves behind as it passes, a network of threads around cells,
+        // stretched along the crests, warped, broken, and in patches.
+        let warp_u = 0.8 * signed_fbm(&self.noise, u * 0.2, 3.7, s * 0.2, 3);
+        let warp_s = 0.8 * signed_fbm(&self.noise, u * 0.2, 5.3, s * 0.2, 3);
+        let (f1, f2) = worley(u * 0.6 + warp_u, s * 1.1 + warp_s);
+        let patch = smoothstep(-0.05, 0.35, signed_fbm(&self.noise, u * 0.04, 7.1, s * 0.08, 3));
+        let broken = smoothstep(-0.2, 0.2, signed_fbm(&self.noise, u * 0.9, 9.4, s * 1.5, 2));
+        let thread = 0.015 + 0.09 * breaking * patch;
+        // Thinner in the swash, where the foam has mostly drained away.
+        let lace_density = if s > 0. { smoothstep(0.05, 0.4, breaking) } else { 0.35 };
+        let lace = (1. - smoothstep(0.5 * thread, thread, f2 - f1)) * broken * patch * lace_density;
+
+        // The swash: the last of each wave running up the beach, foaming at its edge.
+        let swash = smoothstep(0.5, 0.7, swash + 0.4 * ragged);
+
+        whitewater.max(0.9 * lace).max(swash).min(0.97)
     }
 
     /// Light refracted down into the water along `t`: absorbed and scattered on the way to the
@@ -591,7 +778,11 @@ impl ShoreWater {
         let p = intersection.point;
         if beach.offshore_distance(p.x, p.z) >= self.shore.deep_offshore { return opaque }
         let down = match beach.intersect(&p, &t) { Some(d) => d, None => return opaque };
-        let through = transmittance(&self.absorption, down);
+        // Breaking waves stir sand up into the water, which absorbs and scatters more.
+        let murk = self.shore.breaking(beach.offshore_distance(p.x, p.z));
+        let absorption = self.absorption + Vector3::new(0.3, 0.3, 0.35) * (self.turbidity * murk);
+        let water = water * (1. - self.turbidity * murk) + self.sand * (0.3 * self.turbidity * murk);
+        let through = transmittance(&absorption, down);
         if through.rgb.max() < 1e-3 { return opaque }
 
         let bed = p + t * down;
@@ -610,7 +801,7 @@ impl ShoreWater {
             if s.objects.occluded(&Ray { ro: p, rd: l }, to_light.norm(), f64::MIN_POSITIVE) { continue }
             let sin_t = (1. - cos_i * cos_i).sqrt() / WATER_IOR;
             let cos_t = (1. - sin_t * sin_t).sqrt();
-            let lit = transmittance(&self.absorption, depth / cos_t) * (1. - schlick(cos_i, WATER_IOR));
+            let lit = transmittance(&absorption, depth / cos_t) * (1. - schlick(cos_i, WATER_IOR));
             // Refraction bends the beam towards the seabed's normal but doesn't concentrate it:
             // the irradiance is that on the surface, so falls with the angle of incidence there.
             let cos_bed = l.dot(&bed_normal).max(0.);
@@ -621,7 +812,7 @@ impl ShoreWater {
 
         // Light from above reaching the seabed: follow a diffuse bounce back up and out.
         let up = lambertian_direction(bed_normal, random_point_on_unit_sphere());
-        let back = transmittance(&self.absorption, depth / up.y.max(0.05));
+        let back = transmittance(&absorption, depth / up.y.max(0.05));
         match refract(up, -surface_normal, WATER_IOR) {
             Some(out) => {
                 let exit = 1. - schlick(up.dot(&surface_normal).abs(), WATER_IOR);
@@ -647,11 +838,14 @@ impl MaterialModel for ShoreWater {
                 ray: Some(Ray { ro: intersection.point + r.rd.normalize() * 0.001, rd: r.rd }) };
         }
 
-        if rand() < self.foam_coverage(&intersection.point) {
+        if rand() < self.foam_coverage(&intersection.point, &intersection.normal) {
+            // Foam is lumpy, so some of it is in shade.
+            let p = intersection.point;
+            let foam = self.foam * (0.88 + 0.12 * signed_fbm(&self.noise, p.x * 2., 8.8, p.z * 2., 3));
             return ScatteredRay {
-                emit: direct_lighting(self.foam, intersection, s),
+                emit: direct_lighting(foam, intersection, s),
                 sampled_lights: true,
-                ..scatter_lambertian(self.foam, intersection)
+                ..scatter_lambertian(foam, intersection)
             };
         }
 
@@ -668,22 +862,47 @@ impl MaterialModel for ShoreWater {
 
 /// The beach above the water, darker where the waves have wet it.
 pub struct Sand {
+    shore: Arc<Shore>,
     dry: Color,
-    /// Height up the beach the waves wet.
-    wet_height: f64,
+    /// How far above the run-up the sand is wet, as a fraction of it: waves reach further
+    /// at times than the run-up shown.
+    wet_reach: f64,
+    noise: PerlinNoise,
 }
 
 impl Sand {
-    fn albedo(&self, y: f64) -> Color {
-        let wet = 1. - smoothstep(self.wet_height - 0.1, self.wet_height + 0.1, y);
-        self.dry * (1. - 0.45 * wet)
+    /// How wet the sand is at `p`, 0 to 1, with a ragged edge.
+    fn wetness(&self, p: &Vector3<f64>) -> f64 {
+        let u = self.shore.beach.along_distance(p.x, p.z);
+        let edge = self.shore.runup_at(u) * (1. + self.wet_reach)
+            + 0.008 * signed_fbm(&self.noise, p.x * 1.5, 4.4, p.z * 1.5, 3);
+        1. - smoothstep(edge - 0.03, edge + 0.005, p.y)
+    }
+
+    /// Wet sand is darker; all of it varies a little from place to place.
+    fn albedo(&self, p: &Vector3<f64>, wet: f64) -> Color {
+        let variation = 1. + 0.08 * signed_fbm(&self.noise, p.x * 0.4, 0.7, p.z * 0.4, 4)
+            + 0.04 * self.noise.noise(p.x * 8., 2.9, p.z * 8.);
+        self.dry * (variation * (1. - 0.45 * wet))
     }
 }
 
 impl MaterialModel for Sand {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let intersection = &intersection.facing(r);
-        let albedo = self.albedo(intersection.point.y);
+        let wet = self.wetness(&intersection.point);
+        // The film of water on wet sand reflects like water does: a sheen of sky, strongest
+        // looking along the beach.
+        if wet > 0. {
+            let cos = (-r.rd.dot(&intersection.normal) / r.rd.norm()).max(0.);
+            if rand() < wet * schlick(cos, WATER_IOR) {
+                // Slightly rough: the film is broken by the sand grains.
+                let rd = (reflect(r.rd.normalize(), intersection.normal) + random_point_on_unit_sphere() * 0.04).normalize();
+                return ScatteredRay { sampled_lights: false, emit: Color::black(), attenuate: Color::white(),
+                    ray: Some(Ray { ro: intersection.point, rd }) };
+            }
+        }
+        let albedo = self.albedo(&intersection.point, wet);
         ScatteredRay {
             emit: direct_lighting(albedo, intersection, s),
             sampled_lights: true,
@@ -722,7 +941,9 @@ impl Medium for ShoreMedium {
 ///   "absorption": [0.4, 0.07, 0.05], // of the water, per metre
 ///   "sand": [0.76, 0.68, 0.5],
 ///   "foam": [0.9, 0.9, 0.9],
-///   "wet_height": 0.3         // height up the beach the waves wet
+///   "turbidity": 0.5,         // how murky breaking waves make the water, 0 to 1
+///   "runup": 0.2,             // mean height the waves run up the beach (default: from the waves)
+///   "wet_reach": 0.4          // how much further than the run-up the sand is wet, as a fraction of it
 /// }
 /// ```
 pub fn create_shore(opts: &Value) -> SceneObject {
@@ -734,14 +955,17 @@ pub fn create_shore(opts: &Value) -> SceneObject {
         SceneFile::parse_number(&b["slope"], 0.03),
     );
     let h0 = params.amplitudes();
-    let shore = Arc::new(Shore::new(
+    let shore = Shore::new(
         &params,
         &h0,
         beach,
         SceneFile::parse_int(&b["components"], 32),
         b.get("deep_depth").map(|d| SceneFile::parse_number(d, 12.)),
         SceneFile::parse_number(&b["breaker_index"], 0.78),
-    ));
+    );
+    // Run-up scales with the waves breaking on the beach.
+    let runup = SceneFile::parse_number(&b["runup"], 0.08 * shore.significant_height(shore.deep_offshore));
+    let shore = Arc::new(shore.with_runup(runup));
     let tile = create_tile(params.fourier_grid_size, params.lx, params.lx, params.gravity, params.time, false, h0);
     println!(" - OCEAN with beach [A={}, W={}, t={}, slope={}, waves={}, shallow band {:.0}m wide, Hs at the band {:.2}m]",
         params.scale, params.wind, params.time, shore.beach.slope, shore.waves.len(), shore.deep_offshore,
@@ -760,9 +984,15 @@ pub fn create_shore(opts: &Value) -> SceneObject {
                 absorption,
                 foam: SceneFile::parse_color_def(b, "foam", Color::new(0.9, 0.9, 0.9)),
                 sand,
+                turbidity: SceneFile::parse_number(&b["turbidity"], 0.5).clamp(0., 1.),
                 noise: PerlinNoise::new(),
             },
-            sand: Sand { dry: sand, wet_height: SceneFile::parse_number(&b["wet_height"], 0.3) },
+            sand: Sand {
+                shore: shore.clone(),
+                dry: sand,
+                wet_reach: SceneFile::parse_number(&b["wet_reach"], 0.4),
+                noise: PerlinNoise::new(),
+            },
         }),
     }
 }
@@ -773,7 +1003,7 @@ mod tests {
     use crate::na::Vector2;
 
     fn params() -> OceanParams {
-        OceanParams { gravity: 9.81, wind: Vector2::new(8., 2.), time: 3., lx: 100., fourier_grid_size: 64, scale: 2e-5, seed: 0 }
+        OceanParams { gravity: 9.81, wind: Vector2::new(8., 2.), time: 3., lx: 100., fourier_grid_size: 64, scale: 2e-5, seed: 0, swell: None }
     }
 
     fn shore(slope: f64) -> Shore {
@@ -864,6 +1094,27 @@ mod tests {
     }
 
     #[test]
+    fn test_fronts_steeper_than_backs_in_the_surf() {
+        let mut p = params();
+        p.swell = Some(crate::ocean::Swell { height: 1., direction: Vector2::new(0., -1.), wavelength: 50. });
+        p.scale = 2e-6;
+        let h0 = p.amplitudes();
+        let shore = Shore::new(&p, &h0, Beach::new(Vector2::new(0., 0.), Vector2::new(0., 1.), 0.05), 16, Some(10.), 0.78);
+        // Waves come in towards -s; their fronts face the shore, rising with s.
+        let (mut front, mut back) = (0f64, 0f64);
+        for u in [0., 7., 19., 33.] {
+            let mut s = 2.;
+            while s < 40. {
+                let slope = (shore.height(u, s + 0.05) - shore.height(u, s - 0.05)) / 0.1;
+                front = front.max(slope);
+                back = back.max(-slope);
+                s += 0.05;
+            }
+        }
+        assert!(front > 1.3 * back, "front {} back {}", front, back);
+    }
+
+    #[test]
     fn test_ray_hits_shallow_water_and_beach() {
         let p = params();
         let h0 = p.amplitudes();
@@ -889,3 +1140,29 @@ mod tests {
         assert!(hit.point.z > 0., "{}", hit.point);
     }
 }
+
+#[cfg(test)]
+mod profile {
+    use super::*;
+    /// Writes a cross-shore profile of a scene's shore to $SHORE_PROFILE (debugging aid).
+    #[test]
+    #[ignore]
+    fn write_profile() {
+        let scene: Value = serde_json::from_str(&std::fs::read_to_string("demo/scenes/beach.json").unwrap()).unwrap();
+        let o = scene["objects"].as_array().unwrap().iter().find(|o| o["type"] == "ocean").unwrap();
+        let b = &o["beach"];
+        let params = OceanParams::parse(o);
+        let beach = Beach::new(SceneFile::parse_vec2_def(b, "shore", Vector2::new(0., 0.)),
+            SceneFile::parse_vec2_def(b, "offshore", Vector2::new(0., 1.)), SceneFile::parse_number(&b["slope"], 0.03));
+        let shore = Shore::new(&params, &params.amplitudes(), beach, 32, None, 0.78);
+        let mut out = String::from("s,height,seabed,hs,breaking\n");
+        let mut s = -5.;
+        while s < 200. {
+            let p = shore.beach.shore + shore.beach.offshore * s;
+            out += &format!("{},{},{},{},{}\n", s, shore.height(p.x, p.y), shore.beach.seabed_y(p.x, p.y), shore.significant_height(s), shore.breaking(s));
+            s += 0.1;
+        }
+        std::fs::write(std::env::var("SHORE_PROFILE").unwrap(), out).unwrap();
+    }
+}
+

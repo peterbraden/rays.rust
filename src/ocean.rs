@@ -390,6 +390,57 @@ pub struct OceanParams {
     /// The Phillips constant A (eq. 40).
     pub scale: f64,
     pub seed: u64,
+    pub swell: Option<Swell>,
+}
+
+/// Swell: long-crested waves raised by distant storms, more regular than the local wind sea.
+/// It is what makes surf: lines of breakers arriving in sets.
+///
+/// `{"height": 1.2, "direction": [0, -1], "wavelength": 100}`: wave height (crest to trough) in
+/// metres, the direction (x, z) it travels in, and its wavelength. The wavevector is rounded to
+/// the nearest on the Fourier grid, so the wavelength is the patch size divided by a whole
+/// number, and the direction is rounded to match. A little energy at neighbouring wavevectors
+/// spreads the crests and makes the waves come in sets, as real swell does.
+pub struct Swell {
+    pub height: f64,
+    pub direction: Vector2<f64>,
+    pub wavelength: f64,
+}
+
+impl Swell {
+    pub fn parse(o: &Value, lx: f64) -> Option<Swell> {
+        o.get("swell").map(|s| Swell {
+            height: SceneFile::parse_number(&s["height"], 1.),
+            direction: SceneFile::parse_vec2_def(s, "direction", Vector2::new(0., -1.)).normalize(),
+            wavelength: SceneFile::parse_number(&s["wavelength"], lx / 2.),
+        })
+    }
+
+    /// Add the swell to amplitudes h̃0. A wave of amplitude a from h̃0(k) is
+    /// -2 Re(h̃0(k) exp(i(k·x + ωt))), travelling towards -k.
+    fn add_to(&self, h0: &mut [Complex<f64>], lx: f64, fourier_grid_size: usize, rng: &mut StdRng) {
+        let n = fourier_grid_size as i64;
+        // Grid steps (n, m) of the wavevector, -direction · 2π/λ.
+        let steps = -self.direction * (lx / self.wavelength);
+        let (sn, sm) = (steps.x.round() as i64, steps.y.round() as i64);
+        let along = Vector2::new(sn as f64, sm as f64);
+        let len = along.norm().max(1.);
+        // Unit grid steps along and across the wavevector, for the neighbours.
+        let (pn, pm) = ((along.x / len).round() as i64, (along.y / len).round() as i64);
+        let (qn, qm) = (-pm, pn);
+        // (steps along, steps across, relative amplitude)
+        let spread = [(0, 0, 1.), (1, 0, 0.45), (-1, 0, 0.35), (0, 1, 0.25), (0, -1, 0.25)];
+        let total: f64 = spread.iter().map(|(_, _, w)| w * w).sum::<f64>().sqrt();
+        for (a, c, w) in spread {
+            let (gn, gm) = (sn + a * pn + c * qn, sm + a * pm + c * qm);
+            if (gn, gm) == (0, 0) || gn.abs() >= n / 2 || gm.abs() >= n / 2 { continue }
+            let i = ((gm + n / 2) * n + gn + n / 2) as usize;
+            // Amplitudes add in energy, to that of a regular wave of the given height.
+            let amplitude = self.height / 2. * w / total;
+            let phase = rng.r#gen::<f64>() * 2. * std::f64::consts::PI;
+            h0[i] = h0[i] + Complex::from_polar(&(amplitude / 2.), &phase);
+        }
+    }
 }
 
 impl OceanParams {
@@ -408,6 +459,7 @@ impl OceanParams {
             // The random realisation of the spectrum (4.4). Seed 0, the default, is the
             // realisation every ocean used before seeds were configurable.
             seed: SceneFile::parse_int(&o["seed"], 0) as u64,
+            swell: Swell::parse(o, SceneFile::parse_number(&o["resolution"], 100.)),
         }
     }
 
@@ -416,7 +468,11 @@ impl OceanParams {
         let mut seed = [0u8; 32];
         seed[..8].copy_from_slice(&self.seed.to_le_bytes());
         let mut rng: StdRng = SeedableRng::from_seed(seed);
-        create_amplitude_tile(self.wind, self.scale, self.gravity, self.lx, self.lx, self.fourier_grid_size, &mut rng)
+        let mut h0 = create_amplitude_tile(self.wind, self.scale, self.gravity, self.lx, self.lx, self.fourier_grid_size, &mut rng);
+        if let Some(swell) = &self.swell {
+            swell.add_to(&mut h0, self.lx, self.fourier_grid_size, &mut rng);
+        }
+        h0
     }
 }
 
@@ -636,6 +692,29 @@ mod tests {
 			}
 		}
 		assert!(dx > 2. * dz, "dx {} dz {}", dx, dz);
+	}
+
+	#[test]
+	fn test_swell_height_and_direction() {
+		// Swell alone, travelling along -z: rms height H/(2√2), as for a regular wave of height
+		// H, and crests along x.
+		let n = 64;
+		let p = super::OceanParams {
+			gravity: 9.81, wind: Vector2::new(0., 0.), time: 0., lx: L, fourier_grid_size: n, scale: 0., seed: 0,
+			swell: Some(super::Swell { height: 1.2, direction: Vector2::new(0., -1.), wavelength: 50. }),
+		};
+		let h = create_tile(n, L, L, 9.81, 0., false, p.amplitudes()).heights;
+		let at = |z: usize, x: usize| super::grid_height(&h, x, z, n);
+		let rms = ((0..n * n).map(|i| at(i / n, i % n).powi(2)).sum::<f64>() / (n * n) as f64).sqrt();
+		assert!((rms - 1.2 / 8f64.sqrt()).abs() < 0.04, "rms {}", rms);
+		let (mut dx, mut dz) = (0., 0.);
+		for z in 0..n - 1 {
+			for x in 0..n - 1 {
+				dx += (at(z, x + 1) - at(z, x)).powi(2);
+				dz += (at(z + 1, x) - at(z, x)).powi(2);
+			}
+		}
+		assert!(dz > 4. * dx, "dx {} dz {}", dx, dz);
 	}
 
 	#[test]

@@ -12,8 +12,8 @@ Demonstrating the ocean generation.
 ![Ocean 4](./scenes/ocean-boat.png)
 
 ## Beach
-The ocean meeting a sloping beach: waves shorten, refract parallel to the shore, steepen and
-break, with foam on the breaking crests, shallow water over sand, and wet sand at the waterline.
+Swell breaking on a sloping beach: waves shorten, refract parallel to the shore, steepen and
+break, with whitewater and lace foam, murky surf over sand, and run-up wetting the beach.
 ![Beach](./scenes/beach.png)
 
 ## Block Terrain

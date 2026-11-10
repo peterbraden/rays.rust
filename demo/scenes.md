@@ -20,6 +20,10 @@ Mountains from seeded noise after one 100,000 year glacial cycle: tectonic uplif
 incision and glacial erosion (`src/terrain/`).
 ![alpine terrain](./scenes/terrain-alpine.png)
 
+Volcanic mountains after the same cycle: a stratovolcano with lava flows, alluvial valley
+floors and filled lake basins.
+![volcanic terrain](./scenes/terrain-volcanic.png)
+
 ## Fireworks
 ![fireworks](./scenes/fireworks.png)
 

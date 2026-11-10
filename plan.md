@@ -462,6 +462,15 @@ processes can be animated.
   adaptive steps bounded by stiffness, speed capped at 1 km/yr) with a conservative flux
   limiter; tested against Halfar's dome and a plateau ice cap reaching steady state. Erosion
   proportional to sliding speed taken from the ice fluxes.
+- Geology (`planet.rs`, `simulation.rs`): the ground is bedrock (folded strata of alternating
+  hardness, regional variation) under volcanic rock under sediment, each with its own
+  erodibility for rivers and glaciers.
+- Sediment (`fluvial.rs`): erosion-deposition after Yuan et al. 2019 (G = 1), lakes trap
+  sediment to their spill level, glacial erosion feeds meltwater sediment into the rivers, so
+  alluvial valley floors, filled lake basins and outwash form.
+- Volcanoes (`volcano.rs`): vents from a seeded planet-wide lattice (random spacing, as de
+  Bremond d'Arcs et al. 1995 found), cones, and DOWNFLOW-style lava flows (Favalli et al.
+  2005); eruption rates after White et al. 2006.
 - Time (`simulation.rs`): operator splitting, deterministic and resumable; morphological
   acceleration (MORFAC) for glacial erosion.
 - Scene object `"type": "terrain"` (`object.rs`), maps (`map.rs`), demo
@@ -477,9 +486,12 @@ processes can be animated.
 
 ### Known limitations and open questions
 
-- Detachment-limited only: no sediment transport or deposition, so valleys and lakes never
-  fill and there are no deltas or moraines. Next candidate: Yuan et al. 2019's efficient
-  transport/deposition extension of the implicit solver (to verify).
+- Sediment leaving at the sea is lost: no deltas or marine deposits. No moraines (glacial
+  debris goes straight to the rivers), no lateral erosion by meandering, so alluvial valleys
+  widen only by deposition. The sediment-to-bedrock erodibility ratio (3) and lava's (0.3) are
+  model choices; no source found for typical values.
+- Volcanoes: no craters, calderas, explosive (tephra) deposits or lahars; cones are linear in
+  profile; vents don't respond to tectonics or to loading.
 - No isostasy (ice loading, erosional unloading), no sea-level change with the ice ages.
 - Ice: temperate everywhere; SIA is poor on steep, narrow valleys (Cordonnier et al. 2023 use
   higher-order flow); the flux limiter is cruder than Jarosch et al.'s MUSCL scheme.
@@ -533,6 +545,15 @@ processes can be animated.
   124, 1996, doi:10.1006/jcph.1996.0047.
 - Reviews: Tucker and Hancock, ESPL 35(1), 2010, doi:10.1002/esp.1952; Galin et al., "A Review
   of Digital Terrain Modeling", Computer Graphics Forum 38(2), 2019, doi:10.1111/cgf.13657.
+- Sediment: Yuan, Braun, Guerit, Rouby, Cordonnier, JGR Earth Surface 124(6), 2019,
+  doi:10.1029/2018JF004867; Davy and Lague, JGR Earth Surface 114, 2009,
+  doi:10.1029/2008JF001146; Guerit et al., Geology 47(9), 2019, doi:10.1130/G46356.1 (G values);
+  Hallet, Hunter, Bogen, Global and Planetary Change 12, 1996 (glacial sediment yields).
+- Lithology: Forte, Yanites, Whipple, ESPL 41(12), 2016, doi:10.1002/esp.3947; Perne et al.,
+  Earth Surface Dynamics 5, 2017, doi:10.5194/esurf-5-85-2017.
+- Volcanoes: Favalli, Pareschi, Neri, Isola, GRL 32(3), 2005, doi:10.1029/2004GL021718; White,
+  Crisp, Spera, G-cubed 7, 2006, doi:10.1029/2005GC001002; de Bremond d'Arcs, Jaupart, Sparks,
+  JGR 100(B10), 1995, doi:10.1029/95JB02153.
 - Unchecked: Halfar's solution as given by Bueler et al., J. Glaciology 51(173), 2005 (used by
   `test_halfar_dome`, which passing within 3% supports).
 

@@ -17,15 +17,20 @@
 //!
 //! - `time`: years of landscape evolution after the noise topography (default 0).
 //! - `domain`: `{"type": "patch", "cells", "spacing" (m), "lat", "lon"}`, where a patch without
-//!   `lat`/`lon` is placed on this seed's most mountainous spot; or `{"type": "planet",
+//!   `lat`/`lon` is placed on this seed's most mountainous spot (or, with `"near":
+//!   "volcanoes"`, its most volcanic mountains); or `{"type": "planet",
 //!   "cells"}`, a cubed sphere with `cells` x `cells` per face.
+//! - Ground cover: ice, rivers, sea floor, bare rock on steep slopes, alluvium (sediment over
+//!   2 m deep), lava, then a tint by elevation.
 //! - `scale`: metres per scene unit (default 1000). `exaggeration`: vertical exaggeration.
 //! - A patch is drawn in a local frame: x east, y up, z south, sea level at y = 0, centred on
 //!   the origin, ignoring the planet's curvature. A planet is drawn centred on `centre`
 //!   (default the origin), its sea level a sphere of radius `radius / scale`.
 //! - Processes: `radius` (m), `step` (years), `land_bias`, `mountain_height` (m),
-//!   `uplift_rate` (m/yr), `belt_frequency`; `fluvial`: `{k, m, n, diffusivity}`; `glacier`:
-//!   `false` to disable, or overrides of `GlacierParams` by field name.
+//!   `uplift_rate` (m/yr), `belt_frequency`; `fluvial`: `{k, m, n, diffusivity, deposition}`;
+//!   `glacier` and `volcanoes`: `false` to disable, or overrides of `GlacierParams` and
+//!   `VolcanoParams` by field name. Geology: `strata_thickness` (m), `strata_contrast`,
+//!   `fold_amplitude` (m), `sediment_erodibility`, `lava_erodibility`.
 //! - `map`: also write a shaded relief map to this PNG path.
 //!
 //! Water is not part of the terrain: add a plane at y = 0 (patch) or a sphere (planet).
@@ -47,9 +52,10 @@ use crate::shapes::mesh::vertex_normals;
 use crate::shapes::triangle::{SmoothTriangle, Triangle};
 use crate::terrain::domain::{Domain, Layout};
 use crate::terrain::glacier::{slope_squared, GlacierParams};
-use crate::terrain::map::{is_river, land_colour, write_map};
+use crate::terrain::map::{self, is_river, land_colour, write_map};
 use crate::terrain::planet::Planet;
 use crate::terrain::simulation::{Terrain, TerrainParams, ICE_FREE};
+use crate::terrain::volcano::VolcanoParams;
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -131,7 +137,9 @@ const ICE: u8 = 0;
 const RIVER: u8 = 1;
 const SEA_FLOOR: u8 = 2;
 const ROCK: u8 = 3;
-const BAND0: u8 = 4;
+const LAVA: u8 = 4;
+const ALLUVIUM: u8 = 5;
+const BAND0: u8 = 6;
 const BAND_HEIGHT: f64 = 250.;
 const BANDS: usize = 20;
 /// Slope (rise over run) above which no soil holds and bare rock shows.
@@ -145,6 +153,8 @@ impl TerrainMedium {
             else if t.bed[i] < 0. { SEA_FLOOR }
             else if is_river(&t, i) { RIVER }
             else if slope2[i] > ROCK_SLOPE * ROCK_SLOPE { ROCK }
+            else if t.sediment[i] > map::ALLUVIUM { ALLUVIUM }
+            else if t.lava[i] > 1. { LAVA }
             else { BAND0 + ((t.bed[i] / BAND_HEIGHT) as usize).min(BANDS - 1) as u8 }
         }).collect();
         let lambertian = |c: [f64; 3]| -> Box<dyn MaterialModel + Sync + Send> {
@@ -155,6 +165,8 @@ impl TerrainMedium {
             lambertian([0.12, 0.2, 0.3]),
             lambertian([0.35, 0.33, 0.28]),
             lambertian([0.38, 0.36, 0.34]),
+            lambertian(map::LAVA_COLOUR),
+            lambertian(map::ALLUVIUM_COLOUR),
         ];
         for b in 0..BANDS { materials.push(lambertian(land_colour((b as f64 + 0.5) * BAND_HEIGHT))); }
         let jitter = t.domain.min_spacing() / place.scale;
@@ -206,6 +218,28 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
     p.fluvial.m = number(f, "m", p.fluvial.m);
     p.fluvial.n = number(f, "n", p.fluvial.n);
     p.fluvial.diffusivity = number(f, "diffusivity", p.fluvial.diffusivity);
+    p.fluvial.deposition = number(f, "deposition", p.fluvial.deposition);
+    p.planet.strata_thickness = number(o, "strata_thickness", p.planet.strata_thickness);
+    p.planet.strata_contrast = number(o, "strata_contrast", p.planet.strata_contrast);
+    p.planet.fold_amplitude = number(o, "fold_amplitude", p.planet.fold_amplitude);
+    p.sediment_erodibility = number(o, "sediment_erodibility", p.sediment_erodibility);
+    p.lava_erodibility = number(o, "lava_erodibility", p.lava_erodibility);
+    p.volcano = match &o["volcanoes"] {
+        Value::Bool(false) => None,
+        v => {
+            let mut x = VolcanoParams::default();
+            let fields: [(&str, &mut f64); 9] = [
+                ("spacing", &mut x.spacing), ("density", &mut x.density), ("horizon", &mut x.horizon),
+                ("duration", &mut x.duration), ("rate", &mut x.rate), ("cone_radius", &mut x.cone_radius),
+                ("lava_fraction", &mut x.lava_fraction), ("flow_thickness", &mut x.flow_thickness),
+                ("roughness", &mut x.roughness),
+            ];
+            for (k, f) in fields {
+                if let Some(n) = v.get(k).and_then(|n| n.as_f64()) { *f = n; }
+            }
+            Some(x)
+        }
+    };
     p.glacier = match &o["glacier"] {
         Value::Bool(false) => None,
         Value::Object(_) => Some(glacier_params(&o["glacier"])),
@@ -220,9 +254,12 @@ pub fn domain(o: &Value, params: &TerrainParams) -> Domain {
     match d["type"].as_str().unwrap_or("patch") {
         "planet" => Domain::sphere(SceneFile::parse_int(&d["cells"], 64), radius),
         "patch" => {
-            let (lat, lon) = match (d["lat"].as_f64(), d["lon"].as_f64()) {
-                (Some(lat), Some(lon)) => (lat, lon),
-                _ => Planet::new(params.planet.clone()).most_mountainous(20000),
+            let planet = || Planet::new(params.planet.clone());
+            let (lat, lon) = match (d["lat"].as_f64(), d["lon"].as_f64(), d["near"].as_str()) {
+                (Some(lat), Some(lon), _) => (lat, lon),
+                (_, _, Some("volcanoes")) => planet().most_volcanic(20000),
+                (_, _, None | Some("mountains")) => planet().most_mountainous(20000),
+                (_, _, Some(x)) => panic!("Unknown terrain domain \"near\": {}", x),
             };
             Domain::patch(lat, lon, SceneFile::parse_int(&d["cells"], 128), number(d, "spacing", 400.), radius)
         }

@@ -22,6 +22,11 @@ fn mix(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
     [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
 }
 
+/// Sediment thicker than this (metres) is drawn as alluvium.
+pub const ALLUVIUM: f64 = 2.;
+pub const ALLUVIUM_COLOUR: [f64; 3] = [0.80, 0.74, 0.52];
+pub const LAVA_COLOUR: [f64; 3] = [0.16, 0.14, 0.14];
+
 /// Hypsometric tint for land at `h` metres.
 pub fn land_colour(h: f64) -> [f64; 3] {
     let stops = [
@@ -47,6 +52,12 @@ fn cell_colour(t: &Terrain, i: usize) -> [f64; 3] {
     }
     if is_river(t, i) {
         return [0.20, 0.40, 0.75];
+    }
+    if t.sediment[i] > ALLUVIUM {
+        return mix(land_colour(t.bed[i]), ALLUVIUM_COLOUR, 0.6);
+    }
+    if t.lava[i] > 1. {
+        return mix(land_colour(t.bed[i]), LAVA_COLOUR, 0.7);
     }
     land_colour(t.bed[i])
 }
@@ -117,7 +128,7 @@ mod tests {
         params.planet.seed = env("SEED", 0.) as u64;
         params.step = env("STEP", 100.);
         let planet = Planet::new(params.planet.clone());
-        let (lat, lon) = planet.most_mountainous(20000);
+        let (lat, lon) = if std::env::var("VOLCANIC").is_ok() { planet.most_volcanic(20000) } else { planet.most_mountainous(20000) };
         let n = env("CELLS", 128.) as usize;
         let spacing = env("SPACING", 400.);
         println!("patch at {:.2}, {:.2}", lat, lon);
@@ -140,10 +151,19 @@ mod tests {
                         t.ice.iter().cloned().fold(0., f64::max), t.sliding.iter().cloned().fold(0., f64::max));
                 }
             }
+            if std::env::var("VERBOSE").is_ok() {
+                let k = (0..t.domain.len()).max_by(|&a, &b| t.sediment[a].total_cmp(&t.sediment[b])).unwrap();
+                println!("  deepest sediment {} ({}, {}): ground {:.0} sediment {:.0} ice {:.0} drainage {:.2e} flux {:.2e}; neighbours {:?}",
+                    k, k % n, k / n, t.bed[k], t.sediment[k], t.ice[k], t.drainage[k], t.sediment_flux[k],
+                    t.domain.edges(k).iter().map(|l| (t.bed[l.to].round(), t.sediment[l.to].round(), t.ice[l.to].round())).collect::<Vec<_>>());
+            }
             let land = t.bed.iter().filter(|&&b| b > 0.).count();
             let iced = t.ice.iter().filter(|&&h| h > ICE_FREE).count();
             let max = t.bed.iter().cloned().fold(f64::MIN, f64::max);
-            println!("  min {:.0}", t.bed.iter().cloned().fold(f64::MAX, f64::min));
+            println!("  min {:.0}; sediment > 2 m in {} cells, deepest {:.0} m; lava in {} cells, thickest {:.0} m",
+                t.bed.iter().cloned().fold(f64::MAX, f64::min),
+                t.sediment.iter().filter(|&&s| s > ALLUVIUM).count(), t.sediment.iter().cloned().fold(0., f64::max),
+                t.lava.iter().filter(|&&s| s > 1.).count(), t.lava.iter().cloned().fold(0., f64::max));
             println!("t {:>8} in {:.1?}: max {:.0} m, land {}, ice {} cells, max ice {:.0} m",
                 t.time, start.elapsed(), max, land, iced, t.ice.iter().cloned().fold(0., f64::max));
             write_map(&t, &format!("{}/patch-{:03}.png", dir, f), 512);

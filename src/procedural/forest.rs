@@ -47,9 +47,27 @@ pub struct PartOf<T: Geometry> {
     pub part: u32,
 }
 
+impl<T: Geometry> PartOf<T> {
+    fn own(&self, i: RawIntersection) -> RawIntersection {
+        RawIntersection { face: (self.part << PART_SHIFT) | (i.face & ((1 << PART_SHIFT) - 1)), ..i }
+    }
+}
+
 impl<T: Geometry> Geometry for PartOf<T> {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        self.item.intersects(r).map(|i| RawIntersection { face: (self.part << PART_SHIFT) | (i.face & ((1 << PART_SHIFT) - 1)), ..i })
+        self.item.intersects(r).map(|i| self.own(i))
+    }
+
+    fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
+        self.item.intersects_beyond(r, min).map(|i| self.own(i))
+    }
+
+    fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
+        self.item.intersects_range(r, min, max).map(|i| self.own(i))
+    }
+
+    fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
+        self.item.occludes(r, min, max)
     }
 
     fn bounds(&self) -> BBox {

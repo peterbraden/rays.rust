@@ -116,6 +116,22 @@ impl<T: Geometry> Geometry for Tagged<T> {
         self.item.intersects(r).map(|i| RawIntersection { face: self.face, ..i })
     }
 
+    fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
+        self.item.intersects_beyond(r, min).map(|i| RawIntersection { face: self.face, ..i })
+    }
+
+    fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
+        self.item.intersects_range(r, min, max).map(|i| RawIntersection { face: self.face, ..i })
+    }
+
+    fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
+        self.item.occludes(r, min, max)
+    }
+
+    fn transformed_bounds(&self, t: &Affine3<f64>) -> BBox {
+        self.item.transformed_bounds(t)
+    }
+
     fn bounds(&self) -> BBox {
         self.item.bounds()
     }

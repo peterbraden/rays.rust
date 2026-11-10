@@ -303,8 +303,8 @@ emissive surfaces via `diffuse-light`.
 
 ### Gaps, roughly by usefulness
 
-- Transforms: translate and scale (the `Transform` intersection code already supports general
-  affine transforms; only parsing is missing), and instancing.
+- ~~Transforms: translate and scale, and instancing.~~ Done: `transform` and named
+  `geometries`.
 - Arbitrary-orientation plane, disc, quad/rectangle.
 - Area lights: quad, disc and sphere emitters with light sampling. Needed for the Cornell box and
   soft shadows. Directional (sun) light and spot light.

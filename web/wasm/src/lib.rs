@@ -5,16 +5,20 @@
 //! keeps the build to `cargo build --target wasm32-unknown-unknown` and nothing else.
 //!
 //! A module instance is used by one thread (a web worker, or the page) and holds at most one
-//! scene. A panic (eg. an invalid scene) reports its message through the imported `log` and
+//! scene. A panic (eg. an invalid scene) reports its message through the imported `rays_log` and
 //! then traps; the instance must be thrown away, as its state is no longer trustworthy. The
 //! page starts a fresh one.
 use rays::output::OutputOpts;
 use rays::preview::{Preview, encode_rgba};
 use std::cell::RefCell;
 
+#[link(wasm_import_module = "env")]
 unsafe extern "C" {
     /// Show a message. `level` is 0 for information, 1 for an error.
-    fn log(ptr: *const u8, len: usize, level: u32);
+    ///
+    /// Not named `log`: that is the C maths library's logarithm, which the linker would bind
+    /// this declaration to (and every `f64::ln` in the renderer to this).
+    fn rays_log(ptr: *const u8, len: usize, level: u32);
 }
 
 thread_local! {
@@ -38,7 +42,7 @@ unsafe fn text<'a>(ptr: *const u8, len: usize) -> &'a str {
 pub extern "C" fn init() {
     std::panic::set_hook(Box::new(|info| {
         let msg = info.to_string();
-        unsafe { log(msg.as_ptr(), msg.len(), 1) };
+        unsafe { rays_log(msg.as_ptr(), msg.len(), 1) };
     }));
 }
 

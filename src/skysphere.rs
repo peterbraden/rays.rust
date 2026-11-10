@@ -425,12 +425,33 @@ impl SkyViewLUT {
 /// then waited on the `OnceLock` that same thread held - a deadlock, hit at random.
 pub struct LUTSky {
     sky: SkyMaterial,
-    lut: SkyViewLUT,
+    lut: std::sync::Arc<SkyViewLUT>,
 }
+
+/// The table most recently built, with the description of the sky it was built for.
+///
+/// An editor rebuilds the scene after every change, and the table is by far the slowest part
+/// of a simple scene to build (over a second on one thread), though few edits touch the sky.
+static LAST_LUT: std::sync::Mutex<Option<(String, std::sync::Arc<SkyViewLUT>)>> = std::sync::Mutex::new(None);
 
 impl LUTSky {
     pub fn new(sky: SkyMaterial) -> LUTSky {
-        let lut = SkyViewLUT::build(&sky, LUT_WIDTH, LUT_HEIGHT);
+        let lut = std::sync::Arc::new(SkyViewLUT::build(&sky, LUT_WIDTH, LUT_HEIGHT));
+        LUTSky { sky, lut }
+    }
+
+    /// As `new`, reusing the last table built if it was for the same `description` (the sky's
+    /// scene file entry: everything the table depends on comes from it).
+    pub fn cached(sky: SkyMaterial, description: &str) -> LUTSky {
+        let cached = LAST_LUT.lock().unwrap().as_ref()
+            .filter(|(d, _)| d == description)
+            .map(|(_, lut)| lut.clone());
+        // Built outside the lock: the build is a parallel loop (see the note on `LUTSky`).
+        let lut = cached.unwrap_or_else(|| {
+            let lut = std::sync::Arc::new(SkyViewLUT::build(&sky, LUT_WIDTH, LUT_HEIGHT));
+            *LAST_LUT.lock().unwrap() = Some((description.to_string(), lut.clone()));
+            lut
+        });
         LUTSky { sky, lut }
     }
 }
@@ -521,7 +542,7 @@ pub fn create_sky_sphere(o: &Value) -> SceneObject {
     };
     // The lookup table is on by default; "lut": false integrates every ray exactly.
     let m: Box<dyn MaterialModel + Sync + Send> = if o["lut"].as_bool().unwrap_or(true) {
-        Box::new(LUTSky::new(sky))
+        Box::new(LUTSky::cached(sky, &o.to_string()))
     } else {
         Box::new(sky)
     };

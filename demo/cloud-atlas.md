@@ -173,7 +173,7 @@ sky. States are cached in `cache`, so an animation simulates only from frame to 
 scripts/animate.py demo/scenes/harris-cumulus.json --start 1800 --end 9000 --frames 72 --samples 8 -- --width 480 --height 300
 ```
 
-[The result](./scenes/harris-cumulus.mp4) runs from 09:30 to 11:30: clear sky, first wisps, a
+[The result](./scenes/harris-cumulus.mp4) runs from 10:00 to 12:00: clear sky, first wisps, a
 field that fills in, then clumps that break up as the ground's moisture flux falls.
 
 At 100 m the grid resolves clouds down to a few hundred metres. Worley erosion adds finer detail

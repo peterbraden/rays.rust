@@ -1,7 +1,7 @@
 use crate::ray::Ray;
 use crate::intersection::RawIntersection;
 use crate::shapes::bbox::BBox;
-use crate::octree::Octree;
+use crate::bvh::GeometryBvh;
 use std::f64;
 use crate::shapes::geometry::Geometry;
 use std::sync::Arc;
@@ -130,34 +130,26 @@ impl Geometry for Primitive {
 
 // Item[0] | Item[1] | Item[n...]
 //
-// Union builds an Octree of contained items, therefore provides efficient intersection of 
+// Union builds a BVH of contained items, therefore provides efficient intersection of 
 // many items.
 pub struct Union {
-    items: Octree<Primitive>,
+    items: GeometryBvh<Primitive>,
     primitives: u64,
 }
 
 impl Union {
     pub fn new (geometries: Vec<Box<dyn Geometry + Sync + Send>>) -> Union {
-        let mut count = 0;
-        let mut bounds = BBox::empty();
-        let primitives: Vec<Arc<Primitive>> = geometries.into_iter().map(|g| {
-            count += 1;
-            bounds = bounds.union(&g.bounds());
-            Arc::new(Primitive { item: g })
-        }).collect();
-        let tree = Octree::new(8, bounds, &primitives); 
-    
+        let primitives: Vec<Primitive> = geometries.into_iter().map(|item| Primitive { item }).collect();
         Union {
-            items: tree,
-            primitives: count,
+            primitives: primitives.len() as u64,
+            items: GeometryBvh::new(primitives),
         }
     }
 }
 
 impl Geometry for Union {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        self.items.raw_intersection(r, f64::INFINITY, 0f64)
+        self.items.nearest(r, 0., f64::INFINITY).map(|x| x.1)
     }
     fn bounds(&self) -> BBox {
         self.items.bounds()

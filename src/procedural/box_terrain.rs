@@ -10,24 +10,23 @@ use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::material::functions::{scatter_lambertian, scatter_dielectric, diffuse};
 use crate::shapes::geometry::Geometry;
 use crate::material::lambertian::Lambertian;
-use crate::octree::Octree;
+use crate::bvh::GeometryBvh;
 use crate::shapes::bbox::BBox;
 use crate::intersection::RawIntersection;
 use std::f64;
 use crate::na::{Vector3};
 use crate::ray::Ray;
-use std::sync::Arc;
 
 
 pub struct BoxTerrain {
-    boxes: Octree<BBox>,
+    boxes: GeometryBvh<BBox>,
     boxes_count: usize,
     bounds: BBox,
 } 
 
 impl Geometry for BoxTerrain {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        self.boxes.raw_intersection(r, f64::INFINITY, 0f64)
+        self.boxes.nearest(r, 0., f64::INFINITY).map(|x| x.1)
     }
 
     fn bounds(&self) -> BBox {
@@ -65,12 +64,12 @@ pub fn create_box_terrain(seed: u64) -> SceneObject {
 
             );
             bounds = bounds.union(&b);
-            boxes_vec.push(Arc::new(b));
+            boxes_vec.push(b);
         }
     }
 
-    let boxes = Octree::new(8, bounds, &boxes_vec);
-    let terrain = BoxTerrain { boxes, boxes_count: boxes_vec.len(), bounds};
+    let boxes_count = boxes_vec.len();
+    let terrain = BoxTerrain { boxes: GeometryBvh::new(boxes_vec), boxes_count, bounds };
 
     SceneObject {
         geometry: Box::new(terrain),

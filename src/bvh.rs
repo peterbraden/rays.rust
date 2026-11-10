@@ -60,6 +60,7 @@ use crate::intersection::RawIntersection;
 use crate::na::Vector3;
 use crate::na::geometry::{Affine3, Transform3};
 use crate::ray::Ray;
+use crate::shapes::geometry::Geometry;
 use crate::shapes::bbox::BBox;
 use std::mem::MaybeUninit;
 use std::ops::Range;
@@ -375,10 +376,37 @@ impl Bvh {
     }
 }
 
+/// A BVH over items of one kind of geometry, which it owns: for containers of shapes (CSG
+/// unions, box terrain, fireworks) whose items need nothing beyond `Geometry`.
+pub struct GeometryBvh<T> {
+    bvh: Bvh,
+    items: Vec<T>,
+}
+
+impl<T: Geometry> GeometryBvh<T> {
+    pub fn new(items: Vec<T>) -> GeometryBvh<T> {
+        let (bvh, items) = Bvh::build(items, |x| x.bounds());
+        GeometryBvh { bvh, items }
+    }
+
+    /// The nearest item hit in `[min, max)`, and where.
+    pub fn nearest(&self, r: &Ray, min: f64, max: f64) -> Option<(&T, RawIntersection)> {
+        self.bvh.nearest(r, min, max, |i, _| self.items[i].intersects_beyond(r, min))
+            .map(|(i, x)| (&self.items[i], x))
+    }
+
+    pub fn bounds(&self) -> BBox {
+        self.bvh.bounds()
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shapes::geometry::Geometry;
     use crate::shapes::sphere::Sphere;
     use rand::{Rng, SeedableRng};
     use rand::rngs::StdRng;

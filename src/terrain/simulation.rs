@@ -14,7 +14,9 @@
 //!    1996, estimate glacial erosion rates from that sediment);
 //! 4. flow routing over the ice and rock surface, then river erosion and deposition on
 //!    ice-free ground (`flow`, `fluvial`);
-//! 5. hillslope diffusion (`fluvial`).
+//! 5. deltas: what rivers bring to the sea spreads over the sea floor (`marine`);
+//! 6. hillslope diffusion (`fluvial`);
+//! 7. meandering rivers, a sub-grid model drawn over the terrain (`channel`).
 //!
 //! ## Geology
 //!
@@ -57,6 +59,9 @@ use crate::terrain::fluvial::{diffuse, erode_and_deposit, FluvialParams};
 use crate::terrain::glacier::{erode, flow_ice, GlacierParams};
 use crate::terrain::planet::{Planet, PlanetParams};
 use crate::terrain::volcano::{erupt, vents, Vent, VolcanoParams};
+use crate::terrain::marine::{self, MarineParams};
+use crate::terrain::channel::{ChannelParams, Rivers};
+use crate::terrain::fluvial::LAKE;
 
 #[derive(Clone, Debug)]
 pub struct TerrainParams {
@@ -66,6 +71,10 @@ pub struct TerrainParams {
     pub glacier: Option<GlacierParams>,
     /// None to disable volcanoes.
     pub volcano: Option<VolcanoParams>,
+    /// None to let sediment reaching the sea leave the model.
+    pub marine: Option<MarineParams>,
+    /// None for no meandering rivers (they are only modelled on patches).
+    pub channels: Option<ChannelParams>,
     /// Erodibility of sediment, relative to average bedrock.
     pub sediment_erodibility: f64,
     /// Erodibility of volcanic rock, relative to average bedrock.
@@ -81,6 +90,8 @@ impl Default for TerrainParams {
             fluvial: FluvialParams::default(),
             glacier: Some(GlacierParams::default()),
             volcano: Some(VolcanoParams::default()),
+            marine: Some(MarineParams::default()),
+            channels: Some(ChannelParams::default()),
             sediment_erodibility: 3.,
             lava_erodibility: 0.3,
             step: 100.,
@@ -117,6 +128,8 @@ pub struct Terrain {
     pub latitude: Vec<f64>,
     /// Drainage area at the last step, square metres.
     pub drainage: Vec<f64>,
+    /// Where each cell drained at the last step.
+    pub receiver: Vec<usize>,
     /// Basal sliding speed at the last step, metres per year.
     pub sliding: Vec<f64>,
     /// Ice flow steps taken so far (for performance statistics).
@@ -124,6 +137,8 @@ pub struct Terrain {
     /// ... and the solver iterations they took.
     pub ice_iterations: usize,
     vents: Vec<Vent>,
+    /// Meandering rivers and ox-bow lakes.
+    pub rivers: Rivers,
 }
 
 impl Terrain {
@@ -139,11 +154,13 @@ impl Terrain {
         let sea = bed.iter().map(|&b| b < 0.).collect();
         let vents = match &params.volcano { Some(v) => vents(&planet, &domain, v), None => vec![] };
         let mut t = Terrain {
-            domain, params, planet, time: 0., bed, uplift, latitude, sea, vents,
+            domain, params, planet, time: 0., bed, uplift, latitude, sea, vents, rivers: Rivers::default(),
             sediment: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
-            ice: vec![0.; n], drainage: vec![0.; n], sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
+            ice: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
-        t.drainage = t.route().area;
+        let flow = t.route();
+        t.drainage = flow.area;
+        t.receiver = flow.receiver;
         t
     }
 
@@ -229,9 +246,28 @@ impl Terrain {
         let before = self.bed.clone();
         self.sediment_flux = erode_and_deposit(&self.domain, &flow, &mut self.bed, &fixed, &erodibility, &lake, &glacial, &self.params.fluvial, dt);
         self.record(&before);
+        if let Some(m) = &self.params.marine {
+            // What the rivers bring to the sea builds deltas.
+            let sea: Vec<bool> = (0..self.domain.len()).map(|i| fixed[i] && !self.domain.boundary[i]).collect();
+            let supply: Vec<f64> = (0..self.domain.len()).map(|i| if sea[i] { self.sediment_flux[i] } else { 0. }).collect();
+            let before = self.bed.clone();
+            marine::deposit(&self.domain, &mut self.bed, &self.sediment, &sea, &supply, m, dt);
+            self.record(&before);
+        }
         let before = self.bed.clone();
         diffuse(&self.domain, &mut self.bed, &fixed, self.params.fluvial.diffusivity, dt);
         self.record(&before);
+
+        if let Some(c) = &self.params.channels {
+            let n = self.domain.len();
+            let slope: Vec<f64> = (0..n).map(|i| {
+                let r = flow.receiver[i];
+                if r == i { 0. } else { (self.bed[i] - self.bed[r]).max(0.) / flow.receiver_dist[i] }
+            }).collect();
+            let wet: Vec<bool> = (0..n).map(|i| fixed[i] || self.ice[i] >= ICE_FREE || lake[i] > LAKE).collect();
+            self.rivers.step(&self.domain, self.params.planet.seed, self.time, dt, &flow.receiver, &flow.area, &slope, &self.sediment, &wet, &self.bed, c);
+        }
+        self.receiver = flow.receiver.clone();
         self.drainage = flow.area;
         self.time += dt;
     }

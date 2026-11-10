@@ -9,6 +9,8 @@ pub mod flow;
 pub mod fluvial;
 pub mod glacier;
 pub mod volcano;
+pub mod marine;
+pub mod channel;
 pub mod simulation;
 pub mod map;
 pub mod object;

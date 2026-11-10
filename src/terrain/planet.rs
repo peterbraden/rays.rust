@@ -234,6 +234,28 @@ impl Planet {
         self.best_site(samples, |d| self.volcanism(d).min(self.orogeny(d)) + 0.1 * self.continent(d).min(0.2))
     }
 
+    /// As `most_mountainous`, but for a coast with mountains behind it: rivers with deltas.
+    /// Candidates are judged by elevations about 50 km around them: sea on one side, mountains
+    /// on another, lowland between.
+    pub fn most_coastal(&self, samples: usize) -> (f64, f64) {
+        self.best_site(samples, |d| {
+            let centre = self.elevation(d, 5000.);
+            if !(0. ..300.).contains(&centre) { return -10.; }
+            let (e1, e2) = {
+                let a = if d.y.abs() < 0.9 { Vector3::y() } else { Vector3::x() };
+                let e1 = d.cross(&a).normalize();
+                (e1, d.cross(&e1))
+            };
+            let around: Vec<f64> = (0..8).map(|k| {
+                let t = k as f64 * std::f64::consts::FRAC_PI_4;
+                self.elevation(&(d + 0.008 * (e1 * t.cos() + e2 * t.sin())).normalize(), 5000.)
+            }).collect();
+            let low = around.iter().cloned().fold(f64::MAX, f64::min);
+            let high = around.iter().cloned().fold(f64::MIN, f64::max);
+            (if low < -100. { 1. } else { 0. }) + (high / 2000.).min(1.)
+        })
+    }
+
     fn best_site(&self, samples: usize, score: impl Fn(&Vector3<f64>) -> f64) -> (f64, f64) {
         let golden = std::f64::consts::PI * (3. - 5f64.sqrt());
         let mut best = (f64::NEG_INFINITY, 0., 0.);

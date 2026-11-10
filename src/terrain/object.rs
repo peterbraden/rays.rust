@@ -18,7 +18,8 @@
 //! - `time`: years of landscape evolution after the noise topography (default 0).
 //! - `domain`: `{"type": "patch", "cells", "spacing" (m), "lat", "lon"}`, where a patch without
 //!   `lat`/`lon` is placed on this seed's most mountainous spot (or, with `"near":
-//!   "volcanoes"`, its most volcanic mountains); or `{"type": "planet",
+//!   "volcanoes"`, its most volcanic mountains, or with `"near": "coast"`, a coast with
+//!   mountains behind it); or `{"type": "planet",
 //!   "cells"}`, a cubed sphere with `cells` x `cells` per face.
 //! - Ground cover: ice, rivers, sea floor, bare rock on steep slopes, alluvium (sediment over
 //!   2 m deep), lava, then a tint by elevation.
@@ -31,6 +32,11 @@
 //!   `glacier` and `volcanoes`: `false` to disable, or overrides of `GlacierParams` and
 //!   `VolcanoParams` by field name. Geology: `strata_thickness` (m), `strata_contrast`,
 //!   `fold_amplitude` (m), `sediment_erodibility`, `lava_erodibility`.
+//! - `min_river_width`: draw rivers at least this wide, metres (default 0: their modelled
+//!   widths, which may be thinner than a pixel from afar). On patches, rivers, meandering
+//!   channels and ox-bow lakes are drawn as lines at their widths (`channel`).
+//! - `channels`: `false` for no meandering, or overrides of `ChannelParams`; `marine`: `false`
+//!   for no deltas, or `{diffusivity, depth_scale}`.
 //! - `map`: also write a shaded relief map to this PNG path.
 //!
 //! Water is not part of the terrain: add a plane at y = 0 (patch) or a sphere (planet).
@@ -56,6 +62,7 @@ use crate::terrain::map::{self, is_river, land_colour, write_map};
 use crate::terrain::planet::Planet;
 use crate::terrain::simulation::{Terrain, TerrainParams, ICE_FREE};
 use crate::terrain::volcano::VolcanoParams;
+use crate::terrain::channel::{point_cell, WaterLines};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -131,6 +138,8 @@ pub struct TerrainMedium {
     jitter: f64,
     class: Vec<u8>,
     materials: Vec<Box<dyn MaterialModel + Sync + Send>>,
+    /// Rivers and lakes drawn as lines (patches).
+    water: Option<WaterLines>,
 }
 
 const ICE: u8 = 0;
@@ -146,12 +155,15 @@ const BANDS: usize = 20;
 const ROCK_SLOPE: f64 = 0.8;
 
 impl TerrainMedium {
-    pub fn new(t: Terrain, place: Placement) -> TerrainMedium {
+    /// `min_river_width`: draw rivers at least this wide, metres (thin ones vanish from afar).
+    pub fn new(t: Terrain, place: Placement, min_river_width: f64) -> TerrainMedium {
         let slope2 = slope_squared(&t.domain, &t.bed);
+        let water = map::water_lines(&t, min_river_width);
+        let lines = water.is_some();
         let class = (0..t.domain.len()).map(|i| {
             if t.ice[i] >= ICE_FREE { ICE }
             else if t.bed[i] < 0. { SEA_FLOOR }
-            else if is_river(&t, i) { RIVER }
+            else if is_river(&t, i) && !lines { RIVER }
             else if slope2[i] > ROCK_SLOPE * ROCK_SLOPE { ROCK }
             else if t.sediment[i] > map::ALLUVIUM { ALLUVIUM }
             else if t.lava[i] > 1. { LAVA }
@@ -170,7 +182,7 @@ impl TerrainMedium {
         ];
         for b in 0..BANDS { materials.push(lambertian(land_colour((b as f64 + 0.5) * BAND_HEIGHT))); }
         let jitter = t.domain.min_spacing() / place.scale;
-        TerrainMedium { domain: t.domain, place, jitter, class, materials }
+        TerrainMedium { domain: t.domain, place, jitter, class, materials, water }
     }
 }
 
@@ -178,6 +190,11 @@ impl Medium for TerrainMedium {
     fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
         // Look up a random point within half a cell, so that, over many samples, materials
         // blend across cell boundaries rather than showing the grid's staircase.
+        if let Some(water) = &self.water {
+            let q = (pt - self.place.centre) * self.place.scale;
+            let q = [q.x, -q.z];
+            if water.wet(point_cell(&self.domain, q), q) { return &*self.materials[RIVER as usize]; }
+        }
         let j = Vector3::new(rand() - 0.5, rand() - 0.5, rand() - 0.5) * self.jitter;
         &*self.materials[self.class[self.place.cell_at(&self.domain, &(pt + j))] as usize]
     }
@@ -240,6 +257,31 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
             Some(x)
         }
     };
+    p.channels = match &o["channels"] {
+        Value::Bool(false) => None,
+        v => {
+            let mut x = crate::terrain::channel::ChannelParams::default();
+            let fields: [(&str, &mut f64); 10] = [
+                ("min_area", &mut x.min_area), ("max_slope", &mut x.max_slope), ("min_sediment", &mut x.min_sediment),
+                ("width_coefficient", &mut x.width_coefficient), ("migration", &mut x.migration),
+                ("friction", &mut x.friction), ("omega", &mut x.omega), ("gamma", &mut x.gamma),
+                ("regrid", &mut x.regrid), ("oxbow_fill", &mut x.oxbow_fill),
+            ];
+            for (k, f) in fields {
+                if let Some(n) = v.get(k).and_then(|n| n.as_f64()) { *f = n; }
+            }
+            Some(x)
+        }
+    };
+    p.marine = match &o["marine"] {
+        Value::Bool(false) => None,
+        v => {
+            let mut x = crate::terrain::marine::MarineParams::default();
+            if let Some(n) = v.get("diffusivity").and_then(|n| n.as_f64()) { x.diffusivity = n; }
+            if let Some(n) = v.get("depth_scale").and_then(|n| n.as_f64()) { x.depth_scale = n; }
+            Some(x)
+        }
+    };
     p.glacier = match &o["glacier"] {
         Value::Bool(false) => None,
         Value::Object(_) => Some(glacier_params(&o["glacier"])),
@@ -258,6 +300,7 @@ pub fn domain(o: &Value, params: &TerrainParams) -> Domain {
             let (lat, lon) = match (d["lat"].as_f64(), d["lon"].as_f64(), d["near"].as_str()) {
                 (Some(lat), Some(lon), _) => (lat, lon),
                 (_, _, Some("volcanoes")) => planet().most_volcanic(20000),
+                (_, _, Some("coast")) => planet().most_coastal(20000),
                 (_, _, None | Some("mountains")) => planet().most_mountainous(20000),
                 (_, _, Some(x)) => panic!("Unknown terrain domain \"near\": {}", x),
             };
@@ -281,7 +324,7 @@ pub fn create_terrain(o: &Value) -> SceneObject {
         centre: SceneFile::parse_vec3_def(o, "centre", Vector3::zeros()),
     };
     let geometry = mesh(&t, &place);
-    SceneObject { geometry: Box::new(geometry), medium: Box::new(TerrainMedium::new(t, place)) }
+    SceneObject { geometry: Box::new(geometry), medium: Box::new(TerrainMedium::new(t, place, number(o, "min_river_width", 0.))) }
 }
 
 #[cfg(test)]

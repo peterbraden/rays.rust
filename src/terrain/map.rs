@@ -8,6 +8,7 @@
 use crate::na::Vector3;
 use crate::terrain::domain::Layout;
 use crate::terrain::simulation::{Terrain, ICE_FREE};
+use crate::terrain::channel::{point_cell, ChannelParams, WaterLines};
 
 /// Drainage area above which a cell is drawn as river, square metres...
 pub const RIVER_AREA: f64 = 5e7;
@@ -26,6 +27,23 @@ fn mix(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
 pub const ALLUVIUM: f64 = 2.;
 pub const ALLUVIUM_COLOUR: [f64; 3] = [0.80, 0.74, 0.52];
 pub const LAVA_COLOUR: [f64; 3] = [0.16, 0.14, 0.14];
+pub const RIVER_COLOUR: [f64; 3] = [0.20, 0.40, 0.75];
+
+/// A patch's rivers and lakes as lines, at least `min_width` metres wide. None for a planet.
+pub fn water_lines(t: &Terrain, min_width: f64) -> Option<WaterLines> {
+    if !matches!(t.domain.layout, Layout::Patch { .. }) { return None; }
+    let outlets = t.outlets();
+    let c = t.params.channels.as_ref().map_or(ChannelParams::default().width_coefficient, |c| c.width_coefficient);
+    let rivers: Vec<(usize, usize, f64)> = (0..t.domain.len())
+        .filter(|&i| is_river(t, i) && !outlets[i] && t.ice[i] < ICE_FREE && t.receiver[i] != i)
+        .map(|i| (i, t.receiver[i], (c * t.drainage[i].sqrt()).max(min_width)))
+        .collect();
+    let mut channels = t.rivers.channels.clone();
+    for ch in &mut channels { ch.width = ch.width.max(min_width); }
+    let mut oxbows = t.rivers.oxbows.clone();
+    for o in &mut oxbows { o.width = o.width.max(min_width); }
+    Some(WaterLines::new(&t.domain, &channels, &oxbows, &rivers))
+}
 
 /// Hypsometric tint for land at `h` metres.
 pub fn land_colour(h: f64) -> [f64; 3] {
@@ -50,8 +68,9 @@ fn cell_colour(t: &Terrain, i: usize) -> [f64; 3] {
     if t.ice[i] >= ICE_FREE {
         return mix([0.80, 0.88, 0.95], [0.95, 0.97, 1.0], t.ice[i] / 300.);
     }
-    if is_river(t, i) {
-        return [0.20, 0.40, 0.75];
+    // Patches draw rivers as lines (`water_lines`).
+    if is_river(t, i) && matches!(t.domain.layout, Layout::Sphere { .. }) {
+        return RIVER_COLOUR;
     }
     if t.sediment[i] > ALLUVIUM {
         return mix(land_colour(t.bed[i]), ALLUVIUM_COLOUR, 0.6);
@@ -101,9 +120,23 @@ pub fn write_map(t: &Terrain, path: &str, width: usize) {
         }
     }
     let up = (width / w).max(1) as u32;
-    let img = if up > 1 {
+    let mut img = if up > 1 {
         image::imageops::resize(&img, w as u32 * up, h as u32 * up, image::imageops::FilterType::Nearest)
     } else { img };
+    // Rivers and lakes as lines, at least a pixel wide.
+    if let Some(lines) = water_lines(t, spacing / up as f64) {
+        let n = w as f64;
+        for py in 0..h as u32 * up {
+            for px in 0..w as u32 * up {
+                let x = ((px as f64 + 0.5) / up as f64 - n / 2.) * spacing;
+                let z = (n / 2. - (py as f64 + 0.5) / up as f64) * spacing;
+                if lines.wet(point_cell(&t.domain, [x, z]), [x, z]) {
+                    let c = RIVER_COLOUR.map(|v| (v * 255.) as u8);
+                    img.put_pixel(px, py, image::Rgb(c));
+                }
+            }
+        }
+    }
     img.save(path).unwrap();
 }
 
@@ -128,7 +161,9 @@ mod tests {
         params.planet.seed = env("SEED", 0.) as u64;
         params.step = env("STEP", 100.);
         let planet = Planet::new(params.planet.clone());
-        let (lat, lon) = if std::env::var("VOLCANIC").is_ok() { planet.most_volcanic(20000) } else { planet.most_mountainous(20000) };
+        let (lat, lon) = if std::env::var("VOLCANIC").is_ok() { planet.most_volcanic(20000) }
+            else if std::env::var("COASTAL").is_ok() { planet.most_coastal(20000) }
+            else { planet.most_mountainous(20000) };
         let n = env("CELLS", 128.) as usize;
         let spacing = env("SPACING", 400.);
         println!("patch at {:.2}, {:.2}", lat, lon);
@@ -160,7 +195,8 @@ mod tests {
             let land = t.bed.iter().filter(|&&b| b > 0.).count();
             let iced = t.ice.iter().filter(|&&h| h > ICE_FREE).count();
             let max = t.bed.iter().cloned().fold(f64::MIN, f64::max);
-            println!("  min {:.0}; sediment > 2 m in {} cells, deepest {:.0} m; lava in {} cells, thickest {:.0} m",
+            println!("  {} channels, {} ox-bow lakes; min {:.0}; sediment > 2 m in {} cells, deepest {:.0} m; lava in {} cells, thickest {:.0} m",
+                t.rivers.channels.len(), t.rivers.oxbows.len(),
                 t.bed.iter().cloned().fold(f64::MAX, f64::min),
                 t.sediment.iter().filter(|&&s| s > ALLUVIUM).count(), t.sediment.iter().cloned().fold(0., f64::max),
                 t.lava.iter().filter(|&&s| s > 1.).count(), t.lava.iter().cloned().fold(0., f64::max));

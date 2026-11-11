@@ -59,6 +59,7 @@ impl SceneGraph {
             dist: hit.dist,
             point: hit.point,
             normal: hit.normal,
+            face: hit.face,
             object,
         })
     }

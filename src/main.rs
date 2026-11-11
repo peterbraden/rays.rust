@@ -34,6 +34,7 @@ mod material {
     pub mod functions;
     pub mod legacy;
     pub mod plastic;
+    pub mod leaf;
     pub mod noise;
     pub mod grass;
 }
@@ -44,6 +45,7 @@ mod shapes {
     pub mod transform;
     pub mod bbox;
     pub mod geometry;
+    pub mod geometry_set;
     pub mod csg;
     pub mod sphere;
     pub mod plane;
@@ -74,6 +76,8 @@ mod geometry;
 mod procedural {
     pub mod box_terrain;
     pub mod fireworks;
+    pub mod tree;
+    pub mod forest;
     pub mod heightmap;
     pub mod grass;
 }

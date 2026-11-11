@@ -22,7 +22,7 @@ impl Geometry for Plane {
                 }
 
                 return Some(
-                    RawIntersection {
+                    RawIntersection { face: 0,
                         dist, 
                         point: r.ro + (rdn * dist),
                         normal: norm,

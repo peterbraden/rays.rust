@@ -15,6 +15,7 @@ use crate::color::Color;
 use crate::skysphere::create_sky_sphere;
 use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
+use crate::procedural::tree;
 use crate::procedural::grass::{create_grass, GrassMedium};
 use crate::procedural::heightmap::{HeightGrid, Terrain};
 use crate::participatingmedia::create_fog;
@@ -30,13 +31,15 @@ use crate::material::texture::{Solid, CheckeredYPlane, Medium, NoiseMedium, self
 use crate::material::specular::Specular;
 use crate::material::dielectric::Dielectric;
 use crate::material::plastic::Plastic;
+use crate::material::leaf::{Leaf, LeafColor, DEFAULT_AUTUMN, DEFAULT_DEAD};
 use crate::material::lambertian::Lambertian;
 use crate::material::normal::NormalShade;
 use crate::material::legacy::{ Whitted, FlatColor };
 use crate::material::diffuse_light::DiffuseLight;
 use crate::material::noise::{NoiseTexture, NoiseType};
 use crate::participatingmedia::{ParticipatingMedium, HomogenousFog, Vacuum};
-use crate::shapes::geometry::Geometry;
+use crate::shapes::geometry::{Geometry, Tagged};
+use crate::shapes::geometry_set::GeometrySet;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -228,6 +231,14 @@ impl SceneFile {
     pub fn parse_objects(objs: Vec<Value>, materials: &Map<String, Value>, media: &Map<String, Value>, geometries: &GeometryLibrary) ->Vec<Arc<SceneObject>> {
          let mut objects: Vec<Arc<SceneObject>> = Vec::new();
          for obj in objs {
+            if obj["type"] == "tree" {
+                objects.extend(SceneFile::parse_tree(&obj, materials, media));
+                continue;
+            }
+            if obj["type"] == "forest" {
+                objects.extend(SceneFile::parse_forest(&obj, materials, media, geometries));
+                continue;
+            }
             if let Some(x) = SceneFile::parse_object(obj, materials, media, geometries) { objects.push(x) }
          }
          objects
@@ -301,6 +312,186 @@ impl SceneFile {
         panic!("Unknown object type \"{}\"", t);
         //return None
     }
+    /// `{"type": "tree", "species": "quaking-aspen", "seed": 0, "location": [x, y, z],
+    /// "bark": name, "dead_bark": name, "leaves": name or [names], "params": {...}}`: a
+    /// procedural tree (see `crate::procedural::tree`), as objects for its bark, its dead
+    /// branches' bark (default: as "bark") and its leaves. `params` overrides the species'
+    /// parameters. Each name is a material or, failing that, a medium (eg. a noise texture).
+    /// Given several leaf names, each leaf takes one at random, chosen by the seed, so a canopy
+    /// needn't be a single colour. Leaves of the `leaf` material also take their own autumn or
+    /// dead colour, by the tree's `autumn` and `dead_branches` parameters; other materials
+    /// ignore them. Without materials, the bark is grey-brown and the leaves green.
+    pub fn parse_tree(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>) -> Vec<Arc<SceneObject>> {
+        let species = o.get("species").map_or("quaking-aspen".to_string(), SceneFile::parse_string);
+        let p = tree::params(&species, &o["params"]);
+        let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
+        let location = SceneFile::parse_vec3_def(o, "location", Vector3::zeros());
+        SceneFile::tree_parts(o, &p, seed, location, materials, media).into_iter()
+            .map(|(geometry, medium)| Arc::new(SceneObject { geometry: Box::new(geometry), medium }))
+            .collect()
+    }
+
+    /// `{"type": "forest", "seed": 0, "surface": geometry or [geometries], "area": {"min": [x, z],
+    /// "max": [x, z]}, "spacing": 8, "clearings": 0.15, "patch_size": 40, "patchiness": 0.5,
+    /// "max_slope": 35, "variants": 3, "autumn": 0.4, "autumn_spread": 0.1, "params": {...},
+    /// "species": [{"species": "scots-pine", "weight": 1, "spacing": 1, "scale_v": 0.2,
+    /// "bark": name, "dead_bark": name, "leaves": name or [names], "params": {...}}, ...]}`
+    ///
+    /// Trees over `area` of the surface (a named or inline geometry, or several, the trees
+    /// standing on the highest; default the plane y = 0), placed by `crate::procedural::forest`.
+    /// Each species grows `variants` distinct trees, each placed many times by instancing
+    /// transforms, so memory goes with the distinct trees, not the forest's size. The top-level
+    /// `params` apply to every species, then each species' own. Given `autumn`, each distinct
+    /// tree is that far through autumn, give or take `autumn_spread`. The surface itself isn't
+    /// drawn: add it as an object too.
+    pub fn parse_forest(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>,
+                        geometries: &GeometryLibrary) -> Vec<Arc<SceneObject>> {
+        use crate::procedural::forest::{self, ForestLayout, ForestSpecies};
+        let surface = |g: &Value| SceneFile::parse_shared_geometry(g, geometries)
+            .unwrap_or_else(|| panic!("forest surface {} is not a geometry", g));
+        let surfaces: Vec<SharedGeometry> = match &o["surface"] {
+            Value::Null => vec![Arc::new(Plane { y: 0. })],
+            Value::Array(list) => list.iter().map(surface).collect(),
+            g => vec![surface(g)],
+        };
+        let layout = ForestLayout {
+            min: SceneFile::parse_vec2(&o["area"]["min"]),
+            max: SceneFile::parse_vec2(&o["area"]["max"]),
+            spacing: SceneFile::parse_number(&o["spacing"], 8.),
+            clearings: SceneFile::parse_number(&o["clearings"], 0.15),
+            patch_size: SceneFile::parse_number(&o["patch_size"], 40.),
+            patchiness: SceneFile::parse_number(&o["patchiness"], 0.5),
+            max_slope: SceneFile::parse_number(&o["max_slope"], 35.),
+            variants: SceneFile::parse_int(&o["variants"], 3).max(1),
+        };
+        let entries = o["species"].as_array().filter(|e| !e.is_empty())
+            .unwrap_or_else(|| panic!("a forest needs a list of \"species\""));
+        let species: Vec<ForestSpecies> = entries.iter().map(|e| ForestSpecies {
+            weight: SceneFile::parse_number(&e["weight"], 1.),
+            spacing: SceneFile::parse_number(&e["spacing"], 1.),
+            scale_v: SceneFile::parse_number(&e["scale_v"], 0.2),
+        }).collect();
+        let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
+        let refs: Vec<&dyn Geometry> = surfaces.iter().map(|s| &**s as &dyn Geometry).collect();
+        let placements = forest::place(&layout, &species, seed, &refs);
+
+        let spread = SceneFile::parse_number(&o["autumn_spread"], 0.1);
+        let mut rng = crate::geometry::Pcg32::new(seed, 0x7a71);
+        // Every part of every placed tree, in one structure, each part numbered for its medium.
+        let mut instances: Vec<Arc<forest::PartOf<Transform>>> = vec![];
+        let mut parts: Vec<Box<dyn Medium + Sync + Send>> = vec![];
+        let mut distinct = 0;
+        for (k, entry) in entries.iter().enumerate() {
+            let name = entry.get("species").map(SceneFile::parse_string)
+                .unwrap_or_else(|| panic!("forest species {} needs a \"species\"", entry));
+            for v in 0 .. layout.variants {
+                // Draw for every variant, placed or not, so each keeps its own numbers.
+                let (autumn_shift, tree_seed) = (rng.next_f64() * 2. - 1., rng.next_u32() as u64);
+                let here: Vec<&forest::Placement> = placements.iter().filter(|p| p.species == k && p.variant == v).collect();
+                if here.is_empty() {
+                    continue;
+                }
+                let mut overrides = if o["params"].is_object() { o["params"].clone() } else { serde_json::json!({}) };
+                if let Some(autumn) = o["autumn"].as_f64() {
+                    overrides["autumn"] = serde_json::json!((autumn + autumn_shift * spread).clamp(0., 1.));
+                }
+                tree::merge(&mut overrides, &entry["params"]);
+                let p = tree::params(&name, &overrides);
+                distinct += 1;
+
+                // On a slope, sink the trunk so its downhill side meets the ground.
+                let base_radius = p.scale * p.stems[0].length * p.ratio * p.trunk_scale * (1. + 0.99 * p.flare);
+                let places: Vec<(Vector3<f64>, Rotation3<f64>, Vector3<f64>)> = here.iter().map(|t| {
+                    let sink = base_radius * t.scale * (t.slope.to_radians().tan() + 0.05);
+                    let mirror = if t.mirror { -1. } else { 1. };
+                    (t.position - Vector3::new(0., sink, 0.),
+                     Rotation3::from_axis_angle(&Vector3::y_axis(), t.yaw.to_radians()),
+                     Vector3::new(mirror * t.scale, t.scale, t.scale))
+                }).collect();
+                for (geometry, medium) in SceneFile::tree_parts(entry, &p, tree_seed, Vector3::zeros(), materials, media) {
+                    let part = parts.len() as u32;
+                    assert!(part < 1 << (32 - forest::PART_SHIFT), "too many distinct tree parts in a forest");
+                    instances.extend(places.iter().map(|(at, turn, scale)| Arc::new(forest::PartOf {
+                        item: Transform::from_parts(geometry.clone(), *at, *turn, *scale), part,
+                    })));
+                    parts.push(medium);
+                }
+            }
+        }
+        println!("Forest: {} trees, from {} distinct", placements.len(), distinct);
+        if instances.is_empty() {
+            return vec![];
+        }
+        vec![Arc::new(SceneObject {
+            geometry: Box::new(GeometrySet::new(&instances)),
+            medium: Box::new(Solid { m: Box::new(forest::PartsMaterial { parts }) }),
+        })]
+    }
+
+    /// The parts of a tree with parameters `p`, chosen by `seed`, grown at `location`, each a
+    /// geometry and the medium it's made of: its bark, its dead branches' bark, and its leaves in
+    /// as many parts as `o` names leaf materials. `o` names the materials as for `parse_tree`.
+    pub fn tree_parts(o: &Value, p: &tree::TreeParams, seed: u64, location: Vector3<f64>,
+                      materials: &Map<String, Value>, media: &Map<String, Value>)
+                      -> Vec<(SharedGeometry, Box<dyn Medium + Sync + Send>)> {
+        let mesh = tree::generate(p, seed, location);
+        let medium = |key: &Value| -> Box<dyn Medium + Sync + Send> {
+            let name = SceneFile::parse_string(key);
+            if materials.contains_key(&name) {
+                Box::new(Solid { m: SceneFile::require_material(key, materials, "tree") })
+            } else if media.contains_key(&name) {
+                SceneFile::parse_medium_ref(key, materials, media)
+                    .unwrap_or_else(|| panic!("Tree medium {} has an unknown type", key))
+            } else {
+                panic!("Tree material {} is neither a material nor a medium", key)
+            }
+        };
+        // Leaf materials get each leaf's state, for its autumn or dead colour.
+        let states = Arc::new(mesh.leaf_states.clone());
+        let leaf_medium = |key: &Value| -> Box<dyn Medium + Sync + Send> {
+            match materials.get(&SceneFile::parse_string(key)) {
+                Some(props) if props["type"] == "leaf" => {
+                    let mut leaf = SceneFile::parse_leaf(props);
+                    leaf.states = Some(states.clone());
+                    Box::new(Solid { m: Box::new(leaf) })
+                },
+                _ => medium(key),
+            }
+        };
+        let default = |albedo: Color| -> Box<dyn Medium + Sync + Send> {
+            Box::new(Solid { m: Box::new(Lambertian { albedo }) })
+        };
+        let bark = || o.get("bark").map_or_else(|| default(Color::new(0.25, 0.2, 0.16)), medium);
+
+        let mut parts: Vec<(SharedGeometry, Box<dyn Medium + Sync + Send>)> = vec![];
+        if !mesh.bark.is_empty() {
+            parts.push((Arc::new(GeometrySet::new(&mesh.bark)), bark()));
+        }
+        if !mesh.dead_bark.is_empty() {
+            parts.push((Arc::new(GeometrySet::new(&mesh.dead_bark)), o.get("dead_bark").map_or_else(bark, medium)));
+        }
+
+        let leaf_media: Vec<Box<dyn Medium + Sync + Send>> = match o.get("leaves") {
+            None => vec![default(Color::new(0.1, 0.3, 0.06))],
+            Some(Value::Array(names)) if !names.is_empty() => names.iter().map(leaf_medium).collect(),
+            Some(Value::Array(_)) => panic!("A tree's \"leaves\" list is empty"),
+            Some(name) => vec![leaf_medium(name)],
+        };
+        // Deal each leaf (all its triangles) to one of the media.
+        let mut groups: Vec<Vec<Arc<Tagged<Triangle>>>> = vec![vec![]; leaf_media.len()];
+        let mut rng = crate::geometry::Pcg32::new(seed, 0x1eaf);
+        for leaf in mesh.leaves.chunks(mesh.leaf_triangles) {
+            let k = ((rng.next_f64() * groups.len() as f64) as usize).min(groups.len() - 1);
+            groups[k].extend_from_slice(leaf);
+        }
+        for (triangles, medium) in groups.into_iter().zip(leaf_media) {
+            if !triangles.is_empty() {
+                parts.push((Arc::new(GeometrySet::new(&triangles)), medium));
+            }
+        }
+        parts
+    }
+
     pub fn parse_skysphere(o: &Value) -> SceneObject {
         create_sky_sphere(o)
     }
@@ -443,6 +634,32 @@ impl SceneFile {
             })
     }
 
+    /// `{"type": "leaf", "reflectance": colour, "transmittance": colour, "refractive_index": 1.5,
+    /// "roughness": 0.3, "autumn": {"reflectance", "transmittance"}, "autumn_sun": {...},
+    /// "dead": {...}}`; see `Leaf`. Every colour's reflectance and transmittance must sum to at
+    /// most 1.
+    pub fn parse_leaf(o: &Value) -> Leaf {
+        let color = |v: &Value, default: LeafColor, name: &str| -> LeafColor {
+            let c = LeafColor {
+                reflectance: SceneFile::parse_color_def(v, "reflectance", default.reflectance),
+                transmittance: SceneFile::parse_color_def(v, "transmittance", default.transmittance),
+            };
+            let total = c.reflectance + c.transmittance;
+            assert!(total.rgb.max() <= 1.,
+                "A leaf can't reflect and transmit more light than it receives: {} reflectance + transmittance is {}", name, total);
+            c
+        };
+        let grey = Color::new(0.25, 0.25, 0.25);
+        let green = color(o, LeafColor { reflectance: grey, transmittance: grey }, "its");
+        let mut leaf = Leaf::new(green.reflectance, green.transmittance,
+            SceneFile::parse_number(&o["refractive_index"], 1.5),
+            SceneFile::parse_number(&o["roughness"], 0.3));
+        leaf.autumn = color(&o["autumn"], DEFAULT_AUTUMN, "autumn");
+        leaf.autumn_sun = if o["autumn_sun"].is_null() { leaf.autumn } else { color(&o["autumn_sun"], leaf.autumn, "autumn_sun") };
+        leaf.dead = color(&o["dead"], DEFAULT_DEAD, "dead");
+        leaf
+    }
+
     pub fn parse_checkeredplane(o: &Value, m: Box<dyn Medium + Sync + Send>) -> SceneObject {
         SceneObject {
             geometry: Box::new(Plane { y: o["y"].as_f64().unwrap() }),
@@ -500,6 +717,10 @@ impl SceneFile {
                 roughness: SceneFile::parse_number(&o["roughness"], 0.),
             };
             return Some(Box::new(d));
+        }
+
+        if t == "leaf" {
+            return Some(Box::new(SceneFile::parse_leaf(o)));
         }
 
         if t == "dielectric" {
@@ -1198,6 +1419,104 @@ mod tests {
             ]
         }"#.to_string());
         assert_eq!(s.area_lights.len(), 1);
+    }
+
+    #[test]
+    fn test_tree_is_bark_and_leaves() {
+        let tree = |extra: &str| SceneFile::from_string(format!(r#"{{
+            "camera": {{ "location": [0, 1, -10], "lookat": [0, 1, 0], "up": [0, 1, 0], "angle": 0.5 }},
+            "materials": {{ "B": {{ "type": "lambertian", "albedo": [0.3, 0.2, 0.1] }} }},
+            "objects": [ {{ "type": "tree", "species": "shrub", "seed": 2, "location": [0, 0, 5], "bark": "B"{} }} ]
+        }}"#, extra));
+        let s = tree("");
+        assert_eq!(s.objects.len(), 2);
+        let b = s.objects.items()[0].bounds();
+        assert!(b.min.z > 2. && b.max.z < 8., "{:?}", b);
+        // Without leaves, only the bark.
+        assert_eq!(tree(r#", "params": { "leaves": 0 }"#).objects.len(), 1);
+    }
+
+    #[test]
+    fn test_tree_leaves_take_several_materials_and_media() {
+        let materials = serde_json::json!({
+            "A": { "type": "lambertian", "albedo": [0.1, 0.3, 0.1] },
+            "B": { "type": "leaf", "reflectance": [0.1, 0.2, 0.05], "transmittance": [0.1, 0.2, 0.05] }
+        });
+        let media = serde_json::json!({ "C": { "type": "solid", "material": "A" } });
+        let (materials, media) = (materials.as_object().unwrap(), media.as_object().unwrap());
+        let tree = |leaves: Value| SceneFile::parse_tree(
+            &serde_json::json!({ "type": "tree", "species": "shrub", "seed": 3, "bark": "C", "leaves": leaves }),
+            materials, media);
+        let one = tree(serde_json::json!("A"));
+        let three = tree(serde_json::json!(["A", "B", "C"]));
+        // Bark, and a leaf object per name.
+        assert_eq!(one.len(), 2);
+        assert_eq!(three.len(), 4);
+        // The leaves are shared out whole, none lost.
+        let count = |objects: &[Arc<SceneObject>]| objects[1..].iter().map(|o| o.geometry.primitives()).sum::<u64>();
+        assert_eq!(count(&one), count(&three));
+        for o in &three[1..] {
+            assert!(o.geometry.primitives() > count(&one) / 6, "{}", o.geometry.primitives());
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "autumn reflectance + transmittance")]
+    fn test_leaf_colours_must_be_physical() {
+        SceneFile::parse_leaf(&serde_json::json!({ "type": "leaf",
+            "autumn": { "reflectance": [0.6, 0.3, 0], "transmittance": [0.5, 0.3, 0] } }));
+    }
+
+    #[test]
+    fn test_leaf_autumn_sun_defaults_to_autumn() {
+        let leaf = SceneFile::parse_leaf(&serde_json::json!({ "type": "leaf",
+            "autumn": { "reflectance": [0.4, 0.1, 0], "transmittance": [0.3, 0.05, 0] } }));
+        assert_eq!(leaf.autumn_sun, leaf.autumn);
+        assert_eq!(leaf.autumn.reflectance, Color::new(0.4, 0.1, 0.));
+        assert_eq!(leaf.dead, DEFAULT_DEAD);
+    }
+
+    #[test]
+    fn test_forest_instances_a_few_distinct_trees() {
+        let s = SceneFile::from_string(r#"{
+            "camera": { "location": [0, 1, -10], "lookat": [0, 1, 0], "up": [0, 1, 0], "angle": 0.5 },
+            "materials": { "B": { "type": "lambertian", "albedo": [0.3, 0.2, 0.1] },
+                           "L": { "type": "leaf", "reflectance": [0.1, 0.2, 0.05], "transmittance": [0.1, 0.2, 0.05] } },
+            "geometries": { "ground": { "type": "plane", "y": 2 } },
+            "objects": [ { "type": "forest", "seed": 1, "surface": "ground", "spacing": 2, "variants": 2,
+                "area": { "min": [-10, -10], "max": [10, 10] }, "autumn": 0.4,
+                "species": [ { "species": "shrub", "bark": "B", "leaves": "L" },
+                             { "species": "shrub", "weight": 2, "spacing": 0.7, "bark": "B", "leaves": ["L", "L"],
+                               "params": { "leaves": 10 } } ] } ]
+        }"#.to_string());
+        // The whole forest is one object.
+        let objects = s.objects.items();
+        assert_eq!(objects.len(), 1);
+        // All on the ground at y = 2 and within the area, give or take a crown.
+        for o in objects {
+            let b = o.geometry.bounds();
+            assert!(b.min.y > 1.5 && b.max.y < 6., "{:?}", b);
+            assert!(b.min.x > -13. && b.max.x < 13., "{:?}", b);
+        }
+    }
+
+    #[test]
+    fn test_forest_places_each_tree_once_per_part() {
+        // One species, one variant: every shrub is a copy of one.
+        let objects = SceneFile::parse_forest(&serde_json::json!({ "type": "forest", "seed": 2, "spacing": 2,
+            "variants": 1, "clearings": 0, "area": { "min": [-10, -10], "max": [10, 10] },
+            "species": [ { "species": "shrub" } ] }), &Map::new(), &Map::new(), &GeometryLibrary::empty());
+        assert_eq!(objects.len(), 1);
+        let one = tree::generate(&tree::params("shrub", &Value::Null), 0, Vector3::zeros());
+        // Between 20 and 120 shrubs' triangles, though only one shrub's are stored.
+        let trees = objects[0].geometry.primitives() as f64 / (one.bark.len() + one.leaves.len()) as f64;
+        assert!(trees > 20. && trees < 120., "{} shrubs", trees);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unknown tree species")]
+    fn test_unknown_tree_species_names_them() {
+        SceneFile::parse_tree(&serde_json::json!({ "type": "tree", "species": "triffid" }), &Map::new(), &Map::new());
     }
 
     #[test]

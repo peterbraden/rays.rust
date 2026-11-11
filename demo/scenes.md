@@ -20,6 +20,38 @@ Demonstrating the ocean generation.
 Procedural art with a block city skyline at sunset.
 ![block terrain](./scenes/block-terrain.png)
 
+## Trees
+Procedural trees (Weber and Penn's parametric model). From left to right: palm, weeping willow
+(with two Lombardy poplars mostly hidden behind it), quaking aspens, balsam firs, California
+black oak and black tupelo, with shrubs in front. Each is
+`{"type": "tree", "species": "...", "seed": 0, "location": [x, y, z], "bark": material, "leaves": material}`,
+with optional `"params"` overriding the species' parameters (see `src/procedural/tree.rs`).
+`"leaves"` may list several materials, each leaf taking one at random. The leaves here use the
+translucent `leaf` material, so they glow where the sun, behind and to the right, shines
+through them, and the bark is textured with noise.
+![trees](./scenes/trees.png)
+
+Evergreens, from left to right: Italian cypresses, a forked stone (umbrella) pine, Scots pines,
+Norway spruces, a cedar of Lebanon and balsam firs. Trees of the same species differ only by
+their seed.
+![evergreens](./scenes/evergreens.png)
+
+Autumn: each tree's `"autumn"` parameter says how far through the season it is, and its `leaf`
+material gives autumn colours for shaded and sunlit leaves (`"autumn"`, `"autumn_sun"`) and a
+dead colour (`"dead"`). Exposed leaves at the top and outside of a crown turn and fall first.
+From left to right: a Lombardy poplar and a dead tree (`"dead_branches": 1`), a weeping willow
+just turning, quaking aspens, evergreens, a California black oak with some dead limbs, a black
+tupelo (scarlet in the sun, orange in shade) and, far right, an oak keeping its dead leaves
+(`"leaf_fall": 0.35`); red shrubs in front.
+![autumn](./scenes/autumn.png)
+
+## Forest
+A mixed forest of about 19,000 trees on heightmap terrain, seen across an autumn meadow of grass
+under the sky model's low sun: Scots pines, Norway spruces, quaking aspens and black tupelos
+turning in autumn, with a shrub understory. Each species is three distinct trees, instanced;
+species grow in stands, with clearings, and none on steep slopes.
+![forest](./scenes/forest.png)
+
 ## Instancing
 Twenty instances of one teapot mesh, each with its own transform and material.
 ![instances](./scenes/instances.png)

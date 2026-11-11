@@ -134,7 +134,7 @@ impl IndexedTriangles {
     /// most once, so its one hit is the nearest beyond any `min`.
     fn nearest(&self, r: &Ray, min: f64, max: f64) -> Option<(usize, IntersectionPoint)> {
         self.bvh.nearest(r, min, max, |i, _| self.hit(r, i).map(|x| RawIntersection {
-            dist: x.dist, point: x.point, normal: Vector3::zeros(),
+            face: 0, dist: x.dist, point: x.point, normal: Vector3::zeros(),
         })).map(|(i, x)| (i, IntersectionPoint { dist: x.dist, point: x.point }))
     }
 
@@ -198,7 +198,7 @@ impl Geometry for Mesh {
 
     fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
         self.triangles.nearest(r, min, max).map(|(i, x)| RawIntersection {
-            dist: x.dist, point: x.point, normal: self.triangles.face_normal(i),
+            face: i as u32, dist: x.dist, point: x.point, normal: self.triangles.face_normal(i),
         })
     }
 
@@ -312,7 +312,7 @@ impl Geometry for SmoothMesh {
 
     fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
         self.triangles.nearest(r, min, max).map(|(i, x)| RawIntersection {
-            dist: x.dist, point: x.point, normal: self.normal_at(i, x.point),
+            face: i as u32, dist: x.dist, point: x.point, normal: self.normal_at(i, x.point),
         })
     }
 

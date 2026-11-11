@@ -95,7 +95,7 @@ impl RepeatingMesh {
         if r.rd.y.abs() < 1e-12 { return None }
         let t = (y - r.ro.y) / r.rd.y;
         if t <= 0. { return None }
-        Some(RawIntersection {
+        Some(RawIntersection { face: 0,
             dist: t * r.rd.norm(),
             point: r.ro + r.rd * t,
             normal: Vector3::new(0., -r.rd.y.signum(), 0.),

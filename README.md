@@ -17,6 +17,7 @@ Supports:
       - Lambertian 
       - Specular
       - Dielelectric
+      - Leaf (translucent: diffuse reflection and transmission under a glossy coat)
 
   - Objects
     - Sphere
@@ -45,12 +46,40 @@ its transform, whatever the size of the mesh. Each instance has its own material
 A name can be used wherever a geometry is expected (eg. the `a` and `b` of a `difference`), and
 geometries can be built from each other. See [demo/scenes/instances.json](demo/scenes/instances.json).
 
+## Forests
+
+A `forest` covers part of a surface with trees: a few distinct trees are grown per species,
+then placed thousands of times as instances, each turned, scaled and maybe mirrored. Trees keep
+their distance from each other in proportion to their size, species grow in stands, clearings
+are left open, and steep ground stays bare. The surface can be any geometries, named or inline:
+eg. a heightmap `terrain`, which grass can share.
+
+```json
+"variables": { "land": { "type": "noise", "min": [-250, -50], "max": [250, 450], "amplitude": 90, "scale": 260 } },
+"geometries": { "land": { "type": "terrain", "heightmap": "$land" } },
+"objects": [
+  { "type": "transform", "item": "land", "material": "SOIL" },
+  { "type": "forest", "seed": 1, "surface": "land", "area": { "min": [-200, 0], "max": [200, 400] },
+    "spacing": 9, "clearings": 0.2, "patchiness": 0.7, "max_slope": 35, "variants": 3, "autumn": 0.4,
+    "species": [
+      { "species": "scots-pine", "weight": 2, "bark": "PINE_BARK", "leaves": "NEEDLES", "params": { "autumn": 0 } },
+      { "species": "quaking-aspen", "spacing": 0.7, "bark": "PALE_BARK", "leaves": "ASPEN_LEAF" },
+      { "species": "shrub", "weight": 3, "spacing": 0.35, "scale_v": 0.3, "leaves": "SHRUB_LEAF" }
+    ] }
+]
+```
+
+See [demo/scenes/forest.json](demo/scenes/forest.json): 19,000 trees from 15 distinct ones on
+heightmap terrain, behind a meadow of grass.
+
   - Scene files: our JSON, NFF (Eric Haines' Neutral File Format, of the Standard
     Procedural Database), or Tungsten's JSON (as in Bitterli's Rendering Resources), with
     OBJ, PLY and Tungsten `.wo3` meshes
   - Skysphere with Rayleigh and Mie Scattering
   - Procedural Objects
     - Ocean (Tessendorf's algorithm with Phillips spectrum)
+    - Trees (Weber and Penn's parametric model, with presets for several species, autumn colours and dead branches)
+    - Forests of instanced trees over any surface
     - Random Cubes
     - Terrain from heightmaps (fractal noise or images)
     - Grass on any terrain: species presets (lawn, meadow, tussock, reed...) and conditions (wind, drought, frost, rain, mowing...)
@@ -73,6 +102,7 @@ cargo run --release -- demo/demo.json
 - [Simulating Ocean Water, J. Tessendorf](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.161.9102&rep=rep1&type=pdf)
 - [Physically Based Raytracing, M. Pharr, W. Jakob, G. Humphreys](http://www.pbr-book.org/)
 - [Haines, E. (1987). A Proposal for Standard Graphics Environments. IEEE CG&A 7(11).](https://github.com/erich666/StandardProceduralDatabases)
+- [Creation and Rendering of Realistic Trees, J. Weber, J. Penn](https://doi.org/10.1145/218380.218427)
 - [Roth, S. D. (1982). Ray casting for modeling solids.](sci-hub.se/10.1016/0146-664x%2882%2990169-1)
 
 

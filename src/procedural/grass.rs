@@ -817,6 +817,7 @@ impl Geometry for GrassGeometry {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         let (t, i, s) = self.field.nearest(r)?;
         Some(RawIntersection {
+            face: 0,
             dist: t * r.rd.norm(),
             point: r.ro + r.rd * t,
             normal: self.field.blades[i].normal_at(s),

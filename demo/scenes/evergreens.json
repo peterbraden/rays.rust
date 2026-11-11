@@ -1,0 +1,61 @@
+{
+  "width": 1200,
+  "height": 600,
+
+  "supersamples": 32,
+  "chunk_size": 64,
+  "samples_per_chunk": 2,
+  "shadow_bias": 0.0001,
+  "max_depth": 4,
+
+  "background": { "type": "gradient", "bottom": [0.92, 0.93, 0.95], "top": [0.42, 0.6, 0.9] },
+
+  "variables": {
+    "NEEDLES": ["NEEDLE_1", "NEEDLE_2", "NEEDLE_3"],
+    "PINE_NEEDLES": ["PINE_NEEDLE_1", "PINE_NEEDLE_2"]
+  },
+
+  "materials": {
+    "BARK_BASE": { "type": "lambertian", "albedo": [0.26, 0.21, 0.17] },
+    "BARK": { "type": "noise", "base_material": "BARK_BASE", "noise_type": "fbm", "octaves": 4,
+      "scale": 2.5, "color": [0.4, 0.4, 0.35], "blend_factor": 0.6 },
+    "PINE_BARK_BASE": { "type": "lambertian", "albedo": [0.5, 0.3, 0.19] },
+    "PINE_BARK": { "type": "noise", "base_material": "PINE_BARK_BASE", "noise_type": "fbm", "octaves": 4,
+      "scale": 2, "color": [0.22, 0.17, 0.14], "blend_factor": 0.6 },
+    "NEEDLE_1": { "type": "leaf", "reflectance": [0.04, 0.09, 0.04], "transmittance": [0.01, 0.04, 0.01], "roughness": 0.2 },
+    "NEEDLE_2": { "type": "leaf", "reflectance": [0.05, 0.11, 0.04], "transmittance": [0.02, 0.05, 0.01], "roughness": 0.2 },
+    "NEEDLE_3": { "type": "leaf", "reflectance": [0.035, 0.08, 0.045], "transmittance": [0.01, 0.035, 0.01], "roughness": 0.2 },
+    "PINE_NEEDLE_1": { "type": "leaf", "reflectance": [0.07, 0.13, 0.05], "transmittance": [0.03, 0.07, 0.01], "roughness": 0.2 },
+    "PINE_NEEDLE_2": { "type": "leaf", "reflectance": [0.08, 0.13, 0.06], "transmittance": [0.03, 0.06, 0.02], "roughness": 0.2 },
+    "GROUND": { "type": "lambertian", "albedo": [0.3, 0.3, 0.16] }
+  },
+
+  "camera": {
+    "location": [0, 6, -62],
+    "lookat": [0, 10, 0],
+    "up": [0, 1, 0],
+    "angle": 0.5,
+    "aperture": 0.0
+  },
+
+  "lights": [
+    { "location": [-220, 220, 120], "color": "white", "intensity": 320000 }
+  ],
+
+  "objects": [
+    { "type": "tree", "species": "stone-pine", "seed": 3, "location": [16, 0, 4], "bark": "PINE_BARK", "leaves": "$PINE_NEEDLES" },
+    { "type": "tree", "species": "scots-pine", "seed": 1, "location": [2, 0, 22], "bark": "PINE_BARK", "leaves": "$PINE_NEEDLES" },
+    { "type": "tree", "species": "scots-pine", "seed": 2, "location": [-4, 0, 30], "bark": "PINE_BARK", "leaves": "$PINE_NEEDLES" },
+    { "type": "tree", "species": "scots-pine", "seed": 4, "location": [6, 0, 38], "bark": "PINE_BARK", "leaves": "$PINE_NEEDLES" },
+    { "type": "tree", "species": "cedar-of-lebanon", "seed": 2, "location": [-20, 0, 14], "bark": "BARK", "leaves": "$NEEDLES" },
+    { "type": "tree", "species": "norway-spruce", "seed": 1, "location": [-5, 0, 50], "bark": "BARK", "leaves": "$NEEDLES" },
+    { "type": "tree", "species": "norway-spruce", "seed": 2, "location": [-14, 0, 58], "bark": "BARK", "leaves": "$NEEDLES" },
+    { "type": "tree", "species": "norway-spruce", "seed": 3, "location": [-30, 0, 52], "bark": "BARK", "leaves": "$NEEDLES" },
+    { "type": "tree", "species": "italian-cypress", "seed": 1, "location": [42, 0, 30], "bark": "BARK", "leaves": "$NEEDLES" },
+    { "type": "tree", "species": "italian-cypress", "seed": 2, "location": [37, 0, 33], "bark": "BARK", "leaves": "$NEEDLES" },
+    { "type": "tree", "species": "italian-cypress", "seed": 3, "location": [32, 0, 36], "bark": "BARK", "leaves": "$NEEDLES" },
+    { "type": "tree", "species": "balsam-fir", "seed": 2, "location": [-40, 0, 30], "bark": "BARK", "leaves": "$NEEDLES" },
+    { "type": "tree", "species": "balsam-fir", "seed": 3, "location": [-46, 0, 38], "bark": "BARK", "leaves": "$NEEDLES" },
+    { "type": "plane", "y": 0, "material": "GROUND" }
+  ]
+}

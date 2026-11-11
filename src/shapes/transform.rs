@@ -89,6 +89,7 @@ impl Transform {
     fn to_world(&self, r: &Ray, i: RawIntersection) -> RawIntersection {
         let point = self.transform.transform_point(&Point3::from(i.point)).coords;
         RawIntersection {
+            face: i.face,
             dist: (point - r.ro).norm(),
             point,
             normal: (self.normal_matrix * i.normal).normalize(),

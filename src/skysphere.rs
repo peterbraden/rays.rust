@@ -30,6 +30,7 @@
 // to ensure the tau calculation properly accounts for all atmospheric material the light has
 // traveled through. This is critical for realistic rendering of sunset/sunrise conditions.
 
+use crate::geometry::rand;
 use crate::shapes::infinite::Infinite;
 use crate::shapes::sphere::Sphere;
 use crate::na::{Vector3};
@@ -173,6 +174,10 @@ pub struct SkyMaterial {
     multiple_scattering: bool,
     ground_albedo: f64,
     ms_table: std::sync::OnceLock<MultipleScattering>,
+
+    /// Whether clouds and terrain shadow the air seen from the camera (`shadowed_loss`):
+    /// crepuscular rays.
+    pub crepuscular_rays: bool,
 }
 
 impl SkyMaterial {
@@ -470,6 +475,68 @@ impl SkyMaterial {
         let inscattered = self.apply_phase(d, rayleigh.component_mul(&self.rayleigh_coefficients), mie * self.mie_coefficient, multiple)
             * SKY_CALIBRATION;
         (self.transmittance_of(depth), inscattered)
+    }
+}
+
+/// Shadows in the air: crepuscular rays.
+impl SkyMaterial {
+    /// Sunlight scattered once towards `origin` along the unit direction `d`, step by step out
+    /// to `distance` (or through the whole atmosphere): each step's distance, length and
+    /// radiance, on the scale of `segment`'s and the sky's.
+    pub fn single_scattering_steps(&self, origin: &Vector3<f64>, d: &Vector3<f64>, distance: f64) -> Vec<(f64, f64, Vector3<f64>)> {
+        let r = Ray { ro: *origin, rd: *d };
+        let (start, end) = match self.view_ray_span(&r) {
+            Some((start, end)) if start < distance => (start, end.min(distance)),
+            _ => return vec![],
+        };
+        let mu = d.dot(&self.sun_direction);
+        let (rayleigh, mie) = (Self::rayleigh_phase(mu), Self::mie_phase(mu, self.mie_anisotropy));
+        let scale = self.brightness * SKY_CALIBRATION;
+        let mut depth = Depths::default();
+        self.span_samples(&r, start, end, DEFAULT_NUM_SAMPLES).into_iter().map(|(t, step)| {
+            let p = origin + d * t;
+            let here = self.depths((p - self.earth.center).norm() - self.earth.radius, step);
+            depth = depth + here * 0.5;
+            let lit = self.transmittance_of(depth + self.sun_depths_at(&p));
+            let scattered = self.rayleigh_coefficients * (here.r * rayleigh) + Vector3::repeat(self.mie_coefficient * here.m * mie);
+            depth = depth + here * 0.5;
+            (t, step, lit.component_mul(&scattered) * scale)
+        }).collect()
+    }
+
+    /// The part of the sunlight scattered once along the view ray (as in the sky's radiance and
+    /// `segment`, which take the air to be lit everywhere outside the earth's shadow) that
+    /// doesn't arrive because the air there is in shadow: behind clouds, below mountains.
+    /// `lit(p)` is the fraction of sunlight reaching `p`. Taking it away leaves bright air where
+    /// the sun shines through gaps and dim air behind clouds: crepuscular rays.
+    ///
+    /// Testing every step for shadow would cost a shadow ray each; instead `samples` steps are
+    /// chosen with probability proportional to the light they scatter, a point picked uniformly
+    /// in each, and the shadow there stands for the step's. For step k chosen with probability
+    /// w_k / W, c_k (1 - lit) W / w_k is an unbiased estimate of the loss Σ c_i (1 - lit_i), and
+    /// it is least noisy where the light, and so what a shadow takes, is greatest.
+    pub fn shadowed_loss(&self, origin: &Vector3<f64>, d: &Vector3<f64>, distance: f64, samples: usize,
+                         lit: impl Fn(&Vector3<f64>) -> f64) -> Vector3<f64> {
+        let steps = self.single_scattering_steps(origin, d, distance);
+        let weights: Vec<f64> = steps.iter().map(|(_, _, c)| c.sum()).collect();
+        let total: f64 = weights.iter().sum();
+        if total <= 0. || samples == 0 {
+            return Vector3::zeros();
+        }
+        let mut loss = Vector3::zeros();
+        for _ in 0..samples {
+            let mut u = rand() * total;
+            let k = weights.iter().position(|w| { u -= w; u < 0. }).unwrap_or(weights.len() - 1);
+            let (t, step, c) = steps[k];
+            if weights[k] <= 0. {
+                continue;
+            }
+            let shade = 1. - lit(&(origin + d * (t + (rand() - 0.5) * step)));
+            if shade > 0. {
+                loss += c * (shade * total / weights[k]);
+            }
+        }
+        loss / samples as f64
     }
 }
 
@@ -855,6 +922,7 @@ pub fn parse_sky_material(o: &Value) -> SkyMaterial {
         multiple_scattering: o["multiple_scattering"].as_bool().unwrap_or(true),
         ground_albedo: SceneFile::parse_number(&o["ground_albedo"], 0.2),
         ms_table: std::sync::OnceLock::new(),
+        crepuscular_rays: o["crepuscular_rays"].as_bool().unwrap_or(false),
     }
 }
 
@@ -1137,6 +1205,7 @@ mod tests {
             multiple_scattering: false,
             ground_albedo: 0.2,
             ms_table: Default::default(),
+            crepuscular_rays: false,
         };
         // Just after sunset, the sun 0.02 radians below the horizon. From 100 m up, the sun ray
         // passes only slightly beneath the ground, so integrating through it would let a little
@@ -1164,6 +1233,7 @@ mod tests {
             multiple_scattering: false,
             ground_albedo: 0.2,
             ms_table: Default::default(),
+            crepuscular_rays: false,
         }
     }
 
@@ -1223,6 +1293,7 @@ mod tests {
             multiple_scattering: false,
             ground_albedo: 0.2,
             ms_table: Default::default(),
+            crepuscular_rays: false,
         };
         let r = Ray { ro: Vector3::new(0., 1., 0.), rd: Vector3::new(0., 0.3, 1.).normalize() };
         let (a, b) = (sky(20.).radiance(&r), sky(40.).radiance(&r));
@@ -1248,6 +1319,7 @@ mod tests {
             multiple_scattering: false,
             ground_albedo: 0.2,
             ms_table: Default::default(),
+            crepuscular_rays: false,
         };
         // Camera 10m above the surface, looking straight down.
         let down = Ray { ro: Vector3::new(0., 10., 0.), rd: Vector3::new(0., -1., 0.) };
@@ -1275,6 +1347,7 @@ mod tests {
             multiple_scattering: false,
             ground_albedo: 0.2,
             ms_table: Default::default(),
+            crepuscular_rays: false,
         };
         
         // Test optical depth at different heights
@@ -1360,5 +1433,31 @@ mod tests {
         // Test getting invalid preset (should return default Earth preset)
         let preset = get_preset_by_name("invalid");
         assert_eq!(preset.name, "earth");
+    }
+
+    #[test]
+    fn test_shadowed_loss() {
+        let sky = sky_at("[0, 0.3, 1]");
+        let (o, d) = (Vector3::new(0., 2., 0.), Vector3::new(0., 0.2, 1.).normalize());
+        let steps = sky.single_scattering_steps(&o, &d, f64::INFINITY);
+        let all: Vector3<f64> = steps.iter().map(|s| s.2).sum();
+        assert!(all.sum() > 0.);
+        // Nothing in shadow: nothing lost. Everything in shadow: all of it.
+        assert_eq!(sky.shadowed_loss(&o, &d, f64::INFINITY, 4, |_| 1.), Vector3::zeros());
+        let n = 2000;
+        let mean = (0..n).map(|_| sky.shadowed_loss(&o, &d, f64::INFINITY, 2, |_| 0.)).sum::<Vector3<f64>>() / n as f64;
+        assert!((mean - all).norm() < 0.02 * all.norm(), "{} vs {}", mean, all);
+        // In shadow beyond the start of the step nearest 5 km: the loss is the light from beyond
+        // it, on average.
+        let j = steps.iter().position(|s| s.0 > 5000.).unwrap();
+        let edge = steps[j].0 - steps[j].1 / 2.;
+        let beyond: Vector3<f64> = steps[j..].iter().map(|s| s.2).sum();
+        let n = 20_000;
+        let mean = (0..n).map(|_| sky.shadowed_loss(&o, &d, f64::INFINITY, 2, |p| if (p - o).norm() > edge { 0. } else { 1. })).sum::<Vector3<f64>>() / n as f64;
+        assert!((mean - beyond).norm() < 0.05 * beyond.norm(), "{} vs {}", mean, beyond);
+        // Steps sum to about the single scattering the sky adds up itself.
+        let (r, m, _) = SkyMaterial { multiple_scattering: false, ..sky_at("[0, 0.3, 1]") }.scattering(&Ray { ro: o, rd: d });
+        let single = sky.apply_phase(&d, r, m, Vector3::zeros()) * SKY_CALIBRATION;
+        assert!((single - all).norm() < 0.05 * single.norm(), "{} vs {}", single, all);
     }
 }

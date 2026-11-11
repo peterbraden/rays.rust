@@ -17,6 +17,9 @@ pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
 /// matter: 100 m of sea-level air takes about half a percent of blue light.
 const AERIAL_PERSPECTIVE_FROM: f64 = 100.;
 
+/// Shadow rays per camera ray for crepuscular rays (`SkyMaterial::shadowed_loss`).
+const CREPUSCULAR_SAMPLES: usize = 2;
+
 /// Trace a ray. `after_light_sampling` is set for a ray scattered from a surface that has just
 /// sampled the lights directly (the area lights and the sun); their emission is then already
 /// counted, and is ignored if this ray hits one, or sees the sun.
@@ -24,6 +27,19 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, after_light_sampling: bool) -> (u6
     let closest = s.objects.nearest_intersection(r, f64::INFINITY, 0f64);
     // Nothing in the way, or only the skysphere, infinitely far off: the ray reaches the sky.
     let reaches_sky = closest.as_ref().is_none_or(|x| x.dist >= SUN_SHADOW_DISTANCE);
+    // Crepuscular rays: from the camera, the air in shadow along the way, estimated before the
+    // path's own scattering changes the media's state.
+    let shadowed = match (&s.atmosphere, &s.sun) {
+        (Some(sky), Some(sun)) if depth == 0 && sky.crepuscular_rays => {
+            let dist = if reaches_sky { f64::INFINITY } else { closest.as_ref().map_or(f64::INFINITY, |x| x.dist) };
+            if dist > AERIAL_PERSPECTIVE_FROM {
+                sky.shadowed_loss(&r.ro, &r.rd.normalize(), dist, CREPUSCULAR_SAMPLES, |p| sun.transmittance_from(p, s))
+            } else {
+                Vector3::zeros()
+            }
+        },
+        _ => Vector3::zeros(),
+    };
 
     let (cast, color) = match closest {
         Some(x) => {
@@ -40,6 +56,7 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, after_light_sampling: bool) -> (u6
         },
         None => (1, s.render.background.radiance(&r.rd)),
     };
+    let color = Color { rgb: (color.rgb - shadowed).map(|v| v.max(0.)) };
     match &s.sun {
         Some(sun) if reaches_sky && !after_light_sampling => (cast, color + sun.disc_radiance(&r.ro, &r.rd.normalize())),
         _ => (cast, color),

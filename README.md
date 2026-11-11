@@ -75,6 +75,8 @@ heightmap terrain, behind a meadow of grass.
   - Scene files: our JSON, NFF (Eric Haines' Neutral File Format, of the Standard
     Procedural Database), or Tungsten's JSON (as in Bitterli's Rendering Resources), with
     OBJ, PLY and Tungsten `.wo3` meshes
+  - Bump mapping: bumps, dents, wrinkles, ripples and waves ([reference](./docs/bump-mapping.md))
+
   - Skysphere with Rayleigh and Mie Scattering
   - Procedural Objects
     - Ocean (Tessendorf's algorithm with Phillips spectrum)

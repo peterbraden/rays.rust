@@ -3,7 +3,7 @@
 ## Project Overview
 Rays.rust is a raytracer written in Rust with the following features:
 - Whitted tracing and path tracing with Monte-Carlo global illumination
-- Material models: Lambertian, Specular, Dielectric, Plastic, Leaf (translucent, `src/material/leaf.rs`)
+- Material models: Lambertian, Specular, Dielectric, Plastic, Leaf (translucent, `src/material/leaf.rs`); bump mapping via an object's "normal" (src/material/bump.rs, docs/bump-mapping.md)
 - Objects: Sphere, Plane, Mesh, OBJ file import; transforms and instancing of named "geometries"
 - Skysphere with Rayleigh and Mie Scattering
 - Procedural objects including Ocean (Tessendorf's algorithm with Phillips spectrum), trees

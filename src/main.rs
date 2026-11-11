@@ -37,6 +37,7 @@ mod material {
     pub mod leaf;
     pub mod noise;
     pub mod grass;
+    pub mod bump;
 }
 mod intersection;
 mod sceneobject;

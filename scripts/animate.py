@@ -56,6 +56,9 @@ def main():
         subprocess.run([binary, frame_scene, "-o", png] + a.renderer_args, check=True,
                        stdout=subprocess.DEVNULL)
         os.remove(frame_scene)
+        # The frame is done: its resumable state is no longer needed.
+        if os.path.exists(png + ".accum"):
+            os.remove(png + ".accum")
 
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(a.fps),
                     "-i", os.path.join(out, "frame-%04d.png"),

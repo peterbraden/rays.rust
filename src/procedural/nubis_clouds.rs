@@ -407,7 +407,7 @@ impl GlobalNubis {
     }
 
     fn map(&self) -> &crate::planet::CubeMap {
-        self.map.get_or_init(|| {
+        self.map.get_or_init(|| crate::geometry::build_apart(|| {
             let scale = self.planet_radius / self.layer.weather_size;
             crate::planet::CubeMap::new(self.map_size, |d| {
                 let q = d * scale;
@@ -418,7 +418,7 @@ impl GlobalNubis {
                     w
                 }
             })
-        })
+        }))
     }
 }
 

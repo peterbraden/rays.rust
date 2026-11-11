@@ -1,5 +1,7 @@
 # Test Scenes
 
+For clouds, see the [cloud atlas](./cloud-atlas.md).
+
 ## Bump mapping
 Bumps, dents, wrinkles, ripples and waves (see [bump mapping](../docs/bump-mapping.md)).
 ![Bump mapping](./scenes/bumps.png)

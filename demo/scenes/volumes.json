@@ -1,0 +1,38 @@
+{
+  "width": 960,
+  "height": 480,
+  "supersamples": 256,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.0001,
+  "max_depth": 64,
+  "path_termination": "russian_roulette",
+  "background": { "type": "gradient", "bottom": [0.4, 0.38, 0.36], "top": [0.12, 0.2, 0.4] },
+
+  "materials": {
+    "FLOOR": { "type": "lambertian", "albedo": [0.6, 0.6, 0.6] }
+  },
+
+  "sun": { "direction": [-1, 1.4, -0.8], "color": [1, 0.93, 0.8], "intensity": 4 },
+
+  "camera": {
+    "location": [0, 3, -14],
+    "lookat": [0, 1.6, 0],
+    "up": [0, 1, 0],
+    "angle": 0.55
+  },
+
+  "objects": [
+    { "type": "plane", "y": 0, "material": "FLOOR" },
+
+    { "type": "volume", "min": [-5.5, 0, -1], "max": [-2.5, 3, 2],
+      "density": 1.2, "albedo": [0.9, 0.9, 0.9], "g": 0 },
+
+    { "type": "volume", "min": [-2, 0, -2], "max": [2, 4, 2],
+      "density": 12, "albedo": [0.99, 0.99, 0.99], "g": 0.85,
+      "noise": { "scale": 0.45, "octaves": 5, "threshold": 0.55, "seed": 7 } },
+
+    { "type": "volume", "min": [2.5, 0, -1], "max": [5.5, 3, 2],
+      "density": 2, "albedo": [0.35, 0.25, 0.2], "g": 0.3 }
+  ]
+}

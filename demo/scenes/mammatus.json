@@ -1,0 +1,78 @@
+{
+  "width": 960,
+  "height": 600,
+  "supersamples": 32,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 24,
+  "path_termination": "russian_roulette",
+  "camera": {
+    "location": [
+      2000,
+      2,
+      0
+    ],
+    "lookat": [
+      14000,
+      9000,
+      3000
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.8
+  },
+  "sun": {
+    "intensity": 4.9
+  },
+  "objects": [
+    {
+      "type": "ocean",
+      "curved": true,
+      "wind": [
+        7,
+        2
+      ],
+      "detail_center": [
+        2000,
+        0
+      ]
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        -1,
+        0.035,
+        -0.15
+      ]
+    },
+    {
+      "type": "mammatus",
+      "base": 7000,
+      "thickness": 2000,
+      "edge_direction": [
+        -1,
+        0
+      ],
+      "edge_distance": 0,
+      "albedo": [
+        0.99,
+        0.99,
+        0.99
+      ],
+      "similarity_after": 4,
+      "oz": true,
+      "seed": 1,
+      "pouch_band": 6000,
+      "edge_raggedness": 2000,
+      "clustering": 0.35
+    }
+  ],
+  "output": {
+    "tonemap": "reinhard",
+    "exposure": 3.0
+  }
+}

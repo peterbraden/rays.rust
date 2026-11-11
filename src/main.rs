@@ -39,6 +39,10 @@ mod material {
     pub mod grass;
     pub mod bump;
     pub mod rock;
+    pub mod phase;
+    pub mod diffraction;
+    pub mod ice_halos;
+    pub mod rainbow;
 }
 mod intersection;
 mod sceneobject;
@@ -97,11 +101,22 @@ mod procedural {
     pub mod heightmap;
     pub mod grass;
     pub mod rock;
+    pub mod nubis_clouds;
+    pub mod hogan_kew_cirrus;
+    pub mod benard_altocumulus;
+    pub mod lenticular;
+    pub mod terrain;
+    pub mod mammatus;
+    pub mod precipitation;
+    pub mod harris_cumulus;
 }
 mod participatingmedia;
 mod noise;
 mod terrain;
 mod expr;
+mod volume;
+mod glare;
+mod planet;
 
 use crate::trace::trace;
 use crate::rendercontext::RenderContext;
@@ -269,7 +284,7 @@ fn main() {
             }
         },
         |(img, path)| {
-            if let Err(e) = writer.write(&img, &path) {
+            if let Err(e) = writer.write(&s.output.finish(&img), &path) {
                 eprintln!("{}", e);
             }
         });
@@ -277,7 +292,7 @@ fn main() {
 
     let rc = rcmtx.lock().unwrap();
     //wireframe::wireframe(&s, &mut rc);
-    let img = rc.snapshot();
+    let img = s.output.finish(&rc.snapshot());
     if let Err(e) = writer.write(&img, &rc.output_filename) {
         eprintln!("{}", e);
         std::process::exit(1);

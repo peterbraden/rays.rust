@@ -64,6 +64,13 @@ impl Geometry for HomogenousFog {
         }
     }
 
+    fn is_stochastic(&self) -> bool { true }
+
+    /// Exactly exp(-σ d) for the distance d crossed: the fog fills all space.
+    fn transmittance(&self, _r: &Ray, min: f64, max: f64) -> f64 {
+        (-self.density * (max - min).max(0.)).exp()
+    }
+
     fn bounds(&self) -> BBox {
         BBox::new(
             Vector3::new(f64::MIN, f64::MIN, f64::MIN),
@@ -117,6 +124,14 @@ mod tests {
             .count() as f64 / samples as f64;
         // 1 - exp(-0.5 * 2)
         assert!((within - 0.632).abs() < 0.02, "{}", within);
+    }
+
+    #[test]
+    fn test_fog_transmittance_is_exact() {
+        let fog = HomogenousFog { color: Color::white(), density: 0.5, scatter: 0. };
+        let r = Ray { ro: Vector3::new(0., 0., 0.), rd: Vector3::new(0., 0., 1.) };
+        assert!((fog.transmittance(&r, 1., 3.) - (-1f64).exp()).abs() < 1e-12);
+        assert_eq!(fog.transmittance(&r, 0., 1e30), 0.);
     }
 
     #[test]

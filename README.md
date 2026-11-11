@@ -7,6 +7,8 @@
 
 [See full gallery of test scenes](./demo/scenes.md)
 
+[See the cloud atlas](./demo/cloud-atlas.md): every kind of cloud it can render, with a scene for each.
+
 A raytracer written in rust.
 
 Supports:

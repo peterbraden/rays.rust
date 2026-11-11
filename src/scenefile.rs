@@ -10,9 +10,9 @@ use crate::shapes::transform::{Transform};
 use crate::na::{Matrix4, Rotation3, Translation3, Affine3};
 use crate::ocean::create_ocean;
 use crate::shapes::bbox::BBox;
-use crate::light::Light;
+use crate::light::{Light, Sun};
 use crate::color::Color;
-use crate::skysphere::create_sky_sphere;
+use crate::skysphere::{create_sky_sphere, parse_sky_material};
 use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
 use crate::procedural::tree;
@@ -21,7 +21,22 @@ use crate::procedural::grass::{create_grass, GrassMedium};
 use crate::procedural::heightmap::{HeightGrid, Terrain};
 use crate::procedural::rock::{self, Bedrock, Assorted};
 use crate::material::rock::{Rock, RockStyle};
+use crate::procedural::nubis_clouds::{NubisCloudLayer, GlobalNubis};
+use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGenus, GlobalCirrus};
+use crate::procedural::benard_altocumulus::BenardAltocumulus;
+use crate::procedural::lenticular::{Lenticular, MoistLayer};
+use crate::procedural::terrain::{Terrain as Mountains, TerrainMaterial};
+use crate::procedural::mammatus::Mammatus;
+use crate::procedural::precipitation::Precipitation;
+use crate::material::rainbow::RainbowTable;
+use crate::procedural::harris_cumulus::{CloudSimulation, Forcing, HarrisCumulus, Profile, SimulationParams, Sounding};
 use crate::participatingmedia::create_fog;
+use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
+use crate::material::ice_halos::{Crystals, Habit};
+use crate::material::diffraction::DiffractionTable;
+use crate::noise::PerlinNoise;
+use crate::planet::{Planet, PlanetMapping, GlobalMapping, EARTH_RADIUS};
+use crate::material::phase::PhaseFunction;
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
 use serde_json::{Value, Map};
@@ -219,6 +234,8 @@ pub struct SceneFile {
     pub media: Map<String, Value>,
     #[serde(default)]
     pub lights: Vec<Value>,
+    #[serde(default)]
+    pub sun: Value,
     #[serde(default)]
     pub objects: Vec<Value>,
     #[serde(default)]
@@ -440,6 +457,51 @@ impl SceneFile {
             return Some(Arc::new(f));
         }
 
+        if t == "planet" {
+            // The ground as a sphere, so that what is far away drops below the horizon.
+            let planet = Planet { radius: SceneFile::parse_number(&o["radius"], EARTH_RADIUS) };
+            return Some(Arc::new(SceneObject {
+                geometry: crate::planet::ground(&planet),
+                medium: SceneFile::parse_object_medium(&o, materials, media),
+            }));
+        }
+
+        if t == "hogan_kew_cirrus" {
+            return Some(Arc::new(SceneFile::parse_hogan_kew_cirrus(&o)));
+        }
+
+        if t == "harris_cumulus" {
+            return Some(Arc::new(SceneFile::parse_harris_cumulus(&o)));
+        }
+
+        if t == "precipitation" {
+            return Some(Arc::new(SceneFile::parse_precipitation(&o)));
+        }
+
+        if t == "mammatus" {
+            return Some(Arc::new(SceneFile::parse_mammatus(&o)));
+        }
+
+        if t == "mountains" {
+            return Some(Arc::new(SceneFile::parse_terrain(&o)));
+        }
+
+        if t == "lenticular" {
+            return Some(Arc::new(SceneFile::parse_lenticular(&o)));
+        }
+
+        if t == "benard_altocumulus" {
+            return Some(Arc::new(SceneFile::parse_benard_altocumulus(&o)));
+        }
+
+        if t == "nubis_clouds" {
+            return Some(Arc::new(SceneFile::parse_nubis_clouds(&o)));
+        }
+
+        if t == "volume" {
+            return Some(Arc::new(SceneFile::parse_volume(&o)));
+        }
+
         let mut parts = Parts { library: Some((materials, media)), media: vec![], geometries };
         let geom = SceneFile::parse_geometry_in(&o, &mut parts, false);
         let mut m = SceneFile::parse_object_medium(&o, materials, media);
@@ -641,6 +703,633 @@ impl SceneFile {
 
     pub fn parse_skysphere(o: &Value) -> SceneObject {
         create_sky_sphere(o)
+    }
+
+    /// A participating medium filling the box from `min` to `max`:
+    ///
+    /// `{"type": "volume", "min": [x, y, z], "max": [x, y, z], "density": σ, "albedo": colour,
+    /// "g": asymmetry, "noise": {"scale", "octaves", "threshold", "seed"}}`
+    ///
+    /// `density` is the extinction coefficient, the chance of a collision per unit distance
+    /// (default 1). Without `noise` it is constant; with it, it varies up to that maximum.
+    /// `albedo` (default white) is the fraction scattered rather than absorbed at a collision.
+    /// How it scatters is given by `g` (Henyey-Greenstein, -1 to 1, default 0) or by
+    /// `droplet_diameter` (in µm, 5 to 50: the Mie scattering of water droplets of that size;
+    /// see `PhaseFunction::water_droplets`).
+    pub fn parse_volume(o: &Value) -> SceneObject {
+        let bounds = BBox::new(SceneFile::parse_vec3(&o["min"]), SceneFile::parse_vec3(&o["max"]));
+        let max_density = SceneFile::parse_number(&o["density"], 1.);
+        let density: Arc<dyn DensityField> = match o.get("noise") {
+            None => Arc::new(ConstantDensity(max_density)),
+            Some(n) => Arc::new(NoiseDensity {
+                perlin: SceneFile::parse_seed(n).map_or_else(PerlinNoise::new, PerlinNoise::with_seed),
+                max_density,
+                scale: SceneFile::parse_number(&n["scale"], 1.),
+                octaves: SceneFile::parse_int(&n["octaves"], 4) as u32,
+                threshold: SceneFile::parse_number(&n["threshold"], 0.5),
+            }),
+        };
+        create_volume(bounds, density, SceneFile::parse_scattering(o, 0.))
+    }
+
+    /// A medium's multiple-scattering approximations (`volume::ScatteringApproximation`):
+    /// `"similarity_after": N` for the similarity relations from the N-th scattering on, and
+    /// `"oz": true` or `{"octaves", "a", "b", "c"}` for Wrenninge et al.'s octaves.
+    pub fn parse_scattering_approximation(o: &Value) -> ScatteringApproximation {
+        let oz = match o.get("oz") {
+            None | Some(Value::Bool(false)) => None,
+            Some(Value::Bool(true)) => Some(Oz::default()),
+            Some(v) => {
+                let d = Oz::default();
+                Some(Oz {
+                    octaves: SceneFile::parse_int(&v["octaves"], d.octaves as usize) as u32,
+                    a: SceneFile::parse_number(&v["a"], d.a),
+                    b: SceneFile::parse_number(&v["b"], d.b),
+                    c: SceneFile::parse_number(&v["c"], d.c),
+                })
+            },
+        };
+        ScatteringApproximation {
+            similarity_after: o.get("similarity_after").map(|n| SceneFile::parse_int(n, 0) as u32),
+            oz,
+        }
+    }
+
+    /// How a volume scatters: `albedo`, its phase function (`g` defaulting to `default_g`, or
+    /// `droplet_diameter`), approximations, `diffraction`, `halos`, and `"rainbow": true` for
+    /// raindrops' bows in direct sunlight.
+    pub fn parse_scattering(o: &Value, default_g: f64) -> Scattering {
+        Scattering {
+            albedo: SceneFile::parse_color_def(o, "albedo", Color::white()),
+            phase: SceneFile::parse_phase(o, default_g),
+            approximation: SceneFile::parse_scattering_approximation(o),
+            diffraction: SceneFile::parse_diffraction(o),
+            halos: SceneFile::parse_halos(o),
+            rainbow: (o["rainbow"].as_bool() == Some(true)).then(|| Arc::new(RainbowTable::new(100_000))),
+        }
+    }
+
+    /// Ice-crystal halos: `"halos": true` for plates (a third: sun dogs) and randomly oriented
+    /// columns (the 22° and 46° halos), or `{"crystals": [{"habit": "plate" | "column" |
+    /// "random", "fraction", "aspect", "tilt"}], "rays": 4000000}`: populations by their share
+    /// of the light, the prisms' half-height over their radius, and their tilt from horizontal
+    /// (degrees, standard deviation); and the rays traced per colour channel.
+    pub fn parse_halos(o: &Value) -> Option<Halos> {
+        let v = match o.get("halos") {
+            None | Some(Value::Bool(false)) => return None,
+            Some(v) => v,
+        };
+        let crystals = match v.get("crystals").and_then(|c| c.as_array()) {
+            None => vec![
+                Crystals { habit: Habit::Plate, fraction: 1. / 3., aspect: 0.15, tilt: 0.5 },
+                Crystals { habit: Habit::Random, fraction: 2. / 3., aspect: 1.5, tilt: 0. },
+            ],
+            Some(list) => list.iter().map(|c| {
+                let habit = match c["habit"].as_str() {
+                    Some("plate") => Habit::Plate,
+                    Some("column") => Habit::Column,
+                    Some("random") => Habit::Random,
+                    h => panic!("Unknown crystal habit {:?}: expected plate, column or random", h),
+                };
+                let aspect = SceneFile::parse_number(&c["aspect"], if habit == Habit::Plate { 0.15 } else { 1.5 });
+                Crystals { habit, fraction: SceneFile::parse_number(&c["fraction"], 1.), aspect,
+                           tilt: SceneFile::parse_number(&c["tilt"], 0.5) }
+            }).collect(),
+        };
+        assert!(!crystals.is_empty() && crystals.iter().all(|c| c.fraction >= 0. && c.aspect > 0.),
+            "Halo crystals need positive aspects and fractions");
+        Some(Halos {
+            crystals,
+            rays: SceneFile::parse_int(&v["rays"], 4_000_000).max(64),
+            seed: SceneFile::parse_seed(v).unwrap_or(0),
+            table: std::sync::OnceLock::new(),
+        })
+    }
+
+    /// Diffraction by the medium's particles, for iridescence and coronae: `"diffraction": true`
+    /// or `{"fraction": 0.5, "radius": 10, "spread": 0.1}`: the share of scattering diffracted,
+    /// the particles' mean radius in µm (where the medium doesn't vary it), and the relative
+    /// spread of their sizes. None if absent or false.
+    pub fn parse_diffraction(o: &Value) -> Option<Diffraction> {
+        let v = match o.get("diffraction") {
+            None | Some(Value::Bool(false)) => return None,
+            Some(v) => v,
+        };
+        let fraction = SceneFile::parse_number(&v["fraction"], 0.5);
+        assert!((0. ..=1.).contains(&fraction), "Diffraction fraction must be 0 to 1, got {}", fraction);
+        Some(Diffraction {
+            table: DiffractionTable::new(SceneFile::parse_number(&v["spread"], 0.1).max(0.)),
+            fraction,
+            radius: SceneFile::parse_number(&v["radius"], 10.),
+        })
+    }
+
+    /// A medium's phase function: `droplet_diameter` (µm) for water droplets, or else
+    /// Henyey-Greenstein with `g` (default `default_g`).
+    pub fn parse_phase(o: &Value, default_g: f64) -> PhaseFunction {
+        match o.get("droplet_diameter") {
+            Some(d) => {
+                assert!(o.get("g").is_none(), "Give a medium either g or droplet_diameter, not both");
+                PhaseFunction::water_droplets(SceneFile::parse_number(d, 0.))
+            },
+            None => {
+                let g = SceneFile::parse_number(&o["g"], default_g);
+                assert!(g > -1. && g < 1., "g must be between -1 and 1, got {}", g);
+                PhaseFunction::HenyeyGreenstein { g }
+            },
+        }
+    }
+
+    /// A layer of procedural clouds by the Nubis method (see `procedural::nubis_clouds`), as a
+    /// volume from `base` to `top` and `extent` either side of `center` ([x, z]) across:
+    ///
+    /// `{"type": "nubis_clouds", "base": 1500, "top": 3000, "extent": 20000, "coverage": 0.5,
+    /// "cloud_type": 1, "density": 0.05, "albedo": colour, "g": 0.85, "seed": 0}`, with
+    /// `droplet_diameter` in place of `g` for Mie scattering (as for `volume`).
+    ///
+    /// `coverage` (0 to 1) is how much of the sky is cloud; `cloud_type` runs from stratus (0)
+    /// through stratocumulus (0.5) to cumulus (1); `density` is the extinction coefficient in
+    /// the thickest cloud. `weather_size`, `shape_size` and `detail_size` set the sizes of
+    /// cloud fields, clouds and their eroded edges, and `erosion` (0 to 1) how much the edges
+    /// are worn; they default to suit the layer's thickness.
+    ///
+    /// `mapping` places the layer: `"regional"` (the default) curved over the planet about the
+    /// origin, `extent` across; `"flat"` (or `"curved": false`) on a flat earth; `"global"`
+    /// over the whole planet (`GlobalNubis`), with `map_size` texels along each cube face of
+    /// the weather map (default 1024), `climate` (default true) for bands of weather by
+    /// latitude about the `pole` (default [0, 0, 1]), and weather systems `weather_size`
+    /// across (default 400 km).
+    pub fn parse_nubis_clouds(o: &Value) -> SceneObject {
+        let base = SceneFile::parse_number(&o["base"], 1500.);
+        let top = SceneFile::parse_number(&o["top"], 3000.);
+        let extent = SceneFile::parse_number(&o["extent"], 20000.);
+        let center = SceneFile::parse_vec2_def(o, "center", Vector2::new(0., 0.));
+        let mut layer = NubisCloudLayer::new(base, top, center, extent, SceneFile::parse_seed(o).unwrap_or(0));
+        layer.max_density = SceneFile::parse_number(&o["density"], layer.max_density);
+        layer.coverage = SceneFile::parse_number(&o["coverage"], layer.coverage).clamp(0., 1.);
+        layer.cloud_type = SceneFile::parse_number(&o["cloud_type"], layer.cloud_type).clamp(0., 1.);
+        layer.weather_size = SceneFile::parse_number(&o["weather_size"], layer.weather_size);
+        layer.shape_size = SceneFile::parse_number(&o["shape_size"], layer.shape_size);
+        layer.detail_size = SceneFile::parse_number(&o["detail_size"], layer.detail_size);
+        layer.erosion = SceneFile::parse_number(&o["erosion"], layer.erosion).clamp(0., 1.);
+        if o["mapping"].as_str() == Some("global") {
+            let planet = Planet { radius: SceneFile::parse_number(&o["earth_radius"], EARTH_RADIUS) };
+            // Planetary weather: systems hundreds of kilometres across, unless told otherwise.
+            if o.get("weather_size").is_none() {
+                layer.weather_size = 400_000.;
+            }
+            let mut global = GlobalNubis::new(layer, planet.radius);
+            global.map_size = SceneFile::parse_int(&o["map_size"], global.map_size).max(2);
+            global.climate = o["climate"].as_bool().unwrap_or(true);
+            global.pole = SceneFile::parse_vec3_def(o, "pole", global.pole).normalize();
+            return create_volume(SceneFile::shell(&planet, top), Arc::new(GlobalMapping { planet, field: Arc::new(global) }),
+                SceneFile::parse_scattering(o, 0.85));
+        }
+        let bounds = BBox::new(
+            Vector3::new(center.x - extent, base, center.y - extent),
+            Vector3::new(center.x + extent, top, center.y + extent),
+        );
+        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(layer));
+        create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// Cumulus grown by simulating a sunny day (see `procedural::harris_cumulus`):
+    ///
+    /// `{"type": "harris_cumulus", "time": 5400, "cache": "demo/scenes/.cumulus-cache"}`
+    ///
+    /// The simulation runs for `time` seconds (default 90 minutes), continuing from the latest
+    /// state saved in `cache` (a directory) at or before it, and saves its own there, so an
+    /// animation's frames simulate only from one to the next. Its grid is `grid` ([x, y, z]
+    /// cells; x and z powers of two; default [64, 44, 64]) of `cell` metres (100), periodic
+    /// across the ground.
+    ///
+    /// The day is the ARM case's (Oklahoma, 21 June 1997), from 09:30 as its first cumulus
+    /// form (`"sounding": "arm_mid_morning"`, the default, `start` 14400 s after 05:30), or
+    /// from dawn (`"sounding": "arm"`, `start` 0), or a `sounding` of your own ({"height": [m],
+    /// "theta": [K], "water": [g/kg], "surface_pressure": Pa}). The ground's fluxes follow the
+    /// case's day unless steady `heat_flux` and `moisture_flux` (W/m²) are given; `large_scale`
+    /// false drops the air mass's slow tendencies. The fluxes vary by `patchiness` (0 to 1) in
+    /// patches `patch_size` across that change over `patch_period` seconds; `wind` ([x, z] m/s,
+    /// default [10, 0]) carries everything; `friction_velocity` (m/s) stirs the air near the
+    /// ground; `vorticity` (confinement); `max_step` (s); `seed`.
+    ///
+    /// `state` renders a state saved by `CloudSimulation::save` instead of simulating.
+    /// `follow_wind` renders the clouds as seen drifting with the wind, so in an animation
+    /// they stay in view as they grow and dissipate, rather than crossing the sky.
+    ///
+    /// For rendering: `droplet_radius` (µm, default 10; sets the extinction per gram of
+    /// water, and the diffraction), `detail_size`, `erosion` (0 to 1) and `edge` (g/kg of
+    /// cloud water the detail can erode), `repeat` (tile the grid across the sky, default
+    /// true) out to `extent` from `center` ([x, z]), fading over its outer `fade`, and
+    /// `mapping` as for `nubis_clouds`.
+    pub fn parse_harris_cumulus(o: &Value) -> SceneObject {
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let mut p = SimulationParams::default();
+        if let Some(g) = o["grid"].as_array() {
+            let n = |i: usize, d: usize| g.get(i).and_then(|v| v.as_u64()).map_or(d, |v| v as usize);
+            p.size = (n(0, p.size.0), n(1, p.size.1), n(2, p.size.2));
+        }
+        p.cell = num("cell", p.cell);
+        // Steady fluxes in place of the ARM case's day, if given.
+        if o.get("heat_flux").is_some() || o.get("moisture_flux").is_some() {
+            p.forcing = Forcing::steady(num("heat_flux", 200.), num("moisture_flux", 300.));
+        }
+        if o["large_scale"].as_bool() == Some(false) {
+            p.forcing.theta_tendency = Profile::constant(0.);
+            p.forcing.water_tendency = Profile::constant(0.);
+        }
+        p.patchiness = num("patchiness", p.patchiness).clamp(0., 1.);
+        p.patch_size = num("patch_size", p.patch_size);
+        p.patch_period = num("patch_period", p.patch_period);
+        p.wind = SceneFile::parse_vec2_def(o, "wind", p.wind);
+        p.friction_velocity = num("friction_velocity", p.friction_velocity).max(0.);
+        p.vorticity = num("vorticity", p.vorticity).max(0.);
+        p.max_step = num("max_step", p.max_step);
+        p.seed = SceneFile::parse_seed(o).unwrap_or(0);
+        p.start = num("start", p.start);
+        if o["sounding"].as_str() == Some("arm") {
+            // The full day, from dawn.
+            p.sounding = Sounding::arm();
+            p.start = num("start", 0.);
+        } else if let Some(name) = o["sounding"].as_str() {
+            assert!(name == "arm_mid_morning", "harris_cumulus: unknown sounding '{}': expected arm, arm_mid_morning or a profile", name);
+        } else if let Some(sounding) = o.get("sounding") {
+            let list = |k: &str| -> Vec<f64> {
+                sounding[k].as_array().unwrap_or_else(|| panic!("harris_cumulus: the sounding needs \"{}\"", k))
+                    .iter().map(|v| v.as_f64().unwrap()).collect()
+            };
+            let height = list("height");
+            p.sounding = Sounding {
+                theta: Profile::new(&height, &list("theta")),
+                water: Profile::new(&height, &list("water").iter().map(|w| w * 1e-3).collect::<Vec<f64>>()),
+                surface_pressure: SceneFile::parse_number(&sounding["surface_pressure"], 1e5),
+            };
+        }
+        let time = num("time", 5400.).max(0.);
+        let cache = o["cache"].as_str().map(std::path::PathBuf::from);
+        // A saved state, as is (eg. from the `harris_day` diagnostic), or a simulation.
+        let sim = match o["state"].as_str() {
+            Some(path) => CloudSimulation::load(p.clone(), std::path::Path::new(path))
+                .unwrap_or_else(|e| panic!("harris_cumulus: couldn't load the state {}: {}", path, e)),
+            None => CloudSimulation::cached(p.clone(), time, cache.as_deref()),
+        };
+        let center = SceneFile::parse_vec2_def(o, "center", Vector2::new(0., 0.));
+        let mut c = HarrisCumulus::new(&sim, num("droplet_radius", 10.), center);
+        c.detail_size = num("detail_size", c.detail_size).max(1e-3);
+        c.erosion = num("erosion", c.erosion).clamp(0., 1.);
+        c.edge = num("edge", c.edge * 1000.) / 1000.;
+        c.repeat = o["repeat"].as_bool().unwrap_or(c.repeat);
+        if o["follow_wind"].as_bool() == Some(true) {
+            // Seen drifting with the air: the clouds stay where they are, growing and dying in
+            // place, as in a time-lapse that tracks them.
+            c.origin -= c.drift;
+            c.drift = Vector3::zeros();
+        }
+        c.extent = num("extent", c.extent);
+        c.fade = num("fade", c.fade).clamp(0., 1.);
+        let (nx, ny, nz) = p.size;
+        let half = Vector3::new(nx as f64, 0., nz as f64) * p.cell / 2.;
+        let bounds = if c.repeat {
+            BBox::new(Vector3::new(center.x - c.extent, 0., center.y - c.extent), Vector3::new(center.x + c.extent, ny as f64 * p.cell, center.y + c.extent))
+        } else {
+            BBox::new(Vector3::new(center.x, 0., center.y) - half, Vector3::new(center.x, ny as f64 * p.cell, center.y) + half)
+        };
+        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(c));
+        create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// A layer of altocumulus as Rayleigh-Bénard convection cells (see
+    /// `procedural::benard_altocumulus`), filling `extent` either side of `center` ([x, z]):
+    ///
+    /// `{"type": "benard_altocumulus", "base": 4000, "thickness": 200, "seed": 0}`
+    ///
+    /// with `density` (extinction in the densest cloud), `cell_size` (between cells' centres;
+    /// default 2.5 times the thickness), `coverage` (how far each cloudlet reaches towards its
+    /// cell's edge: around 0.5 broken, 1 joined), `regularity` (0 to 1), `anisotropy` (cells
+    /// this many times longer along the wind) and `wind_direction` ([x, z]), `undulation`
+    /// (0 to 1) and `wavelength` (waves across the wind), `patchiness` (0 to 1) and
+    /// `patch_size`, `warp` (in cells), `lumpiness` (0 to 1), `detail_size` and `erosion` (0 to
+    /// 1), `fade` (the fraction of `extent` over which the layer fades out), and
+    /// `particle_radius` (µm, for `diffraction`). `mapping` as for `nubis_clouds` (`"regional"` or `"flat"`).
+    pub fn parse_benard_altocumulus(o: &Value) -> SceneObject {
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let mut c = BenardAltocumulus::new(num("base", 4000.), num("thickness", 200.).max(1.), SceneFile::parse_seed(o).unwrap_or(0));
+        c.max_density = num("density", c.max_density);
+        c.cell_size = num("cell_size", c.cell_size).max(1.);
+        c.coverage = num("coverage", c.coverage).max(0.);
+        c.regularity = num("regularity", c.regularity).clamp(0., 1.);
+        c.anisotropy = num("anisotropy", c.anisotropy).max(0.1);
+        c.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", c.wind_direction).normalize();
+        c.undulation = num("undulation", c.undulation).clamp(0., 1.);
+        c.wavelength = num("wavelength", c.wavelength).max(1.);
+        c.patchiness = num("patchiness", c.patchiness).clamp(0., 1.);
+        c.patch_size = num("patch_size", c.patch_size).max(1.);
+        c.warp = num("warp", c.warp).max(0.);
+        c.lumpiness = num("lumpiness", c.lumpiness).clamp(0., 1.);
+        c.detail_size = num("detail_size", c.detail_size).max(1e-3);
+        c.erosion = num("erosion", c.erosion).clamp(0., 1.);
+        c.extent = num("extent", c.extent);
+        c.center = SceneFile::parse_vec2_def(o, "center", c.center);
+        c.fade = num("fade", c.fade).clamp(0., 1.);
+        c.particle_radius = o["particle_radius"].as_f64();
+        let bounds = BBox::new(
+            Vector3::new(c.center.x - c.extent, c.bottom(), c.center.y - c.extent),
+            Vector3::new(c.center.x + c.extent, c.top(), c.center.y + c.extent),
+        );
+        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(c));
+        create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// Rain or virga falling from a cloud's base (see `procedural::precipitation`), within
+    /// `radius` of `center` ([x, z]):
+    ///
+    /// `{"type": "precipitation", "base": 1500, "rain_rate": 8, "coverage": 0.5, "seed": 0}`
+    ///
+    /// with `ground`, `cell_size` (of the shafts), `fall_depth` (m to 1/e by evaporation:
+    /// virga; by default it all reaches the ground), `shear` (drift per metre fallen) and
+    /// `wind_direction` ([x, z]), `streak_size` and `streakiness` (0 to 1), and `fade` (the
+    /// fraction of `radius` over which it fades out). The phase function defaults to `g` 0.85;
+    /// `"rainbow": true` gives the drops' bows in sunlight.
+    pub fn parse_precipitation(o: &Value) -> SceneObject {
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let mut r = Precipitation::new(num("base", 1500.), SceneFile::parse_seed(o).unwrap_or(0));
+        r.ground = num("ground", r.ground);
+        r.rain_rate = num("rain_rate", r.rain_rate).max(0.);
+        r.cell_size = num("cell_size", r.cell_size).max(1.);
+        r.coverage = num("coverage", r.coverage).clamp(0., 1.);
+        r.fall_depth = num("fall_depth", r.fall_depth).max(1.);
+        r.shear = num("shear", r.shear);
+        r.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", r.wind_direction).normalize();
+        r.streak_size = num("streak_size", r.streak_size).max(1.);
+        r.streakiness = num("streakiness", r.streakiness).clamp(0., 1.);
+        r.center = SceneFile::parse_vec2_def(o, "center", r.center);
+        r.radius = num("radius", r.radius).max(1.);
+        r.fade = num("fade", r.fade).clamp(0., 1.);
+        // Drifting downwind as it falls: the bounds reach from where it leaves the cloud to
+        // where it lands.
+        let reach = r.radius + r.drift().abs();
+        let bounds = BBox::new(
+            Vector3::new(r.center.x - reach, r.ground, r.center.y - reach),
+            Vector3::new(r.center.x + reach, r.base, r.center.y + reach),
+        );
+        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(r));
+        create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// Mammatus under an anvil (see `procedural::mammatus`), filling `extent` either side of
+    /// `center` ([x, z]):
+    ///
+    /// `{"type": "mammatus", "base": 5000, "thickness": 2500, "edge_direction": [x, z],
+    /// "edge_distance": 0, "seed": 0}`
+    ///
+    /// The anvil covers the sky where the distance along `edge_direction` is under
+    /// `edge_distance`, give or take `edge_raggedness`, thinning over `edge_taper`. The pouches:
+    /// `pouch_size` (apart), `pouch_depth`, `coverage` (fraction of cells with one), `regularity`, `clustering` (0 to 1)
+    /// and `cluster_size`,
+    /// `pouch_band` (how far in from the edge they hang deepest), `edge_sharpness` and
+    /// `roughness` (m) and `detail_size`. Extinctions: `anvil_density` and `pouch_density`.
+    /// `mapping` as for `nubis_clouds`.
+    pub fn parse_mammatus(o: &Value) -> SceneObject {
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let mut m = Mammatus::new(SceneFile::parse_seed(o).unwrap_or(0));
+        m.base = num("base", m.base);
+        m.thickness = num("thickness", m.thickness).max(1.);
+        m.anvil_density = num("anvil_density", m.anvil_density).max(0.);
+        m.pouch_density = num("pouch_density", m.pouch_density).max(0.);
+        m.pouch_size = num("pouch_size", m.pouch_size).max(1.);
+        m.pouch_depth = num("pouch_depth", m.pouch_depth).max(0.);
+        m.coverage = num("coverage", m.coverage).clamp(0., 1.);
+        m.regularity = num("regularity", m.regularity).clamp(0., 1.);
+        m.clustering = num("clustering", m.clustering).clamp(0., 1.);
+        m.cluster_size = num("cluster_size", m.cluster_size).max(1.);
+        m.edge_sharpness = num("edge_sharpness", m.edge_sharpness).max(1.);
+        m.roughness = num("roughness", m.roughness).max(0.);
+        m.detail_size = num("detail_size", m.detail_size).max(1.);
+        m.edge_direction = SceneFile::parse_vec2_def(o, "edge_direction", m.edge_direction).normalize();
+        m.edge_distance = num("edge_distance", m.edge_distance);
+        m.edge_raggedness = num("edge_raggedness", m.edge_raggedness).max(0.);
+        m.edge_taper = num("edge_taper", m.edge_taper).max(1.);
+        m.pouch_band = num("pouch_band", m.pouch_band).max(1.);
+        let center = SceneFile::parse_vec2_def(o, "center", Vector2::zeros());
+        let extent = num("extent", 60_000.);
+        let bounds = BBox::new(
+            Vector3::new(center.x - extent, m.bottom(), center.y - extent),
+            Vector3::new(center.x + extent, m.top(), center.y + extent),
+        );
+        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(m));
+        create_volume(bounds, field, SceneFile::parse_scattering(o, 0.8))
+    }
+
+    /// Mountains (see `procedural::terrain`): a meshed heightfield of ridged noise around a
+    /// massif, lying on the planet, with snow, rock and vegetation:
+    ///
+    /// `{"type": "mountains", "center": [x, z], "extent": 30000, "resolution": 768,
+    /// "peak": [x, z], "peak_height": 3200, "peak_radius": 7000, "seed": 0}`
+    ///
+    /// with `relief` and `feature_size` (the ridges), `plains` (relief of the plains around),
+    /// `base` (the height of its foot: below zero for an island in a `sea`),
+    /// `snowline` and `treeline` (m), the colours `snow`, `rock`, `forest` and `grass`, and
+    /// `"mapping": "flat"` for flat ground rather than the planet's.
+    pub fn parse_terrain(o: &Value) -> SceneObject {
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let seed = SceneFile::parse_seed(o).unwrap_or(0);
+        let flat = o["mapping"].as_str() == Some("flat");
+        let mut t = Mountains::new(seed);
+        t.center = SceneFile::parse_vec2_def(o, "center", t.center);
+        t.extent = num("extent", t.extent).max(1.);
+        t.resolution = SceneFile::parse_int(&o["resolution"], t.resolution).max(2);
+        t.peak = SceneFile::parse_vec2_def(o, "peak", t.center);
+        t.peak_height = num("peak_height", t.peak_height);
+        t.peak_radius = num("peak_radius", t.peak_radius).max(1.);
+        t.relief = num("relief", t.relief);
+        t.feature_size = num("feature_size", t.feature_size).max(1.);
+        t.plains = num("plains", t.plains);
+        t.base = num("base", t.base);
+        let radius = if flat { None } else { Some(SceneFile::parse_number(&o["earth_radius"], EARTH_RADIUS)) };
+        t.planet_radius = radius;
+        let mut m = TerrainMaterial::new(seed);
+        m.planet_radius = radius;
+        m.snowline = num("snowline", m.snowline);
+        m.treeline = num("treeline", m.treeline);
+        m.snow = SceneFile::parse_color_def(o, "snow", m.snow);
+        m.rock = SceneFile::parse_color_def(o, "rock", m.rock);
+        m.forest = SceneFile::parse_color_def(o, "forest", m.forest);
+        m.grass = SceneFile::parse_color_def(o, "grass", m.grass);
+        SceneObject {
+            geometry: Box::new(SmoothMesh::from_indexed(&[t.mesh()])),
+            medium: Box::new(Solid { m: Box::new(m) }),
+        }
+    }
+
+    /// Lenticular clouds over the lee waves of a ridge (see `procedural::lenticular`):
+    ///
+    /// `{"type": "lenticular", "ridge": [x, z], "ridge_length": 6000, "wind_direction": [x, z],
+    /// "layers": [{"height": 4000, "depth": 320, "deficit": 190}, ...], "seed": 0}`
+    ///
+    /// Each layer is a moist layer: its middle's height, its depth and the lift needed to
+    /// saturate its middle (all in metres); each makes a lens on every crest the waves lift it
+    /// high enough. The waves: `wavelength`, `amplitude` (the largest lift), `decay` (downstream
+    /// distance to 1/e), `first_crest` (in wavelengths downstream of the ridge), `falloff` and
+    /// `spread` (how they fade beyond the ridge's ends), `bend` and `bend_size` (how far the
+    /// crests wander). The air: `humidity_variation` and `humidity_size`, `strata` and
+    /// `strata_spacing`, `roughness` and `detail_size` (all lifts in metres),
+    /// `condensation_rate` (g/kg per km of lift), `droplet_radius` (µm), and `wind_speed` and
+    /// `time` to move the fine structure through the standing clouds. `mapping` as for
+    /// `nubis_clouds`.
+    pub fn parse_lenticular(o: &Value) -> SceneObject {
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let layers = match o["layers"].as_array() {
+            None => Lenticular::default_layers(),
+            Some(ls) => ls.iter().map(|l| MoistLayer {
+                height: SceneFile::parse_number(&l["height"], 4000.),
+                depth: SceneFile::parse_number(&l["depth"], 300.).max(1.),
+                deficit: SceneFile::parse_number(&l["deficit"], 200.),
+            }).collect(),
+        };
+        let mut c = Lenticular::new(layers, SceneFile::parse_seed(o).unwrap_or(0));
+        c.ridge = SceneFile::parse_vec2_def(o, "ridge", c.ridge);
+        c.ridge_length = num("ridge_length", c.ridge_length).max(0.);
+        c.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", c.wind_direction).normalize();
+        c.wind_speed = num("wind_speed", c.wind_speed);
+        c.wavelength = num("wavelength", c.wavelength).max(100.);
+        c.amplitude = num("amplitude", c.amplitude).max(0.);
+        c.decay = num("decay", c.decay).max(1.);
+        c.first_crest = num("first_crest", c.first_crest);
+        c.falloff = num("falloff", c.falloff).max(1.);
+        c.spread = num("spread", c.spread).max(0.);
+        c.bend = num("bend", c.bend).max(0.);
+        c.bend_size = num("bend_size", c.bend_size).max(1.);
+        c.humidity_variation = num("humidity_variation", c.humidity_variation).max(0.);
+        c.humidity_size = num("humidity_size", c.humidity_size).max(1.);
+        c.strata = num("strata", c.strata).max(0.);
+        c.strata_spacing = num("strata_spacing", c.strata_spacing).max(1.);
+        c.roughness = num("roughness", c.roughness).max(0.);
+        c.detail_size = num("detail_size", c.detail_size).max(1.);
+        c.condensation_rate = num("condensation_rate", c.condensation_rate).max(0.);
+        c.droplet_radius = num("droplet_radius", c.droplet_radius).max(0.5);
+        c.time = num("time", c.time);
+        // The waves reach no cloud once the decayed amplitude is below the least deficit.
+        let least = c.layers.iter().map(|l| l.deficit).fold(f64::INFINITY, f64::min) - c.humidity_variation - c.strata - c.roughness;
+        let reach = if least > 0. && c.amplitude > least { c.decay * (c.amplitude / least).ln() } else { 10. * c.decay };
+        let (s0, s1) = (-0.3 * c.wavelength, reach + c.wavelength);
+        let half = c.ridge_length + 4. * (c.falloff + c.spread * s1);
+        let w = c.wind_direction;
+        let corners = [(s0, -half), (s0, half), (s1, -half), (s1, half)]
+            .map(|(s, a)| Vector2::new(c.ridge.x + s * w.x - a * w.y, c.ridge.y + s * w.y + a * w.x));
+        let lo = corners.iter().fold(Vector2::repeat(f64::INFINITY), |m, p| m.inf(p));
+        let hi = corners.iter().fold(Vector2::repeat(f64::NEG_INFINITY), |m, p| m.sup(p));
+        let bounds = BBox::new(Vector3::new(lo.x, c.bottom(), lo.y), Vector3::new(hi.x, c.top(), hi.y));
+        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(c));
+        create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// Bounds of the shell of atmosphere up to `top` around the whole of `planet`.
+    pub fn shell(planet: &Planet, top: f64) -> BBox {
+        let r = Vector3::repeat(planet.radius + top);
+        BBox::new(planet.center() - r, planet.center() + r)
+    }
+
+    /// A layer of cirrus by Hogan and Kew's fallstreak model (see
+    /// `procedural::hogan_kew_cirrus`), filling `extent` either side of `center` ([x, z]):
+    ///
+    /// `{"type": "hogan_kew_cirrus", "genus": "cirrus" | "cirrostratus" | "cirrocumulus",
+    /// "base": 8000, "top": 10000, "extent": 100000, "wind_direction": [x, z], "seed": 0}`
+    ///
+    /// The genus sets the rest, each of which can be overridden: `coverage`, `cell_size`,
+    /// `spectral_slope`, `anisotropy` (the generating cells); `density`, `generating_depth`,
+    /// `fall_depth`, `sublimation` (the ice); `shear`, `generating_wind`, `fall_speed`,
+    /// `fall_speed_spread`, `veer` (degrees the wind turns down through the layer: hooks) (the
+    /// fallstreaks); `flow_size` and `flow` (the large-scale flow that curves them);
+    /// `fibre_width` and `fibres` (0 to 1: how wispy); `edge`,
+    /// `turbulence_size`, `turbulence`; `patchiness` and `patch_size`; `particle_radius` (µm, at
+    /// the generating level), `particle_growth` (relative growth by the base) and `young_size`
+    /// (relative size at the cells' edges, where ice is newest), for `diffraction`; `fade`, the fraction of
+    /// `extent` over which the layer fades out at its edges (default 0.3); and `time` and
+    /// `evolution_period` (seconds) to animate.
+    /// `"mapping": "global"` puts the layer round the whole planet (`GlobalCirrus`), its streaks
+    /// following the planet's winds (`GlobalWind`: bands by latitude about the `pole`, plus
+    /// `eddies` of strength relative to the jets, `eddy_size` across); `"regional"` (the
+    /// default) and `"flat"` as for `nubis_clouds`.
+    /// The phase function defaults to `g` 0.75, for ice crystals; `"halos"` adds sun dogs and
+    /// halos (see `SceneFile::parse_halos`).
+    pub fn parse_hogan_kew_cirrus(o: &Value) -> SceneObject {
+        let genus = match o["genus"].as_str() {
+            None | Some("cirrus") => CirrusGenus::Cirrus,
+            Some("cirrostratus") => CirrusGenus::Cirrostratus,
+            Some("cirrocumulus") => CirrusGenus::Cirrocumulus,
+            Some(g) => panic!("Unknown cirrus genus '{}': expected cirrus, cirrostratus or cirrocumulus", g),
+        };
+        let mut f = CirrusField::new(genus);
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        f.base = num("base", f.base);
+        f.top = num("top", f.top);
+        f.coverage = num("coverage", f.coverage).clamp(0., 1.);
+        f.cell_size = num("cell_size", f.cell_size);
+        f.spectral_slope = num("spectral_slope", f.spectral_slope);
+        f.anisotropy = num("anisotropy", f.anisotropy);
+        f.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", f.wind_direction);
+        f.seed = SceneFile::parse_seed(o).unwrap_or(0);
+        let (base, top) = (f.base, f.top);
+        let generating = (f.cell_size, f.spectral_slope, f.coverage, f.seed);
+        let mut c = HoganKewCirrus::new(f);
+        c.max_density = num("density", c.max_density);
+        c.generating_depth = num("generating_depth", c.generating_depth);
+        c.fall_depth = num("fall_depth", c.fall_depth);
+        c.sublimation = num("sublimation", c.sublimation);
+        c.shear = num("shear", c.shear);
+        c.generating_wind = num("generating_wind", c.generating_wind);
+        c.fall_speed = num("fall_speed", c.fall_speed);
+        c.fall_speed_spread = num("fall_speed_spread", c.fall_speed_spread).clamp(0., 0.95);
+        c.edge = num("edge", c.edge).max(1e-9);
+        c.veer = num("veer", c.veer.to_degrees()).to_radians();
+        c.flow_size = num("flow_size", c.flow_size);
+        c.flow = num("flow", c.flow).max(0.);
+        c.fibre_width = num("fibre_width", c.fibre_width).max(1.);
+        c.fibres = num("fibres", c.fibres).clamp(0., 1.);
+        c.turbulence_size = num("turbulence_size", c.turbulence_size);
+        c.turbulence = num("turbulence", c.turbulence);
+        c.time = num("time", c.time);
+        c.evolution_period = num("evolution_period", c.evolution_period);
+        c.patchiness = num("patchiness", c.patchiness).clamp(0., 1.);
+        c.particle_radius = num("particle_radius", c.particle_radius);
+        c.particle_growth = num("particle_growth", c.particle_growth);
+        c.young_size = num("young_size", c.young_size).clamp(0.05, 1.);
+        c.patch_size = num("patch_size", c.patch_size);
+        let extent = num("extent", 100000.);
+        let center = SceneFile::parse_vec2_def(o, "center", Vector2::new(0., 0.));
+        c.extent = extent;
+        c.center = center;
+        c.fade = num("fade", c.fade).clamp(0., 1.);
+        let bounds = BBox::new(
+            Vector3::new(center.x - extent, base, center.y - extent),
+            Vector3::new(center.x + extent, top, center.y + extent),
+        );
+        let (bounds, field): (BBox, Arc<dyn DensityField>) = if o["mapping"].as_str() == Some("global") {
+            let planet = Planet { radius: SceneFile::parse_number(&o["earth_radius"], EARTH_RADIUS) };
+            let pole = SceneFile::parse_vec3_def(o, "pole", Vector3::z()).normalize();
+            let (cell, slope, coverage, seed) = generating;
+            let mut global = GlobalCirrus::new(c, cell, slope, coverage, seed, planet.radius, pole);
+            global.wind.eddy_size = num("eddy_size", global.wind.eddy_size);
+            global.wind.eddies = num("eddies", global.wind.eddies);
+            (SceneFile::shell(&planet, top), Arc::new(GlobalMapping { planet, field: Arc::new(global) }))
+        } else {
+            SceneFile::curved(o, bounds, Arc::new(c))
+        };
+        // With diffraction, the phase function is that of the rest: refraction and reflection.
+        let g = if o.get("diffraction").is_some_and(|d| d != &Value::Bool(false)) { 0.5 } else { 0.75 };
+        create_volume(bounds, field, SceneFile::parse_scattering(o, g))
+    }
+
+    /// A cloud layer's field and bounds, curved round the planet (`planet::PlanetMapping`)
+    /// unless `"curved": false`: its heights become altitudes above a sphere of
+    /// `earth_radius` (default the Earth's) beneath the origin, so that it drops away with
+    /// distance, and far enough off is hidden below the horizon, as on a planet.
+    pub fn curved(o: &Value, bounds: BBox, field: Arc<dyn DensityField>) -> (BBox, Arc<dyn DensityField>) {
+        if o["curved"].as_bool() == Some(false) || o["mapping"].as_str() == Some("flat") {
+            return (bounds, field);
+        }
+        let planet = Planet { radius: SceneFile::parse_number(&o["earth_radius"], EARTH_RADIUS) };
+        (planet.bounds_of(&bounds), Arc::new(PlanetMapping { planet, field }))
     }
 
     pub fn parse_box_terrain(o: &Value) -> SceneObject {
@@ -1196,7 +1885,7 @@ impl SceneFile {
             _ => NoiseType::Perlin, // Default to Perlin
         };
         
-        match noise_type {
+        let texture = match noise_type {
             NoiseType::Perlin => {
                 NoiseTexture::new_perlin(
                     base_material,
@@ -1243,7 +1932,17 @@ impl SceneFile {
                     octaves,
                 )
             },
+        };
+        match SceneFile::parse_seed(o) {
+            Some(seed) => texture.seeded(seed),
+            None => texture,
         }
+    }
+
+    /// An object's optional `"seed"`, choosing its procedural pattern. Without one, noise uses
+    /// Perlin's reference table (and Worley seed 42), as before seeds existed.
+    pub fn parse_seed(o: &Value) -> Option<u64> {
+        o.get("seed").map(|s| SceneFile::parse_int(s, 0) as u64)
     }
 
     pub fn parse_medium_ref(key: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Option<Box<dyn Medium + Sync + Send>> {
@@ -1384,6 +2083,10 @@ impl SceneFile {
                     )
                 },
             };
+            let noise_medium = match SceneFile::parse_seed(o) {
+                Some(seed) => noise_medium.seeded(seed),
+                None => noise_medium,
+            };
             
             return Some(Box::new(noise_medium));
         }
@@ -1417,6 +2120,42 @@ impl SceneFile {
         l
     }
 
+    /// The scene's directional light: `{"direction": [x, y, z], "color": colour, "intensity": E,
+    /// "angular_radius": degrees}`, with irradiance `color` × `intensity` (by default white
+    /// and one) on a surface facing it, `direction` pointing towards it, and a visible disc of
+    /// the given radius (default the sun's, 0.2666°). With a skysphere in `objects`, the sun is the
+    /// sky's: it takes the sky's `sun_direction` (so `direction` is not allowed), `intensity`
+    /// is its irradiance above the atmosphere, and it is reddened by the sky's atmosphere on
+    /// its way down to each point, according to the point's altitude (scene y, in metres), so
+    /// it is whiter at cloud level than on the ground, and sets orange as the sky does.
+    pub fn parse_sun(v: &Value, objects: &[Value]) -> Option<Sun> {
+        if v.is_null() {
+            return None;
+        }
+        let irradiance = SceneFile::parse_color_def(v, "color", Color::white())
+            * SceneFile::parse_number(&v["intensity"], 1.);
+        match objects.iter().find(|o| o["type"].as_str() == Some("skysphere")) {
+            Some(sky) => {
+                assert!(v.get("direction").is_none(),
+                    "The sun follows the skysphere's sun_direction; remove the sun's \"direction\"");
+                let sky = parse_sky_material(sky);
+                let direction = sky.sun_direction();
+                Some(Sun { atmosphere: Some(Arc::new(sky)), ..Sun::new(direction, irradiance) })
+            },
+            None => {
+                let d = v.get("direction").map(SceneFile::parse_vec3)
+                    .expect("A sun without a skysphere needs a \"direction\"");
+                assert!(d.norm() > 0., "The sun's direction must not be zero");
+                Some(Sun::new(d, irradiance))
+            },
+        }.map(|mut sun| {
+            if let Some(r) = v.get("angular_radius") {
+                sun.angular_radius = SceneFile::parse_number(r, 0.).to_radians().max(1e-6);
+            }
+            sun
+        })
+    }
+
     /// A colour (black if absent), or `{"type": "gradient", "bottom": colour, "top": colour}`.
     pub fn parse_background(v: &Value) -> Background {
         match v {
@@ -1448,6 +2187,13 @@ impl SceneFile {
             Vector3::new(1000., 1000., 1000.),
         );
 
+        let sun = SceneFile::parse_sun(&s.sun, &s.objects);
+        // The camera's view plane spans tan(angle) over the image's height.
+        let pixel_angle = s.camera["angle"].as_f64().map_or(0., |a| a.tan() / SceneFile::parse_int(&s.height, 480) as f64);
+        // Aerial perspective, unless the skysphere turns it off.
+        let atmosphere = s.objects.iter()
+            .find(|o| o["type"].as_str() == Some("skysphere") && o["aerial_perspective"].as_bool() != Some(false))
+            .map(|o| Arc::new(parse_sky_material(o)));
         let geometries = GeometryLibrary::new(s.geometries);
         geometries.preload(&s.objects);
         let objects = SceneFile::parse_objects(s.objects, &s.materials, &s.media, &geometries);
@@ -1485,8 +2231,14 @@ impl SceneFile {
             max_bounding,
             black_threshold: SceneFile::parse_number(&s.black_threshold, 1e-7f64),
             air_medium: SceneFile::parse_air(&s.air),
-            output: OutputOpts::parse(&s.output),
+            output: OutputOpts {
+                // The camera's view plane spans tan(angle) over the image's height.
+                pixel_angle,
+                ..OutputOpts::parse(&s.output)
+            },
             area_lights,
+            sun,
+            atmosphere,
         }
     }
 
@@ -1727,6 +2479,26 @@ mod tests {
         let scaled = lib.mesh(&objects[3]);
         assert!(!Arc::ptr_eq(&a, &scaled));
         assert!((scaled.bounds().max.x - 2.).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_parse_phase() {
+        use serde_json::json;
+        assert_eq!(SceneFile::parse_phase(&json!({}), 0.3), PhaseFunction::HenyeyGreenstein { g: 0.3 });
+        assert_eq!(SceneFile::parse_phase(&json!({ "g": -0.2 }), 0.3), PhaseFunction::HenyeyGreenstein { g: -0.2 });
+        assert_eq!(SceneFile::parse_phase(&json!({ "droplet_diameter": 12 }), 0.3), PhaseFunction::water_droplets(12.));
+    }
+
+    #[test]
+    #[should_panic(expected = "not both")]
+    fn test_parse_phase_rejects_both() {
+        SceneFile::parse_phase(&serde_json::json!({ "g": 0.5, "droplet_diameter": 12 }), 0.);
+    }
+
+    #[test]
+    fn test_parse_seed() {
+        assert_eq!(SceneFile::parse_seed(&serde_json::json!({ "type": "noise" })), None);
+        assert_eq!(SceneFile::parse_seed(&serde_json::json!({ "seed": 9 })), Some(9));
     }
 
     #[test]

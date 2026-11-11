@@ -1,0 +1,28 @@
+{
+  "width": 480,
+  "height": 240,
+  "supersamples": 16,
+  "samples_per_chunk": 2,
+  "max_depth": 32,
+  "shadow_bias": 1,
+  "path_termination": "russian_roulette",
+  "materials": {
+    "GROUND": { "type": "lambertian", "albedo": [0.06, 0.09, 0.15] }
+  },
+  "camera": {
+    "location": [0, 400000, -1500000],
+    "lookat": [0, -200000, 1000000],
+    "up": [0, 1, 0],
+    "angle": 0.9,
+    "aperture": 0
+  },
+  "sun": { "intensity": 6 },
+  "objects": [
+    { "type": "planet", "material": "GROUND" },
+    { "type": "skysphere", "sun_direction": [0.6, 0.3, 1] },
+    { "type": "nubis_clouds", "mapping": "global", "base": 1500, "top": 4000,
+      "coverage": 0.55, "density": 0.03, "albedo": [0.99, 0.99, 0.99], "g": 0.85,
+      "similarity_after": 2, "seed": 4, "map_size": 512 },
+    { "type": "hogan_kew_cirrus", "mapping": "global", "genus": "cirrus", "seed": 3 }
+  ]
+}

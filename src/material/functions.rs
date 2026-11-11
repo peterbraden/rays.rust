@@ -123,8 +123,16 @@ pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) ->
     for light in &s.lights {
         let light_vec = light.position - intersection.point;
         let shadow_ray = Ray {ro: intersection.point, rd: light_vec.normalize()};
-        if !s.objects.occluded(&shadow_ray, light_vec.norm(), f64::MIN_POSITIVE) {
-            direct = direct + diffuse(albedo, intersection, &light_vec, light);
+        let transmitted = s.objects.transmittance(&shadow_ray, light_vec.norm(), f64::MIN_POSITIVE);
+        if transmitted > 0. {
+            direct = direct + diffuse(albedo, intersection, &light_vec, light) * transmitted;
+        }
+    }
+    if let Some(sun) = &s.sun {
+        let cos = sun.direction.dot(&intersection.normal);
+        if cos > 0. {
+            let transmitted = sun.transmittance_from(&intersection.point, s);
+            direct = direct + albedo * sun.irradiance_at(&intersection.point) * (cos / std::f64::consts::PI * transmitted);
         }
     }
     if s.render.sample_lights {
@@ -152,6 +160,20 @@ pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) ->
 /// "Optimally Combining Sampling Techniques for Monte Carlo Rendering", SIGGRAPH 1995, describe,
 /// would help glossy surfaces and large lights.
 fn sample_area_light(albedo: Color, intersection: &Intersection, s: &Scene) -> Color {
+    let normal = intersection.normal;
+    sample_area_light_with(&intersection.point, s, |w| {
+        let cos_x = w.dot(&normal);
+        if cos_x <= 0. { Color::black() } else { albedo * (cos_x / std::f64::consts::PI) }
+    })
+}
+
+/// One sample of the light arriving at `point` from the area lights, as `sample_area_light`,
+/// with what happens to it there left to `response`: for a unit direction w towards the light,
+/// the fraction of radiance arriving from w that leaves towards the viewer, per steradian (the
+/// BSDF times the cosine at a surface, the phase function times the albedo in a medium). The
+/// estimate is L_e(y, -w) response(w) cos(theta_y) / d^2 / p(y), with a shadow ray only when
+/// that is non-zero.
+pub fn sample_area_light_with(point: &Vector3<f64>, s: &Scene, response: impl Fn(&Vector3<f64>) -> Color) -> Color {
     let n = s.area_lights.len();
     if n == 0 {
         return Color::black();
@@ -161,12 +183,12 @@ fn sample_area_light(albedo: Color, intersection: &Intersection, s: &Scene) -> C
         Some(sample) => sample,
         None => return Color::black(),
     };
-    let to_light = y - intersection.point;
+    let to_light = y - point;
     let d2 = to_light.norm_squared();
     let d = d2.sqrt();
     let w = to_light / d;
-    let cos_x = w.dot(&intersection.normal);
-    if cos_x <= 0. {
+    let response = response(&w);
+    if response == Color::black() {
         return Color::black();
     }
     let emitted = light.medium.material_at(y).emitted(&n_y, &-w);
@@ -174,12 +196,13 @@ fn sample_area_light(albedo: Color, intersection: &Intersection, s: &Scene) -> C
         return Color::black();
     }
     // Stop the shadow ray just short of the light, which would otherwise block itself.
-    let shadow_ray = Ray { ro: intersection.point, rd: w };
-    if s.objects.occluded(&shadow_ray, d * (1. - 1e-6), f64::MIN_POSITIVE) {
+    let shadow_ray = Ray { ro: *point, rd: w };
+    let transmitted = s.objects.transmittance(&shadow_ray, d * (1. - 1e-6), f64::MIN_POSITIVE);
+    if transmitted == 0. {
         return Color::black();
     }
     let cos_y = n_y.dot(&-w).abs();
-    albedo * emitted * (cos_x * cos_y / d2 * light.geometry.surface_area() * n as f64 / std::f64::consts::PI)
+    response * emitted * (transmitted * cos_y / d2 * light.geometry.surface_area() * n as f64)
 }
 
 /// Light reflected by a Lambertian surface from a point light, pbrt's convention: `intensity` is

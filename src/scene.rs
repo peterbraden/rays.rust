@@ -1,13 +1,14 @@
 use crate::camera;
 use crate::na::Vector3;
 use crate::scenegraph::SceneGraph;
-use crate::light::Light;
+use crate::light::{Light, Sun};
 use crate::color::Color;
 use crate::shapes::bbox::BBox;
 use crate::participatingmedia::ParticipatingMedium;
 use crate::output::OutputOpts;
 use crate::sceneobject::SceneObject;
 use std::sync::Arc;
+use crate::skysphere::SkyMaterial;
 
 /// What a path contributes when it is cut short. Paths always stop at `max_depth`, or when their
 /// weight falls below the black threshold.
@@ -127,6 +128,11 @@ pub struct Scene {
     /// Emitting objects whose surface can be sampled, for direct lighting (next-event
     /// estimation). The same `Arc`s as in `objects`, so a hit can be recognised as one of them.
     pub area_lights: Vec<Arc<SceneObject>>,
+    /// A directional light, sampled directly by diffuse surfaces and media.
+    pub sun: Option<Sun>,
+    /// The skysphere's atmosphere, if any, for aerial perspective: light from distant objects
+    /// is attenuated and hazed by the air it crosses.
+    pub atmosphere: Option<Arc<SkyMaterial>>,
 }
 
 impl Scene {

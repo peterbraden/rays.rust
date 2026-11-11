@@ -5,6 +5,7 @@
 /// then a transfer function (sRGB by default). HDR formats would write the linear values as
 /// they are. Writers are chosen by file extension.
 use crate::color::Color;
+use crate::glare::Glare;
 use crate::scenefile::SceneFile;
 use serde_json::Value;
 use std::path::Path;
@@ -40,17 +41,23 @@ pub enum Transfer {
 }
 
 /// How linear values are mapped for display, from the scene file's "output" block, eg.
-/// `"output": { "exposure": 1.0, "tonemap": "none", "transfer": "srgb" }`.
+/// `"output": { "exposure": 1.0, "tonemap": "none", "transfer": "srgb", "glare": true }`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OutputOpts {
     pub exposure: f64,
     pub tonemap: ToneMap,
     pub transfer: Transfer,
+    /// The camera's glare, applied to the linear image before it is written (see `glare`):
+    /// `true`, or `{"strength": 0.05, "core": 0.3, "radius": 25, "threshold": 1}`, angles in
+    /// degrees.
+    pub glare: Option<Glare>,
+    /// Angle (radians) across a pixel at the image's centre, from the camera; for glare.
+    pub pixel_angle: f64,
 }
 
 impl Default for OutputOpts {
     fn default() -> OutputOpts {
-        OutputOpts { exposure: 1., tonemap: ToneMap::None, transfer: Transfer::Srgb }
+        OutputOpts { exposure: 1., tonemap: ToneMap::None, transfer: Transfer::Srgb, glare: None, pixel_angle: 0. }
     }
 }
 
@@ -81,6 +88,28 @@ impl OutputOpts {
                 Some("gamma") => Transfer::Gamma(SceneFile::parse_number(&o["gamma"], 2.2)),
                 Some(x) => panic!("Unknown output transfer '{}': expected \"srgb\", \"linear\" or \"gamma\"", x),
             },
+            glare: match o.get("glare") {
+                None | Some(Value::Bool(false)) => None,
+                Some(g) => {
+                    let d = Glare::default();
+                    let degrees = |k: &str, d: f64| SceneFile::parse_number(&g[k], d.to_degrees()).to_radians();
+                    Some(Glare {
+                        strength: SceneFile::parse_number(&g["strength"], d.strength).clamp(0., 1.),
+                        core: degrees("core", d.core).max(1e-6),
+                        radius: degrees("radius", d.radius),
+                        threshold: SceneFile::parse_number(&g["threshold"], d.threshold),
+                    })
+                },
+            },
+            pixel_angle: 0.,
+        }
+    }
+
+    /// The finished linear image: with the camera's glare, if any.
+    pub fn finish(&self, img: &LinearImage) -> LinearImage {
+        match self.glare {
+            Some(g) if self.pixel_angle > 0. => g.apply(img, self.pixel_angle, self.exposure),
+            _ => LinearImage { width: img.width, height: img.height, pixels: img.pixels.clone() },
         }
     }
 
@@ -222,7 +251,7 @@ mod tests {
 
     #[test]
     fn test_exposure_and_tonemap() {
-        let o = OutputOpts { exposure: 2., tonemap: ToneMap::Reinhard, transfer: Transfer::Linear };
+        let o = OutputOpts { exposure: 2., tonemap: ToneMap::Reinhard, transfer: Transfer::Linear, ..OutputOpts::default() };
         // 0.5 * 2 = 1 -> 1 / (1 + 1)
         assert!((o.encode(0.5) - 0.5).abs() < 1e-12);
         // Highlights compress rather than clip.
@@ -241,7 +270,10 @@ mod tests {
     fn test_parse() {
         assert_eq!(OutputOpts::parse(&Value::Null), OutputOpts::default());
         let o = OutputOpts::parse(&serde_json::json!({ "exposure": 0.5, "tonemap": "reinhard", "transfer": "linear" }));
-        assert_eq!(o, OutputOpts { exposure: 0.5, tonemap: ToneMap::Reinhard, transfer: Transfer::Linear });
+        assert_eq!(o, OutputOpts { exposure: 0.5, tonemap: ToneMap::Reinhard, transfer: Transfer::Linear, ..OutputOpts::default() });
+        let g = OutputOpts::parse(&serde_json::json!({ "glare": { "strength": 0.1, "core": 1 } })).glare.unwrap();
+        assert!((g.core - 1f64.to_radians()).abs() < 1e-12 && g.strength == 0.1);
+        assert_eq!(OutputOpts::parse(&serde_json::json!({ "glare": true })).glare, Some(Glare::default()));
     }
 
     #[test]

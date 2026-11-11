@@ -104,6 +104,20 @@ pub trait Geometry: Sync{
     // shapes. Containers of triangles use them to test several at once (see `triangle::may_hit`).
     fn vertices(&self) -> Option<[Vector3<f64>; 3]> { None }
 
+    // Whether intersections are random, as for a participating medium, which samples where
+    // light collides in it. Such an object must be tested at most once per ray - the nearest
+    // of several samples would be biased towards nearer collisions - so the scene graph keeps
+    // it out of its octree, which can list an object in several cells.
+    fn is_stochastic(&self) -> bool { false }
+
+    // The fraction of light that passes through this object between `min` and `max` along the
+    // ray (world distances, like `intersects`' `dist`): 0 or 1 for solid objects - by default,
+    // whether it is hit there - and in between for participating media. A medium may return a
+    // random estimate, as long as its expectation is the true transmittance.
+    fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 {
+        if self.intersects_beyond(r, min).is_some_and(|x| x.dist >= min && x.dist < max) { 0. } else { 1. }
+    }
+
     // Surface area, for shapes that can be sampled as area lights; 0 for those that can't.
     fn surface_area(&self) -> f64 { 0. }
 
@@ -127,6 +141,8 @@ impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
     fn inside(&self, p: &Vector3<f64>) -> bool { (**self).inside(p) }
     fn surface_area(&self) -> f64 { (**self).surface_area() }
     fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> { (**self).sample_surface(u) }
+    fn is_stochastic(&self) -> bool { (**self).is_stochastic() }
+    fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 { (**self).transmittance(r, min, max) }
 }
 
 /// A geometry whose hits report `face`, so a composite object made of many of them (eg. the

@@ -33,8 +33,10 @@ fn is_unbounded(b: &BBox) -> bool {
 impl SceneGraph {
 
     pub fn new(objects: Vec<Arc<SceneObject>>) -> SceneGraph {
+        // Unbounded objects can't go in the BVH. Nor can participating media: they must be
+        // tested once per ray (see `Geometry::is_stochastic`).
         let (infinite_items, bounded): (Vec<_>, Vec<_>) = objects.into_iter()
-            .partition(|x| is_unbounded(&x.geometry.bounds()));
+            .partition(|x| x.geometry.is_stochastic() || is_unbounded(&x.geometry.bounds()));
         let (bvh, items) = Bvh::build(bounded, |x| x.geometry.bounds());
         SceneGraph { items, infinite_items, bvh }
     }
@@ -70,6 +72,30 @@ impl SceneGraph {
     pub fn occluded(&self, r: &Ray, max: f64, min: f64) -> bool {
         self.bvh.any_hit(r, min, max, |i| self.items[i].occludes(r, min, max))
             || self.infinite_items.iter().any(|o| o.occludes(r, min, max))
+    }
+
+    /// The fraction of light that gets along the ray between `min` and `max` (world distances):
+    /// 0 if anything solid is in the way, otherwise the product of the transmittances of the
+    /// participating media it crosses (`Geometry::transmittance`), which may be a random
+    /// estimate. For shadow rays, in place of `occluded` wherever media should cast soft,
+    /// partial shadows rather than all-or-nothing ones.
+    pub fn transmittance(&self, r: &Ray, max: f64, min: f64) -> f64 {
+        if self.bvh.any_hit(r, min, max, |i| self.items[i].occludes(r, min, max)) {
+            return 0.;
+        }
+        // Solid objects first: if one blocks the ray, the media needn't be tracked.
+        let (media, solid): (Vec<_>, Vec<_>) = self.infinite_items.iter().partition(|o| o.is_stochastic());
+        if solid.iter().any(|o| o.transmittance(r, min, max) == 0.) {
+            return 0.;
+        }
+        let mut t = 1.;
+        for o in media {
+            t *= o.transmittance(r, min, max);
+            if t == 0. {
+                break;
+            }
+        }
+        t
     }
 
     pub fn nearest_raw_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(&SceneObject, RawIntersection)> {

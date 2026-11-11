@@ -157,6 +157,10 @@ impl Geometry for Transform {
         self.item.inside(&self.inverse.transform_point(&Point3::from(*p)).coords)
     }
 
+    fn is_stochastic(&self) -> bool {
+        self.item.is_stochastic()
+    }
+
     fn surface_area(&self) -> f64 {
         self.uniform_scale.map_or(0., |s| self.item.surface_area() * s * s)
     }

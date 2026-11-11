@@ -1,0 +1,154 @@
+{
+  "width": 960,
+  "height": 540,
+  "supersamples": 16,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 16,
+  "path_termination": "russian_roulette",
+  "output": {
+    "tonemap": "reinhard",
+    "exposure": 2.0
+  },
+  "camera": {
+    "location": [
+      0,
+      6,
+      0
+    ],
+    "lookat": [
+      0,
+      4200,
+      60000
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.9
+  },
+  "sun": {
+    "intensity": 4.9
+  },
+  "objects": [
+    {
+      "type": "ocean",
+      "curved": true,
+      "wind": [
+        2,
+        6
+      ],
+      "detail_center": [
+        0,
+        0
+      ]
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        0.12,
+        0.05,
+        1
+      ],
+      "crepuscular_rays": true,
+      "mie_coefficient": 6e-05
+    },
+    {
+      "type": "nubis_clouds",
+      "base": 1200,
+      "top": 9000,
+      "center": [
+        0,
+        70000
+      ],
+      "extent": 45000,
+      "coverage": 0.62,
+      "cloud_type": 1,
+      "density": 0.05,
+      "albedo": [
+        0.99,
+        0.99,
+        0.99
+      ],
+      "similarity_after": 4,
+      "oz": true,
+      "seed": 11,
+      "weather_size": 14000
+    },
+    {
+      "type": "mammatus",
+      "base": 9000,
+      "thickness": 1500,
+      "center": [
+        0,
+        75000
+      ],
+      "extent": 30000,
+      "edge_direction": [
+        0,
+        -1
+      ],
+      "edge_distance": -47000,
+      "edge_raggedness": 4000,
+      "pouch_band": 5000,
+      "anvil_density": 0.01,
+      "pouch_density": 0.015,
+      "albedo": [
+        0.99,
+        0.99,
+        0.99
+      ],
+      "similarity_after": 4,
+      "oz": true,
+      "seed": 3
+    },
+    {
+      "type": "precipitation",
+      "base": 1300,
+      "center": [
+        -9000,
+        52000
+      ],
+      "radius": 9000,
+      "coverage": 0.45,
+      "rain_rate": 15,
+      "cell_size": 3000,
+      "shear": 0.25,
+      "wind_direction": [
+        0.3,
+        -1
+      ],
+      "seed": 4
+    },
+    {
+      "type": "precipitation",
+      "base": 1300,
+      "center": [
+        14000,
+        60000
+      ],
+      "radius": 6000,
+      "coverage": 0.5,
+      "rain_rate": 10,
+      "cell_size": 2500,
+      "shear": 0.25,
+      "wind_direction": [
+        0.3,
+        -1
+      ],
+      "seed": 5
+    },
+    {
+      "type": "hogan_kew_cirrus",
+      "genus": "cirrus",
+      "wind_direction": [
+        1,
+        0.3
+      ],
+      "seed": 7,
+      "oz": true
+    }
+  ]
+}

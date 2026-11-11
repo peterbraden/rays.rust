@@ -687,7 +687,9 @@ impl SceneFile {
     /// "edge_distance": 0, "seed": 0}`
     ///
     /// The anvil covers the sky where the distance along `edge_direction` is under
-    /// `edge_distance`, give or take `edge_raggedness`, thinning over `edge_taper`. The pouches:
+    /// `edge_distance`, give or take `edge_raggedness`, thinning over `edge_taper`. Its base
+    /// can undulate (`base_variation` m over `base_size`), sag towards the core (`sag` m,
+    /// reached `sag_distance` in from the edge) and thicken softly (`base_softness` m). The pouches:
     /// `pouch_size` (apart), `pouch_depth`, `coverage` (fraction of cells with one), `regularity`, `clustering` (0 to 1)
     /// and `cluster_size`,
     /// `pouch_band` (how far in from the edge they hang deepest), `edge_sharpness` and
@@ -698,6 +700,11 @@ impl SceneFile {
         let mut m = Mammatus::new(SceneFile::parse_seed(o).unwrap_or(0));
         m.base = num("base", m.base);
         m.thickness = num("thickness", m.thickness).max(1.);
+        m.base_variation = num("base_variation", m.base_variation).max(0.);
+        m.base_size = num("base_size", m.base_size).max(1.);
+        m.sag = num("sag", m.sag).max(0.);
+        m.sag_distance = num("sag_distance", m.sag_distance).max(1.);
+        m.base_softness = num("base_softness", m.base_softness).max(0.);
         m.anvil_density = num("anvil_density", m.anvil_density).max(0.);
         m.pouch_density = num("pouch_density", m.pouch_density).max(0.);
         m.pouch_size = num("pouch_size", m.pouch_size).max(1.);

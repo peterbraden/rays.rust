@@ -79,19 +79,19 @@
     },
     {
       "type": "mammatus",
-      "base": 9000,
+      "base": 10000,
       "thickness": 1500,
       "center": [
         0,
-        75000
+        82000
       ],
-      "extent": 30000,
+      "extent": 24000,
       "edge_direction": [
         0,
         -1
       ],
-      "edge_distance": -47000,
-      "edge_raggedness": 4000,
+      "edge_distance": -60000,
+      "edge_raggedness": 6000,
       "pouch_band": 5000,
       "anvil_density": 0.01,
       "pouch_density": 0.015,
@@ -102,7 +102,12 @@
       ],
       "similarity_after": 4,
       "oz": true,
-      "seed": 3
+      "seed": 3,
+      "base_variation": 600,
+      "base_size": 15000,
+      "sag": 2000,
+      "sag_distance": 10000,
+      "base_softness": 400
     },
     {
       "type": "precipitation",

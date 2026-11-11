@@ -15,10 +15,13 @@ Serve the repository root, not `web/`: scenes name their meshes by paths from th
 
 - Outline of the scene file (settings, camera, materials, media, lights, objects) with a
   property editor generated from each entry's fields; add, duplicate and delete.
-- The scene file as text alongside, editable, kept in step both ways.
+- The scene file as text in the sidebar's other tab, editable, kept in step both ways.
 - Preview: drag to orbit, shift-drag to pan, scroll to zoom, click an object to select it.
-- Loads the repository's demo scenes; downloads the edited scene as JSON, which the command
-  line renders unchanged.
+  While the camera moves the preview shows quick drafts (one unbounced ray per pixel, at half
+  size); path tracing starts again when it stops.
+- The preview keeps adding samples, up to 4096 per pixel.
+- Loads the repository's demo scenes. "Save scene" downloads the edited scene as JSON, which
+  the command line renders unchanged; "Save image" downloads the preview as it stands, as PNG.
 
 ## How it works
 
@@ -29,7 +32,8 @@ Serve the repository root, not `web/`: scenes name their meshes by paths from th
   stream, so the layers add up to the image the command line gives, whatever the number of
   workers. `?workers=N` sets the number.
 - `app.js` adds the bands up, encodes them with the scene's `output` settings, and draws.
-- A camera move replaces only the camera. Any other edit rebuilds the scene in every worker;
+- A camera move replaces only the camera. During one, each worker renders its share of the
+  rows of a draft (`trace::draft`), one draft at a time. Any other edit rebuilds the scene in every worker;
   the sky's lookup table is kept between rebuilds.
 
 ## Known limits

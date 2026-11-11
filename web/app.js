@@ -96,6 +96,13 @@ let dirty = false;
 let stats = { rays: 0, since: 0, buildMs: 0, built: 0, rendering: false };
 const assetCache = new Map();   // path -> Promise<Uint8Array | null>
 const assetsSent = new Set();
+// While the camera is being moved, quick draft frames stand in for the path-traced image.
+const DRAFT_SCALE = 0.5;        // draft size, as a fraction of the preview's
+let interacting = false;        // the camera is being moved
+let draft = null;               // the draft frame being gathered from the workers
+let draftQueued = false;        // the camera moved again while that one was being made
+let idleTimer = 0;
+const draftCanvas = document.createElement('canvas');
 let pickId = 0;
 const picks = new Map();
 
@@ -152,6 +159,7 @@ function resetAccumulation() {
 async function restartScene() {
     const mine = ++gen;
     showError(null);
+    interacting = false; draft = null; draftQueued = false;
     stats.built = 0; stats.buildMs = 0; stats.rendering = false;
     for (const w of workers) { w.postMessage({ type: 'stop' }); }
     const json = JSON.stringify(previewDoc());
@@ -192,6 +200,69 @@ function restartCamera() {
     for (const w of workers) { w.postMessage({ type: 'camera', gen: mine, json }); }
 }
 
+const cameraIsPlain = () => doc.camera && typeof doc.camera === 'object' && !JSON.stringify(doc.camera).includes('"$');
+
+// The camera is being moved by hand: follow it with drafts until the move ends.
+function moveCamera() {
+    if (!cameraIsPlain() || stats.built < workers.length) { restartCamera(); return; }
+    interacting = true;
+    dirty = false;
+    requestDraft();
+    // A drag ends when the pointer is released; the wheel and the keys, when they go quiet.
+    clearTimeout(idleTimer);
+    if (!drag) { idleTimer = setTimeout(endInteraction, 300); }
+}
+
+// Ask every worker for its part of a draft from the current camera. One at a time: a camera
+// move during a draft asks again when it is done, so drafts never queue up behind the pointer.
+function requestDraft() {
+    if (draft) { draftQueued = true; return; }
+    draftQueued = false;
+    const mine = ++gen;
+    const cols = Math.max(8, Math.round(pw * DRAFT_SCALE)), rows = Math.max(8, Math.round(ph * DRAFT_SCALE));
+    draft = { gen: mine, cols, rows, values: new Float32Array(cols * rows * 3), got: 0 };
+    const json = JSON.stringify(doc.camera);
+    for (const w of workers) { w.postMessage({ type: 'draft', gen: mine, json, cols, rows }); }
+}
+
+function onDraft(m) {
+    if (!draft || m.gen !== draft.gen) { return; }
+    draft.values.set(m.values, m.y0 * draft.cols * 3);
+    draft.got += m.y1 - m.y0;
+    if (draft.got < draft.rows) { return; }
+    drawDraft(draft);
+    draft = null;
+    if (draftQueued) { requestDraft(); } else if (!interacting) { restartCamera(); }
+}
+
+// Show a draft, scaled up to the preview. It also becomes the picture the path-traced rows
+// replace as they arrive.
+function drawDraft({ cols, rows, values }) {
+    if (!encoder) { return; }
+    let rgba;
+    try {
+        rgba = encoder.encode(values, 1, doc.output && typeof doc.output === 'object' ? doc.output : null);
+    } catch (e) {
+        encoder = null;
+        instantiate().then(r => { encoder = r; });
+        return;
+    }
+    draftCanvas.width = cols; draftCanvas.height = rows;
+    draftCanvas.getContext('2d').putImageData(new ImageData(rgba, cols, rows), 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(draftCanvas, 0, 0, pw, ph);
+    image = ctx.getImageData(0, 0, pw, ph);
+    $('status').textContent = `${pw}×${ph} · moving (draft)`;
+}
+
+// The move is over: path trace from where the camera now is.
+function endInteraction() {
+    clearTimeout(idleTimer);
+    if (!interacting) { return; }
+    interacting = false;
+    if (!draft) { restartCamera(); }
+}
+
 let sceneTimer = 0;
 function scheduleScene(delay = 120) {
     clearTimeout(sceneTimer);
@@ -205,7 +276,9 @@ function onWorkerMessage({ data: m }) {
         return;
     }
     if (m.gen !== gen) { return; }
-    if (m.type === 'built') {
+    if (m.type === 'draft') {
+        onDraft(m);
+    } else if (m.type === 'built') {
         stats.built += 1;
         stats.buildMs = Math.max(stats.buildMs, m.ms);
         if (stats.built === 1) { stats.since = performance.now(); }
@@ -333,7 +406,7 @@ function dolly(amount) {
 }
 
 function cameraChanged() {
-    restartCamera();
+    moveCamera();
     syncJsonText();
     if (selection[0] === 'camera' && !$('inspector').contains(document.activeElement)) { renderInspector(); }
 }
@@ -356,9 +429,9 @@ canvas.addEventListener('pointerup', e => {
     canvas.classList.remove('dragging');
     const clicked = drag && drag.moved < 4;
     drag = null;
-    if (clicked) { pickAt(e); }
+    if (clicked) { pickAt(e); } else { endInteraction(); }
 });
-canvas.addEventListener('pointercancel', () => { drag = null; canvas.classList.remove('dragging'); });
+canvas.addEventListener('pointercancel', () => { drag = null; canvas.classList.remove('dragging'); endInteraction(); });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('wheel', e => { e.preventDefault(); dolly(Math.sign(e.deltaY) * 0.08); }, { passive: false });
 canvas.tabIndex = 0;
@@ -695,6 +768,28 @@ $('download').addEventListener('click', () => {
     URL.revokeObjectURL(a.href);
 });
 
+$('save-image').addEventListener('click', () => {
+    // The preview as it stands: at preview size, with the samples gathered so far.
+    canvas.toBlob(blob => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = ($('scene-picker').value.split('/').pop() || 'scene.json').replace(/\.json$/, '') + '.png';
+        a.click();
+        URL.revokeObjectURL(a.href);
+    }, 'image/png');
+});
+
+// The sidebar shows the outline and properties, or the scene file's text.
+function showTab(name) {
+    for (const tab of ['outline', 'json']) {
+        $(`tab-${tab}`).setAttribute('aria-selected', String(tab === name));
+        $(`${tab}-view`).hidden = tab !== name;
+    }
+    if (name === 'json') { syncJsonText(); }
+}
+$('tab-outline').addEventListener('click', () => showTab('outline'));
+$('tab-json').addEventListener('click', () => showTab('json'));
+
 // ---------------------------------------------------------------------------------------
 // Start
 
@@ -721,6 +816,6 @@ async function start() {
 }
 
 // For debugging and tests.
-window.rays = { get doc() { return doc; }, get stats() { return stats; }, get rowSamples() { return rowSamples; }, select };
+window.rays = { get doc() { return doc; }, get interacting() { return interacting || Boolean(draft); }, get stats() { return stats; }, get rowSamples() { return rowSamples; }, select };
 
 start();

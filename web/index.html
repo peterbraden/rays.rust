@@ -20,11 +20,18 @@
             <option value="720">720</option>
         </select>
     </label>
-    <button id="download" type="button">Download JSON</button>
+    <button id="download" type="button">Save scene</button>
+    <button id="save-image" type="button">Save image</button>
     <span id="status" role="status"></span>
 </header>
 <main>
-    <section id="outline-panel" aria-label="Scene outline">
+    <section id="sidebar" aria-label="Scene">
+        <div id="tabs" role="tablist" aria-label="Sidebar view">
+            <button id="tab-outline" type="button" role="tab" aria-selected="true" aria-controls="outline-view">Outline</button>
+            <button id="tab-json" type="button" role="tab" aria-selected="false" aria-controls="json-view">Scene file</button>
+            <span id="json-state"></span>
+        </div>
+        <div id="outline-view" role="tabpanel" aria-labelledby="tab-outline">
         <div class="panel-head">
             <h2>Scene</h2>
             <select id="add" aria-label="Add to the scene">
@@ -40,18 +47,15 @@
             </span>
         </div>
         <form id="inspector" autocomplete="off"></form>
+        </div>
+        <div id="json-view" role="tabpanel" aria-labelledby="tab-json" hidden>
+            <textarea id="json" spellcheck="false" aria-label="Scene JSON"></textarea>
+        </div>
     </section>
     <section id="viewport" aria-label="Preview">
         <canvas id="canvas" width="360" height="240"></canvas>
         <p id="error" role="alert" hidden></p>
         <p id="hint">Drag to orbit · Shift-drag to pan · Scroll to zoom · Click an object to select it</p>
-    </section>
-    <section id="json-panel" aria-label="Scene file">
-        <div class="panel-head">
-            <h2>Scene file</h2>
-            <span id="json-state"></span>
-        </div>
-        <textarea id="json" spellcheck="false" aria-label="Scene JSON"></textarea>
     </section>
 </main>
 <script type="module" src="app.js"></script>

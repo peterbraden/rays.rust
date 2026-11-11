@@ -81,6 +81,30 @@ fn continuation_weight(attenuate: &Color, depth: u64, s: &Scene) -> Option<f64> 
 /// The intersection with the normal its medium shades with (tilted by bump mapping, if any). A
 /// tilt that would put the ray on the other side of the surface is dropped: dielectrics tell
 /// entering from leaving by the normal's side, and a grazing ray mustn't change that.
+/// A quick stand-in for `trace`, for showing the scene while it is being moved around: one
+/// ray, no bounces. The surface's own answer is kept (emission, direct light it sampled, and
+/// anything that ends the path, such as the sky), and the light a bounce would have gathered
+/// is replaced by a headlight: brighter where the surface faces the viewer.
+pub fn draft(r: &Ray, s: &Scene) -> Color {
+    let Some(hit) = s.objects.nearest_intersection(r, f64::INFINITY, 0f64) else {
+        return s.render.background.radiance(&r.rd);
+    };
+    let facing = hit.facing_normal(r);
+    let mut biased = hit;
+    biased.point = hit.point + facing * s.render.shadow_bias;
+    let medium = &hit.object.medium;
+    let medium = medium.part(hit.part).unwrap_or(&**medium);
+    let shaded = shading(r, medium, &biased);
+    let interaction = medium.material_at(biased.point).scatter(r, &shaded, s);
+    match interaction.ray {
+        None => interaction.emit + interaction.attenuate,
+        Some(_) => {
+            let towards_viewer = shaded.normal.dot(&r.rd.normalize()).abs();
+            interaction.emit + interaction.attenuate * (0.15 + 0.35 * towards_viewer)
+        },
+    }
+}
+
 fn shading<'a>(r: &Ray, medium: &(dyn Medium + Sync + Send), intersection: &Intersection<'a>) -> Intersection<'a> {
     let n = medium.normal_at(&intersection.point, &intersection.normal);
     if n == intersection.normal || (n.dot(&r.rd) > 0.) != (intersection.normal.dot(&r.rd) > 0.) {

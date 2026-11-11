@@ -66,6 +66,25 @@ impl Preview {
         cast
     }
 
+    /// Render rows `y0 .. y1` of a draft image, `cols` by `rows` pixels whatever the scene's
+    /// own size, with `trace::draft`: one unbounced ray per pixel. `out` takes three `f32`s
+    /// per pixel. Fast enough to follow the camera while it is being dragged.
+    pub fn render_draft(&self, cols: usize, rows: usize, y0: usize, y1: usize, out: &mut [f32]) {
+        let (w, h) = (cols as f64, rows as f64);
+        for (row, y) in (y0 .. y1.min(rows)).enumerate() {
+            for x in 0 .. cols {
+                // The same numbers for a pixel every time, so a still camera gives a still image.
+                seed_rand(0, (y * cols + x) as u64);
+                let r = self.scene.camera.get_ray(x as f64 / w, (rows - 1 - y) as f64 / h, 0.5 / w, 0.5 / h);
+                let c = crate::trace::draft(&r, &self.scene).ignore_nan();
+                let i = (row * cols + x) * 3;
+                out[i] = c.rgb.x as f32;
+                out[i + 1] = c.rgb.y as f32;
+                out[i + 2] = c.rgb.z as f32;
+            }
+        }
+    }
+
     /// The object seen at image position (x, y), in pixels from the top left: its index in the
     /// scene file's `objects` list. None for the background, or an object with no entry of its
     /// own.
@@ -145,6 +164,21 @@ mod tests {
         assert_eq!(p.pick(6., 7.), Some(1));
         p.set_camera(r#"{ "location": [0, 1, 5], "lookat": [0, 20, 5.1], "up": [0, 1, 0], "angle": 0.5 }"#);
         assert_eq!(p.pick(6., 3.), Some(0));
+    }
+
+    #[test]
+    fn test_draft_shows_the_scene_at_any_size() {
+        let p = Preview::new(SCENE);
+        let (cols, rows) = (6, 4);
+        let mut out = vec![0f32; cols * rows * 3];
+        p.render_draft(cols, rows, 0, 2, &mut out[.. cols * 2 * 3]);
+        p.render_draft(cols, rows, 2, 4, &mut out[cols * 2 * 3 ..]);
+        let again = { let mut o = vec![0f32; cols * rows * 3]; p.render_draft(cols, rows, 0, rows, &mut o); o };
+        assert_eq!(out, again);
+        let px = |x: usize, y: usize| &out[(y * cols + x) * 3 .. (y * cols + x) * 3 + 3];
+        // Sky at the top, lit ground at the bottom, and they differ.
+        assert!(px(0, 0).iter().all(|v| *v > 0.) && px(0, 3).iter().all(|v| *v > 0.));
+        assert_ne!(px(0, 0), px(0, 3));
     }
 
     #[test]

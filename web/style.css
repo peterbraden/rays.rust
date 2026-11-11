@@ -41,12 +41,17 @@ h2 { font-size: 11px; margin: 0; text-transform: uppercase; letter-spacing: 0.08
 #status { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 main {
     flex: 1; min-height: 0;
-    display: grid; grid-template-columns: 300px minmax(0, 1fr) 340px;
+    display: grid; grid-template-columns: 340px minmax(0, 1fr);
 }
 main > section { min-height: 0; display: flex; flex-direction: column; }
-#outline-panel, #json-panel { background: var(--panel); }
-#outline-panel { border-right: 1px solid var(--line); overflow-y: auto; }
-#json-panel { border-left: 1px solid var(--line); }
+#sidebar { background: var(--panel); border-right: 1px solid var(--line); }
+#outline-view { flex: 1; min-height: 0; overflow-y: auto; }
+#json-view { flex: 1; min-height: 0; display: flex; }
+#json-view[hidden], #outline-view[hidden] { display: none; }
+#tabs { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+#tabs button { border-color: transparent; background: none; padding: 4px 10px; color: var(--muted); }
+#tabs button[aria-selected="true"] { background: var(--bg); border-color: var(--line); color: var(--text); }
+#tabs #json-state { margin-left: auto; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .panel-head {
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
     padding: 8px 12px; border-bottom: 1px solid var(--line); min-height: 40px;
@@ -107,9 +112,10 @@ button:hover { border-color: var(--accent); }
 #json-state.bad { color: var(--error-text); background: var(--error-bg); padding: 1px 6px; border-radius: 3px; }
 
 @media (max-width: 900px) {
-    main { grid-template-columns: 1fr; grid-template-rows: auto minmax(260px, 50vh) minmax(240px, auto); overflow-y: auto; }
+    main { grid-template-columns: 1fr; overflow-y: auto; }
     #viewport { order: -1; }
-    #outline-panel { border-right: 0; overflow: visible; }
-    #json-panel { border-left: 0; border-top: 1px solid var(--line); }
-    #json { min-height: 240px; }
+    main { grid-template-rows: minmax(260px, 50vh) auto; }
+    #sidebar { border-right: 0; border-top: 1px solid var(--line); }
+    #outline-view { overflow: visible; }
+    #json { min-height: 320px; }
 }

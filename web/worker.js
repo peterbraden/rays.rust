@@ -6,6 +6,10 @@
 // rows as they finish. A worker starts each layer at a different row, so the first pass
 // covers the image `count` times sooner.
 //
+// While the camera is being moved the page asks for drafts instead (one unbounced ray per
+// pixel, at reduced size), which are quick enough to follow the pointer; layers start again
+// from the camera message that ends the move.
+//
 // Every message carries the generation (`gen`) of the scene or camera it belongs to; the
 // page drops bands from an older generation, and a worker abandons a layer as soon as a newer
 // one arrives. It can only notice between bands, so bands are kept to about BAND_MS.
@@ -19,6 +23,7 @@ let count = 1;
 let gen = -1;          // generation being rendered
 let size = null;       // { width, height } of the built scene
 let running = false;
+let drafting = false;  // showing drafts while the camera is moved: no layers meanwhile
 const assets = new Map();
 
 // Let queued messages (a newer scene, a camera move) be handled.
@@ -39,6 +44,7 @@ self.onmessage = async ({ data: m }) => {
         } else if (m.type === 'scene') {
             gen = m.gen;
             size = null;
+            drafting = false;
             // An instance that has panicked can't be reused. One that hasn't is kept, as it
             // remembers what was slow to build (the sky's lookup table).
             if (!rays || rays.dead) { await fresh(); }
@@ -50,8 +56,19 @@ self.onmessage = async ({ data: m }) => {
         } else if (m.type === 'camera') {
             if (!size) { return; }   // the scene failed to build, or is still coming
             gen = m.gen;
+            drafting = false;
             rays.setCamera(m.json);
             run();
+        } else if (m.type === 'draft') {
+            // One quick frame from this camera: this worker's share of its rows.
+            if (!size) { return; }
+            gen = m.gen;
+            drafting = true;
+            rays.setCamera(m.json);
+            const y0 = Math.floor((m.rows * index) / count);
+            const y1 = Math.floor((m.rows * (index + 1)) / count);
+            const values = rays.renderDraft(m.cols, m.rows, y0, y1);
+            self.postMessage({ type: 'draft', gen: m.gen, y0, y1, values }, [values.buffer]);
         } else if (m.type === 'pick') {
             self.postMessage({ type: 'picked', id: m.id, index: size ? rays.pick(m.x, m.y) : -1 });
         } else if (m.type === 'stop') {
@@ -67,7 +84,7 @@ async function run() {
     if (running) { return; }   // the loop below picks up the new generation itself
     running = true;
     try {
-        while (gen >= 0 && size) {
+        while (gen >= 0 && size && !drafting) {
             const mine = gen;
             const { width, height } = size;
             let rows = Math.max(1, Math.round(height / 16));

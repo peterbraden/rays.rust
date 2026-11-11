@@ -114,6 +114,19 @@ pub unsafe extern "C" fn render_rows(layer: usize, y0: usize, y1: usize, out: *m
     })
 }
 
+/// Render rows `y0 .. y1` of a draft image of `cols` by `rows` pixels into `out`, as `f32`
+/// linear values, three per pixel.
+///
+/// # Safety
+/// `out` must be valid, 4-byte aligned memory for `(y1 - y0) * cols * 3` `f32`s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn render_draft(cols: usize, rows: usize, y0: usize, y1: usize, out: *mut f32) {
+    with_preview(|p| {
+        let out = unsafe { std::slice::from_raw_parts_mut(out, (y1 - y0) * cols * 3) };
+        p.render_draft(cols, rows, y0, y1, out);
+    })
+}
+
 /// The index in the scene file's `objects` of what is seen at pixel (x, y), or -1.
 #[unsafe(no_mangle)]
 pub extern "C" fn pick(x: f64, y: f64) -> i32 {

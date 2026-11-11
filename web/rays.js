@@ -96,6 +96,18 @@ export async function instantiate(url = new URL('rays.wasm', import.meta.url)) {
             });
         },
 
+        /** Rows y0..y1 of a quick draft image, cols by rows pixels: three floats per pixel. */
+        renderDraft(cols, rows, y0, y1) {
+            return guard(() => {
+                const n = (y1 - y0) * cols * 3;
+                const ptr = x.alloc(n * 4);
+                x.render_draft(cols, rows, y0, y1, ptr);
+                const values = new Float32Array(memory.buffer, ptr, n).slice();
+                x.dealloc(ptr, n * 4);
+                return values;
+            });
+        },
+
         /** The index in the scene's `objects` of what is seen at a pixel, or -1. */
         pick(px, py) {
             return guard(() => x.pick(px, py));

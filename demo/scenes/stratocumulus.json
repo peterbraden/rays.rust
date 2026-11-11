@@ -7,15 +7,6 @@
   "shadow_bias": 0.01,
   "max_depth": 64,
   "path_termination": "russian_roulette",
-  "materials": {
-    "SEA": {
-      "type": "sea",
-      "wind": [
-        7,
-        2
-      ]
-    }
-  },
   "camera": {
     "location": [
       0,
@@ -39,8 +30,16 @@
   },
   "objects": [
     {
-      "type": "planet",
-      "material": "SEA"
+      "type": "ocean",
+      "curved": true,
+      "wind": [
+        7,
+        2
+      ],
+      "detail_center": [
+        0,
+        0
+      ]
     },
     {
       "type": "skysphere",

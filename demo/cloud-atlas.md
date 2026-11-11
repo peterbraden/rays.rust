@@ -22,7 +22,8 @@ seven generators:
 | `mammatus` | mammatus under an anvil | Sinking, evaporating lobes under a cloud's base |
 | `precipitation` | rain shafts and virga | Raindrops by rain rate (Marshall-Palmer), falling through shear |
 
-Render any of them with `cargo run --release -- demo/scenes/<scene>.json`. The altostratus, stratocumulus
+Render any of them with `cargo run --release -- demo/scenes/<scene>.json`. The scenes stand on the
+sea (`{"type": "ocean", "curved": true}`), whose reflections show the sky and clouds again. The altostratus, stratocumulus
 and stratus images are quick previews (480 x 300, 8 samples per pixel), so they are noisy.
 
 | | Cloud | Scene |

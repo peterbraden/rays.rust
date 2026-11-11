@@ -12,15 +12,6 @@
     "exposure": 1.3,
     "glare": true
   },
-  "materials": {
-    "SEA": {
-      "type": "sea",
-      "wind": [
-        7,
-        2
-      ]
-    }
-  },
   "camera": {
     "location": [
       0,
@@ -44,8 +35,16 @@
   },
   "objects": [
     {
-      "type": "planet",
-      "material": "SEA"
+      "type": "ocean",
+      "curved": true,
+      "wind": [
+        7,
+        2
+      ],
+      "detail_center": [
+        0,
+        0
+      ]
     },
     {
       "type": "skysphere",

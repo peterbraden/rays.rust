@@ -20,6 +20,9 @@ use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGen
 use crate::procedural::benard_altocumulus::BenardAltocumulus;
 use crate::procedural::lenticular::{Lenticular, MoistLayer};
 use crate::procedural::terrain::{Terrain, TerrainMaterial};
+use crate::procedural::mammatus::Mammatus;
+use crate::procedural::precipitation::Precipitation;
+use crate::material::rainbow::RainbowTable;
 use crate::procedural::harris_cumulus::{CloudSimulation, Forcing, HarrisCumulus, Profile, SimulationParams, Sounding};
 use crate::participatingmedia::create_fog;
 use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
@@ -259,6 +262,14 @@ impl SceneFile {
             return Some(Arc::new(SceneFile::parse_harris_cumulus(&o)));
         }
 
+        if t == "precipitation" {
+            return Some(Arc::new(SceneFile::parse_precipitation(&o)));
+        }
+
+        if t == "mammatus" {
+            return Some(Arc::new(SceneFile::parse_mammatus(&o)));
+        }
+
         if t == "terrain" {
             return Some(Arc::new(SceneFile::parse_terrain(&o)));
         }
@@ -349,7 +360,8 @@ impl SceneFile {
     }
 
     /// How a volume scatters: `albedo`, its phase function (`g` defaulting to `default_g`, or
-    /// `droplet_diameter`), approximations, `diffraction` and `halos`.
+    /// `droplet_diameter`), approximations, `diffraction`, `halos`, and `"rainbow": true` for
+    /// raindrops' bows in direct sunlight.
     pub fn parse_scattering(o: &Value, default_g: f64) -> Scattering {
         Scattering {
             albedo: SceneFile::parse_color_def(o, "albedo", Color::white()),
@@ -357,6 +369,7 @@ impl SceneFile {
             approximation: SceneFile::parse_scattering_approximation(o),
             diffraction: SceneFile::parse_diffraction(o),
             halos: SceneFile::parse_halos(o),
+            rainbow: (o["rainbow"].as_bool() == Some(true)).then(|| Arc::new(RainbowTable::new(100_000))),
         }
     }
 
@@ -629,6 +642,86 @@ impl SceneFile {
         );
         let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(c));
         create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// Rain or virga falling from a cloud's base (see `procedural::precipitation`), within
+    /// `radius` of `center` ([x, z]):
+    ///
+    /// `{"type": "precipitation", "base": 1500, "rain_rate": 8, "coverage": 0.5, "seed": 0}`
+    ///
+    /// with `ground`, `cell_size` (of the shafts), `fall_depth` (m to 1/e by evaporation:
+    /// virga; by default it all reaches the ground), `shear` (drift per metre fallen) and
+    /// `wind_direction` ([x, z]), `streak_size` and `streakiness` (0 to 1), and `fade` (the
+    /// fraction of `radius` over which it fades out). The phase function defaults to `g` 0.85;
+    /// `"rainbow": true` gives the drops' bows in sunlight.
+    pub fn parse_precipitation(o: &Value) -> SceneObject {
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let mut r = Precipitation::new(num("base", 1500.), SceneFile::parse_seed(o).unwrap_or(0));
+        r.ground = num("ground", r.ground);
+        r.rain_rate = num("rain_rate", r.rain_rate).max(0.);
+        r.cell_size = num("cell_size", r.cell_size).max(1.);
+        r.coverage = num("coverage", r.coverage).clamp(0., 1.);
+        r.fall_depth = num("fall_depth", r.fall_depth).max(1.);
+        r.shear = num("shear", r.shear);
+        r.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", r.wind_direction).normalize();
+        r.streak_size = num("streak_size", r.streak_size).max(1.);
+        r.streakiness = num("streakiness", r.streakiness).clamp(0., 1.);
+        r.center = SceneFile::parse_vec2_def(o, "center", r.center);
+        r.radius = num("radius", r.radius).max(1.);
+        r.fade = num("fade", r.fade).clamp(0., 1.);
+        // Drifting downwind as it falls: the bounds reach from where it leaves the cloud to
+        // where it lands.
+        let reach = r.radius + r.drift().abs();
+        let bounds = BBox::new(
+            Vector3::new(r.center.x - reach, r.ground, r.center.y - reach),
+            Vector3::new(r.center.x + reach, r.base, r.center.y + reach),
+        );
+        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(r));
+        create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// Mammatus under an anvil (see `procedural::mammatus`), filling `extent` either side of
+    /// `center` ([x, z]):
+    ///
+    /// `{"type": "mammatus", "base": 5000, "thickness": 2500, "edge_direction": [x, z],
+    /// "edge_distance": 0, "seed": 0}`
+    ///
+    /// The anvil covers the sky where the distance along `edge_direction` is under
+    /// `edge_distance`, give or take `edge_raggedness`, thinning over `edge_taper`. The pouches:
+    /// `pouch_size` (apart), `pouch_depth`, `coverage` (fraction of cells with one), `regularity`, `clustering` (0 to 1)
+    /// and `cluster_size`,
+    /// `pouch_band` (how far in from the edge they hang deepest), `edge_sharpness` and
+    /// `roughness` (m) and `detail_size`. Extinctions: `anvil_density` and `pouch_density`.
+    /// `mapping` as for `nubis_clouds`.
+    pub fn parse_mammatus(o: &Value) -> SceneObject {
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let mut m = Mammatus::new(SceneFile::parse_seed(o).unwrap_or(0));
+        m.base = num("base", m.base);
+        m.thickness = num("thickness", m.thickness).max(1.);
+        m.anvil_density = num("anvil_density", m.anvil_density).max(0.);
+        m.pouch_density = num("pouch_density", m.pouch_density).max(0.);
+        m.pouch_size = num("pouch_size", m.pouch_size).max(1.);
+        m.pouch_depth = num("pouch_depth", m.pouch_depth).max(0.);
+        m.coverage = num("coverage", m.coverage).clamp(0., 1.);
+        m.regularity = num("regularity", m.regularity).clamp(0., 1.);
+        m.clustering = num("clustering", m.clustering).clamp(0., 1.);
+        m.cluster_size = num("cluster_size", m.cluster_size).max(1.);
+        m.edge_sharpness = num("edge_sharpness", m.edge_sharpness).max(1.);
+        m.roughness = num("roughness", m.roughness).max(0.);
+        m.detail_size = num("detail_size", m.detail_size).max(1.);
+        m.edge_direction = SceneFile::parse_vec2_def(o, "edge_direction", m.edge_direction).normalize();
+        m.edge_distance = num("edge_distance", m.edge_distance);
+        m.edge_raggedness = num("edge_raggedness", m.edge_raggedness).max(0.);
+        m.edge_taper = num("edge_taper", m.edge_taper).max(1.);
+        m.pouch_band = num("pouch_band", m.pouch_band).max(1.);
+        let center = SceneFile::parse_vec2_def(o, "center", Vector2::zeros());
+        let extent = num("extent", 60_000.);
+        let bounds = BBox::new(
+            Vector3::new(center.x - extent, m.bottom(), center.y - extent),
+            Vector3::new(center.x + extent, m.top(), center.y + extent),
+        );
+        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(m));
+        create_volume(bounds, field, SceneFile::parse_scattering(o, 0.8))
     }
 
     /// Mountains (see `procedural::terrain`): a meshed heightfield of ridged noise around a

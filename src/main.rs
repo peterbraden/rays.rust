@@ -38,6 +38,7 @@ mod material {
     pub mod phase;
     pub mod diffraction;
     pub mod ice_halos;
+    pub mod rainbow;
 }
 mod intersection;
 mod sceneobject;
@@ -76,6 +77,8 @@ mod procedural {
     pub mod benard_altocumulus;
     pub mod lenticular;
     pub mod terrain;
+    pub mod mammatus;
+    pub mod precipitation;
     pub mod harris_cumulus;
 }
 mod participatingmedia;

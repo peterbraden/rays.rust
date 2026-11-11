@@ -1,0 +1,35 @@
+{
+  "width": 960,
+  "height": 600,
+  "supersamples": 32,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 24,
+  "path_termination": "russian_roulette",
+
+  "materials": {
+    "GROUND": { "type": "lambertian", "albedo": [0.075, 0.085, 0.045] }
+  },
+
+  "camera": {
+    "location": [0, 2, 0],
+    "lookat": [0, 1600, 10000],
+    "up": [0, 1, 0],
+    "angle": 1.0
+  },
+
+  "sun": { "intensity": 4.9 },
+
+  "objects": [
+    { "type": "planet", "material": "GROUND" },
+    { "type": "terrain", "peak_height": 0, "relief": 0, "plains": 30, "extent": 40000, "resolution": 768, "seed": 7 },
+    { "type": "skysphere", "sun_direction": [0.25, 0.36, -1] },
+    { "type": "nubis_clouds", "base": 1500, "top": 5500, "center": [0, 22000], "extent": 16000,
+      "coverage": 1, "cloud_type": 0.8, "density": 0.06,
+      "albedo": [0.99, 0.99, 0.99], "similarity_after": 4, "oz": true, "seed": 4 },
+    { "type": "precipitation", "base": 1500, "center": [0, 15000], "radius": 12000, "coverage": 0.65,
+      "rain_rate": 12, "cell_size": 3500, "shear": 0.3, "wind_direction": [0.3, -1],
+      "rainbow": true, "seed": 2 }
+  ]
+}

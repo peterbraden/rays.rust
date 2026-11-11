@@ -10,7 +10,7 @@ Every cloud is a participating medium of the same kind (see `src/volume.rs`): de
 through a density field, lit by the sun and the sky, under the same atmosphere that reddens the
 sun and hazes the distance. Cloud layers curve with the planet's surface, so distant clouds drop
 towards the horizon and sink below it. What differs is where the density comes from. There are
-five generators:
+seven generators:
 
 | Generator | Makes | Approach |
 |---|---|---|
@@ -19,6 +19,8 @@ five generators:
 | `nubis_clouds` | cumulus, stratocumulus, stratus, altostratus | Noise-based modelling (Schneider, Horizon Zero Dawn's Nubis) |
 | `harris_cumulus` | cumulus, as they grow and die | A simulation of a sunny day (Harris et al. 2003) |
 | `lenticular` | lenticular clouds | Moist layers lifted by a mountain's lee waves |
+| `mammatus` | mammatus under an anvil | Sinking, evaporating lobes under a cloud's base |
+| `precipitation` | rain shafts and virga | Raindrops by rain rate (Marshall-Palmer), falling through shear |
 
 Render any of them with `cargo run --release -- demo/scenes/<scene>.json`. The altostratus, stratocumulus
 and stratus images are quick previews (480 x 300, 8 samples per pixel), so they are noisy.
@@ -36,7 +38,9 @@ and stratus images are quick previews (480 x 300, 8 samples per pixel), so they 
 | | [Stratus](#stratus) | `stratus.json` |
 | | [Cumulus, modelled](#cumulus-modelled) | `nubis-clouds.json` |
 | | [Cumulus, simulated](#cumulus-simulated) | `harris-cumulus.json` |
-| Phenomena | [Iridescence](#iridescence) | `cirrus-iridescence.json` |
+| Phenomena | [Rain and rainbows](#rain-and-rainbows) | `rain.json` |
+| | [Mammatus](#mammatus) | `mammatus.json` |
+| | [Iridescence](#iridescence) | `cirrus-iridescence.json` |
 | | [Clouds from orbit](#clouds-from-orbit) | `orbit.json` |
 
 ## High clouds
@@ -211,6 +215,49 @@ at their edges.
 
 ## Phenomena
 
+### Rain and rainbows
+
+![Rain and a rainbow](./scenes/rain.png)
+
+`rain.json`: `{"type": "precipitation", "base": 1500, "rain_rate": 12, "rainbow": true}`, under
+`{"type": "nubis_clouds", "base": 1500, "top": 5500, "coverage": 1}`
+
+Rain shafts under a storm, lit by the low sun behind the viewer, with a rainbow. Rain is thin
+compared with cloud. Its drops are a millimetre or two across, so its extinction depends on how
+hard it rains: with the Marshall-Palmer drop sizes, about 0.001 per metre at 5 mm/h, a
+visibility of a few kilometres. Shafts fall from cells and lean downwind as the wind changes
+with height (`shear`), streaked where drops fall together. With a `fall_depth`, the
+precipitation evaporates as it falls: that is virga, its streaks fraying out before they reach
+the ground.
+
+The rainbow comes from tracing sunlight through water spheres by geometric optics: reflected,
+or refracted in and out after one, two or three internal reflections, with Fresnel's split at
+each surface. It is traced per wavelength across each colour channel, since water's refractive
+index falls from blue to red, and averaged over the sun's disc (`src/material/rainbow.rs`). The
+primary bow lies 42° from the point opposite the sun, red outside; the fainter secondary lies at
+51°, its colours reversed. Between them is Alexander's dark band, and inside the primary the sky
+is brighter. Like halos, the bow applies to direct sunlight at a path's first scattering.
+
+### Mammatus
+
+![Mammatus](./scenes/mammatus.png)
+
+`mammatus.json`: `{"type": "mammatus", "base": 7000, "thickness": 2000, "edge_direction": [-1, 0], "oz": true}`
+
+Pouches hanging from the underside of an anvil: a supplementary feature (mamma) of cumulonimbus,
+and sometimes of altocumulus or stratocumulus. Cloudy air sinking from the base cools as its ice
+or droplets evaporate. Where that cooling outpaces the warming of its descent, it keeps sinking
+in lobes into the drier air below (Schultz et al., J. Atmos. Sci. 2006). Each pouch is a
+kilometre or two across and a few hundred metres deep, with a sharp, smooth boundary where the
+cloud evaporates.
+
+The anvil is a thick sheet covering the sky beyond a ragged edge, thinning towards it. Under it
+hangs a jittered hexagonal lattice of half-ellipsoids, varied in depth and gathered into
+clusters, deepest a few kilometres in from the edge. In the scene the sun is setting beyond the
+anvil's edge. Its light, reddened by its long path through the air, comes in under the base and
+catches the sides of the nearest pouches, while the anvil overhead hides most of the sky. The
+scene uses Reinhard tone mapping with an exposure of 3, as a photograph at dusk would.
+
 ### Iridescence
 
 ![Iridescence](./scenes/cirrus-iridescence.png)
@@ -237,9 +284,10 @@ is still noisy: from orbit, cloud detail is much smaller than a pixel.
 
 ## Not yet
 
-- **Nimbostratus**: a thick, dark rain cloud. It needs precipitation.
+- **Nimbostratus**: a thick, dark rain cloud. `precipitation` can now fall from a thick
+  `nubis_clouds` stratus, but there is no scene for it yet.
 - **Cumulonimbus**: anvils and overshooting tops. `harris_cumulus` could grow them with a deeper
   grid, a weaker inversion and ice microphysics.
-- **Lenticular, castellanus, mammatus and other species**: each needs its own mechanism (flow over
-  hills, mid-level convection, sinking pouches of cloud).
-- **Rain, virga and lightning.**
+- **Castellanus, fractus and other species**: each needs its own mechanism (turrets from
+  mid-level convection, shreds torn by the wind).
+- **Snow, hail and lightning**; supernumerary bows (they need wave optics) and fogbows.

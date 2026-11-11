@@ -33,6 +33,7 @@ use crate::material::functions::sample_area_light_with;
 use crate::material::phase::PhaseFunction;
 use crate::material::diffraction::DiffractionTable;
 use crate::material::ice_halos::{Crystals, HaloTable};
+use crate::material::rainbow::RainbowTable;
 use std::sync::OnceLock;
 use std::sync::Arc;
 use crate::material::texture::Solid;
@@ -304,6 +305,9 @@ pub struct VolumeMaterial {
     pub approximation: ScatteringApproximation,
     pub diffraction: Option<Diffraction>,
     pub halos: Option<Halos>,
+    /// Rainbows from raindrops (see `material::rainbow`): like halos, the traced drops' phase
+    /// function for direct sunlight at a path's first scattering.
+    pub rainbow: Option<Arc<RainbowTable>>,
     /// The volume's density field, for the particle size where it has one.
     pub field: Arc<dyn DensityField>,
 }
@@ -491,8 +495,10 @@ impl VolumeMaterial {
     fn sun_phase(&self, phase: &VertexPhase, incoming: &Vector3<f64>, s: &Scene, scatterings: u32) -> Color {
         let sun = s.sun.as_ref().unwrap();
         let cos = incoming.dot(&sun.direction);
-        let halos = match &self.halos {
-            Some(h) if scatterings == 0 && !self.reduced(scatterings) => h,
+        let first = scatterings == 0 && !self.reduced(scatterings);
+        let halos = match (&self.halos, &self.rainbow) {
+            (Some(h), _) if first => h,
+            (None, Some(rainbow)) if first => return rainbow.eval(cos),
             _ => return phase.eval(cos),
         };
         let table = halos.table.get_or_init(|| HaloTable::new(&sun.direction, &halos.crystals, halos.rays, halos.seed));
@@ -553,12 +559,13 @@ pub struct Scattering {
     pub approximation: ScatteringApproximation,
     pub diffraction: Option<Diffraction>,
     pub halos: Option<Halos>,
+    pub rainbow: Option<Arc<RainbowTable>>,
 }
 
 pub fn create_volume(bounds: BBox, density: Arc<dyn DensityField>, s: Scattering) -> SceneObject {
     let material = VolumeMaterial {
         albedo: s.albedo, phase: s.phase, approximation: s.approximation, diffraction: s.diffraction,
-        halos: s.halos, field: density.clone(),
+        halos: s.halos, rainbow: s.rainbow, field: density.clone(),
     };
     SceneObject {
         geometry: Box::new(Volume { bounds, density }),
@@ -670,6 +677,7 @@ mod tests {
             approximation: ScatteringApproximation::default(),
             diffraction: Some(Diffraction { table: DiffractionTable::new(0.1), fraction: 0.5, radius: 5. }),
             halos: None,
+            rainbow: None,
             field: Arc::new(ConstantDensity(1.)),
         };
         // First scattering in full: the extinction as given, diffraction in the phase.

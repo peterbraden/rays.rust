@@ -18,6 +18,7 @@ use crate::procedural::fireworks::create_firework;
 use crate::procedural::nubis_clouds::{NubisCloudLayer, GlobalNubis};
 use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGenus, GlobalCirrus};
 use crate::procedural::benard_altocumulus::BenardAltocumulus;
+use crate::procedural::lenticular::{Lenticular, MoistLayer};
 use crate::procedural::harris_cumulus::{CloudSimulation, Forcing, HarrisCumulus, Profile, SimulationParams, Sounding};
 use crate::participatingmedia::create_fog;
 use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
@@ -255,6 +256,10 @@ impl SceneFile {
 
         if t == "harris_cumulus" {
             return Some(Arc::new(SceneFile::parse_harris_cumulus(&o)));
+        }
+
+        if t == "lenticular" {
+            return Some(Arc::new(SceneFile::parse_lenticular(&o)));
         }
 
         if t == "benard_altocumulus" {
@@ -617,6 +622,68 @@ impl SceneFile {
             Vector3::new(c.center.x - c.extent, c.bottom(), c.center.y - c.extent),
             Vector3::new(c.center.x + c.extent, c.top(), c.center.y + c.extent),
         );
+        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(c));
+        create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// Lenticular clouds over the lee waves of a ridge (see `procedural::lenticular`):
+    ///
+    /// `{"type": "lenticular", "ridge": [x, z], "ridge_length": 6000, "wind_direction": [x, z],
+    /// "layers": [{"height": 4000, "depth": 320, "deficit": 190}, ...], "seed": 0}`
+    ///
+    /// Each layer is a moist layer: its middle's height, its depth and the lift needed to
+    /// saturate its middle (all in metres); each makes a lens on every crest the waves lift it
+    /// high enough. The waves: `wavelength`, `amplitude` (the largest lift), `decay` (downstream
+    /// distance to 1/e), `first_crest` (in wavelengths downstream of the ridge), `falloff` and
+    /// `spread` (how they fade beyond the ridge's ends), `bend` and `bend_size` (how far the
+    /// crests wander). The air: `humidity_variation` and `humidity_size`, `strata` and
+    /// `strata_spacing`, `roughness` and `detail_size` (all lifts in metres),
+    /// `condensation_rate` (g/kg per km of lift), `droplet_radius` (µm), and `wind_speed` and
+    /// `time` to move the fine structure through the standing clouds. `mapping` as for
+    /// `nubis_clouds`.
+    pub fn parse_lenticular(o: &Value) -> SceneObject {
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let layers = match o["layers"].as_array() {
+            None => Lenticular::default_layers(),
+            Some(ls) => ls.iter().map(|l| MoistLayer {
+                height: SceneFile::parse_number(&l["height"], 4000.),
+                depth: SceneFile::parse_number(&l["depth"], 300.).max(1.),
+                deficit: SceneFile::parse_number(&l["deficit"], 200.),
+            }).collect(),
+        };
+        let mut c = Lenticular::new(layers, SceneFile::parse_seed(o).unwrap_or(0));
+        c.ridge = SceneFile::parse_vec2_def(o, "ridge", c.ridge);
+        c.ridge_length = num("ridge_length", c.ridge_length).max(0.);
+        c.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", c.wind_direction).normalize();
+        c.wind_speed = num("wind_speed", c.wind_speed);
+        c.wavelength = num("wavelength", c.wavelength).max(100.);
+        c.amplitude = num("amplitude", c.amplitude).max(0.);
+        c.decay = num("decay", c.decay).max(1.);
+        c.first_crest = num("first_crest", c.first_crest);
+        c.falloff = num("falloff", c.falloff).max(1.);
+        c.spread = num("spread", c.spread).max(0.);
+        c.bend = num("bend", c.bend).max(0.);
+        c.bend_size = num("bend_size", c.bend_size).max(1.);
+        c.humidity_variation = num("humidity_variation", c.humidity_variation).max(0.);
+        c.humidity_size = num("humidity_size", c.humidity_size).max(1.);
+        c.strata = num("strata", c.strata).max(0.);
+        c.strata_spacing = num("strata_spacing", c.strata_spacing).max(1.);
+        c.roughness = num("roughness", c.roughness).max(0.);
+        c.detail_size = num("detail_size", c.detail_size).max(1.);
+        c.condensation_rate = num("condensation_rate", c.condensation_rate).max(0.);
+        c.droplet_radius = num("droplet_radius", c.droplet_radius).max(0.5);
+        c.time = num("time", c.time);
+        // The waves reach no cloud once the decayed amplitude is below the least deficit.
+        let least = c.layers.iter().map(|l| l.deficit).fold(f64::INFINITY, f64::min) - c.humidity_variation - c.strata - c.roughness;
+        let reach = if least > 0. && c.amplitude > least { c.decay * (c.amplitude / least).ln() } else { 10. * c.decay };
+        let (s0, s1) = (-0.3 * c.wavelength, reach + c.wavelength);
+        let half = c.ridge_length + 4. * (c.falloff + c.spread * s1);
+        let w = c.wind_direction;
+        let corners = [(s0, -half), (s0, half), (s1, -half), (s1, half)]
+            .map(|(s, a)| Vector2::new(c.ridge.x + s * w.x - a * w.y, c.ridge.y + s * w.y + a * w.x));
+        let lo = corners.iter().fold(Vector2::repeat(f64::INFINITY), |m, p| m.inf(p));
+        let hi = corners.iter().fold(Vector2::repeat(f64::NEG_INFINITY), |m, p| m.sup(p));
+        let bounds = BBox::new(Vector3::new(lo.x, c.bottom(), lo.y), Vector3::new(hi.x, c.top(), hi.y));
         let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(c));
         create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
     }

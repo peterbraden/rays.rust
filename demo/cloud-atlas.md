@@ -10,7 +10,7 @@ Every cloud is a participating medium of the same kind (see `src/volume.rs`): de
 through a density field, lit by the sun and the sky, under the same atmosphere that reddens the
 sun and hazes the distance. Cloud layers curve with the planet's surface, so distant clouds drop
 towards the horizon and sink below it. What differs is where the density comes from. There are
-four generators:
+five generators:
 
 | Generator | Makes | Approach |
 |---|---|---|
@@ -18,6 +18,7 @@ four generators:
 | `benard_altocumulus` | altocumulus, cirrocumulus | Rayleigh-Bénard convection cells in a thin layer |
 | `nubis_clouds` | cumulus, stratocumulus, stratus, altostratus | Noise-based modelling (Schneider, Horizon Zero Dawn's Nubis) |
 | `harris_cumulus` | cumulus, as they grow and die | A simulation of a sunny day (Harris et al. 2003) |
+| `lenticular` | lenticular clouds | Moist layers lifted by a mountain's lee waves |
 
 Render any of them with `cargo run --release -- demo/scenes/<scene>.json`. The altostratus, stratocumulus
 and stratus images are quick previews (480 x 300, 8 samples per pixel), so they are noisy.
@@ -29,6 +30,7 @@ and stratus images are quick previews (480 x 300, 8 samples per pixel), so they 
 | | [Cirrostratus, with halos](#cirrostratus) | `cirrostratus-halos.json` |
 | Middle | [Altocumulus](#altocumulus) | `benard-altocumulus.json` |
 | | [Altocumulus undulatus](#altocumulus-undulatus) | `altocumulus-undulatus.json` |
+| | [Altocumulus lenticularis](#altocumulus-lenticularis) | `lenticular.json` |
 | | [Altostratus](#altostratus) | `altostratus.json` |
 | Low | [Stratocumulus](#stratocumulus) | `stratocumulus.json` |
 | | [Stratus](#stratus) | `stratus.json` |
@@ -102,6 +104,30 @@ sheet from scattered cloudlets to joined ones with holes between (perlucidus); `
 Altocumulus in parallel bands, where gravity waves ripple the layer. `undulation` raises and
 grows the cloudlets along wave crests across the wind, `wavelength` apart, and thins them in the
 troughs.
+
+### Altocumulus lenticularis
+
+![Lenticular clouds](./scenes/lenticular.png)
+
+`lenticular.json`: `{"type": "lenticular", "ridge": [0, 0], "ridge_length": 800, "wind_direction": [1, 0], "oz": true}`
+
+Smooth lenses standing over the lee of a mountain, often stacked like a pile of plates. Stable air
+blowing over a ridge oscillates, and the oscillation stays trapped below some height as a train of
+standing lee waves downstream (Scorer 1949). The air rises over each crest and sinks in each
+trough. A moist layer condenses where a crest lifts it past saturation and evaporates beyond, so
+the cloud stays still while the wind blows through it.
+
+The field is computed in physical units. The wave is a decaying cosine downstream of the ridge,
+fading beyond the ridge's ends. Each moist layer is given by its height, depth and *deficit*: the
+lift it needs to saturate. The lift past saturation sets the cloud water (`condensation_rate`, about
+1.5 g/kg per km), and the droplet size turns that into extinction. Each layer makes a lens on every
+crest that lifts it high enough. Thin, separate moist layers give the stack. On the weaker crests
+downstream, only the moistest layer condenses: in the scene, the second crest holds a single
+plate. Humidity varies slowly from place to place, and fine strata and eddies texture the lenses.
+A short ridge gives the saucers of an isolated peak; a long one gives bands across the wind.
+
+Seen from the side, a lens is lit mostly by light scattered many times, so the scene uses the Oz
+approximation (`"oz": true`). Without it, the render sparkles with noise.
 
 ### Altostratus
 

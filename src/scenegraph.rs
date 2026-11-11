@@ -66,9 +66,8 @@ impl SceneGraph {
     /// Whether anything is hit between `min` and `max` along the ray, stopping at the first hit
     /// found: for shadow rays.
     pub fn occluded(&self, r: &Ray, max: f64, min: f64) -> bool {
-        let in_range = |o: &SceneObject| o.intersects_beyond(r, min).is_some_and(|x| x.dist >= min && x.dist < max);
-        self.bvh.any_hit(r, min, max, |i| in_range(&self.items[i]))
-            || self.infinite_items.iter().any(|o| in_range(o))
+        self.bvh.any_hit(r, min, max, |i| self.items[i].occludes(r, min, max))
+            || self.infinite_items.iter().any(|o| o.occludes(r, min, max))
     }
 
     pub fn nearest_raw_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(&SceneObject, RawIntersection)> {
@@ -76,7 +75,7 @@ impl SceneGraph {
         // Anything in the BVH must be no farther than the nearest unbounded object to matter
         // (on a tie, the bounded object wins).
         let max = infinites.as_ref().map_or(max, |(_, x)| x.dist.next_up());
-        let bounded = self.bvh.nearest(r, min, max, |i, _| self.items[i].intersects_beyond(r, min))
+        let bounded = self.bvh.nearest(r, min, max, |i, best| self.items[i].intersects_range(r, min, best))
             .map(|(i, x)| (&*self.items[i], x));
         bounded.or(infinites)
     }

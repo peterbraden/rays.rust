@@ -29,6 +29,20 @@ pub trait Geometry: Sync{
         }
     }
 
+    /// The nearest hit in `[min, max)` along the ray. A composite can use the range to skip
+    /// whatever lies outside it, eg. a mesh's BVH stops at nodes beyond `max`, the nearest hit
+    /// found elsewhere in the scene so far.
+    fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
+        self.intersects_beyond(r, min).filter(|x| x.dist >= min && x.dist < max)
+    }
+
+    /// Whether anything is hit in `[min, max)` along the ray: for shadow rays, which don't
+    /// need the nearest hit, so a composite can stop at the first. PBR calls this
+    /// `IntersectP`.
+    fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
+        self.intersects_range(r, min, max).is_some()
+    }
+
     // World space bounding box
     fn bounds(&self) -> BBox;
 
@@ -75,6 +89,8 @@ pub trait Geometry: Sync{
 impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> { (**self).intersects(r) }
     fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> { (**self).intersects_beyond(r, min) }
+    fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> { (**self).intersects_range(r, min, max) }
+    fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool { (**self).occludes(r, min, max) }
     fn bounds(&self) -> BBox { (**self).bounds() }
     fn transformed_bounds(&self, t: &Affine3<f64>) -> BBox { (**self).transformed_bounds(t) }
     fn fast_intersects(&self, r: &Ray) -> bool { (**self).fast_intersects(r) }

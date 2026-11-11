@@ -112,7 +112,20 @@ impl Mesh {
 
 impl Geometry for Mesh {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        self.bvh.nearest(r, 0., f64::INFINITY, |i, _| self.triangles[i].intersects(r)).map(|(_, x)| x)
+        self.intersects_range(r, 0., f64::INFINITY)
+    }
+
+    fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
+        self.intersects_range(r, min, f64::INFINITY)
+    }
+
+    // A triangle is hit at most once, so its one hit is the nearest beyond any `min`.
+    fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
+        self.bvh.nearest(r, min, max, |i, _| self.triangles[i].intersects(r)).map(|(_, x)| x)
+    }
+
+    fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
+        self.bvh.any_hit(r, min, max, |i| self.triangles[i].intersects(r).is_some_and(|x| x.dist >= min && x.dist < max))
     }
 
     fn transformed_bounds(&self, t: &Affine3<f64>) -> BBox {
@@ -209,7 +222,20 @@ impl SmoothMesh {
 
 impl Geometry for SmoothMesh {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        self.bvh.nearest(r, 0., f64::INFINITY, |i, _| self.triangles[i].intersects(r)).map(|(_, x)| x)
+        self.intersects_range(r, 0., f64::INFINITY)
+    }
+
+    fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
+        self.intersects_range(r, min, f64::INFINITY)
+    }
+
+    // A triangle is hit at most once, so its one hit is the nearest beyond any `min`.
+    fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
+        self.bvh.nearest(r, min, max, |i, _| self.triangles[i].intersects(r)).map(|(_, x)| x)
+    }
+
+    fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
+        self.bvh.any_hit(r, min, max, |i| self.triangles[i].intersects(r).is_some_and(|x| x.dist >= min && x.dist < max))
     }
 
     fn transformed_bounds(&self, t: &Affine3<f64>) -> BBox {
@@ -343,6 +369,25 @@ mod tests {
         assert!(corners.size().max() > 2.8, "{}", corners);
         for v in verts {
             assert!(tight.contains_point(&t.transform_point(&v.into()).coords), "{} outside {}", v, tight);
+        }
+    }
+
+    #[test]
+    fn test_ranges_agree_with_brute_force() {
+        use rand::{Rng, SeedableRng};
+        let (_, mesh) = tessellated_sphere(12);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(5);
+        for _ in 0 .. 1000 {
+            let r = Ray {
+                ro: Vector3::new(rng.gen_range(-3., 3.), rng.gen_range(-3., 3.), rng.gen_range(-3., 3.)),
+                rd: Vector3::new(rng.gen_range(-1., 1.), rng.gen_range(-1., 1.), rng.gen_range(-1., 1.)),
+            };
+            let (min, max) = (rng.gen_range(0., 2.), rng.gen_range(2., 6.));
+            let expected = mesh.triangles.iter().filter_map(|t| t.intersects(&r))
+                .map(|x| x.dist).filter(|&d| d >= min && d < max)
+                .min_by(|a, b| a.total_cmp(b));
+            assert_eq!(mesh.intersects_range(&r, min, max).map(|x| x.dist), expected);
+            assert_eq!(mesh.occludes(&r, min, max), expected.is_some());
         }
     }
 }

@@ -51,6 +51,17 @@ under the sky model's low sun: Scots pines, Norway spruces, quaking aspens and b
 turning in autumn, with a shrub understory. Each species is three distinct trees, instanced;
 species grow in stands, with clearings, and none on steep slopes.
 ![forest](./scenes/forest.png)
+## Alpine terrain
+Mountains from seeded noise after one 100,000 year glacial cycle: tectonic uplift, river
+incision and glacial erosion (`src/terrain/`).
+![alpine terrain](./scenes/terrain-alpine.png)
+
+Volcanic mountains after the same cycle: a stratovolcano with lava flows, alluvial valley
+floors and filled lake basins.
+![volcanic terrain](./scenes/terrain-volcanic.png)
+
+A coastal plain below mountains: rivers meandering to the sea, building deltas.
+![coastal terrain](./scenes/terrain-coast.png)
 
 ## Instancing
 Twenty instances of one teapot mesh, each with its own transform and material.

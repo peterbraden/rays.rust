@@ -83,6 +83,7 @@ mod procedural {
 }
 mod participatingmedia;
 mod noise;
+mod terrain;
 
 use crate::trace::trace;
 use crate::rendercontext::RenderContext;

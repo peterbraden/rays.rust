@@ -80,6 +80,10 @@ heightmap terrain, behind a meadow of grass.
     - Ocean (Tessendorf's algorithm with Phillips spectrum)
     - Trees (Weber and Penn's parametric model, with presets for several species, autumn colours and dead branches)
     - Forests of instanced trees over any surface
+    - Terrain evolved through time from seeded noise by tectonic uplift, river incision and
+      deposition, glacial erosion (shallow ice approximation), volcanism, deltas and
+      meandering rivers with ox-bow lakes, over layered geology, on a patch or a whole planet
+      (see `src/terrain/`)
     - Random Cubes
     - Terrain from heightmaps (fractal noise or images)
     - Grass on any terrain: species presets (lawn, meadow, tussock, reed...) and conditions (wind, drought, frost, rain, mowing...)

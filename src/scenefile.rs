@@ -16,6 +16,7 @@ use crate::skysphere::create_sky_sphere;
 use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
 use crate::procedural::tree;
+use crate::terrain::object::create_terrain;
 use crate::procedural::grass::{create_grass, GrassMedium};
 use crate::procedural::heightmap::{HeightGrid, Terrain};
 use crate::participatingmedia::create_fog;
@@ -276,6 +277,9 @@ impl SceneFile {
         if t == "ocean" {
             let d = create_ocean(&o);
             return Some(Arc::new(d));
+        }
+        if t == "landscape" {
+            return Some(Arc::new(create_terrain(&o)));
         }
         if t == "firework" {
             let d = create_firework(&o);

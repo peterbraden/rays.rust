@@ -63,6 +63,23 @@ impl PerlinNoise {
         
         Self { perm, grad3 }
     }
+
+    /// A generator whose permutation table is shuffled by `seed`, so different seeds give
+    /// different, uncorrelated noise. Perlin's table is a permutation of 0-255 chosen once; any
+    /// permutation works, so a seeded Fisher-Yates shuffle of it gives a family of noises.
+    pub fn with_seed(seed: u64) -> Self {
+        let mut n = Self::new();
+        let mut rng = crate::geometry::Pcg32::new(seed, 0x5eed);
+        let mut base = [0usize; 256];
+        base.copy_from_slice(&n.perm[..256]);
+        for i in (1..256).rev() {
+            let j = (rng.next_u32() as usize) % (i + 1);
+            base.swap(i, j);
+        }
+        n.perm[..256].copy_from_slice(&base);
+        n.perm[256..].copy_from_slice(&base);
+        n
+    }
     
     /// Get noise value at a 3D point
     pub fn noise(&self, x: f64, y: f64, z: f64) -> f64 {
@@ -360,6 +377,16 @@ mod tests {
         let values: Vec<f64> = (0..8).map(|i| a.noise(i as f64 + 0.5, 0.5, 0.5)).collect();
         assert!(values.iter().any(|v| (v - values[0]).abs() > 1e-6), "{:?}", values);
         WorleyNoise::new(1.0, u32::MAX).noise(0.5, 0.5, 0.5);
+    }
+
+    #[test]
+    fn test_seeded_noise_is_reproducible_and_varies_with_seed() {
+        let (a, b, c) = (PerlinNoise::with_seed(1), PerlinNoise::with_seed(1), PerlinNoise::with_seed(2));
+        let pts = [(0.3, 1.7, -2.2), (10.1, 0.5, 3.3), (-4.4, 2.2, 0.9)];
+        for &(x, y, z) in &pts {
+            assert_eq!(a.noise(x, y, z), b.noise(x, y, z));
+        }
+        assert!(pts.iter().any(|&(x, y, z)| a.noise(x, y, z) != c.noise(x, y, z)));
     }
 
     #[test]

@@ -5,10 +5,8 @@
 ///
 /// In order to use a mesh in a ray-tracing context, we will need to use an acceleration structure
 /// to performantly intersect with the appropriate triangle. Because of this, at render time, the
-/// mesh will need the repetition of vertices necessary to store the triangles in an Octree.
-///
-/// (POSSIBLE ENHANCEMENT: Is there a way to use the octree with indices to dynamically reconstruct
-/// triangles?)
+/// mesh will need the repetition of vertices necessary to store the triangles in a bounding
+/// volume hierarchy (see `crate::bvh`), which holds each triangle once.
 ///
 /// Most other Mesh datastructures are optimisations to reduce the memory requirements by removing
 /// repetition of positional data using indexes of vertices. This makes a lot of sense when you
@@ -30,7 +28,7 @@ use crate::shapes::bbox::BBox;
 use crate::shapes::triangle::{Triangle, SmoothTriangle};
 use std::vec::Vec;
 use std::sync::Arc;
-use crate::octree::Octree;
+use crate::bvh::Bvh;
 
 /// A mesh as stored in a file: vertex positions, optionally a normal per vertex, and triangles
 /// indexing them.
@@ -81,12 +79,12 @@ fn to_vectors(v: &[f32]) -> Vec<Vector3<f64>> {
 }
 
 pub struct Mesh {
-    triangles: Octree<Triangle>,
-    bounds: BBox,
-    triangle_count: usize,
-    /// For sampling points on the surface: each triangle with the running total of area up to
-    /// and including it.
-    areas: Vec<(Arc<Triangle>, f64)>,
+    bvh: Bvh,
+    /// In the BVH's leaf order.
+    triangles: Vec<Triangle>,
+    /// For sampling points on the surface: the running total of area up to and including each
+    /// triangle.
+    areas: Vec<f64>,
 }
 
 // A simple triangle collection mesh. 
@@ -97,45 +95,27 @@ impl Mesh {
         for m in load(&pth) {
             let positions: Vec<Vector3<f64>> = m.positions.iter().map(|p| p.component_mul(&scale)).collect();
             triangles.extend(m.triangles.iter().map(|&[a, b, c]| {
-                Arc::new(Triangle::new(positions[a], positions[b], positions[c]))
+                Triangle::new(positions[a], positions[b], positions[c])
             }));
         }
-
-        //println!("# of triangles: {}", triangles.len());
-
-        let bounds = Mesh::bounds_of(&triangles);
-        let tree = Octree::new(8, bounds, &triangles); 
-        let mut total = 0.;
-        let areas = triangles.iter().map(|t| {
-            total += t.surface_area();
-            (t.clone(), total)
-        }).collect();
-        Mesh {
-            triangles: tree,
-            bounds,
-            triangle_count: triangles.len(),
-            areas,
-        }
+        Mesh::new(triangles)
     }
 
-    fn bounds_of(triangles: &Vec<Arc<Triangle>>) -> BBox {
-        let mut bb = BBox::empty();
-
-        for t in triangles {
-            bb = bb.union(&t.bounds());
-        }
-
-        bb
+    pub fn new(triangles: Vec<Triangle>) -> Mesh {
+        let (bvh, triangles) = Bvh::build(triangles, |t| t.bounds());
+        let mut total = 0.;
+        let areas = triangles.iter().map(|t| { total += t.surface_area(); total }).collect();
+        Mesh { bvh, triangles, areas }
     }
 }
 
 impl Geometry for Mesh {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        self.triangles.raw_intersection(r, f64::INFINITY, 0f64)
+        self.bvh.nearest(r, 0., f64::INFINITY, |i, _| self.triangles[i].intersects(r)).map(|(_, x)| x)
     }
 
     fn surface_area(&self) -> f64 {
-        self.areas.last().map_or(0., |(_, total)| *total)
+        self.areas.last().copied().unwrap_or(0.)
     }
 
     /// Choose a triangle with probability proportional to its area, by binary search on the
@@ -143,16 +123,16 @@ impl Geometry for Mesh {
     /// `sample_triangle`).
     fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> {
         let target = u[0] * self.surface_area();
-        let i = self.areas.partition_point(|(_, total)| *total <= target).min(self.areas.len().checked_sub(1)?);
-        self.areas[i].0.sample_surface([u[1], u[2], 0.])
+        let i = self.areas.partition_point(|total| *total <= target).min(self.areas.len().checked_sub(1)?);
+        self.triangles[i].sample_surface([u[1], u[2], 0.])
     }
 
     fn bounds(&self) -> BBox {
-        self.bounds
+        self.bvh.bounds()
     }
 
     fn primitives(&self) -> u64 {
-        self.triangle_count as u64
+        self.triangles.len() as u64
     }
 }
 
@@ -188,9 +168,9 @@ pub fn vertex_normals(positions: &[Vector3<f64>], triangles: &[[usize; 3]]) -> V
 }
 
 pub struct SmoothMesh {
-    triangles: Octree<SmoothTriangle>,
-    bounds: BBox,
-    triangle_count: usize,
+    bvh: Bvh,
+    /// In the BVH's leaf order.
+    triangles: Vec<SmoothTriangle>,
 }
 
 impl SmoothMesh {
@@ -211,43 +191,28 @@ impl SmoothMesh {
                 let face = Triangle::new(positions[a], positions[b], positions[c]).normal;
                 let or_face = |n: Vector3<f64>| if n == Vector3::zeros() { face } else { n };
                 let (na, nb, nc) = (or_face(normals[a]), or_face(normals[b]), or_face(normals[c]));
-                Arc::new(SmoothTriangle::new(positions[a], positions[b], positions[c], na, nb, nc))
+                SmoothTriangle::new(positions[a], positions[b], positions[c], na, nb, nc)
             }));
         }
 
         println!("# of triangles: {}", triangles.len());
 
-        let bounds = SmoothMesh::bounds_of(&triangles);
-        let tree = Octree::new(8, bounds, &triangles); 
-        SmoothMesh {
-            triangles: tree,
-            bounds,
-            triangle_count: triangles.len()
-        }
-    }
-
-    fn bounds_of(triangles: &Vec<Arc<SmoothTriangle>>) -> BBox {
-        let mut bb = BBox::empty();
-
-        for t in triangles {
-            bb = bb.union(&t.bounds());
-        }
-
-        bb
+        let (bvh, triangles) = Bvh::build(triangles, |t| t.bounds());
+        SmoothMesh { bvh, triangles }
     }
 }
 
 impl Geometry for SmoothMesh {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        self.triangles.raw_intersection(r, f64::INFINITY, 0f64)
+        self.bvh.nearest(r, 0., f64::INFINITY, |i, _| self.triangles[i].intersects(r)).map(|(_, x)| x)
     }
 
     fn bounds(&self) -> BBox {
-        self.bounds
+        self.bvh.bounds()
     }
 
     fn primitives(&self) -> u64 {
-        self.triangle_count as u64
+        self.triangles.len() as u64
     }
 }
 

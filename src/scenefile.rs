@@ -851,7 +851,8 @@ impl SceneFile {
     /// `procedural::hogan_kew_cirrus`), filling `extent` either side of `center` ([x, z]):
     ///
     /// `{"type": "hogan_kew_cirrus", "genus": "cirrus" | "cirrostratus" | "cirrocumulus",
-    /// "base": 8000, "top": 10000, "extent": 100000, "wind_direction": [x, z], "seed": 0}`
+    /// "base": 8000, "top": 10000, "wind_direction": [x, z], "seed": 0}`, filling `extent` either
+    /// side of `center` (by default out to the layer's horizon, about 357 km for a 10 km top)
     ///
     /// The genus sets the rest, each of which can be overridden: `coverage`, `cell_size`,
     /// `spectral_slope`, `anisotropy` (the generating cells); `density`, `generating_depth`,
@@ -913,7 +914,11 @@ impl SceneFile {
         c.particle_growth = num("particle_growth", c.particle_growth);
         c.young_size = num("young_size", c.young_size).clamp(0.05, 1.);
         c.patch_size = num("patch_size", c.patch_size);
-        let extent = num("extent", 100000.);
+        // By default the layer reaches its own horizon, √(2 R top), so it runs down into the
+        // haze there rather than stopping short in clear sky (a 9 km deck stays above the horizon
+        // out to 340 km).
+        let horizon = (2. * SceneFile::parse_number(&o["earth_radius"], EARTH_RADIUS) * top + top * top).sqrt();
+        let extent = num("extent", horizon);
         let center = SceneFile::parse_vec2_def(o, "center", Vector2::new(0., 0.));
         c.extent = extent;
         c.center = center;

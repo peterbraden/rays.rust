@@ -160,6 +160,24 @@ struct Args {
     dump_scene: Option<String>,
 }
 
+/// The process's peak resident memory so far, in bytes: large meshes and their acceleration
+/// structures are the main use. `getrusage` reports `ru_maxrss` in bytes on macOS and in
+/// kilobytes on Linux and the BSDs.
+#[cfg(unix)]
+fn peak_memory() -> Option<u64> {
+    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) } != 0 {
+        return None;
+    }
+    let units = if cfg!(target_os = "macos") { 1 } else { 1024 };
+    Some(usage.ru_maxrss as u64 * units)
+}
+
+#[cfg(not(unix))]
+fn peak_memory() -> Option<u64> {
+    None
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -167,6 +185,7 @@ fn main() {
         style("# 1. - Parsing scene, building models").bold().cyan()
     );
 
+    let build_start = Instant::now();
     let doc = scenefile::SceneFile::read_document(&args.scene).unwrap_or_else(|e| {
         eprintln!("{}", e);
         std::process::exit(1);
@@ -196,6 +215,8 @@ fn main() {
     }
     println!("- Output: {}x{} @ {} samples -> {}", s.image.width, s.image.height, s.render.samples_per_pixel(), rc.output_filename);
     println!("- Scene Objects: {}, Primitives: {} ", s.objects.len(),  s.objects.primitives_len()); 
+    let peak = peak_memory().map_or(String::new(), |b| format!(", peak memory {:.0} MiB", b as f64 / (1024. * 1024.)));
+    println!("- Built in {:.2} s{}", build_start.elapsed().as_secs_f64(), peak);
 
     // Fail before rendering if the output can't be written in this format.
     let writer = output::writer_for(&rc.output_filename, s.output).unwrap_or_else(|e| {

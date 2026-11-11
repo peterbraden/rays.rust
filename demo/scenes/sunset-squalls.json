@@ -9,7 +9,7 @@
   "path_termination": "russian_roulette",
   "output": {
     "tonemap": "reinhard",
-    "exposure": 2.0
+    "exposure": 3.5
   },
   "camera": {
     "location": [
@@ -48,7 +48,7 @@
     {
       "type": "skysphere",
       "sun_direction": [
-        0.12,
+        0.32,
         0.05,
         1
       ],
@@ -153,7 +153,8 @@
         0.3
       ],
       "seed": 7,
-      "oz": true
+      "oz": true,
+      "density": 0.002
     }
   ]
 }

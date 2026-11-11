@@ -91,7 +91,7 @@
 //!
 //! `{"type": "ocean", "curved": true, "wind": [7, 2], "detail_center": [x, z]}`: the sea as the
 //! planet's surface (`CurvedOcean`), physically lit. Its waves are scaled so their slopes carry
-//! `resolved` (default 0.5) of Cox and Munk's for the wind, unless `amplitude` is given, and
+//! `resolved` (default 0.8) of Cox and Munk's for the wind, unless `amplitude` is given, and
 //! are displaced within `detail_distance` (default 300 m) of `detail_center` (put it under the
 //! camera); `water` is the colour the water body sends back, as an albedo, and `roughness` the
 //! mean square slope of the ripples (by default the rest of Cox and Munk's).
@@ -774,12 +774,17 @@ pub fn cox_munk_slope(speed: f64) -> f64 {
     0.003 + 0.00512 * speed.max(0.)
 }
 
-/// The sea's surface as the sum of two tiles of incommensurate sizes, so that the pattern
-/// repeats only far away: swell and wind waves on one, and on the other the shorter waves it
-/// has no room for, down to half a metre.
+/// The sea's surface as the sum of three tiles of incommensurate sizes, so that the pattern
+/// repeats only far away: swell and wind waves on one, on the next the shorter waves it has no
+/// room for, down to a metre, and on the last wavelets down to 12 cm, the chop that gives water
+/// its fine texture. The wavelets are too low to matter to the surface's shape, and only tilt
+/// its normals.
+/// How many of the wave tiles displace the surface; the rest only tilt its normals.
+const DISPLACED: usize = 2;
+
 pub struct WaveField {
     tiles: Vec<WaveTile>,
-    /// Bounds on the height and the slope.
+    /// Bounds on the height and the slope of the displaced surface.
     pub max_height: f64,
     pub max_slope: f64,
     /// The mean square slope of the waves (as interpolated).
@@ -791,12 +796,21 @@ impl WaveField {
     /// `amplitude` it is that, and otherwise the waves are scaled so their mean square slope is
     /// `resolved` of Cox and Munk's for the wind.
     pub fn new(wind: Vector2<f64>, time: f64, seed: u64, amplitude: Option<f64>, resolved: f64) -> WaveField {
-        let (big, small, n) = (487., 61.3, 256);
+        let (big, small, tiny, n) = (487., 61.3, 7.9, 256);
+        // Each tile takes over just short of the previous one's shortest waves.
         let k_split = std::f64::consts::PI * n as f64 / big * 0.9;
+        let k_tiny = std::f64::consts::PI * (n / 2) as f64 / small * 0.9;
         let mut tiles = vec![
             WaveTile::new(wind, big, n, 0., k_split, time, seed),
-            WaveTile::new(wind, small, n / 2, k_split, f64::INFINITY, time, seed.wrapping_add(1)),
+            WaveTile::new(wind, small, n / 2, k_split, k_tiny, time, seed.wrapping_add(1)),
+            WaveTile::new(wind, tiny, n / 2, k_tiny, f64::INFINITY, time, seed.wrapping_add(2)),
         ];
+        // Each wave's amplitude should be √P(k) Δk, but `create_amplitude_tile` leaves out the
+        // grid's spacing Δk = 2π/L, which is larger on a smaller tile: put it back, relative to
+        // the largest, or the shorter waves are far too weak.
+        for t in tiles.iter_mut().skip(1) {
+            t.scale(big / t.size);
+        }
         let mut field = WaveField { tiles: vec![], max_height: 0., max_slope: 0., mean_square_slope: 0. };
         let k = match amplitude {
             Some(a) => a.sqrt(),
@@ -810,7 +824,7 @@ impl WaveField {
         for t in tiles.iter_mut() {
             t.scale(k);
         }
-        let (h, s) = tiles.iter().map(|t| t.maxima()).fold((0., 0.), |a, b| (a.0 + b.0, a.1 + b.1));
+        let (h, s) = tiles[..DISPLACED].iter().map(|t| t.maxima()).fold((0., 0.), |a, b| (a.0 + b.0, a.1 + b.1));
         field.tiles = tiles;
         field.max_height = h;
         field.max_slope = s;
@@ -818,9 +832,14 @@ impl WaveField {
         field
     }
 
-    /// Height and slopes at horizontal position (x, z).
+    /// Height (of the displaced tiles) and slopes (of all) at horizontal position (x, z).
     pub fn at(&self, x: f64, z: f64) -> Vector3<f64> {
-        self.tiles.iter().map(|t| t.at(x, z)).sum()
+        let mut w = Vector3::zeros();
+        for (i, t) in self.tiles.iter().enumerate() {
+            let v = t.at(x, z);
+            w += if i < DISPLACED { v } else { Vector3::new(0., v.y, v.z) };
+        }
+        w
     }
 
     /// The mean square slope as sampled: between texels, interpolation smooths the shortest
@@ -1095,7 +1114,7 @@ fn create_curved_ocean(opts: &Value) -> SceneObject {
         SceneFile::parse_number(&opts["time"], 0.),
         SceneFile::parse_int(&opts["seed"], 0) as u64,
         opts["amplitude"].as_f64(),
-        SceneFile::parse_number(&opts["resolved"], 0.5).clamp(0., 1.),
+        SceneFile::parse_number(&opts["resolved"], 0.8).clamp(0., 1.),
     );
     let radius = SceneFile::parse_number(&opts["earth_radius"], crate::planet::EARTH_RADIUS);
     let material = physical_material(opts, waves.mean_square_slope, wind, Some(Vector3::new(0., -radius, 0.)));

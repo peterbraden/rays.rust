@@ -29,6 +29,7 @@ use crate::shapes::triangle::{Triangle, SmoothTriangle};
 use std::vec::Vec;
 use std::sync::Arc;
 use crate::bvh::Bvh;
+use crate::na::geometry::Affine3;
 
 /// A mesh as stored in a file: vertex positions, optionally a normal per vertex, and triangles
 /// indexing them.
@@ -112,6 +113,10 @@ impl Mesh {
 impl Geometry for Mesh {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         self.bvh.nearest(r, 0., f64::INFINITY, |i, _| self.triangles[i].intersects(r)).map(|(_, x)| x)
+    }
+
+    fn transformed_bounds(&self, t: &Affine3<f64>) -> BBox {
+        self.bvh.transformed_bounds(t)
     }
 
     fn surface_area(&self) -> f64 {
@@ -205,6 +210,10 @@ impl SmoothMesh {
 impl Geometry for SmoothMesh {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         self.bvh.nearest(r, 0., f64::INFINITY, |i, _| self.triangles[i].intersects(r)).map(|(_, x)| x)
+    }
+
+    fn transformed_bounds(&self, t: &Affine3<f64>) -> BBox {
+        self.bvh.transformed_bounds(t)
     }
 
     fn bounds(&self) -> BBox {
@@ -301,5 +310,39 @@ mod tests {
         let r = Ray { ro: Vector3::new(5., 1., 0.), rd: Vector3::new(-1., 0., 0.) };
         let n = m.intersects(&r).expect("hit").normal;
         assert!((n - Vector3::new(1., 1. / 3., 0.).normalize()).norm() < 1e-6, "{}", n);
+    }
+
+    /// A unit sphere as `n` x `2n` latitude-longitude quads.
+    fn tessellated_sphere(n: usize) -> (Vec<Vector3<f64>>, Mesh) {
+        let p = |i: usize, j: usize| {
+            let (th, ph) = (std::f64::consts::PI * i as f64 / n as f64, std::f64::consts::PI * j as f64 / n as f64);
+            Vector3::new(th.sin() * ph.cos(), th.cos(), th.sin() * ph.sin())
+        };
+        let mut tris = vec![];
+        let mut verts = vec![];
+        for i in 0 .. n {
+            for j in 0 .. 2 * n {
+                verts.push(p(i, j));
+                tris.push(Triangle::new(p(i, j), p(i + 1, j), p(i, j + 1)));
+                tris.push(Triangle::new(p(i, j + 1), p(i + 1, j), p(i + 1, j + 1)));
+            }
+        }
+        verts.push(p(n, 0));
+        (verts, Mesh::new(tris))
+    }
+
+    #[test]
+    fn test_transformed_bounds_are_tight_and_conservative() {
+        use crate::na::geometry::Rotation3;
+        let (verts, mesh) = tessellated_sphere(24);
+        let t = Affine3::from_matrix_unchecked(Rotation3::from_euler_angles(0.6, 0.7, 0.8).to_homogeneous());
+        let tight = mesh.transformed_bounds(&t);
+        let corners = mesh.bounds().transform(&na::convert(t));
+        // A rotated unit sphere still fits in [-1, 1]^3; the rotated box of corners doesn't.
+        assert!(tight.size().max() < 2.5, "{}", tight);
+        assert!(corners.size().max() > 2.8, "{}", corners);
+        for v in verts {
+            assert!(tight.contains_point(&t.transform_point(&v.into()).coords), "{} outside {}", v, tight);
+        }
     }
 }

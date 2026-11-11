@@ -58,6 +58,7 @@
 
 use crate::intersection::RawIntersection;
 use crate::na::Vector3;
+use crate::na::geometry::{Affine3, Transform3};
 use crate::ray::Ray;
 use crate::shapes::bbox::BBox;
 
@@ -68,6 +69,10 @@ const TRAVERSAL_COST: f64 = 0.125;
 /// Leaves never hold more than this many items (unless they can't be split at all, eg. all
 /// centroids coincide), whatever the heuristic says.
 const MAX_LEAF: usize = 8;
+/// How deep `transformed_bounds` looks: at most 2^8 = 256 boxes. For a rotated, finely
+/// tessellated sphere that is within 20% of the true extent; transforming the root box's corners
+/// gives 70% too wide.
+const TRANSFORMED_BOUNDS_DEPTH: usize = 8;
 /// Deep enough for any tree built from a sane number of items.
 const STACK_SIZE: usize = 64;
 
@@ -203,6 +208,26 @@ impl Bvh {
 
     pub fn bounds(&self) -> BBox {
         self.nodes.first().map_or(BBox::empty(), |n| n.bounds)
+    }
+
+    /// Bounds of the tree's contents after transforming them by `t`: the union of its boxes
+    /// `TRANSFORMED_BOUNDS_DEPTH` levels down (or leaves above that), each transformed. Much
+    /// tighter than transforming the root box when `t` rotates, and the cost is bounded
+    /// whatever the size of the tree.
+    pub fn transformed_bounds(&self, t: &Affine3<f64>) -> BBox {
+        let t: Transform3<f64> = na::convert(*t);
+        let mut out = BBox::empty();
+        let mut stack = vec![(0usize, 0usize)];
+        while let Some((index, depth)) = stack.pop() {
+            let Some(node) = self.nodes.get(index) else { break };
+            if node.count > 0 || depth == TRANSFORMED_BOUNDS_DEPTH {
+                out = out.union(&node.bounds.transform(&t));
+            } else {
+                stack.push((index + 1, depth + 1));
+                stack.push((node.offset as usize, depth + 1));
+            }
+        }
+        out
     }
 
     pub fn node_count(&self) -> usize {

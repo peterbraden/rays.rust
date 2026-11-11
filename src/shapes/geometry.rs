@@ -2,6 +2,7 @@ use crate::ray::Ray;
 use crate::intersection::RawIntersection;
 use crate::shapes::bbox::BBox;
 use crate::na::{Vector3};
+use crate::na::geometry::Affine3;
 
 
 // 
@@ -30,6 +31,13 @@ pub trait Geometry: Sync{
 
     // World space bounding box
     fn bounds(&self) -> BBox;
+
+    /// The bounds of this geometry after transforming it by `t`, as when it is instanced. The
+    /// default transforms the corners of `bounds()`, which under rotation can be much larger
+    /// than the geometry itself (up to sqrt(3) times as wide); composites can do better.
+    fn transformed_bounds(&self, t: &Affine3<f64>) -> BBox {
+        self.bounds().transform(&na::convert(*t))
+    }
 
 
     // === Optional methods ===
@@ -68,6 +76,7 @@ impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> { (**self).intersects(r) }
     fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> { (**self).intersects_beyond(r, min) }
     fn bounds(&self) -> BBox { (**self).bounds() }
+    fn transformed_bounds(&self, t: &Affine3<f64>) -> BBox { (**self).transformed_bounds(t) }
     fn fast_intersects(&self, r: &Ray) -> bool { (**self).fast_intersects(r) }
     fn primitives(&self) -> u64 { (**self).primitives() }
     fn inside(&self, p: &Vector3<f64>) -> bool { (**self).inside(p) }

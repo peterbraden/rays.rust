@@ -671,7 +671,7 @@ impl SceneFile {
         if t == "terrain" {
             return Some(Box::new(Terrain { grid: Arc::new(HeightGrid::from_json(&o["heightmap"])) }));
         }
-        None
+        SceneFile::parse_shape(t, o)
     }
 
     /// As `parse_geometry`, but a named geometry is returned as the shared original itself.

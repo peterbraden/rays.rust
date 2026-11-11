@@ -4,6 +4,10 @@
 Bumps, dents, wrinkles, ripples and waves (see [bump mapping](../docs/bump-mapping.md)).
 ![Bump mapping](./scenes/bumps.png)
 
+## Shapes
+Every shape modelled on POV-Ray's (see the [shape reference](../docs/shapes.md)).
+![Shapes](./scenes/shapes.png)
+
 ## Spheres
 Spheres demonstrating 3 different materials.
 ![Spheres](./scenes/spheres.png)

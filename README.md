@@ -25,6 +25,10 @@ Supports:
     - Mesh
     - OBJ file to mesh import
     - Infinite Mesh
+    - The shapes of POV-Ray: cylinder, cone, disc, torus, quadric and polynomial surfaces,
+      polygon, prism, lathe, surface of revolution, sphere sweep, blob, isosurface,
+      superellipsoid, Julia fractal, height field, parametric surface, bicubic patch and text
+      ([reference](./docs/shapes.md))
     - Transforms (scale, rotate, translate) and object instancing
 
 ## Instancing

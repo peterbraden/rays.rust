@@ -57,6 +57,18 @@ mod shapes {
     pub mod wo3;
     pub mod infinite;
     pub mod repeating_mesh;
+    pub mod polynomial;
+    pub mod cone;
+    pub mod disc;
+    pub mod algebraic;
+    pub mod polygon;
+    pub mod revolution;
+    pub mod sweep;
+    pub mod blob;
+    pub mod implicit;
+    pub mod julia;
+    pub mod tessellated;
+    pub mod text;
 }
 mod octree;
 mod bvh;
@@ -65,6 +77,7 @@ mod scene;
 mod scenefile;
 mod nff;
 mod tungsten;
+mod scenefile_shapes;
 mod skysphere;
 mod ocean;
 mod camera;
@@ -87,6 +100,7 @@ mod procedural {
 mod participatingmedia;
 mod noise;
 mod terrain;
+mod expr;
 
 use crate::trace::trace;
 use crate::rendercontext::RenderContext;

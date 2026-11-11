@@ -29,9 +29,18 @@ use crate::volume::DensityField;
 const ROW: f64 = 0.866_025_403_784_438_6;
 
 pub struct Mammatus {
-    /// Height of the anvil's base, and how thick it is.
+    /// Height of the anvil's base, and how thick it is: its top is flat, at base + thickness,
+    /// where it spreads against the tropopause.
     pub base: f64,
     pub thickness: f64,
+    /// How far the base undulates up and down (m), over what distance; how far it sags below
+    /// `base` towards the storm's core, reached `sag_distance` in from the edge; and over how
+    /// many metres its underside thickens to full density.
+    pub base_variation: f64,
+    pub base_size: f64,
+    pub sag: f64,
+    pub sag_distance: f64,
+    pub base_softness: f64,
     /// Extinction in the anvil, and in the pouches.
     pub anvil_density: f64,
     pub pouch_density: f64,
@@ -69,6 +78,11 @@ impl Mammatus {
         Mammatus {
             base: 5000.,
             thickness: 2500.,
+            base_variation: 0.,
+            base_size: 20_000.,
+            sag: 0.,
+            sag_distance: 15_000.,
+            base_softness: 0.,
             anvil_density: 0.015,
             pouch_density: 0.02,
             pouch_size: 1400.,
@@ -91,7 +105,19 @@ impl Mammatus {
     }
 
     pub fn bottom(&self) -> f64 {
-        self.base - self.pouch_depth * 1.2 - self.roughness
+        self.base - self.base_variation - self.sag - self.pouch_depth * 1.2 - self.roughness
+    }
+
+    /// The height of the anvil's base at (x, z), `inside` its edge.
+    fn local_base(&self, x: f64, z: f64, inside: f64) -> f64 {
+        let mut b = self.base;
+        if self.base_variation > 0. {
+            b += (self.noise.fbm(x / self.base_size, 0.13, z / self.base_size, 3, 0.5, 2.) - 0.5) * 2. * self.base_variation;
+        }
+        if self.sag > 0. {
+            b -= self.sag * smoothstep(0., self.sag_distance, inside);
+        }
+        b.min(self.top() - 1.)
     }
 
     pub fn top(&self) -> f64 {
@@ -150,11 +176,15 @@ impl Mammatus {
         let taper = smoothstep(0., self.edge_taper, inside);
         let d = p / self.detail_size;
         let ripple = (self.noise.fbm(d.x, d.y, d.z, 3, 0.5, 2.) - 0.5) * 2.;
-        if p.y >= self.base {
-            // The anvil: thinning towards its edge, from the top down, and towards its top.
-            let h = (p.y - self.base) / self.thickness;
+        let base = self.local_base(p.x, p.z, inside);
+        if p.y >= base {
+            // The anvil: thinning towards its edge, from the top down, and towards its top, and
+            // thickening over its soft underside.
+            let depth = self.top() - base;
+            let h = (p.y - base) / depth;
             let top = taper * (0.75 + 0.25 * ripple);
-            return (1. - smoothstep(top - 0.15, top, h)) * (0.85 + 0.15 * ripple);
+            let underside = if self.base_softness > 0. { smoothstep(0., self.base_softness / depth, h + 0.3 * ripple * self.base_softness / depth) } else { 1. };
+            return (1. - smoothstep(top - 0.15, top, h)) * (0.85 + 0.15 * ripple) * underside;
         }
         let band = smoothstep(0., self.pouch_band, inside) * (1. - smoothstep(self.pouch_band, 3. * self.pouch_band, inside)).max(0.3);
         let (t, depth) = self.pouch_at(p.x, p.z);
@@ -162,7 +192,7 @@ impl Mammatus {
         let depth = depth * lerp(1., smoothstep(0.3, 0.65, clusters), self.clustering);
         let hang = self.pouch_depth * depth * band * taper * (1. - t * t).max(0.).sqrt();
         // Height above the pouch's lower surface.
-        let above = p.y - (self.base - hang) + ripple * self.roughness;
+        let above = p.y - (base - hang) + ripple * self.roughness;
         smoothstep(0., self.edge_sharpness, above)
     }
 }
@@ -170,7 +200,11 @@ impl Mammatus {
 impl DensityField for Mammatus {
     fn density(&self, p: &Vector3<f64>) -> f64 {
         let f = self.fraction(p);
-        if p.y >= self.base { self.anvil_density * f } else { self.pouch_density * f }
+        if f <= 0. {
+            return 0.;
+        }
+        let base = self.local_base(p.x, p.z, self.inside_edge(p.x, p.z));
+        if p.y >= base { self.anvil_density * f } else { self.pouch_density * f }
     }
 
     fn majorant(&self) -> f64 {
@@ -192,10 +226,15 @@ impl DensityField for Mammatus {
         }
         let leave = if ds > 0. { (limit - s) / ds } else { f64::INFINITY };
         let (lo, hi) = (self.bottom(), self.top());
+        // With a varying base, the pouches and the anvil share one slab; otherwise each has its
+        // own, either side of the base.
+        let flat = self.base_variation <= 0. && self.sag <= 0.;
         let (m, slab) = if ahead.y < lo {
             (0., if d.y > 0. { to_y(lo) } else { f64::INFINITY })
         } else if ahead.y > hi {
             (0., if d.y < 0. { to_y(hi) } else { f64::INFINITY })
+        } else if !flat {
+            (self.majorant(), positive(to_y(lo)).min(positive(to_y(hi))))
         } else if ahead.y < self.base {
             (self.pouch_density, positive(to_y(lo)).min(positive(to_y(self.base))))
         } else {
@@ -218,6 +257,12 @@ mod tests {
     fn test_majorant_bounds_density() {
         let mut m = Mammatus::new(2);
         m.edge_direction = Vector2::new(0.6, -0.8);
+        test_majorant_for(&m);
+        (m.base_variation, m.sag, m.base_softness) = (500., 1200., 300.);
+        test_majorant_for(&m);
+    }
+
+    fn test_majorant_for(m: &Mammatus) {
         let mut rng = Pcg32::new(7, 0);
         for _ in 0..1000 {
             let p = Vector3::new(uniform(&mut rng, -30000., 30000.), uniform(&mut rng, 3000., 8500.), uniform(&mut rng, -30000., 30000.));

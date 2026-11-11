@@ -4,6 +4,11 @@ Scenes from other renderers, converted to our format, with published reference i
 compare against. The references themselves are not committed: `scripts/fetch-references.sh`
 downloads them into `references/`, checking each archive's SHA-256.
 
+Tungsten scenes (Bitterli's archives under `resources/tungsten/`) load directly, without
+converting: `cargo run --release -- <dir>/scene.json -o out.exr --compare <dir>/TungstenRender.exr`
+(see `src/tungsten.rs` for what is approximated). `--dump-scene` writes the translation, to keep
+or edit as one of the scenes here.
+
 ## Cornell box
 
 - Source: Benedikt Bitterli, "Rendering Resources", <https://benedikt-bitterli.me/resources/>,

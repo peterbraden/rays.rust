@@ -45,6 +45,9 @@ its transform, whatever the size of the mesh. Each instance has its own material
 A name can be used wherever a geometry is expected (eg. the `a` and `b` of a `difference`), and
 geometries can be built from each other. See [demo/scenes/instances.json](demo/scenes/instances.json).
 
+  - Scene files: our JSON, NFF (Eric Haines' Neutral File Format, of the Standard
+    Procedural Database), or Tungsten's JSON (as in Bitterli's Rendering Resources), with
+    OBJ, PLY and Tungsten `.wo3` meshes
   - Skysphere with Rayleigh and Mie Scattering
   - Procedural Objects
     - Ocean (Tessendorf's algorithm with Phillips spectrum)
@@ -69,6 +72,7 @@ cargo run --release -- demo/demo.json
 - [An Efficient Parametric Algorithm for Octree Traversal, J. Revelles, C. Urena, M. Lastra](http://wscg.zcu.cz/wscg2000/Papers_2000/X31.pdf)
 - [Simulating Ocean Water, J. Tessendorf](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.161.9102&rep=rep1&type=pdf)
 - [Physically Based Raytracing, M. Pharr, W. Jakob, G. Humphreys](http://www.pbr-book.org/)
+- [Haines, E. (1987). A Proposal for Standard Graphics Environments. IEEE CG&A 7(11).](https://github.com/erich666/StandardProceduralDatabases)
 - [Roth, S. D. (1982). Ray casting for modeling solids.](sci-hub.se/10.1016/0146-664x%2882%2990169-1)
 
 

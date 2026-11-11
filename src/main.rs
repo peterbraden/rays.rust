@@ -50,6 +50,7 @@ mod shapes {
     pub mod triangle;
     pub mod mesh;
     pub mod ply;
+    pub mod wo3;
     pub mod infinite;
     pub mod repeating_mesh;
 }
@@ -58,6 +59,8 @@ mod bvh;
 mod scenegraph;
 mod scene;
 mod scenefile;
+mod nff;
+mod tungsten;
 mod skysphere;
 mod ocean;
 mod camera;
@@ -128,6 +131,11 @@ struct Args {
     ///seed gives the same image
     #[arg(long)]
     seed: Option<u64>,
+
+    ///Write the scene file, as JSON in our format, to this file. For a scene in another
+    ///renderer's format (eg. .nff), this is the translation
+    #[arg(long)]
+    dump_scene: Option<String>,
 }
 
 fn main() {
@@ -137,7 +145,19 @@ fn main() {
         style("# 1. - Parsing scene, building models").bold().cyan()
     );
 
-    let s = scenefile::SceneFile::from_file(&args.scene, &scenefile::Overrides {
+    let doc = scenefile::SceneFile::read_document(&args.scene).unwrap_or_else(|e| {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    });
+    if let Some(path) = &args.dump_scene {
+        let json = serde_json::to_string_pretty(&doc).unwrap();
+        std::fs::write(path, json + "\n").unwrap_or_else(|e| {
+            eprintln!("Can't write {}: {}", path, e);
+            std::process::exit(1);
+        });
+        println!("- Wrote the scene file to {}", path);
+    }
+    let s = scenefile::SceneFile::from_value_overridden(doc, &scenefile::Overrides {
         width: args.width,
         height: args.height,
         seed: args.seed,

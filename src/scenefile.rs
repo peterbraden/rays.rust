@@ -43,6 +43,7 @@ use crate::shapes::geometry::{Geometry, Tagged};
 use crate::shapes::geometry_set::GeometrySet;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use rayon::prelude::*;
 
 /// A geometry that may be shared: by several objects, or by instancing transforms.
 pub type SharedGeometry = Arc<dyn Geometry + Sync + Send>;
@@ -52,15 +53,96 @@ pub type SharedGeometry = Arc<dyn Geometry + Sync + Send>;
 /// referred to, and shared by every reference, so `{"type": "transform", "item": "dragon",
 /// "translate": [...]}` places another dragon for the price of a transform: object instancing.
 /// Definitions may refer to each other, but not in a cycle.
+///
+/// It also holds the scene's meshes, keyed by file and scale (see `MeshKey`), so a mesh file
+/// is loaded once however many times it appears, named or not; `preload` loads them all in
+/// parallel before the objects are parsed.
 pub struct GeometryLibrary {
     defined: Map<String, Value>,
     built: RefCell<HashMap<String, SharedGeometry>>,
     active: RefCell<Vec<String>>,
+    meshes: RefCell<HashMap<MeshKey, SharedGeometry>>,
+}
+
+/// A loaded mesh: smooth or flat, its file, and its scale (as bits, to be hashable).
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct MeshKey {
+    smooth: bool,
+    src: String,
+    scale: [u64; 3],
+}
+
+impl MeshKey {
+    /// The key for a `mesh` or `smoothmesh` definition; None for anything else.
+    fn of(o: &Value) -> Option<MeshKey> {
+        let smooth = match o.get("type")?.as_str()? {
+            "mesh" => false,
+            "smoothmesh" => true,
+            _ => return None,
+        };
+        let src = SceneFile::parse_string(&o["src"]);
+        let scale = SceneFile::parse_vec3_def(o, "scale", Vector3::new(1., 1., 1.));
+        Some(MeshKey { smooth, src, scale: [scale.x.to_bits(), scale.y.to_bits(), scale.z.to_bits()] })
+    }
+
+    fn load(&self) -> SharedGeometry {
+        let scale = Vector3::from(self.scale.map(f64::from_bits));
+        if self.smooth {
+            Arc::new(SmoothMesh::from_file(self.src.clone(), scale))
+        } else {
+            Arc::new(Mesh::from_file(self.src.clone(), scale))
+        }
+    }
 }
 
 impl GeometryLibrary {
     pub fn new(defined: Map<String, Value>) -> GeometryLibrary {
-        GeometryLibrary { defined, built: RefCell::new(HashMap::new()), active: RefCell::new(Vec::new()) }
+        GeometryLibrary {
+            defined,
+            built: RefCell::new(HashMap::new()),
+            active: RefCell::new(Vec::new()),
+            meshes: RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// The mesh a `mesh` or `smoothmesh` definition describes, loaded on first use.
+    pub fn mesh(&self, o: &Value) -> SharedGeometry {
+        let key = MeshKey::of(o).unwrap_or_else(|| panic!("not a mesh: {}", o));
+        if let Some(m) = self.meshes.borrow().get(&key) {
+            return m.clone();
+        }
+        let m = key.load();
+        self.meshes.borrow_mut().insert(key, m.clone());
+        m
+    }
+
+    /// Load, in parallel, every mesh that `objects` use, directly or through named geometries.
+    /// Loading (parsing the file, building its BVH) is most of the work of reading a scene,
+    /// and meshes are independent of each other. Named geometries nothing uses aren't loaded.
+    pub fn preload(&self, objects: &[Value]) {
+        fn collect(lib: &GeometryLibrary, v: &Value, keys: &mut Vec<MeshKey>, names: &mut Vec<String>) {
+            match v {
+                Value::Object(fields) => {
+                    if let Some(k) = MeshKey::of(v) && !keys.contains(&k) {
+                        keys.push(k)
+                    }
+                    for f in fields.values() { collect(lib, f, keys, names) }
+                },
+                Value::Array(items) => for i in items { collect(lib, i, keys, names) },
+                // Any string naming a geometry is followed: at worst, a material that shares a
+                // geometry's name loads a mesh early.
+                Value::String(name) => if let Some(def) = lib.defined.get(name) && !names.contains(name) {
+                    names.push(name.clone());
+                    collect(lib, def, keys, names);
+                },
+                _ => {},
+            }
+        }
+        let (mut keys, mut names) = (Vec::new(), Vec::new());
+        for o in objects { collect(self, o, &mut keys, &mut names) }
+        keys.retain(|k| !self.meshes.borrow().contains_key(k));
+        let loaded: Vec<(MeshKey, SharedGeometry)> = keys.into_par_iter().map(|k| { let m = k.load(); (k, m) }).collect();
+        self.meshes.borrow_mut().extend(loaded);
     }
 
     pub fn empty() -> GeometryLibrary {
@@ -520,12 +602,8 @@ impl SceneFile {
             return Some(SceneFile::parse_triangle(o));
         }
 
-        if t == "mesh" {
-            return Some(SceneFile::parse_mesh(o));
-        }
-
-        if t == "smoothmesh" {
-            return Some(SceneFile::parse_smoothmesh(o));
+        if t == "mesh" || t == "smoothmesh" {
+            return Some(Box::new(geometries.mesh(o)));
         }
 
         if t == "box" {
@@ -558,6 +636,7 @@ impl SceneFile {
     pub fn parse_shared_geometry(o: &Value, geometries: &GeometryLibrary) -> Option<SharedGeometry> {
         match o {
             Value::String(name) => Some(geometries.get(name)),
+            _ if MeshKey::of(o).is_some() => Some(geometries.mesh(o)),
             _ => SceneFile::parse_geometry(o, geometries).map(Arc::from),
         }
     }
@@ -598,18 +677,6 @@ impl SceneFile {
         );
         let translate = SceneFile::parse_vec3_def(o, "translate", Vector3::zeros());
         Box::new(Transform::from_parts(item, translate, rotation, scale))
-    }
-
-    pub fn parse_mesh(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        Box::new(Mesh::from_file(
-                SceneFile::parse_string(&o["src"]),
-                SceneFile::parse_vec3_def(o, "scale", Vector3::new(1., 1., 1.))))
-    }
-
-    pub fn parse_smoothmesh(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        Box::new(SmoothMesh::from_file(
-                SceneFile::parse_string(&o["src"]),
-                SceneFile::parse_vec3_def(o, "scale", Vector3::new(1., 1., 1.))))
     }
 
     pub fn parse_sphere(o: &Value) -> Box<dyn Geometry + Sync + Send> {
@@ -1069,6 +1136,7 @@ impl SceneFile {
         );
 
         let geometries = GeometryLibrary::new(s.geometries);
+        geometries.preload(&s.objects);
         let objects = SceneFile::parse_objects(s.objects, &s.materials, &s.media, &geometries);
         // Emitters with a surface we can sample become area lights.
         let area_lights: Vec<Arc<SceneObject>> = objects.iter()
@@ -1309,6 +1377,42 @@ mod tests {
     #[should_panic(expected = "unknown geometry \"nope\"")]
     fn test_unknown_geometry_is_an_error() {
         SceneFile::parse_transform(&serde_json::json!({ "type": "transform", "item": "nope" }), &GeometryLibrary::empty());
+    }
+
+    fn tetrahedron_obj() -> String {
+        let dir = std::env::temp_dir().join(format!("rays-scenefile-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tetra.obj");
+        std::fs::write(&path, "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 3 2\nf 1 2 4\nf 1 4 3\nf 2 3 4\n").unwrap();
+        path.to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn test_mesh_files_are_loaded_once() {
+        let src = tetrahedron_obj();
+        let lib = library(serde_json::json!({
+            "used": { "type": "smoothmesh", "src": src },
+            "unused": { "type": "mesh", "src": src, "scale": 3 },
+        }));
+        let inline = serde_json::json!({ "type": "mesh", "src": src });
+        let objects = vec![
+            serde_json::json!({ "type": "transform", "item": inline.clone(), "translate": [1, 0, 0] }),
+            serde_json::json!({ "type": "transform", "item": inline.clone(), "translate": [2, 0, 0] }),
+            serde_json::json!({ "type": "transform", "item": "used" }),
+            serde_json::json!({ "type": "mesh", "src": src, "scale": [2, 2, 2] }),
+        ];
+        lib.preload(&objects);
+        // The inline mesh (twice), "used", and the scaled copy; not "unused".
+        assert_eq!(lib.meshes.borrow().len(), 3);
+        // Inline definitions of the same file and scale share one mesh, loaded by `preload`.
+        let a = lib.mesh(&inline);
+        assert!(Arc::ptr_eq(&a, &lib.mesh(&inline)));
+        assert!(Arc::ptr_eq(&lib.get("used"), &lib.mesh(&serde_json::json!({ "type": "smoothmesh", "src": src }))));
+        assert_eq!(lib.meshes.borrow().len(), 3);
+        // A different scale is a different mesh.
+        let scaled = lib.mesh(&objects[3]);
+        assert!(!Arc::ptr_eq(&a, &scaled));
+        assert!((scaled.bounds().max.x - 2.).abs() < 1e-9);
     }
 
     #[test]

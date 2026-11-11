@@ -16,13 +16,13 @@ use std::sync::Arc;
 /// forest demo, against the octree this replaced, the trees tested per ray fell from 101 to 18
 /// and the triangles from 2600 to 75. It passes the range searched on to its items, so a tree
 /// stops at the nearest hit found so far elsewhere, and a shadow ray stops at the first leaf.
-pub struct GeometrySet<T: Geometry> {
+pub struct GeometrySet<T: Geometry + Send> {
     bvh: Bvh,
     items: Vec<Arc<T>>,
     primitives: u64,
 }
 
-impl<T: Geometry> GeometrySet<T> {
+impl<T: Geometry + Send> GeometrySet<T> {
     pub fn new(items: &[Arc<T>]) -> GeometrySet<T> {
         let primitives = items.iter().map(|t| t.primitives()).sum();
         let (bvh, items) = Bvh::build(items.to_vec(), |t| t.bounds());

@@ -24,6 +24,8 @@ Rays.rust is a raytracer written in Rust with the following features:
 - `--width <NUM>`: Override scene file width
 - `--height <NUM>`: Override scene file height
 - `--seed <NUM>`: Override the scene's render seed; the same seed gives the same image
+- `--supersamples <NUM>`: Override the scene's samples per pixel
+- `--checkpoint <FILE>`: Save progress here (every `--checkpoint-interval` seconds, default 60, and on completion) and resume from it if it exists. The resumed image is identical to an uninterrupted one. A checkpoint from a different scene, size or seed is refused; one with fewer samples is extended, so raising `--supersamples` adds samples to a finished render
 - `--compare <FILE>`: Compare with a reference image (eg. `references/cornell-box/TungstenRender.exr`, fetched by `scripts/fetch-references.sh`): prints exposure fit, RMSE and mean FLIP error; writes `<output>.flip.png` and `<output>.reference.png`
 - `--max-flip <NUM>`: With `--compare`, exit with status 2 if the mean FLIP error exceeds this
 - `--depth <FILE>`: Also write a depth image (distance to the nearest surface through each pixel centre); `.exr` keeps distances, `.png` scales them for viewing

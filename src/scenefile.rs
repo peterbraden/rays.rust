@@ -42,6 +42,7 @@ pub struct Overrides {
     pub width: Option<usize>,
     pub height: Option<usize>,
     pub seed: Option<u64>,
+    pub supersamples: Option<usize>,
 }
 
 /// Every field except `camera` is optional; defaults are applied in `from_scenefile`.
@@ -822,7 +823,7 @@ impl SceneFile {
     /// Parse a scene, optionally overriding the image size. Overrides must be applied before
     /// the camera is built, as it derives its aspect ratio from the image size.
     pub fn from_string_sized(s: String, width: Option<usize>, height: Option<usize>) -> Scene {
-        SceneFile::from_string_overridden(s, &Overrides { width, height, seed: None })
+        SceneFile::from_string_overridden(s, &Overrides { width, height, ..Overrides::default() })
     }
 
     /// Parse a scene, applying command-line overrides first.
@@ -878,6 +879,9 @@ impl SceneFile {
         if let Some(seed) = o.seed {
             scene.seed = Value::from(seed);
         }
+        if let Some(n) = o.supersamples {
+            scene.supersamples = Value::from(n);
+        }
         if let Some(w) = width {
             scene.width = Value::from(w);
         }
@@ -885,6 +889,29 @@ impl SceneFile {
             scene.height = Value::from(h);
         }
         SceneFile::from_scenefile(scene)
+    }
+
+    /// Everything in a scene file that decides its samples, but not how many there are: the
+    /// file, with its variables substituted, as compact JSON (keys sorted, as serde_json's maps
+    /// are), less these settings:
+    ///
+    /// - `supersamples`, so that a render can be extended with more samples;
+    /// - `output`, which only maps the finished image for display;
+    /// - `width`, `height` and `seed`, which may be overridden on the command line, so a
+    ///   checkpoint records and checks the values in effect instead;
+    /// - `variables`, already substituted where they are used.
+    ///
+    /// Two renders with the same fingerprint, size and seed take the same samples (see
+    /// `checkpoint`). Files the scene refers to, such as meshes, are not included.
+    pub fn fingerprint(s: &str) -> Result<String, String> {
+        let doc = serde_json::from_str(s).map_err(|e| e.to_string())?;
+        let mut doc = SceneFile::substitute_variables(doc)?;
+        if let Value::Object(fields) = &mut doc {
+            for k in ["supersamples", "output", "width", "height", "seed", "variables"] {
+                fields.remove(k);
+            }
+        }
+        Ok(doc.to_string())
     }
 
     pub fn from_file(filename: &str, overrides: &Overrides) -> Scene {
@@ -950,6 +977,36 @@ mod tests {
         assert_eq!(s.render.max_depth, 2);
         assert_eq!(s.render.background, Background::Solid(Color::black()));
         assert!(s.lights.is_empty());
+    }
+
+    #[test]
+    fn test_fingerprint_ignores_only_settings_that_change_no_sample() {
+        let base = r#"{ "width": 4, "supersamples": 2, "camera": { "angle": 0.5 }, "variables": { "a": 0.5 } }"#;
+        let f = SceneFile::fingerprint(base).unwrap();
+        let same = [
+            r#"{ "supersamples": 64, "camera": { "angle": 0.5 }, "output": { "exposure": 2 }, "seed": 3 }"#,
+            r#"{ "camera": { "angle": "$a" }, "variables": { "a": 0.5 }, "height": 9 }"#,
+        ];
+        for s in same {
+            assert_eq!(SceneFile::fingerprint(s).unwrap(), f, "{}", s);
+        }
+        let different = [
+            r#"{ "camera": { "angle": 0.6 } }"#,
+            r#"{ "camera": { "angle": 0.5 }, "samples_per_chunk": 2 }"#,
+            r#"{ "camera": { "angle": 0.5 }, "chunk_size": 8 }"#,
+        ];
+        for s in different {
+            assert_ne!(SceneFile::fingerprint(s).unwrap(), f, "{}", s);
+        }
+        assert!(SceneFile::fingerprint("{").is_err());
+    }
+
+    #[test]
+    fn test_supersamples_override() {
+        let s = SceneFile::from_string_overridden(r#"{ "supersamples": 4, "camera": {
+            "location": [0, 0, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 } }"#.to_string(),
+            &Overrides { supersamples: Some(9), ..Overrides::default() });
+        assert_eq!(s.render.supersamples, 9);
     }
 
     #[test]

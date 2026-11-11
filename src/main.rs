@@ -65,6 +65,7 @@ mod paint;
 mod output;
 mod compare;
 mod depth;
+mod checkpoint;
 //mod wireframe;
 mod geometry;
 mod procedural {
@@ -130,6 +131,21 @@ struct Args {
     ///seed gives the same image
     #[arg(long)]
     seed: Option<u64>,
+
+    ///Set the samples per pixel; overrides the scenefile if specified. With --checkpoint, raise
+    ///it to add samples to a finished render
+    #[arg(long)]
+    supersamples: Option<usize>,
+
+    ///Save the render's progress to this file, and resume from it if it exists. A checkpoint
+    ///from a different scene, size or seed is refused. The number of samples may differ: a
+    ///finished render can be continued with more
+    #[arg(long)]
+    checkpoint: Option<String>,
+
+    ///With --checkpoint, the seconds between saves; it is also saved when the render finishes
+    #[arg(long, default_value_t = 60)]
+    checkpoint_interval: u64,
 }
 
 /// The process's peak resident memory so far, in bytes: large meshes and their acceleration
@@ -158,10 +174,14 @@ fn main() {
     );
 
     let build_start = Instant::now();
-    let s = scenefile::SceneFile::from_file(&args.scene, &scenefile::Overrides {
+    let fail = |e: String| -> ! { eprintln!("{}", e); std::process::exit(1) };
+    let contents = std::fs::read_to_string(&args.scene)
+        .unwrap_or_else(|e| fail(format!("Failed to read {}: {}", args.scene, e)));
+    let s = scenefile::SceneFile::from_string_overridden(contents.clone(), &scenefile::Overrides {
         width: args.width,
         height: args.height,
         seed: args.seed,
+        supersamples: args.supersamples,
     });
 
     let mut rc = RenderContext::new(
@@ -195,6 +215,18 @@ fn main() {
         println!("- Depth -> {}", path);
     }
 
+    let checkpoint = args.checkpoint.as_ref().map(|path| {
+        let header = checkpoint::CheckpointHeader {
+            width: s.image.width,
+            height: s.image.height,
+            seed: s.render.seed,
+            samples_per_layer: s.render.samples_per_layer(),
+            scene: scenefile::SceneFile::fingerprint(&contents).unwrap_or_else(|e| fail(e)),
+        };
+        resume(&mut rc, &s, path, &header);
+        (path.clone(), header)
+    });
+
     let rcmtx = Mutex::new(rc);
 
     println!("{}",
@@ -207,6 +239,17 @@ fn main() {
     // the render.
     let progressive_interval = Duration::from_secs(1);
     let last_progressive = Mutex::new(Instant::now());
+    // Checkpoints likewise; the samples are copied under the lock, but saved outside it. Saves
+    // are serialised, so two never share the temporary file.
+    let checkpoint_interval = Duration::from_secs(args.checkpoint_interval);
+    let last_checkpoint = Mutex::new(Instant::now());
+    let saving = Mutex::new(());
+    let save = |c: checkpoint::Checkpoint, path: &str| {
+        let _saving = saving.lock().unwrap();
+        if let Err(e) = c.save(path) {
+            eprintln!("{}", e);
+        }
+    };
 
     rendercontext::render(&s, &rcmtx,
         |rc| {
@@ -215,21 +258,39 @@ fn main() {
             pb.tick();
 
             let mut last = last_progressive.lock().unwrap();
-            if rc.progressive_render && last.elapsed() >= progressive_interval {
+            let image = if rc.progressive_render && last.elapsed() >= progressive_interval {
                 *last = Instant::now();
                 Some((rc.snapshot(), rc.output_filename.clone()))
             } else {
                 None
-            }
+            };
+            let mut last = last_checkpoint.lock().unwrap();
+            let saved = match &checkpoint {
+                Some((path, header)) if last.elapsed() >= checkpoint_interval => {
+                    *last = Instant::now();
+                    Some((rc.checkpoint(header.clone()), path.clone()))
+                },
+                _ => None,
+            };
+            if image.is_none() && saved.is_none() { None } else { Some((image, saved)) }
         },
-        |(img, path)| {
-            if let Err(e) = writer.write(&img, &path) {
-                eprintln!("{}", e);
+        |(image, saved)| {
+            if let Some((img, path)) = image {
+                if let Err(e) = writer.write(&img, &path) {
+                    eprintln!("{}", e);
+                }
+            }
+            if let Some((c, path)) = saved {
+                save(c, &path);
             }
         });
     pb.finish();
 
     let rc = rcmtx.lock().unwrap();
+    if let Some((path, header)) = &checkpoint {
+        save(rc.checkpoint(header.clone()), path);
+        println!("- Checkpoint -> {}", path);
+    }
     //wireframe::wireframe(&s, &mut rc);
     let img = rc.snapshot();
     if let Err(e) = writer.write(&img, &rc.output_filename) {
@@ -241,6 +302,26 @@ fn main() {
     }
     paint::poor_mans(&img, &s.output);
     rc.print_stats();
+}
+
+/// Continue from the checkpoint at `path`, if there is one. One that doesn't belong to this
+/// render is an error rather than overwritten, as it may hold hours of work.
+fn resume(rc: &mut RenderContext, s: &scene::Scene, path: &str, header: &checkpoint::CheckpointHeader) {
+    let fail = |e: String| -> ! { eprintln!("{}", e); std::process::exit(1) };
+    match checkpoint::Checkpoint::load(path).unwrap_or_else(|e| fail(e)) {
+        None => println!("- Checkpoint: {} (new)", path),
+        Some(c) => {
+            if let Err(e) = c.check(header) {
+                fail(format!("Cannot resume from {}: {}. Remove it, or choose another --checkpoint, to start afresh.", path, e));
+            }
+            rc.resume(c);
+            let done = rc.progress_percentage(s);
+            println!("- Checkpoint: resuming from {}, {:.0}% done", path, done.min(100.));
+            if done > 100. {
+                println!("- The checkpoint has more samples than --supersamples asks for; it is used as it is");
+            }
+        },
+    }
 }
 
 /// Compare the finished render with a reference image, reporting how close they are.

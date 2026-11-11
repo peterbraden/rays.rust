@@ -49,8 +49,17 @@
 //! would have been thirty times the size. On ocean-boat, with leaves of up to 16 or more triangles,
 //! this cut rendering by 13%; scenes with small leaves are unchanged.
 //!
-//! Not done: an item spanning several leaves is tested once per leaf the ray visits. Recording,
-//! per ray, which items have been tested would avoid the repeats.
+//! ## Mailboxing
+//!
+//! An item spanning several leaves would be tested once per leaf the ray visits. Mailboxing
+//! avoids the repeats by remembering which items a ray has already been tested against (John
+//! Amanatides and Andrew Woo, "A Fast Voxel Traversal Algorithm for Ray Tracing", Eurographics
+//! 1987, and Bruno Arnaldi, Thierry Priol and Kadi Bouatouch, "A New Space Subdivision Method
+//! for Ray Tracing CSG Modelled Scenes", The Visual Computer 3(2), 1987). The classic form
+//! stores the last ray's id in each item, which every rendering thread would write; here each
+//! traversal instead keeps a small `Mailbox` of the items it has tested. Skipping a retest is
+//! always safe: the first test already offered that item's hit to the search, and a second test
+//! of the same ray gives the same answer.
 
 use crate::shapes::bbox::BBox;
 use crate::shapes::triangle::{EdgeTriangle, LANES, may_hit};
@@ -171,6 +180,27 @@ impl Span {
     fn exit(&self) -> f64 { self.far[0].min(self.far[1]).min(self.far[2]) }
 }
 
+/// Mailbox slots: the most recently tested items a traversal remembers.
+const MAILBOX_SIZE: usize = 32;
+
+/// The items a traversal has tested, as a direct-mapped cache: item `i` lives in slot
+/// `i % MAILBOX_SIZE`. Two items sharing a slot evict each other, which only costs a retest.
+struct Mailbox {
+    slots: [usize; MAILBOX_SIZE],
+}
+
+impl Mailbox {
+    fn new() -> Mailbox {
+        Mailbox { slots: [usize::MAX; MAILBOX_SIZE] }
+    }
+
+    /// Whether item `i` still needs testing, recording that it has been.
+    fn first_visit(&mut self, i: usize) -> bool {
+        let slot = &mut self.slots[i % MAILBOX_SIZE];
+        if *slot == i { false } else { *slot = i; true }
+    }
+}
+
 /// The nearest hit found so far in a traversal: the item's index and its intersection.
 struct Nearest {
     dist: f64,
@@ -245,10 +275,10 @@ impl OctreeNode {
 
     /// Whether any item in this subtree is hit between `min` and `max` along the ray. Unlike
     /// `nearest`, it needn't find the nearest hit: it stops at the first.
-    fn any_hit<T: Geometry>(&self, items: &Items<T>, r: &Ray, ray: &TraversalRay, span: &Span, min: f64, max: f64) -> bool {
+    fn any_hit<T: Geometry>(&self, items: &Items<T>, r: &Ray, ray: &TraversalRay, span: &Span, min: f64, max: f64, tested: &mut Mailbox) -> bool {
         if self.is_leaf() {
-            return items.find(&self.items, r, ray.len, &mut (), |_| max, |_, i| {
-                items.items[i].intersects_beyond(r, min).is_some_and(|x| x.dist >= min && x.dist < max)
+            return items.find(&self.items, r, ray.len, tested, |_| max, |tested, i| {
+                tested.first_visit(i) && items.items[i].intersects_beyond(r, min).is_some_and(|x| x.dist >= min && x.dist < max)
             });
         }
         let mut found = false;
@@ -257,7 +287,7 @@ impl OctreeNode {
                 // Children are visited in order, so the rest begin beyond `max` too.
                 return false;
             }
-            found = child_span.exit() * ray.len >= min && child.any_hit(items, r, ray, child_span, min, max);
+            found = child_span.exit() * ray.len >= min && child.any_hit(items, r, ray, child_span, min, max, tested);
             !found
         });
         found
@@ -267,10 +297,11 @@ impl OctreeNode {
     /// `best`. Children are visited in the order the ray enters them, and the search stops at the
     /// first child that begins beyond the best hit so far: nothing in it, or in any later child,
     /// can be nearer.
-    fn nearest<T: Geometry>(&self, items: &Items<T>, r: &Ray, ray: &TraversalRay, span: &Span, min: f64, best: &mut Nearest) {
+    fn nearest<T: Geometry>(&self, items: &Items<T>, r: &Ray, ray: &TraversalRay, span: &Span, min: f64, best: &mut Nearest, tested: &mut Mailbox) {
         if self.is_leaf() {
             items.find(&self.items, r, ray.len, best, |best| best.dist, |best, i| {
-                if let Some(x) = items.items[i].intersects_beyond(r, min)
+                if tested.first_visit(i)
+                    && let Some(x) = items.items[i].intersects_beyond(r, min)
                     && x.dist >= min && x.dist < best.dist {
                     best.dist = x.dist;
                     best.hit = Some((i, x));
@@ -285,7 +316,7 @@ impl OctreeNode {
                 return false;
             }
             if child_span.exit() * ray.len >= min {
-                child.nearest(items, r, ray, child_span, min, best);
+                child.nearest(items, r, ray, child_span, min, best, tested);
             }
             true
         });
@@ -389,7 +420,7 @@ impl<T: Geometry> Octree<T> {
         if exit < 0. || entry > exit || entry.max(0.) * ray.len >= max || exit * ray.len < min {
             return false;
         }
-        self.root.any_hit(&self.leaf_items(), r, &ray, &span, min, max)
+        self.root.any_hit(&self.leaf_items(), r, &ray, &span, min, max, &mut Mailbox::new())
     }
 
     fn closest_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(usize, RawIntersection)> {
@@ -400,7 +431,7 @@ impl<T: Geometry> Octree<T> {
             return None;
         }
         let mut best = Nearest { dist: max, hit: None };
-        self.root.nearest(&self.leaf_items(), r, &ray, &span, min, &mut best);
+        self.root.nearest(&self.leaf_items(), r, &ray, &span, min, &mut best, &mut Mailbox::new());
         best.hit
     }
 
@@ -630,5 +661,33 @@ mod tests {
                 _ => panic!("ray {} max {} min {}: brute force {:?}, octree {:?}", r, max, min, expected, got),
             }
         }
+    }
+
+    /// A box that counts how often it is tested.
+    struct Counted { b: BBox, tests: std::sync::atomic::AtomicUsize }
+
+    impl Geometry for Counted {
+        fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+            self.tests.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.b.intersects(r)
+        }
+        fn bounds(&self) -> BBox { self.b }
+    }
+
+    #[test]
+    fn test_spanning_item_is_tested_once_per_ray() {
+        // A long slab across the whole tree, among small cubes that make it subdivide: the slab
+        // is in many leaves, and a ray along it passes through them all.
+        let slab = Arc::new(Counted { b: BBox::new(Vector3::new(-8., -0.5, -0.5), Vector3::new(8., 0.5, 0.5)), tests: 0.into() });
+        let mut items = vec![slab.clone()];
+        for x in -8 .. 8 {
+            items.push(Arc::new(Counted { b: BBox::new(Vector3::new(x as f64, 3., 3.), Vector3::new(x as f64 + 0.5, 3.5, 3.5)), tests: 0.into() }));
+        }
+        let tree = Octree::new(5, BBox::new(Vector3::new(-8., -8., -8.), Vector3::new(8., 8., 8.)), &items);
+        // Parallel to the slab but beside it, so it misses and every leaf on the way is visited.
+        let r = Ray { ro: Vector3::new(-9., 0.7, 0.), rd: Vector3::new(1., 0., 0.) };
+        assert!(tree.intersection(&r, f64::INFINITY, 0.).is_none());
+        assert!(!tree.occluded(&r, f64::INFINITY, 0.));
+        assert_eq!(slab.tests.load(std::sync::atomic::Ordering::Relaxed), 2);
     }
 }

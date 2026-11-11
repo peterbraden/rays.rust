@@ -38,6 +38,7 @@ mod material {
     pub mod noise;
     pub mod grass;
     pub mod bump;
+    pub mod rock;
 }
 mod intersection;
 mod sceneobject;
@@ -81,6 +82,7 @@ mod procedural {
     pub mod forest;
     pub mod heightmap;
     pub mod grass;
+    pub mod rock;
 }
 mod participatingmedia;
 mod noise;

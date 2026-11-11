@@ -304,6 +304,67 @@ pub mod combined_noise {
     }
 }
 
+/// Perlin noise with a seed, and the fractal sums built from it that procedural rocks use.
+///
+/// The Perlin permutation table is fixed, so a seed selects a field by displacing the lookup
+/// point by a seed-dependent offset. Each octave is also rotated, which hides the grid's axes
+/// that otherwise show as straight creases in summed noise (Inigo Quilez, "fBM",
+/// <https://iquilezles.org/articles/fbm/>).
+#[derive(Clone)]
+pub struct SeededNoise {
+    perlin: PerlinNoise,
+    offset: Vector3<f64>,
+    rotation: crate::na::Rotation3<f64>,
+}
+
+impl SeededNoise {
+    pub fn new(seed: u64) -> Self {
+        let mut rng = crate::geometry::Pcg32::new(seed, 0x5eed);
+        let offset = Vector3::new(rng.next_f64(), rng.next_f64(), rng.next_f64()) * 256.;
+        SeededNoise {
+            perlin: PerlinNoise::new(),
+            offset,
+            rotation: crate::na::Rotation3::from_euler_angles(0.61, 0.93, 1.27),
+        }
+    }
+
+    /// Gradient noise, roughly in [-1, 1].
+    pub fn noise(&self, p: Vector3<f64>) -> f64 {
+        let q = p + self.offset;
+        self.perlin.noise(q.x, q.y, q.z)
+    }
+
+    /// Fractional Brownian motion: octaves of noise, each twice the frequency and half the
+    /// amplitude of the last. Roughly in [-1, 1].
+    pub fn fbm(&self, p: Vector3<f64>, octaves: u32) -> f64 {
+        let (mut sum, mut amplitude, mut total, mut q) = (0., 1., 0., p);
+        for _ in 0 .. octaves {
+            sum += self.noise(q) * amplitude;
+            total += amplitude;
+            amplitude *= 0.5;
+            q = self.rotation * q * 2.03;
+        }
+        if total > 0. { sum / total } else { 0. }
+    }
+
+    /// Ridged multifractal, after F. Kenton Musgrave, in Ebert et al., "Texturing and Modeling:
+    /// A Procedural Approach", 3rd ed., 2003, chapter 16: each octave is folded, 1 - |n|, so
+    /// its zero crossings become sharp crests, and weighted by the octave before so detail
+    /// gathers on the crests, as on eroded ridges. In [0, 1].
+    pub fn ridged(&self, p: Vector3<f64>, octaves: u32) -> f64 {
+        let (mut sum, mut amplitude, mut total, mut weight, mut q) = (0., 1., 0., 1., p);
+        for _ in 0 .. octaves {
+            let r = (1. - self.noise(q).abs()).powi(2);
+            sum += r * amplitude * weight;
+            total += amplitude;
+            weight = (r * 2.).clamp(0., 1.);
+            amplitude *= 0.5;
+            q = self.rotation * q * 2.03;
+        }
+        if total > 0. { (sum / total).clamp(0., 1.) } else { 0. }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -89,6 +89,8 @@ heightmap terrain, behind a meadow of grass.
     - Random Cubes
     - Terrain from heightmaps (fractal noise or images)
     - Grass on any terrain: species presets (lawn, meadow, tussock, reed...) and conditions (wind, drought, frost, rain, mowing...)
+    - Rocks: bedrock outcrops, boulders and pebbles, with procedural stone materials
+      (granite, basalt, sandstone, limestone, slate, quartzite)
   - Multithreaded
   - Progressive rendering
 

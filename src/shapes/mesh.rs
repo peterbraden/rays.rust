@@ -291,6 +291,21 @@ impl SmoothMesh {
         SmoothMesh { triangles, normals }
     }
 
+    /// A mesh from triangles indexing vertices, eg. generated ones. Meshes with an empty
+    /// `normals` get them from `vertex_normals`.
+    pub fn from_indexed(meshes: &[IndexedMesh]) -> SmoothMesh {
+        let mut normals = Vec::new();
+        let parts = meshes.iter().map(|m| {
+            normals.extend(if m.normals.is_empty() {
+                vertex_normals(&m.positions, &m.triangles)
+            } else {
+                m.normals.clone()
+            });
+            (m.positions.clone(), m.triangles.clone())
+        }).collect();
+        SmoothMesh { triangles: IndexedTriangles::from_meshes(parts), normals }
+    }
+
     fn normal_at(&self, i: usize, point: Vector3<f64>) -> Vector3<f64> {
         let face = self.triangles.face_normal(i);
         let n = self.triangles.triangles[i].map(|v| {

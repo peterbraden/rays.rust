@@ -1,0 +1,50 @@
+{
+  "width": 960,
+  "height": 540,
+
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 4,
+  "background": [0.5, 0.6, 0.8],
+  "shadow_bias": 0.0001,
+  "max_depth": 3,
+
+  "variables": {
+    "ground": 0
+  },
+
+  "materials": {
+    "SANDSTONE": { "type": "rock", "preset": "sandstone", "scale": 2, "lichen": 0.06, "seed": 4 },
+    "GRANITE": { "type": "rock", "preset": "granite", "lichen": 0.35, "seed": 1 },
+    "BASALT": { "type": "rock", "preset": "basalt", "seed": 2 },
+    "LIMESTONE": { "type": "rock", "preset": "limestone", "lichen": 0.2, "seed": 3 },
+    "SOIL": { "type": "lambertian", "albedo": [0.22, 0.18, 0.14] }
+  },
+  "media": {},
+
+  "camera": {
+    "location": [0.4, 1.4, -6.5],
+    "lookat": [0, 0.6, 0],
+    "up": [0, 1, 0],
+    "angle": 0.75,
+    "aperture": 0.01
+  },
+
+  "lights": [
+    { "location": [4000, 5000, -3000], "intensity": 1.6e8, "color": [1, 0.93, 0.82] }
+  ],
+
+  "objects": [
+    { "type": "plane", "y": "$ground", "material": "SOIL" },
+    {
+      "type": "bedrock", "center": [0, -0.4, 9], "size": [24, 10], "height": 4.5,
+      "feature_size": 5, "strata": 0.45, "strata_strength": 0.85, "falloff": 0.3,
+      "resolution": 220, "seed": 3, "material": "SANDSTONE"
+    },
+    { "type": "boulder", "location": [-1.6, "$ground", 1.2], "radius": 1.0, "angularity": 0.7, "seed": 5, "material": "GRANITE" },
+    { "type": "boulder", "location": [1.7, "$ground", 2.2], "radius": 0.7, "angularity": 0.3, "seed": 8, "material": "LIMESTONE" },
+    { "type": "boulder", "location": [0.5, "$ground", -0.6], "radius": 0.35, "angularity": 0.9, "seed": 11, "material": "BASALT" },
+    { "type": "pebbles", "center": [0, "$ground", -2], "radius": 2.4, "count": 600, "size": [0.04, 0.16], "seed": 7 },
+    { "type": "skysphere", "sun_direction": [0.5, 0.6, -0.4], "brightness": 12 }
+  ]
+}

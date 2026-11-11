@@ -71,6 +71,13 @@ A coastal plain below mountains: rivers meandering to the sea, building deltas.
 Twenty instances of one teapot mesh, each with its own transform and material.
 ![instances](./scenes/instances.png)
 
+## Rocks
+A terraced sandstone outcrop, granite, limestone and basalt boulders, and a scatter of mixed pebbles.
+![rocks](./scenes/rocks.png)
+
+A pebble beach in close-up at sunset: dry shingle in the foreground, wet stones at the waterline, seen through refracting water.
+![pebble beach](./scenes/pebble-beach.png)
+
 ## Fireworks
 ![fireworks](./scenes/fireworks.png)
 

@@ -26,6 +26,17 @@ Render any of them with `cargo run --release -- demo/scenes/<scene>.json`. The s
 sea (`{"type": "ocean", "curved": true}`), whose reflections show the sky and clouds again. The altostratus, stratocumulus
 and stratus images are quick previews (480 x 300, 8 samples per pixel), so they are noisy.
 
+### All together
+
+![Sunset squalls](./scenes/sunset-squalls.png)
+
+`sunset-squalls.json`: sunset over the sea, behind a distant line of cumulonimbus. The towers
+are Nubis cumulus 9 km deep, broken into clusters, with an anvil spreading from their tops
+and mammatus beneath it. Squalls trail rain shafts from their bases, and cirrus streams high
+overhead. The sun, 3° up, is behind the line; with crepuscular rays on, its light fans out
+through the gaps. The cirrus catches the last direct light, and the sea reflects it all, the
+glitter path running in to the camera.
+
 | | Cloud | Scene |
 |---|---|---|
 | High | [Cirrus](#cirrus) | `hogan-kew-cirrus.json` |

@@ -12,12 +12,11 @@
     "exposure": 1.0
   },
   "materials": {
-    "GROUND": {
-      "type": "lambertian",
-      "albedo": [
-        0.12,
-        0.16,
-        0.08
+    "SEA": {
+      "type": "sea",
+      "wind": [
+        7,
+        2
       ]
     }
   },
@@ -45,7 +44,7 @@
   "objects": [
     {
       "type": "planet",
-      "material": "GROUND"
+      "material": "SEA"
     },
     {
       "type": "skysphere",

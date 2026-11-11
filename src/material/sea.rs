@@ -80,7 +80,7 @@ impl SlopeTile {
         let (_, sx, sz, _, _) = create_tile(n, size, size, 9.81, time, h0);
         // Undo the centred spectrum's (-1)^(x+z) (see `ocean`).
         let slopes = (0..n * n).map(|ind| {
-            let sign = if (ind % n + ind / n) % 2 == 0 { -1. } else { 1. };
+            let sign = if (ind % n + ind / n).is_multiple_of(2) { -1. } else { 1. };
             [(sx[ind].re * sign) as f32, (sz[ind].re * sign) as f32]
         }).collect();
         SlopeTile { n, size, slopes }

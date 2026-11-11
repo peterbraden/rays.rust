@@ -731,6 +731,7 @@ impl SceneFile {
     /// "peak": [x, z], "peak_height": 3200, "peak_radius": 7000, "seed": 0}`
     ///
     /// with `relief` and `feature_size` (the ridges), `plains` (relief of the plains around),
+    /// `base` (the height of its foot: below zero for an island in a `sea`),
     /// `snowline` and `treeline` (m), the colours `snow`, `rock`, `forest` and `grass`, and
     /// `"mapping": "flat"` for flat ground rather than the planet's.
     pub fn parse_terrain(o: &Value) -> SceneObject {
@@ -747,6 +748,7 @@ impl SceneFile {
         t.relief = num("relief", t.relief);
         t.feature_size = num("feature_size", t.feature_size).max(1.);
         t.plains = num("plains", t.plains);
+        t.base = num("base", t.base);
         let radius = if flat { None } else { Some(SceneFile::parse_number(&o["earth_radius"], EARTH_RADIUS)) };
         t.planet_radius = radius;
         let mut m = TerrainMaterial::new(seed);

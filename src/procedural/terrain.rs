@@ -38,6 +38,9 @@ pub struct Terrain {
     pub feature_size: f64,
     /// Rolling relief of the plains (m).
     pub plains: f64,
+    /// Height of the terrain's foot relative to the planet's surface: below zero, its low
+    /// ground is under the sea, leaving an island.
+    pub base: f64,
     /// The planet's radius, to curve the ground; None for flat.
     pub planet_radius: Option<f64>,
     noise: PerlinNoise,
@@ -56,6 +59,7 @@ impl Terrain {
             relief: 900.,
             feature_size: 6000.,
             plains: 40.,
+            base: 0.,
             planet_radius: Some(crate::planet::EARTH_RADIUS),
             noise: PerlinNoise::with_seed(seed.wrapping_mul(2).wrapping_add(11)),
             warp: PerlinNoise::with_seed(seed.wrapping_mul(2).wrapping_add(12)),
@@ -93,7 +97,7 @@ impl Terrain {
         // Fade to the plains at the edges, so the terrain meets the ground around it.
         let edge = (Vector2::new(x, z) - self.center).abs().max() / self.extent;
         let fade = 1. - smoothstep(0.8, 1., edge);
-        (mountains * fade).max(0.) + rolling * fade
+        (mountains * fade).max(0.) + rolling * fade + self.base
     }
 
     /// The surface point at (`x`, `z`): on the curved planet unless flat.

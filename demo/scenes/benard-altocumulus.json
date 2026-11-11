@@ -7,25 +7,66 @@
   "shadow_bias": 0.01,
   "max_depth": 64,
   "path_termination": "russian_roulette",
-
   "materials": {
-    "GROUND": { "type": "lambertian", "albedo": [0.12, 0.16, 0.08] }
+    "SEA": {
+      "type": "sea",
+      "wind": [
+        7,
+        2
+      ]
+    }
   },
-
   "camera": {
-    "location": [0, 2, 0],
-    "lookat": [-1200, 1300, 2000],
-    "up": [0, 1, 0],
+    "location": [
+      0,
+      2,
+      0
+    ],
+    "lookat": [
+      -1200,
+      1300,
+      2000
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
     "angle": 0.8
   },
-
-  "sun": { "intensity": 4.9 },
-
+  "sun": {
+    "intensity": 4.9
+  },
   "objects": [
-    { "type": "planet", "material": "GROUND" },
-    { "type": "skysphere", "sun_direction": [0.5, 0.4, 1] },
-    { "type": "benard_altocumulus", "base": 4000, "thickness": 200,
-      "anisotropy": 1.4, "wind_direction": [1, 0.4], "patchiness": 0.6,
-      "albedo": [0.99, 0.99, 0.99], "similarity_after": 4, "seed": 2 }
+    {
+      "type": "planet",
+      "material": "SEA"
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        0.5,
+        0.4,
+        1
+      ]
+    },
+    {
+      "type": "benard_altocumulus",
+      "base": 4000,
+      "thickness": 200,
+      "anisotropy": 1.4,
+      "wind_direction": [
+        1,
+        0.4
+      ],
+      "patchiness": 0.6,
+      "albedo": [
+        0.99,
+        0.99,
+        0.99
+      ],
+      "similarity_after": 4,
+      "seed": 2
+    }
   ]
 }

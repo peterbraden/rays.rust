@@ -8,12 +8,11 @@
   "max_depth": 64,
   "path_termination": "russian_roulette",
   "materials": {
-    "GROUND": {
-      "type": "lambertian",
-      "albedo": [
-        0.075,
-        0.085,
-        0.045
+    "SEA": {
+      "type": "sea",
+      "wind": [
+        7,
+        2
       ]
     }
   },
@@ -41,7 +40,7 @@
   "objects": [
     {
       "type": "planet",
-      "material": "GROUND"
+      "material": "SEA"
     },
     {
       "type": "terrain",
@@ -51,7 +50,8 @@
       ],
       "seed": 3,
       "extent": 60000,
-      "resolution": 1280
+      "resolution": 1280,
+      "base": -60
     },
     {
       "type": "skysphere",

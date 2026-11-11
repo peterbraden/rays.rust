@@ -53,7 +53,7 @@
         1
       ],
       "crepuscular_rays": true,
-      "mie_coefficient": 6e-05
+      "mie_coefficient": 4.5e-05
     },
     {
       "type": "nubis_clouds",
@@ -107,7 +107,9 @@
       "base_size": 15000,
       "sag": 2000,
       "sag_distance": 10000,
-      "base_softness": 400
+      "base_softness": 400,
+      "top_variation": 500,
+      "fade": 0.5
     },
     {
       "type": "precipitation",
@@ -125,7 +127,8 @@
         0.3,
         -1
       ],
-      "seed": 4
+      "seed": 4,
+      "base_variation": 500
     },
     {
       "type": "precipitation",
@@ -143,7 +146,8 @@
         0.3,
         -1
       ],
-      "seed": 5
+      "seed": 5,
+      "base_variation": 500
     },
     {
       "type": "hogan_kew_cirrus",

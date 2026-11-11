@@ -41,6 +41,9 @@ pub struct Mammatus {
     pub sag: f64,
     pub sag_distance: f64,
     pub base_softness: f64,
+    /// How far the flat top rises and falls (m), over `base_size`: anvils spread against the
+    /// tropopause, but not along a ruled line.
+    pub top_variation: f64,
     /// Extinction in the anvil, and in the pouches.
     pub anvil_density: f64,
     pub pouch_density: f64,
@@ -66,6 +69,11 @@ pub struct Mammatus {
     pub edge_distance: f64,
     pub edge_raggedness: f64,
     pub edge_taper: f64,
+    /// The sheet's extent: within `extent` of `center` ([x, z]), fading out over its outer
+    /// `fade` (a fraction of `extent`; 0 for no fade, as for a sheet larger than the view).
+    pub center: Vector2<f64>,
+    pub extent: f64,
+    pub fade: f64,
     /// The pouches are deepest around `pouch_band` metres in from the edge, fading over the
     /// same distance either side.
     pub pouch_band: f64,
@@ -83,6 +91,7 @@ impl Mammatus {
             sag: 0.,
             sag_distance: 15_000.,
             base_softness: 0.,
+            top_variation: 0.,
             anvil_density: 0.015,
             pouch_density: 0.02,
             pouch_size: 1400.,
@@ -99,6 +108,9 @@ impl Mammatus {
             edge_raggedness: 3000.,
             edge_taper: 2500.,
             pouch_band: 12_000.,
+            center: Vector2::zeros(),
+            extent: 60_000.,
+            fade: 0.,
             seed: seed as u32,
             noise: PerlinNoise::with_seed(seed.wrapping_mul(5).wrapping_add(41)),
         }
@@ -121,7 +133,16 @@ impl Mammatus {
     }
 
     pub fn top(&self) -> f64 {
-        self.base + self.thickness
+        self.base + self.thickness + self.top_variation
+    }
+
+    /// The height of the anvil's top at (x, z).
+    fn local_top(&self, x: f64, z: f64) -> f64 {
+        let t = self.base + self.thickness;
+        if self.top_variation <= 0. {
+            return t;
+        }
+        t + (self.noise.fbm(x / self.base_size, 0.57, z / self.base_size, 3, 0.5, 2.) - 0.5) * 2. * self.top_variation
     }
 
     /// How far inside the anvil's ragged edge (x, z) lies.
@@ -173,16 +194,31 @@ impl Mammatus {
         if inside <= 0. {
             return 0.;
         }
-        let taper = smoothstep(0., self.edge_taper, inside);
+        // Rounded and ragged, so that no edge of the region is a ruled line.
+        let region = if self.fade > 0. {
+            let from_centre = (Vector2::new(p.x, p.z) - self.center).norm() / self.extent;
+            let ragged = (self.noise.fbm(p.x / 9000., 0.91, p.z / 9000., 3, 0.5, 2.) - 0.5) * self.fade;
+            1. - smoothstep(1. - self.fade, 1., from_centre + ragged)
+        } else {
+            1.
+        };
+        if region <= 0. {
+            return 0.;
+        }
+        let taper = smoothstep(0., self.edge_taper, inside) * region;
         let d = p / self.detail_size;
         let ripple = (self.noise.fbm(d.x, d.y, d.z, 3, 0.5, 2.) - 0.5) * 2.;
-        let base = self.local_base(p.x, p.z, inside);
+        let top = self.local_top(p.x, p.z);
+        let base = self.local_base(p.x, p.z, inside).min(top - 1.);
         if p.y >= base {
             // The anvil: thinning towards its edge, from the top down, and towards its top, and
             // thickening over its soft underside.
-            let depth = self.top() - base;
+            let depth = top - base;
             let h = (p.y - base) / depth;
             let top = taper * (0.75 + 0.25 * ripple);
+            if h > 1. {
+                return 0.;
+            }
             let underside = if self.base_softness > 0. { smoothstep(0., self.base_softness / depth, h + 0.3 * ripple * self.base_softness / depth) } else { 1. };
             return (1. - smoothstep(top - 0.15, top, h)) * (0.85 + 0.15 * ripple) * underside;
         }
@@ -203,7 +239,7 @@ impl DensityField for Mammatus {
         if f <= 0. {
             return 0.;
         }
-        let base = self.local_base(p.x, p.z, self.inside_edge(p.x, p.z));
+        let base = self.local_base(p.x, p.z, self.inside_edge(p.x, p.z)).min(self.local_top(p.x, p.z) - 1.);
         if p.y >= base { self.anvil_density * f } else { self.pouch_density * f }
     }
 
@@ -258,7 +294,7 @@ mod tests {
         let mut m = Mammatus::new(2);
         m.edge_direction = Vector2::new(0.6, -0.8);
         test_majorant_for(&m);
-        (m.base_variation, m.sag, m.base_softness) = (500., 1200., 300.);
+        (m.base_variation, m.sag, m.base_softness, m.top_variation) = (500., 1200., 300., 400.);
         test_majorant_for(&m);
     }
 

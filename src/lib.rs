@@ -8,6 +8,8 @@ extern crate nalgebra as na;
 extern crate serde_derive;
 
 pub mod assets;
+#[cfg(feature = "cli")]
+pub mod server;
 pub mod schema;
 pub mod stopwatch;
 pub mod preview;

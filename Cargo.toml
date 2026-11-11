@@ -12,7 +12,7 @@ default = ["cli"]
 # Everything only the command line needs: argument parsing, the progress bar, the terminal
 # preview and reference comparison (nv-flip is C++). The library without it is the renderer
 # alone, which also builds for WebAssembly (see web/).
-cli = ["dep:clap", "dep:indicatif", "dep:console", "dep:termcolor", "dep:nv-flip", "dep:libc"]
+cli = ["dep:clap", "dep:tiny_http", "dep:indicatif", "dep:console", "dep:termcolor", "dep:nv-flip", "dep:libc"]
 
 [[bin]]
 name = "rays"
@@ -44,6 +44,8 @@ console = { version = "0.15.11", optional = true }
 approx = "0.5.1"
 nv-flip = { version = "0.1.2", optional = true }
 ttf-parser = "0.25"
+# The HTTP side of `rays serve`.
+tiny_http = { version = "0.12", optional = true }
 # Peak memory reporting on the command line.
 libc = { version = "0.2", optional = true }
 

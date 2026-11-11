@@ -92,7 +92,16 @@ let image = null;            // ImageData on the canvas
 let dirty = false;
 let stats = { rays: 0, since: 0, buildMs: 0, built: 0, rendering: false };
 const assetCache = new Map();   // path -> Promise<Uint8Array | null>
-const assetsSent = new Set();
+// Render servers (`rays serve`) share the work when there are any: see "Render servers" below.
+// Of every STRIDE layer numbers, the first workerCount belong to the workers, one each, and
+// the rest to servers, one each: nobody renders a layer twice, and none need be told what the
+// others are doing.
+const STALE_BUILD_MS = 1500;    // a superseded build older than this is abandoned (see restartScene)
+const MAX_SERVERS = 8;
+const STRIDE = workerCount + MAX_SERVERS;
+const CLIENT = Math.random().toString(36).slice(2);   // tells this page's requests from another's
+let servers = [];               // { url, threads, slot, sceneJson, sceneId, abort }
+
 // While the camera is being moved, quick draft frames stand in for the path-traced image.
 const DRAFT_SCALE = 0.5;        // draft size, as a fraction of the preview's
 let interacting = false;        // the camera is being moved
@@ -120,7 +129,7 @@ function previewDoc() {
 // Paths of files the scene refers to, wherever they appear.
 function assetPaths(value, found = new Set()) {
     if (typeof value === 'string') {
-        if (/\.(obj|ply|png|jpe?g|exr|hdr|tga|bmp)$/i.test(value)) { found.add(value); }
+        if (/\.(obj|ply|wo3|png|jpe?g|exr|hdr|tga|bmp|tiff?|ttf|otf)$/i.test(value)) { found.add(value); }
     } else if (value && typeof value === 'object') {
         for (const v of Object.values(value)) { assetPaths(v, found); }
     }
@@ -149,7 +158,7 @@ function resetAccumulation() {
         for (let i = 3; i < image.data.length; i += 4) { image.data[i] = 255; }
         ctx.putImageData(image, 0, 0);
     }
-    stats.rays = 0; stats.since = performance.now();
+    stats.rays = 0; stats.since = performance.now(); stats.serverLayers = 0;
 }
 
 // Rebuild the scene in every worker and start rendering again.
@@ -158,7 +167,21 @@ async function restartScene() {
     showError(null);
     interacting = false; draft = null; draftQueued = false;
     stats.built = 0; stats.buildMs = 0; stats.rendering = false;
-    for (const w of workers) { w.postMessage({ type: 'stop' }); }
+    // A worker still building the scene this one replaces can't hear about it until it has
+    // finished: a build is one long call. A worker that has been at it for a while is
+    // replaced, rather than waited on for a scene nobody wants. Replacing costs what the
+    // worker had kept from earlier builds (the sky's tables, unchanged objects), so it is not
+    // done to a worker on its first build, which is mostly spent making exactly those and
+    // would only be spent again; nor to one that is about to finish anyway.
+    const now = performance.now();
+    workers.forEach((w, index) => {
+        if (w.building && w.warm && now - w.buildStart > STALE_BUILD_MS) {
+            w.terminate();
+            workers[index] = spawnWorker(index);
+        } else {
+            w.postMessage({ type: 'stop' });
+        }
+    });
     const json = JSON.stringify(previewDoc());
     try {
         const paths = [...assetPaths(doc)];
@@ -167,9 +190,9 @@ async function restartScene() {
         const files = await Promise.all(paths.map(p => fetchAsset(p).catch(() => null)));
         if (mine !== gen) { return; }
         paths.forEach((path, i) => {
-            if (files[i] && !assetsSent.has(path)) {
-                assetsSent.add(path);
-                for (const w of workers) { w.postMessage({ type: 'asset', path, bytes: files[i] }); }
+            if (!files[i]) { return; }
+            for (const w of workers) {
+                if (!w.assets.has(path)) { w.assets.add(path); w.postMessage({ type: 'asset', path, bytes: files[i] }); }
             }
         });
     } catch (e) {
@@ -177,7 +200,12 @@ async function restartScene() {
         return;
     }
     resetAccumulation();
-    for (const w of workers) { w.postMessage({ type: 'scene', gen: mine, json }); }
+    for (const w of workers) {
+        if (!w.building) { w.buildStart = performance.now(); }
+        w.building = true;
+        w.postMessage({ type: 'scene', gen: mine, json });
+    }
+    for (const s of servers) { serverLoop(s, mine, json); }
     updateStatus();
 }
 
@@ -195,6 +223,7 @@ function restartCamera() {
     resetAccumulation();
     const json = JSON.stringify(c);
     for (const w of workers) { w.postMessage({ type: 'camera', gen: mine, json }); }
+    for (const s of servers) { if (s.sceneJson) { serverLoop(s, mine, s.sceneJson); } }
 }
 
 const cameraIsPlain = () => doc.camera && typeof doc.camera === 'object' && !JSON.stringify(doc.camera).includes('"$');
@@ -266,7 +295,98 @@ function scheduleScene(delay = 120) {
     sceneTimer = setTimeout(restartScene, delay);
 }
 
-function onWorkerMessage({ data: m }) {
+// ---------------------------------------------------------------------------------------
+// Render servers
+//
+// A server (`rays serve`, src/server.rs) builds the same scene and renders whole layers on
+// all its cores; what it sends back is added to the picture exactly as a worker's bands are.
+// The page looks for servers when it starts: the one it was served from, if that is one, and
+// any named in the address (?servers=http://host:8787,...) or kept from last time. With none,
+// the workers do everything, as before.
+
+function serverCandidates() {
+    const named = new URLSearchParams(location.search).get('servers');
+    let kept = [];
+    try { kept = JSON.parse(localStorage.getItem('rays-servers') ?? '[]'); } catch (e) { /* no storage: nothing kept */ }
+    const list = [location.origin, ...(named ? named.split(',') : kept)];
+    return [...new Set(list.map(u => u.trim().replace(/\/+$/, '')).filter(u => /^https?:/.test(u)))];
+}
+
+async function findServers() {
+    const found = await Promise.all(serverCandidates().map(async url => {
+        try {
+            const r = await fetch(url + '/api/health', { signal: AbortSignal.timeout(2500) });
+            const h = r.ok ? await r.json() : null;
+            return h?.name === 'rays' ? { url, threads: h.threads } : null;
+        } catch (e) {
+            return null;
+        }
+    }));
+    servers = found.filter(Boolean).slice(0, MAX_SERVERS).map((s, slot) => ({ ...s, slot, sceneJson: null, sceneId: null, abort: null }));
+}
+
+// Change which servers are used, and start again with them.
+async function setServers(urls) {
+    try { localStorage.setItem('rays-servers', JSON.stringify(urls)); } catch (e) { /* not kept, then */ }
+    for (const s of servers) { s.abort?.abort(); }
+    const u = new URL(location.href);
+    u.searchParams.delete('servers');
+    history.replaceState(null, '', u);
+    await findServers();
+    restartScene();
+}
+
+// Have a server render its layers of generation `mine` for as long as that is what is shown.
+async function serverLoop(server, mine, json) {
+    server.abort?.abort();
+    const abort = server.abort = new AbortController();
+    const post = (path, body) => fetch(server.url + path, { method: 'POST', body, signal: abort.signal });
+    try {
+        for (let k = 0; gen === mine && k < 4096; k++) {
+            if (server.sceneJson !== json) {
+                const r = await post('/api/scene', json);
+                if (!r.ok) { return; }   // an invalid scene: the workers report the same error
+                server.sceneId = (await r.json()).id;
+                server.sceneJson = json;
+            }
+            const layer = workerCount + server.slot + k * STRIDE;
+            const r = await post('/api/render', JSON.stringify({
+                scene: server.sceneId, layer, client: CLIENT, gen: mine,
+                // The view may have moved since the scene was built.
+                camera: cameraIsPlain() ? doc.camera : null,
+            }));
+            if (r.status === 404) { server.sceneJson = null; k--; continue; }   // it has forgotten the scene
+            if (!r.ok) { return; }
+            const layerSums = new Float32Array(await r.arrayBuffer());
+            if (gen !== mine || layerSums.length !== sums.length) { return; }
+            for (let i = 0; i < layerSums.length; i++) { sums[i] += layerSums[i]; }
+            for (let y = 0; y < ph; y++) { rowSamples[y] += 1; }
+            stats.serverLayers += 1;
+            stats.rendering = true;
+            dirty = true;
+        }
+    } catch (e) {
+        // Superseded (aborted), or the server has gone: either way the workers carry on.
+        if (e.name !== 'AbortError') { server.sceneJson = null; }
+    }
+}
+
+function spawnWorker(index) {
+    const w = new Worker(new URL('worker.js', import.meta.url), { type: 'module' });
+    w.onmessage = onWorkerMessage;
+    w.onerror = e => showError(`Render worker failed: ${e.message}`);
+    w.building = false;      // it has been sent a scene and hasn't answered yet
+    w.buildStart = 0;        // when the build it is busy with was asked for
+    w.warm = false;          // it has built a scene before, so has things kept from it
+    w.assets = new Set();    // paths of the files it has been given
+    w.postMessage({ type: 'init', index, count: workerCount, stride: STRIDE });
+    return w;
+}
+
+function onWorkerMessage({ data: m, target }) {
+    // A worker answers every scene it is sent, in turn; it is free once it answers the latest.
+    if ((m.type === 'built' || m.type === 'error') && m.gen === gen) { target.building = false; }
+    if (m.type === 'built') { target.warm = true; }
     if (m.type === 'picked') {
         picks.get(m.id)?.(m.index);
         picks.delete(m.id);
@@ -333,8 +453,14 @@ function updateStatus() {
         for (const n of rowSamples) { samples = Math.min(samples, n); }
         const seconds = (performance.now() - stats.since) / 1000;
         const rate = seconds > 0 ? stats.rays / seconds : 0;
-        text = `${pw}×${ph} · ${samples} samples/pixel · ${formatCount(rate)} rays/s · ` +
-            `built in ${formatMs(stats.buildMs)} · ${workers.length} workers`;
+        const farm = servers.length
+            ? ` + ${servers.length} server${servers.length > 1 ? 's' : ''} (${servers.reduce((n, s) => n + s.threads, 0)} threads, ${stats.serverLayers} layers)`
+            : '';
+        const ready = Math.min(stats.built, workers.length);
+        const local = ready < workers.length
+            ? `${ready} of ${workers.length} workers ready, the rest building`
+            : `${formatCount(rate)} rays/s in the browser · built in ${formatMs(stats.buildMs)} · ${workers.length} workers`;
+        text = `${pw}×${ph} · ${samples} samples/pixel · ${local}${farm}`;
     }
     $('status').textContent = text;
 }
@@ -1077,6 +1203,13 @@ $('scene-picker').addEventListener('change', async () => {
 
 $('preview-size').addEventListener('change', restartScene);
 
+$('servers').addEventListener('click', () => {
+    const current = servers.map(s => s.url).filter(u => u !== location.origin).join(', ');
+    const answer = prompt('Render servers to share the work with (addresses of machines running "rays serve", separated by commas).\n' +
+        'The server this page came from, if any, is always used.', current);
+    if (answer !== null) { setServers(answer.split(',').map(u => u.trim()).filter(Boolean)); }
+});
+
 $('download').addEventListener('click', () => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([formatScene(doc) + '\n'], { type: 'application/json' }));
@@ -1124,18 +1257,13 @@ async function start() {
         showError(e.message);
         return;
     }
-    for (let index = 0; index < workerCount; index++) {
-        const w = new Worker(new URL('worker.js', import.meta.url), { type: 'module' });
-        w.onmessage = onWorkerMessage;
-        w.onerror = e => showError(`Render worker failed: ${e.message}`);
-        w.postMessage({ type: 'init', index, count: workerCount });
-        workers.push(w);
-    }
+    for (let index = 0; index < workerCount; index++) { workers.push(spawnWorker(index)); }
+    await findServers();
     restartScene();
     requestAnimationFrame(draw);
 }
 
 // For debugging and tests.
-window.rays = { get doc() { return doc; }, get schema() { return schema; }, get interacting() { return interacting || Boolean(draft); }, get stats() { return stats; }, get rowSamples() { return rowSamples; }, select };
+window.rays = { get doc() { return doc; }, get servers() { return servers; }, get schema() { return schema; }, get interacting() { return interacting || Boolean(draft); }, get stats() { return stats; }, get rowSamples() { return rowSamples; }, select };
 
 start();

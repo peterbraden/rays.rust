@@ -79,7 +79,44 @@ fn peak_memory() -> Option<u64> {
     None
 }
 
+/// rays serve: run as a render server, and host the scene builder
+#[derive(Parser, Debug)]
+#[command(name = "rays serve", about = "Serve the scene builder, and render layers for it over HTTP", long_about = None)]
+struct ServeArgs {
+    ///Port to listen on
+    #[arg(long, default_value_t = 8787)]
+    port: u16,
+
+    ///Address to listen on. The default is this machine only; 0.0.0.0 listens on every
+    ///network interface, for other machines to use this one. There is no authentication
+    #[arg(long, default_value = "127.0.0.1")]
+    bind: String,
+
+    ///Directory to serve files from, and that scenes' asset paths are relative to
+    #[arg(long, default_value = ".")]
+    root: String,
+
+    ///Origin of a page allowed to call the render API, eg. https://user.github.io. May be
+    ///repeated. Pages served from this machine are always allowed
+    #[arg(long)]
+    allow_origin: Vec<String>,
+}
+
 fn main() {
+    // `rays serve ...` is a different program from `rays <scene>`: it has its own options.
+    if std::env::args().nth(1).as_deref() == Some("serve") {
+        let a = ServeArgs::parse_from(std::env::args().skip(1));
+        if let Err(e) = std::env::set_current_dir(&a.root) {
+            eprintln!("Can't use {} as the root: {}", a.root, e);
+            std::process::exit(1);
+        }
+        let root = std::env::current_dir().unwrap();
+        if let Err(e) = rays::server::serve(rays::server::Options { bind: a.bind, port: a.port, root, allow_origins: a.allow_origin }) {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
     let args = Args::parse();
 
     println!("{}",

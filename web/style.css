@@ -78,7 +78,9 @@ button:hover { border-color: var(--accent); }
 
 #inspector { padding: 8px 12px 16px; display: grid; gap: 6px; }
 #inspector .field { display: grid; grid-template-columns: 104px minmax(0, 1fr) 20px; gap: 6px; align-items: center; }
-#inspector .field.nested { align-items: start; }
+/* A field with fields of its own: its name above, and the full width for what is inside. */
+#inspector .field.nested { grid-template-columns: minmax(0, 1fr) 20px; align-items: start; }
+#inspector .field.nested > label { grid-column: 1 / -1; }
 /* A field the file doesn't set: its default, dimmed. */
 #inspector .field.unset > .inputs > input, #inspector .field.unset > .inputs > select,
 #inspector .field.unset > .inputs > textarea { color: var(--muted); font-style: italic; }

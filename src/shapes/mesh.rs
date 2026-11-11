@@ -5,10 +5,8 @@
 ///
 /// In order to use a mesh in a ray-tracing context, we will need to use an acceleration structure
 /// to performantly intersect with the appropriate triangle. Because of this, at render time, the
-/// mesh will need the repetition of vertices necessary to store the triangles in an Octree.
-///
-/// (POSSIBLE ENHANCEMENT: Is there a way to use the octree with indices to dynamically reconstruct
-/// triangles?)
+/// mesh will need the repetition of vertices necessary to store the triangles in a bounding
+/// volume hierarchy (see `crate::bvh`), which holds each triangle once.
 ///
 /// Most other Mesh datastructures are optimisations to reduce the memory requirements by removing
 /// repetition of positional data using indexes of vertices. This makes a lot of sense when you
@@ -27,10 +25,11 @@ use crate::na::{Vector3};
 use crate::ray::Ray;
 use crate::intersection::RawIntersection;
 use crate::shapes::bbox::BBox;
-use crate::shapes::triangle::{Triangle, SmoothTriangle};
+use crate::shapes::triangle::{Triangle, IntersectionPoint, intersects_dist, interpolate_normal, triangle_bounds};
 use std::vec::Vec;
 use std::sync::Arc;
-use crate::octree::Octree;
+use crate::bvh::Bvh;
+use crate::na::geometry::Affine3;
 
 /// A mesh as stored in a file: vertex positions, optionally a normal per vertex, and triangles
 /// indexing them.
@@ -80,62 +79,135 @@ fn to_vectors(v: &[f32]) -> Vec<Vector3<f64>> {
     v.chunks(3).map(|i| Vector3::new(i[0] as f64, i[1] as f64, i[2] as f64)).collect()
 }
 
-pub struct Mesh {
-    triangles: Octree<Triangle>,
-    bounds: BBox,
-    triangle_count: usize,
-    /// For sampling points on the surface: each triangle with the running total of area up to
-    /// and including it.
-    areas: Vec<(Arc<Triangle>, f64)>,
+/// Vertex positions, and triangles as three indices into them.
+type MeshPart = (Vec<Vector3<f64>>, Vec<[usize; 3]>);
+
+/// Triangles as indices into a shared buffer of vertex positions. A vertex of a closed mesh is
+/// shared by about six triangles, so storing each position once and each triangle as three
+/// 32-bit indices takes 12 bytes per triangle plus 24 per vertex, against 72 bytes per triangle
+/// (or 144 with vertex normals) for triangles holding their own vertices.
+///
+/// Intersection and shading are split: the BVH search finds the nearest hit using positions
+/// alone, and only the triangle finally hit has its normal computed.
+struct IndexedTriangles {
+    bvh: Bvh,
+    positions: Vec<Vector3<f64>>,
+    /// In the BVH's leaf order.
+    triangles: Vec<[u32; 3]>,
 }
 
-// A simple triangle collection mesh. 
+impl IndexedTriangles {
+    fn new(positions: Vec<Vector3<f64>>, triangles: Vec<[u32; 3]>) -> IndexedTriangles {
+        let (bvh, triangles) = Bvh::build(triangles, |&[a, b, c]| {
+            triangle_bounds(positions[a as usize], positions[b as usize], positions[c as usize])
+        });
+        IndexedTriangles { bvh, positions, triangles }
+    }
+
+    /// Concatenate meshes, each positions and triangles indexing them, into one vertex buffer,
+    /// offsetting their indices.
+    fn from_meshes(meshes: Vec<MeshPart>) -> IndexedTriangles {
+        let mut positions = Vec::new();
+        let mut triangles = Vec::new();
+        for (p, t) in meshes {
+            let offset = positions.len();
+            positions.extend(p);
+            triangles.extend(t.iter().map(|tri| tri.map(|i| u32::try_from(i + offset).expect("mesh has over 2^32 vertices"))));
+        }
+        IndexedTriangles::new(positions, triangles)
+    }
+
+    fn vertices(&self, i: usize) -> [Vector3<f64>; 3] {
+        self.triangles[i].map(|v| self.positions[v as usize])
+    }
+
+    fn hit(&self, r: &Ray, i: usize) -> Option<IntersectionPoint> {
+        let [v0, v1, v2] = self.vertices(i);
+        intersects_dist(v0, v1, v2, r)
+    }
+
+    /// The nearest hit in `[min, max)`: the triangle and where it is hit. A triangle is hit at
+    /// most once, so its one hit is the nearest beyond any `min`.
+    fn nearest(&self, r: &Ray, min: f64, max: f64) -> Option<(usize, IntersectionPoint)> {
+        self.bvh.nearest(r, min, max, |i, _| self.hit(r, i).map(|x| RawIntersection {
+            dist: x.dist, point: x.point, normal: Vector3::zeros(),
+        })).map(|(i, x)| (i, IntersectionPoint { dist: x.dist, point: x.point }))
+    }
+
+    fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
+        self.bvh.any_hit(r, min, max, |i| self.hit(r, i).is_some_and(|x| x.dist >= min && x.dist < max))
+    }
+
+    /// The geometric normal of triangle `i`, from its winding.
+    fn face_normal(&self, i: usize) -> Vector3<f64> {
+        let [v0, v1, v2] = self.vertices(i);
+        (v1 - v0).cross(&(v2 - v0)).normalize()
+    }
+}
+
+pub struct Mesh {
+    triangles: IndexedTriangles,
+    /// For sampling points on the surface: the running total of area up to and including each
+    /// triangle.
+    areas: Vec<f64>,
+}
+
+// A simple triangle collection mesh.
 impl Mesh {
     /// Load an OBJ or PLY file, scaling it by `scale`.
     pub fn from_file(pth: String, scale: Vector3<f64>) -> Mesh {
-        let mut triangles = Vec::new();
-        for m in load(&pth) {
-            let positions: Vec<Vector3<f64>> = m.positions.iter().map(|p| p.component_mul(&scale)).collect();
-            triangles.extend(m.triangles.iter().map(|&[a, b, c]| {
-                Arc::new(Triangle::new(positions[a], positions[b], positions[c]))
-            }));
-        }
-
-        //println!("# of triangles: {}", triangles.len());
-
-        let bounds = Mesh::bounds_of(&triangles);
-        let tree = Octree::new(8, bounds, &triangles); 
-        let mut total = 0.;
-        let areas = triangles.iter().map(|t| {
-            total += t.surface_area();
-            (t.clone(), total)
-        }).collect();
-        Mesh {
-            triangles: tree,
-            bounds,
-            triangle_count: triangles.len(),
-            areas,
-        }
+        Mesh::from_triangles(IndexedTriangles::from_meshes(load(&pth).into_iter().map(|m| {
+            (m.positions.iter().map(|p| p.component_mul(&scale)).collect(), m.triangles)
+        }).collect()))
     }
 
-    fn bounds_of(triangles: &Vec<Arc<Triangle>>) -> BBox {
-        let mut bb = BBox::empty();
+    /// A mesh of `triangles`, each three indices into `positions`.
+    pub fn new(positions: Vec<Vector3<f64>>, triangles: Vec<[usize; 3]>) -> Mesh {
+        Mesh::from_triangles(IndexedTriangles::from_meshes(vec![(positions, triangles)]))
+    }
 
-        for t in triangles {
-            bb = bb.union(&t.bounds());
-        }
+    fn from_triangles(triangles: IndexedTriangles) -> Mesh {
+        let mut total = 0.;
+        let areas = (0 .. triangles.triangles.len()).map(|i| {
+            let [v0, v1, v2] = triangles.vertices(i);
+            total += Triangle::new(v0, v1, v2).surface_area();
+            total
+        }).collect();
+        Mesh { triangles, areas }
+    }
 
-        bb
+    /// Triangle `i`, in the mesh's internal order.
+    pub fn triangle(&self, i: usize) -> Triangle {
+        let [v0, v1, v2] = self.triangles.vertices(i);
+        Triangle::new(v0, v1, v2)
     }
 }
 
 impl Geometry for Mesh {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        self.triangles.raw_intersection(r, f64::INFINITY, 0f64)
+        self.intersects_range(r, 0., f64::INFINITY)
+    }
+
+    fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
+        self.intersects_range(r, min, f64::INFINITY)
+    }
+
+    fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
+        self.triangles.nearest(r, min, max).map(|(i, x)| RawIntersection {
+            dist: x.dist, point: x.point, normal: self.triangles.face_normal(i),
+        })
+    }
+
+    fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
+        self.triangles.occludes(r, min, max)
+    }
+
+    fn transformed_bounds(&self, t: &Affine3<f64>) -> BBox {
+        self.triangles.bvh.transformed_bounds(t)
     }
 
     fn surface_area(&self) -> f64 {
-        self.areas.last().map_or(0., |(_, total)| *total)
+        self.areas.last().copied().unwrap_or(0.)
     }
 
     /// Choose a triangle with probability proportional to its area, by binary search on the
@@ -143,16 +215,16 @@ impl Geometry for Mesh {
     /// `sample_triangle`).
     fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> {
         let target = u[0] * self.surface_area();
-        let i = self.areas.partition_point(|(_, total)| *total <= target).min(self.areas.len().checked_sub(1)?);
-        self.areas[i].0.sample_surface([u[1], u[2], 0.])
+        let i = self.areas.partition_point(|total| *total <= target).min(self.areas.len().checked_sub(1)?);
+        self.triangle(i).sample_surface([u[1], u[2], 0.])
     }
 
     fn bounds(&self) -> BBox {
-        self.bounds
+        self.triangles.bvh.bounds()
     }
 
     fn primitives(&self) -> u64 {
-        self.triangle_count as u64
+        self.triangles.triangles.len() as u64
     }
 }
 
@@ -188,66 +260,72 @@ pub fn vertex_normals(positions: &[Vector3<f64>], triangles: &[[usize; 3]]) -> V
 }
 
 pub struct SmoothMesh {
-    triangles: Octree<SmoothTriangle>,
-    bounds: BBox,
-    triangle_count: usize,
+    triangles: IndexedTriangles,
+    /// A normal per vertex, indexed as the positions. Zero where none can be computed, in which
+    /// case the face normal stands in.
+    normals: Vec<Vector3<f64>>,
 }
 
 impl SmoothMesh {
     /// Load an OBJ or PLY file, scaling it by `scale`. Meshes without a normal for every vertex
     /// get them from `vertex_normals`.
     pub fn from_file(pth: String, scale: Vector3<f64>) -> SmoothMesh {
-        let mut triangles = Vec::new();
-        for m in load(&pth) {
+        let mut normals = Vec::new();
+        let meshes = load(&pth).into_iter().map(|m| {
             let positions: Vec<Vector3<f64>> = m.positions.iter().map(|p| p.component_mul(&scale)).collect();
-            let normals: Vec<Vector3<f64>> = if m.normals.is_empty() {
+            normals.extend(if m.normals.is_empty() {
                 // Computed from the scaled positions, so they need no further transform.
                 vertex_normals(&positions, &m.triangles)
             } else {
                 // Normals transform by the inverse of the scale.
                 m.normals.iter().map(|n| n.component_div(&scale).normalize()).collect()
-            };
-            triangles.extend(m.triangles.iter().map(|&[a, b, c]| {
-                let face = Triangle::new(positions[a], positions[b], positions[c]).normal;
-                let or_face = |n: Vector3<f64>| if n == Vector3::zeros() { face } else { n };
-                let (na, nb, nc) = (or_face(normals[a]), or_face(normals[b]), or_face(normals[c]));
-                Arc::new(SmoothTriangle::new(positions[a], positions[b], positions[c], na, nb, nc))
-            }));
-        }
-
-        println!("# of triangles: {}", triangles.len());
-
-        let bounds = SmoothMesh::bounds_of(&triangles);
-        let tree = Octree::new(8, bounds, &triangles); 
-        SmoothMesh {
-            triangles: tree,
-            bounds,
-            triangle_count: triangles.len()
-        }
+            });
+            (positions, m.triangles)
+        }).collect();
+        let triangles = IndexedTriangles::from_meshes(meshes);
+        println!("# of triangles: {}", triangles.triangles.len());
+        SmoothMesh { triangles, normals }
     }
 
-    fn bounds_of(triangles: &Vec<Arc<SmoothTriangle>>) -> BBox {
-        let mut bb = BBox::empty();
-
-        for t in triangles {
-            bb = bb.union(&t.bounds());
-        }
-
-        bb
+    fn normal_at(&self, i: usize, point: Vector3<f64>) -> Vector3<f64> {
+        let face = self.triangles.face_normal(i);
+        let n = self.triangles.triangles[i].map(|v| {
+            let n = self.normals[v as usize];
+            if n == Vector3::zeros() { face } else { n }
+        });
+        interpolate_normal(self.triangles.vertices(i), n, point)
     }
 }
 
 impl Geometry for SmoothMesh {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        self.triangles.raw_intersection(r, f64::INFINITY, 0f64)
+        self.intersects_range(r, 0., f64::INFINITY)
+    }
+
+    fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
+        self.intersects_range(r, min, f64::INFINITY)
+    }
+
+    fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
+        self.triangles.nearest(r, min, max).map(|(i, x)| RawIntersection {
+            dist: x.dist, point: x.point, normal: self.normal_at(i, x.point),
+        })
+    }
+
+    fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
+        self.triangles.occludes(r, min, max)
+    }
+
+    fn transformed_bounds(&self, t: &Affine3<f64>) -> BBox {
+        self.triangles.bvh.transformed_bounds(t)
     }
 
     fn bounds(&self) -> BBox {
-        self.bounds
+        self.triangles.bvh.bounds()
     }
 
     fn primitives(&self) -> u64 {
-        self.triangle_count as u64
+        self.triangles.triangles.len() as u64
     }
 }
 
@@ -336,5 +414,106 @@ mod tests {
         let r = Ray { ro: Vector3::new(5., 1., 0.), rd: Vector3::new(-1., 0., 0.) };
         let n = m.intersects(&r).expect("hit").normal;
         assert!((n - Vector3::new(1., 1. / 3., 0.).normalize()).norm() < 1e-6, "{}", n);
+    }
+
+    #[test]
+    fn test_rough_surface_matches_brute_force() {
+        // A rough surface of small triangles, as the ocean is, with rays from above it and
+        // grazing along it, limited by min and max: the mesh must find exactly the nearest
+        // triangle hit in range.
+        use rand::{Rng, SeedableRng};
+        use rand::rngs::StdRng;
+        let mut rng = StdRng::seed_from_u64(6);
+        let mut u = |a: f64, b: f64| rng.gen_range(a, b);
+        let n = 24;
+        let mut positions = vec![];
+        for z in 0 ..= n {
+            for x in 0 ..= n {
+                positions.push(Vector3::new(x as f64, u(-0.2, 0.2), z as f64));
+            }
+        }
+        let at = |x: usize, z: usize| z * (n + 1) + x;
+        let triangles: Vec<[usize; 3]> = (0 .. n).flat_map(|x| (0 .. n).map(move |z| (x, z)))
+            .flat_map(|(x, z)| [[at(x, z), at(x + 1, z), at(x, z + 1)], [at(x + 1, z), at(x + 1, z + 1), at(x, z + 1)]])
+            .collect();
+        let mesh = Mesh::new(positions.clone(), triangles.clone());
+        let mut hits = 0;
+        for i in 0 .. 20000 {
+            let ro = Vector3::new(u(-5., 29.), u(-0.3, 4.), u(-5., 29.));
+            let rd = Vector3::new(u(-1., 1.), if i % 2 == 0 { u(-1., 0.2) } else { u(-0.02, 0.02) }, u(-1., 1.)) * u(0.5, 2.);
+            let r = Ray { ro, rd };
+            let (min, max) = match i % 3 { 0 => (0., f64::INFINITY), 1 => (0., u(1., 30.)), _ => (u(0., 5.), f64::INFINITY) };
+            let expected = triangles.iter()
+                .filter_map(|t| intersects_dist(positions[t[0]], positions[t[1]], positions[t[2]], &r))
+                .map(|x| x.dist).filter(|d| *d >= min && *d < max)
+                .min_by(f64::total_cmp);
+            assert_eq!(mesh.intersects_range(&r, min, max).map(|x| x.dist), expected, "{} {} {}", r, min, max);
+            assert_eq!(mesh.occludes(&r, min, max), expected.is_some(), "{} {} {}", r, min, max);
+            if expected.is_some() { hits += 1 }
+        }
+        assert!(hits > 2000, "{}", hits);
+    }
+
+    /// A unit sphere as `n` x `2n` latitude-longitude quads.
+    fn tessellated_sphere(n: usize) -> (Vec<Vector3<f64>>, Mesh) {
+        let p = |i: usize, j: usize| {
+            let (th, ph) = (std::f64::consts::PI * i as f64 / n as f64, std::f64::consts::PI * j as f64 / n as f64);
+            Vector3::new(th.sin() * ph.cos(), th.cos(), th.sin() * ph.sin())
+        };
+        let verts: Vec<Vector3<f64>> = (0 ..= n).flat_map(|i| (0 .. 2 * n).map(move |j| p(i, j))).collect();
+        let at = |i: usize, j: usize| i * 2 * n + j % (2 * n);
+        let mut tris = vec![];
+        for i in 0 .. n {
+            for j in 0 .. 2 * n {
+                tris.push([at(i, j), at(i + 1, j), at(i, j + 1)]);
+                tris.push([at(i, j + 1), at(i + 1, j), at(i + 1, j + 1)]);
+            }
+        }
+        (verts.clone(), Mesh::new(verts, tris))
+    }
+
+    #[test]
+    fn test_transformed_bounds_are_tight_and_conservative() {
+        use crate::na::geometry::Rotation3;
+        let (verts, mesh) = tessellated_sphere(24);
+        let t = Affine3::from_matrix_unchecked(Rotation3::from_euler_angles(0.6, 0.7, 0.8).to_homogeneous());
+        let tight = mesh.transformed_bounds(&t);
+        let corners = mesh.bounds().transform(&na::convert(t));
+        // A rotated unit sphere still fits in [-1, 1]^3; the rotated box of corners doesn't.
+        assert!(tight.size().max() < 2.5, "{}", tight);
+        assert!(corners.size().max() > 2.8, "{}", corners);
+        for v in verts {
+            assert!(tight.contains_point(&t.transform_point(&v.into()).coords), "{} outside {}", v, tight);
+        }
+    }
+
+    #[test]
+    fn test_ranges_agree_with_brute_force() {
+        use rand::{Rng, SeedableRng};
+        let (_, mesh) = tessellated_sphere(12);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(5);
+        for _ in 0 .. 1000 {
+            let r = Ray {
+                ro: Vector3::new(rng.gen_range(-3., 3.), rng.gen_range(-3., 3.), rng.gen_range(-3., 3.)),
+                rd: Vector3::new(rng.gen_range(-1., 1.), rng.gen_range(-1., 1.), rng.gen_range(-1., 1.)),
+            };
+            let (min, max) = (rng.gen_range(0., 2.), rng.gen_range(2., 6.));
+            let expected = (0 .. mesh.primitives() as usize).filter_map(|i| mesh.triangle(i).intersects(&r))
+                .map(|x| x.dist).filter(|&d| d >= min && d < max)
+                .min_by(|a, b| a.total_cmp(b));
+            assert_eq!(mesh.intersects_range(&r, min, max).map(|x| x.dist), expected);
+            assert_eq!(mesh.occludes(&r, min, max), expected.is_some());
+        }
+    }
+
+    #[test]
+    fn test_vertices_are_shared() {
+        let (verts, mesh) = tessellated_sphere(12);
+        assert_eq!(mesh.triangles.positions.len(), verts.len());
+        assert_eq!(mesh.primitives(), 2 * 12 * 24);
+        // Normals are the faces', as with separate triangles.
+        let r = Ray { ro: Vector3::new(0.01, 0.02, -5.), rd: Vector3::new(0., 0., 1.) };
+        let x = mesh.intersects(&r).unwrap();
+        assert!(x.normal.z.abs() > 0.95 && (x.normal.norm() - 1.).abs() < 1e-12, "{}", x.normal);
     }
 }

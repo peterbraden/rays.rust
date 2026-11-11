@@ -24,6 +24,26 @@ Supports:
     - Mesh
     - OBJ file to mesh import
     - Infinite Mesh
+    - Transforms (scale, rotate, translate) and object instancing
+
+## Instancing
+
+Name a geometry once under `"geometries"`, then place it as many times as you like with
+`transform`s. It's loaded and built once, and every instance shares it, so each copy costs only
+its transform, whatever the size of the mesh. Each instance has its own material.
+
+```json
+"geometries": {
+  "teapot": { "type": "smoothmesh", "src": "./demo/teapot.obj" }
+},
+"objects": [
+  { "type": "transform", "item": "teapot", "translate": [-4, 0, 0], "material": "GOLD" },
+  { "type": "transform", "item": "teapot", "scale": 0.5, "rotate": { "pitch": 90 }, "material": "GLASS" }
+]
+```
+
+A name can be used wherever a geometry is expected (eg. the `a` and `b` of a `difference`), and
+geometries can be built from each other. See [demo/scenes/instances.json](demo/scenes/instances.json).
 
   - Skysphere with Rayleigh and Mie Scattering
   - Procedural Objects
@@ -33,6 +53,8 @@ Supports:
       meandering rivers with ox-bow lakes, over layered geology, on a patch or a whole planet
       (see `src/terrain/`)
     - Random Cubes
+    - Terrain from heightmaps (fractal noise or images)
+    - Grass on any terrain: species presets (lawn, meadow, tussock, reed...) and conditions (wind, drought, frost, rain, mowing...)
   - Multithreaded
   - Progressive rendering
 

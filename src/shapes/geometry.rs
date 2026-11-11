@@ -2,6 +2,7 @@ use crate::ray::Ray;
 use crate::intersection::RawIntersection;
 use crate::shapes::bbox::BBox;
 use crate::na::{Vector3};
+use crate::na::geometry::Affine3;
 
 
 // 
@@ -28,8 +29,29 @@ pub trait Geometry: Sync{
         }
     }
 
+    /// The nearest hit in `[min, max)` along the ray. A composite can use the range to skip
+    /// whatever lies outside it, eg. a mesh's BVH stops at nodes beyond `max`, the nearest hit
+    /// found elsewhere in the scene so far.
+    fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
+        self.intersects_beyond(r, min).filter(|x| x.dist >= min && x.dist < max)
+    }
+
+    /// Whether anything is hit in `[min, max)` along the ray: for shadow rays, which don't
+    /// need the nearest hit, so a composite can stop at the first. PBR calls this
+    /// `IntersectP`.
+    fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
+        self.intersects_range(r, min, max).is_some()
+    }
+
     // World space bounding box
     fn bounds(&self) -> BBox;
+
+    /// The bounds of this geometry after transforming it by `t`, as when it is instanced. The
+    /// default transforms the corners of `bounds()`, which under rotation can be much larger
+    /// than the geometry itself (up to sqrt(3) times as wide); composites can do better.
+    fn transformed_bounds(&self, t: &Affine3<f64>) -> BBox {
+        self.bounds().transform(&na::convert(*t))
+    }
 
 
     // === Optional methods ===
@@ -53,6 +75,10 @@ pub trait Geometry: Sync{
     // is problematic. 
     fn inside(&self, _: &Vector3<f64>) -> bool { false }
 
+    // A triangle's corners, in the order its intersection test takes them; None for other
+    // shapes. Containers of triangles use them to test several at once (see `triangle::may_hit`).
+    fn vertices(&self) -> Option<[Vector3<f64>; 3]> { None }
+
     // Surface area, for shapes that can be sampled as area lights; 0 for those that can't.
     fn surface_area(&self) -> f64 { 0. }
 
@@ -61,3 +87,19 @@ pub trait Geometry: Sync{
     fn sample_surface(&self, _u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> { None }
 }
 
+
+/// A shared geometry is a geometry: an object can hold a geometry that other objects, or
+/// instancing `Transform`s, also use, without copying it.
+impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
+    fn intersects(&self, r: &Ray) -> Option<RawIntersection> { (**self).intersects(r) }
+    fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> { (**self).intersects_beyond(r, min) }
+    fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> { (**self).intersects_range(r, min, max) }
+    fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool { (**self).occludes(r, min, max) }
+    fn bounds(&self) -> BBox { (**self).bounds() }
+    fn transformed_bounds(&self, t: &Affine3<f64>) -> BBox { (**self).transformed_bounds(t) }
+    fn fast_intersects(&self, r: &Ray) -> bool { (**self).fast_intersects(r) }
+    fn primitives(&self) -> u64 { (**self).primitives() }
+    fn inside(&self, p: &Vector3<f64>) -> bool { (**self).inside(p) }
+    fn surface_area(&self) -> f64 { (**self).surface_area() }
+    fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> { (**self).sample_surface(u) }
+}

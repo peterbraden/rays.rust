@@ -1,12 +1,13 @@
 //! # Terrain as a scene object
 //!
-//! Builds a terrain from a scene file's `"type": "terrain"` object, runs it to the requested
+//! Builds a terrain from a scene file's `"type": "landscape"` object (`"terrain"` is the
+//! heightmap terrain of `procedural::heightmap`), runs it to the requested
 //! time, and turns it into a smooth triangle mesh whose material varies with what is at each
 //! point (ice, river, sea floor, bare rock on steep slopes, otherwise a tint by elevation).
 //!
 //! ```json
 //! {
-//!   "type": "terrain",
+//!   "type": "landscape",
 //!   "seed": 0,
 //!   "time": 100000,
 //!   "domain": { "type": "patch", "cells": 128, "spacing": 400 },
@@ -47,7 +48,7 @@ use crate::material::lambertian::Lambertian;
 use crate::material::model::MaterialModel;
 use crate::material::texture::Medium;
 use crate::na::Vector3;
-use crate::octree::Octree;
+use crate::bvh::GeometryBvh;
 use crate::ray::Ray;
 use crate::intersection::RawIntersection;
 use crate::sceneobject::SceneObject;
@@ -97,14 +98,17 @@ impl Placement {
 }
 
 pub struct TerrainGeometry {
-    triangles: Octree<SmoothTriangle>,
+    triangles: GeometryBvh<SmoothTriangle>,
     bounds: BBox,
     count: usize,
 }
 
 impl Geometry for TerrainGeometry {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        self.triangles.raw_intersection(r, f64::INFINITY, 0.)
+        self.triangles.nearest(r, 0., f64::INFINITY).map(|x| x.1)
+    }
+    fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
+        self.triangles.nearest(r, min, max).map(|x| x.1)
     }
     fn bounds(&self) -> BBox { self.bounds }
     fn primitives(&self) -> u64 { self.count as u64 }
@@ -121,13 +125,14 @@ pub fn mesh(t: &Terrain, place: &Placement) -> TerrainGeometry {
     }).collect();
     let triangles: Vec<[usize; 3]> = d.quads.iter().flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]).collect();
     let normals = vertex_normals(&positions, &triangles);
-    let items: Vec<Arc<SmoothTriangle>> = triangles.iter().map(|&[a, b, c]| {
+    let items: Vec<SmoothTriangle> = triangles.iter().map(|&[a, b, c]| {
         let face = Triangle::new(positions[a], positions[b], positions[c]).normal;
         let n = |i: usize| if normals[i] == Vector3::zeros() { face } else { normals[i] };
-        Arc::new(SmoothTriangle::new(positions[a], positions[b], positions[c], n(a), n(b), n(c)))
+        SmoothTriangle::new(positions[a], positions[b], positions[c], n(a), n(b), n(c))
     }).collect();
     let bounds = items.iter().fold(BBox::empty(), |b, t| b.union(&t.bounds()));
-    TerrainGeometry { triangles: Octree::new(8, bounds, &items), bounds, count: items.len() }
+    let count = items.len();
+    TerrainGeometry { triangles: GeometryBvh::new(items), bounds, count }
 }
 
 /// Materials by what covers the ground, chosen per cell.
@@ -355,7 +360,7 @@ mod tests {
     #[test]
     fn test_scene_object() {
         let o: Value = serde_json::from_str(r#"{
-            "type": "terrain", "seed": 3, "time": 1000, "step": 500,
+            "type": "landscape", "seed": 3, "time": 1000, "step": 500,
             "domain": { "type": "patch", "cells": 16, "spacing": 1000 },
             "glacier": { "acceleration": 20 }
         }"#).unwrap();

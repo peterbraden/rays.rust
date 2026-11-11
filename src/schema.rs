@@ -23,9 +23,9 @@ pub fn schema() -> Value {
 }
 
 /// The kinds a field may have.
-pub const KINDS: [&str; 18] = [
+pub const KINDS: [&str; 16] = [
     "number", "integer", "boolean", "string", "vec2", "vec3", "color", "enum", "material", "medium",
-    "shape", "shapes", "path", "object", "list", "json", "geometry", "expression",
+    "shape", "shapes", "path", "object", "list", "json",
 ];
 
 #[cfg(test)]
@@ -96,14 +96,12 @@ mod tests {
         let mut names = Vec::new();
         for line in source[start..end].lines() {
             let line = line.trim();
-            let quoted: Vec<&str> = line.split('"').skip(1).step_by(2).collect();
             if line.starts_with("if t == \"") || line.starts_with("} else if t == \"") {
                 names.extend(line.split("t == \"").skip(1).filter_map(|s| s.split('"').next()).map(String::from));
             } else if line.starts_with('"') && line.contains("=>") {
                 let arms = line.split("=>").next().unwrap();
                 names.extend(arms.split('"').skip(1).step_by(2).map(String::from));
             }
-            let _ = quoted;
         }
         names
     }
@@ -130,7 +128,7 @@ mod tests {
         let options = ["linear", "bezier", "conic", "cubic_spline", "b_spline"];
         objects.retain(|n| !options.contains(&n.as_str()));
         check("objects", objects, 50);
-        check("materials", dispatched(scenefile, "pub fn parse_material(", "pub fn parse_noise_texture("), 9);
+        check("materials", dispatched(scenefile, "pub fn parse_material(", "pub fn parse_rock("), 9);
         check("media", dispatched(scenefile, "pub fn parse_medium(", "pub fn parse_air("), 4);
         assert!(missing.is_empty(), "no schema entry for: {}", missing.join(", "));
     }

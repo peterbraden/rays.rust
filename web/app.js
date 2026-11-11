@@ -609,7 +609,7 @@ function typeRow(ref, category, changed) {
     inputs.className = 'inputs';
     const select = typeSelect(category, ref.get()?.type);
     select.addEventListener('change', () => {
-        ref.ensure().type = select.value;
+        retype(ref.ensure(), category, select.value);
         edited(false);
         changed();
     });
@@ -617,6 +617,17 @@ function typeRow(ref, category, changed) {
     inputs.append(select);
     row.append(label, inputs);
     return row;
+}
+
+// Change a node's type, keeping the keys it has and giving it the new type's required
+// fields, from that type's example, where it lacks them.
+function retype(node, category, type) {
+    node.type = type;
+    const entry = schema[category]?.[type];
+    const example = instanceOf(category, type);
+    for (const f of entry?.fields ?? []) {
+        if (f.required && node[f.name] === undefined && example[f.name] !== undefined) { node[f.name] = example[f.name]; }
+    }
 }
 
 // A select of a category's types, grouped as the schema groups them.
@@ -842,7 +853,7 @@ function shapeEditor(slot, ctx, id, again, remove) {
         const ref = { get: slot.get, ensure: slot.get };
         const type = typeSelect('objects', value.type);
         type.id = id;
-        type.addEventListener('change', () => { slot.get().type = type.value; edited(ctx.camera); again(); });
+        type.addEventListener('change', () => { retype(slot.get(), 'objects', type.value); edited(ctx.camera); again(); });
         head.append(type);
         const details = fold(`${id}-fields`, 'fields');
         const entry = schema.objects?.[value.type];

@@ -1581,7 +1581,8 @@ impl SceneFile {
     /// `{"type": "plane", "y": 0}`, a ground plane; or `{"type": "plane", "normal": [x, y, z],
     /// "distance": d}`, POV-Ray's plane: the half-space n.p < d, which can be used in CSG.
     pub fn parse_plane(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        if !o["normal"].is_null() {
+        // A vector is the half-space form's normal; an object is a bump map on either form.
+        if o["normal"].is_array() {
             return Box::new(crate::shapes::plane::HalfSpace::new(
                 SceneFile::parse_vec3(&o["normal"]), SceneFile::parse_number(&o["distance"], 0.)));
         }

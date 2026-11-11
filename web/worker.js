@@ -1,8 +1,9 @@
 // A render worker: its own copy of the scene, rendering the layers the page assigns it.
 //
-// The page starts several of these. Worker `index` of `count` renders layers index,
-// index + count, index + 2 count, ... so no two workers repeat a layer, and what they send
-// adds up to the same image whatever the number of workers. Each layer is sent in bands of
+// The page starts several of these. Worker `index` renders layers index, index + stride,
+// index + 2 stride, ... so no two workers repeat a layer (nor do render servers, which take
+// the layer numbers between: see app.js), and what they send adds up to the same image
+// whoever rendered what. Each layer is sent in bands of
 // rows as they finish. A worker starts each layer at a different row, so the first pass
 // covers the image `count` times sooner.
 //
@@ -16,10 +17,12 @@
 import { instantiate, RaysError } from './rays.js';
 
 const BAND_MS = 40;
+const MAX_LAYER = 4096 * 16;
 
 let rays = null;
 let index = 0;
 let count = 1;
+let stride = 1;        // layers this worker renders are index, index + stride, ...
 let gen = -1;          // generation being rendered
 let size = null;       // { width, height } of the built scene
 let running = false;
@@ -37,7 +40,7 @@ async function fresh() {
 self.onmessage = async ({ data: m }) => {
     try {
         if (m.type === 'init') {
-            index = m.index; count = m.count;
+            index = m.index; count = m.count; stride = m.stride ?? m.count;
         } else if (m.type === 'asset') {
             assets.set(m.path, m.bytes);
             if (rays && !rays.dead) { rays.addAsset(m.path, m.bytes); }
@@ -45,6 +48,10 @@ self.onmessage = async ({ data: m }) => {
             gen = m.gen;
             size = null;
             drafting = false;
+            // Scenes sent while this worker was busy are all waiting behind this one. Let
+            // them be heard first: each sets `gen`, and only the last is worth building.
+            await pause();
+            if (gen !== m.gen) { return; }
             // An instance that has panicked can't be reused. One that hasn't is kept, as it
             // remembers what was slow to build (the sky's lookup table).
             if (!rays || rays.dead) { await fresh(); }
@@ -88,7 +95,7 @@ async function run() {
             const mine = gen;
             const { width, height } = size;
             let rows = Math.max(1, Math.round(height / 16));
-            for (let layer = index; gen === mine && layer < 4096; layer += count) {
+            for (let layer = index; gen === mine && layer < MAX_LAYER; layer += stride) {
                 const start = Math.floor((height * index) / count);
                 for (let done = 0; done < height && gen === mine;) {
                     const y0 = (start + done) % height;

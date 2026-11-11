@@ -19,6 +19,9 @@ const STARTER = {
     supersamples: 64, samples_per_chunk: 1, max_depth: 6,
     shadow_bias: 0.0001,
     background: [0, 0, 0],
+    // Sunlight from the sky's sun: what lights clouds, and casts the shadows.
+    sun: { intensity: 3 },
+    output: { tonemap: 'reinhard' },
     camera: { location: [0, 3, 11], lookat: [0, 1, 0], up: [0, 1, 0], angle: 0.5, aperture: 0 },
     materials: {
         WHITE: { type: 'lambertian', albedo: [0.85, 0.85, 0.85] },
@@ -61,6 +64,11 @@ const TEMPLATES = {
         item: { type: 'smoothmesh', src: 'demo/teapot-normals.obj', scale: [0.1, 0.1, 0.1] },
     }],
     'Sky': () => ['objects', { type: 'skysphere' }],
+    'Clouds: cirrus': () => ['objects', { type: 'hogan_kew_cirrus', genus: 'cirrus', wind_direction: [1, 0.5], seed: 3 }],
+    'Clouds: cumulus': () => ['objects', {
+        type: 'nubis_clouds', base: 1500, top: 3000, extent: 80000, coverage: 0.55, cloud_type: 1, density: 0.03, seed: 4,
+    }],
+    'Sun': () => ['sun', { intensity: 3 }],
     'Point light': () => ['lights', { location: [0, 10, 5], intensity: 300, color: [1, 1, 1] }],
     'Material: diffuse': () => ['materials', { type: 'lambertian', albedo: [0.8, 0.8, 0.8] }],
     'Material: metal': () => ['materials', { type: 'metal', reflective: [0.9, 0.9, 0.9], roughness: 0.1 }],
@@ -69,7 +77,7 @@ const TEMPLATES = {
 };
 
 // Parts of the scene file with their own place in the outline; the rest are "settings".
-const SECTIONS = ['camera', 'materials', 'media', 'geometries', 'lights', 'objects', 'variables'];
+const SECTIONS = ['camera', 'sun', 'materials', 'media', 'geometries', 'lights', 'objects', 'variables'];
 const LIST_SECTIONS = { materials: 'Materials', media: 'Media', geometries: 'Geometries', lights: 'Lights', objects: 'Objects' };
 
 let doc = structuredClone(STARTER);
@@ -488,6 +496,7 @@ function renderOutline() {
     };
     item(['settings'], 'Render settings', '');
     if (doc.camera) { item(['camera'], 'Camera', ''); }
+    if (doc.sun && typeof doc.sun === 'object') { item(['sun'], 'Sun', ''); }
     for (const [section, title] of Object.entries(LIST_SECTIONS)) {
         const group = doc[section];
         if (!group || typeof group !== 'object' || Object.keys(group).length === 0) { continue; }
@@ -524,6 +533,7 @@ function renderInspector() {
     $('duplicate').hidden = !isItem;
     $('inspector-title').textContent = selection[0] === 'settings' ? 'Render settings'
         : selection[0] === 'camera' ? 'Camera'
+        : selection[0] === 'sun' ? 'Sun'
         : isItem ? describe(selection[0], selection[1], target)[0] : 'Properties';
     if (!target || typeof target !== 'object') {
         form.innerHTML = '<p class="empty">Nothing selected.</p>';
@@ -649,6 +659,11 @@ $('duplicate').addEventListener('click', () => {
     edited(false);
 });
 
+// A sun follows the skysphere's sun; without a skysphere it needs a direction of its own.
+function sunFor(sun) {
+    return doc.objects?.some(o => o?.type === 'skysphere') ? sun : { ...sun, direction: [1, 2, 1] };
+}
+
 function uniqueName(group, base) {
     const stem = String(base).replace(/_\d+$/, '');
     for (let i = 2; ; i++) {
@@ -662,7 +677,10 @@ $('add').addEventListener('change', () => {
     $('add').value = '';
     if (!make) { return; }
     const [section, value] = make(doc);
-    if (section === 'materials') {
+    if (section === 'sun') {
+        doc.sun = doc.sun && typeof doc.sun === 'object' ? doc.sun : sunFor(value);
+        select(['sun']);
+    } else if (section === 'materials') {
         doc.materials ??= {};
         const name = uniqueName(doc.materials, value.type.replace(/[^a-z]/g, '').toUpperCase());
         doc.materials[name] = value;
@@ -672,6 +690,12 @@ $('add').addEventListener('change', () => {
             // An object needs a material to refer to.
             doc.materials = { WHITE: { type: 'lambertian', albedo: [0.8, 0.8, 0.8] }, ...doc.materials };
             value.material = 'WHITE';
+        }
+        if (/cloud|cirrus/.test(value.type)) {
+            // Clouds are lit by the sun and seen against the sky: without them they are all
+            // but invisible. Add whichever the scene lacks.
+            if (!doc.objects?.some(o => o?.type === 'skysphere')) { (doc.objects ??= []).push({ type: 'skysphere' }); }
+            if (!doc.sun) { doc.sun = sunFor({ intensity: 3 }); }
         }
         doc[section] ??= [];
         doc[section].push(value);

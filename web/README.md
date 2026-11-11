@@ -19,6 +19,8 @@ Serve the repository root, not `web/`: scenes name their meshes by paths from th
 - Preview: drag to orbit, shift-drag to pan, scroll to zoom, click an object to select it.
   While the camera moves the preview shows quick drafts (one unbounced ray per pixel, at half
   size); path tracing starts again when it stops.
+- The Add menu includes a sun and clouds (cirrus, cumulus). Clouds are lit by the scene's
+  `"sun"` and seen against a skysphere, so adding clouds adds whichever of those is missing.
 - The preview keeps adding samples, up to 4096 per pixel.
 - Loads the repository's demo scenes. "Save scene" downloads the edited scene as JSON, which
   the command line renders unchanged; "Save image" downloads the preview as it stands, as PNG.

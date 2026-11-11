@@ -11,21 +11,21 @@
     "GROUND": {
       "type": "lambertian",
       "albedo": [
-        0.12,
-        0.13,
-        0.09
+        0.075,
+        0.085,
+        0.045
       ]
     }
   },
   "camera": {
     "location": [
-      12000,
+      5000,
       2,
-      -38000
+      -26000
     ],
     "lookat": [
-      13000,
-      3000,
+      3500,
+      3600,
       0
     ],
     "up": [
@@ -33,7 +33,7 @@
       1,
       0
     ],
-    "angle": 0.45
+    "angle": 0.6
   },
   "sun": {
     "intensity": 4.9
@@ -44,11 +44,21 @@
       "material": "GROUND"
     },
     {
+      "type": "terrain",
+      "peak": [
+        -1500,
+        0
+      ],
+      "seed": 3,
+      "extent": 60000,
+      "resolution": 1280
+    },
+    {
       "type": "skysphere",
       "sun_direction": [
         1,
-        0.3,
-        0.4
+        0.22,
+        0.35
       ]
     },
     {
@@ -72,8 +82,9 @@
       "falloff": 3500,
       "spread": 0.08,
       "wavelength": 13000,
-      "amplitude": 480,
-      "oz": true
+      "amplitude": 560,
+      "oz": true,
+      "first_crest": 0.4
     }
   ]
 }

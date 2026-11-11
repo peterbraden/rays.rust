@@ -109,7 +109,7 @@ troughs.
 
 ![Lenticular clouds](./scenes/lenticular.png)
 
-`lenticular.json`: `{"type": "lenticular", "ridge": [0, 0], "ridge_length": 800, "wind_direction": [1, 0], "oz": true}`
+`lenticular.json`: `{"type": "lenticular", "ridge": [0, 0], "ridge_length": 800, "wind_direction": [1, 0], "oz": true}`, over `{"type": "terrain", "peak": [-1500, 0]}`
 
 Smooth lenses standing over the lee of a mountain, often stacked like a pile of plates. Stable air
 blowing over a ridge oscillates, and the oscillation stays trapped below some height as a train of
@@ -124,7 +124,10 @@ lift it needs to saturate. The lift past saturation sets the cloud water (`conde
 crest that lifts it high enough. Thin, separate moist layers give the stack. On the weaker crests
 downstream, only the moistest layer condenses: in the scene, the second crest holds a single
 plate. Humidity varies slowly from place to place, and fine strata and eddies texture the lenses.
-A short ridge gives the saucers of an isolated peak; a long one gives bands across the wind.
+A short ridge gives the saucers of an isolated peak; a long one gives bands across the wind. The
+scene puts a mountain under them: `terrain` is a meshed heightfield of ridged multifractal noise
+around a massif. It lies on the planet's curve, with snow, rock and vegetation by height and
+slope.
 
 Seen from the side, a lens is lit mostly by light scattered many times, so the scene uses the Oz
 approximation (`"oz": true`). Without it, the render sparkles with noise.

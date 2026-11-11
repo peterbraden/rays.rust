@@ -180,9 +180,13 @@ impl SmoothMesh {
         }
 
         println!("# of triangles: {}", triangles.len());
+        SmoothMesh::from_triangles(triangles)
+    }
 
+    /// A mesh of the given triangles, eg. generated rather than loaded.
+    pub fn from_triangles(triangles: Vec<Arc<SmoothTriangle>>) -> SmoothMesh {
         let bounds = SmoothMesh::bounds_of(&triangles);
-        let tree = Octree::new(8, bounds, &triangles); 
+        let tree = Octree::new(8, bounds, &triangles);
         SmoothMesh {
             triangles: tree,
             bounds,

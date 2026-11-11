@@ -19,6 +19,7 @@ use crate::procedural::nubis_clouds::{NubisCloudLayer, GlobalNubis};
 use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGenus, GlobalCirrus};
 use crate::procedural::benard_altocumulus::BenardAltocumulus;
 use crate::procedural::lenticular::{Lenticular, MoistLayer};
+use crate::procedural::terrain::{Terrain, TerrainMaterial};
 use crate::procedural::harris_cumulus::{CloudSimulation, Forcing, HarrisCumulus, Profile, SimulationParams, Sounding};
 use crate::participatingmedia::create_fog;
 use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
@@ -256,6 +257,10 @@ impl SceneFile {
 
         if t == "harris_cumulus" {
             return Some(Arc::new(SceneFile::parse_harris_cumulus(&o)));
+        }
+
+        if t == "terrain" {
+            return Some(Arc::new(SceneFile::parse_terrain(&o)));
         }
 
         if t == "lenticular" {
@@ -624,6 +629,45 @@ impl SceneFile {
         );
         let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(c));
         create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// Mountains (see `procedural::terrain`): a meshed heightfield of ridged noise around a
+    /// massif, lying on the planet, with snow, rock and vegetation:
+    ///
+    /// `{"type": "terrain", "center": [x, z], "extent": 30000, "resolution": 768,
+    /// "peak": [x, z], "peak_height": 3200, "peak_radius": 7000, "seed": 0}`
+    ///
+    /// with `relief` and `feature_size` (the ridges), `plains` (relief of the plains around),
+    /// `snowline` and `treeline` (m), the colours `snow`, `rock`, `forest` and `grass`, and
+    /// `"mapping": "flat"` for flat ground rather than the planet's.
+    pub fn parse_terrain(o: &Value) -> SceneObject {
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let seed = SceneFile::parse_seed(o).unwrap_or(0);
+        let flat = o["mapping"].as_str() == Some("flat");
+        let mut t = Terrain::new(seed);
+        t.center = SceneFile::parse_vec2_def(o, "center", t.center);
+        t.extent = num("extent", t.extent).max(1.);
+        t.resolution = SceneFile::parse_int(&o["resolution"], t.resolution).max(2);
+        t.peak = SceneFile::parse_vec2_def(o, "peak", t.center);
+        t.peak_height = num("peak_height", t.peak_height);
+        t.peak_radius = num("peak_radius", t.peak_radius).max(1.);
+        t.relief = num("relief", t.relief);
+        t.feature_size = num("feature_size", t.feature_size).max(1.);
+        t.plains = num("plains", t.plains);
+        let radius = if flat { None } else { Some(SceneFile::parse_number(&o["earth_radius"], EARTH_RADIUS)) };
+        t.planet_radius = radius;
+        let mut m = TerrainMaterial::new(seed);
+        m.planet_radius = radius;
+        m.snowline = num("snowline", m.snowline);
+        m.treeline = num("treeline", m.treeline);
+        m.snow = SceneFile::parse_color_def(o, "snow", m.snow);
+        m.rock = SceneFile::parse_color_def(o, "rock", m.rock);
+        m.forest = SceneFile::parse_color_def(o, "forest", m.forest);
+        m.grass = SceneFile::parse_color_def(o, "grass", m.grass);
+        SceneObject {
+            geometry: Box::new(SmoothMesh::from_triangles(t.triangles())),
+            medium: Box::new(Solid { m: Box::new(m) }),
+        }
     }
 
     /// Lenticular clouds over the lee waves of a ridge (see `procedural::lenticular`):

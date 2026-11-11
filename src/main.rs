@@ -75,6 +75,7 @@ mod procedural {
     pub mod hogan_kew_cirrus;
     pub mod benard_altocumulus;
     pub mod lenticular;
+    pub mod terrain;
     pub mod harris_cumulus;
 }
 mod participatingmedia;

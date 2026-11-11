@@ -10,7 +10,7 @@ use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::material::functions::{scatter_lambertian, scatter_dielectric, diffuse};
 use crate::shapes::geometry::Geometry;
 use crate::material::lambertian::Lambertian;
-use crate::octree::Octree;
+use crate::bvh::BVH;
 use crate::shapes::bbox::BBox;
 use crate::intersection::RawIntersection;
 use std::f64;
@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 
 pub struct BoxTerrain {
-    boxes: Octree<BBox>,
+    boxes: BVH<BBox>,
     boxes_count: usize,
     bounds: BBox,
 } 
@@ -69,7 +69,7 @@ pub fn create_box_terrain(seed: u64) -> SceneObject {
         }
     }
 
-    let boxes = Octree::new(8, bounds, &boxes_vec);
+    let boxes = BVH::new(&boxes_vec);
     let terrain = BoxTerrain { boxes, boxes_count: boxes_vec.len(), bounds};
 
     SceneObject {

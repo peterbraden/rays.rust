@@ -57,9 +57,9 @@ impl Triangle {
     }
 }
 
-struct IntersectionPoint {
-    dist: f64, 
-    point: Vector3<f64>,
+pub(crate) struct IntersectionPoint {
+    pub dist: f64,
+    pub point: Vector3<f64>,
 }
 
 /// Möller and Trumbore's test, from Tomas Möller and Ben Trumbore, "Fast, Minimum Storage
@@ -76,7 +76,7 @@ struct IntersectionPoint {
 /// We reject only det = 0, as PBR 4th ed. section 6.5.3 does with Woop, Benthin and Wald's
 /// watertight test (JCGT 2(1), 2013, <https://jcgt.org/published/0002/01/05/>): a near-parallel
 /// ray gives a large 1/det, and the u, v bounds then reject it unless it really grazes the triangle.
-fn intersects_dist(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>, r: &Ray) -> Option<IntersectionPoint> {
+pub(crate) fn intersects_dist(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>, r: &Ray) -> Option<IntersectionPoint> {
         let v0v1 = v1 - v0; 
         let v0v2 = v2 - v0; 
         let pvec = r.rd.cross(&v0v2); 

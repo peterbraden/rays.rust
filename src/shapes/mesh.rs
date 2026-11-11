@@ -1,19 +1,16 @@
 /// Meshes
 ///
-/// For simplicity, we'll limit the scope to triangular meshes (rather than including arbitrary
-/// polygonal meshes) and limit that scope to meshes that are manifold.
+/// Triangle meshes, loaded from OBJ or PLY files. Polygons are split into triangles on loading.
 ///
-/// In order to use a mesh in a ray-tracing context, we will need to use an acceleration structure
-/// to performantly intersect with the appropriate triangle. Because of this, at render time, the
-/// mesh will need the repetition of vertices necessary to store the triangles in an Octree.
+/// A mesh is stored as files store it: one array of vertex positions (and, for smooth shading,
+/// normals), and each triangle as three indices into it. Most vertices are shared by about six
+/// triangles, so this holds each position once rather than six times, and a triangle costs 12
+/// bytes of indices instead of a separately allocated, reference-counted `Triangle` of four
+/// vectors (issue #26: the Stanford dragon took about 475 bytes per triangle that way). The
+/// triangle's vertices are fetched when a ray is tested against it.
 ///
-/// (POSSIBLE ENHANCEMENT: Is there a way to use the octree with indices to dynamically reconstruct
-/// triangles?)
-///
-/// Most other Mesh datastructures are optimisations to reduce the memory requirements by removing
-/// repetition of positional data using indexes of vertices. This makes a lot of sense when you
-/// care about a lot of serialisation (for example streaming to a GPU) but in our context of
-/// in-memory tracing, doesn't provide a lot of advantages.
+/// The triangles are ordered as the leaves of a bounding volume hierarchy (`crate::bvh::Tree`),
+/// so the triangles in each leaf are contiguous in memory.
 ///
 /// ## References:
 /// 1. Fundamentals of Computer Graphics (4th Ed.) - Marschner, Steve
@@ -27,10 +24,9 @@ use crate::na::{Vector3};
 use crate::ray::Ray;
 use crate::intersection::RawIntersection;
 use crate::shapes::bbox::BBox;
-use crate::shapes::triangle::{Triangle, SmoothTriangle};
+use crate::shapes::triangle::{intersects_dist, sample_triangle, SmoothTriangle};
+use crate::bvh::Tree;
 use std::vec::Vec;
-use std::sync::Arc;
-use crate::octree::Octree;
 
 /// A mesh as stored in a file: vertex positions, optionally a normal per vertex, and triangles
 /// indexing them.
@@ -80,62 +76,113 @@ fn to_vectors(v: &[f32]) -> Vec<Vector3<f64>> {
     v.chunks(3).map(|i| Vector3::new(i[0] as f64, i[1] as f64, i[2] as f64)).collect()
 }
 
-pub struct Mesh {
-    triangles: Octree<Triangle>,
-    bounds: BBox,
-    triangle_count: usize,
-    /// For sampling points on the surface: each triangle with the running total of area up to
-    /// and including it.
-    areas: Vec<(Arc<Triangle>, f64)>,
+/// Triangles as indices into shared vertex arrays, ordered as the leaves of their hierarchy.
+struct Indexed {
+    positions: Vec<Vector3<f64>>,
+    /// A normal per vertex for smooth shading; empty for flat. A zero normal (a vertex whose
+    /// faces cancel) falls back to the face's own.
+    normals: Vec<Vector3<f64>>,
+    triangles: Vec<[u32; 3]>,
+    tree: Tree,
+    /// The position of each file triangle in `triangles`, in file order.
+    file_order: Vec<u32>,
 }
 
-// A simple triangle collection mesh. 
-impl Mesh {
-    /// Load an OBJ or PLY file, scaling it by `scale`.
-    pub fn from_file(pth: String, scale: Vector3<f64>) -> Mesh {
-        let mut triangles = Vec::new();
-        for m in load(&pth) {
-            let positions: Vec<Vector3<f64>> = m.positions.iter().map(|p| p.component_mul(&scale)).collect();
-            triangles.extend(m.triangles.iter().map(|&[a, b, c]| {
-                Arc::new(Triangle::new(positions[a], positions[b], positions[c]))
-            }));
+impl Indexed {
+    /// Load an OBJ or PLY file, scaled by `scale`; with `smooth`, keep or compute vertex normals.
+    fn load(pth: &str, scale: Vector3<f64>, smooth: bool) -> Indexed {
+        let mut positions: Vec<Vector3<f64>> = Vec::new();
+        let mut normals = Vec::new();
+        let mut file_triangles: Vec<[u32; 3]> = Vec::new();
+        for m in load(pth) {
+            let offset = positions.len();
+            let scaled: Vec<Vector3<f64>> = m.positions.iter().map(|p| p.component_mul(&scale)).collect();
+            if smooth {
+                if m.normals.is_empty() {
+                    // Computed from the scaled positions, so they need no further transform.
+                    normals.extend(vertex_normals(&scaled, &m.triangles));
+                } else {
+                    // Normals transform by the inverse of the scale.
+                    normals.extend(m.normals.iter().map(|n| n.component_div(&scale).normalize()));
+                }
+            }
+            positions.extend(scaled);
+            file_triangles.extend(m.triangles.iter().map(|t| t.map(|i| (i + offset) as u32)));
         }
 
-        //println!("# of triangles: {}", triangles.len());
-
-        let bounds = Mesh::bounds_of(&triangles);
-        let tree = Octree::new(8, bounds, &triangles); 
-        let mut total = 0.;
-        let areas = triangles.iter().map(|t| {
-            total += t.surface_area();
-            (t.clone(), total)
+        let corners = |t: &[u32; 3]| t.map(|i| positions[i as usize]);
+        let bounds: Vec<BBox> = file_triangles.iter().map(|t| {
+            let [a, b, c] = corners(t);
+            BBox::empty().union_point(&a).union_point(&b).union_point(&c)
         }).collect();
-        Mesh {
-            triangles: tree,
-            bounds,
-            triangle_count: triangles.len(),
-            areas,
+        let (tree, order) = Tree::build(&bounds);
+        let triangles: Vec<[u32; 3]> = order.iter().map(|&i| file_triangles[i]).collect();
+        let mut file_order = vec![0u32; order.len()];
+        for (position, &i) in order.iter().enumerate() {
+            file_order[i] = position as u32;
+        }
+        Indexed { positions, normals, triangles, tree, file_order }
+    }
+
+    fn corners(&self, i: usize) -> [Vector3<f64>; 3] {
+        self.triangles[i].map(|v| self.positions[v as usize])
+    }
+
+    /// The face normal, as `Triangle::new` computes it.
+    fn face_normal(&self, i: usize) -> Vector3<f64> {
+        let [a, b, c] = self.corners(i);
+        (b - a).cross(&(c - a)).normalize()
+    }
+
+    fn hit(&self, i: usize, r: &Ray) -> Option<RawIntersection> {
+        let [a, b, c] = self.corners(i);
+        if self.normals.is_empty() {
+            intersects_dist(a, b, c, r).map(|x| RawIntersection { dist: x.dist, point: x.point, normal: self.face_normal(i) })
+        } else {
+            let n = self.triangles[i].map(|v| self.normals[v as usize]);
+            let face = || self.face_normal(i);
+            let or_face = |n: Vector3<f64>| if n == Vector3::zeros() { face() } else { n };
+            SmoothTriangle::new(a, b, c, or_face(n[0]), or_face(n[1]), or_face(n[2])).intersects(r)
         }
     }
 
-    fn bounds_of(triangles: &Vec<Arc<Triangle>>) -> BBox {
-        let mut bb = BBox::empty();
+    fn nearest(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
+        self.tree.nearest(r, min, f64::INFINITY, |i| self.hit(i, r)).map(|(_, x)| x)
+    }
+}
 
-        for t in triangles {
-            bb = bb.union(&t.bounds());
-        }
+pub struct Mesh {
+    mesh: Indexed,
+    /// For sampling points on the surface: the running total of triangle area, in file order.
+    areas: Vec<f64>,
+}
 
-        bb
+impl Mesh {
+    /// Load an OBJ or PLY file, scaling it by `scale`.
+    pub fn from_file(pth: String, scale: Vector3<f64>) -> Mesh {
+        let mesh = Indexed::load(&pth, scale, false);
+        let mut total = 0.;
+        let areas = mesh.file_order.iter().map(|&i| {
+            let [a, b, c] = mesh.corners(i as usize);
+            total += 0.5 * (b - a).cross(&(c - a)).norm();
+            total
+        }).collect();
+        Mesh { mesh, areas }
     }
 }
 
 impl Geometry for Mesh {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        self.triangles.raw_intersection(r, f64::INFINITY, 0f64)
+        self.mesh.nearest(r, 0.)
+    }
+
+    /// The nearest triangle at least `min` along the ray, found in one traversal.
+    fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
+        self.mesh.nearest(r, min)
     }
 
     fn surface_area(&self) -> f64 {
-        self.areas.last().map_or(0., |(_, total)| *total)
+        self.areas.last().copied().unwrap_or(0.)
     }
 
     /// Choose a triangle with probability proportional to its area, by binary search on the
@@ -143,16 +190,18 @@ impl Geometry for Mesh {
     /// `sample_triangle`).
     fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> {
         let target = u[0] * self.surface_area();
-        let i = self.areas.partition_point(|(_, total)| *total <= target).min(self.areas.len().checked_sub(1)?);
-        self.areas[i].0.sample_surface([u[1], u[2], 0.])
+        let f = self.areas.partition_point(|total| *total <= target).min(self.areas.len().checked_sub(1)?);
+        let i = self.mesh.file_order[f] as usize;
+        let [a, b, c] = self.mesh.corners(i);
+        Some((sample_triangle(a, b, c, u[1], u[2]), self.mesh.face_normal(i)))
     }
 
     fn bounds(&self) -> BBox {
-        self.bounds
+        self.mesh.tree.bounds()
     }
 
     fn primitives(&self) -> u64 {
-        self.triangle_count as u64
+        self.mesh.triangles.len() as u64
     }
 }
 
@@ -188,66 +237,32 @@ pub fn vertex_normals(positions: &[Vector3<f64>], triangles: &[[usize; 3]]) -> V
 }
 
 pub struct SmoothMesh {
-    triangles: Octree<SmoothTriangle>,
-    bounds: BBox,
-    triangle_count: usize,
+    mesh: Indexed,
 }
 
 impl SmoothMesh {
     /// Load an OBJ or PLY file, scaling it by `scale`. Meshes without a normal for every vertex
     /// get them from `vertex_normals`.
     pub fn from_file(pth: String, scale: Vector3<f64>) -> SmoothMesh {
-        let mut triangles = Vec::new();
-        for m in load(&pth) {
-            let positions: Vec<Vector3<f64>> = m.positions.iter().map(|p| p.component_mul(&scale)).collect();
-            let normals: Vec<Vector3<f64>> = if m.normals.is_empty() {
-                // Computed from the scaled positions, so they need no further transform.
-                vertex_normals(&positions, &m.triangles)
-            } else {
-                // Normals transform by the inverse of the scale.
-                m.normals.iter().map(|n| n.component_div(&scale).normalize()).collect()
-            };
-            triangles.extend(m.triangles.iter().map(|&[a, b, c]| {
-                let face = Triangle::new(positions[a], positions[b], positions[c]).normal;
-                let or_face = |n: Vector3<f64>| if n == Vector3::zeros() { face } else { n };
-                let (na, nb, nc) = (or_face(normals[a]), or_face(normals[b]), or_face(normals[c]));
-                Arc::new(SmoothTriangle::new(positions[a], positions[b], positions[c], na, nb, nc))
-            }));
-        }
-
-        println!("# of triangles: {}", triangles.len());
-
-        let bounds = SmoothMesh::bounds_of(&triangles);
-        let tree = Octree::new(8, bounds, &triangles); 
-        SmoothMesh {
-            triangles: tree,
-            bounds,
-            triangle_count: triangles.len()
-        }
-    }
-
-    fn bounds_of(triangles: &Vec<Arc<SmoothTriangle>>) -> BBox {
-        let mut bb = BBox::empty();
-
-        for t in triangles {
-            bb = bb.union(&t.bounds());
-        }
-
-        bb
+        SmoothMesh { mesh: Indexed::load(&pth, scale, true) }
     }
 }
 
 impl Geometry for SmoothMesh {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        self.triangles.raw_intersection(r, f64::INFINITY, 0f64)
+        self.mesh.nearest(r, 0.)
+    }
+
+    fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
+        self.mesh.nearest(r, min)
     }
 
     fn bounds(&self) -> BBox {
-        self.bounds
+        self.mesh.tree.bounds()
     }
 
     fn primitives(&self) -> u64 {
-        self.triangle_count as u64
+        self.mesh.triangles.len() as u64
     }
 }
 

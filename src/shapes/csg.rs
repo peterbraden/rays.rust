@@ -1,7 +1,7 @@
 use crate::ray::Ray;
 use crate::intersection::RawIntersection;
 use crate::shapes::bbox::BBox;
-use crate::octree::Octree;
+use crate::bvh::BVH;
 use std::f64;
 use crate::shapes::geometry::Geometry;
 use std::sync::Arc;
@@ -130,10 +130,10 @@ impl Geometry for Primitive {
 
 // Item[0] | Item[1] | Item[n...]
 //
-// Union builds an Octree of contained items, therefore provides efficient intersection of 
+// Union builds a BVH of contained items, therefore provides efficient intersection of 
 // many items.
 pub struct Union {
-    items: Octree<Primitive>,
+    items: BVH<Primitive>,
     primitives: u64,
 }
 
@@ -146,7 +146,7 @@ impl Union {
             bounds = bounds.union(&g.bounds());
             Arc::new(Primitive { item: g })
         }).collect();
-        let tree = Octree::new(8, bounds, &primitives); 
+        let tree = BVH::new(&primitives); 
     
         Union {
             items: tree,

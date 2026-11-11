@@ -106,7 +106,7 @@ use crate::shapes::triangle::Triangle;
 use crate::shapes::repeating_mesh::RepeatingMesh;
 use std::vec::Vec;
 use std::sync::Arc;
-use crate::octree::Octree;
+use crate::bvh::BVH;
 use crate::shapes::geometry::Geometry;
 use crate::sceneobject::SceneObject;
 use crate::material::legacy::Whitted;
@@ -452,7 +452,7 @@ impl OceanGeometry {
 
         let triangles = generate_mesh(vertices, fourier_grid_size, lx, lz);
         let bounds = OceanGeometry::bounds_of(&triangles);
-        let tree = Octree::new(8, bounds, &triangles); 
+        let tree = BVH::new(&triangles); 
 
         println!(" - OCEAN [A={}, g={}, W={}, t={}, N={}, {}]", scale, gravity, wind, time, lx, fourier_grid_size);
         println!("  bounded:{}, triangles:{} ", bounds, triangles.len());

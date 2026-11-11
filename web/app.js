@@ -53,31 +53,20 @@ const SCENES = [
     'demo/scenes/grass-meadow.json',
 ];
 
-const firstKey = o => Object.keys(o ?? {})[0];
-const TEMPLATES = {
-    'Sphere': d => ['objects', { type: 'sphere', location: [0, 1, 0], radius: 1, material: firstKey(d.materials) }],
-    'Box': d => ['objects', { type: 'box', min: [-1, 0, -1], max: [1, 2, 1], material: firstKey(d.materials) }],
-    'Ground plane': d => ['objects', { type: 'plane', y: 0, material: firstKey(d.materials) }],
+// What scene files may contain, from the renderer (src/schema.json): filled in at start.
+let schema = { sections: {}, objects: {}, materials: {}, media: {} };
+
+// Things to add that are arrangements rather than types.
+const EXTRAS = {
     // The file's teapot is 32 units long and centred on the origin: scaled to 3.2, and lifted to sit on y = 0.
-    'Teapot mesh': d => ['objects', {
-        type: 'transform', translate: [0, 0.79, 3], rotate: { yaw: 0 }, material: firstKey(d.materials),
+    'Teapot (mesh)': () => ({
+        type: 'transform', translate: [0, 0.79, 3], rotate: { yaw: 0 }, material: 'M',
         item: { type: 'smoothmesh', src: 'demo/teapot-normals.obj', scale: [0.1, 0.1, 0.1] },
-    }],
-    'Sky': () => ['objects', { type: 'skysphere' }],
-    'Clouds: cirrus': () => ['objects', { type: 'hogan_kew_cirrus', genus: 'cirrus', wind_direction: [1, 0.5], seed: 3 }],
-    'Clouds: cumulus': () => ['objects', {
-        type: 'nubis_clouds', base: 1500, top: 3000, extent: 80000, coverage: 0.55, cloud_type: 1, density: 0.03, seed: 4,
-    }],
-    'Sun': () => ['sun', { intensity: 3 }],
-    'Point light': () => ['lights', { location: [0, 10, 5], intensity: 300, color: [1, 1, 1] }],
-    'Material: diffuse': () => ['materials', { type: 'lambertian', albedo: [0.8, 0.8, 0.8] }],
-    'Material: metal': () => ['materials', { type: 'metal', reflective: [0.9, 0.9, 0.9], roughness: 0.1 }],
-    'Material: glass': () => ['materials', { type: 'dielectric', refractive_index: 1.5, attenuate: [1, 1, 1] }],
-    'Material: emitter': () => ['materials', { type: 'diffuse-light', color: [1, 1, 1], intensity: 5 }],
+    }),
 };
 
 // Parts of the scene file with their own place in the outline; the rest are "settings".
-const SECTIONS = ['camera', 'sun', 'materials', 'media', 'geometries', 'lights', 'objects', 'variables'];
+const SECTIONS = ['camera', 'sun', 'output', 'materials', 'media', 'geometries', 'lights', 'objects', 'variables'];
 const LIST_SECTIONS = { materials: 'Materials', media: 'Media', geometries: 'Geometries', lights: 'Lights', objects: 'Objects' };
 
 let doc = structuredClone(STARTER);
@@ -497,6 +486,7 @@ function renderOutline() {
     item(['settings'], 'Render settings', '');
     if (doc.camera) { item(['camera'], 'Camera', ''); }
     if (doc.sun && typeof doc.sun === 'object') { item(['sun'], 'Sun', ''); }
+    item(['output'], 'Output', '');
     for (const [section, title] of Object.entries(LIST_SECTIONS)) {
         const group = doc[section];
         if (!group || typeof group !== 'object' || Object.keys(group).length === 0) { continue; }
@@ -520,109 +510,353 @@ function select(path) {
 
 // ---------------------------------------------------------------------------------------
 // Properties
+//
+// The fields shown for a node come from the schema: every field its type accepts, in the
+// schema's order, whether or not the scene file sets it. A field the file doesn't set shows
+// its default, dimmed; editing it writes the key, and its reset button removes the key again.
+// Keys in the file that the schema doesn't know are listed after, so nothing is hidden.
 
 const COLOR_KEYS = /colou?r|albedo|reflective|pigment|attenuate|background|bottom|top/i;
-const REFERENCES = { material: 'materials', m1: 'materials', m2: 'materials', base_material: 'materials', medium: 'media' };
+const REFERENCES = { material: 'material', m1: 'material', m2: 'material', base_material: 'material', medium: 'medium' };
+const isNumbers = (v, n) => Array.isArray(v) && v.length === n && v.every(x => typeof x === 'number');
+
+// What the schema says about the node at `path`.
+function nodeSchema(path, node) {
+    const [section] = path;
+    const sections = schema.sections ?? {};
+    const typed = (category, common) => {
+        const entry = schema[category]?.[node?.type];
+        return { category, entry, fields: [...(entry?.fields ?? []), ...(common ? sections.object_common?.fields ?? [] : [])] };
+    };
+    if (section === 'settings') { return { fields: sections.settings?.fields ?? [], doc: sections.settings?.doc }; }
+    if (section === 'objects') { return typed('objects', true); }
+    if (section === 'geometries') { return typed('objects', false); }
+    if (section === 'materials') { return typed('materials', false); }
+    if (section === 'media') { return typed('media', false); }
+    const name = section === 'lights' ? 'light' : section;
+    return { fields: sections[name]?.fields ?? [], doc: sections[name]?.doc };
+}
+
+// The kind to edit a value as when the schema has nothing to say about its key.
+function guessKind(key, value) {
+    if (typeof value === 'number') { return 'number'; }
+    if (typeof value === 'boolean') { return 'boolean'; }
+    if (typeof value === 'string') { return REFERENCES[key] ?? 'string'; }
+    if (isNumbers(value, 3)) { return COLOR_KEYS.test(key) ? 'color' : 'vec3'; }
+    if (isNumbers(value, 2)) { return 'vec2'; }
+    return 'json';
+}
 
 function renderInspector() {
     const form = $('inspector');
     form.replaceChildren();
-    const target = nodeAt(selection);
     const isItem = selection.length === 2;
+    // The output settings can be edited before the file has any: the object is made on the
+    // first edit.
+    const creatable = selection.length === 1 && selection[0] === 'output';
+    const node = nodeAt(selection);
     $('delete').hidden = !isItem;
     $('duplicate').hidden = !isItem;
     $('inspector-title').textContent = selection[0] === 'settings' ? 'Render settings'
-        : selection[0] === 'camera' ? 'Camera'
-        : selection[0] === 'sun' ? 'Sun'
-        : isItem ? describe(selection[0], selection[1], target)[0] : 'Properties';
-    if (!target || typeof target !== 'object') {
+        : selection.length === 1 ? selection[0][0].toUpperCase() + selection[0].slice(1)
+        : isItem ? describe(selection[0], selection[1], node)[0] : 'Properties';
+    if ((!node || typeof node !== 'object') && !creatable) {
         form.innerHTML = '<p class="empty">Nothing selected.</p>';
         return;
     }
-    const keys = Object.keys(target).filter(k => selection[0] !== 'settings' || !SECTIONS.includes(k));
-    for (const key of keys) { form.append(field(target, key)); }
-    if (keys.length === 0) { form.innerHTML = '<p class="empty">No properties: every setting has its default.</p>'; }
+    const ref = {
+        get: () => nodeAt(selection),
+        ensure: () => nodeAt(selection) ?? (doc[selection[0]] = {}),
+    };
+    const ctx = { camera: selection[0] === 'camera' };
+    const info = nodeSchema(selection, node);
+    const about = info.entry?.doc ?? info.doc;
+    if (about) {
+        const p = document.createElement('p');
+        p.className = 'about';
+        p.textContent = about;
+        form.append(p);
+    }
+    if (info.category) { form.append(typeRow(ref, info.category, () => { renderOutline(); renderInspector(); })); }
+    const hidden = selection[0] === 'settings' ? [...SECTIONS, 'type'] : ['type'];
+    renderFields(form, ref, info.fields, ctx, hidden);
 }
 
-function field(target, key) {
-    const value = target[key];
+// Rows for `fields` of the object `ref` refers to, then rows for its other keys.
+function renderFields(container, ref, fields, ctx, hidden = ['type']) {
+    for (const f of fields) { container.append(fieldRow(ref, f, ctx)); }
+    const known = new Set(fields.map(f => f.name));
+    const node = ref.get();
+    const extras = Object.keys(node && typeof node === 'object' ? node : {}).filter(k => !known.has(k) && !hidden.includes(k));
+    if (extras.length && fields.length) {
+        const p = document.createElement('p');
+        p.className = 'group-label';
+        p.textContent = 'Other keys in the file';
+        container.append(p);
+    }
+    for (const key of extras) {
+        container.append(fieldRow(ref, { name: key, kind: guessKind(key, node[key]), extra: true }, ctx));
+    }
+}
+
+// The row choosing a node's type, from the types the schema has for its category.
+function typeRow(ref, category, changed) {
     const row = document.createElement('div');
     row.className = 'field';
-    const id = `f-${key}`;
     const label = document.createElement('label');
-    label.textContent = key;
-    label.title = key;
+    label.textContent = 'type';
+    const inputs = document.createElement('div');
+    inputs.className = 'inputs';
+    const select = typeSelect(category, ref.get()?.type);
+    select.addEventListener('change', () => {
+        ref.ensure().type = select.value;
+        edited(false);
+        changed();
+    });
+    label.htmlFor = select.id = `f-type-${++fieldId}`;
+    inputs.append(select);
+    row.append(label, inputs);
+    return row;
+}
+
+// A select of a category's types, grouped as the schema groups them.
+function typeSelect(category, current, placeholder) {
+    const select = document.createElement('select');
+    if (placeholder) { select.append(new Option(placeholder, '')); }
+    const groups = new Map();
+    for (const [type, entry] of Object.entries(schema[category] ?? {})) {
+        const g = entry.group ?? '';
+        if (!groups.has(g)) { groups.set(g, []); }
+        groups.get(g).push([type, entry]);
+    }
+    for (const [g, list] of groups) {
+        const parent = g ? select.appendChild(Object.assign(document.createElement('optgroup'), { label: g })) : select;
+        for (const [type, entry] of list) { parent.append(new Option(`${entry.label} (${type})`, type)); }
+    }
+    if (current !== undefined && !schema[category]?.[current]) { select.append(new Option(String(current), current)); }
+    if (current !== undefined) { select.value = current; }
+    return select;
+}
+
+let fieldId = 0;
+
+// One field of the object `ref` refers to: a label, its editing controls, and a reset button
+// when the file sets it.
+function fieldRow(ref, f, ctx) {
+    const key = f.name;
+    const row = document.createElement('div');
+    const id = `f-${key}-${++fieldId}`;
+    const label = document.createElement('label');
+    label.textContent = key + (f.required ? ' *' : '');
+    label.title = [f.doc, f.required ? 'Required.' : '', f.min !== undefined ? `Minimum ${f.min}.` : '', f.max !== undefined ? `Maximum ${f.max}.` : '']
+        .filter(Boolean).join(' ') || key;
     label.htmlFor = id;
     const inputs = document.createElement('div');
     inputs.className = 'inputs';
-    row.append(label, inputs);
-    const set = v => { target[key] = v; edited(selection[0] === 'camera'); };
 
-    const number = (get, put, name) => {
+    const present = () => ref.get()?.[key] !== undefined;
+    const current = () => (present() ? ref.get()[key] : f.default);
+    const mark = () => { row.className = 'field' + (present() ? '' : ' unset') + (nested ? ' nested' : ''); reset.hidden = !present() || Boolean(f.required); };
+    const set = v => { ref.ensure()[key] = v; mark(); edited(ctx.camera); };
+    // The value itself as something fields can be read from and written to.
+    const slot = { get: () => ref.get()?.[key], set };
+
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.className = 'reset';
+    reset.textContent = '×';
+    reset.title = f.extra ? `Remove ${key}` : `Remove ${key}: use the default`;
+    reset.setAttribute('aria-label', reset.title);
+    reset.addEventListener('click', () => {
+        delete ref.get()[key];
+        edited(ctx.camera);
+        row.replaceWith(f.extra ? '' : fieldRow(ref, f, ctx));
+    });
+
+    const value = current();
+    let kind = f.kind;
+    // A value of another shape than its kind expects (a "$variable", a colour by name) is
+    // edited as text or JSON rather than lost.
+    if (value !== undefined && value !== null) {
+        const fits = {
+            number: typeof value === 'number', integer: typeof value === 'number', boolean: typeof value === 'boolean',
+            vec2: isNumbers(value, 2), vec3: isNumbers(value, 3), color: isNumbers(value, 3),
+            enum: typeof value === 'string', material: typeof value === 'string', medium: typeof value === 'string',
+            string: typeof value === 'string', path: typeof value === 'string', expression: typeof value === 'string',
+            object: typeof value === 'object' && !Array.isArray(value), shapes: Array.isArray(value),
+            shape: typeof value === 'string' || (typeof value === 'object' && !Array.isArray(value)),
+        }[kind];
+        if (fits === false) { kind = typeof value === 'string' ? 'string' : 'json'; }
+    }
+    const nested = kind === 'object' || kind === 'shape' || kind === 'shapes' || kind === 'geometry';
+
+    const number = (get, put, name, integer) => {
         const input = document.createElement('input');
-        input.type = 'number'; input.step = 'any'; input.value = get();
+        input.type = 'number'; input.step = integer ? '1' : 'any';
+        const v = get();
+        input.value = v ?? '';
+        if (v === undefined || v === null) { input.placeholder = 'auto'; }
+        if (f.min !== undefined) { input.min = f.min; }
+        if (f.max !== undefined) { input.max = f.max; }
         input.setAttribute('aria-label', name);
         input.addEventListener('input', () => {
-            const v = input.valueAsNumber;
-            if (Number.isFinite(v)) { put(v); }
+            const n = input.valueAsNumber;
+            if (Number.isFinite(n)) { put(integer ? Math.round(n) : n); }
         });
         return input;
     };
 
-    if (typeof value === 'number') {
-        const input = number(() => value, set, key);
+    if (kind === 'number' || kind === 'integer') {
+        const input = number(current, set, key, kind === 'integer');
         input.id = id;
         inputs.append(input);
-    } else if (typeof value === 'boolean') {
+    } else if (kind === 'boolean') {
         const input = document.createElement('input');
-        input.type = 'checkbox'; input.checked = value; input.id = id;
+        input.type = 'checkbox'; input.checked = Boolean(value); input.id = id;
         input.addEventListener('change', () => set(input.checked));
         inputs.append(input);
-    } else if (typeof value === 'string' && REFERENCES[key] && doc[REFERENCES[key]]) {
+    } else if (kind === 'enum' || kind === 'material' || kind === 'medium') {
         const input = document.createElement('select');
         input.id = id;
-        const names = Object.keys(doc[REFERENCES[key]]);
-        for (const name of names.includes(value) ? names : [value, ...names]) { input.append(new Option(name, name)); }
-        input.value = value;
-        input.addEventListener('change', () => { set(input.value); renderOutline(); });
+        const names = kind === 'enum' ? f.options ?? [] : Object.keys(doc[kind === 'material' ? 'materials' : 'media'] ?? {});
+        if (value === undefined || value === null) { input.append(new Option(kind === 'enum' ? '(default)' : '(none)', '')); }
+        for (const name of value === undefined || value === null || names.includes(value) ? names : [value, ...names]) {
+            input.append(new Option(name, name));
+        }
+        input.value = value ?? '';
+        input.addEventListener('change', () => { if (input.value !== '') { set(input.value); renderOutline(); } });
         inputs.append(input);
-    } else if (typeof value === 'string') {
+    } else if (kind === 'string' || kind === 'path' || kind === 'expression') {
         const input = document.createElement('input');
-        input.type = 'text'; input.value = value; input.id = id;
+        input.type = 'text'; input.value = value ?? ''; input.id = id;
+        input.spellcheck = false;
         input.addEventListener('change', () => { set(input.value); renderOutline(); });
         inputs.append(input);
-    } else if (Array.isArray(value) && value.length >= 2 && value.length <= 4 && value.every(x => typeof x === 'number')) {
-        const parts = value.map((_, i) => number(() => target[key][i], v => {
-            target[key][i] = v;
-            if (swatch) { swatch.value = toHex(target[key]); }
-            edited(selection[0] === 'camera');
-        }, `${key} ${'xyzw'[i]}`));
-        parts[0].id = id;
+    } else if (kind === 'vec2' || kind === 'vec3' || kind === 'color') {
+        const n = kind === 'vec2' ? 2 : 3;
+        // Editing one part of an unset vector writes the whole vector, from its default.
+        const whole = () => (present() ? ref.get()[key] : Array.isArray(f.default) ? [...f.default] : new Array(n).fill(0));
         let swatch = null;
-        if (value.length === 3 && COLOR_KEYS.test(key) && value.every(x => x >= 0 && x <= 1)) {
+        const parts = Array.from({ length: n }, (_, i) => number(() => current()?.[i], v => {
+            const next = whole();
+            next[i] = v;
+            if (swatch) { swatch.value = toHex(next); }
+            set(next);
+        }, `${key} ${'xyz'[i]}`));
+        parts[0].id = id;
+        if (kind === 'color' && (value ?? [0, 0, 0]).every(x => x >= 0 && x <= 1)) {
             swatch = document.createElement('input');
-            swatch.type = 'color'; swatch.value = toHex(value);
+            swatch.type = 'color'; swatch.value = toHex(value ?? [0, 0, 0]);
             swatch.setAttribute('aria-label', `${key} colour`);
             swatch.addEventListener('input', () => {
-                target[key] = fromHex(swatch.value);
-                parts.forEach((p, i) => { p.value = target[key][i]; });
-                edited(false);
+                const next = fromHex(swatch.value);
+                parts.forEach((p, i) => { p.value = next[i]; });
+                set(next);
             });
         }
         inputs.append(...parts, ...(swatch ? [swatch] : []));
+    } else if (kind === 'object') {
+        // A nested object: its own fields, folded away until wanted.
+        const child = { get: slot.get, ensure: () => { if (!slot.get() || typeof slot.get() !== 'object') { set({}); } return slot.get(); } };
+        const details = fold(id, present() ? 'set' : 'defaults');
+        renderFields(details, child, f.fields ?? [], ctx);
+        inputs.append(details);
+    } else if (kind === 'shape' || kind === 'geometry') {
+        inputs.append(shapeEditor(slot, ctx, id, () => row.replaceWith(fieldRow(ref, f, ctx))));
+    } else if (kind === 'shapes') {
+        const list = document.createElement('div');
+        list.className = 'shape-list';
+        const again = () => row.replaceWith(fieldRow(ref, f, ctx));
+        (value ?? []).forEach((_, i) => {
+            const item = { get: () => slot.get()?.[i], set: v => { slot.get()[i] = v; edited(ctx.camera); } };
+            const editor = shapeEditor(item, ctx, `${id}-${i}`, again, () => { slot.get().splice(i, 1); edited(ctx.camera); again(); });
+            list.append(editor);
+        });
+        const add = typeSelect('objects', undefined, 'Add a shape…');
+        add.id = id;
+        add.addEventListener('change', () => {
+            if (!add.value) { return; }
+            const next = [...(slot.get() ?? []), instanceOf('objects', add.value)];
+            set(next);
+            again();
+        });
+        list.append(add);
+        inputs.append(list);
     } else {
-        // Anything else (nested objects, lists) is edited as JSON.
+        // Anything else (lists, free-form values) is edited as JSON.
         const input = document.createElement('textarea');
         input.id = id; input.spellcheck = false;
-        input.value = JSON.stringify(value, null, 1);
-        input.rows = Math.min(8, input.value.split('\n').length);
+        input.value = value === undefined ? '' : JSON.stringify(value, null, 1);
+        input.rows = Math.min(8, Math.max(1, input.value.split('\n').length));
         input.addEventListener('change', () => {
+            if (input.value.trim() === '') { return; }
             try { set(JSON.parse(input.value)); input.setCustomValidity(''); }
             catch (e) { input.setCustomValidity(e.message); input.reportValidity(); }
         });
         inputs.append(input);
     }
+    row.append(label, inputs, reset);
+    mark();
     return row;
+}
+
+// A fold-away container for nested fields.
+function fold(id, summary) {
+    const details = document.createElement('details');
+    details.className = 'nested-fields';
+    const s = document.createElement('summary');
+    s.id = id;
+    s.textContent = summary;
+    details.append(s);
+    return details;
+}
+
+// A nested shape: by name (an entry of "geometries") or as an object with a type of its own,
+// whose fields are edited in place.
+function shapeEditor(slot, ctx, id, again, remove) {
+    const box = document.createElement('div');
+    box.className = 'shape';
+    const value = slot.get();
+    const head = document.createElement('div');
+    head.className = 'inputs';
+    if (typeof value === 'string' || value === undefined || value === null) {
+        // A named geometry, or nothing yet: choose a name or a type.
+        const names = Object.keys(doc.geometries ?? {});
+        const pick = typeSelect('objects', undefined, value === undefined || value === null ? 'Choose a shape…' : `"${value}" (named geometry)`);
+        pick.id = id;
+        if (names.length) {
+            const group = Object.assign(document.createElement('optgroup'), { label: 'Named geometries' });
+            for (const n of names) { group.append(new Option(n, 'name:' + n)); }
+            pick.prepend(group);
+            pick.prepend(pick.querySelector('option[value=""]'));
+            pick.value = '';
+        }
+        pick.addEventListener('change', () => {
+            if (!pick.value) { return; }
+            slot.set(pick.value.startsWith('name:') ? pick.value.slice(5) : instanceOf('objects', pick.value));
+            again();
+        });
+        head.append(pick);
+        box.append(head);
+    } else {
+        const ref = { get: slot.get, ensure: slot.get };
+        const type = typeSelect('objects', value.type);
+        type.id = id;
+        type.addEventListener('change', () => { slot.get().type = type.value; edited(ctx.camera); again(); });
+        head.append(type);
+        const details = fold(`${id}-fields`, 'fields');
+        const entry = schema.objects?.[value.type];
+        renderFields(details, ref, [...(entry?.fields ?? []), ...(schema.sections?.object_common?.fields ?? [])], ctx);
+        box.append(head, details);
+    }
+    if (remove) {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'reset'; b.textContent = '×';
+        b.title = 'Remove this shape'; b.setAttribute('aria-label', b.title);
+        b.addEventListener('click', remove);
+        head.append(b);
+    }
+    return box;
 }
 
 // Colour swatches show a linear value through the sRGB curve, as the render does.
@@ -666,40 +900,88 @@ function sunFor(sun) {
 
 function uniqueName(group, base) {
     const stem = String(base).replace(/_\d+$/, '');
+    if (!(stem in group)) { return stem; }
     for (let i = 2; ; i++) {
         if (!(`${stem}_${i}` in group)) { return `${stem}_${i}`; }
     }
 }
 
-for (const name of Object.keys(TEMPLATES)) { $('add').append(new Option(name, name)); }
-$('add').addEventListener('change', () => {
-    const make = TEMPLATES[$('add').value];
-    $('add').value = '';
-    if (!make) { return; }
-    const [section, value] = make(doc);
-    if (section === 'sun') {
-        doc.sun = doc.sun && typeof doc.sun === 'object' ? doc.sun : sunFor(value);
-        select(['sun']);
-    } else if (section === 'materials') {
+// A new instance of a type: the schema's example, with the material and medium it names
+// (the schema's examples call them "M" and "MM") pointed at ones this scene has.
+function instanceOf(category, type) {
+    const example = structuredClone(schema[category]?.[type]?.example ?? { type });
+    return adopt(example);
+}
+
+function adopt(value) {
+    if (value === 'M') {
         doc.materials ??= {};
-        const name = uniqueName(doc.materials, value.type.replace(/[^a-z]/g, '').toUpperCase());
-        doc.materials[name] = value;
-        select(['materials', name]);
+        const first = Object.keys(doc.materials)[0];
+        if (first) { return first; }
+        doc.materials.M = { type: 'lambertian', albedo: [0.8, 0.8, 0.8] };
+        return 'M';
+    }
+    if (value === 'MM') {
+        doc.media ??= {};
+        const first = Object.keys(doc.media)[0];
+        if (first) { return first; }
+        doc.media.MM = { type: 'solid', material: adopt('M') };
+        return 'MM';
+    }
+    if (Array.isArray(value)) { return value.map(adopt); }
+    if (value && typeof value === 'object') {
+        for (const k of Object.keys(value)) { value[k] = adopt(value[k]); }
+    }
+    return value;
+}
+
+// The Add menu: every type the schema has, by group, then the scene's other parts.
+function buildAddMenu() {
+    const add = $('add');
+    add.replaceChildren(new Option('Add…', ''));
+    const group = label => add.appendChild(Object.assign(document.createElement('optgroup'), { label }));
+    const groups = new Map();
+    for (const [type, entry] of Object.entries(schema.objects ?? {})) {
+        const g = entry.group ?? 'Other';
+        if (!groups.has(g)) { groups.set(g, group(g)); }
+        groups.get(g).append(new Option(entry.label, `objects:${type}`));
+    }
+    const extras = group('Arrangements');
+    for (const name of Object.keys(EXTRAS)) { extras.append(new Option(name, `extra:${name}`)); }
+    const lights = group('Lights');
+    lights.append(new Option('Sun', 'sun'), new Option('Point light', 'light'));
+    for (const [category, title] of [['materials', 'Materials'], ['media', 'Media']]) {
+        const g = group(title);
+        for (const [type, entry] of Object.entries(schema[category] ?? {})) { g.append(new Option(entry.label, `${category}:${type}`)); }
+    }
+}
+
+$('add').addEventListener('change', () => {
+    const [kind, name] = $('add').value.split(/:(.*)/);
+    $('add').value = '';
+    if (!kind) { return; }
+    if (kind === 'sun') {
+        doc.sun = doc.sun && typeof doc.sun === 'object' ? doc.sun : sunFor({ intensity: 3 });
+        select(['sun']);
+    } else if (kind === 'light') {
+        (doc.lights ??= []).push({ location: [0, 10, 5], intensity: 300, color: [1, 1, 1] });
+        select(['lights', doc.lights.length - 1]);
+    } else if (kind === 'materials' || kind === 'media') {
+        doc[kind] ??= {};
+        const key = uniqueName(doc[kind], name.replace(/[^a-z0-9]+/gi, '_').toUpperCase());
+        // Named before its example is adopted, so a material it refers to isn't itself.
+        doc[kind][key] = {};
+        doc[kind][key] = instanceOf(kind, name);
+        select([kind, key]);
     } else {
-        if (section === 'objects' && 'material' in value && value.material === undefined) {
-            // An object needs a material to refer to.
-            doc.materials = { WHITE: { type: 'lambertian', albedo: [0.8, 0.8, 0.8] }, ...doc.materials };
-            value.material = 'WHITE';
-        }
-        if (/cloud|cirrus/.test(value.type)) {
-            // Clouds are lit by the sun and seen against the sky: without them they are all
-            // but invisible. Add whichever the scene lacks.
-            if (!doc.objects?.some(o => o?.type === 'skysphere')) { (doc.objects ??= []).push({ type: 'skysphere' }); }
-            if (!doc.sun) { doc.sun = sunFor({ intensity: 3 }); }
-        }
-        doc[section] ??= [];
-        doc[section].push(value);
-        select([section, doc[section].length - 1]);
+        const value = kind === 'extra' ? adopt(EXTRAS[name]()) : instanceOf('objects', name);
+        // What the type can't be seen without (clouds need a sun to light them, and a sky).
+        const needs = schema.objects?.[value.type]?.needs ?? [];
+        doc.objects ??= [];
+        if (needs.includes('skysphere') && !doc.objects.some(o => o?.type === 'skysphere')) { doc.objects.push({ type: 'skysphere' }); }
+        if (needs.includes('sun') && !doc.sun) { doc.sun = sunFor({ intensity: 3 }); }
+        doc.objects.push(value);
+        select(['objects', doc.objects.length - 1]);
     }
     edited(false);
 });
@@ -824,6 +1106,9 @@ async function start() {
     $('status').textContent = 'Loading renderer…';
     try {
         encoder = await instantiate();
+        schema = encoder.schema();
+        buildAddMenu();
+        renderInspector();
     } catch (e) {
         showError(e.message);
         return;
@@ -840,6 +1125,6 @@ async function start() {
 }
 
 // For debugging and tests.
-window.rays = { get doc() { return doc; }, get interacting() { return interacting || Boolean(draft); }, get stats() { return stats; }, get rowSamples() { return rowSamples; }, select };
+window.rays = { get doc() { return doc; }, get schema() { return schema; }, get interacting() { return interacting || Boolean(draft); }, get stats() { return stats; }, get rowSamples() { return rowSamples; }, select };
 
 start();

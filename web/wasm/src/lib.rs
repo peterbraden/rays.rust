@@ -46,6 +46,13 @@ pub extern "C" fn init() {
     }));
 }
 
+/// Where the scene schema's JSON text starts (see `rays::schema`); `schema_len` bytes long.
+#[unsafe(no_mangle)]
+pub extern "C" fn schema_ptr() -> *const u8 { rays::schema::SCHEMA.as_ptr() }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn schema_len() -> usize { rays::schema::SCHEMA.len() }
+
 /// Reserve `len` bytes for the page to write into.
 #[unsafe(no_mangle)]
 pub extern "C" fn alloc(len: usize) -> *mut u8 {

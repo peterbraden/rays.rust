@@ -371,7 +371,8 @@ impl SceneFile {
     /// An object's medium, bump mapped if it has a `"normal"` (see `parse_bump`).
     pub fn parse_object_medium(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Box<dyn Medium + Sync + Send> {
         let m = SceneFile::parse_unbumped_medium(o, materials, media);
-        if o["normal"].is_null() {
+        // An object, as opposed to the vector some shapes (a disc, a plane) call their "normal".
+        if !o["normal"].is_object() {
             return m;
         }
         Box::new(Bumped { inner: m, bump: SceneFile::parse_bump(&o["normal"]) })

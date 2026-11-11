@@ -8,6 +8,7 @@ extern crate nalgebra as na;
 extern crate serde_derive;
 
 pub mod assets;
+pub mod schema;
 pub mod stopwatch;
 pub mod preview;
 pub mod ray;

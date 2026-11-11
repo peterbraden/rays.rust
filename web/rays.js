@@ -68,6 +68,11 @@ export async function instantiate(url = new URL('rays.wasm', import.meta.url)) {
     return {
         get dead() { return dead; },
 
+        /** What scene files may contain: the renderer's schema (see src/schema.rs). */
+        schema() {
+            return JSON.parse(decoder.decode(new Uint8Array(memory.buffer, x.schema_ptr(), x.schema_len())));
+        },
+
         /** Give the contents of a file that scenes name by `path`. */
         addAsset(path, bytes) {
             guard(() => withText(path, (p, pl) => withBytes(bytes, (d, dl) => x.asset_add(p, pl, d, dl))));

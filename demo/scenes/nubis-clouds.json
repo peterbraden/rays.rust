@@ -1,0 +1,73 @@
+{
+  "width": 960,
+  "height": 480,
+  "supersamples": 128,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 256,
+  "path_termination": "russian_roulette",
+  "output": {
+    "glare": true
+  },
+  "camera": {
+    "location": [
+      0,
+      900,
+      -8000
+    ],
+    "lookat": [
+      0,
+      450,
+      4000
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.9
+  },
+  "sun": {
+    "intensity": 4.9
+  },
+  "objects": [
+    {
+      "type": "ocean",
+      "curved": true,
+      "wind": [
+        7,
+        2
+      ],
+      "detail_center": [
+        0,
+        -8000
+      ]
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        -0.6,
+        0.55,
+        -0.5
+      ]
+    },
+    {
+      "type": "nubis_clouds",
+      "base": 1500,
+      "top": 3000,
+      "extent": 80000,
+      "coverage": 0.55,
+      "cloud_type": 1,
+      "density": 0.03,
+      "albedo": [
+        0.99,
+        0.99,
+        0.99
+      ],
+      "g": 0.85,
+      "similarity_after": 4,
+      "seed": 4
+    }
+  ]
+}

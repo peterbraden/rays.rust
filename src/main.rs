@@ -1,6 +1,6 @@
 use clap::Parser;
 
-use rays::{compare, output, paint, rendercontext, scenefile};
+use rays::{compare, depth, output, paint, rendercontext, scenefile};
 use rays::rendercontext::RenderContext;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -41,6 +41,11 @@ struct Args {
     #[arg(long)]
     compare: Option<String>,
 
+    ///Also write a depth image: the distance to the nearest surface through each pixel's centre.
+    ///.exr keeps distances (misses are infinite); .png scales them for viewing, near white
+    #[arg(long)]
+    depth: Option<String>,
+
     ///With --compare, fail (exit status 2) if the mean FLIP error exceeds this
     #[arg(long)]
     max_flip: Option<f64>,
@@ -49,6 +54,29 @@ struct Args {
     ///seed gives the same image
     #[arg(long)]
     seed: Option<u64>,
+
+    ///Write the scene file, as JSON in our format, to this file. For a scene in another
+    ///renderer's format (eg. .nff), this is the translation
+    #[arg(long)]
+    dump_scene: Option<String>,
+}
+
+/// The process's peak resident memory so far, in bytes: large meshes and their acceleration
+/// structures are the main use. `getrusage` reports `ru_maxrss` in bytes on macOS and in
+/// kilobytes on Linux and the BSDs.
+#[cfg(unix)]
+fn peak_memory() -> Option<u64> {
+    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) } != 0 {
+        return None;
+    }
+    let units = if cfg!(target_os = "macos") { 1 } else { 1024 };
+    Some(usage.ru_maxrss as u64 * units)
+}
+
+#[cfg(not(unix))]
+fn peak_memory() -> Option<u64> {
+    None
 }
 
 fn main() {
@@ -58,7 +86,20 @@ fn main() {
         style("# 1. - Parsing scene, building models").bold().cyan()
     );
 
-    let s = scenefile::SceneFile::from_file(&args.scene, &scenefile::Overrides {
+    let build_start = Instant::now();
+    let doc = scenefile::SceneFile::read_document(&args.scene).unwrap_or_else(|e| {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    });
+    if let Some(path) = &args.dump_scene {
+        let json = serde_json::to_string_pretty(&doc).unwrap();
+        std::fs::write(path, json + "\n").unwrap_or_else(|e| {
+            eprintln!("Can't write {}: {}", path, e);
+            std::process::exit(1);
+        });
+        println!("- Wrote the scene file to {}", path);
+    }
+    let s = scenefile::SceneFile::from_value_overridden(doc, &scenefile::Overrides {
         width: args.width,
         height: args.height,
         seed: args.seed,
@@ -75,12 +116,25 @@ fn main() {
     }
     println!("- Output: {}x{} @ {} samples -> {}", s.image.width, s.image.height, s.render.samples_per_pixel(), rc.output_filename);
     println!("- Scene Objects: {}, Primitives: {} ", s.objects.len(),  s.objects.primitives_len()); 
+    let peak = peak_memory().map_or(String::new(), |b| format!(", peak memory {:.0} MiB", b as f64 / (1024. * 1024.)));
+    println!("- Built in {:.2} s{}", build_start.elapsed().as_secs_f64(), peak);
 
     // Fail before rendering if the output can't be written in this format.
     let writer = output::writer_for(&rc.output_filename, s.output).unwrap_or_else(|e| {
         eprintln!("{}", e);
         std::process::exit(1);
     });
+
+    if let Some(path) = &args.depth {
+        let raw = path.to_ascii_lowercase().ends_with(".exr");
+        let opts = output::OutputOpts { transfer: output::Transfer::Linear, ..output::OutputOpts::default() };
+        let img = depth::depth_image(&depth::depth(&s), s.image.width, s.image.height, raw);
+        if let Err(e) = output::writer_for(path, opts).and_then(|w| w.write(&img, path)) {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+        println!("- Depth -> {}", path);
+    }
 
     let rcmtx = Mutex::new(rc);
 
@@ -110,7 +164,7 @@ fn main() {
             }
         },
         |(img, path)| {
-            if let Err(e) = writer.write(&img, &path) {
+            if let Err(e) = writer.write(&s.output.finish(&img), &path) {
                 eprintln!("{}", e);
             }
         });
@@ -118,7 +172,7 @@ fn main() {
 
     let rc = rcmtx.lock().unwrap();
     //wireframe::wireframe(&s, &mut rc);
-    let img = rc.snapshot();
+    let img = s.output.finish(&rc.snapshot());
     if let Err(e) = writer.write(&img, &rc.output_filename) {
         eprintln!("{}", e);
         std::process::exit(1);

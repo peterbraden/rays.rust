@@ -453,3 +453,140 @@ point-light falloff and next-event estimation (#60, #62); octree acceleration (`
 - Verified reading list per module (as in Process), you read, then a docstring pass module by
   module.
 - Done: `ocean.rs` (#63), against Tessendorf's 2004 notes, which you had already read.
+
+
+## 9. Procedural terrain: noise, rivers and glaciers
+
+Goal: terrain that scales to a whole planet, starting from seeded noise and shaped by real
+geomorphic processes (river valley erosion, glaciation), as a function of seed and time so the
+processes can be animated.
+
+### Done (`src/terrain/`, literate docstrings in each module)
+
+- Grid (`domain.rs`): a graph of cells covering a whole planet (equiangular cubed sphere) or a
+  square patch of one. Processes are written once against the graph.
+- Planet (`planet.rs`): continents, mountain belts and an uplift field from seeded noise, as
+  functions of direction, so a patch is a window onto the same planet at higher resolution.
+- Flow routing (`flow.rs`): Priority-Flood+epsilon, steepest descent, drainage area.
+- Rivers and hillslopes (`fluvial.rs`): implicit stream power, linear diffusion. Tested against
+  the steady-state slope-area relation.
+- Glaciers (`glacier.rs`): ELA by latitude with ~100 kyr cycles, capped linear mass balance,
+  semi-implicit shallow ice flow (incomplete-Cholesky conjugate gradients, Picard iteration,
+  adaptive steps bounded by stiffness, speed capped at 1 km/yr) with a conservative flux
+  limiter; tested against Halfar's dome and a plateau ice cap reaching steady state. Erosion
+  proportional to sliding speed taken from the ice fluxes.
+- Geology (`planet.rs`, `simulation.rs`): the ground is bedrock (folded strata of alternating
+  hardness, regional variation) under volcanic rock under sediment, each with its own
+  erodibility for rivers and glaciers.
+- Sediment (`fluvial.rs`): erosion-deposition after Yuan et al. 2019 (G = 1), lakes trap
+  sediment to their spill level, glacial erosion feeds meltwater sediment into the rivers, so
+  alluvial valley floors, filled lake basins and outwash form.
+- Volcanoes (`volcano.rs`): vents from a seeded planet-wide lattice (random spacing, as de
+  Bremond d'Arcs et al. 1995 found), cones, and DOWNFLOW-style lava flows (Favalli et al.
+  2005); eruption rates after White et al. 2006.
+- Deltas (`marine.rs`): river sediment reaching the sea is laid at the mouth and spread by
+  depth-dependent diffusion (Kaufman et al. 1991; Rivenæs 1992) that moves only sediment; sea
+  cells built above sea level become land, so deltas prograde.
+- Meanders (`channel.rs`): a sub-grid centreline model on low-gradient reaches of large rivers
+  (Ikeda et al. 1981; Howard and Knutson 1984), confined to the valley floor, with neck
+  cutoffs leaving ox-bow lakes that fill over centuries. Rivers on patches are drawn as lines
+  at their hydraulic-geometry widths (Leopold and Maddock 1953) rather than as whole cells.
+- Time (`simulation.rs`): operator splitting, deterministic and resumable; morphological
+  acceleration (MORFAC) for glacial erosion.
+- Scene object `"type": "landscape"` (`object.rs`), maps (`map.rs`), demo
+  `demo/scenes/terrain-alpine.json`.
+
+### Measured
+
+- A 96 x 96 patch of 500 m cells (48 km) through one 100 kyr glacial cycle: about 6 minutes on
+  one core, nearly all of it ice flow around the glacial maximum. Ice covers almost the whole
+  range at the maximum (about 1.4 km at its thickest, in basins), and at 100 kyr the valleys are
+  broad troughs with cirque glaciers left on the peaks.
+- The whole planet at 64 x 64 x 6 cells (about 170 km each): 20 kyr in under 4 seconds.
+
+### Known limitations and open questions
+
+- No moraines (glacial debris goes straight to the rivers). Lakes fill flat (no lake deltas:
+  filling from the inlet built kilometre-high sediment cliffs on 500 m cells). Marine
+  diffusivity constants are typical values, not fitted.
+- Meanders don't change the grid (no lateral erosion of valley walls or reworking of the
+  floodplain), are only on patches, and are reset when a reach's downstream end moves (reaches
+  are re-found every 1000 years). Howard and Knutson's nonlinear R0(r/w) is simplified to the
+  linear form; no chute cutoffs, avulsion or braiding. The sediment-to-bedrock erodibility ratio (3) and lava's (0.3) are
+  model choices; no source found for typical values.
+- Volcanoes: no craters, calderas, explosive (tephra) deposits or lahars; cones are linear in
+  profile; vents don't respond to tectonics or to loading.
+- No isostasy (ice loading, erosional unloading), no sea-level change with the ice ages.
+- Ice: temperate everywhere; SIA is poor on steep, narrow valleys (Cordonnier et al. 2023 use
+  higher-order flow); the flux limiter is cruder than Jarosch et al.'s MUSCL scheme.
+- Mass balance constants (β, ṁ_max, ELA range and glacial depression), Glen's A, and our
+  sliding coefficient need checking against sources (Cuffey and Paterson; IGM's defaults).
+  Sliding ignores water pressure; with A_s ten times larger, basins were dug kilometres deep.
+- The ice solver's regularisations (speed cap, stiffness-bounded steps, MORFAC = 10) are
+  pragmatic; a multigrid solver or a higher-order flow emulator (as Cordonnier et al. 2023)
+  would be the principled routes to speed and accuracy.
+- Planet scale: the whole planet runs at coarse resolution (eg. 64 x 64 x 6 cells is about 170
+  km each) and a patch at fine resolution, independently. Multi-resolution coupling (a patch
+  taking its boundary from the evolved planet) is the next step to "scales to a planet".
+- Uplift is constant in time; plate motion would move belts.
+- Rendering uses the octree over a triangle mesh; a heightfield intersector would be faster.
+- Animation: a `Terrain` advances incrementally, but the renderer rebuilds the scene per run.
+  With workstream 5, frames could advance one `Terrain`. With MORFAC > 1, ice responds too
+  slowly relative to the climate to be animated faithfully.
+
+### Reading (verified bibliographic details; claims checked from abstracts unless noted)
+
+- Braun and Willett, "A very efficient O(n), implicit and parallel method to solve the stream
+  power equation governing fluvial incision and landscape evolution", Geomorphology 180-181,
+  2013, doi:10.1016/j.geomorph.2012.10.008.
+- Cordonnier, Braun, Cani, Benes, Galin, Peytavie, Guérin, "Large Scale Terrain Generation from
+  Tectonic Uplift and Fluvial Erosion", Computer Graphics Forum 35(2), 2016,
+  doi:10.1111/cgf.12820.
+- Cordonnier et al., "Forming Terrains by Glacial Erosion", ACM TOG 42(4), 2023,
+  doi:10.1145/3592422 (ice flow by a CNN emulator of higher-order flow, not SIA).
+- Barnes, Lehman, Mulla, "Priority-Flood", Computers & Geosciences 62, 2014,
+  doi:10.1016/j.cageo.2013.04.024.
+- Whipple and Tucker, JGR 104(B8), 1999, doi:10.1029/1999JB900120; Howard, WRR 30(7), 1994,
+  doi:10.1029/94WR00757.
+- Culling, J. Geology 68(3), 1960, doi:10.1086/626663; Fernandes and Dietrich, WRR 33(6), 1997,
+  doi:10.1029/97WR00534; Roering, Kirchner, Dietrich, WRR 35(3), 1999,
+  doi:10.1029/1998WR900090.
+- Hutter, "Theoretical Glaciology", 1983; Glen, Proc. R. Soc. A 228, 1955,
+  doi:10.1098/rspa.1955.0066; Mahaffy, JGR 81(6), 1976, doi:10.1029/JC081i006p01059; Jarosch,
+  Schoof, Anslow, The Cryosphere 7, 2013, doi:10.5194/tc-7-229-2013; Weertman, J. Glaciology
+  3(21), 1957, doi:10.3189/S0022143000024709; Cuffey and Paterson, "The Physics of Glaciers",
+  4th ed., 2010.
+- Hallet, J. Glaciology 23(89), 1979, doi:10.3189/S0022143000029725; Humphrey and Raymond,
+  J. Glaciology 40(136), 1994, doi:10.3189/S0022143000012429; Herman et al., Science 350, 2015,
+  doi:10.1126/science.aab2386.
+- Braun, Zwartz, Tomkin, Annals of Glaciology 28, 1999, doi:10.3189/172756499781821797; Herman
+  and Braun, JGR Earth Surface 113, 2008, doi:10.1029/2007JF000807.
+- Hays, Imbrie, Shackleton, Science 194, 1976, doi:10.1126/science.194.4270.1121.
+- Roelvink, Coastal Engineering 53, 2006, doi:10.1016/j.coastaleng.2005.10.015 (MORFAC).
+- Perlin, "Improving Noise", SIGGRAPH 2002, doi:10.1145/566654.566636; Ebert et al.,
+  "Texturing and Modeling", 3rd ed., 2003 (Musgrave's chapters).
+- Sadourny, Monthly Weather Review 100(2), 1972; Ronchi, Iacono, Paolucci, J. Comput. Phys.
+  124, 1996, doi:10.1006/jcph.1996.0047.
+- Reviews: Tucker and Hancock, ESPL 35(1), 2010, doi:10.1002/esp.1952; Galin et al., "A Review
+  of Digital Terrain Modeling", Computer Graphics Forum 38(2), 2019, doi:10.1111/cgf.13657.
+- Sediment: Yuan, Braun, Guerit, Rouby, Cordonnier, JGR Earth Surface 124(6), 2019,
+  doi:10.1029/2018JF004867; Davy and Lague, JGR Earth Surface 114, 2009,
+  doi:10.1029/2008JF001146; Guerit et al., Geology 47(9), 2019, doi:10.1130/G46356.1 (G values);
+  Hallet, Hunter, Bogen, Global and Planetary Change 12, 1996 (glacial sediment yields).
+- Lithology: Forte, Yanites, Whipple, ESPL 41(12), 2016, doi:10.1002/esp.3947; Perne et al.,
+  Earth Surface Dynamics 5, 2017, doi:10.5194/esurf-5-85-2017.
+- Volcanoes: Favalli, Pareschi, Neri, Isola, GRL 32(3), 2005, doi:10.1029/2004GL021718; White,
+  Crisp, Spera, G-cubed 7, 2006, doi:10.1029/2005GC001002; de Bremond d'Arcs, Jaupart, Sparks,
+  JGR 100(B10), 1995, doi:10.1029/95JB02153.
+- Meanders: Ikeda, Parker, Sawai, J. Fluid Mech. 112, 1981, doi:10.1017/S0022112081000451;
+  Howard and Knutson, WRR 20(11), 1984, doi:10.1029/WR020i011p01659; Camporeale et al., Rev.
+  Geophys. 45, 2007, doi:10.1029/2005RG000185; Leopold and Maddock, USGS PP 252, 1953,
+  doi:10.3133/pp252; Constantine and Dunne, Geology 36(1), 2008, doi:10.1130/G24130A.1;
+  Constantine et al., Sedimentology 57(2), 2010; Constantine et al., Nature Geoscience 7, 2014,
+  doi:10.1038/ngeo2282; Langston and Tucker, ESurf 6, 2018, doi:10.5194/esurf-6-1-2018.
+- Marine: Kaufman, Grotzinger, McCormick, Kansas Geol. Survey Bull. 233, 1991; Rivenæs, Basin
+  Research 4, 1992, doi:10.1111/j.1365-2117.1992.tb00136.x; Yuan et al., EPSL 524, 2019,
+  doi:10.1016/j.epsl.2019.115728.
+- Unchecked: Halfar's solution as given by Bueler et al., J. Glaciology 51(173), 2005 (used by
+  `test_halfar_dome`, which passing within 3% supports).
+

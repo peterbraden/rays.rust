@@ -79,9 +79,22 @@
 //!
 //! The exact slope is another FFT: ε(x, t) = Σ_k i k h̃(k, t) exp(i k·x) (eq. 37). Choppy waves
 //! displace each point horizontally to x + λD(x, t), with D(x, t) = Σ_k -i (k/k) h̃(k, t)
-//! exp(i k·x) (eq. 44), sharpening crests and broadening troughs. Neither is used yet: normals
-//! come from the triangles, so slopes aren't computed, and the displacement is computed only
-//! when switched on (`choppyness_shift`, currently off), with λ fixed at 1.
+//! exp(i k·x) (eq. 44), sharpening crests and broadening troughs. Both are computed in
+//! `create_tile`. The flat ocean's normals come from its triangles, and the displacement is
+//! switched off (`choppyness_shift`), with λ fixed at 1; the curved ocean uses the slopes.
+//!
+//! ## Scene options
+//!
+//! `{"type": "ocean", "resolution": 100, "fourier_size": 128, "amplitude": A, "wind": [x, z],
+//! "time": 4, "seed": 0, "color": colour}`: a flat, tiled patch of displaced waves, coloured
+//! `color` where light enters it; `"physical": true` lights it instead (`PhysicalOcean`).
+//!
+//! `{"type": "ocean", "curved": true, "wind": [7, 2], "detail_center": [x, z]}`: the sea as the
+//! planet's surface (`CurvedOcean`), physically lit. Its waves are scaled so their slopes carry
+//! `resolved` (default 0.5) of Cox and Munk's for the wind, unless `amplitude` is given, and
+//! are displaced within `detail_distance` (default 300 m) of `detail_center` (put it under the
+//! camera); `water` is the colour the water body sends back, as an albedo, and `roughness` the
+//! mean square slope of the ripples (by default the rest of Cox and Munk's).
 
 extern crate rand as _rand;
 extern crate image;
@@ -220,7 +233,7 @@ fn fft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
 }
 
 /// Inverse 2D Fast Fourier Transform
-fn ifft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
+pub(crate) fn ifft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
     let ifft = Radix4::new(size, FftDirection::Inverse);
     let mut rows = tile;
     ifft.process(&mut rows[..]);
@@ -259,11 +272,13 @@ pub struct OceanTile {
     pub heights: Field,
     /// Choppy displacements D(x, t) in x and z (eq. 44), if requested.
     pub displacement: Option<(Field, Field)>,
+    /// Slopes ∇h(x, t), in x and z (eq. 37), if requested.
+    pub slopes: Option<(Field, Field)>,
 }
 
 /// The surface at time t, from the amplitudes h̃0. Each field is an inverse FFT, the dominant
-/// cost of building the ocean, so the choppy displacements are only computed when `choppy`.
-/// (The slopes, eq. 37, aren't computed: normals come from the triangles.)
+/// cost of building the ocean, so the choppy displacements are only computed when `choppy`, and
+/// the slopes (eq. 37) when `slopes` (the flat ocean's normals come from its triangles).
 pub fn create_tile(
         fourier_grid_size:usize,
         lx: f64,
@@ -271,6 +286,7 @@ pub fn create_tile(
         gravity: f64,
         time: f64,
         choppy: bool,
+        slopes: bool,
         h0: Vec<Complex<f64>>) 
         -> OceanTile {
 
@@ -278,6 +294,8 @@ pub fn create_tile(
     let mut ht =          vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
     let mut ht_slope_dx = vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
     let mut ht_slope_dz = vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
+    let mut ht_slope_x =  vec![Complex::new(0., 0.); if slopes { fourier_grid_size * fourier_grid_size } else { 0 }];
+    let mut ht_slope_z =  vec![Complex::new(0., 0.); if slopes { fourier_grid_size * fourier_grid_size } else { 0 }];
 
     for j in 0 .. fourier_grid_size {
         for i in 0 .. fourier_grid_size {
@@ -298,6 +316,12 @@ pub fn create_tile(
                 h0[ind] * c0 +
                 h0[neg_k].conj() * c1;
 
+            // i k h̃ (eq. 37)
+            if slopes {
+                ht_slope_x[ind] = ht[ind] * Complex::new(0., k.x);
+                ht_slope_z[ind] = ht[ind] * Complex::new(0., k.y);
+            }
+
             // -i (k/k) h̃ (eq. 44)
             let len = k.norm();
             if choppy && len > 0.00001 {
@@ -316,6 +340,7 @@ pub fn create_tile(
     OceanTile {
         heights: sum(ht),
         displacement: if choppy { Some((sum(ht_slope_dx), sum(ht_slope_dz))) } else { None },
+        slopes: if slopes { Some((sum(ht_slope_x), sum(ht_slope_z))) } else { None },
     }
 }
 
@@ -397,7 +422,7 @@ impl OceanGeometry {
         let scale = SceneFile::parse_number(&o["amplitude"], 1. / (128. * 128.)); // (A)
 
         let h0 = create_amplitude_tile(wind, scale, gravity, lx, lz, fourier_grid_size, &mut rng);
-        let tile = create_tile(fourier_grid_size, lx, lz, gravity, time, choppyness_shift, h0);
+        let tile = create_tile(fourier_grid_size, lx, lz, gravity, time, choppyness_shift, false, h0);
         let ht = tile.heights;
 
         /*
@@ -552,8 +577,15 @@ impl MaterialModel for OceanMaterial {
 }
 
 pub fn create_ocean(opts: &Value) -> SceneObject {
+    if opts["curved"].as_bool() == Some(true) {
+        return create_curved_ocean(opts);
+    }
 	let o = OceanGeometry::new(opts);
     let mut m: Box<dyn MaterialModel + Sync + Send> = Box::new(OceanMaterial::new(opts));
+    if opts["physical"].as_bool() == Some(true) {
+        let wind = SceneFile::parse_vec2_def(opts, "wind", Vector2::new(40., 30.));
+        m = Box::new(physical_material(opts, 0., wind, None));
+    }
     if opts["debug"].as_bool().unwrap_or(false) {
         m = Box::new(NormalShade {});
     }
@@ -580,7 +612,7 @@ mod tests {
 	fn heights_n(wind: Vector2<f64>, time: f64, n: usize) -> Vec<Complex<f64>> {
 		let mut rng: StdRng = SeedableRng::from_seed([0; 32]);
 		let h0 = create_amplitude_tile(wind, 1., 9.81, L, L, n, &mut rng);
-		create_tile(n, L, L, 9.81, time, false, h0).heights
+		create_tile(n, L, L, 9.81, time, false, false, h0).heights
 	}
 
 	#[test]
@@ -662,4 +694,477 @@ mod tests {
 		let expected: Vec<Complex<f64>> = (1u32 .. 17u32).map(|x| Complex::new(x as f64, 0.)).collect();
 		assert_eq_vecs(&expected, &output2);
 	}
+}
+
+// ## On the planet
+//
+// For scenes on a planet the sea is the planet's surface, raised and lowered by the waves:
+// `CurvedOcean`. Up close the surface is displaced, so waves stand up against the horizon and
+// hide the troughs behind them; rays find it by marching through the height field. Further
+// out a wave is smaller than a pixel, and its slopes matter more than its heights, so the
+// displacement fades out and the waves remain only in the normals.
+
+/// The sea's heights and slopes (∂h/∂x, ∂h/∂z) over a periodic tile `size` metres across.
+struct WaveTile {
+    n: usize,
+    size: f64,
+    texels: Vec<[f32; 3]>,
+}
+
+impl WaveTile {
+    /// The waves of the Phillips spectrum for `wind` with wavenumbers from `k_min` up to
+    /// `k_max`, on an `n` x `n` grid, at `time`.
+    fn new(wind: Vector2<f64>, size: f64, n: usize, k_min: f64, k_max: f64, time: f64, seed: u64) -> WaveTile {
+        let mut s = [0u8; 32];
+        s[..8].copy_from_slice(&seed.to_le_bytes());
+        let mut rng: StdRng = SeedableRng::from_seed(s);
+        let mut h0 = create_amplitude_tile(wind, 1., 9.81, size, size, n, &mut rng);
+        for j in 0..n {
+            for i in 0..n {
+                let k = gen_k(i as f64 - n as f64 / 2., j as f64 - n as f64 / 2., size, size).norm();
+                if k < k_min || k >= k_max {
+                    h0[j * n + i] = Complex::new(0., 0.);
+                }
+            }
+        }
+        let tile = create_tile(n, size, size, 9.81, time, false, true, h0);
+        let (h, (sx, sz)) = (tile.heights, tile.slopes.unwrap());
+        // Undo the centred spectrum's (-1)^(x+z) (see the module docs).
+        let texels = (0..n * n).map(|ind| {
+            let sign = if (ind % n + ind / n).is_multiple_of(2) { -1. } else { 1. };
+            [(h[ind].re * sign) as f32, (sx[ind].re * sign) as f32, (sz[ind].re * sign) as f32]
+        }).collect();
+        WaveTile { n, size, texels }
+    }
+
+    fn scale(&mut self, k: f64) {
+        for t in self.texels.iter_mut() {
+            for v in t.iter_mut() {
+                *v *= k as f32;
+            }
+        }
+    }
+
+    /// Height and slopes at (x, z), interpolated bilinearly.
+    fn at(&self, x: f64, z: f64) -> Vector3<f64> {
+        let n = self.n as i64;
+        let (u, v) = (x / self.size * self.n as f64, z / self.size * self.n as f64);
+        let (u0, v0) = (u.floor(), v.floor());
+        let (fu, fv) = (u - u0, v - v0);
+        let t = |du: i64, dv: i64| {
+            let (i, j) = ((u0 as i64 + du).rem_euclid(n), (v0 as i64 + dv).rem_euclid(n));
+            let s = self.texels[(j * n + i) as usize];
+            Vector3::new(s[0] as f64, s[1] as f64, s[2] as f64)
+        };
+        (t(0, 0) * (1. - fu) + t(1, 0) * fu) * (1. - fv) + (t(0, 1) * (1. - fu) + t(1, 1) * fu) * fv
+    }
+
+    /// The largest height and slope in the tile.
+    fn maxima(&self) -> (f64, f64) {
+        self.texels.iter().fold((0., 0.), |(h, s), t| {
+            (h.max((t[0] as f64).abs()), s.max(((t[1] as f64).powi(2) + (t[2] as f64).powi(2)).sqrt()))
+        })
+    }
+}
+
+/// Cox and Munk's mean square slope of the sea for a wind of `speed` m/s (C. Cox and W. Munk,
+/// "Measurement of the roughness of the sea surface from photographs of the sun's glitter",
+/// J. Opt. Soc. Am. 44, 1954; the clean-surface fit).
+pub fn cox_munk_slope(speed: f64) -> f64 {
+    0.003 + 0.00512 * speed.max(0.)
+}
+
+/// The sea's surface as the sum of two tiles of incommensurate sizes, so that the pattern
+/// repeats only far away: swell and wind waves on one, and on the other the shorter waves it
+/// has no room for, down to half a metre.
+pub struct WaveField {
+    tiles: Vec<WaveTile>,
+    /// Bounds on the height and the slope.
+    pub max_height: f64,
+    pub max_slope: f64,
+    /// The mean square slope of the waves (as interpolated).
+    pub mean_square_slope: f64,
+}
+
+impl WaveField {
+    /// The waves for `wind` (m/s) at `time`. The Phillips spectrum's constant is arbitrary; with
+    /// `amplitude` it is that, and otherwise the waves are scaled so their mean square slope is
+    /// `resolved` of Cox and Munk's for the wind.
+    pub fn new(wind: Vector2<f64>, time: f64, seed: u64, amplitude: Option<f64>, resolved: f64) -> WaveField {
+        let (big, small, n) = (487., 61.3, 256);
+        let k_split = std::f64::consts::PI * n as f64 / big * 0.9;
+        let mut tiles = vec![
+            WaveTile::new(wind, big, n, 0., k_split, time, seed),
+            WaveTile::new(wind, small, n / 2, k_split, f64::INFINITY, time, seed.wrapping_add(1)),
+        ];
+        let mut field = WaveField { tiles: vec![], max_height: 0., max_slope: 0., mean_square_slope: 0. };
+        let k = match amplitude {
+            Some(a) => a.sqrt(),
+            None => {
+                field.tiles = std::mem::take(&mut tiles);
+                let mss = field.measure_slope();
+                tiles = std::mem::take(&mut field.tiles);
+                if mss > 0. { (resolved * cox_munk_slope(wind.norm()) / mss).sqrt() } else { 0. }
+            },
+        };
+        for t in tiles.iter_mut() {
+            t.scale(k);
+        }
+        let (h, s) = tiles.iter().map(|t| t.maxima()).fold((0., 0.), |a, b| (a.0 + b.0, a.1 + b.1));
+        field.tiles = tiles;
+        field.max_height = h;
+        field.max_slope = s;
+        field.mean_square_slope = field.measure_slope();
+        field
+    }
+
+    /// Height and slopes at horizontal position (x, z).
+    pub fn at(&self, x: f64, z: f64) -> Vector3<f64> {
+        self.tiles.iter().map(|t| t.at(x, z)).sum()
+    }
+
+    /// The mean square slope as sampled: between texels, interpolation smooths the shortest
+    /// waves, so it is measured on a grid finer than the tiles'.
+    fn measure_slope(&self) -> f64 {
+        let (m, size) = (1024, 487.);
+        let step = size / m as f64;
+        let mut sum = 0.;
+        for j in 0..m {
+            for i in 0..m {
+                let s = self.at((i as f64 + 0.37) * step, (j as f64 + 0.61) * step);
+                sum += s.y * s.y + s.z * s.z;
+            }
+        }
+        sum / (m * m) as f64
+    }
+}
+
+/// The sea as the planet's surface, displaced by `waves` within `detail_distance` of
+/// `detail_center` ([x, z]: put it under the camera), and beyond that a smooth sphere whose
+/// normals still carry the waves' slopes.
+pub struct CurvedOcean {
+    pub radius: f64,
+    pub waves: WaveField,
+    pub detail_center: Vector2<f64>,
+    pub detail_distance: f64,
+}
+
+impl CurvedOcean {
+    fn center(&self) -> Vector3<f64> {
+        Vector3::new(0., -self.radius, 0.)
+    }
+
+    /// How much of the waves' height is displaced at (x, z): all of it within half the detail
+    /// distance, fading to none at it.
+    fn displaced(&self, x: f64, z: f64) -> f64 {
+        let d = (Vector2::new(x, z) - self.detail_center).norm() / self.detail_distance;
+        1. - crate::procedural::nubis_clouds::smoothstep(0.5, 1., d)
+    }
+
+    /// Height of `p` above the displaced surface.
+    fn above(&self, p: &Vector3<f64>) -> f64 {
+        let altitude = (p - self.center()).norm() - self.radius;
+        let a = self.displaced(p.x, p.z);
+        if a <= 0. {
+            return altitude;
+        }
+        altitude - a * self.waves.at(p.x, p.z).x
+    }
+
+    /// The local vertical and horizontal axes (x and z at the origin).
+    fn frame(&self, p: &Vector3<f64>) -> (Vector3<f64>, Vector3<f64>, Vector3<f64>) {
+        let up = (p - self.center()).normalize();
+        let east = (Vector3::x() - up * up.x).normalize();
+        (up, east, east.cross(&up))
+    }
+
+    /// The surface's normal at `p`: the waves' slopes, as displaced, and in full beyond.
+    pub fn normal_at(&self, p: &Vector3<f64>) -> Vector3<f64> {
+        let (up, x, z) = self.frame(p);
+        let w = self.waves.at(p.x, p.z);
+        (up - x * w.y - z * w.z).normalize()
+    }
+
+    /// Where along the ray (from `t0` to `t1`) it is between the spheres that bound the waves.
+    fn sphere_hits(&self, r: &Ray, radius: f64) -> Option<(f64, f64)> {
+        let o = r.ro - self.center();
+        let b = o.dot(&r.rd);
+        let disc = b * b - (o.norm_squared() - radius * radius);
+        if disc < 0. {
+            return None;
+        }
+        Some((-b - disc.sqrt(), -b + disc.sqrt()))
+    }
+
+    /// Where the ray is within `detail_distance` of the detail centre, horizontally.
+    fn detail_span(&self, r: &Ray) -> Option<(f64, f64)> {
+        let o = Vector2::new(r.ro.x, r.ro.z) - self.detail_center;
+        let d = Vector2::new(r.rd.x, r.rd.z);
+        let a = d.norm_squared();
+        if a < 1e-18 {
+            return if o.norm() < self.detail_distance { Some((f64::NEG_INFINITY, f64::INFINITY)) } else { None };
+        }
+        let b = o.dot(&d);
+        let disc = b * b - a * (o.norm_squared() - self.detail_distance * self.detail_distance);
+        if disc < 0. {
+            return None;
+        }
+        Some(((-b - disc.sqrt()) / a, (-b + disc.sqrt()) / a))
+    }
+
+    /// The first crossing of the displaced surface from `t0` to `t1`, by stepping no further
+    /// than the surface could rise to meet the ray, then bisecting.
+    fn march(&self, r: &Ray, t0: f64, t1: f64) -> Option<f64> {
+        let fade_rate = 1.5 / (0.5 * self.detail_distance) * self.waves.max_height;
+        let mut t = t0;
+        let mut f = self.above(&(r.ro + r.rd * t));
+        if f <= 0. {
+            return Some(t);
+        }
+        while t < t1 {
+            let p = r.ro + r.rd * t;
+            let up = (p - self.center()).normalize();
+            let descent = (-r.rd.dot(&up)).max(0.);
+            let horizontal = (1. - r.rd.dot(&up).powi(2)).max(0.).sqrt();
+            let rate = descent + horizontal * (self.waves.max_slope + fade_rate) + 1e-6;
+            let step = (f / rate).max(0.01).min(t1 - t + 0.01);
+            let next = t + step;
+            let g = self.above(&(r.ro + r.rd * next));
+            if g <= 0. {
+                // Crossed: bisect.
+                let (mut lo, mut hi) = (t, next);
+                for _ in 0..24 {
+                    let mid = 0.5 * (lo + hi);
+                    if self.above(&(r.ro + r.rd * mid)) > 0. { lo = mid } else { hi = mid }
+                }
+                return Some(hi);
+            }
+            t = next;
+            f = g;
+        }
+        None
+    }
+}
+
+impl Geometry for CurvedOcean {
+    fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+        let r = Ray { ro: r.ro, rd: r.rd.normalize() };
+        let h = self.waves.max_height;
+        let hit = |t: f64| {
+            let point = r.ro + r.rd * t;
+            Some(RawIntersection { face: 0, part: 0, dist: t, point, normal: self.normal_at(&point) })
+        };
+        // The smooth sphere, where it is beyond the displaced region.
+        let detail = self.detail_span(&r);
+        let outside = |t: f64| detail.is_none_or(|(a, b)| t < a || t > b);
+        let smooth = self.sphere_hits(&r, self.radius)
+            .map(|(a, b)| [a, b])
+            .and_then(|ts| ts.into_iter().find(|t| *t > 0. && outside(*t)));
+        // The displaced region: between the bounding spheres, near the detail centre.
+        let displaced = match (detail, self.sphere_hits(&r, self.radius + h)) {
+            (Some((da, db)), Some((oa, ob))) => {
+                let inner = self.sphere_hits(&r, self.radius - h).map(|(a, _)| a).filter(|a| *a > 0.);
+                let start = da.max(oa).max(0.);
+                let end = db.min(ob).min(inner.unwrap_or(f64::INFINITY));
+                if start < end { self.march(&r, start, end) } else { None }
+            },
+            _ => None,
+        };
+        match (displaced, smooth) {
+            (Some(a), Some(b)) => hit(a.min(b)),
+            (Some(a), None) => hit(a),
+            (None, Some(b)) => hit(b),
+            (None, None) => None,
+        }
+    }
+
+    fn bounds(&self) -> BBox {
+        let r = Vector3::repeat(self.radius + self.waves.max_height);
+        BBox::new(self.center() - r, self.center() + r)
+    }
+}
+
+/// The physical sea: Fresnel reflection from ripples on the waves, the sun's glitter, and the
+/// faint light the water body sends back up, lit as the scene is.
+///
+/// The waves' normal comes from the geometry. Ripples too small for it carry the rest of the
+/// slope: a Beckmann distribution of microfacet normals, of mean square slope `roughness`.
+/// Reflections are sampled from it, and the sun's glitter is evaluated through it directly, so
+/// the glitter path is smooth rather than a scatter of rare hits on the sun's disc. The water
+/// reflects by Fresnel's equations, 2% straight down rising to all at grazing angles. What it
+/// lets in is mostly absorbed: deep, clear water sends back a percent or two of blue and almost
+/// no red (A. Morel, "Optical properties of pure water and pure sea water", 1974), lit by the
+/// sun and lights as they are, so the sea darkens and reddens at sunset.
+pub struct PhysicalOcean {
+    pub water: Color,
+    pub roughness: f64,
+    /// The planet's centre, for the local vertical; None for a flat sea.
+    pub center: Option<Vector3<f64>>,
+}
+
+/// Water's refractive index.
+const WATER_INDEX: f64 = 1.333;
+
+/// Fresnel reflectance of unpolarised light from air onto water, at incidence with cosine `cos_i`.
+pub fn fresnel(cos_i: f64) -> f64 {
+    let cos_i = cos_i.clamp(0., 1.);
+    let sin_t = (1. - cos_i * cos_i).sqrt() / WATER_INDEX;
+    let cos_t = (1. - sin_t * sin_t).max(0.).sqrt();
+    let rs = (cos_i - WATER_INDEX * cos_t) / (cos_i + WATER_INDEX * cos_t);
+    let rp = (WATER_INDEX * cos_i - cos_t) / (WATER_INDEX * cos_i + cos_t);
+    (rs * rs + rp * rp) / 2.
+}
+
+impl PhysicalOcean {
+    /// A microfacet normal about `n`, from the Beckmann distribution of the ripples' slopes.
+    fn sample_ripple(&self, n: &Vector3<f64>) -> Vector3<f64> {
+        // Slopes are Gaussian, each component with variance roughness / 2.
+        let r = (-self.roughness * (1. - geometry::rand()).ln()).sqrt();
+        let phi = 2. * std::f64::consts::PI * geometry::rand();
+        let t = if n.x.abs() < 0.9 { Vector3::x() } else { Vector3::z() };
+        let a = (t - n * n.dot(&t)).normalize();
+        let b = n.cross(&a);
+        (n - a * (r * phi.cos()) - b * (r * phi.sin())).normalize()
+    }
+
+    /// Beckmann's distribution of microfacet normals `m` about `n`, per steradian of `m`.
+    fn ripple_density(&self, n: &Vector3<f64>, m: &Vector3<f64>) -> f64 {
+        let c = n.dot(m);
+        if c <= 0. {
+            return 0.;
+        }
+        let tan2 = (1. - c * c) / (c * c);
+        (-tan2 / self.roughness).exp() / (std::f64::consts::PI * self.roughness * c.powi(4))
+    }
+}
+
+impl MaterialModel for PhysicalOcean {
+    fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
+        let v = -r.rd.normalize();
+        let up = self.center.map_or(Vector3::y(), |c| (intersection.point - c).normalize());
+        let mut n = intersection.normal;
+        // Seen from beyond a wave's slope: use the mean surface.
+        if n.dot(&v) <= 0. {
+            n = up;
+        }
+        let into = Intersection { normal: n, ..intersection.clone() };
+        // The water body, lit through the surface, as much as gets in.
+        let mut emit = crate::material::functions::direct_lighting(self.water * (1. - fresnel(n.dot(&v))), &into, s);
+        // The sun's glitter through the ripples: F D / (4 cos θv) per unit irradiance, Smith's
+        // shadowing left out (it matters only at grazing angles).
+        if let Some(sun) = &s.sun {
+            let l = sun.direction;
+            if l.dot(&up) > 0. && n.dot(&l) > 0. {
+                let h = (l + v).normalize();
+                let glint = fresnel(h.dot(&v)) * self.ripple_density(&n, &h) / (4. * n.dot(&v));
+                if glint > 1e-6 {
+                    let lit = sun.transmittance_from(&intersection.point, s);
+                    emit = emit + sun.irradiance_at(&intersection.point) * (glint * lit);
+                }
+            }
+        }
+        // Everything else reflected from a sampled ripple, weighted by Fresnel's equations.
+        let m = self.sample_ripple(&n);
+        let d = r.rd.normalize();
+        let reflected = d - m * 2. * m.dot(&d);
+        let (attenuate, ray) = if reflected.dot(&up) > 0. && m.dot(&v) > 0. {
+            (Color::white() * fresnel(m.dot(&v)), Some(Ray { ro: intersection.point + up * 1e-3, rd: reflected }))
+        } else {
+            (Color::black(), None)
+        };
+        ScatteredRay { emit, sampled_lights: true, attenuate, ray }
+    }
+}
+
+/// The physical material for an ocean, from its scene object: `water` (what the water body
+/// sends back, as an albedo) and the ripples' share of the slope, the rest of Cox and Munk's
+/// after the waves'.
+fn physical_material(opts: &Value, waves_slope: f64, wind: Vector2<f64>, center: Option<Vector3<f64>>) -> PhysicalOcean {
+    PhysicalOcean {
+        water: SceneFile::parse_color_def(opts, "water", Color::new(0.002, 0.012, 0.03)),
+        roughness: SceneFile::parse_number(&opts["roughness"], (cox_munk_slope(wind.norm()) - waves_slope).max(1e-3)),
+        center,
+    }
+}
+
+/// An ocean lying on the planet (`"curved": true`).
+fn create_curved_ocean(opts: &Value) -> SceneObject {
+    let wind = SceneFile::parse_vec2_def(opts, "wind", Vector2::new(7., 2.));
+    let waves = WaveField::new(
+        wind,
+        SceneFile::parse_number(&opts["time"], 0.),
+        SceneFile::parse_int(&opts["seed"], 0) as u64,
+        opts["amplitude"].as_f64(),
+        SceneFile::parse_number(&opts["resolved"], 0.5).clamp(0., 1.),
+    );
+    let radius = SceneFile::parse_number(&opts["earth_radius"], crate::planet::EARTH_RADIUS);
+    let material = physical_material(opts, waves.mean_square_slope, wind, Some(Vector3::new(0., -radius, 0.)));
+    let ocean = CurvedOcean {
+        radius,
+        waves,
+        detail_center: SceneFile::parse_vec2_def(opts, "detail_center", Vector2::zeros()),
+        detail_distance: SceneFile::parse_number(&opts["detail_distance"], 300.).max(1.),
+    };
+    SceneObject { geometry: Box::new(ocean), medium: Box::new(Solid { m: Box::new(material) }) }
+}
+
+#[cfg(test)]
+mod curved_tests {
+    use super::*;
+
+    fn ocean() -> CurvedOcean {
+        CurvedOcean {
+            radius: crate::planet::EARTH_RADIUS,
+            waves: WaveField::new(Vector2::new(7., 2.), 0., 1, None, 0.5),
+            detail_center: Vector2::zeros(),
+            detail_distance: 300.,
+        }
+    }
+
+    #[test]
+    fn test_fresnel() {
+        assert!((fresnel(1.) - 0.0204).abs() < 1e-3);
+        assert!(fresnel(0.01) > 0.9);
+    }
+
+    #[test]
+    fn test_waves_match_cox_munk() {
+        let w = WaveField::new(Vector2::new(7., 2.), 0., 1, None, 0.5);
+        let total = cox_munk_slope(Vector2::new(7., 2.).norm());
+        assert!((w.mean_square_slope - 0.5 * total).abs() < 0.02 * total, "{} vs {}", w.mean_square_slope, total);
+        // A moderate breeze's waves: heights of a metre or so at most.
+        assert!(w.max_height > 0.2 && w.max_height < 5., "{}", w.max_height);
+    }
+
+    #[test]
+    fn test_rays_hit_the_waves_near_and_the_sphere_far() {
+        let o = ocean();
+        // Straight down near the centre: on the displaced surface.
+        for (x, z) in [(3., 4.), (-20., 51.), (100., -7.)] {
+            let r = Ray { ro: Vector3::new(x, 20., z), rd: Vector3::new(0., -1., 0.) };
+            let hit = o.intersects(&r).unwrap();
+            assert!(o.above(&hit.point).abs() < 1e-3, "{}", o.above(&hit.point));
+            let expected = o.waves.at(x, z).x;
+            assert!((hit.point.y - expected).abs() < 0.01, "{} vs {}", hit.point.y, expected);
+        }
+        // Grazing from a camera 2 m up: hits the surface, not before it rises to meet the ray.
+        let ro = Vector3::new(0., 2., 0.);
+        for k in 0..50 {
+            let d = Vector3::new((k as f64 * 0.37).sin() * 0.3, -0.004 - 0.002 * k as f64, 1.).normalize();
+            let r = Ray { ro, rd: d };
+            let hit = o.intersects(&r).unwrap();
+            assert!(o.above(&hit.point).abs() < 1e-3);
+            // Nothing above water short of the hit.
+            for i in 1..200 {
+                let p = ro + d * (hit.dist * i as f64 / 200.);
+                assert!(o.above(&p) > -1e-6, "{} at {}", o.above(&p), i);
+            }
+        }
+        // Far beyond the detail: the smooth sphere.
+        let r = Ray { ro: Vector3::new(5000., 50., 0.), rd: Vector3::new(0., -1., 0.) };
+        let hit = o.intersects(&r).unwrap();
+        assert!(((hit.point - o.center()).norm() - o.radius).abs() < 1e-3);
+        // Up into the sky: nothing.
+        assert!(o.intersects(&Ray { ro, rd: Vector3::new(0., 1., 1.).normalize() }).is_none());
+    }
 }

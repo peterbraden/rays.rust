@@ -4,6 +4,33 @@ use crate::noise::{PerlinNoise, WorleyNoise, combined_noise};
 
 pub trait Medium : Sync{
     fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send); 
+
+    /// The normal to shade with at `pt`, given the surface's: the same, unless the surface is
+    /// bump mapped (see `bump::Bumped`).
+    fn normal_at(&self, _pt: &Vector3<f64>, normal: &Vector3<f64>) -> Vector3<f64> { *normal }
+    /// The medium of part `k` of a combined shape (see `csg::Tagged`), if it has its own.
+    fn part(&self, _k: u32) -> Option<&(dyn Medium + Sync + Send)> { None }
+}
+
+/// The media of an object whose parts have their own: `base` for the object itself (and parts
+/// without one), and `parts[k - 1]` for part k.
+pub struct PartMedia {
+    pub base: Box<dyn Medium + Sync + Send>,
+    pub parts: Vec<Box<dyn Medium + Sync + Send>>,
+}
+
+impl Medium for PartMedia {
+    fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
+        self.base.material_at(pt)
+    }
+
+    fn part(&self, k: u32) -> Option<&(dyn Medium + Sync + Send)> {
+        if k == 0 { None } else { self.parts.get(k as usize - 1).map(|m| &**m) }
+    }
+
+    fn normal_at(&self, pt: &Vector3<f64>, normal: &Vector3<f64>) -> Vector3<f64> {
+        self.base.normal_at(pt, normal)
+    }
 }
 
 pub struct Solid {
@@ -202,6 +229,17 @@ impl NoiseMedium {
             worley: Some(WorleyNoise::new(1.0, 42)),
             noise_type: NoiseType::Combined { falloff },
         }
+    }
+
+    /// Re-seed the noise generators, so the same scene can give different patterns. Worley
+    /// noise takes the seed's low 32 bits.
+    pub fn seeded(mut self, seed: u64) -> Self {
+        self.perlin = PerlinNoise::shuffled(seed);
+        self.worley = self.worley.map(|w| w.reseeded(seed as u32));
+        if let NoiseType::Worley { seed: s, .. } = &mut self.noise_type {
+            *s = seed as u32;
+        }
+        self
     }
 
     /// Generate turbulence value at a point

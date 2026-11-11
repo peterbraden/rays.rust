@@ -1,0 +1,68 @@
+{
+  "width": 720,
+  "height": 720,
+  "supersamples": 256,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 64,
+  "path_termination": "russian_roulette",
+  "output": {
+    "exposure": 0.5,
+    "tonemap": "reinhard",
+    "glare": true
+  },
+  "camera": {
+    "location": [
+      0,
+      2,
+      0
+    ],
+    "lookat": [
+      0,
+      7267,
+      10000
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 1.05
+  },
+  "sun": {
+    "intensity": 5.7
+  },
+  "objects": [
+    {
+      "type": "ocean",
+      "curved": true,
+      "wind": [
+        7,
+        2
+      ],
+      "detail_center": [
+        0,
+        0
+      ]
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        0,
+        0.309,
+        0.9511
+      ]
+    },
+    {
+      "type": "hogan_kew_cirrus",
+      "genus": "cirrostratus",
+      "wind_direction": [
+        1,
+        0.3
+      ],
+      "seed": 2,
+      "halos": true
+    }
+  ]
+}

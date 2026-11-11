@@ -38,7 +38,9 @@ and stratus images are quick previews (480 x 300, 8 samples per pixel), so they 
 | | [Stratus](#stratus) | `stratus.json` |
 | | [Cumulus, modelled](#cumulus-modelled) | `nubis-clouds.json` |
 | | [Cumulus, simulated](#cumulus-simulated) | `harris-cumulus.json` |
-| Phenomena | [Rain and rainbows](#rain-and-rainbows) | `rain.json` |
+| Phenomena | [Sunset](#sunset) | `sunset.json` |
+| | [Crepuscular rays](#crepuscular-rays) | `crepuscular-rays.json` |
+| | [Rain and rainbows](#rain-and-rainbows) | `rain.json` |
 | | [Mammatus](#mammatus) | `mammatus.json` |
 | | [Iridescence](#iridescence) | `cirrus-iridescence.json` |
 | | [Clouds from orbit](#clouds-from-orbit) | `orbit.json` |
@@ -214,6 +216,43 @@ At 100 m the grid resolves clouds down to a few hundred metres. Worley erosion a
 at their edges.
 
 ## Phenomena
+
+### Sunset
+
+![Sunset](./scenes/sunset.png)
+
+`sunset.json`: altocumulus at 4 km and cirrus at 9 km, the sun 1° below the horizon
+
+Sunset colours come from two things. Sunlight reaching each point of a cloud has crossed the
+atmosphere on its own path, looked up for the point's altitude and the sun's angle there. Near
+the horizon that path runs for hundreds of kilometres through the lowest air, so blue is
+scattered out and red is left. And the planet's shadow rises through the sky as the sun sinks,
+so clouds go out from the bottom up. Once the sun has set at the ground, clouds at 4 km are still
+lit for a few minutes, from below, by light that grazed the earth a few kilometres up: the "fire
+sky", every cloudlet's underside pink and red.
+
+![Sunset sequence](./scenes/sunset-sequence.png)
+
+The sun at 4°, 1°, -1° and -3°: gold, then orange, then the undersides lit red from below, then
+the altocumulus in the earth's shadow, grey against the twilight, with distant cloudlets towards
+the sunset still catching the light. The light falls a hundredfold through the sequence; as a
+photographer would, each frame is exposed for it (exposures 2, 3, 10 and 30, Reinhard tone
+mapping).
+
+### Crepuscular rays
+
+![Crepuscular rays](./scenes/crepuscular-rays.png)
+
+`crepuscular-rays.json`: `{"type": "skysphere", "crepuscular_rays": true, "mie_coefficient": 1e-4}`
+
+Beams of sunlight through gaps in clouds, and shafts of shadow between them, in hazy air. The
+sky's light is integrated along each view ray, but the air there is shadowed by clouds and
+terrain. For each camera ray, two points along it are tested for sunlight through the scene, chosen
+in proportion to the light the air there would scatter. The light that the shadowed air doesn't
+scatter is taken away, an unbiased estimate. Clouds against a low sun then stand dark against
+the glow, rather than washed out by haze that should have been in their shadow. Beams need haze
+to show: this scene has about four times the default aerosol (`mie_coefficient`), a summer
+afternoon's.
 
 ### Rain and rainbows
 

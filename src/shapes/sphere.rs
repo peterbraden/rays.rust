@@ -63,11 +63,32 @@ impl Geometry for Sphere {
         let point = r.ro + (rd * dist);
 
         Some(
-            RawIntersection { face: 0,
+            RawIntersection { face: 0, part: 0,
                 dist, 
                 point,
                 normal: (point - self.center).normalize()
             })
+    }
+
+    fn crossings(&self, r: &Ray) -> Vec<RawIntersection> {
+        let rd = r.rd.normalize();
+        let dst = r.ro - self.center;
+        let b = dst.dot(&rd);
+        let d = b * b - (dst.dot(&dst) - self.radius * self.radius);
+        if d < 0. {
+            return vec![];
+        }
+        [-b - d.sqrt(), -b + d.sqrt()].into_iter()
+            .filter(|t| *t >= 0.)
+            .map(|dist| {
+                let point = r.ro + rd * dist;
+                RawIntersection { face: 0, part: 0, dist, point, normal: (point - self.center).normalize() }
+            })
+            .collect()
+    }
+
+    fn inside(&self, p: &Vector3<f64>) -> bool {
+        (p - self.center).norm_squared() < self.radius * self.radius
     }
 
     fn bounds(&self) -> BBox {
@@ -106,6 +127,17 @@ mod tests {
         // Scattered rays (eg. Lambertian) are not normalised.
         assert_hit(Vector3::new(0., 0., 0.5));
         assert_hit(Vector3::new(0., 0., 10.));
+    }
+
+    #[test]
+    fn test_crossings_and_inside() {
+        let s = Sphere::new(Vector3::new(0., 0., 0.), 1.);
+        let c = s.crossings(&Ray { ro: Vector3::new(0., 0., -5.), rd: Vector3::new(0., 0., 2.) });
+        assert_eq!(c.len(), 2);
+        assert!((c[0].dist - 4.).abs() < 1e-9 && (c[1].dist - 6.).abs() < 1e-9);
+        assert_eq!(c[1].normal, Vector3::new(0., 0., 1.));
+        assert_eq!(s.crossings(&Ray { ro: Vector3::zeros(), rd: Vector3::new(1., 0., 0.) }).len(), 1);
+        assert!(s.inside(&Vector3::new(0.5, 0., 0.)) && !s.inside(&Vector3::new(1.5, 0., 0.)));
     }
 
     #[test]

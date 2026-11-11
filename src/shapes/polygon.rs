@@ -162,7 +162,7 @@ impl Geometry for Polygon {
         if !self.outline.contains(&P2::new(rel.dot(&self.u), rel.dot(&self.v))) {
             return None;
         }
-        Some(RawIntersection { face: 0, dist, point, normal: self.normal })
+        Some(RawIntersection { face: 0, part: 0, dist, point, normal: self.normal })
     }
 
     fn bounds(&self) -> BBox {
@@ -210,12 +210,16 @@ impl Prism {
 
 impl Geometry for Prism {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+        self.crossings(r).into_iter().next()
+    }
+
+    fn crossings(&self, r: &Ray) -> Vec<RawIntersection> {
         let rd = r.rd.normalize();
         let o = r.ro;
-        let mut best: Option<(f64, Vector3<f64>)> = None;
+        let mut hits: Vec<(f64, Vector3<f64>)> = Vec::new();
         let mut consider = |t: f64, n: Vector3<f64>| {
-            if t > 0. && best.is_none_or(|(b, _)| t < b) {
-                best = Some((t, n));
+            if t > 0. {
+                hits.push((t, n));
             }
         };
 
@@ -276,7 +280,9 @@ impl Geometry for Prism {
             consider(t, normal);
         }
 
-        best.map(|(dist, normal)| RawIntersection { face: 0, dist, point: o + rd * dist, normal })
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        hits.dedup_by(|a, b| (a.0 - b.0).abs() <= 1e-9 * (1. + b.0));
+        hits.into_iter().map(|(dist, normal)| RawIntersection { face: 0, part: 0, dist, point: o + rd * dist, normal }).collect()
     }
 
     fn bounds(&self) -> BBox {

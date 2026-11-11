@@ -140,14 +140,18 @@ impl Lathe {
 
 impl Geometry for Lathe {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+        self.crossings(r).into_iter().next()
+    }
+
+    fn crossings(&self, r: &Ray) -> Vec<RawIntersection> {
         let rd = r.rd.normalize();
         let inv = Vector3::new(1. / rd.x, 1. / rd.y, 1. / rd.z);
-        let (entry, _) = self.bounds.entry_exit(&r.ro, &inv)?;
+        let Some((entry, _)) = self.bounds.entry_exit(&r.ro, &inv) else { return vec![] };
         let start = self.bounds.solve_start(entry);
         let o = r.ro + rd * start;
         let dxz2 = rd.x * rd.x + rd.z * rd.z;
 
-        let mut best: Option<(f64, &Segment, f64)> = None;
+        let mut hits: Vec<(f64, &Segment, f64)> = Vec::new();
         for seg in &self.segments {
             let ss = if rd.y.abs() > 1e-9 {
                 let yo = poly::add(&seg.y, &[-o.y]);
@@ -155,36 +159,39 @@ impl Geometry for Lathe {
                 let b = poly::add(&[o.z * rd.y], &poly::scale(&yo, rd.z));
                 let g = poly::add(&poly::add(&poly::mul(&a, &a), &poly::mul(&b, &b)),
                     &poly::scale(&poly::mul(&seg.r, &seg.r), -rd.y * rd.y));
-                poly::roots_in(&g, 0., 1.)
+                poly::roots_in(&g, -1e-9, 1. + 1e-9)
             } else {
                 // A level ray: the heights where the profile is at the ray's level.
-                poly::roots_in(&poly::add(&seg.y, &[-o.y]), 0., 1.)
+                poly::roots_in(&poly::add(&seg.y, &[-o.y]), -1e-9, 1. + 1e-9)
             };
             for s in ss {
                 let p = seg.at(s);
-                // The ray meets the circle of radius p.x in the xz plane: of the (up to two)
-                // crossings, the one at the profile's height.
+                // The ray meets the circle of radius p.x in the xz plane at up to two points.
                 let ts = poly::quadratic_roots(o.x * o.x + o.z * o.z - p.x * p.x, 2. * (o.x * rd.x + o.z * rd.z), dxz2);
-                let t = if rd.y.abs() > 1e-9 {
+                let found: Vec<f64> = if rd.y.abs() > 1e-9 {
+                    // Of those, the one at the profile's height.
                     let ty = (p.y - o.y) / rd.y;
-                    if ts.is_empty() { Some(ty) } else {
-                        ts.into_iter().min_by(|a, b| (a - ty).abs().total_cmp(&(b - ty).abs()))
+                    if ts.is_empty() { vec![ty] } else {
+                        ts.into_iter().min_by(|a, b| (a - ty).abs().total_cmp(&(b - ty).abs())).into_iter().collect()
                     }
                 } else {
-                    ts.into_iter().find(|t| t + start > 1e-9)
+                    ts
                 };
-                if let Some(t) = t {
+                for t in found {
                     let dist = t + start;
-                    if dist > 1e-9 && best.is_none_or(|(b, _, _)| dist < b) {
-                        best = Some((dist, seg, s));
+                    if dist > 1e-9 {
+                        hits.push((dist, seg, s));
                     }
                 }
             }
         }
-        best.map(|(dist, seg, s)| {
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // Where segments meet, both report the same crossing.
+        hits.dedup_by(|a, b| (a.0 - b.0).abs() <= 1e-9 * (1. + b.0));
+        hits.into_iter().map(|(dist, seg, s)| {
             let point = r.ro + rd * dist;
-            RawIntersection { face: 0, dist, point, normal: self.normal(seg, s, &point, &rd) }
-        })
+            RawIntersection { face: 0, part: 0, dist, point, normal: self.normal(seg, s, &point, &rd) }
+        }).collect()
     }
 
     fn bounds(&self) -> BBox {
@@ -245,18 +252,22 @@ impl Sor {
 
 impl Geometry for Sor {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+        self.crossings(r).into_iter().next()
+    }
+
+    fn crossings(&self, r: &Ray) -> Vec<RawIntersection> {
         let rd = r.rd.normalize();
         let inv = Vector3::new(1. / rd.x, 1. / rd.y, 1. / rd.z);
-        let (entry, exit) = self.bounds.entry_exit(&r.ro, &inv)?;
+        let Some((entry, exit)) = self.bounds.entry_exit(&r.ro, &inv) else { return vec![] };
         let start = self.bounds.solve_start(entry);
         let o = r.ro + rd * start;
         let xz = [o.x * o.x + o.z * o.z, 2. * (o.x * rd.x + o.z * rd.z), rd.x * rd.x + rd.z * rd.z];
-        let len = exit - start;
+        let len = self.bounds.solve_end(exit) - start;
 
-        let mut best: Option<(f64, Vector3<f64>)> = None;
+        let mut hits: Vec<(f64, Vector3<f64>)> = Vec::new();
         let mut consider = |t: f64, n: Vector3<f64>| {
-            if t + start > 1e-9 && best.is_none_or(|(b, _)| t < b) {
-                best = Some((t, n));
+            if t + start > 1e-9 {
+                hits.push((t, n));
             }
         };
         for (y0, y1, f) in &self.pieces {
@@ -264,8 +275,11 @@ impl Geometry for Sor {
             let (mut lo, mut hi) = (0., len);
             if rd.y != 0. {
                 let (ta, tb) = ((y0 - o.y) / rd.y, (y1 - o.y) / rd.y);
-                lo = f64::max(lo, ta.min(tb));
-                hi = f64::min(hi, ta.max(tb));
+                // A little beyond the piece's ends, so a crossing exactly at one isn't lost to
+                // rounding; one found by both pieces is dropped below.
+                let pad = 1e-9 * (1. + ta.abs().max(tb.abs()));
+                lo = f64::max(lo, ta.min(tb) - pad);
+                hi = f64::min(hi, ta.max(tb) + pad);
             } else if o.y < *y0 || o.y > *y1 {
                 continue;
             }
@@ -286,10 +300,12 @@ impl Geometry for Sor {
                 }
             }
         }
-        best.map(|(t, normal)| {
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        hits.dedup_by(|a, b| (a.0 - b.0).abs() <= 1e-9 * (1. + b.0));
+        hits.into_iter().map(|(t, normal)| {
             let dist = t + start;
-            RawIntersection { face: 0, dist, point: r.ro + rd * dist, normal }
-        })
+            RawIntersection { face: 0, part: 0, dist, point: r.ro + rd * dist, normal }
+        }).collect()
     }
 
     fn bounds(&self) -> BBox {

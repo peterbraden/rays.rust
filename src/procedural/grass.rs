@@ -816,7 +816,7 @@ pub struct GrassGeometry {
 impl Geometry for GrassGeometry {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         let (t, i, s) = self.field.nearest(r)?;
-        Some(RawIntersection {
+        Some(RawIntersection { part: 0,
             face: 0,
             dist: t * r.rd.norm(),
             point: r.ro + r.rd * t,

@@ -69,7 +69,7 @@ mod tests {
             ]
         }"#.to_string());
         let m = Whitted { pigment: Color::white(), reflection: 0., phong: 0. };
-        let i = Intersection { face: 0,
+        let i = Intersection { face: 0, part: 0,
             dist: 1.,
             point: Vector3::new(0., 0., 0.),
             normal: Vector3::new(0., 1., 0.),

@@ -3,7 +3,8 @@
 The scene file's `objects` take these geometry types besides `sphere`, `plane`, `box`,
 `triangle`, `mesh` and `smoothmesh`. They follow POV-Ray's shapes of the same names, and use the
 same coordinates (except that POV-Ray is left-handed: see `text`). Any of them can be placed with
-a `transform`, given a `material`, and (the solid ones) used in a `difference`.
+a `transform`, given a `material`, and (the solid ones) combined with others: see
+[Combining shapes](#combining-shapes-csg).
 
 ![Every shape](../demo/scenes/shapes.png)
 
@@ -66,3 +67,37 @@ These are turned into triangles when the scene loads.
 | `parametric` | `x`*, `y`*, `z`* (functions of u and v), `u: [0, 1]`, `v: [0, 1]`, `resolution: [64, 64]` | |
 | `bicubic_patch` | `points`* (16: four rows of four), `steps: 16` | A Bezier patch. |
 | `text` | `font`* (a .ttf or .otf file), `string`*, `thickness: 1`, `offset: [0, 0]`, `steps: 8` | Letters about one unit high on the baseline y = 0 from x = 0, from z = 0 to z = thickness. In this right-handed renderer they read left to right from the +z side; turn them 180° about y (`"rotate": {"pitch": 180}`) to face a camera on the -z side. |
+
+## Combining shapes (CSG)
+
+| Type | Fields | |
+|---|---|---|
+| `union` | `items`* | All the shapes, keeping the surfaces where they overlap (seen through glass). |
+| `merge` | `items`* | All the shapes, without the surfaces inside one another. |
+| `intersection` | `items`* | Where the shapes all overlap. |
+| `difference` | `items`* (or `a`*, `b`*) | The first shape with the others cut away. |
+
+![CSG](../demo/scenes/csg.png)
+
+[`demo/scenes/csg.json`](../demo/scenes/csg.json) has an example of each. Combinations nest, and
+can be placed with `transform` like any shape. Any shape can also have:
+
+- `"inverse": true`: turned inside out, so that its inside is everything outside it. An
+  intersection with an inverse shape is a difference.
+- `"clipped_by": shape`: the parts of its surface outside the other shape cut away, leaving it
+  open. Unlike an intersection, this adds no surface.
+
+A shape inside a combination (or a `transform`) can have its own `material` or `medium`, which
+then applies to the surface it contributes: the cut faces of a difference take the cutting
+shape's material. The innermost material wins; shapes without one use the object's.
+
+`{"type": "plane", "normal": [x, y, z], "distance": d}` is a half-space, everything on the
+side of the plane n·p = d that the normal faces away from, for cutting shapes in two. (The
+`"y"` form of `plane` is a ground plane, best kept out of CSG.)
+
+Combinations work as in POV-Ray: each shape's surface is kept where the others say it should
+be, by whether it is inside them. So the shapes in an `intersection`, `difference` or `merge`
+should be solids: closed, with an inside. `disc`, `polygon`, `height_field`, `parametric` and
+`bicubic_patch` have no inside, and open meshes and `open` cylinders, cones and sors have none
+that holds together, so they won't cut or be cut cleanly. Where two shapes' surfaces coincide
+exactly, either may show; let cutting shapes overlap a little.

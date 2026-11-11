@@ -90,6 +90,7 @@ impl Transform {
         let point = self.transform.transform_point(&Point3::from(i.point)).coords;
         RawIntersection {
             face: i.face,
+            part: i.part,
             dist: (point - r.ro).norm(),
             point,
             normal: (self.normal_matrix * i.normal).normalize(),
@@ -101,6 +102,10 @@ impl Geometry for Transform {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         // Intersect in object space, then map the hit back into world space.
         self.item.intersects(&self.to_object(r)).map(|i| self.to_world(r, i))
+    }
+
+    fn crossings(&self, r: &Ray) -> Vec<RawIntersection> {
+        self.item.crossings(&self.to_object(r)).into_iter().map(|i| self.to_world(r, i)).collect()
     }
 
     fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
@@ -210,6 +215,16 @@ mod tests {
             assert!(((p - Vector3::new(1., 2., 3.)).norm() - 3.).abs() < 1e-9);
             assert!((n - (p - Vector3::new(1., 2., 3.)) / 3.).norm() < 1e-9);
         }
+    }
+
+    #[test]
+    fn test_crossings_and_inside_follow_the_transform() {
+        let t = Transform::from_parts(unit_sphere(), Vector3::new(0., 0., 5.), Rotation3::identity(), Vector3::new(2., 1., 1.));
+        let c = t.crossings(&Ray { ro: Vector3::new(-10., 0., 5.), rd: Vector3::new(1., 0., 0.) });
+        assert_eq!(c.len(), 2);
+        assert!((c[0].dist - 8.).abs() < 1e-9 && (c[1].dist - 12.).abs() < 1e-9);
+        assert!((c[1].normal - Vector3::new(1., 0., 0.)).norm() < 1e-9);
+        assert!(t.inside(&Vector3::new(1.5, 0., 5.)) && !t.inside(&Vector3::new(1.5, 0., 0.)));
     }
 
     #[test]

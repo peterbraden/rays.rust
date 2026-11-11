@@ -22,21 +22,21 @@ use crate::shapes::polynomial as poly;
 /// Furthest along a ray that an unbounded surface is searched for.
 const FAR: f64 = 1e7;
 
-/// The nearest hit within `bounds`: the smallest positive root of the polynomial in t that
-/// `along(origin, d)` gives for the ray from `origin` in unit direction `d`, with the normal from
+/// The hits within `bounds`, nearest first: the positive roots of the polynomial in t that
+/// `along(origin, d)` gives for the ray from `origin` in unit direction `d`, with normals from
 /// `gradient`.
-fn nearest_root<P, G>(r: &Ray, bounds: &BBox, along: P, gradient: G) -> Option<RawIntersection>
+fn all_roots<P, G>(r: &Ray, bounds: &BBox, along: P, gradient: G) -> Vec<RawIntersection>
 where
     P: Fn(&Vector3<f64>, &Vector3<f64>) -> Vec<f64>,
     G: Fn(&Vector3<f64>) -> Vector3<f64>,
 {
     let rd = r.rd.normalize();
     let inv = Vector3::new(1. / rd.x, 1. / rd.y, 1. / rd.z);
-    let (entry, exit) = bounds.entry_exit(&r.ro, &inv)?;
+    let Some((entry, exit)) = bounds.entry_exit(&r.ro, &inv) else { return vec![] };
     let start = bounds.solve_start(entry).min(FAR);
-    let end = exit.min(FAR);
+    let end = bounds.solve_end(exit).min(FAR);
     if end <= start {
-        return None;
+        return vec![];
     }
     let origin = r.ro + rd * start;
     let c = along(&origin, &rd);
@@ -44,13 +44,14 @@ where
     poly::roots_in(&c, 0., end - start)
         .into_iter()
         .map(|t| t + start)
-        .find(|t| *t > eps)
+        .filter(|t| *t > eps)
         .map(|dist| {
             let point = r.ro + rd * dist;
             let g = gradient(&point);
             let normal = if g.norm() > 0. { g.normalize() } else { -rd };
-            RawIntersection { face: 0, dist, point, normal }
+            RawIntersection { face: 0, part: 0, dist, point, normal }
         })
+        .collect()
 }
 
 /// A torus about the y axis, centred on the origin: the circle of radius `minor` swept round the
@@ -76,9 +77,13 @@ impl Torus {
 
 impl Geometry for Torus {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+        self.crossings(r).into_iter().next()
+    }
+
+    fn crossings(&self, r: &Ray) -> Vec<RawIntersection> {
         let r2 = self.major * self.major;
         let k = r2 - self.minor * self.minor;
-        nearest_root(r, &self.bounds(), |o, d| {
+        all_roots(r, &self.bounds(), |o, d| {
             // |o + t d|^2 + k, and x^2 + z^2, as polynomials in t.
             let s = [o.norm_squared() + k, 2. * o.dot(d), d.norm_squared()];
             let xz = [o.x * o.x + o.z * o.z, 2. * (o.x * d.x + o.z * d.z), d.x * d.x + d.z * d.z];
@@ -183,8 +188,12 @@ impl Algebraic {
 
 impl Geometry for Algebraic {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+        self.crossings(r).into_iter().next()
+    }
+
+    fn crossings(&self, r: &Ray) -> Vec<RawIntersection> {
         let n = self.order();
-        nearest_root(r, &self.bounds, |o, d| {
+        all_roots(r, &self.bounds, |o, d| {
             // Powers of each coordinate as polynomials in t.
             let pows: Vec<Vec<Vec<f64>>> = (0..3).map(|a| {
                 let mut v = vec![vec![1.]];
@@ -232,6 +241,18 @@ mod tests {
         let inner = t.intersects(&Ray { ro: v(2., 0., 0.), rd: v(1., 0., 0.) }).unwrap();
         assert!((inner.dist - 0.5).abs() < 1e-7);
         assert!(t.inside(&v(2., 0., 0.)) && !t.inside(&v(0., 0., 0.)));
+    }
+
+    #[test]
+    fn test_torus_crossings() {
+        // In and out of the tube on each side of the hole.
+        let c = Torus::new(2., 0.5).crossings(&Ray { ro: v(-10., 0., 0.), rd: v(1., 0., 0.) });
+        let d: Vec<f64> = c.iter().map(|x| x.dist).collect();
+        assert_eq!(d.len(), 4);
+        for (a, b) in d.iter().zip([7.5, 8.5, 11.5, 12.5]) {
+            assert!((a - b).abs() < 1e-7, "{:?}", d);
+        }
+        assert!((c[1].normal - v(1., 0., 0.)).norm() < 1e-7);
     }
 
     #[test]

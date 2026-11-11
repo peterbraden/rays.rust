@@ -47,7 +47,7 @@ impl Geometry for Disc {
         if d2 > self.radius * self.radius || d2 < self.hole_radius * self.hole_radius {
             return None;
         }
-        Some(RawIntersection { face: 0, dist, point, normal: self.normal })
+        Some(RawIntersection { face: 0, part: 0, dist, point, normal: self.normal })
     }
 
     fn bounds(&self) -> BBox {

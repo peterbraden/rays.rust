@@ -225,7 +225,7 @@ mod tests {
         let leaf = Leaf::new(Color::new(0.1, 0.2, 0.05), Color::new(0.05, 0.15, 0.02), 1., 0.);
         let r = Ray { ro: Vector3::new(0., 5., 0.01), rd: Vector3::new(0., -1., 0.) };
         let (object, hit) = s.objects.nearest_raw_intersection(&r, f64::INFINITY, 0.).unwrap();
-        let i = Intersection { dist: hit.dist, point: hit.point, normal: hit.normal, face: hit.face, object };
+        let i = Intersection { dist: hit.dist, point: hit.point, normal: hit.normal, face: hit.face, part: hit.part, object };
         let n = 20000;
         let (mut total, mut through) = (Color::black(), 0);
         for _ in 0 .. n {
@@ -276,7 +276,7 @@ mod tests {
         let object = &s.objects.items()[0];
         let leaf = Leaf::new(Color::black(), Color::black(), 1.5, 0.);
         let fraction = |rd: Vector3<f64>| {
-            let i = Intersection { dist: 1., point: Vector3::zeros(), normal: Vector3::new(0., 1., 0.), face: 0, object };
+            let i = Intersection { dist: 1., point: Vector3::zeros(), normal: Vector3::new(0., 1., 0.), face: 0, part: 0, object };
             let r = Ray { ro: -rd, rd };
             (0 .. 20000).filter(|_| leaf.scatter(&r, &i, &s).ray.is_some()).count() as f64 / 20000.
         };

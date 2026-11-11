@@ -113,6 +113,10 @@ impl Medium for Bumped {
     fn normal_at(&self, pt: &Vector3<f64>, normal: &Vector3<f64>) -> Vector3<f64> {
         self.bump.perturb(pt, &self.inner.normal_at(pt, normal))
     }
+
+    fn part(&self, k: u32) -> Option<&(dyn Medium + Sync + Send)> {
+        self.inner.part(k)
+    }
 }
 
 #[cfg(test)]

@@ -61,6 +61,7 @@ impl SceneGraph {
             normal: hit.normal,
             face: hit.face,
             object,
+            part: hit.part,
         })
     }
 

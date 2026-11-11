@@ -31,6 +31,17 @@ use std::sync::Arc;
 use crate::bvh::Bvh;
 use crate::na::geometry::Affine3;
 
+/// Whether p is inside a closed mesh: a ray from it crosses the surface an odd number of times.
+/// The direction avoids the axes and diagonals, along which a ray is likeliest to run exactly
+/// through an edge or vertex.
+fn inside_closed(mesh: &dyn Geometry, p: &Vector3<f64>) -> bool {
+    if !mesh.bounds().contains_point(p) {
+        return false;
+    }
+    let rd = Vector3::new(0.5381, 0.6229, 0.5677);
+    mesh.crossings(&Ray { ro: *p, rd }).len() % 2 == 1
+}
+
 /// A mesh as stored in a file: vertex positions, optionally a normal per vertex, and triangles
 /// indexing them.
 #[derive(Debug)]
@@ -133,7 +144,7 @@ impl IndexedTriangles {
     /// The nearest hit in `[min, max)`: the triangle and where it is hit. A triangle is hit at
     /// most once, so its one hit is the nearest beyond any `min`.
     fn nearest(&self, r: &Ray, min: f64, max: f64) -> Option<(usize, IntersectionPoint)> {
-        self.bvh.nearest(r, min, max, |i, _| self.hit(r, i).map(|x| RawIntersection {
+        self.bvh.nearest(r, min, max, |i, _| self.hit(r, i).map(|x| RawIntersection { part: 0,
             face: 0, dist: x.dist, point: x.point, normal: Vector3::zeros(),
         })).map(|(i, x)| (i, IntersectionPoint { dist: x.dist, point: x.point }))
     }
@@ -197,7 +208,7 @@ impl Geometry for Mesh {
     }
 
     fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
-        self.triangles.nearest(r, min, max).map(|(i, x)| RawIntersection {
+        self.triangles.nearest(r, min, max).map(|(i, x)| RawIntersection { part: 0,
             face: i as u32, dist: x.dist, point: x.point, normal: self.triangles.face_normal(i),
         })
     }
@@ -229,6 +240,11 @@ impl Geometry for Mesh {
 
     fn primitives(&self) -> u64 {
         self.triangles.triangles.len() as u64
+    }
+
+    /// Meaningful only for a closed mesh.
+    fn inside(&self, p: &Vector3<f64>) -> bool {
+        inside_closed(self, p)
     }
 }
 
@@ -326,7 +342,7 @@ impl Geometry for SmoothMesh {
     }
 
     fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
-        self.triangles.nearest(r, min, max).map(|(i, x)| RawIntersection {
+        self.triangles.nearest(r, min, max).map(|(i, x)| RawIntersection { part: 0,
             face: i as u32, dist: x.dist, point: x.point, normal: self.normal_at(i, x.point),
         })
     }
@@ -346,6 +362,11 @@ impl Geometry for SmoothMesh {
     fn primitives(&self) -> u64 {
         self.triangles.triangles.len() as u64
     }
+
+    /// Meaningful only for a closed mesh.
+    fn inside(&self, p: &Vector3<f64>) -> bool {
+        inside_closed(self, p)
+    }
 }
 
 
@@ -364,6 +385,19 @@ mod tests {
 
     const QUAD: &str = "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\n";
     const ONE: Vector3<f64> = Vector3::new(1., 1., 1.);
+
+    #[test]
+    fn test_inside_closed_mesh() {
+        // A tetrahedron.
+        let p = write_obj("tet.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 3 2\nf 1 2 4\nf 1 4 3\nf 2 3 4\n");
+        let m = Mesh::from_file(p, ONE);
+        assert!(m.inside(&Vector3::new(0.1, 0.1, 0.1)));
+        assert!(!m.inside(&Vector3::new(0.5, 0.5, 0.5)));
+        assert!(!m.inside(&Vector3::new(-0.1, 0.1, 0.1)));
+        let c = m.crossings(&Ray { ro: Vector3::new(0.1, 0.1, -1.), rd: Vector3::new(0., 0., 1.) });
+        assert_eq!(c.len(), 2);
+        assert!((c[0].dist - 1.).abs() < 1e-9 && (c[1].dist - 1.8).abs() < 1e-9);
+    }
 
     #[test]
     fn test_line_elements_are_ignored() {

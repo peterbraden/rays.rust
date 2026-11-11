@@ -125,31 +125,32 @@ impl SphereSweep {
 
 impl Geometry for SphereSweep {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+        self.crossings(r).into_iter().next()
+    }
+
+    /// The crossings of every sphere and cone that aren't inside another.
+    fn crossings(&self, r: &Ray) -> Vec<RawIntersection> {
         let rd = r.rd.normalize();
         let inv = Vector3::new(1. / rd.x, 1. / rd.y, 1. / rd.z);
         let eps = 1e-9 * (1. + self.bounds.size().norm());
-        let mut best: Option<RawIntersection> = None;
+        let ray = Ray { ro: r.ro, rd };
+        let mut hits: Vec<RawIntersection> = Vec::new();
         for (i, (part, pb)) in self.parts.iter().enumerate() {
             if pb.entry_exit(&r.ro, &inv).is_none() {
                 continue;
             }
-            // A sphere or open cone is crossed at most twice.
-            let mut from = 0.;
-            for _ in 0..2 {
-                let Some(hit) = part.geometry().intersects_beyond(&Ray { ro: r.ro, rd }, from) else { break };
-                if best.is_some_and(|b| hit.dist >= b.dist) {
-                    break;
-                }
+            for hit in part.geometry().crossings(&ray) {
                 let hidden = self.parts.iter().enumerate()
                     .any(|(j, (other, _))| j != i && other.contains(&hit.point, eps));
                 if !hidden {
-                    best = Some(hit);
-                    break;
+                    hits.push(hit);
                 }
-                from = hit.dist + eps;
             }
         }
-        best
+        hits.sort_by(|a, b| a.dist.total_cmp(&b.dist));
+        // Where a cone meets its sphere, both may report the crossing.
+        hits.dedup_by(|a, b| (a.dist - b.dist).abs() <= eps * 10.);
+        hits
     }
 
     fn bounds(&self) -> BBox {

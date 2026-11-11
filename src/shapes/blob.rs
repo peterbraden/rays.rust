@@ -159,12 +159,16 @@ impl Blob {
 
 impl Geometry for Blob {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+        self.crossings(r).into_iter().next()
+    }
+
+    fn crossings(&self, r: &Ray) -> Vec<RawIntersection> {
         let rd = r.rd.normalize();
         let inv = Vector3::new(1. / rd.x, 1. / rd.y, 1. / rd.z);
-        let (entry, exit) = self.bounds.entry_exit(&r.ro, &inv)?;
+        let Some((entry, exit)) = self.bounds.entry_exit(&r.ro, &inv) else { return vec![] };
         let start = self.bounds.solve_start(entry);
         let o = r.ro + rd * start;
-        let len = exit - start;
+        let len = self.bounds.solve_end(exit) - start;
 
         let mut pieces = Vec::new();
         for c in &self.components {
@@ -173,6 +177,7 @@ impl Geometry for Blob {
         let mut cuts: Vec<f64> = pieces.iter().flat_map(|p| [p.from, p.to]).collect();
         cuts.sort_by(f64::total_cmp);
         cuts.dedup();
+        let mut hits: Vec<RawIntersection> = Vec::new();
         for w in cuts.windows(2) {
             let (a, b) = (w[0], w[1]);
             let mid = 0.5 * (a + b);
@@ -185,16 +190,20 @@ impl Geometry for Blob {
             if f.len() == 1 {
                 continue;
             }
-            if let Some(t) = poly::roots_in(&f, a, b).into_iter().find(|t| t + start > 1e-9) {
+            for t in poly::roots_in(&f, a, b).into_iter().filter(|t| t + start > 1e-9) {
                 let dist = t + start;
+                // A root on a cut between intervals may be found on both sides.
+                if hits.last().is_some_and(|h| (h.dist - dist).abs() <= 1e-9 * (1. + dist)) {
+                    continue;
+                }
                 let point = r.ro + rd * dist;
                 let g: Vector3<f64> = self.components.iter().map(|c| c.gradient(&point)).sum();
                 // The field falls outwards.
                 let normal = if g.norm() > 0. { -g.normalize() } else { -rd };
-                return Some(RawIntersection { face: 0, dist, point, normal });
+                hits.push(RawIntersection { face: 0, part: 0, dist, point, normal });
             }
         }
-        None
+        hits
     }
 
     fn bounds(&self) -> BBox {

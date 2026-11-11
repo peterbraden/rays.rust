@@ -8,6 +8,29 @@ pub trait Medium : Sync{
     /// The normal to shade with at `pt`, given the surface's: the same, unless the surface is
     /// bump mapped (see `bump::Bumped`).
     fn normal_at(&self, _pt: &Vector3<f64>, normal: &Vector3<f64>) -> Vector3<f64> { *normal }
+    /// The medium of part `k` of a combined shape (see `csg::Tagged`), if it has its own.
+    fn part(&self, _k: u32) -> Option<&(dyn Medium + Sync + Send)> { None }
+}
+
+/// The media of an object whose parts have their own: `base` for the object itself (and parts
+/// without one), and `parts[k - 1]` for part k.
+pub struct PartMedia {
+    pub base: Box<dyn Medium + Sync + Send>,
+    pub parts: Vec<Box<dyn Medium + Sync + Send>>,
+}
+
+impl Medium for PartMedia {
+    fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
+        self.base.material_at(pt)
+    }
+
+    fn part(&self, k: u32) -> Option<&(dyn Medium + Sync + Send)> {
+        if k == 0 { None } else { self.parts.get(k as usize - 1).map(|m| &**m) }
+    }
+
+    fn normal_at(&self, pt: &Vector3<f64>, normal: &Vector3<f64>) -> Vector3<f64> {
+        self.base.normal_at(pt, normal)
+    }
 }
 
 pub struct Solid {

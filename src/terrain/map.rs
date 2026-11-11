@@ -171,12 +171,12 @@ mod tests {
         let end = env("END", 100000.);
         let frames = env("FRAMES", 4.) as usize;
         for f in 0..=frames {
-            let start = std::time::Instant::now();
+            let start = crate::stopwatch::Stopwatch::start();
             let target = end * f as f64 / frames as f64;
             while t.time < target {
                 let before = t.ice_steps;
                 let iterations = t.ice_iterations;
-                let s = std::time::Instant::now();
+                let s = crate::stopwatch::Stopwatch::start();
                 t.run_to((t.time + 1000.).min(target));
                 if std::env::var("VERBOSE").is_ok() {
                     let k = (0..t.domain.len()).max_by(|&a, &b| t.ice[a].total_cmp(&t.ice[b])).unwrap();
@@ -217,7 +217,7 @@ mod tests {
         let end = env("END", 100000.);
         let frames = env("FRAMES", 4.) as usize;
         for f in 0..=frames {
-            let start = std::time::Instant::now();
+            let start = crate::stopwatch::Stopwatch::start();
             t.run_to(end * f as f64 / frames as f64);
             println!("t {:>8} in {:.1?}: ice {} cells", t.time, start.elapsed(), t.ice.iter().filter(|&&h| h > ICE_FREE).count());
             write_map(&t, &format!("{}/planet-{:03}.png", dir, f), 1024);

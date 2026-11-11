@@ -77,7 +77,8 @@ impl Heights {
     /// From an image's brightness: columns along x, rows along z, the first row at z = 1 so that
     /// the image reads the right way up looking down the y axis with z up the page.
     pub fn from_image(path: &str) -> Heights {
-        let img = image::open(path)
+        let bytes = crate::assets::read(path).unwrap_or_else(|e| panic!("Failed to load height field image: {}", e));
+        let img = image::load_from_memory(&bytes)
             .unwrap_or_else(|e| panic!("Failed to load height field image {}: {}", path, e))
             .to_luma16();
         let (w, h) = (img.width() as usize, img.height() as usize);

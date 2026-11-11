@@ -526,10 +526,9 @@ struct GeneratingField3 {
 
 /// In-place 3D FFT of `data`, n on a side (a power of two), x fastest.
 fn fft3d(data: &mut [rustfft::num_complex::Complex<f64>], n: usize, inverse: bool) {
-    use rustfft::FFT;
-    let fft = rustfft::algorithm::Radix4::new(n, inverse);
+    use rustfft::{Fft, FftDirection};
+    let fft = rustfft::algorithm::Radix4::new(n, if inverse { FftDirection::Inverse } else { FftDirection::Forward });
     let mut line = vec![Complex::new(0., 0.); n];
-    let mut out = vec![Complex::new(0., 0.); n];
     // Along each axis in turn: gather a line, transform it, scatter it back.
     for stride in [1, n, n * n] {
         for base in 0..n * n {
@@ -542,9 +541,9 @@ fn fft3d(data: &mut [rustfft::num_complex::Complex<f64>], n: usize, inverse: boo
             for k in 0..n {
                 line[k] = data[start + k * stride];
             }
-            fft.process(&mut line, &mut out);
+            fft.process(&mut line);
             for k in 0..n {
-                data[start + k * stride] = out[k];
+                data[start + k * stride] = line[k];
             }
         }
     }

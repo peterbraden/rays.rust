@@ -319,7 +319,7 @@ pub fn create_terrain(o: &Value) -> SceneObject {
     let params = terrain_params(o);
     let mut t = Terrain::new(domain(o, &params), params);
     let time = number(o, "time", 0.);
-    let start = std::time::Instant::now();
+    let start = crate::stopwatch::Stopwatch::start();
     t.run_to(time);
     println!("Terrain: {} cells evolved for {} years in {:.1?}", t.domain.len(), time, start.elapsed());
     if let Some(path) = o["map"].as_str() { write_map(&t, path, 2048); }

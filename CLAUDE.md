@@ -22,6 +22,15 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Format code: `cargo fmt`
 - View sample scenes: `cargo run --release -- demo/scenes/<scene_file>.json`
 
+## Browser Scene Builder (prototype, `web/`)
+- Build the renderer for the browser: `web/build.sh` (needs `rustup target add wasm32-unknown-unknown` once); writes `web/rays.wasm`
+- Serve the repository root and open `/web/`: `python3 -m http.server 8000`, then http://localhost:8000/web/
+- The renderer is the `rays` library; the command line is its default `cli` feature. `web/wasm` builds the library without it. Code the library needs must build for `wasm32-unknown-unknown`: read files through `crate::assets`, and don't use `std::time::Instant` or threads outside rayon
+- `src/preview.rs` is the interface the page drives (build from JSON, render rows of a layer, set camera, pick)
+- `src/schema.json` lists every scene-file type and field for the editor; `src/schema.rs` tests it against the parser. When the parser gains a type or a field, or a default changes, update the schema (a missing type fails `cargo test schema`)
+- `cargo run --release -- serve` hosts the builder at http://localhost:8787/web/ and renders layers for it (`src/server.rs`; `--port`, `--bind`, `--root`, `--allow-origin`)
+- `.github/workflows/pages.yml` deploys the builder to GitHub Pages from master (`web/site.sh` assembles the site)
+
 ## Command-line Options
 - `<FILE>`: Scene file (required, positional): our JSON, `.nff` (translated by `src/nff.rs`), or Tungsten's JSON (recognised by its `bsdfs` and `primitives`; translated by `src/tungsten.rs`). The image is written alongside it with a `.png` extension
 - `--dump-scene <FILE>`: Write the scene as our JSON (for an NFF or Tungsten file, its translation)

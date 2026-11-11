@@ -1,129 +1,9 @@
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
-//extern crate image;
-extern crate nalgebra as na;
-extern crate rand;
-#[macro_use]
-extern crate clap;
-#[macro_use]
-extern crate serde_derive;
-extern crate serde_json;
-extern crate rayon;
-extern crate tobj;
-extern crate ordered_float;
-extern crate num_complex;
-extern crate rustfft;
-extern crate termcolor;
-
-
 use clap::Parser;
-use rayon::prelude::*;
 
-mod ray;
-mod color;
-mod material {
-    pub mod model;
-    pub mod dielectric;
-    pub mod specular;
-    pub mod ambient;
-    pub mod texture;
-    pub mod lambertian;
-    pub mod diffuse_light;
-    pub mod normal;
-    pub mod functions;
-    pub mod legacy;
-    pub mod plastic;
-    pub mod leaf;
-    pub mod noise;
-    pub mod grass;
-    pub mod bump;
-    pub mod rock;
-    pub mod phase;
-    pub mod diffraction;
-    pub mod ice_halos;
-    pub mod rainbow;
-}
-mod intersection;
-mod sceneobject;
-mod light;
-mod shapes {
-    pub mod transform;
-    pub mod bbox;
-    pub mod geometry;
-    pub mod geometry_set;
-    pub mod csg;
-    pub mod sphere;
-    pub mod plane;
-    pub mod triangle;
-    pub mod mesh;
-    pub mod ply;
-    pub mod wo3;
-    pub mod infinite;
-    pub mod repeating_mesh;
-    pub mod polynomial;
-    pub mod cone;
-    pub mod disc;
-    pub mod algebraic;
-    pub mod polygon;
-    pub mod revolution;
-    pub mod sweep;
-    pub mod blob;
-    pub mod implicit;
-    pub mod julia;
-    pub mod tessellated;
-    pub mod text;
-}
-mod octree;
-mod bvh;
-mod scenegraph;
-mod scene;
-mod scenefile;
-mod nff;
-mod tungsten;
-mod scenefile_shapes;
-mod skysphere;
-mod ocean;
-mod camera;
-mod trace;
-mod rendercontext;
-mod paint;
-mod output;
-mod compare;
-mod depth;
-//mod wireframe;
-mod geometry;
-mod procedural {
-    pub mod box_terrain;
-    pub mod fireworks;
-    pub mod tree;
-    pub mod forest;
-    pub mod heightmap;
-    pub mod grass;
-    pub mod rock;
-    pub mod nubis_clouds;
-    pub mod hogan_kew_cirrus;
-    pub mod benard_altocumulus;
-    pub mod lenticular;
-    pub mod terrain;
-    pub mod mammatus;
-    pub mod precipitation;
-    pub mod harris_cumulus;
-}
-mod participatingmedia;
-mod noise;
-mod terrain;
-mod expr;
-mod volume;
-mod glare;
-mod planet;
-
-use crate::trace::trace;
-use crate::rendercontext::RenderContext;
-use std::sync::{Arc, Mutex};
+use rays::{compare, depth, output, paint, rendercontext, scenefile};
+use rays::rendercontext::RenderContext;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use rand::thread_rng;
-use rand::seq::SliceRandom;
 
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
@@ -199,7 +79,44 @@ fn peak_memory() -> Option<u64> {
     None
 }
 
+/// rays serve: run as a render server, and host the scene builder
+#[derive(Parser, Debug)]
+#[command(name = "rays serve", about = "Serve the scene builder, and render layers for it over HTTP", long_about = None)]
+struct ServeArgs {
+    ///Port to listen on
+    #[arg(long, default_value_t = 8787)]
+    port: u16,
+
+    ///Address to listen on. The default is this machine only; 0.0.0.0 listens on every
+    ///network interface, for other machines to use this one. There is no authentication
+    #[arg(long, default_value = "127.0.0.1")]
+    bind: String,
+
+    ///Directory to serve files from, and that scenes' asset paths are relative to
+    #[arg(long, default_value = ".")]
+    root: String,
+
+    ///Origin of a page allowed to call the render API, eg. https://user.github.io. May be
+    ///repeated. Pages served from this machine are always allowed
+    #[arg(long)]
+    allow_origin: Vec<String>,
+}
+
 fn main() {
+    // `rays serve ...` is a different program from `rays <scene>`: it has its own options.
+    if std::env::args().nth(1).as_deref() == Some("serve") {
+        let a = ServeArgs::parse_from(std::env::args().skip(1));
+        if let Err(e) = std::env::set_current_dir(&a.root) {
+            eprintln!("Can't use {} as the root: {}", a.root, e);
+            std::process::exit(1);
+        }
+        let root = std::env::current_dir().unwrap();
+        if let Err(e) = rays::server::serve(rays::server::Options { bind: a.bind, port: a.port, root, allow_origins: a.allow_origin }) {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
     let args = Args::parse();
 
     println!("{}",

@@ -18,6 +18,9 @@ Cargo.lock
 # Reference renders fetched by scripts/fetch-references.sh
 /references/
 
+# The browser preview's WebAssembly build (web/build.sh)
+/web/rays.wasm
+
 # Simulation states cached by harris_cumulus scenes, and animation frames
 .cumulus-cache/
 /demo/scenes/*-frames/

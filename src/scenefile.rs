@@ -1094,6 +1094,23 @@ impl SceneFile {
             return Some(Box::new(metal));
         }
 
+        if t == "sea" {
+            // The open sea on the planet (see `material::sea`): `wind` ([x, z], m/s), `resolved`
+            // (the share of the slope in resolved waves), `time`, `seed`, `water` (the colour
+            // the water body sends back), and `"flat": true` off the planet.
+            let flat = o["flat"].as_bool() == Some(true);
+            let center = (!flat).then(|| Vector3::new(0., -SceneFile::parse_number(&o["earth_radius"], EARTH_RADIUS), 0.));
+            let mut sea = crate::material::sea::Sea::new(
+                SceneFile::parse_vec2_def(o, "wind", Vector2::new(7., 2.)),
+                SceneFile::parse_number(&o["resolved"], 0.5),
+                SceneFile::parse_number(&o["time"], 0.),
+                SceneFile::parse_int(&o["seed"], 0) as u64,
+                center,
+            );
+            sea.water = SceneFile::parse_color_def(o, "water", sea.water);
+            return Some(Box::new(sea));
+        }
+
         if t == "lambertian" {
             let d:Lambertian = Lambertian {
                 albedo:SceneFile::parse_color(&o["albedo"]), 

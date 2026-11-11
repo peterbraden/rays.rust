@@ -160,7 +160,7 @@ fn dispersion(k: Vector2<f64>, gravity: f64) -> f64 {
 }
 
 /// h̃0(k) for every k on the N x N grid, row-major with rows along z.
-fn create_amplitude_tile(
+pub(crate) fn create_amplitude_tile(
         wind: Vector2<f64>,
         scale: f64,
         gravity: f64,

@@ -1,0 +1,89 @@
+{
+  "width": 960,
+  "height": 600,
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 64,
+  "path_termination": "russian_roulette",
+  "camera": {
+    "location": [
+      5000,
+      2,
+      -26000
+    ],
+    "lookat": [
+      3500,
+      3600,
+      0
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.6
+  },
+  "sun": {
+    "intensity": 4.9
+  },
+  "objects": [
+    {
+      "type": "ocean",
+      "curved": true,
+      "wind": [
+        7,
+        2
+      ],
+      "detail_center": [
+        5000,
+        -26000
+      ]
+    },
+    {
+      "type": "mountains",
+      "peak": [
+        -1500,
+        0
+      ],
+      "seed": 3,
+      "extent": 60000,
+      "resolution": 1280,
+      "base": -60
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        1,
+        0.22,
+        0.35
+      ]
+    },
+    {
+      "type": "lenticular",
+      "ridge": [
+        0,
+        0
+      ],
+      "ridge_length": 800,
+      "wind_direction": [
+        1,
+        0
+      ],
+      "albedo": [
+        0.99,
+        0.99,
+        0.99
+      ],
+      "similarity_after": 4,
+      "seed": 1,
+      "falloff": 3500,
+      "spread": 0.08,
+      "wavelength": 13000,
+      "amplitude": 560,
+      "oz": true,
+      "first_crest": 0.4
+    }
+  ]
+}

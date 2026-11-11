@@ -44,6 +44,9 @@
 //!
 //! ## Layout
 //!
+//! Large subtrees are built in parallel: once a node's items are partitioned, its two children
+//! are independent (pbrt-v4's `BVHAggregate` does the same).
+//!
 //! Nodes are a flat `Vec` in depth-first order: an interior node's first child is the next node,
 //! and it records only where its second child is. A leaf records a run of items, which are
 //! reordered at build time so every leaf's items are contiguous (PBR section 7.3.4, "Compact BVH
@@ -64,11 +67,14 @@ use crate::shapes::geometry::Geometry;
 use crate::shapes::bbox::BBox;
 use std::mem::MaybeUninit;
 use std::ops::Range;
+use rayon::prelude::*;
 
 /// Buckets tried along the split axis.
 const BINS: usize = 16;
-/// The cost of visiting a node, relative to intersecting an item.
-const TRAVERSAL_COST: f64 = 0.125;
+/// The cost of visiting a node, relative to intersecting an item: pbrt-v4's value. At 0.125
+/// (pbrt-v3's) splitting nearly always looked cheaper than a leaf, so most leaves held one
+/// triangle, and a 518k-triangle mesh had about 960k nodes.
+const TRAVERSAL_COST: f64 = 0.5;
 /// Leaves never hold more than this many items (unless they can't be split at all, eg. all
 /// centroids coincide), whatever the heuristic says.
 const MAX_LEAF: usize = 8;
@@ -83,6 +89,9 @@ const MAX_HEURISTIC_DEPTH: usize = 64;
 /// Traversal pushes at most one node per level (and the root): deep enough for any tree `build`
 /// makes.
 const STACK_SIZE: usize = MAX_HEURISTIC_DEPTH + 34;
+/// The parallel build splits the tree into subtrees of fewer than this many items (or a 64th
+/// of the items, if that is more).
+const PARALLEL_BUILD: usize = 4096;
 
 #[derive(Clone, Copy, Debug)]
 struct Node {
@@ -147,30 +156,105 @@ fn surface_area(b: &BBox) -> f64 {
 impl Bvh {
     /// Build a tree over `items`, returning it with the items reordered into leaf order: the
     /// indices the tree passes to callers index the returned `Vec`.
-    pub fn build<T>(items: Vec<T>, bounds_of: impl Fn(&T) -> BBox) -> (Bvh, Vec<T>) {
-        let bounds: Vec<BBox> = items.iter().map(&bounds_of).collect();
+    pub fn build<T: Sync>(items: Vec<T>, bounds_of: impl Fn(&T) -> BBox + Sync) -> (Bvh, Vec<T>) {
+        let bounds: Vec<BBox> = items.par_iter().map(&bounds_of).collect();
         let centroids: Vec<Vector3<f64>> = bounds.iter().map(|b| b.mid()).collect();
         let mut order: Vec<usize> = (0 .. items.len()).collect();
-        let mut nodes = Vec::with_capacity(2 * items.len());
-        if !items.is_empty() {
-            Bvh::build_node(&mut nodes, &bounds, &centroids, &mut order, 0, 0);
-        }
+        let nodes = if items.is_empty() { Vec::new() } else { Bvh::build_parallel(&bounds, &centroids, &mut order) };
 
         // Permute the items into leaf order.
         let mut slots: Vec<Option<T>> = items.into_iter().map(Some).collect();
         let items = order.iter().map(|&i| slots[i].take().unwrap()).collect();
-        nodes.shrink_to_fit();
         (Bvh { nodes }, items)
+    }
+
+    /// Build the tree in three phases, so that each node is copied at most once and the tree is
+    /// the same as a sequential build's:
+    ///
+    /// 1. Partition the top of the tree, sequentially, until every part has fewer than
+    ///    `task_size` items: these are independent subtrees, each a contiguous run of `order`.
+    /// 2. Build the subtrees in parallel, each into a `Vec` of its own.
+    /// 3. Lay out the top nodes depth first, splicing each subtree in where it belongs and
+    ///    shifting its interior nodes' offsets.
+    fn build_parallel(bounds: &[BBox], centroids: &[Vector3<f64>], order: &mut [usize]) -> Vec<Node> {
+        enum Top { Split(BBox, Box<Top>, Box<Top>), Subtree(usize) }
+        // (first, len, depth) of each subtree's run of `order`, in order.
+        fn partition_top(bounds: &[BBox], centroids: &[Vector3<f64>], order: &mut [usize], first: usize, depth: usize, task_size: usize, runs: &mut Vec<(usize, usize, usize)>) -> Top {
+            if order.len() >= task_size
+                && let (node_bounds, Some(mid)) = Bvh::partition(bounds, centroids, order, depth) {
+                let (left, right) = order.split_at_mut(mid);
+                let l = partition_top(bounds, centroids, left, first, depth + 1, task_size, runs);
+                let r = partition_top(bounds, centroids, right, first + mid, depth + 1, task_size, runs);
+                return Top::Split(node_bounds, Box::new(l), Box::new(r));
+            }
+            runs.push((first, order.len(), depth));
+            Top::Subtree(runs.len() - 1)
+        }
+        fn lay_out(top: Top, subtrees: &mut [Vec<Node>], nodes: &mut Vec<Node>) {
+            match top {
+                Top::Split(b, l, r) => {
+                    let index = nodes.len();
+                    nodes.push(Node { bounds: b, offset: 0, count: 0 });
+                    lay_out(*l, subtrees, nodes);
+                    nodes[index].offset = nodes.len() as u32;
+                    lay_out(*r, subtrees, nodes);
+                },
+                Top::Subtree(i) => {
+                    let base = nodes.len() as u32;
+                    nodes.extend(std::mem::take(&mut subtrees[i]).into_iter().map(|mut n| {
+                        if n.count == 0 { n.offset += base }
+                        n
+                    }));
+                },
+            }
+        }
+
+        let task_size = (order.len() / 64).max(PARALLEL_BUILD);
+        let mut runs = Vec::new();
+        let top = partition_top(bounds, centroids, order, 0, 0, task_size, &mut runs);
+
+        // The runs tile `order`, so it splits into one disjoint slice per subtree.
+        let mut slices = Vec::with_capacity(runs.len());
+        let mut rest = &mut *order;
+        for &(_, len, _) in &runs {
+            let (slice, tail) = rest.split_at_mut(len);
+            slices.push(slice);
+            rest = tail;
+        }
+        let mut subtrees: Vec<Vec<Node>> = slices.into_par_iter().zip(runs.par_iter()).map(|(slice, &(first, _, depth))| {
+            let mut sub = Vec::new();
+            Bvh::build_node(&mut sub, bounds, centroids, slice, first, depth);
+            sub.shrink_to_fit();
+            sub
+        }).collect();
+
+        let mut nodes = Vec::with_capacity(subtrees.iter().map(|s| s.len()).sum::<usize>() + runs.len());
+        lay_out(top, &mut subtrees, &mut nodes);
+        nodes
     }
 
     /// Build the node for `order[..]` (which starts at `first` in the full order), and its
     /// subtree, appending them to `nodes`.
     fn build_node(nodes: &mut Vec<Node>, bounds: &[BBox], centroids: &[Vector3<f64>], order: &mut [usize], first: usize, depth: usize) {
-        let node_bounds = order.iter().fold(BBox::empty(), |b, &i| b.union(&bounds[i]));
+        let (node_bounds, mid) = Bvh::partition(bounds, centroids, order, depth);
         let index = nodes.len();
         nodes.push(Node { bounds: node_bounds, offset: first as u32, count: order.len() as u32 });
+        let Some(mid) = mid else { return };
+        let (left, right) = order.split_at_mut(mid);
+        Bvh::build_node(nodes, bounds, centroids, left, first, depth + 1);
+        let second = nodes.len();
+        Bvh::build_node(nodes, bounds, centroids, right, first + mid, depth + 1);
+        nodes[index].offset = second as u32;
+        nodes[index].count = 0;
+    }
+
+    /// The bounds of `order`'s items and, if they should be split, where: `order` is
+    /// partitioned so the first `mid` items go to one child and the rest to the other. `depth` is
+    /// the node's depth in the tree.
+    fn partition(bounds: &[BBox], centroids: &[Vector3<f64>], order: &mut [usize], depth: usize) -> (BBox, Option<usize>) {
+        let node_bounds = order.iter().fold(BBox::empty(), |b, &i| b.union(&bounds[i]));
         if order.len() <= 1 {
-            return;
+            return (node_bounds, None);
         }
 
         let centroid_bounds = order.iter().fold(BBox::empty(), |b, &i| b.union_point(&centroids[i]));
@@ -179,15 +263,15 @@ impl Bvh {
         let (lo, width) = (centroid_bounds.min[axis], extent[axis]);
         if width.is_nan() || width <= 0. {
             // Every centroid is in the same place: no split separates anything.
-            return;
+            return (node_bounds, None);
         }
         if depth >= MAX_HEURISTIC_DEPTH {
             if order.len() > MAX_LEAF {
                 let mid = order.len() / 2;
                 order.select_nth_unstable_by(mid, |&a, &b| centroids[a][axis].total_cmp(&centroids[b][axis]));
-                Bvh::split_at(nodes, bounds, centroids, order, first, depth, index, mid);
+                return (node_bounds, Some(mid));
             }
-            return;
+            return (node_bounds, None);
         }
         let bin_of = |i: usize| (((centroids[i][axis] - lo) / width * BINS as f64) as usize).min(BINS - 1);
 
@@ -218,7 +302,7 @@ impl Bvh {
         let area = surface_area(&node_bounds);
         let split_cost = TRAVERSAL_COST + if area > 0. { best / area } else { 0. };
         if order.len() <= MAX_LEAF && split_cost >= order.len() as f64 {
-            return;
+            return (node_bounds, None);
         }
 
         // Partition: bins up to `split` first. Both sides are non-empty, as the lowest and highest
@@ -230,19 +314,7 @@ impl Bvh {
                 mid += 1;
             }
         }
-        Bvh::split_at(nodes, bounds, centroids, order, first, depth, index, mid);
-    }
-
-    /// Make node `index` an interior node, its children holding `order[..mid]` and `order[mid..]`.
-    #[allow(clippy::too_many_arguments)]
-    fn split_at(nodes: &mut Vec<Node>, bounds: &[BBox], centroids: &[Vector3<f64>], order: &mut [usize],
-                first: usize, depth: usize, index: usize, mid: usize) {
-        let (left, right) = order.split_at_mut(mid);
-        Bvh::build_node(nodes, bounds, centroids, left, first, depth + 1);
-        let second = nodes.len();
-        Bvh::build_node(nodes, bounds, centroids, right, first + mid, depth + 1);
-        nodes[index].offset = second as u32;
-        nodes[index].count = 0;
+        (node_bounds, Some(mid))
     }
 
     pub fn bounds(&self) -> BBox {
@@ -533,5 +605,29 @@ mod tests {
         let r = Ray { ro: Vector3::zeros(), rd: Vector3::new(0., 0., 1.) };
         assert!(bvh.nearest(&r, 0., f64::INFINITY, |_, _| unreachable!()).is_none());
         assert!(!bvh.any_hit(&r, 0., f64::INFINITY, |_| unreachable!()));
+    }
+
+    #[test]
+    fn test_parallel_build_matches_sequential() {
+        let items = spheres(20_000, 6);
+        assert!(items.len() >= 4 * PARALLEL_BUILD);
+        let bounds: Vec<BBox> = items.iter().map(|s| s.bounds()).collect();
+        let centroids: Vec<Vector3<f64>> = bounds.iter().map(|b| b.mid()).collect();
+        let mut order_p: Vec<usize> = (0 .. items.len()).collect();
+        let mut order_s = order_p.clone();
+        let parallel = Bvh::build_parallel(&bounds, &centroids, &mut order_p);
+        let mut sequential = Vec::new();
+        Bvh::build_node(&mut sequential, &bounds, &centroids, &mut order_s, 0, 0);
+        assert_eq!(order_p, order_s);
+        assert_eq!(format!("{:?}", parallel), format!("{:?}", sequential));
+        let many = Bvh::build(items.clone(), |s| s.bounds());
+        // And the joined tree is right: its offsets were shifted when the halves were joined.
+        let (bvh, built) = many;
+        let mut rng = StdRng::seed_from_u64(8);
+        for _ in 0 .. 500 {
+            let r = random_ray(&mut rng);
+            let found = bvh.nearest(&r, 0., f64::INFINITY, |i, _| built[i].intersects(&r)).map(|(_, x)| x.dist);
+            assert_eq!(found, brute_force(&items, &r, 0., f64::INFINITY), "{}", r);
+        }
     }
 }

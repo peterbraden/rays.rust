@@ -415,7 +415,8 @@ impl Geometry for Terrain {
             }
             hit.is_some()
         });
-        hit.map(|(t, normal)| RawIntersection {
+        hit.map(|(t, normal)| RawIntersection { part: 0,
+            face: 0,
             dist: t * r.rd.norm(),
             point: r.ro + r.rd * t,
             normal,

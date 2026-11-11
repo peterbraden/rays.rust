@@ -1,0 +1,23 @@
+{
+  "width": 960,
+  "height": 480,
+  "supersamples": 16,
+  "max_depth": 8,
+  "shadow_bias": 1,
+  "path_termination": "russian_roulette",
+  "materials": {
+    "GROUND": { "type": "lambertian", "albedo": [0.06, 0.09, 0.15] }
+  },
+  "camera": {
+    "location": [0, 400000, 0],
+    "lookat": [0, 40000, 1000000],
+    "up": [0, 1, 0],
+    "angle": 0.15,
+    "aperture": 0
+  },
+  "sun": { "intensity": 6 },
+  "objects": [
+    { "type": "planet", "material": "GROUND" },
+    { "type": "skysphere", "sun_direction": [0, -0.30, 0.95] }
+  ]
+}

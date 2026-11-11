@@ -23,6 +23,8 @@ indicatif = "0.17.11"
 console = "0.15.11"
 approx = "0.5.1"
 nv-flip = "0.1.2"
+ttf-parser = "0.25"
+libc = "0.2"
 
 [profile.release]
 # Whole-program optimisation: inlining across crates (nalgebra, rustfft, rand) and modules.

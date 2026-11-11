@@ -208,7 +208,7 @@ impl Geometry for Triangle {
     }
 
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        intersects_dist(self.v0, self.v1, self.v2, r).map(|x| RawIntersection {
+        intersects_dist(self.v0, self.v1, self.v2, r).map(|x| RawIntersection { face: 0, part: 0,
                 dist: x.dist, 
                 point: x.point,
                 normal: self.normal 
@@ -303,7 +303,7 @@ pub(crate) fn triangle_bounds(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f6
 
 impl Geometry for SmoothTriangle {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
-        intersects_dist(self.v0, self.v1, self.v2, r).map(|x| RawIntersection {
+        intersects_dist(self.v0, self.v1, self.v2, r).map(|x| RawIntersection { face: 0, part: 0,
                 dist: x.dist, 
                 point: x.point,
                 normal: self.interpolate_normal(&x) 

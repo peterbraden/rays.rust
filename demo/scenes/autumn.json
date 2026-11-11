@@ -1,0 +1,86 @@
+{
+  "width": 1200,
+  "height": 600,
+
+  "supersamples": 32,
+  "chunk_size": 64,
+  "samples_per_chunk": 2,
+  "shadow_bias": 0.0001,
+  "max_depth": 4,
+
+  "background": { "type": "gradient", "bottom": [0.95, 0.9, 0.85], "top": [0.45, 0.58, 0.85] },
+
+  "variables": {
+    "ASPEN": ["ASPEN_LEAF_1", "ASPEN_LEAF_2"],
+    "OAK": ["OAK_LEAF_1", "OAK_LEAF_2"],
+    "NEEDLES": ["NEEDLE_1", "NEEDLE_2"]
+  },
+
+  "materials": {
+    "BARK_BASE": { "type": "lambertian", "albedo": [0.26, 0.21, 0.17] },
+    "BARK": { "type": "noise", "base_material": "BARK_BASE", "noise_type": "fbm", "octaves": 4,
+      "scale": 2.5, "color": [0.42, 0.43, 0.36], "blend_factor": 0.6 },
+    "PALE_BARK_BASE": { "type": "lambertian", "albedo": [0.66, 0.65, 0.58] },
+    "PALE_BARK": { "type": "noise", "base_material": "PALE_BARK_BASE", "noise_type": "fbm", "octaves": 4,
+      "scale": 3, "color": [0.12, 0.11, 0.1], "blend_factor": 0.45 },
+    "DEAD_WOOD": { "type": "lambertian", "albedo": [0.55, 0.53, 0.5] },
+
+    "ASPEN_LEAF_1": { "type": "leaf", "reflectance": [0.12, 0.22, 0.04], "transmittance": [0.09, 0.22, 0.02] },
+    "ASPEN_LEAF_2": { "type": "leaf", "reflectance": [0.15, 0.22, 0.04], "transmittance": [0.13, 0.22, 0.02],
+      "autumn": { "reflectance": [0.48, 0.33, 0.04], "transmittance": [0.36, 0.24, 0.02] } },
+    "TUPELO_LEAF": { "type": "leaf", "reflectance": [0.08, 0.17, 0.04], "transmittance": [0.05, 0.15, 0.02],
+      "autumn": { "reflectance": [0.45, 0.24, 0.03], "transmittance": [0.35, 0.16, 0.02] },
+      "autumn_sun": { "reflectance": [0.42, 0.06, 0.05], "transmittance": [0.36, 0.03, 0.02] } },
+    "OAK_LEAF_1": { "type": "leaf", "reflectance": [0.06, 0.14, 0.03], "transmittance": [0.04, 0.12, 0.01],
+      "autumn": { "reflectance": [0.35, 0.18, 0.05], "transmittance": [0.2, 0.08, 0.02] },
+      "autumn_sun": { "reflectance": [0.36, 0.1, 0.05], "transmittance": [0.22, 0.05, 0.02] } },
+    "OAK_LEAF_2": { "type": "leaf", "reflectance": [0.07, 0.15, 0.03], "transmittance": [0.05, 0.13, 0.01],
+      "autumn": { "reflectance": [0.38, 0.24, 0.06], "transmittance": [0.22, 0.12, 0.02] } },
+    "WILLOW_LEAF": { "type": "leaf", "reflectance": [0.15, 0.24, 0.06], "transmittance": [0.12, 0.24, 0.03],
+      "autumn": { "reflectance": [0.4, 0.36, 0.06], "transmittance": [0.32, 0.3, 0.03] } },
+    "SHRUB_LEAF": { "type": "leaf", "reflectance": [0.08, 0.16, 0.04], "transmittance": [0.05, 0.14, 0.02],
+      "autumn": { "reflectance": [0.4, 0.08, 0.06], "transmittance": [0.3, 0.03, 0.02] },
+      "autumn_sun": { "reflectance": [0.38, 0.04, 0.1], "transmittance": [0.3, 0.02, 0.06] } },
+    "NEEDLE_1": { "type": "leaf", "reflectance": [0.04, 0.09, 0.04], "transmittance": [0.01, 0.04, 0.01], "roughness": 0.2 },
+    "NEEDLE_2": { "type": "leaf", "reflectance": [0.05, 0.11, 0.04], "transmittance": [0.02, 0.05, 0.01], "roughness": 0.2 },
+    "GROUND": { "type": "lambertian", "albedo": [0.33, 0.3, 0.16] }
+  },
+
+  "camera": {
+    "location": [0, 5, -62],
+    "lookat": [0, 8.5, 0],
+    "up": [0, 1, 0],
+    "angle": 0.5,
+    "aperture": 0.0
+  },
+
+  "lights": [
+    { "location": [-260, 160, 140], "color": [1, 0.88, 0.72], "intensity": 380000 }
+  ],
+
+  "objects": [
+    { "type": "tree", "species": "california-black-oak", "seed": 2, "location": [-22, 0, 12], "bark": "BARK", "dead_bark": "DEAD_WOOD", "leaves": "$OAK",
+      "params": { "autumn": 0.55, "dead_branches": 0.08 } },
+    { "type": "tree", "species": "california-black-oak", "seed": 7, "location": [-42, 0, 40], "bark": "BARK", "leaves": "$OAK",
+      "params": { "autumn": 0.95, "leaf_fall": 0.35 } },
+    { "type": "tree", "species": "balsam-fir", "seed": 1, "location": [-8, 0, 34], "bark": "BARK", "leaves": "$NEEDLES" },
+    { "type": "tree", "species": "norway-spruce", "seed": 4, "location": [-15, 0, 44], "bark": "BARK", "leaves": "$NEEDLES" },
+    { "type": "tree", "species": "quaking-aspen", "seed": 3, "location": [5, 0, 6], "bark": "PALE_BARK", "leaves": "$ASPEN",
+      "params": { "autumn": 0.5 } },
+    { "type": "tree", "species": "quaking-aspen", "seed": 5, "location": [-1, 0, 13], "bark": "PALE_BARK", "leaves": "$ASPEN",
+      "params": { "autumn": 0.7 } },
+    { "type": "tree", "species": "lombardy-poplar", "seed": 1, "location": [30, 0, 8], "bark": "BARK", "leaves": "$ASPEN",
+      "params": { "autumn": 0.45 } },
+    { "type": "tree", "species": "quaking-aspen", "seed": 9, "location": [38, 0, 32], "bark": "PALE_BARK", "dead_bark": "DEAD_WOOD",
+      "params": { "dead_branches": 1, "dead_leaves": 0 } },
+    { "type": "tree", "species": "weeping-willow", "seed": 3, "location": [17, 0, 14], "bark": "BARK", "leaves": "WILLOW_LEAF",
+      "params": { "autumn": 0.35 } },
+    { "type": "tree", "species": "black-tupelo", "seed": 1, "location": [-34, 0, 30], "bark": "BARK", "leaves": "TUPELO_LEAF",
+      "params": { "autumn": 0.5 } },
+    { "type": "tree", "species": "shrub", "seed": 1, "location": [10, 0, -14], "bark": "BARK", "leaves": "SHRUB_LEAF",
+      "params": { "autumn": 0.5 } },
+    { "type": "tree", "species": "shrub", "seed": 2, "location": [-9, 0, -16], "bark": "BARK", "leaves": "SHRUB_LEAF",
+      "params": { "autumn": 0.4, "leaf_scale": 0.09, "stems": [{}, { "branches": 30 }] } },
+    { "type": "plane", "y": 0, "material": "GROUND" }
+  ]
+}

@@ -152,6 +152,17 @@ impl NoiseTexture {
         }
     }
 
+    /// Re-seed the noise generators, so the same scene can give different patterns. Worley
+    /// noise takes the seed's low 32 bits.
+    pub fn seeded(mut self, seed: u64) -> Self {
+        self.perlin = PerlinNoise::with_seed(seed);
+        self.worley = self.worley.map(|w| w.reseeded(seed as u32));
+        if let NoiseType::Worley { seed: s, .. } = &mut self.noise_type {
+            *s = seed as u32;
+        }
+        self
+    }
+
     /// Generate turbulence value at a point
     fn turbulence(&self, p: Vector3<f64>, octaves: u32) -> f64 {
         let mut value = 0.0;
@@ -255,7 +266,7 @@ mod tests {
             "materials": {}, "media": {}, "objects": [], "variables": {},
             "lights": [ { "location": [0, 10, 0], "intensity": 314.1592653589793 } ]
         }"#.to_string());
-        let i = Intersection {
+        let i = Intersection { face: 0, part: 0,
             dist: 1.,
             point: Vector3::new(0., 0., 0.),
             normal: Vector3::new(0., 1., 0.),

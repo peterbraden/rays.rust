@@ -1047,7 +1047,8 @@ impl SceneFile {
     ///
     /// with `ground`, `cell_size` (of the shafts), `fall_depth` (m to 1/e by evaporation:
     /// virga; by default it all reaches the ground), `shear` (drift per metre fallen) and
-    /// `wind_direction` ([x, z]), `streak_size` and `streakiness` (0 to 1), and `fade` (the
+    /// `wind_direction` ([x, z]), `streak_size` and `streakiness` (0 to 1), `base_variation` (how
+    /// far below the base, varying, the drops emerge from the cloud), and `fade` (the
     /// fraction of `radius` over which it fades out). The phase function defaults to `g` 0.85;
     /// `"rainbow": true` gives the drops' bows in sunlight.
     pub fn parse_precipitation(o: &Value) -> SceneObject {
@@ -1062,6 +1063,7 @@ impl SceneFile {
         r.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", r.wind_direction).normalize();
         r.streak_size = num("streak_size", r.streak_size).max(1.);
         r.streakiness = num("streakiness", r.streakiness).clamp(0., 1.);
+        r.base_variation = num("base_variation", r.base_variation).max(0.);
         r.center = SceneFile::parse_vec2_def(o, "center", r.center);
         r.radius = num("radius", r.radius).max(1.);
         r.fade = num("fade", r.fade).clamp(0., 1.);
@@ -1085,11 +1087,13 @@ impl SceneFile {
     /// The anvil covers the sky where the distance along `edge_direction` is under
     /// `edge_distance`, give or take `edge_raggedness`, thinning over `edge_taper`. Its base
     /// can undulate (`base_variation` m over `base_size`), sag towards the core (`sag` m,
-    /// reached `sag_distance` in from the edge) and thicken softly (`base_softness` m). The pouches:
+    /// reached `sag_distance` in from the edge) and thicken softly (`base_softness` m), and its
+    /// flat top rise and fall (`top_variation` m). The pouches:
     /// `pouch_size` (apart), `pouch_depth`, `coverage` (fraction of cells with one), `regularity`, `clustering` (0 to 1)
     /// and `cluster_size`,
     /// `pouch_band` (how far in from the edge they hang deepest), `edge_sharpness` and
-    /// `roughness` (m) and `detail_size`. Extinctions: `anvil_density` and `pouch_density`.
+    /// `roughness` (m) and `detail_size`. Extinctions: `anvil_density` and `pouch_density`. With
+    /// `fade` (a fraction of `extent`), the sheet rounds off and fades out within its extent.
     /// `mapping` as for `nubis_clouds`.
     pub fn parse_mammatus(o: &Value) -> SceneObject {
         let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
@@ -1101,6 +1105,7 @@ impl SceneFile {
         m.sag = num("sag", m.sag).max(0.);
         m.sag_distance = num("sag_distance", m.sag_distance).max(1.);
         m.base_softness = num("base_softness", m.base_softness).max(0.);
+        m.top_variation = num("top_variation", m.top_variation).max(0.);
         m.anvil_density = num("anvil_density", m.anvil_density).max(0.);
         m.pouch_density = num("pouch_density", m.pouch_density).max(0.);
         m.pouch_size = num("pouch_size", m.pouch_size).max(1.);
@@ -1119,6 +1124,8 @@ impl SceneFile {
         m.pouch_band = num("pouch_band", m.pouch_band).max(1.);
         let center = SceneFile::parse_vec2_def(o, "center", Vector2::zeros());
         let extent = num("extent", 60_000.);
+        (m.center, m.extent) = (center, extent.max(1.));
+        m.fade = num("fade", m.fade).clamp(0., 1.);
         let bounds = BBox::new(
             Vector3::new(center.x - extent, m.bottom(), center.y - extent),
             Vector3::new(center.x + extent, m.top(), center.y + extent),
@@ -1240,7 +1247,8 @@ impl SceneFile {
     /// `procedural::hogan_kew_cirrus`), filling `extent` either side of `center` ([x, z]):
     ///
     /// `{"type": "hogan_kew_cirrus", "genus": "cirrus" | "cirrostratus" | "cirrocumulus",
-    /// "base": 8000, "top": 10000, "extent": 100000, "wind_direction": [x, z], "seed": 0}`
+    /// "base": 8000, "top": 10000, "wind_direction": [x, z], "seed": 0}`, filling `extent` either
+    /// side of `center` (by default out to the layer's horizon, about 357 km for a 10 km top)
     ///
     /// The genus sets the rest, each of which can be overridden: `coverage`, `cell_size`,
     /// `spectral_slope`, `anisotropy` (the generating cells); `density`, `generating_depth`,
@@ -1302,7 +1310,11 @@ impl SceneFile {
         c.particle_growth = num("particle_growth", c.particle_growth);
         c.young_size = num("young_size", c.young_size).clamp(0.05, 1.);
         c.patch_size = num("patch_size", c.patch_size);
-        let extent = num("extent", 100000.);
+        // By default the layer reaches its own horizon, √(2 R top), so it runs down into the
+        // haze there rather than stopping short in clear sky (a 9 km deck stays above the horizon
+        // out to 340 km).
+        let horizon = (2. * SceneFile::parse_number(&o["earth_radius"], EARTH_RADIUS) * top + top * top).sqrt();
+        let extent = num("extent", horizon);
         let center = SceneFile::parse_vec2_def(o, "center", Vector2::new(0., 0.));
         c.extent = extent;
         c.center = center;

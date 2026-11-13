@@ -99,19 +99,20 @@ impl Filter {
 }
 
 impl RenderOpts {
-    /// Samples per pixel in each pass over the image: an n x n grid, n = samples_per_chunk.
+    /// Samples per pixel in each pass over the image: n x n, n = samples_per_chunk. Passes only
+    /// group the work; the samples themselves don't depend on them.
     pub fn samples_per_layer(&self) -> usize {
         self.samples_per_chunk.max(1).pow(2)
     }
 
-    /// Passes over the image needed to take at least `supersamples` samples per pixel.
+    /// Passes over the image needed to take `supersamples` samples per pixel.
     pub fn layers(&self) -> usize {
-        self.supersamples.max(1).div_ceil(self.samples_per_layer())
+        self.samples_per_pixel().div_ceil(self.samples_per_layer())
     }
 
-    /// Samples per pixel actually taken: `supersamples` rounded up to a whole number of layers.
+    /// Samples per pixel: `supersamples`, at least one.
     pub fn samples_per_pixel(&self) -> usize {
-        self.layers() * self.samples_per_layer()
+        self.supersamples.max(1)
     }
 }
 

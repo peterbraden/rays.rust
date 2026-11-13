@@ -139,3 +139,18 @@ mod tests {
         }
     }
 }
+
+/// Run `f`, which may use rayon, apart from the render's threads: on a thread of its own, with a
+/// thread pool of its own. Tables built lazily during a render (`OnceLock::get_or_init`) must be
+/// built so. Built on the render's pool, a thread waiting for the build's parallel work may take
+/// up another pixel's meanwhile, which then waits for the same, unfinished table: a deadlock.
+/// rayon's `install` on another pool doesn't help, as its caller also takes up work while it
+/// waits; a plain thread just waits.
+pub fn build_apart<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|scope| {
+        scope.spawn(|| match rayon::ThreadPoolBuilder::new().build() {
+            Ok(pool) => pool.install(f),
+            Err(_) => f(),
+        }).join().unwrap()
+    })
+}

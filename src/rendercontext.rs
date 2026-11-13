@@ -25,6 +25,40 @@ pub struct RenderContext {
     pub progressive_render: bool,
     pub samples_rendered: u64,
     pub output_filename: String,
+    /// Samples carried over from a saved state (see `load_state`).
+    pub resumed_samples: u64,
+}
+
+/// A render's saved state begins with this, then the key of what it is a render of, its width
+/// and height, then each pixel's summed colour (three f64s) and number of samples (a u64), all
+/// little-endian. The sums are kept exactly, so a resumed render is the same, bit for bit, as
+/// one that ran straight through.
+const STATE_MAGIC: &[u8; 8] = b"RAYSACC2";
+
+/// What a render's samples depend on, besides how many there are: a hash of the scene file's
+/// contents (all but its `supersamples`, so more can be asked for later) and of the overrides
+/// of its size and seed. A saved state is resumed only for the same key, so editing the scene
+/// starts the render afresh. Files the scene refers to (meshes, cached simulations) and the
+/// renderer itself aren't covered: after changing those, render with --fresh.
+pub fn render_key(scene: &str, overrides: (Option<usize>, Option<usize>, Option<u64>)) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    match serde_json::from_str::<serde_json::Value>(scene) {
+        Ok(mut v) => {
+            if let Some(o) = v.as_object_mut() {
+                o.remove("supersamples");
+            }
+            v.to_string().hash(&mut h);
+        },
+        Err(_) => scene.hash(&mut h),
+    }
+    overrides.hash(&mut h);
+    h.finish()
+}
+
+/// Where a render's state is saved: alongside its image, as `<image>.accum`.
+pub fn state_path_for(output: &str) -> String {
+    format!("{}.accum", output)
 }
 
 pub struct RenderIterator {
@@ -42,8 +76,11 @@ pub struct RenderableChunk {
     pub xmax: usize,
     pub ymin: usize,
     pub ymax: usize,
-    pub supersamples: usize,
-    /// Which pass over the image this chunk belongs to.
+    /// The samples each pixel takes: `samples` of them, from number `first_sample`.
+    pub first_sample: usize,
+    pub samples: usize,
+    /// Which region of the image this is, and which of that region's passes.
+    pub region: usize,
     pub layer: usize,
 }
 
@@ -83,7 +120,50 @@ impl RenderContext {
             progressive_render,
             samples_rendered: 0,
             output_filename,
+            resumed_samples: 0,
         }
+    }
+
+    /// The fewest samples any pixel has.
+    pub fn min_samples(&self) -> usize {
+        self.samples.iter().copied().min().unwrap_or(0)
+    }
+
+    /// The accumulated samples, encoded as a state file for a render identified by `key`.
+    pub fn encode_state(&self, key: u64) -> Vec<u8> {
+        let mut out = Vec::with_capacity(32 + self.image.len() * 32);
+        out.extend_from_slice(STATE_MAGIC);
+        for v in [key, self.width as u64, self.height as u64] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        for (c, n) in self.image.iter().zip(&self.samples) {
+            for v in [c.rgb.x, c.rgb.y, c.rgb.z] {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+            out.extend_from_slice(&(*n as u64).to_le_bytes());
+        }
+        out
+    }
+
+    /// Carry on from a saved state, if it is of this render (`key`, and the same size).
+    pub fn load_state(&mut self, path: &str, key: u64) -> Result<(), String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {}", path, e))?;
+        let pixels = self.width * self.height;
+        if bytes.len() != 32 + pixels * 32 || &bytes[..8] != STATE_MAGIC {
+            return Err(format!("{} is not a saved render of this size", path));
+        }
+        let u64_at = |i: usize| u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+        let f64_at = |i: usize| f64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+        if u64_at(8) != key || u64_at(16) != self.width as u64 || u64_at(24) != self.height as u64 {
+            return Err(format!("{} is of a different scene or settings", path));
+        }
+        for i in 0..pixels {
+            let o = 32 + i * 32;
+            self.image[i] = Color::new(f64_at(o), f64_at(o + 8), f64_at(o + 16));
+            self.samples[i] = u64_at(o + 24) as usize;
+        }
+        self.resumed_samples = self.samples.iter().map(|n| *n as u64).sum();
+        Ok(())
     }
 
     pub fn set_pixel(&mut self, x: usize, y: usize, c:Color, samples: usize) {
@@ -163,25 +243,35 @@ impl RenderContext {
     }
 
     pub fn progress_percentage(&self, s: &Scene) -> f64 {
-        (self.samples_rendered as f64 / (self.width * self.height * s.render.samples_per_pixel()) as f64) * 100.
+        ((self.resumed_samples + self.samples_rendered) as f64 / (self.width * self.height * s.render.samples_per_pixel()) as f64) * 100.
     }
 
+    /// The chunks still to render, pass by pass: each region of the image takes the samples
+    /// from those it already has up to the scene's `supersamples`, `samples_per_layer` at a
+    /// time.
     pub fn iter(&self, s: &Scene) -> impl Iterator<Item=RenderableChunk> + '_ {
-        let width = self.width;
-        let height = self.height;
-        let chunk_size = s.render.chunk_size;
-        let chunk_layers = s.render.layers();
-        let samples = s.render.samples_per_chunk.max(1);
-        (0 .. chunk_layers)
-                    .flat_map(move |layer| 
-                        RenderIterator {
-                            i: 0,
-                            layer,
-                            width,
-                            height,
-                            chunk_size,
-                            samples,
-                        })
+        let regions: Vec<RenderableChunk> = RenderIterator {
+            i: 0, layer: 0, width: self.width, height: self.height, chunk_size: s.render.chunk_size, samples: 0,
+        }.collect();
+        let target = s.render.samples_per_pixel();
+        let per_layer = s.render.samples_per_layer();
+        // Every pixel in a region has the same number of samples.
+        let have: Vec<usize> = regions.iter().map(|c| self.samples[c.ymin * self.width + c.xmin]).collect();
+        let layers = (0..regions.len()).map(|r| target.saturating_sub(have[r]).div_ceil(per_layer)).max().unwrap_or(0);
+        (0..layers).flat_map(move |layer| {
+            let regions = regions.clone();
+            let have = have.clone();
+            (0..regions.len()).filter_map(move |r| {
+                let first = have[r] + layer * per_layer;
+                (first < target).then(|| RenderableChunk {
+                    first_sample: first,
+                    samples: per_layer.min(target - first),
+                    region: r,
+                    layer,
+                    ..regions[r]
+                })
+            })
+        }).collect::<Vec<_>>().into_iter()
     }
 }
 
@@ -205,10 +295,14 @@ where
     if chunks.is_empty() {
         return;
     }
-    // Every layer covers the image with the same regions, in the same order.
-    let regions = chunks.len() / s.render.layers();
+    // Each region's chunks, in order: a region's passes must be added up in turn.
+    let regions = chunks.iter().map(|c| c.region).max().unwrap() + 1;
+    let mut by_region = vec![vec![]; regions];
+    for (i, c) in chunks.iter().enumerate() {
+        by_region[c.region].push(i);
+    }
     let next_chunk = AtomicUsize::new(0);
-    // The next layer due for each region, and finished chunks waiting for their turn.
+    // The next pass due for each region, and finished chunks waiting for their turn.
     let order = Mutex::new((vec![0usize; regions], HashMap::<usize, RenderedChunk>::new()));
 
     (0 .. rayon::current_num_threads()).into_par_iter().for_each(|_| loop {
@@ -223,10 +317,11 @@ where
             let mut order = order.lock().unwrap();
             let (next_layer, waiting) = &mut *order;
             waiting.insert(i, rendered);
-            let region = i % regions;
+            let region = chunks[i].region;
             let mut applied = false;
-            while let Some(r) = waiting.remove(&(next_layer[region] * regions + region)) {
-                ctx.apply_chunk(&chunks[next_layer[region] * regions + region], &r);
+            while let Some(&due) = by_region[region].get(next_layer[region]) {
+                let Some(r) = waiting.remove(&due) else { break };
+                ctx.apply_chunk(&chunks[due], &r);
                 next_layer[region] += 1;
                 applied = true;
             }
@@ -253,7 +348,7 @@ impl RenderableChunk {
         // order, so they are the same however the work is scheduled.
         let w = self.width();
         let results: Vec<(u64, usize, Color)> = (0 .. size).into_par_iter()
-            .map(|i| render_pixel(self.xmin + i % w, self.ymin + i / w, self.layer, self.supersamples, s))
+            .map(|i| render_pixel(self.xmin + i % w, self.ymin + i / w, self.first_sample, self.samples, s))
             .collect();
         for (cast, psamples, pixel) in results {
             pixels.push(pixel);
@@ -287,8 +382,10 @@ impl Iterator for RenderIterator {
                     xmax: x + self.chunk_size,
                     ymin: y,
                     ymax: y + self.chunk_size,
-                    supersamples: self.samples,
-                layer: self.layer,
+                    first_sample: 0,
+                    samples: self.samples,
+                    region: 0,
+                    layer: self.layer,
                 })
             } else {
                 // Increment down a row
@@ -299,8 +396,10 @@ impl Iterator for RenderIterator {
                     xmax: self.width,
                     ymin: y,
                     ymax: y + self.chunk_size,
-                    supersamples: self.samples,
-                layer: self.layer,
+                    first_sample: 0,
+                    samples: self.samples,
+                    region: 0,
+                    layer: self.layer,
                 })
             }
         } else if self.width - x > self.chunk_size {
@@ -310,7 +409,9 @@ impl Iterator for RenderIterator {
                 xmax: x + self.chunk_size,
                 ymin: y,
                 ymax: self.height,
-                supersamples: self.samples,
+                first_sample: 0,
+                samples: self.samples,
+                region: 0,
                 layer: self.layer,
             })
         } else {
@@ -320,41 +421,50 @@ impl Iterator for RenderIterator {
                 xmax: self.width,
                 ymin: y,
                 ymax: self.height,
-                supersamples: self.samples,
+                first_sample: 0,
+                samples: self.samples,
+                region: 0,
                 layer: self.layer,
             })
         }
     }
 }
 
-fn render_pixel(x: usize, y: usize, layer: usize, max_samples: usize, s: &Scene) -> (u64, usize, Color) {
-    // Every pixel and layer has its own random stream, so a render depends only on the seed,
-    // not on which thread renders which chunk.
-    let stream = ((layer * s.image.height + y) * s.image.width + x) as u64;
-    seed_rand(s.render.seed, stream);
+/// The R2 sequence's steps (M. Roberts, "The unreasonable effectiveness of quasirandom
+/// sequences", 2018): sample k of a pixel is jittered to (k a1, k a2) mod 1, offset by a random
+/// amount per pixel. Any number of samples is well spread over the pixel, and more can be added
+/// later, which a grid fixed in advance can't do.
+const R2: (f64, f64) = (0.754_877_666_246_692_7, 0.569_840_290_998_053_2);
+
+/// Samples `first` to `first + count` of pixel (x, y). Every sample has its own random stream,
+/// so a render depends only on the seed and how many samples it takes, not on which thread
+/// renders which chunk, nor on how the samples were split between passes or runs.
+fn render_pixel(x: usize, y: usize, first: usize, count: usize, s: &Scene) -> (u64, usize, Color) {
+    let pixels = (s.image.width * s.image.height) as u64;
+    let index = (y * s.image.width + x) as u64;
+    // This pixel's offset of the sequence.
+    seed_rand(s.render.seed ^ 0x9e37_79b9_7f4a_7c15, index);
+    let offset = (rand(), rand());
 
     let mut pixel = Color::black();
     let mut cast = 0;
-    let mut samples = 0;
-
-    // Monte-Carlo method: We sample many times and average.
-    for sx in 0..max_samples {
-        for sy in 0..max_samples {
-            let (rays_cast, c) = trace(
-                    &s.camera.get_ray(
-                        x as f64 / (s.image.width as f64),
-                        y as f64 / (s.image.height as f64),
-                        // Stratified jitter, so repeated layers sample new positions, warped
-                        // to the reconstruction filter, then measured from the pixel's corner.
-                        (0.5 + s.render.filter.sample((sx as f64 + rand()) / (max_samples as f64))) / (s.image.width as f64),
-                        (0.5 + s.render.filter.sample((sy as f64 + rand()) / (max_samples as f64))) / (s.image.height as f64))
-                    , 0, s);
-            cast += rays_cast;
-            pixel = pixel + c;
-            samples += 1;
-        }
+    for k in first..first + count {
+        seed_rand(s.render.seed, k as u64 * pixels + index);
+        let u = (offset.0 + k as f64 * R2.0).fract();
+        let v = (offset.1 + k as f64 * R2.1).fract();
+        let (rays_cast, c) = trace(
+                &s.camera.get_ray(
+                    x as f64 / (s.image.width as f64),
+                    y as f64 / (s.image.height as f64),
+                    // Jitter warped to the reconstruction filter, measured from the pixel's
+                    // corner.
+                    (0.5 + s.render.filter.sample(u)) / (s.image.width as f64),
+                    (0.5 + s.render.filter.sample(v)) / (s.image.height as f64))
+                , 0, s);
+        cast += rays_cast;
+        pixel = pixel + c;
     }
-    (cast, samples, pixel)
+    (cast, count, pixel)
 }
 
 #[cfg(test)]
@@ -388,8 +498,13 @@ mod tests {
 
     /// Render on all threads through `render`, as main does.
     fn render_parallel(seed: u64) -> Vec<Color> {
+        render_from(seed, 32, None).snapshot().pixels
+    }
+
+    /// As `render_parallel`, to `supersamples`, carrying on from a saved state.
+    fn render_from(seed: u64, supersamples: usize, state: Option<&[u8]>) -> RenderContext {
         let s = SceneFile::from_string(format!(r#"{{
-            "width": 24, "height": 16, "chunk_size": 2, "supersamples": 32, "samples_per_chunk": 1,
+            "width": 24, "height": 16, "chunk_size": 2, "supersamples": {}, "samples_per_chunk": 1,
             "seed": {}, "background": [0.3, 0.4, 0.5], "max_depth": 6,
             "path_termination": "russian_roulette", "russian_roulette_depth": 1,
             "camera": {{ "location": [0, 1, -5], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.5, "aperture": 0.1 }},
@@ -405,11 +520,61 @@ mod tests {
                 {{ "type": "sphere", "location": [1, 0.5, 0], "radius": 0.5, "material": "G" }},
                 {{ "type": "fog", "density": 0.02 }}
             ]
-        }}"#, seed));
-        let rc = Mutex::new(RenderContext::new(s.image.width, s.image.height, false, "test.json"));
+        }}"#, supersamples, seed));
+        let mut ctx = RenderContext::new(s.image.width, s.image.height, false, "test.json");
+        if let Some(bytes) = state {
+            let path = std::env::temp_dir().join(format!("rays-test-state-{}-{}.accum", seed, std::process::id()));
+            std::fs::write(&path, bytes).unwrap();
+            ctx.load_state(path.to_str().unwrap(), 7).unwrap();
+            std::fs::remove_file(&path).unwrap();
+        }
+        let rc = Mutex::new(ctx);
         super::render(&s, &rc, |_| None::<()>, |_| ());
-        let img = rc.lock().unwrap().snapshot();
-        img.pixels
+        rc.into_inner().unwrap()
+    }
+
+    #[test]
+    fn test_resumed_render_is_identical() {
+        let straight = render_from(3, 32, None);
+        // Stopped at 12 samples, saved, and carried on to 32: the same image, bit for bit.
+        let part = render_from(3, 12, None);
+        assert_eq!(part.min_samples(), 12);
+        let state = part.encode_state(7);
+        let resumed = render_from(3, 32, Some(&state));
+        assert_eq!(resumed.resumed_samples, 12 * 24 * 16);
+        assert_eq!(resumed.snapshot().pixels, straight.snapshot().pixels);
+        assert_eq!(resumed.samples, straight.samples);
+        // Stopped at an odd count, part way through a pass: the same again.
+        let odd = render_from(3, 5, None).encode_state(7);
+        assert_eq!(render_from(3, 32, Some(&odd)).snapshot().pixels, straight.snapshot().pixels);
+        // Already there: nothing more to do.
+        let done = render_from(3, 12, Some(&state));
+        assert_eq!(done.samples_rendered, 0);
+        assert_eq!(done.snapshot().pixels, part.snapshot().pixels);
+    }
+
+    #[test]
+    fn test_render_key_follows_the_scene_but_not_its_samples() {
+        let a = r#"{"width": 10, "supersamples": 16, "camera": {"angle": 0.5}}"#;
+        let more = r#"{"width": 10, "supersamples": 64, "camera": {"angle": 0.5}}"#;
+        let edited = r#"{"width": 10, "supersamples": 16, "camera": {"angle": 0.6}}"#;
+        let none = (None, None, None);
+        assert_eq!(render_key(a, none), render_key(more, none));
+        assert_ne!(render_key(a, none), render_key(edited, none));
+        assert_ne!(render_key(a, none), render_key(a, (Some(20), None, None)));
+        assert_ne!(render_key(a, none), render_key(a, (None, None, Some(1))));
+    }
+
+    #[test]
+    fn test_state_of_another_render_is_refused() {
+        let part = render_from(3, 4, None);
+        let path = std::env::temp_dir().join(format!("rays-test-refuse-{}.accum", std::process::id()));
+        std::fs::write(&path, part.encode_state(7)).unwrap();
+        let mut other = RenderContext::new(24, 16, false, "test.json");
+        assert!(other.load_state(path.to_str().unwrap(), 8).is_err());
+        let mut smaller = RenderContext::new(12, 16, false, "test.json");
+        assert!(smaller.load_state(path.to_str().unwrap(), 7).is_err());
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
@@ -448,7 +613,7 @@ mod tests {
             let s = scene(supersamples, per_chunk);
             let rc = render(&s);
             let expected = s.render.samples_per_pixel();
-            assert!(expected >= supersamples, "{} < {}", expected, supersamples);
+            assert_eq!(expected, supersamples.max(1));
             for i in 0 .. s.image.width * s.image.height {
                 assert_eq!(rc.samples[i], expected, "pixel {} for {:?}", i, (supersamples, per_chunk));
             }

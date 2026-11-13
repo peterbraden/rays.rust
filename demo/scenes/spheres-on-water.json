@@ -1,102 +1,175 @@
 {
   "width": 500,
   "height": 500,
-
   "supersamples": 75,
   "chunk_size": 128,
   "samples_per_chunk": 1,
-  
-  "background": [0.3, 0.3, 0.3],
-  "shadow_bias": 0.000001,
+  "background": [
+    0.3,
+    0.3,
+    0.3
+  ],
+  "shadow_bias": 1e-06,
   "max_depth": 3,
-
   "materials": {
     "TEST": {
       "type": "normal"
     },
     "RED": {
       "type": "flat",
-      "color": [1,0,0]
+      "color": [
+        1,
+        0,
+        0
+      ]
     },
     "GREEN": {
       "type": "flat",
-      "color": [0,1,0]
+      "color": [
+        0,
+        1,
+        0
+      ]
     },
     "POLISHED_COPPER": {
       "type": "metal",
-      "reflective": [0.97, 0.74, 0.62],
+      "reflective": [
+        0.97,
+        0.74,
+        0.62
+      ],
       "roughness": 0.01
     },
     "POLISHED_STEEL": {
       "type": "metal",
-      "reflective": [0.77, 0.78, 0.78],
+      "reflective": [
+        0.77,
+        0.78,
+        0.78
+      ],
       "roughness": 0.1
     },
     "BRUSHED_METAL_RED": {
       "type": "metal",
-      "reflective": [0.8, 0.1, 0.1],
+      "reflective": [
+        0.8,
+        0.1,
+        0.1
+      ],
       "roughness": 0.4
     },
     "OCEAN": {
       "type": "metal",
-      "reflective": [0.6, 0.6, 0.7],
+      "reflective": [
+        0.6,
+        0.6,
+        0.7
+      ],
       "roughness": 0.2
     },
     "GOLD": {
       "type": "metal",
-      "reflective": [1, 0.85, 0.57],
+      "reflective": [
+        1,
+        0.85,
+        0.57
+      ],
       "roughness": 0.1
     },
     "RED_PLASTIC": {
       "type": "plastic",
       "refractive_index": 1.575,
-      "albedo": [0.9, 0.1, 0.1]
+      "albedo": [
+        0.9,
+        0.1,
+        0.1
+      ]
     },
     "WHITE_PLASTIC": {
       "type": "lambertian",
-      "albedo": [0.9, 0.9, 0.9]
+      "albedo": [
+        0.9,
+        0.9,
+        0.9
+      ]
     },
     "WHITE_MARBLE": {
       "type": "lambertian",
-      "albedo": [0.9, 0.9, 0.9]
+      "albedo": [
+        0.9,
+        0.9,
+        0.9
+      ]
     },
     "BLACK_MARBLE": {
       "type": "lambertian",
-      "albedo": [0.1, 0.1, 0.1]
+      "albedo": [
+        0.1,
+        0.1,
+        0.1
+      ]
     },
     "GLASS": {
       "type": "dielectric",
       "refractive_index": 1.5,
-      "attenuate": [0.9, 0.9, 0.9]
+      "attenuate": [
+        0.9,
+        0.9,
+        0.9
+      ]
     },
     "GREEN_GLASS": {
       "type": "dielectric",
       "refractive_index": 1.5,
-      "attenuate": [0.2, 0.8, 0.2]
+      "attenuate": [
+        0.2,
+        0.8,
+        0.2
+      ]
     },
     "RED_LIGHT": {
       "type": "diffuse-light",
-      "color": [1,0.1,0.1],
+      "color": [
+        1,
+        0.1,
+        0.1
+      ],
       "intensity": 100
     },
     "GREEN_LIGHT": {
       "type": "diffuse-light",
-      "color": [0.1,1,0.1],
+      "color": [
+        0.1,
+        1,
+        0.1
+      ],
       "intensity": 100
     },
     "BLUE_LIGHT": {
       "type": "diffuse-light",
-      "color": [0.1,0.1,1],
+      "color": [
+        0.1,
+        0.1,
+        1
+      ],
       "intensity": 100
     },
     "WHITE_LIGHT": {
       "type": "diffuse-light",
-      "color": [1,1,1],
+      "color": [
+        1,
+        1,
+        1
+      ],
       "intensity": 100
     },
     "RED_WHITTED": {
       "type": "whitted",
-      "pigment": [1,0,0],
+      "pigment": [
+        1,
+        0,
+        0
+      ],
       "reflection": 0.3,
       "phong": 40
     }
@@ -108,64 +181,184 @@
       "m2": "BLACK_MARBLE"
     }
   },
-
   "camera": {
-    "location": [0, 5, -30],
-    "lookat" : [0, 5, 0],
-    "up" : [0,1,0],
-    "angle": 0.30,
+    "location": [
+      0,
+      5,
+      -30
+    ],
+    "lookat": [
+      0,
+      5,
+      0
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.3,
     "aperture": 0.01
   },
-  
-  "lights" : [
+  "lights": [
     {
-      "location": [0, 30, 0], 
+      "location": [
+        0,
+        30,
+        0
+      ],
       "color": "white",
       "intensity": 39270
     },
     {
-      "location": [0, 30, -40], 
+      "location": [
+        0,
+        30,
+        -40
+      ],
       "color": "white",
       "intensity": 69900
     }
   ],
-
-  "variables" : {},
-
+  "variables": {},
   "objects": [
-    { "type" : "ocean", "resolution": 20, "fourier_size": 512, "amplitude": 3.8147e-05, "wind": [20, 0], "debug": false, "color": [0, 0.02, 0.03]},
-    { "type" : "skysphere", "sun_direction": [0.1,-0.1,1], "brightness": 100},
-    { "type" : "fog" },
-    { "type" : "firework", "gravity": 13, "center": [40, 25, 400], "time": 2, "samples": 200, "particles": 60, "radius": 13, "upward_bias": 14, "color": [1, 0.7, 0.6], "intensity": 2},
-    { "type" : "firework", "gravity": 14, "center": [-41, 26.5, 400], "time": 2, "samples": 200, "particles": 50, "radius": 14, "upward_bias": 15, "color": [1, 0.5, 0.3], "intensity": 3},
-    { "type" : "firework", "gravity": 15, "center": [1, 29.2, 401], "time": 2, "samples": 2, "particles": 200, "radius": 15, "upward_bias": 16, "color": [0.2, 0.5, 1], "intensity": 4},
-    { "type" : "firework", "gravity": 15, "center": [0, 30, 400], "time": 2, "samples": 200, "particles": 90, "radius": 15, "upward_bias": 16, "color": [1, 0.7, 0.5], "intensity": 4}
+    {
+      "type": "ocean",
+      "wind": [
+        5,
+        0
+      ],
+      "planet_radius": 0
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        0.1,
+        -0.1,
+        1
+      ],
+      "brightness": 100
+    },
+    {
+      "type": "fog"
+    },
+    {
+      "type": "firework",
+      "gravity": 13,
+      "center": [
+        40,
+        25,
+        400
+      ],
+      "time": 2,
+      "samples": 200,
+      "particles": 60,
+      "radius": 13,
+      "upward_bias": 14,
+      "color": [
+        1,
+        0.7,
+        0.6
+      ],
+      "intensity": 2
+    },
+    {
+      "type": "firework",
+      "gravity": 14,
+      "center": [
+        -41,
+        26.5,
+        400
+      ],
+      "time": 2,
+      "samples": 200,
+      "particles": 50,
+      "radius": 14,
+      "upward_bias": 15,
+      "color": [
+        1,
+        0.5,
+        0.3
+      ],
+      "intensity": 3
+    },
+    {
+      "type": "firework",
+      "gravity": 15,
+      "center": [
+        1,
+        29.2,
+        401
+      ],
+      "time": 2,
+      "samples": 2,
+      "particles": 200,
+      "radius": 15,
+      "upward_bias": 16,
+      "color": [
+        0.2,
+        0.5,
+        1
+      ],
+      "intensity": 4
+    },
+    {
+      "type": "firework",
+      "gravity": 15,
+      "center": [
+        0,
+        30,
+        400
+      ],
+      "time": 2,
+      "samples": 200,
+      "particles": 90,
+      "radius": 15,
+      "upward_bias": 16,
+      "color": [
+        1,
+        0.7,
+        0.5
+      ],
+      "intensity": 4
+    }
   ],
-
   "tmp": [
-    { "type" : "box_terrain" },
-    { 
-      "type" : "__checkeredplane",
+    {
+      "type": "box_terrain"
+    },
+    {
+      "type": "__checkeredplane",
       "y": 0,
-      "medium" : "CHECKERED_MARBLE"
+      "medium": "CHECKERED_MARBLE"
     },
-    { 
-      "type" : "_mesh",
+    {
+      "type": "_mesh",
       "src": "./demo/teapot.obj",
-      "scale": [10,10,10],
-      "material" : "GOLD"
+      "scale": [
+        10,
+        10,
+        10
+      ],
+      "material": "GOLD"
     },
-    { 
-      "type" : "mesh",
+    {
+      "type": "mesh",
       "src": "./demo/ship.obj",
-      "scale": [0.01,0.01,0.01],
-      "material" : "TEST"
+      "scale": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "material": "TEST"
     },
-    { 
-      "type" : "_plane",
+    {
+      "type": "_plane",
       "y": -10,
-      "material" : "RED"
+      "material": "RED"
     },
-    { "type" : "skysphere" }
+    {
+      "type": "skysphere"
+    }
   ]
 }

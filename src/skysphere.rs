@@ -351,7 +351,7 @@ impl SkyMaterial {
         if !self.multiple_scattering {
             return Vector3::zeros();
         }
-        let table = self.ms_table.get_or_init(|| MultipleScattering::build(self));
+        let table = self.ms_table.get_or_init(|| crate::geometry::build_apart(|| MultipleScattering::build(self)));
         let up = (p - self.earth.center).normalize();
         table.lookup((p - self.earth.center).norm() - self.earth.radius, up.dot(&self.sun_direction), self)
     }
@@ -415,7 +415,7 @@ impl SkyMaterial {
     /// In the earth's shadow the depths are huge, so the transmittance is nil, and fades to it
     /// over one column of the table at the terminator.
     fn sun_depths_at(&self, p: &Vector3<f64>) -> Depths {
-        let table = self.sun_table.get_or_init(|| {
+        let table = self.sun_table.get_or_init(|| crate::geometry::build_apart(|| {
             let top = self.atmosphere.radius - self.earth.radius;
             (0..SUN_TABLE_ALTITUDES * SUN_TABLE_ANGLES).into_par_iter().map(|k| {
                 let (i, j) = (k / SUN_TABLE_ANGLES, k % SUN_TABLE_ANGLES);
@@ -425,7 +425,7 @@ impl SkyMaterial {
                 self.optical_depth_towards(point, Vector3::new((1. - mu * mu).max(0.).sqrt(), mu, 0.))
                     .unwrap_or(Depths { r: 1e7, m: 1e7, o: 0. })
             }).collect::<Vec<Depths>>()
-        });
+        }));
         let top = self.atmosphere.radius - self.earth.radius;
         // Above the atmosphere, the sunlight crosses the air (if at all) before it gets here:
         // what reaches `p` is what reaches the point where the line to the sun enters the air.

@@ -1,3 +1,4 @@
+use crate::material::model::LightSampling;
 use crate::color::Color;
 use crate::scene::Scene;
 use crate::material::model::{MaterialModel, ScatteredRay};
@@ -24,10 +25,10 @@ impl MaterialModel for Specular {
 
         if refl.rd.dot(&intersection.normal) <= 0. {
             // Fuzz has pushed the reflection into the surface: absorb it.
-            return ScatteredRay{ sampled_lights: false, emit: Color::black(), attenuate: Color::black(), ray: None };
+            return ScatteredRay{ light_sampling: LightSampling::None, emit: Color::black(), attenuate: Color::black(), ray: None };
         }
 
-        ScatteredRay{ sampled_lights: false, emit: Color::black(), attenuate:self.albedo, ray: Some(refl) }
+        ScatteredRay{ light_sampling: LightSampling::None, emit: Color::black(), attenuate:self.albedo, ray: Some(refl) }
     }
 }
 

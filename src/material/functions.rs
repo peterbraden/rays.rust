@@ -1,6 +1,8 @@
 use crate::na::{Vector3};
 use crate::ray::Ray;
-use crate::material::model::{MaterialModel, ScatteredRay};
+use crate::material::model::{MaterialModel, ScatteredRay, LightSampling};
+use crate::material::bsdf::{BSDF, power_heuristic};
+use crate::sceneobject::SceneObject;
 use crate::geometry::{random_point_on_unit_sphere};
 use crate::intersection::Intersection;
 use crate::color::Color;
@@ -47,7 +49,7 @@ pub fn scatter_lambertian(albedo: Color, intersection: &Intersection) -> Scatter
         // Normal plus a point on the unit sphere gives a cosine-weighted direction.
         rd: lambertian_direction(intersection.normal, random_point_on_unit_sphere()),
     };
-    ScatteredRay{ sampled_lights: false, emit: Color::black(), attenuate:albedo, ray: Some(refl) }
+    ScatteredRay{ light_sampling: LightSampling::None, emit: Color::black(), attenuate:albedo, ray: Some(refl) }
 }
 
 /// Distance to move a scattered ray's origin off the surface, onto the side it travels into.
@@ -91,7 +93,7 @@ pub fn scatter_dielectric(
 
     if let Some(refracted) = refract(r.rd, outward_normal, ni_over_nt) {
         if rand() >= reflect_prob {
-            return ScatteredRay{ sampled_lights: false, emit: Color::black(),
+            return ScatteredRay{ light_sampling: LightSampling::None, emit: Color::black(),
                 attenuate: albedo,
                 ray: Some( Ray {
                     ro: intersection.point - outward_normal * SURFACE_OFFSET,
@@ -103,7 +105,7 @@ pub fn scatter_dielectric(
 
     // Fresnel or total internal reflection: the ray stays on the side it arrived from.
     let reflected = reflect(r.rd, intersection.normal);
-    ScatteredRay { sampled_lights: false, emit: Color::black(),
+    ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(),
         attenuate: Color::white(),
         ray: Some(Ray {
             ro: intersection.point + outward_normal * SURFACE_OFFSET,
@@ -116,7 +118,7 @@ pub fn scatter_dielectric(
 /// Diffuse light arriving directly from the scene's lights (next-event estimation): every point
 /// light that isn't in shadow, and one sample of the area lights. Point lights can't be hit by
 /// scattered rays at all, and small area lights rarely are, so diffuse materials sample them
-/// explicitly. Materials that call this set `ScatteredRay::sampled_lights`, so the trace ignores
+/// explicitly. Materials that call this set `LightSampling::Exclusive`, so the trace ignores
 /// emission from area lights hit by their continuation ray, which would count them twice.
 pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) -> Color {
     let mut direct = Color::black();
@@ -155,13 +157,11 @@ pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) ->
 ///
 /// where V is 1 if nothing blocks the segment from x to y. Choosing one of n lights uniformly,
 /// then a point on it uniformly by area, gives density p(y) = 1 / (n area), and the estimate is
-/// the integrand divided by p(y). Lights are chosen uniformly rather than by power, and only
-/// light sampling is used: combining it with sampling the BSDF, as Veach and Guibas,
-/// "Optimally Combining Sampling Techniques for Monte Carlo Rendering", SIGGRAPH 1995, describe,
-/// would help glossy surfaces and large lights.
+/// the integrand divided by p(y). Lights are chosen uniformly rather than by power. This is
+/// light sampling alone; `direct_lighting_mis` combines it with sampling the BSDF.
 fn sample_area_light(albedo: Color, intersection: &Intersection, s: &Scene) -> Color {
     let normal = intersection.normal;
-    sample_area_light_with(&intersection.point, s, |w| {
+    sample_area_light_with(&intersection.point, s, |w, _| {
         let cos_x = w.dot(&normal);
         if cos_x <= 0. { Color::black() } else { albedo * (cos_x / std::f64::consts::PI) }
     })
@@ -172,8 +172,9 @@ fn sample_area_light(albedo: Color, intersection: &Intersection, s: &Scene) -> C
 /// the fraction of radiance arriving from w that leaves towards the viewer, per steradian (the
 /// BSDF times the cosine at a surface, the phase function times the albedo in a medium). The
 /// estimate is L_e(y, -w) response(w) cos(theta_y) / d^2 / p(y), with a shadow ray only when
-/// that is non-zero.
-pub fn sample_area_light_with(point: &Vector3<f64>, s: &Scene, response: impl Fn(&Vector3<f64>) -> Color) -> Color {
+/// that is non-zero. `response` is also given the density of having picked w, per steradian
+/// (`area_light_pdf`), for weighting the sample by multiple importance sampling.
+pub fn sample_area_light_with(point: &Vector3<f64>, s: &Scene, response: impl Fn(&Vector3<f64>, f64) -> Color) -> Color {
     let n = s.area_lights.len();
     if n == 0 {
         return Color::black();
@@ -187,7 +188,9 @@ pub fn sample_area_light_with(point: &Vector3<f64>, s: &Scene, response: impl Fn
     let d2 = to_light.norm_squared();
     let d = d2.sqrt();
     let w = to_light / d;
-    let response = response(&w);
+    let cos_y = n_y.dot(&-w).abs();
+    let pdf = d2 / (cos_y * light.geometry.surface_area() * n as f64);
+    let response = response(&w, pdf);
     if response == Color::black() {
         return Color::black();
     }
@@ -201,8 +204,113 @@ pub fn sample_area_light_with(point: &Vector3<f64>, s: &Scene, response: impl Fn
     if transmitted == 0. {
         return Color::black();
     }
-    let cos_y = n_y.dot(&-w).abs();
-    response * emitted * (transmitted * cos_y / d2 * light.geometry.surface_area() * n as f64)
+    response * emitted * (transmitted / pdf)
+}
+
+/// The density per steradian with which `sample_area_light_with`, from `point`, picks the
+/// point `y` with normal `n_y` on the area light `light`: the chance of choosing that light,
+/// 1 / n, times its density per unit area, 1 / area, converted to solid angle by d² / |cos θ_y|.
+pub fn area_light_pdf(point: &Vector3<f64>, y: &Vector3<f64>, n_y: &Vector3<f64>, light: &SceneObject, s: &Scene) -> f64 {
+    let to_light = y - point;
+    let d2 = to_light.norm_squared();
+    let cos_y = n_y.dot(&to_light).abs() / d2.sqrt();
+    if cos_y <= 0. {
+        return 0.;
+    }
+    d2 / (cos_y * light.geometry.surface_area() * s.area_lights.len() as f64)
+}
+
+/// Light arriving directly from the scene's lights at `point`, and reflected towards unit `wo`
+/// by `bsdf` (next-event estimation), weighted for multiple importance sampling with the BSDF
+/// sampling of the material's scattered ray (see `material::bsdf`). The material marks that
+/// ray `LightSampling::MIS` with its density, so the trace weights the lights it hits alike.
+///
+/// - Point lights can't be hit by a scattered ray, so are sampled alone: f cos I / d².
+/// - The sun (`sun_light_mis`): as a point for BSDFs that can't resolve its disc, and
+///   otherwise one direction on the disc, weighted against the BSDF's density for it; a
+///   polished surface's lobe can be narrower than the disc, and BSDF sampling takes over.
+/// - The area lights: one sample (`sample_area_light_with`), weighted alike.
+pub fn direct_lighting_mis(bsdf: &dyn BSDF, point: &Vector3<f64>, wo: &Vector3<f64>, s: &Scene) -> Color {
+    let mut direct = Color::black();
+    for light in &s.lights {
+        let light_vec = light.position - point;
+        let d2 = light_vec.norm_squared();
+        let wi = light_vec / d2.sqrt();
+        let f = bsdf.eval(wo, &wi);
+        if f == Color::black() {
+            continue;
+        }
+        let shadow_ray = Ray { ro: *point, rd: wi };
+        let transmitted = s.objects.transmittance(&shadow_ray, d2.sqrt(), f64::MIN_POSITIVE);
+        if transmitted > 0. {
+            direct = direct + f * light.color * (light.intensity / d2 * transmitted);
+        }
+    }
+    if let Some(sun) = &s.sun {
+        direct = direct + sun_light_mis(sun, bsdf, point, wo, s);
+    }
+    if s.render.sample_lights {
+        direct = direct + sample_area_light_with(point, s, |wi, pdf| {
+            let f = bsdf.eval(wo, wi);
+            if f == Color::black() { f } else { f * power_heuristic(pdf, bsdf.pdf(wo, wi)) }
+        });
+    }
+    direct
+}
+
+/// Below this, the BSDF's density towards the sun times the disc's solid angle, the BSDF can't
+/// resolve the disc: the sun is treated as a point (`sun_light_mis`).
+const POINT_SUN: f64 = 1e-3;
+
+/// The sun's light reflected towards `wo` by `bsdf` at `point`, for `direct_lighting_mis`.
+///
+/// For most BSDFs the disc, 0.27° in radius, is a point: the BSDF hardly varies across it, and
+/// its density for a direction there, q, is tiny beside the disc's own, about 1 / Ω for solid
+/// angle Ω = 6.8e-5 sr. Then the power heuristic gives light sampling a weight of
+/// 1 / (1 + (q Ω)²), within 1e-6 of one, and the light is f E cos θ for irradiance E, from the
+/// centre, as without MIS: no sampling of the disc, which costs as much as the rest of shading
+/// a diffuse surface. BSDF-sampled rays that see the disc still take their power heuristic
+/// weight, (q Ω)² at most 1e-6, which this counts twice: a negligible bias.
+///
+/// A glossy lobe narrow enough to resolve the disc (q Ω ≥ `POINT_SUN`) samples it properly:
+/// one direction distributed nearly as the disc's radiance (`Sun::sample_disc_at`), weighted by
+/// the power heuristic against the BSDF's density there.
+fn sun_light_mis(sun: &crate::light::Sun, bsdf: &dyn BSDF, point: &Vector3<f64>, wo: &Vector3<f64>, s: &Scene) -> Color {
+    if bsdf.pdf(wo, &sun.direction) * sun.solid_angle() < POINT_SUN {
+        let f = bsdf.eval(wo, &sun.direction);
+        if f == Color::black() {
+            return f;
+        }
+        let transmitted = sun.transmittance_from(point, s);
+        return if transmitted > 0. { f * sun.irradiance_at(point) * transmitted } else { Color::black() };
+    }
+    let (wi, radiance, pdf) = sun.sample_disc_at(point, [rand(), rand()]);
+    let f = bsdf.eval(wo, &wi);
+    if f == Color::black() {
+        return f;
+    }
+    let transmitted = sun.transmittance_along(point, &wi, s);
+    if transmitted == 0. {
+        return Color::black();
+    }
+    f * radiance * (transmitted * power_heuristic(pdf, bsdf.pdf(wo, &wi)) / pdf)
+}
+
+/// Scatter by `bsdf`: light from the lights sampled directly (`direct_lighting_mis`) as
+/// emission, and a ray continuing in a direction sampled from the BSDF, carrying its density so
+/// the lights it hits are weighted to match.
+pub fn scatter_bsdf(bsdf: &dyn BSDF, r: &Ray, point: &Vector3<f64>, s: &Scene) -> ScatteredRay {
+    let wo = -r.rd.normalize();
+    let emit = direct_lighting_mis(bsdf, point, &wo, s);
+    match bsdf.sample(&wo, [rand(), rand(), rand()]) {
+        Some(sample) => ScatteredRay {
+            emit,
+            attenuate: sample.weight,
+            ray: Some(Ray { ro: *point, rd: sample.wi }),
+            light_sampling: LightSampling::MIS { bsdf_pdf: sample.pdf },
+        },
+        None => ScatteredRay { emit, attenuate: Color::black(), ray: None, light_sampling: LightSampling::MIS { bsdf_pdf: 0. } },
+    }
 }
 
 /// Light reflected by a Lambertian surface from a point light, pbrt's convention: `intensity` is

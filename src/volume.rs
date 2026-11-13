@@ -24,6 +24,7 @@
 //! surfaces hide it, and a shadow ray is blocked by a volume exactly when it collides in it,
 //! which estimates the transmittance unbiasedly, if noisily, as either 0 or 1.
 
+use crate::material::model::LightSampling;
 use crate::color::Color;
 use std::cell::Cell;
 use crate::geometry::rand;
@@ -485,7 +486,7 @@ impl VolumeMaterial {
             };
         }
         if s.render.sample_lights {
-            direct = direct + sample_area_light_with(point, s, p);
+            direct = direct + sample_area_light_with(point, s, |w, _| p(w));
         }
         albedo * direct
     }
@@ -547,7 +548,7 @@ impl MaterialModel for VolumeMaterial {
             emit: self.direct_lighting(&incoming, &i.point, s, &phase, albedo, scatterings),
             // Area lights were sampled above (when enabled); the trace skips them if the
             // scattered ray hits one, so they aren't counted twice.
-            sampled_lights: true,
+            light_sampling: LightSampling::Exclusive,
         }
     }
 }

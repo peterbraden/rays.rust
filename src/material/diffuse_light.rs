@@ -1,3 +1,4 @@
+use crate::material::model::LightSampling;
 use crate::color::Color;
 use crate::scene::Scene;
 use crate::material::model::{MaterialModel, ScatteredRay};
@@ -24,7 +25,7 @@ impl MaterialModel for DiffuseLight {
 
     fn scatter(&self, r: &Ray, intersection: &Intersection, _s: &Scene) -> ScatteredRay{
         let radiance = self.emitted(&intersection.normal, &-r.rd);
-        ScatteredRay{ sampled_lights: false, emit: Color::black(), 
+        ScatteredRay{ light_sampling: LightSampling::None, emit: Color::black(), 
             attenuate: radiance,
             ray: None }
     }

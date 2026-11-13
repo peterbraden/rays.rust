@@ -6,12 +6,15 @@ use crate::geometry::rand;
 use crate::intersection::Intersection;
 use crate::material::texture::Medium;
 use crate::light::SUN_SHADOW_DISTANCE;
+use crate::material::model::LightSampling;
+use crate::material::bsdf::power_heuristic;
+use crate::material::functions::area_light_pdf;
 use std::f64;
 
 // Returns num rays cast, Color
 pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
     crate::volume::begin_path();
-    trace_from(r, depth, s, false)
+    trace_from(r, depth, s, LightSampling::None)
 }
 
 /// Segments shorter than this (scene units: metres, in sky scenes) cross too little air to
@@ -21,10 +24,10 @@ const AERIAL_PERSPECTIVE_FROM: f64 = 100.;
 /// Shadow rays per camera ray for crepuscular rays (`SkyMaterial::shadowed_loss`).
 const CREPUSCULAR_SAMPLES: usize = 2;
 
-/// Trace a ray. `after_light_sampling` is set for a ray scattered from a surface that has just
-/// sampled the lights directly (the area lights and the sun); their emission is then already
-/// counted, and is ignored if this ray hits one, or sees the sun.
-fn trace_from(r: &Ray, depth: u64, s: &Scene, after_light_sampling: bool) -> (u64, Color) {
+/// Trace a ray. `prior` is how the vertex the ray leaves sampled the lights (the area lights
+/// and the sun): if it did, their emission is already counted, wholly or in part, so this ray
+/// counts what it hits of them in part or not at all (`light_weight`).
+fn trace_from(r: &Ray, depth: u64, s: &Scene, prior: LightSampling) -> (u64, Color) {
     let closest = s.objects.nearest_intersection(r, f64::INFINITY, 0f64);
     // Nothing in the way, or only the skysphere, infinitely far off: the ray reaches the sky.
     let reaches_sky = closest.as_ref().is_none_or(|x| x.dist >= SUN_SHADOW_DISTANCE);
@@ -45,7 +48,7 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, after_light_sampling: bool) -> (u6
     let (cast, color) = match closest {
         Some(x) => {
             let dist = x.dist;
-            let (cast, color) = trace_intersection(r, x, depth, s, after_light_sampling);
+            let (cast, color) = trace_intersection(r, x, depth, s, prior);
             match &s.atmosphere {
                 // The sky already includes the air in front of it.
                 Some(sky) if dist > AERIAL_PERSPECTIVE_FROM && !reaches_sky => {
@@ -59,8 +62,24 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, after_light_sampling: bool) -> (u6
     };
     let color = Color { rgb: (color.rgb - shadowed).map(|v| v.max(0.)) };
     match &s.sun {
-        Some(sun) if reaches_sky && !after_light_sampling => (cast, color + sun.disc_radiance(&r.ro, &r.rd.normalize())),
+        Some(sun) if reaches_sky => {
+            let d = r.rd.normalize();
+            let w = light_weight(prior, || sun.disc_pdf(&d));
+            if w > 0. { (cast, color + sun.disc_radiance(&r.ro, &d) * w) } else { (cast, color) }
+        },
         _ => (cast, color),
+    }
+}
+
+/// The share of a sampled light's emission that a ray counts on hitting it, given how the
+/// vertex it left sampled the lights: all of it, none (already counted), or the power
+/// heuristic's weight for BSDF sampling against the light's density `light_pdf` for the same
+/// direction (`material::bsdf`).
+fn light_weight(prior: LightSampling, light_pdf: impl FnOnce() -> f64) -> f64 {
+    match prior {
+        LightSampling::None => 1.,
+        LightSampling::Exclusive => 0.,
+        LightSampling::MIS { bsdf_pdf } => power_heuristic(bsdf_pdf, light_pdf()),
     }
 }
 
@@ -89,9 +108,14 @@ fn shading<'a>(r: &Ray, medium: &(dyn Medium + Sync + Send), intersection: &Inte
     Intersection { normal: n, ..*intersection }
 }
 
-fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene, after_light_sampling: bool) -> (u64, Color){
+fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene, prior: LightSampling) -> (u64, Color){
     let mut cast = 1;
-    if after_light_sampling && s.is_sampled_light(intersection.object) {
+    let weight = if s.is_sampled_light(intersection.object) {
+        light_weight(prior, || area_light_pdf(&r.ro, &intersection.point, &intersection.normal, intersection.object, s))
+    } else {
+        1.
+    };
+    if weight == 0. {
         return (cast, Color::black());
     }
     let medium = &intersection.object.medium;
@@ -106,7 +130,7 @@ fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene, aft
         None => Color::white(),
         Some(ray) => match continuation_weight(&interaction.attenuate, depth, s) {
             Some(w) => {
-                let (c, col) = trace_from(&ray, depth + 1, s, interaction.sampled_lights);
+                let (c, col) = trace_from(&ray, depth + 1, s, interaction.light_sampling);
                 cast += c;
                 col * w
             },
@@ -115,10 +139,10 @@ fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene, aft
         },
     };
 
-    (cast, interaction.emit + interaction.attenuate * incoming)
+    (cast, (interaction.emit + interaction.attenuate * incoming) * weight)
 }
 
-fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &Scene, after_light_sampling: bool) -> (u64, Color) {
+fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &Scene, prior: LightSampling) -> (u64, Color) {
     // Shadow bias -> Move the origin of the intersection point along the normal, in case a
     // floating point error puts it slightly below the surface which would cause a sign flip
     // leading to shadow acne.
@@ -127,7 +151,7 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &S
     biased_intersection.point = intersection.point + (intersection.facing_normal(r) * scene.render.shadow_bias);
 
     let mut cast = 1;
-    let (c, o) = trace_sample(r, &biased_intersection, depth, scene, after_light_sampling);
+    let (c, o) = trace_sample(r, &biased_intersection, depth, scene, prior);
     cast += c;
     (cast, o) 
 }
@@ -467,6 +491,7 @@ mod tests {
     fn test_sun_lights_lambertian_by_cosine() {
         // Irradiance 3 at 60 degrees from the normal: 0.5 / π × 3 × cos 60°.
         let s = sunlit(r#"{ "direction": [0, 1, 1.7320508075688772], "intensity": 3 }"#, "");
+        // A diffuse surface can't resolve the disc, so sees the sun as a point.
         let c = trace_down(&s);
         assert!((c.rgb.x - 0.5 / std::f64::consts::PI * 3. * 0.5).abs() < 1e-9, "{:?}", c);
         // From below the horizon it lights nothing.
@@ -516,9 +541,12 @@ mod tests {
     }
 
     #[test]
-    fn test_sun_disc_is_not_counted_twice() {
-        // A diffuse floor samples the sun directly; its bounce rays that then see the (here
-        // huge) disc must ignore it. With a black sky, every bounce adds nothing.
+    fn test_sun_disc_is_counted_once() {
+        // A diffuse floor samples the sun directly, here over its disc, which is huge enough
+        // for the floor's BSDF to resolve; its bounce rays that then see the disc count it
+        // weighted by MIS, so that the two together count it once. With a black sky, nothing
+        // else lights the floor.
+        crate::geometry::seed_rand(8, 1);
         let s = SceneFile::from_string(r#"{
             "background": [0, 0, 0], "max_depth": 3, "shadow_bias": 0.0001,
             "sun": { "direction": [0, 1, 0.3], "intensity": 2, "angular_radius": 20 },
@@ -526,10 +554,24 @@ mod tests {
             "materials": { "M": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } },
             "objects": [ { "type": "plane", "y": 0, "material": "M" } ]
         }"#.to_string());
-        let direct = 0.5 / std::f64::consts::PI * 2. * Vector3::new(0., 1., 0.3).normalize().y;
-        for _ in 0..200 {
-            assert!((trace_down(&s).rgb.x - direct).abs() < 1e-9);
+        // The light the floor reflects, ∫ (albedo / π) L(ω) cos θ dω over the disc, in rings.
+        let sun = s.sun.as_ref().unwrap();
+        let (a, b) = crate::material::phase::orthonormal_basis(&sun.direction);
+        let (rings, around) = (400, 400);
+        let r = sun.angular_radius;
+        let mut direct = 0.;
+        for i in 0..rings {
+            let theta = (i as f64 + 0.5) / rings as f64 * r;
+            for j in 0..around {
+                let phi = (j as f64 + 0.5) / around as f64 * 2. * std::f64::consts::PI;
+                let d = sun.direction * theta.cos() + (a * phi.cos() + b * phi.sin()) * theta.sin();
+                let d_omega = theta.sin() * (r / rings as f64) * (2. * std::f64::consts::PI / around as f64);
+                direct += 0.5 / std::f64::consts::PI * sun.disc_radiance(&Vector3::zeros(), &d).rgb.x * d.y.max(0.) * d_omega;
+            }
         }
+        let n = 20_000;
+        let mean = (0..n).map(|_| trace_down(&s).rgb.x).sum::<f64>() / n as f64;
+        assert!((mean - direct).abs() < 0.005 * direct, "{} vs {}", mean, direct);
     }
 
     #[test]

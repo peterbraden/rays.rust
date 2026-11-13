@@ -2161,7 +2161,7 @@ impl SceneFile {
             },
         }.map(|mut sun| {
             if let Some(r) = v.get("angular_radius") {
-                sun.angular_radius = SceneFile::parse_number(r, 0.).to_radians().max(1e-6);
+                sun = sun.with_angular_radius(SceneFile::parse_number(r, 0.).to_radians().max(1e-6));
             }
             sun
         })

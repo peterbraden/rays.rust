@@ -1,3 +1,4 @@
+use crate::material::model::LightSampling;
 use crate::color::Color;
 use crate::scene::Scene;
 use crate::material::model::{MaterialModel, ScatteredRay};
@@ -31,9 +32,9 @@ impl MaterialModel for Whitted {
                 ro: intersection.point,
                 rd: reflect(r.rd, intersection.normal)
             };
-            return ScatteredRay{ sampled_lights: false, emit: out, attenuate: Color::white() * self.reflection, ray: Some(refl) };
+            return ScatteredRay{ light_sampling: LightSampling::None, emit: out, attenuate: Color::white() * self.reflection, ray: Some(refl) };
         }
-        ScatteredRay{ sampled_lights: false, emit: out, attenuate: Color::black(), ray: None }
+        ScatteredRay{ light_sampling: LightSampling::None, emit: out, attenuate: Color::black(), ray: None }
     }
 }
 
@@ -43,7 +44,7 @@ pub struct FlatColor {
 
 impl MaterialModel for FlatColor {
     fn scatter(&self, _r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay{
-        ScatteredRay{ sampled_lights: false, emit: Color::black(), attenuate: self.pigment, ray: None }
+        ScatteredRay{ light_sampling: LightSampling::None, emit: Color::black(), attenuate: self.pigment, ray: None }
     }
 }
 

@@ -100,6 +100,7 @@ extern crate rand as _rand;
 extern crate image;
 extern crate rustfft;
 
+use crate::material::model::LightSampling;
 use crate::scene::Scene;
 use crate::intersection::Intersection;
 use std::f64;
@@ -556,7 +557,7 @@ impl MaterialModel for OceanMaterial {
                     // 90degrees down
                     let deep_angle = 1. / (refracted.dot(&Vector3::new(0., 1., 0.)).acos() * 0.8);
 
-					return ScatteredRay{ sampled_lights: false, emit: Color::black(),
+					return ScatteredRay{ light_sampling: LightSampling::None, emit: Color::black(),
 						attenuate: self.deep_color * deep_angle,
 						ray: None, // Don't try and refract
 					};
@@ -569,7 +570,7 @@ impl MaterialModel for OceanMaterial {
 		}
 
 		let reflected = reflect(r.rd, intersection.normal);
-		ScatteredRay { sampled_lights: false, emit: Color::black(),
+		ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(),
 			attenuate: Color::white(),
 			ray: Some(Ray {
 				ro: intersection.point,
@@ -1075,7 +1076,7 @@ impl MaterialModel for PhysicalOcean {
         } else {
             (Color::black(), None)
         };
-        ScatteredRay { emit, sampled_lights: true, attenuate, ray }
+        ScatteredRay { emit, light_sampling: LightSampling::Exclusive, attenuate, ray }
     }
 }
 

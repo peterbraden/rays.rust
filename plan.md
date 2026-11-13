@@ -647,14 +647,15 @@ the noise of a typical pixel. Orbit's median is zero because most of the image i
 ### Steps (each a stacked PR, each measured with `scripts/variance.sh`)
 
 1. Measurement: `--variance <runs>`, `--samples`, `scripts/variance.sh`, the `glossy-sun` scene.
-2. Materials expose their BSDF: evaluate f(wo, wi) cos, and the density of sampling wi.
-3. GGX microfacet reflection for `metal` and plastic's coat, sampled by visible normals.
-4. MIS (power heuristic) between light sampling and BSDF sampling, for area lights and the sun
-   (sampled as a disc).
-5. Sky importance sampling: a tabulated distribution over directions, MIS with the BSDF.
-6. Low-discrepancy sampling: Owen-scrambled Sobol' across every dimension.
-7. Choosing lights by power.
-8. Investigate the speckle in `orbit`.
+2. Materials expose their BSDF (value times cosine, and the density of sampling a direction);
+   MIS (power heuristic) between light sampling and BSDF sampling, for area lights and the sun
+   (sampled over its disc where a BSDF can resolve it). Lambertian and terrain first.
+3. GGX microfacet reflection for `metal` and plastic's coat, sampled by visible normals, which
+   brings them into MIS.
+4. Sky importance sampling: a tabulated distribution over directions, MIS with the BSDF.
+5. Low-discrepancy sampling: Owen-scrambled Sobol' across every dimension.
+6. Choosing lights by power.
+7. Investigate the speckle in `orbit`.
 
 ### Reading (verified; details in each PR)
 

@@ -47,6 +47,17 @@ pub struct RenderOpts {
     /// scattered rays.
     pub sample_sky: bool,
     pub filter: Filter,
+    /// Where the random numbers a sample uses come from.
+    pub sampler: Sampler,
+}
+
+/// How a pixel's samples choose their random numbers.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Sampler {
+    /// Independent numbers, with the pixel position jittered on an n x n grid.
+    Independent,
+    /// Owen-scrambled Sobol' points across every dimension (`sobol`).
+    Sobol,
 }
 
 /// What a ray that leaves the scene sees.

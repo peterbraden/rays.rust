@@ -40,7 +40,7 @@ use crate::material::phase::PhaseFunction;
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
 use serde_json::{Value, Map};
-use crate::scene::{Scene, ImageOpts, RenderOpts, PathTermination, Background, Filter};
+use crate::scene::{Scene, ImageOpts, RenderOpts, PathTermination, Background, Filter, Sampler};
 use crate::output::OutputOpts;
 use std::io::prelude::*;
 use std::fs::File;
@@ -224,6 +224,8 @@ pub struct SceneFile {
     pub sample_lights: Value,
     #[serde(default)]
     pub sample_sky: Value,
+    #[serde(default)]
+    pub sampler: Value,
     #[serde(default)]
     pub filter: Value,
     #[serde(default)]
@@ -2237,6 +2239,11 @@ impl SceneFile {
                     None | Some("box") => Filter::Box,
                     Some("tent") => Filter::Tent,
                     Some(f) => panic!("Unknown filter '{}': expected \"box\" or \"tent\"", f),
+                },
+                sampler: match s.sampler.as_str() {
+                    None | Some("sobol") => Sampler::Sobol,
+                    Some("independent") => Sampler::Independent,
+                    Some(x) => panic!("Unknown sampler '{}': expected \"sobol\" or \"independent\"", x),
                 },
             },
             camera: Box::new(SceneFile::parse_camera(s.camera, width as u32, height as u32)),

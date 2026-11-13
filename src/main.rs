@@ -120,6 +120,7 @@ mod volume;
 mod glare;
 mod variance;
 mod environment;
+mod sobol;
 mod planet;
 
 use crate::trace::trace;

@@ -3,7 +3,8 @@ use std::time::{Instant};
 use crate::scene::Scene;
 use crate::color::Color;
 use crate::trace::trace;
-use crate::geometry::{rand, seed_rand};
+use crate::geometry::{rand, seed_rand, begin_sample, end_sample};
+use crate::scene::Sampler;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::collections::HashMap;
@@ -337,23 +338,41 @@ fn render_pixel(x: usize, y: usize, layer: usize, max_samples: usize, s: &Scene)
     let mut cast = 0;
     let mut samples = 0;
 
+    // With the Sobol' sampler, a pixel's samples are one sequence across every layer: its own
+    // seed, and indices that continue from layer to layer.
+    let pixel_seed = crate::sobol::hash(s.render.seed, (y * s.image.width + x) as u64);
+    let per_layer = max_samples * max_samples;
+
     // Monte-Carlo method: We sample many times and average.
     for sx in 0..max_samples {
         for sy in 0..max_samples {
+            // Where in the pixel, as a uniform in [0, 1)²: Sobol' points stratify themselves;
+            // independent ones are jittered within a cell of the grid.
+            let (u, v) = match s.render.sampler {
+                Sampler::Sobol => {
+                    begin_sample(pixel_seed, (layer * per_layer + sx * max_samples + sy) as u32);
+                    (rand(), rand())
+                },
+                Sampler::Independent => (
+                    (sx as f64 + rand()) / (max_samples as f64),
+                    (sy as f64 + rand()) / (max_samples as f64),
+                ),
+            };
             let (rays_cast, c) = trace(
                     &s.camera.get_ray(
                         x as f64 / (s.image.width as f64),
                         y as f64 / (s.image.height as f64),
-                        // Stratified jitter, so repeated layers sample new positions, warped
-                        // to the reconstruction filter, then measured from the pixel's corner.
-                        (0.5 + s.render.filter.sample((sx as f64 + rand()) / (max_samples as f64))) / (s.image.width as f64),
-                        (0.5 + s.render.filter.sample((sy as f64 + rand()) / (max_samples as f64))) / (s.image.height as f64))
+                        // Warped to the reconstruction filter, then measured from the pixel's
+                        // corner.
+                        (0.5 + s.render.filter.sample(u)) / (s.image.width as f64),
+                        (0.5 + s.render.filter.sample(v)) / (s.image.height as f64))
                     , 0, s);
             cast += rays_cast;
             pixel = pixel + c;
             samples += 1;
         }
     }
+    end_sample();
     (cast, samples, pixel)
 }
 

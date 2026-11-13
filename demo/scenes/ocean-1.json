@@ -1,98 +1,167 @@
 {
   "width": 1200,
   "height": 500,
-
   "supersamples": 999,
   "chunk_size": 64,
   "samples_per_chunk": 1,
-  
-  "background": [0.1, 0.1, 0.1],
+  "background": [
+    0.1,
+    0.1,
+    0.1
+  ],
   "shadow_bias": 0.0001,
   "max_depth": 3,
-
   "materials": {
     "TEST": {
       "type": "normal"
     },
     "RED": {
       "type": "flat",
-      "color": [1,0,0]
+      "color": [
+        1,
+        0,
+        0
+      ]
     },
     "POLISHED_COPPER": {
       "type": "metal",
-      "reflective": [0.97, 0.74, 0.62],
+      "reflective": [
+        0.97,
+        0.74,
+        0.62
+      ],
       "roughness": 0.01
     },
     "POLISHED_STEEL": {
       "type": "metal",
-      "reflective": [0.77, 0.78, 0.78],
+      "reflective": [
+        0.77,
+        0.78,
+        0.78
+      ],
       "roughness": 0.1
     },
     "BRUSHED_METAL_RED": {
       "type": "metal",
-      "reflective": [0.8, 0.1, 0.1],
+      "reflective": [
+        0.8,
+        0.1,
+        0.1
+      ],
       "roughness": 0.4
     },
     "OCEAN": {
       "type": "metal",
-      "reflective": [0.6, 0.6, 0.7],
+      "reflective": [
+        0.6,
+        0.6,
+        0.7
+      ],
       "roughness": 0.2
     },
     "GOLD": {
       "type": "metal",
-      "reflective": [1, 0.85, 0.57],
+      "reflective": [
+        1,
+        0.85,
+        0.57
+      ],
       "roughness": 0.1
     },
     "RED_PLASTIC": {
       "type": "plastic",
       "refractive_index": 1.575,
-      "albedo": [0.9, 0.1, 0.1]
+      "albedo": [
+        0.9,
+        0.1,
+        0.1
+      ]
     },
     "WHITE_PLASTIC": {
       "type": "lambertian",
-      "albedo": [0.9, 0.9, 0.9]
+      "albedo": [
+        0.9,
+        0.9,
+        0.9
+      ]
     },
     "WHITE_MARBLE": {
       "type": "lambertian",
-      "albedo": [0.9, 0.9, 0.9]
+      "albedo": [
+        0.9,
+        0.9,
+        0.9
+      ]
     },
     "BLACK_MARBLE": {
       "type": "lambertian",
-      "albedo": [0.1, 0.1, 0.1]
+      "albedo": [
+        0.1,
+        0.1,
+        0.1
+      ]
     },
     "GLASS": {
       "type": "dielectric",
       "refractive_index": 1.5,
-      "attenuate": [0.9, 0.9, 0.9]
+      "attenuate": [
+        0.9,
+        0.9,
+        0.9
+      ]
     },
     "GREEN_GLASS": {
       "type": "dielectric",
       "refractive_index": 1.5,
-      "attenuate": [0.2, 0.8, 0.2]
+      "attenuate": [
+        0.2,
+        0.8,
+        0.2
+      ]
     },
     "RED_LIGHT": {
       "type": "diffuse-light",
-      "color": [1,0.1,0.1],
+      "color": [
+        1,
+        0.1,
+        0.1
+      ],
       "intensity": 100
     },
     "GREEN_LIGHT": {
       "type": "diffuse-light",
-      "color": [0.1,1,0.1],
+      "color": [
+        0.1,
+        1,
+        0.1
+      ],
       "intensity": 100
     },
     "BLUE_LIGHT": {
       "type": "diffuse-light",
-      "color": [0.1,0.1,1],
+      "color": [
+        0.1,
+        0.1,
+        1
+      ],
       "intensity": 100
     },
     "WHITE_LIGHT": {
       "type": "diffuse-light",
-      "color": [1,1,1],
+      "color": [
+        1,
+        1,
+        1
+      ],
       "intensity": 100
     },
     "RED_WHITTED": {
       "type": "whitted",
-      "pigment": [1,0,0],
+      "pigment": [
+        1,
+        0,
+        0
+      ],
       "reflection": 0.3,
       "phong": 40
     }
@@ -104,26 +173,48 @@
       "m2": "BLACK_MARBLE"
     }
   },
-
   "camera": {
-    "location": [0, 5, -120],
-
-    "lookat" : [0, 5, 0],
-    "up" : [0,1,0],
+    "location": [
+      0,
+      5,
+      -120
+    ],
+    "lookat": [
+      0,
+      5,
+      0
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
     "angle": 0.5,
     "aperture": 0.01
   },
-  
-  "lights" : [
+  "lights": [
     {
-      "location": [-40, 30, -40], 
+      "location": [
+        -40,
+        30,
+        -40
+      ],
       "color": "white",
       "intensity": 120200
     }
   ],
-  "variables" : {},
+  "variables": {},
   "objects": [
-    { "type" : "ocean", "resolution": 100, "fourier_size": 1024, "amplitude": 9.53674e-05, "wind": [34, 1]},
-    { "type" : "skysphere" }
+    {
+      "type": "ocean",
+      "wind": [
+        10,
+        1
+      ],
+      "planet_radius": 0
+    },
+    {
+      "type": "skysphere"
+    }
   ]
 }

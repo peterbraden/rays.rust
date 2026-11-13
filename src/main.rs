@@ -116,6 +116,7 @@ mod terrain;
 mod expr;
 mod volume;
 mod glare;
+mod variance;
 mod planet;
 
 use crate::trace::trace;
@@ -175,10 +176,21 @@ struct Args {
     #[arg(long)]
     seed: Option<u64>,
 
+    ///Samples per pixel; overrides the scenefile if specified
+    #[arg(long)]
+    samples: Option<usize>,
+
     ///Write the scene file, as JSON in our format, to this file. For a scene in another
     ///renderer's format (eg. .nff), this is the translation
     #[arg(long)]
     dump_scene: Option<String>,
+
+    ///Measure the render's noise: render this many times, with successive seeds, and print the
+    ///relative mean squared error of one render and the efficiency 1 / (relMSE x time). Writes
+    ///the mean of the renders as the output, and a map of each pixel's relative standard
+    ///deviation alongside it (.variance.png)
+    #[arg(long)]
+    variance: Option<usize>,
 }
 
 /// The process's peak resident memory so far, in bytes: large meshes and their acceleration
@@ -219,10 +231,11 @@ fn main() {
         });
         println!("- Wrote the scene file to {}", path);
     }
-    let s = scenefile::SceneFile::from_value_overridden(doc, &scenefile::Overrides {
+    let mut s = scenefile::SceneFile::from_value_overridden(doc, &scenefile::Overrides {
         width: args.width,
         height: args.height,
         seed: args.seed,
+        samples: args.samples,
     });
 
     let mut rc = RenderContext::new(
@@ -254,6 +267,11 @@ fn main() {
             std::process::exit(1);
         }
         println!("- Depth -> {}", path);
+    }
+
+    if let Some(runs) = args.variance {
+        measure_variance(&mut s, runs, &rc.output_filename, writer.as_ref());
+        return;
     }
 
     let rcmtx = Mutex::new(rc);
@@ -302,6 +320,43 @@ fn main() {
     }
     paint::poor_mans(&img, &s.output);
     rc.print_stats();
+}
+
+/// Render the scene `runs` times with successive seeds and report its noise (see `variance`).
+fn measure_variance(s: &mut scene::Scene, runs: usize, output_filename: &str, writer: &dyn output::ImageWriter) {
+    if runs < 2 {
+        eprintln!("--variance needs at least two renders");
+        std::process::exit(1);
+    }
+    let base = s.render.seed;
+    let mut renders = Vec::with_capacity(runs);
+    let mut seconds = 0.;
+    for i in 0..runs {
+        s.render.seed = base.wrapping_add(i as u64);
+        let rc = Mutex::new(RenderContext::new(s.image.width, s.image.height, false, output_filename));
+        let start = Instant::now();
+        rendercontext::render(s, &rc, |_| None::<()>, |_| ());
+        let t = start.elapsed().as_secs_f64();
+        seconds += t;
+        println!("- Render {} of {} (seed {}): {:.2} s", i + 1, runs, s.render.seed, t);
+        renders.push(rc.lock().unwrap().snapshot());
+    }
+    let v = variance::Variance::of(&renders);
+    let mean_time = seconds / runs as f64;
+    if let Err(e) = writer.write(&s.output.finish(&v.mean), output_filename) {
+        eprintln!("{}", e);
+    }
+    let map_path = std::path::Path::new(output_filename).with_extension("variance.png");
+    let map_path = map_path.to_string_lossy();
+    let opts = output::OutputOpts { transfer: output::Transfer::Linear, ..output::OutputOpts::default() };
+    if let Err(e) = output::writer_for(&map_path, opts).and_then(|w| w.write(&v.map(), &map_path)) {
+        eprintln!("{}", e);
+    }
+    println!("{}", style("# Variance").bold().cyan());
+    println!("- {} renders at {} samples per pixel, {:.2} s each", runs, s.render.samples_per_pixel(), mean_time);
+    println!("- relMSE of one render: mean {:.5}, median {:.5}", v.rel_mse, v.median_rel_mse);
+    println!("- Efficiency 1 / (relMSE x time): {:.4}", variance::efficiency(v.rel_mse, mean_time));
+    println!("- Mean of the renders: {}; relative standard deviation: {}", output_filename, map_path);
 }
 
 /// Compare the finished render with a reference image, reporting how close they are.

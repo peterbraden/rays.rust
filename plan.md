@@ -590,3 +590,81 @@ processes can be animated.
 - Unchecked: Halfar's solution as given by Bueler et al., J. Glaciology 51(173), 2005 (used by
   `test_halfar_dome`, which passing within 3% supports).
 
+
+
+## 10. Variance reduction
+
+Goal: less noise for the same render time. Renders are visibly grainy: even grain on sky-lit
+matte surfaces (`spheres`), fireflies on glossy surfaces under the sun (`glossy-sun`), and
+speckle in clouds (`orbit`).
+
+### Known (from the code, at the start)
+
+- Diffuse materials (Lambertian, leaf, grass, rock, terrain, ocean's water body) sample point
+  lights, the sun and one area light directly (`direct_lighting`), and their scattered ray then
+  ignores those lights (`ScatteredRay::sampled_lights`): light sampling alone, no MIS.
+- The sun is treated as a direction (irradiance times the cosine) by diffuse surfaces, and as a
+  disc of 6.8e-5 sr (`Sun::disc_radiance`) by everything else. Glossy materials (`metal`,
+  plastic's coat) find the sun and area lights only by chance: fireflies.
+- Rough reflection is the mirror direction plus a random point in a ball scaled by roughness.
+  It has no closed-form density, so it can't take part in MIS.
+- The sky is reached only by scattered rays: cosine-weighted for diffuse surfaces, regardless
+  of where the sky is bright. Since the sky-view LUT, sky radiance is cheap to evaluate.
+- Only the pixel position is stratified (an n x n jittered grid per pass, n usually 2). Every
+  other dimension draws independent PCG numbers.
+- Area lights are chosen uniformly, not by power.
+- Volumes already use delta tracking, ratio-tracked shadows, and the similarity and Oz
+  approximations.
+
+### Measured baseline (`scripts/variance.sh`, 4 renders, Apple M2)
+
+Efficiency is 1 / (relMSE x seconds); compare ratios on the same scene, not across scenes.
+
+| Scene | Size, samples | Seconds | relMSE (mean) | relMSE (median) | Efficiency |
+| --- | --- | --- | --- | --- | --- |
+| cornell-box | 256 x 256, 64 | 1.34 | 0.00294 | 0.00086 | 254 |
+| spheres | 320 x 240, 64 | 0.33 | 0.00418 | 0.00076 | 716 |
+| glossy-sun | 480 x 240, 64 | 0.67 | 40.6 | 0.00057 | 0.037 |
+| forest | 400 x 200, 8 | 5.92 | 0.02684 | 0.00792 | 6.3 |
+| orbit | 160 x 80, 4 | 46.9 | 1.0e6 | 0 | 0 |
+
+Each pixel's variance is divided by its median across the renders squared (`variance.rs`
+explains why not the mean). Fireflies then dominate the mean, as they dominate what a viewer
+sees, and make it noisy in turn: a single firefly in a black pixel (orbit's space) adds 10⁶.
+Compare means only between runs with large differences, and read the median alongside: it is
+the noise of a typical pixel. Orbit's median is zero because most of the image is black space.
+
+### Assumptions to test
+
+- That MIS with a microfacet BRDF removes most fireflies on glossy surfaces under the sun.
+- That sampling the sky in proportion to its brightness helps sky-lit diffuse surfaces enough
+  to pay for the extra shadow ray. Under an overcast or even sky it may not.
+- That a low-discrepancy sampler gains at 16-64 samples per pixel, mostly in direct lighting.
+- The source of the speckle in `orbit` is unknown. Candidates: deep multiple scattering in
+  high-albedo cloud, the variance of transmittance estimates, sky light reaching deep vertices.
+  Measure before choosing a remedy.
+
+### Steps (each a stacked PR, each measured with `scripts/variance.sh`)
+
+1. Measurement: `--variance <runs>`, `--samples`, `scripts/variance.sh`, the `glossy-sun` scene.
+2. Materials expose their BSDF: evaluate f(wo, wi) cos, and the density of sampling wi.
+3. GGX microfacet reflection for `metal` and plastic's coat, sampled by visible normals.
+4. MIS (power heuristic) between light sampling and BSDF sampling, for area lights and the sun
+   (sampled as a disc).
+5. Sky importance sampling: a tabulated distribution over directions, MIS with the BSDF.
+6. Low-discrepancy sampling: Owen-scrambled Sobol' across every dimension.
+7. Choosing lights by power.
+8. Investigate the speckle in `orbit`.
+
+### Reading (verified; details in each PR)
+
+- Veach and Guibas, "Optimally Combining Sampling Techniques for Monte Carlo Rendering",
+  SIGGRAPH 1995, doi:10.1145/218380.218498; Veach, PhD thesis, Stanford 1997, ch. 9.
+- Walter, Marschner, Li, Torrance, "Microfacet Models for Refraction through Rough Surfaces",
+  EGSR 2007; Heitz, "Understanding the Masking-Shadowing Function in Microfacet-Based BRDFs",
+  JCGT 3(2), 2014; Heitz, "Sampling the GGX Distribution of Visible Normals", JCGT 7(4), 2018.
+- Pharr, Jakob, Humphreys, "Physically Based Rendering", 4th ed.: §2.1.4 (efficiency), §2.2.3
+  (MIS), §A.5.4 (cone sampling), §A.5.5 (2D distributions), §12.5.2 (image infinite lights),
+  §12.6.2 (power light sampler), §8.7 (Sobol' sampling), §13.4 (path tracer).
+- Joe and Kuo, "Constructing Sobol sequences with better two-dimensional projections", SIAM J.
+  Sci. Comput. 30(5), 2008; Burley, "Practical Hash-based Owen Scrambling", JCGT 9(4), 2020.

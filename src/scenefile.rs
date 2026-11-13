@@ -192,6 +192,10 @@ pub struct Overrides {
     pub width: Option<usize>,
     pub height: Option<usize>,
     pub seed: Option<u64>,
+    /// Samples per pixel. The scene's per-pass grid (`samples_per_chunk` squared) is kept if
+    /// it divides this, and otherwise shrunk to the largest that does, so exactly this many are
+    /// taken.
+    pub samples: Option<usize>,
 }
 
 /// Every field except `camera` is optional; defaults are applied in `from_scenefile`.
@@ -2256,7 +2260,7 @@ impl SceneFile {
     /// Parse a scene, optionally overriding the image size. Overrides must be applied before
     /// the camera is built, as it derives its aspect ratio from the image size.
     pub fn from_string_sized(s: String, width: Option<usize>, height: Option<usize>) -> Scene {
-        SceneFile::from_string_overridden(s, &Overrides { width, height, seed: None })
+        SceneFile::from_string_overridden(s, &Overrides { width, height, ..Overrides::default() })
     }
 
     /// Parse a scene, applying command-line overrides first.
@@ -2316,6 +2320,13 @@ impl SceneFile {
         let mut scene: SceneFile = serde_json::from_value(doc).unwrap();
         if let Some(seed) = o.seed {
             scene.seed = Value::from(seed);
+        }
+        if let Some(n) = o.samples {
+            let n = n.max(1);
+            let grid = SceneFile::parse_int(&scene.samples_per_chunk, 2).max(1);
+            let grid = (1..=grid).rev().find(|k| n % (k * k) == 0).unwrap_or(1);
+            scene.supersamples = Value::from(n);
+            scene.samples_per_chunk = Value::from(grid);
         }
         if let Some(w) = width {
             scene.width = Value::from(w);
@@ -2838,6 +2849,23 @@ mod tests {
         assert_eq!((s.image.width, s.image.height), (40, 2));
         let s = minimal_scene_sized("", None, Some(30));
         assert_eq!((s.image.width, s.image.height), (4, 30));
+    }
+
+    #[test]
+    fn test_samples_override_takes_exactly_that_many() {
+        let at = |samples_per_chunk: usize, samples: usize| {
+            let doc = format!(r#"{{
+                "width": 4, "height": 2, "supersamples": 7, "samples_per_chunk": {},
+                "camera": {{ "location": [0, 0, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }}
+            }}"#, samples_per_chunk);
+            let s = SceneFile::from_string_overridden(doc, &Overrides { samples: Some(samples), ..Overrides::default() });
+            (s.render.samples_per_pixel(), s.render.samples_per_chunk)
+        };
+        // 2 x 2 divides 16, so the grid stays; 8 x 8 doesn't, so it shrinks to 4 x 4.
+        assert_eq!(at(2, 16), (16, 2));
+        assert_eq!(at(8, 16), (16, 4));
+        // 7 is prime: a grid of one.
+        assert_eq!(at(2, 7), (7, 1));
     }
 
     #[test]

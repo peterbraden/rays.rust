@@ -230,6 +230,7 @@ pub fn area_light_pdf(point: &Vector3<f64>, y: &Vector3<f64>, n_y: &Vector3<f64>
 ///   otherwise one direction on the disc, weighted against the BSDF's density for it; a
 ///   polished surface's lobe can be narrower than the disc, and BSDF sampling takes over.
 /// - The area lights: one sample (`sample_area_light_with`), weighted alike.
+/// - The sky, if sampled (`sky_light_mis`): one direction, weighted alike.
 pub fn direct_lighting_mis(bsdf: &dyn BSDF, point: &Vector3<f64>, wo: &Vector3<f64>, s: &Scene) -> Color {
     let mut direct = Color::black();
     for light in &s.lights {
@@ -249,6 +250,9 @@ pub fn direct_lighting_mis(bsdf: &dyn BSDF, point: &Vector3<f64>, wo: &Vector3<f
     if let Some(sun) = &s.sun {
         direct = direct + sun_light_mis(sun, bsdf, point, wo, s);
     }
+    if let Some(env) = &s.environment {
+        direct = direct + sky_light_mis(env, bsdf, point, wo, s);
+    }
     if s.render.sample_lights {
         direct = direct + sample_area_light_with(point, s, |wi, pdf| {
             let f = bsdf.eval(wo, wi);
@@ -256,6 +260,26 @@ pub fn direct_lighting_mis(bsdf: &dyn BSDF, point: &Vector3<f64>, wo: &Vector3<f
         });
     }
     direct
+}
+
+/// The sky's light reflected towards `wo` by `bsdf` at `point`, for `direct_lighting_mis`: one
+/// direction sampled in proportion to the sky's tabulated brightness (`environment`), with a
+/// shadow ray to the sky, weighted by the power heuristic against the BSDF's density.
+fn sky_light_mis(env: &crate::environment::Environment, bsdf: &dyn BSDF, point: &Vector3<f64>, wo: &Vector3<f64>, s: &Scene) -> Color {
+    let (wi, pdf) = env.sample([rand(), rand()]);
+    if pdf <= 0. {
+        return Color::black();
+    }
+    let f = bsdf.eval(wo, &wi);
+    if f == Color::black() {
+        return f;
+    }
+    let ray = Ray { ro: *point, rd: wi };
+    let transmitted = s.objects.transmittance(&ray, crate::light::SUN_SHADOW_DISTANCE, f64::MIN_POSITIVE);
+    if transmitted == 0. {
+        return Color::black();
+    }
+    f * env.radiance(&ray, s) * (transmitted * power_heuristic(pdf, bsdf.pdf(wo, &wi)) / pdf)
 }
 
 /// Below this, the BSDF's density towards the sun times the disc's solid angle, the BSDF can't

@@ -119,6 +119,7 @@ mod expr;
 mod volume;
 mod glare;
 mod variance;
+mod environment;
 mod planet;
 
 use crate::trace::trace;

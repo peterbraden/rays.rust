@@ -42,6 +42,10 @@ pub struct RenderOpts {
     /// Whether diffuse surfaces sample area lights directly (next-event estimation). Off, they
     /// are found only when a scattered ray happens to hit them: unbiased, but far noisier.
     pub sample_lights: bool,
+    /// Whether surfaces with a BSDF sample the sky directly, in proportion to its brightness
+    /// (`environment`), combined with BSDF sampling by MIS. Off, the sky is found only by
+    /// scattered rays.
+    pub sample_sky: bool,
     pub filter: Filter,
 }
 
@@ -133,6 +137,8 @@ pub struct Scene {
     /// The skysphere's atmosphere, if any, for aerial perspective: light from distant objects
     /// is attenuated and hazed by the air it crosses.
     pub atmosphere: Option<Arc<SkyMaterial>>,
+    /// The sky as a light to sample (`environment`), if it isn't black and `sample_sky` is on.
+    pub environment: Option<crate::environment::Environment>,
 }
 
 impl Scene {

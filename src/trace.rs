@@ -60,6 +60,11 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, prior: LightSampling) -> (u64, Col
         },
         None => (1, s.render.background.radiance(&r.rd)),
     };
+    // A sky sampled directly (`environment`) is weighted against that, as the lights are.
+    let color = match (&s.environment, prior) {
+        (Some(env), LightSampling::MIS { bsdf_pdf }) if reaches_sky => color * power_heuristic(bsdf_pdf, env.pdf(&r.rd.normalize())),
+        _ => color,
+    };
     let color = Color { rgb: (color.rgb - shadowed).map(|v| v.max(0.)) };
     match &s.sun {
         Some(sun) if reaches_sky => {

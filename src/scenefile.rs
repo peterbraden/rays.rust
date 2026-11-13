@@ -223,6 +223,8 @@ pub struct SceneFile {
     #[serde(default)]
     pub sample_lights: Value,
     #[serde(default)]
+    pub sample_sky: Value,
+    #[serde(default)]
     pub filter: Value,
     #[serde(default)]
     pub output: Value,
@@ -2218,7 +2220,7 @@ impl SceneFile {
         let width = SceneFile::parse_int(&s.width, 640);
         let height =SceneFile::parse_int(&s.height, 480);
 
-        Scene {
+        let mut scene = Scene {
             image: ImageOpts { width, height },
             render: RenderOpts {
                 max_depth: SceneFile::parse_int(&s.max_depth, 2),
@@ -2230,6 +2232,7 @@ impl SceneFile {
                 path_termination: SceneFile::parse_path_termination(&s.path_termination, &s.russian_roulette_depth),
                 seed: SceneFile::parse_int(&s.seed, 0) as u64,
                 sample_lights: s.sample_lights.as_bool().unwrap_or(true),
+                sample_sky: s.sample_sky.as_bool().unwrap_or(true),
                 filter: match s.filter.as_str() {
                     None | Some("box") => Filter::Box,
                     Some("tent") => Filter::Tent,
@@ -2250,7 +2253,13 @@ impl SceneFile {
             area_lights,
             sun,
             atmosphere,
+            environment: None,
+        };
+        // Tabulating the sky evaluates it, which needs the scene.
+        if scene.render.sample_sky {
+            scene.environment = crate::environment::Environment::build(&scene);
         }
+        scene
     }
 
     pub fn from_string(s: String) -> Scene {

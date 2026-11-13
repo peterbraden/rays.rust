@@ -488,7 +488,7 @@ pub struct GlobalWind {
 
 impl GlobalWind {
     pub fn new(pole: Vector3<f64>, radius: f64, seed: u64) -> GlobalWind {
-        GlobalWind { pole: pole.normalize(), eddy_size: 800_000., eddies: 0.6, radius, noise: crate::noise::PerlinNoise::with_seed(seed) }
+        GlobalWind { pole: pole.normalize(), eddy_size: 800_000., eddies: 0.6, radius, noise: crate::noise::PerlinNoise::shuffled(seed) }
     }
 
     /// The eastward speed of the bands at latitude `lat` (radians), relative to the jets':

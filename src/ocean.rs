@@ -117,7 +117,7 @@ use crate::shapes::triangle::Triangle;
 use crate::shapes::repeating_mesh::RepeatingMesh;
 use std::vec::Vec;
 use std::sync::Arc;
-use crate::octree::Octree;
+use crate::shapes::mesh::Mesh;
 use crate::shapes::geometry::Geometry;
 use crate::sceneobject::SceneObject;
 use crate::material::legacy::Whitted;
@@ -245,32 +245,39 @@ pub(crate) fn ifft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> 
     transpose(&out, size)
 }
 
-// Type definition for complex height field data
-type OceanComplexData = (
-    Vec<Complex<f64>>, // ht
-    Vec<Complex<f64>>, // ht_slope_x
-    Vec<Complex<f64>>, // ht_slope_z
-    Vec<Complex<f64>>, // ht_slope_dx
-    Vec<Complex<f64>>, // ht_slope_dz
-);
+/// A field over the N x N Fourier grid.
+type Field = Vec<Complex<f64>>;
 
-/// The surface at time t, from the amplitudes h̃0: heights h(x, t) (eqs. 43, 36), slopes ε(x, t)
-/// (eq. 37) and choppy displacements D(x, t) (eq. 44), each on the N x N grid.
+/// A tile of the surface at time t, on the N x N grid.
+pub struct OceanTile {
+    /// Heights h(x, t) (eqs. 43, 36).
+    pub heights: Field,
+    /// Choppy displacements D(x, t) in x and z (eq. 44), if requested.
+    pub displacement: Option<(Field, Field)>,
+    /// Slopes ∇h(x, t), in x and z (eq. 37), if requested.
+    pub slopes: Option<(Field, Field)>,
+}
+
+/// The surface at time t, from the amplitudes h̃0. Each field is an inverse FFT, the dominant
+/// cost of building the ocean, so the choppy displacements are only computed when `choppy`, and
+/// the slopes (eq. 37) when `slopes` (the flat ocean's normals come from its triangles).
 pub fn create_tile(
         fourier_grid_size:usize,
         lx: f64,
         lz: f64,
         gravity: f64,
         time: f64,
+        choppy: bool,
+        slopes: bool,
         h0: Vec<Complex<f64>>) 
-        -> OceanComplexData {
+        -> OceanTile {
 
     // Tile of amplitudes
     let mut ht =          vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
-    let mut ht_slope_x =  vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
-    let mut ht_slope_z =  vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
     let mut ht_slope_dx = vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
     let mut ht_slope_dz = vec![Complex::new(0., 0.); fourier_grid_size * fourier_grid_size];
+    let mut ht_slope_x =  vec![Complex::new(0., 0.); if slopes { fourier_grid_size * fourier_grid_size } else { 0 }];
+    let mut ht_slope_z =  vec![Complex::new(0., 0.); if slopes { fourier_grid_size * fourier_grid_size } else { 0 }];
 
     for j in 0 .. fourier_grid_size {
         for i in 0 .. fourier_grid_size {
@@ -292,12 +299,14 @@ pub fn create_tile(
                 h0[neg_k].conj() * c1;
 
             // i k h̃ (eq. 37)
-            ht_slope_x[ind] = ht[ind] * Complex::new(0., k.x); 
-            ht_slope_z[ind] = ht[ind] * Complex::new(0., k.y); 
+            if slopes {
+                ht_slope_x[ind] = ht[ind] * Complex::new(0., k.x);
+                ht_slope_z[ind] = ht[ind] * Complex::new(0., k.y);
+            }
 
             // -i (k/k) h̃ (eq. 44)
             let len = k.norm();
-            if len > 0.00001 {
+            if choppy && len > 0.00001 {
                 ht_slope_dx[ind] = ht[ind] * Complex::new(0., -k.x / len); 
                 ht_slope_dz[ind] = ht[ind] * Complex::new(0., -k.y / len); 
             } 
@@ -310,19 +319,11 @@ pub fn create_tile(
         let n2 = (fourier_grid_size * fourier_grid_size) as f64;
         ifft2(t, fourier_grid_size).into_iter().map(|x| x * n2).collect()
     };
-    ht = sum(ht);
-    ht_slope_x = sum(ht_slope_x);
-    ht_slope_z = sum(ht_slope_z);
-    ht_slope_dx = sum(ht_slope_dx);
-    ht_slope_dz = sum(ht_slope_dz);
-
-    (
-        ht,
-        ht_slope_x,
-        ht_slope_z,
-        ht_slope_dx,
-        ht_slope_dz,
-    )
+    OceanTile {
+        heights: sum(ht),
+        displacement: if choppy { Some((sum(ht_slope_dx), sum(ht_slope_dz))) } else { None },
+        slopes: if slopes { Some((sum(ht_slope_x), sum(ht_slope_z))) } else { None },
+    }
 }
 
 
@@ -343,7 +344,7 @@ mod tests {
 	fn heights_n(wind: Vector2<f64>, time: f64, n: usize) -> Vec<Complex<f64>> {
 		let mut rng: StdRng = SeedableRng::from_seed([0; 32]);
 		let h0 = create_amplitude_tile(wind, 1., 9.81, L, L, n, &mut rng);
-		create_tile(n, L, L, 9.81, time, h0).0
+		create_tile(n, L, L, 9.81, time, false, false, h0).heights
 	}
 
 	#[test]
@@ -458,7 +459,8 @@ impl WaveTile {
                 }
             }
         }
-        let (h, sx, sz, _, _) = create_tile(n, size, size, 9.81, time, h0);
+        let tile = create_tile(n, size, size, 9.81, time, false, true, h0);
+        let (h, (sx, sz)) = (tile.heights, tile.slopes.unwrap());
         // Undo the centred spectrum's (-1)^(x+z) (see the module docs).
         let texels = (0..n * n).map(|ind| {
             let sign = if (ind % n + ind / n).is_multiple_of(2) { -1. } else { 1. };
@@ -692,30 +694,32 @@ impl Ocean {
         Some(((-b - disc.sqrt()) / a, (-b + disc.sqrt()) / a))
     }
 
-    /// The first crossing of the displaced surface from `t0` to `t1`, by stepping no further
-    /// than the surface could rise to meet the ray, then bisecting.
+    /// The first crossing of the displaced surface from `t0` to `t1`, from above or below (a
+    /// ray refracted into the water comes back up through it), by stepping no further than the
+    /// surface could move to meet the ray, then bisecting.
     fn march(&self, r: &Ray, t0: f64, t1: f64) -> Option<f64> {
         let fade_rate = 1.5 / (0.5 * self.detail_distance) * self.waves.max_height;
-        let mut t = t0;
-        let mut f = self.above(&(r.ro + r.rd * t));
-        if f <= 0. {
-            return Some(t);
-        }
+        // A ray leaving the surface starts on it: step off it first.
+        let mut t = t0 + 1e-4;
+        let start = self.above(&(r.ro + r.rd * t));
+        let side = if start < 0. { -1. } else { 1. };
+        let mut f = start.abs();
         while t < t1 {
             let p = r.ro + r.rd * t;
             let up = self.up(&p);
-            let descent = (-r.rd.dot(&up)).max(0.);
+            // Towards the surface: down from above, up from below.
+            let descent = (-side * r.rd.dot(&up)).max(0.);
             let horizontal = (1. - r.rd.dot(&up).powi(2)).max(0.).sqrt();
             let rate = descent + horizontal * (self.waves.max_slope + fade_rate) + 1e-6;
             let step = (f / rate).max(0.01).min(t1 - t + 0.01);
             let next = t + step;
-            let g = self.above(&(r.ro + r.rd * next));
+            let g = side * self.above(&(r.ro + r.rd * next));
             if g <= 0. {
                 // Crossed: bisect.
                 let (mut lo, mut hi) = (t, next);
                 for _ in 0..24 {
                     let mid = 0.5 * (lo + hi);
-                    if self.above(&(r.ro + r.rd * mid)) > 0. { lo = mid } else { hi = mid }
+                    if side * self.above(&(r.ro + r.rd * mid)) > 0. { lo = mid } else { hi = mid }
                 }
                 return Some(hi);
             }
@@ -732,7 +736,7 @@ impl Geometry for Ocean {
         let h = self.waves.max_height;
         let hit = |t: f64| {
             let point = r.ro + r.rd * t;
-            Some(RawIntersection { dist: t, point, normal: self.normal_at(&point) })
+            Some(RawIntersection { face: 0, part: 0, dist: t, point, normal: self.normal_at(&point) })
         };
         // The smooth surface, where it is beyond the displaced region.
         let detail = self.detail_span(&r);
@@ -834,7 +838,7 @@ impl MaterialModel for PhysicalOcean {
         if n.dot(&v) <= 0. {
             n = up;
         }
-        let into = Intersection { normal: n, ..intersection.clone() };
+        let into = Intersection { normal: n, ..*intersection };
         // The water body, lit through the surface, as much as gets in.
         let mut emit = crate::material::functions::direct_lighting(self.water * (1. - fresnel(n.dot(&v))), &into, s);
         // The sun's glitter through the ripples: F D / (4 cos θv) per unit irradiance, Smith's
@@ -978,6 +982,17 @@ mod curved_tests {
         let r = Ray { ro: Vector3::new(5000., 50., 0.), rd: Vector3::new(0., -1., 0.) };
         let hit = o.intersects(&r).unwrap();
         assert!(o.altitude(&hit.point).abs() < 1e-3);
+        // From under the water, straight up and slanting: through the surface from below.
+        for (x, z) in [(3., 4.), (-20., 51.)] {
+            for d in [Vector3::new(0., 1., 0.), Vector3::new(0.3, 1., -0.2).normalize()] {
+                let r = Ray { ro: Vector3::new(x, -10., z), rd: d };
+                let hit = o.intersects(&r).unwrap();
+                assert!(o.above(&hit.point).abs() < 1e-3, "{}", o.above(&hit.point));
+                for i in 1..100 {
+                    assert!(o.above(&(r.ro + d * (hit.dist * i as f64 / 100.))) < 1e-6);
+                }
+            }
+        }
         // Up into the sky: nothing.
         assert!(o.intersects(&Ray { ro, rd: Vector3::new(0., 1., 1.).normalize() }).is_none());
     }

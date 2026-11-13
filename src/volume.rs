@@ -177,7 +177,7 @@ impl Geometry for Volume {
                     if rand() * majorant < self.density.density(&point) {
                         // Media have no surface; facing back along the ray keeps the shadow
                         // bias from moving the point sideways.
-                        return Some(RawIntersection { dist: t, point, normal: -d });
+                        return Some(RawIntersection { face: 0, part: 0, dist: t, point, normal: -d });
                     }
                     continue;
                 }
@@ -632,7 +632,7 @@ mod tests {
 
     fn noise_volume() -> (Volume, f64) {
         let density = NoiseDensity {
-            perlin: PerlinNoise::with_seed(9), max_density: 4., scale: 3., octaves: 4, threshold: 0.45,
+            perlin: PerlinNoise::shuffled(9), max_density: 4., scale: 3., octaves: 4, threshold: 0.45,
         };
         let steps = 20_000;
         let optical_depth: f64 = (0..steps).map(|i| {

@@ -130,9 +130,9 @@ impl Lenticular {
             condensation_rate: 1.5,
             droplet_radius: 8.,
             time: 0.,
-            humidity_noise: PerlinNoise::with_seed(seed.wrapping_mul(3).wrapping_add(1)),
-            detail_noise: PerlinNoise::with_seed(seed.wrapping_mul(3).wrapping_add(2)),
-            bend_noise: PerlinNoise::with_seed(seed.wrapping_mul(3).wrapping_add(3)),
+            humidity_noise: PerlinNoise::shuffled(seed.wrapping_mul(3).wrapping_add(1)),
+            detail_noise: PerlinNoise::shuffled(seed.wrapping_mul(3).wrapping_add(2)),
+            bend_noise: PerlinNoise::shuffled(seed.wrapping_mul(3).wrapping_add(3)),
         }
     }
 

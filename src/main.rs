@@ -34,7 +34,11 @@ mod material {
     pub mod functions;
     pub mod legacy;
     pub mod plastic;
+    pub mod leaf;
     pub mod noise;
+    pub mod grass;
+    pub mod bump;
+    pub mod rock;
     pub mod phase;
     pub mod diffraction;
     pub mod ice_halos;
@@ -47,18 +51,37 @@ mod shapes {
     pub mod transform;
     pub mod bbox;
     pub mod geometry;
+    pub mod geometry_set;
     pub mod csg;
     pub mod sphere;
     pub mod plane;
     pub mod triangle;
     pub mod mesh;
+    pub mod ply;
+    pub mod wo3;
     pub mod infinite;
     pub mod repeating_mesh;
+    pub mod polynomial;
+    pub mod cone;
+    pub mod disc;
+    pub mod algebraic;
+    pub mod polygon;
+    pub mod revolution;
+    pub mod sweep;
+    pub mod blob;
+    pub mod implicit;
+    pub mod julia;
+    pub mod tessellated;
+    pub mod text;
 }
 mod octree;
+mod bvh;
 mod scenegraph;
 mod scene;
 mod scenefile;
+mod nff;
+mod tungsten;
+mod scenefile_shapes;
 mod skysphere;
 mod ocean;
 mod camera;
@@ -67,11 +90,17 @@ mod rendercontext;
 mod paint;
 mod output;
 mod compare;
+mod depth;
 //mod wireframe;
 mod geometry;
 mod procedural {
     pub mod box_terrain;
     pub mod fireworks;
+    pub mod tree;
+    pub mod forest;
+    pub mod heightmap;
+    pub mod grass;
+    pub mod rock;
     pub mod nubis_clouds;
     pub mod hogan_kew_cirrus;
     pub mod benard_altocumulus;
@@ -83,6 +112,8 @@ mod procedural {
 }
 mod participatingmedia;
 mod noise;
+mod terrain;
+mod expr;
 mod volume;
 mod glare;
 mod planet;
@@ -130,6 +161,11 @@ struct Args {
     #[arg(long)]
     compare: Option<String>,
 
+    ///Also write a depth image: the distance to the nearest surface through each pixel's centre.
+    ///.exr keeps distances (misses are infinite); .png scales them for viewing, near white
+    #[arg(long)]
+    depth: Option<String>,
+
     ///With --compare, fail (exit status 2) if the mean FLIP error exceeds this
     #[arg(long)]
     max_flip: Option<f64>,
@@ -151,6 +187,11 @@ struct Args {
     ///Start afresh, rather than carrying on from the saved state (<output>.accum)
     #[arg(long)]
     fresh: bool,
+
+    ///Write the scene file, as JSON in our format, to this file. For a scene in another
+    ///renderer's format (eg. .nff), this is the translation
+    #[arg(long)]
+    dump_scene: Option<String>,
 }
 
 /// How often a render's state is saved, so an interrupted render loses no more than this.
@@ -164,6 +205,24 @@ fn save_state(path: &str, bytes: &[u8]) {
     }
 }
 
+/// The process's peak resident memory so far, in bytes: large meshes and their acceleration
+/// structures are the main use. `getrusage` reports `ru_maxrss` in bytes on macOS and in
+/// kilobytes on Linux and the BSDs.
+#[cfg(unix)]
+fn peak_memory() -> Option<u64> {
+    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) } != 0 {
+        return None;
+    }
+    let units = if cfg!(target_os = "macos") { 1 } else { 1024 };
+    Some(usage.ru_maxrss as u64 * units)
+}
+
+#[cfg(not(unix))]
+fn peak_memory() -> Option<u64> {
+    None
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -171,7 +230,22 @@ fn main() {
         style("# 1. - Parsing scene, building models").bold().cyan()
     );
 
-    let mut s = scenefile::SceneFile::from_file(&args.scene, &scenefile::Overrides {
+    let build_start = Instant::now();
+    let doc = scenefile::SceneFile::read_document(&args.scene).unwrap_or_else(|e| {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    });
+    if let Some(path) = &args.dump_scene {
+        let json = serde_json::to_string_pretty(&doc).unwrap();
+        std::fs::write(path, json + "\n").unwrap_or_else(|e| {
+            eprintln!("Can't write {}: {}", path, e);
+            std::process::exit(1);
+        });
+        println!("- Wrote the scene file to {}", path);
+    }
+    // What the render's saved state is keyed by: the scene, in whatever format it was read.
+    let contents = doc.to_string();
+    let mut s = scenefile::SceneFile::from_value_overridden(doc, &scenefile::Overrides {
         width: args.width,
         height: args.height,
         seed: args.seed,
@@ -188,7 +262,6 @@ fn main() {
     }
     // Carry on from where an earlier render of the same scene stopped, if there was one.
     let state_path = rendercontext::state_path_for(&rc.output_filename);
-    let contents = std::fs::read_to_string(&args.scene).unwrap_or_default();
     let key = rendercontext::render_key(&contents, (args.width, args.height, args.seed));
     if !args.fresh && std::path::Path::new(&state_path).exists() {
         match rc.load_state(&state_path, key) {
@@ -205,12 +278,25 @@ fn main() {
     }
     println!("- Output: {}x{} @ {} samples -> {}", s.image.width, s.image.height, s.render.samples_per_pixel(), rc.output_filename);
     println!("- Scene Objects: {}, Primitives: {} ", s.objects.len(),  s.objects.primitives_len()); 
+    let peak = peak_memory().map_or(String::new(), |b| format!(", peak memory {:.0} MiB", b as f64 / (1024. * 1024.)));
+    println!("- Built in {:.2} s{}", build_start.elapsed().as_secs_f64(), peak);
 
     // Fail before rendering if the output can't be written in this format.
     let writer = output::writer_for(&rc.output_filename, s.output).unwrap_or_else(|e| {
         eprintln!("{}", e);
         std::process::exit(1);
     });
+
+    if let Some(path) = &args.depth {
+        let raw = path.to_ascii_lowercase().ends_with(".exr");
+        let opts = output::OutputOpts { transfer: output::Transfer::Linear, ..output::OutputOpts::default() };
+        let img = depth::depth_image(&depth::depth(&s), s.image.width, s.image.height, raw);
+        if let Err(e) = output::writer_for(path, opts).and_then(|w| w.write(&img, path)) {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+        println!("- Depth -> {}", path);
+    }
 
     let rcmtx = Mutex::new(rc);
 

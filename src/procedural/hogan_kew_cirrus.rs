@@ -311,8 +311,8 @@ impl HoganKewCirrus {
             fade: 0.3,
             field,
             threshold,
-            detail_noise: PerlinNoise::with_seed(f.seed.wrapping_mul(3).wrapping_add(1)),
-            curl_noise: PerlinNoise::with_seed(f.seed.wrapping_mul(3).wrapping_add(2)),
+            detail_noise: PerlinNoise::shuffled(f.seed.wrapping_mul(3).wrapping_add(1)),
+            curl_noise: PerlinNoise::shuffled(f.seed.wrapping_mul(3).wrapping_add(2)),
         }
     }
 

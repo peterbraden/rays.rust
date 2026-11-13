@@ -1,0 +1,202 @@
+{
+  "width": 960,
+  "height": 540,
+  "supersamples": 96,
+  "chunk_size": 64,
+  "samples_per_chunk": 4,
+  "background": [
+    0.5,
+    0.6,
+    0.8
+  ],
+  "shadow_bias": 0.0001,
+  "max_depth": 5,
+  "variables": {
+    "sun": [
+      -0.55,
+      0.32,
+      0.77
+    ],
+    "slope": [
+      0,
+      -0.07
+    ]
+  },
+  "materials": {
+    "SAND": {
+      "type": "rock",
+      "preset": "sandstone",
+      "scale": 0.05,
+      "bump": 0.2,
+      "weathering": 0.5,
+      "seed": 9
+    },
+    "WATER": {
+      "type": "dielectric",
+      "refractive_index": 1.33,
+      "attenuate": [
+        0.9,
+        0.96,
+        0.95
+      ]
+    }
+  },
+  "media": {},
+  "camera": {
+    "location": [
+      0.05,
+      0.42,
+      -0.25
+    ],
+    "lookat": [
+      0,
+      0.3,
+      0.65
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.42,
+    "aperture": 0.006
+  },
+  "lights": [
+    {
+      "location": [
+        -2750,
+        1600,
+        3850
+      ],
+      "intensity": 80000000.0,
+      "color": [
+        1,
+        0.9,
+        0.78
+      ]
+    }
+  ],
+  "objects": [
+    {
+      "type": "triangle",
+      "v0": [
+        -6,
+        0.19,
+        -1
+      ],
+      "v1": [
+        6,
+        0.19,
+        -1
+      ],
+      "v2": [
+        6,
+        -0.44,
+        8
+      ],
+      "material": "SAND"
+    },
+    {
+      "type": "triangle",
+      "v0": [
+        -6,
+        0.19,
+        -1
+      ],
+      "v1": [
+        6,
+        -0.44,
+        8
+      ],
+      "v2": [
+        -6,
+        -0.44,
+        8
+      ],
+      "material": "SAND"
+    },
+    {
+      "type": "pebbles",
+      "center": [
+        0,
+        0.1825,
+        0.25
+      ],
+      "extent": [
+        1.6,
+        1.0
+      ],
+      "slope": "$slope",
+      "count": 3000,
+      "size": [
+        0.015,
+        0.075
+      ],
+      "packing": 0.8,
+      "detail": 3,
+      "seed": 1
+    },
+    {
+      "type": "pebbles",
+      "center": [
+        0,
+        0.095,
+        1.5
+      ],
+      "extent": [
+        3.2,
+        1.5
+      ],
+      "slope": "$slope",
+      "count": 5000,
+      "size": [
+        0.02,
+        0.09
+      ],
+      "packing": 0.8,
+      "detail": 2,
+      "seed": 2
+    },
+    {
+      "type": "pebbles",
+      "center": [
+        0,
+        -0.017,
+        3.1
+      ],
+      "extent": [
+        5,
+        1.7
+      ],
+      "slope": "$slope",
+      "count": 5000,
+      "size": [
+        0.02,
+        0.1
+      ],
+      "packing": 0.8,
+      "detail": 2,
+      "wetness": 0.8,
+      "seed": 3
+    },
+    {
+      "type": "ocean",
+      "wind": [
+        0.6,
+        0.3
+      ],
+      "seed": 1,
+      "material": "WATER",
+      "planet_radius": 0,
+      "detail_center": [
+        0.05,
+        -0.25
+      ]
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": "$sun",
+      "brightness": 12
+    }
+  ]
+}

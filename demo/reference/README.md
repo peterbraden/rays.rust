@@ -4,6 +4,11 @@ Scenes from other renderers, converted to our format, with published reference i
 compare against. The references themselves are not committed: `scripts/fetch-references.sh`
 downloads them into `references/`, checking each archive's SHA-256.
 
+Tungsten scenes (Bitterli's archives under `resources/tungsten/`) load directly, without
+converting: `cargo run --release -- <dir>/scene.json -o out.exr --compare <dir>/TungstenRender.exr`
+(see `src/tungsten.rs` for what is approximated). `--dump-scene` writes the translation, to keep
+or edit as one of the scenes here.
+
 ## Cornell box
 
 - Source: Benedikt Bitterli, "Rendering Resources", <https://benedikt-bitterli.me/resources/>,
@@ -96,3 +101,48 @@ Results (8-bit references are decoded to linear with the scene's transfer functi
 RMSE is close to the noise floor of two 100-sample renders. The FLIP map shows the rest in the
 sky as banding, consistent with truncation against rounding, and on the glass and metal spheres,
 where the model differences above make up about 0.0015 of it.
+
+
+## Stanford dragon
+
+- Model: Stanford 3D Scanning Repository, "Dragon",
+  <https://graphics.stanford.edu/data/3Dscanrep/>. Dragon model courtesy of the Stanford Computer
+  Graphics Laboratory. The repository permits research use, free redistribution, and publishing
+  images made with the models with credit to the laboratory; not commercial use, or use in a
+  product for sale, without permission. It also asks that the dragon not be animated, morphed,
+  broken or subjected to Boolean operations.
+- Reconstruction: Brian Curless and Marc Levoy, "A Volumetric Method for Building Complex Models
+  from Range Images", SIGGRAPH 1996, pp. 303-312, doi:10.1145/237170.237269
+  (<https://graphics.stanford.edu/papers/volrange/>): about 70 range scans merged as a
+  cumulative weighted signed distance function, from which the surface is extracted. We use the
+  full-resolution `dragon_vrip.ply` (ASCII PLY, 437,645 vertices, 871,414 triangles; the web
+  page's 1,132,830 refers to an earlier reconstruction), loaded by `src/shapes/ply.rs`.
+- Reference: Stanford publishes no reference image, and pbrt-v4-scenes' dragon uses subsurface
+  scattering, which we lack. The reference is rendered with Mitsuba 3 (version 3.9.1, `path`
+  integrator, 1024 samples per pixel) by `scripts/mitsuba_dragon_reference.py`, from the same PLY
+  and ground OBJ.
+- Scene (`stanford-dragon.json`): a white clay dragon (Lambertian, albedo 0.8) on a grey
+  ground square (0.5), lit only by a uniform white sky (the background, radiance 1). This
+  isolates geometry: with no lights or glossy materials to sample, any difference comes from
+  intersection, self-shadowing and visibility on 871k small triangles. The dragon is scaled 50x by
+  a `transform` and set on the ground; flat shading, as the PLY has no normals (Mitsuba's
+  `face_normals`), and two-sided diffuse, as our Lambertian is.
+
+```
+# Fetch the model, render the reference (pip install mitsuba==3.9.1), then render and compare
+scripts/fetch-references.sh
+python scripts/mitsuba_dragon_reference.py references/stanford-dragon/dragon_vrip.ply demo/reference/stanford-dragon/ground.obj references/stanford-dragon/MitsubaRender.exr
+cargo run --release -- demo/reference/stanford-dragon.json -o dragon.png --compare references/stanford-dragon/MitsubaRender.exr
+```
+
+Results, at 640x480 against Mitsuba at 1024 samples per pixel:
+
+| Comparison | Exposure fit | RMSE | Mean FLIP |
+|---|---|---|---|
+| Ours, 256 samples per pixel | 1.0000 | 0.0079 | 0.0097 |
+| Ours, 1024 samples per pixel | 1.0000 | 0.0054 | 0.0080 |
+| Ours against ours with another seed, 1024 (noise floor) | 1.0000 | 0.0047 | 0.0061 |
+
+The difference is at the noise floor: the FLIP map shows only noise, with no structure at the
+dragon's edges or in its crevices. Before #82 the dragon did not appear at all under the
+transform (see `src/shapes/triangle.rs`).

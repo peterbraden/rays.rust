@@ -244,8 +244,8 @@ impl NubisCloudLayer {
             extent,
             weather_map: OnceLock::new(),
             // Separate streams, so the weather map and the shapes aren't correlated.
-            weather: PerlinNoise::with_seed(seed.wrapping_mul(2).wrapping_add(1)),
-            shape: PerlinNoise::with_seed(seed.wrapping_mul(2)),
+            weather: PerlinNoise::shuffled(seed.wrapping_mul(2).wrapping_add(1)),
+            shape: PerlinNoise::shuffled(seed.wrapping_mul(2)),
             seed,
             cells: OnceLock::new(),
         }

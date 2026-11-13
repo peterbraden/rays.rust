@@ -342,7 +342,7 @@ impl CloudSimulation {
         let sounding = params.sounding.clone();
         let pressure: Vec<f64> = (0..ny).map(|j| pressure_at(height(j), sounding.surface_pressure)).collect();
         let seed = params.seed as u32;
-        let patches = PerlinNoise::with_seed(params.seed.wrapping_mul(5).wrapping_add(3));
+        let patches = PerlinNoise::shuffled(params.seed.wrapping_mul(5).wrapping_add(3));
         let mut sim = CloudSimulation {
             params,
             time: 0.,

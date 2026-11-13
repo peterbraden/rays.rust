@@ -138,8 +138,8 @@ pub struct Scene {
 
 impl Scene {
     /// Whether `object` is one of the area lights that diffuse surfaces sample directly.
-    pub fn is_sampled_light(&self, object: &Arc<SceneObject>) -> bool {
-        self.render.sample_lights && self.area_lights.iter().any(|l| Arc::ptr_eq(l, object))
+    pub fn is_sampled_light(&self, object: &SceneObject) -> bool {
+        self.render.sample_lights && self.area_lights.iter().any(|l| std::ptr::eq(&**l, object))
     }
 }
 

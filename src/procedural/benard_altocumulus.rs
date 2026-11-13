@@ -117,8 +117,8 @@ impl BenardAltocumulus {
             fade: 0.3,
             particle_radius: None,
             seed: seed as u32,
-            warp_noise: PerlinNoise::with_seed(seed.wrapping_mul(3).wrapping_add(1)),
-            patch_noise: PerlinNoise::with_seed(seed.wrapping_mul(3).wrapping_add(2)),
+            warp_noise: PerlinNoise::shuffled(seed.wrapping_mul(3).wrapping_add(1)),
+            patch_noise: PerlinNoise::shuffled(seed.wrapping_mul(3).wrapping_add(2)),
             cells: OnceLock::new(),
         }
     }

@@ -45,8 +45,10 @@ impl PerlinNoise {
     }
 
     /// Create a Perlin noise generator whose permutation table is a shuffle chosen by `seed`.
-    /// The same seed always gives the same noise; `new()` keeps Perlin's reference table.
-    pub fn with_seed(seed: u64) -> Self {
+    /// The same seed always gives the same noise; `new()` keeps Perlin's reference table. Unlike
+    /// `with_seed`, this shuffles the identity permutation, with its own random stream: the
+    /// clouds use it.
+    pub fn shuffled(seed: u64) -> Self {
         let mut base_perm = [0usize; 256];
         for (i, p) in base_perm.iter_mut().enumerate() {
             *p = i;
@@ -83,6 +85,23 @@ impl PerlinNoise {
         ];
         
         Self { perm, grad3 }
+    }
+
+    /// A generator whose permutation table is shuffled by `seed`, so different seeds give
+    /// different, uncorrelated noise. Perlin's table is a permutation of 0-255 chosen once; any
+    /// permutation works, so a seeded Fisher-Yates shuffle of it gives a family of noises.
+    pub fn with_seed(seed: u64) -> Self {
+        let mut n = Self::new();
+        let mut rng = crate::geometry::Pcg32::new(seed, 0x5eed);
+        let mut base = [0usize; 256];
+        base.copy_from_slice(&n.perm[..256]);
+        for i in (1..256).rev() {
+            let j = (rng.next_u32() as usize) % (i + 1);
+            base.swap(i, j);
+        }
+        n.perm[..256].copy_from_slice(&base);
+        n.perm[256..].copy_from_slice(&base);
+        n
     }
     
     /// Get noise value at a 3D point
@@ -302,6 +321,67 @@ pub mod combined_noise {
     }
 }
 
+/// Perlin noise with a seed, and the fractal sums built from it that procedural rocks use.
+///
+/// The Perlin permutation table is fixed, so a seed selects a field by displacing the lookup
+/// point by a seed-dependent offset. Each octave is also rotated, which hides the grid's axes
+/// that otherwise show as straight creases in summed noise (Inigo Quilez, "fBM",
+/// <https://iquilezles.org/articles/fbm/>).
+#[derive(Clone)]
+pub struct SeededNoise {
+    perlin: PerlinNoise,
+    offset: Vector3<f64>,
+    rotation: crate::na::Rotation3<f64>,
+}
+
+impl SeededNoise {
+    pub fn new(seed: u64) -> Self {
+        let mut rng = crate::geometry::Pcg32::new(seed, 0x5eed);
+        let offset = Vector3::new(rng.next_f64(), rng.next_f64(), rng.next_f64()) * 256.;
+        SeededNoise {
+            perlin: PerlinNoise::new(),
+            offset,
+            rotation: crate::na::Rotation3::from_euler_angles(0.61, 0.93, 1.27),
+        }
+    }
+
+    /// Gradient noise, roughly in [-1, 1].
+    pub fn noise(&self, p: Vector3<f64>) -> f64 {
+        let q = p + self.offset;
+        self.perlin.noise(q.x, q.y, q.z)
+    }
+
+    /// Fractional Brownian motion: octaves of noise, each twice the frequency and half the
+    /// amplitude of the last. Roughly in [-1, 1].
+    pub fn fbm(&self, p: Vector3<f64>, octaves: u32) -> f64 {
+        let (mut sum, mut amplitude, mut total, mut q) = (0., 1., 0., p);
+        for _ in 0 .. octaves {
+            sum += self.noise(q) * amplitude;
+            total += amplitude;
+            amplitude *= 0.5;
+            q = self.rotation * q * 2.03;
+        }
+        if total > 0. { sum / total } else { 0. }
+    }
+
+    /// Ridged multifractal, after F. Kenton Musgrave, in Ebert et al., "Texturing and Modeling:
+    /// A Procedural Approach", 3rd ed., 2003, chapter 16: each octave is folded, 1 - |n|, so
+    /// its zero crossings become sharp crests, and weighted by the octave before so detail
+    /// gathers on the crests, as on eroded ridges. In [0, 1].
+    pub fn ridged(&self, p: Vector3<f64>, octaves: u32) -> f64 {
+        let (mut sum, mut amplitude, mut total, mut weight, mut q) = (0., 1., 0., 1., p);
+        for _ in 0 .. octaves {
+            let r = (1. - self.noise(q).abs()).powi(2);
+            sum += r * amplitude * weight;
+            total += amplitude;
+            weight = (r * 2.).clamp(0., 1.);
+            amplitude *= 0.5;
+            q = self.rotation * q * 2.03;
+        }
+        if total > 0. { (sum / total).clamp(0., 1.) } else { 0. }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,14 +444,14 @@ mod tests {
 
     #[test]
     fn test_seeded_perlin_is_reproducible() {
-        assert_eq!(perlin_samples(&PerlinNoise::with_seed(7)), perlin_samples(&PerlinNoise::with_seed(7)));
-        assert_ne!(perlin_samples(&PerlinNoise::with_seed(7)), perlin_samples(&PerlinNoise::with_seed(8)));
-        assert_ne!(perlin_samples(&PerlinNoise::with_seed(7)), perlin_samples(&PerlinNoise::new()));
+        assert_eq!(perlin_samples(&PerlinNoise::shuffled(7)), perlin_samples(&PerlinNoise::shuffled(7)));
+        assert_ne!(perlin_samples(&PerlinNoise::shuffled(7)), perlin_samples(&PerlinNoise::shuffled(8)));
+        assert_ne!(perlin_samples(&PerlinNoise::shuffled(7)), perlin_samples(&PerlinNoise::new()));
     }
 
     #[test]
     fn test_seeded_perlin_table_is_a_permutation() {
-        let perlin = PerlinNoise::with_seed(12345);
+        let perlin = PerlinNoise::shuffled(12345);
         let mut seen = perlin.perm[..256].to_vec();
         seen.sort();
         assert_eq!(seen, (0..256).collect::<Vec<_>>());
@@ -380,7 +460,7 @@ mod tests {
 
     #[test]
     fn test_seeded_perlin_range() {
-        let perlin = PerlinNoise::with_seed(3);
+        let perlin = PerlinNoise::shuffled(3);
         for v in perlin_samples(&perlin) {
             assert!((-1.0..=1.0).contains(&v));
         }
@@ -423,6 +503,16 @@ mod tests {
         let values: Vec<f64> = (0..8).map(|i| a.noise(i as f64 + 0.5, 0.5, 0.5)).collect();
         assert!(values.iter().any(|v| (v - values[0]).abs() > 1e-6), "{:?}", values);
         WorleyNoise::new(1.0, u32::MAX).noise(0.5, 0.5, 0.5);
+    }
+
+    #[test]
+    fn test_seeded_noise_is_reproducible_and_varies_with_seed() {
+        let (a, b, c) = (PerlinNoise::with_seed(1), PerlinNoise::with_seed(1), PerlinNoise::with_seed(2));
+        let pts = [(0.3, 1.7, -2.2), (10.1, 0.5, 3.3), (-4.4, 2.2, 0.9)];
+        for &(x, y, z) in &pts {
+            assert_eq!(a.noise(x, y, z), b.noise(x, y, z));
+        }
+        assert!(pts.iter().any(|&(x, y, z)| a.noise(x, y, z) != c.noise(x, y, z)));
     }
 
     #[test]

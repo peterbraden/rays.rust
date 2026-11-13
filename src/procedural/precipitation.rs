@@ -78,8 +78,8 @@ impl Precipitation {
             center: Vector2::zeros(),
             radius: 30_000.,
             fade: 0.3,
-            cells: PerlinNoise::with_seed(seed.wrapping_mul(7).wrapping_add(3)),
-            streaks: PerlinNoise::with_seed(seed.wrapping_mul(7).wrapping_add(4)),
+            cells: PerlinNoise::shuffled(seed.wrapping_mul(7).wrapping_add(3)),
+            streaks: PerlinNoise::shuffled(seed.wrapping_mul(7).wrapping_add(4)),
         }
     }
 

@@ -269,11 +269,11 @@ mod tests {
     fn test_internal_reflection_stays_inside() {
         // A ray inside a unit sphere grazing the top: total internal reflection. The hit point
         // has been biased outward along the normal, as trace does.
-        let i = Intersection {
+        let i = Intersection { face: 0, part: 0,
             dist: 1.,
             point: Vector3::new(0., 1.0001, 0.),
             normal: Vector3::new(0., 1., 0.),
-            object: Arc::new(SceneObject {
+            object: &(SceneObject {
                 geometry: Box::new(Sphere::new(Vector3::new(0., 0., 0.), 1.)),
                 medium: Box::new(Solid { m: Box::new(FlatColor { pigment: Color::white() }) }),
             }),

@@ -54,7 +54,7 @@ impl Geometry for HomogenousFog {
         if self.density > 0. {
             // Sample a free-flight distance (Beer-Lambert). Nearer surfaces occlude it.
             let dist = -(1. - rand()).ln() / self.density;
-            Some(RawIntersection {
+            Some(RawIntersection { face: 0, part: 0,
                 dist,
                 point: r.ro + r.rd * dist,
                 normal: r.rd,

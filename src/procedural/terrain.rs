@@ -20,8 +20,7 @@ use crate::noise::PerlinNoise;
 use crate::procedural::nubis_clouds::smoothstep;
 use crate::ray::Ray;
 use crate::scene::Scene;
-use crate::shapes::triangle::SmoothTriangle;
-use std::sync::Arc;
+use crate::shapes::mesh::IndexedMesh;
 
 pub struct Terrain {
     /// Middle of the square of terrain ([x, z]), and how far it reaches either side.
@@ -61,8 +60,8 @@ impl Terrain {
             plains: 40.,
             base: 0.,
             planet_radius: Some(crate::planet::EARTH_RADIUS),
-            noise: PerlinNoise::with_seed(seed.wrapping_mul(2).wrapping_add(11)),
-            warp: PerlinNoise::with_seed(seed.wrapping_mul(2).wrapping_add(12)),
+            noise: PerlinNoise::shuffled(seed.wrapping_mul(2).wrapping_add(11)),
+            warp: PerlinNoise::shuffled(seed.wrapping_mul(2).wrapping_add(12)),
         }
     }
 
@@ -114,7 +113,7 @@ impl Terrain {
     }
 
     /// The triangles, with normals from the heightfield's slope at each vertex.
-    pub fn triangles(&self) -> Vec<Arc<SmoothTriangle>> {
+    pub fn mesh(&self) -> IndexedMesh {
         let n = self.resolution.max(2);
         let step = 2. * self.extent / (n - 1) as f64;
         let at = |i: usize, j: usize| (self.center.x - self.extent + i as f64 * step, self.center.y - self.extent + j as f64 * step);
@@ -129,15 +128,15 @@ impl Terrain {
             let dz = p(i, (j + 1).min(n - 1)) - p(i, j.saturating_sub(1));
             dz.cross(&dx).normalize()
         }).collect();
-        let nm = |i: usize, j: usize| normals[j * n + i];
-        let mut tris = Vec::with_capacity(2 * (n - 1) * (n - 1));
+        let k = |i: usize, j: usize| j * n + i;
+        let mut triangles = Vec::with_capacity(2 * (n - 1) * (n - 1));
         for j in 0..n - 1 {
             for i in 0..n - 1 {
-                tris.push(Arc::new(SmoothTriangle::new(p(i, j), p(i, j + 1), p(i + 1, j), nm(i, j), nm(i, j + 1), nm(i + 1, j))));
-                tris.push(Arc::new(SmoothTriangle::new(p(i + 1, j), p(i, j + 1), p(i + 1, j + 1), nm(i + 1, j), nm(i, j + 1), nm(i + 1, j + 1))));
+                triangles.push([k(i, j), k(i, j + 1), k(i + 1, j)]);
+                triangles.push([k(i + 1, j), k(i, j + 1), k(i + 1, j + 1)]);
             }
         }
-        tris
+        IndexedMesh { positions: points, normals, triangles }
     }
 }
 
@@ -163,7 +162,7 @@ impl TerrainMaterial {
             forest: Color::new(0.035, 0.05, 0.03),
             grass: Color::new(0.11, 0.12, 0.06),
             planet_radius: Some(crate::planet::EARTH_RADIUS),
-            noise: PerlinNoise::with_seed(seed.wrapping_add(31)),
+            noise: PerlinNoise::shuffled(seed.wrapping_add(31)),
         }
     }
 

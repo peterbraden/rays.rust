@@ -112,7 +112,7 @@ impl Mammatus {
             extent: 60_000.,
             fade: 0.,
             seed: seed as u32,
-            noise: PerlinNoise::with_seed(seed.wrapping_mul(5).wrapping_add(41)),
+            noise: PerlinNoise::shuffled(seed.wrapping_mul(5).wrapping_add(41)),
         }
     }
 

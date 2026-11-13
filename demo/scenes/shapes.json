@@ -1,0 +1,944 @@
+{
+  "width": 960,
+  "height": 600,
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 4,
+  "shadow_bias": 0.0001,
+  "max_depth": 5,
+  "background": {
+    "type": "gradient",
+    "bottom": [
+      0.9,
+      0.9,
+      0.9
+    ],
+    "top": [
+      0.45,
+      0.6,
+      0.85
+    ]
+  },
+  "materials": {
+    "FLOOR": {
+      "type": "lambertian",
+      "albedo": [
+        0.7,
+        0.7,
+        0.7
+      ]
+    },
+    "LIGHT": {
+      "type": "diffuse-light",
+      "color": [
+        1,
+        1,
+        1
+      ],
+      "intensity": 6
+    },
+    "RED": {
+      "type": "lambertian",
+      "albedo": [
+        0.8,
+        0.15,
+        0.12
+      ]
+    },
+    "ORANGE": {
+      "type": "lambertian",
+      "albedo": [
+        0.9,
+        0.45,
+        0.1
+      ]
+    },
+    "YELLOW": {
+      "type": "lambertian",
+      "albedo": [
+        0.85,
+        0.75,
+        0.15
+      ]
+    },
+    "GREEN": {
+      "type": "lambertian",
+      "albedo": [
+        0.2,
+        0.65,
+        0.25
+      ]
+    },
+    "BLUE": {
+      "type": "lambertian",
+      "albedo": [
+        0.15,
+        0.35,
+        0.8
+      ]
+    },
+    "PURPLE": {
+      "type": "lambertian",
+      "albedo": [
+        0.55,
+        0.25,
+        0.7
+      ]
+    },
+    "GLASS": {
+      "type": "dielectric",
+      "refractive_index": 1.5,
+      "attenuate": [
+        1,
+        1,
+        1
+      ]
+    },
+    "METAL": {
+      "type": "metal",
+      "reflective": [
+        0.9,
+        0.8,
+        0.6
+      ],
+      "roughness": 0.15
+    },
+    "GOLD": {
+      "type": "metal",
+      "reflective": [
+        1,
+        0.8,
+        0.45
+      ],
+      "roughness": 0.05
+    },
+    "TEAL": {
+      "type": "lambertian",
+      "albedo": [
+        0.1,
+        0.6,
+        0.6
+      ]
+    }
+  },
+  "media": {},
+  "camera": {
+    "location": [
+      0,
+      14,
+      -11
+    ],
+    "lookat": [
+      0,
+      0.5,
+      6.5
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.62,
+    "aperture": 0
+  },
+  "lights": [],
+  "variables": {},
+  "objects": [
+    {
+      "type": "plane",
+      "y": 0,
+      "material": "FLOOR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -12,
+        30,
+        -14
+      ],
+      "radius": 7,
+      "material": "LIGHT"
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "cylinder",
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "cap": [
+          0,
+          2,
+          0
+        ],
+        "radius": 0.8
+      },
+      "material": "RED",
+      "translate": [
+        7.5,
+        0,
+        0
+      ]
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "cone",
+        "base": [
+          0,
+          0,
+          0
+        ],
+        "base_radius": 1,
+        "cap": [
+          0,
+          2,
+          0
+        ],
+        "cap_radius": 0.25
+      },
+      "material": "ORANGE",
+      "translate": [
+        4.5,
+        0,
+        0
+      ]
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "disc",
+        "center": [
+          0,
+          1.1,
+          0
+        ],
+        "normal": [
+          0,
+          0.4,
+          -1
+        ],
+        "radius": 1,
+        "hole_radius": 0.4
+      },
+      "material": "YELLOW",
+      "translate": [
+        1.5,
+        0,
+        0
+      ]
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "torus",
+        "major": 0.8,
+        "minor": 0.3
+      },
+      "material": "GREEN",
+      "translate": [
+        -1.5,
+        1.1,
+        0
+      ],
+      "rotate": {
+        "roll": -60
+      }
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "quadric",
+        "squares": [
+          1,
+          -1,
+          1
+        ],
+        "constant": -0.15,
+        "bounds": {
+          "min": [
+            -1,
+            -1,
+            -1
+          ],
+          "max": [
+            1,
+            1,
+            1
+          ]
+        }
+      },
+      "material": "BLUE",
+      "translate": [
+        -4.5,
+        1,
+        0
+      ]
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "quartic",
+        "terms": [
+          [
+            1,
+            4,
+            0,
+            0
+          ],
+          [
+            -5,
+            2,
+            0,
+            0
+          ],
+          [
+            1,
+            0,
+            4,
+            0
+          ],
+          [
+            -5,
+            0,
+            2,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            4
+          ],
+          [
+            -5,
+            0,
+            0,
+            2
+          ],
+          [
+            11.8,
+            0,
+            0,
+            0
+          ]
+        ],
+        "bounds": {
+          "min": [
+            -3,
+            -3,
+            -3
+          ],
+          "max": [
+            3,
+            3,
+            3
+          ]
+        }
+      },
+      "material": "PURPLE",
+      "translate": [
+        -7.5,
+        1.05,
+        0
+      ],
+      "scale": 0.35
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "polygon",
+        "points": [
+          [
+            0.0,
+            2.0,
+            0
+          ],
+          [
+            -0.2351,
+            1.3236,
+            0
+          ],
+          [
+            -0.9511,
+            1.309,
+            0
+          ],
+          [
+            -0.3804,
+            0.8764,
+            0
+          ],
+          [
+            -0.5878,
+            0.191,
+            0
+          ],
+          [
+            -0.0,
+            0.6,
+            0
+          ],
+          [
+            0.5878,
+            0.191,
+            0
+          ],
+          [
+            0.3804,
+            0.8764,
+            0
+          ],
+          [
+            0.9511,
+            1.309,
+            0
+          ],
+          [
+            0.2351,
+            1.3236,
+            0
+          ]
+        ]
+      },
+      "material": "RED",
+      "translate": [
+        7.5,
+        0,
+        4.5
+      ]
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "prism",
+        "height1": 0,
+        "height2": 0.6,
+        "points": [
+          [
+            0.0,
+            1.0
+          ],
+          [
+            -0.2351,
+            0.3236
+          ],
+          [
+            -0.9511,
+            0.309
+          ],
+          [
+            -0.3804,
+            -0.1236
+          ],
+          [
+            -0.5878,
+            -0.809
+          ],
+          [
+            -0.0,
+            -0.4
+          ],
+          [
+            0.5878,
+            -0.809
+          ],
+          [
+            0.3804,
+            -0.1236
+          ],
+          [
+            0.9511,
+            0.309
+          ],
+          [
+            0.2351,
+            0.3236
+          ]
+        ]
+      },
+      "material": "ORANGE",
+      "translate": [
+        4.5,
+        0,
+        4.5
+      ]
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "lathe",
+        "spline": "cubic",
+        "points": [
+          [
+            0,
+            -0.2
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0.6,
+            0.05
+          ],
+          [
+            0.75,
+            0.5
+          ],
+          [
+            0.4,
+            1.1
+          ],
+          [
+            0.3,
+            1.5
+          ],
+          [
+            0.5,
+            1.95
+          ],
+          [
+            0.55,
+            2.1
+          ]
+        ]
+      },
+      "material": "YELLOW",
+      "translate": [
+        1.5,
+        0,
+        4.5
+      ]
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "sor",
+        "points": [
+          [
+            0.8,
+            -0.1
+          ],
+          [
+            0.75,
+            0
+          ],
+          [
+            0.7,
+            0.05
+          ],
+          [
+            0.3,
+            0.15
+          ],
+          [
+            0.14,
+            0.3
+          ],
+          [
+            0.12,
+            0.6
+          ],
+          [
+            0.14,
+            0.85
+          ],
+          [
+            0.35,
+            1.05
+          ],
+          [
+            0.62,
+            1.35
+          ],
+          [
+            0.78,
+            1.75
+          ],
+          [
+            0.82,
+            2.0
+          ],
+          [
+            0.83,
+            2.1
+          ]
+        ]
+      },
+      "material": "GOLD",
+      "translate": [
+        -1.5,
+        0,
+        4.5
+      ]
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "sphere_sweep",
+        "spline": "cubic",
+        "spheres": [
+          [
+            0.4973,
+            -0.075,
+            -0.6267,
+            0.18
+          ],
+          [
+            0.8,
+            0.15,
+            0.0,
+            0.18
+          ],
+          [
+            0.4973,
+            0.375,
+            0.6267,
+            0.18
+          ],
+          [
+            -0.1818,
+            0.6,
+            0.7791,
+            0.18
+          ],
+          [
+            -0.7233,
+            0.825,
+            0.3419,
+            0.18
+          ],
+          [
+            -0.7174,
+            1.05,
+            -0.354,
+            0.18
+          ],
+          [
+            -0.1686,
+            1.275,
+            -0.782,
+            0.18
+          ],
+          [
+            0.5078,
+            1.5,
+            -0.6182,
+            0.18
+          ],
+          [
+            0.7999,
+            1.725,
+            0.0135,
+            0.18
+          ],
+          [
+            0.4867,
+            1.95,
+            0.6349,
+            0.18
+          ]
+        ]
+      },
+      "material": "BLUE",
+      "translate": [
+        -4.5,
+        0,
+        4.5
+      ]
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "blob",
+        "threshold": 0.6,
+        "components": [
+          {
+            "type": "sphere",
+            "center": [
+              -0.5,
+              0.8,
+              0
+            ],
+            "radius": 0.9,
+            "strength": 1
+          },
+          {
+            "type": "sphere",
+            "center": [
+              0.5,
+              0.8,
+              0
+            ],
+            "radius": 0.9,
+            "strength": 1
+          },
+          {
+            "type": "sphere",
+            "center": [
+              0,
+              1.5,
+              0
+            ],
+            "radius": 0.8,
+            "strength": 1
+          },
+          {
+            "type": "cylinder",
+            "base": [
+              0,
+              0.3,
+              -0.6
+            ],
+            "cap": [
+              0,
+              0.3,
+              0.6
+            ],
+            "radius": 0.6,
+            "strength": 1
+          }
+        ]
+      },
+      "material": "PURPLE",
+      "translate": [
+        -7.5,
+        0,
+        4.5
+      ]
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "isosurface",
+        "function": "sqrt(x*x + y*y + z*z) - 0.85 + 0.2 * noise3d(4*x, 4*y, 4*z)",
+        "contained_by": {
+          "sphere": {
+            "center": [
+              0,
+              0,
+              0
+            ],
+            "radius": 1.3
+          }
+        },
+        "max_gradient": 3
+      },
+      "material": "RED",
+      "translate": [
+        7.5,
+        1.05,
+        9
+      ]
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "superellipsoid",
+        "e": 0.25,
+        "n": 0.8
+      },
+      "material": "ORANGE",
+      "translate": [
+        4.5,
+        0.8,
+        9
+      ],
+      "scale": 0.8
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "julia_fractal",
+        "c": [
+          -0.083,
+          0.0,
+          -0.83,
+          -0.025
+        ],
+        "max_iteration": 8,
+        "accuracy": 0.001
+      },
+      "material": "TEAL",
+      "translate": [
+        1.5,
+        1.1,
+        9
+      ],
+      "rotate": {
+        "pitch": 30
+      }
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "height_field",
+        "function": "0.5 + 0.3 * sin(12 * x) * cos(10 * z)",
+        "resolution": [
+          96,
+          96
+        ],
+        "smooth": true
+      },
+      "material": "GREEN",
+      "translate": [
+        -2.5,
+        0,
+        8
+      ],
+      "scale": [
+        2,
+        1,
+        2
+      ]
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "parametric",
+        "x": "(1 + v * cos(u / 2)) * cos(u)",
+        "y": "v * sin(u / 2)",
+        "z": "(1 + v * cos(u / 2)) * sin(u)",
+        "u": [
+          0,
+          6.2832
+        ],
+        "v": [
+          -0.35,
+          0.35
+        ],
+        "resolution": [
+          96,
+          8
+        ]
+      },
+      "material": "BLUE",
+      "translate": [
+        -4.5,
+        1.1,
+        9
+      ],
+      "scale": 0.85,
+      "rotate": {
+        "roll": -35
+      }
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "bicubic_patch",
+        "points": [
+          [
+            -1.0,
+            0.9,
+            -1.0
+          ],
+          [
+            -0.3333,
+            0.3,
+            -1.0
+          ],
+          [
+            0.3333,
+            0.3,
+            -1.0
+          ],
+          [
+            1.0,
+            0.9,
+            -1.0
+          ],
+          [
+            -1.0,
+            0.3,
+            -0.3333
+          ],
+          [
+            -0.3333,
+            1.5,
+            -0.3333
+          ],
+          [
+            0.3333,
+            2.1,
+            -0.3333
+          ],
+          [
+            1.0,
+            0.3,
+            -0.3333
+          ],
+          [
+            -1.0,
+            0.3,
+            0.3333
+          ],
+          [
+            -0.3333,
+            2.1,
+            0.3333
+          ],
+          [
+            0.3333,
+            1.5,
+            0.3333
+          ],
+          [
+            1.0,
+            0.3,
+            0.3333
+          ],
+          [
+            -1.0,
+            0.9,
+            1.0
+          ],
+          [
+            -0.3333,
+            0.3,
+            1.0
+          ],
+          [
+            0.3333,
+            0.3,
+            1.0
+          ],
+          [
+            1.0,
+            0.9,
+            1.0
+          ]
+        ],
+        "steps": 24
+      },
+      "material": "PURPLE",
+      "translate": [
+        -7.5,
+        0,
+        9
+      ]
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "text",
+        "font": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "string": "rays.rust",
+        "thickness": 0.4
+      },
+      "material": "METAL",
+      "translate": [
+        4.6,
+        0,
+        13.6
+      ],
+      "scale": 2,
+      "rotate": {
+        "pitch": 180
+      }
+    }
+  ]
+}

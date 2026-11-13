@@ -335,6 +335,18 @@ impl SkyMaterial {
 
     /// Light arriving at `p` (per unit sun irradiance) after scattering more than once, times
     /// the isotropic phase function: `MultipleScattering`'s Ψ, or none if it is off.
+    /// The sky with its tables of optical depths towards the sun and of multiple scattering
+    /// built now, before rendering, rather than by the first ray to need them. Each build is a
+    /// parallel (rayon) loop, so a render thread building one inside its `OnceLock` could steal
+    /// another render job whose ray then waits on that same `OnceLock`: a deadlock, as `LUTSky`
+    /// once had. The sun's table comes first, as the multiple scattering table reads it.
+    pub fn with_tables(self) -> SkyMaterial {
+        let p = self.earth.center + Vector3::new(0., self.earth.radius + 1., 0.);
+        self.sun_depths_at(&p);
+        self.multiple_at(&p);
+        self
+    }
+
     fn multiple_at(&self, p: &Vector3<f64>) -> Vector3<f64> {
         if !self.multiple_scattering {
             return Vector3::zeros();
@@ -793,11 +805,22 @@ impl SkyViewLUT {
     }
 }
 
-/// The sky, looked up in a `SkyViewLUT` above the horizon and integrated exactly below it. The
-/// table is built when the sky is first needed.
+/// The sky, looked up in a `SkyViewLUT` above the horizon and integrated exactly below it.
+///
+/// The table is built with the sky, before rendering starts. It was once built lazily, in a
+/// `OnceLock`, by the first ray to need it, but the build is itself a parallel (rayon) loop: a
+/// render thread waiting for its parts of that loop would steal another render job, whose ray
+/// then waited on the `OnceLock` that same thread held - a deadlock, hit at random.
 pub struct LUTSky {
     sky: SkyMaterial,
-    lut: std::sync::OnceLock<SkyViewLUT>,
+    lut: SkyViewLUT,
+}
+
+impl LUTSky {
+    pub fn new(sky: SkyMaterial) -> LUTSky {
+        let lut = SkyViewLUT::build(&sky, LUT_WIDTH, LUT_HEIGHT);
+        LUTSky { sky, lut }
+    }
 }
 
 impl MaterialModel for LUTSky {
@@ -805,7 +828,7 @@ impl MaterialModel for LUTSky {
         let d = r.rd.normalize();
         let altitude = (r.ro - self.sky.earth.center).norm() - self.sky.earth.radius;
         let looked_up = if d.y >= 0. {
-            self.lut.get_or_init(|| crate::geometry::build_apart(|| SkyViewLUT::build(&self.sky, LUT_WIDTH, LUT_HEIGHT))).lookup(&d, altitude)
+            self.lut.lookup(&d, altitude)
         } else {
             None
         };
@@ -865,7 +888,7 @@ pub fn create_sky_sphere(o: &Value) -> SceneObject {
     let sky = parse_sky_material(o);
     // The lookup table is on by default; "lut": false integrates every ray exactly.
     let m: Box<dyn MaterialModel + Sync + Send> = if o["lut"].as_bool().unwrap_or(true) {
-        Box::new(LUTSky { sky, lut: std::sync::OnceLock::new() })
+        Box::new(LUTSky::new(sky))
     } else {
         Box::new(sky)
     };
@@ -923,7 +946,7 @@ pub fn parse_sky_material(o: &Value) -> SkyMaterial {
         ground_albedo: SceneFile::parse_number(&o["ground_albedo"], 0.2),
         ms_table: std::sync::OnceLock::new(),
         crepuscular_rays: o["crepuscular_rays"].as_bool().unwrap_or(false),
-    }
+    }.with_tables()
 }
 
 #[cfg(test)]
@@ -1371,7 +1394,8 @@ mod tests {
             "sun_direction": [0, 0.5, 1],
             "brightness": 30.0,
             "rayleigh_thickness": 8000.0,
-            "mie_thickness": 1200.0
+            "mie_thickness": 1200.0,
+            "lut": false
         }
         "#;
         
@@ -1399,7 +1423,8 @@ mod tests {
         {
             "preset": "earth",
             "sun_direction": [0, 0.5, 1],
-            "brightness": 30.0
+            "brightness": 30.0,
+            "lut": false
         }
         "#;
         
@@ -1412,7 +1437,8 @@ mod tests {
             "preset": "sunset",
             "rayleigh_r": 5.0e-6,
             "mie_coefficient": 30.0e-6,
-            "sun_direction": [0, 0.5, 1]
+            "sun_direction": [0, 0.5, 1],
+            "lut": false
         }
         "#;
         

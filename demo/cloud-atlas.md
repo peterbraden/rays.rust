@@ -127,7 +127,7 @@ troughs.
 
 ![Lenticular clouds](./scenes/lenticular.png)
 
-`lenticular.json`: `{"type": "lenticular", "ridge": [0, 0], "ridge_length": 800, "wind_direction": [1, 0], "oz": true}`, over `{"type": "terrain", "peak": [-1500, 0]}`
+`lenticular.json`: `{"type": "lenticular", "ridge": [0, 0], "ridge_length": 800, "wind_direction": [1, 0], "oz": true}`, over `{"type": "mountains", "peak": [-1500, 0]}`
 
 Smooth lenses standing over the lee of a mountain, often stacked like a pile of plates. Stable air
 blowing over a ridge oscillates, and the oscillation stays trapped below some height as a train of

@@ -61,15 +61,16 @@
 //! - `conductor`, `rough_conductor` -> `metal` whose colour is albedo times the Fresnel
 //!   reflectance at normal incidence, ((eta - 1)^2 + k^2) / ((eta + 1)^2 + k^2) per channel,
 //!   from `eta` and `k` or the named `material` (default "Cu") in Tungsten's table
-//!   (`bsdfs/ComplexIorData.hpp`, copied into `COMPLEX_IOR`). We have no Fresnel term for
-//!   metals, so grazing reflections come out too dark.
+//!   (`bsdfs/ComplexIorData.hpp`, copied into `COMPLEX_IOR`). Our metals approximate the
+//!   Fresnel term from that colour by Schlick's formula, rather than from eta and k.
 //! - `dielectric`, `rough_dielectric` -> `dielectric` (`ior` default 1.5), attenuated by albedo.
 //! - `plastic`, `rough_plastic` -> `plastic` (`ior` default 1.5); its coat's absorption
 //!   (`sigma_a`, `thickness`) is dropped.
 //! - `smooth_coat`, `rough_coat` -> `plastic` over a lambertian `substrate`, or else the
 //!   substrate alone.
-//! - Rough variants keep `roughness`, but ours fuzzes the reflected direction rather than being
-//!   a microfacet distribution (GGX or Beckmann alpha), so they only resemble the original.
+//! - Rough variants keep `roughness`, which is GGX's alpha in both renderers (`ggx`). Tungsten's
+//!   other `distribution`s (Beckmann, Phong) are approximated by GGX of the same alpha, with a
+//!   warning.
 //! - `null` on a primitive that doesn't emit: the primitive is skipped (in Tungsten it is
 //!   invisible, typically a medium's boundary).
 //! - Anything else (`mixed`, `transparency`, `thinsheet`, hair, ...): grey `lambertian`, warned.
@@ -373,8 +374,8 @@ impl<'a> Importer<'a> {
         let context = format!("{} ({})", context, t);
         let albedo = self.colour(&b["albedo"], 1., &context);
         let num = |k: &str, d: f64| b[k].as_f64().unwrap_or(d);
-        if t.starts_with("rough_") {
-            self.warn(format!("{}: roughness only resembles Tungsten's microfacet distribution", context));
+        if t.starts_with("rough_") && b["distribution"].as_str().is_some_and(|d| d != "ggx") {
+            self.warn(format!("{}: the {} distribution is approximated by GGX", context, b["distribution"]));
         }
         if !b["bump"].is_null() {
             self.warn(format!("{}: bump maps are not supported", context));
@@ -752,7 +753,7 @@ mod tests {
     fn test_materials() {
         let bsdfs = json!([
             { "name": "gold", "type": "conductor", "material": "Au" },
-            { "name": "custom", "type": "rough_conductor", "eta": 1, "k": 0, "roughness": 0.3 },
+            { "name": "custom", "type": "rough_conductor", "eta": 1, "k": 0, "roughness": 0.3, "distribution": "beckmann" },
             { "name": "glass", "type": "dielectric", "ior": 1.33 },
             { "name": "plastic", "type": "rough_plastic", "albedo": [0.1, 0.2, 0.3] },
             { "name": "textured", "type": "lambert", "albedo": "wood.png" },
@@ -772,7 +773,7 @@ mod tests {
         assert_eq!(m["textured"]["albedo"], json!([0.5, 0.5, 0.5]));
         assert_eq!(m["odd"]["type"], "lambertian");
         assert_eq!(s["objects"].as_array().unwrap().len(), 6, "the null sphere is skipped");
-        for expected in ["textures are not supported", "unsupported bsdf", "null bsdf and no emission", "roughness only resembles"] {
+        for expected in ["textures are not supported", "unsupported bsdf", "null bsdf and no emission", "approximated by GGX"] {
             assert!(w.iter().any(|x| x.contains(expected)), "no warning {:?} in {:?}", expected, w);
         }
     }

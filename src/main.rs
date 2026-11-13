@@ -25,6 +25,7 @@ mod color;
 mod material {
     pub mod model;
     pub mod bsdf;
+    pub mod ggx;
     pub mod dielectric;
     pub mod specular;
     pub mod ambient;

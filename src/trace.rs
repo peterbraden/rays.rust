@@ -587,7 +587,9 @@ mod tests {
         let towards = Ray { ro: Vector3::new(0., 1., -1.), rd: Vector3::new(0., -1., 1.).normalize() };
         let seen = trace(&towards, 0, &s).1.rgb.x;
         let disc = sun.disc_radiance(&Vector3::zeros(), &sun.direction).rgb.x;
-        assert!((seen - 0.5 * disc).abs() < 1e-6 * disc, "{} vs {}", seen, 0.5 * disc);
+        // Schlick's Fresnel at 45°, from a reflectance of 0.5 at normal incidence.
+        let f = 0.5 + 0.5 * (1. - 0.5f64.sqrt()).powi(5);
+        assert!((seen - f * disc).abs() < 1e-6 * disc, "{} vs {}", seen, f * disc);
     }
 
     #[test]

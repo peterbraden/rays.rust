@@ -282,6 +282,42 @@ mod tests {
         assert!(sampled_sd < unsampled_sd * 0.75, "sd {} vs {}", sampled_sd, unsampled_sd);
     }
 
+    /// A Lambertian floor under the square lights `lights`, (x offset, radiance) each, 2 x 2
+    /// and one unit up, facing down; black background, direct light and one bounce.
+    fn under_squares(lights: &[(f64, f64)]) -> Scene {
+        let mut materials = String::new();
+        let mut objects = String::from(r#"{ "type": "plane", "y": 0, "material": "F" }"#);
+        for (i, (x, radiance)) in lights.iter().enumerate() {
+            materials += &format!(r#", "L{i}": {{ "type": "diffuse-light", "color": [1, 1, 1], "intensity": {radiance} }}"#);
+            let (a, b) = (x - 1., x + 1.);
+            objects += &format!(r#", {{ "type": "triangle", "v0": [{a}, 1, -1], "v1": [{b}, 1, -1], "v2": [{b}, 1, 1], "material": "L{i}" }},
+                {{ "type": "triangle", "v0": [{a}, 1, -1], "v1": [{b}, 1, 1], "v2": [{a}, 1, 1], "material": "L{i}" }}"#);
+        }
+        SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 1,
+            "camera": {{ "location": [0, 0.5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "materials": {{ "F": {{ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }} {materials} }},
+            "objects": [ {objects} ]
+        }}"#))
+    }
+
+    #[test]
+    fn test_lights_chosen_by_power_add_up() {
+        // A dim light overhead and one twenty times brighter off to the side: chosen by power,
+        // the bright one far more often, yet the floor's light is the sum of each one's alone.
+        crate::geometry::seed_rand(17, 1);
+        let both = under_squares(&[(0., 1.), (2.5, 20.)]);
+        // Each light is two triangles; the bright pair takes 20/21 of the choices.
+        let p: Vec<f64> = (0..4).map(|i| both.area_light_choice.probability(i)).collect();
+        assert!((p[2] + p[3] - 20. / 21.).abs() < 1e-9, "{:?}", p);
+        let n = 40_000;
+        let (sum, sum_sd) = floor_radiance(&both, n);
+        let (dim, dim_sd) = floor_radiance(&under_squares(&[(0., 1.)]), n);
+        let (bright, bright_sd) = floor_radiance(&under_squares(&[(2.5, 20.)]), n);
+        let se = ((sum_sd.powi(2) + dim_sd.powi(2) + bright_sd.powi(2)) / n as f64).sqrt();
+        assert!((sum - dim - bright).abs() < 4. * se, "{} vs {} + {} (se {})", sum, dim, bright, se);
+    }
+
     /// A volume filling the box from -1 to 1 under a uniform white sky, with small spheres off
     /// to the side so the octree subdivides (and would list the volume in several cells).
     fn volume_scene(volume: &str) -> Scene {

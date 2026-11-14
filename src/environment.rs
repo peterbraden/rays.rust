@@ -92,6 +92,11 @@ impl Distribution1D {
         ((i as f64 + du) / n as f64, self.func[i] / self.integral, i)
     }
 
+    /// The chance of choosing piece `i`.
+    pub fn probability(&self, i: usize) -> f64 {
+        self.pdf(i) / self.func.len() as f64
+    }
+
     /// The density at piece `i`.
     pub fn pdf(&self, i: usize) -> f64 {
         if self.integral > 0. { self.func[i] / self.integral } else { 0. }

@@ -143,6 +143,9 @@ pub struct Scene {
     /// Emitting objects whose surface can be sampled, for direct lighting (next-event
     /// estimation). The same `Arc`s as in `objects`, so a hit can be recognised as one of them.
     pub area_lights: Vec<Arc<SceneObject>>,
+    /// The chance of choosing each area light to sample: in proportion to its power
+    /// (`SceneFile::light_powers`).
+    pub area_light_choice: crate::environment::Distribution1D,
     /// A directional light, sampled directly by diffuse surfaces and media.
     pub sun: Option<Sun>,
     /// The skysphere's atmosphere, if any, for aerial perspective: light from distant objects

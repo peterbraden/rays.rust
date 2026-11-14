@@ -155,10 +155,10 @@ pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) ->
 /// L_direct(x) = integral over lights of (albedo / pi) L_e(y, -w) cos(theta_x) cos(theta_y) / d^2 V(x, y) dA
 /// ```
 ///
-/// where V is 1 if nothing blocks the segment from x to y. Choosing one of n lights uniformly,
-/// then a point on it uniformly by area, gives density p(y) = 1 / (n area), and the estimate is
-/// the integrand divided by p(y). Lights are chosen uniformly rather than by power. This is
-/// light sampling alone; `direct_lighting_mis` combines it with sampling the BSDF.
+/// where V is 1 if nothing blocks the segment from x to y. Choosing a light with probability
+/// P (in proportion to its power: `Scene::area_light_choice`), then a point on it uniformly by
+/// area, gives density p(y) = P / area, and the estimate is the integrand divided by p(y). This
+/// is light sampling alone; `direct_lighting_mis` combines it with sampling the BSDF.
 fn sample_area_light(albedo: Color, intersection: &Intersection, s: &Scene) -> Color {
     let normal = intersection.normal;
     sample_area_light_with(&intersection.point, s, |w, _| {
@@ -179,7 +179,9 @@ pub fn sample_area_light_with(point: &Vector3<f64>, s: &Scene, response: impl Fn
     if n == 0 {
         return Color::black();
     }
-    let light = &s.area_lights[((rand() * n as f64) as usize).min(n - 1)];
+    let (_, _, i) = s.area_light_choice.sample(rand());
+    let chosen = s.area_light_choice.probability(i);
+    let light = &s.area_lights[i];
     let (y, n_y) = match light.geometry.sample_surface([rand(), rand(), rand()]) {
         Some(sample) => sample,
         None => return Color::black(),
@@ -189,7 +191,7 @@ pub fn sample_area_light_with(point: &Vector3<f64>, s: &Scene, response: impl Fn
     let d = d2.sqrt();
     let w = to_light / d;
     let cos_y = n_y.dot(&-w).abs();
-    let pdf = d2 / (cos_y * light.geometry.surface_area() * n as f64);
+    let pdf = d2 / (cos_y * light.geometry.surface_area()) * chosen;
     let response = response(&w, pdf);
     if response == Color::black() {
         return Color::black();
@@ -208,8 +210,9 @@ pub fn sample_area_light_with(point: &Vector3<f64>, s: &Scene, response: impl Fn
 }
 
 /// The density per steradian with which `sample_area_light_with`, from `point`, picks the
-/// point `y` with normal `n_y` on the area light `light`: the chance of choosing that light,
-/// 1 / n, times its density per unit area, 1 / area, converted to solid angle by d² / |cos θ_y|.
+/// point `y` with normal `n_y` on the area light `light`: the chance of choosing that light
+/// (`Scene::area_light_choice`), times its density per unit area, 1 / area, converted to solid
+/// angle by d² / |cos θ_y|.
 pub fn area_light_pdf(point: &Vector3<f64>, y: &Vector3<f64>, n_y: &Vector3<f64>, light: &SceneObject, s: &Scene) -> f64 {
     let to_light = y - point;
     let d2 = to_light.norm_squared();
@@ -217,7 +220,9 @@ pub fn area_light_pdf(point: &Vector3<f64>, y: &Vector3<f64>, n_y: &Vector3<f64>
     if cos_y <= 0. {
         return 0.;
     }
-    d2 / (cos_y * light.geometry.surface_area() * s.area_lights.len() as f64)
+    let chosen = s.area_lights.iter().position(|l| std::ptr::eq(&**l, light))
+        .map_or(0., |i| s.area_light_choice.probability(i));
+    d2 / (cos_y * light.geometry.surface_area()) * chosen
 }
 
 /// Light arriving directly from the scene's lights at `point`, and reflected towards unit `wo`

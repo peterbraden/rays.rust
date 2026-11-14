@@ -16,6 +16,7 @@ scenes=(
   "demo/reference/cornell-box.json 256 256 64"
   "demo/scenes/spheres.json 320 240 64"
   "demo/scenes/glossy-sun.json 480 240 64"
+  "demo/scenes/lamps.json 480 270 64"
   "demo/scenes/forest.json 400 200 8"
   "demo/scenes/orbit.json 160 80 4"
 )

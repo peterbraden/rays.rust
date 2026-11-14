@@ -2217,6 +2217,7 @@ impl SceneFile {
             .filter(|o| o.medium.material_at(Vector3::zeros()).is_emitter() && o.geometry.surface_area() > 0.)
             .cloned()
             .collect();
+        let area_light_choice = crate::environment::Distribution1D::new(SceneFile::light_powers(&area_lights));
         let o = SceneGraph::new(objects);
 		
         let width = SceneFile::parse_int(&s.width, 640);
@@ -2258,6 +2259,7 @@ impl SceneFile {
                 ..OutputOpts::parse(&s.output)
             },
             area_lights,
+            area_light_choice,
             sun,
             atmosphere,
             environment: None,
@@ -2267,6 +2269,26 @@ impl SceneFile {
             scene.environment = crate::environment::Environment::build(&scene);
         }
         scene
+    }
+
+    /// Roughly each area light's power, to choose lights to sample in proportion to it: the
+    /// luminance it emits along its normal at one point, times its area. Sampling the light
+    /// that delivers more light more often is Pharr, Jakob and Humphreys's power light sampler
+    /// ("Physically Based Rendering", 4th ed., section 12.6.2,
+    /// <https://pbr-book.org/4ed/Light_Sources/Light_Sampling>). Any choice that can pick every
+    /// emitting light is unbiased, so every light gets at least a hundredth of the mean, in case
+    /// the one point misjudges a textured emitter.
+    fn light_powers(lights: &[Arc<SceneObject>]) -> Vec<f64> {
+        let powers: Vec<f64> = lights.iter().map(|l| {
+            let emitted = match l.geometry.sample_surface([0.5, 0.5, 0.5]) {
+                Some((y, n)) => l.medium.material_at(y).emitted(&n, &n),
+                None => Color::black(),
+            };
+            let e = emitted.rgb;
+            (0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z).max(0.) * l.geometry.surface_area()
+        }).collect();
+        let mean = powers.iter().sum::<f64>() / powers.len().max(1) as f64;
+        powers.iter().map(|p| p.max(0.01 * mean).max(f64::MIN_POSITIVE)).collect()
     }
 
     pub fn from_string(s: String) -> Scene {

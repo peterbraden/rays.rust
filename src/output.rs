@@ -172,19 +172,31 @@ impl ImageWriter for Png {
 /// renders and for reference images to compare against; see "Technical Introduction to
 /// OpenEXR" (Kainz, Bogart, Stanczyk, Hillman),
 /// <https://openexr.com/en/latest/TechnicalIntroduction.html>.
+///
+/// Written with increasing line order, so the file is the same, byte for byte, for the same
+/// image. An EXR file is a sequence of compressed blocks (here 64 x 64 tiles, run-length
+/// compressed) with a table of where each one starts, and with "unspecified" line order, the
+/// `exr` crate's default, which `image` uses, the blocks are written in whatever order their
+/// parallel compression finishes. The pixels were the same either way, but on a busy machine
+/// two renders of the same image could differ as files, which made resumed renders look
+/// different from uninterrupted ones when they weren't.
 pub struct Exr;
 
 impl ImageWriter for Exr {
     fn write(&self, img: &LinearImage, path: &str) -> Result<(), String> {
-        let out = image::Rgb32FImage::from_fn(img.width as u32, img.height as u32, |x, y| {
-            let c = img.get(x as usize, y as usize).rgb;
-            // NaN means a broken sample; keep it out of the file.
-            let f = |v: f64| if v.is_nan() { 0. } else { v as f32 };
-            image::Rgb([f(c.x), f(c.y), f(c.z)])
+        use exr::prelude::*;
+        // NaN means a broken sample; keep it out of the file.
+        let f = |v: f64| if v.is_nan() { 0. } else { v as f32 };
+        let channels = SpecificChannels::rgb(|p: Vec2<usize>| {
+            let c = img.get(p.x(), p.y()).rgb;
+            (f(c.x), f(c.y), f(c.z))
         });
+        let encoding = Encoding { line_order: LineOrder::Increasing, ..Encoding::FAST_LOSSLESS };
+        let layer = Layer::new((img.width, img.height), LayerAttributes::default(), encoding, channels);
         let tmp = format!("{}.tmp", path);
-        out.save_with_format(Path::new(&tmp), image::ImageFormat::OpenExr)
-            .and_then(|_| std::fs::rename(&tmp, path).map_err(image::ImageError::IoError))
+        Image::from_layer(layer).write().to_file(&tmp)
+            .map_err(|e| e.to_string())
+            .and_then(|_| std::fs::rename(&tmp, path).map_err(|e| e.to_string()))
             .map_err(|e| format!("Failed to write {}: {}", path, e))
     }
 }
@@ -312,6 +324,28 @@ mod tests {
         assert_eq!((back.width, back.height), (2, 1));
         for (a, b) in back.pixels.iter().zip(&pixels) {
             assert!((a.rgb - b.rgb).norm() <= b.rgb.norm() * 1e-6, "{:?} vs {:?}", a, b);
+        }
+    }
+
+    #[test]
+    fn test_exr_blocks_are_in_a_fixed_order() {
+        // With unspecified line order, blocks land in the order their parallel compression
+        // finishes, which varies from run to run on a busy machine. Several tiles, so there is
+        // more than one block to order.
+        let pixels = (0..300 * 200).map(|i| Color::new((i % 7) as f64, (i % 13) as f64 * 0.1, 1.)).collect();
+        let img = LinearImage { width: 300, height: 200, pixels };
+        let dir = std::env::temp_dir().join(format!("rays-exr-order-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.exr");
+        let path = path.to_str().unwrap();
+        Exr.write(&img, path).unwrap();
+        let meta = exr::meta::MetaData::read_from_file(path, false).unwrap();
+        assert_eq!(meta.headers[0].line_order, exr::meta::attribute::LineOrder::Increasing);
+        // And the same image gives the same file.
+        let first = std::fs::read(path).unwrap();
+        for _ in 0..5 {
+            Exr.write(&img, path).unwrap();
+            assert_eq!(std::fs::read(path).unwrap(), first);
         }
     }
 }

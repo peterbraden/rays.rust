@@ -75,13 +75,15 @@
 //!
 //! - Three wavelengths per path, not four, to fit [`Color`].
 //! - Spectra are tabulated every 5 nm and interpolated linearly, not every 1 nm.
-//! - The sky (`skysphere`) is computed in RGB and its radiance upsampled as an illuminant:
-//!   its Rayleigh scattering is evaluated at 680, 550 and 440 nm, not at the sample's
-//!   wavelengths. Likewise the halo, rainbow and diffraction code keeps its own wavelengths.
+//! - The sky (`skysphere`) is evaluated at the sample's wavelengths, but its tables of multiple
+//!   scattering and of the sky's view are built at 15 wavelengths and interpolated. The halo,
+//!   rainbow and diffraction code keeps its own wavelengths, averaged per RGB channel, and its
+//!   colours are upsampled.
 //! - Only sRGB, with D65 white; pbrt also offers DCI-P3, Rec. 2020 and ACES2065-1.
 
 pub mod cie;
 pub mod rgb2spec;
+pub mod atmosphere;
 
 use crate::color::Color;
 use crate::na::{Matrix3, Vector3};

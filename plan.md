@@ -772,9 +772,16 @@ start) by chapter:
 - `"spectral": true` turns it on; RGB mode is unchanged. Materials, lights, the sun, the sky,
   the background and the media convert their RGB at the point of use (`Color::as_reflectance`,
   `as_illuminant`, `as_unbounded`).
-- Known limitations: the sky's own scattering, halos, rainbows and diffraction stay in RGB and
-  are upsampled; only sRGB output; three wavelengths, not pbrt's four. White balance and the
-  sensor model belong with the film, in chapter 5.
+- The sky is spectral too (`skysphere`'s "Spectral skies"): its coefficients at the sample's
+  wavelengths (Rayleigh by a log-log fit through the preset's three, ozone from Serdyuchenko et
+  al.'s cross-section), the sun's spectrum above the air from ASTM G-173 (both from Bruneton
+  2017's data), and its multiple scattering and sky-view tables at 15 wavelengths, interpolated.
+  The tables take about 6 s to build (4 cores), on the first spectral sample; a sky sample then
+  costs about twice an RGB one. At the limb at sunset, three wavelengths overstated the red
+  band: the eye barely sees 680 nm, which long paths spare, and 600 nm suffers ozone's peak.
+- Known limitations: halos, rainbows and diffraction stay per RGB channel and are upsampled;
+  only sRGB output; three wavelengths, not pbrt's four. White balance and the sensor model
+  belong with the film, in chapter 5.
 
 ### Reading (chapter 4)
 
@@ -785,5 +792,10 @@ start) by chapter:
 - Jakob and Hanika, "A Low-Dimensional Function Space for Efficient Spectral Upsampling",
   Computer Graphics Forum 38(2) (Eurographics 2019), doi:10.1111/cgf.13626.
 - CIE 015:2018, "Colorimetry", 4th ed. (matching functions, D65, CIELAB).
+- Bruneton, "Precomputed Atmospheric Scattering: a New Implementation", 2017
+  (<https://ebruneton.github.io/precomputed_atmospheric_scattering/>), including its evaluation
+  of RGB against spectral rendering of the sky; ASTM G-173 (solar spectrum); Serdyuchenko et al.,
+  "High spectral resolution ozone absorption cross-sections - Part 2", AMT 7, 2014,
+  doi:10.5194/amt-7-625-2014.
 - Malitson, "Interspecimen Comparison of the Refractive Index of Fused Silica", JOSA 55(10), 1965,
   doi:10.1364/JOSA.55.001205.

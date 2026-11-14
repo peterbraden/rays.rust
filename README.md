@@ -65,6 +65,13 @@ what changes is coloured light on coloured surfaces, and what RGB can't do at al
 
 - Dispersion: a dielectric's `refractive_index` can be a named glass (`"BK7"`, `"fused silica"`,
   `"SF11"`, `"diamond"`), `{"cauchy": [a, b]}` or `{"sellmeier": {"b": [..], "c": [..]}}`.
+- The sky: Rayleigh scattering, ozone and sunlight at each sample's wavelengths, which changes
+  sunsets and twilight most, where three wavelengths can't stand for the light that survives
+  long paths through the air. Below, `limb-sunset` and `stratosphere` in RGB (left) and
+  spectral (right): RGB's red channel, at 680 nm, overstates the light that survives the
+  longest paths, and paints the limb with a red band and a purple fringe.
+
+  ![RGB and spectral skies](demo/spectral-sky-comparison.png)
 - Blackbody emitters: `{"type": "diffuse-light", "temperature": 2700, "intensity": 10}`, and
   `"temperature"` on point lights, emit Planck's spectrum (scaled to unit luminance).
 

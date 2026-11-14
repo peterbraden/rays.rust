@@ -66,13 +66,18 @@ impl Sun {
     /// Irradiance at `point`: through the atmosphere, if any, by its altitude and the sun's
     /// height in its sky, so anywhere on the planet; none on the night side.
     pub fn irradiance_at(&self, point: &Vector3<f64>) -> Color {
-        // In spectral mode, at the sample's wavelengths: the irradiance as an illuminant, and the
-        // air's transmittance, computed in RGB, as a reflectance.
+        // In spectral mode, at the sample's wavelengths: the colour as an illuminant, or with an
+        // atmosphere, sunlight's spectrum above it (`spectrum::atmosphere::solar`) tinted by the
+        // colour, through the air's transmittance at those wavelengths.
         match &self.atmosphere {
             None => self.irradiance.as_illuminant(),
             Some(sky) => {
                 let t = sky.sun_transmittance(point);
-                self.irradiance.as_illuminant() * Color::new(t.x, t.y, t.z).as_reflectance()
+                let above = match crate::spectrum::current() {
+                    None => self.irradiance,
+                    Some(w) => self.irradiance.as_unbounded() * w.map(crate::spectrum::atmosphere::solar),
+                };
+                above * Color::new(t.x, t.y, t.z)
             },
         }
     }

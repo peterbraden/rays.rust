@@ -54,8 +54,8 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, prior: LightSampling) -> (u64, Col
                 // The sky already includes the air in front of it.
                 Some(sky) if dist > AERIAL_PERSPECTIVE_FROM && !reaches_sky => {
                     let (transmittance, inscattered) = sky.segment(&r.ro, &r.rd.normalize(), dist);
-                    // Computed in RGB; at the sample's wavelengths in spectral mode.
-                    (cast, color * Color { rgb: transmittance }.as_reflectance() + Color { rgb: inscattered }.as_illuminant())
+                    // In spectral mode, at the sample's wavelengths (`SkyMaterial::air`).
+                    (cast, color * transmittance + inscattered)
                 },
                 _ => (cast, color),
             }
@@ -67,7 +67,7 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, prior: LightSampling) -> (u64, Col
         (Some(env), LightSampling::MIS { bsdf_pdf }) if reaches_sky => color * power_heuristic(bsdf_pdf, env.pdf(&r.rd.normalize())),
         _ => color,
     };
-    let color = Color { rgb: (color.rgb - Color { rgb: shadowed }.as_illuminant().rgb).map(|v| v.max(0.)) };
+    let color = Color { rgb: (color.rgb - shadowed).map(|v| v.max(0.)) };
     match &s.sun {
         Some(sun) if reaches_sky => {
             let d = r.rd.normalize();

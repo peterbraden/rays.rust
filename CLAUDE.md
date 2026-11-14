@@ -12,7 +12,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Procedural trees (Weber and Penn's parametric model, `src/procedural/tree.rs`), forests of instanced
   trees (`src/procedural/forest.rs`), and rocks (`bedrock`, `boulder`, `pebbles` objects; `rock` material)
 - Heightmap terrain (flat, fractal noise or image) and procedural grass that grows on it, with species and condition presets (see `src/procedural/grass.rs`)
-- Spectral rendering (`"spectral": true`, `src/spectrum.rs`, after PBRT chapter 4): three hero wavelengths per path, RGB upsampled by Jakob-Hanika sigmoid polynomials (`src/spectrum/rgb2spec.rs`) via `Color::as_reflectance`/`as_illuminant`/`as_unbounded` where colours enter light transport (identity in RGB mode); dispersive glasses (`refractive_index`: named glass, Cauchy or Sellmeier) and blackbody emitters (`"temperature"`)
+- Spectral rendering (`"spectral": true`, `src/spectrum.rs`, after PBRT chapter 4): three hero wavelengths per path, RGB upsampled by Jakob-Hanika sigmoid polynomials (`src/spectrum/rgb2spec.rs`) via `Color::as_reflectance`/`as_illuminant`/`as_unbounded` where colours enter light transport (identity in RGB mode); dispersive glasses (`refractive_index`: named glass, Cauchy or Sellmeier) and blackbody emitters (`"temperature"`); the sky is evaluated at the sample's wavelengths (`SkyMaterial::air`, spectral data in `src/spectrum/atmosphere.rs`), so its outputs must not be upsampled again
 - Multithreaded rendering with progressive output
 
 ## Build Commands

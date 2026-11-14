@@ -41,7 +41,7 @@ use crate::material::phase::PhaseFunction;
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
 use serde_json::{Value, Map};
-use crate::scene::{Scene, ImageOpts, RenderOpts, PathTermination, Background, Filter, Sampler};
+use crate::scene::{Scene, ImageOpts, RenderOpts, PathTermination, Background, Filter, FilterShape, TabulatedFilter, Sampler};
 use crate::output::OutputOpts;
 use std::io::prelude::*;
 use std::fs::File;
@@ -228,6 +228,8 @@ pub struct SceneFile {
     #[serde(default)]
     pub spectral: Value,
     #[serde(default)]
+    pub shutter: Value,
+    #[serde(default)]
     pub filter: Value,
     #[serde(default)]
     pub output: Value,
@@ -271,6 +273,29 @@ impl SceneFile {
         }
     }
     
+    /// The reconstruction filter (`scene::Filter`): `"box"` (the default), `"tent"`,
+    /// `"gaussian"`, `"mitchell"` or `"lanczos"`, or an object with `"type"` and parameters:
+    /// `"radius"` in pixels (defaults 1.5, 2 and 3), and `"sigma"` (0.5), `"b"` and `"c"` (1/3
+    /// each), or `"tau"` (3).
+    pub fn parse_filter(v: &Value) -> Filter {
+        let (name, o) = match v {
+            Value::Null => ("box", &Value::Null),
+            Value::String(s) => (s.as_str(), &Value::Null),
+            Value::Object(_) => (v["type"].as_str().unwrap_or_else(|| panic!("A filter object needs a \"type\", got {}", v)), v),
+            _ => panic!("Unexpected filter {}", v),
+        };
+        let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let tabulated = |shape, radius| Filter::Tabulated(Arc::new(TabulatedFilter::new(shape, radius)));
+        match name {
+            "box" => Filter::Box,
+            "tent" => Filter::Tent,
+            "gaussian" => tabulated(FilterShape::Gaussian { sigma: n("sigma", 0.5) }, n("radius", 1.5)),
+            "mitchell" => tabulated(FilterShape::Mitchell { b: n("b", 1. / 3.), c: n("c", 1. / 3.) }, n("radius", 2.)),
+            "lanczos" => tabulated(FilterShape::Lanczos { tau: n("tau", 3.) }, n("radius", 3.)),
+            f => panic!("Unknown filter '{}': expected \"box\", \"tent\", \"gaussian\", \"mitchell\" or \"lanczos\"", f),
+        }
+    }
+
     /// A refractive index (`spectrum::RefractiveIndex`): a number; a named glass, `"BK7"`,
     /// `"fused silica"`, `"SF11"` or `"diamond"` (or `{"glass": name}`); `{"cauchy": [a, b]}`,
     /// n = a + b / λ² with λ in µm; or `{"sellmeier": {"b": [b1, b2, b3], "c": [c1, c2, c3]}}`,
@@ -372,15 +397,74 @@ impl SceneFile {
         }
     }
 
-    pub fn parse_camera(c: Value, width: u32, height: u32) -> camera::FlatLensCamera {
-        camera::FlatLensCamera::new(
-            SceneFile::parse_vec3(&c["lookat"]),
-            SceneFile::parse_vec3(&c["location"]),
-            SceneFile::parse_vec3(&c["up"]),
-            c["angle"].as_f64().unwrap(),
-            width, height,
-            SceneFile::parse_number(&c["aperture"], 0.2)
-        )
+    /// The camera (`camera`): `"location"`, `"lookat"` and `"up"`, and by `"type"`:
+    /// - `"perspective"` (the default): `"angle"`, with tan(angle) the image's height at unit
+    ///   distance; a thin lens of radius `"aperture"` (default 0.2), focused at the point looked
+    ///   at or `"focus_distance"`.
+    /// - `"orthographic"`: parallel rays from a rectangle `"height"` tall (by default what the
+    ///   perspective camera sees at the point looked at).
+    /// - `"spherical"`: every direction, `"mapping": "equirectangular"` (the default) or
+    ///   `"equal_area"`.
+    ///
+    /// With `"motion": {"location", "lookat", "up"}`, the camera moves to that pose (each key
+    /// defaulting to the start's) while the shutter is open.
+    pub fn parse_camera(c: Value, width: u32, height: u32) -> Box<dyn camera::Camera + Sync> {
+        let location = SceneFile::parse_vec3(&c["location"]);
+        let lookat = SceneFile::parse_vec3(&c["lookat"]);
+        let up = SceneFile::parse_vec3(&c["up"]);
+        let start = camera::Frame::look_at(location, lookat, up);
+        let placement = match c.get("motion") {
+            None => camera::Placement::still(start),
+            Some(m) => camera::Placement::moving(start, camera::Frame::look_at(
+                SceneFile::parse_vec3_def(m, "location", location),
+                SceneFile::parse_vec3_def(m, "lookat", lookat),
+                SceneFile::parse_vec3_def(m, "up", up))),
+        };
+        let aspect = width as f64 / height as f64;
+        let angle = || c["angle"].as_f64().unwrap_or_else(|| panic!("The camera needs an \"angle\""));
+        match c["type"].as_str() {
+            None | Some("perspective") => {
+                let mut cam = camera::ThinLensCamera::new(lookat, location, up, angle(), width, height,
+                    SceneFile::parse_number(&c["aperture"], 0.2)).with_placement(placement);
+                if let Some(d) = c["focus_distance"].as_f64() {
+                    cam = cam.with_focus(d);
+                }
+                Box::new(cam)
+            },
+            Some("orthographic") => {
+                let h = c["height"].as_f64().unwrap_or_else(|| angle().tan() * (lookat - location).norm());
+                Box::new(camera::OrthographicCamera::new(placement, h, aspect))
+            },
+            Some("spherical") => Box::new(camera::SphericalCamera::new(placement, match c["mapping"].as_str() {
+                None | Some("equirectangular") => camera::SphereMapping::Equirectangular,
+                Some("equal_area") => camera::SphereMapping::EqualArea,
+                Some(m) => panic!("Unknown spherical mapping '{}': expected \"equirectangular\" or \"equal_area\"", m),
+            })),
+            Some(t) => panic!("Unknown camera type '{}': expected \"perspective\", \"orthographic\" or \"spherical\"", t),
+        }
+    }
+
+    /// Whether a scene value (the camera, an object, a geometry) moves: holds a `"motion"`.
+    fn has_motion(v: &Value) -> bool {
+        match v {
+            Value::Object(o) => o.contains_key("motion") || o.values().any(SceneFile::has_motion),
+            Value::Array(a) => a.iter().any(SceneFile::has_motion),
+            _ => false,
+        }
+    }
+
+    /// `"shutter": [open, close]`, in the time of motion, where moving things are at their start
+    /// at 0 and their end at 1 (default [0, 1]).
+    pub fn parse_shutter(v: &Value) -> crate::motion::Shutter {
+        match v {
+            Value::Null => crate::motion::Shutter::default(),
+            Value::Array(a) if a.len() == 2 && a.iter().all(|x| x.is_number()) => {
+                let (open, close) = (a[0].as_f64().unwrap(), a[1].as_f64().unwrap());
+                assert!(close >= open, "The shutter must close after it opens, got {}", v);
+                crate::motion::Shutter { open, close }
+            },
+            _ => panic!("\"shutter\" must be [open, close], got {}", v),
+        }
     }
 
     pub fn parse_objects(objs: Vec<Value>, materials: &Map<String, Value>, media: &Map<String, Value>, geometries: &GeometryLibrary) ->Vec<Arc<SceneObject>> {
@@ -1527,13 +1611,40 @@ impl SceneFile {
     ///
     /// Or `{"type": "transform", "item": {...}, "steps": [step, ..]}`, applying each step in turn
     /// (see `parse_steps`).
+    ///
+    /// With `"motion": {...}`, the object moves while the shutter is open (`motion`): `motion`
+    /// holds the transform's keys at the end of the motion, each defaulting to its value at the
+    /// start, eg. `"translate": [0, 0, 0], "motion": {"translate": [1, 0, 0]}`.
     pub fn parse_transform(o: &Value, parts: &mut Parts) -> Box<dyn Geometry + Sync + Send> {
         let item = SceneFile::parse_shared_geometry_in(&o["item"], parts)
             .unwrap_or_else(|| panic!("transform needs a geometry \"item\", got {}", o["item"]));
+        let start = SceneFile::parse_affine(o);
+        match o.get("motion") {
+            None => Box::new(Transform::new(item, start)),
+            Some(Value::Object(m)) => {
+                let mut end = o.clone();
+                for (k, v) in m {
+                    end[k.as_str()] = v.clone();
+                }
+                // Steps replace the parts, and the parts the steps.
+                if m.contains_key("steps") {
+                    for k in ["scale", "rotate", "translate"] { end[k] = Value::Null; }
+                } else if ["scale", "rotate", "translate"].iter().any(|k| m.contains_key(*k)) {
+                    end["steps"] = Value::Null;
+                }
+                Box::new(crate::motion::AnimatedTransform::new(item, start, SceneFile::parse_affine(&end)))
+            },
+            Some(v) => panic!("A transform's \"motion\" must be an object of its keys at the end, got {}", v),
+        }
+    }
+
+    /// The affine map of a transform object's `"steps"`, or of its `"scale"`, `"rotate"` and
+    /// `"translate"`.
+    fn parse_affine(o: &Value) -> Affine3<f64> {
         if !o["steps"].is_null() {
             assert!(["scale", "rotate", "translate"].iter().all(|k| o[k].is_null()),
                 "transform takes \"steps\", or \"scale\", \"rotate\" and \"translate\", not both");
-            return Box::new(Transform::new(item, SceneFile::parse_steps(&o["steps"])));
+            return SceneFile::parse_steps(&o["steps"]);
         }
         let scale = match &o["scale"] {
             Value::Number(n) => { let s = n.as_f64().unwrap(); Vector3::new(s, s, s) },
@@ -1547,7 +1658,10 @@ impl SceneFile {
             SceneFile::parse_number(&r["yaw"], 0.).to_radians(),
         );
         let translate = SceneFile::parse_vec3_def(o, "translate", Vector3::zeros());
-        Box::new(Transform::from_parts(item, translate, rotation, scale))
+        assert!(scale.x != 0. && scale.y != 0. && scale.z != 0., "transform scale must be non-zero on every axis, got {}", scale);
+        Affine3::from_matrix_unchecked(Translation3::from(translate).to_homogeneous()
+            * rotation.to_homogeneous()
+            * Matrix4::new_nonuniform_scaling(&scale))
     }
 
     /// A list of transformation steps, applied in order:
@@ -2269,6 +2383,9 @@ impl SceneFile {
         let atmosphere = s.objects.iter()
             .find(|o| o["type"].as_str() == Some("skysphere") && o["aerial_perspective"].as_bool() != Some(false))
             .map(|o| Arc::new(parse_sky_material(o)));
+        // Motion blur: sample times only if something moves (`motion`).
+        let motion = SceneFile::has_motion(&s.camera) || s.objects.iter().any(SceneFile::has_motion)
+            || s.geometries.values().any(SceneFile::has_motion);
         let geometries = GeometryLibrary::new(s.geometries);
         geometries.preload(&s.objects);
         let objects = SceneFile::parse_objects(s.objects, &s.materials, &s.media, &geometries);
@@ -2296,20 +2413,18 @@ impl SceneFile {
                 seed: SceneFile::parse_int(&s.seed, 0) as u64,
                 sample_lights: s.sample_lights.as_bool().unwrap_or(true),
                 sample_sky: s.sample_sky.as_bool().unwrap_or(true),
-                filter: match s.filter.as_str() {
-                    None | Some("box") => Filter::Box,
-                    Some("tent") => Filter::Tent,
-                    Some(f) => panic!("Unknown filter '{}': expected \"box\" or \"tent\"", f),
-                },
+                filter: SceneFile::parse_filter(&s.filter),
                 regularise: SceneFile::parse_number(&s.regularise, crate::material::ggx::DEFAULT_REGULARISE),
                 spectral: s.spectral.as_bool().unwrap_or(false),
+                shutter: SceneFile::parse_shutter(&s.shutter),
+                motion,
                 sampler: match s.sampler.as_str() {
                     None | Some("sobol") => Sampler::Sobol,
                     Some("independent") => Sampler::Independent,
                     Some(x) => panic!("Unknown sampler '{}': expected \"sobol\" or \"independent\"", x),
                 },
             },
-            camera: Box::new(SceneFile::parse_camera(s.camera, width as u32, height as u32)),
+            camera: SceneFile::parse_camera(s.camera, width as u32, height as u32),
             lights: SceneFile::parse_lights(&s.lights),
             objects: o,
             max_bounding,

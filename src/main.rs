@@ -23,6 +23,7 @@ use rayon::prelude::*;
 mod ray;
 mod color;
 mod spectrum;
+mod motion;
 mod material {
     pub mod model;
     pub mod bsdf;

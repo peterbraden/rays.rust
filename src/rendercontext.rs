@@ -462,18 +462,24 @@ fn render_pixel(x: usize, y: usize, first: usize, count: usize, s: &Scene) -> (u
             },
             Sampler::Independent => ((offset.0 + k as f64 * R2.0).fract(), (offset.1 + k as f64 * R2.1).fract()),
         };
+        // With motion blur, the sample's time (`motion`).
+        if s.render.motion {
+            crate::motion::begin_sample(s.render.shutter.time(rand()));
+        }
         // In spectral mode, the sample's wavelengths (`spectrum`).
         if s.render.spectral {
             crate::spectrum::begin_sample(crate::spectrum::Wavelengths::sample_visible(rand()));
         }
+        // Jitter warped to the reconstruction filter, and the sample's weight (one, but for
+        // filters with negative lobes).
+        let ((fx, wx), (fy, wy)) = (s.render.filter.sample_weighted(u), s.render.filter.sample_weighted(v));
         let (rays_cast, c) = trace(
                 &s.camera.get_ray(
                     x as f64 / (s.image.width as f64),
                     y as f64 / (s.image.height as f64),
-                    // Jitter warped to the reconstruction filter, measured from the pixel's
-                    // corner.
-                    (0.5 + s.render.filter.sample(u)) / (s.image.width as f64),
-                    (0.5 + s.render.filter.sample(v)) / (s.image.height as f64))
+                    // Measured from the pixel's corner.
+                    (0.5 + fx) / (s.image.width as f64),
+                    (0.5 + fy) / (s.image.height as f64))
                 , 0, s);
         cast += rays_cast;
         // A spectral sample's radiance becomes a colour (and stray NaNs, as in RGB, pass on).
@@ -481,6 +487,8 @@ fn render_pixel(x: usize, y: usize, first: usize, count: usize, s: &Scene) -> (u
             Some(w) => w.to_srgb(&c),
             None => c,
         };
+        let c = if wx * wy == 1. { c } else { c * (wx * wy) };
+        crate::motion::end_sample();
         pixel = pixel + c;
     }
     end_sample();

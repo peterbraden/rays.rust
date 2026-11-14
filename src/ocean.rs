@@ -98,6 +98,7 @@ extern crate rand as _rand;
 extern crate image;
 extern crate rustfft;
 
+use crate::material::model::LightSampling;
 use crate::scene::Scene;
 use crate::intersection::Intersection;
 use std::f64;
@@ -863,7 +864,7 @@ impl MaterialModel for PhysicalOcean {
         } else {
             (Color::black(), None)
         };
-        ScatteredRay { emit, sampled_lights: true, attenuate, ray }
+        ScatteredRay { emit, light_sampling: LightSampling::Exclusive, attenuate, ray }
     }
 }
 

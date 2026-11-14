@@ -590,3 +590,148 @@ processes can be animated.
 - Unchecked: Halfar's solution as given by Bueler et al., J. Glaciology 51(173), 2005 (used by
   `test_halfar_dome`, which passing within 3% supports).
 
+
+
+## 10. Variance reduction
+
+Goal: less noise for the same render time. Renders are visibly grainy: even grain on sky-lit
+matte surfaces (`spheres`), fireflies on glossy surfaces under the sun (`glossy-sun`), and
+speckle in clouds (`orbit`).
+
+### Known (from the code, at the start)
+
+- Diffuse materials (Lambertian, leaf, grass, rock, terrain, ocean's water body) sample point
+  lights, the sun and one area light directly (`direct_lighting`), and their scattered ray then
+  ignores those lights (`ScatteredRay::sampled_lights`): light sampling alone, no MIS.
+- The sun is treated as a direction (irradiance times the cosine) by diffuse surfaces, and as a
+  disc of 6.8e-5 sr (`Sun::disc_radiance`) by everything else. Glossy materials (`metal`,
+  plastic's coat) find the sun and area lights only by chance: fireflies.
+- Rough reflection is the mirror direction plus a random point in a ball scaled by roughness.
+  It has no closed-form density, so it can't take part in MIS.
+- The sky is reached only by scattered rays: cosine-weighted for diffuse surfaces, regardless
+  of where the sky is bright. Since the sky-view LUT, sky radiance is cheap to evaluate.
+- Only the pixel position is stratified (an n x n jittered grid per pass, n usually 2). Every
+  other dimension draws independent PCG numbers.
+- Area lights are chosen uniformly, not by power.
+- Volumes already use delta tracking, ratio-tracked shadows, and the similarity and Oz
+  approximations.
+
+### Measured baseline (`scripts/variance.sh`, 4 renders, Apple M2)
+
+Efficiency is 1 / (relMSE x seconds); compare ratios on the same scene, not across scenes.
+
+| Scene | Size, samples | Seconds | relMSE (mean) | relMSE (median) | Efficiency |
+| --- | --- | --- | --- | --- | --- |
+| cornell-box | 256 x 256, 64 | 1.34 | 0.00294 | 0.00086 | 254 |
+| spheres | 320 x 240, 64 | 0.33 | 0.00418 | 0.00076 | 716 |
+| glossy-sun | 480 x 240, 64 | 0.67 | 40.6 | 0.00057 | 0.037 |
+| forest | 400 x 200, 8 | 5.92 | 0.02684 | 0.00792 | 6.3 |
+| orbit | 160 x 80, 4 | 46.9 | 1.0e6 | 0 | 0 |
+
+Each pixel's variance is divided by its median across the renders squared (`variance.rs`
+explains why not the mean). Fireflies then dominate the mean, as they dominate what a viewer
+sees, and make it noisy in turn: a single firefly in a black pixel (orbit's space) adds 10⁶.
+Compare means only between runs with large differences, and read the median alongside: it is
+the noise of a typical pixel. Orbit's median is zero because most of the image is black space.
+
+### Assumptions to test
+
+- That MIS with a microfacet BRDF removes most fireflies on glossy surfaces under the sun.
+- That sampling the sky in proportion to its brightness helps sky-lit diffuse surfaces enough
+  to pay for the extra shadow ray. Under an overcast or even sky it may not.
+- That a low-discrepancy sampler gains at 16-64 samples per pixel, mostly in direct lighting.
+- The source of the speckle in `orbit` is unknown. Candidates: deep multiple scattering in
+  high-albedo cloud, the variance of transmittance estimates, sky light reaching deep vertices.
+  Measure before choosing a remedy.
+
+### Steps (each a stacked PR, each measured with `scripts/variance.sh`)
+
+1. Measurement: `--variance <runs>`, `--samples`, `scripts/variance.sh`, the `glossy-sun` scene.
+2. Materials expose their BSDF (value times cosine, and the density of sampling a direction);
+   MIS (power heuristic) between light sampling and BSDF sampling, for area lights and the sun
+   (sampled over its disc where a BSDF can resolve it). Lambertian and terrain first.
+3. GGX microfacet reflection for `metal` and plastic's coat, sampled by visible normals, which
+   brings them into MIS.
+4. Sky importance sampling: a tabulated distribution over directions, MIS with the BSDF.
+5. Low-discrepancy sampling: Owen-scrambled Sobol' across every dimension.
+6. Choosing lights by power.
+7. Investigate the speckle in `orbit`.
+8. (After review) Perceptual roughness, α = r², and path regularisation for light reaching
+   glossy surfaces after another scattering.
+
+Status: steps 1-8 done (see Results). Candidates next: multiple-scattering compensation for
+GGX; shrinking the regularisation with the sample count, for consistency; the orbit
+traversal costs.
+
+### Results (`scripts/variance.sh`, 4 renders, after each step)
+
+| Step | cornell-box | spheres | glossy-sun | forest |
+| --- | --- | --- | --- | --- |
+| Baseline | 0.00086 / 254 | 0.00076 / 716 | 0.00057 / 0.037 | 0.00792 / 6.3 |
+| 2. MIS | 0.00086 / 262 | 0.00076 / 686 | 0.00057 / 0.042 | 0.00787 / 6.2 |
+| 3. GGX | 0.00086 / 264 | 0.00105 / 658 | 0.00081 / 57 | 0.00787 / 5.5 |
+| 4. Sky sampling | 0.00086 / 270 | 0.00058 / 802 | 0.00033 / 41 | 0.00647 / 5.4 |
+| 5. Sobol' | 0.00044 / 468 | 0.00019 / 1521 | 0.00008 / 41 | 0.00616 / 6.3 |
+| 6. Lights by power | 0.00044 / 459 | 0.00015 / 1512 | 0.00007 / 215 | 0.00616 / 5.7 |
+| 8. α = r², regularisation | 0.00044 / 480 | 0.00015 / 1431 | 0.00007 / 548 | 0.00616 / 5.8 |
+
+Each entry is median relMSE / efficiency (from the mean relMSE). Step 6 (lights chosen by
+power) leaves these scenes alone, having one light or none; on `lamps`, five lamps of unequal
+power, it raises efficiency from 13 to 72 and lowers the median relMSE tenfold. Glossy-sun's
+mean relMSE, dominated by fireflies: 40.6 at the baseline, 0.022 with GGX, 0.0014 at the end.
+Timings later in the table ran with the machine under other load (forest 5.9 s at the
+baseline, 7.3 s at the end, for unchanged work per sample in the later steps): compare
+medians there.
+
+Findings:
+
+- MIS on its own changed nothing measurable: diffuse surfaces already took nearly all their
+  direct light from light sampling. Its value came with glossy BSDFs.
+- GGX with MIS removed the glossy-sun fireflies (mean relMSE 33 to 0.02), but in review the
+  GGX step looked more speckled. Two causes, separated by experiment:
+  - Roughness as α made reflections blurrier than the fuzzed mirror's, and 40% noisier per
+    pixel at the same samples (spheres median 0.00069 to 0.00099). With α = roughness² (step
+    8), both the look and the noise return to the old ones (0.00072).
+  - Light reaching a polished surface after another scattering (caustics on the ground; a
+    neighbour's highlight seen in the brushed sphere) became reachable, and sparkled; the
+    fuzzed mirror almost never found it. Path regularisation (step 8) floors every glossy
+    vertex after a path's first at α 0.2: glossy-sun's mean relMSE 5.7 to 0.0014, for softer
+    caustics and frosted reflections of reflections.
+- Measuring variance across renders by dividing by the pixel's mean understated fireflies,
+  capping each near k: BSDF sampling alone measured half as noisy as MIS, against a reference
+  error 90 times larger. The median denominator fixes this (`variance.rs`).
+- Sky sampling costs a shadow ray per vertex (7-50% more time) and helps most under skies of
+  uneven brightness; `"sample_sky": false` turns it off.
+- Sobol' sampling first doubled render times: shuffled indices are full 32-bit numbers, and
+  computing a coordinate bit by bit dominated the profile. Byte tables brought the overhead
+  to about 10%.
+
+### The speckle in `orbit` (step 7)
+
+- It is not deep multiple scattering: with the planet filling the view at 4 samples, the
+  median relMSE is 0.033 with one bounce, 0.042 with two and 0.047 with four. It is the noise
+  of the first scattering in the clouds (where the free path ends, the sun's transmittance
+  from there), at a sample count too low for it.
+- The sample count is low because samples are dear: about 2 ms each. The profile is dominated
+  by `GlobalNubis::majorant_from` and the cube-sphere mapping (`tan`, `atan`,
+  `CubeSphere::locate`: about 60% of samples), not by the clouds' density (4%): delta tracking
+  steps across the weather map one texel at a time, and each step converts to and from
+  texel coordinates by trigonometry.
+- The bright dot in black space, which dominates orbit's mean relMSE, is the sun's disc,
+  smaller than a pixel: real aliasing of a tiny, intense source, not a rendering error.
+- Recommended, as performance work: tabulate the tangents of texel edges (`CubeSphere::boundary`
+  takes the tangent of an integer edge index each time), and skip runs of texels with a
+  coarser map of their maxima, as a mipmap. Faster samples are the cure for this speckle.
+
+### Reading (verified; details in each PR)
+
+- Veach and Guibas, "Optimally Combining Sampling Techniques for Monte Carlo Rendering",
+  SIGGRAPH 1995, doi:10.1145/218380.218498; Veach, PhD thesis, Stanford 1997, ch. 9.
+- Walter, Marschner, Li, Torrance, "Microfacet Models for Refraction through Rough Surfaces",
+  EGSR 2007; Heitz, "Understanding the Masking-Shadowing Function in Microfacet-Based BRDFs",
+  JCGT 3(2), 2014; Heitz, "Sampling the GGX Distribution of Visible Normals", JCGT 7(4), 2018.
+- Pharr, Jakob, Humphreys, "Physically Based Rendering", 4th ed.: §2.1.4 (efficiency), §2.2.3
+  (MIS), §A.5.4 (cone sampling), §A.5.5 (2D distributions), §12.5.2 (image infinite lights),
+  §12.6.2 (power light sampler), §8.7 (Sobol' sampling), §13.4 (path tracer).
+- Joe and Kuo, "Constructing Sobol sequences with better two-dimensional projections", SIAM J.
+  Sci. Comput. 30(5), 2008; Burley, "Practical Hash-based Owen Scrambling", JCGT 9(4), 2020.

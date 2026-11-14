@@ -1,3 +1,4 @@
+use crate::material::model::LightSampling;
 use crate::color::Color;
 use crate::scene::Scene;
 use crate::material::model::{MaterialModel, ScatteredRay};
@@ -10,7 +11,7 @@ pub struct Ambient {
 
 impl MaterialModel for Ambient {
     fn scatter(&self, _r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay{
-        ScatteredRay{ sampled_lights: false, emit: Color::black(), attenuate:self.albedo, ray: None }
+        ScatteredRay{ light_sampling: LightSampling::None, emit: Color::black(), attenuate:self.albedo, ray: None }
     }
 
 

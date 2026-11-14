@@ -1,3 +1,4 @@
+use crate::material::model::LightSampling;
 use serde_json::{Value, Map};
 use crate::sceneobject::SceneObject;
 use crate::shapes::sphere::Sphere;
@@ -103,7 +104,7 @@ impl MaterialModel for FireworkMaterial {
         let actual_intersection = self.particles.nearest(r, 0., f64::INFINITY);
         match actual_intersection {
             Some((particle, _i)) => {
-                ScatteredRay { sampled_lights: false, emit: Color::black(),
+                ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(),
                     attenuate: self.color * particle.intensity,
                     ray: None,
                 }

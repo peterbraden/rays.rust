@@ -40,7 +40,7 @@ use crate::material::phase::PhaseFunction;
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
 use serde_json::{Value, Map};
-use crate::scene::{Scene, ImageOpts, RenderOpts, PathTermination, Background, Filter};
+use crate::scene::{Scene, ImageOpts, RenderOpts, PathTermination, Background, Filter, Sampler};
 use crate::output::OutputOpts;
 use std::io::prelude::*;
 use std::fs::File;
@@ -218,6 +218,12 @@ pub struct SceneFile {
     pub seed: Value,
     #[serde(default)]
     pub sample_lights: Value,
+    #[serde(default)]
+    pub sample_sky: Value,
+    #[serde(default)]
+    pub sampler: Value,
+    #[serde(default)]
+    pub regularise: Value,
     #[serde(default)]
     pub filter: Value,
     #[serde(default)]
@@ -2169,7 +2175,7 @@ impl SceneFile {
             },
         }.map(|mut sun| {
             if let Some(r) = v.get("angular_radius") {
-                sun.angular_radius = SceneFile::parse_number(r, 0.).to_radians().max(1e-6);
+                sun = sun.with_angular_radius(SceneFile::parse_number(r, 0.).to_radians().max(1e-6));
             }
             sun
         })
@@ -2221,12 +2227,13 @@ impl SceneFile {
             .filter(|o| o.medium.material_at(Vector3::zeros()).is_emitter() && o.geometry.surface_area() > 0.)
             .cloned()
             .collect();
+        let area_light_choice = crate::environment::Distribution1D::new(SceneFile::light_powers(&area_lights));
         let o = SceneGraph::new(objects);
 		
         let width = SceneFile::parse_int(&s.width, 640);
         let height =SceneFile::parse_int(&s.height, 480);
 
-        Scene {
+        let mut scene = Scene {
             image: ImageOpts { width, height },
             render: RenderOpts {
                 max_depth: SceneFile::parse_int(&s.max_depth, 2),
@@ -2238,10 +2245,17 @@ impl SceneFile {
                 path_termination: SceneFile::parse_path_termination(&s.path_termination, &s.russian_roulette_depth),
                 seed: SceneFile::parse_int(&s.seed, 0) as u64,
                 sample_lights: s.sample_lights.as_bool().unwrap_or(true),
+                sample_sky: s.sample_sky.as_bool().unwrap_or(true),
                 filter: match s.filter.as_str() {
                     None | Some("box") => Filter::Box,
                     Some("tent") => Filter::Tent,
                     Some(f) => panic!("Unknown filter '{}': expected \"box\" or \"tent\"", f),
+                },
+                regularise: SceneFile::parse_number(&s.regularise, crate::material::ggx::DEFAULT_REGULARISE),
+                sampler: match s.sampler.as_str() {
+                    None | Some("sobol") => Sampler::Sobol,
+                    Some("independent") => Sampler::Independent,
+                    Some(x) => panic!("Unknown sampler '{}': expected \"sobol\" or \"independent\"", x),
                 },
             },
             camera: Box::new(SceneFile::parse_camera(s.camera, width as u32, height as u32)),
@@ -2256,9 +2270,36 @@ impl SceneFile {
                 ..OutputOpts::parse(&s.output)
             },
             area_lights,
+            area_light_choice,
             sun,
             atmosphere,
+            environment: None,
+        };
+        // Tabulating the sky evaluates it, which needs the scene.
+        if scene.render.sample_sky {
+            scene.environment = crate::environment::Environment::build(&scene);
         }
+        scene
+    }
+
+    /// Roughly each area light's power, to choose lights to sample in proportion to it: the
+    /// luminance it emits along its normal at one point, times its area. Sampling the light
+    /// that delivers more light more often is Pharr, Jakob and Humphreys's power light sampler
+    /// ("Physically Based Rendering", 4th ed., section 12.6.2,
+    /// <https://pbr-book.org/4ed/Light_Sources/Light_Sampling>). Any choice that can pick every
+    /// emitting light is unbiased, so every light gets at least a hundredth of the mean, in case
+    /// the one point misjudges a textured emitter.
+    fn light_powers(lights: &[Arc<SceneObject>]) -> Vec<f64> {
+        let powers: Vec<f64> = lights.iter().map(|l| {
+            let emitted = match l.geometry.sample_surface([0.5, 0.5, 0.5]) {
+                Some((y, n)) => l.medium.material_at(y).emitted(&n, &n),
+                None => Color::black(),
+            };
+            let e = emitted.rgb;
+            (0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z).max(0.) * l.geometry.surface_area()
+        }).collect();
+        let mean = powers.iter().sum::<f64>() / powers.len().max(1) as f64;
+        powers.iter().map(|p| p.max(0.01 * mean).max(f64::MIN_POSITIVE)).collect()
     }
 
     pub fn from_string(s: String) -> Scene {
@@ -2268,7 +2309,7 @@ impl SceneFile {
     /// Parse a scene, optionally overriding the image size. Overrides must be applied before
     /// the camera is built, as it derives its aspect ratio from the image size.
     pub fn from_string_sized(s: String, width: Option<usize>, height: Option<usize>) -> Scene {
-        SceneFile::from_string_overridden(s, &Overrides { width, height, seed: None })
+        SceneFile::from_string_overridden(s, &Overrides { width, height, ..Overrides::default() })
     }
 
     /// Parse a scene, applying command-line overrides first.

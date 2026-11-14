@@ -30,6 +30,7 @@
 // to ensure the tau calculation properly accounts for all atmospheric material the light has
 // traveled through. This is critical for realistic rendering of sunset/sunrise conditions.
 
+use crate::material::model::LightSampling;
 use crate::geometry::rand;
 use crate::shapes::infinite::Infinite;
 use crate::shapes::sphere::Sphere;
@@ -556,7 +557,7 @@ impl MaterialModel for SkyMaterial {
     fn scatter(&self, r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay {
         // Linear light; display encoding happens at output.
         let v = self.radiance(r) * SKY_CALIBRATION;
-        ScatteredRay { sampled_lights: false, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
+        ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
     }
 }
 
@@ -837,7 +838,7 @@ impl MaterialModel for LUTSky {
             Some((rayleigh, mie, multiple)) => self.sky.apply_phase(&d, rayleigh, mie, multiple),
             None => self.sky.radiance(r),
         } * SKY_CALIBRATION;
-        ScatteredRay { sampled_lights: false, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
+        ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
     }
 }
 

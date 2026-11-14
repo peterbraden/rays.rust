@@ -22,6 +22,7 @@ use rayon::prelude::*;
 
 mod ray;
 mod color;
+mod spectrum;
 mod material {
     pub mod model;
     pub mod bsdf;

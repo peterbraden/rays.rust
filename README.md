@@ -78,6 +78,33 @@ what changes is coloured light on coloured surfaces, and what RGB can't do at al
 See [demo/scenes/spectral-prism.json](demo/scenes/spectral-prism.json) and
 [demo/scenes/blackbody.json](demo/scenes/blackbody.json), and `src/spectrum.rs` for the details.
 
+## Cameras and film
+
+After PBRT's chapter 5. The `"camera"` takes a `"type"`:
+
+- `"perspective"` (the default): a thin lens (`"aperture"`, `"focus_distance"`), optionally
+  astigmatic: `"astigmatism": {"cylinder": 0.5, "axis": 30}` blurs points into lines everywhere,
+  as an eye's astigmatism does; `{"seidel": 0.2}` gives a lens's astigmatism, growing with the
+  square of the distance from the centre ([demo/scenes/astigmatism.json](demo/scenes/astigmatism.json)).
+- `"orthographic"` and `"spherical"` (`"mapping": "equirectangular"` or `"equal_area"`; see
+  [demo/scenes/panorama.json](demo/scenes/panorama.json)).
+- `"realistic"`: rays traced through a real lens (`"lens": "dgauss.50mm"`, `"wide.22mm"`,
+  `"telephoto.250mm"`, `"fisheye.10mm"` or a pbrt `.dat` file), with `"f_number"`, `"blades"`
+  and `"film_diagonal"`: depth of field, vignetting, distortion and aberrations come from the
+  lens itself ([demo/scenes/realistic-camera.json](demo/scenes/realistic-camera.json)).
+
+Any camera, and any `transform`, can move while the shutter is open: give it `"motion"` with
+its pose at the end, eg. `"translate": [0, 0, 0], "motion": {"translate": [2, 0, 0]}`, and the
+scene a `"shutter": [0, 1]` ([demo/scenes/motion-blur.json](demo/scenes/motion-blur.json)).
+`"filter"` can be `"box"`, `"tent"`, `"gaussian"`, `"mitchell"` or `"lanczos"`.
+
+The `"output"` block holds the film: `"iso"`, `"exposure_time"`, `"white_balance"` (kelvin or
+`"D50"`, `"A"`, ...), `"color_space"` (`"srgb"`, `"display-p3"`, `"rec2020"`,
+`"aces2065-1"`), and `"flare"`: ghosts of the brightest lights, traced through the lens's
+coated surfaces, and the aperture's diffraction starburst (`{"blades": 6, "f_number": 8}`;
+physically faint by default, `"ghosts": 10` exaggerates them;
+[demo/scenes/lens-flare.json](demo/scenes/lens-flare.json)).
+
 ## Forests
 
 A `forest` covers part of a surface with trees: a few distinct trees are grown per species,

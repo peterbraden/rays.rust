@@ -83,6 +83,10 @@ impl Interface {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LensSystem {
     pub interfaces: Vec<Interface>,
+    /// The aperture stop's blades, if it isn't round: their number, and the angle of the first
+    /// corner from the x axis. The stop is then the regular polygon inscribed in its circle,
+    /// which shapes out-of-focus highlights (bokeh), ghosts and diffraction spikes (`flare`).
+    pub blades: Option<(usize, f64)>,
 }
 
 const DGAUSS_50MM: &str = "
@@ -219,7 +223,31 @@ impl LensSystem {
         if interfaces.is_empty() {
             return Err("A lens needs at least one surface".to_string());
         }
-        Ok(LensSystem { interfaces })
+        Ok(LensSystem { interfaces, blades: None })
+    }
+
+    /// With a stop of `n` straight blades, the first corner at `rotation` radians.
+    pub fn with_blades(self, n: usize, rotation: f64) -> LensSystem {
+        assert!(n >= 3, "An aperture needs at least three blades, got {}", n);
+        LensSystem { blades: Some((n, rotation)), ..self }
+    }
+
+    /// Whether (x, y) is within surface `e`'s clear aperture: a circle, or for a bladed stop, the
+    /// polygon inscribed in it.
+    pub fn within(&self, e: &Interface, x: f64, y: f64) -> bool {
+        if x * x + y * y > e.aperture * e.aperture {
+            return false;
+        }
+        match self.blades {
+            Some((n, rotation)) if e.is_stop() => {
+                let apothem = e.aperture * (std::f64::consts::PI / n as f64).cos();
+                (0..n).all(|k| {
+                    let a = rotation + (2 * k + 1) as f64 * std::f64::consts::PI / n as f64;
+                    x * a.cos() + y * a.sin() <= apothem
+                })
+            },
+            _ => true,
+        }
     }
 
     /// The rear surface's distance from the film.
@@ -263,7 +291,7 @@ impl LensSystem {
                 intersect_spherical(e.radius, z + e.radius, &o, &d)?
             };
             let p = o + d * t;
-            if p.x * p.x + p.y * p.y > e.aperture * e.aperture {
+            if !self.within(e, p.x, p.y) {
                 return None;
             }
             o = p;
@@ -286,7 +314,7 @@ impl LensSystem {
                 intersect_spherical(e.radius, z + e.radius, &o, &d)?
             };
             let p = o + d * t;
-            if p.x * p.x + p.y * p.y > e.aperture * e.aperture {
+            if !self.within(e, p.x, p.y) {
                 return None;
             }
             o = p;
@@ -501,6 +529,22 @@ impl Camera for RealisticCamera {
 mod tests {
     use super::*;
     use crate::camera::Frame;
+
+    #[test]
+    fn test_bladed_stop_is_a_polygon() {
+        let lens = LensSystem::named("dgauss.50mm").unwrap().with_blades(6, 0.);
+        let stop = *lens.interfaces.iter().find(|e| e.is_stop()).unwrap();
+        let r = stop.aperture;
+        // Corners at 0°, 60°, ...; flats between, at the apothem r cos 30°.
+        assert!(lens.within(&stop, 0.99 * r, 0.));
+        let flat = r * (std::f64::consts::PI / 6.).cos();
+        let mid = 30f64.to_radians();
+        assert!(lens.within(&stop, 0.99 * flat * mid.cos(), 0.99 * flat * mid.sin()));
+        assert!(!lens.within(&stop, 1.01 * flat * mid.cos(), 1.01 * flat * mid.sin()));
+        // Other surfaces stay round.
+        let front = lens.interfaces[0];
+        assert!(lens.within(&front, 0.99 * front.aperture * mid.cos(), 0.99 * front.aperture * mid.sin()));
+    }
 
     #[test]
     fn test_built_in_lenses_focal_lengths() {

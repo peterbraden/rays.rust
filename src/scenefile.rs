@@ -409,7 +409,8 @@ impl SceneFile {
     /// - `"realistic"`: rays traced through a lens (`lens`): `"lens"`, a built-in name
     ///   (`"dgauss.50mm"`, the default, `"wide.22mm"`, `"telephoto.250mm"`, `"fisheye.10mm"`) or
     ///   a pbrt `.dat` file; `"f_number"` (default wide open); `"focus_distance"` (default the
-    ///   point looked at); `"film_diagonal"` in mm (default 35). The lens sets the field of view.
+    ///   point looked at); `"film_diagonal"` in mm (default 35); `"blades"` and `"blade_rotation"`
+    ///   (degrees) for a polygonal stop. The lens sets the field of view.
     ///
     /// With `"motion": {"location", "lookat", "up"}`, the camera moves to that pose (each key
     /// defaulting to the start's) while the shutter is open.
@@ -453,12 +454,7 @@ impl SceneFile {
                 Some(m) => panic!("Unknown spherical mapping '{}': expected \"equirectangular\" or \"equal_area\"", m),
             })),
             Some("realistic") => {
-                let lens = match c["lens"].as_str().unwrap_or("dgauss.50mm") {
-                    name if !name.contains('/') && !name.ends_with(".dat") => crate::lens::LensSystem::named(name)
-                        .unwrap_or_else(|| panic!("Unknown lens '{}': expected dgauss.50mm, wide.22mm, telephoto.250mm, fisheye.10mm or a .dat file", name)),
-                    path => crate::lens::LensSystem::parse(&std::fs::read_to_string(path).unwrap_or_else(|e| panic!("Can't read lens {}: {}", path, e)))
-                        .unwrap_or_else(|e| panic!("Lens {}: {}", path, e)),
-                };
+                let lens = SceneFile::parse_lens(c["lens"].as_str().unwrap_or("dgauss.50mm"), &c);
                 let focus = c["focus_distance"].as_f64().unwrap_or((lookat - location).norm());
                 let cam = crate::lens::RealisticCamera::new(placement, lens, focus, c["f_number"].as_f64(),
                     SceneFile::parse_number(&c["film_diagonal"], 35.) * 1e-3, aspect)
@@ -467,6 +463,64 @@ impl SceneFile {
             },
             Some(t) => panic!("Unknown camera type '{}': expected \"perspective\", \"orthographic\", \"spherical\" or \"realistic\"", t),
         }
+    }
+
+    /// A lens (`lens::LensSystem`): a built-in name or a pbrt `.dat` file, with `"blades"` (and
+    /// `"blade_rotation"`, degrees) from `o` if given.
+    pub fn parse_lens(name: &str, o: &Value) -> crate::lens::LensSystem {
+        let lens = if !name.contains('/') && !name.ends_with(".dat") {
+            crate::lens::LensSystem::named(name)
+                .unwrap_or_else(|| panic!("Unknown lens '{}': expected dgauss.50mm, wide.22mm, telephoto.250mm, fisheye.10mm or a .dat file", name))
+        } else {
+            crate::lens::LensSystem::parse(&std::fs::read_to_string(name).unwrap_or_else(|e| panic!("Can't read lens {}: {}", name, e)))
+                .unwrap_or_else(|e| panic!("Lens {}: {}", name, e))
+        };
+        match o["blades"].as_u64() {
+            Some(n) => lens.with_blades(n as usize, SceneFile::parse_number(&o["blade_rotation"], 0.).to_radians()),
+            None => lens,
+        }
+    }
+
+    /// The output's `"flare"` (`flare`): `true`, or `{"lens", "f_number", "blades",
+    /// "blade_rotation", "threshold": 20, "sources": 8, "ghosts": 1, "starburst": 1}`. With a
+    /// realistic camera, its lens, f-number, blades, focus and film are the defaults; otherwise
+    /// the double Gauss wide open, focused far off, on a film matching the camera's view.
+    /// `ghosts` and `starburst` scale each (0 or false for none).
+    pub fn parse_flare(output: &Value, camera: &Value, width: usize, height: usize) -> Option<Arc<crate::flare::Flare>> {
+        let f = match output.get("flare") {
+            None | Some(Value::Bool(false)) => return None,
+            Some(Value::Bool(true)) => &Value::Null,
+            Some(f) => f,
+        };
+        let realistic = camera["type"].as_str() == Some("realistic");
+        let pick = |k: &str| if !f[k].is_null() { f[k].clone() } else if realistic { camera[k].clone() } else { Value::Null };
+        let blade_source = serde_json::json!({ "blades": pick("blades"), "blade_rotation": pick("blade_rotation") });
+        let lens = SceneFile::parse_lens(pick("lens").as_str().unwrap_or("dgauss.50mm"), &blade_source);
+        let focal = lens.focal_length().unwrap_or_else(|| panic!("The flare's lens doesn't form an image"));
+        let lens = match pick("f_number").as_f64() { Some(n) => lens.with_stop(focal / n), None => lens };
+        let focus = if realistic {
+            camera["focus_distance"].as_f64().unwrap_or_else(|| (SceneFile::parse_vec3(&camera["lookat"]) - SceneFile::parse_vec3(&camera["location"])).norm())
+        } else {
+            1e4
+        };
+        let rear = lens.focus(focus).or_else(|| lens.focus(1e4)).unwrap_or_else(|| panic!("The flare's lens can't focus"));
+        let lens = lens.with_film_at(rear);
+        let aspect = width as f64 / height as f64;
+        let film_height = if realistic {
+            SceneFile::parse_number(&camera["film_diagonal"], 35.) * 1e-3 / (1. + aspect * aspect).sqrt()
+        } else {
+            focal * camera["angle"].as_f64().unwrap_or(0.5).tan()
+        };
+        let scale = |k: &str| match &f[k] { Value::Bool(b) => if *b { 1. } else { 0. }, v => SceneFile::parse_number(v, 1.) };
+        Some(Arc::new(crate::flare::Flare {
+            lens,
+            film: (film_height * aspect, film_height),
+            threshold: SceneFile::parse_number(&f["threshold"], 20.),
+            sources: SceneFile::parse_int(&f["sources"], 8),
+            ghosts: scale("ghosts"),
+            starburst: scale("starburst"),
+            grid: SceneFile::parse_int(&f["grid"], 192).max(4),
+        }))
     }
 
     /// Whether a scene value (the camera, an object, a geometry) moves: holds a `"motion"`.
@@ -2404,6 +2458,7 @@ impl SceneFile {
         let sun = SceneFile::parse_sun(&s.sun, &s.objects);
         // The camera's view plane spans tan(angle) over the image's height.
         let pixel_angle = s.camera["angle"].as_f64().map_or(0., |a| a.tan() / SceneFile::parse_int(&s.height, 480) as f64);
+        let flare = SceneFile::parse_flare(&s.output, &s.camera, SceneFile::parse_int(&s.width, 640), SceneFile::parse_int(&s.height, 480));
         // Aerial perspective, unless the skysphere turns it off.
         let atmosphere = s.objects.iter()
             .find(|o| o["type"].as_str() == Some("skysphere") && o["aerial_perspective"].as_bool() != Some(false))
@@ -2458,6 +2513,7 @@ impl SceneFile {
             output: OutputOpts {
                 // The camera's view plane spans tan(angle) over the image's height.
                 pixel_angle,
+                flare,
                 ..OutputOpts::parse(&s.output)
             },
             area_lights,

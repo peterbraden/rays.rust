@@ -801,7 +801,7 @@ Tracked here rather than done, each for a stated reason:
 - A check against Tungsten's Cornell box reference: its download was refused (403) from the
   development environment; spectral was compared with our own RGB render instead.
 
-### Chapter 5: cameras and film (in progress)
+### Chapter 5: cameras and film (done)
 
 Plan, in commits:
 
@@ -830,6 +830,31 @@ Plan, in commits:
    the existing glare.
 
 (Correction to the survey: `Ray` has no `time` field; the unused one is on `RayX`.)
+
+Done as planned, in seven commits, each with tests and a demo scene. Measured or checked:
+
+- Filters: weighted samples of each tabulated filter estimate its moments to 2e-3.
+- Realistic camera: each built-in lens's focal length within 12% of its name; a focused point
+  images to under 30 µm; f/4 against wide open passes a quarter of the light, as (N_open / N)².
+- Astigmatism: the cylinder's two focal lines where paraxial optics puts them; Seidel streaks
+  four times as long at twice the field.
+- Lens flare: a quarter-wave coating's reflectance at its design wavelength matches
+  ((n0 n2 - n1²) / (n0 n2 + n1²))²; the sun's ghosts, unexaggerated, peak at about a fifth of
+  the sky's brightness in `lens-flare` (subtle, as with modern coatings).
+
+### Deferred from chapter 5
+
+- Chromatic aberration in the realistic camera (spectral mode): lens prescriptions give only
+  n_d. The flare estimates dispersion from the glass map's trend; the camera could too, or take
+  Abbe numbers as a fifth column.
+- The flare treats each bright region as a point light at its centre, and maps image positions
+  to directions by a pinhole, not the realistic camera's distortion; extended lights (a large
+  window) should be integrated over.
+- Moving objects aren't sampled as area lights (a moving emitter is found only by BSDF rays),
+  and deforming meshes need per-vertex motion.
+- Measured sensor curves, and wide-gamut PNG output with an ICC tag.
+- The starburst's tail only; the Airy core and the spikes' fine structure are left to the
+  glare.
 
 ### Reading (chapter 4)
 

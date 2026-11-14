@@ -50,7 +50,7 @@ impl ColorSpace {
     }
 
     /// The matrix from linear sRGB.
-    pub fn from_srgb(&self) -> Matrix3<f64> {
+    pub fn matrix_from_srgb(&self) -> Matrix3<f64> {
         match self {
             ColorSpace::Srgb => Matrix3::identity(),
             ColorSpace::DisplayP3 => Matrix3::new(
@@ -165,7 +165,7 @@ impl Film {
             },
         };
         let space = o["color_space"].as_str().map_or(ColorSpace::Srgb, ColorSpace::parse);
-        Film { scale: time * iso / 100., matrix: space.from_srgb() * balance }
+        Film { scale: time * iso / 100., matrix: space.matrix_from_srgb() * balance }
     }
 
     pub fn is_identity(&self) -> bool {

@@ -23,6 +23,24 @@ wavelengths (`"spectral": true`; see `src/spectrum.rs`).
 Lamps glowing as blackbodies at 1900, 2700, 4000, 6500 and 12000 K, at equal luminance.
 ![Blackbody lamps](./scenes/blackbody.png)
 
+## Cameras and film
+A double Gauss lens at f/2, traced element by element: depth of field and vignetting.
+![Realistic camera](./scenes/realistic-camera.png)
+
+Motion blur: a sphere sliding, a box turning, a sphere rising, while the shutter is open.
+![Motion blur](./scenes/motion-blur.png)
+
+A spherical (equirectangular) panorama of the lamps scene.
+![Panorama](./scenes/panorama.png)
+
+A star test of a lens's (Seidel) astigmatism: points blur into radial lines that grow with the
+square of the distance from the centre.
+![Astigmatism](./scenes/astigmatism.png)
+
+Lens flare: ghosts of the sun from reflections between the coated surfaces of a double Gauss
+lens (exaggerated tenfold), and the starburst of a six-bladed aperture.
+![Lens flare](./scenes/lens-flare.png)
+
 ## Spheres
 Spheres demonstrating 3 different materials.
 ![Spheres](./scenes/spheres.png)

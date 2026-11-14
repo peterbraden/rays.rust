@@ -26,6 +26,7 @@ mod spectrum;
 mod motion;
 mod film;
 mod lens;
+mod flare;
 mod material {
     pub mod model;
     pub mod bsdf;
@@ -298,7 +299,7 @@ fn main() {
     println!("- Built in {:.2} s{}", build_start.elapsed().as_secs_f64(), peak);
 
     // Fail before rendering if the output can't be written in this format.
-    let writer = output::writer_for(&rc.output_filename, s.output).unwrap_or_else(|e| {
+    let writer = output::writer_for(&rc.output_filename, s.output.clone()).unwrap_or_else(|e| {
         eprintln!("{}", e);
         std::process::exit(1);
     });
@@ -433,7 +434,7 @@ fn compare_with(img: &output::LinearImage, reference: &str, output_filename: &st
     // The reference at our size, encoded exactly as our PNG output is, to view side by side.
     let reference_path = std::path::Path::new(output_filename).with_extension("reference.png");
     let reference_path = reference_path.to_string_lossy();
-    if let Err(e) = output::ImageWriter::write(&output::Png { opts: *opts }, &c.reference, &reference_path) {
+    if let Err(e) = output::ImageWriter::write(&output::Png { opts: opts.clone() }, &c.reference, &reference_path) {
         eprintln!("{}", e);
     }
     println!("{}", style("# Comparison").bold().cyan());

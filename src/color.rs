@@ -74,6 +74,11 @@ impl Color {
 }
 
 
+/// Relative luminance of linear sRGB (ITU-R BT.709 primaries).
+pub fn luminance(c: &Color) -> f64 {
+    0.2126 * c.rgb.x + 0.7152 * c.rgb.y + 0.0722 * c.rgb.z
+}
+
 impl fmt::Display for Color {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "#{:0>2x}{:0>2x}{:0>2x}", (self.rgb.x * 255f64) as u8, (self.rgb.y * 255f64) as u8, (self.rgb.z * 255f64) as u8)

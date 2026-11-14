@@ -1,3 +1,4 @@
+use crate::material::model::LightSampling;
 use crate::color::Color;
 use crate::na::Vector3;
 use crate::ray::Ray;
@@ -60,9 +61,9 @@ impl MaterialModel for GrassMaterial {
             if rand() < coat {
                 let rd = reflect(r.rd.normalize(), n) + random_point_in_unit_ball() * self.roughness;
                 if rd.dot(&n) <= 0. {
-                    return ScatteredRay { sampled_lights: false, emit: Color::black(), attenuate: Color::black(), ray: None };
+                    return ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(), attenuate: Color::black(), ray: None };
                 }
-                return ScatteredRay { sampled_lights: false, emit: Color::black(), attenuate: Color::white(), ray: Some(Ray { ro: front.point, rd }) };
+                return ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(), attenuate: Color::white(), ray: Some(Ray { ro: front.point, rd }) };
             }
         }
 
@@ -82,7 +83,7 @@ impl MaterialModel for GrassMaterial {
         };
         ScatteredRay {
             emit,
-            sampled_lights: true,
+            light_sampling: LightSampling::Exclusive,
             attenuate: weight,
             ray: Some(Ray { ro: side.point, rd: diffuse_direction(side.normal) }),
         }

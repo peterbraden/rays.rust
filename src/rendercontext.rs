@@ -3,7 +3,8 @@ use std::time::{Instant};
 use crate::scene::Scene;
 use crate::color::Color;
 use crate::trace::trace;
-use crate::geometry::{rand, seed_rand};
+use crate::geometry::{rand, seed_rand, begin_sample, end_sample};
+use crate::scene::Sampler;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::collections::HashMap;
@@ -448,10 +449,19 @@ fn render_pixel(x: usize, y: usize, first: usize, count: usize, s: &Scene) -> (u
 
     let mut pixel = Color::black();
     let mut cast = 0;
+    // With the Sobol' sampler, sample k of the pixel is point k of the pixel's own sequence.
+    let pixel_seed = crate::sobol::hash(s.render.seed, index);
     for k in first..first + count {
         seed_rand(s.render.seed, k as u64 * pixels + index);
-        let u = (offset.0 + k as f64 * R2.0).fract();
-        let v = (offset.1 + k as f64 * R2.1).fract();
+        // Where in the pixel, as a uniform in [0, 1)²: the Sobol' point's first two dimensions,
+        // or the R2 sequence from the pixel's offset.
+        let (u, v) = match s.render.sampler {
+            Sampler::Sobol => {
+                begin_sample(pixel_seed, k as u32);
+                (rand(), rand())
+            },
+            Sampler::Independent => ((offset.0 + k as f64 * R2.0).fract(), (offset.1 + k as f64 * R2.1).fract()),
+        };
         let (rays_cast, c) = trace(
                 &s.camera.get_ray(
                     x as f64 / (s.image.width as f64),
@@ -464,6 +474,7 @@ fn render_pixel(x: usize, y: usize, first: usize, count: usize, s: &Scene) -> (u
         cast += rays_cast;
         pixel = pixel + c;
     }
+    end_sample();
     (cast, count, pixel)
 }
 

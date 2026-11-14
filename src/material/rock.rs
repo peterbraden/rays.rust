@@ -24,6 +24,7 @@
 //! 0.06 for basalt to 0.6 for limestone (eg. the USGS spectral library, Kokaly et al. 2017).
 //! Rock is close to Lambertian, so the base is diffuse.
 
+use crate::material::model::LightSampling;
 use crate::color::Color;
 use crate::ray::Ray;
 use crate::intersection::Intersection;
@@ -284,9 +285,9 @@ impl MaterialModel for Rock {
             if rand() < film {
                 let rd = reflect(r.rd.normalize(), normal) + random_point_in_unit_ball() * 0.05;
                 if rd.dot(&geometric) <= 0. {
-                    return ScatteredRay { sampled_lights: false, emit: Color::black(), attenuate: Color::black(), ray: None };
+                    return ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(), attenuate: Color::black(), ray: None };
                 }
-                return ScatteredRay { sampled_lights: false, emit: Color::black(), attenuate: Color::white(),
+                return ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(), attenuate: Color::white(),
                     ray: Some(Ray { ro: intersection.point, rd }) };
             }
         }
@@ -301,7 +302,7 @@ impl MaterialModel for Rock {
         if into < 0. { rd -= geometric * (2. * into) }
         ScatteredRay {
             emit: direct_lighting(albedo, &shaded, s),
-            sampled_lights: true,
+            light_sampling: LightSampling::Exclusive,
             attenuate: albedo,
             ray: Some(Ray { ro: intersection.point, rd: rd.normalize() }),
         }

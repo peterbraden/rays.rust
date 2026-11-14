@@ -56,14 +56,33 @@ thread_local! {
     static RNG: RefCell<Pcg32> = RefCell::new(Pcg32::new(0, 0));
 }
 
-/// Re-seed this thread's generator.
-pub fn seed_rand(seed: u64, stream: u64) {
-    RNG.with(|r| *r.borrow_mut() = Pcg32::new(seed, stream));
+thread_local! {
+    /// While rendering a sample with the Sobol' sampler, where `rand()` is in its sequence.
+    static SOBOL: RefCell<Option<crate::sobol::SampleState>> = const { RefCell::new(None) };
 }
 
-/// Uniform in [0, 1), from this thread's generator.
+/// Re-seed this thread's generator, and go back to independent sampling.
+pub fn seed_rand(seed: u64, stream: u64) {
+    RNG.with(|r| *r.borrow_mut() = Pcg32::new(seed, stream));
+    end_sample();
+}
+
+/// Draw `rand()`'s numbers from sample `index` of the Owen-scrambled Sobol' sequence for
+/// `seed`, one dimension after another, until `end_sample`.
+pub fn begin_sample(seed: u64, index: u32) {
+    SOBOL.with(|s| *s.borrow_mut() = Some(crate::sobol::SampleState::new(seed, index)));
+}
+
+/// Back to independent numbers from this thread's generator.
+pub fn end_sample() {
+    SOBOL.with(|s| *s.borrow_mut() = None);
+}
+
+/// Uniform in [0, 1): the next dimension of the current Sobol' sample, if there is one
+/// (`begin_sample`), and otherwise from this thread's generator.
 pub fn rand() -> f64 {
-    RNG.with(|r| r.borrow_mut().next_f64())
+    SOBOL.with(|s| s.borrow_mut().as_mut().map(|state| state.next()))
+        .unwrap_or_else(|| RNG.with(|r| r.borrow_mut().next_f64()))
 }
 
 pub fn random_point_on_unit_sphere() -> Vector3<f64>{

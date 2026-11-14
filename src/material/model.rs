@@ -51,10 +51,24 @@ pub struct ScatteredRay {
     pub ray: Option<Ray>,
     pub attenuate: Color,
     pub emit: Color,
-    /// Set when `emit` already includes light sampled directly from the scene's area lights.
-    /// The continuation ray must then ignore emission from those lights if it hits one, or that
-    /// light would be counted twice.
-    pub sampled_lights: bool,
+    /// Whether `emit` already includes light sampled directly from the scene's area lights and
+    /// sun, and so how much of their emission the continuation ray counts if it hits one.
+    pub light_sampling: LightSampling,
+}
+
+/// How a scattered ray's vertex sampled the lights (area lights and the sun), which decides
+/// what the ray counts of their emission if it hits one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LightSampling {
+    /// The lights weren't sampled: their emission counts in full.
+    None,
+    /// The lights were sampled alone, so their emission is already counted and the ray ignores
+    /// it (as for a point-like light, which only light sampling can find).
+    Exclusive,
+    /// The lights were sampled with multiple importance sampling (`material::bsdf`), and the
+    /// ray's direction was sampled from the BSDF with density `bsdf_pdf` per steradian: their
+    /// emission counts weighted by the power heuristic against the lights' own density.
+    MIS { bsdf_pdf: f64 },
 }
 
 /// Some material models use a direct ray to the light sources to calculate a scatter.

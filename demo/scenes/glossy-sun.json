@@ -1,0 +1,33 @@
+{
+  "width": 480,
+  "height": 240,
+  "supersamples": 16,
+  "chunk_size": 32,
+  "samples_per_chunk": 2,
+  "shadow_bias": 0.0001,
+  "max_depth": 6,
+  "path_termination": "russian_roulette",
+  "output": { "tonemap": "reinhard" },
+  "camera": {
+    "location": [0, 1.6, -9],
+    "lookat": [0, 0.9, 0],
+    "up": [0, 1, 0],
+    "angle": 0.45
+  },
+  "sun": { "intensity": 4 },
+  "materials": {
+    "GROUND": { "type": "lambertian", "albedo": [0.4, 0.4, 0.4] },
+    "MATTE": { "type": "lambertian", "albedo": [0.8, 0.8, 0.8] },
+    "PLASTIC": { "type": "plastic", "albedo": [0.6, 0.1, 0.1], "roughness": 0.1 },
+    "SATIN": { "type": "metal", "reflective": [0.95, 0.75, 0.4], "roughness": 0.05 },
+    "BRUSHED": { "type": "metal", "reflective": [0.9, 0.9, 0.9], "roughness": 0.25 }
+  },
+  "objects": [
+    { "type": "skysphere", "sun_direction": [0.5, 0.45, -1] },
+    { "type": "plane", "y": 0, "material": "GROUND" },
+    { "type": "sphere", "radius": 0.9, "location": [-3.0, 0.9, 0], "material": "MATTE" },
+    { "type": "sphere", "radius": 0.9, "location": [-1.0, 0.9, 0], "material": "PLASTIC" },
+    { "type": "sphere", "radius": 0.9, "location": [1.0, 0.9, 0], "material": "SATIN" },
+    { "type": "sphere", "radius": 0.9, "location": [3.0, 0.9, 0], "material": "BRUSHED" }
+  ]
+}

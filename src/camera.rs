@@ -97,9 +97,65 @@ impl Placement {
     }
 }
 
+/// # Astigmatism
+///
+/// An astigmatic lens focuses rays in one plane through the axis at a different distance from
+/// rays in the plane at right angles: a point is imaged as two short lines, at right angles, at
+/// the two foci, with an ellipse or a blur circle between them, and lines in the scene are sharp
+/// in one orientation and blurred in the other.
+///
+/// Paraxially, a thin lens bends a ray crossing it at p (from the lens's centre, in the lens's
+/// plane) by -p / f. A cylindrical lens of power P, whose axis is the unit vector a in the
+/// lens's plane, bends it by -P (p · n) n, with n perpendicular to a: only across its axis.
+/// Added to the thin lens, that splits the focus into the two lines (Born and Wolf,
+/// "Principles of Optics", 7th ed., section 4.6, astigmatic pencils). Two kinds:
+///
+/// - `cylinder`, `axis`: an eye's astigmatism, or a misaligned or deformed lens: the same
+///   cylinder all over the image. As in an optical prescription, `axis` is the angle of the
+///   cylinder's axis from the image's horizontal, anticlockwise, and its power acts across it.
+/// - `seidel`: the third-order (Seidel) astigmatism of a lens with spherical surfaces, which
+///   grows with the square of the field: zero at the image's centre, it splits the focus of
+///   rays in the tangential plane (through the image point and the axis) from those in the
+///   sagittal plane, by a cylinder of power `seidel` h² aligned with the radial direction, h
+///   the distance from the centre relative to the image's half diagonal (Welford, "Aberrations
+///   of Optical Systems", chapter 7). Point lights off axis smear into short radial or
+///   tangential streaks. The realistic camera (`lens`) shows a real lens's astigmatism without
+///   this.
+///
+/// Powers are in reciprocal scene units: dioptres, if scene units are metres. With a pinhole
+/// (zero aperture), there's nothing to blur.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Astigmatism {
+    pub cylinder: f64,
+    /// The cylinder's axis, radians.
+    pub axis: f64,
+    pub seidel: f64,
+}
+
+impl Astigmatism {
+    /// The extra bending, per unit distance forward, of a ray crossing the lens at `p` (in the
+    /// lens's plane, along the image's horizontal and vertical) for image point `h` relative to
+    /// the half diagonal.
+    pub fn deflection(&self, p: &[f64; 2], h: &[f64; 2]) -> [f64; 2] {
+        let mut d = [0., 0.];
+        if self.cylinder != 0. {
+            let n = [-self.axis.sin(), self.axis.cos()];
+            let k = -self.cylinder * (p[0] * n[0] + p[1] * n[1]);
+            d = [k * n[0], k * n[1]];
+        }
+        let h2 = h[0] * h[0] + h[1] * h[1];
+        if self.seidel != 0. && h2 > 0. {
+            let r = [h[0] / h2.sqrt(), h[1] / h2.sqrt()];
+            let k = -self.seidel * h2 * (p[0] * r[0] + p[1] * r[1]);
+            d = [d[0] + k * r[0], d[1] + k * r[1]];
+        }
+        d
+    }
+}
+
 /// Perspective projection through a thin lens (PBR section 5.2.3): rays leave a disc of radius
 /// `aperture` in the camera's image plane, through the point on the plane of focus that a
-/// pinhole would have seen.
+/// pinhole would have seen; optionally astigmatic (`Astigmatism`).
 pub struct ThinLensCamera {
     pub placement: Placement,
     /// Horizontal extent of the view relative to vertical.
@@ -108,6 +164,7 @@ pub struct ThinLensCamera {
     tan: f64,
     aperture: f64,
     focus: f64,
+    astigmatism: Option<Astigmatism>,
 }
 
 impl ThinLensCamera {
@@ -119,7 +176,12 @@ impl ThinLensCamera {
             tan: angle.tan(),
             aperture,
             focus: (lookat - location).norm(),
+            astigmatism: None,
         }
+    }
+
+    pub fn with_astigmatism(self, a: Astigmatism) -> ThinLensCamera {
+        ThinLensCamera { astigmatism: Some(a), ..self }
     }
 
     /// Focused at `distance` rather than at the point looked at.
@@ -142,7 +204,16 @@ impl Camera for ThinLensCamera {
         // The lens lies in the camera's image plane.
         let point_lens = random_point_on_disc(self.aperture);
         let ro = f.location + f.camx * point_lens[0] + f.camy * point_lens[1];
-        Ray { ro, rd: (focal_point - ro).normalize() }
+        let mut rd = focal_point - ro;
+        if let Some(a) = &self.astigmatism {
+            // Relative to the half diagonal.
+            let half = 0.5 * (1. + self.aspect * self.aspect).sqrt();
+            let h = [self.aspect * (x + sx - 0.5) / half, (y + sy - 0.5) / half];
+            let d = a.deflection(&[point_lens[0], point_lens[1]], &h);
+            // rd runs `focus` forward, so bending per unit forward scales by it.
+            rd += (f.camx * d[0] + f.camy * d[1]) * self.focus;
+        }
+        Ray { ro, rd: rd.normalize() }
     }
 }
 
@@ -273,6 +344,52 @@ mod tests {
             assert!((r.ro - f.location).dot(&f.camz).abs() < 1e-9, "{}", r.ro);
             assert!((r.ro - f.location).norm() <= 1.0 + 1e-9);
         }
+    }
+
+    /// Where rays for one image point, through many points of the lens, cross a plane `z`
+    /// beyond the camera (looking down +z from the origin).
+    fn footprint(c: &ThinLensCamera, x: f64, y: f64, z: f64) -> Vec<Vector3<f64>> {
+        crate::geometry::seed_rand(3, 1);
+        (0..2000).map(|_| {
+            let r = c.get_ray(x, y, 0., 0.);
+            r.ro + r.rd * ((z - r.ro.z) / r.rd.z)
+        }).collect()
+    }
+
+    /// The spread of points along the image's horizontal (world -x here) and vertical.
+    fn spread(points: &[Vector3<f64>]) -> (f64, f64) {
+        let n = points.len() as f64;
+        let mean = points.iter().sum::<Vector3<f64>>() / n;
+        let var = points.iter().fold(Vector3::zeros(), |a, p| a + (p - mean).component_mul(&(p - mean))) / n;
+        (var.x.sqrt(), var.y.sqrt())
+    }
+
+    #[test]
+    fn test_cylinder_splits_the_focus() {
+        // A vertical cylinder axis: power acts horizontally. At the plane of focus, a point is a
+        // horizontal line; vertically it stays sharp.
+        let c = thin_lens(Vector3::new(0., 0., 10.), 100, 100, 0.1)
+            .with_astigmatism(Astigmatism { cylinder: 0.05, axis: std::f64::consts::FRAC_PI_2, seidel: 0. });
+        let (sx, sy) = spread(&footprint(&c, 0.5, 0.5, 10.));
+        assert!(sy < 1e-9 && sx > 0.01, "{} {}", sx, sy);
+        // The horizontal rays focus nearer, at 1 / (1/10 + 0.05) = 6.67: there the line turns
+        // vertical.
+        let (sx, sy) = spread(&footprint(&c, 0.5, 0.5, 1. / 0.15));
+        assert!(sx < 1e-9 && sy > 0.01, "{} {}", sx, sy);
+    }
+
+    #[test]
+    fn test_seidel_astigmatism_grows_with_the_field() {
+        let c = thin_lens(Vector3::new(0., 0., 10.), 100, 100, 0.1)
+            .with_astigmatism(Astigmatism { cylinder: 0., axis: 0., seidel: 0.05 });
+        // Sharp at the centre.
+        let (sx, sy) = spread(&footprint(&c, 0.5, 0.5, 10.));
+        assert!(sx < 1e-9 && sy < 1e-9);
+        // Off to the side, a radial (horizontal) streak, four times as long at twice the field.
+        let near = spread(&footprint(&c, 0.6, 0.5, 10.));
+        let far = spread(&footprint(&c, 0.7, 0.5, 10.));
+        assert!(near.1 < 1e-6 && far.1 < 1e-6, "{:?} {:?}", near, far);
+        assert!((far.0 / near.0 - 4.).abs() < 0.05, "{:?} {:?}", near, far);
     }
 
     #[test]

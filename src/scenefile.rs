@@ -400,7 +400,8 @@ impl SceneFile {
     /// The camera (`camera`): `"location"`, `"lookat"` and `"up"`, and by `"type"`:
     /// - `"perspective"` (the default): `"angle"`, with tan(angle) the image's height at unit
     ///   distance; a thin lens of radius `"aperture"` (default 0.2), focused at the point looked
-    ///   at or `"focus_distance"`.
+    ///   at or `"focus_distance"`; `"astigmatism": {"cylinder": power, "axis": degrees,
+    ///   "seidel": power}` (`camera::Astigmatism`), powers in reciprocal scene units.
     /// - `"orthographic"`: parallel rays from a rectangle `"height"` tall (by default what the
     ///   perspective camera sees at the point looked at).
     /// - `"spherical"`: every direction, `"mapping": "equirectangular"` (the default) or
@@ -432,6 +433,13 @@ impl SceneFile {
                     SceneFile::parse_number(&c["aperture"], 0.2)).with_placement(placement);
                 if let Some(d) = c["focus_distance"].as_f64() {
                     cam = cam.with_focus(d);
+                }
+                if let Some(a) = c.get("astigmatism") {
+                    cam = cam.with_astigmatism(camera::Astigmatism {
+                        cylinder: SceneFile::parse_number(&a["cylinder"], 0.),
+                        axis: SceneFile::parse_number(&a["axis"], 0.).to_radians(),
+                        seidel: SceneFile::parse_number(&a["seidel"], 0.),
+                    });
                 }
                 Box::new(cam)
             },

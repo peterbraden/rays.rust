@@ -783,6 +783,54 @@ start) by chapter:
   only sRGB output; three wavelengths, not pbrt's four. White balance and the sensor model
   belong with the film, in chapter 5.
 
+### Deferred from chapter 4
+
+Tracked here rather than done, each for a stated reason:
+
+- Halos, rainbows and diffraction at the sample's wavelengths. They trace several wavelengths
+  per RGB band already, so hue and angles are right; native spectra would mostly add
+  saturation that sRGB output clips. Revisit with wide-gamut output (chapter 5's film).
+- Faster spectral sky: the spectral tables take about 6 s to build (4 cores) and a sky sample
+  costs about twice an RGB one. Candidates: f32 tables, caching a sample's `Channels` (the
+  Rayleigh fit takes logarithms on every call), building only the bins a render samples.
+- Four wavelengths per path, as pbrt-v4: needs a spectral type wider than `Color`.
+- Faster spectral materials: constant RGB parameters are upsampled per lookup; their sigmoid
+  coefficients could be computed once, when the scene is parsed.
+- Measured camera sensitivities (pbrt's `PixelSensor` with a camera's RGB curves): needs the
+  published curves.
+- A check against Tungsten's Cornell box reference: its download was refused (403) from the
+  development environment; spectral was compared with our own RGB render instead.
+
+### Chapter 5: cameras and film (in progress)
+
+Plan, in commits:
+
+1. Reconstruction filters: Gaussian, Mitchell-Netravali, Lanczos (windowed sinc), sampled by
+   tabulated importance with signed weights (PBR 8.8).
+2. Cameras: orthographic; spherical (equirectangular and equal-area); a camera trait that
+   carries the sample's time.
+3. Motion blur: a shutter interval; transforms (and the camera) that move between two poses,
+   interpolated (translation linearly, rotation by slerp); bounds that cover the motion. Each
+   sample's time is per-path state, like its wavelengths, rather than a field on every `Ray`
+   (there are 262 constructions of one), which pbrt's spawned rays inherit anyway.
+4. Film and sensor: exposure from ISO, shutter time and f-number; white balance (von Kries in
+   Bradford's cone space, to a colour temperature or named illuminant); output colour spaces
+   (sRGB, Display P3, Rec. 2020, ACES2065-1) for EXR.
+5. Realistic camera: lens systems traced element by element (Kolb, Mitchell and Hanrahan 1995;
+   PBR 5.3), with PBR's lenses built in (double Gauss 50 mm, wide 22 mm, telephoto 250 mm,
+   fisheye 10 mm), focusing by moving the film, exit pupil bounds for sampling, and vignetting.
+6. Astigmatism: a lens system's own (Seidel) aberrations appear in the realistic camera; in
+   addition the thin-lens camera gets a parametric astigmatism, both the field-dependent
+   aberration of a lens (tangential and sagittal foci apart in proportion to the field angle
+   squared) and an eye's (a cylindrical error of given power and axis, across the whole field).
+7. Lens flare: ghosts from pairs of reflections between a lens system's surfaces, traced
+   forward from each bright light through the lens with anti-reflection coated (wavelength
+   dependent) Fresnel reflectance (Hullin, Eisemann, Seidel and Lee, "Physically-Based Real-Time
+   Lens Flare Rendering", SIGGRAPH 2011), plus the aperture's diffraction starburst, added to
+   the existing glare.
+
+(Correction to the survey: `Ray` has no `time` field; the unused one is on `RayX`.)
+
 ### Reading (chapter 4)
 
 - PBR 4th ed., chapter 4 (§4.4.1 blackbody, §4.5 spectral distributions, §4.6 colour, §4.6.6

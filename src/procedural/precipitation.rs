@@ -49,6 +49,9 @@ pub struct Precipitation {
     /// The width of the fine streaks, and how strongly they mark the shafts (0 to 1).
     pub streak_size: f64,
     pub streakiness: f64,
+    /// How far below the base the drops emerge from the cloud, varying from place to place
+    /// over `cell_size` (m): a flat ceiling to the shafts shows where they stand clear of cloud.
+    pub base_variation: f64,
     /// Where it can rain: within `radius` of `center` ([x, z]), fading over its outer `fade`
     /// (a fraction of the radius).
     pub center: Vector2<f64>,
@@ -71,6 +74,7 @@ impl Precipitation {
             wind_direction: Vector2::new(1., 0.),
             streak_size: 120.,
             streakiness: 0.6,
+            base_variation: 0.,
             center: Vector2::zeros(),
             radius: 30_000.,
             fade: 0.3,
@@ -119,7 +123,12 @@ impl Precipitation {
             1.
         };
         // Drops leave the cloud over its last hundred metres or so.
-        let emerging = smoothstep(0., 150., fallen);
+        let below = if self.base_variation > 0. {
+            self.streaks.fbm(q.x / self.cell_size, 0.21, q.y / self.cell_size, 3, 0.5, 2.) * self.base_variation
+        } else {
+            0.
+        };
+        let emerging = smoothstep(below, below + 150., fallen);
         (shafts * streaks * left * frayed * emerging).clamp(0., 1. + 0.5 * self.streakiness)
     }
 }

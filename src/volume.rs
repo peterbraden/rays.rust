@@ -502,7 +502,7 @@ impl VolumeMaterial {
             (None, Some(rainbow)) if first => return rainbow.eval(cos),
             _ => return phase.eval(cos),
         };
-        let table = halos.table.get_or_init(|| HaloTable::new(&sun.direction, &halos.crystals, halos.rays, halos.seed));
+        let table = halos.table.get_or_init(|| crate::geometry::build_apart(|| HaloTable::new(&sun.direction, &halos.crystals, halos.rays, halos.seed)));
         let crystals = table.eval(incoming);
         match phase.diffraction {
             None => crystals,

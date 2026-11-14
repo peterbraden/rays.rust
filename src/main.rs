@@ -180,9 +180,18 @@ struct Args {
     #[arg(long)]
     seed: Option<u64>,
 
-    ///Samples per pixel; overrides the scenefile if specified
+    ///Samples per pixel to render to; overrides the scenefile's supersamples. With a saved
+    ///state, only the samples it lacks are rendered, so a quick render can be refined later
     #[arg(long)]
     samples: Option<usize>,
+
+    ///Render this many more samples per pixel than the saved state has
+    #[arg(long, conflicts_with = "samples")]
+    add_samples: Option<usize>,
+
+    ///Start afresh, rather than carrying on from the saved state (<output>.accum)
+    #[arg(long)]
+    fresh: bool,
 
     ///Write the scene file, as JSON in our format, to this file. For a scene in another
     ///renderer's format (eg. .nff), this is the translation
@@ -195,6 +204,17 @@ struct Args {
     ///deviation alongside it (.variance.png)
     #[arg(long)]
     variance: Option<usize>,
+}
+
+/// How often a render's state is saved, so an interrupted render loses no more than this.
+const STATE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Write a render's state, via a temporary file so that a partial state is never left.
+fn save_state(path: &str, bytes: &[u8]) {
+    let tmp = format!("{}.tmp", path);
+    if let Err(e) = std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, path)) {
+        eprintln!("Failed to save the render's state to {}: {}", path, e);
+    }
 }
 
 /// The process's peak resident memory so far, in bytes: large meshes and their acceleration
@@ -235,11 +255,12 @@ fn main() {
         });
         println!("- Wrote the scene file to {}", path);
     }
+    // What the render's saved state is keyed by: the scene, in whatever format it was read.
+    let contents = doc.to_string();
     let mut s = scenefile::SceneFile::from_value_overridden(doc, &scenefile::Overrides {
         width: args.width,
         height: args.height,
         seed: args.seed,
-        samples: args.samples,
     });
 
     let mut rc = RenderContext::new(
@@ -250,6 +271,22 @@ fn main() {
             );
     if let Some(path) = &args.output {
         rc.output_filename = path.clone();
+    }
+    // Carry on from where an earlier render of the same scene stopped, if there was one.
+    let state_path = rendercontext::state_path_for(&rc.output_filename);
+    let key = rendercontext::render_key(&contents, (args.width, args.height, args.seed));
+    if !args.fresh && std::path::Path::new(&state_path).exists() {
+        match rc.load_state(&state_path, key) {
+            Ok(()) => println!("- Resuming from {:.1} samples per pixel on average, {} at least ({})",
+                rc.resumed_samples as f64 / (rc.width * rc.height) as f64, rc.min_samples(), state_path),
+            Err(e) => println!("- Starting afresh: {}", e),
+        }
+    }
+    if let Some(n) = args.samples {
+        s.render.supersamples = n;
+    }
+    if let Some(n) = args.add_samples {
+        s.render.supersamples = rc.min_samples() + n;
     }
     println!("- Output: {}x{} @ {} samples -> {}", s.image.width, s.image.height, s.render.samples_per_pixel(), rc.output_filename);
     println!("- Scene Objects: {}, Primitives: {} ", s.objects.len(),  s.objects.primitives_len()); 
@@ -286,10 +323,11 @@ fn main() {
     let pb = ProgressBar::new(100);
     pb.set_style(ProgressStyle::with_template("{spinner:.green} {prefix}{msg} [{bar:.cyan/blue}]").unwrap().progress_chars("#>-"));
 
-    // Progressive output is throttled, and encoded outside the lock so it doesn't serialise
-    // the render.
+    // Progressive output and saved states are throttled, and encoded or written outside the
+    // lock so they don't serialise the render.
     let progressive_interval = Duration::from_secs(1);
     let last_progressive = Mutex::new(Instant::now());
+    let last_state = Mutex::new(Instant::now());
 
     rendercontext::render(&s, &rcmtx,
         |rc| {
@@ -298,21 +336,37 @@ fn main() {
             pb.tick();
 
             let mut last = last_progressive.lock().unwrap();
-            if rc.progressive_render && last.elapsed() >= progressive_interval {
+            let image = if rc.progressive_render && last.elapsed() >= progressive_interval {
                 *last = Instant::now();
                 Some((rc.snapshot(), rc.output_filename.clone()))
             } else {
                 None
-            }
+            };
+            let mut last = last_state.lock().unwrap();
+            let state = if last.elapsed() >= STATE_INTERVAL {
+                *last = Instant::now();
+                Some(rc.encode_state(key))
+            } else {
+                None
+            };
+            if image.is_some() || state.is_some() { Some((image, state)) } else { None }
         },
-        |(img, path)| {
-            if let Err(e) = writer.write(&s.output.finish(&img), &path) {
+        |(image, state)| {
+            if let Some((img, path)) = image
+                && let Err(e) = writer.write(&s.output.finish(&img), &path) {
                 eprintln!("{}", e);
+            }
+            if let Some(bytes) = state {
+                save_state(&state_path, &bytes);
             }
         });
     pb.finish();
 
     let rc = rcmtx.lock().unwrap();
+    if rc.samples_rendered > 0 {
+        save_state(&state_path, &rc.encode_state(key));
+    }
+    println!("- {} samples per pixel; more can be added with --add-samples", rc.min_samples());
     //wireframe::wireframe(&s, &mut rc);
     let img = s.output.finish(&rc.snapshot());
     if let Err(e) = writer.write(&img, &rc.output_filename) {

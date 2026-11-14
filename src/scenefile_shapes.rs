@@ -222,15 +222,28 @@ impl SceneFile {
             "bicubic_patch" => Box::new(tessellated::bicubic_patch(&points3(o, "points"), SceneFile::parse_int(&o["steps"], 16))),
             // {"type": "text", "font": "path/to/font.ttf", "string": "Hello", "thickness": 0.2,
             //  "offset": [0, 0], "steps": 8}: on the baseline y = 0 from x = 0, about one unit
-            //  high, from z = 0 back to z = thickness.
+            //  high, from z = 0 back to z = thickness. "font" may be a list of files, of which
+            //  the first that exists is used, so a scene can name a font for each system.
             "text" => {
-                let font = o["font"].as_str().expect("text needs a \"font\" file");
+                let font = &first_existing_font(&o["font"]);
                 let string = o["string"].as_str().expect("text needs a \"string\"");
                 text_shape(font, string, o)
             },
             _ => return None,
         })
     }
+}
+
+/// The font file to use: `font` itself, or the first of a list of them that exists.
+fn first_existing_font(font: &Value) -> String {
+    let candidates: Vec<&str> = match font {
+        Value::String(s) => vec![s.as_str()],
+        Value::Array(a) => a.iter().filter_map(|v| v.as_str()).collect(),
+        _ => panic!("text needs a \"font\" file, or a list of them"),
+    };
+    candidates.iter().find(|f| std::path::Path::new(f).exists()).or(candidates.last())
+        .unwrap_or_else(|| panic!("text needs a \"font\" file, or a list of them"))
+        .to_string()
 }
 
 fn text_shape(font: &str, string: &str, o: &Value) -> Shape {
@@ -280,6 +293,16 @@ fn poly_terms(t: &str, o: &Value) -> Vec<Term> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn test_first_existing_font_is_chosen() {
+        let here = file!();
+        assert_eq!(first_existing_font(&serde_json::json!(here)), here);
+        assert_eq!(first_existing_font(&serde_json::json!(["/no/such/font.ttf", here])), here);
+        // None exists: the last, so the error names a real candidate.
+        assert_eq!(first_existing_font(&serde_json::json!(["/no/a.ttf", "/no/b.ttf"])), "/no/b.ttf");
+    }
+
     use super::*;
     use crate::ray::Ray;
 

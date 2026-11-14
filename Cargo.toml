@@ -6,6 +6,8 @@ edition = "2024"
 
 [dependencies]
 image = "0.25.5"
+# Written directly, rather than through `image`, to fix the order of an EXR file's blocks.
+exr = "1.73"
 nalgebra = "0.33.2"
 rand = "0.6"
 clap = { version = "4.5.32", features = ["derive"] }

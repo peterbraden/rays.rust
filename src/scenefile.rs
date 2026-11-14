@@ -368,10 +368,11 @@ impl SceneFile {
          objects
     }
 
-    /// An object's medium, bump mapped if it has a `"normal"` (see `parse_bump`).
+    /// An object's medium, bump mapped if its `"normal"` is an object (see `parse_bump`). A
+    /// plane's `"normal"` may instead be a vector, its orientation (`parse_plane`).
     pub fn parse_object_medium(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Box<dyn Medium + Sync + Send> {
         let m = SceneFile::parse_unbumped_medium(o, materials, media);
-        if o["normal"].is_null() {
+        if !o["normal"].is_object() {
             return m;
         }
         Box::new(Bumped { inner: m, bump: SceneFile::parse_bump(&o["normal"]) })
@@ -1590,9 +1591,10 @@ impl SceneFile {
     }
 
     /// `{"type": "plane", "y": 0}`, a ground plane; or `{"type": "plane", "normal": [x, y, z],
-    /// "distance": d}`, POV-Ray's plane: the half-space n.p < d, which can be used in CSG.
+    /// "distance": d}`, POV-Ray's plane: the half-space n.p < d, which can be used in CSG. A
+    /// `"normal"` that is an object is a bump map (`parse_object_medium`), not an orientation.
     pub fn parse_plane(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        if !o["normal"].is_null() {
+        if o["normal"].is_array() {
             return Box::new(crate::shapes::plane::HalfSpace::new(
                 SceneFile::parse_vec3(&o["normal"]), SceneFile::parse_number(&o["distance"], 0.)));
         }
@@ -2891,6 +2893,19 @@ mod tests {
         assert_eq!((s.image.width, s.image.height), (40, 2));
         let s = minimal_scene_sized("", None, Some(30));
         assert_eq!((s.image.width, s.image.height), (4, 30));
+    }
+
+    #[test]
+    fn test_plane_normal_is_an_orientation_or_a_bump_map() {
+        // A ground plane, bump mapped: its "normal" is an object (demo/scenes/bumps.json).
+        let bumped = minimal_scene(r#", "materials": { "M": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } },
+            "objects": [ { "type": "plane", "y": 0, "material": "M",
+                           "normal": { "pattern": "waves", "amount": 0.25 } } ]"#);
+        assert_eq!(bumped.objects.infinite_items.len() + bumped.objects.items.len(), 1);
+        // A half-space plane: its "normal" is a vector, and it isn't bump mapped.
+        let oriented = minimal_scene(r#", "materials": { "M": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } },
+            "objects": [ { "type": "plane", "normal": [0, 1, 0], "distance": 0, "material": "M" } ]"#);
+        assert_eq!(oriented.objects.infinite_items.len() + oriented.objects.items.len(), 1);
     }
 
     #[test]

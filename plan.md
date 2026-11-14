@@ -656,9 +656,12 @@ the noise of a typical pixel. Orbit's median is zero because most of the image i
 5. Low-discrepancy sampling: Owen-scrambled Sobol' across every dimension.
 6. Choosing lights by power.
 7. Investigate the speckle in `orbit`.
+8. (After review) Perceptual roughness, α = r², and path regularisation for light reaching
+   glossy surfaces after another scattering.
 
-Status: steps 1-7 done (see Results). Candidates next: path regularisation or another remedy
-for glossy caustics; multiple-scattering compensation for GGX; the orbit traversal costs.
+Status: steps 1-8 done (see Results). Candidates next: multiple-scattering compensation for
+GGX; shrinking the regularisation with the sample count, for consistency; the orbit
+traversal costs.
 
 ### Results (`scripts/variance.sh`, 4 renders, after each step)
 
@@ -669,22 +672,31 @@ for glossy caustics; multiple-scattering compensation for GGX; the orbit travers
 | 3. GGX | 0.00086 / 264 | 0.00105 / 658 | 0.00081 / 57 | 0.00787 / 5.5 |
 | 4. Sky sampling | 0.00086 / 270 | 0.00058 / 802 | 0.00033 / 41 | 0.00647 / 5.4 |
 | 5. Sobol' | 0.00044 / 468 | 0.00019 / 1521 | 0.00008 / 41 | 0.00616 / 6.3 |
+| 6. Lights by power | 0.00044 / 459 | 0.00015 / 1512 | 0.00007 / 215 | 0.00616 / 5.7 |
+| 8. α = r², regularisation | 0.00044 / 480 | 0.00015 / 1431 | 0.00007 / 548 | 0.00616 / 5.8 |
 
 Each entry is median relMSE / efficiency (from the mean relMSE). Step 6 (lights chosen by
 power) leaves these scenes alone, having one light or none; on `lamps`, five lamps of unequal
-power, it raises efficiency from 13 to 72 and lowers the median relMSE tenfold.
+power, it raises efficiency from 13 to 72 and lowers the median relMSE tenfold. Glossy-sun's
+mean relMSE, dominated by fireflies: 40.6 at the baseline, 0.022 with GGX, 0.0014 at the end.
+Timings later in the table ran with the machine under other load (forest 5.9 s at the
+baseline, 7.3 s at the end, for unchanged work per sample in the later steps): compare
+medians there.
 
 Findings:
 
 - MIS on its own changed nothing measurable: diffuse surfaces already took nearly all their
   direct light from light sampling. Its value came with glossy BSDFs.
-- GGX with MIS removed the glossy-sun fireflies (mean relMSE 33 to 0.02). It also made sunlight
-  reflected by glossy surfaces onto diffuse ones (caustics) reachable, which now shows as
-  sparkle at 64 samples on the ground around the spheres; the fuzzed mirror almost never found
-  that light at all. Unidirectional path tracing finds such paths poorly; path regularisation
-  (biased) or bidirectional methods are the usual remedies.
-- The spheres' median rises with GGX because the image changed: rough metals reflect less (no
-  multiple scattering between facets) and highlights moved.
+- GGX with MIS removed the glossy-sun fireflies (mean relMSE 33 to 0.02), but in review the
+  GGX step looked more speckled. Two causes, separated by experiment:
+  - Roughness as α made reflections blurrier than the fuzzed mirror's, and 40% noisier per
+    pixel at the same samples (spheres median 0.00069 to 0.00099). With α = roughness² (step
+    8), both the look and the noise return to the old ones (0.00072).
+  - Light reaching a polished surface after another scattering (caustics on the ground; a
+    neighbour's highlight seen in the brushed sphere) became reachable, and sparkled; the
+    fuzzed mirror almost never found it. Path regularisation (step 8) floors every glossy
+    vertex after a path's first at α 0.2: glossy-sun's mean relMSE 5.7 to 0.0014, for softer
+    caustics and frosted reflections of reflections.
 - Measuring variance across renders by dividing by the pixel's mean understated fireflies,
   capping each near k: BSDF sampling alone measured half as noisy as MIS, against a reference
   error 90 times larger. The median denominator fixes this (`variance.rs`).

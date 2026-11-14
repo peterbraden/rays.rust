@@ -24,6 +24,7 @@ mod ray;
 mod color;
 mod spectrum;
 mod motion;
+mod film;
 mod material {
     pub mod model;
     pub mod bsdf;

@@ -53,11 +53,13 @@ pub struct OutputOpts {
     pub glare: Option<Glare>,
     /// Angle (radians) across a pixel at the image's centre, from the camera; for glare.
     pub pixel_angle: f64,
+    /// The sensor's exposure, white balance and output colour space (`film`).
+    pub film: crate::film::Film,
 }
 
 impl Default for OutputOpts {
     fn default() -> OutputOpts {
-        OutputOpts { exposure: 1., tonemap: ToneMap::None, transfer: Transfer::Srgb, glare: None, pixel_angle: 0. }
+        OutputOpts { exposure: 1., tonemap: ToneMap::None, transfer: Transfer::Srgb, glare: None, pixel_angle: 0., film: crate::film::Film::default() }
     }
 }
 
@@ -102,15 +104,20 @@ impl OutputOpts {
                 },
             },
             pixel_angle: 0.,
+            film: crate::film::Film::parse(o),
         }
     }
 
-    /// The finished linear image: with the camera's glare, if any.
+    /// The finished linear image: with the camera's glare, if any, through the film.
     pub fn finish(&self, img: &LinearImage) -> LinearImage {
-        match self.glare {
+        let img = match self.glare {
             Some(g) if self.pixel_angle > 0. => g.apply(img, self.pixel_angle, self.exposure),
             _ => LinearImage { width: img.width, height: img.height, pixels: img.pixels.clone() },
+        };
+        if self.film.is_identity() {
+            return img;
         }
+        LinearImage { width: img.width, height: img.height, pixels: img.pixels.iter().map(|c| self.film.apply(c)).collect() }
     }
 
     /// Map one linear channel to a display value in [0, 1].

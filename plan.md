@@ -735,3 +735,55 @@ Findings:
   §12.6.2 (power light sampler), §8.7 (Sobol' sampling), §13.4 (path tracer).
 - Joe and Kuo, "Constructing Sobol sequences with better two-dimensional projections", SIAM J.
   Sci. Comput. 30(5), 2008; Burley, "Practical Hash-based Owen Scrambling", JCGT 9(4), 2020.
+
+
+## 11. Coverage of PBRT (4th edition), chapter by chapter
+
+Goal: close the gaps between this renderer and what Pharr, Jakob and Humphreys, "Physically
+Based Rendering", 4th ed. (<https://pbr-book.org/4ed/>) covers, one chapter at a time, in a
+single PR, pausing for review after each chapter. The survey of gaps (from the code, at the
+start) by chapter:
+
+- 4, Radiometry, spectra and colour: spectral rendering, RGB-to-spectrum upsampling, blackbody
+  emitters, colour spaces and a sensor model.
+- 5, Cameras and film: orthographic, spherical and realistic (lens system) cameras; motion blur
+  (`Ray::time` exists but is unused); Gaussian, Mitchell, Lanczos filters; film sensor, white
+  balance.
+- 6, Shapes: curves, bilinear patches, Loop subdivision; texture coordinates on intersections;
+  floating-point error bounds for spawning rays.
+- 8, Sampling: Halton, stratified, PMJ02, blue-noise Z-Sobol'; ray differentials.
+- 9, Reflection models: conductors with complex η, k; rough dielectrics; thin dielectric; mix;
+  anisotropic roughness.
+- 10, Textures: image textures, MIP maps and filtering; normal maps.
+- 11, Volume scattering: grid media, chromatic media with spectral MIS, emissive media.
+- 12, Lights: spot, goniometric, projection, textured area lights; light BVH.
+- 13-14, Light transport: layered BSDFs, subsurface scattering, light tracing.
+- Online chapters: BDPT, MLT, SPPM. 15-16: the wavefront integrator (GPU; see workstream 3).
+
+### Chapter 4: done
+
+- `src/spectrum.rs`: CIE 1931 matching functions and D65 (`src/spectrum/cie.rs`, from
+  colour-science's tables, every 5 nm); visible-wavelength importance sampling and three hero
+  wavelengths per path; the film's XYZ estimate and linear sRGB; Planck's law and luminance-
+  normalised blackbody emission; refractive indices by Cauchy or Sellmeier, with BK7, fused
+  silica, SF11 and diamond; termination of secondary wavelengths at dispersive interfaces.
+- `src/spectrum/rgb2spec.rs`: Jakob and Hanika's sigmoid-polynomial upsampling, the table
+  solved by Gauss-Newton in CIELAB on first use (32³ per largest component).
+- `"spectral": true` turns it on; RGB mode is unchanged. Materials, lights, the sun, the sky,
+  the background and the media convert their RGB at the point of use (`Color::as_reflectance`,
+  `as_illuminant`, `as_unbounded`).
+- Known limitations: the sky's own scattering, halos, rainbows and diffraction stay in RGB and
+  are upsampled; only sRGB output; three wavelengths, not pbrt's four. White balance and the
+  sensor model belong with the film, in chapter 5.
+
+### Reading (chapter 4)
+
+- PBR 4th ed., chapter 4 (§4.4.1 blackbody, §4.5 spectral distributions, §4.6 colour, §4.6.6
+  RGB to spectrum), §5.4.2 (`SampleVisibleWavelengths`).
+- Wilkie, Nawaz, Droske, Weidlich, Hanika, "Hero Wavelength Spectral Sampling", Computer Graphics
+  Forum 33(4) (EGSR 2014), doi:10.1111/cgf.12419.
+- Jakob and Hanika, "A Low-Dimensional Function Space for Efficient Spectral Upsampling",
+  Computer Graphics Forum 38(2) (Eurographics 2019), doi:10.1111/cgf.13626.
+- CIE 015:2018, "Colorimetry", 4th ed. (matching functions, D65, CIELAB).
+- Malitson, "Interspecimen Comparison of the Refractive Index of Fused Silica", JOSA 55(10), 1965,
+  doi:10.1364/JOSA.55.001205.

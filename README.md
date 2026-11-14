@@ -20,6 +20,7 @@ Supports:
       - Specular
       - Dielelectric
       - Leaf (translucent: diffuse reflection and transmission under a glossy coat)
+    - Spectral rendering (`"spectral": true`): dispersion, blackbody emitters
 
   - Objects
     - Sphere
@@ -53,6 +54,22 @@ its transform, whatever the size of the mesh. Each instance has its own material
 
 A name can be used wherever a geometry is expected (eg. the `a` and `b` of a `difference`), and
 geometries can be built from each other. See [demo/scenes/instances.json](demo/scenes/instances.json).
+
+## Spectral rendering
+
+With `"spectral": true`, each sample traces light at three wavelengths instead of red, green
+and blue (hero wavelength sampling, after PBRT's chapter 4), and the film turns them into a
+colour through the CIE matching functions. Colours in the scene are turned into smooth spectra
+(Jakob and Hanika's sigmoid polynomials), so a scene under white light looks as it does in RGB;
+what changes is coloured light on coloured surfaces, and what RGB can't do at all:
+
+- Dispersion: a dielectric's `refractive_index` can be a named glass (`"BK7"`, `"fused silica"`,
+  `"SF11"`, `"diamond"`), `{"cauchy": [a, b]}` or `{"sellmeier": {"b": [..], "c": [..]}}`.
+- Blackbody emitters: `{"type": "diffuse-light", "temperature": 2700, "intensity": 10}`, and
+  `"temperature"` on point lights, emit Planck's spectrum (scaled to unit luminance).
+
+See [demo/scenes/spectral-prism.json](demo/scenes/spectral-prism.json) and
+[demo/scenes/blackbody.json](demo/scenes/blackbody.json), and `src/spectrum.rs` for the details.
 
 ## Forests
 

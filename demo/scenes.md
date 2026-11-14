@@ -15,6 +15,14 @@ Shapes combined: union, merge, intersection, difference and clipping (see the
 [shape reference](../docs/shapes.md#combining-shapes-csg)).
 ![CSG](./scenes/csg.png)
 
+## Spectral rendering
+White light dispersed by a diamond and a prism of SF11 flint glass, traced at sampled
+wavelengths (`"spectral": true`; see `src/spectrum.rs`).
+![Dispersion](./scenes/spectral-prism.png)
+
+Lamps glowing as blackbodies at 1900, 2700, 4000, 6500 and 12000 K, at equal luminance.
+![Blackbody lamps](./scenes/blackbody.png)
+
 ## Spheres
 Spheres demonstrating 3 different materials.
 ![Spheres](./scenes/spheres.png)

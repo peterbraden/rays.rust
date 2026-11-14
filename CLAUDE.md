@@ -12,6 +12,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Procedural trees (Weber and Penn's parametric model, `src/procedural/tree.rs`), forests of instanced
   trees (`src/procedural/forest.rs`), and rocks (`bedrock`, `boulder`, `pebbles` objects; `rock` material)
 - Heightmap terrain (flat, fractal noise or image) and procedural grass that grows on it, with species and condition presets (see `src/procedural/grass.rs`)
+- Spectral rendering (`"spectral": true`, `src/spectrum.rs`, after PBRT chapter 4): three hero wavelengths per path, RGB upsampled by Jakob-Hanika sigmoid polynomials (`src/spectrum/rgb2spec.rs`) via `Color::as_reflectance`/`as_illuminant`/`as_unbounded` where colours enter light transport (identity in RGB mode); dispersive glasses (`refractive_index`: named glass, Cauchy or Sellmeier) and blackbody emitters (`"temperature"`)
 - Multithreaded rendering with progressive output
 
 ## Build Commands
@@ -42,6 +43,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Traits used for major abstractions (Camera, Geometry, Medium, MaterialModel)
 - Box<dyn Trait> for polymorphism
 - Error handling via Option<T>/Result<T,E> with unwrap()
+- New code that turns a scene's RGB into light transport (a material's albedo, an emitter's colour) must convert it with `as_reflectance`, `as_illuminant` or `as_unbounded`, so spectral mode stays correct
 - Full paths with crate:: prefix for imports
 - 4-space indentation
 - snake_case for variables and functions

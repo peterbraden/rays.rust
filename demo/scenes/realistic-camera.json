@@ -1,0 +1,424 @@
+{
+  "width": 480,
+  "height": 320,
+  "supersamples": 128,
+  "chunk_size": 32,
+  "samples_per_chunk": 2,
+  "shadow_bias": 0.0001,
+  "max_depth": 4,
+  "path_termination": "russian_roulette",
+  "background": {
+    "type": "gradient",
+    "bottom": [
+      0.8,
+      0.8,
+      0.8
+    ],
+    "top": [
+      0.4,
+      0.6,
+      0.9
+    ]
+  },
+  "camera": {
+    "type": "realistic",
+    "lens": "dgauss.50mm",
+    "f_number": 2,
+    "location": [
+      0,
+      1.1,
+      -2.5
+    ],
+    "lookat": [
+      0,
+      0.4,
+      5.2
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ]
+  },
+  "materials": {
+    "FLOOR": {
+      "type": "lambertian",
+      "albedo": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    },
+    "LAMP": {
+      "type": "diffuse-light",
+      "color": [
+        1,
+        0.95,
+        0.85
+      ],
+      "intensity": 30
+    },
+    "C0": {
+      "type": "plastic",
+      "albedo": [
+        0.8,
+        0.2,
+        0.1
+      ],
+      "roughness": 0.2
+    },
+    "C1": {
+      "type": "plastic",
+      "albedo": [
+        0.9,
+        0.7,
+        0.1
+      ],
+      "roughness": 0.2
+    },
+    "C2": {
+      "type": "plastic",
+      "albedo": [
+        0.2,
+        0.6,
+        0.2
+      ],
+      "roughness": 0.2
+    },
+    "C3": {
+      "type": "plastic",
+      "albedo": [
+        0.1,
+        0.4,
+        0.8
+      ],
+      "roughness": 0.2
+    },
+    "C4": {
+      "type": "plastic",
+      "albedo": [
+        0.6,
+        0.2,
+        0.7
+      ],
+      "roughness": 0.2
+    }
+  },
+  "objects": [
+    {
+      "type": "plane",
+      "y": 0,
+      "material": "FLOOR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -2.4,
+        0.4,
+        2.0
+      ],
+      "radius": 0.4,
+      "material": "C0"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -1.2,
+        0.4,
+        2.0
+      ],
+      "radius": 0.4,
+      "material": "C1"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.0,
+        0.4,
+        2.0
+      ],
+      "radius": 0.4,
+      "material": "C2"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        1.2,
+        0.4,
+        2.0
+      ],
+      "radius": 0.4,
+      "material": "C3"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        2.4,
+        0.4,
+        2.0
+      ],
+      "radius": 0.4,
+      "material": "C4"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -2.4,
+        0.4,
+        3.6
+      ],
+      "radius": 0.4,
+      "material": "C1"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -1.2,
+        0.4,
+        3.6
+      ],
+      "radius": 0.4,
+      "material": "C2"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.0,
+        0.4,
+        3.6
+      ],
+      "radius": 0.4,
+      "material": "C3"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        1.2,
+        0.4,
+        3.6
+      ],
+      "radius": 0.4,
+      "material": "C4"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        2.4,
+        0.4,
+        3.6
+      ],
+      "radius": 0.4,
+      "material": "C0"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -2.4,
+        0.4,
+        5.2
+      ],
+      "radius": 0.4,
+      "material": "C2"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -1.2,
+        0.4,
+        5.2
+      ],
+      "radius": 0.4,
+      "material": "C3"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.0,
+        0.4,
+        5.2
+      ],
+      "radius": 0.4,
+      "material": "C4"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        1.2,
+        0.4,
+        5.2
+      ],
+      "radius": 0.4,
+      "material": "C0"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        2.4,
+        0.4,
+        5.2
+      ],
+      "radius": 0.4,
+      "material": "C1"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -2.4,
+        0.4,
+        6.800000000000001
+      ],
+      "radius": 0.4,
+      "material": "C3"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -1.2,
+        0.4,
+        6.800000000000001
+      ],
+      "radius": 0.4,
+      "material": "C4"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.0,
+        0.4,
+        6.800000000000001
+      ],
+      "radius": 0.4,
+      "material": "C0"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        1.2,
+        0.4,
+        6.800000000000001
+      ],
+      "radius": 0.4,
+      "material": "C1"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        2.4,
+        0.4,
+        6.800000000000001
+      ],
+      "radius": 0.4,
+      "material": "C2"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -2.4,
+        0.4,
+        8.4
+      ],
+      "radius": 0.4,
+      "material": "C4"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -1.2,
+        0.4,
+        8.4
+      ],
+      "radius": 0.4,
+      "material": "C0"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.0,
+        0.4,
+        8.4
+      ],
+      "radius": 0.4,
+      "material": "C1"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        1.2,
+        0.4,
+        8.4
+      ],
+      "radius": 0.4,
+      "material": "C2"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        2.4,
+        0.4,
+        8.4
+      ],
+      "radius": 0.4,
+      "material": "C3"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -2.4,
+        0.4,
+        10.0
+      ],
+      "radius": 0.4,
+      "material": "C0"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -1.2,
+        0.4,
+        10.0
+      ],
+      "radius": 0.4,
+      "material": "C1"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.0,
+        0.4,
+        10.0
+      ],
+      "radius": 0.4,
+      "material": "C2"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        1.2,
+        0.4,
+        10.0
+      ],
+      "radius": 0.4,
+      "material": "C3"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        2.4,
+        0.4,
+        10.0
+      ],
+      "radius": 0.4,
+      "material": "C4"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0,
+        8,
+        4
+      ],
+      "radius": 1.5,
+      "material": "LAMP"
+    }
+  ]
+}

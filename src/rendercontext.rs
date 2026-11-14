@@ -473,14 +473,20 @@ fn render_pixel(x: usize, y: usize, first: usize, count: usize, s: &Scene) -> (u
         // Jitter warped to the reconstruction filter, and the sample's weight (one, but for
         // filters with negative lobes).
         let ((fx, wx), (fy, wy)) = (s.render.filter.sample_weighted(u), s.render.filter.sample_weighted(v));
-        let (rays_cast, c) = trace(
-                &s.camera.get_ray(
-                    x as f64 / (s.image.width as f64),
-                    y as f64 / (s.image.height as f64),
-                    // Measured from the pixel's corner.
-                    (0.5 + fx) / (s.image.width as f64),
-                    (0.5 + fy) / (s.image.height as f64))
-                , 0, s);
+        let camera_ray = s.camera.get_ray_weighted(
+            x as f64 / (s.image.width as f64),
+            y as f64 / (s.image.height as f64),
+            // Measured from the pixel's corner.
+            (0.5 + fx) / (s.image.width as f64),
+            (0.5 + fy) / (s.image.height as f64));
+        // A ray the lens stops is a black sample.
+        let (rays_cast, c) = match camera_ray {
+            Some((ray, weight)) => {
+                let (n, c) = trace(&ray, 0, s);
+                (n, if weight == 1. { c } else { c * weight })
+            },
+            None => (0, Color::black()),
+        };
         cast += rays_cast;
         // A spectral sample's radiance becomes a colour (and stray NaNs, as in RGB, pass on).
         let c = match crate::spectrum::end_sample() {

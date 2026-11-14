@@ -405,6 +405,10 @@ impl SceneFile {
     ///   perspective camera sees at the point looked at).
     /// - `"spherical"`: every direction, `"mapping": "equirectangular"` (the default) or
     ///   `"equal_area"`.
+    /// - `"realistic"`: rays traced through a lens (`lens`): `"lens"`, a built-in name
+    ///   (`"dgauss.50mm"`, the default, `"wide.22mm"`, `"telephoto.250mm"`, `"fisheye.10mm"`) or
+    ///   a pbrt `.dat` file; `"f_number"` (default wide open); `"focus_distance"` (default the
+    ///   point looked at); `"film_diagonal"` in mm (default 35). The lens sets the field of view.
     ///
     /// With `"motion": {"location", "lookat", "up"}`, the camera moves to that pose (each key
     /// defaulting to the start's) while the shutter is open.
@@ -440,7 +444,20 @@ impl SceneFile {
                 Some("equal_area") => camera::SphereMapping::EqualArea,
                 Some(m) => panic!("Unknown spherical mapping '{}': expected \"equirectangular\" or \"equal_area\"", m),
             })),
-            Some(t) => panic!("Unknown camera type '{}': expected \"perspective\", \"orthographic\" or \"spherical\"", t),
+            Some("realistic") => {
+                let lens = match c["lens"].as_str().unwrap_or("dgauss.50mm") {
+                    name if !name.contains('/') && !name.ends_with(".dat") => crate::lens::LensSystem::named(name)
+                        .unwrap_or_else(|| panic!("Unknown lens '{}': expected dgauss.50mm, wide.22mm, telephoto.250mm, fisheye.10mm or a .dat file", name)),
+                    path => crate::lens::LensSystem::parse(&std::fs::read_to_string(path).unwrap_or_else(|e| panic!("Can't read lens {}: {}", path, e)))
+                        .unwrap_or_else(|e| panic!("Lens {}: {}", path, e)),
+                };
+                let focus = c["focus_distance"].as_f64().unwrap_or((lookat - location).norm());
+                let cam = crate::lens::RealisticCamera::new(placement, lens, focus, c["f_number"].as_f64(),
+                    SceneFile::parse_number(&c["film_diagonal"], 35.) * 1e-3, aspect)
+                    .unwrap_or_else(|e| panic!("Realistic camera: {}", e));
+                Box::new(cam)
+            },
+            Some(t) => panic!("Unknown camera type '{}': expected \"perspective\", \"orthographic\", \"spherical\" or \"realistic\"", t),
         }
     }
 

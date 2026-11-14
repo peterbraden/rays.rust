@@ -11,6 +11,7 @@
 //!   elevations.
 //! - `SphericalCamera`: every direction round the camera, mapped to the image
 //!   equirectangularly or by an equal-area mapping (PBR section 5.3).
+//! - `lens::RealisticCamera`: rays traced through a real lens's elements (PBR section 5.3).
 //!
 //! Every camera has a `Placement`: where it is and which way it looks, and optionally a second
 //! pose it moves to while the shutter is open (`motion`).
@@ -24,6 +25,12 @@ pub trait Camera {
     /// The ray for image position (x + sx, y + sy): (x, y) the pixel's corner and (sx, sy) the
     /// offset within it, each as a fraction of the image's width and height.
     fn get_ray(&self, x: f64, y: f64, sx: f64, sy: f64) -> Ray;
+
+    /// The ray and the weight of the light arriving along it, or None if no light gets through
+    /// (the realistic camera's lens stops it). One for the ideal cameras.
+    fn get_ray_weighted(&self, x: f64, y: f64, sx: f64, sy: f64) -> Option<(Ray, f64)> {
+        Some((self.get_ray(x, y, sx, sy), 1.))
+    }
 }
 
 /// A camera's position and axes: `camx` to the right of the image, `camy` up it, `camz` the

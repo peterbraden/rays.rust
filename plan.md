@@ -657,6 +657,60 @@ the noise of a typical pixel. Orbit's median is zero because most of the image i
 6. Choosing lights by power.
 7. Investigate the speckle in `orbit`.
 
+Status: steps 1-7 done (see Results). Candidates next: path regularisation or another remedy
+for glossy caustics; multiple-scattering compensation for GGX; the orbit traversal costs.
+
+### Results (`scripts/variance.sh`, 4 renders, after each step)
+
+| Step | cornell-box | spheres | glossy-sun | forest |
+| --- | --- | --- | --- | --- |
+| Baseline | 0.00086 / 254 | 0.00076 / 716 | 0.00057 / 0.037 | 0.00792 / 6.3 |
+| 2. MIS | 0.00086 / 262 | 0.00076 / 686 | 0.00057 / 0.042 | 0.00787 / 6.2 |
+| 3. GGX | 0.00086 / 264 | 0.00105 / 658 | 0.00081 / 57 | 0.00787 / 5.5 |
+| 4. Sky sampling | 0.00086 / 270 | 0.00058 / 802 | 0.00033 / 41 | 0.00647 / 5.4 |
+| 5. Sobol' | 0.00044 / 468 | 0.00019 / 1521 | 0.00008 / 41 | 0.00616 / 6.3 |
+
+Each entry is median relMSE / efficiency (from the mean relMSE). Step 6 (lights chosen by
+power) leaves these scenes alone, having one light or none; on `lamps`, five lamps of unequal
+power, it raises efficiency from 13 to 72 and lowers the median relMSE tenfold.
+
+Findings:
+
+- MIS on its own changed nothing measurable: diffuse surfaces already took nearly all their
+  direct light from light sampling. Its value came with glossy BSDFs.
+- GGX with MIS removed the glossy-sun fireflies (mean relMSE 33 to 0.02). It also made sunlight
+  reflected by glossy surfaces onto diffuse ones (caustics) reachable, which now shows as
+  sparkle at 64 samples on the ground around the spheres; the fuzzed mirror almost never found
+  that light at all. Unidirectional path tracing finds such paths poorly; path regularisation
+  (biased) or bidirectional methods are the usual remedies.
+- The spheres' median rises with GGX because the image changed: rough metals reflect less (no
+  multiple scattering between facets) and highlights moved.
+- Measuring variance across renders by dividing by the pixel's mean understated fireflies,
+  capping each near k: BSDF sampling alone measured half as noisy as MIS, against a reference
+  error 90 times larger. The median denominator fixes this (`variance.rs`).
+- Sky sampling costs a shadow ray per vertex (7-50% more time) and helps most under skies of
+  uneven brightness; `"sample_sky": false` turns it off.
+- Sobol' sampling first doubled render times: shuffled indices are full 32-bit numbers, and
+  computing a coordinate bit by bit dominated the profile. Byte tables brought the overhead
+  to about 10%.
+
+### The speckle in `orbit` (step 7)
+
+- It is not deep multiple scattering: with the planet filling the view at 4 samples, the
+  median relMSE is 0.033 with one bounce, 0.042 with two and 0.047 with four. It is the noise
+  of the first scattering in the clouds (where the free path ends, the sun's transmittance
+  from there), at a sample count too low for it.
+- The sample count is low because samples are dear: about 2 ms each. The profile is dominated
+  by `GlobalNubis::majorant_from` and the cube-sphere mapping (`tan`, `atan`,
+  `CubeSphere::locate`: about 60% of samples), not by the clouds' density (4%): delta tracking
+  steps across the weather map one texel at a time, and each step converts to and from
+  texel coordinates by trigonometry.
+- The bright dot in black space, which dominates orbit's mean relMSE, is the sun's disc,
+  smaller than a pixel: real aliasing of a tiny, intense source, not a rendering error.
+- Recommended, as performance work: tabulate the tangents of texel edges (`CubeSphere::boundary`
+  takes the tangent of an integer edge index each time), and skip runs of texels with a
+  coarser map of their maxima, as a mipmap. Faster samples are the cure for this speckle.
+
 ### Reading (verified; details in each PR)
 
 - Veach and Guibas, "Optimally Combining Sampling Techniques for Monte Carlo Rendering",

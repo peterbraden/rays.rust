@@ -3,8 +3,15 @@ use crate::color::Color;
 
 pub struct Light {
     pub position: Vector3<f64>,
-    pub color: Color,
+    pub emission: crate::spectrum::Emission,
     pub intensity: f64,
+}
+
+impl Light {
+    /// Radiant intensity, per steradian, at the current sample's wavelengths (or in RGB).
+    pub fn radiant_intensity(&self) -> Color {
+        self.emission.radiance() * self.intensity
+    }
 }
 
 /// Light from a source so distant that it arrives along a single direction: the sun. It is
@@ -59,11 +66,13 @@ impl Sun {
     /// Irradiance at `point`: through the atmosphere, if any, by its altitude and the sun's
     /// height in its sky, so anywhere on the planet; none on the night side.
     pub fn irradiance_at(&self, point: &Vector3<f64>) -> Color {
+        // In spectral mode, at the sample's wavelengths: the irradiance as an illuminant, and the
+        // air's transmittance, computed in RGB, as a reflectance.
         match &self.atmosphere {
-            None => self.irradiance,
+            None => self.irradiance.as_illuminant(),
             Some(sky) => {
                 let t = sky.sun_transmittance(point);
-                self.irradiance * Color::new(t.x, t.y, t.z)
+                self.irradiance.as_illuminant() * Color::new(t.x, t.y, t.z).as_reflectance()
             },
         }
     }

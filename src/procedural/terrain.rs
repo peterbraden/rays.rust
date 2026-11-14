@@ -198,7 +198,7 @@ impl MaterialModel for TerrainMaterial {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let intersection = &intersection.facing(r);
         let albedo = self.albedo(&intersection.point, &intersection.normal);
-        scatter_bsdf(&LambertianBSDF { albedo, normal: intersection.normal }, r, &intersection.point, s)
+        scatter_bsdf(&LambertianBSDF { albedo: albedo.as_reflectance(), normal: intersection.normal }, r, &intersection.point, s)
     }
 }
 

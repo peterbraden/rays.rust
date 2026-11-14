@@ -14,6 +14,6 @@ impl MaterialModel for Lambertian {
         // Shade whichever side the ray hit.
         let intersection = &intersection.facing(r);
         // Light sampled directly, and a cosine-weighted bounce, combined by MIS.
-        scatter_bsdf(&LambertianBSDF { albedo: self.albedo, normal: intersection.normal }, r, &intersection.point, s)
+        scatter_bsdf(&LambertianBSDF { albedo: self.albedo.as_reflectance(), normal: intersection.normal }, r, &intersection.point, s)
     }
 }

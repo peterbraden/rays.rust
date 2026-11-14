@@ -251,7 +251,7 @@ pub fn direct_lighting_mis(bsdf: &dyn BSDF, point: &Vector3<f64>, wo: &Vector3<f
         let shadow_ray = Ray { ro: *point, rd: wi };
         let transmitted = s.objects.transmittance(&shadow_ray, d2.sqrt(), f64::MIN_POSITIVE);
         if transmitted > 0. {
-            direct = direct + f * light.color * (light.intensity / d2 * transmitted);
+            direct = direct + f * light.radiant_intensity() * (transmitted / d2);
         }
     }
     if let Some(sun) = &s.sun {
@@ -352,7 +352,7 @@ pub fn scatter_bsdf(bsdf: &dyn BSDF, r: &Ray, point: &Vector3<f64>, s: &Scene) -
 pub fn diffuse (pigment: Color, i: &Intersection, light_vec: &Vector3<f64>, light: &Light) -> Color {
     let cos = light_vec.normalize().dot(&i.normal);
     if cos.is_sign_positive() {
-        light.color * pigment * (cos * light.intensity / (std::f64::consts::PI * light_vec.norm_squared()))
+        light.radiant_intensity() * pigment * (cos / (std::f64::consts::PI * light_vec.norm_squared()))
     } else {
         Color::black()
     }

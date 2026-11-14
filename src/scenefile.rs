@@ -12,6 +12,7 @@ use crate::ocean::create_ocean;
 use crate::shapes::bbox::BBox;
 use crate::light::{Light, Sun};
 use crate::color::Color;
+use crate::spectrum::{RefractiveIndex, Emission};
 use crate::skysphere::{create_sky_sphere, parse_sky_material};
 use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
@@ -225,6 +226,8 @@ pub struct SceneFile {
     #[serde(default)]
     pub regularise: Value,
     #[serde(default)]
+    pub spectral: Value,
+    #[serde(default)]
     pub filter: Value,
     #[serde(default)]
     pub output: Value,
@@ -268,6 +271,40 @@ impl SceneFile {
         }
     }
     
+    /// A refractive index (`spectrum::RefractiveIndex`): a number; a named glass, `"BK7"`,
+    /// `"fused silica"`, `"SF11"` or `"diamond"` (or `{"glass": name}`); `{"cauchy": [a, b]}`,
+    /// n = a + b / λ² with λ in µm; or `{"sellmeier": {"b": [b1, b2, b3], "c": [c1, c2, c3]}}`,
+    /// c in µm². 1 if absent. Indices that vary with wavelength disperse light in spectral mode
+    /// and take their value at 587.56 nm otherwise.
+    pub fn parse_refractive_index(v: &Value) -> RefractiveIndex {
+        let glass = |name: &str| RefractiveIndex::glass(name)
+            .unwrap_or_else(|| panic!("Unknown glass \"{}\": expected BK7, fused silica, SF11 or diamond", name));
+        let three = |v: &Value, what: &str| -> [f64; 3] {
+            match v.as_array().map(|a| a.iter().map(|x| x.as_f64()).collect::<Option<Vec<f64>>>()) {
+                Some(Some(a)) if a.len() <= 3 => { let mut out = [0.; 3]; out[..a.len()].copy_from_slice(&a); out },
+                _ => panic!("Sellmeier \"{}\" must be up to three numbers, got {}", what, v),
+            }
+        };
+        match v {
+            Value::Null => RefractiveIndex::Constant(1.),
+            Value::Number(n) => RefractiveIndex::Constant(n.as_f64().unwrap()),
+            Value::String(name) => glass(name),
+            Value::Object(o) => if let Some(name) = o.get("glass").and_then(|g| g.as_str()) {
+                glass(name)
+            } else if let Some(c) = o.get("cauchy") {
+                match c.as_array().map(|a| a.iter().filter_map(|x| x.as_f64()).collect::<Vec<f64>>()) {
+                    Some(a) if a.len() == 2 => RefractiveIndex::Cauchy { a: a[0], b: a[1] },
+                    _ => panic!("\"cauchy\" must be [a, b], got {}", c),
+                }
+            } else if let Some(sm) = o.get("sellmeier") {
+                RefractiveIndex::Sellmeier { b: three(&sm["b"], "b"), c: three(&sm["c"], "c") }
+            } else {
+                panic!("A refractive index object needs \"glass\", \"cauchy\" or \"sellmeier\", got {}", v)
+            },
+            _ => panic!("Unexpected refractive index {}", v),
+        }
+    }
+
     pub fn parse_int(v: &Value, default: usize) -> usize {
         if let Some(x) = v.as_u64() {
             return x as usize;
@@ -1692,8 +1729,8 @@ impl SceneFile {
 
         if t == "dielectric" {
             let d:Dielectric = Dielectric {
-                refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.),
-                attenuate:SceneFile::parse_color(&o["attenuate"]), 
+                refractive_index: SceneFile::parse_refractive_index(&o["refractive_index"]),
+                attenuate: SceneFile::parse_color_def(o, "attenuate", Color::white()),
             };
             return Some(Box::new(d));
         }
@@ -1701,7 +1738,7 @@ impl SceneFile {
         if t == "diffuse-light" {
             let d:DiffuseLight = DiffuseLight {
                 intensity: SceneFile::parse_number(&o["intensity"], 1.),
-                color:SceneFile::parse_color(&o["color"]), 
+                emission: SceneFile::parse_emission(o),
                 two_sided: o["two_sided"].as_bool().unwrap_or(false),
             };
             return Some(Box::new(d));
@@ -2132,9 +2169,22 @@ impl SceneFile {
     pub fn parse_light(o: &Value) -> Light {
         Light {
                 position: SceneFile::parse_vec3(&o["location"]),
-                color: SceneFile::parse_color_def(o, "color", Color::white()),
+                emission: SceneFile::parse_emission(o),
                 intensity: o["intensity"].as_f64().unwrap(),
             }
+    }
+
+    /// What an emitter emits: `"color"` (white if absent), or with `"temperature"` (kelvin), a
+    /// blackbody's spectrum scaled to unit luminance (`spectrum::Emission`), so that emitters
+    /// of the same intensity are equally bright whatever their temperature.
+    pub fn parse_emission(o: &Value) -> Emission {
+        match o["temperature"].as_f64() {
+            Some(t) => {
+                assert!(o.get("color").is_none(), "An emitter takes \"color\" or \"temperature\", not both");
+                Emission::blackbody(t)
+            },
+            None => Emission::Rgb(SceneFile::parse_color_def(o, "color", Color::white())),
+        }
     }
 
     pub fn parse_lights(lights: &Vec<Value>) -> Vec<Light> {
@@ -2252,6 +2302,7 @@ impl SceneFile {
                     Some(f) => panic!("Unknown filter '{}': expected \"box\" or \"tent\"", f),
                 },
                 regularise: SceneFile::parse_number(&s.regularise, crate::material::ggx::DEFAULT_REGULARISE),
+                spectral: s.spectral.as_bool().unwrap_or(false),
                 sampler: match s.sampler.as_str() {
                     None | Some("sobol") => Sampler::Sobol,
                     Some("independent") => Sampler::Independent,
@@ -2593,9 +2644,9 @@ mod tests {
             { "location": [0, 1, 0], "intensity": 1, "color": "white" },
             { "location": [0, 1, 0], "intensity": 1 }
         ]"#);
-        assert_eq!(s.lights[0].color, Color::red());
-        assert_eq!(s.lights[1].color, Color::white());
-        assert_eq!(s.lights[2].color, Color::white());
+        assert_eq!(s.lights[0].emission.srgb(), Color::red());
+        assert_eq!(s.lights[1].emission.srgb(), Color::white());
+        assert_eq!(s.lights[2].emission.srgb(), Color::white());
     }
 
     fn noise_materials() -> Map<String, Value> {

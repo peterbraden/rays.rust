@@ -74,7 +74,7 @@ impl MaterialModel for Plastic {
         if alpha >= MIN_ALPHA {
             let bsdf = PlasticBSDF {
                 coat: GGX { alpha, fresnel: Fresnel::Dielectric(self.refractive_index), normal: intersection.normal },
-                base: LambertianBSDF { albedo: self.albedo, normal: intersection.normal },
+                base: LambertianBSDF { albedo: self.albedo.as_reflectance(), normal: intersection.normal },
                 refractive_index: self.refractive_index,
             };
             return scatter_bsdf(&bsdf, r, &intersection.point, s);
@@ -89,10 +89,11 @@ impl MaterialModel for Plastic {
         }
 
         // Base: direct lighting is emitted; the bounce carries indirect light, weighted by albedo.
+        let albedo = self.albedo.as_reflectance();
         ScatteredRay {
-            emit: direct_lighting(self.albedo, intersection, s),
+            emit: direct_lighting(albedo, intersection, s),
             light_sampling: LightSampling::Exclusive,
-            ..scatter_lambertian(self.albedo, intersection)
+            ..scatter_lambertian(albedo, intersection)
         }
     }
 }

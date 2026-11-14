@@ -52,6 +52,8 @@ pub struct RenderOpts {
     /// The roughness floor for glossy vertices after a rougher one (`ggx::regularised`); 0 for
     /// none.
     pub regularise: f64,
+    /// Whether to trace light at sampled wavelengths rather than in RGB (`spectrum`).
+    pub spectral: bool,
 }
 
 /// How a pixel's samples choose their random numbers.
@@ -76,8 +78,12 @@ pub enum Background {
 }
 
 impl Background {
-    /// Radiance arriving from direction `rd`.
+    /// Radiance arriving from direction `rd` (at the sample's wavelengths, in spectral mode).
     pub fn radiance(&self, rd: &Vector3<f64>) -> Color {
+        self.rgb_radiance(rd).as_illuminant()
+    }
+
+    fn rgb_radiance(&self, rd: &Vector3<f64>) -> Color {
         match self {
             Background::Solid(c) => *c,
             Background::Gradient { bottom, top } => {

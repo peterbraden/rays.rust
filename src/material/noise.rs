@@ -227,18 +227,20 @@ impl MaterialModel for NoiseTexture {
         
         // Blend the base material's color with the noise color based on the noise value
         let noise_influence = noise_value * self.blend_factor;
+        // The base's result is at the sample's wavelengths (in spectral mode); so is the tint.
+        let color = self.color.as_reflectance();
 
         match base_scatter.ray {
             // Terminal: blend the base's final colour.
             None => ScatteredRay { light_sampling: base_scatter.light_sampling, emit: Color::black(),
                 ray: None,
-                attenuate: (base_scatter.emit + base_scatter.attenuate).blend(&self.color, noise_influence),
+                attenuate: (base_scatter.emit + base_scatter.attenuate).blend(&color, noise_influence),
             },
             // Blend the bounce weight, and tint any emitted (eg. direct) light by the noise colour.
             Some(ray) => ScatteredRay { light_sampling: base_scatter.light_sampling,
-                emit: base_scatter.emit * Color::white().blend(&self.color, noise_influence),
+                emit: base_scatter.emit * Color::white().blend(&color, noise_influence),
                 ray: Some(ray),
-                attenuate: base_scatter.attenuate.blend(&self.color, noise_influence),
+                attenuate: base_scatter.attenuate.blend(&color, noise_influence),
             },
         }
     }

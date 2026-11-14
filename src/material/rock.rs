@@ -292,7 +292,7 @@ impl MaterialModel for Rock {
             }
         }
 
-        let albedo = self.albedo(intersection.point, normal);
+        let albedo = self.albedo(intersection.point, normal).as_reflectance();
         let shaded = Intersection { normal, ..*intersection };
         // Cosine-weighted about the shading normal; a bounce the bump tilts into the surface is
         // mirrored back out of it.

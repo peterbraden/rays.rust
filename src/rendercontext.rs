@@ -462,6 +462,10 @@ fn render_pixel(x: usize, y: usize, first: usize, count: usize, s: &Scene) -> (u
             },
             Sampler::Independent => ((offset.0 + k as f64 * R2.0).fract(), (offset.1 + k as f64 * R2.1).fract()),
         };
+        // In spectral mode, the sample's wavelengths (`spectrum`).
+        if s.render.spectral {
+            crate::spectrum::begin_sample(crate::spectrum::Wavelengths::sample_visible(rand()));
+        }
         let (rays_cast, c) = trace(
                 &s.camera.get_ray(
                     x as f64 / (s.image.width as f64),
@@ -472,6 +476,11 @@ fn render_pixel(x: usize, y: usize, first: usize, count: usize, s: &Scene) -> (u
                     (0.5 + s.render.filter.sample(v)) / (s.image.height as f64))
                 , 0, s);
         cast += rays_cast;
+        // A spectral sample's radiance becomes a colour (and stray NaNs, as in RGB, pass on).
+        let c = match crate::spectrum::end_sample() {
+            Some(w) => w.to_srgb(&c),
+            None => c,
+        };
         pixel = pixel + c;
     }
     end_sample();

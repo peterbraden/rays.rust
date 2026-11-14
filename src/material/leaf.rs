@@ -153,7 +153,9 @@ impl MaterialModel for Leaf {
         let far = Intersection { point: near.point - near.normal * THROUGH, normal: -near.normal, ..near };
 
         // Direct light from both sides: lights on each side are only seen from that side.
-        let emit = direct_lighting(reflectance, &near, s) + direct_lighting(transmittance, &far, s);
+        // At the sample's wavelengths, for light transport; the choice of side below may use RGB.
+        let (spectral_r, spectral_t) = (reflectance.as_reflectance(), transmittance.as_reflectance());
+        let emit = direct_lighting(spectral_r, &near, s) + direct_lighting(spectral_t, &far, s);
 
         // Continue the path by reflecting or transmitting, in proportion to how much of each the
         // leaf does, and weight by the inverse of that probability.
@@ -163,9 +165,9 @@ impl MaterialModel for Leaf {
         }
         let p_reflect = lr / (lr + lt);
         let continued = if rand() < p_reflect {
-            scatter_lambertian(reflectance * (1. / p_reflect), &near)
+            scatter_lambertian(spectral_r * (1. / p_reflect), &near)
         } else {
-            scatter_lambertian(transmittance * (1. / (1. - p_reflect)), &far)
+            scatter_lambertian(spectral_t * (1. / (1. - p_reflect)), &far)
         };
         ScatteredRay { emit, light_sampling: LightSampling::Exclusive, ..continued }
     }

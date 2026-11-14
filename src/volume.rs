@@ -466,7 +466,7 @@ impl VolumeMaterial {
     /// is the only way they reach a medium; area lights are sampled once, as at a surface.
     fn direct_lighting(&self, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene,
                        phase: &VertexPhase, albedo: Color, scatterings: u32) -> Color {
-        let p = |w: &Vector3<f64>| phase.eval(incoming.dot(w));
+        let p = |w: &Vector3<f64>| phase.eval(incoming.dot(w)).as_unbounded();
         let mut direct = Color::black();
         for light in &s.lights {
             let to_light = light.position - point;
@@ -474,10 +474,11 @@ impl VolumeMaterial {
             let w = to_light / d;
             let shadow_ray = Ray { ro: *point, rd: w };
             let transmitted = s.objects.transmittance(&shadow_ray, d, f64::MIN_POSITIVE);
-            direct = direct + light.color * p(&w) * (light.intensity / (d * d) * transmitted);
+            direct = direct + light.radiant_intensity() * p(&w) * (transmitted / (d * d));
         }
         if let Some(sun) = &s.sun {
-            let sun_phase = self.sun_phase(phase, incoming, s, scatterings);
+            // Halos, rainbows and diffraction colour the phase function in RGB.
+            let sun_phase = self.sun_phase(phase, incoming, s, scatterings).as_unbounded();
             direct = direct + match self.approximation.oz {
                 None => sun.irradiance_at(point) * sun_phase * sun.transmittance_from(point, s),
                 Some(oz) if scatterings == 0 => sun.irradiance_at(point) * self.oz_sunlight(&oz, sun_phase, incoming, point, s),
@@ -546,8 +547,8 @@ impl MaterialModel for VolumeMaterial {
         ScatteredRay {
             ray: Some(Ray { ro: i.point, rd }),
             // Phase / pdf: 1, unless the phase function differs between channels.
-            attenuate: albedo * weight,
-            emit: self.direct_lighting(&incoming, &i.point, s, &phase, albedo, scatterings),
+            attenuate: albedo.as_reflectance() * weight.as_unbounded(),
+            emit: self.direct_lighting(&incoming, &i.point, s, &phase, albedo.as_reflectance(), scatterings),
             // Area lights were sampled above (when enabled); the trace skips them if the
             // scattered ray hits one, so they aren't counted twice.
             light_sampling: LightSampling::Exclusive,

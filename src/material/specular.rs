@@ -19,7 +19,7 @@ impl MaterialModel for Specular {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay{
         // Shade whichever side the ray hit.
         let intersection = &intersection.facing(r);
-        let fresnel = Fresnel::Schlick(self.albedo);
+        let fresnel = Fresnel::Schlick(self.albedo.as_reflectance());
         let alpha = regularised(self.roughness * self.roughness, s);
         if alpha >= MIN_ALPHA {
             let bsdf = GGX { alpha, fresnel, normal: intersection.normal };

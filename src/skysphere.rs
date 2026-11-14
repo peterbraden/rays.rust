@@ -557,7 +557,8 @@ impl MaterialModel for SkyMaterial {
     fn scatter(&self, r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay {
         // Linear light; display encoding happens at output.
         let v = self.radiance(r) * SKY_CALIBRATION;
-        ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
+        // Computed in RGB; in spectral mode, upsampled as an illuminant (see `spectrum`).
+        ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z).as_illuminant(), ray: None }
     }
 }
 
@@ -838,7 +839,7 @@ impl MaterialModel for LUTSky {
             Some((rayleigh, mie, multiple)) => self.sky.apply_phase(&d, rayleigh, mie, multiple),
             None => self.sky.radiance(r),
         } * SKY_CALIBRATION;
-        ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
+        ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z).as_illuminant(), ray: None }
     }
 }
 

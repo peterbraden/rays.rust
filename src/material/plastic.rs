@@ -7,7 +7,7 @@ use crate::scene::Scene;
 use crate::geometry::rand;
 use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::material::bsdf::{BSDF, BSDFSample, LambertianBSDF};
-use crate::material::ggx::{GGX, Fresnel, MIN_ALPHA};
+use crate::material::ggx::{GGX, Fresnel, MIN_ALPHA, regularised};
 use crate::material::functions::{scatter_lambertian, scatter_bsdf, direct_lighting, fresnel_reflectance, reflect};
 
 
@@ -15,7 +15,7 @@ use crate::material::functions::{scatter_lambertian, scatter_bsdf, direct_lighti
 ///
 /// - The coat reflects by the Fresnel reflectance for its refractive index, so reflections
 ///   strengthen at grazing angles. A rough coat is a GGX microfacet surface (`ggx`) of
-///   roughness α = `roughness`; a smooth one (roughness 0) a mirror.
+///   α = `roughness`²; a smooth one (roughness 0) a mirror.
 /// - What the coat lets through reaches the base and scatters diffusely, tinted by albedo:
 ///   (1 - F(cos θ_o)) albedo / π, with F the coat's reflectance seen from the viewer. This
 ///   ignores the coat's effect on light leaving the base (its own Fresnel loss, and light
@@ -57,13 +57,12 @@ impl BSDF for PlasticBSDF {
 
     fn sample(&self, wo: &Vector3<f64>, u: [f64; 3]) -> Option<BSDFSample> {
         let f = self.coat_share(wo);
-        let lobe = if u[2] < f { self.coat.sample(wo, u) } else { self.base.sample(wo, u) };
-        let wi = lobe?.wi;
-        let pdf = self.pdf(wo, &wi);
+        let lobe = if u[2] < f { self.coat.sample(wo, u) } else { self.base.sample(wo, u) }?;
+        let pdf = self.pdf(wo, &lobe.wi);
         if pdf <= 0. {
             return None;
         }
-        Some(BSDFSample { wi, weight: self.eval(wo, &wi) / pdf, pdf })
+        Some(BSDFSample { wi: lobe.wi, weight: self.eval(wo, &lobe.wi) / pdf, pdf })
     }
 }
 
@@ -71,9 +70,10 @@ impl MaterialModel for Plastic {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay{
         // Shade whichever side the ray hit.
         let intersection = &intersection.facing(r);
-        if self.roughness >= MIN_ALPHA {
+        let alpha = regularised(self.roughness * self.roughness, s);
+        if alpha >= MIN_ALPHA {
             let bsdf = PlasticBSDF {
-                coat: GGX { alpha: self.roughness, fresnel: Fresnel::Dielectric(self.refractive_index), normal: intersection.normal },
+                coat: GGX { alpha, fresnel: Fresnel::Dielectric(self.refractive_index), normal: intersection.normal },
                 base: LambertianBSDF { albedo: self.albedo, normal: intersection.normal },
                 refractive_index: self.refractive_index,
             };

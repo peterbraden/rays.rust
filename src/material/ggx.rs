@@ -75,10 +75,10 @@
 //!
 //! ## Departures and open questions
 //!
-//! - Roughness is α itself, as Walter et al. write it. Many renderers instead expose a
-//!   "perceptual" roughness r with α = r², which spreads the useful range of the slider; using
-//!   α keeps scenes written for the fuzzed mirror, whose roughness was a fuzz radius, looking
-//!   much as they did.
+//! - Materials' `roughness` r is "perceptual": α = r², which spreads the useful range of the
+//!   slider (as Burley's Disney BRDF does). It also matches the fuzzed mirror this replaced,
+//!   whose roughness was a fuzz radius: with α = r², scenes written for it look as they did,
+//!   and are as noisy; with α = r, their reflections were blurrier and 40% noisier per pixel.
 //! - Light scattered between facets more than once is lost, so rough surfaces come out darker
 //!   than they should. Seen from the normal, a white surface reflects 99.7% at α = 0.05, 97%
 //!   at 0.15, 69% at 0.5, and 1 - ln 2 = 31% at α = 1 (`test_white_furnace_...`). The fuzzed
@@ -86,7 +86,40 @@
 //!   darker than they were. Multiple-scattering microfacet models correct this, and are a
 //!   candidate for later.
 //! - Below a roughness of `MIN_ALPHA` the lobe is narrower than double precision handles well,
-//!   and the surface is treated as a perfect mirror (`Mirror`).
+//!   and the surface is treated as a perfect mirror.
+//!
+//! ## Path regularisation
+//!
+//! Sunlight reflected by a polished surface onto a diffuse one is a caustic. A path tracer
+//! finds it from the diffuse end: a bounce off the diffuse surface lands on the polished one,
+//! which samples the sun (with MIS). The sharper the polished lobe, the more rarely the bounce
+//! lands where it reflects the sun, and the brighter it is when it does: sparkle that takes
+//! many samples to settle, and from a mirror, light no sample finds at all.
+//!
+//! Anton S. Kaplanyan and Carsten Dachsbacher, "Path Space Regularization for Holistic and
+//! Robust Light Transport", Computer Graphics Forum 32(2), 2013, pp. 63-72,
+//! doi:10.1111/cgf.12026
+//! (<https://cg.ivd.kit.edu/publications/p2013/PSR_Kaplanyan_2013/PSR_Kaplanyan_2013.pdf>),
+//! regularise only the interactions that unbiased sampling can't handle, blurring them a
+//! little, and derive conditions under which shrinking the blur as samples accumulate keeps
+//! the estimate consistent. Johannes Jendersie and Thorsten Grosch, "Microfacet Model
+//! Regularization for Robust Light Transport", Computer Graphics Forum 2019,
+//! doi:10.1111/cgf.13768, do it for microfacet models by raising the roughness before
+//! evaluating them.
+//!
+//! The same holds when the first surface is itself glossy: a brushed sphere showing a polished
+//! neighbour's highlight of the sun finds it only when its own sampled reflection lands on
+//! that small, bright spot.
+//!
+//! Here: a path's first scattering vertex is exact, and every GGX vertex after it takes
+//! α ≥ α₀, the scene's `"regularise"` (default `DEFAULT_REGULARISE`; 0 turns it off).
+//! Surfaces seen directly, and their own reflections of the lights, are untouched. What is
+//! blurred is light reaching a polished surface after another scattering: caustics come out
+//! softer, and reflections seen in reflections frosted to at least α₀, a bias traded for most
+//! of their noise. On glossy-sun, the mean relMSE at 64 samples falls from 5.7 unregularised
+//! to 0.0035 flooring only vertices after a diffuse one, and to 0.0014 flooring every vertex
+//! after the first. The floor is fixed, not shrunk with the sample count, so this is biased,
+//! not consistent.
 use crate::color::Color;
 use crate::na::Vector3;
 use crate::material::bsdf::{BSDF, BSDFSample};
@@ -95,6 +128,31 @@ use std::f64::consts::PI;
 
 /// Below this roughness, a surface is a perfect mirror.
 pub const MIN_ALPHA: f64 = 1e-3;
+
+/// The default roughness floor for glossy vertices after a diffuse one (`regularised`).
+pub const DEFAULT_REGULARISE: f64 = 0.2;
+
+thread_local! {
+    /// Whether the current path has scattered yet (`scattered`), since `begin_path`.
+    static PATH_SCATTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Start a path: no vertices yet.
+pub fn begin_path() {
+    PATH_SCATTERED.with(|r| r.set(false));
+}
+
+/// The path has scattered (off a surface, or in a medium).
+pub fn scattered() {
+    PATH_SCATTERED.with(|r| r.set(true));
+}
+
+/// α for a GGX vertex of roughness `alpha` on the current path, regularised: unchanged at the
+/// path's first scattering, and at least the scene's floor after it (see "Path
+/// regularisation").
+pub fn regularised(alpha: f64, s: &crate::scene::Scene) -> f64 {
+    if PATH_SCATTERED.with(|r| r.get()) { alpha.max(s.render.regularise) } else { alpha }
+}
 
 /// How much a facet reflects, by the cosine of the angle between the light and its normal.
 #[derive(Clone, Copy, Debug)]
@@ -323,5 +381,59 @@ mod tests {
         let fab = g.eval(&a, &b).rgb.x / b.z;
         let fba = g.eval(&b, &a).rgb.x / a.z;
         assert!((fab - fba).abs() < 1e-12 * fab, "{} vs {}", fab, fba);
+    }
+
+    #[test]
+    fn test_path_roughness_floor() {
+        let s = crate::scenefile::SceneFile::from_string(r#"{
+            "regularise": 0.25,
+            "camera": { "location": [0, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }
+        }"#.to_string());
+        begin_path();
+        // The first vertex: unchanged.
+        assert_eq!(regularised(0.01, &s), 0.01);
+        // After it: the scene's floor, but never smoother than the surface's own.
+        scattered();
+        assert_eq!(regularised(0.01, &s), 0.25);
+        assert_eq!(regularised(0.6, &s), 0.6);
+        // A new path starts smooth.
+        begin_path();
+        assert_eq!(regularised(0.01, &s), 0.01);
+    }
+
+    #[test]
+    fn test_regularisation_tames_caustics() {
+        // A diffuse floor beside a polished sphere, with the sun placed so that the sphere's
+        // leftmost point, (0.5, 1, 0), reflects it onto the origin: a caustic, which the floor
+        // there finds only when a bounce lands near that point. α = 0.09 keeps the exact
+        // estimate's spikes common enough to measure; regularised to 0.2, they spread and
+        // shrink. Both runs draw the same random numbers, so with regularisation doing nothing
+        // they would agree exactly.
+        let scene = |regularise: f64| crate::scenefile::SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 2, "shadow_bias": 0.0001, "regularise": {},
+            "sun": {{ "direction": [-1, 2, 0], "intensity": 1 }},
+            "camera": {{ "location": [0, 1, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }},
+            "materials": {{
+                "F": {{ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }},
+                "M": {{ "type": "metal", "reflective": [0.9, 0.9, 0.9], "roughness": 0.3 }}
+            }},
+            "objects": [
+                {{ "type": "plane", "y": 0, "material": "F" }},
+                {{ "type": "sphere", "location": [1.5, 1, 0], "radius": 1, "material": "M" }}
+            ]
+        }}"#, regularise));
+        let r = crate::ray::Ray { ro: Vector3::new(0., 1., -0.01), rd: Vector3::new(0., -1., 0.01).normalize() };
+        let stats = |s: &crate::scene::Scene| {
+            crate::geometry::seed_rand(31, 1);
+            let n = 100_000;
+            let v: Vec<f64> = (0..n).map(|_| crate::trace::trace(&r, 0, s).1.rgb.x).collect();
+            let mean = v.iter().sum::<f64>() / n as f64;
+            (mean, (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64).sqrt())
+        };
+        let (exact, exact_sd) = stats(&scene(0.));
+        let (regularised, regularised_sd) = stats(&scene(0.2));
+        assert!(regularised_sd < 0.7 * exact_sd, "sd {} vs {}", regularised_sd, exact_sd);
+        // Blurring the caustic moves little light: the mean changes by a few percent at most.
+        assert!((regularised - exact).abs() < 0.1 * exact, "{} vs {}", regularised, exact);
     }
 }

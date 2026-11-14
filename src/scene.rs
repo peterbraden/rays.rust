@@ -49,6 +49,9 @@ pub struct RenderOpts {
     pub filter: Filter,
     /// Where the random numbers a sample uses come from.
     pub sampler: Sampler,
+    /// The roughness floor for glossy vertices after a rougher one (`ggx::regularised`); 0 for
+    /// none.
+    pub regularise: f64,
 }
 
 /// How a pixel's samples choose their random numbers.

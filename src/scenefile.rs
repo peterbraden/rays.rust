@@ -227,6 +227,8 @@ pub struct SceneFile {
     #[serde(default)]
     pub sampler: Value,
     #[serde(default)]
+    pub regularise: Value,
+    #[serde(default)]
     pub filter: Value,
     #[serde(default)]
     pub output: Value,
@@ -2241,6 +2243,7 @@ impl SceneFile {
                     Some("tent") => Filter::Tent,
                     Some(f) => panic!("Unknown filter '{}': expected \"box\" or \"tent\"", f),
                 },
+                regularise: SceneFile::parse_number(&s.regularise, crate::material::ggx::DEFAULT_REGULARISE),
                 sampler: match s.sampler.as_str() {
                     None | Some("sobol") => Sampler::Sobol,
                     Some("independent") => Sampler::Independent,

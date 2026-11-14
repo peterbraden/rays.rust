@@ -121,6 +121,8 @@ pub fn scatter_dielectric(
 /// explicitly. Materials that call this set `LightSampling::Exclusive`, so the trace ignores
 /// emission from area lights hit by their continuation ray, which would count them twice.
 pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) -> Color {
+    // Only materials that scatter call this (`ggx::regularised`).
+    crate::material::ggx::scattered();
     let mut direct = Color::black();
     for light in &s.lights {
         let light_vec = light.position - intersection.point;
@@ -331,6 +333,8 @@ fn sun_light_mis(sun: &crate::light::Sun, bsdf: &dyn BSDF, point: &Vector3<f64>,
 pub fn scatter_bsdf(bsdf: &dyn BSDF, r: &Ray, point: &Vector3<f64>, s: &Scene) -> ScatteredRay {
     let wo = -r.rd.normalize();
     let emit = direct_lighting_mis(bsdf, point, &wo, s);
+    // The path scatters here (`ggx::regularised`).
+    crate::material::ggx::scattered();
     match bsdf.sample(&wo, [rand(), rand(), rand()]) {
         Some(sample) => ScatteredRay {
             emit,

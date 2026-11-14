@@ -14,6 +14,7 @@ use std::f64;
 // Returns num rays cast, Color
 pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
     crate::volume::begin_path();
+    crate::material::ggx::begin_path();
     trace_from(r, depth, s, LightSampling::None)
 }
 

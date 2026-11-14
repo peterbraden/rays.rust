@@ -534,6 +534,8 @@ impl VolumeMaterial {
 
 impl MaterialModel for VolumeMaterial {
     fn scatter(&self, r: &Ray, i: &Intersection, s: &Scene) -> ScatteredRay {
+        // The path scatters here (`ggx::regularised`).
+        crate::material::ggx::scattered();
         let incoming = r.rd.normalize();
         let scatterings = path_scatterings();
         let phase = self.phase_at(&i.point, scatterings);

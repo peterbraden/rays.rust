@@ -5,12 +5,11 @@ use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::intersection::Intersection;
 use crate::ray::Ray;
 use crate::material::functions::{reflect, scatter_bsdf};
-use crate::material::ggx::{GGX, Fresnel, MIN_ALPHA};
+use crate::material::ggx::{GGX, Fresnel, MIN_ALPHA, regularised};
 
 /// A metal: reflection only, tinted by `albedo`, its reflectance at normal incidence, rising
 /// towards white at grazing angles (Schlick's approximation; `ggx::Fresnel`). A rough metal is a
-/// GGX microfacet surface (`ggx`) of roughness α = `roughness`; below `ggx::MIN_ALPHA`, a
-/// mirror.
+/// GGX microfacet surface (`ggx`) of α = `roughness`²; below `ggx::MIN_ALPHA`, a mirror.
 pub struct Specular {
     pub albedo: Color,
     pub roughness: f64,
@@ -21,8 +20,9 @@ impl MaterialModel for Specular {
         // Shade whichever side the ray hit.
         let intersection = &intersection.facing(r);
         let fresnel = Fresnel::Schlick(self.albedo);
-        if self.roughness >= MIN_ALPHA {
-            let bsdf = GGX { alpha: self.roughness, fresnel, normal: intersection.normal };
+        let alpha = regularised(self.roughness * self.roughness, s);
+        if alpha >= MIN_ALPHA {
+            let bsdf = GGX { alpha, fresnel, normal: intersection.normal };
             return scatter_bsdf(&bsdf, r, &intersection.point, s);
         }
         // A mirror: only its reflected ray can find the lights.
@@ -90,9 +90,9 @@ mod tests {
     }
 
     /// ∫ f(ω_o, ω) L(ω) cos θ dω over the sun's disc, in rings, for the floor of `sun_glint`.
-    fn glint_expected(roughness: f64, s: &Scene) -> f64 {
+    fn glint_expected(alpha: f64, s: &Scene) -> f64 {
         let sun = s.sun.as_ref().unwrap();
-        let bsdf = GGX { alpha: roughness, fresnel: Fresnel::Schlick(Color::new(0.9, 0.9, 0.9)), normal: Vector3::new(0., 1., 0.) };
+        let bsdf = GGX { alpha, fresnel: Fresnel::Schlick(Color::new(0.9, 0.9, 0.9)), normal: Vector3::new(0., 1., 0.) };
         let wo = Vector3::new(0., 1., -1.).normalize();
         let (a, b) = crate::material::phase::orthonormal_basis(&sun.direction);
         let (rings, around) = (200, 200);
@@ -114,14 +114,15 @@ mod tests {
     fn test_rough_metal_reflects_the_sun_without_fireflies() {
         // A fuzzed mirror found the sun only when a reflected ray happened to hit its disc,
         // 6.8e-5 sr: rarely, and then 15,000 times brighter than the mean. Light sampling with
-        // MIS finds it every time. Roughness 0.2 can't resolve the disc (the sun is a point);
-        // 0.02 can (it is sampled over the disc, and BSDF sampling shares the work).
+        // MIS finds it every time. α = 0.2 can't resolve the disc (the sun is a point); 0.02
+        // can (it is sampled over the disc, and BSDF sampling shares the work).
         crate::geometry::seed_rand(21, 1);
-        for roughness in [0.2, 0.02] {
+        for alpha in [0.2f64, 0.02] {
+            let roughness = alpha.sqrt();
             let (mean, max, s) = sun_glint(roughness, 4000);
-            let expected = glint_expected(roughness, &s);
-            assert!((mean - expected).abs() < 0.02 * expected, "roughness {}: {} vs {}", roughness, mean, expected);
-            assert!(max < 3. * mean, "roughness {}: a sample of {} against a mean of {}", roughness, max, mean);
+            let expected = glint_expected(alpha, &s);
+            assert!((mean - expected).abs() < 0.02 * expected, "alpha {}: {} vs {}", alpha, mean, expected);
+            assert!(max < 3. * mean, "alpha {}: a sample of {} against a mean of {}", alpha, max, mean);
         }
     }
 }

@@ -68,7 +68,7 @@
 //!   (`sigma_a`, `thickness`) is dropped.
 //! - `smooth_coat`, `rough_coat` -> `plastic` over a lambertian `substrate`, or else the
 //!   substrate alone.
-//! - Rough variants keep `roughness`, which is GGX's alpha in both renderers (`ggx`). Tungsten's
+//! - Rough variants' `roughness` is GGX's alpha, ours its square root (`ggx`). Tungsten's
 //!   other `distribution`s (Beckmann, Phong) are approximated by GGX of the same alpha, with a
 //!   warning.
 //! - `null` on a primitive that doesn't emit: the primitive is skipped (in Tungsten it is
@@ -403,7 +403,7 @@ impl<'a> Importer<'a> {
                         }
                     },
                 };
-                let roughness = if t == "rough_conductor" { num("roughness", 0.1) } else { 0. };
+                let roughness = if t == "rough_conductor" { num("roughness", 0.1).sqrt() } else { 0. };
                 json!({ "type": "metal", "reflective": rgb(albedo.component_mul(&conductor_reflectance(eta, k))), "roughness": roughness })
             },
             "dielectric" | "rough_dielectric" => {
@@ -416,7 +416,7 @@ impl<'a> Importer<'a> {
                 if num("sigma_a", 0.) != 0. || vec3(&b["sigma_a"]).is_some_and(|s| s != V3::zeros()) {
                     self.warn(format!("{}: the coat's absorption (sigma_a) is dropped", context));
                 }
-                let roughness = if t == "rough_plastic" { num("roughness", 0.1) } else { 0. };
+                let roughness = if t == "rough_plastic" { num("roughness", 0.1).sqrt() } else { 0. };
                 json!({ "type": "plastic", "albedo": rgb(albedo), "refractive_index": num("ior", 1.5), "roughness": roughness })
             },
             "smooth_coat" | "rough_coat" => {
@@ -424,7 +424,7 @@ impl<'a> Importer<'a> {
                 match substrate {
                     Some(s) if s["type"] == "lambertian" => {
                         let base = vec3(&s["albedo"]).unwrap_or_else(|| V3::new(1., 1., 1.));
-                        let roughness = if t == "rough_coat" { num("roughness", 0.02) } else { 0. };
+                        let roughness = if t == "rough_coat" { num("roughness", 0.02).sqrt() } else { 0. };
                         json!({ "type": "plastic", "albedo": rgb(base.component_mul(&albedo)), "refractive_index": num("ior", 1.3), "roughness": roughness })
                     },
                     Some(s) => {
@@ -767,7 +767,7 @@ mod tests {
         let au = v(&m["gold"], "reflective");
         assert!(au.x > 0.9 && au.z < 0.6, "gold is yellow: {}", au);
         assert_eq!(m["custom"]["reflective"], json!([0., 0., 0.]), "eta 1, k 0 reflects nothing");
-        assert_eq!(m["custom"]["roughness"], 0.3);
+        assert_eq!(m["custom"]["roughness"], 0.3f64.sqrt());
         assert_eq!(m["glass"], json!({ "type": "dielectric", "refractive_index": 1.33, "attenuate": [1., 1., 1.] }));
         assert_eq!(m["plastic"]["refractive_index"], 1.5);
         assert_eq!(m["textured"]["albedo"], json!([0.5, 0.5, 0.5]));

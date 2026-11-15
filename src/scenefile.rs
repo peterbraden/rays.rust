@@ -224,6 +224,8 @@ pub struct SceneFile {
     #[serde(default)]
     pub sample_lights: Value,
     #[serde(default)]
+    pub light_sampler: Value,
+    #[serde(default)]
     pub sample_sky: Value,
     #[serde(default)]
     pub sampler: Value,
@@ -2823,17 +2825,69 @@ impl SceneFile {
                 flare,
                 ..OutputOpts::parse(&s.output)
             },
+            area_light_indices: area_lights.iter().enumerate().map(|(i, l)| (&**l as *const SceneObject as usize, i)).collect(),
             area_lights,
             area_light_choice,
             sun,
             atmosphere,
             environment: None,
+            light_bvh: None,
+        };
+        scene.light_bvh = match s.light_sampler.as_str() {
+            None | Some("power") => None,
+            Some("bvh") => Some(SceneFile::light_bvh(&scene)),
+            Some(x) => panic!("Unknown light_sampler '{}': expected \"power\" or \"bvh\"", x),
         };
         // Tabulating the sky evaluates it, which needs the scene.
         if scene.render.sample_sky {
             scene.environment = crate::environment::Environment::build(&scene);
         }
         scene
+    }
+
+    /// The light BVH over a scene's sampled lights (`Scene::light_bvh`): its area lights, if
+    /// `sample_lights` is on, then its point lights.
+    fn light_bvh(scene: &Scene) -> crate::light_bvh::LightBvh {
+        use crate::light_bvh::LightBounds;
+        use crate::light::Profile;
+        let mut bounds: Vec<LightBounds> = Vec::new();
+        let luminance = |c: Color| crate::color::luminance(&c).max(0.);
+        for l in scene.area_lights.iter().take(scene.bvh_area_lights()) {
+            // Normals at a few points: one for flat lights (quads, discs, triangles), which
+            // then emit only to one side, or any.
+            let normals: Vec<(Vector3<f64>, Vector3<f64>)> = (0..9)
+                .filter_map(|k| l.geometry.sample_surface([(k % 3) as f64 / 3. + 0.17, (k / 3) as f64 / 3. + 0.17, 0.5]))
+                .collect();
+            let Some(&(y, n)) = normals.first() else { continue };
+            let flat = normals.iter().all(|(_, m)| (m - n).norm() < 1e-6);
+            let material = l.medium.material_at(y);
+            let front = luminance(material.emitted(&n, &n));
+            let two_sided = luminance(material.emitted(&n, &-n)) > 0.;
+            // A diffuse emitter's power: π L A, from each side that emits.
+            let phi = std::f64::consts::PI * front * l.geometry.surface_area() * if two_sided { 2. } else { 1. };
+            let b = l.geometry.bounds();
+            bounds.push(LightBounds {
+                bounds: b, phi,
+                w: n,
+                cos_theta_o: if flat { 1. } else { -1. },
+                cos_theta_e: 0.,
+                two_sided: flat && two_sided,
+            });
+        }
+        // A narrow spread about the axis for beams, which can't be exactly zero.
+        let beam_spread = 1e-4f64.cos();
+        for light in &scene.lights {
+            let phi = light.power();
+            bounds.push(match &light.profile {
+                Profile::Spot { axis, cos_total, .. } => LightBounds { cos_theta_o: *cos_total, cos_theta_e: beam_spread, w: *axis, ..LightBounds::point(light.position, phi) },
+                Profile::Projection { frame, half, .. } => {
+                    let w = Vector3::new(frame[(2, 0)], frame[(2, 1)], frame[(2, 2)]);
+                    LightBounds { cos_theta_o: half.norm().atan().cos(), cos_theta_e: beam_spread, w, ..LightBounds::point(light.position, phi) }
+                },
+                _ => LightBounds::point(light.position, phi),
+            });
+        }
+        crate::light_bvh::LightBvh::new(&bounds)
     }
 
     /// Roughly each area light's power, to choose lights to sample in proportion to it: the

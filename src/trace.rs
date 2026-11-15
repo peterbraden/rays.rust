@@ -291,6 +291,69 @@ mod tests {
         assert!((sampled - hit).abs() < 0.03 * hit, "light sampling {} vs hitting {}", sampled, hit);
     }
 
+    /// A floor under a grid of 8 × 8 point lights and 8 × 8 small quad lights facing down, with
+    /// `sampler` choosing which to sample.
+    fn many_lights(sampler: &str) -> Scene {
+        many_lights_on(sampler, r#"{ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }"#)
+    }
+
+    fn many_lights_on(sampler: &str, floor: &str) -> Scene {
+        let mut objects = vec![r#"{ "type": "plane", "y": 0, "material": "F" }"#.to_string()];
+        let mut lights = vec![];
+        for i in 0..64 {
+            let (x, z) = ((i % 8) as f64 * 3. - 10.5, (i / 8) as f64 * 3. - 10.5);
+            lights.push(format!(r#"{{ "location": [{}, 1, {}], "intensity": {} }}"#, x, z, 0.5 + (i % 3) as f64 * 0.25));
+            let (x, z) = (x + 1.5, z + 1.5);
+            objects.push(format!(r#"{{ "type": "quad", "points": [[{}, 1.2, {}], [{}, 1.2, {}], [{}, 1.2, {}], [{}, 1.2, {}]], "material": "L" }}"#,
+                x - 0.1, z - 0.1, x + 0.1, z - 0.1, x - 0.1, z + 0.1, x + 0.1, z + 0.1));
+        }
+        SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 1, "light_sampler": "{}",
+            "camera": {{ "location": [0, 0.5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "materials": {{
+                "F": {},
+                "L": {{ "type": "diffuse-light", "color": [1, 1, 1], "intensity": 20 }}
+            }},
+            "lights": [{}],
+            "objects": [{}]
+        }}"#, sampler, floor, lights.join(","), objects.join(",")))
+    }
+
+    #[test]
+    fn test_light_bvh_agrees_with_power_sampling_with_less_noise() {
+        crate::geometry::seed_rand(3, 1);
+        let r = Ray { ro: Vector3::new(1.6, 0.5, 1.4), rd: Vector3::new(0., -1., 0.) };
+        let stats = |s: &Scene, n: usize| {
+            let v: Vec<f64> = (0..n).map(|_| trace(&r, 0, s).1.rgb.x).collect();
+            let mean = v.iter().sum::<f64>() / n as f64;
+            (mean, (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64).sqrt())
+        };
+        // Power sampling sums every point light and picks one quad by power; the BVH picks one
+        // light of either kind, by its importance from the point.
+        let (power, power_sd) = stats(&many_lights("power"), 40_000);
+        let (bvh, bvh_sd) = stats(&many_lights("bvh"), 40_000);
+        assert!((power - bvh).abs() < 0.03 * power, "power {} vs bvh {}", power, bvh);
+        // Per sample of one light, against a full sum of the points and one quad.
+        assert!(bvh_sd < 3. * power_sd, "sd {} vs {}", bvh_sd, power_sd);
+        // The point light overhead (number 36, after the 64 quads) is chosen far more often
+        // than its share of the power, about 1 in 128, would have it.
+        let s = many_lights("bvh");
+        let near = s.light_bvh.as_ref().unwrap().pmf(&Vector3::new(1.6, 0., 1.4), 64 + 36);
+        assert!(near > 0.1, "{}", near);
+    }
+
+    #[test]
+    fn test_light_bvh_with_mis_on_glossy_surfaces() {
+        // A rough plastic floor: lights sampled by the BVH and weighted against BSDF sampling
+        // (`direct_lighting_mis`), whose hits on the quads take the BVH's pmf.
+        crate::geometry::seed_rand(4, 1);
+        let floor = r#"{ "type": "plastic", "albedo": [0.4, 0.4, 0.4], "roughness": 0.3 }"#;
+        let r = Ray { ro: Vector3::new(0.6, 0.5, -0.4), rd: Vector3::new(0.3, -1., 0.2).normalize() };
+        let mean = |s: &Scene, n: usize| (0..n).map(|_| trace(&r, 0, s).1.rgb.x).sum::<f64>() / n as f64;
+        let (power, bvh) = (mean(&many_lights_on("power", floor), 60_000), mean(&many_lights_on("bvh", floor), 60_000));
+        assert!((power - bvh).abs() < 0.04 * power, "power {} vs bvh {}", power, bvh);
+    }
+
     /// Mean and standard deviation of n samples of the radiance from the floor below the light.
     fn floor_radiance(s: &Scene, n: usize) -> (f64, f64) {
         let r = Ray { ro: Vector3::new(0., 0.5, 0.), rd: Vector3::new(0., -1., 0.) };

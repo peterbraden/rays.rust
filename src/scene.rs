@@ -291,12 +291,30 @@ pub struct Scene {
     pub atmosphere: Option<Arc<SkyMaterial>>,
     /// The sky as a light to sample (`environment`), if it isn't black and `sample_sky` is on.
     pub environment: Option<crate::environment::Environment>,
+    /// With `"light_sampler": "bvh"`, the tree that chooses a light to sample from each point:
+    /// the area lights (if sampled), numbered as in `area_lights`, then the point lights.
+    pub light_bvh: Option<crate::light_bvh::LightBvh>,
+    /// Each area light's index in `area_lights`, by its address.
+    pub area_light_indices: std::collections::HashMap<usize, usize>,
 }
 
 impl Scene {
     /// Whether `object` is one of the area lights that diffuse surfaces sample directly.
     pub fn is_sampled_light(&self, object: &SceneObject) -> bool {
-        self.render.sample_lights && self.area_lights.iter().any(|l| std::ptr::eq(&**l, object))
+        self.render.sample_lights && self.area_light_indices.contains_key(&(object as *const SceneObject as usize))
+    }
+
+    /// `object`'s index in `area_lights`, if it is one that is sampled.
+    pub fn area_light_index(&self, object: &SceneObject) -> Option<usize> {
+        if !self.render.sample_lights {
+            return None;
+        }
+        self.area_light_indices.get(&(object as *const SceneObject as usize)).copied()
+    }
+
+    /// How many of the light BVH's lights are area lights (the rest are point lights).
+    pub fn bvh_area_lights(&self) -> usize {
+        if self.render.sample_lights { self.area_lights.len() } else { 0 }
     }
 }
 

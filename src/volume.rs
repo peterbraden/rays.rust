@@ -30,7 +30,6 @@ use std::cell::Cell;
 use crate::geometry::rand;
 use crate::intersection::{Intersection, RawIntersection};
 use crate::material::model::{MaterialModel, ScatteredRay};
-use crate::material::functions::sample_area_light_with;
 use crate::material::phase::PhaseFunction;
 use crate::material::diffraction::DiffractionTable;
 use crate::material::ice_halos::{Crystals, HaloTable};
@@ -658,7 +657,8 @@ impl VolumeMaterial {
                        phase: &VertexPhase, albedo: Color, scatterings: u32) -> Color {
         let p = |w: &Vector3<f64>| phase.eval(incoming.dot(w)).as_unbounded();
         let mut direct = Color::black();
-        for light in &s.lights {
+        // With a light BVH, point lights are sampled with the area lights below.
+        for light in s.lights.iter().filter(|_| s.light_bvh.is_none()) {
             let to_light = light.position - point;
             let d = to_light.norm();
             let w = to_light / d;
@@ -676,9 +676,7 @@ impl VolumeMaterial {
                 Some(_) => Color::black(),
             };
         }
-        if s.render.sample_lights {
-            direct = direct + sample_area_light_with(point, s, |w, _| p(w));
-        }
+        direct = direct + crate::material::functions::sample_lights_with(point, s, |w, _| p(w));
         albedo * direct
     }
 

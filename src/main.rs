@@ -61,6 +61,7 @@ mod material {
 mod intersection;
 mod sceneobject;
 mod light;
+mod light_bvh;
 mod shapes {
     pub mod transform;
     pub mod bbox;

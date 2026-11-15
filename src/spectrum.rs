@@ -84,6 +84,7 @@
 pub mod cie;
 pub mod rgb2spec;
 pub mod atmosphere;
+pub mod metals;
 
 use crate::color::Color;
 use crate::na::{Matrix3, Vector3};

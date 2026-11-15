@@ -1906,6 +1906,29 @@ impl SceneFile {
             return Some(Box::new(metal));
         }
 
+        // {"type": "conductor", "metal": "Au" | "Ag" | "Al" | "Cu" | "CuZn"} (or "eta" and "k"
+        // per channel, or a "reflectance" colour), "roughness": r, or "roughness_u" and
+        // "roughness_v" along and across "tangent" (default the x axis): see
+        // `material::conductor`.
+        if t == "conductor" {
+            use crate::material::conductor::{Conductor, Optics};
+            let optics = if let Some(name) = o["metal"].as_str() {
+                let (eta, k) = crate::spectrum::metals::named(name)
+                    .unwrap_or_else(|| panic!("Unknown metal '{}': expected Ag, Al, Au, Cu or CuZn", name));
+                Optics::Measured { eta, k }
+            } else if !o["eta"].is_null() || !o["k"].is_null() {
+                Optics::Constant { eta: SceneFile::parse_color_def(o, "eta", Color::white()), k: SceneFile::parse_color_def(o, "k", Color::black()) }
+            } else {
+                Optics::Reflectance(SceneFile::parse_color_def(o, "reflectance", Color::new(0.9, 0.9, 0.9)))
+            };
+            let r = SceneFile::parse_number(&o["roughness"], 0.);
+            return Some(Box::new(Conductor {
+                optics,
+                roughness: (SceneFile::parse_number(&o["roughness_u"], r), SceneFile::parse_number(&o["roughness_v"], r)),
+                tangent: SceneFile::parse_vec3_def(o, "tangent", Vector3::x()),
+            }));
+        }
+
         if t == "lambertian" {
             let d:Lambertian = Lambertian {
                 albedo:SceneFile::parse_color(&o["albedo"]), 

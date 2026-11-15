@@ -34,6 +34,7 @@ mod material {
     pub mod ggx;
     pub mod dielectric;
     pub mod specular;
+    pub mod conductor;
     pub mod ambient;
     pub mod texture;
     pub mod lambertian;

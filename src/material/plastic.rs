@@ -73,7 +73,7 @@ impl MaterialModel for Plastic {
         let alpha = regularised(self.roughness * self.roughness, s);
         if alpha >= MIN_ALPHA {
             let bsdf = PlasticBSDF {
-                coat: GGX { alpha, fresnel: Fresnel::Dielectric(self.refractive_index), normal: intersection.normal },
+                coat: GGX::new(alpha, Fresnel::Dielectric(self.refractive_index), intersection.normal),
                 base: LambertianBSDF { albedo: self.albedo.as_reflectance(), normal: intersection.normal },
                 refractive_index: self.refractive_index,
             };
@@ -137,7 +137,7 @@ mod tests {
         let n = Vector3::new(0., 0.6, 0.8);
         for alpha in [0.1, 0.4] {
             let b = PlasticBSDF {
-                coat: GGX { alpha, fresnel: Fresnel::Dielectric(1.5), normal: n },
+                coat: GGX::new(alpha, Fresnel::Dielectric(1.5), n),
                 base: LambertianBSDF { albedo: Color::new(0.8, 0.3, 0.1), normal: n },
                 refractive_index: 1.5,
             };

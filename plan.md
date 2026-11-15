@@ -749,8 +749,8 @@ start) by chapter:
 - 5, Cameras and film: orthographic, spherical and realistic (lens system) cameras; motion blur
   (`Ray::time` exists but is unused); Gaussian, Mitchell, Lanczos filters; film sensor, white
   balance.
-- 6, Shapes: curves, bilinear patches, Loop subdivision; texture coordinates on intersections;
-  floating-point error bounds for spawning rays.
+- 6, Shapes (done): curves, bilinear patches, Loop subdivision; texture coordinates on
+  intersections; floating-point error bounds for spawning rays.
 - 8, Sampling: Halton, stratified, PMJ02, blue-noise Z-Sobol'; ray differentials.
 - 9, Reflection models: conductors with complex η, k; rough dielectrics; thin dielectric; mix;
   anisotropic roughness.
@@ -855,6 +855,32 @@ Done as planned, in seven commits, each with tests and a demo scene. Measured or
 - Measured sensor curves, and wide-gamut PNG output with an ICC tag.
 - The starburst's tail only; the Airy core and the spikes' fine structure are left to the
   glare.
+
+### Chapter 6: shapes (done)
+
+In six commits, each with tests:
+
+1. Texture coordinates, computed on demand (`Geometry::uv`): spheres, planes, discs,
+   cylinders and cones, triangles, meshes (OBJ and Tungsten coordinates), through transforms;
+   `uv` and `checker` materials to see them.
+2. Sphere lights sampled by the cone they subtend (`Geometry::sample_from`/`pdf_from`): on
+   `lamps` at 16 spp, RMSE against a 1024 spp reference from 0.185 to 0.129.
+3. Bilinear patches (Reshetov's intersection; area sampling exact for saddles).
+4. Curves: cubic Bézier hair, flat, cylinder and ribbon, in a BVH; `fur`.
+5. Loop subdivision surfaces: on a regular mesh the angle between neighbouring faces halves
+   per level, as it should.
+6. Ray offsets scaled to the scene (`Intersection::spawn_offset`), replacing the fixed 0.001.
+
+### Deferred from chapter 6
+
+- Spherical triangle and rectangle sampling for triangle and quad lights (PBR 6.5.4, 6.6.3);
+  they're sampled by area.
+- pbrt's exact error bounds: ours are conservative (1e-7 relative), not a few ulps, since our
+  shapes' solvers aren't analysed.
+- Curves: v across the strand isn't recovered from the point alone (it's 0.5), and they trace
+  at about a sixth of the rate of triangles; a hair BSDF belongs to chapter 9.
+- Subdivision: normals from the refined mesh, not the limit surface's tangents; no creases.
+- No texture coordinates yet for boxes, tori, CSG results, blobs and the other POV-Ray shapes.
 
 ### Reading (chapter 4)
 

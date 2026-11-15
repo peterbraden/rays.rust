@@ -32,6 +32,8 @@ Supports:
       polygon, prism, lathe, surface of revolution, sphere sweep, blob, isosurface,
       superellipsoid, Julia fractal, height field, parametric surface, bicubic patch and text
       ([reference](./docs/shapes.md))
+    - From PBRT: bilinear patches, Bézier curves (hair and `fur`), Loop subdivision surfaces,
+      and texture coordinates on every analytic shape and mesh
     - Constructive solid geometry: union, merge, intersection and difference of any solid
       shapes, with inverse and clipping, and materials for each part
     - Transforms (scale, rotate, translate) and object instancing

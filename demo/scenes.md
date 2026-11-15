@@ -41,6 +41,14 @@ Lens flare: ghosts of the sun from reflections between the coated surfaces of a 
 lens (exaggerated tenfold), and the starburst of a six-bladed aperture.
 ![Lens flare](./scenes/lens-flare.png)
 
+## Shapes after PBRT
+Texture-space checkers on a sphere and a saddle (a bilinear patch), a cube smoothed by Loop
+subdivision, ribbon and cylinder curves, lit by a quad light.
+![PBRT shapes](./scenes/pbrt-shapes.png)
+
+A ball of fur: 40,000 Bézier curves.
+![Fur](./scenes/fur.png)
+
 ## Spheres
 Spheres demonstrating 3 different materials.
 ![Spheres](./scenes/spheres.png)

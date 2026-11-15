@@ -88,6 +88,42 @@ impl SceneFile {
                 assert!(p.len() == 4, "A {} needs four \"points\", got {}", t, p.len());
                 Box::new(crate::shapes::bilinear::BilinearPatch::new(p[0], p[1], p[2], p[3]))
             },
+            // {"type": "curves", "kind": "flat" | "cylinder" | "ribbon", "split": 3, "curves":
+            // [{"points": [p0, p1, p2, p3], "width": w or [w0, w1], "normals": [n0, n1]}, ..]}:
+            // cubic Bézier strands (see `shapes::curve`); a ribbon needs its end normals.
+            "curves" => {
+                let kind = o["kind"].as_str().unwrap_or("cylinder");
+                let curves = o["curves"].as_array().unwrap_or_else(|| panic!("curves needs a list of \"curves\""))
+                    .iter().map(|c| {
+                        let p = points3(c, "points");
+                        assert!(p.len() == 4, "A curve needs four \"points\", got {}", p.len());
+                        let width = match &c["width"] {
+                            Value::Array(w) if w.len() == 2 => [w[0].as_f64().unwrap(), w[1].as_f64().unwrap()],
+                            v => { let w = SceneFile::parse_number(v, 0.01); [w, w] },
+                        };
+                        crate::shapes::curve::Curve { points: [p[0], p[1], p[2], p[3]], width, kind: curve_kind(kind, c) }
+                    }).collect();
+                Box::new(crate::shapes::curve::Curves::new(curves, SceneFile::parse_int(&o["split"], 3) as u32))
+            },
+            // {"type": "fur", "center": [..], "radius": 1, "count": 20000, "length": 0.2,
+            // "width": [0.01, 0.002], "droop": 0.3, "curl": 0.15, "kind": "cylinder", "seed": 0}:
+            // strands growing from a sphere (`shapes::curve::fur`).
+            "fur" => {
+                let width = match &o["width"] {
+                    Value::Array(w) if w.len() == 2 => [w[0].as_f64().unwrap(), w[1].as_f64().unwrap()],
+                    v => { let w = SceneFile::parse_number(v, 0.01); [w, w * 0.2] },
+                };
+                let kind = match o["kind"].as_str().unwrap_or("cylinder") {
+                    "flat" => crate::shapes::curve::CurveKind::Flat,
+                    "cylinder" => crate::shapes::curve::CurveKind::Cylinder,
+                    k => panic!("fur's \"kind\" is \"flat\" or \"cylinder\", got {}", k),
+                };
+                let strands = crate::shapes::curve::fur(
+                    SceneFile::parse_vec3_def(o, "center", Vector3::zeros()), num_def(o, "radius", 1.),
+                    SceneFile::parse_int(&o["count"], 20000), num_def(o, "length", 0.2), width,
+                    num_def(o, "droop", 0.3), num_def(o, "curl", 0.15), kind, SceneFile::parse_int(&o["seed"], 0) as u64);
+                Box::new(crate::shapes::curve::Curves::new(strands, SceneFile::parse_int(&o["split"], 2) as u32))
+            },
             // {"type": "torus", "major": R, "minor": r}: about the y axis, centred on the origin.
             "torus" => Box::new(Torus::new(num(o, "major"), num(o, "minor"))),
             // {"type": "quadric", "squares": [A, B, C], "mixed": [D, E, F], "linear": [G, H, I],
@@ -479,5 +515,20 @@ mod tests {
     #[should_panic(expected = "needs a number \"radius\"")]
     fn test_missing_field_is_reported() {
         shape(r#"{"type": "cylinder", "base": [0, 0, 0], "cap": [0, 2, 0]}"#);
+    }
+}
+
+/// A curve's kind from its scene file name; a ribbon takes `"normals": [n0, n1]` from `c`.
+fn curve_kind(kind: &str, c: &Value) -> crate::shapes::curve::CurveKind {
+    use crate::shapes::curve::CurveKind;
+    match kind {
+        "flat" => CurveKind::Flat,
+        "cylinder" => CurveKind::Cylinder,
+        "ribbon" => {
+            let n = points3(c, "normals");
+            assert!(n.len() == 2, "A ribbon curve needs two \"normals\", got {}", n.len());
+            CurveKind::Ribbon(n[0].normalize(), n[1].normalize())
+        },
+        k => panic!("Unknown curve kind '{}': expected \"flat\", \"cylinder\" or \"ribbon\"", k),
     }
 }

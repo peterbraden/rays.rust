@@ -981,7 +981,9 @@ impl SceneFile {
     /// (default 1). Without `noise` it is constant; with it, it varies up to that maximum. With
     /// `grid` (`volume::grid`), it is the grid's values times `density`: a Mitsuba `.vol` file's
     /// path, or `{"resolution": [nx, ny, nz], "values": [...]}` (x fastest); `min` and `max`
-    /// default to the file's bounds. With `shape`, a geometry (as an object's, eg.
+    /// default to the file's bounds. In place of `albedo`, `sigma_a` and `sigma_s` (RGB) give
+    /// absorption and scattering per unit density, as pbrt's media; where their sum differs
+    /// between channels the medium is chromatic (`volume::chromatic`). With `shape`, a geometry (as an object's, eg.
     /// `{"type": "sphere", ...}`), the medium fills only its inside: give a dielectric object
     /// the same shape for a glass of coloured liquid (`volume::Volume::shape`).
     /// `albedo` (default white) is the fraction scattered rather than absorbed at a collision.
@@ -1017,6 +1019,16 @@ impl SceneFile {
         };
         let mut scattering = SceneFile::parse_scattering(o, 0.);
         scattering.emission = SceneFile::parse_volume_emission(o, bounds);
+        // Coefficients per unit density, as pbrt gives media: σ_a and σ_s (RGB).
+        if o.get("sigma_a").is_some() || o.get("sigma_s").is_some() {
+            assert!(o.get("albedo").is_none(), "Give a volume either an albedo or sigma_a and sigma_s, not both");
+            let a = SceneFile::parse_color_def(o, "sigma_a", Color::black());
+            let sc = SceneFile::parse_color_def(o, "sigma_s", Color::black());
+            assert!((a + sc).rgb.iter().all(|k| *k >= 0.) && (a + sc).rgb.max() > 0., "A volume needs some extinction");
+            let t = (a + sc).rgb;
+            scattering.albedo = Color { rgb: sc.rgb.zip_map(&t, |s, t| if t > 0. { s / t } else { 0. }) };
+            scattering.extinction = Some((a, sc));
+        }
         create_medium(volume, scattering)
     }
 
@@ -1069,6 +1081,7 @@ impl SceneFile {
             halos: SceneFile::parse_halos(o),
             rainbow: (o["rainbow"].as_bool() == Some(true)).then(|| Arc::new(RainbowTable::new(100_000))),
             emission: None,
+            extinction: None,
         }
     }
 

@@ -1,3 +1,4 @@
+use crate::color::Color;
 use crate::ray::Ray;
 use crate::na::{Vector3};
 use crate::intersection::{Intersection, RawIntersection};
@@ -79,19 +80,21 @@ impl SceneGraph {
     /// participating media it crosses (`Geometry::transmittance`), which may be a random
     /// estimate. For shadow rays, in place of `occluded` wherever media should cast soft,
     /// partial shadows rather than all-or-nothing ones.
-    pub fn transmittance(&self, r: &Ray, max: f64, min: f64) -> f64 {
+    ///
+    /// Per colour channel (or wavelength), for chromatic media (`volume::chromatic`).
+    pub fn transmittance(&self, r: &Ray, max: f64, min: f64) -> Color {
         if self.bvh.any_hit(r, min, max, |i| self.items[i].occludes(r, min, max)) {
-            return 0.;
+            return Color::black();
         }
         // Solid objects first: if one blocks the ray, the media needn't be tracked.
         let (media, solid): (Vec<_>, Vec<_>) = self.infinite_items.iter().partition(|o| o.is_stochastic());
         if solid.iter().any(|o| o.transmittance(r, min, max) == 0.) {
-            return 0.;
+            return Color::black();
         }
-        let mut t = 1.;
+        let mut t = Color::white();
         for o in media {
-            t *= o.transmittance(r, min, max);
-            if t == 0. {
+            t = t * o.transmittance_color(r, min, max);
+            if t.rgb.max() <= 0. {
                 break;
             }
         }
@@ -99,6 +102,7 @@ impl SceneGraph {
     }
 
     pub fn nearest_raw_intersection(&self, r: &Ray, max:f64, min:f64) -> Option<(&SceneObject, RawIntersection)> {
+        crate::volume::chromatic::begin_query();
         let infinites = self.naive_intersection_infinites(r, max, min);
         // Anything in the BVH must be no farther than the nearest unbounded object to matter
         // (on a tie, the bounded object wins).

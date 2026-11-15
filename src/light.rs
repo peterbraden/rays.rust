@@ -97,14 +97,14 @@ impl Sun {
         self.irradiance_at(from) * ((1. - LIMB_DARKENING * (1. - mu)) / (1. - LIMB_DARKENING / 3.) / solid_angle)
     }
 
-    /// The fraction of sunlight reaching `point`: 0 behind anything solid, and partly through
-    /// participating media (an estimate; see `SceneGraph::transmittance`).
-    pub fn transmittance_from(&self, point: &Vector3<f64>, s: &crate::scene::Scene) -> f64 {
+    /// The fraction of sunlight reaching `point`, per channel: 0 behind anything solid, and
+    /// partly through participating media (an estimate; see `SceneGraph::transmittance`).
+    pub fn transmittance_from(&self, point: &Vector3<f64>, s: &crate::scene::Scene) -> crate::color::Color {
         self.transmittance_along(point, &self.direction, s)
     }
 
     /// As `transmittance_from`, towards the point of the disc in unit direction `d`.
-    pub fn transmittance_along(&self, point: &Vector3<f64>, d: &Vector3<f64>, s: &crate::scene::Scene) -> f64 {
+    pub fn transmittance_along(&self, point: &Vector3<f64>, d: &Vector3<f64>, s: &crate::scene::Scene) -> crate::color::Color {
         let shadow_ray = crate::ray::Ray { ro: *point, rd: *d };
         s.objects.transmittance(&shadow_ray, SUN_SHADOW_DISTANCE, f64::MIN_POSITIVE)
     }

@@ -30,6 +30,10 @@ const CREPUSCULAR_SAMPLES: usize = 2;
 /// counts what it hits of them in part or not at all (`light_weight`).
 fn trace_from(r: &Ray, depth: u64, s: &Scene, prior: LightSampling) -> (u64, Color) {
     let closest = s.objects.nearest_intersection(r, f64::INFINITY, 0f64);
+    // Chromatic media's walks up to the hit, and the weight of what is gathered here
+    // (`volume::chromatic`): white unless the path has crossed one.
+    crate::volume::chromatic::settle(closest.as_ref().map(|x| x.dist));
+    let mis = crate::volume::chromatic::weight();
     // Nothing in the way, or only the skysphere, infinitely far off: the ray reaches the sky.
     let reaches_sky = closest.as_ref().is_none_or(|x| x.dist >= SUN_SHADOW_DISTANCE);
     // Crepuscular rays: from the camera, the air in shadow along the way, estimated before the
@@ -38,7 +42,7 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, prior: LightSampling) -> (u64, Col
         (Some(sky), Some(sun)) if depth == 0 && sky.crepuscular_rays => {
             let dist = if reaches_sky { f64::INFINITY } else { closest.as_ref().map_or(f64::INFINITY, |x| x.dist) };
             if dist > AERIAL_PERSPECTIVE_FROM {
-                sky.shadowed_loss(&r.ro, &r.rd.normalize(), dist, CREPUSCULAR_SAMPLES, |p| sun.transmittance_from(p, s))
+                sky.shadowed_loss(&r.ro, &r.rd.normalize(), dist, CREPUSCULAR_SAMPLES, |p| sun.transmittance_from(p, s).rgb.mean())
             } else {
                 Vector3::zeros()
             }
@@ -55,24 +59,24 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, prior: LightSampling) -> (u64, Col
                 Some(sky) if dist > AERIAL_PERSPECTIVE_FROM && !reaches_sky => {
                     let (transmittance, inscattered) = sky.segment(&r.ro, &r.rd.normalize(), dist);
                     // In spectral mode, at the sample's wavelengths (`SkyMaterial::air`).
-                    (cast, color * transmittance + inscattered)
+                    (cast, color * transmittance + inscattered.component_mul(&mis.rgb))
                 },
                 _ => (cast, color),
             }
         },
-        None => (1, s.render.background.radiance(&r.rd)),
+        None => (1, s.render.background.radiance(&r.rd) * mis),
     };
     // A sky sampled directly (`environment`) is weighted against that, as the lights are.
     let color = match (&s.environment, prior) {
         (Some(env), LightSampling::MIS { bsdf_pdf }) if reaches_sky => color * power_heuristic(bsdf_pdf, env.pdf(&r.rd.normalize())),
         _ => color,
     };
-    let color = Color { rgb: (color.rgb - shadowed).map(|v| v.max(0.)) };
+    let color = Color { rgb: (color.rgb - shadowed.component_mul(&mis.rgb)).map(|v| v.max(0.)) };
     match &s.sun {
         Some(sun) if reaches_sky => {
             let d = r.rd.normalize();
             let w = light_weight(prior, || sun.disc_pdf(&d));
-            if w > 0. { (cast, color + sun.disc_radiance(&r.ro, &d) * w) } else { (cast, color) }
+            if w > 0. { (cast, color + sun.disc_radiance(&r.ro, &d) * mis * w) } else { (cast, color) }
         },
         _ => (cast, color),
     }
@@ -131,6 +135,8 @@ fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene, pri
     let material = medium.material_at(intersection.point);
     let shaded = shading(r, medium, intersection, s);
     let interaction = material.scatter(r, &shaded, s);
+    // Taken before the path goes on, which may change it.
+    let mis = crate::volume::chromatic::weight();
 
     let incoming = match interaction.ray {
         // No continuation: attenuate is the final colour.
@@ -146,7 +152,7 @@ fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene, pri
         },
     };
 
-    (cast, (interaction.emit + interaction.attenuate * incoming) * weight)
+    (cast, (interaction.emit * mis + interaction.attenuate * incoming) * weight)
 }
 
 fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &Scene, prior: LightSampling) -> (u64, Color) {
@@ -519,6 +525,51 @@ mod tests {
         let r = Ray { ro: Vector3::new(0., 0., -5.), rd: Vector3::new(0., 0., 1.) };
         let mean = (0..n).map(|_| trace(&r, 0, &s).1.rgb.x).sum::<f64>() / n as f64;
         assert!((mean - (-1.2f64).exp()).abs() < 0.01, "{}", mean);
+    }
+
+    #[test]
+    fn test_chromatic_absorber_follows_beer_lambert_per_channel() {
+        // Each channel through its own extinction: exp(-2 σ_c), whichever channel each path
+        // tracked with (`volume::chromatic`).
+        crate::geometry::seed_rand(3, 2);
+        let s = volume_scene(r#""sigma_a": [0.2, 0.6, 1.2], "sigma_s": [0, 0, 0]"#);
+        let n = 60_000;
+        let r = Ray { ro: Vector3::new(0., 0., -5.), rd: Vector3::new(0., 0., 1.) };
+        let mean = (0..n).map(|_| trace(&r, 0, &s).1.rgb).sum::<Vector3<f64>>() / n as f64;
+        for (c, sigma) in [0.2f64, 0.6, 1.2].iter().enumerate() {
+            assert!((mean[c] - (-2. * sigma).exp()).abs() < 0.01, "{}: {} vs {}", c, mean[c], (-2. * sigma).exp());
+        }
+    }
+
+    #[test]
+    fn test_chromatic_furnace() {
+        // Scattering only, with different extinction in each channel: still exactly as bright
+        // as the sky on average, and every estimate bounded by the MIS weight (three).
+        crate::geometry::seed_rand(4, 2);
+        let s = volume_scene(r#""sigma_a": [0, 0, 0], "sigma_s": [0.5, 1.5, 4], "g": 0.3"#);
+        let n = 30_000;
+        let r = Ray { ro: Vector3::new(0., 0., -5.), rd: Vector3::new(0.1, 0., 1.).normalize() };
+        let samples: Vec<Vector3<f64>> = (0..n).map(|_| trace(&r, 0, &s).1.rgb).collect();
+        let mean = samples.iter().sum::<Vector3<f64>>() / n as f64;
+        assert!(samples.iter().all(|c| c.max() <= 3. + 1e-9 && c.min() >= 0.));
+        for c in 0..3 {
+            assert!((mean[c] - 1.).abs() < 0.02, "{}: {}", c, mean[c]);
+        }
+    }
+
+    #[test]
+    fn test_chromatic_shadows() {
+        crate::geometry::seed_rand(5, 2);
+        let s = volume_scene(r#""sigma_a": [0.2, 0.6, 1.2], "sigma_s": [0.3, 0, 0.1]"#);
+        let r = Ray { ro: Vector3::new(0., 0., -5.), rd: Vector3::new(0., 0., 1.) };
+        let n = 20_000;
+        let mean = (0..n).map(|_| s.objects.transmittance(&r, 10., 0.).rgb).sum::<Vector3<f64>>() / n as f64;
+        for (c, sigma) in [0.5f64, 0.6, 1.3].iter().enumerate() {
+            assert!((mean[c] - (-2. * sigma).exp()).abs() < 0.006, "{}: {} vs {}", c, mean[c], (-2. * sigma).exp());
+        }
+        // A grey medium given by coefficients is just scaled density: exact, no tracking.
+        let grey = volume_scene(r#""sigma_a": [0.25, 0.25, 0.25], "sigma_s": [0.25, 0.25, 0.25]"#);
+        assert!((grey.objects.transmittance(&r, 10., 0.).rgb.x - (-1f64).exp()).abs() < 1e-12);
     }
 
     /// A floor of albedo 0.5, `objects` besides it, and the sun `sun`; black background,

@@ -46,6 +46,7 @@ use crate::sceneobject::SceneObject;
 use crate::shapes::bbox::BBox;
 use crate::shapes::geometry::Geometry;
 
+pub mod chromatic;
 pub mod emission;
 pub mod grid;
 
@@ -61,6 +62,7 @@ thread_local! {
 /// Start a new path: no volume scatterings yet, and densities as given.
 pub fn begin_path() {
     PATH.with(|p| p.set((0, 1.)));
+    chromatic::begin_path();
 }
 
 fn path_density_scale() -> f64 {
@@ -137,6 +139,23 @@ impl DensityField for NoiseDensity {
     fn majorant(&self) -> f64 { self.max_density }
 }
 
+/// A density field times a constant.
+pub struct Scaled {
+    pub field: Arc<dyn DensityField>,
+    pub by: f64,
+}
+
+impl DensityField for Scaled {
+    fn density(&self, p: &Vector3<f64>) -> f64 { self.by * self.field.density(p) }
+    fn majorant(&self) -> f64 { self.by * self.field.majorant() }
+    fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
+        let (m, l) = self.field.majorant_from(p, d);
+        (self.by * m, l)
+    }
+    fn minorant(&self) -> f64 { self.by * self.field.minorant() }
+    fn particle_radius(&self, p: &Vector3<f64>) -> Option<f64> { self.field.particle_radius(p) }
+}
+
 /// A participating medium filling a box, or a closed shape within it.
 pub struct Volume {
     pub bounds: BBox,
@@ -147,6 +166,10 @@ pub struct Volume {
     /// dielectric surface and a volume in the same shape, the surface refracting light in and
     /// the medium absorbing it on its way through.
     pub shape: Option<Box<dyn Geometry + Sync + Send>>,
+    /// For a chromatic medium, the extinction per unit density in each channel (RGB, upsampled
+    /// at the sample's wavelengths in spectral mode); None when it is the same in all, the
+    /// density alone. Tracked by spectral MIS (`chromatic`).
+    pub chromatic: Option<Color>,
 }
 
 /// The stretches of a ray inside a volume: one for a box, any number for a shape.
@@ -167,12 +190,12 @@ impl Iterator for Spans {
 
 impl Volume {
     pub fn new(bounds: BBox, density: Arc<dyn DensityField>) -> Volume {
-        Volume { bounds, density, shape: None }
+        Volume { bounds, density, shape: None, chromatic: None }
     }
 
     /// A medium filling the inside of a closed shape.
     pub fn in_shape(shape: Box<dyn Geometry + Sync + Send>, density: Arc<dyn DensityField>) -> Volume {
-        Volume { bounds: shape.bounds(), density, shape: Some(shape) }
+        Volume { bounds: shape.bounds(), density, shape: Some(shape), chromatic: None }
     }
 
     /// Where the ray from `ro` along the unit direction `d` is in the medium: (entry, exit)
@@ -223,6 +246,9 @@ impl Geometry for Volume {
     /// piecewise-constant majorants of Novák et al. 2018). Stretches with no majorant are
     /// skipped without sampling at all.
     fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
+        if let Some(k) = self.chromatic {
+            return self.intersects_chromatic(r, min, &k.as_unbounded().rgb);
+        }
         let scale = path_density_scale();
         if self.density.majorant() * scale <= 0. {
             return None;
@@ -314,11 +340,99 @@ impl Geometry for Volume {
         transmitted
     }
 
+    /// Per channel: for a chromatic medium, ratio tracking against the majorant of the channel
+    /// with the most extinction, which estimates every channel's transmittance at once.
+    fn transmittance_color(&self, r: &Ray, min: f64, max: f64) -> Color {
+        let k = match self.chromatic {
+            None => return Color::white() * self.transmittance(r, min, max),
+            Some(k) => k.as_unbounded().rgb,
+        };
+        let scale = path_density_scale();
+        let kmax = k.max();
+        if self.density.majorant() * scale * kmax <= 0. {
+            return Color::white();
+        }
+        let d = r.rd.normalize();
+        let control = self.density.minorant();
+        let mut transmitted = Vector3::new(1., 1., 1.);
+        for (entry, exit) in self.spans(&r.ro, &d) {
+            let stop = exit.min(max);
+            let mut t = entry.max(min);
+            if t >= stop {
+                continue;
+            }
+            transmitted = transmitted.component_mul(&k.map(|k| (-control * k * scale * (stop - t)).exp()));
+            while t < stop {
+                let (majorant, length) = self.density.majorant_from(&(r.ro + d * t), &d);
+                let end = (t + length.max(t.abs().max(1.) * 1e-12)).min(stop);
+                let residual = majorant - control;
+                if residual > 0. {
+                    let step = -(1. - rand()).ln() / (residual * kmax * scale);
+                    if t + step < end {
+                        t += step;
+                        let excess = (self.density.density(&(r.ro + d * t)) - control) / (residual * kmax);
+                        transmitted = transmitted.component_mul(&k.map(|k| 1. - excess * k));
+                        let largest = transmitted.max();
+                        if largest < RATIO_TRACKING_ROULETTE {
+                            if rand() * RATIO_TRACKING_ROULETTE >= largest {
+                                return Color::black();
+                            }
+                            transmitted *= RATIO_TRACKING_ROULETTE / largest;
+                        }
+                        continue;
+                    }
+                }
+                t = end;
+            }
+        }
+        Color { rgb: transmitted }
+    }
+
     fn bounds(&self) -> BBox {
         self.bounds
     }
 
     fn is_stochastic(&self) -> bool { true }
+}
+
+impl Volume {
+    /// Delta tracking with the path's hero channel through a medium of extinction `k` per unit
+    /// density per channel, recording each tentative collision's probability ratios for the
+    /// others (`chromatic`).
+    fn intersects_chromatic(&self, r: &Ray, min: f64, k: &Vector3<f64>) -> Option<RawIntersection> {
+        let scale = path_density_scale();
+        let kmax = k.max();
+        if self.density.majorant() * scale * kmax <= 0. {
+            return None;
+        }
+        let hero = chromatic::hero();
+        let d = r.rd.normalize();
+        for (entry, exit) in self.spans(&r.ro, &d) {
+            let mut t = entry.max(min);
+            while t < exit {
+                let (majorant, length) = self.density.majorant_from(&(r.ro + d * t), &d);
+                let end = (t + length.max(t.abs().max(1.) * 1e-12)).min(exit);
+                if majorant > 0. {
+                    let step = -(1. - rand()).ln() / (majorant * kmax * scale);
+                    if t + step < end {
+                        t += step;
+                        let point = r.ro + d * t;
+                        // Each channel's chance of the collision being real.
+                        let p = k * (self.density.density(&point) / (majorant * kmax));
+                        if rand() < p[hero] {
+                            chromatic::record(t, [p.x / p[hero], p.y / p[hero], p.z / p[hero]], true);
+                            return Some(RawIntersection { face: 0, part: 0, dist: t, point, normal: -d });
+                        }
+                        let n = 1. - p[hero];
+                        chromatic::record(t, [(1. - p.x) / n, (1. - p.y) / n, (1. - p.z) / n], false);
+                        continue;
+                    }
+                }
+                t = end;
+            }
+        }
+        None
+    }
 }
 
 /// Approximations that trade exactness for speed and noise in thick, bright media like
@@ -379,6 +493,9 @@ pub struct VolumeMaterial {
     pub field: Arc<dyn DensityField>,
     /// Light the medium emits (`emission`).
     pub emission: Option<emission::VolumeEmission>,
+    /// A chromatic medium's absorption and scattering coefficients per unit density (RGB), from
+    /// which its albedo at the sample's wavelengths follows; `albedo` holds their RGB ratio.
+    pub extinction: Option<(Color, Color)>,
 }
 
 /// Halos from ice crystals (see `material::ice_halos`): sun dogs, the 22° and 46° halos,
@@ -516,7 +633,12 @@ impl VolumeMaterial {
 
     /// The albedo at a vertex after `scatterings`, truncated and reduced as they apply.
     fn albedo_at(&self, scatterings: u32) -> Color {
-        let mut a = self.albedo.rgb;
+        self.adjusted_albedo(self.albedo, scatterings)
+    }
+
+    /// The albedo `a` after `scatterings`, truncated and reduced as they apply.
+    fn adjusted_albedo(&self, a: Color, scatterings: u32) -> Color {
+        let mut a = a.rgb;
         if let Some(d) = self.diffraction.as_ref().filter(|_| self.truncated(scatterings)) {
             a = a.map(|a| a * (1. - d.fraction) / (1. - d.fraction * a));
         }
@@ -594,7 +716,7 @@ impl VolumeMaterial {
                 Color::white() * PhaseFunction::HenyeyGreenstein { g: self.mean_cosine(saved.0) * oz.c.powi(i) }.eval(cos)
             };
             set_path(saved.0, saved.1 * oz.a.powi(i));
-            total = total + phase * (oz.b.powi(i) * sun.transmittance_from(point, s));
+            total = total + phase * sun.transmittance_from(point, s) * oz.b.powi(i);
         }
         set_path(saved.0, saved.1);
         total
@@ -612,7 +734,15 @@ impl MaterialModel for VolumeMaterial {
         // Light leaving this vertex, towards the lights and onwards, has scattered once more.
         set_path(scatterings + 1, self.density_scale(scatterings + 1));
         let (rd, weight) = phase.sample(&incoming);
-        let albedo = albedo.as_reflectance();
+        // At the sample's wavelengths: a chromatic medium's from its coefficients there.
+        let albedo = match &self.extinction {
+            None => albedo.as_reflectance(),
+            Some((sigma_a, sigma_s)) => {
+                let (a, s) = (sigma_a.as_unbounded().rgb, sigma_s.as_unbounded().rgb);
+                let single = s.zip_map(&(a + s), |s, t| if t > 0. { s / t } else { 0. });
+                self.adjusted_albedo(Color { rgb: single }, scatterings)
+            },
+        };
         let mut emit = self.direct_lighting(&incoming, &i.point, s, &phase, albedo, scatterings);
         if let Some(e) = &self.emission {
             // σ_a / σ_t of the emitted radiance (`emission`).
@@ -639,6 +769,9 @@ pub struct Scattering {
     pub halos: Option<Halos>,
     pub rainbow: Option<Arc<RainbowTable>>,
     pub emission: Option<emission::VolumeEmission>,
+    /// Absorption and scattering coefficients per unit density (RGB), for a chromatic medium;
+    /// `albedo` should then be their ratio.
+    pub extinction: Option<(Color, Color)>,
 }
 
 pub fn create_volume(bounds: BBox, density: Arc<dyn DensityField>, s: Scattering) -> SceneObject {
@@ -646,10 +779,23 @@ pub fn create_volume(bounds: BBox, density: Arc<dyn DensityField>, s: Scattering
 }
 
 /// A volume as an object, scattering as `s` says.
-pub fn create_medium(volume: Volume, s: Scattering) -> SceneObject {
+pub fn create_medium(mut volume: Volume, s: Scattering) -> SceneObject {
+    // A medium whose extinction is the same in every channel is grey: its density, scaled.
+    let (density, extinction) = match s.extinction {
+        Some((a, sc)) if !(a + sc).rgb.iter().all(|k| *k == (a + sc).rgb.x) => (volume.density.clone(), Some((a, sc))),
+        Some((a, sc)) => {
+            let k = (a + sc).rgb.x;
+            let scaled: Arc<dyn DensityField> = Arc::new(Scaled { field: volume.density.clone(), by: k });
+            (scaled, None)
+        },
+        None => (volume.density.clone(), None),
+    };
+    volume.density = density;
+    volume.chromatic = extinction.map(|(a, sc)| a + sc);
     let material = VolumeMaterial {
         albedo: s.albedo, phase: s.phase, approximation: s.approximation, diffraction: s.diffraction,
         halos: s.halos, rainbow: s.rainbow, field: volume.density.clone(), emission: s.emission,
+        extinction,
     };
     SceneObject {
         geometry: Box::new(volume),
@@ -791,6 +937,7 @@ mod tests {
             rainbow: None,
             field: Arc::new(ConstantDensity(1.)),
             emission: None,
+            extinction: None,
         };
         // First scattering in full: the extinction as given, diffraction in the phase.
         assert_eq!(m.density_scale(0), 1.);

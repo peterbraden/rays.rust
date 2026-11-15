@@ -72,6 +72,10 @@ impl Geometry for SceneObject {
         self.geometry.transmittance(r, min, max)
     }
 
+    fn transmittance_color(&self, r: &Ray, min: f64, max: f64) -> crate::color::Color {
+        self.geometry.transmittance_color(r, min, max)
+    }
+
     fn surface_area(&self) -> f64 {
         self.geometry.surface_area()
     }

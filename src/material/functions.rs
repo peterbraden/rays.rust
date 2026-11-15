@@ -133,7 +133,7 @@ pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) ->
         let light_vec = light.position - intersection.point;
         let shadow_ray = Ray {ro: intersection.point, rd: light_vec.normalize()};
         let transmitted = s.objects.transmittance(&shadow_ray, light_vec.norm(), f64::MIN_POSITIVE);
-        if transmitted > 0. {
+        if transmitted.rgb.max() > 0. {
             direct = direct + diffuse(albedo, intersection, &light_vec, light) * transmitted;
         }
     }
@@ -141,7 +141,7 @@ pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) ->
         let cos = sun.direction.dot(&intersection.normal);
         if cos > 0. {
             let transmitted = sun.transmittance_from(&intersection.point, s);
-            direct = direct + albedo * sun.irradiance_at(&intersection.point) * (cos / std::f64::consts::PI * transmitted);
+            direct = direct + albedo * sun.irradiance_at(&intersection.point) * transmitted * (cos / std::f64::consts::PI);
         }
     }
     if s.render.sample_lights {
@@ -210,7 +210,7 @@ pub fn sample_area_light_with(point: &Vector3<f64>, s: &Scene, response: impl Fn
     // Stop the shadow ray just short of the light, which would otherwise block itself.
     let shadow_ray = Ray { ro: *point, rd: w };
     let transmitted = s.objects.transmittance(&shadow_ray, d * (1. - 1e-6), f64::MIN_POSITIVE);
-    if transmitted == 0. {
+    if transmitted.rgb.max() <= 0. {
         return Color::black();
     }
     response * emitted * (transmitted / pdf)
@@ -252,7 +252,7 @@ pub fn direct_lighting_mis(bsdf: &dyn BSDF, point: &Vector3<f64>, wo: &Vector3<f
         }
         let shadow_ray = Ray { ro: *point, rd: wi };
         let transmitted = s.objects.transmittance(&shadow_ray, d2.sqrt(), f64::MIN_POSITIVE);
-        if transmitted > 0. {
+        if transmitted.rgb.max() > 0. {
             direct = direct + f * light.radiant_intensity() * (transmitted / d2);
         }
     }
@@ -285,10 +285,10 @@ fn sky_light_mis(env: &crate::environment::Environment, bsdf: &dyn BSDF, point: 
     }
     let ray = Ray { ro: *point, rd: wi };
     let transmitted = s.objects.transmittance(&ray, crate::light::SUN_SHADOW_DISTANCE, f64::MIN_POSITIVE);
-    if transmitted == 0. {
+    if transmitted.rgb.max() <= 0. {
         return Color::black();
     }
-    f * env.radiance(&ray, s) * (transmitted * power_heuristic(pdf, bsdf.pdf(wo, &wi)) / pdf)
+    f * env.radiance(&ray, s) * transmitted * (power_heuristic(pdf, bsdf.pdf(wo, &wi)) / pdf)
 }
 
 /// Below this, the BSDF's density towards the sun times the disc's solid angle, the BSDF can't
@@ -315,7 +315,7 @@ fn sun_light_mis(sun: &crate::light::Sun, bsdf: &dyn BSDF, point: &Vector3<f64>,
             return f;
         }
         let transmitted = sun.transmittance_from(point, s);
-        return if transmitted > 0. { f * sun.irradiance_at(point) * transmitted } else { Color::black() };
+        return if transmitted.rgb.max() > 0. { f * sun.irradiance_at(point) * transmitted } else { Color::black() };
     }
     let (wi, radiance, pdf) = sun.sample_disc_at(point, [rand(), rand()]);
     let f = bsdf.eval(wo, &wi);
@@ -323,7 +323,7 @@ fn sun_light_mis(sun: &crate::light::Sun, bsdf: &dyn BSDF, point: &Vector3<f64>,
         return f;
     }
     let transmitted = sun.transmittance_along(point, &wi, s);
-    if transmitted == 0. {
+    if transmitted.rgb.max() <= 0. {
         return Color::black();
     }
     f * radiance * (transmitted * power_heuristic(pdf, bsdf.pdf(wo, &wi)) / pdf)

@@ -851,7 +851,7 @@ impl MaterialModel for PhysicalOcean {
                 let glint = fresnel(h.dot(&v)) * self.ripple_density(&n, &h) / (4. * n.dot(&v));
                 if glint > 1e-6 {
                     let lit = sun.transmittance_from(&intersection.point, s);
-                    emit = emit + sun.irradiance_at(&intersection.point) * (glint * lit);
+                    emit = emit + sun.irradiance_at(&intersection.point) * lit * glint;
                 }
             }
         }

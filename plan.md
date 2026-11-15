@@ -759,7 +759,7 @@ start) by chapter:
 - 11, Volume scattering (done): grid media, chromatic media with spectral MIS, emissive media;
   media bounded by shapes.
 - 12, Lights (done): spot, goniometric, projection, textured area lights; light BVH.
-- 13-14, Light transport: layered BSDFs, subsurface scattering, light tracing.
+- 13-14, Light transport (done, but light tracing): layered BSDFs, subsurface scattering.
 - Online chapters: BDPT, MLT, SPPM. 15-16: the wavefront integrator (GPU; see workstream 3).
 
 ### Chapter 4: done
@@ -1039,6 +1039,43 @@ importance-sampled environment were there. Added, in three commits with tests:
   not knowing which triangle it sampled.
 - IES photometric files for goniometric lights (pbrt converts them to images offline).
 - `"light_sampler": "bvh"` is not the default, to keep existing renders.
+
+### Chapters 13-14: light transport (done)
+
+Path tracing with MIS and Russian roulette, volumetric path tracing (delta and ratio tracking)
+and, from chapter 11, spectral MIS were there. Added, in two commits with tests:
+
+1. Layered BSDFs (PBR 14.3, Guo et al. 2018), `coated_diffuse` and `coated_conductor`: pbrt's
+   dielectric, diffuse and conductor BxDFs in a local frame (reflection/transmission flags,
+   radiance vs importance), and `LayeredBxDF`'s stochastic `f`, `Sample_f` and `PDF`. One
+   change from pbrt: a walk vertex's connection through the exit interface is weighted against
+   next-event estimation's density for the same interior direction (`pdf(ω_i, -w)`, not
+   `pdf(-w, ω_i)`, which differs for refraction); with pbrt's, `f` integrated to 0.90 where
+   sampling delivers 0.854 under a rough coat. Checked: a smooth clear coat over white loses
+   nothing; light sampling agrees with BSDF sampling within 4-6%; pbrt's `PDF` estimate
+   integrates to up to two (it is only for MIS weights). pbrt's defaults lose light: 7% of a
+   white base's to the 10-bounce walk, more to the coat's unit extinction at 0.01 thickness.
+2. Random-walk subsurface scattering (`subsurface`; Chiang, Kutz and Burley 2016, Wrenninge et
+   al. 2017, Cycles), in place of pbrt-v3's tabulated BSSRDF: a Fresnel sheen, diffuse
+   transmission in, a walk bounded by the object's own geometry with the flight's channel
+   chosen by throughput and balance-heuristic weights, and a diffuse exit with next-event
+   estimation (so the sun lights the inside). Checked: without absorption it conserves energy
+   in every channel; Chiang's fits make a thick slab look its albedo within 0.1. Refracting in
+   and reflecting back by Fresnel at the exit (first tried) made albedo 0.3 look 0.16, since
+   the fit assumes an index-matched boundary.
+
+Demo `light-transport.json`.
+
+### Deferred from chapters 13-14
+
+- Light tracing (pbrt's `LightPathIntegrator`) and the online chapters' BDPT, MLT and SPPM:
+  they splat to arbitrary pixels, which needs a shared film and the camera's importance
+  function; caustics through glass (from point lights and the sun) stay out of reach.
+- Rough or coated boundaries on subsurface objects (the sheen is a mirror), and textured
+  subsurface albedo; walks are capped at 1024 steps, losing the rare deep ones in large, barely
+  absorbing objects.
+- Layered BSDFs that transmit (pbrt's thin layered dielectrics), textured coat roughness and
+  thickness; pbrt's `PDF` estimate is used as is.
 
 ### Reading (chapter 4)
 

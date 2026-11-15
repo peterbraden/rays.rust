@@ -21,7 +21,9 @@ Supports:
       - Dielelectric
       - Leaf (translucent: diffuse reflection and transmission under a glossy coat)
       - From PBRT: conductors with measured metals (gold, copper, silver, aluminium, brass),
-        anisotropic roughness, rough and thin glass, mixes, and hair
+        anisotropic roughness, rough and thin glass, mixes, and hair; layered coated diffuse
+        and coated conductor materials
+      - Subsurface scattering by random walk (marble, wax, jade, skin)
     - Spectral rendering (`"spectral": true`): dispersion, blackbody emitters
 
   - Objects
@@ -128,6 +130,18 @@ EWA over each pixel's footprint (PBRT's chapter 10), so distant and grazing text
 alias nor blur ([demo/scenes/textures.json](demo/scenes/textures.json)):
 
 ![Texture filtering](demo/texture-filtering.png)
+
+## Coats and subsurface scattering
+
+After PBRT's chapter 14: `coated_diffuse` and `coated_conductor` put a base under a clear or
+tinted dielectric coat (`"roughness"`, `"thickness"`, `"medium_albedo"`), evaluated as pbrt
+does by random walks between the layers; and `subsurface` scatters light through the inside of
+an object, given the colour it should look (`"albedo"`) and how far light travels in it
+(`"radius"`, per channel), after Chiang, Kutz and Burley's fits. Varnished bricks, a tinted
+coat, lacquered copper, jade, skin, marble and a wax candle
+([demo/scenes/light-transport.json](demo/scenes/light-transport.json)):
+
+![Coats and subsurface scattering](demo/scenes/light-transport.png)
 
 ## Lights
 

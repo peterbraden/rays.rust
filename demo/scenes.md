@@ -59,6 +59,11 @@ Image textures and a normal map on a brick wall and sphere, paint worn to copper
 and a checkerboard filtered into the distance.
 ![Textures](./scenes/textures.png)
 
+## Coats and subsurface scattering
+Varnished bricks, a tinted coat and lacquered copper (pbrt's layered BSDFs), and jade, skin,
+marble and a wax candle (random-walk subsurface scattering), backlit by a low sun.
+![Light transport](./scenes/light-transport.png)
+
 ## Lights
 A spot light on a red ball, a projector throwing a rose window on the wall, a goniometric lamp
 with a shade, a stained-glass window as a textured area light, and strings of fairy lights,

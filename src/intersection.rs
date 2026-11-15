@@ -52,6 +52,11 @@ impl<'a> Intersection<'a> {
         if r.rd.dot(&self.normal) > 0. { -self.normal } else { self.normal }
     }
 
+    /// The texture coordinates of the point hit (`Geometry::uv`), if its shape has them.
+    pub fn uv(&self) -> Option<crate::na::Vector2<f64>> {
+        self.object.geometry.uv(&self.point, self.face)
+    }
+
     /// This intersection with its normal facing the incoming ray (see `facing_normal`).
     pub fn facing(&self, r: &Ray) -> Intersection<'a> {
         Intersection { normal: self.facing_normal(r), ..*self }

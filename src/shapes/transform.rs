@@ -157,6 +157,10 @@ impl Geometry for Transform {
         self.item.inside(&self.inverse.transform_point(&Point3::from(*p)).coords)
     }
 
+    fn uv(&self, p: &Vector3<f64>, face: u32) -> Option<crate::na::Vector2<f64>> {
+        self.item.uv(&self.inverse.transform_point(&Point3::from(*p)).coords, face)
+    }
+
     fn is_stochastic(&self) -> bool {
         self.item.is_stochastic()
     }

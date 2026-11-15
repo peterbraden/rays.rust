@@ -1,7 +1,7 @@
 use crate::ray::Ray;
 use crate::intersection::RawIntersection;
 use crate::shapes::bbox::BBox;
-use crate::na::{Vector3};
+use crate::na::{Vector2, Vector3};
 use crate::na::geometry::Affine3;
 
 
@@ -124,6 +124,13 @@ pub trait Geometry: Sync{
     // A point uniformly distributed over the surface by area, and the surface normal there,
     // from three uniform random numbers in [0, 1). None for shapes that can't be sampled.
     fn sample_surface(&self, _u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> { None }
+
+    /// Texture coordinates (u, v) of the point `p` on the surface, hit as part `face` (see
+    /// `RawIntersection::face`): the surface's own parameterisation, as pbrt's shapes give
+    /// theirs (Pharr, Jakob and Humphreys, "Physically Based Rendering", 4th ed., chapter 6),
+    /// for textures (ch. 10). Computed on demand, when a material asks, rather than for every
+    /// hit. None for shapes without one.
+    fn uv(&self, _p: &Vector3<f64>, _face: u32) -> Option<Vector2<f64>> { None }
 }
 
 
@@ -141,6 +148,7 @@ impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
     fn inside(&self, p: &Vector3<f64>) -> bool { (**self).inside(p) }
     fn surface_area(&self) -> f64 { (**self).surface_area() }
     fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> { (**self).sample_surface(u) }
+    fn uv(&self, p: &Vector3<f64>, face: u32) -> Option<Vector2<f64>> { (**self).uv(p, face) }
     fn is_stochastic(&self) -> bool { (**self).is_stochastic() }
     fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 { (**self).transmittance(r, min, max) }
 }
@@ -183,6 +191,10 @@ impl<T: Geometry> Geometry for Tagged<T> {
 
     fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> {
         self.item.sample_surface(u)
+    }
+
+    fn uv(&self, p: &Vector3<f64>, _face: u32) -> Option<Vector2<f64>> {
+        self.item.uv(p, 0)
     }
 }
 

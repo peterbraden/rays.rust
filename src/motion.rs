@@ -191,6 +191,10 @@ impl Geometry for AnimatedTransform {
         self.now().inside(p)
     }
 
+    fn uv(&self, p: &Vector3<f64>, face: u32) -> Option<crate::na::Vector2<f64>> {
+        self.now().uv(p, face)
+    }
+
     fn bounds(&self) -> BBox {
         self.bounds
     }

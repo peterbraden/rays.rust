@@ -55,6 +55,19 @@ pub fn disc_bounds(c: Vector3<f64>, w: Vector3<f64>, r: f64) -> BBox {
 }
 
 impl Geometry for Cone {
+    /// Round the axis and along it: u = φ / 2π, v = height / length (PBR section 6.3); on the
+    /// end caps, v is 0 or 1.
+    fn uv(&self, p: &Vector3<f64>, _face: u32) -> Option<crate::na::Vector2<f64>> {
+        let d = p - self.base;
+        let s = d.dot(&self.axis);
+        let radial = d - self.axis * s;
+        let a = if self.axis.x.abs() < 0.9 { Vector3::x() } else { Vector3::y() };
+        let e1 = self.axis.cross(&a).normalize();
+        let e2 = self.axis.cross(&e1);
+        let phi = radial.dot(&e2).atan2(radial.dot(&e1)).rem_euclid(2. * std::f64::consts::PI);
+        Some(crate::na::Vector2::new(phi / (2. * std::f64::consts::PI), (s / self.height).clamp(0., 1.)))
+    }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         self.crossings(r).into_iter().next()
     }

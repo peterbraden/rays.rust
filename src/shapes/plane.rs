@@ -33,6 +33,11 @@ impl Geometry for Plane {
         None
     }
 
+    /// The ground's own coordinates: (x, z).
+    fn uv(&self, p: &Vector3<f64>, _face: u32) -> Option<crate::na::Vector2<f64>> {
+        Some(crate::na::Vector2::new(p.x, p.z))
+    }
+
     fn bounds(&self) -> BBox {
         BBox::new(
             Vector3::new(f64::MIN, self.y, f64::MIN),

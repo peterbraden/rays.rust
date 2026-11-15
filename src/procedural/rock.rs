@@ -157,7 +157,7 @@ impl RockShape {
             let h = self.roughness * radius * (lumps + 0.5 * ridges);
             q + q.normalize() * h
         }).collect();
-        IndexedMesh { positions, normals: vec![], triangles }
+        IndexedMesh { positions, normals: vec![], triangles, texcoords: vec![] }
     }
 }
 
@@ -353,7 +353,7 @@ impl Bedrock {
                 triangles.push([a, d, c]);
             }
         }
-        IndexedMesh { positions, normals: vec![], triangles }
+        IndexedMesh { positions, normals: vec![], triangles, texcoords: vec![] }
     }
 }
 

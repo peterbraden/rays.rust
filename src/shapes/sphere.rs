@@ -30,6 +30,14 @@ impl Geometry for Sphere {
         Some((self.center + n * self.radius, n))
     }
 
+    /// Longitude and latitude, y up (PBR section 6.2, with pbrt's z up turned to y): u = φ / 2π
+    /// round from +x towards +z, v from 0 at the bottom to 1 at the top.
+    fn uv(&self, p: &Vector3<f64>, _face: u32) -> Option<crate::na::Vector2<f64>> {
+        let d = (p - self.center) / self.radius;
+        let phi = d.z.atan2(d.x).rem_euclid(2. * std::f64::consts::PI);
+        Some(crate::na::Vector2::new(phi / (2. * std::f64::consts::PI), 1. - d.y.clamp(-1., 1.).acos() / std::f64::consts::PI))
+    }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         // Solve with a unit direction so that `dist` is a world-space distance even when the
         // caller's ray direction is not normalised.

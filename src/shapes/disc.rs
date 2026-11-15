@@ -54,6 +54,16 @@ impl Geometry for Disc {
         disc_bounds(self.center, self.normal, self.radius)
     }
 
+    /// Polar: u = φ / 2π round the centre, v from 1 at the hole to 0 at the rim (PBR section
+    /// 6.4).
+    fn uv(&self, p: &Vector3<f64>, _face: u32) -> Option<crate::na::Vector2<f64>> {
+        let (a, b) = self.basis();
+        let d = p - self.center;
+        let phi = d.dot(&b).atan2(d.dot(&a)).rem_euclid(2. * std::f64::consts::PI);
+        let r = d.norm();
+        Some(crate::na::Vector2::new(phi / (2. * std::f64::consts::PI), (self.radius - r) / (self.radius - self.hole_radius)))
+    }
+
     fn surface_area(&self) -> f64 {
         std::f64::consts::PI * (self.radius * self.radius - self.hole_radius * self.hole_radius)
     }

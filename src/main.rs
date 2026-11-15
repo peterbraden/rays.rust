@@ -38,6 +38,7 @@ mod material {
     pub mod lambertian;
     pub mod diffuse_light;
     pub mod normal;
+    pub mod uv;
     pub mod functions;
     pub mod legacy;
     pub mod plastic;

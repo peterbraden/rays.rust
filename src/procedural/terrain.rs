@@ -137,7 +137,7 @@ impl Terrain {
                 triangles.push([k(i + 1, j), k(i, j + 1), k(i + 1, j + 1)]);
             }
         }
-        IndexedMesh { positions: points, normals, triangles }
+        IndexedMesh { positions: points, normals, triangles, texcoords: vec![] }
     }
 }
 

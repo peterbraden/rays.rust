@@ -1966,6 +1966,24 @@ impl SceneFile {
             return Some(Box::new(NormalShade {}));
         }
 
+        // {"type": "uv"}: the texture coordinates as colour; {"type": "checker", "colors":
+        // [colour, colour], "checks": n or [nu, nv]}: a diffuse checkerboard in texture space.
+        if t == "uv" {
+            return Some(Box::new(crate::material::uv::UvShade {}));
+        }
+        if t == "checker" {
+            let colors = match o["colors"].as_array() {
+                Some(c) if c.len() == 2 => [SceneFile::parse_color(&c[0]), SceneFile::parse_color(&c[1])],
+                None => [Color::new(0.8, 0.8, 0.8), Color::new(0.1, 0.1, 0.1)],
+                _ => panic!("A checker's \"colors\" are two colours, got {}", o["colors"]),
+            };
+            let checks = match &o["checks"] {
+                Value::Array(_) => { let v = SceneFile::parse_vec2(&o["checks"]); crate::na::Vector2::new(v.x, v.y) },
+                v => crate::na::Vector2::repeat(SceneFile::parse_number(v, 8.)),
+            };
+            return Some(Box::new(crate::material::uv::UvChecker { colors, checks }));
+        }
+
         if t == "rock" {
             return Some(Box::new(SceneFile::parse_rock(o)));
         }

@@ -484,7 +484,9 @@ impl SceneFile {
     /// The output's `"flare"` (`flare`): `true`, or `{"lens", "f_number", "blades",
     /// "blade_rotation", "threshold": 20, "sources": 8, "ghosts": 1, "starburst": 1}`. With a
     /// realistic camera, its lens, f-number, blades, focus and film are the defaults; otherwise
-    /// the double Gauss wide open, focused far off, on a film matching the camera's view.
+    /// the double Gauss (or for views wider than 20° up from the centre, the wide-angle lens)
+    /// wide open, focused far off, on a film matching the camera's view. A light outside the
+    /// lens's field makes no ghosts.
     /// `ghosts` and `starburst` scale each (0 or false for none).
     pub fn parse_flare(output: &Value, camera: &Value, width: usize, height: usize) -> Option<Arc<crate::flare::Flare>> {
         let f = match output.get("flare") {
@@ -495,7 +497,14 @@ impl SceneFile {
         let realistic = camera["type"].as_str() == Some("realistic");
         let pick = |k: &str| if !f[k].is_null() { f[k].clone() } else if realistic { camera[k].clone() } else { Value::Null };
         let blade_source = serde_json::json!({ "blades": pick("blades"), "blade_rotation": pick("blade_rotation") });
-        let lens = SceneFile::parse_lens(pick("lens").as_str().unwrap_or("dgauss.50mm"), &blade_source);
+        // A lens that covers the view: the double Gauss reaches about 22° from its axis, so wider
+        // views (more than 20° up from the centre) take the wide-angle lens.
+        let default_lens = if !realistic && camera["angle"].as_f64().is_some_and(|a| a.tan() / 2. > 20f64.to_radians().tan()) {
+            "wide.22mm"
+        } else {
+            "dgauss.50mm"
+        };
+        let lens = SceneFile::parse_lens(pick("lens").as_str().unwrap_or(default_lens), &blade_source);
         let focal = lens.focal_length().unwrap_or_else(|| panic!("The flare's lens doesn't form an image"));
         let lens = match pick("f_number").as_f64() { Some(n) => lens.with_stop(focal / n), None => lens };
         let focus = if realistic {

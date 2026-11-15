@@ -231,19 +231,45 @@ impl Flare {
         Some((Vector2::new(o.x + d.x * t, o.y + d.y * t), weight))
     }
 
-    /// The grid's rays for a light from camera-space `direction`: for each vertex of a
-    /// (grid + 1)² lattice over the front element, where it lands and with what weight.
-    fn lattice(&self, z: &[f64], direction: &Vector3<f64>, ghost: Option<(usize, usize)>, lambda: f64) -> Vec<Option<(Vector2<f64>, f64)>> {
-        let g = self.grid;
-        let r = self.lens.interfaces[0].aperture;
+    /// The rays for a light from camera-space `direction` through a lattice of (g + 1)²
+    /// points on the front element's plane, spanning [lo, hi]: for each, where it lands on the
+    /// film and with what weight.
+    #[allow(clippy::too_many_arguments)]
+    fn lattice_in(&self, z: &[f64], direction: &Vector3<f64>, ghost: Option<(usize, usize)>, lambda: f64,
+                  lo: Vector2<f64>, hi: Vector2<f64>, g: usize) -> Vec<Option<(Vector2<f64>, f64)>> {
         let front = self.lens.front_z();
         let d = -direction.normalize();
         (0..(g + 1) * (g + 1)).map(|k| {
             let (i, j) = (k % (g + 1), k / (g + 1));
-            let p = Vector3::new(-r + 2. * r * i as f64 / g as f64, -r + 2. * r * j as f64 / g as f64, front);
+            let p = Vector3::new(lo.x + (hi.x - lo.x) * i as f64 / g as f64, lo.y + (hi.y - lo.y) * j as f64 / g as f64, front);
             // Start a little in front of the lens, back along the ray.
             self.trace(z, &(p - d * 0.01), &d, ghost, lambda)
         }).collect()
+    }
+
+    /// The rays along a path through a lattice of `grid` cells a side, laid over just the part of
+    /// the front element whose rays get through: found by a coarse lattice over the whole
+    /// element first, since at small apertures only a sliver of it passes the stop. The lattice,
+    /// its corners and its size; None if nothing gets through.
+    #[allow(clippy::type_complexity)]
+    fn lattice(&self, z: &[f64], direction: &Vector3<f64>, ghost: Option<(usize, usize)>, lambda: f64)
+               -> Option<(Vec<Option<(Vector2<f64>, f64)>>, Vector2<f64>, Vector2<f64>)> {
+        const COARSE: usize = 48;
+        let r = self.lens.interfaces[0].aperture;
+        let (lo, hi) = (Vector2::repeat(-r), Vector2::repeat(r));
+        let coarse = self.lattice_in(z, direction, ghost, lambda, lo, hi, COARSE);
+        let step = 2. * r / COARSE as f64;
+        let mut bounds: Option<(Vector2<f64>, Vector2<f64>)> = None;
+        for (k, v) in coarse.iter().enumerate() {
+            if v.is_some() {
+                let p = Vector2::new(-r + step * (k % (COARSE + 1)) as f64, -r + step * (k / (COARSE + 1)) as f64);
+                bounds = Some(match bounds { None => (p, p), Some((a, b)) => (a.inf(&p), b.sup(&p)) });
+            }
+        }
+        // A path that only a few coarse points miss entirely still has a sliver: widen by a cell.
+        let (a, b) = bounds?;
+        let (a, b) = ((a - Vector2::repeat(step)).sup(&lo), (b + Vector2::repeat(step)).inf(&hi));
+        Some((self.lattice_in(z, direction, ghost, lambda, a, b, self.grid), a, b))
     }
 
     /// Film (camera space) to image position in pixels, (column, row from the top): the image
@@ -307,17 +333,25 @@ impl Flare {
         let cell_ok = |lat: &[Option<(Vector2<f64>, f64)>], i: usize, j: usize| {
             [(i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)].iter().all(|(a, b)| lat[b * (g + 1) + a].is_some())
         };
-        // The light's energy per cell that reaches the film directly.
-        let direct = self.lattice(&z, &source.direction, None, WAVELENGTHS[1]);
-        let reaching = (0..g * g).filter(|k| cell_ok(&direct, k % g, k / g)).count();
-        if reaching == 0 {
+        let cell_area = |lo: &Vector2<f64>, hi: &Vector2<f64>| (hi.x - lo.x) * (hi.y - lo.y) / (g * g) as f64;
+        // The area of the front element through which the light reaches the film directly: its
+        // energy per unit of that area.
+        let (direct, dlo, dhi) = match self.lattice(&z, &source.direction, None, WAVELENGTHS[1]) {
+            Some(l) => l,
+            None => return vec![Color::black(); w * h],
+        };
+        let reaching = (0..g * g).filter(|k| cell_ok(&direct, k % g, k / g)).count() as f64 * cell_area(&dlo, &dhi);
+        if reaching <= 0. {
             return vec![Color::black(); w * h];
         }
         let jobs: Vec<((usize, usize), usize)> = self.ghost_pairs().into_iter().flat_map(|p| (0..3).map(move |c| (p, c))).collect();
         jobs.par_iter().fold(|| vec![Color::black(); w * h], |mut out, &(pair, c)| {
             let lambda = WAVELENGTHS[c];
-            let lat = self.lattice(&z, &source.direction, Some(pair), lambda);
-            let per_cell = source.energy.rgb[c] * self.ghosts / reaching as f64;
+            let (lat, lo, hi) = match self.lattice(&z, &source.direction, Some(pair), lambda) {
+                Some(l) => l,
+                None => return out,
+            };
+            let per_cell = source.energy.rgb[c] * self.ghosts * cell_area(&lo, &hi) / reaching;
             for j in 0..g {
                 for i in 0..g {
                     if !cell_ok(&lat, i, j) {
@@ -559,7 +593,7 @@ mod tests {
         let z = f.positions();
         let a = 5f64.to_radians();
         let dir = Vector3::new(a.sin(), 0., a.cos());
-        let lat = f.lattice(&z, &dir, None, 550.);
+        let (lat, _, _) = f.lattice(&z, &dir, None, 550.).unwrap();
         let hits: Vec<Vector2<f64>> = lat.iter().flatten().map(|(p, _)| *p).collect();
         assert!(hits.len() > 100);
         let mean = hits.iter().sum::<Vector2<f64>>() / hits.len() as f64;

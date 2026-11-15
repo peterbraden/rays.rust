@@ -8,6 +8,7 @@
   "materials": {
     "GROUND": { "type": "lambertian", "albedo": [0.06, 0.09, 0.15] }
   },
+  "output": { "flare": { "blades": 6, "blade_rotation": 20, "f_number": 11, "sources": 2, "ghosts": 4, "starburst": 2 } },
   "camera": {
     "location": [0, 35000, 0],
     "lookat": [0, 25000, 1000000],

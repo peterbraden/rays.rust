@@ -232,6 +232,8 @@ pub struct Look {
     dry_response: f64,
     /// Scale for the random variation from part to part.
     color_variation: f64,
+    /// Whether it's a green leaf, whose chlorophyll yellows the light through it.
+    leafy: bool,
 }
 
 impl Look {
@@ -246,7 +248,7 @@ impl Look {
         Look {
             segments, tapers,
             base_color: colors[0], tip_color: colors[1], dry_color: colors[2],
-            band: None, translucency, sheen, dry_response, color_variation: 1.,
+            band: None, translucency, sheen, dry_response, color_variation: 1., leafy: true,
         }
     }
 }
@@ -798,6 +800,7 @@ impl Species {
                 let colors = [color(&hv, "color"), color(&hv, "tip_color"), color(&hv, "dry_color")];
                 let mut spikelet = Look::new(Outline::Petal(0.45), if h.panicle { 3 } else { 2 }, colors, 0.35, 0.2, 1.);
                 spikelet.color_variation = 1.5;
+                spikelet.leafy = false;
                 vec![blade, stem, spikelet]
             },
             Kind::Flower(_) => {
@@ -805,12 +808,13 @@ impl Species {
                 let (f, l) = (&d["flower"], &d["leaves"]);
                 let leaf = Look::new(Outline::Petal(number(l, "shape").clamp(0.05, 0.95)), 4,
                     [color(l, "color"), color(l, "tip_color"), self.dry_color], self.translucency, self.sheen, 0.7);
-                let petal = Look::new(Outline::Petal(number(f, "petal_shape").clamp(0.05, 0.95)), 3,
+                let mut petal = Look::new(Outline::Petal(number(f, "petal_shape").clamp(0.05, 0.95)), 3,
                     [color(f, "petal_color"), color(f, "petal_tip_color"), withered], 0.4, number(f, "sheen").clamp(0., 1.), 0.25);
                 let centre = color(f, "centre_color");
-                let disc = Look::new(Outline::Wedge, 1, [centre, centre, withered], 0.1, 0.1, 0.2);
-                let pappus = Look::new(Outline::Plume, 3,
+                let mut disc = Look::new(Outline::Wedge, 1, [centre, centre, withered], 0.1, 0.1, 0.2);
+                let mut pappus = Look::new(Outline::Plume, 3,
                     [Color::new(0.4, 0.35, 0.28), color(f, "clock_color"), Color::white()], 0.6, 0., 0.);
+                (petal.leafy, disc.leafy, pappus.leafy) = (false, false, false);
                 vec![stem, leaf, petal, disc, pappus]
             },
             Kind::Clover(_) => {
@@ -819,10 +823,11 @@ impl Species {
                 let mut leaflet = Look::new(Outline::Petal(number(l, "shape").clamp(0.05, 0.95)), 4,
                     [color(l, "color"), color(l, "tip_color"), self.dry_color], self.translucency, self.sheen, 0.6);
                 leaflet.band = Some(color(l, "band_color"));
-                let floret = Look::new(Outline::Petal(0.7), 2,
+                let mut floret = Look::new(Outline::Petal(0.7), 2,
                     [color(f, "color"), color(f, "tip_color"), withered], 0.35, 0.1, 0.3);
                 let old = color(f, "old_color");
-                let wilted = Look::new(Outline::Petal(0.7), 2, [old, old, old], 0.2, 0.05, 0.);
+                let mut wilted = Look::new(Outline::Petal(0.7), 2, [old, old, old], 0.2, 0.05, 0.);
+                (floret.leafy, wilted.leafy) = (false, false);
                 vec![stem, leaflet, floret, wilted]
             },
         }
@@ -1649,9 +1654,6 @@ impl GrassMedium {
         let mut materials = Vec::with_capacity(field.looks.len() * DRY_LEVELS * JITTER_LEVELS * HEIGHT_LEVELS);
         let ice = Color::new(0.75, 0.8, 0.85);
         for sp in &field.looks {
-            // Light through green leaves is yellowed by their chlorophyll; through petals and
-            // seeds it isn't.
-            let leafy = sp.base_color.rgb.y > sp.base_color.rgb.x && sp.base_color.rgb.y > sp.base_color.rgb.z;
             for level in 0 .. DRY_LEVELS {
                 let dry = level as f64 / (DRY_LEVELS - 1) as f64 * sp.dry_response;
                 for j in 0 .. JITTER_LEVELS {
@@ -1671,7 +1673,7 @@ impl GrassMedium {
                         let translucency = sp.translucency * (1. - 0.6 * dry) * (1. - 0.7 * conditions.frost * s);
                         let reflect = c * (1. - 0.35 * translucency);
                         // Light through a leaf is more saturated, and yellower.
-                        let transmit = if leafy { Color::new(c.rgb.x * 1.1, c.rgb.y * 1.15, c.rgb.z * 0.6) } else { c } * translucency;
+                        let transmit = if sp.leafy { Color::new(c.rgb.x * 1.1, c.rgb.y * 1.15, c.rgb.z * 0.6) } else { c } * translucency;
                         materials.push(GrassMaterial {
                             reflect,
                             transmit,

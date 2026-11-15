@@ -38,6 +38,7 @@ mod material {
     pub mod conductor;
     pub mod rough_dielectric;
     pub mod layered;
+    pub mod subsurface;
     pub mod mix;
     pub mod hair;
     pub mod ambient;

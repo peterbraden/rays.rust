@@ -2113,6 +2113,27 @@ impl SceneFile {
             }));
         }
 
+        // {"type": "subsurface", "albedo": colour, "radius": colour or number (how far light
+        // travels, scene units), or "sigma_a" and "sigma_s"; "g": 0, "refractive_index": 1.4}:
+        // random-walk subsurface scattering (`material::subsurface`).
+        if t == "subsurface" {
+            use crate::material::subsurface::{Coefficients, Subsurface};
+            let coefficients = if o.get("sigma_a").is_some() || o.get("sigma_s").is_some() {
+                Coefficients::Sigma { sigma_a: SceneFile::parse_color_def(o, "sigma_a", Color::black()),
+                                      sigma_s: SceneFile::parse_color_def(o, "sigma_s", Color::black()) }
+            } else {
+                let radius = match &o["radius"] {
+                    Value::Number(n) => Color::white() * n.as_f64().unwrap(),
+                    Value::Null => Color::new(1., 0.5, 0.25),
+                    v => SceneFile::parse_color(v),
+                };
+                Coefficients::Albedo { albedo: SceneFile::parse_color_def(o, "albedo", Color::new(0.8, 0.8, 0.8)), radius }
+            };
+            let g = SceneFile::parse_number(&o["g"], 0.);
+            assert!(g > -1. && g < 1., "g must be between -1 and 1, got {}", g);
+            return Some(Box::new(Subsurface { coefficients, g, refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.4) }));
+        }
+
         if t == "lambertian" {
             let d:Lambertian = Lambertian {
                 albedo: SceneFile::parse_color_texture(&o["albedo"]),

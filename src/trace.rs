@@ -399,6 +399,50 @@ mod tests {
         assert!((mean - 1.).abs() < 0.03, "{}", mean);
     }
 
+    /// A big subsurface sphere under an even white sky, seen from above.
+    fn subsurface_furnace(material: &str) -> Scene {
+        subsurface_furnace_sized(material, 20.)
+    }
+
+    fn subsurface_furnace_sized(material: &str, radius: f64) -> Scene {
+        SceneFile::from_string(format!(r#"{{
+            "background": [1, 1, 1], "max_depth": 50, "path_termination": "russian_roulette",
+            "camera": {{ "location": [0, 30, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "materials": {{ "S": {} }},
+            "objects": [ {{ "type": "sphere", "location": [0, 0, 0], "radius": {}, "material": "S" }} ]
+        }}"#, material, radius))
+    }
+
+    #[test]
+    fn test_subsurface_conserves_energy_without_absorption() {
+        // Light that only scatters inside always comes out again: as bright as the sky in every
+        // channel, however far each travels.
+        // (A small sphere: in a large one, the rare walks that wander deep run past the step
+        // limit.)
+        let s = subsurface_furnace_sized(r#"{ "type": "subsurface", "sigma_a": [0, 0, 0], "sigma_s": [2, 5, 12], "g": 0.3 }"#, 1.);
+        crate::geometry::seed_rand(8, 1);
+        let r = Ray { ro: Vector3::new(0., 30., 0.), rd: Vector3::new(0.1, -1., 0.).normalize() };
+        let n = 6000;
+        let mean = (0..n).map(|_| trace(&r, 0, &s).1.rgb).sum::<Vector3<f64>>() / n as f64;
+        for c in 0..3 {
+            assert!((mean[c] - 1.).abs() < 0.03, "{}: {}", c, mean[c]);
+        }
+    }
+
+    #[test]
+    fn test_subsurface_looks_its_albedo() {
+        // Chiang et al.'s fit makes a thick slab look about the colour asked for (plus the
+        // sheen of the surface's reflection, a few percent of the sky).
+        for a in [0.3, 0.8] {
+            let s = subsurface_furnace(&format!(r#"{{ "type": "subsurface", "albedo": [{}, {}, {}], "radius": 0.2 }}"#, a, a, a));
+            crate::geometry::seed_rand(9, 1);
+            let r = Ray { ro: Vector3::new(0., 30., 0.), rd: Vector3::new(0., -1., 0.) };
+            let n = 6000;
+            let mean = (0..n).map(|_| trace(&r, 0, &s).1.rgb.x).sum::<f64>() / n as f64;
+            assert!((mean - a).abs() < 0.1, "albedo {}: looks {}", a, mean);
+        }
+    }
+
     /// Mean and standard deviation of n samples of the radiance from the floor below the light.
     fn floor_radiance(s: &Scene, n: usize) -> (f64, f64) {
         let r = Ray { ro: Vector3::new(0., 0.5, 0.), rd: Vector3::new(0., -1., 0.) };

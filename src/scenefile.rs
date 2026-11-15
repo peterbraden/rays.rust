@@ -1967,6 +1967,27 @@ impl SceneFile {
         // {"type": "rough_dielectric", "refractive_index": .., "roughness": r, "attenuate":
         // colour}: frosted glass; {"type": "thin_dielectric", "refractive_index": ..}: a pane of
         // no thickness (`material::rough_dielectric`).
+        // {"type": "hair", "eumelanin": 1.3, "pheomelanin": 0 (or "color" or "sigma_a"),
+        // "eta": 1.55, "beta_m": 0.3, "beta_n": 0.3, "alpha": 2}: pbrt's hair BSDF
+        // (`material::hair`), for cylinder curves.
+        if t == "hair" {
+            use crate::material::hair::{Hair, Pigment};
+            let pigment = if !o["sigma_a"].is_null() {
+                Pigment::SigmaA(SceneFile::parse_color(&o["sigma_a"]))
+            } else if !o["color"].is_null() {
+                Pigment::Color(SceneFile::parse_color(&o["color"]))
+            } else {
+                Pigment::Melanin { eumelanin: SceneFile::parse_number(&o["eumelanin"], 1.3), pheomelanin: SceneFile::parse_number(&o["pheomelanin"], 0.) }
+            };
+            return Some(Box::new(Hair {
+                pigment,
+                eta: SceneFile::parse_number(&o["eta"], 1.55),
+                beta_m: SceneFile::parse_number(&o["beta_m"], 0.3).clamp(0.01, 1.),
+                beta_n: SceneFile::parse_number(&o["beta_n"], 0.3).clamp(0.01, 1.),
+                alpha: SceneFile::parse_number(&o["alpha"], 2.),
+            }));
+        }
+
         if t == "rough_dielectric" {
             return Some(Box::new(crate::material::rough_dielectric::RoughDielectric {
                 refractive_index: SceneFile::parse_refractive_index(&o["refractive_index"]).or_default(1.5),

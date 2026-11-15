@@ -137,6 +137,10 @@ pub trait Geometry: Sync{
     /// closed form. See `Intersection::spawn_offset`.
     fn tolerance(&self) -> f64 { 0. }
 
+    /// The direction the surface runs at `p` (hit as part `face`), for materials that depend on
+    /// it: a curve's direction, for hair. None for shapes without one.
+    fn tangent(&self, _p: &Vector3<f64>, _face: u32) -> Option<Vector3<f64>> { None }
+
     /// A point on the surface for light sampling from `from`, its normal, and the density with
     /// which it was chosen per unit solid angle at `from` (PBR section 6.1.4, `Shape::Sample`
     /// with a reference point). By default a point uniform by area (`sample_surface`), whose
@@ -181,6 +185,7 @@ impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
     fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> { (**self).sample_surface(u) }
     fn uv(&self, p: &Vector3<f64>, face: u32) -> Option<Vector2<f64>> { (**self).uv(p, face) }
     fn tolerance(&self) -> f64 { (**self).tolerance() }
+    fn tangent(&self, p: &Vector3<f64>, face: u32) -> Option<Vector3<f64>> { (**self).tangent(p, face) }
     fn sample_from(&self, from: &Vector3<f64>, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>, f64)> { (**self).sample_from(from, u) }
     fn pdf_from(&self, from: &Vector3<f64>, y: &Vector3<f64>, n: &Vector3<f64>) -> f64 { (**self).pdf_from(from, y, n) }
     fn is_stochastic(&self) -> bool { (**self).is_stochastic() }
@@ -233,6 +238,10 @@ impl<T: Geometry> Geometry for Tagged<T> {
 
     fn tolerance(&self) -> f64 {
         self.item.tolerance()
+    }
+
+    fn tangent(&self, p: &Vector3<f64>, _face: u32) -> Option<Vector3<f64>> {
+        self.item.tangent(p, 0)
     }
 
     fn sample_from(&self, from: &Vector3<f64>, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>, f64)> {

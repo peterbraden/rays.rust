@@ -288,6 +288,13 @@ impl Geometry for Curves {
         self.segments.len() as u64
     }
 
+    /// The curve's direction at the point (by the same projection as `uv`).
+    fn tangent(&self, p: &Vector3<f64>, face: u32) -> Option<Vector3<f64>> {
+        let u = self.uv(p, face)?.x;
+        let c = self.curves.get(face as usize)?;
+        evaluate(&c.points, u).1.try_normalize(1e-300)
+    }
+
     /// u along the curve, found by projecting the point onto it; v, without the ray, is the
     /// middle of the width.
     fn uv(&self, p: &Vector3<f64>, face: u32) -> Option<Vector2<f64>> {

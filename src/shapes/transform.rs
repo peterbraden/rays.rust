@@ -161,6 +161,11 @@ impl Geometry for Transform {
         self.item.uv(&self.inverse.transform_point(&Point3::from(*p)).coords, face)
     }
 
+    fn tangent(&self, p: &Vector3<f64>, face: u32) -> Option<Vector3<f64>> {
+        let t = self.item.tangent(&self.inverse.transform_point(&Point3::from(*p)).coords, face)?;
+        Some(self.transform.transform_vector(&t).normalize())
+    }
+
     /// The item's tolerance, stretched by at most the transform's largest scale.
     fn tolerance(&self) -> f64 {
         let t = self.item.tolerance();

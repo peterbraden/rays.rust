@@ -37,6 +37,7 @@ mod material {
     pub mod conductor;
     pub mod rough_dielectric;
     pub mod mix;
+    pub mod hair;
     pub mod ambient;
     pub mod texture;
     pub mod lambertian;

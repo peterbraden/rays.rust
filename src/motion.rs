@@ -199,6 +199,10 @@ impl Geometry for AnimatedTransform {
         self.now().tolerance()
     }
 
+    fn tangent(&self, p: &Vector3<f64>, face: u32) -> Option<Vector3<f64>> {
+        self.now().tangent(p, face)
+    }
+
     fn bounds(&self) -> BBox {
         self.bounds
     }

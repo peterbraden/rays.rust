@@ -1062,7 +1062,9 @@ and, from chapter 11, spectral MIS were there. Added, in two commits with tests:
    estimation (so the sun lights the inside). Checked: without absorption it conserves energy
    in every channel; Chiang's fits make a thick slab look its albedo within 0.1. Refracting in
    and reflecting back by Fresnel at the exit (first tried) made albedo 0.3 look 0.16, since
-   the fit assumes an index-matched boundary.
+   the fit assumes an index-matched boundary. `radius` is a distance in scene units: with
+   albedos near one, light diffuses several radii, so objects not much bigger than that leak
+   it out of their far sides and look darker and less red than the albedo (as in Cycles).
 
 Demo `light-transport.json`.
 

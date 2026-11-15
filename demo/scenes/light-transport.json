@@ -6,34 +6,262 @@
   "samples_per_chunk": 4,
   "max_depth": 24,
   "path_termination": "russian_roulette",
-  "background": { "type": "gradient", "bottom": [0.35, 0.3, 0.28], "top": [0.08, 0.1, 0.16] },
-  "sun": { "direction": [-0.6, 0.3, 1], "color": [1, 0.85, 0.65], "intensity": 5 },
-
-  "materials": {
-    "FLOOR": { "type": "lambertian", "albedo": [0.35, 0.33, 0.3] },
-    "LIGHT": { "type": "diffuse-light", "color": [1, 0.95, 0.9], "intensity": 1.5 },
-    "VARNISHED": { "type": "coated_diffuse", "albedo": { "texture": "demo/textures/bricks.png", "scale": [2, 1] }, "roughness": 0 },
-    "TINTED": { "type": "coated_diffuse", "albedo": [0.8, 0.8, 0.8], "roughness": 0.25, "thickness": 0.3, "medium_albedo": [0.9, 0.55, 0.15], "g": 0.4 },
-    "LACQUERED": { "type": "coated_conductor", "metal": "Cu", "conductor_roughness": 0.35, "roughness": 0 },
-    "MARBLE": { "type": "subsurface", "albedo": [0.92, 0.9, 0.86], "radius": [0.25, 0.2, 0.15] },
-    "WAX": { "type": "subsurface", "albedo": [0.95, 0.75, 0.45], "radius": [0.9, 0.45, 0.2], "g": 0.3 },
-    "JADE": { "type": "subsurface", "albedo": [0.35, 0.75, 0.45], "radius": [0.15, 0.6, 0.3], "refractive_index": 1.6 },
-    "SKIN": { "type": "subsurface", "albedo": [0.85, 0.55, 0.42], "radius": [0.6, 0.25, 0.12] }
+  "background": {
+    "type": "gradient",
+    "bottom": [
+      0.35,
+      0.3,
+      0.28
+    ],
+    "top": [
+      0.08,
+      0.1,
+      0.16
+    ]
   },
-
-  "camera": { "location": [0, 2.2, -8], "lookat": [0, 0.8, 0], "up": [0, 1, 0], "angle": 0.55 },
-
+  "sun": {
+    "direction": [
+      -0.6,
+      0.3,
+      1
+    ],
+    "color": [
+      1,
+      0.85,
+      0.65
+    ],
+    "intensity": 5
+  },
+  "materials": {
+    "FLOOR": {
+      "type": "lambertian",
+      "albedo": [
+        0.35,
+        0.33,
+        0.3
+      ]
+    },
+    "LIGHT": {
+      "type": "diffuse-light",
+      "color": [
+        1,
+        0.95,
+        0.9
+      ],
+      "intensity": 1.5
+    },
+    "VARNISHED": {
+      "type": "coated_diffuse",
+      "albedo": {
+        "texture": "demo/textures/bricks.png",
+        "scale": [
+          2,
+          1
+        ]
+      },
+      "roughness": 0
+    },
+    "TINTED": {
+      "type": "coated_diffuse",
+      "albedo": [
+        0.8,
+        0.8,
+        0.8
+      ],
+      "roughness": 0.25,
+      "thickness": 0.3,
+      "medium_albedo": [
+        0.9,
+        0.55,
+        0.15
+      ],
+      "g": 0.4
+    },
+    "LACQUERED": {
+      "type": "coated_conductor",
+      "metal": "Cu",
+      "conductor_roughness": 0.35,
+      "roughness": 0
+    },
+    "MARBLE": {
+      "type": "subsurface",
+      "albedo": [
+        0.92,
+        0.9,
+        0.86
+      ],
+      "radius": [
+        0.08,
+        0.06,
+        0.05
+      ]
+    },
+    "WAX": {
+      "type": "subsurface",
+      "albedo": [
+        0.95,
+        0.75,
+        0.45
+      ],
+      "radius": [
+        0.3,
+        0.14,
+        0.06
+      ],
+      "g": 0.3
+    },
+    "JADE": {
+      "type": "subsurface",
+      "albedo": [
+        0.35,
+        0.75,
+        0.45
+      ],
+      "radius": [
+        0.04,
+        0.2,
+        0.08
+      ],
+      "refractive_index": 1.6
+    },
+    "SKIN": {
+      "type": "subsurface",
+      "albedo": [
+        0.85,
+        0.55,
+        0.42
+      ],
+      "radius": [
+        0.2,
+        0.07,
+        0.035
+      ]
+    }
+  },
+  "camera": {
+    "location": [
+      0,
+      2.2,
+      -8
+    ],
+    "lookat": [
+      0,
+      0.8,
+      0
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.55
+  },
   "objects": [
-    { "type": "plane", "y": 0, "material": "FLOOR" },
-    { "type": "quad", "points": [[-3, 5, -4], [3, 5, -4], [-3, 5, -2], [3, 5, -2]], "material": "LIGHT" },
-
-    { "type": "sphere", "location": [3.3, 0.7, 1.2], "radius": 0.7, "material": "VARNISHED" },
-    { "type": "sphere", "location": [1.65, 0.7, 1.2], "radius": 0.7, "material": "TINTED" },
-    { "type": "sphere", "location": [0, 0.7, 1.2], "radius": 0.7, "material": "LACQUERED" },
-    { "type": "sphere", "location": [-1.65, 0.7, 1.2], "radius": 0.7, "material": "JADE" },
-    { "type": "sphere", "location": [-3.3, 0.7, 1.2], "radius": 0.7, "material": "SKIN" },
-
-    { "type": "sphere", "location": [1.2, 0.45, -0.7], "radius": 0.45, "material": "MARBLE" },
-    { "type": "cylinder", "base": [-1.0, 0, -0.7], "cap": [-1.0, 1.4, -0.7], "radius": 0.28, "material": "WAX" }
+    {
+      "type": "plane",
+      "y": 0,
+      "material": "FLOOR"
+    },
+    {
+      "type": "quad",
+      "points": [
+        [
+          -3,
+          5,
+          -4
+        ],
+        [
+          3,
+          5,
+          -4
+        ],
+        [
+          -3,
+          5,
+          -2
+        ],
+        [
+          3,
+          5,
+          -2
+        ]
+      ],
+      "material": "LIGHT"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        3.3,
+        0.7,
+        1.2
+      ],
+      "radius": 0.7,
+      "material": "VARNISHED"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        1.65,
+        0.7,
+        1.2
+      ],
+      "radius": 0.7,
+      "material": "TINTED"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0,
+        0.7,
+        1.2
+      ],
+      "radius": 0.7,
+      "material": "LACQUERED"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -1.65,
+        0.7,
+        1.2
+      ],
+      "radius": 0.7,
+      "material": "JADE"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -3.3,
+        0.7,
+        1.2
+      ],
+      "radius": 0.7,
+      "material": "SKIN"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        1.2,
+        0.45,
+        -0.7
+      ],
+      "radius": 0.45,
+      "material": "MARBLE"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -1.0,
+        0,
+        -0.7
+      ],
+      "cap": [
+        -1.0,
+        1.4,
+        -0.7
+      ],
+      "radius": 0.28,
+      "material": "WAX"
+    }
   ]
 }

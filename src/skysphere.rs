@@ -776,6 +776,8 @@ impl SkyMaterial {
 }
 
 impl MaterialModel for SkyMaterial {
+    fn is_sky(&self) -> bool { true }
+
     fn scatter(&self, r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay {
         // Linear light; display encoding happens at output.
         // In spectral mode, at the sample's wavelengths (`air`).
@@ -1092,6 +1094,8 @@ impl LUTSky {
 }
 
 impl MaterialModel for LUTSky {
+    fn is_sky(&self) -> bool { true }
+
     fn scatter(&self, r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay {
         let d = r.rd.normalize();
         let altitude = (r.ro - self.sky.earth.center).norm() - self.sky.earth.radius;

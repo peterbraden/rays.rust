@@ -108,6 +108,10 @@ impl Transform {
 const UNBOUNDED: f64 = 1e300;
 
 impl Geometry for Transform {
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        self.item.flatten()?.iter().map(|p| p.transformed(&self.transform)).collect()
+    }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         // Intersect in object space, then map the hit back into world space.
         self.item.intersects(&self.to_object(r)).map(|i| self.to_world(r, i))

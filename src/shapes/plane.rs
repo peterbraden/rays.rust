@@ -9,6 +9,10 @@ pub struct Plane {
 }
 
 impl Geometry for Plane {
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        Some(vec![crate::wavefront::flat::Prim::Plane { y: self.y }])
+    }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         let rdn = r.rd.normalize();
         let mut norm = Vector3::new(0., 1., 0.);

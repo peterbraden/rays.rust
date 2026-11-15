@@ -118,6 +118,10 @@ pub trait Geometry: Sync{
         if self.intersects_beyond(r, min).is_some_and(|x| x.dist >= min && x.dist < max) { 0. } else { 1. }
     }
 
+    // The shape as flat primitives (triangles, spheres, planes), for the wavefront integrator
+    // (`wavefront::flat`); None if it can't be.
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> { None }
+
     // The transmittance per colour channel (or wavelength, in spectral mode): the same in all
     // but for chromatic media (`volume::chromatic`).
     fn transmittance_color(&self, r: &Ray, min: f64, max: f64) -> crate::color::Color {
@@ -197,6 +201,7 @@ impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
     fn is_stochastic(&self) -> bool { (**self).is_stochastic() }
     fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 { (**self).transmittance(r, min, max) }
     fn transmittance_color(&self, r: &Ray, min: f64, max: f64) -> crate::color::Color { (**self).transmittance_color(r, min, max) }
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> { (**self).flatten() }
 }
 
 /// A geometry whose hits report `face`, so a composite object made of many of them (eg. the

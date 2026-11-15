@@ -199,6 +199,12 @@ pub fn sample_triangle(a: Vector3<f64>, b: Vector3<f64>, c: Vector3<f64>, r1: f6
 }
 
 impl Geometry for Triangle {
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        // Wound so that the winding's normal is the triangle's.
+        let v = if (self.v1 - self.v0).cross(&(self.v2 - self.v0)).dot(&self.normal) >= 0. { [self.v0, self.v1, self.v2] } else { [self.v0, self.v2, self.v1] };
+        Some(vec![crate::wavefront::flat::Prim::Triangle { v, n: None }])
+    }
+
     fn uv(&self, p: &Vector3<f64>, _face: u32) -> Option<crate::na::Vector2<f64>> {
         Some(triangle_uv([self.v0, self.v1, self.v2], None, p))
     }
@@ -331,6 +337,10 @@ pub(crate) fn triangle_bounds(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f6
 }
 
 impl Geometry for SmoothTriangle {
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        Some(vec![crate::wavefront::flat::Prim::Triangle { v: [self.v0, self.v1, self.v2], n: Some([self.normalv0, self.normalv1, self.normalv2]) }])
+    }
+
     fn uv(&self, p: &Vector3<f64>, _face: u32) -> Option<crate::na::Vector2<f64>> {
         Some(triangle_uv([self.v0, self.v1, self.v2], None, p))
     }

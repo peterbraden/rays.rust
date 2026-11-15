@@ -43,6 +43,14 @@ pub trait MaterialModel: Sync{
     fn emitted_at(&self, normal: &Vector3<f64>, towards: &Vector3<f64>, _uv: Option<crate::na::Vector2<f64>>) -> Color {
         self.emitted(normal, towards)
     }
+
+    /// This material as data, for the wavefront integrator (`wavefront::flat`); None if it
+    /// can't be.
+    fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> { None }
+
+    /// Whether this is the sky's material, which the wavefront integrator evaluates for rays
+    /// that escape the scene.
+    fn is_sky(&self) -> bool { false }
 }
 
 /// The outgoing ray, and the weight to assign the color of the traced ray.

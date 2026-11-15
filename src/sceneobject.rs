@@ -76,6 +76,10 @@ impl Geometry for SceneObject {
         self.geometry.transmittance_color(r, min, max)
     }
 
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        self.geometry.flatten()
+    }
+
     fn surface_area(&self) -> f64 {
         self.geometry.surface_area()
     }

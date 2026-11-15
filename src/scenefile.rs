@@ -226,6 +226,8 @@ pub struct SceneFile {
     #[serde(default)]
     pub light_sampler: Value,
     #[serde(default)]
+    pub integrator: Value,
+    #[serde(default)]
     pub sample_sky: Value,
     #[serde(default)]
     pub sampler: Value,
@@ -2860,6 +2862,11 @@ impl SceneFile {
                 spectral: s.spectral.as_bool().unwrap_or(false),
                 shutter: SceneFile::parse_shutter(&s.shutter),
                 motion,
+                wavefront: match s.integrator.as_str() {
+                    None | Some("path") => false,
+                    Some("wavefront") => true,
+                    Some(x) => panic!("Unknown integrator '{}': expected \"path\" or \"wavefront\"", x),
+                },
                 sampler: match s.sampler.as_str() {
                     None | Some("sobol") => Sampler::Sobol,
                     Some("independent") => Sampler::Independent,

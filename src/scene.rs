@@ -58,6 +58,8 @@ pub struct RenderOpts {
     /// does each sample take a time.
     pub shutter: crate::motion::Shutter,
     pub motion: bool,
+    /// Whether to render with the wavefront integrator (`wavefront`), where the scene allows.
+    pub wavefront: bool,
 }
 
 /// How a pixel's samples choose their random numbers.

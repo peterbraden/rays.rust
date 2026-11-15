@@ -21,6 +21,10 @@ impl Sphere{
 
 
 impl Geometry for Sphere {
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        Some(vec![crate::wavefront::flat::Prim::Sphere { center: self.center, radius: self.radius }])
+    }
+
     fn surface_area(&self) -> f64 {
         4. * std::f64::consts::PI * self.radius * self.radius
     }

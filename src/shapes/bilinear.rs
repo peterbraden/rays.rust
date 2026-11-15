@@ -139,6 +139,17 @@ impl BilinearPatch {
 }
 
 impl Geometry for BilinearPatch {
+    /// Two triangles, if the corners are coplanar (a quad); a saddle can't be flattened.
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        let n = (self.p10 - self.p00).cross(&(self.p01 - self.p00));
+        let size = (self.p11 - self.p00).norm().max(1e-300);
+        if (self.p11 - self.p00).dot(&n.normalize()).abs() > 1e-9 * size {
+            return None;
+        }
+        Some(vec![crate::wavefront::flat::Prim::Triangle { v: [self.p00, self.p10, self.p11], n: None },
+                  crate::wavefront::flat::Prim::Triangle { v: [self.p00, self.p11, self.p01], n: None }])
+    }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         self.intersects_beyond(r, 0.)
     }

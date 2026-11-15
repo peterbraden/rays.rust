@@ -32,6 +32,12 @@ impl DiffuseLight {
 }
 
 impl MaterialModel for DiffuseLight {
+    fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> {
+        self.texture.is_none().then(|| crate::wavefront::flat::FlatMaterial::Emitter {
+            radiance: self.emission.srgb() * self.intensity, two_sided: self.two_sided,
+        })
+    }
+
     fn is_emitter(&self) -> bool { true }
 
     fn emitted(&self, normal: &Vector3<f64>, towards: &Vector3<f64>) -> Color {

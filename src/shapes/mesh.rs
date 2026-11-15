@@ -220,6 +220,13 @@ impl Mesh {
 }
 
 impl Geometry for Mesh {
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        let p = &self.triangles.positions;
+        Some(self.triangles.triangles.iter().map(|t| crate::wavefront::flat::Prim::Triangle {
+            v: [p[t[0] as usize], p[t[1] as usize], p[t[2] as usize]], n: None,
+        }).collect())
+    }
+
     fn uv(&self, p: &Vector3<f64>, face: u32) -> Option<crate::na::Vector2<f64>> {
         ((face as usize) < self.triangles.triangles.len()).then(|| self.triangles.uv(face as usize, p))
     }
@@ -358,6 +365,18 @@ impl SmoothMesh {
 }
 
 impl Geometry for SmoothMesh {
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        let p = &self.triangles.positions;
+        Some(self.triangles.triangles.iter().map(|t| {
+            let n = [self.normals[t[0] as usize], self.normals[t[1] as usize], self.normals[t[2] as usize]];
+            crate::wavefront::flat::Prim::Triangle {
+                v: [p[t[0] as usize], p[t[1] as usize], p[t[2] as usize]],
+                // A vertex without a normal: the face's stands in, as for the recursive tracer.
+                n: n.iter().all(|n| n.norm_squared() > 0.).then_some(n),
+            }
+        }).collect())
+    }
+
     fn uv(&self, p: &Vector3<f64>, face: u32) -> Option<crate::na::Vector2<f64>> {
         ((face as usize) < self.triangles.triangles.len()).then(|| self.triangles.uv(face as usize, p))
     }

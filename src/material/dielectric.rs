@@ -15,6 +15,13 @@ pub struct Dielectric {
 }
 
 impl MaterialModel for Dielectric {
+    fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> {
+        match self.refractive_index {
+            RefractiveIndex::Constant(n) => Some(crate::wavefront::flat::FlatMaterial::Dielectric { refractive_index: n, tint: self.attenuate }),
+            _ => None,
+        }
+    }
+
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay{
         scatter_dielectric(self.refractive_index.current(), self.attenuate.as_reflectance(), r, intersection,
             crate::material::functions::surface_offset(intersection, s))

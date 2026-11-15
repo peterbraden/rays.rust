@@ -16,6 +16,10 @@ pub struct Specular {
 }
 
 impl MaterialModel for Specular {
+    fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> {
+        Some(crate::wavefront::flat::FlatMaterial::Specular { albedo: self.albedo, roughness: self.roughness })
+    }
+
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay{
         // Shade whichever side the ray hit.
         let intersection = &intersection.facing(r);

@@ -65,6 +65,10 @@ pub struct Conductor {
 }
 
 impl MaterialModel for Conductor {
+    fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> {
+        (self.roughness.0 == self.roughness.1).then(|| crate::wavefront::flat::FlatMaterial::Conductor { optics: self.optics.clone(), roughness: self.roughness.0 })
+    }
+
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let intersection = &intersection.facing(r);
         let (eta, k) = self.optics.current();

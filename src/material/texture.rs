@@ -15,6 +15,9 @@ pub trait Medium : Sync{
     }
     /// The medium of part `k` of a combined shape (see `csg::Tagged`), if it has its own.
     fn part(&self, _k: u32) -> Option<&(dyn Medium + Sync + Send)> { None }
+    /// The material as data, if the medium is one material throughout and it can be
+    /// flattened (`wavefront::flat`).
+    fn flat_material(&self) -> Option<crate::wavefront::flat::FlatMaterial> { None }
 }
 
 /// The media of an object whose parts have their own: `base` for the object itself (and parts
@@ -70,6 +73,10 @@ impl Medium for Solid {
     fn material_at(&self, _pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
         &*self.m
     }
+
+    fn flat_material(&self) -> Option<crate::wavefront::flat::FlatMaterial> {
+        self.m.flat()
+    }
 }
 
 pub struct CheckeredYPlane {
@@ -85,6 +92,12 @@ impl CheckeredYPlane {
 }
 
 impl Medium for CheckeredYPlane {
+    fn flat_material(&self) -> Option<crate::wavefront::flat::FlatMaterial> {
+        Some(crate::wavefront::flat::FlatMaterial::Checker {
+            m1: Box::new(self.m1.flat()?), m2: Box::new(self.m2.flat()?), xsize: self.xsize, zsize: self.zsize,
+        })
+    }
+
     fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
         let zig = if (pt[0].abs() / self.xsize) as i32 % 2 == 0 { pt[0] > 0. } else { pt[0] <= 0. };
         let zag = if (pt[2].abs() / self.zsize) as i32 % 2 == 0 { pt[2] > 0. } else { pt[2] <= 0. };

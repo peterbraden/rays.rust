@@ -32,7 +32,8 @@ use crate::procedural::precipitation::Precipitation;
 use crate::material::rainbow::RainbowTable;
 use crate::procedural::harris_cumulus::{CloudSimulation, Forcing, HarrisCumulus, Profile, SimulationParams, Sounding};
 use crate::participatingmedia::create_fog;
-use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
+use crate::volume::grid::{Grid, GridDensity};
+use crate::volume::{Volume, create_medium, create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
 use crate::material::ice_halos::{Crystals, Habit};
 use crate::material::diffraction::DiffractionTable;
 use crate::noise::PerlinNoise;
@@ -764,7 +765,7 @@ impl SceneFile {
         }
 
         if t == "volume" {
-            return Some(Arc::new(SceneFile::parse_volume(&o)));
+            return Some(Arc::new(SceneFile::parse_volume(&o, geometries)));
         }
 
         let mut parts = Parts { library: Some((materials, media)), media: vec![], geometries };
@@ -973,20 +974,35 @@ impl SceneFile {
     /// A participating medium filling the box from `min` to `max`:
     ///
     /// `{"type": "volume", "min": [x, y, z], "max": [x, y, z], "density": σ, "albedo": colour,
-    /// "g": asymmetry, "noise": {"scale", "octaves", "threshold", "seed"}}`
+    /// "g": asymmetry, "noise": {"scale", "octaves", "threshold", "seed"}, "grid": ...}`
     ///
     /// `density` is the extinction coefficient, the chance of a collision per unit distance
-    /// (default 1). Without `noise` it is constant; with it, it varies up to that maximum.
+    /// (default 1). Without `noise` it is constant; with it, it varies up to that maximum. With
+    /// `grid` (`volume::grid`), it is the grid's values times `density`: a Mitsuba `.vol` file's
+    /// path, or `{"resolution": [nx, ny, nz], "values": [...]}` (x fastest); `min` and `max`
+    /// default to the file's bounds. With `shape`, a geometry (as an object's, eg.
+    /// `{"type": "sphere", ...}`), the medium fills only its inside: give a dielectric object
+    /// the same shape for a glass of coloured liquid (`volume::Volume::shape`).
     /// `albedo` (default white) is the fraction scattered rather than absorbed at a collision.
     /// How it scatters is given by `g` (Henyey-Greenstein, -1 to 1, default 0) or by
     /// `droplet_diameter` (in µm, 5 to 50: the Mie scattering of water droplets of that size;
     /// see `PhaseFunction::water_droplets`).
-    pub fn parse_volume(o: &Value) -> SceneObject {
-        let bounds = BBox::new(SceneFile::parse_vec3(&o["min"]), SceneFile::parse_vec3(&o["max"]));
+    pub fn parse_volume(o: &Value, geometries: &GeometryLibrary) -> SceneObject {
         let max_density = SceneFile::parse_number(&o["density"], 1.);
-        let density: Arc<dyn DensityField> = match o.get("noise") {
-            None => Arc::new(ConstantDensity(max_density)),
-            Some(n) => Arc::new(NoiseDensity {
+        let grid = o.get("grid").map(SceneFile::parse_grid);
+        let shape = o.get("shape").map(|v| SceneFile::parse_geometry(v, geometries)
+            .unwrap_or_else(|| panic!("A volume's shape must be a geometry, got {}", v)));
+        // The box the field spans: as given, or else the grid file's, or the shape's bounds.
+        let bounds = match (o.get("min"), grid.as_ref().and_then(|g| g.bounds), &shape) {
+            (None, Some(b), _) => b,
+            (None, None, Some(s)) => s.bounds(),
+            _ => BBox::new(SceneFile::parse_vec3(&o["min"]), SceneFile::parse_vec3(&o["max"])),
+        };
+        let density: Arc<dyn DensityField> = match (grid, o.get("noise")) {
+            (Some(_), Some(_)) => panic!("Give a volume either a grid or noise, not both"),
+            (Some(g), None) => Arc::new(GridDensity::new(bounds, g, max_density)),
+            (None, None) => Arc::new(ConstantDensity(max_density)),
+            (None, Some(n)) => Arc::new(NoiseDensity {
                 perlin: SceneFile::parse_seed(n).map_or_else(PerlinNoise::new, PerlinNoise::with_seed),
                 max_density,
                 scale: SceneFile::parse_number(&n["scale"], 1.),
@@ -994,7 +1010,25 @@ impl SceneFile {
                 threshold: SceneFile::parse_number(&n["threshold"], 0.5),
             }),
         };
-        create_volume(bounds, density, SceneFile::parse_scattering(o, 0.))
+        let volume = match shape {
+            None => Volume::new(bounds, density),
+            Some(s) => Volume::in_shape(s, density),
+        };
+        create_medium(volume, SceneFile::parse_scattering(o, 0.))
+    }
+
+    /// A voxel grid (`volume::grid::Grid`): a `.vol` file's path, or `{"resolution": [nx, ny,
+    /// nz], "values": [...]}`, x fastest.
+    pub fn parse_grid(v: &Value) -> Arc<Grid> {
+        if let Some(path) = v.as_str() {
+            return Grid::load(path);
+        }
+        let res = v["resolution"].as_array().filter(|r| r.len() == 3)
+            .unwrap_or_else(|| panic!("A grid needs a file name or a \"resolution\" of three numbers"));
+        let n: Vec<usize> = res.iter().map(|x| SceneFile::parse_int(x, 0)).collect();
+        let values = v["values"].as_array().unwrap_or_else(|| panic!("A grid needs \"values\""))
+            .iter().map(|x| SceneFile::parse_number(x, 0.) as f32).collect();
+        Arc::new(Grid::new(n[0], n[1], n[2], values))
     }
 
     /// A medium's multiple-scattering approximations (`volume::ScatteringApproximation`):

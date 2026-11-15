@@ -432,6 +432,11 @@ impl RefractiveIndex {
         }
     }
 
+    /// This index, or `n` if it is the default of 1 (no index given).
+    pub fn or_default(self, n: f64) -> RefractiveIndex {
+        if self == RefractiveIndex::Constant(1.) { RefractiveIndex::Constant(n) } else { self }
+    }
+
     pub fn is_dispersive(&self) -> bool {
         !matches!(self, RefractiveIndex::Constant(_))
     }

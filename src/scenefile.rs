@@ -1952,6 +1952,22 @@ impl SceneFile {
             return Some(Box::new(SceneFile::parse_leaf(o)));
         }
 
+        // {"type": "rough_dielectric", "refractive_index": .., "roughness": r, "attenuate":
+        // colour}: frosted glass; {"type": "thin_dielectric", "refractive_index": ..}: a pane of
+        // no thickness (`material::rough_dielectric`).
+        if t == "rough_dielectric" {
+            return Some(Box::new(crate::material::rough_dielectric::RoughDielectric {
+                refractive_index: SceneFile::parse_refractive_index(&o["refractive_index"]).or_default(1.5),
+                roughness: SceneFile::parse_number(&o["roughness"], 0.3),
+                attenuate: SceneFile::parse_color_def(o, "attenuate", Color::white()),
+            }));
+        }
+        if t == "thin_dielectric" {
+            return Some(Box::new(crate::material::rough_dielectric::ThinDielectric {
+                refractive_index: SceneFile::parse_refractive_index(&o["refractive_index"]).or_default(1.5),
+            }));
+        }
+
         if t == "dielectric" {
             let d:Dielectric = Dielectric {
                 refractive_index: SceneFile::parse_refractive_index(&o["refractive_index"]),

@@ -298,7 +298,7 @@ impl GGX {
     }
 
     /// Heitz's routine (listing 1) for a visible normal, in the local frame, from uniform `u`.
-    fn sample_visible_normal(&self, wo: &Vector3<f64>, u: [f64; 2]) -> Vector3<f64> {
+    pub fn sample_visible_normal(&self, wo: &Vector3<f64>, u: [f64; 2]) -> Vector3<f64> {
         // Stretch the view direction to the hemisphere configuration (α = 1).
         let (ax, ay) = self.alphas();
         let vh = Vector3::new(ax * wo.x, ay * wo.y, wo.z).normalize();

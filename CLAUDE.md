@@ -17,6 +17,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Shapes after PBRT ch. 6: texture coordinates on demand (`Geometry::uv`; `uv` and `checker` materials), sphere lights sampled by their cone (`Geometry::sample_from`/`pdf_from`), bilinear patches (`src/shapes/bilinear.rs`, `quad`), Bézier curves and `fur` (`src/shapes/curve.rs`), Loop subdivision (`src/shapes/subdivision.rs`), and ray offsets scaled to each hit (`Intersection::spawn_offset`, replacing fixed epsilons)
 - Samplers after PBRT ch. 8 (`src/sampler.rs`, `"sampler"`): Sobol' (default), ZSobol' (blue-noise error), Halton, stratified, independent; all feed `geometry::rand()` through a thread-local sample state
 - Materials after PBRT ch. 9: `conductor` (measured metals' complex IOR in `src/spectrum/metals.rs`, anisotropic GGX via `GGX::aniso`), `rough_dielectric` and `thin_dielectric` (`src/material/rough_dielectric.rs`), `mix`, and `hair` (pbrt's hair BSDF, `src/material/hair.rs`; needs cylinder curves, whose `Geometry::tangent` it reads)
+- Textures after PBRT ch. 10 (`src/textures.rs`): image textures as MIP pyramids filtered by EWA over the camera-approximated footprint (`textures::footprint`, `Scene::footprint`), for `lambertian`/`plastic` albedo (`ColorTexture`) and `mix` amount; tangent-space normal maps via `Medium::normal_at_hit`; demo textures from `scripts/make-demo-textures.py`
 - Multithreaded rendering with progressive output
 
 ## Build Commands

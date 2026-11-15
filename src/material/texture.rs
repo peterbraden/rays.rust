@@ -8,6 +8,11 @@ pub trait Medium : Sync{
     /// The normal to shade with at `pt`, given the surface's: the same, unless the surface is
     /// bump mapped (see `bump::Bumped`).
     fn normal_at(&self, _pt: &Vector3<f64>, normal: &Vector3<f64>) -> Vector3<f64> { *normal }
+    /// The normal to shade with at a hit: `normal_at`, unless the medium needs more of the hit
+    /// than its point, such as a normal map its texture coordinates (`NormalMapped`).
+    fn normal_at_hit(&self, i: &crate::intersection::Intersection, _s: &crate::scene::Scene) -> Vector3<f64> {
+        self.normal_at(&i.point, &i.normal)
+    }
     /// The medium of part `k` of a combined shape (see `csg::Tagged`), if it has its own.
     fn part(&self, _k: u32) -> Option<&(dyn Medium + Sync + Send)> { None }
 }
@@ -30,6 +35,31 @@ impl Medium for PartMedia {
 
     fn normal_at(&self, pt: &Vector3<f64>, normal: &Vector3<f64>) -> Vector3<f64> {
         self.base.normal_at(pt, normal)
+    }
+
+    fn normal_at_hit(&self, i: &crate::intersection::Intersection, s: &crate::scene::Scene) -> Vector3<f64> {
+        self.base.normal_at_hit(i, s)
+    }
+}
+
+/// A medium whose surface is normal mapped (`textures::NormalMap`).
+pub struct NormalMapped {
+    pub inner: Box<dyn Medium + Sync + Send>,
+    pub map: crate::textures::NormalMap,
+}
+
+impl Medium for NormalMapped {
+    fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
+        self.inner.material_at(pt)
+    }
+
+    fn normal_at_hit(&self, i: &crate::intersection::Intersection, s: &crate::scene::Scene) -> Vector3<f64> {
+        let n = self.inner.normal_at_hit(i, s);
+        self.map.perturb(&crate::intersection::Intersection { normal: n, ..*i }, s)
+    }
+
+    fn part(&self, k: u32) -> Option<&(dyn Medium + Sync + Send)> {
+        self.inner.part(k)
     }
 }
 

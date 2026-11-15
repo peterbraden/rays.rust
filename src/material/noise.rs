@@ -291,7 +291,7 @@ mod tests {
 
     #[test]
     fn test_noise_texture_perlin() {
-        let base_material = Box::new(Lambertian { albedo: Color::white() });
+        let base_material = Box::new(Lambertian { albedo: Color::white().into() });
         let noise_texture = NoiseTexture::new_perlin(
             base_material,
             Color::new(1.0, 0.0, 0.0), // Red noise color
@@ -313,7 +313,7 @@ mod tests {
     
     #[test]
     fn test_noise_texture_fbm() {
-        let base_material = Box::new(Lambertian { albedo: Color::white() });
+        let base_material = Box::new(Lambertian { albedo: Color::white().into() });
         let noise_texture = NoiseTexture::new_fbm(
             base_material,
             Color::new(0.0, 1.0, 0.0), // Green noise color
@@ -338,7 +338,7 @@ mod tests {
     
     #[test]
     fn test_noise_texture_marble() {
-        let base_material = Box::new(Lambertian { albedo: Color::white() });
+        let base_material = Box::new(Lambertian { albedo: Color::white().into() });
         let noise_texture = NoiseTexture::new_marble(
             base_material,
             Color::new(0.0, 0.0, 1.0), // Blue noise color

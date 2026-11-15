@@ -269,6 +269,8 @@ impl RenderOpts {
 pub struct Scene {
     pub image: ImageOpts,
     pub render: RenderOpts,
+    /// For texture filtering, the camera's footprint (`textures::footprint`), if it has one.
+    pub footprint: Option<crate::textures::Footprint>,
     pub camera: Box<dyn camera::Camera + Sync>,
     pub objects: SceneGraph,
     pub lights: Vec<Light>,

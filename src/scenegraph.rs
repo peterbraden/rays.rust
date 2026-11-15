@@ -157,7 +157,7 @@ mod tests {
     use rand::rngs::StdRng;
 
     fn object(g: Box<dyn Geometry + Sync + Send>) -> Arc<SceneObject> {
-        Arc::new(SceneObject { geometry: g, medium: Box::new(Solid { m: Box::new(Lambertian { albedo: Color::white() }) }) })
+        Arc::new(SceneObject { geometry: g, medium: Box::new(Solid { m: Box::new(Lambertian { albedo: Color::white().into() }) }) })
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! A mix of two materials (Pharr, Jakob and Humphreys, "Physically Based Rendering", 4th ed.,
 //! section 10.5, `MixMaterial`): at each scattering, the second with probability `amount` and
 //! otherwise the first. Choosing one stochastically, rather than blending two BSDFs, is how pbrt
-//! does it too: unbiased, and each material keeps its own sampling. A material with a varying
-//! amount (dust on a surface, wear on paint) needs a texture, from chapter 10.
+//! does it too: unbiased, and each material keeps its own sampling. The amount can vary over the
+//! surface, from an image's grey level (`textures`): dust on a surface, wear on paint.
 use crate::intersection::Intersection;
 use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::na::Vector3;
@@ -12,12 +12,22 @@ use crate::color::Color;
 
 pub struct Mix {
     pub materials: [Box<dyn MaterialModel + Sync + Send>; 2],
-    pub amount: f64,
+    pub amount: crate::textures::ColorTexture,
+}
+
+impl Mix {
+    fn amount_at(&self, i: &Intersection, s: &Scene) -> f64 {
+        crate::color::luminance(&self.amount.eval(i, s)).clamp(0., 1.)
+    }
+
+    fn mean_amount(&self) -> f64 {
+        crate::color::luminance(&self.amount.average()).clamp(0., 1.)
+    }
 }
 
 impl MaterialModel for Mix {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
-        let which = (crate::geometry::rand() < self.amount) as usize;
+        let which = (crate::geometry::rand() < self.amount_at(intersection, s)) as usize;
         self.materials[which].scatter(r, intersection, s)
     }
 
@@ -26,7 +36,8 @@ impl MaterialModel for Mix {
     }
 
     fn emitted(&self, normal: &Vector3<f64>, towards: &Vector3<f64>) -> Color {
-        self.materials[0].emitted(normal, towards) * (1. - self.amount) + self.materials[1].emitted(normal, towards) * self.amount
+        let a = self.mean_amount();
+        self.materials[0].emitted(normal, towards) * (1. - a) + self.materials[1].emitted(normal, towards) * a
     }
 }
 

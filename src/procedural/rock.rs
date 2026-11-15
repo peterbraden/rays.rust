@@ -472,7 +472,7 @@ mod tests {
         assert!(lo < at.y && hi > at.y + 0.5);
         assert!((at.y - lo) / (hi - lo) - 0.12 < 1e-9);
         let o = object(&[mesh], Box::new(crate::material::texture::Solid {
-            m: Box::new(crate::material::lambertian::Lambertian { albedo: crate::color::Color::white() }) }));
+            m: Box::new(crate::material::lambertian::Lambertian { albedo: crate::color::Color::white().into() }) }));
         // A ray straight down onto it hits its top.
         let hit = o.intersects(&Ray { ro: at + Vector3::new(0., 10., 0.), rd: Vector3::new(0., -1., 0.) }).unwrap();
         assert!(hit.point.y > at.y && hit.normal.y > 0.);
@@ -518,7 +518,7 @@ mod tests {
     fn test_assorted_finds_each_pebble() {
         let pebbles = field(Region::Disc(1.), 40, 0.1, 0.2, 2, 2).scatter();
         let m = Assorted::new(vec![
-            Box::new(crate::material::lambertian::Lambertian { albedo: crate::color::Color::white() }),
+            Box::new(crate::material::lambertian::Lambertian { albedo: crate::color::Color::white().into() }),
         ], pebbles.clone());
         for p in &pebbles {
             assert_eq!(m.pebble_at(&(p.center + Vector3::new(0., p.size * 0.1, 0.))), Some(p));

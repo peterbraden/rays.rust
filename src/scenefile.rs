@@ -390,6 +390,45 @@ impl SceneFile {
     }
 
 
+    /// A colour, or an image read by the surface's texture coordinates (`textures`):
+    /// `{"texture": "file.png", "scale": [su, sv] or s, "offset": [ou, ov], "filter":
+    /// "ewa" (the default) | "trilinear" | "bilinear" | "point", "wrap": "repeat" | "clamp" | "black", "linear":
+    /// bool}` (8-bit images are taken as sRGB unless `linear`).
+    pub fn parse_color_texture(v: &Value) -> crate::textures::ColorTexture {
+        match v.get("texture") {
+            Some(_) => crate::textures::ColorTexture::Image(SceneFile::parse_image_map(v)),
+            None => SceneFile::parse_color(v).into(),
+        }
+    }
+
+    pub fn parse_image_map(v: &Value) -> crate::textures::ImageMap {
+        use crate::textures::{Filter, Image, ImageMap, Wrap};
+        let path = v["texture"].as_str().unwrap_or_else(|| panic!("A texture needs a file name, got {}", v["texture"]));
+        let pair = |k: &str, d: f64| match &v[k] {
+            Value::Number(n) => Vector2::repeat(n.as_f64().unwrap()),
+            Value::Null => Vector2::repeat(d),
+            x => SceneFile::parse_vec2(x),
+        };
+        ImageMap {
+            image: Image::shared(path, v["linear"].as_bool()),
+            scale: pair("scale", 1.),
+            offset: pair("offset", 0.),
+            filter: match v["filter"].as_str() {
+                Some("trilinear") => Filter::Trilinear,
+                None | Some("ewa") => Filter::Ewa,
+                Some("bilinear") => Filter::Bilinear,
+                Some("point") => Filter::Point,
+                Some(f) => panic!("Unknown texture filter '{}': expected ewa, trilinear, bilinear or point", f),
+            },
+            wrap: match v["wrap"].as_str() {
+                None | Some("repeat") => Wrap::Repeat,
+                Some("clamp") => Wrap::Clamp,
+                Some("black") => Wrap::Black,
+                Some(w) => panic!("Unknown texture wrap '{}': expected repeat, clamp or black", w),
+            },
+        }
+    }
+
     pub fn parse_color_def(v: &Value, k: &str, def: Color) -> Color {
         match &v.get(k) {
             Some(x) => SceneFile::parse_color(x),
@@ -583,6 +622,17 @@ impl SceneFile {
         if o["normal"].is_null() {
             return m;
         }
+        // {"map": "normals.png", "strength": 1, and an image map's "scale", "offset", ...}: a
+        // tangent-space normal map, read linearly (`textures::NormalMap`).
+        if let Some(path) = o["normal"].get("map") {
+            let mut spec = o["normal"].clone();
+            spec["texture"] = path.clone();
+            if spec.get("linear").is_none() {
+                spec["linear"] = Value::Bool(true);
+            }
+            let map = crate::textures::NormalMap { map: SceneFile::parse_image_map(&spec), strength: SceneFile::parse_number(&o["normal"]["strength"], 1.) };
+            return Box::new(crate::material::texture::NormalMapped { inner: m, map });
+        }
         Box::new(Bumped { inner: m, bump: SceneFile::parse_bump(&o["normal"]) })
     }
 
@@ -621,7 +671,7 @@ impl SceneFile {
                     Box::new(Solid { m })
                 } else {
                     // No material or medium specified
-                    let default_material = Box::new(Lambertian { albedo: Color::white() });
+                    let default_material = Box::new(Lambertian { albedo: Color::white().into() });
                     Box::new(Solid { m: default_material })
                 }
             }
@@ -883,7 +933,7 @@ impl SceneFile {
             }
         };
         let default = |albedo: Color| -> Box<dyn Medium + Sync + Send> {
-            Box::new(Solid { m: Box::new(Lambertian { albedo }) })
+            Box::new(Solid { m: Box::new(Lambertian { albedo: albedo.into() }) })
         };
         let bark = || o.get("bark").map_or_else(|| default(Color::new(0.25, 0.2, 0.16)), medium);
 
@@ -1881,8 +1931,8 @@ impl SceneFile {
         if props["type"].as_str() == Some("noise") {
             return Some(Box::new(SceneFile::parse_noise_texture(props, materials)));
         }
-        // {"type": "mix", "materials": ["A", "B"], "amount": 0.5}: B with probability amount,
-        // else A (`material::mix`).
+        // {"type": "mix", "materials": ["A", "B"], "amount": 0.5 or an image texture (its grey
+        // level)}: B with probability amount, else A (`material::mix`).
         if props["type"].as_str() == Some("mix") {
             let names = props["materials"].as_array().filter(|a| a.len() == 2)
                 .unwrap_or_else(|| panic!("Mix material '{}' needs two \"materials\"", name));
@@ -1890,7 +1940,10 @@ impl SceneFile {
             let get = |k: &Value| SceneFile::require_material(k, materials, &format!("mix {}", name));
             return Some(Box::new(crate::material::mix::Mix {
                 materials: [get(&names[0]), get(&names[1])],
-                amount: SceneFile::parse_number(&props["amount"], 0.5).clamp(0., 1.),
+                amount: match &props["amount"] {
+                    Value::Object(_) => SceneFile::parse_color_texture(&props["amount"]),
+                    v => { let a = SceneFile::parse_number(v, 0.5).clamp(0., 1.); Color::new(a, a, a).into() },
+                },
             }));
         }
         match SceneFile::parse_material(props) {
@@ -1943,7 +1996,7 @@ impl SceneFile {
 
         if t == "lambertian" {
             let d:Lambertian = Lambertian {
-                albedo:SceneFile::parse_color(&o["albedo"]), 
+                albedo: SceneFile::parse_color_texture(&o["albedo"]),
             };
             return Some(Box::new(d));
         }
@@ -1953,7 +2006,7 @@ impl SceneFile {
                 println!("Warning: plastic 'opacity' is ignored; plastic is opaque (use a dielectric for transparency)");
             }
             let d:Plastic = Plastic {
-                albedo:SceneFile::parse_color(&o["albedo"]), 
+                albedo: SceneFile::parse_color_texture(&o["albedo"]),
                 refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.5),
                 roughness: SceneFile::parse_number(&o["roughness"], 0.),
             };
@@ -2214,11 +2267,11 @@ impl SceneFile {
             SceneFile::parse_material_ref(base_material_key, materials)
                 .unwrap_or_else(|| {
                     println!("Warning: Using default material for noise texture because base material '{}' not found", material_name);
-                    Box::new(Lambertian { albedo: Color::white() })
+                    Box::new(Lambertian { albedo: Color::white().into() })
                 })
         } else {
             // Default to white lambertian if no base material is specified
-            Box::new(Lambertian { albedo: Color::white() })
+            Box::new(Lambertian { albedo: Color::white().into() })
         };
         
         let noise_type = match o.get("noise_type").and_then(|v| v.as_str()) {
@@ -2558,6 +2611,14 @@ impl SceneFile {
         // The camera's view plane spans tan(angle) over the image's height.
         let pixel_angle = s.camera["angle"].as_f64().map_or(0., |a| a.tan() / SceneFile::parse_int(&s.height, 480) as f64);
         let flare = SceneFile::parse_flare(&s.output, &s.camera, SceneFile::parse_int(&s.width, 640), SceneFile::parse_int(&s.height, 480));
+        // For texture filtering: the camera's position, axes and the angle between pixels, shrunk
+        // by the samples per pixel (`textures::footprint`).
+        let footprint = (pixel_angle > 0.).then(|| {
+            let f = camera::Frame::look_at(SceneFile::parse_vec3(&s.camera["location"]), SceneFile::parse_vec3(&s.camera["lookat"]),
+                SceneFile::parse_vec3_def(&s.camera, "up", Vector3::y()));
+            let spp = SceneFile::parse_int(&s.supersamples, 35).max(1) as f64;
+            crate::textures::Footprint { location: f.location, right: f.camx, up: f.camy, spread: pixel_angle * (1. / spp.sqrt()).max(0.125) }
+        });
         // Aerial perspective, unless the skysphere turns it off.
         let atmosphere = s.objects.iter()
             .find(|o| o["type"].as_str() == Some("skysphere") && o["aerial_perspective"].as_bool() != Some(false))
@@ -2606,6 +2667,7 @@ impl SceneFile {
                     Some(x) => panic!("Unknown sampler '{}': expected \"sobol\", \"zsobol\", \"halton\", \"stratified\" or \"independent\"", x),
                 },
             },
+            footprint,
             camera: SceneFile::parse_camera(s.camera, width as u32, height as u32),
             lights: SceneFile::parse_lights(&s.lights),
             objects: o,

@@ -22,7 +22,7 @@ use crate::material::functions::{scatter_lambertian, scatter_bsdf, direct_lighti
 ///   reflected back down inside it), as the model always has.
 ///
 pub struct Plastic {
-    pub albedo: Color,
+    pub albedo: crate::textures::ColorTexture,
     pub refractive_index: f64,
     pub roughness: f64,
 }
@@ -74,7 +74,7 @@ impl MaterialModel for Plastic {
         if alpha >= MIN_ALPHA {
             let bsdf = PlasticBSDF {
                 coat: GGX::new(alpha, Fresnel::Dielectric(self.refractive_index), intersection.normal),
-                base: LambertianBSDF { albedo: self.albedo.as_reflectance(), normal: intersection.normal },
+                base: LambertianBSDF { albedo: self.albedo.eval(intersection, s).as_reflectance(), normal: intersection.normal },
                 refractive_index: self.refractive_index,
             };
             return scatter_bsdf(&bsdf, r, &intersection.point, s);
@@ -89,7 +89,7 @@ impl MaterialModel for Plastic {
         }
 
         // Base: direct lighting is emitted; the bounce carries indirect light, weighted by albedo.
-        let albedo = self.albedo.as_reflectance();
+        let albedo = self.albedo.eval(intersection, s).as_reflectance();
         ScatteredRay {
             emit: direct_lighting(albedo, intersection, s),
             light_sampling: LightSampling::Exclusive,

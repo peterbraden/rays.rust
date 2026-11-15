@@ -54,6 +54,11 @@ Measured metals (gold, copper, brass, silver, aluminium), brushed aluminium, fro
 thin pane, and a worn mix of paint and gold leaf.
 ![PBRT materials](./scenes/pbrt-materials.png)
 
+## Textures
+Image textures and a normal map on a brick wall and sphere, paint worn to copper by a dirt mask,
+and a checkerboard filtered into the distance.
+![Textures](./scenes/textures.png)
+
 ## Spheres
 Spheres demonstrating 3 different materials.
 ![Spheres](./scenes/spheres.png)

@@ -755,7 +755,7 @@ start) by chapter:
   differentials moved to chapter 10.
 - 9, Reflection models (done): conductors with complex η, k; rough dielectrics; thin
   dielectric; mix; anisotropic roughness; hair.
-- 10, Textures: image textures, MIP maps and filtering; normal maps.
+- 10, Textures (done): image textures, MIP maps and filtering (EWA); normal maps.
 - 11, Volume scattering: grid media, chromatic media with spectral MIS, emissive media.
 - 12, Lights: spot, goniometric, projection, textured area lights; light BVH.
 - 13-14, Light transport: layered BSDFs, subsurface scattering, light tracing.
@@ -939,6 +939,30 @@ Demo: `pbrt-materials.json`; `fur.json` with the hair BSDF.
 - Hair: shadow rays leave from the near side, so direct light from behind isn't transmitted (TT)
   in light sampling, only by sampled rays; the colour inversion assumes many bounces, so fur
   needs a deep `max_depth`; hair renders slowly (curves themselves are slow).
+
+### Chapter 10: textures (done)
+
+`src/textures.rs`: image textures (PNG, JPEG, EXR; 8-bit decoded from sRGB) as MIP pyramids,
+filtered by pbrt's camera approximation of ray differentials (`Camera::Approximate_dp_dxy`)
+mapped through each shape's texture coordinates: point, bilinear, trilinear, or EWA (the
+default; Heckbert's elliptically weighted average, as pbrt's). Any colour of `lambertian` and
+`plastic`, and a `mix`'s amount, can be an image; tangent-space normal maps (`"normal": {"map":
+..}`) through a new `Medium::normal_at_hit`. Demo `textures.json`, with generated textures
+(`scripts/make-demo-textures.py`).
+
+On a checkerboard receding to the horizon at 4 spp, against 1024 spp point sampling: point RMSE
+0.096 (FLIP 0.054), trilinear 0.097 (0.082; aliasing gone but over-blurred, as isotropic
+filtering is at grazing angles), EWA 0.050 (0.044).
+
+### Deferred from chapter 10
+
+- True ray differentials, propagated through specular bounces (pbrt-v4 too uses the camera
+  approximation everywhere); after a mirror or a lens, the footprint is the camera's, not the
+  reflection's.
+- Textures for every parameter (roughness, conductors' reflectance, emission), and procedural
+  textures in texture space (ours are in world space: `noise`, `checker` by position).
+- Displacement and alpha (cut-out) textures; texture coordinates for more shapes (boxes, tori,
+  CSG); pbrt's resampling of non-power-of-two images (ours box-filter odd sizes).
 
 ### Reading (chapter 4)
 

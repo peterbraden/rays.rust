@@ -118,6 +118,17 @@ coated surfaces, and the aperture's diffraction starburst (`{"blades": 6, "f_num
 physically faint by default, `"ghosts": 10` exaggerates them;
 [demo/scenes/lens-flare.json](demo/scenes/lens-flare.json)).
 
+## Textures
+
+A colour can be an image, read by the surface's texture coordinates:
+`"albedo": {"texture": "bricks.png", "scale": [3, 2]}` (on `lambertian` and `plastic`, and a
+`mix`'s `"amount"`), and an object can have a tangent-space normal map,
+`"normal": {"map": "bricks-normal.png", "strength": 1}`. Images are MIP-mapped and filtered by
+EWA over each pixel's footprint (PBRT's chapter 10), so distant and grazing textures neither
+alias nor blur ([demo/scenes/textures.json](demo/scenes/textures.json)):
+
+![Texture filtering](demo/texture-filtering.png)
+
 ## Forests
 
 A `forest` covers part of a surface with trees: a few distinct trees are grown per species,

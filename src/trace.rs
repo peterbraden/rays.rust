@@ -266,6 +266,31 @@ mod tests {
         }}"#, sample_lights))
     }
 
+    #[test]
+    fn test_textured_area_light_sampling_agrees_with_hitting_it() {
+        // A quad light showing a checkerboard over the floor: light sampling must look the
+        // texture up where it samples, as rays that hit the light do.
+        let scene = |sample_lights: bool| SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 1, "sample_lights": {},
+            "camera": {{ "location": [0, 0.5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "materials": {{
+                "F": {{ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }},
+                "L": {{ "type": "diffuse-light", "color": [1, 1, 1], "intensity": 1,
+                        "texture": {{ "texture": "demo/textures/checker.png", "scale": 0.25 }} }}
+            }},
+            "objects": [
+                {{ "type": "plane", "y": 0, "material": "F" }},
+                {{ "type": "quad", "points": [[-1, 1, -1], [1, 1, -1], [-1, 1, 1], [1, 1, 1]], "material": "L" }}
+            ]
+        }}"#, sample_lights));
+        crate::geometry::seed_rand(2, 1);
+        let r = Ray { ro: Vector3::new(0.2, 0.5, 0.3), rd: Vector3::new(0., -1., 0.) };
+        let mean = |s: &Scene, n: usize| (0..n).map(|_| trace(&r, 0, s).1.rgb.x).sum::<f64>() / n as f64;
+        let (sampled, hit) = (mean(&scene(true), 20000), mean(&scene(false), 60000));
+        assert!(sampled > 0.02, "{}", sampled);
+        assert!((sampled - hit).abs() < 0.03 * hit, "light sampling {} vs hitting {}", sampled, hit);
+    }
+
     /// Mean and standard deviation of n samples of the radiance from the floor below the light.
     fn floor_radiance(s: &Scene, n: usize) -> (f64, f64) {
         let r = Ray { ro: Vector3::new(0., 0.5, 0.), rd: Vector3::new(0., -1., 0.) };

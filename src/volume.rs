@@ -664,7 +664,7 @@ impl VolumeMaterial {
             let w = to_light / d;
             let shadow_ray = Ray { ro: *point, rd: w };
             let transmitted = s.objects.transmittance(&shadow_ray, d, f64::MIN_POSITIVE);
-            direct = direct + light.radiant_intensity() * p(&w) * (transmitted / (d * d));
+            direct = direct + light.radiant_intensity(&-w) * p(&w) * (transmitted / (d * d));
         }
         if let Some(sun) = &s.sun {
             // Halos, rainbows and diffraction colour the phase function in RGB.

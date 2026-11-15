@@ -1,5 +1,5 @@
 use crate::camera;
-use crate::na::{Vector3, Vector2};
+use crate::na::{Matrix3, Vector3, Vector2};
 use crate::scenegraph::SceneGraph;
 use crate::shapes::sphere::Sphere;
 use crate::shapes::triangle::Triangle;
@@ -33,6 +33,8 @@ use crate::material::rainbow::RainbowTable;
 use crate::procedural::harris_cumulus::{CloudSimulation, Forcing, HarrisCumulus, Profile, SimulationParams, Sounding};
 use crate::participatingmedia::create_fog;
 use crate::volume::grid::{Grid, GridDensity};
+use crate::light::Profile as LightProfile;
+use crate::textures::Image;
 use crate::volume::emission::VolumeEmission;
 use crate::volume::{Volume, create_medium, create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
 use crate::material::ice_halos::{Crystals, Habit};
@@ -2142,10 +2144,12 @@ impl SceneFile {
         }
 
         if t == "diffuse-light" {
+            // `"texture": {"texture": "screen.png", ...}` scales the emission by an image.
             let d:DiffuseLight = DiffuseLight {
                 intensity: SceneFile::parse_number(&o["intensity"], 1.),
                 emission: SceneFile::parse_emission(o),
                 two_sided: o["two_sided"].as_bool().unwrap_or(false),
+                texture: o.get("texture").map(SceneFile::parse_image_map),
             };
             return Some(Box::new(d));
         }
@@ -2590,12 +2594,72 @@ impl SceneFile {
     }
 
 
+    /// A light at a point (`light::Light`): `{"location": [x, y, z], "intensity": I, "color" or
+    /// "temperature"}`, radiant intensity `I` (per steradian), or `"power": Φ` (watts, of a point
+    /// or spot light) in its place. One of these makes it directional:
+    ///
+    /// - `"spot": {"direction": [x, y, z] or "lookat": [x, y, z], "angle": 30, "delta": 5}`: a
+    ///   cone of half-angle `angle` degrees, fading over its outer `delta` (pbrt's `coneangle`
+    ///   and `conedelta`).
+    /// - `"goniometric": {"image": file, "up": [0, 1, 0], "forward": [0, 0, 1]}`: intensity
+    ///   scaled by an equirectangular image of directions about `up` (top row up), azimuth zero
+    ///   towards `forward`.
+    /// - `"projection": {"image": file, "lookat": [x, y, z] or "direction", "up": [0, 1, 0],
+    ///   "fov": 30}`: the image projected as by a slide projector, `fov` degrees across its
+    ///   larger side.
     pub fn parse_light(o: &Value) -> Light {
-        Light {
-                position: SceneFile::parse_vec3(&o["location"]),
-                emission: SceneFile::parse_emission(o),
-                intensity: o["intensity"].as_f64().unwrap(),
+        let position = SceneFile::parse_vec3(&o["location"]);
+        let aim = |v: &Value| -> Vector3<f64> {
+            match (v.get("direction"), v.get("lookat")) {
+                (Some(d), None) => SceneFile::parse_vec3(d).normalize(),
+                (None, Some(l)) => (SceneFile::parse_vec3(l) - position).normalize(),
+                _ => panic!("A light's \"spot\" or \"projection\" needs a \"direction\" or a \"lookat\""),
             }
+        };
+        // Rows x, y, z of the rotation into the light's frame, z along `forward`, y nearest `up`,
+        // x to the right as the camera's (`camera`), so a projection reads as seen from behind.
+        let frame = |forward: Vector3<f64>, up: Vector3<f64>| -> Matrix3<f64> {
+            let z = forward.normalize();
+            let x = z.cross(&up);
+            let x = if x.norm() < 1e-9 { z.cross(&z.cross(&Vector3::new(1., 0., 0.))) } else { x }.normalize();
+            let y = x.cross(&z);
+            Matrix3::from_rows(&[x.transpose(), y.transpose(), z.transpose()])
+        };
+        let image = |v: &Value| Image::shared(v["image"].as_str()
+            .unwrap_or_else(|| panic!("A goniometric or projection light needs an \"image\"")), None);
+        let profile = if let Some(v) = o.get("spot") {
+            let angle = SceneFile::parse_number(&v["angle"], 30.);
+            let delta = SceneFile::parse_number(&v["delta"], 5.).clamp(0., angle);
+            assert!(angle > 0. && angle <= 180., "A spot light's angle must be 0 to 180 degrees, got {}", angle);
+            LightProfile::Spot { axis: aim(v), cos_falloff_start: (angle - delta).to_radians().cos(), cos_total: angle.to_radians().cos() }
+        } else if let Some(v) = o.get("goniometric") {
+            let up = SceneFile::parse_vec3_def(v, "up", Vector3::new(0., 1., 0.));
+            let forward = SceneFile::parse_vec3_def(v, "forward", Vector3::new(0., 0., 1.));
+            // The image's pole is the frame's y: build it with up as y, forward as z.
+            let f = frame(forward - up.normalize() * forward.dot(&up.normalize()), up);
+            LightProfile::Goniometric { frame: f, image: image(v) }
+        } else if let Some(v) = o.get("projection") {
+            let img = image(v);
+            let (w, h) = img.size();
+            let half = (SceneFile::parse_number(&v["fov"], 30.).to_radians() / 2.).tan();
+            let half = if w >= h { Vector2::new(half, half * h as f64 / w as f64) } else { Vector2::new(half * w as f64 / h as f64, half) };
+            let f = frame(aim(v), SceneFile::parse_vec3_def(v, "up", Vector3::new(0., 1., 0.)));
+            LightProfile::Projection { frame: f, image: img, half }
+        } else {
+            LightProfile::Isotropic
+        };
+        let mut light = Light { position, emission: SceneFile::parse_emission(o), intensity: 1., profile };
+        light.intensity = match (o.get("intensity"), o.get("power")) {
+            (Some(i), None) => SceneFile::parse_number(i, 1.),
+            (None, Some(p)) => {
+                // Power over the solid angle it's spread across, per unit of `power()`'s
+                // luminance.
+                let unit = light.power() / crate::color::luminance(&light.emission.srgb()).max(1e-12);
+                SceneFile::parse_number(p, 1.) / unit
+            },
+            _ => panic!("A light needs an \"intensity\" or a \"power\""),
+        };
+        light
     }
 
     /// What an emitter emits: `"color"` (white if absent), or with `"temperature"` (kelvin), a

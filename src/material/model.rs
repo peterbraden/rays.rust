@@ -37,6 +37,12 @@ pub trait MaterialModel: Sync{
     /// Radiance emitted in the direction `towards` (a unit vector leaving the surface) from a
     /// point with surface normal `normal`.
     fn emitted(&self, _normal: &Vector3<f64>, _towards: &Vector3<f64>) -> Color { Color::black() }
+
+    /// As `emitted`, at a point with texture coordinates `uv` (if the shape has them), for
+    /// textured emitters; `emitted` is then their mean.
+    fn emitted_at(&self, normal: &Vector3<f64>, towards: &Vector3<f64>, _uv: Option<crate::na::Vector2<f64>>) -> Color {
+        self.emitted(normal, towards)
+    }
 }
 
 /// The outgoing ray, and the weight to assign the color of the traced ray.

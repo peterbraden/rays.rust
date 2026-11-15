@@ -203,7 +203,10 @@ pub fn sample_area_light_with(point: &Vector3<f64>, s: &Scene, response: impl Fn
     if response == Color::black() {
         return Color::black();
     }
-    let emitted = light.medium.material_at(y).emitted(&n_y, &-w);
+    // Texture coordinates of the sampled point, for textured emitters; a shape of many parts
+    // (a mesh) doesn't say which part was sampled, so it takes the texture's mean.
+    let uv = if light.geometry.primitives() == 1 { light.geometry.uv(&y, 0) } else { None };
+    let emitted = light.medium.material_at(y).emitted_at(&n_y, &-w, uv);
     if emitted == Color::black() {
         return Color::black();
     }
@@ -253,7 +256,7 @@ pub fn direct_lighting_mis(bsdf: &dyn BSDF, point: &Vector3<f64>, wo: &Vector3<f
         let shadow_ray = Ray { ro: *point, rd: wi };
         let transmitted = s.objects.transmittance(&shadow_ray, d2.sqrt(), f64::MIN_POSITIVE);
         if transmitted.rgb.max() > 0. {
-            direct = direct + f * light.radiant_intensity() * (transmitted / d2);
+            direct = direct + f * light.radiant_intensity(&-wi) * (transmitted / d2);
         }
     }
     if let Some(sun) = &s.sun {
@@ -354,7 +357,7 @@ pub fn scatter_bsdf(bsdf: &dyn BSDF, r: &Ray, point: &Vector3<f64>, s: &Scene) -
 pub fn diffuse (pigment: Color, i: &Intersection, light_vec: &Vector3<f64>, light: &Light) -> Color {
     let cos = light_vec.normalize().dot(&i.normal);
     if cos.is_sign_positive() {
-        light.radiant_intensity() * pigment * (cos / (std::f64::consts::PI * light_vec.norm_squared()))
+        light.radiant_intensity(&-light_vec.normalize()) * pigment * (cos / (std::f64::consts::PI * light_vec.norm_squared()))
     } else {
         Color::black()
     }

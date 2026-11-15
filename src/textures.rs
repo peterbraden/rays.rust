@@ -114,6 +114,16 @@ impl Image {
     }
 
     /// Load `path` once, however often asked.
+    /// The mean of the texels (the pyramid's top level).
+    pub fn average(&self) -> Color {
+        self.levels.last().unwrap().texels[0]
+    }
+
+    /// Width and height, in texels.
+    pub fn size(&self) -> (usize, usize) {
+        (self.levels[0].width, self.levels[0].height)
+    }
+
     pub fn shared(path: &str, linear: Option<bool>) -> Arc<Image> {
         type Cache = Mutex<HashMap<(String, Option<bool>), Arc<Image>>>;
         static CACHE: OnceLock<Cache> = OnceLock::new();
@@ -274,6 +284,12 @@ impl ImageMap {
         uv.component_mul(&self.scale) + self.offset
     }
 
+    /// The image's value at texture coordinates `uv`, bilinearly interpolated at full
+    /// resolution (for emission, whose footprint isn't known when a light is sampled).
+    pub fn at(&self, uv: &Vector2<f64>) -> Color {
+        self.image.lookup(&self.mapped(uv), 0., Filter::Bilinear, self.wrap)
+    }
+
     /// The image's value at the hit, filtered over its footprint (see the module's notes); the
     /// first texel's colour if the shape has no texture coordinates.
     pub fn eval(&self, i: &Intersection, s: &Scene) -> Color {
@@ -363,10 +379,7 @@ impl ColorTexture {
     pub fn average(&self) -> Color {
         match self {
             ColorTexture::Constant(c) => *c,
-            ColorTexture::Image(m) => {
-                let top = m.image.levels.last().unwrap();
-                top.texels[0]
-            },
+            ColorTexture::Image(m) => m.image.average(),
         }
     }
 }

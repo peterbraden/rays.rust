@@ -1881,6 +1881,18 @@ impl SceneFile {
         if props["type"].as_str() == Some("noise") {
             return Some(Box::new(SceneFile::parse_noise_texture(props, materials)));
         }
+        // {"type": "mix", "materials": ["A", "B"], "amount": 0.5}: B with probability amount,
+        // else A (`material::mix`).
+        if props["type"].as_str() == Some("mix") {
+            let names = props["materials"].as_array().filter(|a| a.len() == 2)
+                .unwrap_or_else(|| panic!("Mix material '{}' needs two \"materials\"", name));
+            assert!(names.iter().all(|n| n.as_str() != Some(name.as_str())), "Mix material '{}' can't contain itself", name);
+            let get = |k: &Value| SceneFile::require_material(k, materials, &format!("mix {}", name));
+            return Some(Box::new(crate::material::mix::Mix {
+                materials: [get(&names[0]), get(&names[1])],
+                amount: SceneFile::parse_number(&props["amount"], 0.5).clamp(0., 1.),
+            }));
+        }
         match SceneFile::parse_material(props) {
             Some(m) => Some(m),
             None => panic!("Material '{}' has unknown type {}", name, props["type"]),

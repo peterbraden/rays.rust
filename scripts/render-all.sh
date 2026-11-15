@@ -32,7 +32,7 @@ while [ $# -gt 0 ]; do
         --commit) commit=1 ;;
         --list) list=1 ;;
         --resume) resume=1 ;;
-        -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) echo "Unknown option $1" >&2; exit 1 ;;
         *) break ;;
     esac

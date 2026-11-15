@@ -20,6 +20,8 @@ Supports:
       - Specular
       - Dielelectric
       - Leaf (translucent: diffuse reflection and transmission under a glossy coat)
+      - From PBRT: conductors with measured metals (gold, copper, silver, aluminium, brass),
+        anisotropic roughness, rough and thin glass, mixes, and hair
     - Spectral rendering (`"spectral": true`): dispersion, blackbody emitters
 
   - Objects

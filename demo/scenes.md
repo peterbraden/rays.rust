@@ -49,6 +49,11 @@ subdivision, ribbon and cylinder curves, lit by a quad light.
 A ball of fur: 40,000 Bézier curves.
 ![Fur](./scenes/fur.png)
 
+## Materials after PBRT
+Measured metals (gold, copper, brass, silver, aluminium), brushed aluminium, frosted glass, a
+thin pane, and a worn mix of paint and gold leaf.
+![PBRT materials](./scenes/pbrt-materials.png)
+
 ## Spheres
 Spheres demonstrating 3 different materials.
 ![Spheres](./scenes/spheres.png)

@@ -753,8 +753,8 @@ start) by chapter:
   intersections; floating-point error bounds for spawning rays.
 - 8, Sampling (done): Halton, stratified, blue-noise Z-Sobol'; PMJ02 deferred; ray
   differentials moved to chapter 10.
-- 9, Reflection models: conductors with complex η, k; rough dielectrics; thin dielectric; mix;
-  anisotropic roughness.
+- 9, Reflection models (done): conductors with complex η, k; rough dielectrics; thin
+  dielectric; mix; anisotropic roughness; hair.
 - 10, Textures: image textures, MIP maps and filtering; normal maps.
 - 11, Volume scattering: grid media, chromatic media with spectral MIS, emissive media.
 - 12, Lights: spot, goniometric, projection, textured area lights; light BVH.
@@ -914,6 +914,31 @@ effect is small, since only the first dimensions are ordered.
   back to per-pixel Sobol'. Indices are 32-bit, so images of 2^32 samples or more wrap.
 - Aligning dimensions to sampling decisions (pbrt's Get1D/Get2D/GetPixel2D), which would keep
   later bounces stratified across branching paths.
+
+### Chapter 9: reflection models (done)
+
+1. `conductor`: complex-index Fresnel; pbrt's measured silver, aluminium, gold, copper and brass
+   (`src/spectrum/metals.rs`), spectral in spectral mode; η/k or a reflectance colour otherwise.
+   Normal-incidence reflectances as published (gold 0.93, 0.77, 0.39).
+2. Anisotropic GGX (roughness along and across a tangent).
+3. `rough_dielectric` (Walter et al.) and `thin_dielectric`.
+4. `mix` (from pbrt's chapter 10, but it's a material).
+5. `hair`: pbrt's hair BSDF, from melanin concentrations or a colour; passes pbrt's white furnace
+   and sampling tests.
+
+Demo: `pbrt-materials.json`; `fur.json` with the hair BSDF.
+
+### Deferred from chapter 9
+
+- Multiple scattering between microfacets: rough glass keeps 98% of the light seen from outside
+  at α = 0.3, but 82% from inside (single scattering); rough metals likewise darken.
+- Measured BSDFs (pbrt's `MeasuredBxDF`, RGL data) and layered BSDFs (coated diffuse and
+  conductor; pbrt's chapter 14); our `plastic` is a simpler coat.
+- Anisotropy's tangent is a fixed world direction projected onto the surface, not the surface's
+  own ∂p/∂u, so brushed metal can't follow a mesh's parameterisation yet.
+- Hair: shadow rays leave from the near side, so direct light from behind isn't transmitted (TT)
+  in light sampling, only by sampled rays; the colour inversion assumes many bounces, so fur
+  needs a deep `max_depth`; hair renders slowly (curves themselves are slow).
 
 ### Reading (chapter 4)
 

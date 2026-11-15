@@ -5,6 +5,9 @@
 //! on: silver, aluminium, gold, copper and brass (CuZn), from published measurements of the
 //! metals' optical constants.
 
+// Measured data, some of whose values happen to lie near 2π or ln 2.
+#![allow(clippy::approx_constant)]
+
 pub const AG_ETA: [f64; 112] = [
     298.75705, 1.519, 302.400421, 1.496, 306.133759, 1.4325, 309.960449, 1.323,
     313.884003, 1.142062, 317.908142, 0.932, 322.036835, 0.719062, 326.274139, 0.526,

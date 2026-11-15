@@ -88,7 +88,7 @@ fn mp(cos_i: f64, cos_o: f64, sin_i: f64, sin_o: f64, v: f64) -> f64 {
     let a = cos_i * cos_o / v;
     let b = sin_i * sin_o / v;
     if v <= 0.1 {
-        (log_i0(a) - b - 1. / v + 0.6931 + (1. / (2. * v)).ln()).exp()
+        (log_i0(a) - b - 1. / v + std::f64::consts::LN_2 + (1. / (2. * v)).ln()).exp()
     } else {
         ((-b).exp() * i0(a)) / ((1. / v).sinh() * 2. * v)
     }

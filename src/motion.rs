@@ -195,6 +195,10 @@ impl Geometry for AnimatedTransform {
         self.now().uv(p, face)
     }
 
+    fn tolerance(&self) -> f64 {
+        self.now().tolerance()
+    }
+
     fn bounds(&self) -> BBox {
         self.bounds
     }

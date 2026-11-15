@@ -155,7 +155,9 @@ fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &S
     // leading to shadow acne.
     let mut biased_intersection = intersection;
     // Bias towards the side the ray arrived from, which for a ray inside an object is inwards.
-    biased_intersection.point = intersection.point + (intersection.facing_normal(r) * scene.render.shadow_bias);
+    // The scene's bias, or more if the hit's error may be larger (`Intersection::spawn_offset`).
+    let bias = scene.render.shadow_bias.max(intersection.spawn_offset());
+    biased_intersection.point = intersection.point + (intersection.facing_normal(r) * bias);
 
     let mut cast = 1;
     let (c, o) = trace_sample(r, &biased_intersection, depth, scene, prior);

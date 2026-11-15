@@ -15,8 +15,9 @@ pub struct Dielectric {
 }
 
 impl MaterialModel for Dielectric {
-    fn scatter(&self, r: &Ray, intersection: &Intersection, _s: &Scene) -> ScatteredRay{
-        scatter_dielectric(self.refractive_index.current(), self.attenuate.as_reflectance(), r, intersection)
+    fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay{
+        scatter_dielectric(self.refractive_index.current(), self.attenuate.as_reflectance(), r, intersection,
+            crate::material::functions::surface_offset(intersection, s))
     }
 }
 
@@ -58,5 +59,33 @@ mod tests {
         let blue = (0..50).find_map(|k| bend(0.05, k)).unwrap();
         let red = (0..50).find_map(|k| bend(0.95, k)).unwrap();
         assert!(blue < red, "blue {} red {}", blue, red);
+    }
+
+    /// In a tiny glass bead, 0.1 mm across, a refracted ray starts just inside the surface (a
+    /// fixed offset of 1 mm put it beyond the far side).
+    #[test]
+    fn test_refraction_into_a_tiny_bead_starts_inside_it() {
+        let s = SceneFile::from_string(r#"{ "camera": { "location": [0, 1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 } }"#.to_string());
+        let radius = 5e-5;
+        let object = SceneObject {
+            geometry: Box::new(Sphere::new(Vector3::zeros(), radius)),
+            medium: Box::new(Solid { m: Box::new(FlatColor { pigment: Color::white() }) }),
+        };
+        let glass = Dielectric { refractive_index: RefractiveIndex::Constant(1.5), attenuate: Color::white() };
+        let r = Ray { ro: Vector3::new(0., 1., 0.), rd: Vector3::new(0., -1., 0.) };
+        let hit = object.geometry.intersects(&r).unwrap();
+        let i = Intersection { face: 0, part: 0, dist: hit.dist, point: hit.point, normal: hit.normal, object: &object };
+        let bias = s.render.shadow_bias.max(i.spawn_offset());
+        let biased = Intersection { point: i.point + i.normal * bias, ..i };
+        let mut refracted = 0;
+        for k in 0..100 {
+            crate::geometry::seed_rand(9, k);
+            let out = glass.scatter(&r, &biased, &s).ray.unwrap();
+            if out.rd.y < 0. {
+                refracted += 1;
+                assert!(out.ro.norm() < radius, "starts {} from the centre of a bead of radius {}", out.ro.norm(), radius);
+            }
+        }
+        assert!(refracted > 80);
     }
 }

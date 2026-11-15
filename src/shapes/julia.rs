@@ -69,6 +69,8 @@ impl Julia {
 }
 
 impl Geometry for Julia {
+    fn tolerance(&self) -> f64 { self.accuracy }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         let rd = r.rd.normalize();
         let (a, b) = match quadratic_roots(r.ro.norm_squared() - self.radius * self.radius, 2. * r.ro.dot(&rd), 1.)[..] {

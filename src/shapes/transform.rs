@@ -161,6 +161,14 @@ impl Geometry for Transform {
         self.item.uv(&self.inverse.transform_point(&Point3::from(*p)).coords, face)
     }
 
+    /// The item's tolerance, stretched by at most the transform's largest scale.
+    fn tolerance(&self) -> f64 {
+        let t = self.item.tolerance();
+        if t == 0. { return 0.; }
+        let linear: Matrix3<f64> = self.transform.matrix().fixed_view::<3, 3>(0, 0).into();
+        t * linear.norm()
+    }
+
     fn is_stochastic(&self) -> bool {
         self.item.is_stochastic()
     }

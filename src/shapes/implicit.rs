@@ -169,6 +169,8 @@ impl Isosurface {
 }
 
 impl Geometry for Isosurface {
+    fn tolerance(&self) -> f64 { self.accuracy }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         implicit_hit(r, &self.container, self.open, self.accuracy, |p| self.g(p), |g| g.abs() / self.max_gradient)
     }
@@ -207,6 +209,8 @@ impl Superellipsoid {
 }
 
 impl Geometry for Superellipsoid {
+    fn tolerance(&self) -> f64 { 1e-6 }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         let cube = Container::Box(self.bounds());
         implicit_hit(r, &cube, true, 1e-6, |p| self.g(p), |_| 2. * 3f64.sqrt() / SUPERELLIPSOID_STEPS)

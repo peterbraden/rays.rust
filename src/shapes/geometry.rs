@@ -132,6 +132,11 @@ pub trait Geometry: Sync{
     /// hit. None for shapes without one.
     fn uv(&self, _p: &Vector3<f64>, _face: u32) -> Option<Vector2<f64>> { None }
 
+    /// The accuracy of this shape's hits, in its own units, beyond floating-point rounding: the
+    /// tolerance of an iterative solver (an isosurface's `accuracy`), or 0 for shapes solved in
+    /// closed form. See `Intersection::spawn_offset`.
+    fn tolerance(&self) -> f64 { 0. }
+
     /// A point on the surface for light sampling from `from`, its normal, and the density with
     /// which it was chosen per unit solid angle at `from` (PBR section 6.1.4, `Shape::Sample`
     /// with a reference point). By default a point uniform by area (`sample_surface`), whose
@@ -175,6 +180,7 @@ impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
     fn surface_area(&self) -> f64 { (**self).surface_area() }
     fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> { (**self).sample_surface(u) }
     fn uv(&self, p: &Vector3<f64>, face: u32) -> Option<Vector2<f64>> { (**self).uv(p, face) }
+    fn tolerance(&self) -> f64 { (**self).tolerance() }
     fn sample_from(&self, from: &Vector3<f64>, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>, f64)> { (**self).sample_from(from, u) }
     fn pdf_from(&self, from: &Vector3<f64>, y: &Vector3<f64>, n: &Vector3<f64>) -> f64 { (**self).pdf_from(from, y, n) }
     fn is_stochastic(&self) -> bool { (**self).is_stochastic() }
@@ -223,6 +229,10 @@ impl<T: Geometry> Geometry for Tagged<T> {
 
     fn uv(&self, p: &Vector3<f64>, _face: u32) -> Option<Vector2<f64>> {
         self.item.uv(p, 0)
+    }
+
+    fn tolerance(&self) -> f64 {
+        self.item.tolerance()
     }
 
     fn sample_from(&self, from: &Vector3<f64>, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>, f64)> {

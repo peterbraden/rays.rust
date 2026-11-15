@@ -52,9 +52,13 @@ pub fn scatter_lambertian(albedo: Color, intersection: &Intersection) -> Scatter
     ScatteredRay{ light_sampling: LightSampling::None, emit: Color::black(), attenuate:albedo, ray: Some(refl) }
 }
 
-/// Distance to move a scattered ray's origin off the surface, onto the side it travels into.
-/// Must exceed the scene's shadow bias, which pushes intersection points outward.
-const SURFACE_OFFSET: f64 = 0.001;
+/// How far to move a scattered ray's origin off the surface, onto the side it travels into:
+/// twice the bias the trace already pushed the hit outward by (the scene's `shadow_bias` or the
+/// hit's error bound, `Intersection::spawn_offset`), so a ray going in starts as far inside as
+/// it would otherwise have started outside.
+pub fn surface_offset(intersection: &Intersection, s: &Scene) -> f64 {
+    2. * s.render.shadow_bias.max(intersection.spawn_offset())
+}
 
 /// Probability that light is reflected rather than transmitted at a dielectric boundary.
 /// Returns 1 for total internal reflection.
@@ -70,9 +74,10 @@ pub fn fresnel_reflectance(cos_i: f64, ni_over_nt: f64, refractive_index: f64) -
 
 pub fn scatter_dielectric(
     refractive_index: f64,
-    albedo: Color, 
+    albedo: Color,
     r: &Ray,
-    intersection: &Intersection
+    intersection: &Intersection,
+    offset: f64,
 ) -> ScatteredRay {
 
     let drn = r.rd.dot(&intersection.normal);
@@ -96,7 +101,7 @@ pub fn scatter_dielectric(
             return ScatteredRay{ light_sampling: LightSampling::None, emit: Color::black(),
                 attenuate: albedo,
                 ray: Some( Ray {
-                    ro: intersection.point - outward_normal * SURFACE_OFFSET,
+                    ro: intersection.point - outward_normal * offset,
                     rd: refracted
                 }),
             };
@@ -108,7 +113,7 @@ pub fn scatter_dielectric(
     ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(),
         attenuate: Color::white(),
         ray: Some(Ray {
-            ro: intersection.point + outward_normal * SURFACE_OFFSET,
+            ro: intersection.point + outward_normal * offset,
             rd: reflected
         }) 
     }
@@ -417,7 +422,7 @@ mod tests {
             }),
         };
         let r = Ray { ro: Vector3::new(-1., 0.8, 0.), rd: Vector3::new(1., 0.2, 0.).normalize() };
-        let out = scatter_dielectric(1.5, Color::white(), &r, &i).ray.unwrap();
+        let out = scatter_dielectric(1.5, Color::white(), &r, &i, 0.001).ray.unwrap();
         assert!(out.ro.norm() < 1., "reflected ray starts outside: {}", out.ro);
         assert!(out.rd.y < 0.);
     }

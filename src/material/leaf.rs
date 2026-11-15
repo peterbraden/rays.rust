@@ -150,7 +150,7 @@ impl MaterialModel for Leaf {
         let LeafColor { reflectance, transmittance } = self.color(intersection.face);
 
         // The far side, for light transmitted through the leaf.
-        let far = Intersection { point: near.point - near.normal * THROUGH, normal: -near.normal, ..near };
+        let far = Intersection { point: near.point - near.normal * THROUGH.max(crate::material::functions::surface_offset(&near, s)), normal: -near.normal, ..near };
 
         // Direct light from both sides: lights on each side are only seen from that side.
         // At the sample's wavelengths, for light transport; the choice of side below may use RGB.

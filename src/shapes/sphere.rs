@@ -115,13 +115,16 @@ impl Geometry for Sphere {
 	
 		if dist < 0. { return None; }
 
-        let point = r.ro + (rd * dist);
+        // Reprojected onto the sphere, which removes the error of computing it along the ray
+        // (PBR section 6.8.5).
+        let normal = (r.ro + rd * dist - self.center).normalize();
+        let point = self.center + normal * self.radius;
 
         Some(
             RawIntersection { face: 0, part: 0,
-                dist, 
+                dist,
                 point,
-                normal: (point - self.center).normalize()
+                normal,
             })
     }
 

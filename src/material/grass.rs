@@ -69,7 +69,7 @@ impl MaterialModel for GrassMaterial {
 
         // The far side of the blade: a point just through it, facing away from the ray.
         let back = Intersection {
-            point: front.point - n * (2. * s.render.shadow_bias + THROUGH_LEAF),
+            point: front.point - n * (crate::material::functions::surface_offset(&front, s) + THROUGH_LEAF),
             normal: -n,
             ..front
         };

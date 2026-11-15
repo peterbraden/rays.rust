@@ -298,6 +298,9 @@ pub struct Scene {
     pub area_light_indices: std::collections::HashMap<usize, usize>,
 }
 
+/// With a light BVH, up to this many point lights are still all sampled at every vertex.
+pub const BVH_POINT_LIGHTS: usize = 16;
+
 impl Scene {
     /// Whether `object` is one of the area lights that diffuse surfaces sample directly.
     pub fn is_sampled_light(&self, object: &SceneObject) -> bool {
@@ -310,6 +313,13 @@ impl Scene {
             return None;
         }
         self.area_light_indices.get(&(object as *const SceneObject as usize)).copied()
+    }
+
+    /// Whether every point light is sampled at every vertex, as when there are few of them
+    /// (a shadow ray each is cheap, and beats choosing one), or there is no light BVH; otherwise
+    /// the BVH chooses among them with the area lights.
+    pub fn sums_point_lights(&self) -> bool {
+        self.light_bvh.is_none() || self.lights.len() <= BVH_POINT_LIGHTS
     }
 
     /// How many of the light BVH's lights are area lights (the rest are point lights).

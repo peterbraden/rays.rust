@@ -758,7 +758,7 @@ start) by chapter:
 - 10, Textures (done): image textures, MIP maps and filtering (EWA); normal maps.
 - 11, Volume scattering (done): grid media, chromatic media with spectral MIS, emissive media;
   media bounded by shapes.
-- 12, Lights: spot, goniometric, projection, textured area lights; light BVH.
+- 12, Lights (done): spot, goniometric, projection, textured area lights; light BVH.
 - 13-14, Light transport: layered BSDFs, subsurface scattering, light tracing.
 - Online chapters: BDPT, MLT, SPPM. 15-16: the wavefront integrator (GPU; see workstream 3).
 
@@ -1008,6 +1008,37 @@ scatters blue most, casting an orange shadow.
   multiple-scattering approximations use the mean albedo in chromatic media.
 - pbrt's `CloudMedium` and `"uniform"` medium are covered by `nubis_clouds` and constant
   volumes.
+
+### Chapter 12: light sources (done)
+
+Point lights, the sun (with its disc), area lights sampled by power, and the sky as an
+importance-sampled environment were there. Added, in three commits with tests:
+
+1. Point lights with directional profiles (`light::Profile`, PBR 12.1-12.2): spots with
+   pbrt's smoothstep falloff, goniometric lights from an equirectangular image, projectors
+   (the image's frame matches the camera's, so a slide reads correctly from behind), and
+   `"power"` in place of intensity.
+2. Textured diffuse area lights (PBR 12.5.1): `MaterialModel::emitted_at` looks the image up
+   at the hit's, or the sampled point's, texture coordinates.
+3. The light BVH (PBR 12.6.3, Conty Estevez and Kulla 2018), `"light_sampler": "bvh"`: bounds,
+   power and emission cones per node, importance without the receiver's normal (so the trace
+   can evaluate the pmf for MIS), median splits. Beams weigh in at 4π times their intensity, as
+   in pbrt; up to 16 point lights are still summed at every vertex, which beat choosing one on
+   `lights.json`. On 900 lamps at 16 spp (`lamp-field.json`), mean FLIP against a 512 spp
+   reference falls from 0.50 (power) to 0.15; on `lights.json`, with 80 bulbs near the wall,
+   RMSE 0.357 to 0.352.
+
+### Deferred from chapter 12
+
+- The receiver's normal in the BVH's importance (pbrt uses it): needs the previous vertex's
+  normal where the trace weights a light it hits. And pbrt's SAH-style split cost over the
+  emission cones; ours split at the median.
+- Spherical triangle and rectangle sampling (PBR 6.5.4, 6.6.3, from chapter 6), and
+  emissive media in the BVH (chapter 11).
+- Textured emission on meshes is exact only when hit; light sampling takes the image's mean,
+  not knowing which triangle it sampled.
+- IES photometric files for goniometric lights (pbrt converts them to images offline).
+- `"light_sampler": "bvh"` is not the default, to keep existing renders.
 
 ### Reading (chapter 4)
 

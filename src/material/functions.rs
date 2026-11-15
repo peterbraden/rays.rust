@@ -130,7 +130,7 @@ pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) ->
     crate::material::ggx::scattered();
     let mut direct = Color::black();
     // With a light BVH, point lights are sampled with the area lights below.
-    for light in s.lights.iter().filter(|_| s.light_bvh.is_none()) {
+    for light in s.lights.iter().filter(|_| s.sums_point_lights()) {
         let light_vec = light.position - intersection.point;
         let shadow_ray = Ray {ro: intersection.point, rd: light_vec.normalize()};
         let transmitted = s.objects.transmittance(&shadow_ray, light_vec.norm(), f64::MIN_POSITIVE);
@@ -284,7 +284,7 @@ pub fn area_light_pdf(point: &Vector3<f64>, y: &Vector3<f64>, n_y: &Vector3<f64>
 /// - The sky, if sampled (`sky_light_mis`): one direction, weighted alike.
 pub fn direct_lighting_mis(bsdf: &dyn BSDF, point: &Vector3<f64>, wo: &Vector3<f64>, s: &Scene) -> Color {
     let mut direct = Color::black();
-    for light in s.lights.iter().filter(|_| s.light_bvh.is_none()) {
+    for light in s.lights.iter().filter(|_| s.sums_point_lights()) {
         let light_vec = light.position - point;
         let d2 = light_vec.norm_squared();
         let wi = light_vec / d2.sqrt();

@@ -2846,7 +2846,8 @@ impl SceneFile {
     }
 
     /// The light BVH over a scene's sampled lights (`Scene::light_bvh`): its area lights, if
-    /// `sample_lights` is on, then its point lights.
+    /// `sample_lights` is on, then its point lights if there are more than
+    /// `scene::BVH_POINT_LIGHTS` of them.
     fn light_bvh(scene: &Scene) -> crate::light_bvh::LightBvh {
         use crate::light_bvh::LightBounds;
         use crate::light::Profile;
@@ -2876,8 +2877,15 @@ impl SceneFile {
         }
         // A narrow spread about the axis for beams, which can't be exactly zero.
         let beam_spread = 1e-4f64.cos();
-        for light in &scene.lights {
-            let phi = light.power();
+        for light in scene.lights.iter().filter(|_| scene.lights.len() > crate::scene::BVH_POINT_LIGHTS) {
+            // As pbrt: 4π times the intensity, its power were it to shine every way, so that
+            // a beam's importance follows the light it delivers where it points, not how
+            // little of the sphere it covers.
+            let image = match &light.profile {
+                Profile::Goniometric { image, .. } | Profile::Projection { image, .. } => luminance(image.average()),
+                _ => 1.,
+            };
+            let phi = 4. * std::f64::consts::PI * luminance(light.emission.srgb()) * light.intensity * image;
             bounds.push(match &light.profile {
                 Profile::Spot { axis, cos_total, .. } => LightBounds { cos_theta_o: *cos_total, cos_theta_e: beam_spread, w: *axis, ..LightBounds::point(light.position, phi) },
                 Profile::Projection { frame, half, .. } => {

@@ -45,3 +45,29 @@ Image.fromarray((mask * 255).astype(np.uint8)).convert('RGB').save(out + 'dirt.p
 c = ((np.floor(x * 64) + np.floor(y * 64)) % 2)
 c = c[..., None].repeat(3, -1)
 Image.fromarray((c * 255).astype(np.uint8)).save(out + 'checker.png')
+# For the lights demo: a slide for the projector and the light panel (a stained-glass rose of
+# coloured cells in lead), and a goniometric diagram of a lamp under a shade (equirectangular,
+# top row up: a bright cone downwards, a soft glow through the shade, dark above it).
+S = 256
+yy, xx = np.mgrid[0:S, 0:S] / S - 0.5
+r = np.hypot(xx, yy)
+a = np.arctan2(yy, xx)
+petal = np.cos(a * 8) * 0.5 + 0.5
+ring = np.floor(r * 10)
+cell = (ring * 7 + np.floor((a + np.pi) / (2 * np.pi) * 16)).astype(int)
+palette = np.array([[0.9, 0.15, 0.1], [0.1, 0.3, 0.9], [0.95, 0.75, 0.1], [0.1, 0.7, 0.3], [0.6, 0.1, 0.7], [0.9, 0.45, 0.1]])
+glass = palette[cell % len(palette)] * (0.55 + 0.45 * petal[..., None])
+lead = (np.abs((r * 10) % 1 - 0.5) > 0.44) | (np.abs(((a + np.pi) / (2 * np.pi) * 16) % 1 - 0.5) > 0.46)
+glass[lead] = 0.02
+glass[r > 0.48] = 0
+srgb = np.where(glass <= 0.0031308, 12.92 * glass, 1.055 * glass ** (1 / 2.4) - 0.055)
+Image.fromarray((np.clip(srgb, 0, 1) * 255 + 0.5).astype(np.uint8)).save(out + 'rose-window.png')
+W, H = 128, 64
+theta = (np.arange(H) + 0.5) / H * np.pi          # from up
+phi = (np.arange(W) + 0.5) / W * 2 * np.pi
+T, P = np.meshgrid(theta, phi, indexing='ij')
+down = np.clip((T - np.radians(125)) / np.radians(20), 0, 1) ** 2          # the open bottom
+shade = 0.12 * np.exp(-((T - np.radians(95)) / np.radians(20)) ** 2) * (1 + 0.3 * np.cos(P * 6))
+gonio = np.clip(down + shade, 0, 1)
+g8 = np.where(gonio <= 0.0031308, 12.92 * gonio, 1.055 * gonio ** (1 / 2.4) - 0.055)
+Image.fromarray((g8 * 255 + 0.5).astype(np.uint8)).convert('RGB').save(out + 'lampshade.png')

@@ -59,6 +59,15 @@ Image textures and a normal map on a brick wall and sphere, paint worn to copper
 and a checkerboard filtered into the distance.
 ![Textures](./scenes/textures.png)
 
+## Lights
+A spot light on a red ball, a projector throwing a rose window on the wall, a goniometric lamp
+with a shade, a stained-glass window as a textured area light, and strings of fairy lights,
+sampled with the light BVH.
+![Lights](./scenes/lights.png)
+
+900 lamps, sampled by the light BVH.
+![Lamp field](./scenes/lamp-field.png)
+
 ## Participating media
 A smoke plume and its fire from voxel grids (blackbody emission by temperature), a glass ball
 of red liquid (a chromatic absorber inside a dielectric), and a ball of medium that scatters

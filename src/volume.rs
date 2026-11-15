@@ -658,7 +658,7 @@ impl VolumeMaterial {
         let p = |w: &Vector3<f64>| phase.eval(incoming.dot(w)).as_unbounded();
         let mut direct = Color::black();
         // With a light BVH, point lights are sampled with the area lights below.
-        for light in s.lights.iter().filter(|_| s.light_bvh.is_none()) {
+        for light in s.lights.iter().filter(|_| s.sums_point_lights()) {
             let to_light = light.position - point;
             let d = to_light.norm();
             let w = to_light / d;

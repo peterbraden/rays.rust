@@ -129,6 +129,24 @@ alias nor blur ([demo/scenes/textures.json](demo/scenes/textures.json)):
 
 ![Texture filtering](demo/texture-filtering.png)
 
+## Lights
+
+After PBRT's chapter 12. Besides area lights (any object with a `diffuse-light` material, whose
+emission can be an image: `"texture": {"texture": "window.png"}`), the sun and the sky, the
+scene's `"lights"` are lights at a point, with an `"intensity"` or a `"power"`, made directional
+by one of `"spot": {"lookat": [x, y, z], "angle": 30, "delta": 5}`, `"goniometric": {"image":
+"lamp.png"}` (an equirectangular diagram of the light's distribution) or `"projection":
+{"image": "slide.png", "lookat": [x, y, z], "fov": 20}` ([demo/scenes/lights.json](demo/scenes/lights.json)):
+
+![Lights](demo/scenes/lights.png)
+
+With many lights, `"light_sampler": "bvh"` picks one per shading point by its likely
+contribution there (pbrt's light BVH) rather than in proportion to its power. Below, 900 lamps
+at 16 samples per pixel: by power (left), by the BVH (middle), and a 512-sample reference
+(right); mean FLIP error 0.50 against 0.15 ([demo/scenes/lamp-field.json](demo/scenes/lamp-field.json)):
+
+![Light BVH](demo/light-bvh-comparison.png)
+
 ## Participating media
 
 A `"volume"` fills a box (`"min"`, `"max"`) or any closed `"shape"` with a medium: constant

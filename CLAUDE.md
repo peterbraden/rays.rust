@@ -18,6 +18,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Samplers after PBRT ch. 8 (`src/sampler.rs`, `"sampler"`): Sobol' (default), ZSobol' (blue-noise error), Halton, stratified, independent; all feed `geometry::rand()` through a thread-local sample state
 - Materials after PBRT ch. 9: `conductor` (measured metals' complex IOR in `src/spectrum/metals.rs`, anisotropic GGX via `GGX::aniso`), `rough_dielectric` and `thin_dielectric` (`src/material/rough_dielectric.rs`), `mix`, and `hair` (pbrt's hair BSDF, `src/material/hair.rs`; needs cylinder curves, whose `Geometry::tangent` it reads)
 - Textures after PBRT ch. 10 (`src/textures.rs`): image textures as MIP pyramids filtered by EWA over the camera-approximated footprint (`textures::footprint`, `Scene::footprint`), for `lambertian`/`plastic` albedo (`ColorTexture`) and `mix` amount; tangent-space normal maps via `Medium::normal_at_hit`; demo textures from `scripts/make-demo-textures.py`
+- Lights after PBRT ch. 12 (`src/light.rs`, `src/light_bvh.rs`): point lights with a `Profile` (spot, goniometric, projection; `"power"`), textured diffuse area lights (`MaterialModel::emitted_at` with texture coordinates), and `"light_sampler": "bvh"`: pbrt's light BVH choosing one light per vertex by importance (`material::functions::sample_lights_with`; up to `scene::BVH_POINT_LIGHTS` point lights are still summed), with `LightBvh::pmf` for MIS
 - Multithreaded rendering with progressive output
 
 ## Build Commands

@@ -3,7 +3,7 @@ use std::time::{Instant};
 use crate::scene::Scene;
 use crate::color::Color;
 use crate::trace::trace;
-use crate::geometry::{rand, seed_rand, begin_sample, end_sample};
+use crate::geometry::{rand, seed_rand, begin_sample, begin_sampler, end_sample};
 use crate::scene::Sampler;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -458,6 +458,26 @@ fn render_pixel(x: usize, y: usize, first: usize, count: usize, s: &Scene) -> (u
         let (u, v) = match s.render.sampler {
             Sampler::Sobol => {
                 begin_sample(pixel_seed, k as u32);
+                (rand(), rand())
+            },
+            Sampler::Halton => {
+                begin_sampler(crate::sampler::SampleState::Halton(crate::sampler::Halton::new(pixel_seed, k as u64)));
+                (rand(), rand())
+            },
+            Sampler::Stratified => {
+                begin_sampler(crate::sampler::SampleState::Stratified(crate::sampler::Stratified::new(pixel_seed, k as u32, s.render.supersamples as u32)));
+                (rand(), rand())
+            },
+            Sampler::ZSobol => {
+                let planned = s.render.supersamples.max(1).next_power_of_two();
+                if k < planned {
+                    let resolution = s.image.width.max(s.image.height) as u32;
+                    begin_sampler(crate::sampler::SampleState::ZSobol(crate::sampler::ZSobol::new(
+                        s.render.seed, x as u32, y as u32, k as u32, planned as u32, resolution)));
+                } else {
+                    // Beyond the planned samples, the pixel's own Sobol' sequence.
+                    begin_sample(pixel_seed, k as u32);
+                }
                 (rand(), rand())
             },
             Sampler::Independent => ((offset.0 + k as f64 * R2.0).fract(), (offset.1 + k as f64 * R2.1).fract()),

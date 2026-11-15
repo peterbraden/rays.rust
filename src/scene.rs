@@ -67,6 +67,13 @@ pub enum Sampler {
     Independent,
     /// Owen-scrambled Sobol' points across every dimension (`sobol`).
     Sobol,
+    /// Owen-scrambled Halton points (`sampler::Halton`).
+    Halton,
+    /// Jittered strata, permuted per dimension (`sampler::Stratified`).
+    Stratified,
+    /// One Sobol' sequence across the image in Morton order: blue-noise error
+    /// (`sampler::ZSobol`).
+    ZSobol,
 }
 
 /// What a ray that leaves the scene sees.

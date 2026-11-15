@@ -751,7 +751,8 @@ start) by chapter:
   balance.
 - 6, Shapes (done): curves, bilinear patches, Loop subdivision; texture coordinates on
   intersections; floating-point error bounds for spawning rays.
-- 8, Sampling: Halton, stratified, PMJ02, blue-noise Z-Sobol'; ray differentials.
+- 8, Sampling (done): Halton, stratified, blue-noise Z-Sobol'; PMJ02 deferred; ray
+  differentials moved to chapter 10.
 - 9, Reflection models: conductors with complex η, k; rough dielectrics; thin dielectric; mix;
   anisotropic roughness.
 - 10, Textures: image textures, MIP maps and filtering; normal maps.
@@ -881,6 +882,38 @@ In six commits, each with tests:
   at about a sixth of the rate of triangles; a hair BSDF belongs to chapter 9.
 - Subdivision: normals from the refined mesh, not the limit surface's tangents; no creases.
 - No texture coordinates yet for boxes, tori, CSG results, blobs and the other POV-Ray shapes.
+
+### Chapter 8: sampling (done)
+
+`src/sampler.rs`: Halton (Owen-scrambled digit by digit with Kensler's permutations),
+stratified (jittered, permuted per dimension; the pixel on a grid for square counts) and
+ZSobol' (Ahmed and Wonka's Morton-ordered Sobol', blue-noise error), beside the existing Sobol'
+and independent samplers; `"sampler"` picks one. Filters were done with chapter 5. Ray
+differentials go with texture filtering (PBR 10.1), in chapter 10.
+
+Measured (relMSE of one 16 spp render, six seeds; and spectra of 1 spp error images):
+
+| scene | independent | Sobol' | ZSobol' | Halton | stratified |
+|---|---|---|---|---|---|
+| cornell-box | 0.0130 | 0.0083 | 0.0088 | 0.0099 | 0.0093 |
+| lamps | 0.0187 | 0.0148 | 0.0147 | 0.0160 | 0.0159 |
+| glossy-sun | 0.0106 | 0.0075 | 0.0073 | 0.0080 | 0.0078 |
+
+ZSobol' matches Sobol' in MSE, and moves the error to high frequencies: on a soft shadow at
+1 spp, 1.6% of its energy lies below a quarter of the Nyquist frequency, against 5.2% for
+Sobol' (white noise: 4.9%); on scenes dominated by deep indirect light (Cornell box), the
+effect is small, since only the first dimensions are ordered.
+
+### Deferred from chapter 8
+
+- PMJ02: its defining property, a (0, 2)-sequence in the first two dimensions, is already the
+  Sobol' sampler's; the blue-noise variant (pmj02bn) needs pbrt's precomputed tables.
+- Halton costs about three times as much per sample as Sobol' here (Owen scrambling every digit
+  in 64 prime bases); pbrt's digit-permutation tables would be cheaper.
+- ZSobol' needs the sample count in advance: samples added beyond it (resuming with more) fall
+  back to per-pixel Sobol'. Indices are 32-bit, so images of 2^32 samples or more wrap.
+- Aligning dimensions to sampling decisions (pbrt's Get1D/Get2D/GetPixel2D), which would keep
+  later bounces stratified across branching paths.
 
 ### Reading (chapter 4)
 

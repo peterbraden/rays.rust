@@ -100,6 +100,15 @@ its pose at the end, eg. `"translate": [0, 0, 0], "motion": {"translate": [2, 0,
 scene a `"shutter": [0, 1]` ([demo/scenes/motion-blur.json](demo/scenes/motion-blur.json)).
 `"filter"` can be `"box"`, `"tent"`, `"gaussian"`, `"mitchell"` or `"lanczos"`.
 
+`"sampler"` chooses where each sample's random numbers come from (PBRT's chapter 8): `"sobol"`
+(the default: Owen-scrambled Sobol' points per pixel), `"zsobol"` (one Sobol' sequence across
+the image in Morton order, so the error is blue noise: the same size, but far less visible at low
+sample counts), `"halton"`, `"stratified"` or `"independent"`. A soft shadow at 1 sample per
+pixel, Sobol' against ZSobol' (less than a third of the error's energy at low frequencies, same
+RMSE):
+
+![Sobol and ZSobol](demo/zsobol-comparison.png)
+
 The `"output"` block holds the film: `"iso"`, `"exposure_time"`, `"white_balance"` (kelvin or
 `"D50"`, `"A"`, ...), `"color_space"` (`"srgb"`, `"display-p3"`, `"rec2020"`,
 `"aces2065-1"`), and `"flare"`: ghosts of the brightest lights, traced through the lens's

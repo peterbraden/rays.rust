@@ -2528,7 +2528,10 @@ impl SceneFile {
                 sampler: match s.sampler.as_str() {
                     None | Some("sobol") => Sampler::Sobol,
                     Some("independent") => Sampler::Independent,
-                    Some(x) => panic!("Unknown sampler '{}': expected \"sobol\" or \"independent\"", x),
+                    Some("halton") => Sampler::Halton,
+                    Some("stratified") => Sampler::Stratified,
+                    Some("zsobol") => Sampler::ZSobol,
+                    Some(x) => panic!("Unknown sampler '{}': expected \"sobol\", \"zsobol\", \"halton\", \"stratified\" or \"independent\"", x),
                 },
             },
             camera: SceneFile::parse_camera(s.camera, width as u32, height as u32),

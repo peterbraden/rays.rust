@@ -24,6 +24,7 @@ mod ray;
 mod color;
 mod spectrum;
 mod motion;
+mod sampler;
 mod film;
 mod lens;
 mod flare;

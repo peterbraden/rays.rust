@@ -1,4 +1,5 @@
 {
+  "output": { "exposure": 0.59 },
   "width": 640,
   "height": 360,
   "supersamples": 16,
@@ -32,7 +33,7 @@
   ],
 
   "objects": [
-    { "type": "skysphere", "sun_direction": [-0.6, 0.45, 0.9] },
+    { "type": "skysphere", "ozone": false, "rayleigh_r": 1.16e-5, "rayleigh_g": 2.7e-5, "rayleigh_b": 6.62e-5, "sun_direction": [-0.6, 0.45, 0.9] },
     { "type": "terrain", "heightmap": "$hills", "material": "SOIL" },
     {
       "type": "grass",

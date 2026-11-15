@@ -1,4 +1,5 @@
 {
+  "output": { "exposure": 0.71 },
   "width": 960,
   "height": 540,
   "supersamples": 96,
@@ -194,7 +195,7 @@
       ]
     },
     {
-      "type": "skysphere",
+      "type": "skysphere", "ozone": false, "rayleigh_r": 1.16e-5, "rayleigh_g": 2.7e-5, "rayleigh_b": 6.62e-5,
       "sun_direction": "$sun",
       "brightness": 12
     }

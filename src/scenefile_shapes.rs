@@ -124,6 +124,35 @@ impl SceneFile {
                     num_def(o, "droop", 0.3), num_def(o, "curl", 0.15), kind, SceneFile::parse_int(&o["seed"], 0) as u64);
                 Box::new(crate::shapes::curve::Curves::new(strands, SceneFile::parse_int(&o["split"], 2) as u32))
             },
+            // {"type": "subdivision", "src": "file.obj" | "points": [..], "triangles": [[a, b, c],
+            // ..], "levels": 3}: a Loop subdivision surface, the smooth limit of the mesh
+            // (`shapes::subdivision`).
+            "subdivision" => {
+                let (positions, triangles) = match o["src"].as_str() {
+                    Some(path) => {
+                        let mut positions = vec![];
+                        let mut triangles = vec![];
+                        for m in crate::shapes::mesh::load(path) {
+                            let offset = positions.len();
+                            positions.extend(m.positions);
+                            triangles.extend(m.triangles.iter().map(|t| t.map(|i| i + offset)));
+                        }
+                        (positions, triangles)
+                    },
+                    None => {
+                        let tris = o["triangles"].as_array().unwrap_or_else(|| panic!("subdivision needs \"src\" or \"points\" and \"triangles\""))
+                            .iter().map(|t| {
+                                let i: Vec<usize> = t.as_array().map(|a| a.iter().filter_map(|x| x.as_u64().map(|v| v as usize)).collect()).unwrap_or_default();
+                                assert!(i.len() == 3, "A subdivision triangle is three indices, got {}", t);
+                                [i[0], i[1], i[2]]
+                            }).collect();
+                        (points3(o, "points"), tris)
+                    },
+                };
+                let n = positions.len();
+                assert!(triangles.iter().flatten().all(|&i| i < n), "subdivision triangle indices must be under the {} points", n);
+                Box::new(crate::shapes::subdivision::subdivide(positions, triangles, SceneFile::parse_int(&o["levels"], 3) as u32))
+            },
             // {"type": "torus", "major": R, "minor": r}: about the y axis, centred on the origin.
             "torus" => Box::new(Torus::new(num(o, "major"), num(o, "minor"))),
             // {"type": "quadric", "squares": [A, B, C], "mixed": [D, E, F], "linear": [G, H, I],

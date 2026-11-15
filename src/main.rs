@@ -74,6 +74,7 @@ mod shapes {
     pub mod disc;
     pub mod bilinear;
     pub mod curve;
+    pub mod subdivision;
     pub mod algebraic;
     pub mod polygon;
     pub mod revolution;

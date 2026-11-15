@@ -85,7 +85,7 @@ fn load_obj(pth: &str) -> Vec<IndexedMesh> {
 
 /// Load a mesh file: OBJ (`.obj`), PLY (`.ply`, see `crate::shapes::ply`) or Tungsten's `.wo3`
 /// (see `crate::shapes::wo3`).
-fn load(pth: &str) -> Vec<IndexedMesh> {
+pub fn load(pth: &str) -> Vec<IndexedMesh> {
     let lower = pth.to_lowercase();
     if lower.ends_with(".ply") {
         vec![crate::shapes::ply::read(pth).unwrap_or_else(|e| panic!("Failed to load mesh {}", e))]

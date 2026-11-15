@@ -33,6 +33,7 @@ use crate::material::rainbow::RainbowTable;
 use crate::procedural::harris_cumulus::{CloudSimulation, Forcing, HarrisCumulus, Profile, SimulationParams, Sounding};
 use crate::participatingmedia::create_fog;
 use crate::volume::grid::{Grid, GridDensity};
+use crate::volume::emission::VolumeEmission;
 use crate::volume::{Volume, create_medium, create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
 use crate::material::ice_halos::{Crystals, Habit};
 use crate::material::diffraction::DiffractionTable;
@@ -1014,7 +1015,9 @@ impl SceneFile {
             None => Volume::new(bounds, density),
             Some(s) => Volume::in_shape(s, density),
         };
-        create_medium(volume, SceneFile::parse_scattering(o, 0.))
+        let mut scattering = SceneFile::parse_scattering(o, 0.);
+        scattering.emission = SceneFile::parse_volume_emission(o, bounds);
+        create_medium(volume, scattering)
     }
 
     /// A voxel grid (`volume::grid::Grid`): a `.vol` file's path, or `{"resolution": [nx, ny,
@@ -1065,6 +1068,34 @@ impl SceneFile {
             diffraction: SceneFile::parse_diffraction(o),
             halos: SceneFile::parse_halos(o),
             rainbow: (o["rainbow"].as_bool() == Some(true)).then(|| Arc::new(RainbowTable::new(100_000))),
+            emission: None,
+        }
+    }
+
+    /// Light a volume emits (`volume::emission`), in the box `bounds`: `"emission": colour`, or
+    /// `{"color": colour, "scale": s}`, or blackbody radiation `{"temperature": kelvin, "scale":
+    /// s}` with luminance `s` (default 1) at the hottest. The temperature may come from a grid
+    /// (`"temperature": "fire.vol"` or inline, see `parse_grid`), its values times
+    /// `temperature_scale`, and below `cutoff` kelvin nothing is emitted. The medium emits
+    /// only as much as it absorbs: give it an albedo below one.
+    pub fn parse_volume_emission(o: &Value, bounds: BBox) -> Option<VolumeEmission> {
+        let v = o.get("emission")?;
+        if v.is_array() {
+            return Some(VolumeEmission::color(SceneFile::parse_color(v), 1.));
+        }
+        let scale = SceneFile::parse_number(&v["scale"], 1.);
+        match v.get("temperature") {
+            None => Some(VolumeEmission::color(SceneFile::parse_color_def(v, "color", Color::white()), scale)),
+            Some(t) => {
+                let field: Arc<dyn DensityField> = if t.is_number() {
+                    Arc::new(ConstantDensity(SceneFile::parse_number(t, 0.)))
+                } else {
+                    let g = SceneFile::parse_grid(t);
+                    let b = if o.get("min").is_none() { g.bounds.unwrap_or(bounds) } else { bounds };
+                    Arc::new(GridDensity::new(b, g, SceneFile::parse_number(&v["temperature_scale"], 1.)))
+                };
+                Some(VolumeEmission::temperature(field, SceneFile::parse_number(&v["cutoff"], 0.), scale))
+            },
         }
     }
 

@@ -46,6 +46,7 @@ use crate::sceneobject::SceneObject;
 use crate::shapes::bbox::BBox;
 use crate::shapes::geometry::Geometry;
 
+pub mod emission;
 pub mod grid;
 
 thread_local! {
@@ -376,6 +377,8 @@ pub struct VolumeMaterial {
     pub rainbow: Option<Arc<RainbowTable>>,
     /// The volume's density field, for the particle size where it has one.
     pub field: Arc<dyn DensityField>,
+    /// Light the medium emits (`emission`).
+    pub emission: Option<emission::VolumeEmission>,
 }
 
 /// Halos from ice crystals (see `material::ice_halos`): sun dogs, the 22° and 46° halos,
@@ -609,11 +612,17 @@ impl MaterialModel for VolumeMaterial {
         // Light leaving this vertex, towards the lights and onwards, has scattered once more.
         set_path(scatterings + 1, self.density_scale(scatterings + 1));
         let (rd, weight) = phase.sample(&incoming);
+        let albedo = albedo.as_reflectance();
+        let mut emit = self.direct_lighting(&incoming, &i.point, s, &phase, albedo, scatterings);
+        if let Some(e) = &self.emission {
+            // σ_a / σ_t of the emitted radiance (`emission`).
+            emit = emit + (Color::white() - albedo) * e.radiance(&i.point);
+        }
         ScatteredRay {
             ray: Some(Ray { ro: i.point, rd }),
             // Phase / pdf: 1, unless the phase function differs between channels.
-            attenuate: albedo.as_reflectance() * weight.as_unbounded(),
-            emit: self.direct_lighting(&incoming, &i.point, s, &phase, albedo.as_reflectance(), scatterings),
+            attenuate: albedo * weight.as_unbounded(),
+            emit,
             // Area lights were sampled above (when enabled); the trace skips them if the
             // scattered ray hits one, so they aren't counted twice.
             light_sampling: LightSampling::Exclusive,
@@ -629,6 +638,7 @@ pub struct Scattering {
     pub diffraction: Option<Diffraction>,
     pub halos: Option<Halos>,
     pub rainbow: Option<Arc<RainbowTable>>,
+    pub emission: Option<emission::VolumeEmission>,
 }
 
 pub fn create_volume(bounds: BBox, density: Arc<dyn DensityField>, s: Scattering) -> SceneObject {
@@ -639,7 +649,7 @@ pub fn create_volume(bounds: BBox, density: Arc<dyn DensityField>, s: Scattering
 pub fn create_medium(volume: Volume, s: Scattering) -> SceneObject {
     let material = VolumeMaterial {
         albedo: s.albedo, phase: s.phase, approximation: s.approximation, diffraction: s.diffraction,
-        halos: s.halos, rainbow: s.rainbow, field: volume.density.clone(),
+        halos: s.halos, rainbow: s.rainbow, field: volume.density.clone(), emission: s.emission,
     };
     SceneObject {
         geometry: Box::new(volume),
@@ -780,6 +790,7 @@ mod tests {
             halos: None,
             rainbow: None,
             field: Arc::new(ConstantDensity(1.)),
+            emission: None,
         };
         // First scattering in full: the extinction as given, diffraction in the phase.
         assert_eq!(m.density_scale(0), 1.);

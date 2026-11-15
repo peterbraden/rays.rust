@@ -1,6 +1,6 @@
 use crate::na::Vector3;
 use std::fmt;
-use std::ops::{Mul, Add, Div};
+use std::ops::{Mul, Add, Div, Sub};
 use std::cmp::Ordering;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -116,6 +116,14 @@ impl Add<Color> for Color {
 
     fn add(self, _rhs: Color) -> Color {
         Color {rgb: self.rgb + _rhs.rgb }
+    }
+}
+
+impl Sub<Color> for Color {
+    type Output = Color;
+
+    fn sub(self, _rhs: Color) -> Color {
+        Color { rgb: self.rgb - _rhs.rgb }
     }
 }
 

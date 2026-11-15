@@ -169,6 +169,26 @@ impl Geometry for Transform {
         self.uniform_scale.map_or(0., |s| self.item.surface_area() * s * s)
     }
 
+    /// A similarity (uniform scale, rotation, translation) keeps angles, so the item's own
+    /// sampling from the point in its space has the same density per solid angle.
+    fn sample_from(&self, from: &Vector3<f64>, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>, f64)> {
+        self.uniform_scale?;
+        let local = self.inverse.transform_point(&Point3::from(*from)).coords;
+        let (p, n, pdf) = self.item.sample_from(&local, u)?;
+        Some((self.transform.transform_point(&Point3::from(p)).coords, (self.normal_matrix * n).normalize(), pdf))
+    }
+
+    fn pdf_from(&self, from: &Vector3<f64>, y: &Vector3<f64>, n: &Vector3<f64>) -> f64 {
+        if self.uniform_scale.is_none() {
+            return 0.;
+        }
+        let local = |v: &Vector3<f64>| self.inverse.transform_point(&Point3::from(*v)).coords;
+        // Normals map back by the transpose of the linear part (the inverse of `normal_matrix`).
+        let linear: crate::na::Matrix3<f64> = self.transform.matrix().fixed_view::<3, 3>(0, 0).into();
+        let ln = (linear.transpose() * n).normalize();
+        self.item.pdf_from(&local(from), &local(y), &ln)
+    }
+
     fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> {
         // Uniform scaling keeps samples uniform by area; otherwise the item isn't sampled.
         self.uniform_scale?;

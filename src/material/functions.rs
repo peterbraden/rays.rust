@@ -184,16 +184,16 @@ pub fn sample_area_light_with(point: &Vector3<f64>, s: &Scene, response: impl Fn
     let (_, _, i) = s.area_light_choice.sample(rand());
     let chosen = s.area_light_choice.probability(i);
     let light = &s.area_lights[i];
-    let (y, n_y) = match light.geometry.sample_surface([rand(), rand(), rand()]) {
+    // A point on the light, with its density per solid angle (`Geometry::sample_from`: by area
+    // for most shapes, by the subtended cone for spheres).
+    let (y, n_y, pdf) = match light.geometry.sample_from(point, [rand(), rand(), rand()]) {
         Some(sample) => sample,
         None => return Color::black(),
     };
     let to_light = y - point;
-    let d2 = to_light.norm_squared();
-    let d = d2.sqrt();
+    let d = to_light.norm();
     let w = to_light / d;
-    let cos_y = n_y.dot(&-w).abs();
-    let pdf = d2 / (cos_y * light.geometry.surface_area()) * chosen;
+    let pdf = pdf * chosen;
     let response = response(&w, pdf);
     if response == Color::black() {
         return Color::black();
@@ -213,18 +213,15 @@ pub fn sample_area_light_with(point: &Vector3<f64>, s: &Scene, response: impl Fn
 
 /// The density per steradian with which `sample_area_light_with`, from `point`, picks the
 /// point `y` with normal `n_y` on the area light `light`: the chance of choosing that light
-/// (`Scene::area_light_choice`), times its density per unit area, 1 / area, converted to solid
-/// angle by d² / |cos θ_y|.
+/// (`Scene::area_light_choice`), times the shape's own density per solid angle
+/// (`Geometry::pdf_from`).
 pub fn area_light_pdf(point: &Vector3<f64>, y: &Vector3<f64>, n_y: &Vector3<f64>, light: &SceneObject, s: &Scene) -> f64 {
-    let to_light = y - point;
-    let d2 = to_light.norm_squared();
-    let cos_y = n_y.dot(&to_light).abs() / d2.sqrt();
-    if cos_y <= 0. {
-        return 0.;
-    }
     let chosen = s.area_lights.iter().position(|l| std::ptr::eq(&**l, light))
         .map_or(0., |i| s.area_light_choice.probability(i));
-    d2 / (cos_y * light.geometry.surface_area()) * chosen
+    if chosen == 0. {
+        return 0.;
+    }
+    light.geometry.pdf_from(point, y, n_y) * chosen
 }
 
 /// Light arriving directly from the scene's lights at `point`, and reflected towards unit `wo`

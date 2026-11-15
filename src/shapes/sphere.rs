@@ -30,6 +30,53 @@ impl Geometry for Sphere {
         Some((self.center + n * self.radius, n))
     }
 
+    /// Sample the cone of directions the sphere subtends from `from` (PBR section 6.2.4): every
+    /// sample is on the visible cap, with density 1 / (2π (1 - cos θ_max)) per solid angle, where
+    /// a uniform point on the whole sphere is hidden behind it half the time or more. From
+    /// inside, by area. For small cones, cos θ comes from a Taylor series in sin² θ, as in pbrt,
+    /// which keeps precision for distant lights.
+    fn sample_from(&self, from: &Vector3<f64>, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>, f64)> {
+        let to_center = self.center - from;
+        let d2 = to_center.norm_squared();
+        let r2 = self.radius * self.radius;
+        if d2 <= r2 * (1. + 1e-9) {
+            let (y, n) = self.sample_surface(u)?;
+            let pdf = crate::shapes::geometry::area_pdf(from, &y, &n, self.surface_area());
+            return (pdf > 0. && pdf.is_finite()).then_some((y, n, pdf));
+        }
+        let sin2_max = r2 / d2;
+        let sin_max = sin2_max.sqrt();
+        let mut one_minus_cos_max = 1. - (1. - sin2_max).max(0.).sqrt();
+        let mut cos_theta = (1. - one_minus_cos_max - 1.) * u[0] + 1.;
+        let mut sin2_theta = 1. - cos_theta * cos_theta;
+        if sin2_max < 0.00068523 {
+            // sin² 1.5°
+            sin2_theta = sin2_max * u[0];
+            cos_theta = (1. - sin2_theta).sqrt();
+            one_minus_cos_max = sin2_max / 2.;
+        }
+        // The angle at the centre between the direction back to `from` and the sampled point.
+        let cos_alpha = sin2_theta / sin_max + cos_theta * (1. - sin2_theta / sin2_max).max(0.).sqrt();
+        let sin_alpha = (1. - cos_alpha * cos_alpha).max(0.).sqrt();
+        let phi = 2. * std::f64::consts::PI * u[1];
+        let z = to_center / d2.sqrt();
+        let (a, b) = crate::material::phase::orthonormal_basis(&z);
+        // The normal points back towards `from`, at angle alpha from it.
+        let n = -(a * (sin_alpha * phi.cos()) + b * (sin_alpha * phi.sin()) + z * cos_alpha);
+        Some((self.center + n * self.radius, n, 1. / (2. * std::f64::consts::PI * one_minus_cos_max)))
+    }
+
+    fn pdf_from(&self, from: &Vector3<f64>, y: &Vector3<f64>, n: &Vector3<f64>) -> f64 {
+        let d2 = (self.center - from).norm_squared();
+        let r2 = self.radius * self.radius;
+        if d2 <= r2 * (1. + 1e-9) {
+            return crate::shapes::geometry::area_pdf(from, y, n, self.surface_area());
+        }
+        let sin2_max = r2 / d2;
+        let one_minus_cos_max = if sin2_max < 0.00068523 { sin2_max / 2. } else { 1. - (1. - sin2_max).sqrt() };
+        1. / (2. * std::f64::consts::PI * one_minus_cos_max)
+    }
+
     /// Longitude and latitude, y up (PBR section 6.2, with pbrt's z up turned to y): u = φ / 2π
     /// round from +x towards +z, v from 0 at the bottom to 1 at the top.
     fn uv(&self, p: &Vector3<f64>, _face: u32) -> Option<crate::na::Vector2<f64>> {
@@ -154,5 +201,38 @@ mod tests {
         let r = Ray { ro: Vector3::new(0., 0., 0.), rd: Vector3::new(0., 0., 2.) };
         let i = s.intersects(&r).unwrap();
         assert!((i.dist - 1.).abs() < 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod sampling_tests {
+    use super::*;
+    use crate::geometry::Pcg32;
+
+    /// Every cone sample is on the sphere and visible from outside it, its density is the
+    /// cone's, and weighted samples integrate the solid angle the sphere subtends.
+    #[test]
+    fn test_sphere_cone_sampling() {
+        let s = Sphere::new(Vector3::new(0., 0., 5.), 1.);
+        let mut rng = Pcg32::new(2, 9);
+        for from in [Vector3::zeros(), Vector3::new(0.3, -0.2, 3.5)] {
+            let d = (s.center - from).norm();
+            let solid = 2. * std::f64::consts::PI * (1. - (1. - 1. / (d * d)).sqrt());
+            let n = 20_000;
+            let mut sum = 0.;
+            for _ in 0..n {
+                let (y, normal, pdf) = s.sample_from(&from, [rng.next_f64(), rng.next_f64(), rng.next_f64()]).unwrap();
+                assert!(((y - s.center).norm() - 1.).abs() < 1e-9);
+                assert!(normal.dot(&(from - y)) >= -1e-9, "sample on the hidden side");
+                assert!((pdf - s.pdf_from(&from, &y, &normal)).abs() < 1e-9 * pdf);
+                sum += 1. / pdf;
+            }
+            assert!((sum / n as f64 - solid).abs() < 1e-9 * solid, "{} vs {}", sum / n as f64, solid);
+        }
+        // A distant sphere, in the Taylor series' range: the density is still the cone's.
+        let far = Sphere::new(Vector3::new(0., 0., 1e4), 1.);
+        let (_, _, pdf) = far.sample_from(&Vector3::zeros(), [0.3, 0.6, 0.]).unwrap();
+        let expected = 1. / (std::f64::consts::PI * 1e-8);
+        assert!((pdf / expected - 1.).abs() < 1e-6, "{} vs {}", pdf, expected);
     }
 }

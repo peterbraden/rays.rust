@@ -10,25 +10,29 @@
 #   --samples N  a quick preview at N samples per pixel, written to target/render-all/ instead,
 #                leaving the checked-in images alone
 #   --commit     commit each image as it is done (not with --samples)
+#   --resume     carry on from each scene's saved render state rather than starting afresh:
+#                after raising a scene's samples, only the missing ones are rendered. Only
+#                when the renderer hasn't changed since the state was saved
 #   --list       list the scenes and stop
 # Scene names (eg. `orbit spheres`) limit the run to those; by default, every scene in demo/
 # and demo/scenes/.
 #
-# Renders always start afresh (--fresh): a saved render state is keyed by the scene file, not
-# the renderer, so after renderer changes resuming one would mix old samples with new.
+# Renders start afresh (--fresh) unless --resume: a saved render state is keyed by the scene
+# file, not the renderer, so after renderer changes resuming one would mix old samples with new.
 # A failed scene is reported and the run carries on. Each scene's output goes to
 # target/render-all/<name>.log, and a line per scene to target/render-all/summary.txt.
 set -u
 cd "$(dirname "$0")/.."
 
-missing=0; samples=""; commit=0; list=0
+missing=0; samples=""; commit=0; list=0; resume=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --missing) missing=1 ;;
         --samples) samples="$2"; shift ;;
         --commit) commit=1 ;;
         --list) list=1 ;;
-        -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --resume) resume=1 ;;
+        -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) echo "Unknown option $1" >&2; exit 1 ;;
         *) break ;;
     esac
@@ -72,7 +76,8 @@ for scene in "${scenes[@]}"; do
         echo "[$done_count/$total] $name: has an image, skipped"
         continue
     fi
-    args=(--fresh)
+    args=()
+    [ $resume = 1 ] || args+=(--fresh)
     if [ -n "$samples" ]; then
         image="$out/$name.png"
         args+=(--samples "$samples" -o "$image")

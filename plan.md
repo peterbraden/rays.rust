@@ -756,7 +756,8 @@ start) by chapter:
 - 9, Reflection models (done): conductors with complex η, k; rough dielectrics; thin
   dielectric; mix; anisotropic roughness; hair.
 - 10, Textures (done): image textures, MIP maps and filtering (EWA); normal maps.
-- 11, Volume scattering: grid media, chromatic media with spectral MIS, emissive media.
+- 11, Volume scattering (done): grid media, chromatic media with spectral MIS, emissive media;
+  media bounded by shapes.
 - 12, Lights: spot, goniometric, projection, textured area lights; light BVH.
 - 13-14, Light transport: layered BSDFs, subsurface scattering, light tracing.
 - Online chapters: BDPT, MLT, SPPM. 15-16: the wavefront integrator (GPU; see workstream 3).
@@ -963,6 +964,50 @@ filtering is at grazing angles), EWA 0.050 (0.044).
   textures in texture space (ours are in world space: `noise`, `checker` by position).
 - Displacement and alpha (cut-out) textures; texture coordinates for more shapes (boxes, tori,
   CSG); pbrt's resampling of non-power-of-two images (ours box-filter odd sizes).
+
+### Chapter 11: volume scattering (done)
+
+Volumes already had delta tracking with local majorants, residual ratio tracking for shadows,
+Henyey-Greenstein and Mie phase functions, and much beyond pbrt (diffraction, halos, rainbows,
+the similarity and Oz approximations). Added, in four commits with tests:
+
+1. Grid media (`src/volume/grid.rs`, pbrt's `GridMedium`/`SampledGrid`): densities on a voxel
+   grid, trilinear, inline or from Mitsuba `.vol` files (float32 or uint8), with pbrt's 16³
+   majorant grid walked by a DDA. On the demo plume, density lookups per ray fall from 16.6 to
+   1.6 against a single global majorant. Demo grids from `scripts/make-demo-volumes.py`.
+2. Media bounded by any closed shape (`Volume::shape`, from the shape's crossings): pbrt's
+   medium interface for an interior, so a dielectric and a volume of the same shape make
+   coloured glass or a glass of liquid.
+3. Emissive media (`src/volume/emission.rs`): σ_a L_e, estimated as (1 - α) L_e at each
+   collision; a colour or blackbody radiation at a temperature, constant or from a grid,
+   following Planck's law in brightness (unlike pbrt, which normalises each temperature's
+   spectrum): 1800 K is about 840 times as luminous as 1200 K.
+4. Chromatic media with spectral MIS (`src/volume/chromatic.rs`; PBR 14.1.2-3, Miller et al.
+   2019): `"sigma_a"`, `"sigma_s"` per channel; each path tracks with a random hero channel
+   against the largest channel's majorant and weights what it gathers by r_c / mean(r).
+   Because media here are objects found by intersection, not the space between surfaces, a
+   walk records its tentative collisions and the trace applies those before the nearest hit
+   (`chromatic::settle`). Shadow rays ratio-track every channel at once, so scene
+   transmittance is now a `Color`. Tests: Beer-Lambert per channel through a chromatic
+   absorber, and a chromatic furnace that averages to one in every channel with no estimate
+   above three.
+
+Demo `media.json`: a smoke plume and its fire, a glass ball of red liquid, and a ball that
+scatters blue most, casting an orange shadow.
+
+### Deferred from chapter 11
+
+- Emissive media aren't sampled as lights (nor are they in pbrt-v4): surfaces near a fire see
+  it only when a BSDF ray hits it, which is noisy. Light sampling of the emission (or a light
+  BVH over voxels, chapter 12) would fix it.
+- NanoVDB/OpenVDB grids (pbrt's `NanoVDBMedium`), and pbrt's RGB grid medium (σ_a, σ_s and
+  L_e per voxel as colours); ours are a scalar grid times per-channel coefficients.
+- Shadow rays through dielectrics stay blocked, so a scattering medium inside glass is lit only
+  by paths, not by the sun or point lights (pbrt the same).
+- Chromatic media under a scaling `transform` (walk distances are local, the hit's world); the
+  multiple-scattering approximations use the mean albedo in chromatic media.
+- pbrt's `CloudMedium` and `"uniform"` medium are covered by `nubis_clouds` and constant
+  volumes.
 
 ### Reading (chapter 4)
 

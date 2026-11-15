@@ -985,7 +985,8 @@ impl SceneFile {
     /// absorption and scattering per unit density, as pbrt's media; where their sum differs
     /// between channels the medium is chromatic (`volume::chromatic`). With `shape`, a geometry (as an object's, eg.
     /// `{"type": "sphere", ...}`), the medium fills only its inside: give a dielectric object
-    /// the same shape for a glass of coloured liquid (`volume::Volume::shape`).
+    /// the same shape for a glass of coloured liquid (`volume::Volume::shape`). `emission`
+    /// makes it glow (`parse_volume_emission`).
     /// `albedo` (default white) is the fraction scattered rather than absorbed at a collision.
     /// How it scatters is given by `g` (Henyey-Greenstein, -1 to 1, default 0) or by
     /// `droplet_diameter` (in µm, 5 to 50: the Mie scattering of water droplets of that size;

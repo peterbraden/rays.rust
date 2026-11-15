@@ -129,6 +129,25 @@ alias nor blur ([demo/scenes/textures.json](demo/scenes/textures.json)):
 
 ![Texture filtering](demo/texture-filtering.png)
 
+## Participating media
+
+A `"volume"` fills a box (`"min"`, `"max"`) or any closed `"shape"` with a medium: constant
+density, `"noise"`, or a voxel `"grid"` (a Mitsuba `.vol` file, tracked with pbrt's grid of
+local majorants). After PBRT's chapter 11, it can give `"sigma_a"` and `"sigma_s"` per colour
+channel, and a medium whose extinction differs between channels (juice, coloured glass,
+smoke that scatters blue) is tracked with pbrt's spectral MIS; and it can glow, with an
+`"emission"` colour or blackbody `"temperature"` (constant, or a grid: fire). A glass of
+coloured liquid is a dielectric object and a volume of the same shape
+([demo/scenes/media.json](demo/scenes/media.json)):
+
+![Media](demo/scenes/media.png)
+
+```json
+{ "type": "volume", "grid": "demo/volumes/plume.vol", "density": 8,
+  "sigma_a": [0.5, 0.5, 0.5], "sigma_s": [0.5, 0.5, 0.5],
+  "emission": { "temperature": "demo/volumes/fire.vol", "temperature_scale": 2000, "scale": 150 } }
+```
+
 ## Forests
 
 A `forest` covers part of a surface with trees: a few distinct trees are grown per species,

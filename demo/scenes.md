@@ -59,6 +59,12 @@ Image textures and a normal map on a brick wall and sphere, paint worn to copper
 and a checkerboard filtered into the distance.
 ![Textures](./scenes/textures.png)
 
+## Participating media
+A smoke plume and its fire from voxel grids (blackbody emission by temperature), a glass ball
+of red liquid (a chromatic absorber inside a dielectric), and a ball of medium that scatters
+blue most, casting an orange shadow.
+![Media](./scenes/media.png)
+
 ## Spheres
 Spheres demonstrating 3 different materials.
 ![Spheres](./scenes/spheres.png)

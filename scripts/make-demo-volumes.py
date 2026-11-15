@@ -57,12 +57,12 @@ density = edge * (0.4 + 0.8 * billow) / (1 + 0.6 * y) * np.clip((3.4 - y) / 0.6,
 density *= np.clip(y / 0.15, 0, 1)
 # The fire: hot along the base of the axis in licking tongues, cooling as it rises and mixes.
 flame = fbm(x + wx * 0.5, y * 2.2 - 0.4, z + wz * 0.5, 4, 4, 400)
-core = np.exp(-(((x + wx * 0.5 - cx) ** 2 + (z + wz * 0.5) ** 2) / (0.2 + 0.06 * y) ** 2))
-tongues = np.clip((flame - 0.35) / 0.3, 0, 1)
-temperature = 2000 * core * np.exp(-y / 0.9) * (0.35 + 0.65 * tongues)
+core = np.exp(-(((x + wx * 0.5 - cx) ** 2 + (z + wz * 0.5) ** 2) / (0.26 + 0.05 * y) ** 2))
+tongues = np.clip((flame - 0.3) / 0.35, 0, 1)
+temperature = 1950 * core * np.exp(-(y / 1.1) ** 2) * (0.55 + 0.45 * tongues)
 temperature = np.clip(temperature, 0, 2000)
 # The fire burns in its own gases: density where it is hot too.
-density = np.maximum(density, 0.5 * core * np.exp(-y / 0.8))
+density = np.maximum(density, 0.5 * core * np.exp(-(y / 1.1) ** 2))
 
 def write(name, values, scale):
     v = np.clip(values / scale * 255 + 0.5, 0, 255).astype(np.uint8)

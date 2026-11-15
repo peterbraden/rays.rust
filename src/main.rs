@@ -37,6 +37,7 @@ mod material {
     pub mod specular;
     pub mod conductor;
     pub mod rough_dielectric;
+    pub mod layered;
     pub mod mix;
     pub mod hair;
     pub mod ambient;

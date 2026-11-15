@@ -2077,6 +2077,42 @@ impl SceneFile {
             }));
         }
 
+        // {"type": "coated_diffuse", "albedo": colour or texture, "roughness": coat r,
+        // "refractive_index": 1.5, "thickness": 0.01, "medium_albedo": colour, "g": 0,
+        // "max_depth": 10, "samples": 1}, and "coated_conductor" with a conductor's "metal" (or
+        // "eta" and "k", or "reflectance") and "conductor_roughness" in place of "albedo": pbrt's
+        // layered materials (`material::layered`).
+        if t == "coated_diffuse" || t == "coated_conductor" {
+            use crate::material::conductor::Optics;
+            use crate::material::layered::{Base, Coated};
+            let base = if t == "coated_diffuse" {
+                Base::Diffuse(SceneFile::parse_color_texture(o.get("albedo").unwrap_or(&serde_json::json!([0.5, 0.5, 0.5]))))
+            } else {
+                let optics = if let Some(name) = o["metal"].as_str() {
+                    let (eta, k) = crate::spectrum::metals::named(name)
+                        .unwrap_or_else(|| panic!("Unknown metal '{}': expected Ag, Al, Au, Cu or CuZn", name));
+                    Optics::Measured { eta, k }
+                } else if !o["eta"].is_null() || !o["k"].is_null() {
+                    Optics::Constant { eta: SceneFile::parse_color_def(o, "eta", Color::white()), k: SceneFile::parse_color_def(o, "k", Color::black()) }
+                } else {
+                    Optics::Reflectance(SceneFile::parse_color_def(o, "reflectance", Color::new(0.9, 0.9, 0.9)))
+                };
+                Base::Conductor { optics, roughness: SceneFile::parse_number(&o["conductor_roughness"], 0.) }
+            };
+            let thickness = SceneFile::parse_number(&o["thickness"], 0.01);
+            assert!(thickness > 0., "A coat's thickness must be positive");
+            return Some(Box::new(Coated {
+                base,
+                refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.5),
+                roughness: SceneFile::parse_number(&o["roughness"], 0.),
+                thickness,
+                albedo: SceneFile::parse_color_def(o, "medium_albedo", Color::black()),
+                g: SceneFile::parse_number(&o["g"], 0.),
+                max_depth: SceneFile::parse_int(&o["max_depth"], 10) as u32,
+                samples: SceneFile::parse_int(&o["samples"], 1).max(1) as u32,
+            }));
+        }
+
         if t == "lambertian" {
             let d:Lambertian = Lambertian {
                 albedo: SceneFile::parse_color_texture(&o["albedo"]),

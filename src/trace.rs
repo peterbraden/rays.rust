@@ -354,6 +354,51 @@ mod tests {
         assert!((power - bvh).abs() < 0.04 * power, "power {} vs bvh {}", power, bvh);
     }
 
+    #[test]
+    fn test_coated_materials_agree_with_and_without_light_sampling() {
+        // Next-event estimation through the stochastic layered BSDF, weighted by its estimated
+        // density, against finding the light by BSDF sampling alone.
+        for (floor, tolerance) in [
+            (r#"{ "type": "coated_diffuse", "albedo": [0.6, 0.6, 0.6], "roughness": 0.3 }"#, 0.04),
+            (r#"{ "type": "coated_diffuse", "albedo": [0.6, 0.6, 0.6], "roughness": 0 }"#, 0.04),
+            (r#"{ "type": "coated_conductor", "metal": "Cu", "conductor_roughness": 0.4, "roughness": 0.1 }"#, 0.06),
+        ] {
+            let scene = |sample_lights: bool| SceneFile::from_string(format!(r#"{{
+                "background": [0, 0, 0], "max_depth": 1, "sample_lights": {},
+                "camera": {{ "location": [0, 0.5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+                "materials": {{ "F": {}, "L": {{ "type": "diffuse-light", "color": [1, 1, 1], "intensity": 1 }} }},
+                "objects": [
+                    {{ "type": "plane", "y": 0, "material": "F" }},
+                    {{ "type": "quad", "points": [[-1, 1, -1], [1, 1, -1], [-1, 1, 1], [1, 1, 1]], "material": "L" }}
+                ]
+            }}"#, sample_lights, floor));
+            crate::geometry::seed_rand(6, 1);
+            let r = Ray { ro: Vector3::new(0.3, 0.5, -0.6), rd: Vector3::new(-0.2, -1., 0.5).normalize() };
+            let mean = |s: &Scene, n: usize| (0..n).map(|_| trace(&r, 0, s).1.rgb.x).sum::<f64>() / n as f64;
+            let (sampled, hit) = (mean(&scene(true), 40_000), mean(&scene(false), 80_000));
+            assert!(sampled > 0.01, "{}: {}", floor, sampled);
+            assert!((sampled - hit).abs() < tolerance * hit, "{}: light sampling {} vs hitting {}", floor, sampled, hit);
+        }
+    }
+
+    #[test]
+    fn test_coated_white_furnace() {
+        // A white base under a thin clear coat, lit evenly from everywhere, looks as bright as
+        // its surroundings, given a deep enough walk: at pbrt's default of 10 bounces between
+        // the layers, light trapped by total internal reflection is lost (7% here).
+        let s = SceneFile::from_string(r#"{
+            "background": [1, 1, 1], "max_depth": 100, "path_termination": "russian_roulette",
+            "camera": { "location": [0, 1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 },
+            "materials": { "F": { "type": "coated_diffuse", "albedo": [1, 1, 1], "thickness": 0.000001, "max_depth": 100 } },
+            "objects": [ { "type": "plane", "y": 0, "material": "F" } ]
+        }"#.to_string());
+        crate::geometry::seed_rand(7, 1);
+        let r = Ray { ro: Vector3::new(0., 1., 0.), rd: Vector3::new(0.3, -1., 0.).normalize() };
+        let n = 20_000;
+        let mean = (0..n).map(|_| trace(&r, 0, &s).1.rgb.x).sum::<f64>() / n as f64;
+        assert!((mean - 1.).abs() < 0.03, "{}", mean);
+    }
+
     /// Mean and standard deviation of n samples of the radiance from the floor below the light.
     fn floor_radiance(s: &Scene, n: usize) -> (f64, f64) {
         let r = Ray { ro: Vector3::new(0., 0.5, 0.), rd: Vector3::new(0., -1., 0.) };

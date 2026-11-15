@@ -72,6 +72,7 @@ mod shapes {
     pub mod polynomial;
     pub mod cone;
     pub mod disc;
+    pub mod bilinear;
     pub mod algebraic;
     pub mod polygon;
     pub mod revolution;

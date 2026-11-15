@@ -20,6 +20,7 @@ defaults.
 | `cylinder` | `base`*, `cap`*, `radius`*, `open: false` | Closed by flat ends unless `open`. |
 | `cone` | `base`*, `base_radius`*, `cap`*, `cap_radius`*, `open: false` | A truncated cone. |
 | `disc` | `center`*, `normal`*, `radius`*, `hole_radius: 0` | Flat, with an optional hole. Can be an area light. |
+| `bilinear_patch` (or `quad`) | `points`* (four corners: p00, p10, p01, p11) | The surface between four corners: a quadrilateral if flat, a saddle if not (pbrt's bilinear patch). Can be an area light. |
 
 ## Polynomial surfaces
 

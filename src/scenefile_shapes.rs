@@ -80,6 +80,14 @@ impl SceneFile {
             // {"type": "disc", "center": [..], "normal": [..], "radius": r, "hole_radius": 0}
             "disc" => Box::new(Disc::new(
                 vec3(o, "center"), vec3(o, "normal"), num(o, "radius"), num_def(o, "hole_radius", 0.))),
+            // {"type": "bilinear_patch", "points": [p00, p10, p01, p11]}: the surface between four
+            // corners, flat or a saddle (see `shapes::bilinear`); "quad" is the same, for flat
+            // corners.
+            "bilinear_patch" | "quad" => {
+                let p = points3(o, "points");
+                assert!(p.len() == 4, "A {} needs four \"points\", got {}", t, p.len());
+                Box::new(crate::shapes::bilinear::BilinearPatch::new(p[0], p[1], p[2], p[3]))
+            },
             // {"type": "torus", "major": R, "minor": r}: about the y axis, centred on the origin.
             "torus" => Box::new(Torus::new(num(o, "major"), num(o, "minor"))),
             // {"type": "quadric", "squares": [A, B, C], "mixed": [D, E, F], "linear": [G, H, I],

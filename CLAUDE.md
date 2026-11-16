@@ -63,6 +63,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Multithreaded rendering with Rayon
 
 ## Project Structure
+- A library (`src/lib.rs`, the module tree) and the command-line tool (`src/main.rs`, behind the default `cli` feature: clap, indicatif, nv-flip and the other terminal and C dependencies). The library without `cli` builds for `wasm32-unknown-unknown` (check: `cargo check --lib --no-default-features --target wasm32-unknown-unknown`); keep C dependencies and getrandom out of it
 - Modules organized by functionality (material, shapes, procedural)
 - Scene definitions stored in JSON files (in demo/ and demo/scenes/); other renderers' formats are translated into that JSON (`SceneFile::read_document`; see `scene-formats.md`)
 - Rendering progress tracking via indicatif

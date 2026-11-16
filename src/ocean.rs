@@ -112,7 +112,8 @@ use crate::ocean::_rand::Rng;
 use std::path::Path;
 use crate::color::Color;
 use rustfft::algorithm::Radix4;
-use rustfft::FFT;
+use rustfft::Fft;
+use rustfft::FftDirection;
 use crate::shapes::bbox::BBox;
 use crate::shapes::triangle::Triangle;
 use crate::shapes::repeating_mesh::RepeatingMesh;
@@ -222,28 +223,24 @@ fn transpose(matr: &[Complex<f64>], size: usize) -> Vec<Complex<f64>> {
 
 /// 2D Fast Fourier Transform (Used to test IFFT2)
 fn fft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
-    let ifft = Radix4::new(size, false);
-    let mut tile_clone = tile.clone();
-    let mut fft = vec![Complex::new(0., 0.); size * size];
-    ifft.process_multi(&mut tile_clone[..], &mut fft[..]);
-    let mut conj = transpose(&fft, size);
-    let mut out =  vec![Complex::new(0., 0.); size * size];
-    ifft.process_multi(&mut conj, &mut out[..]);
-    transpose(&out, size)
+    let fft = Radix4::new(size, FftDirection::Forward);
+    let mut rows = tile;
+    fft.process(&mut rows);
+    let mut cols = transpose(&rows, size);
+    fft.process(&mut cols);
+    transpose(&cols, size)
 }
 
 /// Inverse 2D Fast Fourier Transform
 pub(crate) fn ifft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
-    let ifft = Radix4::new(size, true);
-    let mut tile_clone = tile.clone();
-    let mut fft = vec![Complex::new(0., 0.); size * size];
-    ifft.process_multi(&mut tile_clone[..], &mut fft[..]);
-	fft = fft.iter().map(|x| x.unscale(size as f64)).collect();
-    let mut conj = transpose(&fft, size);
-    let mut out =  vec![Complex::new(0., 0.); size * size];
-    ifft.process_multi(&mut conj[..], &mut out[..]);
-	out = out.iter().map(|x| x.unscale(size as f64)).collect();
-    transpose(&out, size)
+    let ifft = Radix4::new(size, FftDirection::Inverse);
+    let mut rows = tile;
+    ifft.process(&mut rows);
+    let rows: Vec<_> = rows.iter().map(|x| x.unscale(size as f64)).collect();
+    let mut cols = transpose(&rows, size);
+    ifft.process(&mut cols);
+    let cols: Vec<_> = cols.iter().map(|x| x.unscale(size as f64)).collect();
+    transpose(&cols, size)
 }
 
 /// A field over the N x N Fourier grid.

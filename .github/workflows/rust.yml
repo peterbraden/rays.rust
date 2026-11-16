@@ -46,3 +46,25 @@ jobs:
       run: cargo test --release --features gpu gpu::
     - name: Render on the GPU
       run: cargo run --release --features gpu -- --gpu --width 60 --height 40 demo/ci-smoke-test.json
+
+  web:
+    # The browser version (web/): the library for wasm32, rendering through WebGPU in headless
+    # Chromium (SwiftShader), compared with the native GPU renderer's image of the same scene.
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Check the library builds for wasm32
+      run: rustup target add wasm32-unknown-unknown && cargo check --lib --no-default-features --features gpu --target wasm32-unknown-unknown
+    - name: Install wasm-bindgen
+      run: cargo install wasm-bindgen-cli --version "$(grep -A1 '^name = "wasm-bindgen"$' web/Cargo.lock | sed -n 's/version = "\(.*\)"/\1/p')"
+    - name: Build the browser version
+      run: scripts/build-web.sh
+    - name: Install Chromium and lavapipe
+      run: |
+        cd web && npm install --no-save playwright@1.63.0 && npx playwright install --with-deps chromium
+        sudo apt-get install -y mesa-vulkan-drivers
+    - name: Render in the browser, and compare with the native GPU renderer
+      run: |
+        node web/test.mjs demo/scenes/spheres.json 160 90 32 web-spheres.png
+        cargo run --release --features gpu -- --gpu --width 160 --height 90 --samples 32 -o native-spheres.png demo/scenes/spheres.json --compare web-spheres.png --max-flip 0.01

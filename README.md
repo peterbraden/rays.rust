@@ -162,6 +162,25 @@ exposure 0.998 and mean FLIP 0.0017, `instances` 1.001 and 0.016. Without a GPU,
 `scripts/build-shaders.sh`, which uses the nightly toolchain rust-gpu pins (`shaders/rust-toolchain.toml`).
 The shader crate also builds for the CPU, where the tests run its code against the renderer's.
 
+### In a browser
+
+The same renderer runs in a browser with WebGPU (Chrome or Edge; Safari 26; Firefox on
+Windows). `web/` builds the renderer's library for WebAssembly with the GPU path tracer, whose
+shader goes to the browser as WGSL (`src/gpu/pathtrace.wgsl`, translated from the SPIR-V by
+naga when the shader is built):
+
+```
+cargo install wasm-bindgen-cli --version 0.2.130
+scripts/build-web.sh
+python3 -m http.server 8000
+```
+
+and open `http://localhost:8000/web/www/?scene=demo/scenes/spheres.json&width=640&height=360`.
+The page renders one pass per frame and shows the image every 8; meshes the scene names are
+fetched from the server. Its images match the native GPU renderer's (mean FLIP 0.003 on
+`spheres`, 0.0003 on `demo.json`); `node web/test.mjs` renders a scene in headless Chromium for
+comparison with `rays --compare`.
+
 ## Coats and subsurface scattering
 
 After PBRT's chapter 14: `coated_diffuse` and `coated_conductor` put a base under a clear or

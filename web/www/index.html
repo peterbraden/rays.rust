@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rays on WebGPU</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f6f6f4; --fg: #1d1d1b; --muted: #6b6b66; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ececea; --muted: #9a9a94; } }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  canvas { display: block; max-width: 100%; height: auto; image-rendering: pixelated; background: #000; }
+  #status { color: var(--muted); margin-top: 8px; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<canvas id="image" width="320" height="180"></canvas>
+<div id="status">Loading…</div>
+<!-- ?scene=demo/scenes/spheres.json&width=320&height=180&samples=64 -->
+<script type="module" src="main.js"></script>
+</body>
+</html>

@@ -1266,11 +1266,28 @@ UI, file IO and rayon's threads would follow.
    `--features gpu`, runs the GPU tests on lavapipe, checks `pathtrace.spv` against the hashes
    of its sources (`scripts/shader-sources.sh --check`), runs tests in release, and Dependabot's
    config is in `.github/dependabot.yml`.
-1. Web spike: split out `rays-core`; a minimal `rays-web` that renders a flattenable scene in
-   a browser through WebGPU (dispatches short enough for the browser's GPU watchdog, a pass
-   per frame, async readback, single-threaded CPU code); shrink the kernel (buffers without a
-   struct of references, so rust-gpu needn't inline everything) and measure the browser's
-   shader compile time. Exit: a scene renders in Chrome and Safari matching the CLI by FLIP.
+1. Web spike: done, in Chrome (headless, WebGPU on SwiftShader); Safari not yet tried. What
+   was built, and how it differs from the plan:
+   - The renderer is a library (`src/lib.rs`) and a CLI behind a default `cli` feature, rather
+     than separate crates: the same dependency split (no C, no getrandom, no terminal in the
+     library) with less churn while PR #123 is open. The library builds for wasm32 (rustfft
+     2 -> 6, tobj without ahash, web-time's Instant, `build_apart` inline, `assets` for files).
+   - `web/` (rays-web, wasm-bindgen): parses a scene, flattens it, renders a pass per animation
+     frame and reads back every 8, finishing the image as the CLI does. `web/test.mjs` renders
+     in headless Chromium; CI's `web` job compares that with the native GPU's image by FLIP.
+   - The kernel shrank instead of losing its struct of references: one call site each for
+     the traversal, shadow rays and lobe evaluation (WGSL 1.1 MB -> 390 KB; 2.4x faster on
+     lavapipe). One more copy remains (the path's and the shadow rays' traversals, 50 KB).
+   - WGSL is generated at build time and validated for WebGPU (`shaders/builder`).
+   - Measured, 320x180, SwiftShader: shader compile and first pass 3-4 s; 250-540 ms a pass
+     (software); scene setup 10.5 s, mostly baking the sky map single-threaded; camera rays
+     17.7 ms a pass on the CPU, which would bound a real GPU's rate at larger sizes.
+   - Found: a shadow ray re-hit its own sphere where sqrt is a few ULP out (WebGPU allows it),
+     darkening spheres; fixed by the sphere test's early out. Browser vs native GPU, mean FLIP:
+     0.0033 on `spheres` at 256 spp (CPU seed to seed: 0.012), 0.0003 on `demo.json`.
+   - Next for the web: camera rays on the GPU (pinhole and thin lens), the sky baked on the GPU
+     or smaller, a scene picker and progressive display on the GPU, timings on real GPUs
+     (the Mac, phones), Safari.
 2. GPU wavefront with queues: replace the megakernel with stage kernels and queues, with
    identical images (FLIP against the megakernel), then measure on real GPUs (the Mac; the
    browser) against the megakernel to decide which to keep for which device.

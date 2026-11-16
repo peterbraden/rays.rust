@@ -141,6 +141,23 @@ pub struct Rock {
     pub lichen_color: Color,
     /// 0 for dry, 1 for soaked.
     pub wetness: f64,
+    /// Formations by elevation: (y in scene units, colour), sorted by y, the body colour
+    /// blending between them; their boundaries warped up and down by up to `layer_warp`.
+    pub layers: Vec<(f64, Color)>,
+    pub layer_warp: f64,
+    /// Colours for individual beds of the strata, each bed taking one; empty for
+    /// `strata_color` alone.
+    pub beds: Vec<Color>,
+    /// Broad patches of another colour, as iron oxides stain and bleach sandstone: their
+    /// colour and how much of the surface they take, 0 to 1.
+    pub variety: f64,
+    pub variety_color: Color,
+    /// Desert varnish: dark streaks of manganese and iron oxide running down steep faces where
+    /// water runs, 0 to 1, and its colour.
+    pub varnish: f64,
+    pub varnish_color: Color,
+    /// Depth of vertical flutes worn into steep faces, bump mapped.
+    pub flutes: f64,
     noise: SeededNoise,
     /// Noise levels above which the given fraction of the surface is grain or lichen.
     dark_threshold: f64,
@@ -174,6 +191,8 @@ impl Rock {
         let light_threshold = quantile(style.light_grain_amount, &|p| noise.noise(p + Vector3::new(31.4, 0., 0.)));
         Rock {
             style, scale, weathering: 0.3, lichen: 0., lichen_color: Color::new(0.38, 0.40, 0.26), wetness: 0.,
+            layers: vec![], layer_warp: 0., beds: vec![], variety: 0., variety_color: Color::new(0.7, 0.55, 0.4),
+            varnish: 0., varnish_color: Color::new(0.12, 0.07, 0.05), flutes: 0.,
             noise, dark_threshold, light_threshold, lichen_threshold: 0.,
         }
     }
@@ -204,7 +223,12 @@ impl Rock {
     /// Height of the bump-mapped relief, in units of `scale`.
     fn relief(&self, q: Vector3<f64>) -> f64 {
         let b = q / self.style.bump_size;
-        self.noise.fbm(b, 4) * self.style.bump_size * 0.6
+        let flutes = if self.flutes > 0. {
+            // Noise stretched tall: grooves running down the face.
+            let f = Vector3::new(q.x * 0.6, q.y * 0.05, q.z * 0.6) + Vector3::new(0., 0., 23.);
+            self.flutes * (1. - self.noise.fbm(f, 3).abs()).powi(2) * 0.5
+        } else { 0. };
+        flutes + self.noise.fbm(b, 4) * self.style.bump_size * 0.6
             + self.noise.ridged(b * 0.5 + Vector3::new(0., 0., 9.), 3) * self.style.bump_size * 0.3
             - self.crack(q) * self.style.bump_size * 0.15 * self.style.cracks
     }
@@ -229,6 +253,22 @@ impl Rock {
         // Mottling between the body colours.
         let mottle = smoothstep(-0.4, 0.4, self.noise.fbm(q * 1.3, 5));
         let mut c = st.color.blend(&st.secondary, mottle);
+        if !self.layers.is_empty() {
+            // The formation's colour at this elevation, mottled as the body colours are.
+            let y = p.y + self.layer_warp * self.noise.fbm(Vector3::new(p.x, 0., p.z) / (40. * self.scale.max(1e-9)) + Vector3::new(9., 0., 0.), 3);
+            let k = self.layers.partition_point(|(ly, _)| *ly < y);
+            let layer = if k == 0 { self.layers[0].1 } else if k == self.layers.len() { self.layers[k - 1].1 } else {
+                let ((y0, c0), (y1, c1)) = (self.layers[k - 1], self.layers[k]);
+                c0.blend(&c1, smoothstep(0., 1., (y - y0) / (y1 - y0)))
+            };
+            let tone = crate::color::luminance(&c) / crate::color::luminance(&st.color).max(1e-9);
+            c = layer * tone;
+        }
+        // Broad stains and bleaching.
+        if self.variety > 0. {
+            let v = self.noise.fbm(q * 0.12 + Vector3::new(0., 51., 0.), 4);
+            c = c.blend(&self.variety_color, smoothstep(0.35 - 0.7 * self.variety, 0.6 - 0.7 * self.variety, v) * 0.85);
+        }
 
         // Strata: bands across the vertical, warped so they wander like real bedding.
         if st.strata_amount > 0. {
@@ -237,7 +277,13 @@ impl Rock {
             let band = (0.5 + 0.5 * (phase * std::f64::consts::TAU).sin()).powi(3);
             // A second, finer set of laminations within the beds.
             let fine = 0.5 + 0.5 * (phase * 4.7 * std::f64::consts::TAU).sin();
-            c = c.blend(&st.strata_color, st.strata_amount * (0.75 * band + 0.25 * fine));
+            let bed = if self.beds.is_empty() { st.strata_color } else {
+                // Each bed its own colour, from a hash of its number.
+                let n = (phase + 0.25).floor() as i64;
+                let h = (n.wrapping_mul(0x9e37_79b9_7f4a_7c15u64 as i64) as u64 >> 33) as usize;
+                self.beds[h % self.beds.len()]
+            };
+            c = c.blend(&bed, st.strata_amount * (0.75 * band + 0.25 * fine));
         }
 
         // Mineral grains.
@@ -253,6 +299,14 @@ impl Rock {
         // Broad weathering, and grime in the cracks.
         let tone = 1. + self.weathering * self.noise.fbm(q * 0.25 + Vector3::new(0., 0., 40.), 3);
         c = c * (tone * (1. - 0.6 * self.crack(q)));
+
+        // Desert varnish streaks steep faces, in vertical runs where water has run down.
+        if self.varnish > 0. {
+            let steep = smoothstep(0.35, 0.75, 1. - normal.y.abs());
+            let f = Vector3::new(q.x * 0.35, q.y * 0.03, q.z * 0.35) + Vector3::new(40., 0., 0.);
+            let streak = smoothstep(0.05, 0.35, self.noise.fbm(f, 4) + 0.3 * (self.varnish - 0.5));
+            c = c.blend(&self.varnish_color, 0.8 * steep * streak * self.varnish.min(1.));
+        }
 
         // Lichen grows on the surfaces facing the sky.
         if self.lichen > 0. {
@@ -332,6 +386,35 @@ mod tests {
             let (lo, hi) = seen.iter().fold((1f64, 0f64), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
             assert!(hi - lo > 0.02, "{} is flat: {} to {}", name, lo, hi);
         }
+    }
+
+    fn mean_albedo(rock: &Rock, y: f64, normal: Vector3<f64>) -> Color {
+        let mut rng = crate::geometry::Pcg32::new(1, 1);
+        let mut sum = Color::black();
+        for _ in 0 .. 400 {
+            let p = Vector3::new(rng.next_f64() * 50., y, rng.next_f64() * 50.);
+            sum = sum + rock.albedo(p, normal);
+        }
+        sum * (1. / 400.)
+    }
+
+    #[test]
+    fn test_layers_colour_the_rock_by_elevation() {
+        let mut rock = Rock::new(RockStyle::preset("sandstone"), 1., 2);
+        rock.layers = vec![(0., Color::new(0.6, 0.1, 0.1)), (100., Color::new(0.1, 0.1, 0.6))];
+        let (low, high) = (mean_albedo(&rock, -10., Vector3::y()), mean_albedo(&rock, 110., Vector3::y()));
+        assert!(low.rgb.x > 2. * low.rgb.z && high.rgb.z > 2. * high.rgb.x, "{} {}", low.rgb, high.rgb);
+    }
+
+    #[test]
+    fn test_varnish_darkens_steep_faces_only() {
+        let plain = Rock::new(RockStyle::preset("sandstone"), 1., 2);
+        let mut varnished = Rock::new(RockStyle::preset("sandstone"), 1., 2);
+        varnished.varnish = 1.;
+        let wall = Vector3::x();
+        let lum = |c: Color| crate::color::luminance(&c);
+        assert!(lum(mean_albedo(&varnished, 5., wall)) < 0.85 * lum(mean_albedo(&plain, 5., wall)));
+        assert!((lum(mean_albedo(&varnished, 5., Vector3::y())) - lum(mean_albedo(&plain, 5., Vector3::y()))).abs() < 1e-9);
     }
 
     #[test]

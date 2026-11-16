@@ -2333,7 +2333,11 @@ impl SceneFile {
     /// Presets are granite, basalt, sandstone, limestone, slate and quartzite; any field of the
     /// preset can be overridden, eg. `"color"` or `"strata_amount"`. Also `"scale"` (the size of
     /// the texture's features), `"seed"`, `"weathering"`, `"wetness"` (0 to 1), `"lichen"` (the
-    /// fraction of upward surfaces covered, 0 to 1) and `"lichen_color"`.
+    /// fraction of upward surfaces covered, 0 to 1) and `"lichen_color"`. For layered rock
+    /// faces: `"layers"` ([[y, colour], ...]: formations' colours by elevation, warped by
+    /// `"layer_warp"`), `"beds"` (a colour per bed of the strata), `"variety"` and
+    /// `"variety_color"` (broad stains), `"varnish"` and `"varnish_color"` (dark streaks down
+    /// steep faces), and `"flutes"` (vertical grooves, bump mapped).
     pub fn parse_rock(o: &Value) -> Rock {
         let preset = RockStyle::preset(o["preset"].as_str().unwrap_or("granite"));
         let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
@@ -2356,6 +2360,19 @@ impl SceneFile {
         let mut r = Rock::new(style, n("scale", 1.), SceneFile::parse_int(&o["seed"], 0) as u64);
         r.weathering = n("weathering", r.weathering);
         r.wetness = n("wetness", 0.).clamp(0., 1.);
+        if let Some(layers) = o["layers"].as_array() {
+            r.layers = layers.iter().map(|l| (SceneFile::parse_number(&l[0], 0.), SceneFile::parse_color(&l[1]))).collect();
+            r.layers.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
+        r.layer_warp = n("layer_warp", 0.);
+        if let Some(beds) = o["beds"].as_array() {
+            r.beds = beds.iter().map(SceneFile::parse_color).collect();
+        }
+        r.variety = n("variety", 0.).clamp(0., 1.);
+        r.variety_color = c("variety_color", r.variety_color);
+        r.varnish = n("varnish", 0.).clamp(0., 1.);
+        r.varnish_color = c("varnish_color", r.varnish_color);
+        r.flutes = n("flutes", 0.).max(0.);
         let lichen = n("lichen", 0.);
         if lichen > 0. {
             let color = c("lichen_color", r.lichen_color);

@@ -32,7 +32,11 @@
 //!   (height of the scree apron, as a fraction of `height`, default 0.35), `talus_width`
 //!   (metres, default `height`), `floor_amplitude` and `floor_scale` (the floor's undulation,
 //!   default 2 and 150), `clearing` ([x, z, radius]: keep the mesas out of a circle, eg. round
-//!   the camera), `seed`
+//!   the camera), `seed`; and for more weathered country, `towers` (free-standing spires and
+//!   fins per square kilometre, each on its own debris cone), `relief` (rounded hills left on
+//!   the tops, as a fraction of `height`), `height_variation` (from mesa to mesa, a
+//!   fraction), `roughness` (gullies and fallen blocks on the debris slopes, 0 to 1) and
+//!   `floor_ledges` (the height of the low steps the floor is terraced in, metres)
 //!
 //! To share one heightmap between a terrain and the grass on it, define it once in the scene's
 //! `variables` and refer to it as `"$name"`.
@@ -133,6 +137,19 @@ pub struct MesaHeight {
     pub floor_scale: f64,
     pub clearing: Option<(f64, f64, f64)>,
     pub offset: (f64, f64),
+    /// Height of the rounded remnants of softer beds left on the tops, as a fraction of
+    /// `height` (0 for flat tops); and how much the tops' heights vary from mesa to mesa.
+    pub relief: f64,
+    pub height_variation: f64,
+    /// Depth of the gullies and size of the fallen blocks on the debris slopes, 0 to 1.
+    pub roughness: f64,
+    /// Height of the low ledges the floor steps down in, metres (0 for a smoothly rolling
+    /// floor), as thin hard beds in the soft rock beneath it outcrop.
+    pub floor_ledges: f64,
+    /// Free-standing towers and fins, and a grid of them by cell for lookup.
+    towers: Vec<Tower>,
+    tower_cell: f64,
+    tower_grid: std::collections::HashMap<(i64, i64), Vec<usize>>,
     /// Signed distance from the mesas' outlines, metres, positive inside, on a grid.
     sdf: Vec<f32>,
     sdf_min: (f64, f64),
@@ -150,6 +167,8 @@ impl MesaHeight {
         let mut m = MesaHeight {
             noise: PerlinNoise::new(), base, height, scale, cliff, benches, talus, talus_width,
             floor_amplitude, floor_scale, clearing, offset: (seed * 31.17 + 0.37, seed * 17.73 + 0.71),
+            relief: 0., height_variation: 0., roughness: 0., floor_ledges: 0.,
+            towers: vec![], tower_cell: 1., tower_grid: Default::default(),
             sdf: vec![], sdf_min: min, sdf_cell: 1., sdf_n: (1, 1),
         };
         // Fine enough for the cliffs, at most about 1500 cells a side.
@@ -192,13 +211,7 @@ impl MesaHeight {
 
     /// Signed distance (metres, positive inside) from the outlines, interpolated, notched.
     pub fn distance(&self, x: f64, z: f64) -> f64 {
-        let (nx, nz) = self.sdf_n;
-        let u = ((x - self.sdf_min.0) / self.sdf_cell).clamp(0., (nx - 1) as f64);
-        let v = ((z - self.sdf_min.1) / self.sdf_cell).clamp(0., (nz - 1) as f64);
-        let (i, j) = ((u as usize).min(nx.saturating_sub(2)), (v as usize).min(nz.saturating_sub(2)));
-        let (fu, fv) = (u - i as f64, v - j as f64);
-        let at = |a: usize, b: usize| self.sdf[(b.min(nz - 1)) * nx + a.min(nx - 1)] as f64;
-        let d = (at(i, j) * (1. - fu) + at(i + 1, j) * fu) * (1. - fv) + (at(i, j + 1) * (1. - fu) + at(i + 1, j + 1) * fu) * fv;
+        let d = self.base_distance(x, z);
         // Embayments a few cliff-widths across, and smaller notches.
         let n = |s: f64, o: f64| 2. * self.noise.fbm(x / s + o, 3.3, z / s - o, 3, 0.5, 2.) - 1.;
         d + 2.5 * self.cliff * n(6. * self.cliff, 17.7) + 0.6 * self.cliff * n(1.5 * self.cliff, 41.1)
@@ -207,19 +220,131 @@ impl MesaHeight {
     /// The height above the floor at signed distance `d` (metres, positive inside) from a
     /// mesa's edge.
     pub fn profile(&self, d: f64) -> f64 {
-        let h = self.height;
-        let apron = h * self.talus;
+        self.shape(d, self.height, self.talus, self.talus_width, self.cliff).0
+    }
+
+    /// A scarp's profile: the height at signed distance `d` from the foot of the cliff, for a
+    /// top `h` high whose debris slope reaches `talus` of the way up and runs out over about
+    /// `width`, with a cliff band `cliff` wide; and how much of a debris slope the point is on
+    /// (0 on the floor and the cliff, most halfway up the slope), for its gullies and blocks.
+    fn shape(&self, d: f64, h: f64, talus: f64, width: f64, cliff: f64) -> (f64, f64) {
+        let apron = h * talus;
         if d <= 0. {
-            // A concave apron, steepest (at about scree's angle of repose, 35 degrees, for the
-            // default width) where it meets the cliff.
-            return apron * (d / self.talus_width.max(1e-9)).exp();
+            // A concave slope, steepest (at about scree's angle of repose, 35 degrees, for the
+            // default width) where it meets the cliff, stepped by the ledges of harder beds in
+            // the soft rock it is cut into.
+            let u = (d / width.max(1e-9)).exp();
+            let n = 5.;
+            let ledges = ((u * n).floor() + smoothstep(0., 0.45, (u * n).fract())) / n;
+            let u = u + 0.45 * (ledges - u) * smoothstep(0.1, 0.3, u);
+            return (apron * u, (std::f64::consts::PI * u).sin().max(0.));
         }
         // The cliff in steps: each a near-vertical riser and a ledge, the last riser the caprock.
         let steps = (self.benches + 1) as f64;
-        let s = (d / self.cliff.max(1e-9)).min(1.) * steps;
+        let s = (d / cliff.max(1e-9)).min(1.) * steps;
         let riser = |x: f64| smoothstep(0., 0.4, x);
         let f = if s >= steps { 1. } else { (s.floor() + riser(s.fract())) / steps };
-        apron + (h - apron) * f
+        (apron + (h - apron) * f, 0.)
+    }
+
+    /// Scatter `density` towers and fins per square kilometre over [min, max]: most standing
+    /// off the mesas' edges, as the last remnants of a retreating scarp do, some far out on the
+    /// floor; none in the clearing.
+    pub fn with_towers(mut self, density: f64, min: (f64, f64), max: (f64, f64), seed: u64) -> MesaHeight {
+        let area = (max.0 - min.0) * (max.1 - min.1) / 1e6;
+        let want = (density.max(0.) * area).round() as usize;
+        let mut rng = crate::geometry::Pcg32::new(seed, 0x70e2);
+        let mut towers = vec![];
+        let mut tries = 0;
+        while towers.len() < want && tries < want * 200 {
+            tries += 1;
+            let (x, z) = (min.0 + rng.next_f64() * (max.0 - min.0), min.1 + rng.next_f64() * (max.1 - min.1));
+            let d = self.base_distance(x, z);
+            let near = (-6. * self.cliff ..= -1.5 * self.cliff).contains(&d);
+            let far = d < -8. * self.cliff && rng.next_f64() < 0.06;
+            if !(near || far) {
+                continue;
+            }
+            if let Some((cx, cz, r)) = self.clearing && ((x - cx).powi(2) + (z - cz).powi(2)).sqrt() < 1.2 * r {
+                continue;
+            }
+            // Radii mostly small (spires), a few broad (buttes); fins drawn out along one axis.
+            let radius = 0.25 * self.cliff * (1. + 4. * rng.next_f64().powi(3));
+            let aspect = if rng.next_f64() < 0.35 { 1.5 + 2. * rng.next_f64() } else { 1. + 0.3 * rng.next_f64() };
+            towers.push(Tower {
+                x, z, radius, aspect, angle: rng.next_f64() * std::f64::consts::PI,
+                height: self.height * (0.55 + 0.45 * rng.next_f64().sqrt()),
+                talus: self.talus * (0.7 + 0.6 * rng.next_f64()),
+            });
+        }
+        let reach = towers.iter().map(|t| t.reach(self.talus_width)).fold(1., f64::max);
+        self.tower_cell = reach;
+        for (k, t) in towers.iter().enumerate() {
+            let key = ((t.x / reach).floor() as i64, (t.z / reach).floor() as i64);
+            self.tower_grid.entry(key).or_default().push(k);
+        }
+        self.towers = towers;
+        self
+    }
+
+    /// Tower `t`'s height at (x, z), and how much debris slope it is.
+    fn tower_height(&self, t: &Tower, x: f64, z: f64) -> (f64, f64) {
+        let (dx, dz) = (x - t.x, z - t.z);
+        let (c, s) = (t.angle.cos(), t.angle.sin());
+        let (a, b) = ((dx * c + dz * s) / t.aspect, -dx * s + dz * c);
+        // Fluted: the column's outline wavers with the angle round it.
+        let flute = 1. + 0.18 * self.noise.noise(b.atan2(a) * 1.7 + t.x * 0.01, 5.5, t.z * 0.01);
+        let d = t.radius * flute - (a * a + b * b).sqrt();
+        let width = t.height * t.talus / 35f64.to_radians().tan();
+        self.shape(d, t.height, t.talus, width, 0.3 * t.radius)
+    }
+
+    /// The signed distance before the notches are added.
+    fn base_distance(&self, x: f64, z: f64) -> f64 {
+        let (nx, nz) = self.sdf_n;
+        let u = ((x - self.sdf_min.0) / self.sdf_cell).clamp(0., (nx - 1) as f64);
+        let v = ((z - self.sdf_min.1) / self.sdf_cell).clamp(0., (nz - 1) as f64);
+        let (i, j) = ((u as usize).min(nx.saturating_sub(2)), (v as usize).min(nz.saturating_sub(2)));
+        let (fu, fv) = (u - i as f64, v - j as f64);
+        let at = |a: usize, b: usize| self.sdf[(b.min(nz - 1)) * nx + a.min(nx - 1)] as f64;
+        (at(i, j) * (1. - fu) + at(i + 1, j) * fu) * (1. - fv) + (at(i, j + 1) * (1. - fu) + at(i + 1, j + 1) * fu) * fv
+    }
+
+    /// The tallest tower's height at (x, z), and how much debris slope it is.
+    fn towers_at(&self, x: f64, z: f64) -> (f64, f64) {
+        let (ci, cj) = ((x / self.tower_cell).floor() as i64, (z / self.tower_cell).floor() as i64);
+        let mut best = (0., 0.);
+        for i in ci - 1 ..= ci + 1 {
+            for j in cj - 1 ..= cj + 1 {
+                for &k in self.tower_grid.get(&(i, j)).map_or(&[][..], |v| &v[..]) {
+                    let (h, w) = self.tower_height(&self.towers[k], x, z);
+                    if h > best.0 {
+                        best = (h, w);
+                    }
+                }
+            }
+        }
+        best
+    }
+}
+
+/// A free-standing tower or fin of the scarp's rock, on its own cone of debris.
+struct Tower {
+    x: f64,
+    z: f64,
+    radius: f64,
+    /// Length over width, for fins; and the direction of the length.
+    aspect: f64,
+    angle: f64,
+    height: f64,
+    talus: f64,
+}
+
+impl Tower {
+    /// How far from its centre its debris cone reaches (where it is under a centimetre or so).
+    fn reach(&self, _talus_width: f64) -> f64 {
+        let width = self.height * self.talus / 35f64.to_radians().tan();
+        self.radius * self.aspect + width * (self.height * self.talus / 0.01).ln()
     }
 }
 
@@ -276,11 +401,36 @@ fn transform_1d(f: &[f64]) -> Vec<f64> {
 impl HeightSource for MesaHeight {
     fn height(&self, x: f64, z: f64) -> f64 {
         let d = self.distance(x, z);
-        let floor = self.floor_amplitude * (2. * self.noise.fbm(x / self.floor_scale + 71.3, 0.2, z / self.floor_scale - 11.9, 4, 0.5, 2.) - 1.);
-        // Tops weathered a little; the beds, and so the tops, level.
-        let top = smoothstep(0.5 * self.cliff, 2. * self.cliff, d)
-            * 0.015 * self.height * (self.noise.fbm(x / 40. + 5.1, 7.7, z / 40., 3, 0.5, 2.) - 0.5);
-        self.base + floor + self.profile(d) + top
+        let n = |s: f64, o: f64, octaves: u32| 2. * self.noise.fbm(x / s + o, 0.37 * o, z / s - o, octaves, 0.5, 2.) - 1.;
+        let mut floor = self.floor_amplitude * n(self.floor_scale, 71.3, 4);
+        if self.floor_ledges > 0. {
+            // Terraced: each step a short, steep riser and a gently rolling tread.
+            let step = self.floor_ledges;
+            let f = floor / step + 0.15 * n(0.2 * self.floor_scale, 3.7, 3);
+            floor = step * (f.floor() + smoothstep(0., 0.3, f.fract()));
+        }
+        // Each mesa's top at its own height, as erosion has stripped more from some.
+        let h = self.height * (1. + self.height_variation * n(3. * self.scale, 23.9, 2));
+        let width = self.talus_width * h / self.height;
+        let (mut profile, mut slope) = self.shape(d, h, self.talus, width, self.cliff);
+        // The tops: low rounded hills of the softer beds above the caprock, set back from the
+        // rim, on the rubbly caprock.
+        let inside = smoothstep(self.cliff, 3. * self.cliff, d);
+        let hills = (n(6. * self.cliff, 5.1, 4) + 0.15).max(0.).powf(1.5) * 1.6;
+        profile += inside * (self.relief * self.height * hills + 0.01 * self.height * n(0.8 * self.cliff, 8.8, 3));
+        let (tower, tower_slope) = self.towers_at(x, z);
+        if tower > profile {
+            (profile, slope) = (tower, tower_slope);
+        }
+        // Gullies down the debris slopes (along the zero lines of noise, which wander as a
+        // drainage net does), and blocks fallen from the cliffs.
+        if self.roughness > 0. && slope > 0. {
+            let g = n(1.2 * self.cliff, 61.7, 3).abs();
+            let gully = 1. - smoothstep(0., 0.18, g);
+            let blocks = n(0.12 * self.cliff, 13.3, 2).max(0.);
+            profile += slope * self.roughness * self.talus * self.height * (0.02 * blocks - 0.06 * gully);
+        }
+        self.base + floor + profile
     }
 }
 
@@ -413,7 +563,7 @@ impl HeightGrid {
             "mesas" => {
                 let height = SceneFile::parse_number(&o["height"], 120.);
                 let clearing = o.get("clearing").map(|c| (c[0].as_f64().unwrap(), c[1].as_f64().unwrap(), c[2].as_f64().unwrap()));
-                Box::new(MesaHeight::new(min, max, SceneFile::parse_number(&o["coverage"], 0.15), base, height,
+                let m = MesaHeight::new(min, max, SceneFile::parse_number(&o["coverage"], 0.15), base, height,
                     SceneFile::parse_number(&o["scale"], 800.),
                     SceneFile::parse_number(&o["cliff"], 30.),
                     SceneFile::parse_int(&o["benches"], 2) as u32,
@@ -421,7 +571,13 @@ impl HeightGrid {
                     SceneFile::parse_number(&o["talus_width"], height),
                     SceneFile::parse_number(&o["floor_amplitude"], 2.),
                     SceneFile::parse_number(&o["floor_scale"], 150.),
-                    clearing, seed))
+                    clearing, seed);
+                let mut m = m.with_towers(SceneFile::parse_number(&o["towers"], 0.), min, max, seed as u64);
+                m.relief = SceneFile::parse_number(&o["relief"], 0.);
+                m.height_variation = SceneFile::parse_number(&o["height_variation"], 0.);
+                m.roughness = SceneFile::parse_number(&o["roughness"], 0.);
+                m.floor_ledges = SceneFile::parse_number(&o["floor_ledges"], 0.);
+                Box::new(m)
             },
             "image" => Box::new(ImageHeight::from_file(
                 o["src"].as_str().expect("image heightmap needs a \"src\""),
@@ -738,6 +894,26 @@ mod tests {
             if b - a < 0.1 { level += 1; }
         }
         assert!(level > 60, "{}", level);
+    }
+
+    #[test]
+    fn test_towers_stand_off_the_mesas_on_debris_cones() {
+        let m = mesas(0.2).with_towers(2., (-3000., -3000.), (3000., 3000.), 4);
+        assert!(m.towers.len() > 30, "{}", m.towers.len());
+        let mut tall = 0;
+        for t in &m.towers {
+            // Most stand off a mesa's edge; none in the clearing.
+            assert!(m.base_distance(t.x, t.z) < -1.4 * m.cliff);
+            assert!((t.x * t.x + t.z * t.z).sqrt() > 300.);
+            // Its top well above its debris cone, which runs out onto the floor.
+            let top = m.tower_height(t, t.x, t.z).0;
+            if top > 0.5 * m.height { tall += 1; }
+            assert!(m.height(t.x, t.z) >= top - 1e-9);
+            let (c, s) = (t.angle.cos(), t.angle.sin());
+            let off = t.radius * (t.aspect + 1.) + 2. * t.height * t.talus;
+            assert!(m.tower_height(t, t.x - s * off, t.z + c * off).0 < 0.5 * t.height * t.talus, "{}", top);
+        }
+        assert!(tall > m.towers.len() / 2, "{} of {}", tall, m.towers.len());
     }
 
     #[test]

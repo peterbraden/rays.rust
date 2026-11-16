@@ -139,11 +139,17 @@ pads, rosettes of channelled leaves, fans of canes), their `"bark"` the green bo
 `"leaves"` the spines. Like any species they can grow in a `forest`.
 ![desert plants](./scenes/desert-plants.png)
 
-Mesas and buttes at sundown, over a Sonoran saguaro forest (about 30,000 instanced plants of
-seven species). The terrain is a `"mesas"` heightmap: outlines cut from noise, each scarp a
-caprock cliff stepping down in ledges to a talus apron, profiled by the exact distance from
-the edge. Sandstone shows on the slopes too steep for the desert soil, by a `mix` material
-whose `amount` is the slope (`{"slope": [26, 40], "jitter": 8}`).
+Buttes, mesas and spires in late sun, after Monument Valley: each a vertical, fluted cliff of
+sandstone streaked with desert varnish, standing on a broad cone of debris and ledgy shale
+that makes up half its height, over a red floor terraced by low ledges and dotted with
+sagebrush, juniper, creosote, prickly pear and agave. The terrain is a `"mesas"` heightmap:
+outlines cut from noise, profiled by the exact distance from the edge, with free-standing
+towers and fins on their own debris cones (`towers`), gullies and fallen blocks on the slopes
+(`roughness`), hummocky tops (`relief`) and a ledged floor (`floor_ledges`). Three materials
+by slope (`mix` with a `{"slope": [from, to]}` amount): sand on the floor, rubbly rock on the
+debris slopes and sandstone on the cliffs, both coloured by formation (`"layers"` by
+elevation), by bed (`"beds"`) and by stains (`"variety"`), the cliffs `"varnish"`ed and
+`"flutes"`d.
 ![desert mesas](./scenes/desert-mesas.png)
 
 ## Alpine terrain

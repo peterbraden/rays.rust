@@ -302,6 +302,87 @@ impl Terrain {
     }
 }
 
+/// The evolving state of a `Terrain`, to save and restore: everything that changes with time
+/// (the domain, planet and vents are rebuilt from the parameters).
+#[derive(serde_derive::Serialize, serde_derive::Deserialize)]
+pub struct Snapshot {
+    time: f64,
+    bed: Vec<f64>,
+    sediment: Vec<f64>,
+    lava: Vec<f64>,
+    sediment_flux: Vec<f64>,
+    ice: Vec<f64>,
+    sea: Vec<bool>,
+    drainage: Vec<f64>,
+    receiver: Vec<usize>,
+    sliding: Vec<f64>,
+    channels: Vec<crate::terrain::channel::Channel>,
+    oxbows: Vec<crate::terrain::channel::Oxbow>,
+    rivers_found: Option<f64>,
+}
+
+impl Terrain {
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            time: self.time, bed: self.bed.clone(), sediment: self.sediment.clone(), lava: self.lava.clone(),
+            sediment_flux: self.sediment_flux.clone(), ice: self.ice.clone(), sea: self.sea.clone(),
+            drainage: self.drainage.clone(), receiver: self.receiver.clone(), sliding: self.sliding.clone(),
+            channels: self.rivers.channels.clone(), oxbows: self.rivers.oxbows.clone(), rivers_found: self.rivers.found,
+        }
+    }
+
+    /// Restore a snapshot of a terrain with the same parameters and domain.
+    pub fn restore(&mut self, s: Snapshot) {
+        assert_eq!(s.bed.len(), self.domain.len(), "snapshot of a different domain");
+        self.time = s.time;
+        self.bed = s.bed;
+        self.sediment = s.sediment;
+        self.lava = s.lava;
+        self.sediment_flux = s.sediment_flux;
+        self.ice = s.ice;
+        self.sea = s.sea;
+        self.drainage = s.drainage;
+        self.receiver = s.receiver;
+        self.sliding = s.sliding;
+        self.rivers.channels = s.channels;
+        self.rivers.oxbows = s.oxbows;
+        self.rivers.found = s.rivers_found;
+    }
+
+    /// Run to `time`, starting from the latest state saved in `cache` (a directory) for the same
+    /// parameters and domain at or before it, and saving the result there. `key` identifies the
+    /// parameters and domain.
+    pub fn run_cached(&mut self, time: f64, cache: &std::path::Path, key: &str) {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        format!("{:?} {}", self.params, key).hash(&mut hasher);
+        let prefix = format!("landscape-{:016x}-", hasher.finish());
+        let _ = std::fs::create_dir_all(cache);
+        let mut saved: Vec<(u64, std::path::PathBuf)> = std::fs::read_dir(cache).into_iter().flatten().flatten()
+            .filter_map(|e| {
+                let name = e.file_name().into_string().ok()?;
+                let years = name.strip_prefix(&prefix)?.strip_suffix(".json")?.parse::<u64>().ok()?;
+                Some((years, e.path()))
+            }).collect();
+        saved.sort();
+        let wanted = time.round() as u64;
+        if let Some(s) = saved.iter().rev().filter(|(y, _)| *y <= wanted).find_map(|(_, p)| {
+            serde_json::from_reader::<_, Snapshot>(std::io::BufReader::new(std::fs::File::open(p).ok()?)).ok()
+        }) {
+            self.restore(s);
+        }
+        if self.time < time - 1e-9 {
+            self.run_to(time);
+            let path = cache.join(format!("{}{}.json", prefix, wanted));
+            let written = std::fs::File::create(&path).map_err(|e| e.to_string())
+                .and_then(|f| serde_json::to_writer(std::io::BufWriter::new(f), &self.snapshot()).map_err(|e| e.to_string()));
+            if let Err(e) = written {
+                eprintln!("  landscape: couldn't cache the terrain in {}: {}", path.display(), e);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +412,23 @@ mod tests {
         b.run_to(3000.);
         assert_eq!(a.bed, b.bed);
         assert_eq!(a.ice, b.ice);
+    }
+
+    #[test]
+    fn test_cached_run_resumes_where_it_left_off() {
+        let dir = std::env::temp_dir().join(format!("landscape-cache-test-{}", std::process::id()));
+        let mut a = small(4);
+        a.run_cached(1000., &dir, "k");
+        let mut b = small(4);
+        b.run_cached(2000., &dir, "k");
+        let mut c = small(4);
+        c.run_to(2000.);
+        assert_eq!(b.bed, c.bed);
+        let mut d = small(4);
+        d.run_cached(2000., &dir, "k");
+        assert_eq!(d.bed, c.bed);
+        assert_eq!(d.time, 2000.);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -25,3 +25,6 @@ Cargo.lock
 # Saved render states (resumable renders)
 *.accum
 *.accum.tmp
+
+# Terrain evolved by landscape scenes
+.landscape-cache/

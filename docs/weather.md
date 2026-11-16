@@ -58,11 +58,53 @@ them, and the cirrus thickens ahead of the front that brings the rain. The map `
 occluded purple), lows (red), highs (blue), tropical cyclones (orange) and the scene's origin
 (yellow).
 
+## Animation
+
+`"time"` (seconds, default 0) runs the weather on, so `scripts/animate.py` can render it:
+
+```sh
+scripts/animate.py demo/scenes/weather-orbit.json --start 0 --end 172800 --frames 96
+```
+
+The animation script steps every object that has a `"time"`, so give the weather one. Every
+part of the weather changes continuously with time:
+
+- **Systems move and live their lives.**
+  - Cyclones travel east along the storm tracks (`cyclone_velocity`, [12, 1.5] m/s eastward
+    and poleward). They occlude over their `cyclone_lifetime` (4 days), then fill.
+  - Highs creep east (`anticyclone_velocity`, `anticyclone_lifetime`).
+  - Tropical cyclones drift west and poleward (`tropical_velocity`, `tropical_lifetime`).
+    They weaken over land.
+  - The random systems live in slots: each is born, grows, matures and dies, then is born
+    again elsewhere. Its strength is zero at birth and death, so nothing pops in or out.
+  - The scene's own `systems` start as given, and move and age the same way. Each also takes
+    a `velocity`.
+- **The background changes.** It drifts east (`drift`, 8 m/s), and its synoptic and
+  mesoscale patterns change shape over `synoptic_period` (3 days) and `mesoscale_period`
+  (12 hours). Each pattern blends two independent noise fields, a cos ωt + b sin ωt, so its
+  statistics stay the same at every time. Without a sun, the season advances by one day per
+  day.
+- **Shapes move and evolve within the moving cover.**
+  - Low and mid cloud drift round the planet's axis at their `wind` (8 and 15 m/s). They boil
+    as the noise rises through them at `rise` (0.3 and 0.1 m/s).
+  - Convective cells drift at the convective `wind` (10 m/s). Each lives for `lifetime`
+    (5400 s):
+    - its tower rises through the first 40% of its life;
+    - a storm that reaches the tropopause then spreads its anvil and rains;
+    - the column rains out and fades, then the anvil fades;
+    - a new storm starts somewhere else in the cell.
+  - The cirrus runs on Hogan and Kew's own clock (`time`, `evolution_period`).
+  - Rain streaks fall at `fall_speed` (6 m/s).
+
+The sun is the skysphere's, so the afternoon convection follows wherever the scene puts it.
+To animate a day, move the skysphere's `sun_direction` too.
+
 ## Parameters
 
 Every parameter is optional.
 
-- **Seed:** `seed` is random if absent or `"random"`.
+- **Seed and time:** `seed` is random if absent or `"random"`. `time` is in seconds (see
+  Animation), along with the motion parameters listed there.
 - **Place and time:**
   - `site` is `{"lat", "lon"}`: by default the landscape's, else 45°N 0°.
   - `sun_direction` defaults to the skysphere's. Its declination sets the season, clamped to

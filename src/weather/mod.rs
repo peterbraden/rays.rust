@@ -37,6 +37,10 @@
 //! - **Precipitation**: rain (or snow, where it is below freezing) from nimbostratus and
 //!   beneath cumulonimbus, evaporating as it falls through dry air (virga).
 //!
+//! With `time`, it all runs on: the systems move along their tracks, mature and die (and new
+//! ones are born), the background drifts and changes, and the clouds drift with the wind,
+//! boil, and live out their lives (`fields`), all continuously, for animation.
+//!
 //! Each family is evaluated once per texel corner of an equi-angular cube map over the planet
 //! (`planet::CubeMap`), and each renders as one global volume (`fields`), so the families stay
 //! consistent with each other: the rain falls from the cloud above it, the anvils spread from
@@ -57,6 +61,9 @@ use std::f64::consts::{PI, TAU};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::collections::HashMap;
 
+/// Seconds in a day.
+pub const DAY: f64 = 86400.;
+
 /// A system the scene asks for, rather than one placed at random.
 #[derive(Clone, Debug)]
 pub struct SystemSpec {
@@ -70,6 +77,8 @@ pub struct SystemSpec {
     /// Degrees, anticlockwise.
     pub tilt: Option<f64>,
     pub eye: Option<f64>,
+    /// Eastward and poleward, m/s: by default as its kind moves.
+    pub velocity: Option<Vector2<f64>>,
 }
 
 #[derive(Clone, Debug)]
@@ -117,6 +126,22 @@ pub struct WeatherParams {
     pub map_size: usize,
     /// The spacing of convective cells, metres.
     pub cell_size: f64,
+    /// Seconds since the weather began, for animation: systems move, grow and die, the
+    /// background drifts and changes, and the clouds drift with the wind and evolve.
+    pub time: f64,
+    /// How systems move (m/s eastward, and poleward) and how long they live (s): cyclones
+    /// along the storm tracks, highs slowly, tropical cyclones westward and poleward.
+    pub cyclone_velocity: Vector2<f64>,
+    pub anticyclone_velocity: Vector2<f64>,
+    pub tropical_velocity: Vector2<f64>,
+    pub cyclone_lifetime: f64,
+    pub anticyclone_lifetime: f64,
+    pub tropical_lifetime: f64,
+    /// How fast the background drifts east (m/s), and the periods over which its synoptic
+    /// and mesoscale patterns change (s).
+    pub drift: f64,
+    pub synoptic_period: f64,
+    pub mesoscale_period: f64,
 }
 
 impl WeatherParams {
@@ -134,6 +159,9 @@ impl WeatherParams {
             cyclones, anticyclones, tropical_cyclones, cyclone_size: 1.2e6, storm_track: None, itcz: None,
             systems: vec![], fronts: FrontalParams::default(), synoptic_size: 1.2e6, mesoscale_size: 2e5,
             tropopause: (16500., 9000.), climate: ClimateParams::default(), map_size: 512, cell_size: 20000.,
+            time: 0., cyclone_velocity: Vector2::new(12., 1.5), anticyclone_velocity: Vector2::new(3., 0.),
+            tropical_velocity: Vector2::new(-5., 2.), cyclone_lifetime: 4. * DAY, anticyclone_lifetime: 9. * DAY,
+            tropical_lifetime: 8. * DAY, drift: 8., synoptic_period: 3. * DAY, mesoscale_period: 0.5 * DAY,
         }
     }
 }
@@ -262,7 +290,7 @@ impl Weather {
             // The sun's latitude, as far as the tilt allows: a scene's sun is placed for the
             // look of the sky, not always for a season the planet could have.
             Some(s) => s.y.clamp(-1., 1.).asin().clamp(-tilt, tilt),
-            None => (tilt.sin() * (TAU * (params.day_of_year - 80.) / 365.25).sin()).asin(),
+            None => (tilt.sin() * (TAU * (params.day_of_year + params.time / DAY - 80.) / 365.25).sin()).asin(),
         };
         // Convection peaks hours after noon, where the sun has moved on: heat by a sun as
         // many hours behind, ie. further east.
@@ -311,10 +339,40 @@ impl Weather {
         Vector3::new(lat.cos() * lon.cos(), lat.sin(), -lat.cos() * lon.sin())
     }
 
+    /// How a kind of system moves (eastward and poleward, m/s) and how long it lives (s).
+    fn motion(&self, kind: Kind) -> (Vector2<f64>, f64) {
+        let p = &self.params;
+        match kind {
+            Kind::Cyclone => (p.cyclone_velocity, p.cyclone_lifetime),
+            Kind::Anticyclone => (p.anticyclone_velocity, p.anticyclone_lifetime),
+            Kind::Tropical => (p.tropical_velocity, p.tropical_lifetime),
+        }
+    }
+
+    /// Where a system that started at `centre` is after `dt` seconds moving at `velocity`
+    /// (eastward and poleward, m/s): along its latitude, and towards its pole.
+    fn moved(&self, centre: &Vector3<f64>, velocity: &Vector2<f64>, dt: f64) -> Vector3<f64> {
+        let lat = centre.y.clamp(-1., 1.).asin();
+        let lon = (-centre.z).atan2(centre.x);
+        let r = self.params.radius;
+        let h = if lat >= 0. { 1. } else { -1. };
+        let lat2 = (lat + h * velocity.y * dt / r).clamp(-1.45, 1.45);
+        let lon2 = lon + velocity.x * dt / (r * ((lat + lat2) / 2.).cos().max(0.2));
+        Weather::geo(lat2.to_degrees(), lon2.to_degrees())
+    }
+
     /// The scene's systems, then random ones along the storm tracks, in the subtropics and
-    /// over warm seas.
+    /// over warm seas, all as they are at `time`.
+    ///
+    /// The scene's systems start where they are put and move as their kind does; a cyclone
+    /// goes on occluding (its `stage` rising over its lifetime) and, once occluded, fills.
+    /// The random ones live in slots: each is born, moves, grows and dies over its kind's
+    /// lifetime, at an age set by the slot's phase, then is born again somewhere new (by the
+    /// slot's next cycle's seed). Strength rises from nothing at birth and falls to nothing at
+    /// death, so through time nothing appears or vanishes all at once.
     fn place_systems(&self) -> Vec<System> {
         let p = &self.params;
+        let t = p.time;
         let mut rng = Pcg32::new(p.seed, 11);
         let mut u = || rng.next_f64();
         let mut out = vec![];
@@ -335,38 +393,76 @@ impl Weather {
                 Kind::Anticyclone => (1.8e6, 0.),
                 Kind::Tropical => (5e5, 2.2e4),
             };
-            out.push(System::new(s.kind, centre, s.radius.unwrap_or(radius), s.intensity.unwrap_or(0.85),
-                s.stage.unwrap_or(0.5), s.tilt.unwrap_or(0.).to_radians(), s.eye.unwrap_or(eye)));
+            let (velocity, lifetime) = self.motion(s.kind);
+            let velocity = s.velocity.unwrap_or(velocity);
+            let stage = s.stage.unwrap_or(0.5) + if s.kind == Kind::Cyclone { t / lifetime } else { 0. };
+            // Occluded, a cyclone fills.
+            let filling = if s.kind == Kind::Cyclone { 1. - smoothstep(1., 1.4, stage) } else { 1. };
+            out.push(System::new(s.kind, self.moved(&centre, &velocity, t), s.radius.unwrap_or(radius),
+                s.intensity.unwrap_or(0.85) * filling, stage.min(1.), s.tilt.unwrap_or(0.).to_radians(), s.eye.unwrap_or(eye)));
         }
+        // A slot's age (0 to 1 of its lifetime) and cycle at `t`, by its phase.
+        let cycle = |phase: f64, lifetime: f64| {
+            let x = t / lifetime + phase;
+            (x - x.floor(), x.floor() as i64)
+        };
+        // The life cycle's strength: rising after birth, fading before death.
+        let life = |age: f64| smoothstep(0., 0.12, age) * (1. - smoothstep(0.8, 1., age));
         let gauss = |u1: f64, u2: f64| (-2. * u1.max(1e-12).ln()).sqrt() * (TAU * u2).cos();
+        // Each cycle of each slot its own draws.
+        let draws = |slot: u64, n: i64| Pcg32::new(p.seed ^ slot.wrapping_mul(0x9E37_79B9_7F4A_7C15), (n as u64).wrapping_add(1 << 40));
+        let mut slot = 0u64;
         for h in [1., -1.] {
-            // Cyclones: a family along each storm track.
+            // Cyclones: a family along each storm track, each born on its own stretch of it.
             let n = p.cyclones;
             let start = u() * 360.;
             for k in 0..n {
-                let lat = h * (self.storm_track(h) + 7. * gauss(u(), u())).clamp(25., 75.);
-                let lon = start + 360. * k as f64 / n as f64 + (u() - 0.5) * 240. / n as f64;
-                out.push(System::new(Kind::Cyclone, Weather::geo(lat, lon), p.cyclone_size * (0.7 + 0.6 * u()),
-                    0.55 + 0.45 * u(), u(), (u() - 0.5) * 0.7, 0.));
+                slot += 1;
+                let (velocity, lifetime) = self.motion(Kind::Cyclone);
+                let (age, c) = cycle(u(), lifetime);
+                let mut r = draws(slot, c);
+                let mut v = || r.next_f64();
+                let lat = h * (self.storm_track(h) + 7. * gauss(v(), v())).clamp(25., 75.);
+                let lon = start + 360. * k as f64 / n as f64 + (v() - 0.5) * 240. / n as f64;
+                let born = Weather::geo(lat, lon);
+                let (radius, intensity, tilt) = (p.cyclone_size * (0.7 + 0.6 * v()), 0.55 + 0.45 * v(), (v() - 0.5) * 0.7);
+                out.push(System::new(Kind::Cyclone, self.moved(&born, &velocity, age * lifetime), radius,
+                    intensity * life(age), (age * 1.15).min(1.), tilt, 0.));
             }
             // Highs: the subtropical ridge, between the lows.
             let n = p.anticyclones;
             let start = u() * 360.;
             for k in 0..n {
-                let lat = h * (p.climate.hadley + 2. + 5. * gauss(u(), u())).clamp(15., 50.);
-                let lon = start + 360. * k as f64 / n as f64 + (u() - 0.5) * 120. / n as f64;
-                out.push(System::new(Kind::Anticyclone, Weather::geo(lat, lon), 1.3e6 + 1.2e6 * u(), 0.5 + 0.5 * u(), 0., (u() - 0.5) * 0.6, 0.));
+                slot += 1;
+                let (velocity, lifetime) = self.motion(Kind::Anticyclone);
+                let (age, c) = cycle(u(), lifetime);
+                let mut r = draws(slot, c);
+                let mut v = || r.next_f64();
+                let lat = h * (p.climate.hadley + 2. + 5. * gauss(v(), v())).clamp(15., 50.);
+                let lon = start + 360. * k as f64 / n as f64 + (v() - 0.5) * 120. / n as f64;
+                let born = Weather::geo(lat, lon);
+                let (radius, intensity, tilt) = (1.3e6 + 1.2e6 * v(), 0.5 + 0.5 * v(), (v() - 0.5) * 0.6);
+                out.push(System::new(Kind::Anticyclone, self.moved(&born, &velocity, age * lifetime), radius,
+                    intensity * life(age), 0., tilt, 0.));
             }
         }
-        // Tropical cyclones: mostly in the summer hemisphere, over the sea.
+        // Tropical cyclones: mostly in the summer hemisphere, born over the sea.
         for _ in 0..p.tropical_cyclones {
-            let h = if u() < 0.5 + 0.4 * self.season() { 1. } else { -1. };
+            slot += 1;
+            let (velocity, lifetime) = self.motion(Kind::Tropical);
+            let (age, c) = cycle(u(), lifetime);
+            let mut r = draws(slot, c);
+            let mut v = || r.next_f64();
+            let h = if v() < 0.5 + 0.4 * self.season() { 1. } else { -1. };
             for _attempt in 0..50 {
-                let lat = h * (10. + 15. * u());
-                let lon = u() * 360.;
-                let c = Weather::geo(lat, lon);
-                if self.is_sea(&c) {
-                    out.push(System::new(Kind::Tropical, c, 3.5e5 + 3e5 * u(), 0.7 + 0.3 * u(), 0., u() * TAU, 1.2e4 + 2e4 * u()));
+                let (lat, lon) = (h * (8. + 12. * v()), v() * 360.);
+                let born = Weather::geo(lat, lon);
+                if self.is_sea(&born) {
+                    let (radius, intensity, tilt, eye) = (3.5e5 + 3e5 * v(), 0.7 + 0.3 * v(), v() * TAU, 1.2e4 + 2e4 * v());
+                    let here = self.moved(&born, &velocity, age * lifetime);
+                    // Over land, cut off from the warm sea, it dies.
+                    let landfall = if self.is_sea(&here) { 1. } else { 0.4 };
+                    out.push(System::new(Kind::Tropical, here, radius, intensity * life(age) * landfall, 0., tilt, eye));
                     break;
                 }
             }
@@ -422,6 +518,20 @@ impl Weather {
         }
     }
 
+    /// Noise over the planet (0 to 1) with features `size` across, drifting east with the
+    /// background flow and changing over `period`: two independent fields, a cos ωt + b sin ωt,
+    /// which has the same statistics at every time but changes continuously.
+    fn evolving(&self, noise: &PerlinNoise, g: &Vector3<f64>, size: f64, octaves: u32, period: f64, offset: Vector3<f64>) -> f64 {
+        let p = &self.params;
+        // Back to where the air now here was at the start: west, about the axis (y).
+        let g = rotate_about_y(g, -p.drift * p.time / p.radius);
+        let q = g * (p.radius / size) + offset;
+        let w = TAU * p.time / period;
+        let a = noise.fbm(q.x, q.y, q.z, octaves, 0.5, 2.) - 0.5;
+        let b = if w.sin() != 0. { noise.fbm(q.x + 57.3, q.y + 19.1, q.z + 83.7, octaves, 0.5, 2.) - 0.5 } else { 0. };
+        stretched(0.5 + a * w.cos() + b * w.sin())
+    }
+
     /// The weather at `g`, a geographic unit vector.
     pub fn column(&self, g: &Vector3<f64>) -> Column {
         let p = &self.params;
@@ -430,13 +540,10 @@ impl Weather {
         let (temperature, rainfall, ground, sea, continentality) = self.surface(g);
         let land = 1. - sea;
         let heating = self.heating(g);
-        let q = g * (p.radius / p.synoptic_size);
-        let synoptic = stretched(self.synoptic.fbm(q.x, q.y, q.z, 4, 0.5, 2.));
-        let q = g * (p.radius / p.mesoscale_size);
-        let meso = stretched(self.mesoscale.fbm(q.x, q.y, q.z, 3, 0.5, 2.));
-        let meso2 = stretched(self.aloft.fbm(q.x * 1.7, q.y * 1.7, q.z * 1.7, 3, 0.5, 2.));
-        let q = g * (p.radius / p.synoptic_size * 1.6);
-        let jet_noise = stretched(self.aloft.fbm(q.x + 31.7, q.y, q.z, 3, 0.5, 2.));
+        let synoptic = self.evolving(&self.synoptic, g, p.synoptic_size, 4, p.synoptic_period, Vector3::zeros());
+        let meso = self.evolving(&self.mesoscale, g, p.mesoscale_size, 3, p.mesoscale_period, Vector3::zeros());
+        let meso2 = self.evolving(&self.aloft, g, p.mesoscale_size / 1.7, 3, p.mesoscale_period, Vector3::zeros());
+        let jet_noise = self.evolving(&self.aloft, g, p.synoptic_size / 1.6, 3, p.synoptic_period, Vector3::new(31.7, 0., 0.));
 
         // The tropopause: high over the warm tropics, low over the poles.
         let sea_level = temperature + climate::LAPSE_RATE * ground;
@@ -475,7 +582,7 @@ impl Weather {
         let base = ground + lcl;
 
         // Deep convection, where the air is unstable, rising and moist; never in an eye.
-        let deep = ((instability * remap(ascent, -0.05, 0.6) * remap(humidity, 0.5, 0.85) * (0.4 + 0.9 * meso)).max(e.deep)
+        let deep = ((instability * remap(ascent, -0.05, 0.6) * remap(humidity, 0.5, 0.85) * remap(meso, 0.3, 0.75)).max(e.deep)
             * (1. - e.eye) * p.deep).clamp(0., 1.);
         let deep_top = tropopause * (0.8 + 0.2 * instability);
 
@@ -678,7 +785,7 @@ impl Weather {
                 }
             }
         };
-        for s in &self.systems {
+        for s in self.systems.iter().filter(|s| s.intensity > 0.15) {
             let colour = match s.kind { Kind::Cyclone => [200, 30, 30], Kind::Anticyclone => [30, 60, 200], Kind::Tropical => [230, 120, 0] };
             plot(&s.centre, colour, 3);
             for (k, f) in s.fronts.iter().enumerate() {
@@ -698,6 +805,18 @@ impl Weather {
         img.save(path).unwrap_or_else(|e| panic!("Can't write the weather map {}: {}", path, e));
         println!("Weather: wrote a map to {}", path);
     }
+}
+
+/// `g` turned east by `angle` radians about the geographic axis (+y): longitude increases
+/// towards -z from +x (`Domain::frame`), so east is y × g.
+pub(crate) fn rotate_about_y(g: &Vector3<f64>, angle: f64) -> Vector3<f64> {
+    rotate(g, &Vector3::y(), angle)
+}
+
+/// `v` turned by `angle` radians about the unit `axis`, right-handed (Rodrigues).
+pub(crate) fn rotate(v: &Vector3<f64>, axis: &Vector3<f64>, angle: f64) -> Vector3<f64> {
+    let (s, c) = angle.sin_cos();
+    v * c + axis.cross(v) * s + axis * axis.dot(v) * (1. - c)
 }
 
 /// Two unit vectors perpendicular to `d` and each other.
@@ -770,7 +889,7 @@ mod tests {
         p.anticyclones = 0;
         p.tropical_cyclones = 0;
         p.systems = vec![SystemSpec { kind: Kind::Cyclone, lat_lon: Some((50., 0.)), offset: None, radius: Some(1.2e6),
-            intensity: Some(1.), stage: Some(0.3), tilt: Some(0.), eye: None }];
+            intensity: Some(1.), stage: Some(0.3), tilt: Some(0.), eye: None, velocity: None }];
         let w = Weather::new(p, None);
         let s = &w.systems[0];
         // Points ahead of (poleward of) the middle of the warm front, at increasing distances.
@@ -822,5 +941,63 @@ mod tests {
         assert!((maps.mid.base_low.at(&d) + c.mid.base).abs() < 1e-2);
         assert!(maps.deep_reach.at(&d) >= c.deep.cover - 1e-6);
     }
-}
 
+    fn at_time(seed: u64, time: f64) -> Weather {
+        let mut p = WeatherParams::new(seed);
+        p.map_size = 32;
+        p.time = time;
+        Weather::new(p, None)
+    }
+
+    #[test]
+    fn test_systems_move_and_live() {
+        // Over a few minutes each random system moves a little, and the count never changes.
+        let (a, b) = (at_time(4, 1e5), at_time(4, 1e5 + 600.));
+        assert_eq!(a.systems.len(), b.systems.len());
+        for (x, y) in a.systems.iter().zip(&b.systems) {
+            let moved = (x.centre - y.centre).norm() * a.params.radius;
+            let speed = match x.kind { Kind::Cyclone => 12.1, Kind::Anticyclone => 3., Kind::Tropical => 5.4 };
+            assert!((moved / 600. - speed).abs() < 0.2 * speed + 0.5, "{:?}: {} m/s", x.kind, moved / 600.);
+            assert!((x.intensity - y.intensity).abs() < 0.02 && (x.stage - y.stage).abs() < 0.01);
+        }
+        // Cyclones drift east.
+        let c = a.systems.iter().position(|s| s.kind == Kind::Cyclone).unwrap();
+        let east = Vector3::y().cross(&a.systems[c].centre).normalize();
+        assert!((b.systems[c].centre - a.systems[c].centre).dot(&east) > 0.);
+        // A scene's cyclone occludes and fills.
+        let spec = SystemSpec { kind: Kind::Cyclone, lat_lon: Some((50., 0.)), offset: None, radius: None, intensity: Some(1.),
+            stage: Some(0.2), tilt: None, eye: None, velocity: None };
+        let with = |t: f64| { let mut p = WeatherParams::new(4); p.time = t; p.systems = vec![spec.clone()]; Weather::new(p, None).systems[0].clone() };
+        let (young, old, gone) = (with(0.), with(2. * DAY), with(6. * DAY));
+        assert!(old.stage > young.stage && old.intensity == 1. && gone.intensity < 0.05);
+    }
+
+    #[test]
+    fn test_weather_changes_smoothly() {
+        // Seconds apart, at any time (across slots' rebirths too), columns barely change;
+        // days apart they're another sky.
+        let mut rng = Pcg32::new(9, 0);
+        let points: Vec<Vector3<f64>> = (0..3000).map(|_| crate::geometry::point_on_unit_sphere(rng.next_f64(), rng.next_f64())).collect();
+        let change = |t1: f64, t2: f64| {
+            let (a, b) = (at_time(3, t1), at_time(3, t2));
+            points.iter().map(|g| {
+                let (x, y) = (a.column(g), b.column(g));
+                (x.low.cover - y.low.cover).abs().max((x.mid.cover - y.mid.cover).abs()).max((x.deep.cover - y.deep.cover).abs()).max((x.high - y.high).abs())
+            }).fold(0., f64::max)
+        };
+        // (The steepest thresholds change some points by a few hundredths a minute, and a tenth
+        // as much in six seconds: steep, but no jumps.)
+        for t in [0., 1.3 * DAY, 3.7 * DAY, 9.1 * DAY] {
+            let step = change(t, t + 6.);
+            assert!(step < 0.015, "at {}: {}", t, step);
+        }
+        assert!(change(0., 2. * DAY) > 0.5);
+    }
+
+    #[test]
+    fn test_season_advances_without_a_sun() {
+        let at = |t: f64| { let mut p = WeatherParams::new(1); p.day_of_year = 80.; p.time = t; Weather::new(p, None) };
+        let (a, b) = (at(0.), at(30. * DAY));
+        assert!((a.declination - b.declination).abs() > 0.05);
+    }
+}

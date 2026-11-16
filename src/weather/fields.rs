@@ -36,6 +36,43 @@ pub struct Look {
     pub erosion: f64,
 }
 
+/// How a family's shapes move with time: carried round the planet's axis by the wind (a
+/// solid rotation, `speed` m/s at the equator, so shapes keep their size and don't shear
+/// apart however long it runs), and boiling: the noise rising through them at `rise` m/s.
+#[derive(Clone, Copy, Debug)]
+pub struct Drift {
+    pub axis: Vector3<f64>,
+    /// Radians turned, and metres risen, by now.
+    pub angle: f64,
+    pub rise: f64,
+}
+
+impl Drift {
+    pub fn new(axis: Vector3<f64>, speed: f64, rise: f64, time: f64, radius: f64) -> Drift {
+        Drift { axis: axis.normalize(), angle: speed * time / radius, rise: rise * time }
+    }
+
+    pub fn none() -> Drift {
+        Drift { axis: Vector3::y(), angle: 0., rise: 0. }
+    }
+
+    /// Where something now at `v` was at the start.
+    fn back(&self, v: &Vector3<f64>) -> Vector3<f64> {
+        if self.angle == 0. { *v } else { crate::weather::rotate(v, &self.axis, -self.angle) }
+    }
+
+    /// Where something at `v` at the start is now.
+    fn forth(&self, v: &Vector3<f64>) -> Vector3<f64> {
+        if self.angle == 0. { *v } else { crate::weather::rotate(v, &self.axis, self.angle) }
+    }
+
+    /// The position in the noise that the shapes at `position` (from the planet's centre,
+    /// with unit `up`) are cut from.
+    fn noise_position(&self, position: &Vector3<f64>, up: &Vector3<f64>) -> Vector3<f64> {
+        self.back(&(position - up * self.rise))
+    }
+}
+
 /// The noise a family's shapes are cut from.
 struct Shapes {
     perlin: PerlinNoise,
@@ -98,12 +135,13 @@ pub struct Stratiform {
     maps: Arc<Maps>,
     family: Family,
     pub look: Look,
+    pub drift: Drift,
     shapes: Shapes,
 }
 
 impl Stratiform {
     pub fn new(maps: Arc<Maps>, family: Family, look: Look, seed: u64) -> Stratiform {
-        Stratiform { maps, family, look, shapes: Shapes::new(seed) }
+        Stratiform { maps, family, look, drift: Drift::none(), shapes: Shapes::new(seed) }
     }
 
     fn layer(&self) -> &LayerMaps {
@@ -149,7 +187,8 @@ impl PlanetField for Stratiform {
             return 0.;
         }
         let cover = l.cover.at_texel(&t);
-        self.look.max_density * self.shapes.fraction(&self.look, at.altitude, base, top, cover, l.form.at_texel(&t), &at.position)
+        let position = self.drift.noise_position(&at.position, &at.up);
+        self.look.max_density * self.shapes.fraction(&self.look, at.altitude, base, top, cover, l.form.at_texel(&t), &position)
     }
 
     fn majorant(&self) -> f64 {
@@ -176,6 +215,12 @@ pub struct Convective {
     /// The depth of an anvil, metres.
     pub anvil_depth: f64,
     pub radius: f64,
+    /// How the cells move with the wind aloft, and their lumps boil up their sides.
+    pub drift: Drift,
+    /// How long a cell lives, from cumulus through cumulonimbus to its anvil's last, seconds;
+    /// and the time now.
+    pub lifetime: f64,
+    pub time: f64,
     seed: u32,
     shapes: Shapes,
 }
@@ -195,11 +240,18 @@ pub struct Tower {
     pub mature: bool,
     /// The wind aloft at the tower (unit, horizontal), which its anvil spreads along.
     pub wind: Vector3<f64>,
+    /// Its life: how far through it (0 to 1), how much of its column is left (fading as it
+    /// rains out), and how far its anvil has spread and how much of it is left.
+    pub age: f64,
+    pub column: f64,
+    pub anvil: f64,
+    pub anvil_left: f64,
 }
 
 impl Convective {
     pub fn new(maps: Arc<Maps>, look: Look, cell_size: f64, radius: f64, seed: u64) -> Convective {
-        Convective { maps, look, cell_size, overshoot: 800., anvil_depth: 1800., radius, seed: seed as u32, shapes: Shapes::new(seed.wrapping_add(5)) }
+        Convective { maps, look, cell_size, overshoot: 800., anvil_depth: 1800., radius, drift: Drift::none(), lifetime: 5400., time: 0.,
+                     seed: seed as u32, shapes: Shapes::new(seed.wrapping_add(5)) }
     }
 
     /// The highest any of it reaches.
@@ -216,6 +268,8 @@ impl Convective {
     /// apart). Returns how far the point is from any cell not looked at.
     fn towers_within(&self, up: &Vector3<f64>, reach: f64, mut f: impl FnMut(&Tower)) -> f64 {
         let s = self.cell_size;
+        // In the frame drifting with the cells.
+        let up = &self.drift.back(up);
         let p = up * self.radius;
         let c = (p / s).map(|v| v.floor() as i64);
         // Cells beyond the 3 x 3 x 3 block about the point's are at least this far away.
@@ -224,10 +278,17 @@ impl Convective {
             for dy in -1..=1 {
                 for dz in -1..=1 {
                     let (ix, iy, iz) = (c.x + dx, c.y + dy, c.z + dz);
-                    let h = |k: u32| worley_hash(ix as u32, iy as u32, iz as u32, self.seed.wrapping_add(k));
+                    // Each cell lives through cycles, starting at a phase of its own; each cycle
+                    // a new storm, somewhere else in the cell.
+                    let phase = worley_hash(ix as u32, iy as u32, iz as u32, self.seed.wrapping_add(6));
+                    let x = self.time / self.lifetime + phase;
+                    let (age, cycle) = (x - x.floor(), x.floor() as i64 as u32);
+                    let h = |k: u32| worley_hash(ix as u32, iy as u32, iz as u32, self.seed.wrapping_add(k).wrapping_add(cycle.wrapping_mul(7919)));
                     let feature = Vector3::new(ix as f64 + h(0), iy as f64 + h(1), iz as f64 + h(2)) * s;
-                    let fdir = feature.normalize();
-                    let fp = fdir * self.radius;
+                    let fdir_drifting = feature.normalize();
+                    let fp = fdir_drifting * self.radius;
+                    // Where the storm is now, to read the weather there.
+                    let fdir = self.drift.forth(&fdir_drifting);
                     let offset = p - fp;
                     let offset = offset - up * up.dot(&offset);
                     let distance = offset.norm();
@@ -246,13 +307,23 @@ impl Convective {
                     let base = m.deep.base.at_texel(&texel);
                     let ceiling = m.deep.top.at_texel(&texel);
                     let growth = h(4).max(strength).powf(0.7);
-                    let mature = growth > 0.8;
-                    let top = if mature { ceiling } else { base + (ceiling - base) * (0.3 + 0.5 * growth) };
-                    let radius = s * (0.09 + 0.1 * h(5)) * (0.7 + 0.3 * growth);
+                    let reaches = growth > 0.8;
+                    let height = if reaches { ceiling - base } else { (ceiling - base) * (0.3 + 0.5 * growth) };
+                    // Rising through the first 40% of its life, reaching its height, spreading
+                    // its anvil, then raining out: the column fades, then the anvil.
+                    let rising = smoothstep(0., 0.4, age);
+                    let top = base + height * rising;
+                    let mature = reaches && age > 0.3;
+                    let radius = s * (0.09 + 0.1 * h(5)) * (0.7 + 0.3 * growth) * (0.5 + 0.5 * rising);
+                    let column = 1. - smoothstep(0.7, 0.9, age);
+                    let anvil = smoothstep(0.3, 0.65, age);
+                    let anvil_left = 1. - smoothstep(0.85, 1., age);
                     let wind = Vector3::new(m.wind[0].at_texel(&texel), m.wind[1].at_texel(&texel), m.wind[2].at_texel(&texel));
-                    let wind = wind - fdir * fdir.dot(&wind);
-                    let wind = if wind.norm() > 1e-6 { wind.normalize() } else { crate::weather::tangents(&fdir).0 };
-                    f(&Tower { offset, distance, strength, base, top, radius, mature, wind });
+                    // Into the drifting frame, where the offsets are.
+                    let wind = self.drift.back(&wind);
+                    let wind = wind - fdir_drifting * fdir_drifting.dot(&wind);
+                    let wind = if wind.norm() > 1e-6 { wind.normalize() } else { crate::weather::tangents(&fdir_drifting).0 };
+                    f(&Tower { offset, distance, strength, base, top, radius, mature, wind, age, column, anvil, anvil_left });
                 }
             }
         }
@@ -287,7 +358,7 @@ impl Convective {
                 return;
             }
             let lump = *lumps.get_or_insert_with(|| {
-                let q = at.position / (self.look.shape_size);
+                let q = self.drift.noise_position(&at.position, &at.up) / self.look.shape_size;
                 let perlin = stretched(self.shapes.perlin.fbm(q.x, q.y, q.z, 3, 0.5, 2.));
                 remap(perlin, worley_fbm(self.shapes.cells(), &q) - 1., 1.)
             });
@@ -297,10 +368,10 @@ impl Convective {
             let width = if t.mature { t.radius * (1. - 0.2 * hz) } else { t.radius * (1. - hz.powi(4)).max(0.).sqrt() };
             let edge = t.radius * 0.35;
             let d = t.distance + edge * 1.6 * (0.5 - lump);
-            f = f.max(smoothstep(0., edge, width - d) * smoothstep(t.base, t.base + 150., a));
+            f = f.max(smoothstep(0., edge, width - d) * smoothstep(t.base, t.base + 150., a) * t.column);
             if t.mature {
                 // The anvil, spread downwind under the tropopause, and the overshooting dome.
-                let ra = self.anvil_radius(t);
+                let ra = self.anvil_radius(t) * (0.3 + 0.7 * t.anvil);
                 let low = t.top - self.anvil_depth;
                 let spread = smoothstep(low, t.top, a);
                 let shifted = t.offset - t.wind * (0.45 * ra * spread);
@@ -308,10 +379,10 @@ impl Convective {
                 let across = (shifted - t.wind * along).norm();
                 let da = ((along / (1.3 * ra)).powi(2) + (across / ra).powi(2)).sqrt() * (1. / (0.35 + 0.65 * spread));
                 let vertical = smoothstep(low, low + 0.4 * self.anvil_depth, a) * (1. - smoothstep(t.top - 120., t.top + 60., a));
-                f = f.max((1. - smoothstep(0.7, 1., da + 0.25 * (0.5 - lump))) * vertical);
+                f = f.max((1. - smoothstep(0.7, 1., da + 0.25 * (0.5 - lump))) * vertical * t.anvil_left);
                 if a > t.top - 100. {
                     let dome = t.radius * 0.6 * (1. - ((a - t.top) / over).powi(2)).max(0.).sqrt();
-                    f = f.max(smoothstep(0., edge, dome - d));
+                    f = f.max(smoothstep(0., edge, dome - d) * t.column);
                 }
             }
             best = best.max(f * (0.4 + 0.6 * t.strength));
@@ -320,7 +391,7 @@ impl Convective {
             return 0.;
         }
         // Erode the edges.
-        let dd = worley_fbm(self.shapes.cells(), &(at.position / self.look.detail_size));
+        let dd = worley_fbm(self.shapes.cells(), &(self.drift.noise_position(&at.position, &at.up) / self.look.detail_size));
         remap(best, (1. - dd) * self.look.erosion, 1.)
     }
 
@@ -334,7 +405,8 @@ impl Convective {
         let top = m.deep.top.at(&at.up);
         let base = top - self.anvil_depth * 1.2;
         let look = Look { shape_size: self.look.shape_size * 3., ..self.look };
-        self.shapes.fraction(&look, at.altitude, base, top, cover, 0.1, &at.position)
+        let position = Drift { rise: 0., ..self.drift }.noise_position(&at.position, &at.up);
+        self.shapes.fraction(&look, at.altitude, base, top, cover, 0.1, &position)
     }
 }
 
@@ -406,6 +478,9 @@ impl PlanetField for Convective {
 /// Rain and snow: falling from the stratiform cloud's base, and in shafts beneath
 /// cumulonimbus.
 pub struct Rain {
+    /// The time now, and how fast the streaks fall (m/s).
+    pub time: f64,
+    pub fall_speed: f64,
     maps: Arc<Maps>,
     convective: Option<Arc<Convective>>,
     /// The heaviest rain under a cumulonimbus, mm/h.
@@ -421,7 +496,7 @@ impl Rain {
     pub fn new(maps: Arc<Maps>, convective: Option<Arc<Convective>>, shower_rate: f64, seed: u64) -> Rain {
         let showers = if convective.is_some() { crate::procedural::precipitation::rain_extinction(shower_rate) } else { 0. };
         let max = maps.rain.max().max(showers);
-        Rain { maps, convective, shower_rate, streakiness: 0.5, streak_size: 600., noise: PerlinNoise::shuffled(seed), max }
+        Rain { time: 0., fall_speed: 6., maps, convective, shower_rate, streakiness: 0.5, streak_size: 600., noise: PerlinNoise::shuffled(seed), max }
     }
 
     /// The highest it falls from.
@@ -436,7 +511,7 @@ impl Rain {
         }
         // Streaks run down: noise stretched vertically.
         let q = (at.position - at.up * at.altitude) / self.streak_size;
-        let n = self.noise.fbm(q.x, q.y, q.z + at.altitude / (self.streak_size * 10.), 3, 0.5, 2.);
+        let n = self.noise.fbm(q.x, q.y, q.z + (at.altitude + self.fall_speed * self.time) / (self.streak_size * 10.), 3, 0.5, 2.);
         1. - self.streakiness + self.streakiness * 2. * n
     }
 }
@@ -463,7 +538,9 @@ impl PlanetField for Rain {
                 if core <= 0. {
                     return;
                 }
-                let rate = self.shower_rate * t.strength.powf(1.5) * core;
+                // It rains once the storm is grown, until it has rained itself out.
+                let life = smoothstep(0.3, 0.45, t.age) * (1. - smoothstep(0.8, 0.95, t.age));
+                let rate = self.shower_rate * t.strength.powf(1.5) * core * life;
                 let s = crate::procedural::precipitation::rain_extinction(rate) * (-(t.base - at.altitude) / fall).exp();
                 sigma = sigma.max(s);
             });
@@ -567,5 +644,61 @@ mod tests {
         }
         println!("cloud {} skipped {}", cloud, skipped);
         assert!(cloud > 100 && skipped > 300, "uninformative: cloud {} skipped {}", cloud, skipped);
+    }
+
+    #[test]
+    fn test_storms_grow_and_move_with_time() {
+        let mut p = WeatherParams::new(8);
+        p.map_size = 64;
+        p.instability = 3.;
+        p.humidity = 1.3;
+        let w = Weather::new(p, None);
+        let maps = w.maps();
+        let planet = Planet { radius: w.params.radius };
+        let look = Look { max_density: 0.06, shape_size: 1500., detail_size: 300., erosion: 0.35 };
+        let field = |t: f64| {
+            let mut c = Convective::new(maps.clone(), look, 20000., planet.radius, 4);
+            c.time = t;
+            c.drift = Drift::new(Vector3::y(), 10., 2., t, planet.radius);
+            c
+        };
+        // A storm's top rises through the first part of its life: the same storms (in the same
+        // cycle of their cells, their ages 600 s on) are taller ten minutes later.
+        let tops = |up: &Vector3<f64>, t: f64| { let mut v = vec![]; field(t).towers(up, |tw| v.push((tw.age, tw.top - tw.base))); v };
+        let mut compared = 0;
+        for k in 0..20000 {
+            let up = crate::geometry::point_on_unit_sphere((k as f64 * 0.618034) % 1., (k as f64 * 0.414214) % 1.);
+            if maps.deep.cover.at(&up) < 0.4 { continue; }
+            let (now, later) = (tops(&up, 0.), tops(&up, 600.));
+            for (a0, h0) in &now {
+                for (a1, h1) in &later {
+                    if (a1 - a0 - 600. / 5400.).abs() < 1e-9 && *a1 < 0.38 {
+                        assert!(h1 > h0, "{} {} -> {} {}", a0, h0, a1, h1);
+                        compared += 1;
+                    }
+                }
+            }
+            if compared > 20 { break; }
+        }
+        assert!(compared > 0, "no growing storms found");
+        // The density changes smoothly over a few seconds, and the bounds hold at any time.
+        let mut rng = crate::geometry::Pcg32::new(6, 0);
+        let (a, b) = (field(7000.), field(7005.));
+        let (mut diff, mut total) = (0., 0.);
+        for _ in 0..3000 {
+            let u = crate::geometry::point_on_unit_sphere(rng.next_f64(), rng.next_f64());
+            if maps.deep.cover.at(&u) < 0.3 { continue; }
+            let at = planet.surface_point(&(planet.center() + u * (planet.radius + 1000. + rng.next_f64() * 12000.)));
+            let (x, y) = (a.density(&at), b.density(&at));
+            diff += (x - y).abs();
+            total += x;
+            let d = crate::geometry::point_on_unit_sphere(rng.next_f64(), rng.next_f64());
+            let (m, len) = a.majorant_from(&at, &at.position, &d, &planet);
+            for k in 0..20 {
+                let q = planet.surface_point(&(planet.center() + at.position + d * (len.min(30_000.) * k as f64 / 20.)));
+                assert!(a.density(&q) <= m + 1e-12);
+            }
+        }
+        assert!(total > 0. && diff < 0.2 * total, "{} of {}", diff, total);
     }
 }

@@ -32,6 +32,11 @@
 //!   and Kew's cirrus parameters (`hogan_kew_cirrus`; its `coverage` comes from the weather);
 //!   `rain` takes `shower_rate` (mm/h under the strongest cumulonimbus), `streakiness` and
 //!   `streak_size`.
+//! - Time (`time`, seconds, for `scripts/animate.py`): `cyclone_velocity`,
+//!   `anticyclone_velocity`, `tropical_velocity` ([east, poleward] m/s), their `..._lifetime`s
+//!   (s); the background's `drift` (m/s), `synoptic_period` and `mesoscale_period` (s); each
+//!   family's `wind` and `rise` (m/s), the convective cells' `lifetime` (s) and the rain's
+//!   `fall_speed` (m/s). See docs/weather.md.
 //! - `map_size`: texels along each cube face of the weather's maps (512: 20 km); `map`: write
 //!   a satellite's view of the weather, with its fronts and systems marked, to this PNG
 //!   (`map_width` pixels wide, 2048).
@@ -44,7 +49,7 @@ use crate::planet::{GlobalMapping, Planet, EARTH_RADIUS};
 use crate::scenefile::SceneFile;
 use crate::sceneobject::SceneObject;
 use crate::volume::create_volume;
-use crate::weather::fields::{Convective, Family, Look, Rain, Stratiform};
+use crate::weather::fields::{Convective, Drift, Family, Look, Rain, Stratiform};
 use crate::weather::systems::Kind;
 use crate::weather::{Ground, SystemSpec, Weather, WeatherParams};
 use serde_json::Value;
@@ -161,6 +166,17 @@ pub fn weather_params(o: &Value) -> (WeatherParams, Option<Ground>) {
         p.tropopause = (t[0].as_f64().unwrap_or(p.tropopause.0), t[1].as_f64().unwrap_or(p.tropopause.1));
     }
     p.map_size = SceneFile::parse_int(&o["map_size"], p.map_size).max(2);
+    p.time = number(o, "time", p.time);
+    for (k, v) in [("cyclone_velocity", &mut p.cyclone_velocity), ("anticyclone_velocity", &mut p.anticyclone_velocity),
+                   ("tropical_velocity", &mut p.tropical_velocity)] {
+        *v = SceneFile::parse_vec2_def(o, k, *v);
+    }
+    for (k, f) in [("cyclone_lifetime", &mut p.cyclone_lifetime), ("anticyclone_lifetime", &mut p.anticyclone_lifetime),
+                   ("tropical_lifetime", &mut p.tropical_lifetime), ("synoptic_period", &mut p.synoptic_period),
+                   ("mesoscale_period", &mut p.mesoscale_period)] {
+        *f = number(o, k, *f).max(1.);
+    }
+    p.drift = number(o, "drift", p.drift);
     p.cell_size = number(&o["convective"], "cell_size", p.cell_size).max(1000.);
     if let Some(list) = o["systems"].as_array() {
         p.systems = list.iter().map(|s| {
@@ -179,6 +195,7 @@ pub fn weather_params(o: &Value) -> (WeatherParams, Option<Ground>) {
                 offset: s.get("offset").map(SceneFile::parse_vec2),
                 radius: s["radius"].as_f64(), intensity: s["intensity"].as_f64(), stage: s["stage"].as_f64(),
                 tilt: s["tilt"].as_f64(), eye: s["eye"].as_f64(),
+                velocity: s.get("velocity").map(SceneFile::parse_vec2),
             }
         }).collect();
     }
@@ -202,6 +219,26 @@ pub fn weather_of(o: &Value) -> Arc<Weather> {
         }
         w
     })
+}
+
+/// A family's drift with time: `wind` (m/s eastward, round the planet's axis) and `rise`
+/// (m/s, how fast its shapes boil upwards).
+fn drift(o: &Value, weather: &Weather, wind: f64, rise: f64) -> Drift {
+    Drift::new(weather.frame.to_scene(&Vector3::y()), number(o, "wind", wind), number(o, "rise", rise), weather.params.time, weather.params.radius)
+}
+
+/// The convective family as `spec` describes it (shared by its layer and the rain under it,
+/// so that the rain falls from the storms drawn).
+fn convective(spec: &Value, weather: &Weather, maps: Arc<crate::weather::Maps>) -> Convective {
+    let d = Look { max_density: 0.06, shape_size: 1500., detail_size: 300., erosion: 0.35 };
+    let seed = weather.params.seed.wrapping_mul(31).wrapping_add(2);
+    let mut field = Convective::new(maps, look(spec, d), weather.params.cell_size, weather.params.radius, seed);
+    field.overshoot = number(spec, "overshoot", field.overshoot).max(0.);
+    field.anvil_depth = number(spec, "anvil_depth", field.anvil_depth).max(100.);
+    field.lifetime = number(spec, "lifetime", field.lifetime).max(60.);
+    field.time = weather.params.time;
+    field.drift = drift(spec, weather, 10., 2.);
+    field
 }
 
 fn look(o: &Value, d: Look) -> Look {
@@ -234,21 +271,23 @@ pub fn create_layer(o: &Value) -> SceneObject {
             } else {
                 (Family::Mid, Look { max_density: 0.03, shape_size: 3000., detail_size: 400., erosion: 0.35 })
             };
-            let field = Stratiform::new(maps, fam, look(&spec, d), seed);
+            let mut field = Stratiform::new(maps, fam, look(&spec, d), seed);
+            field.drift = if fam == Family::Low { drift(&spec, &weather, 8., 0.3) } else { drift(&spec, &weather, 15., 0.1) };
             let top = field.highest();
             create_volume(shell(top), global(Arc::new(field)), SceneFile::parse_scattering(&spec, 0.85))
         },
         "convective" => {
-            let d = Look { max_density: 0.06, shape_size: 1500., detail_size: 300., erosion: 0.35 };
-            let mut field = Convective::new(maps, look(&spec, d), weather.params.cell_size, weather.params.radius, seed);
-            field.overshoot = number(&spec, "overshoot", field.overshoot).max(0.);
-            field.anvil_depth = number(&spec, "anvil_depth", field.anvil_depth).max(100.);
+            let field = convective(&spec, &weather, maps);
             let top = field.highest();
             create_volume(shell(top), global(Arc::new(field)), SceneFile::parse_scattering(&spec, 0.85))
         },
         "high" => {
             let (mut c, (cell, slope, coverage, s)) = SceneFile::hogan_kew_layer(&spec, crate::procedural::hogan_kew_cirrus::CirrusGenus::Cirrus);
             c.max_density = number(&spec, "density", c.max_density);
+            // Its cells drift and evolve by Hogan and Kew's own clock, unless it has its own.
+            if spec.get("time").is_none() {
+                c.time = weather.params.time;
+            }
             let top = c.top;
             let seed = if spec.get("seed").is_some() { s } else { seed };
             // The planet's axis, in the scene: the weather's north.
@@ -259,13 +298,10 @@ pub fn create_layer(o: &Value) -> SceneObject {
             create_volume(shell(top), global(Arc::new(cirrus)), SceneFile::parse_scattering(&spec, g))
         },
         "rain" => {
-            let convective = (w["convective"] != Value::Bool(false)).then(|| {
-                let c = &w["convective"];
-                let d = Look { max_density: 0.06, shape_size: 1500., detail_size: 300., erosion: 0.35 };
-                Arc::new(Convective::new(maps.clone(), look(c, d), weather.params.cell_size, weather.params.radius,
-                    weather.params.seed.wrapping_mul(31).wrapping_add(2)))
-            });
-            let mut field = Rain::new(maps, convective, number(&spec, "shower_rate", 40.).max(0.), seed);
+            let storms = (w["convective"] != Value::Bool(false)).then(|| Arc::new(convective(&w["convective"], &weather, maps.clone())));
+            let mut field = Rain::new(maps, storms, number(&spec, "shower_rate", 40.).max(0.), seed);
+            field.time = weather.params.time;
+            field.fall_speed = number(&spec, "fall_speed", field.fall_speed);
             field.streakiness = number(&spec, "streakiness", field.streakiness).clamp(0., 1.);
             field.streak_size = number(&spec, "streak_size", field.streak_size).max(1.);
             let top = field.highest();

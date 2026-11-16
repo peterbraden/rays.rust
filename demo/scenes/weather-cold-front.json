@@ -81,7 +81,8 @@
       "convective": {
         "similarity_after": 3
       },
-      "map_width": 1024
+      "map_width": 1024,
+      "time": 0
     }
   ]
 }

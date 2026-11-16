@@ -116,9 +116,14 @@ RMSE):
 The `"output"` block holds the film: `"iso"`, `"exposure_time"`, `"white_balance"` (kelvin or
 `"D50"`, `"A"`, ...), `"color_space"` (`"srgb"`, `"display-p3"`, `"rec2020"`,
 `"aces2065-1"`), and `"flare"`: ghosts of the brightest lights, traced through the lens's
-coated surfaces, and the aperture's diffraction starburst (`{"blades": 6, "f_number": 8}`;
-physically faint by default, `"ghosts": 10` exaggerates them;
-[demo/scenes/lens-flare.json](demo/scenes/lens-flare.json)).
+coated surfaces, and the aperture's diffraction starburst (`{"blades": 9, "f_number": 8}`).
+Both are physical in strength: ghosts reflect twice off surfaces with a modern multilayer
+coating by default (`"coating": "single"` for an older lens's purple ghosts, ten to fifty
+times stronger, or `"none"`), and the blades are curved (`"blade_curvature"`, 0 for straight),
+so each spike fans out and tapers as a real sunstar does; fewer blades and a smaller aperture
+make a crisper star ([demo/scenes/lens-flare.json](demo/scenes/lens-flare.json)). `"ghosts"`
+and `"starburst"` scale them, away from physics. Changing `"output"` keeps a render's samples,
+so a finished render can be refinished.
 
 ## Textures
 

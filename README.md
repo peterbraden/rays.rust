@@ -121,7 +121,11 @@ Both are physical in strength: ghosts reflect twice off surfaces with a modern m
 coating by default (`"coating": "single"` for an older lens's purple ghosts, ten to fifty
 times stronger, or `"none"`), and the blades are curved (`"blade_curvature"`, 0 for straight),
 so each spike fans out and tapers as a real sunstar does; fewer blades and a smaller aperture
-make a crisper star ([demo/scenes/lens-flare.json](demo/scenes/lens-flare.json)). `"ghosts"`
+make a crisper star. And no lens is perfect: with `"imperfection"` (1 by default, 0 for a
+perfect lens) the blades are each a little out of place and their edges rough, the front
+element has dust and hairline scratches, and coatings thin towards each element's rim, so
+the star is uneven and streaked, with a soft glow, and ghosts change colour across them
+([demo/scenes/lens-flare.json](demo/scenes/lens-flare.json)). `"ghosts"`
 and `"starburst"` scale them, away from physics. Changing `"output"` keeps a render's samples,
 so a finished render can be refinished.
 

@@ -131,6 +131,19 @@ alias nor blur ([demo/scenes/textures.json](demo/scenes/textures.json)):
 
 ![Texture filtering](demo/texture-filtering.png)
 
+## Wavefront rendering
+
+After PBRT's chapter 15, `"integrator": "wavefront"` (or `--wavefront`) renders with a
+wavefront path tracer: every path of a pass in a queue, advanced a stage at a time (camera
+rays, intersection, emission, shading sorted by material, shadow rays) over the scene
+flattened into arrays of triangles and spheres with a material table: the structure a GPU
+renderer needs. It covers spheres, triangles, meshes, boxes, quads, planes and their
+transforms; untextured lambertian, plastic, metal, glass, conductor, emitter and checkerboard
+materials; point, area and sun lights, the light BVH, the sky and aerial perspective. Scenes
+using anything else render with the path tracer, which says why. Its images match the path
+tracer's (on `demo.json` at 512 samples, mean FLIP 0.0016 against seed-to-seed 0.0012), at
+about 1.2 to 1.4 times its time on the CPU.
+
 ## Coats and subsurface scattering
 
 After PBRT's chapter 14: `coated_diffuse` and `coated_conductor` put a base under a clear or

@@ -760,7 +760,8 @@ start) by chapter:
   media bounded by shapes.
 - 12, Lights (done): spot, goniometric, projection, textured area lights; light BVH.
 - 13-14, Light transport (done, but light tracing): layered BSDFs, subsurface scattering.
-- Online chapters: BDPT, MLT, SPPM. 15-16: the wavefront integrator (GPU; see workstream 3).
+- Online chapters: BDPT, MLT, SPPM. 15-16 (done on the CPU): the wavefront integrator; the GPU
+  is deferred (see workstream 3).
 
 ### Chapter 4: done
 
@@ -1078,6 +1079,42 @@ Demo `light-transport.json`.
   absorbing objects.
 - Layered BSDFs that transmit (pbrt's thin layered dielectrics), textured coat roughness and
   thickness; pbrt's `PDF` estimate is used as is.
+
+### Chapters 15-16: wavefront rendering (done, on the CPU)
+
+Chapter 15 is pbrt-v4's wavefront renderer for GPUs, chapter 16 a retrospective. Option 1 of
+the three discussed (CPU wavefront, then GPU with wgpu, or a hybrid): in three commits,
+
+1. A flat scene (`src/wavefront/flat.rs`): `Geometry::flatten` (spheres, triangles, meshes,
+   boxes, planar quads, planes, transforms of them) and `MaterialModel::flat` (untextured
+   lambertian, plastic, metal, dielectric, isotropic conductor, diffuse-light, checkerboards)
+   into primitive arrays, the existing array BVH and a `FlatMaterial` enum. The skysphere stays
+   an object, evaluated for escaping rays; aerial perspective is applied as in `trace`.
+2. The wavefront integrator (`src/wavefront/integrator.rs`): per pass, queues of paths through
+   generate, intersect, escape/emission (MIS), shade (sorted by material; next-event
+   estimation queues shadow rays) and shadow stages, each path carrying its own Sobol'
+   `SampleState` instead of thread-local state. `"integrator": "wavefront"`, `--wavefront`;
+   unflattenable scenes fall back with the reason (15 of 68 demo scenes flatten).
+3. Matching the path tracer: sky sampling, sphere lights by cone, the sun's disc for narrow
+   lobes, the light BVH, regularisation after the first non-delta bounce.
+
+Measured at 320x180, 64 spp, against a 512 spp path-traced reference (mean FLIP, time on 4
+cores): spheres 0.0154 / 1.22 s path, 0.0209 / 1.66 s wavefront; instances 0.0205 / 3.07 s,
+0.0223 / 3.77 s; lamp-field 0.0803 / 1.58 s, 0.0848 / 1.82 s; demo 0.0023 / 1.72 s, 0.0025 /
+2.00 s. At 512 spp on demo.json the wavefront image fits the reference to 0.998, mean FLIP
+0.0016 (path seed-to-seed 0.0012). Findings: one queue for the whole image was memory-bound,
+twice the path tracer's time; batches of 4096 paths per thread brought it to 1.15-1.4 times.
+Sorting by material costs little on the CPU. A 4.5% gap on demo.json was the path tracer's
+regularisation, which the wavefront integrator lacked.
+
+### Deferred from chapters 15-16
+
+- The GPU itself (option 2): WGSL compute kernels over the flat scene with wgpu (Metal on the
+  Mac), validated against this integrator by FLIP. A separate PR: a large dependency, and no
+  GPU in the development container (Mesa's lavapipe could stand in for tests).
+- Coverage: textures, coated and rough-dielectric materials, cylinders and other analytic
+  shapes, media, spectral and motion-blurred renders; the scene's other samplers.
+- pbrt's structure-of-arrays queues; ours are arrays of path structs.
 
 ### Reading (chapter 4)
 

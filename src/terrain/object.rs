@@ -442,8 +442,9 @@ fn focus(o: &Value, frame: &Frame, ahead: f64) -> Vector3<f64> {
 ///   and hillslopes, no glaciers), or `false` for its noise topography alone.
 /// - `levels`: patches nested about the `focus` (see `levels`; `[]` for none, as from orbit,
 ///   where the planet's own relief is drawn down to the domain's `spacing`), each driven at its edge by the
-///   one around it. Glaciers only run on the finest (`"glacier"` as for a patch), as at
-///   kilometres per cell the ice can't drain down valleys narrower than a cell.
+///   one around it. Glaciers and meandering channels only run on the finest (`"glacier"` and
+///   `"channels"` as for a patch): at kilometres per cell the ice can't drain down valleys
+///   narrower than a cell, and every river's bends are smaller than one.
 /// - `focus`: a scene point to centre the patches on; by default the ground the scene's camera
 ///   (passed in as `camera`) looks over. Patches are snapped to an eighth of their width, so
 ///   nearby cameras share them (and their cache).
@@ -489,7 +490,12 @@ fn full_scale_landscape(o: &Value, params: TerrainParams) -> SceneObject {
         let snap = |c: f64| (c / (width / 8.)).round() * (width / 8.);
         let (lat, lon) = Domain::lat_lon(&frame.dir(snap(fx), snap(fz)));
         let mut lp = params.clone();
-        if k > 0 { lp.glacier = None; }
+        if k > 0 {
+            // Glaciers and meandering channels are both finer than a coarse patch's cells:
+            // they only run on the finest, where they are drawn.
+            lp.glacier = None;
+            lp.channels = None;
+        }
         let mut t = Terrain::new(Domain::patch(lat, lon, l.cells, l.spacing, radius), lp);
         let initial = scenery::corner_heights(&t);
         if let (Some(outer), Some(before), true) = (built.last(), &parent, time > 0.) {

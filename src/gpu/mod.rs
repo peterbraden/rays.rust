@@ -308,7 +308,10 @@ impl Buffers {
 /// A buffer mapping's completion as a future: wgpu calls back when it's done (natively, during
 /// `poll`; in a browser, from the event loop, so the render must yield to it).
 #[derive(Default)]
-struct Mapped(std::sync::Arc<Mutex<(Option<Result<(), String>>, Option<std::task::Waker>)>>);
+struct Mapped(std::sync::Arc<Mutex<MapSlot>>);
+
+/// The mapping's result once wgpu has called back, and the task waiting for it.
+type MapSlot = (Option<Result<(), String>>, Option<std::task::Waker>);
 
 impl std::future::Future for Mapped {
     type Output = Result<(), String>;
@@ -340,7 +343,9 @@ impl GpuRenderer {
             power_preference: wgpu::PowerPreference::HighPerformance,
             ..Default::default()
         }).await.map_err(|e| format!("no GPU adapter ({})", e))?;
-        let adapter_name = format!("{} ({:?})", adapter.get_info().name, adapter.get_info().backend);
+        let info = adapter.get_info();
+        // Browsers keep the GPU's name to themselves.
+        let adapter_name = if info.name.is_empty() { format!("{:?}", info.backend) } else { format!("{} ({:?})", info.name, info.backend) };
         let mut limits = wgpu::Limits::default();
         let available = adapter.limits();
         // Refuse (and fall back) rather than let wgpu panic on a buffer the device can't bind.
@@ -364,8 +369,13 @@ impl GpuRenderer {
 
         // The shader, written in Rust (`shaders/pathtrace`) and compiled to SPIR-V by rust-gpu
         // (`scripts/build-shaders.sh`); a browser takes the WGSL translation made with it.
+        // RAYS_GPU_WGSL=1 runs the WGSL natively too, to test the translation without a browser.
         #[cfg(not(target_arch = "wasm32"))]
-        let source = wgpu::util::make_spirv(include_bytes!("pathtrace.spv"));
+        let source = if std::env::var_os("RAYS_GPU_WGSL").is_some() {
+            wgpu::ShaderSource::Wgsl(include_str!("pathtrace.wgsl").into())
+        } else {
+            wgpu::util::make_spirv(include_bytes!("pathtrace.spv"))
+        };
         #[cfg(target_arch = "wasm32")]
         let source = wgpu::ShaderSource::Wgsl(include_str!("pathtrace.wgsl").into());
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pathtrace"), source });

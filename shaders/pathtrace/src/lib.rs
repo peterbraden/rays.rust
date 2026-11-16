@@ -226,6 +226,12 @@ fn intersect_prim(s: &Scene, i: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -
     } else if kind == PRIM_SPHERE {
         let oc = ro - p.v0.xyz();
         let b = oc.dot(rd);
+        // A ray from outside going away from the centre misses, decided without the roots: a
+        // shadow ray leaving a sphere otherwise re-hits it where sqrt is a few ULP out
+        // (WebGPU allows that; SwiftShader's is), darkening every sphere.
+        if b > 0.0 && oc.dot(oc) > p.v0.w * p.v0.w {
+            return Vec4::ZERO;
+        }
         // pbrt's discriminant, r² - |oc - b rd|², keeps a small, distant sphere's precision.
         let perp = oc - rd * b;
         let disc = p.v0.w * p.v0.w - perp.dot(perp);

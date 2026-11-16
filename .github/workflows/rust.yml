@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v4
     - name: Install Clippy
       run: rustup component add clippy
     - name: Run Clippy
@@ -17,6 +17,8 @@ jobs:
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+    - name: Run tests (release, as the renders run)
+      run: cargo test --release
     - name: Run Smoke test
       run: cargo run -- demo/ci-smoke-test.json
     - name: Run current work
@@ -24,3 +26,23 @@ jobs:
     - name: Run examples
       run: for f in demo/*.json; do cargo run --release -- --width 60 --height 40 $f; done
 
+  gpu:
+    # The GPU path tracer (--features gpu) on Mesa's software Vulkan driver, lavapipe.
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Check the committed shader matches its sources
+      run: scripts/shader-sources.sh --check
+    - name: Install lavapipe
+      run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+    - name: Install Clippy
+      run: rustup component add clippy
+    - name: Run Clippy
+      run: cargo clippy --features gpu -- -D errors
+    - name: Build
+      run: cargo build --release --features gpu
+    - name: Run GPU tests
+      run: cargo test --release --features gpu gpu::
+    - name: Render on the GPU
+      run: cargo run --release --features gpu -- --gpu --width 60 --height 40 demo/ci-smoke-test.json

@@ -8,3 +8,5 @@
 set -e
 cd "$(dirname "$0")/../shaders"
 cargo run --release -p builder
+cd ..
+scripts/shader-sources.sh > src/gpu/pathtrace.spv.sources

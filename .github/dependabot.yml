@@ -1,6 +1,8 @@
 version: 2
 updates:
-  - package-ecosystem: "rust"
+  # The renderer's crates. The shaders' workspace (shaders/) is left out: its rust-gpu crates
+  # are pinned to the nightly in shaders/rust-toolchain.toml and move together by hand.
+  - package-ecosystem: "cargo"
     directory: "/"
     schedule:
       interval: "daily"

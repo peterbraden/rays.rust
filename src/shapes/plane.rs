@@ -9,6 +9,10 @@ pub struct Plane {
 }
 
 impl Geometry for Plane {
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        Some(vec![crate::wavefront::flat::Prim::Plane { y: self.y }])
+    }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         let rdn = r.rd.normalize();
         let mut norm = Vector3::new(0., 1., 0.);
@@ -31,6 +35,11 @@ impl Geometry for Plane {
         }
 
         None
+    }
+
+    /// The ground's own coordinates: (x, z).
+    fn uv(&self, p: &Vector3<f64>, _face: u32) -> Option<crate::na::Vector2<f64>> {
+        Some(crate::na::Vector2::new(p.x, p.z))
     }
 
     fn bounds(&self) -> BBox {

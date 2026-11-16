@@ -69,17 +69,18 @@ impl MaterialModel for GrassMaterial {
 
         // The far side of the blade: a point just through it, facing away from the ray.
         let back = Intersection {
-            point: front.point - n * (2. * s.render.shadow_bias + THROUGH_LEAF),
+            point: front.point - n * (crate::material::functions::surface_offset(&front, s) + THROUGH_LEAF),
             normal: -n,
             ..front
         };
-        let emit = direct_lighting(self.reflect, &front, s) + direct_lighting(self.transmit, &back, s);
+        let (reflect, transmit) = (self.reflect.as_reflectance(), self.transmit.as_reflectance());
+        let emit = direct_lighting(reflect, &front, s) + direct_lighting(transmit, &back, s);
 
         let p = self.transmit_probability();
         let (side, weight) = if rand() < p {
-            (&back, self.transmit * (1. / p))
+            (&back, transmit * (1. / p))
         } else {
-            (&front, self.reflect * (1. / (1. - p)))
+            (&front, reflect * (1. / (1. - p)))
         };
         ScatteredRay {
             emit,

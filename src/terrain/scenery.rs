@@ -519,7 +519,7 @@ pub fn mesh(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams)
         positions[k] = (positions[a] + positions[b]) / 2.;
         normals[k] = (normals[a] + normals[b]).normalize();
     }
-    SmoothMesh::from_indexed(&[IndexedMesh { positions, normals, triangles }])
+    SmoothMesh::from_indexed(&[IndexedMesh { positions, normals, triangles, texcoords: vec![] }])
 }
 
 /// What covers the ground, where.
@@ -687,7 +687,7 @@ impl MaterialModel for Land {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let intersection = &intersection.facing(r);
         let albedo = self.ground.albedo(&intersection.point, &intersection.normal);
-        scatter_bsdf(&LambertianBSDF { albedo, normal: intersection.normal }, r, &intersection.point, s)
+        scatter_bsdf(&LambertianBSDF { albedo: albedo.as_reflectance(), normal: intersection.normal }, r, &intersection.point, s)
     }
 }
 

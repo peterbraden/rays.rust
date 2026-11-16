@@ -1,0 +1,819 @@
+{
+  "width": 480,
+  "height": 320,
+  "supersamples": 256,
+  "chunk_size": 32,
+  "samples_per_chunk": 4,
+  "shadow_bias": 0.0001,
+  "max_depth": 1,
+  "background": [
+    0,
+    0,
+    0
+  ],
+  "camera": {
+    "location": [
+      0,
+      0,
+      0
+    ],
+    "lookat": [
+      0,
+      0,
+      10
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.6,
+    "aperture": 0.12,
+    "astigmatism": {
+      "seidel": 0.25
+    }
+  },
+  "materials": {
+    "STAR": {
+      "type": "diffuse-light",
+      "color": [
+        1,
+        1,
+        1
+      ],
+      "intensity": 40
+    }
+  },
+  "objects": [
+    {
+      "type": "sphere",
+      "location": [
+        -4.5,
+        -2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -4.5,
+        -1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -4.5,
+        -0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -4.5,
+        0.0,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -4.5,
+        0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -4.5,
+        1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -4.5,
+        2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -3.6,
+        -2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -3.6,
+        -1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -3.6,
+        -0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -3.6,
+        0.0,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -3.6,
+        0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -3.6,
+        1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -3.6,
+        2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -2.7,
+        -2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -2.7,
+        -1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -2.7,
+        -0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -2.7,
+        0.0,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -2.7,
+        0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -2.7,
+        1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -2.7,
+        2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -1.8,
+        -2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -1.8,
+        -1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -1.8,
+        -0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -1.8,
+        0.0,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -1.8,
+        0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -1.8,
+        1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -1.8,
+        2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -0.9,
+        -2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -0.9,
+        -1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -0.9,
+        -0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -0.9,
+        0.0,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -0.9,
+        0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -0.9,
+        1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -0.9,
+        2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.0,
+        -2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.0,
+        -1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.0,
+        -0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.0,
+        0.0,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.0,
+        0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.0,
+        1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.0,
+        2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.9,
+        -2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.9,
+        -1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.9,
+        -0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.9,
+        0.0,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.9,
+        0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.9,
+        1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.9,
+        2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        1.8,
+        -2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        1.8,
+        -1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        1.8,
+        -0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        1.8,
+        0.0,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        1.8,
+        0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        1.8,
+        1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        1.8,
+        2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        2.7,
+        -2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        2.7,
+        -1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        2.7,
+        -0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        2.7,
+        0.0,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        2.7,
+        0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        2.7,
+        1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        2.7,
+        2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        3.6,
+        -2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        3.6,
+        -1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        3.6,
+        -0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        3.6,
+        0.0,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        3.6,
+        0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        3.6,
+        1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        3.6,
+        2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        4.5,
+        -2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        4.5,
+        -1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        4.5,
+        -0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        4.5,
+        0.0,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        4.5,
+        0.9,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        4.5,
+        1.8,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        4.5,
+        2.7,
+        10
+      ],
+      "radius": 0.03,
+      "material": "STAR"
+    }
+  ]
+}

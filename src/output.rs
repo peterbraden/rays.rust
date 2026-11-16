@@ -42,7 +42,7 @@ pub enum Transfer {
 
 /// How linear values are mapped for display, from the scene file's "output" block, eg.
 /// `"output": { "exposure": 1.0, "tonemap": "none", "transfer": "srgb", "glare": true }`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OutputOpts {
     pub exposure: f64,
     pub tonemap: ToneMap,
@@ -53,11 +53,16 @@ pub struct OutputOpts {
     pub glare: Option<Glare>,
     /// Angle (radians) across a pixel at the image's centre, from the camera; for glare.
     pub pixel_angle: f64,
+    /// The sensor's exposure, white balance and output colour space (`film`).
+    pub film: crate::film::Film,
+    /// Lens flare: ghosts and a starburst from the image's brightest lights (`flare`); set
+    /// with the camera, whose lens it uses.
+    pub flare: Option<std::sync::Arc<crate::flare::Flare>>,
 }
 
 impl Default for OutputOpts {
     fn default() -> OutputOpts {
-        OutputOpts { exposure: 1., tonemap: ToneMap::None, transfer: Transfer::Srgb, glare: None, pixel_angle: 0. }
+        OutputOpts { exposure: 1., tonemap: ToneMap::None, transfer: Transfer::Srgb, glare: None, pixel_angle: 0., film: crate::film::Film::default(), flare: None }
     }
 }
 
@@ -102,15 +107,25 @@ impl OutputOpts {
                 },
             },
             pixel_angle: 0.,
+            film: crate::film::Film::parse(o),
+            flare: None,
         }
     }
 
-    /// The finished linear image: with the camera's glare, if any.
+    /// The finished linear image: with the camera's glare, if any, through the film.
     pub fn finish(&self, img: &LinearImage) -> LinearImage {
-        match self.glare {
+        let img = match self.glare {
             Some(g) if self.pixel_angle > 0. => g.apply(img, self.pixel_angle, self.exposure),
             _ => LinearImage { width: img.width, height: img.height, pixels: img.pixels.clone() },
+        };
+        let img = match &self.flare {
+            Some(f) => f.apply(&img, self.exposure, self.pixel_angle),
+            None => img,
+        };
+        if self.film.is_identity() {
+            return img;
         }
+        LinearImage { width: img.width, height: img.height, pixels: img.pixels.iter().map(|c| self.film.apply(c)).collect() }
     }
 
     /// Map one linear channel to a display value in [0, 1].

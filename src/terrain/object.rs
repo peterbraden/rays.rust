@@ -176,7 +176,7 @@ impl TerrainMedium {
             else { BAND0 + ((t.bed[i] / BAND_HEIGHT) as usize).min(BANDS - 1) as u8 }
         }).collect();
         let lambertian = |c: [f64; 3]| -> Box<dyn MaterialModel + Sync + Send> {
-            Box::new(Lambertian { albedo: Color::new(c[0], c[1], c[2]) })
+            Box::new(Lambertian { albedo: Color::new(c[0], c[1], c[2]).into() })
         };
         let mut materials = vec![
             lambertian([0.85, 0.9, 0.95]),

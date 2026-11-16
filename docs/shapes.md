@@ -20,6 +20,10 @@ defaults.
 | `cylinder` | `base`*, `cap`*, `radius`*, `open: false` | Closed by flat ends unless `open`. |
 | `cone` | `base`*, `base_radius`*, `cap`*, `cap_radius`*, `open: false` | A truncated cone. |
 | `disc` | `center`*, `normal`*, `radius`*, `hole_radius: 0` | Flat, with an optional hole. Can be an area light. |
+| `bilinear_patch` (or `quad`) | `points`* (four corners: p00, p10, p01, p11) | The surface between four corners: a quadrilateral if flat, a saddle if not (pbrt's bilinear patch). Can be an area light. |
+| `curves` | `curves`* (each `points`* (four Bézier control points), `width` (one or `[root, tip]`), `normals` for ribbons), `kind: cylinder` (`flat`, `cylinder`, `ribbon`), `split: 3` | Hair-thin strands (pbrt's curves). |
+| `fur` | `center`, `radius: 1`, `count: 20000`, `length: 0.2`, `width: [0.01, 0.002]`, `droop: 0.3`, `curl: 0.15`, `kind: cylinder`, `seed: 0` | Strands of curves growing from a sphere. |
+| `subdivision` | `src` (a mesh file) or `points` and `triangles` (index triples), `levels: 3` | A Loop subdivision surface: the smooth surface a coarse triangle mesh describes. |
 
 ## Polynomial surfaces
 

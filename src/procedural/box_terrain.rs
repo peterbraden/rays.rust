@@ -74,7 +74,7 @@ pub fn create_box_terrain(seed: u64) -> SceneObject {
     SceneObject {
         geometry: Box::new(terrain),
         medium: Box::new(Solid { m: Box::new(Lambertian {
-            albedo: Color::new(0.75, 0.75, 0.75)
+            albedo: Color::new(0.75, 0.75, 0.75).into()
         }) })
     }
 }

@@ -22,7 +22,7 @@ use crate::material::functions::{scatter_lambertian, scatter_bsdf, direct_lighti
 ///   reflected back down inside it), as the model always has.
 ///
 pub struct Plastic {
-    pub albedo: Color,
+    pub albedo: crate::textures::ColorTexture,
     pub refractive_index: f64,
     pub roughness: f64,
 }
@@ -67,14 +67,21 @@ impl BSDF for PlasticBSDF {
 }
 
 impl MaterialModel for Plastic {
+    fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> {
+        match self.albedo {
+            crate::textures::ColorTexture::Constant(albedo) => Some(crate::wavefront::flat::FlatMaterial::Plastic { albedo, refractive_index: self.refractive_index, roughness: self.roughness }),
+            _ => None,
+        }
+    }
+
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay{
         // Shade whichever side the ray hit.
         let intersection = &intersection.facing(r);
         let alpha = regularised(self.roughness * self.roughness, s);
         if alpha >= MIN_ALPHA {
             let bsdf = PlasticBSDF {
-                coat: GGX { alpha, fresnel: Fresnel::Dielectric(self.refractive_index), normal: intersection.normal },
-                base: LambertianBSDF { albedo: self.albedo, normal: intersection.normal },
+                coat: GGX::new(alpha, Fresnel::Dielectric(self.refractive_index), intersection.normal),
+                base: LambertianBSDF { albedo: self.albedo.eval(intersection, s).as_reflectance(), normal: intersection.normal },
                 refractive_index: self.refractive_index,
             };
             return scatter_bsdf(&bsdf, r, &intersection.point, s);
@@ -89,10 +96,11 @@ impl MaterialModel for Plastic {
         }
 
         // Base: direct lighting is emitted; the bounce carries indirect light, weighted by albedo.
+        let albedo = self.albedo.eval(intersection, s).as_reflectance();
         ScatteredRay {
-            emit: direct_lighting(self.albedo, intersection, s),
+            emit: direct_lighting(albedo, intersection, s),
             light_sampling: LightSampling::Exclusive,
-            ..scatter_lambertian(self.albedo, intersection)
+            ..scatter_lambertian(albedo, intersection)
         }
     }
 }
@@ -136,7 +144,7 @@ mod tests {
         let n = Vector3::new(0., 0.6, 0.8);
         for alpha in [0.1, 0.4] {
             let b = PlasticBSDF {
-                coat: GGX { alpha, fresnel: Fresnel::Dielectric(1.5), normal: n },
+                coat: GGX::new(alpha, Fresnel::Dielectric(1.5), n),
                 base: LambertianBSDF { albedo: Color::new(0.8, 0.3, 0.1), normal: n },
                 refractive_index: 1.5,
             };

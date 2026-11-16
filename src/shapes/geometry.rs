@@ -1,7 +1,7 @@
 use crate::ray::Ray;
 use crate::intersection::RawIntersection;
 use crate::shapes::bbox::BBox;
-use crate::na::{Vector3};
+use crate::na::{Vector2, Vector3};
 use crate::na::geometry::Affine3;
 
 
@@ -118,12 +118,64 @@ pub trait Geometry: Sync{
         if self.intersects_beyond(r, min).is_some_and(|x| x.dist >= min && x.dist < max) { 0. } else { 1. }
     }
 
+    // The shape as flat primitives (triangles, spheres, planes), for the wavefront integrator
+    // (`wavefront::flat`); None if it can't be.
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> { None }
+
+    // The transmittance per colour channel (or wavelength, in spectral mode): the same in all
+    // but for chromatic media (`volume::chromatic`).
+    fn transmittance_color(&self, r: &Ray, min: f64, max: f64) -> crate::color::Color {
+        crate::color::Color::white() * self.transmittance(r, min, max)
+    }
+
     // Surface area, for shapes that can be sampled as area lights; 0 for those that can't.
     fn surface_area(&self) -> f64 { 0. }
 
     // A point uniformly distributed over the surface by area, and the surface normal there,
     // from three uniform random numbers in [0, 1). None for shapes that can't be sampled.
     fn sample_surface(&self, _u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> { None }
+
+    /// Texture coordinates (u, v) of the point `p` on the surface, hit as part `face` (see
+    /// `RawIntersection::face`): the surface's own parameterisation, as pbrt's shapes give
+    /// theirs (Pharr, Jakob and Humphreys, "Physically Based Rendering", 4th ed., chapter 6),
+    /// for textures (ch. 10). Computed on demand, when a material asks, rather than for every
+    /// hit. None for shapes without one.
+    fn uv(&self, _p: &Vector3<f64>, _face: u32) -> Option<Vector2<f64>> { None }
+
+    /// The accuracy of this shape's hits, in its own units, beyond floating-point rounding: the
+    /// tolerance of an iterative solver (an isosurface's `accuracy`), or 0 for shapes solved in
+    /// closed form. See `Intersection::spawn_offset`.
+    fn tolerance(&self) -> f64 { 0. }
+
+    /// The direction the surface runs at `p` (hit as part `face`), for materials that depend on
+    /// it: a curve's direction, for hair. None for shapes without one.
+    fn tangent(&self, _p: &Vector3<f64>, _face: u32) -> Option<Vector3<f64>> { None }
+
+    /// A point on the surface for light sampling from `from`, its normal, and the density with
+    /// which it was chosen per unit solid angle at `from` (PBR section 6.1.4, `Shape::Sample`
+    /// with a reference point). By default a point uniform by area (`sample_surface`), whose
+    /// density converts to solid angle by d² / (|cos θ| A); shapes that can do better sample
+    /// only what `from` can see (a sphere, the cone it subtends).
+    fn sample_from(&self, from: &Vector3<f64>, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>, f64)> {
+        let (y, n) = self.sample_surface(u)?;
+        let pdf = area_pdf(from, &y, &n, self.surface_area());
+        (pdf > 0. && pdf.is_finite()).then_some((y, n, pdf))
+    }
+
+    /// The density per unit solid angle with which `sample_from(from, ..)` chooses the point `y`
+    /// with normal `n`.
+    fn pdf_from(&self, from: &Vector3<f64>, y: &Vector3<f64>, n: &Vector3<f64>) -> f64 {
+        area_pdf(from, y, n, self.surface_area())
+    }
+}
+
+/// The density per solid angle at `from` of choosing `y` (normal `n`) uniformly by area on a
+/// surface of area `area`: d² / (|cos θ_y| A).
+pub fn area_pdf(from: &Vector3<f64>, y: &Vector3<f64>, n: &Vector3<f64>, area: f64) -> f64 {
+    let w = y - from;
+    let d2 = w.norm_squared();
+    let cos = n.dot(&w).abs() / d2.sqrt();
+    if cos <= 0. || area <= 0. { 0. } else { d2 / (cos * area) }
 }
 
 
@@ -141,8 +193,15 @@ impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
     fn inside(&self, p: &Vector3<f64>) -> bool { (**self).inside(p) }
     fn surface_area(&self) -> f64 { (**self).surface_area() }
     fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> { (**self).sample_surface(u) }
+    fn uv(&self, p: &Vector3<f64>, face: u32) -> Option<Vector2<f64>> { (**self).uv(p, face) }
+    fn tolerance(&self) -> f64 { (**self).tolerance() }
+    fn tangent(&self, p: &Vector3<f64>, face: u32) -> Option<Vector3<f64>> { (**self).tangent(p, face) }
+    fn sample_from(&self, from: &Vector3<f64>, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>, f64)> { (**self).sample_from(from, u) }
+    fn pdf_from(&self, from: &Vector3<f64>, y: &Vector3<f64>, n: &Vector3<f64>) -> f64 { (**self).pdf_from(from, y, n) }
     fn is_stochastic(&self) -> bool { (**self).is_stochastic() }
     fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 { (**self).transmittance(r, min, max) }
+    fn transmittance_color(&self, r: &Ray, min: f64, max: f64) -> crate::color::Color { (**self).transmittance_color(r, min, max) }
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> { (**self).flatten() }
 }
 
 /// A geometry whose hits report `face`, so a composite object made of many of them (eg. the
@@ -183,6 +242,26 @@ impl<T: Geometry> Geometry for Tagged<T> {
 
     fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> {
         self.item.sample_surface(u)
+    }
+
+    fn uv(&self, p: &Vector3<f64>, _face: u32) -> Option<Vector2<f64>> {
+        self.item.uv(p, 0)
+    }
+
+    fn tolerance(&self) -> f64 {
+        self.item.tolerance()
+    }
+
+    fn tangent(&self, p: &Vector3<f64>, _face: u32) -> Option<Vector3<f64>> {
+        self.item.tangent(p, 0)
+    }
+
+    fn sample_from(&self, from: &Vector3<f64>, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>, f64)> {
+        self.item.sample_from(from, u)
+    }
+
+    fn pdf_from(&self, from: &Vector3<f64>, y: &Vector3<f64>, n: &Vector3<f64>) -> f64 {
+        self.item.pdf_from(from, y, n)
     }
 }
 

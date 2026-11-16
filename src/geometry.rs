@@ -57,8 +57,8 @@ thread_local! {
 }
 
 thread_local! {
-    /// While rendering a sample with the Sobol' sampler, where `rand()` is in its sequence.
-    static SOBOL: RefCell<Option<crate::sobol::SampleState>> = const { RefCell::new(None) };
+    /// While rendering a sample with a sampler (`sampler`), where `rand()` is in its point.
+    static SOBOL: RefCell<Option<crate::sampler::SampleState>> = const { RefCell::new(None) };
 }
 
 /// Re-seed this thread's generator, and go back to independent sampling.
@@ -70,7 +70,12 @@ pub fn seed_rand(seed: u64, stream: u64) {
 /// Draw `rand()`'s numbers from sample `index` of the Owen-scrambled Sobol' sequence for
 /// `seed`, one dimension after another, until `end_sample`.
 pub fn begin_sample(seed: u64, index: u32) {
-    SOBOL.with(|s| *s.borrow_mut() = Some(crate::sobol::SampleState::new(seed, index)));
+    begin_sampler(crate::sampler::SampleState::Sobol(crate::sobol::SampleState::new(seed, index)));
+}
+
+/// Draw `rand()`'s numbers from `state`, one dimension after another, until `end_sample`.
+pub fn begin_sampler(state: crate::sampler::SampleState) {
+    SOBOL.with(|s| *s.borrow_mut() = Some(state));
 }
 
 /// Back to independent numbers from this thread's generator.

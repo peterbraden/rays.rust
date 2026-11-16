@@ -15,6 +15,70 @@ Shapes combined: union, merge, intersection, difference and clipping (see the
 [shape reference](../docs/shapes.md#combining-shapes-csg)).
 ![CSG](./scenes/csg.png)
 
+## Spectral rendering
+White light dispersed by a diamond and a prism of SF11 flint glass, traced at sampled
+wavelengths (`"spectral": true`; see `src/spectrum.rs`).
+![Dispersion](./scenes/spectral-prism.png)
+
+Lamps glowing as blackbodies at 1900, 2700, 4000, 6500 and 12000 K, at equal luminance.
+![Blackbody lamps](./scenes/blackbody.png)
+
+## Cameras and film
+A double Gauss lens at f/2, traced element by element: depth of field and vignetting.
+![Realistic camera](./scenes/realistic-camera.png)
+
+Motion blur: a sphere sliding, a box turning, a sphere rising, while the shutter is open.
+![Motion blur](./scenes/motion-blur.png)
+
+A spherical (equirectangular) panorama of the lamps scene.
+![Panorama](./scenes/panorama.png)
+
+A star test of a lens's (Seidel) astigmatism: points blur into radial lines that grow with the
+square of the distance from the centre.
+![Astigmatism](./scenes/astigmatism.png)
+
+Lens flare: ghosts of the sun from reflections between the coated surfaces of a double Gauss
+lens (exaggerated tenfold), and the starburst of a six-bladed aperture.
+![Lens flare](./scenes/lens-flare.png)
+
+## Shapes after PBRT
+Texture-space checkers on a sphere and a saddle (a bilinear patch), a cube smoothed by Loop
+subdivision, ribbon and cylinder curves, lit by a quad light.
+![PBRT shapes](./scenes/pbrt-shapes.png)
+
+A ball of fur: 40,000 Bézier curves.
+![Fur](./scenes/fur.png)
+
+## Materials after PBRT
+Measured metals (gold, copper, brass, silver, aluminium), brushed aluminium, frosted glass, a
+thin pane, and a worn mix of paint and gold leaf.
+![PBRT materials](./scenes/pbrt-materials.png)
+
+## Textures
+Image textures and a normal map on a brick wall and sphere, paint worn to copper by a dirt mask,
+and a checkerboard filtered into the distance.
+![Textures](./scenes/textures.png)
+
+## Coats and subsurface scattering
+Varnished bricks, a tinted coat and lacquered copper (pbrt's layered BSDFs), and jade, skin,
+marble and a wax candle (random-walk subsurface scattering), backlit by a low sun.
+![Light transport](./scenes/light-transport.png)
+
+## Lights
+A spot light on a red ball, a projector throwing a rose window on the wall, a goniometric lamp
+with a shade, a stained-glass window as a textured area light, and strings of fairy lights,
+sampled with the light BVH.
+![Lights](./scenes/lights.png)
+
+900 lamps, sampled by the light BVH.
+![Lamp field](./scenes/lamp-field.png)
+
+## Participating media
+A smoke plume and its fire from voxel grids (blackbody emission by temperature), a glass ball
+of red liquid (a chromatic absorber inside a dielectric), and a ball of medium that scatters
+blue most, casting an orange shadow.
+![Media](./scenes/media.png)
+
 ## Spheres
 Spheres demonstrating 3 different materials.
 ![Spheres](./scenes/spheres.png)

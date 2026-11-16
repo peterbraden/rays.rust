@@ -164,6 +164,26 @@ pub enum Fresnel {
     Schlick(Color),
     /// A dielectric of this refractive index, seen from outside (`functions::fresnel_reflectance`).
     Dielectric(f64),
+    /// A conductor of complex refractive index η + ik per channel (or per wavelength, in
+    /// spectral mode): `conductor_reflectance`.
+    Conductor { eta: Color, k: Color },
+}
+
+/// Fresnel reflectance of a conductor of complex index η + ik, light arriving from a medium of
+/// index 1 at cosine `cos` (Pharr, Jakob and Humphreys, "Physically Based Rendering", 4th ed.,
+/// section 9.3.6, `FrComplex`): Snell's law with a complex index gives a complex cos θ_t, and
+/// the reflectance is the mean of the squared magnitudes of the parallel and perpendicular
+/// amplitudes.
+pub fn conductor_reflectance(cos: f64, eta: f64, k: f64) -> f64 {
+    use num_complex::Complex;
+    let cos_i = cos.clamp(0., 1.);
+    let n = Complex::new(eta, k);
+    let sin2_i = 1. - cos_i * cos_i;
+    let sin2_t = Complex::new(sin2_i, 0.) / (n * n);
+    let cos_t = (Complex::new(1., 0.) - sin2_t).sqrt();
+    let r_parl = (n * cos_i - cos_t) / (n * cos_i + cos_t);
+    let r_perp = (Complex::new(cos_i, 0.) - n * cos_t) / (Complex::new(cos_i, 0.) + n * cos_t);
+    (r_parl.norm_sqr() + r_perp.norm_sqr()) / 2.
 }
 
 impl Fresnel {
@@ -174,16 +194,26 @@ impl Fresnel {
                 let f = crate::material::functions::fresnel_reflectance(cos, 1. / eta, *eta);
                 Color::new(f, f, f)
             },
+            Fresnel::Conductor { eta, k } => Color::new(
+                conductor_reflectance(cos, eta.rgb.x, k.rgb.x),
+                conductor_reflectance(cos, eta.rgb.y, k.rgb.y),
+                conductor_reflectance(cos, eta.rgb.z, k.rgb.z)),
         }
     }
 }
 
-/// GGX reflection about `normal`, roughness `alpha`.
+/// GGX reflection about `normal`, roughness `alpha`; anisotropic if `aniso` gives a second
+/// roughness, along the surface direction perpendicular to a tangent (PBR section 9.6.1):
+/// D(m) = 1 / (π α_x α_y (x²/α_x² + y²/α_y² + z²)²) for a facet normal (x, y, z) in the frame
+/// (tangent, bitangent, normal), and Λ with α² tan²θ = (x² α_x² + y² α_y²) / z². Heitz's sampling
+/// of visible normals already stretches each axis by its own α.
 pub struct GGX {
     pub alpha: f64,
     pub fresnel: Fresnel,
     /// Unit normal, on the side the light arrives from.
     pub normal: Vector3<f64>,
+    /// α along the bitangent, and the tangent (any direction off the normal) α runs along.
+    pub aniso: Option<(f64, Vector3<f64>)>,
 }
 
 /// A direction in the frame (t, b, n) of a unit normal: z along n.
@@ -199,6 +229,14 @@ impl Frame {
         Frame { t, b, n: *n }
     }
 
+    /// With `t` along `tangent` projected onto the surface (any frame if it is along n).
+    fn with_tangent(n: &Vector3<f64>, tangent: &Vector3<f64>) -> Frame {
+        match (tangent - n * n.dot(tangent)).try_normalize(1e-9) {
+            Some(t) => Frame { t, b: n.cross(&t), n: *n },
+            None => Frame::new(n),
+        }
+    }
+
     fn to_local(&self, v: &Vector3<f64>) -> Vector3<f64> {
         Vector3::new(v.dot(&self.t), v.dot(&self.b), v.dot(&self.n))
     }
@@ -209,14 +247,39 @@ impl Frame {
 }
 
 impl GGX {
+    /// An isotropic lobe.
+    pub fn new(alpha: f64, fresnel: Fresnel, normal: Vector3<f64>) -> GGX {
+        GGX { alpha, fresnel, normal, aniso: None }
+    }
+
+    /// α along the tangent and the bitangent.
+    fn alphas(&self) -> (f64, f64) {
+        match self.aniso {
+            None => (self.alpha, self.alpha),
+            Some((ay, _)) => (self.alpha, ay),
+        }
+    }
+
+    fn frame(&self) -> Frame {
+        match &self.aniso {
+            None => Frame::new(&self.normal),
+            Some((_, t)) => Frame::with_tangent(&self.normal, t),
+        }
+    }
+
     /// D(m) for a unit facet normal in the local frame.
     pub fn d(&self, m: &Vector3<f64>) -> f64 {
         if m.z <= 0. {
             return 0.;
         }
-        let a2 = self.alpha * self.alpha;
-        let k = (a2 - 1.) * m.z * m.z + 1.;
-        a2 / (PI * k * k)
+        let (ax, ay) = self.alphas();
+        if ax == ay {
+            let a2 = ax * ax;
+            let k = (a2 - 1.) * m.z * m.z + 1.;
+            return a2 / (PI * k * k);
+        }
+        let s = m.x * m.x / (ax * ax) + m.y * m.y / (ay * ay) + m.z * m.z;
+        1. / (PI * ax * ay * s * s)
     }
 
     /// Smith's Λ for a unit direction in the local frame.
@@ -225,8 +288,9 @@ impl GGX {
         if cos2 >= 1. {
             return 0.;
         }
-        let tan2 = (1. - cos2) / cos2;
-        ((1. + self.alpha * self.alpha * tan2).sqrt() - 1.) / 2.
+        let (ax, ay) = self.alphas();
+        let a2tan2 = (w.x * w.x * ax * ax + w.y * w.y * ay * ay) / cos2;
+        ((1. + a2tan2).sqrt() - 1.) / 2.
     }
 
     pub fn g1(&self, w: &Vector3<f64>) -> f64 {
@@ -234,9 +298,10 @@ impl GGX {
     }
 
     /// Heitz's routine (listing 1) for a visible normal, in the local frame, from uniform `u`.
-    fn sample_visible_normal(&self, wo: &Vector3<f64>, u: [f64; 2]) -> Vector3<f64> {
+    pub fn sample_visible_normal(&self, wo: &Vector3<f64>, u: [f64; 2]) -> Vector3<f64> {
         // Stretch the view direction to the hemisphere configuration (α = 1).
-        let vh = Vector3::new(self.alpha * wo.x, self.alpha * wo.y, wo.z).normalize();
+        let (ax, ay) = self.alphas();
+        let vh = Vector3::new(ax * wo.x, ay * wo.y, wo.z).normalize();
         // An orthonormal basis about it (with vh as its z).
         let lensq = vh.x * vh.x + vh.y * vh.y;
         let t1 = if lensq > 0. { Vector3::new(-vh.y, vh.x, 0.) / lensq.sqrt() } else { Vector3::new(1., 0., 0.) };
@@ -249,13 +314,13 @@ impl GGX {
         let p2 = (1. - s) * (1. - p1 * p1).max(0.).sqrt() + s * r * phi.sin();
         // Project it onto the hemisphere, then unstretch.
         let nh = t1 * p1 + t2 * p2 + vh * (1. - p1 * p1 - p2 * p2).max(0.).sqrt();
-        Vector3::new(self.alpha * nh.x, self.alpha * nh.y, nh.z.max(0.)).normalize()
+        Vector3::new(ax * nh.x, ay * nh.y, nh.z.max(0.)).normalize()
     }
 }
 
 impl BSDF for GGX {
     fn eval(&self, wo: &Vector3<f64>, wi: &Vector3<f64>) -> Color {
-        let frame = Frame::new(&self.normal);
+        let frame = self.frame();
         let (o, i) = (frame.to_local(wo), frame.to_local(wi));
         if o.z <= 0. || i.z <= 0. {
             return Color::black();
@@ -267,7 +332,7 @@ impl BSDF for GGX {
     }
 
     fn pdf(&self, wo: &Vector3<f64>, wi: &Vector3<f64>) -> f64 {
-        let frame = Frame::new(&self.normal);
+        let frame = self.frame();
         let (o, i) = (frame.to_local(wo), frame.to_local(wi));
         if o.z <= 0. || i.z <= 0. {
             return 0.;
@@ -277,7 +342,7 @@ impl BSDF for GGX {
     }
 
     fn sample(&self, wo: &Vector3<f64>, u: [f64; 3]) -> Option<BSDFSample> {
-        let frame = Frame::new(&self.normal);
+        let frame = self.frame();
         let o = frame.to_local(wo);
         if o.z <= 0. {
             return None;
@@ -304,7 +369,7 @@ mod tests {
     use crate::geometry::{Pcg32, point_on_unit_sphere};
 
     fn ggx(alpha: f64) -> GGX {
-        GGX { alpha, fresnel: Fresnel::Schlick(Color::white()), normal: Vector3::new(0., 0.6, 0.8) }
+        GGX::new(alpha, Fresnel::Schlick(Color::white()), Vector3::new(0., 0.6, 0.8))
     }
 
     #[test]
@@ -374,7 +439,7 @@ mod tests {
 
     #[test]
     fn test_reciprocity() {
-        let g = GGX { alpha: 0.3, fresnel: Fresnel::Dielectric(1.5), normal: Vector3::new(0., 0., 1.) };
+        let g = GGX::new(0.3, Fresnel::Dielectric(1.5), Vector3::new(0., 0., 1.));
         let a = Vector3::new(0.3, 0.1, 0.9).normalize();
         let b = Vector3::new(-0.5, 0.2, 0.7).normalize();
         // f(a, b) = f(b, a); eval includes the cosine of its second argument.

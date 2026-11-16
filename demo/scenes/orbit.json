@@ -10,9 +10,10 @@
   "materials": {
     "GROUND": { "type": "lambertian", "albedo": [0.06, 0.09, 0.15] }
   },
+  "output": { "flare": { "blades": 6, "blade_rotation": 20, "f_number": 11, "sources": 2, "ghosts": 20, "starburst": 2 } },
   "camera": {
     "location": [0, 400000, -1500000],
-    "lookat": [0, -200000, 1000000],
+    "lookat": [0, -80000, 1000000],
     "up": [0, 1, 0],
     "angle": 0.9,
     "aperture": 0

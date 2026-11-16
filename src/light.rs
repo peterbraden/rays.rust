@@ -1,10 +1,100 @@
-use crate::na::Vector3;
+use crate::na::{Matrix3, Vector2, Vector3};
 use crate::color::Color;
+use crate::textures::{Filter, Image, Wrap};
+use std::f64::consts::PI;
+use std::sync::Arc;
 
+/// A light at a point: a point light, spot light, goniometric light or projector (Pharr, Jakob
+/// and Humphreys, "Physically Based Rendering", 4th ed., sections 12.1-12.2), by its `profile`.
 pub struct Light {
     pub position: Vector3<f64>,
-    pub color: Color,
+    pub emission: crate::spectrum::Emission,
     pub intensity: f64,
+    pub profile: Profile,
+}
+
+/// How a point light's intensity varies with direction.
+pub enum Profile {
+    /// The same in every direction.
+    Isotropic,
+    /// A cone about `axis` (unit): full intensity within the angle whose cosine is
+    /// `cos_falloff_start`, nothing beyond `cos_total`, and between them pbrt's smoothstep.
+    Spot { axis: Vector3<f64>, cos_falloff_start: f64, cos_total: f64 },
+    /// Intensity scaled by an image over the sphere of directions, in the light's `frame`
+    /// (rows of a rotation from world to light space: x, y up, z): equirectangular, azimuth
+    /// about y across, the angle from y down (top row up), as goniometric diagrams give a
+    /// luminaire's distribution.
+    Goniometric { frame: Matrix3<f64>, image: Arc<Image> },
+    /// An image projected along the light's z (`frame` as above, y up the image), as a slide
+    /// projector: nothing outside the frustum whose half-extents on the plane z = 1 are
+    /// `half` (x, y).
+    Projection { frame: Matrix3<f64>, image: Arc<Image>, half: Vector2<f64> },
+}
+
+impl Light {
+    /// A point light, equally bright every way.
+    pub fn point(position: Vector3<f64>, emission: crate::spectrum::Emission, intensity: f64) -> Light {
+        Light { position, emission, intensity, profile: Profile::Isotropic }
+    }
+
+    /// Radiant intensity, per steradian, towards the unit direction `towards` (from the
+    /// light), at the current sample's wavelengths (or in RGB).
+    pub fn radiant_intensity(&self, towards: &Vector3<f64>) -> Color {
+        let base = self.emission.radiance() * self.intensity;
+        match &self.profile {
+            Profile::Isotropic => base,
+            Profile::Spot { axis, cos_falloff_start, cos_total } => {
+                base * smoothstep(*cos_total, *cos_falloff_start, axis.dot(towards))
+            },
+            Profile::Goniometric { frame, image } => {
+                let w = frame * towards;
+                let phi = w.x.atan2(w.z).rem_euclid(2. * PI);
+                let theta = w.y.clamp(-1., 1.).acos();
+                // Around in azimuth, but not over the poles: keep v within the outer rows' centres.
+                let h = image.size().1 as f64;
+                let uv = Vector2::new(phi / (2. * PI), (1. - theta / PI).clamp(0.5 / h, 1. - 0.5 / h));
+                base * image.lookup(&uv, 0., Filter::Bilinear, Wrap::Repeat).as_unbounded()
+            },
+            Profile::Projection { frame, image, half } => {
+                let w = frame * towards;
+                if w.z <= 0. {
+                    return Color::black();
+                }
+                let (x, y) = (w.x / w.z / half.x, w.y / w.z / half.y);
+                if x.abs() > 1. || y.abs() > 1. {
+                    return Color::black();
+                }
+                let uv = Vector2::new((x + 1.) / 2., (y + 1.) / 2.);
+                base * image.lookup(&uv, 0., Filter::Bilinear, Wrap::Clamp).as_unbounded()
+            },
+        }
+    }
+
+    /// Roughly the power the light emits (luminance, in RGB), for choosing lights to sample.
+    pub fn power(&self) -> f64 {
+        let i = crate::color::luminance(&self.emission.srgb()) * self.intensity;
+        match &self.profile {
+            Profile::Isotropic => 4. * PI * i,
+            // The cone to half-way through the falloff.
+            Profile::Spot { cos_falloff_start, cos_total, .. } => 2. * PI * i * (1. - 0.5 * (cos_falloff_start + cos_total)),
+            Profile::Goniometric { image, .. } => 4. * PI * i * crate::color::luminance(&image.average()),
+            Profile::Projection { image, half, .. } => {
+                // The frustum's solid angle, near enough: its area on the plane at z = 1 for
+                // narrow beams, over 4 at most.
+                let solid_angle = 4. * (half.x * half.y / (1. + half.x * half.x + half.y * half.y).sqrt()).atan();
+                solid_angle * i * crate::color::luminance(&image.average())
+            },
+        }
+    }
+}
+
+/// 0 below `a`, 1 above `b`, and smoothly between (pbrt's `SmoothStep`).
+fn smoothstep(a: f64, b: f64, x: f64) -> f64 {
+    if a == b {
+        return if x < a { 0. } else { 1. };
+    }
+    let t = ((x - a) / (b - a)).clamp(0., 1.);
+    t * t * (3. - 2. * t)
 }
 
 /// Light from a source so distant that it arrives along a single direction: the sun. It is
@@ -59,11 +149,18 @@ impl Sun {
     /// Irradiance at `point`: through the atmosphere, if any, by its altitude and the sun's
     /// height in its sky, so anywhere on the planet; none on the night side.
     pub fn irradiance_at(&self, point: &Vector3<f64>) -> Color {
+        // In spectral mode, at the sample's wavelengths: the colour as an illuminant, or with an
+        // atmosphere, sunlight's spectrum above it (`spectrum::atmosphere::solar`) tinted by the
+        // colour, through the air's transmittance at those wavelengths.
         match &self.atmosphere {
-            None => self.irradiance,
+            None => self.irradiance.as_illuminant(),
             Some(sky) => {
                 let t = sky.sun_transmittance(point);
-                self.irradiance * Color::new(t.x, t.y, t.z)
+                let above = match crate::spectrum::current() {
+                    None => self.irradiance,
+                    Some(w) => self.irradiance.as_unbounded() * w.map(crate::spectrum::atmosphere::solar),
+                };
+                above * Color::new(t.x, t.y, t.z)
             },
         }
     }
@@ -83,14 +180,14 @@ impl Sun {
         self.irradiance_at(from) * ((1. - LIMB_DARKENING * (1. - mu)) / (1. - LIMB_DARKENING / 3.) / solid_angle)
     }
 
-    /// The fraction of sunlight reaching `point`: 0 behind anything solid, and partly through
-    /// participating media (an estimate; see `SceneGraph::transmittance`).
-    pub fn transmittance_from(&self, point: &Vector3<f64>, s: &crate::scene::Scene) -> f64 {
+    /// The fraction of sunlight reaching `point`, per channel: 0 behind anything solid, and
+    /// partly through participating media (an estimate; see `SceneGraph::transmittance`).
+    pub fn transmittance_from(&self, point: &Vector3<f64>, s: &crate::scene::Scene) -> crate::color::Color {
         self.transmittance_along(point, &self.direction, s)
     }
 
     /// As `transmittance_from`, towards the point of the disc in unit direction `d`.
-    pub fn transmittance_along(&self, point: &Vector3<f64>, d: &Vector3<f64>, s: &crate::scene::Scene) -> f64 {
+    pub fn transmittance_along(&self, point: &Vector3<f64>, d: &Vector3<f64>, s: &crate::scene::Scene) -> crate::color::Color {
         let shadow_ray = crate::ray::Ray { ro: *point, rd: *d };
         s.objects.transmittance(&shadow_ray, SUN_SHADOW_DISTANCE, f64::MIN_POSITIVE)
     }
@@ -198,6 +295,66 @@ impl Sun {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn light(json: &str) -> Light {
+        crate::scenefile::SceneFile::parse_light(&serde_json::from_str(json).unwrap())
+    }
+
+    #[test]
+    fn test_spot_light_cone() {
+        let l = light(r#"{"location": [0, 2, 0], "intensity": 3, "spot": {"direction": [0, -1, 0], "angle": 30, "delta": 10}}"#);
+        let towards = |deg: f64| Vector3::new(deg.to_radians().sin(), -deg.to_radians().cos(), 0.);
+        assert!((l.radiant_intensity(&towards(0.)).rgb.x - 3.).abs() < 1e-12);
+        assert!((l.radiant_intensity(&towards(19.)).rgb.x - 3.).abs() < 1e-12);
+        let mid = l.radiant_intensity(&towards(25.)).rgb.x;
+        assert!(mid > 0.5 && mid < 2.5, "{}", mid);
+        assert_eq!(l.radiant_intensity(&towards(31.)).rgb.x, 0.);
+    }
+
+    #[test]
+    fn test_power_sets_intensity() {
+        // A point light of 4π watts emits 1 W/sr; a spot of the same power over a narrower cone,
+        // more.
+        let p = light(r#"{"location": [0, 0, 0], "power": 12.566370614359172}"#);
+        assert!((p.intensity - 1.).abs() < 1e-12);
+        let s = light(r#"{"location": [0, 0, 0], "power": 12.566370614359172, "spot": {"direction": [0, 0, 1], "angle": 30, "delta": 0}}"#);
+        // Φ / (2π (1 - cos 30°)).
+        assert!((s.intensity - 2. / (1. - 30f64.to_radians().cos())).abs() < 1e-9, "{}", s.intensity);
+    }
+
+    fn quadrants() -> Arc<Image> {
+        // Top left red, top right green, bottom left blue, bottom right white.
+        let (r, g, b, w) = (Color::red(), Color::green(), Color::blue(), Color::white());
+        Arc::new(Image::new(2, 2, vec![r, g, b, w]))
+    }
+
+    #[test]
+    fn test_projection_maps_the_image() {
+        let mut l = light(r#"{"location": [0, 0, 0], "intensity": 1, "projection": {"image": "demo/textures/checker.png", "direction": [0, 0, 1], "fov": 90}}"#);
+        if let Profile::Projection { image, .. } = &mut l.profile {
+            *image = quadrants();
+        }
+        let at = |x: f64, y: f64| l.radiant_intensity(&Vector3::new(x, y, 1.).normalize());
+        // Corners land on single texels of the 2 × 2 image.
+        let colours = [at(0.9, 0.9), at(-0.9, 0.9), at(0.9, -0.9), at(-0.9, -0.9)];
+        // Seen from behind the projector, as from a camera there, the image's top left is up and
+        // to the left: world +x (the camera's right is forward × up).
+        assert_eq!(colours, [Color::red(), Color::green(), Color::blue(), Color::white()]);
+        // Outside the frustum, and behind: dark.
+        assert_eq!(at(1.5, 0.), Color::black());
+        assert_eq!(l.radiant_intensity(&Vector3::new(0., 0., -1.)), Color::black());
+    }
+
+    #[test]
+    fn test_goniometric_poles() {
+        let mut l = light(r#"{"location": [0, 0, 0], "intensity": 2, "goniometric": {"image": "demo/textures/checker.png"}}"#);
+        if let Profile::Goniometric { image, .. } = &mut l.profile {
+            // Top row red (up), bottom row blue (down).
+            *image = Arc::new(Image::new(1, 2, vec![Color::red(), Color::blue()]));
+        }
+        assert_eq!(l.radiant_intensity(&Vector3::new(0., 1., 0.)), Color::red() * 2.);
+        assert_eq!(l.radiant_intensity(&Vector3::new(0., -1., 0.)), Color::blue() * 2.);
+    }
 
     #[test]
     fn test_disc_integrates_to_the_irradiance() {

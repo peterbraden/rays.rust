@@ -108,6 +108,10 @@ impl Transform {
 const UNBOUNDED: f64 = 1e300;
 
 impl Geometry for Transform {
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        self.item.flatten()?.iter().map(|p| p.transformed(&self.transform)).collect()
+    }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         // Intersect in object space, then map the hit back into world space.
         self.item.intersects(&self.to_object(r)).map(|i| self.to_world(r, i))
@@ -157,12 +161,49 @@ impl Geometry for Transform {
         self.item.inside(&self.inverse.transform_point(&Point3::from(*p)).coords)
     }
 
+    fn uv(&self, p: &Vector3<f64>, face: u32) -> Option<crate::na::Vector2<f64>> {
+        self.item.uv(&self.inverse.transform_point(&Point3::from(*p)).coords, face)
+    }
+
+    fn tangent(&self, p: &Vector3<f64>, face: u32) -> Option<Vector3<f64>> {
+        let t = self.item.tangent(&self.inverse.transform_point(&Point3::from(*p)).coords, face)?;
+        Some(self.transform.transform_vector(&t).normalize())
+    }
+
+    /// The item's tolerance, stretched by at most the transform's largest scale.
+    fn tolerance(&self) -> f64 {
+        let t = self.item.tolerance();
+        if t == 0. { return 0.; }
+        let linear: Matrix3<f64> = self.transform.matrix().fixed_view::<3, 3>(0, 0).into();
+        t * linear.norm()
+    }
+
     fn is_stochastic(&self) -> bool {
         self.item.is_stochastic()
     }
 
     fn surface_area(&self) -> f64 {
         self.uniform_scale.map_or(0., |s| self.item.surface_area() * s * s)
+    }
+
+    /// A similarity (uniform scale, rotation, translation) keeps angles, so the item's own
+    /// sampling from the point in its space has the same density per solid angle.
+    fn sample_from(&self, from: &Vector3<f64>, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>, f64)> {
+        self.uniform_scale?;
+        let local = self.inverse.transform_point(&Point3::from(*from)).coords;
+        let (p, n, pdf) = self.item.sample_from(&local, u)?;
+        Some((self.transform.transform_point(&Point3::from(p)).coords, (self.normal_matrix * n).normalize(), pdf))
+    }
+
+    fn pdf_from(&self, from: &Vector3<f64>, y: &Vector3<f64>, n: &Vector3<f64>) -> f64 {
+        if self.uniform_scale.is_none() {
+            return 0.;
+        }
+        let local = |v: &Vector3<f64>| self.inverse.transform_point(&Point3::from(*v)).coords;
+        // Normals map back by the transpose of the linear part (the inverse of `normal_matrix`).
+        let linear: crate::na::Matrix3<f64> = self.transform.matrix().fixed_view::<3, 3>(0, 0).into();
+        let ln = (linear.transpose() * n).normalize();
+        self.item.pdf_from(&local(from), &local(y), &ln)
     }
 
     fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> {

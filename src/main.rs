@@ -22,17 +22,31 @@ use rayon::prelude::*;
 
 mod ray;
 mod color;
+mod spectrum;
+mod motion;
+mod sampler;
+mod textures;
+mod film;
+mod lens;
+mod flare;
 mod material {
     pub mod model;
     pub mod bsdf;
     pub mod ggx;
     pub mod dielectric;
     pub mod specular;
+    pub mod conductor;
+    pub mod rough_dielectric;
+    pub mod layered;
+    pub mod subsurface;
+    pub mod mix;
+    pub mod hair;
     pub mod ambient;
     pub mod texture;
     pub mod lambertian;
     pub mod diffuse_light;
     pub mod normal;
+    pub mod uv;
     pub mod functions;
     pub mod legacy;
     pub mod plastic;
@@ -50,6 +64,8 @@ mod material {
 mod intersection;
 mod sceneobject;
 mod light;
+mod light_bvh;
+mod wavefront;
 mod shapes {
     pub mod transform;
     pub mod bbox;
@@ -67,6 +83,9 @@ mod shapes {
     pub mod polynomial;
     pub mod cone;
     pub mod disc;
+    pub mod bilinear;
+    pub mod curve;
+    pub mod subdivision;
     pub mod algebraic;
     pub mod polygon;
     pub mod revolution;
@@ -195,6 +214,11 @@ struct Args {
     #[arg(long)]
     fresh: bool,
 
+    ///Render with the wavefront integrator (as the scene's "integrator": "wavefront"), if the
+    ///scene can be flattened into its primitives and materials; otherwise, as usual
+    #[arg(long)]
+    wavefront: bool,
+
     ///Write the scene file, as JSON in our format, to this file. For a scene in another
     ///renderer's format (eg. .nff), this is the translation
     #[arg(long)]
@@ -276,7 +300,9 @@ fn main() {
     }
     // Carry on from where an earlier render of the same scene stopped, if there was one.
     let state_path = rendercontext::state_path_for(&rc.output_filename);
-    let key = rendercontext::render_key(&contents, (args.width, args.height, args.seed));
+    // The wavefront integrator's samples differ from the path tracer's: a saved state is one's.
+    let key = rendercontext::render_key(&contents, (args.width, args.height, args.seed))
+        ^ if args.wavefront { 0x7761_7665_6672_6f6e } else { 0 };
     if !args.fresh && std::path::Path::new(&state_path).exists() {
         match rc.load_state(&state_path, key) {
             Ok(()) => println!("- Resuming from {:.1} samples per pixel on average, {} at least ({})",
@@ -296,7 +322,7 @@ fn main() {
     println!("- Built in {:.2} s{}", build_start.elapsed().as_secs_f64(), peak);
 
     // Fail before rendering if the output can't be written in this format.
-    let writer = output::writer_for(&rc.output_filename, s.output).unwrap_or_else(|e| {
+    let writer = output::writer_for(&rc.output_filename, s.output.clone()).unwrap_or_else(|e| {
         eprintln!("{}", e);
         std::process::exit(1);
     });
@@ -317,6 +343,24 @@ fn main() {
         return;
     }
 
+    if args.wavefront {
+        s.render.wavefront = true;
+    }
+    let flat = if s.render.wavefront {
+        match wavefront::flat::FlatScene::build(&s) {
+            Ok(f) => {
+                println!("- Wavefront integrator: {} primitives, {} planes, {} materials, {} emitters",
+                    f.prims.len(), f.planes.len(), f.materials.len(), f.emitters.len());
+                Some(f)
+            },
+            Err(e) => {
+                println!("- The wavefront integrator can't render this scene ({}); rendering with the path tracer", e);
+                None
+            },
+        }
+    } else {
+        None
+    };
     let rcmtx = Mutex::new(rc);
 
     println!("{}",
@@ -331,6 +375,25 @@ fn main() {
     let last_progressive = Mutex::new(Instant::now());
     let last_state = Mutex::new(Instant::now());
 
+    if let Some(flat) = &flat {
+        wavefront::integrator::render(&s, flat, &rcmtx, |rc| {
+            pb.set_position(rc.progress_percentage(&s) as u64);
+            pb.set_message(rc.progress(&s));
+            pb.tick();
+            let mut last = last_progressive.lock().unwrap();
+            if rc.progressive_render && last.elapsed() >= progressive_interval {
+                *last = Instant::now();
+                if let Err(e) = writer.write(&s.output.finish(&rc.snapshot()), &rc.output_filename) {
+                    eprintln!("{}", e);
+                }
+            }
+            let mut last = last_state.lock().unwrap();
+            if last.elapsed() >= STATE_INTERVAL {
+                *last = Instant::now();
+                save_state(&state_path, &rc.encode_state(key));
+            }
+        });
+    } else {
     rendercontext::render(&s, &rcmtx,
         |rc| {
             pb.set_position(rc.progress_percentage(&s) as u64);
@@ -362,6 +425,7 @@ fn main() {
                 save_state(&state_path, &bytes);
             }
         });
+    }
     pb.finish();
 
     let rc = rcmtx.lock().unwrap();
@@ -431,7 +495,7 @@ fn compare_with(img: &output::LinearImage, reference: &str, output_filename: &st
     // The reference at our size, encoded exactly as our PNG output is, to view side by side.
     let reference_path = std::path::Path::new(output_filename).with_extension("reference.png");
     let reference_path = reference_path.to_string_lossy();
-    if let Err(e) = output::ImageWriter::write(&output::Png { opts: *opts }, &c.reference, &reference_path) {
+    if let Err(e) = output::ImageWriter::write(&output::Png { opts: opts.clone() }, &c.reference, &reference_path) {
         eprintln!("{}", e);
     }
     println!("{}", style("# Comparison").bold().cyan());

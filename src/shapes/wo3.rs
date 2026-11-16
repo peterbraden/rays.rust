@@ -52,11 +52,12 @@ fn f32_at(b: &[u8], i: usize) -> f64 {
 pub fn parse(bytes: &[u8]) -> Result<IndexedMesh, String> {
     let mut r = Reader { bytes, at: 0 };
     let vertices = r.count("vertex", VERTEX_BYTES)?;
-    let mut mesh = IndexedMesh { positions: Vec::with_capacity(vertices), normals: Vec::with_capacity(vertices), triangles: Vec::new() };
+    let mut mesh = IndexedMesh { positions: Vec::with_capacity(vertices), normals: Vec::with_capacity(vertices), triangles: Vec::new(), texcoords: Vec::with_capacity(vertices) };
     for _ in 0 .. vertices {
         let v = r.take(VERTEX_BYTES, "vertices")?;
         mesh.positions.push(Vector3::new(f32_at(v, 0), f32_at(v, 1), f32_at(v, 2)));
         mesh.normals.push(Vector3::new(f32_at(v, 3), f32_at(v, 4), f32_at(v, 5)));
+        mesh.texcoords.push(crate::na::Vector2::new(f32_at(v, 6), f32_at(v, 7)));
     }
     if mesh.normals.iter().all(|n| *n == Vector3::zeros()) {
         mesh.normals.clear();

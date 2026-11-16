@@ -1,5 +1,5 @@
 use crate::camera;
-use crate::na::{Vector3, Vector2};
+use crate::na::{Matrix3, Vector3, Vector2};
 use crate::scenegraph::SceneGraph;
 use crate::shapes::sphere::Sphere;
 use crate::shapes::triangle::Triangle;
@@ -12,6 +12,7 @@ use crate::ocean::create_ocean;
 use crate::shapes::bbox::BBox;
 use crate::light::{Light, Sun};
 use crate::color::Color;
+use crate::spectrum::{RefractiveIndex, Emission};
 use crate::skysphere::{create_sky_sphere, parse_sky_material};
 use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
@@ -32,7 +33,11 @@ use crate::procedural::precipitation::Precipitation;
 use crate::material::rainbow::RainbowTable;
 use crate::procedural::harris_cumulus::{CloudSimulation, Forcing, HarrisCumulus, Profile, SimulationParams, Sounding};
 use crate::participatingmedia::create_fog;
-use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
+use crate::volume::grid::{Grid, GridDensity};
+use crate::light::Profile as LightProfile;
+use crate::textures::Image;
+use crate::volume::emission::VolumeEmission;
+use crate::volume::{Volume, create_medium, create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
 use crate::material::ice_halos::{Crystals, Habit};
 use crate::material::diffraction::DiffractionTable;
 use crate::noise::PerlinNoise;
@@ -41,7 +46,7 @@ use crate::material::phase::PhaseFunction;
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
 use serde_json::{Value, Map};
-use crate::scene::{Scene, ImageOpts, RenderOpts, PathTermination, Background, Filter, Sampler};
+use crate::scene::{Scene, ImageOpts, RenderOpts, PathTermination, Background, Filter, FilterShape, TabulatedFilter, Sampler};
 use crate::output::OutputOpts;
 use std::io::prelude::*;
 use std::fs::File;
@@ -220,11 +225,19 @@ pub struct SceneFile {
     #[serde(default)]
     pub sample_lights: Value,
     #[serde(default)]
+    pub light_sampler: Value,
+    #[serde(default)]
+    pub integrator: Value,
+    #[serde(default)]
     pub sample_sky: Value,
     #[serde(default)]
     pub sampler: Value,
     #[serde(default)]
     pub regularise: Value,
+    #[serde(default)]
+    pub spectral: Value,
+    #[serde(default)]
+    pub shutter: Value,
     #[serde(default)]
     pub filter: Value,
     #[serde(default)]
@@ -269,6 +282,63 @@ impl SceneFile {
         }
     }
     
+    /// The reconstruction filter (`scene::Filter`): `"box"` (the default), `"tent"`,
+    /// `"gaussian"`, `"mitchell"` or `"lanczos"`, or an object with `"type"` and parameters:
+    /// `"radius"` in pixels (defaults 1.5, 2 and 3), and `"sigma"` (0.5), `"b"` and `"c"` (1/3
+    /// each), or `"tau"` (3).
+    pub fn parse_filter(v: &Value) -> Filter {
+        let (name, o) = match v {
+            Value::Null => ("box", &Value::Null),
+            Value::String(s) => (s.as_str(), &Value::Null),
+            Value::Object(_) => (v["type"].as_str().unwrap_or_else(|| panic!("A filter object needs a \"type\", got {}", v)), v),
+            _ => panic!("Unexpected filter {}", v),
+        };
+        let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let tabulated = |shape, radius| Filter::Tabulated(Arc::new(TabulatedFilter::new(shape, radius)));
+        match name {
+            "box" => Filter::Box,
+            "tent" => Filter::Tent,
+            "gaussian" => tabulated(FilterShape::Gaussian { sigma: n("sigma", 0.5) }, n("radius", 1.5)),
+            "mitchell" => tabulated(FilterShape::Mitchell { b: n("b", 1. / 3.), c: n("c", 1. / 3.) }, n("radius", 2.)),
+            "lanczos" => tabulated(FilterShape::Lanczos { tau: n("tau", 3.) }, n("radius", 3.)),
+            f => panic!("Unknown filter '{}': expected \"box\", \"tent\", \"gaussian\", \"mitchell\" or \"lanczos\"", f),
+        }
+    }
+
+    /// A refractive index (`spectrum::RefractiveIndex`): a number; a named glass, `"BK7"`,
+    /// `"fused silica"`, `"SF11"` or `"diamond"` (or `{"glass": name}`); `{"cauchy": [a, b]}`,
+    /// n = a + b / λ² with λ in µm; or `{"sellmeier": {"b": [b1, b2, b3], "c": [c1, c2, c3]}}`,
+    /// c in µm². 1 if absent. Indices that vary with wavelength disperse light in spectral mode
+    /// and take their value at 587.56 nm otherwise.
+    pub fn parse_refractive_index(v: &Value) -> RefractiveIndex {
+        let glass = |name: &str| RefractiveIndex::glass(name)
+            .unwrap_or_else(|| panic!("Unknown glass \"{}\": expected BK7, fused silica, SF11 or diamond", name));
+        let three = |v: &Value, what: &str| -> [f64; 3] {
+            match v.as_array().map(|a| a.iter().map(|x| x.as_f64()).collect::<Option<Vec<f64>>>()) {
+                Some(Some(a)) if a.len() <= 3 => { let mut out = [0.; 3]; out[..a.len()].copy_from_slice(&a); out },
+                _ => panic!("Sellmeier \"{}\" must be up to three numbers, got {}", what, v),
+            }
+        };
+        match v {
+            Value::Null => RefractiveIndex::Constant(1.),
+            Value::Number(n) => RefractiveIndex::Constant(n.as_f64().unwrap()),
+            Value::String(name) => glass(name),
+            Value::Object(o) => if let Some(name) = o.get("glass").and_then(|g| g.as_str()) {
+                glass(name)
+            } else if let Some(c) = o.get("cauchy") {
+                match c.as_array().map(|a| a.iter().filter_map(|x| x.as_f64()).collect::<Vec<f64>>()) {
+                    Some(a) if a.len() == 2 => RefractiveIndex::Cauchy { a: a[0], b: a[1] },
+                    _ => panic!("\"cauchy\" must be [a, b], got {}", c),
+                }
+            } else if let Some(sm) = o.get("sellmeier") {
+                RefractiveIndex::Sellmeier { b: three(&sm["b"], "b"), c: three(&sm["c"], "c") }
+            } else {
+                panic!("A refractive index object needs \"glass\", \"cauchy\" or \"sellmeier\", got {}", v)
+            },
+            _ => panic!("Unexpected refractive index {}", v),
+        }
+    }
+
     pub fn parse_int(v: &Value, default: usize) -> usize {
         if let Some(x) = v.as_u64() {
             return x as usize;
@@ -329,6 +399,45 @@ impl SceneFile {
     }
 
 
+    /// A colour, or an image read by the surface's texture coordinates (`textures`):
+    /// `{"texture": "file.png", "scale": [su, sv] or s, "offset": [ou, ov], "filter":
+    /// "ewa" (the default) | "trilinear" | "bilinear" | "point", "wrap": "repeat" | "clamp" | "black", "linear":
+    /// bool}` (8-bit images are taken as sRGB unless `linear`).
+    pub fn parse_color_texture(v: &Value) -> crate::textures::ColorTexture {
+        match v.get("texture") {
+            Some(_) => crate::textures::ColorTexture::Image(SceneFile::parse_image_map(v)),
+            None => SceneFile::parse_color(v).into(),
+        }
+    }
+
+    pub fn parse_image_map(v: &Value) -> crate::textures::ImageMap {
+        use crate::textures::{Filter, Image, ImageMap, Wrap};
+        let path = v["texture"].as_str().unwrap_or_else(|| panic!("A texture needs a file name, got {}", v["texture"]));
+        let pair = |k: &str, d: f64| match &v[k] {
+            Value::Number(n) => Vector2::repeat(n.as_f64().unwrap()),
+            Value::Null => Vector2::repeat(d),
+            x => SceneFile::parse_vec2(x),
+        };
+        ImageMap {
+            image: Image::shared(path, v["linear"].as_bool()),
+            scale: pair("scale", 1.),
+            offset: pair("offset", 0.),
+            filter: match v["filter"].as_str() {
+                Some("trilinear") => Filter::Trilinear,
+                None | Some("ewa") => Filter::Ewa,
+                Some("bilinear") => Filter::Bilinear,
+                Some("point") => Filter::Point,
+                Some(f) => panic!("Unknown texture filter '{}': expected ewa, trilinear, bilinear or point", f),
+            },
+            wrap: match v["wrap"].as_str() {
+                None | Some("repeat") => Wrap::Repeat,
+                Some("clamp") => Wrap::Clamp,
+                Some("black") => Wrap::Black,
+                Some(w) => panic!("Unknown texture wrap '{}': expected repeat, clamp or black", w),
+            },
+        }
+    }
+
     pub fn parse_color_def(v: &Value, k: &str, def: Color) -> Color {
         match &v.get(k) {
             Some(x) => SceneFile::parse_color(x),
@@ -336,15 +445,162 @@ impl SceneFile {
         }
     }
 
-    pub fn parse_camera(c: Value, width: u32, height: u32) -> camera::FlatLensCamera {
-        camera::FlatLensCamera::new(
-            SceneFile::parse_vec3(&c["lookat"]),
-            SceneFile::parse_vec3(&c["location"]),
-            SceneFile::parse_vec3(&c["up"]),
-            c["angle"].as_f64().unwrap(),
-            width, height,
-            SceneFile::parse_number(&c["aperture"], 0.2)
-        )
+    /// The camera (`camera`): `"location"`, `"lookat"` and `"up"`, and by `"type"`:
+    /// - `"perspective"` (the default): `"angle"`, with tan(angle) the image's height at unit
+    ///   distance; a thin lens of radius `"aperture"` (default 0.2), focused at the point looked
+    ///   at or `"focus_distance"`; `"astigmatism": {"cylinder": power, "axis": degrees,
+    ///   "seidel": power}` (`camera::Astigmatism`), powers in reciprocal scene units.
+    /// - `"orthographic"`: parallel rays from a rectangle `"height"` tall (by default what the
+    ///   perspective camera sees at the point looked at).
+    /// - `"spherical"`: every direction, `"mapping": "equirectangular"` (the default) or
+    ///   `"equal_area"`.
+    /// - `"realistic"`: rays traced through a lens (`lens`): `"lens"`, a built-in name
+    ///   (`"dgauss.50mm"`, the default, `"wide.22mm"`, `"telephoto.250mm"`, `"fisheye.10mm"`) or
+    ///   a pbrt `.dat` file; `"f_number"` (default wide open); `"focus_distance"` (default the
+    ///   point looked at); `"film_diagonal"` in mm (default 35); `"blades"` and `"blade_rotation"`
+    ///   (degrees) for a polygonal stop. The lens sets the field of view.
+    ///
+    /// With `"motion": {"location", "lookat", "up"}`, the camera moves to that pose (each key
+    /// defaulting to the start's) while the shutter is open.
+    pub fn parse_camera(c: Value, width: u32, height: u32) -> Box<dyn camera::Camera + Sync> {
+        let location = SceneFile::parse_vec3(&c["location"]);
+        let lookat = SceneFile::parse_vec3(&c["lookat"]);
+        let up = SceneFile::parse_vec3(&c["up"]);
+        let start = camera::Frame::look_at(location, lookat, up);
+        let placement = match c.get("motion") {
+            None => camera::Placement::still(start),
+            Some(m) => camera::Placement::moving(start, camera::Frame::look_at(
+                SceneFile::parse_vec3_def(m, "location", location),
+                SceneFile::parse_vec3_def(m, "lookat", lookat),
+                SceneFile::parse_vec3_def(m, "up", up))),
+        };
+        let aspect = width as f64 / height as f64;
+        let angle = || c["angle"].as_f64().unwrap_or_else(|| panic!("The camera needs an \"angle\""));
+        match c["type"].as_str() {
+            None | Some("perspective") => {
+                let mut cam = camera::ThinLensCamera::new(lookat, location, up, angle(), width, height,
+                    SceneFile::parse_number(&c["aperture"], 0.2)).with_placement(placement);
+                if let Some(d) = c["focus_distance"].as_f64() {
+                    cam = cam.with_focus(d);
+                }
+                if let Some(a) = c.get("astigmatism") {
+                    cam = cam.with_astigmatism(camera::Astigmatism {
+                        cylinder: SceneFile::parse_number(&a["cylinder"], 0.),
+                        axis: SceneFile::parse_number(&a["axis"], 0.).to_radians(),
+                        seidel: SceneFile::parse_number(&a["seidel"], 0.),
+                    });
+                }
+                Box::new(cam)
+            },
+            Some("orthographic") => {
+                let h = c["height"].as_f64().unwrap_or_else(|| angle().tan() * (lookat - location).norm());
+                Box::new(camera::OrthographicCamera::new(placement, h, aspect))
+            },
+            Some("spherical") => Box::new(camera::SphericalCamera::new(placement, match c["mapping"].as_str() {
+                None | Some("equirectangular") => camera::SphereMapping::Equirectangular,
+                Some("equal_area") => camera::SphereMapping::EqualArea,
+                Some(m) => panic!("Unknown spherical mapping '{}': expected \"equirectangular\" or \"equal_area\"", m),
+            })),
+            Some("realistic") => {
+                let lens = SceneFile::parse_lens(c["lens"].as_str().unwrap_or("dgauss.50mm"), &c);
+                let focus = c["focus_distance"].as_f64().unwrap_or((lookat - location).norm());
+                let cam = crate::lens::RealisticCamera::new(placement, lens, focus, c["f_number"].as_f64(),
+                    SceneFile::parse_number(&c["film_diagonal"], 35.) * 1e-3, aspect)
+                    .unwrap_or_else(|e| panic!("Realistic camera: {}", e));
+                Box::new(cam)
+            },
+            Some(t) => panic!("Unknown camera type '{}': expected \"perspective\", \"orthographic\", \"spherical\" or \"realistic\"", t),
+        }
+    }
+
+    /// A lens (`lens::LensSystem`): a built-in name or a pbrt `.dat` file, with `"blades"` (and
+    /// `"blade_rotation"`, degrees) from `o` if given.
+    pub fn parse_lens(name: &str, o: &Value) -> crate::lens::LensSystem {
+        let lens = if !name.contains('/') && !name.ends_with(".dat") {
+            crate::lens::LensSystem::named(name)
+                .unwrap_or_else(|| panic!("Unknown lens '{}': expected dgauss.50mm, wide.22mm, telephoto.250mm, fisheye.10mm or a .dat file", name))
+        } else {
+            crate::lens::LensSystem::parse(&std::fs::read_to_string(name).unwrap_or_else(|e| panic!("Can't read lens {}: {}", name, e)))
+                .unwrap_or_else(|e| panic!("Lens {}: {}", name, e))
+        };
+        match o["blades"].as_u64() {
+            Some(n) => lens.with_blades(n as usize, SceneFile::parse_number(&o["blade_rotation"], 0.).to_radians()),
+            None => lens,
+        }
+    }
+
+    /// The output's `"flare"` (`flare`): `true`, or `{"lens", "f_number", "blades",
+    /// "blade_rotation", "threshold": 20, "sources": 8, "ghosts": 1, "starburst": 1}`. With a
+    /// realistic camera, its lens, f-number, blades, focus and film are the defaults; otherwise
+    /// the double Gauss (or for views wider than 20° up from the centre, the wide-angle lens)
+    /// wide open, focused far off, on a film matching the camera's view. A light outside the
+    /// lens's field makes no ghosts.
+    /// `ghosts` and `starburst` scale each (0 or false for none).
+    pub fn parse_flare(output: &Value, camera: &Value, width: usize, height: usize) -> Option<Arc<crate::flare::Flare>> {
+        let f = match output.get("flare") {
+            None | Some(Value::Bool(false)) => return None,
+            Some(Value::Bool(true)) => &Value::Null,
+            Some(f) => f,
+        };
+        let realistic = camera["type"].as_str() == Some("realistic");
+        let pick = |k: &str| if !f[k].is_null() { f[k].clone() } else if realistic { camera[k].clone() } else { Value::Null };
+        let blade_source = serde_json::json!({ "blades": pick("blades"), "blade_rotation": pick("blade_rotation") });
+        // A lens that covers the view: the double Gauss reaches about 22° from its axis, so wider
+        // views (more than 20° up from the centre) take the wide-angle lens.
+        let default_lens = if !realistic && camera["angle"].as_f64().is_some_and(|a| a.tan() / 2. > 20f64.to_radians().tan()) {
+            "wide.22mm"
+        } else {
+            "dgauss.50mm"
+        };
+        let lens = SceneFile::parse_lens(pick("lens").as_str().unwrap_or(default_lens), &blade_source);
+        let focal = lens.focal_length().unwrap_or_else(|| panic!("The flare's lens doesn't form an image"));
+        let lens = match pick("f_number").as_f64() { Some(n) => lens.with_stop(focal / n), None => lens };
+        let focus = if realistic {
+            camera["focus_distance"].as_f64().unwrap_or_else(|| (SceneFile::parse_vec3(&camera["lookat"]) - SceneFile::parse_vec3(&camera["location"])).norm())
+        } else {
+            1e4
+        };
+        let rear = lens.focus(focus).or_else(|| lens.focus(1e4)).unwrap_or_else(|| panic!("The flare's lens can't focus"));
+        let lens = lens.with_film_at(rear);
+        let aspect = width as f64 / height as f64;
+        let film_height = if realistic {
+            SceneFile::parse_number(&camera["film_diagonal"], 35.) * 1e-3 / (1. + aspect * aspect).sqrt()
+        } else {
+            focal * camera["angle"].as_f64().unwrap_or(0.5).tan()
+        };
+        let scale = |k: &str| match &f[k] { Value::Bool(b) => if *b { 1. } else { 0. }, v => SceneFile::parse_number(v, 1.) };
+        Some(Arc::new(crate::flare::Flare {
+            lens,
+            film: (film_height * aspect, film_height),
+            threshold: SceneFile::parse_number(&f["threshold"], 20.),
+            sources: SceneFile::parse_int(&f["sources"], 8),
+            ghosts: scale("ghosts"),
+            starburst: scale("starburst"),
+            grid: SceneFile::parse_int(&f["grid"], 192).max(4),
+        }))
+    }
+
+    /// Whether a scene value (the camera, an object, a geometry) moves: holds a `"motion"`.
+    fn has_motion(v: &Value) -> bool {
+        match v {
+            Value::Object(o) => o.contains_key("motion") || o.values().any(SceneFile::has_motion),
+            Value::Array(a) => a.iter().any(SceneFile::has_motion),
+            _ => false,
+        }
+    }
+
+    /// `"shutter": [open, close]`, in the time of motion, where moving things are at their start
+    /// at 0 and their end at 1 (default [0, 1]).
+    pub fn parse_shutter(v: &Value) -> crate::motion::Shutter {
+        match v {
+            Value::Null => crate::motion::Shutter::default(),
+            Value::Array(a) if a.len() == 2 && a.iter().all(|x| x.is_number()) => {
+                let (open, close) = (a[0].as_f64().unwrap(), a[1].as_f64().unwrap());
+                assert!(close >= open, "The shutter must close after it opens, got {}", v);
+                crate::motion::Shutter { open, close }
+            },
+            _ => panic!("\"shutter\" must be [open, close], got {}", v),
+        }
     }
 
     pub fn parse_objects(objs: Vec<Value>, materials: &Map<String, Value>, media: &Map<String, Value>, geometries: &GeometryLibrary) ->Vec<Arc<SceneObject>> {
@@ -375,6 +631,17 @@ impl SceneFile {
         let m = SceneFile::parse_unbumped_medium(o, materials, media);
         if !o["normal"].is_object() {
             return m;
+        }
+        // {"map": "normals.png", "strength": 1, and an image map's "scale", "offset", ...}: a
+        // tangent-space normal map, read linearly (`textures::NormalMap`).
+        if let Some(path) = o["normal"].get("map") {
+            let mut spec = o["normal"].clone();
+            spec["texture"] = path.clone();
+            if spec.get("linear").is_none() {
+                spec["linear"] = Value::Bool(true);
+            }
+            let map = crate::textures::NormalMap { map: SceneFile::parse_image_map(&spec), strength: SceneFile::parse_number(&o["normal"]["strength"], 1.) };
+            return Box::new(crate::material::texture::NormalMapped { inner: m, map });
         }
         Box::new(Bumped { inner: m, bump: SceneFile::parse_bump(&o["normal"]) })
     }
@@ -414,7 +681,7 @@ impl SceneFile {
                     Box::new(Solid { m })
                 } else {
                     // No material or medium specified
-                    let default_material = Box::new(Lambertian { albedo: Color::white() });
+                    let default_material = Box::new(Lambertian { albedo: Color::white().into() });
                     Box::new(Solid { m: default_material })
                 }
             }
@@ -507,7 +774,7 @@ impl SceneFile {
         }
 
         if t == "volume" {
-            return Some(Arc::new(SceneFile::parse_volume(&o)));
+            return Some(Arc::new(SceneFile::parse_volume(&o, geometries)));
         }
 
         let mut parts = Parts { library: Some((materials, media)), media: vec![], geometries };
@@ -676,7 +943,7 @@ impl SceneFile {
             }
         };
         let default = |albedo: Color| -> Box<dyn Medium + Sync + Send> {
-            Box::new(Solid { m: Box::new(Lambertian { albedo }) })
+            Box::new(Solid { m: Box::new(Lambertian { albedo: albedo.into() }) })
         };
         let bark = || o.get("bark").map_or_else(|| default(Color::new(0.25, 0.2, 0.16)), medium);
 
@@ -716,20 +983,38 @@ impl SceneFile {
     /// A participating medium filling the box from `min` to `max`:
     ///
     /// `{"type": "volume", "min": [x, y, z], "max": [x, y, z], "density": σ, "albedo": colour,
-    /// "g": asymmetry, "noise": {"scale", "octaves", "threshold", "seed"}}`
+    /// "g": asymmetry, "noise": {"scale", "octaves", "threshold", "seed"}, "grid": ...}`
     ///
     /// `density` is the extinction coefficient, the chance of a collision per unit distance
-    /// (default 1). Without `noise` it is constant; with it, it varies up to that maximum.
+    /// (default 1). Without `noise` it is constant; with it, it varies up to that maximum. With
+    /// `grid` (`volume::grid`), it is the grid's values times `density`: a Mitsuba `.vol` file's
+    /// path, or `{"resolution": [nx, ny, nz], "values": [...]}` (x fastest); `min` and `max`
+    /// default to the file's bounds. In place of `albedo`, `sigma_a` and `sigma_s` (RGB) give
+    /// absorption and scattering per unit density, as pbrt's media; where their sum differs
+    /// between channels the medium is chromatic (`volume::chromatic`). With `shape`, a geometry (as an object's, eg.
+    /// `{"type": "sphere", ...}`), the medium fills only its inside: give a dielectric object
+    /// the same shape for a glass of coloured liquid (`volume::Volume::shape`). `emission`
+    /// makes it glow (`parse_volume_emission`).
     /// `albedo` (default white) is the fraction scattered rather than absorbed at a collision.
     /// How it scatters is given by `g` (Henyey-Greenstein, -1 to 1, default 0) or by
     /// `droplet_diameter` (in µm, 5 to 50: the Mie scattering of water droplets of that size;
     /// see `PhaseFunction::water_droplets`).
-    pub fn parse_volume(o: &Value) -> SceneObject {
-        let bounds = BBox::new(SceneFile::parse_vec3(&o["min"]), SceneFile::parse_vec3(&o["max"]));
+    pub fn parse_volume(o: &Value, geometries: &GeometryLibrary) -> SceneObject {
         let max_density = SceneFile::parse_number(&o["density"], 1.);
-        let density: Arc<dyn DensityField> = match o.get("noise") {
-            None => Arc::new(ConstantDensity(max_density)),
-            Some(n) => Arc::new(NoiseDensity {
+        let grid = o.get("grid").map(SceneFile::parse_grid);
+        let shape = o.get("shape").map(|v| SceneFile::parse_geometry(v, geometries)
+            .unwrap_or_else(|| panic!("A volume's shape must be a geometry, got {}", v)));
+        // The box the field spans: as given, or else the grid file's, or the shape's bounds.
+        let bounds = match (o.get("min"), grid.as_ref().and_then(|g| g.bounds), &shape) {
+            (None, Some(b), _) => b,
+            (None, None, Some(s)) => s.bounds(),
+            _ => BBox::new(SceneFile::parse_vec3(&o["min"]), SceneFile::parse_vec3(&o["max"])),
+        };
+        let density: Arc<dyn DensityField> = match (grid, o.get("noise")) {
+            (Some(_), Some(_)) => panic!("Give a volume either a grid or noise, not both"),
+            (Some(g), None) => Arc::new(GridDensity::new(bounds, g, max_density)),
+            (None, None) => Arc::new(ConstantDensity(max_density)),
+            (None, Some(n)) => Arc::new(NoiseDensity {
                 perlin: SceneFile::parse_seed(n).map_or_else(PerlinNoise::new, PerlinNoise::with_seed),
                 max_density,
                 scale: SceneFile::parse_number(&n["scale"], 1.),
@@ -737,7 +1022,37 @@ impl SceneFile {
                 threshold: SceneFile::parse_number(&n["threshold"], 0.5),
             }),
         };
-        create_volume(bounds, density, SceneFile::parse_scattering(o, 0.))
+        let volume = match shape {
+            None => Volume::new(bounds, density),
+            Some(s) => Volume::in_shape(s, density),
+        };
+        let mut scattering = SceneFile::parse_scattering(o, 0.);
+        scattering.emission = SceneFile::parse_volume_emission(o, bounds);
+        // Coefficients per unit density, as pbrt gives media: σ_a and σ_s (RGB).
+        if o.get("sigma_a").is_some() || o.get("sigma_s").is_some() {
+            assert!(o.get("albedo").is_none(), "Give a volume either an albedo or sigma_a and sigma_s, not both");
+            let a = SceneFile::parse_color_def(o, "sigma_a", Color::black());
+            let sc = SceneFile::parse_color_def(o, "sigma_s", Color::black());
+            assert!((a + sc).rgb.iter().all(|k| *k >= 0.) && (a + sc).rgb.max() > 0., "A volume needs some extinction");
+            let t = (a + sc).rgb;
+            scattering.albedo = Color { rgb: sc.rgb.zip_map(&t, |s, t| if t > 0. { s / t } else { 0. }) };
+            scattering.extinction = Some((a, sc));
+        }
+        create_medium(volume, scattering)
+    }
+
+    /// A voxel grid (`volume::grid::Grid`): a `.vol` file's path, or `{"resolution": [nx, ny,
+    /// nz], "values": [...]}`, x fastest.
+    pub fn parse_grid(v: &Value) -> Arc<Grid> {
+        if let Some(path) = v.as_str() {
+            return Grid::load(path);
+        }
+        let res = v["resolution"].as_array().filter(|r| r.len() == 3)
+            .unwrap_or_else(|| panic!("A grid needs a file name or a \"resolution\" of three numbers"));
+        let n: Vec<usize> = res.iter().map(|x| SceneFile::parse_int(x, 0)).collect();
+        let values = v["values"].as_array().unwrap_or_else(|| panic!("A grid needs \"values\""))
+            .iter().map(|x| SceneFile::parse_number(x, 0.) as f32).collect();
+        Arc::new(Grid::new(n[0], n[1], n[2], values))
     }
 
     /// A medium's multiple-scattering approximations (`volume::ScatteringApproximation`):
@@ -774,6 +1089,35 @@ impl SceneFile {
             diffraction: SceneFile::parse_diffraction(o),
             halos: SceneFile::parse_halos(o),
             rainbow: (o["rainbow"].as_bool() == Some(true)).then(|| Arc::new(RainbowTable::new(100_000))),
+            emission: None,
+            extinction: None,
+        }
+    }
+
+    /// Light a volume emits (`volume::emission`), in the box `bounds`: `"emission": colour`, or
+    /// `{"color": colour, "scale": s}`, or blackbody radiation `{"temperature": kelvin, "scale":
+    /// s}` with luminance `s` (default 1) at the hottest. The temperature may come from a grid
+    /// (`"temperature": "fire.vol"` or inline, see `parse_grid`), its values times
+    /// `temperature_scale`, and below `cutoff` kelvin nothing is emitted. The medium emits
+    /// only as much as it absorbs: give it an albedo below one.
+    pub fn parse_volume_emission(o: &Value, bounds: BBox) -> Option<VolumeEmission> {
+        let v = o.get("emission")?;
+        if v.is_array() {
+            return Some(VolumeEmission::color(SceneFile::parse_color(v), 1.));
+        }
+        let scale = SceneFile::parse_number(&v["scale"], 1.);
+        match v.get("temperature") {
+            None => Some(VolumeEmission::color(SceneFile::parse_color_def(v, "color", Color::white()), scale)),
+            Some(t) => {
+                let field: Arc<dyn DensityField> = if t.is_number() {
+                    Arc::new(ConstantDensity(SceneFile::parse_number(t, 0.)))
+                } else {
+                    let g = SceneFile::parse_grid(t);
+                    let b = if o.get("min").is_none() { g.bounds.unwrap_or(bounds) } else { bounds };
+                    Arc::new(GridDensity::new(b, g, SceneFile::parse_number(&v["temperature_scale"], 1.)))
+                };
+                Some(VolumeEmission::temperature(field, SceneFile::parse_number(&v["cutoff"], 0.), scale))
+            },
         }
     }
 
@@ -1492,13 +1836,40 @@ impl SceneFile {
     ///
     /// Or `{"type": "transform", "item": {...}, "steps": [step, ..]}`, applying each step in turn
     /// (see `parse_steps`).
+    ///
+    /// With `"motion": {...}`, the object moves while the shutter is open (`motion`): `motion`
+    /// holds the transform's keys at the end of the motion, each defaulting to its value at the
+    /// start, eg. `"translate": [0, 0, 0], "motion": {"translate": [1, 0, 0]}`.
     pub fn parse_transform(o: &Value, parts: &mut Parts) -> Box<dyn Geometry + Sync + Send> {
         let item = SceneFile::parse_shared_geometry_in(&o["item"], parts)
             .unwrap_or_else(|| panic!("transform needs a geometry \"item\", got {}", o["item"]));
+        let start = SceneFile::parse_affine(o);
+        match o.get("motion") {
+            None => Box::new(Transform::new(item, start)),
+            Some(Value::Object(m)) => {
+                let mut end = o.clone();
+                for (k, v) in m {
+                    end[k.as_str()] = v.clone();
+                }
+                // Steps replace the parts, and the parts the steps.
+                if m.contains_key("steps") {
+                    for k in ["scale", "rotate", "translate"] { end[k] = Value::Null; }
+                } else if ["scale", "rotate", "translate"].iter().any(|k| m.contains_key(*k)) {
+                    end["steps"] = Value::Null;
+                }
+                Box::new(crate::motion::AnimatedTransform::new(item, start, SceneFile::parse_affine(&end)))
+            },
+            Some(v) => panic!("A transform's \"motion\" must be an object of its keys at the end, got {}", v),
+        }
+    }
+
+    /// The affine map of a transform object's `"steps"`, or of its `"scale"`, `"rotate"` and
+    /// `"translate"`.
+    fn parse_affine(o: &Value) -> Affine3<f64> {
         if !o["steps"].is_null() {
             assert!(["scale", "rotate", "translate"].iter().all(|k| o[k].is_null()),
                 "transform takes \"steps\", or \"scale\", \"rotate\" and \"translate\", not both");
-            return Box::new(Transform::new(item, SceneFile::parse_steps(&o["steps"])));
+            return SceneFile::parse_steps(&o["steps"]);
         }
         let scale = match &o["scale"] {
             Value::Number(n) => { let s = n.as_f64().unwrap(); Vector3::new(s, s, s) },
@@ -1512,7 +1883,10 @@ impl SceneFile {
             SceneFile::parse_number(&r["yaw"], 0.).to_radians(),
         );
         let translate = SceneFile::parse_vec3_def(o, "translate", Vector3::zeros());
-        Box::new(Transform::from_parts(item, translate, rotation, scale))
+        assert!(scale.x != 0. && scale.y != 0. && scale.z != 0., "transform scale must be non-zero on every axis, got {}", scale);
+        Affine3::from_matrix_unchecked(Translation3::from(translate).to_homogeneous()
+            * rotation.to_homogeneous()
+            * Matrix4::new_nonuniform_scaling(&scale))
     }
 
     /// A list of transformation steps, applied in order:
@@ -1645,6 +2019,21 @@ impl SceneFile {
         if props["type"].as_str() == Some("noise") {
             return Some(Box::new(SceneFile::parse_noise_texture(props, materials)));
         }
+        // {"type": "mix", "materials": ["A", "B"], "amount": 0.5 or an image texture (its grey
+        // level)}: B with probability amount, else A (`material::mix`).
+        if props["type"].as_str() == Some("mix") {
+            let names = props["materials"].as_array().filter(|a| a.len() == 2)
+                .unwrap_or_else(|| panic!("Mix material '{}' needs two \"materials\"", name));
+            assert!(names.iter().all(|n| n.as_str() != Some(name.as_str())), "Mix material '{}' can't contain itself", name);
+            let get = |k: &Value| SceneFile::require_material(k, materials, &format!("mix {}", name));
+            return Some(Box::new(crate::material::mix::Mix {
+                materials: [get(&names[0]), get(&names[1])],
+                amount: match &props["amount"] {
+                    Value::Object(_) => SceneFile::parse_color_texture(&props["amount"]),
+                    v => { let a = SceneFile::parse_number(v, 0.5).clamp(0., 1.); Color::new(a, a, a).into() },
+                },
+            }));
+        }
         match SceneFile::parse_material(props) {
             Some(m) => Some(m),
             None => panic!("Material '{}' has unknown type {}", name, props["type"]),
@@ -1670,9 +2059,89 @@ impl SceneFile {
             return Some(Box::new(metal));
         }
 
+        // {"type": "conductor", "metal": "Au" | "Ag" | "Al" | "Cu" | "CuZn"} (or "eta" and "k"
+        // per channel, or a "reflectance" colour), "roughness": r, or "roughness_u" and
+        // "roughness_v" along and across "tangent" (default the x axis): see
+        // `material::conductor`.
+        if t == "conductor" {
+            use crate::material::conductor::{Conductor, Optics};
+            let optics = if let Some(name) = o["metal"].as_str() {
+                let (eta, k) = crate::spectrum::metals::named(name)
+                    .unwrap_or_else(|| panic!("Unknown metal '{}': expected Ag, Al, Au, Cu or CuZn", name));
+                Optics::Measured { eta, k }
+            } else if !o["eta"].is_null() || !o["k"].is_null() {
+                Optics::Constant { eta: SceneFile::parse_color_def(o, "eta", Color::white()), k: SceneFile::parse_color_def(o, "k", Color::black()) }
+            } else {
+                Optics::Reflectance(SceneFile::parse_color_def(o, "reflectance", Color::new(0.9, 0.9, 0.9)))
+            };
+            let r = SceneFile::parse_number(&o["roughness"], 0.);
+            return Some(Box::new(Conductor {
+                optics,
+                roughness: (SceneFile::parse_number(&o["roughness_u"], r), SceneFile::parse_number(&o["roughness_v"], r)),
+                tangent: SceneFile::parse_vec3_def(o, "tangent", Vector3::x()),
+            }));
+        }
+
+        // {"type": "coated_diffuse", "albedo": colour or texture, "roughness": coat r,
+        // "refractive_index": 1.5, "thickness": 0.01, "medium_albedo": colour, "g": 0,
+        // "max_depth": 10, "samples": 1}, and "coated_conductor" with a conductor's "metal" (or
+        // "eta" and "k", or "reflectance") and "conductor_roughness" in place of "albedo": pbrt's
+        // layered materials (`material::layered`).
+        if t == "coated_diffuse" || t == "coated_conductor" {
+            use crate::material::conductor::Optics;
+            use crate::material::layered::{Base, Coated};
+            let base = if t == "coated_diffuse" {
+                Base::Diffuse(SceneFile::parse_color_texture(o.get("albedo").unwrap_or(&serde_json::json!([0.5, 0.5, 0.5]))))
+            } else {
+                let optics = if let Some(name) = o["metal"].as_str() {
+                    let (eta, k) = crate::spectrum::metals::named(name)
+                        .unwrap_or_else(|| panic!("Unknown metal '{}': expected Ag, Al, Au, Cu or CuZn", name));
+                    Optics::Measured { eta, k }
+                } else if !o["eta"].is_null() || !o["k"].is_null() {
+                    Optics::Constant { eta: SceneFile::parse_color_def(o, "eta", Color::white()), k: SceneFile::parse_color_def(o, "k", Color::black()) }
+                } else {
+                    Optics::Reflectance(SceneFile::parse_color_def(o, "reflectance", Color::new(0.9, 0.9, 0.9)))
+                };
+                Base::Conductor { optics, roughness: SceneFile::parse_number(&o["conductor_roughness"], 0.) }
+            };
+            let thickness = SceneFile::parse_number(&o["thickness"], 0.01);
+            assert!(thickness > 0., "A coat's thickness must be positive");
+            return Some(Box::new(Coated {
+                base,
+                refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.5),
+                roughness: SceneFile::parse_number(&o["roughness"], 0.),
+                thickness,
+                albedo: SceneFile::parse_color_def(o, "medium_albedo", Color::black()),
+                g: SceneFile::parse_number(&o["g"], 0.),
+                max_depth: SceneFile::parse_int(&o["max_depth"], 10) as u32,
+                samples: SceneFile::parse_int(&o["samples"], 1).max(1) as u32,
+            }));
+        }
+
+        // {"type": "subsurface", "albedo": colour, "radius": colour or number (how far light
+        // travels, scene units), or "sigma_a" and "sigma_s"; "g": 0, "refractive_index": 1.4}:
+        // random-walk subsurface scattering (`material::subsurface`).
+        if t == "subsurface" {
+            use crate::material::subsurface::{Coefficients, Subsurface};
+            let coefficients = if o.get("sigma_a").is_some() || o.get("sigma_s").is_some() {
+                Coefficients::Sigma { sigma_a: SceneFile::parse_color_def(o, "sigma_a", Color::black()),
+                                      sigma_s: SceneFile::parse_color_def(o, "sigma_s", Color::black()) }
+            } else {
+                let radius = match &o["radius"] {
+                    Value::Number(n) => Color::white() * n.as_f64().unwrap(),
+                    Value::Null => Color::new(1., 0.5, 0.25),
+                    v => SceneFile::parse_color(v),
+                };
+                Coefficients::Albedo { albedo: SceneFile::parse_color_def(o, "albedo", Color::new(0.8, 0.8, 0.8)), radius }
+            };
+            let g = SceneFile::parse_number(&o["g"], 0.);
+            assert!(g > -1. && g < 1., "g must be between -1 and 1, got {}", g);
+            return Some(Box::new(Subsurface { coefficients, g, refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.4) }));
+        }
+
         if t == "lambertian" {
             let d:Lambertian = Lambertian {
-                albedo:SceneFile::parse_color(&o["albedo"]), 
+                albedo: SceneFile::parse_color_texture(&o["albedo"]),
             };
             return Some(Box::new(d));
         }
@@ -1682,7 +2151,7 @@ impl SceneFile {
                 println!("Warning: plastic 'opacity' is ignored; plastic is opaque (use a dielectric for transparency)");
             }
             let d:Plastic = Plastic {
-                albedo:SceneFile::parse_color(&o["albedo"]), 
+                albedo: SceneFile::parse_color_texture(&o["albedo"]),
                 refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.5),
                 roughness: SceneFile::parse_number(&o["roughness"], 0.),
             };
@@ -1693,19 +2162,58 @@ impl SceneFile {
             return Some(Box::new(SceneFile::parse_leaf(o)));
         }
 
+        // {"type": "rough_dielectric", "refractive_index": .., "roughness": r, "attenuate":
+        // colour}: frosted glass; {"type": "thin_dielectric", "refractive_index": ..}: a pane of
+        // no thickness (`material::rough_dielectric`).
+        // {"type": "hair", "eumelanin": 1.3, "pheomelanin": 0 (or "color" or "sigma_a"),
+        // "eta": 1.55, "beta_m": 0.3, "beta_n": 0.3, "alpha": 2}: pbrt's hair BSDF
+        // (`material::hair`), for cylinder curves.
+        if t == "hair" {
+            use crate::material::hair::{Hair, Pigment};
+            let pigment = if !o["sigma_a"].is_null() {
+                Pigment::SigmaA(SceneFile::parse_color(&o["sigma_a"]))
+            } else if !o["color"].is_null() {
+                Pigment::Color(SceneFile::parse_color(&o["color"]))
+            } else {
+                Pigment::Melanin { eumelanin: SceneFile::parse_number(&o["eumelanin"], 1.3), pheomelanin: SceneFile::parse_number(&o["pheomelanin"], 0.) }
+            };
+            return Some(Box::new(Hair {
+                pigment,
+                eta: SceneFile::parse_number(&o["eta"], 1.55),
+                beta_m: SceneFile::parse_number(&o["beta_m"], 0.3).clamp(0.01, 1.),
+                beta_n: SceneFile::parse_number(&o["beta_n"], 0.3).clamp(0.01, 1.),
+                alpha: SceneFile::parse_number(&o["alpha"], 2.),
+            }));
+        }
+
+        if t == "rough_dielectric" {
+            return Some(Box::new(crate::material::rough_dielectric::RoughDielectric {
+                refractive_index: SceneFile::parse_refractive_index(&o["refractive_index"]).or_default(1.5),
+                roughness: SceneFile::parse_number(&o["roughness"], 0.3),
+                attenuate: SceneFile::parse_color_def(o, "attenuate", Color::white()),
+            }));
+        }
+        if t == "thin_dielectric" {
+            return Some(Box::new(crate::material::rough_dielectric::ThinDielectric {
+                refractive_index: SceneFile::parse_refractive_index(&o["refractive_index"]).or_default(1.5),
+            }));
+        }
+
         if t == "dielectric" {
             let d:Dielectric = Dielectric {
-                refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.),
-                attenuate:SceneFile::parse_color(&o["attenuate"]), 
+                refractive_index: SceneFile::parse_refractive_index(&o["refractive_index"]),
+                attenuate: SceneFile::parse_color_def(o, "attenuate", Color::white()),
             };
             return Some(Box::new(d));
         }
 
         if t == "diffuse-light" {
+            // `"texture": {"texture": "screen.png", ...}` scales the emission by an image.
             let d:DiffuseLight = DiffuseLight {
                 intensity: SceneFile::parse_number(&o["intensity"], 1.),
-                color:SceneFile::parse_color(&o["color"]), 
+                emission: SceneFile::parse_emission(o),
                 two_sided: o["two_sided"].as_bool().unwrap_or(false),
+                texture: o.get("texture").map(SceneFile::parse_image_map),
             };
             return Some(Box::new(d));
         }
@@ -1728,6 +2236,24 @@ impl SceneFile {
 
         if t == "normal" {
             return Some(Box::new(NormalShade {}));
+        }
+
+        // {"type": "uv"}: the texture coordinates as colour; {"type": "checker", "colors":
+        // [colour, colour], "checks": n or [nu, nv]}: a diffuse checkerboard in texture space.
+        if t == "uv" {
+            return Some(Box::new(crate::material::uv::UvShade {}));
+        }
+        if t == "checker" {
+            let colors = match o["colors"].as_array() {
+                Some(c) if c.len() == 2 => [SceneFile::parse_color(&c[0]), SceneFile::parse_color(&c[1])],
+                None => [Color::new(0.8, 0.8, 0.8), Color::new(0.1, 0.1, 0.1)],
+                _ => panic!("A checker's \"colors\" are two colours, got {}", o["colors"]),
+            };
+            let checks = match &o["checks"] {
+                Value::Array(_) => { let v = SceneFile::parse_vec2(&o["checks"]); crate::na::Vector2::new(v.x, v.y) },
+                v => crate::na::Vector2::repeat(SceneFile::parse_number(v, 8.)),
+            };
+            return Some(Box::new(crate::material::uv::UvChecker { colors, checks }));
         }
 
         if t == "rock" {
@@ -1926,11 +2452,11 @@ impl SceneFile {
             SceneFile::parse_material_ref(base_material_key, materials)
                 .unwrap_or_else(|| {
                     println!("Warning: Using default material for noise texture because base material '{}' not found", material_name);
-                    Box::new(Lambertian { albedo: Color::white() })
+                    Box::new(Lambertian { albedo: Color::white().into() })
                 })
         } else {
             // Default to white lambertian if no base material is specified
-            Box::new(Lambertian { albedo: Color::white() })
+            Box::new(Lambertian { albedo: Color::white().into() })
         };
         
         let noise_type = match o.get("noise_type").and_then(|v| v.as_str()) {
@@ -2170,12 +2696,85 @@ impl SceneFile {
     }
 
 
+    /// A light at a point (`light::Light`): `{"location": [x, y, z], "intensity": I, "color" or
+    /// "temperature"}`, radiant intensity `I` (per steradian), or `"power": Φ` (watts, of a point
+    /// or spot light) in its place. One of these makes it directional:
+    ///
+    /// - `"spot": {"direction": [x, y, z] or "lookat": [x, y, z], "angle": 30, "delta": 5}`: a
+    ///   cone of half-angle `angle` degrees, fading over its outer `delta` (pbrt's `coneangle`
+    ///   and `conedelta`).
+    /// - `"goniometric": {"image": file, "up": [0, 1, 0], "forward": [0, 0, 1]}`: intensity
+    ///   scaled by an equirectangular image of directions about `up` (top row up), azimuth zero
+    ///   towards `forward`.
+    /// - `"projection": {"image": file, "lookat": [x, y, z] or "direction", "up": [0, 1, 0],
+    ///   "fov": 30}`: the image projected as by a slide projector, `fov` degrees across its
+    ///   larger side.
     pub fn parse_light(o: &Value) -> Light {
-        Light {
-                position: SceneFile::parse_vec3(&o["location"]),
-                color: SceneFile::parse_color_def(o, "color", Color::white()),
-                intensity: o["intensity"].as_f64().unwrap(),
+        let position = SceneFile::parse_vec3(&o["location"]);
+        let aim = |v: &Value| -> Vector3<f64> {
+            match (v.get("direction"), v.get("lookat")) {
+                (Some(d), None) => SceneFile::parse_vec3(d).normalize(),
+                (None, Some(l)) => (SceneFile::parse_vec3(l) - position).normalize(),
+                _ => panic!("A light's \"spot\" or \"projection\" needs a \"direction\" or a \"lookat\""),
             }
+        };
+        // Rows x, y, z of the rotation into the light's frame, z along `forward`, y nearest `up`,
+        // x to the right as the camera's (`camera`), so a projection reads as seen from behind.
+        let frame = |forward: Vector3<f64>, up: Vector3<f64>| -> Matrix3<f64> {
+            let z = forward.normalize();
+            let x = z.cross(&up);
+            let x = if x.norm() < 1e-9 { z.cross(&z.cross(&Vector3::new(1., 0., 0.))) } else { x }.normalize();
+            let y = x.cross(&z);
+            Matrix3::from_rows(&[x.transpose(), y.transpose(), z.transpose()])
+        };
+        let image = |v: &Value| Image::shared(v["image"].as_str()
+            .unwrap_or_else(|| panic!("A goniometric or projection light needs an \"image\"")), None);
+        let profile = if let Some(v) = o.get("spot") {
+            let angle = SceneFile::parse_number(&v["angle"], 30.);
+            let delta = SceneFile::parse_number(&v["delta"], 5.).clamp(0., angle);
+            assert!(angle > 0. && angle <= 180., "A spot light's angle must be 0 to 180 degrees, got {}", angle);
+            LightProfile::Spot { axis: aim(v), cos_falloff_start: (angle - delta).to_radians().cos(), cos_total: angle.to_radians().cos() }
+        } else if let Some(v) = o.get("goniometric") {
+            let up = SceneFile::parse_vec3_def(v, "up", Vector3::new(0., 1., 0.));
+            let forward = SceneFile::parse_vec3_def(v, "forward", Vector3::new(0., 0., 1.));
+            // The image's pole is the frame's y: build it with up as y, forward as z.
+            let f = frame(forward - up.normalize() * forward.dot(&up.normalize()), up);
+            LightProfile::Goniometric { frame: f, image: image(v) }
+        } else if let Some(v) = o.get("projection") {
+            let img = image(v);
+            let (w, h) = img.size();
+            let half = (SceneFile::parse_number(&v["fov"], 30.).to_radians() / 2.).tan();
+            let half = if w >= h { Vector2::new(half, half * h as f64 / w as f64) } else { Vector2::new(half * w as f64 / h as f64, half) };
+            let f = frame(aim(v), SceneFile::parse_vec3_def(v, "up", Vector3::new(0., 1., 0.)));
+            LightProfile::Projection { frame: f, image: img, half }
+        } else {
+            LightProfile::Isotropic
+        };
+        let mut light = Light { position, emission: SceneFile::parse_emission(o), intensity: 1., profile };
+        light.intensity = match (o.get("intensity"), o.get("power")) {
+            (Some(i), None) => SceneFile::parse_number(i, 1.),
+            (None, Some(p)) => {
+                // Power over the solid angle it's spread across, per unit of `power()`'s
+                // luminance.
+                let unit = light.power() / crate::color::luminance(&light.emission.srgb()).max(1e-12);
+                SceneFile::parse_number(p, 1.) / unit
+            },
+            _ => panic!("A light needs an \"intensity\" or a \"power\""),
+        };
+        light
+    }
+
+    /// What an emitter emits: `"color"` (white if absent), or with `"temperature"` (kelvin), a
+    /// blackbody's spectrum scaled to unit luminance (`spectrum::Emission`), so that emitters
+    /// of the same intensity are equally bright whatever their temperature.
+    pub fn parse_emission(o: &Value) -> Emission {
+        match o["temperature"].as_f64() {
+            Some(t) => {
+                assert!(o.get("color").is_none(), "An emitter takes \"color\" or \"temperature\", not both");
+                Emission::blackbody(t)
+            },
+            None => Emission::Rgb(SceneFile::parse_color_def(o, "color", Color::white())),
+        }
     }
 
     pub fn parse_lights(lights: &Vec<Value>) -> Vec<Light> {
@@ -2260,10 +2859,22 @@ impl SceneFile {
         let sun = SceneFile::parse_sun(&s.sun, &s.objects);
         // The camera's view plane spans tan(angle) over the image's height.
         let pixel_angle = s.camera["angle"].as_f64().map_or(0., |a| a.tan() / SceneFile::parse_int(&s.height, 480) as f64);
+        let flare = SceneFile::parse_flare(&s.output, &s.camera, SceneFile::parse_int(&s.width, 640), SceneFile::parse_int(&s.height, 480));
+        // For texture filtering: the camera's position, axes and the angle between pixels, shrunk
+        // by the samples per pixel (`textures::footprint`).
+        let footprint = (pixel_angle > 0.).then(|| {
+            let f = camera::Frame::look_at(SceneFile::parse_vec3(&s.camera["location"]), SceneFile::parse_vec3(&s.camera["lookat"]),
+                SceneFile::parse_vec3_def(&s.camera, "up", Vector3::y()));
+            let spp = SceneFile::parse_int(&s.supersamples, 35).max(1) as f64;
+            crate::textures::Footprint { location: f.location, right: f.camx, up: f.camy, spread: pixel_angle * (1. / spp.sqrt()).max(0.125) }
+        });
         // Aerial perspective, unless the skysphere turns it off.
         let atmosphere = s.objects.iter()
             .find(|o| o["type"].as_str() == Some("skysphere") && o["aerial_perspective"].as_bool() != Some(false))
             .map(|o| Arc::new(parse_sky_material(o)));
+        // Motion blur: sample times only if something moves (`motion`).
+        let motion = SceneFile::has_motion(&s.camera) || s.objects.iter().any(SceneFile::has_motion)
+            || s.geometries.values().any(SceneFile::has_motion);
         let geometries = GeometryLibrary::new(s.geometries);
         geometries.preload(&s.objects);
         // A landscape is meshed finest where the camera is.
@@ -2299,19 +2910,27 @@ impl SceneFile {
                 seed: SceneFile::parse_int(&s.seed, 0) as u64,
                 sample_lights: s.sample_lights.as_bool().unwrap_or(true),
                 sample_sky: s.sample_sky.as_bool().unwrap_or(true),
-                filter: match s.filter.as_str() {
-                    None | Some("box") => Filter::Box,
-                    Some("tent") => Filter::Tent,
-                    Some(f) => panic!("Unknown filter '{}': expected \"box\" or \"tent\"", f),
-                },
+                filter: SceneFile::parse_filter(&s.filter),
                 regularise: SceneFile::parse_number(&s.regularise, crate::material::ggx::DEFAULT_REGULARISE),
+                spectral: s.spectral.as_bool().unwrap_or(false),
+                shutter: SceneFile::parse_shutter(&s.shutter),
+                motion,
+                wavefront: match s.integrator.as_str() {
+                    None | Some("path") => false,
+                    Some("wavefront") => true,
+                    Some(x) => panic!("Unknown integrator '{}': expected \"path\" or \"wavefront\"", x),
+                },
                 sampler: match s.sampler.as_str() {
                     None | Some("sobol") => Sampler::Sobol,
                     Some("independent") => Sampler::Independent,
-                    Some(x) => panic!("Unknown sampler '{}': expected \"sobol\" or \"independent\"", x),
+                    Some("halton") => Sampler::Halton,
+                    Some("stratified") => Sampler::Stratified,
+                    Some("zsobol") => Sampler::ZSobol,
+                    Some(x) => panic!("Unknown sampler '{}': expected \"sobol\", \"zsobol\", \"halton\", \"stratified\" or \"independent\"", x),
                 },
             },
-            camera: Box::new(SceneFile::parse_camera(s.camera, width as u32, height as u32)),
+            footprint,
+            camera: SceneFile::parse_camera(s.camera, width as u32, height as u32),
             lights: SceneFile::parse_lights(&s.lights),
             objects: o,
             max_bounding,
@@ -2320,19 +2939,80 @@ impl SceneFile {
             output: OutputOpts {
                 // The camera's view plane spans tan(angle) over the image's height.
                 pixel_angle,
+                flare,
                 ..OutputOpts::parse(&s.output)
             },
+            area_light_indices: area_lights.iter().enumerate().map(|(i, l)| (&**l as *const SceneObject as usize, i)).collect(),
             area_lights,
             area_light_choice,
             sun,
             atmosphere,
             environment: None,
+            light_bvh: None,
+        };
+        scene.light_bvh = match s.light_sampler.as_str() {
+            None | Some("power") => None,
+            Some("bvh") => Some(SceneFile::light_bvh(&scene)),
+            Some(x) => panic!("Unknown light_sampler '{}': expected \"power\" or \"bvh\"", x),
         };
         // Tabulating the sky evaluates it, which needs the scene.
         if scene.render.sample_sky {
             scene.environment = crate::environment::Environment::build(&scene);
         }
         scene
+    }
+
+    /// The light BVH over a scene's sampled lights (`Scene::light_bvh`): its area lights, if
+    /// `sample_lights` is on, then its point lights if there are more than
+    /// `scene::BVH_POINT_LIGHTS` of them.
+    fn light_bvh(scene: &Scene) -> crate::light_bvh::LightBvh {
+        use crate::light_bvh::LightBounds;
+        use crate::light::Profile;
+        let mut bounds: Vec<LightBounds> = Vec::new();
+        let luminance = |c: Color| crate::color::luminance(&c).max(0.);
+        for l in scene.area_lights.iter().take(scene.bvh_area_lights()) {
+            // Normals at a few points: one for flat lights (quads, discs, triangles), which
+            // then emit only to one side, or any.
+            let normals: Vec<(Vector3<f64>, Vector3<f64>)> = (0..9)
+                .filter_map(|k| l.geometry.sample_surface([(k % 3) as f64 / 3. + 0.17, (k / 3) as f64 / 3. + 0.17, 0.5]))
+                .collect();
+            let Some(&(y, n)) = normals.first() else { continue };
+            let flat = normals.iter().all(|(_, m)| (m - n).norm() < 1e-6);
+            let material = l.medium.material_at(y);
+            let front = luminance(material.emitted(&n, &n));
+            let two_sided = luminance(material.emitted(&n, &-n)) > 0.;
+            // A diffuse emitter's power: π L A, from each side that emits.
+            let phi = std::f64::consts::PI * front * l.geometry.surface_area() * if two_sided { 2. } else { 1. };
+            let b = l.geometry.bounds();
+            bounds.push(LightBounds {
+                bounds: b, phi,
+                w: n,
+                cos_theta_o: if flat { 1. } else { -1. },
+                cos_theta_e: 0.,
+                two_sided: flat && two_sided,
+            });
+        }
+        // A narrow spread about the axis for beams, which can't be exactly zero.
+        let beam_spread = 1e-4f64.cos();
+        for light in scene.lights.iter().filter(|_| scene.lights.len() > crate::scene::BVH_POINT_LIGHTS) {
+            // As pbrt: 4π times the intensity, its power were it to shine every way, so that
+            // a beam's importance follows the light it delivers where it points, not how
+            // little of the sphere it covers.
+            let image = match &light.profile {
+                Profile::Goniometric { image, .. } | Profile::Projection { image, .. } => luminance(image.average()),
+                _ => 1.,
+            };
+            let phi = 4. * std::f64::consts::PI * luminance(light.emission.srgb()) * light.intensity * image;
+            bounds.push(match &light.profile {
+                Profile::Spot { axis, cos_total, .. } => LightBounds { cos_theta_o: *cos_total, cos_theta_e: beam_spread, w: *axis, ..LightBounds::point(light.position, phi) },
+                Profile::Projection { frame, half, .. } => {
+                    let w = Vector3::new(frame[(2, 0)], frame[(2, 1)], frame[(2, 2)]);
+                    LightBounds { cos_theta_o: half.norm().atan().cos(), cos_theta_e: beam_spread, w, ..LightBounds::point(light.position, phi) }
+                },
+                _ => LightBounds::point(light.position, phi),
+            });
+        }
+        crate::light_bvh::LightBvh::new(&bounds)
     }
 
     /// Roughly each area light's power, to choose lights to sample in proportion to it: the
@@ -2646,9 +3326,9 @@ mod tests {
             { "location": [0, 1, 0], "intensity": 1, "color": "white" },
             { "location": [0, 1, 0], "intensity": 1 }
         ]"#);
-        assert_eq!(s.lights[0].color, Color::red());
-        assert_eq!(s.lights[1].color, Color::white());
-        assert_eq!(s.lights[2].color, Color::white());
+        assert_eq!(s.lights[0].emission.srgb(), Color::red());
+        assert_eq!(s.lights[1].emission.srgb(), Color::white());
+        assert_eq!(s.lights[2].emission.srgb(), Color::white());
     }
 
     fn noise_materials() -> Map<String, Value> {

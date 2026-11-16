@@ -4,6 +4,9 @@ use crate::sceneobject::SceneObject;
 use std::cmp;
 use std::fmt;
 
+/// See `Intersection::spawn_offset`.
+pub const RELATIVE_ERROR: f64 = 1e-7;
+
 // TODO PBRT DifferentialGeometry
 #[derive(Debug, Copy, Clone)]
 pub struct RawIntersection {
@@ -50,6 +53,24 @@ impl<'a> Intersection<'a> {
     /// both sides alike, so they use this, eg. for the inside of a sphere.
     pub fn facing_normal(&self, r: &Ray) -> Vector3<f64> {
         if r.rd.dot(&self.normal) > 0. { -self.normal } else { self.normal }
+    }
+
+    /// The texture coordinates of the point hit (`Geometry::uv`), if its shape has them.
+    pub fn uv(&self) -> Option<crate::na::Vector2<f64>> {
+        self.object.geometry.uv(&self.point, self.face)
+    }
+
+    /// How far off the surface to start rays leaving this hit, so they don't hit the surface
+    /// again by error in where the hit was found (Pharr, Jakob and Humphreys, "Physically Based
+    /// Rendering", 4th ed., section 6.8, "Managing Rounding Error"). pbrt bounds each shape's
+    /// error by careful analysis, to a few units in the last place. The shapes here aren't
+    /// analysed, and some (quartics, iterative solvers) are far less precise, so the bound is a
+    /// deliberately conservative relative one, `RELATIVE_ERROR` of the size of the coordinates
+    /// and the distance the hit was found at (both of which an error scales with), or the shape's
+    /// own `tolerance` if larger: unlike a fixed offset, it suits a scene a millimetre across and
+    /// one the size of a planet alike.
+    pub fn spawn_offset(&self) -> f64 {
+        (RELATIVE_ERROR * (self.point.abs().max() + self.dist)).max(self.object.geometry.tolerance())
     }
 
     /// This intersection with its normal facing the incoming ray (see `facing_normal`).

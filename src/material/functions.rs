@@ -52,9 +52,13 @@ pub fn scatter_lambertian(albedo: Color, intersection: &Intersection) -> Scatter
     ScatteredRay{ light_sampling: LightSampling::None, emit: Color::black(), attenuate:albedo, ray: Some(refl) }
 }
 
-/// Distance to move a scattered ray's origin off the surface, onto the side it travels into.
-/// Must exceed the scene's shadow bias, which pushes intersection points outward.
-const SURFACE_OFFSET: f64 = 0.001;
+/// How far to move a scattered ray's origin off the surface, onto the side it travels into:
+/// twice the bias the trace already pushed the hit outward by (the scene's `shadow_bias` or the
+/// hit's error bound, `Intersection::spawn_offset`), so a ray going in starts as far inside as
+/// it would otherwise have started outside.
+pub fn surface_offset(intersection: &Intersection, s: &Scene) -> f64 {
+    2. * s.render.shadow_bias.max(intersection.spawn_offset())
+}
 
 /// Probability that light is reflected rather than transmitted at a dielectric boundary.
 /// Returns 1 for total internal reflection.
@@ -70,9 +74,10 @@ pub fn fresnel_reflectance(cos_i: f64, ni_over_nt: f64, refractive_index: f64) -
 
 pub fn scatter_dielectric(
     refractive_index: f64,
-    albedo: Color, 
+    albedo: Color,
     r: &Ray,
-    intersection: &Intersection
+    intersection: &Intersection,
+    offset: f64,
 ) -> ScatteredRay {
 
     let drn = r.rd.dot(&intersection.normal);
@@ -96,7 +101,7 @@ pub fn scatter_dielectric(
             return ScatteredRay{ light_sampling: LightSampling::None, emit: Color::black(),
                 attenuate: albedo,
                 ray: Some( Ray {
-                    ro: intersection.point - outward_normal * SURFACE_OFFSET,
+                    ro: intersection.point - outward_normal * offset,
                     rd: refracted
                 }),
             };
@@ -108,7 +113,7 @@ pub fn scatter_dielectric(
     ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(),
         attenuate: Color::white(),
         ray: Some(Ray {
-            ro: intersection.point + outward_normal * SURFACE_OFFSET,
+            ro: intersection.point + outward_normal * offset,
             rd: reflected
         }) 
     }
@@ -124,11 +129,12 @@ pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) ->
     // Only materials that scatter call this (`ggx::regularised`).
     crate::material::ggx::scattered();
     let mut direct = Color::black();
-    for light in &s.lights {
+    // With a light BVH, point lights are sampled with the area lights below.
+    for light in s.lights.iter().filter(|_| s.sums_point_lights()) {
         let light_vec = light.position - intersection.point;
         let shadow_ray = Ray {ro: intersection.point, rd: light_vec.normalize()};
         let transmitted = s.objects.transmittance(&shadow_ray, light_vec.norm(), f64::MIN_POSITIVE);
-        if transmitted > 0. {
+        if transmitted.rgb.max() > 0. {
             direct = direct + diffuse(albedo, intersection, &light_vec, light) * transmitted;
         }
     }
@@ -136,13 +142,10 @@ pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) ->
         let cos = sun.direction.dot(&intersection.normal);
         if cos > 0. {
             let transmitted = sun.transmittance_from(&intersection.point, s);
-            direct = direct + albedo * sun.irradiance_at(&intersection.point) * (cos / std::f64::consts::PI * transmitted);
+            direct = direct + albedo * sun.irradiance_at(&intersection.point) * transmitted * (cos / std::f64::consts::PI);
         }
     }
-    if s.render.sample_lights {
-        direct = direct + sample_area_light(albedo, intersection, s);
-    }
-    direct
+    direct + sample_area_light(albedo, intersection, s)
 }
 
 /// One sample of the light reflected from the area lights, following Peter Shirley, Changyaw
@@ -163,7 +166,7 @@ pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) ->
 /// is light sampling alone; `direct_lighting_mis` combines it with sampling the BSDF.
 fn sample_area_light(albedo: Color, intersection: &Intersection, s: &Scene) -> Color {
     let normal = intersection.normal;
-    sample_area_light_with(&intersection.point, s, |w, _| {
+    sample_lights_with(&intersection.point, s, |w, _| {
         let cos_x = w.dot(&normal);
         if cos_x <= 0. { Color::black() } else { albedo * (cos_x / std::f64::consts::PI) }
     })
@@ -183,29 +186,71 @@ pub fn sample_area_light_with(point: &Vector3<f64>, s: &Scene, response: impl Fn
     }
     let (_, _, i) = s.area_light_choice.sample(rand());
     let chosen = s.area_light_choice.probability(i);
+    sample_area_light_from(point, s, i, chosen, response)
+}
+
+/// One sample of light from the sampled lights at `point`, `response` as for
+/// `sample_area_light_with`: with a light BVH (`light_bvh`), one light, point or area, chosen
+/// by its importance there (the point lights aren't then summed separately); otherwise one
+/// area light chosen by power, if `sample_lights` is on.
+pub fn sample_lights_with(point: &Vector3<f64>, s: &Scene, response: impl Fn(&Vector3<f64>, f64) -> Color) -> Color {
+    let bvh = match &s.light_bvh {
+        None => return if s.render.sample_lights { sample_area_light_with(point, s, response) } else { Color::black() },
+        Some(b) => b,
+    };
+    let (i, chosen) = match bvh.sample(point, rand()) {
+        Some(x) => x,
+        None => return Color::black(),
+    };
+    let areas = s.bvh_area_lights();
+    if i < areas {
+        return sample_area_light_from(point, s, i, chosen, response);
+    }
+    // A point light: a delta in direction, so no MIS (an infinite density).
+    let light = &s.lights[i - areas];
+    let to_light = light.position - point;
+    let d2 = to_light.norm_squared();
+    let w = to_light / d2.sqrt();
+    let r = response(&w, f64::INFINITY);
+    if r == Color::black() {
+        return r;
+    }
+    let intensity = light.radiant_intensity(&-w);
+    if intensity == Color::black() {
+        return intensity;
+    }
+    let transmitted = s.objects.transmittance(&Ray { ro: *point, rd: w }, d2.sqrt(), f64::MIN_POSITIVE);
+    r * intensity * transmitted / (d2 * chosen)
+}
+
+/// One sample of area light `i`, chosen with probability `chosen`.
+fn sample_area_light_from(point: &Vector3<f64>, s: &Scene, i: usize, chosen: f64, response: impl Fn(&Vector3<f64>, f64) -> Color) -> Color {
     let light = &s.area_lights[i];
-    let (y, n_y) = match light.geometry.sample_surface([rand(), rand(), rand()]) {
+    // A point on the light, with its density per solid angle (`Geometry::sample_from`: by area
+    // for most shapes, by the subtended cone for spheres).
+    let (y, n_y, pdf) = match light.geometry.sample_from(point, [rand(), rand(), rand()]) {
         Some(sample) => sample,
         None => return Color::black(),
     };
     let to_light = y - point;
-    let d2 = to_light.norm_squared();
-    let d = d2.sqrt();
+    let d = to_light.norm();
     let w = to_light / d;
-    let cos_y = n_y.dot(&-w).abs();
-    let pdf = d2 / (cos_y * light.geometry.surface_area()) * chosen;
+    let pdf = pdf * chosen;
     let response = response(&w, pdf);
     if response == Color::black() {
         return Color::black();
     }
-    let emitted = light.medium.material_at(y).emitted(&n_y, &-w);
+    // Texture coordinates of the sampled point, for textured emitters; a shape of many parts
+    // (a mesh) doesn't say which part was sampled, so it takes the texture's mean.
+    let uv = if light.geometry.primitives() == 1 { light.geometry.uv(&y, 0) } else { None };
+    let emitted = light.medium.material_at(y).emitted_at(&n_y, &-w, uv);
     if emitted == Color::black() {
         return Color::black();
     }
     // Stop the shadow ray just short of the light, which would otherwise block itself.
     let shadow_ray = Ray { ro: *point, rd: w };
     let transmitted = s.objects.transmittance(&shadow_ray, d * (1. - 1e-6), f64::MIN_POSITIVE);
-    if transmitted == 0. {
+    if transmitted.rgb.max() <= 0. {
         return Color::black();
     }
     response * emitted * (transmitted / pdf)
@@ -213,18 +258,17 @@ pub fn sample_area_light_with(point: &Vector3<f64>, s: &Scene, response: impl Fn
 
 /// The density per steradian with which `sample_area_light_with`, from `point`, picks the
 /// point `y` with normal `n_y` on the area light `light`: the chance of choosing that light
-/// (`Scene::area_light_choice`), times its density per unit area, 1 / area, converted to solid
-/// angle by d² / |cos θ_y|.
+/// (`Scene::area_light_choice`), times the shape's own density per solid angle
+/// (`Geometry::pdf_from`).
 pub fn area_light_pdf(point: &Vector3<f64>, y: &Vector3<f64>, n_y: &Vector3<f64>, light: &SceneObject, s: &Scene) -> f64 {
-    let to_light = y - point;
-    let d2 = to_light.norm_squared();
-    let cos_y = n_y.dot(&to_light).abs() / d2.sqrt();
-    if cos_y <= 0. {
+    let chosen = s.area_light_index(light).map_or(0., |i| match &s.light_bvh {
+        Some(bvh) => bvh.pmf(point, i),
+        None => s.area_light_choice.probability(i),
+    });
+    if chosen == 0. {
         return 0.;
     }
-    let chosen = s.area_lights.iter().position(|l| std::ptr::eq(&**l, light))
-        .map_or(0., |i| s.area_light_choice.probability(i));
-    d2 / (cos_y * light.geometry.surface_area()) * chosen
+    light.geometry.pdf_from(point, y, n_y) * chosen
 }
 
 /// Light arriving directly from the scene's lights at `point`, and reflected towards unit `wo`
@@ -240,7 +284,7 @@ pub fn area_light_pdf(point: &Vector3<f64>, y: &Vector3<f64>, n_y: &Vector3<f64>
 /// - The sky, if sampled (`sky_light_mis`): one direction, weighted alike.
 pub fn direct_lighting_mis(bsdf: &dyn BSDF, point: &Vector3<f64>, wo: &Vector3<f64>, s: &Scene) -> Color {
     let mut direct = Color::black();
-    for light in &s.lights {
+    for light in s.lights.iter().filter(|_| s.sums_point_lights()) {
         let light_vec = light.position - point;
         let d2 = light_vec.norm_squared();
         let wi = light_vec / d2.sqrt();
@@ -250,8 +294,8 @@ pub fn direct_lighting_mis(bsdf: &dyn BSDF, point: &Vector3<f64>, wo: &Vector3<f
         }
         let shadow_ray = Ray { ro: *point, rd: wi };
         let transmitted = s.objects.transmittance(&shadow_ray, d2.sqrt(), f64::MIN_POSITIVE);
-        if transmitted > 0. {
-            direct = direct + f * light.color * (light.intensity / d2 * transmitted);
+        if transmitted.rgb.max() > 0. {
+            direct = direct + f * light.radiant_intensity(&-wi) * (transmitted / d2);
         }
     }
     if let Some(sun) = &s.sun {
@@ -260,13 +304,10 @@ pub fn direct_lighting_mis(bsdf: &dyn BSDF, point: &Vector3<f64>, wo: &Vector3<f
     if let Some(env) = &s.environment {
         direct = direct + sky_light_mis(env, bsdf, point, wo, s);
     }
-    if s.render.sample_lights {
-        direct = direct + sample_area_light_with(point, s, |wi, pdf| {
-            let f = bsdf.eval(wo, wi);
-            if f == Color::black() { f } else { f * power_heuristic(pdf, bsdf.pdf(wo, wi)) }
-        });
-    }
-    direct
+    direct + sample_lights_with(point, s, |wi, pdf| {
+        let f = bsdf.eval(wo, wi);
+        if f == Color::black() { f } else { f * power_heuristic(pdf, bsdf.pdf(wo, wi)) }
+    })
 }
 
 /// The sky's light reflected towards `wo` by `bsdf` at `point`, for `direct_lighting_mis`: one
@@ -283,15 +324,15 @@ fn sky_light_mis(env: &crate::environment::Environment, bsdf: &dyn BSDF, point: 
     }
     let ray = Ray { ro: *point, rd: wi };
     let transmitted = s.objects.transmittance(&ray, crate::light::SUN_SHADOW_DISTANCE, f64::MIN_POSITIVE);
-    if transmitted == 0. {
+    if transmitted.rgb.max() <= 0. {
         return Color::black();
     }
-    f * env.radiance(&ray, s) * (transmitted * power_heuristic(pdf, bsdf.pdf(wo, &wi)) / pdf)
+    f * env.radiance(&ray, s) * transmitted * (power_heuristic(pdf, bsdf.pdf(wo, &wi)) / pdf)
 }
 
 /// Below this, the BSDF's density towards the sun times the disc's solid angle, the BSDF can't
 /// resolve the disc: the sun is treated as a point (`sun_light_mis`).
-const POINT_SUN: f64 = 1e-3;
+pub const POINT_SUN: f64 = 1e-3;
 
 /// The sun's light reflected towards `wo` by `bsdf` at `point`, for `direct_lighting_mis`.
 ///
@@ -313,7 +354,7 @@ fn sun_light_mis(sun: &crate::light::Sun, bsdf: &dyn BSDF, point: &Vector3<f64>,
             return f;
         }
         let transmitted = sun.transmittance_from(point, s);
-        return if transmitted > 0. { f * sun.irradiance_at(point) * transmitted } else { Color::black() };
+        return if transmitted.rgb.max() > 0. { f * sun.irradiance_at(point) * transmitted } else { Color::black() };
     }
     let (wi, radiance, pdf) = sun.sample_disc_at(point, [rand(), rand()]);
     let f = bsdf.eval(wo, &wi);
@@ -321,7 +362,7 @@ fn sun_light_mis(sun: &crate::light::Sun, bsdf: &dyn BSDF, point: &Vector3<f64>,
         return f;
     }
     let transmitted = sun.transmittance_along(point, &wi, s);
-    if transmitted == 0. {
+    if transmitted.rgb.max() <= 0. {
         return Color::black();
     }
     f * radiance * (transmitted * power_heuristic(pdf, bsdf.pdf(wo, &wi)) / pdf)
@@ -352,7 +393,7 @@ pub fn scatter_bsdf(bsdf: &dyn BSDF, r: &Ray, point: &Vector3<f64>, s: &Scene) -
 pub fn diffuse (pigment: Color, i: &Intersection, light_vec: &Vector3<f64>, light: &Light) -> Color {
     let cos = light_vec.normalize().dot(&i.normal);
     if cos.is_sign_positive() {
-        light.color * pigment * (cos * light.intensity / (std::f64::consts::PI * light_vec.norm_squared()))
+        light.radiant_intensity(&-light_vec.normalize()) * pigment * (cos / (std::f64::consts::PI * light_vec.norm_squared()))
     } else {
         Color::black()
     }
@@ -420,7 +461,7 @@ mod tests {
             }),
         };
         let r = Ray { ro: Vector3::new(-1., 0.8, 0.), rd: Vector3::new(1., 0.2, 0.).normalize() };
-        let out = scatter_dielectric(1.5, Color::white(), &r, &i).ray.unwrap();
+        let out = scatter_dielectric(1.5, Color::white(), &r, &i, 0.001).ray.unwrap();
         assert!(out.ro.norm() < 1., "reflected ray starts outside: {}", out.ro);
         assert!(out.rd.y < 0.);
     }

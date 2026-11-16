@@ -1,0 +1,831 @@
+{
+  "width": 480,
+  "height": 270,
+  "supersamples": 256,
+  "chunk_size": 32,
+  "samples_per_chunk": 2,
+  "shadow_bias": 0.0001,
+  "max_depth": 12,
+  "path_termination": "russian_roulette",
+  "spectral": true,
+  "background": [
+    0,
+    0,
+    0
+  ],
+  "camera": {
+    "location": [
+      0,
+      1.6,
+      -5
+    ],
+    "lookat": [
+      0,
+      1,
+      0
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.42,
+    "aperture": 0
+  },
+  "materials": {
+    "FLOOR": {
+      "type": "lambertian",
+      "albedo": [
+        0.15,
+        0.15,
+        0.15
+      ]
+    },
+    "FLINT": {
+      "type": "dielectric",
+      "refractive_index": "SF11"
+    },
+    "DIAMOND": {
+      "type": "dielectric",
+      "refractive_index": "diamond"
+    },
+    "BAR": {
+      "type": "diffuse-light",
+      "color": [
+        1,
+        1,
+        1
+      ],
+      "intensity": 4
+    }
+  },
+  "objects": [
+    {
+      "type": "plane",
+      "y": 0,
+      "material": "FLOOR"
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "prism",
+        "height1": 0.2,
+        "height2": 1.9,
+        "points": [
+          [
+            0,
+            0.7
+          ],
+          [
+            -0.6062,
+            -0.35
+          ],
+          [
+            0.6062,
+            -0.35
+          ],
+          [
+            0,
+            0.7
+          ]
+        ]
+      },
+      "translate": [
+        -1.1,
+        0,
+        0
+      ],
+      "material": "FLINT"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        1.2,
+        0.75,
+        0
+      ],
+      "radius": 0.75,
+      "material": "DIAMOND"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        0.0,
+        0,
+        7.0
+      ],
+      "cap": [
+        0.0,
+        3,
+        7.0
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        0.914,
+        0,
+        6.94
+      ],
+      "cap": [
+        0.914,
+        3,
+        6.94
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        1.812,
+        0,
+        6.761
+      ],
+      "cap": [
+        1.812,
+        3,
+        6.761
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        2.679,
+        0,
+        6.467
+      ],
+      "cap": [
+        2.679,
+        3,
+        6.467
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        3.5,
+        0,
+        6.062
+      ],
+      "cap": [
+        3.5,
+        3,
+        6.062
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        4.261,
+        0,
+        5.553
+      ],
+      "cap": [
+        4.261,
+        3,
+        5.553
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        4.95,
+        0,
+        4.95
+      ],
+      "cap": [
+        4.95,
+        3,
+        4.95
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        5.553,
+        0,
+        4.261
+      ],
+      "cap": [
+        5.553,
+        3,
+        4.261
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        6.062,
+        0,
+        3.5
+      ],
+      "cap": [
+        6.062,
+        3,
+        3.5
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        6.467,
+        0,
+        2.679
+      ],
+      "cap": [
+        6.467,
+        3,
+        2.679
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        6.761,
+        0,
+        1.812
+      ],
+      "cap": [
+        6.761,
+        3,
+        1.812
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        6.94,
+        0,
+        0.914
+      ],
+      "cap": [
+        6.94,
+        3,
+        0.914
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        7.0,
+        0,
+        0.0
+      ],
+      "cap": [
+        7.0,
+        3,
+        0.0
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        6.94,
+        0,
+        -0.914
+      ],
+      "cap": [
+        6.94,
+        3,
+        -0.914
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        6.761,
+        0,
+        -1.812
+      ],
+      "cap": [
+        6.761,
+        3,
+        -1.812
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        6.467,
+        0,
+        -2.679
+      ],
+      "cap": [
+        6.467,
+        3,
+        -2.679
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        6.062,
+        0,
+        -3.5
+      ],
+      "cap": [
+        6.062,
+        3,
+        -3.5
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        5.553,
+        0,
+        -4.261
+      ],
+      "cap": [
+        5.553,
+        3,
+        -4.261
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        4.95,
+        0,
+        -4.95
+      ],
+      "cap": [
+        4.95,
+        3,
+        -4.95
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        4.261,
+        0,
+        -5.553
+      ],
+      "cap": [
+        4.261,
+        3,
+        -5.553
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        3.5,
+        0,
+        -6.062
+      ],
+      "cap": [
+        3.5,
+        3,
+        -6.062
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        2.679,
+        0,
+        -6.467
+      ],
+      "cap": [
+        2.679,
+        3,
+        -6.467
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        1.812,
+        0,
+        -6.761
+      ],
+      "cap": [
+        1.812,
+        3,
+        -6.761
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        0.914,
+        0,
+        -6.94
+      ],
+      "cap": [
+        0.914,
+        3,
+        -6.94
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        0.0,
+        0,
+        -7.0
+      ],
+      "cap": [
+        0.0,
+        3,
+        -7.0
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -0.914,
+        0,
+        -6.94
+      ],
+      "cap": [
+        -0.914,
+        3,
+        -6.94
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -1.812,
+        0,
+        -6.761
+      ],
+      "cap": [
+        -1.812,
+        3,
+        -6.761
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -2.679,
+        0,
+        -6.467
+      ],
+      "cap": [
+        -2.679,
+        3,
+        -6.467
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -3.5,
+        0,
+        -6.062
+      ],
+      "cap": [
+        -3.5,
+        3,
+        -6.062
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -4.261,
+        0,
+        -5.553
+      ],
+      "cap": [
+        -4.261,
+        3,
+        -5.553
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -4.95,
+        0,
+        -4.95
+      ],
+      "cap": [
+        -4.95,
+        3,
+        -4.95
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -5.553,
+        0,
+        -4.261
+      ],
+      "cap": [
+        -5.553,
+        3,
+        -4.261
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -6.062,
+        0,
+        -3.5
+      ],
+      "cap": [
+        -6.062,
+        3,
+        -3.5
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -6.467,
+        0,
+        -2.679
+      ],
+      "cap": [
+        -6.467,
+        3,
+        -2.679
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -6.761,
+        0,
+        -1.812
+      ],
+      "cap": [
+        -6.761,
+        3,
+        -1.812
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -6.94,
+        0,
+        -0.914
+      ],
+      "cap": [
+        -6.94,
+        3,
+        -0.914
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -7.0,
+        0,
+        -0.0
+      ],
+      "cap": [
+        -7.0,
+        3,
+        -0.0
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -6.94,
+        0,
+        0.914
+      ],
+      "cap": [
+        -6.94,
+        3,
+        0.914
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -6.761,
+        0,
+        1.812
+      ],
+      "cap": [
+        -6.761,
+        3,
+        1.812
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -6.467,
+        0,
+        2.679
+      ],
+      "cap": [
+        -6.467,
+        3,
+        2.679
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -6.062,
+        0,
+        3.5
+      ],
+      "cap": [
+        -6.062,
+        3,
+        3.5
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -5.553,
+        0,
+        4.261
+      ],
+      "cap": [
+        -5.553,
+        3,
+        4.261
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -4.95,
+        0,
+        4.95
+      ],
+      "cap": [
+        -4.95,
+        3,
+        4.95
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -4.261,
+        0,
+        5.553
+      ],
+      "cap": [
+        -4.261,
+        3,
+        5.553
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -3.5,
+        0,
+        6.062
+      ],
+      "cap": [
+        -3.5,
+        3,
+        6.062
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -2.679,
+        0,
+        6.467
+      ],
+      "cap": [
+        -2.679,
+        3,
+        6.467
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -1.812,
+        0,
+        6.761
+      ],
+      "cap": [
+        -1.812,
+        3,
+        6.761
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    },
+    {
+      "type": "cylinder",
+      "base": [
+        -0.914,
+        0,
+        6.94
+      ],
+      "cap": [
+        -0.914,
+        3,
+        6.94
+      ],
+      "radius": 0.035,
+      "material": "BAR"
+    }
+  ]
+}

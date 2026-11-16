@@ -30,26 +30,39 @@
 //! shared between the grid's cells that reach the film directly, so the ghosts are in proportion
 //! to the light as rendered.
 //!
-//! What each surface reflects is given by Fresnel's equations, averaged over polarisations, and
-//! air-glass surfaces have a single-layer anti-reflection coating: a quarter wave of magnesium
-//! fluoride (n = 1.38) at 550 nm, its reflectance found by thin-film interference (Born and
-//! Wolf, "Principles of Optics", 7th ed., section 1.6.4). A coated surface reflects a fraction
-//! of a percent in the green and more in the red and blue, which tints ghosts purple and
-//! amber. Each colour channel is traced at its own wavelength (610, 550 and 465 nm), with glass
-//! dispersion estimated from each glass's index (lens prescriptions give no Abbe number): an
-//! Abbe number from the trend of the glass map, V = 70 - 60 (n - 1.45) within [25, 70], and
-//! Cauchy's equation through n_d.
+//! What each surface reflects is given by Fresnel's equations, averaged over polarisations,
+//! through the air-glass surfaces' anti-reflection coating, found by thin-film interference
+//! (Born and Wolf, "Principles of Optics", 7th ed., section 1.6): by default a modern
+//! three-layer coating (`Coating::Multi`, 0.1-0.25% a surface), or a 1950s single layer of
+//! magnesium fluoride (1.3%, the purple and amber ghosts of older lenses), or none (4% and
+//! more). A ghost reflects twice, so its strength goes as the square: a single coating's ghosts
+//! are ten to fifty times a multicoated lens's. Each colour channel is traced at its own
+//! wavelength (610, 550 and 465 nm), with glass dispersion estimated from each glass's index
+//! (lens prescriptions give no Abbe number): an Abbe number from the trend of the glass map,
+//! V = 70 - 60 (n - 1.45) within [25, 70], and Cauchy's equation through n_d. The coatings'
+//! reflectance is averaged across each channel's band (±30 nm), as a sensor's channels
+//! integrate it: at one wavelength a coating's colour is exaggerated.
 //!
 //! ## Starburst
 //!
-//! A straight edge of the aperture diffracts light into a thin line perpendicular to it.
-//! Far from the centre, along the line, a rectangle w across diffracts a fraction λ / (2π² w θ²)
-//! of the light per radian at angle θ (the tail of the sinc² pattern, integrated across the
-//! line); each edge of a bladed stop gives half that on each side, and parallel edges add, so a
-//! stop of n blades makes n spikes if n is even and 2n if odd. Here w is the entrance pupil's
-//! width across its flats. A round stop makes no spikes. Spikes are drawn one pixel wide from a
-//! pixel out, for each pixel brighter than the threshold, by convolution, and longer for red
-//! than for blue, as λ goes.
+//! The aperture's edges diffract light into lines perpendicular to them. In the Fraunhofer
+//! pattern of an aperture of area A, a straight edge of length L sends a fraction
+//! (L / A) λ / (4π² θ²) of the light per radian along the line at angle θ from the centre, to
+//! each side (the edge's stationary-phase term; for a slit, both edges together give the tail
+//! of its sinc², λ / (2π² w θ²)). A regular polygon of n blades has n edges, and parallel
+//! edges add, so n spikes if n is even and 2n if odd; a round stop makes none.
+//!
+//! Real blades are not straight: they are arcs, cut so that the aperture is round when fully
+//! open, and nearly a polygon only stopped well down. Along a curved edge the normal turns, so
+//! each direction in a fan as wide as the angle it turns through gets its light from one point
+//! of the edge: the spike spreads into a wedge, and falls as 1/θ³ rather than 1/θ², as a
+//! circle's edge does (Born and Wolf, section 8.5; Keller's geometrical theory of
+//! diffraction). This is why a sunstar tapers and fades, and why it is sharpest with the lens
+//! stopped down. The blades' radius is the open stop's over `blade_curvature` (1 by default;
+//! 0 for straight blades), so the fan is the side's length over that: about 12° for six blades
+//! at f/11 on an f/2 lens. Fans wider than the gap between edges overlap into the round
+//! aperture's halo. The light is spread over each fan at each radius, every bright pixel's,
+//! by convolution, and further for red than for blue, as λ goes.
 //!
 //! Both are physical in strength by default; `ghosts` and `starburst` scale them.
 use crate::color::Color;
@@ -64,9 +77,10 @@ use std::f64::consts::PI;
 /// Wavelengths (nm) of the red, green and blue channels.
 const WAVELENGTHS: [f64; 3] = [610., 550., 465.];
 
-/// The anti-reflection coating: index, and the wavelength it's a quarter wave thick at.
-const COATING_INDEX: f64 = 1.38;
-const COATING_WAVELENGTH: f64 = 550.;
+/// Each channel's band, about its wavelength: ghosts take the coatings' reflectance averaged
+/// over it, as a sensor's channel does, rather than at one wavelength, which exaggerates their
+/// colour.
+const BAND: [f64; 5] = [-30., -15., 0., 15., 30.];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Flare {
@@ -83,6 +97,13 @@ pub struct Flare {
     pub starburst: f64,
     /// Rays across the front element, per side.
     pub grid: usize,
+    /// The air-glass surfaces' coating.
+    pub coating: Coating,
+    /// The blades' curvature, as a multiple of the fully open stop's: 1 for blades cut to
+    /// round the aperture when open (most lenses), 0 for straight blades.
+    pub blade_curvature: f64,
+    /// The stop's radius fully open, metres.
+    pub open_stop: f64,
 }
 
 /// A light found in the image: its direction in camera space and its energy (the sum of its
@@ -94,32 +115,74 @@ pub struct Source {
 }
 
 /// Reflectance at an interface between media of index `n0` and `n2` (in the order the light
-/// crosses them), at cosine `cos0` in the first, averaged over polarisations; with a coating
-/// between them of index `n1` and thickness `d` (nm) if `coating`.
-pub fn reflectance(cos0: f64, n0: f64, n2: f64, lambda: f64, coating: Option<(f64, f64)>) -> f64 {
+/// crosses them), at cosine `cos0` in the first, averaged over polarisations, through thin films
+/// `layers` (index, thickness in nm; in the order the light crosses them): by their
+/// characteristic matrices (Born and Wolf, "Principles of Optics", 7th ed., section 1.6;
+/// Macleod, "Thin-Film Optical Filters", chapter 2), with complex angles where a layer is
+/// crossed beyond its critical angle.
+pub fn reflectance(cos0: f64, n0: f64, n2: f64, lambda: f64, layers: &[(f64, f64)]) -> f64 {
     let sin0 = (1. - cos0 * cos0).max(0.).sqrt();
-    let cos_in = |n: f64| -> Option<f64> {
-        let s = n0 * sin0 / n;
-        if s >= 1. { None } else { Some((1. - s * s).sqrt()) }
-    };
-    let cos2 = match cos_in(n2) {
-        Some(c) => c,
-        None => return 1.,
-    };
-    let rs = |ni: f64, ci: f64, nj: f64, cj: f64| (ni * ci - nj * cj) / (ni * ci + nj * cj);
-    let rp = |ni: f64, ci: f64, nj: f64, cj: f64| (nj * ci - ni * cj) / (nj * ci + ni * cj);
-    match coating {
-        None => 0.5 * (rs(n0, cos0, n2, cos2).powi(2) + rp(n0, cos0, n2, cos2).powi(2)),
-        Some((n1, d)) => {
-            let cos1 = match cos_in(n1) { Some(c) => c, None => return 1. };
-            let delta = 4. * PI * n1 * d * cos1 / lambda;
-            let phase = Complex::new((-delta).cos(), (-delta).sin());
-            let film = |r01: f64, r12: f64| {
-                let r = (Complex::new(r01, 0.) + phase * r12) / (Complex::new(1., 0.) + phase * (r01 * r12));
-                r.norm_sqr()
-            };
-            0.5 * (film(rs(n0, cos0, n1, cos1), rs(n1, cos1, n2, cos2)) + film(rp(n0, cos0, n1, cos1), rp(n1, cos1, n2, cos2)))
-        },
+    if n0 * sin0 >= n2 {
+        return 1.;
+    }
+    let one = Complex::new(1., 0.);
+    let i = Complex::new(0., 1.);
+    // cos θ in a medium of index n (Snell's law), complex beyond the critical angle.
+    let cos_in = |n: f64| (one - Complex::new((n0 * sin0 / n).powi(2), 0.)).sqrt();
+    let mut total = 0.;
+    for s_polarised in [true, false] {
+        // Each medium's tilted admittance: n cos θ for s, n / cos θ for p.
+        let eta = |n: f64| if s_polarised { cos_in(n) * n } else { Complex::new(n, 0.) / cos_in(n) };
+        let (mut b, mut c) = (one, eta(n2));
+        // [B, C] = M_1 ... M_k [1, η_substrate], so the last layer's matrix applies first.
+        for &(n, d) in layers.iter().rev() {
+            let delta = cos_in(n) * (2. * PI * n * d / lambda);
+            let e = eta(n);
+            let (cs, sn) = (delta.cos(), delta.sin());
+            (b, c) = (cs * b + i * sn / e * c, i * e * sn * b + cs * c);
+        }
+        let e0 = eta(n0);
+        let r = (e0 * b - c) / (e0 * b + c);
+        total += 0.5 * r.norm_sqr();
+    }
+    total.min(1.)
+}
+
+/// What an air-glass surface is coated with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Coating {
+    /// Bare glass: 4-8% a surface.
+    Uncoated,
+    /// A quarter wave of magnesium fluoride (n = 1.38) at 550 nm, the single coating of
+    /// 1940s-1970s lenses: about 1.3% on crown glass, tinting ghosts purple.
+    Single,
+    /// A broadband three-layer coating, as on modern lenses: quarter, half and quarter waves at
+    /// 510 nm of magnesium fluoride, zirconia (2.1) and a layer matched to the glass, of index
+    /// 0.84 + 0.53 n (the best such layer for glass of index n, between 1.45 and 1.9): 0.1-0.25%
+    /// averaged over the visible, more at its ends.
+    Multi,
+}
+
+impl Coating {
+    pub fn parse(name: &str) -> Option<Coating> {
+        match name {
+            "none" | "uncoated" => Some(Coating::Uncoated),
+            "single" => Some(Coating::Single),
+            "multi" | "multicoated" => Some(Coating::Multi),
+            _ => None,
+        }
+    }
+
+    /// The layers on glass of index `glass`, from the air's side: (index, thickness in nm).
+    pub fn layers(&self, glass: f64) -> Vec<(f64, f64)> {
+        match self {
+            Coating::Uncoated => vec![],
+            Coating::Single => vec![(1.38, 550. / (4. * 1.38))],
+            Coating::Multi => {
+                let matched = (0.84 + 0.53 * glass).clamp(1.45, 2.0);
+                vec![(1.38, 510. / (4. * 1.38)), (2.1, 510. / (2. * 2.1)), (matched, 510. / (4. * matched))]
+            },
+        }
     }
 }
 
@@ -188,7 +251,8 @@ impl Flare {
             },
         }
         let (mut o, mut d) = (Vector3::new(o.x, o.y, -o.z), Vector3::new(d.x, d.y, -d.z).normalize());
-        let mut weight = 1.;
+        // The light's share at each wavelength across the channel's band.
+        let mut weight = [1.; BAND.len()];
         for (k, forward, step) in path {
             let e = &self.lens.interfaces[k];
             let (t, normal) = if e.is_stop() {
@@ -211,24 +275,26 @@ impl Flare {
             let (before, after) = self.media(k, lambda);
             let (ni, nt) = if forward { (before, after) } else { (after, before) };
             let cos = normal.dot(&-d).abs();
-            let coating = (ni == 1. || nt == 1.).then_some((COATING_INDEX, COATING_WAVELENGTH / (4. * COATING_INDEX)));
-            let r = reflectance(cos, ni, nt, lambda, coating);
+            // An air-glass surface is coated; its layers run from the air's side.
+            let mut layers = if ni == 1. { self.coating.layers(nt) } else if nt == 1. { self.coating.layers(ni) } else { vec![] };
+            if nt == 1. {
+                layers.reverse();
+            }
+            let reflect = step == Step::Reflect;
+            for (wgt, offset) in weight.iter_mut().zip(BAND) {
+                let r = reflectance(cos, ni, nt, lambda + offset, &layers);
+                *wgt *= if reflect { r } else { 1. - r };
+            }
             match step {
-                Step::Reflect => {
-                    d = d - normal * (2. * d.dot(&normal));
-                    weight *= r;
-                },
-                Step::Refract => {
-                    d = refract(&-d, &normal, nt / ni)?;
-                    weight *= 1. - r;
-                },
+                Step::Reflect => d = d - normal * (2. * d.dot(&normal)),
+                Step::Refract => d = refract(&-d, &normal, nt / ni)?,
             }
         }
         if d.z <= 0. {
             return None;
         }
         let t = -o.z / d.z;
-        Some((Vector2::new(o.x + d.x * t, o.y + d.y * t), weight))
+        Some((Vector2::new(o.x + d.x * t, o.y + d.y * t), weight.iter().sum::<f64>() / BAND.len() as f64))
     }
 
     /// The rays for a light from camera-space `direction` through a lattice of (g + 1)²
@@ -372,22 +438,36 @@ impl Flare {
         }).reduce(|| vec![Color::black(); w * h], |a, b| a.iter().zip(&b).map(|(x, y)| *x + *y).collect())
     }
 
-    /// The entrance pupil's diameter, and the stop's blades.
-    fn pupil(&self) -> f64 {
-        let focal = self.lens.focal_length().unwrap_or(0.05);
-        let stop = self.lens.stop_diameter().unwrap_or(0.01);
-        // The stop seen through the elements in front of it: as large as f / N for the
-        // f-number the stop gives, N = f / (2 r_stop m); approximated by tracing a ray parallel
-        // to the axis that just grazes the stop's edge.
-        let z = self.positions();
-        let mut lo = 0.;
-        let mut hi = self.lens.interfaces[0].aperture;
+    /// The entrance pupil's radius: the stop's circle (before its blades) seen through the
+    /// elements in front of it, found by tracing rays parallel to the axis that just graze it.
+    fn pupil_radius(&self) -> f64 {
+        let round = Flare { lens: LensSystem { blades: None, ..self.lens.clone() }, ..self.clone() };
+        let z = round.positions();
+        let (mut lo, mut hi) = (0., self.lens.interfaces[0].aperture);
         for _ in 0..40 {
             let mid = 0.5 * (lo + hi);
             let o = Vector3::new(mid, 0., self.lens.front_z() + 0.01);
-            if self.trace(&z, &o, &Vector3::new(0., 0., -1.), None, WAVELENGTHS[1]).is_some() { lo = mid; } else { hi = mid; }
+            if round.trace(&z, &o, &Vector3::new(0., 0., -1.), None, WAVELENGTHS[1]).is_some() { lo = mid; } else { hi = mid; }
         }
-        if lo > 0. { 2. * lo } else { stop.min(focal) }
+        if lo > 0. { lo } else { self.lens.stop_diameter().unwrap_or(0.01) / 2. }
+    }
+
+    /// A blade's diffraction, per edge and per side: its share of the light per radian along
+    /// the spike, as (L / A) λ / (4π² θ²), the coefficient L / A of the entrance pupil's
+    /// polygon (an edge's length over the area); and the fan of directions each edge spreads
+    /// it over, radians: its normal turns that much along a curved blade (see `starburst_of`).
+    fn blade_diffraction(&self, n: usize) -> (f64, f64) {
+        let r = self.pupil_radius();
+        let side = 2. * r * (PI / n as f64).sin();
+        let area = 0.5 * n as f64 * r * r * (2. * PI / n as f64).sin();
+        let r_stop = self.lens.stop_diameter().unwrap_or(0.) / 2.;
+        let fan = if self.blade_curvature > 0. && self.open_stop > 0. {
+            // In the stop's plane: an arc of radius open_stop / curvature, as long as a side.
+            (2. * r_stop * (PI / n as f64).sin() * self.blade_curvature / self.open_stop).min(2. * PI / n as f64)
+        } else {
+            0.
+        };
+        (side / area, fan)
     }
 
     /// The starburst of the bright pixels of `img`, added to it.
@@ -402,7 +482,7 @@ impl Flare {
         if !img.pixels.iter().any(bright) {
             return vec![Color::black(); w * h];
         }
-        let width = self.pupil() * (PI / n as f64).cos();
+        let (per_edge, fan) = self.blade_diffraction(n);
         let reach = w.max(h);
         let (pw, ph) = ((w + reach).next_power_of_two(), (h + reach).next_power_of_two());
         let mut out = vec![Color::black(); w * h];
@@ -414,18 +494,22 @@ impl Flare {
                 // Each edge's normal; the film's y runs up, the image's rows down.
                 let a = rotation + (2 * k + 1) as f64 * PI / n as f64;
                 for side in [1., -1.] {
-                    let (dx, dy) = (side * a.cos(), -side * a.sin());
                     let mut r = 1.;
                     while r < reach as f64 {
                         let theta = r * pixel_angle;
-                        // Per unit length along the spike; steps of half a pixel.
-                        let v = lambda / (4. * PI * PI * width * theta * theta) * pixel_angle * 0.5 * self.starburst;
-                        let (x, y) = (r * dx, r * dy);
-                        let (x0, y0) = (x.floor(), y.floor());
-                        let (fx, fy) = (x - x0, y - y0);
-                        for (ox, oy, wgt) in [(0., 0., (1. - fx) * (1. - fy)), (1., 0., fx * (1. - fy)), (0., 1., (1. - fx) * fy), (1., 1., fx * fy)] {
-                            let (ix, iy) = (((x0 + ox) as i64).rem_euclid(pw as i64) as usize, ((y0 + oy) as i64).rem_euclid(ph as i64) as usize);
-                            kernel[iy * pw + ix].re += v * wgt;
+                        // Per half-pixel step along the spike, spread across the edge's fan:
+                        // an arc r × fan pixels long, sampled every half pixel.
+                        let v = per_edge * lambda / (4. * PI * PI * theta * theta) * pixel_angle * 0.5 * self.starburst;
+                        let m = ((r * fan / 0.5).ceil() as usize).max(1);
+                        for j in 0..m {
+                            let b = a + fan * ((j as f64 + 0.5) / m as f64 - 0.5);
+                            let (x, y) = (side * r * b.cos(), -side * r * b.sin());
+                            let (x0, y0) = (x.floor(), y.floor());
+                            let (fx, fy) = (x - x0, y - y0);
+                            for (ox, oy, wgt) in [(0., 0., (1. - fx) * (1. - fy)), (1., 0., fx * (1. - fy)), (0., 1., (1. - fx) * fy), (1., 1., fx * fy)] {
+                                let (ix, iy) = (((x0 + ox) as i64).rem_euclid(pw as i64) as usize, ((y0 + oy) as i64).rem_euclid(ph as i64) as usize);
+                                kernel[iy * pw + ix].re += v * wgt / m as f64;
+                            }
                         }
                         r += 0.5;
                     }
@@ -556,24 +640,51 @@ mod tests {
         if let Some(n) = blades {
             lens = lens.with_blades(n, 0.);
         }
-        Flare { lens, film: (0.036, 0.024), threshold: 10., sources: 4, ghosts: 1., starburst: 1., grid: 48 }
+        Flare { lens, film: (0.036, 0.024), threshold: 10., sources: 4, ghosts: 1., starburst: 1., grid: 48,
+                coating: Coating::Single, blade_curvature: 0., open_stop: 0. }
     }
 
     #[test]
     fn test_reflectance() {
         // Uncoated glass, at normal incidence: ((n - 1) / (n + 1))², 4% for n = 1.5.
-        assert!((reflectance(1., 1., 1.5, 550., None) - 0.04).abs() < 1e-9);
+        assert!((reflectance(1., 1., 1.5, 550., &[]) - 0.04).abs() < 1e-9);
         // A quarter-wave coating of index 1.38 on n = 1.5 at its design wavelength:
         // ((n0 n2 - n1²) / (n0 n2 + n1²))² = 1.3%.
-        let d = COATING_WAVELENGTH / (4. * COATING_INDEX);
-        let r = reflectance(1., 1., 1.5, 550., Some((COATING_INDEX, d)));
+        let single = Coating::Single.layers(1.5);
+        let r = reflectance(1., 1., 1.5, 550., &single);
         let expected = ((1.5 - 1.38f64.powi(2)) / (1.5 + 1.38f64.powi(2))).powi(2);
         assert!((r - expected).abs() < 1e-9, "{} vs {}", r, expected);
         // More away from it, at both ends of the spectrum.
-        assert!(reflectance(1., 1., 1.5, 420., Some((COATING_INDEX, d))) > r);
-        assert!(reflectance(1., 1., 1.5, 700., Some((COATING_INDEX, d))) > r);
+        assert!(reflectance(1., 1., 1.5, 420., &single) > r);
+        assert!(reflectance(1., 1., 1.5, 700., &single) > r);
         // Total internal reflection.
-        assert_eq!(reflectance(0.1, 1.5, 1., 550., None), 1.);
+        assert_eq!(reflectance(0.1, 1.5, 1., 550., &[]), 1.);
+        // Fresnel at an angle, uncoated: Rs and Rp at 45° into n = 1.5.
+        let (c, t) = (45f64.to_radians().cos(), (45f64.to_radians().sin() / 1.5).asin().cos());
+        let rs = ((c - 1.5 * t) / (c + 1.5 * t)).powi(2);
+        let rp = ((1.5 * c - t) / (1.5 * c + t)).powi(2);
+        assert!((reflectance(c, 1., 1.5, 550., &[]) - 0.5 * (rs + rp)).abs() < 1e-9);
+        // The same from the glass's side, as light leaving it (reversibility), for a stack too.
+        let stack = Coating::Multi.layers(1.6);
+        let reversed: Vec<_> = stack.iter().rev().copied().collect();
+        assert!((reflectance(1., 1., 1.6, 500., &stack) - reflectance(1., 1.6, 1., 500., &reversed)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_multicoating_reflects_less_across_the_visible() {
+        // A modern coating: averaging a few tenths of a percent from 430 to 670 nm on crown and
+        // flint glass, rising towards the ends of that (to 1.1% at 670 nm on glass of 1.9), and
+        // well under a single coating's on crown glass.
+        for glass in [1.5, 1.62, 1.75, 1.9] {
+            let layers = Coating::Multi.layers(glass);
+            let rs: Vec<f64> = (430..=670).step_by(10).map(|l| reflectance(1., 1., glass, l as f64, &layers)).collect();
+            let mean = rs.iter().sum::<f64>() / rs.len() as f64;
+            assert!(mean < 0.003, "glass {}: mean {}", glass, mean);
+            assert!(rs.iter().all(|r| *r < 0.015), "glass {}: {:?}", glass, rs);
+        }
+        let single = reflectance(1., 1., 1.52, 550., &Coating::Single.layers(1.52));
+        let multi = reflectance(1., 1., 1.52, 550., &Coating::Multi.layers(1.52));
+        assert!(multi < single / 4., "{} vs {}", multi, single);
     }
 
     #[test]
@@ -653,5 +764,33 @@ mod tests {
         assert!((up / far - 4.).abs() < 0.5, "{} {}", up, far);
         // Longer for red than for blue.
         assert!(six[(32 - 10) * w + 32].rgb.x > six[(32 - 10) * w + 32].rgb.z);
+    }
+
+    #[test]
+    fn test_curved_blades_fan_their_spikes() {
+        let (w, h) = (256, 256);
+        let mut pixels = vec![Color::black(); w * h];
+        pixels[128 * w + 128] = Color::new(1e8, 1e8, 1e8);
+        let img = LinearImage { width: w, height: h, pixels };
+        // Six blades cut to round an f/2 stop, at f/11: fans of 2 r sin(30°) / R = 0.18 rad.
+        let straight = flare(Some(6));
+        let open_stop = straight.lens.stop_diameter().unwrap() / 2.;
+        let stopped = |curvature: f64| {
+            let lens = straight.lens.clone().with_stop(2. * open_stop * 2. / 11.);
+            Flare { lens, blade_curvature: curvature, open_stop, ..straight.clone() }
+        };
+        let (flat, curved) = (stopped(0.).starburst_of(&img, 1., 1e-3), stopped(1.).starburst_of(&img, 1., 1e-3));
+        let total = |v: &[Color]| v.iter().map(|c| c.rgb.y).sum::<f64>();
+        // The same light, only spread.
+        let (tf, tc) = (total(&flat), total(&curved));
+        assert!((tc / tf - 1.).abs() < 0.01, "{} vs {}", tc, tf);
+        // Near the centre the fan is under a pixel wide, so the spikes agree; far out it is many
+        // pixels, so a curved blade's spike is fainter along its axis, falling as 1/θ³.
+        let (near, far) = ((128 - 4) * w + 128, (128 - 100) * w + 128);
+        assert!((curved[near].rgb.y / flat[near].rgb.y - 1.).abs() < 0.2, "{} {}", curved[near].rgb.y, flat[near].rgb.y);
+        let ratio = curved[far].rgb.y / flat[far].rgb.y;
+        assert!(ratio < 0.1, "far: curved {} straight {}", curved[far].rgb.y, flat[far].rgb.y);
+        let fall = curved[(128 - 50) * w + 128].rgb.y / curved[far].rgb.y;
+        assert!((fall - 8.).abs() < 2., "1/θ³ from 50 to 100 pixels: {}", fall);
     }
 }

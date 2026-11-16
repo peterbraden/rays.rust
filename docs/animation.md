@@ -136,6 +136,28 @@ Two things go wrong when one clock is far faster than the frame rate:
   its local time** (rule 2 below): heights, ice thickness, water and snow blended linearly.
   When the whole shot falls within one step, the step is simulated once and reused from the
   cache by every frame, at no further cost.
+
+  How far apart the checkpoints are depends on the clock's rate. Blending is linear, so a
+  glacier front that advances a long way between two checkpoints fades in rather than moving;
+  checkpoints must be a few frames apart at most. So within the shot, a simulation's
+  checkpoint interval is
+
+  ```
+  interval = min(step, largest power of two ≤ max_rate × frames_per_checkpoint / fps)
+  ```
+
+  in the object's unit, where `max_rate` is its clock's fastest rate anywhere in the animation
+  and `frames_per_checkpoint` defaults to 4. The interval comes from the scene file alone (the
+  clock over the whole animation), never from the frame being rendered, so every frame agrees
+  on it; and it is part of the cache key. Powers of two nest, so a finer grid's checkpoints
+  include a coarser one's.
+
+  The interval applies only from the shot's start onwards. The history before it (a million
+  years to the first frame's `time`) is simulated with the object's own `step`, as for a
+  still, and shared with stills in the cache. At 2 kyr/s and 24 fps a landscape checkpoints
+  every 256 years through the shot; at 1 s/s the whole shot is less than one interval and
+  every frame shows the still's state.
+
 - **Fast clocks strobe.** If a cloud field changes completely between frames (clouds at
   `"1 kyr/s"`), each frame shows unrelated weather, which flickers. That's the user's choice of
   rate, but the renderer warns when a clock advances an object by more than its correlation
@@ -228,10 +250,9 @@ What every time-dependent object must obey, and what the tests check:
    minute apart and whose structure moves, a blend would cross-fade rather than move; there
    the copy at the checkpoint before `τ` is advanced to `τ` and thrown away (deterministic,
    since it always starts from the same checkpoint).
-3. **Per-frame seeds.** Sample seeds are `hash(seed, frame)` by default, so noise is
-   decorrelated frame to frame (grain, not a fixed pattern); `"animation": {"lock_noise": true}`
-   keeps the scene's seed for every frame when a static pattern is wanted (it flickers less
-   at low sample counts). Procedural seeds (`"seed"` on clouds, trees, terrain) never change
+3. **Per-frame seeds.** Sample seeds are `hash(seed, frame)`, so noise is decorrelated frame
+   to frame: it reads as grain rather than a fixed pattern on the lens, and temporal filters
+   and denoisers prefer it. Procedural seeds (`"seed"` on clouds, trees, terrain) never change
    with the frame: the world is the same world.
 4. **Parallel reductions are order-independent** (max, or sums per fixed chunk, as
    `harris_cumulus` does now), so thread count never changes a result.
@@ -278,12 +299,6 @@ Once the clock exists, objects gain motion one at a time, each through its local
 
 ## Open questions
 
-- Lock noise across frames by default, or decorrelate? Decorrelated is closer to film, and
-  denoisers and temporal filters prefer it.
 - Is a keyframed value in video seconds or in the object's own clock? Video seconds is
   simpler to reason about across objects; the object's clock would let a glacier's keys (an
   ELA, say) be written in years.
-- How fine must the landscape's checkpoints be for smooth glaciation? Blending is linear in
-  ice thickness; a glacier front advancing far within one step would fade in rather than
-  advance. The step may need to follow the clock's rate (a few frames per checkpoint), which
-  would make it part of the cache key.

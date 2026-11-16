@@ -128,36 +128,36 @@ form, so any frame's local time is computed directly, without stepping through e
 
 Two things go wrong when one clock is far faster than the frame rate:
 
-- **Simulations land between their steps.** At 2 kyr/s and 24 fps a frame is 83 years, and a
-  landscape steps every 500 years: most frames fall inside a step. At 1 s/s a frame is
-  3 × 10⁻⁸ years, and every frame of a shot falls inside the same step. Taking a partial step
-  for each frame would be slow (a landscape step can take seconds) and pointless. Instead a
-  simulated object shows the state **interpolated between the two grid states either side of
-  its local time** (rule 2 below): heights, ice thickness, water and snow blended linearly.
-  When the whole shot falls within one step, the step is simulated once and reused from the
-  cache by every frame, at no further cost.
-
-  How far apart the checkpoints are depends on the clock's rate. Blending is linear, so a
-  glacier front that advances a long way between two checkpoints fades in rather than moving;
-  checkpoints must be a few frames apart at most. So within the shot, a simulation's
-  checkpoint interval is
+- **Every frame needs its own simulated state.** At 2 kyr/s and 24 fps a frame is 83 years,
+  and a landscape steps every 500 years: with checkpoints only at its steps, six frames would
+  share one state, or show blends of two, and a glacier front would fade in rather than
+  advance. So through the shot a simulation is checkpointed **at every frame**: its step
+  becomes
 
   ```
-  interval = min(step, largest power of two ≤ max_rate × frames_per_checkpoint / fps)
+  dt = min(step, the gap to the next frame's local time)
   ```
 
-  in the object's unit, where `max_rate` is its clock's fastest rate anywhere in the animation
-  and `frames_per_checkpoint` defaults to 4. The interval comes from the scene file alone (the
-  clock over the whole animation), never from the frame being rendered, so every frame agrees
-  on it; and it is part of the cache key. Powers of two nest, so a finer grid's checkpoints
-  include a coarser one's.
+  and each frame shows a state simulated to exactly its own local time, with no blending. The
+  frames' local times come from the scene file alone (the clock over the whole animation,
+  ramps included), so every frame agrees on the sequence of steps, wherever and in whatever
+  order it is rendered; the frame times are part of the cache key. Inside each gap the
+  simulation's own adaptive steps (the glaciers' `min_step`/`max_step`) run as now.
 
-  The interval applies only from the shot's start onwards. The history before it (a million
-  years to the first frame's `time`) is simulated with the object's own `step`, as for a
-  still, and shared with stills in the cache. At 2 kyr/s and 24 fps a landscape checkpoints
-  every 256 years through the shot; at 1 s/s the whole shot is less than one interval and
-  every frame shows the still's state.
+  The history before the shot (a million years to the first frame's `time`) is simulated with
+  the object's own `step`, as for a still, and shared with stills in the cache: only the shot
+  is stepped frame by frame.
 
+  At slow rates frames are closer together than anything the simulation can show: at 1 s/s
+  they are 10⁻⁹ years apart. Below the simulation's `min_interval` (for a landscape, a year by
+  default) frames are grouped onto a grid of that interval from the shot's start, and share a
+  state; when the whole shot is shorter than one interval, every frame shows the still's
+  state, at no extra cost.
+
+  Rendering frame N alone means simulating frames 0 to N of the shot first (or loading the
+  latest of them from the cache): a state at a frame depends on the states before it, and that
+  is inherent in simulating. Isolation means the result is the same either way, not that it is
+  free.
 - **Fast clocks strobe.** If a cloud field changes completely between frames (clouds at
   `"1 kyr/s"`), each frame shows unrelated weather, which flickers. That's the user's choice of
   rate, but the renderer warns when a clock advances an object by more than its correlation
@@ -236,20 +236,14 @@ What every time-dependent object must obey, and what the tests check:
 
 1. **No state carried between frames.** An object at time `t` is built from the scene file
    and `t` alone.
-2. **Simulations step on a fixed grid.** A simulation's step sequence must not depend on where
-   it is stopped. It advances only through whole intervals between canonical checkpoints, laid
-   from its time zero in its own unit (say every 60 s for clouds, every `step` years for a
-   landscape). Within an interval the adaptive steps are chosen as now (the glaciers'
-   `min_step`/`max_step`, the clouds' CFL step), but the interval always ends exactly on its
-   checkpoint. Cache entries are saved only at checkpoints. To show local time `τ`, the
-   checkpoints either side of `τ` are simulated (or loaded) and blended. Starting from a cache
-   or from scratch then follows the same steps to the same bits; the perturbation seed follows
+2. **Simulations step on a fixed sequence.** A simulation's step sequence must not depend on
+   where it is stopped. It advances only through whole intervals between canonical
+   checkpoints: before the shot, its own `step` from its time zero; through the shot, the
+   frames' local times (above). Within an interval the adaptive steps are chosen as now (the
+   glaciers' `min_step`/`max_step`, the clouds' CFL step), but the interval always ends exactly
+   on its checkpoint. Cache entries are saved only at checkpoints. Starting from a cache or
+   from scratch then follows the same steps to the same bits; the perturbation seed follows
    the step count, which is now the same either way.
-
-   Blending suits slow, smooth processes (landscapes, ice). For clouds, whose checkpoints are a
-   minute apart and whose structure moves, a blend would cross-fade rather than move; there
-   the copy at the checkpoint before `τ` is advanced to `τ` and thrown away (deterministic,
-   since it always starts from the same checkpoint).
 3. **Per-frame seeds.** Sample seeds are `hash(seed, frame)`, so noise is decorrelated frame
    to frame: it reads as grain rather than a fixed pattern on the lens, and temporal filters
    and denoisers prefer it. Procedural seeds (`"seed"` on clouds, trees, terrain) never change
@@ -288,8 +282,8 @@ Once the clock exists, objects gain motion one at a time, each through its local
    key. `animate.py` uses `--frame`.
 2. Clocks: rates with units, `"clocks"` and `"clock"`, each object's native unit, resolved onto
    objects' `"time"`; then keyed rates (ramps) with closed-form `elapsed`.
-3. Simulations on the checkpoint grid (`harris_cumulus`, `landscape` and its glaciers), with
-   blending between checkpoints for the landscape; a test that a frame from cache equals one
+3. Simulations checkpointed at the shot's frames (`harris_cumulus`, `landscape` and its
+   glaciers), the history before it at the still's steps; a test that a frame from cache equals one
    from scratch. A glaciation demo: a valley through one glacial cycle at a few kyr/s.
 4. Keyframed values (the JSON pass), with transforms resolved into `"motion"`.
 5. Camera paths: `Spline`, arc-length speed, `lookat` modes, banking, `Placement::Path`.

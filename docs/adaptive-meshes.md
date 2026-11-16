@@ -72,20 +72,39 @@ species, 6 variants each (84 distinct trees, 50,000 to 400,000 triangles apiece)
 Rendered at 600 × 350 with 64 samples per pixel, on 4 cores, against the same scene with
 `"lod": false`:
 
-| | Triangles built | Triangles placed | Peak memory | Render | Mean FLIP vs full |
-|---|---|---|---|---|---|
-| Full detail | 16.8 M | 24.7 G | 4.2 GB | 216 s | 0.035 (another seed: the noise) |
-| `"pixels": 0.5` | 9.7 M | 0.69 G | 4.25 GB | 140 s | 0.052 |
-| `"pixels": 1` | 2.6 M | 0.16 G | 1.84 GB | 84 s | 0.057 |
+| | Triangles built | Triangles placed | Peak memory | Build | Render | Mean FLIP vs full |
+|---|---|---|---|---|---|---|
+| Full detail | 16.8 M | 24.7 G | 3.9 GB | 57 s | 288 s | 0.035 (another seed: the noise) |
+| `"pixels": 0.5` | 9.7 M | 0.69 G | 1.37 GB | 64 s | 137 s | 0.051 |
+| `"pixels": 1` | 2.6 M | 0.16 G | 0.67 GB | 61 s | 113 s | 0.057 |
 
-At one pixel, rendering is 2.6 times faster and needs less than half the memory. The difference
-from full detail is a little above the noise between two full renders, spread evenly over the
-trees, with no seams between levels and no change of hue; but the forest is about 3% brighter
-(in displayed values, 1-2% far off, 3-4% near). The likeliest cause is what cards can't keep:
-a cluster's leaves shade one another, while its card is one sunlit layer; thin twigs that
-vertex clustering removes may add to it. Storing each card's self-shadowing, or making the
-coarsest levels volumes as Loubet and Neyret do, would be the next step.
+At one pixel, rendering is 2.5 times faster in a sixth of the memory. The difference from full
+detail is a little above the noise between two full renders, spread evenly over the trees, with
+no seams between levels and no change of hue; but the forest is about 3% brighter (in displayed
+values, 1-2% far off, 3-4% near). The likeliest cause is what cards can't keep: a cluster's
+leaves shade one another, while its card is one sunlit layer; thin twigs that vertex clustering
+removes may add to it. Storing each card's self-shadowing, or making the coarsest levels volumes
+as Loubet and Neyret do, would be the next step.
 
-Most of the memory left is the full trees, grown once each to be simplified, and building
-(about 95 s, the same either way) is mostly growing them and placing the trees; with `"lod"`,
-many more variants cost little, as distant ones are kept only as cards.
+## Memory
+
+A ray tracer keeps every tree it may hit for the whole render, so what's kept must be small:
+
+- Trees are grown one at a time (their levels in parallel), each dropped once its levels are
+  made, so only one is ever held in full. Growing them all in parallel held four at once and
+  left the heap fragmented: a quarter more memory, for a build about ten seconds faster.
+- Cards are 40 bytes, in single precision, in one array per level (`CardSet`), not each its own
+  allocation; a leaf kept as it is, a cluster of one, keeps its face in the card. Each card's
+  constituents are 12 bytes, normals octahedrally encoded.
+- A card is cheaper to test than a BVH node to visit, and smaller, so a card set's BVH has
+  leaves of up to 4 cards (`Bvh::build_with_leaves`): without that, its nodes outweighed the
+  cards three to one.
+- A placed tree (`forest::Placed`) is one instance of a model holding all its parts, about 60
+  bytes (position, turn, scale and mirroring), not a general transform per part at 368.
+
+On the forest above, these took the peak from 1.8 GB to 0.67 GB. Of what's left, about 235 MB
+is constituents, 95 MB cards and 90 MB their BVHs.
+
+Building is mostly placing the trees (about 50 s: 35 million darts, 10 million of them
+evaluating noise fields), not growing them (about 12 s); with `"lod"`, many more variants
+cost little, as distant ones are kept only as cards.

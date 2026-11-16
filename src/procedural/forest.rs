@@ -30,7 +30,6 @@ use crate::intersection::{Intersection, RawIntersection};
 use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::material::texture::Medium;
 use crate::scene::Scene;
-use std::collections::HashMap;
 
 /// Bits of a hit's `face` left for the part's own use, eg. the leaf's number; the bits above
 /// them say which part of a multi-part object was hit.
@@ -90,6 +89,126 @@ impl MaterialModel for PartsMaterial {
         let part = (intersection.face >> PART_SHIFT) as usize;
         let own = Intersection { face: intersection.face & ((1 << PART_SHIFT) - 1), ..*intersection };
         self.parts[part].material_at(intersection.point).scatter(r, &own, s)
+    }
+}
+
+/// A geometry shared by every placement of a tree at one level of detail: all its parts, each
+/// numbered (`PartOf`).
+pub type Model = std::sync::Arc<dyn Geometry + Sync + Send>;
+
+/// A tree placed in a forest: its model, turned `yaw` about the vertical (as cosine and sine),
+/// scaled by `scale`, mirrored in x if `mirror`, and moved to `at`. A forest places hundreds of
+/// thousands of trees, so this keeps to what a forest's placement needs, about 60 bytes, where
+/// a general instancing `Transform` keeps a pair of 4x4 matrices.
+pub struct Placed {
+    pub model: Model,
+    pub at: Vector3<f64>,
+    pub cos: f64,
+    pub sin: f64,
+    pub scale: f64,
+    pub mirror: bool,
+}
+
+impl Placed {
+    pub fn new(model: Model, at: Vector3<f64>, yaw_degrees: f64, scale: f64, mirror: bool) -> Placed {
+        let yaw = yaw_degrees.to_radians();
+        Placed { model, at, cos: yaw.cos(), sin: yaw.sin(), scale, mirror }
+    }
+
+    fn sx(&self) -> f64 {
+        if self.mirror { -1. } else { 1. }
+    }
+
+    /// A world vector in the model's frame: unturned, unscaled, unmirrored.
+    fn to_local(&self, v: &Vector3<f64>) -> Vector3<f64> {
+        let (x, z) = (self.cos * v.x - self.sin * v.z, self.sin * v.x + self.cos * v.z);
+        Vector3::new(self.sx() * x, v.y, z) / self.scale
+    }
+
+    /// A point of the model's in the world.
+    fn to_world(&self, p: &Vector3<f64>) -> Vector3<f64> {
+        let (x, y, z) = (self.sx() * p.x * self.scale, p.y * self.scale, p.z * self.scale);
+        self.at + Vector3::new(self.cos * x + self.sin * z, y, -self.sin * x + self.cos * z)
+    }
+
+    /// A normal of the model's in the world: the scale is uniform, so only turned and mirrored.
+    fn normal_to_world(&self, n: &Vector3<f64>) -> Vector3<f64> {
+        let x = self.sx() * n.x;
+        Vector3::new(self.cos * x + self.sin * n.z, n.y, -self.sin * x + self.cos * n.z).normalize()
+    }
+
+    fn local_ray(&self, r: &Ray) -> Ray {
+        Ray { ro: self.to_local(&(r.ro - self.at)), rd: self.to_local(&r.rd) }
+    }
+
+    fn hit_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
+        // Distances along the ray shrink with the model, its scale being uniform.
+        self.model.intersects_range(&self.local_ray(r), min / self.scale, max / self.scale).map(|h| RawIntersection {
+            dist: h.dist * self.scale,
+            point: self.to_world(&h.point),
+            normal: self.normal_to_world(&h.normal),
+            ..h
+        })
+    }
+
+    pub fn bounds(&self) -> BBox {
+        let b = self.model.bounds();
+        let mut out = BBox::empty();
+        for k in 0 .. 8 {
+            let corner = Vector3::new(
+                if k & 1 == 0 { b.min.x } else { b.max.x },
+                if k & 2 == 0 { b.min.y } else { b.max.y },
+                if k & 4 == 0 { b.min.z } else { b.max.z });
+            out = out.union_point(&self.to_world(&corner));
+        }
+        out
+    }
+}
+
+/// The trees of a forest, stored in one array behind a BVH (`crate::bvh::Bvh`).
+pub struct Stand {
+    bvh: crate::bvh::Bvh,
+    trees: Vec<Placed>,
+    primitives: u64,
+}
+
+impl Stand {
+    pub fn new(trees: Vec<Placed>) -> Stand {
+        let primitives = trees.iter().map(|t| t.model.primitives()).sum();
+        let (bvh, trees) = crate::bvh::Bvh::build(trees, Placed::bounds);
+        Stand { bvh, trees, primitives }
+    }
+}
+
+impl Geometry for Stand {
+    fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
+        self.intersects_range(r, 0., f64::INFINITY)
+    }
+
+    fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
+        self.intersects_range(r, min, f64::INFINITY)
+    }
+
+    fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
+        if self.trees.is_empty() {
+            return None;
+        }
+        self.bvh.nearest(r, min, max, |i, best| self.trees[i].hit_range(r, min, best)).map(|(_, x)| x)
+    }
+
+    fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
+        !self.trees.is_empty() && self.bvh.any_hit(r, min, max, |i| {
+            let t = &self.trees[i];
+            t.model.occludes(&t.local_ray(r), min / t.scale, max / t.scale)
+        })
+    }
+
+    fn bounds(&self) -> BBox {
+        self.bvh.bounds()
+    }
+
+    fn primitives(&self) -> u64 {
+        self.primitives
     }
 }
 
@@ -199,8 +318,17 @@ pub fn place(layout: &ForestLayout, species: &[ForestSpecies], seed: u64, surfac
     // as wide as the largest such sum means only adjacent cells need checking.
     let radius = |s: &ForestSpecies, scale: f64| 0.5 * layout.spacing * s.spacing * scale;
     let reach = species.iter().map(|s| 2. * radius(s, 1. + s.scale_v.abs())).fold(0., f64::max).max(1e-9);
-    let cell = |x: f64, z: f64| ((x / reach).floor() as i64, (z / reach).floor() as i64);
-    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    // The cells, over the area and one more each side, in an array: tens of millions of darts
+    // look up nine cells each. Cells wider than `reach` work as well, so a huge area with tiny
+    // spacing is kept to a few million.
+    let (lo, hi) = (layout.min.inf(&layout.max), layout.min.sup(&layout.max));
+    let side = reach.max(((hi.x - lo.x) * (hi.y - lo.y) / 4e6).sqrt());
+    let (nx, nz) = (((hi.x - lo.x) / side).floor() as i64 + 3, ((hi.y - lo.y) / side).floor() as i64 + 3);
+    let cell = |x: f64, z: f64| (((x - lo.x) / side).floor() as i64 + 1, ((z - lo.y) / side).floor() as i64 + 1);
+    let mut grid: Vec<Vec<usize>> = vec![vec![]; (nx * nz) as usize];
+    let at = |(i, j): (i64, i64)| (0 .. nx).contains(&i).then_some(()).and((0 .. nz).contains(&j).then_some((j * nx + i) as usize));
+    // The smallest radius any tree can have.
+    let smallest = species.iter().map(|s| radius(s, (1. - s.scale_v.abs()).max(0.))).fold(f64::INFINITY, f64::min);
     let mut placed: Vec<Placement> = vec![];
     let mut radii: Vec<f64> = vec![];
 
@@ -217,6 +345,21 @@ pub fn place(layout: &ForestLayout, species: &[ForestSpecies], seed: u64, surfac
     for _ in 0 .. darts {
         let (x, z) = (layout.min.x + rng.next_f64() * size.x, layout.min.y + rng.next_f64() * size.y);
         let (pick, spread, yaw, mirror, which) = (rng.next_f64(), rng.next_f64() * 2. - 1., rng.next_f64() * 360., rng.next_f64() < 0.5, rng.next_f64());
+
+        // Most darts land too near a tree already placed: reject those first, before the noise
+        // fields of the clearings and species, if they're too near even at the smallest radius
+        // any tree can have. A rejected dart changes nothing, so the same trees are kept as by
+        // testing at the species' own radius alone.
+        let (cx, cz) = cell(x, z);
+        let near = |r: f64| (cx - 1 ..= cx + 1).any(|i| (cz - 1 ..= cz + 1).any(|j| {
+            at((i, j)).is_some_and(|k| grid[k].iter().any(|&n| {
+                let q = placed[n].position;
+                (q.x - x).hypot(q.z - z) < r + radii[n]
+            }))
+        }));
+        if near(smallest) {
+            continue;
+        }
         if field(&noise, clearing_at, layout.patch_size, x, z) < threshold {
             continue;
         }
@@ -240,14 +383,7 @@ pub fn place(layout: &ForestLayout, species: &[ForestSpecies], seed: u64, surfac
         let scale = 1. + spread * s.scale_v;
         let r = radius(s, scale);
 
-        let (cx, cz) = cell(x, z);
-        let crowded = (cx - 1 ..= cx + 1).any(|i| (cz - 1 ..= cz + 1).any(|j| {
-            grid.get(&(i, j)).is_some_and(|near| near.iter().any(|&n| {
-                let q = placed[n].position;
-                (q.x - x).hypot(q.z - z) < r + radii[n]
-            }))
-        }));
-        if crowded {
+        if near(r) {
             continue;
         }
 
@@ -261,7 +397,7 @@ pub fn place(layout: &ForestLayout, species: &[ForestSpecies], seed: u64, surfac
             continue;
         }
 
-        grid.entry((cx, cz)).or_default().push(placed.len());
+        grid[at((cx, cz)).expect("a tree within the area")].push(placed.len());
         radii.push(r);
         placed.push(Placement {
             species: k,
@@ -288,6 +424,38 @@ mod tests {
 
     fn one(spacing: f64, scale_v: f64) -> ForestSpecies {
         ForestSpecies { weight: 1., spacing, scale_v }
+    }
+
+    #[test]
+    fn test_placed_trees_match_their_transforms() {
+        use crate::shapes::transform::Transform;
+        use crate::na::Rotation3;
+        let model: Model = std::sync::Arc::new(Sphere::new(Vector3::new(1., 2., 0.5), 0.8));
+        let mut rng = Pcg32::new(1, 1);
+        for _ in 0 .. 50 {
+            let (at, yaw, scale, mirror) = (Vector3::new(rng.next_f64() * 20., rng.next_f64(), rng.next_f64() * 20.),
+                rng.next_f64() * 360., 0.5 + rng.next_f64(), rng.next_f64() < 0.5);
+            let placed = Placed::new(model.clone(), at, yaw, scale, mirror);
+            let transform = Transform::from_parts(model.clone(), at, Rotation3::from_axis_angle(&Vector3::y_axis(), yaw.to_radians()),
+                Vector3::new(if mirror { -scale } else { scale }, scale, scale));
+            let stand = Stand::new(vec![Placed::new(model.clone(), at, yaw, scale, mirror)]);
+            let (a, b) = (placed.bounds(), transform.bounds());
+            assert!((a.min - b.min).norm() < 1e-6 && (a.max - b.max).norm() < 1e-6, "{:?} {:?}", a, b);
+            for _ in 0 .. 20 {
+                let target = (a.min.coords + a.max.coords) * 0.5 + Vector3::new(rng.next_f64() - 0.5, rng.next_f64() - 0.5, rng.next_f64() - 0.5) * 2.;
+                let ro = target + Vector3::new(rng.next_f64() - 0.5, rng.next_f64(), rng.next_f64() - 0.5).normalize() * 30.;
+                let r = Ray { ro, rd: (target - ro) * 0.7 };
+                match (stand.intersects(&r), transform.intersects(&r)) {
+                    (Some(x), Some(y)) => {
+                        assert!((x.dist - y.dist).abs() < 1e-9 && (x.point - y.point).norm() < 1e-9, "{:?} {:?}", x, y);
+                        assert!((x.normal - y.normal.normalize()).norm() < 1e-9, "{:?} {:?}", x.normal, y.normal);
+                        assert!(stand.occludes(&r, 0., x.dist + 1e-6) && !stand.occludes(&r, 0., x.dist - 1e-6));
+                    },
+                    (None, None) => assert!(!stand.occludes(&r, 0., f64::INFINITY)),
+                    (x, y) => panic!("{:?} {:?}", x, y),
+                }
+            }
+        }
     }
 
     #[test]

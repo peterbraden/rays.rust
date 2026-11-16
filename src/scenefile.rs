@@ -886,67 +886,73 @@ impl SceneFile {
             }
         }
 
-        // Grow them in parallel; each is placed at the levels of detail its placements need.
-        // Each placement's level, position, turn and scale; each part's geometry by level.
-        type Place = (usize, Vector3<f64>, Rotation3<f64>, Vector3<f64>);
+        // Grow them one at a time, each made at the levels of detail its placements need (in
+        // parallel), so only one tree is ever held in full: what's kept is far smaller.
+        // Each placement's level, position, yaw and scale; each part's geometry by level.
+        type Place = (usize, Vector3<f64>, f64, f64, bool);
         type Levels = Vec<(usize, SharedGeometry)>;
         type Grown = (Vec<(Levels, Box<dyn Medium + Sync + Send>)>, Vec<Place>);
-        let grown: Vec<Grown> = distinct.par_iter().map(|(k, here, p, tree_seed)| {
+        let grown: Vec<Grown> = distinct.iter().map(|(k, here, p, tree_seed)| {
             let entry = &entries[*k];
             // On a slope, sink the trunk so its downhill side meets the ground.
             let base_radius = p.scale * p.stems[0].length * p.ratio * p.trunk_scale * (1. + 0.99 * p.flare);
             let (details, base, bounds) = SceneFile::tree_details(entry, p, *tree_seed, Vector3::zeros(), materials, media);
             let places: Vec<Place> = here.iter().map(|t| {
                 let sink = base_radius * t.scale * (t.slope.to_radians().tan() + 0.05);
-                let mirror = if t.mirror { -1. } else { 1. };
                 let at = t.position - Vector3::new(0., sink, 0.);
                 let level = lod.as_ref().map_or(0, |l| l.level(&bounds, at, t.scale, base));
-                (level, at, Rotation3::from_axis_angle(&Vector3::y_axis(), t.yaw.to_radians()),
-                 Vector3::new(mirror * t.scale, t.scale, t.scale))
+                (level, at, t.yaw, t.scale, t.mirror)
             }).collect();
             let mut levels: Vec<usize> = places.iter().map(|p| p.0).collect();
             levels.sort_unstable();
             levels.dedup();
-            let parts = details.into_iter().map(|(detail, medium)| {
-                let geometries = levels.iter().map(|&l| (l, detail.geometry(crate::shapes::lod::level_size(base, l)))).collect();
+            let parts = details.into_par_iter().map(|(detail, medium)| {
+                let geometries = levels.par_iter().map(|&l| (l, detail.geometry(crate::shapes::lod::level_size(base, l)))).collect();
                 (geometries, medium)
             }).collect();
             (parts, places)
         }).collect();
 
-        // Every part of every placed tree, in one structure, each part numbered for its medium.
-        let mut instances: Vec<Arc<forest::PartOf<Transform>>> = vec![];
+        // Each tree at each level is one model of all its parts, each numbered for its medium,
+        // placed as many times as there are trees at that level; the whole forest is one
+        // object, so a ray searches one structure and stops at the first tree it meets.
+        let mut trees: Vec<forest::Placed> = vec![];
         let mut parts: Vec<Box<dyn Medium + Sync + Send>> = vec![];
         let mut per_level: Vec<usize> = vec![];
         let (mut primitives, mut built) = (0u64, 0u64);
         for (tree_parts, places) in grown {
+            let mut models: std::collections::BTreeMap<usize, Vec<Arc<forest::PartOf<SharedGeometry>>>> = Default::default();
             for (geometries, medium) in tree_parts {
                 let part = parts.len() as u32;
                 assert!(part < 1 << (32 - forest::PART_SHIFT), "too many distinct tree parts in a forest");
                 // Detail coarse enough may simplify away, eg. thin dead branches.
-                for (level, geometry) in geometries.iter().filter(|(_, g)| g.primitives() > 0) {
-                    built += geometry.primitives();
-                    for (_, at, turn, scale) in places.iter().filter(|p| p.0 == *level) {
-                        primitives += geometry.primitives();
-                        instances.push(Arc::new(forest::PartOf { item: Transform::from_parts(geometry.clone(), *at, *turn, *scale), part }));
-                    }
+                for (level, geometry) in geometries.into_iter().filter(|(_, g)| g.primitives() > 0) {
+                    models.entry(level).or_default().push(Arc::new(forest::PartOf { item: geometry, part }));
                 }
                 parts.push(medium);
             }
-            for (level, ..) in &places {
-                if per_level.len() <= *level {
+            let models: std::collections::BTreeMap<usize, forest::Model> = models.into_iter()
+                .map(|(level, items)| (level, Arc::new(GeometrySet::new(&items)) as forest::Model)).collect();
+            built += models.values().map(|m| m.primitives()).sum::<u64>();
+            for (level, at, yaw, scale, mirror) in places {
+                if per_level.len() <= level {
                     per_level.resize(level + 1, 0);
                 }
-                per_level[*level] += 1;
+                per_level[level] += 1;
+                if let Some(model) = models.get(&level) {
+                    primitives += model.primitives();
+                    trees.push(forest::Placed::new(model.clone(), at, yaw, scale, mirror));
+                }
             }
         }
         println!("Forest: {} trees, from {} distinct; {} primitives built, {} placed{}", placements.len(), distinct.len(), built, primitives,
             if lod.is_some() { format!("; trees at each level of detail: {:?}", per_level) } else { String::new() });
-        if instances.is_empty() {
+        if trees.is_empty() {
             return vec![];
         }
+        let stand = forest::Stand::new(trees);
         vec![Arc::new(SceneObject {
-            geometry: Box::new(GeometrySet::new(&instances)),
+            geometry: Box::new(stand),
             medium: Box::new(Solid { m: Box::new(forest::PartsMaterial { parts }) }),
         })]
     }

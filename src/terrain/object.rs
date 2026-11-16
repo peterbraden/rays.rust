@@ -266,6 +266,24 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
             Some(t)
         }
     };
+    // The climate, from latitude: on by default at full scale, `false` for none, or overrides
+    // of `ClimateParams` by field name.
+    p.climate = match &o["climate"] {
+        Value::Bool(false) => None,
+        Value::Null if o.get("scale").is_some() => None,
+        v => {
+            let mut c = crate::terrain::climate::ClimateParams::default();
+            let fields: [(&str, &mut f64); 6] = [
+                ("tilt", &mut c.tilt), ("solar", &mut c.solar), ("hadley", &mut c.hadley),
+                ("recycling", &mut c.recycling), ("orographic", &mut c.orographic), ("warming", &mut c.warming),
+            ];
+            for (k, f) in fields {
+                if let Some(x) = v.get(k).and_then(|x| x.as_f64()) { *f = x; }
+            }
+            if let Some(x) = v.get("cells").and_then(|x| x.as_u64()) { c.cells = x as usize; }
+            Some(c)
+        }
+    };
     p.sediment_erodibility = number(o, "sediment_erodibility", p.sediment_erodibility);
     p.lava_erodibility = number(o, "lava_erodibility", p.lava_erodibility);
     p.volcano = match &o["volcanoes"] {
@@ -498,8 +516,9 @@ fn full_scale_landscape(o: &Value, params: TerrainParams) -> SceneObject {
     let relief = Relief::new(layers.clone(), &planet, radius, p.roughness, finest);
     let view = Viewpoint { location: SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.)) };
     let geometry = scenery::mesh(&relief, &frame, &view, &p);
-    let climate = params.glacier.clone().unwrap_or_default();
-    let ground = Ground::new(layers, climate, time, params.planet.seed, frame, &p);
+    let climate = params.climate.as_ref().map(|c| crate::terrain::climate::climate(c, &planet));
+    if let (Some(path), Some(c)) = (o["climate_map"].as_str(), &climate) { crate::terrain::map::write_climate_map(&planet, c, path, 2048); }
+    let ground = Ground::new(layers, climate, params.glacier.clone().unwrap_or_default(), time, params.planet.seed, frame, &p);
     println!("Landscape: {} triangles in {:.1?}", geometry.primitives(), start.elapsed());
     SceneObject { geometry: Box::new(geometry), medium: Box::new(LandscapeMedium::new(ground)) }
 }

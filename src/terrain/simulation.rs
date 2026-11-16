@@ -62,6 +62,7 @@ use crate::terrain::volcano::{erupt, vents, Vent, VolcanoParams};
 use crate::terrain::marine::{self, MarineParams};
 use crate::terrain::channel::{ChannelParams, Rivers};
 use crate::terrain::fluvial::LAKE;
+use std::f64::consts::TAU;
 
 #[derive(Clone, Debug)]
 pub struct TerrainParams {
@@ -75,6 +76,9 @@ pub struct TerrainParams {
     pub marine: Option<MarineParams>,
     /// None for no meandering rivers (they are only modelled on patches).
     pub channels: Option<ChannelParams>,
+    /// The climate, from latitude (`climate`): it sets the glaciers' snowline cell by cell. None
+    /// for the glaciers' own snowline by latitude.
+    pub climate: Option<crate::terrain::climate::ClimateParams>,
     /// Erodibility of sediment, relative to average bedrock.
     pub sediment_erodibility: f64,
     /// Erodibility of volcanic rock, relative to average bedrock.
@@ -92,6 +96,7 @@ impl Default for TerrainParams {
             volcano: Some(VolcanoParams::default()),
             marine: Some(MarineParams::default()),
             channels: Some(ChannelParams::default()),
+            climate: None,
             sediment_erodibility: 3.,
             lava_erodibility: 0.3,
             step: 100.,
@@ -143,6 +148,8 @@ pub struct Terrain {
     pub boundary_rate: Vec<f64>,
     /// Meandering rivers and ox-bow lakes.
     pub rivers: Rivers,
+    /// Each cell's equilibrium line altitude in today's climate, if there is a climate model.
+    pub ela: Option<Vec<f64>>,
 }
 
 impl Terrain {
@@ -157,8 +164,12 @@ impl Terrain {
         let n = domain.len();
         let sea = bed.iter().map(|&b| b < 0.).collect();
         let vents = match &params.volcano { Some(v) => vents(&planet, &domain, v), None => vec![] };
+        let ela = params.climate.as_ref().map(|c| {
+            let climate = crate::terrain::climate::climate(c, &planet);
+            domain.dirs.iter().map(|d| climate.local(d, 0.).snowline(0.)).collect()
+        });
         let mut t = Terrain {
-            domain, params, planet, time: 0., bed, uplift, latitude, sea, vents, rivers: Rivers::default(),
+            domain, params, planet, time: 0., ela, bed, uplift, latitude, sea, vents, rivers: Rivers::default(),
             sediment: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
             ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
@@ -288,7 +299,13 @@ impl Terrain {
         while done < ice_time * (1. - 1e-9) {
             let t = self.time + done * g.acceleration;
             let balance: Vec<f64> = (0..n).map(|i| {
-                g.mass_balance(self.bed[i] + self.ice[i], g.ela(self.latitude[i], t))
+                let ela = match &self.ela {
+                    // Today's climate is an interglacial: the glacial cycle lowers the snowline
+                    // from there.
+                    Some(e) => e[i] + g.ela_amplitude * ((TAU * t / g.period).cos() - 1.),
+                    None => g.ela(self.latitude[i], t),
+                };
+                g.mass_balance(self.bed[i] + self.ice[i], ela)
             }).collect();
             // Nothing to do while it is too warm for ice anywhere.
             if balance.iter().all(|&m| m <= 0.) && self.ice.iter().all(|&h| h <= 0.) { break; }

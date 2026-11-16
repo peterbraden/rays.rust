@@ -1,6 +1,6 @@
 {
-  "width": 960,
-  "height": 540,
+  "width": 800,
+  "height": 800,
   "supersamples": 16,
   "samples_per_chunk": 4,
   "max_depth": 6,
@@ -12,12 +12,12 @@
   "camera": {
     "location": [
       0,
-      2500000,
-      2600000
+      9640000,
+      15000000
     ],
     "lookat": [
       0,
-      -300000,
+      -6360000,
       0
     ],
     "up": [
@@ -25,7 +25,7 @@
       1,
       0
     ],
-    "angle": 0.9
+    "angle": 0.62
   },
   "sun": {
     "intensity": 5
@@ -37,10 +37,12 @@
       "planet": false,
       "levels": [],
       "domain": {
-        "lat": -27,
-        "lon": -135
+        "lat": -5,
+        "lon": -105
       },
-      "planet_map": "demo/scenes/landscape-planet-map.png"
+      "globe": 256,
+      "planet_map": "demo/scenes/landscape-planet-map.png",
+      "climate_map": "demo/scenes/landscape-climate-map.png"
     },
     {
       "type": "ocean",
@@ -52,9 +54,9 @@
     {
       "type": "skysphere",
       "sun_direction": [
-        -0.8,
-        0.5,
-        0.3
+        -0.5,
+        0.6,
+        0.6
       ]
     }
   ]

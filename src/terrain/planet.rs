@@ -194,6 +194,16 @@ impl Planet {
         e + 1400. * coast * (4. * m * (1. - m)).min(1.)
     }
 
+    /// Elevation at the scale of regions (hundreds of kilometres), metres: the crust's, or the
+    /// continents and mountain belts without their ridges. For the climate, whose winds rise
+    /// over ranges, not over every ridge.
+    pub fn regional_elevation(&self, d: &Vector3<f64>) -> f64 {
+        if let Some(c) = &self.crust { return self.crust_elevation(c, d); }
+        let c = self.continent(d);
+        let base = if c >= 0. { 1500. * c } else { -4500. * (-6. * c).tanh() };
+        base + self.params.mountain_height * self.orogeny(d) * 0.5
+    }
+
     /// Positive on land, negative at sea; roughly in [-1, 1].
     pub fn continent(&self, d: &Vector3<f64>) -> f64 {
         if let Some(c) = &self.crust {

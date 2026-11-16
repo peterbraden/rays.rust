@@ -183,6 +183,33 @@ pub fn write_planet_map(planet: &crate::terrain::planet::Planet, path: &str, wid
     img.save(path).unwrap();
 }
 
+
+/// Write an equirectangular map of a planet's climate to `path`, `width` pixels wide: the land
+/// coloured by biome (brightened, as albedos are dark to the eye), the sea by its depth.
+pub fn write_climate_map(planet: &crate::terrain::planet::Planet, climate: &crate::terrain::climate::Climate, path: &str, width: usize) {
+    use crate::terrain::climate::Biome;
+    use rayon::prelude::*;
+    let (w, h) = (width, width / 2);
+    let pixel = planet.params.radius * std::f64::consts::PI / h as f64;
+    let pixels: Vec<[u8; 3]> = (0..w * h).into_par_iter().map(|k| {
+        let lon = ((k % w) as f64 + 0.5) / w as f64 * std::f64::consts::TAU - std::f64::consts::PI;
+        let lat = std::f64::consts::FRAC_PI_2 - ((k / w) as f64 + 0.5) / h as f64 * std::f64::consts::PI;
+        let d = Vector3::new(lat.cos() * lon.cos(), lat.sin(), -lat.cos() * lon.sin());
+        let e = planet.elevation(&d, pixel);
+        let c = if e < 0. {
+            mix([0.25, 0.4, 0.6], [0.03, 0.08, 0.25], (-e / 5000.).powf(0.6))
+        } else {
+            let a = Biome::of(&climate.local(&d, e)).albedo();
+            // Display-encoded and brightened, so the darkest forests still show.
+            a.map(|v| (v * 2.2).min(1.).powf(1. / 2.2))
+        };
+        c.map(|v| (v.clamp(0., 1.) * 255.) as u8)
+    }).collect();
+    let mut img = image::RgbImage::new(w as u32, h as u32);
+    for (k, c) in pixels.into_iter().enumerate() { img.put_pixel((k % w) as u32, (k / w) as u32, image::Rgb(c)); }
+    img.save(path).unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

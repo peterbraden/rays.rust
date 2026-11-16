@@ -70,6 +70,7 @@ use crate::scene::Scene;
 use crate::shapes::mesh::{IndexedMesh, SmoothMesh};
 use crate::terrain::channel::{point_cell, WaterLines};
 use crate::terrain::domain::{sphere_dir, Domain, Layout};
+use crate::terrain::climate::{Biome, Climate};
 use crate::terrain::glacier::GlacierParams;
 use crate::terrain::map;
 use crate::terrain::planet::Planet;
@@ -420,6 +421,8 @@ pub fn mesh(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams)
     // Out to the horizon, and the mountains beyond it, or a quarter of the way round.
     let reach = ((2. * relief.radius * (cam_h.max(0.) + 9000.)).sqrt() + (2. * relief.radius * 9000f64).sqrt())
         .min(0.3 * relief.radius);
+    // From far off, the globe's mesh is fine enough: the rings stay within reach.
+    let s0 = s0.min(reach / half as f64);
     let (cx, cz) = frame.tangent(&foot);
     let mut vertices: Vec<Vertex> = vec![];
     let mut triangles: Vec<[usize; 3]> = vec![];
@@ -523,10 +526,12 @@ pub fn mesh(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams)
 pub struct Ground {
     frame: Frame,
     layers: Arc<Vec<Layer>>,
-    /// A fixed snowline and treeline, metres; else by latitude from the climate.
+    /// A fixed snowline and treeline, metres; else from the climate.
     snowline: Option<f64>,
     treeline: Option<f64>,
-    climate: GlacierParams,
+    /// The climate model; without one, the glaciers' snowline by latitude, at `time`.
+    climate: Option<Arc<Climate>>,
+    glaciers: GlacierParams,
     time: f64,
     noise: PerlinNoise,
 }
@@ -547,23 +552,31 @@ const BASALT: [f64; 3] = [0.06, 0.055, 0.05];
 fn colour(c: [f64; 3]) -> Color { Color::new(c[0], c[1], c[2]) }
 
 impl Ground {
-    /// The climate is that of glacier parameters `climate` at `time` years.
-    pub fn new(layers: Arc<Vec<Layer>>, climate: GlacierParams, time: f64, seed: u64, frame: Frame, p: &SceneryParams) -> Ground {
+    pub fn new(layers: Arc<Vec<Layer>>, climate: Option<Arc<Climate>>, glaciers: GlacierParams, time: f64, seed: u64, frame: Frame, p: &SceneryParams) -> Ground {
         Ground {
-            frame, layers, snowline: p.snowline, treeline: p.treeline, climate, time,
+            frame, layers, snowline: p.snowline, treeline: p.treeline, climate, glaciers, time,
             noise: PerlinNoise::shuffled(seed.wrapping_add(77)),
         }
     }
 
-    /// The snowline at `d`: the glaciers' equilibrium line at its latitude.
+    /// The snowline at `d`, metres: where summer stays below freezing, or the glaciers'
+    /// equilibrium line by latitude.
     pub fn snowline(&self, d: &Vector3<f64>) -> f64 {
-        self.snowline.unwrap_or_else(|| self.climate.ela(d.y.clamp(-1., 1.).asin(), self.time))
+        if let Some(s) = self.snowline { return s; }
+        match &self.climate {
+            Some(c) => c.local(d, 0.).snowline(0.),
+            None => self.glaciers.ela(d.y.clamp(-1., 1.).asin(), self.time),
+        }
     }
 
-    /// The treeline at `d`: some 800 m below the snowline (as in the Alps, about 2100 and
-    /// 2900 m).
+    /// The treeline at `d`, metres: where the warmest month reaches 10 °C, or 800 m below the
+    /// snowline.
     pub fn treeline(&self, d: &Vector3<f64>) -> f64 {
-        self.treeline.unwrap_or_else(|| self.snowline(d) - 800.)
+        if let Some(t) = self.treeline { return t; }
+        match &self.climate {
+            Some(c) => c.local(d, 0.).treeline(0.),
+            None => self.snowline(d) - 800.,
+        }
     }
 
     /// The finest layer at `d`.
@@ -609,16 +622,47 @@ impl Ground {
             let stone = colour(ROCK) * (0.7 + 0.6 * n(250., 0.7)) * grain;
             return mix(stone, ice, smoothstep(0.6, 0.8, flat));
         }
-        // Vegetation, thinning upwards: forest in patches below the treeline, grass in the
-        // valleys and on fields, alpine meadow above the trees.
         let tree = treeline + (n(1500., 0.3) - 0.5) * 400.;
-        let forest = smoothstep(0.38, 0.55, n(2500., 0.5) + 0.12 * n(60., 0.55) + 0.25 * (1. - flat)) * (1. - smoothstep(tree - 150., tree + 50., h));
-        let grass = mix(colour(GRASS), colour(MEADOW), smoothstep(tree - 300., tree + 300., h));
-        let mut ground = mix(grass, colour(FOREST), forest);
+        // What grows here: by the climate's biome, its edges wandering with the weather from
+        // year to year (noise in temperature and rain); without a climate, forest and grass.
+        let (mut ground, dry) = match &self.climate {
+            Some(c) => {
+                let mut local = c.local(&d, h);
+                local.mean += 3. * (n(40000., 0.15) - 0.5);
+                local.summer += 3. * (n(40000., 0.15) - 0.5);
+                local.precipitation *= (1.2 * (n(25000., 0.45) - 0.5)).exp();
+                let biome = Biome::of(&local);
+                let mut g = match biome {
+                    Biome::Ice => colour(SCREE),
+                    b => colour(b.albedo()),
+                };
+                if biome.forest() {
+                    // Clearings and meadows among the trees.
+                    let open = colour(if biome == Biome::Rainforest { Biome::Savanna.albedo() } else { GRASS });
+                    let cover = smoothstep(0.3, 0.45, n(2500., 0.5) + 0.12 * n(60., 0.55) + 0.25 * (1. - flat));
+                    g = mix(open, g, cover);
+                } else if matches!(biome, Biome::HotDesert | Biome::ColdDesert) {
+                    // Dunes, pans and darker stony desert.
+                    g = g * (0.75 + 0.5 * n(3000., 0.8) + 0.15 * n(150., 0.3));
+                } else {
+                    // Grass, scrub and the odd copse.
+                    g = mix(g, colour(FOREST), 0.5 * smoothstep(0.6, 0.75, n(800., 0.5)));
+                }
+                (g, local.precipitation < local.dry_threshold())
+            }
+            None => {
+                let forest = smoothstep(0.38, 0.55, n(2500., 0.5) + 0.12 * n(60., 0.55) + 0.25 * (1. - flat)) * (1. - smoothstep(tree - 150., tree + 50., h));
+                (mix(colour(GRASS), colour(FOREST), forest), false)
+            }
+        };
+        // Alpine meadow from the treeline up.
+        ground = mix(ground, colour(MEADOW), smoothstep(tree - 100., tree + 200., h));
         if class == ALLUVIUM {
-            // Valley floors: fields and meadows, or gravel where nothing grows.
+            // Valley floors: fields and meadows where it is wet enough, gravel where it is too
+            // high or too dry for them.
             let fields = mix(colour(GRASS), colour(FIELDS), smoothstep(0.4, 0.6, n(350., 0.8)));
-            ground = mix(fields, colour(GRAVEL), smoothstep(tree, tree + 300., h));
+            let barren = if dry { 1. } else { smoothstep(tree, tree + 300., h) };
+            ground = mix(fields, colour(GRAVEL), barren);
         }
         // Beaches.
         ground = mix(ground, colour(SAND), 1. - smoothstep(2., 12., h + 8. * n(150., 0.4)));

@@ -1258,11 +1258,14 @@ UI, file IO and rayon's threads would follow.
 
 ### Phases
 
-0. Hardening (small, now): fix the four bugs and the risks above; share constants; stronger
-   agreement tests; CI: a job that builds and lints `--features gpu`, runs the GPU tests on
-   lavapipe, checks that `pathtrace.spv` matches the shader's sources (a hash of the sources
-   recorded beside it, compared in a test), runs tests in release, and moves Dependabot's
-   config.
+0. Hardening: done. The four bugs and the risks above are fixed (buffer sizes and BVH depth
+   checked against the device and the shader's stack; a NaN-safe box test; resumed renders
+   catch up); shared constants live in the shader crate; a hard-case scene is checked tile by
+   tile against `trace` and the GPU against the wavefront integrator (it caught f32 losing a
+   small, distant sphere light, now sampled by pbrt's cone method). CI builds and lints
+   `--features gpu`, runs the GPU tests on lavapipe, checks `pathtrace.spv` against the hashes
+   of its sources (`scripts/shader-sources.sh --check`), runs tests in release, and Dependabot's
+   config is in `.github/dependabot.yml`.
 1. Web spike: split out `rays-core`; a minimal `rays-web` that renders a flattenable scene in
    a browser through WebGPU (dispatches short enough for the browser's GPU watchdog, a pass
    per frame, async readback, single-threaded CPU code); shrink the kernel (buffers without a

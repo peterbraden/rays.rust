@@ -123,7 +123,7 @@ impl Default for ChannelParams {
 /// A point in the patch's tangent plane: metres east and north of its centre.
 pub type Point = [f64; 2];
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct Channel {
     pub points: Vec<Point>,
     pub width: f64,
@@ -134,7 +134,7 @@ pub struct Channel {
     pub end: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct Oxbow {
     pub points: Vec<Point>,
     pub width: f64,
@@ -148,7 +148,7 @@ pub struct Rivers {
     pub channels: Vec<Channel>,
     pub oxbows: Vec<Oxbow>,
     /// When reaches were last found.
-    found: Option<f64>,
+    pub found: Option<f64>,
 }
 
 fn dist(a: Point, b: Point) -> f64 { ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt() }

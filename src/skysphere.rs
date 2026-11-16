@@ -810,7 +810,10 @@ impl SkyMaterial {
                     return Vector3::zeros();
                 }
                 let t = self.transmittance_to_space(&Ray { ro: r.ro, rd: d });
-                if t.max() <= 0. { Vector3::zeros() } else { space.radiance(&d).rgb.component_mul(&t) }
+                if t.max() <= 0. { return Vector3::zeros(); }
+                // Attenuated in RGB, then (in spectral mode) at the path's wavelengths, as the
+                // sky it is added to is.
+                Color { rgb: space.radiance(&d).rgb.component_mul(&t) }.as_illuminant().rgb
             },
             _ => Vector3::zeros(),
         }
@@ -1482,6 +1485,36 @@ mod tests {
         assert!(through.y < 1e-6 * plain_day.y, "{} vs {}", through, plain_day);
         let (n, plain_night) = (seen(&scene("[0, -0.5, 1]", &space)), seen(&scene("[0, -0.5, 1]", "[0, 0, 0]")));
         assert!(n.y > plain_night.y, "{} vs {}", n, plain_night);
+    }
+
+    #[test]
+    fn test_space_through_the_air_is_spectral_in_spectral_mode() {
+        // In spectral mode the sky's radiance is at the path's wavelengths, so what space adds
+        // to it must be too: the RGB light it sends through the air, as an illuminant there.
+        let scene = |background: &str| crate::scenefile::SceneFile::from_string(format!(r#"{{
+            "width": 8, "height": 8, "background": {},
+            "camera": {{ "location": [0, 10, 0], "lookat": [0, 1000, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "objects": [ {{ "type": "skysphere", "sun_direction": [0, -0.5, 1] }} ]
+        }}"#, background));
+        let space = r#"{ "type": "space", "stars": false, "nebulae": false, "galaxies": false, "threshold": 0,
+            "galactic_pole": [1, 0, 0], "galactic_centre": [0, 1, 0] }"#;
+        let r = Ray { ro: Vector3::new(0., 10., 0.), rd: Vector3::new(0., 1., 0.) };
+        let seen = |s: &crate::scene::Scene| {
+            let sky = s.objects.infinite_items.iter().next().unwrap();
+            let i = sky.intersects(&r).unwrap();
+            let i = Intersection { dist: i.dist, point: i.point, normal: i.normal, face: i.face, part: i.part, object: sky };
+            sky.medium.material_at(i.point).scatter(&r, &i, s).attenuate.rgb
+        };
+        let (with, without) = (scene(space), scene("[0, 0, 0]"));
+        let glow = match &with.render.background { crate::scene::Background::Space(s) => s.radiance(&r.rd).rgb, _ => unreachable!() };
+        let through = Color { rgb: glow.component_mul(&sky_at("[0, 1, 0]").transmittance_to_space(&r)) };
+        crate::spectrum::begin_sample(crate::spectrum::Wavelengths::sample_visible(0.37));
+        let added = seen(&with) - seen(&without);
+        let expected = through.as_illuminant().rgb;
+        crate::spectrum::end_sample();
+        assert!((added - expected).norm() < 1e-6 * expected.norm(), "{} vs {}", added, expected);
+        // Not the RGB light itself, which would be the wrong colour at these wavelengths.
+        assert!((added - through.rgb).norm() > 1e-3 * expected.norm());
     }
 
     #[test]

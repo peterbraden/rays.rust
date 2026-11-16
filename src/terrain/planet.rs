@@ -39,6 +39,8 @@
 use crate::geometry::Pcg32;
 use crate::na::{Matrix3, Rotation3, Unit, Vector3};
 use crate::noise::PerlinNoise;
+use crate::terrain::tectonics::{Crust, TectonicsParams};
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct PlanetParams {
@@ -59,6 +61,9 @@ pub struct PlanetParams {
     pub strata_contrast: f64,
     /// How far layers are folded up and down, metres.
     pub fold_amplitude: f64,
+    /// Plate tectonics, to place the continents, ocean basins, mountain belts and volcanoes;
+    /// None for noise fields alone.
+    pub tectonics: Option<TectonicsParams>,
 }
 
 impl Default for PlanetParams {
@@ -73,6 +78,7 @@ impl Default for PlanetParams {
             strata_thickness: 600.,
             strata_contrast: 5.,
             fold_amplitude: 800.,
+            tectonics: None,
         }
     }
 }
@@ -143,10 +149,14 @@ pub struct Planet {
     folds: Octaves,
     provinces: Octaves,
     hotspots: Octaves,
+    /// The crust from plate tectonics, if simulated.
+    pub crust: Option<Arc<Crust>>,
 }
 
 /// Lattice units per planet radius of the continent field.
 const CONTINENT_FREQUENCY: f64 = 1.2;
+/// ... of the coast's detail below the tectonic grid ...
+const COAST_FREQUENCY: f64 = 40.;
 /// ... of the hills ...
 const RELIEF_FREQUENCY: f64 = 12.;
 /// ... and of the mountain ridges: a base wavelength of about 12 km on an Earth-sized planet,
@@ -156,9 +166,11 @@ const RIDGE_FREQUENCY: f64 = 530.;
 impl Planet {
     pub fn new(params: PlanetParams) -> Planet {
         let seed = params.seed;
+        let crust = params.tectonics.as_ref().map(|t| crate::terrain::tectonics::crust(t, seed, params.radius));
         Planet {
             params, continents: Octaves::new(seed, 1), belts: Octaves::new(seed, 2), relief: Octaves::new(seed, 3),
             folds: Octaves::new(seed, 4), provinces: Octaves::new(seed, 5), hotspots: Octaves::new(seed, 6),
+            crust,
         }
     }
 
@@ -169,13 +181,32 @@ impl Planet {
         ((base_wavelength / finest).log2().ceil().max(1.)) as usize
     }
 
+    /// The large-scale elevation from the crust, with the coast broken up below the tectonic
+    /// grid's resolution, metres.
+    fn crust_elevation(&self, crust: &Crust, d: &Vector3<f64>) -> f64 {
+        let e = crust.elevation(d);
+        // Bays, peninsulas and islands: relief at wavelengths from about the grid's cells down
+        // to tens of kilometres, strongest near sea level.
+        let coast = self.continents.fbm(d, COAST_FREQUENCY, 5);
+        let m = crust.margin(d);
+        // Strongest where continent meets ocean; island arcs and hotspots are raised enough by
+        // themselves.
+        e + 1400. * coast * (4. * m * (1. - m)).min(1.)
+    }
+
     /// Positive on land, negative at sea; roughly in [-1, 1].
     pub fn continent(&self, d: &Vector3<f64>) -> f64 {
+        if let Some(c) = &self.crust {
+            return (self.crust_elevation(c, d) / 1000.).tanh();
+        }
         self.continents.fbm(d, CONTINENT_FREQUENCY, 7) + self.params.land_bias
     }
 
     /// Strength of mountain building, in [0, 1].
     pub fn orogeny(&self, d: &Vector3<f64>) -> f64 {
+        if let Some(c) = &self.crust {
+            return c.orogeny(d).clamp(0., 1.) * smoothstep(-0.1, 0.1, self.continent(d));
+        }
         let belt = self.belts.ridged(d, self.params.belt_frequency, 3);
         smoothstep(0.55, 0.85, belt) * smoothstep(0., 0.12, self.continent(d))
     }
@@ -197,6 +228,7 @@ impl Planet {
     /// Where volcanoes occur, from 0 (never) to 1: along the flanks of mountain belts (as arcs
     /// stand beside the ranges at subduction zones), and over scattered hotspots.
     pub fn volcanism(&self, d: &Vector3<f64>) -> f64 {
+        if let Some(c) = &self.crust { return c.volcanism(d).clamp(0., 1.); }
         let belt = self.belts.ridged(d, self.params.belt_frequency, 3);
         let arc = smoothstep(0.4, 0.55, belt) * (1. - smoothstep(0.6, 0.75, belt));
         let hotspot = smoothstep(0.55, 0.7, self.hotspots.fbm(d, 8., 2));
@@ -205,11 +237,25 @@ impl Planet {
 
     /// Tectonic uplift rate, metres per year.
     pub fn uplift(&self, d: &Vector3<f64>) -> f64 {
+        if let Some(c) = &self.crust {
+            // Only where the crust is being thickened now.
+            return self.params.uplift_rate * c.activity(d).clamp(0., 1.) * smoothstep(-0.1, 0.1, self.continent(d));
+        }
         self.params.uplift_rate * self.orogeny(d)
     }
 
     /// Elevation above sea level at time zero, metres, with detail down to wavelength `finest`.
     pub fn elevation(&self, d: &Vector3<f64>, finest: f64) -> f64 {
+        if let Some(crust) = &self.crust {
+            let base = self.crust_elevation(crust, d);
+            let land = smoothstep(-100., 200., base);
+            let hills = 150. * self.relief.fbm(d, RELIEF_FREQUENCY, self.octaves(RELIEF_FREQUENCY, finest)) * land;
+            // The crust's thickening already raised the belt as a whole: the ridges are relief
+            // about that.
+            let ridges = self.relief.ridged(d, RIDGE_FREQUENCY, self.octaves(RIDGE_FREQUENCY, finest).max(3));
+            let mountains = self.params.mountain_height * self.orogeny(d) * (ridges * ridges - 0.2);
+            return base + hills + mountains;
+        }
         let c = self.continent(d);
         let base = if c >= 0. { 1500. * c } else { -4500. * (-6. * c).tanh() };
         let land = smoothstep(-0.02, 0.05, c);
@@ -226,7 +272,7 @@ impl Planet {
     /// sampling `samples` points spread evenly over the planet (a Fibonacci lattice). Lets a
     /// scene ask for "some mountains" without knowing where this seed put them.
     pub fn most_mountainous(&self, samples: usize) -> (f64, f64) {
-        self.best_site(samples, |d| self.orogeny(d) + 0.1 * self.continent(d))
+        self.best_site(samples, |d| self.orogeny(d) + self.crust.as_ref().map_or(0., |c| 0.5 * c.activity(d)) + 0.1 * self.continent(d))
     }
 
     /// As `most_mountainous`, but for mountainous land with volcanoes.

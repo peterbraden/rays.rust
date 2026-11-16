@@ -245,6 +245,27 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
     p.planet.strata_thickness = number(o, "strata_thickness", p.planet.strata_thickness);
     p.planet.strata_contrast = number(o, "strata_contrast", p.planet.strata_contrast);
     p.planet.fold_amplitude = number(o, "fold_amplitude", p.planet.fold_amplitude);
+    // Plate tectonics: on by default at full scale, `false` for noise alone, or overrides of
+    // `TectonicsParams` by field name.
+    p.planet.tectonics = match &o["tectonics"] {
+        Value::Bool(false) => None,
+        Value::Null if o.get("scale").is_some() => None,
+        v => {
+            let mut t = crate::terrain::tectonics::TectonicsParams::default();
+            let fields: [(&str, &mut f64); 9] = [
+                ("age", &mut t.age), ("step", &mut t.step), ("continental_fraction", &mut t.continental_fraction),
+                ("speed", &mut t.speed), ("rift_interval", &mut t.rift_interval), ("subduction_uplift", &mut t.subduction_uplift),
+                ("collision_uplift", &mut t.collision_uplift), ("relaxation", &mut t.relaxation), ("remesh", &mut t.remesh),
+            ];
+            for (k, f) in fields {
+                if let Some(x) = v.get(k).and_then(|x| x.as_f64()) { *f = x; }
+            }
+            for (k, f) in [("cells", &mut t.cells), ("plates", &mut t.plates), ("hotspots", &mut t.hotspots)] {
+                if let Some(x) = v.get(k).and_then(|x| x.as_u64()) { *f = x as usize; }
+            }
+            Some(t)
+        }
+    };
     p.sediment_erodibility = number(o, "sediment_erodibility", p.sediment_erodibility);
     p.lava_erodibility = number(o, "lava_erodibility", p.lava_erodibility);
     p.volcano = match &o["volcanoes"] {
@@ -472,6 +493,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams) -> SceneObject {
 
     let start = std::time::Instant::now();
     let planet = Planet::new(params.planet.clone());
+    if let Some(path) = o["planet_map"].as_str() { crate::terrain::map::write_planet_map(&planet, path, 2048); }
     let layers = Arc::new(built);
     let relief = Relief::new(layers.clone(), &planet, radius, p.roughness, finest);
     let view = Viewpoint { location: SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.)) };

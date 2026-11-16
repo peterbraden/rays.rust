@@ -5,6 +5,7 @@
 
 pub mod domain;
 pub mod planet;
+pub mod tectonics;
 pub mod flow;
 pub mod fluvial;
 pub mod glacier;

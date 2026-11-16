@@ -140,6 +140,49 @@ pub fn write_map(t: &Terrain, path: &str, width: usize) {
     img.save(path).unwrap();
 }
 
+
+/// Write an equirectangular map of a whole planet's topography to `path`, `width` pixels wide:
+/// hypsometric tints on land, deepening blues at sea, shaded relief, and (with tectonics) the
+/// plates' boundaries in red. The topography is sampled with detail down to a pixel.
+pub fn write_planet_map(planet: &crate::terrain::planet::Planet, path: &str, width: usize) {
+    use rayon::prelude::*;
+    let (w, h) = (width, width / 2);
+    let pixel = planet.params.radius * std::f64::consts::PI / h as f64;
+    let dir = |x: f64, y: f64| {
+        let lon = x / w as f64 * std::f64::consts::TAU - std::f64::consts::PI;
+        let lat = std::f64::consts::FRAC_PI_2 - y / h as f64 * std::f64::consts::PI;
+        Vector3::new(lat.cos() * lon.cos(), lat.sin(), -lat.cos() * lon.sin())
+    };
+    let heights: Vec<f64> = (0..(w + 1) * (h + 1)).into_par_iter()
+        .map(|k| planet.elevation(&dir((k % (w + 1)) as f64, (k / (w + 1)) as f64 + 0.5), pixel)).collect();
+    let plates: Option<Vec<u16>> = planet.crust.as_ref().map(|c| (0..w * h).into_par_iter()
+        .map(|k| c.plate_at(&dir((k % w) as f64 + 0.5, (k / w) as f64 + 0.5))).collect());
+    let mut img = image::RgbImage::new(w as u32, h as u32);
+    for y in 0..h {
+        let lat = std::f64::consts::FRAC_PI_2 - (y as f64 + 0.5) / h as f64 * std::f64::consts::PI;
+        let dxm = pixel * lat.cos().max(0.05);
+        for x in 0..w {
+            let e = heights[y * (w + 1) + x];
+            let ex = heights[y * (w + 1) + x + 1] - e;
+            let ey = heights[(y + 1).min(h - 1) * (w + 1) + x] - e;
+            let normal = Vector3::new(-ex / dxm * 8., ey / pixel * 8., 1.).normalize();
+            let light = Vector3::new(-1., 1., 1.4).normalize();
+            let shade = (0.45 + 0.65 * normal.dot(&light)).clamp(0., 1.3);
+            let mut c = if e < 0. {
+                mix([0.55, 0.75, 0.85], [0.02, 0.07, 0.25], (-e / 6000.).powf(0.6))
+            } else { land_colour(e) };
+            if let Some(p) = &plates {
+                let k = y * w + x;
+                let edge = (x + 1 < w && p[k] != p[k + 1]) || (y + 1 < h && p[k] != p[k + w]);
+                if edge { c = mix(c, [0.9, 0.1, 0.1], 0.6); }
+            }
+            let px = |v: f64| ((v * shade).clamp(0., 1.) * 255.) as u8;
+            img.put_pixel(x as u32, y as u32, image::Rgb([px(c[0]), px(c[1]), px(c[2])]));
+        }
+    }
+    img.save(path).unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

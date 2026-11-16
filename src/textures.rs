@@ -355,10 +355,33 @@ pub struct Footprint {
     pub spread: f64,
 }
 
-/// A colour: constant, or from an image.
+/// A colour: constant, or from an image, or a grey level from the surface's slope.
 pub enum ColorTexture {
     Constant(Color),
     Image(ImageMap),
+    Slope(SlopeTexture),
+}
+
+/// A grey level from how steep the surface is: 0 where it is flatter than `from` degrees, 1
+/// where steeper than `to`, smoothly between, the slope jittered by up to `jitter` degrees of
+/// noise `jitter_scale` across, so the boundary is ragged. As a `mix` amount, it puts one
+/// material on cliffs and another on the ground, as rock shows where it's too steep for soil
+/// to lie.
+pub struct SlopeTexture {
+    pub from: f64,
+    pub to: f64,
+    pub jitter: f64,
+    pub jitter_scale: f64,
+    pub noise: crate::noise::SeededNoise,
+}
+
+impl SlopeTexture {
+    pub fn amount(&self, point: &Vector3<f64>, normal: &Vector3<f64>) -> f64 {
+        let slope = normal.y.abs().clamp(0., 1.).acos().to_degrees();
+        let jitter = if self.jitter > 0. { self.jitter * self.noise.fbm(point / self.jitter_scale.max(1e-9), 3) } else { 0. };
+        let t = ((slope + jitter - self.from) / (self.to - self.from).max(1e-9)).clamp(0., 1.);
+        t * t * (3. - 2. * t)
+    }
 }
 
 impl From<Color> for ColorTexture {
@@ -372,6 +395,7 @@ impl ColorTexture {
         match self {
             ColorTexture::Constant(c) => *c,
             ColorTexture::Image(m) => m.eval(i, s),
+            ColorTexture::Slope(t) => { let a = t.amount(&i.point, &i.normal); Color::new(a, a, a) },
         }
     }
 
@@ -380,6 +404,7 @@ impl ColorTexture {
         match self {
             ColorTexture::Constant(c) => *c,
             ColorTexture::Image(m) => m.image.average(),
+            ColorTexture::Slope(_) => Color::new(0.5, 0.5, 0.5),
         }
     }
 }

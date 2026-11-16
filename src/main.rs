@@ -119,6 +119,7 @@ mod procedural {
     pub mod box_terrain;
     pub mod fireworks;
     pub mod tree;
+    pub mod succulent;
     pub mod forest;
     pub mod heightmap;
     pub mod grass;

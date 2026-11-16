@@ -25,6 +25,14 @@
 //!   crests, as of eroded hills), `seed`
 //! - `image`: a greyscale image stretched over the area, black at `base` and white at `base +
 //!   height`. `src` (path), `height` (default 1)
+//! - `mesas`: flat-topped mesas and buttes standing on a desert floor (`MesaHeight`).
+//!   `height` (of the tops above `base`, default 120), `scale` (size of the mesas, default
+//!   800), `coverage` (fraction of the area they cover, default 0.15), `cliff` (width of the
+//!   cliff band, metres, default 30), `benches` (ledges in the cliff, default 2), `talus`
+//!   (height of the scree apron, as a fraction of `height`, default 0.35), `talus_width`
+//!   (metres, default `height`), `floor_amplitude` and `floor_scale` (the floor's undulation,
+//!   default 2 and 150), `clearing` ([x, z, radius]: keep the mesas out of a circle, eg. round
+//!   the camera), `seed`
 //!
 //! To share one heightmap between a terrain and the grass on it, define it once in the scene's
 //! `variables` and refer to it as `"$name"`.
@@ -94,6 +102,193 @@ impl HeightSource for NoiseHeight {
     }
 }
 
+/// Mesas and buttes: flat-topped remnants of a plateau whose hard caprock protects the softer
+/// beds below, standing out of a desert floor, as in Monument Valley or on the Colorado
+/// Plateau. Their outlines come from fractal noise, cut at a level that leaves `coverage` of
+/// the area standing, warped and notched so the edges are embayed like eroded scarps; small
+/// separate patches become buttes, and the smallest, never wide enough to reach full height,
+/// spires.
+///
+/// The profile across an edge follows the classic scarp: the caprock a vertical cliff, the
+/// softer beds below it stepping down in `benches` ledges, and a concave apron of talus (scree
+/// fallen from the cliff, at about its angle of repose) running out onto the floor (Alan D.
+/// Howard and Richard C. Kochel, "Introduction to cuesta landforms and sapping processes on
+/// the Colorado Plateau", in "Sapping Features of the Colorado Plateau", NASA SP-491, 1988).
+/// So that every cliff is about as wide, the profile is a function of the distance from the
+/// edge: the outlines are cut from broad noise on a grid, their exact signed distance found by
+/// Pedro Felzenszwalb and Daniel Huttenlocher's linear-time Euclidean distance transform
+/// ("Distance Transforms of Sampled Functions", Theory of Computing 8, 2012,
+/// doi:10.4086/toc.2012.v008a019), interpolated, and roughened by finer noise in metres, which
+/// embays and notches the scarps.
+pub struct MesaHeight {
+    pub noise: PerlinNoise,
+    pub base: f64,
+    pub height: f64,
+    pub scale: f64,
+    pub cliff: f64,
+    pub benches: u32,
+    pub talus: f64,
+    pub talus_width: f64,
+    pub floor_amplitude: f64,
+    pub floor_scale: f64,
+    pub clearing: Option<(f64, f64, f64)>,
+    pub offset: (f64, f64),
+    /// Signed distance from the mesas' outlines, metres, positive inside, on a grid.
+    sdf: Vec<f32>,
+    sdf_min: (f64, f64),
+    sdf_cell: f64,
+    sdf_n: (usize, usize),
+}
+
+impl MesaHeight {
+    /// Mesas over [min, max] (and as at its edges beyond), covering `coverage` of it. See the
+    /// module documentation for the other parameters.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(min: (f64, f64), max: (f64, f64), coverage: f64, base: f64, height: f64, scale: f64,
+               cliff: f64, benches: u32, talus: f64, talus_width: f64, floor_amplitude: f64,
+               floor_scale: f64, clearing: Option<(f64, f64, f64)>, seed: f64) -> MesaHeight {
+        let mut m = MesaHeight {
+            noise: PerlinNoise::new(), base, height, scale, cliff, benches, talus, talus_width,
+            floor_amplitude, floor_scale, clearing, offset: (seed * 31.17 + 0.37, seed * 17.73 + 0.71),
+            sdf: vec![], sdf_min: min, sdf_cell: 1., sdf_n: (1, 1),
+        };
+        // Fine enough for the cliffs, at most about 1500 cells a side.
+        let extent = (max.0 - min.0).max(max.1 - min.1);
+        let cell = (0.5 * cliff).max(extent / 1500.).max(1e-6);
+        let (nx, nz) = (((max.0 - min.0) / cell).ceil() as usize + 1, ((max.1 - min.1) / cell).ceil() as usize + 1);
+        let field: Vec<f64> = {
+            use rayon::prelude::*;
+            let m = &m;
+            (0 .. nx * nz).into_par_iter().map(|k| m.field(min.0 + (k % nx) as f64 * cell, min.1 + (k / nx) as f64 * cell)).collect()
+        };
+        let mut sorted = field.clone();
+        sorted.sort_by(|a, b| a.total_cmp(b));
+        let threshold = sorted[(((1. - coverage.clamp(0., 1.)) * sorted.len() as f64) as usize).min(sorted.len() - 1)];
+        let inside: Vec<bool> = field.iter().map(|f| *f > threshold).collect();
+        let to_outside = distance_transform(&inside, nx, nz, true);
+        let to_inside = distance_transform(&inside, nx, nz, false);
+        // Half a cell either side of the edge, so it falls between the cells.
+        m.sdf = (0 .. nx * nz).map(|k| {
+            if inside[k] { (to_outside[k].sqrt() - 0.5) * cell } else { -(to_inside[k].sqrt() - 0.5) * cell }
+        } as f32).collect();
+        m.sdf_cell = cell;
+        m.sdf_n = (nx, nz);
+        m
+    }
+
+    /// The broad field whose level sets are the mesas' outlines, before the cut: warped noise,
+    /// pushed down round the clearing.
+    fn field(&self, x: f64, z: f64) -> f64 {
+        let (nx, nz) = (x / self.scale + self.offset.0, z / self.scale + self.offset.1);
+        let warp = |o: f64| self.noise.fbm(nx * 0.7 + o, 1.7, nz * 0.7 - o, 3, 0.5, 2.) - 0.5;
+        let (wx, wz) = (nx + 0.6 * warp(13.1), nz + 0.6 * warp(47.9));
+        let mut f = self.noise.fbm(wx, 0.5, wz, 4, 0.5, 2.);
+        if let Some((cx, cz, r)) = self.clearing {
+            let d = ((x - cx).powi(2) + (z - cz).powi(2)).sqrt();
+            f -= 0.6 * (1. - smoothstep(r, 1.6 * r, d));
+        }
+        f
+    }
+
+    /// Signed distance (metres, positive inside) from the outlines, interpolated, notched.
+    pub fn distance(&self, x: f64, z: f64) -> f64 {
+        let (nx, nz) = self.sdf_n;
+        let u = ((x - self.sdf_min.0) / self.sdf_cell).clamp(0., (nx - 1) as f64);
+        let v = ((z - self.sdf_min.1) / self.sdf_cell).clamp(0., (nz - 1) as f64);
+        let (i, j) = ((u as usize).min(nx.saturating_sub(2)), (v as usize).min(nz.saturating_sub(2)));
+        let (fu, fv) = (u - i as f64, v - j as f64);
+        let at = |a: usize, b: usize| self.sdf[(b.min(nz - 1)) * nx + a.min(nx - 1)] as f64;
+        let d = (at(i, j) * (1. - fu) + at(i + 1, j) * fu) * (1. - fv) + (at(i, j + 1) * (1. - fu) + at(i + 1, j + 1) * fu) * fv;
+        // Embayments a few cliff-widths across, and smaller notches.
+        let n = |s: f64, o: f64| 2. * self.noise.fbm(x / s + o, 3.3, z / s - o, 3, 0.5, 2.) - 1.;
+        d + 2.5 * self.cliff * n(6. * self.cliff, 17.7) + 0.6 * self.cliff * n(1.5 * self.cliff, 41.1)
+    }
+
+    /// The height above the floor at signed distance `d` (metres, positive inside) from a
+    /// mesa's edge.
+    pub fn profile(&self, d: f64) -> f64 {
+        let h = self.height;
+        let apron = h * self.talus;
+        if d <= 0. {
+            // A concave apron, steepest (at about scree's angle of repose, 35 degrees, for the
+            // default width) where it meets the cliff.
+            return apron * (d / self.talus_width.max(1e-9)).exp();
+        }
+        // The cliff in steps: each a near-vertical riser and a ledge, the last riser the caprock.
+        let steps = (self.benches + 1) as f64;
+        let s = (d / self.cliff.max(1e-9)).min(1.) * steps;
+        let riser = |x: f64| smoothstep(0., 0.4, x);
+        let f = if s >= steps { 1. } else { (s.floor() + riser(s.fract())) / steps };
+        apron + (h - apron) * f
+    }
+}
+
+/// Squared Euclidean distance from each cell of an `nx` by `nz` grid to the nearest cell whose
+/// `mask` differs from `of` (Felzenszwalb and Huttenlocher's transform, by columns then rows).
+fn distance_transform(mask: &[bool], nx: usize, nz: usize, of: bool) -> Vec<f64> {
+    const FAR: f64 = 1e20;
+    let mut d: Vec<f64> = mask.iter().map(|&m| if m == of { FAR } else { 0. }).collect();
+    let mut column = vec![0.; nz];
+    for i in 0 .. nx {
+        for j in 0 .. nz { column[j] = d[j * nx + i]; }
+        let out = transform_1d(&column);
+        for j in 0 .. nz { d[j * nx + i] = out[j]; }
+    }
+    for j in 0 .. nz {
+        let out = transform_1d(&d[j * nx .. (j + 1) * nx]);
+        d[j * nx .. (j + 1) * nx].copy_from_slice(&out);
+    }
+    d
+}
+
+/// The lower envelope of the parabolas (q - p)^2 + f(p): the 1D squared distance transform.
+fn transform_1d(f: &[f64]) -> Vec<f64> {
+    let n = f.len();
+    let mut out = vec![0.; n];
+    let mut v = vec![0usize; n];
+    let mut z = vec![0.; n + 1];
+    let mut k = 0;
+    z[0] = f64::NEG_INFINITY;
+    z[1] = f64::INFINITY;
+    let meet = |q: usize, p: usize| ((f[q] + (q * q) as f64) - (f[p] + (p * p) as f64)) / (2. * q as f64 - 2. * p as f64);
+    for q in 1 .. n {
+        let mut s = meet(q, v[k]);
+        while s <= z[k] {
+            k -= 1;
+            s = meet(q, v[k]);
+        }
+        k += 1;
+        v[k] = q;
+        z[k] = s;
+        z[k + 1] = f64::INFINITY;
+    }
+    k = 0;
+    for (q, o) in out.iter_mut().enumerate() {
+        while z[k + 1] < q as f64 {
+            k += 1;
+        }
+        let dq = q as f64 - v[k] as f64;
+        *o = dq * dq + f[v[k]];
+    }
+    out
+}
+
+impl HeightSource for MesaHeight {
+    fn height(&self, x: f64, z: f64) -> f64 {
+        let d = self.distance(x, z);
+        let floor = self.floor_amplitude * (2. * self.noise.fbm(x / self.floor_scale + 71.3, 0.2, z / self.floor_scale - 11.9, 4, 0.5, 2.) - 1.);
+        // Tops weathered a little; the beds, and so the tops, level.
+        let top = smoothstep(0.5 * self.cliff, 2. * self.cliff, d)
+            * 0.015 * self.height * (self.noise.fbm(x / 40. + 5.1, 7.7, z / 40., 3, 0.5, 2.) - 0.5);
+        self.base + floor + self.profile(d) + top
+    }
+}
+
+fn smoothstep(a: f64, b: f64, x: f64) -> f64 {
+    let t = ((x - a) / (b - a)).clamp(0., 1.);
+    t * t * (3. - 2. * t)
+}
+
 /// A greyscale image stretched over [min, max], sampled bilinearly. Row 0 of the image is at
 /// min z, column 0 at min x.
 pub struct ImageHeight {
@@ -161,12 +356,11 @@ impl HeightGrid {
         // Cells exactly fill the area in x; z rounds up to whole cells.
         let cell = (max.0 - min.0) / nx as f64;
         let nz = nz.max(((max.1 - min.1) / cell).round().max(1.) as usize);
-        let mut heights = Vec::with_capacity((nx + 1) * (nz + 1));
-        for iz in 0 ..= nz {
-            for ix in 0 ..= nx {
-                heights.push(source.height(min.0 + ix as f64 * cell, min.1 + iz as f64 * cell));
-            }
-        }
+        // Row by row, in parallel: a fine grid can have tens of millions of points.
+        use rayon::prelude::*;
+        let heights: Vec<f64> = (0 ..= nz).into_par_iter().flat_map_iter(|iz| {
+            (0 ..= nx).map(move |ix| source.height(min.0 + ix as f64 * cell, min.1 + iz as f64 * cell))
+        }).collect();
         HeightGrid::from_heights(min, cell, nx, nz, heights)
     }
 
@@ -216,6 +410,19 @@ impl HeightGrid {
                 ridged: o["ridged"].as_bool().unwrap_or(false),
                 offset: (seed * 31.17 + 0.37, seed * 17.73 + 0.71),
             }),
+            "mesas" => {
+                let height = SceneFile::parse_number(&o["height"], 120.);
+                let clearing = o.get("clearing").map(|c| (c[0].as_f64().unwrap(), c[1].as_f64().unwrap(), c[2].as_f64().unwrap()));
+                Box::new(MesaHeight::new(min, max, SceneFile::parse_number(&o["coverage"], 0.15), base, height,
+                    SceneFile::parse_number(&o["scale"], 800.),
+                    SceneFile::parse_number(&o["cliff"], 30.),
+                    SceneFile::parse_int(&o["benches"], 2) as u32,
+                    SceneFile::parse_number(&o["talus"], 0.35).clamp(0., 1.),
+                    SceneFile::parse_number(&o["talus_width"], height),
+                    SceneFile::parse_number(&o["floor_amplitude"], 2.),
+                    SceneFile::parse_number(&o["floor_scale"], 150.),
+                    clearing, seed))
+            },
             "image" => Box::new(ImageHeight::from_file(
                 o["src"].as_str().expect("image heightmap needs a \"src\""),
                 min, max, base, SceneFile::parse_number(&o["height"], 1.))),
@@ -496,6 +703,59 @@ mod tests {
         assert!((h.height(0., 4.) - 4.).abs() < 1e-9);
         // Outside the image: the nearest edge.
         assert!((h.height(-5., -5.) - 1.).abs() < 1e-9);
+    }
+
+    fn mesas(coverage: f64) -> MesaHeight {
+        MesaHeight::new((-3000., -3000.), (3000., 3000.), coverage, 0., 100., 500., 20., 2, 0.3, 80., 0., 100.,
+            Some((0., 0., 300.)), 1.)
+    }
+
+    #[test]
+    fn test_distance_transform_is_euclidean() {
+        // One outside cell in the middle of a 7 x 5 grid.
+        let (nx, nz) = (7, 5);
+        let mask: Vec<bool> = (0 .. nx * nz).map(|k| k != 2 * nx + 3).collect();
+        let d = distance_transform(&mask, nx, nz, true);
+        for k in 0 .. nx * nz {
+            let (i, j) = ((k % nx) as f64 - 3., (k / nx) as f64 - 2.);
+            assert_eq!(d[k], i * i + j * j);
+        }
+    }
+
+    #[test]
+    fn test_mesa_profile_steps_up_to_a_flat_top() {
+        let m = mesas(0.2);
+        // Far out on the floor, flat; the apron rising to the cliff's foot; the top flat.
+        assert!(m.profile(-2000.) < 1e-6);
+        assert!((m.profile(0.) - 30.).abs() < 1e-9);
+        assert!(m.profile(-40.) < m.profile(-10.));
+        assert!((m.profile(20.) - 100.).abs() < 1e-9 && (m.profile(500.) - 100.).abs() < 1e-9);
+        // Never falling inwards, and with ledges: some of the cliff band is nearly level.
+        let mut level = 0;
+        for k in 0 .. 200 {
+            let (a, b) = (m.profile(k as f64 * 0.1), m.profile((k + 1) as f64 * 0.1));
+            assert!(b >= a - 1e-12);
+            if b - a < 0.1 { level += 1; }
+        }
+        assert!(level > 60, "{}", level);
+    }
+
+    #[test]
+    fn test_mesas_cover_the_asked_fraction_and_keep_the_clearing() {
+        let m = mesas(0.2);
+        let n = 120;
+        let tops = (0 .. n * n).filter(|k| {
+            let (x, z) = (-3000. + 6000. * ((k % n) as f64 + 0.5) / n as f64, -3000. + 6000. * ((k / n) as f64 + 0.5) / n as f64);
+            m.height(x, z) > 0.3 * m.height
+        }).count() as f64 / (n * n) as f64;
+        assert!((0.12 .. 0.3).contains(&tops), "{}", tops);
+        // The floor between them is flat: no aprons without cliffs.
+        let raised = (0 .. n * n).filter(|k| {
+            let (x, z) = (-3000. + 6000. * ((k % n) as f64 + 0.5) / n as f64, -3000. + 6000. * ((k / n) as f64 + 0.5) / n as f64);
+            m.distance(x, z) < -300. && m.height(x, z) > 1.
+        }).count();
+        assert_eq!(raised, 0);
+        assert!(m.height(0., 0.) < 1., "{}", m.height(0., 0.));
     }
 
     #[test]

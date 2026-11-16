@@ -403,7 +403,19 @@ impl SceneFile {
     /// `{"texture": "file.png", "scale": [su, sv] or s, "offset": [ou, ov], "filter":
     /// "ewa" (the default) | "trilinear" | "bilinear" | "point", "wrap": "repeat" | "clamp" | "black", "linear":
     /// bool}` (8-bit images are taken as sRGB unless `linear`).
+    /// A colour, an image texture (`{"texture": path, ...}`), or a grey level from the slope
+    /// (`{"slope": [from, to], "jitter": degrees, "jitter_scale": size, "seed": 0}`,
+    /// `textures::SlopeTexture`).
     pub fn parse_color_texture(v: &Value) -> crate::textures::ColorTexture {
+        if let Some(range) = v.get("slope") {
+            let r = SceneFile::parse_vec2(range);
+            return crate::textures::ColorTexture::Slope(crate::textures::SlopeTexture {
+                from: r.x, to: r.y,
+                jitter: SceneFile::parse_number(&v["jitter"], 0.),
+                jitter_scale: SceneFile::parse_number(&v["jitter_scale"], 1.),
+                noise: crate::noise::SeededNoise::new(SceneFile::parse_int(&v["seed"], 0) as u64),
+            });
+        }
         match v.get("texture") {
             Some(_) => crate::textures::ColorTexture::Image(SceneFile::parse_image_map(v)),
             None => SceneFile::parse_color(v).into(),
@@ -2020,7 +2032,8 @@ impl SceneFile {
             return Some(Box::new(SceneFile::parse_noise_texture(props, materials)));
         }
         // {"type": "mix", "materials": ["A", "B"], "amount": 0.5 or an image texture (its grey
-        // level)}: B with probability amount, else A (`material::mix`).
+        // level) or a slope (`parse_color_texture`)}: B with probability amount, else A
+        // (`material::mix`).
         if props["type"].as_str() == Some("mix") {
             let names = props["materials"].as_array().filter(|a| a.len() == 2)
                 .unwrap_or_else(|| panic!("Mix material '{}' needs two \"materials\"", name));
@@ -2283,7 +2296,7 @@ impl SceneFile {
     }
 
     /// `{"type": "soil", "preset": "loam"}`: procedural bare ground (see `material::soil`).
-    /// Presets are loam, clay, sand and forest_floor; any field of the preset can be
+    /// Presets are loam, clay, sand, desert and forest_floor; any field of the preset can be
     /// overridden: the colours `color`, `humus`, `stone_color`, `crumb_color`, `litter_color`
     /// and `moss_color`; the fractions of the ground covered by `stones`, `crumbs`, `litter`
     /// and `moss`; the sizes (m) `mottle_size`, `stone_size`, `litter_length`, `litter_width`

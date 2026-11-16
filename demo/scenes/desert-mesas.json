@@ -1,0 +1,77 @@
+{
+  "output": { "exposure": 1.2 },
+  "width": 1280,
+  "height": 640,
+
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 4,
+  "shadow_bias": 0.0001,
+  "max_depth": 4,
+
+  "variables": {
+    "desert": { "type": "mesas", "min": [-2500, -400], "max": [4500, 6500], "cell_size": 1.25,
+      "height": 160, "scale": 1100, "coverage": 0.22, "cliff": 45, "benches": 2, "talus": 0.38, "talus_width": 140,
+      "floor_amplitude": 2.5, "floor_scale": 180, "clearing": [0, 300, 450], "seed": 3 }
+  },
+
+  "geometries": {
+    "land": { "type": "terrain", "heightmap": "$desert" }
+  },
+
+  "materials": {
+    "FLOOR": { "type": "soil", "preset": "desert", "seed": 1 },
+    "SANDSTONE": { "type": "rock", "preset": "sandstone", "scale": 80, "seed": 2,
+      "color": [0.56, 0.26, 0.12], "secondary": [0.64, 0.36, 0.19], "strata_color": [0.4, 0.17, 0.08],
+      "strata_spacing": 0.1, "strata_amount": 0.7, "dark_grain_amount": 0.01, "light_grain_amount": 0.01, "bump": 0.15 },
+    "GROUND": { "type": "mix", "materials": ["FLOOR", "SANDSTONE"],
+      "amount": { "slope": [26, 40], "jitter": 8, "jitter_scale": 12, "seed": 4 } },
+
+    "SAGUARO": { "type": "plastic", "albedo": [0.09, 0.15, 0.07], "roughness": 0.35 },
+    "BARREL": { "type": "plastic", "albedo": [0.1, 0.17, 0.07], "roughness": 0.3 },
+    "PAD": { "type": "plastic", "albedo": [0.13, 0.21, 0.07], "roughness": 0.3 },
+    "AGAVE": { "type": "plastic", "albedo": [0.2, 0.28, 0.24], "roughness": 0.45 },
+    "SPINE": { "type": "lambertian", "albedo": [0.62, 0.56, 0.44] },
+    "RED_SPINE": { "type": "lambertian", "albedo": [0.5, 0.24, 0.14] },
+    "DARK_SPINE": { "type": "lambertian", "albedo": [0.12, 0.1, 0.08] },
+    "GREY_BARK": { "type": "lambertian", "albedo": [0.3, 0.27, 0.23] },
+    "OCOTILLO_LEAF": { "type": "leaf", "reflectance": [0.1, 0.2, 0.05], "transmittance": [0.05, 0.12, 0.02], "roughness": 0.3 },
+    "CREOSOTE_LEAF": { "type": "leaf", "reflectance": [0.07, 0.11, 0.04], "transmittance": [0.03, 0.06, 0.01], "roughness": 0.25 },
+    "SAGE_LEAF": { "type": "leaf", "reflectance": [0.24, 0.27, 0.22], "transmittance": [0.05, 0.07, 0.04], "roughness": 0.5 }
+  },
+
+  "camera": {
+    "location": [0, 3.6, 0],
+    "lookat": [45, 42, 1000],
+    "up": [0, 1, 0],
+    "angle": 0.45,
+    "aperture": 0.0
+  },
+
+  "sun": { "intensity": 1 },
+
+  "objects": [
+    { "type": "skysphere", "ozone": false, "sun_direction": [-0.5, 0.15, -0.8] },
+    { "type": "transform", "item": "land", "material": "GROUND" },
+
+    { "type": "tree", "species": "saguaro", "seed": 7, "location": [-10, 1.84, 45], "params": { "scale": 10, "scale_v": 0 }, "bark": "SAGUARO", "leaves": "SPINE" },
+    { "type": "tree", "species": "barrel-cactus", "seed": 2, "location": [3, 2.14, 11], "bark": "BARREL", "leaves": "RED_SPINE" },
+    { "type": "tree", "species": "agave", "seed": 3, "location": [-2.5, 1.91, 12], "bark": "AGAVE", "leaves": "DARK_SPINE" },
+    { "type": "tree", "species": "prickly-pear", "seed": 2, "location": [5, 2.2, 14], "bark": "PAD", "leaves": "SPINE" },
+    { "type": "tree", "species": "creosote-bush", "seed": 4, "location": [-1.5, 1.97, 22], "bark": "GREY_BARK", "leaves": "CREOSOTE_LEAF" },
+    { "type": "tree", "species": "ocotillo", "seed": 3, "location": [6.5, 2.25, 30], "bark": "GREY_BARK", "leaves": "OCOTILLO_LEAF" },
+
+    { "type": "forest", "seed": 5, "surface": "land",
+      "area": { "min": [-500, 16], "max": [500, 1500] },
+      "spacing": 6, "clearings": 0.2, "patch_size": 50, "patchiness": 0.5, "max_slope": 25, "variants": 3,
+      "species": [
+        { "species": "creosote-bush", "weight": 5, "bark": "GREY_BARK", "leaves": "CREOSOTE_LEAF" },
+        { "species": "sagebrush", "weight": 2, "spacing": 0.8, "bark": "GREY_BARK", "leaves": "SAGE_LEAF" },
+        { "species": "saguaro", "weight": 1.2, "spacing": 1.6, "bark": "SAGUARO", "leaves": "SPINE" },
+        { "species": "ocotillo", "weight": 0.7, "spacing": 1.3, "bark": "GREY_BARK", "leaves": "OCOTILLO_LEAF" },
+        { "species": "prickly-pear", "weight": 1, "spacing": 0.8, "bark": "PAD", "leaves": "SPINE" },
+        { "species": "barrel-cactus", "weight": 0.6, "spacing": 0.6, "bark": "BARREL", "leaves": "RED_SPINE" },
+        { "species": "agave", "weight": 0.5, "spacing": 0.7, "bark": "AGAVE", "leaves": "DARK_SPINE" }
+      ] }
+  ]
+}

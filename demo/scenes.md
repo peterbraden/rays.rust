@@ -130,6 +130,22 @@ under the sky model's low sun: Scots pines, Norway spruces, quaking aspens and b
 turning in autumn, with a shrub understory. Each species is three distinct trees, instanced;
 species grow in stands, with clearings, and none on steep slopes.
 ![forest](./scenes/forest.png)
+## Desert
+Desert plants: `tree` species for the arid Southwest. From left to right: a sagebrush, a
+creosote bush, a saguaro, an ocotillo and a Joshua tree; in front, a prickly pear, a barrel
+cactus and an agave. The bushes and the Joshua tree are Weber and Penn trees; the succulents are
+built by `src/procedural/succulent.rs` (ribbed columns with arms, squat barrels, chains of
+pads, rosettes of channelled leaves, fans of canes), their `"bark"` the green body and their
+`"leaves"` the spines. Like any species they can grow in a `forest`.
+![desert plants](./scenes/desert-plants.png)
+
+Mesas and buttes at sundown, over a Sonoran saguaro forest (about 30,000 instanced plants of
+seven species). The terrain is a `"mesas"` heightmap: outlines cut from noise, each scarp a
+caprock cliff stepping down in ledges to a talus apron, profiled by the exact distance from
+the edge. Sandstone shows on the slopes too steep for the desert soil, by a `mix` material
+whose `amount` is the slope (`{"slope": [26, 40], "jitter": 8}`).
+![desert mesas](./scenes/desert-mesas.png)
+
 ## Alpine terrain
 Mountains from seeded noise after one 100,000 year glacial cycle: tectonic uplift, river
 incision and glacial erosion (`src/terrain/`).

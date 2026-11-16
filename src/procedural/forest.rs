@@ -93,6 +93,34 @@ impl MaterialModel for PartsMaterial {
     }
 }
 
+/// How to choose each placed tree's level of detail (`crate::shapes::lod`): by the size of a
+/// pixel where it stands, seen from `eye`.
+#[derive(Clone, Debug)]
+pub struct Lod {
+    pub eye: Vector3<f64>,
+    /// The angle between neighbouring pixels, in radians.
+    pub pixel_angle: f64,
+    /// The largest detail dropped, in pixels.
+    pub pixels: f64,
+    pub max_level: usize,
+}
+
+impl Lod {
+    /// The level of detail for a tree whose own `bounds` (about its base) are placed at `at`,
+    /// scaled by `scale`, whose pieces are `base` across: by the size of a pixel at its nearest
+    /// point to the eye, in the tree's own units. A tree is placed turned and maybe mirrored, so
+    /// its nearest point is taken from a sphere about its bounds.
+    pub fn level(&self, bounds: &BBox, at: Vector3<f64>, scale: f64, base: f64) -> usize {
+        let mid = (bounds.min.coords + bounds.max.coords) * 0.5;
+        let centre = at + Vector3::new(0., mid.y * scale, 0.);
+        let radius = (0.5 * (bounds.max - bounds.min).norm() + mid.xz().norm()) * scale;
+        let distance = ((centre - self.eye).norm() - radius).max(0.);
+        // Beyond the coarsest level worth making, a card as large as the whole tree.
+        let most = crate::shapes::lod::level_for(base, (bounds.max - bounds.min).max(), 1., self.max_level) + 1;
+        crate::shapes::lod::level_for(base, distance * self.pixel_angle / scale, self.pixels, most.min(self.max_level))
+    }
+}
+
 /// A species' share of a forest.
 #[derive(Clone, Debug)]
 pub struct ForestSpecies {

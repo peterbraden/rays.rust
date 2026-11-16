@@ -2183,8 +2183,10 @@ impl SceneFile {
         })
     }
 
-    /// A colour (black if absent), or `{"type": "gradient", "bottom": colour, "top": colour}`.
-    pub fn parse_background(v: &Value) -> Background {
+    /// A colour (black if absent), `{"type": "gradient", "bottom": colour, "top": colour}`, or
+    /// `{"type": "space", ...}` (`procedural::space`), for a camera whose pixels are
+    /// `pixel_angle` radians across.
+    pub fn parse_background(v: &Value, pixel_angle: f64) -> Background {
         match v {
             Value::Null => Background::Solid(Color::black()),
             Value::Object(_) => match v["type"].as_str() {
@@ -2192,7 +2194,8 @@ impl SceneFile {
                     bottom: SceneFile::parse_color_def(v, "bottom", Color::white()),
                     top: SceneFile::parse_color_def(v, "top", Color::new(0.5, 0.7, 1.)),
                 },
-                t => panic!("Unknown background type {:?}: expected \"gradient\" or a colour", t),
+                Some("space") => Background::Space(Arc::new(crate::procedural::space::Space::parse(v, pixel_angle))),
+                t => panic!("Unknown background type {:?}: expected \"gradient\", \"space\" or a colour", t),
             },
             _ => Background::Solid(SceneFile::parse_color(v)),
         }
@@ -2239,7 +2242,7 @@ impl SceneFile {
             image: ImageOpts { width, height },
             render: RenderOpts {
                 max_depth: SceneFile::parse_int(&s.max_depth, 2),
-                background: SceneFile::parse_background(&s.background),
+                background: SceneFile::parse_background(&s.background, pixel_angle),
                 shadow_bias: SceneFile::parse_number(&s.shadow_bias, 1e-7f64),
                 supersamples: SceneFile::parse_int(&s.supersamples, 35),  
                 chunk_size: SceneFile::parse_int(&s.chunk_size, 64).max(1), 
@@ -2640,12 +2643,12 @@ mod tests {
 
     #[test]
     fn test_gradient_background() {
-        let g = SceneFile::parse_background(&serde_json::json!({ "type": "gradient" }));
+        let g = SceneFile::parse_background(&serde_json::json!({ "type": "gradient" }), 0.);
         // The book's colours by default: white looking down, (0.5, 0.7, 1) looking up.
         assert_eq!(g.radiance(&Vector3::new(0., -1., 0.)), Color::white());
         assert_eq!(g.radiance(&Vector3::new(0., 2., 0.)), Color::new(0.5, 0.7, 1.));
         assert_eq!(g.radiance(&Vector3::new(1., 0., 0.)), Color::new(0.75, 0.85, 1.));
-        assert_eq!(SceneFile::parse_background(&serde_json::json!([0.1, 0.2, 0.3])), Background::Solid(Color::new(0.1, 0.2, 0.3)));
+        assert_eq!(SceneFile::parse_background(&serde_json::json!([0.1, 0.2, 0.3]), 0.), Background::Solid(Color::new(0.1, 0.2, 0.3)));
     }
 
     #[test]

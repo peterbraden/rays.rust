@@ -111,6 +111,7 @@ mod procedural {
     pub mod mammatus;
     pub mod precipitation;
     pub mod harris_cumulus;
+    pub mod space;
 }
 mod participatingmedia;
 mod noise;

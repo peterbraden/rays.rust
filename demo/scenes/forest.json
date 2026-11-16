@@ -42,6 +42,11 @@
     "NEEDLE_2": { "type": "leaf", "reflectance": [0.05, 0.11, 0.04], "transmittance": [0.02, 0.05, 0.01], "roughness": 0.2 },
     "PINE_NEEDLE_1": { "type": "leaf", "reflectance": [0.07, 0.13, 0.05], "transmittance": [0.03, 0.07, 0.01], "roughness": 0.2 },
     "PINE_NEEDLE_2": { "type": "leaf", "reflectance": [0.08, 0.13, 0.06], "transmittance": [0.03, 0.06, 0.02], "roughness": 0.2 },
+    "HAZEL_LEAF": { "type": "leaf", "reflectance": [0.08, 0.17, 0.04], "transmittance": [0.06, 0.17, 0.02],
+      "autumn": { "reflectance": [0.45, 0.36, 0.08], "transmittance": [0.35, 0.28, 0.04] } },
+    "HAWTHORN_LEAF": { "type": "leaf", "reflectance": [0.06, 0.13, 0.035], "transmittance": [0.04, 0.11, 0.02],
+      "autumn": { "reflectance": [0.42, 0.15, 0.05], "transmittance": [0.3, 0.08, 0.02] } },
+    "JUNIPER": { "type": "leaf", "reflectance": [0.06, 0.09, 0.07], "transmittance": [0.02, 0.04, 0.02], "roughness": 0.2 },
     "GROUND": { "type": "soil", "preset": "forest_floor", "seed": 2 }
   },
 
@@ -82,6 +87,21 @@
           "params": { "dead_branches": 0.05 } },
         { "species": "black-tupelo", "weight": 1, "spacing": 1.2, "bark": "BARK", "leaves": "TUPELO_LEAF" },
         { "species": "shrub", "weight": 4, "spacing": 0.35, "scale_v": 0.3, "bark": "BARK", "leaves": "SHRUB_LEAF" }
-      ] }
+      ] },
+
+    { "type": "forest", "seed": 8, "surface": "land",
+      "area": { "min": [-440, -40], "max": [440, 740] },
+      "spacing": 5, "clearings": 0.35, "patch_size": 30, "patchiness": 0.6, "max_slope": 35,
+      "variants": 3, "autumn": 0.4,
+      "species": [
+        { "species": "hazel", "weight": 3, "bark": "PALE_BARK", "leaves": "HAZEL_LEAF" },
+        { "species": "hawthorn", "weight": 2, "bark": "BARK", "leaves": "HAWTHORN_LEAF" },
+        { "species": "juniper", "weight": 1, "spacing": 0.6, "bark": "BARK", "leaves": "JUNIPER", "params": { "autumn": 0 } },
+        { "species": "shrub", "weight": 2, "spacing": 0.5, "scale_v": 0.3, "bark": "BARK", "leaves": "SHRUB_LEAF" }
+      ] },
+
+    { "type": "grass", "heightmap": "$land", "min": [-60, -50], "max": [60, 30], "density": 25, "seed": 9,
+      "species": [ { "preset": "bracken", "weight": 1 }, { "preset": "heather", "weight": 0.1 }, { "preset": "rough", "weight": 0.3 } ],
+      "conditions": { "preset": "autumn", "species_zones": 8, "patchiness": 0.4, "patch_scale": 10, "litter": 150 } }
   ]
 }

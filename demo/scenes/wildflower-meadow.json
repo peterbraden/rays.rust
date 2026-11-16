@@ -10,13 +10,19 @@
 
   "variables": {
     "hills": {
-      "type": "noise", "min": [-30, -10], "max": [30, 50], "resolution": 240,
+      "type": "noise", "min": [-16, -6], "max": [16, 45], "cell_size": 0.25,
+      "amplitude": 1.5, "scale": 25, "octaves": 5, "seed": 4
+    },
+    "far_hills": {
+      "type": "noise", "min": [-1500, -10], "max": [1500, 3000], "cell_size": 3, "base": -0.1,
       "amplitude": 1.5, "scale": 25, "octaves": 5, "seed": 4
     }
   },
 
   "materials": {
-    "SOIL": { "type": "soil", "preset": "loam", "seed": 1 }
+    "SOIL": { "type": "soil", "preset": "loam", "seed": 1 },
+    "FAR_MEADOW": { "type": "soil", "seed": 2, "color": [0.17, 0.19, 0.08], "humus": [0.11, 0.13, 0.05], "mottle_size": 12,
+      "stones": 0, "crumbs": 0, "moss": 0, "bump": 0, "litter": 0.3, "litter_color": [0.22, 0.2, 0.1], "litter_length": 0.3, "litter_width": 0.02 }
   },
   "media": {},
 
@@ -35,6 +41,7 @@
   "objects": [
     { "type": "skysphere", "ozone": false, "rayleigh_r": 1.16e-5, "rayleigh_g": 2.7e-5, "rayleigh_b": 6.62e-5, "sun_direction": [-0.6, 0.5, -0.5] },
     { "type": "terrain", "heightmap": "$hills", "material": "SOIL" },
+    { "type": "terrain", "heightmap": "$far_hills", "material": "FAR_MEADOW" },
     {
       "type": "grass",
       "heightmap": "$hills",

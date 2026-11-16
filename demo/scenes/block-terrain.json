@@ -1,4 +1,5 @@
 {
+  "output": { "exposure": 0.35 },
   "width": 2160,
   "height": 960,
   "supersamples": 75,
@@ -33,7 +34,7 @@
       "y": 0,
       "material" : "OCEAN"
     },
-    { "type" : "skysphere" },
+    { "type" : "skysphere", "rayleigh_r": 1.16e-5, "rayleigh_g": 2.7e-5, "rayleigh_b": 6.62e-5 },
     { "type" : "box_terrain" }
   ]
 }

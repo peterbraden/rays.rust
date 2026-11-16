@@ -1,0 +1,10 @@
+/home/user/rays.rust/shaders/target/spirv-builder/release/build/spirv-std-macros/21054e4138e42a82/out/spirv_std_macros-21054e4138e42a82.d: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/debug_printf.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/image.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/sample_param_permutations.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/scalar_or_vector_composite.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/../README.md
+
+/home/user/rays.rust/shaders/target/spirv-builder/release/build/spirv-std-macros/21054e4138e42a82/out/libspirv_std_macros-21054e4138e42a82.so: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/debug_printf.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/image.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/sample_param_permutations.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/scalar_or_vector_composite.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/../README.md
+
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/lib.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/debug_printf.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/image.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/sample_param_permutations.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/scalar_or_vector_composite.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirv-std-macros-0.11.0/src/../README.md:

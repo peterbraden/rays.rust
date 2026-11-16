@@ -1,7 +1,7 @@
 {
   "width": 960,
   "height": 600,
-  "supersamples": 16,
+  "supersamples": 128,
   "chunk_size": 64,
   "samples_per_chunk": 8,
   "shadow_bias": 0.01,

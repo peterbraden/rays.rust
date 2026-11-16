@@ -1,4 +1,5 @@
 {
+  "output": { "exposure": 0.18 },
   "width": 1200,
   "height": 500,
   "supersamples": 999,
@@ -214,7 +215,7 @@
       "planet_radius": 0
     },
     {
-      "type": "skysphere"
+      "type": "skysphere", "multiple_scattering": false, "mie_coefficient": 0.000105
     }
   ]
 }

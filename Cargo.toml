@@ -28,12 +28,14 @@ nv-flip = "0.1.2"
 ttf-parser = "0.25"
 libc = "0.2"
 # The GPU path tracer (`gpu`), built only with `--features gpu`.
-wgpu = { version = "30", optional = true }
+wgpu = { version = "30", optional = true, features = ["spirv"] }
 pollster = { version = "0.4", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
+# The shader crate, also compiled for the CPU: its buffer layouts and its code, for tests.
+pathtrace = { path = "shaders/pathtrace", optional = true }
 
 [features]
-gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:pathtrace"]
 
 [profile.release]
 # Whole-program optimisation: inlining across crates (nalgebra, rustfft, rand) and modules.

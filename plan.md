@@ -1129,7 +1129,22 @@ scenes with a skysphere may not have. On lavapipe (4 cores) at 640 x 360, 64 spp
 s (path tracer 4.7 s), instances 16.1 s (12.4 s), demo 6.1 s (7.1 s). Timings on a real GPU
 are still to be measured.
 
+The shader then moved from WGSL to Rust, compiled by rust-gpu (spirv-builder 0.11): a
+separate workspace `shaders/` pinned to its nightly (`nightly-2026-08-15`; its README said
+2026-04-11, its toolchain check disagreed), built by `scripts/build-shaders.sh` into the
+committed `src/gpu/pathtrace.spv`, so the renderer stays on stable. The same crate builds for
+the CPU on stable: the host uses its structs as the buffer layouts, and tests check its
+Fresnel, conductor, GGX and sphere-light functions against the renderer's, and its whole
+`radiance` on the CPU against the GPU's image (within 1%). Images are identical to the WGSL
+version's (same FLIP figures); on lavapipe it runs 5-25% slower, after removing bounds checks
+on the scene's buffers (`at`), which had cost a third. What rust-gpu or naga refused:
+`(a..=b).contains(&x)` (a pointer in `Bound`), `f32::is_finite` (an infinite literal), and
+slices of local arrays.
+
 ### Deferred from chapters 15-16
+
+- Sharing the shading with the CPU wavefront integrator itself: it is f64 and nalgebra, the
+  shader f32 and glam; for now the tests hold them together.
 
 - Measuring on real GPUs (the Mac's Metal), and tuning: workgroup size, f16 storage, stack
   depth. The shader is a megakernel (one path per invocation); pbrt's GPU renderer queues

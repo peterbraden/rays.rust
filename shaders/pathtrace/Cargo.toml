@@ -1,0 +1,19 @@
+[package]
+name = "pathtrace"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["dylib", "lib"]
+
+[dependencies]
+spirv-std = "0.11"
+
+# On the CPU (the renderer uses this crate's buffer layouts and runs its code in tests), the
+# structs are plain data for bytemuck, and glam's types are too.
+[target.'cfg(not(target_arch = "spirv"))'.dependencies]
+bytemuck = { version = "1", features = ["derive"] }
+glam = { version = "0.34", default-features = false, features = ["bytemuck", "std"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(target_arch, values("spirv"))'] }

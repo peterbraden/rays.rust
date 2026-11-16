@@ -151,12 +151,16 @@ The same flattened scene renders on a GPU, through wgpu (Metal, Vulkan or Direct
 cargo run --release --features gpu -- demo/scenes/spheres.json --gpu
 ```
 
-A compute shader (`src/gpu/pathtrace.wgsl`) traces one path per pixel per pass over the
+A compute shader, written in Rust (`shaders/pathtrace`) and compiled to SPIR-V by
+[rust-gpu](https://github.com/rust-gpu/rust-gpu), traces one path per pixel per pass over the
 uploaded primitives, BVH and materials, with the wavefront integrator's shading; camera rays
 come from the CPU each pass (so every camera works), and the sky and its aerial perspective are
 baked into tables. Against the path tracer's 512-sample images, at 512 samples: `demo.json`
 exposure 0.998 and mean FLIP 0.0017, `instances` 1.001 and 0.016. Without a GPU, Mesa's lavapipe
-(software Vulkan) runs it, at about the CPU renderers' speed.
+(software Vulkan) runs it, at about the CPU renderers' speed. The compiled shader is committed
+(`src/gpu/pathtrace.spv`), so the renderer builds on stable Rust; after editing the shader, run
+`scripts/build-shaders.sh`, which uses the nightly toolchain rust-gpu pins (`shaders/rust-toolchain.toml`).
+The shader crate also builds for the CPU, where the tests run its code against the renderer's.
 
 ## Coats and subsurface scattering
 

@@ -1,8 +1,15 @@
 //! A path tracer on the GPU, with wgpu (Vulkan, Metal, DirectX 12): the flattened scene of the
-//! wavefront integrator (`wavefront::flat`) uploaded as buffers, and a compute shader
-//! (`pathtrace.wgsl`) that traces one path per pixel per pass, porting the wavefront
-//! integrator's shading to f32 (Pharr, Jakob and Humphreys, "Physically Based Rendering", 4th
-//! ed., chapter 15, whose wavefront renderer is pbrt-v4's GPU renderer).
+//! wavefront integrator (`wavefront::flat`) uploaded as buffers, and a compute shader that
+//! traces one path per pixel per pass, porting the wavefront integrator's shading to f32
+//! (Pharr, Jakob and Humphreys, "Physically Based Rendering", 4th ed., chapter 15, whose
+//! wavefront renderer is pbrt-v4's GPU renderer).
+//!
+//! The shader is Rust: the crate `shaders/pathtrace`, compiled to SPIR-V by rust-gpu
+//! (`scripts/build-shaders.sh`, on rust-gpu's pinned nightly; the renderer stays on stable and
+//! includes the committed `pathtrace.spv`), which wgpu translates for the device (naga), for
+//! Metal too. The same crate is also built for the CPU: its structs are these buffers'
+//! layouts (so the two sides can't drift), and the tests run its functions, and its whole
+//! `radiance`, on the CPU against the renderer's own and the GPU's.
 //!
 //! What stays on the CPU: camera rays (generated each pass and uploaded, so every camera,
 //! realistic lenses included, works unchanged), and the sky, baked into an environment map
@@ -24,7 +31,7 @@ use crate::wavefront::flat::{FlatMaterial, FlatScene, Prim};
 use crate::light::Profile;
 use crate::na::Vector3;
 use crate::ray::Ray;
-use bytemuck::{Pod, Zeroable};
+use bytemuck::Zeroable;
 use rayon::prelude::*;
 use std::sync::Mutex;
 use wgpu::util::DeviceExt;
@@ -44,100 +51,39 @@ const AERIAL_TO: f64 = 2e5;
 const WORKGROUP: u32 = 64;
 const MAX_GROUPS: u32 = 65535;
 
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Params {
-    dims: [u32; 4],
-    counts: [u32; 4],
-    offs: [u32; 4],
-    offs2: [u32; 4],
-    misc: [f32; 4],
-    sun_dir: [f32; 4],
-    sun_irr: [f32; 4],
-    seed: [u32; 4],
-    /// The sun's azimuth frame for the aerial perspective table (x along the sun, z across).
-    ap_x: [f32; 4],
-    ap_z: [f32; 4],
+// The buffers' layouts are the shader crate's own (`shaders/pathtrace`), so the two can't drift.
+use pathtrace::{CameraRay as GpuRay, Light as GpuLight, Material as GpuMaterial, Node as GpuNode, Params, Prim as GpuPrim};
+use pathtrace::glam::{UVec4, Vec4};
+
+fn v4(v: &Vector3<f64>, w: f32) -> Vec4 {
+    Vec4::new(v.x as f32, v.y as f32, v.z as f32, w)
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct GpuPrim {
-    v0: [f32; 4],
-    v1: [f32; 4],
-    v2: [f32; 4],
-    n0: [f32; 4],
-    n1: [f32; 4],
-    n2: [f32; 4],
-    meta: [u32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct GpuNode {
-    bmin: [f32; 3],
-    offset: u32,
-    bmax: [f32; 3],
-    count: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct GpuMaterial {
-    kind: u32,
-    a: u32,
-    b: u32,
-    pad: u32,
-    c0: [f32; 4],
-    c1: [f32; 4],
-    p: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct GpuLight {
-    pos: [f32; 4],
-    intensity: [f32; 4],
-    axis: [f32; 4],
-    extra: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct GpuRay {
-    o: [f32; 4],
-    d: [f32; 4],
-}
-
-fn v4(v: &Vector3<f64>, w: f32) -> [f32; 4] {
-    [v.x as f32, v.y as f32, v.z as f32, w]
-}
-
-fn c4(c: &Color) -> [f32; 4] {
-    [c.rgb.x as f32, c.rgb.y as f32, c.rgb.z as f32, 0.]
+fn c4(c: &Color) -> Vec4 {
+    Vec4::new(c.rgb.x as f32, c.rgb.y as f32, c.rgb.z as f32, 0.)
 }
 
 /// Flatten `m` into `out` (checkerboards' squares after it), returning its index.
 fn push_material(m: &FlatMaterial, out: &mut Vec<GpuMaterial>) -> u32 {
     let index = out.len() as u32;
-    let blank = GpuMaterial { kind: 0, a: 0, b: 0, pad: 0, c0: [0.; 4], c1: [0.; 4], p: [0.; 4] };
+    let blank = GpuMaterial::zeroed();
     out.push(blank);
     let g = match m {
         FlatMaterial::Diffuse { albedo } => GpuMaterial { kind: 0, c0: c4(albedo), ..blank },
         FlatMaterial::Plastic { albedo, refractive_index, roughness } =>
-            GpuMaterial { kind: 1, c0: c4(albedo), p: [*refractive_index as f32, *roughness as f32, 0., 0.], ..blank },
+            GpuMaterial { kind: 1, c0: c4(albedo), p: Vec4::new(*refractive_index as f32, *roughness as f32, 0., 0.), ..blank },
         FlatMaterial::Dielectric { refractive_index, tint } =>
-            GpuMaterial { kind: 2, c0: c4(tint), p: [*refractive_index as f32, 0., 0., 0.], ..blank },
+            GpuMaterial { kind: 2, c0: c4(tint), p: Vec4::new(*refractive_index as f32, 0., 0., 0.), ..blank },
         FlatMaterial::Conductor { optics, roughness } => {
             let (eta, k) = optics.current();
-            GpuMaterial { kind: 3, c0: c4(&eta), c1: c4(&k), p: [0., *roughness as f32, 0., 0.], ..blank }
+            GpuMaterial { kind: 3, c0: c4(&eta), c1: c4(&k), p: Vec4::new(0., *roughness as f32, 0., 0.), ..blank }
         },
         FlatMaterial::Emitter { radiance, two_sided } => GpuMaterial { kind: 4, a: *two_sided as u32, c0: c4(radiance), ..blank },
-        FlatMaterial::Specular { albedo, roughness } => GpuMaterial { kind: 5, c0: c4(albedo), p: [0., *roughness as f32, 0., 0.], ..blank },
+        FlatMaterial::Specular { albedo, roughness } => GpuMaterial { kind: 5, c0: c4(albedo), p: Vec4::new(0., *roughness as f32, 0., 0.), ..blank },
         FlatMaterial::Checker { m1, m2, xsize, zsize } => {
             let a = push_material(m1, out);
             let b = push_material(m2, out);
-            GpuMaterial { kind: 6, a, b, p: [0., 0., *xsize as f32, *zsize as f32], ..blank }
+            GpuMaterial { kind: 6, a, b, p: Vec4::new(0., 0., *xsize as f32, *zsize as f32), ..blank }
         },
     };
     out[index as usize] = g;
@@ -184,9 +130,19 @@ fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
     wgpu::BindGroupEntry { binding, resource: buffer.as_entire_binding() }
 }
 
-impl GpuRenderer {
-    /// Upload the flattened scene, or say why the GPU can't render it.
-    pub fn new(s: &Scene, flat: &FlatScene) -> Result<GpuRenderer, String> {
+/// The shader's inputs, built on the CPU (`Buffers::build`).
+pub struct Buffers {
+    pub params: Params,
+    pub prims: Vec<GpuPrim>,
+    pub nodes: Vec<GpuNode>,
+    pub materials: Vec<GpuMaterial>,
+    pub lights: Vec<GpuLight>,
+    pub tables: Vec<f32>,
+}
+
+impl Buffers {
+    /// The flattened scene as the shader's buffers, or why it can't be.
+    pub fn build(s: &Scene, flat: &FlatScene) -> Result<Buffers, String> {
         let mut lights = Vec::new();
         for l in &s.lights {
             let i = l.emission.srgb() * l.intensity;
@@ -195,7 +151,7 @@ impl GpuRenderer {
                 Profile::Spot { axis, cos_falloff_start, cos_total } => (1., *axis, *cos_falloff_start, *cos_total),
                 _ => return Err("goniometric and projection lights".into()),
             };
-            lights.push(GpuLight { pos: v4(&l.position, kind), intensity: c4(&i), axis: v4(&axis, start as f32), extra: [end as f32, 0., 0., 0.] });
+            lights.push(GpuLight { pos: v4(&l.position, kind), intensity: c4(&i), axis: v4(&axis, start as f32), extra: Vec4::new(end as f32, 0., 0., 0.) });
         }
         if lights.is_empty() {
             lights.push(GpuLight::zeroed());
@@ -206,17 +162,17 @@ impl GpuRenderer {
         let material_index: Vec<u32> = flat.materials.iter().map(|m| push_material(m, &mut materials)).collect();
         let to_gpu = |p: &Prim, m: u32, emitter: u32| -> GpuPrim {
             let mut g = GpuPrim::zeroed();
-            g.meta = [0, material_index[m as usize], emitter, 0];
+            g.info = UVec4::new(0, material_index[m as usize], emitter, 0);
             match p {
                 Prim::Triangle { v, n } => {
                     g.v0 = v4(&v[0], 0.); g.v1 = v4(&v[1], 0.); g.v2 = v4(&v[2], 0.);
                     if let Some(n) = n {
                         g.n0 = v4(&n[0], 0.); g.n1 = v4(&n[1], 0.); g.n2 = v4(&n[2], 0.);
-                        g.meta[3] = 1;
+                        g.info.w = 1;
                     }
                 },
-                Prim::Sphere { center, radius } => { g.v0 = v4(center, *radius as f32); g.meta[0] = 1; },
-                Prim::Plane { y } => { g.v0 = [*y as f32, 0., 0., 0.]; g.meta[0] = 2; },
+                Prim::Sphere { center, radius } => { g.v0 = v4(center, *radius as f32); g.info.x = 1; },
+                Prim::Plane { y } => { g.v0 = Vec4::new(*y as f32, 0., 0., 0.); g.info.x = 2; },
             }
             g
         };
@@ -228,8 +184,8 @@ impl GpuRenderer {
             prims.push(GpuPrim::zeroed());
         }
         let mut nodes: Vec<GpuNode> = flat.bvh.export().iter().map(|(b, offset, count)| GpuNode {
-            bmin: [b.min.x as f32, b.min.y as f32, b.min.z as f32], offset: *offset,
-            bmax: [b.max.x as f32, b.max.y as f32, b.max.z as f32], count: *count,
+            bmin: pathtrace::glam::Vec3::new(b.min.x as f32, b.min.y as f32, b.min.z as f32), offset: *offset,
+            bmax: pathtrace::glam::Vec3::new(b.max.x as f32, b.max.y as f32, b.max.z as f32), count: *count,
         }).collect();
         if nodes.is_empty() {
             nodes.push(GpuNode::zeroed());
@@ -302,27 +258,34 @@ impl GpuRenderer {
             Some(sun) => {
                 flags |= 4;
                 let e = sun.irradiance_at(&Vector3::zeros());
-                (v4(&sun.direction, sun.angular_radius.cos() as f32), [e.rgb.x as f32, e.rgb.y as f32, e.rgb.z as f32, sun.angular_radius as f32])
+                (v4(&sun.direction, sun.angular_radius.cos() as f32), Vec4::new(e.rgb.x as f32, e.rgb.y as f32, e.rgb.z as f32, sun.angular_radius as f32))
             },
-            None => ([0., 1., 0., 1.], [0.; 4]),
+            None => (Vec4::new(0., 1., 0., 1.), Vec4::ZERO),
         };
         let (rr, rr_min) = match s.render.path_termination {
             PathTermination::RussianRoulette { min_depth } => (1, min_depth as f32),
             _ => (0, 0.),
         };
         let params = Params {
-            dims: [s.image.width as u32, s.image.height as u32, 0, s.render.max_depth as u32],
-            counts: [flat.prims.len() as u32, flat.planes.len() as u32, flat.emitters.len() as u32, s.lights.len() as u32],
-            offs: [emitter_off, cdf_off, env_off, marginal_off],
-            offs2: [conditional_off, ENV_WIDTH as u32, ENV_HEIGHT as u32, flags],
-            misc: [s.render.regularise as f32, s.black_threshold as f32, s.render.shadow_bias as f32, rr_min],
+            dims: UVec4::new(s.image.width as u32, s.image.height as u32, 0, s.render.max_depth as u32),
+            counts: UVec4::new(flat.prims.len() as u32, flat.planes.len() as u32, flat.emitters.len() as u32, s.lights.len() as u32),
+            offs: UVec4::new(emitter_off, cdf_off, env_off, marginal_off),
+            offs2: UVec4::new(conditional_off, ENV_WIDTH as u32, ENV_HEIGHT as u32, flags),
+            misc: Vec4::new(s.render.regularise as f32, s.black_threshold as f32, s.render.shadow_bias as f32, rr_min),
             sun_dir,
             sun_irr,
             ap_x: v4(&ap_frame.0, 0.),
             ap_z: v4(&ap_frame.1, 0.),
-            seed: [s.render.seed as u32, rr, aerial_off, 0],
+            seed: UVec4::new(s.render.seed as u32, rr, aerial_off, 0),
         };
+        Ok(Buffers { params, prims, nodes, materials, lights, tables })
+    }
+}
 
+impl GpuRenderer {
+    /// Upload the flattened scene, or say why the GPU can't render it.
+    pub fn new(s: &Scene, flat: &FlatScene) -> Result<GpuRenderer, String> {
+        let Buffers { params, prims, nodes, materials, lights, tables } = Buffers::build(s, flat)?;
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -339,9 +302,11 @@ impl GpuRenderer {
             ..Default::default()
         })).map_err(|e| format!("can't open the GPU ({})", e))?;
 
+        // The shader, written in Rust (`shaders/pathtrace`) and compiled to SPIR-V by rust-gpu
+        // (`scripts/build-shaders.sh`).
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("pathtrace"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("pathtrace.wgsl").into()),
+            source: wgpu::util::make_spirv(include_bytes!("pathtrace.spv")),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("pathtrace"),
@@ -387,7 +352,7 @@ impl GpuRenderer {
     }
 
     /// Camera rays for sample `k` of every pixel, as the wavefront integrator's.
-    fn camera_rays(&self, s: &Scene, k: usize) -> Vec<GpuRay> {
+    pub fn camera_rays(s: &Scene, k: usize) -> Vec<GpuRay> {
         let (w, h) = (s.image.width, s.image.height);
         let pixels = (w * h) as u64;
         (0..w * h).into_par_iter().map(|index| {
@@ -412,9 +377,9 @@ impl GpuRenderer {
         encoder.clear_buffer(&self.accum_buffer, 0, None);
         self.queue.submit(Some(encoder.finish()));
         for k in passes {
-            self.params.dims[2] = k as u32;
+            self.params.dims.z = k as u32;
             self.queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&self.params));
-            self.queue.write_buffer(&self.rays_buffer, 0, bytemuck::cast_slice(&self.camera_rays(s, k)));
+            self.queue.write_buffer(&self.rays_buffer, 0, bytemuck::cast_slice(&Self::camera_rays(s, k)));
             let mut encoder = self.device.create_command_encoder(&Default::default());
             {
                 let mut pass = encoder.begin_compute_pass(&Default::default());
@@ -461,12 +426,98 @@ impl GpuRenderer {
 mod tests {
     use super::*;
     use crate::scenefile::SceneFile;
+    use pathtrace::glam::Vec3;
+
+    fn g3(v: &Vector3<f64>) -> Vec3 {
+        Vec3::new(v.x as f32, v.y as f32, v.z as f32)
+    }
+
+    /// The shader's functions, run on the CPU, agree with the renderer's own.
+    #[test]
+    fn test_shader_functions_match_the_renderer() {
+        use crate::material::bsdf::BSDF;
+        crate::geometry::seed_rand(1, 0);
+        let r = crate::geometry::rand;
+        for _ in 0..2000 {
+            let (cos, ior) = (r(), 1. + r() * 1.5);
+            for ni_over_nt in [1. / ior, ior] {
+                let cpu = crate::material::functions::fresnel_reflectance(cos, ni_over_nt, ior);
+                let gpu = pathtrace::fresnel_reflectance(cos as f32, ni_over_nt as f32, ior as f32) as f64;
+                // f32, and near total internal reflection a square root steepens the error.
+                assert!((cpu - gpu).abs() < 1e-4, "fresnel {} {}: {} vs {}", cos, ni_over_nt, cpu, gpu);
+            }
+            let (eta, k) = (0.1 + r() * 2., r() * 5.);
+            let cpu = crate::material::ggx::conductor_reflectance(cos, eta, k);
+            let gpu = pathtrace::conductor_reflectance(cos as f32, eta as f32, k as f32) as f64;
+            assert!((cpu - gpu).abs() < 1e-4, "conductor {} {} {}: {} vs {}", cos, eta, k, cpu, gpu);
+        }
+        // GGX with Schlick's Fresnel: f cos and the density, about a tilted normal.
+        let n = Vector3::new(0.3, 0.8, -0.2).normalize();
+        let f0 = Color::new(0.9, 0.6, 0.3);
+        for alpha in [0.05, 0.3, 0.8] {
+            let cpu = crate::material::ggx::GGX::new(alpha, crate::material::ggx::Fresnel::Schlick(f0), n);
+            let mut gpu = pathtrace::Lobe::new(1, g3(&n));
+            gpu.alpha = alpha as f32;
+            gpu.albedo = Vec3::new(0.9, 0.6, 0.3);
+            for _ in 0..2000 {
+                let d = |u: f64, v: f64| (n + crate::geometry::point_on_unit_sphere(u, v)).normalize();
+                let (wo, wi) = (d(r(), r()), d(r(), r()));
+                let (fc, fg) = (cpu.eval(&wo, &wi), gpu.eval(g3(&wo), g3(&wi)));
+                let (pc, pg) = (cpu.pdf(&wo, &wi), gpu.pdf(g3(&wo), g3(&wi)) as f64);
+                assert!((fc.rgb.x - fg.x as f64).abs() <= 1e-3 * (1. + fc.rgb.x), "alpha {}: f {} vs {}", alpha, fc.rgb.x, fg.x);
+                assert!((pc - pg).abs() <= 1e-3 * (1. + pc), "alpha {}: pdf {} vs {}", alpha, pc, pg);
+            }
+        }
+        // A sphere light's density from outside and inside.
+        let sphere = crate::shapes::sphere::Sphere::new(Vector3::new(1., 2., 3.), 0.5);
+        for from in [Vector3::new(4., 0., 1.), Vector3::new(1.1, 2.2, 3.1)] {
+            use crate::shapes::geometry::Geometry;
+            let (y, ny, _) = sphere.sample_from(&from, [0.3, 0.6, 0.2]).unwrap();
+            let cpu = sphere.pdf_from(&from, &y, &ny);
+            let gpu = pathtrace::sphere_pdf(g3(&sphere.center), 0.5, g3(&from), g3(&y), g3(&ny)) as f64;
+            assert!((cpu - gpu).abs() < 1e-3 * cpu, "{} vs {}", cpu, gpu);
+        }
+    }
+
+    /// The whole shader, run on the CPU over the same buffers, renders what it renders on the
+    /// GPU: a check on the compilation to SPIR-V and its translation for the device.
+    #[test]
+    fn test_shader_on_the_cpu_matches_the_gpu() {
+        let s = scene();
+        let flat = FlatScene::build(&s).unwrap();
+        let mut gpu = match GpuRenderer::new(&s, &flat) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("skipped: {}", e);
+                return;
+            },
+        };
+        let b = Buffers::build(&s, &flat).unwrap();
+        let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+        let passes = 32;
+        let mut cpu = Vector3::zeros();
+        for k in 0..passes {
+            for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
+                if ray.d.w < 0.5 {
+                    continue;
+                }
+                let mut rng = pathtrace::path_seed(index as u32, k as u32, b.params.seed.x);
+                let c = pathtrace::radiance(&shader, ray.o.truncate(), ray.d.truncate(), &mut rng) * ray.o.w;
+                cpu += Vector3::new(c.x as f64, c.y as f64, c.z as f64);
+            }
+        }
+        let sums = gpu.run(&s, 0..passes);
+        let on_gpu = sums.iter().fold(Vector3::zeros(), |a, v| a + Vector3::new(v[0] as f64, v[1] as f64, v[2] as f64));
+        for ch in 0..3 {
+            assert!((on_gpu[ch] - cpu[ch]).abs() < 0.01 * cpu[ch], "channel {}: GPU {} vs CPU {}", ch, on_gpu[ch], cpu[ch]);
+        }
+    }
 
     /// The GPU renders what the CPU wavefront integrator does (skipped without a GPU adapter,
     /// such as Mesa's lavapipe).
-    #[test]
-    fn test_agrees_with_the_wavefront_integrator() {
-        let s = SceneFile::from_string(r#"{
+    /// Every material and kind of light the GPU path has.
+    fn scene() -> Scene {
+        SceneFile::from_string(r#"{
             "width": 24, "height": 16, "supersamples": 256, "background": [0.2, 0.25, 0.3], "max_depth": 6,
             "path_termination": "russian_roulette",
             "sun": { "direction": [-1, 2, -1], "intensity": 2 },
@@ -486,7 +537,12 @@ mod tests {
                 { "type": "sphere", "location": [1.2, 0.5, 0], "radius": 0.5, "material": "C" },
                 { "type": "sphere", "location": [0, 2.5, 1], "radius": 0.3, "material": "E" }
             ]
-        }"#.to_string());
+        }"#.to_string())
+    }
+
+    #[test]
+    fn test_agrees_with_the_wavefront_integrator() {
+        let s = scene();
         let flat = FlatScene::build(&s).unwrap();
         let mut gpu = match GpuRenderer::new(&s, &flat) {
             Ok(g) => g,

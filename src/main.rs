@@ -143,6 +143,7 @@ mod variance;
 mod environment;
 mod sobol;
 mod planet;
+mod weather;
 
 use crate::trace::trace;
 use crate::rendercontext::RenderContext;
@@ -269,10 +270,13 @@ fn main() {
     );
 
     let build_start = Instant::now();
-    let doc = scenefile::SceneFile::read_document(&args.scene).unwrap_or_else(|e| {
+    let mut doc = scenefile::SceneFile::read_document(&args.scene).unwrap_or_else(|e| {
         eprintln!("{}", e);
         std::process::exit(1);
     });
+    // Weather without a seed gets a random one here, before the render is keyed by the scene,
+    // so a new sky never resumes an old one's samples.
+    weather::scene::choose_seeds(&mut doc);
     if let Some(path) = &args.dump_scene {
         let json = serde_json::to_string_pretty(&doc).unwrap();
         std::fs::write(path, json + "\n").unwrap_or_else(|e| {

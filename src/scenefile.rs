@@ -741,6 +741,13 @@ impl SceneFile {
             }));
         }
 
+        if t == "weather_layer" {
+            return Some(Arc::new(crate::weather::scene::create_layer(&o)));
+        }
+        if t == "weather" {
+            panic!("A weather object is expanded into its layers before parsing (`weather::scene::expand`)");
+        }
+
         if t == "hogan_kew_cirrus" {
             return Some(Arc::new(SceneFile::parse_hogan_kew_cirrus(&o)));
         }
@@ -1619,9 +1626,13 @@ impl SceneFile {
     /// default) and `"flat"` as for `nubis_clouds`.
     /// The phase function defaults to `g` 0.75, for ice crystals; `"halos"` adds sun dogs and
     /// halos (see `SceneFile::parse_halos`).
-    pub fn parse_hogan_kew_cirrus(o: &Value) -> SceneObject {
+    /// Hogan and Kew's cirrus as a scene file describes it (see `parse_hogan_kew_cirrus`), by
+    /// default of `genus`: the layer, and its generating cells' size, spectral slope,
+    /// coverage and seed.
+    pub fn hogan_kew_layer(o: &Value, genus: CirrusGenus) -> (HoganKewCirrus, (f64, f64, f64, u64)) {
         let genus = match o["genus"].as_str() {
-            None | Some("cirrus") => CirrusGenus::Cirrus,
+            None => genus,
+            Some("cirrus") => CirrusGenus::Cirrus,
             Some("cirrostratus") => CirrusGenus::Cirrostratus,
             Some("cirrocumulus") => CirrusGenus::Cirrocumulus,
             Some(g) => panic!("Unknown cirrus genus '{}': expected cirrus, cirrostratus or cirrocumulus", g),
@@ -1636,7 +1647,6 @@ impl SceneFile {
         f.anisotropy = num("anisotropy", f.anisotropy);
         f.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", f.wind_direction);
         f.seed = SceneFile::parse_seed(o).unwrap_or(0);
-        let (base, top) = (f.base, f.top);
         let generating = (f.cell_size, f.spectral_slope, f.coverage, f.seed);
         let mut c = HoganKewCirrus::new(f);
         c.max_density = num("density", c.max_density);
@@ -1662,6 +1672,13 @@ impl SceneFile {
         c.particle_growth = num("particle_growth", c.particle_growth);
         c.young_size = num("young_size", c.young_size).clamp(0.05, 1.);
         c.patch_size = num("patch_size", c.patch_size);
+        (c, generating)
+    }
+
+    pub fn parse_hogan_kew_cirrus(o: &Value) -> SceneObject {
+        let (mut c, generating) = SceneFile::hogan_kew_layer(o, CirrusGenus::Cirrus);
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let (base, top) = (c.base, c.top);
         // By default the layer reaches its own horizon, √(2 R top), so it runs down into the
         // haze there rather than stopping short in clear sky (a 9 km deck stays above the horizon
         // out to 340 km).
@@ -2884,6 +2901,8 @@ impl SceneFile {
                 o["camera"] = s.camera.clone();
             }
         }
+        // Weather becomes its families of cloud, which know the sky's sun and the landscape.
+        let scene_objects = crate::weather::scene::expand(scene_objects);
         let objects = SceneFile::parse_objects(scene_objects, &s.materials, &s.media, &geometries);
         // Emitters with a surface we can sample become area lights.
         let area_lights: Vec<Arc<SceneObject>> = objects.iter()
@@ -3097,8 +3116,9 @@ impl SceneFile {
     /// Build a scene from a scene file's JSON, applying command-line overrides first.
     pub fn from_value_overridden(doc: Value, o: &Overrides) -> Scene {
         let (width, height) = (o.width, o.height);
-        let doc = SceneFile::substitute_variables(doc)
+        let mut doc = SceneFile::substitute_variables(doc)
             .unwrap_or_else(|e| panic!("Scene file: {}", e));
+        crate::weather::scene::choose_seeds(&mut doc);
         let mut scene: SceneFile = serde_json::from_value(doc).unwrap();
         if let Some(seed) = o.seed {
             scene.seed = Value::from(seed);

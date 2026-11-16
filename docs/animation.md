@@ -66,29 +66,85 @@ A frame is chosen on the command line, never by editing the file:
 
 Without either, `t = start` (0), so every existing scene renders as it does today.
 
-### Local clocks: `time_scale` and `time_offset`
+### Clocks: rates with units
 
-Any object that depends on time reads its **local time**
+The scene's times span sixteen orders of magnitude: the shutter is open for a fiftieth of a
+second, waves take seconds, clouds grow over an hour, glaciers advance and retreat over
+100,000 years (`glacier.rs`'s cycle), and the landscape is millions of years old. One number
+can't serve them all, so each object reads its own **clock**, which has its own units and
+rate.
+
+- **Video time** `t` is seconds of the finished film: the camera, keyframes and the shutter use
+  it.
+- **An object's native unit** is the one its `"time"` key already has: seconds for the ocean,
+  clouds, fireworks and the sky; years for `landscape` (and glaciers, rivers and volcanoes in
+  it).
+- **A rate** converts video seconds to the object's own time, written with units so it reads
+  the same whatever the object: `"1 s/s"` (real time, **the default for everything**),
+  `"1 min/s"`, `"2 kyr/s"`, `"0"` (frozen). Units are `s`, `min`, `h`, `day`, `yr`, `kyr`,
+  `Myr`.
+
+An object's local time is its `"time"` (where it is at the first frame, in its own unit) plus
+its clock's elapsed time since the first frame, converted to that unit:
 
 ```
-local = time + time_scale * (t - start)
+local = time + elapsed(clock, t)          elapsed = rate * (t - start) for a constant rate
 ```
 
-where `time` is the object's existing `"time"` key (its time at the first frame, default 0),
-and `time_scale` defaults to 1. So:
+With the default of 1 s/s, a landscape advances 3 × 10⁻⁸ years per second, so it is still,
+as it should be, without being told to freeze. To watch glaciation, give the landscape a
+geological clock:
 
 ```json
-{"type": "ocean", "time": 0},                                   // real time
-{"type": "harris_cumulus", "time": 1800, "time_scale": 60},     // a 1-minute-per-second time-lapse
-{"type": "landscape", "time": 1e6, "time_scale": 0}             // frozen
+"clocks": { "geology": "2 kyr/s", "weather": "1 min/s" },
+"objects": [
+  {"type": "landscape", "time": 1e6, "clock": "geology"},   // one glacial cycle in 50 s
+  {"type": "harris_cumulus", "time": 1800, "clock": "weather"},
+  {"type": "ocean"}                                          // real time
+]
 ```
 
-Existing scenes keep their meaning: `"time"` is still where the object is at the first frame.
-`time_scale` is resolved by the scene file parser before the object's own parser runs, so the
-objects themselves only ever see a plain `"time"`; none of their code changes.
+An object takes `"clock": "name"` (a shared clock defined in `"clocks"`) or an inline
+`"clock": "500 yr/s"`. Shared clocks keep everything that should move together (all the
+weather) at one rate, tuned in one place. Existing scenes keep their meaning: `"time"` is still
+where the object is at the first frame. The clock is worked out before the object's own parser
+runs, so the object only ever sees a plain `"time"` in its own unit.
 
-Shared rates (all weather at one speed, tuned in one place) can come later as named clocks:
-`"clocks": {"weather": 60}` and `"time_scale": "weather"`. Not needed for the first version.
+#### Ramps
+
+A clock's rate can itself be keyed, for the shot that starts in real time and accelerates
+into a time-lapse:
+
+```json
+"clocks": { "geology": {"rate": [[0, "0 yr/s"], [4, "0 yr/s"], [10, "5 kyr/s"]], "interpolation": "log"} }
+```
+
+Across many orders of magnitude the rate is interpolated in log space (a constant factor per
+second, which looks like a steady acceleration), and a rate of zero is approached from a tiny
+floor. `elapsed` is the integral of the rate, which for linear or exponential pieces has a closed
+form, so any frame's local time is computed directly, without stepping through earlier frames.
+
+#### Clocks that don't mix
+
+Two things go wrong when one clock is far faster than the frame rate:
+
+- **Simulations land between their steps.** At 2 kyr/s and 24 fps a frame is 83 years, and a
+  landscape steps every 500 years: most frames fall inside a step. At 1 s/s a frame is
+  3 × 10⁻⁸ years, and every frame of a shot falls inside the same step. Taking a partial step
+  for each frame would be slow (a landscape step can take seconds) and pointless. Instead a
+  simulated object shows the state **interpolated between the two grid states either side of
+  its local time** (rule 2 below): heights, ice thickness, water and snow blended linearly.
+  When the whole shot falls within one step, the step is simulated once and reused from the
+  cache by every frame, at no further cost.
+- **Fast clocks strobe.** If a cloud field changes completely between frames (clouds at
+  `"1 kyr/s"`), each frame shows unrelated weather, which flickers. That's the user's choice of
+  rate, but the renderer warns when a clock advances an object by more than its correlation
+  time per frame (for clouds, the time a cloud lives; for waves, a wave's period). A real
+  time-lapse photographer would average with a long exposure; here the cheap equivalent is to
+  slow that object's clock.
+
+The camera, keyframed values and the shutter always run in video seconds, so camera moves stay
+smooth whatever the clocks are doing.
 
 ### Animated values (keyframes)
 
@@ -159,13 +215,19 @@ What every time-dependent object must obey, and what the tests check:
 1. **No state carried between frames.** An object at time `t` is built from the scene file
    and `t` alone.
 2. **Simulations step on a fixed grid.** A simulation's step sequence must not depend on where
-   it is stopped. It advances only through whole steps between canonical checkpoints (every
-   `checkpoint` seconds of simulated time, say 60 s for clouds, from `t = 0`): within a
-   checkpoint interval the adaptive steps are chosen as now, but the interval always ends
-   exactly on its checkpoint. Cache entries are saved only at checkpoints. To show time `t`,
-   advance a *copy* from the checkpoint before `t` to `t` and discard it. Starting from a
-   cache or from scratch then follows the same steps to the same bits; the perturbation seed
-   follows the step count, which is now the same either way.
+   it is stopped. It advances only through whole intervals between canonical checkpoints, laid
+   from its time zero in its own unit (say every 60 s for clouds, every `step` years for a
+   landscape). Within an interval the adaptive steps are chosen as now (the glaciers'
+   `min_step`/`max_step`, the clouds' CFL step), but the interval always ends exactly on its
+   checkpoint. Cache entries are saved only at checkpoints. To show local time `τ`, the
+   checkpoints either side of `τ` are simulated (or loaded) and blended. Starting from a cache
+   or from scratch then follows the same steps to the same bits; the perturbation seed follows
+   the step count, which is now the same either way.
+
+   Blending suits slow, smooth processes (landscapes, ice). For clouds, whose checkpoints are a
+   minute apart and whose structure moves, a blend would cross-fade rather than move; there
+   the copy at the checkpoint before `τ` is advanced to `τ` and thrown away (deterministic,
+   since it always starts from the same checkpoint).
 3. **Per-frame seeds.** Sample seeds are `hash(seed, frame)` by default, so noise is
    decorrelated frame to frame (grain, not a fixed pattern); `"animation": {"lock_noise": true}`
    keeps the scene's seed for every frame when a static pattern is wanted (it flickers less
@@ -202,22 +264,29 @@ Once the clock exists, objects gain motion one at a time, each through its local
 ## Steps
 
 1. Scene clock: `"animation"`, `--frame`, `--time`, `%04d` outputs, per-frame seeds, resume
-   key. `time_scale`/`time_offset` resolved onto objects' `"time"`. `animate.py` uses `--frame`.
-2. Simulations on the checkpoint grid (`harris_cumulus`, `landscape`); a test that a frame from
-   cache equals one from scratch.
-3. Keyframed values (the JSON pass), with transforms resolved into `"motion"`.
-4. Camera paths: `Spline`, arc-length speed, `lookat` modes, banking, `Placement::Path`.
-5. Isolation tests: frame N alone equals frame N after frames 0..N-1; different thread counts
+   key. `animate.py` uses `--frame`.
+2. Clocks: rates with units, `"clocks"` and `"clock"`, each object's native unit, resolved onto
+   objects' `"time"`; then keyed rates (ramps) with closed-form `elapsed`.
+3. Simulations on the checkpoint grid (`harris_cumulus`, `landscape` and its glaciers), with
+   blending between checkpoints for the landscape; a test that a frame from cache equals one
+   from scratch. A glaciation demo: a valley through one glacial cycle at a few kyr/s.
+4. Keyframed values (the JSON pass), with transforms resolved into `"motion"`.
+5. Camera paths: `Spline`, arc-length speed, `lookat` modes, banking, `Placement::Path`.
+6. Isolation tests: frame N alone equals frame N after frames 0..N-1; different thread counts
    give identical images.
-6. Motion for the static objects, one per change (nubis first).
+7. Motion for the static objects, one per change (nubis first).
 
 ## Open questions
 
-- Should `time_scale` multiply around the first frame (`time + scale * (t - start)`, as above)
-  or around zero (`scale * t + offset`)? The first keeps existing `"time"` values meaning
-  "where it is when the shot starts", which seems the more useful.
 - Lock noise across frames by default, or decorrelate? Decorrelated is closer to film, and
   denoisers and temporal filters prefer it.
-- Is a keyframed value in scene seconds or in the object's local time? Scene seconds is
-  simpler to reason about across objects; local time would let a time-lapsed object's keys
-  follow its own clock.
+- Is a keyframed value in video seconds or in the object's own clock? Video seconds is
+  simpler to reason about across objects; the object's clock would let a glacier's keys (an
+  ELA, say) be written in years.
+- Does the sky need a clock of its own? With `sun_direction` from the time of day, a
+  `"1 h/s"` sky gives a day in 24 s, but next to a geological clock it would strobe through
+  days and nights; a geological shot probably wants the sun fixed (rate 0) or averaged.
+- How fine must the landscape's checkpoints be for smooth glaciation? Blending is linear in
+  ice thickness; a glacier front advancing far within one step would fade in rather than
+  advance. The step may need to follow the clock's rate (a few frames per checkpoint), which
+  would make it part of the cache key.

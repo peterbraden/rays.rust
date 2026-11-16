@@ -606,7 +606,7 @@ impl SceneFile {
          let mut objects: Vec<Arc<SceneObject>> = Vec::new();
          for obj in objs {
             // Report the objects that are slow to build (meshes, oceans), by type and source.
-            let start = std::time::Instant::now();
+            let start = web_time::Instant::now();
             let name = format!("{}{}", obj["type"].as_str().unwrap_or("?"),
                 obj["src"].as_str().or(obj["item"]["src"].as_str()).map_or(String::new(), |s| format!(" {}", s)));
             if obj["type"] == "tree" {

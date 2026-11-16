@@ -305,15 +305,41 @@ impl Buffers {
     }
 }
 
+/// A buffer mapping's completion as a future: wgpu calls back when it's done (natively, during
+/// `poll`; in a browser, from the event loop, so the render must yield to it).
+#[derive(Default)]
+struct Mapped(std::sync::Arc<Mutex<(Option<Result<(), String>>, Option<std::task::Waker>)>>);
+
+impl std::future::Future for Mapped {
+    type Output = Result<(), String>;
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        let mut slot = self.0.lock().unwrap();
+        match slot.0.take() {
+            Some(r) => std::task::Poll::Ready(r),
+            None => {
+                slot.1 = Some(cx.waker().clone());
+                std::task::Poll::Pending
+            }
+        }
+    }
+}
+
 impl GpuRenderer {
-    /// Upload the flattened scene, or say why the GPU can't render it.
+    /// Upload the flattened scene, or say why the GPU can't render it (blocking; natively).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(s: &Scene, flat: &FlatScene) -> Result<GpuRenderer, String> {
+        pollster::block_on(Self::create(s, flat))
+    }
+
+    /// Upload the flattened scene, or say why the GPU can't render it. Async, for a browser,
+    /// whose WebGPU can't be waited on.
+    pub async fn create(s: &Scene, flat: &FlatScene) -> Result<GpuRenderer, String> {
         let Buffers { params, prims, nodes, materials, lights, tables } = Buffers::build(s, flat)?;
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             ..Default::default()
-        })).map_err(|e| format!("no GPU adapter ({})", e))?;
+        }).await.map_err(|e| format!("no GPU adapter ({})", e))?;
         let adapter_name = format!("{} ({:?})", adapter.get_info().name, adapter.get_info().backend);
         let mut limits = wgpu::Limits::default();
         let available = adapter.limits();
@@ -330,18 +356,19 @@ impl GpuRenderer {
         }
         limits.max_storage_buffer_binding_size = available.max_storage_buffer_binding_size;
         limits.max_buffer_size = available.max_buffer_size;
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("rays"),
             required_limits: limits,
             ..Default::default()
-        })).map_err(|e| format!("can't open the GPU ({})", e))?;
+        }).await.map_err(|e| format!("can't open the GPU ({})", e))?;
 
         // The shader, written in Rust (`shaders/pathtrace`) and compiled to SPIR-V by rust-gpu
-        // (`scripts/build-shaders.sh`).
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("pathtrace"),
-            source: wgpu::util::make_spirv(include_bytes!("pathtrace.spv")),
-        });
+        // (`scripts/build-shaders.sh`); a browser takes the WGSL translation made with it.
+        #[cfg(not(target_arch = "wasm32"))]
+        let source = wgpu::util::make_spirv(include_bytes!("pathtrace.spv"));
+        #[cfg(target_arch = "wasm32")]
+        let source = wgpu::ShaderSource::Wgsl(include_str!("pathtrace.wgsl").into());
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pathtrace"), source });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("pathtrace"),
             layout: None,
@@ -401,39 +428,69 @@ impl GpuRenderer {
         }).collect()
     }
 
-    /// Render passes `first..last`, accumulating on the GPU; returns the sums per pixel.
-    fn run(&mut self, s: &Scene, passes: std::ops::Range<usize>) -> Vec<[f32; 4]> {
-        let pixels = (s.image.width * s.image.height) as u32;
-        let groups = pixels.div_ceil(WORKGROUP);
-        let (gx, gy) = (groups.min(MAX_GROUPS), groups.div_ceil(MAX_GROUPS));
+    /// Zero the image accumulated on the GPU.
+    pub fn clear(&self) {
         let mut encoder = self.device.create_command_encoder(&Default::default());
         encoder.clear_buffer(&self.accum_buffer, 0, None);
         self.queue.submit(Some(encoder.finish()));
-        for k in passes {
-            self.params.dims.z = k as u32;
-            self.queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&self.params));
-            self.queue.write_buffer(&self.rays_buffer, 0, bytemuck::cast_slice(&Self::camera_rays(s, k)));
-            let mut encoder = self.device.create_command_encoder(&Default::default());
-            {
-                let mut pass = encoder.begin_compute_pass(&Default::default());
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &self.bind_group, &[]);
-                pass.dispatch_workgroups(gx, gy, 1);
-            }
-            self.queue.submit(Some(encoder.finish()));
+    }
+
+    /// Queue pass (sample) `k` of every pixel, adding to the image on the GPU. Returns at once;
+    /// a pass is one dispatch, so a browser can give each frame one, within its GPU watchdog.
+    pub fn dispatch(&mut self, s: &Scene, k: usize) {
+        let pixels = (s.image.width * s.image.height) as u32;
+        let groups = pixels.div_ceil(WORKGROUP);
+        let (gx, gy) = (groups.min(MAX_GROUPS), groups.div_ceil(MAX_GROUPS));
+        self.params.dims.z = k as u32;
+        self.queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&self.params));
+        self.queue.write_buffer(&self.rays_buffer, 0, bytemuck::cast_slice(&Self::camera_rays(s, k)));
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.dispatch_workgroups(gx, gy, 1);
         }
+        self.queue.submit(Some(encoder.finish()));
+    }
+
+    /// The image accumulated so far: each pixel's sums (the radiance's, and in w the camera
+    /// rays' weights'). Natively this waits for the GPU; in a browser it yields until the copy
+    /// can be read.
+    pub async fn read_back(&self) -> Result<Vec<[f32; 4]>, String> {
         let mut encoder = self.device.create_command_encoder(&Default::default());
         encoder.copy_buffer_to_buffer(&self.accum_buffer, 0, &self.readback, 0, None);
         self.queue.submit(Some(encoder.finish()));
-        self.readback.map_async(wgpu::MapMode::Read, .., |r| r.expect("couldn't read the GPU's image back"));
-        self.device.poll(wgpu::PollType::wait_indefinitely()).expect("GPU device lost");
+        let mapped = Mapped::default();
+        let slot = mapped.0.clone();
+        self.readback.map_async(wgpu::MapMode::Read, .., move |r| {
+            let mut slot = slot.lock().unwrap();
+            slot.0 = Some(r.map_err(|e| e.to_string()));
+            if let Some(waker) = slot.1.take() {
+                waker.wake();
+            }
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("GPU device lost ({})", e))?;
+        mapped.await.map_err(|e| format!("couldn't read the GPU's image back ({})", e))?;
         let out = bytemuck::cast_slice::<u8, [f32; 4]>(&self.readback.get_mapped_range(..).unwrap()).to_vec();
         self.readback.unmap();
-        out
+        Ok(out)
+    }
+
+    /// Render passes `first..last`, accumulating on the GPU; returns the sums per pixel.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn run(&mut self, s: &Scene, passes: std::ops::Range<usize>) -> Vec<[f32; 4]> {
+        self.clear();
+        for k in passes {
+            self.dispatch(s, k);
+        }
+        pollster::block_on(self.read_back()).expect("GPU readback")
     }
 
     /// Render up to the scene's samples per pixel from where `rc` has got to, reading the
     /// image back every `PASSES_PER_READ` passes; `after` sees the context each time.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn render(&mut self, s: &Scene, rc: &Mutex<RenderContext>, mut after: impl FnMut(&RenderContext)) {
         let first = rc.lock().unwrap().min_samples();
         let target = s.render.samples_per_pixel();

@@ -58,11 +58,11 @@
 //!
 //! - `lambert` -> `lambertian`; `oren_nayar` -> `lambertian` (its roughness dropped).
 //! - `mirror` -> `metal` of roughness 0.
-//! - `conductor`, `rough_conductor` -> `metal` whose colour is albedo times the Fresnel
-//!   reflectance at normal incidence, ((eta - 1)^2 + k^2) / ((eta + 1)^2 + k^2) per channel,
-//!   from `eta` and `k` or the named `material` (default "Cu") in Tungsten's table
-//!   (`bsdfs/ComplexIorData.hpp`, copied into `COMPLEX_IOR`). Our metals approximate the
-//!   Fresnel term from that colour by Schlick's formula, rather than from eta and k.
+//! - `conductor`, `rough_conductor` -> `conductor`: a measured metal of ours (`spectrum::metals`)
+//!   if the named `material` is one, or else `eta` and `k`, given or from Tungsten's table
+//!   (`bsdfs/ComplexIorData.hpp`, copied into `COMPLEX_IOR`; default "Cu"). With an albedo other
+//!   than white, `metal` instead, whose colour is albedo times the Fresnel reflectance at normal
+//!   incidence, ((eta - 1)^2 + k^2) / ((eta + 1)^2 + k^2) per channel, by Schlick's formula.
 //! - `dielectric`, `rough_dielectric` -> `dielectric` (`ior` default 1.5), attenuated by albedo.
 //! - `plastic`, `rough_plastic` -> `plastic` (`ior` default 1.5); its coat's absorption
 //!   (`sigma_a`, `thickness`) is dropped.
@@ -404,7 +404,16 @@ impl<'a> Importer<'a> {
                     },
                 };
                 let roughness = if t == "rough_conductor" { num("roughness", 0.1).sqrt() } else { 0. };
-                json!({ "type": "metal", "reflective": rgb(albedo.component_mul(&conductor_reflectance(eta, k))), "roughness": roughness })
+                let named = b["material"].as_str().filter(|n| crate::spectrum::metals::named(n).is_some());
+                if albedo != V3::repeat(1.) {
+                    // Our conductors take no tint: the tinted colour, by Schlick's formula.
+                    json!({ "type": "metal", "reflective": rgb(albedo.component_mul(&conductor_reflectance(eta, k))), "roughness": roughness })
+                } else if let (Some(name), true) = (named, b["eta"].is_null()) {
+                    // A measured metal, spectral in spectral mode.
+                    json!({ "type": "conductor", "metal": name, "roughness": roughness })
+                } else {
+                    json!({ "type": "conductor", "eta": rgb(eta), "k": rgb(k), "roughness": roughness })
+                }
             },
             "dielectric" | "rough_dielectric" => {
                 if b["enable_refraction"] == json!(false) {
@@ -764,9 +773,10 @@ mod tests {
             .map(|b| json!({ "type": "sphere", "bsdf": b })).collect();
         let (s, w) = scene(json!(prims), bsdfs);
         let m = &s["materials"];
-        let au = v(&m["gold"], "reflective");
-        assert!(au.x > 0.9 && au.z < 0.6, "gold is yellow: {}", au);
-        assert_eq!(m["custom"]["reflective"], json!([0., 0., 0.]), "eta 1, k 0 reflects nothing");
+        assert_eq!(m["gold"], json!({ "type": "conductor", "metal": "Au", "roughness": 0. }), "a measured metal");
+        assert_eq!(m["custom"]["type"], "conductor");
+        assert_eq!(m["custom"]["eta"], json!([1., 1., 1.]));
+        assert_eq!(m["custom"]["k"], json!([0., 0., 0.]));
         assert_eq!(m["custom"]["roughness"], 0.3f64.sqrt());
         assert_eq!(m["glass"], json!({ "type": "dielectric", "refractive_index": 1.33, "attenuate": [1., 1., 1.] }));
         assert_eq!(m["plastic"]["refractive_index"], 1.5);

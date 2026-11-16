@@ -571,10 +571,10 @@ mod tests {
             l.density(&(from + (to - from) * ((i as f64 + 0.5) / steps as f64)))
         }).sum::<f64>() * (to - from).norm() / steps as f64;
         assert!(optical_depth > 0.2 && optical_depth < 3., "uninformative test: {}", optical_depth);
-        let v = Volume {
-            bounds: BBox::new(Vector3::new(-3500., 1000., -4300.), Vector3::new(4500., 2000., 3700.)),
-            density: std::sync::Arc::new(l),
-        };
+        let v = Volume::new(
+            BBox::new(Vector3::new(-3500., 1000., -4300.), Vector3::new(4500., 2000., 3700.)),
+            std::sync::Arc::new(l),
+        );
         // Stop at `to`: tracking beyond it would also count cloud past the end.
         let r = Ray { ro: from, rd: to - from };
         let n = 20_000;

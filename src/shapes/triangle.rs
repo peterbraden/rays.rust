@@ -199,6 +199,16 @@ pub fn sample_triangle(a: Vector3<f64>, b: Vector3<f64>, c: Vector3<f64>, r1: f6
 }
 
 impl Geometry for Triangle {
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        // Wound so that the winding's normal is the triangle's.
+        let v = if (self.v1 - self.v0).cross(&(self.v2 - self.v0)).dot(&self.normal) >= 0. { [self.v0, self.v1, self.v2] } else { [self.v0, self.v2, self.v1] };
+        Some(vec![crate::wavefront::flat::Prim::Triangle { v, n: None }])
+    }
+
+    fn uv(&self, p: &Vector3<f64>, _face: u32) -> Option<crate::na::Vector2<f64>> {
+        Some(triangle_uv([self.v0, self.v1, self.v2], None, p))
+    }
+
     fn surface_area(&self) -> f64 {
         0.5 * (self.v1 - self.v0).cross(&(self.v2 - self.v0)).norm()
     }
@@ -296,12 +306,45 @@ pub(crate) fn interpolate_normal(v: [Vector3<f64>; 3], n: [Vector3<f64>; 3], poi
     (n[2] * a  + n[1] * b + (1. - a - b) * n[0]).normalize()
 }
 
+/// The barycentric coordinates (b0, b1, b2) of `p`, a point on the triangle `v`: its weights
+/// for each vertex (PBR section 6.5.3).
+pub fn barycentric(v: [Vector3<f64>; 3], p: &Vector3<f64>) -> [f64; 3] {
+    let (e1, e2, d) = (v[1] - v[0], v[2] - v[0], p - v[0]);
+    let (d11, d12, d22) = (e1.dot(&e1), e1.dot(&e2), e2.dot(&e2));
+    let (dp1, dp2) = (d.dot(&e1), d.dot(&e2));
+    let det = d11 * d22 - d12 * d12;
+    if det == 0. {
+        return [1., 0., 0.];
+    }
+    let b1 = (d22 * dp1 - d12 * dp2) / det;
+    let b2 = (d11 * dp2 - d12 * dp1) / det;
+    [1. - b1 - b2, b1, b2]
+}
+
+/// A triangle's texture coordinates at `p`: interpolated from its vertices' `texcoords`, or
+/// without them pbrt's default, the vertices at (0, 0), (1, 0) and (1, 1).
+pub fn triangle_uv(v: [Vector3<f64>; 3], texcoords: Option<[crate::na::Vector2<f64>; 3]>, p: &Vector3<f64>) -> crate::na::Vector2<f64> {
+    let b = barycentric(v, p);
+    match texcoords {
+        Some(t) => t[0] * b[0] + t[1] * b[1] + t[2] * b[2],
+        None => crate::na::Vector2::new(b[1] + b[2], b[2]),
+    }
+}
+
 /// The bounding box of a triangle.
 pub(crate) fn triangle_bounds(v0: Vector3<f64>, v1: Vector3<f64>, v2: Vector3<f64>) -> BBox {
     BBox::new(v0.inf(&v1).inf(&v2), v0.sup(&v1).sup(&v2))
 }
 
 impl Geometry for SmoothTriangle {
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        Some(vec![crate::wavefront::flat::Prim::Triangle { v: [self.v0, self.v1, self.v2], n: Some([self.normalv0, self.normalv1, self.normalv2]) }])
+    }
+
+    fn uv(&self, p: &Vector3<f64>, _face: u32) -> Option<crate::na::Vector2<f64>> {
+        Some(triangle_uv([self.v0, self.v1, self.v2], None, p))
+    }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         intersects_dist(self.v0, self.v1, self.v2, r).map(|x| RawIntersection { face: 0, part: 0,
                 dist: x.dist, 

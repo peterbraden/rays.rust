@@ -841,7 +841,7 @@ impl MaterialModel for PhysicalOcean {
         }
         let into = Intersection { normal: n, ..*intersection };
         // The water body, lit through the surface, as much as gets in.
-        let mut emit = crate::material::functions::direct_lighting(self.water * (1. - fresnel(n.dot(&v))), &into, s);
+        let mut emit = crate::material::functions::direct_lighting(self.water.as_reflectance() * (1. - fresnel(n.dot(&v))), &into, s);
         // The sun's glitter through the ripples: F D / (4 cos θv) per unit irradiance, Smith's
         // shadowing left out (it matters only at grazing angles).
         if let Some(sun) = &s.sun {
@@ -851,7 +851,7 @@ impl MaterialModel for PhysicalOcean {
                 let glint = fresnel(h.dot(&v)) * self.ripple_density(&n, &h) / (4. * n.dot(&v));
                 if glint > 1e-6 {
                     let lit = sun.transmittance_from(&intersection.point, s);
-                    emit = emit + sun.irradiance_at(&intersection.point) * (glint * lit);
+                    emit = emit + sun.irradiance_at(&intersection.point) * lit * glint;
                 }
             }
         }

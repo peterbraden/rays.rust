@@ -179,7 +179,7 @@ impl Environment {
             let (u, v) = ((k % WIDTH) as f64 + 0.5, (k / WIDTH) as f64 + 0.5);
             let (u, v) = (u / WIDTH as f64, v / HEIGHT as f64);
             let ray = Ray { ro: origin, rd: direction(u, v) };
-            let visible = s.objects.transmittance(&ray, SUN_SHADOW_DISTANCE, f64::MIN_POSITIVE);
+            let visible = s.objects.transmittance(&ray, SUN_SHADOW_DISTANCE, f64::MIN_POSITIVE).rgb.mean();
             luminance(&env.radiance(&ray, s)).max(0.) * visible * (PI * v).sin()
         }).collect();
         env.distribution = Distribution2D::new(&values, WIDTH);

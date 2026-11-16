@@ -16,13 +16,17 @@ pub struct Specular {
 }
 
 impl MaterialModel for Specular {
+    fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> {
+        Some(crate::wavefront::flat::FlatMaterial::Specular { albedo: self.albedo, roughness: self.roughness })
+    }
+
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay{
         // Shade whichever side the ray hit.
         let intersection = &intersection.facing(r);
-        let fresnel = Fresnel::Schlick(self.albedo);
+        let fresnel = Fresnel::Schlick(self.albedo.as_reflectance());
         let alpha = regularised(self.roughness * self.roughness, s);
         if alpha >= MIN_ALPHA {
-            let bsdf = GGX { alpha, fresnel, normal: intersection.normal };
+            let bsdf = GGX::new(alpha, fresnel, intersection.normal);
             return scatter_bsdf(&bsdf, r, &intersection.point, s);
         }
         // A mirror: only its reflected ray can find the lights.
@@ -92,7 +96,7 @@ mod tests {
     /// ∫ f(ω_o, ω) L(ω) cos θ dω over the sun's disc, in rings, for the floor of `sun_glint`.
     fn glint_expected(alpha: f64, s: &Scene) -> f64 {
         let sun = s.sun.as_ref().unwrap();
-        let bsdf = GGX { alpha, fresnel: Fresnel::Schlick(Color::new(0.9, 0.9, 0.9)), normal: Vector3::new(0., 1., 0.) };
+        let bsdf = GGX::new(alpha, Fresnel::Schlick(Color::new(0.9, 0.9, 0.9)), Vector3::new(0., 1., 0.));
         let wo = Vector3::new(0., 1., -1.).normalize();
         let (a, b) = crate::material::phase::orthonormal_basis(&sun.direction);
         let (rings, around) = (200, 200);

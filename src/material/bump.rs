@@ -114,6 +114,10 @@ impl Medium for Bumped {
         self.bump.perturb(pt, &self.inner.normal_at(pt, normal))
     }
 
+    fn normal_at_hit(&self, i: &crate::intersection::Intersection, s: &crate::scene::Scene) -> Vector3<f64> {
+        self.bump.perturb(&i.point, &self.inner.normal_at_hit(i, s))
+    }
+
     fn part(&self, k: u32) -> Option<&(dyn Medium + Sync + Send)> {
         self.inner.part(k)
     }

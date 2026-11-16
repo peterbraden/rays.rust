@@ -335,6 +335,33 @@ fn vec3_invert(rd: &Vector3<f64>) -> Vector3<f64> {
 
 
 impl Geometry for BBox {
+    /// Twelve triangles, wound to face out.
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        let (a, b) = (self.min.coords, self.max.coords);
+        let c = |x: bool, y: bool, z: bool| Vector3::new(if x { b.x } else { a.x }, if y { b.y } else { a.y }, if z { b.z } else { a.z });
+        let centre = (a + b) / 2.;
+        let mut out = Vec::new();
+        // Each face as a quad of corners in order around it.
+        let faces = [
+            [c(false, false, false), c(false, true, false), c(false, true, true), c(false, false, true)],
+            [c(true, false, false), c(true, false, true), c(true, true, true), c(true, true, false)],
+            [c(false, false, false), c(false, false, true), c(true, false, true), c(true, false, false)],
+            [c(false, true, false), c(true, true, false), c(true, true, true), c(false, true, true)],
+            [c(false, false, false), c(true, false, false), c(true, true, false), c(false, true, false)],
+            [c(false, false, true), c(false, true, true), c(true, true, true), c(true, false, true)],
+        ];
+        for q in faces {
+            for t in [[q[0], q[1], q[2]], [q[0], q[2], q[3]]] {
+                let outward = (t[1] - t[0]).cross(&(t[2] - t[0])).dot(&(t[0] - centre)) >= 0.;
+                let v = if outward { t } else { [t[0], t[2], t[1]] };
+                if (v[1] - v[0]).cross(&(v[2] - v[0])).norm_squared() > 0. {
+                    out.push(crate::wavefront::flat::Prim::Triangle { v, n: None });
+                }
+            }
+        }
+        Some(out)
+    }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         let invrd = vec3_invert(&r.rd);
         if !self.fast_intersects(&r.ro, &invrd) { 

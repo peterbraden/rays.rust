@@ -49,6 +49,8 @@ pub struct IndexedMesh {
     pub positions: Vec<Vector3<f64>>,
     pub normals: Vec<Vector3<f64>>,
     pub triangles: Vec<[usize; 3]>,
+    /// Texture coordinates per vertex, or empty.
+    pub texcoords: Vec<crate::na::Vector2<f64>>,
 }
 
 /// Load the models in an OBJ file as triangles, with positions and normals sharing one index.
@@ -73,13 +75,17 @@ fn load_obj(pth: &str) -> Vec<IndexedMesh> {
             normals.clear();
         }
         let triangles = m.mesh.indices.chunks(3).map(|i| [i[0] as usize, i[1] as usize, i[2] as usize]).collect();
-        IndexedMesh { positions, normals, triangles }
+        let mut texcoords: Vec<crate::na::Vector2<f64>> = m.mesh.texcoords.chunks(2).map(|t| crate::na::Vector2::new(t[0] as f64, t[1] as f64)).collect();
+        if texcoords.len() != positions.len() {
+            texcoords.clear();
+        }
+        IndexedMesh { positions, normals, triangles, texcoords }
     }).collect()
 }
 
 /// Load a mesh file: OBJ (`.obj`), PLY (`.ply`, see `crate::shapes::ply`) or Tungsten's `.wo3`
 /// (see `crate::shapes::wo3`).
-fn load(pth: &str) -> Vec<IndexedMesh> {
+pub fn load(pth: &str) -> Vec<IndexedMesh> {
     let lower = pth.to_lowercase();
     if lower.ends_with(".ply") {
         vec![crate::shapes::ply::read(pth).unwrap_or_else(|e| panic!("Failed to load mesh {}", e))]
@@ -94,8 +100,9 @@ fn to_vectors(v: &[f32]) -> Vec<Vector3<f64>> {
     v.chunks(3).map(|i| Vector3::new(i[0] as f64, i[1] as f64, i[2] as f64)).collect()
 }
 
-/// Vertex positions, and triangles as three indices into them.
-type MeshPart = (Vec<Vector3<f64>>, Vec<[usize; 3]>);
+/// Vertex positions, triangles as three indices into them, and texture coordinates per vertex
+/// (or none).
+type MeshPart = (Vec<Vector3<f64>>, Vec<[usize; 3]>, Vec<crate::na::Vector2<f64>>);
 
 /// Triangles as indices into a shared buffer of vertex positions. A vertex of a closed mesh is
 /// shared by about six triangles, so storing each position once and each triangle as three
@@ -109,27 +116,41 @@ struct IndexedTriangles {
     positions: Vec<Vector3<f64>>,
     /// In the BVH's leaf order.
     triangles: Vec<[u32; 3]>,
+    /// Indexed as `positions`, or empty.
+    texcoords: Vec<crate::na::Vector2<f64>>,
 }
 
 impl IndexedTriangles {
-    fn new(positions: Vec<Vector3<f64>>, triangles: Vec<[u32; 3]>) -> IndexedTriangles {
+    fn new(positions: Vec<Vector3<f64>>, triangles: Vec<[u32; 3]>, texcoords: Vec<crate::na::Vector2<f64>>) -> IndexedTriangles {
         let (bvh, triangles) = Bvh::build(triangles, |&[a, b, c]| {
             triangle_bounds(positions[a as usize], positions[b as usize], positions[c as usize])
         });
-        IndexedTriangles { bvh, positions, triangles }
+        IndexedTriangles { bvh, positions, triangles, texcoords }
+    }
+
+    /// Texture coordinates at `p` on triangle `i` (`triangle::triangle_uv`).
+    fn uv(&self, i: usize, p: &Vector3<f64>) -> crate::na::Vector2<f64> {
+        let t = (!self.texcoords.is_empty()).then(|| self.triangles[i].map(|v| self.texcoords[v as usize]));
+        crate::shapes::triangle::triangle_uv(self.vertices(i), t, p)
     }
 
     /// Concatenate meshes, each positions and triangles indexing them, into one vertex buffer,
     /// offsetting their indices.
     fn from_meshes(meshes: Vec<MeshPart>) -> IndexedTriangles {
+        // Texture coordinates for all or none: parts without them get zeros, if others have them.
+        let any_uv = meshes.iter().any(|(_, _, uv)| !uv.is_empty());
         let mut positions = Vec::new();
         let mut triangles = Vec::new();
-        for (p, t) in meshes {
+        let mut texcoords = Vec::new();
+        for (p, t, uv) in meshes {
             let offset = positions.len();
+            if any_uv {
+                texcoords.extend(if uv.len() == p.len() { uv } else { vec![crate::na::Vector2::zeros(); p.len()] });
+            }
             positions.extend(p);
             triangles.extend(t.iter().map(|tri| tri.map(|i| u32::try_from(i + offset).expect("mesh has over 2^32 vertices"))));
         }
-        IndexedTriangles::new(positions, triangles)
+        IndexedTriangles::new(positions, triangles, texcoords)
     }
 
     fn vertices(&self, i: usize) -> [Vector3<f64>; 3] {
@@ -172,13 +193,13 @@ impl Mesh {
     /// Load an OBJ or PLY file, scaling it by `scale`.
     pub fn from_file(pth: String, scale: Vector3<f64>) -> Mesh {
         Mesh::from_triangles(IndexedTriangles::from_meshes(load(&pth).into_iter().map(|m| {
-            (m.positions.iter().map(|p| p.component_mul(&scale)).collect(), m.triangles)
+            (m.positions.iter().map(|p| p.component_mul(&scale)).collect(), m.triangles, m.texcoords)
         }).collect()))
     }
 
     /// A mesh of `triangles`, each three indices into `positions`.
     pub fn new(positions: Vec<Vector3<f64>>, triangles: Vec<[usize; 3]>) -> Mesh {
-        Mesh::from_triangles(IndexedTriangles::from_meshes(vec![(positions, triangles)]))
+        Mesh::from_triangles(IndexedTriangles::from_meshes(vec![(positions, triangles, vec![])]))
     }
 
     fn from_triangles(triangles: IndexedTriangles) -> Mesh {
@@ -199,6 +220,17 @@ impl Mesh {
 }
 
 impl Geometry for Mesh {
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        let p = &self.triangles.positions;
+        Some(self.triangles.triangles.iter().map(|t| crate::wavefront::flat::Prim::Triangle {
+            v: [p[t[0] as usize], p[t[1] as usize], p[t[2] as usize]], n: None,
+        }).collect())
+    }
+
+    fn uv(&self, p: &Vector3<f64>, face: u32) -> Option<crate::na::Vector2<f64>> {
+        ((face as usize) < self.triangles.triangles.len()).then(|| self.triangles.uv(face as usize, p))
+    }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         self.intersects_range(r, 0., f64::INFINITY)
     }
@@ -300,7 +332,7 @@ impl SmoothMesh {
                 // Normals transform by the inverse of the scale.
                 m.normals.iter().map(|n| n.component_div(&scale).normalize()).collect()
             });
-            (positions, m.triangles)
+            (positions, m.triangles, m.texcoords)
         }).collect();
         let triangles = IndexedTriangles::from_meshes(meshes);
         println!("# of triangles: {}", triangles.triangles.len());
@@ -317,7 +349,7 @@ impl SmoothMesh {
             } else {
                 m.normals.clone()
             });
-            (m.positions.clone(), m.triangles.clone())
+            (m.positions.clone(), m.triangles.clone(), m.texcoords.clone())
         }).collect();
         SmoothMesh { triangles: IndexedTriangles::from_meshes(parts), normals }
     }
@@ -333,6 +365,22 @@ impl SmoothMesh {
 }
 
 impl Geometry for SmoothMesh {
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        let p = &self.triangles.positions;
+        Some(self.triangles.triangles.iter().map(|t| {
+            let n = [self.normals[t[0] as usize], self.normals[t[1] as usize], self.normals[t[2] as usize]];
+            crate::wavefront::flat::Prim::Triangle {
+                v: [p[t[0] as usize], p[t[1] as usize], p[t[2] as usize]],
+                // A vertex without a normal: the face's stands in, as for the recursive tracer.
+                n: n.iter().all(|n| n.norm_squared() > 0.).then_some(n),
+            }
+        }).collect())
+    }
+
+    fn uv(&self, p: &Vector3<f64>, face: u32) -> Option<crate::na::Vector2<f64>> {
+        ((face as usize) < self.triangles.triangles.len()).then(|| self.triangles.uv(face as usize, p))
+    }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         self.intersects_range(r, 0., f64::INFINITY)
     }

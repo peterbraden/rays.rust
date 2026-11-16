@@ -1285,6 +1285,15 @@ UI, file IO and rayon's threads would follow.
    - Found: a shadow ray re-hit its own sphere where sqrt is a few ULP out (WebGPU allows it),
      darkening spheres; fixed by the sphere test's early out. Browser vs native GPU, mean FLIP:
      0.0033 on `spheres` at 256 spp (CPU seed to seed: 0.012), 0.0003 on `demo.json`.
+   - Found on the Mac's Metal (the first run on a real GPU): images 12% dark wherever the sky
+     was sampled, and the GPU tests failing (they pass on lavapipe). naga's MSL and HLSL
+     writers write a loop's continuing block before its body, so a `break if` on a value the
+     body computed re-evaluates its expression after the continuing block's stores: rust-gpu's
+     `while lo + 1 < hi` left one iteration early (the sky's binary search, BVH traversal).
+     The builder now stores such conditions in a variable (`hoist_break_ifs`), Metal and DX12
+     take the WGSL, and a test checks the WGSL's loops without a GPU. Demo, 20 spp, mean FLIP
+     against `trace`: 0.1425 -> 0.0295 (the CPU wavefront integrator: 0.026). Not yet
+     reported upstream (gfx-rs/wgpu).
    - Next for the web: camera rays on the GPU (pinhole and thin lens), the sky baked on the GPU
      or smaller, a scene picker and progressive display on the GPU, timings on real GPUs
      (the Mac, phones), Safari.

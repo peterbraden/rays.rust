@@ -42,12 +42,19 @@
       "density": 700,
       "seed": 2,
       "species": [
-        { "preset": "meadow", "weight": 3 },
-        { "preset": "tall", "weight": 0.6 },
-        { "preset": "fescue", "weight": 1 }
+        { "preset": "meadow", "weight": 2 },
+        { "preset": "rough", "weight": 1.5, "height": 0.4 },
+        { "preset": "fescue", "weight": 1 },
+        { "preset": "bent", "weight": 0.8 },
+        { "preset": "timothy", "weight": 0.4 },
+        { "preset": "tall", "weight": 0.3 },
+        { "preset": "clover", "weight": 0.4 },
+        { "preset": "buttercup", "weight": 0.6 },
+        { "preset": "oxeye", "weight": 0.45 },
+        { "preset": "dandelion", "weight": 0.15 }
       ],
       "conditions": {
-        "preset": "summer",
+        "preset": "summer", "dead_fraction": 0.08,
         "species_zones": 4,
         "wind": { "direction": [1, 0.4], "strength": 0.35, "gustiness": 0.6, "scale": 5 }
       }

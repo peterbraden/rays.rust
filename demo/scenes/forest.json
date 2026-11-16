@@ -67,7 +67,9 @@
     { "type": "skysphere", "multiple_scattering": false, "sun_direction": [-0.7, 0.5, 0.52] },
     { "type": "transform", "item": "land", "material": "GROUND" },
     { "type": "grass", "heightmap": "$land", "min": [-36, -88], "max": [36, -22], "density": 350, "seed": 5,
-      "species": [ { "preset": "meadow", "weight": 3 }, { "preset": "tall", "weight": 0.7 }, { "preset": "fescue", "weight": 1 } ],
+      "species": [ { "preset": "meadow", "weight": 2 }, { "preset": "rough", "weight": 1.5 }, { "preset": "tall", "weight": 0.5 },
+        { "preset": "fescue", "weight": 1 }, { "preset": "bent", "weight": 0.8 }, { "preset": "timothy", "weight": 0.3 },
+        { "preset": "red_clover", "weight": 0.2 }, { "preset": "dandelion", "weight": 0.1, "flower": { "clock_fraction": 0.7 } } ],
       "conditions": { "preset": "autumn", "species_zones": 6,
         "wind": { "direction": [1, 0.4], "strength": 0.3, "gustiness": 0.6, "scale": 6 } } },
 

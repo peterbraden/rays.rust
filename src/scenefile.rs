@@ -554,6 +554,8 @@ impl SceneFile {
         };
         let lens = SceneFile::parse_lens(pick("lens").as_str().unwrap_or(default_lens), &blade_source);
         let focal = lens.focal_length().unwrap_or_else(|| panic!("The flare's lens doesn't form an image"));
+        // Its blades are cut to round the stop fully open (see `flare`).
+        let open_stop = lens.stop_diameter().unwrap_or(0.) / 2.;
         let lens = match pick("f_number").as_f64() { Some(n) => lens.with_stop(focal / n), None => lens };
         let focus = if realistic {
             camera["focus_distance"].as_f64().unwrap_or_else(|| (SceneFile::parse_vec3(&camera["lookat"]) - SceneFile::parse_vec3(&camera["location"])).norm())
@@ -577,6 +579,13 @@ impl SceneFile {
             ghosts: scale("ghosts"),
             starburst: scale("starburst"),
             grid: SceneFile::parse_int(&f["grid"], 192).max(4),
+            coating: match f["coating"].as_str() {
+                None => crate::flare::Coating::Multi,
+                Some(c) => crate::flare::Coating::parse(c)
+                    .unwrap_or_else(|| panic!("Unknown lens coating {:?}: one of \"multi\", \"single\" or \"none\"", c)),
+            },
+            blade_curvature: SceneFile::parse_number(&f["blade_curvature"], 1.).max(0.),
+            open_stop,
         }))
     }
 

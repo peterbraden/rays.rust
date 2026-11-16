@@ -14,7 +14,7 @@
       "blades": 6,
       "blade_rotation": 15,
       "f_number": 8,
-      "ghosts": 10
+      "coating": "single"
     }
   },
   "camera": {

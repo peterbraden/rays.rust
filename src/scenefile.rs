@@ -556,6 +556,18 @@ impl SceneFile {
         let focal = lens.focal_length().unwrap_or_else(|| panic!("The flare's lens doesn't form an image"));
         // Its blades are cut to round the stop fully open (see `flare`).
         let open_stop = lens.stop_diameter().unwrap_or(0.) / 2.;
+        // A real diaphragm: blades curved to round the open stop (`blade_curvature`, 0 for
+        // straight), each a little out of place (`imperfection`, 0 for a perfect lens).
+        let imperfection = SceneFile::parse_number(&f["imperfection"], 1.).max(0.);
+        let seed = SceneFile::parse_int(&f["seed"], 1) as u64;
+        let curvature = SceneFile::parse_number(&f["blade_curvature"], 1.).max(0.);
+        let lens = match lens.blades {
+            Some((n, _)) => lens.with_blade_shape(crate::lens::BladeShape {
+                radius: if curvature > 0. { open_stop / curvature } else { 0. },
+                jitter: if imperfection > 0. { crate::flare::imperfect_blades(n, imperfection, seed) } else { vec![] },
+            }),
+            None => lens,
+        };
         let lens = match pick("f_number").as_f64() { Some(n) => lens.with_stop(focal / n), None => lens };
         let focus = if realistic {
             camera["focus_distance"].as_f64().unwrap_or_else(|| (SceneFile::parse_vec3(&camera["lookat"]) - SceneFile::parse_vec3(&camera["location"])).norm())
@@ -584,8 +596,8 @@ impl SceneFile {
                 Some(c) => crate::flare::Coating::parse(c)
                     .unwrap_or_else(|| panic!("Unknown lens coating {:?}: one of \"multi\", \"single\" or \"none\"", c)),
             },
-            blade_curvature: SceneFile::parse_number(&f["blade_curvature"], 1.).max(0.),
-            open_stop,
+            imperfection,
+            seed,
         }))
     }
 

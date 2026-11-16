@@ -137,6 +137,10 @@ pub struct Terrain {
     /// ... and the solver iterations they took.
     pub ice_iterations: usize,
     vents: Vec<Vent>,
+    /// How fast a patch's edge cells rise or fall, metres per year: zero, or, for a patch nested
+    /// in a coarser simulation, the change the coarser one went through there, so the patch's
+    /// base level follows its surroundings.
+    pub boundary_rate: Vec<f64>,
     /// Meandering rivers and ox-bow lakes.
     pub rivers: Rivers,
 }
@@ -156,7 +160,7 @@ impl Terrain {
         let mut t = Terrain {
             domain, params, planet, time: 0., bed, uplift, latitude, sea, vents, rivers: Rivers::default(),
             sediment: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
-            ice: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
+            ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
         let flow = t.route();
         t.drainage = flow.area;
@@ -219,8 +223,8 @@ impl Terrain {
 
     pub fn step(&mut self, dt: f64) {
         let fixed = self.outlets();
-        for ((b, u), f) in self.bed.iter_mut().zip(&self.uplift).zip(&fixed) {
-            if !f { *b += u * dt; }
+        for (i, ((b, u), f)) in self.bed.iter_mut().zip(&self.uplift).zip(&fixed).enumerate() {
+            if !f { *b += u * dt; } else if self.domain.boundary[i] { *b += self.boundary_rate[i] * dt; }
         }
 
         if let Some(v) = &self.params.volcano {
@@ -355,7 +359,7 @@ impl Terrain {
     pub fn run_cached(&mut self, time: f64, cache: &std::path::Path, key: &str) {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        format!("{:?} {}", self.params, key).hash(&mut hasher);
+        format!("{:?} {} {:?}", self.params, key, self.boundary_rate).hash(&mut hasher);
         let prefix = format!("landscape-{:016x}-", hasher.finish());
         let _ = std::fs::create_dir_all(cache);
         let mut saved: Vec<(u64, std::path::PathBuf)> = std::fs::read_dir(cache).into_iter().flatten().flatten()

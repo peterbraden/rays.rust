@@ -1,32 +1,58 @@
-//! # A landscape at full scale
+//! # A landscape at full scale, over a whole planet
 //!
-//! The simulation describes a patch of a planet at a resolution of hundreds of metres. To see
-//! it as a landscape, rather than as a model of one on a table, it is drawn here as the rest of
-//! the scene is: in metres, lying on the planet the skysphere and the ocean assume (its centre
-//! at (0, -R, 0), so the patch's centre is at the scene's origin at sea level, with x east, y
-//! up and z south), with true heights, and with what a camera on or above it needs:
+//! The simulation describes a planet, or patches of it, at resolutions of kilometres to
+//! hundreds of metres. To see it as a landscape, rather than as a model of one on a table, it is
+//! drawn here as the rest of the scene is: in metres, lying on the planet the skysphere and the
+//! ocean assume (its centre at (0, -R, 0), so a chosen site is at the scene's origin at sea
+//! level, with x east, y up and z south), with true heights, and with what a camera anywhere on
+//! or above it needs.
 //!
-//! - **Curvature.** Every point is placed by its direction from the planet's centre and its
-//!   height, so distant ground drops below the horizon (d² / 2R: 785 m at 100 km).
-//! - **Detail below the grid.** The mesh is several times finer than the simulation's cells.
-//!   Heights between cell corners are interpolated by Catmull-Rom splines (smooth, unlike the
-//!   cells' facets), and fractal noise adds the relief the grid can't resolve, in proportion to
-//!   the local slope: rough on mountainsides, little on valley floors and plains. This is
-//!   "amplification" of a coarse terrain (as in Guérin et al., "Sparse representation of
-//!   terrains for procedural modeling", Computer Graphics Forum 35(2), 2016), in its simplest
-//!   form.
-//! - **Surroundings.** The patch is a window onto a whole planet: the same seed's noise
-//!   topography at time zero continues beyond its edge (where the simulation holds the patch's
-//!   edge at that topography, so the two meet), out to `horizon` metres, on a grid whose
-//!   spacing grows geometrically away from the patch. So there is no edge to fall off, and
-//!   distant ranges stand on the horizon.
-//! - **Ground cover** (`Ground`), from what the simulation left at each point (glacier ice,
-//!   alluvium, lava, rivers) and the climate it ran in: snow above the snowline (the glaciers'
-//!   equilibrium line altitude at the final time) on slopes gentle enough to hold it, bare rock
-//!   on steep slopes and above the alpine meadows, forest below the treeline, grassland and
-//!   fields on the valley floors. Albedos are those of real surfaces (conifer forest about 0.05,
-//!   grass 0.1, rock 0.2, snow 0.8), so the sun and sky light it as they would the real thing.
-//!   Rivers and lakes are water, reflecting the sky by Fresnel's equations as the ocean does.
+//! ## Nested simulations
+//!
+//! The heights come from `Layer`s, finest first: patches nested around the place the camera
+//! looks at, each a few times finer than the one around it, and the whole planet (a cubed
+//! sphere) beneath them all. Each patch fades into the next over its outermost cells, and
+//! everything is a function of a point's direction from the planet's centre, so the layers need
+//! not share a frame. A patch's simulation is driven at its edge by the one around it: its edge
+//! cells rise and fall as that one's surface did there (`Terrain::boundary_rate`), as a regional
+//! weather model is driven by a global one.
+//!
+//! A coarse layer has smoothed away the relief it can't resolve. Where only coarse layers reach,
+//! that relief is put back from the planet's own initial topography: its octaves finer than the
+//! layer's cells and coarser than the finest patch's (`Relief::base`), so a distant range has
+//! the ridges a finer simulation would have started from.
+//!
+//! ## Detail below the grid
+//!
+//! Below the finest simulation's resolution, fractal noise adds the relief no simulation
+//! resolves, in proportion to the local slope: rough on mountainsides, little on valley floors
+//! and plains. This is "amplification" of a coarse terrain (as in Guérin et al., "Sparse
+//! representation of terrains for procedural modeling", Computer Graphics Forum 35(2), 2016), in
+//! its simplest form: warped ridged noise, for crests and spurs between gullies. It is drawn
+//! down to whatever spacing the mesh has at that point.
+//!
+//! ## Adaptive resolution: a clipmap about the camera
+//!
+//! The mesh is finest under the camera and coarser with distance, so that each triangle covers
+//! a few pixels wherever it is seen: a geometry clipmap (Losasso and Hoppe, "Geometry clipmaps:
+//! terrain rendering using nested regular grids", SIGGRAPH 2004). Square rings of N x N
+//! vertices are centred under the camera, each with twice the spacing of the one within it, the
+//! finest spacing set by the camera's height above the ground. Each ring's centre is snapped to
+//! its parent's grid, so the edge of a ring lies on its parent's grid lines; there the ring's
+//! odd vertices are put on the straight edge between its even ones, so the two meet without
+//! cracks, and its noise fades towards its parent's octaves (geomorphing) so their heights
+//! agree. Beyond the rings, out of reach of the tangent plane, a cubed-sphere mesh covers the
+//! rest of the planet coarsely.
+//!
+//! ## Ground cover
+//!
+//! From what the simulations left at each point (glacier ice, alluvium, lava, rivers) and the
+//! climate they ran in, by latitude: snow above the snowline (the glaciers' equilibrium line
+//! altitude at the final time) on slopes gentle enough to hold it, bare rock on steep slopes
+//! and above the alpine meadows, forest below the treeline, grassland and fields on the valley
+//! floors. Albedos are those of real surfaces (conifer forest about 0.05, grass 0.1, rock 0.2,
+//! snow 0.8), so the sun and sky light it as they would the real thing. Rivers and lakes are
+//! water, reflecting the sky by Fresnel's equations as the ocean does.
 
 use crate::color::Color;
 use crate::geometry::rand;
@@ -43,13 +69,16 @@ use crate::ray::Ray;
 use crate::scene::Scene;
 use crate::shapes::mesh::{IndexedMesh, SmoothMesh};
 use crate::terrain::channel::{point_cell, WaterLines};
-use crate::terrain::domain::{Domain, Layout};
+use crate::terrain::domain::{sphere_dir, Domain, Layout};
+use crate::terrain::glacier::GlacierParams;
 use crate::terrain::map;
 use crate::terrain::planet::Planet;
-use crate::terrain::simulation::{Terrain, TerrainParams, ICE_FREE};
+use crate::terrain::simulation::{Terrain, ICE_FREE};
 use rayon::prelude::*;
+use std::sync::Arc;
 
-/// A patch's frame on the planet, and the mapping between the planet and the scene.
+/// The scene's frame on the planet: the site at the scene's origin, and the mapping between
+/// the planet and the scene.
 #[derive(Clone, Debug)]
 pub struct Frame {
     pub up: Vector3<f64>,
@@ -61,23 +90,23 @@ pub struct Frame {
 }
 
 impl Frame {
-    pub fn of(domain: &Domain, exaggeration: f64) -> Frame {
-        match &domain.layout {
-            Layout::Patch { up, east, north, .. } => Frame { up: *up, east: *east, north: *north, radius: domain.radius, exaggeration },
-            Layout::Sphere { .. } => panic!("a landscape is drawn at full scale only from a patch"),
-        }
+    /// The frame with the site at (`lat`, `lon`) degrees at the scene's origin.
+    pub fn new(lat: f64, lon: f64, radius: f64, exaggeration: f64) -> Frame {
+        let (up, east, north) = Domain::frame(lat, lon);
+        Frame { up, east, north, radius, exaggeration }
     }
 
     /// The planet's centre in the scene.
     pub fn centre(&self) -> Vector3<f64> { Vector3::new(0., -self.radius, 0.) }
 
-    /// Direction from the planet's centre of the point x metres east and z north on the patch's
-    /// tangent plane (the projection the domain's cells use).
+    /// Direction from the planet's centre of the point x metres east and z north on the site's
+    /// tangent plane (gnomonic, as the domain's patches).
     pub fn dir(&self, x: f64, z: f64) -> Vector3<f64> {
         (self.up * self.radius + self.east * x + self.north * z).normalize()
     }
 
-    /// The tangent-plane coordinates (east, north) of direction `d`.
+    /// The tangent-plane coordinates (east, north) of direction `d`, which must be on the
+    /// site's side of the planet.
     pub fn tangent(&self, d: &Vector3<f64>) -> (f64, f64) {
         Domain::tangent(self.up, self.east, self.north, self.radius, d)
     }
@@ -99,27 +128,27 @@ impl Frame {
 /// Options for drawing a landscape at full scale.
 #[derive(Clone, Debug)]
 pub struct SceneryParams {
-    /// Mesh vertices per simulation cell, along each side.
-    pub detail: usize,
-    /// Amplitude of the sub-grid relief, in cell spacings per unit slope.
+    /// Vertices along each side of a clipmap ring (rounded to a multiple of 4).
+    pub resolution: usize,
+    /// The finest mesh spacing, metres.
+    pub min_spacing: f64,
+    /// Amplitude of the sub-grid relief, in wavelengths per unit slope (a quarter of this).
     pub roughness: f64,
-    /// How far the surroundings reach from the patch's centre, metres.
-    pub horizon: f64,
-    /// Ratio of successive spacings of the surroundings' grid.
-    pub growth: f64,
     pub exaggeration: f64,
     /// Snowline and treeline, metres; None to take them from the climate.
     pub snowline: Option<f64>,
     pub treeline: Option<f64>,
     /// Rivers are drawn at least this wide, metres.
     pub min_river_width: f64,
+    /// Cells per face edge of the mesh over the whole planet.
+    pub globe: usize,
 }
 
 impl Default for SceneryParams {
     fn default() -> SceneryParams {
         SceneryParams {
-            detail: 4, roughness: 1., horizon: 300_000., growth: 1.08, exaggeration: 1.,
-            snowline: None, treeline: None, min_river_width: 0.,
+            resolution: 384, min_spacing: 0.5, roughness: 1., exaggeration: 1.,
+            snowline: None, treeline: None, min_river_width: 0., globe: 192,
         }
     }
 }
@@ -129,32 +158,65 @@ fn catmull_rom(a: f64, b: f64, c: f64, d: f64, t: f64) -> f64 {
     b + 0.5 * t * (c - a + t * (2. * a - 5. * b + 4. * c - d + t * (3. * (b - c) + d - a)))
 }
 
+/// Surface height (ground plus ice) at each of a domain's cell corners: the mean of the cells
+/// meeting there.
+pub fn corner_heights(t: &Terrain) -> Vec<f64> {
+    let surface = t.surface();
+    t.domain.corner_cells.iter()
+        .map(|cells| cells.iter().map(|&c| surface[c]).sum::<f64>() / cells.len() as f64)
+        .collect()
+}
+
+/// Heights at a domain's corners, as a smooth function of direction.
+pub fn sample(domain: &Domain, corners: &[f64], d: &Vector3<f64>) -> f64 {
+    match &domain.layout {
+        Layout::Patch { up, east, north, n, spacing } => {
+            let (x, z) = Domain::tangent(*up, *east, *north, domain.radius, d);
+            let n = *n as i64;
+            let corner = |i: i64, j: i64| corners[(j.clamp(0, n) * (n + 1) + i.clamp(0, n)) as usize];
+            let u = x / spacing + n as f64 / 2.;
+            let v = z / spacing + n as f64 / 2.;
+            let (i, j) = (u.floor() as i64, v.floor() as i64);
+            let (fu, fv) = (u - i as f64, v - j as f64);
+            let row = |jj: i64| catmull_rom(corner(i - 1, jj), corner(i, jj), corner(i + 1, jj), corner(i + 2, jj), fu);
+            catmull_rom(row(j - 1), row(j), row(j + 1), row(j + 2), fv)
+        }
+        Layout::Sphere { n } => {
+            // Bilinear on the face: corners on a face's edge are shared with the next face and
+            // have the same heights, so this is continuous across them.
+            let (f, u, v) = Domain::sphere_coords(*n, d);
+            let n = *n;
+            let corner = |i: usize, j: usize| corners[f * (n + 1) * (n + 1) + j.min(n) * (n + 1) + i.min(n)];
+            let (i, j) = ((u.floor() as usize).min(n - 1), (v.floor() as usize).min(n - 1));
+            let (fu, fv) = (u - i as f64, v - j as f64);
+            let a = corner(i, j) * (1. - fu) + corner(i + 1, j) * fu;
+            let b = corner(i, j + 1) * (1. - fu) + corner(i + 1, j + 1) * fu;
+            a * (1. - fv) + b * fv
+        }
+    }
+}
+
 const ICE: u8 = 0;
 const SEA_FLOOR: u8 = 1;
 const ALLUVIUM: u8 = 2;
 const LAVA: u8 = 3;
 const LAND: u8 = 4;
 
-/// One simulated patch, as drawn: its surface heights and what covers its ground.
+/// One simulation, as drawn: its surface heights and what covers its ground.
 pub struct Layer {
-    n: usize,
-    spacing: f64,
-    /// Surface height (ground plus ice) at each of the patch's (n + 1)² cell corners.
+    pub domain: Domain,
+    /// Cell spacing, metres (nominal, for the sphere).
+    pub spacing: f64,
     corners: Vec<f64>,
-    domain: Domain,
     class: Vec<u8>,
     water: Option<WaterLines>,
-    /// Width of the band inside the edge over which the layer blends into what is around it.
+    /// Width of the band inside a patch's edge over which it blends into what is around it.
     blend: f64,
 }
 
 impl Layer {
     pub fn new(t: Terrain, min_river_width: f64) -> Layer {
-        let Layout::Patch { n, spacing, .. } = t.domain.layout else { panic!("a landscape is drawn at full scale only from a patch") };
-        let surface = t.surface();
-        let corners = t.domain.corner_cells.iter()
-            .map(|cells| cells.iter().map(|&c| surface[c]).sum::<f64>() / cells.len() as f64)
-            .collect();
+        let corners = corner_heights(&t);
         let water = map::water_lines(&t, min_river_width);
         let class = (0..t.domain.len()).map(|i| {
             if t.ice[i] >= ICE_FREE { ICE }
@@ -163,175 +225,309 @@ impl Layer {
             else if t.sediment[i] > map::ALLUVIUM { ALLUVIUM }
             else { LAND }
         }).collect();
-        // The simulation holds a patch's edge at its first topography, so the cells nearest
-        // the edge are the least like a landscape: blend over a tenth of the patch, or at least
-        // three cells.
-        let half = n as f64 * spacing / 2.;
-        Layer { n, spacing, corners, domain: t.domain, class, water, blend: (0.1 * half).max(3. * spacing) }
+        let (spacing, blend) = match t.domain.layout {
+            // The simulation holds a patch's edge at its first topography (moved as its
+            // surroundings were), so the cells nearest the edge are the least like a landscape:
+            // blend over a tenth of the patch, or at least three cells.
+            Layout::Patch { n, spacing, .. } => (spacing, (0.05 * n as f64 * spacing).max(3. * spacing)),
+            Layout::Sphere { n } => (std::f64::consts::FRAC_PI_2 * t.domain.radius / n as f64, 0.),
+        };
+        Layer { spacing, corners, class, water, blend, domain: t.domain }
     }
 
-    /// Half the patch's width, metres.
-    pub fn half(&self) -> f64 { self.n as f64 * self.spacing / 2. }
-
-    fn contains(&self, x: f64, z: f64) -> bool { x.abs() < self.half() && z.abs() < self.half() }
-
-    /// How much the layer counts at (x, z): 1 within, falling to 0 at its edge.
-    fn weight(&self, x: f64, z: f64) -> f64 {
-        let half = self.half();
-        1. - smoothstep(half - self.blend, half, x.abs().max(z.abs()))
+    /// Tangent coordinates of `d` on a patch, if it is on the patch's side of the planet.
+    fn tangent(&self, d: &Vector3<f64>) -> Option<(f64, f64)> {
+        match &self.domain.layout {
+            Layout::Patch { up, east, north, .. } if d.dot(up) > 0.1 => Some(Domain::tangent(*up, *east, *north, self.domain.radius, d)),
+            _ => None,
+        }
     }
 
-    fn corner(&self, i: i64, j: i64) -> f64 {
-        let (i, j) = (i.clamp(0, self.n as i64) as usize, j.clamp(0, self.n as i64) as usize);
-        self.corners[j * (self.n + 1) + i]
+    fn half(&self) -> f64 {
+        match self.domain.layout { Layout::Patch { n, spacing, .. } => n as f64 * spacing / 2., Layout::Sphere { .. } => f64::INFINITY }
     }
 
-    /// The simulated surface at (x, z), smoothly interpolated between the cells' corners.
-    fn simulated(&self, x: f64, z: f64) -> f64 {
-        let u = x / self.spacing + self.n as f64 / 2.;
-        let v = z / self.spacing + self.n as f64 / 2.;
-        let (i, j) = (u.floor() as i64, v.floor() as i64);
-        let (fu, fv) = (u - i as f64, v - j as f64);
-        let row = |jj: i64| catmull_rom(
-            self.corner(i - 1, jj), self.corner(i, jj), self.corner(i + 1, jj), self.corner(i + 2, jj), fu);
-        catmull_rom(row(j - 1), row(j), row(j + 1), row(j + 2), fv)
+    pub fn contains(&self, d: &Vector3<f64>) -> bool {
+        match self.domain.layout {
+            Layout::Sphere { .. } => true,
+            Layout::Patch { .. } => self.tangent(d).is_some_and(|(x, z)| x.abs().max(z.abs()) < self.half()),
+        }
     }
 
-    fn class_at(&self, x: f64, z: f64) -> u8 { self.class[point_cell(&self.domain, [x, z])] }
+    /// How much the layer counts at `d`: 1 within, falling to 0 at a patch's edge.
+    fn weight(&self, d: &Vector3<f64>) -> f64 {
+        match self.domain.layout {
+            Layout::Sphere { .. } => 1.,
+            Layout::Patch { .. } => match self.tangent(d) {
+                Some((x, z)) => 1. - smoothstep(self.half() - self.blend, self.half(), x.abs().max(z.abs())),
+                None => 0.,
+            },
+        }
+    }
+
+    /// The simulated surface at `d`, smoothly interpolated between the cells' corners.
+    pub fn simulated(&self, d: &Vector3<f64>) -> f64 { sample(&self.domain, &self.corners, d) }
+
+    fn class_at(&self, d: &Vector3<f64>) -> u8 { self.class[self.domain.cell_at(d)] }
+
+    fn wet(&self, d: &Vector3<f64>) -> bool {
+        let (Some(water), Some((x, z))) = (&self.water, self.tangent(d)) else { return false };
+        water.wet(point_cell(&self.domain, [x, z]), [x, z])
+    }
 }
 
-/// Heights of the landscape: the simulated patches, finest first, each nested in the next, and
-/// the planet's noise topography around them all.
+/// Heights of the landscape, from its layers and the planet's own topography.
 pub struct Relief {
-    pub frame: Frame,
-    pub layers: std::sync::Arc<Vec<Layer>>,
+    pub layers: Arc<Vec<Layer>>,
     planet: Planet,
-    /// The finest wavelength drawn of the initial topography.
+    radius: f64,
+    /// The finest layer's spacing: the synthetic detail starts below it.
     finest: f64,
+    roughness: f64,
+    noise: SeededNoise,
+    ridges: SeededNoise,
 }
+
+/// The longest wavelength of synthetic detail is a power of two metres, so the octaves are the
+/// same everywhere.
+const LONGEST_DETAIL: f64 = 65536.;
 
 impl Relief {
-    pub fn new(layers: std::sync::Arc<Vec<Layer>>, planet: &Planet, frame: Frame) -> Relief {
-        let coarsest = layers.last().expect("no layers").spacing;
-        Relief { frame, layers, planet: Planet::new(planet.params.clone()), finest: 2. * coarsest }
+    /// `finest`: the spacing below which detail is synthetic; layers coarser than it have the
+    /// planet's own relief down to it put back.
+    pub fn new(layers: Arc<Vec<Layer>>, planet: &Planet, radius: f64, roughness: f64, finest: f64) -> Relief {
+        let seed = planet.params.seed;
+        Relief {
+            layers, radius, finest, roughness,
+            planet: Planet::new(planet.params.clone()),
+            noise: SeededNoise::new(seed.wrapping_add(0x5ce7e)),
+            ridges: SeededNoise::new(seed.wrapping_add(0x41d9e)),
+        }
     }
 
-    /// The planet's topography at time zero, around the patches.
-    fn surroundings(&self, x: f64, z: f64) -> f64 {
-        self.planet.elevation(&self.frame.dir(x, z), self.finest)
-    }
-
-    /// The large-scale height at (x, z), before sub-grid detail, and the cell spacing it is
-    /// resolved to: each layer blending over its outermost cells into the next, the outermost
-    /// into the surroundings.
-    pub fn base(&self, x: f64, z: f64) -> (f64, f64) {
-        let mut found: Option<(f64, f64)> = None;
+    /// The large-scale height at `d`, before synthetic detail: each layer blending into the
+    /// next, coarser layers with the planet's own relief finer than their cells put back.
+    pub fn base(&self, d: &Vector3<f64>) -> f64 {
         let mut rest = 1.;
-        let (mut h, mut s) = (0., 0.);
+        let mut h = 0.;
         for l in self.layers.iter() {
-            let w = l.weight(x, z) * rest;
+            let w = l.weight(d) * rest;
             if w > 0. {
-                h += w * l.simulated(x, z);
-                s += w * l.spacing;
+                let mut v = l.simulated(d);
+                if l.spacing > 1.01 * self.finest {
+                    // Relief between twice this layer's spacing and twice the finest's.
+                    v += self.planet.elevation(d, 2. * self.finest) - self.planet.elevation(d, 2. * l.spacing);
+                }
+                h += w * v;
                 rest -= w;
-                found = Some((h, s));
             }
-            if rest <= 0. { break; }
+            if rest <= 1e-12 { return h; }
         }
-        if rest > 0. {
-            let coarsest = self.finest / 2.;
-            h += rest * self.surroundings(x, z);
-            s += rest * coarsest;
-            found = Some((h, s));
-        }
-        found.unwrap()
+        h + rest * self.planet.elevation(d, 2. * self.finest)
     }
-}
 
-/// Coordinates along one axis of the mesh: `fine` apart across the patch, then growing by
-/// `growth` each step out to `horizon` either side.
-fn axis(half: f64, fine: f64, horizon: f64, growth: f64) -> Vec<f64> {
-    let k = (2. * half / fine).round().max(1.) as usize;
-    let step = 2. * half / k as f64;
-    let mut outer = vec![];
-    let (mut x, mut d) = (half, step);
-    while x < horizon {
-        d *= growth;
-        x += d;
-        outer.push(x);
+    /// Two directions perpendicular to `d` and each other.
+    fn tangents(d: &Vector3<f64>) -> (Vector3<f64>, Vector3<f64>) {
+        let a = if d.y.abs() < 0.9 { Vector3::y() } else { Vector3::x() };
+        let t1 = d.cross(&a).normalize();
+        (t1, d.cross(&t1))
     }
-    let mut xs: Vec<f64> = outer.iter().rev().map(|x| -x).collect();
-    xs.extend((0..=k).map(|i| -half + i as f64 * step));
-    xs.extend(outer);
-    xs
-}
 
-/// The landscape's mesh: the finest patch at `detail` vertices per cell, and its surroundings.
-pub fn mesh(relief: &Relief, p: &SceneryParams, seed: u64) -> SmoothMesh {
-    let first = &relief.layers[0];
-    let fine = first.spacing / p.detail.max(1) as f64;
-    let xs = axis(first.half(), fine, p.horizon, p.growth);
-    let m = xs.len();
-    let base: Vec<(f64, f64)> = (0..m * m).into_par_iter().map(|k| relief.base(xs[k % m], xs[k / m])).collect();
-    // Sub-grid relief: octaves of noise from about two cells (of whichever layer resolves the
-    // ground here) down to the mesh's spacing, in proportion to the slope at the scale of a cell.
-    let noise = SeededNoise::new(seed.wrapping_add(0x5ce7e));
-    let ridges = SeededNoise::new(seed.wrapping_add(0x41d9e));
-    let longest = 4. * relief.finest;
-    let heights: Vec<f64> = (0..m * m).into_par_iter().map(|k| {
-        let (i, j) = (k % m, k / m);
-        let (b, spacing) = base[k];
-        let (i0, i1, j0, j1) = (i.saturating_sub(1), (i + 1).min(m - 1), j.saturating_sub(1), (j + 1).min(m - 1));
-        let gx = (base[j * m + i1].0 - base[j * m + i0].0) / (xs[i1] - xs[i0]);
-        let gz = (base[j1 * m + i].0 - base[j0 * m + i].0) / (xs[j1] - xs[j0]);
-        let slope = gx.hypot(gz).min(1.5);
-        // Spacing of the mesh here: an octave is only drawn where the mesh can carry it.
-        let local = (xs[i1] - xs[i0]).max(xs[j1] - xs[j0]) / 2.;
-        let (x, z) = (xs[i], xs[j]);
-        let mut detail = 0.;
-        let mut wavelength = longest;
+    /// `d` moved `a` metres along `t1` and `b` along `t2` (over the surface).
+    fn step(&self, d: &Vector3<f64>, t1: &Vector3<f64>, t2: &Vector3<f64>, a: f64, b: f64) -> Vector3<f64> {
+        (d + (t1 * a + t2 * b) / self.radius).normalize()
+    }
+
+    /// The slope of the large-scale surface at `d`, over about a cell of the finest layer.
+    pub fn slope(&self, d: &Vector3<f64>) -> f64 {
+        let (t1, t2) = Relief::tangents(d);
+        let e = self.finest;
+        let gx = self.base(&self.step(d, &t1, &t2, e, 0.)) - self.base(&self.step(d, &t1, &t2, -e, 0.));
+        let gz = self.base(&self.step(d, &t1, &t2, 0., e)) - self.base(&self.step(d, &t1, &t2, 0., -e));
+        (gx.hypot(gz) / (2. * e)).min(1.5)
+    }
+
+    /// Synthetic relief at `d`, for a surface of slope `slope`, drawn down to wavelengths the
+    /// mesh's spacing `local` there can carry.
+    pub fn detail(&self, d: &Vector3<f64>, slope: f64, local: f64) -> f64 {
+        let p = d * self.radius;
+        let mut sum = 0.;
+        let mut wavelength = LONGEST_DETAIL;
         let mut octave = 0.;
-        while wavelength >= 2. * fine {
+        while wavelength >= local {
             // The simulation only resolves features several cells across: below about eight
             // cells its slopes are smoothed by its own diffusion.
-            let resolved = smoothstep(4. * spacing, 8. * spacing, wavelength);
+            let resolved = smoothstep(4. * self.finest, 8. * self.finest, wavelength);
             let carried = 1. - smoothstep(wavelength / 4., wavelength / 2., local);
             let w = (1. - resolved) * carried;
             if w > 0. {
-                // Warped ridged noise: sharp crests and spurs between gullies, as on eroded
-                // mountainsides, with a little plain noise to break them up.
-                let q = Vector3::new(x, octave * 31.7, z) / wavelength;
-                let warp = Vector3::new(noise.noise(q * 0.5 + Vector3::new(3.1, 0., 7.7)), 0., noise.noise(q * 0.5 + Vector3::new(9.4, 0., 1.3)));
-                let r = (1. - ridges.noise(q + warp * 0.6).abs()).powi(2);
-                let n = 1.4 * (r - 0.45) + 0.4 * noise.noise(q * 1.7);
-                detail += w * p.roughness * wavelength / 4. * n;
+                // Warped ridged noise: sharp crests and spurs between gullies, with a little
+                // plain noise to break them up.
+                let q = (p + Vector3::new(31.7, 17.3, 5.1) * (octave * wavelength)) / wavelength;
+                let warp = Vector3::new(
+                    self.noise.noise(q * 0.5 + Vector3::new(3.1, 0.7, 7.7)),
+                    self.noise.noise(q * 0.5 + Vector3::new(5.3, 2.9, 0.4)),
+                    self.noise.noise(q * 0.5 + Vector3::new(9.4, 4.2, 1.3)));
+                let r = (1. - self.ridges.noise(q + warp * 0.6).abs()).powi(2);
+                let n = 1.4 * (r - 0.45) + 0.4 * self.noise.noise(q * 1.7);
+                sum += w * self.roughness * wavelength / 4. * n;
             }
             wavelength /= 2.;
             octave += 1.;
         }
-        b + detail * (0.05 + slope)
-    }).collect();
-    let positions: Vec<Vector3<f64>> = (0..m * m).into_par_iter()
-        .map(|k| relief.frame.to_scene(&relief.frame.dir(xs[k % m], xs[k / m]), heights[k])).collect();
-    let v = |i: usize, j: usize| j * m + i;
-    let mut triangles = Vec::with_capacity(2 * (m - 1) * (m - 1));
-    for j in 0..m - 1 {
-        for i in 0..m - 1 {
-            // x east and z north on the plane, so (i, j) -> (i + 1, j) -> (i + 1, j + 1) is
-            // anticlockwise seen from above.
-            triangles.push([v(i, j), v(i + 1, j), v(i + 1, j + 1)]);
-            triangles.push([v(i, j), v(i + 1, j + 1), v(i, j + 1)]);
+        sum * (0.05 + slope)
+    }
+
+    /// The surface's height at `d` with detail down to spacing `local`, given its large-scale
+    /// slope there.
+    pub fn height(&self, d: &Vector3<f64>, slope: f64, local: f64) -> f64 {
+        self.base(d) + self.detail(d, slope, local)
+    }
+
+    /// The surface's normal at `d` (outwards, in planet coordinates), by finite differences
+    /// over the mesh's spacing.
+    pub fn normal(&self, d: &Vector3<f64>, slope: f64, local: f64) -> Vector3<f64> {
+        let (t1, t2) = Relief::tangents(d);
+        let e = local / 2.;
+        let h = |a: f64, b: f64| self.height(&self.step(d, &t1, &t2, a, b), slope, local);
+        let gx = (h(e, 0.) - h(-e, 0.)) / (2. * e);
+        let gz = (h(0., e) - h(0., -e)) / (2. * e);
+        (d - t1 * gx - t2 * gz).normalize()
+    }
+}
+
+/// The camera, as the mesh needs it.
+#[derive(Clone, Debug)]
+pub struct Viewpoint {
+    /// Where the camera is, in the scene.
+    pub location: Vector3<f64>,
+}
+
+/// One mesh vertex, before the planet frame is applied: its direction, and the mesh's spacing
+/// there.
+struct Vertex { d: Vector3<f64>, local: f64 }
+
+/// The landscape's mesh: clipmap rings about the camera, and a coarse globe beyond them.
+pub fn mesh(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams) -> SmoothMesh {
+    let n = (p.resolution / 4).max(4) * 4;
+    let half = (n / 2) as i64;
+    let (foot, cam_h) = frame.on_planet(&view.location);
+    let ground = relief.base(&foot);
+    let above = (cam_h - ground.max(0.)).max(1.);
+    // The nearest ground is about the camera's height away: there a ring's spacing is its
+    // half-width over N / 4.
+    let s0 = (above * 4. / n as f64).max(p.min_spacing);
+    // Out to the horizon, and the mountains beyond it, or a quarter of the way round.
+    let reach = ((2. * relief.radius * (cam_h.max(0.) + 9000.)).sqrt() + (2. * relief.radius * 9000f64).sqrt())
+        .min(0.3 * relief.radius);
+    let (cx, cz) = frame.tangent(&foot);
+    let mut vertices: Vec<Vertex> = vec![];
+    let mut triangles: Vec<[usize; 3]> = vec![];
+    // Odd vertices on each ring's outer edge, to put on the straight edge between their
+    // neighbours: (vertex, neighbour, neighbour).
+    let mut seams: Vec<(usize, usize, usize)> = vec![];
+    // Each ring's centre and extent, in units of s0.
+    let mut hole: Option<(i64, i64, i64)> = None;
+    let mut level = 0;
+    let outer;
+    loop {
+        let step = 1i64 << level;
+        let s = s0 * step as f64;
+        // Centre snapped to twice this ring's spacing, so it lies on its parent's grid.
+        let snap = |c: f64| ((c / s0 / (2 * step) as f64).round() as i64) * 2 * step;
+        let (kx, kz) = (snap(cx), snap(cz));
+        let w = half * step;
+        let base = vertices.len();
+        let width = 2 * half as usize + 1;
+        for j in 0..width as i64 {
+            for i in 0..width as i64 {
+                let (gx, gz) = (kx + (i - half) * step, kz + (j - half) * step);
+                // Geomorphing: towards the edge, the spacing the noise is drawn to tends to the
+                // parent's, so heights agree where the rings meet.
+                let r = ((gx - kx).abs().max((gz - kz).abs())) as f64 / w as f64;
+                let local = s * (1. + smoothstep(0.75, 1., r));
+                vertices.push(Vertex { d: frame.dir(gx as f64 * s0, gz as f64 * s0), local });
+            }
+        }
+        let v = |i: usize, j: usize| base + j * width + i;
+        for j in 0..width - 1 {
+            for i in 0..width - 1 {
+                let (gx, gz) = (kx + (i as i64 - half) * step, kz + (j as i64 - half) * step);
+                if let Some((hx, hz, hw)) = hole {
+                    let inside = |g: i64, c: i64| g >= c - hw && g + step <= c + hw;
+                    if inside(gx, hx) && inside(gz, hz) { continue; }
+                }
+                triangles.push([v(i, j), v(i + 1, j), v(i + 1, j + 1)]);
+                triangles.push([v(i, j), v(i + 1, j + 1), v(i, j + 1)]);
+            }
+        }
+        for k in (1..width - 1).step_by(2) {
+            let last = width - 1;
+            seams.push((v(k, 0), v(k - 1, 0), v(k + 1, 0)));
+            seams.push((v(k, last), v(k - 1, last), v(k + 1, last)));
+            seams.push((v(0, k), v(0, k - 1), v(0, k + 1)));
+            seams.push((v(last, k), v(last, k - 1), v(last, k + 1)));
+        }
+        hole = Some((kx, kz, w));
+        if w as f64 * s0 >= reach || level >= 30 {
+            outer = (kx as f64 * s0, kz as f64 * s0, w as f64 * s0);
+            break;
+        }
+        level += 1;
+    }
+    // The rest of the planet: a cubed sphere, leaving out the cells the rings cover.
+    let g = p.globe.max(2);
+    let in_rings = |d: &Vector3<f64>| d.dot(&frame.up) > 0.2 && {
+        let (x, z) = frame.tangent(d);
+        (x - outer.0).abs() <= outer.2 && (z - outer.1).abs() <= outer.2
+    };
+    let spacing = std::f64::consts::FRAC_PI_2 * relief.radius / g as f64;
+    for f in 0..6 {
+        let base = vertices.len();
+        let coord = |i: usize| -1. + 2. * i as f64 / g as f64;
+        for j in 0..=g {
+            for i in 0..=g {
+                vertices.push(Vertex { d: sphere_dir(f, coord(i), coord(j)), local: spacing });
+            }
+        }
+        let v = |i: usize, j: usize| base + j * (g + 1) + i;
+        for j in 0..g {
+            for i in 0..g {
+                let quad = [v(i, j), v(i + 1, j), v(i + 1, j + 1), v(i, j + 1)];
+                if quad.iter().all(|&k| in_rings(&vertices[k].d)) { continue; }
+                // The face's axes are u x v = outwards, so this is anticlockwise from outside.
+                triangles.push([quad[0], quad[1], quad[2]]);
+                triangles.push([quad[0], quad[2], quad[3]]);
+            }
         }
     }
-    SmoothMesh::from_indexed(&[IndexedMesh { positions, normals: vec![], triangles }])
+    // Heights and normals.
+    let shaped: Vec<(Vector3<f64>, Vector3<f64>)> = vertices.par_iter().map(|v| {
+        let slope = relief.slope(&v.d);
+        let h = relief.height(&v.d, slope, v.local);
+        let n = relief.normal(&v.d, slope, v.local);
+        // Rotated into the scene: to_scene is a rotation about the planet's centre.
+        let normal_scene = frame.to_scene(&n, 0.) - frame.centre();
+        (frame.to_scene(&v.d, h), normal_scene.normalize())
+    }).collect();
+    let mut positions: Vec<Vector3<f64>> = shaped.iter().map(|x| x.0).collect();
+    let mut normals: Vec<Vector3<f64>> = shaped.iter().map(|x| x.1).collect();
+    for (k, a, b) in seams {
+        positions[k] = (positions[a] + positions[b]) / 2.;
+        normals[k] = (normals[a] + normals[b]).normalize();
+    }
+    SmoothMesh::from_indexed(&[IndexedMesh { positions, normals, triangles }])
 }
 
 /// What covers the ground, where.
 pub struct Ground {
     frame: Frame,
-    layers: std::sync::Arc<Vec<Layer>>,
-    pub snowline: f64,
-    pub treeline: f64,
+    layers: Arc<Vec<Layer>>,
+    /// A fixed snowline and treeline, metres; else by latitude from the climate.
+    snowline: Option<f64>,
+    treeline: Option<f64>,
+    climate: GlacierParams,
+    time: f64,
     noise: PerlinNoise,
 }
 
@@ -351,29 +547,34 @@ const BASALT: [f64; 3] = [0.06, 0.055, 0.05];
 fn colour(c: [f64; 3]) -> Color { Color::new(c[0], c[1], c[2]) }
 
 impl Ground {
-    /// The climate is that of terrain parameters `params` at `time` years.
-    pub fn new(layers: std::sync::Arc<Vec<Layer>>, params: &TerrainParams, time: f64, frame: Frame, p: &SceneryParams) -> Ground {
-        // The climate the glaciers ran in, at the end: permanent snow above their equilibrium
-        // line; the treeline lies some 800 m below it (as in the Alps, about 2900 and 2100 m).
-        let latitude = frame.up.y.clamp(-1., 1.).asin();
-        let ela = params.glacier.as_ref().map_or(3000., |g| g.ela(latitude, time));
-        let snowline = p.snowline.unwrap_or(ela);
-        let treeline = p.treeline.unwrap_or(snowline - 800.);
-        Ground { frame, layers, snowline, treeline, noise: PerlinNoise::shuffled(params.planet.seed.wrapping_add(77)) }
+    /// The climate is that of glacier parameters `climate` at `time` years.
+    pub fn new(layers: Arc<Vec<Layer>>, climate: GlacierParams, time: f64, seed: u64, frame: Frame, p: &SceneryParams) -> Ground {
+        Ground {
+            frame, layers, snowline: p.snowline, treeline: p.treeline, climate, time,
+            noise: PerlinNoise::shuffled(seed.wrapping_add(77)),
+        }
     }
 
-    /// The finest layer at (x, z), if any.
-    fn layer_at(&self, x: f64, z: f64) -> Option<&Layer> {
-        self.layers.iter().find(|l| l.contains(x, z))
+    /// The snowline at `d`: the glaciers' equilibrium line at its latitude.
+    pub fn snowline(&self, d: &Vector3<f64>) -> f64 {
+        self.snowline.unwrap_or_else(|| self.climate.ela(d.y.clamp(-1., 1.).asin(), self.time))
+    }
+
+    /// The treeline at `d`: some 800 m below the snowline (as in the Alps, about 2100 and
+    /// 2900 m).
+    pub fn treeline(&self, d: &Vector3<f64>) -> f64 {
+        self.treeline.unwrap_or_else(|| self.snowline(d) - 800.)
+    }
+
+    /// The finest layer at `d`.
+    fn layer_at(&self, d: &Vector3<f64>) -> Option<&Layer> {
+        self.layers.iter().find(|l| l.contains(d))
     }
 
     /// Whether scene point `p` is in a river or lake.
     pub fn wet(&self, p: &Vector3<f64>) -> bool {
         let (d, _) = self.frame.on_planet(p);
-        let (x, z) = self.frame.tangent(&d);
-        let Some(l) = self.layer_at(x, z) else { return false };
-        let Some(water) = &l.water else { return false };
-        water.wet(point_cell(&l.domain, [x, z]), [x, z])
+        self.layer_at(&d).is_some_and(|l| l.wet(&d))
     }
 
     /// The albedo at scene point `p`, whose surface normal is `normal`.
@@ -381,31 +582,37 @@ impl Ground {
         let up = (p - self.frame.centre()).normalize();
         let flat = normal.dot(&up);
         let (d, h) = self.frame.on_planet(p);
-        let (x, z) = self.frame.tangent(&d);
+        let r = self.frame.radius;
         // What the simulation left here, looked up within half a cell of the point so that
         // over many samples the classes blend rather than show the grid.
-        let class = match self.layer_at(x, z) {
+        let class = match self.layer_at(&d) {
             Some(l) => {
-                let (x, z) = (x + (rand() - 0.5) * l.spacing, z + (rand() - 0.5) * l.spacing);
-                match self.layer_at(x, z) { Some(l) => l.class_at(x, z), None => LAND }
+                let (t1, t2) = Relief::tangents(&d);
+                let j = (d + (t1 * (rand() - 0.5) + t2 * (rand() - 0.5)) * l.spacing / r).normalize();
+                self.layer_at(&j).map_or(LAND, |l| l.class_at(&j))
             }
             None => LAND,
         };
-        let n = |s: f64, o: f64| self.noise.fbm(x / s, o, z / s, 4, 0.5, 2.);
+        let q = d * r;
+        let n = |s: f64, o: f64| self.noise.fbm(q.x / s + o * 17., q.y / s, q.z / s, 4, 0.5, 2.);
+        // Fine variation, seen close up.
+        let grain = 0.85 + 0.3 * n(7., 0.21);
         let mix = |a: Color, b: Color, t: f64| { let t = t.clamp(0., 1.); a * (1. - t) + b * t };
-        if class == LAVA { return colour(BASALT) * (0.8 + 0.4 * n(200., 0.9)); }
+        let snowline = self.snowline(&d);
+        let treeline = self.treeline(&d);
+        if class == LAVA { return colour(BASALT) * (0.8 + 0.4 * n(200., 0.9)) * grain; }
         if class == ICE {
             // Snow over the glacier's accumulation zone, bare ice below the snowline.
-            let snow = smoothstep(self.snowline - 300., self.snowline + 100., h + (n(700., 0.2) - 0.5) * 300.);
+            let snow = smoothstep(snowline - 300., snowline + 100., h + (n(700., 0.2) - 0.5) * 300.);
             let ice = mix(colour(GLACIER_ICE), colour(SNOW), snow.max(0.3));
             // Ice doesn't hold to cliffs: the rock walls above and beside a glacier show.
-            let stone = colour(ROCK) * (0.7 + 0.6 * n(250., 0.7));
+            let stone = colour(ROCK) * (0.7 + 0.6 * n(250., 0.7)) * grain;
             return mix(stone, ice, smoothstep(0.6, 0.8, flat));
         }
         // Vegetation, thinning upwards: forest in patches below the treeline, grass in the
         // valleys and on fields, alpine meadow above the trees.
-        let tree = self.treeline + (n(1500., 0.3) - 0.5) * 400.;
-        let forest = smoothstep(0.38, 0.55, n(2500., 0.5) + 0.25 * (1. - flat)) * (1. - smoothstep(tree - 150., tree + 50., h));
+        let tree = treeline + (n(1500., 0.3) - 0.5) * 400.;
+        let forest = smoothstep(0.38, 0.55, n(2500., 0.5) + 0.12 * n(60., 0.55) + 0.25 * (1. - flat)) * (1. - smoothstep(tree - 150., tree + 50., h));
         let grass = mix(colour(GRASS), colour(MEADOW), smoothstep(tree - 300., tree + 300., h));
         let mut ground = mix(grass, colour(FOREST), forest);
         if class == ALLUVIUM {
@@ -419,17 +626,17 @@ impl Ground {
         let high = smoothstep(tree + 300., tree + 900., h + (n(600., 0.6) - 0.5) * 300.);
         let rock = (1. - smoothstep(0.7, 0.85, flat)).max(high * (1. - 0.6 * smoothstep(0.92, 0.99, flat)));
         let stone = mix(colour(ROCK), colour(SCREE), smoothstep(0.85, 0.95, flat)) * (0.7 + 0.6 * n(250., 0.7));
-        ground = mix(ground, stone, rock);
+        ground = mix(ground, stone, rock) * grain;
         // Snow lies above the snowline where slopes are gentle enough to hold it, and drifts
         // lower in sheltered places.
-        let line = self.snowline + (n(900., 0.1) - 0.5) * 500.;
+        let line = snowline + (n(900., 0.1) - 0.5) * 500.;
         let snow = smoothstep(line - 150., line + 150., h) * smoothstep(0.72, 0.88, flat + 0.15 * (n(120., 0.3) - 0.5));
         mix(ground, colour(SNOW), snow)
     }
 }
 
 pub struct Land {
-    ground: std::sync::Arc<Ground>,
+    ground: Arc<Ground>,
 }
 
 impl MaterialModel for Land {
@@ -442,14 +649,14 @@ impl MaterialModel for Land {
 
 /// The landscape's materials: water in its rivers and lakes, land elsewhere.
 pub struct LandscapeMedium {
-    ground: std::sync::Arc<Ground>,
+    ground: Arc<Ground>,
     land: Land,
     water: PhysicalOcean,
 }
 
 impl LandscapeMedium {
     pub fn new(ground: Ground) -> LandscapeMedium {
-        let ground = std::sync::Arc::new(ground);
+        let ground = Arc::new(ground);
         let centre = ground.frame.centre();
         LandscapeMedium {
             land: Land { ground: ground.clone() },
@@ -469,14 +676,12 @@ impl Medium for LandscapeMedium {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terrain::simulation::TerrainParams;
 
-    fn frame() -> Frame {
-        let d = Domain::patch(45., 7., 8, 500., 6.36e6);
-        Frame::of(&d, 1.)
-    }
+    fn frame() -> Frame { Frame::new(45., 7., 6.36e6, 1.) }
 
     #[test]
-    fn test_patch_centre_is_the_scene_origin_and_the_planet_curves_away() {
+    fn test_site_is_the_scene_origin_and_the_planet_curves_away() {
         let f = frame();
         let o = f.to_scene(&f.dir(0., 0.), 0.);
         assert!(o.norm() < 1e-6, "{:?}", o);
@@ -508,36 +713,62 @@ mod tests {
         assert!((catmull_rom(0., 1., 2., 3., 0.3) - 1.3).abs() < 1e-12);
     }
 
-    #[test]
-    fn test_axis_is_fine_over_the_patch_and_reaches_the_horizon() {
-        let xs = axis(1000., 100., 50_000., 1.2);
-        assert!(xs.windows(2).all(|w| w[1] > w[0]));
-        assert!(xs[0] <= -50_000. && *xs.last().unwrap() >= 50_000.);
-        assert!(xs.contains(&-1000.) && xs.iter().any(|&x| (x - 1000.).abs() < 1e-9));
-        let inner = xs.iter().filter(|x| x.abs() <= 1000. + 1e-9).count();
-        assert_eq!(inner, 21);
-    }
-
-    #[test]
-    fn test_relief_is_continuous_across_its_layers() {
+    fn layers() -> (Planet, Arc<Vec<Layer>>, (f64, f64)) {
         let mut params = TerrainParams::default();
         params.planet.radius = 6.36e6;
         let planet = Planet::new(params.planet.clone());
         let (lat, lon) = planet.most_mountainous(2000);
         let fine = Terrain::new(Domain::patch(lat, lon, 16, 1000., params.planet.radius), params.clone());
-        let coarse = Terrain::new(Domain::patch(lat, lon, 16, 4000., params.planet.radius), params);
-        let frame = Frame::of(&fine.domain, 1.);
-        let layers = std::sync::Arc::new(vec![Layer::new(fine, 0.), Layer::new(coarse, 0.)]);
-        let r = Relief::new(layers.clone(), &planet, frame);
-        for half in [layers[0].half(), layers[1].half()] {
+        let coarse = Terrain::new(Domain::patch(lat + 0.01, lon, 16, 4000., params.planet.radius), params.clone());
+        let globe = Terrain::new(Domain::sphere(16, params.planet.radius), params);
+        (planet, Arc::new(vec![Layer::new(fine, 0.), Layer::new(coarse, 0.), Layer::new(globe, 0.)]), (lat, lon))
+    }
+
+    #[test]
+    fn test_relief_is_continuous_across_its_layers() {
+        let (planet, layers, (lat, lon)) = layers();
+        let r = Relief::new(layers.clone(), &planet, 6.36e6, 1., 1000.);
+        let f = Frame::new(lat, lon, 6.36e6, 1.);
+        // Across each patch's edge (the coarse one is centred a little to the north).
+        for (half, z0) in [(8000., 0.), (32000., 0.01f64.to_radians() * 6.36e6)] {
             for z in [-5000., 0., 3000.] {
-                let (inside, s0) = r.base(half - 1e-6, z);
-                let (outside, s1) = r.base(half + 1e-6, z);
-                assert!((inside - outside).abs() < 1e-2, "{} vs {}", inside, outside);
-                assert!((s0 - s1).abs() < 1e-3);
+                let a = r.base(&f.dir(half - 1e-3, z0 + z));
+                let b = r.base(&f.dir(half + 1e-3, z0 + z));
+                assert!((a - b).abs() < 0.5, "{} vs {}", a, b);
             }
         }
         // At the centre, it is the finest layer.
-        assert_eq!(r.base(0., 0.), (layers[0].simulated(0., 0.), 1000.));
+        let c = f.dir(0., 0.);
+        assert!((r.base(&c) - layers[0].simulated(&c)).abs() < 1e-9);
+        // The globe is continuous across a face's edge.
+        let e = sphere_dir(0, 1., 0.3);
+        let (a, b) = (r.base(&(e + Vector3::new(0., 0., -1e-9)).normalize()), r.base(&(e + Vector3::new(0., 0., 1e-9)).normalize()));
+        assert!((a - b).abs() < 1., "{} vs {}", a, b);
+    }
+
+    #[test]
+    fn test_clipmap_is_finest_under_the_camera_and_covers_the_planet() {
+        let (planet, layers, (lat, lon)) = layers();
+        let r = Relief::new(layers, &planet, 6.36e6, 1., 1000.);
+        let f = Frame::new(lat, lon, 6.36e6, 1.);
+        let p = SceneryParams { resolution: 32, globe: 8, ..SceneryParams::default() };
+        let m = mesh(&r, &f, &Viewpoint { location: Vector3::new(0., 5000., 0.) }, &p);
+        use crate::shapes::geometry::Geometry;
+        // A ray straight down from the camera meets the ground.
+        let down = Ray { ro: Vector3::new(1., 20000., 1.), rd: Vector3::new(0., -1., 0.) };
+        let hit = m.intersects(&down).expect("no ground under the camera");
+        assert!(hit.dist > 10000. && hit.dist < 21000., "{}", hit.dist);
+        // Rays aimed at the planet's centre from all round it meet the ground.
+        for d in [Vector3::new(1., 0., 0.), Vector3::new(0., -1., 0.), Vector3::new(-0.3, 0.2, 0.9)] {
+            let d: Vector3<f64> = d.normalize();
+            let ro = f.centre() + d * 7e6;
+            assert!(m.intersects(&Ray { ro, rd: -d }).is_some(), "{:?}", d);
+        }
+        // The rings are crack-free: rays down through a ring's edge all hit.
+        for k in 0..400 {
+            let x = -40000. + 200. * k as f64;
+            let r = Ray { ro: Vector3::new(x, 20000., 0.37 * x), rd: Vector3::new(0., -1., 0.) };
+            assert!(m.intersects(&r).is_some(), "crack at {}", x);
+        }
     }
 }

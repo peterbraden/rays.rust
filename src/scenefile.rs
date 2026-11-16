@@ -2223,7 +2223,14 @@ impl SceneFile {
             .map(|o| Arc::new(parse_sky_material(o)));
         let geometries = GeometryLibrary::new(s.geometries);
         geometries.preload(&s.objects);
-        let objects = SceneFile::parse_objects(s.objects, &s.materials, &s.media, &geometries);
+        // A landscape is meshed finest where the camera is.
+        let mut scene_objects = s.objects;
+        for o in scene_objects.iter_mut() {
+            if o["type"].as_str() == Some("landscape") && o.get("camera").is_none() {
+                o["camera"] = s.camera.clone();
+            }
+        }
+        let objects = SceneFile::parse_objects(scene_objects, &s.materials, &s.media, &geometries);
         // Emitters with a surface we can sample become area lights.
         let area_lights: Vec<Arc<SceneObject>> = objects.iter()
             .filter(|o| o.medium.material_at(Vector3::zeros()).is_emitter() && o.geometry.surface_area() > 0.)

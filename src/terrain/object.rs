@@ -369,7 +369,7 @@ pub fn evolved(o: &Value, params: TerrainParams) -> Terrain {
 
 /// Run `t` to the object's `time`, through its cache. `key` identifies the domain.
 fn evolve(o: &Value, mut t: Terrain, key: &str) -> Terrain {
-    let time = number(o, "time", 0.);
+    let time = SceneFile::local_time(o, 0.);
     let start = std::time::Instant::now();
     match o["cache"].as_str() {
         Some(dir) => t.run_cached(time, std::path::Path::new(dir), key),
@@ -463,7 +463,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams) -> SceneObject {
     p.treeline = o["treeline"].as_f64();
     p.min_river_width = number(o, "min_river_width", p.min_river_width);
     let radius = params.planet.radius;
-    let time = number(o, "time", 0.);
+    let time = SceneFile::local_time(o, 0.);
     let (lat, lon) = site(&o["domain"], &params);
     println!("Landscape: the scene's origin is at {:.3}°, {:.3}°", lat, lon);
     let frame = Frame::new(lat, lon, radius, p.exaggeration);

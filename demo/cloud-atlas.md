@@ -215,13 +215,16 @@ the field fills in, then breaks into taller towers (congestus) by midday.
 
 The simulation starts at 09:30, as the first cumulus form, and runs for `time` seconds when the
 scene loads. The grid is 64 x 44 x 64 cells of 100 m by default, periodic, and tiled across the
-sky. States are cached in `cache`, so an animation simulates only from frame to frame:
+sky. To animate it, the scene's clock runs the clouds at 40 minutes per second of video
+(`"clock": "40 min/s"`), and its `"animation"` starts 0.75 s before the still (see
+[animation](../docs/animation.md)). States are cached in `cache`, so frames rendered in order
+simulate only from one to the next:
 
 ```bash
-scripts/animate.py demo/scenes/harris-cumulus.json --start 1800 --end 9000 --frames 72 --samples 8 -- --width 480 --height 300
+scripts/animate.py demo/scenes/harris-cumulus.json --samples 8 -- --width 480 --height 300
 ```
 
-[The result](./scenes/harris-cumulus.mp4) runs from 10:00 to 12:00: clear sky, first wisps, a
+[The result](./scenes/harris-cumulus.mp4) runs from 10:00 to about 12:00: clear sky, first wisps, a
 field that fills in, then clumps that break up as the ground's moisture flux falls.
 
 At 100 m the grid resolves clouds down to a few hundred metres. Worley erosion adds finer detail

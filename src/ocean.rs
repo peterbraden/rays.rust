@@ -884,7 +884,7 @@ pub fn create_ocean(opts: &Value) -> SceneObject {
     let wind = SceneFile::parse_vec2_def(opts, "wind", Vector2::new(7., 2.));
     let waves = WaveField::new(
         wind,
-        SceneFile::parse_number(&opts["time"], 0.),
+        SceneFile::local_time(opts, 0.),
         SceneFile::parse_int(&opts["seed"], 0) as u64,
         opts["amplitude"].as_f64(),
         SceneFile::parse_number(&opts["resolved"], 0.8).clamp(0., 1.),

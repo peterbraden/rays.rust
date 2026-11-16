@@ -1,7 +1,7 @@
 # Animation: design
 
-A proposal for how scenes change with time. Nothing here is implemented yet; it records how
-time works today, what stops a frame from being rendered on its own, and a plan in small steps.
+A design for how scenes change with time. The scene clock and clocks at constant rates are
+implemented (`src/animation.rs`); the rest is proposed. It records how time worked before, what stops a frame from being rendered on its own, and a plan in small steps.
 
 ## Goals
 
@@ -64,7 +64,8 @@ A frame is chosen on the command line, never by editing the file:
 - `--time T`: any time, for stills and tests.
 - `-o frames/%04d.png`: the frame number substituted into the output name.
 
-Without either, `t = start` (0), so every existing scene renders as it does today.
+Without either, `t = 0`: the still, so every existing scene renders as it does today. Frame 0
+is at `start`, which may be negative, so an animation can lead up to the still.
 
 ### Clocks: rates with units
 
@@ -84,11 +85,11 @@ rate.
   `"1 min/s"`, `"2 kyr/s"`, `"0"` (frozen). Units are `s`, `min`, `h`, `day`, `yr`, `kyr`,
   `Myr`.
 
-An object's local time is its `"time"` (where it is at the first frame, in its own unit) plus
-its clock's elapsed time since the first frame, converted to that unit:
+An object's local time is its `"time"` (where it is at video time 0, the still, in its own
+unit) plus the time elapsed on its clock since then, converted to that unit:
 
 ```
-local = time + elapsed(clock, t)          elapsed = rate * (t - start) for a constant rate
+local = time + elapsed(clock, t)          elapsed = rate * t for a constant rate
 ```
 
 With the default of 1 s/s, a landscape advances 3 × 10⁻⁸ years per second, so it is still,
@@ -107,8 +108,9 @@ geological clock:
 An object takes `"clock": "name"` (a shared clock defined in `"clocks"`) or an inline
 `"clock": "500 yr/s"`. Shared clocks keep everything that should move together (all the
 weather) at one rate, tuned in one place. Existing scenes keep their meaning: `"time"` is still
-where the object is at the first frame. The clock is worked out before the object's own parser
-runs, so the object only ever sees a plain `"time"` in its own unit.
+where the object is in the still. The clock is worked out before the object's own parser
+runs (`animation::apply_clocks`), which leaves the elapsed time in `"clock_elapsed"`; the
+parser adds it to its `"time"` (`SceneFile::local_time`), so each keeps its own default.
 
 #### Ramps
 
@@ -278,10 +280,10 @@ Once the clock exists, objects gain motion one at a time, each through its local
 
 ## Steps
 
-1. Scene clock: `"animation"`, `--frame`, `--time`, `%04d` outputs, per-frame seeds, resume
-   key. `animate.py` uses `--frame`.
-2. Clocks: rates with units, `"clocks"` and `"clock"`, each object's native unit, resolved onto
-   objects' `"time"`; then keyed rates (ramps) with closed-form `elapsed`.
+1. **Done.** Scene clock: `"animation"`, `--frame`, `--time`, `%04d` outputs, per-frame seeds,
+   resume key. `animate.py` uses `--frame`.
+2. **Done:** clocks at constant rates with units, `"clocks"` and `"clock"`, each object's native
+   unit. To do: keyed rates (ramps) with closed-form `elapsed`.
 3. Simulations checkpointed at the shot's frames (`harris_cumulus`, `landscape` and its
    glaciers), the history before it at the still's steps; a test that a frame from cache equals one
    from scratch. A glaciation demo: a valley through one glacial cycle at a few kyr/s.

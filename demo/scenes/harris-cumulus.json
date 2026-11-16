@@ -7,6 +7,11 @@
   "shadow_bias": 0.01,
   "max_depth": 64,
   "path_termination": "russian_roulette",
+  "animation": {
+    "fps": 24,
+    "frames": 72,
+    "start": -0.75
+  },
   "camera": {
     "location": [
       0,
@@ -51,6 +56,7 @@
     {
       "type": "harris_cumulus",
       "time": 3600,
+      "clock": "40 min/s",
       "follow_wind": true,
       "cache": "demo/scenes/.cumulus-cache",
       "albedo": [

@@ -138,7 +138,7 @@ pub fn create_firework(o: &Value) -> SceneObject {
 
     let center = SceneFile::parse_vec3_def(o, "center", Vector3::new(0., 10., 0.));
     let mut rng: StdRng = SeedableRng::from_seed(firework_seed(o, &center));
-    let time = SceneFile::parse_number(&o["time"], 0.9);
+    let time = SceneFile::local_time(o, 0.9);
     let radius = SceneFile::parse_number(&o["radius"], 10.);
     let samples = SceneFile::parse_number(&o["samples"], 10.) as usize;
     let gravity = SceneFile::parse_number(&o["gravity"], 9.8);

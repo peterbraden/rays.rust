@@ -24,6 +24,7 @@ mod ray;
 mod color;
 mod spectrum;
 mod motion;
+mod animation;
 mod sampler;
 mod textures;
 mod film;
@@ -201,6 +202,17 @@ struct Args {
     #[arg(long)]
     seed: Option<u64>,
 
+    ///Render this frame of the scene's animation (its "animation": fps and start), each object
+    ///at its time then on its clock. With -o, %04d in the path stands for the frame number;
+    ///without, the image is <scene>-NNNN.png
+    #[arg(long, conflicts_with = "time")]
+    frame: Option<u64>,
+
+    ///Render the scene's animation at this video time, seconds (0 is the still: each object at
+    ///its "time")
+    #[arg(long)]
+    time: Option<f64>,
+
     ///Samples per pixel to render to; overrides the scenefile's supersamples. With a saved
     ///state, only the samples it lacks are rendered, so a quick render can be refined later
     #[arg(long)]
@@ -283,10 +295,12 @@ fn main() {
     }
     // What the render's saved state is keyed by: the scene, in whatever format it was read.
     let contents = doc.to_string();
+    let when = args.frame.map(animation::When::Frame).or(args.time.map(animation::When::Time));
     let mut s = scenefile::SceneFile::from_value_overridden(doc, &scenefile::Overrides {
         width: args.width,
         height: args.height,
         seed: args.seed,
+        when,
     });
 
     let mut rc = RenderContext::new(
@@ -295,13 +309,26 @@ fn main() {
             args.progressive_render,
             &args.scene,
             );
-    if let Some(path) = &args.output {
-        rc.output_filename = path.clone();
+    match (&args.output, args.frame) {
+        (Some(path), Some(n)) => rc.output_filename = animation::frame_path(path, n),
+        (Some(path), None) if path.contains('%') && args.time.is_some() => {
+            eprintln!("A frame number in the output path ({}) needs --frame, not --time", path);
+            std::process::exit(1);
+        },
+        (Some(path), None) => rc.output_filename = path.clone(),
+        (None, Some(n)) => rc.output_filename = animation::frame_path(
+            &format!("{}-%04d.png", std::path::Path::new(&args.scene).with_extension("").display()), n),
+        (None, None) => {},
+    }
+    if let Some(dir) = std::path::Path::new(&rc.output_filename).parent().filter(|d| !d.as_os_str().is_empty()) {
+        let _ = std::fs::create_dir_all(dir);
     }
     // Carry on from where an earlier render of the same scene stopped, if there was one.
     let state_path = rendercontext::state_path_for(&rc.output_filename);
     // The wavefront integrator's samples differ from the path tracer's: a saved state is one's.
+    let moment = when.map(|w| match w { animation::When::Frame(n) => n as f64, animation::When::Time(t) => t });
     let key = rendercontext::render_key(&contents, (args.width, args.height, args.seed))
+        ^ moment.map_or(0, |m| sobol::hash(0x7469_6d65, m.to_bits() ^ args.frame.is_some() as u64))
         ^ if args.wavefront { 0x7761_7665_6672_6f6e } else { 0 };
     if !args.fresh && std::path::Path::new(&state_path).exists() {
         match rc.load_state(&state_path, key) {

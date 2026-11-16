@@ -198,6 +198,9 @@ pub struct Overrides {
     pub width: Option<usize>,
     pub height: Option<usize>,
     pub seed: Option<u64>,
+    /// The moment of the animation to render (`animation`): a frame or a video time. Without
+    /// one, the animation's start.
+    pub when: Option<crate::animation::When>,
 }
 
 /// Every field except `camera` is optional; defaults are applied in `from_scenefile`.
@@ -1317,7 +1320,7 @@ impl SceneFile {
                 surface_pressure: SceneFile::parse_number(&sounding["surface_pressure"], 1e5),
             };
         }
-        let time = num("time", 5400.).max(0.);
+        let time = SceneFile::local_time(o, 5400.).max(0.);
         let cache = o["cache"].as_str().map(std::path::PathBuf::from);
         // A saved state, as is (eg. from the `harris_day` diagnostic), or a simulation.
         let sim = match o["state"].as_str() {
@@ -1573,7 +1576,7 @@ impl SceneFile {
         c.detail_size = num("detail_size", c.detail_size).max(1.);
         c.condensation_rate = num("condensation_rate", c.condensation_rate).max(0.);
         c.droplet_radius = num("droplet_radius", c.droplet_radius).max(0.5);
-        c.time = num("time", c.time);
+        c.time = SceneFile::local_time(o, c.time);
         // The waves reach no cloud once the decayed amplitude is below the least deficit.
         let least = c.layers.iter().map(|l| l.deficit).fold(f64::INFINITY, f64::min) - c.humidity_variation - c.strata - c.roughness;
         let reach = if least > 0. && c.amplitude > least { c.decay * (c.amplitude / least).ln() } else { 10. * c.decay };
@@ -1655,7 +1658,7 @@ impl SceneFile {
         c.fibres = num("fibres", c.fibres).clamp(0., 1.);
         c.turbulence_size = num("turbulence_size", c.turbulence_size);
         c.turbulence = num("turbulence", c.turbulence);
-        c.time = num("time", c.time);
+        c.time = SceneFile::local_time(o, c.time);
         c.evolution_period = num("evolution_period", c.evolution_period);
         c.patchiness = num("patchiness", c.patchiness).clamp(0., 1.);
         c.particle_radius = num("particle_radius", c.particle_radius);
@@ -2533,6 +2536,13 @@ impl SceneFile {
 
     /// An object's optional `"seed"`, choosing its procedural pattern. Without one, noise uses
     /// Perlin's reference table (and Worley seed 42), as before seeds existed.
+    /// An object's time at the moment rendered, in its own unit: its `"time"` (at the start
+    /// of the animation, default `default`) plus the time elapsed since on its clock
+    /// (`animation::apply_clocks`).
+    pub fn local_time(o: &Value, default: f64) -> f64 {
+        SceneFile::parse_number(&o["time"], default) + o[crate::animation::ELAPSED].as_f64().unwrap_or(0.)
+    }
+
     pub fn parse_seed(o: &Value) -> Option<u64> {
         o.get("seed").map(|s| SceneFile::parse_int(s, 0) as u64)
     }
@@ -3097,11 +3107,21 @@ impl SceneFile {
     /// Build a scene from a scene file's JSON, applying command-line overrides first.
     pub fn from_value_overridden(doc: Value, o: &Overrides) -> Scene {
         let (width, height) = (o.width, o.height);
-        let doc = SceneFile::substitute_variables(doc)
+        let mut doc = SceneFile::substitute_variables(doc)
+            .unwrap_or_else(|e| panic!("Scene file: {}", e));
+        // The moment rendered, and each object's time then on its clock (`animation`).
+        let animation = crate::animation::Animation::parse(&doc["animation"]).unwrap_or_else(|e| panic!("Scene file: {}", e));
+        let time = o.when.map(|w| animation.time(w));
+        crate::animation::apply_clocks(&mut doc, time.unwrap_or(0.))
             .unwrap_or_else(|e| panic!("Scene file: {}", e));
         let mut scene: SceneFile = serde_json::from_value(doc).unwrap();
         if let Some(seed) = o.seed {
             scene.seed = Value::from(seed);
+        }
+        // Each frame's samples have their own seed, so its noise is unlike its neighbours'
+        // (grain, not a pattern fixed on the screen); the world's own seeds don't change.
+        if let Some(t) = time {
+            scene.seed = Value::from(crate::sobol::hash(SceneFile::parse_int(&scene.seed, 0) as u64, t.to_bits()));
         }
         if let Some(w) = width {
             scene.width = Value::from(w);
@@ -3179,6 +3199,24 @@ mod tests {
             "materials": {{}}, "media": {{}}, "objects": [], "variables": {{}}
             {}
         }}"#, extra), width, height)
+    }
+
+    #[test]
+    fn test_each_frame_has_its_own_seed() {
+        use crate::animation::When;
+        let doc = serde_json::json!({
+            "width": 4, "height": 2, "supersamples": 1, "seed": 5,
+            "camera": { "location": [0, 0, -1], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
+            "animation": { "fps": 24 }, "clocks": { "weather": "1 min/s" },
+            "objects": [{ "type": "firework", "clock": "weather" }]
+        });
+        let seed = |when: Option<When>| SceneFile::from_value_overridden(doc.clone(), &Overrides { when, ..Overrides::default() }).render.seed;
+        // A still keeps the scene's seed; each frame has its own, the same every time, and the
+        // same whether asked for by frame or by time.
+        assert_eq!(seed(None), 5);
+        assert_eq!(seed(Some(When::Frame(3))), seed(Some(When::Frame(3))));
+        assert_ne!(seed(Some(When::Frame(3))), seed(Some(When::Frame(4))));
+        assert_eq!(seed(Some(When::Frame(12))), seed(Some(When::Time(0.5))));
     }
 
     fn library(defs: Value) -> GeometryLibrary {

@@ -89,6 +89,7 @@ dependencies = [
 name = "builder"
 version = "0.1.0"
 dependencies = [
+ "naga",
  "spirv-builder",
 ]
 
@@ -669,6 +670,7 @@ dependencies = [
  "rustc-hash 1.1.0",
  "spirv",
  "thiserror",
+ "unicode-ident",
 ]
 
 [[package]]

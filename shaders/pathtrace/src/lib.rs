@@ -301,50 +301,44 @@ fn trace(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> 
     let mut best = Hit { t: tmax, prim: NONE, ng: Vec3::ZERO, ns: Vec3::ZERO };
     let mut best_h = Vec4::ZERO;
     let np = s.params.counts.x;
-    // Planes, after the bounded primitives.
-    let mut k = 0;
-    while k < s.params.counts.y {
-        let h = intersect_prim(s, np + k, ro, rd, tmin, best.t);
-        if h.w > 0.0 {
-            best.t = h.x;
-            best.prim = np + k;
-            best_h = h;
-            if any_hit {
-                return best;
-            }
-        }
-        k += 1;
-    }
-    if np > 0 {
-        let inv = Vec3::ONE / rd;
-        let mut stack = [0u32; STACK];
-        let mut sp = 1usize;
-        while sp > 0 {
-            sp -= 1;
-            let ni = stack[sp];
-            let n = at(s.nodes, ni);
-            if !box_hit(n.bmin, n.bmax, ro, inv, best.t) {
-                continue;
-            }
-            if n.count > 0 {
-                let mut j = n.offset;
-                while j < n.offset + n.count {
-                    let h = intersect_prim(s, j, ro, rd, tmin, best.t);
-                    if h.w > 0.0 {
-                        best.t = h.x;
-                        best.prim = j;
-                        best_h = h;
-                        if any_hit {
-                            return best;
-                        }
-                    }
-                    j += 1;
+    // One loop, and so one copy of `intersect_prim` once rust-gpu inlines everything: a leaf's
+    // primitives j..end are tested first (to begin with, the planes, which follow the bounded
+    // primitives), then the next node is taken from the stack.
+    let mut j = np;
+    let mut end = np + s.params.counts.y;
+    let inv = Vec3::ONE / rd;
+    let mut stack = [0u32; STACK];
+    let mut sp = if np > 0 { 1usize } else { 0 };
+    loop {
+        if j < end {
+            let h = intersect_prim(s, j, ro, rd, tmin, best.t);
+            if h.w > 0.0 {
+                best.t = h.x;
+                best.prim = j;
+                best_h = h;
+                if any_hit {
+                    return best;
                 }
-            } else if sp + 2 <= STACK {
-                stack[sp] = n.offset;
-                stack[sp + 1] = ni + 1;
-                sp += 2;
             }
+            j += 1;
+            continue;
+        }
+        if sp == 0 {
+            break;
+        }
+        sp -= 1;
+        let ni = stack[sp];
+        let n = at(s.nodes, ni);
+        if !box_hit(n.bmin, n.bmax, ro, inv, best.t) {
+            continue;
+        }
+        if n.count > 0 {
+            j = n.offset;
+            end = n.offset + n.count;
+        } else if sp + 2 <= STACK {
+            stack[sp] = n.offset;
+            stack[sp + 1] = ni + 1;
+            sp += 2;
         }
     }
     if best.prim != NONE {
@@ -496,32 +490,49 @@ pub fn fresnel_reflectance(cos_i: f32, ni_over_nt: f32, ior: f32) -> f32 {
     schlick(cos_i.min(cos_t), ior)
 }
 
-fn cmul(a: (f32, f32), b: (f32, f32)) -> (f32, f32) {
+/// Complex numbers, three at a time (one per colour channel): (real, imaginary).
+type C3 = (Vec3, Vec3);
+
+fn cmul(a: C3, b: C3) -> C3 {
     (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0)
 }
 
-fn norm2(a: (f32, f32)) -> f32 {
+fn norm2(a: C3) -> Vec3 {
     a.0 * a.0 + a.1 * a.1
 }
 
-/// `ggx::conductor_reflectance`, complex arithmetic spelled out.
-pub fn conductor_reflectance(cos_in: f32, eta: f32, k: f32) -> f32 {
-    let cos_i = cos_in.clamp(0.0, 1.0);
-    let sin2_i = 1.0 - cos_i * cos_i;
+fn sqrt3(v: Vec3) -> Vec3 {
+    Vec3::new(v.x.max(0.0).sqrt(), v.y.max(0.0).sqrt(), v.z.max(0.0).sqrt())
+}
+
+/// `ggx::conductor_reflectance` for each channel of a conductor with complex index of
+/// refraction `eta` + i `k`, complex arithmetic spelled out. All three channels at once, so the
+/// kernel has one copy of this rather than three.
+pub fn conductor_reflectance3(cos_in: f32, eta: Vec3, k: Vec3) -> Vec3 {
+    let cos_i = Vec3::splat(cos_in.clamp(0.0, 1.0));
+    let sin2_i = Vec3::ONE - cos_i * cos_i;
     let n2 = cmul((eta, k), (eta, k));
     let d = norm2(n2);
     // sin²t = sin²i / n², cos t = √(1 - sin²t), principal root.
-    let z = (1.0 - sin2_i * n2.0 / d, sin2_i * n2.1 / d);
-    let r = norm2(z).sqrt();
-    let mut ct = (((r + z.0) / 2.0).max(0.0).sqrt(), ((r - z.0) / 2.0).max(0.0).sqrt());
-    if z.1 < 0.0 {
-        ct.1 = -ct.1;
-    }
+    let z = (Vec3::ONE - sin2_i * n2.0 / d, sin2_i * n2.1 / d);
+    let r = sqrt3(norm2(z));
+    let mut ct = (sqrt3((r + z.0) / 2.0), sqrt3((r - z.0) / 2.0));
+    ct.1 = Vec3::new(
+        if z.1.x < 0.0 { -ct.1.x } else { ct.1.x },
+        if z.1.y < 0.0 { -ct.1.y } else { ct.1.y },
+        if z.1.z < 0.0 { -ct.1.z } else { ct.1.z },
+    );
     let a = (eta * cos_i, k * cos_i);
     let nct = cmul((eta, k), ct);
-    let rp = norm2((a.0 - ct.0, a.1 - ct.1)) / norm2((a.0 + ct.0, a.1 + ct.1)).max(1e-30);
-    let rs = norm2((cos_i - nct.0, -nct.1)) / norm2((cos_i + nct.0, nct.1)).max(1e-30);
+    let tiny = Vec3::splat(1e-30);
+    let rp = norm2((a.0 - ct.0, a.1 - ct.1)) / norm2((a.0 + ct.0, a.1 + ct.1)).max(tiny);
+    let rs = norm2((cos_i - nct.0, -nct.1)) / norm2((cos_i + nct.0, nct.1)).max(tiny);
     (rp + rs) / 2.0
+}
+
+/// One channel of `conductor_reflectance3`.
+pub fn conductor_reflectance(cos_in: f32, eta: f32, k: f32) -> f32 {
+    conductor_reflectance3(cos_in, Vec3::splat(eta), Vec3::splat(k)).x
 }
 
 /// A BSDF at a hit: kind 0 Lambert, 1 GGX, 2 plastic (GGX coat over Lambert); Fresnel 0
@@ -569,8 +580,7 @@ impl Lobe {
         } else if self.fresnel == 1 {
             Vec3::splat(fresnel_reflectance(cos, 1.0 / self.ior, self.ior))
         } else {
-            Vec3::new(conductor_reflectance(cos, self.albedo.x, self.k.x), conductor_reflectance(cos, self.albedo.y, self.k.y),
-                      conductor_reflectance(cos, self.albedo.z, self.k.z))
+            conductor_reflectance3(cos, self.albedo, self.k)
         }
     }
 
@@ -592,23 +602,17 @@ impl Lobe {
         ((1.0 + a2tan2).sqrt() - 1.0) / 2.0
     }
 
-    fn ggx_eval(&self, wo: Vec3, wi: Vec3) -> Vec3 {
+    /// The microfacet lobe's f |cos θ_i| and density, sharing their terms.
+    fn ggx_eval_pdf(&self, wo: Vec3, wi: Vec3) -> (Vec3, f32) {
         let (o, i) = (self.local(wo), self.local(wi));
         if o.z <= 0.0 || i.z <= 0.0 {
-            return Vec3::ZERO;
+            return (Vec3::ZERO, 0.0);
         }
         let h = (o + i).normalize();
-        let g2 = 1.0 / (1.0 + self.ggx_lambda(o) + self.ggx_lambda(i));
-        self.fresnel(o.dot(h)) * (g2 * self.ggx_d(h) / (4.0 * o.z))
-    }
-
-    fn ggx_pdf(&self, wo: Vec3, wi: Vec3) -> f32 {
-        let (o, i) = (self.local(wo), self.local(wi));
-        if o.z <= 0.0 || i.z <= 0.0 {
-            return 0.0;
-        }
-        let h = (o + i).normalize();
-        self.ggx_d(h) / (1.0 + self.ggx_lambda(o)) / (4.0 * o.z)
+        let d = self.ggx_d(h);
+        let lo = self.ggx_lambda(o);
+        let g2 = 1.0 / (1.0 + lo + self.ggx_lambda(i));
+        (self.fresnel(o.dot(h)) * (g2 * d / (4.0 * o.z)), d / (1.0 + lo) / (4.0 * o.z))
     }
 
     /// Heitz's sampling of visible normals (`GGX::sample_visible_normal`); zero if none.
@@ -644,41 +648,39 @@ impl Lobe {
         fresnel_reflectance(wo.dot(self.n).max(0.0), 1.0 / self.ior, self.ior)
     }
 
+    /// f |cos θ_i| and the density of sampling `wi`, together: the kernel evaluates a lobe
+    /// at as few places as it can, since each is inlined.
+    pub fn eval_pdf(&self, wo: Vec3, wi: Vec3) -> (Vec3, f32) {
+        let c = wi.dot(self.n);
+        let cos_pdf = c.max(0.0) / PI;
+        if self.kind == 0 {
+            return (self.lambert_eval(self.albedo, wi), cos_pdf);
+        }
+        let (f, pdf) = self.ggx_eval_pdf(wo, wi);
+        if self.kind == 1 {
+            return (f, pdf);
+        }
+        // The coat, plus the base dimmed by what the coat reflects; each sampled in proportion.
+        let share = self.coat_share(wo);
+        (f + self.lambert_eval(self.base, wi) * (1.0 - share), share * pdf + (1.0 - share) * cos_pdf)
+    }
+
     /// f |cos θ_i|.
     pub fn eval(&self, wo: Vec3, wi: Vec3) -> Vec3 {
-        if self.kind == 0 {
-            self.lambert_eval(self.albedo, wi)
-        } else if self.kind == 1 {
-            self.ggx_eval(wo, wi)
-        } else {
-            // The coat, plus the base dimmed by what the coat reflects.
-            self.ggx_eval(wo, wi) + self.lambert_eval(self.base, wi) * (1.0 - self.coat_share(wo))
-        }
+        self.eval_pdf(wo, wi).0
     }
 
     pub fn pdf(&self, wo: Vec3, wi: Vec3) -> f32 {
-        let cos_pdf = wi.dot(self.n).max(0.0) / PI;
-        if self.kind == 0 {
-            cos_pdf
-        } else if self.kind == 1 {
-            self.ggx_pdf(wo, wi)
-        } else {
-            let f = self.coat_share(wo);
-            f * self.ggx_pdf(wo, wi) + (1.0 - f) * cos_pdf
-        }
+        self.eval_pdf(wo, wi).1
     }
 
-    /// A direction and its density (w = 0 if none).
-    fn sample(&self, wo: Vec3, u1: f32, u2: f32, u3: f32) -> Vec4 {
-        let wi = if self.kind == 0 || (self.kind == 2 && u3 >= self.coat_share(wo)) {
+    /// A direction, or zero if none.
+    fn sample(&self, wo: Vec3, u1: f32, u2: f32, u3: f32) -> Vec3 {
+        if self.kind == 0 || (self.kind == 2 && u3 >= self.coat_share(wo)) {
             cosine_sample(self.n, u1, u2)
         } else {
             self.ggx_sample(wo, u1, u2)
-        };
-        if wi.dot(wi) == 0.0 {
-            return Vec4::ZERO;
         }
-        wi.extend(self.pdf(wo, wi))
     }
 }
 
@@ -979,88 +981,94 @@ pub fn radiance(s: &Scene, ro_in: Vec3, rd_in: Vec3, rng: &mut u32) -> Vec3 {
         }
 
         scattered = true;
-        // Every point light.
-        let mut li = 0;
-        while li < s.params.counts.w {
-            let light = at(s.lights, li);
-            let to = light.pos.xyz() - above;
-            let d2 = to.dot(to);
-            let wi = to / d2.sqrt();
-            let f = lobe.eval(wo, wi);
-            if f.dot(f) > 0.0 {
-                let i = light.intensity.xyz() * spot(&light, -wi);
-                if i.dot(i) > 0.0 && !occluded(s, above, wi, d2.sqrt()) {
-                    l += beta * f * i / d2;
+        // Direct light, one shadow ray at a time, with one evaluation of the lobe and one call
+        // of `occluded` (so one copy of each once rust-gpu inlines everything): every point
+        // light, then the sun, one area light and the sky. Each gives a direction, a distance,
+        // the light arriving if nothing is in the way, and its density (0 for a delta light, so
+        // no MIS weight).
+        let n_lights = s.params.counts.w;
+        let mut k = 0;
+        while k < n_lights + 3 {
+            let mut wi = Vec3::ZERO;
+            let mut dist = 1e30;
+            let mut li = Vec3::ZERO;
+            let mut pdf = 0.0;
+            if k < n_lights {
+                let light = at(s.lights, k);
+                let to = light.pos.xyz() - above;
+                let d2 = to.dot(to);
+                wi = to / d2.sqrt();
+                dist = d2.sqrt();
+                li = light.intensity.xyz() * spot(&light, -wi) / d2;
+            } else if k == n_lights {
+                // The sun: a point for lobes that can't resolve its disc, else its disc with MIS.
+                if flags & FLAG_SUN != 0 {
+                    let sd = s.params.sun_dir.xyz();
+                    let solid_angle = 2.0 * PI * (1.0 - s.params.sun_dir.w);
+                    if lobe.pdf(wo, sd) * solid_angle < POINT_SUN {
+                        wi = sd;
+                        li = s.params.sun_irr.xyz();
+                    } else {
+                        let cos_t = 1.0 - rand(rng) * (1.0 - s.params.sun_dir.w);
+                        let sin_t = (1.0 - cos_t * cos_t).max(0.0).sqrt();
+                        let phi = 2.0 * PI * rand(rng);
+                        let (t, b) = basis(sd);
+                        wi = t * (sin_t * phi.cos()) + b * (sin_t * phi.sin()) + sd * cos_t;
+                        pdf = sun_disc_pdf(s, wi);
+                        if pdf > 0.0 {
+                            li = sun_disc(s, wi);
+                        }
+                    }
+                }
+            } else if k == n_lights + 1 {
+                // One area light, by power.
+                if flags & FLAG_SAMPLE_LIGHTS != 0 && n_emitters > 0 {
+                    let e = search(s, s.params.offs.y, n_emitters, rand(rng));
+                    let pmf = emitter_probability(s, e);
+                    let pi = at(s.tables, s.params.offs.x + e).to_bits();
+                    let (y, ny, light_pdf) = sample_light(s, pi, above, rand(rng), rand(rng));
+                    let to = y - above;
+                    let d = to.length();
+                    wi = to / d;
+                    dist = d * (1.0 - 1e-4) - eps;
+                    if light_pdf > 0.0 {
+                        pdf = pmf * light_pdf;
+                        li = emitted(s, at(s.prims, pi).info.y, ny, -wi);
+                    }
+                }
+            } else if flags & FLAG_SAMPLE_ENV != 0 {
+                // The sky, by its brightness.
+                let es = env_sample(s, rand(rng), rand(rng));
+                if es.w > 0.0 {
+                    wi = es.xyz();
+                    pdf = es.w;
+                    li = env_lookup(s, wi);
                 }
             }
-            li += 1;
-        }
-        // The sun: a point for lobes that can't resolve its disc, else its disc with MIS.
-        if flags & FLAG_SUN != 0 {
-            let sd = s.params.sun_dir.xyz();
-            let solid_angle = 2.0 * PI * (1.0 - s.params.sun_dir.w);
-            if lobe.pdf(wo, sd) * solid_angle < POINT_SUN {
-                let f = lobe.eval(wo, sd);
-                if f.dot(f) > 0.0 && !occluded(s, above, sd, 1e30) {
-                    l += beta * f * s.params.sun_irr.xyz();
-                }
-            } else {
-                let cos_t = 1.0 - rand(rng) * (1.0 - s.params.sun_dir.w);
-                let sin_t = (1.0 - cos_t * cos_t).max(0.0).sqrt();
-                let phi = 2.0 * PI * rand(rng);
-                let (t, b) = basis(sd);
-                let wi = t * (sin_t * phi.cos()) + b * (sin_t * phi.sin()) + sd * cos_t;
-                let pdf = sun_disc_pdf(s, wi);
-                let f = lobe.eval(wo, wi);
-                if pdf > 0.0 && f.dot(f) > 0.0 && !occluded(s, above, wi, 1e30) {
-                    l += beta * f * sun_disc(s, wi) * (power_heuristic(pdf, lobe.pdf(wo, wi)) / pdf);
+            if li.dot(li) > 0.0 {
+                let (f, lobe_pdf) = lobe.eval_pdf(wo, wi);
+                let w = if pdf > 0.0 { power_heuristic(pdf, lobe_pdf) / pdf } else { 1.0 };
+                if f.dot(f) > 0.0 && !occluded(s, above, wi, dist) {
+                    l += beta * f * li * w;
                 }
             }
-        }
-        // One area light, by power.
-        if flags & FLAG_SAMPLE_LIGHTS != 0 && n_emitters > 0 {
-            let e = search(s, s.params.offs.y, n_emitters, rand(rng));
-            let pmf = emitter_probability(s, e);
-            let pi = at(s.tables, s.params.offs.x + e).to_bits();
-            let (y, ny, pdf) = sample_light(s, pi, above, rand(rng), rand(rng));
-            let to = y - above;
-            let d = to.length();
-            let wi = to / d;
-            let le = emitted(s, at(s.prims, pi).info.y, ny, -wi);
-            if pdf > 0.0 && le.dot(le) > 0.0 {
-                let lp = pmf * pdf;
-                let f = lobe.eval(wo, wi);
-                if f.dot(f) > 0.0 && !occluded(s, above, wi, d * (1.0 - 1e-4) - eps) {
-                    l += beta * f * le * (power_heuristic(lp, lobe.pdf(wo, wi)) / lp);
-                }
-            }
-        }
-        // The sky, by its brightness.
-        if flags & FLAG_SAMPLE_ENV != 0 {
-            let es = env_sample(s, rand(rng), rand(rng));
-            if es.w > 0.0 {
-                let d = es.xyz();
-                let f = lobe.eval(wo, d);
-                if f.dot(f) > 0.0 && !occluded(s, above, d, 1e30) {
-                    l += beta * f * env_lookup(s, d) * (power_heuristic(es.w, lobe.pdf(wo, d)) / es.w);
-                }
-            }
+            k += 1;
         }
         // The next ray.
         if depth >= max_depth {
             break;
         }
-        let smp = lobe.sample(wo, rand(rng), rand(rng), rand(rng));
-        if smp.w <= 0.0 {
+        let wi = lobe.sample(wo, rand(rng), rand(rng), rand(rng));
+        let (f, pdf) = lobe.eval_pdf(wo, wi);
+        if wi.dot(wi) == 0.0 || pdf <= 0.0 {
             break;
         }
-        let wi = smp.xyz();
-        let weight = lobe.eval(wo, wi) / smp.w;
+        let weight = f / pdf;
         if !survives(s, depth, weight, &mut beta, rng) {
             break;
         }
         beta *= weight;
-        prev_pdf = smp.w;
+        prev_pdf = pdf;
         specular = false;
         let side = if wi.dot(ng) < 0.0 { -ng } else { ng };
         ro = point + side * eps;

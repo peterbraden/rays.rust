@@ -1,0 +1,16 @@
+{
+  "width": 960,
+  "height": 480,
+  "supersamples": 16,
+  "max_depth": 1,
+  "output": { "exposure": 1.5e7 },
+  "background": { "type": "space", "seed": 2 },
+  "camera": {
+    "location": [0, 0, 0],
+    "lookat": [0.9, 0.2, -0.3],
+    "up": [0, 1, 0],
+    "angle": 0.9,
+    "aperture": 0
+  },
+  "objects": []
+}

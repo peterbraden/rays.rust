@@ -152,6 +152,12 @@ elevation), by bed (`"beds"`) and by stains (`"variety"`), the cliffs `"varnish"
 `"flutes"`d.
 ![desert mesas](./scenes/desert-mesas.png)
 
+The same country at midday from an overlook (`desert-noon.json`): a few small buttes and
+spires far out on a hummocky, ledged floor of orange sand. The film's white balance is set for
+a bluer light than the noon sun and sky (`"white_balance": 7000`), warming the sand as a
+photographer's shade setting would.
+![desert at noon](./scenes/desert-noon.png)
+
 ## Alpine terrain
 Mountains from seeded noise after one 100,000 year glacial cycle: tectonic uplift, river
 incision and glacial erosion (`src/terrain/`).

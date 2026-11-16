@@ -21,6 +21,7 @@ use crate::procedural::grass::{create_grass, GrassMedium};
 use crate::procedural::heightmap::{HeightGrid, Terrain};
 use crate::procedural::rock::{self, Bedrock, Assorted};
 use crate::material::rock::{Rock, RockStyle};
+use crate::material::soil::{Soil, SoilStyle};
 use crate::procedural::nubis_clouds::{NubisCloudLayer, GlobalNubis};
 use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGenus, GlobalCirrus};
 use crate::procedural::benard_altocumulus::BenardAltocumulus;
@@ -1732,6 +1733,10 @@ impl SceneFile {
         if t == "rock" {
             return Some(Box::new(SceneFile::parse_rock(o)));
         }
+
+        if t == "soil" {
+            return Some(Box::new(SceneFile::parse_soil(o)));
+        }
         
         // Noise materials are handled separately in parse_object_medium
         
@@ -1749,6 +1754,40 @@ impl SceneFile {
         }
             */
         None
+    }
+
+    /// `{"type": "soil", "preset": "loam"}`: procedural bare ground (see `material::soil`).
+    /// Presets are loam, clay, sand and forest_floor; any field of the preset can be
+    /// overridden: the colours `color`, `humus`, `stone_color`, `crumb_color`, `litter_color`
+    /// and `moss_color`; the fractions of the ground covered by `stones`, `crumbs`, `litter`
+    /// and `moss`; the sizes (m) `mottle_size`, `stone_size`, `litter_length`, `litter_width`
+    /// and `clod_size`; and `bump`, the strength of the relief. Also `"scale"` (for a scene not
+    /// in metres), `"seed"` and `"wetness"` (0 to 1).
+    pub fn parse_soil(o: &Value) -> Soil {
+        let p = SoilStyle::preset(o["preset"].as_str().unwrap_or("loam"));
+        let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let c = |k: &str, d: Color| SceneFile::parse_color_def(o, k, d);
+        let style = SoilStyle {
+            color: c("color", p.color),
+            humus: c("humus", p.humus),
+            mottle_size: n("mottle_size", p.mottle_size).max(1e-4),
+            stone_color: c("stone_color", p.stone_color),
+            stones: n("stones", p.stones).clamp(0., 1.),
+            stone_size: n("stone_size", p.stone_size).max(1e-4),
+            crumb_color: c("crumb_color", p.crumb_color),
+            crumbs: n("crumbs", p.crumbs).clamp(0., 1.),
+            litter_color: c("litter_color", p.litter_color),
+            litter: n("litter", p.litter).clamp(0., 1.),
+            litter_length: n("litter_length", p.litter_length).max(1e-4),
+            litter_width: n("litter_width", p.litter_width).max(1e-5),
+            moss_color: c("moss_color", p.moss_color),
+            moss: n("moss", p.moss).clamp(0., 1.),
+            bump: n("bump", p.bump).max(0.),
+            clod_size: n("clod_size", p.clod_size).max(1e-4),
+        };
+        let mut soil = Soil::new(style, n("scale", 1.).max(1e-9), SceneFile::parse_int(&o["seed"], 0) as u64);
+        soil.wetness = n("wetness", 0.).clamp(0., 1.);
+        soil
     }
 
     /// `{"type": "rock", "preset": "granite"}`: a procedural stone (see `material::rock`).

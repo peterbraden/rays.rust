@@ -553,10 +553,53 @@ impl SkyMaterial {
     }
 }
 
+/// What lies beyond the atmosphere: a `space` background, seen through the air.
+impl SkyMaterial {
+    /// The fraction of the light from beyond the atmosphere (per channel) that crosses it to
+    /// the start of the view ray `r` (a unit direction): none if the ray meets the ground.
+    pub fn transmittance_to_space(&self, r: &Ray) -> Vector3<f64> {
+        if (r.ro - self.earth.center).norm() > self.earth.radius && self.earth.intersects(r).is_some() {
+            return Vector3::zeros();
+        }
+        match self.view_ray_span(r) {
+            None => Vector3::repeat(1.),
+            Some((start, end)) => {
+                let depth = self.span_samples(r, start, end, DEFAULT_NUM_SAMPLES).into_iter().fold(Depths::default(), |depth, (t, step)| {
+                    let height = (r.ro + r.rd * t - self.earth.center).norm() - self.earth.radius;
+                    depth + self.depths(height, step)
+                });
+                self.transmittance_of(depth)
+            },
+        }
+    }
+
+    /// The light of a `space` background reaching the start of `r` through the air: by day
+    /// the sky outshines it; at night, and from high up, it shows. Black for any other
+    /// background, which the sky hides (as it always has).
+    ///
+    /// Where the sky's own light, `sky`, is so bright that space could add no more than its
+    /// `threshold` share of it (by a cheap bound on space's luminance in that direction, the
+    /// air letting all of it through), it isn't looked at: by day, hardly anywhere.
+    fn space_seen(&self, r: &Ray, s: &Scene, sky: &Vector3<f64>) -> Vector3<f64> {
+        match &s.render.background {
+            crate::scene::Background::Space(space) => {
+                let d = r.rd.normalize();
+                if space.bound(&d) <= space.threshold * crate::procedural::space::luminance(sky) {
+                    return Vector3::zeros();
+                }
+                let t = self.transmittance_to_space(&Ray { ro: r.ro, rd: d });
+                if t.max() <= 0. { Vector3::zeros() } else { space.radiance(&d).rgb.component_mul(&t) }
+            },
+            _ => Vector3::zeros(),
+        }
+    }
+}
+
 impl MaterialModel for SkyMaterial {
-    fn scatter(&self, r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay {
+    fn scatter(&self, r: &Ray, _intersection: &Intersection, s: &Scene) -> ScatteredRay {
         // Linear light; display encoding happens at output.
         let v = self.radiance(r) * SKY_CALIBRATION;
+        let v = v + self.space_seen(r, s, &v);
         ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
     }
 }
@@ -825,7 +868,7 @@ impl LUTSky {
 }
 
 impl MaterialModel for LUTSky {
-    fn scatter(&self, r: &Ray, _intersection: &Intersection, _s: &Scene) -> ScatteredRay {
+    fn scatter(&self, r: &Ray, _intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let d = r.rd.normalize();
         let altitude = (r.ro - self.sky.earth.center).norm() - self.sky.earth.radius;
         let looked_up = if d.y >= 0. {
@@ -838,6 +881,7 @@ impl MaterialModel for LUTSky {
             Some((rayleigh, mie, multiple)) => self.sky.apply_phase(&d, rayleigh, mie, multiple),
             None => self.sky.radiance(r),
         } * SKY_CALIBRATION;
+        let v = v + self.sky.space_seen(r, s, &v);
         ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
     }
 }
@@ -1112,6 +1156,58 @@ mod tests {
         assert!(sky.sun_transmittance(&toward).z > sky.sun_transmittance(&away).z);
         let night = sky.earth.center + Vector3::new(0., -0.3, -1.).normalize() * (sky.earth.radius + 1000.);
         assert!(sky.sun_transmittance(&night).max() < 1e-6);
+    }
+
+    #[test]
+    fn test_transmittance_to_space() {
+        let sky = sky_at("[0, 1, 0]");
+        let ray = |y: f64, d: Vector3<f64>| Ray { ro: Vector3::new(0., y, 0.), rd: d.normalize() };
+        // Straight up from the ground, the vertical column: optical depths about 0.05 (red)
+        // and 0.27 (blue) of Rayleigh scattering, and a little haze.
+        let up = sky.transmittance_to_space(&ray(10., Vector3::new(0., 1., 0.)));
+        assert!(up.x > 0.85 && up.z < up.x && up.z > 0.6, "{}", up);
+        // Much less towards the horizon; none into the ground; all of it from above the air.
+        let low = sky.transmittance_to_space(&ray(10., Vector3::new(0., 0.02, 1.)));
+        assert!(low.z < 0.2 * up.z, "{} vs {}", low, up);
+        assert_eq!(sky.transmittance_to_space(&ray(10., Vector3::new(0., -1., 0.))), Vector3::zeros());
+        assert_eq!(sky.transmittance_to_space(&ray(1e6, Vector3::new(0., 1., 0.))), Vector3::repeat(1.));
+        assert_eq!(sky.transmittance_to_space(&ray(1e6, Vector3::new(0., -1., 0.))), Vector3::zeros());
+    }
+
+    #[test]
+    fn test_space_shows_through_the_air() {
+        // The stars and the Milky Way are seen through the air, by its transmittance: on their
+        // own at night (the sun below the horizon), over the sky's own light by day.
+        let scene = |sun: &str, background: &str| crate::scenefile::SceneFile::from_string(format!(r#"{{
+            "width": 8, "height": 8, "background": {},
+            "camera": {{ "location": [0, 10, 0], "lookat": [0, 1000, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "objects": [ {{ "type": "skysphere", "sun_direction": {} }} ]
+        }}"#, background, sun));
+        let space = r#"{ "type": "space", "stars": false, "nebulae": false, "galaxies": false, "threshold": 0,
+            "galactic_pole": [1, 0, 0], "galactic_centre": [0, 1, 0] }"#;
+        let r = Ray { ro: Vector3::new(0., 10., 0.), rd: Vector3::new(0., 1., 0.) };
+        let seen = |s: &crate::scene::Scene| {
+            let sky = s.objects.infinite_items.iter().next().unwrap();
+            let i = sky.intersects(&r).unwrap();
+            let i = Intersection { dist: i.dist, point: i.point, normal: i.normal, face: i.face, part: i.part, object: sky };
+            sky.medium.material_at(i.point).scatter(&r, &i, s).attenuate.rgb
+        };
+        let night = scene("[0, -0.5, 1]", space);
+        let glow = match &night.render.background { crate::scene::Background::Space(s) => s.radiance(&r.rd).rgb, _ => unreachable!() };
+        let through = glow.component_mul(&sky_at("[0, 1, 0]").transmittance_to_space(&r));
+        assert!(glow.y > 0.);
+        for (sun, (with, without)) in [("[0, -0.5, 1]", (seen(&night), seen(&scene("[0, -0.5, 1]", "[0, 0, 0]")))),
+                                       ("[0, 1, 0.2]", (seen(&scene("[0, 1, 0.2]", space)), seen(&scene("[0, 1, 0.2]", "[0, 0, 0]"))))] {
+            assert!((with - without - through).norm() < 1e-6 * through.norm(), "sun {}: {} - {} vs {}", sun, with, without, through);
+        }
+        // At the physical scale it is far below the day sky's light, so by default (a
+        // threshold of 1e-3) it isn't computed there, but is at night.
+        let space = space.replace(r#""threshold": 0,"#, "");
+        let (day, plain_day) = (seen(&scene("[0, 1, 0.2]", &space)), seen(&scene("[0, 1, 0.2]", "[0, 0, 0]")));
+        assert_eq!(day, plain_day);
+        assert!(through.y < 1e-6 * plain_day.y, "{} vs {}", through, plain_day);
+        let (n, plain_night) = (seen(&scene("[0, -0.5, 1]", &space)), seen(&scene("[0, -0.5, 1]", "[0, 0, 0]")));
+        assert!(n.y > plain_night.y, "{} vs {}", n, plain_night);
     }
 
     #[test]

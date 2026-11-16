@@ -41,6 +41,7 @@ mod material {
     pub mod grass;
     pub mod bump;
     pub mod rock;
+    pub mod soil;
     pub mod phase;
     pub mod diffraction;
     pub mod ice_halos;
@@ -111,6 +112,7 @@ mod procedural {
     pub mod mammatus;
     pub mod precipitation;
     pub mod harris_cumulus;
+    pub mod space;
 }
 mod participatingmedia;
 mod noise;

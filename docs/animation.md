@@ -250,7 +250,7 @@ Once the clock exists, objects gain motion one at a time, each through its local
 | `nubis_clouds` | new: drift by `wind` (m/s) and evolve by advancing the noise's 4th coordinate or scrolling the detail noise faster than the shape noise; the global weather map advected by the planet's wind field. |
 | `benard_altocumulus`, `mammatus`, `precipitation` | new: drift with `wind`; cells slowly evolve. |
 | grass and trees | new: sway as a sum of a few sinusoids per blade or branch, phase from position and gusts travelling with the wind field; geometry rebuilt per frame (it is procedural already). |
-| sky | `sun_direction` by keyframes, or later from time of day, date and latitude. |
+| sky | the sun's position from the time of day, on its own clock (below); or `sun_direction` by keyframes. |
 
 ## Rendering animations
 
@@ -283,9 +283,6 @@ Once the clock exists, objects gain motion one at a time, each through its local
 - Is a keyframed value in video seconds or in the object's own clock? Video seconds is
   simpler to reason about across objects; the object's clock would let a glacier's keys (an
   ELA, say) be written in years.
-- Does the sky need a clock of its own? With `sun_direction` from the time of day, a
-  `"1 h/s"` sky gives a day in 24 s, but next to a geological clock it would strobe through
-  days and nights; a geological shot probably wants the sun fixed (rate 0) or averaged.
 - How fine must the landscape's checkpoints be for smooth glaciation? Blending is linear in
   ice thickness; a glacier front advancing far within one step would fade in rather than
   advance. The step may need to follow the clock's rate (a few frames per checkpoint), which

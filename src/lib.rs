@@ -16,6 +16,7 @@ extern crate num_complex;
 extern crate rustfft;
 
 
+pub mod assets;
 pub mod ray;
 pub mod color;
 pub mod spectrum;

@@ -63,7 +63,10 @@ fn load_obj(pth: &str) -> Vec<IndexedMesh> {
         ignore_points: true,
         ignore_lines: true,
     };
-    let (models, _materials) = tobj::load_obj(Path::new(pth), &options)
+    // Through `assets`, so a browser can provide the file; material libraries aren't read.
+    let bytes = crate::assets::read(pth).unwrap_or_else(|e| panic!("Failed to load mesh {}: {}", pth, e));
+    let (models, _materials) = tobj::load_obj_buf(&mut std::io::BufReader::new(bytes.as_slice()), &options,
+        |_| Err(tobj::LoadError::OpenFileFailed))
         .unwrap_or_else(|e| panic!("Failed to load mesh {}: {}", pth, e));
     models.iter().map(|m| {
         let positions = to_vectors(&m.mesh.positions);

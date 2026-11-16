@@ -46,8 +46,12 @@ pub fn render_key(scene: &str, overrides: (Option<usize>, Option<usize>, Option<
     let mut h = std::collections::hash_map::DefaultHasher::new();
     match serde_json::from_str::<serde_json::Value>(scene) {
         Ok(mut v) => {
+            // Neither changes the samples: the target count, and what's done to the finished
+            // image (exposure, film, glare, flare), so a render can be refinished, or carried
+            // on, after editing them.
             if let Some(o) = v.as_object_mut() {
                 o.remove("supersamples");
+                o.remove("output");
             }
             v.to_string().hash(&mut h);
         },
@@ -617,6 +621,9 @@ mod tests {
         assert_ne!(render_key(a, none), render_key(edited, none));
         assert_ne!(render_key(a, none), render_key(a, (Some(20), None, None)));
         assert_ne!(render_key(a, none), render_key(a, (None, None, Some(1))));
+        // The finished image's treatment doesn't change the samples either.
+        let refinished = r#"{"width": 10, "supersamples": 16, "camera": {"angle": 0.5}, "output": {"exposure": 2}}"#;
+        assert_eq!(render_key(a, none), render_key(refinished, none));
     }
 
     #[test]

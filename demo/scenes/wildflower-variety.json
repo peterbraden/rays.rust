@@ -25,12 +25,9 @@
   },
   "materials": {
     "SOIL": {
-      "type": "lambertian",
-      "albedo": [
-        0.13,
-        0.1,
-        0.07
-      ]
+      "type": "soil",
+      "preset": "loam",
+      "seed": 1
     }
   },
   "media": {},
@@ -107,7 +104,10 @@
           }
         }
       ],
-      "conditions": "summer"
+      "conditions": {
+        "preset": "summer",
+        "litter": 250
+      }
     },
     {
       "type": "grass",
@@ -130,7 +130,10 @@
           }
         }
       ],
-      "conditions": "summer"
+      "conditions": {
+        "preset": "summer",
+        "litter": 250
+      }
     },
     {
       "type": "grass",
@@ -153,7 +156,10 @@
           }
         }
       ],
-      "conditions": "summer"
+      "conditions": {
+        "preset": "summer",
+        "litter": 250
+      }
     },
     {
       "type": "grass",
@@ -176,7 +182,10 @@
           }
         }
       ],
-      "conditions": "summer"
+      "conditions": {
+        "preset": "summer",
+        "litter": 250
+      }
     },
     {
       "type": "grass",
@@ -196,7 +205,10 @@
           "preset": "daisy"
         }
       ],
-      "conditions": "summer"
+      "conditions": {
+        "preset": "summer",
+        "litter": 250
+      }
     },
     {
       "type": "grass",
@@ -216,7 +228,10 @@
           "preset": "oxeye"
         }
       ],
-      "conditions": "summer"
+      "conditions": {
+        "preset": "summer",
+        "litter": 250
+      }
     },
     {
       "type": "grass",
@@ -239,7 +254,10 @@
           }
         }
       ],
-      "conditions": "summer"
+      "conditions": {
+        "preset": "summer",
+        "litter": 250
+      }
     },
     {
       "type": "grass",
@@ -259,7 +277,10 @@
           "preset": "buttercup"
         }
       ],
-      "conditions": "summer"
+      "conditions": {
+        "preset": "summer",
+        "litter": 250
+      }
     },
     {
       "type": "grass",
@@ -279,7 +300,10 @@
           "preset": "clover"
         }
       ],
-      "conditions": "summer"
+      "conditions": {
+        "preset": "summer",
+        "litter": 250
+      }
     },
     {
       "type": "grass",
@@ -299,7 +323,10 @@
           "preset": "red_clover"
         }
       ],
-      "conditions": "summer"
+      "conditions": {
+        "preset": "summer",
+        "litter": 250
+      }
     }
   ]
 }

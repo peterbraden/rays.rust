@@ -1,5 +1,7 @@
 {
-  "output": { "exposure": 0.84 },
+  "output": {
+    "exposure": 0.84
+  },
   "width": 960,
   "height": 540,
   "supersamples": 24,
@@ -27,12 +29,9 @@
   },
   "materials": {
     "SOIL": {
-      "type": "lambertian",
-      "albedo": [
-        0.13,
-        0.1,
-        0.07
-      ]
+      "type": "soil",
+      "preset": "loam",
+      "seed": 1
     }
   },
   "media": {},
@@ -72,7 +71,11 @@
   ],
   "objects": [
     {
-      "type": "skysphere", "multiple_scattering": false, "rayleigh_r": 1.16e-5, "rayleigh_g": 2.7e-5, "rayleigh_b": 6.62e-5,
+      "type": "skysphere",
+      "multiple_scattering": false,
+      "rayleigh_r": 1.16e-05,
+      "rayleigh_g": 2.7e-05,
+      "rayleigh_b": 6.62e-05,
       "sun_direction": [
         -0.5,
         0.6,

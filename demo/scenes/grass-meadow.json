@@ -16,7 +16,7 @@
   },
 
   "materials": {
-    "SOIL": { "type": "lambertian", "albedo": [0.12, 0.09, 0.06] }
+    "SOIL": { "type": "soil", "preset": "loam", "seed": 1 }
   },
   "media": {},
 
@@ -54,7 +54,7 @@
         { "preset": "dandelion", "weight": 0.15 }
       ],
       "conditions": {
-        "preset": "summer", "dead_fraction": 0.08,
+        "preset": "summer", "dead_fraction": 0.08, "litter": 400,
         "species_zones": 4,
         "wind": { "direction": [1, 0.4], "strength": 0.35, "gustiness": 0.6, "scale": 5 }
       }

@@ -1107,11 +1107,36 @@ twice the path tracer's time; batches of 4096 paths per thread brought it to 1.1
 Sorting by material costs little on the CPU. A 4.5% gap on demo.json was the path tracer's
 regularisation, which the wavefront integrator lacked.
 
+### The GPU (stacked PR)
+
+`src/gpu/`, behind the cargo feature `gpu` (wgpu 30, pollster, bytemuck), `--gpu`: the flat
+scene uploaded (primitives with planes after them, the BVH's nodes via `Bvh::export`, materials
+with checkerboards' squares appended, point and spot lights, and one table of f32 for the
+emitters' distribution, the baked sky and the aerial perspective table), and a WGSL compute
+shader porting the wavefront integrator's shading in f32: Lambert, rough and smooth plastic,
+metal and conductor (complex Fresnel), glass, emitters with MIS, sun (point, or its disc for
+narrow lobes), one area light by power, the sky by importance (marginal and conditional CDFs of
+a 1024 x 512 map, looked up bilinearly), regularisation and Russian roulette. Camera rays are
+generated on the CPU each pass and uploaded, so every camera works. Developed and tested on
+Mesa's lavapipe (llvmpipe, Vulkan 1.4) in the container.
+
+At 320 x 180, 512 spp against a 512 spp path-traced reference: demo exposure 0.998, FLIP
+0.0017; instances 1.001, 0.016; spheres 1.000, 0.017 (the CPU wavefront integrator 0.013). Two
+fixes on the way: aerial perspective, first omitted for scenes under 100 units (but planes are
+unbounded), is baked into a table along rays from the camera (azimuth from the sun, elevation,
+log distance); and that table's frame must be the sky's sun, not the scene's `sun`, which
+scenes with a skysphere may not have. On lavapipe (4 cores) at 640 x 360, 64 spp: spheres 3.6
+s (path tracer 4.7 s), instances 16.1 s (12.4 s), demo 6.1 s (7.1 s). Timings on a real GPU
+are still to be measured.
+
 ### Deferred from chapters 15-16
 
-- The GPU itself (option 2): WGSL compute kernels over the flat scene with wgpu (Metal on the
-  Mac), validated against this integrator by FLIP. A separate PR: a large dependency, and no
-  GPU in the development container (Mesa's lavapipe could stand in for tests).
+- Measuring on real GPUs (the Mac's Metal), and tuning: workgroup size, f16 storage, stack
+  depth. The shader is a megakernel (one path per invocation); pbrt's GPU renderer queues
+  paths between kernels per stage, which helps divergent materials on real GPUs.
+- On the GPU: the light BVH (area lights are chosen by power), Sobol' samples (a hash per
+  pixel, pass and dimension instead), goniometric and projection lights, aerial perspective
+  from each ray's own origin (the table assumes the camera's), the sun's irradiance by altitude.
 - Coverage: textures, coated and rough-dielectric materials, cylinders and other analytic
   shapes, media, spectral and motion-blurred renders; the scene's other samplers.
 - pbrt's structure-of-arrays queues; ours are arrays of path structs.

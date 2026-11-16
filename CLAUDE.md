@@ -21,11 +21,12 @@ Rays.rust is a raytracer written in Rust with the following features:
 - Lights after PBRT ch. 12 (`src/light.rs`, `src/light_bvh.rs`): point lights with a `Profile` (spot, goniometric, projection; `"power"`), textured diffuse area lights (`MaterialModel::emitted_at` with texture coordinates), and `"light_sampler": "bvh"`: pbrt's light BVH choosing one light per vertex by importance (`material::functions::sample_lights_with`; up to `scene::BVH_POINT_LIGHTS` point lights are still summed), with `LightBvh::pmf` for MIS
 - Light transport after PBRT ch. 13-14: layered BSDFs (`coated_diffuse`, `coated_conductor`; `src/material/layered.rs`: pbrt's `LayeredBxDF` random walks, stochastic `eval`/`pdf`, specular samples traced without MIS) and random-walk subsurface scattering (`subsurface`; `src/material/subsurface.rs`: Chiang et al.'s albedo/radius fits, the walk tests only the object's own geometry, diffuse exit with next-event estimation)
 - Wavefront integrator after PBRT ch. 15 (`src/wavefront/`; `"integrator": "wavefront"` or `--wavefront`): the scene flattened by `Geometry::flatten` and `MaterialModel::flat`/`Medium::flat_material` into `flat::FlatScene` (primitive arrays, BVH, `FlatMaterial` enum; the skysphere kept as an object for escaping rays), and `integrator::render_pass` advancing queues of paths stage by stage in cache-sized batches, each path with its own Sobol' `SampleState`; it must match `trace` (MIS, sun disc, regularisation, Russian roulette) and falls back to it with the reason when a scene can't be flattened
+- GPU path tracer (`src/gpu/`, cargo feature `gpu`; `--gpu` or `"integrator": "gpu"`): the flat scene uploaded through wgpu, `pathtrace.wgsl` porting the wavefront integrator's shading in f32 (one path per pixel per pass), camera rays from the CPU, the sky and aerial perspective baked into tables (`GpuRenderer::new`); falls back to the wavefront integrator with the reason. Test it without a GPU with Mesa's lavapipe (`mesa-vulkan-drivers`): `cargo test --release --features gpu gpu::`
 - Multithreaded rendering with progressive output
 
 ## Build Commands
 - Build and run: `cargo run --release -- demo/demo.json`
-- Run tests: `cargo test`
+- Run tests: `cargo test` (and the GPU's: `cargo test --release --features gpu gpu::`)
 - Run specific test: `cargo test <test_name>`
 - Lint code: `cargo clippy`
 - Format code: `cargo fmt`
@@ -43,6 +44,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 - `--add-samples <NUM>`: Render this many more samples per pixel than the saved state has
 - `--fresh`: Start afresh rather than resuming
 - `--wavefront`: Render with the wavefront integrator, if the scene can be flattened (otherwise with the path tracer, saying why)
+- `--gpu`: Render on the GPU (a build with `--features gpu`), if the scene can be flattened and the GPU path supports it (otherwise with the wavefront integrator or the path tracer, saying why)
 - Renders are resumable by default: the accumulated samples are saved every 30 s, and at the end, to `<output>.accum` (exact sums, keyed by a hash of the scene file and the size and seed overrides). Rerunning carries on where it stopped, or from a quick render adds samples up to the new target (`--samples 8`, later `--samples 64`); the result is identical to an uninterrupted render. Editing the scene starts afresh; after changing the renderer or files the scene refers to, use `--fresh`
 - `--compare <FILE>`: Compare with a reference image (eg. `references/cornell-box/TungstenRender.exr`, fetched by `scripts/fetch-references.sh`): prints exposure fit, RMSE and mean FLIP error; writes `<output>.flip.png` and `<output>.reference.png`
 - `--max-flip <NUM>`: With `--compare`, exit with status 2 if the mean FLIP error exceeds this

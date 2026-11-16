@@ -65,6 +65,8 @@ mod sceneobject;
 mod light;
 mod light_bvh;
 mod wavefront;
+#[cfg(feature = "gpu")]
+mod gpu;
 mod shapes {
     pub mod transform;
     pub mod bbox;
@@ -217,6 +219,11 @@ struct Args {
     #[arg(long)]
     wavefront: bool,
 
+    ///Render on the GPU (as "integrator": "gpu"; needs a build with `--features gpu`), if the
+    ///scene can be flattened; otherwise with the wavefront integrator or the path tracer
+    #[arg(long)]
+    gpu: bool,
+
     ///Write the scene file, as JSON in our format, to this file. For a scene in another
     ///renderer's format (eg. .nff), this is the translation
     #[arg(long)]
@@ -300,7 +307,8 @@ fn main() {
     let state_path = rendercontext::state_path_for(&rc.output_filename);
     // The wavefront integrator's samples differ from the path tracer's: a saved state is one's.
     let key = rendercontext::render_key(&contents, (args.width, args.height, args.seed))
-        ^ if args.wavefront { 0x7761_7665_6672_6f6e } else { 0 };
+        ^ if args.wavefront { 0x7761_7665_6672_6f6e } else { 0 }
+        ^ if args.gpu { 0x6770_7500_0000_0001 } else { 0 };
     if !args.fresh && std::path::Path::new(&state_path).exists() {
         match rc.load_state(&state_path, key) {
             Ok(()) => println!("- Resuming from {:.1} samples per pixel on average, {} at least ({})",
@@ -341,8 +349,11 @@ fn main() {
         return;
     }
 
-    if args.wavefront {
+    if args.wavefront || args.gpu {
         s.render.wavefront = true;
+    }
+    if args.gpu {
+        s.render.gpu = true;
     }
     let flat = if s.render.wavefront {
         match wavefront::flat::FlatScene::build(&s) {
@@ -359,6 +370,24 @@ fn main() {
     } else {
         None
     };
+    #[cfg(feature = "gpu")]
+    let mut gpu = match (&flat, s.render.gpu) {
+        (Some(f), true) => match gpu::GpuRenderer::new(&s, f) {
+            Ok(g) => {
+                println!("- GPU: {}", g.adapter_name);
+                Some(g)
+            },
+            Err(e) => {
+                println!("- The GPU can't render this scene ({}); rendering with the wavefront integrator", e);
+                None
+            },
+        },
+        _ => None,
+    };
+    #[cfg(not(feature = "gpu"))]
+    if s.render.gpu {
+        println!("- This build has no GPU support (build with --features gpu); rendering with the wavefront integrator");
+    }
     let rcmtx = Mutex::new(rc);
 
     println!("{}",
@@ -373,7 +402,32 @@ fn main() {
     let last_progressive = Mutex::new(Instant::now());
     let last_state = Mutex::new(Instant::now());
 
-    if let Some(flat) = &flat {
+    #[cfg(feature = "gpu")]
+    let on_gpu = gpu.is_some();
+    #[cfg(not(feature = "gpu"))]
+    let on_gpu = false;
+    #[cfg(feature = "gpu")]
+    let after_pass = |rc: &RenderContext| {
+        pb.set_position(rc.progress_percentage(&s) as u64);
+        pb.set_message(rc.progress(&s));
+        pb.tick();
+        let mut last = last_progressive.lock().unwrap();
+        if rc.progressive_render && last.elapsed() >= progressive_interval {
+            *last = Instant::now();
+            if let Err(e) = writer.write(&s.output.finish(&rc.snapshot()), &rc.output_filename) {
+                eprintln!("{}", e);
+            }
+        }
+        let mut last = last_state.lock().unwrap();
+        if last.elapsed() >= STATE_INTERVAL {
+            *last = Instant::now();
+            save_state(&state_path, &rc.encode_state(key));
+        }
+    };
+    if on_gpu {
+        #[cfg(feature = "gpu")]
+        gpu.as_mut().unwrap().render(&s, &rcmtx, after_pass);
+    } else if let Some(flat) = &flat {
         wavefront::integrator::render(&s, flat, &rcmtx, |rc| {
             pb.set_position(rc.progress_percentage(&s) as u64);
             pb.set_message(rc.progress(&s));

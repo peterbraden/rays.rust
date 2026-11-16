@@ -2864,9 +2864,10 @@ impl SceneFile {
                 motion,
                 wavefront: match s.integrator.as_str() {
                     None | Some("path") => false,
-                    Some("wavefront") => true,
-                    Some(x) => panic!("Unknown integrator '{}': expected \"path\" or \"wavefront\"", x),
+                    Some("wavefront") | Some("gpu") => true,
+                    Some(x) => panic!("Unknown integrator '{}': expected \"path\", \"wavefront\" or \"gpu\"", x),
                 },
+                gpu: s.integrator.as_str() == Some("gpu"),
                 sampler: match s.sampler.as_str() {
                     None | Some("sobol") => Sampler::Sobol,
                     Some("independent") => Sampler::Independent,

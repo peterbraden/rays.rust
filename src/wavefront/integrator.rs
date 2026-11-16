@@ -223,7 +223,7 @@ const AERIAL_PERSPECTIVE_FROM: f64 = 100.;
 
 /// What a ray that escaped the flattened scene sees: the skysphere, by its material, or the
 /// background.
-fn sky_radiance(r: &Ray, s: &Scene, flat: &FlatScene) -> Color {
+pub fn sky_radiance(r: &Ray, s: &Scene, flat: &FlatScene) -> Color {
     use crate::shapes::geometry::Geometry;
     if let Some(sky) = &flat.sky
         && let Some(x) = sky.geometry.intersects(r) {

@@ -144,6 +144,20 @@ using anything else render with the path tracer, which says why. Its images matc
 tracer's (on `demo.json` at 512 samples, mean FLIP 0.0016 against seed-to-seed 0.0012), at
 about 1.2 to 1.4 times its time on the CPU.
 
+The same flattened scene renders on a GPU, through wgpu (Metal, Vulkan or DirectX 12), with
+`--gpu` (or `"integrator": "gpu"`) in a build with the `gpu` feature:
+
+```
+cargo run --release --features gpu -- demo/scenes/spheres.json --gpu
+```
+
+A compute shader (`src/gpu/pathtrace.wgsl`) traces one path per pixel per pass over the
+uploaded primitives, BVH and materials, with the wavefront integrator's shading; camera rays
+come from the CPU each pass (so every camera works), and the sky and its aerial perspective are
+baked into tables. Against the path tracer's 512-sample images, at 512 samples: `demo.json`
+exposure 0.998 and mean FLIP 0.0017, `instances` 1.001 and 0.016. Without a GPU, Mesa's lavapipe
+(software Vulkan) runs it, at about the CPU renderers' speed.
+
 ## Coats and subsurface scattering
 
 After PBRT's chapter 14: `coated_diffuse` and `coated_conductor` put a base under a clear or

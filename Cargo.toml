@@ -27,6 +27,13 @@ approx = "0.5.1"
 nv-flip = "0.1.2"
 ttf-parser = "0.25"
 libc = "0.2"
+# The GPU path tracer (`gpu`), built only with `--features gpu`.
+wgpu = { version = "30", optional = true }
+pollster = { version = "0.4", optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+
+[features]
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
 
 [profile.release]
 # Whole-program optimisation: inlining across crates (nalgebra, rustfft, rand) and modules.

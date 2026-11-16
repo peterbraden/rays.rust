@@ -154,6 +154,13 @@ fn surface_area(b: &BBox) -> f64 {
 }
 
 impl Bvh {
+    /// The nodes as data, for uploading to a GPU (`gpu`): each node's bounds, then for a leaf
+    /// the index of its first item and how many, for an interior node the index of its second
+    /// child (the first follows it) and 0.
+    pub fn export(&self) -> Vec<(BBox, u32, u32)> {
+        self.nodes.iter().map(|n| (n.bounds, n.offset, n.count)).collect()
+    }
+
     /// Build a tree over `items`, returning it with the items reordered into leaf order: the
     /// indices the tree passes to callers index the returned `Vec`.
     pub fn build<T: Sync>(items: Vec<T>, bounds_of: impl Fn(&T) -> BBox + Sync) -> (Bvh, Vec<T>) {

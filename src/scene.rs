@@ -60,6 +60,8 @@ pub struct RenderOpts {
     pub motion: bool,
     /// Whether to render with the wavefront integrator (`wavefront`), where the scene allows.
     pub wavefront: bool,
+    /// Whether to render on the GPU (`gpu`, built with the `gpu` feature), where it can.
+    pub gpu: bool,
 }
 
 /// How a pixel's samples choose their random numbers.

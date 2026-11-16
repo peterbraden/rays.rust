@@ -51,6 +51,7 @@
 //!   spikelets on a nodding panicle, and an airy reddish haze of tiny ones
 //! - `daisy`, `oxeye` (the tall meadow daisy), `dandelion` (with seed clocks), `buttercup`
 //! - `clover` (white), `red_clover`
+//! - `heather`: low, wiry shrubs with purple flower spikes; `bracken`: a fern
 //!
 //! A grass flowers with a `seed_head` (null for none):
 //!
@@ -92,7 +93,15 @@
 //! `height` times as tall, in `color` and `tip_color`; the lowest `wilted` fraction of the
 //! head has withered to `old_color`.
 //!
-//! In `density`, a flowering plant or clover counts as one blade, and `weight` sets how many of
+//! `"kind": "fern"` makes a fern: fronds on stems that rise and arch over, holding the leafy
+//! part nearly level. Of the blade fields, `height`, `height_variation`, `width` and the
+//! colours describe the stems, and `clump_radius` spreads them. Its `frond` (defaults: bracken): `count` per plant,
+//! on average; `blade_start`, how far along the stem the leafy part starts (0 to 1); `pinnae`,
+//! the pairs of leaflets along it, the first `pinna_length` and `pinna_width` (m), shortening
+//! to the tip; their `sweep` towards the tip (degrees) and `droop` (a fraction of their
+//! length). Fern pinnae dry to the species' `dry_color`, rust for bracken.
+//!
+//! In `density`, a flowering plant, clover or fern counts as one blade, and `weight` sets how many of
 //! the field's tufts are of the species.
 //!
 //! ## Conditions
@@ -319,11 +328,27 @@ pub struct Clover {
     pub wilted: f64,
 }
 
+/// A fern: fronds on arching stems, each with pairs of pinnae along it, longest at the base.
+#[derive(Clone, Debug)]
+pub struct Fern {
+    /// Fronds per plant, on average.
+    pub fronds: f64,
+    /// Where along the stem the leafy blade starts.
+    pub blade_start: f64,
+    pub pinnae: usize,
+    pub pinna_length: f64,
+    pub pinna_width: f64,
+    /// How far the pinnae sweep towards the frond's tip, and how much they droop.
+    pub sweep: f64,
+    pub droop: f64,
+}
+
 #[derive(Clone, Debug)]
 pub enum Kind {
     Grass(Option<Box<SeedHead>>),
     Flower(Box<Flower>),
     Clover(Box<Clover>),
+    Fern(Box<Fern>),
 }
 
 /// Parts of each kind of plant: an offset into the species' looks.
@@ -339,6 +364,8 @@ const PETIOLE: usize = 0;
 const LEAFLET: usize = 1;
 const FLORET: usize = 2;
 const WILTED: usize = 3;
+const FROND_STEM: usize = 0;
+const PINNA: usize = 1;
 
 #[derive(Clone, Debug)]
 pub struct Species {
@@ -537,6 +564,27 @@ fn species_preset(name: &str) -> Value {
                 "color": [0.55, 0.15, 0.35], "tip_color": [0.7, 0.3, 0.5], "old_color": [0.35, 0.2, 0.15]
             }
         }),
+        // Heather (Calluna vulgaris): a low, dense shrub of wiry dark shoots, with spikes of tiny
+        // purple flowers that brown as they dry.
+        "heather" => json!({
+            "height": 0.25, "height_variation": 0.35, "width": 0.003, "tip": 1.5, "stiffness": 0.8,
+            "lean": 35, "twist": 90, "segments": 4, "clump_size": 40, "clump_radius": 0.15, "clump_spread": 0.8,
+            "base_color": [0.05, 0.06, 0.03], "tip_color": [0.07, 0.1, 0.04], "dry_color": [0.2, 0.15, 0.1],
+            "translucency": 0.15, "sheen": 0.1, "color_variation": 1.5,
+            "seed_head": {
+                "style": "spike", "fraction": 0.2, "stem_height": 1.15, "stem_width": 0.002, "length": 0.07,
+                "width": 0.012, "spikelets": 40, "spikelet_length": 0.006, "spikelet_width": 0.004,
+                "color": [0.26, 0.08, 0.2], "tip_color": [0.38, 0.16, 0.32], "dry_color": [0.24, 0.16, 0.13]
+            }
+        }),
+        // Bracken (Pteridium aquilinum): fronds on tall stems, their broad triangular blades
+        // held level, turning rust brown as they die back. The defaults of a fern.
+        "bracken" => json!({
+            "kind": "fern", "height": 0.9, "height_variation": 0.35, "width": 0.005, "stiffness": 0.55,
+            "lean": 20, "twist": 0, "segments": 6, "clump_radius": 0.3, "normal_alignment": 0.2,
+            "base_color": [0.08, 0.13, 0.04], "tip_color": [0.1, 0.18, 0.05], "dry_color": [0.42, 0.2, 0.07],
+            "translucency": 0.4, "sheen": 0.2
+        }),
         // Dead blades lying on the ground: not for fields' species lists, but grown under them
         // by their conditions' `litter`.
         "litter" => json!({
@@ -584,6 +632,16 @@ fn flower_defaults() -> Value {
         "leaves": {
             "count": 8, "length": 0.04, "width": 0.012, "shape": 0.75, "angle": 12,
             "color": [0.05, 0.14, 0.03], "tip_color": [0.07, 0.18, 0.04]
+        }
+    })
+}
+
+/// Defaults for a fern's `frond`: bracken.
+fn fern_defaults() -> Value {
+    json!({
+        "frond": {
+            "count": 2.5, "blade_start": 0.4, "pinnae": 14, "pinna_length": 0.22, "pinna_width": 0.05,
+            "sweep": 25, "droop": 0.15
         }
     })
 }
@@ -717,7 +775,8 @@ impl Species {
             }),
             "flower" => Kind::Flower(Box::new(sp.flower(&merge(flower_defaults(), &v)))),
             "clover" => Kind::Clover(Box::new(sp.clover(&merge(clover_defaults(), &v)))),
-            _ => panic!("Unknown grass species kind {} (expected grass, flower or clover)", kind),
+            "fern" => Kind::Fern(Box::new(sp.fern(&merge(fern_defaults(), &v)))),
+            _ => panic!("Unknown grass species kind {} (expected grass, flower, clover or fern)", kind),
         };
         sp.looks = sp.make_looks(&v);
         sp
@@ -782,6 +841,19 @@ impl Species {
         }
     }
 
+    fn fern(&self, v: &Value) -> Fern {
+        let f = &v["frond"];
+        Fern {
+            fronds: number(f, "count").max(0.),
+            blade_start: number(f, "blade_start").clamp(0., 0.95),
+            pinnae: count(f, "pinnae"),
+            pinna_length: number(f, "pinna_length").max(1e-4),
+            pinna_width: number(f, "pinna_width").max(1e-5),
+            sweep: number(f, "sweep").to_radians(),
+            droop: number(f, "droop"),
+        }
+    }
+
     fn clover(&self, v: &Value) -> Clover {
         let (l, f) = (&v["leaves"], &v["flower"]);
         Clover {
@@ -829,6 +901,13 @@ impl Species {
                     [Color::new(0.4, 0.35, 0.28), color(f, "clock_color"), Color::white()], 0.6, 0., 0.);
                 (petal.leafy, disc.leafy, pappus.leafy) = (false, false, false);
                 vec![stem, leaf, petal, disc, pappus]
+            },
+            Kind::Fern(_) => {
+                // Pinnae are themselves cut into many small lobes; at a distance a long,
+                // narrow leaf with a pointed tip stands in for them.
+                let mut pinna = Look::new(Outline::Petal(0.3), 4, leafy, self.translucency, self.sheen, 1.);
+                pinna.color_variation = self.color_variation;
+                vec![stem, pinna]
             },
             Kind::Clover(_) => {
                 let d = merge(clover_defaults(), v);
@@ -1132,6 +1211,7 @@ impl Generator<'_> {
                 },
                 Kind::Flower(f) => self.flower(sp, f, look, centre, patch, &mut rng, &mut blades),
                 Kind::Clover(cl) => self.clover(sp, cl, look, centre, patch, &mut rng, &mut blades),
+                Kind::Fern(f) => self.fern(sp, f, look, centre, patch, &mut rng, &mut blades),
             }
         }
         if self.conditions.litter > 0. {
@@ -1295,6 +1375,54 @@ impl Generator<'_> {
                         let a2 = a0 + d * len + n * (f.curl * len);
                         out.push(part(look + PETAL, shade, a0, a0 + d * (0.55 * len), a2, n.cross(&radial), f.petal_width * (0.8 + 0.4 * rng.next_f64())));
                     }
+                }
+            }
+            out.push(stem);
+        }
+    }
+
+    /// A fern: fronds on arching stems, with pairs of pinnae along the leafy part.
+    #[allow(clippy::too_many_arguments)]
+    fn fern(&self, sp: &Species, f: &Fern, look: usize, centre: Vector3<f64>, patch: f64, rng: &mut Pcg32, out: &mut Vec<Blade>) {
+        let c = self.conditions;
+        let fronds = (f.fronds * (0.5 + rng.next_f64())).round() as usize;
+        for _ in 0 .. fronds {
+            let Some((x, z)) = self.in_disc(centre, sp.clump_radius, rng) else { continue };
+            // The stem rises and arches over, so the leafy blade is held nearly level, facing
+            // the light: a curve from the root, through a point above it, to a tip out to the
+            // side and lower. Wind pushes the tip.
+            let up = self.up(sp, x, z);
+            let shade = self.shade(self.dryness(sp, patch, rng).1, rng);
+            let mut height = sp.height * (1. + sp.height_variation * (2. * rng.next_f64() - 1.))
+                * (0.55 + 0.45 * patch) * (1. - 0.35 * c.trampled);
+            if let Some(m) = c.mow_height { height = height.min(m) }
+            let a = rng.next_f64() * 2. * PI;
+            let away = Vector3::new(x - centre.x, 0., z - centre.z);
+            let mut dir = Vector3::new(a.cos(), 0., a.sin());
+            if away.norm() > 1e-9 { dir = (dir + away.normalize()).normalize() }
+            let v0 = Vector3::new(x, self.grid.height(x, z), z) - up * 0.01;
+            let v1 = v0 + up * (0.95 * height);
+            let mut v2 = v0 + up * (height * (0.5 + 0.2 * rng.next_f64())) + dir * (height * (0.55 + 0.2 * rng.next_f64()))
+                + c.wind * (0.3 * height);
+            v2.y = v2.y.max(self.grid.height(v2.x, v2.z) + 0.05 * height);
+            let stem = part(look + FROND_STEM, shade, v0, v1, v2, dir.cross(&up), sp.width);
+            let size = height / sp.height;
+            let n = f.pinnae.max(1);
+            for k in 0 .. n {
+                let u = (k as f64 + 0.5) / n as f64;
+                let s = f.blade_start + (1. - f.blade_start) * u;
+                let (p, t) = (stem.point(s), stem.tangent(s).normalize());
+                // Across the frond, level, and the frond's face.
+                let across = t.cross(&Vector3::new(0., 1., 0.));
+                let across = if across.norm() < 1e-6 { frame(t).0 } else { across.normalize() };
+                let up = across.cross(&t);
+                let length = f.pinna_length * size * (1. - u).powf(0.8).max(0.08) * (0.85 + 0.3 * rng.next_f64());
+                let width = f.pinna_width * size * (1. - 0.6 * u);
+                for side in [-1., 1.] {
+                    let d = across * (side * f.sweep.cos()) + t * f.sweep.sin();
+                    let v2 = p + d * length - up * (f.droop * length);
+                    let v1 = p + d * (0.5 * length) + up * (0.05 * length);
+                    out.push(part(look + PINNA, shade, p, v1, v2, d.cross(&up), width));
                 }
             }
             out.push(stem);
@@ -1864,7 +1992,7 @@ mod tests {
 
     #[test]
     fn test_presets_parse() {
-        for p in ["lawn", "meadow", "fescue", "tall", "tussock", "savanna", "reed", "rough", "timothy", "wild_oat", "bent",
+        for p in ["lawn", "meadow", "fescue", "tall", "tussock", "savanna", "reed", "rough", "timothy", "wild_oat", "bent", "heather", "bracken",
             "daisy", "oxeye", "dandelion", "buttercup", "clover", "red_clover"] {
             Species::from_json(&json!(p));
         }

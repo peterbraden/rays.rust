@@ -147,8 +147,8 @@ impl GeneratingField {
 
 pub struct HoganKewCirrus {
     /// Heights of the bottom and top of the layer; crystals generate near the top.
-    base: f64,
-    top: f64,
+    pub base: f64,
+    pub top: f64,
     /// Extinction coefficient in the thickest ice (per unit distance).
     pub max_density: f64,
     /// Fraction of the generating level that is cloud, 0 to 1.
@@ -630,6 +630,12 @@ pub struct GlobalCirrus {
     field: GeneratingField3,
     threshold: f64,
     radius: f64,
+    /// Coverage varying over the planet (0 to 1, by the unit direction from its centre), in
+    /// place of the one coverage everywhere: weather's (`weather`). Where it is zero there is no
+    /// ice, and tracking skips the texel.
+    cover: Option<std::sync::Arc<crate::planet::CubeMap>>,
+    /// The generating field's thresholds for coverages 0, 1/n, ... 1.
+    quantiles: Vec<f64>,
 }
 
 impl GlobalCirrus {
@@ -639,7 +645,37 @@ impl GlobalCirrus {
                radius: f64, pole: Vector3<f64>) -> GlobalCirrus {
         let field = GeneratingField3::new(seed, cell_size / TEXELS_PER_CELL, cell_size, slope);
         let threshold = field.quantile_above(coverage.clamp(1e-6, 1.));
-        GlobalCirrus { params, wind: crate::planet::GlobalWind::new(pole, radius, seed.wrapping_add(17)), field, threshold, radius }
+        GlobalCirrus { params, wind: crate::planet::GlobalWind::new(pole, radius, seed.wrapping_add(17)), field, threshold, radius,
+                       cover: None, quantiles: vec![] }
+    }
+
+    /// Cover the planet as `cover` says (0 to 1 at each direction from its centre) rather than
+    /// evenly: the generating cells are thresholded locally, at the quantile leaving that much
+    /// of the field above it, so a cover of 1 is a veil (cirrostratus) and 0.2 scattered cells.
+    pub fn with_cover(mut self, cover: std::sync::Arc<crate::planet::CubeMap>) -> GlobalCirrus {
+        let mut sorted = self.field.real.clone();
+        sorted.sort_by(|a, b| a.total_cmp(b));
+        let n = 64;
+        self.quantiles = (0..=n).map(|k| {
+            let c = k as f64 / n as f64;
+            let i = (((1. - c) * sorted.len() as f64) as usize).min(sorted.len() - 1);
+            // Full cover: below every value, and then some, so the edges' ramp is full too.
+            if k == n { sorted[0] as f64 - self.params.edge } else { sorted[i] as f64 }
+        }).collect();
+        self.cover = Some(cover);
+        self
+    }
+
+    /// The threshold on the generating field at `up`: None where there is no cirrus.
+    fn threshold_at(&self, up: &Vector3<f64>) -> Option<f64> {
+        let Some(cover) = &self.cover else { return Some(self.threshold) };
+        let c = cover.at(up).clamp(0., 1.);
+        if c <= 0. {
+            return None;
+        }
+        let x = c * (self.quantiles.len() - 1) as f64;
+        let k = (x as usize).min(self.quantiles.len() - 2);
+        Some(self.quantiles[k] + (self.quantiles[k + 1] - self.quantiles[k]) * (x - k as f64))
     }
 
     /// Where the ice at `at` left its cell, on the sphere of the generating level, and its
@@ -667,10 +703,10 @@ impl GlobalCirrus {
         (((at.up * generating) + shift).normalize() * generating, d)
     }
 
-    fn cells(&self, source: &Vector3<f64>) -> f64 {
+    fn cells(&self, source: &Vector3<f64>, threshold: f64) -> f64 {
         let c = &self.params;
         let w = if c.evolution_period.is_finite() { 2. * PI * c.time / c.evolution_period } else { 0. };
-        ((self.field.at(source, (w.cos(), w.sin())) - self.threshold) / c.edge).clamp(0., 1.)
+        ((self.field.at(source, (w.cos(), w.sin())) - threshold) / c.edge).clamp(0., 1.)
     }
 
     /// The generating elements (see `HoganKewCirrus::fibre`), in solid noise.
@@ -698,8 +734,9 @@ impl crate::planet::PlanetField for GlobalCirrus {
         if profile <= 0. {
             return 0.;
         }
+        let Some(threshold) = self.threshold_at(&at.up) else { return 0. };
         let (source, _) = self.source(at);
-        let cells = self.cells(&source);
+        let cells = self.cells(&source, threshold);
         if cells <= 0. {
             return 0.;
         }
@@ -726,6 +763,16 @@ impl crate::planet::PlanetField for GlobalCirrus {
         let ahead = (at.position + d * 0.01).norm() - planet.radius;
         let to_low = crate::planet::to_sphere(&at.position, d, planet.radius + low);
         let to_high = crate::planet::to_sphere(&at.position, d, planet.radius + high);
+        if let Some(cover) = &self.cover {
+            // No cirrus over this texel of the cover: clear to its edge.
+            let (face, i, j) = cover.texel(&(at.position + d * 0.01).normalize());
+            let edge = cover.cube.exit(&at.position, d, face, i, j);
+            if cover.texel_max(face, i, j) <= 0. {
+                return (0., edge);
+            }
+            let m = if ahead < low || ahead > high { 0. } else { self.params.max_density };
+            return (m, to_low.min(to_high).min(edge));
+        }
         if ahead < low || ahead > high {
             (0., to_low.min(to_high))
         } else {
@@ -736,7 +783,7 @@ impl crate::planet::PlanetField for GlobalCirrus {
     fn particle_radius(&self, at: &crate::planet::SurfacePoint) -> Option<f64> {
         let c = &self.params;
         let (source, d) = self.source(at);
-        let young = c.young_size + (1. - c.young_size) * self.cells(&source);
+        let young = c.young_size + (1. - c.young_size) * self.cells(&source, self.threshold_at(&at.up).unwrap_or(f64::INFINITY));
         Some(c.particle_radius * (1. + c.particle_growth * d) * young)
     }
 }

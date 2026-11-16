@@ -41,13 +41,12 @@ const ENV_WIDTH: usize = 1024;
 const ENV_HEIGHT: usize = 512;
 /// Passes between reading the accumulated image back.
 const PASSES_PER_READ: usize = 8;
-/// The aerial perspective table: azimuth from the sun, elevation and distance.
-const AP_AZIMUTH: usize = 32;
-const AP_ELEVATION: usize = 64;
-const AP_DISTANCE: usize = 32;
-/// Its distances, logarithmically from `AERIAL_FROM` to `AERIAL_TO` (beyond, the last).
-const AERIAL_FROM: f64 = 100.;
-const AERIAL_TO: f64 = 2e5;
+// The aerial perspective table's size and distances, and the flags and kinds, are the shader's.
+const AP_AZIMUTH: usize = pathtrace::AP_AZIMUTH as usize;
+const AP_ELEVATION: usize = pathtrace::AP_ELEVATION as usize;
+const AP_DISTANCE: usize = pathtrace::AP_DISTANCE as usize;
+const AERIAL_FROM: f64 = pathtrace::AERIAL_FROM as f64;
+const AERIAL_TO: f64 = pathtrace::AERIAL_TO as f64;
 const WORKGROUP: u32 = 64;
 const MAX_GROUPS: u32 = 65535;
 
@@ -69,21 +68,21 @@ fn push_material(m: &FlatMaterial, out: &mut Vec<GpuMaterial>) -> u32 {
     let blank = GpuMaterial::zeroed();
     out.push(blank);
     let g = match m {
-        FlatMaterial::Diffuse { albedo } => GpuMaterial { kind: 0, c0: c4(albedo), ..blank },
+        FlatMaterial::Diffuse { albedo } => GpuMaterial { kind: pathtrace::MAT_DIFFUSE, c0: c4(albedo), ..blank },
         FlatMaterial::Plastic { albedo, refractive_index, roughness } =>
-            GpuMaterial { kind: 1, c0: c4(albedo), p: Vec4::new(*refractive_index as f32, *roughness as f32, 0., 0.), ..blank },
+            GpuMaterial { kind: pathtrace::MAT_PLASTIC, c0: c4(albedo), p: Vec4::new(*refractive_index as f32, *roughness as f32, 0., 0.), ..blank },
         FlatMaterial::Dielectric { refractive_index, tint } =>
-            GpuMaterial { kind: 2, c0: c4(tint), p: Vec4::new(*refractive_index as f32, 0., 0., 0.), ..blank },
+            GpuMaterial { kind: pathtrace::MAT_DIELECTRIC, c0: c4(tint), p: Vec4::new(*refractive_index as f32, 0., 0., 0.), ..blank },
         FlatMaterial::Conductor { optics, roughness } => {
             let (eta, k) = optics.current();
-            GpuMaterial { kind: 3, c0: c4(&eta), c1: c4(&k), p: Vec4::new(0., *roughness as f32, 0., 0.), ..blank }
+            GpuMaterial { kind: pathtrace::MAT_CONDUCTOR, c0: c4(&eta), c1: c4(&k), p: Vec4::new(0., *roughness as f32, 0., 0.), ..blank }
         },
-        FlatMaterial::Emitter { radiance, two_sided } => GpuMaterial { kind: 4, a: *two_sided as u32, c0: c4(radiance), ..blank },
-        FlatMaterial::Specular { albedo, roughness } => GpuMaterial { kind: 5, c0: c4(albedo), p: Vec4::new(0., *roughness as f32, 0., 0.), ..blank },
+        FlatMaterial::Emitter { radiance, two_sided } => GpuMaterial { kind: pathtrace::MAT_EMITTER, a: *two_sided as u32, c0: c4(radiance), ..blank },
+        FlatMaterial::Specular { albedo, roughness } => GpuMaterial { kind: pathtrace::MAT_METAL, c0: c4(albedo), p: Vec4::new(0., *roughness as f32, 0., 0.), ..blank },
         FlatMaterial::Checker { m1, m2, xsize, zsize } => {
             let a = push_material(m1, out);
             let b = push_material(m2, out);
-            GpuMaterial { kind: 6, a, b, p: Vec4::new(0., 0., *xsize as f32, *zsize as f32), ..blank }
+            GpuMaterial { kind: pathtrace::MAT_CHECKER, a, b, p: Vec4::new(0., 0., *xsize as f32, *zsize as f32), ..blank }
         },
     };
     out[index as usize] = g;
@@ -126,6 +125,24 @@ pub struct GpuRenderer {
     pub adapter_name: String,
 }
 
+/// The depth of an exported BVH (`Bvh::export`): one for a lone leaf.
+fn bvh_depth(nodes: &[(crate::shapes::bbox::BBox, u32, u32)]) -> usize {
+    if nodes.is_empty() {
+        return 0;
+    }
+    let mut deepest = 0;
+    let mut stack = vec![(0usize, 1usize)];
+    while let Some((i, d)) = stack.pop() {
+        deepest = deepest.max(d);
+        let (_, offset, count) = nodes[i];
+        if count == 0 {
+            stack.push((i + 1, d + 1));
+            stack.push((offset as usize, d + 1));
+        }
+    }
+    deepest
+}
+
 fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
     wgpu::BindGroupEntry { binding, resource: buffer.as_entire_binding() }
 }
@@ -162,7 +179,7 @@ impl Buffers {
         let material_index: Vec<u32> = flat.materials.iter().map(|m| push_material(m, &mut materials)).collect();
         let to_gpu = |p: &Prim, m: u32, emitter: u32| -> GpuPrim {
             let mut g = GpuPrim::zeroed();
-            g.info = UVec4::new(0, material_index[m as usize], emitter, 0);
+            g.info = UVec4::new(pathtrace::PRIM_TRIANGLE, material_index[m as usize], emitter, 0);
             match p {
                 Prim::Triangle { v, n } => {
                     g.v0 = v4(&v[0], 0.); g.v1 = v4(&v[1], 0.); g.v2 = v4(&v[2], 0.);
@@ -171,8 +188,8 @@ impl Buffers {
                         g.info.w = 1;
                     }
                 },
-                Prim::Sphere { center, radius } => { g.v0 = v4(center, *radius as f32); g.info.x = 1; },
-                Prim::Plane { y } => { g.v0 = Vec4::new(*y as f32, 0., 0., 0.); g.info.x = 2; },
+                Prim::Sphere { center, radius } => { g.v0 = v4(center, *radius as f32); g.info.x = pathtrace::PRIM_SPHERE; },
+                Prim::Plane { y } => { g.v0 = Vec4::new(*y as f32, 0., 0., 0.); g.info.x = pathtrace::PRIM_PLANE; },
             }
             g
         };
@@ -183,7 +200,13 @@ impl Buffers {
         if prims.is_empty() {
             prims.push(GpuPrim::zeroed());
         }
-        let mut nodes: Vec<GpuNode> = flat.bvh.export().iter().map(|(b, offset, count)| GpuNode {
+        // The shader's traversal stack holds at most one node per level, and one more.
+        let exported = flat.bvh.export();
+        let depth = bvh_depth(&exported);
+        if depth + 1 > pathtrace::STACK {
+            return Err(format!("a BVH {} levels deep (the shader's stack holds {})", depth, pathtrace::STACK));
+        }
+        let mut nodes: Vec<GpuNode> = exported.iter().map(|(b, offset, count)| GpuNode {
             bmin: pathtrace::glam::Vec3::new(b.min.x as f32, b.min.y as f32, b.min.z as f32), offset: *offset,
             bmax: pathtrace::glam::Vec3::new(b.max.x as f32, b.max.y as f32, b.max.z as f32), count: *count,
         }).collect();
@@ -251,12 +274,12 @@ impl Buffers {
             (ax, Vector3::y().cross(&ax))
         };
         let mut flags = 0u32;
-        if s.atmosphere.is_some() { flags |= 8; }
-        if s.render.sample_lights { flags |= 1; }
-        if s.environment.is_some() { flags |= 2; }
+        if s.atmosphere.is_some() { flags |= pathtrace::FLAG_AERIAL; }
+        if s.render.sample_lights { flags |= pathtrace::FLAG_SAMPLE_LIGHTS; }
+        if s.environment.is_some() { flags |= pathtrace::FLAG_SAMPLE_ENV; }
         let (sun_dir, sun_irr) = match &s.sun {
             Some(sun) => {
-                flags |= 4;
+                flags |= pathtrace::FLAG_SUN;
                 let e = sun.irradiance_at(&Vector3::zeros());
                 (v4(&sun.direction, sun.angular_radius.cos() as f32), Vec4::new(e.rgb.x as f32, e.rgb.y as f32, e.rgb.z as f32, sun.angular_radius as f32))
             },
@@ -294,6 +317,17 @@ impl GpuRenderer {
         let adapter_name = format!("{} ({:?})", adapter.get_info().name, adapter.get_info().backend);
         let mut limits = wgpu::Limits::default();
         let available = adapter.limits();
+        // Refuse (and fall back) rather than let wgpu panic on a buffer the device can't bind.
+        let pixels = (s.image.width * s.image.height) as u64;
+        let largest = available.max_storage_buffer_binding_size.min(available.max_buffer_size);
+        for (what, bytes) in [("primitives", std::mem::size_of_val(prims.as_slice()) as u64),
+                              ("BVH nodes", std::mem::size_of_val(nodes.as_slice()) as u64),
+                              ("tables", std::mem::size_of_val(tables.as_slice()) as u64),
+                              ("camera rays", pixels * std::mem::size_of::<GpuRay>() as u64)] {
+            if bytes > largest {
+                return Err(format!("its {} need {} MB, more than the GPU's largest buffer ({} MB)", what, bytes >> 20, largest >> 20));
+            }
+        }
         limits.max_storage_buffer_binding_size = available.max_storage_buffer_binding_size;
         limits.max_buffer_size = available.max_buffer_size;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -328,7 +362,6 @@ impl GpuRenderer {
             label: Some("params"), contents: bytemuck::bytes_of(&params),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        let pixels = (s.image.width * s.image.height) as u64;
         let rays_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("rays"), size: pixels * std::mem::size_of::<GpuRay>() as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
@@ -412,6 +445,12 @@ impl GpuRenderer {
             let mut rc = rc.lock().unwrap();
             for y in 0..h {
                 for x in 0..w {
+                    // A pixel a resumed state has already taken past k (another integrator's
+                    // render) skips passes until it isn't: they would repeat its samples.
+                    // (Some sample indices go unused for it; none is used twice.)
+                    if rc.samples_at(x, y) > k {
+                        continue;
+                    }
                     let v = sums[y * w + x];
                     rc.set_pixel(x, y, Color::new(v[0] as f64, v[1] as f64, v[2] as f64), n);
                 }
@@ -513,8 +552,6 @@ mod tests {
         }
     }
 
-    /// The GPU renders what the CPU wavefront integrator does (skipped without a GPU adapter,
-    /// such as Mesa's lavapipe).
     /// Every material and kind of light the GPU path has.
     fn scene() -> Scene {
         SceneFile::from_string(r#"{
@@ -540,6 +577,37 @@ mod tests {
         }"#.to_string())
     }
 
+    /// The review's hard cases (`wavefront::integrator::tests::hard_scene`: a two-sided plane
+    /// light, a mirrored quad light, a tiny distant sphere light, glass), tile by tile.
+    #[test]
+    fn test_agrees_on_hard_cases() {
+        use crate::wavefront::integrator::tests::{hard_scene, mean_image, tiles};
+        let mut s = hard_scene();
+        s.render.supersamples = 256;
+        let flat = FlatScene::build(&s).unwrap();
+        let mut gpu = match GpuRenderer::new(&s, &flat) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("skipped: {}", e);
+                return;
+            },
+        };
+        let (w, h) = (s.image.width, s.image.height);
+        let rc = Mutex::new(RenderContext::new(w, h, false, "test.png"));
+        gpu.render(&s, &rc, |_| ());
+        // The context's rows run bottom up (`RenderContext::snapshot`), as the passes'.
+        let on_gpu: Vec<Color> = { let rc = rc.lock().unwrap(); (0..w * h).map(|i| rc.get_pixel(i % w, i / w)).collect() };
+        let cpu = mean_image(&s, 256);
+        let (a, b) = (tiles(&on_gpu, w, h, 2, 2), tiles(&cpu, w, h, 2, 2));
+        for t in 0..4 {
+            for ch in 0..3 {
+                assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "tile {} channel {}: GPU {} vs CPU {}", t, ch, a[t][ch], b[t][ch]);
+            }
+        }
+    }
+
+    /// The GPU renders what the CPU wavefront integrator does (skipped without a GPU adapter,
+    /// such as Mesa's lavapipe).
     #[test]
     fn test_agrees_with_the_wavefront_integrator() {
         let s = scene();

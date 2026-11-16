@@ -109,21 +109,41 @@ pub struct CameraRay {
     pub d: Vec4,
 }
 
-const FLAG_SAMPLE_LIGHTS: u32 = 1;
-const FLAG_SAMPLE_ENV: u32 = 2;
-const FLAG_SUN: u32 = 4;
-const FLAG_AERIAL: u32 = 8;
-const AP_AZIMUTH: u32 = 32;
-const AP_ELEVATION: u32 = 64;
-const AP_DISTANCE: u32 = 32;
-const AERIAL_FROM: f32 = 100.0;
-const AERIAL_TO: f32 = 2e5;
+// Constants the host shares (`gpu/mod.rs` uses these, so the two sides agree).
+
+/// `Params::offs2.w`'s flags.
+pub const FLAG_SAMPLE_LIGHTS: u32 = 1;
+pub const FLAG_SAMPLE_ENV: u32 = 2;
+pub const FLAG_SUN: u32 = 4;
+pub const FLAG_AERIAL: u32 = 8;
+/// `Prim::info.x`.
+pub const PRIM_TRIANGLE: u32 = 0;
+pub const PRIM_SPHERE: u32 = 1;
+pub const PRIM_PLANE: u32 = 2;
+/// `Material::kind`.
+pub const MAT_DIFFUSE: u32 = 0;
+pub const MAT_PLASTIC: u32 = 1;
+pub const MAT_DIELECTRIC: u32 = 2;
+pub const MAT_CONDUCTOR: u32 = 3;
+pub const MAT_EMITTER: u32 = 4;
+pub const MAT_METAL: u32 = 5;
+pub const MAT_CHECKER: u32 = 6;
+/// The aerial perspective table: azimuth from the sun, elevation and distance, its distances
+/// logarithmic from `AERIAL_FROM` to `AERIAL_TO`.
+pub const AP_AZIMUTH: u32 = 32;
+pub const AP_ELEVATION: u32 = 64;
+pub const AP_DISTANCE: u32 = 32;
+pub const AERIAL_FROM: f32 = 100.0;
+pub const AERIAL_TO: f32 = 2e5;
+/// As the renderer's `ggx::MIN_ALPHA`, `functions::POINT_SUN` and `light`'s limb darkening.
+pub const MIN_ALPHA: f32 = 1e-3;
+pub const POINT_SUN: f32 = 1e-3;
+pub const LIMB_DARKENING: f32 = 0.6;
+/// The BVH traversal's stack: the host refuses trees deeper than this (`Buffers::build`).
+pub const STACK: usize = 100;
 const PI: f32 = core::f32::consts::PI;
-const MIN_ALPHA: f32 = 1e-3;
 const INF: f32 = 3.0e38;
-const LIMB_DARKENING: f32 = 0.6;
 const NONE: u32 = 0xffff_ffff;
-const STACK: usize = 100;
 
 /// The scene's buffers.
 pub struct Scene<'a> {
@@ -179,7 +199,7 @@ struct Hit {
 fn intersect_prim(s: &Scene, i: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -> Vec4 {
     let p = at(s.prims, i);
     let kind = p.info.x;
-    if kind == 0 {
+    if kind == PRIM_TRIANGLE {
         let e1 = p.v1.xyz() - p.v0.xyz();
         let e2 = p.v2.xyz() - p.v0.xyz();
         let pv = rd.cross(e2);
@@ -203,11 +223,12 @@ fn intersect_prim(s: &Scene, i: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -
             return Vec4::ZERO;
         }
         Vec4::new(t, b1, b2, 1.0)
-    } else if kind == 1 {
+    } else if kind == PRIM_SPHERE {
         let oc = ro - p.v0.xyz();
         let b = oc.dot(rd);
-        let c = oc.dot(oc) - p.v0.w * p.v0.w;
-        let disc = b * b - c;
+        // pbrt's discriminant, r² - |oc - b rd|², keeps a small, distant sphere's precision.
+        let perp = oc - rd * b;
+        let disc = p.v0.w * p.v0.w - perp.dot(perp);
         if disc < 0.0 {
             return Vec4::ZERO;
         }
@@ -236,7 +257,7 @@ fn intersect_prim(s: &Scene, i: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -
 fn normals(s: &Scene, i: u32, ro: Vec3, rd: Vec3, h: Vec4) -> (Vec3, Vec3) {
     let p = at(s.prims, i);
     let kind = p.info.x;
-    if kind == 0 {
+    if kind == PRIM_TRIANGLE {
         let g = (p.v1.xyz() - p.v0.xyz()).cross(p.v2.xyz() - p.v0.xyz()).normalize();
         let mut n = g;
         if p.info.w == 1 {
@@ -246,19 +267,32 @@ fn normals(s: &Scene, i: u32, ro: Vec3, rd: Vec3, h: Vec4) -> (Vec3, Vec3) {
             }
         }
         (g, n)
-    } else if kind == 1 {
+    } else if kind == PRIM_SPHERE {
         let n = (ro + rd * h.x - p.v0.xyz()) / p.v0.w;
         (n, n)
     } else {
-        (Vec3::Y, Vec3::Y)
+        // A plane faces each ray, as the renderer's `Plane`.
+        let n = if rd.y > 0.0 { -Vec3::Y } else { Vec3::Y };
+        (n, n)
     }
+}
+
+/// The interval (near, far) narrowed by one axis's slab, entered and left at p and q (in
+/// either order); unchanged if either is NaN.
+fn slab(p: f32, q: f32, near: f32, far: f32) -> (f32, f32) {
+    #[allow(clippy::eq_op)]
+    if p == p && q == q { (near.max(p.min(q)), far.min(p.max(q))) } else { (near, far) }
 }
 
 fn box_hit(bmin: Vec3, bmax: Vec3, ro: Vec3, inv: Vec3, tmax: f32) -> bool {
     let t1 = (bmin - ro) * inv;
     let t2 = (bmax - ro) * inv;
-    let near = t1.min(t2).max_element();
-    let far = t1.max(t2).min_element();
+    // Per axis; a ray parallel to a slab and starting on its face makes 0 × ∞ = NaN, and
+    // limits nothing (as `bvh::TraversalRay::enters`). Unrolled: a component indexed by a
+    // variable is a pointer chosen by branch, which logical SPIR-V can't have.
+    let (n0, f0) = slab(t1.x, t2.x, -INF, INF);
+    let (n1, f1) = slab(t1.y, t2.y, n0, f0);
+    let (near, far) = slab(t1.z, t2.z, n1, f1);
     !(far < 0.0 || near > far || near > tmax)
 }
 
@@ -393,10 +427,18 @@ fn env_pdf(s: &Scene, d: Vec3) -> f32 {
 /// A direction from the sky, in proportion to its brightness, and its density.
 fn env_sample(s: &Scene, u1: f32, u2: f32) -> Vec4 {
     let (w, h) = (s.params.offs2.y, s.params.offs2.z);
-    let y = search(s, s.params.offs.w, h, u1);
-    let x = search(s, s.params.offs2.x + y * (w + 1), w, u2);
-    let u = (x as f32 + 0.5) / w as f32;
-    let v = (y as f32 + 0.5) / h as f32;
+    // A texel by the distributions, then a point uniformly within it (from what is left of
+    // the uniform numbers), so the directions cover the sky, not only texel centres.
+    let marg = s.params.offs.w;
+    let y = search(s, marg, h, u1);
+    let cond = s.params.offs2.x + y * (w + 1);
+    let x = search(s, cond, w, u2);
+    let within = |off: u32, i: u32, u: f32| {
+        let (lo, hi) = (at(s.tables, off + i), at(s.tables, off + i + 1));
+        if hi > lo { ((u - lo) / (hi - lo)).clamp(0.0, 0.99999) } else { 0.5 }
+    };
+    let u = (x as f32 + within(cond, x, u2)) / w as f32;
+    let v = (y as f32 + within(marg, y, u1)) / h as f32;
     let phi = (u - 0.5) * 2.0 * PI;
     let theta = v * PI;
     let d = Vec3::new(theta.sin() * phi.cos(), theta.cos(), theta.sin() * phi.sin());
@@ -665,7 +707,7 @@ fn resolve_material(s: &Scene, m_in: u32, p: Vec3) -> u32 {
     let mut k = 0;
     while k < 4 {
         let mat = at(s.materials, m);
-        if mat.kind != 6 {
+        if mat.kind != MAT_CHECKER {
             break;
         }
         let even_x = ((p.x.abs() / mat.p.z) as u32) % 2 == 0;
@@ -680,16 +722,23 @@ fn resolve_material(s: &Scene, m_in: u32, p: Vec3) -> u32 {
 
 fn emitted(s: &Scene, m: u32, n: Vec3, towards: Vec3) -> Vec3 {
     let mat = at(s.materials, m);
-    if mat.kind == 4 && (mat.a == 1 || towards.dot(n) > 0.0) { mat.c0.xyz() } else { Vec3::ZERO }
+    if mat.kind == MAT_EMITTER && (mat.a == 1 || towards.dot(n) > 0.0) { mat.c0.xyz() } else { Vec3::ZERO }
 }
 
 fn prim_area(s: &Scene, i: u32) -> f32 {
     let p = at(s.prims, i);
-    if p.info.x == 0 {
+    if p.info.x == PRIM_TRIANGLE {
         (p.v1.xyz() - p.v0.xyz()).cross(p.v2.xyz() - p.v0.xyz()).length() / 2.0
     } else {
         4.0 * PI * p.v0.w * p.v0.w
     }
+}
+
+/// 1 - cos θ_max for a sphere of radius² `r2` at distance² `d2`, without the cancellation of
+/// 1 - √(1 - x) in f32 for small, distant spheres (x = r²/d²).
+fn one_minus_cos_max(r2: f32, d2: f32) -> f32 {
+    let x = (r2 / d2).min(1.0);
+    x / (1.0 + (1.0 - x).sqrt())
 }
 
 pub fn sphere_pdf(c: Vec3, r: f32, org: Vec3, y: Vec3, n: Vec3) -> f32 {
@@ -701,15 +750,14 @@ pub fn sphere_pdf(c: Vec3, r: f32, org: Vec3, y: Vec3, n: Vec3) -> f32 {
         let cos = n.dot(w).abs() / dist2.sqrt();
         return dist2 / (cos * 4.0 * PI * r2);
     }
-    let cos_max = (1.0 - r2 / d2).max(0.0).sqrt();
-    1.0 / (2.0 * PI * (1.0 - cos_max))
+    1.0 / (2.0 * PI * one_minus_cos_max(r2, d2))
 }
 
 /// A point on emitting primitive i seen from `org`, its normal, and the density per solid
 /// angle: a sphere by its cone, a triangle by area.
 fn sample_light(s: &Scene, i: u32, org: Vec3, u1: f32, u2: f32) -> (Vec3, Vec3, f32) {
     let p = at(s.prims, i);
-    if p.info.x == 1 {
+    if p.info.x == PRIM_SPHERE {
         let (c, r) = (p.v0.xyz(), p.v0.w);
         let to = c - org;
         let d2 = to.dot(to);
@@ -718,18 +766,26 @@ fn sample_light(s: &Scene, i: u32, org: Vec3, u1: f32, u2: f32) -> (Vec3, Vec3, 
             let y = c + n * r;
             return (y, n, sphere_pdf(c, r, org, y, n));
         }
-        let w = to / d2.sqrt();
-        let cos_max = (1.0 - r * r / d2).max(0.0).sqrt();
-        let cos_t = 1.0 - u1 * (1.0 - cos_max);
-        let sin_t = (1.0 - cos_t * cos_t).max(0.0).sqrt();
+        // pbrt's cone sampling: the point is placed by its angle at the centre rather than by
+        // intersecting the sampled direction with the sphere, which in f32 loses a small,
+        // distant sphere entirely (d² - r² rounds to d²).
+        let sin2_max = (r * r / d2).min(1.0);
+        let sin_max = sin2_max.sqrt();
+        let one_minus = one_minus_cos_max(r * r, d2);
+        let sin2_t = if sin2_max < 0.00068523 {
+            sin2_max * u1
+        } else {
+            let cos_t = 1.0 - u1 * one_minus;
+            (1.0 - cos_t * cos_t).max(0.0)
+        };
+        let cos_t = (1.0 - sin2_t).max(0.0).sqrt();
+        let cos_a = sin2_t / sin_max + cos_t * (1.0 - sin2_t / sin2_max).max(0.0).sqrt();
+        let sin_a = (1.0 - cos_a * cos_a).max(0.0).sqrt();
         let phi = 2.0 * PI * u2;
+        let w = to / d2.sqrt();
         let (t, b) = basis(w);
-        let dir = t * (sin_t * phi.cos()) + b * (sin_t * phi.sin()) + w * cos_t;
-        // Where that direction meets the sphere, nearest first.
-        let bb = (org - c).dot(dir);
-        let disc = (bb * bb - (d2 - r * r)).max(0.0);
-        let y = org + dir * (-bb - disc.sqrt());
-        return (y, (y - c).normalize(), 1.0 / (2.0 * PI * (1.0 - cos_max)));
+        let n = -(t * (sin_a * phi.cos()) + b * (sin_a * phi.sin()) + w * cos_a);
+        return (c + n * r, n, 1.0 / (2.0 * PI * one_minus));
     }
     let su = u1.sqrt();
     let (b1, b2) = (1.0 - su, u2 * su);
@@ -740,7 +796,7 @@ fn sample_light(s: &Scene, i: u32, org: Vec3, u1: f32, u2: f32) -> (Vec3, Vec3, 
 
 fn light_pdf(s: &Scene, i: u32, org: Vec3, y: Vec3, n: Vec3) -> f32 {
     let p = at(s.prims, i);
-    if p.info.x == 1 {
+    if p.info.x == PRIM_SPHERE {
         return sphere_pdf(p.v0.xyz(), p.v0.w, org, y, n);
     }
     let w = y - org;
@@ -838,8 +894,8 @@ pub fn radiance(s: &Scene, ro_in: Vec3, rd_in: Vec3, rng: &mut u32) -> Vec3 {
         let prim = at(s.prims, hit.prim);
         let m = resolve_material(s, prim.info.y, point);
         let mat = at(s.materials, m);
-        if mat.kind == 4 {
-            let le = emitted(s, m, hit.ng, -rd);
+        if mat.kind == MAT_EMITTER {
+            let le = emitted(s, m, hit.ns, -rd);
             let mut w = 1.0;
             if !specular && flags & FLAG_SAMPLE_LIGHTS != 0 && prim.info.z > 0 {
                 let lp = emitter_probability(s, prim.info.z - 1) * light_pdf(s, hit.prim, ro, point, hit.ng);
@@ -861,9 +917,9 @@ pub fn radiance(s: &Scene, ro_in: Vec3, rd_in: Vec3, rng: &mut u32) -> Vec3 {
         let mut next_from = above;
         let mut attenuate = Vec3::ONE;
         let mut lobe = Lobe::new(0, ns);
-        if mat.kind == 0 {
+        if mat.kind == MAT_DIFFUSE {
             lobe.albedo = mat.c0.xyz();
-        } else if mat.kind == 1 {
+        } else if mat.kind == MAT_PLASTIC {
             let alpha = (mat.p.y * mat.p.y).max(floor_alpha);
             if alpha >= MIN_ALPHA {
                 lobe.kind = 2;
@@ -877,19 +933,19 @@ pub fn radiance(s: &Scene, ro_in: Vec3, rd_in: Vec3, rng: &mut u32) -> Vec3 {
             } else {
                 lobe.albedo = mat.c0.xyz();
             }
-        } else if mat.kind == 3 || mat.kind == 5 {
+        } else if mat.kind == MAT_CONDUCTOR || mat.kind == MAT_METAL {
             let alpha = (mat.p.y * mat.p.y).max(floor_alpha);
             lobe.kind = 1;
             lobe.alpha = alpha;
             lobe.albedo = mat.c0.xyz();
             lobe.k = mat.c1.xyz();
-            lobe.fresnel = if mat.kind == 5 { 0 } else { 2 };
+            lobe.fresnel = if mat.kind == MAT_METAL { 0 } else { 2 };
             if alpha < MIN_ALPHA {
                 delta = true;
                 next_dir = reflect_about(rd, ns);
                 attenuate = lobe.fresnel(wo.dot(ns).abs());
             }
-        } else if mat.kind == 2 {
+        } else if mat.kind == MAT_DIELECTRIC {
             // As `functions::scatter_dielectric`.
             let n = hit.ns;
             let exiting = rd.dot(n) > 0.0;
@@ -943,7 +999,7 @@ pub fn radiance(s: &Scene, ro_in: Vec3, rd_in: Vec3, rng: &mut u32) -> Vec3 {
         if flags & FLAG_SUN != 0 {
             let sd = s.params.sun_dir.xyz();
             let solid_angle = 2.0 * PI * (1.0 - s.params.sun_dir.w);
-            if lobe.pdf(wo, sd) * solid_angle < 1e-3 {
+            if lobe.pdf(wo, sd) * solid_angle < POINT_SUN {
                 let f = lobe.eval(wo, sd);
                 if f.dot(f) > 0.0 && !occluded(s, above, sd, 1e30) {
                     l += beta * f * s.params.sun_irr.xyz();

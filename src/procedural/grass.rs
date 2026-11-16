@@ -2065,6 +2065,22 @@ mod tests {
     }
 
     #[test]
+    fn test_bracken_fronds_arch_over_and_hold_their_pinnae_level() {
+        let (_, f) = field(json!({ "preset": "lush", "wind": { "strength": 0 } }), json!(["bracken"]), 3.);
+        let stems: Vec<&Blade> = f.blades.iter().filter(|b| b.look as usize == FROND_STEM).collect();
+        let pinnae: Vec<&Blade> = f.blades.iter().filter(|b| b.look as usize == PINNA).collect();
+        assert!(stems.len() > 20);
+        assert_eq!(pinnae.len(), stems.len() * 2 * 14);
+        // The stem's tip is below the highest point of its curve.
+        assert!(stems.iter().all(|b| b.point(1.).y < b.point(0.7).y));
+        let steep = pinnae.iter().filter(|b| {
+            let chord = v3(b.v[2]) - v3(b.v[0]);
+            chord.y.abs() > 0.5 * chord.norm()
+        }).count();
+        assert!(steep * 10 < pinnae.len(), "{} of {} pinnae steep", steep, pinnae.len());
+    }
+
+    #[test]
     fn test_mown_grass_has_no_seed_heads_but_flowers_flower_short() {
         let (_, f) = field(json!({ "mow_height": 0.05 }), json!([{ "preset": "timothy", "seed_head": { "fraction": 1 } }, "oxeye"]), 30.);
         // Timothy's looks are 0 to 2, the oxeye's from 3: its petals are 3 + PETAL.

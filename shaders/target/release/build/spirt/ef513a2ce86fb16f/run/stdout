@@ -1,0 +1,2 @@
+cargo:rerun-if-changed=build.rs
+cargo:rerun-if-changed=/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spirt-0.4.0/khronos-spec/SPIRV-Headers/include/spirv/unified1

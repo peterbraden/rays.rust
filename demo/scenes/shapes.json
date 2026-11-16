@@ -925,7 +925,7 @@
       "type": "transform",
       "item": {
         "type": "text",
-        "font": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "font": ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/System/Library/Fonts/Supplemental/Arial Bold.ttf"],
         "string": "rays.rust",
         "thickness": 0.4
       },

@@ -81,7 +81,7 @@ pub enum Sampler {
 }
 
 /// What a ray that leaves the scene sees.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Background {
     Solid(Color),
     /// A blend from `bottom` (looking straight down) to `top` (straight up) by elevation:
@@ -90,6 +90,19 @@ pub enum Background {
     /// section "Sending Rays Into the Scene"
     /// (<https://raytracing.github.io/books/RayTracingInOneWeekend.html>).
     Gradient { bottom: Color, top: Color },
+    /// Stars, the Milky Way, nebulae and galaxies (`procedural::space`).
+    Space(std::sync::Arc<crate::procedural::space::Space>),
+}
+
+impl PartialEq for Background {
+    fn eq(&self, other: &Background) -> bool {
+        match (self, other) {
+            (Background::Solid(a), Background::Solid(b)) => a == b,
+            (Background::Gradient { bottom: a, top: b }, Background::Gradient { bottom: c, top: d }) => a == c && b == d,
+            (Background::Space(a), Background::Space(b)) => std::sync::Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
 }
 
 impl Background {
@@ -105,6 +118,7 @@ impl Background {
                 let a = 0.5 * (rd.normalize().y + 1.);
                 *bottom * (1. - a) + *top * a
             },
+            Background::Space(space) => space.radiance(&rd.normalize()),
         }
     }
 }

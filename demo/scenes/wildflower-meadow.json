@@ -1,0 +1,66 @@
+{
+  "output": { "exposure": 0.7 },
+  "width": 960,
+  "height": 540,
+  "supersamples": 24,
+  "chunk_size": 64,
+  "samples_per_chunk": 4,
+  "shadow_bias": 0.0001,
+  "max_depth": 3,
+
+  "variables": {
+    "hills": {
+      "type": "noise", "min": [-16, -6], "max": [16, 45], "cell_size": 0.25,
+      "amplitude": 1.5, "scale": 25, "octaves": 5, "seed": 4
+    },
+    "far_hills": {
+      "type": "noise", "min": [-1500, -10], "max": [1500, 3000], "cell_size": 3, "base": -0.1,
+      "amplitude": 1.5, "scale": 25, "octaves": 5, "seed": 4
+    }
+  },
+
+  "materials": {
+    "SOIL": { "type": "soil", "preset": "loam", "seed": 1 },
+    "FAR_MEADOW": { "type": "soil", "seed": 2, "color": [0.17, 0.19, 0.08], "humus": [0.11, 0.13, 0.05], "mottle_size": 12,
+      "stones": 0, "crumbs": 0, "moss": 0, "bump": 0, "litter": 0.3, "litter_color": [0.22, 0.2, 0.1], "litter_length": 0.3, "litter_width": 0.02 }
+  },
+  "media": {},
+
+  "camera": {
+    "location": [0, 1.3, -5.5],
+    "lookat": [0, 0.1, 1],
+    "up": [0, 1, 0],
+    "angle": 0.7,
+    "aperture": 0.01
+  },
+
+  "lights": [
+    { "location": [-560, 480, -480], "color": [1, 0.95, 0.85], "intensity": 2.6e6 }
+  ],
+
+  "objects": [
+    { "type": "skysphere", "ozone": false, "rayleigh_r": 1.16e-5, "rayleigh_g": 2.7e-5, "rayleigh_b": 6.62e-5, "sun_direction": [-0.6, 0.5, -0.5] },
+    { "type": "terrain", "heightmap": "$hills", "material": "SOIL" },
+    { "type": "terrain", "heightmap": "$far_hills", "material": "FAR_MEADOW" },
+    {
+      "type": "grass",
+      "heightmap": "$hills",
+      "min": [-16, -5.5], "max": [16, 45],
+      "density": 600,
+      "seed": 3,
+      "species": [
+        { "preset": "rough", "weight": 3, "height": 0.35 },
+        { "preset": "bent", "weight": 1 },
+        { "preset": "timothy", "weight": 0.6 },
+        { "preset": "wild_oat", "weight": 0.25 },
+        { "preset": "clover", "weight": 0.6 },
+        { "preset": "red_clover", "weight": 0.3 },
+        { "preset": "oxeye", "weight": 0.5 },
+        { "preset": "buttercup", "weight": 0.5 },
+        { "preset": "dandelion", "weight": 0.25 },
+        { "preset": "daisy", "weight": 0.3 }
+      ],
+      "conditions": { "preset": "wild", "patchiness": 0.15 }
+    }
+  ]
+}

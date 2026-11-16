@@ -785,9 +785,9 @@ pub fn params(species_name: &str, overrides: &Value) -> TreeParams {
     p
 }
 
-pub const SPECIES: [&str; 13] = [
+pub const SPECIES: [&str; 16] = [
     "quaking-aspen", "black-tupelo", "california-black-oak", "weeping-willow",
-    "lombardy-poplar", "balsam-fir", "palm", "shrub",
+    "lombardy-poplar", "balsam-fir", "palm", "shrub", "hazel", "hawthorn", "juniper",
     "scots-pine", "stone-pine", "norway-spruce", "italian-cypress", "cedar-of-lebanon",
 ];
 
@@ -816,7 +816,8 @@ fn split(l: StemLevel, seg_splits: f64, split_angle: f64, split_angle_v: f64) ->
 /// narrow columnar crown of steep, upturned branches; the balsam fir's conical whorls of
 /// near-level branches with flat sprays of short needles; a palm's single unbranched trunk
 /// crowned by arching fronds with leaflets in two opposite rows, spiralling at the golden angle
-/// of 137.5 degrees (Prusinkiewicz and Lindenmayer, ch. 4); a generic multi-stemmed shrub; and
+/// of 137.5 degrees (Prusinkiewicz and Lindenmayer, ch. 4); a generic multi-stemmed shrub, and
+/// the bushes of a woodland's edge (hazel, hawthorn, juniper); and
 /// the evergreens after them, each described where it is defined. Conifers' foliage uses
 /// needle tufts larger than real needles, standing in for a shoot's many needles, which at a
 /// distance read as a mass rather than individually.
@@ -916,6 +917,50 @@ pub fn species(name: &str) -> Option<TreeParams> {
                 level(50., 10., 140., 20., 25., 0.5, 0.1, 1., 4, -10., 0., 40.),
                 level(45., 10., 140., 20., 12., 0.5, 0.1, 1., 2, 0., 0., 30.),
                 level(45., 10., 140., 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Coppiced hazel: many straight stems fanning up from the base, with short side shoots
+        // and broad, round leaves.
+        "hazel" => TreeParams {
+            shape: 3, base_size: 0.15, scale: 4.5, scale_v: 1., levels: 3,
+            ratio: 0.012, ratio_power: 1.3, lobes: 0, lobe_depth: 0., flare: 0.2,
+            base_splits: 7, leaves: 16., leaf_scale: 0.12, leaf_scale_x: 0.9, attraction_up: 0.4, wander: 0.04,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0.1, 1., 6, 0., 0., 25.), 0.05, 18., 6.),
+                level(45., 15., 140., 30., 40., 0.4, 0.1, 1., 4, -10., 0., 30.),
+                level(40., 10., 140., 30., 16., 0.45, 0.1, 1., 2, 0., 0., 20.),
+                level(45., 10., 140., 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Hawthorn: a small, gnarled tree with a short trunk and a dense, rounded, twiggy crown
+        // of small leaves; the hedgerow and woodland-edge tree.
+        "hawthorn" => TreeParams {
+            shape: 1, base_size: 0.25, scale: 5., scale_v: 1.5, levels: 3,
+            ratio: 0.025, ratio_power: 1.3, lobes: 3, lobe_depth: 0.05, flare: 0.4,
+            base_splits: 2, leaves: 60., leaf_scale: 0.07, leaf_scale_x: 0.8, attraction_up: 0.3,
+            wander: 0.08, branch_loss: 0.05,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0., 1., 6, 0., 0., 40.), 0.3, 30., 10.),
+                split(level(55., 15., 137.5, 40., 35., 0.6, 0.15, 1., 6, -15., 0., 80.), 0.15, 20., 10.),
+                level(50., 15., 137.5, 30., 40., 0.45, 0.1, 1., 3, 0., 0., 50.),
+                level(45., 15., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Common juniper: a dense, upright evergreen bush of a few stems, clothed to the ground
+        // in short, prickly needles.
+        "juniper" => TreeParams {
+            shape: 5, base_size: 0.02, scale: 2.5, scale_v: 0.8, levels: 3,
+            ratio: 0.025, ratio_power: 1.3, lobes: 0, lobe_depth: 0., flare: 0.3,
+            base_splits: 3, leaves: 40., leaf_scale: 0.07, leaf_scale_x: 0.2, leaf_bend: 0., leaf_shape: LeafShape::Needles,
+            attraction_up: 0.8, wander: 0.05, branch_loss: 0.05,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0., 1., 6, 0., 0., 20.), 0.15, 15., 10.),
+                level(25., 10., 137.5, 40., 60., 0.3, 0.08, 1., 3, -5., 0., 20.),
+                level(35., 10., 137.5, 40., 14., 0.5, 0.15, 1., 2, 0., 0., 20.),
+                level(30., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
             ],
             ..d
         },

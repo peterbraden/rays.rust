@@ -22,6 +22,7 @@ use crate::procedural::grass::{create_grass, GrassMedium};
 use crate::procedural::heightmap::{HeightGrid, Terrain};
 use crate::procedural::rock::{self, Bedrock, Assorted};
 use crate::material::rock::{Rock, RockStyle};
+use crate::material::soil::{Soil, SoilStyle};
 use crate::procedural::nubis_clouds::{NubisCloudLayer, GlobalNubis};
 use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGenus, GlobalCirrus};
 use crate::procedural::benard_altocumulus::BenardAltocumulus;
@@ -624,10 +625,11 @@ impl SceneFile {
          objects
     }
 
-    /// An object's medium, bump mapped if it has a `"normal"` (see `parse_bump`).
+    /// An object's medium, bump mapped if its `"normal"` is an object (see `parse_bump`). A
+    /// plane's `"normal"` may instead be a vector, its orientation (`parse_plane`).
     pub fn parse_object_medium(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Box<dyn Medium + Sync + Send> {
         let m = SceneFile::parse_unbumped_medium(o, materials, media);
-        if o["normal"].is_null() {
+        if !o["normal"].is_object() {
             return m;
         }
         // {"map": "normals.png", "strength": 1, and an image map's "scale", "offset", ...}: a
@@ -1964,9 +1966,10 @@ impl SceneFile {
     }
 
     /// `{"type": "plane", "y": 0}`, a ground plane; or `{"type": "plane", "normal": [x, y, z],
-    /// "distance": d}`, POV-Ray's plane: the half-space n.p < d, which can be used in CSG.
+    /// "distance": d}`, POV-Ray's plane: the half-space n.p < d, which can be used in CSG. A
+    /// `"normal"` that is an object is a bump map (`parse_object_medium`), not an orientation.
     pub fn parse_plane(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        if !o["normal"].is_null() {
+        if o["normal"].is_array() {
             return Box::new(crate::shapes::plane::HalfSpace::new(
                 SceneFile::parse_vec3(&o["normal"]), SceneFile::parse_number(&o["distance"], 0.)));
         }
@@ -2256,6 +2259,10 @@ impl SceneFile {
         if t == "rock" {
             return Some(Box::new(SceneFile::parse_rock(o)));
         }
+
+        if t == "soil" {
+            return Some(Box::new(SceneFile::parse_soil(o)));
+        }
         
         // Noise materials are handled separately in parse_object_medium
         
@@ -2273,6 +2280,40 @@ impl SceneFile {
         }
             */
         None
+    }
+
+    /// `{"type": "soil", "preset": "loam"}`: procedural bare ground (see `material::soil`).
+    /// Presets are loam, clay, sand and forest_floor; any field of the preset can be
+    /// overridden: the colours `color`, `humus`, `stone_color`, `crumb_color`, `litter_color`
+    /// and `moss_color`; the fractions of the ground covered by `stones`, `crumbs`, `litter`
+    /// and `moss`; the sizes (m) `mottle_size`, `stone_size`, `litter_length`, `litter_width`
+    /// and `clod_size`; and `bump`, the strength of the relief. Also `"scale"` (for a scene not
+    /// in metres), `"seed"` and `"wetness"` (0 to 1).
+    pub fn parse_soil(o: &Value) -> Soil {
+        let p = SoilStyle::preset(o["preset"].as_str().unwrap_or("loam"));
+        let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let c = |k: &str, d: Color| SceneFile::parse_color_def(o, k, d);
+        let style = SoilStyle {
+            color: c("color", p.color),
+            humus: c("humus", p.humus),
+            mottle_size: n("mottle_size", p.mottle_size).max(1e-4),
+            stone_color: c("stone_color", p.stone_color),
+            stones: n("stones", p.stones).clamp(0., 1.),
+            stone_size: n("stone_size", p.stone_size).max(1e-4),
+            crumb_color: c("crumb_color", p.crumb_color),
+            crumbs: n("crumbs", p.crumbs).clamp(0., 1.),
+            litter_color: c("litter_color", p.litter_color),
+            litter: n("litter", p.litter).clamp(0., 1.),
+            litter_length: n("litter_length", p.litter_length).max(1e-4),
+            litter_width: n("litter_width", p.litter_width).max(1e-5),
+            moss_color: c("moss_color", p.moss_color),
+            moss: n("moss", p.moss).clamp(0., 1.),
+            bump: n("bump", p.bump).max(0.),
+            clod_size: n("clod_size", p.clod_size).max(1e-4),
+        };
+        let mut soil = Soil::new(style, n("scale", 1.).max(1e-9), SceneFile::parse_int(&o["seed"], 0) as u64);
+        soil.wetness = n("wetness", 0.).clamp(0., 1.);
+        soil
     }
 
     /// `{"type": "rock", "preset": "granite"}`: a procedural stone (see `material::rock`).
@@ -2780,8 +2821,11 @@ impl SceneFile {
         })
     }
 
-    /// A colour (black if absent), or `{"type": "gradient", "bottom": colour, "top": colour}`.
-    pub fn parse_background(v: &Value) -> Background {
+    /// A colour (black if absent), `{"type": "gradient", "bottom": colour, "top": colour}`, or
+    /// `{"type": "space", ...}` (`procedural::space`), for a camera whose pixels are
+    /// `pixel_angle` radians across, on the scale of a sun of irradiance `sun` (its luminance)
+    /// if the scene has one.
+    pub fn parse_background(v: &Value, pixel_angle: f64, sun: Option<f64>) -> Background {
         match v {
             Value::Null => Background::Solid(Color::black()),
             Value::Object(_) => match v["type"].as_str() {
@@ -2789,7 +2833,8 @@ impl SceneFile {
                     bottom: SceneFile::parse_color_def(v, "bottom", Color::white()),
                     top: SceneFile::parse_color_def(v, "top", Color::new(0.5, 0.7, 1.)),
                 },
-                t => panic!("Unknown background type {:?}: expected \"gradient\" or a colour", t),
+                Some("space") => Background::Space(Arc::new(crate::procedural::space::Space::parse(v, pixel_angle, sun))),
+                t => panic!("Unknown background type {:?}: expected \"gradient\", \"space\" or a colour", t),
             },
             _ => Background::Solid(SceneFile::parse_color(v)),
         }
@@ -2848,7 +2893,8 @@ impl SceneFile {
             image: ImageOpts { width, height },
             render: RenderOpts {
                 max_depth: SceneFile::parse_int(&s.max_depth, 2),
-                background: SceneFile::parse_background(&s.background),
+                background: SceneFile::parse_background(&s.background, pixel_angle,
+                    sun.as_ref().map(|s| crate::procedural::space::luminance(&s.irradiance.rgb))),
                 shadow_bias: SceneFile::parse_number(&s.shadow_bias, 1e-7f64),
                 supersamples: SceneFile::parse_int(&s.supersamples, 35),  
                 chunk_size: SceneFile::parse_int(&s.chunk_size, 64).max(1), 
@@ -3319,12 +3365,12 @@ mod tests {
 
     #[test]
     fn test_gradient_background() {
-        let g = SceneFile::parse_background(&serde_json::json!({ "type": "gradient" }));
+        let g = SceneFile::parse_background(&serde_json::json!({ "type": "gradient" }), 0., None);
         // The book's colours by default: white looking down, (0.5, 0.7, 1) looking up.
         assert_eq!(g.radiance(&Vector3::new(0., -1., 0.)), Color::white());
         assert_eq!(g.radiance(&Vector3::new(0., 2., 0.)), Color::new(0.5, 0.7, 1.));
         assert_eq!(g.radiance(&Vector3::new(1., 0., 0.)), Color::new(0.75, 0.85, 1.));
-        assert_eq!(SceneFile::parse_background(&serde_json::json!([0.1, 0.2, 0.3])), Background::Solid(Color::new(0.1, 0.2, 0.3)));
+        assert_eq!(SceneFile::parse_background(&serde_json::json!([0.1, 0.2, 0.3]), 0., None), Background::Solid(Color::new(0.1, 0.2, 0.3)));
     }
 
     #[test]
@@ -3572,6 +3618,19 @@ mod tests {
         assert_eq!((s.image.width, s.image.height), (40, 2));
         let s = minimal_scene_sized("", None, Some(30));
         assert_eq!((s.image.width, s.image.height), (4, 30));
+    }
+
+    #[test]
+    fn test_plane_normal_is_an_orientation_or_a_bump_map() {
+        // A ground plane, bump mapped: its "normal" is an object (demo/scenes/bumps.json).
+        let bumped = minimal_scene(r#", "materials": { "M": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } },
+            "objects": [ { "type": "plane", "y": 0, "material": "M",
+                           "normal": { "pattern": "waves", "amount": 0.25 } } ]"#);
+        assert_eq!(bumped.objects.infinite_items.len() + bumped.objects.items.len(), 1);
+        // A half-space plane: its "normal" is a vector, and it isn't bump mapped.
+        let oriented = minimal_scene(r#", "materials": { "M": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } },
+            "objects": [ { "type": "plane", "normal": [0, 1, 0], "distance": 0, "material": "M" } ]"#);
+        assert_eq!(oriented.objects.infinite_items.len() + oriented.objects.items.len(), 1);
     }
 
     #[test]

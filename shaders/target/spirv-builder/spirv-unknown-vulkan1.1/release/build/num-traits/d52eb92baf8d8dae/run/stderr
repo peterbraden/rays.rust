@@ -1,0 +1,13 @@
+error: error loading target specification: could not find specification for target "spirv-unknown-vulkan1.1"
+  |
+  = help: run `rustc --print target-list` for a list of built-in targets
+
+error: error loading target specification: could not find specification for target "spirv-unknown-vulkan1.1"
+  |
+  = help: run `rustc --print target-list` for a list of built-in targets
+
+warning: autocfg could not probe for `std`
+error: error loading target specification: could not find specification for target "spirv-unknown-vulkan1.1"
+  |
+  = help: run `rustc --print target-list` for a list of built-in targets
+

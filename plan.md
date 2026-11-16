@@ -247,7 +247,7 @@ nothing measurable either.
 - Arvo and Kirk, "Particle Transport and Image Synthesis", SIGGRAPH 1990 (Russian roulette).
 
 
-## 3. GPU acceleration (brainstorm only)
+## 3. GPU acceleration (brainstorm; superseded by 12)
 
 ### Known constraints in the current architecture
 
@@ -1172,3 +1172,124 @@ slices of local arrays.
   doi:10.5194/amt-7-625-2014.
 - Malitson, "Interspecimen Comparison of the Refractive Index of Fused Silica", JOSA 55(10), 1965,
   doi:10.1364/JOSA.55.001205.
+
+## 12. GPU and WebGPU roadmap: one set of kernels, per-area fallback
+
+Goals (from review, November 2026):
+
+- WebGPU in the browser is a target, not an afterthought: anything that runs on the GPU must
+  survive translation to WGSL and WebGPU's limits, and the host must work without threads,
+  blocking waits or a filesystem.
+- The GPU's coverage grows one area at a time (a material, a shape, a kind of light), and
+  whatever an area doesn't yet cover falls back to the CPU for that area only, not for the
+  whole scene as now.
+- One source of truth for shading: the kernel crate (`shaders/pathtrace`, f32, rust-gpu),
+  run on the GPU and, for fallback and tests, on the CPU. The recursive tracer (`trace`, f64)
+  stays the reference every other path is measured against.
+
+### Review findings (code review of the wavefront and GPU paths)
+
+Verified bugs, to fix first:
+
+1. Mirroring transforms flip flattened triangles' normals: `Prim::transformed` keeps the
+   winding when det < 0 (`flat.rs`), so one-sided emitters light the wrong side and
+   dielectrics swap entering and exiting. Swap two vertices (and their normals) when det < 0.
+2. Emissive (and dielectric) planes are one-sided in the flat scene and the shader, two-sided
+   in `trace` (`Plane::intersects` faces the ray). Match it, or refuse to flatten them.
+3. The shader's sphere-light cone, 1 - √(1 - r²/d²), cancels in f32: about twice too wide at
+   r/d = 2.5e-4, and an infinite density (the light vanishes) below 1.7e-4. Use x / (1 +
+   √(1 - x)), as the CPU's series does.
+4. The shader samples the sky at texel centres only (no jitter within the texel), a slight
+   MIS bias and aliased sky shadows. Keep the remainder of the uniform numbers, as
+   `Distribution1D::sample`.
+
+Risks: scenes past the GPU's buffer limits panic in wgpu rather than falling back (check sizes
+against the adapter's limits and return Err); a full BVH stack in the shader drops nodes
+silently (tie its size to `bvh.rs`'s depth bound); the shader's box test can make NaN for a
+ray starting on a slab, which `TraversalRay::enters` handles; resuming a render saved by
+another integrator mixes sample sequences (put the integrator in the state's key).
+
+Maintainability: constants and table layouts are still duplicated between host and shader
+(flags, material kinds, aerial table sizes, `MIN_ALPHA`, `POINT_SUN`, `LIMB_DARKENING`): make
+them the kernel crate's `pub const`s. Smooth emitters take their side from the winding, not
+the interpolated normal as `trace` does, and `SmoothMesh::flatten` drops all normals when one
+is missing. Shading exists three times (`trace`, `wavefront::integrator`, the shader), and
+the agreement tests compare image totals within 3% on scenes without transforms, plane
+lights or small lights: compare regions (FLIP per tile), and add those cases.
+
+Infrastructure:
+
+- CI (`rust.yml`) never builds `--features gpu`, never runs the GPU tests, and can't notice a
+  stale `pathtrace.spv` after the shader's source changes. Each run takes 35-40 minutes
+  (debug-mode tests, every demo scene).
+- `.github/workflows/dependabot.yml` is Dependabot's config in the workflows directory, so it
+  fails as a workflow on every push; it belongs at `.github/dependabot.yml`, with ecosystem
+  `cargo`, not `rust`.
+- rust-gpu inlines the whole kernel into one function (the struct of buffer references needs
+  inlining to legalise): 330 KB of SPIR-V becomes 1 MB of WGSL, a risk for browsers'
+  compile times.
+- PR #123 is 148 files and 31,000 lines, too large to review as one; review it by chapter
+  (its commits are per chapter).
+
+WebGPU feasibility, checked: naga translates `pathtrace.spv` to WGSL, which re-parses and
+validates with WebGPU's baseline capabilities. The renderer itself doesn't build for
+`wasm32-unknown-unknown`: `nv-flip-sys` (C++) and `getrandom` stop it first, and the terminal
+UI, file IO and rayon's threads would follow.
+
+### Architecture to reach
+
+- Crates: `rays-core` (scene parsing, flat scene, CPU integrators; no terminal UI, no C
+  dependencies; rayon behind a `threads` feature), `rays-kernels` (today's
+  `shaders/pathtrace`: `no_std`, f32, run by the GPU and by the CPU fallback), the `rays` CLI
+  (indicatif, nv-flip, EXR, saved states), and `rays-web` (wasm-bindgen: a canvas, scenes and
+  assets by fetch, async readback).
+- The GPU renderer becomes a wavefront in GPU buffers, as pbrt-v4's: path state as structures
+  of arrays, and a kernel per stage (camera rays, intersect, classify, shade per material
+  kind, shadow rays, accumulate), with queues between them.
+- Per-area fallback through those queues. Each area has a status: GPU, CPU fallback or
+  unsupported (the scene then renders with `trace`, as now). Classification after
+  intersection puts each path in a GPU queue or a CPU queue; the CPU queue is read back,
+  processed by the kernel crate's CPU build or the renderer's own code, and written back for
+  the next stage. Intersection falls back the same way: objects the GPU can't intersect
+  (procedural shapes, CSG) are intersected on the CPU for the rays whose segments reach their
+  bounds, and the nearer hit kept.
+- Shaders shipped as WGSL generated from the SPIR-V at build time (naga), so the web build
+  needs neither naga nor SPIR-V at run time, and the native build can keep SPIR-V.
+
+### Phases
+
+0. Hardening (small, now): fix the four bugs and the risks above; share constants; stronger
+   agreement tests; CI: a job that builds and lints `--features gpu`, runs the GPU tests on
+   lavapipe, checks that `pathtrace.spv` matches the shader's sources (a hash of the sources
+   recorded beside it, compared in a test), runs tests in release, and moves Dependabot's
+   config.
+1. Web spike: split out `rays-core`; a minimal `rays-web` that renders a flattenable scene in
+   a browser through WebGPU (dispatches short enough for the browser's GPU watchdog, a pass
+   per frame, async readback, single-threaded CPU code); shrink the kernel (buffers without a
+   struct of references, so rust-gpu needn't inline everything) and measure the browser's
+   shader compile time. Exit: a scene renders in Chrome and Safari matching the CLI by FLIP.
+2. GPU wavefront with queues: replace the megakernel with stage kernels and queues, with
+   identical images (FLIP against the megakernel), then measure on real GPUs (the Mac; the
+   browser) against the megakernel to decide which to keep for which device.
+3. The fallback framework: per-area status, classification, CPU queues for materials first,
+   then intersection. Exit: every flattenable demo scene plus at least one with a
+   procedural shape and one with an unported material renders through the GPU path with CPU
+   fallback, matching `trace`.
+4. Port areas to the GPU by use, each with a kernel, a test of its CPU build against the
+   renderer, and a FLIP test of the GPU against `trace`. Order, by how often the demo scenes
+   use them: image textures (albedo; textures as arrays within WebGPU's limits), cylinders,
+   cones and discs, the light BVH, Sobol' samples, `coated_*` and `rough_dielectric`,
+   per-ray aerial perspective, grid media, then the rest. Spectral rendering and motion blur
+   stay CPU until the queues carry wavelengths and times.
+5. Convergence: the CPU wavefront integrator runs the kernel crate's code for the areas it
+   covers, removing the second copy of the shading (the decision needed: whether f32 is
+   acceptable there, or the kernels become generic over the float type).
+
+Each phase ends with the GPU and web paths measured against `trace` by FLIP on the demo scenes
+they can render, and timings on the Mac's GPU and in a browser, not only on lavapipe.
+
+### Open decisions
+
+- Whether to split PR #123 into per-chapter PRs for review.
+- f32 for the CPU wavefront integrator when it shares the kernels, or generic kernels.
+- WGSL generated at build time (recommended) or translated by naga in the browser.

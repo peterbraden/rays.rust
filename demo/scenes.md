@@ -132,8 +132,8 @@ species grow in stands, with clearings, and none on steep slopes.
 ![forest](./scenes/forest.png)
 ## Desert
 Desert plants: `tree` species for the arid Southwest. From left to right: a sagebrush, a
-creosote bush, a saguaro, an ocotillo and a Joshua tree; in front, a prickly pear, a barrel
-cactus and an agave. The bushes and the Joshua tree are Weber and Penn trees; the succulents are
+creosote bush, a saguaro, an ocotillo and a Joshua tree; in front, a prickly pear, an agave
+and a barrel cactus. The bushes and the Joshua tree are Weber and Penn trees; the succulents are
 built by `src/procedural/succulent.rs` (ribbed columns with arms, squat barrels, chains of
 pads, rosettes of channelled leaves, fans of canes), their `"bark"` the green body and their
 `"leaves"` the spines. Like any species they can grow in a `forest`.

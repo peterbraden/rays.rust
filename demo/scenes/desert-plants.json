@@ -45,7 +45,7 @@
     { "type": "tree", "species": "creosote-bush", "seed": 1, "location": [4.2, 0, 2], "bark": "GREY_BARK", "leaves": "CREOSOTE_LEAF" },
     { "type": "tree", "species": "sagebrush", "seed": 2, "location": [7.2, 0, 1], "bark": "GREY_BARK", "leaves": "SAGE_LEAF" },
     { "type": "tree", "species": "barrel-cactus", "seed": 1, "location": [-2.4, 0, -3], "bark": "BARREL", "leaves": "RED_SPINE" },
-    { "type": "tree", "species": "prickly-pear", "seed": 3, "location": [2.4, 0, -3.5], "bark": "PAD", "leaves": "SPINE" },
+    { "type": "tree", "species": "prickly-pear", "seed": 2, "location": [2.4, 0, -3.5], "bark": "PAD", "leaves": "SPINE" },
     { "type": "tree", "species": "agave", "seed": 1, "location": [-0.2, 0, -5.5], "bark": "AGAVE", "leaves": "DARK_SPINE" }
   ]
 }

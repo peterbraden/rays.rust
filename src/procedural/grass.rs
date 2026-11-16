@@ -118,6 +118,9 @@
 //!   eg. above a water line or below a tree line
 //! - `species_zones` (m): with several species, group them into patches of about this size
 //!   rather than mixing them evenly; 0 to mix evenly
+//! - `litter`: dead blades lying on the ground, per square metre - the thatch that covers the
+//!   soil under long grass (default 0; `wild` has some). It thins, but doesn't vanish, in bare
+//!   patches
 //!
 //! ## Geometry
 //!
@@ -383,6 +386,7 @@ pub struct Conditions {
     pub max_altitude: f64,
     pub altitude_fade: f64,
     pub species_zones: f64,
+    pub litter: f64,
 }
 
 fn species_preset(name: &str) -> Value {
@@ -533,6 +537,15 @@ fn species_preset(name: &str) -> Value {
                 "color": [0.55, 0.15, 0.35], "tip_color": [0.7, 0.3, 0.5], "old_color": [0.35, 0.2, 0.15]
             }
         }),
+        // Dead blades lying on the ground: not for fields' species lists, but grown under them
+        // by their conditions' `litter`.
+        "litter" => json!({
+            // Leans are drawn up to this and capped at 81 degrees, so most lie flat.
+            "height": 0.16, "height_variation": 0.5, "width": 0.004, "tip": 2, "stiffness": 0,
+            "lean": 160, "twist": 120, "segments": 3, "dryness": 1, "normal_alignment": 1,
+            "base_color": [0.26, 0.22, 0.15], "tip_color": [0.34, 0.29, 0.2], "dry_color": [0.3, 0.26, 0.19],
+            "translucency": 0.15, "sheen": 0.05, "color_variation": 2
+        }),
         _ => panic!("Unknown grass species preset {}", name),
     };
     merge(lawn, &overrides)
@@ -596,7 +609,7 @@ fn conditions_preset(name: &str) -> Value {
         "patchiness": 0.1, "patch_scale": 3, "mow_height": null,
         "mow_stripes": { "width": 0, "direction": [1, 0] },
         "trampled": 0, "max_slope": 50, "min_altitude": -1e9, "max_altitude": 1e9,
-        "altitude_fade": 0.5, "species_zones": 0
+        "altitude_fade": 0.5, "species_zones": 0, "litter": 0
     });
     let overrides = match name {
         "summer" => json!({}),
@@ -615,7 +628,7 @@ fn conditions_preset(name: &str) -> Value {
         // drifts rather than evenly mixed.
         "wild" => json!({
             "dryness": 0.15, "dead_fraction": 0.12, "patchiness": 0.25, "patch_scale": 2.5,
-            "species_zones": 2.5, "wind": { "strength": 0.25, "gustiness": 0.6, "scale": 5 }
+            "species_zones": 2.5, "wind": { "strength": 0.25, "gustiness": 0.6, "scale": 5 }, "litter": 600
         }),
         _ => panic!("Unknown grass conditions preset {}", name),
     };
@@ -867,6 +880,7 @@ impl Conditions {
             max_altitude: number(&v, "max_altitude"),
             altitude_fade: number(&v, "altitude_fade").max(1e-6),
             species_zones: number(&v, "species_zones").max(0.),
+            litter: number(&v, "litter").max(0.),
         }
     }
 }
@@ -1051,6 +1065,9 @@ struct Generator<'a> {
     clump_density: f64,
     /// Each species' first look in the field's list.
     first_look: &'a [usize],
+    /// The dead blades of litter, and their look.
+    litter: &'a Species,
+    litter_look: usize,
 }
 
 impl Generator<'_> {
@@ -1115,6 +1132,19 @@ impl Generator<'_> {
                 },
                 Kind::Flower(f) => self.flower(sp, f, look, centre, patch, &mut rng, &mut blades),
                 Kind::Clover(cl) => self.clover(sp, cl, look, centre, patch, &mut rng, &mut blades),
+            }
+        }
+        if self.conditions.litter > 0. {
+            // From a random sequence of its own, so litter doesn't change the living plants.
+            let mut rng = Pcg32::new(hash(self.seed ^ hash(((tx as u64) << 32) | tz as u64)), 0x1177e7);
+            let expected = self.conditions.litter * w * d;
+            let count = expected.floor() as usize + usize::from(rng.next_f64() < expected.fract());
+            for _ in 0 .. count {
+                let (x, z) = (x0 + rng.next_f64() * w, z0 + rng.next_f64() * d);
+                let y = self.grid.height(x, z);
+                let (patch, grows) = self.vigour(x, z, y, &self.grid.normal(x, z));
+                if rng.next_f64() >= grows * (0.3 + 0.7 * patch) { continue }
+                blades.push(self.blade(self.litter, self.litter_look, Vector3::new(x, y, z), x, z, patch, &mut rng));
             }
         }
         blades
@@ -1483,6 +1513,9 @@ impl GrassField {
             first_look.push(looks.len());
             looks.extend(sp.looks.iter().cloned());
         }
+        let litter = Species::from_json(&json!("litter"));
+        let litter_look = looks.len();
+        looks.extend(litter.looks.iter().cloned());
         assert!(looks.len() <= 256, "grass can have at most 256 looks (about 50 species of flowers)");
         let gmax = grid.max();
         let min = (min.0.max(grid.min.0), min.1.max(grid.min.1));
@@ -1490,6 +1523,7 @@ impl GrassField {
         let generator = Generator {
             grid, species: &species, conditions, noise: PerlinNoise::new(), seed,
             min, max, clump_density: density.max(0.) / per_clump, first_look: &first_look,
+            litter: &litter, litter_look,
         };
         let tiles_x = ((max.0 - min.0) / TILE).ceil().max(0.) as usize;
         let tiles_z = ((max.1 - min.1) / TILE).ceil().max(0.) as usize;
@@ -1864,10 +1898,11 @@ mod tests {
     fn test_wild_plants_grow_their_parts() {
         let species = json!(["timothy", "wild_oat", "daisy", { "preset": "dandelion", "flower": { "clock_fraction": 0.5 } }, "red_clover"]);
         let (grid, f) = field(json!("lush"), species, 40.);
-        assert_eq!(f.looks.len(), 3 + 3 + 5 + 5 + 4);
+        // And one for litter, which lush grass hasn't.
+        assert_eq!(f.looks.len(), 3 + 3 + 5 + 5 + 4 + 1);
         // Every look is used, but for the seeds of the daisy, which doesn't go to seed: each kind
         // of part has grown somewhere.
-        for look in (0 .. f.looks.len()).filter(|&l| l != 6 + PAPPUS) {
+        for look in (0 .. f.looks.len() - 1).filter(|&l| l != 6 + PAPPUS) {
             assert!(f.blades.iter().any(|b| b.look as usize == look), "no parts with look {}", look);
         }
         for b in &f.blades {
@@ -1881,6 +1916,24 @@ mod tests {
                 assert!(b.lo[k] <= b.v[0][k].min(b.v[1][k]).min(b.v[2][k]) && b.hi[k] >= b.v[0][k].max(b.v[1][k]).max(b.v[2][k]));
             }
         }
+    }
+
+    #[test]
+    fn test_litter_lies_on_the_ground_under_unchanged_grass() {
+        let (_, bare) = field(json!("lush"), json!(["meadow"]), 100.);
+        let (grid, f) = field(json!({ "preset": "lush", "litter": 200 }), json!(["meadow"]), 100.);
+        let litter_look = f.looks.len() - 1;
+        let (litter, living): (Vec<&Blade>, Vec<&Blade>) = f.blades.iter().partition(|b| b.look as usize == litter_look);
+        assert_eq!(living.len(), bare.len());
+        assert_eq!(living[100].v, bare.blades[100].v);
+        // 64 m^2 at 200 per m^2.
+        assert!((litter.len() as f64 - 64. * 200.).abs() < 64. * 200. * 0.05, "{} bits of litter", litter.len());
+        // Most of it lies flat, its tip near the ground.
+        let flat = litter.iter().filter(|b| {
+            let tip = b.point(1.);
+            tip.y - grid.height(tip.x, tip.z) < 0.05
+        }).count();
+        assert!(flat as f64 > 0.7 * litter.len() as f64, "{} of {} flat", flat, litter.len());
     }
 
     #[test]

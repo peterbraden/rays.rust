@@ -41,6 +41,7 @@ mod material {
     pub mod grass;
     pub mod bump;
     pub mod rock;
+    pub mod soil;
     pub mod phase;
     pub mod diffraction;
     pub mod ice_halos;

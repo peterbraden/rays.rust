@@ -126,6 +126,11 @@ impl RenderContext {
     }
 
     /// The fewest samples any pixel has.
+    /// How many samples pixel (x, y) has.
+    pub fn samples_at(&self, x: usize, y: usize) -> usize {
+        self.samples[y * self.width + x]
+    }
+
     pub fn min_samples(&self) -> usize {
         self.samples.iter().copied().min().unwrap_or(0)
     }

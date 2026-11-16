@@ -367,13 +367,11 @@ impl SmoothMesh {
 impl Geometry for SmoothMesh {
     fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
         let p = &self.triangles.positions;
-        Some(self.triangles.triangles.iter().map(|t| {
-            let n = [self.normals[t[0] as usize], self.normals[t[1] as usize], self.normals[t[2] as usize]];
-            crate::wavefront::flat::Prim::Triangle {
-                v: [p[t[0] as usize], p[t[1] as usize], p[t[2] as usize]],
-                // A vertex without a normal: the face's stands in, as for the recursive tracer.
-                n: n.iter().all(|n| n.norm_squared() > 0.).then_some(n),
-            }
+        Some(self.triangles.triangles.iter().enumerate().map(|(i, t)| {
+            // A vertex without a normal: the face's stands in, as in `normal_at`.
+            let face = self.triangles.face_normal(i);
+            let n = t.map(|v| { let n = self.normals[v as usize]; if n == Vector3::zeros() { face } else { n } });
+            crate::wavefront::flat::Prim::Triangle { v: [p[t[0] as usize], p[t[1] as usize], p[t[2] as usize]], n: Some(n) }
         }).collect())
     }
 

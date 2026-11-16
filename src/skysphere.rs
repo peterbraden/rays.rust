@@ -576,10 +576,17 @@ impl SkyMaterial {
     /// The light of a `space` background reaching the start of `r` through the air: by day
     /// the sky outshines it; at night, and from high up, it shows. Black for any other
     /// background, which the sky hides (as it always has).
-    fn space_seen(&self, r: &Ray, s: &Scene) -> Vector3<f64> {
+    ///
+    /// Where the sky's own light, `sky`, is so bright that space could add no more than its
+    /// `threshold` share of it (by a cheap bound on space's luminance in that direction, the
+    /// air letting all of it through), it isn't looked at: by day, hardly anywhere.
+    fn space_seen(&self, r: &Ray, s: &Scene, sky: &Vector3<f64>) -> Vector3<f64> {
         match &s.render.background {
             crate::scene::Background::Space(space) => {
                 let d = r.rd.normalize();
+                if space.bound(&d) <= space.threshold * crate::procedural::space::luminance(sky) {
+                    return Vector3::zeros();
+                }
                 let t = self.transmittance_to_space(&Ray { ro: r.ro, rd: d });
                 if t.max() <= 0. { Vector3::zeros() } else { space.radiance(&d).rgb.component_mul(&t) }
             },
@@ -591,7 +598,8 @@ impl SkyMaterial {
 impl MaterialModel for SkyMaterial {
     fn scatter(&self, r: &Ray, _intersection: &Intersection, s: &Scene) -> ScatteredRay {
         // Linear light; display encoding happens at output.
-        let v = self.radiance(r) * SKY_CALIBRATION + self.space_seen(r, s);
+        let v = self.radiance(r) * SKY_CALIBRATION;
+        let v = v + self.space_seen(r, s, &v);
         ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
     }
 }
@@ -872,7 +880,8 @@ impl MaterialModel for LUTSky {
         let v = match looked_up {
             Some((rayleigh, mie, multiple)) => self.sky.apply_phase(&d, rayleigh, mie, multiple),
             None => self.sky.radiance(r),
-        } * SKY_CALIBRATION + self.sky.space_seen(r, s);
+        } * SKY_CALIBRATION;
+        let v = v + self.sky.space_seen(r, s, &v);
         ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
     }
 }
@@ -1174,7 +1183,7 @@ mod tests {
             "camera": {{ "location": [0, 10, 0], "lookat": [0, 1000, 0], "up": [0, 0, 1], "angle": 0.5 }},
             "objects": [ {{ "type": "skysphere", "sun_direction": {} }} ]
         }}"#, background, sun));
-        let space = r#"{ "type": "space", "stars": false, "nebulae": false, "galaxies": false,
+        let space = r#"{ "type": "space", "stars": false, "nebulae": false, "galaxies": false, "threshold": 0,
             "galactic_pole": [1, 0, 0], "galactic_centre": [0, 1, 0] }"#;
         let r = Ray { ro: Vector3::new(0., 10., 0.), rd: Vector3::new(0., 1., 0.) };
         let seen = |s: &crate::scene::Scene| {
@@ -1189,8 +1198,16 @@ mod tests {
         assert!(glow.y > 0.);
         for (sun, (with, without)) in [("[0, -0.5, 1]", (seen(&night), seen(&scene("[0, -0.5, 1]", "[0, 0, 0]")))),
                                        ("[0, 1, 0.2]", (seen(&scene("[0, 1, 0.2]", space)), seen(&scene("[0, 1, 0.2]", "[0, 0, 0]"))))] {
-            assert!((with - without - through).norm() < 1e-9 * through.norm().max(1.), "sun {}: {} - {} vs {}", sun, with, without, through);
+            assert!((with - without - through).norm() < 1e-6 * through.norm(), "sun {}: {} - {} vs {}", sun, with, without, through);
         }
+        // At the physical scale it is far below the day sky's light, so by default (a
+        // threshold of 1e-3) it isn't computed there, but is at night.
+        let space = space.replace(r#""threshold": 0,"#, "");
+        let (day, plain_day) = (seen(&scene("[0, 1, 0.2]", &space)), seen(&scene("[0, 1, 0.2]", "[0, 0, 0]")));
+        assert_eq!(day, plain_day);
+        assert!(through.y < 1e-6 * plain_day.y, "{} vs {}", through, plain_day);
+        let (n, plain_night) = (seen(&scene("[0, -0.5, 1]", &space)), seen(&scene("[0, -0.5, 1]", "[0, 0, 0]")));
+        assert!(n.y > plain_night.y, "{} vs {}", n, plain_night);
     }
 
     #[test]

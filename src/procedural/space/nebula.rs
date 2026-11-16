@@ -14,20 +14,32 @@
 //!   hydrogen-red at its rim, about its white dwarf. Small.
 //! - `dark`: dust alone, cold and unlit, hiding what lies behind it.
 //!
+//! Their brightness is a surface brightness, in magnitudes per square arcsecond, where their
+//! gas is densest: by default 21 for emission nebulae (the brighter H II regions, the Lagoon
+//! or the North America nebula, are 20 to 22 in V), 22 for reflection nebulae, 19 for the
+//! shells of planetary nebulae (which are small and bright: the Ring nebula's is about 18).
+//!
 //! Each returns the light it emits towards the viewer and the optical depth of its dust,
 //! which dims what lies behind (`Space::radiance`).
 use crate::na::Vector3;
 use crate::geometry::Pcg32;
 use crate::noise::SeededNoise;
 use crate::scenefile::SceneFile;
-use super::{GalacticFrame, mix, smoothstep, tangent_basis, warped_fbm};
+use super::{GalacticFrame, Photometry, luminance, mix, smoothstep, tangent_basis, warped_fbm};
 use serde_json::Value;
 
-/// The colours of the emission lines, as linear sRGB: H-alpha at 656 nm is outside the gamut,
-/// a red with some blue added by H-beta (486 nm) in the same gas; O III at 501 nm a blue-green.
+/// The colours of the emission lines, as linear sRGB (made unit luminance where they are
+/// used, `colour`): H-alpha at 656 nm is outside the gamut, a red with some blue added by
+/// H-beta (486 nm) in the same gas; O III at 501 nm a blue-green.
 const H_ALPHA: [f64; 3] = [1., 0.12, 0.22];
 const O_III: [f64; 3] = [0.1, 0.85, 0.75];
 const REFLECTION: [f64; 3] = [0.35, 0.55, 1.];
+
+/// `c` scaled to unit luminance.
+fn colour(c: [f64; 3]) -> Vector3<f64> {
+    let c = Vector3::from(c);
+    c / luminance(&c)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Kind {
@@ -44,6 +56,7 @@ pub struct Nebula {
     radius: f64,
     /// The cosine of the angle beyond which it shows nothing.
     cos_reach: f64,
+    /// Its radiance (luminance) where its gas is densest.
     brightness: f64,
     /// The optical depth of its dust at its thickest.
     dust: f64,
@@ -65,7 +78,8 @@ fn kind(name: &str) -> Kind {
 }
 
 impl Nebula {
-    /// A nebula of `kind` at unit `centre`, `radius` radians across, its shape from `seed`.
+    /// A nebula of `kind` at unit `centre`, `radius` radians across, of radiance `brightness`
+    /// where densest, its shape from `seed`.
     pub fn new(kind: Kind, centre: Vector3<f64>, radius: f64, brightness: f64, dust: f64, seed: u64) -> Nebula {
         let mut rng = Pcg32::new(mix(seed), 0x9eb);
         let centre = centre.normalize();
@@ -78,16 +92,17 @@ impl Nebula {
         Nebula { kind, centre, radius, cos_reach: reach.cos(), brightness, dust, axes, elongation, noise: SeededNoise::new(mix(seed ^ 0xc10d)) }
     }
 
-    /// From its description: `type`, `direction`, `radius` (degrees), `brightness`, `dust`,
-    /// `seed`.
-    pub fn parse(o: &Value, seed: u64) -> Nebula {
+    /// From its description: `type`, `direction`, `radius` (degrees), `surface_brightness`
+    /// (magnitudes per square arcsecond), `brightness` (scaling that), `dust`, `seed`.
+    pub fn parse(o: &Value, seed: u64, photometry: &Photometry) -> Nebula {
         let k = kind(o["type"].as_str().unwrap_or("emission"));
-        let (brightness, dust) = defaults(k);
+        let (mu, dust) = defaults(k);
+        let brightness = photometry.radiance(SceneFile::parse_number(&o["surface_brightness"], mu));
         Nebula::new(
             k,
             SceneFile::parse_vec3_def(o, "direction", Vector3::new(0., 0., 1.)),
             SceneFile::parse_number(&o["radius"], if k == Kind::Planetary { 0.5 } else { 5. }).to_radians(),
-            SceneFile::parse_number(&o["brightness"], brightness),
+            brightness * SceneFile::parse_number(&o["brightness"], 1.),
             SceneFile::parse_number(&o["dust"], dust),
             SceneFile::parse_int(&o["seed"], seed as usize) as u64,
         )
@@ -116,14 +131,14 @@ impl Nebula {
                 let core = smoothstep(0.65, 0.0, edge) * gas;
                 // Dark lanes of dust across it.
                 let lanes = smoothstep(0.1, 0.45, self.noise.fbm(p * 1.7 + Vector3::new(-7., 2., 5.), 5)) * envelope;
-                let light = Vector3::from(H_ALPHA) * density + Vector3::from(O_III) * (0.8 * core * core);
+                let light = colour(H_ALPHA) * density + colour(O_III) * (0.8 * core * core);
                 let shaded = light * (self.brightness * (-2. * lanes).exp());
                 (shaded, self.dust * lanes)
             },
             Kind::Reflection => {
                 let gas = smoothstep(-0.3, 0.5, warped_fbm(&self.noise, p * 0.7, 0.8, 5));
                 let density = gas * smoothstep(1.0, 0.0, edge).powf(1.5);
-                (Vector3::from(REFLECTION) * (self.brightness * density), self.dust * density)
+                (colour(REFLECTION) * (self.brightness * density), self.dust * density)
             },
             Kind::Planetary => {
                 let wobble = 1. + 0.15 * self.noise.fbm(p * 1.5, 4);
@@ -131,7 +146,7 @@ impl Nebula {
                 let shell = (-((rr - 0.65) / 0.18).powi(2)).exp();
                 let inside = smoothstep(0.75, 0.2, rr);
                 let star = (-(r / 0.04).powi(2)).exp() * 3.;
-                let light = Vector3::from(H_ALPHA) * shell + Vector3::from(O_III) * (0.7 * inside) + Vector3::repeat(star);
+                let light = colour(H_ALPHA) * shell + colour(O_III) * (0.7 * inside) + Vector3::repeat(star);
                 (light * self.brightness, 0.)
             },
             Kind::Dark => {
@@ -142,24 +157,42 @@ impl Nebula {
     }
 }
 
-/// The default brightness and dust of each kind.
+impl Nebula {
+    /// A bound on the luminance of its light in unit direction `d`: none outside its patch;
+    /// within it, its densest gas, with the oxygen core (and the central star, for a
+    /// planetary nebula) on top.
+    pub fn bound(&self, d: &Vector3<f64>) -> f64 {
+        if d.dot(&self.centre) < self.cos_reach {
+            return 0.;
+        }
+        self.brightness * match self.kind {
+            Kind::Emission => 1.8,
+            Kind::Reflection => 1.,
+            Kind::Planetary => 4.7,
+            Kind::Dark => 0.,
+        }
+    }
+}
+
+/// The default surface brightness (magnitudes per square arcsecond) and dust of each kind.
 fn defaults(k: Kind) -> (f64, f64) {
     match k {
-        Kind::Emission => (0.3, 0.8),
-        Kind::Reflection => (0.12, 0.3),
-        Kind::Planetary => (0.4, 0.),
-        Kind::Dark => (0., 2.5),
+        Kind::Emission => (21., 0.8),
+        Kind::Reflection => (22., 0.3),
+        Kind::Planetary => (19., 0.),
+        Kind::Dark => (f64::INFINITY, 2.5),
     }
 }
 
 /// The nebulae described by `v`: none if it is `false`; a list of nebulae if it is a list; or
 /// else (an object, or absent) `count` of them scattered at random about the galactic plane,
-/// with `brightness` and `size` (the range of radii, in degrees) and `kinds` (the shares of
+/// each a magnitude or so fainter than its kind's default at random, with `brightness` (scaling
+/// their light) and `size` (the range of radii, in degrees) and `kinds` (the shares of
 /// emission, reflection, planetary and dark nebulae).
-pub fn parse(v: &Value, seed: u64, frame: &GalacticFrame) -> Vec<Nebula> {
+pub fn parse(v: &Value, seed: u64, frame: &GalacticFrame, photometry: &Photometry) -> Vec<Nebula> {
     match v {
         Value::Bool(false) => vec![],
-        Value::Array(list) => list.iter().enumerate().map(|(i, o)| Nebula::parse(o, mix(seed ^ (i as u64 + 1)))).collect(),
+        Value::Array(list) => list.iter().enumerate().map(|(i, o)| Nebula::parse(o, mix(seed ^ (i as u64 + 1)), photometry)).collect(),
         _ => {
             let count = SceneFile::parse_int(&v["count"], 16);
             let scale = SceneFile::parse_number(&v["brightness"], 1.);
@@ -189,8 +222,9 @@ pub fn parse(v: &Value, seed: u64, frame: &GalacticFrame) -> Vec<Nebula> {
                 if k == Kind::Planetary {
                     radius *= 0.12;
                 }
-                let (brightness, dust) = defaults(k);
-                Nebula::new(k, frame.direction(l, b), radius.to_radians(), brightness * scale, dust, mix(seed ^ (0x1000 + i as u64)))
+                let (mu, dust) = defaults(k);
+                let brightness = photometry.radiance(mu + 1.2 * rng.next_f64()) * scale;
+                Nebula::new(k, frame.direction(l, b), radius.to_radians(), brightness, dust, mix(seed ^ (0x1000 + i as u64)))
             }).collect()
         },
     }
@@ -209,7 +243,7 @@ mod tests {
     #[test]
     fn test_nebula_is_confined_to_its_patch() {
         for k in ["emission", "reflection", "planetary", "dark"] {
-            let n = Nebula::parse(&serde_json::json!({ "type": k, "direction": [0, 0, 1], "radius": 5 }), 2);
+            let n = Nebula::parse(&serde_json::json!({ "type": k, "direction": [0, 0, 1], "radius": 5 }), 2, &Photometry::new(1.));
             let (light, dust) = n.sample(&Vector3::new(0., 1., 0.));
             assert_eq!((light, dust), (Vector3::zeros(), 0.));
             // Something shows within it.
@@ -225,7 +259,7 @@ mod tests {
     #[test]
     fn test_random_nebulae_lie_near_the_plane() {
         let f = GalacticFrame::new(Vector3::new(0., 1., 0.), Vector3::new(1., 0., 0.));
-        let ns = parse(&serde_json::json!({ "count": 50 }), 1, &f);
+        let ns = parse(&serde_json::json!({ "count": 50 }), 1, &f, &Photometry::new(1.));
         assert_eq!(ns.len(), 50);
         assert!(ns.iter().all(|n| n.centre.y.abs() < 0.5));
         assert!(ns.iter().any(|n| n.kind == Kind::Dark) && ns.iter().any(|n| n.kind == Kind::Emission));

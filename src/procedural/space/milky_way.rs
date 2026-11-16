@@ -11,6 +11,12 @@
 //! are mottled into star clouds by noise. Their colours are those of their populations: the
 //! bulge's old, cool stars yellow; the disc's, with its young hot stars, whiter.
 //!
+//! Its brightness is set by the disc's surface brightness at the galactic centre, before the
+//! bulge and the clouds: 21 magnitudes per square arcsecond by default, so that its brightest
+//! clouds, in the bulge, are about 20 (the Sagittarius star cloud's, seen from a dark site;
+//! Roach and Gordon, "The Light of the Night Sky", 1973, chapter 6), its fainter stretches 22
+//! to 23.
+//!
 //! The dust is a narrower layer along the plane, its density broken up by domain-warped noise
 //! (`warped_fbm`) into filaments and clouds, thickest towards the centre; and a few
 //! scattered clouds above and below it. Its optical depth (at green) is returned for the caller
@@ -18,11 +24,15 @@
 use crate::na::Vector3;
 use crate::noise::SeededNoise;
 use crate::scenefile::SceneFile;
-use super::{luminance, mix, smoothstep, warped_fbm};
+use super::{Photometry, luminance, mix, smoothstep, warped_fbm};
 use serde_json::Value;
 use std::f64::consts::PI;
 
+/// The greatest the star clouds' mottling can make the glow (`glow`).
+const MAX_CLOUDS: f64 = 4.73;
+
 pub struct MilkyWay {
+    /// The disc's radiance at the galactic centre, before the bulge and the clouds.
     brightness: f64,
     dust: f64,
     disc_colour: Vector3<f64>,
@@ -31,11 +41,21 @@ pub struct MilkyWay {
     dust_noise: SeededNoise,
 }
 
+/// The glow of the disc and the bulge at galactic longitude `l` and latitude `b`, before the
+/// clouds, relative to the disc's at the centre.
+fn profile(l: f64, b: f64) -> (f64, f64) {
+    let scale = 0.06 + 0.05 * l.abs() / PI;
+    let disc = (-b.abs() / scale).exp() * (0.3 + 0.7 * (-(l / 1.4).powi(2)).exp());
+    let bulge = 1.3 * (-(l * l + (b / 0.75).powi(2)) / (2. * 0.2 * 0.2)).exp();
+    (disc, bulge)
+}
+
 impl MilkyWay {
-    pub fn parse(o: &Value, seed: u64) -> MilkyWay {
+    pub fn parse(o: &Value, seed: u64, photometry: &Photometry) -> MilkyWay {
         let unit = |c: Vector3<f64>| c / luminance(&c);
         MilkyWay {
-            brightness: SceneFile::parse_number(&o["brightness"], 0.12),
+            brightness: photometry.radiance(SceneFile::parse_number(&o["surface_brightness"], 21.))
+                * SceneFile::parse_number(&o["brightness"], 1.),
             dust: SceneFile::parse_number(&o["dust"], 1.),
             disc_colour: unit(SceneFile::parse_vec3_def(o, "disc_colour", Vector3::new(0.85, 0.9, 1.))),
             bulge_colour: unit(SceneFile::parse_vec3_def(o, "bulge_colour", Vector3::new(1., 0.82, 0.6))),
@@ -50,12 +70,18 @@ impl MilkyWay {
         if self.brightness <= 0. {
             return Vector3::zeros();
         }
-        let scale = 0.06 + 0.05 * l.abs() / PI;
-        let disc = (-b.abs() / scale).exp() * (0.3 + 0.7 * (-(l / 1.4).powi(2)).exp());
-        let bulge = 1.3 * (-(l * l + (b / 0.75).powi(2)) / (2. * 0.2 * 0.2)).exp();
+        let (disc, bulge) = profile(l, b);
         // Star clouds: brighter and darker patches along the band.
+        // (fbm is within [-1, 1], so this is at most 3.3^1.3: MAX_CLOUDS.)
         let clouds = (1. + 1.5 * self.noise.fbm(d * 4., 4) + 0.8 * self.noise.fbm(d * 23., 4)).max(0.1).powf(1.3);
         (self.disc_colour * disc + self.bulge_colour * bulge) * (clouds * self.brightness)
+    }
+
+    /// A bound on the luminance of the glow at galactic longitude `l` and latitude `b`: the
+    /// clouds at their brightest (its colours are of unit luminance).
+    pub fn bound(&self, l: f64, b: f64) -> f64 {
+        let (disc, bulge) = profile(l, b);
+        self.brightness * (disc + bulge) * MAX_CLOUDS
     }
 
     /// The optical depth (at green) of the galaxy's dust in unit direction `d`, at galactic
@@ -83,7 +109,7 @@ mod tests {
 
     #[test]
     fn test_band_is_brightest_in_the_plane_and_towards_the_centre() {
-        let m = MilkyWay::parse(&Value::Null, 1);
+        let m = MilkyWay::parse(&Value::Null, 1, &Photometry::new(1.));
         let f = GalacticFrame::new(Vector3::new(0., 1., 0.), Vector3::new(1., 0., 0.));
         // Averaged over longitudes, to see past the clouds.
         let mean = |b: f64, ls: &[f64]| ls.iter().map(|&l| luminance(&m.glow(&f.direction(l, b), l, b))).sum::<f64>() / ls.len() as f64;
@@ -96,7 +122,7 @@ mod tests {
 
     #[test]
     fn test_dust_lies_along_the_plane() {
-        let m = MilkyWay::parse(&Value::Null, 1);
+        let m = MilkyWay::parse(&Value::Null, 1, &Photometry::new(1.));
         let f = GalacticFrame::new(Vector3::new(0., 1., 0.), Vector3::new(1., 0., 0.));
         let mean = |b: f64| (0..360).map(|i| {
             let l = -PI + i as f64 * PI / 180.;

@@ -18,6 +18,16 @@
 //! plane) and the galactic centre, given in the scene's coordinates, so the band of the Milky
 //! Way can be laid across the sky wherever the scene wants it.
 //!
+//! ## Brightness
+//!
+//! Everything is on a physical scale, relative to the sun's irradiance (`Photometry`): stars
+//! by their magnitudes, and extended objects by their surface brightnesses in magnitudes per
+//! square arcsecond, both against the sun's apparent magnitude, -26.74. So, beside a sunlit
+//! scene, they are as faint as they are in life: the Milky Way's brightest clouds, at about 20
+//! mag/arcsec², are some 10^-8 of the sun's irradiance per steradian, and a sixth-magnitude
+//! star 10^-13 of it. Seeing them takes the long exposure (`output.exposure`) a night sky
+//! takes. `brightness` scales it all, for when looks matter more.
+//!
 //! The light composes as it would: the stars, the Milky Way's glow and the galaxies are seen
 //! through the dust (the Milky Way's lanes and any dark nebulae), and the emission nebulae glow
 //! in front of it. Seen from inside an atmosphere, the skysphere lets all of this through by
@@ -69,6 +79,40 @@ impl GalacticFrame {
     /// The unit direction at galactic longitude `l` and latitude `b`.
     pub fn direction(&self, l: f64, b: f64) -> Vector3<f64> {
         (self.centre * l.cos() + self.east * l.sin()) * b.cos() + self.pole * b.sin()
+    }
+}
+
+/// The sun's apparent visual magnitude (V), seen from the Earth: the reference against which
+/// the magnitudes of everything else become irradiances. Allen's Astrophysical Quantities, 4th
+/// ed., 2000, section 14.7.
+pub const SUN_MAGNITUDE: f64 = -26.74;
+/// One square arcsecond, in steradians: (π / 648000)².
+pub const ARCSEC2: f64 = 2.350443e-11;
+
+/// Magnitudes as light, on the scene's scale: a source of magnitude m gives an irradiance
+/// 10^(-0.4 (m - m_sun)) times the sun's, and a surface of m magnitudes per square arcsecond
+/// that irradiance from each square arcsecond.
+#[derive(Debug, Clone, Copy)]
+pub struct Photometry {
+    /// The irradiance of a magnitude-zero source.
+    zero: f64,
+}
+
+impl Photometry {
+    /// For a sun whose irradiance (its luminance, as the scene's `sun` gives it) is
+    /// `sun_irradiance`.
+    pub fn new(sun_irradiance: f64) -> Photometry {
+        Photometry { zero: sun_irradiance * 10f64.powf(0.4 * SUN_MAGNITUDE) }
+    }
+
+    /// The irradiance of a point source of magnitude `m`.
+    pub fn irradiance(&self, m: f64) -> f64 {
+        self.zero * 10f64.powf(-0.4 * m)
+    }
+
+    /// The radiance of a surface of `mu` magnitudes per square arcsecond.
+    pub fn radiance(&self, mu: f64) -> f64 {
+        self.irradiance(mu) / ARCSEC2
     }
 }
 
@@ -157,8 +201,12 @@ pub fn warped_fbm(noise: &SeededNoise, p: Vector3<f64>, strength: f64, octaves: 
 /// The sky beyond the atmosphere: stars, the Milky Way, nebulae and galaxies.
 pub struct Space {
     pub frame: GalacticFrame,
-    /// Scales all of it.
+    /// Scales all of it (1 is the physical scale).
     pub brightness: f64,
+    /// Where seen through a skysphere: the share of the sky's own light below which the light
+    /// from space is not worth computing (it can add at most this much).
+    pub threshold: f64,
+
     pub stars: Option<stars::Stars>,
     pub milky_way: Option<milky_way::MilkyWay>,
     pub nebulae: Vec<nebula::Nebula>,
@@ -184,19 +232,36 @@ fn off(v: &Value) -> bool {
 
 impl Space {
     /// Space from its description (the `background` object), for a camera whose pixels are
-    /// `pixel_angle` radians across (0 if unknown): stars are drawn about a pixel wide.
-    pub fn parse(o: &Value, pixel_angle: f64) -> Space {
+    /// `pixel_angle` radians across (0 if unknown): stars are drawn about a pixel wide. The
+    /// photometric reference is `sun_irradiance` if given, else the scene's sun's
+    /// (`scene_sun`, its luminance), else 1.
+    pub fn parse(o: &Value, pixel_angle: f64, scene_sun: Option<f64>) -> Space {
         let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
         let frame = GalacticFrame::new(
             SceneFile::parse_vec3_def(o, "galactic_pole", Vector3::new(-0.35, 0.55, 0.75)),
             SceneFile::parse_vec3_def(o, "galactic_centre", Vector3::new(0.9, 0.2, -0.3)),
         );
         let pixel = if pixel_angle > 0. { pixel_angle } else { 1e-3 };
-        let milky_way = if off(&o["milky_way"]) { None } else { Some(milky_way::MilkyWay::parse(&o["milky_way"], seed)) };
-        let stars = if off(&o["stars"]) { None } else { Some(stars::Stars::parse(&o["stars"], seed, pixel, &frame)) };
-        let nebulae = nebula::parse(&o["nebulae"], seed, &frame);
-        let galaxies = galaxy::parse(&o["galaxies"], seed, &frame);
-        Space { frame, brightness: SceneFile::parse_number(&o["brightness"], 1.), stars, milky_way, nebulae, galaxies }
+        let photometry = Photometry::new(SceneFile::parse_number(&o["sun_irradiance"], scene_sun.unwrap_or(1.)));
+        let milky_way = if off(&o["milky_way"]) { None } else { Some(milky_way::MilkyWay::parse(&o["milky_way"], seed, &photometry)) };
+        let stars = if off(&o["stars"]) { None } else { Some(stars::Stars::parse(&o["stars"], seed, pixel, &frame, &photometry)) };
+        let nebulae = nebula::parse(&o["nebulae"], seed, &frame, &photometry);
+        let galaxies = galaxy::parse(&o["galaxies"], seed, &frame, &photometry);
+        Space {
+            frame, brightness: SceneFile::parse_number(&o["brightness"], 1.),
+            threshold: SceneFile::parse_number(&o["threshold"], 1e-3),
+            stars, milky_way, nebulae, galaxies,
+        }
+    }
+
+    /// A bound on the luminance of `radiance(d)`, far cheaper to find: no noise, and no stars
+    /// generated. Dust only dims, so it is left out.
+    pub fn bound(&self, d: &Vector3<f64>) -> f64 {
+        let (l, b) = self.frame.coordinates(d);
+        self.brightness * (self.stars.as_ref().map_or(0., |s| s.bound(d))
+            + self.milky_way.as_ref().map_or(0., |m| m.bound(l, b))
+            + self.nebulae.iter().map(|n| n.bound(d)).sum::<f64>()
+            + self.galaxies.iter().map(|g| g.bound(d)).sum::<f64>())
     }
 
     /// The radiance arriving from unit direction `d`.
@@ -268,6 +333,38 @@ mod tests {
     }
 
     #[test]
+    fn test_photometry() {
+        // The sun itself, and a star five magnitudes brighter than another is 100 times as
+        // bright.
+        let p = Photometry::new(6.);
+        assert!((p.irradiance(SUN_MAGNITUDE) - 6.).abs() < 1e-9);
+        assert!((p.irradiance(1.) / p.irradiance(6.) - 100.).abs() < 1e-9);
+        // 21 mag/arcsec² is about 4.3e-4 cd/m² for a sun of 1.27e5 lux (Allen, 4th ed.,
+        // section 15.2: 10.8e4 x 10^(-0.4 mu) cd/m² for mu in V).
+        let night = Photometry::new(1.27e5).radiance(21.);
+        assert!((night / (10.8e4 * 10f64.powf(-0.4 * 21.)) - 1.).abs() < 0.05, "{}", night);
+    }
+
+    #[test]
+    fn test_physical_scale_and_brightness() {
+        // Beside a sun of irradiance 1, the Milky Way is some 10^-8 per steradian; brightness
+        // scales it all.
+        let o = |b: f64| serde_json::json!({ "type": "space", "brightness": b, "stars": false, "nebulae": false, "galaxies": false,
+            "galactic_pole": [0, 1, 0], "galactic_centre": [1, 0, 0] });
+        let (one, more) = (Space::parse(&o(1.), 1e-3, None), Space::parse(&o(1e8), 1e-3, None));
+        let d = Vector3::new(1., 0., 0.);
+        let v = luminance(&one.radiance(&d).rgb);
+        assert!(v > 1e-9 && v < 1e-7, "{}", v);
+        assert!((luminance(&more.radiance(&d).rgb) / v - 1e8).abs() < 1e-3);
+        // The scene's sun sets the scale, unless sun_irradiance is given.
+        let lit = Space::parse(&o(1.), 1e-3, Some(6.));
+        assert!((luminance(&lit.radiance(&d).rgb) / v - 6.).abs() < 1e-9);
+        let mut given = o(1.);
+        given["sun_irradiance"] = serde_json::json!(2.);
+        assert!((luminance(&Space::parse(&given, 1e-3, Some(6.)).radiance(&d).rgb) / v - 2.).abs() < 1e-9);
+    }
+
+    #[test]
     fn test_reddening() {
         let t = reddening(1.);
         assert!(t.x > t.y && t.y > t.z);
@@ -277,18 +374,21 @@ mod tests {
     #[test]
     fn test_space_is_deterministic_and_finite() {
         let o = serde_json::json!({ "type": "space", "seed": 3 });
-        let (a, b) = (Space::parse(&o, 2e-3), Space::parse(&o, 2e-3));
-        for d in fibonacci_sphere(2000) {
+        let (a, b) = (Space::parse(&o, 2e-3, None), Space::parse(&o, 2e-3, None));
+        for d in fibonacci_sphere(20000) {
             let (x, y) = (a.radiance(&d), b.radiance(&d));
             assert_eq!(x, y);
             assert!(x.rgb.iter().all(|c| c.is_finite() && *c >= 0.), "{} at {}", x, d);
+            // Within its bound.
+            assert!(luminance(&x.rgb) <= a.bound(&d) * (1. + 1e-9), "{} vs {} at {}", luminance(&x.rgb), a.bound(&d), d);
         }
     }
 
     #[test]
     fn test_parts_can_be_turned_off() {
         let o = serde_json::json!({ "type": "space", "stars": false, "milky_way": false, "nebulae": false, "galaxies": false });
-        let s = Space::parse(&o, 1e-3);
+        let s = Space::parse(&o, 1e-3, None);
+        assert!(fibonacci_sphere(500).all(|d| s.bound(&d) == 0.));
         assert!(fibonacci_sphere(500).all(|d| s.radiance(&d) == Color::black()));
     }
 }

@@ -11,18 +11,26 @@
 //! seen (through more of it), up to a limit for its thickness. In the middle sits the bulge,
 //! round and yellow with old stars.
 //!
+//! Their brightness is the surface brightness of the core, in magnitudes per square arcsecond:
+//! about 18.5 by default (a pixel's worth of a bright galaxy's centre). A disc's centre is
+//! about 2.3 magnitudes fainter, near Freeman's law, 21.65 in B (K. C. Freeman, "On the Disks
+//! of Spiral and S0 Galaxies", ApJ 160, 1970, p. 811): galaxies are bright cores in faint
+//! haloes, their arms hard to see.
+//!
 //! An elliptical is an ellipse on the sky of axis ratio q, with a Sérsic profile,
 //! I = exp(-b (r / r_e)^(1/n)), n = 2: a bright core in a broad halo, yellow throughout.
 use crate::na::Vector3;
 use crate::geometry::Pcg32;
 use crate::noise::SeededNoise;
 use crate::scenefile::SceneFile;
-use super::{GalacticFrame, luminance, mix, smoothstep, tangent_basis};
+use super::{GalacticFrame, Photometry, luminance, mix, smoothstep, tangent_basis};
 use serde_json::Value;
 use std::f64::consts::{PI, TAU};
 
 const OLD_STARS: [f64; 3] = [1., 0.84, 0.64];
 const YOUNG_STARS: [f64; 3] = [0.7, 0.82, 1.];
+/// The surface brightness of a disc's centre, relative to the core's: 10^(-0.4 x 2.3).
+const DISC: f64 = 0.12;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Kind {
@@ -36,7 +44,7 @@ pub struct Galaxy {
     /// Its angular radius (the disc's or the ellipse's major axis), in radians.
     radius: f64,
     cos_reach: f64,
-    /// The surface brightness at its core.
+    /// Its radiance (luminance) at its core.
     brightness: f64,
     /// The disc's normal (spirals), and axes in its plane.
     normal: Vector3<f64>,
@@ -76,8 +84,9 @@ impl Galaxy {
     }
 
     /// From its description: `type` ("spiral" or "elliptical"), `direction`, `radius`
-    /// (degrees), `inclination` and `position_angle` (degrees), `brightness`, `arms`, `seed`.
-    pub fn parse(o: &Value, seed: u64) -> Galaxy {
+    /// (degrees), `inclination` and `position_angle` (degrees), `surface_brightness` (of its
+    /// core, magnitudes per square arcsecond), `brightness` (scaling that), `arms`, `seed`.
+    pub fn parse(o: &Value, seed: u64, photometry: &Photometry) -> Galaxy {
         let kind = match o["type"].as_str().unwrap_or("spiral") {
             "spiral" => Kind::Spiral,
             "elliptical" => Kind::Elliptical,
@@ -89,7 +98,7 @@ impl Galaxy {
             SceneFile::parse_number(&o["radius"], 1.).to_radians(),
             SceneFile::parse_number(&o["inclination"], 60.).to_radians(),
             SceneFile::parse_number(&o["position_angle"], 30.).to_radians(),
-            SceneFile::parse_number(&o["brightness"], 0.3),
+            photometry.radiance(SceneFile::parse_number(&o["surface_brightness"], 18.5)) * SceneFile::parse_number(&o["brightness"], 1.),
             SceneFile::parse_int(&o["arms"], 2),
             SceneFile::parse_int(&o["seed"], seed as usize) as u64,
         )
@@ -124,7 +133,7 @@ impl Galaxy {
                 let arm = (0.5 + 0.5 * wind.cos()).powi(3) * facing.abs().sqrt();
                 let knots = (1. + 1.2 * self.noise.fbm(Vector3::new(x, y, 0.) * 9., 4)).max(0.);
                 // The disc ends (smoothly) at its radius.
-                let disc = (-rho / 0.28).exp() * smoothstep(1.15, 0.8, rho) * (1. / facing.abs()).min(4.) * 0.5;
+                let disc = (-rho / 0.28).exp() * smoothstep(1.15, 0.8, rho) * (1. / facing.abs()).min(4.) * DISC;
                 let r_sky = w.norm();
                 let bulge = (-r_sky / 0.06).exp();
                 // Seen near edge on, the dust in the disc's midplane crosses the bulge as a dark
@@ -135,15 +144,29 @@ impl Galaxy {
             },
         }
     }
+
+    /// A bound on the luminance of its light in unit direction `d`: none outside it; within
+    /// it, the core, and the disc seen as obliquely as it brightens, its arms and knots at
+    /// their brightest (the colours are of unit luminance).
+    pub fn bound(&self, d: &Vector3<f64>) -> f64 {
+        if d.dot(&self.centre) < self.cos_reach {
+            return 0.;
+        }
+        self.brightness * match self.kind {
+            Kind::Elliptical => 1.,
+            Kind::Spiral => 1. + 4. * DISC * (1. + 1.8 * 2.2),
+        }
+    }
 }
 
 /// The galaxies described by `v`: none if `false`; a list if a list; or else `count` of them at
-/// random, away from the galactic plane, `size` (the range of radii, in degrees) across, with
-/// `brightness` scaling their surface brightness and `spirals` the share that are spirals.
-pub fn parse(v: &Value, seed: u64, frame: &GalacticFrame) -> Vec<Galaxy> {
+/// random, away from the galactic plane, `size` (the range of radii, in degrees) across, their
+/// cores 18.3 to 19.8 magnitudes per square arcsecond, with `brightness` scaling their light and
+/// `spirals` the share that are spirals.
+pub fn parse(v: &Value, seed: u64, frame: &GalacticFrame, photometry: &Photometry) -> Vec<Galaxy> {
     match v {
         Value::Bool(false) => vec![],
-        Value::Array(list) => list.iter().enumerate().map(|(i, o)| Galaxy::parse(o, mix(seed ^ (0x6000 + i as u64)))).collect(),
+        Value::Array(list) => list.iter().enumerate().map(|(i, o)| Galaxy::parse(o, mix(seed ^ (0x6000 + i as u64)), photometry)).collect(),
         _ => {
             let count = SceneFile::parse_int(&v["count"], 40);
             let scale = SceneFile::parse_number(&v["brightness"], 1.);
@@ -168,7 +191,7 @@ pub fn parse(v: &Value, seed: u64, frame: &GalacticFrame) -> Vec<Galaxy> {
                 // Random orientations, short of edge on (where a small one is a scratch).
                 let inclination = (0.25 + 0.75 * rng.next_f64()).acos();
                 let position_angle = rng.next_f64() * PI;
-                let brightness = scale * 0.5 * (0.5 + rng.next_f64());
+                let brightness = scale * photometry.radiance(18.3 + 1.5 * rng.next_f64());
                 let arms = if rng.next_f64() < 0.8 { 2 } else { 3 };
                 Galaxy::new(kind, d, radius.to_radians(), inclination, position_angle, brightness, arms, mix(seed ^ (0x7000 + i as u64)))
             }).collect()
@@ -183,7 +206,7 @@ mod tests {
     #[test]
     fn test_galaxy_is_brightest_at_its_core_and_confined() {
         for k in ["spiral", "elliptical"] {
-            let g = Galaxy::parse(&serde_json::json!({ "type": k, "direction": [0, 0, 1], "radius": 2 }), 1);
+            let g = Galaxy::parse(&serde_json::json!({ "type": k, "direction": [0, 0, 1], "radius": 2 }), 1, &Photometry::new(1.));
             let core = luminance(&g.radiance(&Vector3::new(0., 0., 1.)));
             let off = luminance(&g.radiance(&Vector3::new(0.01, 0.01, 1.).normalize()));
             assert!(core > off && off > 0., "{}: {} {}", k, core, off);
@@ -194,10 +217,10 @@ mod tests {
     #[test]
     fn test_inclined_disc_is_foreshortened() {
         // Seen at 70°, the disc's light along its minor axis falls off sooner than along its
-        // major axis.
+        // major axis (outside the round bulge).
         let g = Galaxy::parse(&serde_json::json!({ "type": "spiral", "direction": [0, 0, 1], "radius": 3,
-            "inclination": 70, "position_angle": 0 }), 1);
-        let along = |a: Vector3<f64>| (1..20).map(|i| luminance(&g.radiance(&(Vector3::new(0., 0., 1.) + a * (i as f64 * 0.002)).normalize()))).sum::<f64>();
+            "inclination": 70, "position_angle": 0 }), 1, &Photometry::new(1.));
+        let along = |a: Vector3<f64>| (8..30).map(|i| luminance(&g.radiance(&(Vector3::new(0., 0., 1.) + a * (i as f64 * 0.002)).normalize()))).sum::<f64>();
         let (major, minor) = (g.sky_axes.0, g.sky_axes.1);
         assert!(along(major) > 1.5 * along(minor), "{} vs {}", along(major), along(minor));
     }
@@ -205,7 +228,7 @@ mod tests {
     #[test]
     fn test_random_galaxies_avoid_the_plane() {
         let f = GalacticFrame::new(Vector3::new(0., 1., 0.), Vector3::new(1., 0., 0.));
-        let gs = parse(&Value::Null, 3, &f);
+        let gs = parse(&Value::Null, 3, &f, &Photometry::new(1.));
         assert_eq!(gs.len(), 40);
         assert!(gs.iter().all(|g| f.coordinates(&g.centre).1.abs() > 0.25));
     }

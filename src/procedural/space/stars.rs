@@ -16,7 +16,8 @@
 //! which grow as N(< m) ∝ 10^(0.47 m) over the naked-eye range (about 5000 stars brighter than
 //! sixth magnitude, 120,000 brighter than ninth; Allen's Astrophysical Quantities, 4th ed.,
 //! 2000, section 20.1). A magnitude sampled by inverting it is m = m_lim + log10(u) / 0.47, and
-//! a star's flux is 10^(-0.4 m) times that of a magnitude-zero star. Their colours are those of
+//! a star's flux is 10^(-0.4 m) times that of a magnitude-zero star, on the scene's physical
+//! scale (`Photometry`). Their colours are those of
 //! black bodies (`blackbody`), at temperatures drawn from the spectral classes in rough
 //! proportion to the bright stars' (more of the hot B and A stars, and the K giants, than a
 //! volume-limited count would have). They crowd towards the galactic plane, and more so towards
@@ -24,7 +25,7 @@
 use crate::na::Vector3;
 use crate::geometry::Pcg32;
 use crate::scenefile::SceneFile;
-use super::{GalacticFrame, blackbody, fibonacci_sphere, mix};
+use super::{GalacticFrame, Photometry, blackbody, fibonacci_sphere, mix};
 use serde_json::Value;
 use std::f64::consts::PI;
 
@@ -54,8 +55,11 @@ pub struct Stars {
     /// How many stars there are in the whole sky.
     pub count: f64,
     pub magnitude_limit: f64,
-    /// The flux of a magnitude-zero star, in radiance times steradians.
+    /// The flux of a magnitude-zero star (its irradiance).
     flux_zero: f64,
+    /// The total flux of each cell's stars, by face, row and column: what bounds their light
+    /// (`bound`) without generating them.
+    cell_flux: Vec<f32>,
     /// The angular standard deviation of a star's image, in radians.
     sigma: f64,
     /// How much of a star's colour to show: 0 white, 1 its black body's.
@@ -93,13 +97,13 @@ fn face_direction(f: usize, u: f64, v: f64) -> Vector3<f64> {
 }
 
 impl Stars {
-    pub fn parse(o: &Value, seed: u64, pixel_angle: f64, frame: &GalacticFrame) -> Stars {
+    pub fn parse(o: &Value, seed: u64, pixel_angle: f64, frame: &GalacticFrame, photometry: &Photometry) -> Stars {
         let count = SceneFile::parse_number(&o["count"], 40_000.).max(0.);
         let magnitude_limit = SceneFile::parse_number(&o["magnitude_limit"], 8.);
         // "size" is the standard deviation in degrees; by default half a pixel.
         let sigma = o["size"].as_f64().map_or(0.5 * pixel_angle, |s| s.to_radians()).max(1e-6);
-        // A magnitude-zero star's light: `brightness` times a pixel's solid angle.
-        let brightness = SceneFile::parse_number(&o["brightness"], 12.);
+        // `brightness` scales their light from the physical scale.
+        let brightness = SceneFile::parse_number(&o["brightness"], 1.);
         let plane = SceneFile::parse_number(&o["galactic_concentration"], 3.);
         let bulge = plane;
         // As many cells as keep two stars to each on average, but no smaller than a star's
@@ -110,7 +114,7 @@ impl Stars {
             blackbody(t)
         }).collect();
         let mut stars = Stars {
-            count, magnitude_limit, flux_zero: brightness * pixel_angle * pixel_angle, sigma,
+            count, magnitude_limit, flux_zero: brightness * photometry.irradiance(0.), cell_flux: vec![], sigma,
             saturation: SceneFile::parse_number(&o["saturation"], 1.),
             cells, plane, bulge, mean_density: 1., seed: mix(seed ^ 0x57a2), colours,
         };
@@ -119,6 +123,14 @@ impl Stars {
             let (l, b) = frame.coordinates(&d);
             stars.density(l, b)
         }).sum::<f64>() / n as f64;
+        let n = stars.cells;
+        let cell_flux = (0 .. 6 * n * n).map(|k| {
+            let mut total = 0.;
+            stars.each_star(k / (n * n), (k / n) % n, k % n, frame, |_, flux, _| total += flux);
+            // Rounded up, to stay a bound.
+            (total * (1. + 1e-6)) as f32
+        }).collect();
+        stars.cell_flux = cell_flux;
         stars
     }
 
@@ -174,12 +186,11 @@ impl Stars {
         }
     }
 
-    /// The radiance of the stars seen in unit direction `d`.
-    pub fn radiance(&self, d: &Vector3<f64>, frame: &GalacticFrame) -> Vector3<f64> {
+    /// Call `f` with each cell (face, row, column) whose stars may be seen in unit direction
+    /// `d`: the cell it falls in and those around it, on every face it is near.
+    fn neighbourhood(&self, d: &Vector3<f64>, mut f: impl FnMut(usize, usize, usize)) {
         let reach = REACH * self.sigma;
         let n = self.cells as isize;
-        let norm = 1. / (2. * PI * self.sigma * self.sigma);
-        let mut sum = Vector3::zeros();
         for face in 0..6 {
             let Some((u, v)) = face_coordinates(d, face) else { continue };
             // Near an edge, stars on the next face over may reach across it; a step of θ on a
@@ -192,29 +203,54 @@ impl Stars {
             let cj = (((v + 1.) / 2. * n as f64).floor() as isize).clamp(0, n - 1);
             for i in (ci - 1).max(0) ..= (ci + 1).min(n - 1) {
                 for j in (cj - 1).max(0) ..= (cj + 1).min(n - 1) {
-                    self.each_star(face, i as usize, j as usize, frame, |s, flux, colour| {
-                        let r2 = (d - s).norm_squared();
-                        if r2 < reach * reach {
-                            sum += colour * (flux * norm * (-r2 / (2. * self.sigma * self.sigma)).exp());
-                        }
-                    });
+                    f(face, i as usize, j as usize);
                 }
             }
         }
+    }
+
+    /// The radiance of the stars seen in unit direction `d`.
+    pub fn radiance(&self, d: &Vector3<f64>, frame: &GalacticFrame) -> Vector3<f64> {
+        let reach = REACH * self.sigma;
+        let norm = 1. / (2. * PI * self.sigma * self.sigma);
+        let mut sum = Vector3::zeros();
+        self.neighbourhood(d, |face, i, j| {
+            self.each_star(face, i, j, frame, |s, flux, colour| {
+                let r2 = (d - s).norm_squared();
+                if r2 < reach * reach {
+                    sum += colour * (flux * norm * (-r2 / (2. * self.sigma * self.sigma)).exp());
+                }
+            });
+        });
         sum
+    }
+
+    /// A bound on the luminance of `radiance(d)`, from the cells' total fluxes: each star's
+    /// peak is its flux over 2πσ², and its colour is of unit luminance (as is any mix of it
+    /// with white, `colour`).
+    pub fn bound(&self, d: &Vector3<f64>) -> f64 {
+        let n = self.cells;
+        let mut total = 0.;
+        self.neighbourhood(d, |face, i, j| total += self.cell_flux[(face * n + i) * n + j] as f64);
+        total / (2. * PI * self.sigma * self.sigma)
+    }
+
+    /// Call `f` with the direction, flux and colour of every star.
+    fn each(&self, frame: &GalacticFrame, mut f: impl FnMut(Vector3<f64>, f64, Vector3<f64>)) {
+        for face in 0..6 {
+            for i in 0..self.cells {
+                for j in 0..self.cells {
+                    self.each_star(face, i, j, frame, &mut f);
+                }
+            }
+        }
     }
 
     /// Every star, as (direction, flux, colour): for tests.
     #[cfg(test)]
     pub fn all(&self, frame: &GalacticFrame) -> Vec<(Vector3<f64>, f64, Vector3<f64>)> {
         let mut v = vec![];
-        for face in 0..6 {
-            for i in 0..self.cells {
-                for j in 0..self.cells {
-                    self.each_star(face, i, j, frame, |d, f, c| v.push((d, f, c)));
-                }
-            }
-        }
+        self.each(frame, |d, f, c| v.push((d, f, c)));
         v
     }
 }
@@ -225,7 +261,7 @@ mod tests {
 
     fn stars(o: Value) -> (Stars, GalacticFrame) {
         let frame = GalacticFrame::new(Vector3::new(0., 1., 0.), Vector3::new(1., 0., 0.));
-        (Stars::parse(&o, 7, 2e-3, &frame), frame)
+        (Stars::parse(&o, 7, 2e-3, &frame, &Photometry::new(1.)), frame)
     }
 
     #[test]
@@ -253,6 +289,18 @@ mod tests {
         let near_poles = all.iter().filter(|(d, _, _)| d.y.abs() > 0.8).count() as f64;
         // The two bands' solid angles: 2π x 0.4 and 2π x 0.4.
         assert!(near_plane > 2. * near_poles, "{} vs {}", near_plane, near_poles);
+    }
+
+    #[test]
+    fn test_star_brightness() {
+        // Physically: a magnitude-zero star gives 10^(-0.4 x 26.74) of the sun's irradiance;
+        // and none is brighter than about Sirius.
+        let (s, frame) = stars(serde_json::json!({}));
+        assert!((s.flux_zero / 10f64.powf(-0.4 * 26.74) - 1.).abs() < 1e-9);
+        let brightest = s.all(&frame).iter().map(|(_, f, _)| *f).fold(0., f64::max);
+        assert!(brightest <= s.flux_zero * 10f64.powf(0.4 * 1.5) * (1. + 1e-9));
+        let (doubled, _) = stars(serde_json::json!({ "brightness": 2 }));
+        assert!((doubled.flux_zero / s.flux_zero - 2.).abs() < 1e-9);
     }
 
     #[test]

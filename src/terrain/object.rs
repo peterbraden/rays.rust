@@ -464,6 +464,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams) -> SceneObject {
     let radius = params.planet.radius;
     let time = number(o, "time", 0.);
     let (lat, lon) = site(&o["domain"], &params);
+    println!("Landscape: the scene's origin is at {:.3}°, {:.3}°", lat, lon);
     let frame = Frame::new(lat, lon, radius, p.exaggeration);
 
     // The simulations, coarsest first, each driving the next at its edge.

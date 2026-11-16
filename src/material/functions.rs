@@ -332,7 +332,7 @@ fn sky_light_mis(env: &crate::environment::Environment, bsdf: &dyn BSDF, point: 
 
 /// Below this, the BSDF's density towards the sun times the disc's solid angle, the BSDF can't
 /// resolve the disc: the sun is treated as a point (`sun_light_mis`).
-const POINT_SUN: f64 = 1e-3;
+pub const POINT_SUN: f64 = 1e-3;
 
 /// The sun's light reflected towards `wo` by `bsdf` at `point`, for `direct_lighting_mis`.
 ///

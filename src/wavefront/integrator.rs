@@ -25,10 +25,12 @@
 //!
 //! Its estimates match the recursive tracer's: the same BSDFs (`material::bsdf`, `ggx`,
 //! `plastic`), the same Fresnel choices, light sampling by power with the power heuristic, and
-//! the same depth limit and Russian roulette, sphere lights sampled by their cone, the sky by
-//! its brightness, and each path's random numbers from its own Sobol' sample. One difference:
-//! the sun is always sampled as a point (the recursive tracer samples its disc for glossy
-//! lobes narrow enough to resolve it); and only the Sobol' sampler is used.
+//! the same depth limit and Russian roulette, sphere lights sampled by their cone, the sun's
+//! disc for lobes narrow enough to resolve it, the sky by its brightness, area lights by power
+//! or the light BVH, glossy lobes regularised after the first non-delta bounce
+//! (`ggx::regularised`), and each path's random numbers from its own Sobol' sample. Differences:
+//! only the Sobol' sampler; point lights are always all sampled (the light BVH chooses among
+//! area lights only).
 
 use crate::color::Color;
 use crate::shapes::geometry::Geometry;
@@ -63,6 +65,9 @@ struct Path {
     /// The path's own Sobol' sample (as the recursive tracer's `begin_sample`, but carried
     /// with the path rather than in the thread).
     sampler: crate::sobol::SampleState,
+    /// Whether the path has scattered off a non-delta BSDF, after which glossy lobes are
+    /// regularised (`ggx::regularised`).
+    scattered: bool,
     hit: Option<Hit>,
     done: bool,
 }
@@ -147,7 +152,7 @@ fn render_batch(s: &Scene, flat: &FlatScene, k: usize, range: std::ops::Range<us
             (0.5 + fx) / w as f64, (0.5 + fy) / h as f64)?;
         let ray = Ray { ro: ray.ro, rd: ray.rd.normalize() };
         Some(Path { pixel: index as u32, ray, beta: Color::white(), l: Color::black(), weight: weight * wx * wy,
-                    depth: 0, specular: true, prev_pdf: 0., sampler, hit: None, done: false })
+                    depth: 0, specular: true, prev_pdf: 0., sampler, scattered: false, hit: None, done: false })
     }).collect();
     let mut done = Vec::with_capacity(paths.len());
     let mut shadows: Vec<Shadow> = Vec::new();
@@ -241,9 +246,12 @@ fn gather_emission(p: &mut Path, s: &Scene, flat: &FlatScene) {
         p.l = p.l + p.beta * sky_radiance(&p.ray, s, flat) * w;
         // The sun's disc, seen by the camera or through a mirror (other rays weigh it nearly
         // nothing against sampling it as a point; `trace`).
-        if let Some(sun) = &s.sun
-            && p.specular {
-            p.l = p.l + p.beta * sun.disc_radiance(&p.ray.ro, &p.ray.rd);
+        if let Some(sun) = &s.sun {
+            // In full after a delta bounce; otherwise against sampling the disc, as `trace`.
+            let w = if p.specular { 1. } else { power_heuristic(p.prev_pdf, sun.disc_pdf(&p.ray.rd)) };
+            if w > 0. {
+                p.l = p.l + p.beta * sun.disc_radiance(&p.ray.ro, &p.ray.rd) * w;
+            }
         }
         p.done = true;
         return;
@@ -265,7 +273,7 @@ fn gather_emission(p: &mut Path, s: &Scene, flat: &FlatScene) {
             let w = match sampled {
                 Some(e) if !p.specular && s.render.sample_lights => {
                     let prim = &flat.prims[h.prim as usize];
-                    let light_pdf = flat.emitter_choice.probability(e as usize) * light_pdf(prim, &p.ray.ro, &h.point, &h.geometric);
+                    let light_pdf = flat.emitter_pmf(&p.ray.ro, e as usize) * light_pdf(prim, &p.ray.ro, &h.point, &h.geometric);
                     power_heuristic(p.prev_pdf, light_pdf)
                 },
                 _ => 1.,
@@ -286,10 +294,12 @@ fn shade(i: usize, p: &mut Path, s: &Scene, flat: &FlatScene, shadows: &mut Vec<
     let ns = if h.shading.dot(&wo) >= 0. { h.shading } else { -h.shading };
     let eps = offset(&h.point, s);
     let above = h.point + ng * eps;
+    // As `ggx::regularised`: a roughness floor once the path has scattered.
+    let floor = if p.scattered { s.render.regularise } else { 0. };
     let local = match flat.hit_material(h.prim).at(&h.point) {
         FlatMaterial::Diffuse { albedo } => Local::Lambert(LambertianBSDF { albedo: *albedo, normal: ns }),
         FlatMaterial::Plastic { albedo, refractive_index, roughness } => {
-            let alpha = roughness * roughness;
+            let alpha = (roughness * roughness).max(floor);
             if alpha >= MIN_ALPHA {
                 Local::Plastic(PlasticBSDF {
                     coat: GGX::new(alpha, Fresnel::Dielectric(*refractive_index), ns),
@@ -308,7 +318,7 @@ fn shade(i: usize, p: &mut Path, s: &Scene, flat: &FlatScene, shadows: &mut Vec<
         FlatMaterial::Conductor { optics, roughness } => {
             let (eta, k) = optics.current();
             let fresnel = Fresnel::Conductor { eta, k };
-            let alpha = roughness * roughness;
+            let alpha = (roughness * roughness).max(floor);
             if alpha >= MIN_ALPHA {
                 Local::Ggx(GGX::new(alpha, fresnel, ns))
             } else {
@@ -318,7 +328,7 @@ fn shade(i: usize, p: &mut Path, s: &Scene, flat: &FlatScene, shadows: &mut Vec<
         },
         FlatMaterial::Specular { albedo, roughness } => {
             let fresnel = Fresnel::Schlick(*albedo);
-            let alpha = roughness * roughness;
+            let alpha = (roughness * roughness).max(floor);
             if alpha >= MIN_ALPHA {
                 Local::Ggx(GGX::new(alpha, fresnel, ns))
             } else {
@@ -343,6 +353,7 @@ fn shade(i: usize, p: &mut Path, s: &Scene, flat: &FlatScene, shadows: &mut Vec<
         FlatMaterial::Emitter { .. } | FlatMaterial::Checker { .. } => unreachable!("emitters are retired before shading; checkerboards resolve to a square's material"),
     };
     let bsdf = local.bsdf();
+    p.scattered = true;
     // Next-event estimation: every point light, the sun (as a point), and one area light.
     for light in &s.lights {
         let to = light.position - above;
@@ -354,16 +365,27 @@ fn shade(i: usize, p: &mut Path, s: &Scene, flat: &FlatScene, shadows: &mut Vec<
             shadows.push(Shadow { path: i, ray: Ray { ro: above, rd: wi }, max: d2.sqrt(), contribution: c });
         }
     }
+    // The sun, as `functions::sun_light_mis`: a point for lobes that can't resolve its disc,
+    // and otherwise a direction on the disc weighted against the BSDF's density.
     if let Some(sun) = &s.sun {
-        let f = bsdf.eval(&wo, &sun.direction);
-        if f != Color::black() {
-            shadows.push(Shadow { path: i, ray: Ray { ro: above, rd: sun.direction }, max: crate::light::SUN_SHADOW_DISTANCE,
-                                  contribution: p.beta * f * sun.irradiance_at(&above) });
+        if bsdf.pdf(&wo, &sun.direction) * sun.solid_angle() < crate::material::functions::POINT_SUN {
+            let f = bsdf.eval(&wo, &sun.direction);
+            if f != Color::black() {
+                shadows.push(Shadow { path: i, ray: Ray { ro: above, rd: sun.direction }, max: crate::light::SUN_SHADOW_DISTANCE,
+                                      contribution: p.beta * f * sun.irradiance_at(&above) });
+            }
+        } else {
+            let (wi, radiance, pdf) = sun.sample_disc_at(&above, [p.u(), p.u()]);
+            let f = bsdf.eval(&wo, &wi);
+            if f != Color::black() && pdf > 0. {
+                let w = power_heuristic(pdf, bsdf.pdf(&wo, &wi));
+                shadows.push(Shadow { path: i, ray: Ray { ro: above, rd: wi }, max: crate::light::SUN_SHADOW_DISTANCE,
+                                      contribution: p.beta * f * radiance * (w / pdf) });
+            }
         }
     }
-    if s.render.sample_lights && !flat.emitters.is_empty() {
-        let (_, _, e) = flat.emitter_choice.sample(p.u());
-        let pmf = flat.emitter_choice.probability(e);
+    let u_light = p.u();
+    if let Some((e, pmf)) = (s.render.sample_lights && !flat.emitters.is_empty()).then(|| flat.choose_emitter(&above, u_light)).flatten() {
         let prim_index = flat.emitters[e] as usize;
         let prim = &flat.prims[prim_index];
         let (y, n_y, pdf) = sample_light(prim, &above, [p.u(), p.u(), p.u()]);
@@ -483,7 +505,7 @@ mod tests {
 
     #[test]
     fn test_white_furnace() {
-        // White diffuse objects under a white sky: every pixel exactly white.
+        // White diffuse objects under a white sky: every pixel white.
         let s = SceneFile::from_string(r#"{
             "width": 16, "height": 16, "background": [1, 1, 1], "max_depth": 1000, "path_termination": "russian_roulette",
             "camera": { "location": [0, 1, -4], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.6 },
@@ -491,8 +513,13 @@ mod tests {
             "objects": [ { "type": "sphere", "location": [0, 0, 0], "radius": 1, "material": "W" },
                          { "type": "box", "min": [1.2, -1, -0.5], "max": [2, 0, 0.5], "material": "W" } ]
         }"#.to_string());
-        for c in mean_image(&s, 64) {
-            assert!((c.rgb.x - 1.).abs() < 0.08, "{}", c);
+        // Sky sampling and BSDF sampling, combined by MIS, make each estimate noisy, though
+        // their mean is exactly one.
+        let image = mean_image(&s, 64);
+        let mean = image.iter().map(|c| c.rgb.x).sum::<f64>() / image.len() as f64;
+        assert!((mean - 1.).abs() < 0.01, "{}", mean);
+        for c in image {
+            assert!((c.rgb.x - 1.).abs() < 0.15, "{:?}", c.rgb);
         }
     }
 

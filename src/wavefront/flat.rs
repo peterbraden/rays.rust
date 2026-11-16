@@ -222,6 +222,9 @@ pub struct FlatScene {
     pub emitter_index: Vec<Option<u32>>,
     /// The skysphere, evaluated (by its material) for rays that escape.
     pub sky: Option<std::sync::Arc<crate::sceneobject::SceneObject>>,
+    /// With `"light_sampler": "bvh"`, the light BVH over `emitters` (`light_bvh`), in place of
+    /// choosing by power.
+    pub light_bvh: Option<crate::light_bvh::LightBvh>,
 }
 
 impl FlatScene {
@@ -293,8 +296,42 @@ impl FlatScene {
                 }
             }
         }
+        // The light BVH's bounds: each emitter's box, power (π L A), and normals (a flat
+        // triangle's one, either way if two-sided; a sphere's all).
+        let light_bvh = s.light_bvh.is_some().then(|| {
+            let bounds: Vec<crate::light_bvh::LightBounds> = emitters.iter().map(|&i| {
+                let p = &prims[i as usize];
+                let FlatMaterial::Emitter { radiance, two_sided } = &materials[prim_material[i as usize] as usize] else { unreachable!() };
+                let phi = PI * crate::color::luminance(radiance).max(0.) * p.area() * if *two_sided { 2. } else { 1. };
+                let (w, cos_theta_o) = match p {
+                    Prim::Triangle { v, .. } => ((v[1] - v[0]).cross(&(v[2] - v[0])).normalize(), 1.),
+                    _ => (Vector3::z(), -1.),
+                };
+                crate::light_bvh::LightBounds { bounds: p.bounds(), phi, w, cos_theta_o, cos_theta_e: 0., two_sided: *two_sided }
+            }).collect();
+            crate::light_bvh::LightBvh::new(&bounds)
+        });
         let emitter_choice = Distribution1D::new(if powers.is_empty() { vec![1.] } else { powers });
-        Ok(FlatScene { prims, prim_material, bvh, planes, materials, emitters, emitter_choice, emitter_index, sky })
+        Ok(FlatScene { prims, prim_material, bvh, planes, materials, emitters, emitter_choice, emitter_index, sky, light_bvh })
+    }
+
+    /// One emitter to sample from `p` (its index in `emitters`), and the chance of choosing it.
+    pub fn choose_emitter(&self, p: &Vector3<f64>, u: f64) -> Option<(usize, f64)> {
+        match &self.light_bvh {
+            Some(bvh) => bvh.sample(p, u),
+            None => {
+                let (_, _, e) = self.emitter_choice.sample(u);
+                Some((e, self.emitter_choice.probability(e)))
+            },
+        }
+    }
+
+    /// The chance that `choose_emitter` from `p` picks emitter `e`.
+    pub fn emitter_pmf(&self, p: &Vector3<f64>, e: usize) -> f64 {
+        match &self.light_bvh {
+            Some(bvh) => bvh.pmf(p, e),
+            None => self.emitter_choice.probability(e),
+        }
     }
 
     pub fn material(&self, prim: u32) -> &FlatMaterial {

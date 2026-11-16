@@ -455,17 +455,25 @@ impl PlanetField for Convective {
         let up = at.position / at.position.norm();
         let mut inside = false;
         let block = self.towers_within(&up, f64::INFINITY, |t| {
+            // The column (with its lumps and dome) up to its top, and the anvil only near it.
             let over = if t.mature { self.overshoot } else { 0. };
             let vertical = (t.base - altitude).max(altitude - (t.top + over)).max(0.);
-            let horizontal = (t.distance - self.tower_reach(t)).max(0.);
-            let gap = vertical.max(horizontal);
+            let horizontal = (t.distance - 1.3 * t.radius).max(0.);
+            let mut gap = vertical.max(horizontal);
+            if t.mature {
+                let low = t.top - self.anvil_depth;
+                let vertical = (low - altitude).max(altitude - t.top).max(0.);
+                gap = gap.min(vertical.max((t.distance - self.tower_reach(t)).max(0.)));
+            }
             if gap <= 0. {
                 inside = true;
             }
             clear = clear.min(gap);
         });
         if inside {
-            return (majorant, length);
+            // Somewhere near this storm: the full bound, but only for a while, as it may soon
+            // be clear of it.
+            return (majorant, length.min(1000.));
         }
         clear = clear.min(block - self.max_reach());
         if clear < 50. {

@@ -9,7 +9,7 @@
   "camera": {
     "location": [
       0,
-      30,
+      20,
       0
     ],
     "lookat": [
@@ -27,20 +27,13 @@
   "sun": {
     "intensity": 4.9
   },
-  "materials": {
-    "GROUND": {
-      "type": "lambertian",
-      "albedo": [
-        0.06,
-        0.08,
-        0.04
-      ]
-    }
-  },
   "objects": [
     {
-      "type": "planet",
-      "material": "GROUND"
+      "type": "ocean",
+      "wind": [
+        7,
+        2
+      ]
     },
     {
       "type": "skysphere",

@@ -553,7 +553,8 @@ impl Weather {
         // subtropics sinking, varied at synoptic scale.
         let itcz = (-((latd - self.itcz()) / 4.).powi(2)).exp();
         let subtropics = (-((latd.abs() - (p.climate.hadley - 2.)) / 7.).powi(2)).exp();
-        let mut humidity = 0.42 + 0.3 * smoothstep(200., 1800., rainfall) - 0.15 * continentality + 0.3 * (synoptic - 0.5);
+        // The sea keeps the air above it moist, even under the subtropics' sinking air.
+        let mut humidity = 0.42 + 0.1 * sea + 0.3 * smoothstep(200., 1800., rainfall) - 0.15 * continentality + 0.3 * (synoptic - 0.5);
         let mut ascent = 0.9 * itcz * (0.4 + 0.9 * meso) - 0.5 * subtropics - 0.2 * smoothstep(70., 85., latd.abs())
             + 0.5 * (synoptic - 0.5);
         let mut instability = 0.6 * smoothstep(20., 29., sea_level) * sea
@@ -590,17 +591,22 @@ impl Weather {
         // air over the sea, cumulus over heated ground; held under the inversion.
         let stratus = remap(humidity, 0.8, 0.98) * (1. - 0.7 * instability);
         let marine = sea * remap(subsidence, 0., 0.5) * remap(humidity, 0.5, 0.8) * smoothstep(12., 25., latd.abs()) * (1. - smoothstep(40., 55., latd.abs()));
-        let cumulus = 0.65 * instability * remap(humidity, 0.4, 0.8) * (1. - 0.6 * deep);
+        // Shallow cumulus over warm seas, capped by the inversion rather than stopped by the
+        // subsidence above it: the trade-wind cumulus.
+        let shallow = 0.6 * sea * smoothstep(14., 26., sea_level) * (1. - 0.5 * clear);
+        let cumulus = 0.65 * instability.max(shallow) * remap(humidity, 0.4, 0.8) * (1. - 0.6 * deep);
         let background = [(stratus, 0.05), (marine, 0.4), (cumulus, 0.95)];
         let weight: f64 = background.iter().map(|c| c.0).sum::<f64>() + e.low_weight;
         let low_form = (background.iter().map(|c| c.0 * c.1).sum::<f64>() + e.low_form + 0.01 * 0.5) / (weight + 0.01);
         let low_cover = (stratus.max(marine).max(cumulus) * (0.3 + 0.9 * synoptic) * (0.5 + 0.9 * (meso - 0.5)).max(0.)).max(e.low * (0.7 + 0.9 * (meso - 0.5)).clamp(0.2, 1.)).clamp(0., 1.) * p.low;
-        let low_depth = lerp(lerp(250., 600., meso), 400. + 1800. * instability, low_form);
+        let low_depth = lerp(lerp(250., 600., meso), 400. + 1800. * instability.max(0.6 * shallow), low_form);
         let low = Cloud { cover: low_cover.clamp(0., 1.), base, top: base + low_depth.min((inversion - lcl).max(250.) + 1500. * low_form), form: low_form };
 
         // Mid cloud: frontal (from the systems), altostratus where rising on a large scale,
         // altocumulus in moist layers aloft.
-        let stratiform = remap(ascent, 0.3, 0.9) * remap(humidity, 0.6, 0.9);
+        // Where the air is unstable its ascent goes into convection, not sheets of cloud (the
+        // anvils' shields are the stratiform part of the storms).
+        let stratiform = remap(ascent, 0.3, 0.9) * remap(humidity, 0.6, 0.9) * (1. - 0.85 * instability);
         let alto = remap(meso2, 0.55, 0.8) * remap(humidity, 0.4, 0.75) * (1. - remap(ascent.abs(), 0.2, 0.6));
         let alto_base = ground.max(0.) + 2800. + 2500. * meso;
         let eps = 0.01;

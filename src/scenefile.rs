@@ -2672,7 +2672,7 @@ impl SceneFile {
             };
             let rise = waves.as_ref().map_or(0., |w| w.surface_at(at.x, at.y).0);
             let mesh = berg.mesh(at.x, at.y, sea_level + rise, yaw);
-            let own = IcebergMaterial::new(sea_level, berg.size, seed).layered(berg.kind == Kind::Tabular);
+            let own = IcebergMaterial::new(sea_level, berg.size, seed);
             return rock::object(&[mesh], medium(Box::new(own)));
         }
         let center = SceneFile::parse_vec2_def(o, "center", crate::na::Vector2::zeros());
@@ -2693,7 +2693,7 @@ impl SceneFile {
         };
         let own: Box<dyn MaterialModel + Sync + Send> = match field.style {
             FloeStyle::Slab => Box::new(FloeMaterial::new(seed)),
-            FloeStyle::Brash => Box::new(FloeMaterial::new(seed)),
+            FloeStyle::Brash => Box::new(IcebergMaterial::new(sea_level, 2., seed).translucent()),
         };
         rock::object(&[field.mesh()], medium(own))
     }
@@ -3198,7 +3198,17 @@ impl SceneFile {
                     top: SceneFile::parse_color_def(v, "top", Color::new(0.5, 0.7, 1.)),
                 },
                 Some("space") => Background::Space(Arc::new(crate::procedural::space::Space::parse(v, pixel_angle, sun))),
-                t => panic!("Unknown background type {:?}: expected \"gradient\", \"space\" or a colour", t),
+                // {"type": "overcast", "zenith": colour, "ground": colour}: the CIE overcast sky.
+                Some("overcast") => {
+                    let zenith = SceneFile::parse_color_def(v, "zenith", Color::new(1., 1., 1.));
+                    // "bank": {"direction": [x, z], "darkness": 0.3}: darker cloud low that way.
+                    let bank = v.get("bank").map(|b| {
+                        let d = SceneFile::parse_vec2_def(b, "direction", Vector2::new(0., 1.));
+                        (Vector3::new(d.x, 0., d.y).normalize(), SceneFile::parse_number(&b["darkness"], 0.3).clamp(0., 1.))
+                    });
+                    Background::Overcast { zenith, ground: SceneFile::parse_color_def(v, "ground", zenith * (1. / 3.)), bank }
+                },
+                t => panic!("Unknown background type {:?}: expected \"gradient\", \"space\", \"overcast\" or a colour", t),
             },
             _ => Background::Solid(SceneFile::parse_color(v)),
         }

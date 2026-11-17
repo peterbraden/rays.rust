@@ -62,6 +62,7 @@ use crate::geometry::{rand, Pcg32};
 use crate::intersection::Intersection;
 use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::material::snow::{Ice, IceStyle, Snow, SnowStyle};
+use crate::material::subsurface::{Coefficients, Subsurface};
 use crate::na::{Rotation3, Vector3};
 use crate::noise::SeededNoise;
 use crate::procedural::nubis_clouds::smoothstep;
@@ -141,7 +142,7 @@ impl Iceberg {
     /// to the body's proportions, so that its vertices spread evenly over the surface rather
     /// than evenly by angle (which would mesh a tall berg's walls coarsely).
     #[allow(clippy::type_complexity)]
-    fn shape(&self, detail: u32) -> (impl Fn(&Vector3<f64>) -> Vector3<f64> + Sync + '_, Vec<Vector3<f64>>, Vec<[usize; 3]>) {
+    fn shape(&self, detail: u32) -> (impl Fn(&Vector3<f64>) -> (Vector3<f64>, f64, f64) + Sync + '_, Vec<Vector3<f64>>, Vec<[usize; 3]>) {
         let mut rng = Pcg32::new(self.seed, 23);
         let noise = SeededNoise::new(self.seed.wrapping_add(5));
         let (axes, p) = self.body(&mut rng);
@@ -182,7 +183,7 @@ impl Iceberg {
         } else {
             vec![
                 Scoops { cell: Vector3::new(big, 1.8 * big, big), depth: 0.3 * big, seed: self.seed.wrapping_add(101) },
-                Scoops { cell: Vector3::new(big, 1.7 * big, big) / 3.2, depth: 0.09 * big, seed: self.seed.wrapping_add(202) },
+                Scoops { cell: Vector3::new(big, 1.7 * big, big) / 3.2, depth: 0.14 * big, seed: self.seed.wrapping_add(202) },
                 Scoops { cell: Vector3::new(1.3, 2., 1.3), depth: 0.14, seed: self.seed.wrapping_add(303) },
             ]
         };
@@ -203,7 +204,15 @@ impl Iceberg {
         let directions: Vec<Vector3<f64>> = directions.iter().map(|d| d.component_mul(&axes).normalize()).collect();
         let kind = self.kind;
         let size = self.size;
-        let outline = SeededNoise::new(self.seed.wrapping_add(9));
+        let outline = std::sync::Arc::new(SeededNoise::new(self.seed.wrapping_add(9)));
+        let crown_noise = outline.clone();
+        // A shelf's top rolls, and it is crowned: snow lies deeper away from the edge, where it
+        // calves. The factor its height is scaled by over (x, z).
+        let crown = std::sync::Arc::new(move |q: &Vector3<f64>| -> f64 {
+            let inland = 1. - ((q.x / axes.x).powi(2) + (q.z / axes.z).powi(2)).min(1.);
+            1. + 0.1 * crown_noise.fbm(Vector3::new(q.x, 5., q.z) * 3., 3) + 0.14 * inland
+        });
+        let body_crown = crown.clone();
         // The body, cut and shaped, in the direction `d`.
         let body = move |d: &Vector3<f64>| -> Vector3<f64> {
             let r0 = (d.x.abs() / axes.x).powf(p) + (d.y.abs() / axes.y).powf(p) + (d.z.abs() / axes.z).powf(p);
@@ -216,7 +225,7 @@ impl Iceberg {
                 q.x *= wobble;
                 q.z *= wobble;
                 if q.y > 0. {
-                    q.y *= 1. + 0.1 * outline.fbm(Vector3::new(q.x, 5., q.z) * 3., 3);
+                    q.y *= body_crown(&q);
                 }
             }
             let mut s: f64 = 1.;
@@ -247,7 +256,7 @@ impl Iceberg {
             }
             q * s.max(0.05)
         };
-        let surface = move |d: &Vector3<f64>| -> Vector3<f64> {
+        let surface = move |d: &Vector3<f64>| -> (Vector3<f64>, f64, f64) {
             let q = body(d);
             // The face's normal, from the body's surface to either side: far enough (a few
             // metres) that it turns smoothly round the corners between fracture faces, so the
@@ -267,14 +276,27 @@ impl Iceberg {
             let seen = smoothstep(waterline - 12. / size, waterline - 4. / size, q.y);
             // More broken in some stretches of the wall than others.
             let broken = 0.35 + 1.3 * smoothstep(-0.3, 0.4, noise.fbm(m / (3. * big), 2));
-            let cut: f64 = broken * scoops.iter().map(|c| c.cut(&m)).sum::<f64>();
+            let cuts: Vec<f64> = scoops.iter().map(|c| c.cut(&m)).collect();
+            let cut: f64 = broken * scoops.iter().zip(&cuts).map(|(c, f)| c.depth * f).sum::<f64>();
             let crevasse = crevasses.iter()
                 .map(|&(n, o, w, depth)| depth * (-((m.dot(&n) - o) / w).powi(2)).exp())
                 .fold(0., f64::max);
             // Fine vertical streaks where meltwater runs down, and drifts on the snow.
-            let streaks = 0.05 * noise.noise(Vector3::new(m.x / 0.7, m.y / 7., m.z / 0.7));
+            let streaks = 0.05 * noise.noise(Vector3::new(m.x / 0.7, m.y / 7., m.z / 0.7))
+                + 0.22 * noise.noise(Vector3::new(m.x / 1.6, m.y / 14., m.z / 1.6) + Vector3::new(9., 0., 4.));
             let drifts = 0.5 * noise.fbm(m / 14., 3) * top;
-            m + normal * (drifts - seen * wall * (cut + crevasse + streaks))
+            // How freshly broken the ice here is, 0 to 1: the deeper it was cut back, the less
+            // weathered (and the bluer: `IcebergMaterial`).
+            // Not at the rim, where the cut is into the snow.
+            let rim = 1. - smoothstep(0.15, 0.45, normal.y);
+            let scars = if cuts.len() > 1 { 0.55 * cuts[0] + 0.55 * cuts[1] } else { 0. };
+            let fresh = (seen * rim * (broken * scars + crevasse)).clamp(0., 1.);
+            // The firn: a shelf's top few metres are last years' snow, white down the cliff.
+            let firn = if kind == Kind::Tabular {
+                let top_y = axes.y * crown(&q);
+                smoothstep(top_y - 5. / size, top_y - 2. / size, q.y)
+            } else { 0. };
+            (m + normal * (drifts - seen * wall * (cut + crevasse + streaks)), fresh, firn)
         };
         (surface, directions, triangles)
     }
@@ -323,7 +345,7 @@ impl Iceberg {
         let tilt = if self.kind == Kind::Tabular { 0.01 } else { 0.12 };
         let rotation = Rotation3::from_axis_angle(&Vector3::y_axis(), yaw)
             * Rotation3::from_euler_angles(tilt * (rng.next_f64() - 0.5), 0., tilt * (rng.next_f64() - 0.5));
-        let turned = |d: &Vector3<f64>| rotation * shape(d);
+        let turned = |d: &Vector3<f64>| rotation * shape(d).0;
         // The waterline, roughly, from the coarse mesh.
         let coarse: Vec<Vector3<f64>> = directions.iter().map(&turned).collect();
         let h = Iceberg::waterline(&coarse, &triangles, self.freeboard_fraction());
@@ -355,9 +377,14 @@ impl Iceberg {
         let tolerance = (0.0001 * self.size).clamp(0.005, 0.03);
         // What shows above the water is meshed to 40 cm at least, to carry the scallops.
         let coarsest = |p: &Vector3<f64>| if p.y > h - 4. { 0.4 } else { f64::INFINITY };
-        let (positions, triangles) = refine(&directions, &triangles, &surface, 8, tolerance, &coarsest);
+        let (directions, positions, triangles) = refine(&directions, &triangles, &surface, 8, tolerance, &coarsest);
         println!("Iceberg: {} triangles", triangles.len());
-        let mut mesh = IndexedMesh { positions, normals: vec![], triangles, texcoords: vec![] };
+        // How fresh the ice is at each vertex, and how much it is firn, as texture coordinates.
+        let texcoords = {
+            use rayon::prelude::*;
+            directions.par_iter().map(|d| { let s = shape(d); crate::na::Vector2::new(s.1, s.2) }).collect()
+        };
+        let mut mesh = IndexedMesh { positions, normals: vec![], triangles, texcoords };
         // Floated at its waterline, ram and all.
         let h = Iceberg::waterline(&mesh.positions, &mesh.triangles, self.freeboard_fraction());
         let lift = Vector3::new(x, sea_level - h, z);
@@ -372,7 +399,7 @@ impl Iceberg {
 /// `levels` times; and every edge longer than `coarsest` allows at its midpoint. An edge's
 /// split is decided once for both its triangles, so the mesh stays closed. Returns the
 /// positions and triangles.
-pub fn refine(directions: &[Vector3<f64>], triangles: &[[usize; 3]], surface: &(dyn Fn(&Vector3<f64>) -> Vector3<f64> + Sync), levels: u32, tolerance: f64, coarsest: &(dyn Fn(&Vector3<f64>) -> f64 + Sync)) -> (Vec<Vector3<f64>>, Vec<[usize; 3]>) {
+pub fn refine(directions: &[Vector3<f64>], triangles: &[[usize; 3]], surface: &(dyn Fn(&Vector3<f64>) -> Vector3<f64> + Sync), levels: u32, tolerance: f64, coarsest: &(dyn Fn(&Vector3<f64>) -> f64 + Sync)) -> (Vec<Vector3<f64>>, Vec<Vector3<f64>>, Vec<[usize; 3]>) {
     use rayon::prelude::*;
     use std::collections::HashMap;
     let mut dirs: Vec<Vector3<f64>> = directions.to_vec();
@@ -429,7 +456,7 @@ pub fn refine(directions: &[Vector3<f64>], triangles: &[[usize; 3]], surface: &(
         }
         tris = next;
     }
-    (points, tris)
+    (dirs, points, tris)
 }
 
 /// Conchoidal fracture: ice breaks like glass, leaving concave scoops that meet at sharp
@@ -450,7 +477,7 @@ impl Scoops {
         (crate::sobol::hash(h, k) >> 11) as f64 / (1u64 << 53) as f64
     }
 
-    /// How far to cut back at `m`.
+    /// How far to cut back at `m`, as a fraction of `depth`.
     fn cut(&self, m: &Vector3<f64>) -> f64 {
         let g = m.component_div(&self.cell);
         let base = g.map(f64::floor);
@@ -462,11 +489,11 @@ impl Scoops {
                     let c = base + Vector3::new(dx as f64, dy as f64, dz as f64);
                     let h = [c.x, c.y, c.z].iter().fold(self.seed, |h, v| crate::sobol::hash(h, *v as i64 as u64));
                     let site = c + Vector3::new(Scoops::unit(h, 1), Scoops::unit(h, 2), Scoops::unit(h, 3));
-                    best = best.max(0.3 + 0.7 * Scoops::unit(h, 4) - (g - site).norm_squared());
+                    best = best.max(0.45 + 0.55 * Scoops::unit(h, 4) - (g - site).norm_squared());
                 }
             }
         }
-        self.depth * best
+        best
     }
 }
 
@@ -494,6 +521,7 @@ pub fn creased(mesh: &IndexedMesh, crease: f64) -> IndexedMesh {
     // A vertex per distinct normal at each original vertex.
     let mut positions: Vec<Vector3<f64>> = Vec::with_capacity(p.len());
     let mut normals: Vec<Vector3<f64>> = Vec::with_capacity(p.len());
+    let mut texcoords = Vec::with_capacity(mesh.texcoords.len());
     let mut made: Vec<Vec<u32>> = vec![vec![]; p.len()];
     let mut triangles = Vec::with_capacity(mesh.triangles.len());
     for (t, tri) in mesh.triangles.iter().enumerate() {
@@ -506,6 +534,7 @@ pub fn creased(mesh: &IndexedMesh, crease: f64) -> IndexedMesh {
                 None => {
                     positions.push(p[v]);
                     normals.push(n);
+                    if !mesh.texcoords.is_empty() { texcoords.push(mesh.texcoords[v]); }
                     made[v].push((positions.len() - 1) as u32);
                     positions.len() - 1
                 }
@@ -513,107 +542,100 @@ pub fn creased(mesh: &IndexedMesh, crease: f64) -> IndexedMesh {
         }
         triangles.push(out);
     }
-    IndexedMesh { positions, normals, triangles, texcoords: vec![] }
+    IndexedMesh { positions, normals, triangles, texcoords }
 }
 
-/// An iceberg's surface: white ice, snow on top, veins of blue ice, glossy where waves wash.
+/// An iceberg's ice: snow on the top and on ledges, and beneath it ice that is whiter the
+/// longer it has weathered. A glacier's ice is blue within: dense, its bubbles few. Where a
+/// face has stood in the sun and air for a season, melt opens the crystal boundaries and it
+/// turns to a white, bubbly, cracked crust; where a piece has just broken away, in the
+/// scoops of calving scars and down crevasses, the blue ice shows. The generator records how
+/// far each point was cut back (`fresh`, a texture coordinate), and that picks between
+/// `snow::Ice`'s white, bubbly and blue ice, all the same physics with different bubbles.
+///
+/// Small pieces (`translucent`) are instead lit through: light wanders inside them
+/// (`material::subsurface`, with ice's own absorption and its bubbles' scattering), so thin
+/// edges glow and thick parts are bluer.
 pub struct IcebergMaterial {
     pub sea_level: f64,
+    body: Option<Subsurface>,
     white: Ice,
-    /// Bubbly glacier ice, bluer, on the walls low down.
     glacier: Ice,
-    wet: Ice,
     blue: Ice,
     snow: Snow,
     /// The berg's length, m.
     size: f64,
-    /// Banded horizontally, as a tabular berg's layers of firn and ice are, rather than
-    /// veined.
-    layered: bool,
-    /// The veins' plane, through the berg, and their spacing (m).
-    vein_normal: Vector3<f64>,
-    vein_spacing: f64,
     noise: SeededNoise,
 }
 
+/// The reduced scattering coefficient of a small piece's ice, per metre: light travels a
+/// quarter of a metre between changes of direction.
+pub const ICE_SCATTERING: f64 = 4.;
+
 impl IcebergMaterial {
     pub fn new(sea_level: f64, size: f64, seed: u64) -> IcebergMaterial {
-        let mut rng = Pcg32::new(seed, 31);
-        let a = rng.next_f64() * TAU;
-        let tilt = 0.3 + 0.9 * rng.next_f64();
+        let clean = |preset: &str, roughness: f64| Ice::new(IceStyle { impurities: Default::default(), roughness, ..IceStyle::preset(preset) });
         IcebergMaterial {
             sea_level,
-            white: Ice::new(IceStyle::preset("white")),
-            glacier: Ice::new(IceStyle { roughness: 0.1, ..IceStyle::preset("glacier") }),
+            body: None,
+            white: clean("white", 0.3),
+            glacier: clean("glacier", 0.15),
+            blue: clean("blue", 0.08),
+            snow: Snow::new(SnowStyle { sparkle: 0., ..SnowStyle::preset("settled") }, 1., seed),
             size,
-            layered: false,
-            // Ice that was under water: melted smooth, its bubbles fewer, so a saturated aqua.
-            wet: Ice::new(IceStyle { bubble_radius: 0.7, bubbles: 1.2, roughness: 0.03, ..IceStyle::preset("glacier") }),
-            blue: Ice::new(IceStyle::preset("blue")),
-            snow: Snow::new(SnowStyle::preset("settled"), 1., seed),
-            vein_normal: Vector3::new(tilt.sin() * a.cos(), tilt.cos(), tilt.sin() * a.sin()),
-            vein_spacing: (0.15 * size).clamp(3., 30.),
             noise: SeededNoise::new(seed.wrapping_add(17)),
         }
     }
 
-    /// Banded horizontally (for a tabular berg) rather than veined.
-    pub fn layered(self, layered: bool) -> IcebergMaterial {
-        IcebergMaterial { layered, ..self }
-    }
-
-    /// The share at `p`, with outward normal `n`, of bubbly glacier ice rather than white: the
-    /// walls are bluer low down, where the ice was deep in the glacier or has rolled up from
-    /// under water and not yet weathered, and white above, in bands.
-    pub fn bluish(&self, p: &Vector3<f64>, n: &Vector3<f64>) -> f64 {
-        if self.layered {
-            // Bands of whiter firn and bluer ice, of uneven thickness, bluer with depth in the
-            // shelf (older, denser ice) and white in its top few metres of firn.
-            let height = p.y - self.sea_level;
-            let t = height / 4.5 + 0.8 * self.noise.fbm(Vector3::new(p.x / 60., p.y / 12., p.z / 60.), 3);
-            let band = smoothstep(0.1, 0.8, (TAU * t).sin() * 0.5 + 0.5 + 0.3 * self.noise.noise(Vector3::new(p.x / 15., t, p.z / 15.)));
-            let depth = 1. - smoothstep(0.3, 0.8, height / (0.12 * self.size).max(4.));
-            return 0.5 * (0.25 + 0.75 * depth) * band * (1. - smoothstep(0.4, 0.8, n.y)) * smoothstep(-1., 0.5, height);
+    /// Lit through, for small pieces.
+    pub fn translucent(self) -> IcebergMaterial {
+        IcebergMaterial {
+            body: Some(Subsurface {
+                coefficients: Coefficients::Ice { scattering: ICE_SCATTERING, impurities: Default::default() },
+                g: 0.,
+                refractive_index: crate::material::snow::ICE_REFRACTIVE_INDEX,
+            }),
+            ..self
         }
-        let height = (p.y - self.sea_level) / (0.25 * self.size).max(2.);
-        let white = smoothstep(0.2, 0.9, height + 0.5 * self.noise.fbm(Vector3::new(p.x / 30., p.y / 4., p.z / 30.), 3));
-        (1. - white) * (1. - smoothstep(0.4, 0.8, n.y)) * smoothstep(-1., 0.5, p.y - self.sea_level)
     }
 
-    /// The shares at `p`, with outward normal `n`, of snow, blue veins and wave-washed ice.
-    pub fn shares(&self, p: &Vector3<f64>, n: &Vector3<f64>) -> (f64, f64, f64) {
+    /// The shares at `p`, with outward normal `n` and freshness `fresh`, of snow, white crust
+    /// and blue ice (the rest is bubbly glacier ice).
+    pub fn shares(&self, p: &Vector3<f64>, n: &Vector3<f64>, fresh: f64, firn: f64) -> (f64, f64, f64) {
         let height = p.y - self.sea_level;
-        let snow = smoothstep(0.72, 0.9, n.y + 0.2 * self.noise.fbm(p / 6., 3)) * smoothstep(0.1, 0.3, height / self.size.min(10.));
-        let v = p.dot(&self.vein_normal) / self.vein_spacing + 0.6 * self.noise.fbm(p / 25., 3);
-        let d = (v.rem_euclid(1.) - 0.5).abs();
-        // Rare and faint: a few streaks, not a web of cracks.
-        let vein = if self.layered { 0. } else { 0.5 * (1. - smoothstep(0.01, 0.035, d)) * smoothstep(0.25, 0.5, self.noise.noise(p / 40.)) };
-        // The waves wash a band from a metre or two under water to a few metres above.
-        // The waves wash (or the berg once floated to) a band a few metres high: smooth,
-        // glossy, saturated ice, sharply bounded above.
-        let band = (0.07 * self.size).clamp(0.05, 6.);
-        let edge = band + 0.1 * band * self.noise.noise(Vector3::new(p.x / 20., 0., p.z / 20.));
-        let wet = (1. - smoothstep(0.92 * edge, edge, height)) * smoothstep(-2.5, -1., height);
-        (snow, vein, wet)
+        // Above the reach of the waves (a band that grows with the berg).
+        let dry = smoothstep(0.3, 1., height / (0.03 * self.size).clamp(0.05, 2.5));
+        // Snow lies on the top and on ledges.
+        let snow = (dry * smoothstep(0.3, 0.6, n.y + 0.15 * self.noise.fbm(p / 6., 3))).max(firn);
+        // Weathering varies in patches, and faces that lean back catch more of it.
+        let patches = self.noise.fbm(Vector3::new(p.x / 9., p.y / 5., p.z / 9.), 4);
+        let fresh = (fresh - 0.15 * patches - 0.2 * n.y).clamp(0., 1.);
+        let white = dry * (1. - smoothstep(0.1, 0.4, fresh));
+        let blue = smoothstep(0.45, 0.8, fresh);
+        (snow, white, blue)
     }
 }
 
 impl MaterialModel for IcebergMaterial {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
+        let (fresh, firn) = intersection.uv().map_or((0., 0.), |uv| (uv.x, uv.y));
+        let (snow, white, blue) = self.shares(&intersection.point, &intersection.normal, fresh, firn);
+        let outside = r.rd.dot(&intersection.normal) < 0.;
         let i = &intersection.facing(r);
-        let (snow, vein, wet) = self.shares(&i.point, &intersection.normal);
         let f = crate::material::functions::scatter_bsdf;
-        if rand() < snow {
-            f(&self.snow.bsdf(&i.point, &i.normal, Some(s)), r, &i.point, s)
-        } else if rand() < vein {
-            f(&self.blue.bsdf(&i.normal, Some(s)), r, &i.point, s)
-        } else if rand() < wet {
-            f(&self.wet.bsdf(&i.normal, Some(s)), r, &i.point, s)
-        } else if rand() < self.bluish(&i.point, &intersection.normal) {
-            f(&self.glacier.bsdf(&i.normal, Some(s)), r, &i.point, s)
-        } else {
-            f(&self.white.bsdf(&i.normal, Some(s)), r, &i.point, s)
+        if outside && rand() < snow {
+            return f(&self.snow.bsdf(&i.point, &i.normal, Some(s)), r, &i.point, s);
         }
+        if let Some(body) = &self.body {
+            return if outside && rand() < 0.6 * white {
+                f(&self.white.bsdf(&i.normal, Some(s)), r, &i.point, s)
+            } else {
+                body.scatter(r, intersection, s)
+            };
+        }
+        let u = rand();
+        let ice = if u < white { &self.white } else if u < white + blue { &self.blue } else { &self.glacier };
+        f(&ice.bsdf(&i.normal, Some(s)), r, &i.point, s)
     }
 }
 

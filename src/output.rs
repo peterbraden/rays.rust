@@ -143,14 +143,20 @@ impl OutputOpts {
         }.clamp(0., 1.)
     }
 
-    /// The inverse of the transfer function, for reading display-encoded (eg. 8-bit) images
-    /// back into linear light. Exposure and tone mapping aren't undone.
+    /// The inverse of `encode`, for reading display-encoded (eg. 8-bit) images back into
+    /// linear light: the transfer function, the tone map and the exposure undone (what `encode`
+    /// clipped stays clipped).
     pub fn decode(&self, v: f64) -> f64 {
-        match self.transfer {
+        let v = match self.transfer {
             Transfer::Srgb => if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) },
             Transfer::Linear => v,
             Transfer::Gamma(g) => v.powf(g),
-        }
+        };
+        let v = match self.tonemap {
+            ToneMap::None => v,
+            ToneMap::Reinhard => if v < 1. { v / (1. - v) } else { f64::MAX },
+        };
+        v / self.exposure
     }
 
     pub fn quantise(&self, c: Color) -> [u8; 3] {
@@ -255,7 +261,12 @@ mod tests {
     fn test_gamma_transfer_and_decode() {
         let o = OutputOpts { transfer: Transfer::Gamma(2.), ..OutputOpts::default() };
         assert!((o.encode(0.25) - 0.5).abs() < 1e-12);
-        for opts in [o, OutputOpts::default(), OutputOpts { transfer: Transfer::Linear, ..OutputOpts::default() }] {
+        // A scene's exposure and tone map too, so a PNG reference reads back as the linear
+        // image it was made from (`--compare` against an image of `"exposure": 0.25` read back
+        // a quarter as bright).
+        let dim = OutputOpts { exposure: 0.25, ..OutputOpts::default() };
+        let mapped = OutputOpts { exposure: 2., tonemap: ToneMap::Reinhard, ..OutputOpts::default() };
+        for opts in [o, OutputOpts::default(), OutputOpts { transfer: Transfer::Linear, ..OutputOpts::default() }, dim, mapped] {
             for v in [0., 0.001, 0.18, 0.5, 1.] {
                 assert!((opts.decode(opts.encode(v)) - v).abs() < 1e-9, "{:?} {}", opts.transfer, v);
             }

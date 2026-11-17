@@ -2693,7 +2693,7 @@ impl SceneFile {
         };
         let own: Box<dyn MaterialModel + Sync + Send> = match field.style {
             FloeStyle::Slab => Box::new(FloeMaterial::new(seed)),
-            FloeStyle::Brash => Box::new(IcebergMaterial::new(sea_level, 1., seed)),
+            FloeStyle::Brash => Box::new(FloeMaterial::new(seed)),
         };
         rock::object(&[field.mesh()], medium(own))
     }

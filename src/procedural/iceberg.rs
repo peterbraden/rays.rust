@@ -682,11 +682,11 @@ impl FloeField {
         // Diameters with number density ∝ d^-α between the smallest and largest: by inverting
         // the cumulative distribution, d = d_min (1 - u (1 - (d_min/d_max)^(α-1)))^(-1/(α-1)).
         // Brash ice is steeper than the floes of pack ice: mostly small pieces.
-        let alpha = match self.style { FloeStyle::Brash => 2.8, FloeStyle::Slab => 2.2 };
+        let alpha = match self.style { FloeStyle::Brash => 3.0, FloeStyle::Slab => 2.2 };
         let k = 1. - (self.min_size / self.max_size).powf(alpha - 1.);
         let mut radii = vec![];
         let mut sum = 0.;
-        while sum < target && radii.len() < 100_000 {
+        while sum < target && radii.len() < 40_000 {
             let d = self.min_size * (1. - rng.next_f64() * k).powf(-1. / (alpha - 1.));
             let r = d.min(self.max_size) / 2.;
             // A floe's outline covers about 0.7 of its circle.
@@ -712,7 +712,8 @@ impl FloeField {
             (i0.min(nx - 1), i1, j0.min(nz - 1), j1)
         };
         for r in radii {
-            let gap = 0.04 * r + 0.05;
+            // Packed close: brash jostles edge to edge.
+            let gap = match self.style { FloeStyle::Brash => 0.02 * r + 0.02, FloeStyle::Slab => 0.04 * r + 0.05 };
             for _ in 0..40 {
                 // Beside a larger floe, or anywhere (where the clumps are).
                 let near = if !placed.is_empty() && rng.next_f64() < 0.5 {
@@ -763,78 +764,89 @@ impl FloeField {
         }
     }
 
-    /// Lumps of glacier ice, each floating at its own waterline: some long, some flat, some
-    /// chunky, the smaller ones tipped further as the waves rock them.
+    /// Brash ice: mostly broken plates (flat, angular, with straight fractured edges, some
+    /// pushed up and tilted on their neighbours), and among the larger pieces rounded lumps of
+    /// glacier ice; each floating at its own waterline.
     fn brash(&self) -> IndexedMesh {
         let floes = self.floes();
         let noise = SeededNoise::new(self.seed.wrapping_add(7));
         let mut rng = Pcg32::new(self.seed, 47);
         // Geodesic spheres of each detail, so that whatever a piece's size its vertices are
-        // ten or twenty centimetres apart.
+        // about fifteen centimetres apart.
         let spheres: Vec<(Vec<Vector3<f64>>, Vec<[usize; 3]>)> = (0..=6).map(icosphere).collect();
         let mut positions = vec![];
         let mut triangles = vec![];
         let fraction = 1. - 917. / SEA_WATER_DENSITY;
         for f in &floes {
-            // Each subdivision halves the spacing: detail n has edges of about 1.1 r / 2^n.
-            let detail = ((1.1 * f.radius / 0.15).log2().ceil().max(1.) as usize).min(6);
-            let (directions, sphere) = &spheres[detail];
-            let r = f.radius * 0.9;
-            let axes = Vector3::new(r, r * (0.25 + 0.5 * rng.next_f64()), r * (0.4 + 0.6 * rng.next_f64()));
+            let r = f.radius * 0.95;
+            let lump = rng.next_f64() < 0.1 + 0.5 * smoothstep(1.5, 6., r);
             let offset = Vector3::new(rng.next_f64(), rng.next_f64(), rng.next_f64()) * 100.;
-            let rock = 0.15 + 0.3 / (1. + f.radius);
-            let rotation = Rotation3::from_euler_angles(rock * (rng.next_f64() - 0.5), rng.next_f64() * TAU, rock * (rng.next_f64() - 0.5));
-            // Broken faces, one of them the top, worn round at the edges.
-            // More of them on larger pieces, which have broken more often.
-            let count = 3 + (rng.next_f64() * 3.) as usize;
-            let planes: Vec<(Vector3<f64>, f64)> = (0..count).map(|k| {
-                let n = if k == 0 {
-                    Vector3::new(0.3 * (rng.next_f64() - 0.5), 1., 0.3 * (rng.next_f64() - 0.5)).normalize()
+            // A plate's thickness, a fifth to nearly half its width (but at least a few
+            // centimetres); a lump about half as high as wide.
+            let axes = if lump {
+                Vector3::new(r, r * (0.3 + 0.3 * rng.next_f64()), r * (0.5 + 0.5 * rng.next_f64()))
+            } else {
+                let t = (r * (0.2 + 0.25 * rng.next_f64())).max(0.04);
+                Vector3::new(r, t, r * (0.55 + 0.45 * rng.next_f64()))
+            };
+            let detail = ((1.1 * r / 0.15).log2().ceil().max(2.) as usize).min(5);
+            let (directions, sphere) = &spheres[detail];
+            // Spread over the surface rather than by angle, as for the bergs.
+            let directions: Vec<Vector3<f64>> = directions.iter().map(|d| d.component_mul(&axes).normalize()).collect();
+            // Tilt: most lie nearly flat; some plates are rafted, pushed up on their
+            // neighbours.
+            // Small pieces are jostled about more: half of them tipped, some steeply.
+            let jumbled = 0.3 + 0.3 / (1. + 2. * r);
+            let tilt = if !lump && rng.next_f64() < jumbled { 0.6 * rng.next_f64() } else { 0.1 * rng.next_f64() };
+            let lean = rng.next_f64() * TAU;
+            let rotation = Rotation3::from_axis_angle(&Vector3::y_axis(), rng.next_f64() * TAU)
+                * Rotation3::from_axis_angle(&crate::na::Unit::new_normalize(Vector3::new(lean.cos(), 0., lean.sin())), tilt);
+            // Fracture planes: the edges it broke along, near-vertical for a plate (straight
+            // edges round a polygon), any way for a lump.
+            let count = if lump { 3 + (rng.next_f64() * 3.) as usize } else { 4 + (rng.next_f64() * 4.) as usize };
+            let planes: Vec<(Vector3<f64>, f64)> = (0..count).map(|_| {
+                let a = rng.next_f64() * TAU;
+                let n = if lump {
+                    Vector3::new(a.cos(), 1.2 * (rng.next_f64() - 0.4), a.sin()).normalize()
                 } else {
-                    let a = rng.next_f64() * TAU;
-                    Vector3::new(a.cos(), 1.2 * (rng.next_f64() - 0.5), a.sin()).normalize()
+                    Vector3::new(a.cos(), 0.15 * (rng.next_f64() - 0.5), a.sin()).normalize()
                 };
-                (n, axes.component_mul(&n).norm() * (0.6 + 0.35 * rng.next_f64()))
+                (n, axes.component_mul(&n).norm() * (0.55 + 0.4 * rng.next_f64()))
             }).collect();
-            // Small pieces are worn round; large ones keep sharper edges.
-            let rounding = 0.06 + 0.1 * rng.next_f64();
-            let lumpiness = 0.1 + 0.08 * rng.next_f64();
+            let (p, rounding, lumpiness) = if lump { (2.6, 0.08 + 0.1 * rng.next_f64(), 0.12) } else { (6., 0.015, 0.0) };
             let mut piece: Vec<Vector3<f64>> = directions.iter().map(|d| {
-                let p = 2.6;
                 let r0 = (d.x.abs() / axes.x).powf(p) + (d.y.abs() / axes.y).powf(p) + (d.z.abs() / axes.z).powf(p);
                 let q = d * r0.powf(-1. / p);
                 let mut s: f64 = 1.;
                 for (n, o) in &planes {
                     let along = q.dot(n);
-                    if along > 0. { s = smin(s, o / along, rounding); }
+                    if along > 0. { s = smin(s, o / along, rounding * r); }
                 }
-                let lumps = lumpiness * noise.fbm(d * 1.6 + offset, 4);
-                // An irregular outline: broad bulges and bays round the piece, not a disc.
-                let bulge = 0.22 * noise.fbm(Vector3::new(d.x, 0., d.z) * 1.3 + offset * 0.7, 2);
-                let mut q = q * s.max(0.1) * (1. + lumps);
-                q.x *= 1. + bulge;
-                q.z *= 1. + bulge;
-                // Melt scallops, as on the bergs, a few centimetres deep.
-                let w = q / 0.6 + offset;
-                let scallops = 0.025 * (1. - noise.noise(w).abs() * 2.).max(0.);
-                rotation * (q - d * scallops.min(0.1 * r))
+                let q = q * s.max(0.05);
+                // Lumps are knobbly; a plate is lumpy too, at its own size and finer.
+                let bumps = if lump {
+                    lumpiness * r * noise.fbm(d * 1.6 + offset, 4)
+                } else {
+                    0.07 * r * noise.fbm(q / (0.5 * r) + offset, 3) + 0.01 * noise.fbm(q / 0.12 + offset, 2)
+                };
+                rotation * (q + d * bumps)
             }).collect();
-            // Worn at the waterline, as the bergs are: the sea melts a notch there, and the ice
-            // just below, out of the warmer surface water's reach, spreads in a skirt that
-            // shows turquoise through the water. Floated again with its new shape.
-            let h0 = Iceberg::waterline(&piece, sphere, fraction);
-            let height = 2. * axes.y;
-            let skirt = r * (0.04 + 0.06 * rng.next_f64());
-            for p in piece.iter_mut() {
-                let below = (h0 - p.y) / height;
-                let g = smoothstep(0.02, 0.15, below) * (1. - smoothstep(0.3, 0.75, below));
-                let notch = 0.02 * r * (-((p.y - h0) / (0.06 * height)).powi(2)).exp();
-                let across = (p.x * p.x + p.z * p.z).sqrt();
-                let out = skirt * g - notch;
-                if across > 1e-9 && across + out > 0.1 * across {
-                    let k = 1. + out / across;
-                    p.x *= k;
-                    p.z *= k;
+            if lump {
+                // Worn at the waterline, as the bergs are: a notch, and a small skirt below.
+                let h0 = Iceberg::waterline(&piece, sphere, fraction);
+                let height = 2. * axes.y;
+                let skirt = r * (0.04 + 0.06 * rng.next_f64());
+                for p in piece.iter_mut() {
+                    let below = (h0 - p.y) / height;
+                    let g = smoothstep(0.02, 0.15, below) * (1. - smoothstep(0.3, 0.75, below));
+                    let notch = 0.02 * r * (-((p.y - h0) / (0.06 * height)).powi(2)).exp();
+                    let across = (p.x * p.x + p.z * p.z).sqrt();
+                    let out = skirt * g - notch;
+                    if across > 1e-9 && across + out > 0.1 * across {
+                        let k = 1. + out / across;
+                        p.x *= k;
+                        p.z *= k;
+                    }
                 }
             }
             let h = Iceberg::waterline(&piece, sphere, fraction);
@@ -848,7 +860,8 @@ impl FloeField {
             positions.extend(piece);
             triangles.extend(sphere.iter().map(|t| t.map(|i| i + start)));
         }
-        IndexedMesh { positions, normals: vec![], triangles, texcoords: vec![] }
+        println!("Brash: {} pieces, {} triangles", floes.len(), triangles.len());
+        creased(&IndexedMesh { positions, normals: vec![], triangles, texcoords: vec![] }, 35f64.to_radians().cos())
     }
 
     /// How the waves carry floe `f`: the surface's height at its centre, and the turn that

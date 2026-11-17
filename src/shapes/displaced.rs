@@ -27,6 +27,8 @@
 //!   that a quad is about `pixels` pixels across where the cell is nearest it, up to
 //!   `max_level` (default 8), and no finer than half the graph's finest detail (or
 //!   `min_spacing`, metres). Without a camera, every cell is diced at `level` (default 4).
+//!   Cells wholly out of the camera's view, met only by shadow and bounce rays, are diced as
+//!   if `offscreen` (default 8) times further away.
 //!   Since the level depends on the cell alone, every ray (from the camera, a light or a bounce)
 //!   sees the same surface, and shadows match what is seen.
 //! - Cells are diced when a ray first comes near them, and kept. Each keeps a quadtree of
@@ -53,8 +55,14 @@ use std::sync::{Arc, OnceLock};
 pub struct Detail {
     /// The camera's position, and the angle between neighbouring pixels (radians).
     pub eye: Option<(Vector3<f64>, f64)>,
+    /// The camera's view: the unit direction it looks in, and the angle from that to the
+    /// image's corners (radians).
+    pub view: Option<(Vector3<f64>, f64)>,
     /// Quads about this many pixels across.
     pub pixels: f64,
+    /// Cells out of the camera's view, seen only by shadow and bounce rays, are diced this many
+    /// times coarser.
+    pub offscreen: f64,
     pub max_level: u32,
     /// The smallest spacing of vertices, metres (by default half the graph's finest detail).
     pub min_spacing: Option<f64>,
@@ -64,7 +72,7 @@ pub struct Detail {
 
 impl Default for Detail {
     fn default() -> Detail {
-        Detail { eye: None, pixels: 1., max_level: 8, min_spacing: None, level: 4 }
+        Detail { eye: None, view: None, pixels: 1., offscreen: 8., max_level: 8, min_spacing: None, level: 4 }
     }
 }
 
@@ -148,7 +156,19 @@ impl DisplacedTerrain {
                 None => detail.level,
                 Some((eye, pixel_angle)) => {
                     let nearest = Vector3::new(eye.x.clamp(b.min.x, b.max.x), eye.y.clamp(b.min.y, b.max.y), eye.z.clamp(b.min.z, b.max.z));
-                    let footprint = (nearest - eye).norm().max(1e-6) * pixel_angle * detail.pixels;
+                    let mut footprint = (nearest - eye).norm().max(1e-6) * pixel_angle * detail.pixels;
+                    if let Some((forward, corner)) = detail.view {
+                        // Wholly outside the view: the cell's bounding sphere lies further from
+                        // the view's axis than its corners.
+                        let (centre, radius) = (b.mid() - eye, 0.5 * b.size().norm());
+                        let d = centre.norm();
+                        if d > radius {
+                            let off_axis = (centre.dot(&forward) / d).clamp(-1., 1.).acos();
+                            if off_axis - (radius / d).asin() > corner {
+                                footprint *= detail.offscreen.max(1.);
+                            }
+                        }
+                    }
                     (extent / footprint).log2().ceil().max(0.) as u32
                 },
             };
@@ -445,6 +465,23 @@ mod tests {
             if t.intersects(&r).is_none() { misses += 1 }
         }
         assert_eq!(misses, 0);
+    }
+
+    /// Cells out of the camera's view are diced coarser than those in it, as near.
+    #[test]
+    fn test_cells_out_of_view_are_coarser() {
+        let g = json!({"node": "fractal", "scale": 1.5, "smallest": 0.001, "amplitude": 0.3});
+        // In the middle of the grid, looking along +x with a narrow view.
+        let eye = (Vector3::new(0., 1., 0.), 0.002);
+        let all = terrain(g.clone(), Detail { eye: Some(eye), max_level: 10, ..Default::default() });
+        let viewed = terrain(g, Detail { eye: Some(eye), view: Some((Vector3::x(), 0.3)), max_level: 10, ..Default::default() });
+        let level = |t: &DisplacedTerrain, x: f64, z: f64| {
+            let (ix, iz) = (((x + 4.) as usize), ((z + 4.) as usize));
+            t.levels[iz * 8 + ix]
+        };
+        // Ahead: as before. Behind: three levels coarser (eight times the pixels).
+        assert_eq!(level(&viewed, 2.5, 0.5), level(&all, 2.5, 0.5));
+        assert_eq!(level(&viewed, -2.5, 0.5) + 3, level(&all, -2.5, 0.5));
     }
 
     /// Shadow rays agree with the nearest hit.

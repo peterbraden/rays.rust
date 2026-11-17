@@ -1081,9 +1081,20 @@ impl SceneFile {
         let eye = (!camera.is_null() && height > 0. && v["level"].is_null()).then(|| {
             (SceneFile::parse_vec3(&camera["location"]), camera["angle"].as_f64().unwrap_or(0.5).tan() / height)
         });
+        // The view, for a camera looking at a point (`ThinLensCamera`: `angle`'s tangent is the
+        // image's height at unit distance).
+        let width = SceneFile::parse_number(&camera["image_width"], 0.);
+        let view = (eye.is_some() && width > 0. && camera.get("lookat").is_some()
+            && matches!(camera["type"].as_str(), None | Some("perspective"))).then(|| {
+            let forward = (SceneFile::parse_vec3(&camera["lookat"]) - SceneFile::parse_vec3(&camera["location"])).normalize();
+            let tan = camera["angle"].as_f64().unwrap_or(0.5).tan();
+            (forward, (0.5 * tan * (1. + (width / height).powi(2)).sqrt()).atan())
+        }).filter(|(f, _)| f.iter().all(|c| c.is_finite()));
         let detail = Detail {
             eye,
+            view,
             pixels: SceneFile::parse_number(&v["pixels"], 1.),
+            offscreen: SceneFile::parse_number(&v["offscreen"], 8.),
             max_level: SceneFile::parse_int(&v["max_level"], 8) as u32,
             min_spacing: v["min_spacing"].as_f64(),
             level: SceneFile::parse_int(&v["level"], 4) as u32,
@@ -3280,6 +3291,7 @@ impl SceneFile {
             if g["type"].as_str() == Some("terrain") && g.get("displacement").is_some() && g.get("camera").is_none() {
                 g["camera"] = s.camera.clone();
                 g["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+                g["camera"]["image_width"] = serde_json::json!(SceneFile::parse_int(&s.width, 640));
             }
         }
         let geometries = GeometryLibrary::new(named);
@@ -3315,6 +3327,7 @@ impl SceneFile {
             if (o["type"].as_str() == Some("forest") || displaced) && o.get("camera").is_none() {
                 o["camera"] = s.camera.clone();
                 o["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+                o["camera"]["image_width"] = serde_json::json!(SceneFile::parse_int(&s.width, 640));
             }
         }
         // A moon lights the scene with the sunlight it reflects (unless `"light": false`), and

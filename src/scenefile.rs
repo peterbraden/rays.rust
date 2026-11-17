@@ -30,6 +30,8 @@ use crate::procedural::lenticular::{Lenticular, MoistLayer};
 use crate::procedural::terrain::{Terrain as Mountains, TerrainMaterial};
 use crate::procedural::mammatus::Mammatus;
 use crate::procedural::precipitation::Precipitation;
+use crate::procedural::overcast::Overcast;
+use crate::procedural::hill_cloud::HillCloud;
 use crate::material::rainbow::RainbowTable;
 use crate::procedural::harris_cumulus::{CloudSimulation, Forcing, HarrisCumulus, Profile, SimulationParams, Sounding};
 use crate::participatingmedia::create_fog;
@@ -674,7 +676,14 @@ impl SceneFile {
 
     pub fn parse_objects(objs: Vec<Value>, materials: &Map<String, Value>, media: &Map<String, Value>, geometries: &GeometryLibrary) ->Vec<Arc<SceneObject>> {
          let mut objects: Vec<Arc<SceneObject>> = Vec::new();
-         for obj in objs {
+         // Hill cloud joins the first overcast deck, mapped as it is, to be lit with it.
+         let deck = objs.iter().position(|o| o["type"] == "overcast");
+         let flat = |o: &Value| o["mapping"].as_str() == Some("flat") || o["curved"].as_bool() == Some(false);
+         let joins = |o: &Value| deck.is_some_and(|d| o["type"] == "mountains" && o.get("cloud").is_some()
+             && o["cloud"]["join"].as_bool() != Some(false) && flat(o) == flat(&objs[d]));
+         let mut hills: Vec<HillCloud> = objs.iter().filter(|o| joins(o)).filter_map(SceneFile::hill_cloud_field).collect();
+         let joined: Vec<bool> = objs.iter().map(joins).collect();
+         for (k, obj) in objs.into_iter().enumerate() {
             // Report the objects that are slow to build (meshes, oceans), by type and source.
             let start = std::time::Instant::now();
             let name = format!("{}{}", obj["type"].as_str().unwrap_or("?"),
@@ -683,6 +692,12 @@ impl SceneFile {
                 objects.extend(SceneFile::parse_tree(&obj, materials, media));
             } else if obj["type"] == "forest" {
                 objects.extend(SceneFile::parse_forest(&obj, materials, media, geometries));
+            } else if Some(k) == deck && !hills.is_empty() {
+                objects.push(Arc::new(SceneFile::parse_overcast_with(&obj, std::mem::take(&mut hills))));
+            } else if obj["type"] == "mountains" && obj.get("cloud").is_some() && !joined[k] {
+                // The hills, and the cloud they raise.
+                objects.extend(SceneFile::parse_hill_cloud(&obj).map(Arc::new));
+                objects.extend(SceneFile::parse_object(obj, materials, media, geometries));
             } else if let Some(x) = SceneFile::parse_object(obj, materials, media, geometries) {
                 objects.push(x)
             }
@@ -832,6 +847,10 @@ impl SceneFile {
 
         if t == "mammatus" {
             return Some(Arc::new(SceneFile::parse_mammatus(&o)));
+        }
+
+        if t == "overcast" {
+            return Some(Arc::new(SceneFile::parse_overcast(&o)));
         }
 
         if t == "mountains" {
@@ -1235,7 +1254,9 @@ impl SceneFile {
 
     /// A medium's multiple-scattering approximations (`volume::ScatteringApproximation`):
     /// `"similarity_after": N` for the similarity relations from the N-th scattering on,
-    /// `"oz": true` or `{"octaves", "a", "b", "c"}` for Wrenninge et al.'s octaves, and
+    /// `"oz": true` or `{"octaves", "a", "b", "c"}` for Wrenninge et al.'s octaves,
+    /// `"diffusion": true` or `{"steps": 32}` for sunlight diffused through thick decks by
+    /// the slab diffusion solution for each column (overcast skies), and
     /// `"delta_m": false` to trace a Henyey-Greenstein medium exactly rather than truncating
     /// its forward peak wherever the camera doesn't see the medium directly (on by default).
     pub fn parse_scattering_approximation(o: &Value) -> ScatteringApproximation {
@@ -1256,6 +1277,11 @@ impl SceneFile {
             similarity_after: o.get("similarity_after").map(|n| SceneFile::parse_int(n, 0) as u32),
             oz,
             delta_m: o["delta_m"].as_bool().unwrap_or(true),
+            diffusion: match o.get("diffusion") {
+                None | Some(Value::Bool(false)) => None,
+                Some(Value::Bool(true)) => Some(32),
+                Some(v) => Some(SceneFile::parse_int(&v["steps"], 32).max(1) as u32),
+            },
         }
     }
 
@@ -1611,6 +1637,62 @@ impl SceneFile {
         create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
     }
 
+    /// An overcast deck of bad weather, with scud beneath (see `procedural::overcast`),
+    /// filling `extent` either side of `center` ([x, z]):
+    ///
+    /// `{"type": "overcast", "base": 900, "thickness": 2500, "density": 0.03, "seed": 0}`
+    ///
+    /// with `system_size` and `thickness_variation` (0 to 1: broad patches of thicker and
+    /// thinner cloud), `lump_size`, `base_variation` (m) and `contrast` (0 to 1: the rounded
+    /// masses on its underside, and how much thinner the cloud is between them), `anisotropy`
+    /// and `wind_direction` ([x, z]: rolls along the wind), `breaks` (0 to 1: gaps), `softness`,
+    /// `detail_size` and `erosion` (the ragged base), the scud's `scud` (0 to 1, how much),
+    /// `scud_depth`, `scud_size` and `scud_density`, and `fade` (a fraction of `extent`).
+    /// `mapping` as for `nubis_clouds`. Rain from it is a `precipitation` object with its base.
+    pub fn parse_overcast(o: &Value) -> SceneObject {
+        SceneFile::parse_overcast_with(o, vec![])
+    }
+
+    /// An overcast deck with hill clouds under it (`hill_cloud_field`) in the same volume, so
+    /// that light diffused down through the deck reaches them; they must share its mapping.
+    pub fn parse_overcast_with(o: &Value, hills: Vec<HillCloud>) -> SceneObject {
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let mut c = Overcast::new(num("base", 900.), num("thickness", 2500.).max(1.), SceneFile::parse_seed(o).unwrap_or(0));
+        c.max_density = num("density", c.max_density).max(0.);
+        c.system_size = num("system_size", c.system_size).max(1.);
+        c.thickness_variation = num("thickness_variation", c.thickness_variation).clamp(0., 1.);
+        c.lump_size = num("lump_size", c.lump_size).max(1.);
+        c.base_variation = num("base_variation", c.base_variation).max(0.);
+        c.contrast = num("contrast", c.contrast).clamp(0., 1.);
+        c.anisotropy = num("anisotropy", c.anisotropy).max(0.1);
+        c.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", c.wind_direction).normalize();
+        c.breaks = num("breaks", c.breaks).clamp(0., 1.);
+        c.softness = num("softness", c.softness).max(0.);
+        c.detail_size = num("detail_size", c.detail_size).max(1.);
+        c.erosion = num("erosion", c.erosion).clamp(0., 1.);
+        c.scud = num("scud", c.scud).clamp(0., 1.);
+        c.scud_depth = num("scud_depth", c.scud_depth).max(1.);
+        c.scud_size = num("scud_size", c.scud_size).max(1.);
+        c.scud_density = num("scud_density", c.scud_density).max(0.);
+        c.center = SceneFile::parse_vec2_def(o, "center", c.center);
+        c.extent = num("extent", c.extent).max(1.);
+        c.fade = num("fade", c.fade).clamp(0., 1.);
+        let bottom = hills.iter().map(|h| h.bottom()).fold(c.bottom(), f64::min);
+        let bounds = BBox::new(
+            Vector3::new(c.center.x - c.extent, bottom, c.center.y - c.extent),
+            Vector3::new(c.center.x + c.extent, c.top(), c.center.y + c.extent),
+        );
+        let field: Arc<dyn DensityField> = if hills.is_empty() {
+            Arc::new(c)
+        } else {
+            let mut fields: Vec<Arc<dyn DensityField>> = vec![Arc::new(c)];
+            fields.extend(hills.into_iter().map(|h| Arc::new(h) as Arc<dyn DensityField>));
+            Arc::new(crate::volume::Sum { fields })
+        };
+        let (bounds, field) = SceneFile::curved(o, bounds, field);
+        create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
     /// Mammatus under an anvil (see `procedural::mammatus`), filling `extent` either side of
     /// `center` ([x, z]):
     ///
@@ -1676,8 +1758,72 @@ impl SceneFile {
     /// with `relief` and `feature_size` (the ridges), `plains` (relief of the plains around),
     /// `base` (the height of its foot: below zero for an island in a `sea`),
     /// `snowline` and `treeline` (m), the colours `snow`, `rock`, `forest` and `grass`, and
-    /// `"mapping": "flat"` for flat ground rather than the planet's.
+    /// `"mapping": "flat"` for flat ground rather than the planet's. A `"cloud"` raises hill cloud
+    /// over it (`parse_hill_cloud`).
     pub fn parse_terrain(o: &Value) -> SceneObject {
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let seed = SceneFile::parse_seed(o).unwrap_or(0);
+        let t = SceneFile::parse_mountains(o);
+        let mut m = TerrainMaterial::new(seed);
+        m.planet_radius = t.planet_radius;
+        m.snowline = num("snowline", m.snowline);
+        m.treeline = num("treeline", m.treeline);
+        m.snow = SceneFile::parse_color_def(o, "snow", m.snow);
+        m.rock = SceneFile::parse_color_def(o, "rock", m.rock);
+        m.forest = SceneFile::parse_color_def(o, "forest", m.forest);
+        m.grass = SceneFile::parse_color_def(o, "grass", m.grass);
+        SceneObject {
+            geometry: Box::new(SmoothMesh::from_indexed(&[t.mesh()])),
+            medium: Box::new(Solid { m: Box::new(m) }),
+        }
+    }
+
+    /// Hill cloud over a `mountains` object's ground (see `procedural::hill_cloud`), from its
+    /// `"cloud"`: `{"deficit": 350, "decay": 250, "density": 0.02, "wind_direction": [x, z],
+    /// "trail": 1500, "humidity_variation": 0.25, "humidity_size": 6000, "detail_size": 150,
+    /// "raggedness": 0.5, "resolution": 512, "seed": 0}`, with the volume's scattering (`albedo`,
+    /// `g`, approximations) as for any cloud. In a scene with an `overcast`, the cloud joins
+    /// the deck's volume (`parse_overcast_with`), scattering as the deck does, so that the
+    /// diffusion approximation lights them as one column; `"join": false` keeps it apart.
+    ///
+    /// The air is saturated by a lift of `deficit` metres: hills taller than that disappear into
+    /// cloud, which hugs them, `decay` metres being how fast the hills' lift of the air dies away
+    /// above them, and streams `trail` metres downwind of the crests.
+    pub fn parse_hill_cloud(o: &Value) -> Option<SceneObject> {
+        let c = o.get("cloud")?;
+        let h = SceneFile::hill_cloud_field(o)?;
+        let terrain = SceneFile::parse_mountains(o);
+        let bounds = BBox::new(
+            Vector3::new(terrain.center.x - terrain.extent, h.bottom(), terrain.center.y - terrain.extent),
+            Vector3::new(terrain.center.x + terrain.extent, h.top(), terrain.center.y + terrain.extent),
+        );
+        let mapping = if terrain.planet_radius.is_none() { serde_json::json!({"mapping": "flat"}) } else { o.clone() };
+        let (bounds, field) = SceneFile::curved(&mapping, bounds, Arc::new(h));
+        Some(create_volume(bounds, field, SceneFile::parse_scattering(c, 0.85)))
+    }
+
+    /// The density field of a `mountains` object's `"cloud"`, in the terrain's own (flat)
+    /// coordinates.
+    pub fn hill_cloud_field(o: &Value) -> Option<HillCloud> {
+        let c = o.get("cloud")?;
+        let terrain = SceneFile::parse_mountains(o);
+        let num = |k: &str, d: f64| SceneFile::parse_number(&c[k], d);
+        let resolution = SceneFile::parse_int(&c["resolution"], 512).max(2);
+        let mut h = HillCloud::new(&terrain, resolution, SceneFile::parse_seed(c).unwrap_or(0));
+        h.deficit = num("deficit", h.deficit).max(1.);
+        h.humidity_variation = num("humidity_variation", h.humidity_variation).clamp(0., 0.9);
+        h.humidity_size = num("humidity_size", h.humidity_size).max(1.);
+        h.decay = num("decay", h.decay).max(1.);
+        h.max_density = num("density", h.max_density).max(0.);
+        h.wind_direction = SceneFile::parse_vec2_def(c, "wind_direction", h.wind_direction).normalize();
+        h.trail = num("trail", h.trail).max(0.);
+        h.detail_size = num("detail_size", h.detail_size).max(1.);
+        h.raggedness = num("raggedness", h.raggedness).clamp(0., 1.);
+        Some(h)
+    }
+
+    /// The heightfield of a `mountains` object.
+    pub fn parse_mountains(o: &Value) -> Mountains {
         let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
         let seed = SceneFile::parse_seed(o).unwrap_or(0);
         let flat = o["mapping"].as_str() == Some("flat");
@@ -1692,20 +1838,8 @@ impl SceneFile {
         t.feature_size = num("feature_size", t.feature_size).max(1.);
         t.plains = num("plains", t.plains);
         t.base = num("base", t.base);
-        let radius = if flat { None } else { Some(SceneFile::parse_number(&o["earth_radius"], EARTH_RADIUS)) };
-        t.planet_radius = radius;
-        let mut m = TerrainMaterial::new(seed);
-        m.planet_radius = radius;
-        m.snowline = num("snowline", m.snowline);
-        m.treeline = num("treeline", m.treeline);
-        m.snow = SceneFile::parse_color_def(o, "snow", m.snow);
-        m.rock = SceneFile::parse_color_def(o, "rock", m.rock);
-        m.forest = SceneFile::parse_color_def(o, "forest", m.forest);
-        m.grass = SceneFile::parse_color_def(o, "grass", m.grass);
-        SceneObject {
-            geometry: Box::new(SmoothMesh::from_indexed(&[t.mesh()])),
-            medium: Box::new(Solid { m: Box::new(m) }),
-        }
+        t.planet_radius = if flat { None } else { Some(SceneFile::parse_number(&o["earth_radius"], EARTH_RADIUS)) };
+        t
     }
 
     /// Lenticular clouds over the lee waves of a ridge (see `procedural::lenticular`):
@@ -3412,6 +3546,23 @@ impl SceneFile {
 mod tests {
     use super::*;
     use crate::ray::Ray;
+
+    #[test]
+    fn test_hill_cloud_joins_an_overcast() {
+        let hills = serde_json::json!({ "type": "mountains", "extent": 3000, "resolution": 16, "peak_height": 600,
+            "peak_radius": 2000, "cloud": { "deficit": 250, "resolution": 64 } });
+        let deck = serde_json::json!({ "type": "overcast", "base": 1200, "extent": 5000 });
+        let none = Map::new();
+        let library = GeometryLibrary::new(Map::new());
+        // With a deck: the hills and the deck, the cloud in the deck's volume.
+        let joined = SceneFile::parse_objects(vec![hills.clone(), deck.clone()], &none, &none, &library);
+        assert_eq!(joined.len(), 2);
+        // Without one, or told not to join: a volume of its own.
+        assert_eq!(SceneFile::parse_objects(vec![hills.clone()], &none, &none, &library).len(), 2);
+        let mut apart = hills.clone();
+        apart["cloud"]["join"] = serde_json::json!(false);
+        assert_eq!(SceneFile::parse_objects(vec![apart, deck], &none, &none, &library).len(), 3);
+    }
 
     #[test]
     fn test_variables_are_substituted() {

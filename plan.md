@@ -1343,6 +1343,62 @@ UI, file IO and rayon's threads would follow.
        `trace`'s 7.1.
      - 16 of 72 demo scenes reach the GPU (plus `deep-space` after #142); the rest stop at
        flattening (media, procedural shapes, textures, spectral rendering): phase 3's fallback.
+   - Sky and space on the GPU (done for accuracy; speed open): the GPU's own sky, not an
+     approximation of it. Goal: as little difference from the CPU as f32 allows.
+
+     Result: ray by ray, the shader's air is within 3e-5 of the renderer's (sky, aerial
+     perspective, sunlight; ground to orbit, below the horizon, moonlit) and its space within
+     4e-4 (`test_air_matches_the_renderer`, `test_space_matches_the_renderer`). Images, 640 x
+     360, 64 spp, mean FLIP against `trace` (GPU, then wavefront): limb-sunset 0.0011 / 0.0011
+     (0.0885 with the map), stratosphere 0.0020 / 0.0017 (0.178), night-orbit 0.0039 / 0.0043
+     (0.056), sky-sunset 0.0117 / 0.0107, sky-custom 0.0105 / 0.0094, glossy-sun 0.0200 /
+     0.0175. The sun's disc needed its angle from the chord and its solid angle as
+     4π sin²(r/2): from f32 cosines its edge was ragged (cos θ within rounding of 1).
+
+     Found, not yet solved: the kernel's size. rust-gpu inlines everything into one kernel;
+     the air and space took the WGSL from 396 KB to 834 KB (after folding the sky's two call
+     sites into one, and space's seven of fbm into three). A demo sample went from 19 ms to
+     48 ms (the CPU's: 41), though the demo has no space: code that never runs still costs
+     registers and occupancy. In a browser the shader's compile went from 2.7 s to 11.8 s.
+     The remedy is the queues of phase 2 below: sky and space in their own kernel, fed the
+     escaping rays, the sky's light samples and aerial perspective's in-scattering (the
+     transmittance, which the path needs at once, is a short march of depths alone).
+
+     Known (from the code): the CPU's escaping rays take `LUTSky::air_radiance`, a lookup in
+     `SkyViewLUT` (8 altitudes, 1-200 m, 256 x 128, Rayleigh, Mie and multiple scattering
+     before the phase functions, which are applied exactly) above the horizon and below 200 m,
+     and otherwise `Air::scattering`, an exact march (32 view steps by `span_samples`, 16 towards
+     the sun at each, `MultipleScattering`'s 32 x 32 table); plus a moonlit copy of the sky
+     (`LUTSky::moonlit`) and `space_seen` (space's radiance times `transmittance_to_space`,
+     skipped below `threshold` of the sky's light). Hits are hazed by `Air::segment` from each
+     ray's origin (a 32-step march with the sun's depth table). Sunlight at a shading point is
+     `Sun::irradiance_at` (the sun's depth table there); the sun's disc is from the ray's
+     origin. The GPU instead bakes a 1024 x 512 map and an aerial table from the camera, and
+     uses one sunlight colour: all three approximations.
+
+     Plan:
+     1. Air: upload the atmosphere's parameters, the sun's depth table, the multiple
+        scattering table and the sky-view tables (about 9.4 MB a sky; WebGPU allows 128 MB a
+        binding); port `air_radiance` (table and exact march), the moonlit sky, `segment`,
+        `sun_transmittance` and the disc to the shader. Escaping rays, hits, sunlight and the
+        disc then evaluate per ray, as on the CPU. Test: the shader's CPU build against
+        `LUTSky` and `SkyMaterial` ray by ray (on the ground, at 200 m either side of the top
+        table, from orbit, below the horizon, at the terminator), then images against the
+        wavefront integrator by FLIP.
+     2. Space: stars from a catalogue built on the CPU (`Stars::each`, sorted by cell, with
+        each cell's offset: the shader can't run `Pcg32`, which needs 64-bit integers WebGPU
+        lacks), evaluated as `Stars::radiance` over the same neighbourhood; the Milky Way,
+        nebulae and galaxies from their parameters and `SeededNoise`'s permutation tables,
+        ported (Perlin, fBm, warped fBm, reddening); `bound` and `threshold` as the CPU.
+     3. The baked map stays only as the distribution sky samples are drawn from (MIS keeps
+        that unbiased); its radiance is no longer used.
+
+     Assumptions, to check: f32 is close enough given altitudes computed without
+     cancellation (h = (|p|^2 + 2 R p_y) / (|p - c| + R) about a planet centred below the
+     origin, not |p - c| - R, which loses 0.5 m at Earth's radius); the exact march (512 exps
+     a ray) is affordable for the escaping rays of orbital scenes; the WGSL stays within what
+     browsers compile (rust-gpu inlines everything: few call sites for the march and noise).
+     Spectral skies stay on the CPU (the GPU doesn't render spectrally).
 2. GPU wavefront with queues: replace the megakernel with stage kernels and queues, with
    identical images (FLIP against the megakernel), then measure on real GPUs (the Mac; the
    browser) against the megakernel to decide which to keep for which device.

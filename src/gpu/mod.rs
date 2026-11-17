@@ -12,17 +12,17 @@
 //! `radiance`, on the CPU against the renderer's own and the GPU's.
 //!
 //! What stays on the CPU: camera rays (generated each pass and uploaded, so every camera,
-//! realistic lenses included, works unchanged), and the sky, baked into an environment map
-//! (equirectangular, `ENV_WIDTH` × `ENV_HEIGHT`) that the shader looks up (bilinearly) for escaping rays and
-//! samples in proportion to its brightness. Each pass's radiance accumulates on the GPU, and is
-//! read back into the render's context every `PASSES_PER_READ` passes.
+//! realistic lenses included, works unchanged), and a map of the sky (equirectangular,
+//! `ENV_WIDTH` × `ENV_HEIGHT`), which the shader samples directions from in proportion to its
+//! brightness and, for a background other than a skysphere's, looks up. A skysphere's air is
+//! the GPU's own: its parameters and tables (`skysphere::AirExport`, as `air_record`s) let the
+//! shader evaluate it per ray as the CPU does, for escaping rays, aerial perspective from each
+//! ray's origin, and sunlight at each point. Each pass's radiance accumulates on the GPU, and
+//! is read back into the render's context every `PASSES_PER_READ` passes.
 //!
-//! Differences from the CPU integrators: f32 arithmetic (ray offsets scaled accordingly); the
-//! sky at the map's resolution; area lights chosen by power (not the light BVH); independent
-//! random numbers (a hash per pixel, pass and dimension), not Sobol'; the sun's irradiance
-//! fixed at its value at the origin (it varies with altitude under a sky); aerial perspective
-//! from a table baked along rays from the camera's position (`AP_*`; the CPU integrates it
-//! from each ray's own origin); point lights isotropic or spot.
+//! Differences from the CPU integrators: f32 arithmetic (ray offsets scaled accordingly); area
+//! lights chosen by power (not the light BVH); independent random numbers (a hash per pixel,
+//! pass and dimension), not Sobol'; point lights isotropic or spot.
 
 use crate::color::Color;
 use crate::rendercontext::RenderContext;
@@ -43,12 +43,6 @@ const ENV_HEIGHT: usize = 512;
 const VISIBILITY_SCALE: usize = 8;
 /// Passes between reading the accumulated image back.
 const PASSES_PER_READ: usize = 8;
-// The aerial perspective table's size and distances, and the flags and kinds, are the shader's.
-const AP_AZIMUTH: usize = pathtrace::AP_AZIMUTH as usize;
-const AP_ELEVATION: usize = pathtrace::AP_ELEVATION as usize;
-const AP_DISTANCE: usize = pathtrace::AP_DISTANCE as usize;
-const AERIAL_FROM: f64 = pathtrace::AERIAL_FROM as f64;
-const AERIAL_TO: f64 = pathtrace::AERIAL_TO as f64;
 const WORKGROUP: u32 = 64;
 const MAX_GROUPS: u32 = 65535;
 
@@ -118,6 +112,101 @@ fn env_direction(x: usize, y: usize) -> Vector3<f64> {
 /// them, and the GPU doesn't sample adaptively (`main` renders such scenes with the path tracer).
 pub fn squares_at_least(c: &Color, n: usize) -> Color {
     Color { rgb: c.rgb.component_mul(&c.rgb) / n.max(1) as f64 }
+}
+
+/// Append `air` (and its moonlit copy) to `tables` as the shader's record (`pathtrace::AIR_*`),
+/// returning where it starts.
+fn air_record(tables: &mut Vec<f32>, air: &crate::skysphere::AirExport) -> u32 {
+    use pathtrace::*;
+    let base = tables.len();
+    tables.resize(base + AIR_HEADER as usize, 0.);
+    let put = |tables: &mut Vec<f32>, i: u32, v: f64| tables[base + i as usize] = v as f32;
+    let put3 = |tables: &mut Vec<f32>, i: u32, v: &Vector3<f64>| (0..3).for_each(|k| tables[base + i as usize + k] = v[k] as f32);
+    let c = air.earth_centre;
+    put3(tables, AIR_CENTRE, &c);
+    put(tables, AIR_RADII, air.earth_radius);
+    put(tables, AIR_RADII + 1, air.atmosphere_radius);
+    // |c|² - r², in f64: the shader's `excess` adds the terms in p, which are small near the
+    // ground, to these.
+    put(tables, AIR_EXCESS, c.norm_squared() - air.earth_radius * air.earth_radius);
+    put(tables, AIR_EXCESS + 1, c.norm_squared() - air.atmosphere_radius * air.atmosphere_radius);
+    put3(tables, AIR_SUN, &air.sun_direction);
+    put(tables, AIR_HEIGHTS, air.rayleigh_thickness);
+    put(tables, AIR_HEIGHTS + 1, air.mie_thickness);
+    put(tables, AIR_BRIGHTNESS, air.brightness);
+    put3(tables, AIR_RAYLEIGH, &air.rayleigh);
+    put(tables, AIR_MIE, air.mie);
+    put(tables, AIR_MIE + 1, air.mie_anisotropy);
+    put3(tables, AIR_OZONE, &air.ozone);
+    for (i, h) in crate::skysphere::LUT_ALTITUDES.iter().enumerate() {
+        put(tables, AIR_LUT_ALTITUDES + i as u32, *h);
+    }
+    let offset = |tables: &mut Vec<f32>, i: u32, values: Option<Vec<f32>>| {
+        let at = match values {
+            Some(v) => { let at = tables.len() as u32; tables.extend(v); at },
+            None => NO_AIR,
+        };
+        tables[base + (AIR_TABLES + i) as usize] = f32::from_bits(at);
+    };
+    offset(tables, 0, Some(air.sun_table.iter().flat_map(|d| d.map(|x| x as f32)).collect()));
+    offset(tables, 1, air.multiple.as_ref().map(|m| m.iter().flat_map(|v| [v.x as f32, v.y as f32, v.z as f32]).collect()));
+    offset(tables, 2, air.lut.as_ref().map(|l| l.iter().flat_map(|(r, m, s)| [r, m, s]).flat_map(|v| [v.x as f32, v.y as f32, v.z as f32]).collect()));
+    let moon = air.moon.as_ref().map_or(NO_AIR, |m| air_record(tables, m));
+    tables[base + (AIR_TABLES + 3) as usize] = f32::from_bits(moon);
+    base as u32
+}
+
+/// Append `space` to `tables` as the shader's record (`pathtrace::SPACE_*`), returning where it
+/// starts: the frame and settings, the noise's tables, and each part's parameters (the stars
+/// as a catalogue, which the shader can't generate).
+fn space_record(tables: &mut Vec<f32>, space: &crate::procedural::space::Space) -> u32 {
+    use pathtrace::*;
+    let base = tables.len();
+    tables.resize(base + SPACE_HEADER as usize, 0.);
+    let f = &space.frame;
+    for (i, v) in [f.centre, f.pole, f.east].iter().flat_map(|v| v.iter()).enumerate() {
+        tables[base + SPACE_FRAME as usize + i] = *v as f32;
+    }
+    tables[base + SPACE_BRIGHTNESS as usize] = space.brightness as f32;
+    tables[base + SPACE_THRESHOLD as usize] = space.threshold as f32;
+    // Every field's noise is Perlin's, with the same table and rotation; only its offset differs.
+    let noise = crate::noise::SeededNoise::new(0);
+    for (i, v) in noise.rotation_rows().iter().enumerate() {
+        tables[base + SPACE_ROTATION as usize + i] = *v as f32;
+    }
+    let put = |tables: &mut Vec<f32>, i: u32, v: u32| tables[base + (SPACE_TABLES + i) as usize] = f32::from_bits(v);
+    let at = tables.len() as u32;
+    tables.extend(noise.permutation().iter().map(|p| *p as f32));
+    put(tables, 0, at);
+    let stars = match &space.stars {
+        Some(stars) => {
+            let (sigma, n, starts, list, flux) = stars.export(&space.frame);
+            let at = tables.len();
+            tables.resize(at + STARS_HEADER as usize, 0.);
+            tables[at] = sigma as f32;
+            tables[at + 1] = f32::from_bits(n as u32);
+            let offset = |tables: &mut Vec<f32>, i: usize, values: Vec<f32>| {
+                tables[at + i] = f32::from_bits(tables.len() as u32);
+                tables.extend(values);
+            };
+            offset(tables, 2, starts.iter().map(|s| f32::from_bits(*s)).collect());
+            offset(tables, 3, list.iter().flat_map(|s| s.map(|x| x as f32)).collect());
+            offset(tables, 4, flux);
+            at as u32
+        },
+        None => NO_AIR,
+    };
+    put(tables, 1, stars);
+    let record = |tables: &mut Vec<f32>, values: Vec<f64>| { let at = tables.len() as u32; tables.extend(values.iter().map(|v| *v as f32)); at };
+    let milky = space.milky_way.as_ref().map_or(NO_AIR, |m| record(tables, m.export()));
+    put(tables, 2, milky);
+    let nebulae = record(tables, space.nebulae.iter().flat_map(|n| n.export()).collect());
+    put(tables, 3, nebulae);
+    put(tables, 4, space.nebulae.len() as u32);
+    let galaxies = record(tables, space.galaxies.iter().flat_map(|g| g.export()).collect());
+    put(tables, 5, galaxies);
+    put(tables, 6, space.galaxies.len() as u32);
+    base as u32
 }
 
 /// A scene uploaded to the GPU, with the pipeline that renders it.
@@ -269,45 +358,26 @@ impl Buffers {
             tables.extend(cdf(&row));
         }
 
-        // Aerial perspective, from the camera's position: transmittance and inscattered light
-        // along each direction (by azimuth from the sun and elevation) to each distance.
-        let aerial_off = tables.len() as u32;
-        if let Some(sky) = &s.atmosphere {
-            let origin = s.camera.get_ray_weighted(0.5, 0.5, 0., 0.).map_or(Vector3::zeros(), |(r, _)| r.ro);
-            let sun = sky.sun_direction();
-            // A frame with the sun's azimuth along x.
-            let ax = Vector3::new(sun.x, 0., sun.z).try_normalize(1e-9).unwrap_or(Vector3::x());
-            let az = Vector3::y().cross(&ax);
-            let entries: Vec<[f32; 6]> = (0..AP_AZIMUTH * AP_ELEVATION * AP_DISTANCE).into_par_iter().map(|i| {
-                let (a, e, k) = (i / (AP_ELEVATION * AP_DISTANCE), (i / AP_DISTANCE) % AP_ELEVATION, i % AP_DISTANCE);
-                let phi = (a as f64 / (AP_AZIMUTH - 1) as f64) * std::f64::consts::PI;
-                let cos_e = -1. + 2. * e as f64 / (AP_ELEVATION - 1) as f64;
-                let sin_e = (1. - cos_e * cos_e).max(0.).sqrt();
-                let d = ax * (sin_e * phi.cos()) + az * (sin_e * phi.sin()) + Vector3::y() * cos_e;
-                let dist = AERIAL_FROM * (AERIAL_TO / AERIAL_FROM).powf(k as f64 / (AP_DISTANCE - 1) as f64);
-                let (t, inscattered) = sky.segment(&origin, &d.normalize(), dist);
-                [t.x as f32, t.y as f32, t.z as f32, inscattered.x as f32, inscattered.y as f32, inscattered.z as f32]
-            }).collect();
-            for e in entries {
-                tables.extend(e);
-            }
-        }
-
-        // The aerial perspective table's frame: the sky's sun's azimuth along x.
-        let ap_frame = {
-            let sun = s.atmosphere.as_ref().map_or(Vector3::y(), |sky| sky.sun_direction());
-            let ax = Vector3::new(sun.x, 0., sun.z).try_normalize(1e-9).unwrap_or(Vector3::x());
-            (ax, Vector3::y().cross(&ax))
+        // The air: the sky's (for escaping rays), the aerial perspective's, the sun's.
+        let sky_air = flat.sky.as_ref().and_then(|sky| sky.medium.material_at(Vector3::zeros()).air());
+        let sky_off = sky_air.map_or(pathtrace::NO_AIR, |a| air_record(&mut tables, &a));
+        let aerial_off = s.atmosphere.as_ref().map_or(pathtrace::NO_AIR, |a| air_record(&mut tables, &a.export()));
+        let sun_off = s.sun.as_ref().and_then(|sun| sun.atmosphere.as_ref()).map_or(pathtrace::NO_AIR, |a| air_record(&mut tables, &a.export()));
+        // Space, if it is the background.
+        let space_off = match &s.render.background {
+            crate::scene::Background::Space(space) => space_record(&mut tables, space),
+            _ => pathtrace::NO_AIR,
         };
+
         let mut flags = 0u32;
-        if s.atmosphere.is_some() { flags |= pathtrace::FLAG_AERIAL; }
+        if aerial_off != pathtrace::NO_AIR { flags |= pathtrace::FLAG_AERIAL; }
         if s.render.sample_lights { flags |= pathtrace::FLAG_SAMPLE_LIGHTS; }
         if s.environment.is_some() { flags |= pathtrace::FLAG_SAMPLE_ENV; }
         let (sun_dir, sun_irr) = match &s.sun {
             Some(sun) => {
                 flags |= pathtrace::FLAG_SUN;
-                // Reddened by the air between it and the camera, as the sky map is baked.
-                let e = sun.irradiance_at(&crate::environment::viewpoint(s));
+                // Above the air: the shader reddens it at each point (`sun_transmittance`).
+                let e = sun.irradiance;
                 (v4(&sun.direction, sun.angular_radius.cos() as f32), Vec4::new(e.rgb.x as f32, e.rgb.y as f32, e.rgb.z as f32, sun.angular_radius as f32))
             },
             None => (Vec4::new(0., 1., 0., 1.), Vec4::ZERO),
@@ -324,9 +394,8 @@ impl Buffers {
             misc: Vec4::new(s.render.regularise as f32, s.black_threshold as f32, s.render.shadow_bias as f32, rr_min),
             sun_dir,
             sun_irr,
-            ap_x: v4(&ap_frame.0, 0.),
-            ap_z: v4(&ap_frame.1, 0.),
-            seed: UVec4::new(s.render.seed as u32, rr, aerial_off, 0),
+            seed: UVec4::new(s.render.seed as u32, rr, 0, 0),
+            air: UVec4::new(sky_off, aerial_off, sun_off, space_off),
         };
         Ok(Buffers { params, prims, nodes, materials, lights, tables })
     }
@@ -622,6 +691,121 @@ mod tests {
         assert!(sums.iter().all(|v| (v[0] - 0.2).abs() < 1e-3), "the background, not {:?}", sums[0]);
     }
 
+    /// The shader's air against the renderer's, ray by ray: the sky's radiance (from its
+    /// tables and integrated), aerial perspective and sunlight, from the ground to orbit.
+    #[test]
+    fn test_air_matches_the_renderer() {
+        let scene = |sky: &str| SceneFile::from_string(format!(r#"{{
+            "width": 8, "height": 8, "supersamples": 1, "background": [0, 0, 0],
+            "camera": {{ "location": [0, 2, 0], "lookat": [0, 2, 10], "up": [0, 1, 0], "angle": 0.6 }},
+            "sun": {{ "intensity": 6 }},
+            "materials": {{ "G": {{ "type": "lambertian", "albedo": [0.3, 0.3, 0.3] }} }},
+            "objects": [ {{ "type": "plane", "y": 0, "material": "G" }}, {sky} ]
+        }}"#));
+        let skies = [
+            ("tables", r#"{ "type": "skysphere", "sun_direction": [0.3, 0.4, 1] }"#),
+            ("exact", r#"{ "type": "skysphere", "sun_direction": [0.3, 0.4, 1], "lut": false }"#),
+            ("sunset", r#"{ "type": "skysphere", "sun_direction": [0, 0.02, 1] }"#),
+            ("night", r#"{ "type": "skysphere", "sun_direction": [0, -0.3, 0.95] }"#),
+            // The sun far below the horizon: the moon's light is all there is.
+            ("moonlit", r#"{ "type": "skysphere", "sun_direction": [0, -0.6, 0.8], "moonlight": { "direction": [0.2, 0.5, -1], "share": 2e-6 } }"#),
+        ];
+        let altitudes = [1.5, 50., 199., 201., 2000., 30e3, 400e3];
+        let mut worst: Vec<(String, f64)> = vec![];
+        for (name, sky) in skies {
+            let s = scene(sky);
+            let flat = FlatScene::build(&s).unwrap();
+            let b = Buffers::build(&s, &flat).unwrap();
+            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let (mut sky_err, mut seg_err, mut sun_err) = (0f64, 0f64, 0f64);
+            for h in altitudes {
+                let o = Vector3::new(30., h, -20.);
+                for d in crate::procedural::space::fibonacci_sphere(300) {
+                    let cpu = crate::wavefront::integrator::sky_radiance(&Ray { ro: o, rd: d }, &s, &flat).rgb;
+                    let gpu = pathtrace::air_radiance(&shader, b.params.air.x, g3(&o), g3(&d));
+                    for ch in 0..3 {
+                        sky_err = sky_err.max((gpu[ch] as f64 - cpu[ch]).abs() / (cpu.max() + 1e-12));
+                    }
+                    if let Some(air) = &s.atmosphere {
+                        for dist in [500., 20e3, 300e3] {
+                            let (t, ins) = air.segment(&o, &d, dist);
+                            let (gt, gi) = pathtrace::aerial_segment(&shader, g3(&o), g3(&d), dist as f32);
+                            for ch in 0..3 {
+                                seg_err = seg_err.max((gt[ch] as f64 - t[ch]).abs());
+                                seg_err = seg_err.max((gi[ch] as f64 - ins[ch]).abs() / (ins.max() + 1e-12));
+                            }
+                        }
+                    }
+                }
+                if let Some(air) = s.sun.as_ref().and_then(|sun| sun.atmosphere.as_ref()) {
+                    let t = air.sun_transmittance(&o);
+                    let g = pathtrace::sun_transmittance(&shader, g3(&o));
+                    for ch in 0..3 {
+                        sun_err = sun_err.max((g[ch] as f64 - t[ch]).abs());
+                    }
+                }
+            }
+            eprintln!("AIR {:8} sky {:.2e} aerial {:.2e} sun {:.2e}", name, sky_err, seg_err, sun_err);
+            worst.push((format!("{} sky", name), sky_err));
+            worst.push((format!("{} aerial", name), seg_err));
+            worst.push((format!("{} sun", name), sun_err));
+        }
+        // f32 against f64: about 1e-5 of the brightest channel (3e-5 at worst when written).
+        for (what, e) in &worst {
+            assert!(*e < 2e-4, "{}: {:.2e}", what, e);
+        }
+    }
+
+    /// The shader's space against the renderer's, direction by direction: its radiance (stars,
+    /// the Milky Way, nebulae, galaxies), its bound, and the sky with space showing through it.
+    #[test]
+    fn test_space_matches_the_renderer() {
+        for name in ["demo/scenes/deep-space.json", "demo/scenes/night-orbit.json"] {
+            let s = SceneFile::from_file(name, &crate::scenefile::Overrides { width: Some(64), height: Some(36), seed: None });
+            let flat = FlatScene::build(&s).unwrap();
+            let b = Buffers::build(&s, &flat).unwrap();
+            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let crate::scene::Background::Space(space) = &s.render.background else { panic!("{} has no space", name) };
+            if name.contains("deep-space") {
+                assert!(space.stars.is_some() && space.milky_way.is_some() && !space.nebulae.is_empty() && !space.galaxies.is_empty(),
+                    "deep-space should exercise every part of space");
+            }
+            // Directions all round, and onto (and just off) stars, which are a pixel or two wide.
+            let mut dirs: Vec<Vector3<f64>> = crate::procedural::space::fibonacci_sphere(4000).collect();
+            if let Some(stars) = &space.stars {
+                let (sigma, _, _, list, _) = stars.export(&space.frame);
+                for st in list.iter().step_by(97).take(400) {
+                    let c = Vector3::new(st[0], st[1], st[2]);
+                    let (t, _) = crate::procedural::space::tangent_basis(&c);
+                    dirs.push(c);
+                    dirs.push((c + t * sigma).normalize());
+                    dirs.push((c + t * 3. * sigma).normalize());
+                }
+            }
+            let (mut worst, mut worst_bound, mut worst_sky) = (0f64, 0f64, 0f64);
+            let o = s.camera.get_ray(0.5, 0.5, 0., 0.).ro;
+            for d in &dirs {
+                let cpu = space.radiance(d).rgb;
+                let gpu = pathtrace::space_radiance_at(&shader, g3(d));
+                let scale = crate::color::luminance(&space.radiance(d)).max(space.bound(d) * 1e-3).max(1e-30);
+                for ch in 0..3 {
+                    worst = worst.max((gpu[ch] as f64 - cpu[ch]).abs() / scale);
+                }
+                let (bc, bg) = (space.bound(d), pathtrace::space_bound_at(&shader, g3(d)) as f64);
+                worst_bound = worst_bound.max((bg - bc).abs() / bc.max(1e-30));
+                let cpu_sky = crate::wavefront::integrator::sky_radiance(&Ray { ro: o, rd: *d }, &s, &flat).rgb;
+                let gpu_sky = pathtrace::background(&shader, g3(&o), g3(d));
+                for ch in 0..3 {
+                    worst_sky = worst_sky.max((gpu_sky[ch] as f64 - cpu_sky[ch]).abs() / cpu_sky.max().max(1e-30));
+                }
+            }
+            // f32 against f64 (noise sampled hundreds of units out, stars' Gaussians a pixel
+            // wide): 4e-4 of the local brightness at worst when written.
+            eprintln!("SPACE {} radiance {:.2e} bound {:.2e} sky {:.2e}", name, worst, worst_bound, worst_sky);
+            assert!(worst < 3e-3 && worst_bound < 1e-5 && worst_sky < 3e-3, "{}: radiance {:.2e} bound {:.2e} sky {:.2e}", name, worst, worst_bound, worst_sky);
+        }
+    }
+
     /// From orbit the GPU sees the sky and the sun the CPU does: its sky map and the sun's
     /// reddening are found from the camera, not the world's origin (on the night side's
     /// ground, where the sun had set, which rendered `limb-sunset` black).
@@ -712,40 +896,43 @@ mod tests {
     /// GPU: a check on the compilation to SPIR-V and its translation for the device.
     #[test]
     fn test_shader_on_the_cpu_matches_the_gpu() {
-        let s = scene();
-        let flat = FlatScene::build(&s).unwrap();
-        let mut gpu = match GpuRenderer::new(&s, &flat) {
-            Ok(g) => g,
-            Err(e) => {
-                eprintln!("skipped: {}", e);
-                return;
-            },
-        };
-        let b = Buffers::build(&s, &flat).unwrap();
-        let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
-        let passes = 32;
-        let mut cpu = Vector3::zeros();
-        let mut cpu_rays = 0u64;
-        for k in 0..passes {
-            for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
-                if ray.d.w < 0.5 {
-                    continue;
+        // Every material and light, and a sky of air with space showing through it from orbit.
+        let orbit = SceneFile::from_file("demo/scenes/night-orbit.json", &crate::scenefile::Overrides { width: Some(24), height: Some(16), seed: None });
+        for (name, s) in [("materials", scene()), ("night-orbit", orbit)] {
+            let flat = FlatScene::build(&s).unwrap();
+            let mut gpu = match GpuRenderer::new(&s, &flat) {
+                Ok(g) => g,
+                Err(e) => {
+                    eprintln!("skipped: {}", e);
+                    return;
+                },
+            };
+            let b = Buffers::build(&s, &flat).unwrap();
+            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let passes = 32;
+            let mut cpu = Vector3::zeros();
+            let mut cpu_rays = 0u64;
+            for k in 0..passes {
+                for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
+                    if ray.d.w < 0.5 {
+                        continue;
+                    }
+                    let mut rng = pathtrace::path_seed(index as u32, k as u32, b.params.seed.x);
+                    let mut rays = 0;
+                    let c = pathtrace::radiance(&shader, ray.o.truncate(), ray.d.truncate(), &mut rng, &mut rays) * ray.o.w;
+                    cpu_rays += rays as u64;
+                    cpu += Vector3::new(c.x as f64, c.y as f64, c.z as f64);
                 }
-                let mut rng = pathtrace::path_seed(index as u32, k as u32, b.params.seed.x);
-                let mut rays = 0;
-                let c = pathtrace::radiance(&shader, ray.o.truncate(), ray.d.truncate(), &mut rng, &mut rays) * ray.o.w;
-                cpu_rays += rays as u64;
-                cpu += Vector3::new(c.x as f64, c.y as f64, c.z as f64);
             }
+            let sums = gpu.run(&s, 0..passes);
+            let on_gpu = sums.iter().fold(Vector3::zeros(), |a, v| a + Vector3::new(v[0] as f64, v[1] as f64, v[2] as f64));
+            for ch in 0..3 {
+                assert!((on_gpu[ch] - cpu[ch]).abs() < 0.01 * cpu[ch], "{} channel {}: GPU {} vs CPU {}", name, ch, on_gpu[ch], cpu[ch]);
+            }
+            // And traces as many rays (w).
+            let gpu_rays: f64 = sums.iter().map(|v| v[3] as f64).sum();
+            assert!((gpu_rays - cpu_rays as f64).abs() < 0.01 * cpu_rays as f64, "{} rays: GPU {} vs CPU {}", name, gpu_rays, cpu_rays);
         }
-        let sums = gpu.run(&s, 0..passes);
-        let on_gpu = sums.iter().fold(Vector3::zeros(), |a, v| a + Vector3::new(v[0] as f64, v[1] as f64, v[2] as f64));
-        for ch in 0..3 {
-            assert!((on_gpu[ch] - cpu[ch]).abs() < 0.01 * cpu[ch], "channel {}: GPU {} vs CPU {}", ch, on_gpu[ch], cpu[ch]);
-        }
-        // And traces as many rays (w).
-        let gpu_rays: f64 = sums.iter().map(|v| v[3] as f64).sum();
-        assert!((gpu_rays - cpu_rays as f64).abs() < 0.01 * cpu_rays as f64, "rays: GPU {} vs CPU {}", gpu_rays, cpu_rays);
     }
 
     /// Every material and kind of light the GPU path has.

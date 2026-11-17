@@ -186,6 +186,25 @@ impl Stars {
         }
     }
 
+    /// The stars for the GPU, which can't generate them (`Pcg32` needs 64-bit integers, which
+    /// WebGPU lacks): the angular standard deviation, cells across a face, where each cell's
+    /// stars start in the list (and where the last ends), each star's direction and flux times
+    /// colour, and each cell's total flux (`bound`).
+    pub fn export(&self, frame: &GalacticFrame) -> (f64, usize, Vec<u32>, Vec<[f64; 6]>, Vec<f32>) {
+        let n = self.cells;
+        let mut starts = Vec::with_capacity(6 * n * n + 1);
+        let mut stars = vec![];
+        for k in 0..6 * n * n {
+            starts.push(stars.len() as u32);
+            self.each_star(k / (n * n), (k / n) % n, k % n, frame, |d, flux, colour| {
+                let c = colour * flux;
+                stars.push([d.x, d.y, d.z, c.x, c.y, c.z]);
+            });
+        }
+        starts.push(stars.len() as u32);
+        (self.sigma, n, starts, stars, self.cell_flux.clone())
+    }
+
     /// Call `f` with each cell (face, row, column) whose stars may be seen in unit direction
     /// `d`: the cell it falls in and those around it, on every face it is near.
     fn neighbourhood(&self, d: &Vector3<f64>, mut f: impl FnMut(usize, usize, usize)) {

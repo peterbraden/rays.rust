@@ -32,11 +32,11 @@ pub struct Params {
     pub sun_dir: Vec4,
     /// The sun's irradiance and angular radius.
     pub sun_irr: Vec4,
-    /// Seed, Russian roulette on, aerial perspective table.
+    /// Seed, Russian roulette on.
     pub seed: UVec4,
-    /// The sun's azimuth frame for the aerial perspective table.
-    pub ap_x: Vec4,
-    pub ap_z: Vec4,
+    /// Records of the air in `tables` (`AIR_*`), or `NO_AIR`: the sky's (for rays that escape),
+    /// the aerial perspective's, the sun's (its reddening); and space's (`SPACE_*`).
+    pub air: UVec4,
 }
 
 #[derive(Copy, Clone)]
@@ -128,13 +128,59 @@ pub const MAT_CONDUCTOR: u32 = 3;
 pub const MAT_EMITTER: u32 = 4;
 pub const MAT_METAL: u32 = 5;
 pub const MAT_CHECKER: u32 = 6;
-/// The aerial perspective table: azimuth from the sun, elevation and distance, its distances
-/// logarithmic from `AERIAL_FROM` to `AERIAL_TO`.
-pub const AP_AZIMUTH: u32 = 32;
-pub const AP_ELEVATION: u32 = 64;
-pub const AP_DISTANCE: u32 = 32;
+/// Hits nearer than this are not hazed (as the renderer's `AERIAL_PERSPECTIVE_FROM`).
 pub const AERIAL_FROM: f32 = 100.0;
-pub const AERIAL_TO: f32 = 2e5;
+/// No record (`Params::air`), table (`AIR_TABLES`) or moon.
+pub const NO_AIR: u32 = 0xffff_ffff;
+/// A record of the air in `tables` (`gpu::air_record`, after `skysphere::AirExport`): these
+/// offsets within it. The earth's centre; its radius and the atmosphere's; |c|² - r² for each,
+/// found in f64 (`excess`); the sun's direction; the Rayleigh and Mie scale heights; the
+/// brightness; the Rayleigh coefficients; Mie's coefficient and anisotropy; ozone's; the
+/// altitudes of the sky-view tables; then the tables' offsets (as bits), `NO_AIR` if absent.
+pub const AIR_CENTRE: u32 = 0;
+pub const AIR_RADII: u32 = 3;
+pub const AIR_EXCESS: u32 = 5;
+pub const AIR_SUN: u32 = 7;
+pub const AIR_HEIGHTS: u32 = 10;
+pub const AIR_BRIGHTNESS: u32 = 12;
+pub const AIR_RAYLEIGH: u32 = 13;
+pub const AIR_MIE: u32 = 16;
+pub const AIR_OZONE: u32 = 18;
+pub const AIR_LUT_ALTITUDES: u32 = 21;
+/// The sun's depth table, multiple scattering's, the sky-view tables, the moon's record.
+pub const AIR_TABLES: u32 = 29;
+pub const AIR_HEADER: u32 = 33;
+/// As `skysphere`'s: the steps of a view ray and of a ray to the sun, the tables' sizes, and the
+/// sky's calibration.
+pub const SKY_STEPS: u32 = 32;
+pub const SUN_STEPS: u32 = 16;
+pub const SUN_TABLE_ALTITUDES: u32 = 64;
+pub const SUN_TABLE_ANGLES: u32 = 256;
+pub const MS_ALTITUDES: u32 = 32;
+pub const MS_SUN_ANGLES: u32 = 32;
+pub const LUT_SLICES: u32 = 8;
+pub const LUT_WIDTH: u32 = 256;
+pub const LUT_HEIGHT: u32 = 128;
+pub const SKY_CALIBRATION: f32 = 0.38317;
+/// A record of space in `tables` (`gpu::space_record`, after `procedural::space::Space`):
+/// the galactic frame (centre, pole, east), brightness, threshold, the noise's rotation between
+/// octaves (rows), then offsets and counts (as bits): the noise's permutation table, the
+/// stars', the Milky Way's, the nebulae's and how many, the galaxies' and how many; `NO_AIR`
+/// for those absent.
+pub const SPACE_FRAME: u32 = 0;
+pub const SPACE_BRIGHTNESS: u32 = 9;
+pub const SPACE_THRESHOLD: u32 = 10;
+pub const SPACE_ROTATION: u32 = 11;
+pub const SPACE_TABLES: u32 = 20;
+pub const SPACE_HEADER: u32 = 27;
+/// The stars' record: σ, cells across a face, then offsets (as bits) of where each cell's stars
+/// start (6 n² + 1 of them), the stars (direction, flux times colour) and each cell's total flux.
+pub const STARS_HEADER: u32 = 5;
+/// `MilkyWay::export`'s order: brightness, dust, disc colour, bulge colour, noise offsets.
+pub const MILKY_SIZE: u32 = 14;
+/// `Nebula::export`'s and `Galaxy::export`'s sizes.
+pub const NEBULA_SIZE: u32 = 18;
+pub const GALAXY_SIZE: u32 = 29;
 /// As the renderer's `ggx::MIN_ALPHA`, `functions::POINT_SUN` and `light`'s limb darkening.
 pub const MIN_ALPHA: f32 = 1e-3;
 pub const POINT_SUN: f32 = 1e-3;
@@ -445,34 +491,790 @@ fn env_sample(s: &Scene, u1: f32, u2: f32) -> Vec4 {
     d.extend(env_pdf(s, d))
 }
 
-fn ap_entry(s: &Scene, a: u32, e: u32, k: u32) -> (Vec3, Vec3) {
-    let i = (s.params.seed.z + 6 * ((a * AP_ELEVATION + e) * AP_DISTANCE + k)) as usize;
-    (Vec3::new(at(s.tables, i as u32), at(s.tables, (i + 1) as u32), at(s.tables, (i + 2) as u32)), Vec3::new(at(s.tables, (i + 3) as u32), at(s.tables, (i + 4) as u32), at(s.tables, (i + 5) as u32)))
+// ---- The atmosphere, per ray, as the renderer's `skysphere` (in f32). ----
+
+/// A record of the air (`AIR_*`), read once.
+#[derive(Copy, Clone)]
+struct Air {
+    centre: Vec3,
+    earth: f32,
+    top: f32,
+    /// |c|² - r² for the earth and the atmosphere (`excess`).
+    earth_k: f32,
+    top_k: f32,
+    sun: Vec3,
+    rayleigh_height: f32,
+    mie_height: f32,
+    brightness: f32,
+    rayleigh: Vec3,
+    mie: f32,
+    g: f32,
+    ozone: Vec3,
+    base: u32,
+    sun_table: u32,
+    multiple: u32,
+    lut: u32,
+    moon: u32,
 }
 
-/// Transmittance and inscattered light along d to distance t (trilinear in the table).
-fn aerial(s: &Scene, d: Vec3, t: f32) -> (Vec3, Vec3) {
-    let x = d.dot(s.params.ap_x.xyz());
-    let z = d.dot(s.params.ap_z.xyz());
-    let fa = (z.atan2(x).abs() / PI).clamp(0.0, 1.0) * (AP_AZIMUTH - 1) as f32;
-    let fe = ((d.y + 1.0) / 2.0).clamp(0.0, 1.0) * (AP_ELEVATION - 1) as f32;
-    let fk = ((t / AERIAL_FROM).ln() / (AERIAL_TO / AERIAL_FROM).ln()).clamp(0.0, 1.0) * (AP_DISTANCE - 1) as f32;
-    let a0 = (fa as u32).min(AP_AZIMUTH - 2);
-    let e0 = (fe as u32).min(AP_ELEVATION - 2);
-    let k0 = (fk as u32).min(AP_DISTANCE - 2);
-    let (wa, we, wk) = (fa - a0 as f32, fe - e0 as f32, fk - k0 as f32);
-    let mut tr = Vec3::ZERO;
-    let mut ins = Vec3::ZERO;
-    let mut c = 0u32;
-    while c < 8 {
-        let (da, de, dk) = (c & 1, (c >> 1) & 1, (c >> 2) & 1);
-        let w = if da == 1 { wa } else { 1.0 - wa } * if de == 1 { we } else { 1.0 - we } * if dk == 1 { wk } else { 1.0 - wk };
-        let (vt, vi) = ap_entry(s, a0 + da, e0 + de, k0 + dk);
-        tr += vt * w;
-        ins += vi * w;
-        c += 1;
+fn tv3(s: &Scene, i: u32) -> Vec3 {
+    Vec3::new(at(s.tables, i), at(s.tables, i + 1), at(s.tables, i + 2))
+}
+
+// (Closures that capture the scene's buffers are avoided here: naga rejects the struct of
+// pointers rust-gpu can leave for them.)
+fn load_air(s: &Scene, base: u32) -> Air {
+    Air {
+        centre: tv3(s, base + AIR_CENTRE), earth: at(s.tables, base + AIR_RADII), top: at(s.tables, base + AIR_RADII + 1),
+        earth_k: at(s.tables, base + AIR_EXCESS), top_k: at(s.tables, base + AIR_EXCESS + 1), sun: tv3(s, base + AIR_SUN),
+        rayleigh_height: at(s.tables, base + AIR_HEIGHTS), mie_height: at(s.tables, base + AIR_HEIGHTS + 1),
+        brightness: at(s.tables, base + AIR_BRIGHTNESS),
+        rayleigh: tv3(s, base + AIR_RAYLEIGH), mie: at(s.tables, base + AIR_MIE), g: at(s.tables, base + AIR_MIE + 1),
+        ozone: tv3(s, base + AIR_OZONE),
+        base,
+        sun_table: at(s.tables, base + AIR_TABLES).to_bits(), multiple: at(s.tables, base + AIR_TABLES + 1).to_bits(),
+        lut: at(s.tables, base + AIR_TABLES + 2).to_bits(), moon: at(s.tables, base + AIR_TABLES + 3).to_bits(),
     }
-    (tr, ins)
+}
+
+/// |p - c|² - r², for k = |c|² - r²: p·p - 2 p·c + k, which keeps its precision near the ground
+/// at a planet's scale, where |p - c|² and r² are 4e13 and agree to six figures.
+fn excess(p: Vec3, c: Vec3, k: f32) -> f32 {
+    p.dot(p) - 2.0 * p.dot(c) + k
+}
+
+/// Height above the ground: (|p - c|² - r²) / (|p - c| + r).
+fn altitude(a: &Air, p: Vec3) -> f32 {
+    excess(p, a.centre, a.earth_k) / ((p - a.centre).length() + a.earth)
+}
+
+/// The roots of |o + t d|² = r² along unit d (nearer first), or None: in the stable form.
+fn sphere_roots(o: Vec3, d: Vec3, c: Vec3, k: f32) -> Option<(f32, f32)> {
+    let b = (o - c).dot(d);
+    let cc = excess(o, c, k);
+    let disc = b * b - cc;
+    if disc < 0.0 {
+        return None;
+    }
+    let q = -(b + if b < 0.0 { -disc.sqrt() } else { disc.sqrt() });
+    if q == 0.0 {
+        return Some((0.0, 0.0));
+    }
+    let (t0, t1) = (q, cc / q);
+    Some(if t0 < t1 { (t0, t1) } else { (t1, t0) })
+}
+
+/// The distance to a sphere along unit d, as the renderer's `Sphere::intersects`: the nearer
+/// root if not behind, else the farther; negative if none.
+fn sphere_hit(o: Vec3, d: Vec3, c: Vec3, k: f32) -> f32 {
+    match sphere_roots(o, d, c, k) {
+        None => -1.0,
+        Some((t0, t1)) => if t0 >= 0.0 { t0 } else { t1 },
+    }
+}
+
+/// `SkyMaterial::view_ray_span`: where the ray is in the atmosphere, up to the ground.
+fn view_ray_span(a: &Air, o: Vec3, d: Vec3) -> Option<(f32, f32)> {
+    let (enter, leave) = sphere_roots(o, d, a.centre, a.top_k)?;
+    if leave <= 0.0 {
+        return None;
+    }
+    let start = enter.max(0.0);
+    let mut end = leave;
+    if excess(o, a.centre, a.earth_k) > 0.0 {
+        let g = sphere_hit(o, d, a.centre, a.earth_k);
+        if g >= 0.0 {
+            end = end.min(g);
+        }
+    }
+    if end <= start { None } else { Some((start, end)) }
+}
+
+/// Sample `k` of `path_samples(length, n)`: (distance, step).
+fn path_sample(length: f32, n: u32, k: u32) -> (f32, f32) {
+    let (lo, hi) = (k as f32 / n as f32, (k + 1) as f32 / n as f32);
+    let u = (lo + hi) / 2.0;
+    (length * u * u, length * (hi * hi - lo * lo))
+}
+
+/// Sample `k` of `SkyMaterial::span_samples(r, start, end, n)`: crowded about the ray's
+/// closest approach to the planet.
+fn span_sample(a: &Air, o: Vec3, d: Vec3, start: f32, end: f32, n: u32, k: u32) -> (f32, f32) {
+    let focus = (-(o - a.centre).dot(d)).clamp(start, end);
+    let (before, after) = (focus - start, end - focus);
+    // Crowded towards b over [a, b], in order of distance; or away from a.
+    let towards = |lo: f32, hi: f32, n: u32, k: u32| { let (t, step) = path_sample(hi - lo, n, n - 1 - k); (hi - t, step) };
+    let away = |lo: f32, hi: f32, n: u32, k: u32| { let (t, step) = path_sample(hi - lo, n, k); (lo + t, step) };
+    if before <= 1e-9 * (end - start) {
+        away(start, end, n, k)
+    } else if after <= 1e-9 * (end - start) {
+        towards(start, end, n, k)
+    } else {
+        let n1 = ((n as f32 * before / (before + after)).round() as u32).clamp(1, n - 1);
+        if k < n1 { towards(start, focus, n1, k) } else { away(focus, end, n - n1, k - n1) }
+    }
+}
+
+/// Optical depths (Rayleigh, Mie, ozone) of a step at `height` (`SkyMaterial::depths`).
+fn depths(a: &Air, height: f32, step: f32) -> Vec3 {
+    let ozone = (1.0 - (height - 25_000.0).abs() / 15_000.0).max(0.0);
+    Vec3::new((-height / a.rayleigh_height).exp() * step, (-height / a.mie_height).exp() * step, ozone * step)
+}
+
+fn transmittance(a: &Air, d: Vec3) -> Vec3 {
+    let tau = a.rayleigh * d.x + Vec3::splat(a.mie * 1.1 * d.y) + a.ozone * d.z;
+    Vec3::new((-tau.x).exp(), (-tau.y).exp(), (-tau.z).exp())
+}
+
+fn scattered(a: &Air, d: Vec3) -> Vec3 {
+    a.rayleigh * d.x + Vec3::splat(a.mie * d.y)
+}
+
+/// `SkyMaterial::optical_depth_towards` the sun: None if the earth is in the way.
+fn depths_to_sun(a: &Air, p: Vec3) -> Option<Vec3> {
+    if sphere_hit(p, a.sun, a.centre, a.earth_k) >= 0.0 {
+        return None;
+    }
+    let length = sphere_hit(p, a.sun, a.centre, a.top_k);
+    if length < 0.0 {
+        return None;
+    }
+    let mut total = Vec3::ZERO;
+    let mut k = 0;
+    while k < SUN_STEPS {
+        let (t, step) = path_sample(length, SUN_STEPS, k);
+        total += depths(a, altitude(a, p + a.sun * t), step);
+        k += 1;
+    }
+    Some(total)
+}
+
+/// Bilinear in a table of `cols`-wide rows of 3 at `off`, at fractional row u and column v.
+fn bilinear3(s: &Scene, off: u32, rows: u32, cols: u32, u: f32, v: f32) -> Vec3 {
+    let (i, j) = ((u as u32).min(rows - 2), (v as u32).min(cols - 2));
+    let (fu, fv) = (u - i as f32, v - j as f32);
+    let (r0, r1) = (off + 3 * (i * cols + j), off + 3 * ((i + 1) * cols + j));
+    (tv3(s, r0) * (1.0 - fv) + tv3(s, r0 + 3) * fv) * (1.0 - fu) + (tv3(s, r1) * (1.0 - fv) + tv3(s, r1 + 3) * fv) * fu
+}
+
+/// `MultipleScattering::lookup`'s Ψ at `p`, or none if it is off.
+fn multiple_at(s: &Scene, a: &Air, p: Vec3) -> Vec3 {
+    if a.multiple == NO_AIR {
+        return Vec3::ZERO;
+    }
+    let mu = (p - a.centre).normalize().dot(a.sun);
+    let u = (altitude(a, p).max(0.0) / (a.top - a.earth)).sqrt().min(1.0) * (MS_ALTITUDES - 1) as f32;
+    let v = (mu.clamp(-1.0, 1.0) + 1.0) / 2.0 * (MS_SUN_ANGLES - 1) as f32;
+    bilinear3(s, a.multiple, MS_ALTITUDES, MS_SUN_ANGLES, u, v)
+}
+
+/// `SkyMaterial::sun_depths_at`: from the table, at the point where the line to the sun enters
+/// the air if `p` is above it (none if it never does).
+fn sun_depths_at(s: &Scene, a: &Air, p_in: Vec3) -> Vec3 {
+    let mut p = p_in;
+    if excess(p, a.centre, a.top_k) > 0.0 {
+        let o = p - a.centre;
+        let b = o.dot(a.sun);
+        let disc = b * b - excess(p, a.centre, a.top_k);
+        if b >= 0.0 || disc <= 0.0 {
+            return Vec3::ZERO;
+        }
+        p += a.sun * (-b - disc.sqrt());
+    }
+    let up = (p - a.centre).normalize();
+    let u = (altitude(a, p).max(0.0) / (a.top - a.earth)).sqrt().min(1.0) * (SUN_TABLE_ALTITUDES - 1) as f32;
+    let v = (up.dot(a.sun).clamp(-1.0, 1.0) + 1.0) / 2.0 * (SUN_TABLE_ANGLES - 1) as f32;
+    bilinear3(s, a.sun_table, SUN_TABLE_ALTITUDES, SUN_TABLE_ANGLES, u, v)
+}
+
+fn rayleigh_phase(mu: f32) -> f32 {
+    3.0 / (16.0 * PI) * (1.0 + mu * mu)
+}
+
+fn mie_phase(mu: f32, g: f32) -> f32 {
+    let g2 = g * g;
+    3.0 / (8.0 * PI) * ((1.0 - g2) * (1.0 + mu * mu)) / ((2.0 + g2) * (1.0 + g2 - 2.0 * g * mu).powf(1.5))
+}
+
+/// `SkyMaterial::apply_phase`.
+fn apply_phase(a: &Air, d: Vec3, rayleigh: Vec3, mie: Vec3, multiple: Vec3) -> Vec3 {
+    let mu = d.dot(a.sun);
+    (rayleigh * rayleigh_phase(mu) + mie * mie_phase(mu, a.g) + multiple) * a.brightness
+}
+
+/// `Air::scattering`: Rayleigh, Mie and multiple scattering along the view ray, before the
+/// phase functions.
+fn scattering(s: &Scene, a: &Air, o: Vec3, d: Vec3) -> (Vec3, Vec3, Vec3) {
+    let (start, end) = match view_ray_span(a, o, d) {
+        Some(span) => span,
+        None => return (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO),
+    };
+    let (mut rayleigh, mut mie, mut multiple) = (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO);
+    let mut depth = Vec3::ZERO;
+    let mut k = 0;
+    while k < SKY_STEPS {
+        let (t, step) = span_sample(a, o, d, start, end, SKY_STEPS, k);
+        let p = o + d * t;
+        let here = depths(a, altitude(a, p), step);
+        depth += here * 0.5;
+        multiple += transmittance(a, depth) * scattered(a, here) * multiple_at(s, a, p);
+        if let Some(to_sun) = depths_to_sun(a, p) {
+            let lit = transmittance(a, depth + to_sun);
+            rayleigh += lit * here.x;
+            mie += lit * here.y;
+        }
+        depth += here * 0.5;
+        k += 1;
+    }
+    (rayleigh * a.rayleigh, mie * a.mie, multiple)
+}
+
+/// One of `SkyViewLUT`'s slices, bilinear (`lookup_slice`).
+fn lut_slice(s: &Scene, a: &Air, slice: u32, d: Vec3) -> (Vec3, Vec3, Vec3) {
+    let l = d.y.clamp(0.0, 1.0).asin();
+    let v = (l / (PI / 2.0)).sqrt() * (LUT_HEIGHT - 1) as f32;
+    let u = fract(d.z.atan2(d.x) / (2.0 * PI)) * LUT_WIDTH as f32;
+    let x0 = (u.floor() as u32) % LUT_WIDTH;
+    let y0 = (v.floor() as u32).min(LUT_HEIGHT - 2);
+    let (x1, y1) = ((x0 + 1) % LUT_WIDTH, y0 + 1);
+    let (fx, fy) = (u - u.floor(), v - y0 as f32);
+    let base = a.lut + slice * LUT_WIDTH * LUT_HEIGHT * 9;
+    let t = UVec4::new(base + 9 * (y0 * LUT_WIDTH + x0), base + 9 * (y0 * LUT_WIDTH + x1), base + 9 * (y1 * LUT_WIDTH + x0), base + 9 * (y1 * LUT_WIDTH + x1));
+    let w = Vec4::new((1.0 - fx) * (1.0 - fy), fx * (1.0 - fy), (1.0 - fx) * fy, fx * fy);
+    // Rayleigh, Mie and multiple scattering, each bilinear.
+    (lut_texels(s, t, w, 0), lut_texels(s, t, w, 3), lut_texels(s, t, w, 6))
+}
+
+/// The four texels `t` (offsets) weighted by `w`, at `c` within each.
+fn lut_texels(s: &Scene, t: UVec4, w: Vec4, c: u32) -> Vec3 {
+    tv3(s, t.x + c) * w.x + tv3(s, t.y + c) * w.y + tv3(s, t.z + c) * w.z + tv3(s, t.w + c) * w.w
+}
+
+/// The altitude of sky-view table `i`.
+fn lut_altitude(s: &Scene, a: &Air, i: u32) -> f32 {
+    at(s.tables, a.base + AIR_LUT_ALTITUDES + i)
+}
+
+/// `SkyViewLUT::lookup`: linear between the two tables about `altitude`; None above the top.
+fn lut_lookup(s: &Scene, a: &Air, d: Vec3, altitude: f32) -> Option<(Vec3, Vec3, Vec3)> {
+    if altitude > lut_altitude(s, a, LUT_SLICES - 1) {
+        return None;
+    }
+    let aa = altitude.max(lut_altitude(s, a, 0));
+    // The first table above `aa` (`partition_point`), at least the second, at most the last.
+    let mut i = 0;
+    while i < LUT_SLICES && lut_altitude(s, a, i) <= aa {
+        i += 1;
+    }
+    let i = i.clamp(1, LUT_SLICES - 1);
+    let (h0, h1) = (lut_altitude(s, a, i - 1), lut_altitude(s, a, i));
+    let f = (aa - h0) / (h1 - h0);
+    let (r0, m0, s0) = lut_slice(s, a, i - 1, d);
+    let (r1, m1, s1) = lut_slice(s, a, i, d);
+    Some((r0 * (1.0 - f) + r1 * f, m0 * (1.0 - f) + m1 * f, s0 * (1.0 - f) + s1 * f))
+}
+
+/// The light the air sends along the ray from `o` towards unit `d`, as the renderer's
+/// `LUTSky::air_radiance` (or `SkyMaterial`'s, without tables): looked up above the horizon
+/// below the highest table, integrated otherwise, and the same for its moonlight.
+pub fn air_radiance(s: &Scene, record: u32, o: Vec3, d: Vec3) -> Vec3 {
+    let mut out = Vec3::ZERO;
+    let mut r = record;
+    // The sky, then its moonlit copy: one call site of the integration.
+    let mut n = 0;
+    while r != NO_AIR && n < 2 {
+        let a = load_air(s, r);
+        let looked_up = if d.y < 0.0 || a.lut == NO_AIR { None } else { lut_lookup(s, &a, d, altitude(&a, o)) };
+        let (rayleigh, mie, multiple) = match looked_up {
+            Some(v) => v,
+            None => scattering(s, &a, o, d),
+        };
+        out += apply_phase(&a, d, rayleigh, mie, multiple) * SKY_CALIBRATION;
+        r = a.moon;
+        n += 1;
+    }
+    out
+}
+
+/// `Air::segment`: for light reaching `o` along unit `d` from `distance` away, the fraction
+/// the air between lets through, and the light it scatters in on the way.
+fn segment(s: &Scene, record: u32, o: Vec3, d: Vec3, distance: f32) -> (Vec3, Vec3) {
+    let a = load_air(s, record);
+    let (start, end) = match view_ray_span(&a, o, d) {
+        Some((start, end)) if start < distance => (start, end.min(distance)),
+        _ => return (Vec3::ONE, Vec3::ZERO),
+    };
+    let mut depth = Vec3::ZERO;
+    let (mut rayleigh, mut mie, mut multiple) = (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO);
+    let mut k = 0;
+    while k < SKY_STEPS {
+        let (t, step) = span_sample(&a, o, d, start, end, SKY_STEPS, k);
+        let p = o + d * t;
+        let here = depths(&a, altitude(&a, p), step);
+        depth += here * 0.5;
+        multiple += transmittance(&a, depth) * scattered(&a, here) * multiple_at(s, &a, p);
+        let lit = transmittance(&a, depth + sun_depths_at(s, &a, p));
+        rayleigh += lit * here.x;
+        mie += lit * here.y;
+        depth += here * 0.5;
+        k += 1;
+    }
+    let inscattered = apply_phase(&a, d, rayleigh * a.rayleigh, mie * a.mie, multiple) * SKY_CALIBRATION;
+    (transmittance(&a, depth), inscattered)
+}
+
+/// The fraction of sunlight reaching `p` through the sun's air (`SkyMaterial::sun_transmittance`);
+/// all of it without one.
+pub fn sun_transmittance(s: &Scene, p: Vec3) -> Vec3 {
+    let record = s.params.air.z;
+    if record == NO_AIR {
+        return Vec3::ONE;
+    }
+    let a = load_air(s, record);
+    transmittance(&a, sun_depths_at(s, &a, p))
+}
+
+/// `SkyMaterial::transmittance_to_space`: the fraction of light from beyond the atmosphere
+/// that crosses it to `o` along unit `d`; none through the ground.
+fn transmittance_to_space(s: &Scene, record: u32, o: Vec3, d: Vec3) -> Vec3 {
+    let a = load_air(s, record);
+    if excess(o, a.centre, a.earth_k) > 0.0 && sphere_hit(o, d, a.centre, a.earth_k) >= 0.0 {
+        return Vec3::ZERO;
+    }
+    let (start, end) = match view_ray_span(&a, o, d) {
+        Some(span) => span,
+        None => return Vec3::ONE,
+    };
+    let mut depth = Vec3::ZERO;
+    let mut k = 0;
+    while k < SKY_STEPS {
+        let (t, step) = span_sample(&a, o, d, start, end, SKY_STEPS, k);
+        depth += depths(&a, altitude(&a, o + d * t), step);
+        k += 1;
+    }
+    transmittance(&a, depth)
+}
+
+/// What reaches `o` along unit `d` from beyond the scene: the sky's air, with space showing
+/// through it where it could add more than its threshold (`SkyMaterial::space_seen`); space
+/// alone; or the background's map.
+pub fn background(s: &Scene, o: Vec3, d: Vec3) -> Vec3 {
+    let (sky, space) = (s.params.air.x, s.params.air.w);
+    if sky == NO_AIR && space == NO_AIR {
+        return env_lookup(s, d);
+    }
+    let mut v = Vec3::ZERO;
+    let mut through = Vec3::ONE;
+    let mut with_space = space != NO_AIR;
+    if sky != NO_AIR {
+        v = air_radiance(s, sky, o, d);
+        if with_space {
+            let threshold = at(s.tables, space + SPACE_THRESHOLD);
+            if space_bound(s, space, d) <= threshold * luminance(v) {
+                with_space = false;
+            } else {
+                through = transmittance_to_space(s, sky, o, d);
+                with_space = through.max_element() > 0.0;
+            }
+        }
+    }
+    if with_space {
+        v += space_radiance(s, space, d) * through;
+    }
+    v
+}
+
+// ---- Space, as `procedural::space` (in f32). ----
+
+/// Where space's parts are (`SPACE_TABLES`): the stars', the Milky Way's, the nebulae's
+/// and how many, the galaxies' and how many.
+fn space_tables(s: &Scene, space: u32) -> (u32, u32, u32, u32, u32, u32) {
+    let t = space + SPACE_TABLES;
+    (at(s.tables, t + 1).to_bits(), at(s.tables, t + 2).to_bits(), at(s.tables, t + 3).to_bits(),
+     at(s.tables, t + 4).to_bits(), at(s.tables, t + 5).to_bits(), at(s.tables, t + 6).to_bits())
+}
+
+fn luminance(c: Vec3) -> f32 {
+    0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z
+}
+
+fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
+    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Galactic longitude and latitude of unit `d` (`GalacticFrame::coordinates`).
+fn galactic(s: &Scene, space: u32, d: Vec3) -> (f32, f32) {
+    let (centre, pole, east) = (tv3(s, space + SPACE_FRAME), tv3(s, space + SPACE_FRAME + 3), tv3(s, space + SPACE_FRAME + 6));
+    let b = d.dot(pole).clamp(-1.0, 1.0).asin();
+    (d.dot(east).atan2(d.dot(centre)), b)
+}
+
+/// `PerlinNoise::noise`, with the permutation table at `perm`.
+fn perlin(s: &Scene, perm: u32, p: Vec3) -> f32 {
+    let f = Vec3::new(p.x.floor(), p.y.floor(), p.z.floor());
+    let xi = ((f.x as i32) & 255) as u32;
+    let yi = ((f.y as i32) & 255) as u32;
+    let zi = ((f.z as i32) & 255) as u32;
+    let (x, y, z) = (p.x - f.x, p.y - f.y, p.z - f.z);
+    let fade = |t: f32| t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+    let (u, v, w) = (fade(x), fade(y), fade(z));
+    let a = perm_at(s, perm, xi) + yi;
+    let aa = perm_at(s, perm, a) + zi;
+    let ab = perm_at(s, perm, a + 1) + zi;
+    let b = perm_at(s, perm, xi + 1) + yi;
+    let ba = perm_at(s, perm, b) + zi;
+    let bb = perm_at(s, perm, b + 1) + zi;
+    let g1 = grad(perm_at(s, perm, aa), x, y, z);
+    let g2 = grad(perm_at(s, perm, ba), x - 1.0, y, z);
+    let g3 = grad(perm_at(s, perm, ab), x, y - 1.0, z);
+    let g4 = grad(perm_at(s, perm, bb), x - 1.0, y - 1.0, z);
+    let g5 = grad(perm_at(s, perm, aa + 1), x, y, z - 1.0);
+    let g6 = grad(perm_at(s, perm, ba + 1), x - 1.0, y, z - 1.0);
+    let g7 = grad(perm_at(s, perm, ab + 1), x, y - 1.0, z - 1.0);
+    let g8 = grad(perm_at(s, perm, bb + 1), x - 1.0, y - 1.0, z - 1.0);
+    let lerp = |a: f32, b: f32, t: f32| a + t * (b - a);
+    let (l1, l2, l3, l4) = (lerp(g1, g2, u), lerp(g3, g4, u), lerp(g5, g6, u), lerp(g7, g8, u));
+    lerp(lerp(l1, l2, v), lerp(l3, l4, v), w)
+}
+
+fn perm_at(s: &Scene, perm: u32, i: u32) -> u32 {
+    at(s.tables, perm + i) as u32
+}
+
+/// `PerlinNoise::grad`: one of the 12 edge directions of a cube, by `hash` % 12, dotted with
+/// (x, y, z).
+fn grad(hash: u32, x: f32, y: f32, z: f32) -> f32 {
+    let h = hash % 12;
+    let first = if h & 1 == 0 { 1.0 } else { -1.0 };
+    let second = if h & 2 == 0 { 1.0 } else { -1.0 };
+    if h < 4 {
+        first * x + second * y
+    } else if h < 8 {
+        first * x + second * z
+    } else {
+        first * y + second * z
+    }
+}
+
+/// `SeededNoise::fbm`: octaves of noise displaced by `offset`, each rotated, at twice the
+/// frequency and half the amplitude.
+fn fbm(s: &Scene, space: u32, offset: Vec3, p: Vec3, octaves: u32) -> f32 {
+    let perm = at(s.tables, space + SPACE_TABLES).to_bits();
+    let (r0, r1, r2) = (tv3(s, space + SPACE_ROTATION), tv3(s, space + SPACE_ROTATION + 3), tv3(s, space + SPACE_ROTATION + 6));
+    let (mut sum, mut amplitude, mut total, mut q) = (0.0, 1.0, 0.0, p);
+    let mut k = 0;
+    while k < octaves {
+        sum += perlin(s, perm, q + offset) * amplitude;
+        total += amplitude;
+        amplitude *= 0.5;
+        q = Vec3::new(r0.dot(q), r1.dot(q), r2.dot(q)) * 2.03;
+        k += 1;
+    }
+    if total > 0.0 { sum / total } else { 0.0 }
+}
+
+/// Where `warped_fbm` samples the three fields that displace its point: the `g`th.
+fn warp_offset(g: u32) -> Vec3 {
+    if g == 0 { Vec3::new(1.7, 9.2, 3.1) } else if g == 1 { Vec3::new(8.3, 2.8, 5.4) } else { Vec3::new(4.6, 7.1, 0.9) }
+}
+
+/// Coordinate `i` of `d` (no indexing by a variable, which logical SPIR-V can't do).
+fn component(d: Vec3, i: u32) -> f32 {
+    if i == 0 { d.x } else if i == 1 { d.y } else { d.z }
+}
+
+/// The cells of the stars that may show in unit `d` (`Stars::neighbourhood`), each passed to
+/// `cell` as its index; `total` adds what it returns.
+fn star_cells(s: &Scene, stars: u32, d: Vec3, want_bound: bool) -> Vec3 {
+    let sigma = at(s.tables, stars);
+    let n = at(s.tables, stars + 1).to_bits();
+    let (starts, data, flux) = (at(s.tables, stars + 2).to_bits(), at(s.tables, stars + 3).to_bits(), at(s.tables, stars + 4).to_bits());
+    let reach = 4.0 * sigma;
+    let norm = 1.0 / (2.0 * PI * sigma * sigma);
+    let mut sum = Vec3::ZERO;
+    let mut face = 0;
+    while face < 6 {
+        let (axis, sign) = (face / 2, if face % 2 == 0 { 1.0 } else { -1.0 });
+        let along = component(d, axis) * sign;
+        let margin = 3.0 * reach;
+        if along > 0.0 {
+            let (u, v) = (component(d, (axis + 1) % 3) / along, component(d, (axis + 2) % 3) / along);
+            if u.abs() <= 1.0 + margin && v.abs() <= 1.0 + margin {
+                let ci = (((u + 1.0) / 2.0 * n as f32).floor() as i32).clamp(0, n as i32 - 1);
+                let cj = (((v + 1.0) / 2.0 * n as f32).floor() as i32).clamp(0, n as i32 - 1);
+                let mut i = (ci - 1).max(0);
+                while i <= (ci + 1).min(n as i32 - 1) {
+                    let mut j = (cj - 1).max(0);
+                    while j <= (cj + 1).min(n as i32 - 1) {
+                        let cell = (face * n + i as u32) * n + j as u32;
+                        if want_bound {
+                            sum.x += at(s.tables, flux + cell);
+                        } else {
+                            let (first, last) = (at(s.tables, starts + cell).to_bits(), at(s.tables, starts + cell + 1).to_bits());
+                            let mut k = first;
+                            while k < last {
+                                let (dir, c) = (tv3(s, data + 6 * k), tv3(s, data + 6 * k + 3));
+                                let r = d - dir;
+                                let r2 = r.dot(r);
+                                if r2 < reach * reach {
+                                    sum += c * (norm * (-r2 / (2.0 * sigma * sigma)).exp());
+                                }
+                                k += 1;
+                            }
+                        }
+                        j += 1;
+                    }
+                    i += 1;
+                }
+            }
+        }
+        face += 1;
+    }
+    if want_bound { Vec3::splat(sum.x * norm) } else { sum }
+}
+
+/// `milky_way::profile`: the disc's and the bulge's glow at (l, b).
+fn milky_profile(l: f32, b: f32) -> (f32, f32) {
+    let scale = 0.06 + 0.05 * l.abs() / PI;
+    let disc = (-b.abs() / scale).exp() * (0.3 + 0.7 * (-(l / 1.4) * (l / 1.4)).exp());
+    let bulge = 1.3 * (-(l * l + (b / 0.75) * (b / 0.75)) / (2.0 * 0.2 * 0.2)).exp();
+    (disc, bulge)
+}
+
+/// A bound on space's luminance in unit `d` (`Space::bound`).
+fn space_bound(s: &Scene, space: u32, d: Vec3) -> f32 {
+    let (stars, milky, nebulae, n_nebulae, galaxies, n_galaxies) = space_tables(s, space);
+    let (l, b) = galactic(s, space, d);
+    let mut total = 0.0;
+    if stars != NO_AIR {
+        total += star_cells(s, stars, d, true).x;
+    }
+    if milky != NO_AIR {
+        let (disc, bulge) = milky_profile(l, b);
+        total += at(s.tables, milky) * (disc + bulge) * 4.73;
+    }
+    let mut k = 0;
+    while k < n_nebulae {
+        let r = nebulae + k * NEBULA_SIZE;
+        if d.dot(tv3(s, r + 1)) >= at(s.tables, r + 5) {
+            let kind = at(s.tables, r) as u32;
+            let scale = if kind == 0 { 1.8 } else if kind == 1 { 1.0 } else if kind == 2 { 4.7 } else { 0.0 };
+            total += at(s.tables, r + 6) * scale;
+        }
+        k += 1;
+    }
+    let mut k = 0;
+    while k < n_galaxies {
+        let r = galaxies + k * GALAXY_SIZE;
+        if d.dot(tv3(s, r + 1)) >= at(s.tables, r + 5) {
+            let spiral = at(s.tables, r) < 0.5;
+            total += at(s.tables, r + 6) * if spiral { 1.0 + 4.0 * 0.12 * (1.0 + 1.8 * 2.2) } else { 1.0 };
+        }
+        k += 1;
+    }
+    total * at(s.tables, space + SPACE_BRIGHTNESS)
+}
+
+/// The radiance from space in unit `d` (`Space::radiance`): stars, the Milky Way's glow and
+/// galaxies behind the dust, reddened by it, and the nebulae's light in front.
+fn space_radiance(s: &Scene, space: u32, d: Vec3) -> Vec3 {
+    let (stars, milky, nebulae, n_nebulae, galaxies, n_galaxies) = space_tables(s, space);
+    let (l, b) = galactic(s, space, d);
+    let mut behind = Vec3::ZERO;
+    let mut tau = 0.0;
+    if stars != NO_AIR {
+        behind += star_cells(s, stars, d, false);
+    }
+    if milky != NO_AIR {
+        let (brightness, dust) = (at(s.tables, milky), at(s.tables, milky + 1));
+        let (disc_colour, bulge_colour) = (tv3(s, milky + 2), tv3(s, milky + 5));
+        let (noise, dust_noise) = (tv3(s, milky + 8), tv3(s, milky + 11));
+        // Its noise, in one call of fbm (rust-gpu inlines each call): the glow's two fields of
+        // clouds (passes 0-1), the dust lane's offset (2), and the dust's two warped fields
+        // (3-6 and 7-10: three fields that displace it, then the field itself; `warped_fbm`).
+        let glows = brightness > 0.0;
+        let dusty = dust > 0.0 && b.abs() <= 0.8;
+        let (mut clouds, mut offset, mut fields) = (1.0, 0.0, Vec3::ZERO);
+        let (mut qa, mut qb) = (Vec3::ZERO, Vec3::ZERO);
+        let mut k = if glows { 0 } else { 2 };
+        let end = if dusty { 11 } else { 2 };
+        while k < end {
+            let (field, p, octaves) = if k < 2 {
+                (noise, d * if k == 0 { 4.0 } else { 23.0 }, 4)
+            } else if k == 2 {
+                (dust_noise, d * 1.5 + Vec3::splat(5.0), 3)
+            } else {
+                let second = k >= 7;
+                let g = if second { k - 7 } else { k - 3 };
+                let base = if second { d * 11.0 + Vec3::new(-3.0, 1.0, 7.0) } else { d * 7.0 };
+                if g < 3 {
+                    (dust_noise, base + warp_offset(g), 4)
+                } else if second {
+                    (dust_noise, base + qb, 5)
+                } else {
+                    (dust_noise, base + qa * 1.1, 7)
+                }
+            };
+            let v = fbm(s, space, field, p, octaves);
+            if k == 0 { clouds += 1.5 * v; } else if k == 1 { clouds += 0.8 * v; } else if k == 2 { offset = v; }
+            else if k == 3 { qa.x = v; } else if k == 4 { qa.y = v; } else if k == 5 { qa.z = v; } else if k == 6 { fields.x = v; }
+            else if k == 7 { qb.x = v; } else if k == 8 { qb.y = v; } else if k == 9 { qb.z = v; } else { fields.y = v; }
+            k += 1;
+        }
+        // The glow (`MilkyWay::glow`).
+        if glows {
+            let (disc, bulge) = milky_profile(l, b);
+            behind += (disc_colour * disc + bulge_colour * bulge) * (clouds.max(0.1).powf(1.3) * brightness);
+        }
+        // The dust (`MilkyWay::dust`).
+        if dusty {
+            let offset = 0.025 * offset;
+            let width = 0.045 + 0.03 * l.abs() / PI;
+            let lane = (-((b - offset) / width) * ((b - offset) / width)).exp();
+            let filaments = smoothstep(0.0, 0.3, fields.x);
+            let centre = 0.5 + 0.9 * (-(l / 1.5) * (l / 1.5)).exp();
+            let clouds = (-(b / 0.3) * (b / 0.3)).exp() * smoothstep(0.25, 0.45, fields.y);
+            tau += dust * (lane * (0.15 + 3.0 * filaments) * centre + 1.2 * clouds);
+        }
+    }
+    let mut k = 0;
+    while k < n_galaxies {
+        behind += galaxy_radiance(s, space, galaxies + k * GALAXY_SIZE, d);
+        k += 1;
+    }
+    let mut front = Vec3::ZERO;
+    let mut k = 0;
+    while k < n_nebulae {
+        let (light, depth) = nebula_sample(s, space, nebulae + k * NEBULA_SIZE, d);
+        front += light;
+        tau += depth;
+        k += 1;
+    }
+    let reddened = if tau <= 0.0 { Vec3::ONE } else { Vec3::new((-tau * 0.81).exp(), (-tau).exp(), (-tau * 1.25).exp()) };
+    (behind * reddened + front) * at(s.tables, space + SPACE_BRIGHTNESS)
+}
+
+/// `nebula::colour`: a colour of unit luminance.
+fn unit_colour(c: Vec3) -> Vec3 {
+    c / luminance(c)
+}
+
+/// `Nebula::sample`: its light in unit `d`, and the optical depth of its dust. Each kind's
+/// fields come from one call of warped fbm and one of fbm, with the kind's parameters.
+fn nebula_sample(s: &Scene, space: u32, r: u32, d: Vec3) -> (Vec3, f32) {
+    let kind = at(s.tables, r) as u32;
+    let centre = tv3(s, r + 1);
+    let (radius, cos_reach, brightness, dust) = (at(s.tables, r + 4), at(s.tables, r + 5), at(s.tables, r + 6), at(s.tables, r + 7));
+    let (axis0, axis1) = (tv3(s, r + 8), tv3(s, r + 11));
+    let (elongation, noise) = (at(s.tables, r + 14), tv3(s, r + 15));
+    let c = d.dot(centre);
+    if c < cos_reach {
+        return (Vec3::ZERO, 0.0);
+    }
+    let w = d / c - centre;
+    let (x, y) = (w.dot(axis0) / (radius * elongation), w.dot(axis1) / radius);
+    let rr = (x * x + y * y).sqrt();
+    let p = Vec3::new(x, y, 0.0) * 2.2;
+    // Its noise, in one call of fbm: the ragged edge (pass 0); the gas of emission, reflection
+    // and dark nebulae, warped (1-4, `warped_fbm`); a second field, emission's lanes or a
+    // planetary nebula's wobble (5).
+    let (gp, strength, gas_octaves) = if kind == 0 { (p, 1.2, 6) } else if kind == 1 { (p * 0.7, 0.8, 5) } else { (p, 1.0, 6) };
+    let (sp, second_octaves) = if kind == 0 { (p * 1.7 + Vec3::new(-7.0, 2.0, 5.0), 5) } else { (p * 1.5, 4) };
+    let (mut edge_field, mut gas_field, mut second) = (0.0, 0.0, 0.0);
+    let mut q = Vec3::ZERO;
+    let mut k = 0;
+    while k < 6 {
+        let wanted = k == 0 || (k <= 4 && kind != 2) || (k == 5 && (kind == 0 || kind == 2));
+        if wanted {
+            let (at_p, octaves) = if k == 0 {
+                (p * 0.8 + Vec3::splat(3.0), 3)
+            } else if k < 4 {
+                (gp + warp_offset(k - 1), 4)
+            } else if k == 4 {
+                (gp + q * strength, gas_octaves)
+            } else {
+                (sp, second_octaves)
+            };
+            let v = fbm(s, space, noise, at_p, octaves);
+            if k == 0 { edge_field = v; } else if k == 1 { q.x = v; } else if k == 2 { q.y = v; } else if k == 3 { q.z = v; }
+            else if k == 4 { gas_field = v; } else { second = v; }
+        }
+        k += 1;
+    }
+    let edge = rr * (1.0 + 0.45 * edge_field);
+    let h_alpha = unit_colour(Vec3::new(1.0, 0.12, 0.22));
+    let o_iii = unit_colour(Vec3::new(0.1, 0.85, 0.75));
+    if kind == 0 {
+        let gas = smoothstep(-0.25, 0.45, gas_field);
+        let envelope = smoothstep(1.05, 0.2, edge);
+        let density = gas * envelope;
+        let core = smoothstep(0.65, 0.0, edge) * gas;
+        let lanes = smoothstep(0.1, 0.45, second) * envelope;
+        let light = h_alpha * density + o_iii * (0.8 * core * core);
+        (light * (brightness * (-2.0 * lanes).exp()), dust * lanes)
+    } else if kind == 1 {
+        let gas = smoothstep(-0.3, 0.5, gas_field);
+        let density = gas * smoothstep(1.0, 0.0, edge).powf(1.5);
+        (unit_colour(Vec3::new(0.35, 0.55, 1.0)) * (brightness * density), dust * density)
+    } else if kind == 2 {
+        let wobbled = rr * (1.0 + 0.15 * second);
+        let shell = (-((wobbled - 0.65) / 0.18) * ((wobbled - 0.65) / 0.18)).exp();
+        let inside = smoothstep(0.75, 0.2, wobbled);
+        let star = (-(rr / 0.04) * (rr / 0.04)).exp() * 3.0;
+        ((h_alpha * shell + o_iii * (0.7 * inside) + Vec3::splat(star)) * brightness, 0.0)
+    } else {
+        let thick = smoothstep(-0.2, 0.4, gas_field) * smoothstep(1.0, 0.3, edge);
+        (Vec3::ZERO, dust * thick)
+    }
+}
+
+/// `Galaxy::radiance`: its light in unit `d`.
+fn galaxy_radiance(s: &Scene, space: u32, r: u32, d: Vec3) -> Vec3 {
+    let elliptical = at(s.tables, r) > 0.5;
+    let centre = tv3(s, r + 1);
+    let (radius, cos_reach, brightness) = (at(s.tables, r + 4), at(s.tables, r + 5), at(s.tables, r + 6));
+    let c = d.dot(centre);
+    if c < cos_reach {
+        return Vec3::ZERO;
+    }
+    let (normal, disc0, disc1, sky0, sky1) = (tv3(s, r + 7), tv3(s, r + 10), tv3(s, r + 13), tv3(s, r + 16), tv3(s, r + 19));
+    let (axis_ratio, arms, pitch, phase, noise) = (at(s.tables, r + 22), at(s.tables, r + 23), at(s.tables, r + 24), at(s.tables, r + 25), tv3(s, r + 26));
+    let w = (d / c - centre) / radius;
+    let old = unit_colour(Vec3::new(1.0, 0.84, 0.64));
+    let young = unit_colour(Vec3::new(0.7, 0.82, 1.0));
+    if elliptical {
+        let (x, y) = (w.dot(sky0), w.dot(sky1) / axis_ratio);
+        let rr = (x * x + y * y).sqrt();
+        return old * (brightness * (-2.5 * (rr / 0.3).powf(0.7)).exp());
+    }
+    let facing0 = normal.dot(centre);
+    let facing = if facing0.abs() < 0.12 { if facing0 < 0.0 { -0.12 } else { 0.12 } } else { facing0 };
+    let p = w - centre * (normal.dot(w) / facing);
+    let (x, y) = (p.dot(disc0), p.dot(disc1));
+    let rho = (x * x + y * y).sqrt();
+    let theta = y.atan2(x);
+    let wind = arms * (theta - (rho + 0.03).ln() / pitch) + phase;
+    let arm = (0.5 + 0.5 * wind.cos()).powi(3) * facing.abs().sqrt();
+    let knots = (1.0 + 1.2 * fbm(s, space, noise, Vec3::new(x, y, 0.0) * 9.0, 4)).max(0.0);
+    let disc = (-rho / 0.28).exp() * smoothstep(1.15, 0.8, rho) * (1.0 / facing.abs()).min(4.0) * 0.12;
+    let r_sky = w.length();
+    let bulge = (-r_sky / 0.06).exp();
+    let across = w.dot(sky1);
+    let lane = 1.0 - 0.75 * (1.0 - facing.abs()) * (1.0 - facing.abs()) * (-(across / 0.035) * (across / 0.035)).exp() * (-r_sky / 0.7).exp();
+    (old * (disc * (0.6 + 0.4 * (1.0 - arm)) + bulge) + young * (disc * arm * 1.8 * knots)) * (brightness * lane)
+}
+
+pub fn space_radiance_at(s: &Scene, d: Vec3) -> Vec3 {
+    space_radiance(s, s.params.air.w, d)
+}
+
+pub fn space_bound_at(s: &Scene, d: Vec3) -> f32 {
+    space_bound(s, s.params.air.w, d)
+}
+
+pub fn aerial_segment(s: &Scene, o: Vec3, d: Vec3, distance: f32) -> (Vec3, Vec3) {
+    segment(s, s.params.air.y, o, d, distance)
 }
 
 // ---- Scattering. ----
@@ -813,20 +1615,31 @@ fn light_pdf(s: &Scene, i: u32, org: Vec3, y: Vec3, n: Vec3) -> f32 {
     if cos <= 0.0 { 0.0 } else { d2 / (cos * prim_area(s, i)) }
 }
 
-fn sun_disc(s: &Scene, d: Vec3) -> Vec3 {
-    let cos = d.dot(s.params.sun_dir.xyz());
-    let cos_r = s.params.sun_dir.w;
-    if cos <= cos_r {
+/// The sun's disc seen from `o` along `d` (`Sun::disc_radiance`): reddened by the air to `o`.
+/// The angle between unit `d` and the sun's centre, from their chord: near the sun, cos θ is
+/// within f32's rounding of 1 (the sun's 1 - cos r is 1.1e-5, f32's steps near 1 are 6e-8), so
+/// the disc's edge, found from the cosine, was ragged.
+fn sun_angle(s: &Scene, d: Vec3) -> f32 {
+    2.0 * ((d - s.params.sun_dir.xyz()).length() / 2.0).min(1.0).asin()
+}
+
+/// The disc's solid angle, 2π (1 - cos r) = 4π sin²(r / 2), without the cancellation.
+fn sun_solid_angle(s: &Scene) -> f32 {
+    let h = (s.params.sun_irr.w / 2.0).sin();
+    4.0 * PI * h * h
+}
+
+fn sun_disc(s: &Scene, o: Vec3, d: Vec3) -> Vec3 {
+    let theta = sun_angle(s, d);
+    if theta >= s.params.sun_irr.w {
         return Vec3::ZERO;
     }
-    let theta = cos.min(1.0).acos();
     let mu = (1.0 - (theta / s.params.sun_irr.w).powi(2)).max(0.0).sqrt();
-    let solid_angle = 2.0 * PI * (1.0 - cos_r);
-    s.params.sun_irr.xyz() * ((1.0 - LIMB_DARKENING * (1.0 - mu)) / (1.0 - LIMB_DARKENING / 3.0) / solid_angle)
+    s.params.sun_irr.xyz() * sun_transmittance(s, o) * ((1.0 - LIMB_DARKENING * (1.0 - mu)) / (1.0 - LIMB_DARKENING / 3.0) / sun_solid_angle(s))
 }
 
 fn sun_disc_pdf(s: &Scene, d: Vec3) -> f32 {
-    if d.dot(s.params.sun_dir.xyz()) <= s.params.sun_dir.w { 0.0 } else { 1.0 / (2.0 * PI * (1.0 - s.params.sun_dir.w)) }
+    if sun_angle(s, d) >= s.params.sun_irr.w { 0.0 } else { 1.0 / sun_solid_angle(s) }
 }
 
 /// A spot light's falloff towards `towards` (pbrt's smoothstep); one for a point light.
@@ -877,26 +1690,47 @@ pub fn radiance(s: &Scene, ro_in: Vec3, rd_in: Vec3, rng: &mut u32, rays: &mut u
     let flags = s.params.offs2.w;
     let n_emitters = s.params.counts.z;
     let mut depth = 0u32;
+    // The sky's light is evaluated in one place (`background`, which is large, and rust-gpu
+    // inlines every call): for the ray that escapes, and for the vertex before's light sample
+    // of the sky, which is kept (`pending`, its weight, origin and direction) until then. A
+    // path that ends after a light sample comes round once more (`done`) to settle it.
+    let mut pending = Vec3::ZERO;
+    let (mut pending_o, mut pending_d) = (Vec3::ZERO, Vec3::Y);
+    let mut done = false;
     loop {
-        let hit = trace(s, ro, rd, 0.0, INF, false);
-        *rays += 1;
-        if hit.prim == NONE {
-            // The sky, weighted against sampling it if the last vertex did.
-            let mut w = 1.0;
-            if !specular && flags & FLAG_SAMPLE_ENV != 0 {
-                w = power_heuristic(prev_pdf, env_pdf(s, rd));
+        let hit = if done { Hit { t: INF, prim: NONE, ng: Vec3::Y, ns: Vec3::Y } } else { trace(s, ro, rd, 0.0, INF, false) };
+        let escaped = !done && hit.prim == NONE;
+        if !done {
+            *rays += 1;
+        }
+        // The sky, weighted against sampling it if the last vertex did.
+        let mut w_sky = 1.0;
+        if escaped && !specular && flags & FLAG_SAMPLE_ENV != 0 {
+            w_sky = power_heuristic(prev_pdf, env_pdf(s, rd));
+        }
+        let mut q = 0;
+        while q < 2 {
+            let (weight, o, d) = if q == 0 { (pending, pending_o, pending_d) } else if escaped { (beta * w_sky, ro, rd) } else { (Vec3::ZERO, ro, rd) };
+            if weight.dot(weight) > 0.0 {
+                l += weight * background(s, o, d);
             }
-            l += beta * env_lookup(s, rd) * w;
+            q += 1;
+        }
+        pending = Vec3::ZERO;
+        if done {
+            break;
+        }
+        if escaped {
             if flags & FLAG_SUN != 0 {
                 let ws = if specular { 1.0 } else { power_heuristic(prev_pdf, sun_disc_pdf(s, rd)) };
-                l += beta * sun_disc(s, rd) * ws;
+                l += beta * sun_disc(s, ro, rd) * ws;
             }
             break;
         }
         // Aerial perspective: the air before the hit attenuates what lies beyond it, and adds
         // its own light.
         if flags & FLAG_AERIAL != 0 && hit.t > AERIAL_FROM {
-            let (tr, ins) = aerial(s, rd, hit.t);
+            let (tr, ins) = aerial_segment(s, ro, rd, hit.t);
             l += beta * ins;
             beta *= tr;
         }
@@ -1012,19 +1846,22 @@ pub fn radiance(s: &Scene, ro_in: Vec3, rd_in: Vec3, rng: &mut u32, rays: &mut u
                 // The sun: a point for lobes that can't resolve its disc, else its disc with MIS.
                 if flags & FLAG_SUN != 0 {
                     let sd = s.params.sun_dir.xyz();
-                    let solid_angle = 2.0 * PI * (1.0 - s.params.sun_dir.w);
+                    let solid_angle = sun_solid_angle(s);
                     if lobe.pdf(wo, sd) * solid_angle < POINT_SUN {
                         wi = sd;
-                        li = s.params.sun_irr.xyz();
+                        li = s.params.sun_irr.xyz() * sun_transmittance(s, above);
                     } else {
-                        let cos_t = 1.0 - rand(rng) * (1.0 - s.params.sun_dir.w);
-                        let sin_t = (1.0 - cos_t * cos_t).max(0.0).sqrt();
+                        // Uniformly in the cone, by 1 - cos θ (as `sun_angle`, without the
+                        // rounding of cos θ near 1).
+                        let one_minus = rand(rng) * solid_angle / (2.0 * PI);
+                        let cos_t = 1.0 - one_minus;
+                        let sin_t = (one_minus * (2.0 - one_minus)).max(0.0).sqrt();
                         let phi = 2.0 * PI * rand(rng);
                         let (t, b) = basis(sd);
                         wi = t * (sin_t * phi.cos()) + b * (sin_t * phi.sin()) + sd * cos_t;
                         pdf = sun_disc_pdf(s, wi);
                         if pdf > 0.0 {
-                            li = sun_disc(s, wi);
+                            li = sun_disc(s, above, wi);
                         }
                     }
                 }
@@ -1045,12 +1882,12 @@ pub fn radiance(s: &Scene, ro_in: Vec3, rd_in: Vec3, rng: &mut u32, rays: &mut u
                     }
                 }
             } else if flags & FLAG_SAMPLE_ENV != 0 {
-                // The sky, by its brightness.
+                // The sky, by its brightness: its light found at the top of the next round.
                 let es = env_sample(s, rand(rng), rand(rng));
                 if es.w > 0.0 {
                     wi = es.xyz();
                     pdf = es.w;
-                    li = env_lookup(s, wi);
+                    li = Vec3::ONE;
                 }
             }
             if li.dot(li) > 0.0 {
@@ -1059,24 +1896,33 @@ pub fn radiance(s: &Scene, ro_in: Vec3, rd_in: Vec3, rng: &mut u32, rays: &mut u
                 if f.dot(f) > 0.0 {
                     *rays += 1;
                     if !occluded(s, above, wi, dist) {
-                        l += beta * f * li * w;
+                        if k == n_lights + 2 {
+                            pending = beta * f * w;
+                            pending_o = above;
+                            pending_d = wi;
+                        } else {
+                            l += beta * f * li * w;
+                        }
                     }
                 }
             }
             k += 1;
         }
-        // The next ray.
+        // The next ray (or one more round, for the sky's light sample).
         if depth >= max_depth {
-            break;
+            done = true;
+            continue;
         }
         let wi = lobe.sample(wo, rand(rng), rand(rng), rand(rng));
         let (f, pdf) = lobe.eval_pdf(wo, wi);
         if wi.dot(wi) == 0.0 || pdf <= 0.0 {
-            break;
+            done = true;
+            continue;
         }
         let weight = f / pdf;
         if !survives(s, depth, weight, &mut beta, rng) {
-            break;
+            done = true;
+            continue;
         }
         beta *= weight;
         prev_pdf = pdf;

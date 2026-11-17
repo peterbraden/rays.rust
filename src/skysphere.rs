@@ -67,12 +67,12 @@ pub fn sky_brightness_for_sun(intensity: f64) -> f64 {
     intensity / SKY_CALIBRATION
 }
 
-const DEFAULT_NUM_SAMPLES: usize = 32;
+pub const DEFAULT_NUM_SAMPLES: usize = 32;
 /// Resolution of the sun's transmittance table: altitudes (spaced quadratically, closer low
 /// down) and cosines of its angle from the zenith.
-const SUN_TABLE_ALTITUDES: usize = 64;
-const SUN_TABLE_ANGLES: usize = 256;
-const DEFAULT_NUM_SAMPLES_LIGHT: usize = 16;
+pub const SUN_TABLE_ALTITUDES: usize = 64;
+pub const SUN_TABLE_ANGLES: usize = 256;
+pub const DEFAULT_NUM_SAMPLES_LIGHT: usize = 16;
 
 /// Sample points along a path of `length` through the atmosphere, as (distance, step): the
 /// midpoints, in u, of n equal steps of u, where distance = length u². A ray from inside the
@@ -852,6 +852,8 @@ impl SkyMaterial {
 impl MaterialModel for SkyMaterial {
     fn is_sky(&self) -> bool { true }
 
+    fn air(&self) -> Option<AirExport> { Some(self.export()) }
+
     fn scatter(&self, r: &Ray, _intersection: &Intersection, s: &Scene) -> ScatteredRay {
         // Linear light; display encoding happens at output.
         // In spectral mode, at the sample's wavelengths (`air`).
@@ -926,8 +928,8 @@ pub struct MultipleScattering {
     psi: Vec<Vector3<f64>>,
 }
 
-const MS_ALTITUDES: usize = 32;
-const MS_SUN_ANGLES: usize = 32;
+pub const MS_ALTITUDES: usize = 32;
+pub const MS_SUN_ANGLES: usize = 32;
 const MS_DIRECTIONS: usize = 64;
 const MS_STEPS: usize = 20;
 
@@ -1049,10 +1051,10 @@ pub struct SkyViewLUT {
 /// interpolating between distant altitudes is poor near the horizon (2-4% between 300 m and
 /// 1 km). Scenes keep within tens of metres of the ground; above the top, rays are integrated
 /// exactly.
-const LUT_ALTITUDES: [f64; 8] = [1., 5., 15., 30., 60., 100., 150., 200.];
+pub const LUT_ALTITUDES: [f64; 8] = [1., 5., 15., 30., 60., 100., 150., 200.];
 /// Longitude and latitude resolution of the table.
-const LUT_WIDTH: usize = 256;
-const LUT_HEIGHT: usize = 128;
+pub const LUT_WIDTH: usize = 256;
+pub const LUT_HEIGHT: usize = 128;
 
 impl SkyViewLUT {
     pub fn build(air: &Air, width: usize, height: usize) -> SkyViewLUT {
@@ -1199,8 +1201,66 @@ impl LUTSky {
     }
 }
 
+/// # The air for the GPU
+///
+/// The GPU evaluates the same model in f32 (`gpu::Buffers`, the shader's `air_radiance`,
+/// `segment` and `sun_transmittance`), from these parameters and tables, so that it differs
+/// from the CPU only by rounding.
+pub struct AirExport {
+    pub earth_centre: Vector3<f64>,
+    pub earth_radius: f64,
+    pub atmosphere_radius: f64,
+    pub sun_direction: Vector3<f64>,
+    pub rayleigh_thickness: f64,
+    pub mie_thickness: f64,
+    pub brightness: f64,
+    pub rayleigh: Vector3<f64>,
+    pub mie: f64,
+    pub mie_anisotropy: f64,
+    pub ozone: Vector3<f64>,
+    /// `sun_depths_at`'s table: `SUN_TABLE_ALTITUDES` rows of `SUN_TABLE_ANGLES` depths
+    /// (Rayleigh, Mie, ozone).
+    pub sun_table: Vec<[f64; 3]>,
+    /// `MultipleScattering`'s Ψ, `MS_ALTITUDES` rows of `MS_SUN_ANGLES`, if it is on.
+    pub multiple: Option<Vec<Vector3<f64>>>,
+    /// `SkyViewLUT`'s slices, one per `LUT_ALTITUDES`, each `LUT_HEIGHT` rows of `LUT_WIDTH`
+    /// (Rayleigh, Mie, multiple), for a `LUTSky`; None for a sky integrated exactly.
+    pub lut: Option<Vec<Scattering>>,
+    /// The same air lit by a moon (`LUTSky::moonlit`), added to the sky's light.
+    pub moon: Option<Box<AirExport>>,
+}
+
+impl SkyMaterial {
+    /// This air's parameters and tables, in RGB (`AirExport`).
+    pub fn export(&self) -> AirExport {
+        self.sun_depths_at(&(self.earth.center + Vector3::new(0., self.earth.radius + 1., 0.)));
+        AirExport {
+            earth_centre: self.earth.center, earth_radius: self.earth.radius, atmosphere_radius: self.atmosphere.radius,
+            sun_direction: self.sun_direction, rayleigh_thickness: self.rayleigh_thickness, mie_thickness: self.mie_thickness,
+            brightness: self.brightness, rayleigh: self.rayleigh_coefficients, mie: self.mie_coefficient,
+            mie_anisotropy: self.mie_anisotropy, ozone: self.ozone,
+            sun_table: self.sun_table.get().unwrap().iter().map(|d| [d.r, d.m, d.o]).collect(),
+            multiple: self.multiple_scattering.then(|| self.rgb_ms().psi.clone()),
+            lut: None, moon: None,
+        }
+    }
+}
+
+impl LUTSky {
+    /// The sky's air with its sky-view tables and moonlight (`AirExport`).
+    pub fn export(&self) -> AirExport {
+        AirExport {
+            lut: Some(self.lut.slices.iter().flatten().copied().collect()),
+            moon: self.moonlit.as_ref().map(|m| Box::new(m.export())),
+            ..self.sky.export()
+        }
+    }
+}
+
 impl MaterialModel for LUTSky {
     fn is_sky(&self) -> bool { true }
+
+    fn air(&self) -> Option<AirExport> { Some(self.export()) }
 
     fn scatter(&self, r: &Ray, _intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let v = self.air_radiance(r);

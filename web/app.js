@@ -164,6 +164,7 @@ function resetAccumulation() {
 // Rebuild the scene in every worker and start rendering again.
 async function restartScene() {
     const mine = ++gen;
+    gpu = null;
     showError(null);
     interacting = false; draft = null; draftQueued = false;
     stats.built = 0; stats.buildMs = 0; stats.rendering = false;
@@ -189,6 +190,7 @@ async function restartScene() {
         // of the file the renderer ignores, and if the file is needed the renderer says so.
         const files = await Promise.all(paths.map(p => fetchAsset(p).catch(() => null)));
         if (mine !== gen) { return; }
+        sceneFiles = paths.map((path, i) => [path, files[i]]).filter(([, bytes]) => bytes);
         paths.forEach((path, i) => {
             if (!files[i]) { return; }
             for (const w of workers) {
@@ -208,7 +210,7 @@ async function restartScene() {
         w.postMessage({ type: 'scene', gen: mine, json });
     }
     for (const s of servers) { serverLoop(s, mine, json); }
-    if (wantGpu()) { renderOnGpu(mine, json); }
+    if (wantGpu()) { renderOnGpu(mine, json, sceneFiles); } else { gpuWorker?.postMessage({ type: 'stop' }); }
     updateStatus();
 }
 
@@ -223,6 +225,7 @@ function restartCamera() {
         return;
     }
     const mine = ++gen;
+    gpu = null;
     resetAccumulation();
     const json = JSON.stringify(c);
     for (const w of workers) { w.postMessage({ type: 'camera', gen: mine, json }); }
@@ -230,21 +233,21 @@ function restartCamera() {
     if (wantGpu()) { renderOnGpu(mine, JSON.stringify(previewDoc())); }
 }
 
+let sceneFiles = [];     // the current scene's assets, by path, as fetched
+
 // ---------------------------------------------------------------------------------------
 // The GPU
 //
 // Where the browser has WebGPU and the scene can be flattened for it (triangles, spheres and
-// the simpler materials: `rays::wavefront::flat`), the GPU path tracer renders the picture
-// (`Renderer` in web/src/lib.rs), a few passes a frame. The workers and servers always start
-// on a scene, so there is a picture while the GPU's copy is made; once it is ready they stop
-// (the workers keep the scene, for picking and drafts) and the GPU's picture replaces theirs.
-// If the GPU can't take the scene, or "CPU" is chosen, they simply carry on, and the status
-// line says why the GPU didn't.
-//
-// Making the GPU's copy (parsing and flattening the scene) happens on this thread, and holds
-// the page up while it does: seconds, the first time a scene has a sky.
+// the simpler materials: `rays::wavefront::flat`), the GPU path tracer renders the picture,
+// in a worker of its own (gpu-worker.js). The render workers and servers always start on a
+// scene, so there is a picture while the GPU's copy is made; when the GPU worker says it is
+// ready they stop (the workers keep the scene, for picking and drafts) and its pictures
+// replace theirs. If the GPU can't take the scene, or "CPU" is chosen, they simply carry on,
+// and the status line says why the GPU didn't.
 
-let gpu = null;          // the renderer for the picture being shown
+let gpuWorker = null;
+let gpu = null;          // { gen, adapter, passes }: the GPU is rendering the picture shown
 let gpuWhyNot = '';      // why the last scene wasn't rendered on the GPU
 let gpuAdapter = false;  // the browser has WebGPU and offered an adapter (asked once, at start)
 
@@ -253,52 +256,54 @@ function rendererChoice() {
 }
 
 function wantGpu() {
-    return rendererChoice() !== 'cpu' && gpuAdapter && Boolean(encoder);
+    return rendererChoice() !== 'cpu' && gpuAdapter;
 }
 
-async function renderOnGpu(mine, json) {
-    let r;
-    try {
-        r = await encoder.gpuRenderer(json);
-    } catch (e) {
-        if (encoder.dead) { encoder = await instantiate(); }
+function spawnGpuWorker() {
+    const w = new Worker(new URL('gpu-worker.js', import.meta.url), { type: 'module' });
+    w.assets = new Set();
+    w.onmessage = onGpuMessage;
+    w.onerror = e => { gpuWhyNot = `its worker failed: ${e.message}`; gpu = null; };
+    return w;
+}
+
+// Have the GPU render generation `mine`; `files` are the scene's assets, by path.
+function renderOnGpu(mine, json, files = []) {
+    gpuWorker ??= spawnGpuWorker();
+    for (const [path, bytes] of files) {
+        if (!gpuWorker.assets.has(path)) { gpuWorker.assets.add(path); gpuWorker.postMessage({ type: 'asset', path, bytes }); }
+    }
+    gpuWorker.postMessage({ type: 'scene', gen: mine, json });
+}
+
+function onGpuMessage({ data: m }) {
+    if (m.gen !== gen) { return; }
+    if (m.type === 'ready') {
+        // From here the picture is the GPU's.
+        gpu = { gen: m.gen, adapter: m.adapter, passes: 0 };
+        gpuWhyNot = '';
+        for (const w of workers) { w.postMessage({ type: 'render', on: false }); }
+        for (const s of servers) { s.abort?.abort(); }
+    } else if (m.type === 'frame') {
+        if (!gpu || m.width !== pw || m.height !== ph) { return; }
+        image.data.set(m.pixels);
+        ctx.putImageData(image, 0, 0);
+        gpu.passes = m.passes;
+        rowSamples.fill(m.passes);
+        stats.rendering = true;
+        $('status').textContent = `${pw}×${ph} · ${m.passes} samples/pixel · GPU: ${gpu.adapter}`;
+    } else if (m.type === 'refused') {
         // The CPU carries on with it.
-        if (gen === mine) { gpuWhyNot = e.message; updateStatus(); }
-        return;
-    }
-    if (gen !== mine) { r.free(); return; }
-    // From here the picture is the GPU's.
-    for (const w of workers) { w.postMessage({ type: 'render', on: false }); }
-    for (const s of servers) { s.abort?.abort(); }
-    // The renderer this one replaces frees itself when its loop next comes round: it can't
-    // be freed from here, as it may be in the middle of reading a picture back.
-    gpu = r;
-    gpuWhyNot = '';
-    const adapter = r.adapter();
-    try {
-        while (gen === mine && gpu === r && r.passes() < 4096) {
-            // A few passes between pictures: reading back costs more than a pass.
-            for (let i = 0; i < GPU_PASSES_PER_FRAME; i++) { r.pass(); }
-            const pixels = await r.image();
-            if (gen !== mine || gpu !== r) { return; }
-            if (r.width() === pw && r.height() === ph) {
-                image.data.set(pixels);
-                ctx.putImageData(image, 0, 0);
-            }
-            rowSamples.fill(r.passes());
-            stats.rendering = true;
-            $('status').textContent = `${pw}×${ph} · ${r.passes()} samples/pixel · GPU: ${adapter}`;
-            await new Promise(requestAnimationFrame);
-        }
-    } catch (e) {
-        if (gen === mine) { showError(`GPU: ${e.message ?? e}`); }
-    } finally {
-        if (gpu === r) { gpu = null; }
-        r.free();
+        gpuWhyNot = m.message.startsWith('no GPU adapter') ? 'the browser offered no GPU adapter' : m.message;
+        updateStatus();
+    } else if (m.type === 'error') {
+        gpu = null;
+        gpuWhyNot = m.message;
+        // The workers stopped when the GPU took over: have them carry on.
+        for (const w of workers) { w.postMessage({ type: 'render', on: true }); }
+        updateStatus();
     }
 }
-
-const GPU_PASSES_PER_FRAME = 4;
 
 const cameraIsPlain = () => doc.camera && typeof doc.camera === 'object' && !JSON.stringify(doc.camera).includes('"$');
 
@@ -319,6 +324,8 @@ function requestDraft() {
     if (draft) { draftQueued = true; return; }
     draftQueued = false;
     const mine = ++gen;
+    gpu = null;
+    gpuWorker?.postMessage({ type: 'stop' });
     const cols = Math.max(8, Math.round(pw * DRAFT_SCALE)), rows = Math.max(8, Math.round(ph * DRAFT_SCALE));
     draft = { gen: mine, cols, rows, values: new Float32Array(cols * rows * 3), got: 0 };
     const json = JSON.stringify(doc.camera);
@@ -1353,6 +1360,6 @@ async function start() {
 }
 
 // For debugging and tests.
-window.rays = { get doc() { return doc; }, get gpu() { return gpu ? { passes: gpu.passes(), adapter: gpu.adapter() } : null; }, get gpuWhyNot() { return gpuWhyNot; }, get servers() { return servers; }, get schema() { return schema; }, get interacting() { return interacting || Boolean(draft); }, get stats() { return stats; }, get rowSamples() { return rowSamples; }, select };
+window.rays = { get doc() { return doc; }, get gpu() { return gpu; }, get gpuWhyNot() { return gpuWhyNot; }, get servers() { return servers; }, get schema() { return schema; }, get interacting() { return interacting || Boolean(draft); }, get stats() { return stats; }, get rowSamples() { return rowSamples; }, select };
 
 start();

@@ -41,7 +41,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 ## Browser Scene Builder (prototype, `web/`)
 - Build the renderer for the browser: `scripts/build-web.sh` (needs `wasm-bindgen-cli` at the version in `web/Cargo.lock`); writes `web/www/pkg`
 - Serve the repository root and open `/web/`: `python3 -m http.server 8000`, then http://localhost:8000/web/ (or `cargo run --release -- serve`, below)
-- One browser module (the crate in `web/`, wasm-bindgen) holds both renderers: the GPU path tracer (`Renderer`, WebGPU, for scenes that flatten) and the CPU one (`Preview`, every scene). The page uses the GPU when it can and says why when it can't. `web/www/` is the GPU renderer's own test page
+- One browser module (the crate in `web/`, wasm-bindgen) holds both renderers: the GPU path tracer (`Renderer`, WebGPU, for scenes that flatten) and the CPU one (`Preview`, every scene). The page uses the GPU when it can (in `web/gpu-worker.js`; the CPU's workers are `web/worker.js`) and says why when it can't. `web/www/` is the GPU renderer's own test page
 - The renderer is the `rays` library; the command line is its default `cli` feature. Code the library needs must build for `wasm32-unknown-unknown`: read files through `crate::assets`, use `web_time::Instant` rather than `std::time::Instant`, and no threads outside rayon
 - `src/preview.rs` is the interface the page drives (build from JSON, render rows of a layer, set camera, pick)
 - `src/schema.json` lists every scene-file type and field for the editor; `src/schema.rs` tests it against the parser. When the parser gains a type or a field, or a default changes, update the schema (a missing type fails `cargo test schema`)

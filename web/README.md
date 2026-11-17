@@ -35,11 +35,13 @@ own test page, which renders one scene: see `scripts/build-web.sh`.)
 "Renderer: GPU if it can" (the default) renders the picture with the GPU path tracer
 (`src/gpu`, `Renderer` in `web/src/lib.rs`) when the browser has WebGPU and the scene can be
 flattened for it: triangles, spheres, boxes, planes and the simpler materials (see
-`src/wavefront/flat.rs`). The workers still build the scene, to answer clicks and draw drafts
-while the camera moves, but don't render it. Otherwise the status line says why not (no
-WebGPU; what couldn't be flattened) and the CPU renders, as it does when "CPU" is chosen. The
-GPU renderer is rebuilt for every edit and camera move, and render servers are not used
-while it is rendering.
+`src/wavefront/flat.rs`). It runs in a worker of its own (`gpu-worker.js`), so making its copy
+of the scene doesn't hold the page up. The render workers and servers start on every scene as
+usual, so there is a picture meanwhile; when the GPU is ready they stop (the workers keep the
+scene, to answer clicks and draw drafts while the camera moves) and its pictures replace
+theirs. Otherwise the status line says why not (no WebGPU; what couldn't be flattened) and
+the CPU carries on, as it does when "CPU" is chosen. The GPU's copy is remade for every edit
+and camera move, and render servers are not used while it is rendering.
 
 ## Render servers
 

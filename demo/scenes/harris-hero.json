@@ -45,7 +45,7 @@
     },
     {
       "type": "harris_cumulus",
-      "time": 2400,
+      "time": 1200,
       "grid": [
         128,
         168,
@@ -97,7 +97,13 @@
         "surface_pressure": 100000
       },
       "heat_flux": 200,
-      "moisture_flux": 400
+      "moisture_flux": 400,
+      "bubble": {
+        "height": 900,
+        "radius": 500,
+        "warmth": 2,
+        "supersaturation": 0.05
+      }
     }
   ]
 }

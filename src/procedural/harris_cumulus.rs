@@ -225,6 +225,26 @@ pub struct SimulationParams {
     /// at its middle (1 doubles the fluxes there), falling off as a Gaussian. It launches one
     /// thermal stronger than the others, and so one cloud, where it is: a hero cumulus.
     pub hot_spot: Option<(Vector2<f64>, f64, f64)>,
+    /// A cloud to start from (`Bubble`), rather than waiting for the ground to raise one.
+    pub bubble: Option<Bubble>,
+}
+
+/// # A cloud to start from
+///
+/// As in studies of single clouds (the "warm bubble" that starts most simulations of moist
+/// convection, eg. Weisman and Klemp's), a ball of air warmer than its surroundings by
+/// `warmth` K at its middle and saturated with `supersaturation` to spare, falling off to the
+/// sounding at `radius` (as cos²): its first step condenses the excess into cloud, whose
+/// latent heat keeps it buoyant, and it rises and grows into a cumulus in minutes, where it is
+/// put, without the hour of heating that raises clouds from a clear morning (and with it the
+/// whole field of them).
+#[derive(Debug, Clone, Copy)]
+pub struct Bubble {
+    /// Its middle: (x, height, z), m, across the grid from its corner.
+    pub centre: Vector3<f64>,
+    pub radius: f64,
+    pub warmth: f64,
+    pub supersaturation: f64,
 }
 
 impl Default for SimulationParams {
@@ -248,6 +268,7 @@ impl Default for SimulationParams {
             start: 4. * 3600.,
             texture_period: 600.,
             hot_spot: None,
+            bubble: None,
         }
     }
 }
@@ -384,6 +405,20 @@ impl CloudSimulation {
             let jitter = |s: u32| if z < 200. { (worley_hash(i as u32, j as u32, k as u32, seed.wrapping_add(s)) - 0.5) * 2. } else { 0. };
             sim.theta.data[n] = sounding.theta.value(z) + 0.1 * jitter(0);
             sim.vapour.data[n] = sounding.water.value(z) + 2.5e-5 * jitter(1);
+        }
+        if let Some(b) = sim.params.bubble {
+            for n in 0..sim.theta.data.len() {
+                let r = (sim.theta.position(n) - b.centre).norm() / b.radius;
+                if r >= 1. {
+                    continue;
+                }
+                let f = (std::f64::consts::FRAC_PI_2 * r).cos().powi(2);
+                let j = sim.theta.ijk(n).1;
+                sim.theta.data[n] += b.warmth * f;
+                // Saturated, and then some, at its own (warmer) temperature.
+                let saturated = saturation_mixing_ratio(sim.theta.data[n] * sim.exner[j], sim.pressure[j]) * (1. + b.supersaturation);
+                sim.vapour.data[n] += (saturated - sim.vapour.data[n]).max(0.) * f;
+            }
         }
         sim
     }
@@ -1446,6 +1481,24 @@ mod tests {
         let f = Forcing::arm();
         assert_eq!(f.moisture_flux.value(7.5 * 3600.), 500.);
         assert!((f.heat_flux.value(2. * 3600.) - 30.).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_a_seeded_cloud_forms_and_rises() {
+        // A saturated warm bubble in conditionally unstable air: cloud at once, rising.
+        let mut p = small((16, 40, 16), 50.);
+        p.forcing = Forcing::steady(0., 0.);
+        let z = [0., 600., 3000.];
+        p.sounding = Sounding { theta: Profile::new(&z, &[300., 300., 307.]), water: Profile::new(&z, &[0.016, 0.015, 0.006]), surface_pressure: 1e5 };
+        p.bubble = Some(Bubble { centre: Vector3::new(400., 900., 400.), radius: 300., warmth: 1.5, supersaturation: 0.05 });
+        let mut sim = CloudSimulation::new(p);
+        let top = |s: &CloudSimulation| (0..s.cloud.data.len()).filter(|n| s.cloud.data[*n] > 1e-5)
+            .map(|n| s.cloud.position(n).y).fold(0., f64::max);
+        sim.advance_to(10., |_| {});
+        let early = top(&sim);
+        assert!(early > 800., "no cloud from the bubble: top {}", early);
+        sim.advance_to(300., |_| {});
+        assert!(top(&sim) > early + 200., "the cloud didn't rise: {} -> {}", early, top(&sim));
     }
 
     #[test]

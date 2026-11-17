@@ -768,6 +768,10 @@ impl SceneFile {
             return Some(Arc::new(crate::celestial::moon::parse_moon(&o)));
         }
 
+        if t == "gas_giant" {
+            return Some(Arc::new(crate::celestial::giant::parse_giant(&o)));
+        }
+
         if t == "hogan_kew_cirrus" {
             return Some(Arc::new(SceneFile::parse_hogan_kew_cirrus(&o)));
         }
@@ -2993,6 +2997,12 @@ impl SceneFile {
         geometries.preload(&s.objects);
         // A landscape is meshed finest where the camera is.
         let mut scene_objects = s.objects;
+        // A world from a seed becomes the giant or the rocky or icy body it turns out to be.
+        for o in scene_objects.iter_mut() {
+            if o["type"].as_str() == Some("world") {
+                *o = crate::celestial::world_object(o);
+            }
+        }
         let planets: Vec<Value> = scene_objects.iter()
             .filter(|o| matches!(o["type"].as_str(), Some("skysphere") | Some("planet"))).cloned().collect();
         for o in scene_objects.iter_mut() {
@@ -3000,7 +3010,7 @@ impl SceneFile {
                 o["camera"] = s.camera.clone();
             }
             // A moon draws craters down to the camera's pixels, and orbits the scene's planet.
-            if o["type"].as_str() == Some("moon") {
+            if matches!(o["type"].as_str(), Some("moon") | Some("gas_giant")) {
                 if o.get("camera").is_none() {
                     o["camera"] = s.camera.clone();
                     o["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));

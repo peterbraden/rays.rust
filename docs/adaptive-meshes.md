@@ -121,3 +121,17 @@ million trees (381,000 and 1.11 million) from 142 distinct ones, seen from 330 m
 At 1200 × 700 and 32 samples per pixel, on 4 cores: built in 256 s (placing the trees is most of
 it), rendered in 399 s, in 3.1 GB at most. The seven trees nearest the camera are seen in full;
 20 million triangles of cards and bark are built, standing for 2.8 billion placed.
+
+## In daylight: sun, sky and clouds
+
+[`demo/scenes/forest-sunlit.json`](../demo/scenes/forest-sunlit.json) is the stress test with
+the light outdoors: the physical sky (multiple scattering, aerial perspective) and its sun, low
+and to the side, and a field of cumulus (`nubis_clouds`) whose shadows fall on the forest, so
+every shadow ray from a leaf also crosses the clouds' volume. Four forests reach to the horizon,
+coarser with distance: the canopy and understory near the camera, then canopies at 8 m and 10 m
+spacing out to 14 km, 2.65 million trees from 220 distinct ones.
+
+![A forest in daylight](../demo/scenes/forest-sunlit.png)
+
+At 1200 × 700 and 32 samples per pixel, on 4 cores: built in 337 s, rendered in 426 s (171
+million rays, at 402,000 a second), in 3.9 GB at most.

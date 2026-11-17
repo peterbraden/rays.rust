@@ -764,6 +764,10 @@ impl SceneFile {
             }));
         }
 
+        if t == "moon" {
+            return Some(Arc::new(crate::celestial::moon::parse_moon(&o)));
+        }
+
         if t == "hogan_kew_cirrus" {
             return Some(Arc::new(SceneFile::parse_hogan_kew_cirrus(&o)));
         }
@@ -2989,9 +2993,22 @@ impl SceneFile {
         geometries.preload(&s.objects);
         // A landscape is meshed finest where the camera is.
         let mut scene_objects = s.objects;
+        let planets: Vec<Value> = scene_objects.iter()
+            .filter(|o| matches!(o["type"].as_str(), Some("skysphere") | Some("planet"))).cloned().collect();
         for o in scene_objects.iter_mut() {
             if o["type"].as_str() == Some("landscape") && o.get("camera").is_none() {
                 o["camera"] = s.camera.clone();
+            }
+            // A moon draws craters down to the camera's pixels, and orbits the scene's planet.
+            if o["type"].as_str() == Some("moon") {
+                if o.get("camera").is_none() {
+                    o["camera"] = s.camera.clone();
+                    o["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+                }
+                if o.get("planet").is_none() {
+                    let (centre, radius) = crate::celestial::moon::scene_primary(&planets);
+                    o["planet"] = serde_json::json!({ "centre": [centre.x, centre.y, centre.z], "radius": radius });
+                }
             }
             // A forest sees each tree at the detail the camera needs (`parse_forest_lod`).
             if o["type"].as_str() == Some("forest") && o.get("camera").is_none() {

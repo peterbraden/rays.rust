@@ -1191,6 +1191,10 @@ impl SkyMaterial {
         self.earth.radius
     }
 
+    pub fn earth_centre(&self) -> Vector3<f64> {
+        self.earth.center
+    }
+
     pub fn sun_direction(&self) -> Vector3<f64> {
         self.sun_direction
     }

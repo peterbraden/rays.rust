@@ -1,0 +1,74 @@
+{
+  "width": 960,
+  "height": 480,
+  "supersamples": 512,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 64,
+  "path_termination": "russian_roulette",
+  "animation": {
+    "fps": 24,
+    "frames": 48
+  },
+  "clocks": {
+    "weather": "5 min/s"
+  },
+  "output": {
+    "tonemap": "reinhard",
+    "exposure": 1.3,
+    "glare": true
+  },
+  "camera": {
+    "location": [
+      0,
+      2,
+      0
+    ],
+    "lookat": [
+      0,
+      7000,
+      7000
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 1.2
+  },
+  "sun": {
+    "intensity": 5.3
+  },
+  "objects": [
+    {
+      "type": "ocean",
+      "wind": [
+        7,
+        2
+      ],
+      "detail_center": [
+        0,
+        0
+      ]
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        -0.8,
+        0.4,
+        0.45
+      ]
+    },
+    {
+      "type": "hogan_kew_cirrus",
+      "genus": "cirrus",
+      "wind_direction": [
+        1,
+        0.5
+      ],
+      "seed": 3,
+      "clock": "weather"
+    }
+  ]
+}

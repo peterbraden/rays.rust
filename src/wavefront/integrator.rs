@@ -477,7 +477,8 @@ pub fn render(s: &Scene, flat: &FlatScene, rc: &Mutex<RenderContext>, mut after_
         let mut rc = rc.lock().unwrap();
         for y in 0..h {
             for x in 0..w {
-                rc.set_pixel(x, y, image[y * w + x], 1);
+                let c = image[y * w + x];
+                rc.set_pixel(x, y, c, Color { rgb: c.rgb.component_mul(&c.rgb) }, 1);
             }
         }
         rc.rays_cast += rays;

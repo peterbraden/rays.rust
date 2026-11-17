@@ -1,0 +1,219 @@
+{
+  "width": 480,
+  "height": 270,
+  "supersamples": 32,
+  "samples_per_chunk": 2,
+  "max_depth": 32,
+  "shadow_bias": 1,
+  "path_termination": "russian_roulette",
+  "animation": {
+    "fps": 24,
+    "frames": 240,
+    "shutter": 0.5
+  },
+  "background": {
+    "type": "space"
+  },
+  "output": {
+    "flare": {
+      "blades": 6,
+      "blade_rotation": 20,
+      "f_number": 11,
+      "sources": 2,
+      "ghosts": 20,
+      "starburst": 2
+    }
+  },
+  "camera": {
+    "location": {
+      "keys": [
+        [
+          0,
+          [
+            0,
+            3,
+            0
+          ]
+        ],
+        [
+          1.5,
+          [
+            0,
+            30,
+            60
+          ]
+        ],
+        [
+          3,
+          [
+            0,
+            300,
+            600
+          ]
+        ],
+        [
+          4.5,
+          [
+            0,
+            3000,
+            5000
+          ]
+        ],
+        [
+          6,
+          [
+            0,
+            25000,
+            30000
+          ]
+        ],
+        [
+          7.5,
+          [
+            0,
+            120000,
+            110000
+          ]
+        ],
+        [
+          9,
+          [
+            0,
+            400000,
+            260000
+          ]
+        ],
+        [
+          10,
+          [
+            0,
+            420000,
+            280000
+          ]
+        ]
+      ]
+    },
+    "lookat": {
+      "keys": [
+        [
+          0,
+          [
+            0,
+            71.788,
+            997.631
+          ]
+        ],
+        [
+          1.5,
+          [
+            0,
+            96.692,
+            1057.774
+          ]
+        ],
+        [
+          3,
+          [
+            0,
+            360.064,
+            1598.195
+          ]
+        ],
+        [
+          4.5,
+          [
+            0,
+            3039.094,
+            5999.236
+          ]
+        ],
+        [
+          6,
+          [
+            0,
+            24981.293,
+            30999.825
+          ]
+        ],
+        [
+          7.5,
+          [
+            0,
+            119877.374,
+            110992.453
+          ]
+        ],
+        [
+          9,
+          [
+            0,
+            399727.571,
+            260962.176
+          ]
+        ],
+        [
+          10,
+          [
+            0,
+            419719.788,
+            280959.938
+          ]
+        ]
+      ]
+    },
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.9,
+    "aperture": 0
+  },
+  "sun": {
+    "intensity": 6
+  },
+  "objects": [
+    {
+      "type": "ocean",
+      "wind": [
+        9,
+        3
+      ]
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        0.15,
+        0.06,
+        1
+      ]
+    },
+    {
+      "type": "nubis_clouds",
+      "mapping": "global",
+      "base": 1500,
+      "top": 4000,
+      "coverage": 0.5,
+      "density": 0.03,
+      "albedo": [
+        0.99,
+        0.99,
+        0.99
+      ],
+      "g": 0.85,
+      "similarity_after": 2,
+      "seed": 4,
+      "map_size": 512,
+      "wind": [
+        15,
+        0
+      ]
+    },
+    {
+      "type": "hogan_kew_cirrus",
+      "mapping": "global",
+      "genus": "cirrus",
+      "seed": 3
+    }
+  ]
+}

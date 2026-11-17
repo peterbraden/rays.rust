@@ -28,6 +28,7 @@ use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGen
 use crate::procedural::benard_altocumulus::BenardAltocumulus;
 use crate::procedural::lenticular::{Lenticular, MoistLayer};
 use crate::procedural::terrain::{Terrain as Mountains, TerrainMaterial};
+use crate::material::snow::Snow;
 use crate::procedural::mammatus::Mammatus;
 use crate::procedural::precipitation::Precipitation;
 use crate::material::rainbow::RainbowTable;
@@ -1604,7 +1605,10 @@ impl SceneFile {
     ///
     /// with `relief` and `feature_size` (the ridges), `plains` (relief of the plains around),
     /// `base` (the height of its foot: below zero for an island in a `sea`),
-    /// `snowline` and `treeline` (m), the colours `snow`, `rock`, `forest` and `grass`, and
+    /// `snowline` and `treeline` (m), the colours `rock`, `forest` and `grass`, `snow` (by
+    /// default physical snow, `material::snow`, settled and older near the snowline; an object
+    /// of its makeup as for a snow material, eg. `{"preset": "fresh"}`; or a colour for diffuse
+    /// snow), and
     /// `"mapping": "flat"` for flat ground rather than the planet's.
     pub fn parse_terrain(o: &Value) -> SceneObject {
         let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
@@ -1627,7 +1631,15 @@ impl SceneFile {
         m.planet_radius = radius;
         m.snowline = num("snowline", m.snowline);
         m.treeline = num("treeline", m.treeline);
-        m.snow = SceneFile::parse_color_def(o, "snow", m.snow);
+        match &o["snow"] {
+            Value::Null => {},
+            // An object of snow's makeup (`parse_snow_style`): for all the snow.
+            Value::Object(_) => {
+                let style = SceneFile::parse_snow_style(&o["snow"]);
+                m.snow_materials = [Snow::new(style.clone(), 1., seed), Snow::new(style, 1., seed)];
+            },
+            c => m.snow = Some(SceneFile::parse_color(c)),
+        }
         m.rock = SceneFile::parse_color_def(o, "rock", m.rock);
         m.forest = SceneFile::parse_color_def(o, "forest", m.forest);
         m.grass = SceneFile::parse_color_def(o, "grass", m.grass);
@@ -2144,6 +2156,20 @@ impl SceneFile {
                 },
             }));
         }
+        // {"type": "snow_cover", "material": "A", "cover": 0.5, "snow": {"preset": "fresh"},
+        // "up": [0, 1, 0], "drift": 0.3, "seed": 0}: snow lying on A where it faces the sky
+        // (`material::snow::SnowCover`).
+        if props["type"].as_str() == Some("snow_cover") {
+            assert!(props["material"].as_str() != Some(name.as_str()), "Snow cover '{}' can't contain itself", name);
+            let base = SceneFile::require_material(&props["material"], materials, &format!("snow_cover {}", name));
+            let seed = SceneFile::parse_int(&props["seed"], 0) as u64;
+            let snow = crate::material::snow::Snow::new(SceneFile::parse_snow_style(&props["snow"]),
+                SceneFile::parse_number(&props["snow"]["scale"], 1.).max(1e-9), seed);
+            return Some(Box::new(crate::material::snow::SnowCover::new(base, snow,
+                SceneFile::parse_number(&props["cover"], 0.5).clamp(0., 1.),
+                SceneFile::parse_vec3_def(props, "up", Vector3::y()),
+                SceneFile::parse_number(&props["drift"], 0.3), seed)));
+        }
         match SceneFile::parse_material(props) {
             Some(m) => Some(m),
             None => panic!("Material '{}' has unknown type {}", name, props["type"]),
@@ -2373,6 +2399,19 @@ impl SceneFile {
         if t == "soil" {
             return Some(Box::new(SceneFile::parse_soil(o)));
         }
+
+        // {"type": "snow", "preset": "settled", "grain_size": mm, "soot": ppb, "dust": ppm,
+        // "sparkle": 0 to 1, "scale": scene units per metre, "seed": 0} and {"type": "ice",
+        // "preset": "glacier", "bubble_radius": mm, "bubbles": per cm³, "soot", "dust",
+        // "roughness"}: snow and glacier ice from ice's absorption and their grains or bubbles
+        // (`material::snow`).
+        if t == "snow" {
+            return Some(Box::new(crate::material::snow::Snow::new(SceneFile::parse_snow_style(o),
+                SceneFile::parse_number(&o["scale"], 1.).max(1e-9), SceneFile::parse_int(&o["seed"], 0) as u64)));
+        }
+        if t == "ice" {
+            return Some(Box::new(crate::material::snow::Ice::new(SceneFile::parse_ice_style(o))));
+        }
         
         // Noise materials are handled separately in parse_object_medium
         
@@ -2390,6 +2429,33 @@ impl SceneFile {
         }
             */
         None
+    }
+
+    /// Snow's makeup (`material::snow::SnowStyle`): a `"preset"` (fresh, settled, old, firn,
+    /// dirty; by default settled) with any of `grain_size` (mm), `soot` (ppb), `dust` (ppm) and
+    /// `sparkle` overridden.
+    pub fn parse_snow_style(o: &Value) -> crate::material::snow::SnowStyle {
+        let p = crate::material::snow::SnowStyle::preset(o["preset"].as_str().unwrap_or("settled"));
+        let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        crate::material::snow::SnowStyle {
+            grain_size: n("grain_size", p.grain_size).max(1e-3),
+            impurities: crate::material::snow::Impurities { soot: n("soot", p.impurities.soot).max(0.), dust: n("dust", p.impurities.dust).max(0.) },
+            sparkle: n("sparkle", p.sparkle).clamp(0., 1.),
+        }
+    }
+
+    /// Glacier ice's makeup (`material::snow::IceStyle`): a `"preset"` (white, glacier, blue,
+    /// clear; by default glacier) with any of `bubble_radius` (mm), `bubbles` (per cm³), `soot`
+    /// (ppb), `dust` (ppm) and `roughness` overridden.
+    pub fn parse_ice_style(o: &Value) -> crate::material::snow::IceStyle {
+        let p = crate::material::snow::IceStyle::preset(o["preset"].as_str().unwrap_or("glacier"));
+        let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        crate::material::snow::IceStyle {
+            bubble_radius: n("bubble_radius", p.bubble_radius).max(1e-4),
+            bubbles: n("bubbles", p.bubbles).max(0.),
+            impurities: crate::material::snow::Impurities { soot: n("soot", p.impurities.soot).max(0.), dust: n("dust", p.impurities.dust).max(0.) },
+            roughness: n("roughness", p.roughness).clamp(0., 1.),
+        }
     }
 
     /// `{"type": "soil", "preset": "loam"}`: procedural bare ground (see `material::soil`).

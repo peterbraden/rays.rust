@@ -1,0 +1,23 @@
+{
+  "width": 900,
+  "height": 900,
+  "supersamples": 16,
+  "max_depth": 2,
+  "output": { "exposure": 15 },
+  "background": { "type": "space", "seed": 5 },
+  "camera": {
+    "location": [0, 0, 0],
+    "lookat": [0, 0, 1],
+    "up": [0, 1, 0],
+    "angle": 0.115,
+    "aperture": 0
+  },
+  "sun": { "intensity": 0.222, "direction": [-0.12, 0.04, -1] },
+  "objects": [
+    { "type": "gas_giant", "preset": "jupiter", "seed": 1, "position": [0, 0, 1.4e9],
+      "pole": [0, 1, -0.05], "rotation": -40, "resolution": 4096 },
+    { "type": "moon", "preset": "io", "seed": 2, "position": [-37595096, 31529490, 981164245],
+      "planet": { "centre": [0, 0, 1.4e9], "radius": 71492e3 },
+      "earthshine": { "albedo": 0.538, "color": [1.0, 0.95, 0.85] } }
+  ]
+}

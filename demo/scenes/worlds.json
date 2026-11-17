@@ -1,0 +1,24 @@
+{
+  "width": 1200,
+  "height": 400,
+  "supersamples": 16,
+  "max_depth": 1,
+  "output": { "exposure": 1.6 },
+  "background": { "type": "space", "seed": 21 },
+  "camera": {
+    "location": [0, 0, 0],
+    "lookat": [0, 0, 1],
+    "up": [0, 1, 0],
+    "angle": 0.0175,
+    "aperture": 0
+  },
+  "sun": { "intensity": 6, "direction": [-0.6, 0.15, -0.6] },
+  "objects": [
+    { "type": "moon", "preset": "mercury", "seed": 1, "position": [22500000.0, 0, 1e9], "earthshine": false },
+    { "type": "moon", "preset": "mars", "seed": 2, "position": [13500000.0, 0, 1e9], "earthshine": false },
+    { "type": "moon", "preset": "callisto", "seed": 3, "position": [4500000.0, 0, 1e9], "earthshine": false },
+    { "type": "moon", "preset": "ganymede", "seed": 4, "position": [-4500000.0, 0, 1e9], "earthshine": false },
+    { "type": "moon", "preset": "europa", "seed": 5, "position": [-13500000.0, 0, 1e9], "earthshine": false },
+    { "type": "moon", "preset": "io", "seed": 6, "position": [-22500000.0, 0, 1e9], "earthshine": false }
+  ]
+}

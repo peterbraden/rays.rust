@@ -20,17 +20,71 @@
 //! This is the start of a universe's worth of bodies: the pieces (orbits, photometry, the
 //! cratered surface) are general, and the Moon is one set of their parameters.
 
+pub mod bands;
+pub mod giant;
 pub mod hapke;
 pub mod moon;
 pub mod orbit;
+pub mod rings;
+pub mod shape;
 pub mod surface;
+pub mod terrain;
 
 use crate::na::{Matrix3, Vector3};
+use crate::scenefile::SceneFile;
+use serde_json::Value;
+
+/// Where a body described by `o` is, and the pole of its orbit (the scene's y if it has none):
+/// at its `position`; on its `orbit` about the planet at `planet` at its `time`; or seen in its
+/// `direction` from `from` (default the origin) at `distance` (default `default_distance`)
+/// from the planet's centre.
+pub fn place(o: &Value, planet: &Vector3<f64>, default_distance: f64) -> (Vector3<f64>, Vector3<f64>) {
+    if let Some(p) = o.get("position") {
+        (SceneFile::parse_vec3(p), Vector3::y())
+    } else if let Some(orbit) = o.get("orbit") {
+        let orbit = crate::celestial::orbit::Orbit::parse(orbit);
+        (planet + orbit.position(SceneFile::parse_number(&o["time"], 0.)), orbit.normal())
+    } else {
+        let d = SceneFile::parse_vec3_def(o, "direction", Vector3::new(0., 0.5, 1.)).normalize();
+        let distance = SceneFile::parse_number(&o["distance"], default_distance);
+        let from = SceneFile::parse_vec3_def(o, "from", Vector3::zeros());
+        (along_to_distance(&from, &d, planet, distance)
+            .expect("A body must be farther from its planet's centre than the point it's seen from"), Vector3::y())
+    }
+}
 
 /// The Moon's mean radius, metres (IAU WGCCRE 2015).
 pub const MOON_RADIUS: f64 = 1_737_400.;
 /// The Moon's mean distance from the Earth's centre, metres.
 pub const MOON_DISTANCE: f64 = 384_400_000.;
+
+/// The kinds of world `world_object` chooses among, and how often: gas and ice giants, rocky
+/// and icy bodies.
+pub const WORLD_KINDS: [(&str, &str, f64); 4] = [("gas_giant", "gas_giant", 0.25), ("gas_giant", "ice_giant", 0.2), ("moon", "rocky", 0.3), ("moon", "icy", 0.25)];
+
+/// A `world` object (`{"type": "world", "seed": n, ...}`) as the object it turns out to be:
+/// its kind (gas giant, ice giant, rocky, icy, or `kind` if given) drawn from its seed, and
+/// everything about it from the same seed; its other keys (placement, camera) kept.
+pub fn world_object(o: &Value) -> Value {
+    let seed = SceneFile::parse_number(&o["seed"], 0.) as u64;
+    let u = (crate::procedural::space::mix(seed ^ 0x776f_726c) >> 11) as f64 / (1u64 << 53) as f64;
+    let chosen = match o["kind"].as_str() {
+        Some(k) => *WORLD_KINDS.iter().find(|w| w.1 == k)
+            .unwrap_or_else(|| panic!("A world's kind is gas_giant, ice_giant, rocky or icy, not {:?}", k)),
+        None => {
+            let mut acc = 0.;
+            *WORLD_KINDS.iter().find(|w| { acc += w.2; u < acc }).unwrap_or(&WORLD_KINDS[3])
+        },
+    };
+    let mut out = o.clone();
+    out["type"] = Value::from(chosen.0);
+    out["preset"] = Value::from(chosen.1);
+    if chosen.0 == "moon" && o.get("earthshine").is_none() {
+        // A world of its own, not a moon of the scene's planet.
+        out["earthshine"] = Value::from(false);
+    }
+    out
+}
 
 /// The point at `distance` from `centre` along the ray from `from` in unit direction `d`: where
 /// a body seen in that direction from there would be. None if there is none ahead (`from` is

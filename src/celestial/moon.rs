@@ -15,7 +15,6 @@
 //!    from the normal albedo there.
 
 use crate::celestial::hapke::{AlbedoTable, Hapke};
-use crate::celestial::orbit::Orbit;
 use crate::celestial::surface::{Surface, SurfaceParams};
 use crate::color::Color;
 use crate::intersection::Intersection;
@@ -68,6 +67,8 @@ pub struct Moon {
     pub shadows: bool,
     /// The size of a pixel at the moon, km: craters smaller than this aren't drawn.
     pub footprint: f64,
+    /// What else colours it (`terrain`): Mars' dark regions, Europa's lines, Io's volcanoes.
+    pub terrain: crate::celestial::terrain::Terrain,
 }
 
 impl std::fmt::Debug for Moon {
@@ -84,8 +85,10 @@ const SHADOW_STEPS: usize = 20;
 
 impl Moon {
     /// The normal albedo of the surface sample `s`, per channel.
-    fn albedo(&self, s: &crate::celestial::surface::SurfaceSample) -> Color {
-        (self.highlands * (1. - s.mare) + self.maria * s.mare) * s.brightness
+    fn albedo(&self, local: &Vector3<f64>, s: &crate::celestial::surface::SurfaceSample) -> Color {
+        // In the terrain's frame the pole is y, as in the body's.
+        let base = self.highlands * (1. - s.mare) + self.maria * s.mare;
+        self.terrain.albedo(local, base, s.mare) * s.brightness
     }
 
     /// The unobstructed share of the sun's disc (angular radius `sun_radius`, in unit direction
@@ -142,7 +145,7 @@ impl Moon {
         let point = self.centre + self.frame * local * self.radius;
         let mu = n.dot(view).max(1e-3);
         // Each channel's single-scattering albedo, at the path's wavelengths in spectral mode.
-        let a = self.albedo(&s).as_reflectance().rgb;
+        let a = self.albedo(local, &s).as_reflectance().rgb;
         let w = a.map(|c| self.albedos.w(c));
         let reflect = |e: Color, light: &Vector3<f64>| -> Color {
             let mu0 = n.dot(light);
@@ -303,26 +306,17 @@ impl Moon {
 pub fn parse(o: &Value) -> Moon {
     let planet_centre = SceneFile::parse_vec3_def(&o["planet"], "centre", Vector3::new(0., -crate::planet::EARTH_RADIUS, 0.));
     let planet_radius = SceneFile::parse_number(&o["planet"]["radius"], crate::planet::EARTH_RADIUS);
-    let radius = SceneFile::parse_number(&o["radius"], crate::celestial::MOON_RADIUS);
-    let (centre, up) = if let Some(p) = o.get("position") {
-        (SceneFile::parse_vec3(p), Vector3::y())
-    } else if let Some(orbit) = o.get("orbit") {
-        let orbit = Orbit::parse(orbit);
-        (planet_centre + orbit.position(SceneFile::parse_number(&o["time"], 0.)), orbit.normal())
-    } else {
-        let d = SceneFile::parse_vec3_def(o, "direction", Vector3::new(0., 0.5, 1.)).normalize();
-        let distance = SceneFile::parse_number(&o["distance"], crate::celestial::MOON_DISTANCE);
-        let from = SceneFile::parse_vec3_def(o, "from", Vector3::zeros());
-        (crate::celestial::along_to_distance(&from, &d, &planet_centre, distance)
-            .expect("A moon must be farther from its planet's centre than the point it's seen from"), Vector3::y())
-    };
+    let seed = SceneFile::parse_number(&o["seed"], 0.) as u64;
+    let world = crate::celestial::terrain::World::named(o["preset"].as_str().unwrap_or("moon"), seed);
+    let radius = SceneFile::parse_number(&o["radius"], world.radius);
+    let (centre, up) = crate::celestial::place(o, &planet_centre, crate::celestial::MOON_DISTANCE);
     let libration = o.get("libration").map_or((0., 0.), |l| {
         let v = l.as_array().expect("libration is [longitude, latitude] in degrees");
         (v[0].as_f64().unwrap_or(0.).to_radians(), v[1].as_f64().unwrap_or(0.).to_radians())
     });
     let frame = crate::celestial::locked_frame(&centre, &planet_centre, &up, libration);
 
-    let defaults = SurfaceParams::default();
+    let defaults = world.params.clone();
     let c = &o["craters"];
     let params = SurfaceParams {
         seed: SceneFile::parse_number(&o["seed"], 0.) as u64,
@@ -369,8 +363,9 @@ pub fn parse(o: &Value) -> Moon {
         surface: Surface::new(params),
         albedos: photometry.albedo_table(),
         photometry,
-        highlands: SceneFile::parse_color_def(albedo, "highlands", Color::new(0.14, 0.13, 0.112)),
-        maria: SceneFile::parse_color_def(albedo, "maria", Color::new(0.083, 0.078, 0.069)),
+        highlands: SceneFile::parse_color_def(albedo, "highlands", world.highlands),
+        maria: SceneFile::parse_color_def(albedo, "maria", world.maria),
+        terrain: crate::celestial::terrain::Terrain::new(world.pattern, seed),
         primary,
         shadows: o["shadows"].as_bool().unwrap_or(true),
         footprint,

@@ -13,7 +13,7 @@ rand = "0.6"
 clap = { version = "4.5.32", features = ["derive"], optional = true }
 serde = "1.0"
 serde_derive = "1.0"
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 lazy_static = "1.2.0"
 rayon="1.0"
 # Without `ahash`, whose getrandom has no browser backend by default.

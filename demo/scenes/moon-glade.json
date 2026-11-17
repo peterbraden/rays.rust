@@ -1,0 +1,22 @@
+{
+  "width": 960,
+  "height": 540,
+  "supersamples": 32,
+  "max_depth": 6,
+  "shadow_bias": 0.01,
+  "path_termination": "russian_roulette",
+  "output": { "exposure": 1.5e5, "tonemap": "reinhard" },
+  "background": { "type": "space", "seed": 4, "galactic_pole": [1, 1.4, 0], "galactic_centre": [-0.7, 0.5, 0.6] },
+  "camera": {
+    "location": [0, 4, 0],
+    "lookat": [0, 1400, 10000],
+    "up": [0, 1, 0],
+    "angle": 0.45
+  },
+  "sun": { "intensity": 6 },
+  "objects": [
+    { "type": "ocean", "wind": [6, 2], "detail_center": [0, 0] },
+    { "type": "skysphere", "sun_direction": [0.15, -0.3, -1] },
+    { "type": "moon", "seed": 1, "direction": [-0.05, 0.2, 1], "from": [0, 4, 0] }
+  ]
+}

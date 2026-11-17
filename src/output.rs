@@ -29,6 +29,12 @@ pub enum ToneMap {
     None,
     /// v / (1 + v): compresses highlights smoothly.
     Reinhard,
+    /// A filmic curve: the ACES reference rendering transform as fitted by Krzysztof Narkowicz
+    /// ("ACES Filmic Tone Mapping Curve", 2016), (v (2.51 v + 0.03)) / (v (2.43 v + 0.59) +
+    /// 0.14). A toe that deepens shadows and a shoulder that rolls highlights off, so a scene
+    /// has a photograph's contrast; applied per channel, bright saturated colours desaturate
+    /// towards white as film's do.
+    Filmic,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -58,11 +64,14 @@ pub struct OutputOpts {
     /// Lens flare: ghosts and a starburst from the image's brightest lights (`flare`); set
     /// with the camera, whose lens it uses.
     pub flare: Option<std::sync::Arc<crate::flare::Flare>>,
+    /// Scales colours' distance from their luminance (1 leaves them; more is more vivid), as a
+    /// photographer's grade does; applied to the linear image.
+    pub saturation: f64,
 }
 
 impl Default for OutputOpts {
     fn default() -> OutputOpts {
-        OutputOpts { exposure: 1., tonemap: ToneMap::None, transfer: Transfer::Srgb, glare: None, pixel_angle: 0., film: crate::film::Film::default(), flare: None }
+        OutputOpts { exposure: 1., tonemap: ToneMap::None, transfer: Transfer::Srgb, glare: None, pixel_angle: 0., film: crate::film::Film::default(), flare: None, saturation: 1. }
     }
 }
 
@@ -85,7 +94,8 @@ impl OutputOpts {
             tonemap: match o["tonemap"].as_str() {
                 None | Some("none") => ToneMap::None,
                 Some("reinhard") => ToneMap::Reinhard,
-                Some(x) => panic!("Unknown output tonemap '{}': expected \"none\" or \"reinhard\"", x),
+                Some("filmic") => ToneMap::Filmic,
+                Some(x) => panic!("Unknown output tonemap '{}': expected \"none\", \"reinhard\" or \"filmic\"", x),
             },
             transfer: match o["transfer"].as_str() {
                 None | Some("srgb") => Transfer::Srgb,
@@ -109,6 +119,7 @@ impl OutputOpts {
             pixel_angle: 0.,
             film: crate::film::Film::parse(o),
             flare: None,
+            saturation: SceneFile::parse_number(&o["saturation"], 1.).max(0.),
         }
     }
 
@@ -122,10 +133,18 @@ impl OutputOpts {
             Some(f) => f.apply(&img, self.exposure, self.pixel_angle),
             None => img,
         };
-        if self.film.is_identity() {
+        let img = if self.film.is_identity() { img } else {
+            LinearImage { width: img.width, height: img.height, pixels: img.pixels.iter().map(|c| self.film.apply(c)).collect() }
+        };
+        if self.saturation == 1. {
             return img;
         }
-        LinearImage { width: img.width, height: img.height, pixels: img.pixels.iter().map(|c| self.film.apply(c)).collect() }
+        let saturate = |c: &crate::color::Color| {
+            let l = crate::color::luminance(c);
+            let grey = crate::color::Color::new(l, l, l);
+            grey + (*c - grey) * self.saturation
+        };
+        LinearImage { width: img.width, height: img.height, pixels: img.pixels.iter().map(saturate).collect() }
     }
 
     /// Map one linear channel to a display value in [0, 1].
@@ -135,6 +154,7 @@ impl OutputOpts {
         let v = match self.tonemap {
             ToneMap::None => v,
             ToneMap::Reinhard => v / (1. + v),
+            ToneMap::Filmic => (v * (2.51 * v + 0.03)) / (v * (2.43 * v + 0.59) + 0.14),
         }.min(1.);
         match self.transfer {
             Transfer::Srgb => srgb_oetf(v),
@@ -155,6 +175,12 @@ impl OutputOpts {
         let v = match self.tonemap {
             ToneMap::None => v,
             ToneMap::Reinhard => if v < 1. { v / (1. - v) } else { f64::MAX },
+            // y = v (2.51 v + 0.03) / (v (2.43 v + 0.59) + 0.14) as a quadratic in v; its
+            // leading coefficient is negative over y's range, so one root is positive.
+            ToneMap::Filmic => {
+                let (a, b, c) = (2.43 * v - 2.51, 0.59 * v - 0.03, 0.14 * v);
+                if a >= 0. { f64::MAX } else { (-b - (b * b - 4. * a * c).max(0.).sqrt()) / (2. * a) }
+            },
         };
         v / self.exposure
     }
@@ -266,7 +292,8 @@ mod tests {
         // a quarter as bright).
         let dim = OutputOpts { exposure: 0.25, ..OutputOpts::default() };
         let mapped = OutputOpts { exposure: 2., tonemap: ToneMap::Reinhard, ..OutputOpts::default() };
-        for opts in [o, OutputOpts::default(), OutputOpts { transfer: Transfer::Linear, ..OutputOpts::default() }, dim, mapped] {
+        let filmic = OutputOpts { exposure: 0.5, tonemap: ToneMap::Filmic, ..OutputOpts::default() };
+        for opts in [o, OutputOpts::default(), OutputOpts { transfer: Transfer::Linear, ..OutputOpts::default() }, dim, mapped, filmic] {
             for v in [0., 0.001, 0.18, 0.5, 1.] {
                 assert!((opts.decode(opts.encode(v)) - v).abs() < 1e-9, "{:?} {}", opts.transfer, v);
             }
@@ -285,6 +312,24 @@ mod tests {
     fn test_linear_transfer_rounds() {
         let o = OutputOpts { transfer: Transfer::Linear, ..OutputOpts::default() };
         assert_eq!(o.quantise(Color::new(0.18, 0.999, 0.5)), [46, 255, 128]);
+    }
+
+    #[test]
+    fn test_filmic_curve_and_saturation() {
+        let o = OutputOpts { tonemap: ToneMap::Filmic, transfer: Transfer::Linear, ..OutputOpts::default() };
+        // Black stays black, the curve rises monotonically and saturates at white.
+        assert_eq!(o.encode(0.), 0.);
+        let v: Vec<f64> = (0 .. 100).map(|k| o.encode(k as f64 * 0.1)).collect();
+        assert!(v.windows(2).all(|w| w[1] >= w[0]));
+        assert!(o.encode(100.) > 0.99);
+        // Saturation leaves greys and luminance alone and pushes colours away from grey.
+        let s = OutputOpts { saturation: 1.5, ..OutputOpts::default() };
+        let img = LinearImage { width: 2, height: 1, pixels: vec![crate::color::Color::new(0.3, 0.3, 0.3), crate::color::Color::new(0.6, 0.3, 0.1)] };
+        let out = s.finish(&img);
+        assert!((out.pixels[0].rgb - img.pixels[0].rgb).norm() < 1e-12);
+        let (a, b) = (&img.pixels[1], &out.pixels[1]);
+        assert!((crate::color::luminance(a) - crate::color::luminance(b)).abs() < 1e-9);
+        assert!(b.rgb.x > a.rgb.x && b.rgb.z < a.rgb.z);
     }
 
     #[test]

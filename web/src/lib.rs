@@ -122,7 +122,8 @@ impl Inner {
         for y in 0..h {
             for x in 0..w {
                 let v = sums[y * w + x];
-                rc.set_pixel(x, y, rays::color::Color::new(v[0] as f64, v[1] as f64, v[2] as f64), n);
+                let c = rays::color::Color::new(v[0] as f64, v[1] as f64, v[2] as f64);
+                rc.set_pixel(x, y, c, rays::gpu::squares_at_least(&c, n), n);
             }
         }
         Ok(self.scene.output.finish(&rc.snapshot()))

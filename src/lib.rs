@@ -94,6 +94,7 @@ pub mod shapes {
     pub mod julia;
     pub mod tessellated;
     pub mod text;
+    pub mod lod;
 }
 pub mod octree;
 pub mod bvh;
@@ -119,6 +120,7 @@ pub mod procedural {
     pub mod box_terrain;
     pub mod fireworks;
     pub mod tree;
+    pub mod succulent;
     pub mod forest;
     pub mod heightmap;
     pub mod grass;
@@ -140,6 +142,8 @@ pub mod expr;
 pub mod volume;
 pub mod glare;
 pub mod variance;
+pub mod adaptive;
 pub mod environment;
 pub mod sobol;
 pub mod planet;
+pub mod celestial;

@@ -113,6 +113,13 @@ fn env_direction(x: usize, y: usize) -> Vector3<f64> {
     Vector3::new(theta.sin() * phi.cos(), theta.cos(), theta.sin() * phi.sin())
 }
 
+/// The sum of the squares of `n` samples summing to `c`, as far as the GPU tells: it keeps
+/// only sums, so the least they can be (were the samples equal). Only adaptive sampling reads
+/// them, and the GPU doesn't sample adaptively (`main` renders such scenes with the path tracer).
+pub fn squares_at_least(c: &Color, n: usize) -> Color {
+    Color { rgb: c.rgb.component_mul(&c.rgb) / n.max(1) as f64 }
+}
+
 /// A scene uploaded to the GPU, with the pipeline that renders it.
 pub struct GpuRenderer {
     device: wgpu::Device,
@@ -542,7 +549,8 @@ impl GpuRenderer {
                         continue;
                     }
                     let v = sums[y * w + x];
-                    rc.set_pixel(x, y, Color::new(v[0] as f64, v[1] as f64, v[2] as f64), n);
+                    let c = Color::new(v[0] as f64, v[1] as f64, v[2] as f64);
+                    rc.set_pixel(x, y, c, squares_at_least(&c, n), n);
                     rc.rays_cast += v[3] as u64;
                 }
             }

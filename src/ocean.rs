@@ -841,7 +841,7 @@ impl MaterialModel for PhysicalOcean {
         let mut emit = crate::material::functions::direct_lighting(self.water.as_reflectance() * (1. - fresnel(n.dot(&v))), &into, s);
         // The sun's glitter through the ripples: F D / (4 cos θv) per unit irradiance, Smith's
         // shadowing left out (it matters only at grazing angles).
-        if let Some(sun) = &s.sun {
+        for sun in s.directional_lights() {
             let l = sun.direction;
             if l.dot(&up) > 0. && n.dot(&l) > 0. {
                 let h = (l + v).normalize();

@@ -62,6 +62,7 @@ use crate::terrain::volcano::{erupt, vents, Vent, VolcanoParams};
 use crate::terrain::marine::{self, MarineParams};
 use crate::terrain::channel::{ChannelParams, Rivers};
 use crate::terrain::fluvial::LAKE;
+use std::f64::consts::TAU;
 
 #[derive(Clone, Debug)]
 pub struct TerrainParams {
@@ -75,6 +76,9 @@ pub struct TerrainParams {
     pub marine: Option<MarineParams>,
     /// None for no meandering rivers (they are only modelled on patches).
     pub channels: Option<ChannelParams>,
+    /// The climate, from latitude (`climate`): it sets the glaciers' snowline cell by cell. None
+    /// for the glaciers' own snowline by latitude.
+    pub climate: Option<crate::terrain::climate::ClimateParams>,
     /// Erodibility of sediment, relative to average bedrock.
     pub sediment_erodibility: f64,
     /// Erodibility of volcanic rock, relative to average bedrock.
@@ -92,6 +96,7 @@ impl Default for TerrainParams {
             volcano: Some(VolcanoParams::default()),
             marine: Some(MarineParams::default()),
             channels: Some(ChannelParams::default()),
+            climate: None,
             sediment_erodibility: 3.,
             lava_erodibility: 0.3,
             step: 100.,
@@ -137,8 +142,14 @@ pub struct Terrain {
     /// ... and the solver iterations they took.
     pub ice_iterations: usize,
     vents: Vec<Vent>,
+    /// How fast a patch's edge cells rise or fall, metres per year: zero, or, for a patch nested
+    /// in a coarser simulation, the change the coarser one went through there, so the patch's
+    /// base level follows its surroundings.
+    pub boundary_rate: Vec<f64>,
     /// Meandering rivers and ox-bow lakes.
     pub rivers: Rivers,
+    /// Each cell's equilibrium line altitude in today's climate, if there is a climate model.
+    pub ela: Option<Vec<f64>>,
 }
 
 impl Terrain {
@@ -153,10 +164,14 @@ impl Terrain {
         let n = domain.len();
         let sea = bed.iter().map(|&b| b < 0.).collect();
         let vents = match &params.volcano { Some(v) => vents(&planet, &domain, v), None => vec![] };
+        let ela = params.climate.as_ref().map(|c| {
+            let climate = crate::terrain::climate::climate(c, &planet);
+            domain.dirs.iter().map(|d| climate.local(d, 0.).snowline(0.)).collect()
+        });
         let mut t = Terrain {
-            domain, params, planet, time: 0., bed, uplift, latitude, sea, vents, rivers: Rivers::default(),
+            domain, params, planet, time: 0., ela, bed, uplift, latitude, sea, vents, rivers: Rivers::default(),
             sediment: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
-            ice: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
+            ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
         let flow = t.route();
         t.drainage = flow.area;
@@ -219,8 +234,8 @@ impl Terrain {
 
     pub fn step(&mut self, dt: f64) {
         let fixed = self.outlets();
-        for ((b, u), f) in self.bed.iter_mut().zip(&self.uplift).zip(&fixed) {
-            if !f { *b += u * dt; }
+        for (i, ((b, u), f)) in self.bed.iter_mut().zip(&self.uplift).zip(&fixed).enumerate() {
+            if !f { *b += u * dt; } else if self.domain.boundary[i] { *b += self.boundary_rate[i] * dt; }
         }
 
         if let Some(v) = &self.params.volcano {
@@ -284,7 +299,13 @@ impl Terrain {
         while done < ice_time * (1. - 1e-9) {
             let t = self.time + done * g.acceleration;
             let balance: Vec<f64> = (0..n).map(|i| {
-                g.mass_balance(self.bed[i] + self.ice[i], g.ela(self.latitude[i], t))
+                let ela = match &self.ela {
+                    // Today's climate is an interglacial: the glacial cycle lowers the snowline
+                    // from there.
+                    Some(e) => e[i] + g.ela_amplitude * ((TAU * t / g.period).cos() - 1.),
+                    None => g.ela(self.latitude[i], t),
+                };
+                g.mass_balance(self.bed[i] + self.ice[i], ela)
             }).collect();
             // Nothing to do while it is too warm for ice anywhere.
             if balance.iter().all(|&m| m <= 0.) && self.ice.iter().all(|&h| h <= 0.) { break; }
@@ -299,6 +320,87 @@ impl Terrain {
         }
         self.sliding = mean_sliding;
         (0..n).map(|i| (start[i] - self.bed[i]).max(0.) * self.domain.area[i] / dt).collect()
+    }
+}
+
+/// The evolving state of a `Terrain`, to save and restore: everything that changes with time
+/// (the domain, planet and vents are rebuilt from the parameters).
+#[derive(serde_derive::Serialize, serde_derive::Deserialize)]
+pub struct Snapshot {
+    time: f64,
+    bed: Vec<f64>,
+    sediment: Vec<f64>,
+    lava: Vec<f64>,
+    sediment_flux: Vec<f64>,
+    ice: Vec<f64>,
+    sea: Vec<bool>,
+    drainage: Vec<f64>,
+    receiver: Vec<usize>,
+    sliding: Vec<f64>,
+    channels: Vec<crate::terrain::channel::Channel>,
+    oxbows: Vec<crate::terrain::channel::Oxbow>,
+    rivers_found: Option<f64>,
+}
+
+impl Terrain {
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            time: self.time, bed: self.bed.clone(), sediment: self.sediment.clone(), lava: self.lava.clone(),
+            sediment_flux: self.sediment_flux.clone(), ice: self.ice.clone(), sea: self.sea.clone(),
+            drainage: self.drainage.clone(), receiver: self.receiver.clone(), sliding: self.sliding.clone(),
+            channels: self.rivers.channels.clone(), oxbows: self.rivers.oxbows.clone(), rivers_found: self.rivers.found,
+        }
+    }
+
+    /// Restore a snapshot of a terrain with the same parameters and domain.
+    pub fn restore(&mut self, s: Snapshot) {
+        assert_eq!(s.bed.len(), self.domain.len(), "snapshot of a different domain");
+        self.time = s.time;
+        self.bed = s.bed;
+        self.sediment = s.sediment;
+        self.lava = s.lava;
+        self.sediment_flux = s.sediment_flux;
+        self.ice = s.ice;
+        self.sea = s.sea;
+        self.drainage = s.drainage;
+        self.receiver = s.receiver;
+        self.sliding = s.sliding;
+        self.rivers.channels = s.channels;
+        self.rivers.oxbows = s.oxbows;
+        self.rivers.found = s.rivers_found;
+    }
+
+    /// Run to `time`, starting from the latest state saved in `cache` (a directory) for the same
+    /// parameters and domain at or before it, and saving the result there. `key` identifies the
+    /// parameters and domain.
+    pub fn run_cached(&mut self, time: f64, cache: &std::path::Path, key: &str) {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        format!("{:?} {} {:?}", self.params, key, self.boundary_rate).hash(&mut hasher);
+        let prefix = format!("landscape-{:016x}-", hasher.finish());
+        let _ = std::fs::create_dir_all(cache);
+        let mut saved: Vec<(u64, std::path::PathBuf)> = std::fs::read_dir(cache).into_iter().flatten().flatten()
+            .filter_map(|e| {
+                let name = e.file_name().into_string().ok()?;
+                let years = name.strip_prefix(&prefix)?.strip_suffix(".json")?.parse::<u64>().ok()?;
+                Some((years, e.path()))
+            }).collect();
+        saved.sort();
+        let wanted = time.round() as u64;
+        if let Some(s) = saved.iter().rev().filter(|(y, _)| *y <= wanted).find_map(|(_, p)| {
+            serde_json::from_reader::<_, Snapshot>(std::io::BufReader::new(std::fs::File::open(p).ok()?)).ok()
+        }) {
+            self.restore(s);
+        }
+        if self.time < time - 1e-9 {
+            self.run_to(time);
+            let path = cache.join(format!("{}{}.json", prefix, wanted));
+            let written = std::fs::File::create(&path).map_err(|e| e.to_string())
+                .and_then(|f| serde_json::to_writer(std::io::BufWriter::new(f), &self.snapshot()).map_err(|e| e.to_string()));
+            if let Err(e) = written {
+                eprintln!("  landscape: couldn't cache the terrain in {}: {}", path.display(), e);
+            }
+        }
     }
 }
 
@@ -331,6 +433,23 @@ mod tests {
         b.run_to(3000.);
         assert_eq!(a.bed, b.bed);
         assert_eq!(a.ice, b.ice);
+    }
+
+    #[test]
+    fn test_cached_run_resumes_where_it_left_off() {
+        let dir = std::env::temp_dir().join(format!("landscape-cache-test-{}", std::process::id()));
+        let mut a = small(4);
+        a.run_cached(1000., &dir, "k");
+        let mut b = small(4);
+        b.run_cached(2000., &dir, "k");
+        let mut c = small(4);
+        c.run_to(2000.);
+        assert_eq!(b.bed, c.bed);
+        let mut d = small(4);
+        d.run_cached(2000., &dir, "k");
+        assert_eq!(d.bed, c.bed);
+        assert_eq!(d.time, 2000.);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -2,25 +2,50 @@ name: Build, Tests, Lint and Examples
 
 on: [push]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Unoptimised, the test suite's renders and sky integrations took 47 minutes.
+  # Optimise the dev/test profile in CI, keeping debug assertions and overflow
+  # checks, and drop debug info (it only slows linking and bloats the cache).
+  CARGO_PROFILE_DEV_OPT_LEVEL: 2
+  CARGO_PROFILE_DEV_DEBUG: 0
+
 jobs:
-  build:
-
+  lint:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
     - name: Install Clippy
       run: rustup component add clippy
     - name: Run Clippy
       run: cargo clippy -- -D errors
-    - name: Build
-      run: cargo build --verbose
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
+    - name: Build tests
+      run: cargo test --no-run
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test
     - name: Run Smoke test
       run: cargo run -- demo/ci-smoke-test.json
-    - name: Run current work
-      run: cargo run --release -- -p demo/demo.json
-    - name: Run examples
-      run: for f in demo/*.json; do cargo run --release -- --width 60 --height 40 $f; done
 
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: Swatinem/rust-cache@v2
+    - name: Build release
+      run: cargo build --release
+    - name: Run current work
+      run: ./target/release/rays -p demo/demo.json
+    - name: Run examples
+      run: for f in demo/*.json; do ./target/release/rays --width 60 --height 40 $f; done

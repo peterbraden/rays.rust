@@ -272,8 +272,15 @@ impl MesaHeight {
             f -= 0.6 * (1. - smoothstep(r, 1.6 * r, d));
         }
         if let Some([vx, vz, inner, outer]) = self.valley {
+            // Beyond the valley, the outlines come from noise four times broader, raised: a
+            // few long tablelands rather than a crowd of small mesas.
             let d = ((x - vx).powi(2) + (z - vz).powi(2)).sqrt();
-            f += 0.12 * smoothstep(inner, outer, d);
+            let t = smoothstep(inner, outer, d);
+            if t > 0. {
+                let (bx, bz) = (x / (4. * self.scale) + 3.7, z / (4. * self.scale) - 5.3);
+                let broad = self.noise.fbm(bx, 2.9, bz, 4, 0.45, 2.);
+                f = f * (1. - t) + (broad + 0.1) * t;
+            }
         }
         for (k, &[bx, bz, r]) in self.buttes.iter().enumerate() {
             // Elongated along its own axis, and warped, so its outline is irregular.
@@ -411,23 +418,7 @@ impl MesaHeight {
     /// its own size and height, meeting in the sharp-floored joints between them, as massive
     /// cross-bedded sandstone weathers along its joints (slickrock).
     fn dome_field(&self, x: f64, z: f64) -> f64 {
-        let size = self.domes;
-        let warp = 0.3 * size * self.noise.fbm(x / (2. * size), 9.1, z / (2. * size), 2, 0.5, 2.);
-        let (u, v) = ((x + warp) / size, (z - warp) / size);
-        let (ci, cj) = (u.floor() as i64, v.floor() as i64);
-        let mut best = 0f64;
-        for i in ci - 1 ..= ci + 1 {
-            for j in cj - 1 ..= cj + 1 {
-                let (cx, cz) = (i as f64 + 0.2 + 0.6 * hash01(i, j, 1), j as f64 + 0.2 + 0.6 * hash01(i, j, 2));
-                let radius = 0.6 + 0.5 * hash01(i, j, 3);
-                let height = 0.35 + 0.65 * hash01(i, j, 4);
-                let r = ((u - cx).powi(2) + (v - cz).powi(2)).sqrt() / radius;
-                // A rounded dome, swelling smoothly from the joints to its crown.
-                let t = (1. - r * r).max(0.);
-                best = best.max(height * t * t * (3. - 2. * t));
-            }
-        }
-        best
+        dome_value(&self.noise, x, z, self.domes)
     }
 
     /// The tallest tower's height at (x, z), and how much debris slope it is.
@@ -446,6 +437,63 @@ impl MesaHeight {
         }
         best
     }
+}
+
+/// Slickrock domes, 0 to 1: rounded, swollen knobs on a jittered grid of cells `size` across,
+/// each its own size and height, meeting in the sharp-floored joints between them, as massive
+/// cross-bedded sandstone weathers along its joints. Their flanks step down in thin ledges
+/// where harder beds stand out, and their crowns hold potholes (weathering pits, "tinajas")
+/// where rain collects.
+pub fn dome_value(noise: &PerlinNoise, x: f64, z: f64, size: f64) -> f64 {
+    let warp = 0.3 * size * noise.fbm(x / (2. * size), 9.1, z / (2. * size), 2, 0.5, 2.);
+    let (u, v) = ((x + warp) / size, (z - warp) / size);
+    let (ci, cj) = (u.floor() as i64, v.floor() as i64);
+    let mut best = 0f64;
+    for i in ci - 1 ..= ci + 1 {
+        for j in cj - 1 ..= cj + 1 {
+            let (cx, cz) = (i as f64 + 0.2 + 0.6 * hash01(i, j, 1), j as f64 + 0.2 + 0.6 * hash01(i, j, 2));
+            let radius = 0.6 + 0.5 * hash01(i, j, 3);
+            let height = 0.35 + 0.65 * hash01(i, j, 4);
+            let r = ((u - cx).powi(2) + (v - cz).powi(2)).sqrt() / radius;
+            // A rounded dome, swelling smoothly from the joints to its crown.
+            let t = (1. - r * r).max(0.);
+            best = best.max(height * t * t * (3. - 2. * t));
+        }
+    }
+    // Ledges: the dome terraced in steps of a bed's thickness, half way.
+    let step = 1. / 9.;
+    let f = best / step;
+    let terraced = step * (f.floor() + smoothstep(0., 0.35, f.fract()));
+    let mut value = 0.5 * (best + terraced);
+    // Potholes, on the flatter tops: round pits on a finer jittered grid.
+    let (pu, pv) = (u * 5., v * 5.);
+    let (pi, pj) = (pu.floor() as i64, pv.floor() as i64);
+    for i in pi - 1 ..= pi + 1 {
+        for j in pj - 1 ..= pj + 1 {
+            if hash01(i, j, 11) > 0.25 { continue }
+            let (cx, cz) = (i as f64 + 0.5 + 0.3 * (hash01(i, j, 12) - 0.5), j as f64 + 0.5 + 0.3 * (hash01(i, j, 13) - 0.5));
+            let r = ((pu - cx).powi(2) + (pv - cz).powi(2)).sqrt() / (0.25 + 0.2 * hash01(i, j, 14));
+            if r < 1. {
+                value -= 0.04 * (1. - r * r) * smoothstep(0.3, 0.6, best);
+            }
+        }
+    }
+    value
+}
+
+/// How much (x, z) lies in a dry wash, 0 to 1, for a floor whose undulations are `floor_scale`
+/// across: the washes wind along the zero lines of broad noise (`MesaHeight::washes`).
+pub fn wash_value(noise: &PerlinNoise, x: f64, z: f64, floor_scale: f64) -> f64 {
+    let (s, o) = (2.5 * floor_scale, 44.4);
+    let w = (2. * noise.fbm(x / s + o, 0.37 * o, z / s - o, 3, 0.5, 2.) - 1.).abs();
+    1. - smoothstep(0., 0.05, w)
+}
+
+/// How far (x, z) lies in a hollow of the floor's undulations, 0 to 1: where sand collects.
+pub fn hollow_value(noise: &PerlinNoise, x: f64, z: f64, floor_scale: f64) -> f64 {
+    let (s, o) = (floor_scale, 71.3);
+    let f = 2. * noise.fbm(x / s + o, 0.37 * o, z / s - o, 4, 0.5, 2.) - 1.;
+    smoothstep(0., -0.35, f)
 }
 
 /// The most cells along a side of a mesa field's distance grid.
@@ -545,8 +593,7 @@ impl HeightSource for MesaHeight {
         }
         if self.washes > 0. {
             // Dry washes: sinuous channels along the zero lines of broad noise, on the floor.
-            let w = n(2.5 * self.floor_scale, 44.4, 3).abs();
-            let wash = 1. - smoothstep(0., 0.05, w);
+            let wash = wash_value(&self.noise, x, z, self.floor_scale);
             floor -= self.washes * wash * (1. - smoothstep(-3. * self.cliff, -self.cliff, d));
         }
         // Each mesa's top at its own height, as erosion has stripped more from some.
@@ -1142,6 +1189,37 @@ mod tests {
         // and somewhere they do.
         assert!(before.iter().zip(&after).all(|(b, a)| a <= b && b - a <= 30. + 1e-9));
         assert!(before.iter().zip(&after).any(|(b, a)| b - a > 10.));
+    }
+
+    #[test]
+    fn test_terrain_texture_follows_the_washes() {
+        let mut m = mesas(0.02);
+        m.washes = 4.;
+        let t = crate::textures::TerrainTexture {
+            feature: crate::textures::TerrainFeature::Washes, scale: m.floor_scale, spread: 1., noise: PerlinNoise::new(),
+        };
+        // Where the texture says wash, the floor is cut down; elsewhere not.
+        let mut cut = 0;
+        for k in 0 .. 3000 {
+            let (x, z) = (k as f64 * 1.9 - 2850., 1800.);
+            let a = t.amount(&Vector3::new(x, 0., z));
+            let mut flat = mesas(0.02);
+            flat.washes = 0.;
+            let depth = flat.height(x, z) - m.height(x, z);
+            assert!((depth - 4. * a).abs() < 1e-6 || m.distance(x, z) > -3. * m.cliff, "{} {}", depth, a);
+            if a > 0.9 { cut += 1; }
+        }
+        assert!(cut > 0);
+    }
+
+    #[test]
+    fn test_domes_have_ledges_and_potholes() {
+        // The terraced dome steps: along a line, some runs are much flatter than others.
+        let n = PerlinNoise::new();
+        let v: Vec<f64> = (0 .. 2000).map(|k| dome_value(&n, k as f64 * 0.05, 7., 50.)).collect();
+        let steps: Vec<f64> = v.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
+        let flat = steps.iter().filter(|d| **d < 1e-4).count();
+        assert!(flat > 50, "{}", flat);
     }
 
     #[test]

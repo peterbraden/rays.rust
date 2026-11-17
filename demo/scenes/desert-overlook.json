@@ -533,17 +533,17 @@
   "LOWER": {
    "type": "mix",
    "materials": [
-    "FLOOR",
-    "TALUS"
+    "LEDGES",
+    "CONES"
    ],
    "amount": {
-    "slope": [
-     13,
-     25
+    "height": [
+     8,
+     20
     ],
-    "jitter": 6,
-    "jitter_scale": 6,
-    "seed": 3
+    "jitter": 3,
+    "jitter_scale": 30,
+    "seed": 7
    }
   },
   "GROUND": {
@@ -565,14 +565,14 @@
   "JUNIPER_LEAF": {
    "type": "leaf",
    "reflectance": [
-    0.12,
-    0.14,
-    0.1
+    0.16,
+    0.19,
+    0.13
    ],
    "transmittance": [
-    0.04,
-    0.07,
-    0.03
+    0.1,
+    0.13,
+    0.06
    ],
    "roughness": 0.4
   },
@@ -619,7 +619,7 @@
    "cross_set": 0.2,
    "pits": 0.45,
    "pit_size": 0.02,
-   "varnish": 0.25,
+   "varnish": 0.45,
    "varnish_color": [
     0.2,
     0.11,
@@ -704,7 +704,7 @@
   "UPLANDS": {
    "type": "mix",
    "materials": [
-    "SLICKROCK",
+    "SLICK_POCKETS",
     "CLIFF"
    ],
    "amount": {
@@ -750,14 +750,14 @@
   "JUNIPER_LEAF_2": {
    "type": "leaf",
    "reflectance": [
-    0.14,
-    0.16,
-    0.11
+    0.18,
+    0.2,
+    0.14
    ],
    "transmittance": [
-    0.05,
-    0.08,
-    0.03
+    0.11,
+    0.14,
+    0.06
    ],
    "roughness": 0.4
   },
@@ -774,6 +774,119 @@
     0.04
    ],
    "roughness": 0.5
+  },
+  "SAND": {
+   "type": "soil",
+   "preset": "sand",
+   "seed": 3,
+   "color": [
+    0.78,
+    0.5,
+    0.34
+   ],
+   "humus": [
+    0.72,
+    0.46,
+    0.31
+   ],
+   "stones": 0.01,
+   "crumbs": 0.01,
+   "litter": 0.03,
+   "mottle_size": 4,
+   "bump": 0.2
+  },
+  "BENCH": {
+   "type": "rock",
+   "preset": "sandstone",
+   "scale": 8,
+   "seed": 12,
+   "color": [
+    0.78,
+    0.66,
+    0.56
+   ],
+   "secondary": [
+    0.72,
+    0.58,
+    0.48
+   ],
+   "strata_amount": 0.4,
+   "strata_spacing": 0.08,
+   "dark_grain_amount": 0.01,
+   "light_grain_amount": 0.01,
+   "fractal": 0.4,
+   "fractal_size": 0.2,
+   "fractal_h": 1.2,
+   "crackle": 0.3,
+   "crackle_size": 0.15
+  },
+  "FLOOR_HOLLOWS": {
+   "type": "mix",
+   "materials": [
+    "FLOOR",
+    "SAND"
+   ],
+   "amount": {
+    "terrain": "hollows",
+    "scale": 200,
+    "spread": 0.9
+   }
+  },
+  "FLOOR_WASHES": {
+   "type": "mix",
+   "materials": [
+    "FLOOR_HOLLOWS",
+    "SAND"
+   ],
+   "amount": {
+    "terrain": "washes",
+    "scale": 200,
+    "spread": 1.0
+   }
+  },
+  "LEDGES": {
+   "type": "mix",
+   "materials": [
+    "FLOOR_WASHES",
+    "BENCH"
+   ],
+   "amount": {
+    "slope": [
+     13,
+     25
+    ],
+    "jitter": 6,
+    "jitter_scale": 6,
+    "seed": 3
+   }
+  },
+  "CONES": {
+   "type": "mix",
+   "materials": [
+    "FLOOR_WASHES",
+    "TALUS"
+   ],
+   "amount": {
+    "slope": [
+     13,
+     25
+    ],
+    "jitter": 6,
+    "jitter_scale": 6,
+    "seed": 3
+   }
+  },
+  "SLICK_POCKETS": {
+   "type": "mix",
+   "materials": [
+    "SLICKROCK",
+    "SAND"
+   ],
+   "amount": {
+    "terrain": "joints",
+    "scale": 70,
+    "spread": 1.3
+   }
   }
  },
  "camera": {
@@ -807,7 +920,8 @@
     0.13,
     0.25
    ],
-   "multiple_scattering": true
+   "multiple_scattering": true,
+   "mie_coefficient": 6e-06
   },
   {
    "type": "transform",
@@ -858,7 +972,10 @@
      "leaves": [
       "JUNIPER_LEAF",
       "JUNIPER_LEAF_2"
-     ]
+     ],
+     "params": {
+      "dead_branches": 0.2
+     }
     },
     {
      "species": "creosote-bush",
@@ -883,6 +1000,12 @@
      2000,
      6500
     ]
+   },
+   "favour": {
+    "terrain": "washes",
+    "scale": 200,
+    "spread": 1.0,
+    "strength": 0.75
    }
   },
   {
@@ -935,7 +1058,13 @@
      "bark": "GREY_BARK",
      "leaves": "RABBIT_LEAF"
     }
-   ]
+   ],
+   "favour": {
+    "terrain": "joints",
+    "scale": 70,
+    "spread": 1.3,
+    "strength": 0.85
+   }
   }
  ]
 }

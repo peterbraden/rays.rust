@@ -1,7 +1,9 @@
 {
  "output": {
-  "exposure": 0.62,
-  "white_balance": 7000
+  "exposure": 0.5,
+  "white_balance": 7000,
+  "tonemap": "filmic",
+  "saturation": 1.2
  },
  "width": 900,
  "height": 1000,
@@ -510,7 +512,8 @@
     0.45,
     0.75,
     -0.5
-   ]
+   ],
+   "mie_coefficient": 8e-06
   },
   {
    "type": "transform",

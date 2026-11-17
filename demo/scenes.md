@@ -165,8 +165,11 @@ Mesa: its top weathered into rounded slickrock domes (`domes`) of cross-bedded s
 POV-Ray-style turbulent bump mapping and cracked by crackle (`"fractal"`, `"crackle"`), with
 Utah junipers, sagebrush and rabbitbrush in the hollows. Below, a valley with a few landmark
 buttes placed by hand (`buttes`), split into columns along their vertical joints (`joints`),
-on cones of paler, pinker shale, the floor cut by dry washes (`washes`); the country rises to
-tablelands at the horizon (`valley`). Low side light, a filmic tone curve (`"tonemap":
+on cones of paler, pinker shale, the floor cut by dry washes (`washes`), with pale sand
+gathered in the washes and hollows and between the domes, and the plants crowding along the
+washes (a `{"terrain": "washes" | "hollows" | "joints"}` texture as a `mix` amount and a
+forest's `"favour"`); the country rises to a few long tablelands at the horizon (`valley`).
+The slickrock steps down in thin ledges and holds potholes. Low side light, a filmic tone curve (`"tonemap":
 "filmic"`) and a little saturation (`"saturation"`) give it a photograph's contrast. The
 viewpoint mesa is raised by `uplift`; the near country is a 1.5 m grid and the far, out to the
 horizon, a 30 m grid of the same mesas (`domain`) with a `hole` where the near one is.

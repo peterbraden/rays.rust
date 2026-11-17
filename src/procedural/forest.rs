@@ -147,6 +147,13 @@ fn field(noise: &PerlinNoise, offset: Vector2<f64>, size: f64, x: f64, z: f64) -
 
 /// Where the trees stand on `surfaces`, chosen by `seed`.
 pub fn place(layout: &ForestLayout, species: &[ForestSpecies], seed: u64, surfaces: &[&dyn Geometry]) -> Vec<Placement> {
+    place_favouring(layout, species, seed, surfaces, &|_, _| 1.)
+}
+
+/// As `place`, keeping a tree at (x, z) only with the chance `favour(x, z)` gives (0 to 1),
+/// as plants of a dry country crowd where water gathers.
+pub fn place_favouring(layout: &ForestLayout, species: &[ForestSpecies], seed: u64, surfaces: &[&dyn Geometry],
+                       favour: &dyn Fn(f64, f64) -> f64) -> Vec<Placement> {
     assert!(!species.is_empty(), "a forest needs at least one species");
     assert!(layout.spacing > 0. && layout.patch_size > 0., "a forest's spacing and patch size must be positive");
     let mut rng = Pcg32::new(seed, 0xf0e5);
@@ -170,7 +177,8 @@ pub fn place(layout: &ForestLayout, species: &[ForestSpecies], seed: u64, surfac
     // Neighbours are kept apart by the sum of their radii, half their spacing; a grid of cells
     // as wide as the largest such sum means only adjacent cells need checking.
     let radius = |s: &ForestSpecies, scale: f64| 0.5 * layout.spacing * s.spacing * scale;
-    let reach = species.iter().map(|s| 2. * radius(s, 1. + s.scale_v.abs())).fold(0., f64::max).max(1e-9);
+    // Unfavoured places need up to twice the room (see below).
+    let reach = species.iter().map(|s| 4. * radius(s, 1. + s.scale_v.abs())).fold(0., f64::max).max(1e-9);
     let cell = |x: f64, z: f64| ((x / reach).floor() as i64, (z / reach).floor() as i64);
     let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
     let mut placed: Vec<Placement> = vec![];
@@ -192,6 +200,13 @@ pub fn place(layout: &ForestLayout, species: &[ForestSpecies], seed: u64, surfac
         if field(&noise, clearing_at, layout.patch_size, x, z) < threshold {
             continue;
         }
+        // A uniform number from one already drawn, so forests without a favour are unchanged.
+        // The favour sets how much room a tree needs there, as well as its chance: dart
+        // throwing fills every gap in the end, so thinning alone wouldn't show.
+        let favoured = favour(x, z).clamp(0., 1.);
+        if favoured < (which * 7919.).fract() {
+            continue;
+        }
 
         // The species, by weight, favouring those whose stand this is.
         let weights: Vec<f64> = species.iter().zip(&stands).map(|(s, at)| {
@@ -210,7 +225,7 @@ pub fn place(layout: &ForestLayout, species: &[ForestSpecies], seed: u64, surfac
         }
         let s = &species[k];
         let scale = 1. + spread * s.scale_v;
-        let r = radius(s, scale);
+        let r = radius(s, scale) / favoured.max(0.25).sqrt();
 
         let (cx, cz) = cell(x, z);
         let crowded = (cx - 1 ..= cx + 1).any(|i| (cz - 1 ..= cz + 1).any(|j| {
@@ -260,6 +275,14 @@ mod tests {
 
     fn one(spacing: f64, scale_v: f64) -> ForestSpecies {
         ForestSpecies { weight: 1., spacing, scale_v }
+    }
+
+    #[test]
+    fn test_trees_crowd_where_favoured() {
+        let ground = Plane { y: 0. };
+        let trees = place_favouring(&layout(), &[one(1., 0.)], 8, &[&ground], &|x, _| if x > 0. { 1. } else { 0.1 });
+        let east = trees.iter().filter(|t| t.position.x > 0.).count();
+        assert!(east > 3 * (trees.len() - east), "{} of {}", east, trees.len());
     }
 
     #[test]

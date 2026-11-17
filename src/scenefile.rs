@@ -407,6 +407,22 @@ impl SceneFile {
     /// (`{"slope": [from, to], "jitter": degrees, "jitter_scale": size, "seed": 0}`,
     /// `textures::SlopeTexture`), or from the elevation (`{"height": [from, to], ...}`).
     pub fn parse_color_texture(v: &Value) -> crate::textures::ColorTexture {
+        // {"terrain": "washes" | "hollows" | "joints", "scale": the heightmap's floor_scale or
+        // domes, "spread": 1}: where a point lies among a mesas heightmap's features.
+        if let Some(feature) = v.get("terrain") {
+            use crate::textures::TerrainFeature;
+            return crate::textures::ColorTexture::Terrain(crate::textures::TerrainTexture {
+                feature: match feature.as_str() {
+                    Some("washes") => TerrainFeature::Washes,
+                    Some("hollows") => TerrainFeature::Hollows,
+                    Some("joints") => TerrainFeature::Joints,
+                    _ => panic!("terrain texture must be \"washes\", \"hollows\" or \"joints\", got {}", feature),
+                },
+                scale: SceneFile::parse_number(&v["scale"], 150.),
+                spread: SceneFile::parse_number(&v["spread"], 1.),
+                noise: crate::noise::PerlinNoise::new(),
+            });
+        }
         if let Some(range) = v.get("slope").or(v.get("height")) {
             let r = SceneFile::parse_vec2(range);
             return crate::textures::ColorTexture::Slope(crate::textures::SlopeTexture {
@@ -870,7 +886,21 @@ impl SceneFile {
         }).collect();
         let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
         let refs: Vec<&dyn Geometry> = surfaces.iter().map(|s| &**s as &dyn Geometry).collect();
-        let placements = forest::place(&layout, &species, seed, &refs);
+        // {"favour": {"terrain": "washes", "scale": 150, "spread": 1, "strength": 0.8}}: trees
+        // crowd along a mesas heightmap's feature (`parse_color_texture`), `strength` of them
+        // kept only there.
+        let placements = match o.get("favour") {
+            Some(f) => {
+                let feature = match SceneFile::parse_color_texture(f) {
+                    crate::textures::ColorTexture::Terrain(t) => t,
+                    _ => panic!("a forest's \"favour\" must be a terrain texture, got {}", f),
+                };
+                let strength = SceneFile::parse_number(&f["strength"], 0.8).clamp(0., 1.);
+                forest::place_favouring(&layout, &species, seed, &refs,
+                    &|x, z| 1. - strength + strength * feature.amount(&Vector3::new(x, 0., z)))
+            },
+            None => forest::place(&layout, &species, seed, &refs),
+        };
 
         let spread = SceneFile::parse_number(&o["autumn_spread"], 0.1);
         let mut rng = crate::geometry::Pcg32::new(seed, 0x7a71);

@@ -360,6 +360,45 @@ pub enum ColorTexture {
     Constant(Color),
     Image(ImageMap),
     Slope(SlopeTexture),
+    Terrain(TerrainTexture),
+}
+
+/// Which feature of a `mesas` heightmap a `TerrainTexture` follows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TerrainFeature {
+    /// Its dry washes (`heightmap::wash_value`).
+    Washes,
+    /// The hollows of its floor (`heightmap::hollow_value`).
+    Hollows,
+    /// The joints between its slickrock domes (`heightmap::dome_value`).
+    Joints,
+}
+
+/// A grey level from where a point lies among a `mesas` heightmap's features, given the same
+/// size the heightmap was (its `floor_scale`, or for joints its `domes`): so ground cover can
+/// follow them, as sand gathers in washes, hollows and the joints of slickrock.
+pub struct TerrainTexture {
+    pub feature: TerrainFeature,
+    pub scale: f64,
+    /// Widens (above 1) or narrows the feature.
+    pub spread: f64,
+    pub noise: crate::noise::PerlinNoise,
+}
+
+impl TerrainTexture {
+    pub fn amount(&self, point: &Vector3<f64>) -> f64 {
+        use crate::procedural::heightmap::{dome_value, hollow_value, wash_value};
+        let (x, z) = (point.x, point.z);
+        let v = match self.feature {
+            TerrainFeature::Washes => wash_value(&self.noise, x, z, self.scale),
+            TerrainFeature::Hollows => hollow_value(&self.noise, x, z, self.scale),
+            TerrainFeature::Joints => {
+                let d = dome_value(&self.noise, x, z, self.scale);
+                1. - (d / 0.25).clamp(0., 1.)
+            },
+        };
+        (v * self.spread).clamp(0., 1.)
+    }
 }
 
 /// A grey level from how steep the surface is: 0 where it is flatter than `from` degrees, 1
@@ -399,6 +438,7 @@ impl ColorTexture {
             ColorTexture::Constant(c) => *c,
             ColorTexture::Image(m) => m.eval(i, s),
             ColorTexture::Slope(t) => { let a = t.amount(&i.point, &i.normal); Color::new(a, a, a) },
+            ColorTexture::Terrain(t) => { let a = t.amount(&i.point); Color::new(a, a, a) },
         }
     }
 
@@ -407,7 +447,7 @@ impl ColorTexture {
         match self {
             ColorTexture::Constant(c) => *c,
             ColorTexture::Image(m) => m.image.average(),
-            ColorTexture::Slope(_) => Color::new(0.5, 0.5, 0.5),
+            ColorTexture::Slope(_) | ColorTexture::Terrain(_) => Color::new(0.5, 0.5, 0.5),
         }
     }
 }

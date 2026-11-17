@@ -1,6 +1,8 @@
 {
  "output": {
-  "exposure": 0.8
+  "exposure": 0.65,
+  "tonemap": "filmic",
+  "saturation": 1.2
  },
  "width": 1200,
  "height": 600,
@@ -250,7 +252,8 @@
     -0.55,
     0.45,
     -0.6
-   ]
+   ],
+   "mie_coefficient": 8e-06
   },
   {
    "type": "plane",

@@ -1,6 +1,8 @@
 {
  "output": {
-  "exposure": 1.35
+  "exposure": 1.0,
+  "tonemap": "filmic",
+  "saturation": 1.2
  },
  "width": 1280,
  "height": 640,
@@ -503,7 +505,8 @@
     -0.55,
     0.22,
     -0.6
-   ]
+   ],
+   "mie_coefficient": 8e-06
   },
   {
    "type": "transform",

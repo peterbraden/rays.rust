@@ -882,6 +882,27 @@ mod tests {
         }
     }
 
+    /// Timings for work on the GPU's speed, not a test: per pass, the fastest of a few runs,
+    /// of the CPU's camera rays and of whole passes (which include them), for the scenes in
+    /// RAYS_BENCH (comma-separated; by default a few with meshes), at 640 x 360.
+    /// `cargo test --release --features gpu bench_passes -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_passes() {
+        let names = std::env::var("RAYS_BENCH").unwrap_or("demo/demo.json,demo/scenes/instances.json,demo/scenes/glossy-sun.json,demo/scenes/spheres.json".into());
+        for name in names.split(',') {
+            let s = SceneFile::from_file(name, &crate::scenefile::Overrides { width: Some(640), height: Some(360), seed: None });
+            let flat = FlatScene::build(&s).unwrap();
+            let mut gpu = GpuRenderer::new(&s, &flat).unwrap();
+            gpu.run(&s, 0..2);
+            let n = 16;
+            let fastest = |f: &mut dyn FnMut()| (0..3).map(|_| { let t = std::time::Instant::now(); f(); t.elapsed().as_secs_f64() }).fold(f64::MAX, f64::min) * 1e3 / n as f64;
+            let rays = fastest(&mut || for k in 0..n { std::hint::black_box(GpuRenderer::camera_rays(&s, k)); });
+            let pass = fastest(&mut || { gpu.run(&s, 0..n); });
+            eprintln!("BENCH {:36} camera rays {:6.2} ms, pass {:6.2} ms, GPU about {:6.2} ms", name, rays, pass, pass - rays);
+        }
+    }
+
     /// The shader's functions, run on the CPU, agree with the renderer's own.
     #[test]
     fn test_shader_functions_match_the_renderer() {

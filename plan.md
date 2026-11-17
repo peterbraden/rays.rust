@@ -1457,6 +1457,18 @@ UI, file IO and rayon's threads would follow.
    8. Perhaps, natively only: hardware ray queries (wgpu's are experimental; WebGPU has
       none; the M2 has no ray tracing hardware, the M3 does).
    1-4 apply to the current kernels, and come first.
+
+   Measured (step 1; `bench_passes`, GPU time a pass at 640 x 360 on the M2, the fastest of
+   three, as macOS's own work loads the machine): demo 22.8 ms, instances 39.6, glossy-sun
+   18.9, spheres 7.7 (after paths that have ended stopped reading and writing in later
+   rounds: 26.9, 40.0, 21.1, 9.3 before). Per ray, from the shader's CPU build: demo 3.3 box
+   and 1.3 triangle tests (its teapot is small; most rays hit the plane, tested first, or
+   escape), instances 21.4 and 2.3, glossy-sun 3.3 and 1.7. Where the time goes: the demo's
+   first round (bounce and sky) 8.5 ms, its nine later rounds 14 ms, though paths average two
+   vertices: about 0.8 ms a dispatch of a large kernel over every pixel, idle or not (reading
+   only an ended path's flags changed nothing, so not memory). Instances: its first round
+   20 ms, traversal-bound. So queues with indirect dispatch (above) come before intersection
+   for most scenes; intersection (2-4) for scenes of many triangles, as instances.
 3. The fallback framework: per-area status, classification, CPU queues for materials first,
    then intersection. Exit: every flattenable demo scene plus at least one with a
    procedural shape and one with an unported material renders through the GPU path with CPU

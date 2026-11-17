@@ -1696,11 +1696,14 @@ pub struct PathState {
 }
 
 /// `PathState::state.y`: still tracing; its last bounce was specular; it has scattered off a
-/// rough surface (so regularisation applies); its light has been added to the image.
+/// rough surface (so regularisation applies); its light has been added to the image; it has
+/// asked the sky for light the `answer_sky` kernel hasn't yet found (so that kernel, and
+/// `bounce_paths` for paths long ended, can leave the others alone).
 pub const PATH_ACTIVE: u32 = 1;
 pub const PATH_SPECULAR: u32 = 2;
 pub const PATH_SCATTERED: u32 = 4;
 pub const PATH_ADDED: u32 = 8;
+pub const PATH_ASKED: u32 = 16;
 
 impl PathState {
     /// Pixel `index`'s path in pass `pass` from its camera ray.
@@ -2048,6 +2051,11 @@ pub fn bounce_paths(
     #[spirv(storage_buffer, descriptor_set = 0, binding = 8)] queries: &mut [SkyQuery],
 ) {
     let Some(index) = pixel(gid, params) else { return };
+    // A path ended and added: nothing to do, and nothing to write (most rounds of a pass are
+    // mostly these). Its flags alone are read to find out.
+    if paths[index].state.y & (PATH_ACTIVE | PATH_ADDED) == PATH_ADDED {
+        return;
+    }
     let p = paths[index];
     // Each buffer written once, after the branches (writes in each would join pointers chosen
     // by branch, which needs SPIR-V's variable pointers).
@@ -2056,6 +2064,9 @@ pub fn bounce_paths(
     if p.state.y & PATH_ACTIVE != 0 {
         let s = Scene { params, prims, nodes, materials, lights, tables };
         (next, q0, q1) = bounce(&s, &p);
+        if q0.weight.xyz().dot(q0.weight.xyz()) > 0.0 || q1.weight.xyz().dot(q1.weight.xyz()) > 0.0 {
+            next.state.y |= PATH_ASKED;
+        }
     } else if p.state.y & PATH_ADDED == 0 {
         // A NaN (from some degenerate case) is dropped, as the CPU renderers drop theirs; its
         // rays were still cast. (Not `is_finite`: its infinite constant is invalid for naga,
@@ -2067,8 +2078,10 @@ pub fn bounce_paths(
         next.state.y = p.state.y | PATH_ADDED;
     }
     paths[index] = next;
-    queries[2 * index] = q0;
-    queries[2 * index + 1] = q1;
+    if next.state.y & PATH_ASKED != 0 {
+        queries[2 * index] = q0;
+        queries[2 * index + 1] = q1;
+    }
     if add.w > 0.0 {
         accum[index] += add;
     }
@@ -2089,6 +2102,10 @@ pub fn answer_sky(
     #[spirv(storage_buffer, descriptor_set = 0, binding = 8)] queries: &mut [SkyQuery],
 ) {
     let Some(index) = pixel(gid, params) else { return };
+    let flags = paths[index].state.y;
+    if flags & PATH_ASKED == 0 {
+        return;
+    }
     let s = Scene { params, prims, nodes, materials, lights, tables };
     let mut light = Vec3::ZERO;
     // Both slots, at one call site of `sky_light`.
@@ -2100,7 +2117,6 @@ pub fn answer_sky(
         light += sky_light(&s, &q);
         k += 1;
     }
-    if light.dot(light) > 0.0 {
-        paths[index].l += light.extend(0.0);
-    }
+    paths[index].l += light.extend(0.0);
+    paths[index].state.y = flags & !PATH_ASKED;
 }

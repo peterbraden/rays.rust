@@ -45,7 +45,7 @@ families:
 
 | Family | Clouds | Rendered by |
 | --- | --- | --- |
-| `low` | stratus, stratocumulus, cumulus humilis, based at the condensation level | `fields::Stratiform` (Nubis recipe, base, top, cover and form from the maps) |
+| `low` | stratus, stratocumulus, cumulus humilis, based at the condensation level | `fields::Stratiform`: noise (Nubis recipe) for sheets; cumulus as cauliflower heaps (`fields::Heaps`, `procedural::cauliflower`: trees of spheres, domes on domes, crisp edges, flat bases) |
 | `mid` | altostratus, nimbostratus, altocumulus | `fields::Stratiform` |
 | `convective` | cumulus congestus and cumulonimbus towers, anvils spread downwind, overshooting tops, anvil shields over clusters | `fields::Convective` (new) |
 | `high` | cirrus along the jets and ahead of warm fronts, thickening to cirrostratus | Hogan and Kew's `GlobalCirrus`, its coverage from the weather |
@@ -135,6 +135,8 @@ Every parameter is optional.
     `diffraction`, `halos`, `rainbow`.
 
   Some families take more:
+  - `low`: `heaps`, `false` for noise alone, or `{"cell", "edge", "roughness", "levels",
+    "ratio", "children", "embed", "rise"}` for the cauliflower cumulus.
   - `convective`: `cell_size` (m between storms), `overshoot` and `anvil_depth`.
   - `high`: Hogan and Kew's cirrus parameters (see `hogan_kew_cirrus`).
   - `rain`: `shower_rate` (mm/h), `streakiness` and `streak_size`.

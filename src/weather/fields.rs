@@ -138,12 +138,173 @@ pub struct Stratiform {
     pub drift: Drift,
     shapes: Shapes,
     ceiling: f64,
+    /// Cumuliform cloud as cauliflower heaps (`Heaps`) rather than noise; None for noise alone.
+    pub heaps: Option<Heaps>,
+}
+
+/// # Heaps of cumulus
+///
+/// Where the low cloud is cumuliform, each cloud is a cauliflower (`procedural::cauliflower`):
+/// a tree of spheres, domes on domes, with a crisp edge and a flat base. Clouds sit on cells a
+/// `cell` apart over the planet (a jittered grid, as the storms' are), each active with the
+/// local cover as its chance, as deep as the layer there and about as wide, and drifting with
+/// the layer. Where the cloud turns stratiform they fade into the noise's sheets.
+pub struct Heaps {
+    pub tree: crate::procedural::cauliflower::Cauliflower,
+    /// Spacing of the cells (m), and the cloud's edge: the depth over which its density rises.
+    pub cell: f64,
+    pub edge: f64,
+    /// Fine bumps on the surface (m), from the detail noise.
+    pub roughness: f64,
+    pub radius: f64,
+    pub seed: u32,
+}
+
+impl Heaps {
+    pub fn new(radius: f64, seed: u64) -> Heaps {
+        Heaps { tree: crate::procedural::cauliflower::Cauliflower::cumulus(), cell: 2000., edge: 30., roughness: 20., radius, seed: seed as u32 }
+    }
+
+    /// The farthest a cloud reaches from its cell's centre, horizontally.
+    fn max_reach(&self) -> f64 {
+        0.45 * self.cell + 0.15 * self.cell * self.tree.extent(1.)
+    }
+}
+
+/// One cloud of the heaps, near a point: its axis (a unit vector, in the drifting frame), the
+/// point's horizontal distance from it, the radius of its body's spheres and of the disc they
+/// stand on, its base and highest top (altitudes), and how far it reaches from its axis.
+struct Heap {
+    axis: Vector3<f64>,
+    distance: f64,
+    r0: f64,
+    width: f64,
+    base: f64,
+    top: f64,
+    reach: f64,
+    id: u64,
+    hashes: [f64; 2],
+}
+
+impl Heap {
+    /// The body's spheres, over a flat disc: more of them the wider it is.
+    fn roots(&self, h: &Heaps) -> Vec<crate::procedural::cauliflower::Sphere> {
+        let (t1, t2) = crate::weather::tangents(&self.axis);
+        let n = ((1.5 * (self.width / self.r0).powi(2)).round() as usize).clamp(1, 12);
+        let disc = (self.width - self.r0).max(0.);
+        (0..n).map(|k| {
+            let id = self.id.wrapping_mul(7).wrapping_add(k as u64);
+            let u = |j: u64| crate::procedural::cauliflower::unit(id, j);
+            // Spread over the disc (the first at the middle), the outer ones smaller.
+            let (rho, a) = if k == 0 { (0., 0.) } else { (u(0).sqrt(), std::f64::consts::TAU * (u(1) + self.hashes[0])) };
+            let r = self.r0 * (1. - 0.4 * rho) * (0.8 + 0.2 * u(2));
+            let centre = self.axis * (h.radius + self.base + 0.8 * r) + (t1 * a.cos() + t2 * a.sin()) * (disc * rho);
+            crate::procedural::cauliflower::Sphere { centre, radius: r, id }
+        }).collect()
+    }
 }
 
 impl Stratiform {
     pub fn new(maps: Arc<Maps>, family: Family, look: Look, seed: u64) -> Stratiform {
         let ceiling = match family { Family::Low => maps.low.top.max(), Family::Mid => maps.mid.top.max() };
-        Stratiform { maps, family, look, drift: Drift::none(), shapes: Shapes::new(seed), ceiling }
+        Stratiform { maps, family, look, drift: Drift::none(), shapes: Shapes::new(seed), ceiling, heaps: None }
+    }
+
+    /// Calls `f` with each cloud of the heaps whose cell is near the point above `up` (a unit
+    /// vector in the frame drifting with the layer), stopping if it returns true; returns how far
+    /// the point is from the reach of any cloud not reported (in cells not looked at, or too far
+    /// off to reach it).
+    fn heaps_near(&self, h: &Heaps, up: &Vector3<f64>, mut f: impl FnMut(&Heap) -> bool) -> f64 {
+        let l = self.layer();
+        let s = h.cell;
+        let surface = up * h.radius;
+        let c = (surface / s).map(|v| v.floor() as i64);
+        let block = (0..3).map(|k| (surface[k] - (c[k] - 1) as f64 * s).min((c[k] + 2) as f64 * s - surface[k])).fold(f64::INFINITY, f64::min);
+        let ext = h.tree.extent(1.);
+        let mut beyond = block - h.max_reach();
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let (ix, iy, iz) = (c.x + dx, c.y + dy, c.z + dz);
+                    let hash = |k: u32| crate::noise::worley_hash(ix as u32, iy as u32, iz as u32, h.seed.wrapping_add(k));
+                    let axis = (Vector3::new(ix as f64 + hash(0), iy as f64 + hash(1), iz as f64 + hash(2)) * s).normalize();
+                    if !owns(axis * h.radius, s, (ix, iy, iz)) {
+                        continue;
+                    }
+                    let offset = surface - axis * h.radius;
+                    let distance = (offset - up * up.dot(&offset)).norm();
+                    if distance > h.max_reach() {
+                        beyond = beyond.min(distance - h.max_reach());
+                        continue;
+                    }
+                    let texel = l.cover.locate(&self.drift.forth(&axis));
+                    let (cover, form) = (l.cover.at_texel(&texel), l.form.at_texel(&texel));
+                    // Active more often than the cover: a cloud covers less than its cell.
+                    if hash(3) >= (2.5 * cover).min(1.) * smoothstep(0.35, 0.65, form) {
+                        continue;
+                    }
+                    let (base, top) = (l.base.at_texel(&texel), l.top.at_texel(&texel));
+                    let depth = (top - base) * (0.6 + 0.4 * hash(4));
+                    // The body: spheres over a flat disc `width` in radius, sized so that their
+                    // turrets (to `extent` times their radius) top out at about the cloud's depth.
+                    let r0 = (depth / (0.8 + ext)).clamp(30., 0.15 * s);
+                    let width = (s * (0.2 + 0.25 * hash(5))).clamp(r0, 0.45 * s);
+                    let heap = Heap {
+                        axis, distance, r0, width, base, reach: width + r0 * ext,
+                        top: base + 0.8 * r0 + r0 * ext,
+                        id: ((ix as u64) << 42) ^ ((iy as u64) << 21) ^ (iz as u64) ^ ((h.seed as u64) << 13),
+                        hashes: [hash(6), hash(7)],
+                    };
+                    if f(&heap) {
+                        return beyond;
+                    }
+                }
+            }
+        }
+        beyond
+    }
+
+    /// How much of the densest cloud (0 to 1) the cauliflower heaps put at `at`, whose layer's
+    /// base is `base` there.
+    fn heap_fraction(&self, h: &Heaps, at: &SurfacePoint, base: f64) -> f64 {
+        let p = self.drift.back(&at.position);
+        let up = p.normalize();
+        let deep = h.edge + h.roughness;
+        let mut best = f64::NEG_INFINITY;
+        self.heaps_near(h, &up, |heap| {
+            if heap.distance > heap.reach + h.roughness || at.altitude > heap.top + h.roughness {
+                return false;
+            }
+            best = best.max(h.tree.depth(&heap.roots(h), &heap.axis, &p, deep));
+            best >= deep
+        });
+        if best <= -h.roughness {
+            return 0.;
+        }
+        // Fine bumps, then the edge; and the flat base, where the air saturates.
+        let bumps = if h.roughness > 0. && best < deep {
+            h.roughness * (worley_fbm(self.shapes.cells(), &(self.drift.noise_position(&at.position, &at.up) / self.look.detail_size)) - 0.5) * 2.
+        } else {
+            0.
+        };
+        smoothstep(0., h.edge, best + bumps) * smoothstep(base, base + 0.3 * h.edge, at.altitude)
+    }
+
+    /// Within a texel of nothing but heaps: how far a ray at `at` can go before it could reach
+    /// one (0 if it is at one), at most `limit`. Moving a distance L changes the point's height
+    /// and its horizontal distance from any cloud's axis by at most L.
+    fn heap_clearance(&self, h: &Heaps, at: &SurfacePoint, limit: f64) -> f64 {
+        let up = self.drift.back(&at.up);
+        let mut clear = limit;
+        let beyond = self.heaps_near(h, &up, |heap| {
+            // The body's spheres reach 0.2 of their radius below the base (the base cuts them flat
+            // where the point is, but neighbouring columns' bases differ).
+            let vertical = (heap.base - 0.2 * heap.r0 - h.roughness - at.altitude).max(at.altitude - heap.top - h.roughness).max(0.);
+            let horizontal = (heap.distance - heap.reach - h.roughness).max(0.);
+            clear = clear.min(vertical.max(horizontal));
+            clear <= 0.
+        });
+        clear.min(beyond - h.roughness).max(0.)
     }
 
     fn layer(&self) -> &LayerMaps {
@@ -159,9 +320,18 @@ impl Stratiform {
     }
 }
 
-/// The local majorant over a texel of `cover` between the spheres of `low` and `high`
-/// altitudes: `m` between them if the cover isn't zero, else nothing to the texel's edge.
-#[allow(clippy::too_many_arguments)]
+/// Whether the cell (`ix`, `iy`, `iz`) of a lattice `s` apart holds `point`, a feature's
+/// projection onto the planet's surface. Features are jittered points in the 3D cells, then
+/// projected onto the surface; one counts only if its projection stays in its own cell. Then any
+/// feature within a distance D of a point on the surface lies in a cell within D of it, so
+/// searching the cells about the point finds every feature near it. (Otherwise a feature
+/// from a cell two above the point's, inside the lattice, could project beside it unfound:
+/// clouds cut off at cell boundaries, and bounds that missed them.)
+fn owns(point: Vector3<f64>, s: f64, (ix, iy, iz): (i64, i64, i64)) -> bool {
+    let c = (point / s).map(|v| v.floor() as i64);
+    c.x == ix && c.y == iy && c.z == iz
+}
+
 /// Whether a ray at `at` along `d` has left a family for good: above `ceiling` (its highest
 /// cloud anywhere) and heading outwards, its distance from the planet's centre only grows.
 /// Without this, rays climbing out of the clouds (to the sun, the sky) stepped on through empty
@@ -171,6 +341,9 @@ fn gone(at: &SurfacePoint, d: &Vector3<f64>, ceiling: f64) -> bool {
     at.altitude >= ceiling && at.position.dot(d) >= 0.
 }
 
+/// The local majorant over a texel of `cover` between the spheres of `low` and `high`
+/// altitudes: `m` between them if the cover isn't zero, else nothing to the texel's edge.
+#[allow(clippy::too_many_arguments)]
 fn column_bound(at: &SurfacePoint, d: &Vector3<f64>, planet: &Planet, map: &CubeMap, cover: f64, low: f64, high: f64, m: f64) -> (f64, f64) {
     let ahead = at.position + d * 0.01;
     let (face, i, j) = map.texel(&ahead.normalize());
@@ -198,8 +371,19 @@ impl PlanetField for Stratiform {
             return 0.;
         }
         let cover = l.cover.at_texel(&t);
+        let form = l.form.at_texel(&t);
         let position = self.drift.noise_position(&at.position, &at.up);
-        self.look.max_density * self.shapes.fraction(&self.look, at.altitude, base, top, cover, l.form.at_texel(&t), &position)
+        // Heaps where the cloud is cumuliform, noise where it's stratiform, mixed between.
+        let heaped = match &self.heaps {
+            Some(_) if cover > 0. => smoothstep(0.35, 0.65, form),
+            _ => 0.,
+        };
+        let noise = if heaped < 1. { self.shapes.fraction(&self.look, at.altitude, base, top, cover, form, &position) } else { 0. };
+        let heap = match &self.heaps {
+            Some(h) if heaped > 0. => self.heap_fraction(h, at, base) * (1. - smoothstep(top - 0.3 * h.edge, top, at.altitude)),
+            _ => 0.,
+        };
+        self.look.max_density * (noise * (1. - heaped) + heap * heaped)
     }
 
     fn majorant(&self) -> f64 {
@@ -212,8 +396,16 @@ impl PlanetField for Stratiform {
         }
         let l = self.layer();
         let (face, i, j) = l.cover.texel(&(at.position + d * 0.01).normalize());
-        column_bound(at, d, planet, &l.cover, l.cover.texel_max(face, i, j), -l.base_low.texel_max(face, i, j),
-            l.top.texel_max(face, i, j), self.look.max_density)
+        let (majorant, length) = column_bound(at, d, planet, &l.cover, l.cover.texel_max(face, i, j), -l.base_low.texel_max(face, i, j),
+            l.top.texel_max(face, i, j), self.look.max_density);
+        // Over a texel that is all heaps, clear air until the ray could reach one.
+        match &self.heaps {
+            Some(h) if majorant > 0. && -l.form_low.texel_max(face, i, j) >= 0.65 => {
+                let clear = self.heap_clearance(h, at, length);
+                if clear >= 20. { (0., clear) } else { (majorant, length.min(300.)) }
+            },
+            _ => (majorant, length),
+        }
     }
 }
 
@@ -304,6 +496,9 @@ impl Convective {
                     let feature = Vector3::new(ix as f64 + h(0), iy as f64 + h(1), iz as f64 + h(2)) * s;
                     let fdir_drifting = feature.normalize();
                     let fp = fdir_drifting * self.radius;
+                    if !owns(fp, s, (ix, iy, iz)) {
+                        continue;
+                    }
                     // Where the storm is now, to read the weather there.
                     let fdir = self.drift.forth(&fdir_drifting);
                     let offset = p - fp;
@@ -733,5 +928,41 @@ mod tests {
             }
         }
         assert!(total > 0. && diff < 0.2 * total, "{} of {}", diff, total);
+    }
+
+    #[test]
+    fn test_heaps_are_bounded_and_skipped() {
+        // A cumulus sky: plenty of heaps; the bound holds along random rays through them, and
+        // clear air between them is skipped.
+        let mut p = WeatherParams::new(12);
+        p.map_size = 64;
+        p.instability = 2.;
+        let w = Weather::new(p, None);
+        let maps = w.maps();
+        let planet = Planet { radius: w.params.radius };
+        let look = Look { max_density: 0.05, shape_size: 1200., detail_size: 220., erosion: 0.4 };
+        let mut f = Stratiform::new(maps.clone(), Family::Low, look, 3);
+        f.heaps = Some(Heaps::new(planet.radius, 9));
+        f.drift = Drift::new(Vector3::y(), 8., 0.3, 3000., planet.radius);
+        let mut rng = crate::geometry::Pcg32::new(7, 0);
+        let (mut cloud, mut skipped, mut tested) = (0, 0, 0);
+        while tested < 2000 {
+            let up = crate::geometry::point_on_unit_sphere(rng.next_f64(), rng.next_f64());
+            if maps.low.cover.at(&up) < 0.2 || maps.low.form.at(&up) < 0.7 { continue; }
+            tested += 1;
+            let (base, top) = (maps.low.base.at(&up), maps.low.top.at(&up));
+            let at = planet.surface_point(&(planet.center() + up * (planet.radius + base - 100. + rng.next_f64() * (top - base + 200.))));
+            let d = crate::geometry::point_on_unit_sphere(rng.next_f64(), rng.next_f64());
+            let (m, len) = f.majorant_from(&at, &at.position, &d, &planet);
+            assert!(len > 0.);
+            if m == 0. { skipped += 1; }
+            for k in 0..40 {
+                let q = planet.surface_point(&(planet.center() + at.position + d * (len.min(20_000.) * k as f64 / 40.)));
+                let v = f.density(&q);
+                if v > 0. { cloud += 1; }
+                assert!(v <= m + 1e-12, "{} > {} at step {} of {}", v, m, k, len);
+            }
+        }
+        assert!(cloud > 100 && skipped > 300, "uninformative: cloud {} skipped {}", cloud, skipped);
     }
 }

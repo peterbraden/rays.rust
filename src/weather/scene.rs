@@ -241,6 +241,21 @@ fn convective(spec: &Value, weather: &Weather, maps: Arc<crate::weather::Maps>) 
     field
 }
 
+/// The low cloud's cumulus as cauliflower heaps (`fields::Heaps`): `{"cell", "edge",
+/// "roughness", "levels", "ratio", "children", "embed", "rise"}`, all optional.
+fn heaps(o: &Value, weather: &Weather, seed: u64) -> crate::weather::fields::Heaps {
+    let mut h = crate::weather::fields::Heaps::new(weather.params.radius, seed.wrapping_add(101));
+    h.cell = number(o, "cell", h.cell).max(100.);
+    h.edge = number(o, "edge", h.edge).max(1.);
+    h.roughness = number(o, "roughness", h.roughness).max(0.);
+    let t = &h.tree;
+    h.tree = crate::procedural::cauliflower::Cauliflower::new(
+        SceneFile::parse_int(&o["levels"], t.levels).min(8), number(o, "ratio", t.ratio).clamp(0.1, 0.8),
+        SceneFile::parse_int(&o["children"], t.children).clamp(1, 32), number(o, "embed", t.embed).clamp(0., 1.),
+        number(o, "rise", t.rise).max(0.));
+    h
+}
+
 fn look(o: &Value, d: Look) -> Look {
     Look {
         max_density: number(o, "density", d.max_density).max(0.),
@@ -273,6 +288,9 @@ pub fn create_layer(o: &Value) -> SceneObject {
             };
             let mut field = Stratiform::new(maps, fam, look(&spec, d), seed);
             field.drift = if fam == Family::Low { drift(&spec, &weather, 8., 0.3) } else { drift(&spec, &weather, 15., 0.1) };
+            if fam == Family::Low && spec["heaps"] != Value::Bool(false) {
+                field.heaps = Some(heaps(&spec["heaps"], &weather, seed));
+            }
             let top = field.highest();
             create_volume(shell(top), global(Arc::new(field)), SceneFile::parse_scattering(&spec, 0.85))
         },

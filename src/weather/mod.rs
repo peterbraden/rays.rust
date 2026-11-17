@@ -279,6 +279,8 @@ pub struct LayerMaps {
     pub top: CubeMap,
     pub form: CubeMap,
     pub base_low: CubeMap,
+    /// The form negated, whose texel maximum is the least cumuliform over the texel.
+    pub form_low: CubeMap,
 }
 
 impl Weather {
@@ -687,11 +689,11 @@ impl Weather {
         let start = std::time::Instant::now();
         let n = self.params.map_size.max(2);
         let dirs = CubeMap::corner_directions(n);
-        const K: usize = 23;
+        const K: usize = 26;
         let values: Vec<[f32; K]> = dirs.par_iter().map(|d| {
             let c = self.column(&self.frame.to_geo(d));
             let w = self.frame.to_scene(&c.wind);
-            let l = |x: &Cloud| [x.cover, x.base, x.top, x.form, -x.base];
+            let l = |x: &Cloud| [x.cover, x.base, x.top, x.form, -x.base, -x.form];
             let mut v = [0f32; K];
             let all: Vec<f64> = l(&c.low).into_iter().chain(l(&c.mid)).chain(l(&c.deep))
                 .chain([w.x, w.y, w.z, c.high, c.rain, c.rain_base, c.rain_fall, c.tropopause]).collect();
@@ -699,10 +701,10 @@ impl Weather {
             v
         }).collect();
         let map = |k: usize| CubeMap::from_corners(n, values.iter().map(|v| v[k]).collect());
-        let layer = |k: usize| LayerMaps { cover: map(k), base: map(k + 1), top: map(k + 2), form: map(k + 3), base_low: map(k + 4) };
-        let (low, mid, deep) = (layer(0), layer(5), layer(10));
-        let wind = [map(15), map(16), map(17)];
-        let (high, rain, rain_base, rain_fall) = (Arc::new(map(18)), map(19), map(20), map(21));
+        let layer = |k: usize| LayerMaps { cover: map(k), base: map(k + 1), top: map(k + 2), form: map(k + 3), base_low: map(k + 4), form_low: map(k + 5) };
+        let (low, mid, deep) = (layer(0), layer(6), layer(12));
+        let wind = [map(18), map(19), map(20)];
+        let (high, rain, rain_base, rain_fall) = (Arc::new(map(21)), map(22), map(23), map(24));
         drop(values);
 
         // Second pass: what reaches out from the convective cells. The anvils' shield, spread

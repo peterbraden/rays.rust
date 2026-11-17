@@ -125,6 +125,7 @@ mod procedural {
     pub mod grass;
     pub mod rock;
     pub mod nubis_clouds;
+    pub mod cauliflower;
     pub mod hogan_kew_cirrus;
     pub mod benard_altocumulus;
     pub mod lenticular;

@@ -179,6 +179,10 @@ impl Buffers {
         // Primitives: the bounded ones in the BVH's order, then the planes.
         let mut materials = Vec::new();
         let material_index: Vec<u32> = flat.materials.iter().map(|m| push_material(m, &mut materials)).collect();
+        // A buffer may not be empty (wgpu refuses to bind it): a scene of sky alone has none.
+        if materials.is_empty() {
+            materials.push(GpuMaterial::zeroed());
+        }
         let to_gpu = |p: &Prim, m: u32, emitter: u32| -> GpuPrim {
             let mut g = GpuPrim::zeroed();
             g.info = UVec4::new(pathtrace::PRIM_TRIANGLE, material_index[m as usize], emitter, 0);
@@ -586,6 +590,24 @@ mod tests {
             check(&f.body, &mut loops);
         }
         assert!(loops > 0, "no loops found: is the shader the one expected?");
+    }
+
+    /// A scene of sky alone (no objects) makes no empty buffers, which wgpu can't bind; it
+    /// rendered with a panic rather than an image.
+    #[test]
+    fn test_a_scene_without_objects_has_no_empty_buffers() {
+        let s = SceneFile::from_string(r#"{ "width": 8, "height": 8, "supersamples": 1, "background": [0.2, 0.25, 0.3],
+            "camera": { "location": [0, 1, -5], "lookat": [0, 1, 0], "up": [0, 1, 0], "angle": 0.6 },
+            "materials": {}, "objects": [] }"#.to_string());
+        let flat = FlatScene::build(&s).unwrap();
+        let b = Buffers::build(&s, &flat).unwrap();
+        for (what, len) in [("prims", b.prims.len()), ("nodes", b.nodes.len()), ("materials", b.materials.len()),
+                            ("lights", b.lights.len()), ("tables", b.tables.len())] {
+            assert!(len > 0, "{} is empty", what);
+        }
+        let Ok(mut gpu) = GpuRenderer::new(&s, &flat) else { return };
+        let sums = gpu.run(&s, 0..1);
+        assert!(sums.iter().all(|v| (v[0] - 0.2).abs() < 1e-3), "the background, not {:?}", sums[0]);
     }
 
     /// The shader's functions, run on the CPU, agree with the renderer's own.

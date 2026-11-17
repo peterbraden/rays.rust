@@ -1349,11 +1349,12 @@ mod tests {
     #[test]
     fn test_heated_ground_grows_cumulus_at_the_condensation_level() {
         // A coarse day: thermals from the heated ground should reach the top of the mixed
-        // layer and condense there.
+        // layer and condense there. Cloud forms by 20 minutes, its base steady at 1-1.25 km
+        // through the hour; half an hour checks it has lasted, in half the time.
         let mut p = SimulationParams { friction_velocity: 0.4, ..small((32, 40, 32), 100.) };
         p.forcing = Forcing::steady(300., 400.);
         let mut sim = CloudSimulation::new(p);
-        sim.advance_to(60. * 60., |_| {});
+        sim.advance_to(30. * 60., |_| {});
         let base = sim.cloud_base().expect("no cloud formed");
         assert!((400. ..1600.).contains(&base), "cloud base {}", base);
         // And it is a cloud, not a fog: the lowest 300 m are (almost all) clear.

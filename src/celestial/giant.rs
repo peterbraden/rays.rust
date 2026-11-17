@@ -193,10 +193,9 @@ impl Giant {
             return Color::black();
         }
         let mut light = self.ring_shadow(p, &l, sun.angular_radius);
-        if let (Some((obj, s)), true) = (me, self.shadows) {
-            if light > 0. {
-                light *= self.shadow_of_others(obj, &(p + n * (1. + 1e-9 * p.norm())), &l, s);
-            }
+        if let (Some((obj, s)), true) = (me, self.shadows)
+            && light > 0. {
+            light *= self.shadow_of_others(obj, &(p + n * (1. + 1e-9 * p.norm())), &l, s);
         }
         if light <= 0. {
             return Color::black();
@@ -278,7 +277,7 @@ impl Giant {
         let frame = frame(&pole, SceneFile::parse_number(&o["rotation"], 0.).to_radians());
         let w = &mut preset.weather;
         w.resolution = SceneFile::parse_number(&o["resolution"], w.resolution as f64) as usize;
-        w.time = SceneFile::parse_number(&o["time"], w.time);
+        w.time = SceneFile::parse_number(&o["flow_time"], w.time);
         w.turbulence = SceneFile::parse_number(&o["turbulence"], w.turbulence);
         let rings = match &o["rings"] {
             Value::Bool(false) => None,

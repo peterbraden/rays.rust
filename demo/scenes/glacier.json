@@ -1,0 +1,31 @@
+{
+  "width": 960,
+  "height": 540,
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 6,
+  "path_termination": "russian_roulette",
+  "output": { "tonemap": "reinhard", "exposure": 1.2 },
+  "camera": {
+    "location": [19000, 5200, 64913],
+    "lookat": [7880, 3400, 64913],
+    "up": [0, 1, 0],
+    "angle": 0.7
+  },
+  "sun": { "intensity": 4.9 },
+  "objects": [
+    {
+      "type": "landscape",
+      "seed": 0,
+      "time": 100000,
+      "domain": { "near": "mountains", "cells": 128, "spacing": 750 },
+      "climate": { "warming": -7 },
+      "focus": [1875, 4600, 33375],
+      "cache": "demo/scenes/.landscape-cache"
+    },
+    { "type": "ocean", "wind": [7, 2] },
+    { "type": "skysphere", "sun_direction": [0.4, 0.35, -0.6] }
+  ]
+}

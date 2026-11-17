@@ -734,6 +734,31 @@ mod tests {
         assert!(none.share(&p, &Vector3::y()) < 0.01);
     }
 
+    /// Scene files name the materials, with presets and overrides.
+    #[test]
+    fn test_scene_materials_parse() {
+        let o: serde_json::Value = serde_json::from_str(r#"{ "preset": "fresh", "grain_size": 0.2, "soot": 100 }"#).unwrap();
+        let style = crate::scenefile::SceneFile::parse_snow_style(&o);
+        assert_eq!((style.grain_size, style.impurities.soot, style.impurities.dust), (0.2, 100., 1.));
+        let o: serde_json::Value = serde_json::from_str(r#"{ "preset": "blue", "bubbles": 2 }"#).unwrap();
+        let ice = crate::scenefile::SceneFile::parse_ice_style(&o);
+        assert_eq!((ice.bubbles, ice.bubble_radius), (2., 0.8));
+        // Builds (an unknown type or a bad reference would panic).
+        crate::scenefile::SceneFile::from_string(r#"{
+            "camera": { "location": [0, 1, -3], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
+            "materials": {
+                "S": { "type": "snow" }, "I": { "type": "ice", "preset": "white" },
+                "R": { "type": "lambertian", "albedo": [0.2, 0.2, 0.2] },
+                "C": { "type": "snow_cover", "material": "R", "cover": 0.4, "snow": { "preset": "fresh" } }
+            },
+            "objects": [
+                { "type": "plane", "y": 0, "material": "S" },
+                { "type": "sphere", "location": [0, 1, 0], "radius": 0.5, "material": "I" },
+                { "type": "sphere", "location": [1, 1, 0], "radius": 0.5, "material": "C" }
+            ]
+        }"#.to_string());
+    }
+
     /// In spectral mode the albedo follows the wavelength: high in the blue, lower in the red.
     #[test]
     fn test_spectral_albedo_follows_wavelength() {

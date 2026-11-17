@@ -28,4 +28,3 @@ Cargo.lock
 
 # Terrain evolved by landscape scenes
 .landscape-cache/
-.glacier-cache/

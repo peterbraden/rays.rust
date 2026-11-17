@@ -1,4 +1,5 @@
 {
+  "output": { "exposure": 0.46 },
   "width": 800,
   "height": 600,
 
@@ -163,7 +164,7 @@
       "medium" : "CHECKERED_FLOOR"
     },
     { 
-      "type" : "skysphere"
+      "type" : "skysphere", "multiple_scattering": false, "mie_coefficient": 0.000105, "rayleigh_r": 1.16e-5, "rayleigh_g": 2.7e-5, "rayleigh_b": 6.62e-5
     }
   ]
 }

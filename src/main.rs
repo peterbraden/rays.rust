@@ -1,8 +1,9 @@
 use clap::Parser;
 
-use rays::{compare, depth, output, paint, rendercontext, scenefile};
+// The renderer is the library; this file is its command line.
+use rays::*;
 use rays::rendercontext::RenderContext;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use indicatif::ProgressBar;
@@ -55,10 +56,57 @@ struct Args {
     #[arg(long)]
     seed: Option<u64>,
 
+    ///Samples per pixel to render to; overrides the scenefile's supersamples. With a saved
+    ///state, only the samples it lacks are rendered, so a quick render can be refined later
+    #[arg(long)]
+    samples: Option<usize>,
+
+    ///Render this many more samples per pixel than the saved state has
+    #[arg(long, conflicts_with = "samples")]
+    add_samples: Option<usize>,
+
+    ///Adaptive sampling: each pixel stops once its standard error, relative to its displayed
+    ///value, is below this (eg. 0.01), with supersamples the most it takes; overrides the
+    ///scene's "adaptive" threshold. 0 turns it off
+    #[arg(long)]
+    noise_threshold: Option<f64>,
+
+    ///Also write a map of each pixel's samples, relative to the most any pixel took: where
+    ///adaptive sampling spent them
+    #[arg(long)]
+    sample_map: Option<String>,
+
+    ///Start afresh, rather than carrying on from the saved state (<output>.accum)
+    #[arg(long)]
+    fresh: bool,
+
+    ///Render with the wavefront integrator (as the scene's "integrator": "wavefront"), if the
+    ///scene can be flattened into its primitives and materials; otherwise, as usual
+    #[arg(long)]
+    wavefront: bool,
+
     ///Write the scene file, as JSON in our format, to this file. For a scene in another
     ///renderer's format (eg. .nff), this is the translation
     #[arg(long)]
     dump_scene: Option<String>,
+
+    ///Measure the render's noise: render this many times, with successive seeds, and print the
+    ///relative mean squared error of one render and the efficiency 1 / (relMSE x time). Writes
+    ///the mean of the renders as the output, and a map of each pixel's relative standard
+    ///deviation alongside it (.variance.png)
+    #[arg(long)]
+    variance: Option<usize>,
+}
+
+/// How often a render's state is saved, so an interrupted render loses no more than this.
+const STATE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Write a render's state, via a temporary file so that a partial state is never left.
+fn save_state(path: &str, bytes: &[u8]) {
+    let tmp = format!("{}.tmp", path);
+    if let Err(e) = std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, path)) {
+        eprintln!("Failed to save the render's state to {}: {}", path, e);
+    }
 }
 
 /// The process's peak resident memory so far, in bytes: large meshes and their acceleration
@@ -136,7 +184,9 @@ fn main() {
         });
         println!("- Wrote the scene file to {}", path);
     }
-    let s = scenefile::SceneFile::from_value_overridden(doc, &scenefile::Overrides {
+    // What the render's saved state is keyed by: the scene, in whatever format it was read.
+    let contents = doc.to_string();
+    let mut s = scenefile::SceneFile::from_value_overridden(doc, &scenefile::Overrides {
         width: args.width,
         height: args.height,
         seed: args.seed,
@@ -151,13 +201,44 @@ fn main() {
     if let Some(path) = &args.output {
         rc.output_filename = path.clone();
     }
-    println!("- Output: {}x{} @ {} samples -> {}", s.image.width, s.image.height, s.render.samples_per_pixel(), rc.output_filename);
+    // Carry on from where an earlier render of the same scene stopped, if there was one.
+    let state_path = rendercontext::state_path_for(&rc.output_filename);
+    if let Some(t) = args.noise_threshold {
+        s.render.adaptive = (t > 0.).then(|| scene::Adaptive {
+            threshold: t,
+            min_samples: s.render.adaptive.map_or(scene::Adaptive::DEFAULT_MIN_SAMPLES, |a| a.min_samples),
+        });
+    }
+    // The wavefront integrator's samples differ from the path tracer's: a saved state is one's.
+    // It doesn't sample adaptively, so then the path tracer renders.
+    let key = rendercontext::render_key(&contents, (args.width, args.height, args.seed))
+        ^ if args.wavefront && s.render.adaptive.is_none() { 0x7761_7665_6672_6f6e } else { 0 };
+    if !args.fresh && std::path::Path::new(&state_path).exists() {
+        match rc.load_state(&state_path, key) {
+            Ok(()) => println!("- Resuming from {:.1} samples per pixel on average, {} at least ({})",
+                rc.resumed_samples as f64 / (rc.width * rc.height) as f64, rc.min_samples(), state_path),
+            Err(e) => println!("- Starting afresh: {}", e),
+        }
+    }
+    if let Some(n) = args.samples {
+        s.render.supersamples = n;
+    }
+    if let Some(n) = args.add_samples {
+        // Adaptively sampled pixels differ: more than the most any has.
+        let have = if s.render.adaptive.is_some() { rc.max_samples() } else { rc.min_samples() };
+        s.render.supersamples = have + n;
+    }
+    match s.render.adaptive {
+        Some(a) => println!("- Output: {}x{} @ {} to {} samples, to a noise of {} -> {}", s.image.width, s.image.height,
+            a.min_samples.min(s.render.samples_per_pixel()), s.render.samples_per_pixel(), a.threshold, rc.output_filename),
+        None => println!("- Output: {}x{} @ {} samples -> {}", s.image.width, s.image.height, s.render.samples_per_pixel(), rc.output_filename),
+    }
     println!("- Scene Objects: {}, Primitives: {} ", s.objects.len(),  s.objects.primitives_len()); 
     let peak = peak_memory().map_or(String::new(), |b| format!(", peak memory {:.0} MiB", b as f64 / (1024. * 1024.)));
     println!("- Built in {:.2} s{}", build_start.elapsed().as_secs_f64(), peak);
 
     // Fail before rendering if the output can't be written in this format.
-    let writer = output::writer_for(&rc.output_filename, s.output).unwrap_or_else(|e| {
+    let writer = output::writer_for(&rc.output_filename, s.output.clone()).unwrap_or_else(|e| {
         eprintln!("{}", e);
         std::process::exit(1);
     });
@@ -173,6 +254,33 @@ fn main() {
         println!("- Depth -> {}", path);
     }
 
+    if let Some(runs) = args.variance {
+        measure_variance(&mut s, runs, &rc.output_filename, writer.as_ref());
+        return;
+    }
+
+    if args.wavefront {
+        s.render.wavefront = true;
+    }
+    if s.render.wavefront && s.render.adaptive.is_some() {
+        println!("- The wavefront integrator doesn't sample adaptively; rendering with the path tracer");
+        s.render.wavefront = false;
+    }
+    let flat = if s.render.wavefront {
+        match wavefront::flat::FlatScene::build(&s) {
+            Ok(f) => {
+                println!("- Wavefront integrator: {} primitives, {} planes, {} materials, {} emitters",
+                    f.prims.len(), f.planes.len(), f.materials.len(), f.emitters.len());
+                Some(f)
+            },
+            Err(e) => {
+                println!("- The wavefront integrator can't render this scene ({}); rendering with the path tracer", e);
+                None
+            },
+        }
+    } else {
+        None
+    };
     let rcmtx = Mutex::new(rc);
 
     println!("{}",
@@ -181,11 +289,31 @@ fn main() {
     let pb = ProgressBar::new(100);
     pb.set_style(ProgressStyle::with_template("{spinner:.green} {prefix}{msg} [{bar:.cyan/blue}]").unwrap().progress_chars("#>-"));
 
-    // Progressive output is throttled, and encoded outside the lock so it doesn't serialise
-    // the render.
+    // Progressive output and saved states are throttled, and encoded or written outside the
+    // lock so they don't serialise the render.
     let progressive_interval = Duration::from_secs(1);
     let last_progressive = Mutex::new(Instant::now());
+    let last_state = Mutex::new(Instant::now());
 
+    if let Some(flat) = &flat {
+        wavefront::integrator::render(&s, flat, &rcmtx, |rc| {
+            pb.set_position(rc.progress_percentage(&s) as u64);
+            pb.set_message(rc.progress(&s));
+            pb.tick();
+            let mut last = last_progressive.lock().unwrap();
+            if rc.progressive_render && last.elapsed() >= progressive_interval {
+                *last = Instant::now();
+                if let Err(e) = writer.write(&s.output.finish(&rc.snapshot()), &rc.output_filename) {
+                    eprintln!("{}", e);
+                }
+            }
+            let mut last = last_state.lock().unwrap();
+            if last.elapsed() >= STATE_INTERVAL {
+                *last = Instant::now();
+                save_state(&state_path, &rc.encode_state(key));
+            }
+        });
+    } else {
     rendercontext::render(&s, &rcmtx,
         |rc| {
             pb.set_position(rc.progress_percentage(&s) as u64);
@@ -193,21 +321,51 @@ fn main() {
             pb.tick();
 
             let mut last = last_progressive.lock().unwrap();
-            if rc.progressive_render && last.elapsed() >= progressive_interval {
+            let image = if rc.progressive_render && last.elapsed() >= progressive_interval {
                 *last = Instant::now();
                 Some((rc.snapshot(), rc.output_filename.clone()))
             } else {
                 None
-            }
+            };
+            let mut last = last_state.lock().unwrap();
+            let state = if last.elapsed() >= STATE_INTERVAL {
+                *last = Instant::now();
+                Some(rc.encode_state(key))
+            } else {
+                None
+            };
+            if image.is_some() || state.is_some() { Some((image, state)) } else { None }
         },
-        |(img, path)| {
-            if let Err(e) = writer.write(&s.output.finish(&img), &path) {
+        |(image, state)| {
+            if let Some((img, path)) = image
+                && let Err(e) = writer.write(&s.output.finish(&img), &path) {
                 eprintln!("{}", e);
             }
+            if let Some(bytes) = state {
+                save_state(&state_path, &bytes);
+            }
         });
+    }
     pb.finish();
 
     let rc = rcmtx.lock().unwrap();
+    if rc.samples_rendered > 0 {
+        save_state(&state_path, &rc.encode_state(key));
+    }
+    if s.render.adaptive.is_some() {
+        println!("- {:.1} samples per pixel on average, from {} to {}; more can be added with --add-samples",
+            rc.mean_samples(), rc.min_samples(), rc.max_samples());
+    } else {
+        println!("- {} samples per pixel; more can be added with --add-samples", rc.min_samples());
+    }
+    if let Some(path) = &args.sample_map {
+        let opts = output::OutputOpts { transfer: output::Transfer::Linear, ..output::OutputOpts::default() };
+        if let Err(e) = output::writer_for(path, opts).and_then(|w| w.write(&rc.sample_map(), path)) {
+            eprintln!("{}", e);
+        } else {
+            println!("- Samples per pixel -> {}", path);
+        }
+    }
     //wireframe::wireframe(&s, &mut rc);
     let img = s.output.finish(&rc.snapshot());
     if let Err(e) = writer.write(&img, &rc.output_filename) {
@@ -219,6 +377,43 @@ fn main() {
     }
     paint::poor_mans(&img, &s.output);
     rc.print_stats();
+}
+
+/// Render the scene `runs` times with successive seeds and report its noise (see `variance`).
+fn measure_variance(s: &mut scene::Scene, runs: usize, output_filename: &str, writer: &dyn output::ImageWriter) {
+    if runs < 2 {
+        eprintln!("--variance needs at least two renders");
+        std::process::exit(1);
+    }
+    let base = s.render.seed;
+    let mut renders = Vec::with_capacity(runs);
+    let mut seconds = 0.;
+    for i in 0..runs {
+        s.render.seed = base.wrapping_add(i as u64);
+        let rc = Mutex::new(RenderContext::new(s.image.width, s.image.height, false, output_filename));
+        let start = Instant::now();
+        rendercontext::render(s, &rc, |_| None::<()>, |_| ());
+        let t = start.elapsed().as_secs_f64();
+        seconds += t;
+        println!("- Render {} of {} (seed {}): {:.2} s", i + 1, runs, s.render.seed, t);
+        renders.push(rc.lock().unwrap().snapshot());
+    }
+    let v = variance::Variance::of(&renders);
+    let mean_time = seconds / runs as f64;
+    if let Err(e) = writer.write(&s.output.finish(&v.mean), output_filename) {
+        eprintln!("{}", e);
+    }
+    let map_path = std::path::Path::new(output_filename).with_extension("variance.png");
+    let map_path = map_path.to_string_lossy();
+    let opts = output::OutputOpts { transfer: output::Transfer::Linear, ..output::OutputOpts::default() };
+    if let Err(e) = output::writer_for(&map_path, opts).and_then(|w| w.write(&v.map(), &map_path)) {
+        eprintln!("{}", e);
+    }
+    println!("{}", style("# Variance").bold().cyan());
+    println!("- {} renders at {} samples per pixel, {:.2} s each", runs, s.render.samples_per_pixel(), mean_time);
+    println!("- relMSE of one render: mean {:.5}, median {:.5}", v.rel_mse, v.median_rel_mse);
+    println!("- Efficiency 1 / (relMSE x time): {:.4}", variance::efficiency(v.rel_mse, mean_time));
+    println!("- Mean of the renders: {}; relative standard deviation: {}", output_filename, map_path);
 }
 
 /// Compare the finished render with a reference image, reporting how close they are.
@@ -233,7 +428,7 @@ fn compare_with(img: &output::LinearImage, reference: &str, output_filename: &st
     // The reference at our size, encoded exactly as our PNG output is, to view side by side.
     let reference_path = std::path::Path::new(output_filename).with_extension("reference.png");
     let reference_path = reference_path.to_string_lossy();
-    if let Err(e) = output::ImageWriter::write(&output::Png { opts: *opts }, &c.reference, &reference_path) {
+    if let Err(e) = output::ImageWriter::write(&output::Png { opts: opts.clone() }, &c.reference, &reference_path) {
         eprintln!("{}", e);
     }
     println!("{}", style("# Comparison").bold().cyan());

@@ -20,6 +20,11 @@ Supports:
       - Specular
       - Dielelectric
       - Leaf (translucent: diffuse reflection and transmission under a glossy coat)
+      - From PBRT: conductors with measured metals (gold, copper, silver, aluminium, brass),
+        anisotropic roughness, rough and thin glass, mixes, and hair; layered coated diffuse
+        and coated conductor materials
+      - Subsurface scattering by random walk (marble, wax, jade, skin)
+    - Spectral rendering (`"spectral": true`): dispersion, blackbody emitters
 
   - Objects
     - Sphere
@@ -31,6 +36,8 @@ Supports:
       polygon, prism, lathe, surface of revolution, sphere sweep, blob, isosurface,
       superellipsoid, Julia fractal, height field, parametric surface, bicubic patch and text
       ([reference](./docs/shapes.md))
+    - From PBRT: bilinear patches, Bézier curves (hair and `fur`), Loop subdivision surfaces,
+      and texture coordinates on every analytic shape and mesh
     - Constructive solid geometry: union, merge, intersection and difference of any solid
       shapes, with inverse and clipping, and materials for each part
     - Transforms (scale, rotate, translate) and object instancing
@@ -53,6 +60,147 @@ its transform, whatever the size of the mesh. Each instance has its own material
 
 A name can be used wherever a geometry is expected (eg. the `a` and `b` of a `difference`), and
 geometries can be built from each other. See [demo/scenes/instances.json](demo/scenes/instances.json).
+
+## Spectral rendering
+
+With `"spectral": true`, each sample traces light at three wavelengths instead of red, green
+and blue (hero wavelength sampling, after PBRT's chapter 4), and the film turns them into a
+colour through the CIE matching functions. Colours in the scene are turned into smooth spectra
+(Jakob and Hanika's sigmoid polynomials), so a scene under white light looks as it does in RGB;
+what changes is coloured light on coloured surfaces, and what RGB can't do at all:
+
+- Dispersion: a dielectric's `refractive_index` can be a named glass (`"BK7"`, `"fused silica"`,
+  `"SF11"`, `"diamond"`), `{"cauchy": [a, b]}` or `{"sellmeier": {"b": [..], "c": [..]}}`.
+- The sky: Rayleigh scattering, ozone and sunlight at each sample's wavelengths, which changes
+  sunsets and twilight most, where three wavelengths can't stand for the light that survives
+  long paths through the air. Below, `limb-sunset` and `stratosphere` in RGB (left) and
+  spectral (right): RGB's red channel, at 680 nm, overstates the light that survives the
+  longest paths, and paints the limb with a red band and a purple fringe.
+
+  ![RGB and spectral skies](demo/spectral-sky-comparison.png)
+- Blackbody emitters: `{"type": "diffuse-light", "temperature": 2700, "intensity": 10}`, and
+  `"temperature"` on point lights, emit Planck's spectrum (scaled to unit luminance).
+
+See [demo/scenes/spectral-prism.json](demo/scenes/spectral-prism.json) and
+[demo/scenes/blackbody.json](demo/scenes/blackbody.json), and `src/spectrum.rs` for the details.
+
+## Cameras and film
+
+After PBRT's chapter 5. The `"camera"` takes a `"type"`:
+
+- `"perspective"` (the default): a thin lens (`"aperture"`, `"focus_distance"`), optionally
+  astigmatic: `"astigmatism": {"cylinder": 0.5, "axis": 30}` blurs points into lines everywhere,
+  as an eye's astigmatism does; `{"seidel": 0.2}` gives a lens's astigmatism, growing with the
+  square of the distance from the centre ([demo/scenes/astigmatism.json](demo/scenes/astigmatism.json)).
+- `"orthographic"` and `"spherical"` (`"mapping": "equirectangular"` or `"equal_area"`; see
+  [demo/scenes/panorama.json](demo/scenes/panorama.json)).
+- `"realistic"`: rays traced through a real lens (`"lens": "dgauss.50mm"`, `"wide.22mm"`,
+  `"telephoto.250mm"`, `"fisheye.10mm"` or a pbrt `.dat` file), with `"f_number"`, `"blades"`
+  and `"film_diagonal"`: depth of field, vignetting, distortion and aberrations come from the
+  lens itself ([demo/scenes/realistic-camera.json](demo/scenes/realistic-camera.json)).
+
+Any camera, and any `transform`, can move while the shutter is open: give it `"motion"` with
+its pose at the end, eg. `"translate": [0, 0, 0], "motion": {"translate": [2, 0, 0]}`, and the
+scene a `"shutter": [0, 1]` ([demo/scenes/motion-blur.json](demo/scenes/motion-blur.json)).
+`"filter"` can be `"box"`, `"tent"`, `"gaussian"`, `"mitchell"` or `"lanczos"`.
+
+`"sampler"` chooses where each sample's random numbers come from (PBRT's chapter 8): `"sobol"`
+(the default: Owen-scrambled Sobol' points per pixel), `"zsobol"` (one Sobol' sequence across
+the image in Morton order, so the error is blue noise: the same size, but far less visible at low
+sample counts), `"halton"`, `"stratified"` or `"independent"`. A soft shadow at 1 sample per
+pixel, Sobol' against ZSobol' (less than a third of the error's energy at low frequencies, same
+RMSE):
+
+![Sobol and ZSobol](demo/zsobol-comparison.png)
+
+The `"output"` block holds the film: `"iso"`, `"exposure_time"`, `"white_balance"` (kelvin or
+`"D50"`, `"A"`, ...), `"color_space"` (`"srgb"`, `"display-p3"`, `"rec2020"`,
+`"aces2065-1"`), and `"flare"`: ghosts of the brightest lights, traced through the lens's
+coated surfaces, and the aperture's diffraction starburst (`{"blades": 9, "f_number": 8}`).
+Both are physical in strength: ghosts reflect twice off surfaces with a modern multilayer
+coating by default (`"coating": "single"` for an older lens's purple ghosts, ten to fifty
+times stronger, or `"none"`), and the blades are curved (`"blade_curvature"`, 0 for straight),
+so each spike fans out and tapers as a real sunstar does; fewer blades and a smaller aperture
+make a crisper star. And no lens is perfect: with `"imperfection"` (1 by default, 0 for a
+perfect lens) the blades are each a little out of place and their edges rough, the front
+element has dust and hairline scratches, and coatings thin towards each element's rim, so
+the star is uneven and streaked, with a soft glow, and ghosts change colour across them
+([demo/scenes/lens-flare.json](demo/scenes/lens-flare.json)). `"ghosts"`
+and `"starburst"` scale them, away from physics. Changing `"output"` keeps a render's samples,
+so a finished render can be refinished.
+
+## Textures
+
+A colour can be an image, read by the surface's texture coordinates:
+`"albedo": {"texture": "bricks.png", "scale": [3, 2]}` (on `lambertian` and `plastic`, and a
+`mix`'s `"amount"`), and an object can have a tangent-space normal map,
+`"normal": {"map": "bricks-normal.png", "strength": 1}`. Images are MIP-mapped and filtered by
+EWA over each pixel's footprint (PBRT's chapter 10), so distant and grazing textures neither
+alias nor blur ([demo/scenes/textures.json](demo/scenes/textures.json)):
+
+![Texture filtering](demo/texture-filtering.png)
+
+## Wavefront rendering
+
+After PBRT's chapter 15, `"integrator": "wavefront"` (or `--wavefront`) renders with a
+wavefront path tracer: every path of a pass in a queue, advanced a stage at a time (camera
+rays, intersection, emission, shading sorted by material, shadow rays) over the scene
+flattened into arrays of triangles and spheres with a material table: the structure a GPU
+renderer needs. It covers spheres, triangles, meshes, boxes, quads, planes and their
+transforms; untextured lambertian, plastic, metal, glass, conductor, emitter and checkerboard
+materials; point, area and sun lights, the light BVH, the sky and aerial perspective. Scenes
+using anything else render with the path tracer, which says why. Its images match the path
+tracer's (on `demo.json` at 512 samples, mean FLIP 0.0016 against seed-to-seed 0.0012), at
+about 1.2 to 1.4 times its time on the CPU.
+
+## Coats and subsurface scattering
+
+After PBRT's chapter 14: `coated_diffuse` and `coated_conductor` put a base under a clear or
+tinted dielectric coat (`"roughness"`, `"thickness"`, `"medium_albedo"`), evaluated as pbrt
+does by random walks between the layers; and `subsurface` scatters light through the inside of
+an object, given the colour it should look (`"albedo"`) and how far light travels in it
+(`"radius"`, per channel), after Chiang, Kutz and Burley's fits. Varnished bricks, a tinted
+coat, lacquered copper, jade, skin, marble and a wax candle
+([demo/scenes/light-transport.json](demo/scenes/light-transport.json)):
+
+![Coats and subsurface scattering](demo/scenes/light-transport.png)
+
+## Lights
+
+After PBRT's chapter 12. Besides area lights (any object with a `diffuse-light` material, whose
+emission can be an image: `"texture": {"texture": "window.png"}`), the sun and the sky, the
+scene's `"lights"` are lights at a point, with an `"intensity"` or a `"power"`, made directional
+by one of `"spot": {"lookat": [x, y, z], "angle": 30, "delta": 5}`, `"goniometric": {"image":
+"lamp.png"}` (an equirectangular diagram of the light's distribution) or `"projection":
+{"image": "slide.png", "lookat": [x, y, z], "fov": 20}` ([demo/scenes/lights.json](demo/scenes/lights.json)):
+
+![Lights](demo/scenes/lights.png)
+
+With many lights, `"light_sampler": "bvh"` picks one per shading point by its likely
+contribution there (pbrt's light BVH) rather than in proportion to its power. Below, 900 lamps
+at 16 samples per pixel: by power (left), by the BVH (middle), and a 512-sample reference
+(right); mean FLIP error 0.50 against 0.15 ([demo/scenes/lamp-field.json](demo/scenes/lamp-field.json)):
+
+![Light BVH](demo/light-bvh-comparison.png)
+
+## Participating media
+
+A `"volume"` fills a box (`"min"`, `"max"`) or any closed `"shape"` with a medium: constant
+density, `"noise"`, or a voxel `"grid"` (a Mitsuba `.vol` file, tracked with pbrt's grid of
+local majorants). After PBRT's chapter 11, it can give `"sigma_a"` and `"sigma_s"` per colour
+channel, and a medium whose extinction differs between channels (juice, coloured glass,
+smoke that scatters blue) is tracked with pbrt's spectral MIS; and it can glow, with an
+`"emission"` colour or blackbody `"temperature"` (constant, or a grid: fire). A glass of
+coloured liquid is a dielectric object and a volume of the same shape
+([demo/scenes/media.json](demo/scenes/media.json)):
+
+![Media](demo/scenes/media.png)
+
+```json
+{ "type": "volume", "grid": "demo/volumes/plume.vol", "density": 8,
+  "sigma_a": [0.5, 0.5, 0.5], "sigma_s": [0.5, 0.5, 0.5],
+  "emission": { "temperature": "demo/volumes/fire.vol", "temperature_scale": 2000, "scale": 150 } }
+```
 
 ## Forests
 

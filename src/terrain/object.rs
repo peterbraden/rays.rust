@@ -64,6 +64,7 @@ use crate::terrain::planet::Planet;
 use crate::terrain::simulation::{Terrain, TerrainParams, ICE_FREE};
 use crate::terrain::volcano::VolcanoParams;
 use crate::terrain::channel::{point_cell, WaterLines};
+use crate::terrain::scenery::{self, Frame, Ground, LandscapeMedium, Layer, Relief, SceneryParams, Viewpoint};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -175,7 +176,7 @@ impl TerrainMedium {
             else { BAND0 + ((t.bed[i] / BAND_HEIGHT) as usize).min(BANDS - 1) as u8 }
         }).collect();
         let lambertian = |c: [f64; 3]| -> Box<dyn MaterialModel + Sync + Send> {
-            Box::new(Lambertian { albedo: Color::new(c[0], c[1], c[2]) })
+            Box::new(Lambertian { albedo: Color::new(c[0], c[1], c[2]).into() })
         };
         let mut materials = vec![
             lambertian([0.85, 0.9, 0.95]),
@@ -244,6 +245,45 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
     p.planet.strata_thickness = number(o, "strata_thickness", p.planet.strata_thickness);
     p.planet.strata_contrast = number(o, "strata_contrast", p.planet.strata_contrast);
     p.planet.fold_amplitude = number(o, "fold_amplitude", p.planet.fold_amplitude);
+    // Plate tectonics: on by default at full scale, `false` for noise alone, or overrides of
+    // `TectonicsParams` by field name.
+    p.planet.tectonics = match &o["tectonics"] {
+        Value::Bool(false) => None,
+        Value::Null if o.get("scale").is_some() => None,
+        v => {
+            let mut t = crate::terrain::tectonics::TectonicsParams::default();
+            let fields: [(&str, &mut f64); 9] = [
+                ("age", &mut t.age), ("step", &mut t.step), ("continental_fraction", &mut t.continental_fraction),
+                ("speed", &mut t.speed), ("rift_interval", &mut t.rift_interval), ("subduction_uplift", &mut t.subduction_uplift),
+                ("collision_uplift", &mut t.collision_uplift), ("relaxation", &mut t.relaxation), ("remesh", &mut t.remesh),
+            ];
+            for (k, f) in fields {
+                if let Some(x) = v.get(k).and_then(|x| x.as_f64()) { *f = x; }
+            }
+            for (k, f) in [("cells", &mut t.cells), ("plates", &mut t.plates), ("hotspots", &mut t.hotspots)] {
+                if let Some(x) = v.get(k).and_then(|x| x.as_u64()) { *f = x as usize; }
+            }
+            Some(t)
+        }
+    };
+    // The climate, from latitude: on by default at full scale, `false` for none, or overrides
+    // of `ClimateParams` by field name.
+    p.climate = match &o["climate"] {
+        Value::Bool(false) => None,
+        Value::Null if o.get("scale").is_some() => None,
+        v => {
+            let mut c = crate::terrain::climate::ClimateParams::default();
+            let fields: [(&str, &mut f64); 6] = [
+                ("tilt", &mut c.tilt), ("solar", &mut c.solar), ("hadley", &mut c.hadley),
+                ("recycling", &mut c.recycling), ("orographic", &mut c.orographic), ("warming", &mut c.warming),
+            ];
+            for (k, f) in fields {
+                if let Some(x) = v.get(k).and_then(|x| x.as_f64()) { *f = x; }
+            }
+            if let Some(x) = v.get("cells").and_then(|x| x.as_u64()) { c.cells = x as usize; }
+            Some(c)
+        }
+    };
     p.sediment_erodibility = number(o, "sediment_erodibility", p.sediment_erodibility);
     p.lava_erodibility = number(o, "lava_erodibility", p.lava_erodibility);
     p.volcano = match &o["volcanoes"] {
@@ -295,33 +335,58 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
     p
 }
 
+/// Where a patch lies: its centre's (latitude, longitude) in degrees.
+fn site(d: &Value, params: &TerrainParams) -> (f64, f64) {
+    let planet = || Planet::new(params.planet.clone());
+    match (d["lat"].as_f64(), d["lon"].as_f64(), d["near"].as_str()) {
+        (Some(lat), Some(lon), _) => (lat, lon),
+        (_, _, Some("volcanoes")) => planet().most_volcanic(20000),
+        (_, _, Some("coast")) => planet().most_coastal(20000),
+        (_, _, None | Some("mountains")) => planet().most_mountainous(20000),
+        (_, _, Some(x)) => panic!("Unknown terrain domain \"near\": {}", x),
+    }
+}
+
 pub fn domain(o: &Value, params: &TerrainParams) -> Domain {
     let d = &o["domain"];
     let radius = params.planet.radius;
     match d["type"].as_str().unwrap_or("patch") {
         "planet" => Domain::sphere(SceneFile::parse_int(&d["cells"], 64), radius),
         "patch" => {
-            let planet = || Planet::new(params.planet.clone());
-            let (lat, lon) = match (d["lat"].as_f64(), d["lon"].as_f64(), d["near"].as_str()) {
-                (Some(lat), Some(lon), _) => (lat, lon),
-                (_, _, Some("volcanoes")) => planet().most_volcanic(20000),
-                (_, _, Some("coast")) => planet().most_coastal(20000),
-                (_, _, None | Some("mountains")) => planet().most_mountainous(20000),
-                (_, _, Some(x)) => panic!("Unknown terrain domain \"near\": {}", x),
-            };
+            let (lat, lon) = site(d, params);
             Domain::patch(lat, lon, SceneFile::parse_int(&d["cells"], 128), number(d, "spacing", 400.), radius)
         }
         t => panic!("Unknown terrain domain type: {}", t),
     }
 }
 
-pub fn create_terrain(o: &Value) -> SceneObject {
-    let params = terrain_params(o);
-    let mut t = Terrain::new(domain(o, &params), params);
+/// The terrain an object describes, evolved to its `time`: from the cache directory given as
+/// `cache`, if it has it.
+pub fn evolved(o: &Value, params: TerrainParams) -> Terrain {
+    let d = domain(o, &params);
+    evolve(o, Terrain::new(d, params), &o["domain"].to_string())
+}
+
+/// Run `t` to the object's `time`, through its cache. `key` identifies the domain.
+fn evolve(o: &Value, mut t: Terrain, key: &str) -> Terrain {
     let time = number(o, "time", 0.);
     let start = crate::stopwatch::Stopwatch::start();
-    t.run_to(time);
+    match o["cache"].as_str() {
+        Some(dir) => t.run_cached(time, std::path::Path::new(dir), key),
+        None => t.run_to(time),
+    }
     println!("Terrain: {} cells evolved for {} years in {:.1?}", t.domain.len(), time, start.elapsed());
+    t
+}
+
+pub fn create_terrain(o: &Value) -> SceneObject {
+    let mut params = terrain_params(o);
+    // Without a `scale`, the landscape is drawn as itself, in metres on the scene's planet.
+    if o.get("scale").is_none() {
+        if o.get("radius").is_none() { params.planet.radius = crate::planet::EARTH_RADIUS; }
+        return full_scale_landscape(o, params);
+    }
+    let t = evolved(o, params);
     if let Some(path) = o["map"].as_str() { write_map(&t, path, 2048); }
     let place = Placement {
         scale: number(o, "scale", 1000.),
@@ -330,6 +395,139 @@ pub fn create_terrain(o: &Value) -> SceneObject {
     };
     let geometry = mesh(&t, &place);
     SceneObject { geometry: Box::new(geometry), medium: Box::new(TerrainMedium::new(t, place, number(o, "min_river_width", 0.))) }
+}
+
+/// A patch level of a full-scale landscape: cells along a side, and their spacing (m).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Level { pub cells: usize, pub spacing: f64 }
+
+/// The patch levels, finest first: `"levels": [{"cells", "spacing"}, ...]`, or by default the
+/// domain's patch and coarser ones five times wider apart, until they are as coarse as the
+/// planet's cells (spacing `globe`).
+pub fn levels(o: &Value, globe: f64) -> Vec<Level> {
+    if let Some(ls) = o["levels"].as_array() {
+        return ls.iter().map(|l| Level { cells: SceneFile::parse_int(&l["cells"], 128), spacing: number(l, "spacing", 750.) }).collect();
+    }
+    let d = &o["domain"];
+    let mut l = Level { cells: SceneFile::parse_int(&d["cells"], 128), spacing: number(d, "spacing", 750.) };
+    let mut out = vec![l];
+    while l.spacing * 5. < globe / 2. {
+        l.spacing *= 5.;
+        out.push(l);
+    }
+    out
+}
+
+/// Where the landscape needs most detail: `"focus"` (a scene point), or the ground the camera
+/// looks over: below it, moved towards where it looks by up to `ahead` metres.
+fn focus(o: &Value, frame: &Frame, ahead: f64) -> Vector3<f64> {
+    if o.get("focus").is_some() { return frame.on_planet(&SceneFile::parse_vec3(&o["focus"])).0; }
+    let camera = SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.));
+    let lookat = SceneFile::parse_vec3_def(&o["camera"], "lookat", camera);
+    let (foot, _) = frame.on_planet(&camera);
+    let (x, z) = frame.tangent(&foot);
+    let (lx, lz) = frame.tangent(&frame.on_planet(&lookat).0);
+    let (dx, dz) = (lx - x, lz - z);
+    let len = dx.hypot(dz);
+    if len < 1e-9 { return foot; }
+    let k = len.min(ahead) / len;
+    frame.dir(x + dx * k, z + dz * k)
+}
+
+/// A landscape at full scale over the whole planet (see `scenery`):
+///
+/// - `domain`: the site at the scene's origin: `{"lat", "lon"}` or `{"near": "mountains"}`
+///   (or `"volcanoes"`, `"coast"`), and the finest patch's `cells` and `spacing`.
+/// - `planet`: `{"cells": 64}`, cells per face edge of the whole planet's simulation (rivers
+///   and hillslopes, no glaciers), or `false` for its noise topography alone.
+/// - `levels`: patches nested about the `focus` (see `levels`; `[]` for none, as from orbit,
+///   where the planet's own relief is drawn down to the domain's `spacing`), each driven at its edge by the
+///   one around it. Glaciers and meandering channels only run on the finest (`"glacier"` and
+///   `"channels"` as for a patch): at kilometres per cell the ice can't drain down valleys
+///   narrower than a cell, and every river's bends are smaller than one.
+/// - `focus`: a scene point to centre the patches on; by default the ground the scene's camera
+///   (passed in as `camera`) looks over. Patches are snapped to an eighth of their width, so
+///   nearby cameras share them (and their cache).
+/// - The mesh: `resolution` (vertices along a clipmap ring), `min_spacing` (m), `globe` (cells
+///   per face edge beyond the rings), `roughness` of the detail below the finest cells.
+/// - Ground cover: `snowline` and `treeline` (m; by default from the climate, by latitude),
+///   `min_river_width` (m).
+fn full_scale_landscape(o: &Value, params: TerrainParams) -> SceneObject {
+    let mut p = SceneryParams::default();
+    p.resolution = SceneFile::parse_int(&o["resolution"], p.resolution).max(8);
+    p.min_spacing = number(o, "min_spacing", p.min_spacing).max(1e-3);
+    p.globe = SceneFile::parse_int(&o["globe"], p.globe).max(2);
+    p.roughness = number(o, "roughness", p.roughness);
+    p.exaggeration = number(o, "exaggeration", p.exaggeration);
+    p.snowline = o["snowline"].as_f64();
+    p.treeline = o["treeline"].as_f64();
+    p.min_river_width = number(o, "min_river_width", p.min_river_width);
+    let radius = params.planet.radius;
+    let time = number(o, "time", 0.);
+    let (lat, lon) = site(&o["domain"], &params);
+    println!("Landscape: the scene's origin is at {:.3}°, {:.3}°", lat, lon);
+    let frame = Frame::new(lat, lon, radius, p.exaggeration);
+
+    // The simulations, coarsest first, each driving the next at its edge.
+    let mut built: Vec<Layer> = vec![];
+    let mut parent: Option<Vec<f64>> = None;
+    let planet_cells = match &o["planet"] { Value::Bool(false) => None, v => Some(SceneFile::parse_int(&v["cells"], 64).max(2)) };
+    let globe_spacing = planet_cells.map_or(f64::INFINITY, |n| std::f64::consts::FRAC_PI_2 * radius / n as f64);
+    if let Some(n) = planet_cells {
+        let mut gp = params.clone();
+        gp.glacier = None;
+        let t = Terrain::new(Domain::sphere(n, radius), gp);
+        parent = Some(scenery::corner_heights(&t));
+        built.push(Layer::new(evolve(o, t, &format!("planet {}", n)), p.min_river_width));
+    }
+    let levels = levels(o, globe_spacing);
+    let finest = levels.first().map_or(number(&o["domain"], "spacing", 750.), |l| l.spacing);
+    let finest_half = levels.first().map_or(0., |l| l.cells as f64 * l.spacing / 2.);
+    let centre = focus(o, &frame, 0.5 * finest_half);
+    let (fx, fz) = frame.tangent(&centre);
+    for (k, l) in levels.iter().enumerate().rev() {
+        let width = l.cells as f64 * l.spacing;
+        let snap = |c: f64| (c / (width / 8.)).round() * (width / 8.);
+        let (lat, lon) = Domain::lat_lon(&frame.dir(snap(fx), snap(fz)));
+        let mut lp = params.clone();
+        if k > 0 {
+            // Glaciers and meandering channels are both finer than a coarse patch's cells:
+            // they only run on the finest, where they are drawn.
+            lp.glacier = None;
+            lp.channels = None;
+        }
+        let mut t = Terrain::new(Domain::patch(lat, lon, l.cells, l.spacing, radius), lp);
+        let initial = scenery::corner_heights(&t);
+        if let (Some(outer), Some(before), true) = (built.last(), &parent, time > 0.) {
+            // The edge follows the change the simulation around it went through there.
+            t.boundary_rate = (0..t.domain.len()).map(|i| {
+                if !t.domain.boundary[i] { return 0.; }
+                let d = t.domain.dirs[i];
+                (outer.simulated(&d) - scenery::sample(&outer.domain, before, &d)) / time
+            }).collect();
+        }
+        parent = Some(initial);
+        let key = format!("patch {:.9} {:.9} {} {}", lat, lon, l.cells, l.spacing);
+        let t = evolve(o, t, &key);
+        if k == 0 {
+            if let Some(path) = o["map"].as_str() { write_map(&t, path, 2048); }
+        }
+        built.push(Layer::new(t, p.min_river_width));
+    }
+    built.reverse();
+
+    let start = crate::stopwatch::Stopwatch::start();
+    let planet = Planet::new(params.planet.clone());
+    if let Some(path) = o["planet_map"].as_str() { crate::terrain::map::write_planet_map(&planet, path, 2048); }
+    let layers = Arc::new(built);
+    let relief = Relief::new(layers.clone(), &planet, radius, p.roughness, finest);
+    let view = Viewpoint { location: SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.)) };
+    let geometry = scenery::mesh(&relief, &frame, &view, &p);
+    let climate = params.climate.as_ref().map(|c| crate::terrain::climate::climate(c, &planet));
+    if let (Some(path), Some(c)) = (o["climate_map"].as_str(), &climate) { crate::terrain::map::write_climate_map(&planet, c, path, 2048); }
+    let ground = Ground::new(layers, climate, params.glacier.clone().unwrap_or_default(), time, params.planet.seed, frame, &p);
+    println!("Landscape: {} triangles in {:.1?}", geometry.primitives(), start.elapsed());
+    SceneObject { geometry: Box::new(geometry), medium: Box::new(LandscapeMedium::new(ground)) }
 }
 
 #[cfg(test)]
@@ -362,6 +560,7 @@ mod tests {
         let o: Value = serde_json::from_str(r#"{
             "type": "landscape", "seed": 3, "time": 1000, "step": 500,
             "domain": { "type": "patch", "cells": 16, "spacing": 1000 },
+            "scale": 1000,
             "glacier": { "acceleration": 20 }
         }"#).unwrap();
         let p = terrain_params(&o);
@@ -374,5 +573,26 @@ mod tests {
         assert!(hit.normal.y > 0.);
         let off: Value = serde_json::from_str(r#"{ "glacier": false }"#).unwrap();
         assert!(terrain_params(&off).glacier.is_none());
+    }
+
+    #[test]
+    fn test_full_scale_landscape_lies_on_the_planet() {
+        let o: Value = serde_json::from_str(r#"{
+            "type": "landscape", "seed": 3, "time": 0,
+            "domain": { "type": "patch", "cells": 16, "spacing": 1000 },
+            "planet": { "cells": 8 }, "resolution": 32, "globe": 8,
+            "camera": { "location": [0, 3000, 0], "lookat": [0, 0, -1000] }
+        }"#).unwrap();
+        assert_eq!(levels(&o, 2e5), vec![Level { cells: 16, spacing: 1000. }, Level { cells: 16, spacing: 5000. }, Level { cells: 16, spacing: 25000. }]);
+        let obj = create_terrain(&o);
+        // A ray straight down onto the site meets ground within a few km of sea level.
+        let r = Ray { ro: Vector3::new(10., 20000., 10.), rd: Vector3::new(0., -1., 0.) };
+        let hit = obj.geometry.intersects(&r).expect("no hit");
+        assert!(hit.dist > 10000. && hit.dist < 21000., "{}", hit.dist);
+        // The ground goes on to the horizon and round the planet.
+        let r = Ray { ro: Vector3::new(300000., 20000., 0.), rd: Vector3::new(0., -1., 0.) };
+        assert!(obj.geometry.intersects(&r).is_some());
+        let r = Ray { ro: Vector3::new(0., -2e7, 0.), rd: Vector3::new(0., 1., 0.) };
+        assert!(obj.geometry.intersects(&r).is_some());
     }
 }

@@ -24,12 +24,12 @@
 //! surfaces hide it, and a shadow ray is blocked by a volume exactly when it collides in it,
 //! which estimates the transmittance unbiasedly, if noisily, as either 0 or 1.
 
+use crate::material::model::LightSampling;
 use crate::color::Color;
 use std::cell::Cell;
 use crate::geometry::rand;
 use crate::intersection::{Intersection, RawIntersection};
 use crate::material::model::{MaterialModel, ScatteredRay};
-use crate::material::functions::sample_area_light_with;
 use crate::material::phase::PhaseFunction;
 use crate::material::diffraction::DiffractionTable;
 use crate::material::ice_halos::{Crystals, HaloTable};
@@ -45,6 +45,10 @@ use crate::sceneobject::SceneObject;
 use crate::shapes::bbox::BBox;
 use crate::shapes::geometry::Geometry;
 
+pub mod chromatic;
+pub mod emission;
+pub mod grid;
+
 thread_local! {
     /// The state of the path being traced on this thread, for the multiple-scattering
     /// approximations (`ScatteringApproximation`): how many times it has scattered in a
@@ -52,15 +56,57 @@ thread_local! {
     /// shadow rays included. Geometry is intersected without knowing which path it serves,
     /// hence a thread-local; each thread traces one path at a time, from `begin_path`.
     static PATH: Cell<(u32, f64)> = const { Cell::new((0, 1.)) };
+
+    /// How many vertices the path has scattered at diffusely or glossily (not a mirror or
+    /// glass), counting the one it is at: once it has left one, its segments cross the media
+    /// truncated (`Volume::truncated`), even before it scatters in one.
+    static VERTICES: Cell<u32> = const { Cell::new(0) };
 }
 
 /// Start a new path: no volume scatterings yet, and densities as given.
 pub fn begin_path() {
     PATH.with(|p| p.set((0, 1.)));
+    VERTICES.with(|v| v.set(0));
+    chromatic::begin_path();
+}
+
+/// The path is at a vertex, about to scatter: its shadow rays and its continuation leave it.
+/// A specular vertex is then taken back (`specular_vertex`), so that what the camera sees in a
+/// mirror or through glass is seen as directly.
+pub fn at_vertex() {
+    VERTICES.with(|v| v.set(v.get() + 1));
+}
+
+/// The vertex just scattered specularly: it doesn't count.
+pub fn specular_vertex() {
+    VERTICES.with(|v| v.set(v.get().saturating_sub(1)));
+}
+
+/// Whether the path's segments now leave a vertex.
+fn left_vertex() -> bool {
+    VERTICES.with(|v| v.get()) > 0
+}
+
+/// Whether the path left a vertex before the one it is at.
+fn left_earlier_vertex() -> bool {
+    VERTICES.with(|v| v.get()) > 1
 }
 
 fn path_density_scale() -> f64 {
     PATH.with(|p| p.get().1)
+}
+
+impl Volume {
+    /// The factor this volume's density is scaled by for the current segment: as the path's
+    /// last volume scattering set it, or before any, this volume's own truncation once the path
+    /// has left a vertex, and as given on the camera's own rays.
+    fn segment_scale(&self) -> f64 {
+        match PATH.with(|p| p.get()) {
+            (0, _) if left_vertex() => self.truncated,
+            (0, _) => 1.,
+            (_, scale) => scale,
+        }
+    }
 }
 
 fn path_scatterings() -> u32 {
@@ -71,8 +117,18 @@ fn set_path(scatterings: u32, scale: f64) {
     PATH.with(|p| p.set((scatterings, scale)));
 }
 
-/// Below this estimated transmittance, ratio tracking plays Russian roulette.
-const RATIO_TRACKING_ROULETTE: f64 = 0.3;
+/// Below this estimated transmittance, ratio tracking plays Russian roulette. Survivors carry
+/// this much, so it is also the size of the speckles in a deep shadow, whose mean is far less:
+/// small, so that sunlight through a cloud's edge, or under it, isn't a scatter of bright
+/// grains of 0 or this (at 0.3, the ground under a cloud speckled like gravel).
+const RATIO_TRACKING_ROULETTE: f64 = 0.02;
+
+/// Ratio tracking samples collisions against this multiple of the residual majorant. Against
+/// the majorant itself, a collision where the density reaches it (a cloud's core) multiplies
+/// the estimate by 0, and ratio tracking is no better than delta tracking's 0 or 1; against
+/// twice it, each factor is at least a half, at the cost of twice the steps (Novák, Selle and
+/// Jarosz 2014, section 5: looser bounds trade steps for variance, towards exp(-∫σ) exactly).
+const RATIO_TRACKING_SLACK: f64 = 2.;
 
 /// The extinction coefficient through a volume: the chance of a collision per unit distance.
 pub trait DensityField: Sync + Send {
@@ -133,10 +189,102 @@ impl DensityField for NoiseDensity {
     fn majorant(&self) -> f64 { self.max_density }
 }
 
-/// A participating medium filling a box.
+/// A density field times a constant.
+pub struct Scaled {
+    pub field: Arc<dyn DensityField>,
+    pub by: f64,
+}
+
+impl DensityField for Scaled {
+    fn density(&self, p: &Vector3<f64>) -> f64 { self.by * self.field.density(p) }
+    fn majorant(&self) -> f64 { self.by * self.field.majorant() }
+    fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
+        let (m, l) = self.field.majorant_from(p, d);
+        (self.by * m, l)
+    }
+    fn minorant(&self) -> f64 { self.by * self.field.minorant() }
+    fn particle_radius(&self, p: &Vector3<f64>) -> Option<f64> { self.field.particle_radius(p) }
+}
+
+/// A participating medium filling a box, or a closed shape within it.
 pub struct Volume {
     pub bounds: BBox,
     pub density: Arc<dyn DensityField>,
+    /// The closed shape the medium fills, within `bounds`; None to fill the box. This is pbrt's
+    /// medium interface for a shape's interior (Pharr, Jakob and Humphreys, "Physically Based
+    /// Rendering", 4th ed., section 11.4, `MediumInterface`): a glass of coloured liquid is a
+    /// dielectric surface and a volume in the same shape, the surface refracting light in and
+    /// the medium absorbing it on its way through.
+    pub shape: Option<Box<dyn Geometry + Sync + Send>>,
+    /// For a chromatic medium, the extinction per unit density in each channel (RGB, upsampled
+    /// at the sample's wavelengths in spectral mode); None when it is the same in all, the
+    /// density alone. Tracked by spectral MIS (`chromatic`).
+    pub chromatic: Option<Color>,
+    /// The density scale for segments that leave a vertex before the path has scattered in a
+    /// medium (a surface's shadow rays, and the light it scatters), which the medium's
+    /// material sets from its truncations (`VolumeMaterial::density_scale`, from its first
+    /// truncated generation): light reaching a surface past a cloud's edge has been scattered
+    /// by small angles as often as not, as it has on its way to a cloud's vertex. 1 by default.
+    pub truncated: f64,
+}
+
+/// The stretches of a ray inside a volume: one for a box, any number for a shape.
+enum Spans {
+    One(Option<(f64, f64)>),
+    Many(std::vec::IntoIter<(f64, f64)>),
+}
+
+impl Iterator for Spans {
+    type Item = (f64, f64);
+    fn next(&mut self) -> Option<(f64, f64)> {
+        match self {
+            Spans::One(s) => s.take(),
+            Spans::Many(i) => i.next(),
+        }
+    }
+}
+
+impl Volume {
+    pub fn new(bounds: BBox, density: Arc<dyn DensityField>) -> Volume {
+        Volume { bounds, density, shape: None, chromatic: None, truncated: 1. }
+    }
+
+    /// A medium filling the inside of a closed shape.
+    pub fn in_shape(shape: Box<dyn Geometry + Sync + Send>, density: Arc<dyn DensityField>) -> Volume {
+        Volume { bounds: shape.bounds(), density, shape: Some(shape), chromatic: None, truncated: 1. }
+    }
+
+    /// Where the ray from `ro` along the unit direction `d` is in the medium: (entry, exit)
+    /// distances, nearest first. Entry may be behind the origin, if it starts inside. In a shape,
+    /// from where it crosses the surface inwards to where it crosses outwards, the surface's
+    /// outward normals telling which is which; a ray whose first crossing is outwards started
+    /// inside.
+    fn spans(&self, ro: &Vector3<f64>, d: &Vector3<f64>) -> Spans {
+        let invrd = Vector3::new(1. / d.x, 1. / d.y, 1. / d.z);
+        let (entry, exit) = match self.bounds.entry_exit(ro, &invrd) {
+            Some(x) => x,
+            None => return Spans::One(None),
+        };
+        let shape = match &self.shape {
+            None => return Spans::One(Some((entry, exit))),
+            Some(s) => s,
+        };
+        let mut spans = Vec::new();
+        let mut start = None;
+        for (k, c) in shape.crossings(&Ray { ro: *ro, rd: *d }).iter().enumerate() {
+            let entering = c.normal.dot(d) < 0.;
+            match start {
+                None if k == 0 && !entering => spans.push((0., c.dist)),
+                None if entering => start = Some(c.dist),
+                Some(s) if !entering => {
+                    spans.push((s, c.dist));
+                    start = None;
+                },
+                _ => (),
+            }
+        }
+        Spans::Many(spans.into_iter())
+    }
 }
 
 impl Geometry for Volume {
@@ -154,35 +302,38 @@ impl Geometry for Volume {
     /// piecewise-constant majorants of Novák et al. 2018). Stretches with no majorant are
     /// skipped without sampling at all.
     fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<RawIntersection> {
-        let scale = path_density_scale();
+        if let Some(k) = self.chromatic {
+            return self.intersects_chromatic(r, min, &k.as_unbounded().rgb);
+        }
+        let scale = self.segment_scale();
         if self.density.majorant() * scale <= 0. {
             return None;
         }
         let d = r.rd.normalize();
-        let invrd = Vector3::new(1. / d.x, 1. / d.y, 1. / d.z);
-        let (entry, exit) = self.bounds.entry_exit(&r.ro, &invrd)?;
-        let mut t = entry.max(min);
-        while t < exit {
-            let (majorant, length) = self.density.majorant_from(&(r.ro + d * t), &d);
-            // Always advance, if only by a hair, so a stretch reported as empty at a boundary
-            // can't stall the walk.
-            let end = (t + length.max(t.abs().max(1.) * 1e-12)).min(exit);
-            if majorant > 0. {
-                // Scaling the density scales the majorant alike: steps shrink, and the chance
-                // of a collision being real is unchanged.
-                let step = -(1. - rand()).ln() / (majorant * scale);
-                if t + step < end {
-                    t += step;
-                    let point = r.ro + d * t;
-                    if rand() * majorant < self.density.density(&point) {
-                        // Media have no surface; facing back along the ray keeps the shadow
-                        // bias from moving the point sideways.
-                        return Some(RawIntersection { face: 0, part: 0, dist: t, point, normal: -d });
+        for (entry, exit) in self.spans(&r.ro, &d) {
+            let mut t = entry.max(min);
+            while t < exit {
+                let (majorant, length) = self.density.majorant_from(&(r.ro + d * t), &d);
+                // Always advance, if only by a hair, so a stretch reported as empty at a
+                // boundary can't stall the walk.
+                let end = (t + length.max(t.abs().max(1.) * 1e-12)).min(exit);
+                if majorant > 0. {
+                    // Scaling the density scales the majorant alike: steps shrink, and the
+                    // chance of a collision being real is unchanged.
+                    let step = -(1. - rand()).ln() / (majorant * scale);
+                    if t + step < end {
+                        t += step;
+                        let point = r.ro + d * t;
+                        if rand() * majorant < self.density.density(&point) {
+                            // Media have no surface; facing back along the ray keeps the shadow
+                            // bias from moving the point sideways.
+                            return Some(RawIntersection { face: 0, part: 0, dist: t, point, normal: -d });
+                        }
+                        continue;
                     }
-                    continue;
                 }
+                t = end;
             }
-            t = end;
         }
         None
     }
@@ -206,45 +357,91 @@ impl Geometry for Volume {
     /// estimate is small, Russian roulette ends most walks early (and doubles the survivors),
     /// which stays unbiased.
     fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 {
-        let scale = path_density_scale();
+        let scale = self.segment_scale();
         if self.density.majorant() * scale <= 0. {
             return 1.;
         }
         let d = r.rd.normalize();
-        let invrd = Vector3::new(1. / d.x, 1. / d.y, 1. / d.z);
-        let (entry, exit) = match self.bounds.entry_exit(&r.ro, &invrd) {
-            Some(x) => x,
-            None => return 1.,
-        };
-        let stop = exit.min(max);
-        let mut t = entry.max(min);
-        if t >= stop {
-            return 1.;
-        }
         let control = self.density.minorant();
-        let mut transmitted = (-control * scale * (stop - t)).exp();
-        while t < stop {
-            let (majorant, length) = self.density.majorant_from(&(r.ro + d * t), &d);
-            let end = (t + length.max(t.abs().max(1.) * 1e-12)).min(stop);
-            let residual = majorant - control;
-            if residual > 0. {
-                let step = -(1. - rand()).ln() / (residual * scale);
-                if t + step < end {
-                    t += step;
-                    transmitted *= 1. - (self.density.density(&(r.ro + d * t)) - control) / residual;
-                    if transmitted < RATIO_TRACKING_ROULETTE {
-                        // Survive with probability T / threshold, carrying the threshold.
-                        if rand() * RATIO_TRACKING_ROULETTE >= transmitted {
-                            return 0.;
-                        }
-                        transmitted = RATIO_TRACKING_ROULETTE;
-                    }
-                    continue;
-                }
+        let mut transmitted = 1.;
+        for (entry, exit) in self.spans(&r.ro, &d) {
+            let stop = exit.min(max);
+            let mut t = entry.max(min);
+            if t >= stop {
+                continue;
             }
-            t = end;
+            transmitted *= (-control * scale * (stop - t)).exp();
+            while t < stop {
+                let (majorant, length) = self.density.majorant_from(&(r.ro + d * t), &d);
+                let end = (t + length.max(t.abs().max(1.) * 1e-12)).min(stop);
+                let residual = (majorant - control) * RATIO_TRACKING_SLACK;
+                if residual > 0. {
+                    let step = -(1. - rand()).ln() / (residual * scale);
+                    if t + step < end {
+                        t += step;
+                        transmitted *= 1. - (self.density.density(&(r.ro + d * t)) - control) / residual;
+                        if transmitted < RATIO_TRACKING_ROULETTE {
+                            // Survive with probability T / threshold, carrying the threshold.
+                            if rand() * RATIO_TRACKING_ROULETTE >= transmitted {
+                                return 0.;
+                            }
+                            transmitted = RATIO_TRACKING_ROULETTE;
+                        }
+                        continue;
+                    }
+                }
+                t = end;
+            }
         }
         transmitted
+    }
+
+    /// Per channel: for a chromatic medium, ratio tracking against the majorant of the channel
+    /// with the most extinction, which estimates every channel's transmittance at once.
+    fn transmittance_color(&self, r: &Ray, min: f64, max: f64) -> Color {
+        let k = match self.chromatic {
+            None => return Color::white() * self.transmittance(r, min, max),
+            Some(k) => k.as_unbounded().rgb,
+        };
+        let scale = self.segment_scale();
+        let kmax = k.max();
+        if self.density.majorant() * scale * kmax <= 0. {
+            return Color::white();
+        }
+        let d = r.rd.normalize();
+        let control = self.density.minorant();
+        let mut transmitted = Vector3::new(1., 1., 1.);
+        for (entry, exit) in self.spans(&r.ro, &d) {
+            let stop = exit.min(max);
+            let mut t = entry.max(min);
+            if t >= stop {
+                continue;
+            }
+            transmitted = transmitted.component_mul(&k.map(|k| (-control * k * scale * (stop - t)).exp()));
+            while t < stop {
+                let (majorant, length) = self.density.majorant_from(&(r.ro + d * t), &d);
+                let end = (t + length.max(t.abs().max(1.) * 1e-12)).min(stop);
+                let residual = (majorant - control) * RATIO_TRACKING_SLACK;
+                if residual > 0. {
+                    let step = -(1. - rand()).ln() / (residual * kmax * scale);
+                    if t + step < end {
+                        t += step;
+                        let excess = (self.density.density(&(r.ro + d * t)) - control) / (residual * kmax);
+                        transmitted = transmitted.component_mul(&k.map(|k| 1. - excess * k));
+                        let largest = transmitted.max();
+                        if largest < RATIO_TRACKING_ROULETTE {
+                            if rand() * RATIO_TRACKING_ROULETTE >= largest {
+                                return Color::black();
+                            }
+                            transmitted *= RATIO_TRACKING_ROULETTE / largest;
+                        }
+                        continue;
+                    }
+                }
+                t = end;
+            }
+        }
+        Color { rgb: transmitted }
     }
 
     fn bounds(&self) -> BBox {
@@ -254,8 +451,49 @@ impl Geometry for Volume {
     fn is_stochastic(&self) -> bool { true }
 }
 
+impl Volume {
+    /// Delta tracking with the path's hero channel through a medium of extinction `k` per unit
+    /// density per channel, recording each tentative collision's probability ratios for the
+    /// others (`chromatic`).
+    fn intersects_chromatic(&self, r: &Ray, min: f64, k: &Vector3<f64>) -> Option<RawIntersection> {
+        let scale = self.segment_scale();
+        let kmax = k.max();
+        if self.density.majorant() * scale * kmax <= 0. {
+            return None;
+        }
+        let hero = chromatic::hero();
+        let d = r.rd.normalize();
+        for (entry, exit) in self.spans(&r.ro, &d) {
+            let mut t = entry.max(min);
+            while t < exit {
+                let (majorant, length) = self.density.majorant_from(&(r.ro + d * t), &d);
+                let end = (t + length.max(t.abs().max(1.) * 1e-12)).min(exit);
+                if majorant > 0. {
+                    let step = -(1. - rand()).ln() / (majorant * kmax * scale);
+                    if t + step < end {
+                        t += step;
+                        let point = r.ro + d * t;
+                        // Each channel's chance of the collision being real.
+                        let p = k * (self.density.density(&point) / (majorant * kmax));
+                        if rand() < p[hero] {
+                            chromatic::record(t, [p.x / p[hero], p.y / p[hero], p.z / p[hero]], true);
+                            return Some(RawIntersection { face: 0, part: 0, dist: t, point, normal: -d });
+                        }
+                        let n = 1. - p[hero];
+                        chromatic::record(t, [(1. - p.x) / n, (1. - p.y) / n, (1. - p.z) / n], false);
+                        continue;
+                    }
+                }
+                t = end;
+            }
+        }
+        None
+    }
+}
+
 /// Approximations that trade exactness for speed and noise in thick, bright media like
-/// clouds, where light scatters hundreds of times. Both off by default: plain path tracing.
+/// clouds, where light scatters hundreds of times. All off by default: plain path tracing.
+/// (Scene files turn `delta_m` on unless told otherwise.)
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ScatteringApproximation {
     /// Similarity relations from this many volume scatterings on. After a few scatterings,
@@ -276,6 +514,15 @@ pub struct ScatteringApproximation {
     /// path's first volume scattering; later ones then skip the sun, which would otherwise be
     /// counted twice, but still gather light from the sky and surroundings.
     pub oz: Option<Oz>,
+    /// Delta-M truncation of a Henyey-Greenstein phase function wherever the camera doesn't see
+    /// the medium directly (`VolumeMaterial::forward_peak`, `Volume::truncated`): the sharpest part of the forward peak,
+    /// a fraction g² of scattering, is taken as no scattering at all, and the rest scatters by
+    /// Henyey-Greenstein of mean cosine g / (1 + g). Light scattered through so small an angle
+    /// carries on almost as if unscattered, so the light that reaches the camera hardly
+    /// changes, but sunlight gathered at deep vertices no longer swings between almost none and
+    /// eighty times the mean (for g = 0.85), the grain that dominates a cloud's noise. The
+    /// first scattering, whose silver lining the camera sees, keeps the whole phase function.
+    pub delta_m: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -310,6 +557,11 @@ pub struct VolumeMaterial {
     pub rainbow: Option<Arc<RainbowTable>>,
     /// The volume's density field, for the particle size where it has one.
     pub field: Arc<dyn DensityField>,
+    /// Light the medium emits (`emission`).
+    pub emission: Option<emission::VolumeEmission>,
+    /// A chromatic medium's absorption and scattering coefficients per unit density (RGB), from
+    /// which its albedo at the sample's wavelengths follows; `albedo` holds their RGB ratio.
+    pub extinction: Option<(Color, Color)>,
 }
 
 /// Halos from ice crystals (see `material::ice_halos`): sun dogs, the 22° and 46° halos,
@@ -397,6 +649,35 @@ impl VolumeMaterial {
         self.diffraction.is_some() && scatterings >= 1
     }
 
+    /// The fraction f of the base phase function's scattering that a vertex after `scatterings`
+    /// earlier volume scatterings treats as no scattering: delta-M truncation
+    /// (`ScatteringApproximation::delta_m`; Wiscombe 1977, as for diffraction above). For
+    /// Henyey-Greenstein of mean cosine g, f = g² keeps the phase function's first two moments
+    /// (Wiscombe's equations 7-8 with its Legendre moments g^l), and the rest is
+    /// Henyey-Greenstein again with g' = (g - f) / (1 - f) = g / (1 + g). Like diffraction, it
+    /// leaves the extinction σ (1 - f α) and the albedo α (1 - f) / (1 - f α).
+    fn forward_peak(&self, scatterings: u32) -> f64 {
+        match self.phase {
+            PhaseFunction::HenyeyGreenstein { g } if g > 0. && self.approximation.delta_m && scatterings >= 1 => g * g,
+            _ => 0.,
+        }
+    }
+
+    /// Whether a path that hasn't scattered in a medium yet arrives at one of its vertices
+    /// truncated, having left a surface (`Volume::segment_scale`), when any truncation applies.
+    fn reached_truncated(&self) -> bool {
+        left_earlier_vertex() && self.density_scale(1) != 1.
+    }
+
+    /// The base phase function after `scatterings`: without its forward peak, when truncated.
+    fn base_phase(&self, scatterings: u32) -> PhaseFunction {
+        let f = self.forward_peak(scatterings);
+        match self.phase {
+            PhaseFunction::HenyeyGreenstein { g } if f > 0. => PhaseFunction::HenyeyGreenstein { g: (g - f) / (1. - f) },
+            p => p,
+        }
+    }
+
     /// How a vertex at `point`, after `scatterings` volume scatterings, scatters: isotropically
     /// when reduced, without diffraction when truncated, and otherwise in full.
     fn phase_at(&self, point: &Vector3<f64>, scatterings: u32) -> VertexPhase<'_> {
@@ -404,7 +685,7 @@ impl VolumeMaterial {
             return VertexPhase { base: PhaseFunction::isotropic(), diffraction: None };
         }
         VertexPhase {
-            base: self.phase,
+            base: self.base_phase(scatterings),
             diffraction: self.diffraction.as_ref().filter(|_| !self.truncated(scatterings))
                 .map(|d| (d, self.field.particle_radius(point).unwrap_or(d.radius))),
         }
@@ -415,7 +696,7 @@ impl VolumeMaterial {
     fn mean_cosine(&self, scatterings: u32) -> f64 {
         match &self.diffraction {
             Some(d) if !self.truncated(scatterings) => (1. - d.fraction) * self.phase.mean_cosine() + d.fraction,
-            _ => self.phase.mean_cosine(),
+            _ => self.base_phase(scatterings).mean_cosine(),
         }
     }
 
@@ -439,6 +720,13 @@ impl VolumeMaterial {
             scale *= 1. - d.fraction * albedo;
             albedo = albedo * (1. - d.fraction) / (1. - d.fraction * albedo);
         }
+        // Diffraction is truncated wherever the forward peak is, so then the base phase function
+        // is all the scattering left.
+        let f = self.forward_peak(scatterings);
+        if f > 0. {
+            scale *= 1. - f * albedo;
+            albedo = albedo * (1. - f) / (1. - f * albedo);
+        }
         if self.reduced(scatterings) {
             scale *= 1. - albedo * self.mean_cosine(scatterings);
         }
@@ -447,9 +735,18 @@ impl VolumeMaterial {
 
     /// The albedo at a vertex after `scatterings`, truncated and reduced as they apply.
     fn albedo_at(&self, scatterings: u32) -> Color {
-        let mut a = self.albedo.rgb;
+        self.adjusted_albedo(self.albedo, scatterings)
+    }
+
+    /// The albedo `a` after `scatterings`, truncated and reduced as they apply.
+    fn adjusted_albedo(&self, a: Color, scatterings: u32) -> Color {
+        let mut a = a.rgb;
         if let Some(d) = self.diffraction.as_ref().filter(|_| self.truncated(scatterings)) {
             a = a.map(|a| a * (1. - d.fraction) / (1. - d.fraction * a));
+        }
+        let f = self.forward_peak(scatterings);
+        if f > 0. {
+            a = a.map(|a| a * (1. - f) / (1. - f * a));
         }
         if self.reduced(scatterings) {
             let g = self.mean_cosine(scatterings);
@@ -460,34 +757,39 @@ impl VolumeMaterial {
 
     /// Light from the scene's lights scattered at `point` towards the viewer, for light that
     /// was travelling along `incoming` (a unit vector): each light's radiance times the phase
-    /// function at the angle between `incoming` and the direction to it, times the albedo.
+    /// function at the angle between `incoming` and the direction to it, before the albedo.
     /// Point lights and the sun are delta lights, which a scattered ray can never hit, so this
     /// is the only way they reach a medium; area lights are sampled once, as at a surface.
     fn direct_lighting(&self, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene,
-                       phase: &VertexPhase, albedo: Color, scatterings: u32) -> Color {
-        let p = |w: &Vector3<f64>| phase.eval(incoming.dot(w));
+                       phase: &VertexPhase, scatterings: u32, first: u32) -> Color {
+        let p = |w: &Vector3<f64>| phase.eval(incoming.dot(w)).as_unbounded();
         let mut direct = Color::black();
-        for light in &s.lights {
+        // With a light BVH, point lights are sampled with the area lights below.
+        for light in s.lights.iter().filter(|_| s.sums_point_lights()) {
             let to_light = light.position - point;
             let d = to_light.norm();
             let w = to_light / d;
             let shadow_ray = Ray { ro: *point, rd: w };
             let transmitted = s.objects.transmittance(&shadow_ray, d, f64::MIN_POSITIVE);
-            direct = direct + light.color * p(&w) * (light.intensity / (d * d) * transmitted);
+            direct = direct + light.radiant_intensity(&-w) * p(&w) * (transmitted / (d * d));
         }
         if let Some(sun) = &s.sun {
-            let sun_phase = self.sun_phase(phase, incoming, s, scatterings);
+            // Halos, rainbows and diffraction colour the phase function in RGB.
+            let sun_phase = self.sun_phase(phase, incoming, s, scatterings).as_unbounded();
             direct = direct + match self.approximation.oz {
                 None => sun.irradiance_at(point) * sun_phase * sun.transmittance_from(point, s),
-                Some(oz) if scatterings == 0 => sun.irradiance_at(point) * self.oz_sunlight(&oz, sun_phase, incoming, point, s),
+                // At the path's first volume scattering, even one reached off a surface.
+                Some(oz) if first == 0 => sun.irradiance_at(point) * self.oz_sunlight(&oz, sun_phase, incoming, point, s),
                 // Already counted, octaves and all, at the path's first scattering.
                 Some(_) => Color::black(),
             };
         }
-        if s.render.sample_lights {
-            direct = direct + sample_area_light_with(point, s, p);
+        // Moonlight, by the plain phase function (no halos: their tables are the sun's).
+        if let Some(moon) = &s.moonlight {
+            let m = &moon.light;
+            direct = direct + m.irradiance_at(point) * p(&m.direction) * m.transmittance_from(point, s);
         }
-        albedo * direct
+        direct + crate::material::functions::sample_lights_with(point, s, |w, _| p(w))
     }
 
     /// The phase function for direct sunlight at a vertex seen along `incoming`: with halos,
@@ -501,7 +803,7 @@ impl VolumeMaterial {
             (None, Some(rainbow)) if first => return rainbow.eval(cos),
             _ => return phase.eval(cos),
         };
-        let table = halos.table.get_or_init(|| HaloTable::new(&sun.direction, &halos.crystals, halos.rays, halos.seed));
+        let table = halos.table.get_or_init(|| crate::geometry::build_apart(|| HaloTable::new(&sun.direction, &halos.crystals, halos.rays, halos.seed)));
         let crystals = table.eval(incoming);
         match phase.diffraction {
             None => crystals,
@@ -524,7 +826,7 @@ impl VolumeMaterial {
                 Color::white() * PhaseFunction::HenyeyGreenstein { g: self.mean_cosine(saved.0) * oz.c.powi(i) }.eval(cos)
             };
             set_path(saved.0, saved.1 * oz.a.powi(i));
-            total = total + phase * (oz.b.powi(i) * sun.transmittance_from(point, s));
+            total = total + phase * sun.transmittance_from(point, s) * oz.b.powi(i);
         }
         set_path(saved.0, saved.1);
         total
@@ -533,21 +835,41 @@ impl VolumeMaterial {
 
 impl MaterialModel for VolumeMaterial {
     fn scatter(&self, r: &Ray, i: &Intersection, s: &Scene) -> ScatteredRay {
+        // The path scatters here (`ggx::regularised`).
+        crate::material::ggx::scattered();
         let incoming = r.rd.normalize();
-        let scatterings = path_scatterings();
+        let first = path_scatterings();
+        // A first volume scattering after the path has left a surface arrived truncated
+        // (`Volume::truncated`): it scatters as the first truncated generation. Only one the
+        // camera sees directly scatters in full.
+        let scatterings = if first == 0 && self.reached_truncated() { 1 } else { first };
         let phase = self.phase_at(&i.point, scatterings);
         let albedo = self.albedo_at(scatterings);
         // Light leaving this vertex, towards the lights and onwards, has scattered once more.
         set_path(scatterings + 1, self.density_scale(scatterings + 1));
         let (rd, weight) = phase.sample(&incoming);
+        // At the sample's wavelengths: a chromatic medium's from its coefficients there.
+        let albedo = match &self.extinction {
+            None => albedo.as_reflectance(),
+            Some((sigma_a, sigma_s)) => {
+                let (a, s) = (sigma_a.as_unbounded().rgb, sigma_s.as_unbounded().rgb);
+                let single = s.zip_map(&(a + s), |s, t| if t > 0. { s / t } else { 0. });
+                self.adjusted_albedo(Color { rgb: single }, scatterings)
+            },
+        };
+        let mut emit = albedo * self.direct_lighting(&incoming, &i.point, s, &phase, scatterings, first);
+        if let Some(e) = &self.emission {
+            // σ_a / σ_t of the emitted radiance (`emission`).
+            emit = emit + (Color::white() - albedo) * e.radiance(&i.point);
+        }
         ScatteredRay {
             ray: Some(Ray { ro: i.point, rd }),
             // Phase / pdf: 1, unless the phase function differs between channels.
-            attenuate: albedo * weight,
-            emit: self.direct_lighting(&incoming, &i.point, s, &phase, albedo, scatterings),
+            attenuate: albedo * weight.as_unbounded(),
+            emit,
             // Area lights were sampled above (when enabled); the trace skips them if the
             // scattered ray hits one, so they aren't counted twice.
-            sampled_lights: true,
+            light_sampling: LightSampling::Exclusive,
         }
     }
 }
@@ -560,15 +882,38 @@ pub struct Scattering {
     pub diffraction: Option<Diffraction>,
     pub halos: Option<Halos>,
     pub rainbow: Option<Arc<RainbowTable>>,
+    pub emission: Option<emission::VolumeEmission>,
+    /// Absorption and scattering coefficients per unit density (RGB), for a chromatic medium;
+    /// `albedo` should then be their ratio.
+    pub extinction: Option<(Color, Color)>,
 }
 
 pub fn create_volume(bounds: BBox, density: Arc<dyn DensityField>, s: Scattering) -> SceneObject {
+    create_medium(Volume::new(bounds, density), s)
+}
+
+/// A volume as an object, scattering as `s` says.
+pub fn create_medium(mut volume: Volume, s: Scattering) -> SceneObject {
+    // A medium whose extinction is the same in every channel is grey: its density, scaled.
+    let (density, extinction) = match s.extinction {
+        Some((a, sc)) if !(a + sc).rgb.iter().all(|k| *k == (a + sc).rgb.x) => (volume.density.clone(), Some((a, sc))),
+        Some((a, sc)) => {
+            let k = (a + sc).rgb.x;
+            let scaled: Arc<dyn DensityField> = Arc::new(Scaled { field: volume.density.clone(), by: k });
+            (scaled, None)
+        },
+        None => (volume.density.clone(), None),
+    };
+    volume.density = density;
+    volume.chromatic = extinction.map(|(a, sc)| a + sc);
     let material = VolumeMaterial {
         albedo: s.albedo, phase: s.phase, approximation: s.approximation, diffraction: s.diffraction,
-        halos: s.halos, rainbow: s.rainbow, field: density.clone(),
+        halos: s.halos, rainbow: s.rainbow, field: volume.density.clone(), emission: s.emission,
+        extinction,
     };
+    volume.truncated = material.density_scale(1);
     SceneObject {
-        geometry: Box::new(Volume { bounds, density }),
+        geometry: Box::new(volume),
         medium: Box::new(Solid { m: Box::new(material) }),
     }
 }
@@ -591,7 +936,7 @@ mod tests {
     #[test]
     fn test_constant_volume_follows_beer_lambert() {
         seed_rand(1, 0);
-        let v = Volume { bounds: unit_box(), density: Arc::new(ConstantDensity(1.5)) };
+        let v = Volume::new(unit_box(), Arc::new(ConstantDensity(1.5)));
         let t = transmitted(&v, 0.5, 0.5, 40_000);
         assert!((t - (-1.5f64).exp()).abs() < 0.01, "{}", t);
     }
@@ -599,7 +944,7 @@ mod tests {
     #[test]
     fn test_collisions_lie_within_the_box() {
         seed_rand(2, 0);
-        let v = Volume { bounds: unit_box(), density: Arc::new(ConstantDensity(3.)) };
+        let v = Volume::new(unit_box(), Arc::new(ConstantDensity(3.)));
         // Unnormalised direction: distances are still world-space.
         let r = Ray { ro: Vector3::new(-2., 0.5, 0.5), rd: Vector3::new(4., 0., 0.) };
         for _ in 0..1000 {
@@ -613,7 +958,7 @@ mod tests {
     #[test]
     fn test_ray_starting_inside_or_beyond_min() {
         seed_rand(3, 0);
-        let v = Volume { bounds: unit_box(), density: Arc::new(ConstantDensity(1.)) };
+        let v = Volume::new(unit_box(), Arc::new(ConstantDensity(1.)));
         let r = Ray { ro: Vector3::new(0.5, 0.5, 0.5), rd: Vector3::new(1., 0., 0.) };
         let n = 40_000;
         // From the centre, half a unit of medium remains; from min = 0.3 along, a fifth.
@@ -625,8 +970,35 @@ mod tests {
     }
 
     #[test]
+    fn test_volume_in_a_sphere() {
+        use crate::shapes::sphere::Sphere;
+        seed_rand(10, 0);
+        let v = Volume::in_shape(Box::new(Sphere::new(Vector3::new(0., 0., 0.), 1.)), Arc::new(ConstantDensity(1.)));
+        let n = 40_000;
+        // Through the middle: 2 units of medium. Off-centre at 0.8: a chord of 1.2.
+        for (y, chord) in [(0., 2.), (0.8, 1.2)] {
+            let r = Ray { ro: Vector3::new(-3., y, 0.), rd: Vector3::new(1., 0., 0.) };
+            let t = (0..n).filter(|_| v.intersects(&r).is_none()).count() as f64 / n as f64;
+            assert!((t - (-chord as f64).exp()).abs() < 0.01, "{}: {}", y, t);
+            assert!((v.transmittance(&r, 0., f64::INFINITY) - (-chord as f64).exp()).abs() < 1e-9);
+            // Collisions are inside.
+            for _ in 0..200 {
+                if let Some(i) = v.intersects(&r) {
+                    assert!(i.point.norm() <= 1. + 1e-9, "{:?}", i.point);
+                }
+            }
+        }
+        // Outside the sphere but within its bounds: clear.
+        let corner = Ray { ro: Vector3::new(-3., 0.9, 0.9), rd: Vector3::new(1., 0., 0.) };
+        assert!((0..100).all(|_| v.intersects(&corner).is_none()));
+        // From inside, only what lies ahead: a unit radius.
+        let inside = Ray { ro: Vector3::new(0., 0., 0.), rd: Vector3::new(0., 1., 0.) };
+        assert!((v.transmittance(&inside, 0., f64::INFINITY) - (-1f64).exp()).abs() < 1e-9);
+    }
+
+    #[test]
     fn test_empty_volume_is_clear() {
-        let v = Volume { bounds: unit_box(), density: Arc::new(ConstantDensity(0.)) };
+        let v = Volume::new(unit_box(), Arc::new(ConstantDensity(0.)));
         assert_eq!(transmitted(&v, 0.5, 0.5, 100), 1.);
     }
 
@@ -638,7 +1010,7 @@ mod tests {
         let optical_depth: f64 = (0..steps).map(|i| {
             density.density(&Vector3::new((i as f64 + 0.5) / steps as f64, 0.37, 0.61))
         }).sum::<f64>() / steps as f64;
-        (Volume { bounds: unit_box(), density: Arc::new(density) }, optical_depth)
+        (Volume::new(unit_box(), Arc::new(density)), optical_depth)
     }
 
     #[test]
@@ -660,7 +1032,7 @@ mod tests {
     #[test]
     fn test_ratio_tracking_respects_min_and_max() {
         seed_rand(8, 0);
-        let v = Volume { bounds: unit_box(), density: Arc::new(ConstantDensity(2.)) };
+        let v = Volume::new(unit_box(), Arc::new(ConstantDensity(2.)));
         let r = Ray { ro: Vector3::new(-1., 0.5, 0.5), rd: Vector3::new(1., 0., 0.) };
         let n = 40_000;
         // From 1.2 to 1.7 along the ray: half a unit of medium.
@@ -679,6 +1051,8 @@ mod tests {
             halos: None,
             rainbow: None,
             field: Arc::new(ConstantDensity(1.)),
+            emission: None,
+            extinction: None,
         };
         // First scattering in full: the extinction as given, diffraction in the phase.
         assert_eq!(m.density_scale(0), 1.);
@@ -693,9 +1067,52 @@ mod tests {
     }
 
     #[test]
+    fn test_delta_m_truncates_all_but_the_cameras_segments() {
+        // Henyey-Greenstein g = 0.8, albedo 0.9: delta-M takes f = 0.64 of scattering as none,
+        // so rays that leave a vertex see the extinction scaled by 1 - 0.9 × 0.64; the camera's
+        // own rays see the medium as it is.
+        let scattering = Scattering {
+            albedo: Color::new(0.9, 0.9, 0.9),
+            phase: PhaseFunction::HenyeyGreenstein { g: 0.8 },
+            approximation: ScatteringApproximation { delta_m: true, ..ScatteringApproximation::default() },
+            diffraction: None, halos: None, rainbow: None, emission: None, extinction: None,
+        };
+        let o = create_volume(unit_box(), Arc::new(ConstantDensity(2.)), scattering);
+        let r = Ray { ro: Vector3::new(-1., 0.5, 0.5), rd: Vector3::new(1., 0., 0.) };
+        begin_path();
+        assert!((o.transmittance(&r, 0., f64::INFINITY) - (-2f64).exp()).abs() < 1e-12);
+        at_vertex();
+        let truncated = (-2. * (1. - 0.9 * 0.64f64)).exp();
+        assert!((o.transmittance(&r, 0., f64::INFINITY) - truncated).abs() < 1e-12);
+        // Not after a mirror.
+        specular_vertex();
+        assert!((o.transmittance(&r, 0., f64::INFINITY) - (-2f64).exp()).abs() < 1e-12);
+        begin_path();
+    }
+
+    #[test]
+    fn test_delta_m_conserves_scattering() {
+        // From the second scattering, g' = g / (1 + g), and the scattering coefficient that is
+        // left is what wasn't truncated: σ' α' = σ α (1 - f).
+        let m = VolumeMaterial {
+            albedo: Color::new(0.95, 0.95, 0.95),
+            phase: PhaseFunction::HenyeyGreenstein { g: 0.85 },
+            approximation: ScatteringApproximation { delta_m: true, ..ScatteringApproximation::default() },
+            diffraction: None, halos: None, rainbow: None,
+            field: Arc::new(ConstantDensity(1.)), emission: None, extinction: None,
+        };
+        assert_eq!(m.density_scale(0), 1.);
+        assert_eq!(m.mean_cosine(0), 0.85);
+        assert!((m.mean_cosine(1) - 0.85 / 1.85).abs() < 1e-12);
+        let f = 0.85f64.powi(2);
+        assert!((m.density_scale(1) * m.albedo_at(1).rgb.x - 0.95 * (1. - f)).abs() < 1e-12);
+        assert!((m.density_scale(1) - (1. - 0.95 * f)).abs() < 1e-12);
+    }
+
+    #[test]
     fn test_homogeneous_transmittance_is_exact() {
         // The constant density is its own minorant: nothing left to estimate.
-        let v = Volume { bounds: unit_box(), density: Arc::new(ConstantDensity(2.)) };
+        let v = Volume::new(unit_box(), Arc::new(ConstantDensity(2.)));
         let r = Ray { ro: Vector3::new(-1., 0.5, 0.5), rd: Vector3::new(1., 0., 0.) };
         for _ in 0..10 {
             assert!((v.transmittance(&r, 0., f64::INFINITY) - (-2f64).exp()).abs() < 1e-12);

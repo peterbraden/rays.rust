@@ -318,6 +318,28 @@ impl Domain {
         f * n * n + index(d.dot(&v)) * n + index(d.dot(&u))
     }
 
+    /// Where direction `d` lies on a cubed sphere of `n` cells per face edge: its face, and its
+    /// position on that face in corner units, each in [0, n] (corner (ci, cj) of the face is at
+    /// (ci, cj); cell (i, j) spans (i, j) to (i + 1, j + 1)).
+    pub fn sphere_coords(n: usize, d: &Vector3<f64>) -> (usize, f64, f64) {
+        let ax = d.x.abs().max(d.y.abs()).max(d.z.abs());
+        let f = if d.x.abs() == ax {
+            if d.x > 0. { 0 } else { 1 }
+        } else if d.y.abs() == ax {
+            if d.y > 0. { 2 } else { 3 }
+        } else if d.z > 0. { 4 } else { 5 };
+        let (fnorm, u, v) = face_axes(f);
+        let dn = d.dot(&fnorm);
+        let coord = |x: f64| (((x / dn).atan() / FRAC_PI_4 + 1.) / 2. * n as f64).clamp(0., n as f64);
+        (f, coord(d.dot(&u)), coord(d.dot(&v)))
+    }
+
+    /// The (latitude, longitude) in degrees of direction `d`, the inverse of `frame`'s up.
+    pub fn lat_lon(d: &Vector3<f64>) -> (f64, f64) {
+        let d = d.normalize();
+        (d.y.clamp(-1., 1.).asin().to_degrees(), (-d.z).atan2(d.x).to_degrees())
+    }
+
     /// The cell containing direction `d` (which needn't be normalised). Directions off a patch
     /// give the nearest edge cell.
     pub fn cell_at(&self, d: &Vector3<f64>) -> usize {
@@ -424,6 +446,21 @@ mod tests {
         // Neighbouring cells are 100 m apart on the sphere, too.
         let arc = d.radius * d.dirs[5].angle(&d.dirs[6]);
         assert!((arc - 100.).abs() < 0.01, "{}", arc);
+    }
+
+    #[test]
+    fn test_sphere_coords_agree_with_cells_and_lat_lon_inverts_frame() {
+        let n = 8;
+        let d = Domain::sphere(n, 1.);
+        for (k, dir) in d.dirs.iter().enumerate() {
+            let (f, u, v) = Domain::sphere_coords(n, dir);
+            assert_eq!(f * n * n + v.floor() as usize * n + u.floor() as usize, k);
+        }
+        for (lat, lon) in [(10., 20.), (-45., 170.), (80., -100.)] {
+            let (up, _, _) = Domain::frame(lat, lon);
+            let (a, b) = Domain::lat_lon(&up);
+            assert!((a - lat).abs() < 1e-9 && (b - lon).abs() < 1e-9, "{} {}", a, b);
+        }
     }
 
     #[test]

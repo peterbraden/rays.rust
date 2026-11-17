@@ -1,0 +1,9066 @@
+{
+ "width": 480,
+ "height": 270,
+ "supersamples": 256,
+ "max_depth": 3,
+ "background": [
+  0,
+  0,
+  0
+ ],
+ "materials": {
+  "GROUND": {
+   "type": "lambertian",
+   "albedo": [
+    0.5,
+    0.5,
+    0.5
+   ]
+  },
+  "L0": {
+   "type": "diffuse-light",
+   "temperature": 2200,
+   "intensity": 300
+  },
+  "L1": {
+   "type": "diffuse-light",
+   "temperature": 4000,
+   "intensity": 300
+  },
+  "L2": {
+   "type": "diffuse-light",
+   "color": [
+    1,
+    0.5,
+    0.2
+   ],
+   "intensity": 300
+  }
+ },
+ "camera": {
+  "location": [
+   0,
+   6,
+   -34
+  ],
+  "lookat": [
+   0,
+   0,
+   0
+  ],
+  "up": [
+   0,
+   1,
+   0
+  ],
+  "angle": 0.6
+ },
+ "objects": [
+  {
+   "type": "plane",
+   "y": 0,
+   "material": "GROUND"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.853,
+    0.4,
+    -28.71
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.469,
+    0.4,
+    -26.712
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -29.565,
+    0.4,
+    -25.041
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.821,
+    0.4,
+    -22.519
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -29.154,
+    0.4,
+    -20.558
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.947,
+    0.4,
+    -18.911
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.723,
+    0.4,
+    -17.11
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.5,
+    0.4,
+    -14.681
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.686,
+    0.4,
+    -13.514
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.859,
+    0.4,
+    -11.448
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.433,
+    0.4,
+    -9.594
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.448,
+    0.4,
+    -7.401
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -29.253,
+    0.4,
+    -4.446
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.549,
+    0.4,
+    -2.849
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.471,
+    0.4,
+    -0.771
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -29.241,
+    0.4,
+    0.833
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.477,
+    0.4,
+    2.717
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -29.238,
+    0.4,
+    5.124
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.885,
+    0.4,
+    7.249
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -29.228,
+    0.4,
+    9.382
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.764,
+    0.4,
+    10.622
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.754,
+    0.4,
+    12.468
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.461,
+    0.4,
+    14.829
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -29.578,
+    0.4,
+    17.345
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -29.148,
+    0.4,
+    19.409
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -29.544,
+    0.4,
+    20.617
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -29.457,
+    0.4,
+    22.695
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -29.187,
+    0.4,
+    24.826
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -29.299,
+    0.4,
+    26.955
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -28.702,
+    0.4,
+    29.357
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -27.556,
+    0.4,
+    -28.465
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -27.35,
+    0.4,
+    -26.985
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -26.498,
+    0.4,
+    -25.192
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -26.946,
+    0.4,
+    -23.225
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -27.233,
+    0.4,
+    -20.641
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -27.421,
+    0.4,
+    -18.773
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -27.406,
+    0.4,
+    -17.542
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -26.96,
+    0.4,
+    -15.113
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -26.711,
+    0.4,
+    -13.187
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -27.053,
+    0.4,
+    -11.094
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -26.425,
+    0.4,
+    -8.834
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -27.199,
+    0.4,
+    -7.352
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -26.923,
+    0.4,
+    -5.441
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -27.472,
+    0.4,
+    -3.079
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -27.529,
+    0.4,
+    -1.095
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -27.056,
+    0.4,
+    1.599
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -26.429,
+    0.4,
+    2.944
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -26.773,
+    0.4,
+    4.781
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -27.251,
+    0.4,
+    6.885
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -27.465,
+    0.4,
+    9.386
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -26.448,
+    0.4,
+    11.152
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -26.559,
+    0.4,
+    12.616
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -27.273,
+    0.4,
+    15.338
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -27.166,
+    0.4,
+    17.343
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -26.766,
+    0.4,
+    19.197
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -27.164,
+    0.4,
+    21.245
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -26.598,
+    0.4,
+    22.718
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -26.741,
+    0.4,
+    25.548
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -26.82,
+    0.4,
+    27.097
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -27.031,
+    0.4,
+    29.328
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -24.794,
+    0.4,
+    -29.044
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -24.823,
+    0.4,
+    -26.643
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -25.271,
+    0.4,
+    -25.185
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -25.18,
+    0.4,
+    -22.589
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -25.06,
+    0.4,
+    -21.163
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -24.978,
+    0.4,
+    -18.965
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -25.362,
+    0.4,
+    -17.166
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -25.261,
+    0.4,
+    -15.505
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -24.724,
+    0.4,
+    -13.394
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -24.98,
+    0.4,
+    -10.476
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -24.852,
+    0.4,
+    -8.67
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -25.275,
+    0.4,
+    -6.405
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -25.408,
+    0.4,
+    -5.071
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -25.383,
+    0.4,
+    -2.689
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -24.843,
+    0.4,
+    -1.55
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -24.424,
+    0.4,
+    0.599
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -25.467,
+    0.4,
+    3.562
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -25.368,
+    0.4,
+    4.443
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -25.179,
+    0.4,
+    7.195
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -24.892,
+    0.4,
+    8.685
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -25.599,
+    0.4,
+    10.886
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -24.573,
+    0.4,
+    13.44
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -24.602,
+    0.4,
+    14.849
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -24.94,
+    0.4,
+    16.762
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -24.946,
+    0.4,
+    18.807
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -25.248,
+    0.4,
+    20.822
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -25.097,
+    0.4,
+    23.376
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -24.954,
+    0.4,
+    24.961
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -24.885,
+    0.4,
+    27.077
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -24.438,
+    0.4,
+    29.13
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -22.615,
+    0.4,
+    -28.806
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -23.47,
+    0.4,
+    -26.921
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -22.953,
+    0.4,
+    -25.209
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -23.149,
+    0.4,
+    -23.082
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -23.008,
+    0.4,
+    -21.025
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -23.144,
+    0.4,
+    -18.447
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -22.885,
+    0.4,
+    -17.288
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -23.004,
+    0.4,
+    -15.101
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -22.466,
+    0.4,
+    -13.231
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -23.428,
+    0.4,
+    -11.571
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -22.854,
+    0.4,
+    -9.068
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -23.552,
+    0.4,
+    -7.436
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -23.584,
+    0.4,
+    -4.961
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -23.308,
+    0.4,
+    -3.031
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -23.305,
+    0.4,
+    -1.279
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -22.734,
+    0.4,
+    0.743
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -22.87,
+    0.4,
+    2.97
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -22.564,
+    0.4,
+    5.457
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -23.581,
+    0.4,
+    6.551
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -22.96,
+    0.4,
+    8.803
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -22.722,
+    0.4,
+    10.432
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -23.167,
+    0.4,
+    13.294
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -23.441,
+    0.4,
+    14.403
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -23.053,
+    0.4,
+    17.5
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -22.945,
+    0.4,
+    18.417
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -22.886,
+    0.4,
+    21.227
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -22.821,
+    0.4,
+    23.43
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -23.029,
+    0.4,
+    25.219
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -23.364,
+    0.4,
+    26.756
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -23.236,
+    0.4,
+    28.404
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -20.901,
+    0.4,
+    -28.822
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -20.507,
+    0.4,
+    -27.429
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -20.766,
+    0.4,
+    -24.534
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -20.954,
+    0.4,
+    -23.089
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -20.626,
+    0.4,
+    -21.518
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -21.279,
+    0.4,
+    -19.498
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -20.804,
+    0.4,
+    -17.569
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -21.085,
+    0.4,
+    -15.518
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -20.759,
+    0.4,
+    -13.541
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -21.337,
+    0.4,
+    -10.825
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -20.745,
+    0.4,
+    -9.438
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -20.753,
+    0.4,
+    -7.074
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -20.867,
+    0.4,
+    -5.103
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -21.519,
+    0.4,
+    -3.344
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -21.47,
+    0.4,
+    -1.145
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -21.264,
+    0.4,
+    1.085
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -20.709,
+    0.4,
+    3.454
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -21.588,
+    0.4,
+    4.51
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -20.88,
+    0.4,
+    6.987
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -21.151,
+    0.4,
+    8.467
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -21.246,
+    0.4,
+    11.082
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -20.993,
+    0.4,
+    13.493
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -20.94,
+    0.4,
+    14.665
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -20.938,
+    0.4,
+    16.705
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -20.98,
+    0.4,
+    18.561
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -20.564,
+    0.4,
+    20.944
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -21.385,
+    0.4,
+    23.256
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -21.19,
+    0.4,
+    25.088
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -21.491,
+    0.4,
+    26.55
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -21.056,
+    0.4,
+    28.868
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.023,
+    0.4,
+    -29.212
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.565,
+    0.4,
+    -26.73
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -18.582,
+    0.4,
+    -24.466
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -18.783,
+    0.4,
+    -23.332
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.499,
+    0.4,
+    -20.506
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -18.615,
+    0.4,
+    -19.432
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.149,
+    0.4,
+    -16.597
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.2,
+    0.4,
+    -14.863
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -18.645,
+    0.4,
+    -13.146
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -18.603,
+    0.4,
+    -10.823
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.08,
+    0.4,
+    -8.578
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.556,
+    0.4,
+    -6.408
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -18.712,
+    0.4,
+    -5.125
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.555,
+    0.4,
+    -3.376
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.553,
+    0.4,
+    -0.533
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -18.807,
+    0.4,
+    0.818
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.036,
+    0.4,
+    3.468
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -18.494,
+    0.4,
+    4.788
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.48,
+    0.4,
+    6.586
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.515,
+    0.4,
+    9.443
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.417,
+    0.4,
+    10.705
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -18.618,
+    0.4,
+    13.3
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.318,
+    0.4,
+    14.978
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.187,
+    0.4,
+    17.302
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -18.474,
+    0.4,
+    19.225
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.052,
+    0.4,
+    21.419
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.459,
+    0.4,
+    23.202
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.055,
+    0.4,
+    24.688
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.56,
+    0.4,
+    27.258
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -19.323,
+    0.4,
+    28.494
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -16.506,
+    0.4,
+    -28.752
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -17.226,
+    0.4,
+    -27.038
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -17.52,
+    0.4,
+    -24.408
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -17.404,
+    0.4,
+    -23.311
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -17.349,
+    0.4,
+    -21.547
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -17.083,
+    0.4,
+    -18.429
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -17.046,
+    0.4,
+    -17.056
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -17.108,
+    0.4,
+    -15.546
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -16.597,
+    0.4,
+    -12.595
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -17.18,
+    0.4,
+    -11.487
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -17.316,
+    0.4,
+    -8.636
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -16.477,
+    0.4,
+    -7.535
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -16.827,
+    0.4,
+    -5.003
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -17.543,
+    0.4,
+    -2.6
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -17.233,
+    0.4,
+    -1.538
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -16.46,
+    0.4,
+    0.633
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -16.99,
+    0.4,
+    2.883
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -17.32,
+    0.4,
+    5.512
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -17.496,
+    0.4,
+    7.582
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -16.882,
+    0.4,
+    9.428
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -16.85,
+    0.4,
+    10.929
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -17.016,
+    0.4,
+    13.086
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -16.973,
+    0.4,
+    14.559
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -16.504,
+    0.4,
+    16.769
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -16.53,
+    0.4,
+    19.6
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -17.461,
+    0.4,
+    20.774
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -16.664,
+    0.4,
+    22.716
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -17.225,
+    0.4,
+    24.556
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -17.034,
+    0.4,
+    27.237
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -16.439,
+    0.4,
+    29.2
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -15.526,
+    0.4,
+    -28.759
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -14.756,
+    0.4,
+    -26.645
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -14.537,
+    0.4,
+    -25.514
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -15.144,
+    0.4,
+    -22.677
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -14.525,
+    0.4,
+    -20.815
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -14.91,
+    0.4,
+    -19.069
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -14.813,
+    0.4,
+    -16.454
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -15.543,
+    0.4,
+    -15.087
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -14.626,
+    0.4,
+    -13.141
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -15.214,
+    0.4,
+    -11.232
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -15.285,
+    0.4,
+    -8.789
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -15.559,
+    0.4,
+    -6.949
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -14.931,
+    0.4,
+    -5.567
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -14.437,
+    0.4,
+    -2.608
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -14.568,
+    0.4,
+    -0.461
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -15.58,
+    0.4,
+    1.033
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -15.165,
+    0.4,
+    2.796
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -15.404,
+    0.4,
+    5.143
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -14.728,
+    0.4,
+    6.514
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -14.873,
+    0.4,
+    9.157
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -15.065,
+    0.4,
+    11.526
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -15.458,
+    0.4,
+    12.78
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -15.047,
+    0.4,
+    14.921
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -15.542,
+    0.4,
+    17.202
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -14.961,
+    0.4,
+    19.564
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -15.598,
+    0.4,
+    20.552
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -14.777,
+    0.4,
+    22.649
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -15.561,
+    0.4,
+    25.092
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -14.754,
+    0.4,
+    26.825
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -15.341,
+    0.4,
+    28.732
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -13.236,
+    0.4,
+    -28.981
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -13.16,
+    0.4,
+    -26.629
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -12.592,
+    0.4,
+    -24.58
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -13.007,
+    0.4,
+    -23.181
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -12.602,
+    0.4,
+    -21.012
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -13.487,
+    0.4,
+    -19.124
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -13.262,
+    0.4,
+    -16.495
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -13.027,
+    0.4,
+    -15.036
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -12.852,
+    0.4,
+    -12.64
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -12.774,
+    0.4,
+    -11.476
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -12.896,
+    0.4,
+    -9.378
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -13.573,
+    0.4,
+    -6.786
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -13.226,
+    0.4,
+    -5.141
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -12.945,
+    0.4,
+    -2.771
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -12.421,
+    0.4,
+    -0.621
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -12.931,
+    0.4,
+    0.473
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -12.642,
+    0.4,
+    2.835
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -13.576,
+    0.4,
+    5.324
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -13.259,
+    0.4,
+    6.493
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -12.672,
+    0.4,
+    9.133
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -13.104,
+    0.4,
+    11.562
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -13.27,
+    0.4,
+    13.259
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -13.555,
+    0.4,
+    14.506
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -12.523,
+    0.4,
+    17.225
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -12.873,
+    0.4,
+    19.074
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -12.98,
+    0.4,
+    21.475
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -13.19,
+    0.4,
+    23.343
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -13.128,
+    0.4,
+    24.404
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -13.146,
+    0.4,
+    27.301
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -12.521,
+    0.4,
+    29.492
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.214,
+    0.4,
+    -29.211
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -10.533,
+    0.4,
+    -26.774
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.301,
+    0.4,
+    -25.48
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.233,
+    0.4,
+    -23.279
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.506,
+    0.4,
+    -20.459
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -10.841,
+    0.4,
+    -18.68
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -10.813,
+    0.4,
+    -16.916
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -10.604,
+    0.4,
+    -14.546
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.112,
+    0.4,
+    -13.323
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -10.965,
+    0.4,
+    -10.514
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.098,
+    0.4,
+    -9.499
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.375,
+    0.4,
+    -7.563
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.245,
+    0.4,
+    -4.934
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.379,
+    0.4,
+    -3.372
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.477,
+    0.4,
+    -0.656
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -10.725,
+    0.4,
+    0.474
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.435,
+    0.4,
+    3.023
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.218,
+    0.4,
+    5.42
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.139,
+    0.4,
+    7.482
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -10.862,
+    0.4,
+    9.357
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.598,
+    0.4,
+    11.207
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.489,
+    0.4,
+    12.582
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -10.688,
+    0.4,
+    15.09
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -10.717,
+    0.4,
+    17.38
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -10.744,
+    0.4,
+    19.509
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -10.85,
+    0.4,
+    21.558
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.162,
+    0.4,
+    23.377
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.352,
+    0.4,
+    24.849
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -10.531,
+    0.4,
+    27.585
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -11.305,
+    0.4,
+    29.53
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -9.15,
+    0.4,
+    -29.459
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -8.445,
+    0.4,
+    -27.441
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -9.005,
+    0.4,
+    -24.445
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -9.513,
+    0.4,
+    -22.688
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -8.745,
+    0.4,
+    -21.581
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -8.401,
+    0.4,
+    -18.699
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -8.498,
+    0.4,
+    -17.141
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -8.513,
+    0.4,
+    -14.829
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -8.909,
+    0.4,
+    -13.245
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -8.468,
+    0.4,
+    -11.524
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -9.54,
+    0.4,
+    -9.095
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -9.275,
+    0.4,
+    -6.736
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -9.275,
+    0.4,
+    -5.485
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -9.081,
+    0.4,
+    -3.384
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -8.573,
+    0.4,
+    -1.306
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -9.173,
+    0.4,
+    1.373
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -8.618,
+    0.4,
+    2.569
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -9.574,
+    0.4,
+    5.075
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -8.558,
+    0.4,
+    6.494
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -9.367,
+    0.4,
+    9.364
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -9.034,
+    0.4,
+    10.502
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -8.882,
+    0.4,
+    13.407
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -8.991,
+    0.4,
+    14.464
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -8.675,
+    0.4,
+    17.0
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -8.472,
+    0.4,
+    19.193
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -8.837,
+    0.4,
+    20.443
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -9.094,
+    0.4,
+    23.268
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -8.502,
+    0.4,
+    24.854
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -8.53,
+    0.4,
+    26.578
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -9.093,
+    0.4,
+    29.567
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -7.34,
+    0.4,
+    -29.094
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -7.433,
+    0.4,
+    -27.164
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.8,
+    0.4,
+    -25.452
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.69,
+    0.4,
+    -23.508
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -7.143,
+    0.4,
+    -20.523
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -7.364,
+    0.4,
+    -19.578
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.447,
+    0.4,
+    -16.881
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -7.038,
+    0.4,
+    -15.507
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.475,
+    0.4,
+    -13.563
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.625,
+    0.4,
+    -11.497
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.695,
+    0.4,
+    -9.152
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -7.418,
+    0.4,
+    -6.978
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.931,
+    0.4,
+    -5.26
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.828,
+    0.4,
+    -3.15
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.512,
+    0.4,
+    -0.943
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.441,
+    0.4,
+    0.689
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -7.431,
+    0.4,
+    2.421
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.722,
+    0.4,
+    4.56
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.802,
+    0.4,
+    6.467
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.675,
+    0.4,
+    8.903
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.741,
+    0.4,
+    10.683
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -7.533,
+    0.4,
+    13.001
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.769,
+    0.4,
+    15.461
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.931,
+    0.4,
+    16.927
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.814,
+    0.4,
+    19.51
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.918,
+    0.4,
+    20.731
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -6.475,
+    0.4,
+    23.54
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -7.238,
+    0.4,
+    24.6
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -7.507,
+    0.4,
+    26.938
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -7.346,
+    0.4,
+    29.143
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -4.491,
+    0.4,
+    -29.241
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -5.152,
+    0.4,
+    -27.11
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -5.179,
+    0.4,
+    -25.007
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -4.922,
+    0.4,
+    -22.92
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -5.528,
+    0.4,
+    -21.494
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -4.538,
+    0.4,
+    -19.151
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -5.284,
+    0.4,
+    -17.269
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -4.711,
+    0.4,
+    -15.285
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -4.849,
+    0.4,
+    -13.134
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -4.653,
+    0.4,
+    -10.758
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -4.548,
+    0.4,
+    -9.074
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -4.887,
+    0.4,
+    -6.921
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -5.174,
+    0.4,
+    -5.452
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -5.548,
+    0.4,
+    -2.611
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -4.791,
+    0.4,
+    -0.82
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -4.893,
+    0.4,
+    0.541
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -4.963,
+    0.4,
+    2.931
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -5.334,
+    0.4,
+    5.539
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -4.753,
+    0.4,
+    7.263
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -5.489,
+    0.4,
+    8.48
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -5.235,
+    0.4,
+    11.029
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -4.735,
+    0.4,
+    12.483
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -4.784,
+    0.4,
+    14.728
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -4.695,
+    0.4,
+    16.71
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -5.241,
+    0.4,
+    19.455
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -4.981,
+    0.4,
+    21.482
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -5.143,
+    0.4,
+    23.187
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -5.222,
+    0.4,
+    25.134
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -5.494,
+    0.4,
+    26.823
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -4.832,
+    0.4,
+    28.925
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -2.819,
+    0.4,
+    -29.39
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -2.502,
+    0.4,
+    -27.396
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -3.063,
+    0.4,
+    -24.912
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -3.426,
+    0.4,
+    -23.279
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -2.997,
+    0.4,
+    -20.459
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -2.934,
+    0.4,
+    -18.805
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -2.937,
+    0.4,
+    -17.298
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -3.248,
+    0.4,
+    -15.471
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -3.09,
+    0.4,
+    -12.585
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -3.282,
+    0.4,
+    -10.845
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -3.496,
+    0.4,
+    -8.624
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -2.676,
+    0.4,
+    -7.196
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -2.555,
+    0.4,
+    -5.259
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -3.385,
+    0.4,
+    -2.668
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -3.139,
+    0.4,
+    -0.836
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -2.681,
+    0.4,
+    0.52
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -2.541,
+    0.4,
+    2.774
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -2.74,
+    0.4,
+    4.893
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -3.525,
+    0.4,
+    6.762
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -3.553,
+    0.4,
+    8.513
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -2.524,
+    0.4,
+    11.008
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -3.046,
+    0.4,
+    12.486
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -3.568,
+    0.4,
+    15.078
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -2.818,
+    0.4,
+    17.218
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -2.48,
+    0.4,
+    19.535
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -3.144,
+    0.4,
+    20.604
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -3.462,
+    0.4,
+    23.045
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -2.814,
+    0.4,
+    25.197
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -3.075,
+    0.4,
+    26.727
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -3.055,
+    0.4,
+    29.385
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -1.349,
+    0.4,
+    -28.982
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -1.142,
+    0.4,
+    -26.839
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -1.209,
+    0.4,
+    -24.627
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -1.515,
+    0.4,
+    -23.233
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -1.041,
+    0.4,
+    -21.068
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -0.837,
+    0.4,
+    -19.293
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -0.707,
+    0.4,
+    -17.293
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -1.115,
+    0.4,
+    -14.748
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -1.439,
+    0.4,
+    -13.357
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -0.46,
+    0.4,
+    -10.677
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -0.403,
+    0.4,
+    -9.44
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -0.829,
+    0.4,
+    -6.737
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -0.856,
+    0.4,
+    -4.571
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -0.638,
+    0.4,
+    -3.022
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -0.904,
+    0.4,
+    -1.298
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -0.763,
+    0.4,
+    1.051
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -1.453,
+    0.4,
+    3.317
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -0.907,
+    0.4,
+    4.978
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -0.55,
+    0.4,
+    7.026
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -1.262,
+    0.4,
+    8.801
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -1.441,
+    0.4,
+    10.904
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -1.155,
+    0.4,
+    13.328
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -0.814,
+    0.4,
+    15.308
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -1.561,
+    0.4,
+    16.985
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -1.225,
+    0.4,
+    19.424
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -1.261,
+    0.4,
+    21.386
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -0.789,
+    0.4,
+    22.808
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -0.971,
+    0.4,
+    24.793
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -0.863,
+    0.4,
+    27.355
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    -0.908,
+    0.4,
+    29.182
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.349,
+    0.4,
+    -28.674
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    0.452,
+    0.4,
+    -26.958
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.566,
+    0.4,
+    -24.716
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.569,
+    0.4,
+    -22.577
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.199,
+    0.4,
+    -21.121
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    0.862,
+    0.4,
+    -18.826
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.175,
+    0.4,
+    -16.496
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.188,
+    0.4,
+    -14.902
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.517,
+    0.4,
+    -13.152
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    0.768,
+    0.4,
+    -10.718
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.069,
+    0.4,
+    -8.939
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.341,
+    0.4,
+    -6.728
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.037,
+    0.4,
+    -5.597
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    0.468,
+    0.4,
+    -3.583
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    0.528,
+    0.4,
+    -1.05
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.479,
+    0.4,
+    0.963
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.026,
+    0.4,
+    2.43
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.321,
+    0.4,
+    5.148
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.137,
+    0.4,
+    7.259
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    0.645,
+    0.4,
+    9.182
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.587,
+    0.4,
+    10.642
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.236,
+    0.4,
+    12.641
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    0.843,
+    0.4,
+    14.507
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    0.875,
+    0.4,
+    16.44
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    0.76,
+    0.4,
+    19.275
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    0.87,
+    0.4,
+    21.326
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.473,
+    0.4,
+    23.227
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    0.558,
+    0.4,
+    25.48
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    0.89,
+    0.4,
+    26.432
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    1.03,
+    0.4,
+    28.642
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    3.432,
+    0.4,
+    -28.78
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    3.445,
+    0.4,
+    -26.499
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    3.389,
+    0.4,
+    -24.52
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    3.459,
+    0.4,
+    -22.744
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    3.279,
+    0.4,
+    -21.357
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.7,
+    0.4,
+    -18.782
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.63,
+    0.4,
+    -16.96
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.839,
+    0.4,
+    -15.486
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.92,
+    0.4,
+    -12.621
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.746,
+    0.4,
+    -11.592
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    3.247,
+    0.4,
+    -8.462
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.407,
+    0.4,
+    -6.94
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    3.272,
+    0.4,
+    -4.537
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.581,
+    0.4,
+    -3.592
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    3.268,
+    0.4,
+    -1.156
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.718,
+    0.4,
+    1.086
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    3.13,
+    0.4,
+    3.044
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.872,
+    0.4,
+    5.071
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.676,
+    0.4,
+    6.754
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.485,
+    0.4,
+    9.044
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.5,
+    0.4,
+    11.186
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.513,
+    0.4,
+    13.276
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.609,
+    0.4,
+    14.82
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.771,
+    0.4,
+    17.213
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    3.512,
+    0.4,
+    19.468
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    3.445,
+    0.4,
+    21.218
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.449,
+    0.4,
+    23.016
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.66,
+    0.4,
+    24.765
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    2.734,
+    0.4,
+    26.939
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    3.564,
+    0.4,
+    29.02
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    5.398,
+    0.4,
+    -28.892
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    5.517,
+    0.4,
+    -27.25
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    4.592,
+    0.4,
+    -24.849
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    4.506,
+    0.4,
+    -23.189
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    4.827,
+    0.4,
+    -21.475
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    4.518,
+    0.4,
+    -18.565
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    4.443,
+    0.4,
+    -16.441
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    5.446,
+    0.4,
+    -15.53
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    5.467,
+    0.4,
+    -13.229
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    5.386,
+    0.4,
+    -10.997
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    5.016,
+    0.4,
+    -9.488
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    5.084,
+    0.4,
+    -7.058
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    4.636,
+    0.4,
+    -4.726
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    4.549,
+    0.4,
+    -3.524
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    5.455,
+    0.4,
+    -1.233
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    4.905,
+    0.4,
+    1.528
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    4.61,
+    0.4,
+    2.935
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    4.766,
+    0.4,
+    5.081
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    5.306,
+    0.4,
+    7.486
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    5.507,
+    0.4,
+    8.754
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    4.741,
+    0.4,
+    11.188
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    4.92,
+    0.4,
+    12.756
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    4.799,
+    0.4,
+    15.232
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    5.077,
+    0.4,
+    16.874
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    5.143,
+    0.4,
+    19.417
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    4.839,
+    0.4,
+    21.596
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    4.506,
+    0.4,
+    22.925
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    4.845,
+    0.4,
+    25.341
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    5.528,
+    0.4,
+    26.868
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    5.596,
+    0.4,
+    28.556
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    7.36,
+    0.4,
+    -28.949
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    6.733,
+    0.4,
+    -27.392
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    6.411,
+    0.4,
+    -24.78
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    6.706,
+    0.4,
+    -22.857
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    7.493,
+    0.4,
+    -20.981
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    6.744,
+    0.4,
+    -19.557
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    7.191,
+    0.4,
+    -17.308
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    7.45,
+    0.4,
+    -14.799
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    7.481,
+    0.4,
+    -12.666
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    6.519,
+    0.4,
+    -11.196
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    6.595,
+    0.4,
+    -8.479
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    6.635,
+    0.4,
+    -7.56
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    7.031,
+    0.4,
+    -5.545
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    7.591,
+    0.4,
+    -3.204
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    6.665,
+    0.4,
+    -1.053
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    7.238,
+    0.4,
+    1.311
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    7.581,
+    0.4,
+    2.774
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    7.479,
+    0.4,
+    5.161
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    7.101,
+    0.4,
+    7.506
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    7.339,
+    0.4,
+    8.706
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    7.332,
+    0.4,
+    10.768
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    6.611,
+    0.4,
+    13.264
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    7.406,
+    0.4,
+    15.321
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    7.419,
+    0.4,
+    17.421
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    7.296,
+    0.4,
+    19.307
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    6.662,
+    0.4,
+    21.198
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    6.739,
+    0.4,
+    22.444
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    6.404,
+    0.4,
+    24.577
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    6.497,
+    0.4,
+    26.697
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    6.689,
+    0.4,
+    29.137
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    9.404,
+    0.4,
+    -28.707
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    9.536,
+    0.4,
+    -26.974
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    8.781,
+    0.4,
+    -24.839
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    8.754,
+    0.4,
+    -23.421
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    9.11,
+    0.4,
+    -21.362
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    9.077,
+    0.4,
+    -19.493
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    8.646,
+    0.4,
+    -16.803
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    8.661,
+    0.4,
+    -14.59
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    8.648,
+    0.4,
+    -12.495
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    9.127,
+    0.4,
+    -10.862
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    9.115,
+    0.4,
+    -9.334
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    9.155,
+    0.4,
+    -6.771
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    9.116,
+    0.4,
+    -4.892
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    9.18,
+    0.4,
+    -2.788
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    8.816,
+    0.4,
+    -1.03
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    9.59,
+    0.4,
+    0.417
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    9.072,
+    0.4,
+    3.127
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    9.344,
+    0.4,
+    4.855
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    9.422,
+    0.4,
+    7.127
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    8.561,
+    0.4,
+    8.935
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    9.157,
+    0.4,
+    11.29
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    9.515,
+    0.4,
+    12.425
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    8.617,
+    0.4,
+    15.056
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    8.724,
+    0.4,
+    16.594
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    9.392,
+    0.4,
+    18.725
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    8.822,
+    0.4,
+    21.234
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    8.692,
+    0.4,
+    23.124
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    9.367,
+    0.4,
+    24.854
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    8.481,
+    0.4,
+    26.874
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    8.887,
+    0.4,
+    29.47
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.527,
+    0.4,
+    -29.526
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.135,
+    0.4,
+    -27.547
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.326,
+    0.4,
+    -25.29
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.221,
+    0.4,
+    -23.159
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.37,
+    0.4,
+    -20.788
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.511,
+    0.4,
+    -18.751
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.428,
+    0.4,
+    -16.491
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.137,
+    0.4,
+    -14.855
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    10.74,
+    0.4,
+    -12.423
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    10.991,
+    0.4,
+    -10.971
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    10.611,
+    0.4,
+    -8.626
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.527,
+    0.4,
+    -7.068
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    10.686,
+    0.4,
+    -5.316
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.257,
+    0.4,
+    -2.452
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    10.547,
+    0.4,
+    -1.065
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.048,
+    0.4,
+    1.347
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    10.576,
+    0.4,
+    2.984
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.215,
+    0.4,
+    4.568
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.363,
+    0.4,
+    7.394
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.411,
+    0.4,
+    8.929
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.535,
+    0.4,
+    11.307
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.346,
+    0.4,
+    12.923
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.024,
+    0.4,
+    15.307
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.257,
+    0.4,
+    17.565
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    11.015,
+    0.4,
+    19.417
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    10.788,
+    0.4,
+    21.324
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    10.782,
+    0.4,
+    23.0
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    10.644,
+    0.4,
+    25.058
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    10.733,
+    0.4,
+    26.758
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    10.69,
+    0.4,
+    29.201
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.995,
+    0.4,
+    -28.495
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.794,
+    0.4,
+    -27.289
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.923,
+    0.4,
+    -25.223
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.685,
+    0.4,
+    -23.256
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    13.53,
+    0.4,
+    -21.175
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    13.592,
+    0.4,
+    -19.475
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.974,
+    0.4,
+    -17.459
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    13.156,
+    0.4,
+    -15.548
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    13.342,
+    0.4,
+    -13.474
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.761,
+    0.4,
+    -11.426
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.781,
+    0.4,
+    -8.464
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.917,
+    0.4,
+    -6.819
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.404,
+    0.4,
+    -5.289
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    13.26,
+    0.4,
+    -2.715
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.408,
+    0.4,
+    -1.232
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.566,
+    0.4,
+    1.264
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.579,
+    0.4,
+    3.585
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    13.439,
+    0.4,
+    4.734
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.912,
+    0.4,
+    7.025
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.976,
+    0.4,
+    9.286
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.519,
+    0.4,
+    11.025
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.693,
+    0.4,
+    12.907
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    13.1,
+    0.4,
+    15.17
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    13.146,
+    0.4,
+    17.028
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    13.207,
+    0.4,
+    18.968
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.84,
+    0.4,
+    20.577
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.429,
+    0.4,
+    23.141
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.412,
+    0.4,
+    25.21
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    13.073,
+    0.4,
+    27.477
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    12.71,
+    0.4,
+    28.672
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.98,
+    0.4,
+    -29.518
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    15.138,
+    0.4,
+    -26.44
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.75,
+    0.4,
+    -24.744
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    15.206,
+    0.4,
+    -23.038
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    15.197,
+    0.4,
+    -21.539
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    15.021,
+    0.4,
+    -18.555
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.651,
+    0.4,
+    -17.319
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    15.33,
+    0.4,
+    -15.085
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.935,
+    0.4,
+    -12.525
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.99,
+    0.4,
+    -10.659
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.934,
+    0.4,
+    -9.404
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.979,
+    0.4,
+    -6.537
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.486,
+    0.4,
+    -5.046
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    15.509,
+    0.4,
+    -2.595
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.693,
+    0.4,
+    -0.981
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    15.187,
+    0.4,
+    1.49
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    15.023,
+    0.4,
+    3.292
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.814,
+    0.4,
+    4.605
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.857,
+    0.4,
+    6.893
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.72,
+    0.4,
+    8.894
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    15.116,
+    0.4,
+    11.302
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.81,
+    0.4,
+    12.454
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    15.491,
+    0.4,
+    14.913
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    15.138,
+    0.4,
+    16.971
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.536,
+    0.4,
+    19.598
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.663,
+    0.4,
+    20.535
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.854,
+    0.4,
+    22.778
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.818,
+    0.4,
+    24.895
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    15.407,
+    0.4,
+    26.773
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    14.605,
+    0.4,
+    29.461
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.309,
+    0.4,
+    -29.206
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.167,
+    0.4,
+    -27.17
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    16.507,
+    0.4,
+    -25.422
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.004,
+    0.4,
+    -23.015
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    16.599,
+    0.4,
+    -21.363
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    16.926,
+    0.4,
+    -18.65
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.146,
+    0.4,
+    -16.893
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.118,
+    0.4,
+    -15.473
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.016,
+    0.4,
+    -12.751
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    16.795,
+    0.4,
+    -11.294
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.417,
+    0.4,
+    -8.562
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    16.829,
+    0.4,
+    -7.077
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.468,
+    0.4,
+    -5.463
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    16.663,
+    0.4,
+    -2.413
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.229,
+    0.4,
+    -0.42
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    16.745,
+    0.4,
+    1.467
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    16.874,
+    0.4,
+    2.593
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.399,
+    0.4,
+    4.745
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    16.877,
+    0.4,
+    6.945
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    16.718,
+    0.4,
+    8.796
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.189,
+    0.4,
+    10.966
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.331,
+    0.4,
+    12.684
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.357,
+    0.4,
+    14.5
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.118,
+    0.4,
+    17.574
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    16.528,
+    0.4,
+    18.832
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    16.996,
+    0.4,
+    20.906
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.122,
+    0.4,
+    22.786
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.09,
+    0.4,
+    24.547
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.346,
+    0.4,
+    27.155
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    17.106,
+    0.4,
+    29.091
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    18.996,
+    0.4,
+    -28.515
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    18.819,
+    0.4,
+    -27.445
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    19.298,
+    0.4,
+    -24.683
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    18.531,
+    0.4,
+    -23.063
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    18.659,
+    0.4,
+    -20.798
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    18.491,
+    0.4,
+    -18.702
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    19.108,
+    0.4,
+    -16.652
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    19.126,
+    0.4,
+    -14.8
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    19.277,
+    0.4,
+    -13.078
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    18.996,
+    0.4,
+    -11.469
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    19.058,
+    0.4,
+    -8.871
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    19.125,
+    0.4,
+    -7.0
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    18.567,
+    0.4,
+    -4.564
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    18.72,
+    0.4,
+    -2.781
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    19.303,
+    0.4,
+    -1.101
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    19.108,
+    0.4,
+    0.95
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    18.988,
+    0.4,
+    3.38
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    19.383,
+    0.4,
+    4.971
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    19.555,
+    0.4,
+    6.544
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    18.432,
+    0.4,
+    9.044
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    19.455,
+    0.4,
+    10.632
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    19.04,
+    0.4,
+    13.522
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    18.792,
+    0.4,
+    15.476
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    19.589,
+    0.4,
+    16.807
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    18.489,
+    0.4,
+    18.492
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    18.484,
+    0.4,
+    21.419
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    18.488,
+    0.4,
+    23.47
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    18.924,
+    0.4,
+    25.403
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    18.691,
+    0.4,
+    26.842
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    18.501,
+    0.4,
+    29.195
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    20.772,
+    0.4,
+    -29.558
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    21.486,
+    0.4,
+    -26.889
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    21.45,
+    0.4,
+    -25.215
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    21.109,
+    0.4,
+    -23.421
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    20.93,
+    0.4,
+    -21.365
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    21.212,
+    0.4,
+    -18.658
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    20.992,
+    0.4,
+    -17.512
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    20.494,
+    0.4,
+    -14.555
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    21.098,
+    0.4,
+    -12.967
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    20.476,
+    0.4,
+    -11.574
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    21.387,
+    0.4,
+    -9.484
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    20.969,
+    0.4,
+    -6.523
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    21.045,
+    0.4,
+    -5.316
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    21.427,
+    0.4,
+    -2.759
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    20.822,
+    0.4,
+    -1.552
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    21.252,
+    0.4,
+    0.964
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    20.666,
+    0.4,
+    3.563
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    20.956,
+    0.4,
+    4.652
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    21.574,
+    0.4,
+    6.612
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    20.55,
+    0.4,
+    9.11
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    20.969,
+    0.4,
+    11.221
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    21.518,
+    0.4,
+    12.976
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    20.666,
+    0.4,
+    15.055
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    21.521,
+    0.4,
+    16.587
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    21.499,
+    0.4,
+    18.714
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    21.044,
+    0.4,
+    21.229
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    21.577,
+    0.4,
+    22.834
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    21.572,
+    0.4,
+    25.235
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    21.316,
+    0.4,
+    27.269
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    20.7,
+    0.4,
+    28.802
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.564,
+    0.4,
+    -28.463
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    22.749,
+    0.4,
+    -27.294
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.567,
+    0.4,
+    -24.51
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    22.546,
+    0.4,
+    -23.449
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.327,
+    0.4,
+    -21.28
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.534,
+    0.4,
+    -18.484
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.191,
+    0.4,
+    -16.56
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    22.957,
+    0.4,
+    -14.951
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.408,
+    0.4,
+    -12.804
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.461,
+    0.4,
+    -10.751
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.534,
+    0.4,
+    -9.545
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    22.901,
+    0.4,
+    -7.156
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.463,
+    0.4,
+    -4.745
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.471,
+    0.4,
+    -2.456
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.01,
+    0.4,
+    -0.563
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.599,
+    0.4,
+    1.348
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.247,
+    0.4,
+    2.866
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    22.495,
+    0.4,
+    5.265
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.102,
+    0.4,
+    7.39
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.6,
+    0.4,
+    9.595
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.488,
+    0.4,
+    10.835
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.392,
+    0.4,
+    13.07
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    22.635,
+    0.4,
+    15.558
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    22.711,
+    0.4,
+    17.566
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    22.632,
+    0.4,
+    18.6
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    22.486,
+    0.4,
+    21.503
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.18,
+    0.4,
+    23.453
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.095,
+    0.4,
+    25.393
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    22.907,
+    0.4,
+    26.856
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    23.586,
+    0.4,
+    28.931
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    25.359,
+    0.4,
+    -28.843
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    24.555,
+    0.4,
+    -26.432
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    25.347,
+    0.4,
+    -25.32
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    24.719,
+    0.4,
+    -23.405
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    24.904,
+    0.4,
+    -20.49
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    24.562,
+    0.4,
+    -18.768
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    25.009,
+    0.4,
+    -17.407
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    25.381,
+    0.4,
+    -14.775
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    25.441,
+    0.4,
+    -12.521
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    25.129,
+    0.4,
+    -11.464
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    24.754,
+    0.4,
+    -9.566
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    24.997,
+    0.4,
+    -7.363
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    24.998,
+    0.4,
+    -5.522
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    24.795,
+    0.4,
+    -3.314
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    24.93,
+    0.4,
+    -1.589
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    24.965,
+    0.4,
+    0.888
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    24.818,
+    0.4,
+    3.143
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    24.579,
+    0.4,
+    5.46
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    24.692,
+    0.4,
+    6.696
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    25.243,
+    0.4,
+    8.614
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    24.989,
+    0.4,
+    10.942
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    25.577,
+    0.4,
+    12.897
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    24.446,
+    0.4,
+    14.571
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    25.346,
+    0.4,
+    17.109
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    25.332,
+    0.4,
+    19.578
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    25.42,
+    0.4,
+    21.56
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    25.597,
+    0.4,
+    23.116
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    24.414,
+    0.4,
+    25.162
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    25.246,
+    0.4,
+    26.584
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    25.261,
+    0.4,
+    28.946
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    27.181,
+    0.4,
+    -29.524
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    27.351,
+    0.4,
+    -27.339
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    27.51,
+    0.4,
+    -25.369
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    27.512,
+    0.4,
+    -23.001
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    27.103,
+    0.4,
+    -20.732
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    27.251,
+    0.4,
+    -18.478
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    26.507,
+    0.4,
+    -17.502
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    26.914,
+    0.4,
+    -15.044
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    27.518,
+    0.4,
+    -12.57
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    27.271,
+    0.4,
+    -11.084
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    26.483,
+    0.4,
+    -8.579
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    26.791,
+    0.4,
+    -7.037
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    26.434,
+    0.4,
+    -4.585
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    26.814,
+    0.4,
+    -2.533
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    26.485,
+    0.4,
+    -0.85
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    26.669,
+    0.4,
+    0.501
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    27.432,
+    0.4,
+    3.157
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    26.699,
+    0.4,
+    5.356
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    26.657,
+    0.4,
+    6.821
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    27.093,
+    0.4,
+    8.671
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    26.99,
+    0.4,
+    11.209
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    27.168,
+    0.4,
+    12.918
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    26.569,
+    0.4,
+    14.719
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    27.237,
+    0.4,
+    16.718
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    27.574,
+    0.4,
+    19.08
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    27.205,
+    0.4,
+    20.851
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    26.865,
+    0.4,
+    23.389
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    27.454,
+    0.4,
+    24.415
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    26.551,
+    0.4,
+    27.45
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    26.899,
+    0.4,
+    28.688
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    29.421,
+    0.4,
+    -29.307
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    29.536,
+    0.4,
+    -26.414
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    28.653,
+    0.4,
+    -25.123
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    29.373,
+    0.4,
+    -22.746
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    28.761,
+    0.4,
+    -20.502
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    29.204,
+    0.4,
+    -19.27
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    28.806,
+    0.4,
+    -16.556
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    28.65,
+    0.4,
+    -14.601
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    29.243,
+    0.4,
+    -12.697
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    29.412,
+    0.4,
+    -10.979
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    29.55,
+    0.4,
+    -9.556
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    29.532,
+    0.4,
+    -6.54
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    29.445,
+    0.4,
+    -5.394
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    28.498,
+    0.4,
+    -3.55
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    29.272,
+    0.4,
+    -1.057
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    28.735,
+    0.4,
+    1.111
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    28.889,
+    0.4,
+    2.449
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    29.279,
+    0.4,
+    4.517
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    28.857,
+    0.4,
+    7.364
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    29.298,
+    0.4,
+    9.302
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    29.082,
+    0.4,
+    10.506
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    28.566,
+    0.4,
+    13.297
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    28.763,
+    0.4,
+    14.862
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    29.527,
+    0.4,
+    16.475
+   ],
+   "radius": 0.05,
+   "material": "L0"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    28.556,
+    0.4,
+    19.532
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    28.694,
+    0.4,
+    20.638
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    29.246,
+    0.4,
+    22.69
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    29.085,
+    0.4,
+    25.41
+   ],
+   "radius": 0.05,
+   "material": "L1"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    29.348,
+    0.4,
+    27.004
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  },
+  {
+   "type": "sphere",
+   "location": [
+    28.55,
+    0.4,
+    28.671
+   ],
+   "radius": 0.05,
+   "material": "L2"
+  }
+ ],
+ "light_sampler": "bvh"
+}

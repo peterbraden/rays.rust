@@ -1,17 +1,19 @@
 {
   "width": 480,
   "height": 240,
-  "supersamples": 16,
+  "supersamples": 64,
   "samples_per_chunk": 2,
   "max_depth": 32,
   "shadow_bias": 1,
   "path_termination": "russian_roulette",
+  "background": { "type": "space" },
   "materials": {
     "GROUND": { "type": "lambertian", "albedo": [0.06, 0.09, 0.15] }
   },
+  "output": { "flare": { "blades": 9, "f_number": 8, "sources": 2 } },
   "camera": {
     "location": [0, 400000, -1500000],
-    "lookat": [0, -200000, 1000000],
+    "lookat": [0, -80000, 1000000],
     "up": [0, 1, 0],
     "angle": 0.9,
     "aperture": 0

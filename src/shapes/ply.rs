@@ -165,7 +165,7 @@ pub fn parse(bytes: &[u8]) -> Result<IndexedMesh, String> {
         _ => Values::Binary { data: &bytes[start ..], at: 0, big: format == Format::Big },
     };
 
-    let mut mesh = IndexedMesh { positions: Vec::new(), normals: Vec::new(), triangles: Vec::new() };
+    let mut mesh = IndexedMesh { positions: Vec::new(), normals: Vec::new(), triangles: Vec::new(), texcoords: Vec::new() };
     for e in &elements {
         let is_vertex = e.name == "vertex";
         let is_face = e.name == "face";

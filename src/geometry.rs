@@ -56,14 +56,38 @@ thread_local! {
     static RNG: RefCell<Pcg32> = RefCell::new(Pcg32::new(0, 0));
 }
 
-/// Re-seed this thread's generator.
-pub fn seed_rand(seed: u64, stream: u64) {
-    RNG.with(|r| *r.borrow_mut() = Pcg32::new(seed, stream));
+thread_local! {
+    /// While rendering a sample with a sampler (`sampler`), where `rand()` is in its point.
+    static SOBOL: RefCell<Option<crate::sampler::SampleState>> = const { RefCell::new(None) };
 }
 
-/// Uniform in [0, 1), from this thread's generator.
+/// Re-seed this thread's generator, and go back to independent sampling.
+pub fn seed_rand(seed: u64, stream: u64) {
+    RNG.with(|r| *r.borrow_mut() = Pcg32::new(seed, stream));
+    end_sample();
+}
+
+/// Draw `rand()`'s numbers from sample `index` of the Owen-scrambled Sobol' sequence for
+/// `seed`, one dimension after another, until `end_sample`.
+pub fn begin_sample(seed: u64, index: u32) {
+    begin_sampler(crate::sampler::SampleState::Sobol(crate::sobol::SampleState::new(seed, index)));
+}
+
+/// Draw `rand()`'s numbers from `state`, one dimension after another, until `end_sample`.
+pub fn begin_sampler(state: crate::sampler::SampleState) {
+    SOBOL.with(|s| *s.borrow_mut() = Some(state));
+}
+
+/// Back to independent numbers from this thread's generator.
+pub fn end_sample() {
+    SOBOL.with(|s| *s.borrow_mut() = None);
+}
+
+/// Uniform in [0, 1): the next dimension of the current Sobol' sample, if there is one
+/// (`begin_sample`), and otherwise from this thread's generator.
 pub fn rand() -> f64 {
-    RNG.with(|r| r.borrow_mut().next_f64())
+    SOBOL.with(|s| s.borrow_mut().as_mut().map(|state| state.next()))
+        .unwrap_or_else(|| RNG.with(|r| r.borrow_mut().next_f64()))
 }
 
 pub fn random_point_on_unit_sphere() -> Vector3<f64>{
@@ -138,4 +162,21 @@ mod tests {
             assert!(random_point_in_unit_ball().norm() <= 1.);
         }
     }
+}
+
+/// Run `f`, which may use rayon, apart from the render's threads: on a thread of its own, with a
+/// thread pool of its own. Tables built lazily during a render (`OnceLock::get_or_init`) must be
+/// built so. Built on the render's pool, a thread waiting for the build's parallel work may take
+/// up another pixel's meanwhile, which then waits for the same, unfinished table: a deadlock.
+/// rayon's `install` on another pool doesn't help, as its caller also takes up work while it
+/// waits; a plain thread just waits.
+pub fn build_apart<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    // Where there are no threads (WebAssembly) there is no pool to deadlock with either.
+    if cfg!(target_arch = "wasm32") { return f(); }
+    std::thread::scope(|scope| {
+        scope.spawn(|| match rayon::ThreadPoolBuilder::new().build() {
+            Ok(pool) => pool.install(f),
+            Err(_) => f(),
+        }).join().unwrap()
+    })
 }

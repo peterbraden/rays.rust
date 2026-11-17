@@ -15,6 +15,70 @@ Shapes combined: union, merge, intersection, difference and clipping (see the
 [shape reference](../docs/shapes.md#combining-shapes-csg)).
 ![CSG](./scenes/csg.png)
 
+## Spectral rendering
+White light dispersed by a diamond and a prism of SF11 flint glass, traced at sampled
+wavelengths (`"spectral": true`; see `src/spectrum.rs`).
+![Dispersion](./scenes/spectral-prism.png)
+
+Lamps glowing as blackbodies at 1900, 2700, 4000, 6500 and 12000 K, at equal luminance.
+![Blackbody lamps](./scenes/blackbody.png)
+
+## Cameras and film
+A double Gauss lens at f/2, traced element by element: depth of field and vignetting.
+![Realistic camera](./scenes/realistic-camera.png)
+
+Motion blur: a sphere sliding, a box turning, a sphere rising, while the shutter is open.
+![Motion blur](./scenes/motion-blur.png)
+
+A spherical (equirectangular) panorama of the lamps scene.
+![Panorama](./scenes/panorama.png)
+
+A star test of a lens's (Seidel) astigmatism: points blur into radial lines that grow with the
+square of the distance from the centre.
+![Astigmatism](./scenes/astigmatism.png)
+
+Lens flare: ghosts of the sun from reflections between the coated surfaces of a double Gauss
+lens (exaggerated tenfold), and the starburst of a six-bladed aperture.
+![Lens flare](./scenes/lens-flare.png)
+
+## Shapes after PBRT
+Texture-space checkers on a sphere and a saddle (a bilinear patch), a cube smoothed by Loop
+subdivision, ribbon and cylinder curves, lit by a quad light.
+![PBRT shapes](./scenes/pbrt-shapes.png)
+
+A ball of fur: 40,000 Bézier curves.
+![Fur](./scenes/fur.png)
+
+## Materials after PBRT
+Measured metals (gold, copper, brass, silver, aluminium), brushed aluminium, frosted glass, a
+thin pane, and a worn mix of paint and gold leaf.
+![PBRT materials](./scenes/pbrt-materials.png)
+
+## Textures
+Image textures and a normal map on a brick wall and sphere, paint worn to copper by a dirt mask,
+and a checkerboard filtered into the distance.
+![Textures](./scenes/textures.png)
+
+## Coats and subsurface scattering
+Varnished bricks, a tinted coat and lacquered copper (pbrt's layered BSDFs), and jade, skin,
+marble and a wax candle (random-walk subsurface scattering), backlit by a low sun.
+![Light transport](./scenes/light-transport.png)
+
+## Lights
+A spot light on a red ball, a projector throwing a rose window on the wall, a goniometric lamp
+with a shade, a stained-glass window as a textured area light, and strings of fairy lights,
+sampled with the light BVH.
+![Lights](./scenes/lights.png)
+
+900 lamps, sampled by the light BVH.
+![Lamp field](./scenes/lamp-field.png)
+
+## Participating media
+A smoke plume and its fire from voxel grids (blackbody emission by temperature), a glass ball
+of red liquid (a chromatic absorber inside a dielectric), and a ball of medium that scatters
+blue most, casting an orange shadow.
+![Media](./scenes/media.png)
+
 ## Spheres
 Spheres demonstrating 3 different materials.
 ![Spheres](./scenes/spheres.png)
@@ -66,6 +130,56 @@ under the sky model's low sun: Scots pines, Norway spruces, quaking aspens and b
 turning in autumn, with a shrub understory. Each species is three distinct trees, instanced;
 species grow in stands, with clearings, and none on steep slopes.
 ![forest](./scenes/forest.png)
+## Desert
+Desert plants: `tree` species for the arid Southwest. From left to right: a Utah juniper, a
+sagebrush behind it, a creosote bush, a saguaro, an ocotillo and a Joshua tree; in front, a
+rabbitbrush, a prickly pear, an agave and a barrel cactus. Sagebrush and rabbitbrush are
+`mound` plants: dense, rounded masses of small leaves on a few twisted stems. The bushes and the Joshua tree are Weber and Penn trees; the succulents are
+built by `src/procedural/succulent.rs` (ribbed columns with arms, squat barrels, chains of
+pads, rosettes of channelled leaves, fans of canes), their `"bark"` the green body and their
+`"leaves"` the spines. Like any species they can grow in a `forest`.
+![desert plants](./scenes/desert-plants.png)
+
+Buttes, mesas and spires in late sun, after Monument Valley: each a vertical, fluted cliff of
+sandstone streaked with desert varnish, standing on a broad cone of debris and ledgy shale
+that makes up half its height, over a red floor terraced by low ledges and dotted with
+sagebrush, juniper, creosote, prickly pear and agave. The terrain is a `"mesas"` heightmap:
+outlines cut from noise, profiled by the exact distance from the edge, with free-standing
+towers and fins on their own debris cones (`towers`), gullies and fallen blocks on the slopes
+(`roughness`), hummocky tops (`relief`) and a ledged floor (`floor_ledges`). Three materials
+by slope (`mix` with a `{"slope": [from, to]}` amount): sand on the floor, rubbly rock on the
+debris slopes and sandstone on the cliffs, both coloured by formation (`"layers"` by
+elevation), by bed (`"beds"`) and by stains (`"variety"`), the cliffs `"varnish"`ed and
+`"flutes"`d.
+![desert mesas](./scenes/desert-mesas.png)
+
+The same country at midday from an overlook (`desert-noon.json`): a few small buttes and
+spires far out on a hummocky, ledged floor of orange sand. The film's white balance is set for
+a bluer light than the noon sun and sky (`"white_balance": 7000`), warming the sand as a
+photographer's shade setting would.
+![desert at noon](./scenes/desert-noon.png)
+
+From the rim of a higher mesa (`desert-overlook.json`), after the view from Hunts Mesa: its
+top weathered into slickrock domes (`domes`) of cross-bedded sandstone, whose laminae curve
+into festoons, cut off by each set above (`material::rock::cross_beds`), and stand out as real
+relief on an 8 cm grid near the camera (`laminae`): harder laminae as ribs, partings worn
+back. The rock carries lichen, bleached patches, desert varnish and fine turbulent bump
+(`"fractal"`). Below, a valley of landmark buttes (`buttes`): flat, thin caprock over walls
+split into slabs and fins along one dominant set of joints (`joints`), standing on concave cones of
+gullied debris; pale sand gathers in the washes and hollows, where the plants crowd
+(`{"terrain": ...}` textures and a forest's `"favour"`), and the country rises to long
+tablelands at the horizon (`valley`). Sunlit cumulus cast shadows across it; the sky is on the
+sun's scale, a filmic tone curve gives it a photograph's contrast, and it is rendered
+adaptively (`"adaptive"`). The near country is a 1.5 m grid and the far, to the horizon, a
+30 m grid of the same mesas (`domain`), each with a `hole` where the finer one is.
+![desert overlook](./scenes/desert-overlook.png)
+
+One of the overlook's buttes from the valley floor (`desert-butte.json`): sheer walls of
+sandstone, split along their joints into rounded buttresses, on a cone of debris half its
+height, concave and steepest under the cliff, cut by gullies radiating down it (each found
+from where on the cliff's foot its slope falls from), with blocks fallen from the cliff.
+![desert butte](./scenes/desert-butte.png)
+
 ## Alpine terrain
 Mountains from seeded noise after one 100,000 year glacial cycle: tectonic uplift, river
 incision and glacial erosion (`src/terrain/`).

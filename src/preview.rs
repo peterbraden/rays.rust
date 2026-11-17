@@ -43,7 +43,7 @@ impl Preview {
     pub fn set_camera(&mut self, camera_json: &str) {
         let c: Value = serde_json::from_str(camera_json).unwrap_or_else(|e| panic!("camera: {}", e));
         let (w, h) = (self.width() as u32, self.height() as u32);
-        self.scene.camera = Box::new(SceneFile::parse_camera(c, w, h));
+        self.scene.camera = SceneFile::parse_camera(c, w, h);
     }
 
     /// Render image rows `y0 .. y1` (row 0 is the top) of one layer, writing the linear sum of
@@ -51,12 +51,13 @@ impl Preview {
     /// Returns the number of rays cast.
     pub fn render_rows(&self, layer: usize, y0: usize, y1: usize, out: &mut [f32]) -> u64 {
         let (w, h) = (self.width(), self.height());
-        let spc = self.scene.render.samples_per_chunk.max(1);
+        // Layer n is samples n * per to (n + 1) * per of every pixel, each with a stream of its own.
+        let per = self.samples_per_layer();
         let mut cast = 0;
         for (row, y) in (y0 .. y1.min(h)).enumerate() {
             for x in 0 .. w {
                 // The renderer's rows run from the bottom; images' from the top.
-                let (c, _, sum) = render_pixel(x, h - 1 - y, layer, spc, &self.scene);
+                let (c, _, sum, _) = render_pixel(x, h - 1 - y, layer * per, per, &self.scene);
                 let sum = sum.ignore_nan();
                 let i = (row * w + x) * 3;
                 out[i] = sum.rgb.x as f32;

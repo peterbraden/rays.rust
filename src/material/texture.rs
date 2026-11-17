@@ -8,8 +8,16 @@ pub trait Medium : Sync{
     /// The normal to shade with at `pt`, given the surface's: the same, unless the surface is
     /// bump mapped (see `bump::Bumped`).
     fn normal_at(&self, _pt: &Vector3<f64>, normal: &Vector3<f64>) -> Vector3<f64> { *normal }
+    /// The normal to shade with at a hit: `normal_at`, unless the medium needs more of the hit
+    /// than its point, such as a normal map its texture coordinates (`NormalMapped`).
+    fn normal_at_hit(&self, i: &crate::intersection::Intersection, _s: &crate::scene::Scene) -> Vector3<f64> {
+        self.normal_at(&i.point, &i.normal)
+    }
     /// The medium of part `k` of a combined shape (see `csg::Tagged`), if it has its own.
     fn part(&self, _k: u32) -> Option<&(dyn Medium + Sync + Send)> { None }
+    /// The material as data, if the medium is one material throughout and it can be
+    /// flattened (`wavefront::flat`).
+    fn flat_material(&self) -> Option<crate::wavefront::flat::FlatMaterial> { None }
 }
 
 /// The media of an object whose parts have their own: `base` for the object itself (and parts
@@ -31,6 +39,31 @@ impl Medium for PartMedia {
     fn normal_at(&self, pt: &Vector3<f64>, normal: &Vector3<f64>) -> Vector3<f64> {
         self.base.normal_at(pt, normal)
     }
+
+    fn normal_at_hit(&self, i: &crate::intersection::Intersection, s: &crate::scene::Scene) -> Vector3<f64> {
+        self.base.normal_at_hit(i, s)
+    }
+}
+
+/// A medium whose surface is normal mapped (`textures::NormalMap`).
+pub struct NormalMapped {
+    pub inner: Box<dyn Medium + Sync + Send>,
+    pub map: crate::textures::NormalMap,
+}
+
+impl Medium for NormalMapped {
+    fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
+        self.inner.material_at(pt)
+    }
+
+    fn normal_at_hit(&self, i: &crate::intersection::Intersection, s: &crate::scene::Scene) -> Vector3<f64> {
+        let n = self.inner.normal_at_hit(i, s);
+        self.map.perturb(&crate::intersection::Intersection { normal: n, ..*i }, s)
+    }
+
+    fn part(&self, k: u32) -> Option<&(dyn Medium + Sync + Send)> {
+        self.inner.part(k)
+    }
 }
 
 pub struct Solid {
@@ -39,6 +72,10 @@ pub struct Solid {
 impl Medium for Solid {
     fn material_at(&self, _pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
         &*self.m
+    }
+
+    fn flat_material(&self) -> Option<crate::wavefront::flat::FlatMaterial> {
+        self.m.flat()
     }
 }
 
@@ -55,6 +92,12 @@ impl CheckeredYPlane {
 }
 
 impl Medium for CheckeredYPlane {
+    fn flat_material(&self) -> Option<crate::wavefront::flat::FlatMaterial> {
+        Some(crate::wavefront::flat::FlatMaterial::Checker {
+            m1: Box::new(self.m1.flat()?), m2: Box::new(self.m2.flat()?), xsize: self.xsize, zsize: self.zsize,
+        })
+    }
+
     fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
         let zig = if (pt[0].abs() / self.xsize) as i32 % 2 == 0 { pt[0] > 0. } else { pt[0] <= 0. };
         let zag = if (pt[2].abs() / self.zsize) as i32 % 2 == 0 { pt[2] > 0. } else { pt[2] <= 0. };

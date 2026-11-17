@@ -34,7 +34,6 @@
   "objects": [
     {
       "type": "ocean",
-      "curved": true,
       "wind": [
         7,
         2

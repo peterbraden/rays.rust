@@ -6,12 +6,16 @@ use crate::geometry::rand;
 use crate::intersection::Intersection;
 use crate::material::texture::Medium;
 use crate::light::SUN_SHADOW_DISTANCE;
+use crate::material::model::LightSampling;
+use crate::material::bsdf::power_heuristic;
+use crate::material::functions::area_light_pdf;
 use std::f64;
 
 // Returns num rays cast, Color
 pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
     crate::volume::begin_path();
-    trace_from(r, depth, s, false)
+    crate::material::ggx::begin_path();
+    trace_from(r, depth, s, LightSampling::None)
 }
 
 /// Segments shorter than this (scene units: metres, in sky scenes) cross too little air to
@@ -21,11 +25,15 @@ const AERIAL_PERSPECTIVE_FROM: f64 = 100.;
 /// Shadow rays per camera ray for crepuscular rays (`SkyMaterial::shadowed_loss`).
 const CREPUSCULAR_SAMPLES: usize = 2;
 
-/// Trace a ray. `after_light_sampling` is set for a ray scattered from a surface that has just
-/// sampled the lights directly (the area lights and the sun); their emission is then already
-/// counted, and is ignored if this ray hits one, or sees the sun.
-fn trace_from(r: &Ray, depth: u64, s: &Scene, after_light_sampling: bool) -> (u64, Color) {
+/// Trace a ray. `prior` is how the vertex the ray leaves sampled the lights (the area lights
+/// and the sun): if it did, their emission is already counted, wholly or in part, so this ray
+/// counts what it hits of them in part or not at all (`light_weight`).
+fn trace_from(r: &Ray, depth: u64, s: &Scene, prior: LightSampling) -> (u64, Color) {
     let closest = s.objects.nearest_intersection(r, f64::INFINITY, 0f64);
+    // Chromatic media's walks up to the hit, and the weight of what is gathered here
+    // (`volume::chromatic`): white unless the path has crossed one.
+    crate::volume::chromatic::settle(closest.as_ref().map(|x| x.dist));
+    let mis = crate::volume::chromatic::weight();
     // Nothing in the way, or only the skysphere, infinitely far off: the ray reaches the sky.
     let reaches_sky = closest.as_ref().is_none_or(|x| x.dist >= SUN_SHADOW_DISTANCE);
     // Crepuscular rays: from the camera, the air in shadow along the way, estimated before the
@@ -34,7 +42,7 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, after_light_sampling: bool) -> (u6
         (Some(sky), Some(sun)) if depth == 0 && sky.crepuscular_rays => {
             let dist = if reaches_sky { f64::INFINITY } else { closest.as_ref().map_or(f64::INFINITY, |x| x.dist) };
             if dist > AERIAL_PERSPECTIVE_FROM {
-                sky.shadowed_loss(&r.ro, &r.rd.normalize(), dist, CREPUSCULAR_SAMPLES, |p| sun.transmittance_from(p, s))
+                sky.shadowed_loss(&r.ro, &r.rd.normalize(), dist, CREPUSCULAR_SAMPLES, |p| sun.transmittance_from(p, s).rgb.mean())
             } else {
                 Vector3::zeros()
             }
@@ -45,22 +53,44 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, after_light_sampling: bool) -> (u6
     let (cast, color) = match closest {
         Some(x) => {
             let dist = x.dist;
-            let (cast, color) = trace_intersection(r, x, depth, s, after_light_sampling);
+            let (cast, color) = trace_intersection(r, x, depth, s, prior);
             match &s.atmosphere {
                 // The sky already includes the air in front of it.
                 Some(sky) if dist > AERIAL_PERSPECTIVE_FROM && !reaches_sky => {
                     let (transmittance, inscattered) = sky.segment(&r.ro, &r.rd.normalize(), dist);
-                    (cast, color * transmittance + inscattered)
+                    // In spectral mode, at the sample's wavelengths (`SkyMaterial::air`).
+                    (cast, color * transmittance + inscattered.component_mul(&mis.rgb))
                 },
                 _ => (cast, color),
             }
         },
-        None => (1, s.render.background.radiance(&r.rd)),
+        None => (1, s.render.background.radiance(&r.rd) * mis),
     };
-    let color = Color { rgb: (color.rgb - shadowed).map(|v| v.max(0.)) };
+    // A sky sampled directly (`environment`) is weighted against that, as the lights are.
+    let color = match (&s.environment, prior) {
+        (Some(env), LightSampling::MIS { bsdf_pdf }) if reaches_sky => color * power_heuristic(bsdf_pdf, env.pdf(&r.rd.normalize())),
+        _ => color,
+    };
+    let color = Color { rgb: (color.rgb - shadowed.component_mul(&mis.rgb)).map(|v| v.max(0.)) };
     match &s.sun {
-        Some(sun) if reaches_sky && !after_light_sampling => (cast, color + sun.disc_radiance(&r.ro, &r.rd.normalize())),
+        Some(sun) if reaches_sky => {
+            let d = r.rd.normalize();
+            let w = light_weight(prior, || sun.disc_pdf(&d));
+            if w > 0. { (cast, color + sun.disc_radiance(&r.ro, &d) * mis * w) } else { (cast, color) }
+        },
         _ => (cast, color),
+    }
+}
+
+/// The share of a sampled light's emission that a ray counts on hitting it, given how the
+/// vertex it left sampled the lights: all of it, none (already counted), or the power
+/// heuristic's weight for BSDF sampling against the light's density `light_pdf` for the same
+/// direction (`material::bsdf`).
+fn light_weight(prior: LightSampling, light_pdf: impl FnOnce() -> f64) -> f64 {
+    match prior {
+        LightSampling::None => 1.,
+        LightSampling::Exclusive => 0.,
+        LightSampling::MIS { bsdf_pdf } => power_heuristic(bsdf_pdf, light_pdf()),
     }
 }
 
@@ -86,6 +116,9 @@ fn continuation_weight(attenuate: &Color, depth: u64, s: &Scene) -> Option<f64> 
 /// anything that ends the path, such as the sky), and the light a bounce would have gathered
 /// is replaced by a headlight: brighter where the surface faces the viewer.
 pub fn draft(r: &Ray, s: &Scene) -> Color {
+    // As `trace` begins a path: nothing carried over from the last one.
+    crate::volume::begin_path();
+    crate::material::ggx::begin_path();
     let Some(hit) = s.objects.nearest_intersection(r, f64::INFINITY, 0f64) else {
         return s.render.background.radiance(&r.rd);
     };
@@ -94,7 +127,7 @@ pub fn draft(r: &Ray, s: &Scene) -> Color {
     biased.point = hit.point + facing * s.render.shadow_bias;
     let medium = &hit.object.medium;
     let medium = medium.part(hit.part).unwrap_or(&**medium);
-    let shaded = shading(r, medium, &biased);
+    let shaded = shading(r, medium, &biased, s);
     let interaction = medium.material_at(biased.point).scatter(r, &shaded, s);
     match interaction.ray {
         None => interaction.emit + interaction.attenuate,
@@ -105,32 +138,49 @@ pub fn draft(r: &Ray, s: &Scene) -> Color {
     }
 }
 
-fn shading<'a>(r: &Ray, medium: &(dyn Medium + Sync + Send), intersection: &Intersection<'a>) -> Intersection<'a> {
-    let n = medium.normal_at(&intersection.point, &intersection.normal);
+fn shading<'a>(r: &Ray, medium: &(dyn Medium + Sync + Send), intersection: &Intersection<'a>, s: &Scene) -> Intersection<'a> {
+    let n = medium.normal_at_hit(intersection, s);
     if n == intersection.normal || (n.dot(&r.rd) > 0.) != (intersection.normal.dot(&r.rd) > 0.) {
         return *intersection;
     }
     Intersection { normal: n, ..*intersection }
 }
 
-fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene, after_light_sampling: bool) -> (u64, Color){
+fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene, prior: LightSampling) -> (u64, Color){
     let mut cast = 1;
-    if after_light_sampling && s.is_sampled_light(intersection.object) {
+    let weight = if s.is_sampled_light(intersection.object) {
+        light_weight(prior, || area_light_pdf(&r.ro, &intersection.point, &intersection.normal, intersection.object, s))
+    } else if let Some(moon) = s.moonlight.as_ref().filter(|m| m.is_on(&intersection.point)) {
+        // Moonlight is sampled as a disc, like the sun: a ray that reaches the moon counts it
+        // as one that reaches the sun's disc does.
+        light_weight(prior, || moon.light.disc_pdf(&r.rd.normalize()))
+    } else {
+        1.
+    };
+    if weight == 0. {
         return (cast, Color::black());
     }
     let medium = &intersection.object.medium;
     // A part of a combined shape may have its own medium (see `csg::Tagged`).
     let medium = medium.part(intersection.part).unwrap_or(&**medium);
     let material = medium.material_at(intersection.point);
-    let shaded = shading(r, medium, intersection);
+    let shaded = shading(r, medium, intersection, s);
+    // Rays leaving here cross media truncated (`volume::Volume::truncated`), unless it turns out
+    // to be a mirror or glass, through which the camera sees as directly.
+    crate::volume::at_vertex();
     let interaction = material.scatter(r, &shaded, s);
+    if matches!(interaction.light_sampling, LightSampling::None) {
+        crate::volume::specular_vertex();
+    }
+    // Taken before the path goes on, which may change it.
+    let mis = crate::volume::chromatic::weight();
 
     let incoming = match interaction.ray {
         // No continuation: attenuate is the final colour.
         None => Color::white(),
         Some(ray) => match continuation_weight(&interaction.attenuate, depth, s) {
             Some(w) => {
-                let (c, col) = trace_from(&ray, depth + 1, s, interaction.sampled_lights);
+                let (c, col) = trace_from(&ray, depth + 1, s, interaction.light_sampling);
                 cast += c;
                 col * w
             },
@@ -139,19 +189,21 @@ fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene, aft
         },
     };
 
-    (cast, interaction.emit + interaction.attenuate * incoming)
+    (cast, (interaction.emit * mis + interaction.attenuate * incoming) * weight)
 }
 
-fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &Scene, after_light_sampling: bool) -> (u64, Color) {
+fn trace_intersection(r: &Ray, intersection: Intersection, depth: u64, scene: &Scene, prior: LightSampling) -> (u64, Color) {
     // Shadow bias -> Move the origin of the intersection point along the normal, in case a
     // floating point error puts it slightly below the surface which would cause a sign flip
     // leading to shadow acne.
     let mut biased_intersection = intersection;
     // Bias towards the side the ray arrived from, which for a ray inside an object is inwards.
-    biased_intersection.point = intersection.point + (intersection.facing_normal(r) * scene.render.shadow_bias);
+    // The scene's bias, or more if the hit's error may be larger (`Intersection::spawn_offset`).
+    let bias = scene.render.shadow_bias.max(intersection.spawn_offset());
+    biased_intersection.point = intersection.point + (intersection.facing_normal(r) * bias);
 
     let mut cast = 1;
-    let (c, o) = trace_sample(r, &biased_intersection, depth, scene, after_light_sampling);
+    let (c, o) = trace_sample(r, &biased_intersection, depth, scene, prior);
     cast += c;
     (cast, o) 
 }
@@ -251,6 +303,183 @@ mod tests {
         }}"#, sample_lights))
     }
 
+    #[test]
+    fn test_textured_area_light_sampling_agrees_with_hitting_it() {
+        // A quad light showing a checkerboard over the floor: light sampling must look the
+        // texture up where it samples, as rays that hit the light do.
+        let scene = |sample_lights: bool| SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 1, "sample_lights": {},
+            "camera": {{ "location": [0, 0.5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "materials": {{
+                "F": {{ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }},
+                "L": {{ "type": "diffuse-light", "color": [1, 1, 1], "intensity": 1,
+                        "texture": {{ "texture": "demo/textures/checker.png", "scale": 0.25 }} }}
+            }},
+            "objects": [
+                {{ "type": "plane", "y": 0, "material": "F" }},
+                {{ "type": "quad", "points": [[-1, 1, -1], [1, 1, -1], [-1, 1, 1], [1, 1, 1]], "material": "L" }}
+            ]
+        }}"#, sample_lights));
+        crate::geometry::seed_rand(2, 1);
+        let r = Ray { ro: Vector3::new(0.2, 0.5, 0.3), rd: Vector3::new(0., -1., 0.) };
+        let mean = |s: &Scene, n: usize| (0..n).map(|_| trace(&r, 0, s).1.rgb.x).sum::<f64>() / n as f64;
+        let (sampled, hit) = (mean(&scene(true), 20000), mean(&scene(false), 60000));
+        assert!(sampled > 0.02, "{}", sampled);
+        assert!((sampled - hit).abs() < 0.03 * hit, "light sampling {} vs hitting {}", sampled, hit);
+    }
+
+    /// A floor under a grid of 8 × 8 point lights and 8 × 8 small quad lights facing down, with
+    /// `sampler` choosing which to sample.
+    fn many_lights(sampler: &str) -> Scene {
+        many_lights_on(sampler, r#"{ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }"#)
+    }
+
+    fn many_lights_on(sampler: &str, floor: &str) -> Scene {
+        let mut objects = vec![r#"{ "type": "plane", "y": 0, "material": "F" }"#.to_string()];
+        let mut lights = vec![];
+        for i in 0..64 {
+            let (x, z) = ((i % 8) as f64 * 3. - 10.5, (i / 8) as f64 * 3. - 10.5);
+            lights.push(format!(r#"{{ "location": [{}, 1, {}], "intensity": {} }}"#, x, z, 0.5 + (i % 3) as f64 * 0.25));
+            let (x, z) = (x + 1.5, z + 1.5);
+            objects.push(format!(r#"{{ "type": "quad", "points": [[{}, 1.2, {}], [{}, 1.2, {}], [{}, 1.2, {}], [{}, 1.2, {}]], "material": "L" }}"#,
+                x - 0.1, z - 0.1, x + 0.1, z - 0.1, x - 0.1, z + 0.1, x + 0.1, z + 0.1));
+        }
+        SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 1, "light_sampler": "{}",
+            "camera": {{ "location": [0, 0.5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "materials": {{
+                "F": {},
+                "L": {{ "type": "diffuse-light", "color": [1, 1, 1], "intensity": 20 }}
+            }},
+            "lights": [{}],
+            "objects": [{}]
+        }}"#, sampler, floor, lights.join(","), objects.join(",")))
+    }
+
+    #[test]
+    fn test_light_bvh_agrees_with_power_sampling_with_less_noise() {
+        crate::geometry::seed_rand(3, 1);
+        let r = Ray { ro: Vector3::new(1.6, 0.5, 1.4), rd: Vector3::new(0., -1., 0.) };
+        let stats = |s: &Scene, n: usize| {
+            let v: Vec<f64> = (0..n).map(|_| trace(&r, 0, s).1.rgb.x).collect();
+            let mean = v.iter().sum::<f64>() / n as f64;
+            (mean, (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64).sqrt())
+        };
+        // Power sampling sums every point light and picks one quad by power; the BVH picks one
+        // light of either kind, by its importance from the point.
+        let (power, power_sd) = stats(&many_lights("power"), 40_000);
+        let (bvh, bvh_sd) = stats(&many_lights("bvh"), 40_000);
+        assert!((power - bvh).abs() < 0.03 * power, "power {} vs bvh {}", power, bvh);
+        // Per sample of one light, against a full sum of the points and one quad.
+        assert!(bvh_sd < 3. * power_sd, "sd {} vs {}", bvh_sd, power_sd);
+        // The point light overhead (number 36, after the 64 quads) is chosen far more often
+        // than its share of the power, about 1 in 128, would have it.
+        let s = many_lights("bvh");
+        let near = s.light_bvh.as_ref().unwrap().pmf(&Vector3::new(1.6, 0., 1.4), 64 + 36);
+        assert!(near > 0.1, "{}", near);
+    }
+
+    #[test]
+    fn test_light_bvh_with_mis_on_glossy_surfaces() {
+        // A rough plastic floor: lights sampled by the BVH and weighted against BSDF sampling
+        // (`direct_lighting_mis`), whose hits on the quads take the BVH's pmf.
+        crate::geometry::seed_rand(4, 1);
+        let floor = r#"{ "type": "plastic", "albedo": [0.4, 0.4, 0.4], "roughness": 0.3 }"#;
+        let r = Ray { ro: Vector3::new(0.6, 0.5, -0.4), rd: Vector3::new(0.3, -1., 0.2).normalize() };
+        let mean = |s: &Scene, n: usize| (0..n).map(|_| trace(&r, 0, s).1.rgb.x).sum::<f64>() / n as f64;
+        let (power, bvh) = (mean(&many_lights_on("power", floor), 60_000), mean(&many_lights_on("bvh", floor), 60_000));
+        assert!((power - bvh).abs() < 0.04 * power, "power {} vs bvh {}", power, bvh);
+    }
+
+    #[test]
+    fn test_coated_materials_agree_with_and_without_light_sampling() {
+        // Next-event estimation through the stochastic layered BSDF, weighted by its estimated
+        // density, against finding the light by BSDF sampling alone.
+        for (floor, tolerance) in [
+            (r#"{ "type": "coated_diffuse", "albedo": [0.6, 0.6, 0.6], "roughness": 0.3 }"#, 0.04),
+            (r#"{ "type": "coated_diffuse", "albedo": [0.6, 0.6, 0.6], "roughness": 0 }"#, 0.04),
+            (r#"{ "type": "coated_conductor", "metal": "Cu", "conductor_roughness": 0.4, "roughness": 0.1 }"#, 0.06),
+        ] {
+            let scene = |sample_lights: bool| SceneFile::from_string(format!(r#"{{
+                "background": [0, 0, 0], "max_depth": 1, "sample_lights": {},
+                "camera": {{ "location": [0, 0.5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+                "materials": {{ "F": {}, "L": {{ "type": "diffuse-light", "color": [1, 1, 1], "intensity": 1 }} }},
+                "objects": [
+                    {{ "type": "plane", "y": 0, "material": "F" }},
+                    {{ "type": "quad", "points": [[-1, 1, -1], [1, 1, -1], [-1, 1, 1], [1, 1, 1]], "material": "L" }}
+                ]
+            }}"#, sample_lights, floor));
+            crate::geometry::seed_rand(6, 1);
+            let r = Ray { ro: Vector3::new(0.3, 0.5, -0.6), rd: Vector3::new(-0.2, -1., 0.5).normalize() };
+            let mean = |s: &Scene, n: usize| (0..n).map(|_| trace(&r, 0, s).1.rgb.x).sum::<f64>() / n as f64;
+            let (sampled, hit) = (mean(&scene(true), 40_000), mean(&scene(false), 80_000));
+            assert!(sampled > 0.01, "{}: {}", floor, sampled);
+            assert!((sampled - hit).abs() < tolerance * hit, "{}: light sampling {} vs hitting {}", floor, sampled, hit);
+        }
+    }
+
+    #[test]
+    fn test_coated_white_furnace() {
+        // A white base under a thin clear coat, lit evenly from everywhere, looks as bright as
+        // its surroundings, given a deep enough walk: at pbrt's default of 10 bounces between
+        // the layers, light trapped by total internal reflection is lost (7% here).
+        let s = SceneFile::from_string(r#"{
+            "background": [1, 1, 1], "max_depth": 100, "path_termination": "russian_roulette",
+            "camera": { "location": [0, 1, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 },
+            "materials": { "F": { "type": "coated_diffuse", "albedo": [1, 1, 1], "thickness": 0.000001, "max_depth": 100 } },
+            "objects": [ { "type": "plane", "y": 0, "material": "F" } ]
+        }"#.to_string());
+        crate::geometry::seed_rand(7, 1);
+        let r = Ray { ro: Vector3::new(0., 1., 0.), rd: Vector3::new(0.3, -1., 0.).normalize() };
+        let n = 20_000;
+        let mean = (0..n).map(|_| trace(&r, 0, &s).1.rgb.x).sum::<f64>() / n as f64;
+        assert!((mean - 1.).abs() < 0.03, "{}", mean);
+    }
+
+    /// A big subsurface sphere under an even white sky, seen from above.
+    fn subsurface_furnace(material: &str) -> Scene {
+        subsurface_furnace_sized(material, 20.)
+    }
+
+    fn subsurface_furnace_sized(material: &str, radius: f64) -> Scene {
+        SceneFile::from_string(format!(r#"{{
+            "background": [1, 1, 1], "max_depth": 50, "path_termination": "russian_roulette",
+            "camera": {{ "location": [0, 30, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "materials": {{ "S": {} }},
+            "objects": [ {{ "type": "sphere", "location": [0, 0, 0], "radius": {}, "material": "S" }} ]
+        }}"#, material, radius))
+    }
+
+    #[test]
+    fn test_subsurface_conserves_energy_without_absorption() {
+        // Light that only scatters inside always comes out again: as bright as the sky in every
+        // channel, however far each travels.
+        // (A small sphere: in a large one, the rare walks that wander deep run past the step
+        // limit.)
+        let s = subsurface_furnace_sized(r#"{ "type": "subsurface", "sigma_a": [0, 0, 0], "sigma_s": [2, 5, 12], "g": 0.3 }"#, 1.);
+        crate::geometry::seed_rand(8, 1);
+        let r = Ray { ro: Vector3::new(0., 30., 0.), rd: Vector3::new(0.1, -1., 0.).normalize() };
+        let n = 6000;
+        let mean = (0..n).map(|_| trace(&r, 0, &s).1.rgb).sum::<Vector3<f64>>() / n as f64;
+        for c in 0..3 {
+            assert!((mean[c] - 1.).abs() < 0.03, "{}: {}", c, mean[c]);
+        }
+    }
+
+    #[test]
+    fn test_subsurface_looks_its_albedo() {
+        // Chiang et al.'s fit makes a thick slab look about the colour asked for (plus the
+        // sheen of the surface's reflection, a few percent of the sky).
+        for a in [0.3, 0.8] {
+            let s = subsurface_furnace(&format!(r#"{{ "type": "subsurface", "albedo": [{}, {}, {}], "radius": 0.2 }}"#, a, a, a));
+            crate::geometry::seed_rand(9, 1);
+            let r = Ray { ro: Vector3::new(0., 30., 0.), rd: Vector3::new(0., -1., 0.) };
+            let n = 6000;
+            let mean = (0..n).map(|_| trace(&r, 0, &s).1.rgb.x).sum::<f64>() / n as f64;
+            assert!((mean - a).abs() < 0.1, "albedo {}: looks {}", a, mean);
+        }
+    }
+
     /// Mean and standard deviation of n samples of the radiance from the floor below the light.
     fn floor_radiance(s: &Scene, n: usize) -> (f64, f64) {
         let r = Ray { ro: Vector3::new(0., 0.5, 0.), rd: Vector3::new(0., -1., 0.) };
@@ -275,6 +504,42 @@ mod tests {
         // Less noise, though only modestly for a light this large and close, where the geometry
         // term varies a lot across it; the gain is largest for small lights.
         assert!(sampled_sd < unsampled_sd * 0.75, "sd {} vs {}", sampled_sd, unsampled_sd);
+    }
+
+    /// A Lambertian floor under the square lights `lights`, (x offset, radiance) each, 2 x 2
+    /// and one unit up, facing down; black background, direct light and one bounce.
+    fn under_squares(lights: &[(f64, f64)]) -> Scene {
+        let mut materials = String::new();
+        let mut objects = String::from(r#"{ "type": "plane", "y": 0, "material": "F" }"#);
+        for (i, (x, radiance)) in lights.iter().enumerate() {
+            materials += &format!(r#", "L{i}": {{ "type": "diffuse-light", "color": [1, 1, 1], "intensity": {radiance} }}"#);
+            let (a, b) = (x - 1., x + 1.);
+            objects += &format!(r#", {{ "type": "triangle", "v0": [{a}, 1, -1], "v1": [{b}, 1, -1], "v2": [{b}, 1, 1], "material": "L{i}" }},
+                {{ "type": "triangle", "v0": [{a}, 1, -1], "v1": [{b}, 1, 1], "v2": [{a}, 1, 1], "material": "L{i}" }}"#);
+        }
+        SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 1,
+            "camera": {{ "location": [0, 0.5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "materials": {{ "F": {{ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }} {materials} }},
+            "objects": [ {objects} ]
+        }}"#))
+    }
+
+    #[test]
+    fn test_lights_chosen_by_power_add_up() {
+        // A dim light overhead and one twenty times brighter off to the side: chosen by power,
+        // the bright one far more often, yet the floor's light is the sum of each one's alone.
+        crate::geometry::seed_rand(17, 1);
+        let both = under_squares(&[(0., 1.), (2.5, 20.)]);
+        // Each light is two triangles; the bright pair takes 20/21 of the choices.
+        let p: Vec<f64> = (0..4).map(|i| both.area_light_choice.probability(i)).collect();
+        assert!((p[2] + p[3] - 20. / 21.).abs() < 1e-9, "{:?}", p);
+        let n = 40_000;
+        let (sum, sum_sd) = floor_radiance(&both, n);
+        let (dim, dim_sd) = floor_radiance(&under_squares(&[(0., 1.)]), n);
+        let (bright, bright_sd) = floor_radiance(&under_squares(&[(2.5, 20.)]), n);
+        let se = ((sum_sd.powi(2) + dim_sd.powi(2) + bright_sd.powi(2)) / n as f64).sqrt();
+        assert!((sum - dim - bright).abs() < 4. * se, "{} vs {} + {} (se {})", sum, dim, bright, se);
     }
 
     /// A volume filling the box from -1 to 1 under a uniform white sky, with small spheres off
@@ -350,11 +615,103 @@ mod tests {
         // An optical depth of 8: nearly all light arriving has scattered many times.
         crate::geometry::seed_rand(13, 1);
         let n = 20_000;
-        let (exact, exact_cast, exact_sd) = through_slab("", n);
-        let (similar, similar_cast, similar_sd) = through_slab(r#", "similarity_after": 4"#, n);
+        let (exact, exact_cast, exact_sd) = through_slab(r#", "delta_m": false"#, n);
+        let (similar, similar_cast, similar_sd) = through_slab(r#", "delta_m": false, "similarity_after": 4"#, n);
         let se = ((exact_sd.powi(2) + similar_sd.powi(2)) / n as f64).sqrt();
         assert!((similar - exact).abs() < 0.05 * exact + 3. * se, "similarity {} vs exact {} (se {})", similar, exact, se);
         assert!((similar_cast as f64) < 0.5 * exact_cast as f64, "rays {} vs {}", similar_cast, exact_cast);
+    }
+
+    /// Mean radiance and standard error looking straight down onto a plane-parallel slab of
+    /// optical depth `tau` (1 unit thick), lit by a sun of irradiance 1 at the zenith, over
+    /// a black sky and nothing below.
+    fn slab_reflection(tau: f64, albedo: f64, g: f64, extra: &str, n: usize) -> (f64, f64) {
+        let s = SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 100000, "path_termination": "russian_roulette",
+            "shadow_bias": 0.0001,
+            "sun": {{ "direction": [0, 1, 0], "intensity": 1 }},
+            "camera": {{ "location": [0, 5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "objects": [ {{ "type": "volume", "min": [-1e6, 0, -1e6], "max": [1e6, 1, 1e6],
+                           "density": {tau}, "albedo": [{albedo}, {albedo}, {albedo}], "g": {g} {extra} }} ]
+        }}"#));
+        let r = Ray { ro: Vector3::new(0., 5., 0.), rd: Vector3::new(0., -1., 0.) };
+        let v: Vec<f64> = (0..n).map(|_| trace(&r, 0, &s).1.rgb.x).collect();
+        let mean = v.iter().sum::<f64>() / n as f64;
+        let sd = (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64).sqrt();
+        (mean, sd / (n as f64).sqrt())
+    }
+
+    /// Runs `f` on a thread with room for paths thousands of vertices deep (`trace` recurses
+    /// once per vertex, and a thick slab's paths scatter thousands of times).
+    fn with_deep_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new().stack_size(1 << 29).spawn(f).unwrap().join().unwrap()
+    }
+
+    #[test]
+    fn test_thick_slab_reflects_as_chandrasekhar() {
+        // A conservative isotropic medium, semi-infinite, lit and seen along its normal,
+        // reflects radiance E H(1)² / 8π for irradiance E (S. Chandrasekhar, "Radiative
+        // Transfer", 1950, chapter IV, equation 30: I(μ) = F μ₀ H(μ) H(μ₀) / 4 (μ + μ₀), with
+        // πF = E), where H(1) = 2.9078 (ibid., table XI): 0.3364 E, a little brighter than a
+        // white Lambertian surface's E / π. At an optical depth of 100 about one per cent less
+        // comes back, the rest getting through. A cloud is as bright as this on its sunlit side,
+        // less what it absorbs.
+        let (mean, se) = with_deep_stack(|| {
+            crate::geometry::seed_rand(24, 1);
+            slab_reflection(100., 1., 0., "", 4000)
+        });
+        let expected = 2.9078f64.powi(2) / (8. * std::f64::consts::PI);
+        assert!(mean < expected + 3. * se && mean > 0.97 * expected - 3. * se, "{} ± {} vs {}", mean, se, expected);
+    }
+
+    #[test]
+    fn test_delta_m_matches_exact_transport_in_a_cloud_slab() {
+        // A thick slab of cloud (optical depth 50, albedo 0.999, g = 0.85) seen from above with
+        // the sun overhead: delta-M truncation after the first scattering reflects the same light
+        // as exact transport, with far less noise, and both are nearly white: about 0.8 of a
+        // white Lambertian surface's E / π.
+        let ((exact, exact_se), (truncated, truncated_se)) = with_deep_stack(|| {
+            crate::geometry::seed_rand(25, 1);
+            (slab_reflection(50., 0.999, 0.85, r#", "delta_m": false"#, 20_000),
+             slab_reflection(50., 0.999, 0.85, "", 20_000))
+        });
+        let pi = std::f64::consts::PI;
+        let se = (exact_se.powi(2) + truncated_se.powi(2)).sqrt();
+        assert!((truncated - exact).abs() < 0.02 * exact + 3. * se, "delta-M {} vs exact {} (se {})", truncated, exact, se);
+        assert!(truncated_se < 0.6 * exact_se, "standard errors {} vs {}", truncated_se, exact_se);
+        assert!(truncated * pi > 0.7 && exact * pi > 0.7, "reflectance {} / {}", truncated * pi, exact * pi);
+    }
+
+    #[test]
+    fn test_skylight_is_in_proportion_to_sunlight() {
+        // Under a clear sky with the sun 53° up, the sky lights the ground with a sixth or so of
+        // what the sun does directly (the diffuse fraction of global irradiance on clear days is
+        // 10-20%): the sky and the sun are on one scale, whatever the sun's intensity.
+        let ground = |intensity: f64| {
+            let s = SceneFile::from_string(format!(r#"{{
+                "background": [0, 0, 0], "max_depth": 1, "shadow_bias": 0.001,
+                "sun": {{ "intensity": {intensity} }},
+                "camera": {{ "location": [0, 10, 0], "lookat": [0, 0, 1], "up": [0, 1, 0], "angle": 0.5 }},
+                "materials": {{ "W": {{ "type": "lambertian", "albedo": [1, 1, 1] }} }},
+                "objects": [
+                    {{ "type": "skysphere", "sun_direction": [-0.4, 0.8, -0.45] }},
+                    {{ "type": "plane", "y": 0, "material": "W" }}
+                ]
+            }}"#));
+            let r = Ray { ro: Vector3::new(0., 10., 0.), rd: Vector3::new(0., -1., 0.) };
+            let n = 20_000;
+            let radiance = (0..n).map(|_| trace(&r, 0, &s).1.rgb.y).sum::<f64>() / n as f64;
+            let sun = s.sun.as_ref().unwrap();
+            let direct = sun.irradiance_at(&Vector3::zeros()).rgb.y * sun.direction.y / std::f64::consts::PI;
+            (radiance, direct)
+        };
+        crate::geometry::seed_rand(26, 1);
+        let (radiance, direct) = ground(1.);
+        let diffuse_fraction = (radiance - direct) / radiance;
+        assert!(diffuse_fraction > 0.05 && diffuse_fraction < 0.25, "diffuse fraction {}", diffuse_fraction);
+        let (brighter, brighter_direct) = ground(3.);
+        assert!((brighter_direct / direct - 3.).abs() < 1e-9);
+        assert!((brighter / radiance - 3.).abs() < 0.05, "{} vs {}", brighter, radiance);
     }
 
     #[test]
@@ -476,6 +833,51 @@ mod tests {
         assert!((mean - (-1.2f64).exp()).abs() < 0.01, "{}", mean);
     }
 
+    #[test]
+    fn test_chromatic_absorber_follows_beer_lambert_per_channel() {
+        // Each channel through its own extinction: exp(-2 σ_c), whichever channel each path
+        // tracked with (`volume::chromatic`).
+        crate::geometry::seed_rand(3, 2);
+        let s = volume_scene(r#""sigma_a": [0.2, 0.6, 1.2], "sigma_s": [0, 0, 0]"#);
+        let n = 60_000;
+        let r = Ray { ro: Vector3::new(0., 0., -5.), rd: Vector3::new(0., 0., 1.) };
+        let mean = (0..n).map(|_| trace(&r, 0, &s).1.rgb).sum::<Vector3<f64>>() / n as f64;
+        for (c, sigma) in [0.2f64, 0.6, 1.2].iter().enumerate() {
+            assert!((mean[c] - (-2. * sigma).exp()).abs() < 0.01, "{}: {} vs {}", c, mean[c], (-2. * sigma).exp());
+        }
+    }
+
+    #[test]
+    fn test_chromatic_furnace() {
+        // Scattering only, with different extinction in each channel: still exactly as bright
+        // as the sky on average, and every estimate bounded by the MIS weight (three).
+        crate::geometry::seed_rand(4, 2);
+        let s = volume_scene(r#""sigma_a": [0, 0, 0], "sigma_s": [0.5, 1.5, 4], "g": 0.3"#);
+        let n = 30_000;
+        let r = Ray { ro: Vector3::new(0., 0., -5.), rd: Vector3::new(0.1, 0., 1.).normalize() };
+        let samples: Vec<Vector3<f64>> = (0..n).map(|_| trace(&r, 0, &s).1.rgb).collect();
+        let mean = samples.iter().sum::<Vector3<f64>>() / n as f64;
+        assert!(samples.iter().all(|c| c.max() <= 3. + 1e-9 && c.min() >= 0.));
+        for c in 0..3 {
+            assert!((mean[c] - 1.).abs() < 0.02, "{}: {}", c, mean[c]);
+        }
+    }
+
+    #[test]
+    fn test_chromatic_shadows() {
+        crate::geometry::seed_rand(5, 2);
+        let s = volume_scene(r#""sigma_a": [0.2, 0.6, 1.2], "sigma_s": [0.3, 0, 0.1]"#);
+        let r = Ray { ro: Vector3::new(0., 0., -5.), rd: Vector3::new(0., 0., 1.) };
+        let n = 20_000;
+        let mean = (0..n).map(|_| s.objects.transmittance(&r, 10., 0.).rgb).sum::<Vector3<f64>>() / n as f64;
+        for (c, sigma) in [0.5f64, 0.6, 1.3].iter().enumerate() {
+            assert!((mean[c] - (-2. * sigma).exp()).abs() < 0.006, "{}: {} vs {}", c, mean[c], (-2. * sigma).exp());
+        }
+        // A grey medium given by coefficients is just scaled density: exact, no tracking.
+        let grey = volume_scene(r#""sigma_a": [0.25, 0.25, 0.25], "sigma_s": [0.25, 0.25, 0.25]"#);
+        assert!((grey.objects.transmittance(&r, 10., 0.).rgb.x - (-1f64).exp()).abs() < 1e-12);
+    }
+
     /// A floor of albedo 0.5, `objects` besides it, and the sun `sun`; black background,
     /// direct light only.
     fn sunlit(sun: &str, objects: &str) -> Scene {
@@ -491,6 +893,7 @@ mod tests {
     fn test_sun_lights_lambertian_by_cosine() {
         // Irradiance 3 at 60 degrees from the normal: 0.5 / π × 3 × cos 60°.
         let s = sunlit(r#"{ "direction": [0, 1, 1.7320508075688772], "intensity": 3 }"#, "");
+        // A diffuse surface can't resolve the disc, so sees the sun as a point.
         let c = trace_down(&s);
         assert!((c.rgb.x - 0.5 / std::f64::consts::PI * 3. * 0.5).abs() < 1e-9, "{:?}", c);
         // From below the horizon it lights nothing.
@@ -540,9 +943,12 @@ mod tests {
     }
 
     #[test]
-    fn test_sun_disc_is_not_counted_twice() {
-        // A diffuse floor samples the sun directly; its bounce rays that then see the (here
-        // huge) disc must ignore it. With a black sky, every bounce adds nothing.
+    fn test_sun_disc_is_counted_once() {
+        // A diffuse floor samples the sun directly, here over its disc, which is huge enough
+        // for the floor's BSDF to resolve; its bounce rays that then see the disc count it
+        // weighted by MIS, so that the two together count it once. With a black sky, nothing
+        // else lights the floor.
+        crate::geometry::seed_rand(8, 1);
         let s = SceneFile::from_string(r#"{
             "background": [0, 0, 0], "max_depth": 3, "shadow_bias": 0.0001,
             "sun": { "direction": [0, 1, 0.3], "intensity": 2, "angular_radius": 20 },
@@ -550,10 +956,24 @@ mod tests {
             "materials": { "M": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } },
             "objects": [ { "type": "plane", "y": 0, "material": "M" } ]
         }"#.to_string());
-        let direct = 0.5 / std::f64::consts::PI * 2. * Vector3::new(0., 1., 0.3).normalize().y;
-        for _ in 0..200 {
-            assert!((trace_down(&s).rgb.x - direct).abs() < 1e-9);
+        // The light the floor reflects, ∫ (albedo / π) L(ω) cos θ dω over the disc, in rings.
+        let sun = s.sun.as_ref().unwrap();
+        let (a, b) = crate::material::phase::orthonormal_basis(&sun.direction);
+        let (rings, around) = (400, 400);
+        let r = sun.angular_radius;
+        let mut direct = 0.;
+        for i in 0..rings {
+            let theta = (i as f64 + 0.5) / rings as f64 * r;
+            for j in 0..around {
+                let phi = (j as f64 + 0.5) / around as f64 * 2. * std::f64::consts::PI;
+                let d = sun.direction * theta.cos() + (a * phi.cos() + b * phi.sin()) * theta.sin();
+                let d_omega = theta.sin() * (r / rings as f64) * (2. * std::f64::consts::PI / around as f64);
+                direct += 0.5 / std::f64::consts::PI * sun.disc_radiance(&Vector3::zeros(), &d).rgb.x * d.y.max(0.) * d_omega;
+            }
         }
+        let n = 20_000;
+        let mean = (0..n).map(|_| trace_down(&s).rgb.x).sum::<f64>() / n as f64;
+        assert!((mean - direct).abs() < 0.005 * direct, "{} vs {}", mean, direct);
     }
 
     #[test]
@@ -569,7 +989,9 @@ mod tests {
         let towards = Ray { ro: Vector3::new(0., 1., -1.), rd: Vector3::new(0., -1., 1.).normalize() };
         let seen = trace(&towards, 0, &s).1.rgb.x;
         let disc = sun.disc_radiance(&Vector3::zeros(), &sun.direction).rgb.x;
-        assert!((seen - 0.5 * disc).abs() < 1e-6 * disc, "{} vs {}", seen, 0.5 * disc);
+        // Schlick's Fresnel at 45°, from a reflectance of 0.5 at normal incidence.
+        let f = 0.5 + 0.5 * (1. - 0.5f64.sqrt()).powi(5);
+        assert!((seen - f * disc).abs() < 1e-6 * disc, "{} vs {}", seen, f * disc);
     }
 
     #[test]

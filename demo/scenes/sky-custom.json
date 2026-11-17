@@ -1,4 +1,5 @@
 {
+  "output": { "exposure": 0.27 },
   "width": 1200,
   "height": 500,
 
@@ -57,11 +58,11 @@
       "medium": "CHECKERED_MARBLE"
     },
     { 
-      "type": "skysphere",
+      "type": "skysphere", "multiple_scattering": false, "ozone": false,
       "rayleigh_r": 5.0e-6,
       "rayleigh_g": 10.0e-6,
       "rayleigh_b": 30.0e-6,
-      "mie_coefficient": 15.0e-6,
+      "mie_coefficient": 7.5e-5,
       "mie_anisotropy": 0.85,
       "sun_direction": [0.3, 0.2, 1],
       "brightness": 15

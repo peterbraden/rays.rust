@@ -1,0 +1,190 @@
+{
+  "width": 480,
+  "height": 270,
+  "supersamples": 128,
+  "chunk_size": 32,
+  "samples_per_chunk": 2,
+  "shadow_bias": 0.0001,
+  "max_depth": 4,
+  "path_termination": "russian_roulette",
+  "background": {
+    "type": "gradient",
+    "bottom": [
+      0.9,
+      0.9,
+      0.9
+    ],
+    "top": [
+      0.5,
+      0.7,
+      1.0
+    ]
+  },
+  "filter": "mitchell",
+  "shutter": [
+    0,
+    1
+  ],
+  "camera": {
+    "location": [
+      0,
+      2.2,
+      -9
+    ],
+    "lookat": [
+      0,
+      1,
+      0
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.42,
+    "aperture": 0
+  },
+  "materials": {
+    "FLOOR": {
+      "type": "lambertian",
+      "albedo": [
+        0.6,
+        0.6,
+        0.6
+      ]
+    },
+    "RED": {
+      "type": "plastic",
+      "albedo": [
+        0.8,
+        0.1,
+        0.1
+      ],
+      "roughness": 0.3
+    },
+    "BLUE": {
+      "type": "plastic",
+      "albedo": [
+        0.1,
+        0.2,
+        0.8
+      ],
+      "roughness": 0.3
+    },
+    "GOLD": {
+      "type": "metal",
+      "reflective": [
+        0.95,
+        0.75,
+        0.4
+      ],
+      "roughness": 0.2
+    },
+    "LAMP": {
+      "type": "diffuse-light",
+      "color": [
+        1,
+        0.95,
+        0.9
+      ],
+      "intensity": 60
+    }
+  },
+  "objects": [
+    {
+      "type": "plane",
+      "y": 0,
+      "material": "FLOOR"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0,
+        6,
+        -2
+      ],
+      "radius": 0.5,
+      "material": "LAMP"
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "sphere",
+        "location": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.8
+      },
+      "translate": [
+        -3.5,
+        0.8,
+        0
+      ],
+      "motion": {
+        "translate": [
+          -1.5,
+          0.8,
+          0
+        ]
+      },
+      "material": "RED"
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "box",
+        "min": [
+          -0.8,
+          -0.8,
+          -0.8
+        ],
+        "max": [
+          0.8,
+          0.8,
+          0.8
+        ]
+      },
+      "translate": [
+        0.8,
+        0.8,
+        0
+      ],
+      "rotate": {
+        "pitch": 0
+      },
+      "motion": {
+        "rotate": {
+          "pitch": 60
+        }
+      },
+      "material": "GOLD"
+    },
+    {
+      "type": "transform",
+      "item": {
+        "type": "sphere",
+        "location": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.6
+      },
+      "translate": [
+        3.2,
+        0.6,
+        0
+      ],
+      "motion": {
+        "translate": [
+          3.2,
+          2.4,
+          0
+        ]
+      },
+      "material": "BLUE"
+    }
+  ]
+}

@@ -125,7 +125,7 @@ mod tests {
         objects.extend(dispatched(shapes, "pub fn parse_shape(", "\n}\n"));
         objects.extend(["tree", "forest"].map(String::from));
         // Arms inside a shape's own options (a prism's "linear" sweep, say) are not types.
-        let options = ["linear", "bezier", "conic", "cubic_spline", "b_spline"];
+        let options = ["linear", "bezier", "conic", "cubic_spline", "b_spline", "flat", "cylinder", "ribbon", "bspline"];
         objects.retain(|n| !options.contains(&n.as_str()));
         check("objects", objects, 50);
         check("materials", dispatched(scenefile, "pub fn parse_material(", "pub fn parse_rock("), 9);

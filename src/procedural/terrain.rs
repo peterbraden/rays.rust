@@ -13,7 +13,8 @@
 
 use crate::color::Color;
 use crate::intersection::Intersection;
-use crate::material::functions::{direct_lighting, scatter_lambertian};
+use crate::material::functions::scatter_bsdf;
+use crate::material::bsdf::LambertianBSDF;
 use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::na::{Vector2, Vector3};
 use crate::noise::PerlinNoise;
@@ -136,7 +137,7 @@ impl Terrain {
                 triangles.push([k(i + 1, j), k(i, j + 1), k(i + 1, j + 1)]);
             }
         }
-        IndexedMesh { positions: points, normals, triangles }
+        IndexedMesh { positions: points, normals, triangles, texcoords: vec![] }
     }
 }
 
@@ -197,11 +198,7 @@ impl MaterialModel for TerrainMaterial {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let intersection = &intersection.facing(r);
         let albedo = self.albedo(&intersection.point, &intersection.normal);
-        ScatteredRay {
-            emit: direct_lighting(albedo, intersection, s),
-            sampled_lights: true,
-            ..scatter_lambertian(albedo, intersection)
-        }
+        scatter_bsdf(&LambertianBSDF { albedo: albedo.as_reflectance(), normal: intersection.normal }, r, &intersection.point, s)
     }
 }
 

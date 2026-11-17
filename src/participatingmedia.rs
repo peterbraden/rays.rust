@@ -1,3 +1,4 @@
+use crate::material::model::LightSampling;
 use crate::color::Color;
 use crate::ray::Ray;
 use crate::scene::Scene;
@@ -21,7 +22,7 @@ pub struct Vacuum {}
 impl ParticipatingMedium for Vacuum {}
 impl MaterialModel for Vacuum {
     fn scatter(&self, _r: &Ray, _i: &Intersection, _s: &Scene) -> ScatteredRay {
-        ScatteredRay { sampled_lights: false, emit: Color::black(),
+        ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(),
             ray: None,
             attenuate: Color::white(),
         }
@@ -39,7 +40,7 @@ impl ParticipatingMedium for HomogenousFog{}
 impl MaterialModel for HomogenousFog {
     fn scatter(&self, r: &Ray, i: &Intersection, _s: &Scene) -> ScatteredRay {
        // let amount = i.dist * self.density;
-        ScatteredRay { sampled_lights: false, emit: Color::black(),
+        ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(),
             ray: Some(Ray {
                 ro: i.point,
                 rd: (r.rd + (random_point_in_unit_ball() * self.scatter * rand())).normalize(),
@@ -89,7 +90,7 @@ impl MaterialModel for LowAltitudeFog {
     fn scatter(&self, _r: &Ray, _i: &Intersection, _s: &Scene) -> ScatteredRay {
         //let amount = i.dist * self.density;
         // TODO
-        ScatteredRay { sampled_lights: false, emit: Color::black(),
+        ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(),
             ray: None,
             attenuate: Color::white(),
         }

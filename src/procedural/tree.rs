@@ -186,6 +186,30 @@ pub struct TreeParams {
     /// Fraction of a dead branch's leaves still hanging on it, dead.
     pub dead_leaves: f64,
     pub stems: Vec<StemLevel>,
+    /// How the plant grows: by Weber and Penn's branching stems, or as one of the desert
+    /// plants of `crate::procedural::succulent`, which read some of these fields differently.
+    pub form: PlantForm,
+}
+
+/// How a plant is built.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlantForm {
+    /// Branching stems, after Weber and Penn: trees and bushes.
+    #[default]
+    Branching,
+    /// A ribbed column with upturned arms (`succulent`).
+    Saguaro,
+    /// A single squat, ribbed body.
+    Barrel,
+    /// Chains of flattened pads.
+    PricklyPear,
+    /// A rosette of thick, spined leaves.
+    Agave,
+    /// A fan of long, whip-like canes.
+    Ocotillo,
+    /// A dense, rounded mound of small leaves on a few twisted stems: sagebrush, rabbitbrush.
+    Mound,
 }
 
 /// The shape of a leaf.
@@ -209,14 +233,14 @@ impl Default for TreeParams {
             leaf_bend: 0.3, leaf_shape: LeafShape::Oval, attraction_up: 0.5,
             wander: 0.035, roughness: 0.15, lean: 0., lean_v: 4., branch_loss: 0.08,
             autumn: 0., autumn_v: 0.5, leaf_fall: 1., dead_branches: 0., dead_leaves: 0.1,
-            stems: vec![StemLevel::default(); 4],
+            stems: vec![StemLevel::default(); 4], form: PlantForm::Branching,
         }
     }
 }
 
 impl TreeParams {
     /// The parameters for stems (or leaves) of `level`; levels past the last listed reuse it.
-    fn level(&self, level: usize) -> &StemLevel {
+    pub fn level(&self, level: usize) -> &StemLevel {
         &self.stems[level.min(self.stems.len() - 1)]
     }
 }
@@ -679,6 +703,9 @@ impl Generator<'_> {
 
 /// Generate the tree `p` describes, chosen by `seed`, with its base at `origin`.
 pub fn generate(p: &TreeParams, seed: u64, origin: Vector3<f64>) -> TreeMesh {
+    if p.form != PlantForm::Branching {
+        return crate::procedural::succulent::generate(p, seed, origin);
+    }
     let mut g = Generator {
         p, rng: Pcg32::new(seed, 0x7ee), season_rng: Pcg32::new(seed, 0x5ea5), noise: PerlinNoise::new(),
         bark: vec![], dead_bark: vec![], leaves: vec![], leaf_info: vec![],
@@ -785,11 +812,26 @@ pub fn params(species_name: &str, overrides: &Value) -> TreeParams {
     p
 }
 
-pub const SPECIES: [&str; 13] = [
+pub const SPECIES: [&str; 26] = [
     "quaking-aspen", "black-tupelo", "california-black-oak", "weeping-willow",
-    "lombardy-poplar", "balsam-fir", "palm", "shrub",
+    "lombardy-poplar", "balsam-fir", "palm", "shrub", "hazel", "hawthorn", "juniper",
     "scots-pine", "stone-pine", "norway-spruce", "italian-cypress", "cedar-of-lebanon",
+    "creosote-bush", "sagebrush", "joshua-tree", "utah-juniper", "rabbitbrush",
+    "saguaro", "barrel-cactus", "prickly-pear", "agave", "ocotillo",
 ];
+
+/// A succulent's parameters (see `crate::procedural::succulent` for what each field means to
+/// its form); `arms` is `stems[1].branches`.
+#[allow(clippy::too_many_arguments)]
+fn succulent(form: PlantForm, scale: f64, scale_v: f64, ratio: f64, arms: f64, leaves: f64,
+             leaf_scale: f64, leaf_scale_x: f64) -> TreeParams {
+    TreeParams {
+        form, scale, scale_v, ratio, leaves, leaf_scale, leaf_scale_x,
+        levels: 1, flare: 0., lean: 0., lean_v: 3., wander: 0.,
+        stems: vec![level(0., 0., 0., 0., 0., 1., 0., 1., 1, 0., 0., 0.), StemLevel { branches: arms, ..StemLevel::default() }],
+        ..TreeParams::default()
+    }
+}
 
 /// A `StemLevel` without splits, its arguments in the order of the paper's Table 1.
 #[allow(clippy::too_many_arguments)]
@@ -816,7 +858,8 @@ fn split(l: StemLevel, seg_splits: f64, split_angle: f64, split_angle_v: f64) ->
 /// narrow columnar crown of steep, upturned branches; the balsam fir's conical whorls of
 /// near-level branches with flat sprays of short needles; a palm's single unbranched trunk
 /// crowned by arching fronds with leaflets in two opposite rows, spiralling at the golden angle
-/// of 137.5 degrees (Prusinkiewicz and Lindenmayer, ch. 4); a generic multi-stemmed shrub; and
+/// of 137.5 degrees (Prusinkiewicz and Lindenmayer, ch. 4); a generic multi-stemmed shrub, and
+/// the bushes of a woodland's edge (hazel, hawthorn, juniper); and
 /// the evergreens after them, each described where it is defined. Conifers' foliage uses
 /// needle tufts larger than real needles, standing in for a shoot's many needles, which at a
 /// distance read as a mass rather than individually.
@@ -919,6 +962,50 @@ pub fn species(name: &str) -> Option<TreeParams> {
             ],
             ..d
         },
+        // Coppiced hazel: many straight stems fanning up from the base, with short side shoots
+        // and broad, round leaves.
+        "hazel" => TreeParams {
+            shape: 3, base_size: 0.15, scale: 4.5, scale_v: 1., levels: 3,
+            ratio: 0.012, ratio_power: 1.3, lobes: 0, lobe_depth: 0., flare: 0.2,
+            base_splits: 7, leaves: 16., leaf_scale: 0.12, leaf_scale_x: 0.9, attraction_up: 0.4, wander: 0.04,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0.1, 1., 6, 0., 0., 25.), 0.05, 18., 6.),
+                level(45., 15., 140., 30., 40., 0.4, 0.1, 1., 4, -10., 0., 30.),
+                level(40., 10., 140., 30., 16., 0.45, 0.1, 1., 2, 0., 0., 20.),
+                level(45., 10., 140., 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Hawthorn: a small, gnarled tree with a short trunk and a dense, rounded, twiggy crown
+        // of small leaves; the hedgerow and woodland-edge tree.
+        "hawthorn" => TreeParams {
+            shape: 1, base_size: 0.25, scale: 5., scale_v: 1.5, levels: 3,
+            ratio: 0.025, ratio_power: 1.3, lobes: 3, lobe_depth: 0.05, flare: 0.4,
+            base_splits: 2, leaves: 60., leaf_scale: 0.07, leaf_scale_x: 0.8, attraction_up: 0.3,
+            wander: 0.08, branch_loss: 0.05,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0., 1., 6, 0., 0., 40.), 0.3, 30., 10.),
+                split(level(55., 15., 137.5, 40., 35., 0.6, 0.15, 1., 6, -15., 0., 80.), 0.15, 20., 10.),
+                level(50., 15., 137.5, 30., 40., 0.45, 0.1, 1., 3, 0., 0., 50.),
+                level(45., 15., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Common juniper: a dense, upright evergreen bush of a few stems, clothed to the ground
+        // in short, prickly needles.
+        "juniper" => TreeParams {
+            shape: 5, base_size: 0.02, scale: 2.5, scale_v: 0.8, levels: 3,
+            ratio: 0.025, ratio_power: 1.3, lobes: 0, lobe_depth: 0., flare: 0.3,
+            base_splits: 3, leaves: 40., leaf_scale: 0.07, leaf_scale_x: 0.2, leaf_bend: 0., leaf_shape: LeafShape::Needles,
+            attraction_up: 0.8, wander: 0.05, branch_loss: 0.05,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0., 1., 6, 0., 0., 20.), 0.15, 15., 10.),
+                level(25., 10., 137.5, 40., 60., 0.3, 0.08, 1., 3, -5., 0., 20.),
+                level(35., 10., 137.5, 40., 14., 0.5, 0.15, 1., 2, 0., 0., 20.),
+                level(30., 10., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
         // Long bare trunk, sinuous with age; a high, irregular, flattish crown of upturned
         // limbs, often with gaps; needles in short tufts.
         "scots-pine" => TreeParams {
@@ -992,6 +1079,88 @@ pub fn species(name: &str) -> Option<TreeParams> {
                 level(50., 15., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
             ],
             ..d
+        },
+        // The desert's bushes. Creosote bush (Larrea tridentata): an open, vase-shaped bush of
+        // many slender, grey, upright stems from the base, sparse tiny dark olive leaves
+        // clustered towards their tips.
+        "creosote-bush" => TreeParams {
+            shape: 3, base_size: 0.2, scale: 1.8, scale_v: 0.5, levels: 3,
+            ratio: 0.012, ratio_power: 1.2, lobes: 0, lobe_depth: 0., flare: 0.,
+            base_splits: 8, leaves: 30., leaf_scale: 0.035, leaf_scale_x: 0.5, leaf_bend: 0.2,
+            attraction_up: 0.8, wander: 0.06, roughness: 0.2, branch_loss: 0.1,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0.15, 1., 5, 0., 0., 20.), 0.05, 24., 8.),
+                level(35., 10., 137.5, 40., 30., 0.4, 0.1, 1., 3, -5., 0., 20.),
+                level(35., 10., 137.5, 40., 10., 0.45, 0.1, 1., 2, 0., 0., 20.),
+                level(40., 15., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Big sagebrush (Artemisia tridentata): a low, rounded, silvery-grey bush on a short,
+        // gnarled, shredding trunk; a dense mass of small wedge-shaped leaves, some of its
+        // stems dead and bare.
+        "sagebrush" => TreeParams {
+            leaf_scale_v: 0.3, wander: 0.15, dead_branches: 0.15,
+            ..succulent(PlantForm::Mound, 1.0, 0.35, 1.3, 7., 2200., 0.065, 0.45)
+        },
+        // Joshua tree (Yucca brevifolia): a stout trunk forking into a few thick, angular,
+        // sparsely branched limbs, each ending in a dense ball of stiff, sword-shaped leaves.
+        // The limbs carry leaves only on short shoots at their ends, as dead leaves fall from
+        // (in reality, hang thatched on) the older wood.
+        "joshua-tree" => TreeParams {
+            shape: 3, base_size: 0.45, scale: 6., scale_v: 2., levels: 3,
+            ratio: 0.06, ratio_power: 0.5, lobes: 0, lobe_depth: 0., flare: 0.6,
+            leaves: 70., leaf_scale: 0.4, leaf_scale_x: 0.1, leaf_bend: 0., leaf_shape: LeafShape::Needles,
+            attraction_up: 1.5, wander: 0.08, roughness: 0.25, branch_loss: 0.,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0.1, 1., 4, 0., 0., 20.), 0.6, 35., 10.),
+                split(level(55., 15., 137.5, 50., 6., 0.4, 0.15, 0.5, 4, 20., 0., 40.), 0.6, 30., 10.),
+                level(30., 15., 137.5, 50., 3., 0.12, 0.03, 0.5, 1, 0., 0., 20.),
+                level(60., 30., 137.5, 40., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Utah juniper (Juniperus osteosperma): the small tree of the Colorado Plateau's
+        // slickrock and mesas, rarely over 6 m; a short, fluted trunk soon forking into
+        // twisted, often partly dead limbs with grey shredding bark, and dense, rounded clumps
+        // of scale-like foliage.
+        "utah-juniper" => TreeParams {
+            shape: 2, base_size: 0.06, scale: 4., scale_v: 1.5, levels: 3,
+            ratio: 0.05, ratio_power: 1.1, lobes: 4, lobe_depth: 0.12, flare: 0.8,
+            base_splits: 2, leaves: 120., leaf_scale: 0.2, leaf_scale_x: 0.35, leaf_bend: 0.,
+            leaf_shape: LeafShape::Needles, attraction_up: 0.3, wander: 0.15, roughness: 0.3,
+            lean: 8., lean_v: 8., branch_loss: 0.08, dead_branches: 0.1, dead_leaves: 0.,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0.15, 1., 6, 0., 0., 50.), 0.35, 35., 12.),
+                split(level(60., 20., 137.5, 50., 26., 0.65, 0.15, 1., 5, -10., 0., 70.), 0.2, 25., 10.),
+                level(50., 20., 137.5, 40., 40., 0.45, 0.1, 1., 2, 0., 0., 40.),
+                level(40., 20., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Rubber rabbitbrush (Ericameria nauseosa): a rounded bush of many slender, upright,
+        // whitish-green stems from the base, densely leafy with narrow, yellow-green leaves.
+        "rabbitbrush" => TreeParams {
+            leaf_scale_v: 0.3, wander: 0.05,
+            ..succulent(PlantForm::Mound, 1.0, 0.3, 1.0, 14., 1800., 0.07, 0.22)
+        },
+        // The succulents (`crate::procedural::succulent`).
+        "saguaro" => TreeParams {
+            lobes: 18, lobe_depth: 0.12, lean_v: 2., wander: 0.015,
+            ..succulent(PlantForm::Saguaro, 9., 3.5, 0.032, 5., 14., 0.05, 0.06)
+        },
+        "barrel-cactus" => TreeParams {
+            lobes: 21, lobe_depth: 0.22, lean: 12., lean_v: 6.,
+            ..succulent(PlantForm::Barrel, 0.9, 0.4, 0.38, 0., 22., 0.07, 0.07)
+        },
+        "prickly-pear" => TreeParams {
+            attraction_up: 0.4,
+            ..succulent(PlantForm::PricklyPear, 0.28, 0.05, 0.72, 22., 14., 0.025, 0.08)
+        },
+        "agave" => succulent(PlantForm::Agave, 0.9, 0.2, 0.16, 36., 9., 0.025, 0.15),
+        "ocotillo" => TreeParams {
+            lean: 22., lean_v: 6., wander: 0.03,
+            ..succulent(PlantForm::Ocotillo, 4.5, 1.2, 0.006, 22., 50., 0.035, 0.55)
         },
         _ => return None,
     };

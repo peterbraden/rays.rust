@@ -29,6 +29,12 @@ pub enum ToneMap {
     None,
     /// v / (1 + v): compresses highlights smoothly.
     Reinhard,
+    /// A filmic curve: the ACES reference rendering transform as fitted by Krzysztof Narkowicz
+    /// ("ACES Filmic Tone Mapping Curve", 2016), (v (2.51 v + 0.03)) / (v (2.43 v + 0.59) +
+    /// 0.14). A toe that deepens shadows and a shoulder that rolls highlights off, so a scene
+    /// has a photograph's contrast; applied per channel, bright saturated colours desaturate
+    /// towards white as film's do.
+    Filmic,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -42,7 +48,7 @@ pub enum Transfer {
 
 /// How linear values are mapped for display, from the scene file's "output" block, eg.
 /// `"output": { "exposure": 1.0, "tonemap": "none", "transfer": "srgb", "glare": true }`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OutputOpts {
     pub exposure: f64,
     pub tonemap: ToneMap,
@@ -53,11 +59,19 @@ pub struct OutputOpts {
     pub glare: Option<Glare>,
     /// Angle (radians) across a pixel at the image's centre, from the camera; for glare.
     pub pixel_angle: f64,
+    /// The sensor's exposure, white balance and output colour space (`film`).
+    pub film: crate::film::Film,
+    /// Lens flare: ghosts and a starburst from the image's brightest lights (`flare`); set
+    /// with the camera, whose lens it uses.
+    pub flare: Option<std::sync::Arc<crate::flare::Flare>>,
+    /// Scales colours' distance from their luminance (1 leaves them; more is more vivid), as a
+    /// photographer's grade does; applied to the linear image.
+    pub saturation: f64,
 }
 
 impl Default for OutputOpts {
     fn default() -> OutputOpts {
-        OutputOpts { exposure: 1., tonemap: ToneMap::None, transfer: Transfer::Srgb, glare: None, pixel_angle: 0. }
+        OutputOpts { exposure: 1., tonemap: ToneMap::None, transfer: Transfer::Srgb, glare: None, pixel_angle: 0., film: crate::film::Film::default(), flare: None, saturation: 1. }
     }
 }
 
@@ -80,7 +94,8 @@ impl OutputOpts {
             tonemap: match o["tonemap"].as_str() {
                 None | Some("none") => ToneMap::None,
                 Some("reinhard") => ToneMap::Reinhard,
-                Some(x) => panic!("Unknown output tonemap '{}': expected \"none\" or \"reinhard\"", x),
+                Some("filmic") => ToneMap::Filmic,
+                Some(x) => panic!("Unknown output tonemap '{}': expected \"none\", \"reinhard\" or \"filmic\"", x),
             },
             transfer: match o["transfer"].as_str() {
                 None | Some("srgb") => Transfer::Srgb,
@@ -102,15 +117,34 @@ impl OutputOpts {
                 },
             },
             pixel_angle: 0.,
+            film: crate::film::Film::parse(o),
+            flare: None,
+            saturation: SceneFile::parse_number(&o["saturation"], 1.).max(0.),
         }
     }
 
-    /// The finished linear image: with the camera's glare, if any.
+    /// The finished linear image: with the camera's glare, if any, through the film.
     pub fn finish(&self, img: &LinearImage) -> LinearImage {
-        match self.glare {
+        let img = match self.glare {
             Some(g) if self.pixel_angle > 0. => g.apply(img, self.pixel_angle, self.exposure),
             _ => LinearImage { width: img.width, height: img.height, pixels: img.pixels.clone() },
+        };
+        let img = match &self.flare {
+            Some(f) => f.apply(&img, self.exposure, self.pixel_angle),
+            None => img,
+        };
+        let img = if self.film.is_identity() { img } else {
+            LinearImage { width: img.width, height: img.height, pixels: img.pixels.iter().map(|c| self.film.apply(c)).collect() }
+        };
+        if self.saturation == 1. {
+            return img;
         }
+        let saturate = |c: &crate::color::Color| {
+            let l = crate::color::luminance(c);
+            let grey = crate::color::Color::new(l, l, l);
+            grey + (*c - grey) * self.saturation
+        };
+        LinearImage { width: img.width, height: img.height, pixels: img.pixels.iter().map(saturate).collect() }
     }
 
     /// Map one linear channel to a display value in [0, 1].
@@ -120,6 +154,7 @@ impl OutputOpts {
         let v = match self.tonemap {
             ToneMap::None => v,
             ToneMap::Reinhard => v / (1. + v),
+            ToneMap::Filmic => (v * (2.51 * v + 0.03)) / (v * (2.43 * v + 0.59) + 0.14),
         }.min(1.);
         match self.transfer {
             Transfer::Srgb => srgb_oetf(v),
@@ -172,19 +207,31 @@ impl ImageWriter for Png {
 /// renders and for reference images to compare against; see "Technical Introduction to
 /// OpenEXR" (Kainz, Bogart, Stanczyk, Hillman),
 /// <https://openexr.com/en/latest/TechnicalIntroduction.html>.
+///
+/// Written with increasing line order, so the file is the same, byte for byte, for the same
+/// image. An EXR file is a sequence of compressed blocks (here 64 x 64 tiles, run-length
+/// compressed) with a table of where each one starts, and with "unspecified" line order, the
+/// `exr` crate's default, which `image` uses, the blocks are written in whatever order their
+/// parallel compression finishes. The pixels were the same either way, but on a busy machine
+/// two renders of the same image could differ as files, which made resumed renders look
+/// different from uninterrupted ones when they weren't.
 pub struct Exr;
 
 impl ImageWriter for Exr {
     fn write(&self, img: &LinearImage, path: &str) -> Result<(), String> {
-        let out = image::Rgb32FImage::from_fn(img.width as u32, img.height as u32, |x, y| {
-            let c = img.get(x as usize, y as usize).rgb;
-            // NaN means a broken sample; keep it out of the file.
-            let f = |v: f64| if v.is_nan() { 0. } else { v as f32 };
-            image::Rgb([f(c.x), f(c.y), f(c.z)])
+        use exr::prelude::*;
+        // NaN means a broken sample; keep it out of the file.
+        let f = |v: f64| if v.is_nan() { 0. } else { v as f32 };
+        let channels = SpecificChannels::rgb(|p: Vec2<usize>| {
+            let c = img.get(p.x(), p.y()).rgb;
+            (f(c.x), f(c.y), f(c.z))
         });
+        let encoding = Encoding { line_order: LineOrder::Increasing, ..Encoding::FAST_LOSSLESS };
+        let layer = Layer::new((img.width, img.height), LayerAttributes::default(), encoding, channels);
         let tmp = format!("{}.tmp", path);
-        out.save_with_format(Path::new(&tmp), image::ImageFormat::OpenExr)
-            .and_then(|_| std::fs::rename(&tmp, path).map_err(image::ImageError::IoError))
+        Image::from_layer(layer).write().to_file(&tmp)
+            .map_err(|e| e.to_string())
+            .and_then(|_| std::fs::rename(&tmp, path).map_err(|e| e.to_string()))
             .map_err(|e| format!("Failed to write {}: {}", path, e))
     }
 }
@@ -250,6 +297,24 @@ mod tests {
     }
 
     #[test]
+    fn test_filmic_curve_and_saturation() {
+        let o = OutputOpts { tonemap: ToneMap::Filmic, transfer: Transfer::Linear, ..OutputOpts::default() };
+        // Black stays black, the curve rises monotonically and saturates at white.
+        assert_eq!(o.encode(0.), 0.);
+        let v: Vec<f64> = (0 .. 100).map(|k| o.encode(k as f64 * 0.1)).collect();
+        assert!(v.windows(2).all(|w| w[1] >= w[0]));
+        assert!(o.encode(100.) > 0.99);
+        // Saturation leaves greys and luminance alone and pushes colours away from grey.
+        let s = OutputOpts { saturation: 1.5, ..OutputOpts::default() };
+        let img = LinearImage { width: 2, height: 1, pixels: vec![crate::color::Color::new(0.3, 0.3, 0.3), crate::color::Color::new(0.6, 0.3, 0.1)] };
+        let out = s.finish(&img);
+        assert!((out.pixels[0].rgb - img.pixels[0].rgb).norm() < 1e-12);
+        let (a, b) = (&img.pixels[1], &out.pixels[1]);
+        assert!((crate::color::luminance(a) - crate::color::luminance(b)).abs() < 1e-9);
+        assert!(b.rgb.x > a.rgb.x && b.rgb.z < a.rgb.z);
+    }
+
+    #[test]
     fn test_exposure_and_tonemap() {
         let o = OutputOpts { exposure: 2., tonemap: ToneMap::Reinhard, transfer: Transfer::Linear, ..OutputOpts::default() };
         // 0.5 * 2 = 1 -> 1 / (1 + 1)
@@ -312,6 +377,28 @@ mod tests {
         assert_eq!((back.width, back.height), (2, 1));
         for (a, b) in back.pixels.iter().zip(&pixels) {
             assert!((a.rgb - b.rgb).norm() <= b.rgb.norm() * 1e-6, "{:?} vs {:?}", a, b);
+        }
+    }
+
+    #[test]
+    fn test_exr_blocks_are_in_a_fixed_order() {
+        // With unspecified line order, blocks land in the order their parallel compression
+        // finishes, which varies from run to run on a busy machine. Several tiles, so there is
+        // more than one block to order.
+        let pixels = (0..300 * 200).map(|i| Color::new((i % 7) as f64, (i % 13) as f64 * 0.1, 1.)).collect();
+        let img = LinearImage { width: 300, height: 200, pixels };
+        let dir = std::env::temp_dir().join(format!("rays-exr-order-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.exr");
+        let path = path.to_str().unwrap();
+        Exr.write(&img, path).unwrap();
+        let meta = exr::meta::MetaData::read_from_file(path, false).unwrap();
+        assert_eq!(meta.headers[0].line_order, exr::meta::attribute::LineOrder::Increasing);
+        // And the same image gives the same file.
+        let first = std::fs::read(path).unwrap();
+        for _ in 0..5 {
+            Exr.write(&img, path).unwrap();
+            assert_eq!(std::fs::read(path).unwrap(), first);
         }
     }
 }

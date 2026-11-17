@@ -23,7 +23,7 @@ seven generators:
 | `precipitation` | rain shafts and virga | Raindrops by rain rate (Marshall-Palmer), falling through shear |
 
 Render any of them with `cargo run --release -- demo/scenes/<scene>.json`. The scenes stand on the
-sea (`{"type": "ocean", "curved": true}`), whose reflections show the sky and clouds again. The altostratus, stratocumulus
+sea (`{"type": "ocean"}`, the planet's surface), whose reflections show the sky and clouds again. The altostratus, stratocumulus
 and stratus images are quick previews (480 x 300, 8 samples per pixel), so they are noisy.
 
 ### All together

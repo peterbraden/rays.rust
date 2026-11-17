@@ -58,7 +58,7 @@ impl Grid {
         let normals = self.normals.iter().map(|&n| {
             if n.norm() > 0. && n.iter().all(|x| x.is_finite()) { n.normalize() } else { Vector3::zeros() }
         }).collect();
-        SmoothMesh::from_indexed(&[IndexedMesh { positions: self.points.clone(), normals, triangles: self.cells(keep) }])
+        SmoothMesh::from_indexed(&[IndexedMesh { positions: self.points.clone(), normals, triangles: self.cells(keep), texcoords: vec![] }])
     }
 
     fn flat(&self, keep: impl Fn(&[usize; 3]) -> bool) -> Mesh {

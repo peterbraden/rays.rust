@@ -37,6 +37,20 @@ pub trait MaterialModel: Sync{
     /// Radiance emitted in the direction `towards` (a unit vector leaving the surface) from a
     /// point with surface normal `normal`.
     fn emitted(&self, _normal: &Vector3<f64>, _towards: &Vector3<f64>) -> Color { Color::black() }
+
+    /// As `emitted`, at a point with texture coordinates `uv` (if the shape has them), for
+    /// textured emitters; `emitted` is then their mean.
+    fn emitted_at(&self, normal: &Vector3<f64>, towards: &Vector3<f64>, _uv: Option<crate::na::Vector2<f64>>) -> Color {
+        self.emitted(normal, towards)
+    }
+
+    /// This material as data, for the wavefront integrator (`wavefront::flat`); None if it
+    /// can't be.
+    fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> { None }
+
+    /// Whether this is the sky's material, which the wavefront integrator evaluates for rays
+    /// that escape the scene.
+    fn is_sky(&self) -> bool { false }
 }
 
 /// The outgoing ray, and the weight to assign the color of the traced ray.
@@ -51,10 +65,24 @@ pub struct ScatteredRay {
     pub ray: Option<Ray>,
     pub attenuate: Color,
     pub emit: Color,
-    /// Set when `emit` already includes light sampled directly from the scene's area lights.
-    /// The continuation ray must then ignore emission from those lights if it hits one, or that
-    /// light would be counted twice.
-    pub sampled_lights: bool,
+    /// Whether `emit` already includes light sampled directly from the scene's area lights and
+    /// sun, and so how much of their emission the continuation ray counts if it hits one.
+    pub light_sampling: LightSampling,
+}
+
+/// How a scattered ray's vertex sampled the lights (area lights and the sun), which decides
+/// what the ray counts of their emission if it hits one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LightSampling {
+    /// The lights weren't sampled: their emission counts in full.
+    None,
+    /// The lights were sampled alone, so their emission is already counted and the ray ignores
+    /// it (as for a point-like light, which only light sampling can find).
+    Exclusive,
+    /// The lights were sampled with multiple importance sampling (`material::bsdf`), and the
+    /// ray's direction was sampled from the BSDF with density `bsdf_pdf` per steradian: their
+    /// emission counts weighted by the power heuristic against the lights' own density.
+    MIS { bsdf_pdf: f64 },
 }
 
 /// Some material models use a direct ray to the light sources to calculate a scatter.

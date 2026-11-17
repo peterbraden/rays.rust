@@ -1,0 +1,234 @@
+{
+  "width": 640,
+  "height": 240,
+  "supersamples": 128,
+  "chunk_size": 32,
+  "samples_per_chunk": 2,
+  "shadow_bias": 0.0001,
+  "max_depth": 5,
+  "path_termination": "russian_roulette",
+  "spectral": true,
+  "background": [
+    0,
+    0,
+    0
+  ],
+  "output": {
+    "tonemap": "reinhard"
+  },
+  "camera": {
+    "location": [
+      0,
+      2,
+      -9
+    ],
+    "lookat": [
+      0,
+      1.1,
+      0
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.42,
+    "aperture": 0
+  },
+  "materials": {
+    "FLOOR": {
+      "type": "lambertian",
+      "albedo": [
+        0.4,
+        0.4,
+        0.4
+      ]
+    },
+    "WALL": {
+      "type": "lambertian",
+      "albedo": [
+        0.25,
+        0.25,
+        0.25
+      ]
+    },
+    "CHALK": {
+      "type": "lambertian",
+      "albedo": [
+        0.8,
+        0.8,
+        0.8
+      ]
+    },
+    "K1900": {
+      "type": "diffuse-light",
+      "temperature": 1900,
+      "intensity": 12
+    },
+    "K2700": {
+      "type": "diffuse-light",
+      "temperature": 2700,
+      "intensity": 12
+    },
+    "K4000": {
+      "type": "diffuse-light",
+      "temperature": 4000,
+      "intensity": 12
+    },
+    "K6500": {
+      "type": "diffuse-light",
+      "temperature": 6500,
+      "intensity": 12
+    },
+    "K12000": {
+      "type": "diffuse-light",
+      "temperature": 12000,
+      "intensity": 12
+    }
+  },
+  "objects": [
+    {
+      "type": "plane",
+      "y": 0,
+      "material": "FLOOR"
+    },
+    {
+      "type": "triangle",
+      "v0": [
+        -20,
+        0,
+        2
+      ],
+      "v1": [
+        20,
+        0,
+        2
+      ],
+      "v2": [
+        20,
+        20,
+        2
+      ],
+      "material": "WALL"
+    },
+    {
+      "type": "triangle",
+      "v0": [
+        -20,
+        0,
+        2
+      ],
+      "v1": [
+        20,
+        20,
+        2
+      ],
+      "v2": [
+        -20,
+        20,
+        2
+      ],
+      "material": "WALL"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        4.4,
+        1.25,
+        -0.6
+      ],
+      "radius": 0.08,
+      "material": "K1900"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        4.4,
+        0.5,
+        0
+      ],
+      "radius": 0.5,
+      "material": "CHALK"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        2.2,
+        1.25,
+        -0.6
+      ],
+      "radius": 0.08,
+      "material": "K2700"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        2.2,
+        0.5,
+        0
+      ],
+      "radius": 0.5,
+      "material": "CHALK"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.0,
+        1.25,
+        -0.6
+      ],
+      "radius": 0.08,
+      "material": "K4000"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        0.0,
+        0.5,
+        0
+      ],
+      "radius": 0.5,
+      "material": "CHALK"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -2.2,
+        1.25,
+        -0.6
+      ],
+      "radius": 0.08,
+      "material": "K6500"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -2.2,
+        0.5,
+        0
+      ],
+      "radius": 0.5,
+      "material": "CHALK"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -4.4,
+        1.25,
+        -0.6
+      ],
+      "radius": 0.08,
+      "material": "K12000"
+    },
+    {
+      "type": "sphere",
+      "location": [
+        -4.4,
+        0.5,
+        0
+      ],
+      "radius": 0.5,
+      "material": "CHALK"
+    }
+  ]
+}

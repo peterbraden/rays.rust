@@ -1,50 +1,68 @@
 {
   "width": 960,
-  "height": 480,
-  "supersamples": 16,
+  "height": 540,
+  "supersamples": 64,
   "chunk_size": 64,
-  "samples_per_chunk": 2,
-  "background": [0.1, 0.1, 0.1],
-  "shadow_bias": 0.001,
-  "max_depth": 3,
-
-  "materials": {
-    "WATER": {
-      "type": "metal",
-      "reflective": [0.3, 0.35, 0.45],
-      "roughness": 0.05
-    }
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 6,
+  "path_termination": "russian_roulette",
+  "output": {
+    "tonemap": "reinhard",
+    "exposure": 1.5
   },
-  "media": {},
-
   "camera": {
-    "location": [0, 24, 40],
-    "lookat": [0, 1, -3],
-    "up": [0, 1, 0],
-    "angle": 0.7,
-    "aperture": 0
+    "location": [
+      -5000,
+      4300,
+      -6000
+    ],
+    "lookat": [
+      -44625,
+      7500,
+      -6375
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.8
   },
-
-  "lights": [
-    {
-      "location": [-6000, 6000, -2000],
-      "color": "white",
-      "intensity": 8e7
-    }
-  ],
-  "variables": { "time": 100000 },
-
+  "sun": {
+    "intensity": 4.9
+  },
   "objects": [
     {
       "type": "landscape",
       "seed": 0,
-      "time": "$time",
-      "domain": { "type": "patch", "cells": 96, "spacing": 500, "near": "volcanoes" },
-      "scale": 1000,
-      "exaggeration": 2,
-      "min_river_width": 150
+      "time": 100000,
+      "domain": {
+        "near": "volcanoes",
+        "cells": 128,
+        "spacing": 750
+      },
+      "focus": [
+        0,
+        0,
+        0
+      ],
+      "cache": "demo/scenes/.landscape-cache"
     },
-    { "type": "plane", "y": 0, "material": "WATER" },
-    { "type": "skysphere", "sun_direction": [-0.6, 0.6, -0.2] }
+    {
+      "type": "ocean",
+      "wind": [
+        7,
+        2
+      ]
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        0.6,
+        0.35,
+        -0.5
+      ]
+    }
   ]
 }

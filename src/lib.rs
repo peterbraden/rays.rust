@@ -8,22 +8,38 @@ extern crate nalgebra as na;
 extern crate serde_derive;
 
 pub mod assets;
+pub mod schema;
 #[cfg(feature = "cli")]
 pub mod server;
-pub mod schema;
 pub mod stopwatch;
 pub mod preview;
 pub mod ray;
 pub mod color;
+pub mod spectrum;
+pub mod motion;
+pub mod sampler;
+pub mod textures;
+pub mod film;
+pub mod lens;
+pub mod flare;
 pub mod material {
     pub mod model;
+    pub mod bsdf;
+    pub mod ggx;
     pub mod dielectric;
     pub mod specular;
+    pub mod conductor;
+    pub mod rough_dielectric;
+    pub mod layered;
+    pub mod subsurface;
+    pub mod mix;
+    pub mod hair;
     pub mod ambient;
     pub mod texture;
     pub mod lambertian;
     pub mod diffuse_light;
     pub mod normal;
+    pub mod uv;
     pub mod functions;
     pub mod legacy;
     pub mod plastic;
@@ -32,6 +48,7 @@ pub mod material {
     pub mod grass;
     pub mod bump;
     pub mod rock;
+    pub mod soil;
     pub mod phase;
     pub mod diffraction;
     pub mod ice_halos;
@@ -40,6 +57,8 @@ pub mod material {
 pub mod intersection;
 pub mod sceneobject;
 pub mod light;
+pub mod light_bvh;
+pub mod wavefront;
 pub mod shapes {
     pub mod transform;
     pub mod bbox;
@@ -57,6 +76,9 @@ pub mod shapes {
     pub mod polynomial;
     pub mod cone;
     pub mod disc;
+    pub mod bilinear;
+    pub mod curve;
+    pub mod subdivision;
     pub mod algebraic;
     pub mod polygon;
     pub mod revolution;
@@ -66,6 +88,7 @@ pub mod shapes {
     pub mod julia;
     pub mod tessellated;
     pub mod text;
+    pub mod lod;
 }
 pub mod octree;
 pub mod bvh;
@@ -92,6 +115,7 @@ pub mod procedural {
     pub mod box_terrain;
     pub mod fireworks;
     pub mod tree;
+    pub mod succulent;
     pub mod forest;
     pub mod heightmap;
     pub mod grass;
@@ -104,6 +128,7 @@ pub mod procedural {
     pub mod mammatus;
     pub mod precipitation;
     pub mod harris_cumulus;
+    pub mod space;
 }
 pub mod participatingmedia;
 pub mod noise;
@@ -111,7 +136,12 @@ pub mod terrain;
 pub mod expr;
 pub mod volume;
 pub mod glare;
+pub mod variance;
+pub mod adaptive;
+pub mod environment;
+pub mod sobol;
 pub mod planet;
+pub mod celestial;
 
 /// Parse JSON, for callers that don't depend on `serde_json` themselves. Panics if invalid.
 pub fn serde_json_from_str(s: &str) -> serde_json::Value {

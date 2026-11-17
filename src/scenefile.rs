@@ -1,5 +1,5 @@
 use crate::camera;
-use crate::na::{Vector3, Vector2};
+use crate::na::{Matrix3, Vector3, Vector2};
 use crate::scenegraph::SceneGraph;
 use crate::shapes::sphere::Sphere;
 use crate::shapes::triangle::Triangle;
@@ -12,6 +12,7 @@ use crate::ocean::create_ocean;
 use crate::shapes::bbox::BBox;
 use crate::light::{Light, Sun};
 use crate::color::Color;
+use crate::spectrum::{RefractiveIndex, Emission};
 use crate::skysphere::{create_sky_sphere, parse_sky_material};
 use crate::procedural::box_terrain::create_box_terrain;
 use crate::procedural::fireworks::create_firework;
@@ -21,6 +22,7 @@ use crate::procedural::grass::{create_grass, GrassMedium};
 use crate::procedural::heightmap::{HeightGrid, Terrain};
 use crate::procedural::rock::{self, Bedrock, Assorted};
 use crate::material::rock::{Rock, RockStyle};
+use crate::material::soil::{Soil, SoilStyle};
 use crate::procedural::nubis_clouds::{NubisCloudLayer, GlobalNubis};
 use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGenus, GlobalCirrus};
 use crate::procedural::benard_altocumulus::BenardAltocumulus;
@@ -31,7 +33,11 @@ use crate::procedural::precipitation::Precipitation;
 use crate::material::rainbow::RainbowTable;
 use crate::procedural::harris_cumulus::{CloudSimulation, Forcing, HarrisCumulus, Profile, SimulationParams, Sounding};
 use crate::participatingmedia::create_fog;
-use crate::volume::{create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
+use crate::volume::grid::{Grid, GridDensity};
+use crate::light::Profile as LightProfile;
+use crate::textures::Image;
+use crate::volume::emission::VolumeEmission;
+use crate::volume::{Volume, create_medium, create_volume, DensityField, ConstantDensity, NoiseDensity, ScatteringApproximation, Oz, Diffraction, Halos, Scattering};
 use crate::material::ice_halos::{Crystals, Habit};
 use crate::material::diffraction::DiffractionTable;
 use crate::noise::PerlinNoise;
@@ -40,7 +46,7 @@ use crate::material::phase::PhaseFunction;
 use std::sync::Arc;
 use crate::sceneobject::SceneObject;
 use serde_json::{Value, Map};
-use crate::scene::{Scene, ImageOpts, RenderOpts, PathTermination, Background, Filter};
+use crate::scene::{Scene, ImageOpts, RenderOpts, PathTermination, Background, Filter, FilterShape, TabulatedFilter, Sampler};
 use crate::output::OutputOpts;
 use std::io::prelude::*;
 use std::fs::File;
@@ -65,6 +71,8 @@ use rayon::prelude::*;
 
 /// A geometry that may be shared: by several objects, or by instancing transforms.
 pub type SharedGeometry = Arc<dyn Geometry + Sync + Send>;
+/// A part of a tree, as detail to make levels of, and its medium (`SceneFile::tree_details`).
+pub type TreeDetail = (crate::shapes::lod::Detail, Box<dyn Medium + Sync + Send>);
 
 /// The scene file's named geometries, `"geometries": {"dragon": {"type": "mesh", ...}}`. Wherever
 /// a geometry is expected, the string `"dragon"` refers to one. Each is built once, when first
@@ -210,6 +218,8 @@ pub struct SceneFile {
     pub supersamples: Value, 
     #[serde(default)]
     pub samples_per_chunk: Value, 
+    #[serde(default)]
+    pub adaptive: Value,
     pub camera: Value, 
     #[serde(default)]
     pub shadow_bias: Value, 
@@ -221,6 +231,20 @@ pub struct SceneFile {
     pub seed: Value,
     #[serde(default)]
     pub sample_lights: Value,
+    #[serde(default)]
+    pub light_sampler: Value,
+    #[serde(default)]
+    pub integrator: Value,
+    #[serde(default)]
+    pub sample_sky: Value,
+    #[serde(default)]
+    pub sampler: Value,
+    #[serde(default)]
+    pub regularise: Value,
+    #[serde(default)]
+    pub spectral: Value,
+    #[serde(default)]
+    pub shutter: Value,
     #[serde(default)]
     pub filter: Value,
     #[serde(default)]
@@ -265,6 +289,63 @@ impl SceneFile {
         }
     }
     
+    /// The reconstruction filter (`scene::Filter`): `"box"` (the default), `"tent"`,
+    /// `"gaussian"`, `"mitchell"` or `"lanczos"`, or an object with `"type"` and parameters:
+    /// `"radius"` in pixels (defaults 1.5, 2 and 3), and `"sigma"` (0.5), `"b"` and `"c"` (1/3
+    /// each), or `"tau"` (3).
+    pub fn parse_filter(v: &Value) -> Filter {
+        let (name, o) = match v {
+            Value::Null => ("box", &Value::Null),
+            Value::String(s) => (s.as_str(), &Value::Null),
+            Value::Object(_) => (v["type"].as_str().unwrap_or_else(|| panic!("A filter object needs a \"type\", got {}", v)), v),
+            _ => panic!("Unexpected filter {}", v),
+        };
+        let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let tabulated = |shape, radius| Filter::Tabulated(Arc::new(TabulatedFilter::new(shape, radius)));
+        match name {
+            "box" => Filter::Box,
+            "tent" => Filter::Tent,
+            "gaussian" => tabulated(FilterShape::Gaussian { sigma: n("sigma", 0.5) }, n("radius", 1.5)),
+            "mitchell" => tabulated(FilterShape::Mitchell { b: n("b", 1. / 3.), c: n("c", 1. / 3.) }, n("radius", 2.)),
+            "lanczos" => tabulated(FilterShape::Lanczos { tau: n("tau", 3.) }, n("radius", 3.)),
+            f => panic!("Unknown filter '{}': expected \"box\", \"tent\", \"gaussian\", \"mitchell\" or \"lanczos\"", f),
+        }
+    }
+
+    /// A refractive index (`spectrum::RefractiveIndex`): a number; a named glass, `"BK7"`,
+    /// `"fused silica"`, `"SF11"` or `"diamond"` (or `{"glass": name}`); `{"cauchy": [a, b]}`,
+    /// n = a + b / λ² with λ in µm; or `{"sellmeier": {"b": [b1, b2, b3], "c": [c1, c2, c3]}}`,
+    /// c in µm². 1 if absent. Indices that vary with wavelength disperse light in spectral mode
+    /// and take their value at 587.56 nm otherwise.
+    pub fn parse_refractive_index(v: &Value) -> RefractiveIndex {
+        let glass = |name: &str| RefractiveIndex::glass(name)
+            .unwrap_or_else(|| panic!("Unknown glass \"{}\": expected BK7, fused silica, SF11 or diamond", name));
+        let three = |v: &Value, what: &str| -> [f64; 3] {
+            match v.as_array().map(|a| a.iter().map(|x| x.as_f64()).collect::<Option<Vec<f64>>>()) {
+                Some(Some(a)) if a.len() <= 3 => { let mut out = [0.; 3]; out[..a.len()].copy_from_slice(&a); out },
+                _ => panic!("Sellmeier \"{}\" must be up to three numbers, got {}", what, v),
+            }
+        };
+        match v {
+            Value::Null => RefractiveIndex::Constant(1.),
+            Value::Number(n) => RefractiveIndex::Constant(n.as_f64().unwrap()),
+            Value::String(name) => glass(name),
+            Value::Object(o) => if let Some(name) = o.get("glass").and_then(|g| g.as_str()) {
+                glass(name)
+            } else if let Some(c) = o.get("cauchy") {
+                match c.as_array().map(|a| a.iter().filter_map(|x| x.as_f64()).collect::<Vec<f64>>()) {
+                    Some(a) if a.len() == 2 => RefractiveIndex::Cauchy { a: a[0], b: a[1] },
+                    _ => panic!("\"cauchy\" must be [a, b], got {}", c),
+                }
+            } else if let Some(sm) = o.get("sellmeier") {
+                RefractiveIndex::Sellmeier { b: three(&sm["b"], "b"), c: three(&sm["c"], "c") }
+            } else {
+                panic!("A refractive index object needs \"glass\", \"cauchy\" or \"sellmeier\", got {}", v)
+            },
+            _ => panic!("Unexpected refractive index {}", v),
+        }
+    }
+
     pub fn parse_int(v: &Value, default: usize) -> usize {
         if let Some(x) = v.as_u64() {
             return x as usize;
@@ -325,6 +406,74 @@ impl SceneFile {
     }
 
 
+    /// A colour, or an image read by the surface's texture coordinates (`textures`):
+    /// `{"texture": "file.png", "scale": [su, sv] or s, "offset": [ou, ov], "filter":
+    /// "ewa" (the default) | "trilinear" | "bilinear" | "point", "wrap": "repeat" | "clamp" | "black", "linear":
+    /// bool}` (8-bit images are taken as sRGB unless `linear`).
+    /// A colour, an image texture (`{"texture": path, ...}`), or a grey level from the slope
+    /// (`{"slope": [from, to], "jitter": degrees, "jitter_scale": size, "seed": 0}`,
+    /// `textures::SlopeTexture`), or from the elevation (`{"height": [from, to], ...}`).
+    pub fn parse_color_texture(v: &Value) -> crate::textures::ColorTexture {
+        // {"terrain": "washes" | "hollows" | "joints", "scale": the heightmap's floor_scale or
+        // domes, "spread": 1}: where a point lies among a mesas heightmap's features.
+        if let Some(feature) = v.get("terrain") {
+            use crate::textures::TerrainFeature;
+            return crate::textures::ColorTexture::Terrain(crate::textures::TerrainTexture {
+                feature: match feature.as_str() {
+                    Some("washes") => TerrainFeature::Washes,
+                    Some("hollows") => TerrainFeature::Hollows,
+                    Some("joints") => TerrainFeature::Joints,
+                    _ => panic!("terrain texture must be \"washes\", \"hollows\" or \"joints\", got {}", feature),
+                },
+                scale: SceneFile::parse_number(&v["scale"], 150.),
+                spread: SceneFile::parse_number(&v["spread"], 1.),
+                noise: crate::noise::PerlinNoise::new(),
+            });
+        }
+        if let Some(range) = v.get("slope").or(v.get("height")) {
+            let r = SceneFile::parse_vec2(range);
+            return crate::textures::ColorTexture::Slope(crate::textures::SlopeTexture {
+                by_height: v.get("slope").is_none(),
+                from: r.x, to: r.y,
+                jitter: SceneFile::parse_number(&v["jitter"], 0.),
+                jitter_scale: SceneFile::parse_number(&v["jitter_scale"], 1.),
+                noise: crate::noise::SeededNoise::new(SceneFile::parse_int(&v["seed"], 0) as u64),
+            });
+        }
+        match v.get("texture") {
+            Some(_) => crate::textures::ColorTexture::Image(SceneFile::parse_image_map(v)),
+            None => SceneFile::parse_color(v).into(),
+        }
+    }
+
+    pub fn parse_image_map(v: &Value) -> crate::textures::ImageMap {
+        use crate::textures::{Filter, Image, ImageMap, Wrap};
+        let path = v["texture"].as_str().unwrap_or_else(|| panic!("A texture needs a file name, got {}", v["texture"]));
+        let pair = |k: &str, d: f64| match &v[k] {
+            Value::Number(n) => Vector2::repeat(n.as_f64().unwrap()),
+            Value::Null => Vector2::repeat(d),
+            x => SceneFile::parse_vec2(x),
+        };
+        ImageMap {
+            image: Image::shared(path, v["linear"].as_bool()),
+            scale: pair("scale", 1.),
+            offset: pair("offset", 0.),
+            filter: match v["filter"].as_str() {
+                Some("trilinear") => Filter::Trilinear,
+                None | Some("ewa") => Filter::Ewa,
+                Some("bilinear") => Filter::Bilinear,
+                Some("point") => Filter::Point,
+                Some(f) => panic!("Unknown texture filter '{}': expected ewa, trilinear, bilinear or point", f),
+            },
+            wrap: match v["wrap"].as_str() {
+                None | Some("repeat") => Wrap::Repeat,
+                Some("clamp") => Wrap::Clamp,
+                Some("black") => Wrap::Black,
+                Some(w) => panic!("Unknown texture wrap '{}': expected repeat, clamp or black", w),
+            },
+        }
+    }
+
     pub fn parse_color_def(v: &Value, k: &str, def: Color) -> Color {
         match &v.get(k) {
             Some(x) => SceneFile::parse_color(x),
@@ -332,15 +481,199 @@ impl SceneFile {
         }
     }
 
-    pub fn parse_camera(c: Value, width: u32, height: u32) -> camera::FlatLensCamera {
-        camera::FlatLensCamera::new(
-            SceneFile::parse_vec3(&c["lookat"]),
-            SceneFile::parse_vec3(&c["location"]),
-            SceneFile::parse_vec3(&c["up"]),
-            c["angle"].as_f64().unwrap(),
-            width, height,
-            SceneFile::parse_number(&c["aperture"], 0.2)
-        )
+    /// The camera (`camera`): `"location"`, `"lookat"` and `"up"`, and by `"type"`:
+    /// - `"perspective"` (the default): `"angle"`, with tan(angle) the image's height at unit
+    ///   distance; a thin lens of radius `"aperture"` (default 0.2), focused at the point looked
+    ///   at or `"focus_distance"`; `"astigmatism": {"cylinder": power, "axis": degrees,
+    ///   "seidel": power}` (`camera::Astigmatism`), powers in reciprocal scene units.
+    /// - `"orthographic"`: parallel rays from a rectangle `"height"` tall (by default what the
+    ///   perspective camera sees at the point looked at).
+    /// - `"spherical"`: every direction, `"mapping": "equirectangular"` (the default) or
+    ///   `"equal_area"`.
+    /// - `"realistic"`: rays traced through a lens (`lens`): `"lens"`, a built-in name
+    ///   (`"dgauss.50mm"`, the default, `"wide.22mm"`, `"telephoto.250mm"`, `"fisheye.10mm"`) or
+    ///   a pbrt `.dat` file; `"f_number"` (default wide open); `"focus_distance"` (default the
+    ///   point looked at); `"film_diagonal"` in mm (default 35); `"blades"` and `"blade_rotation"`
+    ///   (degrees) for a polygonal stop. The lens sets the field of view.
+    ///
+    /// With `"motion": {"location", "lookat", "up"}`, the camera moves to that pose (each key
+    /// defaulting to the start's) while the shutter is open.
+    pub fn parse_camera(c: Value, width: u32, height: u32) -> Box<dyn camera::Camera + Sync> {
+        let location = SceneFile::parse_vec3(&c["location"]);
+        let lookat = SceneFile::parse_vec3(&c["lookat"]);
+        let up = SceneFile::parse_vec3(&c["up"]);
+        let start = camera::Frame::look_at(location, lookat, up);
+        let placement = match c.get("motion") {
+            None => camera::Placement::still(start),
+            Some(m) => camera::Placement::moving(start, camera::Frame::look_at(
+                SceneFile::parse_vec3_def(m, "location", location),
+                SceneFile::parse_vec3_def(m, "lookat", lookat),
+                SceneFile::parse_vec3_def(m, "up", up))),
+        };
+        let aspect = width as f64 / height as f64;
+        let angle = || c["angle"].as_f64().unwrap_or_else(|| panic!("The camera needs an \"angle\""));
+        match c["type"].as_str() {
+            None | Some("perspective") => {
+                let mut cam = camera::ThinLensCamera::new(lookat, location, up, angle(), width, height,
+                    SceneFile::parse_number(&c["aperture"], 0.2)).with_placement(placement);
+                if let Some(d) = c["focus_distance"].as_f64() {
+                    cam = cam.with_focus(d);
+                }
+                if let Some(a) = c.get("astigmatism") {
+                    cam = cam.with_astigmatism(camera::Astigmatism {
+                        cylinder: SceneFile::parse_number(&a["cylinder"], 0.),
+                        axis: SceneFile::parse_number(&a["axis"], 0.).to_radians(),
+                        seidel: SceneFile::parse_number(&a["seidel"], 0.),
+                    });
+                }
+                Box::new(cam)
+            },
+            Some("orthographic") => {
+                let h = c["height"].as_f64().unwrap_or_else(|| angle().tan() * (lookat - location).norm());
+                Box::new(camera::OrthographicCamera::new(placement, h, aspect))
+            },
+            Some("spherical") => Box::new(camera::SphericalCamera::new(placement, match c["mapping"].as_str() {
+                None | Some("equirectangular") => camera::SphereMapping::Equirectangular,
+                Some("equal_area") => camera::SphereMapping::EqualArea,
+                Some(m) => panic!("Unknown spherical mapping '{}': expected \"equirectangular\" or \"equal_area\"", m),
+            })),
+            Some("realistic") => {
+                let lens = SceneFile::parse_lens(c["lens"].as_str().unwrap_or("dgauss.50mm"), &c);
+                let focus = c["focus_distance"].as_f64().unwrap_or((lookat - location).norm());
+                let cam = crate::lens::RealisticCamera::new(placement, lens, focus, c["f_number"].as_f64(),
+                    SceneFile::parse_number(&c["film_diagonal"], 35.) * 1e-3, aspect)
+                    .unwrap_or_else(|e| panic!("Realistic camera: {}", e));
+                Box::new(cam)
+            },
+            Some(t) => panic!("Unknown camera type '{}': expected \"perspective\", \"orthographic\", \"spherical\" or \"realistic\"", t),
+        }
+    }
+
+    /// A lens (`lens::LensSystem`): a built-in name or a pbrt `.dat` file, with `"blades"` (and
+    /// `"blade_rotation"`, degrees) from `o` if given.
+    pub fn parse_lens(name: &str, o: &Value) -> crate::lens::LensSystem {
+        let lens = if !name.contains('/') && !name.ends_with(".dat") {
+            crate::lens::LensSystem::named(name)
+                .unwrap_or_else(|| panic!("Unknown lens '{}': expected dgauss.50mm, wide.22mm, telephoto.250mm, fisheye.10mm or a .dat file", name))
+        } else {
+            crate::lens::LensSystem::parse(&crate::assets::read(name).map_err(|e| e.to_string()).and_then(|b| String::from_utf8(b).map_err(|e| e.to_string()))
+                    .unwrap_or_else(|e| panic!("Can't read lens {}: {}", name, e)))
+                .unwrap_or_else(|e| panic!("Lens {}: {}", name, e))
+        };
+        match o["blades"].as_u64() {
+            Some(n) => lens.with_blades(n as usize, SceneFile::parse_number(&o["blade_rotation"], 0.).to_radians()),
+            None => lens,
+        }
+    }
+
+    /// The output's `"flare"` (`flare`): `true`, or `{"lens", "f_number", "blades",
+    /// "blade_rotation", "threshold": 20, "sources": 8, "ghosts": 1, "starburst": 1}`. With a
+    /// realistic camera, its lens, f-number, blades, focus and film are the defaults; otherwise
+    /// the double Gauss (or for views wider than 20° up from the centre, the wide-angle lens)
+    /// wide open, focused far off, on a film matching the camera's view. A light outside the
+    /// lens's field makes no ghosts.
+    /// `ghosts` and `starburst` scale each (0 or false for none).
+    pub fn parse_flare(output: &Value, camera: &Value, width: usize, height: usize) -> Option<Arc<crate::flare::Flare>> {
+        let f = match output.get("flare") {
+            None | Some(Value::Bool(false)) => return None,
+            Some(Value::Bool(true)) => &Value::Null,
+            Some(f) => f,
+        };
+        let realistic = camera["type"].as_str() == Some("realistic");
+        let pick = |k: &str| if !f[k].is_null() { f[k].clone() } else if realistic { camera[k].clone() } else { Value::Null };
+        let blade_source = serde_json::json!({ "blades": pick("blades"), "blade_rotation": pick("blade_rotation") });
+        // A lens that covers the view: the double Gauss reaches about 22° from its axis, so wider
+        // views (more than 20° up from the centre) take the wide-angle lens.
+        let default_lens = if !realistic && camera["angle"].as_f64().is_some_and(|a| a.tan() / 2. > 20f64.to_radians().tan()) {
+            "wide.22mm"
+        } else {
+            "dgauss.50mm"
+        };
+        let lens = SceneFile::parse_lens(pick("lens").as_str().unwrap_or(default_lens), &blade_source);
+        let focal = lens.focal_length().unwrap_or_else(|| panic!("The flare's lens doesn't form an image"));
+        // Its blades are cut to round the stop fully open (see `flare`).
+        let open_stop = lens.stop_diameter().unwrap_or(0.) / 2.;
+        // A real diaphragm: blades curved to round the open stop (`blade_curvature`, 0 for
+        // straight), each a little out of place (`imperfection`, 0 for a perfect lens).
+        let imperfection = SceneFile::parse_number(&f["imperfection"], 1.).max(0.);
+        let seed = SceneFile::parse_int(&f["seed"], 1) as u64;
+        let curvature = SceneFile::parse_number(&f["blade_curvature"], 1.).max(0.);
+        let lens = match lens.blades {
+            Some((n, _)) => lens.with_blade_shape(crate::lens::BladeShape {
+                radius: if curvature > 0. { open_stop / curvature } else { 0. },
+                jitter: if imperfection > 0. { crate::flare::imperfect_blades(n, imperfection, seed) } else { vec![] },
+            }),
+            None => lens,
+        };
+        let lens = match pick("f_number").as_f64() { Some(n) => lens.with_stop(focal / n), None => lens };
+        let focus = if realistic {
+            camera["focus_distance"].as_f64().unwrap_or_else(|| (SceneFile::parse_vec3(&camera["lookat"]) - SceneFile::parse_vec3(&camera["location"])).norm())
+        } else {
+            1e4
+        };
+        let rear = lens.focus(focus).or_else(|| lens.focus(1e4)).unwrap_or_else(|| panic!("The flare's lens can't focus"));
+        let lens = lens.with_film_at(rear);
+        let aspect = width as f64 / height as f64;
+        let film_height = if realistic {
+            SceneFile::parse_number(&camera["film_diagonal"], 35.) * 1e-3 / (1. + aspect * aspect).sqrt()
+        } else {
+            focal * camera["angle"].as_f64().unwrap_or(0.5).tan()
+        };
+        let scale = |k: &str| match &f[k] { Value::Bool(b) => if *b { 1. } else { 0. }, v => SceneFile::parse_number(v, 1.) };
+        Some(Arc::new(crate::flare::Flare {
+            lens,
+            film: (film_height * aspect, film_height),
+            threshold: SceneFile::parse_number(&f["threshold"], 20.),
+            sources: SceneFile::parse_int(&f["sources"], 8),
+            ghosts: scale("ghosts"),
+            starburst: scale("starburst"),
+            grid: SceneFile::parse_int(&f["grid"], 192).max(4),
+            coating: match f["coating"].as_str() {
+                None => crate::flare::Coating::Multi,
+                Some(c) => crate::flare::Coating::parse(c)
+                    .unwrap_or_else(|| panic!("Unknown lens coating {:?}: one of \"multi\", \"single\" or \"none\"", c)),
+            },
+            imperfection,
+            seed,
+        }))
+    }
+
+    /// Whether a scene value (the camera, an object, a geometry) moves: holds a `"motion"`.
+    fn has_motion(v: &Value) -> bool {
+        match v {
+            Value::Object(o) => o.contains_key("motion") || o.values().any(SceneFile::has_motion),
+            Value::Array(a) => a.iter().any(SceneFile::has_motion),
+            _ => false,
+        }
+    }
+
+    /// `"shutter": [open, close]`, in the time of motion, where moving things are at their start
+    /// at 0 and their end at 1 (default [0, 1]).
+    /// `"adaptive"`: a noise threshold, or `{"threshold", "min_samples"}`; absent, false or a
+    /// threshold of 0 for none.
+    pub fn parse_adaptive(v: &Value) -> Option<crate::scene::Adaptive> {
+        let (threshold, min) = match v {
+            Value::Null | Value::Bool(false) => return None,
+            Value::Bool(true) => (0.01, &Value::Null),
+            Value::Object(o) => (SceneFile::parse_number(&v["threshold"], 0.01), o.get("min_samples").unwrap_or(&Value::Null)),
+            _ => (SceneFile::parse_number(v, 0.), &Value::Null),
+        };
+        (threshold > 0.).then(|| crate::scene::Adaptive {
+            threshold,
+            min_samples: SceneFile::parse_int(min, crate::scene::Adaptive::DEFAULT_MIN_SAMPLES).max(2),
+        })
+    }
+
+    pub fn parse_shutter(v: &Value) -> crate::motion::Shutter {
+        match v {
+            Value::Null => crate::motion::Shutter::default(),
+            Value::Array(a) if a.len() == 2 && a.iter().all(|x| x.is_number()) => {
+                let (open, close) = (a[0].as_f64().unwrap(), a[1].as_f64().unwrap());
+                assert!(close >= open, "The shutter must close after it opens, got {}", v);
+                crate::motion::Shutter { open, close }
+            },
+            _ => panic!("\"shutter\" must be [open, close], got {}", v),
+        }
     }
 
     pub fn parse_objects(objs: Vec<Value>, materials: &Map<String, Value>, media: &Map<String, Value>, geometries: &GeometryLibrary) ->Vec<Arc<SceneObject>> {
@@ -425,12 +758,23 @@ impl SceneFile {
         if !keep { *KEPT_OBJECTS.lock().unwrap() = None; }
     }
 
-    /// An object's medium, bump mapped if it has a `"normal"` (see `parse_bump`).
+    /// An object's medium, bump mapped if its `"normal"` is an object (see `parse_bump`). A
+    /// plane's `"normal"` may instead be a vector, its orientation (`parse_plane`).
     pub fn parse_object_medium(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value> ) -> Box<dyn Medium + Sync + Send> {
         let m = SceneFile::parse_unbumped_medium(o, materials, media);
-        // An object, as opposed to the vector some shapes (a disc, a plane) call their "normal".
         if !o["normal"].is_object() {
             return m;
+        }
+        // {"map": "normals.png", "strength": 1, and an image map's "scale", "offset", ...}: a
+        // tangent-space normal map, read linearly (`textures::NormalMap`).
+        if let Some(path) = o["normal"].get("map") {
+            let mut spec = o["normal"].clone();
+            spec["texture"] = path.clone();
+            if spec.get("linear").is_none() {
+                spec["linear"] = Value::Bool(true);
+            }
+            let map = crate::textures::NormalMap { map: SceneFile::parse_image_map(&spec), strength: SceneFile::parse_number(&o["normal"]["strength"], 1.) };
+            return Box::new(crate::material::texture::NormalMapped { inner: m, map });
         }
         Box::new(Bumped { inner: m, bump: SceneFile::parse_bump(&o["normal"]) })
     }
@@ -470,7 +814,7 @@ impl SceneFile {
                     Box::new(Solid { m })
                 } else {
                     // No material or medium specified
-                    let default_material = Box::new(Lambertian { albedo: Color::white() });
+                    let default_material = Box::new(Lambertian { albedo: Color::white().into() });
                     Box::new(Solid { m: default_material })
                 }
             }
@@ -530,6 +874,14 @@ impl SceneFile {
             }));
         }
 
+        if t == "moon" {
+            return Some(Arc::new(crate::celestial::moon::parse_moon(&o)));
+        }
+
+        if t == "gas_giant" {
+            return Some(Arc::new(crate::celestial::giant::parse_giant(&o)));
+        }
+
         if t == "hogan_kew_cirrus" {
             return Some(Arc::new(SceneFile::parse_hogan_kew_cirrus(&o)));
         }
@@ -563,7 +915,7 @@ impl SceneFile {
         }
 
         if t == "volume" {
-            return Some(Arc::new(SceneFile::parse_volume(&o)));
+            return Some(Arc::new(SceneFile::parse_volume(&o, geometries)));
         }
 
         let mut parts = Parts { library: Some((materials, media)), media: vec![], geometries };
@@ -646,19 +998,33 @@ impl SceneFile {
         }).collect();
         let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
         let refs: Vec<&dyn Geometry> = surfaces.iter().map(|s| &**s as &dyn Geometry).collect();
-        let placements = forest::place(&layout, &species, seed, &refs);
+        // {"favour": {"terrain": "washes", "scale": 150, "spread": 1, "strength": 0.8}}: trees
+        // crowd along a mesas heightmap's feature (`parse_color_texture`), `strength` of them
+        // kept only there.
+        let placements = match o.get("favour") {
+            Some(f) => {
+                let feature = match SceneFile::parse_color_texture(f) {
+                    crate::textures::ColorTexture::Terrain(t) => t,
+                    _ => panic!("a forest's \"favour\" must be a terrain texture, got {}", f),
+                };
+                let strength = SceneFile::parse_number(&f["strength"], 0.8).clamp(0., 1.);
+                forest::place_favouring(&layout, &species, seed, &refs,
+                    &|x, z| 1. - strength + strength * feature.amount(&Vector3::new(x, 0., z)))
+            },
+            None => forest::place(&layout, &species, seed, &refs),
+        };
 
         let spread = SceneFile::parse_number(&o["autumn_spread"], 0.1);
         let mut rng = crate::geometry::Pcg32::new(seed, 0x7a71);
-        // Every part of every placed tree, in one structure, each part numbered for its medium.
-        let mut instances: Vec<Arc<forest::PartOf<Transform>>> = vec![];
-        let mut parts: Vec<Box<dyn Medium + Sync + Send>> = vec![];
-        let mut distinct = 0;
+        let lod = SceneFile::parse_forest_lod(o);
+
+        // The distinct trees: each species' variants that are placed, each with its own
+        // numbers, drawn for every variant, placed or not, so each keeps its own.
+        let mut distinct: Vec<(usize, Vec<&forest::Placement>, tree::TreeParams, u64)> = vec![];
         for (k, entry) in entries.iter().enumerate() {
             let name = entry.get("species").map(SceneFile::parse_string)
                 .unwrap_or_else(|| panic!("forest species {} needs a \"species\"", entry));
             for v in 0 .. layout.variants {
-                // Draw for every variant, placed or not, so each keeps its own numbers.
                 let (autumn_shift, tree_seed) = (rng.next_f64() * 2. - 1., rng.next_u32() as u64);
                 let here: Vec<&forest::Placement> = placements.iter().filter(|p| p.species == k && p.variant == v).collect();
                 if here.is_empty() {
@@ -669,36 +1035,103 @@ impl SceneFile {
                     overrides["autumn"] = serde_json::json!((autumn + autumn_shift * spread).clamp(0., 1.));
                 }
                 tree::merge(&mut overrides, &entry["params"]);
-                let p = tree::params(&name, &overrides);
-                distinct += 1;
+                distinct.push((k, here, tree::params(&name, &overrides), tree_seed));
+            }
+        }
 
-                // On a slope, sink the trunk so its downhill side meets the ground.
-                let base_radius = p.scale * p.stems[0].length * p.ratio * p.trunk_scale * (1. + 0.99 * p.flare);
-                let places: Vec<(Vector3<f64>, Rotation3<f64>, Vector3<f64>)> = here.iter().map(|t| {
-                    let sink = base_radius * t.scale * (t.slope.to_radians().tan() + 0.05);
-                    let mirror = if t.mirror { -1. } else { 1. };
-                    (t.position - Vector3::new(0., sink, 0.),
-                     Rotation3::from_axis_angle(&Vector3::y_axis(), t.yaw.to_radians()),
-                     Vector3::new(mirror * t.scale, t.scale, t.scale))
-                }).collect();
-                for (geometry, medium) in SceneFile::tree_parts(entry, &p, tree_seed, Vector3::zeros(), materials, media) {
-                    let part = parts.len() as u32;
-                    assert!(part < 1 << (32 - forest::PART_SHIFT), "too many distinct tree parts in a forest");
-                    instances.extend(places.iter().map(|(at, turn, scale)| Arc::new(forest::PartOf {
-                        item: Transform::from_parts(geometry.clone(), *at, *turn, *scale), part,
-                    })));
-                    parts.push(medium);
+        // Grow them one at a time, each made at the levels of detail its placements need (in
+        // parallel), so only one tree is ever held in full: what's kept is far smaller.
+        // Each placement's level, position, yaw and scale; each part's geometry by level.
+        type Place = (usize, Vector3<f64>, f64, f64, bool);
+        type Levels = Vec<(usize, SharedGeometry)>;
+        type Grown = (Vec<(Levels, Box<dyn Medium + Sync + Send>)>, Vec<Place>);
+        let grown: Vec<Grown> = distinct.iter().map(|(k, here, p, tree_seed)| {
+            let entry = &entries[*k];
+            // On a slope, sink the trunk so its downhill side meets the ground.
+            let base_radius = p.scale * p.stems[0].length * p.ratio * p.trunk_scale * (1. + 0.99 * p.flare);
+            let (details, base, bounds) = SceneFile::tree_details(entry, p, *tree_seed, Vector3::zeros(), materials, media);
+            let places: Vec<Place> = here.iter().map(|t| {
+                let sink = base_radius * t.scale * (t.slope.to_radians().tan() + 0.05);
+                let at = t.position - Vector3::new(0., sink, 0.);
+                let level = lod.as_ref().map_or(0, |l| l.level(&bounds, at, t.scale, base));
+                (level, at, t.yaw, t.scale, t.mirror)
+            }).collect();
+            let mut levels: Vec<usize> = places.iter().map(|p| p.0).collect();
+            levels.sort_unstable();
+            levels.dedup();
+            let parts = details.into_par_iter().map(|(detail, medium)| {
+                let geometries = levels.par_iter().map(|&l| (l, detail.geometry(crate::shapes::lod::level_size(base, l)))).collect();
+                (geometries, medium)
+            }).collect();
+            (parts, places)
+        }).collect();
+
+        // Each tree at each level is one model of all its parts, each numbered for its medium,
+        // placed as many times as there are trees at that level; the whole forest is one
+        // object, so a ray searches one structure and stops at the first tree it meets.
+        let mut trees: Vec<forest::Placed> = vec![];
+        let mut parts: Vec<Box<dyn Medium + Sync + Send>> = vec![];
+        let mut per_level: Vec<usize> = vec![];
+        let (mut primitives, mut built) = (0u64, 0u64);
+        for (tree_parts, places) in grown {
+            let mut models: std::collections::BTreeMap<usize, Vec<Arc<forest::PartOf<SharedGeometry>>>> = Default::default();
+            for (geometries, medium) in tree_parts {
+                let part = parts.len() as u32;
+                assert!(part < 1 << (32 - forest::PART_SHIFT), "too many distinct tree parts in a forest");
+                // Detail coarse enough may simplify away, eg. thin dead branches.
+                for (level, geometry) in geometries.into_iter().filter(|(_, g)| g.primitives() > 0) {
+                    models.entry(level).or_default().push(Arc::new(forest::PartOf { item: geometry, part }));
+                }
+                parts.push(medium);
+            }
+            let models: std::collections::BTreeMap<usize, forest::Model> = models.into_iter()
+                .map(|(level, items)| (level, Arc::new(GeometrySet::new(&items)) as forest::Model)).collect();
+            built += models.values().map(|m| m.primitives()).sum::<u64>();
+            for (level, at, yaw, scale, mirror) in places {
+                if per_level.len() <= level {
+                    per_level.resize(level + 1, 0);
+                }
+                per_level[level] += 1;
+                if let Some(model) = models.get(&level) {
+                    primitives += model.primitives();
+                    trees.push(forest::Placed::new(model.clone(), at, yaw, scale, mirror));
                 }
             }
         }
-        println!("Forest: {} trees, from {} distinct", placements.len(), distinct);
-        if instances.is_empty() {
+        println!("Forest: {} trees, from {} distinct; {} primitives built, {} placed{}", placements.len(), distinct.len(), built, primitives,
+            if lod.is_some() { format!("; trees at each level of detail: {:?}", per_level) } else { String::new() });
+        if trees.is_empty() {
             return vec![];
         }
+        let stand = forest::Stand::new(trees);
         vec![Arc::new(SceneObject {
-            geometry: Box::new(GeometrySet::new(&instances)),
+            geometry: Box::new(stand),
             medium: Box::new(Solid { m: Box::new(forest::PartsMaterial { parts }) }),
         })]
+    }
+
+    /// A forest's `"lod"`: `true`, or `{"pixels": 1, "max_level": 12}`, to see each tree at the
+    /// level of detail the size of a pixel where it stands calls for (`shapes::lod`), dropping
+    /// detail up to `pixels` across. It needs the scene's camera, which the scene gives it.
+    fn parse_forest_lod(o: &Value) -> Option<crate::procedural::forest::Lod> {
+        let pixels = match &o["lod"] {
+            Value::Null | Value::Bool(false) => return None,
+            Value::Bool(true) => 1.,
+            v => SceneFile::parse_number(&v["pixels"], 1.),
+        };
+        let camera = &o["camera"];
+        let height = SceneFile::parse_number(&camera["image_height"], 0.);
+        let angle = camera["angle"].as_f64().unwrap_or(0.5);
+        if camera.is_null() || height <= 0. {
+            println!("A forest's \"lod\" needs the scene's camera: seeing every tree in full");
+            return None;
+        }
+        Some(crate::procedural::forest::Lod {
+            eye: SceneFile::parse_vec3(&camera["location"]),
+            pixel_angle: angle.tan() / height,
+            pixels,
+            max_level: SceneFile::parse_int(&o["lod"]["max_level"], 12),
+        })
     }
 
     /// The parts of a tree with parameters `p`, chosen by `seed`, grown at `location`, each a
@@ -707,7 +1140,27 @@ impl SceneFile {
     pub fn tree_parts(o: &Value, p: &tree::TreeParams, seed: u64, location: Vector3<f64>,
                       materials: &Map<String, Value>, media: &Map<String, Value>)
                       -> Vec<(SharedGeometry, Box<dyn Medium + Sync + Send>)> {
+        SceneFile::tree_details(o, p, seed, location, materials, media).0.into_iter()
+            .map(|(detail, medium)| (detail.geometry(0.), medium))
+            .collect()
+    }
+
+    /// The parts of a tree as for `tree_parts`, as detail to make levels of from
+    /// (`shapes::lod`), with the size of its leaves, the level of detail's base, and its bounds.
+    pub fn tree_details(o: &Value, p: &tree::TreeParams, seed: u64, location: Vector3<f64>,
+                        materials: &Map<String, Value>, media: &Map<String, Value>)
+                        -> (Vec<TreeDetail>, f64, BBox) {
+        use crate::shapes::lod::{self, Detail};
         let mesh = tree::generate(p, seed, location);
+        let mut bounds = BBox::new(Vector3::repeat(f64::INFINITY), Vector3::repeat(f64::NEG_INFINITY));
+        for t in &mesh.bark {
+            bounds = bounds.union(&t.bounds());
+        }
+        for t in &mesh.leaves {
+            bounds = bounds.union(&t.bounds());
+        }
+        let base = lod::piece_size(&mesh.leaves);
+        let base = if base > 0. { base } else { 0.01 * (bounds.max - bounds.min).max() };
         let medium = |key: &Value| -> Box<dyn Medium + Sync + Send> {
             let name = SceneFile::parse_string(key);
             if materials.contains_key(&name) {
@@ -732,16 +1185,16 @@ impl SceneFile {
             }
         };
         let default = |albedo: Color| -> Box<dyn Medium + Sync + Send> {
-            Box::new(Solid { m: Box::new(Lambertian { albedo }) })
+            Box::new(Solid { m: Box::new(Lambertian { albedo: albedo.into() }) })
         };
         let bark = || o.get("bark").map_or_else(|| default(Color::new(0.25, 0.2, 0.16)), medium);
 
-        let mut parts: Vec<(SharedGeometry, Box<dyn Medium + Sync + Send>)> = vec![];
+        let mut parts: Vec<(Detail, Box<dyn Medium + Sync + Send>)> = vec![];
         if !mesh.bark.is_empty() {
-            parts.push((Arc::new(GeometrySet::new(&mesh.bark)), bark()));
+            parts.push((Detail::Surface(mesh.bark.clone()), bark()));
         }
         if !mesh.dead_bark.is_empty() {
-            parts.push((Arc::new(GeometrySet::new(&mesh.dead_bark)), o.get("dead_bark").map_or_else(bark, medium)));
+            parts.push((Detail::Surface(mesh.dead_bark.clone()), o.get("dead_bark").map_or_else(bark, medium)));
         }
 
         let leaf_media: Vec<Box<dyn Medium + Sync + Send>> = match o.get("leaves") {
@@ -759,10 +1212,10 @@ impl SceneFile {
         }
         for (triangles, medium) in groups.into_iter().zip(leaf_media) {
             if !triangles.is_empty() {
-                parts.push((Arc::new(GeometrySet::new(&triangles)), medium));
+                parts.push((Detail::Aggregate(triangles), medium));
             }
         }
-        parts
+        (parts, base, bounds)
     }
 
     pub fn parse_skysphere(o: &Value) -> SceneObject {
@@ -772,20 +1225,38 @@ impl SceneFile {
     /// A participating medium filling the box from `min` to `max`:
     ///
     /// `{"type": "volume", "min": [x, y, z], "max": [x, y, z], "density": σ, "albedo": colour,
-    /// "g": asymmetry, "noise": {"scale", "octaves", "threshold", "seed"}}`
+    /// "g": asymmetry, "noise": {"scale", "octaves", "threshold", "seed"}, "grid": ...}`
     ///
     /// `density` is the extinction coefficient, the chance of a collision per unit distance
-    /// (default 1). Without `noise` it is constant; with it, it varies up to that maximum.
+    /// (default 1). Without `noise` it is constant; with it, it varies up to that maximum. With
+    /// `grid` (`volume::grid`), it is the grid's values times `density`: a Mitsuba `.vol` file's
+    /// path, or `{"resolution": [nx, ny, nz], "values": [...]}` (x fastest); `min` and `max`
+    /// default to the file's bounds. In place of `albedo`, `sigma_a` and `sigma_s` (RGB) give
+    /// absorption and scattering per unit density, as pbrt's media; where their sum differs
+    /// between channels the medium is chromatic (`volume::chromatic`). With `shape`, a geometry (as an object's, eg.
+    /// `{"type": "sphere", ...}`), the medium fills only its inside: give a dielectric object
+    /// the same shape for a glass of coloured liquid (`volume::Volume::shape`). `emission`
+    /// makes it glow (`parse_volume_emission`).
     /// `albedo` (default white) is the fraction scattered rather than absorbed at a collision.
     /// How it scatters is given by `g` (Henyey-Greenstein, -1 to 1, default 0) or by
     /// `droplet_diameter` (in µm, 5 to 50: the Mie scattering of water droplets of that size;
     /// see `PhaseFunction::water_droplets`).
-    pub fn parse_volume(o: &Value) -> SceneObject {
-        let bounds = BBox::new(SceneFile::parse_vec3(&o["min"]), SceneFile::parse_vec3(&o["max"]));
+    pub fn parse_volume(o: &Value, geometries: &GeometryLibrary) -> SceneObject {
         let max_density = SceneFile::parse_number(&o["density"], 1.);
-        let density: Arc<dyn DensityField> = match o.get("noise") {
-            None => Arc::new(ConstantDensity(max_density)),
-            Some(n) => Arc::new(NoiseDensity {
+        let grid = o.get("grid").map(SceneFile::parse_grid);
+        let shape = o.get("shape").map(|v| SceneFile::parse_geometry(v, geometries)
+            .unwrap_or_else(|| panic!("A volume's shape must be a geometry, got {}", v)));
+        // The box the field spans: as given, or else the grid file's, or the shape's bounds.
+        let bounds = match (o.get("min"), grid.as_ref().and_then(|g| g.bounds), &shape) {
+            (None, Some(b), _) => b,
+            (None, None, Some(s)) => s.bounds(),
+            _ => BBox::new(SceneFile::parse_vec3(&o["min"]), SceneFile::parse_vec3(&o["max"])),
+        };
+        let density: Arc<dyn DensityField> = match (grid, o.get("noise")) {
+            (Some(_), Some(_)) => panic!("Give a volume either a grid or noise, not both"),
+            (Some(g), None) => Arc::new(GridDensity::new(bounds, g, max_density)),
+            (None, None) => Arc::new(ConstantDensity(max_density)),
+            (None, Some(n)) => Arc::new(NoiseDensity {
                 perlin: SceneFile::parse_seed(n).map_or_else(PerlinNoise::new, PerlinNoise::with_seed),
                 max_density,
                 scale: SceneFile::parse_number(&n["scale"], 1.),
@@ -793,12 +1264,44 @@ impl SceneFile {
                 threshold: SceneFile::parse_number(&n["threshold"], 0.5),
             }),
         };
-        create_volume(bounds, density, SceneFile::parse_scattering(o, 0.))
+        let volume = match shape {
+            None => Volume::new(bounds, density),
+            Some(s) => Volume::in_shape(s, density),
+        };
+        let mut scattering = SceneFile::parse_scattering(o, 0.);
+        scattering.emission = SceneFile::parse_volume_emission(o, bounds);
+        // Coefficients per unit density, as pbrt gives media: σ_a and σ_s (RGB).
+        if o.get("sigma_a").is_some() || o.get("sigma_s").is_some() {
+            assert!(o.get("albedo").is_none(), "Give a volume either an albedo or sigma_a and sigma_s, not both");
+            let a = SceneFile::parse_color_def(o, "sigma_a", Color::black());
+            let sc = SceneFile::parse_color_def(o, "sigma_s", Color::black());
+            assert!((a + sc).rgb.iter().all(|k| *k >= 0.) && (a + sc).rgb.max() > 0., "A volume needs some extinction");
+            let t = (a + sc).rgb;
+            scattering.albedo = Color { rgb: sc.rgb.zip_map(&t, |s, t| if t > 0. { s / t } else { 0. }) };
+            scattering.extinction = Some((a, sc));
+        }
+        create_medium(volume, scattering)
+    }
+
+    /// A voxel grid (`volume::grid::Grid`): a `.vol` file's path, or `{"resolution": [nx, ny,
+    /// nz], "values": [...]}`, x fastest.
+    pub fn parse_grid(v: &Value) -> Arc<Grid> {
+        if let Some(path) = v.as_str() {
+            return Grid::load(path);
+        }
+        let res = v["resolution"].as_array().filter(|r| r.len() == 3)
+            .unwrap_or_else(|| panic!("A grid needs a file name or a \"resolution\" of three numbers"));
+        let n: Vec<usize> = res.iter().map(|x| SceneFile::parse_int(x, 0)).collect();
+        let values = v["values"].as_array().unwrap_or_else(|| panic!("A grid needs \"values\""))
+            .iter().map(|x| SceneFile::parse_number(x, 0.) as f32).collect();
+        Arc::new(Grid::new(n[0], n[1], n[2], values))
     }
 
     /// A medium's multiple-scattering approximations (`volume::ScatteringApproximation`):
-    /// `"similarity_after": N` for the similarity relations from the N-th scattering on, and
-    /// `"oz": true` or `{"octaves", "a", "b", "c"}` for Wrenninge et al.'s octaves.
+    /// `"similarity_after": N` for the similarity relations from the N-th scattering on,
+    /// `"oz": true` or `{"octaves", "a", "b", "c"}` for Wrenninge et al.'s octaves, and
+    /// `"delta_m": false` to trace a Henyey-Greenstein medium exactly rather than truncating
+    /// its forward peak wherever the camera doesn't see the medium directly (on by default).
     pub fn parse_scattering_approximation(o: &Value) -> ScatteringApproximation {
         let oz = match o.get("oz") {
             None | Some(Value::Bool(false)) => None,
@@ -816,6 +1319,7 @@ impl SceneFile {
         ScatteringApproximation {
             similarity_after: o.get("similarity_after").map(|n| SceneFile::parse_int(n, 0) as u32),
             oz,
+            delta_m: o["delta_m"].as_bool().unwrap_or(true),
         }
     }
 
@@ -830,6 +1334,35 @@ impl SceneFile {
             diffraction: SceneFile::parse_diffraction(o),
             halos: SceneFile::parse_halos(o),
             rainbow: (o["rainbow"].as_bool() == Some(true)).then(|| Arc::new(RainbowTable::new(100_000))),
+            emission: None,
+            extinction: None,
+        }
+    }
+
+    /// Light a volume emits (`volume::emission`), in the box `bounds`: `"emission": colour`, or
+    /// `{"color": colour, "scale": s}`, or blackbody radiation `{"temperature": kelvin, "scale":
+    /// s}` with luminance `s` (default 1) at the hottest. The temperature may come from a grid
+    /// (`"temperature": "fire.vol"` or inline, see `parse_grid`), its values times
+    /// `temperature_scale`, and below `cutoff` kelvin nothing is emitted. The medium emits
+    /// only as much as it absorbs: give it an albedo below one.
+    pub fn parse_volume_emission(o: &Value, bounds: BBox) -> Option<VolumeEmission> {
+        let v = o.get("emission")?;
+        if v.is_array() {
+            return Some(VolumeEmission::color(SceneFile::parse_color(v), 1.));
+        }
+        let scale = SceneFile::parse_number(&v["scale"], 1.);
+        match v.get("temperature") {
+            None => Some(VolumeEmission::color(SceneFile::parse_color_def(v, "color", Color::white()), scale)),
+            Some(t) => {
+                let field: Arc<dyn DensityField> = if t.is_number() {
+                    Arc::new(ConstantDensity(SceneFile::parse_number(t, 0.)))
+                } else {
+                    let g = SceneFile::parse_grid(t);
+                    let b = if o.get("min").is_none() { g.bounds.unwrap_or(bounds) } else { bounds };
+                    Arc::new(GridDensity::new(b, g, SceneFile::parse_number(&v["temperature_scale"], 1.)))
+                };
+                Some(VolumeEmission::temperature(field, SceneFile::parse_number(&v["cutoff"], 0.), scale))
+            },
         }
     }
 
@@ -1111,7 +1644,8 @@ impl SceneFile {
     ///
     /// with `ground`, `cell_size` (of the shafts), `fall_depth` (m to 1/e by evaporation:
     /// virga; by default it all reaches the ground), `shear` (drift per metre fallen) and
-    /// `wind_direction` ([x, z]), `streak_size` and `streakiness` (0 to 1), and `fade` (the
+    /// `wind_direction` ([x, z]), `streak_size` and `streakiness` (0 to 1), `base_variation` (how
+    /// far below the base, varying, the drops emerge from the cloud), and `fade` (the
     /// fraction of `radius` over which it fades out). The phase function defaults to `g` 0.85;
     /// `"rainbow": true` gives the drops' bows in sunlight.
     pub fn parse_precipitation(o: &Value) -> SceneObject {
@@ -1126,6 +1660,7 @@ impl SceneFile {
         r.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", r.wind_direction).normalize();
         r.streak_size = num("streak_size", r.streak_size).max(1.);
         r.streakiness = num("streakiness", r.streakiness).clamp(0., 1.);
+        r.base_variation = num("base_variation", r.base_variation).max(0.);
         r.center = SceneFile::parse_vec2_def(o, "center", r.center);
         r.radius = num("radius", r.radius).max(1.);
         r.fade = num("fade", r.fade).clamp(0., 1.);
@@ -1149,11 +1684,13 @@ impl SceneFile {
     /// The anvil covers the sky where the distance along `edge_direction` is under
     /// `edge_distance`, give or take `edge_raggedness`, thinning over `edge_taper`. Its base
     /// can undulate (`base_variation` m over `base_size`), sag towards the core (`sag` m,
-    /// reached `sag_distance` in from the edge) and thicken softly (`base_softness` m). The pouches:
+    /// reached `sag_distance` in from the edge) and thicken softly (`base_softness` m), and its
+    /// flat top rise and fall (`top_variation` m). The pouches:
     /// `pouch_size` (apart), `pouch_depth`, `coverage` (fraction of cells with one), `regularity`, `clustering` (0 to 1)
     /// and `cluster_size`,
     /// `pouch_band` (how far in from the edge they hang deepest), `edge_sharpness` and
-    /// `roughness` (m) and `detail_size`. Extinctions: `anvil_density` and `pouch_density`.
+    /// `roughness` (m) and `detail_size`. Extinctions: `anvil_density` and `pouch_density`. With
+    /// `fade` (a fraction of `extent`), the sheet rounds off and fades out within its extent.
     /// `mapping` as for `nubis_clouds`.
     pub fn parse_mammatus(o: &Value) -> SceneObject {
         let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
@@ -1165,6 +1702,7 @@ impl SceneFile {
         m.sag = num("sag", m.sag).max(0.);
         m.sag_distance = num("sag_distance", m.sag_distance).max(1.);
         m.base_softness = num("base_softness", m.base_softness).max(0.);
+        m.top_variation = num("top_variation", m.top_variation).max(0.);
         m.anvil_density = num("anvil_density", m.anvil_density).max(0.);
         m.pouch_density = num("pouch_density", m.pouch_density).max(0.);
         m.pouch_size = num("pouch_size", m.pouch_size).max(1.);
@@ -1183,6 +1721,8 @@ impl SceneFile {
         m.pouch_band = num("pouch_band", m.pouch_band).max(1.);
         let center = SceneFile::parse_vec2_def(o, "center", Vector2::zeros());
         let extent = num("extent", 60_000.);
+        (m.center, m.extent) = (center, extent.max(1.));
+        m.fade = num("fade", m.fade).clamp(0., 1.);
         let bounds = BBox::new(
             Vector3::new(center.x - extent, m.bottom(), center.y - extent),
             Vector3::new(center.x + extent, m.top(), center.y + extent),
@@ -1304,7 +1844,8 @@ impl SceneFile {
     /// `procedural::hogan_kew_cirrus`), filling `extent` either side of `center` ([x, z]):
     ///
     /// `{"type": "hogan_kew_cirrus", "genus": "cirrus" | "cirrostratus" | "cirrocumulus",
-    /// "base": 8000, "top": 10000, "extent": 100000, "wind_direction": [x, z], "seed": 0}`
+    /// "base": 8000, "top": 10000, "wind_direction": [x, z], "seed": 0}`, filling `extent` either
+    /// side of `center` (by default out to the layer's horizon, about 357 km for a 10 km top)
     ///
     /// The genus sets the rest, each of which can be overridden: `coverage`, `cell_size`,
     /// `spectral_slope`, `anisotropy` (the generating cells); `density`, `generating_depth`,
@@ -1366,7 +1907,11 @@ impl SceneFile {
         c.particle_growth = num("particle_growth", c.particle_growth);
         c.young_size = num("young_size", c.young_size).clamp(0.05, 1.);
         c.patch_size = num("patch_size", c.patch_size);
-        let extent = num("extent", 100000.);
+        // By default the layer reaches its own horizon, √(2 R top), so it runs down into the
+        // haze there rather than stopping short in clear sky (a 9 km deck stays above the horizon
+        // out to 340 km).
+        let horizon = (2. * SceneFile::parse_number(&o["earth_radius"], EARTH_RADIUS) * top + top * top).sqrt();
+        let extent = num("extent", horizon);
         let center = SceneFile::parse_vec2_def(o, "center", Vector2::new(0., 0.));
         c.extent = extent;
         c.center = center;
@@ -1536,13 +2081,40 @@ impl SceneFile {
     ///
     /// Or `{"type": "transform", "item": {...}, "steps": [step, ..]}`, applying each step in turn
     /// (see `parse_steps`).
+    ///
+    /// With `"motion": {...}`, the object moves while the shutter is open (`motion`): `motion`
+    /// holds the transform's keys at the end of the motion, each defaulting to its value at the
+    /// start, eg. `"translate": [0, 0, 0], "motion": {"translate": [1, 0, 0]}`.
     pub fn parse_transform(o: &Value, parts: &mut Parts) -> Box<dyn Geometry + Sync + Send> {
         let item = SceneFile::parse_shared_geometry_in(&o["item"], parts)
             .unwrap_or_else(|| panic!("transform needs a geometry \"item\", got {}", o["item"]));
+        let start = SceneFile::parse_affine(o);
+        match o.get("motion") {
+            None => Box::new(Transform::new(item, start)),
+            Some(Value::Object(m)) => {
+                let mut end = o.clone();
+                for (k, v) in m {
+                    end[k.as_str()] = v.clone();
+                }
+                // Steps replace the parts, and the parts the steps.
+                if m.contains_key("steps") {
+                    for k in ["scale", "rotate", "translate"] { end[k] = Value::Null; }
+                } else if ["scale", "rotate", "translate"].iter().any(|k| m.contains_key(*k)) {
+                    end["steps"] = Value::Null;
+                }
+                Box::new(crate::motion::AnimatedTransform::new(item, start, SceneFile::parse_affine(&end)))
+            },
+            Some(v) => panic!("A transform's \"motion\" must be an object of its keys at the end, got {}", v),
+        }
+    }
+
+    /// The affine map of a transform object's `"steps"`, or of its `"scale"`, `"rotate"` and
+    /// `"translate"`.
+    fn parse_affine(o: &Value) -> Affine3<f64> {
         if !o["steps"].is_null() {
             assert!(["scale", "rotate", "translate"].iter().all(|k| o[k].is_null()),
                 "transform takes \"steps\", or \"scale\", \"rotate\" and \"translate\", not both");
-            return Box::new(Transform::new(item, SceneFile::parse_steps(&o["steps"])));
+            return SceneFile::parse_steps(&o["steps"]);
         }
         let scale = match &o["scale"] {
             Value::Number(n) => { let s = n.as_f64().unwrap(); Vector3::new(s, s, s) },
@@ -1556,7 +2128,10 @@ impl SceneFile {
             SceneFile::parse_number(&r["yaw"], 0.).to_radians(),
         );
         let translate = SceneFile::parse_vec3_def(o, "translate", Vector3::zeros());
-        Box::new(Transform::from_parts(item, translate, rotation, scale))
+        assert!(scale.x != 0. && scale.y != 0. && scale.z != 0., "transform scale must be non-zero on every axis, got {}", scale);
+        Affine3::from_matrix_unchecked(Translation3::from(translate).to_homogeneous()
+            * rotation.to_homogeneous()
+            * Matrix4::new_nonuniform_scaling(&scale))
     }
 
     /// A list of transformation steps, applied in order:
@@ -1636,9 +2211,9 @@ impl SceneFile {
     }
 
     /// `{"type": "plane", "y": 0}`, a ground plane; or `{"type": "plane", "normal": [x, y, z],
-    /// "distance": d}`, POV-Ray's plane: the half-space n.p < d, which can be used in CSG.
+    /// "distance": d}`, POV-Ray's plane: the half-space n.p < d, which can be used in CSG. A
+    /// `"normal"` that is an object is a bump map (`parse_object_medium`), not an orientation.
     pub fn parse_plane(o: &Value) -> Box<dyn Geometry + Sync + Send> {
-        // A vector is the half-space form's normal; an object is a bump map on either form.
         if o["normal"].is_array() {
             return Box::new(crate::shapes::plane::HalfSpace::new(
                 SceneFile::parse_vec3(&o["normal"]), SceneFile::parse_number(&o["distance"], 0.)));
@@ -1689,6 +2264,22 @@ impl SceneFile {
         if props["type"].as_str() == Some("noise") {
             return Some(Box::new(SceneFile::parse_noise_texture(props, materials)));
         }
+        // {"type": "mix", "materials": ["A", "B"], "amount": 0.5 or an image texture (its grey
+        // level) or a slope (`parse_color_texture`)}: B with probability amount, else A
+        // (`material::mix`).
+        if props["type"].as_str() == Some("mix") {
+            let names = props["materials"].as_array().filter(|a| a.len() == 2)
+                .unwrap_or_else(|| panic!("Mix material '{}' needs two \"materials\"", name));
+            assert!(names.iter().all(|n| n.as_str() != Some(name.as_str())), "Mix material '{}' can't contain itself", name);
+            let get = |k: &Value| SceneFile::require_material(k, materials, &format!("mix {}", name));
+            return Some(Box::new(crate::material::mix::Mix {
+                materials: [get(&names[0]), get(&names[1])],
+                amount: match &props["amount"] {
+                    Value::Object(_) => SceneFile::parse_color_texture(&props["amount"]),
+                    v => { let a = SceneFile::parse_number(v, 0.5).clamp(0., 1.); Color::new(a, a, a).into() },
+                },
+            }));
+        }
         match SceneFile::parse_material(props) {
             Some(m) => Some(m),
             None => panic!("Material '{}' has unknown type {}", name, props["type"]),
@@ -1714,9 +2305,89 @@ impl SceneFile {
             return Some(Box::new(metal));
         }
 
+        // {"type": "conductor", "metal": "Au" | "Ag" | "Al" | "Cu" | "CuZn"} (or "eta" and "k"
+        // per channel, or a "reflectance" colour), "roughness": r, or "roughness_u" and
+        // "roughness_v" along and across "tangent" (default the x axis): see
+        // `material::conductor`.
+        if t == "conductor" {
+            use crate::material::conductor::{Conductor, Optics};
+            let optics = if let Some(name) = o["metal"].as_str() {
+                let (eta, k) = crate::spectrum::metals::named(name)
+                    .unwrap_or_else(|| panic!("Unknown metal '{}': expected Ag, Al, Au, Cu or CuZn", name));
+                Optics::Measured { eta, k }
+            } else if !o["eta"].is_null() || !o["k"].is_null() {
+                Optics::Constant { eta: SceneFile::parse_color_def(o, "eta", Color::white()), k: SceneFile::parse_color_def(o, "k", Color::black()) }
+            } else {
+                Optics::Reflectance(SceneFile::parse_color_def(o, "reflectance", Color::new(0.9, 0.9, 0.9)))
+            };
+            let r = SceneFile::parse_number(&o["roughness"], 0.);
+            return Some(Box::new(Conductor {
+                optics,
+                roughness: (SceneFile::parse_number(&o["roughness_u"], r), SceneFile::parse_number(&o["roughness_v"], r)),
+                tangent: SceneFile::parse_vec3_def(o, "tangent", Vector3::x()),
+            }));
+        }
+
+        // {"type": "coated_diffuse", "albedo": colour or texture, "roughness": coat r,
+        // "refractive_index": 1.5, "thickness": 0.01, "medium_albedo": colour, "g": 0,
+        // "max_depth": 10, "samples": 1}, and "coated_conductor" with a conductor's "metal" (or
+        // "eta" and "k", or "reflectance") and "conductor_roughness" in place of "albedo": pbrt's
+        // layered materials (`material::layered`).
+        if t == "coated_diffuse" || t == "coated_conductor" {
+            use crate::material::conductor::Optics;
+            use crate::material::layered::{Base, Coated};
+            let base = if t == "coated_diffuse" {
+                Base::Diffuse(SceneFile::parse_color_texture(o.get("albedo").unwrap_or(&serde_json::json!([0.5, 0.5, 0.5]))))
+            } else {
+                let optics = if let Some(name) = o["metal"].as_str() {
+                    let (eta, k) = crate::spectrum::metals::named(name)
+                        .unwrap_or_else(|| panic!("Unknown metal '{}': expected Ag, Al, Au, Cu or CuZn", name));
+                    Optics::Measured { eta, k }
+                } else if !o["eta"].is_null() || !o["k"].is_null() {
+                    Optics::Constant { eta: SceneFile::parse_color_def(o, "eta", Color::white()), k: SceneFile::parse_color_def(o, "k", Color::black()) }
+                } else {
+                    Optics::Reflectance(SceneFile::parse_color_def(o, "reflectance", Color::new(0.9, 0.9, 0.9)))
+                };
+                Base::Conductor { optics, roughness: SceneFile::parse_number(&o["conductor_roughness"], 0.) }
+            };
+            let thickness = SceneFile::parse_number(&o["thickness"], 0.01);
+            assert!(thickness > 0., "A coat's thickness must be positive");
+            return Some(Box::new(Coated {
+                base,
+                refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.5),
+                roughness: SceneFile::parse_number(&o["roughness"], 0.),
+                thickness,
+                albedo: SceneFile::parse_color_def(o, "medium_albedo", Color::black()),
+                g: SceneFile::parse_number(&o["g"], 0.),
+                max_depth: SceneFile::parse_int(&o["max_depth"], 10) as u32,
+                samples: SceneFile::parse_int(&o["samples"], 1).max(1) as u32,
+            }));
+        }
+
+        // {"type": "subsurface", "albedo": colour, "radius": colour or number (how far light
+        // travels, scene units), or "sigma_a" and "sigma_s"; "g": 0, "refractive_index": 1.4}:
+        // random-walk subsurface scattering (`material::subsurface`).
+        if t == "subsurface" {
+            use crate::material::subsurface::{Coefficients, Subsurface};
+            let coefficients = if o.get("sigma_a").is_some() || o.get("sigma_s").is_some() {
+                Coefficients::Sigma { sigma_a: SceneFile::parse_color_def(o, "sigma_a", Color::black()),
+                                      sigma_s: SceneFile::parse_color_def(o, "sigma_s", Color::black()) }
+            } else {
+                let radius = match &o["radius"] {
+                    Value::Number(n) => Color::white() * n.as_f64().unwrap(),
+                    Value::Null => Color::new(1., 0.5, 0.25),
+                    v => SceneFile::parse_color(v),
+                };
+                Coefficients::Albedo { albedo: SceneFile::parse_color_def(o, "albedo", Color::new(0.8, 0.8, 0.8)), radius }
+            };
+            let g = SceneFile::parse_number(&o["g"], 0.);
+            assert!(g > -1. && g < 1., "g must be between -1 and 1, got {}", g);
+            return Some(Box::new(Subsurface { coefficients, g, refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.4) }));
+        }
+
         if t == "lambertian" {
             let d:Lambertian = Lambertian {
-                albedo:SceneFile::parse_color(&o["albedo"]), 
+                albedo: SceneFile::parse_color_texture(&o["albedo"]),
             };
             return Some(Box::new(d));
         }
@@ -1726,7 +2397,7 @@ impl SceneFile {
                 println!("Warning: plastic 'opacity' is ignored; plastic is opaque (use a dielectric for transparency)");
             }
             let d:Plastic = Plastic {
-                albedo:SceneFile::parse_color(&o["albedo"]), 
+                albedo: SceneFile::parse_color_texture(&o["albedo"]),
                 refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.5),
                 roughness: SceneFile::parse_number(&o["roughness"], 0.),
             };
@@ -1737,19 +2408,58 @@ impl SceneFile {
             return Some(Box::new(SceneFile::parse_leaf(o)));
         }
 
+        // {"type": "rough_dielectric", "refractive_index": .., "roughness": r, "attenuate":
+        // colour}: frosted glass; {"type": "thin_dielectric", "refractive_index": ..}: a pane of
+        // no thickness (`material::rough_dielectric`).
+        // {"type": "hair", "eumelanin": 1.3, "pheomelanin": 0 (or "color" or "sigma_a"),
+        // "eta": 1.55, "beta_m": 0.3, "beta_n": 0.3, "alpha": 2}: pbrt's hair BSDF
+        // (`material::hair`), for cylinder curves.
+        if t == "hair" {
+            use crate::material::hair::{Hair, Pigment};
+            let pigment = if !o["sigma_a"].is_null() {
+                Pigment::SigmaA(SceneFile::parse_color(&o["sigma_a"]))
+            } else if !o["color"].is_null() {
+                Pigment::Color(SceneFile::parse_color(&o["color"]))
+            } else {
+                Pigment::Melanin { eumelanin: SceneFile::parse_number(&o["eumelanin"], 1.3), pheomelanin: SceneFile::parse_number(&o["pheomelanin"], 0.) }
+            };
+            return Some(Box::new(Hair {
+                pigment,
+                eta: SceneFile::parse_number(&o["eta"], 1.55),
+                beta_m: SceneFile::parse_number(&o["beta_m"], 0.3).clamp(0.01, 1.),
+                beta_n: SceneFile::parse_number(&o["beta_n"], 0.3).clamp(0.01, 1.),
+                alpha: SceneFile::parse_number(&o["alpha"], 2.),
+            }));
+        }
+
+        if t == "rough_dielectric" {
+            return Some(Box::new(crate::material::rough_dielectric::RoughDielectric {
+                refractive_index: SceneFile::parse_refractive_index(&o["refractive_index"]).or_default(1.5),
+                roughness: SceneFile::parse_number(&o["roughness"], 0.3),
+                attenuate: SceneFile::parse_color_def(o, "attenuate", Color::white()),
+            }));
+        }
+        if t == "thin_dielectric" {
+            return Some(Box::new(crate::material::rough_dielectric::ThinDielectric {
+                refractive_index: SceneFile::parse_refractive_index(&o["refractive_index"]).or_default(1.5),
+            }));
+        }
+
         if t == "dielectric" {
             let d:Dielectric = Dielectric {
-                refractive_index: SceneFile::parse_number(&o["refractive_index"], 1.),
-                attenuate:SceneFile::parse_color(&o["attenuate"]), 
+                refractive_index: SceneFile::parse_refractive_index(&o["refractive_index"]),
+                attenuate: SceneFile::parse_color_def(o, "attenuate", Color::white()),
             };
             return Some(Box::new(d));
         }
 
         if t == "diffuse-light" {
+            // `"texture": {"texture": "screen.png", ...}` scales the emission by an image.
             let d:DiffuseLight = DiffuseLight {
                 intensity: SceneFile::parse_number(&o["intensity"], 1.),
-                color:SceneFile::parse_color(&o["color"]), 
+                emission: SceneFile::parse_emission(o),
                 two_sided: o["two_sided"].as_bool().unwrap_or(false),
+                texture: o.get("texture").map(SceneFile::parse_image_map),
             };
             return Some(Box::new(d));
         }
@@ -1774,8 +2484,30 @@ impl SceneFile {
             return Some(Box::new(NormalShade {}));
         }
 
+        // {"type": "uv"}: the texture coordinates as colour; {"type": "checker", "colors":
+        // [colour, colour], "checks": n or [nu, nv]}: a diffuse checkerboard in texture space.
+        if t == "uv" {
+            return Some(Box::new(crate::material::uv::UvShade {}));
+        }
+        if t == "checker" {
+            let colors = match o["colors"].as_array() {
+                Some(c) if c.len() == 2 => [SceneFile::parse_color(&c[0]), SceneFile::parse_color(&c[1])],
+                None => [Color::new(0.8, 0.8, 0.8), Color::new(0.1, 0.1, 0.1)],
+                _ => panic!("A checker's \"colors\" are two colours, got {}", o["colors"]),
+            };
+            let checks = match &o["checks"] {
+                Value::Array(_) => { let v = SceneFile::parse_vec2(&o["checks"]); crate::na::Vector2::new(v.x, v.y) },
+                v => crate::na::Vector2::repeat(SceneFile::parse_number(v, 8.)),
+            };
+            return Some(Box::new(crate::material::uv::UvChecker { colors, checks }));
+        }
+
         if t == "rock" {
             return Some(Box::new(SceneFile::parse_rock(o)));
+        }
+
+        if t == "soil" {
+            return Some(Box::new(SceneFile::parse_soil(o)));
         }
         
         // Noise materials are handled separately in parse_object_medium
@@ -1796,11 +2528,53 @@ impl SceneFile {
         None
     }
 
+    /// `{"type": "soil", "preset": "loam"}`: procedural bare ground (see `material::soil`).
+    /// Presets are loam, clay, sand, desert and forest_floor; any field of the preset can be
+    /// overridden: the colours `color`, `humus`, `stone_color`, `crumb_color`, `litter_color`
+    /// and `moss_color`; the fractions of the ground covered by `stones`, `crumbs`, `litter`
+    /// and `moss`; the sizes (m) `mottle_size`, `stone_size`, `litter_length`, `litter_width`
+    /// and `clod_size`; and `bump`, the strength of the relief. Also `"scale"` (for a scene not
+    /// in metres), `"seed"` and `"wetness"` (0 to 1).
+    pub fn parse_soil(o: &Value) -> Soil {
+        let p = SoilStyle::preset(o["preset"].as_str().unwrap_or("loam"));
+        let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let c = |k: &str, d: Color| SceneFile::parse_color_def(o, k, d);
+        let style = SoilStyle {
+            color: c("color", p.color),
+            humus: c("humus", p.humus),
+            mottle_size: n("mottle_size", p.mottle_size).max(1e-4),
+            stone_color: c("stone_color", p.stone_color),
+            stones: n("stones", p.stones).clamp(0., 1.),
+            stone_size: n("stone_size", p.stone_size).max(1e-4),
+            crumb_color: c("crumb_color", p.crumb_color),
+            crumbs: n("crumbs", p.crumbs).clamp(0., 1.),
+            litter_color: c("litter_color", p.litter_color),
+            litter: n("litter", p.litter).clamp(0., 1.),
+            litter_length: n("litter_length", p.litter_length).max(1e-4),
+            litter_width: n("litter_width", p.litter_width).max(1e-5),
+            moss_color: c("moss_color", p.moss_color),
+            moss: n("moss", p.moss).clamp(0., 1.),
+            bump: n("bump", p.bump).max(0.),
+            clod_size: n("clod_size", p.clod_size).max(1e-4),
+        };
+        let mut soil = Soil::new(style, n("scale", 1.).max(1e-9), SceneFile::parse_int(&o["seed"], 0) as u64);
+        soil.wetness = n("wetness", 0.).clamp(0., 1.);
+        soil
+    }
+
     /// `{"type": "rock", "preset": "granite"}`: a procedural stone (see `material::rock`).
     /// Presets are granite, basalt, sandstone, limestone, slate and quartzite; any field of the
     /// preset can be overridden, eg. `"color"` or `"strata_amount"`. Also `"scale"` (the size of
     /// the texture's features), `"seed"`, `"weathering"`, `"wetness"` (0 to 1), `"lichen"` (the
-    /// fraction of upward surfaces covered, 0 to 1) and `"lichen_color"`.
+    /// fraction of upward surfaces covered, 0 to 1) and `"lichen_color"`. For layered rock
+    /// faces: `"layers"` ([[y, colour], ...]: formations' colours by elevation, warped by
+    /// `"layer_warp"`), `"beds"` (a colour per bed of the strata), `"variety"` and
+    /// `"variety_color"` (broad stains), `"varnish"` and `"varnish_color"` (dark streaks down
+    /// steep faces), `"flutes"` (vertical grooves, bump mapped), `"cross_bedding"` and
+    /// `"cross_set"` (inclined laminae in sets that thick) and `"pits"` and `"pit_size"`
+    /// (honeycomb weathering), `"fractal"`, `"fractal_size"` and `"fractal_h"` (turbulent
+    /// relief down to a pixel's size, for close-up detail) and `"crackle"` and
+    /// `"crackle_size"` (fractures). Sizes are in units of `"scale"`.
     pub fn parse_rock(o: &Value) -> Rock {
         let preset = RockStyle::preset(o["preset"].as_str().unwrap_or("granite"));
         let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
@@ -1823,6 +2597,28 @@ impl SceneFile {
         let mut r = Rock::new(style, n("scale", 1.), SceneFile::parse_int(&o["seed"], 0) as u64);
         r.weathering = n("weathering", r.weathering);
         r.wetness = n("wetness", 0.).clamp(0., 1.);
+        if let Some(layers) = o["layers"].as_array() {
+            r.layers = layers.iter().map(|l| (SceneFile::parse_number(&l[0], 0.), SceneFile::parse_color(&l[1]))).collect();
+            r.layers.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
+        r.layer_warp = n("layer_warp", 0.);
+        if let Some(beds) = o["beds"].as_array() {
+            r.beds = beds.iter().map(SceneFile::parse_color).collect();
+        }
+        r.variety = n("variety", 0.).clamp(0., 1.);
+        r.variety_color = c("variety_color", r.variety_color);
+        r.varnish = n("varnish", 0.).clamp(0., 1.);
+        r.varnish_color = c("varnish_color", r.varnish_color);
+        r.flutes = n("flutes", 0.).max(0.);
+        r.cross_bedding = n("cross_bedding", 0.).clamp(0., 1.);
+        r.cross_set = n("cross_set", r.cross_set).max(1e-6);
+        r.pits = n("pits", 0.).clamp(0., 1.);
+        r.pit_size = n("pit_size", r.pit_size).max(1e-6);
+        r.fractal = n("fractal", 0.).max(0.);
+        r.fractal_size = n("fractal_size", r.fractal_size).max(1e-6);
+        r.fractal_h = n("fractal_h", r.fractal_h);
+        r.crackle = n("crackle", 0.).max(0.);
+        r.crackle_size = n("crackle_size", r.crackle_size).max(1e-6);
         let lichen = n("lichen", 0.);
         if lichen > 0. {
             let color = c("lichen_color", r.lichen_color);
@@ -1932,11 +2728,11 @@ impl SceneFile {
             SceneFile::parse_material_ref(base_material_key, materials)
                 .unwrap_or_else(|| {
                     println!("Warning: Using default material for noise texture because base material '{}' not found", material_name);
-                    Box::new(Lambertian { albedo: Color::white() })
+                    Box::new(Lambertian { albedo: Color::white().into() })
                 })
         } else {
             // Default to white lambertian if no base material is specified
-            Box::new(Lambertian { albedo: Color::white() })
+            Box::new(Lambertian { albedo: Color::white().into() })
         };
         
         let noise_type = match o.get("noise_type").and_then(|v| v.as_str()) {
@@ -2176,12 +2972,101 @@ impl SceneFile {
     }
 
 
+    /// A light at a point (`light::Light`): `{"location": [x, y, z], "intensity": I, "color" or
+    /// "temperature"}`, radiant intensity `I` (per steradian), or `"power": Φ` (watts, of a point
+    /// or spot light) in its place. One of these makes it directional:
+    ///
+    /// - `"spot": {"direction": [x, y, z] or "lookat": [x, y, z], "angle": 30, "delta": 5}`: a
+    ///   cone of half-angle `angle` degrees, fading over its outer `delta` (pbrt's `coneangle`
+    ///   and `conedelta`).
+    /// - `"goniometric": {"image": file, "up": [0, 1, 0], "forward": [0, 0, 1]}`: intensity
+    ///   scaled by an equirectangular image of directions about `up` (top row up), azimuth zero
+    ///   towards `forward`.
+    /// - `"projection": {"image": file, "lookat": [x, y, z] or "direction", "up": [0, 1, 0],
+    ///   "fov": 30}`: the image projected as by a slide projector, `fov` degrees across its
+    ///   larger side.
     pub fn parse_light(o: &Value) -> Light {
-        Light {
-                position: SceneFile::parse_vec3(&o["location"]),
-                color: SceneFile::parse_color_def(o, "color", Color::white()),
-                intensity: o["intensity"].as_f64().unwrap(),
+        let position = SceneFile::parse_vec3(&o["location"]);
+        let aim = |v: &Value| -> Vector3<f64> {
+            match (v.get("direction"), v.get("lookat")) {
+                (Some(d), None) => SceneFile::parse_vec3(d).normalize(),
+                (None, Some(l)) => (SceneFile::parse_vec3(l) - position).normalize(),
+                _ => panic!("A light's \"spot\" or \"projection\" needs a \"direction\" or a \"lookat\""),
             }
+        };
+        // Rows x, y, z of the rotation into the light's frame, z along `forward`, y nearest `up`,
+        // x to the right as the camera's (`camera`), so a projection reads as seen from behind.
+        let frame = |forward: Vector3<f64>, up: Vector3<f64>| -> Matrix3<f64> {
+            let z = forward.normalize();
+            let x = z.cross(&up);
+            let x = if x.norm() < 1e-9 { z.cross(&z.cross(&Vector3::new(1., 0., 0.))) } else { x }.normalize();
+            let y = x.cross(&z);
+            Matrix3::from_rows(&[x.transpose(), y.transpose(), z.transpose()])
+        };
+        let image = |v: &Value| Image::shared(v["image"].as_str()
+            .unwrap_or_else(|| panic!("A goniometric or projection light needs an \"image\"")), None);
+        let profile = if let Some(v) = o.get("spot") {
+            let angle = SceneFile::parse_number(&v["angle"], 30.);
+            let delta = SceneFile::parse_number(&v["delta"], 5.).clamp(0., angle);
+            assert!(angle > 0. && angle <= 180., "A spot light's angle must be 0 to 180 degrees, got {}", angle);
+            LightProfile::Spot { axis: aim(v), cos_falloff_start: (angle - delta).to_radians().cos(), cos_total: angle.to_radians().cos() }
+        } else if let Some(v) = o.get("goniometric") {
+            let up = SceneFile::parse_vec3_def(v, "up", Vector3::new(0., 1., 0.));
+            let forward = SceneFile::parse_vec3_def(v, "forward", Vector3::new(0., 0., 1.));
+            // The image's pole is the frame's y: build it with up as y, forward as z.
+            let f = frame(forward - up.normalize() * forward.dot(&up.normalize()), up);
+            LightProfile::Goniometric { frame: f, image: image(v) }
+        } else if let Some(v) = o.get("projection") {
+            let img = image(v);
+            let (w, h) = img.size();
+            let half = (SceneFile::parse_number(&v["fov"], 30.).to_radians() / 2.).tan();
+            let half = if w >= h { Vector2::new(half, half * h as f64 / w as f64) } else { Vector2::new(half * w as f64 / h as f64, half) };
+            let f = frame(aim(v), SceneFile::parse_vec3_def(v, "up", Vector3::new(0., 1., 0.)));
+            LightProfile::Projection { frame: f, image: img, half }
+        } else {
+            LightProfile::Isotropic
+        };
+        let mut light = Light { position, emission: SceneFile::parse_emission(o), intensity: 1., profile };
+        light.intensity = match (o.get("intensity"), o.get("power")) {
+            (Some(i), None) => SceneFile::parse_number(i, 1.),
+            (None, Some(p)) => {
+                // Power over the solid angle it's spread across, per unit of `power()`'s
+                // luminance.
+                let unit = light.power() / crate::color::luminance(&light.emission.srgb()).max(1e-12);
+                SceneFile::parse_number(p, 1.) / unit
+            },
+            _ => panic!("A light needs an \"intensity\" or a \"power\""),
+        };
+        light
+    }
+
+    /// What an emitter emits: `"color"` (white if absent), or with `"temperature"` (kelvin), a
+    /// blackbody's spectrum scaled to unit luminance (`spectrum::Emission`), so that emitters
+    /// of the same intensity are equally bright whatever their temperature.
+    pub fn parse_emission(o: &Value) -> Emission {
+        match o["temperature"].as_f64() {
+            Some(t) => {
+                assert!(o.get("color").is_none(), "An emitter takes \"color\" or \"temperature\", not both");
+                Emission::blackbody(t)
+            },
+            None => Emission::Rgb(SceneFile::parse_color_def(o, "color", Color::white())),
+        }
+    }
+
+    /// With a `"sun"` and a skysphere, the sky is lit by that sun: its brightness is set so its
+    /// radiance is the air's per unit of sunlight times the sun's `intensity`
+    /// (`skysphere::sky_brightness_for_sun`), on the same scale as the sunlight on everything
+    /// under it. So the sky can't be given a `brightness` of its own.
+    pub fn sky_follows_sun(sun: &Value, objects: &mut [Value]) {
+        if sun.is_null() {
+            return;
+        }
+        let intensity = SceneFile::parse_number(&sun["intensity"], 1.);
+        for o in objects.iter_mut().filter(|o| o["type"].as_str() == Some("skysphere")) {
+            assert!(o.get("brightness").is_none(),
+                "With a sun, the sky's brightness follows the sun's intensity; remove the skysphere's \"brightness\"");
+            o["brightness"] = serde_json::json!(crate::skysphere::sky_brightness_for_sun(intensity));
+        }
     }
 
     pub fn parse_lights(lights: &Vec<Value>) -> Vec<Light> {
@@ -2197,7 +3082,8 @@ impl SceneFile {
     /// and one) on a surface facing it, `direction` pointing towards it, and a visible disc of
     /// the given radius (default the sun's, 0.2666°). With a skysphere in `objects`, the sun is the
     /// sky's: it takes the sky's `sun_direction` (so `direction` is not allowed), `intensity`
-    /// is its irradiance above the atmosphere, and it is reddened by the sky's atmosphere on
+    /// is its irradiance above the atmosphere, which also sets the sky's brightness
+    /// (`sky_follows_sun`), and it is reddened by the sky's atmosphere on
     /// its way down to each point, according to the point's altitude (scene y, in metres), so
     /// it is whiter at cloud level than on the ground, and sets orange as the sky does.
     pub fn parse_sun(v: &Value, objects: &[Value]) -> Option<Sun> {
@@ -2222,14 +3108,17 @@ impl SceneFile {
             },
         }.map(|mut sun| {
             if let Some(r) = v.get("angular_radius") {
-                sun.angular_radius = SceneFile::parse_number(r, 0.).to_radians().max(1e-6);
+                sun = sun.with_angular_radius(SceneFile::parse_number(r, 0.).to_radians().max(1e-6));
             }
             sun
         })
     }
 
-    /// A colour (black if absent), or `{"type": "gradient", "bottom": colour, "top": colour}`.
-    pub fn parse_background(v: &Value) -> Background {
+    /// A colour (black if absent), `{"type": "gradient", "bottom": colour, "top": colour}`, or
+    /// `{"type": "space", ...}` (`procedural::space`), for a camera whose pixels are
+    /// `pixel_angle` radians across, on the scale of a sun of irradiance `sun` (its luminance)
+    /// if the scene has one.
+    pub fn parse_background(v: &Value, pixel_angle: f64, sun: Option<f64>) -> Background {
         match v {
             Value::Null => Background::Solid(Color::black()),
             Value::Object(_) => match v["type"].as_str() {
@@ -2237,7 +3126,8 @@ impl SceneFile {
                     bottom: SceneFile::parse_color_def(v, "bottom", Color::white()),
                     top: SceneFile::parse_color_def(v, "top", Color::new(0.5, 0.7, 1.)),
                 },
-                t => panic!("Unknown background type {:?}: expected \"gradient\" or a colour", t),
+                Some("space") => Background::Space(Arc::new(crate::procedural::space::Space::parse(v, pixel_angle, sun))),
+                t => panic!("Unknown background type {:?}: expected \"gradient\", \"space\" or a colour", t),
             },
             _ => Background::Solid(SceneFile::parse_color(v)),
         }
@@ -2253,7 +3143,8 @@ impl SceneFile {
         }
     }
 
-    pub fn from_scenefile(s: SceneFile) -> Scene {
+    pub fn from_scenefile(mut s: SceneFile) -> Scene {
+        SceneFile::sky_follows_sun(&s.sun, &mut s.objects);
         let max_bounding = BBox::new( // TODO
             Vector3::new(-1000., -1000., -1000.),
             Vector3::new(1000., 1000., 1000.),
@@ -2262,29 +3153,91 @@ impl SceneFile {
         let sun = SceneFile::parse_sun(&s.sun, &s.objects);
         // The camera's view plane spans tan(angle) over the image's height.
         let pixel_angle = s.camera["angle"].as_f64().map_or(0., |a| a.tan() / SceneFile::parse_int(&s.height, 480) as f64);
+        let flare = SceneFile::parse_flare(&s.output, &s.camera, SceneFile::parse_int(&s.width, 640), SceneFile::parse_int(&s.height, 480));
+        // For texture filtering: the camera's position, axes and the angle between pixels, shrunk
+        // by the samples per pixel (`textures::footprint`).
+        let footprint = (pixel_angle > 0.).then(|| {
+            let f = camera::Frame::look_at(SceneFile::parse_vec3(&s.camera["location"]), SceneFile::parse_vec3(&s.camera["lookat"]),
+                SceneFile::parse_vec3_def(&s.camera, "up", Vector3::y()));
+            let spp = SceneFile::parse_int(&s.supersamples, 35).max(1) as f64;
+            crate::textures::Footprint { location: f.location, right: f.camx, up: f.camy, spread: pixel_angle * (1. / spp.sqrt()).max(0.125) }
+        });
         // Aerial perspective, unless the skysphere turns it off.
         let atmosphere = s.objects.iter()
             .find(|o| o["type"].as_str() == Some("skysphere") && o["aerial_perspective"].as_bool() != Some(false))
             .map(|o| Arc::new(parse_sky_material(o)));
+        // Motion blur: sample times only if something moves (`motion`).
+        let motion = SceneFile::has_motion(&s.camera) || s.objects.iter().any(SceneFile::has_motion)
+            || s.geometries.values().any(SceneFile::has_motion);
         let geometries = GeometryLibrary::new(s.geometries);
         geometries.preload(&s.objects);
-        let object_sources = SceneFile::parse_objects_indexed(s.objects, &s.materials, &s.media, &geometries);
+        // A landscape is meshed finest where the camera is.
+        let mut scene_objects = s.objects;
+        // A world from a seed becomes the giant or the rocky or icy body it turns out to be.
+        for o in scene_objects.iter_mut() {
+            if o["type"].as_str() == Some("world") {
+                *o = crate::celestial::world_object(o);
+            }
+        }
+        let planets: Vec<Value> = scene_objects.iter()
+            .filter(|o| matches!(o["type"].as_str(), Some("skysphere") | Some("planet"))).cloned().collect();
+        for o in scene_objects.iter_mut() {
+            if o["type"].as_str() == Some("landscape") && o.get("camera").is_none() {
+                o["camera"] = s.camera.clone();
+            }
+            // A moon draws craters down to the camera's pixels, and orbits the scene's planet.
+            if matches!(o["type"].as_str(), Some("moon") | Some("gas_giant")) {
+                if o.get("camera").is_none() {
+                    o["camera"] = s.camera.clone();
+                    o["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+                }
+                if o.get("planet").is_none() {
+                    let (centre, radius) = crate::celestial::moon::scene_primary(&planets);
+                    o["planet"] = serde_json::json!({ "centre": [centre.x, centre.y, centre.z], "radius": radius });
+                }
+            }
+            // A forest sees each tree at the detail the camera needs (`parse_forest_lod`).
+            if o["type"].as_str() == Some("forest") && o.get("camera").is_none() {
+                o["camera"] = s.camera.clone();
+                o["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+            }
+        }
+        // A moon lights the scene with the sunlight it reflects (unless `"light": false`), and
+        // a skysphere's air scatters it too.
+        let moonlight = match (&sun, scene_objects.iter().find(|o| o["type"].as_str() == Some("moon") && o["light"].as_bool() != Some(false))) {
+            (Some(sun), Some(moon)) => {
+                let eye = SceneFile::parse_vec3_def(&s.camera, "location", Vector3::zeros());
+                let sky = scene_objects.iter().find(|o| o["type"].as_str() == Some("skysphere"));
+                Some(crate::celestial::moon::Moonlight::new(moon, &eye, sun, sky))
+            },
+            _ => None,
+        };
+        if let (Some(m), Some(sun)) = (&moonlight, &sun) {
+            let share = crate::color::luminance(&m.light.irradiance) / crate::color::luminance(&sun.irradiance).max(1e-300);
+            let d = m.light.direction;
+            for o in scene_objects.iter_mut().filter(|o| o["type"].as_str() == Some("skysphere")) {
+                o["moonlight"] = serde_json::json!({ "direction": [d.x, d.y, d.z], "share": share });
+            }
+        }
+        let object_sources = SceneFile::parse_objects_indexed(scene_objects, &s.materials, &s.media, &geometries);
         let objects: Vec<Arc<SceneObject>> = object_sources.iter().map(|(_, o)| o.clone()).collect();
         // Emitters with a surface we can sample become area lights.
         let area_lights: Vec<Arc<SceneObject>> = objects.iter()
             .filter(|o| o.medium.material_at(Vector3::zeros()).is_emitter() && o.geometry.surface_area() > 0.)
             .cloned()
             .collect();
+        let area_light_choice = crate::environment::Distribution1D::new(SceneFile::light_powers(&area_lights));
         let o = SceneGraph::new(objects);
 		
         let width = SceneFile::parse_int(&s.width, 640);
         let height =SceneFile::parse_int(&s.height, 480);
 
-        Scene {
+        let mut scene = Scene {
             image: ImageOpts { width, height },
             render: RenderOpts {
                 max_depth: SceneFile::parse_int(&s.max_depth, 2),
-                background: SceneFile::parse_background(&s.background),
+                background: SceneFile::parse_background(&s.background, pixel_angle,
+                    sun.as_ref().map(|s| crate::procedural::space::luminance(&s.irradiance.rgb))),
                 shadow_bias: SceneFile::parse_number(&s.shadow_bias, 1e-7f64),
                 supersamples: SceneFile::parse_int(&s.supersamples, 35),  
                 chunk_size: SceneFile::parse_int(&s.chunk_size, 64).max(1), 
@@ -2292,13 +3245,29 @@ impl SceneFile {
                 path_termination: SceneFile::parse_path_termination(&s.path_termination, &s.russian_roulette_depth),
                 seed: SceneFile::parse_int(&s.seed, 0) as u64,
                 sample_lights: s.sample_lights.as_bool().unwrap_or(true),
-                filter: match s.filter.as_str() {
-                    None | Some("box") => Filter::Box,
-                    Some("tent") => Filter::Tent,
-                    Some(f) => panic!("Unknown filter '{}': expected \"box\" or \"tent\"", f),
+                sample_sky: s.sample_sky.as_bool().unwrap_or(true),
+                filter: SceneFile::parse_filter(&s.filter),
+                regularise: SceneFile::parse_number(&s.regularise, crate::material::ggx::DEFAULT_REGULARISE),
+                spectral: s.spectral.as_bool().unwrap_or(false),
+                shutter: SceneFile::parse_shutter(&s.shutter),
+                motion,
+                wavefront: match s.integrator.as_str() {
+                    None | Some("path") => false,
+                    Some("wavefront") => true,
+                    Some(x) => panic!("Unknown integrator '{}': expected \"path\" or \"wavefront\"", x),
+                },
+                adaptive: SceneFile::parse_adaptive(&s.adaptive),
+                sampler: match s.sampler.as_str() {
+                    None | Some("sobol") => Sampler::Sobol,
+                    Some("independent") => Sampler::Independent,
+                    Some("halton") => Sampler::Halton,
+                    Some("stratified") => Sampler::Stratified,
+                    Some("zsobol") => Sampler::ZSobol,
+                    Some(x) => panic!("Unknown sampler '{}': expected \"sobol\", \"zsobol\", \"halton\", \"stratified\" or \"independent\"", x),
                 },
             },
-            camera: Box::new(SceneFile::parse_camera(s.camera, width as u32, height as u32)),
+            footprint,
+            camera: SceneFile::parse_camera(s.camera, width as u32, height as u32),
             lights: SceneFile::parse_lights(&s.lights),
             objects: o,
             max_bounding,
@@ -2307,13 +3276,102 @@ impl SceneFile {
             output: OutputOpts {
                 // The camera's view plane spans tan(angle) over the image's height.
                 pixel_angle,
+                flare,
                 ..OutputOpts::parse(&s.output)
             },
+            area_light_indices: area_lights.iter().enumerate().map(|(i, l)| (&**l as *const SceneObject as usize, i)).collect(),
             area_lights,
             object_sources,
+            area_light_choice,
             sun,
+            moonlight,
             atmosphere,
+            environment: None,
+            light_bvh: None,
+        };
+        scene.light_bvh = match s.light_sampler.as_str() {
+            None | Some("power") => None,
+            Some("bvh") => Some(SceneFile::light_bvh(&scene)),
+            Some(x) => panic!("Unknown light_sampler '{}': expected \"power\" or \"bvh\"", x),
+        };
+        // Tabulating the sky evaluates it, which needs the scene.
+        if scene.render.sample_sky {
+            scene.environment = crate::environment::Environment::build(&scene);
         }
+        scene
+    }
+
+    /// The light BVH over a scene's sampled lights (`Scene::light_bvh`): its area lights, if
+    /// `sample_lights` is on, then its point lights if there are more than
+    /// `scene::BVH_POINT_LIGHTS` of them.
+    fn light_bvh(scene: &Scene) -> crate::light_bvh::LightBvh {
+        use crate::light_bvh::LightBounds;
+        use crate::light::Profile;
+        let mut bounds: Vec<LightBounds> = Vec::new();
+        let luminance = |c: Color| crate::color::luminance(&c).max(0.);
+        for l in scene.area_lights.iter().take(scene.bvh_area_lights()) {
+            // Normals at a few points: one for flat lights (quads, discs, triangles), which
+            // then emit only to one side, or any.
+            let normals: Vec<(Vector3<f64>, Vector3<f64>)> = (0..9)
+                .filter_map(|k| l.geometry.sample_surface([(k % 3) as f64 / 3. + 0.17, (k / 3) as f64 / 3. + 0.17, 0.5]))
+                .collect();
+            let Some(&(y, n)) = normals.first() else { continue };
+            let flat = normals.iter().all(|(_, m)| (m - n).norm() < 1e-6);
+            let material = l.medium.material_at(y);
+            let front = luminance(material.emitted(&n, &n));
+            let two_sided = luminance(material.emitted(&n, &-n)) > 0.;
+            // A diffuse emitter's power: π L A, from each side that emits.
+            let phi = std::f64::consts::PI * front * l.geometry.surface_area() * if two_sided { 2. } else { 1. };
+            let b = l.geometry.bounds();
+            bounds.push(LightBounds {
+                bounds: b, phi,
+                w: n,
+                cos_theta_o: if flat { 1. } else { -1. },
+                cos_theta_e: 0.,
+                two_sided: flat && two_sided,
+            });
+        }
+        // A narrow spread about the axis for beams, which can't be exactly zero.
+        let beam_spread = 1e-4f64.cos();
+        for light in scene.lights.iter().filter(|_| scene.lights.len() > crate::scene::BVH_POINT_LIGHTS) {
+            // As pbrt: 4π times the intensity, its power were it to shine every way, so that
+            // a beam's importance follows the light it delivers where it points, not how
+            // little of the sphere it covers.
+            let image = match &light.profile {
+                Profile::Goniometric { image, .. } | Profile::Projection { image, .. } => luminance(image.average()),
+                _ => 1.,
+            };
+            let phi = 4. * std::f64::consts::PI * luminance(light.emission.srgb()) * light.intensity * image;
+            bounds.push(match &light.profile {
+                Profile::Spot { axis, cos_total, .. } => LightBounds { cos_theta_o: *cos_total, cos_theta_e: beam_spread, w: *axis, ..LightBounds::point(light.position, phi) },
+                Profile::Projection { frame, half, .. } => {
+                    let w = Vector3::new(frame[(2, 0)], frame[(2, 1)], frame[(2, 2)]);
+                    LightBounds { cos_theta_o: half.norm().atan().cos(), cos_theta_e: beam_spread, w, ..LightBounds::point(light.position, phi) }
+                },
+                _ => LightBounds::point(light.position, phi),
+            });
+        }
+        crate::light_bvh::LightBvh::new(&bounds)
+    }
+
+    /// Roughly each area light's power, to choose lights to sample in proportion to it: the
+    /// luminance it emits along its normal at one point, times its area. Sampling the light
+    /// that delivers more light more often is Pharr, Jakob and Humphreys's power light sampler
+    /// ("Physically Based Rendering", 4th ed., section 12.6.2,
+    /// <https://pbr-book.org/4ed/Light_Sources/Light_Sampling>). Any choice that can pick every
+    /// emitting light is unbiased, so every light gets at least a hundredth of the mean, in case
+    /// the one point misjudges a textured emitter.
+    fn light_powers(lights: &[Arc<SceneObject>]) -> Vec<f64> {
+        let powers: Vec<f64> = lights.iter().map(|l| {
+            let emitted = match l.geometry.sample_surface([0.5, 0.5, 0.5]) {
+                Some((y, n)) => l.medium.material_at(y).emitted(&n, &n),
+                None => Color::black(),
+            };
+            let e = emitted.rgb;
+            (0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z).max(0.) * l.geometry.surface_area()
+        }).collect();
+        let mean = powers.iter().sum::<f64>() / powers.len().max(1) as f64;
+        powers.iter().map(|p| p.max(0.01 * mean).max(f64::MIN_POSITIVE)).collect()
     }
 
     pub fn from_string(s: String) -> Scene {
@@ -2323,7 +3381,7 @@ impl SceneFile {
     /// Parse a scene, optionally overriding the image size. Overrides must be applied before
     /// the camera is built, as it derives its aspect ratio from the image size.
     pub fn from_string_sized(s: String, width: Option<usize>, height: Option<usize>) -> Scene {
-        SceneFile::from_string_overridden(s, &Overrides { width, height, seed: None })
+        SceneFile::from_string_overridden(s, &Overrides { width, height, ..Overrides::default() })
     }
 
     /// Parse a scene, applying command-line overrides first.
@@ -2607,9 +3665,9 @@ mod tests {
             { "location": [0, 1, 0], "intensity": 1, "color": "white" },
             { "location": [0, 1, 0], "intensity": 1 }
         ]"#);
-        assert_eq!(s.lights[0].color, Color::red());
-        assert_eq!(s.lights[1].color, Color::white());
-        assert_eq!(s.lights[2].color, Color::white());
+        assert_eq!(s.lights[0].emission.srgb(), Color::red());
+        assert_eq!(s.lights[1].emission.srgb(), Color::white());
+        assert_eq!(s.lights[2].emission.srgb(), Color::white());
     }
 
     fn noise_materials() -> Map<String, Value> {
@@ -2652,12 +3710,12 @@ mod tests {
 
     #[test]
     fn test_gradient_background() {
-        let g = SceneFile::parse_background(&serde_json::json!({ "type": "gradient" }));
+        let g = SceneFile::parse_background(&serde_json::json!({ "type": "gradient" }), 0., None);
         // The book's colours by default: white looking down, (0.5, 0.7, 1) looking up.
         assert_eq!(g.radiance(&Vector3::new(0., -1., 0.)), Color::white());
         assert_eq!(g.radiance(&Vector3::new(0., 2., 0.)), Color::new(0.5, 0.7, 1.));
         assert_eq!(g.radiance(&Vector3::new(1., 0., 0.)), Color::new(0.75, 0.85, 1.));
-        assert_eq!(SceneFile::parse_background(&serde_json::json!([0.1, 0.2, 0.3])), Background::Solid(Color::new(0.1, 0.2, 0.3)));
+        assert_eq!(SceneFile::parse_background(&serde_json::json!([0.1, 0.2, 0.3]), 0., None), Background::Solid(Color::new(0.1, 0.2, 0.3)));
     }
 
     #[test]
@@ -2860,6 +3918,22 @@ mod tests {
     }
 
     #[test]
+    fn test_forest_lod_coarsens_distant_trees() {
+        // The same shrubs, seen close up and from a kilometre away.
+        let forest = |eye: [f64; 3], lod: bool| SceneFile::parse_forest(&serde_json::json!({ "type": "forest", "seed": 2,
+            "spacing": 2, "variants": 1, "clearings": 0, "area": { "min": [-10, -10], "max": [10, 10] }, "lod": lod,
+            "camera": { "location": eye, "angle": 0.5, "image_height": 200 },
+            "species": [ { "species": "shrub" } ] }), &Map::new(), &Map::new(), &GeometryLibrary::empty())[0].geometry.primitives();
+        let full = forest([0., 1000., 0.], false);
+        // Close up, nearby shrubs are seen in full.
+        assert!(forest([0., 1., -11.], true) as f64 > 0.2 * full as f64);
+        // Far away, each is a few cards.
+        let far = forest([0., 1000., 0.], true);
+        assert!(far * 100 < full, "{} of {}", far, full);
+        assert!(far > 0);
+    }
+
+    #[test]
     #[should_panic(expected = "Unknown tree species")]
     fn test_unknown_tree_species_names_them() {
         SceneFile::parse_tree(&serde_json::json!({ "type": "tree", "species": "triffid" }), &Map::new(), &Map::new());
@@ -2905,6 +3979,19 @@ mod tests {
         assert_eq!((s.image.width, s.image.height), (40, 2));
         let s = minimal_scene_sized("", None, Some(30));
         assert_eq!((s.image.width, s.image.height), (4, 30));
+    }
+
+    #[test]
+    fn test_plane_normal_is_an_orientation_or_a_bump_map() {
+        // A ground plane, bump mapped: its "normal" is an object (demo/scenes/bumps.json).
+        let bumped = minimal_scene(r#", "materials": { "M": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } },
+            "objects": [ { "type": "plane", "y": 0, "material": "M",
+                           "normal": { "pattern": "waves", "amount": 0.25 } } ]"#);
+        assert_eq!(bumped.objects.infinite_items.len() + bumped.objects.items.len(), 1);
+        // A half-space plane: its "normal" is a vector, and it isn't bump mapped.
+        let oriented = minimal_scene(r#", "materials": { "M": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } },
+            "objects": [ { "type": "plane", "normal": [0, 1, 0], "distance": 0, "material": "M" } ]"#);
+        assert_eq!(oriented.objects.infinite_items.len() + oriented.objects.items.len(), 1);
     }
 
     #[test]

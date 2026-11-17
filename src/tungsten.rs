@@ -58,18 +58,19 @@
 //!
 //! - `lambert` -> `lambertian`; `oren_nayar` -> `lambertian` (its roughness dropped).
 //! - `mirror` -> `metal` of roughness 0.
-//! - `conductor`, `rough_conductor` -> `metal` whose colour is albedo times the Fresnel
-//!   reflectance at normal incidence, ((eta - 1)^2 + k^2) / ((eta + 1)^2 + k^2) per channel,
-//!   from `eta` and `k` or the named `material` (default "Cu") in Tungsten's table
-//!   (`bsdfs/ComplexIorData.hpp`, copied into `COMPLEX_IOR`). We have no Fresnel term for
-//!   metals, so grazing reflections come out too dark.
+//! - `conductor`, `rough_conductor` -> `conductor`: a measured metal of ours (`spectrum::metals`)
+//!   if the named `material` is one, or else `eta` and `k`, given or from Tungsten's table
+//!   (`bsdfs/ComplexIorData.hpp`, copied into `COMPLEX_IOR`; default "Cu"). With an albedo other
+//!   than white, `metal` instead, whose colour is albedo times the Fresnel reflectance at normal
+//!   incidence, ((eta - 1)^2 + k^2) / ((eta + 1)^2 + k^2) per channel, by Schlick's formula.
 //! - `dielectric`, `rough_dielectric` -> `dielectric` (`ior` default 1.5), attenuated by albedo.
 //! - `plastic`, `rough_plastic` -> `plastic` (`ior` default 1.5); its coat's absorption
 //!   (`sigma_a`, `thickness`) is dropped.
 //! - `smooth_coat`, `rough_coat` -> `plastic` over a lambertian `substrate`, or else the
 //!   substrate alone.
-//! - Rough variants keep `roughness`, but ours fuzzes the reflected direction rather than being
-//!   a microfacet distribution (GGX or Beckmann alpha), so they only resemble the original.
+//! - Rough variants' `roughness` is GGX's alpha, ours its square root (`ggx`). Tungsten's
+//!   other `distribution`s (Beckmann, Phong) are approximated by GGX of the same alpha, with a
+//!   warning.
 //! - `null` on a primitive that doesn't emit: the primitive is skipped (in Tungsten it is
 //!   invisible, typically a medium's boundary).
 //! - Anything else (`mixed`, `transparency`, `thinsheet`, hair, ...): grey `lambertian`, warned.
@@ -373,8 +374,8 @@ impl<'a> Importer<'a> {
         let context = format!("{} ({})", context, t);
         let albedo = self.colour(&b["albedo"], 1., &context);
         let num = |k: &str, d: f64| b[k].as_f64().unwrap_or(d);
-        if t.starts_with("rough_") {
-            self.warn(format!("{}: roughness only resembles Tungsten's microfacet distribution", context));
+        if t.starts_with("rough_") && b["distribution"].as_str().is_some_and(|d| d != "ggx") {
+            self.warn(format!("{}: the {} distribution is approximated by GGX", context, b["distribution"]));
         }
         if !b["bump"].is_null() {
             self.warn(format!("{}: bump maps are not supported", context));
@@ -402,8 +403,17 @@ impl<'a> Importer<'a> {
                         }
                     },
                 };
-                let roughness = if t == "rough_conductor" { num("roughness", 0.1) } else { 0. };
-                json!({ "type": "metal", "reflective": rgb(albedo.component_mul(&conductor_reflectance(eta, k))), "roughness": roughness })
+                let roughness = if t == "rough_conductor" { num("roughness", 0.1).sqrt() } else { 0. };
+                let named = b["material"].as_str().filter(|n| crate::spectrum::metals::named(n).is_some());
+                if albedo != V3::repeat(1.) {
+                    // Our conductors take no tint: the tinted colour, by Schlick's formula.
+                    json!({ "type": "metal", "reflective": rgb(albedo.component_mul(&conductor_reflectance(eta, k))), "roughness": roughness })
+                } else if let (Some(name), true) = (named, b["eta"].is_null()) {
+                    // A measured metal, spectral in spectral mode.
+                    json!({ "type": "conductor", "metal": name, "roughness": roughness })
+                } else {
+                    json!({ "type": "conductor", "eta": rgb(eta), "k": rgb(k), "roughness": roughness })
+                }
             },
             "dielectric" | "rough_dielectric" => {
                 if b["enable_refraction"] == json!(false) {
@@ -415,7 +425,7 @@ impl<'a> Importer<'a> {
                 if num("sigma_a", 0.) != 0. || vec3(&b["sigma_a"]).is_some_and(|s| s != V3::zeros()) {
                     self.warn(format!("{}: the coat's absorption (sigma_a) is dropped", context));
                 }
-                let roughness = if t == "rough_plastic" { num("roughness", 0.1) } else { 0. };
+                let roughness = if t == "rough_plastic" { num("roughness", 0.1).sqrt() } else { 0. };
                 json!({ "type": "plastic", "albedo": rgb(albedo), "refractive_index": num("ior", 1.5), "roughness": roughness })
             },
             "smooth_coat" | "rough_coat" => {
@@ -423,7 +433,7 @@ impl<'a> Importer<'a> {
                 match substrate {
                     Some(s) if s["type"] == "lambertian" => {
                         let base = vec3(&s["albedo"]).unwrap_or_else(|| V3::new(1., 1., 1.));
-                        let roughness = if t == "rough_coat" { num("roughness", 0.02) } else { 0. };
+                        let roughness = if t == "rough_coat" { num("roughness", 0.02).sqrt() } else { 0. };
                         json!({ "type": "plastic", "albedo": rgb(base.component_mul(&albedo)), "refractive_index": num("ior", 1.3), "roughness": roughness })
                     },
                     Some(s) => {
@@ -752,7 +762,7 @@ mod tests {
     fn test_materials() {
         let bsdfs = json!([
             { "name": "gold", "type": "conductor", "material": "Au" },
-            { "name": "custom", "type": "rough_conductor", "eta": 1, "k": 0, "roughness": 0.3 },
+            { "name": "custom", "type": "rough_conductor", "eta": 1, "k": 0, "roughness": 0.3, "distribution": "beckmann" },
             { "name": "glass", "type": "dielectric", "ior": 1.33 },
             { "name": "plastic", "type": "rough_plastic", "albedo": [0.1, 0.2, 0.3] },
             { "name": "textured", "type": "lambert", "albedo": "wood.png" },
@@ -763,16 +773,17 @@ mod tests {
             .map(|b| json!({ "type": "sphere", "bsdf": b })).collect();
         let (s, w) = scene(json!(prims), bsdfs);
         let m = &s["materials"];
-        let au = v(&m["gold"], "reflective");
-        assert!(au.x > 0.9 && au.z < 0.6, "gold is yellow: {}", au);
-        assert_eq!(m["custom"]["reflective"], json!([0., 0., 0.]), "eta 1, k 0 reflects nothing");
-        assert_eq!(m["custom"]["roughness"], 0.3);
+        assert_eq!(m["gold"], json!({ "type": "conductor", "metal": "Au", "roughness": 0. }), "a measured metal");
+        assert_eq!(m["custom"]["type"], "conductor");
+        assert_eq!(m["custom"]["eta"], json!([1., 1., 1.]));
+        assert_eq!(m["custom"]["k"], json!([0., 0., 0.]));
+        assert_eq!(m["custom"]["roughness"], 0.3f64.sqrt());
         assert_eq!(m["glass"], json!({ "type": "dielectric", "refractive_index": 1.33, "attenuate": [1., 1., 1.] }));
         assert_eq!(m["plastic"]["refractive_index"], 1.5);
         assert_eq!(m["textured"]["albedo"], json!([0.5, 0.5, 0.5]));
         assert_eq!(m["odd"]["type"], "lambertian");
         assert_eq!(s["objects"].as_array().unwrap().len(), 6, "the null sphere is skipped");
-        for expected in ["textures are not supported", "unsupported bsdf", "null bsdf and no emission", "roughness only resembles"] {
+        for expected in ["textures are not supported", "unsupported bsdf", "null bsdf and no emission", "approximated by GGX"] {
             assert!(w.iter().any(|x| x.contains(expected)), "no warning {:?} in {:?}", expected, w);
         }
     }

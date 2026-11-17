@@ -189,17 +189,21 @@ impl<N> Talus<N> {
         let (i, j, f) = pts[nearest];
         let r = |k: u32| hash(i, j, layer, seed, k + 3);
         // The distance in from the cell's edges: to the nearest bisector with a neighbour.
-        let mut edge = f64::INFINITY;
+        // And the block's half-width: to the nearest bisector from its middle.
+        let (mut edge, mut half) = (f64::INFINITY, f64::INFINITY);
         for (n, &(_, _, g)) in pts.iter().enumerate() {
             if n != nearest {
                 let d = g - f;
                 edge = edge.min(((u - g).norm_squared() - (u - f).norm_squared()) / (2. * d.norm()));
+                half = half.min(0.5 * d.norm());
             }
         }
         let v = u - f;
-        let thick = self.height * (0.5 + 0.9 * r(0));
         // The gap left round the block within its cell, and how steeply its sides fall.
         let gap = 0.04 + 0.22 * r(1);
+        // No thicker than it is wide: a block in a narrow cell would stand as a pillar, where
+        // a real one falls over.
+        let thick = (self.height * (0.5 + 0.9 * r(0))).min(1.2 * (half - gap)).max(0.);
         let side = (2.5 + 3. * r(2)) * (edge - gap);
         if side <= 0. {
             return None;

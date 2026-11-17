@@ -51,7 +51,21 @@ use rayon::prelude::*;
 /// Scales the integrated radiance into the renderer's working range. Under the default sRGB
 /// output this keeps the sky looking as it did with its former built-in tone curve,
 /// (0.383 v)^(1/2.2).
-const SKY_CALIBRATION: f64 = 0.38317;
+///
+/// The integral itself is radiance per unit of sunlight above the atmosphere, so the sky's
+/// radiance is that times `brightness` times this. With a scene's `"sun"` the product must be
+/// the sun's irradiance, or the sky is out of proportion with the sunlit scene under it
+/// (`sky_brightness_for_sun`).
+pub const SKY_CALIBRATION: f64 = 0.38317;
+
+/// The skysphere `brightness` that puts the sky on the same scale as a sun of irradiance
+/// `intensity` above the atmosphere: its radiance is then the air's per unit sunlight times
+/// the sun's. (The default brightness, 20, makes a sky 7.7 times brighter than a sun of
+/// irradiance 1 would light it: a blue sky brighter than a sunlit white page, haze over
+/// distant sunlit clouds brighter than the clouds.)
+pub fn sky_brightness_for_sun(intensity: f64) -> f64 {
+    intensity / SKY_CALIBRATION
+}
 
 const DEFAULT_NUM_SAMPLES: usize = 32;
 /// Resolution of the sun's transmittance table: altitudes (spaced quadratically, closer low

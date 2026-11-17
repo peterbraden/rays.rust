@@ -215,6 +215,8 @@ pub struct SceneFile {
     pub supersamples: Value, 
     #[serde(default)]
     pub samples_per_chunk: Value, 
+    #[serde(default)]
+    pub adaptive: Value,
     pub camera: Value, 
     #[serde(default)]
     pub shadow_bias: Value, 
@@ -614,6 +616,21 @@ impl SceneFile {
 
     /// `"shutter": [open, close]`, in the time of motion, where moving things are at their start
     /// at 0 and their end at 1 (default [0, 1]).
+    /// `"adaptive"`: a noise threshold, or `{"threshold", "min_samples"}`; absent, false or a
+    /// threshold of 0 for none.
+    pub fn parse_adaptive(v: &Value) -> Option<crate::scene::Adaptive> {
+        let (threshold, min) = match v {
+            Value::Null | Value::Bool(false) => return None,
+            Value::Bool(true) => (0.01, &Value::Null),
+            Value::Object(o) => (SceneFile::parse_number(&v["threshold"], 0.01), o.get("min_samples").unwrap_or(&Value::Null)),
+            _ => (SceneFile::parse_number(v, 0.), &Value::Null),
+        };
+        (threshold > 0.).then(|| crate::scene::Adaptive {
+            threshold,
+            min_samples: SceneFile::parse_int(min, crate::scene::Adaptive::DEFAULT_MIN_SAMPLES).max(2),
+        })
+    }
+
     pub fn parse_shutter(v: &Value) -> crate::motion::Shutter {
         match v {
             Value::Null => crate::motion::Shutter::default(),
@@ -1170,8 +1187,10 @@ impl SceneFile {
     }
 
     /// A medium's multiple-scattering approximations (`volume::ScatteringApproximation`):
-    /// `"similarity_after": N` for the similarity relations from the N-th scattering on, and
-    /// `"oz": true` or `{"octaves", "a", "b", "c"}` for Wrenninge et al.'s octaves.
+    /// `"similarity_after": N` for the similarity relations from the N-th scattering on,
+    /// `"oz": true` or `{"octaves", "a", "b", "c"}` for Wrenninge et al.'s octaves, and
+    /// `"delta_m": false` to trace a Henyey-Greenstein medium exactly rather than truncating
+    /// its forward peak wherever the camera doesn't see the medium directly (on by default).
     pub fn parse_scattering_approximation(o: &Value) -> ScatteringApproximation {
         let oz = match o.get("oz") {
             None | Some(Value::Bool(false)) => None,
@@ -1189,6 +1208,7 @@ impl SceneFile {
         ScatteringApproximation {
             similarity_after: o.get("similarity_after").map(|n| SceneFile::parse_int(n, 0) as u32),
             oz,
+            delta_m: o["delta_m"].as_bool().unwrap_or(true),
         }
     }
 
@@ -2891,6 +2911,22 @@ impl SceneFile {
         }
     }
 
+    /// With a `"sun"` and a skysphere, the sky is lit by that sun: its brightness is set so its
+    /// radiance is the air's per unit of sunlight times the sun's `intensity`
+    /// (`skysphere::sky_brightness_for_sun`), on the same scale as the sunlight on everything
+    /// under it. So the sky can't be given a `brightness` of its own.
+    pub fn sky_follows_sun(sun: &Value, objects: &mut [Value]) {
+        if sun.is_null() {
+            return;
+        }
+        let intensity = SceneFile::parse_number(&sun["intensity"], 1.);
+        for o in objects.iter_mut().filter(|o| o["type"].as_str() == Some("skysphere")) {
+            assert!(o.get("brightness").is_none(),
+                "With a sun, the sky's brightness follows the sun's intensity; remove the skysphere's \"brightness\"");
+            o["brightness"] = serde_json::json!(crate::skysphere::sky_brightness_for_sun(intensity));
+        }
+    }
+
     pub fn parse_lights(lights: &Vec<Value>) -> Vec<Light> {
         let mut l: Vec<Light> = Vec::new();
         for light in lights {
@@ -2904,7 +2940,8 @@ impl SceneFile {
     /// and one) on a surface facing it, `direction` pointing towards it, and a visible disc of
     /// the given radius (default the sun's, 0.2666°). With a skysphere in `objects`, the sun is the
     /// sky's: it takes the sky's `sun_direction` (so `direction` is not allowed), `intensity`
-    /// is its irradiance above the atmosphere, and it is reddened by the sky's atmosphere on
+    /// is its irradiance above the atmosphere, which also sets the sky's brightness
+    /// (`sky_follows_sun`), and it is reddened by the sky's atmosphere on
     /// its way down to each point, according to the point's altitude (scene y, in metres), so
     /// it is whiter at cloud level than on the ground, and sets orange as the sky does.
     pub fn parse_sun(v: &Value, objects: &[Value]) -> Option<Sun> {
@@ -2964,7 +3001,8 @@ impl SceneFile {
         }
     }
 
-    pub fn from_scenefile(s: SceneFile) -> Scene {
+    pub fn from_scenefile(mut s: SceneFile) -> Scene {
+        SceneFile::sky_follows_sun(&s.sun, &mut s.objects);
         let max_bounding = BBox::new( // TODO
             Vector3::new(-1000., -1000., -1000.),
             Vector3::new(1000., 1000., 1000.),
@@ -3069,6 +3107,7 @@ impl SceneFile {
                     Some("wavefront") => true,
                     Some(x) => panic!("Unknown integrator '{}': expected \"path\" or \"wavefront\"", x),
                 },
+                adaptive: SceneFile::parse_adaptive(&s.adaptive),
                 sampler: match s.sampler.as_str() {
                     None | Some("sobol") => Sampler::Sobol,
                     Some("independent") => Sampler::Independent,

@@ -60,6 +60,25 @@ pub struct RenderOpts {
     pub motion: bool,
     /// Whether to render with the wavefront integrator (`wavefront`), where the scene allows.
     pub wavefront: bool,
+    /// Whether each pixel stops sampling once its noise is low enough (`adaptive`), before
+    /// `supersamples`, which is then the most a pixel takes.
+    pub adaptive: Option<Adaptive>,
+}
+
+/// Adaptive sampling (`crate::adaptive`): `"adaptive": 0.01`, or
+/// `"adaptive": {"threshold": 0.01, "min_samples": 16}`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Adaptive {
+    /// A pixel stops when its standard error, relative to its displayed value, is below this.
+    pub threshold: f64,
+    /// Every pixel takes at least this many samples before its noise is judged: an estimate of
+    /// the noise from fewer is too unreliable, and stopping early on a pixel that hasn't yet
+    /// found a rare bright path darkens it.
+    pub min_samples: usize,
+}
+
+impl Adaptive {
+    pub const DEFAULT_MIN_SAMPLES: usize = 16;
 }
 
 /// How a pixel's samples choose their random numbers.

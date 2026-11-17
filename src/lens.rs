@@ -87,6 +87,28 @@ pub struct LensSystem {
     /// corner from the x axis. The stop is then the regular polygon inscribed in its circle,
     /// which shapes out-of-focus highlights (bokeh), ghosts and diffraction spikes (`flare`).
     pub blades: Option<(usize, f64)>,
+    /// The blades' shape: their edges' radius of curvature, metres (0 for straight), and how
+    /// each blade departs from the regular polygon (none for a perfect diaphragm).
+    pub blade_shape: BladeShape,
+}
+
+/// The shape of a diaphragm's blades (see `LensSystem::within`).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BladeShape {
+    /// The edges' radius of curvature, metres: blades are arcs bulging outwards, cut so the
+    /// stop is round near fully open. Zero for straight blades.
+    pub radius: f64,
+    /// Per blade, its departure from the regular diaphragm: the edge's normal turned by
+    /// `angle` radians, its distance from the centre scaled by `reach`, and its radius by
+    /// `curvature`. Empty for identical blades.
+    pub jitter: Vec<BladeJitter>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BladeJitter {
+    pub angle: f64,
+    pub reach: f64,
+    pub curvature: f64,
 }
 
 const DGAUSS_50MM: &str = "
@@ -223,7 +245,7 @@ impl LensSystem {
         if interfaces.is_empty() {
             return Err("A lens needs at least one surface".to_string());
         }
-        Ok(LensSystem { interfaces, blades: None })
+        Ok(LensSystem { interfaces, blades: None, blade_shape: BladeShape::default() })
     }
 
     /// With a stop of `n` straight blades, the first corner at `rotation` radians.
@@ -232,21 +254,41 @@ impl LensSystem {
         LensSystem { blades: Some((n, rotation)), ..self }
     }
 
-    /// Whether (x, y) is within surface `e`'s clear aperture: a circle, or for a bladed stop, the
-    /// polygon inscribed in it.
-    pub fn within(&self, e: &Interface, x: f64, y: f64) -> bool {
-        if x * x + y * y > e.aperture * e.aperture {
-            return false;
+    /// The blades' shape: curvature and per-blade departures (see `BladeShape`).
+    pub fn with_blade_shape(self, blade_shape: BladeShape) -> LensSystem {
+        LensSystem { blade_shape, ..self }
+    }
+
+    /// Blade `k` of a bladed stop of radius `aperture`: its edge's outward normal, its distance
+    /// from the centre along it, and its radius of curvature (infinite for a straight blade).
+    pub fn blade(&self, aperture: f64, k: usize) -> Option<(f64, f64, f64)> {
+        let (n, rotation) = self.blades?;
+        let j = self.blade_shape.jitter.get(k).copied().unwrap_or(BladeJitter { angle: 0., reach: 1., curvature: 1. });
+        let normal = rotation + (2 * k + 1) as f64 * std::f64::consts::PI / n as f64 + j.angle;
+        let apothem = aperture * (std::f64::consts::PI / n as f64).cos() * j.reach;
+        let radius = if self.blade_shape.radius > 0. { self.blade_shape.radius * j.curvature } else { f64::INFINITY };
+        Some((normal, apothem, radius))
+    }
+
+    /// How far (x, y) lies outside blade `k`'s edge (negative inside), metres.
+    pub fn outside_blade(&self, aperture: f64, k: usize, x: f64, y: f64) -> f64 {
+        let Some((normal, apothem, radius)) = self.blade(aperture, k) else { return f64::NEG_INFINITY };
+        let (c, s) = (normal.cos(), normal.sin());
+        if radius.is_infinite() {
+            x * c + y * s - apothem
+        } else {
+            // An arc through the apothem's foot, bulging outwards: its centre lies inwards.
+            let (cx, cy) = (c * (apothem - radius), s * (apothem - radius));
+            ((x - cx).powi(2) + (y - cy).powi(2)).sqrt() - radius
         }
+    }
+
+    /// Whether (x, y) is within surface `e`'s clear aperture: a circle, or for a bladed stop,
+    /// within every blade's edge (straight blades make the polygon inscribed in the circle).
+    pub fn within(&self, e: &Interface, x: f64, y: f64) -> bool {
         match self.blades {
-            Some((n, rotation)) if e.is_stop() => {
-                let apothem = e.aperture * (std::f64::consts::PI / n as f64).cos();
-                (0..n).all(|k| {
-                    let a = rotation + (2 * k + 1) as f64 * std::f64::consts::PI / n as f64;
-                    x * a.cos() + y * a.sin() <= apothem
-                })
-            },
-            _ => true,
+            Some((n, _)) if e.is_stop() => (0..n).all(|k| self.outside_blade(e.aperture, k, x, y) <= 0.),
+            _ => x * x + y * y <= e.aperture * e.aperture,
         }
     }
 

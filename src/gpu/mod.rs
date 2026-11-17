@@ -39,6 +39,8 @@ use wgpu::util::DeviceExt;
 /// The baked sky's resolution.
 const ENV_WIDTH: usize = 1024;
 const ENV_HEIGHT: usize = 512;
+/// Texels per side of a cell of the sky map's visibility (`environment::visibility`).
+const VISIBILITY_SCALE: usize = 8;
 /// Passes between reading the accumulated image back.
 const PASSES_PER_READ: usize = 8;
 // The aerial perspective table's size and distances, and the flags and kinds, are the shader's.
@@ -177,6 +179,10 @@ impl Buffers {
         // Primitives: the bounded ones in the BVH's order, then the planes.
         let mut materials = Vec::new();
         let material_index: Vec<u32> = flat.materials.iter().map(|m| push_material(m, &mut materials)).collect();
+        // A buffer may not be empty (wgpu refuses to bind it): a scene of sky alone has none.
+        if materials.is_empty() {
+            materials.push(GpuMaterial::zeroed());
+        }
         let to_gpu = |p: &Prim, m: u32, emitter: u32| -> GpuPrim {
             let mut g = GpuPrim::zeroed();
             g.info = UVec4::new(pathtrace::PRIM_TRIANGLE, material_index[m as usize], emitter, 0);
@@ -222,17 +228,30 @@ impl Buffers {
         let powers: Vec<f64> = (0..flat.emitters.len()).map(|e| flat.emitter_choice.probability(e)).collect();
         tables.extend(cdf(&powers));
         let env_off = tables.len() as u32;
+        // The sky as seen from the camera, as the CPU integrators see it from each ray's
+        // origin: exact for camera rays, near enough for paths that stay near the camera (from
+        // the world's origin, an orbiting camera saw the night side's ground-level sky).
+        let origin = crate::environment::viewpoint(s);
         let texels: Vec<Color> = (0..ENV_WIDTH * ENV_HEIGHT).into_par_iter().map(|i| {
             let d = env_direction(i % ENV_WIDTH, i / ENV_WIDTH);
-            crate::wavefront::integrator::sky_radiance(&Ray { ro: Vector3::zeros(), rd: d }, s, flat)
+            crate::wavefront::integrator::sky_radiance(&Ray { ro: origin, rd: d }, s, flat)
         }).collect();
         for t in &texels {
             tables.extend([t.rgb.x as f32, t.rgb.y as f32, t.rgb.z as f32]);
         }
-        // Rows by brightness times sin θ (a row's share of the sphere), then within each row.
+        // Rows by brightness times sin θ (a row's share of the sphere) times how much of the
+        // sky the scene lets through from the camera, as the CPU's `Environment` (so no shadow
+        // rays are spent on the ground), then within each row. The visibility is found on a
+        // grid of VISIBILITY_SCALE² texels, the CPU's resolution, for a ray per cell.
+        let (vw, vh) = (ENV_WIDTH / VISIBILITY_SCALE, ENV_HEIGHT / VISIBILITY_SCALE);
+        let visible: Vec<f64> = (0..vw * vh).into_par_iter().map(|i| {
+            let (x, y) = ((i % vw) * VISIBILITY_SCALE + VISIBILITY_SCALE / 2, (i / vw) * VISIBILITY_SCALE + VISIBILITY_SCALE / 2);
+            crate::environment::visibility(s, &origin, &env_direction(x, y))
+        }).collect();
         let weight = |x: usize, y: usize| {
             let theta = (y as f64 + 0.5) / ENV_HEIGHT as f64 * std::f64::consts::PI;
-            crate::color::luminance(&texels[y * ENV_WIDTH + x]).max(0.) * theta.sin() + 1e-9
+            let v = visible[(y / VISIBILITY_SCALE) * vw + x / VISIBILITY_SCALE];
+            crate::color::luminance(&texels[y * ENV_WIDTH + x]).max(0.) * theta.sin() * v + 1e-9
         };
         let rows: Vec<f64> = (0..ENV_HEIGHT).map(|y| (0..ENV_WIDTH).map(|x| weight(x, y)).sum()).collect();
         let marginal_off = tables.len() as u32;
@@ -280,7 +299,8 @@ impl Buffers {
         let (sun_dir, sun_irr) = match &s.sun {
             Some(sun) => {
                 flags |= pathtrace::FLAG_SUN;
-                let e = sun.irradiance_at(&Vector3::zeros());
+                // Reddened by the air between it and the camera, as the sky map is baked.
+                let e = sun.irradiance_at(&crate::environment::viewpoint(s));
                 (v4(&sun.direction, sun.angular_radius.cos() as f32), Vec4::new(e.rgb.x as f32, e.rgb.y as f32, e.rgb.z as f32, sun.angular_radius as f32))
             },
             None => (Vec4::new(0., 1., 0., 1.), Vec4::ZERO),
@@ -369,9 +389,12 @@ impl GpuRenderer {
 
         // The shader, written in Rust (`shaders/pathtrace`) and compiled to SPIR-V by rust-gpu
         // (`scripts/build-shaders.sh`); a browser takes the WGSL translation made with it.
-        // RAYS_GPU_WGSL=1 runs the WGSL natively too, to test the translation without a browser.
+        // Vulkan takes the SPIR-V; other backends the WGSL, whose loops the builder has
+        // rewritten for naga's MSL and HLSL writers (`fold_continuing_blocks` in
+        // shaders/builder: from SPIR-V, Metal's loops left one iteration early). RAYS_GPU_WGSL=1 runs the WGSL
+        // on Vulkan too, to test the translation without a browser.
         #[cfg(not(target_arch = "wasm32"))]
-        let source = if std::env::var_os("RAYS_GPU_WGSL").is_some() {
+        let source = if info.backend != wgpu::Backend::Vulkan || std::env::var_os("RAYS_GPU_WGSL").is_some() {
             wgpu::ShaderSource::Wgsl(include_str!("pathtrace.wgsl").into())
         } else {
             wgpu::util::make_spirv(include_bytes!("pathtrace.spv"))
@@ -464,8 +487,8 @@ impl GpuRenderer {
         self.queue.submit(Some(encoder.finish()));
     }
 
-    /// The image accumulated so far: each pixel's sums (the radiance's, and in w the camera
-    /// rays' weights'). Natively this waits for the GPU; in a browser it yields until the copy
+    /// The image accumulated so far: each pixel's sums (the radiance's, and in w the number of
+    /// rays traced). Natively this waits for the GPU; in a browser it yields until the copy
     /// can be read.
     pub async fn read_back(&self) -> Result<Vec<[f32; 4]>, String> {
         let mut encoder = self.device.create_command_encoder(&Default::default());
@@ -520,6 +543,7 @@ impl GpuRenderer {
                     }
                     let v = sums[y * w + x];
                     rc.set_pixel(x, y, Color::new(v[0] as f64, v[1] as f64, v[2] as f64), n);
+                    rc.rays_cast += v[3] as u64;
                 }
             }
             after(&rc);
@@ -536,6 +560,97 @@ mod tests {
 
     fn g3(v: &Vector3<f64>) -> Vec3 {
         Vec3::new(v.x as f32, v.y as f32, v.z as f32)
+    }
+
+    /// No loop in the WGSL has a continuing block or a `break if`, which naga's MSL and HLSL
+    /// writers emit before the loop's body, re-evaluating the body's values there after the
+    /// block's stores (`fold_continuing_blocks` in shaders/builder). Metal and DX12 take this
+    /// WGSL; this checks it without them.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_loops_have_no_continuing_blocks() {
+        use wgpu::naga::{Block, Statement};
+        fn check(block: &Block, loops: &mut usize) {
+            for s in block.iter() {
+                match s {
+                    Statement::Loop { body, continuing, break_if } => {
+                        assert!(continuing.is_empty() && break_if.is_none(), "a loop with a continuing block or a break-if");
+                        *loops += 1;
+                        check(body, loops);
+                    },
+                    Statement::Block(b) => check(b, loops),
+                    Statement::If { accept, reject, .. } => {
+                        check(accept, loops);
+                        check(reject, loops);
+                    },
+                    Statement::Switch { cases, .. } => cases.iter().for_each(|c| check(&c.body, loops)),
+                    _ => {},
+                }
+            }
+        }
+        let module = wgpu::naga::front::wgsl::parse_str(include_str!("pathtrace.wgsl")).unwrap();
+        let mut loops = 0;
+        for f in module.functions.iter().map(|(_, f)| f).chain(module.entry_points.iter().map(|ep| &ep.function)) {
+            check(&f.body, &mut loops);
+        }
+        assert!(loops > 0, "no loops found: is the shader the one expected?");
+    }
+
+    /// A scene of sky alone (no objects) makes no empty buffers, which wgpu can't bind; it
+    /// rendered with a panic rather than an image.
+    #[test]
+    fn test_a_scene_without_objects_has_no_empty_buffers() {
+        let s = SceneFile::from_string(r#"{ "width": 8, "height": 8, "supersamples": 1, "background": [0.2, 0.25, 0.3],
+            "camera": { "location": [0, 1, -5], "lookat": [0, 1, 0], "up": [0, 1, 0], "angle": 0.6 },
+            "materials": {}, "objects": [] }"#.to_string());
+        let flat = FlatScene::build(&s).unwrap();
+        let b = Buffers::build(&s, &flat).unwrap();
+        for (what, len) in [("prims", b.prims.len()), ("nodes", b.nodes.len()), ("materials", b.materials.len()),
+                            ("lights", b.lights.len()), ("tables", b.tables.len())] {
+            assert!(len > 0, "{} is empty", what);
+        }
+        let Ok(mut gpu) = GpuRenderer::new(&s, &flat) else { return };
+        let sums = gpu.run(&s, 0..1);
+        assert!(sums.iter().all(|v| (v[0] - 0.2).abs() < 1e-3), "the background, not {:?}", sums[0]);
+    }
+
+    /// From orbit the GPU sees the sky and the sun the CPU does: its sky map and the sun's
+    /// reddening are found from the camera, not the world's origin (on the night side's
+    /// ground, where the sun had set, which rendered `limb-sunset` black).
+    /// Checked by the shader's CPU build over the GPU's buffers, so without a GPU too.
+    #[test]
+    fn test_sees_the_sky_from_orbit() {
+        let s = SceneFile::from_string(r#"{
+            "width": 32, "height": 16, "supersamples": 16, "max_depth": 4, "background": [0, 0, 0],
+            "camera": { "location": [0, 400000, 0], "lookat": [0, 40000, 1000000], "up": [0, 1, 0], "angle": 0.3 },
+            "sun": { "intensity": 6 },
+            "materials": { "GROUND": { "type": "lambertian", "albedo": [0.06, 0.09, 0.15] } },
+            "objects": [ { "type": "planet", "material": "GROUND" }, { "type": "skysphere", "sun_direction": [0, -0.3, 0.95] } ]
+        }"#.to_string());
+        let flat = FlatScene::build(&s).unwrap();
+        let b = Buffers::build(&s, &flat).unwrap();
+        let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+        let passes = 16;
+        let mut on_shader = Vector3::zeros();
+        for k in 0..passes {
+            for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
+                if ray.d.w < 0.5 {
+                    continue;
+                }
+                let mut rng = pathtrace::path_seed(index as u32, k as u32, b.params.seed.x);
+                let c = pathtrace::radiance(&shader, ray.o.truncate(), ray.d.truncate(), &mut rng, &mut 0) * ray.o.w;
+                on_shader += Vector3::new(c.x as f64, c.y as f64, c.z as f64) / passes as f64;
+            }
+        }
+        let cpu = crate::wavefront::integrator::tests::mean_image(&s, passes).iter().fold(Vector3::zeros(), |a, c| a + c.rgb);
+        for ch in 0..3 {
+            assert!((on_shader[ch] - cpu[ch]).abs() < 0.05 * cpu[ch], "channel {}: shader {} vs CPU {}", ch, on_shader[ch], cpu[ch]);
+        }
+        let Ok(mut gpu) = GpuRenderer::new(&s, &flat) else { return };
+        let on_gpu = gpu.run(&s, 0..passes).iter().fold(Vector3::zeros(), |a, v| a + Vector3::new(v[0] as f64, v[1] as f64, v[2] as f64)) / passes as f64;
+        for ch in 0..3 {
+            assert!((on_gpu[ch] - cpu[ch]).abs() < 0.05 * cpu[ch], "channel {}: GPU {} vs CPU {}", ch, on_gpu[ch], cpu[ch]);
+        }
     }
 
     /// The shader's functions, run on the CPU, agree with the renderer's own.
@@ -602,13 +717,16 @@ mod tests {
         let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
         let passes = 32;
         let mut cpu = Vector3::zeros();
+        let mut cpu_rays = 0u64;
         for k in 0..passes {
             for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
                 if ray.d.w < 0.5 {
                     continue;
                 }
                 let mut rng = pathtrace::path_seed(index as u32, k as u32, b.params.seed.x);
-                let c = pathtrace::radiance(&shader, ray.o.truncate(), ray.d.truncate(), &mut rng) * ray.o.w;
+                let mut rays = 0;
+                let c = pathtrace::radiance(&shader, ray.o.truncate(), ray.d.truncate(), &mut rng, &mut rays) * ray.o.w;
+                cpu_rays += rays as u64;
                 cpu += Vector3::new(c.x as f64, c.y as f64, c.z as f64);
             }
         }
@@ -617,6 +735,9 @@ mod tests {
         for ch in 0..3 {
             assert!((on_gpu[ch] - cpu[ch]).abs() < 0.01 * cpu[ch], "channel {}: GPU {} vs CPU {}", ch, on_gpu[ch], cpu[ch]);
         }
+        // And traces as many rays (w).
+        let gpu_rays: f64 = sums.iter().map(|v| v[3] as f64).sum();
+        assert!((gpu_rays - cpu_rays as f64).abs() < 0.01 * cpu_rays as f64, "rays: GPU {} vs CPU {}", gpu_rays, cpu_rays);
     }
 
     /// Every material and kind of light the GPU path has.
@@ -673,8 +794,9 @@ mod tests {
         }
     }
 
-    /// The GPU renders what the CPU wavefront integrator does (skipped without a GPU adapter,
-    /// such as Mesa's lavapipe).
+    /// The GPU renders what the CPU wavefront integrator does, tracing as many rays (so it
+    /// samples the sky as the CPU does; skipped without a GPU adapter, such as Mesa's
+    /// lavapipe).
     #[test]
     fn test_agrees_with_the_wavefront_integrator() {
         let s = scene();
@@ -688,10 +810,12 @@ mod tests {
         };
         let rc = Mutex::new(RenderContext::new(24, 16, false, "test.png"));
         gpu.render(&s, &rc, |_| ());
-        let gpu_image = rc.lock().unwrap().snapshot();
+        let (gpu_image, gpu_rays) = { let rc = rc.lock().unwrap(); (rc.snapshot(), rc.rays_cast) };
         let rc = Mutex::new(RenderContext::new(24, 16, false, "test.png"));
         crate::wavefront::integrator::render(&s, &flat, &rc, |_| ());
-        let cpu_image = rc.lock().unwrap().snapshot();
+        let (cpu_image, cpu_rays) = { let rc = rc.lock().unwrap(); (rc.snapshot(), rc.rays_cast) };
+        // Russian roulette ends paths by different random numbers, so the counts differ a little.
+        assert!((gpu_rays as f64 - cpu_rays as f64).abs() < 0.02 * cpu_rays as f64, "rays: GPU {} vs CPU {}", gpu_rays, cpu_rays);
         let total = |img: &crate::output::LinearImage| img.pixels.iter().fold(Vector3::zeros(), |a, c| a + c.rgb);
         let (g, c) = (total(&gpu_image), total(&cpu_image));
         for ch in 0..3 {

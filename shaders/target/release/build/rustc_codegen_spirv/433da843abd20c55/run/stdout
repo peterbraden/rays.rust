@@ -1,3 +1,0 @@
-cargo:rerun-if-env-changed=RUSTGPU_SKIP_TOOLCHAIN_CHECK
-cargo::rustc-check-cfg=cfg(rustc_codegen_spirv_disable_pqp_cg_ssa)
-cargo::rustc-check-cfg=cfg(llvm_enzyme)

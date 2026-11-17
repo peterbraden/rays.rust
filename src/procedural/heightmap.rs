@@ -1285,12 +1285,12 @@ mod tests {
             feature: crate::textures::TerrainFeature::Washes, scale: m.floor_scale, spread: 1., noise: PerlinNoise::new(),
         };
         // Where the texture says wash, the floor is cut down; elsewhere not.
+        let mut flat = mesas(0.02);
+        flat.washes = 0.;
         let mut cut = 0;
         for k in 0 .. 3000 {
             let (x, z) = (k as f64 * 1.9 - 2850., 1800.);
             let a = t.amount(&Vector3::new(x, 0., z));
-            let mut flat = mesas(0.02);
-            flat.washes = 0.;
             let depth = flat.height(x, z) - m.height(x, z);
             assert!((depth - 4. * a).abs() < 1e-6 || m.distance(x, z) > -3. * m.cliff, "{} {}", depth, a);
             if a > 0.9 { cut += 1; }

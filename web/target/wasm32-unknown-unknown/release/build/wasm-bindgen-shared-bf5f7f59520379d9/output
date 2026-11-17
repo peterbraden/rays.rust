@@ -1,3 +1,0 @@
-cargo:rerun-if-changed=/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasm-bindgen-shared-0.2.130/src/lib.rs
-cargo:rerun-if-changed=/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wasm-bindgen-shared-0.2.130/src/tys.rs
-cargo:rustc-env=SCHEMA_FILE_HASH=2070563888170033746

@@ -1,2 +1,0 @@
-{"$message_type":"diagnostic","message":"dropping unsupported crate type `dylib` for target `wasm32-unknown-unknown`","code":null,"level":"warning","spans":[],"children":[],"rendered":"\u001b[1m\u001b[33mwarning\u001b[0m\u001b[1m: dropping unsupported crate type `dylib` for target `wasm32-unknown-unknown`\u001b[0m\n\n"}
-{"$message_type":"diagnostic","message":"1 warning emitted","code":null,"level":"warning","spans":[],"children":[],"rendered":"\u001b[1m\u001b[33mwarning\u001b[0m\u001b[1m: 1 warning emitted\u001b[0m\n\n"}

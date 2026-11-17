@@ -1,6 +1,6 @@
 {
  "output": {
-  "exposure": 1.5,
+  "exposure": 4,
   "tonemap": "filmic",
   "saturation": 1.35
  },
@@ -10,7 +10,7 @@
  "chunk_size": 64,
  "samples_per_chunk": 4,
  "shadow_bias": 0.0001,
- "max_depth": 5,
+ "max_depth": 32,
  "variables": {
   "near": {
    "type": "mesas",
@@ -921,12 +921,32 @@
    "type": "skysphere",
    "ozone": true,
    "sun_direction": [
-    -0.9,
-    0.13,
-    0.25
+    -0.8,
+    0.17,
+    -0.35
    ],
    "multiple_scattering": true,
    "mie_coefficient": 6e-06
+  },
+  {
+   "type": "nubis_clouds",
+   "base": 2600,
+   "top": 3800,
+   "extent": 60000,
+   "coverage": 0.3,
+   "cloud_type": 0.8,
+   "density": 0.03,
+   "albedo": [
+    0.99,
+    0.99,
+    0.99
+   ],
+   "g": 0.85,
+   "seed": 7,
+   "center": [
+    0,
+    9000
+   ]
   },
   {
    "type": "transform",
@@ -1071,5 +1091,6 @@
     "strength": 0.85
    }
   }
- ]
+ ],
+ "path_termination": "russian_roulette"
 }

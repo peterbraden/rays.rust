@@ -1,6 +1,6 @@
 {
  "output": {
-  "exposure": 0.5,
+  "exposure": 1.05,
   "white_balance": 7000,
   "tonemap": "filmic",
   "saturation": 1.2
@@ -11,7 +11,7 @@
  "chunk_size": 64,
  "samples_per_chunk": 4,
  "shadow_bias": 0.0001,
- "max_depth": 5,
+ "max_depth": 32,
  "variables": {
   "desert": {
    "type": "mesas",
@@ -516,6 +516,26 @@
    "mie_coefficient": 8e-06
   },
   {
+   "type": "nubis_clouds",
+   "base": 2600,
+   "top": 3800,
+   "extent": 60000,
+   "coverage": 0.35,
+   "cloud_type": 0.8,
+   "density": 0.03,
+   "albedo": [
+    0.99,
+    0.99,
+    0.99
+   ],
+   "g": 0.85,
+   "seed": 5,
+   "center": [
+    0,
+    8000
+   ]
+  },
+  {
    "type": "transform",
    "item": "land",
    "material": "GROUND"
@@ -593,5 +613,6 @@
     }
    ]
   }
- ]
+ ],
+ "path_termination": "russian_roulette"
 }

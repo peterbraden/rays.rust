@@ -1,0 +1,33 @@
+{
+  "width": 480,
+  "height": 320,
+  "supersamples": 32,
+  "samples_per_chunk": 4,
+  "shadow_bias": 0.01,
+  "max_depth": 64,
+  "path_termination": "russian_roulette",
+  "camera": {
+    "location": [0, 2, -3200],
+    "lookat": [0, 1500, 0],
+    "up": [0, 1, 0],
+    "angle": 0.55
+  },
+  "sun": { "intensity": 4.9 },
+  "objects": [
+    { "type": "ocean", "wind": [3, 1] },
+    { "type": "skysphere", "sun_direction": [-0.7, 0.6, -0.5] },
+    {
+      "type": "harris_cumulus",
+      "time": 2400,
+      "grid": [128, 112, 128],
+      "cell": 25,
+      "wind": [1, 0],
+      "hot_spot": { "radius": 500, "boost": 1.5 },
+      "repeat": false,
+      "follow_wind": true,
+      "cache": "demo/scenes/.cumulus-cache",
+      "detail_size": 20,
+      "albedo": [0.99, 0.99, 0.99]
+    }
+  ]
+}

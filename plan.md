@@ -1298,6 +1298,51 @@ UI, file IO and rayon's threads would follow.
    - Next for the web: camera rays on the GPU (pinhole and thin lens), the sky baked on the GPU
      or smaller, a scene picker and progressive display on the GPU, timings on real GPUs
      (the Mac, phones), Safari.
+   - Benchmark of the megakernel on the M2 (Metal; 8 CPU threads), after the fixes in #128,
+     #140-#143 (`scripts/benchmark-gpu.sh 640 360 8 64 256`): the 17 demo scenes the GPU
+     renders, cost of a sample from the difference between 8 and 64 spp, FLIP at 64 spp
+     against `trace` at 256. ms a sample, trace / wavefront / GPU, and FLIP, wavefront / GPU:
+
+     | Scene            | trace | wavefront |  GPU | GPU setup | FLIP wf | FLIP GPU |
+     |------------------|------:|----------:|-----:|----------:|--------:|---------:|
+     | demo             |  46.2 |      41.3 | 19.0 |    1.2 s  |  0.0167 |   0.0197 |
+     | astigmatism      |   6.1 |       7.9 |  4.7 |    0.3 s  |  0.0062 |   0.0062 |
+     | glossy-sun       |  43.6 |      40.7 | 15.2 |    1.2 s  |  0.0178 |   0.0214 |
+     | instances        |  83.3 |      89.0 | 38.2 |    1.2 s  |  0.0164 |   0.0208 |
+     | lamp-field       |  55.5 |      53.3 |  7.5 |    0.3 s  |  0.0702 |   0.3736 |
+     | lamps            |  45.7 |      33.8 | 21.9 |    0.3 s  |  0.0272 |   0.0298 |
+     | lens-flare       |   7.1 |      48.0 |  5.7 |    4.0 s  |  0.0049 |   0.0109 |
+     | limb-sunset      | 278.2 |     285.9 |  4.7 |    2.4 s  |  0.0011 |   0.0885 |
+     | night-orbit      | 400.5 |     406.0 |  6.2 |    0.7 s  |  0.0044 |   0.0562 |
+     | panorama         |  30.5 |      24.3 | 13.3 |    0.3 s  |  0.0118 |   0.0146 |
+     | realistic-camera |  65.5 |      59.1 | 25.9 |    0.4 s  |  0.0566 |   0.0594 |
+     | sky-custom       |  47.9 |      47.7 |  5.6 |    1.1 s  |  0.0094 |   0.0200 |
+     | sky-presets      |  52.7 |      52.7 |  5.2 |    1.2 s  |  0.0113 |   0.0207 |
+     | sky-sunset       |  56.0 |      48.6 |  7.1 |    1.1 s  |  0.0107 |   0.0179 |
+     | spheres          |  66.4 |      41.8 |  7.5 |    1.1 s  |  0.0164 |   0.0201 |
+     | stratosphere     | 336.0 |     356.0 |  4.0 |    3.4 s  |  0.0037 |   0.1780 |
+     | deep-space       | 145.3 |     152.7 |  4.1 |    0.5 s  |  0.0007 |   0.0414 |
+
+     What it shows:
+     - Geometric mean, a sample: 7.2x the wavefront integrator, 6.8x `trace`; at 64 spp with
+       setup, 2.9x the wavefront integrator. Not a like-for-like comparison where the sky
+       dominates: there the CPU evaluates the atmosphere for every ray and the GPU looks it up
+       in a baked map (35-90x faster), which is also why the GPU is worse there (the map's
+       0.35 degrees a texel bands a narrow view of the limb, and smears stars).
+     - On scenes of geometry and materials (demo, glossy-sun, instances, lamps, panorama,
+       realistic-camera, astigmatism) the GPU is 1.5-2.7x the 8-thread CPU. On the demo a pass
+       takes 18.6 ms, 2.8 ms of it the CPU's camera rays: the shader is the bound, the case for
+       the queued stage kernels below. With `realistic-camera` the reverse: tracing camera rays
+       through the lens on the CPU (28.7 ms a pass) is the whole cost; camera rays on the GPU
+       would remove it.
+     - At equal samples the GPU is noisier everywhere (demo 0.0197 against 0.0167): its hashed
+       random numbers against the CPU's Sobol' points.
+     - `lamp-field` asks for the light BVH, which the GPU ignores silently, choosing among 900
+       lamps by power: unbiased (same exposure) but 5x the error. It should at least say so.
+     - Not the GPU: on `lens-flare` the CPU wavefront integrator takes 48 ms a sample against
+       `trace`'s 7.1.
+     - 16 of 72 demo scenes reach the GPU (plus `deep-space` after #142); the rest stop at
+       flattening (media, procedural shapes, textures, spectral rendering): phase 3's fallback.
 2. GPU wavefront with queues: replace the megakernel with stage kernels and queues, with
    identical images (FLIP against the megakernel), then measure on real GPUs (the Mac; the
    browser) against the megakernel to decide which to keep for which device.

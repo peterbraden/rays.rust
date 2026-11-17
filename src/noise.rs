@@ -335,6 +335,21 @@ pub struct SeededNoise {
 }
 
 impl SeededNoise {
+    /// What the GPU needs to evaluate it (`procedural::space` exports it): the offset the seed
+    /// gives, the rotation between octaves (row by row), and the permutation table.
+    pub fn offset(&self) -> Vector3<f64> {
+        self.offset
+    }
+
+    pub fn rotation_rows(&self) -> [f64; 9] {
+        let m = self.rotation.matrix();
+        [m[(0, 0)], m[(0, 1)], m[(0, 2)], m[(1, 0)], m[(1, 1)], m[(1, 2)], m[(2, 0)], m[(2, 1)], m[(2, 2)]]
+    }
+
+    pub fn permutation(&self) -> &[usize; 512] {
+        &self.perlin.perm
+    }
+
     pub fn new(seed: u64) -> Self {
         let mut rng = crate::geometry::Pcg32::new(seed, 0x5eed);
         let offset = Vector3::new(rng.next_f64(), rng.next_f64(), rng.next_f64()) * 256.;

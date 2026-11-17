@@ -154,18 +154,74 @@ fn surface_area(b: &BBox) -> f64 {
 }
 
 impl Bvh {
+    /// The nodes as data, for uploading to a GPU (`gpu`): each node's bounds, then for a leaf
+    /// the index of its first item and how many, for an interior node the index of its second
+    /// child (the first follows it) and 0.
+    pub fn export(&self) -> Vec<(BBox, u32, u32)> {
+        self.nodes.iter().map(|n| (n.bounds, n.offset, n.count)).collect()
+    }
+
     /// Build a tree over `items`, returning it with the items reordered into leaf order: the
     /// indices the tree passes to callers index the returned `Vec`.
     pub fn build<T: Sync>(items: Vec<T>, bounds_of: impl Fn(&T) -> BBox + Sync) -> (Bvh, Vec<T>) {
         let bounds: Vec<BBox> = items.par_iter().map(&bounds_of).collect();
         let centroids: Vec<Vector3<f64>> = bounds.iter().map(|b| b.mid()).collect();
         let mut order: Vec<usize> = (0 .. items.len()).collect();
-        let nodes = if items.is_empty() { Vec::new() } else { Bvh::build_parallel(&bounds, &centroids, &mut order) };
+        let mut nodes = if items.is_empty() { Vec::new() } else { Bvh::build_parallel(&bounds, &centroids, &mut order) };
+        // Kept for the whole render, and grown by pushing: give back the slack.
+        nodes.shrink_to_fit();
 
         // Permute the items into leaf order.
         let mut slots: Vec<Option<T>> = items.into_iter().map(Some).collect();
         let items = order.iter().map(|&i| slots[i].take().unwrap()).collect();
         (Bvh { nodes }, items)
+    }
+
+    /// As `build`, with every subtree of at most `leaf` items made one leaf: for items so cheap
+    /// to test that visiting a node costs more, such as the cards of `shapes::lod`, it saves most
+    /// of the nodes, which are larger than the items (a card is 40 bytes, a node 56).
+    pub fn build_with_leaves<T: Sync>(items: Vec<T>, bounds_of: impl Fn(&T) -> BBox + Sync, leaf: usize) -> (Bvh, Vec<T>) {
+        let (bvh, items) = Bvh::build(items, bounds_of);
+        (bvh.collapsed(leaf), items)
+    }
+
+    /// This tree with every subtree of at most `leaf` items made one leaf. A subtree's items are
+    /// a contiguous run, the tree being laid out depth first, as are its nodes.
+    fn collapsed(self, leaf: usize) -> Bvh {
+        if self.nodes.is_empty() {
+            return self;
+        }
+        // Each node's run of items: children follow their parents, so visit from the end.
+        let mut runs = vec![(0u32, 0u32); self.nodes.len()];
+        for i in (0 .. self.nodes.len()).rev() {
+            let n = &self.nodes[i];
+            runs[i] = if n.count > 0 { (n.offset, n.count) } else {
+                let (a, b) = (runs[i + 1], runs[n.offset as usize]);
+                (a.0.min(b.0), a.1 + b.1)
+            };
+        }
+        let mut nodes = Vec::with_capacity(self.nodes.len());
+        // (old node, the new node whose right child it is, if it is one)
+        let mut stack = vec![(0usize, None::<usize>)];
+        while let Some((i, parent)) = stack.pop() {
+            let index = nodes.len();
+            if let Some(p) = parent {
+                let p: &mut Node = &mut nodes[p];
+                p.offset = index as u32;
+            }
+            let n = self.nodes[i];
+            let (first, count) = runs[i];
+            if n.count > 0 || count as usize <= leaf {
+                nodes.push(Node { bounds: n.bounds, offset: first, count });
+            } else {
+                nodes.push(Node { bounds: n.bounds, offset: 0, count: 0 });
+                // The left child goes next, so it's pushed last.
+                stack.push((n.offset as usize, Some(index)));
+                stack.push((i + 1, None));
+            }
+        }
+        nodes.shrink_to_fit();
+        Bvh { nodes }
     }
 
     /// Build the tree in three phases, so that each node is copied at most once and the tree is
@@ -519,6 +575,28 @@ mod tests {
             assert_eq!(expected, found, "{}", r);
             let any = bvh.any_hit(&r, min, max, |i| items[i].intersects_beyond(&r, min).is_some_and(|x| x.dist >= min && x.dist < max));
             assert_eq!(any, expected.is_some(), "{}", r);
+        }
+    }
+
+    #[test]
+    fn test_collapsed_leaves_find_the_same_hits() {
+        let original = spheres(2000, 7);
+        let (full, items) = Bvh::build(spheres(2000, 7), |s| s.bounds());
+        for leaf in [2, 4, 16] {
+            let (bvh, collapsed) = Bvh::build_with_leaves(spheres(2000, 7), |s| s.bounds(), leaf);
+            // The same items in the same order, behind fewer nodes.
+            assert!(collapsed.iter().zip(&items).all(|(a, b)| a.bounds().min == b.bounds().min && a.bounds().max == b.bounds().max));
+            assert!(bvh.node_count() < full.node_count(), "{} of {}", bvh.node_count(), full.node_count());
+            let mut rng = StdRng::seed_from_u64(8);
+            for _ in 0 .. 1000 {
+                let r = random_ray(&mut rng);
+                let (min, max) = (rng.gen_range(0., 3.), rng.gen_range(3., 60.));
+                let expected = brute_force(&original, &r, min, max);
+                let found = bvh.nearest(&r, min, max, |i, _| collapsed[i].intersects_beyond(&r, min)).map(|(_, x)| x.dist);
+                assert_eq!(expected, found, "{}", r);
+                let any = bvh.any_hit(&r, min, max, |i| collapsed[i].intersects_beyond(&r, min).is_some_and(|x| x.dist >= min && x.dist < max));
+                assert_eq!(any, expected.is_some(), "{}", r);
+            }
         }
     }
 

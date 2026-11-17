@@ -1,151 +1,12 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
-//extern crate image;
-extern crate nalgebra as na;
-extern crate rand;
-#[macro_use]
-extern crate clap;
-#[macro_use]
-extern crate serde_derive;
-extern crate serde_json;
-extern crate rayon;
-extern crate tobj;
-extern crate ordered_float;
-extern crate num_complex;
-extern crate rustfft;
-extern crate termcolor;
-
-
 use clap::Parser;
 use rayon::prelude::*;
+use rays::*;
 
-mod ray;
-mod color;
-mod spectrum;
-mod motion;
-mod sampler;
-mod textures;
-mod film;
-mod lens;
-mod flare;
-mod material {
-    pub mod model;
-    pub mod bsdf;
-    pub mod ggx;
-    pub mod dielectric;
-    pub mod specular;
-    pub mod conductor;
-    pub mod rough_dielectric;
-    pub mod layered;
-    pub mod subsurface;
-    pub mod mix;
-    pub mod hair;
-    pub mod ambient;
-    pub mod texture;
-    pub mod lambertian;
-    pub mod diffuse_light;
-    pub mod normal;
-    pub mod uv;
-    pub mod functions;
-    pub mod legacy;
-    pub mod plastic;
-    pub mod leaf;
-    pub mod noise;
-    pub mod grass;
-    pub mod bump;
-    pub mod rock;
-    pub mod soil;
-    pub mod phase;
-    pub mod diffraction;
-    pub mod ice_halos;
-    pub mod rainbow;
-}
-mod intersection;
-mod sceneobject;
-mod light;
-mod light_bvh;
-mod wavefront;
-mod shapes {
-    pub mod transform;
-    pub mod bbox;
-    pub mod geometry;
-    pub mod geometry_set;
-    pub mod csg;
-    pub mod sphere;
-    pub mod plane;
-    pub mod triangle;
-    pub mod mesh;
-    pub mod ply;
-    pub mod wo3;
-    pub mod infinite;
-    pub mod repeating_mesh;
-    pub mod polynomial;
-    pub mod cone;
-    pub mod disc;
-    pub mod bilinear;
-    pub mod curve;
-    pub mod subdivision;
-    pub mod algebraic;
-    pub mod polygon;
-    pub mod revolution;
-    pub mod sweep;
-    pub mod blob;
-    pub mod implicit;
-    pub mod julia;
-    pub mod tessellated;
-    pub mod text;
-}
-mod octree;
-mod bvh;
-mod scenegraph;
-mod scene;
-mod scenefile;
-mod nff;
-mod tungsten;
-mod scenefile_shapes;
-mod skysphere;
-mod ocean;
-mod camera;
-mod trace;
-mod rendercontext;
-mod paint;
-mod output;
-mod compare;
-mod depth;
-//mod wireframe;
-mod geometry;
-mod procedural {
-    pub mod box_terrain;
-    pub mod fireworks;
-    pub mod tree;
-    pub mod forest;
-    pub mod heightmap;
-    pub mod grass;
-    pub mod rock;
-    pub mod nubis_clouds;
-    pub mod hogan_kew_cirrus;
-    pub mod benard_altocumulus;
-    pub mod lenticular;
-    pub mod terrain;
-    pub mod mammatus;
-    pub mod precipitation;
-    pub mod harris_cumulus;
-    pub mod space;
-}
-mod participatingmedia;
-mod noise;
-mod terrain;
-mod expr;
-mod volume;
-mod glare;
-mod variance;
-mod environment;
-mod sobol;
-mod planet;
-
-use crate::trace::trace;
-use crate::rendercontext::RenderContext;
+use rays::trace::trace;
+use rays::rendercontext::RenderContext;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use rand::thread_rng;
@@ -210,6 +71,17 @@ struct Args {
     #[arg(long, conflicts_with = "samples")]
     add_samples: Option<usize>,
 
+    ///Adaptive sampling: each pixel stops once its standard error, relative to its displayed
+    ///value, is below this (eg. 0.01), with supersamples the most it takes; overrides the
+    ///scene's "adaptive" threshold. 0 turns it off
+    #[arg(long)]
+    noise_threshold: Option<f64>,
+
+    ///Also write a map of each pixel's samples, relative to the most any pixel took: where
+    ///adaptive sampling spent them
+    #[arg(long)]
+    sample_map: Option<String>,
+
     ///Start afresh, rather than carrying on from the saved state (<output>.accum)
     #[arg(long)]
     fresh: bool,
@@ -218,6 +90,11 @@ struct Args {
     ///scene can be flattened into its primitives and materials; otherwise, as usual
     #[arg(long)]
     wavefront: bool,
+
+    ///Render on the GPU (as "integrator": "gpu"; needs a build with `--features gpu`), if the
+    ///scene can be flattened; otherwise with the wavefront integrator or the path tracer
+    #[arg(long)]
+    gpu: bool,
 
     ///Write the scene file, as JSON in our format, to this file. For a scene in another
     ///renderer's format (eg. .nff), this is the translation
@@ -300,9 +177,17 @@ fn main() {
     }
     // Carry on from where an earlier render of the same scene stopped, if there was one.
     let state_path = rendercontext::state_path_for(&rc.output_filename);
-    // The wavefront integrator's samples differ from the path tracer's: a saved state is one's.
+    if let Some(t) = args.noise_threshold {
+        s.render.adaptive = (t > 0.).then(|| scene::Adaptive {
+            threshold: t,
+            min_samples: s.render.adaptive.map_or(scene::Adaptive::DEFAULT_MIN_SAMPLES, |a| a.min_samples),
+        });
+    }
+    // The wavefront integrator's and the GPU's samples differ from the path tracer's: a saved
+    // state is one's. Neither samples adaptively, so then the path tracer renders.
     let key = rendercontext::render_key(&contents, (args.width, args.height, args.seed))
-        ^ if args.wavefront { 0x7761_7665_6672_6f6e } else { 0 };
+        ^ if args.wavefront && s.render.adaptive.is_none() { 0x7761_7665_6672_6f6e } else { 0 }
+        ^ if args.gpu && s.render.adaptive.is_none() { 0x6770_7500_0000_0001 } else { 0 };
     if !args.fresh && std::path::Path::new(&state_path).exists() {
         match rc.load_state(&state_path, key) {
             Ok(()) => println!("- Resuming from {:.1} samples per pixel on average, {} at least ({})",
@@ -314,9 +199,15 @@ fn main() {
         s.render.supersamples = n;
     }
     if let Some(n) = args.add_samples {
-        s.render.supersamples = rc.min_samples() + n;
+        // Adaptively sampled pixels differ: more than the most any has.
+        let have = if s.render.adaptive.is_some() { rc.max_samples() } else { rc.min_samples() };
+        s.render.supersamples = have + n;
     }
-    println!("- Output: {}x{} @ {} samples -> {}", s.image.width, s.image.height, s.render.samples_per_pixel(), rc.output_filename);
+    match s.render.adaptive {
+        Some(a) => println!("- Output: {}x{} @ {} to {} samples, to a noise of {} -> {}", s.image.width, s.image.height,
+            a.min_samples.min(s.render.samples_per_pixel()), s.render.samples_per_pixel(), a.threshold, rc.output_filename),
+        None => println!("- Output: {}x{} @ {} samples -> {}", s.image.width, s.image.height, s.render.samples_per_pixel(), rc.output_filename),
+    }
     println!("- Scene Objects: {}, Primitives: {} ", s.objects.len(),  s.objects.primitives_len()); 
     let peak = peak_memory().map_or(String::new(), |b| format!(", peak memory {:.0} MiB", b as f64 / (1024. * 1024.)));
     println!("- Built in {:.2} s{}", build_start.elapsed().as_secs_f64(), peak);
@@ -343,8 +234,17 @@ fn main() {
         return;
     }
 
-    if args.wavefront {
+    if args.wavefront || args.gpu {
         s.render.wavefront = true;
+    }
+    if args.gpu {
+        s.render.gpu = true;
+    }
+    if s.render.wavefront && s.render.adaptive.is_some() {
+        let which = if s.render.gpu { "The GPU and the wavefront integrator don't" } else { "The wavefront integrator doesn't" };
+        println!("- {} sample adaptively; rendering with the path tracer", which);
+        s.render.wavefront = false;
+        s.render.gpu = false;
     }
     let flat = if s.render.wavefront {
         match wavefront::flat::FlatScene::build(&s) {
@@ -361,6 +261,24 @@ fn main() {
     } else {
         None
     };
+    #[cfg(feature = "gpu")]
+    let mut gpu = match (&flat, s.render.gpu) {
+        (Some(f), true) => match gpu::GpuRenderer::new(&s, f) {
+            Ok(g) => {
+                println!("- GPU: {}", g.adapter_name);
+                Some(g)
+            },
+            Err(e) => {
+                println!("- The GPU can't render this scene ({}); rendering with the wavefront integrator", e);
+                None
+            },
+        },
+        _ => None,
+    };
+    #[cfg(not(feature = "gpu"))]
+    if s.render.gpu {
+        println!("- This build has no GPU support (build with --features gpu); rendering with the wavefront integrator");
+    }
     let rcmtx = Mutex::new(rc);
 
     println!("{}",
@@ -375,7 +293,32 @@ fn main() {
     let last_progressive = Mutex::new(Instant::now());
     let last_state = Mutex::new(Instant::now());
 
-    if let Some(flat) = &flat {
+    #[cfg(feature = "gpu")]
+    let on_gpu = gpu.is_some();
+    #[cfg(not(feature = "gpu"))]
+    let on_gpu = false;
+    #[cfg(feature = "gpu")]
+    let after_pass = |rc: &RenderContext| {
+        pb.set_position(rc.progress_percentage(&s) as u64);
+        pb.set_message(rc.progress(&s));
+        pb.tick();
+        let mut last = last_progressive.lock().unwrap();
+        if rc.progressive_render && last.elapsed() >= progressive_interval {
+            *last = Instant::now();
+            if let Err(e) = writer.write(&s.output.finish(&rc.snapshot()), &rc.output_filename) {
+                eprintln!("{}", e);
+            }
+        }
+        let mut last = last_state.lock().unwrap();
+        if last.elapsed() >= STATE_INTERVAL {
+            *last = Instant::now();
+            save_state(&state_path, &rc.encode_state(key));
+        }
+    };
+    if on_gpu {
+        #[cfg(feature = "gpu")]
+        gpu.as_mut().unwrap().render(&s, &rcmtx, after_pass);
+    } else if let Some(flat) = &flat {
         wavefront::integrator::render(&s, flat, &rcmtx, |rc| {
             pb.set_position(rc.progress_percentage(&s) as u64);
             pb.set_message(rc.progress(&s));
@@ -432,7 +375,20 @@ fn main() {
     if rc.samples_rendered > 0 {
         save_state(&state_path, &rc.encode_state(key));
     }
-    println!("- {} samples per pixel; more can be added with --add-samples", rc.min_samples());
+    if s.render.adaptive.is_some() {
+        println!("- {:.1} samples per pixel on average, from {} to {}; more can be added with --add-samples",
+            rc.mean_samples(), rc.min_samples(), rc.max_samples());
+    } else {
+        println!("- {} samples per pixel; more can be added with --add-samples", rc.min_samples());
+    }
+    if let Some(path) = &args.sample_map {
+        let opts = output::OutputOpts { transfer: output::Transfer::Linear, ..output::OutputOpts::default() };
+        if let Err(e) = output::writer_for(path, opts).and_then(|w| w.write(&rc.sample_map(), path)) {
+            eprintln!("{}", e);
+        } else {
+            println!("- Samples per pixel -> {}", path);
+        }
+    }
     //wireframe::wireframe(&s, &mut rc);
     let img = s.output.finish(&rc.snapshot());
     if let Err(e) = writer.write(&img, &rc.output_filename) {

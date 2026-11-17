@@ -10,23 +10,52 @@ image = "0.25.5"
 exr = "1.73"
 nalgebra = "0.33.2"
 rand = "0.6"
-clap = { version = "4.5.32", features = ["derive"] }
+clap = { version = "4.5.32", features = ["derive"], optional = true }
 serde = "1.0"
 serde_derive = "1.0"
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 lazy_static = "1.2.0"
 rayon="1.0"
-tobj = "4.0.3"
+# Without `ahash`, whose getrandom has no browser backend by default.
+tobj = { version = "4.0.3", default-features = false }
 ordered-float = "5.0.0"
 num-complex = "0.4.6"
-rustfft="2.1"
+rustfft = "6.2"
 termcolor="1.0.5"
-indicatif = "0.17.11"
-console = "0.15.11"
+indicatif = { version = "0.17.11", optional = true }
+console = { version = "0.15.11", optional = true }
 approx = "0.5.1"
-nv-flip = "0.1.2"
+# C++, so not in the browser's build: `--compare` (src/compare.rs) is the command line's.
+nv-flip = { version = "0.1.2", optional = true }
 ttf-parser = "0.25"
-libc = "0.2"
+libc = { version = "0.2", optional = true }
+# std's Instant natively; performance.now() in a browser, where std's panics.
+web-time = "1.1"
+# The GPU path tracer (`gpu`), built only with `--features gpu`.
+wgpu = { version = "30", optional = true }
+pollster = { version = "0.4", optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+# The shader crate, also compiled for the CPU: its buffer layouts and its code, for tests.
+pathtrace = { path = "shaders/pathtrace", optional = true }
+
+# Natively the shader goes in as SPIR-V; a browser takes its WGSL (src/gpu/pathtrace.wgsl).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wgpu = { version = "30", optional = true, features = ["spirv"] }
+
+[lib]
+name = "rays"
+path = "src/lib.rs"
+
+# The command-line tool. The library alone (without `cli`) is what the browser's build uses.
+[[bin]]
+name = "rays"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["dep:clap", "dep:indicatif", "dep:console", "dep:nv-flip", "dep:libc"]
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:pathtrace"]
 
 [profile.release]
 # Whole-program optimisation: inlining across crates (nalgebra, rustfft, rand) and modules.

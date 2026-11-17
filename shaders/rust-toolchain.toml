@@ -1,0 +1,4 @@
+# rust-gpu's codegen backend builds only with this exact nightly (spirv-builder 0.11's; its README says 2026-04-11, its toolchain check 2026-08-15).
+[toolchain]
+channel = "nightly-2026-08-15"
+components = ["rust-src", "rustc-dev", "llvm-tools"]

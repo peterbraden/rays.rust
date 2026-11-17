@@ -1,0 +1,9 @@
+[package]
+name = "builder"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+spirv-builder = "0.11"
+# The same naga as wgpu 30's.
+naga = { version = "30", features = ["spv-in", "wgsl-in", "wgsl-out"] }

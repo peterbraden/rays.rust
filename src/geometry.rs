@@ -170,7 +170,11 @@ mod tests {
 /// up another pixel's meanwhile, which then waits for the same, unfinished table: a deadlock.
 /// rayon's `install` on another pool doesn't help, as its caller also takes up work while it
 /// waits; a plain thread just waits.
+/// Without threads (a browser), there are no other threads to deadlock with: `f` runs here.
 pub fn build_apart<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    #[cfg(target_arch = "wasm32")]
+    return f();
+    #[cfg(not(target_arch = "wasm32"))]
     std::thread::scope(|scope| {
         scope.spawn(|| match rayon::ThreadPoolBuilder::new().build() {
             Ok(pool) => pool.install(f),

@@ -64,6 +64,16 @@ impl MilkyWay {
         }
     }
 
+    /// Its parameters for the GPU, in the order of the shader's `MILKY_*`: brightness, dust,
+    /// the disc's colour, the bulge's, the noise's offset and the dust noise's.
+    pub fn export(&self) -> Vec<f64> {
+        let mut v = vec![self.brightness, self.dust];
+        for c in [self.disc_colour, self.bulge_colour, self.noise.offset(), self.dust_noise.offset()] {
+            v.extend(c.iter());
+        }
+        v
+    }
+
     /// The glow of the unresolved stars in unit direction `d`, at galactic longitude `l` and
     /// latitude `b`.
     pub fn glow(&self, d: &Vector3<f64>, l: f64, b: f64) -> Vector3<f64> {

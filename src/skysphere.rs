@@ -51,14 +51,28 @@ use rayon::prelude::*;
 /// Scales the integrated radiance into the renderer's working range. Under the default sRGB
 /// output this keeps the sky looking as it did with its former built-in tone curve,
 /// (0.383 v)^(1/2.2).
-const SKY_CALIBRATION: f64 = 0.38317;
+///
+/// The integral itself is radiance per unit of sunlight above the atmosphere, so the sky's
+/// radiance is that times `brightness` times this. With a scene's `"sun"` the product must be
+/// the sun's irradiance, or the sky is out of proportion with the sunlit scene under it
+/// (`sky_brightness_for_sun`).
+pub const SKY_CALIBRATION: f64 = 0.38317;
 
-const DEFAULT_NUM_SAMPLES: usize = 32;
+/// The skysphere `brightness` that puts the sky on the same scale as a sun of irradiance
+/// `intensity` above the atmosphere: its radiance is then the air's per unit sunlight times
+/// the sun's. (The default brightness, 20, makes a sky 7.7 times brighter than a sun of
+/// irradiance 1 would light it: a blue sky brighter than a sunlit white page, haze over
+/// distant sunlit clouds brighter than the clouds.)
+pub fn sky_brightness_for_sun(intensity: f64) -> f64 {
+    intensity / SKY_CALIBRATION
+}
+
+pub const DEFAULT_NUM_SAMPLES: usize = 32;
 /// Resolution of the sun's transmittance table: altitudes (spaced quadratically, closer low
 /// down) and cosines of its angle from the zenith.
-const SUN_TABLE_ALTITUDES: usize = 64;
-const SUN_TABLE_ANGLES: usize = 256;
-const DEFAULT_NUM_SAMPLES_LIGHT: usize = 16;
+pub const SUN_TABLE_ALTITUDES: usize = 64;
+pub const SUN_TABLE_ANGLES: usize = 256;
+pub const DEFAULT_NUM_SAMPLES_LIGHT: usize = 16;
 
 /// Sample points along a path of `length` through the atmosphere, as (distance, step): the
 /// midpoints, in u, of n equal steps of u, where distance = length u². A ray from inside the
@@ -344,6 +358,21 @@ impl SkyMaterial {
     /// parallel (rayon) loop, so a render thread building one inside its `OnceLock` could steal
     /// another render job whose ray then waits on that same `OnceLock`: a deadlock, as `LUTSky`
     /// once had. The sun's table comes first, as the multiple scattering table reads it.
+    /// The same air lit from unit `direction` with `brightness` (its tables built afresh).
+    pub fn relit(&self, direction: Vector3<f64>, brightness: f64) -> SkyMaterial {
+        SkyMaterial {
+            atmosphere: self.atmosphere.clone(), earth: self.earth.clone(),
+            sun_direction: direction.normalize(), brightness,
+            rayleigh_thickness: self.rayleigh_thickness, mie_thickness: self.mie_thickness,
+            rayleigh_coefficients: self.rayleigh_coefficients, mie_coefficient: self.mie_coefficient,
+            mie_anisotropy: self.mie_anisotropy, ozone: self.ozone,
+            sun_table: std::sync::OnceLock::new(),
+            multiple_scattering: self.multiple_scattering, ground_albedo: self.ground_albedo,
+            ms_table: std::sync::OnceLock::new(), spectral_ms: std::sync::OnceLock::new(),
+            crepuscular_rays: self.crepuscular_rays,
+        }.with_tables()
+    }
+
     pub fn with_tables(self) -> SkyMaterial {
         let p = self.earth.center + Vector3::new(0., self.earth.radius + 1., 0.);
         self.sun_depths_at(&p);
@@ -810,7 +839,10 @@ impl SkyMaterial {
                     return Vector3::zeros();
                 }
                 let t = self.transmittance_to_space(&Ray { ro: r.ro, rd: d });
-                if t.max() <= 0. { Vector3::zeros() } else { space.radiance(&d).rgb.component_mul(&t) }
+                if t.max() <= 0. { return Vector3::zeros(); }
+                // Attenuated in RGB, then (in spectral mode) at the path's wavelengths, as the
+                // sky it is added to is.
+                Color { rgb: space.radiance(&d).rgb.component_mul(&t) }.as_illuminant().rgb
             },
             _ => Vector3::zeros(),
         }
@@ -819,6 +851,8 @@ impl SkyMaterial {
 
 impl MaterialModel for SkyMaterial {
     fn is_sky(&self) -> bool { true }
+
+    fn air(&self) -> Option<AirExport> { Some(self.export()) }
 
     fn scatter(&self, r: &Ray, _intersection: &Intersection, s: &Scene) -> ScatteredRay {
         // Linear light; display encoding happens at output.
@@ -894,8 +928,8 @@ pub struct MultipleScattering {
     psi: Vec<Vector3<f64>>,
 }
 
-const MS_ALTITUDES: usize = 32;
-const MS_SUN_ANGLES: usize = 32;
+pub const MS_ALTITUDES: usize = 32;
+pub const MS_SUN_ANGLES: usize = 32;
 const MS_DIRECTIONS: usize = 64;
 const MS_STEPS: usize = 20;
 
@@ -1017,10 +1051,10 @@ pub struct SkyViewLUT {
 /// interpolating between distant altitudes is poor near the horizon (2-4% between 300 m and
 /// 1 km). Scenes keep within tens of metres of the ground; above the top, rays are integrated
 /// exactly.
-const LUT_ALTITUDES: [f64; 8] = [1., 5., 15., 30., 60., 100., 150., 200.];
+pub const LUT_ALTITUDES: [f64; 8] = [1., 5., 15., 30., 60., 100., 150., 200.];
 /// Longitude and latitude resolution of the table.
-const LUT_WIDTH: usize = 256;
-const LUT_HEIGHT: usize = 128;
+pub const LUT_WIDTH: usize = 256;
+pub const LUT_HEIGHT: usize = 128;
 
 impl SkyViewLUT {
     pub fn build(air: &Air, width: usize, height: usize) -> SkyViewLUT {
@@ -1090,12 +1124,43 @@ pub struct LUTSky {
     sky: SkyMaterial,
     lut: SkyViewLUT,
     spectral_luts: std::sync::OnceLock<Vec<SkyViewLUT>>,
+    /// The same air lit by a moon's light instead of the sun's (`moonlit`).
+    moonlit: Option<Box<LUTSky>>,
 }
 
 impl LUTSky {
     pub fn new(sky: SkyMaterial) -> LUTSky {
         let lut = SkyViewLUT::build(&sky.rgb_air(), LUT_WIDTH, LUT_HEIGHT);
-        LUTSky { sky, lut, spectral_luts: std::sync::OnceLock::new() }
+        LUTSky { sky, lut, spectral_luts: std::sync::OnceLock::new(), moonlit: None }
+    }
+
+    /// This sky, also lit by moonlight: the same air with the moon in place of the sun, its
+    /// light `share` of the sun's (the night sky's faint blue is moonlight scattered as
+    /// daylight is).
+    pub fn moonlit(self, direction: Vector3<f64>, share: f64) -> LUTSky {
+        let moon = self.sky.relit(direction, self.sky.brightness * share);
+        LUTSky { moonlit: Some(Box::new(LUTSky::new(moon))), ..self }
+    }
+
+    /// The light scattered by the air along `r`, without what shows through it from space.
+    fn air_radiance(&self, r: &Ray) -> Vector3<f64> {
+        let d = r.rd.normalize();
+        let altitude = (r.ro - self.sky.earth.center).norm() - self.sky.earth.radius;
+        let looked_up = match crate::spectrum::current() {
+            _ if d.y < 0. => None,
+            None => self.lut.lookup(&d, altitude),
+            Some(w) => self.lookup_spectral(&d, altitude, &w.lambda),
+        };
+        // The phase functions, which peak sharply around the sun, are applied exactly.
+        let air = self.sky.air();
+        let v = match looked_up {
+            Some((rayleigh, mie, multiple)) => air.apply_phase(&d, rayleigh, mie, multiple),
+            None => air.radiance(r),
+        } * SKY_CALIBRATION;
+        match &self.moonlit {
+            Some(m) => v + m.air_radiance(r),
+            None => v,
+        }
     }
 
     fn spectral_luts(&self) -> &[SkyViewLUT] {
@@ -1136,24 +1201,69 @@ impl LUTSky {
     }
 }
 
+/// # The air for the GPU
+///
+/// The GPU evaluates the same model in f32 (`gpu::Buffers`, the shader's `air_radiance`,
+/// `segment` and `sun_transmittance`), from these parameters and tables, so that it differs
+/// from the CPU only by rounding.
+pub struct AirExport {
+    pub earth_centre: Vector3<f64>,
+    pub earth_radius: f64,
+    pub atmosphere_radius: f64,
+    pub sun_direction: Vector3<f64>,
+    pub rayleigh_thickness: f64,
+    pub mie_thickness: f64,
+    pub brightness: f64,
+    pub rayleigh: Vector3<f64>,
+    pub mie: f64,
+    pub mie_anisotropy: f64,
+    pub ozone: Vector3<f64>,
+    /// `sun_depths_at`'s table: `SUN_TABLE_ALTITUDES` rows of `SUN_TABLE_ANGLES` depths
+    /// (Rayleigh, Mie, ozone).
+    pub sun_table: Vec<[f64; 3]>,
+    /// `MultipleScattering`'s Ψ, `MS_ALTITUDES` rows of `MS_SUN_ANGLES`, if it is on.
+    pub multiple: Option<Vec<Vector3<f64>>>,
+    /// `SkyViewLUT`'s slices, one per `LUT_ALTITUDES`, each `LUT_HEIGHT` rows of `LUT_WIDTH`
+    /// (Rayleigh, Mie, multiple), for a `LUTSky`; None for a sky integrated exactly.
+    pub lut: Option<Vec<Scattering>>,
+    /// The same air lit by a moon (`LUTSky::moonlit`), added to the sky's light.
+    pub moon: Option<Box<AirExport>>,
+}
+
+impl SkyMaterial {
+    /// This air's parameters and tables, in RGB (`AirExport`).
+    pub fn export(&self) -> AirExport {
+        self.sun_depths_at(&(self.earth.center + Vector3::new(0., self.earth.radius + 1., 0.)));
+        AirExport {
+            earth_centre: self.earth.center, earth_radius: self.earth.radius, atmosphere_radius: self.atmosphere.radius,
+            sun_direction: self.sun_direction, rayleigh_thickness: self.rayleigh_thickness, mie_thickness: self.mie_thickness,
+            brightness: self.brightness, rayleigh: self.rayleigh_coefficients, mie: self.mie_coefficient,
+            mie_anisotropy: self.mie_anisotropy, ozone: self.ozone,
+            sun_table: self.sun_table.get().unwrap().iter().map(|d| [d.r, d.m, d.o]).collect(),
+            multiple: self.multiple_scattering.then(|| self.rgb_ms().psi.clone()),
+            lut: None, moon: None,
+        }
+    }
+}
+
+impl LUTSky {
+    /// The sky's air with its sky-view tables and moonlight (`AirExport`).
+    pub fn export(&self) -> AirExport {
+        AirExport {
+            lut: Some(self.lut.slices.iter().flatten().copied().collect()),
+            moon: self.moonlit.as_ref().map(|m| Box::new(m.export())),
+            ..self.sky.export()
+        }
+    }
+}
+
 impl MaterialModel for LUTSky {
     fn is_sky(&self) -> bool { true }
 
+    fn air(&self) -> Option<AirExport> { Some(self.export()) }
+
     fn scatter(&self, r: &Ray, _intersection: &Intersection, s: &Scene) -> ScatteredRay {
-        let d = r.rd.normalize();
-        let altitude = (r.ro - self.sky.earth.center).norm() - self.sky.earth.radius;
-        let spectral = crate::spectrum::current();
-        let looked_up = match spectral {
-            _ if d.y < 0. => None,
-            None => self.lut.lookup(&d, altitude),
-            Some(w) => self.lookup_spectral(&d, altitude, &w.lambda),
-        };
-        // The phase functions, which peak sharply around the sun, are applied exactly.
-        let air = self.sky.air();
-        let v = match looked_up {
-            Some((rayleigh, mie, multiple)) => air.apply_phase(&d, rayleigh, mie, multiple),
-            None => air.radiance(r),
-        } * SKY_CALIBRATION;
+        let v = self.air_radiance(r);
         let v = v + self.sky.space_seen(r, s, &v);
         ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
     }
@@ -1188,6 +1298,10 @@ impl SkyMaterial {
         self.earth.radius
     }
 
+    pub fn earth_centre(&self) -> Vector3<f64> {
+        self.earth.center
+    }
+
     pub fn sun_direction(&self) -> Vector3<f64> {
         self.sun_direction
     }
@@ -1206,7 +1320,12 @@ pub fn create_sky_sphere(o: &Value) -> SceneObject {
     let sky = parse_sky_material(o);
     // The lookup table is on by default; "lut": false integrates every ray exactly.
     let m: Box<dyn MaterialModel + Sync + Send> = if o["lut"].as_bool().unwrap_or(true) {
-        Box::new(LUTSky::new(sky))
+        let sky = LUTSky::new(sky);
+        // Lit by a moon too (set by the scene, `celestial::moon::Moonlight`).
+        Box::new(match o.get("moonlight") {
+            Some(m) => sky.moonlit(SceneFile::parse_vec3(&m["direction"]), SceneFile::parse_number(&m["share"], 0.)),
+            None => sky,
+        })
     } else {
         Box::new(sky)
     };
@@ -1482,6 +1601,36 @@ mod tests {
         assert!(through.y < 1e-6 * plain_day.y, "{} vs {}", through, plain_day);
         let (n, plain_night) = (seen(&scene("[0, -0.5, 1]", &space)), seen(&scene("[0, -0.5, 1]", "[0, 0, 0]")));
         assert!(n.y > plain_night.y, "{} vs {}", n, plain_night);
+    }
+
+    #[test]
+    fn test_space_through_the_air_is_spectral_in_spectral_mode() {
+        // In spectral mode the sky's radiance is at the path's wavelengths, so what space adds
+        // to it must be too: the RGB light it sends through the air, as an illuminant there.
+        let scene = |background: &str| crate::scenefile::SceneFile::from_string(format!(r#"{{
+            "width": 8, "height": 8, "background": {},
+            "camera": {{ "location": [0, 10, 0], "lookat": [0, 1000, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "objects": [ {{ "type": "skysphere", "sun_direction": [0, -0.5, 1] }} ]
+        }}"#, background));
+        let space = r#"{ "type": "space", "stars": false, "nebulae": false, "galaxies": false, "threshold": 0,
+            "galactic_pole": [1, 0, 0], "galactic_centre": [0, 1, 0] }"#;
+        let r = Ray { ro: Vector3::new(0., 10., 0.), rd: Vector3::new(0., 1., 0.) };
+        let seen = |s: &crate::scene::Scene| {
+            let sky = s.objects.infinite_items.iter().next().unwrap();
+            let i = sky.intersects(&r).unwrap();
+            let i = Intersection { dist: i.dist, point: i.point, normal: i.normal, face: i.face, part: i.part, object: sky };
+            sky.medium.material_at(i.point).scatter(&r, &i, s).attenuate.rgb
+        };
+        let (with, without) = (scene(space), scene("[0, 0, 0]"));
+        let glow = match &with.render.background { crate::scene::Background::Space(s) => s.radiance(&r.rd).rgb, _ => unreachable!() };
+        let through = Color { rgb: glow.component_mul(&sky_at("[0, 1, 0]").transmittance_to_space(&r)) };
+        crate::spectrum::begin_sample(crate::spectrum::Wavelengths::sample_visible(0.37));
+        let added = seen(&with) - seen(&without);
+        let expected = through.as_illuminant().rgb;
+        crate::spectrum::end_sample();
+        assert!((added - expected).norm() < 1e-6 * expected.norm(), "{} vs {}", added, expected);
+        // Not the RGB light itself, which would be the wrong colour at these wavelengths.
+        assert!((added - through.rgb).norm() > 1e-3 * expected.norm());
     }
 
     #[test]

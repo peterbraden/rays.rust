@@ -1,0 +1,63 @@
+{
+  "width": 800,
+  "height": 800,
+  "supersamples": 16,
+  "samples_per_chunk": 4,
+  "max_depth": 6,
+  "shadow_bias": 1,
+  "path_termination": "russian_roulette",
+  "output": {
+    "exposure": 1.0
+  },
+  "camera": {
+    "location": [
+      0,
+      9640000,
+      15000000
+    ],
+    "lookat": [
+      0,
+      -6360000,
+      0
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.62
+  },
+  "sun": {
+    "intensity": 5
+  },
+  "objects": [
+    {
+      "type": "landscape",
+      "seed": 0,
+      "planet": false,
+      "levels": [],
+      "domain": {
+        "lat": -5,
+        "lon": -105
+      },
+      "globe": 256,
+      "planet_map": "demo/scenes/landscape-planet-map.png",
+      "climate_map": "demo/scenes/landscape-climate-map.png"
+    },
+    {
+      "type": "ocean",
+      "wind": [
+        7,
+        2
+      ]
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        -0.5,
+        0.6,
+        0.6
+      ]
+    }
+  ]
+}

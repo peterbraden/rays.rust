@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v4
     - name: Install Clippy
       run: rustup component add clippy
     - name: Run Clippy
@@ -17,6 +17,8 @@ jobs:
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+    - name: Run tests (release, as the renders run)
+      run: cargo test --release
     - name: Run Smoke test
       run: cargo run -- demo/ci-smoke-test.json
     - name: Run current work
@@ -24,3 +26,46 @@ jobs:
     - name: Run examples
       run: for f in demo/*.json; do cargo run --release -- --width 60 --height 40 $f; done
 
+  gpu:
+    # The GPU path tracer (--features gpu) on Mesa's software Vulkan driver, lavapipe.
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Check the committed shader matches its sources
+      run: scripts/shader-sources.sh --check
+    - name: Install lavapipe
+      run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+    - name: Install Clippy
+      run: rustup component add clippy
+    - name: Run Clippy
+      run: cargo clippy --features gpu -- -D errors
+    - name: Build
+      run: cargo build --release --features gpu
+    - name: Run GPU tests
+      run: "cargo test --release --features gpu gpu::"
+    - name: Render on the GPU
+      # spheres.json reaches the GPU; the smoke test scene falls back to the path tracer.
+      run: cargo run --release --features gpu -- --gpu --width 60 --height 40 demo/scenes/spheres.json | tee /dev/stderr | grep -q "^- GPU:"
+
+  web:
+    # The browser version (web/): the library for wasm32, rendering through WebGPU in headless
+    # Chromium (SwiftShader), compared with the native GPU renderer's image of the same scene.
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Check the library builds for wasm32
+      run: rustup target add wasm32-unknown-unknown && cargo check --lib --no-default-features --features gpu --target wasm32-unknown-unknown
+    - name: Install wasm-bindgen
+      run: cargo install wasm-bindgen-cli --version "$(grep -A1 '^name = "wasm-bindgen"$' web/Cargo.lock | sed -n 's/version = "\(.*\)"/\1/p')"
+    - name: Build the browser version
+      run: scripts/build-web.sh
+    - name: Install Chromium and lavapipe
+      run: |
+        cd web && npm install --no-save playwright@1.63.0 && npx playwright install --with-deps chromium
+        sudo apt-get install -y mesa-vulkan-drivers
+    - name: Render in the browser, and compare with the native GPU renderer
+      run: |
+        node web/test.mjs demo/scenes/spheres.json 160 90 32 web-spheres.png
+        cargo run --release --features gpu -- --gpu --width 160 --height 90 --samples 32 -o native-spheres.png demo/scenes/spheres.json --compare web-spheres.png --max-flip 0.01

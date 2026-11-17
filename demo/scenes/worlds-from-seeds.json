@@ -1,0 +1,23 @@
+{
+  "width": 1200,
+  "height": 400,
+  "supersamples": 16,
+  "max_depth": 4,
+  "output": { "exposure": 1.2 },
+  "background": { "type": "space", "seed": 33 },
+  "camera": {
+    "location": [0, 0, 0],
+    "lookat": [0, 0, 1],
+    "up": [0, 1, 0],
+    "angle": 0.12,
+    "aperture": 0
+  },
+  "sun": { "intensity": 6, "direction": [-0.55, 0.25, -0.6] },
+  "objects": [
+    { "type": "world", "kind": "gas_giant", "seed": 7, "rings": true, "direction": [-0.15, 0, 1], "distance": 3.4e9, "pole": [0.2, 0.9, -0.35], "resolution": 2048 },
+    { "type": "world", "kind": "ice_giant", "seed": 12, "direction": [-0.05, 0, 1], "distance": 1.2e9 },
+    { "type": "world", "kind": "rocky", "seed": 5, "direction": [0.03, 0, 1], "distance": 3.5e7 },
+    { "type": "world", "kind": "rocky", "seed": 9, "direction": [0.095, 0, 1], "distance": 1.5e8 },
+    { "type": "world", "kind": "icy", "seed": 4, "direction": [0.16, 0, 1], "distance": 1.4e7 }
+  ]
+}

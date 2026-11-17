@@ -247,7 +247,7 @@ nothing measurable either.
 - Arvo and Kirk, "Particle Transport and Image Synthesis", SIGGRAPH 1990 (Russian roulette).
 
 
-## 3. GPU acceleration (brainstorm only)
+## 3. GPU acceleration (brainstorm; superseded by 12)
 
 ### Known constraints in the current architecture
 
@@ -1107,11 +1107,51 @@ twice the path tracer's time; batches of 4096 paths per thread brought it to 1.1
 Sorting by material costs little on the CPU. A 4.5% gap on demo.json was the path tracer's
 regularisation, which the wavefront integrator lacked.
 
+### The GPU (stacked PR)
+
+`src/gpu/`, behind the cargo feature `gpu` (wgpu 30, pollster, bytemuck), `--gpu`: the flat
+scene uploaded (primitives with planes after them, the BVH's nodes via `Bvh::export`, materials
+with checkerboards' squares appended, point and spot lights, and one table of f32 for the
+emitters' distribution, the baked sky and the aerial perspective table), and a WGSL compute
+shader porting the wavefront integrator's shading in f32: Lambert, rough and smooth plastic,
+metal and conductor (complex Fresnel), glass, emitters with MIS, sun (point, or its disc for
+narrow lobes), one area light by power, the sky by importance (marginal and conditional CDFs of
+a 1024 x 512 map, looked up bilinearly), regularisation and Russian roulette. Camera rays are
+generated on the CPU each pass and uploaded, so every camera works. Developed and tested on
+Mesa's lavapipe (llvmpipe, Vulkan 1.4) in the container.
+
+At 320 x 180, 512 spp against a 512 spp path-traced reference: demo exposure 0.998, FLIP
+0.0017; instances 1.001, 0.016; spheres 1.000, 0.017 (the CPU wavefront integrator 0.013). Two
+fixes on the way: aerial perspective, first omitted for scenes under 100 units (but planes are
+unbounded), is baked into a table along rays from the camera (azimuth from the sun, elevation,
+log distance); and that table's frame must be the sky's sun, not the scene's `sun`, which
+scenes with a skysphere may not have. On lavapipe (4 cores) at 640 x 360, 64 spp: spheres 3.6
+s (path tracer 4.7 s), instances 16.1 s (12.4 s), demo 6.1 s (7.1 s). Timings on a real GPU
+are still to be measured.
+
+The shader then moved from WGSL to Rust, compiled by rust-gpu (spirv-builder 0.11): a
+separate workspace `shaders/` pinned to its nightly (`nightly-2026-08-15`; its README said
+2026-04-11, its toolchain check disagreed), built by `scripts/build-shaders.sh` into the
+committed `src/gpu/pathtrace.spv`, so the renderer stays on stable. The same crate builds for
+the CPU on stable: the host uses its structs as the buffer layouts, and tests check its
+Fresnel, conductor, GGX and sphere-light functions against the renderer's, and its whole
+`radiance` on the CPU against the GPU's image (within 1%). Images are identical to the WGSL
+version's (same FLIP figures); on lavapipe it runs 5-25% slower, after removing bounds checks
+on the scene's buffers (`at`), which had cost a third. What rust-gpu or naga refused:
+`(a..=b).contains(&x)` (a pointer in `Bound`), `f32::is_finite` (an infinite literal), and
+slices of local arrays.
+
 ### Deferred from chapters 15-16
 
-- The GPU itself (option 2): WGSL compute kernels over the flat scene with wgpu (Metal on the
-  Mac), validated against this integrator by FLIP. A separate PR: a large dependency, and no
-  GPU in the development container (Mesa's lavapipe could stand in for tests).
+- Sharing the shading with the CPU wavefront integrator itself: it is f64 and nalgebra, the
+  shader f32 and glam; for now the tests hold them together.
+
+- Measuring on real GPUs (the Mac's Metal), and tuning: workgroup size, f16 storage, stack
+  depth. The shader is a megakernel (one path per invocation); pbrt's GPU renderer queues
+  paths between kernels per stage, which helps divergent materials on real GPUs.
+- On the GPU: the light BVH (area lights are chosen by power), Sobol' samples (a hash per
+  pixel, pass and dimension instead), goniometric and projection lights, aerial perspective
+  from each ray's own origin (the table assumes the camera's), the sun's irradiance by altitude.
 - Coverage: textures, coated and rough-dielectric materials, cylinders and other analytic
   shapes, media, spectral and motion-blurred renders; the scene's other samplers.
 - pbrt's structure-of-arrays queues; ours are arrays of path structs.
@@ -1132,3 +1172,310 @@ regularisation, which the wavefront integrator lacked.
   doi:10.5194/amt-7-625-2014.
 - Malitson, "Interspecimen Comparison of the Refractive Index of Fused Silica", JOSA 55(10), 1965,
   doi:10.1364/JOSA.55.001205.
+
+## 12. GPU and WebGPU roadmap: one set of kernels, per-area fallback
+
+Goals (from review, November 2026):
+
+- WebGPU in the browser is a target, not an afterthought: anything that runs on the GPU must
+  survive translation to WGSL and WebGPU's limits, and the host must work without threads,
+  blocking waits or a filesystem.
+- The GPU's coverage grows one area at a time (a material, a shape, a kind of light), and
+  whatever an area doesn't yet cover falls back to the CPU for that area only, not for the
+  whole scene as now.
+- One source of truth for shading: the kernel crate (`shaders/pathtrace`, f32, rust-gpu),
+  run on the GPU and, for fallback and tests, on the CPU. The recursive tracer (`trace`, f64)
+  stays the reference every other path is measured against.
+
+### Review findings (code review of the wavefront and GPU paths)
+
+Verified bugs, to fix first:
+
+1. Mirroring transforms flip flattened triangles' normals: `Prim::transformed` keeps the
+   winding when det < 0 (`flat.rs`), so one-sided emitters light the wrong side and
+   dielectrics swap entering and exiting. Swap two vertices (and their normals) when det < 0.
+2. Emissive (and dielectric) planes are one-sided in the flat scene and the shader, two-sided
+   in `trace` (`Plane::intersects` faces the ray). Match it, or refuse to flatten them.
+3. The shader's sphere-light cone, 1 - √(1 - r²/d²), cancels in f32: about twice too wide at
+   r/d = 2.5e-4, and an infinite density (the light vanishes) below 1.7e-4. Use x / (1 +
+   √(1 - x)), as the CPU's series does.
+4. The shader samples the sky at texel centres only (no jitter within the texel), a slight
+   MIS bias and aliased sky shadows. Keep the remainder of the uniform numbers, as
+   `Distribution1D::sample`.
+
+Risks: scenes past the GPU's buffer limits panic in wgpu rather than falling back (check sizes
+against the adapter's limits and return Err); a full BVH stack in the shader drops nodes
+silently (tie its size to `bvh.rs`'s depth bound); the shader's box test can make NaN for a
+ray starting on a slab, which `TraversalRay::enters` handles; resuming a render saved by
+another integrator mixes sample sequences (put the integrator in the state's key).
+
+Maintainability: constants and table layouts are still duplicated between host and shader
+(flags, material kinds, aerial table sizes, `MIN_ALPHA`, `POINT_SUN`, `LIMB_DARKENING`): make
+them the kernel crate's `pub const`s. Smooth emitters take their side from the winding, not
+the interpolated normal as `trace` does, and `SmoothMesh::flatten` drops all normals when one
+is missing. Shading exists three times (`trace`, `wavefront::integrator`, the shader), and
+the agreement tests compare image totals within 3% on scenes without transforms, plane
+lights or small lights: compare regions (FLIP per tile), and add those cases.
+
+Infrastructure:
+
+- CI (`rust.yml`) never builds `--features gpu`, never runs the GPU tests, and can't notice a
+  stale `pathtrace.spv` after the shader's source changes. Each run takes 35-40 minutes
+  (debug-mode tests, every demo scene).
+- `.github/workflows/dependabot.yml` is Dependabot's config in the workflows directory, so it
+  fails as a workflow on every push; it belongs at `.github/dependabot.yml`, with ecosystem
+  `cargo`, not `rust`.
+- rust-gpu inlines the whole kernel into one function (the struct of buffer references needs
+  inlining to legalise): 330 KB of SPIR-V becomes 1 MB of WGSL, a risk for browsers'
+  compile times.
+- PR #123 is 148 files and 31,000 lines, too large to review as one; review it by chapter
+  (its commits are per chapter).
+
+WebGPU feasibility, checked: naga translates `pathtrace.spv` to WGSL, which re-parses and
+validates with WebGPU's baseline capabilities. The renderer itself doesn't build for
+`wasm32-unknown-unknown`: `nv-flip-sys` (C++) and `getrandom` stop it first, and the terminal
+UI, file IO and rayon's threads would follow.
+
+### Architecture to reach
+
+- Crates: `rays-core` (scene parsing, flat scene, CPU integrators; no terminal UI, no C
+  dependencies; rayon behind a `threads` feature), `rays-kernels` (today's
+  `shaders/pathtrace`: `no_std`, f32, run by the GPU and by the CPU fallback), the `rays` CLI
+  (indicatif, nv-flip, EXR, saved states), and `rays-web` (wasm-bindgen: a canvas, scenes and
+  assets by fetch, async readback).
+- The GPU renderer becomes a wavefront in GPU buffers, as pbrt-v4's: path state as structures
+  of arrays, and a kernel per stage (camera rays, intersect, classify, shade per material
+  kind, shadow rays, accumulate), with queues between them.
+- Per-area fallback through those queues. Each area has a status: GPU, CPU fallback or
+  unsupported (the scene then renders with `trace`, as now). Classification after
+  intersection puts each path in a GPU queue or a CPU queue; the CPU queue is read back,
+  processed by the kernel crate's CPU build or the renderer's own code, and written back for
+  the next stage. Intersection falls back the same way: objects the GPU can't intersect
+  (procedural shapes, CSG) are intersected on the CPU for the rays whose segments reach their
+  bounds, and the nearer hit kept.
+- Shaders shipped as WGSL generated from the SPIR-V at build time (naga), so the web build
+  needs neither naga nor SPIR-V at run time, and the native build can keep SPIR-V.
+
+### Phases
+
+0. Hardening: done. The four bugs and the risks above are fixed (buffer sizes and BVH depth
+   checked against the device and the shader's stack; a NaN-safe box test; resumed renders
+   catch up); shared constants live in the shader crate; a hard-case scene is checked tile by
+   tile against `trace` and the GPU against the wavefront integrator (it caught f32 losing a
+   small, distant sphere light, now sampled by pbrt's cone method). CI builds and lints
+   `--features gpu`, runs the GPU tests on lavapipe, checks `pathtrace.spv` against the hashes
+   of its sources (`scripts/shader-sources.sh --check`), runs tests in release, and Dependabot's
+   config is in `.github/dependabot.yml`.
+1. Web spike: done, in Chrome (headless, WebGPU on SwiftShader); Safari not yet tried. What
+   was built, and how it differs from the plan:
+   - The renderer is a library (`src/lib.rs`) and a CLI behind a default `cli` feature, rather
+     than separate crates: the same dependency split (no C, no getrandom, no terminal in the
+     library) with less churn while PR #123 is open. The library builds for wasm32 (rustfft
+     2 -> 6, tobj without ahash, web-time's Instant, `build_apart` inline, `assets` for files).
+   - `web/` (rays-web, wasm-bindgen): parses a scene, flattens it, renders a pass per animation
+     frame and reads back every 8, finishing the image as the CLI does. `web/test.mjs` renders
+     in headless Chromium; CI's `web` job compares that with the native GPU's image by FLIP.
+   - The kernel shrank instead of losing its struct of references: one call site each for
+     the traversal, shadow rays and lobe evaluation (WGSL 1.1 MB -> 390 KB; 2.4x faster on
+     lavapipe). One more copy remains (the path's and the shadow rays' traversals, 50 KB).
+   - WGSL is generated at build time and validated for WebGPU (`shaders/builder`).
+   - Measured, 320x180, SwiftShader: shader compile and first pass 3-4 s; 250-540 ms a pass
+     (software); scene setup 10.5 s, mostly baking the sky map single-threaded; camera rays
+     17.7 ms a pass on the CPU, which would bound a real GPU's rate at larger sizes.
+   - Found: a shadow ray re-hit its own sphere where sqrt is a few ULP out (WebGPU allows it),
+     darkening spheres; fixed by the sphere test's early out. Browser vs native GPU, mean FLIP:
+     0.0033 on `spheres` at 256 spp (CPU seed to seed: 0.012), 0.0003 on `demo.json`.
+   - Found on the Mac's Metal (the first run on a real GPU): images 12% dark wherever the sky
+     was sampled, and the GPU tests failing (they pass on lavapipe). naga's MSL and HLSL
+     writers write a loop's continuing block before its body, so the body's values it uses
+     (and its `break if`) are re-evaluated after the block's own stores: rust-gpu's
+     `while lo + 1 < hi` left one iteration early (the sky's binary search, BVH traversal),
+     and a count kept across iterations came out a quarter of the right one. The builder now
+     folds continuing blocks into loop bodies (`fold_continuing_blocks`), Metal and DX12
+     take the WGSL, and a test checks the WGSL's loops without a GPU. Demo, 20 spp, mean FLIP
+     against `trace`: 0.1425 -> 0.0295 (the CPU wavefront integrator: 0.026). Not yet
+     reported upstream (gfx-rs/wgpu).
+   - Next for the web: camera rays on the GPU (pinhole and thin lens), the sky baked on the GPU
+     or smaller, a scene picker and progressive display on the GPU, timings on real GPUs
+     (the Mac, phones), Safari.
+   - Benchmark of the megakernel on the M2 (Metal; 8 CPU threads), after the fixes in #128,
+     #140-#143 (`scripts/benchmark-gpu.sh 640 360 8 64 256`): the 17 demo scenes the GPU
+     renders, cost of a sample from the difference between 8 and 64 spp, FLIP at 64 spp
+     against `trace` at 256. ms a sample, trace / wavefront / GPU, and FLIP, wavefront / GPU:
+
+     | Scene            | trace | wavefront |  GPU | GPU setup | FLIP wf | FLIP GPU |
+     |------------------|------:|----------:|-----:|----------:|--------:|---------:|
+     | demo             |  46.2 |      41.3 | 19.0 |    1.2 s  |  0.0167 |   0.0197 |
+     | astigmatism      |   6.1 |       7.9 |  4.7 |    0.3 s  |  0.0062 |   0.0062 |
+     | glossy-sun       |  43.6 |      40.7 | 15.2 |    1.2 s  |  0.0178 |   0.0214 |
+     | instances        |  83.3 |      89.0 | 38.2 |    1.2 s  |  0.0164 |   0.0208 |
+     | lamp-field       |  55.5 |      53.3 |  7.5 |    0.3 s  |  0.0702 |   0.3736 |
+     | lamps            |  45.7 |      33.8 | 21.9 |    0.3 s  |  0.0272 |   0.0298 |
+     | lens-flare       |   7.1 |      48.0 |  5.7 |    4.0 s  |  0.0049 |   0.0109 |
+     | limb-sunset      | 278.2 |     285.9 |  4.7 |    2.4 s  |  0.0011 |   0.0885 |
+     | night-orbit      | 400.5 |     406.0 |  6.2 |    0.7 s  |  0.0044 |   0.0562 |
+     | panorama         |  30.5 |      24.3 | 13.3 |    0.3 s  |  0.0118 |   0.0146 |
+     | realistic-camera |  65.5 |      59.1 | 25.9 |    0.4 s  |  0.0566 |   0.0594 |
+     | sky-custom       |  47.9 |      47.7 |  5.6 |    1.1 s  |  0.0094 |   0.0200 |
+     | sky-presets      |  52.7 |      52.7 |  5.2 |    1.2 s  |  0.0113 |   0.0207 |
+     | sky-sunset       |  56.0 |      48.6 |  7.1 |    1.1 s  |  0.0107 |   0.0179 |
+     | spheres          |  66.4 |      41.8 |  7.5 |    1.1 s  |  0.0164 |   0.0201 |
+     | stratosphere     | 336.0 |     356.0 |  4.0 |    3.4 s  |  0.0037 |   0.1780 |
+     | deep-space       | 145.3 |     152.7 |  4.1 |    0.5 s  |  0.0007 |   0.0414 |
+
+     What it shows:
+     - Geometric mean, a sample: 7.2x the wavefront integrator, 6.8x `trace`; at 64 spp with
+       setup, 2.9x the wavefront integrator. Not a like-for-like comparison where the sky
+       dominates: there the CPU evaluates the atmosphere for every ray and the GPU looks it up
+       in a baked map (35-90x faster), which is also why the GPU is worse there (the map's
+       0.35 degrees a texel bands a narrow view of the limb, and smears stars).
+     - On scenes of geometry and materials (demo, glossy-sun, instances, lamps, panorama,
+       realistic-camera, astigmatism) the GPU is 1.5-2.7x the 8-thread CPU. On the demo a pass
+       takes 18.6 ms, 2.8 ms of it the CPU's camera rays: the shader is the bound, the case for
+       the queued stage kernels below. With `realistic-camera` the reverse: tracing camera rays
+       through the lens on the CPU (28.7 ms a pass) is the whole cost; camera rays on the GPU
+       would remove it.
+     - At equal samples the GPU is noisier everywhere (demo 0.0197 against 0.0167): its hashed
+       random numbers against the CPU's Sobol' points.
+     - `lamp-field` asks for the light BVH, which the GPU ignores silently, choosing among 900
+       lamps by power: unbiased (same exposure) but 5x the error. It should at least say so.
+     - Not the GPU: on `lens-flare` the CPU wavefront integrator takes 48 ms a sample against
+       `trace`'s 7.1.
+     - 16 of 72 demo scenes reach the GPU (plus `deep-space` after #142); the rest stop at
+       flattening (media, procedural shapes, textures, spectral rendering): phase 3's fallback.
+   - Sky and space on the GPU (done): the GPU's own sky, not an
+     approximation of it. Goal: as little difference from the CPU as f32 allows.
+
+     Result: ray by ray, the shader's air is within 3e-5 of the renderer's (sky, aerial
+     perspective, sunlight; ground to orbit, below the horizon, moonlit) and its space within
+     4e-4 (`test_air_matches_the_renderer`, `test_space_matches_the_renderer`). Images, 640 x
+     360, 64 spp, mean FLIP against `trace` (GPU, then wavefront): limb-sunset 0.0011 / 0.0011
+     (0.0885 with the map), stratosphere 0.0020 / 0.0017 (0.178), night-orbit 0.0039 / 0.0043
+     (0.056), sky-sunset 0.0117 / 0.0107, sky-custom 0.0105 / 0.0094, glossy-sun 0.0200 /
+     0.0175. The sun's disc needed its angle from the chord and its solid angle as
+     4π sin²(r/2): from f32 cosines its edge was ragged (cos θ within rounding of 1).
+
+     Found, not yet solved: the kernel's size. rust-gpu inlines everything into one kernel;
+     the air and space took the WGSL from 396 KB to 834 KB (after folding the sky's two call
+     sites into one, and space's seven of fbm into three). A demo sample went from 19 ms to
+     48 ms (the CPU's: 41), though the demo has no space: code that never runs still costs
+     registers and occupancy. In a browser the shader's compile went from 2.7 s to 11.8 s.
+     The remedy is the queues of phase 2 below: sky and space in their own kernel, fed the
+     escaping rays, the sky's light samples and aerial perspective's in-scattering (the
+     transmittance, which the path needs at once, is a short march of depths alone).
+
+     Done: a wavefront by bounce, on #124. Per sample on the M2 at 640 x 360 (baked map /
+     exact in one kernel / exact, split; the CPU wavefront integrator's): demo 19 / 48 / 13.9
+     ms (41), spheres 7.4 / - / 11.8 (42), sky-sunset 7.1 / - / 11.4 (49); limb-sunset 46,
+     night-orbit 58, stratosphere 23 ms (the CPU's 286, 406, 356). Images unchanged (the same
+     random numbers). In Chromium (WebGPU on the M2): compile and first pass 7.4 s (2.7 s with
+     the map, 11.8 s in one kernel); spheres at 160 x 90 35.5 ms a pass (16.4 ms with the
+     map), where a pass's `max_depth` + 2 rounds of dispatches cost more than the pixels.
+     Browser against native: FLIP 0.0025 (spheres), 0.0002 (night-orbit).
+
+     Design: a wavefront by bounce. A compact queue of sky queries would need
+     several of a pixel's results summed, and WebGPU has no float atomics; one bounce at a time
+     bounds each pixel's queries at three, in fixed slots. Two entry points: `bounce` advances
+     each path one vertex (its state in a buffer between dispatches; the camera rays' buffer
+     becomes it, which keeps to WebGPU's 8 storage buffers) and fills its pixel's slots
+     (escaping ray, sky light sample, aerial in-scattering: origin, direction, weight, and a
+     distance for the last); `sky` evaluates a pixel's slots at one call of `background` and
+     adds them to its sum. A pass is `max_depth` + 1 pairs of dispatches. Known: images must
+     not change (the same random numbers, in the same order; tests compare the shader's CPU
+     build and the GPU). Assumed, to measure: each kernel's code is small enough to recover the
+     megakernel's speed, and the extra dispatches cost less than they save.
+
+     Known (from the code): the CPU's escaping rays take `LUTSky::air_radiance`, a lookup in
+     `SkyViewLUT` (8 altitudes, 1-200 m, 256 x 128, Rayleigh, Mie and multiple scattering
+     before the phase functions, which are applied exactly) above the horizon and below 200 m,
+     and otherwise `Air::scattering`, an exact march (32 view steps by `span_samples`, 16 towards
+     the sun at each, `MultipleScattering`'s 32 x 32 table); plus a moonlit copy of the sky
+     (`LUTSky::moonlit`) and `space_seen` (space's radiance times `transmittance_to_space`,
+     skipped below `threshold` of the sky's light). Hits are hazed by `Air::segment` from each
+     ray's origin (a 32-step march with the sun's depth table). Sunlight at a shading point is
+     `Sun::irradiance_at` (the sun's depth table there); the sun's disc is from the ray's
+     origin. The GPU instead bakes a 1024 x 512 map and an aerial table from the camera, and
+     uses one sunlight colour: all three approximations.
+
+     Plan:
+     1. Air: upload the atmosphere's parameters, the sun's depth table, the multiple
+        scattering table and the sky-view tables (about 9.4 MB a sky; WebGPU allows 128 MB a
+        binding); port `air_radiance` (table and exact march), the moonlit sky, `segment`,
+        `sun_transmittance` and the disc to the shader. Escaping rays, hits, sunlight and the
+        disc then evaluate per ray, as on the CPU. Test: the shader's CPU build against
+        `LUTSky` and `SkyMaterial` ray by ray (on the ground, at 200 m either side of the top
+        table, from orbit, below the horizon, at the terminator), then images against the
+        wavefront integrator by FLIP.
+     2. Space: stars from a catalogue built on the CPU (`Stars::each`, sorted by cell, with
+        each cell's offset: the shader can't run `Pcg32`, which needs 64-bit integers WebGPU
+        lacks), evaluated as `Stars::radiance` over the same neighbourhood; the Milky Way,
+        nebulae and galaxies from their parameters and `SeededNoise`'s permutation tables,
+        ported (Perlin, fBm, warped fBm, reddening); `bound` and `threshold` as the CPU.
+     3. The baked map stays only as the distribution sky samples are drawn from (MIS keeps
+        that unbiased); its radiance is no longer used.
+
+     Assumptions, to check: f32 is close enough given altitudes computed without
+     cancellation (h = (|p|^2 + 2 R p_y) / (|p - c| + R) about a planet centred below the
+     origin, not |p - c| - R, which loses 0.5 m at Earth's radius); the exact march (512 exps
+     a ray) is affordable for the escaping rays of orbital scenes; the WGSL stays within what
+     browsers compile (rust-gpu inlines everything: few call sites for the march and noise).
+     Spectral skies stay on the CPU (the GPU doesn't render spectrally).
+2. GPU wavefront with queues: replace the megakernel with stage kernels and queues, with
+   identical images (FLIP against the megakernel), then measure on real GPUs (the Mac; the
+   browser) against the megakernel to decide which to keep for which device.
+
+   Started: a wavefront by bounce (`bounce_paths`, `answer_sky`; above). Still to come:
+   - Queues of active paths (a u32 atomic counter, `dispatchWorkgroupsIndirect`), so late
+     rounds with few paths left cost little; most for the browser, where a pass is now about
+     20 full-image dispatches. Queues and counters must share buffers: all 8 of WebGPU's
+     storage bindings are in use. Spike first: atomics and indirect dispatch through rust-gpu
+     and naga to Metal and the browser.
+   - Stages: intersect (sorting hits into queues: escaped, emitter, each material kind),
+     shade per material kind, shadow rays, sky; the random numbers drawn in the same order,
+     so images and the GPU-against-CPU-build tests hold.
+
+   Mesh intersection, the other large speedup. Known (the shader's `trace`, `bvh.rs`): a
+   binary SAH BVH, leaves of up to 8; a per-thread stack of 100 in a local array (likely
+   spilled); a node's box tested when it is popped, children pushed in a fixed order, so
+   neither nearer-first nor skipped when missed; each test loads a whole 112-byte `Prim`,
+   normals included; instances flattened into world triangles (no instancing on the GPU).
+   In order:
+   1. Measure: box and triangle tests per ray (counted as rays are), and a pass's time with
+      shading off, on demo, instances and glossy-sun.
+   2. Ordered traversal (Aila and Laine, "Understanding the Efficiency of Ray Traversal on
+      GPUs", HPG 2009): both children's boxes in the parent, tested together, the nearer
+      visited first, the farther pushed only if hit.
+   3. A compact buffer for the test (a vertex and two edges), normals and materials fetched
+      for the hit alone.
+   4. The stack sized by the tree's depth (`bvh_depth`), not 100.
+   5. Intersection as its own stage (above), with an any-hit kernel for shadow rays, and rays
+      sorted for coherence once they are queued.
+   6. A wide BVH (4 or 8 children; compressed, after Ylitie, Karras and Laine, "Efficient
+      Incoherent Ray Traversal on GPUs Through Compressed Wide BVHs", HPG 2017).
+   7. Two levels: a tree of instances over a tree per mesh, so instanced scenes (forests)
+      don't multiply their triangles.
+   8. Perhaps, natively only: hardware ray queries (wgpu's are experimental; WebGPU has
+      none; the M2 has no ray tracing hardware, the M3 does).
+   1-4 apply to the current kernels, and come first.
+3. The fallback framework: per-area status, classification, CPU queues for materials first,
+   then intersection. Exit: every flattenable demo scene plus at least one with a
+   procedural shape and one with an unported material renders through the GPU path with CPU
+   fallback, matching `trace`.
+4. Port areas to the GPU by use, each with a kernel, a test of its CPU build against the
+   renderer, and a FLIP test of the GPU against `trace`. Order, by how often the demo scenes
+   use them: image textures (albedo; textures as arrays within WebGPU's limits), cylinders,
+   cones and discs, the light BVH, Sobol' samples, `coated_*` and `rough_dielectric`,
+   per-ray aerial perspective, grid media, then the rest. Spectral rendering and motion blur
+   stay CPU until the queues carry wavelengths and times.
+5. Convergence: the CPU wavefront integrator runs the kernel crate's code for the areas it
+   covers, removing the second copy of the shading (the decision needed: whether f32 is
+   acceptable there, or the kernels become generic over the float type).
+
+Each phase ends with the GPU and web paths measured against `trace` by FLIP on the demo scenes
+they can render, and timings on the Mac's GPU and in a browser, not only on lavapipe.
+
+### Open decisions
+
+- Whether to split PR #123 into per-chapter PRs for review.
+- f32 for the CPU wavefront integrator when it shares the kernels, or generic kernels.
+- WGSL generated at build time (recommended) or translated by naga in the browser.

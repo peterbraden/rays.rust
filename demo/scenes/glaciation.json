@@ -1,0 +1,100 @@
+{
+  "width": 960,
+  "height": 540,
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 6,
+  "path_termination": "russian_roulette",
+  "animation": {
+    "fps": 24,
+    "frames": 120
+  },
+  "clocks": {
+    "geology": "10 kyr/s"
+  },
+  "output": {
+    "tonemap": "reinhard",
+    "exposure": 1.5
+  },
+  "camera": {
+    "location": [
+      14000,
+      3060,
+      33000
+    ],
+    "lookat": [
+      1875,
+      4600,
+      33375
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.8
+  },
+  "sun": {
+    "intensity": 4.9
+  },
+  "objects": [
+    {
+      "type": "landscape",
+      "seed": 0,
+      "time": 100000,
+      "domain": {
+        "near": "mountains",
+        "cells": 128,
+        "spacing": 750
+      },
+      "focus": [
+        0,
+        0,
+        0
+      ],
+      "cache": "demo/scenes/.landscape-cache",
+      "clock": "geology"
+    },
+    {
+      "type": "ocean",
+      "wind": [
+        7,
+        2
+      ]
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        0.5,
+        0.35,
+        0.6
+      ]
+    },
+    {
+      "type": "nubis_clouds",
+      "base": 5200,
+      "top": 6800,
+      "center": [
+        14000,
+        33000
+      ],
+      "extent": 60000,
+      "coverage": 0.35,
+      "cloud_type": 0.8,
+      "density": 0.04,
+      "albedo": [
+        0.99,
+        0.99,
+        0.99
+      ],
+      "g": 0.85,
+      "seed": 2,
+      "wind": [
+        -12,
+        3
+      ]
+    }
+  ]
+}

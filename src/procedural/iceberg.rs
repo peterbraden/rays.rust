@@ -25,7 +25,13 @@
 //! (|x/a|^p + |y/b|^p + |z/c|^p)^(1/p) = 1 (p near 2 rounded, larger boxy), cut and shaped:
 //!
 //! - a few fracture planes, their edges rounded, for the faces where it broke away;
-//! - erosion: lumps, and vertical flutes on the walls where meltwater runs down;
+//! - cleavage: the faces broken along planes, at two scales (slabs and chips), each Voronoi
+//!   cell of the face cut back to a plane of its own so that neighbours meet at sharp steps,
+//!   the cells taller than wide so the facets stand in columns (`Cleavage`); the mesh's
+//!   normals are smoothed only across gentle edges, so the facets' edges stay crisp
+//!   (`creased`);
+//! - erosion: a little lumpiness, and fine vertical flutes on the walls where meltwater runs
+//!   down;
 //! - a wave-cut notch at the waterline, where the sea melts it fastest (the overhang that
 //!   eventually breaks off as a growler), and under it the ram, a shelf of ice jutting out
 //!   below the water, which glows turquoise through it; and a slight tilt, but for tabular
@@ -118,12 +124,12 @@ impl Iceberg {
         // (height above water, H) to be the fraction of the length (L) that bergs of each kind
         // show, a prism floating with an eighth of it above water must be about 8 H deep.
         match self.kind {
-            Kind::Tabular => (Vector3::new(0.5, j(0.3), j(0.4)), 8.),
-            Kind::Blocky => (Vector3::new(0.5, j(1.1), j(0.42)), 10.),
+            Kind::Tabular => (Vector3::new(0.5, j(0.3), j(0.4)), 16.),
+            Kind::Blocky => (Vector3::new(0.5, j(1.1), j(0.42)), 16.),
             Kind::Dome => (Vector3::new(0.5, j(0.7), j(0.42)), 2.2),
             Kind::Pinnacle => (Vector3::new(0.5, j(0.6), j(0.42)), 3.),
-            Kind::Wedge => (Vector3::new(0.5, j(0.9), j(0.38)), 8.),
-            Kind::Drydock => (Vector3::new(0.5, j(1.1), j(0.36)), 8.),
+            Kind::Wedge => (Vector3::new(0.5, j(0.9), j(0.38)), 12.),
+            Kind::Drydock => (Vector3::new(0.5, j(1.1), j(0.36)), 12.),
         }
     }
 
@@ -159,8 +165,18 @@ impl Iceberg {
             (r * a.cos(), r * a.sin(), 0.07 + 0.07 * rng.next_f64(), if k == 0 { 0.45 } else { 0.15 + 0.25 * rng.next_f64() })
         }).collect();
 
+        // Cleavage, at two scales: slabs a fifth of the length across, and chips a quarter of
+        // that, both taller than wide.
+        let cleavage = if rounded { vec![] } else {
+            vec![
+                Cleavage { cell: Vector3::new(0.22, 0.5, 0.22), depth: 0.04, tilt: 0.25, seed: self.seed.wrapping_add(101) },
+                Cleavage { cell: Vector3::new(0.06, 0.12, 0.06), depth: 0.006, tilt: 0.15, seed: self.seed.wrapping_add(202) },
+            ]
+        };
+
         let (directions, triangles) = icosphere(self.detail);
-        let positions = directions.iter().map(|d| {
+        // The body, cut and shaped, in the direction `d`.
+        let body = |d: &Vector3<f64>| -> Vector3<f64> {
             let r0 = (d.x.abs() / axes.x).powf(p) + (d.y.abs() / axes.y).powf(p) + (d.z.abs() / axes.z).powf(p);
             let q = d * r0.powf(-1. / p);
             let mut s: f64 = 1.;
@@ -187,15 +203,30 @@ impl Iceberg {
             }
             for (n, offset) in &planes {
                 let along = q.dot(n);
-                if along > 0. { s = smin(s, offset / along, 0.02); }
+                if along > 0. { s = smin(s, offset / along, 0.006); }
             }
-            let q = q * s.max(0.05);
-            // Erosion: lumps, and vertical flutes on the walls (noise stretched vertically).
-            let lumps = noise.fbm(q * 4., 4);
-            let flutes = noise.ridged(Vector3::new(q.x * 18., q.y * 2., q.z * 18.), 3) - 0.4;
-            let wall = 1. - d.y.abs();
-            let h = if rounded { 0.02 * lumps } else { 0.025 * lumps + 0.012 * flutes * wall };
-            (q + q.normalize() * h) * self.size
+            q * s.max(0.05)
+        };
+        let positions = directions.iter().map(|d| {
+            let q = body(d);
+            // The face's normal, from the body's surface a little to either side.
+            let (t1, t2) = crate::material::phase::orthonormal_basis(d);
+            let e = 1e-4;
+            let normal = (body(&(d + t1 * e).normalize()) - q).cross(&(body(&(d + t2 * e).normalize()) - q))
+                .try_normalize(1e-18)
+                .map(|n| if n.dot(d) < 0. { -n } else { n })
+                .unwrap_or(*d);
+            // Cleaved back, less on the snow-covered top.
+            let top = smoothstep(0.6, 0.85, normal.y);
+            let cut: f64 = cleavage.iter().map(|c| c.cut(&q, &normal)).sum();
+            let q = q - normal * cut * (1. - 0.85 * top);
+            // Erosion: a little lumpiness, and fine vertical flutes on the walls where meltwater
+            // runs down.
+            let lumps = noise.fbm(q * 6., 3);
+            let flutes = noise.ridged(Vector3::new(q.x * 40., q.y * 3., q.z * 40.), 2).powi(2) - 0.3;
+            let wall = 1. - top;
+            let h = if rounded { 0.02 * lumps } else { 0.005 * lumps + 0.004 * flutes * wall };
+            (q + normal * h) * self.size
         }).collect();
         IndexedMesh { positions, normals: vec![], triangles, texcoords: vec![] }
     }
@@ -276,8 +307,81 @@ impl Iceberg {
         let h = Iceberg::waterline(&mesh.positions, self.freeboard_fraction());
         let lift = Vector3::new(x, sea_level - h, z);
         for p in mesh.positions.iter_mut() { *p += lift; }
-        mesh
+        if self.kind == Kind::Dome { mesh } else { creased(&mesh, 35f64.to_radians().cos()) }
     }
+}
+
+/// Ice cleaved along planes: the surface divided into Voronoi cells (of jittered sites on a
+/// grid of `cell`, in units of the berg's length), each cut back to a plane of its own, a
+/// little tilted from the face, so that neighbouring cells meet at steps and the face is a
+/// patchwork of flat facets with sharp edges, as where slabs have calved away.
+struct Cleavage {
+    cell: Vector3<f64>,
+    /// The deepest cut, and the steepest tilt of a facet from the face.
+    depth: f64,
+    tilt: f64,
+    seed: u64,
+}
+
+impl Cleavage {
+    fn unit(h: u64, k: u64) -> f64 {
+        (crate::sobol::hash(h, k) >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    /// How far to cut back, along the face's unit normal `n`, at `q`.
+    fn cut(&self, q: &Vector3<f64>, n: &Vector3<f64>) -> f64 {
+        let g = q.component_div(&self.cell);
+        let base = g.map(f64::floor);
+        let mut best = (f64::INFINITY, 0u64, Vector3::zeros());
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let c = base + Vector3::new(dx as f64, dy as f64, dz as f64);
+                    let h = [c.x, c.y, c.z].iter().fold(self.seed, |h, v| crate::sobol::hash(h, *v as i64 as u64));
+                    let site = c + Vector3::new(Cleavage::unit(h, 1), Cleavage::unit(h, 2), Cleavage::unit(h, 3));
+                    let d2 = (g - site).norm_squared();
+                    if d2 < best.0 { best = (d2, h, site); }
+                }
+            }
+        }
+        let (_, h, site) = best;
+        // The facet's plane: its depth at the site, and its tilt, mostly turning about the
+        // vertical so that facets stand upright.
+        // A third of the cells are left whole, faces of the original break.
+        let depth = self.depth * ((Cleavage::unit(h, 4) - 0.35) / 0.65).max(0.).powf(0.7);
+        let across = Vector3::y().cross(n).try_normalize(1e-6).unwrap_or_else(Vector3::x);
+        let along = n.cross(&across);
+        let tilt = across * (2. * Cleavage::unit(h, 5) - 1.) + along * 0.3 * (2. * Cleavage::unit(h, 6) - 1.);
+        let local = (g - site).component_mul(&self.cell);
+        (depth + self.tilt * local.dot(&tilt)).max(0.)
+    }
+}
+
+/// The mesh with its normals smoothed only across edges where the faces meet at less than the
+/// angle whose cosine is `crease`: sharper edges stay sharp. Each corner gets its own vertex.
+pub fn creased(mesh: &IndexedMesh, crease: f64) -> IndexedMesh {
+    let p = &mesh.positions;
+    let face: Vec<Vector3<f64>> = mesh.triangles.iter().map(|&[a, b, c]| (p[b] - p[a]).cross(&(p[c] - p[a]))).collect();
+    let mut around: Vec<Vec<usize>> = vec![vec![]; p.len()];
+    for (t, tri) in mesh.triangles.iter().enumerate() {
+        for &v in tri { around[v].push(t); }
+    }
+    let mut positions = Vec::with_capacity(3 * mesh.triangles.len());
+    let mut normals = Vec::with_capacity(3 * mesh.triangles.len());
+    let mut triangles = Vec::with_capacity(mesh.triangles.len());
+    for (t, tri) in mesh.triangles.iter().enumerate() {
+        let own = face[t].try_normalize(1e-300).unwrap_or_else(Vector3::zeros);
+        let start = positions.len();
+        for &v in tri {
+            let n = around[v].iter()
+                .filter(|&&u| face[u].try_normalize(1e-300).is_some_and(|f| f.dot(&own) >= crease))
+                .fold(Vector3::zeros(), |a, &u| a + face[u]);
+            positions.push(p[v]);
+            normals.push(n.try_normalize(1e-300).unwrap_or(own));
+        }
+        triangles.push([start, start + 1, start + 2]);
+    }
+    IndexedMesh { positions, normals, triangles, texcoords: vec![] }
 }
 
 /// An iceberg's surface: white ice, snow on top, veins of blue ice, glossy where waves wash.

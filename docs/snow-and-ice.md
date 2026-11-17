@@ -120,7 +120,10 @@ used by ice services:
 | `wedge`    | one steep face, the top sloping away from it |
 | `drydock`  | eroded into a U, a channel between two pillars |
 
-Each shape is fractured into faces, eroded with lumps and vertical meltwater flutes, tilted
+Each shape is fractured into faces and cleaved: its walls break along planes at two scales,
+slabs and chips, into tall flat facets that meet at sharp edges and steps, as where pieces
+have calved away (the dome alone is smooth). Fine vertical meltwater flutes run down the
+walls. It is tilted
 (except tabular bergs) and notched at the waterline by the waves. Below the notch, the ram is
 a shelf of ice that juts out under the water, broadest on one side. The berg floats as its
 `density` says: with 900 kg/m³ (ice capped with lighter firn), an eighth of its volume is

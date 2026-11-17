@@ -1423,6 +1423,40 @@ UI, file IO and rayon's threads would follow.
 2. GPU wavefront with queues: replace the megakernel with stage kernels and queues, with
    identical images (FLIP against the megakernel), then measure on real GPUs (the Mac; the
    browser) against the megakernel to decide which to keep for which device.
+
+   Started: a wavefront by bounce (`bounce_paths`, `answer_sky`; above). Still to come:
+   - Queues of active paths (a u32 atomic counter, `dispatchWorkgroupsIndirect`), so late
+     rounds with few paths left cost little; most for the browser, where a pass is now about
+     20 full-image dispatches. Queues and counters must share buffers: all 8 of WebGPU's
+     storage bindings are in use. Spike first: atomics and indirect dispatch through rust-gpu
+     and naga to Metal and the browser.
+   - Stages: intersect (sorting hits into queues: escaped, emitter, each material kind),
+     shade per material kind, shadow rays, sky; the random numbers drawn in the same order,
+     so images and the GPU-against-CPU-build tests hold.
+
+   Mesh intersection, the other large speedup. Known (the shader's `trace`, `bvh.rs`): a
+   binary SAH BVH, leaves of up to 8; a per-thread stack of 100 in a local array (likely
+   spilled); a node's box tested when it is popped, children pushed in a fixed order, so
+   neither nearer-first nor skipped when missed; each test loads a whole 112-byte `Prim`,
+   normals included; instances flattened into world triangles (no instancing on the GPU).
+   In order:
+   1. Measure: box and triangle tests per ray (counted as rays are), and a pass's time with
+      shading off, on demo, instances and glossy-sun.
+   2. Ordered traversal (Aila and Laine, "Understanding the Efficiency of Ray Traversal on
+      GPUs", HPG 2009): both children's boxes in the parent, tested together, the nearer
+      visited first, the farther pushed only if hit.
+   3. A compact buffer for the test (a vertex and two edges), normals and materials fetched
+      for the hit alone.
+   4. The stack sized by the tree's depth (`bvh_depth`), not 100.
+   5. Intersection as its own stage (above), with an any-hit kernel for shadow rays, and rays
+      sorted for coherence once they are queued.
+   6. A wide BVH (4 or 8 children; compressed, after Ylitie, Karras and Laine, "Efficient
+      Incoherent Ray Traversal on GPUs Through Compressed Wide BVHs", HPG 2017).
+   7. Two levels: a tree of instances over a tree per mesh, so instanced scenes (forests)
+      don't multiply their triangles.
+   8. Perhaps, natively only: hardware ray queries (wgpu's are experimental; WebGPU has
+      none; the M2 has no ray tracing hardware, the M3 does).
+   1-4 apply to the current kernels, and come first.
 3. The fallback framework: per-area status, classification, CPU queues for materials first,
    then intersection. Exit: every flattenable demo scene plus at least one with a
    procedural shape and one with an unported material renders through the GPU path with CPU

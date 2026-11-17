@@ -28,8 +28,8 @@
 //!   normals are smoothed only across gentle edges, so the facets' edges stay crisp
 //!   (`creased`); and the mesh is refined adaptively where the surface bends (`refine`), so
 //!   the facets' edges are straight rather than serrated by the triangles they cross;
-//! - erosion: a little lumpiness, and fine vertical flutes on the walls where meltwater runs
-//!   down;
+//! - erosion: a little lumpiness, fine vertical flutes on the walls where meltwater runs
+//!   down, and melt scallops, dimples a metre or so across and a few centimetres deep;
 //! - a wave-cut notch at the waterline, where the sea melts it fastest (the overhang that
 //!   eventually breaks off as a growler), and under it the ram, a shelf of ice jutting out
 //!   below the water, which glows turquoise through it; and a slight tilt, but for tabular
@@ -178,8 +178,8 @@ impl Iceberg {
 
         let (directions, triangles) = icosphere(detail);
         let directions: Vec<Vector3<f64>> = directions.iter().map(|d| d.component_mul(&axes).normalize()).collect();
-        // Steps between facets rise over half a metre (the mesh is refined to follow them).
-        let ramp = 0.5 / self.size;
+        // Steps between facets rise over 15 cm (the mesh is refined to follow them).
+        let ramp = 0.15 / self.size;
         let kind = self.kind;
         let size = self.size;
         // The body, cut and shaped, in the direction `d`.
@@ -237,7 +237,12 @@ impl Iceberg {
             let flutes = noise.noise(Vector3::new(q.x * 25., q.y * 1.5, q.z * 25.));
             let wall = 1. - top;
             let h = if rounded { 0.02 * lumps } else { 0.004 * lumps + 0.002 * flutes * wall };
-            (q + normal * h) * size
+            // Melt scallops: shallow dimples, a metre or so across and a few centimetres deep,
+            // that flowing water and air melt into ice faces, sharp-rimmed where they meet.
+            let w = q * size / 0.9;
+            let scallops = 0.035 * (1. - noise.noise(w + Vector3::new(31., 0., 17.)).abs() * 2.).max(0.)
+                + 0.012 * (1. - noise.noise(w * 2.7 + Vector3::new(3., 9., 5.)).abs() * 2.).max(0.);
+            (q + normal * h) * size - normal * scallops * (1. - 0.7 * top)
         };
         (surface, directions, triangles)
     }
@@ -279,7 +284,7 @@ impl Iceberg {
     /// The mesh floating with its waterline at `sea_level`, centred over `(x, z)`, turned by
     /// `yaw` (radians).
     pub fn mesh(&self, x: f64, z: f64, sea_level: f64, yaw: f64) -> IndexedMesh {
-        let base = self.detail.saturating_sub(2);
+        let base = self.detail.saturating_sub(1);
         let (shape, directions, triangles) = self.shape(base);
         let mut rng = Pcg32::new(self.seed, 29);
         // Bergs other than tabular ones float tilted, having rolled as they melted.
@@ -313,10 +318,10 @@ impl Iceberg {
             }
             p
         };
-        // Refined where the surface bends more than a few centimetres between vertices: along
-        // the facets' edges and steps, and the notch.
-        let tolerance = (0.0008 * self.size).clamp(0.02, 0.1);
-        let (positions, triangles) = refine(&directions, &triangles, &surface, 5, tolerance);
+        // Refined where the surface bends more than a centimetre or so between vertices: along
+        // the facets' edges and steps, the notch, and the scallops and flutes on the faces.
+        let tolerance = (0.0001 * self.size).clamp(0.005, 0.03);
+        let (positions, triangles) = refine(&directions, &triangles, &surface, 7, tolerance);
         println!("Iceberg: {} triangles", triangles.len());
         let mut mesh = IndexedMesh { positions, normals: vec![], triangles, texcoords: vec![] };
         // Floated at its waterline, ram and all.
@@ -454,28 +459,47 @@ impl Cleavage {
 }
 
 /// The mesh with its normals smoothed only across edges where the faces meet at less than the
-/// angle whose cosine is `crease`: sharper edges stay sharp. Each corner gets its own vertex.
+/// angle whose cosine is `crease`: sharper edges stay sharp. A vertex is split only where its
+/// corners' normals differ (along a crease), so a smooth mesh keeps its vertices.
 pub fn creased(mesh: &IndexedMesh, crease: f64) -> IndexedMesh {
+    use rayon::prelude::*;
     let p = &mesh.positions;
-    let face: Vec<Vector3<f64>> = mesh.triangles.iter().map(|&[a, b, c]| (p[b] - p[a]).cross(&(p[c] - p[a]))).collect();
-    let mut around: Vec<Vec<usize>> = vec![vec![]; p.len()];
+    let face: Vec<Vector3<f64>> = mesh.triangles.par_iter().map(|&[a, b, c]| (p[b] - p[a]).cross(&(p[c] - p[a]))).collect();
+    let unit: Vec<Vector3<f64>> = face.par_iter().map(|f| f.try_normalize(1e-300).unwrap_or_else(Vector3::zeros)).collect();
+    let mut around: Vec<Vec<u32>> = vec![vec![]; p.len()];
     for (t, tri) in mesh.triangles.iter().enumerate() {
-        for &v in tri { around[v].push(t); }
+        for &v in tri { around[v].push(t as u32); }
     }
-    let mut positions = Vec::with_capacity(3 * mesh.triangles.len());
-    let mut normals = Vec::with_capacity(3 * mesh.triangles.len());
+    // Each corner's normal: the faces round its vertex within the crease angle of its own.
+    let corners: Vec<[Vector3<f64>; 3]> = mesh.triangles.par_iter().enumerate().map(|(t, tri)| {
+        tri.map(|v| {
+            around[v].iter()
+                .filter(|&&u| unit[u as usize].dot(&unit[t]) >= crease)
+                .fold(Vector3::zeros(), |a, &u| a + face[u as usize])
+                .try_normalize(1e-300).unwrap_or(unit[t])
+        })
+    }).collect();
+    // A vertex per distinct normal at each original vertex.
+    let mut positions: Vec<Vector3<f64>> = Vec::with_capacity(p.len());
+    let mut normals: Vec<Vector3<f64>> = Vec::with_capacity(p.len());
+    let mut made: Vec<Vec<u32>> = vec![vec![]; p.len()];
     let mut triangles = Vec::with_capacity(mesh.triangles.len());
     for (t, tri) in mesh.triangles.iter().enumerate() {
-        let own = face[t].try_normalize(1e-300).unwrap_or_else(Vector3::zeros);
-        let start = positions.len();
-        for &v in tri {
-            let n = around[v].iter()
-                .filter(|&&u| face[u].try_normalize(1e-300).is_some_and(|f| f.dot(&own) >= crease))
-                .fold(Vector3::zeros(), |a, &u| a + face[u]);
-            positions.push(p[v]);
-            normals.push(n.try_normalize(1e-300).unwrap_or(own));
+        let mut out = [0usize; 3];
+        for k in 0..3 {
+            let (v, n) = (tri[k], corners[t][k]);
+            let found = made[v].iter().copied().find(|&i| normals[i as usize] == n || (normals[i as usize] - n).norm_squared() < 1e-10);
+            out[k] = match found {
+                Some(i) => i as usize,
+                None => {
+                    positions.push(p[v]);
+                    normals.push(n);
+                    made[v].push((positions.len() - 1) as u32);
+                    positions.len() - 1
+                }
+            };
         }
-        triangles.push([start, start + 1, start + 2]);
+        triangles.push(out);
     }
     IndexedMesh { positions, normals, triangles, texcoords: vec![] }
 }
@@ -691,14 +715,16 @@ impl FloeField {
         let floes = self.floes();
         let noise = SeededNoise::new(self.seed.wrapping_add(7));
         let mut rng = Pcg32::new(self.seed, 47);
-        let fine = icosphere(3);
-        let coarse = icosphere(2);
-        let tiny = icosphere(1);
+        // Geodesic spheres of each detail, so that whatever a piece's size its vertices are
+        // ten or twenty centimetres apart.
+        let spheres: Vec<(Vec<Vector3<f64>>, Vec<[usize; 3]>)> = (0..=6).map(icosphere).collect();
         let mut positions = vec![];
         let mut triangles = vec![];
         let fraction = 1. - 917. / SEA_WATER_DENSITY;
         for f in &floes {
-            let (directions, sphere) = if f.radius < 0.15 { &tiny } else if f.radius < 0.4 { &coarse } else { &fine };
+            // Each subdivision halves the spacing: detail n has edges of about 1.1 r / 2^n.
+            let detail = ((1.1 * f.radius / 0.15).log2().ceil().max(1.) as usize).min(6);
+            let (directions, sphere) = &spheres[detail];
             let r = f.radius * 0.9;
             let axes = Vector3::new(r, r * (0.25 + 0.5 * rng.next_f64()), r * (0.4 + 0.6 * rng.next_f64()));
             let offset = Vector3::new(rng.next_f64(), rng.next_f64(), rng.next_f64()) * 100.;
@@ -729,7 +755,11 @@ impl FloeField {
                     if along > 0. { s = smin(s, o / along, rounding); }
                 }
                 let lumps = lumpiness * noise.fbm(d * 1.6 + offset, 4);
-                rotation * (q * s.max(0.1) * (1. + lumps))
+                let q = q * s.max(0.1) * (1. + lumps);
+                // Melt scallops, as on the bergs, a few centimetres deep.
+                let w = q / 0.6 + offset;
+                let scallops = 0.025 * (1. - noise.noise(w).abs() * 2.).max(0.);
+                rotation * (q - d * scallops.min(0.1 * r))
             }).collect();
             let h = Iceberg::waterline(&piece, sphere, fraction);
             let lift = Vector3::new(f.x, self.sea_level - h, f.z);

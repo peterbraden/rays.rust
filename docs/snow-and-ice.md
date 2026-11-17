@@ -122,8 +122,11 @@ used by ice services:
 
 Each shape is fractured into faces and cleaved: its walls break along planes at two scales,
 slabs and chips, into tall flat facets that meet at sharp edges and steps, as where pieces
-have calved away (the dome alone is smooth). The mesh is refined where the surface bends, so
-the facets' edges stay straight and clean. Fine vertical meltwater flutes run down the
+have calved away (the dome alone is smooth). The mesh is refined wherever the surface bends,
+down to a centimetre or so, so the facets' edges are straight and the melt scallops (shallow
+dimples a metre across) show. A large berg has several million triangles, and a scene of a few
+takes a couple of minutes and a few gigabytes to build. `"detail"` (default 7) sets the
+starting mesh before refinement; lower it for quick tests. Fine vertical meltwater flutes run down the
 walls. It is tilted
 (except tabular bergs) and notched at the waterline by the waves. Below the notch, the ram is
 a shelf of ice that juts out under the water, broadest on one side. The berg floats as its

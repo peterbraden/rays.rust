@@ -131,6 +131,7 @@ mod procedural {
     pub mod terrain;
     pub mod mammatus;
     pub mod precipitation;
+    pub mod overcast;
     pub mod harris_cumulus;
     pub mod space;
 }

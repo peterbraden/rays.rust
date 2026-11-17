@@ -61,12 +61,17 @@ thread_local! {
     /// glass), counting the one it is at: once it has left one, its segments cross the media
     /// truncated (`Volume::truncated`), even before it scatters in one.
     static VERTICES: Cell<u32> = const { Cell::new(0) };
+    /// Whether the path has gathered the sunlight diffused through a medium with the diffusion
+    /// approximation (`ScatteringApproximation::diffusion`), which stands for all its later
+    /// scatterings' sunlight.
+    static DIFFUSED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Start a new path: no volume scatterings yet, and densities as given.
 pub fn begin_path() {
     PATH.with(|p| p.set((0, 1.)));
     VERTICES.with(|v| v.set(0));
+    DIFFUSED.with(|d| d.set(false));
     chromatic::begin_path();
 }
 
@@ -145,6 +150,20 @@ pub trait DensityField: Sync + Send {
         (self.majorant(), f64::INFINITY)
     }
 
+    /// The optical depths of the vertical column through `p` from height `lo` to `hi`, below
+    /// `p` and above it, from `steps` jittered steps (for `ScatteringApproximation::diffusion`).
+    /// Fields whose density is largely the same all the way up a column can work it out once.
+    fn column_depths(&self, p: &Vector3<f64>, lo: f64, hi: f64, steps: u32) -> (f64, f64) {
+        let step = (hi - lo) / steps as f64;
+        let (mut below, mut above) = (0., 0.);
+        for k in 0..steps {
+            let y = lo + (k as f64 + rand()) * step;
+            let tau = self.density(&Vector3::new(p.x, y, p.z)) * step;
+            if y < p.y { below += tau } else { above += tau }
+        }
+        (below, above)
+    }
+
     /// A lower bound on `density` everywhere in the volume (by default 0). Transmittance
     /// through this much is computed exactly, and only the rest estimated.
     fn minorant(&self) -> f64 {
@@ -203,6 +222,10 @@ impl DensityField for Scaled {
         (self.by * m, l)
     }
     fn minorant(&self) -> f64 { self.by * self.field.minorant() }
+    fn column_depths(&self, p: &Vector3<f64>, lo: f64, hi: f64, steps: u32) -> (f64, f64) {
+        let (below, above) = self.field.column_depths(p, lo, hi, steps);
+        (self.by * below, self.by * above)
+    }
     fn particle_radius(&self, p: &Vector3<f64>) -> Option<f64> { self.field.particle_radius(p) }
 }
 
@@ -523,6 +546,25 @@ pub struct ScatteringApproximation {
     /// eighty times the mean (for g = 0.85), the grain that dominates a cloud's noise. The
     /// first scattering, whose silver lining the camera sees, keeps the whole phase function.
     pub delta_m: bool,
+    /// The diffusion approximation for thick decks of cloud, where sunlight reaches the
+    /// underside only after hundreds of scatterings: a random walk rarely gets there, and when
+    /// it does it is a firefly. Instead, at the first vertex of a path in the medium, the
+    /// sunlight scattered many times is the diffusion solution for a plane-parallel slab
+    /// (the "independent column approximation" of cloud radiation, e.g. R. F. Cahalan et
+    /// al., "The albedo of fractal stratocumulus clouds", J. Atmos. Sci. 51, 1994) for the
+    /// column of medium through the vertex, measured straight up and down. For reduced
+    /// optical depths τ* = (1 - α g) τ of the whole column and of the part below the vertex,
+    /// and the sun at cosine μ₀ from the zenith, the diffuse flux through a conservative
+    /// slab is F = μ₀ K(μ₀) E / (1 + ¾ τ*_column), K(μ₀) = 3/7 (1 + 2 μ₀) its injection
+    /// function, and the mean radiance at the vertex 3F/4π (τ*_below + ⅔): F/2π at the base,
+    /// rising linearly into the cloud (A. Kokhanovsky, "Cloud Optics", 2006, ch. 3;
+    /// G. L. Stephens, "Remote Sensing of the Lower Atmosphere", ch. 6). Light under a deck
+    /// is as bright as the deck over it is thin, with no noise. The sunlight is attenuated by
+    /// whatever lies above the column's top. Later vertices of the path in such a medium skip
+    /// the sun, which the first has counted; they still gather the sky, and light off the
+    /// ground. Columns are measured with `diffusion` jittered steps; the medium's box sets
+    /// how far.
+    pub diffusion: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -562,6 +604,9 @@ pub struct VolumeMaterial {
     /// A chromatic medium's absorption and scattering coefficients per unit density (RGB), from
     /// which its albedo at the sample's wavelengths follows; `albedo` holds their RGB ratio.
     pub extinction: Option<(Color, Color)>,
+    /// The lowest and highest the medium reaches (its box's), for the diffusion approximation's
+    /// columns.
+    pub column: (f64, f64),
 }
 
 /// Halos from ice crystals (see `material::ice_halos`): sun dogs, the 22° and 46° halos,
@@ -777,6 +822,15 @@ impl VolumeMaterial {
             // Halos, rainbows and diffraction colour the phase function in RGB.
             let sun_phase = self.sun_phase(phase, incoming, s, scatterings).as_unbounded();
             direct = direct + match self.approximation.oz {
+                _ if self.approximation.diffusion.is_some() => {
+                    if DIFFUSED.with(|d| d.replace(true)) {
+                        // Counted at the path's first vertex in such a medium.
+                        Color::black()
+                    } else {
+                        sun.irradiance_at(point) * sun_phase * sun.transmittance_from(point, s)
+                            + self.diffused_sunlight(point, s)
+                    }
+                },
                 None => sun.irradiance_at(point) * sun_phase * sun.transmittance_from(point, s),
                 // At the path's first volume scattering, even one reached off a surface.
                 Some(oz) if first == 0 => sun.irradiance_at(point) * self.oz_sunlight(&oz, sun_phase, incoming, point, s),
@@ -806,6 +860,25 @@ impl VolumeMaterial {
         }
     }
 
+    /// The diffusion approximation's sunlight scattered many times, as radiance arriving at
+    /// `point` from all around (`ScatteringApproximation::diffusion`).
+    fn diffused_sunlight(&self, point: &Vector3<f64>, s: &Scene) -> Color {
+        let sun = s.sun.as_ref().unwrap();
+        let mu = sun.direction.normalize().y;
+        let steps = self.approximation.diffusion.unwrap_or(32).max(1);
+        if mu <= 0. {
+            return Color::black();
+        }
+        // The optical depths of the column below the point and above it.
+        let (lo, hi) = self.column;
+        let (below, above) = self.field.column_depths(point, lo, hi, steps);
+        let reduce = 1. - self.mean_albedo() * self.phase.mean_cosine();
+        let radiance = diffused_radiance(mu, (below + above) * reduce, below * reduce);
+        // Sunlight arriving at the top of the column, past anything above it.
+        let top = Vector3::new(point.x, hi, point.z) + sun.direction.normalize() * 1e-3;
+        sun.irradiance_at(&top) * sun.transmittance_from(&top, s) * radiance
+    }
+
     /// Wrenninge et al.'s sum over octaves, per unit sun irradiance: Σ b^i p_i(θ) T(a^i σ),
     /// p_i the phase function with its mean cosine scaled c^i (as Henyey-Greenstein beyond the
     /// first octave).
@@ -826,6 +899,15 @@ impl VolumeMaterial {
         set_path(saved.0, saved.1);
         total
     }
+}
+
+/// The mean radiance of sunlight diffused through a conservative slab of reduced optical
+/// thickness `column`, at a reduced depth `below` above its base, per unit irradiance from a
+/// sun at cosine `mu` from the zenith (`ScatteringApproximation::diffusion`).
+fn diffused_radiance(mu: f64, column: f64, below: f64) -> f64 {
+    let injection = 3. / 7. * (1. + 2. * mu);
+    let flux = mu * injection / (1. + 0.75 * column);
+    3. * flux / (4. * std::f64::consts::PI) * (below + 2. / 3.)
 }
 
 impl MaterialModel for VolumeMaterial {
@@ -904,7 +986,7 @@ pub fn create_medium(mut volume: Volume, s: Scattering) -> SceneObject {
     let material = VolumeMaterial {
         albedo: s.albedo, phase: s.phase, approximation: s.approximation, diffraction: s.diffraction,
         halos: s.halos, rainbow: s.rainbow, field: volume.density.clone(), emission: s.emission,
-        extinction,
+        extinction, column: (volume.bounds.min.y, volume.bounds.max.y),
     };
     volume.truncated = material.density_scale(1);
     SceneObject {
@@ -1048,6 +1130,7 @@ mod tests {
             field: Arc::new(ConstantDensity(1.)),
             emission: None,
             extinction: None,
+            column: (0., 1.),
         };
         // First scattering in full: the extinction as given, diffraction in the phase.
         assert_eq!(m.density_scale(0), 1.);
@@ -1086,6 +1169,30 @@ mod tests {
     }
 
     #[test]
+    fn test_diffusion_through_a_slab() {
+        use std::f64::consts::PI;
+        // At the base, the radiance below a thick slab: its diffuse transmittance, spread over
+        // the hemisphere (F = π L), and the mean over the sphere half that.
+        let (mu, tau) = (0.6, 8.);
+        let transmitted = mu * 3. / 7. * (1. + 2. * mu) / (1. + 0.75 * tau);
+        assert!((diffused_radiance(mu, tau, 0.) - transmitted / (2. * PI)).abs() < 1e-12);
+        // Brighter up through the cloud, linearly, towards the reflected light at the top.
+        let at = |below: f64| diffused_radiance(mu, tau, below);
+        assert!(at(4.) > at(2.) && at(2.) > at(0.));
+        assert!(((at(4.) - at(2.)) - (at(2.) - at(0.))).abs() < 1e-12);
+        // Darker under a thicker deck: the light under it goes as 1 / (1 + ¾ τ*).
+        assert!(diffused_radiance(mu, 16., 0.) < 0.55 * diffused_radiance(mu, 8., 0.));
+    }
+
+    #[test]
+    fn test_column_depths_of_a_constant_medium() {
+        let field = ConstantDensity(0.02);
+        let (below, above) = field.column_depths(&Vector3::new(5., 300., -2.), 0., 1000., 64);
+        assert!((below + above - 20.).abs() < 1e-9, "{}", below + above);
+        assert!((below - 6.).abs() < 0.4 && (above - 14.).abs() < 0.4, "{} {}", below, above);
+    }
+
+    #[test]
     fn test_delta_m_conserves_scattering() {
         // From the second scattering, g' = g / (1 + g), and the scattering coefficient that is
         // left is what wasn't truncated: σ' α' = σ α (1 - f).
@@ -1094,7 +1201,7 @@ mod tests {
             phase: PhaseFunction::HenyeyGreenstein { g: 0.85 },
             approximation: ScatteringApproximation { delta_m: true, ..ScatteringApproximation::default() },
             diffraction: None, halos: None, rainbow: None,
-            field: Arc::new(ConstantDensity(1.)), emission: None, extinction: None,
+            field: Arc::new(ConstantDensity(1.)), emission: None, extinction: None, column: (0., 1.),
         };
         assert_eq!(m.density_scale(0), 1.);
         assert_eq!(m.mean_cosine(0), 0.85);

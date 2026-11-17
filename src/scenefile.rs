@@ -30,6 +30,7 @@ use crate::procedural::lenticular::{Lenticular, MoistLayer};
 use crate::procedural::terrain::{Terrain as Mountains, TerrainMaterial};
 use crate::procedural::mammatus::Mammatus;
 use crate::procedural::precipitation::Precipitation;
+use crate::procedural::overcast::Overcast;
 use crate::material::rainbow::RainbowTable;
 use crate::procedural::harris_cumulus::{CloudSimulation, Forcing, HarrisCumulus, Profile, SimulationParams, Sounding};
 use crate::participatingmedia::create_fog;
@@ -797,6 +798,10 @@ impl SceneFile {
             return Some(Arc::new(SceneFile::parse_mammatus(&o)));
         }
 
+        if t == "overcast" {
+            return Some(Arc::new(SceneFile::parse_overcast(&o)));
+        }
+
         if t == "mountains" {
             return Some(Arc::new(SceneFile::parse_terrain(&o)));
         }
@@ -1184,7 +1189,9 @@ impl SceneFile {
 
     /// A medium's multiple-scattering approximations (`volume::ScatteringApproximation`):
     /// `"similarity_after": N` for the similarity relations from the N-th scattering on,
-    /// `"oz": true` or `{"octaves", "a", "b", "c"}` for Wrenninge et al.'s octaves, and
+    /// `"oz": true` or `{"octaves", "a", "b", "c"}` for Wrenninge et al.'s octaves,
+    /// `"diffusion": true` or `{"steps": 32}` for sunlight diffused through thick decks by
+    /// the slab diffusion solution for each column (overcast skies), and
     /// `"delta_m": false` to trace a Henyey-Greenstein medium exactly rather than truncating
     /// its forward peak wherever the camera doesn't see the medium directly (on by default).
     pub fn parse_scattering_approximation(o: &Value) -> ScatteringApproximation {
@@ -1205,6 +1212,11 @@ impl SceneFile {
             similarity_after: o.get("similarity_after").map(|n| SceneFile::parse_int(n, 0) as u32),
             oz,
             delta_m: o["delta_m"].as_bool().unwrap_or(true),
+            diffusion: match o.get("diffusion") {
+                None | Some(Value::Bool(false)) => None,
+                Some(Value::Bool(true)) => Some(32),
+                Some(v) => Some(SceneFile::parse_int(&v["steps"], 32).max(1) as u32),
+            },
         }
     }
 
@@ -1557,6 +1569,48 @@ impl SceneFile {
             Vector3::new(r.center.x + reach, r.base, r.center.y + reach),
         );
         let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(r));
+        create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// An overcast deck of bad weather, with scud beneath (see `procedural::overcast`),
+    /// filling `extent` either side of `center` ([x, z]):
+    ///
+    /// `{"type": "overcast", "base": 900, "thickness": 2500, "density": 0.03, "seed": 0}`
+    ///
+    /// with `system_size` and `thickness_variation` (0 to 1: broad patches of thicker and
+    /// thinner cloud), `lump_size`, `base_variation` (m) and `contrast` (0 to 1: the rounded
+    /// masses on its underside, and how much thinner the cloud is between them), `anisotropy`
+    /// and `wind_direction` ([x, z]: rolls along the wind), `breaks` (0 to 1: gaps), `softness`,
+    /// `detail_size` and `erosion` (the ragged base), the scud's `scud` (0 to 1, how much),
+    /// `scud_depth`, `scud_size` and `scud_density`, and `fade` (a fraction of `extent`).
+    /// `mapping` as for `nubis_clouds`. Rain from it is a `precipitation` object with its base.
+    pub fn parse_overcast(o: &Value) -> SceneObject {
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let mut c = Overcast::new(num("base", 900.), num("thickness", 2500.).max(1.), SceneFile::parse_seed(o).unwrap_or(0));
+        c.max_density = num("density", c.max_density).max(0.);
+        c.system_size = num("system_size", c.system_size).max(1.);
+        c.thickness_variation = num("thickness_variation", c.thickness_variation).clamp(0., 1.);
+        c.lump_size = num("lump_size", c.lump_size).max(1.);
+        c.base_variation = num("base_variation", c.base_variation).max(0.);
+        c.contrast = num("contrast", c.contrast).clamp(0., 1.);
+        c.anisotropy = num("anisotropy", c.anisotropy).max(0.1);
+        c.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", c.wind_direction).normalize();
+        c.breaks = num("breaks", c.breaks).clamp(0., 1.);
+        c.softness = num("softness", c.softness).max(0.);
+        c.detail_size = num("detail_size", c.detail_size).max(1.);
+        c.erosion = num("erosion", c.erosion).clamp(0., 1.);
+        c.scud = num("scud", c.scud).clamp(0., 1.);
+        c.scud_depth = num("scud_depth", c.scud_depth).max(1.);
+        c.scud_size = num("scud_size", c.scud_size).max(1.);
+        c.scud_density = num("scud_density", c.scud_density).max(0.);
+        c.center = SceneFile::parse_vec2_def(o, "center", c.center);
+        c.extent = num("extent", c.extent).max(1.);
+        c.fade = num("fade", c.fade).clamp(0., 1.);
+        let bounds = BBox::new(
+            Vector3::new(c.center.x - c.extent, c.bottom(), c.center.y - c.extent),
+            Vector3::new(c.center.x + c.extent, c.top(), c.center.y + c.extent),
+        );
+        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(c));
         create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
     }
 

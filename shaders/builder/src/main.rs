@@ -3,7 +3,7 @@
 //! browsers (which take only WGSL) and for native backends other than Vulkan. The translation
 //! is validated with WebGPU's baseline capabilities, so a shader a browser would reject fails
 //! here.
-use naga::{Block, Expression, Handle, Span, Statement};
+use naga::{Block, Span, Statement};
 use spirv_builder::{ShaderPanicStrategy, SpirvBuilder};
 use std::path::Path;
 
@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let bytes = std::fs::read(&out)?;
     let mut module = naga::front::spv::parse_u8_slice(&bytes, &naga::front::spv::Options::default())?;
-    let hoisted = hoist_break_ifs(&mut module)?;
+    let folded = fold_continuing_blocks(&mut module)?;
     let webgpu = || naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty());
     let info = webgpu().validate(&module)?;
     let wgsl = naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())?;
@@ -27,84 +27,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     webgpu().validate(&naga::front::wgsl::parse_str(&wgsl)?)?;
     let out = here.join("../../src/gpu/pathtrace.wgsl");
     std::fs::write(&out, &wgsl)?;
-    println!("wrote {} ({} KB, {} loop conditions hoisted)", out.display(), wgsl.len() / 1024, hoisted);
+    println!("wrote {} ({} KB, {} loops folded)", out.display(), wgsl.len() / 1024, folded);
     Ok(())
 }
 
-/// Moves each loop's `break if` condition out of the loop body, for naga's MSL and HLSL
-/// writers (Metal, DX12; naga 30). WGSL's `loop { body continuing { stores; break if c; } }`
-/// evaluates c after the stores, but c may be (or be computed from) a value the body computed,
-/// as rust-gpu's loops are: `while lo + 1 < hi` becomes `let go = lo + 1 < hi; ... continuing
-/// { lo = next_lo; ...; break if !go; }`. The writers emit the continuing block before the body
+/// Folds each loop's continuing block into the end of its body, for naga's MSL and HLSL
+/// writers (Metal, DX12; naga 30). Those writers emit the continuing block before the body
 /// (`while (true) { if (!init) { continuing; if (c) break; } init = false; body }`), where the
-/// body's named values aren't in scope, so they write c's expression out again, re-reading
-/// `lo` and `hi` after the continuing block has updated them: the loop leaves one iteration
-/// early. (On Metal the sky's binary search returned a row one too low, and BVH traversal lost
-/// light: 12% of a diffuse floor's.) SPIR-V keeps the value, so Vulkan never sees it.
+/// body's named values aren't in scope, so each value of the body the continuing block uses
+/// (or its `break if` condition c) is written out again as an expression, and re-evaluated
+/// there, after the continuing block's earlier stores. rust-gpu's loops pass every variable
+/// through the continuing block (`continuing { lo = next_lo; ...; break if !go; }`, with
+/// `go = lo + 1 < hi` from the body), so a value computed from a variable the block has just
+/// updated comes out wrong: `while lo + 1 < hi` left one iteration early (on Metal the sky's
+/// binary search returned a row one too low, and BVH traversal lost light: 12% of a diffuse
+/// floor's), and a count kept across iterations came out a quarter of the right one. SPIR-V
+/// keeps the values, so Vulkan never sees it.
 ///
-/// Here the body's value is stored in a local variable where it is computed and loaded in the
-/// continuing block, so whatever re-emits the condition re-reads that variable, which nothing
-/// else writes. Handles the shapes rust-gpu makes (c or `!c`, with c emitted at the top level
-/// of the body) and fails on others. Returns the number of conditions moved.
-fn hoist_break_ifs(module: &mut naga::Module) -> Result<usize, String> {
-    let bool_ty = module.types.insert(
-        naga::Type { name: None, inner: naga::TypeInner::Scalar(naga::Scalar::BOOL) },
-        Span::UNDEFINED,
-    );
+/// `loop { body; continue; continuing { stores; break if c; } }` becomes
+/// `loop { body; stores; if c { break; } }`: the same where the body's only `continue` is its
+/// last statement, as in rust-gpu's loops; others fail here, as naga's validator would on a
+/// value out of scope. Returns the number of loops folded.
+fn fold_continuing_blocks(module: &mut naga::Module) -> Result<usize, String> {
     let mut count = 0;
     let functions = module.functions.iter_mut().map(|(_, f)| f);
     for f in functions.chain(module.entry_points.iter_mut().map(|ep| &mut ep.function)) {
-        let mut body = std::mem::take(&mut f.body);
-        hoist_in_block(&mut body, f, bool_ty, &mut count)?;
-        f.body = body;
+        fold_in_block(&mut f.body, &mut count)?;
     }
     Ok(count)
 }
 
-fn hoist_in_block(block: &mut Block, f: &mut naga::Function, bool_ty: Handle<naga::Type>, count: &mut usize) -> Result<(), String> {
+fn fold_in_block(block: &mut Block, count: &mut usize) -> Result<(), String> {
     for statement in block.iter_mut() {
         match statement {
-            Statement::Block(b) => hoist_in_block(b, f, bool_ty, count)?,
+            Statement::Block(b) => fold_in_block(b, count)?,
             Statement::If { accept, reject, .. } => {
-                hoist_in_block(accept, f, bool_ty, count)?;
-                hoist_in_block(reject, f, bool_ty, count)?;
+                fold_in_block(accept, count)?;
+                fold_in_block(reject, count)?;
             },
             Statement::Switch { cases, .. } => {
                 for case in cases.iter_mut() {
-                    hoist_in_block(&mut case.body, f, bool_ty, count)?;
+                    fold_in_block(&mut case.body, count)?;
                 }
             },
             Statement::Loop { body, continuing, break_if } => {
-                hoist_in_block(body, f, bool_ty, count)?;
-                hoist_in_block(continuing, f, bool_ty, count)?;
-                let Some(condition) = *break_if else { continue };
-                // The value to keep, and whether the condition negates it in the continuing block.
-                let (value, negated) = match f.expressions[condition] {
-                    _ if emitted_at(body, condition).is_some() => (condition, false),
-                    Expression::Unary { op: naga::UnaryOperator::LogicalNot, expr } if emitted_at(continuing, condition).is_some() => (expr, true),
-                    _ if emitted_at(continuing, condition).is_some() || f.expressions[condition].needs_pre_emit() => continue,
-                    ref e => return Err(format!("a loop's break-if condition of an unexpected shape: {:?}", e)),
-                };
-                let Some(at) = emitted_at(body, value) else {
-                    if emitted_at(continuing, value).is_some() || f.expressions[value].needs_pre_emit() {
-                        continue;
-                    }
-                    return Err(format!("a loop's break-if condition reads a value not emitted at the top level of its body: {:?}", f.expressions[value]));
-                };
-                let var = f.local_variables.append(
-                    naga::LocalVariable { name: Some(format!("break_if_{}", *count)), ty: bool_ty, init: None },
-                    Span::UNDEFINED,
-                );
-                let pointer = f.expressions.append(Expression::LocalVariable(var), Span::UNDEFINED);
-                body.splice(at + 1..at + 1, Block::from_vec(vec![Statement::Store { pointer, value }]));
-                let load = f.expressions.append(Expression::Load { pointer }, Span::UNDEFINED);
-                let last = if negated {
-                    f.expressions.append(Expression::Unary { op: naga::UnaryOperator::LogicalNot, expr: load }, Span::UNDEFINED)
-                } else {
-                    load
-                };
-                continuing.push(Statement::Emit(naga::Range::new_from_bounds(load, last)), Span::UNDEFINED);
-                *break_if = Some(last);
+                fold_in_block(body, count)?;
+                fold_in_block(continuing, count)?;
+                if continuing.is_empty() && break_if.is_none() {
+                    continue;
+                }
+                if matches!(body.last(), Some(Statement::Continue)) {
+                    body.cull(body.len() - 1..);
+                }
+                if continues(body) {
+                    return Err("a loop with a continuing block continues before the end of its body".into());
+                }
+                body.append(continuing);
+                if let Some(condition) = break_if.take() {
+                    let mut accept = Block::new();
+                    accept.push(Statement::Break, Span::UNDEFINED);
+                    body.push(Statement::If { condition, accept, reject: Block::new() }, Span::UNDEFINED);
+                }
                 *count += 1;
             },
             _ => {},
@@ -113,7 +96,13 @@ fn hoist_in_block(block: &mut Block, f: &mut naga::Function, bool_ty: Handle<nag
     Ok(())
 }
 
-/// The index of the top-level statement of `block` that emits `e`.
-fn emitted_at(block: &Block, e: Handle<Expression>) -> Option<usize> {
-    block.iter().position(|s| matches!(s, Statement::Emit(r) if r.index_range().contains(&(e.index() as u32))))
+/// Whether `block` has a `continue` for the loop it is in (not one of a nested loop).
+fn continues(block: &Block) -> bool {
+    block.iter().any(|s| match s {
+        Statement::Continue => true,
+        Statement::Block(b) => continues(b),
+        Statement::If { accept, reject, .. } => continues(accept) || continues(reject),
+        Statement::Switch { cases, .. } => cases.iter().any(|c| continues(&c.body)),
+        _ => false,
+    })
 }

@@ -1287,10 +1287,11 @@ UI, file IO and rayon's threads would follow.
      0.0033 on `spheres` at 256 spp (CPU seed to seed: 0.012), 0.0003 on `demo.json`.
    - Found on the Mac's Metal (the first run on a real GPU): images 12% dark wherever the sky
      was sampled, and the GPU tests failing (they pass on lavapipe). naga's MSL and HLSL
-     writers write a loop's continuing block before its body, so a `break if` on a value the
-     body computed re-evaluates its expression after the continuing block's stores: rust-gpu's
-     `while lo + 1 < hi` left one iteration early (the sky's binary search, BVH traversal).
-     The builder now stores such conditions in a variable (`hoist_break_ifs`), Metal and DX12
+     writers write a loop's continuing block before its body, so the body's values it uses
+     (and its `break if`) are re-evaluated after the block's own stores: rust-gpu's
+     `while lo + 1 < hi` left one iteration early (the sky's binary search, BVH traversal),
+     and a count kept across iterations came out a quarter of the right one. The builder now
+     folds continuing blocks into loop bodies (`fold_continuing_blocks`), Metal and DX12
      take the WGSL, and a test checks the WGSL's loops without a GPU. Demo, 20 spp, mean FLIP
      against `trace`: 0.1425 -> 0.0295 (the CPU wavefront integrator: 0.026). Not yet
      reported upstream (gfx-rs/wgpu).

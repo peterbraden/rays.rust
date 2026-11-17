@@ -370,8 +370,8 @@ impl GpuRenderer {
         // The shader, written in Rust (`shaders/pathtrace`) and compiled to SPIR-V by rust-gpu
         // (`scripts/build-shaders.sh`); a browser takes the WGSL translation made with it.
         // Vulkan takes the SPIR-V; other backends the WGSL, whose loops the builder has
-        // rewritten for naga's MSL and HLSL writers (`hoist_break_ifs` in shaders/builder:
-        // from SPIR-V, Metal's loops left one iteration early). RAYS_GPU_WGSL=1 runs the WGSL
+        // rewritten for naga's MSL and HLSL writers (`fold_continuing_blocks` in
+        // shaders/builder: from SPIR-V, Metal's loops left one iteration early). RAYS_GPU_WGSL=1 runs the WGSL
         // on Vulkan too, to test the translation without a browser.
         #[cfg(not(target_arch = "wasm32"))]
         let source = if info.backend != wgpu::Backend::Vulkan || std::env::var_os("RAYS_GPU_WGSL").is_some() {
@@ -541,42 +541,28 @@ mod tests {
         Vec3::new(v.x as f32, v.y as f32, v.z as f32)
     }
 
-    /// No loop in the WGSL ends on a condition computed in its body, which naga's MSL and HLSL
-    /// writers re-evaluate after the continuing block's stores (`hoist_break_ifs` in
-    /// shaders/builder). Metal and DX12 take this WGSL; this checks it without them.
+    /// No loop in the WGSL has a continuing block or a `break if`, which naga's MSL and HLSL
+    /// writers emit before the loop's body, re-evaluating the body's values there after the
+    /// block's stores (`fold_continuing_blocks` in shaders/builder). Metal and DX12 take this
+    /// WGSL; this checks it without them.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn test_loops_keep_their_break_conditions() {
-        use wgpu::naga::{Block, Expression, Function, Handle, Statement};
-        fn emitted(block: &Block, e: Handle<Expression>) -> bool {
-            block.iter().any(|s| matches!(s, Statement::Emit(r) if r.index_range().contains(&(e.index() as u32))))
-        }
-        // Whether `e`, or what it is computed from, is a value the loop's body emitted.
-        fn reads(f: &Function, body: &Block, e: Handle<Expression>) -> bool {
-            emitted(body, e) || match f.expressions[e] {
-                Expression::Unary { expr, .. } => reads(f, body, expr),
-                Expression::Binary { left, right, .. } => reads(f, body, left) || reads(f, body, right),
-                Expression::Select { condition, accept, reject } => [condition, accept, reject].iter().any(|&x| reads(f, body, x)),
-                _ => false,
-            }
-        }
-        fn check(f: &Function, block: &Block, loops: &mut usize) {
+    fn test_loops_have_no_continuing_blocks() {
+        use wgpu::naga::{Block, Statement};
+        fn check(block: &Block, loops: &mut usize) {
             for s in block.iter() {
                 match s {
                     Statement::Loop { body, continuing, break_if } => {
-                        if let Some(c) = *break_if {
-                            assert!(!reads(f, body, c), "a loop's break-if condition is computed in its body: {:?}", f.expressions[c]);
-                            *loops += 1;
-                        }
-                        check(f, body, loops);
-                        check(f, continuing, loops);
+                        assert!(continuing.is_empty() && break_if.is_none(), "a loop with a continuing block or a break-if");
+                        *loops += 1;
+                        check(body, loops);
                     },
-                    Statement::Block(b) => check(f, b, loops),
+                    Statement::Block(b) => check(b, loops),
                     Statement::If { accept, reject, .. } => {
-                        check(f, accept, loops);
-                        check(f, reject, loops);
+                        check(accept, loops);
+                        check(reject, loops);
                     },
-                    Statement::Switch { cases, .. } => cases.iter().for_each(|c| check(f, &c.body, loops)),
+                    Statement::Switch { cases, .. } => cases.iter().for_each(|c| check(&c.body, loops)),
                     _ => {},
                 }
             }
@@ -584,9 +570,9 @@ mod tests {
         let module = wgpu::naga::front::wgsl::parse_str(include_str!("pathtrace.wgsl")).unwrap();
         let mut loops = 0;
         for f in module.functions.iter().map(|(_, f)| f).chain(module.entry_points.iter().map(|ep| &ep.function)) {
-            check(f, &f.body, &mut loops);
+            check(&f.body, &mut loops);
         }
-        assert!(loops > 0, "no loops with break-if conditions found: is the shader the one expected?");
+        assert!(loops > 0, "no loops found: is the shader the one expected?");
     }
 
     /// The shader's functions, run on the CPU, agree with the renderer's own.

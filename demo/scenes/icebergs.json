@@ -80,6 +80,25 @@
       "seed": 1
     },
     {
+      "type": "ice_floes",
+      "style": "brash",
+      "center": [
+        0,
+        10
+      ],
+      "extent": [
+        120,
+        90
+      ],
+      "concentration": 0.12,
+      "size": [
+        0.08,
+        0.6
+      ],
+      "clumping": 0.6,
+      "seed": 7
+    },
+    {
       "type": "iceberg",
       "shape": "dome",
       "size": 18,

@@ -292,6 +292,10 @@ impl Iceberg {
             // Fine vertical streaks where meltwater runs down, and drifts on the snow.
             let streaks = 0.05 * noise.noise(Vector3::new(m.x / 0.7, m.y / 7., m.z / 0.7))
                 + 0.22 * noise.noise(Vector3::new(m.x / 1.6, m.y / 14., m.z / 1.6) + Vector3::new(9., 0., 4.));
+            // Crumpled: the cliff folds in upright creases and buttresses a few metres across.
+            let fold = |w: f64, o: f64| noise.ridged(Vector3::new(m.x / w, m.y / (4. * w), m.z / w) + Vector3::repeat(o), 3) - 0.5;
+            let folds = 0.06 * big * fold(0.4 * big, 11.) + 0.02 * big * fold(0.13 * big, 23.);
+            let streaks = if rounded { streaks } else { streaks + folds };
             let drifts = 0.5 * noise.fbm(m / 14., 3) * top;
             // How freshly broken the ice here is, 0 to 1: the deeper it was cut back, the less
             // weathered (and the bluer: `IcebergMaterial`).
@@ -570,6 +574,8 @@ pub struct IcebergMaterial {
     white: Ice,
     glacier: Ice,
     blue: Ice,
+    /// Wet ice melted smooth: glossy, and greyer than the white pieces.
+    clear: Ice,
     snow: Snow,
     /// The berg's length, m.
     size: f64,
@@ -590,6 +596,7 @@ impl IcebergMaterial {
             glacier: clean("glacier", 0.15),
             // Dense ice with few bubbles, as deep in a glacier: a saturated blue.
             blue: Ice::new(IceStyle { bubble_radius: 0.7, bubbles: 1.2, impurities: Default::default(), roughness: 0.08 }),
+            clear: Ice::new(IceStyle { bubble_radius: 0.6, bubbles: 9., impurities: Default::default(), roughness: 0.04 }),
             snow: Snow::new(SnowStyle { sparkle: 0., ..SnowStyle::preset("settled") }, 1., seed),
             size,
             noise: SeededNoise::new(seed.wrapping_add(17)),
@@ -632,10 +639,15 @@ impl MaterialModel for IcebergMaterial {
         let outside = r.rd.dot(&intersection.normal) < 0.;
         let i = &intersection.facing(r);
         let f = crate::material::functions::scatter_bsdf;
+        let (snow, fresh) = if self.body.is_some() { (if fresh > 0.5 { 0. } else { snow }, fresh) } else { (snow, fresh) };
         if outside && rand() < snow {
             return f(&self.snow.bsdf(&i.point, &i.normal, Some(s)), r, &i.point, s);
         }
         if let Some(body) = &self.body {
+            // Brash: for it the first texture coordinate says a piece is clear ice.
+            if fresh > 0.5 {
+                return f(&self.clear.bsdf(&i.normal, Some(s)), r, &i.point, s);
+            }
             return if outside && rand() < 0.6 * white {
                 f(&self.white.bsdf(&i.normal, Some(s)), r, &i.point, s)
             } else {
@@ -792,6 +804,7 @@ impl FloeField {
         let spheres: Vec<(Vec<Vector3<f64>>, Vec<[usize; 3]>)> = (0..=6).map(icosphere).collect();
         let mut positions = vec![];
         let mut triangles = vec![];
+        let mut texcoords = vec![];
         let fraction = 1. - 917. / SEA_WATER_DENSITY;
         for f in &floes {
             let r = f.radius * 0.95;
@@ -873,11 +886,15 @@ impl FloeField {
             for p in piece.iter_mut() {
                 *p = ride * (*p - pivot) + Vector3::new(f.x, self.sea_level + rise, f.z);
             }
+            // Small pieces are often clear ice: melted smooth, washed by the waves, glassy and
+            // dark against the white ones. (Carried as a texture coordinate.)
+            let clear = !lump && rng.next_f64() < 0.15 + 0.5 * (1. - smoothstep(0.3, 1.2, r));
+            texcoords.extend(std::iter::repeat_n(crate::na::Vector2::new(clear as u8 as f64, 0.), piece.len()));
             positions.extend(piece);
             triangles.extend(sphere.iter().map(|t| t.map(|i| i + start)));
         }
         println!("Brash: {} pieces, {} triangles", floes.len(), triangles.len());
-        creased(&IndexedMesh { positions, normals: vec![], triangles, texcoords: vec![] }, 35f64.to_radians().cos())
+        creased(&IndexedMesh { positions, normals: vec![], triangles, texcoords }, 50f64.to_radians().cos())
     }
 
     /// How the waves carry floe `f`: the surface's height at its centre, and the turn that

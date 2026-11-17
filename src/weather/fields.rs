@@ -157,69 +157,40 @@ pub struct Heaps {
     /// How high the body's spheres' centres stand above the base, as a fraction of their
     /// radius: low, so the base cuts them broad and flat, as a cumulus's is.
     pub lift: f64,
+    /// How much larger the body's middle spheres are than its rim's (`cauliflower::body`): a
+    /// dome, not a flat-topped box.
+    pub dome: f64,
     /// How far clouds lean downwind per metre of height (the wind's shear).
     pub lean: f64,
     /// How skewed the clouds' depths are: d = 0.25 + 0.75 u^skew of the layer's (u uniform), so
     /// many small and a few large, as in real fields of cumulus.
     pub skew: f64,
-    /// Pyroclastic billows (Tessendorf's Cumulo): generations of |noise| (size, amplitude, m)
-    /// pushing the surface outwards, puffs on puffs with creases between.
-    pub billows: Vec<(f64, f64)>,
-    /// Wisps: the point looked up is first carried two steps through vector noise `wisp_size`
-    /// across, by up to `wisps` metres, fraying edges into ragged fragments.
-    pub wisps: f64,
-    pub wisp_size: f64,
+    /// Billows and wisps (`cauliflower::Surface`).
+    pub surface: crate::procedural::cauliflower::Surface,
     pub radius: f64,
     pub seed: u32,
-    noise: PerlinNoise,
 }
 
 impl Heaps {
     pub fn new(radius: f64, seed: u64) -> Heaps {
         Heaps {
-            tree: crate::procedural::cauliflower::Cauliflower::cumulus(), cell: 2000., edge: 15., lift: 0.35, lean: 0.25, skew: 2.,
-            billows: vec![(120., 30.), (60., 15.), (30., 8.)], wisps: 40., wisp_size: 150., radius, seed: seed as u32,
-            noise: PerlinNoise::shuffled(seed.wrapping_add(77)),
+            tree: crate::procedural::cauliflower::Cauliflower::cumulus(), cell: 2000., edge: 15., lift: 0.35, dome: 0.8, lean: 0.25, skew: 2.,
+            surface: crate::procedural::cauliflower::Surface::new(seed.wrapping_add(77)), radius, seed: seed as u32,
         }
     }
 
-    /// How far beyond the spheres any density can reach: the billows' outward push, and the
-    /// wisps' shift of the point looked up (√3 times their amplitude: a noise vector).
     fn margin(&self) -> f64 {
-        self.billows.iter().map(|b| b.1).sum::<f64>() + 3f64.sqrt() * self.wisps
+        self.surface.margin()
     }
 
     /// The deepest any cloud can be, as a fraction of a cell.
     fn deepest(&self) -> f64 {
-        0.15 * (self.lift + self.tree.extent(1.))
+        0.15 * (1. + self.dome) * (self.lift + self.tree.extent(1.))
     }
 
     /// The farthest a cloud reaches from its cell's centre, horizontally (leaning included).
     fn max_reach(&self) -> f64 {
-        0.45 * self.cell + 0.15 * self.cell * self.tree.extent(1.) + self.lean * self.deepest() * self.cell
-    }
-
-    /// The point `p` looked up, carried two steps through vector noise (the wisps).
-    fn frayed(&self, p: &Vector3<f64>) -> Vector3<f64> {
-        if self.wisps <= 0. {
-            return *p;
-        }
-        let mut q = *p;
-        for step in 0..2 {
-            let x = q / self.wisp_size + Vector3::repeat(41.3 * step as f64);
-            let v = Vector3::new(self.noise.noise(x.x, x.y, x.z), self.noise.noise(x.x + 17.1, x.y - 5.3, x.z + 9.7),
-                                 self.noise.noise(x.x - 23.9, x.y + 13.3, x.z - 3.1));
-            q += v * (0.5 * self.wisps);
-        }
-        q
-    }
-
-    /// The billows' outward push at `p` (m): |noise| per generation.
-    fn billowing(&self, p: &Vector3<f64>) -> f64 {
-        self.billows.iter().enumerate().map(|(g, (size, amplitude))| {
-            let x = p / *size + Vector3::repeat(7.7 * g as f64);
-            amplitude * self.noise.noise(x.x, x.y, x.z).abs().min(1.)
-        }).sum()
+        0.45 * self.cell + 0.15 * (1. + self.dome) * self.cell * self.tree.extent(1.) + self.lean * self.deepest() * self.cell
     }
 }
 
@@ -245,19 +216,7 @@ struct Heap {
 impl Heap {
     /// The body's spheres, over a flat disc: more of them the wider it is.
     fn roots(&self, h: &Heaps) -> Vec<crate::procedural::cauliflower::Sphere> {
-        let (t1, t2) = crate::weather::tangents(&self.axis);
-        let n = ((1.5 * (self.width / self.r0).powi(2)).round() as usize).clamp(1, 12);
-        let disc = (self.width - self.r0).max(0.);
-        (0..n).map(|k| {
-            let id = self.id.wrapping_mul(7).wrapping_add(k as u64);
-            let u = |j: u64| crate::procedural::cauliflower::unit(id, j);
-            // Spread over the disc (the first at the middle), bunched towards the core the taller
-            // the cloud (its strongest updraft), the outer ones smaller.
-            let (rho, a) = if k == 0 { (0., 0.) } else { (u(0).powf(0.5 + self.tall), std::f64::consts::TAU * (u(1) + self.hashes[0])) };
-            let r = self.r0 * (1. - 0.5 * rho) * (0.8 + 0.2 * u(2));
-            let centre = self.axis * (h.radius + self.base + h.lift * r) + (t1 * a.cos() + t2 * a.sin()) * (disc * rho);
-            crate::procedural::cauliflower::Sphere { centre, radius: r, id }
-        }).collect()
+        crate::procedural::cauliflower::body(&(self.axis * (h.radius + self.base)), &self.axis, self.r0, self.width, h.lift, h.dome, self.tall, self.id, self.hashes[0])
     }
 }
 
@@ -307,9 +266,10 @@ impl Stratiform {
                     // The body: spheres over a flat disc `width` in radius, sized so that their
                     // turrets (to `extent` times their radius) top out at about the cloud's depth;
                     // small clouds narrow, larger ones wider.
-                    let r0 = (depth / (h.lift + ext)).clamp(30., 0.15 * s);
+                    let r0 = (depth / ((1. + h.dome) * (h.lift + ext))).clamp(30., 0.15 * s);
+                    let largest = r0 * (1. + h.dome);
                     let width = (s * (0.12 + 0.33 * (0.25 + 0.75 * tall).powf(0.7) * (0.7 + 0.3 * hash(5)))).clamp(r0, 0.45 * s);
-                    let top_of = base + h.lift * r0 + r0 * ext;
+                    let top_of = base + largest * (h.lift + ext);
                     // Leaning downwind with height: the wind aloft, in the drifting frame, level.
                     let m = &self.maps;
                     let wind = Vector3::new(m.wind[0].at_texel(&texel), m.wind[1].at_texel(&texel), m.wind[2].at_texel(&texel));
@@ -317,7 +277,7 @@ impl Stratiform {
                     let wind = wind - axis * axis.dot(&wind);
                     let downwind = if wind.norm() > 1e-6 { wind.normalize() } else { Vector3::zeros() };
                     let heap = Heap {
-                        axis, distance, r0, width, base, reach: width + r0 * ext + h.lean * (top_of - base),
+                        axis, distance, r0, width, base, reach: width + largest * ext + h.lean * (top_of - base),
                         top: top_of,
                         id: ((ix as u64) << 42) ^ ((iy as u64) << 21) ^ (iz as u64) ^ ((h.seed as u64) << 13),
                         hashes: [hash(6), hash(7)], tall, downwind,
@@ -338,7 +298,7 @@ impl Stratiform {
         let up = p.normalize();
         let margin = h.margin();
         // Frayed into wisps: the point looked up, carried through vector noise.
-        let q = h.frayed(&p);
+        let q = h.surface.frayed(&p);
         let mut best = f64::NEG_INFINITY;
         self.heaps_near(h, &up, |heap| {
             if heap.distance > heap.reach + margin || at.altitude > heap.top + margin {
@@ -354,7 +314,7 @@ impl Stratiform {
         }
         // Billows pushing the surface outwards (never in: the spheres are the core), then the
         // edge; and the flat base, where the air saturates.
-        let billows = if best < h.edge { h.billowing(&q) } else { 0. };
+        let billows = if best < h.edge { h.surface.billowing(&q) } else { 0. };
         smoothstep(0., h.edge, best + billows) * smoothstep(base, base + 0.3 * h.edge, at.altitude)
     }
 
@@ -368,7 +328,7 @@ impl Stratiform {
             // The body's spheres reach 0.2 of their radius below the base (the base cuts them flat
             // where the point is, but neighbouring columns' bases differ).
             let margin = h.margin();
-            let vertical = (heap.base - (1. - h.lift) * heap.r0 - margin - at.altitude).max(at.altitude - heap.top - margin).max(0.);
+            let vertical = (heap.base - (1. - h.lift) * heap.r0 * (1. + h.dome) - margin - at.altitude).max(at.altitude - heap.top - margin).max(0.);
             let horizontal = (heap.distance - heap.reach - margin).max(0.);
             clear = clear.min(vertical.max(horizontal));
             clear <= 0.
@@ -940,7 +900,7 @@ mod tests {
             }
         }
         println!("cloud {} skipped {}", cloud, skipped);
-        assert!(cloud > 100 && skipped > 300, "uninformative: cloud {} skipped {}", cloud, skipped);
+        assert!(cloud > 100 && skipped > 200, "uninformative: cloud {} skipped {}", cloud, skipped);
     }
 
     #[test]
@@ -1032,6 +992,6 @@ mod tests {
                 assert!(v <= m + 1e-12, "{} > {} at step {} of {}", v, m, k, len);
             }
         }
-        assert!(cloud > 100 && skipped > 300, "uninformative: cloud {} skipped {}", cloud, skipped);
+        assert!(cloud > 100 && skipped > 200, "uninformative: cloud {} skipped {}", cloud, skipped);
     }
 }

@@ -764,6 +764,9 @@ impl SceneFile {
             }));
         }
 
+        if t == "cumulus" {
+            return Some(Arc::new(SceneFile::parse_cumulus(&o)));
+        }
         if t == "weather_layer" {
             return Some(Arc::new(crate::weather::scene::create_layer(&o)));
         }
@@ -1499,6 +1502,35 @@ impl SceneFile {
         };
         let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(c));
         create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// One cauliflower cumulus (see `procedural::cauliflower::Cumulus`), placed by hand:
+    ///
+    /// `{"type": "cumulus", "center": [x, z], "base": 1000, "width": 800, "depth": 1500,
+    /// "seed": 0}`, with `density` (extinction per metre in its core, 0.05), `edge` (m, 15),
+    /// `lift`, `dome` (how much higher the body's middle stands, in its spheres' radius: 0.8),
+    /// `lean` (per metre of height) and `wind_direction` ([x, z]), `billows` (a scale)
+    /// and `wisps`, `wisp_size` (m), and the sphere tree's `levels`, `ratio`, `children`, `embed`
+    /// and `rise`; and how it scatters, as any volume (`g` default 0.85).
+    pub fn parse_cumulus(o: &Value) -> SceneObject {
+        use crate::procedural::cauliflower::{Cauliflower, Cumulus, Surface};
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let seed = SceneFile::parse_seed(o).unwrap_or(0);
+        let d = Cauliflower::cumulus();
+        let tree = Cauliflower::new(SceneFile::parse_int(&o["levels"], d.levels).min(8), num("ratio", d.ratio).clamp(0.1, 0.8),
+            SceneFile::parse_int(&o["children"], d.children).clamp(1, 32), num("embed", d.embed).clamp(0., 1.), num("rise", d.rise).max(0.));
+        let mut surface = Surface::new(seed.wrapping_add(77));
+        let billows = num("billows", 1.).max(0.);
+        surface.billows.iter_mut().for_each(|b| b.1 *= billows);
+        surface.wisps = num("wisps", surface.wisps).max(0.);
+        surface.wisp_size = num("wisp_size", surface.wisp_size).max(1.);
+        let mut c = Cumulus::new(tree, surface, SceneFile::parse_vec2_def(o, "center", Vector2::zeros()), num("base", 1000.),
+            num("width", 800.).max(10.), num("depth", 1500.).max(10.), num("lift", 0.35).clamp(0., 1.), num("dome", 0.8).max(0.), num("lean", 0.25).max(0.),
+            SceneFile::parse_vec2_def(o, "wind_direction", Vector2::new(1., 0.)), seed);
+        c.max_density = num("density", c.max_density).max(0.);
+        c.edge = num("edge", c.edge).max(1.);
+        let bounds = c.bounds();
+        create_volume(bounds, Arc::new(c), SceneFile::parse_scattering(o, 0.85))
     }
 
     /// A layer of altocumulus as Rayleigh-Bénard convection cells (see

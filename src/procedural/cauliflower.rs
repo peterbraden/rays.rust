@@ -154,6 +154,165 @@ impl Cauliflower {
     }
 }
 
+/// The body of one cumulus: root spheres over a flat disc of radius `width` about
+/// `base_centre` (on its base), standing `lift` of their radius above it so the base cuts them
+/// broad and flat, more of them the wider it is, bunched towards the core the taller the cloud
+/// (`tall`, 0 to 1), the outer ones smaller: the middle ones larger by a factor 1 + `dome`,
+/// falling off as 1 - ρ² to the rim, so the body is already a heap, a convex dome, before any
+/// turrets grow on it (spheres all alike made a flat-topped, boxy cloud), while every sphere,
+/// its centre `lift` of its radius above the base, is still cut flat by it. The largest root's
+/// radius is r0 (1 + dome).
+/// `phase` turns the pattern; `id` seeds it.
+#[allow(clippy::too_many_arguments)]
+pub fn body(base_centre: &Vector3<f64>, up: &Vector3<f64>, r0: f64, width: f64, lift: f64, dome: f64, tall: f64, id: u64, phase: f64) -> Vec<Sphere> {
+    let (t1, t2) = basis(up);
+    let n = ((1.5 * (width / r0).powi(2)).round() as usize).clamp(1, 12);
+    let disc = (width - r0).max(0.);
+    (0..n).map(|k| {
+        let id = id.wrapping_mul(7).wrapping_add(k as u64);
+        let u = |j: u64| unit(id, j);
+        let (rho, a) = if k == 0 { (0., 0.) } else { (u(0).powf(0.5 + tall), std::f64::consts::TAU * (u(1) + phase)) };
+        let r = r0 * (1. - 0.5 * rho) * (0.8 + 0.2 * u(2)) * (1. + dome * (1. - rho * rho));
+        let centre = base_centre + up * (lift * r) + (t1 * a.cos() + t2 * a.sin()) * (disc * rho);
+        Sphere { centre, radius: r, id }
+    }).collect()
+}
+
+/// A cumulus's surface finer than its spheres: pyroclastic billows (after Tessendorf's Cumulo:
+/// generations of |noise|, `billows` as (size, amplitude) m, pushing the surface outwards,
+/// puffs on puffs with creases between) and wisps (the point looked up carried two steps
+/// through vector noise `wisp_size` across, by up to `wisps` m, fraying the edges).
+pub struct Surface {
+    pub billows: Vec<(f64, f64)>,
+    pub wisps: f64,
+    pub wisp_size: f64,
+    noise: crate::noise::PerlinNoise,
+}
+
+impl Surface {
+    pub fn new(seed: u64) -> Surface {
+        Surface { billows: vec![(120., 30.), (60., 15.), (30., 8.)], wisps: 40., wisp_size: 150., noise: crate::noise::PerlinNoise::shuffled(seed) }
+    }
+
+    /// How far beyond the spheres any density can reach: the billows' outward push, and the
+    /// wisps' shift of the point looked up (√3 times their amplitude: a noise vector).
+    pub fn margin(&self) -> f64 {
+        self.billows.iter().map(|b| b.1).sum::<f64>() + 3f64.sqrt() * self.wisps
+    }
+
+    /// The point `p` looked up, carried two steps through vector noise (the wisps).
+    pub fn frayed(&self, p: &Vector3<f64>) -> Vector3<f64> {
+        if self.wisps <= 0. {
+            return *p;
+        }
+        let mut q = *p;
+        for step in 0..2 {
+            let x = q / self.wisp_size + Vector3::repeat(41.3 * step as f64);
+            let v = Vector3::new(self.noise.noise(x.x, x.y, x.z), self.noise.noise(x.x + 17.1, x.y - 5.3, x.z + 9.7),
+                                 self.noise.noise(x.x - 23.9, x.y + 13.3, x.z - 3.1));
+            q += v * (0.5 * self.wisps);
+        }
+        q
+    }
+
+    /// The billows' outward push at `p` (m): |noise| per generation.
+    pub fn billowing(&self, p: &Vector3<f64>) -> f64 {
+        self.billows.iter().enumerate().map(|(g, (size, amplitude))| {
+            let x = p / *size + Vector3::repeat(7.7 * g as f64);
+            amplitude * self.noise.noise(x.x, x.y, x.z).abs().min(1.)
+        }).sum()
+    }
+}
+
+/// # One cumulus
+///
+/// A single cauliflower cumulus in the scene's own (flat) coordinates, for a cloud placed by
+/// hand: a hero cloud, or a test of the shape. Its body is `body`'s spheres, `width` in radius,
+/// growing turrets up to `depth` above its flat `base`, leaning `lean` per metre of height along
+/// `wind`, and finished by its `surface`.
+pub struct Cumulus {
+    pub tree: Cauliflower,
+    pub surface: Surface,
+    pub max_density: f64,
+    pub base: f64,
+    pub edge: f64,
+    pub lean: f64,
+    pub wind: Vector3<f64>,
+    roots: Vec<Sphere>,
+    r0: f64,
+    lift: f64,
+    dome: f64,
+    reach: f64,
+    centre: Vector3<f64>,
+}
+
+impl Cumulus {
+    /// A cloud over (`x`, `z`) = `centre`, its base at `base`, `width` in radius and `depth` deep.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(tree: Cauliflower, surface: Surface, centre: crate::na::Vector2<f64>, base: f64, width: f64, depth: f64,
+               lift: f64, dome: f64, lean: f64, wind: crate::na::Vector2<f64>, seed: u64) -> Cumulus {
+        let r0 = (depth / ((1. + dome) * (lift + tree.extent(1.)))).max(10.);
+        let width = width.max(r0);
+        let tall = (depth / (2. * width)).clamp(0., 1.);
+        let at = Vector3::new(centre.x, base, centre.y);
+        let roots = body(&at, &Vector3::y(), r0, width, lift, dome, tall, mix(seed), unit(seed, 99));
+        let wind = Vector3::new(wind.x, 0., wind.y);
+        let wind = if wind.norm() > 0. { wind.normalize() } else { Vector3::zeros() };
+        let reach = width + r0 * (1. + dome) * tree.extent(1.);
+        Cumulus { tree, surface, max_density: 0.05, base, edge: 15., lean, wind, roots, r0, lift, dome, reach, centre: at }
+    }
+
+    pub fn top(&self) -> f64 {
+        let largest = self.r0 * (1. + self.dome);
+        self.base + self.lift * largest + self.tree.extent(largest)
+    }
+
+    /// The box holding all of it: its spheres' reach, its lean, and its surface's margin.
+    pub fn bounds(&self) -> crate::shapes::bbox::BBox {
+        let m = self.surface.margin();
+        let side = self.reach + self.lean * (self.top() - self.base) + m;
+        crate::shapes::bbox::BBox::new(
+            Vector3::new(self.centre.x - side, self.base - (1. - self.lift) * self.r0 * (1. + self.dome) - m, self.centre.z - side),
+            Vector3::new(self.centre.x + side, self.top() + m, self.centre.z + side),
+        )
+    }
+
+    /// The fraction (0 to 1) of the densest cloud at `p`.
+    pub fn fraction(&self, p: &Vector3<f64>) -> f64 {
+        if p.y <= self.base {
+            return 0.;
+        }
+        let q = self.surface.frayed(p);
+        let lean = self.wind * (self.lean * (p.y - self.base));
+        let depth = self.depth_at(&(q - lean));
+        let m = self.surface.margin();
+        if depth <= -m {
+            return 0.;
+        }
+        let billows = if depth < self.edge { self.surface.billowing(&q) } else { 0. };
+        smoothstep(0., self.edge, depth + billows) * smoothstep(self.base, self.base + 0.3 * self.edge, p.y)
+    }
+
+    fn depth_at(&self, p: &Vector3<f64>) -> f64 {
+        self.tree.depth(&self.roots, &Vector3::y(), p, self.edge)
+    }
+}
+
+fn smoothstep(lo: f64, hi: f64, v: f64) -> f64 {
+    let t = ((v - lo) / (hi - lo)).clamp(0., 1.);
+    t * t * (3. - 2. * t)
+}
+
+impl crate::volume::DensityField for Cumulus {
+    fn density(&self, p: &Vector3<f64>) -> f64 {
+        self.max_density * self.fraction(p)
+    }
+
+    fn majorant(&self) -> f64 {
+        self.max_density
+    }
+}
+
 /// Two unit vectors perpendicular to the unit `up` and each other.
 fn basis(up: &Vector3<f64>) -> (Vector3<f64>, Vector3<f64>) {
     let a = if up.x.abs() < 0.9 { Vector3::x() } else { Vector3::z() };

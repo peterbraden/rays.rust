@@ -249,12 +249,13 @@ fn heaps(o: &Value, weather: &Weather, seed: u64) -> crate::weather::fields::Hea
     h.cell = number(o, "cell", h.cell).max(100.);
     h.edge = number(o, "edge", h.edge).max(1.);
     h.lift = number(o, "lift", h.lift).clamp(0., 1.);
+    h.dome = number(o, "dome", h.dome).max(0.);
     h.lean = number(o, "lean", h.lean).max(0.);
     h.skew = number(o, "skew", h.skew).max(0.1);
     let billows = number(o, "billows", 1.).max(0.);
-    h.billows.iter_mut().for_each(|b| b.1 *= billows);
-    h.wisps = number(o, "wisps", h.wisps).max(0.);
-    h.wisp_size = number(o, "wisp_size", h.wisp_size).max(1.);
+    h.surface.billows.iter_mut().for_each(|b| b.1 *= billows);
+    h.surface.wisps = number(o, "wisps", h.surface.wisps).max(0.);
+    h.surface.wisp_size = number(o, "wisp_size", h.surface.wisp_size).max(1.);
     let t = &h.tree;
     h.tree = crate::procedural::cauliflower::Cauliflower::new(
         SceneFile::parse_int(&o["levels"], t.levels).min(8), number(o, "ratio", t.ratio).clamp(0.1, 0.8),

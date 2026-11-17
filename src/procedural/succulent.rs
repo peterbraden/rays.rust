@@ -23,6 +23,11 @@
 ///   margins (Gentry, "Agaves of Continental North America", University of Arizona Press, 1982).
 /// - Ocotillo (Fouquieria splendens): a fan of long, nearly unbranched, whip-like canes from a
 ///   short base, with small leaves along them after rain.
+/// - Mound: the desert's commonest shrubs (sagebrush, rabbitbrush) are dense, rounded masses
+///   of small leaves on a few twisted stems, which branching doesn't capture at a reasonable
+///   cost: their leaves are scattered through a lumpy ellipsoid, densest towards its surface
+///   (where light reaches), with stems twisting up into it; `dead_branches` of the stems are
+///   bare and grey, with their part of the canopy gone.
 ///
 /// Spines stand in for many more than a real cactus has, larger, as conifers' needle tufts do,
 /// so they read as a pale halo against the light without millions of triangles.
@@ -38,6 +43,10 @@
 /// | `leaves` | areoles per metre along each rib | areoles per pad | teeth per margin | leaves per cane |
 /// | `leaf_scale`, `leaf_scale_x` | spine length, width / length | the same | the same | leaf length, width / length |
 /// | `lean` (`lean_v`) | lean from the vertical, degrees | | | spread of the canes from the vertical |
+///
+/// For a mound: `scale` is its height, `ratio` its width over height, `stems[1].branches` its
+/// stems, `leaves` its leaves, `leaf_scale` and `leaf_scale_x` their size, and `wander` how
+/// much its stems twist.
 /// | `wander` | meander of the stems, fraction of their length | | | the same |
 /// | `attraction_up` | | how far new pads turn upwards, 0 to 1 | | |
 use crate::na::{Vector3, UnitQuaternion, Unit};
@@ -548,6 +557,65 @@ impl Builder<'_> {
     }
 }
 
+impl Builder<'_> {
+    fn mound(&mut self, origin: Vector3<f64>) {
+        let p = self.p;
+        let height = self.vary(p.scale, p.scale_v).max(0.1);
+        let width = height * p.ratio;
+        let centre = origin + Vector3::y() * (0.48 * height);
+        let half = Vector3::new(0.5 * width, 0.52 * height, 0.5 * width);
+        let lump = Vector3::new(self.uniform(), self.uniform(), self.uniform()) * 100.;
+        // Lumpy: the canopy's radius varies with direction, in a few broad clumps.
+        let reach = |b: &Builder, d: &Vector3<f64>| 1. + 0.3 * b.signed_noise(lump + d * 1.6);
+        let stems = p.level(1).branches.max(1.).round() as usize;
+        let mut dead = vec![];
+        for _ in 0 .. stems {
+            // Each stem leans out from the base towards a point in the canopy.
+            let azimuth = self.uniform() * 2. * PI;
+            let out = Vector3::new(azimuth.cos(), 0., azimuth.sin());
+            let tip = centre + Vector3::new(out.x * half.x, 0., out.z * half.z) * (0.3 + 0.5 * self.uniform())
+                + Vector3::y() * (half.y * self.vary(0.3, 0.3));
+            let base = origin + out * (0.06 * width * self.uniform()) - Vector3::y() * (0.02 * height);
+            let length = (tip - base).norm();
+            let steps = 12;
+            let start_dir = (Vector3::y() * 2. + out).normalize();
+            let to_tip = (tip - base).normalize();
+            let heading = move |u: f64| {
+                let t = (u / length).clamp(0., 1.);
+                start_dir * (1. - t) + to_tip * t
+            };
+            let points = self.centreline(base, steps, length / steps as f64, p.wander, &heading);
+            let rings = Builder::rings(&points, out);
+            let radius = 0.022 * height * self.vary(1., 0.3);
+            self.sweep(&rings, 5, (false, true), &|ring, theta| ring.out(theta) * (radius * (1. - 0.75 * ring.t)));
+            if self.uniform() < p.dead_branches {
+                dead.push(tip);
+            }
+        }
+        let count = p.leaves.max(0.).round() as usize;
+        for _ in 0 .. count {
+            // A direction, mostly above the equator, and a depth, mostly near the surface.
+            let mut d = Vector3::new(self.uniform() * 2. - 1., self.uniform() * 1.6 - 0.6, self.uniform() * 2. - 1.);
+            if d.norm() < 1e-6 { continue }
+            d = d.normalize();
+            let depth = 1. - 0.45 * self.uniform().powi(2);
+            let at = centre + d.component_mul(&half) * (depth * reach(self, &d));
+            if at.y < origin.y + 0.06 * height {
+                continue;
+            }
+            // Bare where a dead stem's part of the canopy would have been.
+            if dead.iter().any(|t| (at - t).norm() < 0.35 * width) {
+                continue;
+            }
+            let outward = (d + Vector3::y() * 0.5).normalize();
+            let dir = (outward + Vector3::new(self.uniform() - 0.5, self.uniform() - 0.5, self.uniform() - 0.5) * 1.6).normalize();
+            let normal = (outward - dir * dir.dot(&outward)).try_normalize(1e-9).unwrap_or_else(|| perpendicular(&dir));
+            let l = p.leaf_scale * self.vary(1., p.leaf_scale_v);
+            self.leaf(at, dir, normal, l);
+        }
+    }
+}
+
 /// Generate the plant `p` describes, whose form isn't `Branching`, chosen by `seed`, with its
 /// base at `origin`.
 pub fn generate(p: &TreeParams, seed: u64, origin: Vector3<f64>) -> TreeMesh {
@@ -561,6 +629,7 @@ pub fn generate(p: &TreeParams, seed: u64, origin: Vector3<f64>) -> TreeMesh {
         PlantForm::PricklyPear => b.prickly_pear(origin),
         PlantForm::Agave => b.agave(origin),
         PlantForm::Ocotillo => b.ocotillo(origin),
+        PlantForm::Mound => b.mound(origin),
         PlantForm::Branching => panic!("Branching plants are grown by tree::generate"),
     }
     let (low, high) = b.tuft_heights.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &y| (lo.min(y), hi.max(y)));
@@ -579,7 +648,7 @@ mod tests {
     use crate::na::Vector3;
     use serde_json::Value;
 
-    const SUCCULENTS: [&str; 5] = ["saguaro", "barrel-cactus", "prickly-pear", "agave", "ocotillo"];
+    const SUCCULENTS: [&str; 7] = ["saguaro", "barrel-cactus", "prickly-pear", "agave", "ocotillo", "sagebrush", "rabbitbrush"];
 
     #[test]
     fn test_succulents_grow_closed_outward_facing_bodies() {
@@ -626,6 +695,24 @@ mod tests {
         let ring: Vec<f64> = m.bark.iter().filter(|t| (t.v0.y - 0.5 * height).abs() < 0.03 * height).map(|t| t.v0.xz().norm()).collect();
         let (lo, hi) = ring.iter().fold((f64::MAX, 0f64), |(lo, hi), &r| (lo.min(r), hi.max(r)));
         assert!(1. - lo / hi > 0.6 * p.lobe_depth, "{} to {}", lo, hi);
+    }
+
+    #[test]
+    fn test_mounds_are_dense_and_rounded() {
+        let p = params("sagebrush", &serde_json::json!({ "scale_v": 0, "dead_branches": 0 }));
+        let m = generate(&p, 4, Vector3::zeros());
+        let (h, w) = (p.scale, p.scale * p.ratio);
+        // Leaves fill a mound about as wide and tall as asked, none below the ground.
+        let centres: Vec<Vector3<f64>> = m.leaves.iter().map(|t| t.item.v0).collect();
+        assert!(centres.len() > 4 * 1500);
+        let top = centres.iter().map(|c| c.y).fold(0., f64::max);
+        let reach = centres.iter().map(|c| c.xz().norm()).fold(0., f64::max);
+        assert!(top > 0.8 * h && top < 1.4 * h, "{} vs {}", top, h);
+        assert!(reach > 0.35 * w && reach < 0.8 * w, "{} vs {}", reach, w);
+        assert!(centres.iter().all(|c| c.y > -0.05));
+        // Dead stems leave gaps: fewer leaves.
+        let dead = generate(&params("sagebrush", &serde_json::json!({ "scale_v": 0, "dead_branches": 1 })), 4, Vector3::zeros());
+        assert!(dead.leaves.len() < m.leaves.len() / 2, "{} {}", dead.leaves.len(), m.leaves.len());
     }
 
     #[test]

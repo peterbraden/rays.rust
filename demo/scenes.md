@@ -131,9 +131,10 @@ turning in autumn, with a shrub understory. Each species is three distinct trees
 species grow in stands, with clearings, and none on steep slopes.
 ![forest](./scenes/forest.png)
 ## Desert
-Desert plants: `tree` species for the arid Southwest. From left to right: a sagebrush, a
-creosote bush, a saguaro, an ocotillo and a Joshua tree; in front, a prickly pear, an agave
-and a barrel cactus. The bushes and the Joshua tree are Weber and Penn trees; the succulents are
+Desert plants: `tree` species for the arid Southwest. From left to right: a Utah juniper, a
+sagebrush behind it, a creosote bush, a saguaro, an ocotillo and a Joshua tree; in front, a
+rabbitbrush, a prickly pear, an agave and a barrel cactus. Sagebrush and rabbitbrush are
+`mound` plants: dense, rounded masses of small leaves on a few twisted stems. The bushes and the Joshua tree are Weber and Penn trees; the succulents are
 built by `src/procedural/succulent.rs` (ribbed columns with arms, squat barrels, chains of
 pads, rosettes of channelled leaves, fans of canes), their `"bark"` the green body and their
 `"leaves"` the spines. Like any species they can grow in a `forest`.
@@ -160,7 +161,9 @@ photographer's shade setting would.
 
 From the rim of a higher mesa at dawn (`desert-overlook.json`), after the view from Hunts
 Mesa: its top weathered into rounded slickrock domes (`domes`), their cross-bedded sandstone
-(`"cross_bedding"`) pocked with honeycomb pits (`"pits"`), over a valley of buttes and spires
+(`"cross_bedding"`) pocked with honeycomb pits (`"pits"`), rough down to the pixel with
+POV-Ray-style turbulent bump mapping and cracked by crackle (`"fractal"`, `"crackle"`), with
+Utah junipers, sagebrush and rabbitbrush in the hollows, over a valley of buttes and spires
 fading into the haze towards the horizon. The mesa is raised above the others by `uplift`; the
 near country is a 1.5 m grid and the far, out to the horizon, a 30 m grid of the same mesas
 (`domain`) with a `hole` where the near one is.

@@ -167,6 +167,18 @@ pub struct Rock {
     /// `pit_size` across (in units of `scale`), dark and recessed.
     pub pits: f64,
     pub pit_size: f64,
+    /// Fractal relief for close-up detail, as POV-Ray's turbulent normals: octaves of
+    /// turbulence (|noise|, creased like weathered stone) from `fractal_size` down to the size
+    /// of a pixel where the surface is seen, so it holds detail however near the camera comes
+    /// and doesn't alias far away. `fractal` scales its slopes; each octave's amplitude falls
+    /// by 2^-`fractal_h` (1: equally steep at every scale; less: rougher in the small).
+    pub fractal: f64,
+    pub fractal_size: f64,
+    pub fractal_h: f64,
+    /// Fractures: the cell walls of cellular (Worley) noise `crackle_size` across, as
+    /// POV-Ray's crackle pattern, recessed `crackle` deep and dark with grime.
+    pub crackle: f64,
+    pub crackle_size: f64,
     noise: SeededNoise,
     /// Noise levels above which the given fraction of the surface is grain or lichen.
     dark_threshold: f64,
@@ -203,6 +215,7 @@ impl Rock {
             layers: vec![], layer_warp: 0., beds: vec![], variety: 0., variety_color: Color::new(0.7, 0.55, 0.4),
             varnish: 0., varnish_color: Color::new(0.12, 0.07, 0.05), flutes: 0.,
             cross_bedding: 0., cross_set: 1., pits: 0., pit_size: 0.05,
+            fractal: 0., fractal_size: 1., fractal_h: 1., crackle: 0., crackle_size: 1.,
             noise, dark_threshold, light_threshold, lichen_threshold: 0.,
         }
     }
@@ -232,6 +245,14 @@ impl Rock {
 
     /// Height of the bump-mapped relief, in units of `scale`.
     fn relief(&self, q: Vector3<f64>) -> f64 {
+        self.relief_to(q, f64::INFINITY)
+    }
+
+    /// The relief, with fractal detail down to wavelength `finest`.
+    fn relief_to(&self, q: Vector3<f64>, finest: f64) -> f64 {
+        let fine = if finest.is_finite() {
+            self.fractal_relief(q, finest) - self.crackle * self.crackle_size * 0.05 * self.crackle_at(q)
+        } else { 0. };
         let b = q / self.style.bump_size;
         let flutes = if self.flutes > 0. {
             // Noise stretched tall: grooves running down the face.
@@ -239,9 +260,54 @@ impl Rock {
             self.flutes * (1. - self.noise.fbm(f, 3).abs()).powi(2) * 0.5
         } else { 0. };
         let pits = if self.pits > 0. { -self.pit(q) * self.pit_size * 0.6 } else { 0. };
-        flutes + pits + self.noise.fbm(b, 4) * self.style.bump_size * 0.6
+        // The preset's relief at its own strength, `bump`; the fractal detail at its own.
+        fine + self.style.bump * (flutes + pits + self.noise.fbm(b, 4) * self.style.bump_size * 0.6
             + self.noise.ridged(b * 0.5 + Vector3::new(0., 0., 9.), 3) * self.style.bump_size * 0.3
-            - self.crack(q) * self.style.bump_size * 0.15 * self.style.cracks
+            - self.crack(q) * self.style.bump_size * 0.15 * self.style.cracks)
+    }
+
+    /// Fractal relief at `q`, its octaves stopping at wavelength `finest` (in units of
+    /// `scale`), the last faded in by how far it is above it. In units of `scale`.
+    fn fractal_relief(&self, q: Vector3<f64>, finest: f64) -> f64 {
+        if self.fractal <= 0. { return 0. }
+        let (mut sum, mut wavelength, mut amplitude) = (0., self.fractal_size, self.fractal_size);
+        let falloff = 0.5f64.powf(self.fractal_h);
+        for k in 0 .. 16 {
+            let fade = ((wavelength / finest.max(1e-9) - 1.)).clamp(0., 1.);
+            if fade <= 0. { break }
+            // Turbulence: folded noise, creased where it crosses zero. Each octave turned, so
+            // their lattices don't line up.
+            let r = crate::na::Rotation3::from_euler_angles(0.61 * k as f64, 0.93 * k as f64, 1.27 * k as f64);
+            let n = self.noise.noise(r * q / wavelength + Vector3::new(17.3 * k as f64, 0., 5.));
+            sum += amplitude * fade * (0.5 - n.abs());
+            wavelength *= 0.5;
+            amplitude *= falloff;
+        }
+        self.fractal * 0.3 * sum
+    }
+
+    /// The fracture pattern at `q`: 1 on a crack between Worley cells, falling to 0 within
+    /// `width` (relative to the cell size) of it.
+    fn crackle_at(&self, q: Vector3<f64>) -> f64 {
+        if self.crackle <= 0. { return 0. }
+        let u = q / self.crackle_size.max(1e-9);
+        let cell = u.map(|x| x.floor());
+        let (mut f1, mut f2) = (f64::MAX, f64::MAX);
+        for i in -1 ..= 1 {
+            for j in -1 ..= 1 {
+                for k in -1 ..= 1 {
+                    let c = cell + Vector3::new(i as f64, j as f64, k as f64);
+                    let h = |salt: f64| ((c.x * 127.1 + c.y * 311.7 + c.z * 74.7 + salt).sin() * 43_758.545_3).fract().abs();
+                    let d = (c + Vector3::new(h(0.), h(13.), h(29.)) - u).norm_squared();
+                    if d < f1 { f2 = f1; f1 = d; } else if d < f2 { f2 = d; }
+                }
+            }
+        }
+        // F2 - F1 is 0 on the walls between cells.
+        let wall = f2.sqrt() - f1.sqrt();
+        // Cracks fade in and out along their length.
+        let presence = smoothstep(-0.3, 0.2, self.noise.noise(u * 0.7 + Vector3::new(3., 0., 11.)));
+        smoothstep(0.08, 0., wall) * presence
     }
 
     /// How far a point lies in a pit: 1 at its middle, 0 outside pits. Pits are the high spots
@@ -275,14 +341,25 @@ impl Rock {
 
     /// The shading normal: the surface normal tilted by the relief.
     pub fn bumped_normal(&self, p: Vector3<f64>, normal: Vector3<f64>) -> Vector3<f64> {
-        if self.style.bump <= 0. { return normal }
+        self.bumped_normal_filtered(p, normal, 0.)
+    }
+
+    /// As `bumped_normal`, with fractal detail no finer than `width` (scene units: about a
+    /// pixel's size where the surface is seen; 0 for the coarse relief alone).
+    pub fn bumped_normal_filtered(&self, p: Vector3<f64>, normal: Vector3<f64>, width: f64) -> Vector3<f64> {
+        if self.style.bump <= 0. && self.fractal <= 0. && self.crackle <= 0. { return normal }
         let q = p / self.scale;
-        let e = self.style.bump_size * 0.05;
-        let d = |axis: Vector3<f64>| (self.relief(q + axis * e) - self.relief(q - axis * e)) / (2. * e);
+        let finest = if width > 0. { 2. * width / self.scale } else { f64::INFINITY };
+        let mut e = self.style.bump_size * 0.05;
+        if finest.is_finite() && (self.fractal > 0. || self.crackle > 0.) {
+            e = e.min(0.25 * finest);
+        }
+        let d = |axis: Vector3<f64>| (self.relief_to(q + axis * e, finest) - self.relief_to(q - axis * e, finest)) / (2. * e);
         let g = Vector3::new(d(Vector3::x()), d(Vector3::y()), d(Vector3::z()));
         // Only the part of the gradient along the surface tilts it.
         let tangential = g - normal * g.dot(&normal);
-        (normal - tangential * self.style.bump).try_normalize(1e-12).unwrap_or(normal)
+        // `relief_to` has already scaled each part by its strength.
+        (normal - tangential).try_normalize(1e-12).unwrap_or(normal)
     }
 
     /// The diffuse reflectance at a point, given its shading normal.
@@ -347,6 +424,15 @@ impl Rock {
         let tone = 1. + self.weathering * self.noise.fbm(q * 0.25 + Vector3::new(0., 0., 40.), 3);
         c = c * (tone * (1. - 0.6 * self.crack(q)));
 
+        // Grime gathers in the cracks and the creases of the fractal relief.
+        if self.crackle > 0. {
+            c = c * (1. - 0.55 * self.crackle * self.crackle_at(q));
+        }
+        if self.fractal > 0. {
+            let crease = self.fractal_relief(q, 0.25 * self.fractal_size) / (0.3 * self.fractal * self.fractal_size);
+            c = c * (1. + 0.6 * crease.clamp(-0.5, 0.5));
+        }
+
         // Pits are shadowed inside.
         if self.pits > 0. {
             c = c * (1. - 0.6 * self.pit(q));
@@ -383,7 +469,13 @@ impl Rock {
 impl MaterialModel for Rock {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let geometric = intersection.facing_normal(r);
-        let normal = self.bumped_normal(intersection.point, geometric);
+        // About a pixel's width where the surface is seen, so the fractal detail stops there.
+        let width = s.footprint.as_ref().map_or(0., |f| {
+            let dist = (intersection.point - f.location).norm();
+            let cos = (r.rd.normalize().dot(&geometric)).abs().max(0.2);
+            dist * f.spread * (s.render.samples_per_pixel() as f64).sqrt() / cos
+        });
+        let normal = self.bumped_normal_filtered(intersection.point, geometric, width);
 
         if self.wetness > 0. {
             let cos_i = (r.rd.dot(&normal) / r.rd.norm()).abs();
@@ -490,6 +582,37 @@ mod tests {
         let lum = |c: Color| crate::color::luminance(&c);
         let wall = Vector3::x();
         assert!(lum(mean_albedo(&pitted, 5., wall)) < 0.97 * lum(mean_albedo(&plain, 5., wall)));
+    }
+
+    #[test]
+    fn test_fractal_detail_follows_the_pixel_size() {
+        let mut rock = Rock::new(RockStyle::preset("sandstone"), 10., 8);
+        rock.fractal = 0.5;
+        rock.fractal_size = 0.1;
+        let n = Vector3::new(0., 0., -1.);
+        // The mean tilt of the shading normal along a line, at a given pixel width.
+        let tilt = |width: f64| (0 .. 200).map(|k| {
+            let p = Vector3::new(k as f64 * 0.0137, 1.3, -3.);
+            rock.bumped_normal_filtered(p, n, width).dot(&n).acos()
+        }).sum::<f64>() / 200.;
+        // Seen closer (smaller pixels), finer octaves change the normal; seen from afar, the
+        // fractal fades out rather than aliasing.
+        let change = (0 .. 200).map(|k| {
+            let p = Vector3::new(k as f64 * 0.0137, 1.3, -3.);
+            rock.bumped_normal_filtered(p, n, 0.001).dot(&rock.bumped_normal_filtered(p, n, 0.05)).min(1.).acos()
+        }).sum::<f64>() / 200.;
+        assert!(change > 0.05, "{}", change);
+        assert!(tilt(100.) < tilt(0.001) * 0.6, "{} {}", tilt(100.), tilt(0.001));
+    }
+
+    #[test]
+    fn test_crackle_draws_thin_cracks() {
+        let mut rock = Rock::new(RockStyle::preset("sandstone"), 1., 8);
+        rock.crackle = 1.;
+        rock.crackle_size = 1.;
+        let on: usize = (0 .. 2000).filter(|k| rock.crackle_at(Vector3::new(*k as f64 * 0.0377, 0.31, 0.77)) > 0.5).count();
+        // Cracks cover a small part of the surface.
+        assert!(on > 10 && on < 400, "{}", on);
     }
 
     #[test]

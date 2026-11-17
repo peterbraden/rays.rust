@@ -2340,7 +2340,9 @@ impl SceneFile {
     /// `"variety_color"` (broad stains), `"varnish"` and `"varnish_color"` (dark streaks down
     /// steep faces), `"flutes"` (vertical grooves, bump mapped), `"cross_bedding"` and
     /// `"cross_set"` (inclined laminae in sets that thick) and `"pits"` and `"pit_size"`
-    /// (honeycomb weathering).
+    /// (honeycomb weathering), `"fractal"`, `"fractal_size"` and `"fractal_h"` (turbulent
+    /// relief down to a pixel's size, for close-up detail) and `"crackle"` and
+    /// `"crackle_size"` (fractures). Sizes are in units of `"scale"`.
     pub fn parse_rock(o: &Value) -> Rock {
         let preset = RockStyle::preset(o["preset"].as_str().unwrap_or("granite"));
         let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
@@ -2380,6 +2382,11 @@ impl SceneFile {
         r.cross_set = n("cross_set", r.cross_set).max(1e-6);
         r.pits = n("pits", 0.).clamp(0., 1.);
         r.pit_size = n("pit_size", r.pit_size).max(1e-6);
+        r.fractal = n("fractal", 0.).max(0.);
+        r.fractal_size = n("fractal_size", r.fractal_size).max(1e-6);
+        r.fractal_h = n("fractal_h", r.fractal_h);
+        r.crackle = n("crackle", 0.).max(0.);
+        r.crackle_size = n("crackle_size", r.crackle_size).max(1e-6);
         let lichen = n("lichen", 0.);
         if lichen > 0. {
             let color = c("lichen_color", r.lichen_color);

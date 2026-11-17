@@ -208,6 +208,8 @@ pub enum PlantForm {
     Agave,
     /// A fan of long, whip-like canes.
     Ocotillo,
+    /// A dense, rounded mound of small leaves on a few twisted stems: sagebrush, rabbitbrush.
+    Mound,
 }
 
 /// The shape of a leaf.
@@ -810,11 +812,11 @@ pub fn params(species_name: &str, overrides: &Value) -> TreeParams {
     p
 }
 
-pub const SPECIES: [&str; 24] = [
+pub const SPECIES: [&str; 26] = [
     "quaking-aspen", "black-tupelo", "california-black-oak", "weeping-willow",
     "lombardy-poplar", "balsam-fir", "palm", "shrub", "hazel", "hawthorn", "juniper",
     "scots-pine", "stone-pine", "norway-spruce", "italian-cypress", "cedar-of-lebanon",
-    "creosote-bush", "sagebrush", "joshua-tree",
+    "creosote-bush", "sagebrush", "joshua-tree", "utah-juniper", "rabbitbrush",
     "saguaro", "barrel-cactus", "prickly-pear", "agave", "ocotillo",
 ];
 
@@ -1095,19 +1097,11 @@ pub fn species(name: &str) -> Option<TreeParams> {
             ..d
         },
         // Big sagebrush (Artemisia tridentata): a low, rounded, silvery-grey bush on a short,
-        // gnarled, shredding trunk; a dense mass of small wedge-shaped leaves.
+        // gnarled, shredding trunk; a dense mass of small wedge-shaped leaves, some of its
+        // stems dead and bare.
         "sagebrush" => TreeParams {
-            shape: 1, base_size: 0.05, scale: 1.1, scale_v: 0.3, levels: 3,
-            ratio: 0.035, ratio_power: 1.2, lobes: 3, lobe_depth: 0.08, flare: 0.3,
-            base_splits: 4, leaves: 70., leaf_scale: 0.04, leaf_scale_x: 0.45, leaf_bend: 0.4,
-            attraction_up: 0.6, wander: 0.12, roughness: 0.25, branch_loss: 0.05,
-            stems: vec![
-                split(level(0., 0., 0., 0., 0., 1., 0.1, 1., 5, 0., 0., 40.), 0.4, 30., 10.),
-                level(50., 15., 137.5, 40., 28., 0.55, 0.1, 1., 3, -10., 0., 40.),
-                level(40., 15., 137.5, 30., 18., 0.45, 0.1, 1., 2, 0., 0., 30.),
-                level(40., 15., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
-            ],
-            ..d
+            leaf_scale_v: 0.3, wander: 0.15, dead_branches: 0.15,
+            ..succulent(PlantForm::Mound, 1.0, 0.35, 1.3, 7., 2200., 0.065, 0.45)
         },
         // Joshua tree (Yucca brevifolia): a stout trunk forking into a few thick, angular,
         // sparsely branched limbs, each ending in a dense ball of stiff, sword-shaped leaves.
@@ -1125,6 +1119,30 @@ pub fn species(name: &str) -> Option<TreeParams> {
                 level(60., 30., 137.5, 40., 0., 0., 0., 1., 1, 0., 0., 0.),
             ],
             ..d
+        },
+        // Utah juniper (Juniperus osteosperma): the small tree of the Colorado Plateau's
+        // slickrock and mesas, rarely over 6 m; a short, fluted trunk soon forking into
+        // twisted, often partly dead limbs with grey shredding bark, and dense, rounded clumps
+        // of scale-like foliage.
+        "utah-juniper" => TreeParams {
+            shape: 2, base_size: 0.06, scale: 4., scale_v: 1.5, levels: 3,
+            ratio: 0.05, ratio_power: 1.1, lobes: 4, lobe_depth: 0.12, flare: 0.8,
+            base_splits: 2, leaves: 120., leaf_scale: 0.2, leaf_scale_x: 0.35, leaf_bend: 0.,
+            leaf_shape: LeafShape::Needles, attraction_up: 0.3, wander: 0.15, roughness: 0.3,
+            lean: 8., lean_v: 8., branch_loss: 0.08, dead_branches: 0.1, dead_leaves: 0.,
+            stems: vec![
+                split(level(0., 0., 0., 0., 0., 1., 0.15, 1., 6, 0., 0., 50.), 0.35, 35., 12.),
+                split(level(60., 20., 137.5, 50., 26., 0.65, 0.15, 1., 5, -10., 0., 70.), 0.2, 25., 10.),
+                level(50., 20., 137.5, 40., 40., 0.45, 0.1, 1., 2, 0., 0., 40.),
+                level(40., 20., 137.5, 30., 0., 0., 0., 1., 1, 0., 0., 0.),
+            ],
+            ..d
+        },
+        // Rubber rabbitbrush (Ericameria nauseosa): a rounded bush of many slender, upright,
+        // whitish-green stems from the base, densely leafy with narrow, yellow-green leaves.
+        "rabbitbrush" => TreeParams {
+            leaf_scale_v: 0.3, wander: 0.05,
+            ..succulent(PlantForm::Mound, 1.0, 0.3, 1.0, 14., 1800., 0.07, 0.22)
         },
         // The succulents (`crate::procedural::succulent`).
         "saguaro" => TreeParams {

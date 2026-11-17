@@ -171,9 +171,9 @@
   "GREY_BARK": {
    "type": "lambertian",
    "albedo": [
-    0.3,
-    0.27,
-    0.23
+    0.36,
+    0.33,
+    0.29
    ]
   },
   "OCOTILLO_LEAF": {
@@ -193,30 +193,30 @@
   "CREOSOTE_LEAF": {
    "type": "leaf",
    "reflectance": [
-    0.07,
-    0.11,
-    0.04
+    0.13,
+    0.16,
+    0.07
    ],
    "transmittance": [
-    0.03,
     0.06,
-    0.01
+    0.09,
+    0.03
    ],
-   "roughness": 0.25
+   "roughness": 0.3
   },
   "SAGE_LEAF": {
    "type": "leaf",
    "reflectance": [
-    0.24,
-    0.27,
-    0.22
+    0.3,
+    0.33,
+    0.26
    ],
    "transmittance": [
-    0.05,
-    0.07,
+    0.06,
+    0.08,
     0.04
    ],
-   "roughness": 0.5
+   "roughness": 0.6
   },
   "FLOOR": {
    "type": "soil",
@@ -331,7 +331,12 @@
    "layer_warp": 6,
    "bump": 0.5,
    "bump_size": 0.15,
-   "cracks": 0.1
+   "cracks": 0.1,
+   "fractal": 0.6,
+   "fractal_size": 0.3,
+   "fractal_h": 1.2,
+   "crackle": 0.3,
+   "crackle_size": 0.2
   },
   "CLIFF": {
    "type": "rock",
@@ -434,7 +439,12 @@
    "cross_bedding": 0.35,
    "cross_set": 0.4,
    "pits": 0.3,
-   "pit_size": 0.015
+   "pit_size": 0.015,
+   "fractal": 0.5,
+   "fractal_size": 0.05,
+   "fractal_h": 1.2,
+   "crackle": 0.4,
+   "crackle_size": 0.04
   },
   "LOWER": {
    "type": "mix",
@@ -471,16 +481,16 @@
   "JUNIPER_LEAF": {
    "type": "leaf",
    "reflectance": [
-    0.06,
-    0.1,
-    0.05
+    0.12,
+    0.14,
+    0.1
    ],
    "transmittance": [
-    0.02,
     0.04,
-    0.01
+    0.07,
+    0.03
    ],
-   "roughness": 0.3
+   "roughness": 0.4
   },
   "SLICKROCK": {
    "type": "rock",
@@ -589,7 +599,12 @@
    ],
    "layer_warp": 4,
    "bump": 0.35,
-   "cracks": 0.3
+   "cracks": 0.3,
+   "fractal": 0.5,
+   "fractal_size": 0.08,
+   "fractal_h": 1.2,
+   "crackle": 0.5,
+   "crackle_size": 0.06
   },
   "LOWLANDS": {
    "type": "mix",
@@ -622,6 +637,64 @@
     "jitter_scale": 8,
     "seed": 5
    }
+  },
+  "JUNIPER_BARK": {
+   "type": "lambertian",
+   "albedo": [
+    0.3,
+    0.27,
+    0.23
+   ]
+  },
+  "DEAD_WOOD": {
+   "type": "lambertian",
+   "albedo": [
+    0.55,
+    0.52,
+    0.47
+   ]
+  },
+  "SAGE_LEAF_2": {
+   "type": "leaf",
+   "reflectance": [
+    0.26,
+    0.3,
+    0.22
+   ],
+   "transmittance": [
+    0.06,
+    0.08,
+    0.04
+   ],
+   "roughness": 0.6
+  },
+  "JUNIPER_LEAF_2": {
+   "type": "leaf",
+   "reflectance": [
+    0.14,
+    0.16,
+    0.11
+   ],
+   "transmittance": [
+    0.05,
+    0.08,
+    0.03
+   ],
+   "roughness": 0.4
+  },
+  "RABBIT_LEAF": {
+   "type": "leaf",
+   "reflectance": [
+    0.22,
+    0.27,
+    0.1
+   ],
+   "transmittance": [
+    0.1,
+    0.14,
+    0.04
+   ],
+   "roughness": 0.5
   }
  },
  "camera": {
@@ -671,48 +744,117 @@
    "type": "forest",
    "seed": 5,
    "surface": "near",
-   "area": {
-    "min": [
-     -3300,
-     -150
-    ],
-    "max": [
-     3300,
-     7300
-    ]
-   },
-   "spacing": 11,
-   "clearings": 0.3,
-   "patch_size": 60,
-   "patchiness": 0.6,
-   "max_slope": 22,
-   "variants": 3,
+   "spacing": 5,
+   "clearings": 0.35,
+   "patch_size": 25,
+   "patchiness": 0.85,
+   "max_slope": 18,
+   "variants": 4,
    "species": [
     {
      "species": "sagebrush",
-     "weight": 5,
+     "weight": 6,
+     "scale_v": 0.35,
      "bark": "GREY_BARK",
-     "leaves": "SAGE_LEAF"
+     "dead_bark": "DEAD_WOOD",
+     "leaves": [
+      "SAGE_LEAF",
+      "SAGE_LEAF_2"
+     ]
     },
     {
-     "species": "juniper",
-     "weight": 2,
-     "spacing": 1.3,
+     "species": "rabbitbrush",
+     "weight": 2.5,
+     "scale_v": 0.35,
      "bark": "GREY_BARK",
-     "leaves": "JUNIPER_LEAF"
+     "leaves": "RABBIT_LEAF"
+    },
+    {
+     "species": "utah-juniper",
+     "weight": 2.5,
+     "spacing": 2,
+     "scale_v": 0.4,
+     "bark": "JUNIPER_BARK",
+     "dead_bark": "DEAD_WOOD",
+     "leaves": [
+      "JUNIPER_LEAF",
+      "JUNIPER_LEAF_2"
+     ]
     },
     {
      "species": "creosote-bush",
-     "weight": 1,
+     "weight": 0.6,
      "bark": "GREY_BARK",
      "leaves": "CREOSOTE_LEAF"
     },
     {
      "species": "prickly-pear",
-     "weight": 0.5,
-     "spacing": 0.7,
+     "weight": 0.4,
+     "spacing": 0.6,
      "bark": "PAD",
      "leaves": "SPINE"
+    }
+   ],
+   "area": {
+    "min": [
+     -1200,
+     950
+    ],
+    "max": [
+     1600,
+     3800
+    ]
+   }
+  },
+  {
+   "type": "forest",
+   "seed": 9,
+   "surface": "near",
+   "spacing": 7,
+   "clearings": 0.3,
+   "patch_size": 20,
+   "patchiness": 0.8,
+   "max_slope": 12,
+   "variants": 3,
+   "area": {
+    "min": [
+     -350,
+     620
+    ],
+    "max": [
+     350,
+     915
+    ]
+   },
+   "species": [
+    {
+     "species": "utah-juniper",
+     "weight": 2,
+     "scale_v": 0.4,
+     "bark": "JUNIPER_BARK",
+     "dead_bark": "DEAD_WOOD",
+     "leaves": [
+      "JUNIPER_LEAF",
+      "JUNIPER_LEAF_2"
+     ]
+    },
+    {
+     "species": "sagebrush",
+     "weight": 3,
+     "scale_v": 0.35,
+     "bark": "GREY_BARK",
+     "dead_bark": "DEAD_WOOD",
+     "leaves": [
+      "SAGE_LEAF",
+      "SAGE_LEAF_2"
+     ]
+    },
+    {
+     "species": "rabbitbrush",
+     "weight": 1,
+     "scale_v": 0.3,
+     "bark": "GREY_BARK",
+     "leaves": "RABBIT_LEAF"
     }
    ]
   }

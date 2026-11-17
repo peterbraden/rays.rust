@@ -27,7 +27,9 @@ reuse it as `"$name"`.
 | `fractal` | Perlin noise over octaves from `scale` down to `smallest` metres; `style` `perlin`, `ridged` or `billow`; `roughness`, `lacunarity`, `amplitude`, `seed`, `plan` (2D) |
 | `cells` | Worley noise: `style` `f1`, `edges` (cracks between cells) or `stones` (a rounded stone per cell) |
 | `strata` | Ledges: beds `step` metres thick, each ending in a riser; `breakup` makes them waver |
-| `slope`, `altitude` | Masks from 0 to 1 between `from` and `to` (degrees, metres), with a fractal `breakup` |
+| `slope`, `altitude` | Masks from 0 to 1 between `from` and `to` (degrees, metres), with a fractal `breakup`; falling instead where `to` is below `from` |
+| `aspect` | How squarely the surface faces `direction` (default north, `[0, 0, -1]`), as a mask |
+| `field` | What the surface hit knows about itself: on a landscape, its simulation's sediment, ice, flow, wetness and so on (see [surface layers](surface-layers.md)) |
 | `add`, `multiply`, `min`, `max`, `subtract` | Arithmetic |
 | `blend` | `a` where `mask` is 0, `b` where 1 |
 | `clamp`, `abs`, `power`, `smoothstep`, `remap`, `terrace` | Shaping |

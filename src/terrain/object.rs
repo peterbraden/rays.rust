@@ -218,8 +218,9 @@ impl Medium for TerrainMedium {
             let q = [q.x, -q.z];
             if water.wet(point_cell(&self.domain, q), q) { return &*self.materials[RIVER as usize]; }
         }
-        if let Some(g) = &self.ground {
-            if self.water.is_some() || self.class[self.place.cell_at(&self.domain, &pt)] != RIVER { return &**g; }
+        if let Some(g) = &self.ground
+            && (self.water.is_some() || self.class[self.place.cell_at(&self.domain, &pt)] != RIVER) {
+            return &**g;
         }
         let j = Vector3::new(rand() - 0.5, rand() - 0.5, rand() - 0.5) * self.jitter;
         &*self.materials[self.class[self.place.cell_at(&self.domain, &(pt + j))] as usize]

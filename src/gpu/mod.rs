@@ -467,8 +467,8 @@ impl GpuRenderer {
         self.queue.submit(Some(encoder.finish()));
     }
 
-    /// The image accumulated so far: each pixel's sums (the radiance's, and in w the camera
-    /// rays' weights'). Natively this waits for the GPU; in a browser it yields until the copy
+    /// The image accumulated so far: each pixel's sums (the radiance's, and in w the number of
+    /// rays traced). Natively this waits for the GPU; in a browser it yields until the copy
     /// can be read.
     pub async fn read_back(&self) -> Result<Vec<[f32; 4]>, String> {
         let mut encoder = self.device.create_command_encoder(&Default::default());
@@ -523,6 +523,7 @@ impl GpuRenderer {
                     }
                     let v = sums[y * w + x];
                     rc.set_pixel(x, y, Color::new(v[0] as f64, v[1] as f64, v[2] as f64), n);
+                    rc.rays_cast += v[3] as u64;
                 }
             }
             after(&rc);
@@ -639,13 +640,16 @@ mod tests {
         let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
         let passes = 32;
         let mut cpu = Vector3::zeros();
+        let mut cpu_rays = 0u64;
         for k in 0..passes {
             for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
                 if ray.d.w < 0.5 {
                     continue;
                 }
                 let mut rng = pathtrace::path_seed(index as u32, k as u32, b.params.seed.x);
-                let c = pathtrace::radiance(&shader, ray.o.truncate(), ray.d.truncate(), &mut rng) * ray.o.w;
+                let mut rays = 0;
+                let c = pathtrace::radiance(&shader, ray.o.truncate(), ray.d.truncate(), &mut rng, &mut rays) * ray.o.w;
+                cpu_rays += rays as u64;
                 cpu += Vector3::new(c.x as f64, c.y as f64, c.z as f64);
             }
         }
@@ -654,6 +658,9 @@ mod tests {
         for ch in 0..3 {
             assert!((on_gpu[ch] - cpu[ch]).abs() < 0.01 * cpu[ch], "channel {}: GPU {} vs CPU {}", ch, on_gpu[ch], cpu[ch]);
         }
+        // And traces as many rays (w).
+        let gpu_rays: f64 = sums.iter().map(|v| v[3] as f64).sum();
+        assert!((gpu_rays - cpu_rays as f64).abs() < 0.01 * cpu_rays as f64, "rays: GPU {} vs CPU {}", gpu_rays, cpu_rays);
     }
 
     /// Every material and kind of light the GPU path has.

@@ -863,8 +863,9 @@ fn survives(s: &Scene, depth: u32, attenuate: Vec3, beta: &mut Vec3, rng: &mut u
     true
 }
 
-/// The radiance along one camera ray.
-pub fn radiance(s: &Scene, ro_in: Vec3, rd_in: Vec3, rng: &mut u32) -> Vec3 {
+/// The radiance along one camera ray; `rays` counts the rays it traces (the path's and
+/// shadow rays), as the wavefront integrator's `rays_cast` does.
+pub fn radiance(s: &Scene, ro_in: Vec3, rd_in: Vec3, rng: &mut u32, rays: &mut u32) -> Vec3 {
     let mut ro = ro_in;
     let mut rd = rd_in.normalize();
     let mut beta = Vec3::ONE;
@@ -878,6 +879,7 @@ pub fn radiance(s: &Scene, ro_in: Vec3, rd_in: Vec3, rng: &mut u32) -> Vec3 {
     let mut depth = 0u32;
     loop {
         let hit = trace(s, ro, rd, 0.0, INF, false);
+        *rays += 1;
         if hit.prim == NONE {
             // The sky, weighted against sampling it if the last vertex did.
             let mut w = 1.0;
@@ -1054,8 +1056,11 @@ pub fn radiance(s: &Scene, ro_in: Vec3, rd_in: Vec3, rng: &mut u32) -> Vec3 {
             if li.dot(li) > 0.0 {
                 let (f, lobe_pdf) = lobe.eval_pdf(wo, wi);
                 let w = if pdf > 0.0 { power_heuristic(pdf, lobe_pdf) / pdf } else { 1.0 };
-                if f.dot(f) > 0.0 && !occluded(s, above, wi, dist) {
-                    l += beta * f * li * w;
+                if f.dot(f) > 0.0 {
+                    *rays += 1;
+                    if !occluded(s, above, wi, dist) {
+                        l += beta * f * li * w;
+                    }
                 }
             }
             k += 1;
@@ -1107,12 +1112,13 @@ pub fn main(
     }
     let s = Scene { params, prims, nodes, materials, lights, tables };
     let mut rng = path_seed(index, params.dims.z, params.seed.x);
-    let c = radiance(&s, cam.o.xyz(), cam.d.xyz(), &mut rng) * cam.o.w;
-    // A NaN (from some degenerate case) is dropped, as the CPU renderers drop theirs. (Not
-    // `is_finite`: its infinite constant is invalid for naga, which wgpu translates through.)
+    let mut cast = 0;
+    let c = radiance(&s, cam.o.xyz(), cam.d.xyz(), &mut rng, &mut cast) * cam.o.w;
+    // A NaN (from some degenerate case) is dropped, as the CPU renderers drop theirs; its rays
+    // were still cast. (Not `is_finite`: its infinite constant is invalid for naga, which wgpu
+    // translates through.) w counts the rays.
     #[allow(clippy::eq_op)]
     let not_nan = c.x == c.x && c.y == c.y && c.z == c.z;
-    if not_nan {
-        accum[index as usize] += c.extend(1.0);
-    }
+    let c = if not_nan { c } else { Vec3::ZERO };
+    accum[index as usize] += c.extend(cast as f32);
 }

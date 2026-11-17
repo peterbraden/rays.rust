@@ -409,7 +409,36 @@ impl SceneFile {
     /// `{"texture": "file.png", "scale": [su, sv] or s, "offset": [ou, ov], "filter":
     /// "ewa" (the default) | "trilinear" | "bilinear" | "point", "wrap": "repeat" | "clamp" | "black", "linear":
     /// bool}` (8-bit images are taken as sRGB unless `linear`).
+    /// A colour, an image texture (`{"texture": path, ...}`), or a grey level from the slope
+    /// (`{"slope": [from, to], "jitter": degrees, "jitter_scale": size, "seed": 0}`,
+    /// `textures::SlopeTexture`), or from the elevation (`{"height": [from, to], ...}`).
     pub fn parse_color_texture(v: &Value) -> crate::textures::ColorTexture {
+        // {"terrain": "washes" | "hollows" | "joints", "scale": the heightmap's floor_scale or
+        // domes, "spread": 1}: where a point lies among a mesas heightmap's features.
+        if let Some(feature) = v.get("terrain") {
+            use crate::textures::TerrainFeature;
+            return crate::textures::ColorTexture::Terrain(crate::textures::TerrainTexture {
+                feature: match feature.as_str() {
+                    Some("washes") => TerrainFeature::Washes,
+                    Some("hollows") => TerrainFeature::Hollows,
+                    Some("joints") => TerrainFeature::Joints,
+                    _ => panic!("terrain texture must be \"washes\", \"hollows\" or \"joints\", got {}", feature),
+                },
+                scale: SceneFile::parse_number(&v["scale"], 150.),
+                spread: SceneFile::parse_number(&v["spread"], 1.),
+                noise: crate::noise::PerlinNoise::new(),
+            });
+        }
+        if let Some(range) = v.get("slope").or(v.get("height")) {
+            let r = SceneFile::parse_vec2(range);
+            return crate::textures::ColorTexture::Slope(crate::textures::SlopeTexture {
+                by_height: v.get("slope").is_none(),
+                from: r.x, to: r.y,
+                jitter: SceneFile::parse_number(&v["jitter"], 0.),
+                jitter_scale: SceneFile::parse_number(&v["jitter_scale"], 1.),
+                noise: crate::noise::SeededNoise::new(SceneFile::parse_int(&v["seed"], 0) as u64),
+            });
+        }
         match v.get("texture") {
             Some(_) => crate::textures::ColorTexture::Image(SceneFile::parse_image_map(v)),
             None => SceneFile::parse_color(v).into(),
@@ -796,6 +825,14 @@ impl SceneFile {
             }));
         }
 
+        if t == "moon" {
+            return Some(Arc::new(crate::celestial::moon::parse_moon(&o)));
+        }
+
+        if t == "gas_giant" {
+            return Some(Arc::new(crate::celestial::giant::parse_giant(&o)));
+        }
+
         if t == "hogan_kew_cirrus" {
             return Some(Arc::new(SceneFile::parse_hogan_kew_cirrus(&o)));
         }
@@ -916,7 +953,21 @@ impl SceneFile {
         }).collect();
         let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
         let refs: Vec<&dyn Geometry> = surfaces.iter().map(|s| &**s as &dyn Geometry).collect();
-        let placements = forest::place(&layout, &species, seed, &refs);
+        // {"favour": {"terrain": "washes", "scale": 150, "spread": 1, "strength": 0.8}}: trees
+        // crowd along a mesas heightmap's feature (`parse_color_texture`), `strength` of them
+        // kept only there.
+        let placements = match o.get("favour") {
+            Some(f) => {
+                let feature = match SceneFile::parse_color_texture(f) {
+                    crate::textures::ColorTexture::Terrain(t) => t,
+                    _ => panic!("a forest's \"favour\" must be a terrain texture, got {}", f),
+                };
+                let strength = SceneFile::parse_number(&f["strength"], 0.8).clamp(0., 1.);
+                forest::place_favouring(&layout, &species, seed, &refs,
+                    &|x, z| 1. - strength + strength * feature.amount(&Vector3::new(x, 0., z)))
+            },
+            None => forest::place(&layout, &species, seed, &refs),
+        };
 
         let spread = SceneFile::parse_number(&o["autumn_spread"], 0.1);
         let mut rng = crate::geometry::Pcg32::new(seed, 0x7a71);
@@ -2284,7 +2335,8 @@ impl SceneFile {
             return Some(Box::new(SceneFile::parse_noise_texture(props, materials)));
         }
         // {"type": "mix", "materials": ["A", "B"], "amount": 0.5 or an image texture (its grey
-        // level)}: B with probability amount, else A (`material::mix`).
+        // level) or a slope (`parse_color_texture`)}: B with probability amount, else A
+        // (`material::mix`).
         if props["type"].as_str() == Some("mix") {
             let names = props["materials"].as_array().filter(|a| a.len() == 2)
                 .unwrap_or_else(|| panic!("Mix material '{}' needs two \"materials\"", name));
@@ -2547,7 +2599,7 @@ impl SceneFile {
     }
 
     /// `{"type": "soil", "preset": "loam"}`: procedural bare ground (see `material::soil`).
-    /// Presets are loam, clay, sand and forest_floor; any field of the preset can be
+    /// Presets are loam, clay, sand, desert and forest_floor; any field of the preset can be
     /// overridden: the colours `color`, `humus`, `stone_color`, `crumb_color`, `litter_color`
     /// and `moss_color`; the fractions of the ground covered by `stones`, `crumbs`, `litter`
     /// and `moss`; the sizes (m) `mottle_size`, `stone_size`, `litter_length`, `litter_width`
@@ -2584,7 +2636,15 @@ impl SceneFile {
     /// Presets are granite, basalt, sandstone, limestone, slate and quartzite; any field of the
     /// preset can be overridden, eg. `"color"` or `"strata_amount"`. Also `"scale"` (the size of
     /// the texture's features), `"seed"`, `"weathering"`, `"wetness"` (0 to 1), `"lichen"` (the
-    /// fraction of upward surfaces covered, 0 to 1) and `"lichen_color"`.
+    /// fraction of upward surfaces covered, 0 to 1) and `"lichen_color"`. For layered rock
+    /// faces: `"layers"` ([[y, colour], ...]: formations' colours by elevation, warped by
+    /// `"layer_warp"`), `"beds"` (a colour per bed of the strata), `"variety"` and
+    /// `"variety_color"` (broad stains), `"varnish"` and `"varnish_color"` (dark streaks down
+    /// steep faces), `"flutes"` (vertical grooves, bump mapped), `"cross_bedding"` and
+    /// `"cross_set"` (inclined laminae in sets that thick) and `"pits"` and `"pit_size"`
+    /// (honeycomb weathering), `"fractal"`, `"fractal_size"` and `"fractal_h"` (turbulent
+    /// relief down to a pixel's size, for close-up detail) and `"crackle"` and
+    /// `"crackle_size"` (fractures). Sizes are in units of `"scale"`.
     pub fn parse_rock(o: &Value) -> Rock {
         let preset = RockStyle::preset(o["preset"].as_str().unwrap_or("granite"));
         let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
@@ -2607,6 +2667,28 @@ impl SceneFile {
         let mut r = Rock::new(style, n("scale", 1.), SceneFile::parse_int(&o["seed"], 0) as u64);
         r.weathering = n("weathering", r.weathering);
         r.wetness = n("wetness", 0.).clamp(0., 1.);
+        if let Some(layers) = o["layers"].as_array() {
+            r.layers = layers.iter().map(|l| (SceneFile::parse_number(&l[0], 0.), SceneFile::parse_color(&l[1]))).collect();
+            r.layers.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
+        r.layer_warp = n("layer_warp", 0.);
+        if let Some(beds) = o["beds"].as_array() {
+            r.beds = beds.iter().map(SceneFile::parse_color).collect();
+        }
+        r.variety = n("variety", 0.).clamp(0., 1.);
+        r.variety_color = c("variety_color", r.variety_color);
+        r.varnish = n("varnish", 0.).clamp(0., 1.);
+        r.varnish_color = c("varnish_color", r.varnish_color);
+        r.flutes = n("flutes", 0.).max(0.);
+        r.cross_bedding = n("cross_bedding", 0.).clamp(0., 1.);
+        r.cross_set = n("cross_set", r.cross_set).max(1e-6);
+        r.pits = n("pits", 0.).clamp(0., 1.);
+        r.pit_size = n("pit_size", r.pit_size).max(1e-6);
+        r.fractal = n("fractal", 0.).max(0.);
+        r.fractal_size = n("fractal_size", r.fractal_size).max(1e-6);
+        r.fractal_h = n("fractal_h", r.fractal_h);
+        r.crackle = n("crackle", 0.).max(0.);
+        r.crackle_size = n("crackle_size", r.crackle_size).max(1e-6);
         let lichen = n("lichen", 0.);
         if lichen > 0. {
             let color = c("lichen_color", r.lichen_color);
@@ -3161,14 +3243,50 @@ impl SceneFile {
         geometries.preload(&s.objects);
         // A landscape is meshed finest where the camera is.
         let mut scene_objects = s.objects;
+        // A world from a seed becomes the giant or the rocky or icy body it turns out to be.
+        for o in scene_objects.iter_mut() {
+            if o["type"].as_str() == Some("world") {
+                *o = crate::celestial::world_object(o);
+            }
+        }
+        let planets: Vec<Value> = scene_objects.iter()
+            .filter(|o| matches!(o["type"].as_str(), Some("skysphere") | Some("planet"))).cloned().collect();
         for o in scene_objects.iter_mut() {
             if o["type"].as_str() == Some("landscape") && o.get("camera").is_none() {
                 o["camera"] = s.camera.clone();
+            }
+            // A moon draws craters down to the camera's pixels, and orbits the scene's planet.
+            if matches!(o["type"].as_str(), Some("moon") | Some("gas_giant")) {
+                if o.get("camera").is_none() {
+                    o["camera"] = s.camera.clone();
+                    o["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+                }
+                if o.get("planet").is_none() {
+                    let (centre, radius) = crate::celestial::moon::scene_primary(&planets);
+                    o["planet"] = serde_json::json!({ "centre": [centre.x, centre.y, centre.z], "radius": radius });
+                }
             }
             // A forest sees each tree at the detail the camera needs (`parse_forest_lod`).
             if o["type"].as_str() == Some("forest") && o.get("camera").is_none() {
                 o["camera"] = s.camera.clone();
                 o["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+            }
+        }
+        // A moon lights the scene with the sunlight it reflects (unless `"light": false`), and
+        // a skysphere's air scatters it too.
+        let moonlight = match (&sun, scene_objects.iter().find(|o| o["type"].as_str() == Some("moon") && o["light"].as_bool() != Some(false))) {
+            (Some(sun), Some(moon)) => {
+                let eye = SceneFile::parse_vec3_def(&s.camera, "location", Vector3::zeros());
+                let sky = scene_objects.iter().find(|o| o["type"].as_str() == Some("skysphere"));
+                Some(crate::celestial::moon::Moonlight::new(moon, &eye, sun, sky))
+            },
+            _ => None,
+        };
+        if let (Some(m), Some(sun)) = (&moonlight, &sun) {
+            let share = crate::color::luminance(&m.light.irradiance) / crate::color::luminance(&sun.irradiance).max(1e-300);
+            let d = m.light.direction;
+            for o in scene_objects.iter_mut().filter(|o| o["type"].as_str() == Some("skysphere")) {
+                o["moonlight"] = serde_json::json!({ "direction": [d.x, d.y, d.z], "share": share });
             }
         }
         let objects = SceneFile::parse_objects(scene_objects, &s.materials, &s.media, &geometries);
@@ -3234,6 +3352,7 @@ impl SceneFile {
             area_lights,
             area_light_choice,
             sun,
+            moonlight,
             atmosphere,
             environment: None,
             light_bvh: None,

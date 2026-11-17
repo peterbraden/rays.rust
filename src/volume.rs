@@ -866,6 +866,11 @@ impl VolumeMaterial {
                 Some(_) => Color::black(),
             };
         }
+        // Moonlight, by the plain phase function (no halos: their tables are the sun's).
+        if let Some(moon) = &s.moonlight {
+            let m = &moon.light;
+            direct = direct + m.irradiance_at(point) * p(&m.direction) * m.transmittance_from(point, s);
+        }
         direct + crate::material::functions::sample_lights_with(point, s, |w, _| p(w))
     }
 

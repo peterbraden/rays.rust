@@ -321,6 +321,8 @@ pub struct Scene {
     pub area_light_choice: crate::environment::Distribution1D,
     /// A directional light, sampled directly by diffuse surfaces and media.
     pub sun: Option<Sun>,
+    /// The sunlight a moon reflects, sampled like the sun (`celestial::moon::Moonlight`).
+    pub moonlight: Option<crate::celestial::moon::Moonlight>,
     /// The skysphere's atmosphere, if any, for aerial perspective: light from distant objects
     /// is attenuated and hazed by the air it crosses.
     pub atmosphere: Option<Arc<SkyMaterial>>,
@@ -337,6 +339,11 @@ pub struct Scene {
 pub const BVH_POINT_LIGHTS: usize = 16;
 
 impl Scene {
+    /// The distant lights sampled directly: the sun, and moonlight.
+    pub fn directional_lights(&self) -> impl Iterator<Item = &Sun> {
+        self.sun.iter().chain(self.moonlight.iter().map(|m| &m.light))
+    }
+
     /// Whether `object` is one of the area lights that diffuse surfaces sample directly.
     pub fn is_sampled_light(&self, object: &SceneObject) -> bool {
         self.render.sample_lights && self.area_light_indices.contains_key(&(object as *const SceneObject as usize))

@@ -1,0 +1,400 @@
+{
+ "output": {
+  "exposure": 2.27,
+  "tonemap": "filmic",
+  "saturation": 1.2
+ },
+ "width": 1200,
+ "height": 600,
+ "supersamples": 96,
+ "chunk_size": 64,
+ "samples_per_chunk": 4,
+ "shadow_bias": 0.0001,
+ "max_depth": 4,
+ "materials": {
+  "GROUND": {
+   "type": "soil",
+   "preset": "desert",
+   "seed": 1
+  },
+  "SAGUARO": {
+   "type": "plastic",
+   "albedo": [
+    0.09,
+    0.15,
+    0.07
+   ],
+   "roughness": 0.35
+  },
+  "BARREL": {
+   "type": "plastic",
+   "albedo": [
+    0.1,
+    0.17,
+    0.07
+   ],
+   "roughness": 0.3
+  },
+  "PAD": {
+   "type": "plastic",
+   "albedo": [
+    0.13,
+    0.21,
+    0.07
+   ],
+   "roughness": 0.3
+  },
+  "AGAVE": {
+   "type": "plastic",
+   "albedo": [
+    0.2,
+    0.28,
+    0.24
+   ],
+   "roughness": 0.45
+  },
+  "SPINE": {
+   "type": "lambertian",
+   "albedo": [
+    0.62,
+    0.56,
+    0.44
+   ]
+  },
+  "RED_SPINE": {
+   "type": "lambertian",
+   "albedo": [
+    0.5,
+    0.24,
+    0.14
+   ]
+  },
+  "DARK_SPINE": {
+   "type": "lambertian",
+   "albedo": [
+    0.12,
+    0.1,
+    0.08
+   ]
+  },
+  "GREY_BARK": {
+   "type": "lambertian",
+   "albedo": [
+    0.36,
+    0.33,
+    0.29
+   ]
+  },
+  "JOSHUA_BARK": {
+   "type": "lambertian",
+   "albedo": [
+    0.25,
+    0.2,
+    0.15
+   ]
+  },
+  "OCOTILLO_LEAF": {
+   "type": "leaf",
+   "reflectance": [
+    0.1,
+    0.2,
+    0.05
+   ],
+   "transmittance": [
+    0.05,
+    0.12,
+    0.02
+   ],
+   "roughness": 0.3
+  },
+  "CREOSOTE_LEAF": {
+   "type": "leaf",
+   "reflectance": [
+    0.13,
+    0.16,
+    0.07
+   ],
+   "transmittance": [
+    0.06,
+    0.09,
+    0.03
+   ],
+   "roughness": 0.3
+  },
+  "SAGE_LEAF": {
+   "type": "leaf",
+   "reflectance": [
+    0.3,
+    0.33,
+    0.26
+   ],
+   "transmittance": [
+    0.06,
+    0.08,
+    0.04
+   ],
+   "roughness": 0.6
+  },
+  "YUCCA_LEAF": {
+   "type": "leaf",
+   "reflectance": [
+    0.11,
+    0.15,
+    0.07
+   ],
+   "transmittance": [
+    0.03,
+    0.06,
+    0.01
+   ],
+   "roughness": 0.3
+  },
+  "JUNIPER_BARK": {
+   "type": "lambertian",
+   "albedo": [
+    0.3,
+    0.27,
+    0.23
+   ]
+  },
+  "DEAD_WOOD": {
+   "type": "lambertian",
+   "albedo": [
+    0.55,
+    0.52,
+    0.47
+   ]
+  },
+  "SAGE_LEAF_2": {
+   "type": "leaf",
+   "reflectance": [
+    0.26,
+    0.3,
+    0.22
+   ],
+   "transmittance": [
+    0.06,
+    0.08,
+    0.04
+   ],
+   "roughness": 0.6
+  },
+  "JUNIPER_LEAF": {
+   "type": "leaf",
+   "reflectance": [
+    0.12,
+    0.14,
+    0.1
+   ],
+   "transmittance": [
+    0.04,
+    0.07,
+    0.03
+   ],
+   "roughness": 0.4
+  },
+  "JUNIPER_LEAF_2": {
+   "type": "leaf",
+   "reflectance": [
+    0.14,
+    0.16,
+    0.11
+   ],
+   "transmittance": [
+    0.05,
+    0.08,
+    0.03
+   ],
+   "roughness": 0.4
+  },
+  "RABBIT_LEAF": {
+   "type": "leaf",
+   "reflectance": [
+    0.22,
+    0.27,
+    0.1
+   ],
+   "transmittance": [
+    0.1,
+    0.14,
+    0.04
+   ],
+   "roughness": 0.5
+  }
+ },
+ "camera": {
+  "location": [
+   0,
+   2.4,
+   -17
+  ],
+  "lookat": [
+   0,
+   2.0,
+   0
+  ],
+  "up": [
+   0,
+   1,
+   0
+  ],
+  "angle": 0.62,
+  "aperture": 0.0
+ },
+ "sun": {
+  "intensity": 1
+ },
+ "objects": [
+  {
+   "type": "skysphere",
+   "ozone": false,
+   "sun_direction": [
+    -0.55,
+    0.45,
+    -0.6
+   ],
+   "mie_coefficient": 8e-06
+  },
+  {
+   "type": "plane",
+   "y": 0,
+   "material": "GROUND"
+  },
+  {
+   "type": "tree",
+   "species": "joshua-tree",
+   "seed": 2,
+   "location": [
+    -8.5,
+    0,
+    5
+   ],
+   "bark": "JOSHUA_BARK",
+   "leaves": "YUCCA_LEAF"
+  },
+  {
+   "type": "tree",
+   "species": "ocotillo",
+   "seed": 1,
+   "location": [
+    -4.5,
+    0,
+    3
+   ],
+   "bark": "GREY_BARK",
+   "leaves": "OCOTILLO_LEAF"
+  },
+  {
+   "type": "tree",
+   "species": "saguaro",
+   "seed": 4,
+   "location": [
+    0.3,
+    0,
+    4
+   ],
+   "params": {
+    "scale": 7.5,
+    "scale_v": 0
+   },
+   "bark": "SAGUARO",
+   "leaves": "SPINE"
+  },
+  {
+   "type": "tree",
+   "species": "creosote-bush",
+   "seed": 1,
+   "location": [
+    4.2,
+    0,
+    2
+   ],
+   "bark": "GREY_BARK",
+   "leaves": "CREOSOTE_LEAF"
+  },
+  {
+   "type": "tree",
+   "species": "sagebrush",
+   "seed": 2,
+   "location": [
+    7.2,
+    0,
+    1
+   ],
+   "bark": "GREY_BARK",
+   "leaves": [
+    "SAGE_LEAF",
+    "SAGE_LEAF_2"
+   ],
+   "dead_bark": "DEAD_WOOD"
+  },
+  {
+   "type": "tree",
+   "species": "barrel-cactus",
+   "seed": 1,
+   "location": [
+    -2.4,
+    0,
+    -3
+   ],
+   "bark": "BARREL",
+   "leaves": "RED_SPINE"
+  },
+  {
+   "type": "tree",
+   "species": "prickly-pear",
+   "seed": 2,
+   "location": [
+    2.4,
+    0,
+    -3.5
+   ],
+   "bark": "PAD",
+   "leaves": "SPINE"
+  },
+  {
+   "type": "tree",
+   "species": "agave",
+   "seed": 1,
+   "location": [
+    -0.2,
+    0,
+    -5.5
+   ],
+   "bark": "AGAVE",
+   "leaves": "DARK_SPINE"
+  },
+  {
+   "type": "tree",
+   "species": "rabbitbrush",
+   "seed": 1,
+   "location": [
+    5.6,
+    0,
+    -2.5
+   ],
+   "bark": "GREY_BARK",
+   "leaves": "RABBIT_LEAF"
+  },
+  {
+   "type": "tree",
+   "species": "utah-juniper",
+   "seed": 2,
+   "location": [
+    12,
+    0,
+    17
+   ],
+   "bark": "JUNIPER_BARK",
+   "dead_bark": "DEAD_WOOD",
+   "leaves": [
+    "JUNIPER_LEAF",
+    "JUNIPER_LEAF_2"
+   ]
+  }
+ ],
+ "adaptive": {
+  "threshold": 0.04,
+  "min_samples": 16
+ }
+}

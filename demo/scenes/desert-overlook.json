@@ -6,7 +6,7 @@
  },
  "width": 864,
  "height": 1080,
- "supersamples": 64,
+ "supersamples": 96,
  "chunk_size": 64,
  "samples_per_chunk": 4,
  "shadow_bias": 0.0001,
@@ -1092,5 +1092,9 @@
    }
   }
  ],
- "path_termination": "russian_roulette"
+ "path_termination": "russian_roulette",
+ "adaptive": {
+  "threshold": 0.04,
+  "min_samples": 16
+ }
 }

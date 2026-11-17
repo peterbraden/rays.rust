@@ -94,7 +94,16 @@ impl SoilStyle {
                 moss_color: Color::new(0.055, 0.09, 0.025), moss: 0.3,
                 ..loam
             },
-            _ => panic!("Unknown soil preset '{}': expected loam, clay, sand or forest_floor", name),
+            // Desert floor: red-orange, iron-stained sand and silt, scattered with the dark,
+            // varnished stones of desert pavement and a little dry plant debris.
+            "desert" => SoilStyle {
+                color: Color::new(0.46, 0.26, 0.14), humus: Color::new(0.38, 0.22, 0.12), mottle_size: 2.,
+                stone_color: Color::new(0.2, 0.12, 0.08), stones: 0.12, stone_size: 0.01,
+                crumb_color: Color::new(0.3, 0.18, 0.1), crumbs: 0.05,
+                litter_color: Color::new(0.45, 0.38, 0.26), litter: 0.04, moss: 0., bump: 0.3, clod_size: 0.03,
+                ..loam
+            },
+            _ => panic!("Unknown soil preset '{}': expected loam, clay, sand, desert or forest_floor", name),
         }
     }
 }

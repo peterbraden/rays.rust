@@ -945,14 +945,14 @@ impl MaterialModel for PhysicalOcean {
         // The sun's glitter through the ripples: F D / (4 cos θv) per unit irradiance, Smith's
         // shadowing left out (it matters only at grazing angles).
         let mut glitter = Color::black();
-        if let Some(sun) = &s.sun {
+        for sun in s.directional_lights() {
             let l = sun.direction;
             if l.dot(&up) > 0. && n.dot(&l) > 0. {
                 let h = (l + v).normalize();
                 let glint = fresnel(h.dot(&v)) * self.ripple_density(&n, &h) / (4. * n.dot(&v));
                 if glint > 1e-6 {
                     let lit = sun.transmittance_from(&intersection.point, s);
-                    glitter = sun.irradiance_at(&intersection.point) * lit * glint;
+                    glitter = glitter + sun.irradiance_at(&intersection.point) * lit * glint;
                 }
             }
         }

@@ -11,8 +11,26 @@ horizon and veils it by day, it can hide the sun, and the planet's shadow falls 
 ```
 
 Scenes: `demo/scenes/moon.json` (a quarter moon through a telescope), `moonrise.json` (the
-full moon rising at dusk), `moon-daytime.json` (a pale gibbous moon in the blue sky) and
-`moon-crescent.json` (a crescent after sunset, its night side lit by earthshine).
+full moon rising at dusk), `moon-daytime.json` (a pale gibbous moon in the blue sky),
+`moon-crescent.json` (a crescent after sunset, its night side lit by earthshine), and lit by
+the moon: `moon-glade.json` (its path of light on the sea) and `moonlit-alpine.json`.
+
+## Moonlight
+
+The moon lights the scene (`celestial::moon::Moonlight`): its whole disc's light, summed
+over its sunlit (and earthshine-lit) face as seen from the camera, becomes a disc light in
+its direction, sampled by surfaces, water and clouds as the sun is, crossing the same air
+(reddened when the moon is low), and shadowed by everything short of the moon. So its light
+follows its phase: a full moon gives 2.5·10⁻⁶ of the sun's irradiance (about 0.25 lux
+beside the sun's 10⁵), a quarter a tenth of that. A ray that reaches the moon's disc counts
+its radiance weighted against that sampling, as rays reaching the sun's disc do.
+
+The skysphere's air scatters moonlight too: the night sky under a moon is the day's sky
+(blue overhead, an aureole about the moon) at the moon's share of the sun's light, which a
+long exposure shows, as a photograph does (`"lut": false` skies leave it out). By moonlight
+a scene wants about 2·10⁵ times a sunlit scene's exposure.
+
+`"light": false` on the moon leaves its light out. Only the first moon in a scene lights it.
 
 ## Brightness: physical
 
@@ -104,6 +122,8 @@ moon comes from the camera, or `footprint` (km) if the camera has no `angle`.
 ## Not yet
 
 The limb is a smooth sphere (mountains on it would be a few kilometres, a fraction of a pixel
-in most views); the moon is lit only by the sun and its planet, and lights nothing itself;
+in most views); the moon is lit only by the sun and its planet; its light is sampled as a
+uniform disc (its soft shadows don't follow a crescent's shape), and halos in ice clouds are
+the sun's only;
 eclipses have no refracted light; the atmosphere doesn't refract it (no flattened moon at the
 horizon).

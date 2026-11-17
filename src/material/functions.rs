@@ -138,7 +138,7 @@ pub fn direct_lighting(albedo: Color, intersection: &Intersection, s: &Scene) ->
             direct = direct + diffuse(albedo, intersection, &light_vec, light) * transmitted;
         }
     }
-    if let Some(sun) = &s.sun {
+    for sun in s.directional_lights() {
         let cos = sun.direction.dot(&intersection.normal);
         if cos > 0. {
             let transmitted = sun.transmittance_from(&intersection.point, s);
@@ -298,7 +298,7 @@ pub fn direct_lighting_mis(bsdf: &dyn BSDF, point: &Vector3<f64>, wo: &Vector3<f
             direct = direct + f * light.radiant_intensity(&-wi) * (transmitted / d2);
         }
     }
-    if let Some(sun) = &s.sun {
+    for sun in s.directional_lights() {
         direct = direct + sun_light_mis(sun, bsdf, point, wo, s);
     }
     if let Some(env) = &s.environment {

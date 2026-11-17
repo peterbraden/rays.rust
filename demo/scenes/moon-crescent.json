@@ -1,0 +1,26 @@
+{
+  "width": 960,
+  "height": 540,
+  "supersamples": 16,
+  "max_depth": 4,
+  "shadow_bias": 0.01,
+  "path_termination": "russian_roulette",
+  "output": { "exposure": 600, "tonemap": "reinhard" },
+  "background": { "type": "space", "seed": 4 },
+  "materials": {
+    "GROUND": { "type": "lambertian", "albedo": [0.08, 0.09, 0.06] }
+  },
+  "camera": {
+    "location": [0, 30, 0],
+    "lookat": [24000, 19000, 100000],
+    "up": [0, 1, 0],
+    "angle": 0.03,
+    "aperture": 0
+  },
+  "sun": { "intensity": 6 },
+  "objects": [
+    { "type": "planet", "material": "GROUND" },
+    { "type": "skysphere", "sun_direction": [0, -0.22, 1] },
+    { "type": "moon", "seed": 1, "direction": [0.24, 0.19, 1], "from": [0, 30, 0] }
+  ]
+}

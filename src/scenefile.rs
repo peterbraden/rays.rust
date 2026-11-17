@@ -1390,6 +1390,11 @@ impl SceneFile {
     /// `follow_wind` renders the clouds as seen drifting with the wind, so in an animation
     /// they stay in view as they grow and dissipate, rather than crossing the sky.
     ///
+    /// Turbulence finer than the grid (`HarrisCumulus::turbulent`, after Kim et al.'s wavelet
+    /// turbulence): `turbulence` (strength, default 0.35; 0 for none) over `turbulence_octaves`
+    /// (default 3) below the cell size, looked up at texture coordinates the simulation carries
+    /// with the flow, each set renewed every `texture_period` seconds (default 600).
+    ///
     /// For rendering: `droplet_radius` (µm, default 10; sets the extinction per gram of
     /// water, and the diffraction), `detail_size`, `erosion` (0 to 1) and `edge` (g/kg of
     /// cloud water the detail can erode), `repeat` (tile the grid across the sky, default
@@ -1420,6 +1425,15 @@ impl SceneFile {
         p.max_step = num("max_step", p.max_step);
         p.seed = SceneFile::parse_seed(o).unwrap_or(0);
         p.start = num("start", p.start);
+        p.texture_period = num("texture_period", p.texture_period).max(1.);
+        // A hero cloud: `"hot_spot": {"center": [x, z] (m from the grid's corner; default its
+        // middle), "radius": m, "boost": 1}`.
+        if let Some(h) = o.get("hot_spot") {
+            let (nx, _, nz) = p.size;
+            let middle = Vector2::new(nx as f64, nz as f64) * p.cell / 2.;
+            p.hot_spot = Some((SceneFile::parse_vec2_def(h, "center", middle), SceneFile::parse_number(&h["radius"], 500.).max(1.),
+                SceneFile::parse_number(&h["boost"], 1.).max(0.)));
+        }
         if o["sounding"].as_str() == Some("arm") {
             // The full day, from dawn.
             p.sounding = Sounding::arm();
@@ -1447,7 +1461,8 @@ impl SceneFile {
             None => CloudSimulation::cached(p.clone(), time, cache.as_deref()),
         };
         let center = SceneFile::parse_vec2_def(o, "center", Vector2::new(0., 0.));
-        let mut c = HarrisCumulus::new(&sim, num("droplet_radius", 10.), center);
+        let mut c = HarrisCumulus::with_turbulence(&sim, num("droplet_radius", 10.), center,
+            num("turbulence", 0.35).max(0.), SceneFile::parse_int(&o["turbulence_octaves"], 3).min(8));
         c.detail_size = num("detail_size", c.detail_size).max(1e-3);
         c.erosion = num("erosion", c.erosion).clamp(0., 1.);
         c.edge = num("edge", c.edge * 1000.) / 1000.;

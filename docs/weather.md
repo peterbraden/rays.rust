@@ -135,8 +135,12 @@ Every parameter is optional.
     `diffraction`, `halos`, `rainbow`.
 
   Some families take more:
-  - `low`: `heaps`, `false` for noise alone, or `{"cell", "edge", "roughness", "levels",
-    "ratio", "children", "embed", "rise"}` for the cauliflower cumulus.
+  - `low`: `heaps`, `false` for noise alone, or an object of the cauliflower cumulus's
+    settings: `cell` (m between clouds), `edge` (m), `lift` (how high the body's spheres stand
+    above the flat base, as a fraction of their radius), `lean` (downwind per metre of height),
+    `skew` (of the clouds' depths: many small, few large), `billows` (scales the pyroclastic
+    displacement), `wisps` and `wisp_size` (m: fraying by vector noise), and the sphere tree's
+    `levels`, `ratio`, `children`, `embed` and `rise`.
   - `convective`: `cell_size` (m between storms), `overshoot` and `anvil_depth`.
   - `high`: Hogan and Kew's cirrus parameters (see `hogan_kew_cirrus`).
   - `rain`: `shower_rate` (mm/h), `streakiness` and `streak_size`.

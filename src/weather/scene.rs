@@ -241,13 +241,20 @@ fn convective(spec: &Value, weather: &Weather, maps: Arc<crate::weather::Maps>) 
     field
 }
 
-/// The low cloud's cumulus as cauliflower heaps (`fields::Heaps`): `{"cell", "edge",
-/// "roughness", "levels", "ratio", "children", "embed", "rise"}`, all optional.
+/// The low cloud's cumulus as cauliflower heaps (`fields::Heaps`): `{"cell", "edge", "lift",
+/// "lean", "skew", "billows" (a scale), "wisps", "wisp_size", "levels", "ratio", "children",
+/// "embed", "rise"}`, all optional.
 fn heaps(o: &Value, weather: &Weather, seed: u64) -> crate::weather::fields::Heaps {
     let mut h = crate::weather::fields::Heaps::new(weather.params.radius, seed.wrapping_add(101));
     h.cell = number(o, "cell", h.cell).max(100.);
     h.edge = number(o, "edge", h.edge).max(1.);
-    h.roughness = number(o, "roughness", h.roughness).max(0.);
+    h.lift = number(o, "lift", h.lift).clamp(0., 1.);
+    h.lean = number(o, "lean", h.lean).max(0.);
+    h.skew = number(o, "skew", h.skew).max(0.1);
+    let billows = number(o, "billows", 1.).max(0.);
+    h.billows.iter_mut().for_each(|b| b.1 *= billows);
+    h.wisps = number(o, "wisps", h.wisps).max(0.);
+    h.wisp_size = number(o, "wisp_size", h.wisp_size).max(1.);
     let t = &h.tree;
     h.tree = crate::procedural::cauliflower::Cauliflower::new(
         SceneFile::parse_int(&o["levels"], t.levels).min(8), number(o, "ratio", t.ratio).clamp(0.1, 0.8),

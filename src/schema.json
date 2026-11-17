@@ -30,6 +30,12 @@
           "min": 1
         },
         {
+          "name": "adaptive",
+          "kind": "json",
+          "default": null,
+          "doc": "Adaptive sampling: a noise threshold, true (0.01), or {\"threshold\": 0.01, \"min_samples\": 16}; absent, false or 0 for none."
+        },
+        {
           "name": "chunk_size",
           "kind": "integer",
           "default": 64,
@@ -80,47 +86,180 @@
           "doc": "Sample lights directly (next event estimation) rather than only by chance hits."
         },
         {
+          "name": "sample_sky",
+          "kind": "boolean",
+          "default": true,
+          "doc": "Sample the sky (or other background light) directly, from a table of its brightness."
+        },
+        {
+          "name": "light_sampler",
+          "kind": "enum",
+          "default": "power",
+          "doc": "How lights are chosen for direct sampling: by power, or by a light BVH (for many lights).",
+          "options": ["power", "bvh"]
+        },
+        {
+          "name": "integrator",
+          "kind": "enum",
+          "default": "path",
+          "doc": "The path tracer, or its wavefront form (paths traced in batches).",
+          "options": ["path", "wavefront"]
+        },
+        {
+          "name": "sampler",
+          "kind": "enum",
+          "default": "sobol",
+          "doc": "The sequence sample points are drawn from.",
+          "options": ["sobol", "zsobol", "halton", "stratified", "independent"]
+        },
+        {
+          "name": "regularise",
+          "kind": "number",
+          "default": 0.2,
+          "doc": "Least GGX roughness after a path's first scattering (path regularisation: softer caustics, less noise); 0 turns it off."
+        },
+        {
+          "name": "spectral",
+          "kind": "boolean",
+          "default": false,
+          "doc": "Trace wavelengths rather than RGB, so glass with a varying refractive index disperses light."
+        },
+        {
+          "name": "shutter",
+          "kind": "vec2",
+          "default": [0, 1],
+          "doc": "[open, close] in the time of motion: moving things are at their start at 0 and their \"motion\" pose at 1."
+        },
+        {
           "name": "filter",
           "kind": "enum",
           "default": "box",
-          "doc": "Pixel reconstruction filter.",
-          "options": ["box", "tent"]
+          "doc": "Pixel reconstruction filter; or an object {\"type\": name, \"radius\": pixels (gaussian 1.5, mitchell 2, lanczos 3), \"sigma\": 0.5, \"b\" and \"c\": 1/3, \"tau\": 3}.",
+          "options": ["box", "tent", "gaussian", "mitchell", "lanczos"]
         },
         {
           "name": "background",
           "kind": "json",
           "default": [0, 0, 0],
-          "doc": "Seen where rays hit nothing: a colour, or {\"type\": \"gradient\", \"bottom\": colour (default white), \"top\": colour (default [0.5, 0.7, 1])}."
+          "doc": "Seen where rays hit nothing: a colour, {\"type\": \"gradient\", \"bottom\": colour (default white), \"top\": colour (default [0.5, 0.7, 1])}, or {\"type\": \"space\", \"seed\", \"brightness\", \"threshold\", \"sun_irradiance\", \"stars\", \"milky_way\", \"nebulae\", \"galaxies\"} (see docs/space.md)."
         }
       ]
     },
     "camera": {
-      "doc": "The camera (required): a thin-lens perspective camera focused at the distance of lookat.",
+      "doc": "The camera (required): where it is and looks, and by \"type\" a thin-lens perspective camera, an orthographic or spherical one, or one that traces rays through a real lens.",
       "fields": [
+        {
+          "name": "type",
+          "kind": "enum",
+          "default": "perspective",
+          "doc": "The kind of camera.",
+          "options": ["perspective", "orthographic", "spherical", "realistic"]
+        },
         {"name": "location", "kind": "vec3", "required": true, "doc": "Position of the camera."},
         {
           "name": "lookat",
           "kind": "vec3",
           "required": true,
-          "doc": "Point looked at; its distance is the focus distance."
+          "doc": "Point looked at; its distance is the default focus distance."
         },
         {"name": "up", "kind": "vec3", "required": true, "doc": "Up direction, usually [0, 1, 0]."},
         {
           "name": "angle",
           "kind": "number",
-          "required": true,
-          "doc": "Field of view in radians: the image's height spans tan(angle) at unit distance."
+          "default": null,
+          "doc": "Field of view in radians: the image's height spans tan(angle) at unit distance. Required for perspective, and for orthographic without \"height\"."
         },
         {
           "name": "aperture",
           "kind": "number",
           "default": 0.2,
-          "doc": "Lens radius in scene units, for depth of field; 0 for a pinhole."
+          "doc": "Perspective: lens radius in scene units, for depth of field; 0 for a pinhole."
+        },
+        {
+          "name": "focus_distance",
+          "kind": "number",
+          "default": null,
+          "doc": "Perspective and realistic: distance in focus; default the distance to lookat."
+        },
+        {
+          "name": "astigmatism",
+          "kind": "object",
+          "default": null,
+          "doc": "Perspective: an astigmatic lens; powers in reciprocal scene units.",
+          "fields": [
+            {
+              "name": "cylinder",
+              "kind": "number",
+              "default": 0,
+              "doc": "Power of a cylinder added to the lens."
+            },
+            {"name": "axis", "kind": "number", "default": 0, "doc": "The cylinder's axis, degrees."},
+            {
+              "name": "seidel",
+              "kind": "number",
+              "default": 0,
+              "doc": "Power of off-axis (Seidel) astigmatism, growing towards the image's corners."
+            }
+          ]
+        },
+        {
+          "name": "height",
+          "kind": "number",
+          "default": null,
+          "doc": "Orthographic: height of the rectangle seen, scene units; default what the perspective camera sees at lookat."
+        },
+        {
+          "name": "mapping",
+          "kind": "enum",
+          "default": "equirectangular",
+          "doc": "Spherical: how directions map to the image.",
+          "options": ["equirectangular", "equal_area"]
+        },
+        {
+          "name": "lens",
+          "kind": "string",
+          "default": "dgauss.50mm",
+          "doc": "Realistic: dgauss.50mm, wide.22mm, telephoto.250mm, fisheye.10mm, or a pbrt lens .dat file; it sets the field of view."
+        },
+        {
+          "name": "f_number",
+          "kind": "number",
+          "default": null,
+          "doc": "Realistic: the stop's f-number; default wide open."
+        },
+        {
+          "name": "film_diagonal",
+          "kind": "number",
+          "default": 35,
+          "doc": "Realistic: the film's diagonal, mm."
+        },
+        {
+          "name": "blades",
+          "kind": "integer",
+          "default": null,
+          "doc": "Realistic: blades of a polygonal stop; default a round one."
+        },
+        {
+          "name": "blade_rotation",
+          "kind": "number",
+          "default": 0,
+          "doc": "Realistic: rotation of the blades, degrees."
+        },
+        {
+          "name": "motion",
+          "kind": "object",
+          "default": null,
+          "doc": "The pose the camera moves to while the shutter is open; each key defaults to the start's.",
+          "fields": [
+            {"name": "location", "kind": "vec3", "default": null, "doc": "Position at the end."},
+            {"name": "lookat", "kind": "vec3", "default": null, "doc": "Point looked at at the end."},
+            {"name": "up", "kind": "vec3", "default": null, "doc": "Up direction at the end."}
+          ]
         }
       ]
     },
     "sun": {
-      "doc": "The directional sun light, sampled directly; absent or null for none. With a skysphere in objects it follows the sky's sun_direction and is reddened by its atmosphere.",
+      "doc": "The directional sun light, sampled directly; absent or null for none. With a skysphere in objects it follows the sky's sun_direction, is reddened by its atmosphere, and its intensity sets the sky's brightness (the skysphere must then not give \"brightness\").",
       "fields": [
         {
           "name": "direction",
@@ -145,7 +284,7 @@
       ]
     },
     "output": {
-      "doc": "How linear pixel values are mapped for display in a PNG (EXR output ignores all but glare).",
+      "doc": "How the linear image is finished and mapped for display. Glare, flare, the film keys (iso, exposure_time, white_balance, color_space) and saturation apply to every output; exposure, tonemap and transfer only to PNG.",
       "fields": [
         {
           "name": "exposure",
@@ -157,8 +296,8 @@
           "name": "tonemap",
           "kind": "enum",
           "default": "none",
-          "doc": "Tone map: none clips above 1, reinhard is v / (1 + v).",
-          "options": ["none", "reinhard"]
+          "doc": "Tone curve: none clips above 1, reinhard is v / (1 + v), filmic is the ACES fit.",
+          "options": ["none", "reinhard", "filmic"]
         },
         {
           "name": "transfer",
@@ -168,6 +307,33 @@
           "options": ["srgb", "linear", "gamma"]
         },
         {"name": "gamma", "kind": "number", "default": 2.2, "doc": "With transfer gamma: the exponent."},
+        {
+          "name": "saturation",
+          "kind": "number",
+          "default": 1,
+          "doc": "Colour saturation: 0 grey, 1 unchanged.",
+          "min": 0
+        },
+        {"name": "iso", "kind": "number", "default": 100, "doc": "Film speed: scales the image by iso / 100."},
+        {
+          "name": "exposure_time",
+          "kind": "number",
+          "default": 1,
+          "doc": "Exposure time, s: scales the image."
+        },
+        {
+          "name": "white_balance",
+          "kind": "json",
+          "default": null,
+          "doc": "Illuminant rendered as white: \"D50\", \"D55\", \"D65\", \"D75\", \"A\", or a colour temperature in kelvin; absent for none."
+        },
+        {
+          "name": "color_space",
+          "kind": "enum",
+          "default": "srgb",
+          "doc": "Colour space of the output's primaries.",
+          "options": ["srgb", "display-p3", "rec2020", "aces2065-1"]
+        },
         {
           "name": "glare",
           "kind": "object",
@@ -197,24 +363,189 @@
               "doc": "Only pixels brighter than this (after exposure) glare."
             }
           ]
+        },
+        {
+          "name": "flare",
+          "kind": "object",
+          "default": null,
+          "doc": "Lens flare from bright lights, traced through a lens: true for defaults, or this object; absent or false: none.",
+          "fields": [
+            {
+              "name": "lens",
+              "kind": "string",
+              "default": null,
+              "doc": "The lens, as the realistic camera's; default that camera's, else dgauss.50mm (wide.22mm for wide views)."
+            },
+            {
+              "name": "f_number",
+              "kind": "number",
+              "default": null,
+              "doc": "The stop; default the realistic camera's, else wide open."
+            },
+            {
+              "name": "blades",
+              "kind": "integer",
+              "default": null,
+              "doc": "Blades of the stop (they shape the starburst); default the realistic camera's, else round."
+            },
+            {
+              "name": "blade_rotation",
+              "kind": "number",
+              "default": 0,
+              "doc": "Rotation of the blades, degrees."
+            },
+            {
+              "name": "blade_curvature",
+              "kind": "number",
+              "default": 1,
+              "doc": "How curved the blades are: 1 rounds the open stop, 0 straight.",
+              "min": 0
+            },
+            {
+              "name": "imperfection",
+              "kind": "number",
+              "default": 1,
+              "doc": "How far each blade is out of place; 0 for a perfect diaphragm.",
+              "min": 0
+            },
+            {"name": "seed", "kind": "integer", "default": 1, "doc": "Chooses the blades' imperfections."},
+            {
+              "name": "threshold",
+              "kind": "number",
+              "default": 20,
+              "doc": "Only light sources brighter than this make flare."
+            },
+            {"name": "sources", "kind": "integer", "default": 8, "doc": "Most light sources flared."},
+            {
+              "name": "ghosts",
+              "kind": "number",
+              "default": 1,
+              "doc": "Scale of the ghosts (reflections between elements); 0 or false for none."
+            },
+            {
+              "name": "starburst",
+              "kind": "number",
+              "default": 1,
+              "doc": "Scale of the starburst (diffraction by the stop); 0 or false for none."
+            },
+            {
+              "name": "grid",
+              "kind": "integer",
+              "default": 192,
+              "doc": "Rays across the lens for each ghost.",
+              "min": 4
+            },
+            {
+              "name": "coating",
+              "kind": "enum",
+              "default": "multi",
+              "doc": "Anti-reflection coating of the elements.",
+              "options": ["multi", "single", "none"]
+            }
+          ]
         }
       ]
     },
     "light": {
-      "doc": "One entry of \"lights\": a point light.",
+      "doc": "One entry of \"lights\": a light at a point, shining every way, or with one of \"spot\", \"goniometric\" or \"projection\" by direction.",
       "fields": [
         {"name": "location", "kind": "vec3", "required": true, "doc": "Position of the light."},
         {
           "name": "color",
           "kind": "color",
           "default": [1, 1, 1],
-          "doc": "Colour of the light (or a name: white, red, ...)."
+          "doc": "Colour of the light (or a name: white, red, ...); not with temperature."
+        },
+        {
+          "name": "temperature",
+          "kind": "number",
+          "default": null,
+          "doc": "In place of color: a blackbody of this temperature, kelvin, scaled to unit luminance."
         },
         {
           "name": "intensity",
           "kind": "number",
-          "required": true,
-          "doc": "Brightness; falls off with the square of distance."
+          "default": null,
+          "doc": "Radiant intensity (per steradian); falls off with the square of distance. One of intensity and power is required."
+        },
+        {
+          "name": "power",
+          "kind": "number",
+          "default": null,
+          "doc": "In place of intensity: the light's total power."
+        },
+        {
+          "name": "spot",
+          "kind": "object",
+          "default": null,
+          "doc": "A spot light: a cone about a direction.",
+          "fields": [
+            {
+              "name": "direction",
+              "kind": "vec3",
+              "default": null,
+              "doc": "Axis of the cone; one of direction and lookat is required."
+            },
+            {
+              "name": "lookat",
+              "kind": "vec3",
+              "default": null,
+              "doc": "A point the cone is aimed at, in place of direction."
+            },
+            {
+              "name": "angle",
+              "kind": "number",
+              "default": 30,
+              "doc": "Half-angle of the cone, degrees.",
+              "max": 180
+            },
+            {
+              "name": "delta",
+              "kind": "number",
+              "default": 5,
+              "doc": "The outer part of the angle over which the light fades, degrees.",
+              "min": 0
+            }
+          ]
+        },
+        {
+          "name": "goniometric",
+          "kind": "object",
+          "default": null,
+          "doc": "Intensity scaled by an equirectangular image of directions.",
+          "fields": [
+            {"name": "image", "kind": "path", "required": true, "doc": "The image; its top row is up."},
+            {"name": "up", "kind": "vec3", "default": [0, 1, 0], "doc": "The image's pole."},
+            {"name": "forward", "kind": "vec3", "default": [0, 0, 1], "doc": "Direction of azimuth zero."}
+          ]
+        },
+        {
+          "name": "projection",
+          "kind": "object",
+          "default": null,
+          "doc": "An image projected as by a slide projector.",
+          "fields": [
+            {"name": "image", "kind": "path", "required": true, "doc": "The image projected."},
+            {
+              "name": "direction",
+              "kind": "vec3",
+              "default": null,
+              "doc": "Where it points; one of direction and lookat is required."
+            },
+            {
+              "name": "lookat",
+              "kind": "vec3",
+              "default": null,
+              "doc": "A point it is aimed at, in place of direction."
+            },
+            {"name": "up", "kind": "vec3", "default": [0, 1, 0], "doc": "Up of the image."},
+            {
+              "name": "fov",
+              "kind": "number",
+              "default": 30,
+              "doc": "Angle across the image's larger side, degrees."
+            }
+          ]
         }
       ]
     },
@@ -241,13 +572,13 @@
           "name": "normal",
           "kind": "object",
           "default": null,
-          "doc": "Bump mapping: tilts the shading normal by a pattern, without changing the shape. Applies wherever material/medium do. Clashes with plane's own \"normal\".",
+          "doc": "Bump mapping: tilts the shading normal by a pattern, or by a tangent-space normal map image (\"map\"), without changing the shape. Applies wherever material/medium do. Only an object is a bump map: a plane's or disc's own \"normal\" is a vector.",
           "fields": [
             {
               "name": "pattern",
               "kind": "enum",
-              "required": true,
-              "doc": "The pattern of bumps.",
+              "default": null,
+              "doc": "The pattern of bumps; required unless \"map\" is given.",
               "options": ["bumps", "dents", "wrinkles", "ripples", "waves"]
             },
             {"name": "amount", "kind": "number", "default": 0.5, "doc": "How strongly the normal is tilted."},
@@ -269,6 +600,44 @@
               "kind": "number",
               "default": 0,
               "doc": "ripples and waves: shift of the rings, in cycles."
+            },
+            {
+              "name": "map",
+              "kind": "path",
+              "default": null,
+              "doc": "A normal map image, read by the texture coordinates, in place of a pattern; \"scale\" is then its repeats (a number or [u, v])."
+            },
+            {
+              "name": "strength",
+              "kind": "number",
+              "default": 1,
+              "doc": "With map: how strongly the map tilts the normal."
+            },
+            {
+              "name": "offset",
+              "kind": "json",
+              "default": 0,
+              "doc": "With map: shift of the texture coordinates, a number or [u, v]."
+            },
+            {
+              "name": "filter",
+              "kind": "enum",
+              "default": "ewa",
+              "doc": "With map: how the image is filtered.",
+              "options": ["ewa", "trilinear", "bilinear", "point"]
+            },
+            {
+              "name": "wrap",
+              "kind": "enum",
+              "default": "repeat",
+              "doc": "With map: what lies beyond the image's edges.",
+              "options": ["repeat", "clamp", "black"]
+            },
+            {
+              "name": "linear",
+              "kind": "boolean",
+              "default": true,
+              "doc": "With map: the image holds linear values (not sRGB)."
             }
           ]
         },
@@ -276,19 +645,19 @@
           "name": "transform",
           "kind": "json",
           "default": null,
-          "doc": "List of transform steps (see transform_step), applied in order to the whole shape including its clipping, eg. [{\"scale\": 2}, {\"rotate\": [0, 45, 0]}, {\"translate\": [0, 1, 0]}]. Geometry-backed objects only (sphere, triangle, mesh, smoothmesh, box, plane, rotate, transform, CSG, terrain, the POV-Ray shapes), at top level or nested; ignored by checkeredplane and by procedural objects."
+          "doc": "List of transform steps (see transform_step), applied in order to the whole shape including its clipping, eg. [{\"scale\": 2}, {\"rotate\": [0, 45, 0]}, {\"translate\": [0, 1, 0]}]. Geometry-backed objects only (sphere, triangle, mesh, smoothmesh, box, plane, rotate, transform, CSG, terrain, the POV-Ray shapes, patches, curves, subdivision surfaces), at top level or nested; ignored by checkeredplane and by procedural objects."
         },
         {
           "name": "inverse",
           "kind": "boolean",
           "default": false,
-          "doc": "Turn the shape inside out (its outside becomes its inside, for CSG). Geometry-backed objects only (sphere, triangle, mesh, smoothmesh, box, plane, rotate, transform, CSG, terrain, the POV-Ray shapes), at top level or nested; ignored by checkeredplane and by procedural objects."
+          "doc": "Turn the shape inside out (its outside becomes its inside, for CSG). Geometry-backed objects only (sphere, triangle, mesh, smoothmesh, box, plane, rotate, transform, CSG, terrain, the POV-Ray shapes, patches, curves, subdivision surfaces), at top level or nested; ignored by checkeredplane and by procedural objects."
         },
         {
           "name": "clipped_by",
           "kind": "shape",
           "default": null,
-          "doc": "Keep only the part of the surface inside this shape (does not close the cut). Geometry-backed objects only (sphere, triangle, mesh, smoothmesh, box, plane, rotate, transform, CSG, terrain, the POV-Ray shapes), at top level or nested; ignored by checkeredplane and by procedural objects."
+          "doc": "Keep only the part of the surface inside this shape (does not close the cut). Geometry-backed objects only (sphere, triangle, mesh, smoothmesh, box, plane, rotate, transform, CSG, terrain, the POV-Ray shapes, patches, curves, subdivision surfaces), at top level or nested; ignored by checkeredplane and by procedural objects."
         }
       ]
     },
@@ -375,7 +744,7 @@
           "name": "normal",
           "kind": "vec3",
           "default": null,
-          "doc": "Half-space form: the plane's outward normal. Only works on a plane nested in a CSG or transform without its own material (see notes)."
+          "doc": "In place of y: an [x, y, z] vector for POV-Ray's half-space n.p < distance, usable in CSG (an object here is a bump map instead)."
         },
         {
           "name": "distance",
@@ -952,7 +1321,7 @@
           "name": "font",
           "kind": "path",
           "required": true,
-          "doc": "TrueType or OpenType font file (.ttf or .otf)."
+          "doc": "TrueType or OpenType font file; or a list of files, of which the first that exists is used."
         },
         {
           "name": "string",
@@ -981,6 +1350,145 @@
         "thickness": 0.3,
         "material": "M",
         "transform": [{"scale": 2}, {"translate": [-1.2, 0, 0]}]
+      }
+    },
+    "bilinear_patch": {
+      "label": "Bilinear patch",
+      "group": "Shapes",
+      "doc": "The surface between four corners, flat or a saddle.",
+      "fields": [
+        {
+          "name": "points",
+          "kind": "list",
+          "required": true,
+          "doc": "The four corners [p00, p10, p01, p11], each [x, y, z].",
+          "item": "vec3"
+        }
+      ],
+      "example": {
+        "type": "bilinear_patch",
+        "points": [[-1.5, 0, 0], [1.5, 0, 0.5], [-1.5, 2, 0.5], [1.5, 2, -0.5]],
+        "material": "M"
+      }
+    },
+    "quad": {
+      "label": "Quad",
+      "group": "Shapes",
+      "doc": "A flat four-cornered sheet (a bilinear patch with coplanar corners); with an emitting material, an area light.",
+      "fields": [
+        {
+          "name": "points",
+          "kind": "list",
+          "required": true,
+          "doc": "The four corners [p00, p10, p01, p11], each [x, y, z].",
+          "item": "vec3"
+        }
+      ],
+      "example": {"type": "quad", "points": [[-1.5, 0, 0], [1.5, 0, 0], [-1.5, 2, 0], [1.5, 2, 0]], "material": "M"}
+    },
+    "curves": {
+      "label": "Curves",
+      "group": "Shapes",
+      "doc": "Cubic Bézier strands with width, as flat ribbons facing the ray, cylinders (for the hair material) or oriented ribbons.",
+      "fields": [
+        {
+          "name": "curves",
+          "kind": "list",
+          "required": true,
+          "doc": "The strands.",
+          "fields": [
+            {
+              "name": "points",
+              "kind": "list",
+              "required": true,
+              "doc": "The four control points, each [x, y, z].",
+              "item": "vec3"
+            },
+            {"name": "width", "kind": "json", "default": 0.01, "doc": "Width: a number, or [root, tip]."},
+            {
+              "name": "normals",
+              "kind": "list",
+              "default": null,
+              "doc": "Kind ribbon (required there): the surface normals at the two ends.",
+              "item": "vec3"
+            }
+          ]
+        },
+        {
+          "name": "kind",
+          "kind": "enum",
+          "default": "cylinder",
+          "doc": "How the strands are shaped; a ribbon takes each curve's \"normals\".",
+          "options": ["flat", "cylinder", "ribbon"]
+        },
+        {
+          "name": "split",
+          "kind": "integer",
+          "default": 3,
+          "doc": "Times each curve is halved for its bounds (2^split segments)."
+        }
+      ],
+      "example": {
+        "type": "curves",
+        "curves": [{"points": [[-1.5, 0, 0], [-0.5, 2.5, 0], [0.5, -0.5, 0], [1.5, 2, 0]], "width": [0.3, 0.1]}],
+        "material": "M"
+      }
+    },
+    "fur": {
+      "label": "Fur",
+      "group": "Shapes",
+      "doc": "A ball of fur: curved strands growing from a sphere, leaning out and drooping.",
+      "fields": [
+        {"name": "center", "kind": "vec3", "default": [0, 0, 0], "doc": "Centre of the sphere."},
+        {
+          "name": "radius",
+          "kind": "number",
+          "default": 1,
+          "doc": "Radius of the sphere the strands grow from."
+        },
+        {"name": "count", "kind": "integer", "default": 20000, "doc": "Number of strands."},
+        {"name": "length", "kind": "number", "default": 0.2, "doc": "Length of a strand."},
+        {
+          "name": "width",
+          "kind": "json",
+          "default": 0.01,
+          "doc": "Width at the root (the tip a fifth of it), or [root, tip]."
+        },
+        {
+          "name": "droop",
+          "kind": "number",
+          "default": 0.3,
+          "doc": "The tip's fall under gravity, as a fraction of the length."
+        },
+        {
+          "name": "curl",
+          "kind": "number",
+          "default": 0.15,
+          "doc": "Random sideways bend, as a fraction of the length."
+        },
+        {
+          "name": "kind",
+          "kind": "enum",
+          "default": "cylinder",
+          "doc": "How the strands are shaped.",
+          "options": ["flat", "cylinder"]
+        },
+        {
+          "name": "split",
+          "kind": "integer",
+          "default": 2,
+          "doc": "Times each strand is halved for its bounds."
+        },
+        {"name": "seed", "kind": "integer", "default": 0, "doc": "Chooses the strands."}
+      ],
+      "example": {
+        "type": "fur",
+        "center": [0, 1, 0],
+        "radius": 1,
+        "count": 2000,
+        "length": 0.4,
+        "width": 0.03,
+        "material": "M"
       }
     },
     "mesh": {
@@ -1155,6 +1663,45 @@
         "material": "M"
       }
     },
+    "subdivision": {
+      "label": "Subdivision surface",
+      "group": "Meshes",
+      "doc": "A Loop subdivision surface: the smooth limit of a triangle mesh.",
+      "fields": [
+        {
+          "name": "src",
+          "kind": "path",
+          "default": null,
+          "doc": "Mesh file whose triangles are the control mesh; or give points and triangles."
+        },
+        {
+          "name": "points",
+          "kind": "list",
+          "default": null,
+          "doc": "The control mesh's vertices, each [x, y, z] (required without src).",
+          "item": "vec3"
+        },
+        {
+          "name": "triangles",
+          "kind": "json",
+          "default": null,
+          "doc": "Its triangles, each [a, b, c] indices into points (required without src)."
+        },
+        {
+          "name": "levels",
+          "kind": "integer",
+          "default": 3,
+          "doc": "Times the mesh is refined; each quadruples the triangles."
+        }
+      ],
+      "example": {
+        "type": "subdivision",
+        "points": [[0, 2.5, 0], [-1.5, 0, 1], [1.5, 0, 1], [0, 0, -1.5]],
+        "triangles": [[0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 3, 2]],
+        "levels": 3,
+        "material": "M"
+      }
+    },
     "rotate": {
       "label": "Rotate",
       "group": "Combining",
@@ -1202,6 +1749,23 @@
           "kind": "json",
           "default": null,
           "doc": "Instead of scale, rotate and translate (not both): a list of transform steps applied in order (see transform_step)."
+        },
+        {
+          "name": "motion",
+          "kind": "object",
+          "default": null,
+          "doc": "Motion blur: the transform's keys at the end of the motion (shutter time 1), each defaulting to its value at the start.",
+          "fields": [
+            {"name": "translate", "kind": "vec3", "default": null, "doc": "Translation at the end."},
+            {"name": "rotate", "kind": "json", "default": null, "doc": "Rotation at the end, as \"rotate\"."},
+            {"name": "scale", "kind": "json", "default": null, "doc": "Scale at the end, as \"scale\"."},
+            {
+              "name": "steps",
+              "kind": "json",
+              "default": null,
+              "doc": "Steps at the end, in place of the three above."
+            }
+          ]
         }
       ],
       "example": {
@@ -1326,7 +1890,7 @@
               "kind": "enum",
               "default": "flat",
               "doc": "Where heights come from.",
-              "options": ["flat", "noise", "image"]
+              "options": ["flat", "noise", "mesas", "image"]
             },
             {
               "name": "min",
@@ -1348,7 +1912,12 @@
               "doc": "Size of a grid cell, in scene units; default is the longest side / resolution."
             },
             {"name": "base", "kind": "number", "default": 0, "doc": "Height (y) of the ground's base level."},
-            {"name": "seed", "kind": "integer", "default": 0, "doc": "Noise type: shifts the noise pattern."},
+            {
+              "name": "seed",
+              "kind": "integer",
+              "default": 0,
+              "doc": "Noise and mesas types: chooses the pattern."
+            },
             {
               "name": "amplitude",
               "kind": "number",
@@ -1359,7 +1928,7 @@
               "name": "scale",
               "kind": "number",
               "default": 10,
-              "doc": "Noise type: horizontal size of the largest features."
+              "doc": "Noise type: horizontal size of the largest features. Mesas type: size of the mesas (default 800)."
             },
             {"name": "octaves", "kind": "integer", "default": 5, "doc": "Noise type: layers of finer detail."},
             {
@@ -1390,7 +1959,159 @@
               "name": "height",
               "kind": "number",
               "default": 1,
-              "doc": "Image type: height of a white pixel above base."
+              "doc": "Image type: height of a white pixel above base. Mesas type: height of the tops above base (default 120)."
+            },
+            {
+              "name": "coverage",
+              "kind": "number",
+              "default": 0.15,
+              "doc": "Mesas type: fraction of the area the mesas cover."
+            },
+            {
+              "name": "cliff",
+              "kind": "number",
+              "default": 30,
+              "doc": "Mesas type: width of the cliff band, m."
+            },
+            {"name": "benches", "kind": "integer", "default": 2, "doc": "Mesas type: ledges in the cliff."},
+            {
+              "name": "talus",
+              "kind": "number",
+              "default": 0.35,
+              "doc": "Mesas type: height of the scree apron, as a fraction of height.",
+              "min": 0,
+              "max": 1
+            },
+            {
+              "name": "talus_width",
+              "kind": "number",
+              "default": null,
+              "doc": "Mesas type: width of the scree apron, m; default height."
+            },
+            {
+              "name": "floor_amplitude",
+              "kind": "number",
+              "default": 2,
+              "doc": "Mesas type: height of the floor's undulation, m."
+            },
+            {
+              "name": "floor_scale",
+              "kind": "number",
+              "default": 150,
+              "doc": "Mesas type: size of the floor's undulation, m."
+            },
+            {
+              "name": "clearing",
+              "kind": "vec3",
+              "default": null,
+              "doc": "Mesas type: [x, z, radius], a circle kept free of mesas (eg. round the camera)."
+            },
+            {
+              "name": "domain",
+              "kind": "json",
+              "default": null,
+              "doc": "Mesas type: [min x, min z, max x, max z], the area the mesas are laid out over; default the heightmap's own."
+            },
+            {
+              "name": "towers",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: free-standing spires and fins per square kilometre."
+            },
+            {
+              "name": "relief",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: rounded hills left on the tops, as a fraction of height."
+            },
+            {
+              "name": "height_variation",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: variation of height from mesa to mesa, a fraction."
+            },
+            {
+              "name": "roughness",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: gullies and fallen blocks on the debris slopes, 0 to 1."
+            },
+            {
+              "name": "floor_ledges",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: height of the low steps the floor is terraced in, m."
+            },
+            {
+              "name": "domes",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: size of the slickrock domes the tops weather into, m; 0 for none."
+            },
+            {
+              "name": "hole",
+              "kind": "json",
+              "default": null,
+              "doc": "Mesas type: [min x, min z, max x, max z], a rectangle sunk out of sight (where a finer grid takes over)."
+            },
+            {
+              "name": "uplift",
+              "kind": "json",
+              "default": null,
+              "doc": "Mesas type: [x, z, radius, height], a taller mesa placed there."
+            },
+            {
+              "name": "valley",
+              "kind": "json",
+              "default": null,
+              "doc": "Mesas type: [x, z, inner, outer]: few mesas near (x, z), tablelands past outer."
+            },
+            {
+              "name": "buttes",
+              "kind": "json",
+              "default": null,
+              "doc": "Mesas type: [[x, z, radius], ...], buttes placed by hand."
+            },
+            {
+              "name": "joints",
+              "kind": "vec2",
+              "default": null,
+              "doc": "Mesas type: [spacing, depth] of vertical joints weathered into slots, m."
+            },
+            {
+              "name": "taper",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: how much the cliffs' steepness varies."
+            },
+            {
+              "name": "shoulder",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: rounding of the rims, a fraction of height."
+            },
+            {
+              "name": "washes",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: depth of dry washes across the floor, m."
+            },
+            {
+              "name": "laminae",
+              "kind": "object",
+              "default": null,
+              "doc": "Mesas type: a rock material's cross-bedding as relief on the tops.",
+              "fields": [
+                {"name": "seed", "kind": "integer", "default": 0, "doc": "The rock material's seed."},
+                {"name": "scale", "kind": "number", "default": 1, "doc": "The rock material's scale."},
+                {"name": "set", "kind": "number", "default": 1, "doc": "The rock material's cross_set."},
+                {
+                  "name": "relief",
+                  "kind": "number",
+                  "default": 0.1,
+                  "doc": "Relief between the softest and hardest laminae, m."
+                }
+              ]
             }
           ]
         }
@@ -1404,7 +2125,7 @@
     "landscape": {
       "label": "Landscape (simulated)",
       "group": "Terrain",
-      "doc": "Terrain grown by simulating tectonic uplift, river and glacial erosion, volcanoes and sediment on a patch of a planet (or the whole planet), with its own materials.",
+      "doc": "Terrain grown by simulating tectonics, uplift, river and glacial erosion, volcanoes and sediment. With \"scale\", a model of a patch (or of the whole planet) scaled into the scene; without it, the landscape at full size, in metres, over the whole planet, finest near the camera.",
       "fields": [
         {"name": "seed", "kind": "integer", "default": 0, "doc": "Chooses the planet."},
         {
@@ -1414,16 +2135,22 @@
           "doc": "Years of landscape evolution to simulate; 0 shows the initial noise topography."
         },
         {
+          "name": "cache",
+          "kind": "path",
+          "default": null,
+          "doc": "Directory where simulated states are kept and reused."
+        },
+        {
           "name": "domain",
           "kind": "object",
           "default": null,
-          "doc": "What is simulated; absent: a 128-cell patch at the most mountainous place.",
+          "doc": "What is simulated; absent: a 128-cell patch at the most mountainous place. At full scale: the site at the scene's origin and the finest patch.",
           "fields": [
             {
               "name": "type",
               "kind": "enum",
               "default": "patch",
-              "doc": "A patch of the planet, or the whole sphere.",
+              "doc": "Scaled model: a patch of the planet, or the whole sphere.",
               "options": ["patch", "planet"]
             },
             {
@@ -1432,7 +2159,12 @@
               "default": 128,
               "doc": "Patch: cells along a side; planet: resolution of the sphere's grid (default 64 there)."
             },
-            {"name": "spacing", "kind": "number", "default": 400, "doc": "Patch: cell size, m."},
+            {
+              "name": "spacing",
+              "kind": "number",
+              "default": 400,
+              "doc": "Patch: cell size, m (default 750 at full scale)."
+            },
             {
               "name": "lat",
               "kind": "number",
@@ -1454,13 +2186,18 @@
             }
           ]
         },
-        {"name": "scale", "kind": "number", "default": 1000, "doc": "Metres of terrain per scene unit."},
+        {
+          "name": "scale",
+          "kind": "number",
+          "default": null,
+          "doc": "Metres of terrain per scene unit (eg. 1000), for a scaled model; absent: full scale on the scene's planet."
+        },
         {"name": "exaggeration", "kind": "number", "default": 1, "doc": "Vertical exaggeration."},
         {
           "name": "centre",
           "kind": "vec3",
           "default": [0, 0, 0],
-          "doc": "Scene position of the patch's centre at sea level."
+          "doc": "Scaled model: scene position of the patch's centre at sea level."
         },
         {
           "name": "min_river_width",
@@ -1468,14 +2205,24 @@
           "default": 0,
           "doc": "Draw rivers at least this wide, m."
         },
-        {"name": "map", "kind": "path", "default": null, "doc": "Also write a shaded relief map image here."},
+        {
+          "name": "map",
+          "kind": "path",
+          "default": null,
+          "doc": "Also write a shaded relief map image of the (finest) patch here."
+        },
         {
           "name": "step",
           "kind": "number",
           "default": 100,
           "doc": "Length of a landscape evolution step, years."
         },
-        {"name": "radius", "kind": "number", "default": 6371000.0, "doc": "Planet radius, m."},
+        {
+          "name": "radius",
+          "kind": "number",
+          "default": 6371000.0,
+          "doc": "Planet radius, m; at full scale the default is 6360000, the scene planet's."
+        },
         {
           "name": "land_bias",
           "kind": "number",
@@ -1495,6 +2242,91 @@
           "doc": "Peak tectonic uplift, m per year."
         },
         {"name": "belt_frequency", "kind": "number", "default": 3, "doc": "Mountain belts per planet radius."},
+        {
+          "name": "tectonics",
+          "kind": "object",
+          "default": null,
+          "doc": "Plate tectonics shaping the continents: on with defaults at full scale, off (noise alone) in a scaled model unless given; false for none.",
+          "fields": [
+            {"name": "cells", "kind": "integer", "default": 96, "doc": "Grid cells per cube face edge."},
+            {"name": "plates", "kind": "integer", "default": 12, "doc": "Plates at the start."},
+            {"name": "age", "kind": "number", "default": 300, "doc": "Million years simulated."},
+            {"name": "step", "kind": "number", "default": 2, "doc": "Million years per step."},
+            {
+              "name": "continental_fraction",
+              "kind": "number",
+              "default": 0.32,
+              "doc": "Fraction of the surface that is continent at the start."
+            },
+            {
+              "name": "speed",
+              "kind": "number",
+              "default": 50,
+              "doc": "Typical plate speed, km per million years."
+            },
+            {
+              "name": "rift_interval",
+              "kind": "number",
+              "default": 70,
+              "doc": "Mean time between rifting events, million years."
+            },
+            {
+              "name": "subduction_uplift",
+              "kind": "number",
+              "default": 35,
+              "doc": "Thickening behind a subduction zone, m per million years."
+            },
+            {
+              "name": "collision_uplift",
+              "kind": "number",
+              "default": 70,
+              "doc": "Thickening where continents collide, m per million years."
+            },
+            {
+              "name": "relaxation",
+              "kind": "number",
+              "default": 100,
+              "doc": "Relaxation time of thickened crust, million years."
+            },
+            {"name": "hotspots", "kind": "integer", "default": 10, "doc": "Number of hotspots."},
+            {
+              "name": "remesh",
+              "kind": "number",
+              "default": 10,
+              "doc": "Million years between resamplings of the plates."
+            }
+          ]
+        },
+        {
+          "name": "climate",
+          "kind": "object",
+          "default": null,
+          "doc": "Climate by latitude (temperature, rain, snow line): on with defaults at full scale, off in a scaled model unless given; false for none.",
+          "fields": [
+            {"name": "tilt", "kind": "number", "default": 23.44, "doc": "Axial tilt, degrees."},
+            {"name": "solar", "kind": "number", "default": 1361, "doc": "Solar constant, W/m²."},
+            {
+              "name": "hadley",
+              "kind": "number",
+              "default": 30,
+              "doc": "Latitude of the dry subtropics, degrees."
+            },
+            {"name": "cells", "kind": "integer", "default": 64, "doc": "Grid cells per cube face edge."},
+            {
+              "name": "recycling",
+              "kind": "number",
+              "default": 3000000.0,
+              "doc": "Distance over which air crossing land rains out its moisture, m."
+            },
+            {
+              "name": "orographic",
+              "kind": "number",
+              "default": 1200,
+              "doc": "Rise over which air loses 1/e of its moisture, m."
+            },
+            {"name": "warming", "kind": "number", "default": 0, "doc": "Added to every temperature, °C."}
+          ]
+        },
         {
           "name": "strata_thickness",
           "kind": "number",
@@ -1722,6 +2554,85 @@
             },
             {"name": "picard", "kind": "integer", "default": 2, "doc": "Solves per ice step.", "min": 1}
           ]
+        },
+        {
+          "name": "planet",
+          "kind": "object",
+          "default": null,
+          "doc": "Full scale: the whole planet's simulation driving the patches; false for its noise topography alone.",
+          "fields": [{"name": "cells", "kind": "integer", "default": 64, "doc": "Cells per face edge.", "min": 2}]
+        },
+        {
+          "name": "levels",
+          "kind": "list",
+          "default": null,
+          "doc": "Full scale: the nested patches, finest first; default the domain's and coarser ones five times wider apart; [] for none (as from orbit).",
+          "fields": [
+            {"name": "cells", "kind": "integer", "default": 128, "doc": "Cells along a side."},
+            {"name": "spacing", "kind": "number", "default": 750, "doc": "Cell size, m."}
+          ]
+        },
+        {
+          "name": "focus",
+          "kind": "vec3",
+          "default": null,
+          "doc": "Full scale: scene point the patches centre on; default the ground the camera looks over."
+        },
+        {
+          "name": "resolution",
+          "kind": "integer",
+          "default": 384,
+          "doc": "Full scale: vertices along a ring of the mesh.",
+          "min": 8
+        },
+        {
+          "name": "min_spacing",
+          "kind": "number",
+          "default": 0.5,
+          "doc": "Full scale: finest spacing of the mesh, m."
+        },
+        {
+          "name": "globe",
+          "kind": "integer",
+          "default": 192,
+          "doc": "Full scale: mesh cells per face edge beyond the rings.",
+          "min": 2
+        },
+        {
+          "name": "roughness",
+          "kind": "number",
+          "default": 1,
+          "doc": "Full scale: strength of the detail below the finest cells."
+        },
+        {
+          "name": "snowline",
+          "kind": "number",
+          "default": null,
+          "doc": "Full scale: height of the snow line, m; default from the climate."
+        },
+        {
+          "name": "treeline",
+          "kind": "number",
+          "default": null,
+          "doc": "Full scale: height of the tree line, m; default from the climate."
+        },
+        {
+          "name": "planet_map",
+          "kind": "path",
+          "default": null,
+          "doc": "Full scale: also write a map of the whole planet here."
+        },
+        {
+          "name": "climate_map",
+          "kind": "path",
+          "default": null,
+          "doc": "Full scale: also write a map of the climate here."
+        },
+        {
+          "name": "camera",
+          "kind": "json",
+          "default": null,
+          "doc": "Full scale: {\"location\", \"lookat\"} the mesh is finest near; filled in from the scene's camera if absent."
         }
       ],
       "example": {
@@ -1831,105 +2742,59 @@
     "ocean": {
       "label": "Ocean",
       "group": "Water",
-      "doc": "An endless sea of Tessendorf waves at y = 0; a tiled mesh, or with \"curved\" the planet's surface displaced near the camera. A material or medium given replaces the ocean's own.",
+      "doc": "A sea of Tessendorf waves on the planet's surface, physically lit (sun glitter, Fresnel sky reflection), displaced near detail_center and shaded by its slopes beyond. A material or medium given replaces the ocean's own.",
       "fields": [
-        {
-          "name": "wind",
-          "kind": "vec2",
-          "default": [40, 30],
-          "doc": "Wind velocity [x, z], m/s; default [7, 2] when curved."
-        },
-        {
-          "name": "time",
-          "kind": "number",
-          "default": 4,
-          "doc": "Time of the wave animation, s; default 0 when curved."
-        },
+        {"name": "wind", "kind": "vec2", "default": [7, 2], "doc": "Wind velocity [x, z], m/s."},
+        {"name": "time", "kind": "number", "default": 0, "doc": "Time of the wave animation, s."},
         {"name": "seed", "kind": "integer", "default": 0, "doc": "Random realisation of the waves."},
         {
           "name": "amplitude",
           "kind": "number",
           "default": null,
-          "doc": "Phillips spectrum constant A (wave height squared); default 1/16384 flat, or when curved set from \"resolved\"."
+          "doc": "Phillips spectrum constant A (wave height squared); default set from \"resolved\"."
         },
         {
-          "name": "resolution",
+          "name": "resolved",
           "kind": "number",
-          "default": 100,
-          "doc": "Flat only: size of the repeating wave patch, m."
+          "default": 0.8,
+          "doc": "Fraction of Cox and Munk's mean square slope carried by the displaced waves (ignored with \"amplitude\").",
+          "min": 0,
+          "max": 1
         },
         {
-          "name": "fourier_size",
-          "kind": "integer",
-          "default": 128,
-          "doc": "Flat only: Fourier grid size, a power of two from 16 to 2048; build time and memory grow with its square."
-        },
-        {
-          "name": "gravity",
+          "name": "planet_radius",
           "kind": "number",
-          "default": 9.81,
-          "doc": "Flat only: gravitational acceleration, m/s^2."
-        },
-        {
-          "name": "color",
-          "kind": "color",
-          "default": [0, 0.2, 0.3],
-          "doc": "Flat, not physical: colour of the deep water."
-        },
-        {
-          "name": "physical",
-          "kind": "boolean",
-          "default": false,
-          "doc": "Flat only: use the physically lit water material (sun glitter, Fresnel sky reflection), as curved oceans always do."
+          "default": 6360000,
+          "doc": "Radius of the planet whose surface the sea is, m; 0 or less for a flat sea at y = 0."
         },
         {
           "name": "water",
           "kind": "color",
           "default": [0.002, 0.012, 0.03],
-          "doc": "Physical or curved: albedo of the water body."
+          "doc": "Albedo of the water body."
         },
         {
           "name": "roughness",
           "kind": "number",
           "default": null,
-          "doc": "Physical or curved: mean square slope of unresolved ripples; default Cox and Munk's for the wind less the waves' own."
-        },
-        {"name": "debug", "kind": "boolean", "default": false, "doc": "Flat only: shade by surface normal."},
-        {
-          "name": "curved",
-          "kind": "boolean",
-          "default": false,
-          "doc": "Make the ocean the planet's surface, physically lit, with waves displaced near the camera."
-        },
-        {
-          "name": "resolved",
-          "kind": "number",
-          "default": 0.5,
-          "doc": "Curved only: fraction of Cox and Munk's mean square slope carried by the displaced waves (ignored with \"amplitude\").",
-          "min": 0,
-          "max": 1
-        },
-        {
-          "name": "earth_radius",
-          "kind": "number",
-          "default": 6360000,
-          "doc": "Curved only: radius of the planet, m."
+          "doc": "Mean square slope of unresolved ripples; default Cox and Munk's for the wind less the waves' own."
         },
         {
           "name": "detail_center",
           "kind": "vec2",
           "default": [0, 0],
-          "doc": "Curved only: [x, z] around which waves are displaced geometry (put it under the camera)."
+          "doc": "[x, z] around which waves are displaced geometry (put it under the camera)."
         },
         {
           "name": "detail_distance",
           "kind": "number",
           "default": 300,
-          "doc": "Curved only: distance from detail_center over which waves are displaced, m.",
+          "doc": "Distance from detail_center over which waves are displaced, m.",
           "min": 1
-        }
+        },
+        {"name": "debug", "kind": "boolean", "default": false, "doc": "Shade by surface normal."}
       ],
-      "example": {"type": "ocean", "fourier_size": 32, "wind": [20, 5]},
+      "example": {"type": "ocean", "wind": [20, 5]},
       "needs": ["skysphere"]
     },
     "skysphere": {
@@ -1950,7 +2815,12 @@
           "default": [0, 0.5, 2],
           "doc": "Direction towards the sun (normalised); a scene \"sun\" follows it."
         },
-        {"name": "brightness", "kind": "number", "default": 20, "doc": "Multiplier on the sky's radiance."},
+        {
+          "name": "brightness",
+          "kind": "number",
+          "default": 20,
+          "doc": "Multiplier on the sky's radiance; not allowed with a scene \"sun\", whose intensity sets it."
+        },
         {
           "name": "rayleigh_r",
           "kind": "number",
@@ -2041,9 +2911,547 @@
           "kind": "boolean",
           "default": true,
           "doc": "Look the sky up in a precomputed table; false integrates every ray exactly."
+        },
+        {
+          "name": "moonlight",
+          "kind": "json",
+          "default": null,
+          "doc": "Set by the scene when a moon lights it: {\"direction\", \"share\"} of the sun's light."
         }
       ],
       "example": {"type": "skysphere", "sun_direction": [0, 0.5, 2]}
+    },
+    "moon": {
+      "label": "Moon",
+      "group": "Sky",
+      "doc": "A cratered moon or other airless world at its true size and distance, lit by the sun (Hapke's model) and its planet's earthshine; it takes none of the common object keys.",
+      "fields": [
+        {
+          "name": "preset",
+          "kind": "enum",
+          "default": "moon",
+          "doc": "The world: a real one, or a rocky or icy one drawn from the seed; it sets the radius, craters and colours.",
+          "options": ["moon", "mercury", "mars", "callisto", "ganymede", "europa", "io", "rocky", "icy"]
+        },
+        {"name": "seed", "kind": "integer", "default": 0, "doc": "Chooses the surface."},
+        {
+          "name": "radius",
+          "kind": "number",
+          "default": 1737400,
+          "doc": "Radius, m (default from the preset; the Moon's shown)."
+        },
+        {
+          "name": "direction",
+          "kind": "vec3",
+          "default": [0, 0.5, 1],
+          "doc": "Direction in which it is seen from \"from\"."
+        },
+        {
+          "name": "distance",
+          "kind": "number",
+          "default": 384400000,
+          "doc": "Its distance from the planet's centre, m."
+        },
+        {
+          "name": "from",
+          "kind": "vec3",
+          "default": [0, 0, 0],
+          "doc": "The point it is seen from in \"direction\"."
+        },
+        {
+          "name": "position",
+          "kind": "vec3",
+          "default": null,
+          "doc": "Its centre, in place of direction and distance."
+        },
+        {
+          "name": "orbit",
+          "kind": "object",
+          "default": null,
+          "doc": "A Keplerian orbit about the planet, in place of direction; defaults are the Moon's.",
+          "fields": [
+            {"name": "semi_major_axis", "kind": "number", "default": 384400000, "doc": "Semi-major axis, m."},
+            {
+              "name": "eccentricity",
+              "kind": "number",
+              "default": 0.0549,
+              "doc": "Eccentricity.",
+              "min": 0,
+              "max": 0.99
+            },
+            {"name": "inclination", "kind": "number", "default": 5.145, "doc": "Inclination, degrees."},
+            {
+              "name": "ascending_node",
+              "kind": "number",
+              "default": 0,
+              "doc": "Longitude of the ascending node, degrees."
+            },
+            {
+              "name": "argument_of_periapsis",
+              "kind": "number",
+              "default": 0,
+              "doc": "Argument of periapsis, degrees."
+            },
+            {
+              "name": "mean_anomaly",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mean anomaly at time 0, degrees."
+            },
+            {
+              "name": "gm",
+              "kind": "number",
+              "default": 398600441800000.0,
+              "doc": "The planet's gravitational parameter, m³/s²."
+            },
+            {"name": "pole", "kind": "vec3", "default": [0, 1, 0], "doc": "Pole of the reference plane."},
+            {
+              "name": "equinox",
+              "kind": "vec3",
+              "default": [1, 0, 0],
+              "doc": "Reference direction in that plane."
+            }
+          ]
+        },
+        {"name": "time", "kind": "number", "default": 0, "doc": "With orbit: time along it, s."},
+        {
+          "name": "libration",
+          "kind": "vec2",
+          "default": [0, 0],
+          "doc": "[longitude, latitude] in degrees by which the face it keeps to its planet is turned."
+        },
+        {
+          "name": "maria",
+          "kind": "number",
+          "default": 1,
+          "doc": "How much of the near side is flooded with dark plains: 0 none, 1 as on the Moon (from the preset)."
+        },
+        {
+          "name": "albedo_variation",
+          "kind": "number",
+          "default": 0.15,
+          "doc": "Variation of the highlands' albedo, a fraction (from the preset)."
+        },
+        {
+          "name": "craters",
+          "kind": "object",
+          "default": null,
+          "doc": "The craters; defaults from the preset (the Moon's shown).",
+          "fields": [
+            {
+              "name": "density",
+              "kind": "number",
+              "default": 0.07,
+              "doc": "K in N(>D) = K / D² craters per km²."
+            },
+            {
+              "name": "max",
+              "kind": "number",
+              "default": 300,
+              "doc": "Largest crater, km; bigger ones are basins."
+            },
+            {"name": "min", "kind": "number", "default": 0.5, "doc": "Smallest crater generated, km."},
+            {"name": "basins", "kind": "integer", "default": 30, "doc": "Basins, 300 km and up."},
+            {"name": "rayed", "kind": "integer", "default": 12, "doc": "Young rayed craters."},
+            {
+              "name": "ray_brightness",
+              "kind": "number",
+              "default": 0.5,
+              "doc": "How much brighter rays are than the ground (1 doubles it)."
+            },
+            {
+              "name": "fresh_brightness",
+              "kind": "number",
+              "default": 0.3,
+              "doc": "How bright fresh craters' walls and ejecta are, likewise."
+            },
+            {
+              "name": "mare_survival",
+              "kind": "number",
+              "default": 0.3,
+              "doc": "Share of a mare's craters that are younger than it."
+            }
+          ]
+        },
+        {
+          "name": "albedo",
+          "kind": "object",
+          "default": null,
+          "doc": "Normal albedos of the ground; defaults from the preset (the Moon's shown).",
+          "fields": [
+            {
+              "name": "highlands",
+              "kind": "color",
+              "default": [0.14, 0.13, 0.112],
+              "doc": "Albedo of the highlands."
+            },
+            {
+              "name": "maria",
+              "kind": "color",
+              "default": [0.083, 0.078, 0.069],
+              "doc": "Albedo of the maria."
+            }
+          ]
+        },
+        {
+          "name": "photometry",
+          "kind": "object",
+          "default": null,
+          "doc": "Hapke's model of the regolith; the Moon's by default.",
+          "fields": [
+            {
+              "name": "b",
+              "kind": "number",
+              "default": 0.27,
+              "doc": "Asymmetry of the particles' phase function."
+            },
+            {"name": "c", "kind": "number", "default": 1, "doc": "Its backward share."},
+            {"name": "b0", "kind": "number", "default": 1.07, "doc": "Amplitude of the opposition surge."},
+            {"name": "h", "kind": "number", "default": 0.18, "doc": "Width of the opposition surge."}
+          ]
+        },
+        {
+          "name": "earthshine",
+          "kind": "object",
+          "default": null,
+          "doc": "Light of the planet's sunlit face on the night side; false for none.",
+          "fields": [
+            {"name": "albedo", "kind": "number", "default": 0.367, "doc": "The planet's geometric albedo."},
+            {
+              "name": "color",
+              "kind": "color",
+              "default": [0.85, 0.95, 1.15],
+              "doc": "Colour of its light (scaled to unit luminance)."
+            }
+          ]
+        },
+        {
+          "name": "shadows",
+          "kind": "boolean",
+          "default": true,
+          "doc": "Shadows cast by the relief near the terminator."
+        },
+        {
+          "name": "light",
+          "kind": "boolean",
+          "default": true,
+          "doc": "Light the scene with the sunlight it reflects (moonlight); needs a \"sun\"."
+        },
+        {
+          "name": "footprint",
+          "kind": "number",
+          "default": 2,
+          "doc": "Size of the finest detail drawn, km, when there is no camera to set it."
+        },
+        {
+          "name": "planet",
+          "kind": "json",
+          "default": null,
+          "doc": "The planet it belongs to, {\"centre\", \"radius\"}; filled in from the scene's skysphere or planet (else the Earth under the origin) if absent."
+        },
+        {
+          "name": "camera",
+          "kind": "json",
+          "default": null,
+          "doc": "For the detail drawn: {\"location\", \"angle\", \"image_height\"}; filled in from the scene's camera if absent."
+        }
+      ],
+      "example": {"type": "moon", "direction": [0, -0.18, -1], "distance": 40000000},
+      "needs": ["sun"]
+    },
+    "gas_giant": {
+      "label": "Gas giant",
+      "group": "Sky",
+      "doc": "A gas or ice giant: an oblate planet of banded, stormy clouds, with rings; lit by the sun, taking none of the common object keys.",
+      "fields": [
+        {
+          "name": "preset",
+          "kind": "enum",
+          "default": "gas_giant",
+          "doc": "A real planet, or a gas or ice giant drawn from the seed; it sets the size, weather and rings.",
+          "options": ["gas_giant", "ice_giant", "jupiter", "saturn", "uranus", "neptune"]
+        },
+        {
+          "name": "seed",
+          "kind": "integer",
+          "default": 0,
+          "doc": "Chooses the weather (and a generated planet's size and rings)."
+        },
+        {
+          "name": "radius",
+          "kind": "number",
+          "default": null,
+          "doc": "Equatorial radius, m; default the preset's (Jupiter 71492000)."
+        },
+        {
+          "name": "polar_radius",
+          "kind": "number",
+          "default": null,
+          "doc": "Polar radius, m; default the preset's flattening of radius."
+        },
+        {"name": "pole", "kind": "vec3", "default": [0, 1, 0], "doc": "The axis it spins about."},
+        {"name": "rotation", "kind": "number", "default": 0, "doc": "Turn about the pole, degrees."},
+        {
+          "name": "direction",
+          "kind": "vec3",
+          "default": [0, 0.5, 1],
+          "doc": "Direction in which it is seen from \"from\"."
+        },
+        {
+          "name": "distance",
+          "kind": "number",
+          "default": 780000000000.0,
+          "doc": "Its distance from the planet's centre, m."
+        },
+        {
+          "name": "from",
+          "kind": "vec3",
+          "default": [0, 0, 0],
+          "doc": "The point it is seen from in \"direction\"."
+        },
+        {
+          "name": "position",
+          "kind": "vec3",
+          "default": null,
+          "doc": "Its centre, in place of direction and distance."
+        },
+        {
+          "name": "orbit",
+          "kind": "object",
+          "default": null,
+          "doc": "A Keplerian orbit about the planet, in place of direction; defaults are the Moon's.",
+          "fields": [
+            {"name": "semi_major_axis", "kind": "number", "default": 384400000, "doc": "Semi-major axis, m."},
+            {
+              "name": "eccentricity",
+              "kind": "number",
+              "default": 0.0549,
+              "doc": "Eccentricity.",
+              "min": 0,
+              "max": 0.99
+            },
+            {"name": "inclination", "kind": "number", "default": 5.145, "doc": "Inclination, degrees."},
+            {
+              "name": "ascending_node",
+              "kind": "number",
+              "default": 0,
+              "doc": "Longitude of the ascending node, degrees."
+            },
+            {
+              "name": "argument_of_periapsis",
+              "kind": "number",
+              "default": 0,
+              "doc": "Argument of periapsis, degrees."
+            },
+            {
+              "name": "mean_anomaly",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mean anomaly at time 0, degrees."
+            },
+            {
+              "name": "gm",
+              "kind": "number",
+              "default": 398600441800000.0,
+              "doc": "The planet's gravitational parameter, m³/s²."
+            },
+            {"name": "pole", "kind": "vec3", "default": [0, 1, 0], "doc": "Pole of the reference plane."},
+            {
+              "name": "equinox",
+              "kind": "vec3",
+              "default": [1, 0, 0],
+              "doc": "Reference direction in that plane."
+            }
+          ]
+        },
+        {"name": "time", "kind": "number", "default": 0, "doc": "With orbit: time along it, s."},
+        {
+          "name": "albedo",
+          "kind": "number",
+          "default": null,
+          "doc": "Geometric albedo the disc is scaled to; default the preset's (Jupiter 0.538)."
+        },
+        {
+          "name": "resolution",
+          "kind": "integer",
+          "default": null,
+          "doc": "Height in texels of the cloud map; default the preset's (2048 when generated)."
+        },
+        {
+          "name": "flow_time",
+          "kind": "number",
+          "default": null,
+          "doc": "How long the clouds are stirred by the winds; default the preset's."
+        },
+        {
+          "name": "turbulence",
+          "kind": "number",
+          "default": null,
+          "doc": "Strength of the turbulence in the bands; default the preset's."
+        },
+        {
+          "name": "rings",
+          "kind": "object",
+          "default": null,
+          "doc": "Rings: absent for the preset's, false for none, true for the preset's or generated ones, or this object.",
+          "fields": [
+            {
+              "name": "preset",
+              "kind": "enum",
+              "default": null,
+              "doc": "A real planet's rings; absent: generated from the seed.",
+              "options": ["saturn", "uranus", "neptune"]
+            },
+            {
+              "name": "seed",
+              "kind": "integer",
+              "default": null,
+              "doc": "Chooses generated rings; default the planet's seed."
+            }
+          ]
+        },
+        {
+          "name": "shadows",
+          "kind": "boolean",
+          "default": true,
+          "doc": "Shadows of the rings on the planet and of the planet on the rings."
+        },
+        {
+          "name": "planet",
+          "kind": "json",
+          "default": null,
+          "doc": "The planet it belongs to, {\"centre\", \"radius\"}; filled in from the scene's skysphere or planet (else the Earth under the origin) if absent."
+        },
+        {
+          "name": "camera",
+          "kind": "json",
+          "default": null,
+          "doc": "For the detail drawn: {\"location\", \"angle\", \"image_height\"}; filled in from the scene's camera if absent."
+        }
+      ],
+      "example": {
+        "type": "gas_giant",
+        "preset": "jupiter",
+        "direction": [0, -0.18, -1],
+        "distance": 1000000000,
+        "resolution": 256
+      },
+      "needs": ["sun"]
+    },
+    "world": {
+      "label": "World",
+      "group": "Sky",
+      "doc": "A world drawn from a seed: it becomes a gas_giant (gas or ice giant) or a moon (rocky or icy), whose other keys it accepts and passes on.",
+      "fields": [
+        {
+          "name": "seed",
+          "kind": "integer",
+          "default": 0,
+          "doc": "Chooses the kind of world and everything about it."
+        },
+        {
+          "name": "kind",
+          "kind": "enum",
+          "default": null,
+          "doc": "The kind of world; default drawn from the seed.",
+          "options": ["gas_giant", "ice_giant", "rocky", "icy"]
+        },
+        {
+          "name": "direction",
+          "kind": "vec3",
+          "default": [0, 0.5, 1],
+          "doc": "Direction in which it is seen from \"from\"."
+        },
+        {
+          "name": "distance",
+          "kind": "number",
+          "default": 384400000,
+          "doc": "Its distance from the planet's centre, m. Default 7.8e11 for a giant."
+        },
+        {
+          "name": "from",
+          "kind": "vec3",
+          "default": [0, 0, 0],
+          "doc": "The point it is seen from in \"direction\"."
+        },
+        {
+          "name": "position",
+          "kind": "vec3",
+          "default": null,
+          "doc": "Its centre, in place of direction and distance."
+        },
+        {
+          "name": "orbit",
+          "kind": "object",
+          "default": null,
+          "doc": "A Keplerian orbit about the planet, in place of direction; defaults are the Moon's.",
+          "fields": [
+            {"name": "semi_major_axis", "kind": "number", "default": 384400000, "doc": "Semi-major axis, m."},
+            {
+              "name": "eccentricity",
+              "kind": "number",
+              "default": 0.0549,
+              "doc": "Eccentricity.",
+              "min": 0,
+              "max": 0.99
+            },
+            {"name": "inclination", "kind": "number", "default": 5.145, "doc": "Inclination, degrees."},
+            {
+              "name": "ascending_node",
+              "kind": "number",
+              "default": 0,
+              "doc": "Longitude of the ascending node, degrees."
+            },
+            {
+              "name": "argument_of_periapsis",
+              "kind": "number",
+              "default": 0,
+              "doc": "Argument of periapsis, degrees."
+            },
+            {
+              "name": "mean_anomaly",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mean anomaly at time 0, degrees."
+            },
+            {
+              "name": "gm",
+              "kind": "number",
+              "default": 398600441800000.0,
+              "doc": "The planet's gravitational parameter, m³/s²."
+            },
+            {"name": "pole", "kind": "vec3", "default": [0, 1, 0], "doc": "Pole of the reference plane."},
+            {
+              "name": "equinox",
+              "kind": "vec3",
+              "default": [1, 0, 0],
+              "doc": "Reference direction in that plane."
+            }
+          ]
+        },
+        {"name": "time", "kind": "number", "default": 0, "doc": "With orbit: time along it, s."},
+        {
+          "name": "radius",
+          "kind": "number",
+          "default": null,
+          "doc": "Radius, m; default drawn from the seed."
+        },
+        {"name": "shadows", "kind": "boolean", "default": true, "doc": "Shadows of the relief, or of rings."},
+        {
+          "name": "planet",
+          "kind": "json",
+          "default": null,
+          "doc": "The planet it belongs to, {\"centre\", \"radius\"}; filled in from the scene's skysphere or planet (else the Earth under the origin) if absent."
+        },
+        {
+          "name": "camera",
+          "kind": "json",
+          "default": null,
+          "doc": "For the detail drawn: {\"location\", \"angle\", \"image_height\"}; filled in from the scene's camera if absent."
+        }
+      ],
+      "example": {"type": "world", "seed": 3, "direction": [0, -0.18, -1], "distance": 1000000000, "resolution": 256},
+      "needs": ["sun"]
     },
     "nubis_clouds": {
       "label": "Nubis clouds",
@@ -2195,6 +3603,12 @@
           ]
         },
         {
+          "name": "delta_m",
+          "kind": "boolean",
+          "default": true,
+          "doc": "Truncate a Henyey-Greenstein medium's forward peak where the camera doesn't see the medium directly (faster); false traces it exactly."
+        },
+        {
           "name": "diffraction",
           "kind": "object",
           "default": false,
@@ -2305,8 +3719,8 @@
         {
           "name": "extent",
           "kind": "number",
-          "default": 100000,
-          "doc": "Half-width of the square the layer fills, m."
+          "default": null,
+          "doc": "Half-width of the layer either side of center, m; default out to the layer's own horizon (about 357 km for a 10 km top)."
         },
         {"name": "center", "kind": "vec2", "default": [0, 0], "doc": "Centre [x, z] of that square."},
         {
@@ -2573,6 +3987,12 @@
             },
             {"name": "c", "kind": "number", "default": 0.5, "doc": "Factor on each octave's phase asymmetry."}
           ]
+        },
+        {
+          "name": "delta_m",
+          "kind": "boolean",
+          "default": true,
+          "doc": "Truncate a Henyey-Greenstein medium's forward peak where the camera doesn't see the medium directly (faster); false traces it exactly."
         },
         {
           "name": "diffraction",
@@ -2860,6 +4280,12 @@
             },
             {"name": "c", "kind": "number", "default": 0.5, "doc": "Factor on each octave's phase asymmetry."}
           ]
+        },
+        {
+          "name": "delta_m",
+          "kind": "boolean",
+          "default": true,
+          "doc": "Truncate a Henyey-Greenstein medium's forward peak where the camera doesn't see the medium directly (faster); false traces it exactly."
         },
         {
           "name": "diffraction",
@@ -3172,6 +4598,12 @@
           ]
         },
         {
+          "name": "delta_m",
+          "kind": "boolean",
+          "default": true,
+          "doc": "Truncate a Henyey-Greenstein medium's forward peak where the camera doesn't see the medium directly (faster); false traces it exactly."
+        },
+        {
           "name": "diffraction",
           "kind": "object",
           "default": false,
@@ -3275,6 +4707,14 @@
         },
         {"name": "extent", "kind": "number", "default": 60000, "doc": "Half-width of the square it fills, m."},
         {"name": "center", "kind": "vec2", "default": [0, 0], "doc": "Centre [x, z] of that square."},
+        {
+          "name": "fade",
+          "kind": "number",
+          "default": 0,
+          "doc": "Fraction of extent over which the sheet rounds off and fades out.",
+          "min": 0,
+          "max": 1
+        },
         {"name": "seed", "kind": "integer", "default": 0, "doc": "Random seed."},
         {
           "name": "edge_direction",
@@ -3335,6 +4775,13 @@
           "kind": "number",
           "default": 0,
           "doc": "Metres over which the underside thickens to full density.",
+          "min": 0
+        },
+        {
+          "name": "top_variation",
+          "kind": "number",
+          "default": 0,
+          "doc": "How far the anvil's flat top rises and falls, m.",
           "min": 0
         },
         {
@@ -3479,6 +4926,12 @@
             },
             {"name": "c", "kind": "number", "default": 0.5, "doc": "Factor on each octave's phase asymmetry."}
           ]
+        },
+        {
+          "name": "delta_m",
+          "kind": "boolean",
+          "default": true,
+          "doc": "Truncate a Henyey-Greenstein medium's forward peak where the camera doesn't see the medium directly (faster); false traces it exactly."
         },
         {
           "name": "diffraction",
@@ -3655,6 +5108,13 @@
           "max": 1
         },
         {
+          "name": "base_variation",
+          "kind": "number",
+          "default": 0,
+          "doc": "How far below the base, varying, the drops emerge from the cloud, m.",
+          "min": 0
+        },
+        {
           "name": "mapping",
           "kind": "enum",
           "default": "regional",
@@ -3715,6 +5175,12 @@
             },
             {"name": "c", "kind": "number", "default": 0.5, "doc": "Factor on each octave's phase asymmetry."}
           ]
+        },
+        {
+          "name": "delta_m",
+          "kind": "boolean",
+          "default": true,
+          "doc": "Truncate a Henyey-Greenstein medium's forward peak where the camera doesn't see the medium directly (faster); false traces it exactly."
         },
         {
           "name": "diffraction",
@@ -4021,6 +5487,12 @@
           ]
         },
         {
+          "name": "delta_m",
+          "kind": "boolean",
+          "default": true,
+          "doc": "Truncate a Henyey-Greenstein medium's forward peak where the camera doesn't see the medium directly (faster); false traces it exactly."
+        },
+        {
           "name": "diffraction",
           "kind": "object",
           "default": false,
@@ -4136,8 +5608,18 @@
       "group": "Volumes",
       "doc": "A participating medium (smoke, mist) filling an axis-aligned box, of constant or noise-driven density.",
       "fields": [
-        {"name": "min", "kind": "vec3", "required": true, "doc": "One corner of the box."},
-        {"name": "max", "kind": "vec3", "required": true, "doc": "The opposite corner."},
+        {
+          "name": "min",
+          "kind": "vec3",
+          "default": null,
+          "doc": "One corner of the box; required unless a grid file with bounds or a shape gives them."
+        },
+        {
+          "name": "max",
+          "kind": "vec3",
+          "default": null,
+          "doc": "Opposite corner of the box (required with min)."
+        },
         {
           "name": "density",
           "kind": "number",
@@ -4167,10 +5649,40 @@
           ]
         },
         {
+          "name": "grid",
+          "kind": "json",
+          "default": null,
+          "doc": "Density from a voxel grid, times density: a Mitsuba .vol file's path, or {\"resolution\": [nx, ny, nz], \"values\": [...]} (x fastest); not with noise."
+        },
+        {
+          "name": "shape",
+          "kind": "shape",
+          "default": null,
+          "doc": "The medium fills only the inside of this shape (eg. the same as a glass object's)."
+        },
+        {
           "name": "albedo",
           "kind": "color",
           "default": [1, 1, 1],
           "doc": "Fraction of light scattered rather than absorbed at a collision."
+        },
+        {
+          "name": "sigma_a",
+          "kind": "color",
+          "default": null,
+          "doc": "In place of albedo: absorption per unit density (RGB), as pbrt's media."
+        },
+        {
+          "name": "sigma_s",
+          "kind": "color",
+          "default": null,
+          "doc": "In place of albedo: scattering per unit density (RGB); differing channels make the medium chromatic."
+        },
+        {
+          "name": "emission",
+          "kind": "json",
+          "default": null,
+          "doc": "Light the medium emits (give it an albedo below 1): a colour, {\"color\", \"scale\"}, or a blackbody {\"temperature\": kelvin or a grid, \"scale\", \"temperature_scale\", \"cutoff\"}."
         },
         {
           "name": "g",
@@ -4205,6 +5717,12 @@
             {"name": "b", "kind": "number", "default": 0.5, "doc": "Factor on each octave's scattering."},
             {"name": "c", "kind": "number", "default": 0.5, "doc": "Factor on each octave's phase asymmetry."}
           ]
+        },
+        {
+          "name": "delta_m",
+          "kind": "boolean",
+          "default": true,
+          "doc": "Truncate a Henyey-Greenstein medium's forward peak where the camera doesn't see the medium directly (faster); false traces it exactly."
         },
         {
           "name": "diffraction",
@@ -4292,7 +5810,7 @@
     "grass": {
       "label": "Grass",
       "group": "Plants",
-      "doc": "A field of individual grass blades growing on a heightmap, shaped by species and conditions.",
+      "doc": "A field of individual grass blades, and wildflowers, clover and ferns among them, growing on a heightmap, shaped by species and conditions.",
       "fields": [
         {
           "name": "heightmap",
@@ -4305,7 +5823,7 @@
               "kind": "enum",
               "default": "flat",
               "doc": "Where heights come from.",
-              "options": ["flat", "noise", "image"]
+              "options": ["flat", "noise", "mesas", "image"]
             },
             {
               "name": "min",
@@ -4327,7 +5845,12 @@
               "doc": "Size of a grid cell, in scene units; default is the longest side / resolution."
             },
             {"name": "base", "kind": "number", "default": 0, "doc": "Height (y) of the ground's base level."},
-            {"name": "seed", "kind": "integer", "default": 0, "doc": "Noise type: shifts the noise pattern."},
+            {
+              "name": "seed",
+              "kind": "integer",
+              "default": 0,
+              "doc": "Noise and mesas types: chooses the pattern."
+            },
             {
               "name": "amplitude",
               "kind": "number",
@@ -4338,7 +5861,7 @@
               "name": "scale",
               "kind": "number",
               "default": 10,
-              "doc": "Noise type: horizontal size of the largest features."
+              "doc": "Noise type: horizontal size of the largest features. Mesas type: size of the mesas (default 800)."
             },
             {"name": "octaves", "kind": "integer", "default": 5, "doc": "Noise type: layers of finer detail."},
             {
@@ -4369,7 +5892,159 @@
               "name": "height",
               "kind": "number",
               "default": 1,
-              "doc": "Image type: height of a white pixel above base."
+              "doc": "Image type: height of a white pixel above base. Mesas type: height of the tops above base (default 120)."
+            },
+            {
+              "name": "coverage",
+              "kind": "number",
+              "default": 0.15,
+              "doc": "Mesas type: fraction of the area the mesas cover."
+            },
+            {
+              "name": "cliff",
+              "kind": "number",
+              "default": 30,
+              "doc": "Mesas type: width of the cliff band, m."
+            },
+            {"name": "benches", "kind": "integer", "default": 2, "doc": "Mesas type: ledges in the cliff."},
+            {
+              "name": "talus",
+              "kind": "number",
+              "default": 0.35,
+              "doc": "Mesas type: height of the scree apron, as a fraction of height.",
+              "min": 0,
+              "max": 1
+            },
+            {
+              "name": "talus_width",
+              "kind": "number",
+              "default": null,
+              "doc": "Mesas type: width of the scree apron, m; default height."
+            },
+            {
+              "name": "floor_amplitude",
+              "kind": "number",
+              "default": 2,
+              "doc": "Mesas type: height of the floor's undulation, m."
+            },
+            {
+              "name": "floor_scale",
+              "kind": "number",
+              "default": 150,
+              "doc": "Mesas type: size of the floor's undulation, m."
+            },
+            {
+              "name": "clearing",
+              "kind": "vec3",
+              "default": null,
+              "doc": "Mesas type: [x, z, radius], a circle kept free of mesas (eg. round the camera)."
+            },
+            {
+              "name": "domain",
+              "kind": "json",
+              "default": null,
+              "doc": "Mesas type: [min x, min z, max x, max z], the area the mesas are laid out over; default the heightmap's own."
+            },
+            {
+              "name": "towers",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: free-standing spires and fins per square kilometre."
+            },
+            {
+              "name": "relief",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: rounded hills left on the tops, as a fraction of height."
+            },
+            {
+              "name": "height_variation",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: variation of height from mesa to mesa, a fraction."
+            },
+            {
+              "name": "roughness",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: gullies and fallen blocks on the debris slopes, 0 to 1."
+            },
+            {
+              "name": "floor_ledges",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: height of the low steps the floor is terraced in, m."
+            },
+            {
+              "name": "domes",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: size of the slickrock domes the tops weather into, m; 0 for none."
+            },
+            {
+              "name": "hole",
+              "kind": "json",
+              "default": null,
+              "doc": "Mesas type: [min x, min z, max x, max z], a rectangle sunk out of sight (where a finer grid takes over)."
+            },
+            {
+              "name": "uplift",
+              "kind": "json",
+              "default": null,
+              "doc": "Mesas type: [x, z, radius, height], a taller mesa placed there."
+            },
+            {
+              "name": "valley",
+              "kind": "json",
+              "default": null,
+              "doc": "Mesas type: [x, z, inner, outer]: few mesas near (x, z), tablelands past outer."
+            },
+            {
+              "name": "buttes",
+              "kind": "json",
+              "default": null,
+              "doc": "Mesas type: [[x, z, radius], ...], buttes placed by hand."
+            },
+            {
+              "name": "joints",
+              "kind": "vec2",
+              "default": null,
+              "doc": "Mesas type: [spacing, depth] of vertical joints weathered into slots, m."
+            },
+            {
+              "name": "taper",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: how much the cliffs' steepness varies."
+            },
+            {
+              "name": "shoulder",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: rounding of the rims, a fraction of height."
+            },
+            {
+              "name": "washes",
+              "kind": "number",
+              "default": 0,
+              "doc": "Mesas type: depth of dry washes across the floor, m."
+            },
+            {
+              "name": "laminae",
+              "kind": "object",
+              "default": null,
+              "doc": "Mesas type: a rock material's cross-bedding as relief on the tops.",
+              "fields": [
+                {"name": "seed", "kind": "integer", "default": 0, "doc": "The rock material's seed."},
+                {"name": "scale", "kind": "number", "default": 1, "doc": "The rock material's scale."},
+                {"name": "set", "kind": "number", "default": 1, "doc": "The rock material's cross_set."},
+                {
+                  "name": "relief",
+                  "kind": "number",
+                  "default": 0.1,
+                  "doc": "Relief between the softest and hardest laminae, m."
+                }
+              ]
             }
           ]
         },
@@ -4396,14 +6071,35 @@
           "name": "species",
           "kind": "list",
           "default": [{"preset": "meadow"}],
-          "doc": "The species mixed; each item a preset name or an object; a single item needn't be in a list.",
+          "doc": "The plants mixed (grasses, wildflowers, clover, ferns); each item a preset name or an object; a single item needn't be in a list.",
           "fields": [
             {
               "name": "preset",
               "kind": "enum",
               "default": "meadow",
               "doc": "Species preset the other fields override.",
-              "options": ["lawn", "meadow", "fescue", "tall", "tussock", "savanna", "reed"]
+              "options": [
+                "lawn",
+                "meadow",
+                "fescue",
+                "tall",
+                "tussock",
+                "savanna",
+                "reed",
+                "rough",
+                "timothy",
+                "wild_oat",
+                "bent",
+                "daisy",
+                "oxeye",
+                "dandelion",
+                "buttercup",
+                "clover",
+                "red_clover",
+                "heather",
+                "bracken",
+                "litter"
+              ]
             },
             {"name": "weight", "kind": "number", "default": 1, "doc": "Relative abundance.", "min": 0},
             {
@@ -4532,6 +6228,334 @@
               "doc": "0 grows straight up, 1 perpendicular to the slope (default from the preset; meadow's shown).",
               "min": 0,
               "max": 1
+            },
+            {
+              "name": "color_variation",
+              "kind": "number",
+              "default": 1,
+              "doc": "How much blades differ in colour (default from the preset; meadow's shown).",
+              "min": 0,
+              "max": 2.2
+            },
+            {
+              "name": "kind",
+              "kind": "enum",
+              "default": "grass",
+              "doc": "The kind of plant: blades, or a flowering plant, clover or fern (from the preset).",
+              "options": ["grass", "flower", "clover", "fern"]
+            },
+            {
+              "name": "seed_head",
+              "kind": "object",
+              "default": null,
+              "doc": "Kind grass: flowering stems with a seed head; null for none (as meadow). Defaults shown are the spike style's; panicle has its own.",
+              "fields": [
+                {
+                  "name": "style",
+                  "kind": "enum",
+                  "default": "spike",
+                  "doc": "Spikelets packed round the stem, or hanging from branches.",
+                  "options": ["spike", "panicle"]
+                },
+                {
+                  "name": "fraction",
+                  "kind": "number",
+                  "default": 0.25,
+                  "doc": "Share of a tuft's blades that are flowering stems.",
+                  "min": 0,
+                  "max": 1
+                },
+                {
+                  "name": "stem_height",
+                  "kind": "number",
+                  "default": 1.9,
+                  "doc": "Height of the stems, times the blade height (panicle 1.6).",
+                  "min": 0.1
+                },
+                {
+                  "name": "stem_width",
+                  "kind": "number",
+                  "default": 0.0022,
+                  "doc": "Width of the stems, m (panicle 0.0015)."
+                },
+                {
+                  "name": "length",
+                  "kind": "number",
+                  "default": 0.09,
+                  "doc": "Length of the head, m (panicle 0.15)."
+                },
+                {
+                  "name": "width",
+                  "kind": "number",
+                  "default": 0.008,
+                  "doc": "Width of a spike, m (panicle 0).",
+                  "min": 0
+                },
+                {
+                  "name": "spikelets",
+                  "kind": "integer",
+                  "default": 90,
+                  "doc": "Spikelets in the head (panicle 16)."
+                },
+                {
+                  "name": "spikelet_length",
+                  "kind": "number",
+                  "default": 0.0065,
+                  "doc": "Length of a spikelet, m (panicle 0.012)."
+                },
+                {
+                  "name": "spikelet_width",
+                  "kind": "number",
+                  "default": 0.003,
+                  "doc": "Width of a spikelet, m (panicle 0.004)."
+                },
+                {
+                  "name": "branch_length",
+                  "kind": "number",
+                  "default": 0,
+                  "doc": "Panicle: length of the branches, m (panicle 0.05).",
+                  "min": 0
+                },
+                {
+                  "name": "droop",
+                  "kind": "number",
+                  "default": 0,
+                  "doc": "Panicle: how much the spikelets hang (panicle 0.5).",
+                  "min": 0,
+                  "max": 1
+                },
+                {
+                  "name": "color",
+                  "kind": "color",
+                  "default": [0.34, 0.37, 0.25],
+                  "doc": "Colour of the spikelets at the base."
+                },
+                {
+                  "name": "tip_color",
+                  "kind": "color",
+                  "default": [0.48, 0.45, 0.38],
+                  "doc": "Colour of the spikelets at the tip."
+                },
+                {
+                  "name": "dry_color",
+                  "kind": "color",
+                  "default": [0.55, 0.47, 0.3],
+                  "doc": "Colour they ripen to as the grass dries."
+                }
+              ]
+            },
+            {
+              "name": "flower",
+              "kind": "object",
+              "default": null,
+              "doc": "Kinds flower and clover: the flower, merged over the kind's defaults (a daisy's shown; clover instead takes fraction 0.12, height 1.4, radius 0.01, florets 45, wilted 0.3, color, tip_color, old_color).",
+              "fields": [
+                {
+                  "name": "count",
+                  "kind": "number",
+                  "default": 1.5,
+                  "doc": "Flowering stems per plant, on average.",
+                  "min": 0
+                },
+                {"name": "petals", "kind": "integer", "default": 36, "doc": "Petals in a layer."},
+                {"name": "layers", "kind": "integer", "default": 1, "doc": "Layers of petals.", "min": 1},
+                {"name": "petal_length", "kind": "number", "default": 0.008, "doc": "Length of a petal, m."},
+                {"name": "petal_width", "kind": "number", "default": 0.0018, "doc": "Width of a petal, m."},
+                {
+                  "name": "petal_shape",
+                  "kind": "number",
+                  "default": 0.6,
+                  "doc": "Where along it a petal is widest, 0 to 1.",
+                  "min": 0.05,
+                  "max": 0.95
+                },
+                {
+                  "name": "cup",
+                  "kind": "number",
+                  "default": 5,
+                  "doc": "Tilt of the outer petals above the flower's face, degrees."
+                },
+                {
+                  "name": "layer_cup",
+                  "kind": "number",
+                  "default": 20,
+                  "doc": "Extra tilt of each layer further in, degrees."
+                },
+                {
+                  "name": "curl",
+                  "kind": "number",
+                  "default": -0.08,
+                  "doc": "How far the tips turn up (negative: droop), a fraction of the length."
+                },
+                {
+                  "name": "centre_radius",
+                  "kind": "number",
+                  "default": 0.0035,
+                  "doc": "Radius of the centre, m.",
+                  "min": 0
+                },
+                {
+                  "name": "dome",
+                  "kind": "number",
+                  "default": 0.5,
+                  "doc": "Height of the centre, as a fraction of its radius."
+                },
+                {
+                  "name": "petal_color",
+                  "kind": "color",
+                  "default": [0.86, 0.86, 0.83],
+                  "doc": "Colour of the petals at the base."
+                },
+                {
+                  "name": "petal_tip_color",
+                  "kind": "color",
+                  "default": [0.85, 0.7, 0.74],
+                  "doc": "Colour of the petals at the tip."
+                },
+                {
+                  "name": "centre_color",
+                  "kind": "color",
+                  "default": [0.8, 0.55, 0.03],
+                  "doc": "Colour of the centre."
+                },
+                {
+                  "name": "sheen",
+                  "kind": "number",
+                  "default": 0.1,
+                  "doc": "Gloss of the petals.",
+                  "min": 0,
+                  "max": 1
+                },
+                {
+                  "name": "clock_fraction",
+                  "kind": "number",
+                  "default": 0,
+                  "doc": "Share of the stems gone to seed, with a seed clock.",
+                  "min": 0,
+                  "max": 1
+                },
+                {
+                  "name": "clock_radius",
+                  "kind": "number",
+                  "default": 0.018,
+                  "doc": "Radius of a seed clock, m."
+                },
+                {
+                  "name": "clock_height",
+                  "kind": "number",
+                  "default": 1.5,
+                  "doc": "Height of a clock's stem, times a flower's.",
+                  "min": 0.1
+                },
+                {"name": "pappus", "kind": "integer", "default": 110, "doc": "Seeds in a clock."},
+                {
+                  "name": "clock_color",
+                  "kind": "color",
+                  "default": [0.85, 0.85, 0.83],
+                  "doc": "Colour of the seeds' plumes."
+                }
+              ]
+            },
+            {
+              "name": "leaves",
+              "kind": "object",
+              "default": null,
+              "doc": "Kinds flower and clover: the leaves, merged over the kind's defaults (a daisy's rosette shown; clover: length 0.012, width 0.011, shape 0.7, angle 10, and a band_color).",
+              "fields": [
+                {"name": "count", "kind": "integer", "default": 8, "doc": "Leaves per plant."},
+                {
+                  "name": "length",
+                  "kind": "number",
+                  "default": 0.04,
+                  "doc": "Length of a leaf (clover: a leaflet), m."
+                },
+                {"name": "width", "kind": "number", "default": 0.012, "doc": "Width of a leaf, m."},
+                {
+                  "name": "shape",
+                  "kind": "number",
+                  "default": 0.75,
+                  "doc": "Where along it a leaf is widest, 0 to 1.",
+                  "min": 0.05,
+                  "max": 0.95
+                },
+                {
+                  "name": "angle",
+                  "kind": "number",
+                  "default": 12,
+                  "doc": "Angle of the leaves above the ground, degrees."
+                },
+                {
+                  "name": "color",
+                  "kind": "color",
+                  "default": [0.05, 0.14, 0.03],
+                  "doc": "Colour at the base."
+                },
+                {
+                  "name": "tip_color",
+                  "kind": "color",
+                  "default": [0.07, 0.18, 0.04],
+                  "doc": "Colour at the tip."
+                },
+                {
+                  "name": "band_color",
+                  "kind": "color",
+                  "default": [0.2, 0.3, 0.15],
+                  "doc": "Clover only: colour of the pale chevron across the leaflets."
+                }
+              ]
+            },
+            {
+              "name": "frond",
+              "kind": "object",
+              "default": null,
+              "doc": "Kind fern: the fronds, merged over bracken's (shown).",
+              "fields": [
+                {
+                  "name": "count",
+                  "kind": "number",
+                  "default": 2.5,
+                  "doc": "Fronds per plant, on average.",
+                  "min": 0
+                },
+                {
+                  "name": "blade_start",
+                  "kind": "number",
+                  "default": 0.4,
+                  "doc": "How far along the stem the leafy part starts.",
+                  "min": 0,
+                  "max": 0.95
+                },
+                {
+                  "name": "pinnae",
+                  "kind": "integer",
+                  "default": 14,
+                  "doc": "Pairs of leaflets along the frond."
+                },
+                {
+                  "name": "pinna_length",
+                  "kind": "number",
+                  "default": 0.22,
+                  "doc": "Length of the first pinnae, m."
+                },
+                {
+                  "name": "pinna_width",
+                  "kind": "number",
+                  "default": 0.05,
+                  "doc": "Width of the first pinnae, m."
+                },
+                {
+                  "name": "sweep",
+                  "kind": "number",
+                  "default": 25,
+                  "doc": "Sweep of the pinnae towards the tip, degrees."
+                },
+                {
+                  "name": "droop",
+                  "kind": "number",
+                  "default": 0.15,
+                  "doc": "Droop of the pinnae, a fraction of their length."
+                }
+              ]
             }
           ]
         },
@@ -4546,7 +6570,18 @@
               "kind": "enum",
               "default": "summer",
               "doc": "Conditions preset the other fields override.",
-              "options": ["lush", "summer", "drought", "autumn", "after_rain", "frost", "windy", "manicured", "trampled"]
+              "options": [
+                "lush",
+                "summer",
+                "drought",
+                "autumn",
+                "after_rain",
+                "frost",
+                "windy",
+                "manicured",
+                "trampled",
+                "wild"
+              ]
             },
             {
               "name": "wind",
@@ -4694,7 +6729,14 @@
               "name": "species_zones",
               "kind": "number",
               "default": 0,
-              "doc": "Group species into patches about this size, m; 0 mixes them evenly.",
+              "doc": "With several species: group them into patches about this size, m; 0 mixes them evenly (wild: 2.5).",
+              "min": 0
+            },
+            {
+              "name": "litter",
+              "kind": "number",
+              "default": 0,
+              "doc": "Dead blades lying on the ground, per square metre (wild: 600).",
               "min": 0
             }
           ]
@@ -4711,7 +6753,7 @@
     "tree": {
       "label": "Tree",
       "group": "Plants",
-      "doc": "A procedural tree (Weber and Penn's parametric model) of a named species; it takes \"bark\" and \"leaves\" instead of material and medium, and none of the other common object keys.",
+      "doc": "A procedural tree (Weber and Penn's parametric model), shrub, cactus or succulent of a named species; it takes \"bark\" and \"leaves\" instead of material and medium, and none of the other common object keys.",
       "fields": [
         {
           "name": "species",
@@ -4727,11 +6769,24 @@
             "balsam-fir",
             "palm",
             "shrub",
+            "hazel",
+            "hawthorn",
+            "juniper",
             "scots-pine",
             "stone-pine",
             "norway-spruce",
             "italian-cypress",
-            "cedar-of-lebanon"
+            "cedar-of-lebanon",
+            "creosote-bush",
+            "sagebrush",
+            "joshua-tree",
+            "utah-juniper",
+            "rabbitbrush",
+            "saguaro",
+            "barrel-cactus",
+            "prickly-pear",
+            "agave",
+            "ocotillo"
           ]
         },
         {"name": "seed", "kind": "integer", "default": 0, "doc": "Chooses this individual tree."},
@@ -5028,6 +7083,13 @@
                   "doc": "Variation of the curvature, degrees."
                 }
               ]
+            },
+            {
+              "name": "form",
+              "kind": "enum",
+              "default": "branching",
+              "doc": "How the plant grows: a branching tree, or a cactus, succulent or mound (the desert species set it).",
+              "options": ["branching", "saguaro", "barrel", "prickly-pear", "agave", "ocotillo", "mound"]
             }
           ]
         }
@@ -5069,11 +7131,24 @@
                 "balsam-fir",
                 "palm",
                 "shrub",
+                "hazel",
+                "hawthorn",
+                "juniper",
                 "scots-pine",
                 "stone-pine",
                 "norway-spruce",
                 "italian-cypress",
-                "cedar-of-lebanon"
+                "cedar-of-lebanon",
+                "creosote-bush",
+                "sagebrush",
+                "joshua-tree",
+                "utah-juniper",
+                "rabbitbrush",
+                "saguaro",
+                "barrel-cactus",
+                "prickly-pear",
+                "agave",
+                "ocotillo"
               ]
             },
             {"name": "weight", "kind": "number", "default": 1, "doc": "Relative abundance."},
@@ -5416,6 +7491,13 @@
                       "doc": "Variation of the curvature, degrees."
                     }
                   ]
+                },
+                {
+                  "name": "form",
+                  "kind": "enum",
+                  "default": "branching",
+                  "doc": "How the plant grows: a branching tree, or a cactus, succulent or mound (the desert species set it).",
+                  "options": ["branching", "saguaro", "barrel", "prickly-pear", "agave", "ocotillo", "mound"]
                 }
               ]
             }
@@ -5453,11 +7535,61 @@
           "doc": "Steepest ground trees stand on, degrees."
         },
         {
+          "name": "favour",
+          "kind": "object",
+          "default": null,
+          "doc": "Crowd the trees along a feature of a mesas heightmap.",
+          "fields": [
+            {
+              "name": "terrain",
+              "kind": "enum",
+              "required": true,
+              "doc": "The feature favoured.",
+              "options": ["washes", "hollows", "joints"]
+            },
+            {
+              "name": "scale",
+              "kind": "number",
+              "default": 150,
+              "doc": "The heightmap's floor_scale (or domes)."
+            },
+            {
+              "name": "spread",
+              "kind": "number",
+              "default": 1,
+              "doc": "How far from the feature the trees spread."
+            },
+            {
+              "name": "strength",
+              "kind": "number",
+              "default": 0.8,
+              "doc": "Share of the trees kept only there.",
+              "min": 0,
+              "max": 1
+            }
+          ]
+        },
+        {
           "name": "variants",
           "kind": "integer",
           "default": 3,
           "doc": "Distinct trees grown per species; build time and memory go with it.",
           "min": 1
+        },
+        {
+          "name": "lod",
+          "kind": "object",
+          "default": null,
+          "doc": "Level of detail: each tree built as coarsely as its size on screen allows; true for defaults, or this object.",
+          "fields": [
+            {
+              "name": "pixels",
+              "kind": "number",
+              "default": 1,
+              "doc": "Detail up to this many pixels across is dropped."
+            },
+            {"name": "max_level", "kind": "integer", "default": 12, "doc": "The coarsest level used."}
+          ]
         },
         {
           "name": "autumn",
@@ -5745,10 +7877,23 @@
                   "doc": "Variation of the curvature, degrees."
                 }
               ]
+            },
+            {
+              "name": "form",
+              "kind": "enum",
+              "default": "branching",
+              "doc": "How the plant grows: a branching tree, or a cactus, succulent or mound (the desert species set it).",
+              "options": ["branching", "saguaro", "barrel", "prickly-pear", "agave", "ocotillo", "mound"]
             }
           ]
         },
-        {"name": "seed", "kind": "integer", "default": 0, "doc": "Chooses the placement and the trees."}
+        {"name": "seed", "kind": "integer", "default": 0, "doc": "Chooses the placement and the trees."},
+        {
+          "name": "camera",
+          "kind": "json",
+          "default": null,
+          "doc": "For lod: {\"location\", \"angle\", \"image_height\"}; filled in from the scene's camera if absent."
+        }
       ],
       "example": {
         "type": "forest",
@@ -5932,7 +8077,7 @@
           "name": "albedo",
           "kind": "color",
           "required": true,
-          "doc": "Fraction of light reflected, per channel."
+          "doc": "Fraction of light reflected, per channel. A texture object is also accepted: {\"texture\": file, \"scale\", \"offset\", \"filter\": ewa|trilinear|bilinear|point, \"wrap\": repeat|clamp|black, \"linear\"}, or a grey level by {\"slope\": [from, to]} or {\"height\": [from, to]} (with \"jitter\", \"jitter_scale\", \"seed\"), or {\"terrain\": washes|hollows|joints, \"scale\", \"spread\"}."
         }
       ],
       "example": {"type": "lambertian", "albedo": [0.8, 0.3, 0.2]}
@@ -5957,7 +8102,12 @@
       "group": "Other",
       "doc": "An opaque diffuse base under a clear glossy coat.",
       "fields": [
-        {"name": "albedo", "kind": "color", "required": true, "doc": "Colour of the diffuse base."},
+        {
+          "name": "albedo",
+          "kind": "color",
+          "required": true,
+          "doc": "Colour of the diffuse base. A texture object is also accepted: {\"texture\": file, \"scale\", \"offset\", \"filter\": ewa|trilinear|bilinear|point, \"wrap\": repeat|clamp|black, \"linear\"}, or a grey level by {\"slope\": [from, to]} or {\"height\": [from, to]} (with \"jitter\", \"jitter_scale\", \"seed\"), or {\"terrain\": washes|hollows|joints, \"scale\", \"spread\"}."
+        },
         {
           "name": "refractive_index",
           "kind": "number",
@@ -6047,14 +8197,14 @@
       "fields": [
         {
           "name": "refractive_index",
-          "kind": "number",
+          "kind": "json",
           "default": 1,
-          "doc": "Index of refraction (glass 1.5, water 1.33)."
+          "doc": "Index of refraction (glass 1.5, water 1.33). A number, a glass name (BK7, fused silica, SF11, diamond), {\"cauchy\": [a, b]} or {\"sellmeier\": {\"b\": [..], \"c\": [..]}}; these disperse in spectral mode."
         },
         {
           "name": "attenuate",
           "kind": "color",
-          "required": true,
+          "default": [1, 1, 1],
           "doc": "Tint applied to light passing through or reflected."
         }
       ],
@@ -6065,13 +8215,65 @@
       "group": "Other",
       "doc": "An emitting surface; objects with it become area lights.",
       "fields": [
-        {"name": "color", "kind": "color", "required": true, "doc": "Colour emitted."},
-        {"name": "intensity", "kind": "number", "default": 1, "doc": "Multiplier on the colour."},
+        {
+          "name": "color",
+          "kind": "color",
+          "default": [1, 1, 1],
+          "doc": "Colour emitted; not with temperature."
+        },
+        {
+          "name": "temperature",
+          "kind": "number",
+          "default": null,
+          "doc": "In place of color: a blackbody of this temperature, kelvin, scaled to unit luminance."
+        },
+        {"name": "intensity", "kind": "number", "default": 1, "doc": "Multiplier on the emission."},
         {
           "name": "two_sided",
           "kind": "boolean",
           "default": false,
           "doc": "Emit from the back of the surface too."
+        },
+        {
+          "name": "texture",
+          "kind": "object",
+          "default": null,
+          "doc": "An image that scales the emission over the surface (eg. a screen).",
+          "fields": [
+            {"name": "texture", "kind": "path", "required": true, "doc": "The image file."},
+            {
+              "name": "scale",
+              "kind": "json",
+              "default": 1,
+              "doc": "Repeats across the texture coordinates: a number or [u, v]."
+            },
+            {
+              "name": "offset",
+              "kind": "json",
+              "default": 0,
+              "doc": "Shift of the texture coordinates: a number or [u, v]."
+            },
+            {
+              "name": "filter",
+              "kind": "enum",
+              "default": "ewa",
+              "doc": "How the image is filtered.",
+              "options": ["ewa", "trilinear", "bilinear", "point"]
+            },
+            {
+              "name": "wrap",
+              "kind": "enum",
+              "default": "repeat",
+              "doc": "What lies beyond the image's edges.",
+              "options": ["repeat", "clamp", "black"]
+            },
+            {
+              "name": "linear",
+              "kind": "boolean",
+              "default": null,
+              "doc": "The image holds linear values; default by its format (8-bit images are sRGB)."
+            }
+          ]
         }
       ],
       "example": {"type": "diffuse-light", "color": [1, 0.9, 0.8], "intensity": 5}
@@ -6216,6 +8418,101 @@
           "kind": "color",
           "default": [0.38, 0.4, 0.26],
           "doc": "Colour of the lichen (used when lichen > 0)."
+        },
+        {
+          "name": "layers",
+          "kind": "json",
+          "default": null,
+          "doc": "Formations' colours by elevation: [[y, colour], ...]."
+        },
+        {
+          "name": "layer_warp",
+          "kind": "number",
+          "default": 0,
+          "doc": "How far the layers' boundaries are warped."
+        },
+        {
+          "name": "beds",
+          "kind": "json",
+          "default": null,
+          "doc": "A list of colours, one per bed of the strata."
+        },
+        {
+          "name": "variety",
+          "kind": "number",
+          "default": 0,
+          "doc": "Strength of broad stains.",
+          "min": 0,
+          "max": 1
+        },
+        {
+          "name": "variety_color",
+          "kind": "color",
+          "default": [0.7, 0.55, 0.4],
+          "doc": "Colour of the stains."
+        },
+        {
+          "name": "varnish",
+          "kind": "number",
+          "default": 0,
+          "doc": "Dark streaks down steep faces (desert varnish).",
+          "min": 0,
+          "max": 1
+        },
+        {
+          "name": "varnish_color",
+          "kind": "color",
+          "default": [0.12, 0.07, 0.05],
+          "doc": "Colour of the varnish."
+        },
+        {
+          "name": "flutes",
+          "kind": "number",
+          "default": 0,
+          "doc": "Strength of vertical grooves, bump mapped.",
+          "min": 0
+        },
+        {
+          "name": "cross_bedding",
+          "kind": "number",
+          "default": 0,
+          "doc": "Strength of inclined laminae (cross-bedding).",
+          "min": 0,
+          "max": 1
+        },
+        {
+          "name": "cross_set",
+          "kind": "number",
+          "default": 1,
+          "doc": "Thickness of a set of cross-beds, in units of scale."
+        },
+        {"name": "pits", "kind": "number", "default": 0, "doc": "Honeycomb weathering.", "min": 0, "max": 1},
+        {"name": "pit_size", "kind": "number", "default": 0.05, "doc": "Size of the pits, in units of scale."},
+        {
+          "name": "fractal",
+          "kind": "number",
+          "default": 0,
+          "doc": "Strength of turbulent relief down to a pixel's size, for close-ups.",
+          "min": 0
+        },
+        {
+          "name": "fractal_size",
+          "kind": "number",
+          "default": 1,
+          "doc": "Size of its largest features, in units of scale."
+        },
+        {
+          "name": "fractal_h",
+          "kind": "number",
+          "default": 1,
+          "doc": "Its roughness exponent: lower is rougher."
+        },
+        {"name": "crackle", "kind": "number", "default": 0, "doc": "Strength of fractures.", "min": 0},
+        {
+          "name": "crackle_size",
+          "kind": "number",
+          "default": 1,
+          "doc": "Spacing of the fractures, in units of scale."
         }
       ],
       "example": {"type": "rock", "preset": "granite", "scale": 1}
@@ -6290,6 +8587,462 @@
         "scale": 3,
         "blend_factor": 0.8
       }
+    },
+    "conductor": {
+      "label": "Conductor",
+      "group": "Other",
+      "doc": "A metal with a GGX microfacet surface, from measured optical constants, eta and k, or a reflectance; optionally anisotropic.",
+      "fields": [
+        {
+          "name": "metal",
+          "kind": "enum",
+          "default": null,
+          "doc": "A measured metal: silver, aluminium, gold, copper or brass.",
+          "options": ["Ag", "Al", "Au", "Cu", "CuZn"]
+        },
+        {
+          "name": "eta",
+          "kind": "color",
+          "default": null,
+          "doc": "Without metal: refractive index per channel (with k; default white if only k is given)."
+        },
+        {
+          "name": "k",
+          "kind": "color",
+          "default": null,
+          "doc": "Without metal: absorption index per channel (default black if only eta is given)."
+        },
+        {
+          "name": "reflectance",
+          "kind": "color",
+          "default": [0.9, 0.9, 0.9],
+          "doc": "Without metal, eta or k: the colour reflected at normal incidence."
+        },
+        {"name": "roughness", "kind": "number", "default": 0, "doc": "GGX roughness; 0 is a mirror."},
+        {
+          "name": "roughness_u",
+          "kind": "number",
+          "default": null,
+          "doc": "Roughness along tangent, for brushed metal; default roughness."
+        },
+        {
+          "name": "roughness_v",
+          "kind": "number",
+          "default": null,
+          "doc": "Roughness across tangent; default roughness."
+        },
+        {"name": "tangent", "kind": "vec3", "default": [1, 0, 0], "doc": "Direction of the brushing."}
+      ],
+      "example": {"type": "conductor", "metal": "Au", "roughness": 0.2}
+    },
+    "coated_diffuse": {
+      "label": "Coated diffuse",
+      "group": "Other",
+      "doc": "A diffuse base under a clear dielectric coat (pbrt's layered material): varnished or glazed surfaces.",
+      "fields": [
+        {
+          "name": "albedo",
+          "kind": "color",
+          "default": [0.5, 0.5, 0.5],
+          "doc": "Colour of the diffuse base. A texture object is also accepted: {\"texture\": file, \"scale\", \"offset\", \"filter\": ewa|trilinear|bilinear|point, \"wrap\": repeat|clamp|black, \"linear\"}, or a grey level by {\"slope\": [from, to]} or {\"height\": [from, to]} (with \"jitter\", \"jitter_scale\", \"seed\"), or {\"terrain\": washes|hollows|joints, \"scale\", \"spread\"}."
+        },
+        {"name": "roughness", "kind": "number", "default": 0, "doc": "Roughness of the coat."},
+        {"name": "refractive_index", "kind": "number", "default": 1.5, "doc": "Index of the coat."},
+        {
+          "name": "thickness",
+          "kind": "number",
+          "default": 0.01,
+          "doc": "Thickness of the layer between coat and base; must be positive."
+        },
+        {
+          "name": "medium_albedo",
+          "kind": "color",
+          "default": [0, 0, 0],
+          "doc": "Albedo of a scattering medium between coat and base; black for none."
+        },
+        {"name": "g", "kind": "number", "default": 0, "doc": "Asymmetry of that medium's scattering."},
+        {
+          "name": "max_depth",
+          "kind": "integer",
+          "default": 10,
+          "doc": "Most bounces followed between the layers."
+        },
+        {
+          "name": "samples",
+          "kind": "integer",
+          "default": 1,
+          "doc": "Random walks averaged per evaluation.",
+          "min": 1
+        }
+      ],
+      "example": {"type": "coated_diffuse", "albedo": [0.7, 0.2, 0.15], "roughness": 0.1}
+    },
+    "coated_conductor": {
+      "label": "Coated conductor",
+      "group": "Other",
+      "doc": "A metal under a clear dielectric coat (pbrt's layered material): lacquered or car-paint metal.",
+      "fields": [
+        {
+          "name": "metal",
+          "kind": "enum",
+          "default": null,
+          "doc": "A measured metal: silver, aluminium, gold, copper or brass.",
+          "options": ["Ag", "Al", "Au", "Cu", "CuZn"]
+        },
+        {
+          "name": "eta",
+          "kind": "color",
+          "default": null,
+          "doc": "Without metal: refractive index per channel (with k; default white if only k is given)."
+        },
+        {
+          "name": "k",
+          "kind": "color",
+          "default": null,
+          "doc": "Without metal: absorption index per channel (default black if only eta is given)."
+        },
+        {
+          "name": "reflectance",
+          "kind": "color",
+          "default": [0.9, 0.9, 0.9],
+          "doc": "Without metal, eta or k: the colour reflected at normal incidence."
+        },
+        {
+          "name": "conductor_roughness",
+          "kind": "number",
+          "default": 0,
+          "doc": "Roughness of the metal under the coat."
+        },
+        {"name": "roughness", "kind": "number", "default": 0, "doc": "Roughness of the coat."},
+        {"name": "refractive_index", "kind": "number", "default": 1.5, "doc": "Index of the coat."},
+        {
+          "name": "thickness",
+          "kind": "number",
+          "default": 0.01,
+          "doc": "Thickness of the layer between coat and base; must be positive."
+        },
+        {
+          "name": "medium_albedo",
+          "kind": "color",
+          "default": [0, 0, 0],
+          "doc": "Albedo of a scattering medium between coat and base; black for none."
+        },
+        {"name": "g", "kind": "number", "default": 0, "doc": "Asymmetry of that medium's scattering."},
+        {
+          "name": "max_depth",
+          "kind": "integer",
+          "default": 10,
+          "doc": "Most bounces followed between the layers."
+        },
+        {
+          "name": "samples",
+          "kind": "integer",
+          "default": 1,
+          "doc": "Random walks averaged per evaluation.",
+          "min": 1
+        }
+      ],
+      "example": {"type": "coated_conductor", "metal": "Cu", "conductor_roughness": 0.2, "roughness": 0.05}
+    },
+    "subsurface": {
+      "label": "Subsurface",
+      "group": "Other",
+      "doc": "Random-walk subsurface scattering under a dielectric surface: skin, wax, marble, milk.",
+      "fields": [
+        {
+          "name": "albedo",
+          "kind": "color",
+          "default": [0.8, 0.8, 0.8],
+          "doc": "Colour of the light that comes back out."
+        },
+        {
+          "name": "radius",
+          "kind": "json",
+          "default": [1, 0.5, 0.25],
+          "doc": "How far light travels inside, scene units: a number or a colour (per channel)."
+        },
+        {
+          "name": "sigma_a",
+          "kind": "color",
+          "default": null,
+          "doc": "In place of albedo and radius: absorption coefficient, per scene unit."
+        },
+        {
+          "name": "sigma_s",
+          "kind": "color",
+          "default": null,
+          "doc": "In place of albedo and radius: scattering coefficient, per scene unit."
+        },
+        {
+          "name": "g",
+          "kind": "number",
+          "default": 0,
+          "doc": "Asymmetry of the scattering inside, -1 to 1 exclusive."
+        },
+        {"name": "refractive_index", "kind": "number", "default": 1.4, "doc": "Index of the surface."}
+      ],
+      "example": {"type": "subsurface", "albedo": [0.8, 0.5, 0.4], "radius": [0.5, 0.25, 0.12]}
+    },
+    "hair": {
+      "label": "Hair",
+      "group": "Other",
+      "doc": "pbrt's hair BSDF, for cylinder curves (curves, fur): coloured by melanin, a colour or an absorption.",
+      "fields": [
+        {
+          "name": "eumelanin",
+          "kind": "number",
+          "default": 1.3,
+          "doc": "Concentration of the dark pigment (0.3 blonde, 1.3 brown, 8 black)."
+        },
+        {"name": "pheomelanin", "kind": "number", "default": 0, "doc": "Concentration of the red pigment."},
+        {
+          "name": "color",
+          "kind": "color",
+          "default": null,
+          "doc": "In place of the melanins: the hair's colour."
+        },
+        {
+          "name": "sigma_a",
+          "kind": "color",
+          "default": null,
+          "doc": "In place of those: absorption inside the hair (takes precedence)."
+        },
+        {"name": "eta", "kind": "number", "default": 1.55, "doc": "Refractive index of the hair."},
+        {
+          "name": "beta_m",
+          "kind": "number",
+          "default": 0.3,
+          "doc": "Roughness along the hair.",
+          "min": 0.01,
+          "max": 1
+        },
+        {
+          "name": "beta_n",
+          "kind": "number",
+          "default": 0.3,
+          "doc": "Roughness around the hair.",
+          "min": 0.01,
+          "max": 1
+        },
+        {"name": "alpha", "kind": "number", "default": 2, "doc": "Tilt of the hair's scales, degrees."}
+      ],
+      "example": {"type": "hair", "eumelanin": 1.3}
+    },
+    "rough_dielectric": {
+      "label": "Rough dielectric",
+      "group": "Other",
+      "doc": "Frosted glass: a dielectric with a GGX microfacet surface.",
+      "fields": [
+        {
+          "name": "refractive_index",
+          "kind": "json",
+          "default": 1.5,
+          "doc": "Index of refraction. A number, a glass name (BK7, fused silica, SF11, diamond), {\"cauchy\": [a, b]} or {\"sellmeier\": {\"b\": [..], \"c\": [..]}}; these disperse in spectral mode."
+        },
+        {"name": "roughness", "kind": "number", "default": 0.3, "doc": "GGX roughness of the surface."},
+        {
+          "name": "attenuate",
+          "kind": "color",
+          "default": [1, 1, 1],
+          "doc": "Tint applied to light passing through or reflected."
+        }
+      ],
+      "example": {"type": "rough_dielectric", "refractive_index": 1.5, "roughness": 0.3}
+    },
+    "thin_dielectric": {
+      "label": "Thin dielectric",
+      "group": "Other",
+      "doc": "A pane of glass of no thickness: it reflects and transmits without bending light.",
+      "fields": [
+        {
+          "name": "refractive_index",
+          "kind": "json",
+          "default": 1.5,
+          "doc": "Index of refraction. A number, a glass name (BK7, fused silica, SF11, diamond), {\"cauchy\": [a, b]} or {\"sellmeier\": {\"b\": [..], \"c\": [..]}}; these disperse in spectral mode."
+        }
+      ],
+      "example": {"type": "thin_dielectric", "refractive_index": 1.5}
+    },
+    "uv": {
+      "label": "UV",
+      "group": "Other",
+      "doc": "Shows the surface's texture coordinates as colour, for checking them.",
+      "fields": [],
+      "example": {"type": "uv"}
+    },
+    "checker": {
+      "label": "Checker",
+      "group": "Other",
+      "doc": "A diffuse checkerboard in the surface's texture coordinates.",
+      "fields": [
+        {
+          "name": "colors",
+          "kind": "json",
+          "default": [[0.8, 0.8, 0.8], [0.1, 0.1, 0.1]],
+          "doc": "The two colours, [colour, colour]."
+        },
+        {
+          "name": "checks",
+          "kind": "json",
+          "default": 8,
+          "doc": "Checks across the texture: a number, or [u, v]."
+        }
+      ],
+      "example": {"type": "checker", "colors": [[0.8, 0.8, 0.8], [0.1, 0.1, 0.4]], "checks": 8}
+    },
+    "soil": {
+      "label": "Soil",
+      "group": "Other",
+      "doc": "Procedural bare ground: mottled earth with stones, crumbs, plant litter and moss, bump mapped.",
+      "fields": [
+        {
+          "name": "preset",
+          "kind": "enum",
+          "default": "loam",
+          "doc": "Kind of ground; every style field below defaults from it.",
+          "options": ["loam", "clay", "sand", "desert", "forest_floor"]
+        },
+        {
+          "name": "color",
+          "kind": "color",
+          "default": [0.17, 0.12, 0.08],
+          "doc": "Main colour of the earth (default from the preset; loam's shown)."
+        },
+        {
+          "name": "humus",
+          "kind": "color",
+          "default": [0.07, 0.05, 0.035],
+          "doc": "Darker colour it mottles toward (default from the preset; loam's shown)."
+        },
+        {
+          "name": "mottle_size",
+          "kind": "number",
+          "default": 0.6,
+          "doc": "Size of the mottling, m (default from the preset; loam's shown).",
+          "min": 0.0001
+        },
+        {
+          "name": "stone_color",
+          "kind": "color",
+          "default": [0.24, 0.22, 0.19],
+          "doc": "Colour of the stones (default from the preset; loam's shown)."
+        },
+        {
+          "name": "stones",
+          "kind": "number",
+          "default": 0.02,
+          "doc": "Fraction of the ground covered by stones (default from the preset; loam's shown).",
+          "min": 0,
+          "max": 1
+        },
+        {
+          "name": "stone_size",
+          "kind": "number",
+          "default": 0.012,
+          "doc": "Size of the stones, m (default from the preset; loam's shown).",
+          "min": 0.0001
+        },
+        {
+          "name": "crumb_color",
+          "kind": "color",
+          "default": [0.04, 0.03, 0.02],
+          "doc": "Colour of the crumbs of earth (default from the preset; loam's shown)."
+        },
+        {
+          "name": "crumbs",
+          "kind": "number",
+          "default": 0.15,
+          "doc": "Fraction covered by crumbs (default from the preset; loam's shown).",
+          "min": 0,
+          "max": 1
+        },
+        {
+          "name": "litter_color",
+          "kind": "color",
+          "default": [0.3, 0.24, 0.14],
+          "doc": "Colour of dead plant litter (default from the preset; loam's shown)."
+        },
+        {
+          "name": "litter",
+          "kind": "number",
+          "default": 0.45,
+          "doc": "Fraction covered by litter (default from the preset; loam's shown).",
+          "min": 0,
+          "max": 1
+        },
+        {
+          "name": "litter_length",
+          "kind": "number",
+          "default": 0.04,
+          "doc": "Length of a piece of litter, m (default from the preset; loam's shown).",
+          "min": 0.0001
+        },
+        {
+          "name": "litter_width",
+          "kind": "number",
+          "default": 0.0025,
+          "doc": "Width of a piece of litter, m (default from the preset; loam's shown).",
+          "min": 1e-05
+        },
+        {
+          "name": "moss_color",
+          "kind": "color",
+          "default": [0.06, 0.09, 0.03],
+          "doc": "Colour of the moss (default from the preset; loam's shown)."
+        },
+        {
+          "name": "moss",
+          "kind": "number",
+          "default": 0.12,
+          "doc": "Fraction covered by moss (default from the preset; loam's shown).",
+          "min": 0,
+          "max": 1
+        },
+        {
+          "name": "bump",
+          "kind": "number",
+          "default": 0.6,
+          "doc": "Strength of the relief (default from the preset; loam's shown).",
+          "min": 0
+        },
+        {
+          "name": "clod_size",
+          "kind": "number",
+          "default": 0.025,
+          "doc": "Size of the clods, m (default from the preset; loam's shown).",
+          "min": 0.0001
+        },
+        {
+          "name": "scale",
+          "kind": "number",
+          "default": 1,
+          "doc": "Scene units per metre of the texture (for a scene not in metres)."
+        },
+        {"name": "seed", "kind": "integer", "default": 0, "doc": "Chooses the pattern."},
+        {"name": "wetness", "kind": "number", "default": 0, "doc": "Darker and glossier.", "min": 0, "max": 1}
+      ],
+      "example": {"type": "soil", "preset": "loam"}
+    },
+    "mix": {
+      "label": "Mix",
+      "group": "Other",
+      "doc": "Two materials mixed: at each point the second with probability amount, else the first.",
+      "fields": [
+        {
+          "name": "materials",
+          "kind": "list",
+          "required": true,
+          "doc": "Names of the two materials, [A, B].",
+          "item": "material"
+        },
+        {
+          "name": "amount",
+          "kind": "json",
+          "default": 0.5,
+          "doc": "Share of B, 0 to 1; or a texture object whose grey level is the share: an image {\"texture\": file, ...}, {\"slope\": [from, to]}, {\"height\": [from, to]} or {\"terrain\": ...}."
+        }
+      ],
+      "example": {"type": "mix", "materials": ["M", "M"], "amount": 0.5}
     }
   },
   "media": {

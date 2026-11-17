@@ -1343,7 +1343,7 @@ UI, file IO and rayon's threads would follow.
        `trace`'s 7.1.
      - 16 of 72 demo scenes reach the GPU (plus `deep-space` after #142); the rest stop at
        flattening (media, procedural shapes, textures, spectral rendering): phase 3's fallback.
-   - Sky and space on the GPU (done for accuracy; speed open): the GPU's own sky, not an
+   - Sky and space on the GPU (done): the GPU's own sky, not an
      approximation of it. Goal: as little difference from the CPU as f32 allows.
 
      Result: ray by ray, the shader's air is within 3e-5 of the renderer's (sky, aerial
@@ -1363,6 +1363,27 @@ UI, file IO and rayon's threads would follow.
      The remedy is the queues of phase 2 below: sky and space in their own kernel, fed the
      escaping rays, the sky's light samples and aerial perspective's in-scattering (the
      transmittance, which the path needs at once, is a short march of depths alone).
+
+     Done: a wavefront by bounce, on #124. Per sample on the M2 at 640 x 360 (baked map /
+     exact in one kernel / exact, split; the CPU wavefront integrator's): demo 19 / 48 / 13.9
+     ms (41), spheres 7.4 / - / 11.8 (42), sky-sunset 7.1 / - / 11.4 (49); limb-sunset 46,
+     night-orbit 58, stratosphere 23 ms (the CPU's 286, 406, 356). Images unchanged (the same
+     random numbers). In Chromium (WebGPU on the M2): compile and first pass 7.4 s (2.7 s with
+     the map, 11.8 s in one kernel); spheres at 160 x 90 35.5 ms a pass (16.4 ms with the
+     map), where a pass's `max_depth` + 2 rounds of dispatches cost more than the pixels.
+     Browser against native: FLIP 0.0025 (spheres), 0.0002 (night-orbit).
+
+     Design: a wavefront by bounce. A compact queue of sky queries would need
+     several of a pixel's results summed, and WebGPU has no float atomics; one bounce at a time
+     bounds each pixel's queries at three, in fixed slots. Two entry points: `bounce` advances
+     each path one vertex (its state in a buffer between dispatches; the camera rays' buffer
+     becomes it, which keeps to WebGPU's 8 storage buffers) and fills its pixel's slots
+     (escaping ray, sky light sample, aerial in-scattering: origin, direction, weight, and a
+     distance for the last); `sky` evaluates a pixel's slots at one call of `background` and
+     adds them to its sum. A pass is `max_depth` + 1 pairs of dispatches. Known: images must
+     not change (the same random numbers, in the same order; tests compare the shader's CPU
+     build and the GPU). Assumed, to measure: each kernel's code is small enough to recover the
+     megakernel's speed, and the extra dispatches cost less than they save.
 
      Known (from the code): the CPU's escaping rays take `LUTSky::air_radiance`, a lookup in
      `SkyViewLUT` (8 altitudes, 1-200 m, 256 x 128, Rayleigh, Mie and multiple scattering

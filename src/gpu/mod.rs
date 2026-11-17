@@ -47,7 +47,7 @@ const WORKGROUP: u32 = 64;
 const MAX_GROUPS: u32 = 65535;
 
 // The buffers' layouts are the shader crate's own (`shaders/pathtrace`), so the two can't drift.
-use pathtrace::{CameraRay as GpuRay, Light as GpuLight, Material as GpuMaterial, Node as GpuNode, Params, Prim as GpuPrim};
+use pathtrace::{CameraRay as GpuRay, Light as GpuLight, Material as GpuMaterial, Node as GpuNode, Params, PathState, Prim as GpuPrim, SkyQuery};
 use pathtrace::glam::{UVec4, Vec4};
 
 fn v4(v: &Vector3<f64>, w: f32) -> Vec4 {
@@ -213,11 +213,14 @@ fn space_record(tables: &mut Vec<f32>, space: &crate::procedural::space::Space) 
 pub struct GpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    pipeline: wgpu::ComputePipeline,
+    /// The two kernels a pass alternates: a vertex of every path, then the light its sky queries
+    /// find (`pathtrace::bounce_paths`, `answer_sky`).
+    bounce_pipeline: wgpu::ComputePipeline,
+    sky_pipeline: wgpu::ComputePipeline,
     bind_group: wgpu::BindGroup,
     params: Params,
     params_buffer: wgpu::Buffer,
-    rays_buffer: wgpu::Buffer,
+    paths_buffer: wgpu::Buffer,
     accum_buffer: wgpu::Buffer,
     readback: wgpu::Buffer,
     pub adapter_name: String,
@@ -450,7 +453,8 @@ impl GpuRenderer {
         for (what, bytes) in [("primitives", std::mem::size_of_val(prims.as_slice()) as u64),
                               ("BVH nodes", std::mem::size_of_val(nodes.as_slice()) as u64),
                               ("tables", std::mem::size_of_val(tables.as_slice()) as u64),
-                              ("camera rays", pixels * std::mem::size_of::<GpuRay>() as u64)] {
+                              ("paths", pixels * std::mem::size_of::<PathState>() as u64),
+                              ("sky queries", 2 * pixels * std::mem::size_of::<SkyQuery>() as u64)] {
             if bytes > largest {
                 return Err(format!("its {} need {} MB, more than the GPU's largest buffer ({} MB)", what, bytes >> 20, largest >> 20));
             }
@@ -478,14 +482,31 @@ impl GpuRenderer {
         #[cfg(target_arch = "wasm32")]
         let source = wgpu::ShaderSource::Wgsl(include_str!("pathtrace.wgsl").into());
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pathtrace"), source });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("pathtrace"),
-            layout: None,
+        // One layout for both kernels, so they share a bind group: the parameters, the scene's
+        // buffers (read only), the paths, the image and the sky queries.
+        let binding = |binding: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
+            binding, visibility: wgpu::ShaderStages::COMPUTE, count: None,
+            ty: wgpu::BindingType::Buffer { ty, has_dynamic_offset: false, min_binding_size: None },
+        };
+        let read = wgpu::BufferBindingType::Storage { read_only: true };
+        let write = wgpu::BufferBindingType::Storage { read_only: false };
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("scene"),
+            entries: &[binding(0, wgpu::BufferBindingType::Uniform), binding(1, read), binding(2, read), binding(3, read),
+                       binding(4, read), binding(5, read), binding(6, write), binding(7, write), binding(8, write)],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("pathtrace"), bind_group_layouts: &[Some(&layout)], immediate_size: 0,
+        });
+        let kernel = |entry_point: &str| device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(entry_point),
+            layout: Some(&pipeline_layout),
             module: &module,
-            entry_point: Some("main"),
+            entry_point: Some(entry_point),
             compilation_options: Default::default(),
             cache: None,
         });
+        let (bounce_pipeline, sky_pipeline) = (kernel("bounce_paths"), kernel("answer_sky"));
         let storage = |label: &str, bytes: &[u8]| device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(label), contents: bytes, usage: wgpu::BufferUsages::STORAGE,
         });
@@ -498,9 +519,13 @@ impl GpuRenderer {
             label: Some("params"), contents: bytemuck::bytes_of(&params),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        let rays_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("rays"), size: pixels * std::mem::size_of::<GpuRay>() as u64,
+        let paths_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("paths"), size: pixels * std::mem::size_of::<PathState>() as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        let queries_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("sky queries"), size: 2 * pixels * std::mem::size_of::<SkyQuery>() as u64,
+            usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
         });
         let accum_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("accum"), size: pixels * 16,
@@ -510,14 +535,14 @@ impl GpuRenderer {
             label: Some("readback"), size: pixels * 16,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
-        let layout = pipeline.get_bind_group_layout(0);
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("scene"),
             layout: &layout,
             entries: &[entry(0, &params_buffer), entry(1, &prims_buffer), entry(2, &nodes_buffer), entry(3, &materials_buffer),
-                       entry(4, &lights_buffer), entry(5, &tables_buffer), entry(6, &rays_buffer), entry(7, &accum_buffer)],
+                       entry(4, &lights_buffer), entry(5, &tables_buffer), entry(6, &paths_buffer), entry(7, &accum_buffer),
+                       entry(8, &queries_buffer)],
         });
-        Ok(GpuRenderer { device, queue, pipeline, bind_group, params, params_buffer, rays_buffer, accum_buffer, readback, adapter_name })
+        Ok(GpuRenderer { device, queue, bounce_pipeline, sky_pipeline, bind_group, params, params_buffer, paths_buffer, accum_buffer, readback, adapter_name })
     }
 
     /// Camera rays for sample `k` of every pixel, as the wavefront integrator's.
@@ -552,13 +577,25 @@ impl GpuRenderer {
         let (gx, gy) = (groups.min(MAX_GROUPS), groups.div_ceil(MAX_GROUPS));
         self.params.dims.z = k as u32;
         self.queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&self.params));
-        self.queue.write_buffer(&self.rays_buffer, 0, bytemuck::cast_slice(&Self::camera_rays(s, k)));
+        let seed = self.params.seed.x;
+        let paths: Vec<PathState> = Self::camera_rays(s, k).iter().enumerate()
+            .map(|(i, ray)| PathState::start(i as u32, k as u32, seed, ray)).collect();
+        self.queue.write_buffer(&self.paths_buffer, 0, bytemuck::cast_slice(&paths));
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
+            // A path has at most `max_depth` + 1 vertices; the last round of `bounce_paths` adds
+            // the paths ended in the one before to the image.
             let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.dispatch_workgroups(gx, gy, 1);
+            let rounds = self.params.dims.w + 2;
+            for round in 0..rounds {
+                pass.set_pipeline(&self.bounce_pipeline);
+                pass.dispatch_workgroups(gx, gy, 1);
+                if round + 1 < rounds {
+                    pass.set_pipeline(&self.sky_pipeline);
+                    pass.dispatch_workgroups(gx, gy, 1);
+                }
+            }
         }
         self.queue.submit(Some(encoder.finish()));
     }

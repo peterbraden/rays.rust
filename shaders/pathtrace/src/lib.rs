@@ -1676,267 +1676,366 @@ fn survives(s: &Scene, depth: u32, attenuate: Vec3, beta: &mut Vec3, rng: &mut u
     true
 }
 
-/// The radiance along one camera ray; `rays` counts the rays it traces (the path's and
-/// shadow rays), as the wavefront integrator's `rays_cast` does.
-pub fn radiance(s: &Scene, ro_in: Vec3, rd_in: Vec3, rng: &mut u32, rays: &mut u32) -> Vec3 {
-    let mut ro = ro_in;
-    let mut rd = rd_in.normalize();
-    let mut beta = Vec3::ONE;
-    let mut l = Vec3::ZERO;
-    let mut specular = true;
-    let mut prev_pdf = 0.0;
-    let mut scattered = false;
+/// A path between bounces, one per pixel in the `paths` buffer: `bounce` advances it a vertex
+/// at a time, and `sky_light` adds the light its vertex asked of the sky (`SkyQuery`). The host
+/// starts it from a camera ray (`PathState::start`).
+#[derive(Copy, Clone)]
+#[cfg_attr(not(target_arch = "spirv"), derive(bytemuck::Pod, bytemuck::Zeroable))]
+#[repr(C)]
+pub struct PathState {
+    /// The ray's origin, and the camera sample's weight.
+    pub o: Vec4,
+    /// Its direction, and the density it was sampled with (for MIS).
+    pub d: Vec4,
+    /// The throughput, and the depth.
+    pub beta: Vec4,
+    /// The light gathered so far, and the rays traced.
+    pub l: Vec4,
+    /// The random numbers' state, and `PATH_*` flags.
+    pub state: UVec4,
+}
+
+/// `PathState::state.y`: still tracing; its last bounce was specular; it has scattered off a
+/// rough surface (so regularisation applies); its light has been added to the image.
+pub const PATH_ACTIVE: u32 = 1;
+pub const PATH_SPECULAR: u32 = 2;
+pub const PATH_SCATTERED: u32 = 4;
+pub const PATH_ADDED: u32 = 8;
+
+impl PathState {
+    /// Pixel `index`'s path in pass `pass` from its camera ray.
+    pub fn start(index: u32, pass: u32, seed: u32, ray: &CameraRay) -> PathState {
+        let live = ray.d.w >= 0.5;
+        PathState {
+            o: ray.o, d: ray.d.truncate().normalize_or_zero().extend(0.0), beta: Vec4::new(1.0, 1.0, 1.0, 0.0), l: Vec4::ZERO,
+            state: UVec4::new(path_seed(index, pass, seed), if live { PATH_ACTIVE | PATH_SPECULAR } else { PATH_ADDED }, 0, 0),
+        }
+    }
+}
+
+/// Light a vertex asks of the sky, which `sky_light` finds: the sky beyond (`background`) along
+/// a ray from `o` (`o.w` < 0), or the air's in-scattering towards `o` from `o.w` away (aerial
+/// perspective, `segment`), times `weight`; none if `weight` is zero. Two per pixel: the
+/// escaping ray's or the hit's haze, and the sky's light sample.
+#[derive(Copy, Clone)]
+#[cfg_attr(not(target_arch = "spirv"), derive(bytemuck::Pod, bytemuck::Zeroable))]
+#[repr(C)]
+pub struct SkyQuery {
+    pub o: Vec4,
+    pub d: Vec4,
+    pub weight: Vec4,
+}
+
+impl SkyQuery {
+    pub const NONE: SkyQuery = SkyQuery { o: Vec4::ZERO, d: Vec4::ZERO, weight: Vec4::ZERO };
+
+    fn sky(o: Vec3, d: Vec3, weight: Vec3) -> SkyQuery {
+        SkyQuery { o: o.extend(-1.0), d: d.extend(0.0), weight: weight.extend(0.0) }
+    }
+
+    fn haze(o: Vec3, d: Vec3, distance: f32, weight: Vec3) -> SkyQuery {
+        SkyQuery { o: o.extend(distance), d: d.extend(0.0), weight: weight.extend(0.0) }
+    }
+}
+
+/// The light a query finds, times its weight.
+pub fn sky_light(s: &Scene, q: &SkyQuery) -> Vec3 {
+    let w = q.weight.xyz();
+    if w.dot(w) == 0.0 {
+        return Vec3::ZERO;
+    }
+    if q.o.w < 0.0 {
+        w * background(s, q.o.xyz(), q.d.xyz())
+    } else {
+        w * segment(s, s.params.air.y, q.o.xyz(), q.d.xyz(), q.o.w).1
+    }
+}
+
+/// `segment`'s transmittance alone: the depths along the ray, which the path needs at once
+/// (its in-scattering is the sky kernel's).
+fn aerial_transmittance(s: &Scene, o: Vec3, d: Vec3, distance: f32) -> Vec3 {
+    let a = load_air(s, s.params.air.y);
+    let (start, end) = match view_ray_span(&a, o, d) {
+        Some((start, end)) if start < distance => (start, end.min(distance)),
+        _ => return Vec3::ONE,
+    };
+    let mut depth = Vec3::ZERO;
+    let mut k = 0;
+    while k < SKY_STEPS {
+        let (t, step) = span_sample(&a, o, d, start, end, SKY_STEPS, k);
+        depth += depths(&a, altitude(&a, o + d * t), step);
+        k += 1;
+    }
+    transmittance(&a, depth)
+}
+
+/// The path with a new ray, still tracing.
+#[allow(clippy::too_many_arguments)]
+fn carry_on(p: &PathState, o: Vec3, d: Vec3, beta: Vec3, l: Vec3, rays: u32, rng: u32, flags: u32, prev_pdf: f32, depth: u32, q0: SkyQuery, q1: SkyQuery) -> (PathState, SkyQuery, SkyQuery) {
+    (PathState { o: o.extend(p.o.w), d: d.extend(prev_pdf), beta: beta.extend(depth as f32), l: l.extend(rays as f32), state: UVec4::new(rng, flags, 0, 0) }, q0, q1)
+}
+
+/// The path, ended at this vertex (its sky queries still to be answered).
+#[allow(clippy::too_many_arguments)]
+fn finish(p: &PathState, o: Vec3, d: Vec3, beta: Vec3, l: Vec3, rays: u32, rng: u32, flags: u32, prev_pdf: f32, depth: u32, q0: SkyQuery, q1: SkyQuery) -> (PathState, SkyQuery, SkyQuery) {
+    carry_on(p, o, d, beta, l, rays, rng, flags & !PATH_ACTIVE, prev_pdf, depth, q0, q1)
+}
+
+/// One vertex of a path (`PathState`): trace its ray; at what it hits, haze, emission, direct
+/// light (asking the sky for its light sample), and the next ray, or the end. Returns the path
+/// and its two sky queries.
+pub fn bounce(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
+    let (ro, rd, prev_pdf) = (p.o.xyz(), p.d.xyz(), p.d.w);
+    let mut beta = p.beta.xyz();
+    let depth = p.beta.w as u32;
+    let mut l = p.l.xyz();
+    let mut rays = p.l.w as u32;
+    let mut rng = p.state.x;
+    let flags_p = p.state.y;
+    let specular = flags_p & PATH_SPECULAR != 0;
+    let (mut q0, mut q1) = (SkyQuery::NONE, SkyQuery::NONE);
     let max_depth = s.params.dims.w;
     let flags = s.params.offs2.w;
     let n_emitters = s.params.counts.z;
-    let mut depth = 0u32;
-    // The sky's light is evaluated in one place (`background`, which is large, and rust-gpu
-    // inlines every call): for the ray that escapes, and for the vertex before's light sample
-    // of the sky, which is kept (`pending`, its weight, origin and direction) until then. A
-    // path that ends after a light sample comes round once more (`done`) to settle it.
-    let mut pending = Vec3::ZERO;
-    let (mut pending_o, mut pending_d) = (Vec3::ZERO, Vec3::Y);
-    let mut done = false;
-    loop {
-        let hit = if done { Hit { t: INF, prim: NONE, ng: Vec3::Y, ns: Vec3::Y } } else { trace(s, ro, rd, 0.0, INF, false) };
-        let escaped = !done && hit.prim == NONE;
-        if !done {
-            *rays += 1;
-        }
-        // The sky, weighted against sampling it if the last vertex did.
-        let mut w_sky = 1.0;
-        if escaped && !specular && flags & FLAG_SAMPLE_ENV != 0 {
-            w_sky = power_heuristic(prev_pdf, env_pdf(s, rd));
-        }
-        let mut q = 0;
-        while q < 2 {
-            let (weight, o, d) = if q == 0 { (pending, pending_o, pending_d) } else if escaped { (beta * w_sky, ro, rd) } else { (Vec3::ZERO, ro, rd) };
-            if weight.dot(weight) > 0.0 {
-                l += weight * background(s, o, d);
-            }
-            q += 1;
-        }
-        pending = Vec3::ZERO;
-        if done {
-            break;
-        }
-        if escaped {
-            if flags & FLAG_SUN != 0 {
-                let ws = if specular { 1.0 } else { power_heuristic(prev_pdf, sun_disc_pdf(s, rd)) };
-                l += beta * sun_disc(s, ro, rd) * ws;
-            }
-            break;
-        }
-        // Aerial perspective: the air before the hit attenuates what lies beyond it, and adds
-        // its own light.
-        if flags & FLAG_AERIAL != 0 && hit.t > AERIAL_FROM {
-            let (tr, ins) = aerial_segment(s, ro, rd, hit.t);
-            l += beta * ins;
-            beta *= tr;
-        }
-        let point = ro + rd * hit.t;
-        let prim = at(s.prims, hit.prim);
-        let m = resolve_material(s, prim.info.y, point);
-        let mat = at(s.materials, m);
-        if mat.kind == MAT_EMITTER {
-            let le = emitted(s, m, hit.ns, -rd);
-            let mut w = 1.0;
-            if !specular && flags & FLAG_SAMPLE_LIGHTS != 0 && prim.info.z > 0 {
-                let lp = emitter_probability(s, prim.info.z - 1) * light_pdf(s, hit.prim, ro, point, hit.ng);
-                w = power_heuristic(prev_pdf, lp);
-            }
-            l += beta * le * w;
-            break;
-        }
-        let wo = -rd;
-        let ng = if hit.ng.dot(wo) < 0.0 { -hit.ng } else { hit.ng };
-        let ns = if hit.ns.dot(wo) < 0.0 { -hit.ns } else { hit.ns };
-        let eps = offset_for(s, point);
-        let above = point + ng * eps;
-        let floor_alpha = if scattered { s.params.misc.x } else { 0.0 };
 
-        // Delta bounces: mirrors, glass, smooth coats.
-        let mut delta = false;
-        let mut next_dir = Vec3::ZERO;
-        let mut next_from = above;
-        let mut attenuate = Vec3::ONE;
-        let mut lobe = Lobe::new(0, ns);
-        if mat.kind == MAT_DIFFUSE {
-            lobe.albedo = mat.c0.xyz();
-        } else if mat.kind == MAT_PLASTIC {
-            let alpha = (mat.p.y * mat.p.y).max(floor_alpha);
-            if alpha >= MIN_ALPHA {
-                lobe.kind = 2;
-                lobe.fresnel = 1;
-                lobe.alpha = alpha;
-                lobe.ior = mat.p.x;
-                lobe.base = mat.c0.xyz();
-            } else if rand(rng) < fresnel_reflectance(wo.dot(ns).abs(), 1.0 / mat.p.x, mat.p.x) {
-                delta = true;
-                next_dir = reflect_about(rd, ns);
-            } else {
-                lobe.albedo = mat.c0.xyz();
-            }
-        } else if mat.kind == MAT_CONDUCTOR || mat.kind == MAT_METAL {
-            let alpha = (mat.p.y * mat.p.y).max(floor_alpha);
-            lobe.kind = 1;
-            lobe.alpha = alpha;
-            lobe.albedo = mat.c0.xyz();
-            lobe.k = mat.c1.xyz();
-            lobe.fresnel = if mat.kind == MAT_METAL { 0 } else { 2 };
-            if alpha < MIN_ALPHA {
-                delta = true;
-                next_dir = reflect_about(rd, ns);
-                attenuate = lobe.fresnel(wo.dot(ns).abs());
-            }
-        } else if mat.kind == MAT_DIELECTRIC {
-            // As `functions::scatter_dielectric`.
-            let n = hit.ns;
-            let exiting = rd.dot(n) > 0.0;
-            let outward = if exiting { -n } else { n };
-            let ior = mat.p.x;
-            let ni_over_nt = if exiting { ior } else { 1.0 / ior };
-            let r = fresnel_reflectance(rd.dot(n).abs(), ni_over_nt, ior);
-            let dt = rd.dot(outward);
-            let disc = 1.0 - ni_over_nt * ni_over_nt * (1.0 - dt * dt);
-            delta = true;
-            if disc > 0.0 && rand(rng) >= r {
-                next_dir = ((rd - outward * dt) * ni_over_nt - outward * disc.sqrt()).normalize();
-                next_from = point - outward * eps;
-                attenuate = mat.c0.xyz();
-            } else {
-                next_dir = reflect_about(rd, n);
-                next_from = point + outward * eps;
-            }
+    let hit = trace(s, ro, rd, 0.0, INF, false);
+    rays += 1;
+    if hit.prim == NONE {
+        // The sky, weighted against sampling it if the last vertex did, and the sun's disc.
+        let mut w = 1.0;
+        if !specular && flags & FLAG_SAMPLE_ENV != 0 {
+            w = power_heuristic(prev_pdf, env_pdf(s, rd));
         }
-
-        if delta {
-            if depth >= max_depth || !survives(s, depth, attenuate, &mut beta, rng) {
-                break;
-            }
-            beta *= attenuate;
-            specular = true;
-            ro = next_from;
-            rd = next_dir.normalize();
-            depth += 1;
-            continue;
+        q0 = SkyQuery::sky(ro, rd, beta * w);
+        if flags & FLAG_SUN != 0 {
+            let ws = if specular { 1.0 } else { power_heuristic(prev_pdf, sun_disc_pdf(s, rd)) };
+            l += beta * sun_disc(s, ro, rd) * ws;
         }
-
-        scattered = true;
-        // Direct light, one shadow ray at a time, with one evaluation of the lobe and one call
-        // of `occluded` (so one copy of each once rust-gpu inlines everything): every point
-        // light, then the sun, one area light and the sky. Each gives a direction, a distance,
-        // the light arriving if nothing is in the way, and its density (0 for a delta light, so
-        // no MIS weight).
-        let n_lights = s.params.counts.w;
-        let mut k = 0;
-        while k < n_lights + 3 {
-            let mut wi = Vec3::ZERO;
-            let mut dist = 1e30;
-            let mut li = Vec3::ZERO;
-            let mut pdf = 0.0;
-            if k < n_lights {
-                let light = at(s.lights, k);
-                let to = light.pos.xyz() - above;
-                let d2 = to.dot(to);
-                wi = to / d2.sqrt();
-                dist = d2.sqrt();
-                li = light.intensity.xyz() * spot(&light, -wi) / d2;
-            } else if k == n_lights {
-                // The sun: a point for lobes that can't resolve its disc, else its disc with MIS.
-                if flags & FLAG_SUN != 0 {
-                    let sd = s.params.sun_dir.xyz();
-                    let solid_angle = sun_solid_angle(s);
-                    if lobe.pdf(wo, sd) * solid_angle < POINT_SUN {
-                        wi = sd;
-                        li = s.params.sun_irr.xyz() * sun_transmittance(s, above);
-                    } else {
-                        // Uniformly in the cone, by 1 - cos θ (as `sun_angle`, without the
-                        // rounding of cos θ near 1).
-                        let one_minus = rand(rng) * solid_angle / (2.0 * PI);
-                        let cos_t = 1.0 - one_minus;
-                        let sin_t = (one_minus * (2.0 - one_minus)).max(0.0).sqrt();
-                        let phi = 2.0 * PI * rand(rng);
-                        let (t, b) = basis(sd);
-                        wi = t * (sin_t * phi.cos()) + b * (sin_t * phi.sin()) + sd * cos_t;
-                        pdf = sun_disc_pdf(s, wi);
-                        if pdf > 0.0 {
-                            li = sun_disc(s, above, wi);
-                        }
-                    }
-                }
-            } else if k == n_lights + 1 {
-                // One area light, by power.
-                if flags & FLAG_SAMPLE_LIGHTS != 0 && n_emitters > 0 {
-                    let e = search(s, s.params.offs.y, n_emitters, rand(rng));
-                    let pmf = emitter_probability(s, e);
-                    let pi = at(s.tables, s.params.offs.x + e).to_bits();
-                    let (y, ny, light_pdf) = sample_light(s, pi, above, rand(rng), rand(rng));
-                    let to = y - above;
-                    let d = to.length();
-                    wi = to / d;
-                    dist = d * (1.0 - 1e-4) - eps;
-                    if light_pdf > 0.0 {
-                        pdf = pmf * light_pdf;
-                        li = emitted(s, at(s.prims, pi).info.y, ny, -wi);
-                    }
-                }
-            } else if flags & FLAG_SAMPLE_ENV != 0 {
-                // The sky, by its brightness: its light found at the top of the next round.
-                let es = env_sample(s, rand(rng), rand(rng));
-                if es.w > 0.0 {
-                    wi = es.xyz();
-                    pdf = es.w;
-                    li = Vec3::ONE;
-                }
-            }
-            if li.dot(li) > 0.0 {
-                let (f, lobe_pdf) = lobe.eval_pdf(wo, wi);
-                let w = if pdf > 0.0 { power_heuristic(pdf, lobe_pdf) / pdf } else { 1.0 };
-                if f.dot(f) > 0.0 {
-                    *rays += 1;
-                    if !occluded(s, above, wi, dist) {
-                        if k == n_lights + 2 {
-                            pending = beta * f * w;
-                            pending_o = above;
-                            pending_d = wi;
-                        } else {
-                            l += beta * f * li * w;
-                        }
-                    }
-                }
-            }
-            k += 1;
-        }
-        // The next ray (or one more round, for the sky's light sample).
-        if depth >= max_depth {
-            done = true;
-            continue;
-        }
-        let wi = lobe.sample(wo, rand(rng), rand(rng), rand(rng));
-        let (f, pdf) = lobe.eval_pdf(wo, wi);
-        if wi.dot(wi) == 0.0 || pdf <= 0.0 {
-            done = true;
-            continue;
-        }
-        let weight = f / pdf;
-        if !survives(s, depth, weight, &mut beta, rng) {
-            done = true;
-            continue;
-        }
-        beta *= weight;
-        prev_pdf = pdf;
-        specular = false;
-        let side = if wi.dot(ng) < 0.0 { -ng } else { ng };
-        ro = point + side * eps;
-        rd = wi;
-        depth += 1;
+        return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
     }
-    l
+    // Aerial perspective: the air before the hit attenuates what lies beyond it, and adds its
+    // own light (found by the sky kernel, weighted by the throughput before).
+    if flags & FLAG_AERIAL != 0 && hit.t > AERIAL_FROM {
+        q0 = SkyQuery::haze(ro, rd, hit.t, beta);
+        beta *= aerial_transmittance(s, ro, rd, hit.t);
+    }
+    let point = ro + rd * hit.t;
+    let prim = at(s.prims, hit.prim);
+    let m = resolve_material(s, prim.info.y, point);
+    let mat = at(s.materials, m);
+    if mat.kind == MAT_EMITTER {
+        let le = emitted(s, m, hit.ns, -rd);
+        let mut w = 1.0;
+        if !specular && flags & FLAG_SAMPLE_LIGHTS != 0 && prim.info.z > 0 {
+            let lp = emitter_probability(s, prim.info.z - 1) * light_pdf(s, hit.prim, ro, point, hit.ng);
+            w = power_heuristic(prev_pdf, lp);
+        }
+        l += beta * le * w;
+        return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
+    }
+    let wo = -rd;
+    let ng = if hit.ng.dot(wo) < 0.0 { -hit.ng } else { hit.ng };
+    let ns = if hit.ns.dot(wo) < 0.0 { -hit.ns } else { hit.ns };
+    let eps = offset_for(s, point);
+    let above = point + ng * eps;
+    let floor_alpha = if flags_p & PATH_SCATTERED != 0 { s.params.misc.x } else { 0.0 };
+
+    // Delta bounces: mirrors, glass, smooth coats.
+    let mut delta = false;
+    let mut next_dir = Vec3::ZERO;
+    let mut next_from = above;
+    let mut attenuate = Vec3::ONE;
+    let mut lobe = Lobe::new(0, ns);
+    if mat.kind == MAT_DIFFUSE {
+        lobe.albedo = mat.c0.xyz();
+    } else if mat.kind == MAT_PLASTIC {
+        let alpha = (mat.p.y * mat.p.y).max(floor_alpha);
+        if alpha >= MIN_ALPHA {
+            lobe.kind = 2;
+            lobe.fresnel = 1;
+            lobe.alpha = alpha;
+            lobe.ior = mat.p.x;
+            lobe.base = mat.c0.xyz();
+        } else if rand(&mut rng) < fresnel_reflectance(wo.dot(ns).abs(), 1.0 / mat.p.x, mat.p.x) {
+            delta = true;
+            next_dir = reflect_about(rd, ns);
+        } else {
+            lobe.albedo = mat.c0.xyz();
+        }
+    } else if mat.kind == MAT_CONDUCTOR || mat.kind == MAT_METAL {
+        let alpha = (mat.p.y * mat.p.y).max(floor_alpha);
+        lobe.kind = 1;
+        lobe.alpha = alpha;
+        lobe.albedo = mat.c0.xyz();
+        lobe.k = mat.c1.xyz();
+        lobe.fresnel = if mat.kind == MAT_METAL { 0 } else { 2 };
+        if alpha < MIN_ALPHA {
+            delta = true;
+            next_dir = reflect_about(rd, ns);
+            attenuate = lobe.fresnel(wo.dot(ns).abs());
+        }
+    } else if mat.kind == MAT_DIELECTRIC {
+        // As `functions::scatter_dielectric`.
+        let n = hit.ns;
+        let exiting = rd.dot(n) > 0.0;
+        let outward = if exiting { -n } else { n };
+        let ior = mat.p.x;
+        let ni_over_nt = if exiting { ior } else { 1.0 / ior };
+        let r = fresnel_reflectance(rd.dot(n).abs(), ni_over_nt, ior);
+        let dt = rd.dot(outward);
+        let disc = 1.0 - ni_over_nt * ni_over_nt * (1.0 - dt * dt);
+        delta = true;
+        if disc > 0.0 && rand(&mut rng) >= r {
+            next_dir = ((rd - outward * dt) * ni_over_nt - outward * disc.sqrt()).normalize();
+            next_from = point - outward * eps;
+            attenuate = mat.c0.xyz();
+        } else {
+            next_dir = reflect_about(rd, n);
+            next_from = point + outward * eps;
+        }
+    }
+
+    if delta {
+        if depth >= max_depth || !survives(s, depth, attenuate, &mut beta, &mut rng) {
+            return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
+        }
+        beta *= attenuate;
+        return carry_on(p, next_from, next_dir.normalize(), beta, l, rays, rng, flags_p | PATH_SPECULAR, prev_pdf, depth + 1, q0, q1);
+    }
+
+    let flags_p = (flags_p | PATH_SCATTERED) & !PATH_SPECULAR;
+    // Direct light, one shadow ray at a time, with one evaluation of the lobe and one call
+    // of `occluded` (so one copy of each once rust-gpu inlines everything): every point
+    // light, then the sun, one area light and the sky. Each gives a direction, a distance,
+    // the light arriving if nothing is in the way, and its density (0 for a delta light, so
+    // no MIS weight).
+    let n_lights = s.params.counts.w;
+    let mut k = 0;
+    while k < n_lights + 3 {
+        let mut wi = Vec3::ZERO;
+        let mut dist = 1e30;
+        let mut li = Vec3::ZERO;
+        let mut pdf = 0.0;
+        if k < n_lights {
+            let light = at(s.lights, k);
+            let to = light.pos.xyz() - above;
+            let d2 = to.dot(to);
+            wi = to / d2.sqrt();
+            dist = d2.sqrt();
+            li = light.intensity.xyz() * spot(&light, -wi) / d2;
+        } else if k == n_lights {
+            // The sun: a point for lobes that can't resolve its disc, else its disc with MIS.
+            if flags & FLAG_SUN != 0 {
+                let sd = s.params.sun_dir.xyz();
+                let solid_angle = sun_solid_angle(s);
+                if lobe.pdf(wo, sd) * solid_angle < POINT_SUN {
+                    wi = sd;
+                    li = s.params.sun_irr.xyz() * sun_transmittance(s, above);
+                } else {
+                    // Uniformly in the cone, by 1 - cos θ (as `sun_angle`, without the
+                    // rounding of cos θ near 1).
+                    let one_minus = rand(&mut rng) * solid_angle / (2.0 * PI);
+                    let cos_t = 1.0 - one_minus;
+                    let sin_t = (one_minus * (2.0 - one_minus)).max(0.0).sqrt();
+                    let phi = 2.0 * PI * rand(&mut rng);
+                    let (t, b) = basis(sd);
+                    wi = t * (sin_t * phi.cos()) + b * (sin_t * phi.sin()) + sd * cos_t;
+                    pdf = sun_disc_pdf(s, wi);
+                    if pdf > 0.0 {
+                        li = sun_disc(s, above, wi);
+                    }
+                }
+            }
+        } else if k == n_lights + 1 {
+            // One area light, by power.
+            if flags & FLAG_SAMPLE_LIGHTS != 0 && n_emitters > 0 {
+                let e = search(s, s.params.offs.y, n_emitters, rand(&mut rng));
+                let pmf = emitter_probability(s, e);
+                let pi = at(s.tables, s.params.offs.x + e).to_bits();
+                let (y, ny, light_pdf) = sample_light(s, pi, above, rand(&mut rng), rand(&mut rng));
+                let to = y - above;
+                let d = to.length();
+                wi = to / d;
+                dist = d * (1.0 - 1e-4) - eps;
+                if light_pdf > 0.0 {
+                    pdf = pmf * light_pdf;
+                    li = emitted(s, at(s.prims, pi).info.y, ny, -wi);
+                }
+            }
+        } else if flags & FLAG_SAMPLE_ENV != 0 {
+            // The sky, by its brightness: its light found by the `sky` kernel (`q1`).
+            let es = env_sample(s, rand(&mut rng), rand(&mut rng));
+            if es.w > 0.0 {
+                wi = es.xyz();
+                pdf = es.w;
+                li = Vec3::ONE;
+            }
+        }
+        if li.dot(li) > 0.0 {
+            let (f, lobe_pdf) = lobe.eval_pdf(wo, wi);
+            let w = if pdf > 0.0 { power_heuristic(pdf, lobe_pdf) / pdf } else { 1.0 };
+            if f.dot(f) > 0.0 {
+                rays += 1;
+                if !occluded(s, above, wi, dist) {
+                    if k == n_lights + 2 {
+                        q1 = SkyQuery::sky(above, wi, beta * f * w);
+                    } else {
+                        l += beta * f * li * w;
+                    }
+                }
+            }
+        }
+        k += 1;
+    }
+    // The next ray.
+    if depth >= max_depth {
+        return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
+    }
+    let wi = lobe.sample(wo, rand(&mut rng), rand(&mut rng), rand(&mut rng));
+    let (f, pdf) = lobe.eval_pdf(wo, wi);
+    if wi.dot(wi) == 0.0 || pdf <= 0.0 {
+        return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
+    }
+    let weight = f / pdf;
+    if !survives(s, depth, weight, &mut beta, &mut rng) {
+        return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
+    }
+    beta *= weight;
+    let side = if wi.dot(ng) < 0.0 { -ng } else { ng };
+    carry_on(p, point + side * eps, wi, beta, l, rays, rng, flags_p, pdf, depth + 1, q0, q1)
 }
 
+/// The radiance along one camera ray, a vertex at a time as on the GPU (`bounce`, then its sky
+/// queries): for the tests, on the CPU. `rays` counts the rays traced.
+#[cfg(not(target_arch = "spirv"))]
+pub fn radiance(s: &Scene, ro: Vec3, rd: Vec3, rng: &mut u32, rays: &mut u32) -> Vec3 {
+    let ray = CameraRay { o: ro.extend(1.0), d: rd.extend(1.0) };
+    let mut p = PathState::start(0, 0, 0, &ray);
+    p.state.x = *rng;
+    loop {
+        let (next, q0, q1) = bounce(s, &p);
+        p = next;
+        p.l += (sky_light(s, &q0) + sky_light(s, &q1)).extend(0.0);
+        if p.state.y & PATH_ACTIVE == 0 {
+            break;
+        }
+    }
+    *rng = p.state.x;
+    *rays = p.l.w as u32;
+    p.l.xyz()
+}
+
+/// The pixel this invocation serves (dispatched as rows of at most 65535 workgroups), if any.
+fn pixel(gid: UVec3, params: &Params) -> Option<usize> {
+    let index = gid.x + gid.y * (65535 * 64);
+    if index >= params.dims.x * params.dims.y { None } else { Some(index as usize) }
+}
+
+/// One vertex of every pixel's path (`bounce`), its sky queries in two slots a pixel; a path
+/// found ended (its queries answered by `answer_sky` since) adds its light to the image, once.
+/// A pass dispatches this `max_depth` + 2 times, with `answer_sky` after each but the last.
 #[spirv(compute(threads(64)))]
-pub fn main(
+pub fn bounce_paths(
     #[spirv(global_invocation_id)] gid: UVec3,
     #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Prim],
@@ -1944,27 +2043,64 @@ pub fn main(
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 5)] tables: &[f32],
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] rays: &[CameraRay],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] paths: &mut [PathState],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 7)] accum: &mut [Vec4],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 8)] queries: &mut [SkyQuery],
 ) {
-    // Dispatched as rows of at most 65535 workgroups.
-    let index = gid.x + gid.y * (65535 * 64);
-    if index >= params.dims.x * params.dims.y {
-        return;
+    let Some(index) = pixel(gid, params) else { return };
+    let p = paths[index];
+    // Each buffer written once, after the branches (writes in each would join pointers chosen
+    // by branch, which needs SPIR-V's variable pointers).
+    let (mut next, mut q0, mut q1) = (p, SkyQuery::NONE, SkyQuery::NONE);
+    let mut add = Vec4::ZERO;
+    if p.state.y & PATH_ACTIVE != 0 {
+        let s = Scene { params, prims, nodes, materials, lights, tables };
+        (next, q0, q1) = bounce(&s, &p);
+    } else if p.state.y & PATH_ADDED == 0 {
+        // A NaN (from some degenerate case) is dropped, as the CPU renderers drop theirs; its
+        // rays were still cast. (Not `is_finite`: its infinite constant is invalid for naga,
+        // which wgpu translates through.) w counts the rays.
+        let c = p.l.xyz() * p.o.w;
+        #[allow(clippy::eq_op)]
+        let not_nan = c.x == c.x && c.y == c.y && c.z == c.z;
+        add = if not_nan { c } else { Vec3::ZERO }.extend(p.l.w);
+        next.state.y = p.state.y | PATH_ADDED;
     }
-    let cam = rays[index as usize];
-    if cam.d.w < 0.5 {
-        return;
+    paths[index] = next;
+    queries[2 * index] = q0;
+    queries[2 * index + 1] = q1;
+    if add.w > 0.0 {
+        accum[index] += add;
     }
+}
+
+/// The light every pixel's sky queries find (`sky_light`), added to its path's: the sky, space
+/// and the air's haze, in a kernel of their own, as they are most of the shader's code.
+#[spirv(compute(threads(64)))]
+pub fn answer_sky(
+    #[spirv(global_invocation_id)] gid: UVec3,
+    #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Prim],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] nodes: &[Node],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 5)] tables: &[f32],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] paths: &mut [PathState],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 8)] queries: &mut [SkyQuery],
+) {
+    let Some(index) = pixel(gid, params) else { return };
     let s = Scene { params, prims, nodes, materials, lights, tables };
-    let mut rng = path_seed(index, params.dims.z, params.seed.x);
-    let mut cast = 0;
-    let c = radiance(&s, cam.o.xyz(), cam.d.xyz(), &mut rng, &mut cast) * cam.o.w;
-    // A NaN (from some degenerate case) is dropped, as the CPU renderers drop theirs; its rays
-    // were still cast. (Not `is_finite`: its infinite constant is invalid for naga, which wgpu
-    // translates through.) w counts the rays.
-    #[allow(clippy::eq_op)]
-    let not_nan = c.x == c.x && c.y == c.y && c.z == c.z;
-    let c = if not_nan { c } else { Vec3::ZERO };
-    accum[index as usize] += c.extend(cast as f32);
+    let mut light = Vec3::ZERO;
+    // Both slots, at one call site of `sky_light`.
+    let mut k = 0;
+    while k < 2 {
+        // A copy: a reference into the buffer chosen by the loop would be a pointer chosen by
+        // branch, which needs SPIR-V's variable pointers.
+        let q = queries[2 * index + k];
+        light += sky_light(&s, &q);
+        k += 1;
+    }
+    if light.dot(light) > 0.0 {
+        paths[index].l += light.extend(0.0);
+    }
 }

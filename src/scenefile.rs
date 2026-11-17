@@ -3016,6 +3016,23 @@ impl SceneFile {
                 o["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
             }
         }
+        // A moon lights the scene with the sunlight it reflects (unless `"light": false`), and
+        // a skysphere's air scatters it too.
+        let moonlight = match (&sun, scene_objects.iter().find(|o| o["type"].as_str() == Some("moon") && o["light"].as_bool() != Some(false))) {
+            (Some(sun), Some(moon)) => {
+                let eye = SceneFile::parse_vec3_def(&s.camera, "location", Vector3::zeros());
+                let sky = scene_objects.iter().find(|o| o["type"].as_str() == Some("skysphere"));
+                Some(crate::celestial::moon::Moonlight::new(moon, &eye, sun, sky))
+            },
+            _ => None,
+        };
+        if let (Some(m), Some(sun)) = (&moonlight, &sun) {
+            let share = crate::color::luminance(&m.light.irradiance) / crate::color::luminance(&sun.irradiance).max(1e-300);
+            let d = m.light.direction;
+            for o in scene_objects.iter_mut().filter(|o| o["type"].as_str() == Some("skysphere")) {
+                o["moonlight"] = serde_json::json!({ "direction": [d.x, d.y, d.z], "share": share });
+            }
+        }
         let objects = SceneFile::parse_objects(scene_objects, &s.materials, &s.media, &geometries);
         // Emitters with a surface we can sample become area lights.
         let area_lights: Vec<Arc<SceneObject>> = objects.iter()
@@ -3078,6 +3095,7 @@ impl SceneFile {
             area_lights,
             area_light_choice,
             sun,
+            moonlight,
             atmosphere,
             environment: None,
             light_bvh: None,

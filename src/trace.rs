@@ -123,6 +123,10 @@ fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene, pri
     let mut cast = 1;
     let weight = if s.is_sampled_light(intersection.object) {
         light_weight(prior, || area_light_pdf(&r.ro, &intersection.point, &intersection.normal, intersection.object, s))
+    } else if let Some(moon) = s.moonlight.as_ref().filter(|m| m.is_on(&intersection.point)) {
+        // Moonlight is sampled as a disc, like the sun: a ray that reaches the moon counts it
+        // as one that reaches the sun's disc does.
+        light_weight(prior, || moon.light.disc_pdf(&r.rd.normalize()))
     } else {
         1.
     };

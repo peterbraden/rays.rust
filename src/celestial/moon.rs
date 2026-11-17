@@ -185,6 +185,83 @@ impl Moon {
     }
 }
 
+impl Moon {
+    /// The irradiance the moon's whole disc gives at `eye` (facing it), lit by `sun`: its
+    /// radiance summed over the disc, on a grid of its projection.
+    pub fn irradiance(&self, eye: &Vector3<f64>, sun: &crate::light::Sun) -> Color {
+        let to = self.centre - eye;
+        let dist = to.norm();
+        let axis = to / dist;
+        let (u, v) = crate::procedural::space::tangent_basis(&axis);
+        let spread = (self.radius / dist).asin().tan();
+        let n = 64;
+        let mut sum = Color::black();
+        let o = eye - self.centre;
+        for i in 0..n {
+            for j in 0..n {
+                let (x, y) = (-1. + 2. * (i as f64 + 0.5) / n as f64, -1. + 2. * (j as f64 + 0.5) / n as f64);
+                if x * x + y * y >= 1. {
+                    continue;
+                }
+                let d = (axis + (u * x + v * y) * spread).normalize();
+                let b = o.dot(&d);
+                let disc = b * b - (o.norm_squared() - self.radius * self.radius);
+                if disc < 0. {
+                    continue;
+                }
+                let p = eye + d * (-b - disc.sqrt());
+                let local = self.frame.transpose() * (p - self.centre).normalize();
+                sum = sum + self.radiance(&local, &-d, Some(sun));
+            }
+        }
+        // Each sample's solid angle, nearly: the grid's spacing on the view plane, squared.
+        sum * (2. * spread / n as f64).powi(2)
+    }
+}
+
+/// The sunlight a moon reflects onto the scene, as a light: a disc in the moon's direction,
+/// with the irradiance its whole sunlit (and earthshine-lit) face gives, sampled like the sun
+/// by diffuse surfaces and media, and crossing the air as the sun's light does. What a
+/// surface sees of the disc itself (a mirror, or a ray that happens to hit it) is the moon's
+/// own radiance, weighted against this sampling (`trace`).
+#[derive(Debug, Clone)]
+pub struct Moonlight {
+    pub light: crate::light::Sun,
+    pub centre: Vector3<f64>,
+    pub radius: f64,
+}
+
+impl Moonlight {
+    /// The light of the `moon` object `o` (with its planet and camera filled in, as for
+    /// `parse_moon`), seen from `eye`, lit by `sun`; through the air of the skysphere `sky`,
+    /// if any.
+    pub fn new(o: &Value, eye: &Vector3<f64>, sun: &crate::light::Sun, sky: Option<&Value>) -> Moonlight {
+        let moon = Moon::parse(o);
+        // Above any air.
+        let bare = crate::light::Sun { atmosphere: None, ..sun.clone() };
+        let irradiance = moon.irradiance(eye, &bare);
+        let to = moon.centre - eye;
+        let dist = to.norm();
+        let direction = to / dist;
+        let atmosphere = sky.map(|sky| {
+            let mut sky = sky.clone();
+            sky["sun_direction"] = serde_json::json!([direction.x, direction.y, direction.z]);
+            std::sync::Arc::new(crate::skysphere::parse_sky_material(&sky))
+        });
+        let light = crate::light::Sun {
+            atmosphere,
+            shadow_distance: (dist - moon.radius) * 0.999,
+            ..crate::light::Sun::new(direction, irradiance).with_angular_radius((moon.radius / dist).asin())
+        };
+        Moonlight { light, centre: moon.centre, radius: moon.radius }
+    }
+
+    /// Whether `point` is on the moon.
+    pub fn is_on(&self, point: &Vector3<f64>) -> bool {
+        ((point - self.centre).norm() - self.radius).abs() < self.radius * 1e-3
+    }
+}
+
 impl MaterialModel for Moon {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let d = r.rd.normalize();
@@ -307,37 +384,9 @@ mod tests {
     use crate::light::Sun;
 
 
-    /// The moon's irradiance at `eye`, against the sun's, by summing its radiance over its disc.
+    /// The moon's irradiance at `eye`, against the sun's.
     fn irradiance(m: &Moon, eye: &Vector3<f64>, sun: &Sun) -> f64 {
-        let to = m.centre - eye;
-        let dist = to.norm();
-        let axis = to / dist;
-        let (u, v) = crate::procedural::space::tangent_basis(&axis);
-        let angular = (m.radius / dist).asin();
-        let n = 160;
-        let mut sum = 0.;
-        for i in 0..n {
-            for j in 0..n {
-                let (x, y) = (-1. + 2. * (i as f64 + 0.5) / n as f64, -1. + 2. * (j as f64 + 0.5) / n as f64);
-                if x * x + y * y >= 1. {
-                    continue;
-                }
-                let d = (axis + (u * x + v * y) * angular.tan()).normalize();
-                let hit = crate::celestial::along_to_distance(eye, &d, &m.centre, m.radius * (1. - 1e-12));
-                // The near side of the sphere along d.
-                let o = eye - m.centre;
-                let b = o.dot(&d);
-                let disc = b * b - (o.norm_squared() - m.radius * m.radius);
-                if disc < 0. || hit.is_none() {
-                    continue;
-                }
-                let p = eye + d * (-b - disc.sqrt());
-                let local = m.frame.transpose() * (p - m.centre).normalize();
-                sum += crate::color::luminance(&m.radiance(&local, &-d, Some(sun)));
-            }
-        }
-        let pixel = (2. * angular.tan() / n as f64).powi(2);
-        sum * pixel / crate::color::luminance(&sun.irradiance)
+        crate::color::luminance(&m.irradiance(eye, sun)) / crate::color::luminance(&sun.irradiance)
     }
 
     /// A moon seen from the origin on the Earth, in `direction`, lit by a sun in `sun`.
@@ -411,5 +460,48 @@ mod tests {
         let (a, b) = (crate::trace::trace(&r, 0, &with).1, crate::trace::trace(&r, 0, &scene("")).1);
         // (The air is integrated a little differently up to an object than through the sky.)
         assert!((crate::color::luminance(&a) / crate::color::luminance(&b) - 1.).abs() < 1e-3, "{:?} vs {:?}", a.rgb, b.rgb);
+    }
+
+    #[test]
+    fn test_moonlight_lights_the_ground() {
+        // A full moon overhead (the sun below the ground, a little off the line so the moon
+        // isn't eclipsed) lights a white Lambertian floor with about 2.5e-6 of the sun's
+        // irradiance, ~0.25 lux beside the sun's 1e5: its radiance is albedo / π times that.
+        let s = crate::scenefile::SceneFile::from_string(r#"{ "width": 2, "height": 2, "supersamples": 1, "max_depth": 1,
+            "camera": { "location": [0, 2, 0], "lookat": [0, 0, 1], "up": [0, 1, 0], "angle": 0.5 },
+            "sun": { "intensity": 1, "direction": [0.06, -1, 0] },
+            "materials": { "WHITE": { "type": "lambertian", "albedo": [1, 1, 1] } },
+            "objects": [ { "type": "plane", "y": 0, "material": "WHITE" },
+                         { "type": "moon", "seed": 1, "direction": [0, 1, 0], "from": [0, 2, 0] } ] }"#.to_string());
+        let m = s.moonlight.as_ref().expect("the moon lights the scene");
+        let e = crate::color::luminance(&m.light.irradiance);
+        assert!(e > 1.8e-6 && e < 3.2e-6, "{:e}", e);
+        assert!((m.light.direction - Vector3::y()).norm() < 1e-6);
+        assert!(m.light.shadow_distance < m.centre.norm() - m.radius);
+        // The floor, lit by it alone.
+        let r = Ray { ro: Vector3::new(0., 2., 0.), rd: Vector3::new(0., -1., 1.).normalize() };
+        let floor = crate::color::luminance(&crate::trace::trace(&r, 0, &s).1);
+        let expected = e * m.light.direction.y / std::f64::consts::PI;
+        assert!((floor / expected - 1.).abs() < 0.02, "{:e} vs {:e}", floor, expected);
+        // `"light": false` turns it off.
+        let dark = crate::scenefile::SceneFile::from_string(r#"{ "width": 2, "height": 2, "supersamples": 1,
+            "camera": { "location": [0, 2, 0], "lookat": [0, 0, 1], "up": [0, 1, 0], "angle": 0.5 },
+            "sun": { "intensity": 1, "direction": [0.06, -1, 0] },
+            "objects": [ { "type": "moon", "direction": [0, 1, 0], "light": false } ] }"#.to_string());
+        assert!(dark.moonlight.is_none());
+    }
+
+    #[test]
+    fn test_moonlit_sky() {
+        // At night, with a full moon up, the sky is daylight's blue, dimmed by the moon's share.
+        let scene = |moon: bool| crate::scenefile::SceneFile::from_string(format!(r#"{{ "width": 2, "height": 2, "supersamples": 1,
+            "camera": {{ "location": [0, 2, 0], "lookat": [0, 1, 1], "up": [0, 1, 0], "angle": 0.5 }},
+            "sun": {{ "intensity": 6 }},
+            "objects": [ {{ "type": "skysphere", "sun_direction": [0.3, -0.5, -1] }} {} ] }}"#,
+            if moon { r#", { "type": "moon", "direction": [-0.3, 0.5, 1], "from": [0, 2, 0] }"# } else { "" }));
+        let r = Ray { ro: Vector3::new(0., 2., 0.), rd: Vector3::new(0.5, 0.6, -0.2).normalize() };
+        let (lit, dark) = (crate::trace::trace(&r, 0, &scene(true)).1, crate::trace::trace(&r, 0, &scene(false)).1);
+        assert!(lit.rgb.z > lit.rgb.x, "{:?}", lit.rgb);
+        assert!(crate::color::luminance(&lit) > 10. * crate::color::luminance(&dark), "{:?} {:?}", lit.rgb, dark.rgb);
     }
 }

@@ -174,16 +174,33 @@ impl Iceberg {
             (r * a.cos(), r * a.sin(), 0.07 + 0.07 * rng.next_f64(), if k == 0 { 0.45 } else { 0.15 + 0.25 * rng.next_f64() })
         }).collect();
 
-        // Cleavage: a few large slabs a third of the length across, broken back a little and
-        // nearly in line with the face, their edges rounded by weathering.
-        let cleavage = if rounded { vec![] } else {
-            vec![Cleavage { cell: Vector3::new(0.35, 0.7, 0.35), depth: 0.03, tilt: 0.15, seed: self.seed.wrapping_add(101) }]
+        // Conchoidal fracture at three scales (metres): calving scars a fifth of the berg
+        // across, smaller breaks within them, and melt scallops a metre or so across.
+        let big = (0.18 * self.size).clamp(5., 16.);
+        let scoops = if rounded {
+            vec![Scoops { cell: Vector3::new(1.3, 2., 1.3), depth: 0.1, seed: self.seed.wrapping_add(303) }]
+        } else {
+            vec![
+                Scoops { cell: Vector3::new(big, 1.8 * big, big), depth: 0.3 * big, seed: self.seed.wrapping_add(101) },
+                Scoops { cell: Vector3::new(big, 1.7 * big, big) / 3.2, depth: 0.09 * big, seed: self.seed.wrapping_add(202) },
+                Scoops { cell: Vector3::new(1.3, 2., 1.3), depth: 0.14, seed: self.seed.wrapping_add(303) },
+            ]
         };
+        // Crevasses: a few narrow, deep cracks, each in a vertical plane through the berg (its
+        // horizontal normal, its offset from the centre, half-width and depth, in metres).
+        let crevasses: Vec<(Vector3<f64>, f64, f64, f64)> = if rounded { vec![] } else {
+            (0..3 + (rng.next_f64() * 3.) as usize).map(|_| {
+                let a = rng.next_f64() * TAU;
+                (Vector3::new(a.cos(), 0., a.sin()), (rng.next_f64() - 0.5) * 0.7 * self.size,
+                    0.25 + 0.35 * rng.next_f64(), (0.4 + 0.6 * rng.next_f64()) * (0.5 * big).min(0.08 * self.size))
+            }).collect()
+        };
+        // Roughly where the waterline will be (exactly, for a box), in the length: the detail
+        // fades out a few metres under it, where it can't be seen.
+        let waterline = axes.y * (1. - 2. * self.freeboard_fraction());
 
         let (directions, triangles) = icosphere(detail);
         let directions: Vec<Vector3<f64>> = directions.iter().map(|d| d.component_mul(&axes).normalize()).collect();
-        // Steps between slabs are crisp, worn round over only half a metre.
-        let ramp = (0.5 / self.size).min(0.04);
         let kind = self.kind;
         let size = self.size;
         let outline = SeededNoise::new(self.seed.wrapping_add(9));
@@ -199,7 +216,7 @@ impl Iceberg {
                 q.x *= wobble;
                 q.z *= wobble;
                 if q.y > 0. {
-                    q.y *= 1. + 0.03 * outline.fbm(Vector3::new(q.x, 5., q.z) * 6., 3);
+                    q.y *= 1. + 0.1 * outline.fbm(Vector3::new(q.x, 5., q.z) * 3., 3);
                 }
             }
             let mut s: f64 = 1.;
@@ -242,34 +259,22 @@ impl Iceberg {
                 .try_normalize(1e-18)
                 .map(|n| if n.dot(d) < 0. { -n } else { n })
                 .unwrap_or(*d);
-            // Cleaved back, less on the snow-covered top.
-            let top = smoothstep(0.6, 0.85, normal.y);
-            let cut: f64 = cleavage.iter().map(|c| c.cut(&q, &normal, ramp)).sum();
-            let q = q - normal * cut * (1. - 0.85 * top);
-            // Erosion: a little lumpiness, and fine vertical flutes on the walls where meltwater
-            // runs down.
-            let lumps = noise.fbm(q * 6., 3);
-            // (Smooth noise: a ridged one's sharp creases are finer than any mesh can follow.)
-            let flutes = noise.noise(Vector3::new(q.x * 25., q.y * 1.5, q.z * 25.));
-            let wall = 1. - top;
-            let mut h = if rounded { 0.02 * lumps } else { 0.004 * lumps + 0.002 * flutes * wall };
-            if kind == Kind::Tabular {
-                // The shelf's layers of firn and ice, a few metres thick, show on its cliffs as
-                // horizontal grooves and ledges (a bump of a profile that is zero at both ends
-                // of each layer, so there is no step where one meets the next).
-                let t = q.y * size / 2.8 + 0.6 * noise.fbm(q * 3., 2);
-                let f = t.rem_euclid(1.);
-                let groove = smoothstep(0.65, 0.85, f) * (1. - smoothstep(0.92, 1., f));
-                h -= 0.08 / size * groove * wall;
-            }
-            // Melt scallops: shallow dimples, a metre or so across and a few centimetres deep,
-            // that flowing water and air melt into ice faces, sharp-rimmed where they meet.
-            let w = q * size / 0.9;
-            // With a rougher rippling a few metres across, the faces' texture at a distance.
-            let scallops = 0.08 * (1. - noise.noise(w + Vector3::new(31., 0., 17.)).abs() * 2.).max(0.)
-                + 0.025 * (1. - noise.noise(w * 2.7 + Vector3::new(3., 9., 5.)).abs() * 2.).max(0.)
-                + 0.15 * noise.fbm(w / 3. + Vector3::new(7., 1., 3.), 3);
-            (q + normal * h) * size - normal * scallops * (1. - 0.7 * top)
+            // In metres from here. The top is snow: smooth, with gentle drifts. The walls are
+            // broken ice.
+            let m = q * size;
+            let top = smoothstep(0.55, 0.85, normal.y);
+            let wall = 1. - 0.9 * top;
+            let seen = smoothstep(waterline - 12. / size, waterline - 4. / size, q.y);
+            // More broken in some stretches of the wall than others.
+            let broken = 0.35 + 1.3 * smoothstep(-0.3, 0.4, noise.fbm(m / (3. * big), 2));
+            let cut: f64 = broken * scoops.iter().map(|c| c.cut(&m)).sum::<f64>();
+            let crevasse = crevasses.iter()
+                .map(|&(n, o, w, depth)| depth * (-((m.dot(&n) - o) / w).powi(2)).exp())
+                .fold(0., f64::max);
+            // Fine vertical streaks where meltwater runs down, and drifts on the snow.
+            let streaks = 0.05 * noise.noise(Vector3::new(m.x / 0.7, m.y / 7., m.z / 0.7));
+            let drifts = 0.5 * noise.fbm(m / 14., 3) * top;
+            m + normal * (drifts - seen * wall * (cut + crevasse + streaks))
         };
         (surface, directions, triangles)
     }
@@ -348,7 +353,9 @@ impl Iceberg {
         // Refined where the surface bends more than a centimetre or so between vertices: along
         // the facets' edges and steps, the notch, and the scallops and flutes on the faces.
         let tolerance = (0.0001 * self.size).clamp(0.005, 0.03);
-        let (positions, triangles) = refine(&directions, &triangles, &surface, 7, tolerance);
+        // What shows above the water is meshed to 40 cm at least, to carry the scallops.
+        let coarsest = |p: &Vector3<f64>| if p.y > h - 4. { 0.4 } else { f64::INFINITY };
+        let (positions, triangles) = refine(&directions, &triangles, &surface, 8, tolerance, &coarsest);
         println!("Iceberg: {} triangles", triangles.len());
         let mut mesh = IndexedMesh { positions, normals: vec![], triangles, texcoords: vec![] };
         // Floated at its waterline, ram and all.
@@ -362,9 +369,10 @@ impl Iceberg {
 /// Mesh `surface` (a function of direction, from the unit `directions`) adaptively: each pass
 /// splits every edge whose midpoint on the surface lies more than `tolerance` from the
 /// straight edge, and splits the triangles accordingly (into two, three or four), up to
-/// `levels` times. An edge's split is decided once for both its triangles, so the mesh stays
-/// closed. Returns the positions and triangles.
-pub fn refine(directions: &[Vector3<f64>], triangles: &[[usize; 3]], surface: &(dyn Fn(&Vector3<f64>) -> Vector3<f64> + Sync), levels: u32, tolerance: f64) -> (Vec<Vector3<f64>>, Vec<[usize; 3]>) {
+/// `levels` times; and every edge longer than `coarsest` allows at its midpoint. An edge's
+/// split is decided once for both its triangles, so the mesh stays closed. Returns the
+/// positions and triangles.
+pub fn refine(directions: &[Vector3<f64>], triangles: &[[usize; 3]], surface: &(dyn Fn(&Vector3<f64>) -> Vector3<f64> + Sync), levels: u32, tolerance: f64, coarsest: &(dyn Fn(&Vector3<f64>) -> f64 + Sync)) -> (Vec<Vector3<f64>>, Vec<[usize; 3]>) {
     use rayon::prelude::*;
     use std::collections::HashMap;
     let mut dirs: Vec<Vector3<f64>> = directions.to_vec();
@@ -379,7 +387,10 @@ pub fn refine(directions: &[Vector3<f64>], triangles: &[[usize; 3]], surface: &(
         let mids: Vec<Option<(Vector3<f64>, Vector3<f64>)>> = edges.par_iter().map(|&(a, b)| {
             let d = (dirs[a] + dirs[b]).normalize();
             let p = surface(&d);
-            ((p - (points[a] + points[b]) / 2.).norm() > tolerance).then_some((d, p))
+            // (A midpoint can sit on the straight edge by chance while the surface between is
+            // rough, so edges are also split down to the length `coarsest` allows there.)
+            let long = (points[a] - points[b]).norm() > coarsest(&p);
+            (long || (p - (points[a] + points[b]) / 2.).norm() > tolerance).then_some((d, p))
         }).collect();
         let mut split: HashMap<(usize, usize), usize> = HashMap::new();
         for (e, m) in edges.iter().zip(mids) {
@@ -421,67 +432,41 @@ pub fn refine(directions: &[Vector3<f64>], triangles: &[[usize; 3]], surface: &(
     (points, tris)
 }
 
-/// Ice cleaved along planes: the surface divided into Voronoi cells (of jittered sites on a
-/// grid of `cell`, in units of the berg's length), each cut back to a plane of its own, a
-/// little tilted from the face, so that neighbouring cells meet at steps and the face is a
-/// patchwork of flat facets with sharp edges, as where slabs have calved away.
-struct Cleavage {
+/// Conchoidal fracture: ice breaks like glass, leaving concave scoops that meet at sharp
+/// ridges (calving scars; at a small scale, the scallops melt leaves are the same shape).
+/// Each jittered site of a grid of `cell` carves a paraboloid bowl, and the cut at a point is
+/// the deepest of them there: the upper envelope of a_i - |x - s_i|² (in cells, a_i random),
+/// which is continuous, concave within each bowl and creased where two meet, and zero where
+/// no bowl reaches, leaving the face as it was.
+struct Scoops {
+    /// The grid's cell (taller than wide, so the scoops stand upright) and the deepest cut.
     cell: Vector3<f64>,
-    /// The deepest cut, and the steepest tilt of a facet from the face.
     depth: f64,
-    tilt: f64,
     seed: u64,
 }
 
-impl Cleavage {
+impl Scoops {
     fn unit(h: u64, k: u64) -> f64 {
         (crate::sobol::hash(h, k) >> 11) as f64 / (1u64 << 53) as f64
     }
 
-    /// How far to cut back, along the face's unit normal `n`, at `q`. Between neighbouring
-    /// cells the cut changes over a ramp of width `ramp` (in the length), not at once: a step
-    /// in the surface would cross the mesh's triangles at random and show as a staircase.
-    fn cut(&self, q: &Vector3<f64>, n: &Vector3<f64>, ramp: f64) -> f64 {
-        let g = q.component_div(&self.cell);
+    /// How far to cut back at `m`.
+    fn cut(&self, m: &Vector3<f64>) -> f64 {
+        let g = m.component_div(&self.cell);
         let base = g.map(f64::floor);
-        // Every site near enough to matter, weighted down from one at the nearest to none at
-        // `ramp` (in cells) farther: continuous everywhere, also where three cells meet.
-        let ramp = ramp / self.cell.min();
-        let mut sites = [(0f64, 0u64, Vector3::zeros()); 27];
-        let mut k = 0;
+        let mut best: f64 = 0.;
+        // A site farther than one cell away can't reach (a_i is at most 1).
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
                     let c = base + Vector3::new(dx as f64, dy as f64, dz as f64);
                     let h = [c.x, c.y, c.z].iter().fold(self.seed, |h, v| crate::sobol::hash(h, *v as i64 as u64));
-                    let site = c + Vector3::new(Cleavage::unit(h, 1), Cleavage::unit(h, 2), Cleavage::unit(h, 3));
-                    sites[k] = ((g - site).norm(), h, site);
-                    k += 1;
+                    let site = c + Vector3::new(Scoops::unit(h, 1), Scoops::unit(h, 2), Scoops::unit(h, 3));
+                    best = best.max(0.3 + 0.7 * Scoops::unit(h, 4) - (g - site).norm_squared());
                 }
             }
         }
-        let nearest = sites.iter().map(|s| s.0).fold(f64::INFINITY, f64::min);
-        let (mut sum, mut weights) = (0., 0.);
-        for (d, h, site) in &sites {
-            let w = 1. - smoothstep(0., ramp, d - nearest);
-            if w > 0. {
-                sum += w * self.facet(*h, site, &g, n);
-                weights += w;
-            }
-        }
-        sum / weights
-    }
-
-    /// The cut of the facet of the cell with hash `h` and site `site` (in cells), at `g`.
-    fn facet(&self, h: u64, site: &Vector3<f64>, g: &Vector3<f64>, n: &Vector3<f64>) -> f64 {
-        // Its depth at the site, and its tilt, mostly turning about the vertical so that facets
-        // stand upright. A third of the cells are left whole, faces of the original break.
-        let depth = self.depth * ((Cleavage::unit(h, 4) - 0.35) / 0.65).max(0.).powf(0.7);
-        let across = Vector3::y().cross(n).try_normalize(1e-6).unwrap_or_else(Vector3::x);
-        let along = n.cross(&across);
-        let tilt = across * (2. * Cleavage::unit(h, 5) - 1.) + along * 0.3 * (2. * Cleavage::unit(h, 6) - 1.);
-        let local = (g - site).component_mul(&self.cell);
-        (depth + self.tilt * local.dot(&tilt)).max(0.)
+        self.depth * best
     }
 }
 

@@ -12,8 +12,8 @@ import sys
 import numpy as np
 from PIL import Image
 
-X0, Z0, CELL, HEIGHT = -120., -20., 1., 60.
-W, H = 241, 321
+X0, Z0, CELL, HEIGHT = -150., -20., 1., 60.
+W, H = 401, 321
 x = X0 + np.arange(W) * CELL
 z = Z0 + np.arange(H) * CELL
 X, Z = np.meshgrid(x, z)
@@ -43,20 +43,26 @@ def smoothstep(a, b, t):
 
 
 # The cliff's foot: buttresses and alcoves where joints let it retreat.
-foot = 72 + 9 * noise(90, 3, 1) + 4 * np.abs(np.sin(X / 19. + 1.3 * noise(50, 2, 2)))
+foot = 72 + 9 * noise(90, 3, 1) + 5 * np.abs(np.sin(X / 17. + 2.5 * noise(45, 2, 2))) ** 0.6 + 1.5 * noise(8, 2, 11)
 d = Z - foot                               # metres in from the foot
 cliff_h = 30 + 3 * noise(70, 2, 3)
-apron_h = 8 + 2 * noise(40, 2, 4)
+apron_h = 10 + 3 * noise(40, 2, 4)
 
 # Floor: rising 2% towards the cliff, gently rolling, with a shallow wash across it.
 floor = 0.02 * (Z - Z0) + 0.4 * noise(30, 3, 5)
 wash_z = 22 + 6 * np.sin(X / 37.) + 3 * noise(40, 2, 6)
 floor -= 0.7 * np.exp(-((Z - wash_z) / 3.5) ** 2)
 # Talus: a concave apron, steepest (about the angle of repose) where it meets the cliff.
-apron = apron_h * np.exp(np.minimum(d, 0) / 13.)
-# The cliff: near vertical sandstone over 5 m, then a rounded, ledgy rim to a bench.
-rise = smoothstep(0, 5, d)
-rim = 6 * smoothstep(5, 22, d)
+# Debris cones where gullies spill off the cliff, and hummocks of fallen rock.
+dn = np.minimum(d, 0)
+cones = np.maximum(0, np.sin(X / 23. + 2 * noise(80, 2, 9))) ** 6
+hummocks = 0.6 * np.maximum(noise(12, 3, 10), 0)
+apron_h = apron_h * (1 + 0.35 * cones) + hummocks
+apron = apron_h * np.exp(dn / (18. + 6 * noise(60, 2, 8)))
+# The cliff: near vertical sandstone over 4 m of the heightmap.
+rise = smoothstep(0, 4, d)
+# A crisp rim, then the ledgy slope of the next formation up in two steps.
+rim = 3 * smoothstep(9, 11, d + 2 * noise(20, 2, 12)) + 3 * smoothstep(17, 19.5, d + 2 * noise(20, 2, 13))
 cliff = apron_h + (cliff_h - apron_h) * rise + rim
 bench = 0.6 * noise(25, 3, 7) + 0.03 * np.maximum(d - 22, 0)
 h = floor + np.where(d > 0, cliff + np.where(d > 22, bench, 0), apron)

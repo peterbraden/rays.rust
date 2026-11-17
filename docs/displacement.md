@@ -3,11 +3,12 @@
 ![Before and after: the same heightmap, plain and displaced](displacement-comparison.png)
 
 *`demo/scenes/displaced-terrain.json`: a sandstone escarpment after the Wingate cliffs of the
-Colorado Plateau, about 30 m high and 90 m away, over a talus apron and a sandy wash, late
-afternoon. Left, the 1 m heightmap as triangles, with the same materials. Right, the same
-heightmap displaced at render time by a function graph: buttresses between weathered joints,
-alcoves, bedding breaks, fallen blocks on the talus, cobbles and hummocks in the sand. The
-relief casts its own shadows and changes the cliff's outline, which bump mapping can't do.*
+Colorado Plateau, about 30 m high, seen along its length in raking late-afternoon light, over a
+talus apron and a sandy floor. Top, the 1 m heightmap as triangles, with the same materials.
+Bottom, the same heightmap displaced at render time by a function graph: buttresses between
+weathered joints, alcoves, bedding, fallen blocks on the talus and outcrops in the sand. The
+relief casts its own shadows and changes the cliff's outline, which bump mapping can't do. The
+dark streaks of desert varnish are a graph too, the amount of a `mix` of two rocks.*
 
 A terrain stops at its heightmap's resolution. Rock faces, scree and ledges read as real only
 when their silhouettes and self-shadowing are real, and bump mapping fails exactly where most of
@@ -37,6 +38,8 @@ A graph can also be a material's texture: wherever a colour texture is read (a `
 `amount`, an albedo), an object with `"node"` is a graph, evaluated at the hit with its normal.
 The demo uses one to put sandstone on steep faces and sand on flats and ledge tops:
 `"GROUND": {"type": "mix", "materials": ["SAND", "SANDSTONE"], "amount": {"node": "slope", "from": 28, "to": 38}}`.
+Its varnish is plan-view noise (`"plan": true`, so constant down a vertical face, as streaks
+are) masked to the steepest, highest rock, mixing a dark rock into the sandstone.
 
 Every node knows its range by interval arithmetic and clamps to it, so a displaced surface can
 be bounded before it is evaluated. Fractals and cells are filtered: told the spacing of the
@@ -58,7 +61,9 @@ octave's mean in its place, so a coarsely diced distant surface doesn't alias or
   base's normal, for `slope` masks.
 - **Diced to the pixel.** Each heightmap cell is diced into 2^k x 2^k quads, `k` chosen once per
   cell from the camera so a quad is about `pixels` pixels across, up to `max_level`, and no finer
-  than half the graph's finest detail (`min_spacing` overrides). As in Reyes (Cook, Carpenter and
+  than half the graph's finest detail (`min_spacing` overrides). A cell's size is the longer of
+  its width and its height range, so a 1 m cell spanning 20 m of cliff is diced finely enough
+  up the face, not smeared into vertical streaks. As in Reyes (Cook, Carpenter and
   Catmull 1987) and Pharr and Hanrahan's geometry caching (1996), but per cell and lazily: a
   cell is diced the first time a ray comes near it, then kept. Each diced cell keeps a quadtree
   of boxes that rays descend nearest first; a BVH over the cells' conservative bounds finds

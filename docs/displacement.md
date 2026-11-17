@@ -6,7 +6,8 @@
 Colorado Plateau, about 30 m high, seen along its length in raking late-afternoon light, over a
 talus apron and a sandy floor. Top, the 1 m heightmap as triangles, with the same materials.
 Bottom, the same heightmap displaced at render time by a function graph: buttresses between
-weathered joints, alcoves, bedding, fallen blocks on the talus and outcrops in the sand. The
+weathered joints, alcoves, bedding, and angular fallen blocks on the talus, sorted with the
+biggest rolled out to its toe. The
 relief casts its own shadows and changes the cliff's outline, which bump mapping can't do. The
 dark streaks of desert varnish are a graph too, the amount of a `mix` of two rocks.*
 
@@ -26,6 +27,7 @@ reuse it as `"$name"`.
 |------|---------------|
 | `fractal` | Perlin noise over octaves from `scale` down to `smallest` metres; `style` `perlin`, `ridged` or `billow`; `roughness`, `lacunarity`, `amplitude`, `seed`, `plan` (2D) |
 | `cells` | Worley noise: `style` `f1`, `edges` (cracks between cells) or `stones` (a rounded stone per cell) |
+| `talus` | Fallen blocks and scree (`src/talus.rs`): angular polyhedra in layers from `largest` to `smallest` metres, many small to few large by a power law (`exponent`), sorted down the slope by `position` (0 at the toe, 1 at the apex; big blocks roll to the toe); `output` `height`, `mask` or `id` |
 | `strata` | Ledges: beds `step` metres thick, each ending in a riser; `breakup` makes them waver |
 | `slope`, `altitude` | Masks from 0 to 1 between `from` and `to` (degrees, metres), with a fractal `breakup` |
 | `add`, `multiply`, `min`, `max`, `subtract` | Arithmetic |
@@ -59,6 +61,12 @@ octave's mean in its place, so a coarsely diced distant surface doesn't alias or
 - **Along the normal.** Points move along the base's normal, so cliffs get relief, not just level
   ground (`"displacement_direction": "vertical"` moves them straight up). The graph sees the
   base's normal, for `slope` masks.
+- **Straight up, too.** `"vertical_displacement"`, a second graph, is added straight up after
+  the first. Fallen blocks stand upright on a slope (along the normal they'd lean downhill),
+  and since a block's top then lies right above where it stands, a material can find it: the
+  demo's `talus` displaces vertically and the same node with `"output": "mask"` puts rock on
+  the blocks and grit between them (`Context::lifted`: at a shading point a block's `position`
+  is judged where it stands, its height below).
 - **Diced to the pixel.** Each heightmap cell is diced into 2^k x 2^k quads, `k` chosen once per
   cell from the camera so a quad is about `pixels` pixels across, up to `max_level`, and no finer
   than half the graph's finest detail (`min_spacing` overrides). A cell's size is the longer of

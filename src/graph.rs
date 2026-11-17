@@ -22,6 +22,9 @@
 //!   `plan`, and `style`: `"f1"` (distance to the nearest feature point, in cells), `"edges"`
 //!   (F2 - F1: zero along the cracks between cells), or `"stones"` (a rounded stone in each
 //!   cell, each its own size and height, as Terragen's Fake Stones), each in [0, amplitude].
+//! - `talus`: fallen blocks and scree, angular and fractured, many small to few large, sorted
+//!   down the slope (`talus.rs`). Heights in metres; meant for a terrain's
+//!   `"vertical_displacement"`, so blocks stand upright on a slope and a material can find them.
 //! - `slope`: the surface's slope, 0 below `from` degrees and 1 above `to`, smoothly;
 //!   `breakup` (a node, in degrees) added to the slope first, so the edge of the zone is
 //!   ragged rather than a contour.
@@ -70,11 +73,19 @@ pub struct Context {
     pub p: Vector3<f64>,
     pub normal: Vector3<f64>,
     pub filter: f64,
+    /// The point is on the surface the graph displaced (a shading point), not the surface
+    /// before displacement: `talus` then finds its blocks' footing below it.
+    pub lifted: bool,
 }
 
 impl Context {
     pub fn new(p: Vector3<f64>, normal: Vector3<f64>, filter: f64) -> Context {
-        Context { p, normal, filter }
+        Context { p, normal, filter, lifted: false }
+    }
+
+    /// At a shading point on the displaced surface, unfiltered (see `lifted`).
+    pub fn lifted(p: Vector3<f64>, normal: Vector3<f64>) -> Context {
+        Context { p, normal, filter: 0., lifted: true }
     }
 
     /// The surface's slope, degrees from level.
@@ -111,6 +122,7 @@ enum Node {
     Remap { input: Box<Node>, from: (f64, f64), to: (f64, f64) },
     Terrace { input: Box<Node>, step: f64, sharpness: f64 },
     Warp { input: Box<Node>, by: [Box<Node>; 3] },
+    Talus(Box<crate::talus::Talus<Node>>),
 }
 
 /// A parsed graph: its output node.
@@ -214,6 +226,7 @@ impl Node {
                 let d = Vector3::new(by[0].eval(c), by[1].eval(c), by[2].eval(c));
                 input.eval(&Context { p: c.p + d, ..*c })
             },
+            Node::Talus(t) => t.eval(c, |n, c| n.eval(c)),
         };
         let (lo, hi) = self.range();
         v.clamp(lo, hi)
@@ -268,6 +281,7 @@ impl Node {
                 (r.0 - step.abs(), r.1 + step.abs())
             },
             Node::Warp { input, .. } => input.range(),
+            Node::Talus(t) => t.range(),
         }
     }
 
@@ -277,6 +291,7 @@ impl Node {
         let children: Vec<&Node> = match self {
             Node::Fractal { smallest, .. } => return *smallest,
             Node::Cells { scale, .. } => return 0.1 * scale,
+            Node::Talus(t) => return t.smallest,
             Node::Const(_) => return f64::INFINITY,
             Node::Strata { step, breakup, .. } => return breakup.as_ref().map_or(f64::INFINITY, |b| b.finest()).min(0.25 * step),
             Node::Slope { breakup, .. } | Node::Altitude { breakup, .. } => breakup.iter().map(|b| &**b).collect(),
@@ -527,6 +542,7 @@ fn parse_node(v: &Value) -> Result<Node, String> {
             };
             Node::Warp { input: child(o, "input")?, by }
         },
+        "talus" => Node::Talus(Box::new(crate::talus::Talus::parse(o, seed(), |k| o.get(k).map(parse_node).transpose())?)),
         k => return Err(format!("unknown graph node \"{}\"", k)),
     })
 }

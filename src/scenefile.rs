@@ -1074,7 +1074,9 @@ impl SceneFile {
             Some("vertical") => true,
             Some(x) => panic!("Unknown displacement_direction '{}': expected \"normal\" or \"vertical\"", x),
         };
-        DisplacedTerrain::new(grid, graph, vertical, &detail).unwrap_or_else(|e| panic!("{}", e))
+        let lift = o.get("vertical_displacement").map(|v| crate::graph::Graph::parse(v)
+            .unwrap_or_else(|e| panic!("terrain's vertical_displacement: {}", e)));
+        DisplacedTerrain::with_lift(grid, graph, vertical, lift, &detail).unwrap_or_else(|e| panic!("{}", e))
     }
 
     /// A forest's `"lod"`: `true`, or `{"pixels": 1, "max_level": 12}`, to see each tree at the

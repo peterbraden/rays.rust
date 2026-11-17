@@ -71,6 +71,8 @@ use rayon::prelude::*;
 
 /// A geometry that may be shared: by several objects, or by instancing transforms.
 pub type SharedGeometry = Arc<dyn Geometry + Sync + Send>;
+/// A part of a tree, as detail to make levels of, and its medium (`SceneFile::tree_details`).
+pub type TreeDetail = (crate::shapes::lod::Detail, Box<dyn Medium + Sync + Send>);
 
 /// The scene file's named geometries, `"geometries": {"dragon": {"type": "mesh", ...}}`. Wherever
 /// a geometry is expected, the string `"dragon"` refers to one. Each is built once, when first
@@ -216,6 +218,8 @@ pub struct SceneFile {
     pub supersamples: Value, 
     #[serde(default)]
     pub samples_per_chunk: Value, 
+    #[serde(default)]
+    pub adaptive: Value,
     pub camera: Value, 
     #[serde(default)]
     pub shadow_bias: Value, 
@@ -406,7 +410,36 @@ impl SceneFile {
     /// `{"texture": "file.png", "scale": [su, sv] or s, "offset": [ou, ov], "filter":
     /// "ewa" (the default) | "trilinear" | "bilinear" | "point", "wrap": "repeat" | "clamp" | "black", "linear":
     /// bool}` (8-bit images are taken as sRGB unless `linear`).
+    /// A colour, an image texture (`{"texture": path, ...}`), or a grey level from the slope
+    /// (`{"slope": [from, to], "jitter": degrees, "jitter_scale": size, "seed": 0}`,
+    /// `textures::SlopeTexture`), or from the elevation (`{"height": [from, to], ...}`).
     pub fn parse_color_texture(v: &Value) -> crate::textures::ColorTexture {
+        // {"terrain": "washes" | "hollows" | "joints", "scale": the heightmap's floor_scale or
+        // domes, "spread": 1}: where a point lies among a mesas heightmap's features.
+        if let Some(feature) = v.get("terrain") {
+            use crate::textures::TerrainFeature;
+            return crate::textures::ColorTexture::Terrain(crate::textures::TerrainTexture {
+                feature: match feature.as_str() {
+                    Some("washes") => TerrainFeature::Washes,
+                    Some("hollows") => TerrainFeature::Hollows,
+                    Some("joints") => TerrainFeature::Joints,
+                    _ => panic!("terrain texture must be \"washes\", \"hollows\" or \"joints\", got {}", feature),
+                },
+                scale: SceneFile::parse_number(&v["scale"], 150.),
+                spread: SceneFile::parse_number(&v["spread"], 1.),
+                noise: crate::noise::PerlinNoise::new(),
+            });
+        }
+        if let Some(range) = v.get("slope").or(v.get("height")) {
+            let r = SceneFile::parse_vec2(range);
+            return crate::textures::ColorTexture::Slope(crate::textures::SlopeTexture {
+                by_height: v.get("slope").is_none(),
+                from: r.x, to: r.y,
+                jitter: SceneFile::parse_number(&v["jitter"], 0.),
+                jitter_scale: SceneFile::parse_number(&v["jitter_scale"], 1.),
+                noise: crate::noise::SeededNoise::new(SceneFile::parse_int(&v["seed"], 0) as u64),
+            });
+        }
         match v.get("texture") {
             Some(_) => crate::textures::ColorTexture::Image(SceneFile::parse_image_map(v)),
             None => SceneFile::parse_color(v).into(),
@@ -557,6 +590,20 @@ impl SceneFile {
         };
         let lens = SceneFile::parse_lens(pick("lens").as_str().unwrap_or(default_lens), &blade_source);
         let focal = lens.focal_length().unwrap_or_else(|| panic!("The flare's lens doesn't form an image"));
+        // Its blades are cut to round the stop fully open (see `flare`).
+        let open_stop = lens.stop_diameter().unwrap_or(0.) / 2.;
+        // A real diaphragm: blades curved to round the open stop (`blade_curvature`, 0 for
+        // straight), each a little out of place (`imperfection`, 0 for a perfect lens).
+        let imperfection = SceneFile::parse_number(&f["imperfection"], 1.).max(0.);
+        let seed = SceneFile::parse_int(&f["seed"], 1) as u64;
+        let curvature = SceneFile::parse_number(&f["blade_curvature"], 1.).max(0.);
+        let lens = match lens.blades {
+            Some((n, _)) => lens.with_blade_shape(crate::lens::BladeShape {
+                radius: if curvature > 0. { open_stop / curvature } else { 0. },
+                jitter: if imperfection > 0. { crate::flare::imperfect_blades(n, imperfection, seed) } else { vec![] },
+            }),
+            None => lens,
+        };
         let lens = match pick("f_number").as_f64() { Some(n) => lens.with_stop(focal / n), None => lens };
         let focus = if realistic {
             camera["focus_distance"].as_f64().unwrap_or_else(|| (SceneFile::parse_vec3(&camera["lookat"]) - SceneFile::parse_vec3(&camera["location"])).norm())
@@ -580,6 +627,13 @@ impl SceneFile {
             ghosts: scale("ghosts"),
             starburst: scale("starburst"),
             grid: SceneFile::parse_int(&f["grid"], 192).max(4),
+            coating: match f["coating"].as_str() {
+                None => crate::flare::Coating::Multi,
+                Some(c) => crate::flare::Coating::parse(c)
+                    .unwrap_or_else(|| panic!("Unknown lens coating {:?}: one of \"multi\", \"single\" or \"none\"", c)),
+            },
+            imperfection,
+            seed,
         }))
     }
 
@@ -594,6 +648,21 @@ impl SceneFile {
 
     /// `"shutter": [open, close]`, in the time of motion, where moving things are at their start
     /// at 0 and their end at 1 (default [0, 1]).
+    /// `"adaptive"`: a noise threshold, or `{"threshold", "min_samples"}`; absent, false or a
+    /// threshold of 0 for none.
+    pub fn parse_adaptive(v: &Value) -> Option<crate::scene::Adaptive> {
+        let (threshold, min) = match v {
+            Value::Null | Value::Bool(false) => return None,
+            Value::Bool(true) => (0.01, &Value::Null),
+            Value::Object(o) => (SceneFile::parse_number(&v["threshold"], 0.01), o.get("min_samples").unwrap_or(&Value::Null)),
+            _ => (SceneFile::parse_number(v, 0.), &Value::Null),
+        };
+        (threshold > 0.).then(|| crate::scene::Adaptive {
+            threshold,
+            min_samples: SceneFile::parse_int(min, crate::scene::Adaptive::DEFAULT_MIN_SAMPLES).max(2),
+        })
+    }
+
     pub fn parse_shutter(v: &Value) -> crate::motion::Shutter {
         match v {
             Value::Null => crate::motion::Shutter::default(),
@@ -744,6 +813,14 @@ impl SceneFile {
             }));
         }
 
+        if t == "moon" {
+            return Some(Arc::new(crate::celestial::moon::parse_moon(&o)));
+        }
+
+        if t == "gas_giant" {
+            return Some(Arc::new(crate::celestial::giant::parse_giant(&o)));
+        }
+
         if t == "hogan_kew_cirrus" {
             return Some(Arc::new(SceneFile::parse_hogan_kew_cirrus(&o)));
         }
@@ -860,19 +937,33 @@ impl SceneFile {
         }).collect();
         let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
         let refs: Vec<&dyn Geometry> = surfaces.iter().map(|s| &**s as &dyn Geometry).collect();
-        let placements = forest::place(&layout, &species, seed, &refs);
+        // {"favour": {"terrain": "washes", "scale": 150, "spread": 1, "strength": 0.8}}: trees
+        // crowd along a mesas heightmap's feature (`parse_color_texture`), `strength` of them
+        // kept only there.
+        let placements = match o.get("favour") {
+            Some(f) => {
+                let feature = match SceneFile::parse_color_texture(f) {
+                    crate::textures::ColorTexture::Terrain(t) => t,
+                    _ => panic!("a forest's \"favour\" must be a terrain texture, got {}", f),
+                };
+                let strength = SceneFile::parse_number(&f["strength"], 0.8).clamp(0., 1.);
+                forest::place_favouring(&layout, &species, seed, &refs,
+                    &|x, z| 1. - strength + strength * feature.amount(&Vector3::new(x, 0., z)))
+            },
+            None => forest::place(&layout, &species, seed, &refs),
+        };
 
         let spread = SceneFile::parse_number(&o["autumn_spread"], 0.1);
         let mut rng = crate::geometry::Pcg32::new(seed, 0x7a71);
-        // Every part of every placed tree, in one structure, each part numbered for its medium.
-        let mut instances: Vec<Arc<forest::PartOf<Transform>>> = vec![];
-        let mut parts: Vec<Box<dyn Medium + Sync + Send>> = vec![];
-        let mut distinct = 0;
+        let lod = SceneFile::parse_forest_lod(o);
+
+        // The distinct trees: each species' variants that are placed, each with its own
+        // numbers, drawn for every variant, placed or not, so each keeps its own.
+        let mut distinct: Vec<(usize, Vec<&forest::Placement>, tree::TreeParams, u64)> = vec![];
         for (k, entry) in entries.iter().enumerate() {
             let name = entry.get("species").map(SceneFile::parse_string)
                 .unwrap_or_else(|| panic!("forest species {} needs a \"species\"", entry));
             for v in 0 .. layout.variants {
-                // Draw for every variant, placed or not, so each keeps its own numbers.
                 let (autumn_shift, tree_seed) = (rng.next_f64() * 2. - 1., rng.next_u32() as u64);
                 let here: Vec<&forest::Placement> = placements.iter().filter(|p| p.species == k && p.variant == v).collect();
                 if here.is_empty() {
@@ -883,36 +974,103 @@ impl SceneFile {
                     overrides["autumn"] = serde_json::json!((autumn + autumn_shift * spread).clamp(0., 1.));
                 }
                 tree::merge(&mut overrides, &entry["params"]);
-                let p = tree::params(&name, &overrides);
-                distinct += 1;
+                distinct.push((k, here, tree::params(&name, &overrides), tree_seed));
+            }
+        }
 
-                // On a slope, sink the trunk so its downhill side meets the ground.
-                let base_radius = p.scale * p.stems[0].length * p.ratio * p.trunk_scale * (1. + 0.99 * p.flare);
-                let places: Vec<(Vector3<f64>, Rotation3<f64>, Vector3<f64>)> = here.iter().map(|t| {
-                    let sink = base_radius * t.scale * (t.slope.to_radians().tan() + 0.05);
-                    let mirror = if t.mirror { -1. } else { 1. };
-                    (t.position - Vector3::new(0., sink, 0.),
-                     Rotation3::from_axis_angle(&Vector3::y_axis(), t.yaw.to_radians()),
-                     Vector3::new(mirror * t.scale, t.scale, t.scale))
-                }).collect();
-                for (geometry, medium) in SceneFile::tree_parts(entry, &p, tree_seed, Vector3::zeros(), materials, media) {
-                    let part = parts.len() as u32;
-                    assert!(part < 1 << (32 - forest::PART_SHIFT), "too many distinct tree parts in a forest");
-                    instances.extend(places.iter().map(|(at, turn, scale)| Arc::new(forest::PartOf {
-                        item: Transform::from_parts(geometry.clone(), *at, *turn, *scale), part,
-                    })));
-                    parts.push(medium);
+        // Grow them one at a time, each made at the levels of detail its placements need (in
+        // parallel), so only one tree is ever held in full: what's kept is far smaller.
+        // Each placement's level, position, yaw and scale; each part's geometry by level.
+        type Place = (usize, Vector3<f64>, f64, f64, bool);
+        type Levels = Vec<(usize, SharedGeometry)>;
+        type Grown = (Vec<(Levels, Box<dyn Medium + Sync + Send>)>, Vec<Place>);
+        let grown: Vec<Grown> = distinct.iter().map(|(k, here, p, tree_seed)| {
+            let entry = &entries[*k];
+            // On a slope, sink the trunk so its downhill side meets the ground.
+            let base_radius = p.scale * p.stems[0].length * p.ratio * p.trunk_scale * (1. + 0.99 * p.flare);
+            let (details, base, bounds) = SceneFile::tree_details(entry, p, *tree_seed, Vector3::zeros(), materials, media);
+            let places: Vec<Place> = here.iter().map(|t| {
+                let sink = base_radius * t.scale * (t.slope.to_radians().tan() + 0.05);
+                let at = t.position - Vector3::new(0., sink, 0.);
+                let level = lod.as_ref().map_or(0, |l| l.level(&bounds, at, t.scale, base));
+                (level, at, t.yaw, t.scale, t.mirror)
+            }).collect();
+            let mut levels: Vec<usize> = places.iter().map(|p| p.0).collect();
+            levels.sort_unstable();
+            levels.dedup();
+            let parts = details.into_par_iter().map(|(detail, medium)| {
+                let geometries = levels.par_iter().map(|&l| (l, detail.geometry(crate::shapes::lod::level_size(base, l)))).collect();
+                (geometries, medium)
+            }).collect();
+            (parts, places)
+        }).collect();
+
+        // Each tree at each level is one model of all its parts, each numbered for its medium,
+        // placed as many times as there are trees at that level; the whole forest is one
+        // object, so a ray searches one structure and stops at the first tree it meets.
+        let mut trees: Vec<forest::Placed> = vec![];
+        let mut parts: Vec<Box<dyn Medium + Sync + Send>> = vec![];
+        let mut per_level: Vec<usize> = vec![];
+        let (mut primitives, mut built) = (0u64, 0u64);
+        for (tree_parts, places) in grown {
+            let mut models: std::collections::BTreeMap<usize, Vec<Arc<forest::PartOf<SharedGeometry>>>> = Default::default();
+            for (geometries, medium) in tree_parts {
+                let part = parts.len() as u32;
+                assert!(part < 1 << (32 - forest::PART_SHIFT), "too many distinct tree parts in a forest");
+                // Detail coarse enough may simplify away, eg. thin dead branches.
+                for (level, geometry) in geometries.into_iter().filter(|(_, g)| g.primitives() > 0) {
+                    models.entry(level).or_default().push(Arc::new(forest::PartOf { item: geometry, part }));
+                }
+                parts.push(medium);
+            }
+            let models: std::collections::BTreeMap<usize, forest::Model> = models.into_iter()
+                .map(|(level, items)| (level, Arc::new(GeometrySet::new(&items)) as forest::Model)).collect();
+            built += models.values().map(|m| m.primitives()).sum::<u64>();
+            for (level, at, yaw, scale, mirror) in places {
+                if per_level.len() <= level {
+                    per_level.resize(level + 1, 0);
+                }
+                per_level[level] += 1;
+                if let Some(model) = models.get(&level) {
+                    primitives += model.primitives();
+                    trees.push(forest::Placed::new(model.clone(), at, yaw, scale, mirror));
                 }
             }
         }
-        println!("Forest: {} trees, from {} distinct", placements.len(), distinct);
-        if instances.is_empty() {
+        println!("Forest: {} trees, from {} distinct; {} primitives built, {} placed{}", placements.len(), distinct.len(), built, primitives,
+            if lod.is_some() { format!("; trees at each level of detail: {:?}", per_level) } else { String::new() });
+        if trees.is_empty() {
             return vec![];
         }
+        let stand = forest::Stand::new(trees);
         vec![Arc::new(SceneObject {
-            geometry: Box::new(GeometrySet::new(&instances)),
+            geometry: Box::new(stand),
             medium: Box::new(Solid { m: Box::new(forest::PartsMaterial { parts }) }),
         })]
+    }
+
+    /// A forest's `"lod"`: `true`, or `{"pixels": 1, "max_level": 12}`, to see each tree at the
+    /// level of detail the size of a pixel where it stands calls for (`shapes::lod`), dropping
+    /// detail up to `pixels` across. It needs the scene's camera, which the scene gives it.
+    fn parse_forest_lod(o: &Value) -> Option<crate::procedural::forest::Lod> {
+        let pixels = match &o["lod"] {
+            Value::Null | Value::Bool(false) => return None,
+            Value::Bool(true) => 1.,
+            v => SceneFile::parse_number(&v["pixels"], 1.),
+        };
+        let camera = &o["camera"];
+        let height = SceneFile::parse_number(&camera["image_height"], 0.);
+        let angle = camera["angle"].as_f64().unwrap_or(0.5);
+        if camera.is_null() || height <= 0. {
+            println!("A forest's \"lod\" needs the scene's camera: seeing every tree in full");
+            return None;
+        }
+        Some(crate::procedural::forest::Lod {
+            eye: SceneFile::parse_vec3(&camera["location"]),
+            pixel_angle: angle.tan() / height,
+            pixels,
+            max_level: SceneFile::parse_int(&o["lod"]["max_level"], 12),
+        })
     }
 
     /// The parts of a tree with parameters `p`, chosen by `seed`, grown at `location`, each a
@@ -921,7 +1079,27 @@ impl SceneFile {
     pub fn tree_parts(o: &Value, p: &tree::TreeParams, seed: u64, location: Vector3<f64>,
                       materials: &Map<String, Value>, media: &Map<String, Value>)
                       -> Vec<(SharedGeometry, Box<dyn Medium + Sync + Send>)> {
+        SceneFile::tree_details(o, p, seed, location, materials, media).0.into_iter()
+            .map(|(detail, medium)| (detail.geometry(0.), medium))
+            .collect()
+    }
+
+    /// The parts of a tree as for `tree_parts`, as detail to make levels of from
+    /// (`shapes::lod`), with the size of its leaves, the level of detail's base, and its bounds.
+    pub fn tree_details(o: &Value, p: &tree::TreeParams, seed: u64, location: Vector3<f64>,
+                        materials: &Map<String, Value>, media: &Map<String, Value>)
+                        -> (Vec<TreeDetail>, f64, BBox) {
+        use crate::shapes::lod::{self, Detail};
         let mesh = tree::generate(p, seed, location);
+        let mut bounds = BBox::new(Vector3::repeat(f64::INFINITY), Vector3::repeat(f64::NEG_INFINITY));
+        for t in &mesh.bark {
+            bounds = bounds.union(&t.bounds());
+        }
+        for t in &mesh.leaves {
+            bounds = bounds.union(&t.bounds());
+        }
+        let base = lod::piece_size(&mesh.leaves);
+        let base = if base > 0. { base } else { 0.01 * (bounds.max - bounds.min).max() };
         let medium = |key: &Value| -> Box<dyn Medium + Sync + Send> {
             let name = SceneFile::parse_string(key);
             if materials.contains_key(&name) {
@@ -950,12 +1128,12 @@ impl SceneFile {
         };
         let bark = || o.get("bark").map_or_else(|| default(Color::new(0.25, 0.2, 0.16)), medium);
 
-        let mut parts: Vec<(SharedGeometry, Box<dyn Medium + Sync + Send>)> = vec![];
+        let mut parts: Vec<(Detail, Box<dyn Medium + Sync + Send>)> = vec![];
         if !mesh.bark.is_empty() {
-            parts.push((Arc::new(GeometrySet::new(&mesh.bark)), bark()));
+            parts.push((Detail::Surface(mesh.bark.clone()), bark()));
         }
         if !mesh.dead_bark.is_empty() {
-            parts.push((Arc::new(GeometrySet::new(&mesh.dead_bark)), o.get("dead_bark").map_or_else(bark, medium)));
+            parts.push((Detail::Surface(mesh.dead_bark.clone()), o.get("dead_bark").map_or_else(bark, medium)));
         }
 
         let leaf_media: Vec<Box<dyn Medium + Sync + Send>> = match o.get("leaves") {
@@ -973,10 +1151,10 @@ impl SceneFile {
         }
         for (triangles, medium) in groups.into_iter().zip(leaf_media) {
             if !triangles.is_empty() {
-                parts.push((Arc::new(GeometrySet::new(&triangles)), medium));
+                parts.push((Detail::Aggregate(triangles), medium));
             }
         }
-        parts
+        (parts, base, bounds)
     }
 
     pub fn parse_skysphere(o: &Value) -> SceneObject {
@@ -1059,8 +1237,10 @@ impl SceneFile {
     }
 
     /// A medium's multiple-scattering approximations (`volume::ScatteringApproximation`):
-    /// `"similarity_after": N` for the similarity relations from the N-th scattering on, and
-    /// `"oz": true` or `{"octaves", "a", "b", "c"}` for Wrenninge et al.'s octaves.
+    /// `"similarity_after": N` for the similarity relations from the N-th scattering on,
+    /// `"oz": true` or `{"octaves", "a", "b", "c"}` for Wrenninge et al.'s octaves, and
+    /// `"delta_m": false` to trace a Henyey-Greenstein medium exactly rather than truncating
+    /// its forward peak wherever the camera doesn't see the medium directly (on by default).
     pub fn parse_scattering_approximation(o: &Value) -> ScatteringApproximation {
         let oz = match o.get("oz") {
             None | Some(Value::Bool(false)) => None,
@@ -1078,6 +1258,7 @@ impl SceneFile {
         ScatteringApproximation {
             similarity_after: o.get("similarity_after").map(|n| SceneFile::parse_int(n, 0) as u32),
             oz,
+            delta_m: o["delta_m"].as_bool().unwrap_or(true),
         }
     }
 
@@ -2030,7 +2211,8 @@ impl SceneFile {
             return Some(Box::new(SceneFile::parse_noise_texture(props, materials)));
         }
         // {"type": "mix", "materials": ["A", "B"], "amount": 0.5 or an image texture (its grey
-        // level)}: B with probability amount, else A (`material::mix`).
+        // level) or a slope (`parse_color_texture`)}: B with probability amount, else A
+        // (`material::mix`).
         if props["type"].as_str() == Some("mix") {
             let names = props["materials"].as_array().filter(|a| a.len() == 2)
                 .unwrap_or_else(|| panic!("Mix material '{}' needs two \"materials\"", name));
@@ -2293,7 +2475,7 @@ impl SceneFile {
     }
 
     /// `{"type": "soil", "preset": "loam"}`: procedural bare ground (see `material::soil`).
-    /// Presets are loam, clay, sand and forest_floor; any field of the preset can be
+    /// Presets are loam, clay, sand, desert and forest_floor; any field of the preset can be
     /// overridden: the colours `color`, `humus`, `stone_color`, `crumb_color`, `litter_color`
     /// and `moss_color`; the fractions of the ground covered by `stones`, `crumbs`, `litter`
     /// and `moss`; the sizes (m) `mottle_size`, `stone_size`, `litter_length`, `litter_width`
@@ -2330,7 +2512,15 @@ impl SceneFile {
     /// Presets are granite, basalt, sandstone, limestone, slate and quartzite; any field of the
     /// preset can be overridden, eg. `"color"` or `"strata_amount"`. Also `"scale"` (the size of
     /// the texture's features), `"seed"`, `"weathering"`, `"wetness"` (0 to 1), `"lichen"` (the
-    /// fraction of upward surfaces covered, 0 to 1) and `"lichen_color"`.
+    /// fraction of upward surfaces covered, 0 to 1) and `"lichen_color"`. For layered rock
+    /// faces: `"layers"` ([[y, colour], ...]: formations' colours by elevation, warped by
+    /// `"layer_warp"`), `"beds"` (a colour per bed of the strata), `"variety"` and
+    /// `"variety_color"` (broad stains), `"varnish"` and `"varnish_color"` (dark streaks down
+    /// steep faces), `"flutes"` (vertical grooves, bump mapped), `"cross_bedding"` and
+    /// `"cross_set"` (inclined laminae in sets that thick) and `"pits"` and `"pit_size"`
+    /// (honeycomb weathering), `"fractal"`, `"fractal_size"` and `"fractal_h"` (turbulent
+    /// relief down to a pixel's size, for close-up detail) and `"crackle"` and
+    /// `"crackle_size"` (fractures). Sizes are in units of `"scale"`.
     pub fn parse_rock(o: &Value) -> Rock {
         let preset = RockStyle::preset(o["preset"].as_str().unwrap_or("granite"));
         let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
@@ -2353,6 +2543,28 @@ impl SceneFile {
         let mut r = Rock::new(style, n("scale", 1.), SceneFile::parse_int(&o["seed"], 0) as u64);
         r.weathering = n("weathering", r.weathering);
         r.wetness = n("wetness", 0.).clamp(0., 1.);
+        if let Some(layers) = o["layers"].as_array() {
+            r.layers = layers.iter().map(|l| (SceneFile::parse_number(&l[0], 0.), SceneFile::parse_color(&l[1]))).collect();
+            r.layers.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
+        r.layer_warp = n("layer_warp", 0.);
+        if let Some(beds) = o["beds"].as_array() {
+            r.beds = beds.iter().map(SceneFile::parse_color).collect();
+        }
+        r.variety = n("variety", 0.).clamp(0., 1.);
+        r.variety_color = c("variety_color", r.variety_color);
+        r.varnish = n("varnish", 0.).clamp(0., 1.);
+        r.varnish_color = c("varnish_color", r.varnish_color);
+        r.flutes = n("flutes", 0.).max(0.);
+        r.cross_bedding = n("cross_bedding", 0.).clamp(0., 1.);
+        r.cross_set = n("cross_set", r.cross_set).max(1e-6);
+        r.pits = n("pits", 0.).clamp(0., 1.);
+        r.pit_size = n("pit_size", r.pit_size).max(1e-6);
+        r.fractal = n("fractal", 0.).max(0.);
+        r.fractal_size = n("fractal_size", r.fractal_size).max(1e-6);
+        r.fractal_h = n("fractal_h", r.fractal_h);
+        r.crackle = n("crackle", 0.).max(0.);
+        r.crackle_size = n("crackle_size", r.crackle_size).max(1e-6);
         let lichen = n("lichen", 0.);
         if lichen > 0. {
             let color = c("lichen_color", r.lichen_color);
@@ -2794,6 +3006,22 @@ impl SceneFile {
         }
     }
 
+    /// With a `"sun"` and a skysphere, the sky is lit by that sun: its brightness is set so its
+    /// radiance is the air's per unit of sunlight times the sun's `intensity`
+    /// (`skysphere::sky_brightness_for_sun`), on the same scale as the sunlight on everything
+    /// under it. So the sky can't be given a `brightness` of its own.
+    pub fn sky_follows_sun(sun: &Value, objects: &mut [Value]) {
+        if sun.is_null() {
+            return;
+        }
+        let intensity = SceneFile::parse_number(&sun["intensity"], 1.);
+        for o in objects.iter_mut().filter(|o| o["type"].as_str() == Some("skysphere")) {
+            assert!(o.get("brightness").is_none(),
+                "With a sun, the sky's brightness follows the sun's intensity; remove the skysphere's \"brightness\"");
+            o["brightness"] = serde_json::json!(crate::skysphere::sky_brightness_for_sun(intensity));
+        }
+    }
+
     pub fn parse_lights(lights: &Vec<Value>) -> Vec<Light> {
         let mut l: Vec<Light> = Vec::new();
         for light in lights {
@@ -2807,7 +3035,8 @@ impl SceneFile {
     /// and one) on a surface facing it, `direction` pointing towards it, and a visible disc of
     /// the given radius (default the sun's, 0.2666°). With a skysphere in `objects`, the sun is the
     /// sky's: it takes the sky's `sun_direction` (so `direction` is not allowed), `intensity`
-    /// is its irradiance above the atmosphere, and it is reddened by the sky's atmosphere on
+    /// is its irradiance above the atmosphere, which also sets the sky's brightness
+    /// (`sky_follows_sun`), and it is reddened by the sky's atmosphere on
     /// its way down to each point, according to the point's altitude (scene y, in metres), so
     /// it is whiter at cloud level than on the ground, and sets orange as the sky does.
     pub fn parse_sun(v: &Value, objects: &[Value]) -> Option<Sun> {
@@ -2867,7 +3096,8 @@ impl SceneFile {
         }
     }
 
-    pub fn from_scenefile(s: SceneFile) -> Scene {
+    pub fn from_scenefile(mut s: SceneFile) -> Scene {
+        SceneFile::sky_follows_sun(&s.sun, &mut s.objects);
         let max_bounding = BBox::new( // TODO
             Vector3::new(-1000., -1000., -1000.),
             Vector3::new(1000., 1000., 1000.),
@@ -2896,9 +3126,50 @@ impl SceneFile {
         geometries.preload(&s.objects);
         // A landscape is meshed finest where the camera is.
         let mut scene_objects = s.objects;
+        // A world from a seed becomes the giant or the rocky or icy body it turns out to be.
+        for o in scene_objects.iter_mut() {
+            if o["type"].as_str() == Some("world") {
+                *o = crate::celestial::world_object(o);
+            }
+        }
+        let planets: Vec<Value> = scene_objects.iter()
+            .filter(|o| matches!(o["type"].as_str(), Some("skysphere") | Some("planet"))).cloned().collect();
         for o in scene_objects.iter_mut() {
             if o["type"].as_str() == Some("landscape") && o.get("camera").is_none() {
                 o["camera"] = s.camera.clone();
+            }
+            // A moon draws craters down to the camera's pixels, and orbits the scene's planet.
+            if matches!(o["type"].as_str(), Some("moon") | Some("gas_giant")) {
+                if o.get("camera").is_none() {
+                    o["camera"] = s.camera.clone();
+                    o["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+                }
+                if o.get("planet").is_none() {
+                    let (centre, radius) = crate::celestial::moon::scene_primary(&planets);
+                    o["planet"] = serde_json::json!({ "centre": [centre.x, centre.y, centre.z], "radius": radius });
+                }
+            }
+            // A forest sees each tree at the detail the camera needs (`parse_forest_lod`).
+            if o["type"].as_str() == Some("forest") && o.get("camera").is_none() {
+                o["camera"] = s.camera.clone();
+                o["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+            }
+        }
+        // A moon lights the scene with the sunlight it reflects (unless `"light": false`), and
+        // a skysphere's air scatters it too.
+        let moonlight = match (&sun, scene_objects.iter().find(|o| o["type"].as_str() == Some("moon") && o["light"].as_bool() != Some(false))) {
+            (Some(sun), Some(moon)) => {
+                let eye = SceneFile::parse_vec3_def(&s.camera, "location", Vector3::zeros());
+                let sky = scene_objects.iter().find(|o| o["type"].as_str() == Some("skysphere"));
+                Some(crate::celestial::moon::Moonlight::new(moon, &eye, sun, sky))
+            },
+            _ => None,
+        };
+        if let (Some(m), Some(sun)) = (&moonlight, &sun) {
+            let share = crate::color::luminance(&m.light.irradiance) / crate::color::luminance(&sun.irradiance).max(1e-300);
+            let d = m.light.direction;
+            for o in scene_objects.iter_mut().filter(|o| o["type"].as_str() == Some("skysphere")) {
+                o["moonlight"] = serde_json::json!({ "direction": [d.x, d.y, d.z], "share": share });
             }
         }
         let objects = SceneFile::parse_objects(scene_objects, &s.materials, &s.media, &geometries);
@@ -2937,6 +3208,7 @@ impl SceneFile {
                     Some("wavefront") => true,
                     Some(x) => panic!("Unknown integrator '{}': expected \"path\" or \"wavefront\"", x),
                 },
+                adaptive: SceneFile::parse_adaptive(&s.adaptive),
                 sampler: match s.sampler.as_str() {
                     None | Some("sobol") => Sampler::Sobol,
                     Some("independent") => Sampler::Independent,
@@ -2963,6 +3235,7 @@ impl SceneFile {
             area_lights,
             area_light_choice,
             sun,
+            moonlight,
             atmosphere,
             environment: None,
             light_bvh: None,
@@ -3625,6 +3898,22 @@ mod tests {
         // Between 20 and 120 shrubs' triangles, though only one shrub's are stored.
         let trees = objects[0].geometry.primitives() as f64 / (one.bark.len() + one.leaves.len()) as f64;
         assert!(trees > 20. && trees < 120., "{} shrubs", trees);
+    }
+
+    #[test]
+    fn test_forest_lod_coarsens_distant_trees() {
+        // The same shrubs, seen close up and from a kilometre away.
+        let forest = |eye: [f64; 3], lod: bool| SceneFile::parse_forest(&serde_json::json!({ "type": "forest", "seed": 2,
+            "spacing": 2, "variants": 1, "clearings": 0, "area": { "min": [-10, -10], "max": [10, 10] }, "lod": lod,
+            "camera": { "location": eye, "angle": 0.5, "image_height": 200 },
+            "species": [ { "species": "shrub" } ] }), &Map::new(), &Map::new(), &GeometryLibrary::empty())[0].geometry.primitives();
+        let full = forest([0., 1000., 0.], false);
+        // Close up, nearby shrubs are seen in full.
+        assert!(forest([0., 1., -11.], true) as f64 > 0.2 * full as f64);
+        // Far away, each is a few cards.
+        let far = forest([0., 1000., 0.], true);
+        assert!(far * 100 < full, "{} of {}", far, full);
+        assert!(far > 0);
     }
 
     #[test]

@@ -96,6 +96,7 @@ mod shapes {
     pub mod julia;
     pub mod tessellated;
     pub mod text;
+    pub mod lod;
 }
 mod octree;
 mod bvh;
@@ -120,6 +121,7 @@ mod procedural {
     pub mod box_terrain;
     pub mod fireworks;
     pub mod tree;
+    pub mod succulent;
     pub mod forest;
     pub mod heightmap;
     pub mod grass;
@@ -141,9 +143,11 @@ mod expr;
 mod volume;
 mod glare;
 mod variance;
+mod adaptive;
 mod environment;
 mod sobol;
 mod planet;
+mod celestial;
 
 use crate::trace::trace;
 use crate::rendercontext::RenderContext;
@@ -221,6 +225,17 @@ struct Args {
     ///Render this many more samples per pixel than the saved state has
     #[arg(long, conflicts_with = "samples")]
     add_samples: Option<usize>,
+
+    ///Adaptive sampling: each pixel stops once its standard error, relative to its displayed
+    ///value, is below this (eg. 0.01), with supersamples the most it takes; overrides the
+    ///scene's "adaptive" threshold. 0 turns it off
+    #[arg(long)]
+    noise_threshold: Option<f64>,
+
+    ///Also write a map of each pixel's samples, relative to the most any pixel took: where
+    ///adaptive sampling spent them
+    #[arg(long)]
+    sample_map: Option<String>,
 
     ///Start afresh, rather than carrying on from the saved state (<output>.accum)
     #[arg(long)]
@@ -325,11 +340,19 @@ fn main() {
     }
     // Carry on from where an earlier render of the same scene stopped, if there was one.
     let state_path = rendercontext::state_path_for(&rc.output_filename);
+    if let Some(t) = args.noise_threshold {
+        s.render.adaptive = (t > 0.).then(|| scene::Adaptive {
+            threshold: t,
+            min_samples: s.render.adaptive.map_or(scene::Adaptive::DEFAULT_MIN_SAMPLES, |a| a.min_samples),
+        });
+    }
     // The wavefront integrator's samples differ from the path tracer's: a saved state is one's.
+    // It doesn't sample adaptively, so then the path tracer renders. Each moment of an
+    // animation is its own render.
     let moment = when.map(|w| match w { animation::When::Frame(n) => n as f64, animation::When::Time(t) => t });
     let key = rendercontext::render_key(&contents, (args.width, args.height, args.seed))
         ^ moment.map_or(0, |m| sobol::hash(0x7469_6d65, m.to_bits() ^ args.frame.is_some() as u64))
-        ^ if args.wavefront { 0x7761_7665_6672_6f6e } else { 0 };
+        ^ if args.wavefront && s.render.adaptive.is_none() { 0x7761_7665_6672_6f6e } else { 0 };
     if !args.fresh && std::path::Path::new(&state_path).exists() {
         match rc.load_state(&state_path, key) {
             Ok(()) => println!("- Resuming from {:.1} samples per pixel on average, {} at least ({})",
@@ -341,9 +364,15 @@ fn main() {
         s.render.supersamples = n;
     }
     if let Some(n) = args.add_samples {
-        s.render.supersamples = rc.min_samples() + n;
+        // Adaptively sampled pixels differ: more than the most any has.
+        let have = if s.render.adaptive.is_some() { rc.max_samples() } else { rc.min_samples() };
+        s.render.supersamples = have + n;
     }
-    println!("- Output: {}x{} @ {} samples -> {}", s.image.width, s.image.height, s.render.samples_per_pixel(), rc.output_filename);
+    match s.render.adaptive {
+        Some(a) => println!("- Output: {}x{} @ {} to {} samples, to a noise of {} -> {}", s.image.width, s.image.height,
+            a.min_samples.min(s.render.samples_per_pixel()), s.render.samples_per_pixel(), a.threshold, rc.output_filename),
+        None => println!("- Output: {}x{} @ {} samples -> {}", s.image.width, s.image.height, s.render.samples_per_pixel(), rc.output_filename),
+    }
     println!("- Scene Objects: {}, Primitives: {} ", s.objects.len(),  s.objects.primitives_len()); 
     let peak = peak_memory().map_or(String::new(), |b| format!(", peak memory {:.0} MiB", b as f64 / (1024. * 1024.)));
     println!("- Built in {:.2} s{}", build_start.elapsed().as_secs_f64(), peak);
@@ -372,6 +401,10 @@ fn main() {
 
     if args.wavefront {
         s.render.wavefront = true;
+    }
+    if s.render.wavefront && s.render.adaptive.is_some() {
+        println!("- The wavefront integrator doesn't sample adaptively; rendering with the path tracer");
+        s.render.wavefront = false;
     }
     let flat = if s.render.wavefront {
         match wavefront::flat::FlatScene::build(&s) {
@@ -459,7 +492,20 @@ fn main() {
     if rc.samples_rendered > 0 {
         save_state(&state_path, &rc.encode_state(key));
     }
-    println!("- {} samples per pixel; more can be added with --add-samples", rc.min_samples());
+    if s.render.adaptive.is_some() {
+        println!("- {:.1} samples per pixel on average, from {} to {}; more can be added with --add-samples",
+            rc.mean_samples(), rc.min_samples(), rc.max_samples());
+    } else {
+        println!("- {} samples per pixel; more can be added with --add-samples", rc.min_samples());
+    }
+    if let Some(path) = &args.sample_map {
+        let opts = output::OutputOpts { transfer: output::Transfer::Linear, ..output::OutputOpts::default() };
+        if let Err(e) = output::writer_for(path, opts).and_then(|w| w.write(&rc.sample_map(), path)) {
+            eprintln!("{}", e);
+        } else {
+            println!("- Samples per pixel -> {}", path);
+        }
+    }
     //wireframe::wireframe(&s, &mut rc);
     let img = s.output.finish(&rc.snapshot());
     if let Err(e) = writer.write(&img, &rc.output_filename) {

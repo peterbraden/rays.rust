@@ -43,6 +43,6 @@
     { "type": "boulder", "location": [-0.5, -0.62, -2.4], "radius": 0.7, "angularity": 0.1, "seed": 20, "material": "OLD_SNOW" },
     { "type": "boulder", "location": [-1.9, -0.62, -1.8], "radius": 0.7, "angularity": 0.1, "seed": 21, "material": "FIRN" },
     { "type": "boulder", "location": [-3.4, -0.62, -1.0], "radius": 0.7, "angularity": 0.1, "seed": 22, "material": "DIRTY" },
-    { "type": "skysphere", "sun_direction": [-0.35, 0.22, 1] }
+    { "type": "skysphere", "sun_direction": [-0.35, 0.5, 1] }
   ]
 }

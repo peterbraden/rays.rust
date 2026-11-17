@@ -123,6 +123,9 @@ used by ice services:
 Each shape is fractured into faces, and its walls are broken the way ice breaks: like glass,
 in concave scoops that meet at sharp ridges. There are three scales of them: calving scars a
 fifth of the berg across, smaller breaks within those, and melt scallops a metre or so wide.
+That is how old, melted ice looks. Weathered cliffs are crushed instead: shattered and rough
+at every scale, with fresh ice in the hollows between blocks. Which a stretch of wall is
+varies along it, and a tabular berg's front is mostly crushed. Finer roughness is bump mapped.
 A few narrow, deep crevasses cut the walls, and the top is smooth snow. The mesh is refined to
 about 40 cm above the water, so a large berg has several million triangles.
 
@@ -148,11 +151,15 @@ larger ones they broke from, and the field thins out towards its ragged edges. E
 It floats with a tenth of its thickness above the water, snow on top with patches of bare ice,
 and white ice at the sides.
 
-`"style": "brash"` makes the pieces brash ice instead: mostly broken plates, flat and angular
-with sharp edges, the small ones tipped and jumbled, with rounded lumps among the larger
-pieces. Each floats at its own waterline, and they pack edge to edge. Light passes through
-them (random-walk subsurface scattering with ice's own absorption), so thin edges glow.
-`"clumping"` (0 to 1, default 0.5) gathers floes into clumps with open water between.
+`"style": "brash"` makes brash ice instead, by partitioning the sea's surface. Sites are
+scattered at a density that varies from place to place, and the surface is divided into their
+Voronoi cells, so cell sizes vary widely (`size` gives the smallest and largest). Each region
+is ice, slush or open water; like gathers with like (more so with higher `clumping`), giving
+rafts of floes with lanes of water between. `concentration` is the share of ice.
+
+- An ice cell becomes one angular chunk: its polygon with corners broken off, extruded to a
+  slab with a hummocked, snowy top.
+- Slush is the same at a small scale: thin wet fragments with gaps.
 
 In a scene with an ocean, icebergs and floes float on its waves: each piece rises and falls
 with the surface where it floats, and small pieces tip with its slope. (Pieces as large as the

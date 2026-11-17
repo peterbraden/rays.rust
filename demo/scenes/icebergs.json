@@ -23,8 +23,8 @@
     }
   },
   "output": {
-    "tonemap": "reinhard",
-    "exposure": 1.6
+    "tonemap": "filmic",
+    "exposure": 1.7
   },
   "camera": {
     "location": [
@@ -54,6 +54,11 @@
       ],
       "planet_radius": 0,
       "transparent": true,
+      "absorption": [
+        1.2,
+        0.5,
+        0.45
+      ],
       "detail_center": [
         0,
         -30
@@ -71,32 +76,13 @@
         170,
         140
       ],
-      "concentration": 0.8,
+      "concentration": 0.55,
       "size": [
-        0.2,
-        6
+        0.6,
+        5
       ],
-      "clumping": 0.3,
+      "clumping": 0.5,
       "seed": 1
-    },
-    {
-      "type": "ice_floes",
-      "style": "brash",
-      "center": [
-        0,
-        10
-      ],
-      "extent": [
-        120,
-        90
-      ],
-      "concentration": 0.12,
-      "size": [
-        0.08,
-        0.6
-      ],
-      "clumping": 0.6,
-      "seed": 7
     },
     {
       "type": "iceberg",

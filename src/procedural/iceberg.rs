@@ -285,7 +285,26 @@ impl Iceberg {
             // More broken in some stretches of the wall than others.
             let broken = 0.35 + 1.3 * smoothstep(-0.3, 0.4, noise.fbm(m / (3. * big), 2));
             let cuts: Vec<f64> = scoops.iter().map(|c| c.cut(&m)).collect();
-            let cut: f64 = broken * scoops.iter().zip(&cuts).map(|(c, f)| c.depth * f).sum::<f64>();
+            // Scoops are how old, melted ice looks. A weathered cliff is crushed instead:
+            // shattered and rough at every scale (turbulence: octaves of folded noise, upright).
+            // Which it is varies along the wall; a shelf's front is mostly crushed.
+            let crushed = if rounded { 0. } else {
+                smoothstep(-0.25, 0.15, noise.fbm(m / (2.5 * big) + Vector3::new(5., 1., 8.), 2) + if kind == Kind::Tabular { 0.25 } else { 0. })
+            };
+            // (Its two largest octaves alone say where the hollows between blocks are.)
+            let (turbulence, coarse) = {
+                let (mut sum, mut coarse, mut amp, mut w) = (0., 0., 1., 0.5 * big);
+                for o in 0..5 {
+                    let u = Vector3::new(m.x / w, m.y / (2.5 * w), m.z / w) + Vector3::repeat(13. * o as f64);
+                    sum += amp * (1. - 2. * noise.noise(u).abs());
+                    if o == 1 { coarse = sum; }
+                    amp *= 0.5;
+                    w *= 0.48;
+                }
+                (0.12 * big * sum, coarse)
+            };
+            let cut: f64 = (1. - 0.75 * crushed) * broken * scoops.iter().zip(&cuts).map(|(c, f)| c.depth * f).sum::<f64>()
+                - crushed * turbulence;
             let crevasse = crevasses.iter()
                 .map(|&(n, o, w, depth)| depth * (-((m.dot(&n) - o) / w).powi(2)).exp())
                 .fold(0., f64::max);
@@ -301,8 +320,10 @@ impl Iceberg {
             // weathered (and the bluer: `IcebergMaterial`).
             // Not at the rim, where the cut is into the snow.
             let rim = 1. - smoothstep(0.15, 0.45, normal.y);
-            let scars = if cuts.len() > 1 { 0.55 * cuts[0] + 0.55 * cuts[1] } else { 0. };
-            let fresh = (seen * rim * (broken * scars + crevasse)).clamp(0., 1.);
+            let scars = if cuts.len() > 1 { 0.55 * cuts[0] + 0.55 * cuts[1] } else { 0.8 * cuts[0] };
+            // In crushed ice the hollows between the shattered blocks are the fresh ice.
+            let hollows = (0.3 - 0.55 * coarse).clamp(0., 1.);
+            let fresh = (seen * rim * ((1. - crushed) * broken * scars + crushed * hollows + crevasse)).clamp(0., 1.);
             // The firn: a shelf's top few metres are last years' snow, white down the cliff.
             let firn = if kind == Kind::Tabular {
                 let top_y = axes.y * crown(&q);
@@ -595,7 +616,7 @@ impl IcebergMaterial {
             white: clean("white", 0.3),
             glacier: clean("glacier", 0.15),
             // Dense ice with few bubbles, as deep in a glacier: a saturated blue.
-            blue: Ice::new(IceStyle { bubble_radius: 0.7, bubbles: 1.2, impurities: Default::default(), roughness: 0.08 }),
+            blue: Ice::new(IceStyle { bubble_radius: 0.7, bubbles: 2., impurities: Default::default(), roughness: 0.08 }),
             clear: Ice::new(IceStyle { bubble_radius: 0.6, bubbles: 9., impurities: Default::default(), roughness: 0.04 }),
             snow: Snow::new(SnowStyle { sparkle: 0., ..SnowStyle::preset("settled") }, 1., seed),
             size,
@@ -626,9 +647,34 @@ impl IcebergMaterial {
         // Weathering varies in patches, and faces that lean back catch more of it.
         let patches = self.noise.fbm(Vector3::new(p.x / 9., p.y / 5., p.z / 9.), 4);
         let fresh = (fresh - 0.15 * patches - 0.2 * n.y).clamp(0., 1.);
-        let white = dry * (1. - smoothstep(0.1, 0.4, fresh));
-        let blue = smoothstep(0.45, 0.8, fresh);
+        // Mostly the aqua of bubbly ice; white only on the most weathered, outermost faces.
+        let white = 0.7 * dry * (1. - smoothstep(0.03, 0.25, fresh));
+        let blue = 0.85 * smoothstep(0.45, 0.9, fresh);
         (snow, white, blue)
+    }
+}
+
+impl IcebergMaterial {
+    /// The shading normal at `p` for broken ice: `n` tilted against the gradient of a
+    /// turbulent height field (octaves of folded noise from 60 cm down to 4 cm; Blinn's bump
+    /// mapping, as `material::bump`), kept facing the viewer along `wo`.
+    fn bumped(&self, p: &Vector3<f64>, n: &Vector3<f64>, wo: &Vector3<f64>) -> Vector3<f64> {
+        let height = |q: Vector3<f64>| {
+            let (mut sum, mut amp, mut w) = (0., 1., 0.6);
+            for o in 0..5 {
+                sum += amp * w * (1. - 2. * self.noise.noise(q / w + Vector3::repeat(7. * o as f64)).abs());
+                amp *= 0.8;
+                w *= 0.5;
+            }
+            0.45 * sum
+        };
+        let e = 0.01;
+        let g = Vector3::new(
+            height(p + Vector3::x() * e) - height(p - Vector3::x() * e),
+            height(p + Vector3::y() * e) - height(p - Vector3::y() * e),
+            height(p + Vector3::z() * e) - height(p - Vector3::z() * e)) / (2. * e);
+        let bumped = (n - (g - n * g.dot(n))).normalize();
+        if bumped.dot(wo) > 0.05 { bumped } else { *n }
     }
 }
 
@@ -657,7 +703,9 @@ impl MaterialModel for IcebergMaterial {
         }
         let u = rand();
         let ice = if u < white { &self.white } else if u < white + blue { &self.blue } else { &self.glacier };
-        f(&ice.bsdf(&i.normal, Some(s)), r, &i.point, s)
+        // The ice's fine roughness, below the mesh's: bump mapped.
+        let normal = self.bumped(&i.point, &i.normal, &-r.rd.normalize());
+        f(&ice.bsdf(&normal, Some(s)), r, &i.point, s)
     }
 }
 

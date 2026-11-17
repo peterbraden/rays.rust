@@ -10,7 +10,7 @@ Every cloud is a participating medium of the same kind (see `src/volume.rs`): de
 through a density field, lit by the sun and the sky, under the same atmosphere that reddens the
 sun and hazes the distance. Cloud layers curve with the planet's surface, so distant clouds drop
 towards the horizon and sink below it. What differs is where the density comes from. There are
-eight generators:
+nine generators:
 
 | Generator | Makes | Approach |
 |---|---|---|
@@ -21,6 +21,7 @@ eight generators:
 | `lenticular` | lenticular clouds | Moist layers lifted by a mountain's lee waves |
 | `mammatus` | mammatus under an anvil | Sinking, evaporating lobes under a cloud's base |
 | `overcast` | nimbostratus and stratocumulus overcast, scud | A deck lumpy underneath, lit by diffusion through each column |
+| `mountains` `"cloud"` | hill fog, cap clouds | Damp air lifted over high ground past its saturation, streaming off the crests |
 | `precipitation` | rain shafts and virga | Raindrops by rain rate (Marshall-Palmer), falling through shear |
 
 Render any of them with `cargo run --release -- demo/scenes/<scene>.json`. The scenes stand on the
@@ -190,7 +191,7 @@ A low, grey overcast: Nubis with the stratus profile and full coverage.
 ![Overcast](./scenes/overcast.png)
 
 `overcast.json`: `{"type": "overcast", "base": 1200, "thickness": 2200, "density": 0.03, "diffusion": true}`,
-with a `precipitation` shower over the hills.
+with a `precipitation` shower over the hills, and hill cloud on the ridge.
 
 Bad weather: a deck of cloud kilometres thick (an optical depth of 30 to 100) with no blue
 anywhere, as on a wet, windy day. From below it is anything but uniform. Its underside hangs in
@@ -210,6 +211,16 @@ without noise; paths carry on to gather the sky and the ground. It is an approxi
 doesn't spread sideways from column to column, so seams are sharper than they would be, and
 the sides of the lumps are lit like their bases. The air under the deck needs
 `"crepuscular_rays": true` on the skysphere, or it is hazed blue as if the sun shone on it.
+
+The cloud on the hills is the ridge's own: a `"cloud"` on the `mountains` object
+(`procedural::hill_cloud`). On a raw day the air near the ground needs only a few hundred metres
+of lift to saturate (`deficit`), and wind blowing over the hills gives it that, the lift dying
+away with height above the ground (`decay`). So the higher summits vanish into cloud while lower
+ground stays clear, the cloud streams off downwind of the crests (`trail`), and patches of
+damper air (`humidity_variation`) cap some summits and leave others bare. In a scene with an
+overcast it joins the deck's volume, so the light diffused down through the deck lights it too;
+on its own, a thin cloud in a dark scene would be lit only by random walks that reach the
+deck, which are noisy.
 
 ### Cumulus, modelled
 

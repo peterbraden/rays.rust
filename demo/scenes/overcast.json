@@ -64,7 +64,21 @@
       "resolution": 1024,
       "snowline": 5000,
       "treeline": 4000,
-      "seed": 5
+      "seed": 5,
+      "cloud": {
+        "deficit": 280,
+        "decay": 380,
+        "density": 0.03,
+        "wind_direction": [
+          1,
+          0.1
+        ],
+        "trail": 1500,
+        "seed": 1,
+        "raggedness": 0.75,
+        "humidity_variation": 0.45,
+        "humidity_size": 3000
+      }
     },
     {
       "type": "skysphere",

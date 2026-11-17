@@ -208,6 +208,34 @@ impl DensityField for NoiseDensity {
     fn majorant(&self) -> f64 { self.max_density }
 }
 
+/// Several density fields filling one volume, their densities added: media lit together, as
+/// one column for the diffusion approximation (an overcast deck and the hill cloud under it).
+pub struct Sum {
+    pub fields: Vec<Arc<dyn DensityField>>,
+}
+
+impl DensityField for Sum {
+    fn density(&self, p: &Vector3<f64>) -> f64 {
+        self.fields.iter().map(|f| f.density(p)).sum()
+    }
+    fn majorant(&self) -> f64 {
+        self.fields.iter().map(|f| f.majorant()).sum()
+    }
+    /// The sum of the parts' bounds, as far as all of them hold.
+    fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
+        self.fields.iter().map(|f| f.majorant_from(p, d)).fold((0., f64::INFINITY), |(m, l), (fm, fl)| (m + fm, l.min(fl)))
+    }
+    fn minorant(&self) -> f64 {
+        self.fields.iter().map(|f| f.minorant()).sum()
+    }
+    fn column_depths(&self, p: &Vector3<f64>, lo: f64, hi: f64, steps: u32) -> (f64, f64) {
+        self.fields.iter().map(|f| f.column_depths(p, lo, hi, steps)).fold((0., 0.), |(b, a), (fb, fa)| (b + fb, a + fa))
+    }
+    fn particle_radius(&self, p: &Vector3<f64>) -> Option<f64> {
+        self.fields.iter().find_map(|f| f.particle_radius(p))
+    }
+}
+
 /// A density field times a constant.
 pub struct Scaled {
     pub field: Arc<dyn DensityField>,
@@ -1182,6 +1210,17 @@ mod tests {
         assert!(((at(4.) - at(2.)) - (at(2.) - at(0.))).abs() < 1e-12);
         // Darker under a thicker deck: the light under it goes as 1 / (1 + ¾ τ*).
         assert!(diffused_radiance(mu, 16., 0.) < 0.55 * diffused_radiance(mu, 8., 0.));
+    }
+
+    #[test]
+    fn test_sum_adds_densities_bounds_and_columns() {
+        let s = Sum { fields: vec![Arc::new(ConstantDensity(0.01)), Arc::new(ConstantDensity(0.03))] };
+        let p = Vector3::new(1., 50., 2.);
+        assert!((s.density(&p) - 0.04).abs() < 1e-15);
+        assert!((s.majorant() - 0.04).abs() < 1e-15);
+        assert_eq!(s.majorant_from(&p, &Vector3::y()), (s.majorant(), f64::INFINITY));
+        let (below, above) = s.column_depths(&p, 0., 100., 16);
+        assert!((below + above - 4.).abs() < 1e-9, "{}", below + above);
     }
 
     #[test]

@@ -1098,6 +1098,7 @@ impl SceneFile {
             rainbow: (o["rainbow"].as_bool() == Some(true)).then(|| Arc::new(RainbowTable::new(100_000))),
             emission: None,
             extinction: None,
+            sun_probes: o["sun_probes"].as_bool().unwrap_or(crate::volume::SUN_PROBES),
         }
     }
 

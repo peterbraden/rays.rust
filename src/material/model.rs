@@ -51,6 +51,13 @@ pub trait MaterialModel: Sync{
     /// Whether this is the sky's material, which the wavefront integrator evaluates for rays
     /// that escape the scene.
     fn is_sky(&self) -> bool { false }
+
+    /// For a scattering medium: the sunlight a scattering at `point` sends back along
+    /// `incoming` (a unit vector, the way the light arriving there travelled), exactly as its
+    /// own `scatter` gathers it (albedo, phase function, sun, transmittance), for the path's
+    /// current state; None if it can't say (a surface, or a chromatic medium). The other half
+    /// of the sun probes' multiple importance sampling (`volume::VertexPhase::sun_probe`).
+    fn volume_sunlight(&self, _incoming: &Vector3<f64>, _point: &Vector3<f64>, _s: &crate::scene::Scene) -> Option<Color> { None }
 }
 
 /// The outgoing ray, and the weight to assign the color of the traced ray.

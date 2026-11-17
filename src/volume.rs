@@ -495,6 +495,30 @@ pub struct VolumeMaterial {
     /// A chromatic medium's absorption and scattering coefficients per unit density (RGB), from
     /// which its albedo at the sample's wavelengths follows; `albedo` holds their RGB ratio.
     pub extinction: Option<(Color, Color)>,
+    /// Whether its vertices send sun probes (`sun_probe`).
+    pub sun_probes: bool,
+}
+
+/// Whether volumes send sun probes by default.
+pub const SUN_PROBES: bool = true;
+
+/// A continuation ray (origin and direction) and the weight of the sunlight at its next vertex.
+type SunWeight = (Vector3<f64>, Vector3<f64>, f64);
+
+thread_local! {
+    /// The weight of the sunlight gathered at the next vertex along a path's continuation, from
+    /// the vertex that sent it and a sun probe (`sun_probe`): the continuation ray (origin and
+    /// direction, exactly) and the weight. A vertex reached by any other ray, after a surface
+    /// say, which no probe could have reached, takes all of it.
+    static NEXT_SUN_WEIGHT: Cell<Option<SunWeight>> = const { Cell::new(None) };
+}
+
+/// The weight of the sunlight gathered at a volume vertex reached by `r`.
+fn sun_weight_for(r: &Ray) -> f64 {
+    NEXT_SUN_WEIGHT.with(|w| match w.get() {
+        Some((ro, rd, weight)) if ro == r.ro && rd == r.rd => weight,
+        _ => 1.,
+    })
 }
 
 /// Halos from ice crystals (see `material::ice_halos`): sun dogs, the 22° and 46° halos,
@@ -653,8 +677,9 @@ impl VolumeMaterial {
     /// function at the angle between `incoming` and the direction to it, times the albedo.
     /// Point lights and the sun are delta lights, which a scattered ray can never hit, so this
     /// is the only way they reach a medium; area lights are sampled once, as at a surface.
+    #[allow(clippy::too_many_arguments)]
     fn direct_lighting(&self, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene,
-                       phase: &VertexPhase, albedo: Color, scatterings: u32) -> Color {
+                       phase: &VertexPhase, albedo: Color, scatterings: u32, sun_weight: f64) -> Color {
         let p = |w: &Vector3<f64>| phase.eval(incoming.dot(w)).as_unbounded();
         let mut direct = Color::black();
         // With a light BVH, point lights are sampled with the area lights below.
@@ -670,7 +695,8 @@ impl VolumeMaterial {
             // Halos, rainbows and diffraction colour the phase function in RGB.
             let sun_phase = self.sun_phase(phase, incoming, s, scatterings).as_unbounded();
             direct = direct + match self.approximation.oz {
-                None => sun.irradiance_at(point) * sun_phase * sun.transmittance_from(point, s),
+                None if sun_weight <= 0. => Color::black(),
+                None => sun.irradiance_at(point) * sun_phase * sun.transmittance_from(point, s) * sun_weight,
                 Some(oz) if scatterings == 0 => sun.irradiance_at(point) * self.oz_sunlight(&oz, sun_phase, incoming, point, s),
                 // Already counted, octaves and all, at the path's first scattering.
                 Some(_) => Color::black(),
@@ -721,7 +747,68 @@ impl VolumeMaterial {
     }
 }
 
+impl VolumeMaterial {
+    /// # Sun probes
+    ///
+    /// The sunlight a path gathers at its next vertex in a cloud is the sun's irradiance times
+    /// the phase function at the angle between the path's direction and the sun's. Where the
+    /// phase function has a strong forward peak (g = 0.85 gives about 80 times its mean) the
+    /// rare paths heading nearly straight for the sun carry those peaks, and make the fireflies
+    /// of sunlit clouds: in a measured cumulus scene they were nearly all of its noise (none
+    /// without the sun, a sixth of it at g = 0.5).
+    ///
+    /// So that light is estimated by two techniques, combined by multiple importance sampling
+    /// (Veach and Guibas, "Optimally Combining Sampling Techniques for Monte Carlo Rendering",
+    /// SIGGRAPH 1995) with the balance heuristic: the path's own continuation, its direction
+    /// drawn from this vertex's phase function, and a probe from here whose direction is drawn
+    /// from the same phase function about the sun, which meets the next vertex's peak. Both
+    /// find the next vertex by the same free flight, whose density cancels from the weights,
+    /// which are each technique's direction density over their sum (`NEXT_SUN_WEIGHT`, applied
+    /// where the continuation scatters next). The path itself is sampled as before and keeps
+    /// its weight; sampling its direction from a mixture instead (a defensive mixture) gave
+    /// every unguided bounce a weight above one, which compounded over the dozens of bounces in
+    /// a thick cloud into far worse fireflies. The probe costs a free flight and a shadow ray.
+    ///
+    /// Returns the probe's estimate (before this vertex's albedo) of the sunlight scattered at
+    /// the vertex it finds and back along it to here, then here towards `incoming`.
+    fn sun_probe(&self, incoming: &Vector3<f64>, point: &Vector3<f64>, sun: &Vector3<f64>, phase: &VertexPhase, s: &Scene) -> Color {
+        let d = phase.base.sample(sun);
+        let probe = Ray { ro: *point, rd: d };
+        let found = s.objects.nearest_intersection(&probe, f64::INFINITY, 0.);
+        // Chromatic media crossed on the way weight it as they would the continuation, without
+        // changing the path's own state.
+        let mis = chromatic::side_weight(found.as_ref().map(|h| h.dist));
+        let Some(hit) = found else { return Color::black() };
+        if hit.dist >= crate::light::SUN_SHADOW_DISTANCE {
+            return Color::black();
+        }
+        let Some(light) = hit.object.medium.material_at(hit.point).volume_sunlight(&d, &hit.point, s) else { return Color::black() };
+        // Through the air on the way, as the continuation's would be (`trace`).
+        let air = match &s.atmosphere {
+            Some(sky) if hit.dist > crate::trace::AERIAL_PERSPECTIVE_FROM => Color { rgb: sky.segment(point, &d, hit.dist).0 },
+            _ => Color::white(),
+        };
+        let cos = incoming.dot(&d);
+        let density = phase.pdf(cos) + phase.base.eval(sun.dot(&d));
+        phase.eval(cos) * light * air * mis / density
+    }
+}
+
 impl MaterialModel for VolumeMaterial {
+    fn volume_sunlight(&self, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene) -> Option<Color> {
+        if self.extinction.is_some() {
+            return None;
+        }
+        let sun = s.sun.as_ref()?;
+        let scatterings = path_scatterings();
+        if self.approximation.oz.is_some() && scatterings > 0 {
+            return Some(Color::black());
+        }
+        let phase = self.phase_at(point, scatterings);
+        let sun_phase = self.sun_phase(&phase, incoming, s, scatterings).as_unbounded();
+        Some(self.albedo_at(scatterings).as_reflectance() * sun.irradiance_at(point) * sun_phase * sun.transmittance_from(point, s))
+    }
+
     fn scatter(&self, r: &Ray, i: &Intersection, s: &Scene) -> ScatteredRay {
         // The path scatters here (`ggx::regularised`).
         crate::material::ggx::scattered();
@@ -741,7 +828,21 @@ impl MaterialModel for VolumeMaterial {
                 self.adjusted_albedo(Color { rgb: single }, scatterings)
             },
         };
-        let mut emit = self.direct_lighting(&incoming, &i.point, s, &phase, albedo, scatterings);
+        // Its share of the sunlight here, against a sun probe's that might have found this vertex
+        // (none can, in a chromatic medium: `volume_sunlight`).
+        let sun_weight = if self.extinction.is_none() { sun_weight_for(r) } else { 1. };
+        let mut emit = self.direct_lighting(&incoming, &i.point, s, &phase, albedo, scatterings, sun_weight);
+        // The next vertex's sunlight, by two techniques combined: along the continuation, and
+        // by a probe towards the sun.
+        let probe = s.sun.as_ref().map(|sun| sun.direction)
+            .filter(|_| self.sun_probes && self.extinction.is_none() && phase.base.mean_cosine() > 0.2);
+        NEXT_SUN_WEIGHT.with(|w| w.set(probe.map(|sun| {
+            let p = phase.pdf(incoming.dot(&rd));
+            (i.point, rd, p / (p + phase.base.eval(sun.dot(&rd))))
+        })));
+        if let Some(sun) = probe {
+            emit = emit + albedo * self.sun_probe(&incoming, &i.point, &sun, &phase, s);
+        }
         if let Some(e) = &self.emission {
             // σ_a / σ_t of the emitted radiance (`emission`).
             emit = emit + (Color::white() - albedo) * e.radiance(&i.point);
@@ -770,6 +871,8 @@ pub struct Scattering {
     /// Absorption and scattering coefficients per unit density (RGB), for a chromatic medium;
     /// `albedo` should then be their ratio.
     pub extinction: Option<(Color, Color)>,
+    /// Whether its vertices send sun probes (`VolumeMaterial::sun_probe`).
+    pub sun_probes: bool,
 }
 
 pub fn create_volume(bounds: BBox, density: Arc<dyn DensityField>, s: Scattering) -> SceneObject {
@@ -793,7 +896,7 @@ pub fn create_medium(mut volume: Volume, s: Scattering) -> SceneObject {
     let material = VolumeMaterial {
         albedo: s.albedo, phase: s.phase, approximation: s.approximation, diffraction: s.diffraction,
         halos: s.halos, rainbow: s.rainbow, field: volume.density.clone(), emission: s.emission,
-        extinction,
+        extinction, sun_probes: s.sun_probes,
     };
     SceneObject {
         geometry: Box::new(volume),
@@ -936,6 +1039,7 @@ mod tests {
             field: Arc::new(ConstantDensity(1.)),
             emission: None,
             extinction: None,
+            sun_probes: false,
         };
         // First scattering in full: the extinction as given, diffraction in the phase.
         assert_eq!(m.density_scale(0), 1.);

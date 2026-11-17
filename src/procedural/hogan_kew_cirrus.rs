@@ -764,6 +764,11 @@ impl crate::planet::PlanetField for GlobalCirrus {
         let to_low = crate::planet::to_sphere(&at.position, d, planet.radius + low);
         let to_high = crate::planet::to_sphere(&at.position, d, planet.radius + high);
         if let Some(cover) = &self.cover {
+            // Above the layer and climbing: it's left for good (else it would step on through
+            // the empty texels above, to the far side of the planet).
+            if ahead > high && at.position.dot(d) >= 0. {
+                return (0., f64::INFINITY);
+            }
             // No cirrus over this texel of the cover: clear to its edge.
             let (face, i, j) = cover.texel(&(at.position + d * 0.01).normalize());
             let edge = cover.cube.exit(&at.position, d, face, i, j);

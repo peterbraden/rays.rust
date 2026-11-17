@@ -141,5 +141,7 @@ Every parameter is optional.
 - **Maps:** `map_size` is the number of texels per cube face (512: about 20 km each). `map`
   and `map_width` write the satellite view described above.
 
-The planet-wide maps take about 13 s to build at the default size. Renders are as costly as
+Sunlit clouds' fireflies are tamed by sun probes, on for every volume (`"sun_probes"`; see
+`VolumeMaterial::sun_probe` and plan.md's variance section): about 2.4 times the efficiency on
+the trade-cumulus scene, unbiased. The planet-wide maps take about 4 s to build at the default size. Renders are as costly as
 any thick, multiply scattering cloud; `similarity_after` (eg. 2) speeds them up.

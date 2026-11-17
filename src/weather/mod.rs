@@ -505,7 +505,10 @@ impl Weather {
         let n = self.zonal.len();
         let k = (((lat.sin() + 1.) / 2. * n as f64) as usize).min(n - 1);
         let c = &self.params.climate;
-        let (_, june, december) = climate::insolation(c.solar, c.tilt.to_radians(), lat);
+        // The solstices' insolation (not `insolation`, whose annual mean, a year's sum, is unused
+        // here and took most of the time to build the maps).
+        let tilt = c.tilt.to_radians();
+        let (june, december) = (climate::daily_insolation(c.solar, lat, tilt), climate::daily_insolation(c.solar, lat, -tilt));
         let swing = (june - december).abs() / 2. * (0.02 + 0.07 * land);
         (self.zonal[k] + season * swing, climate::zonal_precipitation(c, lat))
     }

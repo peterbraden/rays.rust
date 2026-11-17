@@ -137,11 +137,13 @@ pub struct Stratiform {
     pub look: Look,
     pub drift: Drift,
     shapes: Shapes,
+    ceiling: f64,
 }
 
 impl Stratiform {
     pub fn new(maps: Arc<Maps>, family: Family, look: Look, seed: u64) -> Stratiform {
-        Stratiform { maps, family, look, drift: Drift::none(), shapes: Shapes::new(seed) }
+        let ceiling = match family { Family::Low => maps.low.top.max(), Family::Mid => maps.mid.top.max() };
+        Stratiform { maps, family, look, drift: Drift::none(), shapes: Shapes::new(seed), ceiling }
     }
 
     fn layer(&self) -> &LayerMaps {
@@ -153,13 +155,22 @@ impl Stratiform {
 
     /// The highest any cloud in the family reaches.
     pub fn highest(&self) -> f64 {
-        self.layer().top.max()
+        self.ceiling
     }
 }
 
 /// The local majorant over a texel of `cover` between the spheres of `low` and `high`
 /// altitudes: `m` between them if the cover isn't zero, else nothing to the texel's edge.
 #[allow(clippy::too_many_arguments)]
+/// Whether a ray at `at` along `d` has left a family for good: above `ceiling` (its highest
+/// cloud anywhere) and heading outwards, its distance from the planet's centre only grows.
+/// Without this, rays climbing out of the clouds (to the sun, the sky) stepped on through empty
+/// texels, 20 km at a time, to the far side of the planet-sized bounds: most of a render's
+/// time, in every family, empty or not.
+fn gone(at: &SurfacePoint, d: &Vector3<f64>, ceiling: f64) -> bool {
+    at.altitude >= ceiling && at.position.dot(d) >= 0.
+}
+
 fn column_bound(at: &SurfacePoint, d: &Vector3<f64>, planet: &Planet, map: &CubeMap, cover: f64, low: f64, high: f64, m: f64) -> (f64, f64) {
     let ahead = at.position + d * 0.01;
     let (face, i, j) = map.texel(&ahead.normalize());
@@ -196,6 +207,9 @@ impl PlanetField for Stratiform {
     }
 
     fn majorant_from(&self, at: &SurfacePoint, _p: &Vector3<f64>, d: &Vector3<f64>, planet: &Planet) -> (f64, f64) {
+        if gone(at, d, self.ceiling) {
+            return (0., f64::INFINITY);
+        }
         let l = self.layer();
         let (face, i, j) = l.cover.texel(&(at.position + d * 0.01).normalize());
         column_bound(at, d, planet, &l.cover, l.cover.texel_max(face, i, j), -l.base_low.texel_max(face, i, j),
@@ -215,6 +229,8 @@ pub struct Convective {
     /// The depth of an anvil, metres.
     pub anvil_depth: f64,
     pub radius: f64,
+    /// The highest top of any storm's column, before its overshooting dome (cached).
+    top_max: f64,
     /// How the cells move with the wind aloft, and their lumps boil up their sides.
     pub drift: Drift,
     /// How long a cell lives, from cumulus through cumulonimbus to its anvil's last, seconds;
@@ -250,13 +266,14 @@ pub struct Tower {
 
 impl Convective {
     pub fn new(maps: Arc<Maps>, look: Look, cell_size: f64, radius: f64, seed: u64) -> Convective {
-        Convective { maps, look, cell_size, overshoot: 800., anvil_depth: 1800., radius, drift: Drift::none(), lifetime: 5400., time: 0.,
+        let top_max = maps.deep_top_reach.max();
+        Convective { maps, look, cell_size, overshoot: 800., anvil_depth: 1800., radius, top_max, drift: Drift::none(), lifetime: 5400., time: 0.,
                      seed: seed as u32, shapes: Shapes::new(seed.wrapping_add(5)) }
     }
 
     /// The highest any of it reaches.
     pub fn highest(&self) -> f64 {
-        self.maps.deep_top_reach.max() + self.overshoot
+        self.top_max + self.overshoot
     }
 
     /// Calls `f` with each active tower whose cell is near the point above `up` (scene).
@@ -426,6 +443,9 @@ impl PlanetField for Convective {
     }
 
     fn majorant_from(&self, at: &SurfacePoint, _p: &Vector3<f64>, d: &Vector3<f64>, planet: &Planet) -> (f64, f64) {
+        if gone(at, d, self.highest()) {
+            return (0., f64::INFINITY);
+        }
         let m = &self.maps;
         let (face, i, j) = m.deep_reach.texel(&(at.position + d * 0.01).normalize());
         let towers = m.deep_reach.texel_max(face, i, j);
@@ -498,19 +518,21 @@ pub struct Rain {
     pub streak_size: f64,
     noise: PerlinNoise,
     max: f64,
+    ceiling: f64,
 }
 
 impl Rain {
     pub fn new(maps: Arc<Maps>, convective: Option<Arc<Convective>>, shower_rate: f64, seed: u64) -> Rain {
         let showers = if convective.is_some() { crate::procedural::precipitation::rain_extinction(shower_rate) } else { 0. };
         let max = maps.rain.max().max(showers);
-        Rain { time: 0., fall_speed: 6., maps, convective, shower_rate, streakiness: 0.5, streak_size: 600., noise: PerlinNoise::shuffled(seed), max }
+        let showers = if convective.is_some() { maps.deep_base_high.max() } else { 0. };
+        let ceiling = maps.rain_base.max().max(showers);
+        Rain { time: 0., fall_speed: 6., maps, convective, shower_rate, streakiness: 0.5, streak_size: 600., noise: PerlinNoise::shuffled(seed), max, ceiling }
     }
 
     /// The highest it falls from.
     pub fn highest(&self) -> f64 {
-        let showers = if self.convective.is_some() { self.maps.deep_base_high.max() } else { 0. };
-        self.maps.rain_base.max().max(showers)
+        self.ceiling
     }
 
     fn streaks(&self, at: &SurfacePoint) -> f64 {
@@ -564,6 +586,9 @@ impl PlanetField for Rain {
     }
 
     fn majorant_from(&self, at: &SurfacePoint, _p: &Vector3<f64>, d: &Vector3<f64>, planet: &Planet) -> (f64, f64) {
+        if gone(at, d, self.ceiling) {
+            return (0., f64::INFINITY);
+        }
         let m = &self.maps;
         let (face, i, j) = m.rain.texel(&(at.position + d * 0.01).normalize());
         let mut cover = m.rain.texel_max(face, i, j);

@@ -1,0 +1,648 @@
+//! # Function graphs
+//!
+//! A small graph of functions over the ground, written in a scene file as nested JSON: noise,
+//! warped, folded into ridges, masked by slope or altitude, blended, terraced. A graph gives a
+//! number at each point of a surface, and is what drives a terrain's displacement
+//! (`shapes::displaced`); it is meant to drive surface layers' masks and media densities in the
+//! same way. After Terragen's node networks, in which any fractal can be warped, masked and fed
+//! into anything (Planetside, "Power Fractal Shader v3", "Surface Layer", "Warp Input Shader").
+//!
+//! A node is a number, a string (an expression, see below), or an object naming its kind with
+//! `"node"`. Reuse a node by defining it once in the scene's `variables` and writing `"$name"`.
+//!
+//! Sources:
+//! - `fractal`: Perlin noise summed over octaves, from `scale` (the largest features, metres,
+//!   default 10) down to `smallest` (default `scale / 256`), each `lacunarity` (default 2.03)
+//!   times finer and `roughness` (default 0.5) times weaker. `style`: `"perlin"` (in
+//!   [-amplitude, amplitude]), `"ridged"` (sharp crests, Musgrave's ridged multifractal, in
+//!   [0, amplitude]) or `"billow"` (rounded heaps, |noise|, in [0, amplitude]). `amplitude`
+//!   (default 1), `seed`, and `plan` (true: vary only across x and z, as for strata seen from
+//!   above; by default in 3D, so cliffs get relief too).
+//! - `cells`: Worley's cellular noise, cells `scale` across (default 1), `seed`, `amplitude`,
+//!   `plan`, and `style`: `"f1"` (distance to the nearest feature point, in cells), `"edges"`
+//!   (F2 - F1: zero along the cracks between cells), or `"stones"` (a rounded stone in each
+//!   cell, each its own size and height, as Terragen's Fake Stones), each in [0, amplitude].
+//! - `slope`: the surface's slope, 0 below `from` degrees and 1 above `to`, smoothly;
+//!   `breakup` (a node, in degrees) added to the slope first, so the edge of the zone is
+//!   ragged rather than a contour.
+//! - `altitude`: as `slope`, by height (y, metres) from `from` to `to`, with `breakup` in metres.
+//! - `strata`: ledges: beds `step` metres thick (default 1), each eroded back from the one
+//!   above it and ending in a riser `sharpness` of the way to vertical (default 0.8), as the
+//!   difference between the terraced height and the height, in [-amplitude, amplitude]
+//!   (default `step` / 2); `breakup` (a node, metres) added to the height first, so the beds
+//!   waver and pinch out. Displaced along a slope's normal, it cuts a slope into ledges.
+//! - a number, or `{"node": "constant", "value": v}`.
+//! - an expression, `"0.1 * sin(x)"`, or `{"node": "expr", "expr": ..., "inputs": {"a": node,
+//!   ...}, "range": [lo, hi]}` (`expr.rs`'s syntax), over `x`, `y`, `z`, `slope` (degrees) and
+//!   the named inputs. Its value is clamped to `range`, which a displacement needs to bound the
+//!   surface; a bare string has no range.
+//!
+//! Combinations (`input`, `a`, `b` and `mask` are nodes; `inputs` a list of them):
+//! - `add`, `multiply`, `min`, `max` over `inputs`; `subtract`: `a` - `b`.
+//! - `blend`: `a` where `mask` is 0, `b` where it is 1, mixed between.
+//! - `clamp` (`input`, `min`, `max`), `abs`, `power` (`input`, `exponent`: of |input|, signed),
+//!   `smoothstep` (`input` from `from` to `to`, to [0, 1]), `remap` (`input` from `from` [lo,
+//!   hi] onto `to` [lo, hi], linearly).
+//! - `terrace`: `input` stepped in `step`s, each step's riser `sharpness` (0: smooth, 1:
+//!   vertical, default 0.8) of the way to a cliff, as strata weather into ledges.
+//! - `warp`: `input` read at a point moved by `amount` (metres, default 1) times a vector of
+//!   noise `scale` across (default 10; `seed`, `octaves`, default 3), so its features flow and
+//!   bend (domain distortion, Inigo Quilez, "Domain warping",
+//!   <https://iquilezles.org/articles/warp/>); or by the nodes `x`, `y` and `z` given.
+//!
+//! Every node knows its range (by interval arithmetic) and clamps to it, so a displacement can
+//! bound its surface before evaluating it. Fractals and cells are filtered: given the size of
+//! the smallest detail that will be seen at a point (`Context::filter`, for a displaced surface
+//! the spacing of its vertices), octaves finer than twice that are left out (their mean in
+//! their place, the last fading out), so a surface tessellated coarsely far from the camera
+//! doesn't alias.
+use crate::expr::Expr;
+use crate::na::Vector3;
+use crate::noise::SeededNoise;
+use serde_json::Value;
+use std::sync::LazyLock;
+
+/// Where a graph is evaluated: the point on the surface (before any displacement), the
+/// surface's unit normal there, and the size of the smallest detail worth keeping (metres; 0
+/// for all of it).
+#[derive(Clone, Copy, Debug)]
+pub struct Context {
+    pub p: Vector3<f64>,
+    pub normal: Vector3<f64>,
+    pub filter: f64,
+}
+
+impl Context {
+    pub fn new(p: Vector3<f64>, normal: Vector3<f64>, filter: f64) -> Context {
+        Context { p, normal, filter }
+    }
+
+    /// The surface's slope, degrees from level.
+    pub fn slope(&self) -> f64 {
+        self.normal.y.clamp(-1., 1.).acos().to_degrees()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FractalStyle { Perlin, Ridged, Billow }
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum CellStyle { F1, Edges, Stones }
+
+#[derive(Clone)]
+enum Node {
+    Const(f64),
+    Fractal { noise: Box<SeededNoise>, style: FractalStyle, scale: f64, smallest: f64, roughness: f64, lacunarity: f64, amplitude: f64, plan: bool },
+    Cells { seed: u32, style: CellStyle, scale: f64, amplitude: f64, plan: bool },
+    Slope { from: f64, to: f64, breakup: Option<Box<Node>> },
+    Altitude { from: f64, to: f64, breakup: Option<Box<Node>> },
+    Strata { step: f64, sharpness: f64, amplitude: f64, breakup: Option<Box<Node>> },
+    Expr { expr: Expr, inputs: Vec<Node>, range: (f64, f64) },
+    Add(Vec<Node>),
+    Multiply(Vec<Node>),
+    Min(Vec<Node>),
+    Max(Vec<Node>),
+    Subtract(Box<Node>, Box<Node>),
+    Blend { a: Box<Node>, b: Box<Node>, mask: Box<Node> },
+    Clamp { input: Box<Node>, lo: f64, hi: f64 },
+    Abs(Box<Node>),
+    Power { input: Box<Node>, exponent: f64 },
+    Smoothstep { input: Box<Node>, from: f64, to: f64 },
+    Remap { input: Box<Node>, from: (f64, f64), to: (f64, f64) },
+    Terrace { input: Box<Node>, step: f64, sharpness: f64 },
+    Warp { input: Box<Node>, by: [Box<Node>; 3] },
+}
+
+/// A parsed graph: its output node.
+#[derive(Clone)]
+pub struct Graph {
+    root: Node,
+    range: (f64, f64),
+}
+
+/// Octaves are rotated, which hides the lattice's axes (as `SeededNoise::fbm` does).
+static ROTATION: LazyLock<crate::na::Rotation3<f64>> = LazyLock::new(|| crate::na::Rotation3::from_euler_angles(0.61, 0.93, 1.27));
+
+/// The mean of a ridged and of a billowed octave, put in place of the octaves filtered out, so
+/// that filtering removes detail without raising or lowering the surface.
+static OCTAVE_MEANS: LazyLock<(f64, f64)> = LazyLock::new(|| {
+    let noise = SeededNoise::new(7);
+    let mut rng = crate::geometry::Pcg32::new(11, 3);
+    let (mut ridged, mut billow, n) = (0., 0., 20000);
+    for _ in 0 .. n {
+        let p = Vector3::new(rng.next_f64(), rng.next_f64(), rng.next_f64()) * 64.;
+        let v = noise.noise(p).clamp(-1., 1.);
+        ridged += (1. - v.abs()).powi(2);
+        billow += v.abs();
+    }
+    (ridged / n as f64, billow / n as f64)
+});
+
+fn smoothstep(lo: f64, hi: f64, x: f64) -> f64 {
+    if hi <= lo {
+        return if x >= hi { 1. } else { 0. };
+    }
+    let t = ((x - lo) / (hi - lo)).clamp(0., 1.);
+    t * t * (3. - 2. * t)
+}
+
+/// Hash integers to [0, 1).
+fn hash01(a: i64, b: i64, c: i64, seed: u32) -> f64 {
+    let mut h = (a as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ (b as u64).wrapping_mul(0xc2b2_ae3d_27d4_eb4f)
+        ^ (c as u64).wrapping_mul(0x1656_67b1_9e37_79f9)
+        ^ (seed as u64).wrapping_mul(0x27d4_eb2f_1656_67c5);
+    h ^= h >> 31;
+    h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    h ^= h >> 29;
+    (h >> 11) as f64 / (1u64 << 53) as f64
+}
+
+fn mul_range(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+    let c = [a.0 * b.0, a.0 * b.1, a.1 * b.0, a.1 * b.1].map(|v| if v.is_nan() { 0. } else { v });
+    (c.iter().cloned().fold(f64::INFINITY, f64::min), c.iter().cloned().fold(f64::NEG_INFINITY, f64::max))
+}
+
+impl Node {
+    fn eval(&self, c: &Context) -> f64 {
+        let v = match self {
+            Node::Const(v) => *v,
+            Node::Fractal { noise, style, scale, smallest, roughness, lacunarity, amplitude, plan } => {
+                fractal(noise, *style, *scale, *smallest, *roughness, *lacunarity, *plan, c) * amplitude
+            },
+            Node::Cells { seed, style, scale, amplitude, plan } => cells(*seed, *style, *scale, *plan, c) * amplitude,
+            Node::Slope { from, to, breakup } => {
+                let s = c.slope() + breakup.as_ref().map_or(0., |b| b.eval(c));
+                smoothstep(*from, *to, s)
+            },
+            Node::Altitude { from, to, breakup } => {
+                let h = c.p.y + breakup.as_ref().map_or(0., |b| b.eval(c));
+                smoothstep(*from, *to, h)
+            },
+            Node::Strata { step, sharpness, amplitude, breakup } => {
+                let h = c.p.y + breakup.as_ref().map_or(0., |b| b.eval(c));
+                (terrace(h, *step, *sharpness) - h) / step * amplitude
+            },
+            Node::Expr { expr, inputs, .. } => {
+                let mut vars = vec![c.p.x, c.p.y, c.p.z, c.slope()];
+                vars.extend(inputs.iter().map(|n| n.eval(c)));
+                expr.eval(&vars)
+            },
+            Node::Add(v) => v.iter().map(|n| n.eval(c)).sum(),
+            Node::Multiply(v) => v.iter().map(|n| n.eval(c)).product(),
+            Node::Min(v) => v.iter().map(|n| n.eval(c)).fold(f64::INFINITY, f64::min),
+            Node::Max(v) => v.iter().map(|n| n.eval(c)).fold(f64::NEG_INFINITY, f64::max),
+            Node::Subtract(a, b) => a.eval(c) - b.eval(c),
+            Node::Blend { a, b, mask } => {
+                let m = mask.eval(c).clamp(0., 1.);
+                // Only what is seen: either side alone where the mask is 0 or 1.
+                if m <= 0. { a.eval(c) } else if m >= 1. { b.eval(c) } else { a.eval(c) * (1. - m) + b.eval(c) * m }
+            },
+            Node::Clamp { input, lo, hi } => input.eval(c).clamp(*lo, *hi),
+            Node::Abs(a) => a.eval(c).abs(),
+            Node::Power { input, exponent } => {
+                let v = input.eval(c);
+                v.signum() * v.abs().powf(*exponent)
+            },
+            Node::Smoothstep { input, from, to } => smoothstep(*from, *to, input.eval(c)),
+            Node::Remap { input, from, to } => {
+                let t = if from.1 != from.0 { (input.eval(c) - from.0) / (from.1 - from.0) } else { 0. };
+                to.0 + t * (to.1 - to.0)
+            },
+            Node::Terrace { input, step, sharpness } => terrace(input.eval(c), *step, *sharpness),
+            Node::Warp { input, by } => {
+                let d = Vector3::new(by[0].eval(c), by[1].eval(c), by[2].eval(c));
+                input.eval(&Context { p: c.p + d, ..*c })
+            },
+        };
+        let (lo, hi) = self.range();
+        v.clamp(lo, hi)
+    }
+
+    /// Bounds on the node's value, by interval arithmetic.
+    fn range(&self) -> (f64, f64) {
+        match self {
+            Node::Const(v) => (*v, *v),
+            Node::Fractal { style, amplitude, .. } => {
+                let a = amplitude.abs();
+                match style { FractalStyle::Perlin => (-a, a), _ => (amplitude.min(0.), amplitude.max(0.)) }
+            },
+            Node::Cells { amplitude, .. } => (amplitude.min(0.), amplitude.max(0.)),
+            Node::Strata { amplitude, .. } => (-amplitude.abs(), amplitude.abs()),
+            Node::Slope { .. } | Node::Altitude { .. } | Node::Smoothstep { .. } => (0., 1.),
+            Node::Expr { range, .. } => *range,
+            Node::Add(v) => v.iter().map(Node::range).fold((0., 0.), |a, b| (a.0 + b.0, a.1 + b.1)),
+            Node::Multiply(v) => v.iter().map(Node::range).fold((1., 1.), mul_range),
+            Node::Min(v) => v.iter().map(Node::range).fold((f64::INFINITY, f64::INFINITY), |a, b| (a.0.min(b.0), a.1.min(b.1))),
+            Node::Max(v) => v.iter().map(Node::range).fold((f64::NEG_INFINITY, f64::NEG_INFINITY), |a, b| (a.0.max(b.0), a.1.max(b.1))),
+            Node::Subtract(a, b) => {
+                let (a, b) = (a.range(), b.range());
+                (a.0 - b.1, a.1 - b.0)
+            },
+            Node::Blend { a, b, .. } => {
+                let (a, b) = (a.range(), b.range());
+                (a.0.min(b.0), a.1.max(b.1))
+            },
+            Node::Clamp { input, lo, hi } => {
+                let r = input.range();
+                (r.0.clamp(*lo, *hi), r.1.clamp(*lo, *hi))
+            },
+            Node::Abs(a) => {
+                let (lo, hi) = a.range();
+                if lo >= 0. { (lo, hi) } else if hi <= 0. { (-hi, -lo) } else { (0., hi.max(-lo)) }
+            },
+            Node::Power { input, exponent } => {
+                let (lo, hi) = input.range();
+                let m = lo.abs().max(hi.abs()).powf(*exponent);
+                (if lo < 0. { -m } else { lo.powf(*exponent).min(m) }, if hi > 0. { m } else { -(hi.abs().powf(*exponent)) })
+            },
+            Node::Remap { input, from, to } => {
+                let r = input.range();
+                let f = |v: f64| if from.1 != from.0 { to.0 + (v - from.0) / (from.1 - from.0) * (to.1 - to.0) } else { to.0 };
+                let (a, b) = (f(r.0), f(r.1));
+                (a.min(b), a.max(b))
+            },
+            // Terracing keeps values within a step of where they were.
+            Node::Terrace { input, step, .. } => {
+                let r = input.range();
+                (r.0 - step.abs(), r.1 + step.abs())
+            },
+            Node::Warp { input, .. } => input.range(),
+        }
+    }
+
+    /// The size of the finest detail the node can make (metres): fractals' `smallest`, cells'
+    /// scale; infinite for a node with none.
+    fn finest(&self) -> f64 {
+        let children: Vec<&Node> = match self {
+            Node::Fractal { smallest, .. } => return *smallest,
+            Node::Cells { scale, .. } => return 0.1 * scale,
+            Node::Const(_) => return f64::INFINITY,
+            Node::Strata { step, breakup, .. } => return breakup.as_ref().map_or(f64::INFINITY, |b| b.finest()).min(0.25 * step),
+            Node::Slope { breakup, .. } | Node::Altitude { breakup, .. } => breakup.iter().map(|b| &**b).collect(),
+            Node::Expr { inputs, .. } => inputs.iter().collect(),
+            Node::Add(v) | Node::Multiply(v) | Node::Min(v) | Node::Max(v) => v.iter().collect(),
+            Node::Subtract(a, b) => vec![a, b],
+            Node::Blend { a, b, mask } => vec![a, b, mask],
+            Node::Clamp { input, .. } | Node::Abs(input) | Node::Power { input, .. } | Node::Smoothstep { input, .. }
+                | Node::Remap { input, .. } | Node::Terrace { input, .. } => vec![input],
+            Node::Warp { input, by } => vec![input, &by[0], &by[1], &by[2]],
+        };
+        children.into_iter().map(Node::finest).fold(f64::INFINITY, f64::min)
+    }
+}
+
+/// A fractal's value at the context's point, filtered (see the module documentation): in
+/// [-1, 1] for Perlin, [0, 1] for ridged and billowed.
+#[allow(clippy::too_many_arguments)]
+fn fractal(noise: &SeededNoise, style: FractalStyle, scale: f64, smallest: f64, roughness: f64, lacunarity: f64, plan: bool, c: &Context) -> f64 {
+    let p = if plan { Vector3::new(c.p.x, 0., c.p.z) } else { c.p } / scale;
+    let (ridged_mean, billow_mean) = *OCTAVE_MEANS;
+    let mean = match style { FractalStyle::Perlin => 0., FractalStyle::Ridged => ridged_mean, FractalStyle::Billow => billow_mean };
+    let (mut sum, mut total, mut amplitude, mut weight, mut size, mut q) = (0., 0., 1., 1., scale, p);
+    // Octaves down to `smallest`: the last whose features are at least `smallest` across.
+    let octaves = ((scale / smallest.max(1e-9)).ln() / lacunarity.ln()).floor().max(0.) as usize + 1;
+    for _ in 0 .. octaves.min(40) {
+        // Keep the octave in full while its features are at least four times the filter, fade it
+        // out to its mean by twice the filter.
+        let keep = if c.filter > 0. { smoothstep(2. * c.filter, 4. * c.filter, size) } else { 1. };
+        let v = if keep > 0. {
+            let n = noise.noise(q).clamp(-1., 1.);
+            match style {
+                FractalStyle::Perlin => n,
+                FractalStyle::Ridged => (1. - n.abs()).powi(2),
+                FractalStyle::Billow => n.abs(),
+            }
+        } else {
+            mean
+        };
+        let v = mean + (v - mean) * keep;
+        sum += v * amplitude * weight;
+        total += amplitude;
+        if style == FractalStyle::Ridged {
+            // Detail gathers on the crests: each octave weighted by the one before.
+            weight = (v * 2.).clamp(0., 1.);
+        }
+        amplitude *= roughness;
+        size /= lacunarity;
+        q = *ROTATION * q * lacunarity;
+    }
+    if total <= 0. {
+        return mean;
+    }
+    match style {
+        FractalStyle::Perlin => (sum / total).clamp(-1., 1.),
+        _ => (sum / total).clamp(0., 1.),
+    }
+}
+
+/// Cellular noise at the context's point: one feature point jittered in each cell of a lattice
+/// `scale` across.
+fn cells(seed: u32, style: CellStyle, scale: f64, plan: bool, c: &Context) -> f64 {
+    let p = c.p / scale;
+    let (cx, cy, cz) = (p.x.floor() as i64, if plan { 0 } else { p.y.floor() as i64 }, p.z.floor() as i64);
+    let ys: &[i64] = if plan { &[0] } else { &[-1, 0, 1] };
+    let (mut f1, mut f2, mut nearest) = (f64::INFINITY, f64::INFINITY, (0, 0, 0));
+    for dx in -1 ..= 1 {
+        for &dy in ys {
+            for dz in -1 ..= 1 {
+                let (i, j, k) = (cx + dx, cy + dy, cz + dz);
+                let f = Vector3::new(
+                    i as f64 + hash01(i, j, k, seed),
+                    if plan { p.y } else { j as f64 + hash01(i, j, k, seed ^ 0x51ed) },
+                    k as f64 + hash01(i, j, k, seed ^ 0xa2c3));
+                let d = (f - p).norm();
+                if d < f1 {
+                    f2 = f1;
+                    f1 = d;
+                    nearest = (i, j, k);
+                } else if d < f2 {
+                    f2 = d;
+                }
+            }
+        }
+    }
+    let v = match style {
+        CellStyle::F1 => f1,
+        CellStyle::Edges => f2 - f1,
+        CellStyle::Stones => {
+            // A stone round each feature point, at most halfway to the next, flattened.
+            let (i, j, k) = nearest;
+            let radius = (0.5 * (f1 + f2)).min(0.35 + 0.3 * hash01(i, j, k, seed ^ 0x77));
+            let height = 0.5 + 0.5 * hash01(i, j, k, seed ^ 0x99);
+            let t = (1. - (f1 / radius).powi(2)).max(0.);
+            height * t.sqrt()
+        },
+    };
+    v.clamp(0., 1.)
+}
+
+/// `v` stepped in `step`s, each riser `sharpness` of the way to vertical.
+fn terrace(v: f64, step: f64, sharpness: f64) -> f64 {
+    if step <= 0. {
+        return v;
+    }
+    let s = v / step;
+    let (k, f) = (s.floor(), s.fract());
+    // Each step's rise is squeezed into a band `1 - sharpness` of a step wide at its end.
+    let band = (1. - sharpness.clamp(0., 1.)).max(1e-3);
+    let rise = smoothstep(1. - band, 1., f);
+    (k + rise) * step
+}
+
+/// Parsing.
+impl Graph {
+    pub fn parse(v: &Value) -> Result<Graph, String> {
+        let root = parse_node(v)?;
+        let range = root.range();
+        Ok(Graph { root, range })
+    }
+
+    pub fn eval(&self, c: &Context) -> f64 {
+        self.root.eval(c)
+    }
+
+    /// Bounds on the graph's value.
+    pub fn range(&self) -> (f64, f64) {
+        self.range
+    }
+
+    /// The size of the finest detail the graph makes, metres (infinite for none).
+    pub fn finest(&self) -> f64 {
+        self.root.finest()
+    }
+}
+
+fn num(o: &Value, k: &str, def: f64) -> Result<f64, String> {
+    match &o[k] {
+        Value::Null => Ok(def),
+        v => v.as_f64().ok_or_else(|| format!("graph node's \"{}\" must be a number, got {}", k, v)),
+    }
+}
+
+fn pair(o: &Value, k: &str, def: (f64, f64)) -> Result<(f64, f64), String> {
+    match &o[k] {
+        Value::Null => Ok(def),
+        Value::Array(a) if a.len() == 2 && a.iter().all(Value::is_number) => Ok((a[0].as_f64().unwrap(), a[1].as_f64().unwrap())),
+        v => Err(format!("graph node's \"{}\" must be [lo, hi], got {}", k, v)),
+    }
+}
+
+fn child(o: &Value, k: &str) -> Result<Box<Node>, String> {
+    match o.get(k) {
+        Some(v) => Ok(Box::new(parse_node(v)?)),
+        None => Err(format!("graph node {} needs \"{}\"", o["node"], k)),
+    }
+}
+
+fn children(o: &Value) -> Result<Vec<Node>, String> {
+    match &o["inputs"] {
+        Value::Array(a) if !a.is_empty() => a.iter().map(parse_node).collect(),
+        _ => Err(format!("graph node {} needs a list of \"inputs\"", o["node"])),
+    }
+}
+
+fn parse_node(v: &Value) -> Result<Node, String> {
+    match v {
+        Value::Number(n) => return Ok(Node::Const(n.as_f64().unwrap())),
+        Value::String(s) => return parse_expr(s, &Value::Null, (f64::NEG_INFINITY, f64::INFINITY)),
+        Value::Object(_) => {},
+        _ => return Err(format!("a graph node is a number, an expression or an object, not {}", v)),
+    }
+    let o = v;
+    let kind = o["node"].as_str().or_else(|| o["type"].as_str()).ok_or_else(|| format!("graph node needs a \"node\": {}", o))?;
+    let seed = || o["seed"].as_u64().unwrap_or(0);
+    let plan = o["plan"].as_bool().unwrap_or(false);
+    Ok(match kind {
+        "constant" => Node::Const(num(o, "value", 0.)?),
+        "fractal" => {
+            let scale = num(o, "scale", 10.)?;
+            let style = match o["style"].as_str().unwrap_or("perlin") {
+                "perlin" => FractalStyle::Perlin,
+                "ridged" => FractalStyle::Ridged,
+                "billow" => FractalStyle::Billow,
+                s => return Err(format!("unknown fractal style \"{}\": perlin, ridged or billow", s)),
+            };
+            let lacunarity = num(o, "lacunarity", 2.03)?;
+            if lacunarity <= 1. || scale <= 0. {
+                return Err("a fractal's scale must be positive and its lacunarity above 1".into());
+            }
+            Node::Fractal { noise: Box::new(SeededNoise::new(seed())), style, scale, smallest: num(o, "smallest", scale / 256.)?.max(1e-6),
+                roughness: num(o, "roughness", 0.5)?, lacunarity, amplitude: num(o, "amplitude", 1.)?, plan }
+        },
+        "cells" => {
+            let style = match o["style"].as_str().unwrap_or("f1") {
+                "f1" => CellStyle::F1,
+                "edges" => CellStyle::Edges,
+                "stones" => CellStyle::Stones,
+                s => return Err(format!("unknown cells style \"{}\": f1, edges or stones", s)),
+            };
+            let scale = num(o, "scale", 1.)?;
+            if scale <= 0. {
+                return Err("cells' scale must be positive".into());
+            }
+            Node::Cells { seed: seed() as u32, style, scale, amplitude: num(o, "amplitude", 1.)?, plan }
+        },
+        "slope" | "altitude" => {
+            let (from, to) = (num(o, "from", 0.)?, num(o, "to", if kind == "slope" { 90. } else { 1. })?);
+            let breakup = o.get("breakup").map(parse_node).transpose()?.map(Box::new);
+            if kind == "slope" { Node::Slope { from, to, breakup } } else { Node::Altitude { from, to, breakup } }
+        },
+        "strata" => {
+            let step = num(o, "step", 1.)?;
+            if step <= 0. {
+                return Err("strata's step must be positive".into());
+            }
+            Node::Strata { step, sharpness: num(o, "sharpness", 0.8)?, amplitude: num(o, "amplitude", 0.5 * step)?,
+                breakup: o.get("breakup").map(parse_node).transpose()?.map(Box::new) }
+        },
+        "expr" => {
+            let text = o["expr"].as_str().ok_or("an expr node needs an \"expr\" string")?;
+            parse_expr(text, &o["inputs"], pair(o, "range", (f64::NEG_INFINITY, f64::INFINITY))?)?
+        },
+        "add" => Node::Add(children(o)?),
+        "multiply" => Node::Multiply(children(o)?),
+        "min" => Node::Min(children(o)?),
+        "max" => Node::Max(children(o)?),
+        "subtract" => Node::Subtract(child(o, "a")?, child(o, "b")?),
+        "blend" => Node::Blend { a: child(o, "a")?, b: child(o, "b")?, mask: child(o, "mask")? },
+        "clamp" => Node::Clamp { input: child(o, "input")?, lo: num(o, "min", f64::NEG_INFINITY)?, hi: num(o, "max", f64::INFINITY)? },
+        "abs" => Node::Abs(child(o, "input")?),
+        "power" => Node::Power { input: child(o, "input")?, exponent: num(o, "exponent", 1.)? },
+        "smoothstep" => Node::Smoothstep { input: child(o, "input")?, from: num(o, "from", 0.)?, to: num(o, "to", 1.)? },
+        "remap" => Node::Remap { input: child(o, "input")?, from: pair(o, "from", (0., 1.))?, to: pair(o, "to", (0., 1.))? },
+        "terrace" => Node::Terrace { input: child(o, "input")?, step: num(o, "step", 1.)?, sharpness: num(o, "sharpness", 0.8)? },
+        "warp" => {
+            let by = if o.get("x").is_some() || o.get("y").is_some() || o.get("z").is_some() {
+                let axis = |k: &str| o.get(k).map_or(Ok(Box::new(Node::Const(0.))), |v| parse_node(v).map(Box::new));
+                [axis("x")?, axis("y")?, axis("z")?]
+            } else {
+                // A vector of noise: three fractals of the same scale, seeded apart.
+                let (amount, scale, octaves) = (num(o, "amount", 1.)?, num(o, "scale", 10.)?, num(o, "octaves", 3.)?.max(1.));
+                let lacunarity: f64 = 2.03;
+                let smallest = scale / lacunarity.powf(octaves - 1.) * 0.999;
+                let axis = |k: u64| Box::new(Node::Fractal { noise: Box::new(SeededNoise::new(seed().wrapping_mul(3).wrapping_add(k + 101))),
+                    style: FractalStyle::Perlin, scale, smallest, roughness: 0.5, lacunarity, amplitude: amount, plan: false });
+                [axis(0), axis(1), axis(2)]
+            };
+            Node::Warp { input: child(o, "input")?, by }
+        },
+        k => return Err(format!("unknown graph node \"{}\"", k)),
+    })
+}
+
+fn parse_expr(text: &str, inputs: &Value, range: (f64, f64)) -> Result<Node, String> {
+    let mut names = vec!["x", "y", "z", "slope"];
+    let mut nodes = vec![];
+    if let Value::Object(m) = inputs {
+        for (k, v) in m {
+            names.push(k);
+            nodes.push(parse_node(v)?);
+        }
+    }
+    let expr = Expr::parse(text, &names).map_err(|e| format!("in expression \"{}\": {}", text, e))?;
+    Ok(Node::Expr { expr, inputs: nodes, range })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn at(x: f64, y: f64, z: f64) -> Context {
+        Context::new(Vector3::new(x, y, z), Vector3::y(), 0.)
+    }
+
+    fn graph(v: Value) -> Graph {
+        Graph::parse(&v).unwrap()
+    }
+
+    #[test]
+    fn test_values_stay_in_range() {
+        let nodes = [
+            json!({"node": "fractal", "scale": 3, "amplitude": 2}),
+            json!({"node": "fractal", "style": "ridged", "scale": 3, "amplitude": 0.5}),
+            json!({"node": "fractal", "style": "billow", "scale": 3}),
+            json!({"node": "cells", "style": "stones", "scale": 0.5, "amplitude": 0.2}),
+            json!({"node": "cells", "style": "edges", "scale": 0.5}),
+            json!({"node": "warp", "amount": 2, "input": {"node": "fractal", "scale": 1}}),
+            json!({"node": "terrace", "step": 0.5, "input": {"node": "fractal", "scale": 4, "amplitude": 3}}),
+            json!({"node": "multiply", "inputs": [{"node": "slope", "from": 10, "to": 40}, {"node": "fractal", "amplitude": -1}]}),
+            json!({"node": "power", "exponent": 2, "input": {"node": "fractal"}}),
+            json!({"node": "strata", "step": 0.3, "breakup": {"node": "fractal", "scale": 2}}),
+        ];
+        for n in nodes {
+            let g = graph(n.clone());
+            let (lo, hi) = g.range();
+            assert!(lo.is_finite() && hi.is_finite() && lo <= hi, "{}: {:?}", n, g.range());
+            let mut rng = crate::geometry::Pcg32::new(1, 1);
+            for _ in 0 .. 2000 {
+                let p = Vector3::new(rng.next_f64(), rng.next_f64(), rng.next_f64()) * 20.;
+                let v = g.eval(&at(p.x, p.y, p.z));
+                assert!(v >= lo && v <= hi, "{}: {} outside {:?}", n, v, g.range());
+            }
+        }
+    }
+
+    #[test]
+    fn test_arithmetic_and_expressions() {
+        let g = graph(json!({"node": "add", "inputs": [1, {"node": "multiply", "inputs": [2, 3]},
+            {"node": "subtract", "a": 1, "b": 4}]}));
+        assert_eq!(g.eval(&at(0., 0., 0.)), 4.);
+        assert_eq!(g.range(), (4., 4.));
+        let e = graph(json!({"node": "expr", "expr": "a * x + y", "inputs": {"a": 2}, "range": [-100, 100]}));
+        assert_eq!(e.eval(&at(3., 1., 0.)), 7.);
+        assert_eq!(e.eval(&at(300., 1., 0.)), 100.);
+        assert_eq!(graph(json!("x + z")).eval(&at(1., 0., 2.)), 3.);
+        assert!(Graph::parse(&json!({"node": "frob"})).is_err());
+        assert!(Graph::parse(&json!({"node": "blend", "a": 1})).err().unwrap().contains("\"b\""));
+    }
+
+    #[test]
+    fn test_masks() {
+        let slope = graph(json!({"node": "slope", "from": 20, "to": 40}));
+        let tilt = |deg: f64| Context::new(Vector3::zeros(), Vector3::new(deg.to_radians().sin(), deg.to_radians().cos(), 0.), 0.);
+        assert_eq!(slope.eval(&tilt(10.)), 0.);
+        assert_eq!(slope.eval(&tilt(60.)), 1.);
+        assert!((slope.eval(&tilt(30.)) - 0.5).abs() < 1e-9);
+        let alt = graph(json!({"node": "blend", "a": 1, "b": 3, "mask": {"node": "altitude", "from": 0, "to": 10}}));
+        assert_eq!(alt.eval(&at(0., -5., 0.)), 1.);
+        assert_eq!(alt.eval(&at(0., 15., 0.)), 3.);
+        assert_eq!(alt.eval(&at(0., 5., 0.)), 2.);
+    }
+
+    #[test]
+    fn test_terrace_steps() {
+        let g = graph(json!({"node": "terrace", "step": 1, "sharpness": 1, "input": "x"}));
+        assert!((g.eval(&at(2.3, 0., 0.)) - 2.).abs() < 1e-9);
+        assert!((g.eval(&at(2.7, 0., 0.)) - 2.).abs() < 1e-9);
+    }
+
+    /// Filtering drops fine octaves without moving the surface: the filtered fractal follows
+    /// the full one, and far coarser filters average to the same mean.
+    #[test]
+    fn test_filtering_keeps_the_mean() {
+        for style in ["perlin", "ridged", "billow"] {
+            let g = graph(json!({"node": "fractal", "style": style, "scale": 8, "smallest": 0.01}));
+            let mut rng = crate::geometry::Pcg32::new(5, 2);
+            let (mut full, mut coarse, mut diff, n) = (0., 0., 0f64, 4000);
+            for _ in 0 .. n {
+                let p = Vector3::new(rng.next_f64(), rng.next_f64(), rng.next_f64()) * 100.;
+                let f = g.eval(&Context::new(p, Vector3::y(), 0.));
+                let c = g.eval(&Context::new(p, Vector3::y(), 0.5));
+                full += f;
+                coarse += c;
+                diff = diff.max((f - c).abs());
+            }
+            assert!(((full - coarse) / n as f64).abs() < 0.03, "{}: means {} and {}", style, full / n as f64, coarse / n as f64);
+            assert!(diff < 0.5, "{}: filtering moved the surface by {}", style, diff);
+        }
+    }
+
+    #[test]
+    fn test_finest_detail() {
+        let g = graph(json!({"node": "add", "inputs": [{"node": "fractal", "scale": 10, "smallest": 0.05}, {"node": "cells", "scale": 2}]}));
+        assert!((g.finest() - 0.05).abs() < 1e-12);
+        assert_eq!(graph(json!(3)).finest(), f64::INFINITY);
+    }
+}

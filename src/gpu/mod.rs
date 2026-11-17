@@ -39,6 +39,8 @@ use wgpu::util::DeviceExt;
 /// The baked sky's resolution.
 const ENV_WIDTH: usize = 1024;
 const ENV_HEIGHT: usize = 512;
+/// Texels per side of a cell of the sky map's visibility (`environment::visibility`).
+const VISIBILITY_SCALE: usize = 8;
 /// Passes between reading the accumulated image back.
 const PASSES_PER_READ: usize = 8;
 // The aerial perspective table's size and distances, and the flags and kinds, are the shader's.
@@ -229,10 +231,20 @@ impl Buffers {
         for t in &texels {
             tables.extend([t.rgb.x as f32, t.rgb.y as f32, t.rgb.z as f32]);
         }
-        // Rows by brightness times sin θ (a row's share of the sphere), then within each row.
+        // Rows by brightness times sin θ (a row's share of the sphere) times how much of the
+        // sky the scene lets through from the camera, as the CPU's `Environment` (so no shadow
+        // rays are spent on the ground), then within each row. The visibility is found on a
+        // grid of VISIBILITY_SCALE² texels, the CPU's resolution, for a ray per cell.
+        let origin = crate::environment::viewpoint(s);
+        let (vw, vh) = (ENV_WIDTH / VISIBILITY_SCALE, ENV_HEIGHT / VISIBILITY_SCALE);
+        let visible: Vec<f64> = (0..vw * vh).into_par_iter().map(|i| {
+            let (x, y) = ((i % vw) * VISIBILITY_SCALE + VISIBILITY_SCALE / 2, (i / vw) * VISIBILITY_SCALE + VISIBILITY_SCALE / 2);
+            crate::environment::visibility(s, &origin, &env_direction(x, y))
+        }).collect();
         let weight = |x: usize, y: usize| {
             let theta = (y as f64 + 0.5) / ENV_HEIGHT as f64 * std::f64::consts::PI;
-            crate::color::luminance(&texels[y * ENV_WIDTH + x]).max(0.) * theta.sin() + 1e-9
+            let v = visible[(y / VISIBILITY_SCALE) * vw + x / VISIBILITY_SCALE];
+            crate::color::luminance(&texels[y * ENV_WIDTH + x]).max(0.) * theta.sin() * v + 1e-9
         };
         let rows: Vec<f64> = (0..ENV_HEIGHT).map(|y| (0..ENV_WIDTH).map(|x| weight(x, y)).sum()).collect();
         let marginal_off = tables.len() as u32;
@@ -717,8 +729,9 @@ mod tests {
         }
     }
 
-    /// The GPU renders what the CPU wavefront integrator does (skipped without a GPU adapter,
-    /// such as Mesa's lavapipe).
+    /// The GPU renders what the CPU wavefront integrator does, tracing as many rays (so it
+    /// samples the sky as the CPU does; skipped without a GPU adapter, such as Mesa's
+    /// lavapipe).
     #[test]
     fn test_agrees_with_the_wavefront_integrator() {
         let s = scene();
@@ -732,10 +745,12 @@ mod tests {
         };
         let rc = Mutex::new(RenderContext::new(24, 16, false, "test.png"));
         gpu.render(&s, &rc, |_| ());
-        let gpu_image = rc.lock().unwrap().snapshot();
+        let (gpu_image, gpu_rays) = { let rc = rc.lock().unwrap(); (rc.snapshot(), rc.rays_cast) };
         let rc = Mutex::new(RenderContext::new(24, 16, false, "test.png"));
         crate::wavefront::integrator::render(&s, &flat, &rc, |_| ());
-        let cpu_image = rc.lock().unwrap().snapshot();
+        let (cpu_image, cpu_rays) = { let rc = rc.lock().unwrap(); (rc.snapshot(), rc.rays_cast) };
+        // Russian roulette ends paths by different random numbers, so the counts differ a little.
+        assert!((gpu_rays as f64 - cpu_rays as f64).abs() < 0.02 * cpu_rays as f64, "rays: GPU {} vs CPU {}", gpu_rays, cpu_rays);
         let total = |img: &crate::output::LinearImage| img.pixels.iter().fold(Vector3::zeros(), |a, c| a + c.rgb);
         let (g, c) = (total(&gpu_image), total(&cpu_image));
         for ch in 0..3 {

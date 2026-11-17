@@ -3112,6 +3112,10 @@ impl SceneFile {
         // The moment rendered, and each object's time then on its clock (`animation`).
         let animation = crate::animation::Animation::parse(&doc["animation"]).unwrap_or_else(|e| panic!("Scene file: {}", e));
         let time = o.when.map(|w| animation.time(w));
+        // Keyed values at that time (a still is at time 0); keyed cameras blur along their path.
+        let t = time.unwrap_or(0.);
+        let close = (time.is_some() && animation.shutter > 0.).then(|| t + animation.shutter / animation.fps);
+        crate::animation::resolve_keys(&mut doc, t, close).unwrap_or_else(|e| panic!("Scene file: {}", e));
         crate::animation::apply_clocks(&mut doc, time.unwrap_or(0.))
             .unwrap_or_else(|e| panic!("Scene file: {}", e));
         let mut scene: SceneFile = serde_json::from_value(doc).unwrap();

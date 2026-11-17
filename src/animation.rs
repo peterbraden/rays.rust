@@ -100,11 +100,14 @@ pub struct Animation {
     pub start: f64,
     /// How many frames there are, if said.
     pub frames: Option<u64>,
+    /// How long the shutter is open, as a fraction of a frame (0.5: a 180° shutter); keyed
+    /// cameras blur along their paths over it.
+    pub shutter: f64,
 }
 
 impl Default for Animation {
     fn default() -> Animation {
-        Animation { fps: 24., start: 0., frames: None }
+        Animation { fps: 24., start: 0., frames: None, shutter: 0.5 }
     }
 }
 
@@ -117,6 +120,7 @@ impl Animation {
                 let num = |k: &str| o.get(k).map(|x| x.as_f64().ok_or_else(|| format!("\"animation\": \"{}\" must be a number, got {}", k, x)));
                 if let Some(f) = num("fps") { a.fps = f?; }
                 if let Some(s) = num("start") { a.start = s?; }
+                if let Some(s) = num("shutter") { a.shutter = s?.max(0.); }
                 if let Some(n) = o.get("frames") {
                     a.frames = Some(n.as_u64().ok_or_else(|| format!("\"animation\": \"frames\" must be a whole number, got {}", n))?);
                 }
@@ -191,6 +195,129 @@ fn resolve(v: &mut Value, elapsed: f64, rates: &std::collections::HashMap<String
             }
         },
         Value::Array(items) => for i in items { resolve(i, elapsed, rates)? },
+        _ => {},
+    }
+    Ok(())
+}
+
+/// Is `v` a keyed value: `{"keys": [[t, value], ...], "interpolation": ...}`?
+fn is_keyed(v: &Value) -> bool {
+    v.as_object().is_some_and(|o| o.contains_key("keys") && o.keys().all(|k| k == "keys" || k == "interpolation"))
+}
+
+/// A keyed value at video time `t`. Keys are `[time, value]` in video seconds, the values
+/// numbers or arrays of numbers (vectors, colours), held at the first and last outside their
+/// times. `"interpolation"`: `"smooth"` (the default: a monotone cubic through the keys, which
+/// never overshoots them, so a camera climbing from 2 m never dips below it), `"linear"`, or
+/// `"step"` (each value held until the next key; any values).
+pub fn keyed_value(v: &Value, t: f64) -> Result<Value, String> {
+    let keys = v["keys"].as_array().filter(|k| !k.is_empty())
+        .ok_or_else(|| format!("\"keys\" must be a list of [time, value], got {}", v["keys"]))?;
+    let mut times = Vec::with_capacity(keys.len());
+    let mut values = Vec::with_capacity(keys.len());
+    for k in keys {
+        match k.as_array().map(|a| a.as_slice()) {
+            Some([time, value]) => {
+                let time = time.as_f64().ok_or_else(|| format!("a key's time must be a number, got {}", k))?;
+                if times.last().is_some_and(|&last| time <= last) {
+                    return Err(format!("keys must be in order of time, got {} after {}", time, times.last().unwrap()));
+                }
+                times.push(time);
+                values.push(value.clone());
+            },
+            _ => return Err(format!("a key must be [time, value], got {}", k)),
+        }
+    }
+    let interpolation = v["interpolation"].as_str().unwrap_or("smooth");
+    if !["smooth", "linear", "step"].contains(&interpolation) {
+        return Err(format!("unknown \"interpolation\" {}: expected \"smooth\", \"linear\" or \"step\"", v["interpolation"]));
+    }
+    // The segment: the last key at or before t.
+    let i = times.iter().rposition(|&k| k <= t);
+    if interpolation == "step" {
+        return Ok(values[i.unwrap_or(0)].clone());
+    }
+    // Each value as numbers.
+    let numbers = |x: &Value| -> Result<Vec<f64>, String> {
+        match x {
+            Value::Number(n) => Ok(vec![n.as_f64().unwrap()]),
+            Value::Array(a) => a.iter().map(|c| c.as_f64().ok_or_else(|| format!("keyed values must be numbers or lists of numbers, got {}", x))).collect(),
+            _ => Err(format!("keyed values must be numbers or lists of numbers (or \"interpolation\": \"step\"), got {}", x)),
+        }
+    };
+    let ys = values.iter().map(numbers).collect::<Result<Vec<_>, _>>()?;
+    if ys.iter().any(|y| y.len() != ys[0].len()) {
+        return Err(format!("keyed values must all have the same length, got {}", v["keys"]));
+    }
+    let n = times.len();
+    let out: Vec<f64> = match i {
+        None => ys[0].clone(),
+        Some(i) if i == n - 1 => ys[n - 1].clone(),
+        Some(i) => (0..ys[0].len()).map(|c| {
+            let y: Vec<f64> = ys.iter().map(|y| y[c]).collect();
+            match interpolation {
+                "linear" => y[i] + (y[i + 1] - y[i]) * (t - times[i]) / (times[i + 1] - times[i]),
+                _ => monotone_cubic(&times, &y, i, t),
+            }
+        }).collect(),
+    };
+    Ok(match &values[0] {
+        Value::Number(_) => Value::from(out[0]),
+        _ => Value::from(out),
+    })
+}
+
+/// A monotone cubic (Fritsch and Carlson, "Monotone Piecewise Cubic Interpolation", SIAM J.
+/// Numer. Anal. 17(2), 1980), with Fritsch and Butland's weighted harmonic mean for the slopes,
+/// through (`x`, `y`), in segment `i`, at `t`. Between keys it stays between their values.
+fn monotone_cubic(x: &[f64], y: &[f64], i: usize, t: f64) -> f64 {
+    let n = x.len();
+    let delta = |k: usize| (y[k + 1] - y[k]) / (x[k + 1] - x[k]);
+    let slope = |k: usize| -> f64 {
+        if k == 0 { return delta(0); }
+        if k == n - 1 { return delta(n - 2); }
+        let (d0, d1) = (delta(k - 1), delta(k));
+        if d0 * d1 <= 0. { return 0.; }
+        let (h0, h1) = (x[k] - x[k - 1], x[k + 1] - x[k]);
+        3. * (h0 + h1) / ((2. * h1 + h0) / d0 + (h1 + 2. * h0) / d1)
+    };
+    // The end slopes, limited so the end segments don't overshoot either.
+    let limit = |m: f64, d: f64| if m * d <= 0. { 0. } else if m.abs() > 3. * d.abs() { 3. * d } else { m };
+    let h = x[i + 1] - x[i];
+    let d = delta(i);
+    let (m0, m1) = (limit(slope(i), d), limit(slope(i + 1), d));
+    let s = (t - x[i]) / h;
+    let (s2, s3) = (s * s, s * s * s);
+    (2. * s3 - 3. * s2 + 1.) * y[i] + (s3 - 2. * s2 + s) * h * m0 + (-2. * s3 + 3. * s2) * y[i + 1] + (s3 - s2) * h * m1
+}
+
+/// Resolve every keyed value in a scene file at video time `t`. A camera whose `location`,
+/// `lookat` or `up` is keyed also gets a `"motion"` to its pose at `close` (when the shutter
+/// closes, if it is open for a while), so it blurs along its path.
+pub fn resolve_keys(doc: &mut Value, t: f64, close: Option<f64>) -> Result<(), String> {
+    if let (Some(close), Some(camera)) = (close, doc.get_mut("camera").and_then(Value::as_object_mut)) {
+        let moving: Vec<&str> = ["location", "lookat", "up"].into_iter().filter(|k| camera.get(*k).is_some_and(is_keyed)).collect();
+        if !moving.is_empty() && !camera.contains_key("motion") {
+            let mut end = Map::new();
+            for k in moving {
+                end.insert(k.to_string(), keyed_value(&camera[k], close).map_err(|e| format!("camera \"{}\": {}", k, e))?);
+            }
+            camera.insert("motion".to_string(), Value::Object(end));
+        }
+    }
+    resolve_keyed(doc, t)
+}
+
+fn resolve_keyed(v: &mut Value, t: f64) -> Result<(), String> {
+    if is_keyed(v) {
+        *v = keyed_value(v, t)?;
+        return Ok(());
+    }
+    match v {
+        Value::Object(o) => for (k, child) in o.iter_mut() {
+            resolve_keyed(child, t).map_err(|e| if e.starts_with('"') { e } else { format!("\"{}\": {}", k, e) })?;
+        },
+        Value::Array(items) => for i in items { resolve_keyed(i, t)? },
         _ => {},
     }
     Ok(())
@@ -275,6 +402,40 @@ mod tests {
         assert!(err(json!({ "objects": [{ "type": "ocean", "clock": "tides" }] })).contains("unknown clock"));
         assert!(err(json!({ "objects": [{ "type": "sphere", "clock": "1 s/s" }] })).contains("doesn't change with time"));
         assert!(err(json!({ "clocks": { "x": "quick" } })).contains("clock \"x\""));
+    }
+
+    #[test]
+    fn test_keyed_values() {
+        let v = |keys: Value, t: f64| keyed_value(&keys, t).unwrap();
+        let k = json!({ "keys": [[0, 2], [1, 20], [2, 200], [3, 2000]] });
+        // Held outside the keys, through them at their times.
+        assert_eq!(v(k.clone(), -1.), json!(2.));
+        assert_eq!(v(k.clone(), 1.), json!(20.));
+        assert_eq!(v(k.clone(), 9.), json!(2000.));
+        // Smooth, but never below the first key on the way up (a Catmull-Rom would dip to 0.9).
+        for i in 0..=300 {
+            let t = i as f64 / 100.;
+            let (a, b) = (v(k.clone(), t).as_f64().unwrap(), v(k.clone(), t + 0.01).as_f64().unwrap());
+            assert!(a >= 2. && b >= a, "at {}: {} then {}", t, a, b);
+        }
+        // Vectors, linearly; and steps of anything.
+        assert_eq!(v(json!({ "keys": [[0, [0, 0, 0]], [2, [2, 4, 6]]], "interpolation": "linear" }), 0.5), json!([0.5, 1., 1.5]));
+        assert_eq!(v(json!({ "keys": [[0, "a"], [1, "b"]], "interpolation": "step" }), 0.5), json!("a"));
+        assert!(keyed_value(&json!({ "keys": [[1, 0], [0, 1]] }), 0.).is_err());
+        assert!(keyed_value(&json!({ "keys": [[0, 0], [1, 1]], "interpolation": "cubic" }), 0.).is_err());
+    }
+
+    #[test]
+    fn test_a_keyed_camera_moves_while_the_shutter_is_open() {
+        let mut doc = json!({
+            "camera": { "location": { "keys": [[0, [0, 0, 0]], [1, [24, 0, 0]]], "interpolation": "linear" },
+                        "lookat": [0, 0, 1], "up": [0, 1, 0] },
+            "objects": [{ "type": "sphere", "radius": { "keys": [[0, 1], [1, 3]], "interpolation": "linear" } }]
+        });
+        resolve_keys(&mut doc, 0.5, Some(0.5 + 0.5 / 24.)).unwrap();
+        assert_eq!(doc["camera"]["location"], json!([12., 0., 0.]));
+        assert_eq!(doc["camera"]["motion"], json!({ "location": [12.5, 0., 0.] }));
+        assert_eq!(doc["objects"][0]["radius"], json!(2.));
     }
 
     #[test]

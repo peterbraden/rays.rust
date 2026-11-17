@@ -1037,6 +1037,44 @@ pub fn create_ocean(opts: &Value) -> SceneObject {
     SceneObject { geometry: Box::new(ocean), medium: Box::new(Solid { m: material }) }
 }
 
+/// The surface of the ocean a scene object describes, for floating things on its waves: the
+/// same waves as `create_ocean` builds (they are deterministic), shared between the objects
+/// that ask for the same ocean.
+pub fn surface(opts: &Value) -> std::sync::Arc<Ocean> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, Arc<Ocean>>>> = OnceLock::new();
+    let key = opts.to_string();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(o) = cache.lock().unwrap().get(&key) { return o.clone(); }
+    let wind = SceneFile::parse_vec2_def(opts, "wind", Vector2::new(7., 2.));
+    let radius = SceneFile::parse_number(&opts["planet_radius"], crate::planet::EARTH_RADIUS);
+    let ocean = Arc::new(Ocean {
+        planet_radius: (radius > 0.).then_some(radius),
+        waves: WaveField::new(
+            wind,
+            SceneFile::parse_number(&opts["time"], 0.),
+            SceneFile::parse_int(&opts["seed"], 0) as u64,
+            opts["amplitude"].as_f64(),
+            SceneFile::parse_number(&opts["resolved"], 0.8).clamp(0., 1.),
+        ),
+        detail_center: SceneFile::parse_vec2_def(opts, "detail_center", Vector2::zeros()),
+        detail_distance: SceneFile::parse_number(&opts["detail_distance"], 300.).max(1.),
+        absorption: absorption(opts),
+    });
+    cache.lock().unwrap().insert(key, ocean.clone());
+    ocean
+}
+
+impl Ocean {
+    /// The displaced surface's height above the mean at (x, z) (a flat ocean's, or near the
+    /// origin a curved one's), and its normal there.
+    pub fn surface_at(&self, x: f64, z: f64) -> (f64, Vector3<f64>) {
+        let h = self.displaced(x, z) * self.waves.at(x, z).x;
+        (h, self.normal_at(&Vector3::new(x, h, z)))
+    }
+}
+
 #[cfg(test)]
 mod curved_tests {
     use super::*;

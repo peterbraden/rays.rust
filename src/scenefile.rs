@@ -675,7 +675,12 @@ impl SceneFile {
 
     pub fn parse_objects(objs: Vec<Value>, materials: &Map<String, Value>, media: &Map<String, Value>, geometries: &GeometryLibrary) ->Vec<Arc<SceneObject>> {
          let mut objects: Vec<Arc<SceneObject>> = Vec::new();
-         for obj in objs {
+         // Ice floats on the scene's ocean, on its waves.
+         let ocean = objs.iter().find(|o| o["type"] == "ocean").cloned();
+         for mut obj in objs {
+            if let (Some(ocean), true) = (&ocean, obj["type"] == "iceberg" || obj["type"] == "ice_floes") {
+                if obj.get("ocean").is_none() { obj["ocean"] = ocean.clone(); }
+            }
             // Report the objects that are slow to build (meshes, oceans), by type and source.
             let start = std::time::Instant::now();
             let name = format!("{}{}", obj["type"].as_str().unwrap_or("?"),
@@ -2633,7 +2638,8 @@ impl SceneFile {
     }
 
     /// Icebergs and sea ice floating on the sea at `"sea_level"` (default 0), see
-    /// `procedural::iceberg`. Each takes a `"seed"`, and a `"material"` or `"medium"` in place of
+    /// `procedural::iceberg`, riding the waves of the scene's ocean if it has one (`"ocean"`,
+    /// filled in by `parse_objects`). Each takes a `"seed"`, and a `"material"` or `"medium"` in place of
     /// its own ice and snow.
     ///
     /// - `{"type": "iceberg", "location": [x, z], "size": 100, "shape": "tabular" | "blocky" |
@@ -2649,6 +2655,8 @@ impl SceneFile {
         let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
         let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
         let sea_level = n("sea_level", 0.);
+        // The ocean it floats on, if the scene has one (`parse_objects` passes it in).
+        let waves = o["ocean"].is_object().then(|| crate::ocean::surface(&o["ocean"]));
         let given = o.get("material").is_some() || o.get("medium").is_some();
         let medium = |own: Box<dyn MaterialModel + Sync + Send>| -> Box<dyn Medium + Sync + Send> {
             if given { SceneFile::parse_object_medium(o, materials, media) } else { Box::new(Solid { m: own }) }
@@ -2662,8 +2670,10 @@ impl SceneFile {
                 Some(y) => y.to_radians(),
                 None => crate::geometry::Pcg32::new(seed, 43).next_f64() * std::f64::consts::TAU,
             };
-            let mesh = berg.mesh(at.x, at.y, sea_level, yaw);
-            return rock::object(&[mesh], medium(Box::new(IcebergMaterial::new(sea_level, berg.size, seed))));
+            let rise = waves.as_ref().map_or(0., |w| w.surface_at(at.x, at.y).0);
+            let mesh = berg.mesh(at.x, at.y, sea_level + rise, yaw);
+            let own = IcebergMaterial::new(sea_level, berg.size, seed).layered(berg.kind == Kind::Tabular);
+            return rock::object(&[mesh], medium(Box::new(own)));
         }
         let center = SceneFile::parse_vec2_def(o, "center", crate::na::Vector2::zeros());
         let extent = SceneFile::parse_vec2_def(o, "extent", crate::na::Vector2::new(400., 300.));
@@ -2673,6 +2683,7 @@ impl SceneFile {
             concentration: n("concentration", 0.6).clamp(0., 0.95),
             min_size: size.x.max(0.1), max_size: size.y.max(size.x.max(0.1)),
             thickness: n("thickness", 1.).max(0.01), sea_level, seed,
+            waves,
             style: match o["style"].as_str().unwrap_or("floes") {
                 "floes" => FloeStyle::Slab,
                 "brash" => FloeStyle::Brash,
@@ -2682,7 +2693,7 @@ impl SceneFile {
         };
         let own: Box<dyn MaterialModel + Sync + Send> = match field.style {
             FloeStyle::Slab => Box::new(FloeMaterial::new(seed)),
-            FloeStyle::Brash => Box::new(IcebergMaterial::new(sea_level, 4., seed)),
+            FloeStyle::Brash => Box::new(IcebergMaterial::new(sea_level, 1., seed)),
         };
         rock::object(&[field.mesh()], medium(own))
     }

@@ -21,13 +21,16 @@
 //! (|x/a|^p + |y/b|^p + |z/c|^p)^(1/p) = 1 (p near 2 rounded, larger boxy), cut and shaped:
 //!
 //! - a few fracture planes, their edges rounded, for the faces where it broke away;
-//! - cleavage: the faces broken along planes, at two scales (slabs and chips), each Voronoi
-//!   cell of the face cut back to a plane of its own so that neighbours meet at steep steps
-//!   (ramps a few of the mesh's vertices wide, which it can follow without a staircase),
-//!   the cells taller than wide so the facets stand in columns (`Cleavage`); the mesh's
-//!   normals are smoothed only across gentle edges, so the facets' edges stay crisp
+//! - cleavage: the faces broken along planes into a few large slabs, each Voronoi cell of the
+//!   face cut back a little to a plane of its own, nearly in line with it, the steps between
+//!   neighbours worn round over a couple of metres, the cells taller than wide
+//!   (`Cleavage`); the mesh's normals are smoothed only across sharp edges, so the remaining
+//!   corners stay crisp
 //!   (`creased`); and the mesh is refined adaptively where the surface bends (`refine`), so
 //!   the facets' edges are straight rather than serrated by the triangles they cross;
+//! - for tabular bergs, an outline broken into bays, a gently rolling top, and the ice
+//!   shelf's layers of firn and ice showing on the cliffs as horizontal grooves and as bands
+//!   of whiter and bluer ice (in place of veins);
 //! - erosion: a little lumpiness, fine vertical flutes on the walls where meltwater runs
 //!   down, and melt scallops, dimples a metre or so across and a few centimetres deep;
 //! - a wave-cut notch at the waterline, where the sea melts it fastest (the overhang that
@@ -52,7 +55,9 @@
 //! reached. Each is a slab of an irregular outline, its top edge rounded, floating with a tenth
 //! of its thickness above the water; snow lies on top, with patches of bare ice, and the sides
 //! are white ice. Or the pieces are brash ice and bergy bits, broken from bergs: rounded lumps
-//! of glacier ice, each floating at its own waterline.
+//! of glacier ice, each floating at its own waterline, notched there and spreading in a
+//! skirt just below, as the bergs are. With a scene's ocean, every piece rides its waves:
+//! raised or lowered with the surface where it floats, and tipped with its slope.
 use crate::geometry::{rand, Pcg32};
 use crate::intersection::Intersection;
 use crate::material::model::{MaterialModel, ScatteredRay};
@@ -123,7 +128,7 @@ impl Iceberg {
         // show, a prism floating with an eighth of it above water must be about 8 H deep.
         match self.kind {
             Kind::Tabular => (Vector3::new(0.5, j(0.3), j(0.4)), 16.),
-            Kind::Blocky => (Vector3::new(0.5, j(1.1), j(0.42)), 16.),
+            Kind::Blocky => (Vector3::new(0.5, j(1.1), j(0.42)), 14.),
             Kind::Dome => (Vector3::new(0.5, j(0.7), j(0.42)), 2.2),
             Kind::Pinnacle => (Vector3::new(0.5, j(0.6), j(0.42)), 3.),
             Kind::Wedge => (Vector3::new(0.5, j(0.9), j(0.38)), 12.),
@@ -144,7 +149,8 @@ impl Iceberg {
         // Fracture planes: the faces where it broke away.
         let (fractures, steep) = match self.kind {
             Kind::Dome => (0, 0.),
-            Kind::Tabular => (3, 0.1),
+            // A shelf's edge breaks back in bays and inlets.
+            Kind::Tabular => (10, 0.05),
             Kind::Pinnacle => (7, 0.5),
             Kind::Blocky => (7, 0.4),
             _ => (7, 1.4),
@@ -155,7 +161,8 @@ impl Iceberg {
             let a = rng.next_f64() * TAU;
             let n = Vector3::new(a.cos(), steep * (rng.next_f64() - 0.35), a.sin()).normalize();
             let support = axes.component_mul(&n).norm();
-            (n, support * (1. - 0.3 * rng.next_f64()))
+            let deepest = if self.kind == Kind::Tabular { 0.4 } else { 0.3 };
+            (n, support * (1. - deepest * rng.next_f64()))
         }).collect();
         // The wedge's slope, falling from its steep face.
         let slope = Vector3::new(0.55, 0.85, 0.1 * (rng.next_f64() - 0.5)).normalize();
@@ -167,25 +174,34 @@ impl Iceberg {
             (r * a.cos(), r * a.sin(), 0.07 + 0.07 * rng.next_f64(), if k == 0 { 0.45 } else { 0.15 + 0.25 * rng.next_f64() })
         }).collect();
 
-        // Cleavage, at two scales: slabs a fifth of the length across, and chips a quarter of
-        // that, both taller than wide.
+        // Cleavage: a few large slabs a third of the length across, broken back a little and
+        // nearly in line with the face, their edges rounded by weathering.
         let cleavage = if rounded { vec![] } else {
-            vec![
-                Cleavage { cell: Vector3::new(0.22, 0.5, 0.22), depth: 0.04, tilt: 0.25, seed: self.seed.wrapping_add(101) },
-                Cleavage { cell: Vector3::new(0.06, 0.12, 0.06), depth: 0.006, tilt: 0.08, seed: self.seed.wrapping_add(202) },
-            ]
+            vec![Cleavage { cell: Vector3::new(0.35, 0.7, 0.35), depth: 0.03, tilt: 0.15, seed: self.seed.wrapping_add(101) }]
         };
 
         let (directions, triangles) = icosphere(detail);
         let directions: Vec<Vector3<f64>> = directions.iter().map(|d| d.component_mul(&axes).normalize()).collect();
-        // Steps between facets rise over 15 cm (the mesh is refined to follow them).
-        let ramp = 0.15 / self.size;
+        // Steps between slabs are crisp, worn round over only half a metre.
+        let ramp = (0.5 / self.size).min(0.04);
         let kind = self.kind;
         let size = self.size;
+        let outline = SeededNoise::new(self.seed.wrapping_add(9));
         // The body, cut and shaped, in the direction `d`.
         let body = move |d: &Vector3<f64>| -> Vector3<f64> {
             let r0 = (d.x.abs() / axes.x).powf(p) + (d.y.abs() / axes.y).powf(p) + (d.z.abs() / axes.z).powf(p);
-            let q = d * r0.powf(-1. / p);
+            let mut q = d * r0.powf(-1. / p);
+            if kind == Kind::Tabular {
+                // An irregular outline, broken from the shelf's front, and a top that rolls
+                // gently, as the shelf's snow surface did.
+                let h = Vector3::new(d.x, 0., d.z);
+                let wobble = 1. + 0.15 * outline.fbm(h * 2., 3) + 0.05 * outline.noise(h * 9. + Vector3::new(0., 3., 0.));
+                q.x *= wobble;
+                q.z *= wobble;
+                if q.y > 0. {
+                    q.y *= 1. + 0.03 * outline.fbm(Vector3::new(q.x, 5., q.z) * 6., 3);
+                }
+            }
             let mut s: f64 = 1.;
             match kind {
                 Kind::Wedge => {
@@ -210,7 +226,7 @@ impl Iceberg {
             }
             for (n, offset) in &planes {
                 let along = q.dot(n);
-                if along > 0. { s = smin(s, offset / along, 0.006); }
+                if along > 0. { s = smin(s, offset / along, 0.012); }
             }
             q * s.max(0.05)
         };
@@ -236,12 +252,23 @@ impl Iceberg {
             // (Smooth noise: a ridged one's sharp creases are finer than any mesh can follow.)
             let flutes = noise.noise(Vector3::new(q.x * 25., q.y * 1.5, q.z * 25.));
             let wall = 1. - top;
-            let h = if rounded { 0.02 * lumps } else { 0.004 * lumps + 0.002 * flutes * wall };
+            let mut h = if rounded { 0.02 * lumps } else { 0.004 * lumps + 0.002 * flutes * wall };
+            if kind == Kind::Tabular {
+                // The shelf's layers of firn and ice, a few metres thick, show on its cliffs as
+                // horizontal grooves and ledges (a bump of a profile that is zero at both ends
+                // of each layer, so there is no step where one meets the next).
+                let t = q.y * size / 2.8 + 0.6 * noise.fbm(q * 3., 2);
+                let f = t.rem_euclid(1.);
+                let groove = smoothstep(0.65, 0.85, f) * (1. - smoothstep(0.92, 1., f));
+                h -= 0.08 / size * groove * wall;
+            }
             // Melt scallops: shallow dimples, a metre or so across and a few centimetres deep,
             // that flowing water and air melt into ice faces, sharp-rimmed where they meet.
             let w = q * size / 0.9;
-            let scallops = 0.035 * (1. - noise.noise(w + Vector3::new(31., 0., 17.)).abs() * 2.).max(0.)
-                + 0.012 * (1. - noise.noise(w * 2.7 + Vector3::new(3., 9., 5.)).abs() * 2.).max(0.);
+            // With a rougher rippling a few metres across, the faces' texture at a distance.
+            let scallops = 0.08 * (1. - noise.noise(w + Vector3::new(31., 0., 17.)).abs() * 2.).max(0.)
+                + 0.025 * (1. - noise.noise(w * 2.7 + Vector3::new(3., 9., 5.)).abs() * 2.).max(0.)
+                + 0.15 * noise.fbm(w / 3. + Vector3::new(7., 1., 3.), 3);
             (q + normal * h) * size - normal * scallops * (1. - 0.7 * top)
         };
         (surface, directions, triangles)
@@ -515,6 +542,9 @@ pub struct IcebergMaterial {
     snow: Snow,
     /// The berg's length, m.
     size: f64,
+    /// Banded horizontally, as a tabular berg's layers of firn and ice are, rather than
+    /// veined.
+    layered: bool,
     /// The veins' plane, through the berg, and their spacing (m).
     vein_normal: Vector3<f64>,
     vein_spacing: f64,
@@ -531,7 +561,9 @@ impl IcebergMaterial {
             white: Ice::new(IceStyle::preset("white")),
             glacier: Ice::new(IceStyle { roughness: 0.1, ..IceStyle::preset("glacier") }),
             size,
-            wet: Ice::new(IceStyle { roughness: 0.02, ..IceStyle::preset("glacier") }),
+            layered: false,
+            // Ice that was under water: melted smooth, its bubbles fewer, so a saturated aqua.
+            wet: Ice::new(IceStyle { bubble_radius: 0.7, bubbles: 1.2, roughness: 0.03, ..IceStyle::preset("glacier") }),
             blue: Ice::new(IceStyle::preset("blue")),
             snow: Snow::new(SnowStyle::preset("settled"), 1., seed),
             vein_normal: Vector3::new(tilt.sin() * a.cos(), tilt.cos(), tilt.sin() * a.sin()),
@@ -540,10 +572,24 @@ impl IcebergMaterial {
         }
     }
 
+    /// Banded horizontally (for a tabular berg) rather than veined.
+    pub fn layered(self, layered: bool) -> IcebergMaterial {
+        IcebergMaterial { layered, ..self }
+    }
+
     /// The share at `p`, with outward normal `n`, of bubbly glacier ice rather than white: the
     /// walls are bluer low down, where the ice was deep in the glacier or has rolled up from
     /// under water and not yet weathered, and white above, in bands.
     pub fn bluish(&self, p: &Vector3<f64>, n: &Vector3<f64>) -> f64 {
+        if self.layered {
+            // Bands of whiter firn and bluer ice, of uneven thickness, bluer with depth in the
+            // shelf (older, denser ice) and white in its top few metres of firn.
+            let height = p.y - self.sea_level;
+            let t = height / 4.5 + 0.8 * self.noise.fbm(Vector3::new(p.x / 60., p.y / 12., p.z / 60.), 3);
+            let band = smoothstep(0.1, 0.8, (TAU * t).sin() * 0.5 + 0.5 + 0.3 * self.noise.noise(Vector3::new(p.x / 15., t, p.z / 15.)));
+            let depth = 1. - smoothstep(0.3, 0.8, height / (0.12 * self.size).max(4.));
+            return 0.5 * (0.25 + 0.75 * depth) * band * (1. - smoothstep(0.4, 0.8, n.y)) * smoothstep(-1., 0.5, height);
+        }
         let height = (p.y - self.sea_level) / (0.25 * self.size).max(2.);
         let white = smoothstep(0.2, 0.9, height + 0.5 * self.noise.fbm(Vector3::new(p.x / 30., p.y / 4., p.z / 30.), 3));
         (1. - white) * (1. - smoothstep(0.4, 0.8, n.y)) * smoothstep(-1., 0.5, p.y - self.sea_level)
@@ -555,10 +601,14 @@ impl IcebergMaterial {
         let snow = smoothstep(0.72, 0.9, n.y + 0.2 * self.noise.fbm(p / 6., 3)) * smoothstep(0.1, 0.3, height / self.size.min(10.));
         let v = p.dot(&self.vein_normal) / self.vein_spacing + 0.6 * self.noise.fbm(p / 25., 3);
         let d = (v.rem_euclid(1.) - 0.5).abs();
-        let vein = (1. - smoothstep(0.015, 0.05, d)) * smoothstep(-0.1, 0.2, self.noise.noise(p / 40.));
+        // Rare and faint: a few streaks, not a web of cracks.
+        let vein = if self.layered { 0. } else { 0.5 * (1. - smoothstep(0.01, 0.035, d)) * smoothstep(0.25, 0.5, self.noise.noise(p / 40.)) };
         // The waves wash a band from a metre or two under water to a few metres above.
-        let band = (0.04 * self.size).clamp(0.15, 3.);
-        let wet = (1. - smoothstep(0.15 * band, band, height + 0.25 * band * self.noise.noise(p / 4.))) * smoothstep(-2.5, -1., height);
+        // The waves wash (or the berg once floated to) a band a few metres high: smooth,
+        // glossy, saturated ice, sharply bounded above.
+        let band = (0.07 * self.size).clamp(0.05, 6.);
+        let edge = band + 0.1 * band * self.noise.noise(Vector3::new(p.x / 20., 0., p.z / 20.));
+        let wet = (1. - smoothstep(0.92 * edge, edge, height)) * smoothstep(-2.5, -1., height);
         (snow, vein, wet)
     }
 }
@@ -583,7 +633,7 @@ impl MaterialModel for IcebergMaterial {
 }
 
 /// A field of ice floes on the sea.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct FloeField {
     /// Centre of the field (x, z), and its width (x) and depth (z), m.
     pub center: (f64, f64),
@@ -599,6 +649,10 @@ pub struct FloeField {
     pub style: FloeStyle,
     /// How much the floes gather in clumps, 0 (evenly) to 1.
     pub clumping: f64,
+    /// The ocean whose waves they ride, if any: each floats at the surface's height where it
+    /// is, tipped with its slope (fully for small pieces, less for those as large as the
+    /// waves).
+    pub waves: Option<std::sync::Arc<crate::ocean::Ocean>>,
     pub seed: u64,
 }
 
@@ -728,11 +782,11 @@ impl FloeField {
             let r = f.radius * 0.9;
             let axes = Vector3::new(r, r * (0.25 + 0.5 * rng.next_f64()), r * (0.4 + 0.6 * rng.next_f64()));
             let offset = Vector3::new(rng.next_f64(), rng.next_f64(), rng.next_f64()) * 100.;
-            let rock = 0.3 + 0.6 / (1. + f.radius);
+            let rock = 0.15 + 0.3 / (1. + f.radius);
             let rotation = Rotation3::from_euler_angles(rock * (rng.next_f64() - 0.5), rng.next_f64() * TAU, rock * (rng.next_f64() - 0.5));
             // Broken faces, one of them the top, worn round at the edges.
             // More of them on larger pieces, which have broken more often.
-            let count = 3 + (rng.next_f64() * 4.) as usize + (2. * f.radius).min(8.) as usize;
+            let count = 3 + (rng.next_f64() * 3.) as usize;
             let planes: Vec<(Vector3<f64>, f64)> = (0..count).map(|k| {
                 let n = if k == 0 {
                     Vector3::new(0.3 * (rng.next_f64() - 0.5), 1., 0.3 * (rng.next_f64() - 0.5)).normalize()
@@ -743,8 +797,8 @@ impl FloeField {
                 (n, axes.component_mul(&n).norm() * (0.6 + 0.35 * rng.next_f64()))
             }).collect();
             // Small pieces are worn round; large ones keep sharper edges.
-            let rounding = (0.03 + 0.2 * rng.next_f64()) / (1. + 0.3 * f.radius);
-            let lumpiness = 0.08 + 0.15 * rng.next_f64();
+            let rounding = 0.06 + 0.1 * rng.next_f64();
+            let lumpiness = 0.1 + 0.08 * rng.next_f64();
             let mut piece: Vec<Vector3<f64>> = directions.iter().map(|d| {
                 let p = 2.6;
                 let r0 = (d.x.abs() / axes.x).powf(p) + (d.y.abs() / axes.y).powf(p) + (d.z.abs() / axes.z).powf(p);
@@ -755,20 +809,60 @@ impl FloeField {
                     if along > 0. { s = smin(s, o / along, rounding); }
                 }
                 let lumps = lumpiness * noise.fbm(d * 1.6 + offset, 4);
-                let q = q * s.max(0.1) * (1. + lumps);
+                // An irregular outline: broad bulges and bays round the piece, not a disc.
+                let bulge = 0.22 * noise.fbm(Vector3::new(d.x, 0., d.z) * 1.3 + offset * 0.7, 2);
+                let mut q = q * s.max(0.1) * (1. + lumps);
+                q.x *= 1. + bulge;
+                q.z *= 1. + bulge;
                 // Melt scallops, as on the bergs, a few centimetres deep.
                 let w = q / 0.6 + offset;
                 let scallops = 0.025 * (1. - noise.noise(w).abs() * 2.).max(0.);
                 rotation * (q - d * scallops.min(0.1 * r))
             }).collect();
+            // Worn at the waterline, as the bergs are: the sea melts a notch there, and the ice
+            // just below, out of the warmer surface water's reach, spreads in a skirt that
+            // shows turquoise through the water. Floated again with its new shape.
+            let h0 = Iceberg::waterline(&piece, sphere, fraction);
+            let height = 2. * axes.y;
+            let skirt = r * (0.04 + 0.06 * rng.next_f64());
+            for p in piece.iter_mut() {
+                let below = (h0 - p.y) / height;
+                let g = smoothstep(0.02, 0.15, below) * (1. - smoothstep(0.3, 0.75, below));
+                let notch = 0.02 * r * (-((p.y - h0) / (0.06 * height)).powi(2)).exp();
+                let across = (p.x * p.x + p.z * p.z).sqrt();
+                let out = skirt * g - notch;
+                if across > 1e-9 && across + out > 0.1 * across {
+                    let k = 1. + out / across;
+                    p.x *= k;
+                    p.z *= k;
+                }
+            }
             let h = Iceberg::waterline(&piece, sphere, fraction);
-            let lift = Vector3::new(f.x, self.sea_level - h, f.z);
+            // Riding the waves: raised or lowered with the surface, and tipped with it.
+            let (rise, ride) = self.ride(f);
+            let pivot = Vector3::new(0., h, 0.);
             let start = positions.len();
-            for p in piece.iter_mut() { *p += lift; }
+            for p in piece.iter_mut() {
+                *p = ride * (*p - pivot) + Vector3::new(f.x, self.sea_level + rise, f.z);
+            }
             positions.extend(piece);
             triangles.extend(sphere.iter().map(|t| t.map(|i| i + start)));
         }
         IndexedMesh { positions, normals: vec![], triangles, texcoords: vec![] }
+    }
+
+    /// How the waves carry floe `f`: the surface's height at its centre, and the turn that
+    /// tips it with the surface's slope there (less, the larger it is beside the waves).
+    fn ride(&self, f: &Floe) -> (f64, Rotation3<f64>) {
+        match &self.waves {
+            None => (0., Rotation3::identity()),
+            Some(w) => {
+                let (h, n) = w.surface_at(f.x, f.z);
+                let follow = 1. / (1. + (f.radius / 3.).powi(2));
+                let up = (Vector3::y() * (1. - follow) + n * follow).normalize();
+                (h, Rotation3::rotation_between(&Vector3::y(), &up).unwrap_or_else(Rotation3::identity))
+            }
+        }
     }
 
     /// Slabs of sea ice.
@@ -780,6 +874,7 @@ impl FloeField {
         let mut rng = Pcg32::new(self.seed, 41);
         let fraction = 0.1;
         for f in &floes {
+            let first = positions.len();
             let t = self.thickness * (0.7 + 0.6 * rng.next_f64());
             let top = self.sea_level + fraction * t;
             let bottom = top - t;
@@ -824,6 +919,12 @@ impl FloeField {
             let cb = positions.len();
             positions.push(Vector3::new(f.x, bottom, f.z));
             for k in 0..n { triangles.push([cb, e + k, e + (k + 1) % n]); }
+            // Riding the waves.
+            let (rise, ride) = self.ride(f);
+            let pivot = Vector3::new(f.x, self.sea_level, f.z);
+            for p in positions[first..].iter_mut() {
+                *p = ride * (*p - pivot) + pivot + Vector3::new(0., rise, 0.);
+            }
         }
         IndexedMesh { positions, normals: vec![], triangles, texcoords: vec![] }
     }
@@ -913,7 +1014,7 @@ mod tests {
 
     #[test]
     fn test_floes_cover_the_concentration_without_overlapping() {
-        let field = FloeField { center: (0., 0.), extent: (400., 300.), concentration: 0.6, min_size: 2., max_size: 60., thickness: 1., sea_level: 0., style: FloeStyle::Slab, clumping: 0., seed: 2 };
+        let field = FloeField { center: (0., 0.), extent: (400., 300.), concentration: 0.6, min_size: 2., max_size: 60., thickness: 1., sea_level: 0., style: FloeStyle::Slab, clumping: 0., waves: None, seed: 2 };
         let floes = field.floes();
         let covered: f64 = floes.iter().map(|f| 0.7 * PI * f.radius * f.radius).sum();
         assert!(covered > 0.45 * 400. * 300., "{}", covered / (400. * 300.));

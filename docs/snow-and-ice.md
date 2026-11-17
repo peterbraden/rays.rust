@@ -129,7 +129,10 @@ takes a couple of minutes and a few gigabytes to build. `"detail"` (default 7) s
 starting mesh before refinement; lower it for quick tests. Fine vertical meltwater flutes run down the
 walls. It is tilted
 (except tabular bergs) and notched at the waterline by the waves. Below the notch, the ram is
-a shelf of ice that juts out under the water, broadest on one side. The berg floats as its
+a shelf of ice that juts out under the water, broadest on one side. Tabular bergs, broken
+from ice shelves, have irregular outlines with bays, gently rolling tops, and the shelf's
+layers of firn and ice down their cliffs as horizontal grooves and bands of whiter and bluer
+ice. The berg floats as its
 `density` says: with 900 kg/m³ (ice capped with lighter firn), an eighth of its volume is
 above the sea. Most of each berg is under water, as in real ones. The surface is white,
 bubble-rich glacier ice, bluer low on the walls (ice from deep in the glacier, or ice that has
@@ -153,7 +156,12 @@ and white ice at the sides.
 
 `"style": "brash"` makes the pieces brash ice and bergy bits instead: lumps of glacier ice
 broken from bergs, fractured and rounded by melting, about half as high as wide, each floating
-at its own waterline. `"clumping"` (0 to 1, default 0.5) gathers floes or lumps into clumps
+at its own waterline. Like the bergs, each is notched at the waterline and spreads in a skirt
+just below it, which shows turquoise through the water.
+
+In a scene with an ocean, icebergs and floes float on its waves: each piece rises and falls
+with the surface where it floats, and small pieces tip with its slope. (Pieces as large as the
+waves tip less.) `"clumping"` (0 to 1, default 0.5) gathers floes or lumps into clumps
 with open water between.
 
 Either object takes a `"material"` or `"medium"` in place of its own ice and snow.

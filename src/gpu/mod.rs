@@ -254,7 +254,6 @@ pub struct Buffers {
     pub prims: Vec<GpuPrim>,
     pub nodes: Vec<GpuNode>,
     pub materials: Vec<GpuMaterial>,
-    pub lights: Vec<GpuLight>,
     pub tables: Vec<f32>,
 }
 
@@ -385,6 +384,9 @@ impl Buffers {
             },
             None => (Vec4::new(0., 1., 0., 1.), Vec4::ZERO),
         };
+        // The point lights, in `tables` too (`pathtrace::load_light`).
+        let lights_off = tables.len() as u32;
+        tables.extend_from_slice(bytemuck::cast_slice::<GpuLight, f32>(&lights));
         let (rr, rr_min) = match s.render.path_termination {
             PathTermination::RussianRoulette { min_depth } => (1, min_depth as f32),
             _ => (0, 0.),
@@ -397,10 +399,10 @@ impl Buffers {
             misc: Vec4::new(s.render.regularise as f32, s.black_threshold as f32, s.render.shadow_bias as f32, rr_min),
             sun_dir,
             sun_irr,
-            seed: UVec4::new(s.render.seed as u32, rr, 0, 0),
+            seed: UVec4::new(s.render.seed as u32, rr, lights_off, 0),
             air: UVec4::new(sky_off, aerial_off, sun_off, space_off),
         };
-        Ok(Buffers { params, prims, nodes, materials, lights, tables })
+        Ok(Buffers { params, prims, nodes, materials, tables })
     }
 }
 
@@ -436,7 +438,7 @@ impl GpuRenderer {
     /// Upload the flattened scene, or say why the GPU can't render it. Async, for a browser,
     /// whose WebGPU can't be waited on.
     pub async fn create(s: &Scene, flat: &FlatScene) -> Result<GpuRenderer, String> {
-        let Buffers { params, prims, nodes, materials, lights, tables } = Buffers::build(s, flat)?;
+        let Buffers { params, prims, nodes, materials, tables } = Buffers::build(s, flat)?;
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -493,7 +495,7 @@ impl GpuRenderer {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene"),
             entries: &[binding(0, wgpu::BufferBindingType::Uniform), binding(1, read), binding(2, read), binding(3, read),
-                       binding(4, read), binding(5, read), binding(6, write), binding(7, write), binding(8, write)],
+                       binding(5, read), binding(6, write), binding(7, write), binding(8, write)],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pathtrace"), bind_group_layouts: &[Some(&layout)], immediate_size: 0,
@@ -513,7 +515,6 @@ impl GpuRenderer {
         let prims_buffer = storage("prims", bytemuck::cast_slice(&prims));
         let nodes_buffer = storage("nodes", bytemuck::cast_slice(&nodes));
         let materials_buffer = storage("materials", bytemuck::cast_slice(&materials));
-        let lights_buffer = storage("lights", bytemuck::cast_slice(&lights));
         let tables_buffer = storage("tables", bytemuck::cast_slice(&tables));
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("params"), contents: bytemuck::bytes_of(&params),
@@ -539,7 +540,7 @@ impl GpuRenderer {
             label: Some("scene"),
             layout: &layout,
             entries: &[entry(0, &params_buffer), entry(1, &prims_buffer), entry(2, &nodes_buffer), entry(3, &materials_buffer),
-                       entry(4, &lights_buffer), entry(5, &tables_buffer), entry(6, &paths_buffer), entry(7, &accum_buffer),
+                       entry(5, &tables_buffer), entry(6, &paths_buffer), entry(7, &accum_buffer),
                        entry(8, &queries_buffer)],
         });
         Ok(GpuRenderer { device, queue, bounce_pipeline, sky_pipeline, bind_group, params, params_buffer, paths_buffer, accum_buffer, readback, adapter_name })
@@ -720,7 +721,7 @@ mod tests {
         let flat = FlatScene::build(&s).unwrap();
         let b = Buffers::build(&s, &flat).unwrap();
         for (what, len) in [("prims", b.prims.len()), ("nodes", b.nodes.len()), ("materials", b.materials.len()),
-                            ("lights", b.lights.len()), ("tables", b.tables.len())] {
+                            ("tables", b.tables.len())] {
             assert!(len > 0, "{} is empty", what);
         }
         let Ok(mut gpu) = GpuRenderer::new(&s, &flat) else { return };
@@ -753,7 +754,7 @@ mod tests {
             let s = scene(sky);
             let flat = FlatScene::build(&s).unwrap();
             let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, tables: &b.tables };
             let (mut sky_err, mut seg_err, mut sun_err) = (0f64, 0f64, 0f64);
             for h in altitudes {
                 let o = Vector3::new(30., h, -20.);
@@ -801,7 +802,7 @@ mod tests {
             let s = SceneFile::from_file(name, &crate::scenefile::Overrides { width: Some(64), height: Some(36), seed: None });
             let flat = FlatScene::build(&s).unwrap();
             let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, tables: &b.tables };
             let crate::scene::Background::Space(space) = &s.render.background else { panic!("{} has no space", name) };
             if name.contains("deep-space") {
                 assert!(space.stars.is_some() && space.milky_way.is_some() && !space.nebulae.is_empty() && !space.galaxies.is_empty(),
@@ -858,7 +859,7 @@ mod tests {
         }"#.to_string());
         let flat = FlatScene::build(&s).unwrap();
         let b = Buffers::build(&s, &flat).unwrap();
-        let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+        let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, tables: &b.tables };
         let passes = 16;
         let mut on_shader = Vector3::zeros();
         for k in 0..passes {
@@ -966,7 +967,7 @@ mod tests {
                 },
             };
             let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, tables: &b.tables };
             let passes = 32;
             let mut cpu = Vector3::zeros();
             let mut cpu_rays = 0u64;

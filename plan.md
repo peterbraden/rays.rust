@@ -1430,6 +1430,15 @@ UI, file IO and rayon's threads would follow.
      20 full-image dispatches. Queues and counters must share buffers: all 8 of WebGPU's
      storage bindings are in use. Spike first: atomics and indirect dispatch through rust-gpu
      and naga to Metal and the browser.
+     Spike, done on Metal: `spirv_std::arch::atomic_i_add` with `Scope::QueueFamily` (Device
+     scope needs a capability under the Vulkan memory model rust-gpu targets); naga makes the
+     whole buffer `array<atomic<u32>>`, and the WGSL validates for WebGPU. A one-thread kernel
+     writes the indirect arguments into a buffer of its own bind group (a buffer can't be both
+     writable storage and indirect in one dispatch), and `dispatch_workgroups_indirect` reads
+     them. Design from it: queues double-buffered in one u32 buffer (counts, which half is
+     read, a first-round flag, then the two halves); round 0 over every pixel, the rest
+     indirect; a path's light added by the sky kernel in the round it ends; the lights moved
+     into `tables` to free a binding for the queue.
    - Stages: intersect (sorting hits into queues: escaped, emitter, each material kind),
      shade per material kind, shadow rays, sky; the random numbers drawn in the same order,
      so images and the GPU-against-CPU-build tests hold.

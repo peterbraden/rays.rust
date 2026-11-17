@@ -32,7 +32,7 @@ pub struct Params {
     pub sun_dir: Vec4,
     /// The sun's irradiance and angular radius.
     pub sun_irr: Vec4,
-    /// Seed, Russian roulette on.
+    /// Seed, Russian roulette on, where the lights are in `tables`.
     pub seed: UVec4,
     /// Records of the air in `tables` (`AIR_*`), or `NO_AIR`: the sky's (for rays that escape),
     /// the aerial perspective's, the sun's (its reddening); and space's (`SPACE_*`).
@@ -197,8 +197,18 @@ pub struct Scene<'a> {
     pub prims: &'a [Prim],
     pub nodes: &'a [Node],
     pub materials: &'a [Material],
-    pub lights: &'a [Light],
     pub tables: &'a [f32],
+}
+
+/// Point light `k`, from `tables` (where the lights are, to keep within WebGPU's 8 storage
+/// buffers): `Params::seed.z`, 16 floats each.
+fn load_light(s: &Scene, k: u32) -> Light {
+    let i = s.params.seed.z + 16 * k;
+    Light { pos: tv4(s, i), intensity: tv4(s, i + 4), axis: tv4(s, i + 8), extra: tv4(s, i + 12) }
+}
+
+fn tv4(s: &Scene, i: u32) -> Vec4 {
+    Vec4::new(at(s.tables, i), at(s.tables, i + 1), at(s.tables, i + 2), at(s.tables, i + 3))
 }
 
 /// `slice[i]` without the bounds check: the host sizes every buffer for the indices it writes
@@ -1920,7 +1930,7 @@ pub fn bounce(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
         let mut li = Vec3::ZERO;
         let mut pdf = 0.0;
         if k < n_lights {
-            let light = at(s.lights, k);
+            let light = load_light(s, k);
             let to = light.pos.xyz() - above;
             let d2 = to.dot(to);
             wi = to / d2.sqrt();
@@ -2044,7 +2054,6 @@ pub fn bounce_paths(
     #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Prim],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] nodes: &[Node],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 5)] tables: &[f32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] paths: &mut [PathState],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 7)] accum: &mut [Vec4],
@@ -2062,7 +2071,7 @@ pub fn bounce_paths(
     let (mut next, mut q0, mut q1) = (p, SkyQuery::NONE, SkyQuery::NONE);
     let mut add = Vec4::ZERO;
     if p.state.y & PATH_ACTIVE != 0 {
-        let s = Scene { params, prims, nodes, materials, lights, tables };
+        let s = Scene { params, prims, nodes, materials, tables };
         (next, q0, q1) = bounce(&s, &p);
         if q0.weight.xyz().dot(q0.weight.xyz()) > 0.0 || q1.weight.xyz().dot(q1.weight.xyz()) > 0.0 {
             next.state.y |= PATH_ASKED;
@@ -2096,7 +2105,6 @@ pub fn answer_sky(
     #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Prim],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] nodes: &[Node],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 5)] tables: &[f32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] paths: &mut [PathState],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 8)] queries: &mut [SkyQuery],
@@ -2106,7 +2114,7 @@ pub fn answer_sky(
     if flags & PATH_ASKED == 0 {
         return;
     }
-    let s = Scene { params, prims, nodes, materials, lights, tables };
+    let s = Scene { params, prims, nodes, materials, tables };
     let mut light = Vec3::ZERO;
     // Both slots, at one call site of `sky_light`.
     let mut k = 0;

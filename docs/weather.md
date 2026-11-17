@@ -142,6 +142,7 @@ Every parameter is optional.
   and `map_width` write the satellite view described above.
 
 Sunlit clouds' fireflies are tamed by sun probes, on for every volume (`"sun_probes"`; see
-`VolumeMaterial::sun_probe` and plan.md's variance section): about 2.4 times the efficiency on
-the trade-cumulus scene, unbiased. The planet-wide maps take about 4 s to build at the default size. Renders are as costly as
+`VolumeMaterial::sun_probe` and plan.md's variance section) and delta-M truncation of the
+phase function's forward peak after the first scattering (`"delta_m"`): together about 3.4 times
+the efficiency on the trade-cumulus scene. The planet-wide maps take about 4 s to build at the default size. Renders are as costly as
 any thick, multiply scattering cloud; `similarity_after` (eg. 2) speeds them up.

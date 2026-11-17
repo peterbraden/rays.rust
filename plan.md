@@ -754,6 +754,11 @@ exposure fit and mean FLIP; two independent references differ by 1.3% and FLIP 0
   13 s to build, most of it an annual insolation mean computed and discarded per texel: 4 s.
 - ZSobol' (blue-noise error) measured the same here (0.111 / 0.048) and looked much the same:
   the error is per-path variance, not clumping between samples.
+- After merging delta-M truncation (#135: the forward peak truncated after the first
+  scattering, g' = g / (1 + g), so deep vertices' phase peaks are about 5 rather than 80 times
+  the mean), sun probes still pay, but less: trade cumulus efficiency 1.45 off, 1.61 on
+  (0.124 to 0.096 mean); `nubis-clouds` 8.2 to 9.1. Kept on. Against the start (no probes, no
+  delta-M, the old ratio tracking), the trade-cumulus scene is 3.4 times as efficient.
 - What remains is the grain of deep multiple scattering. Unbiased remedies are larger: learned
   volume path guiding (Herholz et al. 2019), or a denoiser.
 

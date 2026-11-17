@@ -134,7 +134,13 @@ fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene, pri
     let medium = medium.part(intersection.part).unwrap_or(&**medium);
     let material = medium.material_at(intersection.point);
     let shaded = shading(r, medium, intersection, s);
+    // Rays leaving here cross media truncated (`volume::Volume::truncated`), unless it turns out
+    // to be a mirror or glass, through which the camera sees as directly.
+    crate::volume::at_vertex();
     let interaction = material.scatter(r, &shaded, s);
+    if matches!(interaction.light_sampling, LightSampling::None) {
+        crate::volume::specular_vertex();
+    }
     // Taken before the path goes on, which may change it.
     let mis = crate::volume::chromatic::weight();
 
@@ -578,11 +584,104 @@ mod tests {
         // An optical depth of 8: nearly all light arriving has scattered many times.
         crate::geometry::seed_rand(13, 1);
         let n = 20_000;
-        let (exact, exact_cast, exact_sd) = through_slab("", n);
-        let (similar, similar_cast, similar_sd) = through_slab(r#", "similarity_after": 4"#, n);
+        let (exact, exact_cast, exact_sd) = through_slab(r#", "delta_m": false"#, n);
+        let (similar, similar_cast, similar_sd) = through_slab(r#", "delta_m": false, "similarity_after": 4"#, n);
         let se = ((exact_sd.powi(2) + similar_sd.powi(2)) / n as f64).sqrt();
         assert!((similar - exact).abs() < 0.05 * exact + 3. * se, "similarity {} vs exact {} (se {})", similar, exact, se);
         assert!((similar_cast as f64) < 0.5 * exact_cast as f64, "rays {} vs {}", similar_cast, exact_cast);
+    }
+
+    /// Mean radiance and standard error looking straight down onto a plane-parallel slab of
+    /// optical depth `tau` (1 unit thick), lit by a sun of irradiance 1 at the zenith, over
+    /// a black sky and nothing below.
+    fn slab_reflection(tau: f64, albedo: f64, g: f64, extra: &str, n: usize) -> (f64, f64) {
+        let s = SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 100000, "path_termination": "russian_roulette",
+            "shadow_bias": 0.0001,
+            "sun": {{ "direction": [0, 1, 0], "intensity": 1 }},
+            "camera": {{ "location": [0, 5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "objects": [ {{ "type": "volume", "min": [-1e6, 0, -1e6], "max": [1e6, 1, 1e6],
+                           "density": {tau}, "albedo": [{albedo}, {albedo}, {albedo}], "g": {g} {extra} }} ]
+        }}"#));
+        let r = Ray { ro: Vector3::new(0., 5., 0.), rd: Vector3::new(0., -1., 0.) };
+        let v: Vec<f64> = (0..n).map(|_| trace(&r, 0, &s).1.rgb.x).collect();
+        let mean = v.iter().sum::<f64>() / n as f64;
+        let sd = (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64).sqrt();
+        (mean, sd / (n as f64).sqrt())
+    }
+
+    /// Runs `f` on a thread with room for paths thousands of vertices deep (`trace` recurses
+    /// once per vertex, and a thick slab's paths scatter thousands of times).
+    fn with_deep_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new().stack_size(1 << 29).spawn(f).unwrap().join().unwrap()
+    }
+
+    #[test]
+    fn test_thick_slab_reflects_as_chandrasekhar() {
+        // A conservative isotropic medium, semi-infinite, lit and seen along its normal,
+        // reflects radiance E H(1)² / 8π for irradiance E (S. Chandrasekhar, "Radiative
+        // Transfer", 1950, chapter IV, equation 30: I(μ) = F μ₀ H(μ) H(μ₀) / 4 (μ + μ₀), with
+        // πF = E), where H(1) = 2.9078 (ibid., table XI): 0.3364 E, a little brighter than a
+        // white Lambertian surface's E / π. At an optical depth of 100 about one per cent less
+        // comes back, the rest getting through. A cloud is as bright as this on its sunlit side,
+        // less what it absorbs.
+        let (mean, se) = with_deep_stack(|| {
+            crate::geometry::seed_rand(24, 1);
+            slab_reflection(100., 1., 0., "", 4000)
+        });
+        let expected = 2.9078f64.powi(2) / (8. * std::f64::consts::PI);
+        assert!(mean < expected + 3. * se && mean > 0.97 * expected - 3. * se, "{} ± {} vs {}", mean, se, expected);
+    }
+
+    #[test]
+    fn test_delta_m_matches_exact_transport_in_a_cloud_slab() {
+        // A thick slab of cloud (optical depth 50, albedo 0.999, g = 0.85) seen from above with
+        // the sun overhead: delta-M truncation after the first scattering reflects the same light
+        // as exact transport, with far less noise, and both are nearly white: about 0.8 of a
+        // white Lambertian surface's E / π.
+        let ((exact, exact_se), (truncated, truncated_se)) = with_deep_stack(|| {
+            crate::geometry::seed_rand(25, 1);
+            // Without sun probes, which also tame exact transport's noise: delta-M alone.
+            (slab_reflection(50., 0.999, 0.85, r#", "delta_m": false, "sun_probes": false"#, 20_000),
+             slab_reflection(50., 0.999, 0.85, r#", "sun_probes": false"#, 20_000))
+        });
+        let pi = std::f64::consts::PI;
+        let se = (exact_se.powi(2) + truncated_se.powi(2)).sqrt();
+        assert!((truncated - exact).abs() < 0.02 * exact + 3. * se, "delta-M {} vs exact {} (se {})", truncated, exact, se);
+        assert!(truncated_se < 0.6 * exact_se, "standard errors {} vs {}", truncated_se, exact_se);
+        assert!(truncated * pi > 0.7 && exact * pi > 0.7, "reflectance {} / {}", truncated * pi, exact * pi);
+    }
+
+    #[test]
+    fn test_skylight_is_in_proportion_to_sunlight() {
+        // Under a clear sky with the sun 53° up, the sky lights the ground with a sixth or so of
+        // what the sun does directly (the diffuse fraction of global irradiance on clear days is
+        // 10-20%): the sky and the sun are on one scale, whatever the sun's intensity.
+        let ground = |intensity: f64| {
+            let s = SceneFile::from_string(format!(r#"{{
+                "background": [0, 0, 0], "max_depth": 1, "shadow_bias": 0.001,
+                "sun": {{ "intensity": {intensity} }},
+                "camera": {{ "location": [0, 10, 0], "lookat": [0, 0, 1], "up": [0, 1, 0], "angle": 0.5 }},
+                "materials": {{ "W": {{ "type": "lambertian", "albedo": [1, 1, 1] }} }},
+                "objects": [
+                    {{ "type": "skysphere", "sun_direction": [-0.4, 0.8, -0.45] }},
+                    {{ "type": "plane", "y": 0, "material": "W" }}
+                ]
+            }}"#));
+            let r = Ray { ro: Vector3::new(0., 10., 0.), rd: Vector3::new(0., -1., 0.) };
+            let n = 20_000;
+            let radiance = (0..n).map(|_| trace(&r, 0, &s).1.rgb.y).sum::<f64>() / n as f64;
+            let sun = s.sun.as_ref().unwrap();
+            let direct = sun.irradiance_at(&Vector3::zeros()).rgb.y * sun.direction.y / std::f64::consts::PI;
+            (radiance, direct)
+        };
+        crate::geometry::seed_rand(26, 1);
+        let (radiance, direct) = ground(1.);
+        let diffuse_fraction = (radiance - direct) / radiance;
+        assert!(diffuse_fraction > 0.05 && diffuse_fraction < 0.25, "diffuse fraction {}", diffuse_fraction);
+        let (brighter, brighter_direct) = ground(3.);
+        assert!((brighter_direct / direct - 3.).abs() < 1e-9);
+        assert!((brighter / radiance - 3.).abs() < 0.05, "{} vs {}", brighter, radiance);
     }
 
     #[test]

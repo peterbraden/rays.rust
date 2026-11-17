@@ -95,6 +95,7 @@ mod shapes {
     pub mod julia;
     pub mod tessellated;
     pub mod text;
+    pub mod lod;
 }
 mod octree;
 mod bvh;

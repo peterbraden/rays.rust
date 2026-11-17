@@ -1,0 +1,615 @@
+{
+ "output": {
+  "exposure": 2.98,
+  "tonemap": "filmic",
+  "saturation": 1.2
+ },
+ "width": 1280,
+ "height": 640,
+ "supersamples": 96,
+ "chunk_size": 64,
+ "samples_per_chunk": 4,
+ "shadow_bias": 0.0001,
+ "max_depth": 32,
+ "variables": {
+  "desert": {
+   "type": "mesas",
+   "min": [
+    -2500,
+    -400
+   ],
+   "max": [
+    4500,
+    7000
+   ],
+   "cell_size": 1.25,
+   "height": 210,
+   "scale": 650,
+   "coverage": 0.07,
+   "cliff": 22,
+   "benches": 1,
+   "talus": 0.5,
+   "talus_width": 160,
+   "towers": 0.4,
+   "relief": 0.03,
+   "height_variation": 0.12,
+   "roughness": 0.4,
+   "floor_amplitude": 7,
+   "floor_scale": 260,
+   "floor_ledges": 2.5,
+   "clearing": [
+    0,
+    250,
+    500
+   ],
+   "seed": 3
+  }
+ },
+ "geometries": {
+  "land": {
+   "type": "terrain",
+   "heightmap": "$desert"
+  }
+ },
+ "materials": {
+  "SAGUARO": {
+   "type": "plastic",
+   "albedo": [
+    0.09,
+    0.15,
+    0.07
+   ],
+   "roughness": 0.35
+  },
+  "BARREL": {
+   "type": "plastic",
+   "albedo": [
+    0.1,
+    0.17,
+    0.07
+   ],
+   "roughness": 0.3
+  },
+  "PAD": {
+   "type": "plastic",
+   "albedo": [
+    0.13,
+    0.21,
+    0.07
+   ],
+   "roughness": 0.3
+  },
+  "AGAVE": {
+   "type": "plastic",
+   "albedo": [
+    0.2,
+    0.28,
+    0.24
+   ],
+   "roughness": 0.45
+  },
+  "SPINE": {
+   "type": "lambertian",
+   "albedo": [
+    0.62,
+    0.56,
+    0.44
+   ]
+  },
+  "RED_SPINE": {
+   "type": "lambertian",
+   "albedo": [
+    0.5,
+    0.24,
+    0.14
+   ]
+  },
+  "DARK_SPINE": {
+   "type": "lambertian",
+   "albedo": [
+    0.12,
+    0.1,
+    0.08
+   ]
+  },
+  "GREY_BARK": {
+   "type": "lambertian",
+   "albedo": [
+    0.36,
+    0.33,
+    0.29
+   ]
+  },
+  "OCOTILLO_LEAF": {
+   "type": "leaf",
+   "reflectance": [
+    0.1,
+    0.2,
+    0.05
+   ],
+   "transmittance": [
+    0.05,
+    0.12,
+    0.02
+   ],
+   "roughness": 0.3
+  },
+  "CREOSOTE_LEAF": {
+   "type": "leaf",
+   "reflectance": [
+    0.13,
+    0.16,
+    0.07
+   ],
+   "transmittance": [
+    0.06,
+    0.09,
+    0.03
+   ],
+   "roughness": 0.3
+  },
+  "SAGE_LEAF": {
+   "type": "leaf",
+   "reflectance": [
+    0.3,
+    0.33,
+    0.26
+   ],
+   "transmittance": [
+    0.06,
+    0.08,
+    0.04
+   ],
+   "roughness": 0.6
+  },
+  "FLOOR": {
+   "type": "soil",
+   "preset": "desert",
+   "seed": 1,
+   "color": [
+    0.68,
+    0.27,
+    0.1
+   ],
+   "humus": [
+    0.58,
+    0.23,
+    0.09
+   ],
+   "mottle_size": 6,
+   "stones": 0.02,
+   "bump": 0.3,
+   "crumbs": 0.02,
+   "litter": 0.02
+  },
+  "TALUS": {
+   "type": "rock",
+   "preset": "sandstone",
+   "scale": 6,
+   "seed": 5,
+   "color": [
+    0.7,
+    0.27,
+    0.09
+   ],
+   "secondary": [
+    0.6,
+    0.23,
+    0.08
+   ],
+   "strata_spacing": 0.25,
+   "strata_amount": 0.35,
+   "beds": [
+    [
+     0.45,
+     0.19,
+     0.09
+    ],
+    [
+     0.6,
+     0.32,
+     0.17
+    ],
+    [
+     0.5,
+     0.23,
+     0.13
+    ]
+   ],
+   "dark_grain_amount": 0.01,
+   "light_grain_amount": 0.01,
+   "variety": 0.25,
+   "variety_color": [
+    0.72,
+    0.44,
+    0.24
+   ],
+   "layers": [
+    [
+     0,
+     [
+      0.66,
+      0.24,
+      0.09
+     ]
+    ],
+    [
+     95,
+     [
+      0.7,
+      0.27,
+      0.1
+     ]
+    ],
+    [
+     115,
+     [
+      0.68,
+      0.27,
+      0.1
+     ]
+    ],
+    [
+     195,
+     [
+      0.62,
+      0.25,
+      0.1
+     ]
+    ],
+    [
+     212,
+     [
+      0.7,
+      0.52,
+      0.35
+     ]
+    ]
+   ],
+   "layer_warp": 6,
+   "bump": 0.5,
+   "bump_size": 0.15,
+   "cracks": 0.1
+  },
+  "CLIFF": {
+   "type": "rock",
+   "preset": "sandstone",
+   "scale": 40,
+   "seed": 2,
+   "color": [
+    0.6,
+    0.22,
+    0.08
+   ],
+   "secondary": [
+    0.7,
+    0.29,
+    0.11
+   ],
+   "strata_spacing": 0.12,
+   "strata_amount": 0.35,
+   "beds": [
+    [
+     0.44,
+     0.17,
+     0.08
+    ],
+    [
+     0.62,
+     0.31,
+     0.15
+    ],
+    [
+     0.52,
+     0.23,
+     0.11
+    ],
+    [
+     0.4,
+     0.19,
+     0.12
+    ]
+   ],
+   "dark_grain_amount": 0.01,
+   "light_grain_amount": 0.01,
+   "variety": 0.3,
+   "variety_color": [
+    0.66,
+    0.42,
+    0.26
+   ],
+   "varnish": 0.55,
+   "varnish_color": [
+    0.14,
+    0.08,
+    0.06
+   ],
+   "flutes": 0.8,
+   "bump": 0.35,
+   "layers": [
+    [
+     0,
+     [
+      0.66,
+      0.24,
+      0.09
+     ]
+    ],
+    [
+     95,
+     [
+      0.7,
+      0.27,
+      0.1
+     ]
+    ],
+    [
+     115,
+     [
+      0.68,
+      0.27,
+      0.1
+     ]
+    ],
+    [
+     195,
+     [
+      0.62,
+      0.25,
+      0.1
+     ]
+    ],
+    [
+     212,
+     [
+      0.7,
+      0.52,
+      0.35
+     ]
+    ]
+   ],
+   "layer_warp": 5
+  },
+  "LOWER": {
+   "type": "mix",
+   "materials": [
+    "FLOOR",
+    "TALUS"
+   ],
+   "amount": {
+    "slope": [
+     13,
+     25
+    ],
+    "jitter": 6,
+    "jitter_scale": 6,
+    "seed": 3
+   }
+  },
+  "GROUND": {
+   "type": "mix",
+   "materials": [
+    "LOWER",
+    "CLIFF"
+   ],
+   "amount": {
+    "slope": [
+     46,
+     60
+    ],
+    "jitter": 6,
+    "jitter_scale": 10,
+    "seed": 4
+   }
+  },
+  "JUNIPER_LEAF": {
+   "type": "leaf",
+   "reflectance": [
+    0.12,
+    0.14,
+    0.1
+   ],
+   "transmittance": [
+    0.04,
+    0.07,
+    0.03
+   ],
+   "roughness": 0.4
+  },
+  "JUNIPER_BARK": {
+   "type": "lambertian",
+   "albedo": [
+    0.3,
+    0.27,
+    0.23
+   ]
+  },
+  "DEAD_WOOD": {
+   "type": "lambertian",
+   "albedo": [
+    0.55,
+    0.52,
+    0.47
+   ]
+  },
+  "SAGE_LEAF_2": {
+   "type": "leaf",
+   "reflectance": [
+    0.26,
+    0.3,
+    0.22
+   ],
+   "transmittance": [
+    0.06,
+    0.08,
+    0.04
+   ],
+   "roughness": 0.6
+  },
+  "JUNIPER_LEAF_2": {
+   "type": "leaf",
+   "reflectance": [
+    0.14,
+    0.16,
+    0.11
+   ],
+   "transmittance": [
+    0.05,
+    0.08,
+    0.03
+   ],
+   "roughness": 0.4
+  },
+  "RABBIT_LEAF": {
+   "type": "leaf",
+   "reflectance": [
+    0.22,
+    0.27,
+    0.1
+   ],
+   "transmittance": [
+    0.1,
+    0.14,
+    0.04
+   ],
+   "roughness": 0.5
+  }
+ },
+ "camera": {
+  "location": [
+   0,
+   28,
+   0
+  ],
+  "lookat": [
+   500,
+   140,
+   2900
+  ],
+  "up": [
+   0,
+   1,
+   0
+  ],
+  "angle": 0.3,
+  "aperture": 0.0
+ },
+ "sun": {
+  "intensity": 1
+ },
+ "objects": [
+  {
+   "type": "skysphere",
+   "ozone": false,
+   "sun_direction": [
+    -0.55,
+    0.22,
+    -0.6
+   ],
+   "mie_coefficient": 8e-06
+  },
+  {
+   "type": "nubis_clouds",
+   "base": 2600,
+   "top": 3800,
+   "extent": 60000,
+   "coverage": 0.25,
+   "cloud_type": 0.8,
+   "density": 0.03,
+   "albedo": [
+    0.99,
+    0.99,
+    0.99
+   ],
+   "g": 0.85,
+   "seed": 3,
+   "center": [
+    0,
+    8000
+   ]
+  },
+  {
+   "type": "transform",
+   "item": "land",
+   "material": "GROUND"
+  },
+  {
+   "type": "forest",
+   "seed": 5,
+   "surface": "land",
+   "area": {
+    "min": [
+     -1500,
+     200
+    ],
+    "max": [
+     2500,
+     4500
+    ]
+   },
+   "spacing": 9,
+   "clearings": 0.3,
+   "patch_size": 60,
+   "patchiness": 0.6,
+   "max_slope": 22,
+   "variants": 3,
+   "species": [
+    {
+     "species": "sagebrush",
+     "weight": 5,
+     "bark": "GREY_BARK",
+     "leaves": [
+      "SAGE_LEAF",
+      "SAGE_LEAF_2"
+     ],
+     "dead_bark": "DEAD_WOOD",
+     "scale_v": 0.35
+    },
+    {
+     "species": "utah-juniper",
+     "weight": 1.5,
+     "spacing": 2,
+     "scale_v": 0.4,
+     "bark": "JUNIPER_BARK",
+     "dead_bark": "DEAD_WOOD",
+     "leaves": [
+      "JUNIPER_LEAF",
+      "JUNIPER_LEAF_2"
+     ]
+    },
+    {
+     "species": "creosote-bush",
+     "weight": 1.5,
+     "bark": "GREY_BARK",
+     "leaves": "CREOSOTE_LEAF"
+    },
+    {
+     "species": "prickly-pear",
+     "weight": 1,
+     "spacing": 0.7,
+     "bark": "PAD",
+     "leaves": "SPINE"
+    },
+    {
+     "species": "agave",
+     "weight": 0.4,
+     "spacing": 0.7,
+     "bark": "AGAVE",
+     "leaves": "DARK_SPINE"
+    },
+    {
+     "species": "rabbitbrush",
+     "weight": 2,
+     "scale_v": 0.3,
+     "bark": "GREY_BARK",
+     "leaves": "RABBIT_LEAF"
+    }
+   ]
+  }
+ ],
+ "path_termination": "russian_roulette",
+ "adaptive": {
+  "threshold": 0.04,
+  "min_samples": 16
+ }
+}

@@ -60,6 +60,25 @@ pub struct RenderOpts {
     pub motion: bool,
     /// Whether to render with the wavefront integrator (`wavefront`), where the scene allows.
     pub wavefront: bool,
+    /// Whether each pixel stops sampling once its noise is low enough (`adaptive`), before
+    /// `supersamples`, which is then the most a pixel takes.
+    pub adaptive: Option<Adaptive>,
+}
+
+/// Adaptive sampling (`crate::adaptive`): `"adaptive": 0.01`, or
+/// `"adaptive": {"threshold": 0.01, "min_samples": 16}`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Adaptive {
+    /// A pixel stops when its standard error, relative to its displayed value, is below this.
+    pub threshold: f64,
+    /// Every pixel takes at least this many samples before its noise is judged: an estimate of
+    /// the noise from fewer is too unreliable, and stopping early on a pixel that hasn't yet
+    /// found a rare bright path darkens it.
+    pub min_samples: usize,
+}
+
+impl Adaptive {
+    pub const DEFAULT_MIN_SAMPLES: usize = 16;
 }
 
 /// How a pixel's samples choose their random numbers.
@@ -302,6 +321,8 @@ pub struct Scene {
     pub area_light_choice: crate::environment::Distribution1D,
     /// A directional light, sampled directly by diffuse surfaces and media.
     pub sun: Option<Sun>,
+    /// The sunlight a moon reflects, sampled like the sun (`celestial::moon::Moonlight`).
+    pub moonlight: Option<crate::celestial::moon::Moonlight>,
     /// The skysphere's atmosphere, if any, for aerial perspective: light from distant objects
     /// is attenuated and hazed by the air it crosses.
     pub atmosphere: Option<Arc<SkyMaterial>>,
@@ -318,6 +339,11 @@ pub struct Scene {
 pub const BVH_POINT_LIGHTS: usize = 16;
 
 impl Scene {
+    /// The distant lights sampled directly: the sun, and moonlight.
+    pub fn directional_lights(&self) -> impl Iterator<Item = &Sun> {
+        self.sun.iter().chain(self.moonlight.iter().map(|m| &m.light))
+    }
+
     /// Whether `object` is one of the area lights that diffuse surfaces sample directly.
     pub fn is_sampled_light(&self, object: &SceneObject) -> bool {
         self.render.sample_lights && self.area_light_indices.contains_key(&(object as *const SceneObject as usize))

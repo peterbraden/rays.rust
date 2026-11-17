@@ -150,7 +150,7 @@ Twenty instances of one teapot mesh, each with its own transform and material.
 A terraced sandstone outcrop, granite, limestone and basalt boulders, and a scatter of mixed pebbles.
 ![rocks](./scenes/rocks.png)
 
-An escarpment above a stony valley floor, its heightmap displaced at render time by a function graph: bedded ledges and vertical joints on the cliff, stones on the floor, diced to the size of a pixel (see [displacement](../docs/displacement.md)).
+A sandstone escarpment after the Wingate cliffs of the Colorado Plateau, over talus and a sandy wash: its 1 m heightmap displaced at render time by a function graph into buttresses, joints, alcoves, fallen blocks and cobbles, diced to the size of a pixel, with sand and rock chosen by slope from the same graphs (see [displacement](../docs/displacement.md)).
 ![displaced terrain](./scenes/displaced-terrain.png)
 
 A pebble beach in close-up at sunset: dry shingle in the foreground, wet stones at the waterline, seen through refracting water.

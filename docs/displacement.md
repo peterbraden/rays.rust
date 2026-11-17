@@ -2,10 +2,12 @@
 
 ![Before and after: the same heightmap, plain and displaced](displacement-comparison.png)
 
-*`demo/scenes/displaced-terrain.json`. Left, the heightmap's 1.5 m triangles with the rock
-material's bump mapping. Right, the same heightmap displaced at render time by a function graph:
-bedded ledges and vertical joints on the cliff, stones on the scree and the floor. The ledges
-cast shadows and break the skyline, which bump mapping can't do.*
+*`demo/scenes/displaced-terrain.json`: a sandstone escarpment after the Wingate cliffs of the
+Colorado Plateau, about 30 m high and 90 m away, over a talus apron and a sandy wash, late
+afternoon. Left, the 1 m heightmap as triangles, with the same materials. Right, the same
+heightmap displaced at render time by a function graph: buttresses between weathered joints,
+alcoves, bedding breaks, fallen blocks on the talus, cobbles and hummocks in the sand. The
+relief casts its own shadows and changes the cliff's outline, which bump mapping can't do.*
 
 A terrain stops at its heightmap's resolution. Rock faces, scree and ledges read as real only
 when their silhouettes and self-shadowing are real, and bump mapping fails exactly where most of
@@ -30,6 +32,11 @@ reuse it as `"$name"`.
 | `clamp`, `abs`, `power`, `smoothstep`, `remap`, `terrace` | Shaping |
 | `warp` | Domain distortion: `input` read at a point moved by noise (`amount`, `scale`) or by nodes `x`, `y`, `z` |
 | `expr` | An expression (`expr.rs`) over `x`, `y`, `z`, `slope` and named `inputs`, clamped to `range` |
+
+A graph can also be a material's texture: wherever a colour texture is read (a `mix`'s
+`amount`, an albedo), an object with `"node"` is a graph, evaluated at the hit with its normal.
+The demo uses one to put sandstone on steep faces and sand on flats and ledge tops:
+`"GROUND": {"type": "mix", "materials": ["SAND", "SANDSTONE"], "amount": {"node": "slope", "from": 28, "to": 38}}`.
 
 Every node knows its range by interval arithmetic and clamps to it, so a displaced surface can
 be bounded before it is evaluated. Fractals and cells are filtered: told the spacing of the
@@ -70,8 +77,8 @@ surface, so keep displacement small or masked off where they are.
 
 ## What next
 
-- Drive surface layers' material masks from the same graphs (Terragen gap 2), and media
-  densities.
+- Fuller surface layers (more than two materials, masks from the simulations' fields) on the
+  same graphs (Terragen gap 2), and media densities.
 - Put the `landscape` scenery's clipmap and the desert branch's `mesas` (whose overlook uses
   nested fixed grids down to 8 cm) through displacement, so one coarse grid does.
 - Vector displacement for overhangs.

@@ -406,6 +406,11 @@ impl SceneFile {
     /// "ewa" (the default) | "trilinear" | "bilinear" | "point", "wrap": "repeat" | "clamp" | "black", "linear":
     /// bool}` (8-bit images are taken as sRGB unless `linear`).
     pub fn parse_color_texture(v: &Value) -> crate::textures::ColorTexture {
+        // A function graph's node (`graph.rs`): a grey level, eg. a mix's amount by slope.
+        if v.get("node").is_some() {
+            return crate::textures::ColorTexture::Graph(Arc::new(crate::graph::Graph::parse(v)
+                .unwrap_or_else(|e| panic!("texture graph: {}", e))));
+        }
         match v.get("texture") {
             Some(_) => crate::textures::ColorTexture::Image(SceneFile::parse_image_map(v)),
             None => SceneFile::parse_color(v).into(),
@@ -3015,7 +3020,15 @@ impl SceneFile {
         // Motion blur: sample times only if something moves (`motion`).
         let motion = SceneFile::has_motion(&s.camera) || s.objects.iter().any(SceneFile::has_motion)
             || s.geometries.values().any(SceneFile::has_motion);
-        let geometries = GeometryLibrary::new(s.geometries);
+        // A displaced terrain is diced for the camera (`parse_displaced_terrain`), named or not.
+        let mut named = s.geometries;
+        for g in named.values_mut() {
+            if g["type"].as_str() == Some("terrain") && g.get("displacement").is_some() && g.get("camera").is_none() {
+                g["camera"] = s.camera.clone();
+                g["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+            }
+        }
+        let geometries = GeometryLibrary::new(named);
         geometries.preload(&s.objects);
         // A landscape is meshed finest where the camera is.
         let mut scene_objects = s.objects;
@@ -3686,6 +3699,14 @@ mod tests {
         assert_eq!(leaf.autumn_sun, leaf.autumn);
         assert_eq!(leaf.autumn.reflectance, Color::new(0.4, 0.1, 0.));
         assert_eq!(leaf.dead, DEFAULT_DEAD);
+    }
+
+    /// A colour texture can be a function graph: a mix of materials by slope.
+    #[test]
+    fn test_graph_as_texture() {
+        let t = SceneFile::parse_color_texture(&serde_json::json!({"node": "slope", "from": 20, "to": 40}));
+        assert!(matches!(t, crate::textures::ColorTexture::Graph(_)));
+        assert!((t.average().rgb.x - 0.5).abs() < 1e-12);
     }
 
     #[test]

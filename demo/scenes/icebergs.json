@@ -1,31 +1,116 @@
 {
   "width": 960,
-  "height": 640,
-  "supersamples": 64,
-  "chunk_size": 64,
-  "samples_per_chunk": 8,
-  "shadow_bias": 0.001,
+  "height": 720,
+  "supersamples": 96,
   "max_depth": 8,
   "path_termination": "russian_roulette",
-  "output": { "tonemap": "reinhard", "exposure": 1.0 },
-
+  "shadow_bias": 0.001,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "background": {
+    "type": "overcast",
+    "zenith": [
+      0.95,
+      1.0,
+      1.1
+    ],
+    "bank": {
+      "direction": [
+        0.1,
+        1
+      ],
+      "darkness": 0.1
+    }
+  },
+  "output": {
+    "tonemap": "reinhard",
+    "exposure": 1.6
+  },
   "camera": {
-    "location": [0, 6, -40],
-    "lookat": [10, 6, 200],
-    "up": [0, 1, 0],
-    "angle": 0.9,
+    "location": [
+      0,
+      2.6,
+      -30
+    ],
+    "lookat": [
+      0,
+      -4,
+      60
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.95,
     "aperture": 0.001
   },
-
-  "sun": { "intensity": 4.9 },
-
   "objects": [
-    { "type": "ocean", "wind": [3, 1], "planet_radius": 0, "transparent": true, "detail_center": [0, -40], "detail_distance": 200 },
-    { "type": "ice_floes", "style": "brash", "center": [-40, 15], "extent": [120, 100], "concentration": 0.45, "size": [0.25, 14], "clumping": 0.8, "seed": 1 },
-    { "type": "iceberg", "shape": "blocky", "size": 85, "location": [-48, 160], "yaw": 25, "seed": 2 },
-    { "type": "iceberg", "shape": "tabular", "size": 700, "location": [380, 620], "yaw": -6, "seed": 4 },
-    { "type": "iceberg", "shape": "wedge", "size": 40, "location": [40, 270], "yaw": 70, "seed": 5 },
-    { "type": "iceberg", "shape": "dome", "size": 45, "location": [-330, 520], "seed": 6 },
-    { "type": "skysphere", "sun_direction": [-0.5, 0.45, -0.3] }
+    {
+      "type": "ocean",
+      "wind": [
+        2,
+        1
+      ],
+      "planet_radius": 0,
+      "transparent": true,
+      "detail_center": [
+        0,
+        -30
+      ],
+      "detail_distance": 200
+    },
+    {
+      "type": "ice_floes",
+      "style": "brash",
+      "center": [
+        0,
+        35
+      ],
+      "extent": [
+        170,
+        140
+      ],
+      "concentration": 0.8,
+      "size": [
+        0.2,
+        6
+      ],
+      "clumping": 0.3,
+      "seed": 1
+    },
+    {
+      "type": "iceberg",
+      "shape": "dome",
+      "size": 18,
+      "location": [
+        7,
+        -9
+      ],
+      "yaw": 200,
+      "seed": 12
+    },
+    {
+      "type": "iceberg",
+      "shape": "tabular",
+      "size": 380,
+      "location": [
+        60,
+        150
+      ],
+      "yaw": 8,
+      "seed": 4
+    },
+    {
+      "type": "iceberg",
+      "shape": "blocky",
+      "size": 60,
+      "location": [
+        -150,
+        260
+      ],
+      "yaw": 40,
+      "seed": 2
+    }
   ]
 }

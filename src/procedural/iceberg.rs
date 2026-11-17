@@ -179,7 +179,11 @@ impl Iceberg {
         // across, smaller breaks within them, and melt scallops a metre or so across.
         let big = (0.18 * self.size).clamp(5., 16.);
         let scoops = if rounded {
-            vec![Scoops { cell: Vector3::new(1.3, 2., 1.3), depth: 0.1, seed: self.seed.wrapping_add(303) }]
+            // A worn piece: broad shallow hollows, and scallops.
+            vec![
+                Scoops { cell: Vector3::repeat(0.3 * self.size), depth: 0.07 * self.size, seed: self.seed.wrapping_add(101) },
+                Scoops { cell: Vector3::new(1.3, 2., 1.3), depth: 0.1, seed: self.seed.wrapping_add(303) },
+            ]
         } else {
             vec![
                 Scoops { cell: Vector3::new(big, 1.8 * big, big), depth: 0.3 * big, seed: self.seed.wrapping_add(101) },
@@ -229,6 +233,10 @@ impl Iceberg {
                 }
             }
             let mut s: f64 = 1.;
+            if kind == Kind::Dome {
+                // Lumpy, not a smooth dome: melted unevenly.
+                s *= 1. + 0.3 * outline.fbm(d * 1.4, 3);
+            }
             match kind {
                 Kind::Wedge => {
                     let along = q.dot(&slope);
@@ -354,7 +362,7 @@ impl Iceberg {
         let notch_height = (0.012 * self.size).clamp(0.8, 2.);
         // The ram: under the notch the ice the waves haven't reached juts out as a submerged
         // shelf, broadest on one side.
-        let width = (0.15 * self.size).min(20.);
+        let width = (0.15 * self.size).min(20.) * smoothstep(10., 60., self.size).max(0.25);
         let reach = 8. + 0.12 * self.size;
         let side = rng.next_f64() * TAU;
         let surface = |d: &Vector3<f64>| -> Vector3<f64> {
@@ -580,7 +588,8 @@ impl IcebergMaterial {
             body: None,
             white: clean("white", 0.3),
             glacier: clean("glacier", 0.15),
-            blue: clean("blue", 0.08),
+            // Dense ice with few bubbles, as deep in a glacier: a saturated blue.
+            blue: Ice::new(IceStyle { bubble_radius: 0.7, bubbles: 1.2, impurities: Default::default(), roughness: 0.08 }),
             snow: Snow::new(SnowStyle { sparkle: 0., ..SnowStyle::preset("settled") }, 1., seed),
             size,
             noise: SeededNoise::new(seed.wrapping_add(17)),
@@ -689,7 +698,7 @@ impl FloeField {
         // Diameters with number density ∝ d^-α between the smallest and largest: by inverting
         // the cumulative distribution, d = d_min (1 - u (1 - (d_min/d_max)^(α-1)))^(-1/(α-1)).
         // Brash ice is steeper than the floes of pack ice: mostly small pieces.
-        let alpha = match self.style { FloeStyle::Brash => 3.0, FloeStyle::Slab => 2.2 };
+        let alpha = match self.style { FloeStyle::Brash => 2.3, FloeStyle::Slab => 2.2 };
         let k = 1. - (self.min_size / self.max_size).powf(alpha - 1.);
         let mut radii = vec![];
         let mut sum = 0.;

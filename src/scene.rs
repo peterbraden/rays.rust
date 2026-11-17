@@ -153,7 +153,7 @@ impl Background {
                 if sin < 0. { return *ground; }
                 let dim = bank.map_or(1., |(towards, to)| {
                     let facing = Vector3::new(d.x, 0., d.z).try_normalize(1e-9).map_or(0., |h| h.dot(&towards));
-                    let w = crate::procedural::nubis_clouds::smoothstep(-0.3, 0.8, facing) * (1. - sin).powi(2);
+                    let w = crate::procedural::nubis_clouds::smoothstep(-0.3, 0.8, facing) * (1. - sin).powf(0.7);
                     1. - (1. - to) * w
                 });
                 *zenith * (dim * (1. + 2. * sin) / 3.)

@@ -120,27 +120,21 @@ used by ice services:
 | `wedge`    | one steep face, the top sloping away from it |
 | `drydock`  | eroded into a U, a channel between two pillars |
 
-Each shape is fractured into faces and cleaved: its walls break along planes at two scales,
-slabs and chips, into tall flat facets that meet at sharp edges and steps, as where pieces
-have calved away (the dome alone is smooth). The mesh is refined wherever the surface bends,
-down to a centimetre or so, so the facets' edges are straight and the melt scallops (shallow
-dimples a metre across) show. A large berg has several million triangles, and a scene of a few
-takes a couple of minutes and a few gigabytes to build. `"detail"` (default 7) sets the
-starting mesh before refinement; lower it for quick tests. Fine vertical meltwater flutes run down the
-walls. It is tilted
-(except tabular bergs) and notched at the waterline by the waves. Below the notch, the ram is
-a shelf of ice that juts out under the water, broadest on one side. Tabular bergs, broken
-from ice shelves, have irregular outlines with bays, gently rolling tops, and the shelf's
-layers of firn and ice down their cliffs as horizontal grooves and bands of whiter and bluer
-ice. The berg floats as its
-`density` says: with 900 kg/m³ (ice capped with lighter firn), an eighth of its volume is
-above the sea. Most of each berg is under water, as in real ones. The surface is white,
-bubble-rich glacier ice, bluer low on the walls (ice from deep in the glacier, or ice that has
-rolled up from under water and not yet weathered), with:
+Each shape is fractured into faces, and its walls are broken the way ice breaks: like glass,
+in concave scoops that meet at sharp ridges. There are three scales of them: calving scars a
+fifth of the berg across, smaller breaks within those, and melt scallops a metre or so wide.
+A few narrow, deep crevasses cut the walls, and the top is smooth snow. The mesh is refined to
+about 40 cm above the water, so a large berg has several million triangles.
 
-- snow on gentle upward surfaces;
-- thin veins of blue ice, where meltwater refroze in old crevasses;
-- glossy, bubble-poor ice where the waves wash it.
+The berg floats as its `density` says: with 900 kg/m³, an eighth of its volume is above the
+sea. It is notched at the waterline by the waves, and below the notch a shelf of ice (the ram)
+juts out under water.
+
+The ice's colour follows how freshly it was broken. Old faces have weathered to a white,
+bubbly crust. Deep in the scars and crevasses the dense blue ice of the glacier's interior
+shows. Snow lies on the top, on ledges, and down the top few metres of a tabular berg's cliff
+(the firn). All of these are the `ice` and `snow` materials above with different bubbles and
+grains.
 
 ```json
 { "type": "ice_floes", "center": [0, 80], "extent": [360, 200], "concentration": 0.55,
@@ -154,10 +148,11 @@ larger ones they broke from, and the field thins out towards its ragged edges. E
 It floats with a tenth of its thickness above the water, snow on top with patches of bare ice,
 and white ice at the sides.
 
-`"style": "brash"` makes the pieces brash ice and bergy bits instead: lumps of glacier ice
-broken from bergs, fractured and rounded by melting, about half as high as wide, each floating
-at its own waterline. Like the bergs, each is notched at the waterline and spreads in a skirt
-just below it, which shows turquoise through the water.
+`"style": "brash"` makes the pieces brash ice instead: mostly broken plates, flat and angular
+with sharp edges, the small ones tipped and jumbled, with rounded lumps among the larger
+pieces. Each floats at its own waterline, and they pack edge to edge. Light passes through
+them (random-walk subsurface scattering with ice's own absorption), so thin edges glow.
+`"clumping"` (0 to 1, default 0.5) gathers floes into clumps with open water between.
 
 In a scene with an ocean, icebergs and floes float on its waves: each piece rises and falls
 with the surface where it floats, and small pieces tip with its slope. (Pieces as large as the
@@ -165,6 +160,13 @@ waves tip less.) `"clumping"` (0 to 1, default 0.5) gathers floes or lumps into 
 with open water between.
 
 Either object takes a `"material"` or `"medium"` in place of its own ice and snow.
+
+### Overcast sky
+
+`"background": {"type": "overcast", "zenith": [0.95, 1, 1.1], "bank": {"direction": [x, z],
+"darkness": 0.1}}` lights the scene with the CIE standard overcast sky: three times as bright
+overhead as at the horizon, with no sun. `bank` puts darker cloud low in one direction, for a
+dark sky behind bright ice. Ice shows its blue best in this light.
 
 ### Transparent water
 
@@ -180,7 +182,5 @@ all for clearer, more tropical water.
 - `demo/scenes/snow-ice.json`: a snowfield against a low sun, with boulders under fresh snow,
   blocks of white, bubbly and blue glacier ice, and mounds of old snow, firn and dirty snow.
 - `demo/scenes/glacier.json`: an ice cap over the alpine landscape in a colder climate.
-- `demo/scenes/icebergs.json`: brash ice glowing turquoise under the water, a blocky berg
-  with its submerged ram, and tabular bergs beyond.
-- `demo/scenes/icebergs-overcast.json`: the same under a low overcast of stratocumulus, which
-  brings out the ice's blue. It needs many samples to clear the noise.
+- `demo/scenes/icebergs.json`: after photographs of Antarctic ice under heavy overcast. Brash
+  ice and a worn bergy bit in the foreground, a tabular berg's cliff behind, dark water.

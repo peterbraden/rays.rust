@@ -158,6 +158,15 @@ pub struct Rock {
     pub varnish_color: Color,
     /// Depth of vertical flutes worn into steep faces, bump mapped.
     pub flutes: f64,
+    /// Cross-bedding, 0 to 1: laminae inclined within sets `cross_set` thick (in units of
+    /// `scale`), each set's dipping its own way, as the foresets of the dunes that became
+    /// aeolian sandstone (Navajo, De Chelly) do; drawn in place of level strata where strong.
+    pub cross_bedding: f64,
+    pub cross_set: f64,
+    /// Pitting, 0 to 1: the small cavities of honeycomb weathering (tafoni) on steep faces,
+    /// `pit_size` across (in units of `scale`), dark and recessed.
+    pub pits: f64,
+    pub pit_size: f64,
     noise: SeededNoise,
     /// Noise levels above which the given fraction of the surface is grain or lichen.
     dark_threshold: f64,
@@ -193,6 +202,7 @@ impl Rock {
             style, scale, weathering: 0.3, lichen: 0., lichen_color: Color::new(0.38, 0.40, 0.26), wetness: 0.,
             layers: vec![], layer_warp: 0., beds: vec![], variety: 0., variety_color: Color::new(0.7, 0.55, 0.4),
             varnish: 0., varnish_color: Color::new(0.12, 0.07, 0.05), flutes: 0.,
+            cross_bedding: 0., cross_set: 1., pits: 0., pit_size: 0.05,
             noise, dark_threshold, light_threshold, lichen_threshold: 0.,
         }
     }
@@ -228,9 +238,39 @@ impl Rock {
             let f = Vector3::new(q.x * 0.6, q.y * 0.05, q.z * 0.6) + Vector3::new(0., 0., 23.);
             self.flutes * (1. - self.noise.fbm(f, 3).abs()).powi(2) * 0.5
         } else { 0. };
-        flutes + self.noise.fbm(b, 4) * self.style.bump_size * 0.6
+        let pits = if self.pits > 0. { -self.pit(q) * self.pit_size * 0.6 } else { 0. };
+        flutes + pits + self.noise.fbm(b, 4) * self.style.bump_size * 0.6
             + self.noise.ridged(b * 0.5 + Vector3::new(0., 0., 9.), 3) * self.style.bump_size * 0.3
             - self.crack(q) * self.style.bump_size * 0.15 * self.style.cracks
+    }
+
+    /// How far a point lies in a pit: 1 at its middle, 0 outside pits. Pits are the high spots
+    /// of fine noise, gathered in patches by a broader noise, as tafoni cluster.
+    fn pit(&self, q: Vector3<f64>) -> f64 {
+        let size = self.pit_size.max(1e-9);
+        let patch = smoothstep(-0.2, 0.3, self.noise.fbm(q / (12. * size) + Vector3::new(0., 70., 0.), 2) + self.pits - 0.5);
+        let n = self.noise.noise(q / size + Vector3::new(13., 0., 7.));
+        smoothstep(0.3, 0.55, n) * patch
+    }
+
+    /// The phase of the cross-bedded laminae at `q`, and how close it is to a set's bounding
+    /// surface (1 on it): within each set the laminae dip at 15 to 30 degrees, towards a
+    /// direction of the set's own, and curve (as trough cross-beds do), so they meet the set's
+    /// level base and top at an angle.
+    fn cross_beds(&self, q: Vector3<f64>) -> (f64, f64) {
+        let set = self.cross_set.max(1e-9);
+        let y = q.y + 0.3 * set * self.noise.fbm(q / (6. * set) + Vector3::new(5., 0., 0.), 2);
+        let k = (y / set).floor();
+        let hash = |salt: f64| ((k * 12.9898 + salt * 78.233).sin() * 43_758.545_3).fract().abs();
+        let azimuth = hash(1.) * std::f64::consts::TAU;
+        let dip = (15. + 15. * hash(2.)).to_radians().tan();
+        let (along, across) = (q.x * azimuth.cos() + q.z * azimuth.sin(), -q.x * azimuth.sin() + q.z * azimuth.cos());
+        let curve = 0.4 * (across / (3. * set)).sin() * set;
+        let spacing = 0.06 * set;
+        let phase = (y + dip * along + curve) / spacing;
+        let within = y / set - k;
+        let boundary = smoothstep(0.06, 0., within.min(1. - within));
+        (phase, boundary)
     }
 
     /// The shading normal: the surface normal tilted by the relief.
@@ -283,7 +323,14 @@ impl Rock {
                 let h = (n.wrapping_mul(0x9e37_79b9_7f4a_7c15u64 as i64) as u64 >> 33) as usize;
                 self.beds[h % self.beds.len()]
             };
-            c = c.blend(&bed, st.strata_amount * (0.75 * band + 0.25 * fine));
+            c = c.blend(&bed, st.strata_amount * (0.75 * band + 0.25 * fine) * (1. - self.cross_bedding));
+        }
+        if self.cross_bedding > 0. {
+            let (phase, boundary) = self.cross_beds(q);
+            let lamina = (0.5 + 0.5 * (phase * std::f64::consts::TAU).sin()).powi(2);
+            let bed = if self.beds.is_empty() { st.strata_color } else { self.beds[(phase.floor() as i64).rem_euclid(self.beds.len() as i64) as usize] };
+            c = c.blend(&bed, self.cross_bedding * (0.45 * lamina + 0.3));
+            c = c * (1. - 0.25 * self.cross_bedding * boundary);
         }
 
         // Mineral grains.
@@ -299,6 +346,11 @@ impl Rock {
         // Broad weathering, and grime in the cracks.
         let tone = 1. + self.weathering * self.noise.fbm(q * 0.25 + Vector3::new(0., 0., 40.), 3);
         c = c * (tone * (1. - 0.6 * self.crack(q)));
+
+        // Pits are shadowed inside.
+        if self.pits > 0. {
+            c = c * (1. - 0.6 * self.pit(q));
+        }
 
         // Desert varnish streaks steep faces, in vertical runs where water has run down.
         if self.varnish > 0. {
@@ -415,6 +467,29 @@ mod tests {
         let lum = |c: Color| crate::color::luminance(&c);
         assert!(lum(mean_albedo(&varnished, 5., wall)) < 0.85 * lum(mean_albedo(&plain, 5., wall)));
         assert!((lum(mean_albedo(&varnished, 5., Vector3::y())) - lum(mean_albedo(&plain, 5., Vector3::y()))).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_cross_beds_dip_within_level_sets() {
+        let mut rock = Rock::new(RockStyle::preset("sandstone"), 1., 2);
+        rock.cross_set = 1.;
+        // Within a set, the laminae's phase changes along the ground (they dip); every set has
+        // level bounding surfaces at whole multiples of its thickness, give or take its warp.
+        let (a, _) = rock.cross_beds(Vector3::new(0., 0.5, 0.));
+        let (b, _) = rock.cross_beds(Vector3::new(0.5, 0.5, 0.5));
+        assert!((a - b).abs() > 0.5, "{} {}", a, b);
+        let mid = rock.cross_beds(Vector3::new(3., 10.5, 3.)).1;
+        assert!(mid < 0.5, "{}", mid);
+    }
+
+    #[test]
+    fn test_pits_darken_and_recess() {
+        let plain = Rock::new(RockStyle::preset("sandstone"), 1., 2);
+        let mut pitted = Rock::new(RockStyle::preset("sandstone"), 1., 2);
+        pitted.pits = 1.;
+        let lum = |c: Color| crate::color::luminance(&c);
+        let wall = Vector3::x();
+        assert!(lum(mean_albedo(&pitted, 5., wall)) < 0.97 * lum(mean_albedo(&plain, 5., wall)));
     }
 
     #[test]

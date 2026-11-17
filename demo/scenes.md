@@ -158,6 +158,14 @@ a bluer light than the noon sun and sky (`"white_balance": 7000`), warming the s
 photographer's shade setting would.
 ![desert at noon](./scenes/desert-noon.png)
 
+From the rim of a higher mesa at dawn (`desert-overlook.json`), after the view from Hunts
+Mesa: its top weathered into rounded slickrock domes (`domes`), their cross-bedded sandstone
+(`"cross_bedding"`) pocked with honeycomb pits (`"pits"`), over a valley of buttes and spires
+fading into the haze towards the horizon. The mesa is raised above the others by `uplift`; the
+near country is a 1.5 m grid and the far, out to the horizon, a 30 m grid of the same mesas
+(`domain`) with a `hole` where the near one is.
+![desert overlook](./scenes/desert-overlook.png)
+
 ## Alpine terrain
 Mountains from seeded noise after one 100,000 year glacial cycle: tectonic uplift, river
 incision and glacial erosion (`src/terrain/`).

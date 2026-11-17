@@ -1,0 +1,720 @@
+{
+ "output": {
+  "exposure": 1.3
+ },
+ "width": 864,
+ "height": 1080,
+ "supersamples": 64,
+ "chunk_size": 64,
+ "samples_per_chunk": 4,
+ "shadow_bias": 0.0001,
+ "max_depth": 5,
+ "variables": {
+  "near": {
+   "type": "mesas",
+   "height": 260,
+   "scale": 900,
+   "coverage": 0.04,
+   "cliff": 22,
+   "benches": 1,
+   "talus": 0.45,
+   "talus_width": 180,
+   "towers": 0.06,
+   "relief": 0.08,
+   "domes": 70,
+   "height_variation": 0.12,
+   "roughness": 0.4,
+   "floor_amplitude": 6,
+   "floor_scale": 200,
+   "floor_ledges": 2,
+   "seed": 21,
+   "domain": [
+    -40000,
+    -8000,
+    40000,
+    60000
+   ],
+   "uplift": [
+    0,
+    0,
+    1000,
+    220
+   ],
+   "min": [
+    -3500,
+    -200
+   ],
+   "max": [
+    3500,
+    7500
+   ],
+   "cell_size": 1.5
+  },
+  "far": {
+   "type": "mesas",
+   "height": 260,
+   "scale": 900,
+   "coverage": 0.04,
+   "cliff": 22,
+   "benches": 1,
+   "talus": 0.45,
+   "talus_width": 180,
+   "towers": 0.06,
+   "relief": 0.08,
+   "domes": 70,
+   "height_variation": 0.12,
+   "roughness": 0.4,
+   "floor_amplitude": 6,
+   "floor_scale": 200,
+   "floor_ledges": 2,
+   "seed": 21,
+   "domain": [
+    -40000,
+    -8000,
+    40000,
+    60000
+   ],
+   "uplift": [
+    0,
+    0,
+    1000,
+    220
+   ],
+   "min": [
+    -40000,
+    -8000
+   ],
+   "max": [
+    40000,
+    60000
+   ],
+   "cell_size": 30,
+   "hole": [
+    -3400,
+    -100,
+    3400,
+    7400
+   ]
+  }
+ },
+ "geometries": {
+  "near": {
+   "type": "terrain",
+   "heightmap": "$near"
+  },
+  "far": {
+   "type": "terrain",
+   "heightmap": "$far"
+  }
+ },
+ "materials": {
+  "SAGUARO": {
+   "type": "plastic",
+   "albedo": [
+    0.09,
+    0.15,
+    0.07
+   ],
+   "roughness": 0.35
+  },
+  "BARREL": {
+   "type": "plastic",
+   "albedo": [
+    0.1,
+    0.17,
+    0.07
+   ],
+   "roughness": 0.3
+  },
+  "PAD": {
+   "type": "plastic",
+   "albedo": [
+    0.13,
+    0.21,
+    0.07
+   ],
+   "roughness": 0.3
+  },
+  "AGAVE": {
+   "type": "plastic",
+   "albedo": [
+    0.2,
+    0.28,
+    0.24
+   ],
+   "roughness": 0.45
+  },
+  "SPINE": {
+   "type": "lambertian",
+   "albedo": [
+    0.62,
+    0.56,
+    0.44
+   ]
+  },
+  "RED_SPINE": {
+   "type": "lambertian",
+   "albedo": [
+    0.5,
+    0.24,
+    0.14
+   ]
+  },
+  "DARK_SPINE": {
+   "type": "lambertian",
+   "albedo": [
+    0.12,
+    0.1,
+    0.08
+   ]
+  },
+  "GREY_BARK": {
+   "type": "lambertian",
+   "albedo": [
+    0.3,
+    0.27,
+    0.23
+   ]
+  },
+  "OCOTILLO_LEAF": {
+   "type": "leaf",
+   "reflectance": [
+    0.1,
+    0.2,
+    0.05
+   ],
+   "transmittance": [
+    0.05,
+    0.12,
+    0.02
+   ],
+   "roughness": 0.3
+  },
+  "CREOSOTE_LEAF": {
+   "type": "leaf",
+   "reflectance": [
+    0.07,
+    0.11,
+    0.04
+   ],
+   "transmittance": [
+    0.03,
+    0.06,
+    0.01
+   ],
+   "roughness": 0.25
+  },
+  "SAGE_LEAF": {
+   "type": "leaf",
+   "reflectance": [
+    0.24,
+    0.27,
+    0.22
+   ],
+   "transmittance": [
+    0.05,
+    0.07,
+    0.04
+   ],
+   "roughness": 0.5
+  },
+  "FLOOR": {
+   "type": "soil",
+   "preset": "desert",
+   "seed": 1,
+   "color": [
+    0.6,
+    0.33,
+    0.2
+   ],
+   "humus": [
+    0.52,
+    0.29,
+    0.18
+   ],
+   "mottle_size": 10,
+   "stones": 0.02,
+   "bump": 0.3,
+   "crumbs": 0.02,
+   "litter": 0.02,
+   "moss": 0.2,
+   "moss_color": [
+    0.24,
+    0.26,
+    0.19
+   ]
+  },
+  "TALUS": {
+   "type": "rock",
+   "preset": "sandstone",
+   "scale": 6,
+   "seed": 5,
+   "color": [
+    0.7,
+    0.27,
+    0.09
+   ],
+   "secondary": [
+    0.6,
+    0.23,
+    0.08
+   ],
+   "strata_spacing": 0.25,
+   "strata_amount": 0.35,
+   "beds": [
+    [
+     0.45,
+     0.19,
+     0.09
+    ],
+    [
+     0.6,
+     0.32,
+     0.17
+    ],
+    [
+     0.5,
+     0.23,
+     0.13
+    ]
+   ],
+   "dark_grain_amount": 0.01,
+   "light_grain_amount": 0.01,
+   "variety": 0.25,
+   "variety_color": [
+    0.72,
+    0.44,
+    0.24
+   ],
+   "layers": [
+    [
+     0,
+     [
+      0.62,
+      0.26,
+      0.13
+     ]
+    ],
+    [
+     110,
+     [
+      0.66,
+      0.3,
+      0.15
+     ]
+    ],
+    [
+     150,
+     [
+      0.64,
+      0.3,
+      0.16
+     ]
+    ],
+    [
+     240,
+     [
+      0.68,
+      0.36,
+      0.2
+     ]
+    ],
+    [
+     300,
+     [
+      0.72,
+      0.44,
+      0.28
+     ]
+    ]
+   ],
+   "layer_warp": 6,
+   "bump": 0.5,
+   "bump_size": 0.15,
+   "cracks": 0.1
+  },
+  "CLIFF": {
+   "type": "rock",
+   "preset": "sandstone",
+   "scale": 40,
+   "seed": 2,
+   "color": [
+    0.6,
+    0.22,
+    0.08
+   ],
+   "secondary": [
+    0.7,
+    0.29,
+    0.11
+   ],
+   "strata_spacing": 0.12,
+   "strata_amount": 0.35,
+   "beds": [
+    [
+     0.44,
+     0.17,
+     0.08
+    ],
+    [
+     0.62,
+     0.31,
+     0.15
+    ],
+    [
+     0.52,
+     0.23,
+     0.11
+    ],
+    [
+     0.4,
+     0.19,
+     0.12
+    ]
+   ],
+   "dark_grain_amount": 0.01,
+   "light_grain_amount": 0.01,
+   "variety": 0.3,
+   "variety_color": [
+    0.66,
+    0.42,
+    0.26
+   ],
+   "varnish": 0.55,
+   "varnish_color": [
+    0.14,
+    0.08,
+    0.06
+   ],
+   "flutes": 0.8,
+   "bump": 0.35,
+   "layers": [
+    [
+     0,
+     [
+      0.62,
+      0.26,
+      0.13
+     ]
+    ],
+    [
+     110,
+     [
+      0.66,
+      0.3,
+      0.15
+     ]
+    ],
+    [
+     150,
+     [
+      0.64,
+      0.3,
+      0.16
+     ]
+    ],
+    [
+     240,
+     [
+      0.68,
+      0.36,
+      0.2
+     ]
+    ],
+    [
+     300,
+     [
+      0.72,
+      0.44,
+      0.28
+     ]
+    ]
+   ],
+   "layer_warp": 5,
+   "cross_bedding": 0.35,
+   "cross_set": 0.4,
+   "pits": 0.3,
+   "pit_size": 0.015
+  },
+  "LOWER": {
+   "type": "mix",
+   "materials": [
+    "FLOOR",
+    "TALUS"
+   ],
+   "amount": {
+    "slope": [
+     13,
+     25
+    ],
+    "jitter": 6,
+    "jitter_scale": 6,
+    "seed": 3
+   }
+  },
+  "GROUND": {
+   "type": "mix",
+   "materials": [
+    "LOWLANDS",
+    "UPLANDS"
+   ],
+   "amount": {
+    "height": [
+     175,
+     205
+    ],
+    "jitter": 10,
+    "jitter_scale": 40,
+    "seed": 6
+   }
+  },
+  "JUNIPER_LEAF": {
+   "type": "leaf",
+   "reflectance": [
+    0.06,
+    0.1,
+    0.05
+   ],
+   "transmittance": [
+    0.02,
+    0.04,
+    0.01
+   ],
+   "roughness": 0.3
+  },
+  "SLICKROCK": {
+   "type": "rock",
+   "preset": "sandstone",
+   "scale": 30,
+   "seed": 8,
+   "color": [
+    0.68,
+    0.33,
+    0.17
+   ],
+   "secondary": [
+    0.72,
+    0.42,
+    0.25
+   ],
+   "strata_spacing": 0.1,
+   "strata_amount": 0.2,
+   "beds": [
+    [
+     0.52,
+     0.2,
+     0.1
+    ],
+    [
+     0.8,
+     0.58,
+     0.42
+    ],
+    [
+     0.64,
+     0.28,
+     0.14
+    ],
+    [
+     0.74,
+     0.46,
+     0.3
+    ],
+    [
+     0.58,
+     0.24,
+     0.12
+    ]
+   ],
+   "cross_bedding": 0.9,
+   "cross_set": 0.5,
+   "pits": 0.45,
+   "pit_size": 0.02,
+   "varnish": 0.25,
+   "varnish_color": [
+    0.2,
+    0.11,
+    0.08
+   ],
+   "flutes": 0.2,
+   "dark_grain_amount": 0.01,
+   "light_grain_amount": 0.01,
+   "variety": 0.25,
+   "variety_color": [
+    0.74,
+    0.5,
+    0.34
+   ],
+   "layers": [
+    [
+     0,
+     [
+      0.62,
+      0.26,
+      0.13
+     ]
+    ],
+    [
+     110,
+     [
+      0.66,
+      0.3,
+      0.15
+     ]
+    ],
+    [
+     150,
+     [
+      0.64,
+      0.3,
+      0.16
+     ]
+    ],
+    [
+     240,
+     [
+      0.68,
+      0.36,
+      0.2
+     ]
+    ],
+    [
+     300,
+     [
+      0.72,
+      0.44,
+      0.28
+     ]
+    ]
+   ],
+   "layer_warp": 4,
+   "bump": 0.35,
+   "cracks": 0.3
+  },
+  "LOWLANDS": {
+   "type": "mix",
+   "materials": [
+    "LOWER",
+    "CLIFF"
+   ],
+   "amount": {
+    "slope": [
+     46,
+     60
+    ],
+    "jitter": 6,
+    "jitter_scale": 10,
+    "seed": 4
+   }
+  },
+  "UPLANDS": {
+   "type": "mix",
+   "materials": [
+    "SLICKROCK",
+    "CLIFF"
+   ],
+   "amount": {
+    "slope": [
+     62,
+     76
+    ],
+    "jitter": 6,
+    "jitter_scale": 8,
+    "seed": 5
+   }
+  }
+ },
+ "camera": {
+  "location": [
+   0,
+   512,
+   780
+  ],
+  "lookat": [
+   300,
+   -60,
+   4800
+  ],
+  "up": [
+   0,
+   1,
+   0
+  ],
+  "angle": 0.56,
+  "aperture": 0.0
+ },
+ "sun": {
+  "intensity": 1
+ },
+ "objects": [
+  {
+   "type": "skysphere",
+   "ozone": true,
+   "sun_direction": [
+    -0.8,
+    0.16,
+    -0.35
+   ],
+   "multiple_scattering": true
+  },
+  {
+   "type": "transform",
+   "item": "near",
+   "material": "GROUND"
+  },
+  {
+   "type": "transform",
+   "item": "far",
+   "material": "GROUND"
+  },
+  {
+   "type": "forest",
+   "seed": 5,
+   "surface": "near",
+   "area": {
+    "min": [
+     -3300,
+     -150
+    ],
+    "max": [
+     3300,
+     7300
+    ]
+   },
+   "spacing": 11,
+   "clearings": 0.3,
+   "patch_size": 60,
+   "patchiness": 0.6,
+   "max_slope": 22,
+   "variants": 3,
+   "species": [
+    {
+     "species": "sagebrush",
+     "weight": 5,
+     "bark": "GREY_BARK",
+     "leaves": "SAGE_LEAF"
+    },
+    {
+     "species": "juniper",
+     "weight": 2,
+     "spacing": 1.3,
+     "bark": "GREY_BARK",
+     "leaves": "JUNIPER_LEAF"
+    },
+    {
+     "species": "creosote-bush",
+     "weight": 1,
+     "bark": "GREY_BARK",
+     "leaves": "CREOSOTE_LEAF"
+    },
+    {
+     "species": "prickly-pear",
+     "weight": 0.5,
+     "spacing": 0.7,
+     "bark": "PAD",
+     "leaves": "SPINE"
+    }
+   ]
+  }
+ ]
+}

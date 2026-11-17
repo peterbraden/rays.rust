@@ -36,7 +36,12 @@
 //!   fins per square kilometre, each on its own debris cone), `relief` (rounded hills left on
 //!   the tops, as a fraction of `height`), `height_variation` (from mesa to mesa, a
 //!   fraction), `roughness` (gullies and fallen blocks on the debris slopes, 0 to 1) and
-//!   `floor_ledges` (the height of the low steps the floor is terraced in, metres)
+//!   `floor_ledges` (the height of the low steps the floor is terraced in, metres), `domes`
+//!   (the size of the slickrock domes the tops weather into, `relief` high), `domain` ([min
+//!   x, min z, max x, max z]: the area the mesas are laid out over, so that a fine grid of the
+//!   near country and a coarse one of the far can share them) and `hole` (a rectangle sunk
+//!   out of sight, for the coarse grid where the fine one is), `uplift` ([x, z, radius,
+//!   height]: a mesa there, about three quarters of the radius across, that much taller)
 //!
 //! To share one heightmap between a terrain and the grass on it, define it once in the scene's
 //! `variables` and refer to it as `"$name"`.
@@ -146,6 +151,16 @@ pub struct MesaHeight {
     /// Height of the low ledges the floor steps down in, metres (0 for a smoothly rolling
     /// floor), as thin hard beds in the soft rock beneath it outcrop.
     pub floor_ledges: f64,
+    /// The size of the sandstone domes the tops are weathered into (metres; 0 for low rounded
+    /// hills instead), `relief` of `height` high.
+    pub domes: f64,
+    /// A rectangle [min x, min z, max x, max z] where the surface is sunk out of sight, so a
+    /// coarse grid of the far country can leave the near country to a finer one.
+    pub hole: Option<[f64; 4]>,
+    /// [x, z, radius, height]: a mesa stands there, about three quarters of the radius across,
+    /// that much taller than the others, as a higher remnant of the plateau does (Hunts Mesa
+    /// above Monument Valley).
+    pub uplift: Option<[f64; 4]>,
     /// Free-standing towers and fins, and a grid of them by cell for lookup.
     towers: Vec<Tower>,
     tower_cell: f64,
@@ -167,17 +182,35 @@ impl MesaHeight {
         let mut m = MesaHeight {
             noise: PerlinNoise::new(), base, height, scale, cliff, benches, talus, talus_width,
             floor_amplitude, floor_scale, clearing, offset: (seed * 31.17 + 0.37, seed * 17.73 + 0.71),
-            relief: 0., height_variation: 0., roughness: 0., floor_ledges: 0.,
+            relief: 0., height_variation: 0., roughness: 0., floor_ledges: 0., domes: 0., hole: None, uplift: None,
             towers: vec![], tower_cell: 1., tower_grid: Default::default(),
             sdf: vec![], sdf_min: min, sdf_cell: 1., sdf_n: (1, 1),
         };
-        // Fine enough for the cliffs, at most about 1500 cells a side.
+        m.build_distances(min, max, coverage);
+        m
+    }
+
+    /// As `new`, with `uplift` (see the field), the outlines cut again to take it in.
+    pub fn with_uplift(mut self, uplift: [f64; 4], coverage: f64) -> MesaHeight {
+        self.uplift = Some(uplift);
+        let (nx, nz) = self.sdf_n;
+        let min = self.sdf_min;
+        let max = (min.0 + (nx - 1) as f64 * self.sdf_cell, min.1 + (nz - 1) as f64 * self.sdf_cell);
+        self.build_distances(min, max, coverage);
+        self
+    }
+
+    /// Cut the outlines from the field over [min, max] so they cover `coverage` of it, and find
+    /// the signed distance from them.
+    fn build_distances(&mut self, min: (f64, f64), max: (f64, f64), coverage: f64) {
+        let cliff = self.cliff;
+        // Fine enough for the cliffs, at most `SDF_CELLS` a side.
         let extent = (max.0 - min.0).max(max.1 - min.1);
-        let cell = (0.5 * cliff).max(extent / 1500.).max(1e-6);
+        let cell = (0.5 * cliff).max(extent / SDF_CELLS).max(1e-6);
         let (nx, nz) = (((max.0 - min.0) / cell).ceil() as usize + 1, ((max.1 - min.1) / cell).ceil() as usize + 1);
         let field: Vec<f64> = {
             use rayon::prelude::*;
-            let m = &m;
+            let m = &*self;
             (0 .. nx * nz).into_par_iter().map(|k| m.field(min.0 + (k % nx) as f64 * cell, min.1 + (k / nx) as f64 * cell)).collect()
         };
         let mut sorted = field.clone();
@@ -187,12 +220,12 @@ impl MesaHeight {
         let to_outside = distance_transform(&inside, nx, nz, true);
         let to_inside = distance_transform(&inside, nx, nz, false);
         // Half a cell either side of the edge, so it falls between the cells.
-        m.sdf = (0 .. nx * nz).map(|k| {
+        self.sdf = (0 .. nx * nz).map(|k| {
             if inside[k] { (to_outside[k].sqrt() - 0.5) * cell } else { -(to_inside[k].sqrt() - 0.5) * cell }
         } as f32).collect();
-        m.sdf_cell = cell;
-        m.sdf_n = (nx, nz);
-        m
+        self.sdf_min = min;
+        self.sdf_cell = cell;
+        self.sdf_n = (nx, nz);
     }
 
     /// The broad field whose level sets are the mesas' outlines, before the cut: warped noise,
@@ -205,6 +238,11 @@ impl MesaHeight {
         if let Some((cx, cz, r)) = self.clearing {
             let d = ((x - cx).powi(2) + (z - cz).powi(2)).sqrt();
             f -= 0.6 * (1. - smoothstep(r, 1.6 * r, d));
+        }
+        if let Some([ux, uz, r, _]) = self.uplift {
+            // A mesa stands there, its edge about three quarters of the way out.
+            let d = ((x - ux).powi(2) + (z - uz).powi(2)).sqrt();
+            f += 0.6 * (1. - smoothstep(0.5 * r, r, d));
         }
         f
     }
@@ -310,6 +348,29 @@ impl MesaHeight {
         (at(i, j) * (1. - fu) + at(i + 1, j) * fu) * (1. - fv) + (at(i, j + 1) * (1. - fu) + at(i + 1, j + 1) * fu) * fv
     }
 
+    /// Sandstone domes, 0 to 1: rounded, swollen knobs on a jittered grid of `domes` cells, each
+    /// its own size and height, meeting in the sharp-floored joints between them, as massive
+    /// cross-bedded sandstone weathers along its joints (slickrock).
+    fn dome_field(&self, x: f64, z: f64) -> f64 {
+        let size = self.domes;
+        let warp = 0.3 * size * self.noise.fbm(x / (2. * size), 9.1, z / (2. * size), 2, 0.5, 2.);
+        let (u, v) = ((x + warp) / size, (z - warp) / size);
+        let (ci, cj) = (u.floor() as i64, v.floor() as i64);
+        let mut best = 0f64;
+        for i in ci - 1 ..= ci + 1 {
+            for j in cj - 1 ..= cj + 1 {
+                let (cx, cz) = (i as f64 + 0.2 + 0.6 * hash01(i, j, 1), j as f64 + 0.2 + 0.6 * hash01(i, j, 2));
+                let radius = 0.6 + 0.5 * hash01(i, j, 3);
+                let height = 0.35 + 0.65 * hash01(i, j, 4);
+                let r = ((u - cx).powi(2) + (v - cz).powi(2)).sqrt() / radius;
+                // A rounded dome, swelling smoothly from the joints to its crown.
+                let t = (1. - r * r).max(0.);
+                best = best.max(height * t * t * (3. - 2. * t));
+            }
+        }
+        best
+    }
+
     /// The tallest tower's height at (x, z), and how much debris slope it is.
     fn towers_at(&self, x: f64, z: f64) -> (f64, f64) {
         let (ci, cj) = ((x / self.tower_cell).floor() as i64, (z / self.tower_cell).floor() as i64);
@@ -326,6 +387,18 @@ impl MesaHeight {
         }
         best
     }
+}
+
+/// The most cells along a side of a mesa field's distance grid.
+const SDF_CELLS: f64 = 3000.;
+
+/// A hash of integers to [0, 1).
+fn hash01(i: i64, j: i64, salt: u64) -> f64 {
+    let mut h = (i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (j as u64).wrapping_mul(0xc2b2_ae3d_27d4_eb4f) ^ salt.wrapping_mul(0x1656_67b1_9e37_79f9);
+    h ^= h >> 31;
+    h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    h ^= h >> 29;
+    (h >> 11) as f64 / (1u64 << 53) as f64
 }
 
 /// A free-standing tower or fin of the scarp's rock, on its own cone of debris.
@@ -404,19 +477,26 @@ impl HeightSource for MesaHeight {
         let n = |s: f64, o: f64, octaves: u32| 2. * self.noise.fbm(x / s + o, 0.37 * o, z / s - o, octaves, 0.5, 2.) - 1.;
         let mut floor = self.floor_amplitude * n(self.floor_scale, 71.3, 4);
         if self.floor_ledges > 0. {
-            // Terraced: each step a short, steep riser and a gently rolling tread.
+            // Terraced: each step a short, steep riser and a gently rolling tread; only on the
+            // floor, not on the tops.
             let step = self.floor_ledges;
             let f = floor / step + 0.15 * n(0.2 * self.floor_scale, 3.7, 3);
-            floor = step * (f.floor() + smoothstep(0., 0.3, f.fract()));
+            let ledged = step * (f.floor() + smoothstep(0., 0.3, f.fract()));
+            floor += (ledged - floor) * (1. - smoothstep(-self.cliff, 0., d));
         }
         // Each mesa's top at its own height, as erosion has stripped more from some.
-        let h = self.height * (1. + self.height_variation * n(3. * self.scale, 23.9, 2));
+        let mut h = self.height * (1. + self.height_variation * n(3. * self.scale, 23.9, 2));
+        if let Some([ux, uz, r, extra]) = self.uplift {
+            h += extra * (1. - smoothstep(r, 1.5 * r, ((x - ux).powi(2) + (z - uz).powi(2)).sqrt()));
+        }
         let width = self.talus_width * h / self.height;
         let (mut profile, mut slope) = self.shape(d, h, self.talus, width, self.cliff);
         // The tops: low rounded hills of the softer beds above the caprock, set back from the
         // rim, on the rubbly caprock.
         let inside = smoothstep(self.cliff, 3. * self.cliff, d);
-        let hills = (n(6. * self.cliff, 5.1, 4) + 0.15).max(0.).powf(1.5) * 1.6;
+        let hills = if self.domes > 0. { self.dome_field(x, z) } else {
+            (n(6. * self.cliff, 5.1, 4) + 0.15).max(0.).powf(1.5) * 1.6
+        };
         profile += inside * (self.relief * self.height * hills + 0.01 * self.height * n(0.8 * self.cliff, 8.8, 3));
         let (tower, tower_slope) = self.towers_at(x, z);
         if tower > profile {
@@ -430,7 +510,11 @@ impl HeightSource for MesaHeight {
             let blocks = n(0.12 * self.cliff, 13.3, 2).max(0.);
             profile += slope * self.roughness * self.talus * self.height * (0.02 * blocks - 0.06 * gully);
         }
-        self.base + floor + profile
+        let sunk = match self.hole {
+            Some([x0, z0, x1, z1]) if x > x0 && x < x1 && z > z0 && z < z1 => 2. * self.height,
+            _ => 0.,
+        };
+        self.base + floor + profile - sunk
     }
 }
 
@@ -563,7 +647,13 @@ impl HeightGrid {
             "mesas" => {
                 let height = SceneFile::parse_number(&o["height"], 120.);
                 let clearing = o.get("clearing").map(|c| (c[0].as_f64().unwrap(), c[1].as_f64().unwrap(), c[2].as_f64().unwrap()));
-                let m = MesaHeight::new(min, max, SceneFile::parse_number(&o["coverage"], 0.15), base, height,
+                // The field the mesas are laid out over: by default the heightmap's own area, but
+                // grids of the same country at different resolutions must share one.
+                let (dmin, dmax) = match o.get("domain") {
+                    Some(d) => ((d[0].as_f64().unwrap(), d[1].as_f64().unwrap()), (d[2].as_f64().unwrap(), d[3].as_f64().unwrap())),
+                    None => (min, max),
+                };
+                let m = MesaHeight::new(dmin, dmax, SceneFile::parse_number(&o["coverage"], 0.15), base, height,
                     SceneFile::parse_number(&o["scale"], 800.),
                     SceneFile::parse_number(&o["cliff"], 30.),
                     SceneFile::parse_int(&o["benches"], 2) as u32,
@@ -572,7 +662,13 @@ impl HeightGrid {
                     SceneFile::parse_number(&o["floor_amplitude"], 2.),
                     SceneFile::parse_number(&o["floor_scale"], 150.),
                     clearing, seed);
-                let mut m = m.with_towers(SceneFile::parse_number(&o["towers"], 0.), min, max, seed as u64);
+                let m = match o.get("uplift") {
+                    Some(u) => m.with_uplift([0, 1, 2, 3].map(|k| u[k].as_f64().unwrap()), SceneFile::parse_number(&o["coverage"], 0.15)),
+                    None => m,
+                };
+                let mut m = m.with_towers(SceneFile::parse_number(&o["towers"], 0.), dmin, dmax, seed as u64);
+                m.domes = SceneFile::parse_number(&o["domes"], 0.);
+                m.hole = o.get("hole").map(|h| [0, 1, 2, 3].map(|k| h[k].as_f64().unwrap()));
                 m.relief = SceneFile::parse_number(&o["relief"], 0.);
                 m.height_variation = SceneFile::parse_number(&o["height_variation"], 0.);
                 m.roughness = SceneFile::parse_number(&o["roughness"], 0.);
@@ -914,6 +1010,36 @@ mod tests {
             assert!(m.tower_height(t, t.x - s * off, t.z + c * off).0 < 0.5 * t.height * t.talus, "{}", top);
         }
         assert!(tall > m.towers.len() / 2, "{} of {}", tall, m.towers.len());
+    }
+
+    #[test]
+    fn test_uplift_stands_a_taller_mesa_there() {
+        let m = mesas(0.1).with_uplift([1500., 1500., 500., 150.], 0.1);
+        // A mesa at the uplift's centre, full height plus the uplift, level to near its edge.
+        let centre = m.height(1500., 1500.);
+        assert!(centre > 0.95 * (m.height + 150.), "{}", centre);
+        assert!(m.height(1500., 1500. + 0.5 * 500.) > 0.95 * (m.height + 150.));
+    }
+
+    #[test]
+    fn test_domes_are_rounded_and_jointed() {
+        let mut m = mesas(0.2);
+        m.domes = 50.;
+        // Each dome is 0 to 1, peaks within a cell, and falls to joints between them.
+        let samples: Vec<f64> = (0 .. 400).map(|k| m.dome_field(k as f64 * 0.5, 13.)).collect();
+        let (lo, hi) = samples.iter().fold((1f64, 0f64), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+        assert!(lo >= 0. && hi <= 1. && hi > 0.5 && lo < 0.5 * hi, "{} to {}", lo, hi);
+        // Smooth: no step between neighbouring samples greater than a dome's rise allows.
+        assert!(samples.windows(2).all(|w| (w[1] - w[0]).abs() < 0.1));
+    }
+
+    #[test]
+    fn test_hole_sinks_the_surface() {
+        let mut m = mesas(0.2);
+        let outside = m.height(-2000., -2000.);
+        m.hole = Some([-2100., -2100., -1900., -1900.]);
+        assert!(m.height(-2000., -2000.) < outside - m.height);
+        assert_eq!(m.height(-2200., -2000.), { m.hole = None; m.height(-2200., -2000.) });
     }
 
     #[test]

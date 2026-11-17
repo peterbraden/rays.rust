@@ -405,11 +405,12 @@ impl SceneFile {
     /// bool}` (8-bit images are taken as sRGB unless `linear`).
     /// A colour, an image texture (`{"texture": path, ...}`), or a grey level from the slope
     /// (`{"slope": [from, to], "jitter": degrees, "jitter_scale": size, "seed": 0}`,
-    /// `textures::SlopeTexture`).
+    /// `textures::SlopeTexture`), or from the elevation (`{"height": [from, to], ...}`).
     pub fn parse_color_texture(v: &Value) -> crate::textures::ColorTexture {
-        if let Some(range) = v.get("slope") {
+        if let Some(range) = v.get("slope").or(v.get("height")) {
             let r = SceneFile::parse_vec2(range);
             return crate::textures::ColorTexture::Slope(crate::textures::SlopeTexture {
+                by_height: v.get("slope").is_none(),
                 from: r.x, to: r.y,
                 jitter: SceneFile::parse_number(&v["jitter"], 0.),
                 jitter_scale: SceneFile::parse_number(&v["jitter_scale"], 1.),
@@ -2337,7 +2338,9 @@ impl SceneFile {
     /// faces: `"layers"` ([[y, colour], ...]: formations' colours by elevation, warped by
     /// `"layer_warp"`), `"beds"` (a colour per bed of the strata), `"variety"` and
     /// `"variety_color"` (broad stains), `"varnish"` and `"varnish_color"` (dark streaks down
-    /// steep faces), and `"flutes"` (vertical grooves, bump mapped).
+    /// steep faces), `"flutes"` (vertical grooves, bump mapped), `"cross_bedding"` and
+    /// `"cross_set"` (inclined laminae in sets that thick) and `"pits"` and `"pit_size"`
+    /// (honeycomb weathering).
     pub fn parse_rock(o: &Value) -> Rock {
         let preset = RockStyle::preset(o["preset"].as_str().unwrap_or("granite"));
         let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
@@ -2373,6 +2376,10 @@ impl SceneFile {
         r.varnish = n("varnish", 0.).clamp(0., 1.);
         r.varnish_color = c("varnish_color", r.varnish_color);
         r.flutes = n("flutes", 0.).max(0.);
+        r.cross_bedding = n("cross_bedding", 0.).clamp(0., 1.);
+        r.cross_set = n("cross_set", r.cross_set).max(1e-6);
+        r.pits = n("pits", 0.).clamp(0., 1.);
+        r.pit_size = n("pit_size", r.pit_size).max(1e-6);
         let lichen = n("lichen", 0.);
         if lichen > 0. {
             let color = c("lichen_color", r.lichen_color);

@@ -366,8 +366,11 @@ pub enum ColorTexture {
 /// where steeper than `to`, smoothly between, the slope jittered by up to `jitter` degrees of
 /// noise `jitter_scale` across, so the boundary is ragged. As a `mix` amount, it puts one
 /// material on cliffs and another on the ground, as rock shows where it's too steep for soil
-/// to lie.
+/// to lie. With `by_height`, the same from the elevation instead, `from` and `to` in scene
+/// units and `jitter` too.
 pub struct SlopeTexture {
+    /// By elevation (y, scene units) rather than slope.
+    pub by_height: bool,
     pub from: f64,
     pub to: f64,
     pub jitter: f64,
@@ -377,7 +380,7 @@ pub struct SlopeTexture {
 
 impl SlopeTexture {
     pub fn amount(&self, point: &Vector3<f64>, normal: &Vector3<f64>) -> f64 {
-        let slope = normal.y.abs().clamp(0., 1.).acos().to_degrees();
+        let slope = if self.by_height { point.y } else { normal.y.abs().clamp(0., 1.).acos().to_degrees() };
         let jitter = if self.jitter > 0. { self.jitter * self.noise.fbm(point / self.jitter_scale.max(1e-9), 3) } else { 0. };
         let t = ((slope + jitter - self.from) / (self.to - self.from).max(1e-9)).clamp(0., 1.);
         t * t * (3. - 2. * t)

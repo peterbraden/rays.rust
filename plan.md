@@ -1457,6 +1457,39 @@ UI, file IO and rayon's threads would follow.
    8. Perhaps, natively only: hardware ray queries (wgpu's are experimental; WebGPU has
       none; the M2 has no ray tracing hardware, the M3 does).
    1-4 apply to the current kernels, and come first.
+
+   Done, on #114: 1, 2 and 4. Measured on the kernel's CPU build (`pathtrace::stats`,
+   `gpu::tests::measure_traversal`; the GPU runs the same code, so does the same work), box
+   tests and primitive tests a ray at 160 x 90, before and after:
+
+   | Scene      | primitives | tree depth | boxes before | after | primitives before | after |
+   |------------|-----------:|-----------:|-------------:|------:|------------------:|------:|
+   | demo       |        993 |         14 |          3.3 |   4.1 |               1.3 |   1.3 |
+   | instances  |    126,401 |         24 |         21.3 |  20.3 |               2.3 |   2.1 |
+   | glossy-sun |          5 |          3 |          3.3 |   3.2 |               1.7 |   1.7 |
+   | spheres    |          4 |          3 |          2.3 |   2.6 |               1.4 |   1.4 |
+
+   - Ordered traversal: the node buffer holds interior nodes only, each with its two
+     children's boxes (64 bytes; leaves have no node). A ray tests both at one visit, descends
+     into the nearer, and stacks the farther, with the distance at which it enters it, only if
+     it does; a stacked child is dropped unvisited if something nearer was hit meanwhile.
+   - What it bought is not fewer box tests, which stay about the same (the old traversal
+     already skipped boxes beyond the best hit, when it popped them), but half as many node
+     fetches and loop iterations (two boxes a fetch), and a few fewer primitive tests where
+     there is depth to order. A child that isn't there (a tree of one leaf) is `NO_CHILD`: no
+     box says "nothing", since the slab test lets every ray into an inverted one, which made
+     the first version loop forever on such trees (found on the CPU build;
+     `test_traversal_matches_brute_force` now covers trees of none, one leaf and many).
+   - The stack is 64 entries (one a level of interior nodes) and as many entry distances, from
+     100 entries: 512 bytes a thread from 400. So not smaller, as step 4 meant it to be. To
+     do: pack the distance's ordering into the entry, or re-test instead of storing it.
+   - Images are unchanged: pixel-identical at 320 x 180, 8 spp on instances, demo and
+     glossy-sun (old kernel against new, the same random numbers).
+   - Timed only on llvmpipe (software Vulkan, 4 cores; no GPU in the container): a sample at
+     320 x 180, median of 3, instances 94.8 -> 84.9 ms, demo 48.6 -> 40.9 ms, with run-to-run
+     spread as large as the difference. The WGSL grew from 772 KB to 816 KB. To measure on the
+     M2 and in a browser on a real GPU before building on it (`scripts/benchmark-gpu.sh`).
+   - Still to do of 1: a pass's time with shading off.
 3. The fallback framework: per-area status, classification, CPU queues for materials first,
    then intersection. Exit: every flattenable demo scene plus at least one with a
    procedural shape and one with an unported material renders through the GPU path with CPU

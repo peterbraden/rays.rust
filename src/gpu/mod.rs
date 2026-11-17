@@ -250,9 +250,9 @@ fn bvh_depth(nodes: &[(crate::shapes::bbox::BBox, u32, u32)]) -> usize {
 /// that leaf as its only child; no tree at all, a root no ray enters.
 fn gpu_nodes(exported: &[(crate::shapes::bbox::BBox, u32, u32)]) -> Result<Vec<GpuNode>, String> {
     use pathtrace::glam::Vec3;
-    // A box no ray enters (`box_entry`: it leaves before it arrives).
-    const NOWHERE: (Vec3, Vec3) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
-    let empty = GpuNode { amin: NOWHERE.0, a: 0, amax: NOWHERE.1, a_count: 0, bmin: NOWHERE.0, b: 0, bmax: NOWHERE.1, b_count: 0 };
+    // Children that aren't there.
+    let none = pathtrace::NO_CHILD;
+    let empty = GpuNode { amin: Vec3::ZERO, a: none, amax: Vec3::ZERO, a_count: 0, bmin: Vec3::ZERO, b: none, bmax: Vec3::ZERO, b_count: 0 };
     let corners = |b: &crate::shapes::bbox::BBox| (Vec3::new(b.min.x as f32, b.min.y as f32, b.min.z as f32), Vec3::new(b.max.x as f32, b.max.y as f32, b.max.z as f32));
     let Some((root_bounds, root_offset, root_count)) = exported.first() else {
         return Ok(vec![empty]);
@@ -1013,6 +1013,61 @@ mod tests {
             // And traces as many rays (w).
             let gpu_rays: f64 = sums.iter().map(|v| v[3] as f64).sum();
             assert!((gpu_rays - cpu_rays as f64).abs() < 0.01 * cpu_rays as f64, "{} rays: GPU {} vs CPU {}", name, gpu_rays, cpu_rays);
+        }
+    }
+
+    /// The shader's traversal finds what a search of every primitive finds: the nearest hit, and
+    /// whether anything is in the way, for trees of every shape (none, one leaf, deep), with
+    /// planes, and for ranges that end before or begin beyond the nearest surface.
+    #[test]
+    fn test_traversal_matches_brute_force() {
+        use pathtrace::glam::Vec3;
+        let mut rng = crate::geometry::Pcg32::new(11, 0);
+        let mut next = move || rng.next_f64();
+        for (spheres, planes) in [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (9, 1), (300, 0), (2000, 2)] {
+            let mut objects = Vec::new();
+            for _ in 0..spheres {
+                objects.push(format!(r#"{{ "type": "sphere", "location": [{}, {}, {}], "radius": {}, "material": "M" }}"#,
+                    next() * 20. - 10., next() * 20. - 10., next() * 20. - 10., 0.05 + next() * 0.6));
+            }
+            for i in 0..planes {
+                objects.push(format!(r#"{{ "type": "plane", "y": {}, "material": "M" }}"#, -11. - i as f64));
+            }
+            let s = SceneFile::from_string(format!(r#"{{
+                "width": 4, "height": 4, "background": [0, 0, 0],
+                "camera": {{ "location": [0, 0, -30], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }},
+                "materials": {{ "M": {{ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }} }},
+                "objects": [{}]
+            }}"#, objects.join(",")));
+            let flat = FlatScene::build(&s).unwrap();
+            let b = Buffers::build(&s, &flat).unwrap();
+            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let count = (b.params.counts.x + b.params.counts.y) as usize;
+            assert_eq!(count, spheres + planes);
+            // Every primitive on its own is a scene the traversal searches in full.
+            let alone: Vec<(Params, [GpuPrim; 1], Vec<GpuNode>)> = (0..count).map(|i| {
+                let plane = i >= b.params.counts.x as usize;
+                let mut params = b.params;
+                params.counts.x = if plane { 0 } else { 1 };
+                params.counts.y = if plane { 1 } else { 0 };
+                let nodes = gpu_nodes(&if plane { vec![] } else { vec![(flat.bvh.export()[0].0, 0, 1)] }).unwrap();
+                (params, [b.prims[i]], nodes)
+            }).collect();
+            for _ in 0..400 {
+                let ro = Vec3::new(next() as f32 * 30. - 15., next() as f32 * 30. - 15., next() as f32 * 30. - 15.);
+                let rd = Vec3::new(next() as f32 - 0.5, next() as f32 - 0.5, next() as f32 - 0.5).normalize();
+                let (tmin, tmax) = match (next() * 3.) as u32 { 0 => (0., f32::MAX), 1 => (0., next() as f32 * 20.), _ => (next() as f32 * 20., f32::MAX) };
+                let mut expected = (tmax, u32::MAX);
+                for (i, (params, prim, nodes)) in alone.iter().enumerate() {
+                    let single = pathtrace::Scene { params, prims: prim, nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+                    let (t, hit) = pathtrace::nearest(&single, ro, rd, tmin, expected.0, false);
+                    if hit != u32::MAX { expected = (t, i as u32); }
+                }
+                let (t, prim) = pathtrace::nearest(&shader, ro, rd, tmin, tmax, false);
+                assert_eq!((t, prim != u32::MAX), (expected.0, expected.1 != u32::MAX), "{} spheres, {} planes: ray {:?} {:?} in ({}, {})", spheres, planes, ro, rd, tmin, tmax);
+                let (_, any) = pathtrace::nearest(&shader, ro, rd, tmin, tmax, true);
+                assert_eq!(any != u32::MAX, expected.1 != u32::MAX, "any hit: {} spheres, {} planes", spheres, planes);
+            }
         }
     }
 

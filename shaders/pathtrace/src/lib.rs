@@ -68,13 +68,17 @@ pub struct Node {
     pub a: u32,
     pub amax: Vec3,
     /// A leaf's items; 0 for an interior node. A child that isn't there (the second child of
-    /// a tree that is one leaf) is an interior node with an empty box, which no ray enters.
+    /// a tree that is one leaf) is the interior node `NO_CHILD`, which no ray enters.
     pub a_count: u32,
     pub bmin: Vec3,
     pub b: u32,
     pub bmax: Vec3,
     pub b_count: u32,
 }
+
+/// The index of a child that isn't there. (No box can say so: every ray "enters" an inverted
+/// or infinite one, by the slab test.)
+pub const NO_CHILD: u32 = 0xffff_ffff;
 
 /// A child as the traversal's stack holds it: an interior node's index, or for a leaf, this
 /// bit, its count less one in the next `LEAF_COUNT_BITS` and its first item in the rest.
@@ -457,8 +461,8 @@ fn trace(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> 
             continue;
         }
         let n = at(s.nodes, next);
-        let ta = box_entry(n.amin, n.amax, ro, inv, best.t);
-        let tb = box_entry(n.bmin, n.bmax, ro, inv, best.t);
+        let ta = if n.a == NO_CHILD { INF } else { box_entry(n.amin, n.amax, ro, inv, best.t) };
+        let tb = if n.b == NO_CHILD { INF } else { box_entry(n.bmin, n.bmax, ro, inv, best.t) };
         let ca = child(n.a, n.a_count);
         let cb = child(n.b, n.b_count);
         // The nearer first (a, if they tie), the farther kept if the ray enters it at all.
@@ -482,6 +486,14 @@ fn trace(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> 
         best.ns = n;
     }
     best
+}
+
+/// The traversal alone, for the renderer's tests of it: the nearest hit's distance and
+/// primitive (`u32::MAX` for none) in (tmin, tmax), or any hit's.
+#[cfg(not(target_arch = "spirv"))]
+pub fn nearest(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> (f32, u32) {
+    let h = trace(s, ro, rd, tmin, tmax, any_hit);
+    (h.t, h.prim)
 }
 
 fn occluded(s: &Scene, ro: Vec3, rd: Vec3, tmax: f32) -> bool {

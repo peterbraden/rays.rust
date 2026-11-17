@@ -10,11 +10,11 @@
     "location": [
       0,
       2,
-      -4200
+      -5500
     ],
     "lookat": [
       0,
-      2200,
+      2700,
       0
     ],
     "up": [
@@ -22,7 +22,7 @@
       1,
       0
     ],
-    "angle": 0.62
+    "angle": 0.78
   },
   "sun": {
     "intensity": 4.9
@@ -57,7 +57,7 @@
         0
       ],
       "hot_spot": {
-        "radius": 450,
+        "radius": 900,
         "boost": 3
       },
       "repeat": false,
@@ -105,8 +105,8 @@
       "heat_flux": 80,
       "moisture_flux": 150,
       "bubble": {
-        "height": 1000,
-        "radius": 700,
+        "height": 1200,
+        "radius": 1000,
         "warmth": 2.5,
         "supersaturation": 0.05
       }

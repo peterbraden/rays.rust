@@ -978,6 +978,32 @@ impl SceneFile {
         })]
     }
 
+    /// A terrain displaced by the graph `d` (`shapes::displaced`), diced as its
+    /// `"displacement_detail"` and the scene's camera (which the scene gives it) call for.
+    fn parse_displaced_terrain(grid: Arc<HeightGrid>, d: &Value, o: &Value) -> crate::shapes::displaced::DisplacedTerrain {
+        use crate::shapes::displaced::{Detail, DisplacedTerrain};
+        let graph = crate::graph::Graph::parse(d).unwrap_or_else(|e| panic!("terrain's displacement: {}", e));
+        let v = &o["displacement_detail"];
+        let camera = &o["camera"];
+        let height = SceneFile::parse_number(&camera["image_height"], 0.);
+        let eye = (!camera.is_null() && height > 0. && v["level"].is_null()).then(|| {
+            (SceneFile::parse_vec3(&camera["location"]), camera["angle"].as_f64().unwrap_or(0.5).tan() / height)
+        });
+        let detail = Detail {
+            eye,
+            pixels: SceneFile::parse_number(&v["pixels"], 1.),
+            max_level: SceneFile::parse_int(&v["max_level"], 8) as u32,
+            min_spacing: v["min_spacing"].as_f64(),
+            level: SceneFile::parse_int(&v["level"], 4) as u32,
+        };
+        let vertical = match o["displacement_direction"].as_str() {
+            None | Some("normal") => false,
+            Some("vertical") => true,
+            Some(x) => panic!("Unknown displacement_direction '{}': expected \"normal\" or \"vertical\"", x),
+        };
+        DisplacedTerrain::new(grid, graph, vertical, &detail).unwrap_or_else(|e| panic!("{}", e))
+    }
+
     /// A forest's `"lod"`: `true`, or `{"pixels": 1, "max_level": 12}`, to see each tree at the
     /// level of detail the size of a pixel where it stands calls for (`shapes::lod`), dropping
     /// detail up to `pixels` across. It needs the scene's camera, which the scene gives it.
@@ -1896,7 +1922,11 @@ impl SceneFile {
         }
 
         if t == "terrain" {
-            return Some(Box::new(Terrain { grid: Arc::new(HeightGrid::from_json(&o["heightmap"])) }));
+            let grid = Arc::new(HeightGrid::from_json(&o["heightmap"]));
+            if let Some(d) = o.get("displacement") {
+                return Some(Box::new(SceneFile::parse_displaced_terrain(grid, d, o)));
+            }
+            return Some(Box::new(Terrain { grid }));
         }
         SceneFile::parse_shape(t, o)
     }
@@ -2993,8 +3023,10 @@ impl SceneFile {
             if o["type"].as_str() == Some("landscape") && o.get("camera").is_none() {
                 o["camera"] = s.camera.clone();
             }
-            // A forest sees each tree at the detail the camera needs (`parse_forest_lod`).
-            if o["type"].as_str() == Some("forest") && o.get("camera").is_none() {
+            // A forest sees each tree at the detail the camera needs (`parse_forest_lod`), and a
+            // displaced terrain is diced as finely (`parse_displaced_terrain`).
+            let displaced = o["type"].as_str() == Some("terrain") && o.get("displacement").is_some();
+            if (o["type"].as_str() == Some("forest") || displaced) && o.get("camera").is_none() {
                 o["camera"] = s.camera.clone();
                 o["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
             }

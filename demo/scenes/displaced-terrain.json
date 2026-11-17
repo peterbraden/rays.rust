@@ -1,0 +1,294 @@
+{
+  "output": {
+    "exposure": 0.8
+  },
+  "width": 960,
+  "height": 540,
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 4,
+  "background": [
+    0.5,
+    0.6,
+    0.8
+  ],
+  "max_depth": 4,
+  "variables": {
+    "sun": [
+      -0.8,
+      0.3,
+      -0.3
+    ],
+    "hills": {
+      "type": "image",
+      "src": "./demo/textures/escarpment-height.png",
+      "height": 40,
+      "min": [
+        -150,
+        -30
+      ],
+      "max": [
+        150,
+        370.5
+      ],
+      "cell_size": 1.5
+    },
+    "rock": {
+      "node": "add",
+      "inputs": [
+        {
+          "node": "strata",
+          "step": 2.2,
+          "sharpness": 0.85,
+          "amplitude": 0.9,
+          "breakup": {
+            "node": "fractal",
+            "scale": 14,
+            "smallest": 0.5,
+            "amplitude": 1.6,
+            "seed": 2
+          }
+        },
+        {
+          "node": "strata",
+          "step": 0.7,
+          "sharpness": 0.6,
+          "amplitude": 0.2,
+          "breakup": {
+            "node": "fractal",
+            "scale": 6,
+            "smallest": 0.3,
+            "amplitude": 0.5,
+            "seed": 21
+          }
+        },
+        {
+          "node": "expr",
+          "expr": "-1.1 * (1 - min(e / 0.08, 1))^2",
+          "range": [
+            -1.1,
+            0
+          ],
+          "inputs": {
+            "e": {
+              "node": "warp",
+              "amount": 1.2,
+              "scale": 8,
+              "seed": 7,
+              "input": {
+                "node": "cells",
+                "style": "edges",
+                "scale": 7,
+                "seed": 11,
+                "plan": true
+              }
+            }
+          }
+        },
+        {
+          "node": "warp",
+          "amount": 0.6,
+          "scale": 4,
+          "seed": 5,
+          "input": {
+            "node": "fractal",
+            "style": "ridged",
+            "scale": 5,
+            "smallest": 0.01,
+            "amplitude": 0.6,
+            "seed": 3
+          }
+        },
+        {
+          "node": "fractal",
+          "scale": 0.5,
+          "smallest": 0.004,
+          "amplitude": 0.05,
+          "seed": 8
+        }
+      ]
+    },
+    "scree": {
+      "node": "add",
+      "inputs": [
+        {
+          "node": "blend",
+          "a": {
+            "node": "cells",
+            "style": "stones",
+            "scale": 0.18,
+            "amplitude": 0.07,
+            "seed": 3
+          },
+          "b": {
+            "node": "cells",
+            "style": "stones",
+            "scale": 0.6,
+            "amplitude": 0.3,
+            "seed": 4
+          },
+          "mask": {
+            "node": "smoothstep",
+            "from": 0.1,
+            "to": 0.6,
+            "input": {
+              "node": "fractal",
+              "scale": 8,
+              "smallest": 0.5,
+              "seed": 12
+            }
+          }
+        },
+        {
+          "node": "cells",
+          "style": "stones",
+          "scale": 0.07,
+          "amplitude": 0.025,
+          "seed": 6
+        },
+        {
+          "node": "fractal",
+          "scale": 3,
+          "smallest": 0.01,
+          "amplitude": 0.05,
+          "seed": 9
+        }
+      ]
+    },
+    "outcrops": {
+      "node": "slope",
+      "from": 30,
+      "to": 40,
+      "breakup": {
+        "node": "fractal",
+        "scale": 6,
+        "smallest": 0.3,
+        "amplitude": 10,
+        "seed": 1
+      }
+    },
+    "floor": {
+      "node": "add",
+      "inputs": [
+        {
+          "node": "fractal",
+          "scale": 2,
+          "smallest": 0.005,
+          "amplitude": 0.04,
+          "seed": 13
+        },
+        {
+          "node": "multiply",
+          "inputs": [
+            {
+              "node": "cells",
+              "style": "stones",
+              "scale": 0.25,
+              "amplitude": 0.14,
+              "seed": 14
+            },
+            {
+              "node": "smoothstep",
+              "from": 0.15,
+              "to": 0.6,
+              "input": {
+                "node": "fractal",
+                "style": "billow",
+                "scale": 5,
+                "smallest": 0.5,
+                "seed": 15
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "talus": {
+      "node": "slope",
+      "from": 6,
+      "to": 14,
+      "breakup": {
+        "node": "fractal",
+        "scale": 4,
+        "smallest": 0.2,
+        "amplitude": 5,
+        "seed": 16
+      }
+    }
+  },
+  "materials": {
+    "ROCK": {
+      "type": "rock",
+      "preset": "sandstone",
+      "scale": 1.5,
+      "lichen": 0.12,
+      "seed": 4
+    }
+  },
+  "media": {},
+  "camera": {
+    "location": [
+      0,
+      4.3,
+      0
+    ],
+    "lookat": [
+      6,
+      9,
+      40
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.6,
+    "aperture": 0.0
+  },
+  "lights": [
+    {
+      "location": [
+        -8000,
+        3000,
+        -3000
+      ],
+      "intensity": 100000000.0,
+      "color": [
+        1,
+        0.88,
+        0.74
+      ]
+    }
+  ],
+  "objects": [
+    {
+      "type": "terrain",
+      "heightmap": "$hills",
+      "material": "ROCK",
+      "displacement": {
+        "node": "blend",
+        "a": {
+          "node": "blend",
+          "a": "$floor",
+          "b": "$scree",
+          "mask": "$talus"
+        },
+        "b": "$rock",
+        "mask": "$outcrops"
+      },
+      "displacement_detail": {
+        "pixels": 1,
+        "max_level": 8
+      }
+    },
+    {
+      "type": "skysphere",
+      "ozone": false,
+      "rayleigh_r": 1.16e-05,
+      "rayleigh_g": 2.7e-05,
+      "rayleigh_b": 6.62e-05,
+      "sun_direction": "$sun",
+      "brightness": 12
+    }
+  ]
+}

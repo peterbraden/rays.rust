@@ -96,6 +96,7 @@ mod shapes {
     pub mod tessellated;
     pub mod text;
     pub mod lod;
+    pub mod displaced;
 }
 mod octree;
 mod bvh;
@@ -138,6 +139,7 @@ mod participatingmedia;
 mod noise;
 mod terrain;
 mod expr;
+mod graph;
 mod volume;
 mod glare;
 mod variance;

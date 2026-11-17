@@ -90,7 +90,7 @@ enum FractalStyle { Perlin, Ridged, Billow }
 enum CellStyle { F1, Edges, Stones }
 
 #[derive(Clone)]
-enum Node {
+enum Op {
     Const(f64),
     Fractal { noise: Box<SeededNoise>, style: FractalStyle, scale: f64, smallest: f64, roughness: f64, lacunarity: f64, amplitude: f64, plan: bool },
     Cells { seed: u32, style: CellStyle, scale: f64, amplitude: f64, plan: bool },
@@ -111,6 +111,14 @@ enum Node {
     Remap { input: Box<Node>, from: (f64, f64), to: (f64, f64) },
     Terrace { input: Box<Node>, step: f64, sharpness: f64 },
     Warp { input: Box<Node>, by: [Box<Node>; 3] },
+}
+
+/// A node: its operation, and the bounds on its value, found once when it is parsed (every
+/// evaluation clamps to them).
+#[derive(Clone)]
+struct Node {
+    op: Op,
+    range: (f64, f64),
 }
 
 /// A parsed graph: its output node.
@@ -164,110 +172,142 @@ fn mul_range(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
 }
 
 impl Node {
+    fn new(op: Op) -> Node {
+        let range = op.range();
+        Node { op, range }
+    }
+
     fn eval(&self, c: &Context) -> f64 {
-        let v = match self {
-            Node::Const(v) => *v,
-            Node::Fractal { noise, style, scale, smallest, roughness, lacunarity, amplitude, plan } => {
+        let v = match &self.op {
+            Op::Const(v) => *v,
+            Op::Fractal { noise, style, scale, smallest, roughness, lacunarity, amplitude, plan } => {
                 fractal(noise, *style, *scale, *smallest, *roughness, *lacunarity, *plan, c) * amplitude
             },
-            Node::Cells { seed, style, scale, amplitude, plan } => cells(*seed, *style, *scale, *plan, c) * amplitude,
-            Node::Slope { from, to, breakup } => {
+            Op::Cells { seed, style, scale, amplitude, plan } => cells(*seed, *style, *scale, *plan, c) * amplitude,
+            Op::Slope { from, to, breakup } => {
                 let s = c.slope() + breakup.as_ref().map_or(0., |b| b.eval(c));
                 smoothstep(*from, *to, s)
             },
-            Node::Altitude { from, to, breakup } => {
+            Op::Altitude { from, to, breakup } => {
                 let h = c.p.y + breakup.as_ref().map_or(0., |b| b.eval(c));
                 smoothstep(*from, *to, h)
             },
-            Node::Strata { step, sharpness, amplitude, breakup } => {
+            Op::Strata { step, sharpness, amplitude, breakup } => {
                 let h = c.p.y + breakup.as_ref().map_or(0., |b| b.eval(c));
                 (terrace(h, *step, *sharpness) - h) / step * amplitude
             },
-            Node::Expr { expr, inputs, .. } => {
-                let mut vars = vec![c.p.x, c.p.y, c.p.z, c.slope()];
-                vars.extend(inputs.iter().map(|n| n.eval(c)));
-                expr.eval(&vars)
+            Op::Expr { expr, inputs, .. } => {
+                // On the stack, unless there are many inputs.
+                let mut vars = [0.; 16];
+                if inputs.len() + 4 > vars.len() {
+                    let mut vars = vec![c.p.x, c.p.y, c.p.z, c.slope()];
+                    vars.extend(inputs.iter().map(|n| n.eval(c)));
+                    return expr.eval(&vars).clamp(self.range.0, self.range.1);
+                }
+                vars[.. 4].copy_from_slice(&[c.p.x, c.p.y, c.p.z, c.slope()]);
+                for (v, n) in vars[4 ..].iter_mut().zip(inputs) {
+                    *v = n.eval(c);
+                }
+                expr.eval(&vars[.. 4 + inputs.len()])
             },
-            Node::Add(v) => v.iter().map(|n| n.eval(c)).sum(),
-            Node::Multiply(v) => v.iter().map(|n| n.eval(c)).product(),
-            Node::Min(v) => v.iter().map(|n| n.eval(c)).fold(f64::INFINITY, f64::min),
-            Node::Max(v) => v.iter().map(|n| n.eval(c)).fold(f64::NEG_INFINITY, f64::max),
-            Node::Subtract(a, b) => a.eval(c) - b.eval(c),
-            Node::Blend { a, b, mask } => {
+            Op::Add(v) => v.iter().map(|n| n.eval(c)).sum(),
+            Op::Multiply(v) => {
+                // Inputs after a zero are left unevaluated: often a mask, or stones where there
+                // are none.
+                let mut product = 1.;
+                for n in v {
+                    product *= n.eval(c);
+                    if product == 0. { break }
+                }
+                product
+            },
+            Op::Min(v) => v.iter().map(|n| n.eval(c)).fold(f64::INFINITY, f64::min),
+            Op::Max(v) => v.iter().map(|n| n.eval(c)).fold(f64::NEG_INFINITY, f64::max),
+            Op::Subtract(a, b) => a.eval(c) - b.eval(c),
+            Op::Blend { a, b, mask } => {
                 let m = mask.eval(c).clamp(0., 1.);
                 // Only what is seen: either side alone where the mask is 0 or 1.
                 if m <= 0. { a.eval(c) } else if m >= 1. { b.eval(c) } else { a.eval(c) * (1. - m) + b.eval(c) * m }
             },
-            Node::Clamp { input, lo, hi } => input.eval(c).clamp(*lo, *hi),
-            Node::Abs(a) => a.eval(c).abs(),
-            Node::Power { input, exponent } => {
+            Op::Clamp { input, lo, hi } => input.eval(c).clamp(*lo, *hi),
+            Op::Abs(a) => a.eval(c).abs(),
+            Op::Power { input, exponent } => {
                 let v = input.eval(c);
                 v.signum() * v.abs().powf(*exponent)
             },
-            Node::Smoothstep { input, from, to } => smoothstep(*from, *to, input.eval(c)),
-            Node::Remap { input, from, to } => {
+            Op::Smoothstep { input, from, to } => smoothstep(*from, *to, input.eval(c)),
+            Op::Remap { input, from, to } => {
                 let t = if from.1 != from.0 { (input.eval(c) - from.0) / (from.1 - from.0) } else { 0. };
                 to.0 + t * (to.1 - to.0)
             },
-            Node::Terrace { input, step, sharpness } => terrace(input.eval(c), *step, *sharpness),
-            Node::Warp { input, by } => {
+            Op::Terrace { input, step, sharpness } => terrace(input.eval(c), *step, *sharpness),
+            Op::Warp { input, by } => {
                 let d = Vector3::new(by[0].eval(c), by[1].eval(c), by[2].eval(c));
                 input.eval(&Context { p: c.p + d, ..*c })
             },
         };
-        let (lo, hi) = self.range();
-        v.clamp(lo, hi)
+        v.clamp(self.range.0, self.range.1)
     }
 
+    fn range(&self) -> (f64, f64) {
+        self.range
+    }
+
+    fn finest(&self) -> f64 {
+        self.op.finest()
+    }
+}
+
+impl Op {
     /// Bounds on the node's value, by interval arithmetic.
     fn range(&self) -> (f64, f64) {
         match self {
-            Node::Const(v) => (*v, *v),
-            Node::Fractal { style, amplitude, .. } => {
+            Op::Const(v) => (*v, *v),
+            Op::Fractal { style, amplitude, .. } => {
                 let a = amplitude.abs();
                 match style { FractalStyle::Perlin => (-a, a), _ => (amplitude.min(0.), amplitude.max(0.)) }
             },
-            Node::Cells { amplitude, .. } => (amplitude.min(0.), amplitude.max(0.)),
-            Node::Strata { amplitude, .. } => (-amplitude.abs(), amplitude.abs()),
-            Node::Slope { .. } | Node::Altitude { .. } | Node::Smoothstep { .. } => (0., 1.),
-            Node::Expr { range, .. } => *range,
-            Node::Add(v) => v.iter().map(Node::range).fold((0., 0.), |a, b| (a.0 + b.0, a.1 + b.1)),
-            Node::Multiply(v) => v.iter().map(Node::range).fold((1., 1.), mul_range),
-            Node::Min(v) => v.iter().map(Node::range).fold((f64::INFINITY, f64::INFINITY), |a, b| (a.0.min(b.0), a.1.min(b.1))),
-            Node::Max(v) => v.iter().map(Node::range).fold((f64::NEG_INFINITY, f64::NEG_INFINITY), |a, b| (a.0.max(b.0), a.1.max(b.1))),
-            Node::Subtract(a, b) => {
+            Op::Cells { amplitude, .. } => (amplitude.min(0.), amplitude.max(0.)),
+            Op::Strata { amplitude, .. } => (-amplitude.abs(), amplitude.abs()),
+            Op::Slope { .. } | Op::Altitude { .. } | Op::Smoothstep { .. } => (0., 1.),
+            Op::Expr { range, .. } => *range,
+            Op::Add(v) => v.iter().map(Node::range).fold((0., 0.), |a, b| (a.0 + b.0, a.1 + b.1)),
+            Op::Multiply(v) => v.iter().map(Node::range).fold((1., 1.), mul_range),
+            Op::Min(v) => v.iter().map(Node::range).fold((f64::INFINITY, f64::INFINITY), |a, b| (a.0.min(b.0), a.1.min(b.1))),
+            Op::Max(v) => v.iter().map(Node::range).fold((f64::NEG_INFINITY, f64::NEG_INFINITY), |a, b| (a.0.max(b.0), a.1.max(b.1))),
+            Op::Subtract(a, b) => {
                 let (a, b) = (a.range(), b.range());
                 (a.0 - b.1, a.1 - b.0)
             },
-            Node::Blend { a, b, .. } => {
+            Op::Blend { a, b, .. } => {
                 let (a, b) = (a.range(), b.range());
                 (a.0.min(b.0), a.1.max(b.1))
             },
-            Node::Clamp { input, lo, hi } => {
+            Op::Clamp { input, lo, hi } => {
                 let r = input.range();
                 (r.0.clamp(*lo, *hi), r.1.clamp(*lo, *hi))
             },
-            Node::Abs(a) => {
+            Op::Abs(a) => {
                 let (lo, hi) = a.range();
                 if lo >= 0. { (lo, hi) } else if hi <= 0. { (-hi, -lo) } else { (0., hi.max(-lo)) }
             },
-            Node::Power { input, exponent } => {
+            Op::Power { input, exponent } => {
                 let (lo, hi) = input.range();
                 let m = lo.abs().max(hi.abs()).powf(*exponent);
                 (if lo < 0. { -m } else { lo.powf(*exponent).min(m) }, if hi > 0. { m } else { -(hi.abs().powf(*exponent)) })
             },
-            Node::Remap { input, from, to } => {
+            Op::Remap { input, from, to } => {
                 let r = input.range();
                 let f = |v: f64| if from.1 != from.0 { to.0 + (v - from.0) / (from.1 - from.0) * (to.1 - to.0) } else { to.0 };
                 let (a, b) = (f(r.0), f(r.1));
                 (a.min(b), a.max(b))
             },
             // Terracing keeps values within a step of where they were.
-            Node::Terrace { input, step, .. } => {
+            Op::Terrace { input, step, .. } => {
                 let r = input.range();
                 (r.0 - step.abs(), r.1 + step.abs())
             },
-            Node::Warp { input, .. } => input.range(),
+            Op::Warp { input, .. } => input.range(),
         }
     }
 
@@ -275,18 +315,18 @@ impl Node {
     /// scale; infinite for a node with none.
     fn finest(&self) -> f64 {
         let children: Vec<&Node> = match self {
-            Node::Fractal { smallest, .. } => return *smallest,
-            Node::Cells { scale, .. } => return 0.1 * scale,
-            Node::Const(_) => return f64::INFINITY,
-            Node::Strata { step, breakup, .. } => return breakup.as_ref().map_or(f64::INFINITY, |b| b.finest()).min(0.25 * step),
-            Node::Slope { breakup, .. } | Node::Altitude { breakup, .. } => breakup.iter().map(|b| &**b).collect(),
-            Node::Expr { inputs, .. } => inputs.iter().collect(),
-            Node::Add(v) | Node::Multiply(v) | Node::Min(v) | Node::Max(v) => v.iter().collect(),
-            Node::Subtract(a, b) => vec![a, b],
-            Node::Blend { a, b, mask } => vec![a, b, mask],
-            Node::Clamp { input, .. } | Node::Abs(input) | Node::Power { input, .. } | Node::Smoothstep { input, .. }
-                | Node::Remap { input, .. } | Node::Terrace { input, .. } => vec![input],
-            Node::Warp { input, by } => vec![input, &by[0], &by[1], &by[2]],
+            Op::Fractal { smallest, .. } => return *smallest,
+            Op::Cells { scale, .. } => return 0.1 * scale,
+            Op::Const(_) => return f64::INFINITY,
+            Op::Strata { step, breakup, .. } => return breakup.as_ref().map_or(f64::INFINITY, |b| b.finest()).min(0.25 * step),
+            Op::Slope { breakup, .. } | Op::Altitude { breakup, .. } => breakup.iter().map(|b| &**b).collect(),
+            Op::Expr { inputs, .. } => inputs.iter().collect(),
+            Op::Add(v) | Op::Multiply(v) | Op::Min(v) | Op::Max(v) => v.iter().collect(),
+            Op::Subtract(a, b) => vec![a, b],
+            Op::Blend { a, b, mask } => vec![a, b, mask],
+            Op::Clamp { input, .. } | Op::Abs(input) | Op::Power { input, .. } | Op::Smoothstep { input, .. }
+                | Op::Remap { input, .. } | Op::Terrace { input, .. } => vec![input],
+            Op::Warp { input, by } => vec![input, &by[0], &by[1], &by[2]],
         };
         children.into_iter().map(Node::finest).fold(f64::INFINITY, f64::min)
     }
@@ -444,7 +484,7 @@ fn children(o: &Value) -> Result<Vec<Node>, String> {
 
 fn parse_node(v: &Value) -> Result<Node, String> {
     match v {
-        Value::Number(n) => return Ok(Node::Const(n.as_f64().unwrap())),
+        Value::Number(n) => return Ok(Node::new(Op::Const(n.as_f64().unwrap()))),
         Value::String(s) => return parse_expr(s, &Value::Null, (f64::NEG_INFINITY, f64::INFINITY)),
         Value::Object(_) => {},
         _ => return Err(format!("a graph node is a number, an expression or an object, not {}", v)),
@@ -453,8 +493,8 @@ fn parse_node(v: &Value) -> Result<Node, String> {
     let kind = o["node"].as_str().or_else(|| o["type"].as_str()).ok_or_else(|| format!("graph node needs a \"node\": {}", o))?;
     let seed = || o["seed"].as_u64().unwrap_or(0);
     let plan = o["plan"].as_bool().unwrap_or(false);
-    Ok(match kind {
-        "constant" => Node::Const(num(o, "value", 0.)?),
+    Ok(Node::new(match kind {
+        "constant" => Op::Const(num(o, "value", 0.)?),
         "fractal" => {
             let scale = num(o, "scale", 10.)?;
             let style = match o["style"].as_str().unwrap_or("perlin") {
@@ -467,7 +507,7 @@ fn parse_node(v: &Value) -> Result<Node, String> {
             if lacunarity <= 1. || scale <= 0. {
                 return Err("a fractal's scale must be positive and its lacunarity above 1".into());
             }
-            Node::Fractal { noise: Box::new(SeededNoise::new(seed())), style, scale, smallest: num(o, "smallest", scale / 256.)?.max(1e-6),
+            Op::Fractal { noise: Box::new(SeededNoise::new(seed())), style, scale, smallest: num(o, "smallest", scale / 256.)?.max(1e-6),
                 roughness: num(o, "roughness", 0.5)?, lacunarity, amplitude: num(o, "amplitude", 1.)?, plan }
         },
         "cells" => {
@@ -481,54 +521,54 @@ fn parse_node(v: &Value) -> Result<Node, String> {
             if scale <= 0. {
                 return Err("cells' scale must be positive".into());
             }
-            Node::Cells { seed: seed() as u32, style, scale, amplitude: num(o, "amplitude", 1.)?, plan }
+            Op::Cells { seed: seed() as u32, style, scale, amplitude: num(o, "amplitude", 1.)?, plan }
         },
         "slope" | "altitude" => {
             let (from, to) = (num(o, "from", 0.)?, num(o, "to", if kind == "slope" { 90. } else { 1. })?);
             let breakup = o.get("breakup").map(parse_node).transpose()?.map(Box::new);
-            if kind == "slope" { Node::Slope { from, to, breakup } } else { Node::Altitude { from, to, breakup } }
+            if kind == "slope" { Op::Slope { from, to, breakup } } else { Op::Altitude { from, to, breakup } }
         },
         "strata" => {
             let step = num(o, "step", 1.)?;
             if step <= 0. {
                 return Err("strata's step must be positive".into());
             }
-            Node::Strata { step, sharpness: num(o, "sharpness", 0.8)?, amplitude: num(o, "amplitude", 0.5 * step)?,
+            Op::Strata { step, sharpness: num(o, "sharpness", 0.8)?, amplitude: num(o, "amplitude", 0.5 * step)?,
                 breakup: o.get("breakup").map(parse_node).transpose()?.map(Box::new) }
         },
         "expr" => {
             let text = o["expr"].as_str().ok_or("an expr node needs an \"expr\" string")?;
-            parse_expr(text, &o["inputs"], pair(o, "range", (f64::NEG_INFINITY, f64::INFINITY))?)?
+            return parse_expr(text, &o["inputs"], pair(o, "range", (f64::NEG_INFINITY, f64::INFINITY))?)
         },
-        "add" => Node::Add(children(o)?),
-        "multiply" => Node::Multiply(children(o)?),
-        "min" => Node::Min(children(o)?),
-        "max" => Node::Max(children(o)?),
-        "subtract" => Node::Subtract(child(o, "a")?, child(o, "b")?),
-        "blend" => Node::Blend { a: child(o, "a")?, b: child(o, "b")?, mask: child(o, "mask")? },
-        "clamp" => Node::Clamp { input: child(o, "input")?, lo: num(o, "min", f64::NEG_INFINITY)?, hi: num(o, "max", f64::INFINITY)? },
-        "abs" => Node::Abs(child(o, "input")?),
-        "power" => Node::Power { input: child(o, "input")?, exponent: num(o, "exponent", 1.)? },
-        "smoothstep" => Node::Smoothstep { input: child(o, "input")?, from: num(o, "from", 0.)?, to: num(o, "to", 1.)? },
-        "remap" => Node::Remap { input: child(o, "input")?, from: pair(o, "from", (0., 1.))?, to: pair(o, "to", (0., 1.))? },
-        "terrace" => Node::Terrace { input: child(o, "input")?, step: num(o, "step", 1.)?, sharpness: num(o, "sharpness", 0.8)? },
+        "add" => Op::Add(children(o)?),
+        "multiply" => Op::Multiply(children(o)?),
+        "min" => Op::Min(children(o)?),
+        "max" => Op::Max(children(o)?),
+        "subtract" => Op::Subtract(child(o, "a")?, child(o, "b")?),
+        "blend" => Op::Blend { a: child(o, "a")?, b: child(o, "b")?, mask: child(o, "mask")? },
+        "clamp" => Op::Clamp { input: child(o, "input")?, lo: num(o, "min", f64::NEG_INFINITY)?, hi: num(o, "max", f64::INFINITY)? },
+        "abs" => Op::Abs(child(o, "input")?),
+        "power" => Op::Power { input: child(o, "input")?, exponent: num(o, "exponent", 1.)? },
+        "smoothstep" => Op::Smoothstep { input: child(o, "input")?, from: num(o, "from", 0.)?, to: num(o, "to", 1.)? },
+        "remap" => Op::Remap { input: child(o, "input")?, from: pair(o, "from", (0., 1.))?, to: pair(o, "to", (0., 1.))? },
+        "terrace" => Op::Terrace { input: child(o, "input")?, step: num(o, "step", 1.)?, sharpness: num(o, "sharpness", 0.8)? },
         "warp" => {
             let by = if o.get("x").is_some() || o.get("y").is_some() || o.get("z").is_some() {
-                let axis = |k: &str| o.get(k).map_or(Ok(Box::new(Node::Const(0.))), |v| parse_node(v).map(Box::new));
+                let axis = |k: &str| o.get(k).map_or(Ok(Box::new(Node::new(Op::Const(0.)))), |v| parse_node(v).map(Box::new));
                 [axis("x")?, axis("y")?, axis("z")?]
             } else {
                 // A vector of noise: three fractals of the same scale, seeded apart.
                 let (amount, scale, octaves) = (num(o, "amount", 1.)?, num(o, "scale", 10.)?, num(o, "octaves", 3.)?.max(1.));
                 let lacunarity: f64 = 2.03;
                 let smallest = scale / lacunarity.powf(octaves - 1.) * 0.999;
-                let axis = |k: u64| Box::new(Node::Fractal { noise: Box::new(SeededNoise::new(seed().wrapping_mul(3).wrapping_add(k + 101))),
-                    style: FractalStyle::Perlin, scale, smallest, roughness: 0.5, lacunarity, amplitude: amount, plan: false });
+                let axis = |k: u64| Box::new(Node::new(Op::Fractal { noise: Box::new(SeededNoise::new(seed().wrapping_mul(3).wrapping_add(k + 101))),
+                    style: FractalStyle::Perlin, scale, smallest, roughness: 0.5, lacunarity, amplitude: amount, plan: false }));
                 [axis(0), axis(1), axis(2)]
             };
-            Node::Warp { input: child(o, "input")?, by }
+            Op::Warp { input: child(o, "input")?, by }
         },
         k => return Err(format!("unknown graph node \"{}\"", k)),
-    })
+    }))
 }
 
 fn parse_expr(text: &str, inputs: &Value, range: (f64, f64)) -> Result<Node, String> {
@@ -541,7 +581,7 @@ fn parse_expr(text: &str, inputs: &Value, range: (f64, f64)) -> Result<Node, Str
         }
     }
     let expr = Expr::parse(text, &names).map_err(|e| format!("in expression \"{}\": {}", text, e))?;
-    Ok(Node::Expr { expr, inputs: nodes, range })
+    Ok(Node::new(Op::Expr { expr, inputs: nodes, range }))
 }
 
 #[cfg(test)]

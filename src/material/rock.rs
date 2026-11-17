@@ -191,6 +191,64 @@ fn smoothstep(e0: f64, e1: f64, x: f64) -> f64 {
     t * t * (3. - 2. * t)
 }
 
+/// Where a point lies in cross-bedded sandstone (`cross_beds`).
+#[derive(Clone, Copy, Debug)]
+pub struct Lamina {
+    /// Which lamina (whole part) and where across it (fraction), counted within its set.
+    pub phase: f64,
+    /// A number for the lamina, unique within the rock, for its colour and hardness.
+    pub id: i64,
+    /// 1 on a set's bounding surface, falling to 0 within a few percent of the set's thickness.
+    pub boundary: f64,
+    /// How hard the lamina is, 0 to 1: coarse, well-cemented laminae weather out as ribs, fine
+    /// ones are worn back, so this is its relief on a weathered face.
+    pub hardness: f64,
+}
+
+/// Cross-bedded sandstone at `q` (in the rock's own units), in sets about `set` thick: the
+/// foresets of the dunes that became aeolian sandstone (Navajo, De Chelly). After the
+/// sedimentology (eg. Rubin, "Cross-bedding, bedforms, and paleocurrents", SEPM 1987):
+/// - Sets are wedges between bounding surfaces that are near level but tilted and wavy, each
+///   set truncating the tops of the laminae of the one below.
+/// - Within a set, laminae dip steeply (up to the angle of repose) near its top and curve down
+///   to meet its base tangentially, as a dune's avalanche face does at its toe.
+/// - Each set dips its own way, as the wind and dunes did; laminae are of varying thickness,
+///   with crisp edges, and differ from each other in colour and hardness.
+pub fn cross_beds(noise: &SeededNoise, q: Vector3<f64>, set: f64) -> Lamina {
+    let set = set.max(1e-9);
+    // Bounding surfaces: level on average, tilted and wavy, so the sets are wedges.
+    let tilt = 0.08 * (q.x + 0.6 * q.z) / set;
+    let y = q.y / set + tilt * 0.5 + 0.35 * noise.fbm(q / (5. * set) + Vector3::new(5., 0., 0.), 2);
+    let k = y.floor();
+    let within = y - k;
+    let hash = |salt: f64| ((k * 12.9898 + salt * 78.233).sin() * 43_758.545_3).fract().abs();
+    let azimuth = hash(1.) * std::f64::consts::TAU;
+    let (along, across) = ((q.x * azimuth.cos() + q.z * azimuth.sin()) / set, (-q.x * azimuth.sin() + q.z * azimuth.cos()) / set);
+    // Tangential foresets: a lamina is a curve along which `along` grows as the square root of
+    // the height in the set, so it is steep above and flattens towards the base; troughs bend
+    // the laminae across the set.
+    let steepness = 0.8 + 0.8 * hash(2.);
+    // Troughs: the laminae bend into festoons, arcs a few set-thicknesses across, so a level
+    // surface cutting them shows the swirls of slickrock rather than straight stripes.
+    let width = 1.2 + 1.2 * hash(3.);
+    let t = (across / width).rem_euclid(1.) - 0.5;
+    let trough = 2.5 * width * t * t + 0.4 * noise.fbm(Vector3::new(across * 0.3, k * 3.3, along * 0.3), 2);
+    let coordinate = along + trough - steepness * within.max(0.).sqrt();
+    // Laminae of varying thickness: the coordinate stretched by noise before it is counted.
+    let spacing = 0.07 + 0.05 * hash(4.);
+    let wobble = 0.5 * noise.fbm(Vector3::new(coordinate * 3., k * 7.1, across * 0.5), 2);
+    let phase = coordinate / spacing + wobble;
+    let n = phase.floor();
+    let id = (n as i64).wrapping_mul(7919).wrapping_add((k as i64).wrapping_mul(104_729));
+    let h = ((id as f64 * 0.618_033_988_7).fract() + 1.).fract();
+    // Each lamina's hardness from its number; a thin, softer parting at its edges.
+    let f = phase - n;
+    let parting = smoothstep(0.2, 0., f.min(1. - f));
+    let hardness = (0.35 + 0.65 * h) * (1. - 0.5 * parting);
+    let boundary = smoothstep(0.05, 0., within.min(1. - within));
+    Lamina { phase, id, boundary, hardness }
+}
+
 /// Refractive index of water.
 const WATER: f64 = 1.33;
 
@@ -319,24 +377,11 @@ impl Rock {
         smoothstep(0.3, 0.55, n) * patch
     }
 
-    /// The phase of the cross-bedded laminae at `q`, and how close it is to a set's bounding
-    /// surface (1 on it): within each set the laminae dip at 15 to 30 degrees, towards a
-    /// direction of the set's own, and curve (as trough cross-beds do), so they meet the set's
-    /// level base and top at an angle.
+    /// The cross-bedded laminae at `q` (`cross_beds`): the lamina's phase and how close the
+    /// point is to a set's bounding surface (1 on it).
     fn cross_beds(&self, q: Vector3<f64>) -> (f64, f64) {
-        let set = self.cross_set.max(1e-9);
-        let y = q.y + 0.3 * set * self.noise.fbm(q / (6. * set) + Vector3::new(5., 0., 0.), 2);
-        let k = (y / set).floor();
-        let hash = |salt: f64| ((k * 12.9898 + salt * 78.233).sin() * 43_758.545_3).fract().abs();
-        let azimuth = hash(1.) * std::f64::consts::TAU;
-        let dip = (15. + 15. * hash(2.)).to_radians().tan();
-        let (along, across) = (q.x * azimuth.cos() + q.z * azimuth.sin(), -q.x * azimuth.sin() + q.z * azimuth.cos());
-        let curve = 0.4 * (across / (3. * set)).sin() * set;
-        let spacing = 0.06 * set;
-        let phase = (y + dip * along + curve) / spacing;
-        let within = y / set - k;
-        let boundary = smoothstep(0.06, 0., within.min(1. - within));
-        (phase, boundary)
+        let l = cross_beds(&self.noise, q, self.cross_set);
+        (l.phase, l.boundary)
     }
 
     /// The shading normal: the surface normal tilted by the relief.
@@ -403,11 +448,13 @@ impl Rock {
             c = c.blend(&bed, st.strata_amount * (0.75 * band + 0.25 * fine) * (1. - self.cross_bedding));
         }
         if self.cross_bedding > 0. {
-            let (phase, boundary) = self.cross_beds(q);
-            let lamina = (0.5 + 0.5 * (phase * std::f64::consts::TAU).sin()).powi(2);
-            let bed = if self.beds.is_empty() { st.strata_color } else { self.beds[(phase.floor() as i64).rem_euclid(self.beds.len() as i64) as usize] };
-            c = c.blend(&bed, self.cross_bedding * (0.45 * lamina + 0.3));
-            c = c * (1. - 0.25 * self.cross_bedding * boundary);
+            let l = cross_beds(&self.noise, q, self.cross_set);
+            // Each lamina its own colour; harder ones (the ribs) paler, the partings between
+            // them darker; a set's bounding surface a thin darker line.
+            let bed = if self.beds.is_empty() { st.strata_color } else { self.beds[l.id.rem_euclid(self.beds.len() as i64) as usize] };
+            c = c.blend(&bed, self.cross_bedding * 0.65);
+            c = c * (1. + self.cross_bedding * 0.25 * (l.hardness - 0.6));
+            c = c * (1. - 0.3 * self.cross_bedding * l.boundary);
         }
 
         // Mineral grains.

@@ -159,20 +159,19 @@ a bluer light than the noon sun and sky (`"white_balance": 7000`), warming the s
 photographer's shade setting would.
 ![desert at noon](./scenes/desert-noon.png)
 
-From the rim of a higher mesa at dawn (`desert-overlook.json`), after the view from Hunts
-Mesa: its top weathered into rounded slickrock domes (`domes`) of cross-bedded sandstone
-(`"cross_bedding"`), pocked with honeycomb pits (`"pits"`), rough down to the pixel with
-POV-Ray-style turbulent bump mapping and cracked by crackle (`"fractal"`, `"crackle"`), with
-Utah junipers, sagebrush and rabbitbrush in the hollows. Below, a valley with a few landmark
-buttes placed by hand (`buttes`), split along their vertical joints into columns of their own heights at the rims (`joints`),
-on cones of paler, pinker shale, the floor cut by dry washes (`washes`), with pale sand
-gathered in the washes and hollows and between the domes, and the plants crowding along the
-washes (a `{"terrain": "washes" | "hollows" | "joints"}` texture as a `mix` amount and a
-forest's `"favour"`); the country rises to a few long tablelands at the horizon (`valley`).
-The slickrock steps down in thin ledges and holds potholes. Low side light, a filmic tone curve (`"tonemap":
-"filmic"`) and a little saturation (`"saturation"`) give it a photograph's contrast. The
-viewpoint mesa is raised by `uplift`; the near country is a 1.5 m grid and the far, out to the
-horizon, a 30 m grid of the same mesas (`domain`) with a `hole` where the near one is.
+From the rim of a higher mesa (`desert-overlook.json`), after the view from Hunts Mesa: its
+top weathered into slickrock domes (`domes`) of cross-bedded sandstone, whose laminae curve
+into festoons, cut off by each set above (`material::rock::cross_beds`), and stand out as real
+relief on an 8 cm grid near the camera (`laminae`): harder laminae as ribs, partings worn
+back. The rock carries lichen, bleached patches, desert varnish and fine turbulent bump
+(`"fractal"`). Below, a valley of landmark buttes (`buttes`): flat, thin caprock over walls
+split into slabs and fins along one dominant set of joints (`joints`), standing on banded,
+ledged shale slopes; pale sand gathers in the washes and hollows, where the plants crowd
+(`{"terrain": ...}` textures and a forest's `"favour"`), and the country rises to long
+tablelands at the horizon (`valley`). Sunlit cumulus cast shadows across it; the sky is on the
+sun's scale, a filmic tone curve gives it a photograph's contrast, and it is rendered
+adaptively (`"adaptive"`). The near country is a 1.5 m grid and the far, to the horizon, a
+30 m grid of the same mesas (`domain`), each with a `hole` where the finer one is.
 ![desert overlook](./scenes/desert-overlook.png)
 
 ## Alpine terrain

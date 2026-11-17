@@ -1,8 +1,8 @@
 {
  "output": {
-  "exposure": 4,
+  "exposure": 2.0,
   "tonemap": "filmic",
-  "saturation": 1.35
+  "saturation": 1.2
  },
  "width": 864,
  "height": 1080,
@@ -28,7 +28,7 @@
    "roughness": 0.3,
    "floor_amplitude": 6,
    "floor_scale": 200,
-   "floor_ledges": 2,
+   "floor_ledges": 0,
    "seed": 21,
    "domain": [
     -40000,
@@ -95,7 +95,13 @@
     3500,
     7500
    ],
-   "cell_size": 1.5
+   "cell_size": 1.5,
+   "hole": [
+    -89.5,
+    690.5,
+    89.5,
+    959.5
+   ]
   },
   "far": {
    "type": "mesas",
@@ -113,7 +119,7 @@
    "roughness": 0.3,
    "floor_amplitude": 6,
    "floor_scale": 200,
-   "floor_ledges": 2,
+   "floor_ledges": 0,
    "seed": 21,
    "domain": [
     -40000,
@@ -187,6 +193,97 @@
     3400,
     7400
    ]
+  },
+  "close": {
+   "type": "mesas",
+   "height": 260,
+   "scale": 900,
+   "coverage": 0.12,
+   "cliff": 22,
+   "benches": 1,
+   "talus": 0.38,
+   "talus_width": 180,
+   "towers": 0.06,
+   "relief": 0.08,
+   "domes": 70,
+   "height_variation": 0.12,
+   "roughness": 0.3,
+   "floor_amplitude": 6,
+   "floor_scale": 200,
+   "floor_ledges": 0,
+   "seed": 21,
+   "domain": [
+    -40000,
+    -8000,
+    40000,
+    60000
+   ],
+   "uplift": [
+    0,
+    0,
+    1000,
+    220
+   ],
+   "valley": [
+    300,
+    4500,
+    4000,
+    12000
+   ],
+   "joints": [
+    45,
+    14
+   ],
+   "taper": 0.6,
+   "shoulder": 0.05,
+   "washes": 3,
+   "buttes": [
+    [
+     -500,
+     2300,
+     200
+    ],
+    [
+     700,
+     3000,
+     260
+    ],
+    [
+     -1500,
+     3900,
+     300
+    ],
+    [
+     1500,
+     4300,
+     220
+    ],
+    [
+     200,
+     5200,
+     350
+    ],
+    [
+     -2000,
+     6300,
+     500
+    ]
+   ],
+   "min": [
+    -90,
+    690
+   ],
+   "max": [
+    90,
+    960
+   ],
+   "cell_size": 0.08,
+   "laminae": {
+    "seed": 8,
+    "scale": 30,
+    "set": 0.12,
+    "relief": 0.06
+   }
   }
  },
  "geometries": {
@@ -197,6 +294,10 @@
   "far": {
    "type": "terrain",
    "heightmap": "$far"
+  },
+  "close": {
+   "type": "terrain",
+   "heightmap": "$close"
   }
  },
  "materials": {
@@ -370,8 +471,8 @@
      0.13
     ]
    ],
-   "dark_grain_amount": 0.01,
-   "light_grain_amount": 0.01,
+   "dark_grain_amount": 0,
+   "light_grain_amount": 0,
    "variety": 0.25,
    "variety_color": [
     0.7,
@@ -382,24 +483,80 @@
     [
      0,
      [
-      0.6,
-      0.3,
-      0.24
+      0.62,
+      0.29,
+      0.21
      ]
     ],
     [
-     60,
+     14,
      [
-      0.66,
-      0.35,
-      0.27
+      0.6,
+      0.45,
+      0.42
      ]
     ],
     [
-     110,
+     28,
      [
       0.62,
-      0.31,
+      0.29,
+      0.21
+     ]
+    ],
+    [
+     42,
+     [
+      0.6,
+      0.45,
+      0.42
+     ]
+    ],
+    [
+     56,
+     [
+      0.62,
+      0.29,
+      0.21
+     ]
+    ],
+    [
+     70,
+     [
+      0.6,
+      0.45,
+      0.42
+     ]
+    ],
+    [
+     84,
+     [
+      0.62,
+      0.29,
+      0.21
+     ]
+    ],
+    [
+     98,
+     [
+      0.6,
+      0.45,
+      0.42
+     ]
+    ],
+    [
+     112,
+     [
+      0.62,
+      0.29,
+      0.21
+     ]
+    ],
+    [
+     130,
+     [
+      0.66,
+      0.34,
       0.24
      ]
     ],
@@ -412,7 +569,7 @@
      ]
     ]
    ],
-   "layer_warp": 6,
+   "layer_warp": 3,
    "bump": 0.5,
    "bump_size": 0.15,
    "cracks": 0.1,
@@ -461,17 +618,17 @@
      0.12
     ]
    ],
-   "dark_grain_amount": 0.01,
-   "light_grain_amount": 0.01,
+   "dark_grain_amount": 0,
+   "light_grain_amount": 0,
    "variety": 0.3,
    "variety_color": [
     0.66,
     0.42,
     0.26
    ],
-   "varnish": 0.55,
+   "varnish": 0.65,
    "varnish_color": [
-    0.14,
+    0.16,
     0.08,
     0.06
    ],
@@ -527,7 +684,7 @@
    "fractal": 0.5,
    "fractal_size": 0.05,
    "fractal_h": 1.2,
-   "crackle": 0.4,
+   "crackle": 0.2,
    "crackle_size": 0.04
   },
   "LOWER": {
@@ -582,14 +739,14 @@
    "scale": 30,
    "seed": 8,
    "color": [
-    0.74,
-    0.38,
-    0.19
+    0.66,
+    0.28,
+    0.14
    ],
    "secondary": [
-    0.78,
-    0.47,
-    0.27
+    0.7,
+    0.35,
+    0.19
    ],
    "strata_spacing": 0.1,
    "strata_amount": 0.2,
@@ -597,47 +754,47 @@
     [
      0.6,
      0.26,
-     0.12
+     0.13
     ],
     [
-     0.84,
-     0.6,
-     0.42
+     0.78,
+     0.52,
+     0.36
     ],
     [
-     0.72,
-     0.36,
-     0.18
+     0.68,
+     0.33,
+     0.17
     ],
     [
-     0.8,
-     0.5,
-     0.3
+     0.74,
+     0.44,
+     0.27
     ],
     [
-     0.66,
-     0.3,
+     0.64,
+     0.29,
      0.15
     ]
    ],
-   "cross_bedding": 0.8,
-   "cross_set": 0.3,
+   "cross_bedding": 0.55,
+   "cross_set": 0.12,
    "pits": 0.45,
    "pit_size": 0.02,
-   "varnish": 0.25,
+   "varnish": 0.3,
    "varnish_color": [
     0.2,
     0.11,
     0.08
    ],
    "flutes": 0.2,
-   "dark_grain_amount": 0.01,
-   "light_grain_amount": 0.01,
-   "variety": 0.25,
+   "dark_grain_amount": 0,
+   "light_grain_amount": 0,
+   "variety": 0.35,
    "variety_color": [
-    0.74,
-    0.5,
-    0.34
+    0.86,
+    0.72,
+    0.58
    ],
    "layers": [
     [
@@ -682,13 +839,19 @@
     ]
    ],
    "layer_warp": 4,
-   "bump": 0.35,
+   "bump": 0.15,
    "cracks": 0.3,
-   "fractal": 0.5,
-   "fractal_size": 0.08,
+   "fractal": 0.2,
+   "fractal_size": 0.015,
    "fractal_h": 1.2,
-   "crackle": 0.2,
-   "crackle_size": 0.1
+   "crackle": 0.12,
+   "crackle_size": 0.15,
+   "lichen": 0.1,
+   "lichen_color": [
+    0.13,
+    0.13,
+    0.1
+   ]
   },
   "LOWLANDS": {
    "type": "mix",
@@ -921,9 +1084,9 @@
    "type": "skysphere",
    "ozone": true,
    "sun_direction": [
-    -0.8,
-    0.17,
-    -0.35
+    0.85,
+    0.22,
+    -0.45
    ],
    "multiple_scattering": true,
    "mie_coefficient": 6e-06
@@ -950,6 +1113,11 @@
   },
   {
    "type": "transform",
+   "item": "close",
+   "material": "GROUND"
+  },
+  {
+   "type": "transform",
    "item": "near",
    "material": "GROUND"
   },
@@ -961,7 +1129,10 @@
   {
    "type": "forest",
    "seed": 5,
-   "surface": "near",
+   "surface": [
+    "close",
+    "near"
+   ],
    "spacing": 6,
    "clearings": 0.35,
    "patch_size": 25,
@@ -1036,7 +1207,10 @@
   {
    "type": "forest",
    "seed": 9,
-   "surface": "near",
+   "surface": [
+    "close",
+    "near"
+   ],
    "spacing": 5,
    "clearings": 0.3,
    "patch_size": 20,
@@ -1046,7 +1220,7 @@
    "area": {
     "min": [
      -350,
-     620
+     760
     ],
     "max": [
      350,

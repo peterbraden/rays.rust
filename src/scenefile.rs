@@ -1427,7 +1427,8 @@ impl SceneFile {
         p.start = num("start", p.start);
         p.texture_period = num("texture_period", p.texture_period).max(1.);
         // A cloud to start from: `"bubble": {"center": [x, z] (m from the grid's corner; default
-        // its middle), "height": m, "radius": m, "warmth": K, "supersaturation": 0.05}`.
+        // its middle), "height": m (of its middle), "radius": m, "depth": m (top to bottom;
+        // default twice the radius: a ball), "warmth": K, "supersaturation": 0.05}`.
         if let Some(b) = o.get("bubble") {
             let (nx, _, nz) = p.size;
             let middle = Vector2::new(nx as f64, nz as f64) * p.cell / 2.;
@@ -1435,6 +1436,7 @@ impl SceneFile {
             p.bubble = Some(crate::procedural::harris_cumulus::Bubble {
                 centre: Vector3::new(c.x, SceneFile::parse_number(&b["height"], 1000.), c.y),
                 radius: SceneFile::parse_number(&b["radius"], 400.).max(1.),
+                height: SceneFile::parse_number(&b["depth"], 2. * SceneFile::parse_number(&b["radius"], 400.)).max(1.) / 2.,
                 warmth: SceneFile::parse_number(&b["warmth"], 2.),
                 supersaturation: SceneFile::parse_number(&b["supersaturation"], 0.05).max(0.),
             });

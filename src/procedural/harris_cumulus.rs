@@ -243,6 +243,9 @@ pub struct Bubble {
     /// Its middle: (x, height, z), m, across the grid from its corner.
     pub centre: Vector3<f64>,
     pub radius: f64,
+    /// Its vertical semi-axis (m): a tall ellipsoid seeds a cloud's body, cloudy from its base
+    /// up, where a ball rises as a lone thermal, a dome on a thin stem.
+    pub height: f64,
     pub warmth: f64,
     pub supersaturation: f64,
 }
@@ -408,7 +411,8 @@ impl CloudSimulation {
         }
         if let Some(b) = sim.params.bubble {
             for n in 0..sim.theta.data.len() {
-                let r = (sim.theta.position(n) - b.centre).norm() / b.radius;
+                let d = sim.theta.position(n) - b.centre;
+                let r = (Vector3::new(d.x / b.radius, d.y / b.height, d.z / b.radius)).norm();
                 if r >= 1. {
                     continue;
                 }
@@ -1490,7 +1494,7 @@ mod tests {
         p.forcing = Forcing::steady(0., 0.);
         let z = [0., 600., 3000.];
         p.sounding = Sounding { theta: Profile::new(&z, &[300., 300., 307.]), water: Profile::new(&z, &[0.016, 0.015, 0.006]), surface_pressure: 1e5 };
-        p.bubble = Some(Bubble { centre: Vector3::new(400., 900., 400.), radius: 300., warmth: 1.5, supersaturation: 0.05 });
+        p.bubble = Some(Bubble { centre: Vector3::new(400., 900., 400.), radius: 300., height: 300., warmth: 1.5, supersaturation: 0.05 });
         let mut sim = CloudSimulation::new(p);
         let top = |s: &CloudSimulation| (0..s.cloud.data.len()).filter(|n| s.cloud.data[*n] > 1e-5)
             .map(|n| s.cloud.position(n).y).fold(0., f64::max);

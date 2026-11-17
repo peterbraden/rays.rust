@@ -53,17 +53,18 @@
       "style": "brash",
       "center": [
         0,
-        -10
+        -2
       ],
       "extent": [
-        80,
-        30
+        130,
+        70
       ],
-      "concentration": 0.45,
+      "concentration": 0.5,
       "size": [
-        0.4,
-        12
+        0.25,
+        14
       ],
+      "clumping": 0.8,
       "seed": 1
     },
     {

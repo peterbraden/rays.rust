@@ -6,14 +6,10 @@
 //! of density ρ_w ≈ 1025 kg m⁻³ with the fraction 1 - ρ_i / ρ_w of its volume above the water:
 //! about a tenth for solid ice (917 kg m⁻³), more for a berg capped with lighter firn, which is
 //! why the default density here is 900 (an eighth). The waterline is found from the shape: the
-//! berg is star-shaped about its centre, its surface at distance R(ω) in each direction ω of a
-//! geodesic sphere, and the volume above a plane y = h is
-//!
-//! ```text
-//! V(h) = Σ_ω Δω ∫ r² [r ω_y > h] dr      (0 < r < R(ω))
-//! ```
-//!
-//! each integral in closed form; h is found by bisection so that V(h) / V(-∞) is that fraction.
+//! volume above a plane y = h is, by the divergence theorem, the sum over the parts of the
+//! mesh's triangles above it of the signed volumes of the tetrahedra they make with a point on
+//! the plane (`Iceberg::volume_above`), and h is found by bisection so that the fraction above
+//! is the freeboard's.
 //!
 //! Shapes follow the classes of the International Ice Patrol and the Canadian Ice Service
 //! (eg. MANICE, the Manual of Standard Procedures for Observing and Reporting Ice Conditions,
@@ -26,10 +22,12 @@
 //!
 //! - a few fracture planes, their edges rounded, for the faces where it broke away;
 //! - cleavage: the faces broken along planes, at two scales (slabs and chips), each Voronoi
-//!   cell of the face cut back to a plane of its own so that neighbours meet at sharp steps,
+//!   cell of the face cut back to a plane of its own so that neighbours meet at steep steps
+//!   (ramps a few of the mesh's vertices wide, which it can follow without a staircase),
 //!   the cells taller than wide so the facets stand in columns (`Cleavage`); the mesh's
 //!   normals are smoothed only across gentle edges, so the facets' edges stay crisp
-//!   (`creased`);
+//!   (`creased`); and the mesh is refined adaptively where the surface bends (`refine`), so
+//!   the facets' edges are straight rather than serrated by the triangles they cross;
 //! - erosion: a little lumpiness, and fine vertical flutes on the walls where meltwater runs
 //!   down;
 //! - a wave-cut notch at the waterline, where the sea melts it fastest (the overhang that
@@ -133,8 +131,12 @@ impl Iceberg {
         }
     }
 
-    /// Vertex positions and triangles in the berg's frame, about its centre, in metres.
-    fn shape(&self) -> IndexedMesh {
+    /// The berg's surface in the direction `d` from its centre, in its own frame, in metres,
+    /// and the starting directions and triangles to mesh it from: a geodesic sphere stretched
+    /// to the body's proportions, so that its vertices spread evenly over the surface rather
+    /// than evenly by angle (which would mesh a tall berg's walls coarsely).
+    #[allow(clippy::type_complexity)]
+    fn shape(&self, detail: u32) -> (impl Fn(&Vector3<f64>) -> Vector3<f64> + Sync + '_, Vec<Vector3<f64>>, Vec<[usize; 3]>) {
         let mut rng = Pcg32::new(self.seed, 23);
         let noise = SeededNoise::new(self.seed.wrapping_add(5));
         let (axes, p) = self.body(&mut rng);
@@ -170,17 +172,22 @@ impl Iceberg {
         let cleavage = if rounded { vec![] } else {
             vec![
                 Cleavage { cell: Vector3::new(0.22, 0.5, 0.22), depth: 0.04, tilt: 0.25, seed: self.seed.wrapping_add(101) },
-                Cleavage { cell: Vector3::new(0.06, 0.12, 0.06), depth: 0.006, tilt: 0.15, seed: self.seed.wrapping_add(202) },
+                Cleavage { cell: Vector3::new(0.06, 0.12, 0.06), depth: 0.006, tilt: 0.08, seed: self.seed.wrapping_add(202) },
             ]
         };
 
-        let (directions, triangles) = icosphere(self.detail);
+        let (directions, triangles) = icosphere(detail);
+        let directions: Vec<Vector3<f64>> = directions.iter().map(|d| d.component_mul(&axes).normalize()).collect();
+        // Steps between facets rise over half a metre (the mesh is refined to follow them).
+        let ramp = 0.5 / self.size;
+        let kind = self.kind;
+        let size = self.size;
         // The body, cut and shaped, in the direction `d`.
-        let body = |d: &Vector3<f64>| -> Vector3<f64> {
+        let body = move |d: &Vector3<f64>| -> Vector3<f64> {
             let r0 = (d.x.abs() / axes.x).powf(p) + (d.y.abs() / axes.y).powf(p) + (d.z.abs() / axes.z).powf(p);
             let q = d * r0.powf(-1. / p);
             let mut s: f64 = 1.;
-            match self.kind {
+            match kind {
                 Kind::Wedge => {
                     let along = q.dot(&slope);
                     if along > 0. { s = smin(s, 0.5 * axes.component_mul(&slope).norm() / along, 0.05); }
@@ -207,58 +214,64 @@ impl Iceberg {
             }
             q * s.max(0.05)
         };
-        let positions = directions.iter().map(|d| {
+        let surface = move |d: &Vector3<f64>| -> Vector3<f64> {
             let q = body(d);
-            // The face's normal, from the body's surface a little to either side.
+            // The face's normal, from the body's surface to either side: far enough (a few
+            // metres) that it turns smoothly round the corners between fracture faces, so the
+            // cuts made along it don't tear there.
             let (t1, t2) = crate::material::phase::orthonormal_basis(d);
-            let e = 1e-4;
-            let normal = (body(&(d + t1 * e).normalize()) - q).cross(&(body(&(d + t2 * e).normalize()) - q))
+            let e = (3. / size).min(0.03);
+            let side = |t: Vector3<f64>| body(&(d + t * e).normalize()) - body(&(d - t * e).normalize());
+            let normal = side(t1).cross(&side(t2))
                 .try_normalize(1e-18)
                 .map(|n| if n.dot(d) < 0. { -n } else { n })
                 .unwrap_or(*d);
             // Cleaved back, less on the snow-covered top.
             let top = smoothstep(0.6, 0.85, normal.y);
-            let cut: f64 = cleavage.iter().map(|c| c.cut(&q, &normal)).sum();
+            let cut: f64 = cleavage.iter().map(|c| c.cut(&q, &normal, ramp)).sum();
             let q = q - normal * cut * (1. - 0.85 * top);
             // Erosion: a little lumpiness, and fine vertical flutes on the walls where meltwater
             // runs down.
             let lumps = noise.fbm(q * 6., 3);
-            let flutes = noise.ridged(Vector3::new(q.x * 40., q.y * 3., q.z * 40.), 2).powi(2) - 0.3;
+            // (Smooth noise: a ridged one's sharp creases are finer than any mesh can follow.)
+            let flutes = noise.noise(Vector3::new(q.x * 25., q.y * 1.5, q.z * 25.));
             let wall = 1. - top;
-            let h = if rounded { 0.02 * lumps } else { 0.005 * lumps + 0.004 * flutes * wall };
-            (q + normal * h) * self.size
-        }).collect();
-        IndexedMesh { positions, normals: vec![], triangles, texcoords: vec![] }
+            let h = if rounded { 0.02 * lumps } else { 0.004 * lumps + 0.002 * flutes * wall };
+            (q + normal * h) * size
+        };
+        (surface, directions, triangles)
     }
 
-    /// The height of the waterline in the berg's frame, for vertices on rays from the origin:
-    /// where the fraction above it of the volume they enclose is the freeboard's.
-    pub fn waterline(positions: &[Vector3<f64>], fraction: f64) -> f64 {
-        // Each vertex stands for an equal solid angle of a geodesic sphere.
-        let above = |h: f64| -> f64 {
-            positions.iter().map(|v| {
-                let r = v.norm();
-                if r <= 0. { return 0.; }
-                let dy = v.y / r;
-                let r3 = r * r * r;
-                if h >= 0. {
-                    if dy <= 0. { return 0.; }
-                    let r_min = h / dy;
-                    if r_min >= r { 0. } else { (r3 - r_min.powi(3)) / 3. }
-                } else if dy >= 0. {
-                    r3 / 3.
-                } else {
-                    let r_max = h / dy;
-                    r.min(r_max).powi(3) / 3.
-                }
-            }).sum()
-        };
-        let total: f64 = positions.iter().map(|v| v.norm().powi(3) / 3.).sum();
-        let r_max = positions.iter().map(|v| v.norm()).fold(0., f64::max);
-        let (mut lo, mut hi) = (-r_max, r_max);
-        for _ in 0..60 {
+    /// The volume of a closed, outward-wound mesh above the plane y = `h`: by the divergence
+    /// theorem, the sum over the parts of its triangles above the plane of the signed volumes
+    /// of the tetrahedra they make with a point on the plane (the plane's own cross-section
+    /// adds nothing, lying in it).
+    pub fn volume_above(positions: &[Vector3<f64>], triangles: &[[usize; 3]], h: f64) -> f64 {
+        let o = Vector3::new(0., h, 0.);
+        let tet = |a: &Vector3<f64>, b: &Vector3<f64>, c: &Vector3<f64>| (a - o).dot(&(b - o).cross(&(c - o))) / 6.;
+        triangles.iter().map(|t| {
+            let v = t.map(|i| positions[i]);
+            // The triangle clipped to y >= h (Sutherland-Hodgman against one plane).
+            let mut poly: Vec<Vector3<f64>> = Vec::with_capacity(4);
+            for k in 0..3 {
+                let (a, b) = (v[k], v[(k + 1) % 3]);
+                let (da, db) = (a.y - h, b.y - h);
+                if da >= 0. { poly.push(a); }
+                if (da >= 0.) != (db >= 0.) { poly.push(a + (b - a) * (da / (da - db))); }
+            }
+            (1..poly.len().saturating_sub(1)).map(|k| tet(&poly[0], &poly[k], &poly[k + 1])).sum::<f64>()
+        }).sum()
+    }
+
+    /// The height of the waterline of a closed mesh: where the fraction of its volume above
+    /// it is `fraction`.
+    pub fn waterline(positions: &[Vector3<f64>], triangles: &[[usize; 3]], fraction: f64) -> f64 {
+        let (lo, hi) = positions.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.y), hi.max(p.y)));
+        let total = Iceberg::volume_above(positions, triangles, lo - 1.);
+        let (mut lo, mut hi) = (lo, hi);
+        for _ in 0..50 {
             let mid = 0.5 * (lo + hi);
-            if above(mid) / total > fraction { lo = mid } else { hi = mid }
+            if Iceberg::volume_above(positions, triangles, mid) / total > fraction { lo = mid } else { hi = mid }
         }
         0.5 * (lo + hi)
     }
@@ -266,49 +279,114 @@ impl Iceberg {
     /// The mesh floating with its waterline at `sea_level`, centred over `(x, z)`, turned by
     /// `yaw` (radians).
     pub fn mesh(&self, x: f64, z: f64, sea_level: f64, yaw: f64) -> IndexedMesh {
-        let mut mesh = self.shape();
+        let base = self.detail.saturating_sub(2);
+        let (shape, directions, triangles) = self.shape(base);
         let mut rng = Pcg32::new(self.seed, 29);
         // Bergs other than tabular ones float tilted, having rolled as they melted.
         let tilt = if self.kind == Kind::Tabular { 0.01 } else { 0.12 };
         let rotation = Rotation3::from_axis_angle(&Vector3::y_axis(), yaw)
             * Rotation3::from_euler_angles(tilt * (rng.next_f64() - 0.5), 0., tilt * (rng.next_f64() - 0.5));
-        for p in mesh.positions.iter_mut() { *p = rotation * *p; }
-        let h = Iceberg::waterline(&mesh.positions, self.freeboard_fraction());
+        let turned = |d: &Vector3<f64>| rotation * shape(d);
+        // The waterline, roughly, from the coarse mesh.
+        let coarse: Vec<Vector3<f64>> = directions.iter().map(&turned).collect();
+        let h = Iceberg::waterline(&coarse, &triangles, self.freeboard_fraction());
         // The wave-cut notch: the sea melts a groove a metre or two high at the waterline.
-        let depth = (0.015 * self.size).min(2.5);
-        let height = (0.012 * self.size).clamp(0.5, 2.);
-        for p in mesh.positions.iter_mut() {
-            let k = (-((p.y - h - 0.3 * height) / height).powi(2)).exp();
-            let across = (p.x * p.x + p.z * p.z).sqrt();
-            if k > 1e-3 && across > depth {
-                let s = 1. - depth * k / across;
-                p.x *= s;
-                p.z *= s;
-            }
-        }
+        let notch_depth = (0.015 * self.size).min(2.5);
+        let notch_height = (0.012 * self.size).clamp(0.8, 2.);
         // The ram: under the notch the ice the waves haven't reached juts out as a submerged
         // shelf, broadest on one side.
         let width = (0.15 * self.size).min(20.);
         let reach = 8. + 0.12 * self.size;
         let side = rng.next_f64() * TAU;
-        for p in mesh.positions.iter_mut() {
-            let below = h - p.y;
-            // Rising over a few metres: steps between the mesh's rows would show as teeth.
-            let g = smoothstep(0.8, 4., below) * (1. - smoothstep(0.5 * reach, reach, below));
+        let surface = |d: &Vector3<f64>| -> Vector3<f64> {
+            let mut p = turned(d);
             let across = (p.x * p.x + p.z * p.z).sqrt();
-            if g > 0. && across > 1e-6 {
-                let facing = 0.5 + 0.5 * (0.5 + 0.5 * (p.z.atan2(p.x) - side).cos()).powi(2);
-                let s = 1. + width * g * facing / across;
+            let notch = notch_depth * (-((p.y - h - 0.3 * notch_height) / notch_height).powi(2)).exp();
+            let below = h - p.y;
+            let g = smoothstep(0.8, 4., below) * (1. - smoothstep(0.5 * reach, reach, below));
+            let facing = 0.5 + 0.5 * (0.5 + 0.5 * (p.z.atan2(p.x) - side).cos()).powi(2);
+            let out = width * g * facing - notch;
+            if across > 1e-6 && across + out > 0.05 * across {
+                let s = 1. + out / across;
                 p.x *= s;
                 p.z *= s;
             }
-        }
-        // The ram adds a little volume under water: float it again.
-        let h = Iceberg::waterline(&mesh.positions, self.freeboard_fraction());
+            p
+        };
+        // Refined where the surface bends more than a few centimetres between vertices: along
+        // the facets' edges and steps, and the notch.
+        let tolerance = (0.0008 * self.size).clamp(0.02, 0.1);
+        let (positions, triangles) = refine(&directions, &triangles, &surface, 5, tolerance);
+        println!("Iceberg: {} triangles", triangles.len());
+        let mut mesh = IndexedMesh { positions, normals: vec![], triangles, texcoords: vec![] };
+        // Floated at its waterline, ram and all.
+        let h = Iceberg::waterline(&mesh.positions, &mesh.triangles, self.freeboard_fraction());
         let lift = Vector3::new(x, sea_level - h, z);
         for p in mesh.positions.iter_mut() { *p += lift; }
         if self.kind == Kind::Dome { mesh } else { creased(&mesh, 35f64.to_radians().cos()) }
     }
+}
+
+/// Mesh `surface` (a function of direction, from the unit `directions`) adaptively: each pass
+/// splits every edge whose midpoint on the surface lies more than `tolerance` from the
+/// straight edge, and splits the triangles accordingly (into two, three or four), up to
+/// `levels` times. An edge's split is decided once for both its triangles, so the mesh stays
+/// closed. Returns the positions and triangles.
+pub fn refine(directions: &[Vector3<f64>], triangles: &[[usize; 3]], surface: &(dyn Fn(&Vector3<f64>) -> Vector3<f64> + Sync), levels: u32, tolerance: f64) -> (Vec<Vector3<f64>>, Vec<[usize; 3]>) {
+    use rayon::prelude::*;
+    use std::collections::HashMap;
+    let mut dirs: Vec<Vector3<f64>> = directions.to_vec();
+    let mut points: Vec<Vector3<f64>> = dirs.par_iter().map(surface).collect();
+    let mut tris: Vec<[usize; 3]> = triangles.to_vec();
+    for _ in 0..levels {
+        // Each edge once, with its midpoint's direction.
+        let mut edges: Vec<(usize, usize)> = tris.iter().flat_map(|&[a, b, c]| [(a, b), (b, c), (c, a)])
+            .map(|(a, b)| (a.min(b), a.max(b))).collect();
+        edges.sort_unstable();
+        edges.dedup();
+        let mids: Vec<Option<(Vector3<f64>, Vector3<f64>)>> = edges.par_iter().map(|&(a, b)| {
+            let d = (dirs[a] + dirs[b]).normalize();
+            let p = surface(&d);
+            ((p - (points[a] + points[b]) / 2.).norm() > tolerance).then_some((d, p))
+        }).collect();
+        let mut split: HashMap<(usize, usize), usize> = HashMap::new();
+        for (e, m) in edges.iter().zip(mids) {
+            if let Some((d, p)) = m {
+                split.insert(*e, dirs.len());
+                dirs.push(d);
+                points.push(p);
+            }
+        }
+        if split.is_empty() { break; }
+        let mid = |a: usize, b: usize| split.get(&(a.min(b), a.max(b))).copied();
+        let mut next = Vec::with_capacity(tris.len() * 2);
+        for &t in &tris {
+            // Turned so that the split edges come first: ab, then bc, then ca.
+            let ms = [mid(t[0], t[1]), mid(t[1], t[2]), mid(t[2], t[0])];
+            match ms.iter().filter(|m| m.is_some()).count() {
+                0 => next.push(t),
+                3 => {
+                    let (ab, bc, ca) = (ms[0].unwrap(), ms[1].unwrap(), ms[2].unwrap());
+                    next.extend([[t[0], ab, ca], [ab, t[1], bc], [ca, bc, t[2]], [ab, bc, ca]]);
+                }
+                1 => {
+                    let k = ms.iter().position(|m| m.is_some()).unwrap();
+                    let (a, b, c) = (t[k], t[(k + 1) % 3], t[(k + 2) % 3]);
+                    let m = ms[k].unwrap();
+                    next.extend([[a, m, c], [m, b, c]]);
+                }
+                _ => {
+                    // The unsplit edge is k: c to a, after turning.
+                    let k = ms.iter().position(|m| m.is_none()).unwrap();
+                    let (a, b, c) = (t[(k + 1) % 3], t[(k + 2) % 3], t[k]);
+                    let (ab, bc) = (ms[(k + 1) % 3].unwrap(), ms[(k + 2) % 3].unwrap());
+                    next.extend([[a, ab, c], [ab, bc, c], [ab, b, bc]]);
+                }
+            }
+        }
+        tris = next;
+    }
+    (points, tris)
 }
 
 /// Ice cleaved along planes: the surface divided into Voronoi cells (of jittered sites on a
@@ -328,26 +406,44 @@ impl Cleavage {
         (crate::sobol::hash(h, k) >> 11) as f64 / (1u64 << 53) as f64
     }
 
-    /// How far to cut back, along the face's unit normal `n`, at `q`.
-    fn cut(&self, q: &Vector3<f64>, n: &Vector3<f64>) -> f64 {
+    /// How far to cut back, along the face's unit normal `n`, at `q`. Between neighbouring
+    /// cells the cut changes over a ramp of width `ramp` (in the length), not at once: a step
+    /// in the surface would cross the mesh's triangles at random and show as a staircase.
+    fn cut(&self, q: &Vector3<f64>, n: &Vector3<f64>, ramp: f64) -> f64 {
         let g = q.component_div(&self.cell);
         let base = g.map(f64::floor);
-        let mut best = (f64::INFINITY, 0u64, Vector3::zeros());
+        // Every site near enough to matter, weighted down from one at the nearest to none at
+        // `ramp` (in cells) farther: continuous everywhere, also where three cells meet.
+        let ramp = ramp / self.cell.min();
+        let mut sites = [(0f64, 0u64, Vector3::zeros()); 27];
+        let mut k = 0;
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
                     let c = base + Vector3::new(dx as f64, dy as f64, dz as f64);
                     let h = [c.x, c.y, c.z].iter().fold(self.seed, |h, v| crate::sobol::hash(h, *v as i64 as u64));
                     let site = c + Vector3::new(Cleavage::unit(h, 1), Cleavage::unit(h, 2), Cleavage::unit(h, 3));
-                    let d2 = (g - site).norm_squared();
-                    if d2 < best.0 { best = (d2, h, site); }
+                    sites[k] = ((g - site).norm(), h, site);
+                    k += 1;
                 }
             }
         }
-        let (_, h, site) = best;
-        // The facet's plane: its depth at the site, and its tilt, mostly turning about the
-        // vertical so that facets stand upright.
-        // A third of the cells are left whole, faces of the original break.
+        let nearest = sites.iter().map(|s| s.0).fold(f64::INFINITY, f64::min);
+        let (mut sum, mut weights) = (0., 0.);
+        for (d, h, site) in &sites {
+            let w = 1. - smoothstep(0., ramp, d - nearest);
+            if w > 0. {
+                sum += w * self.facet(*h, site, &g, n);
+                weights += w;
+            }
+        }
+        sum / weights
+    }
+
+    /// The cut of the facet of the cell with hash `h` and site `site` (in cells), at `g`.
+    fn facet(&self, h: u64, site: &Vector3<f64>, g: &Vector3<f64>, n: &Vector3<f64>) -> f64 {
+        // Its depth at the site, and its tilt, mostly turning about the vertical so that facets
+        // stand upright. A third of the cells are left whole, faces of the original break.
         let depth = self.depth * ((Cleavage::unit(h, 4) - 0.35) / 0.65).max(0.).powf(0.7);
         let across = Vector3::y().cross(n).try_normalize(1e-6).unwrap_or_else(Vector3::x);
         let along = n.cross(&across);
@@ -497,54 +593,83 @@ pub enum FloeStyle {
 pub struct Floe { pub x: f64, pub z: f64, pub radius: f64 }
 
 impl FloeField {
-    /// Floes placed largest first, none touching, until the concentration is reached.
+    /// Floes placed largest first, none touching, until the concentration is reached: sizes
+    /// from a power law (many more small than large), and the smaller ones, half the time,
+    /// placed beside a larger one, as fragments gather round the floes and bergy bits they
+    /// broke from.
     pub fn floes(&self) -> Vec<Floe> {
         let mut rng = Pcg32::new(self.seed, 37);
         let area = self.extent.0 * self.extent.1;
         let target = self.concentration.clamp(0., 0.95) * area;
-        // Diameters from a power law, number density ∝ d⁻², above min_size: d = d_min / u.
+        // Diameters with number density ∝ d^-α between the smallest and largest: by inverting
+        // the cumulative distribution, d = d_min (1 - u (1 - (d_min/d_max)^(α-1)))^(-1/(α-1)).
+        // Brash ice is steeper than the floes of pack ice: mostly small pieces.
+        let alpha = match self.style { FloeStyle::Brash => 2.8, FloeStyle::Slab => 2.2 };
+        let k = 1. - (self.min_size / self.max_size).powf(alpha - 1.);
         let mut radii = vec![];
         let mut sum = 0.;
-        while sum < 1.15 * target && radii.len() < 200_000 {
-            let d = (self.min_size / (1. - rng.next_f64() * (1. - self.min_size / self.max_size))).min(self.max_size);
-            let r = d / 2.;
+        while sum < target && radii.len() < 100_000 {
+            let d = self.min_size * (1. - rng.next_f64() * k).powf(-1. / (alpha - 1.));
+            let r = d.min(self.max_size) / 2.;
             // A floe's outline covers about 0.7 of its circle.
             sum += 0.7 * PI * r * r;
             radii.push(r);
         }
         radii.sort_by(|a, b| b.total_cmp(a));
-        // A grid of cells as wide as the largest floe, for the overlap test.
-        let cell = 2. * radii.first().copied().unwrap_or(1.);
+        // A grid of cells for the overlap test; a floe is listed in every cell its circle
+        // touches.
+        let cell = (4. * self.min_size).max(0.5 * self.max_size);
         let nx = (self.extent.0 / cell).ceil().max(1.) as usize;
         let nz = (self.extent.1 / cell).ceil().max(1.) as usize;
         let mut grid: Vec<Vec<usize>> = vec![vec![]; nx * nz];
         let mut placed: Vec<Floe> = vec![];
-        let mut covered = 0.;
         let clumps = SeededNoise::new(self.seed.wrapping_add(53));
         let clump_size = 0.3 * self.extent.0.min(self.extent.1).max(4. * self.max_size);
         let (x0, z0) = (self.center.0 - self.extent.0 / 2., self.center.1 - self.extent.1 / 2.);
+        let cells = |x: f64, z: f64, r: f64| {
+            let i0 = ((x - r - x0) / cell).floor().max(0.) as usize;
+            let i1 = (((x + r - x0) / cell).floor().max(0.) as usize).min(nx - 1);
+            let j0 = ((z - r - z0) / cell).floor().max(0.) as usize;
+            let j1 = (((z + r - z0) / cell).floor().max(0.) as usize).min(nz - 1);
+            (i0.min(nx - 1), i1, j0.min(nz - 1), j1)
+        };
         for r in radii {
-            if covered >= target { break; }
-            for _ in 0..30 {
-                let x = x0 + rng.next_f64() * self.extent.0;
-                let z = z0 + rng.next_f64() * self.extent.1;
-                // Pack ice gathers in clumps and streaks, with open water between.
-                let clump = smoothstep(-0.35, 0.35, clumps.fbm(Vector3::new(x, 0., z) / clump_size, 3));
-                if rng.next_f64() > 1. - self.clumping * (1. - clump) { continue; }
-                let (ci, cj) = (((x - x0) / cell) as usize, ((z - z0) / cell) as usize);
-                let gap = 0.05 * r + 0.1;
-                let clear = (ci.saturating_sub(1)..=(ci + 1).min(nx - 1)).all(|i| {
-                    (cj.saturating_sub(1)..=(cj + 1).min(nz - 1)).all(|j| {
-                        grid[j * nx + i].iter().all(|&k| {
-                            let f = &placed[k];
-                            (f.x - x).hypot(f.z - z) > f.radius + r + gap
-                        })
+            let gap = 0.04 * r + 0.05;
+            for _ in 0..40 {
+                // Beside a larger floe, or anywhere (where the clumps are).
+                let near = if !placed.is_empty() && rng.next_f64() < 0.5 {
+                    let f = placed[(rng.next_f64() * placed.len() as f64) as usize];
+                    (f.radius > 2. * r).then(|| {
+                        let a = rng.next_f64() * TAU;
+                        let dist = f.radius + r + gap * (1. + 3. * rng.next_f64());
+                        (f.x + a.cos() * dist, f.z + a.sin() * dist)
                     })
-                });
+                } else { None };
+                let (x, z) = match near {
+                    Some(p) => p,
+                    None => {
+                        let (x, z) = (x0 + rng.next_f64() * self.extent.0, z0 + rng.next_f64() * self.extent.1);
+                        // Pack ice gathers in clumps and streaks, with open water between.
+                        let clump = smoothstep(-0.35, 0.35, clumps.fbm(Vector3::new(x, 0., z) / clump_size, 3));
+                        if rng.next_f64() > 1. - self.clumping * (1. - clump) { continue; }
+                        (x, z)
+                    }
+                };
+                if x < x0 || x > x0 + self.extent.0 || z < z0 || z > z0 + self.extent.1 { continue; }
+                // Thinning out towards the field's edges, along a ragged line.
+                let edge = (x - x0).min(x0 + self.extent.0 - x).min(z - z0).min(z0 + self.extent.1 - z);
+                let margin = 0.25 * self.extent.0.min(self.extent.1);
+                let thin = smoothstep(0., 1., edge / margin + 0.4 * clumps.fbm(Vector3::new(x, 7., z) / (0.5 * margin), 3));
+                if rng.next_f64() > thin { continue; }
+                let (i0, i1, j0, j1) = cells(x, z, r + gap);
+                let clear = (i0..=i1).all(|i| (j0..=j1).all(|j| grid[j * nx + i].iter().all(|&k| {
+                    let f = &placed[k];
+                    (f.x - x).hypot(f.z - z) > f.radius + r + gap
+                })));
                 if clear {
-                    grid[cj.min(nz - 1) * nx + ci.min(nx - 1)].push(placed.len());
+                    let (i0, i1, j0, j1) = cells(x, z, r);
+                    for i in i0..=i1 { for j in j0..=j1 { grid[j * nx + i].push(placed.len()); } }
                     placed.push(Floe { x, z, radius: r });
-                    covered += 0.7 * PI * r * r;
                     break;
                 }
             }
@@ -560,30 +685,40 @@ impl FloeField {
         }
     }
 
-    /// Lumps of glacier ice, each floating at its own waterline.
+    /// Lumps of glacier ice, each floating at its own waterline: some long, some flat, some
+    /// chunky, the smaller ones tipped further as the waves rock them.
     fn brash(&self) -> IndexedMesh {
         let floes = self.floes();
         let noise = SeededNoise::new(self.seed.wrapping_add(7));
         let mut rng = Pcg32::new(self.seed, 47);
-        let (directions, sphere) = icosphere(3);
+        let fine = icosphere(3);
+        let coarse = icosphere(2);
+        let tiny = icosphere(1);
         let mut positions = vec![];
         let mut triangles = vec![];
         let fraction = 1. - 917. / SEA_WATER_DENSITY;
         for f in &floes {
-            let r = f.radius * 0.85;
-            let axes = Vector3::new(r, r * (0.35 + 0.3 * rng.next_f64()), r * (0.7 + 0.3 * rng.next_f64()));
+            let (directions, sphere) = if f.radius < 0.15 { &tiny } else if f.radius < 0.4 { &coarse } else { &fine };
+            let r = f.radius * 0.9;
+            let axes = Vector3::new(r, r * (0.25 + 0.5 * rng.next_f64()), r * (0.4 + 0.6 * rng.next_f64()));
             let offset = Vector3::new(rng.next_f64(), rng.next_f64(), rng.next_f64()) * 100.;
-            let rotation = Rotation3::from_euler_angles(0.3 * (rng.next_f64() - 0.5), rng.next_f64() * TAU, 0.3 * (rng.next_f64() - 0.5));
+            let rock = 0.3 + 0.6 / (1. + f.radius);
+            let rotation = Rotation3::from_euler_angles(rock * (rng.next_f64() - 0.5), rng.next_f64() * TAU, rock * (rng.next_f64() - 0.5));
             // Broken faces, one of them the top, worn round at the edges.
-            let planes: Vec<(Vector3<f64>, f64)> = (0..4).map(|k| {
+            // More of them on larger pieces, which have broken more often.
+            let count = 3 + (rng.next_f64() * 4.) as usize + (2. * f.radius).min(8.) as usize;
+            let planes: Vec<(Vector3<f64>, f64)> = (0..count).map(|k| {
                 let n = if k == 0 {
-                    Vector3::new(0.2 * (rng.next_f64() - 0.5), 1., 0.2 * (rng.next_f64() - 0.5)).normalize()
+                    Vector3::new(0.3 * (rng.next_f64() - 0.5), 1., 0.3 * (rng.next_f64() - 0.5)).normalize()
                 } else {
                     let a = rng.next_f64() * TAU;
-                    Vector3::new(a.cos(), 0.8 * (rng.next_f64() - 0.5), a.sin()).normalize()
+                    Vector3::new(a.cos(), 1.2 * (rng.next_f64() - 0.5), a.sin()).normalize()
                 };
-                (n, axes.component_mul(&n).norm() * (0.6 + 0.3 * rng.next_f64()))
+                (n, axes.component_mul(&n).norm() * (0.6 + 0.35 * rng.next_f64()))
             }).collect();
+            // Small pieces are worn round; large ones keep sharper edges.
+            let rounding = (0.03 + 0.2 * rng.next_f64()) / (1. + 0.3 * f.radius);
+            let lumpiness = 0.08 + 0.15 * rng.next_f64();
             let mut piece: Vec<Vector3<f64>> = directions.iter().map(|d| {
                 let p = 2.6;
                 let r0 = (d.x.abs() / axes.x).powf(p) + (d.y.abs() / axes.y).powf(p) + (d.z.abs() / axes.z).powf(p);
@@ -591,12 +726,12 @@ impl FloeField {
                 let mut s: f64 = 1.;
                 for (n, o) in &planes {
                     let along = q.dot(n);
-                    if along > 0. { s = smin(s, o / along, 0.15); }
+                    if along > 0. { s = smin(s, o / along, rounding); }
                 }
-                let lumps = 0.18 * noise.fbm(d * 1.6 + offset, 4);
+                let lumps = lumpiness * noise.fbm(d * 1.6 + offset, 4);
                 rotation * (q * s.max(0.1) * (1. + lumps))
             }).collect();
-            let h = Iceberg::waterline(&piece, fraction);
+            let h = Iceberg::waterline(&piece, sphere, fraction);
             let lift = Vector3::new(f.x, self.sea_level - h, f.z);
             let start = positions.len();
             for p in piece.iter_mut() { *p += lift; }
@@ -739,11 +874,11 @@ mod tests {
     #[test]
     fn test_waterline_of_a_sphere() {
         // A sphere floating with half its volume above water floats at its centre.
-        let (dirs, _) = icosphere(5);
-        let h = Iceberg::waterline(&dirs, 0.5);
+        let (dirs, tris) = icosphere(5);
+        let h = Iceberg::waterline(&dirs, &tris, 0.5);
         assert!(h.abs() < 0.01, "{}", h);
         // With less above, the waterline rises through it.
-        assert!(Iceberg::waterline(&dirs, 0.1) > 0.4);
+        assert!(Iceberg::waterline(&dirs, &tris, 0.1) > 0.4);
     }
 
     #[test]

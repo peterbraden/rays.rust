@@ -122,7 +122,8 @@ used by ice services:
 
 Each shape is fractured into faces and cleaved: its walls break along planes at two scales,
 slabs and chips, into tall flat facets that meet at sharp edges and steps, as where pieces
-have calved away (the dome alone is smooth). Fine vertical meltwater flutes run down the
+have calved away (the dome alone is smooth). The mesh is refined where the surface bends, so
+the facets' edges stay straight and clean. Fine vertical meltwater flutes run down the
 walls. It is tilted
 (except tabular bergs) and notched at the waterline by the waves. Below the notch, the ram is
 a shelf of ice that juts out under the water, broadest on one side. The berg floats as its
@@ -142,7 +143,8 @@ rolled up from under water and not yet weathered), with:
 
 Floes from `size[0]` to `size[1]` metres across cover a fraction `concentration` of a
 rectangle `extent` ([x, z]) wide. As in real pack ice, there are many small floes and few
-large ones; none touch. Each floe is a slab with an irregular outline and a rounded top edge.
+large ones (for brash ice, mostly small fragments); none touch. Small pieces gather round the
+larger ones they broke from, and the field thins out towards its ragged edges. Each floe is a slab with an irregular outline and a rounded top edge.
 It floats with a tenth of its thickness above the water, snow on top with patches of bare ice,
 and white ice at the sides.
 

@@ -21,7 +21,7 @@
 
   "objects": [
     { "type": "ocean", "wind": [3, 1], "planet_radius": 0, "transparent": true, "detail_center": [0, -40], "detail_distance": 200 },
-    { "type": "ice_floes", "style": "brash", "center": [0, -10], "extent": [80, 30], "concentration": 0.45, "size": [0.4, 12], "seed": 1 },
+    { "type": "ice_floes", "style": "brash", "center": [0, -2], "extent": [130, 70], "concentration": 0.5, "size": [0.25, 14], "clumping": 0.8, "seed": 1 },
     { "type": "iceberg", "shape": "blocky", "size": 90, "location": [-20, 150], "yaw": 10, "seed": 2 },
     { "type": "iceberg", "shape": "tabular", "size": 260, "location": [140, 330], "yaw": 5, "seed": 4 },
     { "type": "iceberg", "shape": "tabular", "size": 200, "location": [-200, 420], "yaw": -15, "seed": 9 },

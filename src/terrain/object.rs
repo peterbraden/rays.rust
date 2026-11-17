@@ -370,7 +370,7 @@ pub fn evolved(o: &Value, params: TerrainParams) -> Terrain {
 /// Run `t` to the object's `time`, through its cache. `key` identifies the domain.
 fn evolve(o: &Value, mut t: Terrain, key: &str) -> Terrain {
     let time = number(o, "time", 0.);
-    let start = crate::stopwatch::Stopwatch::start();
+    let start = web_time::Instant::now();
     match o["cache"].as_str() {
         Some(dir) => t.run_cached(time, std::path::Path::new(dir), key),
         None => t.run_to(time),
@@ -516,7 +516,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams) -> SceneObject {
     }
     built.reverse();
 
-    let start = crate::stopwatch::Stopwatch::start();
+    let start = web_time::Instant::now();
     let planet = Planet::new(params.planet.clone());
     if let Some(path) = o["planet_map"].as_str() { crate::terrain::map::write_planet_map(&planet, path, 2048); }
     let layers = Arc::new(built);

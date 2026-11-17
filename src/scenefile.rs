@@ -697,7 +697,7 @@ impl SceneFile {
                 continue;
             }
             // Report the objects that are slow to build (meshes, oceans), by type and source.
-            let start = crate::stopwatch::Stopwatch::start();
+            let start = web_time::Instant::now();
             let name = format!("{}{}", obj["type"].as_str().unwrap_or("?"),
                 obj["src"].as_str().or(obj["item"]["src"].as_str()).map_or(String::new(), |s| format!(" {}", s)));
             let built: Vec<Arc<SceneObject>> = if obj["type"] == "tree" {
@@ -3253,9 +3253,10 @@ impl SceneFile {
                 motion,
                 wavefront: match s.integrator.as_str() {
                     None | Some("path") => false,
-                    Some("wavefront") => true,
-                    Some(x) => panic!("Unknown integrator '{}': expected \"path\" or \"wavefront\"", x),
+                    Some("wavefront") | Some("gpu") => true,
+                    Some(x) => panic!("Unknown integrator '{}': expected \"path\", \"wavefront\" or \"gpu\"", x),
                 },
+                gpu: s.integrator.as_str() == Some("gpu"),
                 adaptive: SceneFile::parse_adaptive(&s.adaptive),
                 sampler: match s.sampler.as_str() {
                     None | Some("sobol") => Sampler::Sobol,
@@ -3455,7 +3456,7 @@ impl SceneFile {
     /// by extension: `.nff` (see `crate::nff`); or, for JSON, by content: Tungsten's (see
     /// `crate::tungsten`). Anything else is read as our JSON.
     pub fn read_document(filename: &str) -> Result<Value, String> {
-        let contents = String::from_utf8(crate::assets::read(filename)?)
+        let contents = String::from_utf8(crate::assets::read(filename).map_err(|e| format!("Can't read scene file {}: {}", filename, e))?)
             .map_err(|e| format!("Scene file {}: {}", filename, e))?;
         if filename.to_lowercase().ends_with(".nff") {
             return crate::nff::to_scene(&contents).map_err(|e| format!("{}: {}", filename, e));

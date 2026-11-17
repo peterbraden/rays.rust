@@ -1,17 +1,25 @@
-//! Rays: a ray tracer. This library holds the renderer; `main.rs` is the command line on top
-//! of it, and `web/` drives it from a browser through WebAssembly.
+//! Rays: the renderer as a library, for the command-line tool (`src/main.rs`, the `cli`
+//! feature) and the browser (`web/`, built for wasm32 without `cli`).
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+//extern crate image;
 extern crate nalgebra as na;
+extern crate rand;
 #[macro_use]
 extern crate serde_derive;
+extern crate serde_json;
+extern crate rayon;
+extern crate tobj;
+extern crate ordered_float;
+extern crate num_complex;
+extern crate rustfft;
+
 
 pub mod assets;
 pub mod schema;
 #[cfg(feature = "cli")]
 pub mod server;
-pub mod stopwatch;
 pub mod preview;
 pub mod ray;
 pub mod color;
@@ -59,6 +67,8 @@ pub mod sceneobject;
 pub mod light;
 pub mod light_bvh;
 pub mod wavefront;
+#[cfg(feature = "gpu")]
+pub mod gpu;
 pub mod shapes {
     pub mod transform;
     pub mod bbox;
@@ -103,7 +113,6 @@ pub mod ocean;
 pub mod camera;
 pub mod trace;
 pub mod rendercontext;
-#[cfg(feature = "cli")]
 pub mod paint;
 pub mod output;
 #[cfg(feature = "cli")]

@@ -28,7 +28,7 @@ pub enum Prim {
     /// normal follows the winding, (v1 - v0) × (v2 - v0).
     Triangle { v: [Vector3<f64>; 3], n: Option<[Vector3<f64>; 3]> },
     Sphere { center: Vector3<f64>, radius: f64 },
-    /// The infinite plane y = `y`, facing up; kept out of the BVH.
+    /// The infinite plane y = `y`, its normal facing each ray (as `Plane`); kept out of the BVH.
     Plane { y: f64 },
 }
 
@@ -114,7 +114,9 @@ impl Prim {
                 if t <= min || t >= max {
                     return None;
                 }
-                let n = Vector3::new(0., 1., 0.);
+                // Facing the ray, as `Plane::intersects`: a plane has no inside, so emitters on
+                // it shine both ways, and glass is always entered.
+                let n = Vector3::new(0., if r.rd.y > 0. { -1. } else { 1. }, 0.);
                 Some((t, n, n))
             },
         }
@@ -143,10 +145,18 @@ impl Prim {
         let linear = t.matrix().fixed_view::<3, 3>(0, 0).into_owned();
         let normal_matrix = linear.try_inverse()?.transpose();
         match self {
-            Prim::Triangle { v, n } => Some(Prim::Triangle {
-                v: [point(&v[0]), point(&v[1]), point(&v[2])],
-                n: n.map(|n| [(normal_matrix * n[0]).normalize(), (normal_matrix * n[1]).normalize(), (normal_matrix * n[2]).normalize()]),
-            }),
+            Prim::Triangle { v, n } => {
+                let v = [point(&v[0]), point(&v[1]), point(&v[2])];
+                let n = n.map(|n| [(normal_matrix * n[0]).normalize(), (normal_matrix * n[1]).normalize(), (normal_matrix * n[2]).normalize()]);
+                // A mirroring transformation reverses the winding, and with it the geometric
+                // normal, which must still point the way the transformed normal does (as
+                // `Transform`'s normal matrix keeps it): swap two corners.
+                Some(if linear.determinant() < 0. {
+                    Prim::Triangle { v: [v[0], v[2], v[1]], n: n.map(|n| [n[0], n[2], n[1]]) }
+                } else {
+                    Prim::Triangle { v, n }
+                })
+            },
             Prim::Sphere { center, radius } => {
                 let gram = linear.transpose() * linear;
                 let s2 = gram.trace() / 3.;
@@ -397,6 +407,13 @@ mod tests {
             Box::new(crate::shapes::transform::Transform::new(
                 std::sync::Arc::new(crate::shapes::sphere::Sphere::new(Vector3::zeros(), 0.5)) as std::sync::Arc<dyn Geometry + Sync + Send>,
                 crate::na::Affine3::from_matrix_unchecked(crate::na::Matrix4::new_scaling(1.5) * crate::na::Matrix4::new_translation(&Vector3::new(0.3, 0., 0.))))),
+            // Mirrored: the winding reverses, and the normals must still point out.
+            Box::new(crate::shapes::transform::Transform::new(
+                std::sync::Arc::new(BBox::new(Vector3::new(-0.7, -0.5, -0.9), Vector3::new(0.8, 0.6, 0.4))) as std::sync::Arc<dyn Geometry + Sync + Send>,
+                crate::na::Affine3::from_matrix_unchecked(crate::na::Matrix4::new_nonuniform_scaling(&Vector3::new(-1., 1., 1.2))))),
+            Box::new(crate::shapes::transform::Transform::new(
+                std::sync::Arc::new(crate::shapes::bilinear::BilinearPatch::new(Vector3::new(-1., 0.2, -1.), Vector3::new(1., 0.2, -1.), Vector3::new(-1., 0.2, 1.), Vector3::new(1., 0.2, 1.))) as std::sync::Arc<dyn Geometry + Sync + Send>,
+                crate::na::Affine3::from_matrix_unchecked(crate::na::Matrix4::new_nonuniform_scaling(&Vector3::new(1., -1., 1.))))),
         ];
         for shape in &shapes {
             let prims = shape.flatten().unwrap();

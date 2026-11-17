@@ -26,6 +26,7 @@ let stride = 1;        // layers this worker renders are index, index + stride, 
 let gen = -1;          // generation being rendered
 let size = null;       // { width, height } of the built scene
 let running = false;
+let paused = false;    // the scene is kept (for picking and drafts) but something else renders it
 let drafting = false;  // showing drafts while the camera is moved: no layers meanwhile
 const assets = new Map();
 
@@ -48,6 +49,7 @@ self.onmessage = async ({ data: m }) => {
             gen = m.gen;
             size = null;
             drafting = false;
+            paused = m.render === false;
             // Scenes sent while this worker was busy are all waiting behind this one. Let
             // them be heard first: each sets `gen`, and only the last is worth building.
             await pause();
@@ -64,8 +66,13 @@ self.onmessage = async ({ data: m }) => {
             if (!size) { return; }   // the scene failed to build, or is still coming
             gen = m.gen;
             drafting = false;
+            paused = m.render === false;
             rays.setCamera(m.json);
             run();
+        } else if (m.type === 'render') {
+            // Start rendering after all (the GPU couldn't take the scene), or stop.
+            paused = !m.on;
+            if (size) { run(); }
         } else if (m.type === 'draft') {
             // One quick frame from this camera: this worker's share of its rows.
             if (!size) { return; }
@@ -91,17 +98,17 @@ async function run() {
     if (running) { return; }   // the loop below picks up the new generation itself
     running = true;
     try {
-        while (gen >= 0 && size && !drafting) {
+        while (gen >= 0 && size && !drafting && !paused) {
             const mine = gen;
             const { width, height } = size;
             let rows = Math.max(1, Math.round(height / 16));
-            for (let layer = index; gen === mine && layer < MAX_LAYER; layer += stride) {
+            for (let layer = index; gen === mine && !paused && layer < MAX_LAYER; layer += stride) {
                 const start = Math.floor((height * index) / count);
-                for (let done = 0; done < height && gen === mine;) {
+                for (let done = 0; done < height && gen === mine && !paused;) {
                     const y0 = (start + done) % height;
                     const y1 = Math.min(height, y0 + rows);
                     const t0 = performance.now();
-                    const { sums, rays: cast } = rays.renderRows(layer, y0, y1, width);
+                    const { sums, rays: cast } = rays.renderRows(layer, y0, y1);
                     const ms = performance.now() - t0;
                     self.postMessage({ type: 'band', gen: mine, layer, y0, y1, sums, rays: cast, ms }, [sums.buffer]);
                     done += y1 - y0;

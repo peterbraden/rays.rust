@@ -81,7 +81,7 @@ pub fn parse(bytes: &[u8]) -> Result<IndexedMesh, String> {
 
 /// Read a `.wo3` file.
 pub fn read(path: &str) -> Result<IndexedMesh, String> {
-    let bytes = crate::assets::read(path)?;
+    let bytes = crate::assets::read(path).map_err(|e| format!("can't read {}: {}", path, e))?;
     parse(&bytes).map_err(|e| format!("{}: {}", path, e))
 }
 

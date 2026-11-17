@@ -20,6 +20,12 @@
             <option value="720">720</option>
         </select>
     </label>
+    <label>Renderer
+        <select id="renderer" title="The GPU renders scenes it can flatten (triangles, spheres, simple materials); the CPU renders everything">
+            <option value="auto">GPU if it can</option>
+            <option value="cpu">CPU</option>
+        </select>
+    </label>
     <button id="download" type="button">Save scene</button>
     <button id="save-image" type="button">Save image</button>
     <button id="servers" type="button" title="Machines running &quot;rays serve&quot; that share the rendering">Servers…</button>

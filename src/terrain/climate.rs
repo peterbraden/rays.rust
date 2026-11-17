@@ -304,7 +304,7 @@ pub fn climate(params: &ClimateParams, planet: &Planet) -> Arc<Climate> {
     let cache = CLIMATES.get_or_init(|| Mutex::new(HashMap::new()));
     let mut map = cache.lock().unwrap();
     if let Some(c) = map.get(&key) { return c.clone(); }
-    let start = crate::stopwatch::Stopwatch::start();
+    let start = web_time::Instant::now();
     let c = Arc::new(Climate::new(params.clone(), planet));
     println!("Climate: {} cells in {:.1?}", 6 * c.n() * c.n(), start.elapsed());
     map.insert(key, c.clone());

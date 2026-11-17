@@ -112,7 +112,8 @@ use crate::ocean::_rand::Rng;
 use std::path::Path;
 use crate::color::Color;
 use rustfft::algorithm::Radix4;
-use rustfft::{Fft, FftDirection};
+use rustfft::Fft;
+use rustfft::FftDirection;
 use crate::shapes::bbox::BBox;
 use crate::shapes::triangle::Triangle;
 use crate::shapes::repeating_mesh::RepeatingMesh;
@@ -223,24 +224,23 @@ fn transpose(matr: &[Complex<f64>], size: usize) -> Vec<Complex<f64>> {
 /// 2D Fast Fourier Transform (Used to test IFFT2)
 fn fft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
     let fft = Radix4::new(size, FftDirection::Forward);
-    // Each row is transformed in place; then, transposed, each column.
     let mut rows = tile;
-    fft.process(&mut rows[..]);
-    let mut columns = transpose(&rows, size);
-    fft.process(&mut columns[..]);
-    transpose(&columns, size)
+    fft.process(&mut rows);
+    let mut cols = transpose(&rows, size);
+    fft.process(&mut cols);
+    transpose(&cols, size)
 }
 
 /// Inverse 2D Fast Fourier Transform
 pub(crate) fn ifft2 (tile: Vec<Complex<f64>>, size: usize) -> Vec<Complex<f64>> {
     let ifft = Radix4::new(size, FftDirection::Inverse);
     let mut rows = tile;
-    ifft.process(&mut rows[..]);
-    let rows: Vec<Complex<f64>> = rows.iter().map(|x| x.unscale(size as f64)).collect();
-    let mut columns = transpose(&rows, size);
-    ifft.process(&mut columns[..]);
-    let columns: Vec<Complex<f64>> = columns.iter().map(|x| x.unscale(size as f64)).collect();
-    transpose(&columns, size)
+    ifft.process(&mut rows);
+    let rows: Vec<_> = rows.iter().map(|x| x.unscale(size as f64)).collect();
+    let mut cols = transpose(&rows, size);
+    ifft.process(&mut cols);
+    let cols: Vec<_> = cols.iter().map(|x| x.unscale(size as f64)).collect();
+    transpose(&cols, size)
 }
 
 /// A field over the N x N Fourier grid.

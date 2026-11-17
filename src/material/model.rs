@@ -51,6 +51,9 @@ pub trait MaterialModel: Sync{
     /// Whether this is the sky's material, which the wavefront integrator evaluates for rays
     /// that escape the scene.
     fn is_sky(&self) -> bool { false }
+
+    /// A sky's air, for the GPU to evaluate as the CPU does (`skysphere::AirExport`).
+    fn air(&self) -> Option<crate::skysphere::AirExport> { None }
 }
 
 /// The outgoing ray, and the weight to assign the color of the traced ray.

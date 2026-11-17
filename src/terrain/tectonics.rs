@@ -531,7 +531,7 @@ pub fn crust(params: &TectonicsParams, seed: u64, radius: f64) -> Arc<Crust> {
     // Held while simulating, so that threads asking for the same crust wait for it.
     let mut map = cache.lock().unwrap();
     if let Some(c) = map.get(&key) { return c.clone(); }
-    let start = crate::stopwatch::Stopwatch::start();
+    let start = web_time::Instant::now();
     let mut t = Tectonics::new(params.clone(), seed, radius);
     t.run();
     let mut ages: Vec<f64> = t.current.iter().filter(|c| !c.continental).map(|c| c.age).collect();

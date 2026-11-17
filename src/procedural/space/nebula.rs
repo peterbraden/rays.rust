@@ -108,6 +108,21 @@ impl Nebula {
         )
     }
 
+    /// Its parameters for the GPU, in the order of the shader's `NEBULA_*`: its kind (0
+    /// emission, 1 reflection, 2 planetary, 3 dark), centre, radius, cos of its reach,
+    /// brightness, dust, axes, elongation and its noise's offset.
+    pub fn export(&self) -> Vec<f64> {
+        let kind = match self.kind { Kind::Emission => 0., Kind::Reflection => 1., Kind::Planetary => 2., Kind::Dark => 3. };
+        let mut v = vec![kind];
+        v.extend(self.centre.iter());
+        v.extend([self.radius, self.cos_reach, self.brightness, self.dust]);
+        v.extend(self.axes.0.iter());
+        v.extend(self.axes.1.iter());
+        v.push(self.elongation);
+        v.extend(self.noise.offset().iter());
+        v
+    }
+
     /// The light the nebula emits in unit direction `d`, and the optical depth of its dust
     /// there.
     pub fn sample(&self, d: &Vector3<f64>) -> (Vector3<f64>, f64) {

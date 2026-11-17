@@ -200,12 +200,15 @@ async function restartScene() {
         return;
     }
     resetAccumulation();
+    // The workers build the scene whoever renders it (they answer clicks and draw drafts),
+    // and start rendering it at once; the GPU takes over if and when it is ready.
     for (const w of workers) {
         if (!w.building) { w.buildStart = performance.now(); }
         w.building = true;
         w.postMessage({ type: 'scene', gen: mine, json });
     }
     for (const s of servers) { serverLoop(s, mine, json); }
+    if (wantGpu()) { renderOnGpu(mine, json); }
     updateStatus();
 }
 
@@ -224,7 +227,78 @@ function restartCamera() {
     const json = JSON.stringify(c);
     for (const w of workers) { w.postMessage({ type: 'camera', gen: mine, json }); }
     for (const s of servers) { if (s.sceneJson) { serverLoop(s, mine, s.sceneJson); } }
+    if (wantGpu()) { renderOnGpu(mine, JSON.stringify(previewDoc())); }
 }
+
+// ---------------------------------------------------------------------------------------
+// The GPU
+//
+// Where the browser has WebGPU and the scene can be flattened for it (triangles, spheres and
+// the simpler materials: `rays::wavefront::flat`), the GPU path tracer renders the picture
+// (`Renderer` in web/src/lib.rs), a few passes a frame. The workers and servers always start
+// on a scene, so there is a picture while the GPU's copy is made; once it is ready they stop
+// (the workers keep the scene, for picking and drafts) and the GPU's picture replaces theirs.
+// If the GPU can't take the scene, or "CPU" is chosen, they simply carry on, and the status
+// line says why the GPU didn't.
+//
+// Making the GPU's copy (parsing and flattening the scene) happens on this thread, and holds
+// the page up while it does: seconds, the first time a scene has a sky.
+
+let gpu = null;          // the renderer for the picture being shown
+let gpuWhyNot = '';      // why the last scene wasn't rendered on the GPU
+let gpuAdapter = false;  // the browser has WebGPU and offered an adapter (asked once, at start)
+
+function rendererChoice() {
+    return $('renderer').value;
+}
+
+function wantGpu() {
+    return rendererChoice() !== 'cpu' && gpuAdapter && Boolean(encoder);
+}
+
+async function renderOnGpu(mine, json) {
+    let r;
+    try {
+        r = await encoder.gpuRenderer(json);
+    } catch (e) {
+        if (encoder.dead) { encoder = await instantiate(); }
+        // The CPU carries on with it.
+        if (gen === mine) { gpuWhyNot = e.message; updateStatus(); }
+        return;
+    }
+    if (gen !== mine) { r.free(); return; }
+    // From here the picture is the GPU's.
+    for (const w of workers) { w.postMessage({ type: 'render', on: false }); }
+    for (const s of servers) { s.abort?.abort(); }
+    // The renderer this one replaces frees itself when its loop next comes round: it can't
+    // be freed from here, as it may be in the middle of reading a picture back.
+    gpu = r;
+    gpuWhyNot = '';
+    const adapter = r.adapter();
+    try {
+        while (gen === mine && gpu === r && r.passes() < 4096) {
+            // A few passes between pictures: reading back costs more than a pass.
+            for (let i = 0; i < GPU_PASSES_PER_FRAME; i++) { r.pass(); }
+            const pixels = await r.image();
+            if (gen !== mine || gpu !== r) { return; }
+            if (r.width() === pw && r.height() === ph) {
+                image.data.set(pixels);
+                ctx.putImageData(image, 0, 0);
+            }
+            rowSamples.fill(r.passes());
+            stats.rendering = true;
+            $('status').textContent = `${pw}×${ph} · ${r.passes()} samples/pixel · GPU: ${adapter}`;
+            await new Promise(requestAnimationFrame);
+        }
+    } catch (e) {
+        if (gen === mine) { showError(`GPU: ${e.message ?? e}`); }
+    } finally {
+        if (gpu === r) { gpu = null; }
+        r.free();
+    }
+}
+
+const GPU_PASSES_PER_FRAME = 4;
 
 const cameraIsPlain = () => doc.camera && typeof doc.camera === 'object' && !JSON.stringify(doc.camera).includes('"$');
 
@@ -416,7 +490,7 @@ function onWorkerMessage({ data: m, target }) {
 // camera or editing replaces the picture progressively rather than flashing to black.
 function draw() {
     requestAnimationFrame(draw);
-    if (!dirty || !encoder || !sums) { return; }
+    if (!dirty || !encoder || !sums || gpu) { return; }
     dirty = false;
     const averaged = new Float32Array(sums.length);
     const row = pw * 3;
@@ -460,7 +534,8 @@ function updateStatus() {
         const local = ready < workers.length
             ? `${ready} of ${workers.length} workers ready, the rest building`
             : `${formatCount(rate)} rays/s in the browser · built in ${formatMs(stats.buildMs)} · ${workers.length} workers`;
-        text = `${pw}×${ph} · ${samples} samples/pixel · ${local}${farm}`;
+        const why = gpuWhyNot && rendererChoice() !== 'cpu' ? ` · not on the GPU: ${gpuWhyNot}` : '';
+        text = `${pw}×${ph} · ${samples} samples/pixel · ${local}${farm}${why}`;
     }
     $('status').textContent = text;
 }
@@ -1203,6 +1278,14 @@ $('scene-picker').addEventListener('change', async () => {
 
 $('preview-size').addEventListener('change', restartScene);
 
+try { $('renderer').value = localStorage.getItem('rays-renderer') ?? 'auto'; } catch (e) { /* no storage: the default */ }
+if (!$('renderer').value) { $('renderer').value = 'auto'; }
+$('renderer').addEventListener('change', () => {
+    try { localStorage.setItem('rays-renderer', rendererChoice()); } catch (e) { /* not kept, then */ }
+    gpuWhyNot = '';
+    restartScene();
+});
+
 $('servers').addEventListener('click', () => {
     const current = servers.map(s => s.url).filter(u => u !== location.origin).join(', ');
     const answer = prompt('Render servers to share the work with (addresses of machines running "rays serve", separated by commas).\n' +
@@ -1257,6 +1340,12 @@ async function start() {
         showError(e.message);
         return;
     }
+    try {
+        gpuAdapter = Boolean(navigator.gpu && await navigator.gpu.requestAdapter());
+    } catch (e) {
+        gpuAdapter = false;
+    }
+    gpuWhyNot = navigator.gpu ? (gpuAdapter ? '' : 'the browser offered no GPU adapter') : 'this browser has no WebGPU';
     for (let index = 0; index < workerCount; index++) { workers.push(spawnWorker(index)); }
     await findServers();
     restartScene();
@@ -1264,6 +1353,6 @@ async function start() {
 }
 
 // For debugging and tests.
-window.rays = { get doc() { return doc; }, get servers() { return servers; }, get schema() { return schema; }, get interacting() { return interacting || Boolean(draft); }, get stats() { return stats; }, get rowSamples() { return rowSamples; }, select };
+window.rays = { get doc() { return doc; }, get gpu() { return gpu ? { passes: gpu.passes(), adapter: gpu.adapter() } : null; }, get gpuWhyNot() { return gpuWhyNot; }, get servers() { return servers; }, get schema() { return schema; }, get interacting() { return interacting || Boolean(draft); }, get stats() { return stats; }, get rowSamples() { return rowSamples; }, select };
 
 start();

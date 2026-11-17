@@ -1,15 +1,17 @@
 # Scene builder (prototype)
 
-A browser editor for scene files, with a live preview from the real path tracer compiled to
-WebAssembly.
+A browser editor for scene files, with a live preview from the real renderer compiled to
+WebAssembly: on the GPU (WebGPU) where the browser has one and the scene allows, otherwise on
+the CPU.
 
-    rustup target add wasm32-unknown-unknown   # once
-    web/build.sh                               # writes web/rays.wasm
+    cargo install wasm-bindgen-cli --version <the wasm-bindgen version in web/Cargo.lock>   # once
+    scripts/build-web.sh                       # writes web/www/pkg
     python3 -m http.server 8000                # from the repository root
     # open http://localhost:8000/web/
 
 Serve the repository root, not `web/`: scenes name their meshes by paths from the root
-(`demo/teapot.obj`), and the page fetches them from there.
+(`demo/teapot.obj`), and the page fetches them from there. (`web/www/` is the GPU renderer's
+own test page, which renders one scene: see `scripts/build-web.sh`.)
 
 ## What it does
 
@@ -27,6 +29,17 @@ Serve the repository root, not `web/`: scenes name their meshes by paths from th
 - The preview keeps adding samples, up to 4096 per pixel from each worker's share.
 - Loads the repository's demo scenes. "Save scene" downloads the edited scene as JSON, which
   the command line renders unchanged; "Save image" downloads the preview as it stands, as PNG.
+
+## The GPU
+
+"Renderer: GPU if it can" (the default) renders the picture with the GPU path tracer
+(`src/gpu`, `Renderer` in `web/src/lib.rs`) when the browser has WebGPU and the scene can be
+flattened for it: triangles, spheres, boxes, planes and the simpler materials (see
+`src/wavefront/flat.rs`). The workers still build the scene, to answer clicks and draw drafts
+while the camera moves, but don't render it. Otherwise the status line says why not (no
+WebGPU; what couldn't be flattened) and the CPU renders, as it does when "CPU" is chosen. The
+GPU renderer is rebuilt for every edit and camera move, and render servers are not used
+while it is rendering.
 
 ## Render servers
 
@@ -66,8 +79,9 @@ integer, boolean, string, path, vec2, vec3, color, enum (with `options`), materi
 
 ## How it works
 
-- `wasm/` wraps `rays::preview` as a WebAssembly module with plain exports (no binding
-  generator). `rays.js` is its JavaScript side.
+- The crate in `web/` binds the renderer for JavaScript with wasm-bindgen: `Preview` wraps
+  `rays::preview` (the CPU path tracer), `Renderer` the GPU one. `rays.js` wraps both for the
+  page.
 - `worker.js`: each web worker builds its own copy of the scene and renders different layers
   (one sample per pixel each), in bands of rows.
 - `app.js` adds the bands up, encodes them with the scene's `output` settings, and draws.
@@ -81,7 +95,7 @@ integer, boolean, string, path, vec2, vec3, color, enum (with `options`), materi
 ## Known limits
 
 - The preview is the CPU renderer, on one thread per worker: complete, but slow for heavy
-  scenes (grass, clouds, large oceans). There is no GPU path yet.
+  scenes (grass, clouds, large oceans). The GPU renders only scenes that flatten.
 - Each worker holds its own copy of the scene in memory, and builds it itself. The first
   build of a scene with a sky takes about 8 s in the browser.
 - An invalid scene panics the renderer; the page shows the message and starts a new instance.

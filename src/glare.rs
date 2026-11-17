@@ -23,7 +23,7 @@ use crate::color::Color;
 use crate::output::LinearImage;
 use rustfft::algorithm::Radix4;
 use rustfft::num_complex::Complex;
-use rustfft::{Fft, FftDirection};
+use rustfft::Fft;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Glare {
@@ -44,10 +44,9 @@ impl Default for Glare {
 
 /// In-place 2D FFT of `data`, `width` x `height` (both powers of two), rows first.
 pub(crate) fn fft2d(data: &mut [Complex<f64>], width: usize, height: usize, inverse: bool) {
-    let direction = if inverse { FftDirection::Inverse } else { FftDirection::Forward };
-    // Each row is transformed in place.
-    Radix4::new(width, direction).process(data);
-    let out = &*data;
+    let direction = if inverse { rustfft::FftDirection::Inverse } else { rustfft::FftDirection::Forward };
+    let mut out = data.to_vec();
+    Radix4::new(width, direction).process(&mut out);
     // Transpose, transform the columns as rows, transpose back.
     let mut t = vec![Complex::new(0., 0.); width * height];
     for y in 0..height {
@@ -56,9 +55,10 @@ pub(crate) fn fft2d(data: &mut [Complex<f64>], width: usize, height: usize, inve
         }
     }
     Radix4::new(height, direction).process(&mut t);
+    let out2 = t;
     for x in 0..width {
         for y in 0..height {
-            data[y * width + x] = t[x * height + y];
+            data[y * width + x] = out2[x * height + y];
         }
     }
 }

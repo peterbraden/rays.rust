@@ -60,6 +60,8 @@ pub struct RenderOpts {
     pub motion: bool,
     /// Whether to render with the wavefront integrator (`wavefront`), where the scene allows.
     pub wavefront: bool,
+    /// Whether to render on the GPU (`gpu`, built with the `gpu` feature), where it can.
+    pub gpu: bool,
     /// Whether each pixel stops sampling once its noise is low enough (`adaptive`), before
     /// `supersamples`, which is then the most a pixel takes.
     pub adaptive: Option<Adaptive>,

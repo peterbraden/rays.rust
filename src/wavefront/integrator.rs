@@ -109,12 +109,12 @@ impl Local {
     }
 }
 
-/// Render sample `k` of every pixel: each pixel's radiance (times its weight), and the number
-/// of rays cast.
 /// Paths per batch: a queue small enough to stay in cache through every stage, and enough
 /// batches to keep every thread busy.
 const BATCH: usize = 4096;
 
+/// Render sample `k` of every pixel: each pixel's radiance (times its weight), and the number
+/// of rays cast.
 pub fn render_pass(s: &Scene, flat: &FlatScene, k: usize) -> (Vec<Color>, u64) {
     let (w, h) = (s.image.width, s.image.height);
     let mut image = vec![Color::black(); w * h];
@@ -223,7 +223,7 @@ const AERIAL_PERSPECTIVE_FROM: f64 = 100.;
 
 /// What a ray that escaped the flattened scene sees: the skysphere, by its material, or the
 /// background.
-fn sky_radiance(r: &Ray, s: &Scene, flat: &FlatScene) -> Color {
+pub fn sky_radiance(r: &Ray, s: &Scene, flat: &FlatScene) -> Color {
     use crate::shapes::geometry::Geometry;
     if let Some(sky) = &flat.sky
         && let Some(x) = sky.geometry.intersects(r) {
@@ -266,7 +266,9 @@ fn gather_emission(p: &mut Path, s: &Scene, flat: &FlatScene) {
     }
     let m = flat.hit_material(h.prim).at(&h.point);
     if let FlatMaterial::Emitter { .. } = m {
-        let le = m.emitted(&h.geometric, &-p.ray.rd);
+        // The side it emits from by the normal it shades with, as `trace` (for a smooth mesh,
+        // the interpolated normal, not the winding).
+        let le = m.emitted(&h.shading, &-p.ray.rd);
         if le != Color::black() {
             // Weighted against light sampling, if the vertex before sampled this light.
             let sampled = flat.emitter_index.get(h.prim as usize).copied().flatten();
@@ -477,8 +479,12 @@ pub fn render(s: &Scene, flat: &FlatScene, rc: &Mutex<RenderContext>, mut after_
         let mut rc = rc.lock().unwrap();
         for y in 0..h {
             for x in 0..w {
-                let c = image[y * w + x];
-                rc.set_pixel(x, y, c, Color { rgb: c.rgb.component_mul(&c.rgb) }, 1);
+                // A pixel a resumed state has already taken past k (another integrator's
+                // render) keeps what it has: sample k would repeat one of its samples.
+                if rc.samples_at(x, y) <= k {
+                    let c = image[y * w + x];
+                    rc.set_pixel(x, y, c, Color { rgb: c.rgb.component_mul(&c.rgb) }, 1);
+                }
             }
         }
         rc.rays_cast += rays;
@@ -487,12 +493,12 @@ pub fn render(s: &Scene, flat: &FlatScene, rc: &Mutex<RenderContext>, mut after_
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use crate::scenefile::SceneFile;
 
     /// The mean of a pass's pixels over `passes` passes.
-    fn mean_image(s: &Scene, passes: usize) -> Vec<Color> {
+    pub fn mean_image(s: &Scene, passes: usize) -> Vec<Color> {
         let flat = FlatScene::build(s).unwrap();
         let mut sum = vec![Color::black(); s.image.width * s.image.height];
         for k in 0..passes {
@@ -521,6 +527,67 @@ mod tests {
         assert!((mean - 1.).abs() < 0.01, "{}", mean);
         for c in image {
             assert!((c.rgb.x - 1.).abs() < 0.15, "{:?}", c.rgb);
+        }
+    }
+
+    /// The image's mean radiance in each of `nx` × `ny` tiles.
+    pub fn tiles(image: &[Color], w: usize, h: usize, nx: usize, ny: usize) -> Vec<Vector3<f64>> {
+        let mut out = vec![Vector3::zeros(); nx * ny];
+        for (i, c) in image.iter().enumerate() {
+            let (x, y) = (i % w, i / w);
+            out[(y * ny / h) * nx + x * nx / w] += c.rgb / ((w / nx) * (h / ny)) as f64;
+        }
+        out
+    }
+
+    /// What the review of the flat scene found missing from the tests: a two-sided plane light,
+    /// a one-sided quad light under a mirroring transform, a sphere light small and far enough
+    /// to trouble f32 (out of the camera's view: a camera ray that hit it would dominate its
+    /// tile), and glass.
+    pub fn hard_scene() -> Scene {
+        SceneFile::from_string(r#"{
+            "width": 16, "height": 16, "background": [0, 0, 0], "max_depth": 6, "path_termination": "russian_roulette",
+            "camera": { "location": [0, 1.5, -5], "lookat": [0, 1, 0], "up": [0, 1, 0], "angle": 0.7 },
+            "materials": {
+                "F": { "type": "lambertian", "albedo": [0.6, 0.6, 0.6] },
+                "G": { "type": "dielectric", "refractive_index": 1.5 },
+                "SKY": { "type": "diffuse-light", "color": [0.2, 0.25, 0.3], "intensity": 1 },
+                "QUAD": { "type": "diffuse-light", "color": [1, 0.8, 0.6], "intensity": 3 },
+                "STAR": { "type": "diffuse-light", "color": [1, 1, 1], "intensity": 4e8 }
+            },
+            "objects": [
+                { "type": "plane", "y": 0, "material": "F" },
+                { "type": "plane", "y": 8, "material": "SKY" },
+                { "type": "transform", "item": { "type": "quad", "points": [[-1, 3, -1], [-1, 3, 1], [1, 3, -1], [1, 3, 1]] },
+                  "scale": [-1, 1, 1], "material": "QUAD" },
+                { "type": "sphere", "location": [0, 0.6, 0], "radius": 0.6, "material": "G" },
+                { "type": "sphere", "location": [-1.8, 0.5, 0.5], "radius": 0.5, "material": "F" },
+                { "type": "sphere", "location": [-40, 7, -30], "radius": 0.01, "material": "STAR" }
+            ]
+        }"#.to_string())
+    }
+
+    #[test]
+    fn test_agrees_with_the_path_tracer_on_hard_cases() {
+        let s = hard_scene();
+        let n = 256;
+        let wavefront = mean_image(&s, n);
+        let (w, h) = (s.image.width, s.image.height);
+        let mut path = vec![Color::black(); w * h];
+        for (index, p) in path.iter_mut().enumerate() {
+            let (x, y) = (index % w, index / w);
+            for k in 0..n {
+                crate::geometry::seed_rand(9, (k * w * h + index) as u64);
+                let (u, v) = (crate::geometry::rand(), crate::geometry::rand());
+                let (ray, weight) = s.camera.get_ray_weighted(x as f64 / w as f64, y as f64 / h as f64, u / w as f64, v / h as f64).unwrap();
+                *p = *p + crate::trace::trace(&ray, 0, &s).1 * (weight / n as f64);
+            }
+        }
+        let (a, b) = (tiles(&wavefront, w, h, 2, 2), tiles(&path, w, h, 2, 2));
+        for t in 0..4 {
+            for ch in 0..3 {
+                assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "tile {} channel {}: wavefront {} vs path {}", t, ch, a[t][ch], b[t][ch]);
+            }
         }
     }
 

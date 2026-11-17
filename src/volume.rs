@@ -56,16 +56,57 @@ thread_local! {
     /// shadow rays included. Geometry is intersected without knowing which path it serves,
     /// hence a thread-local; each thread traces one path at a time, from `begin_path`.
     static PATH: Cell<(u32, f64)> = const { Cell::new((0, 1.)) };
+
+    /// How many vertices the path has scattered at diffusely or glossily (not a mirror or
+    /// glass), counting the one it is at: once it has left one, its segments cross the media
+    /// truncated (`Volume::truncated`), even before it scatters in one.
+    static VERTICES: Cell<u32> = const { Cell::new(0) };
 }
 
 /// Start a new path: no volume scatterings yet, and densities as given.
 pub fn begin_path() {
     PATH.with(|p| p.set((0, 1.)));
+    VERTICES.with(|v| v.set(0));
     chromatic::begin_path();
+}
+
+/// The path is at a vertex, about to scatter: its shadow rays and its continuation leave it.
+/// A specular vertex is then taken back (`specular_vertex`), so that what the camera sees in a
+/// mirror or through glass is seen as directly.
+pub fn at_vertex() {
+    VERTICES.with(|v| v.set(v.get() + 1));
+}
+
+/// The vertex just scattered specularly: it doesn't count.
+pub fn specular_vertex() {
+    VERTICES.with(|v| v.set(v.get().saturating_sub(1)));
+}
+
+/// Whether the path's segments now leave a vertex.
+fn left_vertex() -> bool {
+    VERTICES.with(|v| v.get()) > 0
+}
+
+/// Whether the path left a vertex before the one it is at.
+fn left_earlier_vertex() -> bool {
+    VERTICES.with(|v| v.get()) > 1
 }
 
 fn path_density_scale() -> f64 {
     PATH.with(|p| p.get().1)
+}
+
+impl Volume {
+    /// The factor this volume's density is scaled by for the current segment: as the path's
+    /// last volume scattering set it, or before any, this volume's own truncation once the path
+    /// has left a vertex, and as given on the camera's own rays.
+    fn segment_scale(&self) -> f64 {
+        match PATH.with(|p| p.get()) {
+            (0, _) if left_vertex() => self.truncated,
+            (0, _) => 1.,
+            (_, scale) => scale,
+        }
+    }
 }
 
 fn path_scatterings() -> u32 {
@@ -76,8 +117,18 @@ fn set_path(scatterings: u32, scale: f64) {
     PATH.with(|p| p.set((scatterings, scale)));
 }
 
-/// Below this estimated transmittance, ratio tracking plays Russian roulette.
-const RATIO_TRACKING_ROULETTE: f64 = 0.3;
+/// Below this estimated transmittance, ratio tracking plays Russian roulette. Survivors carry
+/// this much, so it is also the size of the speckles in a deep shadow, whose mean is far less:
+/// small, so that sunlight through a cloud's edge, or under it, isn't a scatter of bright
+/// grains of 0 or this (at 0.3, the ground under a cloud speckled like gravel).
+const RATIO_TRACKING_ROULETTE: f64 = 0.02;
+
+/// Ratio tracking samples collisions against this multiple of the residual majorant. Against
+/// the majorant itself, a collision where the density reaches it (a cloud's core) multiplies
+/// the estimate by 0, and ratio tracking is no better than delta tracking's 0 or 1; against
+/// twice it, each factor is at least a half, at the cost of twice the steps (Novák, Selle and
+/// Jarosz 2014, section 5: looser bounds trade steps for variance, towards exp(-∫σ) exactly).
+const RATIO_TRACKING_SLACK: f64 = 2.;
 
 /// The extinction coefficient through a volume: the chance of a collision per unit distance.
 pub trait DensityField: Sync + Send {
@@ -169,6 +220,12 @@ pub struct Volume {
     /// at the sample's wavelengths in spectral mode); None when it is the same in all, the
     /// density alone. Tracked by spectral MIS (`chromatic`).
     pub chromatic: Option<Color>,
+    /// The density scale for segments that leave a vertex before the path has scattered in a
+    /// medium (a surface's shadow rays, and the light it scatters), which the medium's
+    /// material sets from its truncations (`VolumeMaterial::density_scale`, from its first
+    /// truncated generation): light reaching a surface past a cloud's edge has been scattered
+    /// by small angles as often as not, as it has on its way to a cloud's vertex. 1 by default.
+    pub truncated: f64,
 }
 
 /// The stretches of a ray inside a volume: one for a box, any number for a shape.
@@ -189,12 +246,12 @@ impl Iterator for Spans {
 
 impl Volume {
     pub fn new(bounds: BBox, density: Arc<dyn DensityField>) -> Volume {
-        Volume { bounds, density, shape: None, chromatic: None }
+        Volume { bounds, density, shape: None, chromatic: None, truncated: 1. }
     }
 
     /// A medium filling the inside of a closed shape.
     pub fn in_shape(shape: Box<dyn Geometry + Sync + Send>, density: Arc<dyn DensityField>) -> Volume {
-        Volume { bounds: shape.bounds(), density, shape: Some(shape), chromatic: None }
+        Volume { bounds: shape.bounds(), density, shape: Some(shape), chromatic: None, truncated: 1. }
     }
 
     /// Where the ray from `ro` along the unit direction `d` is in the medium: (entry, exit)
@@ -248,7 +305,7 @@ impl Geometry for Volume {
         if let Some(k) = self.chromatic {
             return self.intersects_chromatic(r, min, &k.as_unbounded().rgb);
         }
-        let scale = path_density_scale();
+        let scale = self.segment_scale();
         if self.density.majorant() * scale <= 0. {
             return None;
         }
@@ -300,7 +357,7 @@ impl Geometry for Volume {
     /// estimate is small, Russian roulette ends most walks early (and doubles the survivors),
     /// which stays unbiased.
     fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 {
-        let scale = path_density_scale();
+        let scale = self.segment_scale();
         if self.density.majorant() * scale <= 0. {
             return 1.;
         }
@@ -317,7 +374,7 @@ impl Geometry for Volume {
             while t < stop {
                 let (majorant, length) = self.density.majorant_from(&(r.ro + d * t), &d);
                 let end = (t + length.max(t.abs().max(1.) * 1e-12)).min(stop);
-                let residual = majorant - control;
+                let residual = (majorant - control) * RATIO_TRACKING_SLACK;
                 if residual > 0. {
                     let step = -(1. - rand()).ln() / (residual * scale);
                     if t + step < end {
@@ -346,7 +403,7 @@ impl Geometry for Volume {
             None => return Color::white() * self.transmittance(r, min, max),
             Some(k) => k.as_unbounded().rgb,
         };
-        let scale = path_density_scale();
+        let scale = self.segment_scale();
         let kmax = k.max();
         if self.density.majorant() * scale * kmax <= 0. {
             return Color::white();
@@ -364,7 +421,7 @@ impl Geometry for Volume {
             while t < stop {
                 let (majorant, length) = self.density.majorant_from(&(r.ro + d * t), &d);
                 let end = (t + length.max(t.abs().max(1.) * 1e-12)).min(stop);
-                let residual = majorant - control;
+                let residual = (majorant - control) * RATIO_TRACKING_SLACK;
                 if residual > 0. {
                     let step = -(1. - rand()).ln() / (residual * kmax * scale);
                     if t + step < end {
@@ -399,7 +456,7 @@ impl Volume {
     /// density per channel, recording each tentative collision's probability ratios for the
     /// others (`chromatic`).
     fn intersects_chromatic(&self, r: &Ray, min: f64, k: &Vector3<f64>) -> Option<RawIntersection> {
-        let scale = path_density_scale();
+        let scale = self.segment_scale();
         let kmax = k.max();
         if self.density.majorant() * scale * kmax <= 0. {
             return None;
@@ -435,7 +492,8 @@ impl Volume {
 }
 
 /// Approximations that trade exactness for speed and noise in thick, bright media like
-/// clouds, where light scatters hundreds of times. Both off by default: plain path tracing.
+/// clouds, where light scatters hundreds of times. All off by default: plain path tracing.
+/// (Scene files turn `delta_m` on unless told otherwise.)
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ScatteringApproximation {
     /// Similarity relations from this many volume scatterings on. After a few scatterings,
@@ -456,6 +514,15 @@ pub struct ScatteringApproximation {
     /// path's first volume scattering; later ones then skip the sun, which would otherwise be
     /// counted twice, but still gather light from the sky and surroundings.
     pub oz: Option<Oz>,
+    /// Delta-M truncation of a Henyey-Greenstein phase function wherever the camera doesn't see
+    /// the medium directly (`VolumeMaterial::forward_peak`, `Volume::truncated`): the sharpest part of the forward peak,
+    /// a fraction g² of scattering, is taken as no scattering at all, and the rest scatters by
+    /// Henyey-Greenstein of mean cosine g / (1 + g). Light scattered through so small an angle
+    /// carries on almost as if unscattered, so the light that reaches the camera hardly
+    /// changes, but sunlight gathered at deep vertices no longer swings between almost none and
+    /// eighty times the mean (for g = 0.85), the grain that dominates a cloud's noise. The
+    /// first scattering, whose silver lining the camera sees, keeps the whole phase function.
+    pub delta_m: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -582,6 +649,35 @@ impl VolumeMaterial {
         self.diffraction.is_some() && scatterings >= 1
     }
 
+    /// The fraction f of the base phase function's scattering that a vertex after `scatterings`
+    /// earlier volume scatterings treats as no scattering: delta-M truncation
+    /// (`ScatteringApproximation::delta_m`; Wiscombe 1977, as for diffraction above). For
+    /// Henyey-Greenstein of mean cosine g, f = g² keeps the phase function's first two moments
+    /// (Wiscombe's equations 7-8 with its Legendre moments g^l), and the rest is
+    /// Henyey-Greenstein again with g' = (g - f) / (1 - f) = g / (1 + g). Like diffraction, it
+    /// leaves the extinction σ (1 - f α) and the albedo α (1 - f) / (1 - f α).
+    fn forward_peak(&self, scatterings: u32) -> f64 {
+        match self.phase {
+            PhaseFunction::HenyeyGreenstein { g } if g > 0. && self.approximation.delta_m && scatterings >= 1 => g * g,
+            _ => 0.,
+        }
+    }
+
+    /// Whether a path that hasn't scattered in a medium yet arrives at one of its vertices
+    /// truncated, having left a surface (`Volume::segment_scale`), when any truncation applies.
+    fn reached_truncated(&self) -> bool {
+        left_earlier_vertex() && self.density_scale(1) != 1.
+    }
+
+    /// The base phase function after `scatterings`: without its forward peak, when truncated.
+    fn base_phase(&self, scatterings: u32) -> PhaseFunction {
+        let f = self.forward_peak(scatterings);
+        match self.phase {
+            PhaseFunction::HenyeyGreenstein { g } if f > 0. => PhaseFunction::HenyeyGreenstein { g: (g - f) / (1. - f) },
+            p => p,
+        }
+    }
+
     /// How a vertex at `point`, after `scatterings` volume scatterings, scatters: isotropically
     /// when reduced, without diffraction when truncated, and otherwise in full.
     fn phase_at(&self, point: &Vector3<f64>, scatterings: u32) -> VertexPhase<'_> {
@@ -589,7 +685,7 @@ impl VolumeMaterial {
             return VertexPhase { base: PhaseFunction::isotropic(), diffraction: None };
         }
         VertexPhase {
-            base: self.phase,
+            base: self.base_phase(scatterings),
             diffraction: self.diffraction.as_ref().filter(|_| !self.truncated(scatterings))
                 .map(|d| (d, self.field.particle_radius(point).unwrap_or(d.radius))),
         }
@@ -600,7 +696,7 @@ impl VolumeMaterial {
     fn mean_cosine(&self, scatterings: u32) -> f64 {
         match &self.diffraction {
             Some(d) if !self.truncated(scatterings) => (1. - d.fraction) * self.phase.mean_cosine() + d.fraction,
-            _ => self.phase.mean_cosine(),
+            _ => self.base_phase(scatterings).mean_cosine(),
         }
     }
 
@@ -624,6 +720,13 @@ impl VolumeMaterial {
             scale *= 1. - d.fraction * albedo;
             albedo = albedo * (1. - d.fraction) / (1. - d.fraction * albedo);
         }
+        // Diffraction is truncated wherever the forward peak is, so then the base phase function
+        // is all the scattering left.
+        let f = self.forward_peak(scatterings);
+        if f > 0. {
+            scale *= 1. - f * albedo;
+            albedo = albedo * (1. - f) / (1. - f * albedo);
+        }
         if self.reduced(scatterings) {
             scale *= 1. - albedo * self.mean_cosine(scatterings);
         }
@@ -641,6 +744,10 @@ impl VolumeMaterial {
         if let Some(d) = self.diffraction.as_ref().filter(|_| self.truncated(scatterings)) {
             a = a.map(|a| a * (1. - d.fraction) / (1. - d.fraction * a));
         }
+        let f = self.forward_peak(scatterings);
+        if f > 0. {
+            a = a.map(|a| a * (1. - f) / (1. - f * a));
+        }
         if self.reduced(scatterings) {
             let g = self.mean_cosine(scatterings);
             a = a.map(|a| a * (1. - g) / (1. - a * g));
@@ -650,11 +757,11 @@ impl VolumeMaterial {
 
     /// Light from the scene's lights scattered at `point` towards the viewer, for light that
     /// was travelling along `incoming` (a unit vector): each light's radiance times the phase
-    /// function at the angle between `incoming` and the direction to it, times the albedo.
+    /// function at the angle between `incoming` and the direction to it, before the albedo.
     /// Point lights and the sun are delta lights, which a scattered ray can never hit, so this
     /// is the only way they reach a medium; area lights are sampled once, as at a surface.
     fn direct_lighting(&self, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene,
-                       phase: &VertexPhase, albedo: Color, scatterings: u32) -> Color {
+                       phase: &VertexPhase, scatterings: u32, first: u32) -> Color {
         let p = |w: &Vector3<f64>| phase.eval(incoming.dot(w)).as_unbounded();
         let mut direct = Color::black();
         // With a light BVH, point lights are sampled with the area lights below.
@@ -671,13 +778,13 @@ impl VolumeMaterial {
             let sun_phase = self.sun_phase(phase, incoming, s, scatterings).as_unbounded();
             direct = direct + match self.approximation.oz {
                 None => sun.irradiance_at(point) * sun_phase * sun.transmittance_from(point, s),
-                Some(oz) if scatterings == 0 => sun.irradiance_at(point) * self.oz_sunlight(&oz, sun_phase, incoming, point, s),
+                // At the path's first volume scattering, even one reached off a surface.
+                Some(oz) if first == 0 => sun.irradiance_at(point) * self.oz_sunlight(&oz, sun_phase, incoming, point, s),
                 // Already counted, octaves and all, at the path's first scattering.
                 Some(_) => Color::black(),
             };
         }
-        direct = direct + crate::material::functions::sample_lights_with(point, s, |w, _| p(w));
-        albedo * direct
+        direct + crate::material::functions::sample_lights_with(point, s, |w, _| p(w))
     }
 
     /// The phase function for direct sunlight at a vertex seen along `incoming`: with halos,
@@ -726,7 +833,11 @@ impl MaterialModel for VolumeMaterial {
         // The path scatters here (`ggx::regularised`).
         crate::material::ggx::scattered();
         let incoming = r.rd.normalize();
-        let scatterings = path_scatterings();
+        let first = path_scatterings();
+        // A first volume scattering after the path has left a surface arrived truncated
+        // (`Volume::truncated`): it scatters as the first truncated generation. Only one the
+        // camera sees directly scatters in full.
+        let scatterings = if first == 0 && self.reached_truncated() { 1 } else { first };
         let phase = self.phase_at(&i.point, scatterings);
         let albedo = self.albedo_at(scatterings);
         // Light leaving this vertex, towards the lights and onwards, has scattered once more.
@@ -741,7 +852,7 @@ impl MaterialModel for VolumeMaterial {
                 self.adjusted_albedo(Color { rgb: single }, scatterings)
             },
         };
-        let mut emit = self.direct_lighting(&incoming, &i.point, s, &phase, albedo, scatterings);
+        let mut emit = albedo * self.direct_lighting(&incoming, &i.point, s, &phase, scatterings, first);
         if let Some(e) = &self.emission {
             // σ_a / σ_t of the emitted radiance (`emission`).
             emit = emit + (Color::white() - albedo) * e.radiance(&i.point);
@@ -795,6 +906,7 @@ pub fn create_medium(mut volume: Volume, s: Scattering) -> SceneObject {
         halos: s.halos, rainbow: s.rainbow, field: volume.density.clone(), emission: s.emission,
         extinction,
     };
+    volume.truncated = material.density_scale(1);
     SceneObject {
         geometry: Box::new(volume),
         medium: Box::new(Solid { m: Box::new(material) }),
@@ -947,6 +1059,49 @@ mod tests {
         assert!(m.phase_at(&Vector3::zeros(), 1).diffraction.is_none());
         // Scattered light is conserved: σ_s' = σ α' = 0.55 × 0.818 = 0.45 = σ α (1 - f).
         assert!((m.density_scale(1) * m.albedo_at(1).rgb.x - 0.9 * 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_delta_m_truncates_all_but_the_cameras_segments() {
+        // Henyey-Greenstein g = 0.8, albedo 0.9: delta-M takes f = 0.64 of scattering as none,
+        // so rays that leave a vertex see the extinction scaled by 1 - 0.9 × 0.64; the camera's
+        // own rays see the medium as it is.
+        let scattering = Scattering {
+            albedo: Color::new(0.9, 0.9, 0.9),
+            phase: PhaseFunction::HenyeyGreenstein { g: 0.8 },
+            approximation: ScatteringApproximation { delta_m: true, ..ScatteringApproximation::default() },
+            diffraction: None, halos: None, rainbow: None, emission: None, extinction: None,
+        };
+        let o = create_volume(unit_box(), Arc::new(ConstantDensity(2.)), scattering);
+        let r = Ray { ro: Vector3::new(-1., 0.5, 0.5), rd: Vector3::new(1., 0., 0.) };
+        begin_path();
+        assert!((o.transmittance(&r, 0., f64::INFINITY) - (-2f64).exp()).abs() < 1e-12);
+        at_vertex();
+        let truncated = (-2. * (1. - 0.9 * 0.64f64)).exp();
+        assert!((o.transmittance(&r, 0., f64::INFINITY) - truncated).abs() < 1e-12);
+        // Not after a mirror.
+        specular_vertex();
+        assert!((o.transmittance(&r, 0., f64::INFINITY) - (-2f64).exp()).abs() < 1e-12);
+        begin_path();
+    }
+
+    #[test]
+    fn test_delta_m_conserves_scattering() {
+        // From the second scattering, g' = g / (1 + g), and the scattering coefficient that is
+        // left is what wasn't truncated: σ' α' = σ α (1 - f).
+        let m = VolumeMaterial {
+            albedo: Color::new(0.95, 0.95, 0.95),
+            phase: PhaseFunction::HenyeyGreenstein { g: 0.85 },
+            approximation: ScatteringApproximation { delta_m: true, ..ScatteringApproximation::default() },
+            diffraction: None, halos: None, rainbow: None,
+            field: Arc::new(ConstantDensity(1.)), emission: None, extinction: None,
+        };
+        assert_eq!(m.density_scale(0), 1.);
+        assert_eq!(m.mean_cosine(0), 0.85);
+        assert!((m.mean_cosine(1) - 0.85 / 1.85).abs() < 1e-12);
+        let f = 0.85f64.powi(2);
+        assert!((m.density_scale(1) * m.albedo_at(1).rgb.x - 0.95 * (1. - f)).abs() < 1e-12);
+        assert!((m.density_scale(1) - (1. - 0.95 * f)).abs() < 1e-12);
     }
 
     #[test]

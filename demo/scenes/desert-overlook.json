@@ -18,14 +18,14 @@
    "scale": 900,
    "coverage": 0.12,
    "cliff": 22,
-   "benches": 1,
-   "talus": 0.38,
-   "talus_width": 180,
+   "benches": 0,
+   "talus": 0.48,
+   "talus_width": 130,
    "towers": 0.06,
    "relief": 0.08,
    "domes": 70,
    "height_variation": 0.12,
-   "roughness": 0.3,
+   "roughness": 0.6,
    "floor_amplitude": 6,
    "floor_scale": 200,
    "floor_ledges": 0,
@@ -109,14 +109,14 @@
    "scale": 900,
    "coverage": 0.12,
    "cliff": 22,
-   "benches": 1,
-   "talus": 0.38,
-   "talus_width": 180,
+   "benches": 0,
+   "talus": 0.48,
+   "talus_width": 130,
    "towers": 0.06,
    "relief": 0.08,
    "domes": 70,
    "height_variation": 0.12,
-   "roughness": 0.3,
+   "roughness": 0.6,
    "floor_amplitude": 6,
    "floor_scale": 200,
    "floor_ledges": 0,
@@ -200,14 +200,14 @@
    "scale": 900,
    "coverage": 0.12,
    "cliff": 22,
-   "benches": 1,
-   "talus": 0.38,
-   "talus_width": 180,
+   "benches": 0,
+   "talus": 0.48,
+   "talus_width": 130,
    "towers": 0.06,
    "relief": 0.08,
    "domes": 70,
    "height_variation": 0.12,
-   "roughness": 0.3,
+   "roughness": 0.6,
    "floor_amplitude": 6,
    "floor_scale": 200,
    "floor_ledges": 0,
@@ -443,14 +443,14 @@
    "scale": 6,
    "seed": 5,
    "color": [
-    0.68,
-    0.32,
-    0.22
+    0.6,
+    0.26,
+    0.15
    ],
    "secondary": [
-    0.6,
-    0.28,
-    0.2
+    0.54,
+    0.23,
+    0.14
    ],
    "strata_spacing": 0.25,
    "strata_amount": 0.35,
@@ -473,7 +473,7 @@
    ],
    "dark_grain_amount": 0,
    "light_grain_amount": 0,
-   "variety": 0.25,
+   "variety": 0.15,
    "variety_color": [
     0.7,
     0.45,
@@ -483,89 +483,41 @@
     [
      0,
      [
-      0.62,
-      0.29,
-      0.21
+      0.58,
+      0.26,
+      0.16
+     ]
+    ],
+    [
+     10,
+     [
+      0.7,
+      0.5,
+      0.4
      ]
     ],
     [
      14,
      [
-      0.6,
-      0.45,
-      0.42
+      0.58,
+      0.26,
+      0.16
      ]
     ],
     [
-     28,
+     120,
      [
       0.62,
-      0.29,
-      0.21
-     ]
-    ],
-    [
-     42,
-     [
-      0.6,
-      0.45,
-      0.42
-     ]
-    ],
-    [
-     56,
-     [
-      0.62,
-      0.29,
-      0.21
-     ]
-    ],
-    [
-     70,
-     [
-      0.6,
-      0.45,
-      0.42
-     ]
-    ],
-    [
-     84,
-     [
-      0.62,
-      0.29,
-      0.21
-     ]
-    ],
-    [
-     98,
-     [
-      0.6,
-      0.45,
-      0.42
-     ]
-    ],
-    [
-     112,
-     [
-      0.62,
-      0.29,
-      0.21
-     ]
-    ],
-    [
-     130,
-     [
-      0.66,
-      0.34,
-      0.24
+      0.28,
+      0.16
      ]
     ],
     [
      240,
      [
-      0.66,
-      0.34,
-      0.24
+      0.64,
+      0.3,
+      0.17
      ]
     ]
    ],

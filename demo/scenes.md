@@ -165,14 +165,20 @@ into festoons, cut off by each set above (`material::rock::cross_beds`), and sta
 relief on an 8 cm grid near the camera (`laminae`): harder laminae as ribs, partings worn
 back. The rock carries lichen, bleached patches, desert varnish and fine turbulent bump
 (`"fractal"`). Below, a valley of landmark buttes (`buttes`): flat, thin caprock over walls
-split into slabs and fins along one dominant set of joints (`joints`), standing on banded,
-ledged shale slopes; pale sand gathers in the washes and hollows, where the plants crowd
+split into slabs and fins along one dominant set of joints (`joints`), standing on concave cones of
+gullied debris; pale sand gathers in the washes and hollows, where the plants crowd
 (`{"terrain": ...}` textures and a forest's `"favour"`), and the country rises to long
 tablelands at the horizon (`valley`). Sunlit cumulus cast shadows across it; the sky is on the
 sun's scale, a filmic tone curve gives it a photograph's contrast, and it is rendered
 adaptively (`"adaptive"`). The near country is a 1.5 m grid and the far, to the horizon, a
 30 m grid of the same mesas (`domain`), each with a `hole` where the finer one is.
 ![desert overlook](./scenes/desert-overlook.png)
+
+One of the overlook's buttes from the valley floor (`desert-butte.json`): sheer walls of
+sandstone, split along their joints into rounded buttresses, on a cone of debris half its
+height, concave and steepest under the cliff, cut by gullies radiating down it (each found
+from where on the cliff's foot its slope falls from), with blocks fallen from the cliff.
+![desert butte](./scenes/desert-butte.png)
 
 ## Alpine terrain
 Mountains from seeded noise after one 100,000 year glacial cycle: tectonic uplift, river

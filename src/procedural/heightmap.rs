@@ -321,8 +321,11 @@ impl MesaHeight {
                 let line = (u - u.round()).abs() * spacing;
                 let (bias, deep) = if k == 0 { (-0.1, 1.) } else { (0.35, 0.5) };
                 let open = smoothstep(bias, bias + 0.4, n(3. * spacing, salt + 11. * k as f64));
-                let width = 0.08 * spacing;
-                d -= depth * deep * open * (1. - smoothstep(0., width, line));
+                // Rounded re-entrants rather than square slots: the walls between joints weather
+                // into buttresses.
+                let width = 0.3 * spacing;
+                let t = 1. - smoothstep(0., width, line);
+                d -= depth * deep * open * t * t;
             }
         }
         d
@@ -365,14 +368,10 @@ impl MesaHeight {
     fn shape(&self, d: f64, h: f64, talus: f64, width: f64, cliff: f64) -> (f64, f64) {
         let apron = h * talus;
         if d <= 0. {
-            // A concave slope, steepest (at about scree's angle of repose, 35 degrees, for the
-            // default width) where it meets the cliff, stepped by the ledges of harder beds in
-            // the soft rock it is cut into.
+            // A concave cone of debris, steepest (at about scree's angle of repose, 35 degrees,
+            // for the default width) where it meets the cliff, flaring out onto the floor. Its
+            // texture (gullies, fallen blocks) is added by `debris`.
             let u = (d / width.max(1e-9)).exp();
-            // Banded shale under the cliff: alternating ledges of siltstone and slopes of shale.
-            let n = 7.;
-            let ledges = ((u * n).floor() + smoothstep(0., 0.3, (u * n).fract())) / n;
-            let u = u + 0.7 * (ledges - u) * smoothstep(0.1, 0.35, u);
             return (apron * u, (std::f64::consts::PI * u).sin().max(0.));
         }
         // The cliff in steps: each a near-vertical riser and a ledge, the last riser the caprock.
@@ -453,21 +452,44 @@ impl MesaHeight {
         dome_value(&self.noise, x, z, self.domes)
     }
 
-    /// The tallest tower's height at (x, z), and how much debris slope it is.
-    fn towers_at(&self, x: f64, z: f64) -> (f64, f64) {
+    /// The tallest tower's height at (x, z), how much debris slope it is, and the point of the
+    /// tower's foot the slope there falls from.
+    fn towers_at(&self, x: f64, z: f64) -> (f64, f64, f64, f64) {
         let (ci, cj) = ((x / self.tower_cell).floor() as i64, (z / self.tower_cell).floor() as i64);
-        let mut best = (0., 0.);
+        let mut best = (0., 0., x, z);
         for i in ci - 1 ..= ci + 1 {
             for j in cj - 1 ..= cj + 1 {
                 for &k in self.tower_grid.get(&(i, j)).map_or(&[][..], |v| &v[..]) {
-                    let (h, w) = self.tower_height(&self.towers[k], x, z);
+                    let t = &self.towers[k];
+                    let (h, w) = self.tower_height(t, x, z);
                     if h > best.0 {
-                        best = (h, w);
+                        let r = ((x - t.x).powi(2) + (z - t.z).powi(2)).sqrt().max(1e-9);
+                        best = (h, w, t.x + (x - t.x) / r * t.radius, t.z + (z - t.z) / r * t.radius);
                     }
                 }
             }
         }
         best
+    }
+
+    /// The texture of a debris slope at (x, z), `slope` its weight (0 off the slope), falling
+    /// from the cliff's foot at (cx, cz), whose top is `h` high: gullies cut straight down it,
+    /// radiating from the cliff as rills do on scree, with ribs of debris between them; and
+    /// blocks fallen from the cliff, mostly near its top. Gullies are found from where along
+    /// the cliff's foot the slope falls from, so they run downslope however the outline turns.
+    fn debris(&self, x: f64, z: f64, cx: f64, cz: f64, slope: f64, h: f64) -> f64 {
+        if self.roughness <= 0. || slope <= 0. { return 0. }
+        let along = self.cliff * 0.35;
+        let run = ((x - cx).powi(2) + (z - cz).powi(2)).sqrt();
+        // Gullies wander and branch a little as they run down.
+        let g = 2. * self.noise.fbm(cx / along + 61.7, run / (4. * self.cliff), cz / along - 61.7, 3, 0.5, 2.) - 1.;
+        let gully = 1. - smoothstep(0., 0.14, g.abs());
+        let rib = smoothstep(0.1, 0.5, g.abs());
+        // Fallen blocks: lumps on a finer scale, sharp-topped, more under the cliff.
+        let lump = (2. * self.noise.fbm(x / (0.06 * self.cliff) + 13.3, 4.4, z / (0.06 * self.cliff) - 13.3, 2, 0.5, 2.) - 1.).max(0.).powi(2);
+        let near_cliff = smoothstep(4. * self.cliff, 0., run);
+        let apron = h * self.talus;
+        self.roughness * slope * apron * (0.02 * rib - 0.09 * gully + 0.025 * lump * near_cliff)
     }
 }
 
@@ -635,7 +657,19 @@ impl HeightSource for MesaHeight {
         }
         let width = self.talus_width * h / self.height;
         let cliff = self.cliff * (1. + self.taper * (0.5 + 0.5 * n(8. * self.cliff, 31.3, 2)).max(0.) * 2.);
-        let (mut profile, mut slope) = self.shape(d, h, self.talus, width, cliff);
+        // The cones follow the mesa's broad outline, not every notch and joint in its cliff: on
+        // the slope the distance is half from the smoothed outline.
+        let base_d = self.base_distance(x, z);
+        let ds = if d <= 0. { 0.5 * (d + base_d.min(0.)) } else { d };
+        let (mut profile, mut slope) = self.shape(ds, h, self.talus, width, cliff);
+        // Where on the cliff's foot this point's slope falls from: back up the outline's
+        // gradient by its distance.
+        let foot = if d <= 0. {
+            let e = 0.5 * self.cliff;
+            let (gx, gz) = (self.base_distance(x + e, z) - self.base_distance(x - e, z), self.base_distance(x, z + e) - self.base_distance(x, z - e));
+            let g = (gx * gx + gz * gz).sqrt().max(1e-9);
+            (x - gx / g * ds, z - gz / g * ds)
+        } else { (x, z) };
         if d > 0. && self.joints.is_some() {
             // Columns at the rim worn to their own heights; the cliff below them stays.
             let floor_of_cliff = h * self.talus;
@@ -659,18 +693,13 @@ impl HeightSource for MesaHeight {
             (n(6. * self.cliff, 5.1, 4) + 0.15).max(0.).powf(1.5) * 1.6
         };
         profile += inside * (self.relief * self.height * hills + 0.01 * self.height * n(0.8 * self.cliff, 8.8, 3));
-        let (tower, tower_slope) = self.towers_at(x, z);
+        let (mut foot, mut top) = (foot, h);
+        let (tower, tower_slope, tx, tz) = self.towers_at(x, z);
         if tower > profile {
             (profile, slope) = (tower, tower_slope);
+            (foot, top) = ((tx, tz), self.height);
         }
-        // Gullies down the debris slopes (along the zero lines of noise, which wander as a
-        // drainage net does), and blocks fallen from the cliffs.
-        if self.roughness > 0. && slope > 0. {
-            let g = n(1.2 * self.cliff, 61.7, 3).abs();
-            let gully = 1. - smoothstep(0., 0.18, g);
-            let blocks = n(0.12 * self.cliff, 13.3, 2).max(0.);
-            profile += slope * self.roughness * self.talus * self.height * (0.02 * blocks - 0.06 * gully);
-        }
+        profile += self.debris(x, z, foot.0, foot.1, slope, top);
         let sunk = match self.hole {
             Some([x0, z0, x1, z1]) if x > x0 && x < x1 && z > z0 && z < z1 => 2. * self.height,
             _ => 0.,

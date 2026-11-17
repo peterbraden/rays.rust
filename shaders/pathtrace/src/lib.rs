@@ -58,13 +58,35 @@ pub struct Prim {
 #[derive(Copy, Clone)]
 #[cfg_attr(not(target_arch = "spirv"), derive(bytemuck::Pod, bytemuck::Zeroable))]
 #[repr(C)]
+/// An interior node of the BVH, holding its two children's boxes: a ray tests both at one
+/// visit, goes into the nearer and keeps the farther for later only if it enters it (Aila and
+/// Laine, "Understanding the Efficiency of Ray Traversal on GPUs", HPG 2009). Leaves have no
+/// node of their own: a child is a leaf when its count isn't zero.
 pub struct Node {
+    pub amin: Vec3,
+    /// Child a: a leaf's first item, or an interior node's index.
+    pub a: u32,
+    pub amax: Vec3,
+    /// A leaf's items; 0 for an interior node. A child that isn't there (the second child of
+    /// a tree that is one leaf) is an interior node with an empty box, which no ray enters.
+    pub a_count: u32,
     pub bmin: Vec3,
-    /// A leaf's first item, or an interior node's second child.
-    pub offset: u32,
+    pub b: u32,
     pub bmax: Vec3,
-    /// A leaf's items; 0 for an interior node.
-    pub count: u32,
+    pub b_count: u32,
+}
+
+/// A child as the traversal's stack holds it: an interior node's index, or for a leaf, this
+/// bit, its count less one in the next `LEAF_COUNT_BITS` and its first item in the rest.
+pub const LEAF: u32 = 0x8000_0000;
+pub const LEAF_COUNT_BITS: u32 = 3;
+/// The most items a leaf may hold, and one more than the largest first item.
+pub const MAX_LEAF: u32 = 1 << LEAF_COUNT_BITS;
+pub const MAX_LEAF_ITEMS: u32 = 1 << (31 - LEAF_COUNT_BITS);
+
+#[inline(always)]
+fn child(index: u32, count: u32) -> u32 {
+    if count > 0 { LEAF | ((count - 1) << (31 - LEAF_COUNT_BITS)) | index } else { index }
 }
 
 #[derive(Copy, Clone)]
@@ -185,8 +207,11 @@ pub const GALAXY_SIZE: u32 = 29;
 pub const MIN_ALPHA: f32 = 1e-3;
 pub const POINT_SUN: f32 = 1e-3;
 pub const LIMB_DARKENING: f32 = 0.6;
-/// The BVH traversal's stack: the host refuses trees deeper than this (`Buffers::build`).
-pub const STACK: usize = 100;
+/// The BVH traversal's stack: one entry for each level of interior nodes, at most (the
+/// farther child, while the nearer is descended into). The host refuses trees deeper than
+/// this (`Buffers::build`); a binary tree built by the surface area heuristic over a million
+/// triangles is about 40 levels deep.
+pub const STACK: usize = 64;
 const PI: f32 = core::f32::consts::PI;
 const INF: f32 = 3.0e38;
 const NONE: u32 = 0xffff_ffff;
@@ -199,6 +224,35 @@ pub struct Scene<'a> {
     pub materials: &'a [Material],
     pub lights: &'a [Light],
     pub tables: &'a [f32],
+}
+
+/// How much work traversal does, counted on the CPU build only (the shader has nowhere to
+/// keep it): box tests and primitive tests since `stats::take` was last called on this thread.
+/// They are the same on the GPU, which runs this code; `gpu::tests::measure_traversal` reports
+/// them per ray.
+#[cfg(not(target_arch = "spirv"))]
+pub mod stats {
+    use std::cell::Cell;
+    thread_local! {
+        pub static BOXES: Cell<u64> = const { Cell::new(0) };
+        pub static PRIMS: Cell<u64> = const { Cell::new(0) };
+    }
+    /// (box tests, primitive tests) since the last call, on this thread.
+    pub fn take() -> (u64, u64) {
+        (BOXES.with(|c| c.replace(0)), PRIMS.with(|c| c.replace(0)))
+    }
+}
+
+#[inline(always)]
+fn count_box() {
+    #[cfg(not(target_arch = "spirv"))]
+    stats::BOXES.with(|c| c.set(c.get() + 1));
+}
+
+#[inline(always)]
+fn count_prim() {
+    #[cfg(not(target_arch = "spirv"))]
+    stats::PRIMS.with(|c| c.set(c.get() + 1));
 }
 
 /// `slice[i]` without the bounds check: the host sizes every buffer for the indices it writes
@@ -336,7 +390,9 @@ fn slab(p: f32, q: f32, near: f32, far: f32) -> (f32, f32) {
     if p == p && q == q { (near.max(p.min(q)), far.min(p.max(q))) } else { (near, far) }
 }
 
-fn box_hit(bmin: Vec3, bmax: Vec3, ro: Vec3, inv: Vec3, tmax: f32) -> bool {
+/// Where the ray enters the box, if it does before `tmax`; otherwise `INF`.
+fn box_entry(bmin: Vec3, bmax: Vec3, ro: Vec3, inv: Vec3, tmax: f32) -> f32 {
+    count_box();
     let t1 = (bmin - ro) * inv;
     let t2 = (bmax - ro) * inv;
     // Per axis; a ray parallel to a slab and starting on its face makes 0 × ∞ = NaN, and
@@ -345,7 +401,7 @@ fn box_hit(bmin: Vec3, bmax: Vec3, ro: Vec3, inv: Vec3, tmax: f32) -> bool {
     let (n0, f0) = slab(t1.x, t2.x, -INF, INF);
     let (n1, f1) = slab(t1.y, t2.y, n0, f0);
     let (near, far) = slab(t1.z, t2.z, n1, f1);
-    !(far < 0.0 || near > far || near > tmax)
+    if far < 0.0 || near > far || near > tmax { INF } else { near }
 }
 
 /// The nearest hit beyond `tmin`, or with `any_hit`, whether anything lies before `tmax`.
@@ -355,14 +411,21 @@ fn trace(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> 
     let np = s.params.counts.x;
     // One loop, and so one copy of `intersect_prim` once rust-gpu inlines everything: a leaf's
     // primitives j..end are tested first (to begin with, the planes, which follow the bounded
-    // primitives), then the next node is taken from the stack.
+    // primitives), then the tree is descended: at each interior node into the nearer child
+    // the ray enters, the farther going on the stack with the distance at which the ray
+    // enters it, so that it can be dropped unvisited if something nearer has been hit by the
+    // time it comes off.
     let mut j = np;
     let mut end = np + s.params.counts.y;
     let inv = Vec3::ONE / rd;
     let mut stack = [0u32; STACK];
-    let mut sp = if np > 0 { 1usize } else { 0 };
+    let mut entered = [0f32; STACK];
+    let mut sp = 0usize;
+    // The interior node to visit next, if there is one; the root, to begin with.
+    let mut node = if np > 0 { 0 } else { NONE };
     loop {
         if j < end {
+            count_prim();
             let h = intersect_prim(s, j, ro, rd, tmin, best.t);
             if h.w > 0.0 {
                 best.t = h.x;
@@ -375,22 +438,42 @@ fn trace(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> 
             j += 1;
             continue;
         }
-        if sp == 0 {
-            break;
+        // The next thing to do: the child chosen at the last node, or the stack's top.
+        let mut next = node;
+        node = NONE;
+        if next == NONE {
+            if sp == 0 {
+                break;
+            }
+            sp -= 1;
+            if entered[sp] >= best.t {
+                continue;
+            }
+            next = stack[sp];
         }
-        sp -= 1;
-        let ni = stack[sp];
-        let n = at(s.nodes, ni);
-        if !box_hit(n.bmin, n.bmax, ro, inv, best.t) {
+        if next & LEAF != 0 {
+            j = next & (MAX_LEAF_ITEMS - 1);
+            end = j + ((next & !LEAF) >> (31 - LEAF_COUNT_BITS)) + 1;
             continue;
         }
-        if n.count > 0 {
-            j = n.offset;
-            end = n.offset + n.count;
-        } else if sp + 2 <= STACK {
-            stack[sp] = n.offset;
-            stack[sp + 1] = ni + 1;
-            sp += 2;
+        let n = at(s.nodes, next);
+        let ta = box_entry(n.amin, n.amax, ro, inv, best.t);
+        let tb = box_entry(n.bmin, n.bmax, ro, inv, best.t);
+        let ca = child(n.a, n.a_count);
+        let cb = child(n.b, n.b_count);
+        // The nearer first (a, if they tie), the farther kept if the ray enters it at all.
+        let a_first = ta <= tb;
+        let near = if a_first { ca } else { cb };
+        let far = if a_first { cb } else { ca };
+        let t_near = if a_first { ta } else { tb };
+        let t_far = if a_first { tb } else { ta };
+        if t_far < INF && sp < STACK {
+            stack[sp] = far;
+            entered[sp] = t_far;
+            sp += 1;
+        }
+        if t_near < INF {
+            node = near;
         }
     }
     if best.prim != NONE {

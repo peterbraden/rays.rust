@@ -226,7 +226,8 @@ pub struct GpuRenderer {
     pub adapter_name: String,
 }
 
-/// The depth of an exported BVH (`Bvh::export`): one for a lone leaf.
+/// The depth of an exported BVH (`Bvh::export`), leaves included: one for a lone leaf. The
+/// shader's stack needs an entry for each level of interior nodes, which is one fewer.
 fn bvh_depth(nodes: &[(crate::shapes::bbox::BBox, u32, u32)]) -> usize {
     if nodes.is_empty() {
         return 0;
@@ -242,6 +243,52 @@ fn bvh_depth(nodes: &[(crate::shapes::bbox::BBox, u32, u32)]) -> usize {
         }
     }
     deepest
+}
+
+/// The BVH as the shader traverses it: its interior nodes alone, each with its two children's
+/// boxes (`pathtrace::Node`), the root first. A tree that is a single leaf gets a root with
+/// that leaf as its only child; no tree at all, a root no ray enters.
+fn gpu_nodes(exported: &[(crate::shapes::bbox::BBox, u32, u32)]) -> Result<Vec<GpuNode>, String> {
+    use pathtrace::glam::Vec3;
+    // A box no ray enters (`box_entry`: it leaves before it arrives).
+    const NOWHERE: (Vec3, Vec3) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+    let empty = GpuNode { amin: NOWHERE.0, a: 0, amax: NOWHERE.1, a_count: 0, bmin: NOWHERE.0, b: 0, bmax: NOWHERE.1, b_count: 0 };
+    let corners = |b: &crate::shapes::bbox::BBox| (Vec3::new(b.min.x as f32, b.min.y as f32, b.min.z as f32), Vec3::new(b.max.x as f32, b.max.y as f32, b.max.z as f32));
+    let Some((root_bounds, root_offset, root_count)) = exported.first() else {
+        return Ok(vec![empty]);
+    };
+    if *root_count > 0 {
+        let (amin, amax) = corners(root_bounds);
+        return Ok(vec![GpuNode { amin, amax, a: *root_offset, a_count: *root_count, ..empty }]);
+    }
+    // Each interior node's index among the interior nodes, in the same (depth-first) order.
+    let mut index = vec![u32::MAX; exported.len()];
+    let mut interior = 0;
+    for (i, (_, _, count)) in exported.iter().enumerate() {
+        if *count == 0 {
+            index[i] = interior;
+            interior += 1;
+        }
+    }
+    // A child as a node holds it: (first item, count) for a leaf, (index, 0) otherwise.
+    let child = |i: usize| -> Result<(Vec3, Vec3, u32, u32), String> {
+        let (bounds, offset, count) = &exported[i];
+        let (min, max) = corners(bounds);
+        if *count > pathtrace::MAX_LEAF {
+            return Err(format!("a BVH leaf of {} primitives (the shader's hold {})", count, pathtrace::MAX_LEAF));
+        }
+        Ok(if *count > 0 { (min, max, *offset, *count) } else { (min, max, index[i], 0) })
+    };
+    let mut nodes = Vec::with_capacity(interior as usize);
+    for (i, (_, second, count)) in exported.iter().enumerate() {
+        if *count == 0 {
+            // An interior node's first child is the next node; its second, at `offset`.
+            let (amin, amax, a, a_count) = child(i + 1)?;
+            let (bmin, bmax, b, b_count) = child(*second as usize)?;
+            nodes.push(GpuNode { amin, a, amax, a_count, bmin, b, bmax, b_count });
+        }
+    }
+    Ok(nodes)
 }
 
 fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
@@ -305,19 +352,16 @@ impl Buffers {
         if prims.is_empty() {
             prims.push(GpuPrim::zeroed());
         }
-        // The shader's traversal stack holds at most one node per level, and one more.
+        // The shader's traversal stack holds at most one child per level of interior nodes.
         let exported = flat.bvh.export();
         let depth = bvh_depth(&exported);
-        if depth + 1 > pathtrace::STACK {
+        if depth > pathtrace::STACK {
             return Err(format!("a BVH {} levels deep (the shader's stack holds {})", depth, pathtrace::STACK));
         }
-        let mut nodes: Vec<GpuNode> = exported.iter().map(|(b, offset, count)| GpuNode {
-            bmin: pathtrace::glam::Vec3::new(b.min.x as f32, b.min.y as f32, b.min.z as f32), offset: *offset,
-            bmax: pathtrace::glam::Vec3::new(b.max.x as f32, b.max.y as f32, b.max.z as f32), count: *count,
-        }).collect();
-        if nodes.is_empty() {
-            nodes.push(GpuNode::zeroed());
+        if prims.len() > pathtrace::MAX_LEAF_ITEMS as usize {
+            return Err(format!("{} primitives (the shader's traversal counts to {})", prims.len(), pathtrace::MAX_LEAF_ITEMS));
         }
+        let nodes = gpu_nodes(&exported)?;
 
         // Tables: emitters' primitives and their cumulative distribution, then the sky.
         let mut tables: Vec<f32> = Vec::new();
@@ -969,6 +1013,41 @@ mod tests {
             // And traces as many rays (w).
             let gpu_rays: f64 = sums.iter().map(|v| v[3] as f64).sum();
             assert!((gpu_rays - cpu_rays as f64).abs() < 0.01 * cpu_rays as f64, "{} rays: GPU {} vs CPU {}", name, gpu_rays, cpu_rays);
+        }
+    }
+
+    /// How much work the shader's traversal does on scenes of geometry: box tests and
+    /// primitive tests per ray, counted on the shader's CPU build (the GPU runs the same code,
+    /// so does the same work). Not a test of anything; run it for the figures:
+    /// `cargo test --release --features gpu measure_traversal -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn measure_traversal() {
+        println!("{:<16} {:>9} {:>9} {:>10} {:>10} {:>10}", "scene", "prims", "nodes", "rays", "boxes/ray", "prims/ray");
+        for name in ["demo/demo.json", "demo/scenes/instances.json", "demo/scenes/glossy-sun.json", "demo/scenes/spheres.json"] {
+            let s = SceneFile::from_file(name, &crate::scenefile::Overrides { width: Some(160), height: Some(90), seed: None });
+            let flat = match FlatScene::build(&s) {
+                Ok(f) => f,
+                Err(e) => { println!("{:<16} not flattened: {}", name, e); continue; },
+            };
+            let b = Buffers::build(&s, &flat).unwrap();
+            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            pathtrace::stats::take();
+            let mut total_rays = 0u64;
+            let start = std::time::Instant::now();
+            for k in 0..2 {
+                for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
+                    if ray.d.w < 0.5 { continue; }
+                    let mut rng = pathtrace::path_seed(index as u32, k as u32, b.params.seed.x);
+                    let mut rays = 0;
+                    pathtrace::radiance(&shader, ray.o.truncate(), ray.d.truncate(), &mut rng, &mut rays);
+                    total_rays += rays as u64;
+                }
+            }
+            let (boxes, prims) = pathtrace::stats::take();
+            let short = name.rsplit('/').next().unwrap().trim_end_matches(".json");
+            println!("{:<16} {:>9} {:>9} {:>10} {:>10.1} {:>10.1}   ({:.2} s on one thread, tree {} levels deep)", short, b.prims.len(), b.nodes.len(), total_rays,
+                boxes as f64 / total_rays as f64, prims as f64 / total_rays as f64, start.elapsed().as_secs_f64(), bvh_depth(&flat.bvh.export()));
         }
     }
 

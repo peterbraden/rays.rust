@@ -97,7 +97,7 @@ def main():
             {"type": "ocean", "wind": [9, 3]},
             {"type": "skysphere", "sun_direction": [0.15, 0.06, 1]},
             {"type": "nubis_clouds", "mapping": "global", "base": 1500, "top": 4000, "coverage": 0.5, "density": 0.03,
-             "albedo": [0.99, 0.99, 0.99], "g": 0.85, "similarity_after": 2, "seed": 4, "map_size": 512,
+             "albedo": [0.99, 0.99, 0.99], "g": 0.85, "similarity_after": 2, "seed": 10, "map_size": 512,
              "wind": [15, 0]},
             {"type": "hogan_kew_cirrus", "mapping": "global", "genus": "cirrus", "seed": 3},
         ],

@@ -41,7 +41,12 @@
 //!   x, min z, max x, max z]: the area the mesas are laid out over, so that a fine grid of the
 //!   near country and a coarse one of the far can share them) and `hole` (a rectangle sunk
 //!   out of sight, for the coarse grid where the fine one is), `uplift` ([x, z, radius,
-//!   height]: a mesa there, about three quarters of the radius across, that much taller)
+//!   height]: a mesa there, about three quarters of the radius across, that much taller),
+//!   `joints` ([spacing, depth]: vertical joints weathered into slots, splitting cliffs into
+//!   columns and fins), `taper` (how much the cliffs' steepness varies), `shoulder` (rounded
+//!   rims, a fraction of `height`), `valley` ([x, z, inner, outer]: few mesas near (x, z),
+//!   tablelands past `outer`), `washes` (depth of dry washes across the floor) and `buttes`
+//!   ([[x, z, radius], ...]: buttes placed by hand)
 //!
 //! To share one heightmap between a terrain and the grass on it, define it once in the scene's
 //! `variables` and refer to it as `"$name"`.
@@ -60,6 +65,7 @@ use crate::shapes::geometry::Geometry;
 use crate::scenefile::SceneFile;
 use serde_json::Value;
 use std::sync::Arc;
+use std::f64::consts::PI;
 
 /// Anything that can give the height of the ground at (x, z).
 pub trait HeightSource: Sync + Send {
@@ -161,6 +167,24 @@ pub struct MesaHeight {
     /// that much taller than the others, as a higher remnant of the plateau does (Hunts Mesa
     /// above Monument Valley).
     pub uplift: Option<[f64; 4]>,
+    /// Vertical joints: [spacing, depth] in metres. Two sets at right angles, each joint
+    /// weathered into a slot up to `depth` into the cliff (twice that where two cross), splitting it into columns and fins,
+    /// as the Mittens' thumbs were split off.
+    pub joints: Option<[f64; 2]>,
+    /// How much the cliff band's width varies along the outline (0: the same everywhere), so
+    /// some faces stand sheer and others taper.
+    pub taper: f64,
+    /// Rounding of the rims, as a fraction of `height`: the tops fall away in a convex
+    /// shoulder to the cliff rather than meeting it at a sharp edge.
+    pub shoulder: f64,
+    /// [x, z, inner, outer]: few mesas within `inner` of (x, z), more beyond, and continuous
+    /// tablelands past `outer`, as a valley ringed by the plateau it was cut from.
+    pub valley: Option<[f64; 4]>,
+    /// The depth of the dry washes winding across the floor, metres (0 for none).
+    pub washes: f64,
+    /// [x, z, radius] each: buttes placed by hand, about three quarters of their radius
+    /// across, as landmarks.
+    pub buttes: Vec<[f64; 3]>,
     /// Free-standing towers and fins, and a grid of them by cell for lookup.
     towers: Vec<Tower>,
     tower_cell: f64,
@@ -182,7 +206,7 @@ impl MesaHeight {
         let mut m = MesaHeight {
             noise: PerlinNoise::new(), base, height, scale, cliff, benches, talus, talus_width,
             floor_amplitude, floor_scale, clearing, offset: (seed * 31.17 + 0.37, seed * 17.73 + 0.71),
-            relief: 0., height_variation: 0., roughness: 0., floor_ledges: 0., domes: 0., hole: None, uplift: None,
+            relief: 0., height_variation: 0., roughness: 0., floor_ledges: 0., domes: 0., hole: None, uplift: None, joints: None, taper: 0., shoulder: 0., valley: None, washes: 0., buttes: vec![],
             towers: vec![], tower_cell: 1., tower_grid: Default::default(),
             sdf: vec![], sdf_min: min, sdf_cell: 1., sdf_n: (1, 1),
         };
@@ -191,8 +215,16 @@ impl MesaHeight {
     }
 
     /// As `new`, with `uplift` (see the field), the outlines cut again to take it in.
-    pub fn with_uplift(mut self, uplift: [f64; 4], coverage: f64) -> MesaHeight {
-        self.uplift = Some(uplift);
+    pub fn with_uplift(self, uplift: [f64; 4], coverage: f64) -> MesaHeight {
+        self.reshaped(Some(uplift), None, vec![], coverage)
+    }
+
+    /// As `new`, with `uplift` and `valley` (see the field), the outlines cut again to take
+    /// them in.
+    pub fn reshaped(mut self, uplift: Option<[f64; 4]>, valley: Option<[f64; 4]>, buttes: Vec<[f64; 3]>, coverage: f64) -> MesaHeight {
+        self.uplift = uplift;
+        self.valley = valley;
+        self.buttes = buttes;
         let (nx, nz) = self.sdf_n;
         let min = self.sdf_min;
         let max = (min.0 + (nx - 1) as f64 * self.sdf_cell, min.1 + (nz - 1) as f64 * self.sdf_cell);
@@ -239,6 +271,19 @@ impl MesaHeight {
             let d = ((x - cx).powi(2) + (z - cz).powi(2)).sqrt();
             f -= 0.6 * (1. - smoothstep(r, 1.6 * r, d));
         }
+        if let Some([vx, vz, inner, outer]) = self.valley {
+            let d = ((x - vx).powi(2) + (z - vz).powi(2)).sqrt();
+            f += 0.12 * smoothstep(inner, outer, d);
+        }
+        for (k, &[bx, bz, r]) in self.buttes.iter().enumerate() {
+            // Elongated along its own axis, and warped, so its outline is irregular.
+            let (angle, aspect) = (hash01(k as i64, 7, 1) * PI, 1. + 1.2 * hash01(k as i64, 7, 2));
+            let w = |o: f64| 0.35 * r * (2. * self.noise.fbm(x / r + o, 7.3 + k as f64, z / r - o, 3, 0.5, 2.) - 1.);
+            let (dx, dz) = (x - bx + w(3.1), z - bz + w(8.7));
+            let (u, v) = (dx * angle.cos() + dz * angle.sin(), -dx * angle.sin() + dz * angle.cos());
+            let d = ((u / aspect.sqrt()).powi(2) + (v * aspect.sqrt()).powi(2)).sqrt();
+            f += 0.6 * (1. - smoothstep(0.5 * r, r, d));
+        }
         if let Some([ux, uz, r, _]) = self.uplift {
             // A mesa stands there, its edge about three quarters of the way out.
             let d = ((x - ux).powi(2) + (z - uz).powi(2)).sqrt();
@@ -252,7 +297,21 @@ impl MesaHeight {
         let d = self.base_distance(x, z);
         // Embayments a few cliff-widths across, and smaller notches.
         let n = |s: f64, o: f64| 2. * self.noise.fbm(x / s + o, 3.3, z / s - o, 3, 0.5, 2.) - 1.;
-        d + 2.5 * self.cliff * n(6. * self.cliff, 17.7) + 0.6 * self.cliff * n(1.5 * self.cliff, 41.1)
+        let mut d = d + 2.5 * self.cliff * n(6. * self.cliff, 17.7) + 0.6 * self.cliff * n(1.5 * self.cliff, 41.1);
+        if let Some([spacing, depth]) = self.joints {
+            // Two sets of joints at right angles, turned by the seed, wavering a little; each
+            // open (weathered into a slot) only in places.
+            let angle = self.offset.0 * 2.7;
+            let (c, s) = (angle.cos(), angle.sin());
+            for (k, (u, salt)) in [(x * c + z * s, 5.3), (-x * s + z * c, 9.1)].into_iter().enumerate() {
+                let u = u / spacing + 0.15 * n(4. * spacing, salt);
+                let line = (u - u.round()).abs() * spacing;
+                let open = smoothstep(-0.1, 0.4, n(3. * spacing, salt + 11. * k as f64));
+                let width = 0.08 * spacing;
+                d -= depth * open * (1. - smoothstep(0., width, line));
+            }
+        }
+        d
     }
 
     /// The height above the floor at signed distance `d` (metres, positive inside) from a
@@ -484,13 +543,25 @@ impl HeightSource for MesaHeight {
             let ledged = step * (f.floor() + smoothstep(0., 0.3, f.fract()));
             floor += (ledged - floor) * (1. - smoothstep(-self.cliff, 0., d));
         }
+        if self.washes > 0. {
+            // Dry washes: sinuous channels along the zero lines of broad noise, on the floor.
+            let w = n(2.5 * self.floor_scale, 44.4, 3).abs();
+            let wash = 1. - smoothstep(0., 0.05, w);
+            floor -= self.washes * wash * (1. - smoothstep(-3. * self.cliff, -self.cliff, d));
+        }
         // Each mesa's top at its own height, as erosion has stripped more from some.
         let mut h = self.height * (1. + self.height_variation * n(3. * self.scale, 23.9, 2));
         if let Some([ux, uz, r, extra]) = self.uplift {
             h += extra * (1. - smoothstep(r, 1.5 * r, ((x - ux).powi(2) + (z - uz).powi(2)).sqrt()));
         }
         let width = self.talus_width * h / self.height;
-        let (mut profile, mut slope) = self.shape(d, h, self.talus, width, self.cliff);
+        let cliff = self.cliff * (1. + self.taper * (0.5 + 0.5 * n(8. * self.cliff, 31.3, 2)).max(0.) * 2.);
+        let (mut profile, mut slope) = self.shape(d, h, self.talus, width, cliff);
+        if self.shoulder > 0. && d > 0. {
+            // A convex shoulder: the top falls away towards the rim.
+            let t = (1. - (d - cliff) / (2. * cliff)).clamp(0., 1.);
+            profile -= self.shoulder * h * t * t * smoothstep(0., cliff, d);
+        }
         // The tops: low rounded hills of the softer beds above the caprock, set back from the
         // rim, on the rubbly caprock.
         let inside = smoothstep(self.cliff, 3. * self.cliff, d);
@@ -662,12 +733,18 @@ impl HeightGrid {
                     SceneFile::parse_number(&o["floor_amplitude"], 2.),
                     SceneFile::parse_number(&o["floor_scale"], 150.),
                     clearing, seed);
-                let m = match o.get("uplift") {
-                    Some(u) => m.with_uplift([0, 1, 2, 3].map(|k| u[k].as_f64().unwrap()), SceneFile::parse_number(&o["coverage"], 0.15)),
-                    None => m,
-                };
+                let four = |k: &str| o.get(k).map(|u| [0, 1, 2, 3].map(|i| u[i].as_f64().unwrap()));
+                let buttes: Vec<[f64; 3]> = o["buttes"].as_array().map_or(vec![], |list| list.iter()
+                    .map(|b| [0, 1, 2].map(|i| b[i].as_f64().unwrap())).collect());
+                let m = if four("uplift").is_some() || four("valley").is_some() || !buttes.is_empty() {
+                    m.reshaped(four("uplift"), four("valley"), buttes, SceneFile::parse_number(&o["coverage"], 0.15))
+                } else { m };
                 let mut m = m.with_towers(SceneFile::parse_number(&o["towers"], 0.), dmin, dmax, seed as u64);
                 m.domes = SceneFile::parse_number(&o["domes"], 0.);
+                m.joints = o.get("joints").map(|j| [j[0].as_f64().unwrap(), j[1].as_f64().unwrap()]);
+                m.taper = SceneFile::parse_number(&o["taper"], 0.);
+                m.shoulder = SceneFile::parse_number(&o["shoulder"], 0.);
+                m.washes = SceneFile::parse_number(&o["washes"], 0.);
                 m.hole = o.get("hole").map(|h| [0, 1, 2, 3].map(|k| h[k].as_f64().unwrap()));
                 m.relief = SceneFile::parse_number(&o["relief"], 0.);
                 m.height_variation = SceneFile::parse_number(&o["height_variation"], 0.);
@@ -1031,6 +1108,50 @@ mod tests {
         assert!(lo >= 0. && hi <= 1. && hi > 0.5 && lo < 0.5 * hi, "{} to {}", lo, hi);
         // Smooth: no step between neighbouring samples greater than a dome's rise allows.
         assert!(samples.windows(2).all(|w| (w[1] - w[0]).abs() < 0.1));
+    }
+
+    #[test]
+    fn test_placed_buttes_stand_where_asked() {
+        let m = mesas(0.02).reshaped(None, None, vec![[1500., -1500., 300.]], 0.02);
+        assert!(m.height(1500., -1500.) > 0.9 * m.height, "{}", m.height(1500., -1500.));
+    }
+
+    #[test]
+    fn test_valley_has_fewer_mesas_than_its_rim() {
+        let m = mesas(0.15).reshaped(None, Some([0., 0., 1200., 2500.]), vec![], 0.15);
+        let share = |r0: f64, r1: f64| {
+            let (mut tops, mut all) = (0, 0);
+            for k in 0 .. 4000 {
+                let (a, t) = (k as f64 * 2.399, (k as f64 + 0.5) / 4000.);
+                let r = r0 + (r1 - r0) * t;
+                all += 1;
+                if m.distance(r * a.cos(), r * a.sin()) > 0. { tops += 1; }
+            }
+            tops as f64 / all as f64
+        };
+        assert!(share(400., 1200.) < 0.5 * share(2600., 2990.), "{} {}", share(400., 1200.), share(2600., 2990.));
+    }
+
+    #[test]
+    fn test_joints_cut_slots_into_the_cliffs() {
+        let mut m = mesas(0.2);
+        let before: Vec<f64> = (0 .. 2000).map(|k| m.distance(k as f64 * 2.9 - 2900., 1234.)).collect();
+        m.joints = Some([40., 15.]);
+        let after: Vec<f64> = (0 .. 2000).map(|k| m.distance(k as f64 * 2.9 - 2900., 1234.)).collect();
+        // Joints only ever eat into the mesas, by up to their depth (twice where two cross),
+        // and somewhere they do.
+        assert!(before.iter().zip(&after).all(|(b, a)| a <= b && b - a <= 30. + 1e-9));
+        assert!(before.iter().zip(&after).any(|(b, a)| b - a > 10.));
+    }
+
+    #[test]
+    fn test_washes_cut_into_the_floor() {
+        let mut m = mesas(0.02);
+        let before: Vec<f64> = (0 .. 1000).map(|k| m.height(k as f64 * 3.7 - 1900., 2400.)).collect();
+        m.washes = 4.;
+        let after: Vec<f64> = (0 .. 1000).map(|k| m.height(k as f64 * 3.7 - 1900., 2400.)).collect();
+        assert!(before.iter().zip(&after).all(|(b, a)| a <= &(b + 1e-9)));
+        assert!(before.iter().zip(&after).any(|(b, a)| b - a > 2.));
     }
 
     #[test]

@@ -160,13 +160,16 @@ photographer's shade setting would.
 ![desert at noon](./scenes/desert-noon.png)
 
 From the rim of a higher mesa at dawn (`desert-overlook.json`), after the view from Hunts
-Mesa: its top weathered into rounded slickrock domes (`domes`), their cross-bedded sandstone
-(`"cross_bedding"`) pocked with honeycomb pits (`"pits"`), rough down to the pixel with
+Mesa: its top weathered into rounded slickrock domes (`domes`) of cross-bedded sandstone
+(`"cross_bedding"`), pocked with honeycomb pits (`"pits"`), rough down to the pixel with
 POV-Ray-style turbulent bump mapping and cracked by crackle (`"fractal"`, `"crackle"`), with
-Utah junipers, sagebrush and rabbitbrush in the hollows, over a valley of buttes and spires
-fading into the haze towards the horizon. The mesa is raised above the others by `uplift`; the
-near country is a 1.5 m grid and the far, out to the horizon, a 30 m grid of the same mesas
-(`domain`) with a `hole` where the near one is.
+Utah junipers, sagebrush and rabbitbrush in the hollows. Below, a valley with a few landmark
+buttes placed by hand (`buttes`), split into columns along their vertical joints (`joints`),
+on cones of paler, pinker shale, the floor cut by dry washes (`washes`); the country rises to
+tablelands at the horizon (`valley`). Low side light, a filmic tone curve (`"tonemap":
+"filmic"`) and a little saturation (`"saturation"`) give it a photograph's contrast. The
+viewpoint mesa is raised by `uplift`; the near country is a 1.5 m grid and the far, out to the
+horizon, a 30 m grid of the same mesas (`domain`) with a `hole` where the near one is.
 ![desert overlook](./scenes/desert-overlook.png)
 
 ## Alpine terrain

@@ -1,6 +1,8 @@
 {
  "output": {
-  "exposure": 1.3
+  "exposure": 1.5,
+  "tonemap": "filmic",
+  "saturation": 1.25
  },
  "width": 864,
  "height": 1080,
@@ -14,16 +16,16 @@
    "type": "mesas",
    "height": 260,
    "scale": 900,
-   "coverage": 0.04,
+   "coverage": 0.12,
    "cliff": 22,
    "benches": 1,
-   "talus": 0.45,
+   "talus": 0.38,
    "talus_width": 180,
    "towers": 0.06,
    "relief": 0.08,
    "domes": 70,
    "height_variation": 0.12,
-   "roughness": 0.4,
+   "roughness": 0.3,
    "floor_amplitude": 6,
    "floor_scale": 200,
    "floor_ledges": 2,
@@ -39,6 +41,51 @@
     0,
     1000,
     220
+   ],
+   "valley": [
+    300,
+    4500,
+    4000,
+    12000
+   ],
+   "joints": [
+    45,
+    14
+   ],
+   "taper": 0.6,
+   "shoulder": 0.05,
+   "washes": 3,
+   "buttes": [
+    [
+     -500,
+     2300,
+     200
+    ],
+    [
+     700,
+     3000,
+     260
+    ],
+    [
+     -1500,
+     3900,
+     300
+    ],
+    [
+     1500,
+     4300,
+     220
+    ],
+    [
+     200,
+     5200,
+     350
+    ],
+    [
+     -2000,
+     6300,
+     500
+    ]
    ],
    "min": [
     -3500,
@@ -54,16 +101,16 @@
    "type": "mesas",
    "height": 260,
    "scale": 900,
-   "coverage": 0.04,
+   "coverage": 0.12,
    "cliff": 22,
    "benches": 1,
-   "talus": 0.45,
+   "talus": 0.38,
    "talus_width": 180,
    "towers": 0.06,
    "relief": 0.08,
    "domes": 70,
    "height_variation": 0.12,
-   "roughness": 0.4,
+   "roughness": 0.3,
    "floor_amplitude": 6,
    "floor_scale": 200,
    "floor_ledges": 2,
@@ -79,6 +126,51 @@
     0,
     1000,
     220
+   ],
+   "valley": [
+    300,
+    4500,
+    4000,
+    12000
+   ],
+   "joints": [
+    45,
+    14
+   ],
+   "taper": 0.6,
+   "shoulder": 0.05,
+   "washes": 3,
+   "buttes": [
+    [
+     -500,
+     2300,
+     200
+    ],
+    [
+     700,
+     3000,
+     260
+    ],
+    [
+     -1500,
+     3900,
+     300
+    ],
+    [
+     1500,
+     4300,
+     220
+    ],
+    [
+     200,
+     5200,
+     350
+    ],
+    [
+     -2000,
+     6300,
+     500
+    ]
    ],
    "min": [
     -40000,
@@ -250,14 +342,14 @@
    "scale": 6,
    "seed": 5,
    "color": [
-    0.7,
-    0.27,
-    0.09
+    0.64,
+    0.33,
+    0.25
    ],
    "secondary": [
-    0.6,
-    0.23,
-    0.08
+    0.56,
+    0.29,
+    0.23
    ],
    "strata_spacing": 0.25,
    "strata_amount": 0.35,
@@ -282,49 +374,41 @@
    "light_grain_amount": 0.01,
    "variety": 0.25,
    "variety_color": [
-    0.72,
-    0.44,
-    0.24
+    0.7,
+    0.45,
+    0.36
    ],
    "layers": [
     [
      0,
      [
-      0.62,
-      0.26,
-      0.13
+      0.6,
+      0.3,
+      0.24
+     ]
+    ],
+    [
+     60,
+     [
+      0.66,
+      0.35,
+      0.27
      ]
     ],
     [
      110,
      [
-      0.66,
-      0.3,
-      0.15
-     ]
-    ],
-    [
-     150,
-     [
-      0.64,
-      0.3,
-      0.16
+      0.62,
+      0.31,
+      0.24
      ]
     ],
     [
      240,
      [
-      0.68,
-      0.36,
-      0.2
-     ]
-    ],
-    [
-     300,
-     [
-      0.72,
-      0.44,
-      0.28
+      0.66,
+      0.34,
+      0.24
      ]
     ]
    ],
@@ -332,10 +416,10 @@
    "bump": 0.5,
    "bump_size": 0.15,
    "cracks": 0.1,
-   "fractal": 0.6,
+   "fractal": 0.3,
    "fractal_size": 0.3,
    "fractal_h": 1.2,
-   "crackle": 0.3,
+   "crackle": 0.15,
    "crackle_size": 0.2
   },
   "CLIFF": {
@@ -498,46 +582,41 @@
    "scale": 30,
    "seed": 8,
    "color": [
-    0.68,
-    0.33,
-    0.17
+    0.72,
+    0.38,
+    0.2
    ],
    "secondary": [
-    0.72,
-    0.42,
-    0.25
+    0.76,
+    0.46,
+    0.28
    ],
    "strata_spacing": 0.1,
    "strata_amount": 0.2,
    "beds": [
     [
-     0.52,
-     0.2,
-     0.1
+     0.62,
+     0.3,
+     0.15
     ],
     [
      0.8,
-     0.58,
-     0.42
+     0.56,
+     0.38
     ],
     [
-     0.64,
-     0.28,
-     0.14
+     0.7,
+     0.38,
+     0.2
     ],
     [
-     0.74,
-     0.46,
+     0.76,
+     0.48,
      0.3
-    ],
-    [
-     0.58,
-     0.24,
-     0.12
     ]
    ],
-   "cross_bedding": 0.9,
-   "cross_set": 0.5,
+   "cross_bedding": 0.55,
+   "cross_set": 0.2,
    "pits": 0.45,
    "pit_size": 0.02,
    "varnish": 0.25,
@@ -701,12 +780,12 @@
   "location": [
    0,
    512,
-   780
+   690
   ],
   "lookat": [
-   300,
-   -60,
-   4800
+   0,
+   80,
+   4500
   ],
   "up": [
    0,
@@ -724,9 +803,9 @@
    "type": "skysphere",
    "ozone": true,
    "sun_direction": [
-    -0.8,
-    0.16,
-    -0.35
+    -0.9,
+    0.13,
+    0.25
    ],
    "multiple_scattering": true
   },
@@ -744,7 +823,7 @@
    "type": "forest",
    "seed": 5,
    "surface": "near",
-   "spacing": 5,
+   "spacing": 6,
    "clearings": 0.35,
    "patch_size": 25,
    "patchiness": 0.85,
@@ -771,8 +850,8 @@
     },
     {
      "species": "utah-juniper",
-     "weight": 2.5,
-     "spacing": 2,
+     "weight": 1,
+     "spacing": 2.5,
      "scale_v": 0.4,
      "bark": "JUNIPER_BARK",
      "dead_bark": "DEAD_WOOD",
@@ -797,12 +876,12 @@
    ],
    "area": {
     "min": [
-     -1200,
+     -1500,
      950
     ],
     "max": [
-     1600,
-     3800
+     2000,
+     6500
     ]
    }
   },

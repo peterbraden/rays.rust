@@ -215,6 +215,8 @@ pub struct SceneFile {
     pub supersamples: Value, 
     #[serde(default)]
     pub samples_per_chunk: Value, 
+    #[serde(default)]
+    pub adaptive: Value,
     pub camera: Value, 
     #[serde(default)]
     pub shadow_bias: Value, 
@@ -643,6 +645,21 @@ impl SceneFile {
 
     /// `"shutter": [open, close]`, in the time of motion, where moving things are at their start
     /// at 0 and their end at 1 (default [0, 1]).
+    /// `"adaptive"`: a noise threshold, or `{"threshold", "min_samples"}`; absent, false or a
+    /// threshold of 0 for none.
+    pub fn parse_adaptive(v: &Value) -> Option<crate::scene::Adaptive> {
+        let (threshold, min) = match v {
+            Value::Null | Value::Bool(false) => return None,
+            Value::Bool(true) => (0.01, &Value::Null),
+            Value::Object(o) => (SceneFile::parse_number(&v["threshold"], 0.01), o.get("min_samples").unwrap_or(&Value::Null)),
+            _ => (SceneFile::parse_number(v, 0.), &Value::Null),
+        };
+        (threshold > 0.).then(|| crate::scene::Adaptive {
+            threshold,
+            min_samples: SceneFile::parse_int(min, crate::scene::Adaptive::DEFAULT_MIN_SAMPLES).max(2),
+        })
+    }
+
     pub fn parse_shutter(v: &Value) -> crate::motion::Shutter {
         match v {
             Value::Null => crate::motion::Shutter::default(),
@@ -3130,6 +3147,7 @@ impl SceneFile {
                     Some("wavefront") => true,
                     Some(x) => panic!("Unknown integrator '{}': expected \"path\" or \"wavefront\"", x),
                 },
+                adaptive: SceneFile::parse_adaptive(&s.adaptive),
                 sampler: match s.sampler.as_str() {
                     None | Some("sobol") => Sampler::Sobol,
                     Some("independent") => Sampler::Independent,

@@ -308,10 +308,7 @@ impl MesaHeight {
         if let Some([spacing, depth]) = self.joints {
             // Two sets of joints at right angles, turned by the seed, wavering a little; each
             // open (weathered into a slot) only in places.
-            let angle = self.offset.0 * 2.7;
-            let (c, s) = (angle.cos(), angle.sin());
-            for (k, (u, salt)) in [(x * c + z * s, 5.3), (-x * s + z * c, 9.1)].into_iter().enumerate() {
-                let u = u / spacing + 0.15 * n(4. * spacing, salt);
+            for (k, (u, salt)) in self.joint_coords(x, z, spacing).into_iter().zip([5.3, 9.1]).enumerate() {
                 let line = (u - u.round()).abs() * spacing;
                 let open = smoothstep(-0.1, 0.4, n(3. * spacing, salt + 11. * k as f64));
                 let width = 0.08 * spacing;
@@ -319,6 +316,29 @@ impl MesaHeight {
             }
         }
         d
+    }
+
+    /// Where (x, z) lies across the two sets of joints `spacing` apart: the joints are at whole
+    /// numbers, turned by the seed and wavering a little.
+    fn joint_coords(&self, x: f64, z: f64, spacing: f64) -> [f64; 2] {
+        let n = |s: f64, o: f64| 2. * self.noise.fbm(x / s + o, 3.3, z / s - o, 3, 0.5, 2.) - 1.;
+        let angle = self.offset.0 * 2.7;
+        let (c, s) = (angle.cos(), angle.sin());
+        [(x * c + z * s) / spacing + 0.15 * n(4. * spacing, 5.3), (-x * s + z * c) / spacing + 0.15 * n(4. * spacing, 9.1)]
+    }
+
+    /// How far the column of rock between joints at (x, z) has been worn down, as a fraction
+    /// of the mesa's height: columns at the rim stand at their own heights, some worn to
+    /// stubs, so a cliff breaks into stepped spires; inland they keep the top's height.
+    fn column_drop(&self, x: f64, z: f64, d: f64, cliff: f64) -> f64 {
+        let Some([spacing, _]) = self.joints else { return 0. };
+        let [u, v] = self.joint_coords(x, z, spacing);
+        let (i, j) = (u.floor() as i64, v.floor() as i64);
+        let h = hash01(i, j, 77);
+        // Most columns whole or slightly lowered; some well down.
+        let drop = 0.25 * h.powi(3) + 0.05 * h;
+        // Only at the rim, fading inland over a couple of columns.
+        drop * (1. - smoothstep(cliff, cliff + 2. * spacing, d))
     }
 
     /// The height above the floor at signed distance `d` (metres, positive inside) from a
@@ -604,6 +624,14 @@ impl HeightSource for MesaHeight {
         let width = self.talus_width * h / self.height;
         let cliff = self.cliff * (1. + self.taper * (0.5 + 0.5 * n(8. * self.cliff, 31.3, 2)).max(0.) * 2.);
         let (mut profile, mut slope) = self.shape(d, h, self.talus, width, cliff);
+        if d > 0. && self.joints.is_some() {
+            // Columns at the rim worn to their own heights; the cliff below them stays.
+            let floor_of_cliff = h * self.talus;
+            // Not on the uplifted mesa: it is the one looked out from.
+            let uplifted = self.uplift.map_or(0., |[ux, uz, r, _]| 1. - smoothstep(r, 1.5 * r, ((x - ux).powi(2) + (z - uz).powi(2)).sqrt()));
+            let drop = self.column_drop(x, z, d, cliff) * self.height * (1. - uplifted);
+            profile = (profile - drop).max(floor_of_cliff.min(profile));
+        }
         if self.shoulder > 0. && d > 0. {
             // A convex shoulder: the top falls away towards the rim.
             let t = (1. - (d - cliff) / (2. * cliff)).clamp(0., 1.);
@@ -1220,6 +1248,22 @@ mod tests {
         let steps: Vec<f64> = v.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
         let flat = steps.iter().filter(|d| **d < 1e-4).count();
         assert!(flat > 50, "{}", flat);
+    }
+
+    #[test]
+    fn test_jointed_rims_break_into_columns_of_their_own_heights() {
+        let mut m = mesas(0.2);
+        m.joints = Some([40., 10.]);
+        // Along a line, the rim's columns differ in height, while deep inside the tops are level.
+        let (mut rim, mut inland) = (vec![], vec![]);
+        for k in 0 .. 6000 {
+            let (x, z) = (k as f64 * 1.0 - 3000., 777.);
+            let d = m.distance(x, z);
+            if d > 0. && d < m.cliff { rim.push(m.column_drop(x, z, d, m.cliff)); }
+            if d > m.cliff + 100. { inland.push(m.column_drop(x, z, d, m.cliff)); }
+        }
+        assert!(rim.iter().cloned().fold(0., f64::max) > 0.1, "{:?}", rim.len());
+        assert!(inland.iter().all(|v| *v == 0.));
     }
 
     #[test]

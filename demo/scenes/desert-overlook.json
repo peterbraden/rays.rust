@@ -2,7 +2,7 @@
  "output": {
   "exposure": 1.5,
   "tonemap": "filmic",
-  "saturation": 1.25
+  "saturation": 1.35
  },
  "width": 864,
  "height": 1080,
@@ -315,14 +315,14 @@
    "preset": "desert",
    "seed": 1,
    "color": [
-    0.6,
-    0.33,
-    0.2
+    0.66,
+    0.3,
+    0.15
    ],
    "humus": [
-    0.52,
-    0.29,
-    0.18
+    0.58,
+    0.27,
+    0.14
    ],
    "mottle_size": 10,
    "stones": 0.02,
@@ -342,14 +342,14 @@
    "scale": 6,
    "seed": 5,
    "color": [
-    0.64,
-    0.33,
-    0.25
+    0.68,
+    0.32,
+    0.22
    ],
    "secondary": [
-    0.56,
-    0.29,
-    0.23
+    0.6,
+    0.28,
+    0.2
    ],
    "strata_spacing": 0.25,
    "strata_amount": 0.35,
@@ -582,44 +582,49 @@
    "scale": 30,
    "seed": 8,
    "color": [
-    0.72,
+    0.74,
     0.38,
-    0.2
+    0.19
    ],
    "secondary": [
-    0.76,
-    0.46,
-    0.28
+    0.78,
+    0.47,
+    0.27
    ],
    "strata_spacing": 0.1,
    "strata_amount": 0.2,
    "beds": [
     [
-     0.62,
-     0.3,
-     0.15
+     0.6,
+     0.26,
+     0.12
+    ],
+    [
+     0.84,
+     0.6,
+     0.42
+    ],
+    [
+     0.72,
+     0.36,
+     0.18
     ],
     [
      0.8,
-     0.56,
-     0.38
-    ],
-    [
-     0.7,
-     0.38,
-     0.2
-    ],
-    [
-     0.76,
-     0.48,
+     0.5,
      0.3
+    ],
+    [
+     0.66,
+     0.3,
+     0.15
     ]
    ],
-   "cross_bedding": 0.55,
-   "cross_set": 0.2,
+   "cross_bedding": 0.8,
+   "cross_set": 0.3,
    "pits": 0.45,
    "pit_size": 0.02,
-   "varnish": 0.45,
+   "varnish": 0.25,
    "varnish_color": [
     0.2,
     0.11,
@@ -682,8 +687,8 @@
    "fractal": 0.5,
    "fractal_size": 0.08,
    "fractal_h": 1.2,
-   "crackle": 0.5,
-   "crackle_size": 0.06
+   "crackle": 0.2,
+   "crackle_size": 0.1
   },
   "LOWLANDS": {
    "type": "mix",
@@ -1012,7 +1017,7 @@
    "type": "forest",
    "seed": 9,
    "surface": "near",
-   "spacing": 7,
+   "spacing": 5,
    "clearings": 0.3,
    "patch_size": 20,
    "patchiness": 0.8,

@@ -164,7 +164,7 @@ Mesa: its top weathered into rounded slickrock domes (`domes`) of cross-bedded s
 (`"cross_bedding"`), pocked with honeycomb pits (`"pits"`), rough down to the pixel with
 POV-Ray-style turbulent bump mapping and cracked by crackle (`"fractal"`, `"crackle"`), with
 Utah junipers, sagebrush and rabbitbrush in the hollows. Below, a valley with a few landmark
-buttes placed by hand (`buttes`), split into columns along their vertical joints (`joints`),
+buttes placed by hand (`buttes`), split along their vertical joints into columns of their own heights at the rims (`joints`),
 on cones of paler, pinker shale, the floor cut by dry washes (`washes`), with pale sand
 gathered in the washes and hollows and between the domes, and the plants crowding along the
 washes (a `{"terrain": "washes" | "hollows" | "joints"}` texture as a `mix` amount and a

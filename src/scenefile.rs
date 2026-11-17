@@ -747,6 +747,9 @@ impl SceneFile {
             };
             return Some(Arc::new(SceneObject { geometry: Box::new(geometry), medium }));
         }
+        if t == "iceberg" || t == "ice_floes" {
+            return Some(Arc::new(SceneFile::parse_ice_object(&o, materials, media)));
+        }
         if t == "boulder" || t == "pebbles" || t == "bedrock" {
             return Some(Arc::new(SceneFile::parse_rock_object(&o, materials, media)));
         }
@@ -2525,6 +2528,49 @@ impl SceneFile {
             r = r.with_lichen(lichen, color);
         }
         r
+    }
+
+    /// Icebergs and sea ice floating on the sea at `"sea_level"` (default 0), see
+    /// `procedural::iceberg`. Each takes a `"seed"`, and a `"material"` or `"medium"` in place of
+    /// its own ice and snow.
+    ///
+    /// - `{"type": "iceberg", "location": [x, z], "size": 100, "shape": "tabular" | "blocky" |
+    ///   "dome" | "pinnacle" | "wedge" | "drydock", "yaw": degrees, "density": 900, "detail": 6}`:
+    ///   an iceberg `size` metres long, floating as its density says.
+    /// - `{"type": "ice_floes", "center": [x, z], "extent": [400, 300], "concentration": 0.6,
+    ///   "size": [2, 60], "thickness": 1}`: floes from `size[0]` to `size[1]` metres across
+    ///   covering `concentration` of the sea.
+    pub fn parse_ice_object(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>) -> SceneObject {
+        use crate::procedural::iceberg::{FloeField, FloeMaterial, Iceberg, IcebergMaterial, Kind};
+        let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
+        let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let sea_level = n("sea_level", 0.);
+        let given = o.get("material").is_some() || o.get("medium").is_some();
+        let medium = |own: Box<dyn MaterialModel + Sync + Send>| -> Box<dyn Medium + Sync + Send> {
+            if given { SceneFile::parse_object_medium(o, materials, media) } else { Box::new(Solid { m: own }) }
+        };
+        if o["type"].as_str() == Some("iceberg") {
+            let mut berg = Iceberg::new(Kind::named(o["shape"].as_str().unwrap_or("blocky")), n("size", 100.).max(0.1), seed);
+            berg.density = n("density", berg.density).clamp(100., 1020.);
+            berg.detail = SceneFile::parse_int(&o["detail"], berg.detail as usize).min(8) as u32;
+            let at = SceneFile::parse_vec2_def(o, "location", crate::na::Vector2::zeros());
+            let yaw = match o["yaw"].as_f64() {
+                Some(y) => y.to_radians(),
+                None => crate::geometry::Pcg32::new(seed, 43).next_f64() * std::f64::consts::TAU,
+            };
+            let mesh = berg.mesh(at.x, at.y, sea_level, yaw);
+            return rock::object(&[mesh], medium(Box::new(IcebergMaterial::new(sea_level, berg.size, seed))));
+        }
+        let center = SceneFile::parse_vec2_def(o, "center", crate::na::Vector2::zeros());
+        let extent = SceneFile::parse_vec2_def(o, "extent", crate::na::Vector2::new(400., 300.));
+        let size = SceneFile::parse_vec2_def(o, "size", crate::na::Vector2::new(2., 60.));
+        let field = FloeField {
+            center: (center.x, center.y), extent: (extent.x.max(1.), extent.y.max(1.)),
+            concentration: n("concentration", 0.6).clamp(0., 0.95),
+            min_size: size.x.max(0.1), max_size: size.y.max(size.x.max(0.1)),
+            thickness: n("thickness", 1.).max(0.01), sea_level, seed,
+        };
+        rock::object(&[field.mesh()], medium(Box::new(FloeMaterial::new(seed))))
     }
 
     /// Procedural rocks, all resting on the ground (see `procedural::rock`). Each takes a

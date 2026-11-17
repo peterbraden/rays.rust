@@ -1,0 +1,33 @@
+{
+  "width": 960,
+  "height": 540,
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.001,
+  "max_depth": 8,
+  "path_termination": "russian_roulette",
+  "output": { "tonemap": "reinhard", "exposure": 0.9 },
+
+  "camera": {
+    "location": [0, 7, -60],
+    "lookat": [0, 4, 600],
+    "up": [0, 1, 0],
+    "angle": 0.85,
+    "aperture": 0.001
+  },
+
+  "sun": { "intensity": 4.9 },
+
+  "objects": [
+    { "type": "ocean", "wind": [4, 2], "planet_radius": 0 },
+    { "type": "ice_floes", "center": [0, 80], "extent": [360, 200], "concentration": 0.55, "size": [1.5, 35], "thickness": 1.2, "seed": 1 },
+    { "type": "iceberg", "shape": "blocky", "size": 60, "location": [-70, 250], "seed": 2 },
+    { "type": "iceberg", "shape": "pinnacle", "size": 110, "location": [170, 470], "seed": 3 },
+    { "type": "iceberg", "shape": "tabular", "size": 600, "location": [-520, 1150], "seed": 4 },
+    { "type": "iceberg", "shape": "wedge", "size": 140, "location": [-330, 560], "seed": 5 },
+    { "type": "iceberg", "shape": "dome", "size": 80, "location": [400, 780], "seed": 6 },
+    { "type": "iceberg", "shape": "drydock", "size": 120, "location": [60, 950], "seed": 7 },
+    { "type": "skysphere", "sun_direction": [0.75, 0.2, 0.1] }
+  ]
+}

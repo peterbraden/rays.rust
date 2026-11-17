@@ -125,6 +125,7 @@ mod procedural {
     pub mod heightmap;
     pub mod grass;
     pub mod rock;
+    pub mod iceberg;
     pub mod nubis_clouds;
     pub mod hogan_kew_cirrus;
     pub mod benard_altocumulus;

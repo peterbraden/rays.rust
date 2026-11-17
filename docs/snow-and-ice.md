@@ -94,8 +94,56 @@ the same fields as a snow material.
   about an ice-age climate. Simulating its glaciers takes about a quarter of an hour, and the
   result is cached.
 
+## Icebergs and ice floes
+
+`src/procedural/iceberg.rs` makes icebergs and sea ice that float on the sea at
+`"sea_level"` (default 0). Use them with an ocean that has `"planet_radius": 0`, so that its
+surface is flat at that level.
+
+```json
+{ "type": "iceberg", "shape": "pinnacle", "size": 110, "location": [170, 470],
+  "yaw": 30, "density": 900, "detail": 6, "seed": 3 }
+```
+
+An iceberg `size` metres long, centred over `location` ([x, z]), in one of the shape classes
+used by ice services:
+
+| shape      | what it is |
+|------------|------------|
+| `tabular`  | flat-topped and banded; broken from an ice shelf, long and low |
+| `blocky`   | flat top, steep vertical sides (the default) |
+| `dome`     | smooth and rounded |
+| `pinnacle` | one or more spires |
+| `wedge`    | one steep face, the top sloping away from it |
+| `drydock`  | eroded into a U, a channel between two pillars |
+
+Each shape is fractured into faces, eroded with lumps and vertical meltwater flutes, tilted
+(except tabular bergs) and notched at the waterline by the waves. The berg floats as its
+`density` says: with 900 kg/m³ (ice capped with lighter firn), an eighth of its volume is
+above the sea. Most of each berg is under water, as in real ones. The surface is white,
+bubble-rich glacier ice, with:
+
+- snow on gentle upward surfaces;
+- thin veins of blue ice, where meltwater refroze in old crevasses;
+- glossy, bubble-poor ice where the waves wash it.
+
+```json
+{ "type": "ice_floes", "center": [0, 80], "extent": [360, 200], "concentration": 0.55,
+  "size": [1.5, 35], "thickness": 1.2, "seed": 1 }
+```
+
+Floes from `size[0]` to `size[1]` metres across cover a fraction `concentration` of a
+rectangle `extent` ([x, z]) wide. As in real pack ice, there are many small floes and few
+large ones; none touch. Each floe is a slab with an irregular outline and a rounded top edge.
+It floats with a tenth of its thickness above the water, snow on top with patches of bare ice,
+and white ice at the sides.
+
+Either object takes a `"material"` or `"medium"` in place of its own ice and snow.
+
 ## Demo scenes
 
 - `demo/scenes/snow-ice.json`: a snowfield against a low sun, with boulders under fresh snow,
   blocks of white, bubbly and blue glacier ice, and mounds of old snow, firn and dirty snow.
 - `demo/scenes/glacier.json`: an ice cap over the alpine landscape in a colder climate.
+- `demo/scenes/icebergs.json`: pack ice in the foreground, and icebergs of every shape beyond
+  it, under a low polar sun.

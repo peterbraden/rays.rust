@@ -796,7 +796,7 @@ impl SceneFile {
             return Some(Arc::new(d));
         }
         if t == "landscape" {
-            return Some(Arc::new(create_terrain(&o)));
+            return Some(Arc::new(create_terrain(&o, materials)));
         }
         if t == "firework" {
             let d = create_firework(&o);
@@ -2384,6 +2384,25 @@ impl SceneFile {
                     v => { let a = SceneFile::parse_number(v, 0.5).clamp(0., 1.); Color::new(a, a, a).into() },
                 },
             }));
+        }
+        // {"type": "surface_layers", "layers": [{"material": "A"}, {"material": "B", "mask":
+        // graph, "coverage": 1}, ...]}: materials stacked from the bottom up, each over those
+        // below by its mask (`material::surface_layers`).
+        if props["type"].as_str() == Some("surface_layers") {
+            use crate::material::surface_layers::{SurfaceLayer, SurfaceLayers};
+            let layers = props["layers"].as_array().filter(|a| !a.is_empty())
+                .unwrap_or_else(|| panic!("Surface layers '{}' need a list of \"layers\"", name));
+            let layers = layers.iter().enumerate().map(|(k, l)| {
+                let key = &l["material"];
+                assert!(key.as_str() != Some(name.as_str()), "Surface layers '{}' can't contain themselves", name);
+                SurfaceLayer {
+                    material: SceneFile::require_material(key, materials, &format!("surface layer {} of {}", k, name)),
+                    mask: l.get("mask").map(|m| crate::graph::Graph::parse(m)
+                        .unwrap_or_else(|e| panic!("surface layer {} of {}'s mask: {}", k, name, e))),
+                    coverage: SceneFile::parse_number(&l["coverage"], 1.),
+                }
+            }).collect();
+            return Some(Box::new(SurfaceLayers { layers }));
         }
         match SceneFile::parse_material(props) {
             Some(m) => Some(m),

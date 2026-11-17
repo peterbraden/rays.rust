@@ -40,6 +40,7 @@ mod material {
     pub mod layered;
     pub mod subsurface;
     pub mod mix;
+    pub mod surface_layers;
     pub mod hair;
     pub mod ambient;
     pub mod texture;

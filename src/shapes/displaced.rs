@@ -136,15 +136,20 @@ impl DisplacedTerrain {
         }).collect();
         // Dice no finer than half the finest detail, or an eighth of a cell, so the smooth base
         // itself looks smooth.
+        // A steep cell's surface is longer than the cell is wide: on a cliff, a 1.5 m cell may
+        // span 20 m of rock. Its level is chosen for the longer of the two, so quads up a cliff
+        // are no taller than a pixel rather than smearing the relief into vertical streaks.
         let min_spacing = detail.min_spacing.unwrap_or_else(|| (0.5 * graph.finest()).min(cell / 8.)).max(1e-6);
-        let finest = ((cell / min_spacing).log2().floor().max(0.) as u32).min(detail.max_level);
-        let levels: Vec<u8> = cell_bounds.par_iter().map(|b| {
+        let levels: Vec<u8> = cell_bounds.par_iter().enumerate().map(|(k, b)| {
+            let (lo, hi) = grid.smooth_range(k % nx, k / nx);
+            let extent = cell.max(hi - lo);
+            let finest = ((extent / min_spacing).log2().floor().max(0.) as u32).min(detail.max_level);
             let level = match detail.eye {
                 None => detail.level,
                 Some((eye, pixel_angle)) => {
                     let nearest = Vector3::new(eye.x.clamp(b.min.x, b.max.x), eye.y.clamp(b.min.y, b.max.y), eye.z.clamp(b.min.z, b.max.z));
                     let footprint = (nearest - eye).norm().max(1e-6) * pixel_angle * detail.pixels;
-                    (cell / footprint).log2().ceil().max(0.) as u32
+                    (extent / footprint).log2().ceil().max(0.) as u32
                 },
             };
             level.min(finest).min(15) as u8

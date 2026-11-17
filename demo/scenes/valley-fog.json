@@ -1,0 +1,92 @@
+{
+  "width": 960,
+  "height": 540,
+  "supersamples": 256,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 32,
+  "path_termination": "russian_roulette",
+  "output": {
+    "tonemap": "filmic",
+    "exposure": 1.4
+  },
+  "camera": {
+    "location": [
+      2000,
+      1700,
+      6000
+    ],
+    "lookat": [
+      1000,
+      500,
+      -4000
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.75
+  },
+  "sun": {
+    "intensity": 4.9
+  },
+  "objects": [
+    {
+      "type": "mountains",
+      "mapping": "flat",
+      "center": [
+        0,
+        0
+      ],
+      "extent": 16000,
+      "resolution": 1024,
+      "peak": [
+        0,
+        4000
+      ],
+      "peak_height": 1400,
+      "peak_radius": 12000,
+      "relief": 700,
+      "feature_size": 5000,
+      "plains": 40,
+      "snowline": 5000,
+      "treeline": 4000,
+      "seed": 3
+    },
+    {
+      "type": "valley_fog",
+      "center": [
+        0,
+        0
+      ],
+      "extent": 16000,
+      "resolution": 512,
+      "pool_size": 1500,
+      "depth": 220,
+      "density": 0.02,
+      "haze": 8e-05,
+      "haze_height": 120,
+      "albedo": [
+        0.99,
+        0.99,
+        0.99
+      ],
+      "similarity_after": 2,
+      "seed": 1,
+      "top_variation": 30,
+      "billow_size": 350,
+      "raggedness": 10,
+      "detail_size": 40
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        0.7,
+        0.22,
+        -0.7
+      ]
+    }
+  ]
+}

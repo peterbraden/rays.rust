@@ -135,6 +135,7 @@ mod procedural {
     pub mod precipitation;
     pub mod overcast;
     pub mod hill_cloud;
+    pub mod valley_fog;
     pub mod harris_cumulus;
     pub mod space;
 }

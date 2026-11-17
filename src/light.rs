@@ -113,6 +113,9 @@ pub struct Sun {
     pub(crate) cos_radius: f64,
     /// With a skysphere: its atmosphere, which the sunlight crosses on its way to each point.
     pub atmosphere: Option<std::sync::Arc<crate::skysphere::SkyMaterial>>,
+    /// How far shadow rays look for occluders: `SUN_SHADOW_DISTANCE` for the sun, short of the
+    /// body itself for light reflected by a moon (`celestial::moon::Moonlight`).
+    pub shadow_distance: f64,
 }
 
 impl std::fmt::Debug for Sun {
@@ -138,7 +141,7 @@ impl Sun {
     /// A sun with no atmosphere and the mean angular radius.
     pub fn new(direction: Vector3<f64>, irradiance: Color) -> Sun {
         Sun { direction: direction.normalize(), irradiance, angular_radius: SUN_ANGULAR_RADIUS,
-              cos_radius: SUN_ANGULAR_RADIUS.cos(), atmosphere: None }
+              cos_radius: SUN_ANGULAR_RADIUS.cos(), atmosphere: None, shadow_distance: SUN_SHADOW_DISTANCE }
     }
 
     /// The same sun with a disc of angular radius `r`, radians.
@@ -189,7 +192,7 @@ impl Sun {
     /// As `transmittance_from`, towards the point of the disc in unit direction `d`.
     pub fn transmittance_along(&self, point: &Vector3<f64>, d: &Vector3<f64>, s: &crate::scene::Scene) -> crate::color::Color {
         let shadow_ray = crate::ray::Ray { ro: *point, rd: *d };
-        s.objects.transmittance(&shadow_ray, SUN_SHADOW_DISTANCE, f64::MIN_POSITIVE)
+        s.objects.transmittance(&shadow_ray, self.shadow_distance, f64::MIN_POSITIVE)
     }
 
     /// The disc's solid angle, 2π (1 - cos r) for angular radius r.

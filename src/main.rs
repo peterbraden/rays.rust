@@ -146,6 +146,7 @@ mod adaptive;
 mod environment;
 mod sobol;
 mod planet;
+mod celestial;
 
 use crate::trace::trace;
 use crate::rendercontext::RenderContext;

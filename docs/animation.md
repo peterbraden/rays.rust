@@ -287,8 +287,12 @@ Once the clock exists, objects gain motion one at a time, each through its local
 3. Simulations checkpointed at the shot's frames (`harris_cumulus`, `landscape` and its
    glaciers), the history before it at the still's steps; a test that a frame from cache equals one
    from scratch. A glaciation demo: a valley through one glacial cycle at a few kyr/s.
-4. Keyframed values (the JSON pass), with transforms resolved into `"motion"`.
-5. Camera paths: `Spline`, arc-length speed, `lookat` modes, banking, `Placement::Path`.
+4. **Done:** keyed values (the JSON pass, `animation::resolve_keys`): `"smooth"` is a monotone
+   cubic, which never overshoots its keys; keyed cameras get a `"motion"` to their pose at the
+   shutter's close. To do: keyed transforms resolved into `"motion"`.
+5. Camera paths: **done** as keyed `location`/`lookat`/`up`, through the keyed values, so
+   everything that reads the camera's pose sees it. To do: arc-length speed, `"lookat": "ahead"`,
+   banking.
 6. Isolation tests: frame N alone equals frame N after frames 0..N-1; different thread counts
    give identical images.
 7. Motion for the static objects, one per change (nubis first).

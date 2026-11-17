@@ -30,6 +30,13 @@
 //! can lead up to the still. `apply_clocks` resolves this before the scene is parsed, leaving each timed
 //! object the time that has elapsed on its clock in `"clock_elapsed"`, which its parser adds to
 //! its `"time"` (`SceneFile::local_time`), so each keeps its own default time.
+//!
+//! **Keyed values.** Any number or list of numbers in the scene can be given as keys in video
+//! seconds, `{"keys": [[0, [0, 2, 0]], [10, [0, 4e5, 0]]], "interpolation": "smooth"}`, and is
+//! resolved to its value at the frame's time before the scene is parsed (`resolve_keys`). A
+//! keyed camera (`location`, `lookat`, `up`) follows its path, and blurs along it while the
+//! shutter is open (`"animation": {"shutter": 0.5}`, in frames: its pose at the shutter's close
+//! becomes its `"motion"`).
 use serde_json::{Map, Value};
 
 /// A year, in seconds (a Julian year).

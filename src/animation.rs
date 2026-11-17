@@ -52,6 +52,7 @@ pub const TIMED: &[(&str, f64)] = &[
     ("hogan_kew_cirrus", 1.),
     ("harris_cumulus", 1.),
     ("lenticular", 1.),
+    ("nubis_clouds", 1.),
     ("landscape", YEAR),
 ];
 

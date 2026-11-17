@@ -98,8 +98,17 @@ struct WeatherMap {
 
 impl WeatherMap {
     fn new(origin: Vector2<f64>, size: f64, texel: f64, sample: impl Fn(f64, f64) -> f64) -> WeatherMap {
-        let n = ((size / texel).ceil() as usize).clamp(1, 4096);
-        let texel = size / n as f64;
+        let n = WeatherMap::texels(size, texel);
+        WeatherMap::grid(origin, n, size / n as f64, sample)
+    }
+
+    /// How many texels of at most `texel` cover `size`.
+    fn texels(size: f64, texel: f64) -> usize {
+        ((size / texel).ceil() as usize).clamp(1, 4096)
+    }
+
+    /// `n` texels of `texel` each way from `origin`.
+    fn grid(origin: Vector2<f64>, n: usize, texel: f64, sample: impl Fn(f64, f64) -> f64) -> WeatherMap {
         let corner = |i: usize, j: usize| sample(origin.x + i as f64 * texel, origin.y + j as f64 * texel);
         let corners: Vec<f64> = (0..=n).flat_map(|j| (0..=n).map(move |i| (i, j))).map(|(i, j)| corner(i, j)).collect();
         let at = |i: usize, j: usize| corners[j * (n + 1) + i];
@@ -218,6 +227,12 @@ pub struct NubisCloudLayer {
     /// The square, `extent` either side of `center` in x and z, that the clouds fill.
     pub center: Vector2<f64>,
     pub extent: f64,
+    /// Seconds since the scene's time 0 (`animation`): the clouds drift with the `wind`
+    /// ([x, z], m/s), and change shape as their noise scrolls up through them at `evolution`
+    /// (m/s; the eroded detail at twice that, billowing).
+    pub time: f64,
+    pub wind: Vector2<f64>,
+    pub evolution: f64,
     /// Built on first use, from `weather_size`, `center` and `extent`.
     weather_map: OnceLock<WeatherMap>,
     weather: PerlinNoise,
@@ -242,6 +257,9 @@ impl NubisCloudLayer {
             erosion: 0.4,
             center,
             extent,
+            time: 0.,
+            wind: Vector2::zeros(),
+            evolution: 1.,
             weather_map: OnceLock::new(),
             // Separate streams, so the weather map and the shapes aren't correlated.
             weather: PerlinNoise::shuffled(seed.wrapping_mul(2).wrapping_add(1)),
@@ -251,13 +269,27 @@ impl NubisCloudLayer {
         }
     }
 
+    /// How far the air has carried the clouds since time 0.
+    fn drift(&self) -> Vector3<f64> {
+        Vector3::new(self.wind.x, 0., self.wind.y) * self.time
+    }
+
     fn weather_map(&self) -> &WeatherMap {
+        // In the air's frame: the map covers what has drifted into the square by now, on the
+        // same lattice of texels as at time 0 (one more each way), so drifting clouds sample the
+        // same corners and don't shimmer.
         self.weather_map.get_or_init(|| {
             let origin = self.center - Vector2::new(self.extent, self.extent);
+            let sample = |x: f64, z: f64| stretched(self.weather.fbm(x / self.weather_size, 0.5, z / self.weather_size, 3, 0.5, 2.0));
             // Fine enough to keep all three octaves.
-            WeatherMap::new(origin, 2. * self.extent, self.weather_size / 24., |x, z| {
-                stretched(self.weather.fbm(x / self.weather_size, 0.5, z / self.weather_size, 3, 0.5, 2.0))
-            })
+            let n = WeatherMap::texels(2. * self.extent, self.weather_size / 24.);
+            let texel = 2. * self.extent / n as f64;
+            let drift = self.drift();
+            if drift == Vector3::zeros() {
+                return WeatherMap::grid(origin, n, texel, sample);
+            }
+            let snapped = Vector2::new((-drift.x / texel).floor(), (-drift.z / texel).floor()) * texel;
+            WeatherMap::grid(origin + snapped, n + 1, texel, sample)
         })
     }
 
@@ -290,7 +322,8 @@ impl NubisCloudLayer {
 
     /// Cloud density as a fraction of `max_density`, in [0, 1].
     pub fn fraction(&self, p: &Vector3<f64>) -> f64 {
-        self.fraction_at(p.y, || self.weather_map().at(p.x, p.z), p)
+        let p = p - self.drift();
+        self.fraction_at(p.y, || self.weather_map().at(p.x, p.z), &p)
     }
 
     /// The cloud recipe, given where its inputs come from: the height `altitude`, the weather
@@ -313,8 +346,9 @@ impl NubisCloudLayer {
             return 0.;
         }
 
-        // 3. The base shape, cut to the cell's strength.
-        let q = p / self.shape_size;
+        // 3. The base shape, cut to the cell's strength, evolving as its noise scrolls up.
+        let rise = Vector3::y() * (self.evolution * self.time);
+        let q = (p - rise) / self.shape_size;
         let perlin = stretched(self.shape.fbm(q.x, q.y, q.z, 4, 0.5, 2.0));
         let perlin_worley = remap(perlin, worley_fbm(self.cells(), &q) - 1., 1.);
         let shape = remap(perlin_worley * profile, 0.7 * (1. - cell), 1.);
@@ -323,7 +357,7 @@ impl NubisCloudLayer {
         }
 
         // 4. Erode the edges: billowing detail high up, its inverse (wisps) near the base.
-        let d = worley_fbm(self.cells(), &(p / self.detail_size));
+        let d = worley_fbm(self.cells(), &((p - 2. * rise) / self.detail_size));
         let detail = lerp(1. - d, d, (h * 5.).min(1.));
         remap(shape, detail * self.erosion, 1.)
     }
@@ -343,6 +377,7 @@ impl DensityField for NubisCloudLayer {
     /// to that height if the ray crosses it first.
     fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
         let map = self.weather_map();
+        let p = &(p - self.drift());
         // Classify by a point a centimetre along the ray, so one on a texel's edge (or the
         // clouds' top) counts as where it is entering, even through the rounding of a planet's
         // mapping (a hair's breadth ahead, rays crawled across texel edges).
@@ -406,6 +441,17 @@ impl GlobalNubis {
         0.85 + 0.45 * band(0., 8.) - 0.4 * band(25., 9.) + 0.35 * band(52., 12.)
     }
 
+    /// Where a point is in the air's frame: turned back about the pole by how far an eastward
+    /// wind of `layer.wind.x` m/s at the equator has carried the clouds since time 0 (the
+    /// whole layer turning as one).
+    fn in_air(&self, v: &Vector3<f64>) -> Vector3<f64> {
+        let angle = self.layer.wind.x * self.layer.time / self.planet_radius;
+        if angle == 0. {
+            return *v;
+        }
+        crate::na::UnitQuaternion::from_axis_angle(&crate::na::Unit::new_normalize(self.pole), -angle) * v
+    }
+
     fn map(&self) -> &crate::planet::CubeMap {
         self.map.get_or_init(|| crate::geometry::build_apart(|| {
             let scale = self.planet_radius / self.layer.weather_size;
@@ -424,7 +470,8 @@ impl GlobalNubis {
 
 impl crate::planet::PlanetField for GlobalNubis {
     fn density(&self, at: &crate::planet::SurfacePoint) -> f64 {
-        self.layer.max_density * self.layer.fraction_at(at.altitude, || self.map().at(&at.up), &at.position)
+        let (up, position) = (self.in_air(&at.up), self.in_air(&at.position));
+        self.layer.max_density * self.layer.fraction_at(at.altitude, || self.map().at(&up), &position)
     }
 
     fn majorant(&self) -> f64 {
@@ -434,16 +481,17 @@ impl crate::planet::PlanetField for GlobalNubis {
     fn majorant_from(&self, at: &crate::planet::SurfacePoint, _p: &Vector3<f64>, d: &Vector3<f64>,
                      planet: &crate::planet::Planet) -> (f64, f64) {
         let map = self.map();
+        let (position, d) = (self.in_air(&at.position), self.in_air(d));
         // Classify by a point a centimetre along the ray, so one on a texel's edge (or the
         // clouds' top) counts as where it is going; otherwise it finds the edge it is on, no
         // distance away, again and again.
-        let ahead = at.position + d * 0.01;
+        let ahead = position + d * 0.01;
         let (face, i, j) = map.texel(&ahead.normalize());
-        let edge = map.cube.exit(&at.position, d, face, i, j);
+        let edge = map.cube.exit(&position, &d, face, i, j);
         match self.layer.column_top(map.texel_max(face, i, j)) {
             None => (0., edge),
             Some(top) => {
-                let to_top = crate::planet::to_sphere(&at.position, d, planet.radius + top);
+                let to_top = crate::planet::to_sphere(&position, &d, planet.radius + top);
                 let majorant = if ahead.norm() - planet.radius > top { 0. } else { self.layer.max_density };
                 (majorant, edge.min(to_top))
             },
@@ -457,6 +505,25 @@ mod tests {
 
     fn layer(seed: u64) -> NubisCloudLayer {
         NubisCloudLayer::new(1000., 2000., Vector2::new(12000., 12000.), 12500., seed)
+    }
+
+    #[test]
+    fn test_clouds_drift_with_the_wind() {
+        // Without evolution, the clouds a minute later are the same clouds, carried downwind,
+        // and the majorants still bound them there.
+        let still = layer(3);
+        let mut later = layer(3);
+        (later.time, later.wind, later.evolution) = (60., Vector2::new(10., -5.), 0.);
+        let shift = Vector3::new(600., 0., -300.);
+        let mut cloudy = 0;
+        for i in 0..400 {
+            let p = Vector3::new(4000. + 37. * i as f64, 1100. + 2. * i as f64, 5000. + 23. * i as f64);
+            let (a, b) = (still.density(&p), later.density(&(p + shift)));
+            assert!((a - b).abs() < 1e-12, "at {:?}: {} then {}", p, a, b);
+            assert!(b <= later.majorant_from(&(p + shift), &Vector3::new(0.6, 0.1, 0.79).normalize()).0 + 1e-12);
+            cloudy += (a > 0.) as usize;
+        }
+        assert!(cloudy > 10, "too few cloudy points to tell: {}", cloudy);
     }
 
     /// Fraction of a grid of points through the layer, at `y`, that are cloud.

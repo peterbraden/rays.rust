@@ -1214,6 +1214,10 @@ impl SceneFile {
     /// the weather map (default 1024), `climate` (default true) for bands of weather by
     /// latitude about the `pole` (default [0, 0, 1]), and weather systems `weather_size`
     /// across (default 400 km).
+    ///
+    /// In an animation (`animation`), clouds drift with the `wind` ([x, z], m/s, default calm;
+    /// over a whole planet its x is an eastward wind at the equator, turning the layer about the
+    /// pole) and change shape at `evolution` (m/s, default 1), from their `"time"` (seconds).
     pub fn parse_nubis_clouds(o: &Value) -> SceneObject {
         let base = SceneFile::parse_number(&o["base"], 1500.);
         let top = SceneFile::parse_number(&o["top"], 3000.);
@@ -1227,6 +1231,9 @@ impl SceneFile {
         layer.shape_size = SceneFile::parse_number(&o["shape_size"], layer.shape_size);
         layer.detail_size = SceneFile::parse_number(&o["detail_size"], layer.detail_size);
         layer.erosion = SceneFile::parse_number(&o["erosion"], layer.erosion).clamp(0., 1.);
+        layer.time = SceneFile::local_time(o, 0.);
+        layer.wind = SceneFile::parse_vec2_def(o, "wind", layer.wind);
+        layer.evolution = SceneFile::parse_number(&o["evolution"], layer.evolution);
         if o["mapping"].as_str() == Some("global") {
             let planet = Planet { radius: SceneFile::parse_number(&o["earth_radius"], EARTH_RADIUS) };
             // Planetary weather: systems hundreds of kilometres across, unless told otherwise.

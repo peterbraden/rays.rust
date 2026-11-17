@@ -98,7 +98,10 @@ the same fields as a snow material.
 
 `src/procedural/iceberg.rs` makes icebergs and sea ice that float on the sea at
 `"sea_level"` (default 0). Use them with an ocean that has `"planet_radius": 0`, so that its
-surface is flat at that level.
+surface is flat at that level, and `"transparent": true`, so that you can see into it. Most of
+an iceberg is under water. Its foot, and the undersides of floes and lumps of ice, glow
+turquoise through the water: the sea absorbs red light within a few metres, and blue and green
+much further down.
 
 ```json
 { "type": "iceberg", "shape": "pinnacle", "size": 110, "location": [170, 470],
@@ -118,10 +121,12 @@ used by ice services:
 | `drydock`  | eroded into a U, a channel between two pillars |
 
 Each shape is fractured into faces, eroded with lumps and vertical meltwater flutes, tilted
-(except tabular bergs) and notched at the waterline by the waves. The berg floats as its
+(except tabular bergs) and notched at the waterline by the waves. Below the notch, the ram is
+a shelf of ice that juts out under the water, broadest on one side. The berg floats as its
 `density` says: with 900 kg/m³ (ice capped with lighter firn), an eighth of its volume is
 above the sea. Most of each berg is under water, as in real ones. The surface is white,
-bubble-rich glacier ice, with:
+bubble-rich glacier ice, bluer low on the walls (ice from deep in the glacier, or ice that has
+rolled up from under water and not yet weathered), with:
 
 - snow on gentle upward surfaces;
 - thin veins of blue ice, where meltwater refroze in old crevasses;
@@ -138,12 +143,28 @@ large ones; none touch. Each floe is a slab with an irregular outline and a roun
 It floats with a tenth of its thickness above the water, snow on top with patches of bare ice,
 and white ice at the sides.
 
+`"style": "brash"` makes the pieces brash ice and bergy bits instead: lumps of glacier ice
+broken from bergs, fractured and rounded by melting, about half as high as wide, each floating
+at its own waterline. `"clumping"` (0 to 1, default 0.5) gathers floes or lumps into clumps
+with open water between.
+
 Either object takes a `"material"` or `"medium"` in place of its own ice and snow.
+
+### Transparent water
+
+`{"type": "ocean", "transparent": true, "absorption": [0.38, 0.065, 0.045]}` lets you see into
+the sea. A ray refracted into the water is traced down to whatever is submerged and dimmed by
+the water's absorption per metre; the water in front of it adds the sea's own colour. Sunlight
+reaches submerged ice through the surface, and the light it sends back leaves by refraction.
+The default absorption is clear coastal sea water. Raise the blue for greener water; lower it
+all for clearer, more tropical water.
 
 ## Demo scenes
 
 - `demo/scenes/snow-ice.json`: a snowfield against a low sun, with boulders under fresh snow,
   blocks of white, bubbly and blue glacier ice, and mounds of old snow, firn and dirty snow.
 - `demo/scenes/glacier.json`: an ice cap over the alpine landscape in a colder climate.
-- `demo/scenes/icebergs.json`: pack ice in the foreground, and icebergs of every shape beyond
-  it, under a low polar sun.
+- `demo/scenes/icebergs.json`: brash ice glowing turquoise under the water, a blocky berg
+  with its submerged ram, and tabular bergs beyond.
+- `demo/scenes/icebergs-overcast.json`: the same under a low overcast of stratocumulus, which
+  brings out the ice's blue. It needs many samples to clear the noise.

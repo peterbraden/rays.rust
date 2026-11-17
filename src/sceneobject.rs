@@ -68,6 +68,10 @@ impl Geometry for SceneObject {
         self.geometry.is_stochastic()
     }
 
+    fn transmits(&self) -> bool {
+        self.geometry.transmits()
+    }
+
     fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 {
         self.geometry.transmittance(r, min, max)
     }

@@ -27,10 +27,13 @@
 //! - a few fracture planes, their edges rounded, for the faces where it broke away;
 //! - erosion: lumps, and vertical flutes on the walls where meltwater runs down;
 //! - a wave-cut notch at the waterline, where the sea melts it fastest (the overhang that
-//!   eventually breaks off as a growler); and a slight tilt, but for tabular bergs.
+//!   eventually breaks off as a growler), and under it the ram, a shelf of ice jutting out
+//!   below the water, which glows turquoise through it; and a slight tilt, but for tabular
+//!   bergs.
 //!
-//! The berg's surface (`IcebergMaterial`) is `material::snow`'s: mostly the white, bubble-rich
-//! ice of a glacier, snow on the gentler upward surfaces, veins of blue ice where meltwater
+//! The berg's surface (`IcebergMaterial`) is `material::snow`'s: the white, bubble-rich ice of
+//! a glacier, bluer bubbly ice low on its walls (ice from deep in the glacier, or rolled up from
+//! under water, not yet weathered white), snow on the gentler upward surfaces, veins of blue ice where meltwater
 //! refroze in crevasses (thin layers, all in one plane through the berg), and a band of glossy,
 //! bubble-poor glacier ice where the waves wash it.
 //!
@@ -44,7 +47,8 @@
 //! `concentration` (the fraction of the sea's surface covered, as ice charts report it) is
 //! reached. Each is a slab of an irregular outline, its top edge rounded, floating with a tenth
 //! of its thickness above the water; snow lies on top, with patches of bare ice, and the sides
-//! are white ice.
+//! are white ice. Or the pieces are brash ice and bergy bits, broken from bergs: rounded lumps
+//! of glacier ice, each floating at its own waterline.
 use crate::geometry::{rand, Pcg32};
 use crate::intersection::Intersection;
 use crate::material::model::{MaterialModel, ScatteredRay};
@@ -99,7 +103,7 @@ fn smin(a: f64, b: f64, k: f64) -> f64 {
 
 impl Iceberg {
     pub fn new(kind: Kind, size: f64, seed: u64) -> Iceberg {
-        Iceberg { kind, size, density: 900., detail: 6, seed }
+        Iceberg { kind, size, density: 900., detail: 7, seed }
     }
 
     /// The fraction of the volume above water.
@@ -134,6 +138,7 @@ impl Iceberg {
             Kind::Dome => (0, 0.),
             Kind::Tabular => (3, 0.1),
             Kind::Pinnacle => (7, 0.5),
+            Kind::Blocky => (7, 0.4),
             _ => (7, 1.4),
         };
         let planes: Vec<(Vector3<f64>, f64)> = (0..fractures).map(|_| {
@@ -250,6 +255,25 @@ impl Iceberg {
                 p.z *= s;
             }
         }
+        // The ram: under the notch the ice the waves haven't reached juts out as a submerged
+        // shelf, broadest on one side.
+        let width = (0.15 * self.size).min(20.);
+        let reach = 8. + 0.12 * self.size;
+        let side = rng.next_f64() * TAU;
+        for p in mesh.positions.iter_mut() {
+            let below = h - p.y;
+            // Rising over a few metres: steps between the mesh's rows would show as teeth.
+            let g = smoothstep(0.8, 4., below) * (1. - smoothstep(0.5 * reach, reach, below));
+            let across = (p.x * p.x + p.z * p.z).sqrt();
+            if g > 0. && across > 1e-6 {
+                let facing = 0.5 + 0.5 * (0.5 + 0.5 * (p.z.atan2(p.x) - side).cos()).powi(2);
+                let s = 1. + width * g * facing / across;
+                p.x *= s;
+                p.z *= s;
+            }
+        }
+        // The ram adds a little volume under water: float it again.
+        let h = Iceberg::waterline(&mesh.positions, self.freeboard_fraction());
         let lift = Vector3::new(x, sea_level - h, z);
         for p in mesh.positions.iter_mut() { *p += lift; }
         mesh
@@ -260,9 +284,13 @@ impl Iceberg {
 pub struct IcebergMaterial {
     pub sea_level: f64,
     white: Ice,
+    /// Bubbly glacier ice, bluer, on the walls low down.
+    glacier: Ice,
     wet: Ice,
     blue: Ice,
     snow: Snow,
+    /// The berg's length, m.
+    size: f64,
     /// The veins' plane, through the berg, and their spacing (m).
     vein_normal: Vector3<f64>,
     vein_spacing: f64,
@@ -277,6 +305,8 @@ impl IcebergMaterial {
         IcebergMaterial {
             sea_level,
             white: Ice::new(IceStyle::preset("white")),
+            glacier: Ice::new(IceStyle { roughness: 0.1, ..IceStyle::preset("glacier") }),
+            size,
             wet: Ice::new(IceStyle { roughness: 0.02, ..IceStyle::preset("glacier") }),
             blue: Ice::new(IceStyle::preset("blue")),
             snow: Snow::new(SnowStyle::preset("settled"), 1., seed),
@@ -286,14 +316,25 @@ impl IcebergMaterial {
         }
     }
 
+    /// The share at `p`, with outward normal `n`, of bubbly glacier ice rather than white: the
+    /// walls are bluer low down, where the ice was deep in the glacier or has rolled up from
+    /// under water and not yet weathered, and white above, in bands.
+    pub fn bluish(&self, p: &Vector3<f64>, n: &Vector3<f64>) -> f64 {
+        let height = (p.y - self.sea_level) / (0.25 * self.size).max(2.);
+        let white = smoothstep(0.2, 0.9, height + 0.5 * self.noise.fbm(Vector3::new(p.x / 30., p.y / 4., p.z / 30.), 3));
+        (1. - white) * (1. - smoothstep(0.4, 0.8, n.y)) * smoothstep(-1., 0.5, p.y - self.sea_level)
+    }
+
     /// The shares at `p`, with outward normal `n`, of snow, blue veins and wave-washed ice.
     pub fn shares(&self, p: &Vector3<f64>, n: &Vector3<f64>) -> (f64, f64, f64) {
         let height = p.y - self.sea_level;
-        let snow = smoothstep(0.72, 0.9, n.y + 0.2 * self.noise.fbm(p / 6., 3)) * smoothstep(1., 3., height);
+        let snow = smoothstep(0.72, 0.9, n.y + 0.2 * self.noise.fbm(p / 6., 3)) * smoothstep(0.1, 0.3, height / self.size.min(10.));
         let v = p.dot(&self.vein_normal) / self.vein_spacing + 0.6 * self.noise.fbm(p / 25., 3);
         let d = (v.rem_euclid(1.) - 0.5).abs();
         let vein = (1. - smoothstep(0.015, 0.05, d)) * smoothstep(-0.1, 0.2, self.noise.noise(p / 40.));
-        let wet = 1. - smoothstep(0.5, 3., height + 0.8 * self.noise.noise(p / 4.));
+        // The waves wash a band from a metre or two under water to a few metres above.
+        let band = (0.04 * self.size).clamp(0.15, 3.);
+        let wet = (1. - smoothstep(0.15 * band, band, height + 0.25 * band * self.noise.noise(p / 4.))) * smoothstep(-2.5, -1., height);
         (snow, vein, wet)
     }
 }
@@ -309,6 +350,8 @@ impl MaterialModel for IcebergMaterial {
             f(&self.blue.bsdf(&i.normal, Some(s)), r, &i.point, s)
         } else if rand() < wet {
             f(&self.wet.bsdf(&i.normal, Some(s)), r, &i.point, s)
+        } else if rand() < self.bluish(&i.point, &intersection.normal) {
+            f(&self.glacier.bsdf(&i.normal, Some(s)), r, &i.point, s)
         } else {
             f(&self.white.bsdf(&i.normal, Some(s)), r, &i.point, s)
         }
@@ -329,7 +372,20 @@ pub struct FloeField {
     /// Ice thickness, m.
     pub thickness: f64,
     pub sea_level: f64,
+    pub style: FloeStyle,
+    /// How much the floes gather in clumps, 0 (evenly) to 1.
+    pub clumping: f64,
     pub seed: u64,
+}
+
+/// What the pieces are.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FloeStyle {
+    /// Slabs of sea ice, snow on top.
+    Slab,
+    /// Brash ice and bergy bits: lumps of glacier ice broken from bergs, rounded by melting,
+    /// floating by buoyancy as a berg does (a tenth above water), about half as high as wide.
+    Brash,
 }
 
 /// One floe: its centre (x, z) and radius.
@@ -360,12 +416,17 @@ impl FloeField {
         let mut grid: Vec<Vec<usize>> = vec![vec![]; nx * nz];
         let mut placed: Vec<Floe> = vec![];
         let mut covered = 0.;
+        let clumps = SeededNoise::new(self.seed.wrapping_add(53));
+        let clump_size = 0.3 * self.extent.0.min(self.extent.1).max(4. * self.max_size);
         let (x0, z0) = (self.center.0 - self.extent.0 / 2., self.center.1 - self.extent.1 / 2.);
         for r in radii {
             if covered >= target { break; }
             for _ in 0..30 {
                 let x = x0 + rng.next_f64() * self.extent.0;
                 let z = z0 + rng.next_f64() * self.extent.1;
+                // Pack ice gathers in clumps and streaks, with open water between.
+                let clump = smoothstep(-0.35, 0.35, clumps.fbm(Vector3::new(x, 0., z) / clump_size, 3));
+                if rng.next_f64() > 1. - self.clumping * (1. - clump) { continue; }
                 let (ci, cj) = (((x - x0) / cell) as usize, ((z - z0) / cell) as usize);
                 let gap = 0.05 * r + 0.1;
                 let clear = (ci.saturating_sub(1)..=(ci + 1).min(nx - 1)).all(|i| {
@@ -389,6 +450,60 @@ impl FloeField {
 
     /// The floes as one mesh.
     pub fn mesh(&self) -> IndexedMesh {
+        match self.style {
+            FloeStyle::Slab => self.slabs(),
+            FloeStyle::Brash => self.brash(),
+        }
+    }
+
+    /// Lumps of glacier ice, each floating at its own waterline.
+    fn brash(&self) -> IndexedMesh {
+        let floes = self.floes();
+        let noise = SeededNoise::new(self.seed.wrapping_add(7));
+        let mut rng = Pcg32::new(self.seed, 47);
+        let (directions, sphere) = icosphere(3);
+        let mut positions = vec![];
+        let mut triangles = vec![];
+        let fraction = 1. - 917. / SEA_WATER_DENSITY;
+        for f in &floes {
+            let r = f.radius * 0.85;
+            let axes = Vector3::new(r, r * (0.35 + 0.3 * rng.next_f64()), r * (0.7 + 0.3 * rng.next_f64()));
+            let offset = Vector3::new(rng.next_f64(), rng.next_f64(), rng.next_f64()) * 100.;
+            let rotation = Rotation3::from_euler_angles(0.3 * (rng.next_f64() - 0.5), rng.next_f64() * TAU, 0.3 * (rng.next_f64() - 0.5));
+            // Broken faces, one of them the top, worn round at the edges.
+            let planes: Vec<(Vector3<f64>, f64)> = (0..4).map(|k| {
+                let n = if k == 0 {
+                    Vector3::new(0.2 * (rng.next_f64() - 0.5), 1., 0.2 * (rng.next_f64() - 0.5)).normalize()
+                } else {
+                    let a = rng.next_f64() * TAU;
+                    Vector3::new(a.cos(), 0.8 * (rng.next_f64() - 0.5), a.sin()).normalize()
+                };
+                (n, axes.component_mul(&n).norm() * (0.6 + 0.3 * rng.next_f64()))
+            }).collect();
+            let mut piece: Vec<Vector3<f64>> = directions.iter().map(|d| {
+                let p = 2.6;
+                let r0 = (d.x.abs() / axes.x).powf(p) + (d.y.abs() / axes.y).powf(p) + (d.z.abs() / axes.z).powf(p);
+                let q = d * r0.powf(-1. / p);
+                let mut s: f64 = 1.;
+                for (n, o) in &planes {
+                    let along = q.dot(n);
+                    if along > 0. { s = smin(s, o / along, 0.15); }
+                }
+                let lumps = 0.18 * noise.fbm(d * 1.6 + offset, 4);
+                rotation * (q * s.max(0.1) * (1. + lumps))
+            }).collect();
+            let h = Iceberg::waterline(&piece, fraction);
+            let lift = Vector3::new(f.x, self.sea_level - h, f.z);
+            let start = positions.len();
+            for p in piece.iter_mut() { *p += lift; }
+            positions.extend(piece);
+            triangles.extend(sphere.iter().map(|t| t.map(|i| i + start)));
+        }
+        IndexedMesh { positions, normals: vec![], triangles, texcoords: vec![] }
+    }
+
+    /// Slabs of sea ice.
+    fn slabs(&self) -> IndexedMesh {
         let floes = self.floes();
         let mut positions = vec![];
         let mut triangles = vec![];
@@ -529,7 +644,7 @@ mod tests {
 
     #[test]
     fn test_floes_cover_the_concentration_without_overlapping() {
-        let field = FloeField { center: (0., 0.), extent: (400., 300.), concentration: 0.6, min_size: 2., max_size: 60., thickness: 1., sea_level: 0., seed: 2 };
+        let field = FloeField { center: (0., 0.), extent: (400., 300.), concentration: 0.6, min_size: 2., max_size: 60., thickness: 1., sea_level: 0., style: FloeStyle::Slab, clumping: 0., seed: 2 };
         let floes = field.floes();
         let covered: f64 = floes.iter().map(|f| 0.7 * PI * f.radius * f.radius).sum();
         assert!(covered > 0.45 * 400. * 300., "{}", covered / (400. * 300.));

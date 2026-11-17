@@ -1,33 +1,31 @@
 {
   "width": 960,
-  "height": 540,
+  "height": 640,
   "supersamples": 64,
   "chunk_size": 64,
   "samples_per_chunk": 8,
   "shadow_bias": 0.001,
   "max_depth": 8,
   "path_termination": "russian_roulette",
-  "output": { "tonemap": "reinhard", "exposure": 0.9 },
+  "output": { "tonemap": "reinhard", "exposure": 1.0 },
 
   "camera": {
-    "location": [0, 7, -60],
-    "lookat": [0, 4, 600],
+    "location": [0, 6, -40],
+    "lookat": [10, 6, 200],
     "up": [0, 1, 0],
-    "angle": 0.85,
+    "angle": 0.9,
     "aperture": 0.001
   },
 
   "sun": { "intensity": 4.9 },
 
   "objects": [
-    { "type": "ocean", "wind": [4, 2], "planet_radius": 0 },
-    { "type": "ice_floes", "center": [0, 80], "extent": [360, 200], "concentration": 0.55, "size": [1.5, 35], "thickness": 1.2, "seed": 1 },
-    { "type": "iceberg", "shape": "blocky", "size": 60, "location": [-70, 250], "seed": 2 },
-    { "type": "iceberg", "shape": "pinnacle", "size": 110, "location": [170, 470], "seed": 3 },
-    { "type": "iceberg", "shape": "tabular", "size": 600, "location": [-520, 1150], "seed": 4 },
-    { "type": "iceberg", "shape": "wedge", "size": 140, "location": [-330, 560], "seed": 5 },
-    { "type": "iceberg", "shape": "dome", "size": 80, "location": [400, 780], "seed": 6 },
-    { "type": "iceberg", "shape": "drydock", "size": 120, "location": [60, 950], "seed": 7 },
-    { "type": "skysphere", "sun_direction": [0.75, 0.2, 0.1] }
+    { "type": "ocean", "wind": [3, 1], "planet_radius": 0, "transparent": true, "detail_center": [0, -40], "detail_distance": 200 },
+    { "type": "ice_floes", "style": "brash", "center": [0, -10], "extent": [80, 30], "concentration": 0.45, "size": [0.4, 12], "seed": 1 },
+    { "type": "iceberg", "shape": "blocky", "size": 90, "location": [-20, 150], "yaw": 10, "seed": 2 },
+    { "type": "iceberg", "shape": "tabular", "size": 260, "location": [140, 330], "yaw": 5, "seed": 4 },
+    { "type": "iceberg", "shape": "tabular", "size": 200, "location": [-200, 420], "yaw": -15, "seed": 9 },
+    { "type": "iceberg", "shape": "wedge", "size": 60, "location": [260, 380], "seed": 5 },
+    { "type": "skysphere", "sun_direction": [-0.5, 0.45, -0.3] }
   ]
 }

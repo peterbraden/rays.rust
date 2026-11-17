@@ -2535,13 +2535,15 @@ impl SceneFile {
     /// its own ice and snow.
     ///
     /// - `{"type": "iceberg", "location": [x, z], "size": 100, "shape": "tabular" | "blocky" |
-    ///   "dome" | "pinnacle" | "wedge" | "drydock", "yaw": degrees, "density": 900, "detail": 6}`:
+    ///   "dome" | "pinnacle" | "wedge" | "drydock", "yaw": degrees, "density": 900, "detail": 7}`:
     ///   an iceberg `size` metres long, floating as its density says.
     /// - `{"type": "ice_floes", "center": [x, z], "extent": [400, 300], "concentration": 0.6,
     ///   "size": [2, 60], "thickness": 1}`: floes from `size[0]` to `size[1]` metres across
-    ///   covering `concentration` of the sea.
+    ///   covering `concentration` of the sea; `"style": "brash"` for lumps of glacier ice
+    ///   (brash ice and bergy bits) rather than slabs of sea ice; `"clumping"` (0 to 1, default
+    ///   0.5) gathers them in clumps.
     pub fn parse_ice_object(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>) -> SceneObject {
-        use crate::procedural::iceberg::{FloeField, FloeMaterial, Iceberg, IcebergMaterial, Kind};
+        use crate::procedural::iceberg::{FloeField, FloeMaterial, FloeStyle, Iceberg, IcebergMaterial, Kind};
         let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
         let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
         let sea_level = n("sea_level", 0.);
@@ -2569,8 +2571,18 @@ impl SceneFile {
             concentration: n("concentration", 0.6).clamp(0., 0.95),
             min_size: size.x.max(0.1), max_size: size.y.max(size.x.max(0.1)),
             thickness: n("thickness", 1.).max(0.01), sea_level, seed,
+            style: match o["style"].as_str().unwrap_or("floes") {
+                "floes" => FloeStyle::Slab,
+                "brash" => FloeStyle::Brash,
+                x => panic!("Unknown ice_floes style '{}': expected floes or brash", x),
+            },
+            clumping: n("clumping", 0.5).clamp(0., 1.),
         };
-        rock::object(&[field.mesh()], medium(Box::new(FloeMaterial::new(seed))))
+        let own: Box<dyn MaterialModel + Sync + Send> = match field.style {
+            FloeStyle::Slab => Box::new(FloeMaterial::new(seed)),
+            FloeStyle::Brash => Box::new(IcebergMaterial::new(sea_level, 4., seed)),
+        };
+        rock::object(&[field.mesh()], medium(own))
     }
 
     /// Procedural rocks, all resting on the ground (see `procedural::rock`). Each takes a

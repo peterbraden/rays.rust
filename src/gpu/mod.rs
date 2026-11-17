@@ -228,9 +228,13 @@ impl Buffers {
         let powers: Vec<f64> = (0..flat.emitters.len()).map(|e| flat.emitter_choice.probability(e)).collect();
         tables.extend(cdf(&powers));
         let env_off = tables.len() as u32;
+        // The sky as seen from the camera, as the CPU integrators see it from each ray's
+        // origin: exact for camera rays, near enough for paths that stay near the camera (from
+        // the world's origin, an orbiting camera saw the night side's ground-level sky).
+        let origin = crate::environment::viewpoint(s);
         let texels: Vec<Color> = (0..ENV_WIDTH * ENV_HEIGHT).into_par_iter().map(|i| {
             let d = env_direction(i % ENV_WIDTH, i / ENV_WIDTH);
-            crate::wavefront::integrator::sky_radiance(&Ray { ro: Vector3::zeros(), rd: d }, s, flat)
+            crate::wavefront::integrator::sky_radiance(&Ray { ro: origin, rd: d }, s, flat)
         }).collect();
         for t in &texels {
             tables.extend([t.rgb.x as f32, t.rgb.y as f32, t.rgb.z as f32]);
@@ -239,7 +243,6 @@ impl Buffers {
         // sky the scene lets through from the camera, as the CPU's `Environment` (so no shadow
         // rays are spent on the ground), then within each row. The visibility is found on a
         // grid of VISIBILITY_SCALE² texels, the CPU's resolution, for a ray per cell.
-        let origin = crate::environment::viewpoint(s);
         let (vw, vh) = (ENV_WIDTH / VISIBILITY_SCALE, ENV_HEIGHT / VISIBILITY_SCALE);
         let visible: Vec<f64> = (0..vw * vh).into_par_iter().map(|i| {
             let (x, y) = ((i % vw) * VISIBILITY_SCALE + VISIBILITY_SCALE / 2, (i / vw) * VISIBILITY_SCALE + VISIBILITY_SCALE / 2);
@@ -296,7 +299,8 @@ impl Buffers {
         let (sun_dir, sun_irr) = match &s.sun {
             Some(sun) => {
                 flags |= pathtrace::FLAG_SUN;
-                let e = sun.irradiance_at(&Vector3::zeros());
+                // Reddened by the air between it and the camera, as the sky map is baked.
+                let e = sun.irradiance_at(&crate::environment::viewpoint(s));
                 (v4(&sun.direction, sun.angular_radius.cos() as f32), Vec4::new(e.rgb.x as f32, e.rgb.y as f32, e.rgb.z as f32, sun.angular_radius as f32))
             },
             None => (Vec4::new(0., 1., 0., 1.), Vec4::ZERO),
@@ -608,6 +612,45 @@ mod tests {
         let Ok(mut gpu) = GpuRenderer::new(&s, &flat) else { return };
         let sums = gpu.run(&s, 0..1);
         assert!(sums.iter().all(|v| (v[0] - 0.2).abs() < 1e-3), "the background, not {:?}", sums[0]);
+    }
+
+    /// From orbit the GPU sees the sky and the sun the CPU does: its sky map and the sun's
+    /// reddening are found from the camera, not the world's origin (on the night side's
+    /// ground, where the sun had set, which rendered `limb-sunset` black).
+    /// Checked by the shader's CPU build over the GPU's buffers, so without a GPU too.
+    #[test]
+    fn test_sees_the_sky_from_orbit() {
+        let s = SceneFile::from_string(r#"{
+            "width": 32, "height": 16, "supersamples": 16, "max_depth": 4, "background": [0, 0, 0],
+            "camera": { "location": [0, 400000, 0], "lookat": [0, 40000, 1000000], "up": [0, 1, 0], "angle": 0.3 },
+            "sun": { "intensity": 6 },
+            "materials": { "GROUND": { "type": "lambertian", "albedo": [0.06, 0.09, 0.15] } },
+            "objects": [ { "type": "planet", "material": "GROUND" }, { "type": "skysphere", "sun_direction": [0, -0.3, 0.95] } ]
+        }"#.to_string());
+        let flat = FlatScene::build(&s).unwrap();
+        let b = Buffers::build(&s, &flat).unwrap();
+        let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+        let passes = 16;
+        let mut on_shader = Vector3::zeros();
+        for k in 0..passes {
+            for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
+                if ray.d.w < 0.5 {
+                    continue;
+                }
+                let mut rng = pathtrace::path_seed(index as u32, k as u32, b.params.seed.x);
+                let c = pathtrace::radiance(&shader, ray.o.truncate(), ray.d.truncate(), &mut rng, &mut 0) * ray.o.w;
+                on_shader += Vector3::new(c.x as f64, c.y as f64, c.z as f64) / passes as f64;
+            }
+        }
+        let cpu = crate::wavefront::integrator::tests::mean_image(&s, passes).iter().fold(Vector3::zeros(), |a, c| a + c.rgb);
+        for ch in 0..3 {
+            assert!((on_shader[ch] - cpu[ch]).abs() < 0.05 * cpu[ch], "channel {}: shader {} vs CPU {}", ch, on_shader[ch], cpu[ch]);
+        }
+        let Ok(mut gpu) = GpuRenderer::new(&s, &flat) else { return };
+        let on_gpu = gpu.run(&s, 0..passes).iter().fold(Vector3::zeros(), |a, v| a + Vector3::new(v[0] as f64, v[1] as f64, v[2] as f64)) / passes as f64;
+        for ch in 0..3 {
+            assert!((on_gpu[ch] - cpu[ch]).abs() < 0.05 * cpu[ch], "channel {}: GPU {} vs CPU {}", ch, on_gpu[ch], cpu[ch]);
+        }
     }
 
     /// The shader's functions, run on the CPU, agree with the renderer's own.

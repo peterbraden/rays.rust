@@ -14,7 +14,7 @@
 //! ```json
 //! { "type": "terrain", "heightmap": {...},
 //!   "displacement": {"node": "fractal", "style": "ridged", "scale": 4, "smallest": 0.02, "amplitude": 0.5},
-//!   "displacement_detail": {"pixels": 1, "max_level": 8} }
+//!   "displacement_detail": {"pixels": 1, "max_level": 8, "offscreen": 4} }
 //! ```
 //!
 //! - The base surface is the heightmap made smooth (`HeightGrid::smooth`: Catmull-Rom splines
@@ -30,7 +30,11 @@
 //!   Since the level depends on the cell alone, every ray (from the camera, a light or a bounce)
 //!   sees the same surface, and shadows match what is seen.
 //! - Cells are diced when a ray first comes near them, and kept. Each keeps a quadtree of
-//!   bounding boxes over its quads, which rays descend nearest first.
+//!   bounding boxes over its quads, which rays descend nearest first. Before dicing, a cell's
+//!   bounds allow sideways displacement only as far as its base's slopes can tilt the normal,
+//!   so rays grazing gentle ground dice few cells besides those they hit.
+//! - Cells wholly outside a still perspective camera's view are diced `offscreen` times
+//!   coarser (default 4): they're seen only through their shadows and the light they reflect.
 //! - Neighbouring cells at different levels meet without cracks: a cell's edge shared with a
 //!   coarser one follows the coarser cell's edge, and the points on edges and corners are
 //!   evaluated as filtered for the coarsest cell they belong to, so both sides compute exactly
@@ -46,7 +50,23 @@ use crate::procedural::heightmap::{intersect_triangle, HeightGrid};
 use crate::ray::Ray;
 use crate::shapes::bbox::BBox;
 use crate::shapes::geometry::Geometry;
+use std::cell::Cell;
 use std::sync::{Arc, OnceLock};
+
+thread_local! {
+    static ROUGHLY: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Run `f` with displaced terrains seen roughly, as their heightmaps' flat cells, without
+/// dicing any: for guesses that needn't be exact, such as which of the sky the camera sees
+/// (`environment`). A ray grazing the ground from the camera passes close to many cells, and
+/// dicing them all for that guess cost more than the render.
+pub fn roughly<T>(f: impl FnOnce() -> T) -> T {
+    let before = ROUGHLY.with(|r| r.replace(true));
+    let v = f();
+    ROUGHLY.with(|r| r.set(before));
+    v
+}
 
 /// How finely to dice: from the camera, or everywhere alike.
 #[derive(Clone, Debug)]
@@ -60,11 +80,49 @@ pub struct Detail {
     pub min_spacing: Option<f64>,
     /// The level of every cell, without a camera.
     pub level: u32,
+    /// What the camera sees, if known: cells wholly outside it are diced `offscreen` times
+    /// coarser.
+    pub view: Option<View>,
+    pub offscreen: f64,
 }
 
 impl Default for Detail {
     fn default() -> Detail {
-        Detail { eye: None, pixels: 1., max_level: 8, min_spacing: None, level: 4 }
+        Detail { eye: None, pixels: 1., max_level: 8, min_spacing: None, level: 4, view: None, offscreen: 1. }
+    }
+}
+
+/// A perspective camera's field of view: its axes (unit vectors), the tangents of half its
+/// angles across and up, and how far rays may start from its position (the lens's radius).
+#[derive(Clone, Debug)]
+pub struct View {
+    pub eye: Vector3<f64>,
+    pub right: Vector3<f64>,
+    pub up: Vector3<f64>,
+    pub forward: Vector3<f64>,
+    pub tan_x: f64,
+    pub tan_y: f64,
+    pub margin: f64,
+}
+
+impl View {
+    /// Whether the box lies wholly outside the view: all its corners beyond one of the planes
+    /// bounding it (the four sides, and the plane of the lens behind).
+    pub fn excludes(&self, b: &BBox) -> bool {
+        let planes = [
+            (self.right - self.forward * self.tan_x).normalize(),
+            (-self.right - self.forward * self.tan_x).normalize(),
+            (self.up - self.forward * self.tan_y).normalize(),
+            (-self.up - self.forward * self.tan_y).normalize(),
+            -self.forward,
+        ];
+        planes.iter().any(|n| (0 .. 8).all(|c| {
+            let p = Vector3::new(
+                if c & 1 == 0 { b.min.x } else { b.max.x },
+                if c & 2 == 0 { b.min.y } else { b.max.y },
+                if c & 4 == 0 { b.min.z } else { b.max.z });
+            (p - self.eye).dot(n) > self.margin
+        }))
     }
 }
 
@@ -90,6 +148,8 @@ pub struct DisplacedTerrain {
     levels: Vec<u8>,
     cell_bounds: Vec<BBox>,
     tiles: Vec<OnceLock<Tile>>,
+    /// Threads for dicing large cells asked for from outside a thread pool.
+    pool: OnceLock<Option<rayon::ThreadPool>>,
     /// Over the cells, by index into `cells`.
     bvh: Bvh,
     cells: Vec<u32>,
@@ -128,7 +188,18 @@ impl DisplacedTerrain {
             let (min, max) = if vertical {
                 (Vector3::new(x0, lo + range.0, z0), Vector3::new(x0 + cell, hi + range.1, z0 + cell))
             } else {
-                (Vector3::new(x0 - reach, lo - reach, z0 - reach), Vector3::new(x0 + cell + reach, hi + reach, z0 + cell + reach))
+                // Moved along the base's normal, (-hx, 1, -hz) normalised: sideways by at most
+                // reach times |hx| / sqrt(1 + hx^2) (and so in z), and up or down by the
+                // displacement times a y component between 1 and 1 / sqrt(1 + hx^2 + hz^2). On
+                // gentle ground that keeps the bounds to a little more than the cell, so rays
+                // dice only cells they come near.
+                let (sx, sz) = grid.smooth_slope_bounds(ix, iz);
+                let side = |s: f64| reach * (s / (1. + s * s).sqrt()).min(1.);
+                let (rx, rz) = (side(sx), side(sz));
+                let ny = 1. / (1. + sx * sx + sz * sz).sqrt();
+                let down = if range.0 < 0. { range.0 } else { range.0 * ny };
+                let up = if range.1 > 0. { range.1 } else { range.1 * ny };
+                (Vector3::new(x0 - rx, lo + down, z0 - rz), Vector3::new(x0 + cell + rx, hi + up, z0 + cell + rz))
             };
             // Room for rounding.
             let pad = Vector3::repeat(1e-9 * (1. + min.abs().max().max(max.abs().max())));
@@ -148,7 +219,10 @@ impl DisplacedTerrain {
                 None => detail.level,
                 Some((eye, pixel_angle)) => {
                     let nearest = Vector3::new(eye.x.clamp(b.min.x, b.max.x), eye.y.clamp(b.min.y, b.max.y), eye.z.clamp(b.min.z, b.max.z));
-                    let footprint = (nearest - eye).norm().max(1e-6) * pixel_angle * detail.pixels;
+                    // Cells out of view are seen only by the light they shade or reflect.
+                    let unseen = detail.view.as_ref().is_some_and(|v| v.excludes(b));
+                    let footprint = (nearest - eye).norm().max(1e-6) * pixel_angle * detail.pixels
+                        * if unseen { detail.offscreen.max(1.) } else { 1. };
                     (extent / footprint).log2().ceil().max(0.) as u32
                 },
             };
@@ -160,7 +234,7 @@ impl DisplacedTerrain {
         println!("Displaced terrain: {} x {} cells diced to levels {} to {}, up to {:.1} million vertices if all are seen",
             nx, nz, levels.iter().min().unwrap_or(&0), levels.iter().max().unwrap_or(&0), vertices / 1e6);
         let tiles = (0 .. nx * nz).map(|_| OnceLock::new()).collect();
-        Ok(DisplacedTerrain { grid, graph, vertical, range, levels, cell_bounds, tiles, bvh, cells, bounds })
+        Ok(DisplacedTerrain { grid, graph, vertical, range, levels, cell_bounds, tiles, pool: OnceLock::new(), bvh, cells, bounds })
     }
 
     /// The displacement's range.
@@ -194,17 +268,23 @@ impl DisplacedTerrain {
             .filter_map(|&(i, j)| self.level(i as isize, j as isize)).min().unwrap_or(0)
     }
 
-    fn dice(&self, k: usize) -> Tile {
+    fn dice(&self, k: usize, parallel: bool) -> Tile {
         let (ix, iz) = ((k % self.grid.nx) as i64, (k / self.grid.nx) as i64);
         let level = self.levels[k] as u32;
         let n = 1usize << level;
         let ni = n as i64;
         // With a ring of vertices outside the cell, for normals.
         let w = n + 3;
-        let ring: Vec<Vector3<f64>> = (0 .. w * w).map(|q| {
+        let ring_point = |q: usize| {
             let (i, j) = ((q % w) as i64 - 1, (q / w) as i64 - 1);
             self.point(ix * ni + i, iz * ni + j, level)
-        }).collect();
+        };
+        let ring: Vec<Vector3<f64>> = if parallel {
+            use rayon::prelude::*;
+            (0 .. w * w).into_par_iter().with_min_len(256).map(ring_point).collect()
+        } else {
+            (0 .. w * w).map(ring_point).collect()
+        };
         let at = |i: usize, j: usize| ring[(j + 1) * w + i + 1];
         let mut pos = Vec::with_capacity((n + 1) * (n + 1));
         let mut nrm = Vec::with_capacity((n + 1) * (n + 1));
@@ -277,12 +357,25 @@ impl DisplacedTerrain {
     }
 
     fn tile(&self, k: usize) -> &Tile {
-        self.tiles[k].get_or_init(|| self.dice(k))
+        self.tiles[k].get_or_init(|| {
+            // Asked from outside a thread pool (placing a forest, say), a large cell is diced
+            // on a pool of the terrain's own. Not from a render's threads: one waiting there
+            // takes up other pixels meanwhile, which may want this same cell (see
+            // `geometry::build_apart`), and the render keeps every core busy anyway.
+            if self.levels[k] >= 5 && rayon::current_thread_index().is_none()
+                && let Some(pool) = self.pool.get_or_init(|| rayon::ThreadPoolBuilder::new().build().ok()) {
+                return pool.install(|| self.dice(k, true));
+            }
+            self.dice(k, false)
+        })
     }
 
     /// The nearest hit with cell k, between t0 and t1 (multiples of the ray's direction): t, and
     /// the interpolated normal.
     fn intersect_cell(&self, r: &Ray, k: usize, t0: f64, t1: f64, any: bool) -> Option<(f64, Vector3<f64>)> {
+        if ROUGHLY.with(Cell::get) {
+            return self.intersect_base(r, k, t0, t1);
+        }
         let tile = self.tile(k);
         let n = tile.n;
         let inv = Vector3::new(1. / r.rd.x, 1. / r.rd.y, 1. / r.rd.z);
@@ -337,6 +430,24 @@ impl DisplacedTerrain {
             children.sort_by(|a, b| b.2.total_cmp(&a.2));
             for &(ci, cj, e) in children.iter() {
                 stack.push((depth - 1, ci, cj, e));
+            }
+        }
+        best
+    }
+
+    /// The nearest hit with cell k's two flat triangles through its heightmap's corners.
+    fn intersect_base(&self, r: &Ray, k: usize, t0: f64, t1: f64) -> Option<(f64, Vector3<f64>)> {
+        let g = &self.grid;
+        let (ix, iz) = ((k % g.nx) as isize, (k / g.nx) as isize);
+        let corner = |a: isize, b: isize| Vector3::new(
+            g.min.0 + (ix + a) as f64 * g.cell, g.corner_clamped(ix + a, iz + b), g.min.1 + (iz + b) as f64 * g.cell);
+        let (a, b, c, d) = (corner(0, 0), corner(1, 0), corner(0, 1), corner(1, 1));
+        let mut best: Option<(f64, Vector3<f64>)> = None;
+        for [p, q, s] in [[a, b, c], [d, c, b]] {
+            if let Some((t, _, _)) = intersect_triangle(r, p, q, s)
+                && t >= t0 && t <= t1 && best.is_none_or(|(bt, _)| t < bt) {
+                let n = (s - p).cross(&(q - p));
+                best = Some((t, if n.y < 0. { -n } else { n }.normalize()));
             }
         }
         best
@@ -461,6 +572,57 @@ mod tests {
             let hit = t.intersects_range(&r, 1e-6, max);
             assert_eq!(hit.is_some(), t.occludes(&r, 1e-6, max), "{:?}", r);
         }
+    }
+
+    /// Every diced vertex lies within its cell's bounds, which are found before dicing, also
+    /// on steep ground where the normal tilts the displacement sideways.
+    #[test]
+    fn test_diced_cells_stay_within_their_bounds() {
+        let n = 8;
+        let heights = (0 .. (n + 1) * (n + 1)).map(|k| {
+            let (i, j) = ((k % (n + 1)) as f64, (k / (n + 1)) as f64);
+            // A cliff across the middle, and rolling ground.
+            6. / (1. + (-(i - 4.) * 3.).exp()) + 0.3 * (j * 0.9).sin()
+        }).collect();
+        let grid = Arc::new(HeightGrid::from_heights((-4., -4.), 1., n, n, heights));
+        let g = json!({"node": "add", "inputs": [
+            {"node": "fractal", "style": "ridged", "scale": 2, "smallest": 0.05, "amplitude": 0.8},
+            {"node": "fractal", "scale": 1, "smallest": 0.05, "amplitude": -0.5, "seed": 3}]});
+        let t = DisplacedTerrain::new(grid, Graph::parse(&g).unwrap(), false, &Detail { level: 5, ..Default::default() }).unwrap();
+        let mut sideways = 0f64;
+        for k in 0 .. n * n {
+            let b = t.cell_bounds[k];
+            let x0 = t.grid.min.0 + (k % n) as f64;
+            sideways = sideways.max(x0 - b.min.x);
+            for p in &t.dice(k, false).pos {
+                assert!((0 .. 3).all(|a| p[a] >= b.min[a] && p[a] <= b.max[a]), "cell {}: {:?} outside {:?}", k, p, b);
+            }
+        }
+        // On the cliff the bounds reach sideways; on the flat they'd be as wide as the
+        // displacement's reach without the slopes.
+        assert!(sideways > 0.3, "{}", sideways);
+        let flat = t.cell_bounds[0];
+        assert!(flat.max.x - flat.min.x < 1. + 0.8, "{:?}", flat);
+    }
+
+    /// Cells outside the camera's view are diced coarser than those in it, at the same distance.
+    #[test]
+    fn test_cells_out_of_view_are_diced_coarser() {
+        let g = json!({"node": "fractal", "scale": 1, "smallest": 0.001, "amplitude": 0.1});
+        let eye = Vector3::new(0., 1., 0.);
+        // Looking along +x, 30 degrees each way.
+        let view = View { eye, right: Vector3::new(0., 0., 1.), up: Vector3::y(), forward: Vector3::x(),
+            tan_x: 0.58, tan_y: 0.58, margin: 0. };
+        assert!(view.excludes(&BBox::new(Vector3::new(-3., -1., -1.), Vector3::new(-2., 1., 1.))));
+        assert!(!view.excludes(&BBox::new(Vector3::new(2., -1., -1.), Vector3::new(3., 1., 1.))));
+        assert!(view.excludes(&BBox::new(Vector3::new(1., -1., 3.), Vector3::new(2., 1., 4.))));
+        let detail = |view: Option<View>| Detail { eye: Some((eye, 0.002)), max_level: 10, view, offscreen: 4., ..Default::default() };
+        let seen = terrain(g.clone(), detail(None));
+        let culled = terrain(g, detail(Some(view)));
+        // Cell (6, 4) lies ahead (+x), cell (1, 4) behind.
+        let (ahead, behind) = (4 * 8 + 6, 4 * 8 + 1);
+        assert_eq!(seen.levels[ahead], culled.levels[ahead]);
+        assert_eq!(seen.levels[behind], culled.levels[behind] + 2);
     }
 
     /// Cells near the camera are diced finer than far ones.

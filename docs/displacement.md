@@ -68,6 +68,20 @@ octave's mean in its place, so a coarsely diced distant surface doesn't alias or
   cell is diced the first time a ray comes near it, then kept. Each diced cell keeps a quadtree
   of boxes that rays descend nearest first; a BVH over the cells' conservative bounds finds
   them.
+- **Tight bounds.** A cell's bounds before dicing allow for the displacement only as far as
+  its base's normals can carry it: sideways by the graph's reach times the sine of the steepest
+  slope the cell's sixteen spline vertices allow (`HeightGrid::smooth_slope_bounds`), up and
+  down by the graph's range. On gentle ground that is little more than the cell, so a ray grazing
+  the ground dices only the cells it passes close to, not every cell within the graph's reach.
+- **Out of view, coarser.** Cells wholly outside the camera's view (a still perspective camera's
+  frustum, a few pixels wider) are seen only through the shadows and light they cast, and are
+  diced `offscreen` times coarser (`"displacement_detail": {"offscreen": 4}`, the default; 1
+  dices them like the rest).
+- **Guesses don't dice.** The sky's sampling table (`environment`) only guesses which of the sky
+  the camera sees, so it sees displaced terrain as its heightmap's flat cells
+  (`displaced::roughly`) rather than dicing every cell around the camera.
+- **Dicing on all cores.** Cells diced outside a render's threads (dropping a forest's trees
+  onto the terrain) are diced on a pool of the terrain's own when they are large.
 - **Same surface for every ray.** The level depends on the cell, not the ray, so camera, shadow
   and bounce rays all meet the same geometry.
 - **No cracks.** Where a cell meets a coarser neighbour, its edge follows the neighbour's; points
@@ -76,6 +90,9 @@ octave's mean in its place, so a coarsely diced distant surface doesn't alias or
   seams).
 - **Memory.** The scene prints how many vertices it could need if every cell were seen; only
   the cells rays reach are diced.
+- **Cost.** The escarpment demo at 960 x 540 and 16 samples: 9 min 49 s and 10.6 GB before these
+  optimisations, 3 min 5 s and 0.85 GB after (4 cores). Evaluating the graph at the vertices is still most
+  of the time.
 
 Things placed on a heightmap (grass, rocks, trees) stand on its grid, not on the displaced
 surface, so keep displacement small or masked off where they are.

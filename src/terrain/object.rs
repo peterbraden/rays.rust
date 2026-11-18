@@ -23,7 +23,10 @@
 //!   mountains behind it); or `{"type": "planet",
 //!   "cells"}`, a cubed sphere with `cells` x `cells` per face.
 //! - Ground cover: ice, rivers, sea floor, bare rock on steep slopes, alluvium (sediment over
-//!   2 m deep), lava, then a tint by elevation.
+//!   2 m deep), lava, then a tint by elevation; or `"material"`, the name of a material for
+//!   all the ground but the rivers, typically `surface_layers` masked by what the simulation
+//!   left (`field` nodes in its graphs: sediment, ice, flow, wetness and so on, see
+//!   `graph::Field`).
 //! - `scale`: metres per scene unit (default 1000). `exaggeration`: vertical exaggeration.
 //! - A patch is drawn in a local frame: x east, y up, z south, sea level at y = 0, centred on
 //!   the origin, ignoring the planet's curvature. A planet is drawn centred on `centre`
@@ -88,6 +91,15 @@ impl Placement {
         }
     }
 
+    /// The direction on the planet under scene position `p`, and its height there (metres).
+    pub fn on_terrain(&self, domain: &Domain, p: &Vector3<f64>) -> (Vector3<f64>, f64) {
+        let q = (p - self.centre) * self.scale;
+        match &domain.layout {
+            Layout::Patch { up, east, north, .. } => ((up * domain.radius + east * q.x - north * q.z).normalize(), q.y / self.exaggeration),
+            Layout::Sphere { .. } => (q.normalize(), (q.norm() - domain.radius) / self.exaggeration),
+        }
+    }
+
     /// The cell under scene position `p`.
     pub fn cell_at(&self, domain: &Domain, p: &Vector3<f64>) -> usize {
         let q = (p - self.centre) * self.scale;
@@ -146,6 +158,10 @@ pub struct TerrainMedium {
     materials: Vec<Box<dyn MaterialModel + Sync + Send>>,
     /// Rivers and lakes drawn as lines (patches).
     water: Option<WaterLines>,
+    /// What the simulation left, for graphs' `field` nodes.
+    fields: crate::terrain::fields::SimFields,
+    /// The scene's material for the ground, in place of the cover classes.
+    ground: Option<Box<dyn MaterialModel + Sync + Send>>,
 }
 
 const ICE: u8 = 0;
@@ -162,7 +178,8 @@ const ROCK_SLOPE: f64 = 0.8;
 
 impl TerrainMedium {
     /// `min_river_width`: draw rivers at least this wide, metres (thin ones vanish from afar).
-    pub fn new(t: Terrain, place: Placement, min_river_width: f64) -> TerrainMedium {
+    pub fn new(t: Terrain, place: Placement, min_river_width: f64, ground: Option<Box<dyn MaterialModel + Sync + Send>>) -> TerrainMedium {
+        let fields = crate::terrain::fields::SimFields::new(&t);
         let slope2 = slope_squared(&t.domain, &t.bed);
         let water = map::water_lines(&t, min_river_width);
         let lines = water.is_some();
@@ -188,7 +205,7 @@ impl TerrainMedium {
         ];
         for b in 0..BANDS { materials.push(lambertian(land_colour((b as f64 + 0.5) * BAND_HEIGHT))); }
         let jitter = t.domain.min_spacing() / place.scale;
-        TerrainMedium { domain: t.domain, place, jitter, class, materials, water }
+        TerrainMedium { domain: t.domain, place, jitter, class, materials, water, fields, ground }
     }
 }
 
@@ -201,8 +218,21 @@ impl Medium for TerrainMedium {
             let q = [q.x, -q.z];
             if water.wet(point_cell(&self.domain, q), q) { return &*self.materials[RIVER as usize]; }
         }
+        if let Some(g) = &self.ground
+            && (self.water.is_some() || self.class[self.place.cell_at(&self.domain, &pt)] != RIVER) {
+            return &**g;
+        }
         let j = Vector3::new(rand() - 0.5, rand() - 0.5, rand() - 0.5) * self.jitter;
         &*self.materials[self.class[self.place.cell_at(&self.domain, &(pt + j))] as usize]
+    }
+
+    fn fields(&self) -> Option<&dyn crate::graph::Fields> { Some(self) }
+}
+
+impl crate::graph::Fields for TerrainMedium {
+    fn field(&self, f: crate::graph::Field, p: &Vector3<f64>) -> Option<f64> {
+        let (d, h) = self.place.on_terrain(&self.domain, p);
+        self.fields.at(&self.domain, f, &d, h)
     }
 }
 
@@ -379,12 +409,17 @@ fn evolve(o: &Value, mut t: Terrain, key: &str) -> Terrain {
     t
 }
 
-pub fn create_terrain(o: &Value) -> SceneObject {
+/// The landscape's `"material"`, if it names one, for its ground.
+fn ground_material(o: &Value, materials: &serde_json::Map<String, Value>) -> Option<Box<dyn MaterialModel + Sync + Send>> {
+    o.get("material").map(|m| SceneFile::require_material(m, materials, "landscape"))
+}
+
+pub fn create_terrain(o: &Value, materials: &serde_json::Map<String, Value>) -> SceneObject {
     let mut params = terrain_params(o);
     // Without a `scale`, the landscape is drawn as itself, in metres on the scene's planet.
     if o.get("scale").is_none() {
         if o.get("radius").is_none() { params.planet.radius = crate::planet::EARTH_RADIUS; }
-        return full_scale_landscape(o, params);
+        return full_scale_landscape(o, params, ground_material(o, materials));
     }
     let t = evolved(o, params);
     if let Some(path) = o["map"].as_str() { write_map(&t, path, 2048); }
@@ -394,7 +429,7 @@ pub fn create_terrain(o: &Value) -> SceneObject {
         centre: SceneFile::parse_vec3_def(o, "centre", Vector3::zeros()),
     };
     let geometry = mesh(&t, &place);
-    SceneObject { geometry: Box::new(geometry), medium: Box::new(TerrainMedium::new(t, place, number(o, "min_river_width", 0.))) }
+    SceneObject { geometry: Box::new(geometry), medium: Box::new(TerrainMedium::new(t, place, number(o, "min_river_width", 0.), ground_material(o, materials))) }
 }
 
 /// A patch level of a full-scale landscape: cells along a side, and their spacing (m).
@@ -451,8 +486,9 @@ fn focus(o: &Value, frame: &Frame, ahead: f64) -> Vector3<f64> {
 /// - The mesh: `resolution` (vertices along a clipmap ring), `min_spacing` (m), `globe` (cells
 ///   per face edge beyond the rings), `roughness` of the detail below the finest cells.
 /// - Ground cover: `snowline` and `treeline` (m; by default from the climate, by latitude),
-///   `min_river_width` (m).
-fn full_scale_landscape(o: &Value, params: TerrainParams) -> SceneObject {
+///   `min_river_width` (m); or `"material"`, a material for the ground but rivers and lakes,
+///   whose graphs' `field` nodes read the simulations (blended between patches) and the climate.
+fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> SceneObject {
     let mut p = SceneryParams::default();
     p.resolution = SceneFile::parse_int(&o["resolution"], p.resolution).max(8);
     p.min_spacing = number(o, "min_spacing", p.min_spacing).max(1e-3);
@@ -527,7 +563,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams) -> SceneObject {
     if let (Some(path), Some(c)) = (o["climate_map"].as_str(), &climate) { crate::terrain::map::write_climate_map(&planet, c, path, 2048); }
     let ground = Ground::new(layers, climate, params.glacier.clone().unwrap_or_default(), time, params.planet.seed, frame, &p);
     println!("Landscape: {} triangles in {:.1?}", geometry.primitives(), start.elapsed());
-    SceneObject { geometry: Box::new(geometry), medium: Box::new(LandscapeMedium::new(ground)) }
+    SceneObject { geometry: Box::new(geometry), medium: Box::new(LandscapeMedium::new(ground, material)) }
 }
 
 #[cfg(test)]
@@ -565,7 +601,7 @@ mod tests {
         }"#).unwrap();
         let p = terrain_params(&o);
         assert_eq!(p.glacier.as_ref().unwrap().acceleration, 20.);
-        let obj = create_terrain(&o);
+        let obj = create_terrain(&o, &serde_json::Map::new());
         assert_eq!(obj.geometry.primitives(), 16 * 16 * 2);
         // A ray straight down onto the middle hits the terrain.
         let r = Ray { ro: Vector3::new(0.1, 100., 0.1), rd: Vector3::new(0., -1., 0.) };
@@ -584,7 +620,7 @@ mod tests {
             "camera": { "location": [0, 3000, 0], "lookat": [0, 0, -1000] }
         }"#).unwrap();
         assert_eq!(levels(&o, 2e5), vec![Level { cells: 16, spacing: 1000. }, Level { cells: 16, spacing: 5000. }, Level { cells: 16, spacing: 25000. }]);
-        let obj = create_terrain(&o);
+        let obj = create_terrain(&o, &serde_json::Map::new());
         // A ray straight down onto the site meets ground within a few km of sea level.
         let r = Ray { ro: Vector3::new(10., 20000., 10.), rd: Vector3::new(0., -1., 0.) };
         let hit = obj.geometry.intersects(&r).expect("no hit");

@@ -213,11 +213,14 @@ pub struct Layer {
     water: Option<WaterLines>,
     /// Width of the band inside a patch's edge over which it blends into what is around it.
     blend: f64,
+    /// What the simulation left, for graphs' `field` nodes.
+    fields: crate::terrain::fields::SimFields,
 }
 
 impl Layer {
     pub fn new(t: Terrain, min_river_width: f64) -> Layer {
         let corners = corner_heights(&t);
+        let fields = crate::terrain::fields::SimFields::new(&t);
         let water = map::water_lines(&t, min_river_width);
         let class = (0..t.domain.len()).map(|i| {
             if t.ice[i] >= ICE_FREE { ICE }
@@ -233,7 +236,7 @@ impl Layer {
             Layout::Patch { n, spacing, .. } => (spacing, (0.05 * n as f64 * spacing).max(3. * spacing)),
             Layout::Sphere { n } => (std::f64::consts::FRAC_PI_2 * t.domain.radius / n as f64, 0.),
         };
-        Layer { spacing, corners, class, water, blend, domain: t.domain }
+        Layer { spacing, corners, class, water, blend, fields, domain: t.domain }
     }
 
     /// Tangent coordinates of `d` on a patch, if it is on the patch's side of the planet.
@@ -679,6 +682,38 @@ impl Ground {
     }
 }
 
+impl crate::graph::Fields for Ground {
+    /// The simulations' fields, each layer's blended into the coarser ones around it as their
+    /// surfaces are; the climate's, and the snowline and treeline as the ground cover has them.
+    fn field(&self, f: crate::graph::Field, p: &Vector3<f64>) -> Option<f64> {
+        use crate::graph::Field;
+        let (d, h) = self.frame.on_planet(p);
+        match f {
+            Field::Elevation => return Some(h),
+            Field::Snowline => return Some(h - self.snowline(&d)),
+            Field::Treeline => return Some(h - self.treeline(&d)),
+            Field::Temperature | Field::Precipitation => {
+                let local = self.climate.as_ref()?.local(&d, h);
+                return Some(if f == Field::Temperature { local.mean } else { local.precipitation });
+            },
+            _ => {},
+        }
+        let (mut sum, mut left) = (0., 1.);
+        for l in self.layers.iter() {
+            let w = l.weight(&d);
+            if w <= 0. { continue; }
+            sum += left * w * l.fields.at(&l.domain, f, &d, h)?;
+            left *= 1. - w;
+            if left <= 1e-6 { break; }
+        }
+        // Beyond every simulation (with no planet-wide one), the last one's edge.
+        if left > 1e-6 {
+            if let Some(l) = self.layers.last() { sum += left * l.fields.at(&l.domain, f, &d, h)?; }
+        }
+        Some(sum)
+    }
+}
+
 pub struct Land {
     ground: Arc<Ground>,
 }
@@ -691,19 +726,20 @@ impl MaterialModel for Land {
     }
 }
 
-/// The landscape's materials: water in its rivers and lakes, land elsewhere.
+/// The landscape's materials: water in its rivers and lakes, land elsewhere (the ground cover,
+/// or the scene's own material).
 pub struct LandscapeMedium {
     ground: Arc<Ground>,
-    land: Land,
+    land: Box<dyn MaterialModel + Sync + Send>,
     water: PhysicalOcean,
 }
 
 impl LandscapeMedium {
-    pub fn new(ground: Ground) -> LandscapeMedium {
+    pub fn new(ground: Ground, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> LandscapeMedium {
         let ground = Arc::new(ground);
         let centre = ground.frame.centre();
         LandscapeMedium {
-            land: Land { ground: ground.clone() },
+            land: material.unwrap_or_else(|| Box::new(Land { ground: ground.clone() })),
             // Rivers are shallow and carry silt, sending back more green and brown than the sea.
             water: PhysicalOcean { water: Color::new(0.01, 0.018, 0.018), roughness: 0.004, center: Some(centre) },
             ground,
@@ -713,8 +749,10 @@ impl LandscapeMedium {
 
 impl Medium for LandscapeMedium {
     fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
-        if self.ground.wet(&pt) { &self.water } else { &self.land }
+        if self.ground.wet(&pt) { &self.water } else { &*self.land }
     }
+
+    fn fields(&self) -> Option<&dyn crate::graph::Fields> { Some(&*self.ground) }
 }
 
 #[cfg(test)]

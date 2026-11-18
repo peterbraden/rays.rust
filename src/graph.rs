@@ -25,10 +25,20 @@
 //! - `talus`: fallen blocks and scree, angular and fractured, many small to few large, sorted
 //!   down the slope (`talus.rs`). Heights in metres; meant for a terrain's
 //!   `"vertical_displacement"`, so blocks stand upright on a slope and a material can find them.
-//! - `slope`: the surface's slope, 0 below `from` degrees and 1 above `to`, smoothly;
+//! - `slope`: the surface's slope, 0 below `from` degrees and 1 above `to`, smoothly (falling
+//!   instead where `to` is below `from`, as for every node with `from` and `to`);
 //!   `breakup` (a node, in degrees) added to the slope first, so the edge of the zone is
 //!   ragged rather than a contour.
 //! - `altitude`: as `slope`, by height (y, metres) from `from` to `to`, with `breakup` in metres.
+//! - `aspect`: how squarely the surface faces `direction` (a vector, default `[0, 0, -1]`, which
+//!   is north on a landscape): the normal's component along it, 0 on level ground and 1 on a
+//!   wall facing it, as shaded north faces keep their snow; smoothly from `from` (default 0) to
+//!   `to` (default 1), with `breakup`.
+//! - `field`: what the surface knows about itself, given by the object hit (`Fields`): for a
+//!   landscape, what its simulation left there (see `Field`: `sediment`, `ice`, `lava`, `flow`,
+//!   `wetness`, `convexity`, `elevation`, `snowline`, `treeline`, `temperature`,
+//!   `precipitation`), `default` (0) on surfaces without it. With `from` and `to`, smoothly from
+//!   0 to 1 between them (`breakup` added first, as for `slope`); without, the value itself.
 //! - `strata`: ledges: beds `step` metres thick (default 1), each eroded back from the one
 //!   above it and ending in a riser `sharpness` of the way to vertical (default 0.8), as the
 //!   difference between the terraced height and the height, in [-amplitude, amplitude]
@@ -65,27 +75,90 @@ use crate::noise::SeededNoise;
 use serde_json::Value;
 use std::sync::LazyLock;
 
+/// What a surface can say about itself at a point, for `field` nodes: a landscape knows what its
+/// simulation left there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Field {
+    /// Loose sediment over the rock (alluvium, colluvium, lake fill), metres thick.
+    Sediment,
+    /// Glacier ice, metres thick.
+    Ice,
+    /// Volcanic rock under the sediment, metres thick.
+    Lava,
+    /// How much water flows past: log10 of the area draining through the point, m².
+    Flow,
+    /// The topographic wetness index, ln(a / tan β), a the area drained per unit width of
+    /// contour (m) and β the slope (Beven and Kirkby, "A physically based, variable
+    /// contributing area model of basin hydrology", Hydrological Sciences Bulletin 24, 1979):
+    /// high in hollows and valley floors where water gathers, low on ridges and steep slopes.
+    Wetness,
+    /// How far the ground stands above the mean of its surroundings, metres: positive on ridges
+    /// and spurs, negative in hollows and gullies.
+    Convexity,
+    /// Height above sea level, metres (unlike `altitude`, the planet's curvature and a
+    /// landscape's scale and exaggeration taken out).
+    Elevation,
+    /// Height above the snowline, metres: where the summer stays below freezing.
+    Snowline,
+    /// Height above the treeline, metres: where the warmest month reaches 10 °C.
+    Treeline,
+    /// Mean annual temperature, °C (from the climate model).
+    Temperature,
+    /// Precipitation, mm a year (from the climate model).
+    Precipitation,
+}
+
+impl Field {
+    pub fn parse(s: &str) -> Result<Field, String> {
+        Ok(match s {
+            "sediment" => Field::Sediment,
+            "ice" => Field::Ice,
+            "lava" => Field::Lava,
+            "flow" => Field::Flow,
+            "wetness" => Field::Wetness,
+            "convexity" => Field::Convexity,
+            "elevation" => Field::Elevation,
+            "snowline" => Field::Snowline,
+            "treeline" => Field::Treeline,
+            "temperature" => Field::Temperature,
+            "precipitation" => Field::Precipitation,
+            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature or precipitation", s)),
+        })
+    }
+}
+
+/// A surface's fields (`Field`) at scene points on it; None for one it doesn't have.
+pub trait Fields: Sync + Send {
+    fn field(&self, f: Field, p: &Vector3<f64>) -> Option<f64>;
+}
+
 /// Where a graph is evaluated: the point on the surface (before any displacement), the
-/// surface's unit normal there, and the size of the smallest detail worth keeping (metres; 0
-/// for all of it).
-#[derive(Clone, Copy, Debug)]
-pub struct Context {
+/// surface's unit normal there, the size of the smallest detail worth keeping (metres; 0
+/// for all of it), and what the surface knows about itself (`Fields`), if anything.
+#[derive(Clone, Copy)]
+pub struct Context<'a> {
     pub p: Vector3<f64>,
     pub normal: Vector3<f64>,
     pub filter: f64,
     /// The point is on the surface the graph displaced (a shading point), not the surface
     /// before displacement: `talus` then finds its blocks' footing below it.
     pub lifted: bool,
+    pub fields: Option<&'a dyn Fields>,
 }
 
-impl Context {
-    pub fn new(p: Vector3<f64>, normal: Vector3<f64>, filter: f64) -> Context {
-        Context { p, normal, filter, lifted: false }
+impl<'a> Context<'a> {
+    pub fn new(p: Vector3<f64>, normal: Vector3<f64>, filter: f64) -> Context<'a> {
+        Context { p, normal, filter, lifted: false, fields: None }
     }
 
     /// At a shading point on the displaced surface, unfiltered (see `lifted`).
-    pub fn lifted(p: Vector3<f64>, normal: Vector3<f64>) -> Context {
-        Context { p, normal, filter: 0., lifted: true }
+    pub fn lifted(p: Vector3<f64>, normal: Vector3<f64>) -> Context<'a> {
+        Context { p, normal, filter: 0., lifted: true, fields: None }
+    }
+
+    /// The same, on a surface with these fields.
+    pub fn with_fields(self, fields: Option<&'a dyn Fields>) -> Context<'a> {
+        Context { fields, ..self }
     }
 
     /// The surface's slope, degrees from level.
@@ -107,6 +180,9 @@ enum Op {
     Cells { seed: u32, style: CellStyle, scale: f64, amplitude: f64, plan: bool },
     Slope { from: f64, to: f64, breakup: Option<Box<Node>> },
     Altitude { from: f64, to: f64, breakup: Option<Box<Node>> },
+    Aspect { direction: Vector3<f64>, from: f64, to: f64, breakup: Option<Box<Node>> },
+    /// A surface's field; smoothstepped from `from` to `to` if `band` is given.
+    Field { field: Field, default: f64, band: Option<(f64, f64)>, breakup: Option<Box<Node>> },
     Strata { step: f64, sharpness: f64, amplitude: f64, breakup: Option<Box<Node>> },
     Expr { expr: Expr, inputs: Vec<Node>, range: (f64, f64) },
     Add(Vec<Node>),
@@ -158,8 +234,12 @@ static OCTAVE_MEANS: LazyLock<(f64, f64)> = LazyLock::new(|| {
     (ridged / n as f64, billow / n as f64)
 });
 
+/// 0 below `lo`, 1 above `hi`, smoothly between; falling instead where `hi` is below `lo`.
 fn smoothstep(lo: f64, hi: f64, x: f64) -> f64 {
-    if hi <= lo {
+    if hi < lo {
+        return 1. - smoothstep(hi, lo, x);
+    }
+    if hi == lo {
         return if x >= hi { 1. } else { 0. };
     }
     let t = ((x - lo) / (hi - lo)).clamp(0., 1.);
@@ -203,6 +283,17 @@ impl Node {
             Op::Altitude { from, to, breakup } => {
                 let h = c.p.y + breakup.as_ref().map_or(0., |b| b.eval(c));
                 smoothstep(*from, *to, h)
+            },
+            Op::Aspect { direction, from, to, breakup } => {
+                let a = c.normal.dot(direction) + breakup.as_ref().map_or(0., |b| b.eval(c));
+                smoothstep(*from, *to, a)
+            },
+            Op::Field { field, default, band, breakup } => {
+                let v = c.fields.and_then(|f| f.field(*field, &c.p)).unwrap_or(*default);
+                match band {
+                    Some((from, to)) => smoothstep(*from, *to, v + breakup.as_ref().map_or(0., |b| b.eval(c))),
+                    None => v,
+                }
             },
             Op::Strata { step, sharpness, amplitude, breakup } => {
                 let h = c.p.y + breakup.as_ref().map_or(0., |b| b.eval(c));
@@ -282,7 +373,9 @@ impl Op {
             },
             Op::Cells { amplitude, .. } => (amplitude.min(0.), amplitude.max(0.)),
             Op::Strata { amplitude, .. } => (-amplitude.abs(), amplitude.abs()),
-            Op::Slope { .. } | Op::Altitude { .. } | Op::Smoothstep { .. } => (0., 1.),
+            Op::Slope { .. } | Op::Altitude { .. } | Op::Aspect { .. } | Op::Smoothstep { .. } => (0., 1.),
+            Op::Field { band: Some(_), .. } => (0., 1.),
+            Op::Field { band: None, .. } => (f64::NEG_INFINITY, f64::INFINITY),
             Op::Expr { range, .. } => *range,
             Op::Add(v) => v.iter().map(Node::range).fold((0., 0.), |a, b| (a.0 + b.0, a.1 + b.1)),
             Op::Multiply(v) => v.iter().map(Node::range).fold((1., 1.), mul_range),
@@ -334,7 +427,8 @@ impl Op {
             Op::Talus(t) => return t.smallest,
             Op::Const(_) => return f64::INFINITY,
             Op::Strata { step, breakup, .. } => return breakup.as_ref().map_or(f64::INFINITY, |b| b.finest()).min(0.25 * step),
-            Op::Slope { breakup, .. } | Op::Altitude { breakup, .. } => breakup.iter().map(|b| &**b).collect(),
+            Op::Slope { breakup, .. } | Op::Altitude { breakup, .. } | Op::Aspect { breakup, .. }
+                | Op::Field { breakup, .. } => breakup.iter().map(|b| &**b).collect(),
             Op::Expr { inputs, .. } => inputs.iter().collect(),
             Op::Add(v) | Op::Multiply(v) | Op::Min(v) | Op::Max(v) => v.iter().collect(),
             Op::Subtract(a, b) => vec![a, b],
@@ -543,6 +637,27 @@ fn parse_node(v: &Value) -> Result<Node, String> {
             let breakup = o.get("breakup").map(parse_node).transpose()?.map(Box::new);
             if kind == "slope" { Op::Slope { from, to, breakup } } else { Op::Altitude { from, to, breakup } }
         },
+        "aspect" => {
+            let direction = match &o["direction"] {
+                Value::Null => -Vector3::z(),
+                Value::Array(a) if a.len() == 3 && a.iter().all(Value::is_number) =>
+                    Vector3::new(a[0].as_f64().unwrap(), a[1].as_f64().unwrap(), a[2].as_f64().unwrap()),
+                v => return Err(format!("aspect's \"direction\" must be [x, y, z], got {}", v)),
+            };
+            if direction.norm() == 0. {
+                return Err("aspect's direction must not be zero".into());
+            }
+            Op::Aspect { direction: direction.normalize(), from: num(o, "from", 0.)?, to: num(o, "to", 1.)?,
+                breakup: o.get("breakup").map(parse_node).transpose()?.map(Box::new) }
+        },
+        "field" => {
+            let field = Field::parse(o["field"].as_str().ok_or("a field node needs a \"field\" name")?)?;
+            let band = match (o.get("from"), o.get("to")) {
+                (None, None) => None,
+                _ => Some((num(o, "from", 0.)?, num(o, "to", 1.)?)),
+            };
+            Op::Field { field, default: num(o, "default", 0.)?, band, breakup: o.get("breakup").map(parse_node).transpose()?.map(Box::new) }
+        },
         "strata" => {
             let step = num(o, "step", 1.)?;
             if step <= 0. {
@@ -605,7 +720,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn at(x: f64, y: f64, z: f64) -> Context {
+    fn at(x: f64, y: f64, z: f64) -> Context<'static> {
         Context::new(Vector3::new(x, y, z), Vector3::y(), 0.)
     }
 
@@ -652,6 +767,35 @@ mod tests {
         assert_eq!(graph(json!("x + z")).eval(&at(1., 0., 2.)), 3.);
         assert!(Graph::parse(&json!({"node": "frob"})).is_err());
         assert!(Graph::parse(&json!({"node": "blend", "a": 1})).err().unwrap().contains("\"b\""));
+    }
+
+    struct Deep;
+    impl Fields for Deep {
+        fn field(&self, f: Field, p: &Vector3<f64>) -> Option<f64> {
+            (f == Field::Sediment).then_some(p.x)
+        }
+    }
+
+    #[test]
+    fn test_fields_and_aspect() {
+        let g = graph(json!({"node": "field", "field": "sediment", "from": 1, "to": 3}));
+        assert_eq!(g.range(), (0., 1.));
+        assert_eq!(g.eval(&at(5., 0., 0.).with_fields(Some(&Deep))), 1.);
+        assert_eq!(g.eval(&at(2., 0., 0.).with_fields(Some(&Deep))), 0.5);
+        // Off a surface with fields, the default.
+        assert_eq!(g.eval(&at(5., 0., 0.)), 0.);
+        let raw = graph(json!({"node": "field", "field": "ice", "default": 7}));
+        assert_eq!(raw.eval(&at(5., 0., 0.).with_fields(Some(&Deep))), 7.);
+        assert!(Graph::parse(&json!({"node": "field", "field": "mud"})).is_err());
+        // A wall facing north (-z) faces north fully; level ground and a south wall don't.
+        let north = graph(json!({"node": "aspect", "from": 0, "to": 1}));
+        let facing = |n: Vector3<f64>| north.eval(&Context::new(Vector3::zeros(), n, 0.));
+        assert_eq!(facing(-Vector3::z()), 1.);
+        assert_eq!(facing(Vector3::y()), 0.);
+        assert_eq!(facing(Vector3::z()), 0.);
+        // Reversed edges fall.
+        let gentle = graph(json!({"node": "slope", "from": 40, "to": 30}));
+        assert_eq!(gentle.eval(&at(0., 0., 0.)), 1.);
     }
 
     #[test]

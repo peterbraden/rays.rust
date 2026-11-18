@@ -17,3 +17,4 @@ pub mod simulation;
 pub mod map;
 pub mod object;
 pub mod scenery;
+pub mod fields;

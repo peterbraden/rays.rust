@@ -952,6 +952,48 @@ impl HeightGrid {
         Vector3::new(-dx, 1., -dz).normalize()
     }
 
+    /// The height at grid vertex (i, j), the nearest edge's beyond the grid.
+    pub fn corner_clamped(&self, i: isize, j: isize) -> f64 {
+        self.corner(i.clamp(0, self.nx as isize) as usize, j.clamp(0, self.nz as isize) as usize)
+    }
+
+    /// A smooth surface through the grid's vertices: Catmull-Rom splines across each cell
+    /// through its 4 x 4 nearest vertices (Edwin Catmull and Raphael Rom, "A class of local
+    /// interpolating splines", in Computer Aided Geometric Design, 1974). It is continuous in
+    /// height and slope, so a surface displaced from it shows no facets of the grid. Its height
+    /// at (x, z), and its gradient (dh/dx, dh/dz).
+    pub fn smooth(&self, x: f64, z: f64) -> (f64, f64, f64) {
+        let (ix, iz, fx, fz) = self.locate(x, z);
+        let (wx, dx) = catmull_rom(fx);
+        let (wz, dz) = catmull_rom(fz);
+        let (mut h, mut hx, mut hz) = (0., 0., 0.);
+        for (b, (wzb, dzb)) in wz.iter().zip(dz.iter()).enumerate() {
+            for (a, (wxa, dxa)) in wx.iter().zip(dx.iter()).enumerate() {
+                let v = self.corner_clamped(ix as isize + a as isize - 1, iz as isize + b as isize - 1);
+                h += v * wxa * wzb;
+                hx += v * dxa * wzb;
+                hz += v * wxa * dzb;
+            }
+        }
+        (h, hx / self.cell, hz / self.cell)
+    }
+
+    /// Bounds on the smooth surface's height over cell (ix, iz). Catmull-Rom's weights dip below
+    /// 0 by at most 1/8 in all along each axis, so the surface strays at most 0.28 of the range
+    /// of its 16 vertices beyond them.
+    pub fn smooth_range(&self, ix: usize, iz: usize) -> (f64, f64) {
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for b in -1 ..= 2 {
+            for a in -1 ..= 2 {
+                let v = self.corner_clamped(ix as isize + a, iz as isize + b);
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+        }
+        let margin = 0.29 * (hi - lo);
+        (lo - margin, hi + margin)
+    }
+
     pub fn bounds(&self) -> BBox {
         let max = self.max();
         BBox::new(
@@ -974,6 +1016,14 @@ impl HeightGrid {
         }
         best
     }
+}
+
+/// Catmull-Rom's weights for the four vertices about a point `t` of the way across the middle
+/// span, and their derivatives.
+fn catmull_rom(t: f64) -> ([f64; 4], [f64; 4]) {
+    let (t2, t3) = (t * t, t * t * t);
+    ([0.5 * (-t + 2. * t2 - t3), 0.5 * (2. - 5. * t2 + 3. * t3), 0.5 * (t + 4. * t2 - 3. * t3), 0.5 * (t3 - t2)],
+     [0.5 * (-1. + 4. * t - 3. * t2), 0.5 * (-10. * t + 9. * t2), 0.5 * (1. + 8. * t - 9. * t2), 0.5 * (3. * t2 - 2. * t)])
 }
 
 /// Möller-Trumbore ray-triangle intersection, two-sided: (t, u, v) where the hit is at
@@ -1285,12 +1335,12 @@ mod tests {
             feature: crate::textures::TerrainFeature::Washes, scale: m.floor_scale, spread: 1., noise: PerlinNoise::new(),
         };
         // Where the texture says wash, the floor is cut down; elsewhere not.
+        let mut flat = mesas(0.02);
+        flat.washes = 0.;
         let mut cut = 0;
         for k in 0 .. 3000 {
             let (x, z) = (k as f64 * 1.9 - 2850., 1800.);
             let a = t.amount(&Vector3::new(x, 0., z));
-            let mut flat = mesas(0.02);
-            flat.washes = 0.;
             let depth = flat.height(x, z) - m.height(x, z);
             assert!((depth - 4. * a).abs() < 1e-6 || m.distance(x, z) > -3. * m.cliff, "{} {}", depth, a);
             if a > 0.9 { cut += 1; }

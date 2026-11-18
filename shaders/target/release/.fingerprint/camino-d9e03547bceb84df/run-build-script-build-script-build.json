@@ -1,1 +1,0 @@
-{"rustc":7785869403364627722,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[6459889917060353397,"build_script_build",false,14803946102323422351]],"local":[{"RerunIfChanged":{"output":"release/build/camino-d9e03547bceb84df/output","paths":["build.rs"]}}],"rustflags":[],"config":0,"compile_kind":0}

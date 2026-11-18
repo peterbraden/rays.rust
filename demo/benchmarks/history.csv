@@ -1,0 +1,2 @@
+commit,commit_date,subject,measured_at,cpu,threads,runs,wall_mean_s,wall_std_s,render_mean_s,render_std_s,rays,mrays_per_s,diff_to,diff_mean,diff_rmse,status
+9dfb66826f4322053c0767ad61f32c9ec0b449ef,2026-11-09T19:04:33+01:00,Merge pull request #39 from peterbraden/dielectric,2026-11-18T13:32:42+00:00,Intel(R) Xeon(R) Processor @ 2.30GHz,4,5,20.333,0.520,19.955,0.533,23337136,1.170,,,,ok

@@ -1574,7 +1574,9 @@ they can render, and timings on the Mac's GPU and in a browser, not only on lava
 
 ## 13. A scheduler: one owner for queues, pixel completion and CPU work
 
-Status: planning. Nothing below is implemented.
+Status: step 1 done (#114). The design, and the reading behind it, live with the code, in
+`src/scheduler.rs`'s module documentation: keep them there as the steps land, and this
+section to what is planned and what was measured.
 
 Goal: one component that decides what work runs next, where, and in what order, in place of
 the four loops that each decide for themselves today. It starts as a small piece of host code
@@ -1619,12 +1621,23 @@ the host's.
 
 ### Steps, small to large
 
-1. Pixel completion on the GPU. Accumulate each pixel's sum of squares (`add_paths`), read
-   it back with the image, and fill a pass's first queue from the pixels still active
-   (`adaptive::active`, as the CPU does): the host already builds that queue from the live
-   camera rays. The GPU then honours `"adaptive"`, and the scheduler exists as the one place
-   that decides which pixels a pass samples, shared with `next_pass`. Test: GPU against the
-   wavefront integrator with adaptive sampling on; the sample map.
+1. Pixel completion on the GPU. Done: `scheduler::plan` decides which pixels take samples
+   next and how many, for the recursive tracer (`RenderContext::next_pass`, unchanged in what
+   it decides) and now the GPU (`GpuRenderer::render`), a region at a time from the film
+   alone. `add_paths` accumulates each pixel's sum of squares beside its sum; a pass's first
+   queue holds only the pixels the plan names, each with its own next sample
+   (`dispatch_samples`), so `"adaptive"` works on the GPU, and `main` no longer sends such
+   scenes to the path tracer.
+   - Verified: `test_samples_adaptively` (quiet pixels stop, the picture is the fully
+     sampled one's within 3%, a render stopped at 16 samples and resumed equals an
+     uninterrupted one pixel for pixel); without adaptive sampling images are pixel-identical
+     to before, and 8 samples resumed to 16 equal a fresh 16.
+   - Measured on demo.json, 320 x 180, a target of 64 samples and a threshold of 0.03: 24.2
+     samples a pixel on average (16 to 64), 7.7M rays against 19.2M, mean FLIP 0.017 against
+     the full render.
+   - Known limits: the plan is made once for 8 passes (`PASSES_PER_READ`), as each needs
+     the film read back, so a pixel may take up to 7 samples more than it needed; the
+     browser's renderer (`web/src/lib.rs`) still gives every pixel every pass.
 2. One vocabulary. `Stage`, `Queue`, `Batch` and per-queue counters (paths in, time) shared
    by the CPU wavefront integrator and the GPU host, and reported: the measurements the
    later steps are judged by.

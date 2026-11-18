@@ -267,22 +267,25 @@ impl RenderContext {
     /// pixel still too noisy (`adaptive::active`). None once every pixel is done. It depends
     /// only on the region's own pixels, so it is the same however the render is scheduled.
     pub fn next_pass(&self, s: &Scene, region: usize, b: &Bounds, layer: usize) -> Option<RenderableChunk> {
+        let (first, count) = self.plan(s, b, s.render.samples_per_layer());
+        count.iter().any(|&n| n > 0).then_some(RenderableChunk { bounds: *b, first, count, region, layer })
+    }
+
+    /// For each pixel of region `b`, row by row: its next sample's index (its count so far),
+    /// and how many it should take in its next pass, at most `most` (`scheduler::plan`: none
+    /// for a pixel that is complete).
+    pub fn plan(&self, s: &Scene, b: &Bounds, most: usize) -> (Vec<usize>, Vec<usize>) {
         let target = s.render.samples_per_pixel();
-        let per_layer = s.render.samples_per_layer();
         let index: Vec<usize> = (b.ymin..b.ymax).flat_map(|y| (b.xmin..b.xmax).map(move |x| y * self.width + x)).collect();
         let first: Vec<usize> = index.iter().map(|&i| self.samples[i]).collect();
-        let active = match &s.render.adaptive {
-            None => first.iter().map(|&n| n < target).collect(),
-            Some(a) => {
-                let sum: Vec<Color> = index.iter().map(|&i| self.image[i]).collect();
-                let squares: Vec<Color> = index.iter().map(|&i| self.squares[i]).collect();
-                let r = crate::adaptive::Region { width: b.width(), sum: &sum, squares: &squares, samples: &first };
-                crate::adaptive::active(&r, target, a, crate::adaptive::display_gain(s))
-            },
+        // The sums are read only by adaptive sampling.
+        let (sum, squares): (Vec<Color>, Vec<Color>) = match &s.render.adaptive {
+            None => (Vec::new(), Vec::new()),
+            Some(_) => (index.iter().map(|&i| self.image[i]).collect(), index.iter().map(|&i| self.squares[i]).collect()),
         };
-        let count: Vec<usize> = first.iter().zip(&active)
-            .map(|(&n, &on)| if on { per_layer.min(target.saturating_sub(n)) } else { 0 }).collect();
-        count.iter().any(|&n| n > 0).then_some(RenderableChunk { bounds: *b, first, count, region, layer })
+        let film = crate::adaptive::Region { width: b.width(), sum: &sum, squares: &squares, samples: &first };
+        let count = crate::scheduler::plan(&film, target, s.render.adaptive.as_ref(), crate::adaptive::display_gain(s), most);
+        (first, count)
     }
 
     /// The current estimate as a linear image, top row first.

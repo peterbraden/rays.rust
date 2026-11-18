@@ -2405,7 +2405,10 @@ pub fn path_sum(p: &PathState) -> Vec4 {
     if not_nan { c } else { Vec3::ZERO }.extend(p.l.w)
 }
 
-/// Every pixel's path, finished, added to the image: once a pass, after its last round.
+/// Every pixel's path, finished, added to the image: once a pass, after its last round. The
+/// image holds two vectors a pixel: the sum of its samples (and in w the rays they cast), and
+/// the sum of their squares, channel by channel (and in w how many were added), from which
+/// the host judges the pixel's noise (`scheduler::plan`).
 #[cfg(target_arch = "spirv")]
 #[spirv(compute(threads(64)))]
 pub fn add_paths(
@@ -2417,6 +2420,8 @@ pub fn add_paths(
     let Some(index) = pixel(gid, params) else { return };
     let add = path_sum(&paths[index]);
     if add.w > 0.0 {
-        accum[index] += add;
+        let c = add.xyz();
+        accum[2 * index] += add;
+        accum[2 * index + 1] += (c * c).extend(1.0);
     }
 }

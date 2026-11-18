@@ -1,0 +1,184 @@
+//! The scheduler: what work is done next, where, and in what order.
+//!
+//! A renderer is a great many small jobs (trace this ray, shade this hit, add this sample), and
+//! most of what separates a fast one from a slow one is not how each job is done but which
+//! jobs are done together. This module is where those decisions are meant to live. Today it
+//! holds one of them, the first; the rest of this note is the design it is growing towards,
+//! and the reading behind it. The plan and its progress are in `plan.md`, section 13.
+//!
+//! # Why a scheduler can exist here
+//!
+//! Sample k of pixel p draws its random numbers from a stream of its own, seeded by (p, k)
+//! and nothing else: `rendercontext::render_pixel` on the CPU, `pathtrace::path_seed` on the
+//! GPU. So what a sample contributes doesn't depend on when it is traced, on which thread or
+//! machine, or alongside which other samples. A scheduler may therefore reorder, batch and
+//! move work as it likes without changing the picture, and every policy can be tested the
+//! same way: two policies, the same pixels. Everything below leans on that, and anything
+//! added here must keep it.
+//!
+//! # The model
+//!
+//! - A work item is a path: a pixel, a sample index, and its state so far (on the GPU,
+//!   `pathtrace::PathState`).
+//! - A queue holds the paths waiting for one stage (generate, intersect, shade, shadow, sky,
+//!   accumulate) on one resource: what the batch must have at hand to run (a mesh's tree, a
+//!   texture, a medium's grid, a kernel).
+//! - An executor drains queues: a GPU kernel, the CPU (for what the GPU can't do), in time a
+//!   render server. Each has a capacity, and a cost to reach it (a readback, a network hop).
+//! - A policy chooses the next queue, how much of it, the executor, and the order within it.
+//! - The film is what is known of the picture so far: for each pixel the sum of its samples,
+//!   the sum of their squares, and how many there are. A pixel is complete when it has the
+//!   samples asked for, or, with adaptive sampling, when its noise is low enough.
+//!
+//! Decisions are made at two rates, and the design has to respect which is which. Within a
+//! pass, which paths are in which queue is decided on the GPU, from data: the host can't see
+//! a queue's count without reading it back, which in a browser arrives a frame late, so the
+//! queues size their own dispatches (`pathtrace::queue`). Between passes, which pixels take
+//! which samples, what goes to the CPU or to a server, and what is loaded, are the host's to
+//! decide, here.
+//!
+//! # What is here now: pixel completion
+//!
+//! `plan` answers the first question a pass asks: which pixels take samples next, and how
+//! many each. It is the one place that is decided, for the recursive tracer
+//! (`RenderContext::next_pass`, a region at a time) and for the GPU (`GpuRenderer::render`,
+//! the image at a time), which before had no notion of a finished pixel: every pixel took
+//! every pass, so adaptive sampling did nothing there. A pixel's next sample is always the
+//! one after its last (its count is its next index), so pixels that stop early leave no gaps,
+//! a render can be resumed from its film alone, and more samples can be asked for later.
+//!
+//! On the GPU this is the generation stage of the papers below, in its simplest form. Laine,
+//! Karras and Aila keep a pool of paths and refill the slots of those that end; van Antwerpen
+//! compacts the survivors and regenerates into the gaps. Here a pass's first queue is filled
+//! with just the pixels the plan names (`GpuRenderer::dispatch_samples`), each with its own
+//! sample index, and the pixels it doesn't name cost nothing. What this doesn't yet do is
+//! refill within a pass: a path that ends early leaves its slot idle until the next pass
+//! (step 4 of the plan).
+//!
+//! # What isn't here yet, and what the reading says about it
+//!
+//! Stage queues, and why. Laine, Karras and Aila's argument for a wavefront over one large
+//! kernel is that a GPU runs a group of threads through the same instructions: when paths
+//! that have hit different materials share a group, each waits while the others' code runs,
+//! and a kernel that holds every material's code needs registers for all of it. Queues by
+//! stage and by material give each kernel one job. The GPU path has stage kernels and queues
+//! of live paths (plan.md, section 12); queues by material are still to come.
+//!
+//! The CPU's queue. Budge and others describe a path tracer as queues of tasks over a layer
+//! that decides which processor each batch goes to, CPUs and GPUs together, and which data
+//! must be in memory for it to run. That is the shape wanted here for what the GPU can't
+//! shade or intersect: such paths wait in a queue the host reads back, runs, and returns
+//! (step 3). The decision the scheduler owns is how often: every readback stalls the GPU's
+//! paths or lets them run ahead of the CPU's.
+//!
+//! Order, for the cache's sake. Pharr, Kolb, Gershbein and Hanrahan reorder rays so that the
+//! geometry and textures they need are those already in memory, choosing the next batch by
+//! what it costs to bring in and how much work it unblocks. Navrátil and others treat
+//! traversal itself as a scheduling problem, measured by the data moved from memory into the
+//! cache. Eisenacher and others sort very large batches of rays, and then sort their hits by
+//! mesh and face before shading, so that texture reads are coherent without a cache. Lee and
+//! others queue work on the CPU so that vector lanes stay full and neighbouring work touches
+//! the same data. All of it is a sort key and a choice of queue; none of it is free. Meister
+//! and others measure reordering on recent GPUs: tracing got 1.3 to 2 times faster, but the
+//! sorting's own cost was hard to win back. So order is a policy to measure here (step 5),
+//! not a property to assume.
+//!
+//! Resources. The same papers' larger point is that the scheduler should know what each
+//! batch needs. With queues keyed by resource, and a budget of what may be resident (on the
+//! GPU, in a browser's memory, on a render server), the policy becomes: run the queues whose
+//! data is at hand, and load for the fullest of the rest (step 6). That is also how work
+//! would be shared between servers: by the assets each holds, not by layer number as
+//! `web/app.js` shares it now.
+//!
+//! # Reading
+//!
+//! Each was checked to exist as cited; what is said of them above is from their abstracts
+//! and from how later papers describe them, not from a close reading. Read them before
+//! building on a claim.
+//!
+//! - Samuli Laine, Tero Karras and Timo Aila, "Megakernels Considered Harmful: Wavefront Path
+//!   Tracing on GPUs", High-Performance Graphics 2013, doi:10.1145/2492045.2492060.
+//! - Dietger van Antwerpen, "Improving SIMD Efficiency for Parallel Monte Carlo Light
+//!   Transport on the GPU", High Performance Graphics 2011, doi:10.1145/2018323.2018330.
+//! - Matt Pharr, Craig Kolb, Reid Gershbein and Pat Hanrahan, "Rendering Complex Scenes with
+//!   Memory-Coherent Ray Tracing", SIGGRAPH 1997, doi:10.1145/258734.258791.
+//! - Paul Navrátil, Donald Fussell, Calvin Lin and William Mark, "Dynamic Ray Scheduling to
+//!   Improve Ray Coherence and Bandwidth Utilization", IEEE Symposium on Interactive Ray
+//!   Tracing 2007, doi:10.1109/RT.2007.4342596.
+//! - Brian Budge, Tony Bernardin, Jeff Stuart, Shubhabrata Sengupta, Kenneth Joy and John
+//!   Owens, "Out-of-core Data Management for Path Tracing on Hybrid Resources", Computer
+//!   Graphics Forum 28(2) (Eurographics 2009), doi:10.1111/j.1467-8659.2009.01378.x.
+//! - Christian Eisenacher, Gregory Nichols, Andrew Selle and Brent Burley, "Sorted Deferred
+//!   Shading for Production Path Tracing", Computer Graphics Forum 32(4) (EGSR 2013),
+//!   doi:10.1111/cgf.12158.
+//! - Mark Lee, Brian Green, Feng Xie and Eric Tabellion, "Vectorized Production Path
+//!   Tracing", High Performance Graphics 2017.
+//! - Daniel Meister, Jakub Bokšanský, Michael Guthe and Jiří Bittner, "On Ray Reordering
+//!   Techniques for Faster GPU Ray Tracing", I3D 2020, doi:10.1145/3384382.3384534.
+//! - Matt Pharr, Wenzel Jakob and Greg Humphreys, "Physically Based Rendering", 4th ed.,
+//!   chapter 15 (the wavefront renderer `wavefront` and `gpu` follow).
+use crate::adaptive::Region;
+use crate::scene::Adaptive;
+
+/// How many more samples each pixel of a region of the film should take in its next pass: up
+/// to `most` for a pixel that isn't complete, none for one that is.
+///
+/// A pixel is complete when it has `target` samples; or, with adaptive sampling, when it and
+/// its neighbours are no longer too noisy (`adaptive::active`, which reads the region's sums:
+/// without adaptive sampling they aren't looked at, and may be empty). `gain` is how bright a
+/// linear one is displayed (`adaptive::display_gain`). The samples a pixel takes are its next
+/// ones: those numbered from its count.
+///
+/// The answer depends on the region's own pixels and nothing else, so it is the same however
+/// and wherever the passes before it were run.
+pub fn plan(film: &Region, target: usize, adaptive: Option<&Adaptive>, gain: f64, most: usize) -> Vec<usize> {
+    let active: Vec<bool> = match adaptive {
+        None => film.samples.iter().map(|&n| n < target).collect(),
+        Some(a) => crate::adaptive::active(film, target, a, gain),
+    };
+    film.samples.iter().zip(&active)
+        .map(|(&n, &on)| if on { most.min(target.saturating_sub(n)) } else { 0 })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::color::Color;
+
+    fn film<'a>(sum: &'a [Color], squares: &'a [Color], samples: &'a [usize]) -> Region<'a> {
+        Region { width: samples.len(), sum, squares, samples }
+    }
+
+    /// Without adaptive sampling every pixel takes samples until it has the target, never
+    /// more than a pass's worth, never past the target; the sums aren't needed.
+    #[test]
+    fn test_plan_fills_each_pixel_to_the_target() {
+        let samples = [0, 5, 14, 16, 20];
+        assert_eq!(plan(&film(&[], &[], &samples), 16, None, 1., 8), vec![8, 8, 2, 0, 0]);
+        assert_eq!(plan(&film(&[], &[], &samples), 16, None, 1., 1), vec![1, 1, 1, 0, 0]);
+    }
+
+    /// With adaptive sampling a pixel whose samples all agree stops once it has the minimum,
+    /// and a noisy one carries on, with the pixels beside it.
+    #[test]
+    fn test_plan_stops_quiet_pixels() {
+        let adaptive = Adaptive { threshold: 0.01, min_samples: 4 };
+        let n = 8usize;
+        // Eight pixels in a row: quiet ones at 0.5 every sample; one, at the far end,
+        // alternating between 0 and 1.
+        let quiet = (Color::new(0.5 * n as f64, 0.5 * n as f64, 0.5 * n as f64), Color::new(0.25 * n as f64, 0.25 * n as f64, 0.25 * n as f64));
+        let noisy = (Color::new(0.5 * n as f64, 0.5 * n as f64, 0.5 * n as f64), Color::new(0.5 * n as f64, 0.5 * n as f64, 0.5 * n as f64));
+        let mut sum = vec![quiet.0; 8];
+        let mut squares = vec![quiet.1; 8];
+        sum[7] = noisy.0;
+        squares[7] = noisy.1;
+        let samples = vec![n; 8];
+        let counts = plan(&film(&sum, &squares, &samples), 64, Some(&adaptive), 1., 8);
+        assert_eq!(counts[0], 0, "a quiet pixel far from the noise: {:?}", counts);
+        assert_eq!(counts[7], 8, "the noisy pixel: {:?}", counts);
+        // Before the minimum, every pixel is still wanted, quiet or not.
+        let few = vec![2usize; 8];
+        assert!(plan(&film(&sum, &squares, &few), 64, Some(&adaptive), 1., 8).iter().all(|&c| c == 8));
+    }
+}

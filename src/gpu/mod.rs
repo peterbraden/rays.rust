@@ -105,13 +105,6 @@ fn env_direction(x: usize, y: usize) -> Vector3<f64> {
     Vector3::new(theta.sin() * phi.cos(), theta.cos(), theta.sin() * phi.sin())
 }
 
-/// The sum of the squares of `n` samples summing to `c`, as far as the GPU tells: it keeps
-/// only sums, so the least they can be (were the samples equal). Only adaptive sampling reads
-/// them, and the GPU doesn't sample adaptively (`main` renders such scenes with the path tracer).
-pub fn squares_at_least(c: &Color, n: usize) -> Color {
-    Color { rgb: c.rgb.component_mul(&c.rgb) / n.max(1) as f64 }
-}
-
 /// Append `air` (and its moonlit copy) to `tables` as the shader's record (`pathtrace::AIR_*`),
 /// returning where it starts.
 fn air_record(tables: &mut Vec<f32>, air: &crate::skysphere::AirExport) -> u32 {
@@ -610,11 +603,11 @@ impl GpuRenderer {
             usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
         });
         let accum_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("accum"), size: pixels * 16,
+            label: Some("accum"), size: pixels * 32,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"), size: pixels * 16,
+            label: Some("readback"), size: pixels * 32,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let round_groups = [0, 1].map(|side| device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -635,9 +628,17 @@ impl GpuRenderer {
 
     /// Camera rays for sample `k` of every pixel, as the wavefront integrator's.
     pub fn camera_rays(s: &Scene, k: usize) -> Vec<GpuRay> {
+        Self::camera_rays_for(s, &vec![Some(k as u32); s.image.width * s.image.height])
+    }
+
+    /// The camera ray of each pixel's sample `samples[pixel]`; a dead ray (as one the lens
+    /// stops) for a pixel that takes none.
+    pub fn camera_rays_for(s: &Scene, samples: &[Option<u32>]) -> Vec<GpuRay> {
         let (w, h) = (s.image.width, s.image.height);
         let pixels = (w * h) as u64;
         (0..w * h).into_par_iter().map(|index| {
+            let Some(k) = samples[index] else { return GpuRay::zeroed() };
+            let k = k as usize;
             let (x, y) = (index % w, index / w);
             let stream = k as u64 * pixels + index as u64;
             crate::geometry::seed_rand(s.render.seed ^ 0x5bd1_e995, stream);
@@ -660,15 +661,23 @@ impl GpuRenderer {
     /// Queue pass (sample) `k` of every pixel, adding to the image on the GPU. Returns at once;
     /// a pass is one dispatch, so a browser can give each frame one, within its GPU watchdog.
     pub fn dispatch(&mut self, s: &Scene, k: usize) {
+        self.dispatch_samples(s, &vec![Some(k as u32); s.image.width * s.image.height]);
+    }
+
+    /// Queue a pass in which each pixel takes its sample `samples[pixel]`, or none: the pixels
+    /// the scheduler has found complete (`scheduler::plan`) aren't generated, so cost nothing.
+    /// A sample's random numbers are its pixel's and its own index's, whichever pass it is in.
+    pub fn dispatch_samples(&mut self, s: &Scene, samples: &[Option<u32>]) {
         let pixels = (s.image.width * s.image.height) as u32;
-        self.params.dims.z = k as u32;
         for side in 0..2 {
             self.params.seed.z = side as u32;
             self.queue.write_buffer(&self.params_buffers[side], 0, bytemuck::bytes_of(&self.params));
         }
         let seed = self.params.seed.x;
-        let rays = Self::camera_rays(s, k);
-        let paths: Vec<PathState> = rays.iter().enumerate().map(|(i, ray)| PathState::start(i as u32, k as u32, seed, ray)).collect();
+        let rays = Self::camera_rays_for(s, samples);
+        // (A pixel that takes no sample has a dead ray, so a path that adds nothing.)
+        let paths: Vec<PathState> = rays.iter().enumerate()
+            .map(|(i, ray)| PathState::start(i as u32, samples[i].unwrap_or(0), seed, ray)).collect();
         self.queue.write_buffer(&self.paths_buffer, 0, bytemuck::cast_slice(&paths));
         // The first round's queue (side 0): every pixel whose camera ray got through the lens.
         // Side 1 starts empty.
@@ -711,7 +720,7 @@ impl GpuRenderer {
     /// The image accumulated so far: each pixel's sums (the radiance's, and in w the number of
     /// rays traced). Natively this waits for the GPU; in a browser it yields until the copy
     /// can be read.
-    pub async fn read_back(&self) -> Result<Vec<[f32; 4]>, String> {
+    pub async fn read_back(&self) -> Result<(Vec<[f32; 4]>, Vec<[f32; 4]>), String> {
         let mut encoder = self.device.create_command_encoder(&Default::default());
         encoder.copy_buffer_to_buffer(&self.accum_buffer, 0, &self.readback, 0, None);
         self.queue.submit(Some(encoder.finish()));
@@ -727,9 +736,10 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("GPU device lost ({})", e))?;
         mapped.await.map_err(|e| format!("couldn't read the GPU's image back ({})", e))?;
-        let out = bytemuck::cast_slice::<u8, [f32; 4]>(&self.readback.get_mapped_range(..).unwrap()).to_vec();
+        let both = bytemuck::cast_slice::<u8, [f32; 4]>(&self.readback.get_mapped_range(..).unwrap()).to_vec();
         self.readback.unmap();
-        Ok(out)
+        // Interleaved on the GPU (`pathtrace::add_paths`): a pixel's sums, then its squares.
+        Ok((both.iter().step_by(2).copied().collect(), both.iter().skip(1).step_by(2).copied().collect()))
     }
 
     /// Render passes `first..last`, accumulating on the GPU; returns the sums per pixel.
@@ -739,37 +749,58 @@ impl GpuRenderer {
         for k in passes {
             self.dispatch(s, k);
         }
-        pollster::block_on(self.read_back()).expect("GPU readback")
+        pollster::block_on(self.read_back()).expect("GPU readback").0
     }
 
     /// Render up to the scene's samples per pixel from where `rc` has got to, reading the
     /// image back every `PASSES_PER_READ` passes; `after` sees the context each time.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn render(&mut self, s: &Scene, rc: &Mutex<RenderContext>, mut after: impl FnMut(&RenderContext)) {
-        let first = rc.lock().unwrap().min_samples();
-        let target = s.render.samples_per_pixel();
         let (w, h) = (s.image.width, s.image.height);
-        let mut k = first;
-        while k < target {
-            let n = PASSES_PER_READ.min(target - k);
-            let sums = self.run(s, k..k + n);
+        loop {
+            // The scheduler's part (`scheduler::plan`): which pixels take samples in the next
+            // few passes, and how many each. Decided a region at a time, as the recursive
+            // tracer's passes are, from the film alone, so a render resumed from a saved film
+            // goes on as an uninterrupted one would.
+            let (mut first, mut count) = (vec![0usize; w * h], vec![0usize; w * h]);
+            {
+                let rc = rc.lock().unwrap();
+                for b in rc.regions(s) {
+                    let (f, c) = rc.plan(s, &b, PASSES_PER_READ);
+                    let mut i = 0;
+                    for y in b.ymin..b.ymax {
+                        for x in b.xmin..b.xmax {
+                            first[y * w + x] = f[i];
+                            count[y * w + x] = c[i];
+                            i += 1;
+                        }
+                    }
+                }
+            }
+            let passes = count.iter().copied().max().unwrap_or(0);
+            if passes == 0 {
+                break;
+            }
+            self.clear();
+            for j in 0..passes {
+                let samples: Vec<Option<u32>> = (0..w * h).map(|i| (j < count[i]).then(|| (first[i] + j) as u32)).collect();
+                self.dispatch_samples(s, &samples);
+            }
+            let (sums, squares) = pollster::block_on(self.read_back()).expect("GPU readback");
             let mut rc = rc.lock().unwrap();
             for y in 0..h {
                 for x in 0..w {
-                    // A pixel a resumed state has already taken past k (another integrator's
-                    // render) skips passes until it isn't: they would repeat its samples.
-                    // (Some sample indices go unused for it; none is used twice.)
-                    if rc.samples_at(x, y) > k {
+                    let i = y * w + x;
+                    if count[i] == 0 {
                         continue;
                     }
-                    let v = sums[y * w + x];
-                    let c = Color::new(v[0] as f64, v[1] as f64, v[2] as f64);
-                    rc.set_pixel(x, y, c, squares_at_least(&c, n), n);
-                    rc.rays_cast += v[3] as u64;
+                    let colour = |v: [f32; 4]| Color::new(v[0] as f64, v[1] as f64, v[2] as f64);
+                    // A sample the lens stopped added nothing, and is a black sample all the same.
+                    rc.set_pixel(x, y, colour(sums[i]), colour(squares[i]), count[i]);
+                    rc.rays_cast += sums[i][3] as u64;
                 }
             }
             after(&rc);
-            k += n;
         }
     }
 }
@@ -1248,6 +1279,59 @@ mod tests {
             for ch in 0..3 {
                 assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "tile {} channel {}: GPU {} vs CPU {}", t, ch, a[t][ch], b[t][ch]);
             }
+        }
+    }
+
+    /// Pixel completion (`scheduler::plan`): with adaptive sampling the GPU stops sampling the
+    /// pixels that are quiet (a flat background: every sample the same) and carries on with
+    /// the noisy ones, each taking its own next samples; the picture is the one it gets from
+    /// sampling every pixel in full; and a render stopped part-way and resumed from its film
+    /// ends where an uninterrupted one does.
+    #[test]
+    fn test_samples_adaptively() {
+        let mut s = scene();
+        s.render.supersamples = 64;
+        let flat = FlatScene::build(&s).unwrap();
+        let mut gpu = match GpuRenderer::new(&s, &flat) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("skipped: {}", e);
+                return;
+            },
+        };
+        let (w, h) = (s.image.width, s.image.height);
+        let render = |gpu: &mut GpuRenderer, s: &Scene, rc: RenderContext| {
+            let rc = Mutex::new(rc);
+            gpu.render(s, &rc, |_| ());
+            rc.into_inner().unwrap()
+        };
+        let full = render(&mut gpu, &s, RenderContext::new(w, h, false, "test.png"));
+        assert!((0..w * h).all(|i| full.samples_at(i % w, i / w) == 64));
+
+        s.render.adaptive = Some(crate::scene::Adaptive { threshold: 0.05, min_samples: 8 });
+        let adaptive = render(&mut gpu, &s, RenderContext::new(w, h, false, "test.png"));
+        let counts: Vec<usize> = (0..w * h).map(|i| adaptive.samples_at(i % w, i / w)).collect();
+        let (least, most) = (*counts.iter().min().unwrap(), *counts.iter().max().unwrap());
+        assert!(least >= 8 && most <= 64, "samples from {} to {}", least, most);
+        assert!(least < most, "every pixel took {} samples", least);
+        let taken: usize = counts.iter().sum();
+        assert!(taken < w * h * 64 * 9 / 10, "{} samples of {}", taken, w * h * 64);
+        // The same picture: each pixel's mean within its noise of the fully sampled one's.
+        let mean = |rc: &RenderContext| (0..w * h).fold(Vector3::zeros(), |a, i| a + rc.get_pixel(i % w, i / w).rgb) / (w * h) as f64;
+        let (a, f) = (mean(&adaptive), mean(&full));
+        for ch in 0..3 {
+            assert!((a[ch] - f[ch]).abs() < 0.03 * f[ch], "channel {}: adaptive {} vs full {}", ch, a[ch], f[ch]);
+        }
+
+        // Stopped at 16 samples and resumed: the same film, pixel for pixel.
+        s.render.supersamples = 16;
+        let part = render(&mut gpu, &s, RenderContext::new(w, h, false, "test.png"));
+        s.render.supersamples = 64;
+        let resumed = render(&mut gpu, &s, part);
+        for i in 0..w * h {
+            let (x, y) = (i % w, i / w);
+            assert_eq!(resumed.samples_at(x, y), adaptive.samples_at(x, y), "pixel {}'s samples", i);
+            assert_eq!(resumed.get_pixel(x, y), adaptive.get_pixel(x, y), "pixel {}", i);
         }
     }
 

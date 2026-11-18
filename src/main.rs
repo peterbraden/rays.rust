@@ -221,10 +221,11 @@ fn main() {
         });
     }
     // The wavefront integrator's and the GPU's samples differ from the path tracer's: a saved
-    // state is one's. Neither samples adaptively, so then the path tracer renders.
+    // state is one's. The wavefront integrator doesn't sample adaptively, so then the path
+    // tracer renders; the GPU does (`scheduler::plan`).
     let key = rendercontext::render_key(&contents, (args.width, args.height, args.seed))
         ^ if args.wavefront && s.render.adaptive.is_none() { 0x7761_7665_6672_6f6e } else { 0 }
-        ^ if args.gpu && s.render.adaptive.is_none() { 0x6770_7500_0000_0001 } else { 0 };
+        ^ if args.gpu { 0x6770_7500_0000_0001 } else { 0 };
     if !args.fresh && std::path::Path::new(&state_path).exists() {
         match rc.load_state(&state_path, key) {
             Ok(()) => println!("- Resuming from {:.1} samples per pixel on average, {} at least ({})",
@@ -277,11 +278,9 @@ fn main() {
     if args.gpu {
         s.render.gpu = true;
     }
-    if s.render.wavefront && s.render.adaptive.is_some() {
-        let which = if s.render.gpu { "The GPU and the wavefront integrator don't" } else { "The wavefront integrator doesn't" };
-        println!("- {} sample adaptively; rendering with the path tracer", which);
+    if s.render.wavefront && !s.render.gpu && s.render.adaptive.is_some() {
+        println!("- The wavefront integrator doesn't sample adaptively; rendering with the path tracer");
         s.render.wavefront = false;
-        s.render.gpu = false;
     }
     let flat = if s.render.wavefront {
         match wavefront::flat::FlatScene::build(&s) {
@@ -311,6 +310,18 @@ fn main() {
             },
         },
         _ => None,
+    };
+    // Without the GPU, an adaptively sampled scene is the path tracer's: the wavefront
+    // integrator the GPU would fall back to doesn't sample adaptively.
+    #[cfg(feature = "gpu")]
+    let gpu_missing = gpu.is_none();
+    #[cfg(not(feature = "gpu"))]
+    let gpu_missing = true;
+    let flat = if gpu_missing && flat.is_some() && s.render.adaptive.is_some() {
+        println!("- The wavefront integrator doesn't sample adaptively; rendering with the path tracer");
+        None
+    } else {
+        flat
     };
     #[cfg(not(feature = "gpu"))]
     if s.render.gpu {

@@ -115,15 +115,14 @@ impl Inner {
     // `pass` refuses (rather than panics) while this borrow is held across the readback.
     #[allow(clippy::await_holding_refcell_ref)]
     async fn finished(&self) -> Result<rays::output::LinearImage, JsValue> {
-        let sums = self.gpu.borrow().read_back().await.map_err(|e| JsValue::from_str(&e))?;
+        let (sums, squares) = self.gpu.borrow().read_back().await.map_err(|e| JsValue::from_str(&e))?;
         let (w, h) = (self.scene.image.width, self.scene.image.height);
         let mut rc = RenderContext::new(w, h, false, "web");
         let n = self.passes.get();
         for y in 0..h {
             for x in 0..w {
-                let v = sums[y * w + x];
-                let c = rays::color::Color::new(v[0] as f64, v[1] as f64, v[2] as f64);
-                rc.set_pixel(x, y, c, rays::gpu::squares_at_least(&c, n), n);
+                let colour = |v: [f32; 4]| rays::color::Color::new(v[0] as f64, v[1] as f64, v[2] as f64);
+                rc.set_pixel(x, y, colour(sums[y * w + x]), colour(squares[y * w + x]), n);
             }
         }
         Ok(self.scene.output.finish(&rc.snapshot()))

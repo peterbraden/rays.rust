@@ -17,6 +17,7 @@ extern crate rustfft;
 
 
 pub mod assets;
+pub mod scheduler;
 pub mod schema;
 #[cfg(feature = "cli")]
 pub mod server;

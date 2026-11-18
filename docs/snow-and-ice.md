@@ -156,10 +156,12 @@ cells twice, at two scales, so neither layer shows the other's pattern. `concent
 share of the sea with ice; the rest is open water, gathered in lanes (more so with higher
 `clumping`).
 
-- **Slush** (the fine partition): fragments of clear ice a few centimetres thick, a hand's
-  width to a metre across. Some overlap and some leave gaps; they lie at slightly different
-  heights and tilts, with a few tipped up out of the water. They range from glass-clear, with
-  the dark water showing through, to cloudy white.
+- **Slush** (the fine partition): fragments of ice from a hand's width to a couple of metres
+  across, each somewhere on its way to melting away. A fresh one is thick, angular and white
+  with bubbles; a nearly melted one is a thin, rounded, glass-clear wafer with the dark water
+  showing through. Within a fragment the ice is clearest at its thin edges and cloudiest in
+  the middle. Outlines are lobed and notched, slivers as well as plates. Some overlap, some
+  leave gaps, and a few are tipped up out of the water.
 - **Shards** (the coarse partition, `size` giving the smallest and largest): chunks of white
   ice. Each is its cell's polygon pulled in off-centre, squeezed, sometimes split in two, with
   corners broken off and a ragged outline, under an uneven, hummocked, snowy top. Small cells

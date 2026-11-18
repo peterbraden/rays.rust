@@ -686,8 +686,8 @@ impl MaterialModel for IcebergMaterial {
                 // Clear ice, the dark water showing through, with cloudy patches of bubbles
                 // and of snow frozen in.
                 let p = intersection.point;
-                let cloud = smoothstep(0.35, 0.7, firn + 0.5 * self.noise.fbm(Vector3::new(p.x, 0., p.z) / 0.35, 4));
-                return if rand() < 0.85 * cloud {
+                let cloud = smoothstep(0.15, 0.6, firn + 0.25 * self.noise.fbm(Vector3::new(p.x, 0., p.z) / 0.2, 4));
+                return if rand() < 0.95 * cloud {
                     let normal = self.bumped(&i.point, &i.normal, &-r.rd.normalize());
                     f(&self.clear.bsdf(&normal, Some(s)), r, &i.point, s)
                 } else {
@@ -983,9 +983,10 @@ impl FloeField {
         };
         // Where there is ice at all: lanes of open water wander through.
         let iced = |x: f64, z: f64, u: f64| u + 1.5 * self.clumping * clumps.fbm(Vector3::new(x, 0., z) / clump_size, 3) > 1. - p_ice;
-        let mut emit = |piece: Vec<Vector3<f64>>, tris: Vec<[usize; 3]>, uv: (f64, f64)| {
+        let mut emit = |piece: Vec<Vector3<f64>>, tris: Vec<[usize; 3]>, uv: Vec<(f64, f64)>| {
             let start = positions.len();
-            texcoords.extend(std::iter::repeat_n(crate::na::Vector2::new(uv.0, uv.1), piece.len()));
+            assert_eq!(uv.len(), piece.len());
+            texcoords.extend(uv.iter().map(|&(u, v)| crate::na::Vector2::new(u, v)));
             triangles.extend(tris.iter().map(|t| t.map(|i| i + start)));
             positions.extend(piece);
             pieces += 1;
@@ -1001,27 +1002,71 @@ impl FloeField {
             }
         };
 
-        // Slush.
-        let fine = (4. * self.min_size).clamp(0.6, 1.6);
+        // Slush. Each fragment is somewhere on its way to melting away, `melt` from 0 (just
+        // broken: thick, angular, white with bubbles) to 1 (nearly gone: a thin, rounded,
+        // glass-clear wafer). Within a fragment the ice is clearest at its thin edges, where
+        // melting has got furthest, and cloudiest in its middle.
+        let fine = (5. * self.min_size).clamp(0.8, 2.);
         for (cell, _) in self.cells(fine, 8, &mut rng) {
             let c = centroid(&cell);
-            if !iced(c.0, c.1, 0.35 + 0.3 * rng.next_f64()) || rng.next_f64() < 0.18 { continue; }
-            let grow = 0.7 + 0.55 * rng.next_f64();
-            let poly: Vec<(f64, f64)> = cell.iter().map(|p| (c.0 + (p.0 - c.0) * grow, c.1 + (p.1 - c.1) * grow)).collect();
-            let poly = broken(poly, c, 1 + (rng.next_f64() * 3.) as usize, 0.5, &mut rng);
+            if !iced(c.0, c.1, 0.35 + 0.3 * rng.next_f64()) || rng.next_f64() < 0.15 { continue; }
+            let melt = rng.next_f64().powf(0.7);
+            // Grown or shrunk, and squeezed along an axis: slivers as well as plates.
+            let grow = 0.45 + 0.95 * rng.next_f64();
+            let (axis, squeeze) = (rng.next_f64() * TAU, 0.3 + 0.7 * rng.next_f64().sqrt());
+            let (ax, az) = (axis.cos(), axis.sin());
+            let poly: Vec<(f64, f64)> = cell.iter().map(|p| {
+                let (dx, dz) = ((p.0 - c.0) * grow, (p.1 - c.1) * grow);
+                let along = dx * ax + dz * az;
+                (c.0 + dx - (1. - squeeze) * along * ax, c.1 + dz - (1. - squeeze) * along * az)
+            }).collect();
+            let poly = broken(poly, c, (rng.next_f64() * 5.) as usize, 0.35, &mut rng);
             let radius = reach(&poly, c);
             if radius < 0.02 { continue; }
-            let sheet = (0.02 + 0.12 * rng.next_f64().powi(2)).min(0.6 * radius);
-            let lump = 0.5 * sheet * rng.next_f64();
+            // The outline, resampled: lobed and notched (it need not be convex), and the more
+            // melted, the more its corners are rounded off towards a blob.
             let offset = Vector3::new(rng.next_f64(), rng.next_f64(), rng.next_f64()) * 50.;
+            let perimeter: f64 = (0..poly.len()).map(|k| { let (a, b) = (poly[k], poly[(k + 1) % poly.len()]); (b.0 - a.0).hypot(b.1 - a.1) }).sum();
+            let points = ((perimeter / (0.5 * radius)).ceil() as usize).clamp(5, 10);
+            let lobes = 0.12 + 0.3 * rng.next_f64();
+            let mut outline: Vec<(f64, f64)> = vec![];
+            let mut walked = 0.;
+            let mut next = 0.;
+            for k in 0..poly.len() {
+                let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
+                let len = (b.0 - a.0).hypot(b.1 - a.1);
+                while next < walked + len && outline.len() < points {
+                    let f = (next - walked) / len.max(1e-12);
+                    let (x, z) = (a.0 + (b.0 - a.0) * f - c.0, a.1 + (b.1 - a.1) * f - c.1);
+                    let d = x.hypot(z).max(1e-9);
+                    // Towards a circle as it melts, then lobed.
+                    let round = d + 0.6 * melt * (0.75 * radius - d);
+                    let u = Vector3::new(x / d, 0., z / d);
+                    let k = round / d * (1. + lobes * noise.fbm(u * 1.3 + offset, 2) + 0.5 * lobes * (1. - melt) * noise.noise(u * 4. + offset));
+                    outline.push((c.0 + x * k, c.1 + z * k));
+                    next += perimeter / points as f64;
+                }
+                walked += len;
+            }
+            if outline.len() < 3 { continue; }
+            let radius = reach(&outline, c);
+            // Thinner as it melts; fresh fragments stand a little proud, lumpy.
+            let sheet = (0.015 + 0.3 * (1. - melt).powi(2) * rng.next_f64()).min(0.7 * radius);
+            let lump = sheet * (0.2 + 0.8 * (1. - melt) * rng.next_f64());
             let ripple = |x: f64, z: f64, k: usize| if k < 2 { lump * (0.5 + noise.fbm(Vector3::new(x, 0., z) / (0.6 * radius) + offset, 2)) } else { 0. };
-            let rings = [(0.5, 0.), (0.9, 0.), (1., -0.3 * sheet), (0.85, -sheet)];
-            let (mut piece, tris) = solid(&poly, c, &rings, &ripple);
-            // Most lie flat at the surface, at slightly different heights; a few are tipped up.
+            let rings = [(0.5, 0.115 * sheet), (0.88, 0.115 * sheet), (1., -0.25 * sheet), (0.8, -0.885 * sheet)];
+            let (mut piece, tris) = solid(&outline, c, &rings, &ripple);
+            // Most lie flat at the surface; a few are tipped up.
             let tip = if rng.next_f64() < 0.1 { 0.25 + 0.5 * rng.next_f64() } else { 0.08 * rng.next_f64() };
-            place(&mut piece, c, radius, tip, 0.03 * rng.next_f64() + 0.3 * tip * radius, &mut rng);
-            // How cloudy: most clear, some white.
-            emit(piece, tris, (1., rng.next_f64().powi(2)));
+            place(&mut piece, c, radius, tip, 0.3 * tip * radius, &mut rng);
+            // How cloudy, per vertex (the middle, the two top rings, the edge and underside).
+            let core = (1. - melt).powf(1.5) * (0.5 + 0.6 * rng.next_f64());
+            let m = outline.len();
+            let cloud = |ring: f64| core * (1. - 0.75 * ring * ring) - 0.2 * melt;
+            let mut uv = vec![(1., cloud(0.))];
+            for f in [0.5, 0.88, 1., 1.] { uv.extend(std::iter::repeat_n((1., cloud(f)), m)); }
+            uv.push((1., cloud(0.3)));
+            emit(piece, tris, uv);
         }
 
         // Shards.
@@ -1067,7 +1112,8 @@ impl FloeField {
                     for t in 0..n {
                         let f = t as f64 / n as f64;
                         let (x, z) = (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f);
-                        let ragged = 1. + 0.1 * noise.fbm(Vector3::new(x, 0., z) / (0.35 * r) + offset, 3);
+                        let ragged = 1. + 0.22 * noise.fbm(Vector3::new(x, 0., z) / (0.8 * r) + offset, 2)
+                            + 0.1 * noise.fbm(Vector3::new(x, 0., z) / (0.25 * r) + offset, 3);
                         outline.push((pc.0 + (x - pc.0) * ragged, pc.1 + (z - pc.1) * ragged));
                     }
                 }
@@ -1090,7 +1136,8 @@ impl FloeField {
                 let (mut piece, tris) = solid(&outline, pc, &rings, &bump);
                 let tip = if rng.next_f64() < 0.12 { 0.2 + 0.4 * rng.next_f64() } else { (0.05 + 0.15 / (1. + r)) * rng.next_f64() };
                 place(&mut piece, pc, r, tip, 0., &mut rng);
-                emit(piece, tris, (0., 0.));
+                let uv = vec![(0., 0.); piece.len()];
+                emit(piece, tris, uv);
             }
         }
         println!("Brash: {} pieces, {} triangles", pieces, triangles.len());

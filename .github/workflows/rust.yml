@@ -19,6 +19,8 @@ jobs:
       run: cargo test --verbose
     - name: Run tests (release, as the renders run)
       run: cargo test --release
+    - name: Build the library without the command line
+      run: cargo check --lib --no-default-features
     - name: Run Smoke test
       run: cargo run -- demo/ci-smoke-test.json
     - name: Run current work

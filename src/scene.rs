@@ -318,6 +318,9 @@ pub struct Scene {
     /// Emitting objects whose surface can be sampled, for direct lighting (next-event
     /// estimation). The same `Arc`s as in `objects`, so a hit can be recognised as one of them.
     pub area_lights: Vec<Arc<SceneObject>>,
+    /// Each object with its index in the scene file's `objects` list (entries that produce no
+    /// object are skipped), so a hit can be traced back to the description it came from.
+    pub object_sources: Vec<(usize, Arc<SceneObject>)>,
     /// The chance of choosing each area light to sample: in proportion to its power
     /// (`SceneFile::light_powers`).
     pub area_light_choice: crate::environment::Distribution1D,
@@ -341,6 +344,11 @@ pub struct Scene {
 pub const BVH_POINT_LIGHTS: usize = 16;
 
 impl Scene {
+    /// The index, in the scene file's `objects` list, of the entry this object was built from.
+    pub fn source_index(&self, object: &SceneObject) -> Option<usize> {
+        self.object_sources.iter().find(|(_, o)| std::ptr::eq(&**o, object)).map(|(i, _)| *i)
+    }
+
     /// The distant lights sampled directly: the sun, and moonlight.
     pub fn directional_lights(&self) -> impl Iterator<Item = &Sun> {
         self.sun.iter().chain(self.moonlight.iter().map(|m| &m.light))

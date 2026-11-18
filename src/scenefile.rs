@@ -194,6 +194,9 @@ impl GeometryLibrary {
     }
 }
 
+static KEEP_OBJECTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static KEPT_OBJECTS: std::sync::Mutex<Option<HashMap<String, Vec<Arc<SceneObject>>>>> = std::sync::Mutex::new(None);
+
 /// Command-line settings that take precedence over the scene file.
 #[derive(Default)]
 pub struct Overrides {
@@ -553,7 +556,8 @@ impl SceneFile {
             crate::lens::LensSystem::named(name)
                 .unwrap_or_else(|| panic!("Unknown lens '{}': expected dgauss.50mm, wide.22mm, telephoto.250mm, fisheye.10mm or a .dat file", name))
         } else {
-            crate::lens::LensSystem::parse(&std::fs::read_to_string(name).unwrap_or_else(|e| panic!("Can't read lens {}: {}", name, e)))
+            crate::lens::LensSystem::parse(&crate::assets::read(name).map_err(|e| e.to_string()).and_then(|b| String::from_utf8(b).map_err(|e| e.to_string()))
+                    .unwrap_or_else(|e| panic!("Can't read lens {}: {}", name, e)))
                 .unwrap_or_else(|e| panic!("Lens {}: {}", name, e))
         };
         match o["blades"].as_u64() {
@@ -673,25 +677,85 @@ impl SceneFile {
     }
 
     pub fn parse_objects(objs: Vec<Value>, materials: &Map<String, Value>, media: &Map<String, Value>, geometries: &GeometryLibrary) ->Vec<Arc<SceneObject>> {
-         let mut objects: Vec<Arc<SceneObject>> = Vec::new();
-         for obj in objs {
+        SceneFile::parse_objects_indexed(objs, materials, media, geometries).into_iter().map(|(_, o)| o).collect()
+    }
+
+    /// The objects, each with the index in `objs` of the entry it came from. An entry may give
+    /// no object, or several (a tree, a forest).
+    pub fn parse_objects_indexed(objs: Vec<Value>, materials: &Map<String, Value>, media: &Map<String, Value>, geometries: &GeometryLibrary) -> Vec<(usize, Arc<SceneObject>)> {
+         let mut objects: Vec<(usize, Arc<SceneObject>)> = Vec::new();
+         // Objects kept from the last build (see `keep_objects_between_builds`), and those to
+         // keep from this one.
+         let reuse = KEEP_OBJECTS.load(std::sync::atomic::Ordering::Relaxed);
+         let previous = if reuse { KEPT_OBJECTS.lock().unwrap().take().unwrap_or_default() } else { HashMap::new() };
+         let mut kept: HashMap<String, Vec<Arc<SceneObject>>> = HashMap::new();
+         for (i, obj) in objs.into_iter().enumerate() {
+            let key = if reuse { SceneFile::object_key(&obj, materials, media, geometries) } else { String::new() };
+            if let Some(built) = previous.get(&key).or(kept.get(&key)) {
+                objects.extend(built.iter().map(|x| (i, x.clone())));
+                kept.insert(key, built.clone());
+                continue;
+            }
             // Report the objects that are slow to build (meshes, oceans), by type and source.
             let start = web_time::Instant::now();
             let name = format!("{}{}", obj["type"].as_str().unwrap_or("?"),
                 obj["src"].as_str().or(obj["item"]["src"].as_str()).map_or(String::new(), |s| format!(" {}", s)));
-            if obj["type"] == "tree" {
-                objects.extend(SceneFile::parse_tree(&obj, materials, media));
+            let built: Vec<Arc<SceneObject>> = if obj["type"] == "tree" {
+                SceneFile::parse_tree(&obj, materials, media)
             } else if obj["type"] == "forest" {
-                objects.extend(SceneFile::parse_forest(&obj, materials, media, geometries));
-            } else if let Some(x) = SceneFile::parse_object(obj, materials, media, geometries) {
-                objects.push(x)
-            }
+                SceneFile::parse_forest(&obj, materials, media, geometries)
+            } else {
+                SceneFile::parse_object(obj, materials, media, geometries).into_iter().collect()
+            };
+            objects.extend(built.iter().map(|x| (i, x.clone())));
+            if reuse { kept.insert(key, built); }
             let t = start.elapsed().as_secs_f64();
             if t >= 0.1 {
                 println!("- Built {} in {:.2} s", name, t);
             }
          }
+         if reuse { *KEPT_OBJECTS.lock().unwrap() = Some(kept); }
          objects
+    }
+
+    /// Everything an object is built from, as text: its own description, and the definition
+    /// of every material, medium and named geometry it refers to, and of those they refer to.
+    /// Two objects with the same key are the same object.
+    ///
+    /// References are found by name: any string in the description that names a material, a
+    /// medium or a geometry counts. A string that only happens to match a name makes the key
+    /// depend on more than it need, which costs a rebuild and nothing else.
+    fn object_key(obj: &Value, materials: &Map<String, Value>, media: &Map<String, Value>, geometries: &GeometryLibrary) -> String {
+        fn collect<'a>(v: &'a Value, tables: &[(&str, &'a Map<String, Value>)], seen: &mut Vec<(usize, &'a str)>, key: &mut String) {
+            match v {
+                Value::String(name) => for (t, (label, table)) in tables.iter().enumerate() {
+                    if let Some((name, def)) = table.get_key_value(name.as_str()) && !seen.contains(&(t, name.as_str())) {
+                        seen.push((t, name.as_str()));
+                        key.push_str(&format!("\n{} {}={}", label, name, def));
+                        collect(def, tables, seen, key);
+                    }
+                },
+                Value::Array(items) => for i in items { collect(i, tables, seen, key) },
+                Value::Object(fields) => for f in fields.values() { collect(f, tables, seen, key) },
+                _ => {},
+            }
+        }
+        let mut key = obj.to_string();
+        let tables = [("material", materials), ("medium", media), ("geometry", &geometries.defined)];
+        collect(obj, &tables, &mut Vec::new(), &mut key);
+        key
+    }
+
+    /// Keep each built object between builds (in this process), and reuse it when the next
+    /// scene has an object with the same description and the same definitions behind it.
+    ///
+    /// For an editor, which rebuilds the scene on every change: only what changed is built
+    /// again, so moving a sphere doesn't regrow the grass. Objects are immutable once built,
+    /// so sharing one between scenes is safe. Off by default: a single render gains nothing,
+    /// and the objects of the last scene would be held in memory for no reason.
+    pub fn keep_objects_between_builds(keep: bool) {
+        KEEP_OBJECTS.store(keep, std::sync::atomic::Ordering::Relaxed);
+        if !keep { *KEPT_OBJECTS.lock().unwrap() = None; }
     }
 
     /// An object's medium, bump mapped if its `"normal"` is an object (see `parse_bump`). A
@@ -3155,7 +3219,8 @@ impl SceneFile {
                 o["moonlight"] = serde_json::json!({ "direction": [d.x, d.y, d.z], "share": share });
             }
         }
-        let objects = SceneFile::parse_objects(scene_objects, &s.materials, &s.media, &geometries);
+        let object_sources = SceneFile::parse_objects_indexed(scene_objects, &s.materials, &s.media, &geometries);
+        let objects: Vec<Arc<SceneObject>> = object_sources.iter().map(|(_, o)| o.clone()).collect();
         // Emitters with a surface we can sample become area lights.
         let area_lights: Vec<Arc<SceneObject>> = objects.iter()
             .filter(|o| o.medium.material_at(Vector3::zeros()).is_emitter() && o.geometry.surface_area() > 0.)
@@ -3217,6 +3282,7 @@ impl SceneFile {
             },
             area_light_indices: area_lights.iter().enumerate().map(|(i, l)| (&**l as *const SceneObject as usize, i)).collect(),
             area_lights,
+            object_sources,
             area_light_choice,
             sun,
             moonlight,
@@ -3390,8 +3456,8 @@ impl SceneFile {
     /// by extension: `.nff` (see `crate::nff`); or, for JSON, by content: Tungsten's (see
     /// `crate::tungsten`). Anything else is read as our JSON.
     pub fn read_document(filename: &str) -> Result<Value, String> {
-        let contents = std::fs::read_to_string(filename)
-            .map_err(|e| format!("Can't read scene file {}: {}", filename, e))?;
+        let contents = String::from_utf8(crate::assets::read(filename).map_err(|e| format!("Can't read scene file {}: {}", filename, e))?)
+            .map_err(|e| format!("Scene file {}: {}", filename, e))?;
         if filename.to_lowercase().ends_with(".nff") {
             return crate::nff::to_scene(&contents).map_err(|e| format!("{}: {}", filename, e));
         }

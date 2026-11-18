@@ -157,7 +157,7 @@ impl Grid {
         if let Some(g) = cache.lock().unwrap().get(path) {
             return g.clone();
         }
-        let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("Couldn't read volume grid {}: {}", path, e));
+        let bytes = crate::assets::read(path).unwrap_or_else(|e| panic!("Couldn't read volume grid: {}", e));
         let g = Arc::new(Grid::parse_vol(&bytes).unwrap_or_else(|e| panic!("Couldn't read volume grid {}: {}", path, e)));
         cache.lock().unwrap().insert(path.to_string(), g.clone());
         g

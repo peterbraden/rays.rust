@@ -1424,24 +1424,76 @@ UI, file IO and rayon's threads would follow.
    identical images (FLIP against the megakernel), then measure on real GPUs (the Mac; the
    browser) against the megakernel to decide which to keep for which device.
 
-   Started: a wavefront by bounce (`bounce_paths`, `answer_sky`; above). Still to come:
-   - Queues of active paths (a u32 atomic counter, `dispatchWorkgroupsIndirect`), so late
-     rounds with few paths left cost little; most for the browser, where a pass is now about
-     20 full-image dispatches. Queues and counters must share buffers: all 8 of WebGPU's
-     storage bindings are in use. Spike first: atomics and indirect dispatch through rust-gpu
-     and naga to Metal and the browser.
-     Spike, done on Metal: `spirv_std::arch::atomic_i_add` with `Scope::QueueFamily` (Device
-     scope needs a capability under the Vulkan memory model rust-gpu targets); naga makes the
-     whole buffer `array<atomic<u32>>`, and the WGSL validates for WebGPU. A one-thread kernel
-     writes the indirect arguments into a buffer of its own bind group (a buffer can't be both
-     writable storage and indirect in one dispatch), and `dispatch_workgroups_indirect` reads
-     them. Design from it: queues double-buffered in one u32 buffer (counts, which half is
-     read, a first-round flag, then the two halves); round 0 over every pixel, the rest
-     indirect; a path's light added by the sky kernel in the round it ends; the lights moved
-     into `tables` to free a binding for the queue.
-   - Stages: intersect (sorting hits into queues: escaped, emitter, each material kind),
-     shade per material kind, shadow rays, sky; the random numbers drawn in the same order,
-     so images and the GPU-against-CPU-build tests hold.
+   Started: a wavefront by bounce (`bounce_paths`, `answer_sky`; above).
+
+   Done, on #114: queues of active paths. A round's dispatch covers the paths still alive,
+   not every pixel.
+   - One buffer holds two queues of pixel indices and a four-word header each: the dispatch
+     that covers the queue, as `dispatchWorkgroupsIndirect` reads it, and its count.
+     `bounce_paths` takes its paths from one side and appends those still alive to the other
+     with `atomicAdd`, extending that side's dispatch as it fills (a group in x for the first
+     item of each 64, a row in y for each 65,535 groups); `answer_sky` runs over the same
+     queue; the next round swaps sides (`Params::seed.z`, so two parameter buffers and bind
+     groups). Between rounds the host copies the filled side's header to the buffer the next
+     dispatch reads (a buffer bound for writing can't also be a dispatch's arguments) and an
+     empty header over the side just read: two buffer copies, no kernel.
+   - Within WebGPU's 8 storage buffers a kernel: the image left the rounds' bind group for a
+     kernel of its own, `add_paths`, once a pass; the queues took its place.
+   - The spike's answers: rust-gpu's `atomic_i_add`/`atomic_load`/`atomic_store` on a
+     `&mut [u32]` work (scope `QueueFamily`: `Device` needs a capability under Vulkan's memory
+     model); naga 30 reads them and makes the buffer `array<atomic<u32>>` (so every access
+     to it is atomic), and the WGSL validates for WebGPU. Runs on Vulkan from the SPIR-V and
+     from the WGSL (lavapipe), and in Chromium (WebGPU on SwiftShader). A separate spike on
+     the M2 (an atomic append, indirect arguments written by a one-thread kernel in a bind
+     group of its own, then `dispatch_workgroups_indirect`) ran correctly on Metal from the
+     WGSL; these queues themselves are still to run there, and on DX12.
+   - Images unchanged: pixel-identical at 320 x 180, 8 spp on instances, demo, glossy-sun and
+     night-orbit; the ten GPU tests pass; browser against native FLIP 0.0025 on spheres.
+   - What it saves, counted on the kernel's CPU build (`measure_traversal`): of a pass's
+     pixel-rounds, the share with a live path is 21% on demo (max depth 9), 29% on glossy-sun
+     (6), 57% on instances (3) and spheres (2). Dispatches a pass: 2 (d + 1) + 1, from
+     2 (d + 2) - 1, plus two small copies a round.
+   - Timed on llvmpipe only (320 x 180, a sample, median of 3): demo 48.8 -> 35.9 ms,
+     glossy-sun 52.9 -> 41.3, instances 95.9 -> 90.2 (inside its spread). A dead path's
+     invocation was already cheap (one load and a branch), so the gain is less than the live
+     share suggests; on a real GPU, where it is cheaper still, expect less, and measure
+     (`scripts/benchmark-gpu.sh`, and `web/test.mjs` for the browser's time a pass).
+
+   Done, on #114: the first stage split, and the test's own record.
+   - A bounce is `intersect` then `shade`; on the GPU a kernel each (`intersect_paths`,
+     `bounce_paths`), run in turn over the round's queue, the hit kept in the path
+     (`PathState::hit`, the primitive in `state.z`; 96 bytes a path from 80). The closest-hit
+     traversal is a kernel of 5 buffers; the shading kernel keeps one copy of the traversal,
+     for its shadow rays, not two. A round is three dispatches from two.
+   - The primitive buffer is packed (`pack_prims`): each primitive's test record first (48
+     bytes: a vertex and two edges, or a centre and radius, with the kind), then each one's
+     shading record (80 bytes). A test read 112 bytes. Shading rebuilds the primitive from
+     both, with the original vertices, so every result is the same bits.
+   - Images unchanged again (pixel-identical on instances, demo, glossy-sun, night-orbit,
+     lamps); GPU tests pass from the SPIR-V and the WGSL; browser against native FLIP 0.0025.
+   - On llvmpipe neither shows: a sample's time is the same within its spread (about 25%).
+     They are for a real GPU's registers and memory traffic: measure there.
+   - How the work divides (`measure_traversal`, the kernel's CPU build on one thread, the
+     share of `radiance`'s time inside the traversal, closest hits and shadow rays together):
+     demo 31%, instances 41%, glossy-sun 23%, spheres 16%, lamps 47%, night-orbit 1%. So on
+     these scenes most of the time is shading and the sky, not intersection; a scene of
+     more geometry than `instances` (126,401 triangles) isn't among those the GPU renders.
+
+   Still to come:
+   - Shadow rays as a stage (an any-hit kernel), which would leave the shading kernel with
+     no traversal at all. The difficulty, known: a vertex casts one shadow ray for every
+     point light and three more (sun, an area light, the sky), and adds what they find in
+     that order. Kept exact, that is one invocation a path walking that path's rays in
+     order, from a record each (direction, distance, the light to add: 32 bytes), so
+     pixels x (lights + 3) records: 60 MB at 640 x 360 with 5 lights, but 6.7 GB with
+     `lamp-field`'s 900, past any buffer. Options: rounds over part of the queue at a time
+     (a slice sized to the buffer); or point lights chosen one a vertex (which changes the
+     estimator, so the images, and wants the light BVH on the GPU first: phase 4). To
+     decide once the M2 says whether the shading kernel's size still costs.
+   - Shading by material kind: hits sorted into a queue each (escaped, emitter, each
+     kind), a kernel each; the random numbers drawn in the same order, so images and the
+     GPU-against-CPU-build tests hold. The queue buffer has room for more sides.
+   - The traversal's stack: 64 entries and as many entry distances, 512 bytes a thread.
 
    Mesh intersection, the other large speedup. Known (the shader's `trace`, `bvh.rs`): a
    binary SAH BVH, leaves of up to 8; a per-thread stack of 100 in a local array (likely
@@ -1467,17 +1519,46 @@ UI, file IO and rayon's threads would follow.
       none; the M2 has no ray tracing hardware, the M3 does).
    1-4 apply to the current kernels, and come first.
 
-   Measured (step 1; `bench_passes`, GPU time a pass at 640 x 360 on the M2, the fastest of
-   three, as macOS's own work loads the machine): demo 22.8 ms, instances 39.6, glossy-sun
-   18.9, spheres 7.7 (after paths that have ended stopped reading and writing in later
-   rounds: 26.9, 40.0, 21.1, 9.3 before). Per ray, from the shader's CPU build: demo 3.3 box
-   and 1.3 triangle tests (its teapot is small; most rays hit the plane, tested first, or
-   escape), instances 21.4 and 2.3, glossy-sun 3.3 and 1.7. Where the time goes: the demo's
-   first round (bounce and sky) 8.5 ms, its nine later rounds 14 ms, though paths average two
-   vertices: about 0.8 ms a dispatch of a large kernel over every pixel, idle or not (reading
-   only an ended path's flags changed nothing, so not memory). Instances: its first round
-   20 ms, traversal-bound. So queues with indirect dispatch (above) come before intersection
-   for most scenes; intersection (2-4) for scenes of many triangles, as instances.
+   Measured first on the M2, before the queues and this work (`bench_passes`, since dropped
+   for `measure_traversal`; GPU time a pass at 640 x 360, the fastest of three): demo 22.8 ms,
+   instances 39.6, glossy-sun 18.9, spheres 7.7. The demo's first round (bounce and sky) took
+   8.5 ms and its nine later rounds 14 ms, though its paths average two vertices: about 0.8 ms
+   a dispatch of a large kernel over every pixel, idle or not (reading only an ended path's
+   flags changed nothing, so not memory traffic). That cost is what the queues remove;
+   instances' first round, 20 ms, was traversal-bound.
+
+   Done, on #114: 1, 2 and 4. Measured on the kernel's CPU build (`pathtrace::stats`,
+   `gpu::tests::measure_traversal`; the GPU runs the same code, so does the same work), box
+   tests and primitive tests a ray at 160 x 90, before and after:
+
+   | Scene      | primitives | tree depth | boxes before | after | primitives before | after |
+   |------------|-----------:|-----------:|-------------:|------:|------------------:|------:|
+   | demo       |        993 |         14 |          3.3 |   4.1 |               1.3 |   1.3 |
+   | instances  |    126,401 |         24 |         21.3 |  20.3 |               2.3 |   2.1 |
+   | glossy-sun |          5 |          3 |          3.3 |   3.2 |               1.7 |   1.7 |
+   | spheres    |          4 |          3 |          2.3 |   2.6 |               1.4 |   1.4 |
+
+   - Ordered traversal: the node buffer holds interior nodes only, each with its two
+     children's boxes (64 bytes; leaves have no node). A ray tests both at one visit, descends
+     into the nearer, and stacks the farther, with the distance at which it enters it, only if
+     it does; a stacked child is dropped unvisited if something nearer was hit meanwhile.
+   - What it bought is not fewer box tests, which stay about the same (the old traversal
+     already skipped boxes beyond the best hit, when it popped them), but half as many node
+     fetches and loop iterations (two boxes a fetch), and a few fewer primitive tests where
+     there is depth to order. A child that isn't there (a tree of one leaf) is `NO_CHILD`: no
+     box says "nothing", since the slab test lets every ray into an inverted one, which made
+     the first version loop forever on such trees (found on the CPU build;
+     `test_traversal_matches_brute_force` now covers trees of none, one leaf and many).
+   - The stack is 64 entries (one a level of interior nodes) and as many entry distances, from
+     100 entries: 512 bytes a thread from 400. So not smaller, as step 4 meant it to be. To
+     do: pack the distance's ordering into the entry, or re-test instead of storing it.
+   - Images are unchanged: pixel-identical at 320 x 180, 8 spp on instances, demo and
+     glossy-sun (old kernel against new, the same random numbers).
+   - Timed only on llvmpipe (software Vulkan, 4 cores; no GPU in the container): a sample at
+     320 x 180, median of 3, instances 94.8 -> 84.9 ms, demo 48.6 -> 40.9 ms, with run-to-run
+     spread as large as the difference. The WGSL grew from 772 KB to 816 KB. To measure on the
+     M2 and in a browser on a real GPU before building on it (`scripts/benchmark-gpu.sh`).
+   - Still to do of 1: a pass's time with shading off.
 3. The fallback framework: per-area status, classification, CPU queues for materials first,
    then intersection. Exit: every flattenable demo scene plus at least one with a
    procedural shape and one with an unported material renders through the GPU path with CPU
@@ -1500,3 +1581,208 @@ they can render, and timings on the Mac's GPU and in a browser, not only on lava
 - Whether to split PR #123 into per-chapter PRs for review.
 - f32 for the CPU wavefront integrator when it shares the kernels, or generic kernels.
 - WGSL generated at build time (recommended) or translated by naga in the browser.
+
+## 13. A scheduler: one owner for queues, pixel completion and CPU work
+
+Status: step 1 done (#114). The design, and the reading behind it, live with the code, in
+`src/scheduler.rs`'s module documentation: keep them there as the steps land, and this
+section to what is planned and what was measured.
+
+Goal: one component that decides what work runs next, where, and in what order, in place of
+the four loops that each decide for themselves today. It starts as a small piece of host code
+and grows into what keeps batches coherent in the data they touch.
+
+### Known: who schedules what today
+
+- `rendercontext::render` (the recursive tracer): regions by passes; `next_pass` decides each
+  region's pixels from their noise (`adaptive::active`). The only place pixel completion
+  exists.
+- `wavefront::integrator`: batches of 4,096 paths a thread, each through every stage; a
+  queue a stage, shading sorted by material kind.
+- `gpu`: a pass is sample k of every pixel; rounds over the queue of live paths, sized on the
+  GPU by the queue's own count (section 12). It has no pixel completion: every pixel takes
+  every pass (it reports made-up sums of squares, `squares_at_least`), so `"adaptive"` does
+  nothing there. A scene it can't flatten falls back whole.
+- The scene builder (`web/app.js`): layers shared between workers, render servers and the GPU
+  worker by layer number.
+
+What makes a scheduler possible is already true everywhere: sample k of pixel p has its own
+random stream, so an image doesn't depend on when or where a sample is traced. Every step
+below must keep that, and test it: the same pixels from any two policies.
+
+### The model
+
+- Work item: a path (pixel, sample index, state), as `PathState` is.
+- Queue: paths waiting for one stage on one resource. Stages: generate, intersect, shade (by
+  material kind), shadow, sky, accumulate. Resource: what the batch must have at hand (a
+  mesh or instance's tree, a texture, a medium's grid, a kernel).
+- Executor: something that drains a queue: a GPU kernel, CPU code (the kernel crate's CPU
+  build, or the renderer's own for what isn't ported: section 12's phase 3), later a render
+  server. Each has a capacity and a cost to reach (a readback, a network hop).
+- Policy: which queue next, how much of it, on which executor, in what order within it.
+- Film: per pixel its sum, sum of squares and count; a pixel is complete when its noise is
+  low enough or it has its samples. Generation draws only from pixels that aren't.
+
+Two rates, which the design has to respect: decisions within a pass (which paths are in
+which queue) are made on the GPU, from data, as the queue counts already are, since the host
+can't see a count without a readback, which in a browser is a frame late. Decisions between
+passes (which pixels, which samples, what goes to the CPU or a server, what is loaded) are
+the host's.
+
+### Steps, small to large
+
+1. Pixel completion on the GPU. Done: `scheduler::plan` decides which pixels take samples
+   next and how many, for the recursive tracer (`RenderContext::next_pass`, unchanged in what
+   it decides) and now the GPU (`GpuRenderer::render`), a region at a time from the film
+   alone. `add_paths` accumulates each pixel's sum of squares beside its sum; a pass's first
+   queue holds only the pixels the plan names, each with its own next sample
+   (`dispatch_samples`), so `"adaptive"` works on the GPU, and `main` no longer sends such
+   scenes to the path tracer.
+   - Verified: `test_samples_adaptively` (quiet pixels stop, the picture is the fully
+     sampled one's within 3%, a render stopped at 16 samples and resumed equals an
+     uninterrupted one pixel for pixel); without adaptive sampling images are pixel-identical
+     to before, and 8 samples resumed to 16 equal a fresh 16.
+   - Measured on demo.json, 320 x 180, a target of 64 samples and a threshold of 0.03: 24.2
+     samples a pixel on average (16 to 64), 7.7M rays against 19.2M, mean FLIP 0.017 against
+     the full render.
+   - Known limits: the plan is made once for 8 passes (`PASSES_PER_READ`), as each needs
+     the film read back, so a pixel may take up to 7 samples more than it needed; the
+     browser's renderer (`web/src/lib.rs`) still gives every pixel every pass.
+2. One vocabulary. Done: `scheduler::Stage` names the stages the CPU's wavefront integrator
+   and the GPU's kernels share, and `scheduler::Stats` counts each stage's batches, paths and
+   (where it can be told) time, and the paths alive at each round; both renderers record into
+   it and a render prints it at the end. On the GPU the rounds' counts are the queues' headers,
+   copied aside between rounds (no kernel changed), and time is the whole device's, as
+   splitting it by kernel needs timestamp queries. There is no `Queue` or `Batch` type yet: a
+   batch is a count, and the types can come with the first policy that moves one (step 3).
+   Images are unchanged (GPU: 5 scenes pixel for pixel). First readings, demo.json at 320 x 180,
+   16 spp: the two renderers agree that 21% of path-rounds have a live path (100, 100, 4, 2,
+   1, 1, 0... % by round), instances.json 57%; on the CPU, of 1.67 s across threads, shading
+   takes 52%, emission (the sky) 20%, shadow rays 10%, intersection 9%, camera rays 10%; a
+   batch of 4096 paths is 1159 on average by intersection and 603 by shading, so the
+   by-material sort is already working on small batches.
+3. The CPU queue (section 12, phase 3). After intersection a path whose material or shape
+   the GPU lacks goes to a queue the host reads back, runs on the CPU and writes back for
+   the next stage. The scheduler sets how often (latency against batch size) and may hold
+   such paths over to a later pass rather than stall the GPU's.
+   - Done, the CPU's side: a material that isn't data no longer stops a scene flattening.
+     It is `FlatMaterial::Host`, and the wavefront integrator's shading stage hands its
+     paths, sorted last, to the scene's own material (`integrator::host_bounce`, following
+     `trace::trace_sample`; the path lends the thread its sampler and regularisation state),
+     counted as `Stage::Host`. Emitters must still be data (the stages' light sampling has to
+     know them), and shapes must still flatten. 12 more demo scenes flatten (51 of 93;
+     bumps, textures, pbrt-materials, rocks, the noise media, the moons and worlds).
+     Verified: `test_host_materials_agree_with_the_path_tracer` (layered, rough glass and a
+     texture among ported materials, under a sun, a point light, an area light and a sky,
+     within 5% a tile), and at 160 x 90, 64 spp against the path tracer: mean FLIP 0.013 to
+     0.030 on bumps, textures, pbrt-materials, rocks and noise-simple-demo, and moon.json
+     and worlds.json pixel for pixel (one deterministic vertex, the same Sobol' points).
+     The host's share of the time is now a number: textures.json 6.6 s of host shading for
+     1.3M vertices, 5 us each.
+   - Done, the GPU's side (natively; `gpu::host` has the design): `shade` stops a path at a
+     `MAT_HOST` material (`PATH_HOST`, keeping its hit) and `bounce_paths` appends it to a
+     third queue in the queue buffer (`HOST_QUEUE`; no new binding). After a pass's rounds
+     the host reads the queue and the paths back (`GpuRenderer::block_with_host`), shades
+     each vertex in parallel with `integrator::host_vertex` (the hit refound in f64 on the
+     kernel's primitive; a Sobol' point keyed by pixel, sample and depth), writes the paths
+     back, and runs the rounds again over those that go on, until none waits. A new flag,
+     `PATH_LIGHTS_COUNTED`, carries `LightSampling::Exclusive` to the next vertex.
+     Verified on lavapipe: `test_host_shades_what_the_kernels_cant` (the wavefront
+     integrator's picture within 5% a tile; also through the WGSL), scenes without host
+     materials pixel for pixel as before (5 scenes) and in a browser (FLIP 0.0025 against
+     native), and at 160 x 90, 64 spp against the path tracer: mean FLIP 0.0135 rocks, 0.030
+     bumps, 0.029 pbrt-materials, 0.023 textures, each the same as the wavefront
+     integrator's.
+   - Measured (llvmpipe, so the device's times mean little): textures.json, 64 passes: 384
+     reads of the host's queue (6 a pass), 1.31M host vertices in 1.0 s of wall time,
+     against 2.07M path-rounds on the device in 1.2 s.
+   - Not yet: in a browser (a pass there is queued without waiting on the device; the host
+     loop needs the page's pass to be asynchronous, and the scene's files and the scene
+     itself in the GPU worker, which it has); shapes the kernels lack (intersection on the
+     host: a queue before `intersect_paths`, and a host that can trace); reading back only
+     the waiting paths (the whole paths buffer is copied each time: 96 bytes a pixel);
+     any policy (every pass drains after its rounds, and the device idles meanwhile).
+4. Regeneration and width. A path's sample index moves from the pass's parameters into the
+   path, so a slot freed by a finished path takes a new sample at once and the wavefront
+   stays full (van Antwerpen; Laine et al.), within a memory budget for the wavefront.
+   - Regeneration: built, measured, set aside (`scheduler`'s "the wavefront's width" has
+     the argument). A kernel at the end of each round added finished paths to the image and
+     started their pixels' next samples from camera rays the host had laid out, the host
+     asking the device between runs of rounds whether any path was left. Pixel for pixel
+     the same images; but with one path a pixel a block waits for its slowest pixel, so
+     demo.json (320 x 180, 64 spp) took 652 rounds against 640, and 4.66 s against 3.95 s;
+     instances.json 8.6 s against 7.0 s; and a host material's pixel still needs a read of
+     the device for every sample. Saving the rounds needs slow pixels to run on into the next
+     block, so a film that is never whole, which adaptive sampling and resuming rest on.
+   - Width: done. A pass carries up to 8 samples of every pixel at once, each in a lane
+     (`pathtrace::slots`: slot `lane * pixels + pixel` of the paths, the sky queries and the
+     queues; `add_paths` adds a pixel's lanes in order, so the sums are those of single
+     passes), as many as `WAVEFRONT_BUDGET` (256 MB at 204 bytes a slot) has room for: 8 up
+     to about 400 x 400, 1 from 1280 x 720. `scheduler::lanes` decides. Verified: the GPU's
+     tests; images pixel for pixel as before (5 scenes at 8 spp, 4 at 64). Measured
+     (llvmpipe, 320 x 180, 64 spp, against one lane): 80 rounds for 640; the device's time
+     2.06 s for 2.33 s on demo.json, 1.88 for 2.21 on glossy-sun.json, 4.01 for 5.23 on
+     instances.json.
+   - Scenes with host materials: at first kept to one lane, as with 8 textures.json read
+     the device 48 times for 384 but took 8.5 s for 7.0 s, each read copying every lane's
+     paths to reach those waiting. Done since: the waiting paths are gathered by a kernel
+     and the shaded ones scattered back by another (`gather_host`, `scatter_host`,
+     dispatched over the host's queue, whose header now keeps its dispatch's size as the
+     sides' do), so a read is the size of the work, and these scenes take every lane too.
+     Pixel for pixel as before; 320 x 180, 64 spp on llvmpipe, against one lane and whole
+     reads: rocks.json 9.4 s for 11.7 s, bumps.json 8.1 for 10.5, pbrt-materials.json 7.0
+     for 9.8, textures.json 7.5 for 7.3 (every path's first vertex is the host's there).
+   - In a browser: the scene builder's GPU worker queues a frame's samples in one pass
+     (`Renderer::advance`), where the wavefront has the lanes. Checked in headless Chromium
+     (the page's GPU, an edit, an orbit, a pick, a refused scene); not timed there.
+   - Not yet: the budget from the device's memory rather than a constant; host materials
+     in a browser. The second needs a decision first: there the host's shading would run on
+     the GPU worker's one thread, while the page's CPU workers, which can shade those
+     vertices in parallel, sit idle or render the whole picture themselves. That is two
+     executors for one queue, which is what the scheduler's model is for, and the page's
+     side of it (`web/app.js`) has to be part of the design.
+5. Order within and between queues. Shading queues by material kind, and a sort key inside
+   a queue (kind, then texture, then mesh and face, as Eisenacher et al.; or a ray's origin
+   and direction). To measure before adopting: Meister et al. find reordering makes tracing
+   1.3 to 2 times faster on recent GPUs, but that its own cost is hard to win back.
+6. Resources. Queues keyed by what they need, and a resident set with a budget (textures
+   and meshes on the GPU, files fetched in a browser, assets a render server has): run the
+   queues whose data is at hand, load for the fullest of the rest (Pharr et al.; Navrátil
+   et al.; Budge et al.). This is where instancing on the GPU (a tree a mesh under a tree
+   of instances, section 12) and textures as loadable units come in, and where servers are
+   chosen by the assets they hold, not by layer number.
+
+### Open questions
+
+- Does the CPU wavefront integrator move onto the same scheduler (section 12's phase 5), or
+  only share its vocabulary?
+- The wavefront's memory budget, and who sets it (the device's limits, the scene, the user).
+- Whether a pass remains a unit at all once paths regenerate (resumable renders save per
+  pixel counts, which survive it; the GPU's pass-indexed random numbers would need the
+  index per path).
+
+### Reading (verified to exist as cited; contents from their abstracts only)
+
+- Laine, Karras, Aila, "Megakernels Considered Harmful: Wavefront Path Tracing on GPUs", HPG
+  2013, doi:10.1145/2492045.2492060. Stage kernels and queues; the case for sorting work.
+- van Antwerpen, "Improving SIMD Efficiency for Parallel Monte Carlo Light Transport on the
+  GPU", HPG 2011, doi:10.1145/2018323.2018330. Stream compaction with sample regeneration.
+- Pharr, Kolb, Gershbein, Hanrahan, "Rendering Complex Scenes with Memory-Coherent Ray
+  Tracing", SIGGRAPH 1997, doi:10.1145/258734.258791. Reordering the work by what is in
+  the cache; geometry and textures created lazily.
+- Navrátil, Fussell, Lin, Mark, "Dynamic Ray Scheduling to Improve Ray Coherence and
+  Bandwidth Utilization", IEEE Symposium on Interactive Ray Tracing 2007,
+  doi:10.1109/RT.2007.4342596. Traversal as a scheduling problem; memory-to-cache bandwidth.
+- Budge, Bernardin, Stuart, Sengupta, Joy, Owens, "Out-of-core Data Management for Path
+  Tracing on Hybrid Resources", Computer Graphics Forum 28(2) (Eurographics 2009),
+  doi:10.1111/j.1467-8659.2009.01378.x. A scheduling and data-management layer under a path
+  tracer, over CPUs and GPUs together.
+- Eisenacher, Nichols, Selle, Burley, "Sorted Deferred Shading for Production Path
+  Tracing", Computer Graphics Forum 32(4) (EGSR 2013), doi:10.1111/cgf.12158. Large sorted
+  ray batches, shading deferred until hits are sorted, for coherent texture access.
+- Lee, Green, Xie, Tabellion, "Vectorized Production Path Tracing", HPG 2017. Queues that
+  keep vector lanes full and data coherent, on the CPU.
+- Meister, Bokšanský, Guthe, Bittner, "On Ray Reordering Techniques for Faster GPU Ray
+  Tracing", I3D 2020, doi:10.1145/3384382.3384534. What reordering gains and costs.
+- Pharr, Jakob, Humphreys, "Physically Based Rendering", 4th ed., chapter 15 (already the
+  basis of `wavefront` and `gpu`).

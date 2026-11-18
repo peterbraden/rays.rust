@@ -17,6 +17,11 @@ extern crate rustfft;
 
 
 pub mod assets;
+pub mod scheduler;
+pub mod schema;
+#[cfg(feature = "cli")]
+pub mod server;
+pub mod preview;
 pub mod ray;
 pub mod color;
 pub mod spectrum;
@@ -147,3 +152,8 @@ pub mod environment;
 pub mod sobol;
 pub mod planet;
 pub mod celestial;
+
+/// Parse JSON, for callers that don't depend on `serde_json` themselves. Panics if invalid.
+pub fn serde_json_from_str(s: &str) -> serde_json::Value {
+    serde_json::from_str(s).unwrap_or_else(|e| panic!("Invalid JSON: {}", e))
+}

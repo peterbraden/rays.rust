@@ -1039,6 +1039,7 @@ impl MultipleScattering {
 ///   altitude (how soon they reach the ground), and they are rarely seen, being mostly hidden by
 ///   geometry.
 /// - The sun is fixed for the scene, so it needs no dimension of its own.
+#[derive(Clone)]
 pub struct SkyViewLUT {
     width: usize,
     height: usize,
@@ -1128,9 +1129,33 @@ pub struct LUTSky {
     moonlit: Option<Box<LUTSky>>,
 }
 
+/// The table most recently built, with the description of the sky it was built for.
+///
+/// An editor rebuilds the scene after every change, and the table is by far the slowest part
+/// of a simple scene to build (over a second on one thread), though few edits touch the sky.
+static LAST_LUT: std::sync::Mutex<Option<(String, std::sync::Arc<SkyViewLUT>)>> = std::sync::Mutex::new(None);
+
 impl LUTSky {
     pub fn new(sky: SkyMaterial) -> LUTSky {
         let lut = SkyViewLUT::build(&sky.rgb_air(), LUT_WIDTH, LUT_HEIGHT);
+        LUTSky { sky, lut, spectral_luts: std::sync::OnceLock::new(), moonlit: None }
+    }
+
+    /// As `new`, reusing the last table built if it was for the same `description` (the sky's
+    /// scene file entry: everything the table depends on comes from it).
+    pub fn cached(sky: SkyMaterial, description: &str) -> LUTSky {
+        let cached = LAST_LUT.lock().unwrap().as_ref()
+            .filter(|(d, _)| d == description)
+            .map(|(_, lut)| lut.clone());
+        // Built outside the lock: the build is a parallel loop (see the note on `LUTSky`).
+        let lut = match cached {
+            Some(lut) => (*lut).clone(),
+            None => {
+                let lut = SkyViewLUT::build(&sky.rgb_air(), LUT_WIDTH, LUT_HEIGHT);
+                *LAST_LUT.lock().unwrap() = Some((description.to_string(), std::sync::Arc::new(lut.clone())));
+                lut
+            },
+        };
         LUTSky { sky, lut, spectral_luts: std::sync::OnceLock::new(), moonlit: None }
     }
 
@@ -1320,7 +1345,7 @@ pub fn create_sky_sphere(o: &Value) -> SceneObject {
     let sky = parse_sky_material(o);
     // The lookup table is on by default; "lut": false integrates every ray exactly.
     let m: Box<dyn MaterialModel + Sync + Send> = if o["lut"].as_bool().unwrap_or(true) {
-        let sky = LUTSky::new(sky);
+        let sky = LUTSky::cached(sky, &o.to_string());
         // Lit by a moon too (set by the scene, `celestial::moon::Moonlight`).
         Box::new(match o.get("moonlight") {
             Some(m) => sky.moonlit(SceneFile::parse_vec3(&m["direction"]), SceneFile::parse_number(&m["share"], 0.)),
@@ -1361,7 +1386,7 @@ pub fn parse_sky_material(o: &Value) -> SkyMaterial {
     let rayleigh_thickness = SceneFile::parse_number(&o["rayleigh_thickness"], preset.rayleigh_thickness);
     let mie_thickness = SceneFile::parse_number(&o["mie_thickness"], preset.mie_thickness);
     
-    SkyMaterial {
+    let sky = SkyMaterial {
         earth: Sphere::new(
             earth_location,
             SceneFile::parse_number(&o["earth_radius"], 6360e3),
@@ -1384,8 +1409,24 @@ pub fn parse_sky_material(o: &Value) -> SkyMaterial {
         ms_table: std::sync::OnceLock::new(),
         spectral_ms: std::sync::OnceLock::new(),
         crepuscular_rays: o["crepuscular_rays"].as_bool().unwrap_or(false),
-    }.with_tables()
+    };
+    // Reuse the tables last built, if they were for this same description (see `LAST_LUT`).
+    let description = o.to_string();
+    let cached = LAST_TABLES.lock().unwrap().as_ref().filter(|t| t.0 == description).cloned();
+    if let Some((_, sun, multiple)) = cached {
+        if let Some(t) = sun { let _ = sky.sun_table.set(t); }
+        if let Some(psi) = multiple { let _ = sky.ms_table.set(MultipleScattering { psi }); }
+        return sky.with_tables();
+    }
+    let sky = sky.with_tables();
+    *LAST_TABLES.lock().unwrap() = Some((description, sky.sun_table.get().cloned(), sky.ms_table.get().map(|m| m.psi.clone())));
+    sky
 }
+
+/// The sun and multiple scattering tables most recently built, with the description of the sky
+/// they were built for.
+type SkyTables = (String, Option<Vec<Depths>>, Option<Vec<Vector3<f64>>>);
+static LAST_TABLES: std::sync::Mutex<Option<SkyTables>> = std::sync::Mutex::new(None);
 
 #[cfg(test)]
 mod tests {

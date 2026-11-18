@@ -138,7 +138,44 @@ fn peak_memory() -> Option<u64> {
     None
 }
 
+/// rays serve: run as a render server, and host the scene builder
+#[derive(Parser, Debug)]
+#[command(name = "rays serve", about = "Serve the scene builder, and render layers for it over HTTP", long_about = None)]
+struct ServeArgs {
+    ///Port to listen on
+    #[arg(long, default_value_t = 8787)]
+    port: u16,
+
+    ///Address to listen on. The default is this machine only; 0.0.0.0 listens on every
+    ///network interface, for other machines to use this one. There is no authentication
+    #[arg(long, default_value = "127.0.0.1")]
+    bind: String,
+
+    ///Directory to serve files from, and that scenes' asset paths are relative to
+    #[arg(long, default_value = ".")]
+    root: String,
+
+    ///Origin of a page allowed to call the render API, eg. https://user.github.io. May be
+    ///repeated. Pages served from this machine are always allowed
+    #[arg(long)]
+    allow_origin: Vec<String>,
+}
+
 fn main() {
+    // `rays serve ...` is a different program from `rays <scene>`: it has its own options.
+    if std::env::args().nth(1).as_deref() == Some("serve") {
+        let a = ServeArgs::parse_from(std::env::args().skip(1));
+        if let Err(e) = std::env::set_current_dir(&a.root) {
+            eprintln!("Can't use {} as the root: {}", a.root, e);
+            std::process::exit(1);
+        }
+        let root = std::env::current_dir().unwrap();
+        if let Err(e) = rays::server::serve(rays::server::Options { bind: a.bind, port: a.port, root, allow_origins: a.allow_origin }) {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
     let args = Args::parse();
 
     println!("{}",
@@ -184,10 +221,11 @@ fn main() {
         });
     }
     // The wavefront integrator's and the GPU's samples differ from the path tracer's: a saved
-    // state is one's. Neither samples adaptively, so then the path tracer renders.
+    // state is one's. The wavefront integrator doesn't sample adaptively, so then the path
+    // tracer renders; the GPU does (`scheduler::plan`).
     let key = rendercontext::render_key(&contents, (args.width, args.height, args.seed))
         ^ if args.wavefront && s.render.adaptive.is_none() { 0x7761_7665_6672_6f6e } else { 0 }
-        ^ if args.gpu && s.render.adaptive.is_none() { 0x6770_7500_0000_0001 } else { 0 };
+        ^ if args.gpu { 0x6770_7500_0000_0001 } else { 0 };
     if !args.fresh && std::path::Path::new(&state_path).exists() {
         match rc.load_state(&state_path, key) {
             Ok(()) => println!("- Resuming from {:.1} samples per pixel on average, {} at least ({})",
@@ -240,11 +278,9 @@ fn main() {
     if args.gpu {
         s.render.gpu = true;
     }
-    if s.render.wavefront && s.render.adaptive.is_some() {
-        let which = if s.render.gpu { "The GPU and the wavefront integrator don't" } else { "The wavefront integrator doesn't" };
-        println!("- {} sample adaptively; rendering with the path tracer", which);
+    if s.render.wavefront && !s.render.gpu && s.render.adaptive.is_some() {
+        println!("- The wavefront integrator doesn't sample adaptively; rendering with the path tracer");
         s.render.wavefront = false;
-        s.render.gpu = false;
     }
     let flat = if s.render.wavefront {
         match wavefront::flat::FlatScene::build(&s) {
@@ -274,6 +310,18 @@ fn main() {
             },
         },
         _ => None,
+    };
+    // Without the GPU, an adaptively sampled scene is the path tracer's: the wavefront
+    // integrator the GPU would fall back to doesn't sample adaptively.
+    #[cfg(feature = "gpu")]
+    let gpu_missing = gpu.is_none();
+    #[cfg(not(feature = "gpu"))]
+    let gpu_missing = true;
+    let flat = if gpu_missing && flat.is_some() && s.render.adaptive.is_some() {
+        println!("- The wavefront integrator doesn't sample adaptively; rendering with the path tracer");
+        None
+    } else {
+        flat
     };
     #[cfg(not(feature = "gpu"))]
     if s.render.gpu {
@@ -317,7 +365,7 @@ fn main() {
     };
     if on_gpu {
         #[cfg(feature = "gpu")]
-        gpu.as_mut().unwrap().render(&s, &rcmtx, after_pass);
+        gpu.as_mut().unwrap().render(&s, flat.as_ref().unwrap(), &rcmtx, after_pass);
     } else if let Some(flat) = &flat {
         wavefront::integrator::render(&s, flat, &rcmtx, |rc| {
             pb.set_position(rc.progress_percentage(&s) as u64);

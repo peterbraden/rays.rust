@@ -516,7 +516,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams) -> SceneObject {
     }
     built.reverse();
 
-    let start = std::time::Instant::now();
+    let start = web_time::Instant::now();
     let planet = Planet::new(params.planet.clone());
     if let Some(path) = o["planet_map"].as_str() { crate::terrain::map::write_planet_map(&planet, path, 2048); }
     let layers = Arc::new(built);

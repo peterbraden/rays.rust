@@ -43,10 +43,35 @@ const ENV_HEIGHT: usize = 512;
 const VISIBILITY_SCALE: usize = 8;
 /// Passes between reading the accumulated image back.
 const PASSES_PER_READ: usize = 8;
-const WORKGROUP: u32 = 64;
-const MAX_GROUPS: u32 = 65535;
+
+/// The most memory for the wavefront: the paths, their sky queries and their places in the
+/// queues, for every lane (`pathtrace::slots`). It sets how many samples of each pixel a pass
+/// may carry at once (`GpuRenderer::lanes`): 8 of a small image, one of a large.
+const WAVEFRONT_BUDGET: u64 = 256 << 20;
+
+/// Runs of rounds between reads whose rounds are counted (`GpuRenderer::rounds_buffer`): a
+/// pass's, and each run after the host has shaded the paths that waited for it (`host`). Runs
+/// beyond these go uncounted, not unrendered.
+const COUNTED_PASSES: usize = 256;
+
+/// What the host is keeping about the passes queued since the image was last read
+/// (`scheduler::Stats`, and what completes it at the read).
+#[derive(Default)]
+struct Block {
+    stats: crate::scheduler::Stats,
+    /// Runs of rounds queued whose rounds are being counted, and which of them followed the
+    /// host's shading: those count towards the stages' work, but not the paths alive by
+    /// round, which is of a pass's first run.
+    counted: usize,
+    after_host: Vec<usize>,
+    /// When the first of them was queued, and the host's own time in them since.
+    started: Option<web_time::Instant>,
+    host_seconds: f64,
+}
 
 // The buffers' layouts are the shader crate's own (`shaders/pathtrace`), so the two can't drift.
+pub mod host;
+
 use pathtrace::{CameraRay as GpuRay, Light as GpuLight, Material as GpuMaterial, Node as GpuNode, Params, PathState, Prim as GpuPrim, SkyQuery};
 use pathtrace::glam::{UVec4, Vec4};
 
@@ -80,6 +105,8 @@ fn push_material(m: &FlatMaterial, out: &mut Vec<GpuMaterial>) -> u32 {
             let b = push_material(m2, out);
             GpuMaterial { kind: pathtrace::MAT_CHECKER, a, b, p: Vec4::new(0., 0., *xsize as f32, *zsize as f32), ..blank }
         },
+        // The kernels stop a path here for the host (`host`).
+        FlatMaterial::Host { object } => GpuMaterial { kind: pathtrace::MAT_HOST, a: *object, ..blank },
     };
     out[index as usize] = g;
     index
@@ -105,13 +132,6 @@ fn env_direction(x: usize, y: usize) -> Vector3<f64> {
     let v = (y as f64 + 0.5) / ENV_HEIGHT as f64;
     let (phi, theta) = ((u - 0.5) * 2. * PI, v * PI);
     Vector3::new(theta.sin() * phi.cos(), theta.cos(), theta.sin() * phi.sin())
-}
-
-/// The sum of the squares of `n` samples summing to `c`, as far as the GPU tells: it keeps
-/// only sums, so the least they can be (were the samples equal). Only adaptive sampling reads
-/// them, and the GPU doesn't sample adaptively (`main` renders such scenes with the path tracer).
-pub fn squares_at_least(c: &Color, n: usize) -> Color {
-    Color { rgb: c.rgb.component_mul(&c.rgb) / n.max(1) as f64 }
 }
 
 /// Append `air` (and its moonlit copy) to `tables` as the shader's record (`pathtrace::AIR_*`),
@@ -213,20 +233,64 @@ fn space_record(tables: &mut Vec<f32>, space: &crate::procedural::space::Space) 
 pub struct GpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    /// The two kernels a pass alternates: a vertex of every path, then the light its sky queries
-    /// find (`pathtrace::bounce_paths`, `answer_sky`).
+    /// A round's three kernels, each over the queue of paths still alive: what each path's ray
+    /// hits, the rest of its vertex there, then the light its sky queries find
+    /// (`pathtrace::intersect_paths`, `bounce_paths`, `answer_sky`); and the one that ends a
+    /// pass, adding every path to the image (`add_paths`).
+    intersect_pipeline: wgpu::ComputePipeline,
     bounce_pipeline: wgpu::ComputePipeline,
     sky_pipeline: wgpu::ComputePipeline,
-    bind_group: wgpu::BindGroup,
+    add_pipeline: wgpu::ComputePipeline,
+    /// The scene and the paths, for rounds reading the queue's side 0 and its side 1: they
+    /// differ in their parameters (`Params::seed.z`).
+    round_groups: [wgpu::BindGroup; 2],
+    add_group: wgpu::BindGroup,
     params: Params,
-    params_buffer: wgpu::Buffer,
+    params_buffers: [wgpu::Buffer; 2],
+    /// The two queues of paths (`pathtrace::queue`), and the buffer each round's dispatch is
+    /// read from: the header of the queue it reads, copied there, as a buffer bound for
+    /// writing can't also be a dispatch's arguments. `empty_header` resets a side.
+    queue_buffer: wgpu::Buffer,
+    dispatch_buffer: wgpu::Buffer,
+    empty_header: wgpu::Buffer,
     paths_buffer: wgpu::Buffer,
     accum_buffer: wgpu::Buffer,
+    /// For the scheduler's measurements (`scheduler::Stats::live`): the paths alive at the
+    /// start of each round after the first, of each pass since the last read. The count is in
+    /// the header of the queue a round reads, and a copy between rounds keeps it; nothing in
+    /// the kernels knows. A word a round, `rounds()` a pass, for `COUNTED_PASSES` passes.
+    rounds_buffer: wgpu::Buffer,
+    /// The image, then the rounds, read together.
     readback: wgpu::Buffer,
+    /// Where the scene has materials the host shades (`host`): what serves its queue.
+    host_queue: Option<HostQueue>,
+    /// The most samples of each pixel a pass may carry at once (`pathtrace::slots`): what the
+    /// wavefront's buffers have room for, within `WAVEFRONT_BUDGET`.
+    pub lanes: usize,
+    block: Mutex<Block>,
     pub adapter_name: String,
 }
 
-/// The depth of an exported BVH (`Bvh::export`): one for a lone leaf.
+/// What serves the host's queue (`host`; `GpuRenderer::serve_host`): the kernels that gather
+/// the waiting paths side by side and scatter them back once shaded (`pathtrace::gather_host`,
+/// `scatter_host`), the buffer they are gathered in, the dispatch over the host's queue (a
+/// copy of its header), and what is read: that header, then the gathered paths.
+struct HostQueue {
+    gather: wgpu::ComputePipeline,
+    scatter: wgpu::ComputePipeline,
+    /// The paths, the queues and `gathered`; the second with the parameters under which a
+    /// kernel's appends go to side 0 of the queue, where the next rounds begin.
+    groups: [wgpu::BindGroup; 2],
+    gathered: wgpu::Buffer,
+    dispatch: wgpu::Buffer,
+    readback: wgpu::Buffer,
+    /// How many paths to read with the header, before their number is known: somewhat more
+    /// than waited last time. (More waiting than that takes a second read.)
+    guess: std::sync::atomic::AtomicUsize,
+}
+
+/// The depth of an exported BVH (`Bvh::export`), leaves included: one for a lone leaf. The
+/// shader's stack needs an entry for each level of interior nodes, which is one fewer.
 fn bvh_depth(nodes: &[(crate::shapes::bbox::BBox, u32, u32)]) -> usize {
     if nodes.is_empty() {
         return 0;
@@ -244,6 +308,52 @@ fn bvh_depth(nodes: &[(crate::shapes::bbox::BBox, u32, u32)]) -> usize {
     deepest
 }
 
+/// The BVH as the shader traverses it: its interior nodes alone, each with its two children's
+/// boxes (`pathtrace::Node`), the root first. A tree that is a single leaf gets a root with
+/// that leaf as its only child; no tree at all, a root no ray enters.
+fn gpu_nodes(exported: &[(crate::shapes::bbox::BBox, u32, u32)]) -> Result<Vec<GpuNode>, String> {
+    use pathtrace::glam::Vec3;
+    // Children that aren't there.
+    let none = pathtrace::NO_CHILD;
+    let empty = GpuNode { amin: Vec3::ZERO, a: none, amax: Vec3::ZERO, a_count: 0, bmin: Vec3::ZERO, b: none, bmax: Vec3::ZERO, b_count: 0 };
+    let corners = |b: &crate::shapes::bbox::BBox| (Vec3::new(b.min.x as f32, b.min.y as f32, b.min.z as f32), Vec3::new(b.max.x as f32, b.max.y as f32, b.max.z as f32));
+    let Some((root_bounds, root_offset, root_count)) = exported.first() else {
+        return Ok(vec![empty]);
+    };
+    if *root_count > 0 {
+        let (amin, amax) = corners(root_bounds);
+        return Ok(vec![GpuNode { amin, amax, a: *root_offset, a_count: *root_count, ..empty }]);
+    }
+    // Each interior node's index among the interior nodes, in the same (depth-first) order.
+    let mut index = vec![u32::MAX; exported.len()];
+    let mut interior = 0;
+    for (i, (_, _, count)) in exported.iter().enumerate() {
+        if *count == 0 {
+            index[i] = interior;
+            interior += 1;
+        }
+    }
+    // A child as a node holds it: (first item, count) for a leaf, (index, 0) otherwise.
+    let child = |i: usize| -> Result<(Vec3, Vec3, u32, u32), String> {
+        let (bounds, offset, count) = &exported[i];
+        let (min, max) = corners(bounds);
+        if *count > pathtrace::MAX_LEAF {
+            return Err(format!("a BVH leaf of {} primitives (the shader's hold {})", count, pathtrace::MAX_LEAF));
+        }
+        Ok(if *count > 0 { (min, max, *offset, *count) } else { (min, max, index[i], 0) })
+    };
+    let mut nodes = Vec::with_capacity(interior as usize);
+    for (i, (_, second, count)) in exported.iter().enumerate() {
+        if *count == 0 {
+            // An interior node's first child is the next node; its second, at `offset`.
+            let (amin, amax, a, a_count) = child(i + 1)?;
+            let (bmin, bmax, b, b_count) = child(*second as usize)?;
+            nodes.push(GpuNode { amin, a, amax, a_count, bmin, b, bmax, b_count });
+        }
+    }
+    Ok(nodes)
+}
+
 fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
     wgpu::BindGroupEntry { binding, resource: buffer.as_entire_binding() }
 }
@@ -251,15 +361,23 @@ fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
 /// The shader's inputs, built on the CPU (`Buffers::build`).
 pub struct Buffers {
     pub params: Params,
-    pub prims: Vec<GpuPrim>,
+    /// The primitives as the shader reads them (`pathtrace::pack_prims`), and as records.
+    pub prims: Vec<pathtrace::glam::Vec4>,
+    pub prim_records: Vec<GpuPrim>,
     pub nodes: Vec<GpuNode>,
     pub materials: Vec<GpuMaterial>,
+    pub lights: Vec<GpuLight>,
     pub tables: Vec<f32>,
 }
 
 impl Buffers {
     /// The flattened scene as the shader's buffers, or why it can't be.
     pub fn build(s: &Scene, flat: &FlatScene) -> Result<Buffers, String> {
+        // A browser's passes are queued without waiting on the device, which serving the
+        // host's queue must (`host`).
+        if cfg!(target_arch = "wasm32") && !flat.hosts.is_empty() {
+            return Err(format!("{} objects whose materials the renderer's own code shades, which the GPU's host can't yet do in a browser", flat.hosts.len()));
+        }
         let mut lights = Vec::new();
         for l in &s.lights {
             let i = l.emission.srgb() * l.intensity;
@@ -304,19 +422,20 @@ impl Buffers {
         if prims.is_empty() {
             prims.push(GpuPrim::zeroed());
         }
-        // The shader's traversal stack holds at most one node per level, and one more.
+        // The shader's traversal stack holds at most one child per level of interior nodes.
         let exported = flat.bvh.export();
         let depth = bvh_depth(&exported);
-        if depth + 1 > pathtrace::STACK {
+        if depth > pathtrace::STACK {
             return Err(format!("a BVH {} levels deep (the shader's stack holds {})", depth, pathtrace::STACK));
         }
-        let mut nodes: Vec<GpuNode> = exported.iter().map(|(b, offset, count)| GpuNode {
-            bmin: pathtrace::glam::Vec3::new(b.min.x as f32, b.min.y as f32, b.min.z as f32), offset: *offset,
-            bmax: pathtrace::glam::Vec3::new(b.max.x as f32, b.max.y as f32, b.max.z as f32), count: *count,
-        }).collect();
-        if nodes.is_empty() {
-            nodes.push(GpuNode::zeroed());
+        if prims.len() > pathtrace::MAX_LEAF_ITEMS as usize {
+            return Err(format!("{} primitives (the shader's traversal counts to {})", prims.len(), pathtrace::MAX_LEAF_ITEMS));
         }
+        // The packed buffer keeps a primitive's material and emitter as floats.
+        if prims.len().max(flat.materials.len()) >= pathtrace::MAX_PACKED_INDEX as usize {
+            return Err(format!("{} primitives or materials (the shader's buffers count to {})", prims.len().max(flat.materials.len()), pathtrace::MAX_PACKED_INDEX));
+        }
+        let nodes = gpu_nodes(&exported)?;
 
         // Tables: emitters' primitives and their cumulative distribution, then the sky.
         let mut tables: Vec<f32> = Vec::new();
@@ -384,9 +503,6 @@ impl Buffers {
             },
             None => (Vec4::new(0., 1., 0., 1.), Vec4::ZERO),
         };
-        // The point lights, in `tables` too (`pathtrace::load_light`).
-        let lights_off = tables.len() as u32;
-        tables.extend_from_slice(bytemuck::cast_slice::<GpuLight, f32>(&lights));
         let (rr, rr_min) = match s.render.path_termination {
             PathTermination::RussianRoulette { min_depth } => (1, min_depth as f32),
             _ => (0, 0.),
@@ -399,10 +515,10 @@ impl Buffers {
             misc: Vec4::new(s.render.regularise as f32, s.black_threshold as f32, s.render.shadow_bias as f32, rr_min),
             sun_dir,
             sun_irr,
-            seed: UVec4::new(s.render.seed as u32, rr, lights_off, 0),
+            seed: UVec4::new(s.render.seed as u32, rr, 0, 1),
             air: UVec4::new(sky_off, aerial_off, sun_off, space_off),
         };
-        Ok(Buffers { params, prims, nodes, materials, tables })
+        Ok(Buffers { params, prims: pathtrace::pack_prims(&prims), prim_records: prims, nodes, materials, lights, tables })
     }
 }
 
@@ -438,7 +554,7 @@ impl GpuRenderer {
     /// Upload the flattened scene, or say why the GPU can't render it. Async, for a browser,
     /// whose WebGPU can't be waited on.
     pub async fn create(s: &Scene, flat: &FlatScene) -> Result<GpuRenderer, String> {
-        let Buffers { params, prims, nodes, materials, tables } = Buffers::build(s, flat)?;
+        let Buffers { params, prims, nodes, materials, lights, tables, .. } = Buffers::build(s, flat)?;
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -461,6 +577,13 @@ impl GpuRenderer {
                 return Err(format!("its {} need {} MB, more than the GPU's largest buffer ({} MB)", what, bytes >> 20, largest >> 20));
             }
         }
+        // The wavefront's width (`pathtrace::slots`): as many lanes as the budget and the
+        // device's largest buffer have room for.
+        let slot_bytes = std::mem::size_of::<PathState>() as u64 + 2 * std::mem::size_of::<SkyQuery>() as u64 + 12;
+        let lanes = (WAVEFRONT_BUDGET / (pixels * slot_bytes).max(1))
+            .min(largest / (2 * pixels * std::mem::size_of::<SkyQuery>() as u64).max(1))
+            .clamp(1, PASSES_PER_READ as u64);
+        let slots = lanes * pixels;
         limits.max_storage_buffer_binding_size = available.max_storage_buffer_binding_size;
         limits.max_buffer_size = available.max_buffer_size;
         let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
@@ -492,65 +615,134 @@ impl GpuRenderer {
         };
         let read = wgpu::BufferBindingType::Storage { read_only: true };
         let write = wgpu::BufferBindingType::Storage { read_only: false };
+        // A round's kernels: the scene (read only), the paths, the queues and the sky queries.
+        // WebGPU allows a kernel eight storage buffers, so the image has a layout of its own,
+        // with the kernel that adds to it.
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene"),
             entries: &[binding(0, wgpu::BufferBindingType::Uniform), binding(1, read), binding(2, read), binding(3, read),
-                       binding(5, read), binding(6, write), binding(7, write), binding(8, write)],
+                       binding(4, read), binding(5, read), binding(6, write), binding(7, write), binding(8, write)],
         });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("pathtrace"), bind_group_layouts: &[Some(&layout)], immediate_size: 0,
+        let add_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("image"),
+            entries: &[binding(0, wgpu::BufferBindingType::Uniform), binding(1, read), binding(2, write)],
         });
-        let kernel = |entry_point: &str| device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(entry_point),
-            layout: Some(&pipeline_layout),
-            module: &module,
-            entry_point: Some(entry_point),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        let (bounce_pipeline, sky_pipeline) = (kernel("bounce_paths"), kernel("answer_sky"));
+        let kernel = |entry_point: &str, layout: &wgpu::BindGroupLayout| {
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(entry_point), bind_group_layouts: &[Some(layout)], immediate_size: 0,
+            });
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(entry_point),
+                layout: Some(&pipeline_layout),
+                module: &module,
+                entry_point: Some(entry_point),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        };
+        let (intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline) =
+            (kernel("intersect_paths", &layout), kernel("bounce_paths", &layout), kernel("answer_sky", &layout), kernel("add_paths", &add_layout));
         let storage = |label: &str, bytes: &[u8]| device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(label), contents: bytes, usage: wgpu::BufferUsages::STORAGE,
         });
         let prims_buffer = storage("prims", bytemuck::cast_slice(&prims));
         let nodes_buffer = storage("nodes", bytemuck::cast_slice(&nodes));
         let materials_buffer = storage("materials", bytemuck::cast_slice(&materials));
+        let lights_buffer = storage("lights", bytemuck::cast_slice(&lights));
         let tables_buffer = storage("tables", bytemuck::cast_slice(&tables));
-        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let params_buffers = [0, 1].map(|_| device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("params"), contents: bytemuck::bytes_of(&params),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        }));
+        let queue_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("queues"), size: (pathtrace::QUEUE_HEADER as u64 + 3 * slots) * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        let dispatch_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("dispatch"), size: 16,
+            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        let empty_header = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("empty queue"), contents: bytemuck::cast_slice(&pathtrace::EMPTY_QUEUE), usage: wgpu::BufferUsages::COPY_SRC,
         });
         let paths_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("paths"), size: pixels * std::mem::size_of::<PathState>() as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            label: Some("paths"), size: slots * std::mem::size_of::<PathState>() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
         });
         let queries_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("sky queries"), size: 2 * pixels * std::mem::size_of::<SkyQuery>() as u64,
+            label: Some("sky queries"), size: 2 * slots * std::mem::size_of::<SkyQuery>() as u64,
             usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
         });
         let accum_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("accum"), size: pixels * 16,
+            label: Some("accum"), size: pixels * 32,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
+        let rounds_size = (COUNTED_PASSES * (params.dims.w as usize + 1) * 4) as u64;
+        let rounds_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("rounds"), size: rounds_size,
+            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"), size: pixels * 16,
+            label: Some("readback"), size: pixels * 32 + rounds_size,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let round_groups = [0, 1].map(|side| device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("scene"),
             layout: &layout,
-            entries: &[entry(0, &params_buffer), entry(1, &prims_buffer), entry(2, &nodes_buffer), entry(3, &materials_buffer),
-                       entry(5, &tables_buffer), entry(6, &paths_buffer), entry(7, &accum_buffer),
+            entries: &[entry(0, &params_buffers[side]), entry(1, &prims_buffer), entry(2, &nodes_buffer), entry(3, &materials_buffer),
+                       entry(4, &lights_buffer), entry(5, &tables_buffer), entry(6, &paths_buffer), entry(7, &queue_buffer),
                        entry(8, &queries_buffer)],
+        }));
+        let host_queue = (!flat.hosts.is_empty()).then(|| {
+            let host_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("host"),
+                entries: &[binding(0, wgpu::BufferBindingType::Uniform), binding(1, write), binding(2, write), binding(3, write)],
+            });
+            let size = slots * std::mem::size_of::<PathState>() as u64;
+            let gathered = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("gathered"), size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            });
+            let dispatch = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("host dispatch"), size: 16,
+                usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            });
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("host readback"), size: 16 + size,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            });
+            let groups = [0, 1].map(|side| device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("host"),
+                layout: &host_layout,
+                entries: &[entry(0, &params_buffers[side]), entry(1, &paths_buffer), entry(2, &queue_buffer), entry(3, &gathered)],
+            }));
+            HostQueue {
+                gather: kernel("gather_host", &host_layout), scatter: kernel("scatter_host", &host_layout), groups, gathered, dispatch, readback,
+                guess: std::sync::atomic::AtomicUsize::new(pixels as usize),
+            }
         });
-        Ok(GpuRenderer { device, queue, bounce_pipeline, sky_pipeline, bind_group, params, params_buffer, paths_buffer, accum_buffer, readback, adapter_name })
+        let add_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("image"),
+            layout: &add_layout,
+            entries: &[entry(0, &params_buffers[0]), entry(1, &paths_buffer), entry(2, &accum_buffer)],
+        });
+        Ok(GpuRenderer { device, queue, intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline, round_groups, add_group, params, params_buffers,
+            queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, rounds_buffer, readback, host_queue, lanes: lanes as usize, block: Default::default(), adapter_name })
     }
 
     /// Camera rays for sample `k` of every pixel, as the wavefront integrator's.
     pub fn camera_rays(s: &Scene, k: usize) -> Vec<GpuRay> {
+        Self::camera_rays_for(s, &vec![Some(k as u32); s.image.width * s.image.height])
+    }
+
+    /// The camera ray of each pixel's sample `samples[pixel]`; a dead ray (as one the lens
+    /// stops) for a pixel that takes none.
+    pub fn camera_rays_for(s: &Scene, samples: &[Option<u32>]) -> Vec<GpuRay> {
         let (w, h) = (s.image.width, s.image.height);
         let pixels = (w * h) as u64;
         (0..w * h).into_par_iter().map(|index| {
+            let Some(k) = samples[index] else { return GpuRay::zeroed() };
+            let k = k as usize;
             let (x, y) = (index % w, index / w);
             let stream = k as u64 * pixels + index as u64;
             crate::geometry::seed_rand(s.render.seed ^ 0x5bd1_e995, stream);
@@ -573,44 +765,239 @@ impl GpuRenderer {
     /// Queue pass (sample) `k` of every pixel, adding to the image on the GPU. Returns at once;
     /// a pass is one dispatch, so a browser can give each frame one, within its GPU watchdog.
     pub fn dispatch(&mut self, s: &Scene, k: usize) {
-        let pixels = (s.image.width * s.image.height) as u32;
-        let groups = pixels.div_ceil(WORKGROUP);
-        let (gx, gy) = (groups.min(MAX_GROUPS), groups.div_ceil(MAX_GROUPS));
-        self.params.dims.z = k as u32;
-        self.queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&self.params));
-        let seed = self.params.seed.x;
-        let paths: Vec<PathState> = Self::camera_rays(s, k).iter().enumerate()
-            .map(|(i, ray)| PathState::start(i as u32, k as u32, seed, ray)).collect();
-        self.queue.write_buffer(&self.paths_buffer, 0, bytemuck::cast_slice(&paths));
+        self.dispatch_samples(s, &vec![Some(k as u32); s.image.width * s.image.height]);
+    }
+
+    /// Queue a pass in which each pixel takes its sample `samples[pixel]`, or none: the pixels
+    /// the scheduler has found complete (`scheduler::plan`) aren't generated, so cost nothing.
+    pub fn dispatch_samples(&mut self, s: &Scene, samples: &[Option<u32>]) {
+        let first: Vec<usize> = samples.iter().map(|k| k.unwrap_or(0) as usize).collect();
+        let count: Vec<usize> = samples.iter().map(|k| k.is_some() as usize).collect();
+        self.dispatch_block(s, &first, &count);
+    }
+
+    /// Queue a pass in which pixel i takes its samples `first[i]..first[i] + count[i]` (at
+    /// most `lanes` of them) at once, each in a lane of the wavefront (`pathtrace::slots`):
+    /// the rounds of one sample, for all of them. Returns at once.
+    pub fn dispatch_block(&mut self, s: &Scene, first: &[usize], count: &[usize]) {
+        assert!(self.host_queue.is_none(), "a scene with materials the host shades takes its passes through block_with_host");
+        let slot = self.begin_pass(s, first, count);
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        {
-            // A path has at most `max_depth` + 1 vertices; the last round of `bounce_paths` adds
-            // the paths ended in the one before to the image.
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_bind_group(0, &self.bind_group, &[]);
-            let rounds = self.params.dims.w + 2;
-            for round in 0..rounds {
-                pass.set_pipeline(&self.bounce_pipeline);
-                pass.dispatch_workgroups(gx, gy, 1);
-                if round + 1 < rounds {
-                    pass.set_pipeline(&self.sky_pipeline);
-                    pass.dispatch_workgroups(gx, gy, 1);
-                }
-            }
-        }
+        self.encode_rounds(&mut encoder, slot);
+        self.encode_add(&mut encoder);
         self.queue.submit(Some(encoder.finish()));
     }
 
-    /// The image accumulated so far: each pixel's sums (the radiance's, and in w the number of
-    /// rays traced). Natively this waits for the GPU; in a browser it yields until the copy
-    /// can be read.
-    pub async fn read_back(&self) -> Result<Vec<[f32; 4]>, String> {
+    /// As `dispatch_block`, for a scene with materials the host shades (`host`): after the
+    /// rounds, the paths waiting for the host are read back, shaded and queued again, until
+    /// none waits; then the pass is added to the image. This waits on the device.
+    pub async fn block_with_host(&mut self, s: &Scene, flat: &FlatScene, first: &[usize], count: &[usize]) -> Result<(), String> {
+        let slot = self.begin_pass(s, first, count);
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        encoder.copy_buffer_to_buffer(&self.accum_buffer, 0, &self.readback, 0, None);
+        self.encode_rounds(&mut encoder, slot);
         self.queue.submit(Some(encoder.finish()));
+        while self.serve_host(s, flat, first).await? {
+            let rounds = self.rounds();
+            let slot = {
+                let mut block = self.block.lock().unwrap();
+                (block.counted < COUNTED_PASSES).then(|| {
+                    block.counted += 1;
+                    let run = block.counted - 1;
+                    block.after_host.push(run);
+                    run * rounds
+                })
+            };
+            let mut encoder = self.device.create_command_encoder(&Default::default());
+            if let Some(slot) = slot {
+                // How many paths these rounds start with: those the host sent on.
+                encoder.copy_buffer_to_buffer(&self.queue_buffer, 12, &self.rounds_buffer, 4 * slot as u64, 4);
+            }
+            self.encode_rounds(&mut encoder, slot);
+            self.queue.submit(Some(encoder.finish()));
+        }
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        self.encode_add(&mut encoder);
+        self.queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+
+    /// The host's turn: the paths waiting for it gathered and read (`pathtrace::gather_host`),
+    /// shaded (`host::shade`), and scattered back to their slots, those that go on queued for
+    /// the next rounds (`scatter_host`). Whether any waited.
+    async fn serve_host(&self, s: &Scene, flat: &FlatScene, first: &[usize]) -> Result<bool, String> {
+        use std::sync::atomic::Ordering;
+        let host = self.host_queue.as_ref().expect("a scene with host materials");
+        let image = s.image.width * s.image.height;
+        let slots = image * self.params.seed.w as usize;
+        let size = std::mem::size_of::<PathState>() as u64;
+        let header = 16 * pathtrace::HOST_QUEUE as u64;
+        let guess = host.guess.load(Ordering::Relaxed).min(slots) as u64;
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(&self.queue_buffer, header, &host.dispatch, 0, 16);
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&host.gather);
+            pass.set_bind_group(0, &host.groups[0], &[]);
+            pass.dispatch_workgroups_indirect(&host.dispatch, 0);
+        }
+        encoder.copy_buffer_to_buffer(&self.queue_buffer, header, &host.readback, 0, 16);
+        encoder.copy_buffer_to_buffer(&host.gathered, 0, &host.readback, 16, guess * size);
+        self.queue.submit(Some(encoder.finish()));
+        self.map(&host.readback, 0..16 + guess * size).await?;
+        let (count, mut paths) = {
+            let data = host.readback.get_mapped_range(..16 + guess * size).unwrap();
+            let count = bytemuck::pod_read_unaligned::<u32>(&data[12..16]) as u64;
+            let paths: Vec<PathState> = bytemuck::pod_collect_to_vec(&data[16..16 + (count.min(guess) * size) as usize]);
+            (count, paths)
+        };
+        host.readback.unmap();
+        if count == 0 {
+            return Ok(false);
+        }
+        if count > guess {
+            // More waited than was read with the header: the rest.
+            let rest = 16 + guess * size..16 + count * size;
+            let mut encoder = self.device.create_command_encoder(&Default::default());
+            encoder.copy_buffer_to_buffer(&host.gathered, guess * size, &host.readback, rest.start, rest.end - rest.start);
+            self.queue.submit(Some(encoder.finish()));
+            self.map(&host.readback, rest.clone()).await?;
+            paths.extend(bytemuck::pod_collect_to_vec::<u8, PathState>(&host.readback.get_mapped_range(rest).unwrap()));
+            host.readback.unmap();
+        }
+        host.guess.store((count + count / 4 + 64) as usize, Ordering::Relaxed);
+        let began = web_time::Instant::now();
+        let shaded: Vec<PathState> = paths.par_iter().map(|p| {
+            // Its slot (`gather_host`) is its pixel's path in a lane, so that sample of the
+            // pixel's.
+            let (pixel, lane) = (p.state.w as usize % image, p.state.w as usize / image);
+            host::shade(s, flat, p, pixel as u32, (first[pixel] + lane) as u32)
+        }).collect();
+        self.queue.write_buffer(&host.gathered, 0, bytemuck::cast_slice(&shaded));
+        let seconds = began.elapsed().as_secs_f64();
+        // The next rounds begin at side 0 of the queue, which the scattered paths that go on
+        // are appended to; then the host's queue is empty again.
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(&self.empty_header, 0, &self.queue_buffer, 0, 16);
+        encoder.copy_buffer_to_buffer(&self.empty_header, 0, &self.queue_buffer, 16, 16);
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&host.scatter);
+            pass.set_bind_group(0, &host.groups[1], &[]);
+            pass.dispatch_workgroups_indirect(&host.dispatch, 0);
+        }
+        encoder.copy_buffer_to_buffer(&self.queue_buffer, 0, &self.dispatch_buffer, 0, 16);
+        encoder.copy_buffer_to_buffer(&self.empty_header, 0, &self.queue_buffer, header, 16);
+        self.queue.submit(Some(encoder.finish()));
+        let mut block = self.block.lock().unwrap();
+        block.host_seconds += seconds;
+        block.stats.record(crate::scheduler::Stage::Host, count, seconds);
+        Ok(true)
+    }
+
+    /// A pass's paths, from their camera rays, and its first queue, uploaded: pixel i's
+    /// samples `first[i]..first[i] + count[i]`, one a lane. Returns the pass's slot for its
+    /// rounds' counts (the scheduler's measurements), if there is one left before the next
+    /// read.
+    fn begin_pass(&mut self, s: &Scene, first: &[usize], count: &[usize]) -> Option<usize> {
+        let began = web_time::Instant::now();
+        let image = s.image.width * s.image.height;
+        let lanes = count.iter().copied().max().unwrap_or(0).max(1);
+        assert!(lanes <= self.lanes, "a pass of {} samples a pixel, with lanes for {}", lanes, self.lanes);
+        let pixels = image as u32;
+        self.params.seed.w = lanes as u32;
+        for side in 0..2 {
+            self.params.seed.z = side as u32;
+            self.queue.write_buffer(&self.params_buffers[side], 0, bytemuck::bytes_of(&self.params));
+        }
+        let seed = self.params.seed.x;
+        // (A pixel that takes no sample in a lane has a dead ray there, so a path that adds
+        // nothing.)
+        let mut paths: Vec<PathState> = Vec::with_capacity(image * lanes);
+        for lane in 0..lanes {
+            let samples: Vec<Option<u32>> = (0..image).map(|i| (lane < count[i]).then(|| (first[i] + lane) as u32)).collect();
+            let rays = Self::camera_rays_for(s, &samples);
+            paths.extend(rays.iter().enumerate().map(|(i, ray)| PathState::start(i as u32, samples[i].unwrap_or(0), seed, ray)));
+        }
+        self.queue.write_buffer(&self.paths_buffer, 0, bytemuck::cast_slice(&paths));
+        // The first round's queue (side 0): every pixel whose camera ray got through the lens.
+        // Side 1 and the host's queue start empty.
+        let alive: Vec<u32> = paths.iter().enumerate().filter(|(_, p)| p.state.y & pathtrace::PATH_ACTIVE != 0).map(|(i, _)| i as u32).collect();
+        let first = pathtrace::queue_header(alive.len() as u32);
+        let mut head = first.to_vec();
+        head.extend_from_slice(&pathtrace::EMPTY_QUEUE);
+        head.extend_from_slice(&pathtrace::EMPTY_QUEUE);
+        head.extend_from_slice(&alive);
+        self.queue.write_buffer(&self.queue_buffer, 0, bytemuck::cast_slice(&head));
+        self.queue.write_buffer(&self.dispatch_buffer, 0, bytemuck::cast_slice(&first));
+        // The host's part ends here: the rays generated and uploaded. Encoding and submitting
+        // the kernels is counted as the device's, since a driver may run them as they arrive.
+        let seconds = began.elapsed().as_secs_f64();
+        let rounds = self.rounds();
+        // What the host knows of the pass already: the paths it generated (which are the first
+        // round's), and that every pixel's path is added to the film. The later rounds are
+        // counted at the read.
+        use crate::scheduler::Stage;
+        let slot = {
+            let block = self.block.get_mut().unwrap();
+            block.started.get_or_insert(began);
+            block.host_seconds += seconds;
+            block.stats.passes += lanes as u64;
+            block.stats.record(Stage::Generate, alive.len() as u64, seconds);
+            block.stats.record(Stage::Accumulate, pixels as u64 * lanes as u64, 0.);
+            (block.counted < COUNTED_PASSES).then(|| {
+                block.counted += 1;
+                block.stats.round(0, alive.len() as u64);
+                (block.counted - 1) * rounds
+            })
+        };
+        if slot.is_some() {
+            self.record_round(alive.len() as u64);
+        }
+        slot
+    }
+
+    /// A path has at most `max_depth` + 1 vertices: that many rounds, each over the paths the
+    /// last left alive, starting from side 0 of the queue. With a `slot`, each round's count
+    /// is kept for the scheduler's measurements.
+    fn encode_rounds(&self, encoder: &mut wgpu::CommandEncoder, slot: Option<usize>) {
+        for round in 0..=self.params.dims.w {
+            let side = (round % 2) as usize;
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_bind_group(0, &self.round_groups[side], &[]);
+                pass.set_pipeline(&self.intersect_pipeline);
+                pass.dispatch_workgroups_indirect(&self.dispatch_buffer, 0);
+                pass.set_pipeline(&self.bounce_pipeline);
+                pass.dispatch_workgroups_indirect(&self.dispatch_buffer, 0);
+                pass.set_pipeline(&self.sky_pipeline);
+                pass.dispatch_workgroups_indirect(&self.dispatch_buffer, 0);
+            }
+            // The next round reads the side this one filled, and fills the side it read.
+            encoder.copy_buffer_to_buffer(&self.queue_buffer, 16 * (1 - side as u64), &self.dispatch_buffer, 0, 16);
+            if let Some(slot) = slot.filter(|_| round < self.params.dims.w) {
+                // How many paths the next round starts with (the header's count).
+                encoder.copy_buffer_to_buffer(&self.queue_buffer, 16 * (1 - side as u64) + 12, &self.rounds_buffer, 4 * (slot + round as usize + 1) as u64, 4);
+            }
+            encoder.copy_buffer_to_buffer(&self.empty_header, 0, &self.queue_buffer, 16 * side as u64, 16);
+        }
+    }
+
+    /// Every pixel's path, added to the image: the end of a pass.
+    fn encode_add(&self, encoder: &mut wgpu::CommandEncoder) {
+        let pixels = self.params.dims.x * self.params.dims.y;
+        let groups = pixels.div_ceil(pathtrace::WORKGROUP);
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_bind_group(0, &self.add_group, &[]);
+        pass.set_pipeline(&self.add_pipeline);
+        pass.dispatch_workgroups(groups.min(pathtrace::MAX_GROUPS), groups.div_ceil(pathtrace::MAX_GROUPS), 1);
+    }
+
+    /// Map `buffer` for reading. Natively this waits for the GPU; in a browser it yields until
+    /// the buffer can be read.
+    async fn map(&self, buffer: &wgpu::Buffer, range: std::ops::Range<u64>) -> Result<(), String> {
         let mapped = Mapped::default();
         let slot = mapped.0.clone();
-        self.readback.map_async(wgpu::MapMode::Read, .., move |r| {
+        buffer.map_async(wgpu::MapMode::Read, range, move |r| {
             let mut slot = slot.lock().unwrap();
             slot.0 = Some(r.map_err(|e| e.to_string()));
             if let Some(waker) = slot.1.take() {
@@ -619,10 +1006,71 @@ impl GpuRenderer {
         });
         #[cfg(not(target_arch = "wasm32"))]
         self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("GPU device lost ({})", e))?;
-        mapped.await.map_err(|e| format!("couldn't read the GPU's image back ({})", e))?;
-        let out = bytemuck::cast_slice::<u8, [f32; 4]>(&self.readback.get_mapped_range(..).unwrap()).to_vec();
+        mapped.await.map_err(|e| format!("couldn't read from the GPU ({})", e))
+    }
+
+    /// Rounds in a pass: a path has at most `max_depth` + 1 vertices.
+    fn rounds(&self) -> usize {
+        self.params.dims.w as usize + 1
+    }
+
+    /// A round of `paths` went through its three kernels. (Their time isn't known apart:
+    /// `scheduler`'s module documentation.)
+    fn record_round(&self, paths: u64) {
+        use crate::scheduler::Stage;
+        if paths > 0 {
+            let mut block = self.block.lock().unwrap();
+            for stage in [Stage::Intersect, Stage::Shade, Stage::Sky] {
+                block.stats.record(stage, paths, 0.);
+            }
+        }
+    }
+
+    /// What the stages have done since this was last asked, complete up to the last read.
+    pub fn take_stats(&self) -> crate::scheduler::Stats {
+        std::mem::take(&mut self.block.lock().unwrap().stats)
+    }
+
+    /// The image accumulated so far: each pixel's sums (the radiance's, and in w the number of
+    /// rays traced). Natively this waits for the GPU; in a browser it yields until the copy
+    /// can be read.
+    pub async fn read_back(&self) -> Result<(Vec<[f32; 4]>, Vec<[f32; 4]>), String> {
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(&self.accum_buffer, 0, &self.readback, 0, None);
+        let image = self.accum_buffer.size();
+        let (counted, after_host) = {
+            let mut block = self.block.lock().unwrap();
+            (std::mem::take(&mut block.counted), std::mem::take(&mut block.after_host))
+        };
+        if counted > 0 {
+            encoder.copy_buffer_to_buffer(&self.rounds_buffer, 0, &self.readback, image, (counted * self.rounds() * 4) as u64);
+        }
+        self.queue.submit(Some(encoder.finish()));
+        self.map(&self.readback, 0..self.readback.size()).await?;
+        let both = bytemuck::cast_slice::<u8, [f32; 4]>(&self.readback.get_mapped_range(..image).unwrap()).to_vec();
+        let rounds = bytemuck::cast_slice::<u8, u32>(&self.readback.get_mapped_range(image..image + (counted * self.rounds() * 4) as u64).unwrap()).to_vec();
         self.readback.unmap();
-        Ok(out)
+        for (run, pass) in rounds.chunks(self.rounds()).enumerate() {
+            // (A pass's first round was counted when it was queued; a run after the host's
+            // turn has its first here.)
+            let after = after_host.contains(&run);
+            for (round, &paths) in pass.iter().enumerate().skip(if after { 0 } else { 1 }) {
+                if !after {
+                    self.block.lock().unwrap().stats.round(round, paths as u64);
+                }
+                self.record_round(paths as u64);
+            }
+        }
+        {
+            // The time since the first of these passes was queued that wasn't the host's.
+            let mut block = self.block.lock().unwrap();
+            if let Some(started) = block.started.take() {
+                let device = started.elapsed().as_secs_f64() - std::mem::take(&mut block.host_seconds);
+                block.stats.device_seconds += device.max(0.);
+            }
+        }
+        // Interleaved on the GPU (`pathtrace::add_paths`): a pixel's sums, then its squares.
+        Ok((both.iter().step_by(2).copied().collect(), both.iter().skip(1).step_by(2).copied().collect()))
     }
 
     /// Render passes `first..last`, accumulating on the GPU; returns the sums per pixel.
@@ -632,37 +1080,61 @@ impl GpuRenderer {
         for k in passes {
             self.dispatch(s, k);
         }
-        pollster::block_on(self.read_back()).expect("GPU readback")
+        pollster::block_on(self.read_back()).expect("GPU readback").0
     }
 
-    /// Render up to the scene's samples per pixel from where `rc` has got to, reading the
-    /// image back every `PASSES_PER_READ` passes; `after` sees the context each time.
+    /// Render up to the scene's samples per pixel from where `rc` has got to, a pass of up to
+    /// `lanes` samples a pixel at a time, the image read back after each; `after` sees the
+    /// context each time.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn render(&mut self, s: &Scene, rc: &Mutex<RenderContext>, mut after: impl FnMut(&RenderContext)) {
-        let first = rc.lock().unwrap().min_samples();
-        let target = s.render.samples_per_pixel();
+    pub fn render(&mut self, s: &Scene, flat: &FlatScene, rc: &Mutex<RenderContext>, mut after: impl FnMut(&RenderContext)) {
         let (w, h) = (s.image.width, s.image.height);
-        let mut k = first;
-        while k < target {
-            let n = PASSES_PER_READ.min(target - k);
-            let sums = self.run(s, k..k + n);
+        loop {
+            // The scheduler's part (`scheduler::plan`): which pixels take samples in the next
+            // few passes, and how many each. Decided a region at a time, as the recursive
+            // tracer's passes are, from the film alone, so a render resumed from a saved film
+            // goes on as an uninterrupted one would.
+            let (mut first, mut count) = (vec![0usize; w * h], vec![0usize; w * h]);
+            {
+                let rc = rc.lock().unwrap();
+                for b in rc.regions(s) {
+                    let (f, c) = rc.plan(s, &b, crate::scheduler::lanes(self.lanes));
+                    let mut i = 0;
+                    for y in b.ymin..b.ymax {
+                        for x in b.xmin..b.xmax {
+                            first[y * w + x] = f[i];
+                            count[y * w + x] = c[i];
+                            i += 1;
+                        }
+                    }
+                }
+            }
+            let passes = count.iter().copied().max().unwrap_or(0);
+            if passes == 0 {
+                break;
+            }
+            self.clear();
+            if self.host_queue.is_some() {
+                pollster::block_on(self.block_with_host(s, flat, &first, &count)).expect("GPU readback");
+            } else {
+                self.dispatch_block(s, &first, &count);
+            }
+            let (sums, squares) = pollster::block_on(self.read_back()).expect("GPU readback");
             let mut rc = rc.lock().unwrap();
+            rc.schedule.merge(&self.take_stats());
             for y in 0..h {
                 for x in 0..w {
-                    // A pixel a resumed state has already taken past k (another integrator's
-                    // render) skips passes until it isn't: they would repeat its samples.
-                    // (Some sample indices go unused for it; none is used twice.)
-                    if rc.samples_at(x, y) > k {
+                    let i = y * w + x;
+                    if count[i] == 0 {
                         continue;
                     }
-                    let v = sums[y * w + x];
-                    let c = Color::new(v[0] as f64, v[1] as f64, v[2] as f64);
-                    rc.set_pixel(x, y, c, squares_at_least(&c, n), n);
-                    rc.rays_cast += v[3] as u64;
+                    let colour = |v: [f32; 4]| Color::new(v[0] as f64, v[1] as f64, v[2] as f64);
+                    // A sample the lens stopped added nothing, and is a black sample all the same.
+                    rc.set_pixel(x, y, colour(sums[i]), colour(squares[i]), count[i]);
+                    rc.rays_cast += sums[i][3] as u64;
                 }
             }
             after(&rc);
-            k += n;
         }
     }
 }
@@ -721,7 +1193,7 @@ mod tests {
         let flat = FlatScene::build(&s).unwrap();
         let b = Buffers::build(&s, &flat).unwrap();
         for (what, len) in [("prims", b.prims.len()), ("nodes", b.nodes.len()), ("materials", b.materials.len()),
-                            ("tables", b.tables.len())] {
+                            ("lights", b.lights.len()), ("tables", b.tables.len())] {
             assert!(len > 0, "{} is empty", what);
         }
         let Ok(mut gpu) = GpuRenderer::new(&s, &flat) else { return };
@@ -754,7 +1226,7 @@ mod tests {
             let s = scene(sky);
             let flat = FlatScene::build(&s).unwrap();
             let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, tables: &b.tables };
+            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
             let (mut sky_err, mut seg_err, mut sun_err) = (0f64, 0f64, 0f64);
             for h in altitudes {
                 let o = Vector3::new(30., h, -20.);
@@ -802,7 +1274,7 @@ mod tests {
             let s = SceneFile::from_file(name, &crate::scenefile::Overrides { width: Some(64), height: Some(36), seed: None });
             let flat = FlatScene::build(&s).unwrap();
             let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, tables: &b.tables };
+            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
             let crate::scene::Background::Space(space) = &s.render.background else { panic!("{} has no space", name) };
             if name.contains("deep-space") {
                 assert!(space.stars.is_some() && space.milky_way.is_some() && !space.nebulae.is_empty() && !space.galaxies.is_empty(),
@@ -859,7 +1331,7 @@ mod tests {
         }"#.to_string());
         let flat = FlatScene::build(&s).unwrap();
         let b = Buffers::build(&s, &flat).unwrap();
-        let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, tables: &b.tables };
+        let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
         let passes = 16;
         let mut on_shader = Vector3::zeros();
         for k in 0..passes {
@@ -880,27 +1352,6 @@ mod tests {
         let on_gpu = gpu.run(&s, 0..passes).iter().fold(Vector3::zeros(), |a, v| a + Vector3::new(v[0] as f64, v[1] as f64, v[2] as f64)) / passes as f64;
         for ch in 0..3 {
             assert!((on_gpu[ch] - cpu[ch]).abs() < 0.05 * cpu[ch], "channel {}: GPU {} vs CPU {}", ch, on_gpu[ch], cpu[ch]);
-        }
-    }
-
-    /// Timings for work on the GPU's speed, not a test: per pass, the fastest of a few runs,
-    /// of the CPU's camera rays and of whole passes (which include them), for the scenes in
-    /// RAYS_BENCH (comma-separated; by default a few with meshes), at 640 x 360.
-    /// `cargo test --release --features gpu bench_passes -- --ignored --nocapture`
-    #[test]
-    #[ignore]
-    fn bench_passes() {
-        let names = std::env::var("RAYS_BENCH").unwrap_or("demo/demo.json,demo/scenes/instances.json,demo/scenes/glossy-sun.json,demo/scenes/spheres.json".into());
-        for name in names.split(',') {
-            let s = SceneFile::from_file(name, &crate::scenefile::Overrides { width: Some(640), height: Some(360), seed: None });
-            let flat = FlatScene::build(&s).unwrap();
-            let mut gpu = GpuRenderer::new(&s, &flat).unwrap();
-            gpu.run(&s, 0..2);
-            let n = 16;
-            let fastest = |f: &mut dyn FnMut()| (0..3).map(|_| { let t = std::time::Instant::now(); f(); t.elapsed().as_secs_f64() }).fold(f64::MAX, f64::min) * 1e3 / n as f64;
-            let rays = fastest(&mut || for k in 0..n { std::hint::black_box(GpuRenderer::camera_rays(&s, k)); });
-            let pass = fastest(&mut || { gpu.run(&s, 0..n); });
-            eprintln!("BENCH {:36} camera rays {:6.2} ms, pass {:6.2} ms, GPU about {:6.2} ms", name, rays, pass, pass - rays);
         }
     }
 
@@ -967,7 +1418,7 @@ mod tests {
                 },
             };
             let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, tables: &b.tables };
+            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
             let passes = 32;
             let mut cpu = Vector3::zeros();
             let mut cpu_rays = 0u64;
@@ -991,6 +1442,123 @@ mod tests {
             // And traces as many rays (w).
             let gpu_rays: f64 = sums.iter().map(|v| v[3] as f64).sum();
             assert!((gpu_rays - cpu_rays as f64).abs() < 0.01 * cpu_rays as f64, "{} rays: GPU {} vs CPU {}", name, gpu_rays, cpu_rays);
+        }
+    }
+
+    /// The shader's traversal finds what a search of every primitive finds: the nearest hit, and
+    /// whether anything is in the way, for trees of every shape (none, one leaf, deep), with
+    /// planes, and for ranges that end before or begin beyond the nearest surface.
+    #[test]
+    fn test_traversal_matches_brute_force() {
+        use pathtrace::glam::Vec3;
+        let mut rng = crate::geometry::Pcg32::new(11, 0);
+        let mut next = move || rng.next_f64();
+        for (spheres, planes) in [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (9, 1), (300, 0), (2000, 2)] {
+            let mut objects = Vec::new();
+            for _ in 0..spheres {
+                objects.push(format!(r#"{{ "type": "sphere", "location": [{}, {}, {}], "radius": {}, "material": "M" }}"#,
+                    next() * 20. - 10., next() * 20. - 10., next() * 20. - 10., 0.05 + next() * 0.6));
+            }
+            for i in 0..planes {
+                objects.push(format!(r#"{{ "type": "plane", "y": {}, "material": "M" }}"#, -11. - i as f64));
+            }
+            let s = SceneFile::from_string(format!(r#"{{
+                "width": 4, "height": 4, "background": [0, 0, 0],
+                "camera": {{ "location": [0, 0, -30], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }},
+                "materials": {{ "M": {{ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }} }},
+                "objects": [{}]
+            }}"#, objects.join(",")));
+            let flat = FlatScene::build(&s).unwrap();
+            let b = Buffers::build(&s, &flat).unwrap();
+            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let count = (b.params.counts.x + b.params.counts.y) as usize;
+            assert_eq!(count, spheres + planes);
+            // Every primitive on its own is a scene the traversal searches in full.
+            let alone: Vec<(Params, Vec<pathtrace::glam::Vec4>, Vec<GpuNode>)> = (0..count).map(|i| {
+                let plane = i >= b.params.counts.x as usize;
+                let mut params = b.params;
+                params.counts.x = if plane { 0 } else { 1 };
+                params.counts.y = if plane { 1 } else { 0 };
+                let nodes = gpu_nodes(&if plane { vec![] } else { vec![(flat.bvh.export()[0].0, 0, 1)] }).unwrap();
+                (params, pathtrace::pack_prims(&[b.prim_records[i]]), nodes)
+            }).collect();
+            for _ in 0..400 {
+                let ro = Vec3::new(next() as f32 * 30. - 15., next() as f32 * 30. - 15., next() as f32 * 30. - 15.);
+                let rd = Vec3::new(next() as f32 - 0.5, next() as f32 - 0.5, next() as f32 - 0.5).normalize();
+                let (tmin, tmax) = match (next() * 3.) as u32 { 0 => (0., f32::MAX), 1 => (0., next() as f32 * 20.), _ => (next() as f32 * 20., f32::MAX) };
+                let mut expected = (tmax, u32::MAX);
+                for (i, (params, prim, nodes)) in alone.iter().enumerate() {
+                    let single = pathtrace::Scene { params, prims: prim, nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+                    let (t, hit) = pathtrace::nearest(&single, ro, rd, tmin, expected.0, false);
+                    if hit != u32::MAX { expected = (t, i as u32); }
+                }
+                let (t, prim) = pathtrace::nearest(&shader, ro, rd, tmin, tmax, false);
+                assert_eq!((t, prim != u32::MAX), (expected.0, expected.1 != u32::MAX), "{} spheres, {} planes: ray {:?} {:?} in ({}, {})", spheres, planes, ro, rd, tmin, tmax);
+                let (_, any) = pathtrace::nearest(&shader, ro, rd, tmin, tmax, true);
+                assert_eq!(any != u32::MAX, expected.1 != u32::MAX, "any hit: {} spheres, {} planes", spheres, planes);
+            }
+        }
+    }
+
+    /// How much work the shader's traversal does on scenes of geometry: box tests and
+    /// primitive tests per ray, counted on the shader's CPU build (the GPU runs the same code,
+    /// so does the same work). Not a test of anything; run it for the figures:
+    /// `cargo test --release --features gpu measure_traversal -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn measure_traversal() {
+        println!("{:<16} {:>9} {:>9} {:>10} {:>10} {:>10}", "scene", "prims", "nodes", "rays", "boxes/ray", "prims/ray");
+        for name in ["demo/demo.json", "demo/scenes/instances.json", "demo/scenes/glossy-sun.json", "demo/scenes/spheres.json", "demo/scenes/lamps.json", "demo/scenes/night-orbit.json"] {
+            let s = SceneFile::from_file(name, &crate::scenefile::Overrides { width: Some(160), height: Some(90), seed: None });
+            let flat = match FlatScene::build(&s) {
+                Ok(f) => f,
+                Err(e) => { println!("{:<16} not flattened: {}", name, e); continue; },
+            };
+            let b = Buffers::build(&s, &flat).unwrap();
+            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            pathtrace::stats::take();
+            let mut total_rays = 0u64;
+            for k in 0..2 {
+                for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
+                    if ray.d.w < 0.5 { continue; }
+                    let mut rng = pathtrace::path_seed(index as u32, k as u32, b.params.seed.x);
+                    let mut rays = 0;
+                    pathtrace::radiance(&shader, ray.o.truncate(), ray.d.truncate(), &mut rng, &mut rays);
+                    total_rays += rays as u64;
+                }
+            }
+            let (boxes, prims) = pathtrace::stats::take();
+            // The queues' saving: of the invocations a pass would make with every pixel
+            // dispatched every round, the share that had a live path to advance.
+            let (mut live, mut slots) = (0u64, 0u64);
+            for (index, ray) in GpuRenderer::camera_rays(&s, 0).iter().enumerate() {
+                let mut p = PathState::start(index as u32, 0, b.params.seed.x, ray);
+                for _ in 0..=b.params.dims.w {
+                    slots += 1;
+                    if p.state.y & pathtrace::PATH_ACTIVE != 0 {
+                        live += 1;
+                        p = pathtrace::bounce(&shader, &p).0;
+                    }
+                }
+            }
+            pathtrace::stats::take();
+            let live_share = live as f64 / slots as f64;
+            // How the work divides: the share of the megakernel's time (on this CPU, one
+            // thread) that is traversal, closest hits and shadow rays together.
+            pathtrace::stats::time_traversal(true);
+            let start = std::time::Instant::now();
+            for (index, ray) in GpuRenderer::camera_rays(&s, 0).iter().enumerate() {
+                if ray.d.w < 0.5 { continue; }
+                let mut rng = pathtrace::path_seed(index as u32, 0, b.params.seed.x);
+                let mut rays = 0;
+                pathtrace::radiance(&shader, ray.o.truncate(), ray.d.truncate(), &mut rng, &mut rays);
+            }
+            let traversal_share = pathtrace::stats::trace_seconds() / start.elapsed().as_secs_f64();
+            pathtrace::stats::time_traversal(false);
+            pathtrace::stats::take();
+            let short = name.rsplit('/').next().unwrap().trim_end_matches(".json");
+            println!("{:<16} {:>9} {:>9} {:>10} {:>10.1} {:>10.1}   (tree {} levels deep; max depth {}, {:.0}% of path-rounds live, traversal {:.0}% of the time)", short, b.prim_records.len(), b.nodes.len(), total_rays,
+                boxes as f64 / total_rays as f64, prims as f64 / total_rays as f64, bvh_depth(&flat.bvh.export()), b.params.dims.w, 100. * live_share, 100. * traversal_share);
         }
     }
 
@@ -1036,7 +1604,7 @@ mod tests {
         };
         let (w, h) = (s.image.width, s.image.height);
         let rc = Mutex::new(RenderContext::new(w, h, false, "test.png"));
-        gpu.render(&s, &rc, |_| ());
+        gpu.render(&s, &flat, &rc, |_| ());
         // The context's rows run bottom up (`RenderContext::snapshot`), as the passes'.
         let on_gpu: Vec<Color> = { let rc = rc.lock().unwrap(); (0..w * h).map(|i| rc.get_pixel(i % w, i / w)).collect() };
         let cpu = mean_image(&s, 256);
@@ -1045,6 +1613,127 @@ mod tests {
             for ch in 0..3 {
                 assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "tile {} channel {}: GPU {} vs CPU {}", t, ch, a[t][ch], b[t][ch]);
             }
+        }
+    }
+
+    /// The host counts what the scheduler measures: the paths alive at each round, read from
+    /// the queues' headers. Every pixel starts a path (a pinhole stops none), none can have
+    /// more vertices than the depth allows, and fewer are alive each round.
+    #[test]
+    fn test_counts_live_paths_by_round() {
+        use crate::scheduler::Stage;
+        let s = scene();
+        let flat = FlatScene::build(&s).unwrap();
+        let mut gpu = match GpuRenderer::new(&s, &flat) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("skipped: {}", e);
+                return;
+            },
+        };
+        let passes = 3;
+        gpu.run(&s, 0..passes);
+        let stats = gpu.take_stats();
+        let pixels = (s.image.width * s.image.height) as u64;
+        assert_eq!(stats.passes, passes as u64);
+        assert_eq!(stats.live.len(), gpu.rounds());
+        assert_eq!(stats.live[0], passes as u64 * pixels);
+        assert!(stats.live.windows(2).all(|w| w[1] <= w[0]), "{:?}", stats.live);
+        assert!(stats.live[1] > 0 && *stats.live.last().unwrap() < stats.live[0], "{:?}", stats.live);
+        assert_eq!(stats.stage(Stage::Intersect).items, stats.live.iter().sum::<u64>());
+        assert_eq!(stats.stage(Stage::Generate).items, stats.live[0]);
+        assert_eq!(stats.stage(Stage::Accumulate).items, passes as u64 * pixels);
+        assert!(stats.device_seconds > 0.);
+        // Taken, so the next block starts from nothing.
+        assert!(gpu.take_stats().is_empty());
+    }
+
+    /// The CPU queue (`host`): paths that hit a material the kernels have no code for wait
+    /// for the host, which shades them with the scene's own and sends them on. The picture is
+    /// the wavefront integrator's, which shades the same vertices the same way, and the
+    /// report counts them.
+    #[test]
+    fn test_host_shades_what_the_kernels_cant() {
+        use crate::scheduler::Stage;
+        use crate::wavefront::integrator::tests::{host_scene, mean_image, tiles};
+        let mut s = host_scene();
+        s.render.supersamples = 256;
+        let flat = FlatScene::build(&s).unwrap();
+        let mut gpu = match GpuRenderer::new(&s, &flat) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("skipped: {}", e);
+                return;
+            },
+        };
+        let (w, h) = (s.image.width, s.image.height);
+        let rc = Mutex::new(RenderContext::new(w, h, false, "test.png"));
+        gpu.render(&s, &flat, &rc, |_| ());
+        let rc = rc.into_inner().unwrap();
+        let host = rc.schedule.stage(Stage::Host);
+        // The camera sees host materials, and paths reach them again after a bounce: more
+        // than one wait a pass.
+        assert!(host.items > 0 && host.batches > 0, "{:?} in {} passes", host, rc.schedule.passes);
+        let on_gpu: Vec<Color> = (0..w * h).map(|i| rc.get_pixel(i % w, i / w)).collect();
+        let cpu = mean_image(&s, 256);
+        let (a, b) = (tiles(&on_gpu, w, h, 3, 2), tiles(&cpu, w, h, 3, 2));
+        for t in 0..6 {
+            for ch in 0..3 {
+                assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "tile {} channel {}: GPU {} vs CPU {}", t, ch, a[t][ch], b[t][ch]);
+            }
+        }
+    }
+
+    /// Pixel completion (`scheduler::plan`): with adaptive sampling the GPU stops sampling the
+    /// pixels that are quiet (a flat background: every sample the same) and carries on with
+    /// the noisy ones, each taking its own next samples; the picture is the one it gets from
+    /// sampling every pixel in full; and a render stopped part-way and resumed from its film
+    /// ends where an uninterrupted one does.
+    #[test]
+    fn test_samples_adaptively() {
+        let mut s = scene();
+        s.render.supersamples = 64;
+        let flat = FlatScene::build(&s).unwrap();
+        let mut gpu = match GpuRenderer::new(&s, &flat) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("skipped: {}", e);
+                return;
+            },
+        };
+        let (w, h) = (s.image.width, s.image.height);
+        let render = |gpu: &mut GpuRenderer, s: &Scene, rc: RenderContext| {
+            let rc = Mutex::new(rc);
+            gpu.render(s, &flat, &rc, |_| ());
+            rc.into_inner().unwrap()
+        };
+        let full = render(&mut gpu, &s, RenderContext::new(w, h, false, "test.png"));
+        assert!((0..w * h).all(|i| full.samples_at(i % w, i / w) == 64));
+
+        s.render.adaptive = Some(crate::scene::Adaptive { threshold: 0.05, min_samples: 8 });
+        let adaptive = render(&mut gpu, &s, RenderContext::new(w, h, false, "test.png"));
+        let counts: Vec<usize> = (0..w * h).map(|i| adaptive.samples_at(i % w, i / w)).collect();
+        let (least, most) = (*counts.iter().min().unwrap(), *counts.iter().max().unwrap());
+        assert!(least >= 8 && most <= 64, "samples from {} to {}", least, most);
+        assert!(least < most, "every pixel took {} samples", least);
+        let taken: usize = counts.iter().sum();
+        assert!(taken < w * h * 64 * 9 / 10, "{} samples of {}", taken, w * h * 64);
+        // The same picture: each pixel's mean within its noise of the fully sampled one's.
+        let mean = |rc: &RenderContext| (0..w * h).fold(Vector3::zeros(), |a, i| a + rc.get_pixel(i % w, i / w).rgb) / (w * h) as f64;
+        let (a, f) = (mean(&adaptive), mean(&full));
+        for ch in 0..3 {
+            assert!((a[ch] - f[ch]).abs() < 0.03 * f[ch], "channel {}: adaptive {} vs full {}", ch, a[ch], f[ch]);
+        }
+
+        // Stopped at 16 samples and resumed: the same film, pixel for pixel.
+        s.render.supersamples = 16;
+        let part = render(&mut gpu, &s, RenderContext::new(w, h, false, "test.png"));
+        s.render.supersamples = 64;
+        let resumed = render(&mut gpu, &s, part);
+        for i in 0..w * h {
+            let (x, y) = (i % w, i / w);
+            assert_eq!(resumed.samples_at(x, y), adaptive.samples_at(x, y), "pixel {}'s samples", i);
+            assert_eq!(resumed.get_pixel(x, y), adaptive.get_pixel(x, y), "pixel {}", i);
         }
     }
 
@@ -1063,7 +1752,7 @@ mod tests {
             },
         };
         let rc = Mutex::new(RenderContext::new(24, 16, false, "test.png"));
-        gpu.render(&s, &rc, |_| ());
+        gpu.render(&s, &flat, &rc, |_| ());
         let (gpu_image, gpu_rays) = { let rc = rc.lock().unwrap(); (rc.snapshot(), rc.rays_cast) };
         let rc = Mutex::new(RenderContext::new(24, 16, false, "test.png"));
         crate::wavefront::integrator::render(&s, &flat, &rc, |_| ());

@@ -18,3 +18,17 @@ pub fn read(path: &str) -> std::io::Result<Vec<u8>> {
     }
     std::fs::read(path)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_provided_file_is_read_without_a_disk() {
+        assert!(read("no-such-dir/tri.obj").is_err());
+        provide("no-such-dir/tri.obj", b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n".to_vec());
+        assert_eq!(read("no-such-dir/tri.obj").unwrap().len(), 32);
+        let mesh = crate::shapes::mesh::Mesh::from_file("no-such-dir/tri.obj".to_string(), na::Vector3::new(1., 1., 1.));
+        assert_eq!(crate::shapes::geometry::Geometry::primitives(&mesh), 1);
+    }
+}

@@ -8,8 +8,15 @@
 //! Shapes and materials describe themselves (`Geometry::flatten`, `MaterialModel::flat`), so
 //! the scene file is parsed, and transforms and instances applied, exactly as for the
 //! recursive tracer. The skysphere stays an object, evaluated for rays that escape. What can't
-//! be flattened (procedural shapes, CSG, textures, media, crepuscular rays, spectral and
-//! motion-blurred renders) is reported, and the scene renders the usual way.
+//! be flattened (procedural shapes, CSG, media, crepuscular rays, spectral and motion-blurred
+//! renders) is reported, and the scene renders the usual way.
+//!
+//! A material that isn't data (textured, layered, procedural: anything whose `flat` is None)
+//! doesn't stop a scene being flattened if its shape can be. It is kept as `FlatMaterial::Host`,
+//! naming its object, and a path that hits it is shaded by the scene's own material, as the
+//! recursive tracer would (`integrator::host_bounce`). That is the fallback the plan's
+//! scheduler is for (plan.md sections 12 and 13; `scheduler`'s "CPU queue"): the stages cover
+//! what has been ported, and the rest is a queue of its own served by the renderer's code.
 
 use crate::bvh::Bvh;
 use crate::color::Color;
@@ -180,6 +187,9 @@ pub enum FlatMaterial {
     Emitter { radiance: Color, two_sided: bool },
     /// Two materials in a checkerboard across x and z (`CheckeredYPlane`).
     Checker { m1: Box<FlatMaterial>, m2: Box<FlatMaterial>, xsize: f64, zsize: f64 },
+    /// A material that isn't data: `FlatScene::hosts[object]`'s own, asked through
+    /// `MaterialModel::scatter` as the recursive tracer does.
+    Host { object: u32 },
 }
 
 impl FlatMaterial {
@@ -193,6 +203,7 @@ impl FlatMaterial {
             FlatMaterial::Emitter { .. } => 4,
             FlatMaterial::Specular { .. } => 5,
             FlatMaterial::Checker { .. } => 6,
+            FlatMaterial::Host { .. } => 7,
         }
     }
 
@@ -235,6 +246,11 @@ pub struct FlatScene {
     /// With `"light_sampler": "bvh"`, the light BVH over `emitters` (`light_bvh`), in place of
     /// choosing by power.
     pub light_bvh: Option<crate::light_bvh::LightBvh>,
+    /// The objects whose materials are `FlatMaterial::Host`.
+    pub hosts: Vec<std::sync::Arc<crate::sceneobject::SceneObject>>,
+    /// Where there are hosts: each primitive's place among its object's (its face, for
+    /// `Geometry::uv`: a mesh flattens to its triangles in order). Empty otherwise.
+    pub prim_face: Vec<u32>,
 }
 
 impl FlatScene {
@@ -252,7 +268,8 @@ impl FlatScene {
         }
         let mut sky = None;
         let mut materials: Vec<FlatMaterial> = Vec::new();
-        let mut bounded: Vec<(Prim, u32)> = Vec::new();
+        let mut bounded: Vec<(Prim, u32, u32)> = Vec::new();
+        let mut hosts = Vec::new();
         let mut planes: Vec<(Prim, u32)> = Vec::new();
         let objects = s.objects.items().iter().chain(s.objects.infinite_items.iter());
         let (mut shapes, mut unflat_shapes, mut unflat_materials) = (0, 0, 0);
@@ -270,13 +287,26 @@ impl FlatScene {
                 }
                 continue;
             };
-            let Some(m) = o.medium.flat_material() else { unflat_materials += 1; continue };
+            let m = match o.medium.flat_material() {
+                Some(m) => m,
+                // An emitter must be data: the stages' light sampling has to know it. So must
+                // a medium of several parts' (a combined shape's), as a primitive doesn't
+                // record its part.
+                None if o.medium.material_at(Vector3::zeros()).is_emitter() || o.medium.part(1).is_some() => {
+                    unflat_materials += 1;
+                    continue;
+                },
+                None => {
+                    hosts.push(o.clone());
+                    FlatMaterial::Host { object: hosts.len() as u32 - 1 }
+                },
+            };
             let index = materials.len() as u32;
             materials.push(m);
-            for p in prims {
+            for (face, p) in prims.into_iter().enumerate() {
                 match p {
                     Prim::Plane { .. } => planes.push((p, index)),
-                    _ => bounded.push((p, index)),
+                    _ => bounded.push((p, index, face as u32)),
                 }
             }
         }
@@ -284,14 +314,15 @@ impl FlatScene {
             problems.push(format!("{} of {} objects whose shapes can't be flattened (only spheres, triangles, meshes, boxes, flat quads, planes and their transforms can)", unflat_shapes, shapes));
         }
         if unflat_materials > 0 {
-            problems.push(format!("{} of {} objects whose materials can't be flattened (only untextured lambertian, plastic, metal, dielectric, isotropic conductor and diffuse-light can)", unflat_materials, shapes));
+            problems.push(format!("{} of {} objects whose materials can't be flattened (textured lights, and combined shapes with a material a part)", unflat_materials, shapes));
         }
         problems.dedup();
         if !problems.is_empty() {
             return Err(problems.join("; "));
         }
-        let (bvh, bounded) = Bvh::build(bounded, |(p, _)| p.bounds());
-        let (prims, prim_material): (Vec<Prim>, Vec<u32>) = bounded.into_iter().unzip();
+        let (bvh, bounded) = Bvh::build(bounded, |(p, _, _)| p.bounds());
+        let prim_face = if hosts.is_empty() { Vec::new() } else { bounded.iter().map(|b| b.2).collect() };
+        let (prims, prim_material): (Vec<Prim>, Vec<u32>) = bounded.into_iter().map(|(p, m, _)| (p, m)).unzip();
         // Emitters, by power: luminance times area (times two if two-sided).
         let mut emitters = Vec::new();
         let mut powers = Vec::new();
@@ -322,7 +353,7 @@ impl FlatScene {
             crate::light_bvh::LightBvh::new(&bounds)
         });
         let emitter_choice = Distribution1D::new(if powers.is_empty() { vec![1.] } else { powers });
-        Ok(FlatScene { prims, prim_material, bvh, planes, materials, emitters, emitter_choice, emitter_index, sky, light_bvh })
+        Ok(FlatScene { prims, prim_material, bvh, planes, materials, emitters, emitter_choice, emitter_index, sky, light_bvh, hosts, prim_face })
     }
 
     /// One emitter to sample from `p` (its index in `emitters`), and the chance of choosing it.
@@ -378,6 +409,17 @@ impl FlatScene {
     }
 
     /// The material of a hit's primitive (bounded or plane).
+    /// A primitive by a hit's index: bounded, or after those a plane.
+    pub fn prim(&self, prim: u32) -> &Prim {
+        let n = self.prims.len();
+        if (prim as usize) < n { &self.prims[prim as usize] } else { &self.planes[prim as usize - n].0 }
+    }
+
+    /// A primitive's place among its object's (0 for a plane, or where no material needs it).
+    pub fn face(&self, prim: u32) -> u32 {
+        self.prim_face.get(prim as usize).copied().unwrap_or(0)
+    }
+
     pub fn hit_material(&self, prim: u32) -> &FlatMaterial {
         let n = self.prims.len() as u32;
         if prim < n { self.material(prim) } else { &self.materials[self.planes[(prim - n) as usize].1 as usize] }

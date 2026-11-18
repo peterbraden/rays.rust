@@ -6,9 +6,12 @@
 #![cfg_attr(target_arch = "spirv", no_std)]
 #![allow(clippy::too_many_arguments)]
 
+// (Some are used only by the kernels' entry points, which the CPU build leaves out.)
+#[allow(unused_imports)]
 use spirv_std::glam::{UVec3, UVec4, Vec3, Vec4, Vec4Swizzles};
 #[allow(unused_imports)]
 use spirv_std::num_traits::Float;
+#[allow(unused_imports)]
 use spirv_std::spirv;
 
 /// glam, as the shader sees it, for building its buffers on the CPU.
@@ -32,7 +35,8 @@ pub struct Params {
     pub sun_dir: Vec4,
     /// The sun's irradiance and angular radius.
     pub sun_irr: Vec4,
-    /// Seed, Russian roulette on, where the lights are in `tables`.
+    /// Seed, Russian roulette on, the side of the queue a round reads, and the lanes: how
+    /// many paths each pixel has at once (`slots`).
     pub seed: UVec4,
     /// Records of the air in `tables` (`AIR_*`), or `NO_AIR`: the sky's (for rays that escape),
     /// the aerial perspective's, the sun's (its reddening); and space's (`SPACE_*`).
@@ -58,13 +62,39 @@ pub struct Prim {
 #[derive(Copy, Clone)]
 #[cfg_attr(not(target_arch = "spirv"), derive(bytemuck::Pod, bytemuck::Zeroable))]
 #[repr(C)]
+/// An interior node of the BVH, holding its two children's boxes: a ray tests both at one
+/// visit, goes into the nearer and keeps the farther for later only if it enters it (Aila and
+/// Laine, "Understanding the Efficiency of Ray Traversal on GPUs", HPG 2009). Leaves have no
+/// node of their own: a child is a leaf when its count isn't zero.
 pub struct Node {
+    pub amin: Vec3,
+    /// Child a: a leaf's first item, or an interior node's index.
+    pub a: u32,
+    pub amax: Vec3,
+    /// A leaf's items; 0 for an interior node. A child that isn't there (the second child of
+    /// a tree that is one leaf) is the interior node `NO_CHILD`, which no ray enters.
+    pub a_count: u32,
     pub bmin: Vec3,
-    /// A leaf's first item, or an interior node's second child.
-    pub offset: u32,
+    pub b: u32,
     pub bmax: Vec3,
-    /// A leaf's items; 0 for an interior node.
-    pub count: u32,
+    pub b_count: u32,
+}
+
+/// The index of a child that isn't there. (No box can say so: every ray "enters" an inverted
+/// or infinite one, by the slab test.)
+pub const NO_CHILD: u32 = 0xffff_ffff;
+
+/// A child as the traversal's stack holds it: an interior node's index, or for a leaf, this
+/// bit, its count less one in the next `LEAF_COUNT_BITS` and its first item in the rest.
+pub const LEAF: u32 = 0x8000_0000;
+pub const LEAF_COUNT_BITS: u32 = 3;
+/// The most items a leaf may hold, and one more than the largest first item.
+pub const MAX_LEAF: u32 = 1 << LEAF_COUNT_BITS;
+pub const MAX_LEAF_ITEMS: u32 = 1 << (31 - LEAF_COUNT_BITS);
+
+#[inline(always)]
+fn child(index: u32, count: u32) -> u32 {
+    if count > 0 { LEAF | ((count - 1) << (31 - LEAF_COUNT_BITS)) | index } else { index }
 }
 
 #[derive(Copy, Clone)]
@@ -128,6 +158,8 @@ pub const MAT_CONDUCTOR: u32 = 3;
 pub const MAT_EMITTER: u32 = 4;
 pub const MAT_METAL: u32 = 5;
 pub const MAT_CHECKER: u32 = 6;
+/// A material the kernels have no code for: the host shades the vertex (`PATH_HOST`).
+pub const MAT_HOST: u32 = 7;
 /// Hits nearer than this are not hazed (as the renderer's `AERIAL_PERSPECTIVE_FROM`).
 pub const AERIAL_FROM: f32 = 100.0;
 /// No record (`Params::air`), table (`AIR_TABLES`) or moon.
@@ -185,8 +217,11 @@ pub const GALAXY_SIZE: u32 = 29;
 pub const MIN_ALPHA: f32 = 1e-3;
 pub const POINT_SUN: f32 = 1e-3;
 pub const LIMB_DARKENING: f32 = 0.6;
-/// The BVH traversal's stack: the host refuses trees deeper than this (`Buffers::build`).
-pub const STACK: usize = 100;
+/// The BVH traversal's stack: one entry for each level of interior nodes, at most (the
+/// farther child, while the nearer is descended into). The host refuses trees deeper than
+/// this (`Buffers::build`); a binary tree built by the surface area heuristic over a million
+/// triangles is about 40 levels deep.
+pub const STACK: usize = 64;
 const PI: f32 = core::f32::consts::PI;
 const INF: f32 = 3.0e38;
 const NONE: u32 = 0xffff_ffff;
@@ -194,21 +229,53 @@ const NONE: u32 = 0xffff_ffff;
 /// The scene's buffers.
 pub struct Scene<'a> {
     pub params: &'a Params,
-    pub prims: &'a [Prim],
+    /// The primitives, packed (`pack_prims`): what a ray is tested against first, three
+    /// vectors each, then what shading needs of them, five each.
+    pub prims: &'a [Vec4],
     pub nodes: &'a [Node],
     pub materials: &'a [Material],
+    pub lights: &'a [Light],
     pub tables: &'a [f32],
 }
 
-/// Point light `k`, from `tables` (where the lights are, to keep within WebGPU's 8 storage
-/// buffers): `Params::seed.z`, 16 floats each.
-fn load_light(s: &Scene, k: u32) -> Light {
-    let i = s.params.seed.z + 16 * k;
-    Light { pos: tv4(s, i), intensity: tv4(s, i + 4), axis: tv4(s, i + 8), extra: tv4(s, i + 12) }
+/// How much work traversal does, counted on the CPU build only (the shader has nowhere to
+/// keep it): box tests and primitive tests since `stats::take` was last called on this thread.
+/// They are the same on the GPU, which runs this code; `gpu::tests::measure_traversal` reports
+/// them per ray.
+#[cfg(not(target_arch = "spirv"))]
+pub mod stats {
+    use std::cell::Cell;
+    thread_local! {
+        pub static BOXES: Cell<u64> = const { Cell::new(0) };
+        pub static PRIMS: Cell<u64> = const { Cell::new(0) };
+        /// Nanoseconds spent in `trace`, while `TIMED` is on (two clock readings a ray).
+        pub static TRACE_NS: Cell<u64> = const { Cell::new(0) };
+        pub static TIMED: Cell<bool> = const { Cell::new(false) };
+    }
+    /// Time traversal from here on (or stop), on this thread; `trace_seconds` reads it.
+    pub fn time_traversal(on: bool) {
+        TIMED.with(|t| t.set(on));
+        TRACE_NS.with(|c| c.set(0));
+    }
+    pub fn trace_seconds() -> f64 {
+        TRACE_NS.with(|c| c.get()) as f64 * 1e-9
+    }
+    /// (box tests, primitive tests) since the last call, on this thread.
+    pub fn take() -> (u64, u64) {
+        (BOXES.with(|c| c.replace(0)), PRIMS.with(|c| c.replace(0)))
+    }
 }
 
-fn tv4(s: &Scene, i: u32) -> Vec4 {
-    Vec4::new(at(s.tables, i), at(s.tables, i + 1), at(s.tables, i + 2), at(s.tables, i + 3))
+#[inline(always)]
+fn count_box() {
+    #[cfg(not(target_arch = "spirv"))]
+    stats::BOXES.with(|c| c.set(c.get() + 1));
+}
+
+#[inline(always)]
+fn count_prim() {
+    #[cfg(not(target_arch = "spirv"))]
+    stats::PRIMS.with(|c| c.set(c.get() + 1));
 }
 
 /// `slice[i]` without the bounds check: the host sizes every buffer for the indices it writes
@@ -245,19 +312,69 @@ fn fract(x: f32) -> f32 {
 
 #[derive(Copy, Clone)]
 struct Hit {
-    pub t: f32,
+    t: f32,
     prim: u32,
-    ng: Vec3,
-    ns: Vec3,
+}
+
+/// A primitive's first vector, as the tests below name it.
+struct TestRecord {
+    v0: Vec4,
+}
+
+/// Vectors a primitive has in each part of the packed buffer: for the intersection test (a
+/// triangle's first vertex and two edges, a sphere's centre and radius, a plane's height;
+/// the kind in the second's w), and for shading (the other two vertices, with the material
+/// and emitter + 1 in their w; three vertex normals, the first's w saying whether to use them).
+pub const PRIM_TEST: u32 = 3;
+pub const PRIM_SHADING: u32 = 5;
+/// Indices are kept as floats there, exact up to this.
+pub const MAX_PACKED_INDEX: u32 = 1 << 24;
+
+/// A primitive whole again, from both parts: for shading, where the test's saving doesn't
+/// matter and the original vertices do (an edge added back to a vertex isn't the vertex).
+fn whole_prim(s: &Scene, i: u32) -> Prim {
+    let count = s.params.counts.x + s.params.counts.y;
+    let v0 = at(s.prims, PRIM_TEST * i);
+    let kind = at(s.prims, PRIM_TEST * i + 1).w as u32;
+    let at_shading = PRIM_TEST * count + PRIM_SHADING * i;
+    let v1 = at(s.prims, at_shading);
+    let v2 = at(s.prims, at_shading + 1);
+    let n0 = at(s.prims, at_shading + 2);
+    Prim {
+        v0, v1: v1.xyz().extend(0.0), v2: v2.xyz().extend(0.0),
+        n0: n0.xyz().extend(0.0), n1: at(s.prims, at_shading + 3), n2: at(s.prims, at_shading + 4),
+        info: UVec4::new(kind, v1.w as u32, v2.w as u32, n0.w as u32),
+    }
+}
+
+/// The buffer the shader reads primitives from: every primitive's test record, then every
+/// primitive's shading record (`PRIM_TEST`, `PRIM_SHADING`). Edges are differences of the
+/// vertices as the shader's f32, so the test computes what it did from the vertices.
+#[cfg(not(target_arch = "spirv"))]
+pub fn pack_prims(prims: &[Prim]) -> Vec<Vec4> {
+    let mut packed = Vec::with_capacity(prims.len() * (PRIM_TEST + PRIM_SHADING) as usize);
+    for p in prims {
+        let triangle = p.info.x == PRIM_TRIANGLE;
+        let e1 = if triangle { p.v1.xyz() - p.v0.xyz() } else { Vec3::ZERO };
+        let e2 = if triangle { p.v2.xyz() - p.v0.xyz() } else { Vec3::ZERO };
+        packed.extend([p.v0, e1.extend(p.info.x as f32), e2.extend(0.0)]);
+    }
+    for p in prims {
+        packed.extend([p.v1.xyz().extend(p.info.y as f32), p.v2.xyz().extend(p.info.z as f32), p.n0.xyz().extend(p.info.w as f32), p.n1, p.n2]);
+    }
+    packed
 }
 
 /// (t, b1, b2, 1) for a hit within (tmin, tmax), else zero.
 fn intersect_prim(s: &Scene, i: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -> Vec4 {
-    let p = at(s.prims, i);
-    let kind = p.info.x;
+    // The test's own record (`PRIM_TEST` vectors), not the whole primitive.
+    let v0 = at(s.prims, PRIM_TEST * i);
+    let e1 = at(s.prims, PRIM_TEST * i + 1);
+    let kind = e1.w as u32;
     if kind == PRIM_TRIANGLE {
-        let e1 = p.v1.xyz() - p.v0.xyz();
-        let e2 = p.v2.xyz() - p.v0.xyz();
+        let e2 = at(s.prims, PRIM_TEST * i + 2).xyz();
+        let e1 = e1.xyz();
+        let p = TestRecord { v0 };
         let pv = rd.cross(e2);
         let det = e1.dot(pv);
         if det.abs() < 1e-12 {
@@ -280,6 +397,7 @@ fn intersect_prim(s: &Scene, i: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -
         }
         Vec4::new(t, b1, b2, 1.0)
     } else if kind == PRIM_SPHERE {
+        let p = TestRecord { v0 };
         let oc = ro - p.v0.xyz();
         let b = oc.dot(rd);
         // A ray from outside going away from the centre misses, decided without the roots: a
@@ -307,7 +425,7 @@ fn intersect_prim(s: &Scene, i: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -
         if rd.y.abs() < 1e-12 {
             return Vec4::ZERO;
         }
-        let t = (p.v0.x - ro.y) / rd.y;
+        let t = (v0.x - ro.y) / rd.y;
         if t <= tmin || t >= tmax {
             return Vec4::ZERO;
         }
@@ -317,7 +435,7 @@ fn intersect_prim(s: &Scene, i: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -
 
 /// The geometric and shading normals of a hit.
 fn normals(s: &Scene, i: u32, ro: Vec3, rd: Vec3, h: Vec4) -> (Vec3, Vec3) {
-    let p = at(s.prims, i);
+    let p = whole_prim(s, i);
     let kind = p.info.x;
     if kind == PRIM_TRIANGLE {
         let g = (p.v1.xyz() - p.v0.xyz()).cross(p.v2.xyz() - p.v0.xyz()).normalize();
@@ -346,7 +464,9 @@ fn slab(p: f32, q: f32, near: f32, far: f32) -> (f32, f32) {
     if p == p && q == q { (near.max(p.min(q)), far.min(p.max(q))) } else { (near, far) }
 }
 
-fn box_hit(bmin: Vec3, bmax: Vec3, ro: Vec3, inv: Vec3, tmax: f32) -> bool {
+/// Where the ray enters the box, if it does before `tmax`; otherwise `INF`.
+fn box_entry(bmin: Vec3, bmax: Vec3, ro: Vec3, inv: Vec3, tmax: f32) -> f32 {
+    count_box();
     let t1 = (bmin - ro) * inv;
     let t2 = (bmax - ro) * inv;
     // Per axis; a ray parallel to a slab and starting on its face makes 0 × ∞ = NaN, and
@@ -355,64 +475,108 @@ fn box_hit(bmin: Vec3, bmax: Vec3, ro: Vec3, inv: Vec3, tmax: f32) -> bool {
     let (n0, f0) = slab(t1.x, t2.x, -INF, INF);
     let (n1, f1) = slab(t1.y, t2.y, n0, f0);
     let (near, far) = slab(t1.z, t2.z, n1, f1);
-    !(far < 0.0 || near > far || near > tmax)
+    if far < 0.0 || near > far || near > tmax { INF } else { near }
 }
 
-/// The nearest hit beyond `tmin`, or with `any_hit`, whether anything lies before `tmax`.
-fn trace(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> Hit {
-    let mut best = Hit { t: tmax, prim: NONE, ng: Vec3::ZERO, ns: Vec3::ZERO };
+/// The nearest hit beyond `tmin`, or with `any_hit`, whether anything lies before `tmax`: the
+/// primitive (`NONE` for none) and (t, b1, b2, 1) as `intersect_prim` gives them. Its normals
+/// are `normals`' to find, where it is shaded.
+fn trace(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> (u32, Vec4) {
+    #[cfg(not(target_arch = "spirv"))]
+    if stats::TIMED.with(|t| t.get()) {
+        let start = std::time::Instant::now();
+        let found = traverse(s, ro, rd, tmin, tmax, any_hit);
+        stats::TRACE_NS.with(|c| c.set(c.get() + start.elapsed().as_nanos() as u64));
+        return found;
+    }
+    traverse(s, ro, rd, tmin, tmax, any_hit)
+}
+
+#[inline(always)]
+fn traverse(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> (u32, Vec4) {
+    let mut best = Hit { t: tmax, prim: NONE };
     let mut best_h = Vec4::ZERO;
     let np = s.params.counts.x;
     // One loop, and so one copy of `intersect_prim` once rust-gpu inlines everything: a leaf's
     // primitives j..end are tested first (to begin with, the planes, which follow the bounded
-    // primitives), then the next node is taken from the stack.
+    // primitives), then the tree is descended: at each interior node into the nearer child
+    // the ray enters, the farther going on the stack with the distance at which the ray
+    // enters it, so that it can be dropped unvisited if something nearer has been hit by the
+    // time it comes off.
     let mut j = np;
     let mut end = np + s.params.counts.y;
     let inv = Vec3::ONE / rd;
     let mut stack = [0u32; STACK];
-    let mut sp = if np > 0 { 1usize } else { 0 };
+    let mut entered = [0f32; STACK];
+    let mut sp = 0usize;
+    // The interior node to visit next, if there is one; the root, to begin with.
+    let mut node = if np > 0 { 0 } else { NONE };
     loop {
         if j < end {
+            count_prim();
             let h = intersect_prim(s, j, ro, rd, tmin, best.t);
             if h.w > 0.0 {
                 best.t = h.x;
                 best.prim = j;
                 best_h = h;
                 if any_hit {
-                    return best;
+                    return (best.prim, best_h);
                 }
             }
             j += 1;
             continue;
         }
-        if sp == 0 {
-            break;
+        // The next thing to do: the child chosen at the last node, or the stack's top.
+        let mut next = node;
+        node = NONE;
+        if next == NONE {
+            if sp == 0 {
+                break;
+            }
+            sp -= 1;
+            if entered[sp] >= best.t {
+                continue;
+            }
+            next = stack[sp];
         }
-        sp -= 1;
-        let ni = stack[sp];
-        let n = at(s.nodes, ni);
-        if !box_hit(n.bmin, n.bmax, ro, inv, best.t) {
+        if next & LEAF != 0 {
+            j = next & (MAX_LEAF_ITEMS - 1);
+            end = j + ((next & !LEAF) >> (31 - LEAF_COUNT_BITS)) + 1;
             continue;
         }
-        if n.count > 0 {
-            j = n.offset;
-            end = n.offset + n.count;
-        } else if sp + 2 <= STACK {
-            stack[sp] = n.offset;
-            stack[sp + 1] = ni + 1;
-            sp += 2;
+        let n = at(s.nodes, next);
+        let ta = if n.a == NO_CHILD { INF } else { box_entry(n.amin, n.amax, ro, inv, best.t) };
+        let tb = if n.b == NO_CHILD { INF } else { box_entry(n.bmin, n.bmax, ro, inv, best.t) };
+        let ca = child(n.a, n.a_count);
+        let cb = child(n.b, n.b_count);
+        // The nearer first (a, if they tie), the farther kept if the ray enters it at all.
+        let a_first = ta <= tb;
+        let near = if a_first { ca } else { cb };
+        let far = if a_first { cb } else { ca };
+        let t_near = if a_first { ta } else { tb };
+        let t_far = if a_first { tb } else { ta };
+        if t_far < INF && sp < STACK {
+            stack[sp] = far;
+            entered[sp] = t_far;
+            sp += 1;
+        }
+        if t_near < INF {
+            node = near;
         }
     }
-    if best.prim != NONE {
-        let (g, n) = normals(s, best.prim, ro, rd, best_h);
-        best.ng = g;
-        best.ns = n;
-    }
-    best
+    (best.prim, best_h)
+}
+
+/// The traversal alone, for the renderer's tests of it: the nearest hit's distance and
+/// primitive (`u32::MAX` for none) in (tmin, tmax), or any hit's.
+#[cfg(not(target_arch = "spirv"))]
+pub fn nearest(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> (f32, u32) {
+    let (prim, h) = trace(s, ro, rd, tmin, tmax, any_hit);
+    (if prim == NONE { tmax } else { h.x }, prim)
 }
 
 fn occluded(s: &Scene, ro: Vec3, rd: Vec3, tmax: f32) -> bool {
-    trace(s, ro, rd, 0.0, tmax, true).prim != NONE
+    trace(s, ro, rd, 0.0, tmax, true).0 != NONE
 }
 
 // ---- Tables: emitters, the sky and aerial perspective. ----
@@ -1546,7 +1710,7 @@ fn emitted(s: &Scene, m: u32, n: Vec3, towards: Vec3) -> Vec3 {
 }
 
 fn prim_area(s: &Scene, i: u32) -> f32 {
-    let p = at(s.prims, i);
+    let p = whole_prim(s, i);
     if p.info.x == PRIM_TRIANGLE {
         (p.v1.xyz() - p.v0.xyz()).cross(p.v2.xyz() - p.v0.xyz()).length() / 2.0
     } else {
@@ -1576,7 +1740,7 @@ pub fn sphere_pdf(c: Vec3, r: f32, org: Vec3, y: Vec3, n: Vec3) -> f32 {
 /// A point on emitting primitive i seen from `org`, its normal, and the density per solid
 /// angle: a sphere by its cone, a triangle by area.
 fn sample_light(s: &Scene, i: u32, org: Vec3, u1: f32, u2: f32) -> (Vec3, Vec3, f32) {
-    let p = at(s.prims, i);
+    let p = whole_prim(s, i);
     if p.info.x == PRIM_SPHERE {
         let (c, r) = (p.v0.xyz(), p.v0.w);
         let to = c - org;
@@ -1615,7 +1779,7 @@ fn sample_light(s: &Scene, i: u32, org: Vec3, u1: f32, u2: f32) -> (Vec3, Vec3, 
 }
 
 fn light_pdf(s: &Scene, i: u32, org: Vec3, y: Vec3, n: Vec3) -> f32 {
-    let p = at(s.prims, i);
+    let p = whole_prim(s, i);
     if p.info.x == PRIM_SPHERE {
         return sphere_pdf(p.v0.xyz(), p.v0.w, org, y, n);
     }
@@ -1701,19 +1865,28 @@ pub struct PathState {
     pub beta: Vec4,
     /// The light gathered so far, and the rays traced.
     pub l: Vec4,
-    /// The random numbers' state, and `PATH_*` flags.
+    /// The random numbers' state, `PATH_*` flags, and the primitive its ray hits (`NONE` for
+    /// none), once `intersect` has found it.
     pub state: UVec4,
+    /// That hit: its distance and barycentric coordinates (`intersect_prim`).
+    pub hit: Vec4,
 }
 
 /// `PathState::state.y`: still tracing; its last bounce was specular; it has scattered off a
-/// rough surface (so regularisation applies); its light has been added to the image; it has
-/// asked the sky for light the `answer_sky` kernel hasn't yet found (so that kernel, and
-/// `bounce_paths` for paths long ended, can leave the others alone).
+/// rough surface (so regularisation applies); its light has been added to the image.
 pub const PATH_ACTIVE: u32 = 1;
 pub const PATH_SPECULAR: u32 = 2;
 pub const PATH_SCATTERED: u32 = 4;
 pub const PATH_ADDED: u32 = 8;
-pub const PATH_ASKED: u32 = 16;
+/// Waiting for the host: its ray hit a material the kernels have no code for (`MAT_HOST`), so
+/// it is stopped at the hit, which it keeps (`hit`, `state.z`), and in the host's queue. The
+/// host shades the vertex with the renderer's own material and queues the path again, or ends
+/// it (the renderer's `gpu::host`).
+pub const PATH_HOST: u32 = 16;
+/// The last vertex counted the lights (area lights, the sun) wholly by sampling them, as some
+/// of the host's materials do (the renderer's `LightSampling::Exclusive`): one the ray finds
+/// adds nothing, though a sky does in full.
+pub const PATH_LIGHTS_COUNTED: u32 = 32;
 
 impl PathState {
     /// Pixel `index`'s path in pass `pass` from its camera ray.
@@ -1722,6 +1895,7 @@ impl PathState {
         PathState {
             o: ray.o, d: ray.d.truncate().normalize_or_zero().extend(0.0), beta: Vec4::new(1.0, 1.0, 1.0, 0.0), l: Vec4::ZERO,
             state: UVec4::new(path_seed(index, pass, seed), if live { PATH_ACTIVE | PATH_SPECULAR } else { PATH_ADDED }, 0, 0),
+            hit: Vec4::ZERO,
         }
     }
 }
@@ -1785,7 +1959,7 @@ fn aerial_transmittance(s: &Scene, o: Vec3, d: Vec3, distance: f32) -> Vec3 {
 /// The path with a new ray, still tracing.
 #[allow(clippy::too_many_arguments)]
 fn carry_on(p: &PathState, o: Vec3, d: Vec3, beta: Vec3, l: Vec3, rays: u32, rng: u32, flags: u32, prev_pdf: f32, depth: u32, q0: SkyQuery, q1: SkyQuery) -> (PathState, SkyQuery, SkyQuery) {
-    (PathState { o: o.extend(p.o.w), d: d.extend(prev_pdf), beta: beta.extend(depth as f32), l: l.extend(rays as f32), state: UVec4::new(rng, flags, 0, 0) }, q0, q1)
+    (PathState { o: o.extend(p.o.w), d: d.extend(prev_pdf), beta: beta.extend(depth as f32), l: l.extend(rays as f32), state: UVec4::new(rng, flags, 0, 0), hit: Vec4::ZERO }, q0, q1)
 }
 
 /// The path, ended at this vertex (its sky queries still to be answered).
@@ -1798,6 +1972,22 @@ fn finish(p: &PathState, o: Vec3, d: Vec3, beta: Vec3, l: Vec3, rays: u32, rng: 
 /// light (asking the sky for its light sample), and the next ray, or the end. Returns the path
 /// and its two sky queries.
 pub fn bounce(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
+    shade(s, &intersect(s, p))
+}
+
+/// The path with what its ray hits found (`PathState::hit`, and the primitive in `state.z`):
+/// the first of a bounce's two stages, and all of its closest-hit traversal.
+pub fn intersect(s: &Scene, p: &PathState) -> PathState {
+    let (prim, h) = trace(s, p.o.xyz(), p.d.xyz(), 0.0, INF, false);
+    let mut found = *p;
+    found.state.z = prim;
+    found.hit = h;
+    found
+}
+
+/// The second stage, at what `intersect` found: haze, emission, direct light (its shadow rays
+/// traced here, and the sky asked for its light sample), and the next ray, or the end.
+pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
     let (ro, rd, prev_pdf) = (p.o.xyz(), p.d.xyz(), p.d.w);
     let mut beta = p.beta.xyz();
     let depth = p.beta.w as u32;
@@ -1806,22 +1996,23 @@ pub fn bounce(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
     let mut rng = p.state.x;
     let flags_p = p.state.y;
     let specular = flags_p & PATH_SPECULAR != 0;
+    let counted = flags_p & PATH_LIGHTS_COUNTED != 0;
     let (mut q0, mut q1) = (SkyQuery::NONE, SkyQuery::NONE);
     let max_depth = s.params.dims.w;
     let flags = s.params.offs2.w;
     let n_emitters = s.params.counts.z;
 
-    let hit = trace(s, ro, rd, 0.0, INF, false);
+    let hit = Hit { t: p.hit.x, prim: p.state.z };
     rays += 1;
     if hit.prim == NONE {
         // The sky, weighted against sampling it if the last vertex did, and the sun's disc.
         let mut w = 1.0;
-        if !specular && flags & FLAG_SAMPLE_ENV != 0 {
+        if !specular && !counted && flags & FLAG_SAMPLE_ENV != 0 {
             w = power_heuristic(prev_pdf, env_pdf(s, rd));
         }
         q0 = SkyQuery::sky(ro, rd, beta * w);
         if flags & FLAG_SUN != 0 {
-            let ws = if specular { 1.0 } else { power_heuristic(prev_pdf, sun_disc_pdf(s, rd)) };
+            let ws = if specular { 1.0 } else if counted { 0.0 } else { power_heuristic(prev_pdf, sun_disc_pdf(s, rd)) };
             l += beta * sun_disc(s, ro, rd) * ws;
         }
         return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
@@ -1833,22 +2024,30 @@ pub fn bounce(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
         beta *= aerial_transmittance(s, ro, rd, hit.t);
     }
     let point = ro + rd * hit.t;
-    let prim = at(s.prims, hit.prim);
+    let (hit_ng, hit_ns) = normals(s, hit.prim, ro, rd, p.hit);
+    let prim = whole_prim(s, hit.prim);
     let m = resolve_material(s, prim.info.y, point);
     let mat = at(s.materials, m);
     if mat.kind == MAT_EMITTER {
-        let le = emitted(s, m, hit.ns, -rd);
+        let le = emitted(s, m, hit_ns, -rd);
         let mut w = 1.0;
         if !specular && flags & FLAG_SAMPLE_LIGHTS != 0 && prim.info.z > 0 {
-            let lp = emitter_probability(s, prim.info.z - 1) * light_pdf(s, hit.prim, ro, point, hit.ng);
-            w = power_heuristic(prev_pdf, lp);
+            let lp = emitter_probability(s, prim.info.z - 1) * light_pdf(s, hit.prim, ro, point, hit_ng);
+            w = if counted { 0.0 } else { power_heuristic(prev_pdf, lp) };
         }
         l += beta * le * w;
         return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
     }
+    if mat.kind == MAT_HOST {
+        // Stopped here for the host, with the hit and the haze before it.
+        let (mut parked, a, b) = finish(p, ro, rd, beta, l, rays, rng, flags_p | PATH_HOST, prev_pdf, depth, q0, q1);
+        parked.state.z = hit.prim;
+        parked.hit = p.hit;
+        return (parked, a, b);
+    }
     let wo = -rd;
-    let ng = if hit.ng.dot(wo) < 0.0 { -hit.ng } else { hit.ng };
-    let ns = if hit.ns.dot(wo) < 0.0 { -hit.ns } else { hit.ns };
+    let ng = if hit_ng.dot(wo) < 0.0 { -hit_ng } else { hit_ng };
+    let ns = if hit_ns.dot(wo) < 0.0 { -hit_ns } else { hit_ns };
     let eps = offset_for(s, point);
     let above = point + ng * eps;
     let floor_alpha = if flags_p & PATH_SCATTERED != 0 { s.params.misc.x } else { 0.0 };
@@ -1889,7 +2088,7 @@ pub fn bounce(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
         }
     } else if mat.kind == MAT_DIELECTRIC {
         // As `functions::scatter_dielectric`.
-        let n = hit.ns;
+        let n = hit_ns;
         let exiting = rd.dot(n) > 0.0;
         let outward = if exiting { -n } else { n };
         let ior = mat.p.x;
@@ -1913,10 +2112,10 @@ pub fn bounce(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
             return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
         }
         beta *= attenuate;
-        return carry_on(p, next_from, next_dir.normalize(), beta, l, rays, rng, flags_p | PATH_SPECULAR, prev_pdf, depth + 1, q0, q1);
+        return carry_on(p, next_from, next_dir.normalize(), beta, l, rays, rng, (flags_p | PATH_SPECULAR) & !PATH_LIGHTS_COUNTED, prev_pdf, depth + 1, q0, q1);
     }
 
-    let flags_p = (flags_p | PATH_SCATTERED) & !PATH_SPECULAR;
+    let flags_p = (flags_p | PATH_SCATTERED) & !(PATH_SPECULAR | PATH_LIGHTS_COUNTED);
     // Direct light, one shadow ray at a time, with one evaluation of the lobe and one call
     // of `occluded` (so one copy of each once rust-gpu inlines everything): every point
     // light, then the sun, one area light and the sky. Each gives a direction, a distance,
@@ -1930,7 +2129,7 @@ pub fn bounce(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
         let mut li = Vec3::ZERO;
         let mut pdf = 0.0;
         if k < n_lights {
-            let light = load_light(s, k);
+            let light = at(s.lights, k);
             let to = light.pos.xyz() - above;
             let d2 = to.dot(to);
             wi = to / d2.sqrt();
@@ -1972,7 +2171,7 @@ pub fn bounce(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
                 dist = d * (1.0 - 1e-4) - eps;
                 if light_pdf > 0.0 {
                     pdf = pmf * light_pdf;
-                    li = emitted(s, at(s.prims, pi).info.y, ny, -wi);
+                    li = emitted(s, whole_prim(s, pi).info.y, ny, -wi);
                 }
             }
         } else if flags & FLAG_SAMPLE_ENV != 0 {
@@ -2039,82 +2238,253 @@ pub fn radiance(s: &Scene, ro: Vec3, rd: Vec3, rng: &mut u32, rays: &mut u32) ->
 }
 
 /// The pixel this invocation serves (dispatched as rows of at most 65535 workgroups), if any.
+#[cfg(target_arch = "spirv")]
 fn pixel(gid: UVec3, params: &Params) -> Option<usize> {
     let index = gid.x + gid.y * (65535 * 64);
     if index >= params.dims.x * params.dims.y { None } else { Some(index as usize) }
 }
 
-/// One vertex of every pixel's path (`bounce`), its sky queries in two slots a pixel; a path
-/// found ended (its queries answered by `answer_sky` since) adds its light to the image, once.
-/// A pass dispatches this `max_depth` + 2 times, with `answer_sky` after each but the last.
+// ---- Queues of paths: a round's dispatch covers the paths still alive, not every pixel. ----
+//
+// One buffer, `queue`, holds two queues of pixel indices, side 0 and side 1. A round reads the
+// paths to advance from one side (`Params::seed.z`) and writes those still alive after it to
+// the other; the next round swaps them. Each side has a header of four words: the dispatch that
+// covers it (workgroups in x and y, then 1), as `dispatchWorkgroupsIndirect` reads it, and its
+// count. Kernels append with atomics, keeping the header's dispatch in step with the count,
+// so the host needs no kernel between rounds: it copies the filled side's header to the
+// buffer the next dispatch is read from (a buffer bound for writing can't also be a
+// dispatch's arguments), and a fresh header over the side just emptied.
+//
+// A third queue, the host's, takes the paths a round can't advance: those at a material the
+// kernels have no code for. They wait there, out of both sides, until the rounds are done and
+// the host reads them (`HOST_QUEUE`).
+//
+// Every access to the buffer is atomic: naga gives a buffer touched by atomic instructions
+// an atomic element type, as WGSL and Metal require.
+
+/// The wavefront's width: a path for each pixel in each lane. A pass may carry several samples
+/// of every pixel at once, lane k's path for pixel i in slot `k * pixels + i` of the paths and
+/// of the sky queries, and it is slots the queues hold. The rounds a pass takes don't grow with
+/// its lanes, so neither do its dispatches, nor the times the host must be waited for; its
+/// memory does. (The other way to keep a wavefront full, starting a pixel's next sample when
+/// its path ends, was measured here and gave nothing: with one path a pixel a pass still waits
+/// for its slowest pixel. See the renderer's `scheduler`.)
+pub fn slots(params: &Params) -> u32 {
+    params.dims.x * params.dims.y * params.seed.w
+}
+
+/// Words in the queue buffer before the queues' items: a header each for the two sides and
+/// the host's queue.
+pub const QUEUE_HEADER: u32 = 12;
+/// The host's queue, after the two sides: the paths stopped at a material the kernels have no
+/// code for (`PATH_HOST`), for the host to read once the rounds are done (`gather_host`,
+/// `scatter_host`).
+pub const HOST_QUEUE: u32 = 2;
+/// In a side's header, after the dispatch's three words.
+pub const QUEUE_COUNT: u32 = 3;
+/// The most workgroups a dispatch may have in one dimension (WebGPU's default limit).
+pub const MAX_GROUPS: u32 = 65535;
+pub const WORKGROUP: u32 = 64;
+
+/// A header for an empty queue: no workgroups (but a depth of one), no items.
+pub const EMPTY_QUEUE: [u32; 4] = [0, 0, 1, 0];
+
+/// The header of a queue of `count` items, as a kernel's appends leave it.
+pub fn queue_header(count: u32) -> [u32; 4] {
+    let groups = count.div_ceil(WORKGROUP);
+    [groups.min(MAX_GROUPS), groups.div_ceil(MAX_GROUPS), 1, count]
+}
+
+#[cfg(target_arch = "spirv")]
+mod queue {
+    use super::*;
+    use spirv_std::arch::{atomic_i_add, atomic_load, atomic_store};
+    use spirv_std::memory::{Scope, Semantics};
+
+    // The widest scope Vulkan's memory model allows without a further capability.
+    const SCOPE: u32 = Scope::QueueFamily as u32;
+    const SEMANTICS: u32 = Semantics::NONE.bits();
+
+    fn load(queue: &[u32], i: u32) -> u32 {
+        unsafe { atomic_load::<u32, SCOPE, SEMANTICS>(queue.get_unchecked(i as usize)) }
+    }
+
+    /// The pixel this invocation is to advance: item `gid` of the side being read, if there
+    /// is one.
+    pub fn take(queue: &[u32], gid: UVec3, params: &Params) -> Option<u32> {
+        let side = params.seed.z;
+        let i = gid.x + gid.y * (MAX_GROUPS * WORKGROUP);
+        if i >= load(queue, side * 4 + QUEUE_COUNT) {
+            return None;
+        }
+        Some(load(queue, QUEUE_HEADER + side * slots(params) + i))
+    }
+
+    /// Append `pixel` to the side being written.
+    pub fn push(queue: &mut [u32], pixel: u32, params: &Params) {
+        append(queue, 1 - params.seed.z, pixel, params);
+    }
+
+    /// Append `pixel` to the host's queue.
+    pub fn push_host(queue: &mut [u32], pixel: u32, params: &Params) {
+        append(queue, HOST_QUEUE, pixel, params);
+    }
+
+    /// How many paths wait in the host's queue.
+    pub fn host_count(queue: &[u32]) -> u32 {
+        load(queue, HOST_QUEUE * 4 + QUEUE_COUNT)
+    }
+
+    /// Item `i` of the host's queue.
+    pub fn host_item(queue: &[u32], i: u32, params: &Params) -> u32 {
+        load(queue, QUEUE_HEADER + HOST_QUEUE * slots(params) + i)
+    }
+
+    /// Append `pixel` to queue `which` (a side, or the host's), keeping its header's dispatch
+    /// in step with its count.
+    fn append(queue: &mut [u32], which: u32, pixel: u32, params: &Params) {
+        let header = (which * 4) as usize;
+        unsafe {
+            let slot = atomic_i_add::<u32, SCOPE, SEMANTICS>(queue.get_unchecked_mut(header + QUEUE_COUNT as usize), 1);
+            atomic_store::<u32, SCOPE, SEMANTICS>(
+                queue.get_unchecked_mut((QUEUE_HEADER + which * slots(params) + slot) as usize), pixel);
+            // The first item of each workgroup extends the dispatch to cover it: across x
+            // until that is full, then a row of y for every `MAX_GROUPS` groups.
+            if slot % WORKGROUP == 0 {
+                let group = slot / WORKGROUP;
+                if group < MAX_GROUPS {
+                    atomic_i_add::<u32, SCOPE, SEMANTICS>(queue.get_unchecked_mut(header), 1);
+                }
+                if group % MAX_GROUPS == 0 {
+                    atomic_i_add::<u32, SCOPE, SEMANTICS>(queue.get_unchecked_mut(header + 1), 1);
+                }
+            }
+        }
+    }
+}
+
+/// The paths waiting for the host (`PATH_HOST`), copied side by side into `gathered` in the
+/// order of the host's queue, each with its slot in `state.w`: what the host reads is then the
+/// size of its work, not of the wavefront. Dispatched over the host's queue.
+#[cfg(target_arch = "spirv")]
+#[spirv(compute(threads(64)))]
+pub fn gather_host(
+    #[spirv(global_invocation_id)] gid: UVec3,
+    #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] paths: &mut [PathState],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] queue: &mut [u32],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] gathered: &mut [PathState],
+) {
+    let i = gid.x + gid.y * (MAX_GROUPS * WORKGROUP);
+    if i >= queue::host_count(queue) {
+        return;
+    }
+    let slot = queue::host_item(queue, i, params);
+    let mut p = paths[slot as usize];
+    p.state.w = slot;
+    gathered[i as usize] = p;
+}
+
+/// The other way: the paths the host has shaded, from `gathered` back to their slots
+/// (`state.w`), those that go on queued for the next round. Dispatched over the host's queue,
+/// as `gather_host` was.
+#[cfg(target_arch = "spirv")]
+#[spirv(compute(threads(64)))]
+pub fn scatter_host(
+    #[spirv(global_invocation_id)] gid: UVec3,
+    #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] paths: &mut [PathState],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] queue: &mut [u32],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] gathered: &mut [PathState],
+) {
+    let i = gid.x + gid.y * (MAX_GROUPS * WORKGROUP);
+    if i >= queue::host_count(queue) {
+        return;
+    }
+    let mut p = gathered[i as usize];
+    let slot = p.state.w;
+    p.state.w = 0;
+    paths[slot as usize] = p;
+    if p.state.y & PATH_ACTIVE != 0 {
+        queue::push(queue, slot, params);
+    }
+}
+
+/// What each queued path's ray hits (`intersect`): a round's first kernel, small, and all of
+/// its closest-hit traversal.
+#[cfg(target_arch = "spirv")]
+#[spirv(compute(threads(64)))]
+pub fn intersect_paths(
+    #[spirv(global_invocation_id)] gid: UVec3,
+    #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Vec4],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] nodes: &[Node],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 5)] tables: &[f32],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] paths: &mut [PathState],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 7)] queue: &mut [u32],
+) {
+    let Some(pixel) = queue::take(queue, gid, params) else { return };
+    let index = pixel as usize;
+    let s = Scene { params, prims, nodes, materials, lights, tables };
+    paths[index] = intersect(&s, &paths[index]);
+}
+
+/// The rest of a vertex of each queued path (`shade`, at what `intersect_paths` found), its
+/// sky queries in its pixel's two slots; those still alive are queued for the next round. A
+/// pass runs `max_depth` + 1 rounds, each over the paths the last left alive: `intersect_paths`,
+/// this, `answer_sky`; then `add_paths`.
+#[cfg(target_arch = "spirv")]
 #[spirv(compute(threads(64)))]
 pub fn bounce_paths(
     #[spirv(global_invocation_id)] gid: UVec3,
     #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Prim],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Vec4],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] nodes: &[Node],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 5)] tables: &[f32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] paths: &mut [PathState],
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 7)] accum: &mut [Vec4],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 7)] queue: &mut [u32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 8)] queries: &mut [SkyQuery],
 ) {
-    let Some(index) = pixel(gid, params) else { return };
-    // A path ended and added: nothing to do, and nothing to write (most rounds of a pass are
-    // mostly these). Its flags alone are read to find out.
-    if paths[index].state.y & (PATH_ACTIVE | PATH_ADDED) == PATH_ADDED {
-        return;
-    }
+    let Some(pixel) = queue::take(queue, gid, params) else { return };
+    let index = pixel as usize;
     let p = paths[index];
-    // Each buffer written once, after the branches (writes in each would join pointers chosen
-    // by branch, which needs SPIR-V's variable pointers).
-    let (mut next, mut q0, mut q1) = (p, SkyQuery::NONE, SkyQuery::NONE);
-    let mut add = Vec4::ZERO;
-    if p.state.y & PATH_ACTIVE != 0 {
-        let s = Scene { params, prims, nodes, materials, tables };
-        (next, q0, q1) = bounce(&s, &p);
-        if q0.weight.xyz().dot(q0.weight.xyz()) > 0.0 || q1.weight.xyz().dot(q1.weight.xyz()) > 0.0 {
-            next.state.y |= PATH_ASKED;
-        }
-    } else if p.state.y & PATH_ADDED == 0 {
-        // A NaN (from some degenerate case) is dropped, as the CPU renderers drop theirs; its
-        // rays were still cast. (Not `is_finite`: its infinite constant is invalid for naga,
-        // which wgpu translates through.) w counts the rays.
-        let c = p.l.xyz() * p.o.w;
-        #[allow(clippy::eq_op)]
-        let not_nan = c.x == c.x && c.y == c.y && c.z == c.z;
-        add = if not_nan { c } else { Vec3::ZERO }.extend(p.l.w);
-        next.state.y = p.state.y | PATH_ADDED;
-    }
+    let s = Scene { params, prims, nodes, materials, lights, tables };
+    let (next, q0, q1) = shade(&s, &p);
     paths[index] = next;
-    if next.state.y & PATH_ASKED != 0 {
-        queries[2 * index] = q0;
-        queries[2 * index + 1] = q1;
+    queries[2 * index] = q0;
+    queries[2 * index + 1] = q1;
+    if next.state.y & PATH_ACTIVE != 0 {
+        queue::push(queue, pixel, params);
     }
-    if add.w > 0.0 {
-        accum[index] += add;
+    if next.state.y & PATH_HOST != 0 {
+        queue::push_host(queue, pixel, params);
     }
 }
 
-/// The light every pixel's sky queries find (`sky_light`), added to its path's: the sky, space
-/// and the air's haze, in a kernel of their own, as they are most of the shader's code.
+/// The light the sky queries of the paths just advanced find (`sky_light`), added to each
+/// path's: the sky, space and the air's haze, in a kernel of their own, as they are most of
+/// the shader's code. Dispatched over the same queue as the `bounce_paths` before it.
+#[cfg(target_arch = "spirv")]
 #[spirv(compute(threads(64)))]
 pub fn answer_sky(
     #[spirv(global_invocation_id)] gid: UVec3,
     #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Prim],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Vec4],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] nodes: &[Node],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 5)] tables: &[f32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] paths: &mut [PathState],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 7)] queue: &mut [u32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 8)] queries: &mut [SkyQuery],
 ) {
-    let Some(index) = pixel(gid, params) else { return };
-    let flags = paths[index].state.y;
-    if flags & PATH_ASKED == 0 {
-        return;
-    }
-    let s = Scene { params, prims, nodes, materials, tables };
+    let Some(pixel) = queue::take(queue, gid, params) else { return };
+    let index = pixel as usize;
+    let s = Scene { params, prims, nodes, materials, lights, tables };
     let mut light = Vec3::ZERO;
     // Both slots, at one call site of `sky_light`.
     let mut k = 0;
@@ -2125,6 +2495,50 @@ pub fn answer_sky(
         light += sky_light(&s, &q);
         k += 1;
     }
-    paths[index].l += light.extend(0.0);
-    paths[index].state.y = flags & !PATH_ASKED;
+    if light.dot(light) > 0.0 {
+        paths[index].l += light.extend(0.0);
+    }
+}
+
+/// What a finished path adds to its pixel's sum: its light times the camera sample's weight,
+/// and in w the rays it cast. A NaN (from some degenerate case) is dropped, as the CPU
+/// renderers drop theirs; its rays were still cast. (Not `is_finite`: its infinite constant
+/// is invalid for naga, which wgpu translates through.) Nothing for a pixel whose camera ray
+/// the lens stopped (`PATH_ADDED` from the start).
+pub fn path_sum(p: &PathState) -> Vec4 {
+    if p.state.y & PATH_ADDED != 0 {
+        return Vec4::ZERO;
+    }
+    let c = p.l.xyz() * p.o.w;
+    #[allow(clippy::eq_op)]
+    let not_nan = c.x == c.x && c.y == c.y && c.z == c.z;
+    if not_nan { c } else { Vec3::ZERO }.extend(p.l.w)
+}
+
+/// Every pixel's paths, finished, added to the image: once a pass, after its last round. The
+/// image holds two vectors a pixel: the sum of its samples (and in w the rays they cast), and
+/// the sum of their squares, channel by channel (and in w how many were added), from which
+/// the host judges the pixel's noise (`scheduler::plan`).
+#[cfg(target_arch = "spirv")]
+#[spirv(compute(threads(64)))]
+pub fn add_paths(
+    #[spirv(global_invocation_id)] gid: UVec3,
+    #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] paths: &[PathState],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] accum: &mut [Vec4],
+) {
+    let Some(index) = pixel(gid, params) else { return };
+    // Lane by lane, which is the order of the pixel's samples: the sums are those of as many
+    // passes of one lane.
+    let pixels = (params.dims.x * params.dims.y) as usize;
+    let mut lane = 0;
+    while lane < params.seed.w as usize {
+        let add = path_sum(&paths[lane * pixels + index]);
+        if add.w > 0.0 {
+            let c = add.xyz();
+            accum[2 * index] += add;
+            accum[2 * index + 1] += (c * c).extend(1.0);
+        }
+        lane += 1;
+    }
 }

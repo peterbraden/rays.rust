@@ -88,6 +88,28 @@
 //! browser a frame's delay), and whether the device waits (it does: a pass can't end with
 //! paths outstanding until paths carry their own sample, the next step).
 //!
+//! # What is here now: the wavefront's width
+//!
+//! The reading's way to keep a wavefront full is regeneration: a path that ends is replaced
+//! at once by a new one, so no kernel runs over dead paths (van Antwerpen; Laine and others).
+//! That was built here and measured, and set aside. The queues already make a round cost
+//! only its live paths, so what regeneration could save is rounds, and with a pixel's samples
+//! taken one after another (so that their sum is added in order, by one invocation, with no
+//! race) a pass still takes as many rounds as its slowest pixel's paths have vertices:
+//! demo.json, 64 samples in blocks of 8, took 652 rounds against 640, and a fifth longer for
+//! the extra kernel and for asking the device whether it was done. Letting the slow pixels'
+//! paths run on into the next block would have saved the rounds, at the cost of a film that
+//! is never whole, on which adaptive sampling and resumed renders rest.
+//!
+//! What is here instead is width (`lanes`; `pathtrace::slots`): a pass carries several
+//! samples of every pixel at once, each in a lane of the wavefront, and its rounds are those
+//! of one sample. The same paths, the same sums in the same order (so the same pixels), an
+//! eighth of the dispatches; the cost is memory, a path and its sky queries a lane, so the
+//! width is what a budget has room for (`gpu::WAVEFRONT_BUDGET`: 8 lanes of a small image,
+//! one at 1280 x 720). The two aren't exclusive: with a lane's samples regenerated and each
+//! lane summed apart, a wavefront could be both wide and full. That is for when a
+//! measurement asks for it.
+//!
 //! # What isn't here yet, and what the reading says about it
 //!
 //! Stage queues, and why. Laine, Karras and Aila's argument for a wavefront over one large
@@ -314,6 +336,24 @@ pub fn plan(film: &Region, target: usize, adaptive: Option<&Adaptive>, gain: f64
         .collect()
 }
 
+/// How many samples of each pixel a pass of the GPU's carries at once (its lanes:
+/// `pathtrace::slots`), of the `room` its buffers have.
+///
+/// All there is room for, where the kernels do all the work: the rounds a pass takes are those
+/// of one sample however many it carries, so each lane more is a pass's dispatches saved.
+/// Measured (llvmpipe, 320 x 180, 64 samples, 8 lanes against 1): the same pixels from 80
+/// rounds instead of 640, the device's time 11% less on demo.json, 15% on glossy-sun.json,
+/// 23% on instances.json.
+///
+/// One, where the host shades some of the vertices (`gpu::host`). Lanes cut its reads of the
+/// device by as much (textures.json: 48 instead of 384), but each read then copies every
+/// lane's paths, there and back, to get at those waiting, and that cost more than the reads
+/// saved: 8.5 s against 7.0 s. Until the waiting paths are gathered by a kernel, so that a
+/// read is the size of the work, such scenes keep one lane.
+pub fn lanes(room: usize, hosts: bool) -> usize {
+    if hosts { 1 } else { room.max(1) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,6 +370,11 @@ mod tests {
         let samples = [0, 5, 14, 16, 20];
         assert_eq!(plan(&film(&[], &[], &samples), 16, None, 1., 8), vec![8, 8, 2, 0, 0]);
         assert_eq!(plan(&film(&[], &[], &samples), 16, None, 1., 1), vec![1, 1, 1, 0, 0]);
+    }
+
+    #[test]
+    fn test_lanes() {
+        assert_eq!((lanes(8, false), lanes(8, true), lanes(0, false)), (8, 1, 1));
     }
 
     #[test]

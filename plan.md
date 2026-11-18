@@ -1672,7 +1672,7 @@ the host's.
    - Done, the GPU's side (natively; `gpu::host` has the design): `shade` stops a path at a
      `MAT_HOST` material (`PATH_HOST`, keeping its hit) and `bounce_paths` appends it to a
      third queue in the queue buffer (`HOST_QUEUE`; no new binding). After a pass's rounds
-     the host reads the queue and the paths back (`GpuRenderer::pass_with_host`), shades
+     the host reads the queue and the paths back (`GpuRenderer::block_with_host`), shades
      each vertex in parallel with `integrator::host_vertex` (the hit refound in f64 on the
      kernel's primitive; a Sobol' point keyed by pixel, sample and depth), writes the paths
      back, and runs the rounds again over those that go on, until none waits. A new flag,
@@ -1695,6 +1695,31 @@ the host's.
 4. Regeneration and width. A path's sample index moves from the pass's parameters into the
    path, so a slot freed by a finished path takes a new sample at once and the wavefront
    stays full (van Antwerpen; Laine et al.), within a memory budget for the wavefront.
+   - Regeneration: built, measured, set aside (`scheduler`'s "the wavefront's width" has
+     the argument). A kernel at the end of each round added finished paths to the image and
+     started their pixels' next samples from camera rays the host had laid out, the host
+     asking the device between runs of rounds whether any path was left. Pixel for pixel
+     the same images; but with one path a pixel a block waits for its slowest pixel, so
+     demo.json (320 x 180, 64 spp) took 652 rounds against 640, and 4.66 s against 3.95 s;
+     instances.json 8.6 s against 7.0 s; and a host material's pixel still needs a read of
+     the device for every sample. Saving the rounds needs slow pixels to run on into the next
+     block, so a film that is never whole, which adaptive sampling and resuming rest on.
+   - Width: done. A pass carries up to 8 samples of every pixel at once, each in a lane
+     (`pathtrace::slots`: slot `lane * pixels + pixel` of the paths, the sky queries and the
+     queues; `add_paths` adds a pixel's lanes in order, so the sums are those of single
+     passes), as many as `WAVEFRONT_BUDGET` (256 MB at 204 bytes a slot) has room for: 8 up
+     to about 400 x 400, 1 from 1280 x 720. `scheduler::lanes` decides. Verified: the GPU's
+     tests; images pixel for pixel as before (5 scenes at 8 spp, 4 at 64). Measured
+     (llvmpipe, 320 x 180, 64 spp, against one lane): 80 rounds for 640; the device's time
+     2.06 s for 2.33 s on demo.json, 1.88 for 2.21 on glossy-sun.json, 4.01 for 5.23 on
+     instances.json.
+   - Scenes with host materials keep one lane: with 8, textures.json read the device 48
+     times for 384, but took 8.5 s for 7.0 s, as each read copies every lane's paths to
+     reach those waiting. Next: gather the waiting paths in a kernel (the host's queue
+     keeping its dispatch's size, as the sides do), so a read is the size of the work.
+   - Not yet: lanes in a browser (the page still queues a pass a sample; lanes would give a
+     frame several samples for the dispatches of one); the budget from the device's
+     memory rather than a constant.
 5. Order within and between queues. Shading queues by material kind, and a sort key inside
    a queue (kind, then texture, then mesh and face, as Eisenacher et al.; or a ray's origin
    and direction). To measure before adopting: Meister et al. find reordering makes tracing

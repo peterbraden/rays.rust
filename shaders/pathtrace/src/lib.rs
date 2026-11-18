@@ -35,7 +35,8 @@ pub struct Params {
     pub sun_dir: Vec4,
     /// The sun's irradiance and angular radius.
     pub sun_irr: Vec4,
-    /// Seed, Russian roulette on.
+    /// Seed, Russian roulette on, the side of the queue a round reads, and the lanes: how
+    /// many paths each pixel has at once (`slots`).
     pub seed: UVec4,
     /// Records of the air in `tables` (`AIR_*`), or `NO_AIR`: the sky's (for rays that escape),
     /// the aerial perspective's, the sun's (its reddening); and space's (`SPACE_*`).
@@ -2261,6 +2262,17 @@ fn pixel(gid: UVec3, params: &Params) -> Option<usize> {
 // Every access to the buffer is atomic: naga gives a buffer touched by atomic instructions
 // an atomic element type, as WGSL and Metal require.
 
+/// The wavefront's width: a path for each pixel in each lane. A pass may carry several samples
+/// of every pixel at once, lane k's path for pixel i in slot `k * pixels + i` of the paths and
+/// of the sky queries, and it is slots the queues hold. The rounds a pass takes don't grow with
+/// its lanes, so neither do its dispatches, nor the times the host must be waited for; its
+/// memory does. (The other way to keep a wavefront full, starting a pixel's next sample when
+/// its path ends, was measured here and gave nothing: with one path a pixel a pass still waits
+/// for its slowest pixel. See the renderer's `scheduler`.)
+pub fn slots(params: &Params) -> u32 {
+    params.dims.x * params.dims.y * params.seed.w
+}
+
 /// Words in the queue buffer before the queues' items: a header each for the two sides and
 /// the host's queue.
 pub const QUEUE_HEADER: u32 = 12;
@@ -2305,7 +2317,7 @@ mod queue {
         if i >= load(queue, side * 4 + QUEUE_COUNT) {
             return None;
         }
-        Some(load(queue, QUEUE_HEADER + side * params.dims.x * params.dims.y + i))
+        Some(load(queue, QUEUE_HEADER + side * slots(params) + i))
     }
 
     /// Append `pixel` to the side being written.
@@ -2315,7 +2327,7 @@ mod queue {
         unsafe {
             let slot = atomic_i_add::<u32, SCOPE, SEMANTICS>(queue.get_unchecked_mut(header + QUEUE_COUNT as usize), 1);
             atomic_store::<u32, SCOPE, SEMANTICS>(
-                queue.get_unchecked_mut((QUEUE_HEADER + side * params.dims.x * params.dims.y + slot) as usize), pixel);
+                queue.get_unchecked_mut((QUEUE_HEADER + side * slots(params) + slot) as usize), pixel);
             // The first item of each workgroup extends the dispatch to cover it: across x
             // until that is full, then a row of y for every `MAX_GROUPS` groups.
             if slot % WORKGROUP == 0 {
@@ -2335,7 +2347,7 @@ mod queue {
         unsafe {
             let slot = atomic_i_add::<u32, SCOPE, SEMANTICS>(queue.get_unchecked_mut((HOST_QUEUE * 4 + QUEUE_COUNT) as usize), 1);
             atomic_store::<u32, SCOPE, SEMANTICS>(
-                queue.get_unchecked_mut((QUEUE_HEADER + HOST_QUEUE * params.dims.x * params.dims.y + slot) as usize), pixel);
+                queue.get_unchecked_mut((QUEUE_HEADER + HOST_QUEUE * slots(params) + slot) as usize), pixel);
         }
     }
 }
@@ -2445,7 +2457,7 @@ pub fn path_sum(p: &PathState) -> Vec4 {
     if not_nan { c } else { Vec3::ZERO }.extend(p.l.w)
 }
 
-/// Every pixel's path, finished, added to the image: once a pass, after its last round. The
+/// Every pixel's paths, finished, added to the image: once a pass, after its last round. The
 /// image holds two vectors a pixel: the sum of its samples (and in w the rays they cast), and
 /// the sum of their squares, channel by channel (and in w how many were added), from which
 /// the host judges the pixel's noise (`scheduler::plan`).
@@ -2458,10 +2470,17 @@ pub fn add_paths(
     #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] accum: &mut [Vec4],
 ) {
     let Some(index) = pixel(gid, params) else { return };
-    let add = path_sum(&paths[index]);
-    if add.w > 0.0 {
-        let c = add.xyz();
-        accum[2 * index] += add;
-        accum[2 * index + 1] += (c * c).extend(1.0);
+    // Lane by lane, which is the order of the pixel's samples: the sums are those of as many
+    // passes of one lane.
+    let pixels = (params.dims.x * params.dims.y) as usize;
+    let mut lane = 0;
+    while lane < params.seed.w as usize {
+        let add = path_sum(&paths[lane * pixels + index]);
+        if add.w > 0.0 {
+            let c = add.xyz();
+            accum[2 * index] += add;
+            accum[2 * index + 1] += (c * c).extend(1.0);
+        }
+        lane += 1;
     }
 }

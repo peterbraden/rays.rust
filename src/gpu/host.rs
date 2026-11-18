@@ -9,7 +9,7 @@
 //! (`integrator::host_vertex`, so `MaterialModel::scatter`, with its own light sampling and
 //! shadow rays through the scene's own acceleration structure), writes the paths back with
 //! their next rays, and runs the rounds again over them, until none waits
-//! (`GpuRenderer::pass_with_host`). A path can wait once a vertex, so that is at most
+//! (`GpuRenderer::block_with_host`). A path can wait once a vertex, so that is at most
 //! `max_depth` + 1 times round.
 //!
 //! This is the arrangement Budge and others describe for path tracing on "hybrid resources"
@@ -23,7 +23,9 @@
 //!   pass at least.
 //! - The whole of the paths is read and written back, though only those waiting are needed:
 //!   a kernel has no storage buffer to spare for compacting them (WebGPU's eight). At a large
-//!   image that copy is the cost to remove first (compact in a kernel of its own).
+//!   image that copy is the cost to remove first (compact in a kernel of its own), and it is
+//!   why such scenes render a lane at a time (`scheduler::lanes`): with every lane's paths
+//!   copied for each read, the wider wavefront cost more than the reads it saved.
 //! - A pass can't end until its waiting paths have, as a pixel has one path a pass. Holding
 //!   them over to a later pass, so the device never idles on the host, needs a path to carry
 //!   its own sample index (plan.md section 13, step 4).

@@ -499,6 +499,13 @@ impl PlanetField for Stratiform {
     }
 }
 
+/// The density of a cumulonimbus's frozen top, and of its anvil near it, as fractions of its
+/// liquid column's. Ice water content is highest in the updraft (a gram or more per cubic metre)
+/// and falls as the outflow spreads, so the frozen top stays bright and the anvil thins
+/// outwards, to the shield's `cauliflower::ICE`.
+const GLACIATED: f64 = 0.6;
+const ANVIL: f64 = 0.35;
+
 /// Deep convection: towers of cumulus congestus and cumulonimbus, their anvils, and the
 /// shields of anvils over clusters of storms.
 pub struct Convective {
@@ -751,8 +758,9 @@ impl Convective {
                     f = f.max(smoothstep(0., edge, dome - d) * t.column);
                 }
             }
-            // Ice: thinner than the liquid cloud below (`cauliflower::ICE`).
-            best = best.max(f * (0.4 + 0.6 * t.strength) * crate::procedural::cauliflower::ICE);
+            // Ice, thinner than the liquid cloud below, but near the storm still fed by its
+            // updraft: thicker than the shield (`cauliflower::ICE`).
+            best = best.max(f * (0.4 + 0.6 * t.strength) * ANVIL);
         });
         if best <= 0. {
             return crisp;
@@ -781,7 +789,7 @@ impl Convective {
         }
         let billows = if depth < enough { self.surface.billowing(&q) * (1. - ice) } else { 0. };
         // Gone entirely as the column rains out.
-        self.surface.condensed(depth + billows, edge, maturity, &q) * (1. - (1. - crate::procedural::cauliflower::ICE) * ice) * smoothstep(0., 0.15, t.column)
+        self.surface.condensed(depth + billows, edge, maturity, &q) * (1. - (1. - GLACIATED) * ice) * smoothstep(0., 0.15, t.column)
             * smoothstep(t.base, t.base + 0.3 * self.edge, at.altitude)
     }
 
@@ -794,10 +802,23 @@ impl Convective {
         }
         let top = m.deep.top.at(&at.up);
         let base = top - self.anvil_depth * 1.2;
-        // Ice, spread flat and smooth: a sheet, little eroded, and thin (`cauliflower::ICE`).
-        let look = Look { shape_size: self.look.shape_size * 3., detail_size: self.look.detail_size * 3., erosion: 0.4 * self.look.erosion, ..self.look };
+        let h = (at.altitude - base) / (top - base);
+        if h <= 0. || h >= 1. {
+            return 0.;
+        }
+        // Ice spread flat under the tropopause: a smooth sheet, not heaps (cumuliform noise cut
+        // to the cover made it a field of puffs), broken where the cover is partial into broad
+        // patches about 9 km across, its texture fibrous: noise drawn out horizontally. And thin
+        // (`cauliflower::ICE`), the outflow's ice spread wide.
+        let profile = smoothstep(0., 0.3, h) * (1. - smoothstep(0.75, 1., h));
         let position = Drift { rise: 0., ..self.drift }.noise_position(&at.position, &at.up);
-        self.shapes.fraction(&look, at.altitude, base, top, cover, 0., &position) * crate::procedural::cauliflower::ICE
+        let q = position / (self.look.shape_size * 6.);
+        let patches = stretched(self.shapes.perlin.fbm(q.x, q.y, q.z, 5, 0.55, 2.));
+        let vertical = at.up * at.up.dot(&position);
+        let f = (position + vertical * 5.) / (self.look.detail_size * 2.);
+        let fibres = stretched(self.shapes.perlin.fbm(f.x, f.y, f.z, 3, 0.5, 2.));
+        let v = patches * profile * (0.8 + 0.4 * fibres);
+        smoothstep(1. - cover, 1.2 - cover, v) * crate::procedural::cauliflower::ICE
     }
 }
 

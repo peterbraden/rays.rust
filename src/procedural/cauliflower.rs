@@ -179,6 +179,88 @@ impl Cauliflower {
     }
 }
 
+/// A tree grown once and kept (`Cauliflower::grow`): every sphere not buried, with its level and
+/// children, so a cloud looked up millions of times needn't regenerate its turrets (their
+/// hashes, directions and burial tests) at each lookup.
+pub struct Grown {
+    nodes: Vec<Node>,
+    roots: usize,
+}
+
+struct Node {
+    centre: Vector3<f64>,
+    radius: f64,
+    level: u8,
+    first: u32,
+    count: u8,
+}
+
+impl Cauliflower {
+    /// The whole tree grown from `roots` along `up`, as `depth` would visit it.
+    pub fn grow(&self, roots: &[Sphere], up: &Vector3<f64>) -> Grown {
+        let frame = Frame::new(up);
+        let mut nodes: Vec<Node> = roots.iter().map(|r| Node { centre: r.centre, radius: r.radius, level: 0, first: 0, count: 0 }).collect();
+        let mut spheres: Vec<(Sphere, usize)> = roots.iter().enumerate().map(|(i, r)| (*r, i)).collect();
+        // Breadth first, so each node's children are contiguous.
+        let mut i = 0;
+        while i < nodes.len() {
+            let level = nodes[i].level as usize;
+            if level < self.levels {
+                let (s, from) = spheres[i];
+                let first = nodes.len();
+                for k in 0..self.child_count(level) {
+                    let c = self.child(&s, k, self.child_count(level), &frame);
+                    if Cauliflower::buried(&c, roots, from) {
+                        continue;
+                    }
+                    nodes.push(Node { centre: c.centre, radius: c.radius, level: level as u8 + 1, first: 0, count: 0 });
+                    spheres.push((c, from));
+                }
+                nodes[i].first = first as u32;
+                nodes[i].count = (nodes.len() - first) as u8;
+            }
+            i += 1;
+        }
+        Grown { nodes, roots: roots.len() }
+    }
+}
+
+impl Grown {
+    /// As `Cauliflower::depth`, from the kept tree (`tree` for the levels' reach).
+    pub fn depth(&self, tree: &Cauliflower, p: &Vector3<f64>, enough: f64) -> f64 {
+        let mut best = f64::NEG_INFINITY;
+        for i in 0..self.roots {
+            self.visit(tree, i, p, enough, &mut best);
+            if best >= enough {
+                return enough;
+            }
+        }
+        best
+    }
+
+    fn visit(&self, tree: &Cauliflower, i: usize, p: &Vector3<f64>, enough: f64, best: &mut f64) {
+        let n = &self.nodes[i];
+        let dist = (p - n.centre).norm();
+        if n.radius * tree.reach[n.level as usize] - dist <= *best {
+            return;
+        }
+        *best = best.max(n.radius - dist);
+        if *best >= enough {
+            return;
+        }
+        for c in n.first as usize..n.first as usize + n.count as usize {
+            self.visit(tree, c, p, enough, best);
+            if *best >= enough {
+                return;
+            }
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+}
+
 /// The body of one cumulus: root spheres over a flat disc of radius `width` about
 /// `base_centre` (on its base), standing `lift` of their radius above it so the base cuts them
 /// broad and flat, more of them the wider it is, bunched towards the core the taller the cloud
@@ -263,7 +345,7 @@ pub struct Cumulus {
     pub edge: f64,
     pub lean: f64,
     pub wind: Vector3<f64>,
-    roots: Vec<Sphere>,
+    grown: Grown,
     r0: f64,
     lift: f64,
     dome: f64,
@@ -284,7 +366,8 @@ impl Cumulus {
         let wind = Vector3::new(wind.x, 0., wind.y);
         let wind = if wind.norm() > 0. { wind.normalize() } else { Vector3::zeros() };
         let reach = width + r0 * (1. + dome) * tree.extent(1.);
-        Cumulus { tree, surface, max_density: 0.05, base, edge: 15., lean, wind, roots, r0, lift, dome, reach, centre: at }
+        let grown = tree.grow(&roots, &Vector3::y());
+        Cumulus { tree, surface, max_density: 0.05, base, edge: 15., lean, wind, grown, r0, lift, dome, reach, centre: at }
     }
 
     pub fn top(&self) -> f64 {
@@ -319,7 +402,7 @@ impl Cumulus {
     }
 
     fn depth_at(&self, p: &Vector3<f64>) -> f64 {
-        self.tree.depth(&self.roots, &Vector3::y(), p, self.edge)
+        self.grown.depth(&self.tree, p, self.edge)
     }
 }
 
@@ -376,6 +459,22 @@ mod tests {
                 if !Cauliflower::buried(&child, roots, from) {
                     all_spheres_of(c, &child, level + 1, up, out, roots, from);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn test_grown_tree_matches_generated() {
+        let c = Cauliflower::cumulus();
+        let up = Vector3::y();
+        let roots = body(&Vector3::zeros(), &up, 400., 900., 0.35, 0.8, 0.5, 13, 0.7);
+        let grown = c.grow(&roots, &up);
+        let mut rng = crate::geometry::Pcg32::new(3, 0);
+        for _ in 0..3000 {
+            let p = Vector3::new(rng.next_f64() - 0.5, rng.next_f64(), rng.next_f64() - 0.5) * 3000.;
+            for enough in [15., f64::INFINITY] {
+                let (a, b) = (c.depth(&roots, &up, &p, enough), grown.depth(&c, &p, enough));
+                assert!((a - b).abs() < 1e-9, "{} vs {}", a, b);
             }
         }
     }

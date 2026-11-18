@@ -1,0 +1,147 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="810" height="660" font-family="sans-serif">
+<style>.title{font-size:14px;font-weight:600}.tick{font-size:10px;fill:#555}.legend{font-size:12px}.grid{stroke:#ddd}</style>
+<rect width="100%" height="100%" fill="white"/>
+<g transform="translate(0,0)">
+<text x="70" y="18" class="title">Time (mean of runs, log scale)</text>
+<line x1="70" x2="790" y1="194.0" y2="194.0" class="grid"/>
+<text x="64" y="198.0" class="tick" text-anchor="end">0.305</text>
+<line x1="70" x2="790" y1="152.5" y2="152.5" class="grid"/>
+<text x="64" y="156.5" class="tick" text-anchor="end">0.872</text>
+<line x1="70" x2="790" y1="111.0" y2="111.0" class="grid"/>
+<text x="64" y="115.0" class="tick" text-anchor="end">2.49</text>
+<line x1="70" x2="790" y1="69.5" y2="69.5" class="grid"/>
+<text x="64" y="73.5" class="tick" text-anchor="end">7.12</text>
+<line x1="70" x2="790" y1="28.0" y2="28.0" class="grid"/>
+<text x="64" y="32.0" class="tick" text-anchor="end">20.3</text>
+<polyline points="70.0,28.7 135.5,80.6 200.9,80.2 266.4,117.2 331.8,116.4 397.3,194.0 462.7,164.2 528.2,160.8 593.6,159.3 659.1,162.2 724.5,162.4 790.0,158.1" fill="none" stroke="#2a6fdb" stroke-width="2"/>
+<circle cx="70.0" cy="28.7" r="3" fill="#2a6fdb"/>
+<circle cx="135.5" cy="80.6" r="3" fill="#2a6fdb"/>
+<circle cx="200.9" cy="80.2" r="3" fill="#2a6fdb"/>
+<circle cx="266.4" cy="117.2" r="3" fill="#2a6fdb"/>
+<circle cx="331.8" cy="116.4" r="3" fill="#2a6fdb"/>
+<circle cx="397.3" cy="194.0" r="3" fill="#2a6fdb"/>
+<circle cx="462.7" cy="164.2" r="3" fill="#2a6fdb"/>
+<circle cx="528.2" cy="160.8" r="3" fill="#2a6fdb"/>
+<circle cx="593.6" cy="159.3" r="3" fill="#2a6fdb"/>
+<circle cx="659.1" cy="162.2" r="3" fill="#2a6fdb"/>
+<circle cx="724.5" cy="162.4" r="3" fill="#2a6fdb"/>
+<circle cx="790.0" cy="158.1" r="3" fill="#2a6fdb"/>
+<polyline points="70.0,28.0 135.5,78.3 200.9,78.4 266.4,112.3 331.8,112.2 397.3,174.0 462.7,126.0 528.2,123.8 593.6,123.9 659.1,124.0 724.5,124.3 790.0,121.1" fill="none" stroke="#e07b39" stroke-width="2"/>
+<circle cx="70.0" cy="28.0" r="3" fill="#e07b39"/>
+<circle cx="135.5" cy="78.3" r="3" fill="#e07b39"/>
+<circle cx="200.9" cy="78.4" r="3" fill="#e07b39"/>
+<circle cx="266.4" cy="112.3" r="3" fill="#e07b39"/>
+<circle cx="331.8" cy="112.2" r="3" fill="#e07b39"/>
+<circle cx="397.3" cy="174.0" r="3" fill="#e07b39"/>
+<circle cx="462.7" cy="126.0" r="3" fill="#e07b39"/>
+<circle cx="528.2" cy="123.8" r="3" fill="#e07b39"/>
+<circle cx="593.6" cy="123.9" r="3" fill="#e07b39"/>
+<circle cx="659.1" cy="124.0" r="3" fill="#e07b39"/>
+<circle cx="724.5" cy="124.3" r="3" fill="#e07b39"/>
+<circle cx="790.0" cy="121.1" r="3" fill="#e07b39"/>
+<text x="790" y="18" class="legend" fill="#e07b39" text-anchor="end">wall s</text>
+<text x="720" y="18" class="legend" fill="#2a6fdb" text-anchor="end">render s</text>
+<text x="70.0" y="210" class="tick" text-anchor="middle">9dfb668<title>2026-11-09 Merge pull request #39 from peterbraden/dielectric</title></text>
+<text x="135.5" y="210" class="tick" text-anchor="middle">f02b756<title>2026-11-09 Merge pull request #44 from peterbraden/firework-demo-gravity</title></text>
+<text x="200.9" y="210" class="tick" text-anchor="middle">ef805ae<title>2026-11-09 Merge pull request #49 from peterbraden/bbox-robustness</title></text>
+<text x="266.4" y="210" class="tick" text-anchor="middle">2f817d2<title>2026-11-09 Merge pull request #76 from peterbraden/transforms</title></text>
+<text x="331.8" y="210" class="tick" text-anchor="middle">7254521<title>2026-11-09 Merge pull request #82 from peterbraden/triangle-epsilon</title></text>
+<text x="397.3" y="210" class="tick" text-anchor="middle">9ea7d2f<title>2026-11-10 Merge pull request #107 from peterbraden/claude/simd-gpu-speedups-qlyr96</title></text>
+<text x="462.7" y="210" class="tick" text-anchor="middle">9938bfd<title>2026-11-14 Merge pull request #121 from peterbraden/resume-determinism</title></text>
+<text x="528.2" y="210" class="tick" text-anchor="middle">4303d65<title>2026-11-16 Merge pull request #127 from peterbraden/claude/planet-scale-landscape-8ztfzu</title></text>
+<text x="593.6" y="210" class="tick" text-anchor="middle">bc5ff0e<title>2026-11-17 Merge pull request #135 from peterbraden/claude/volumetric-clouds-grey-bug-ym2mjz</title></text>
+<text x="659.1" y="210" class="tick" text-anchor="middle">55e5e6f<title>2026-11-17 Merge pull request #145 from peterbraden/claude/bad-weather-effects-ifatnk</title></text>
+<text x="724.5" y="210" class="tick" text-anchor="middle">5c50296<title>2026-11-18 Merge pull request #148 from peterbraden/dependabot/github_actions/actions/checkout-7</title></text>
+<text x="790.0" y="210" class="tick" text-anchor="middle">b5657ae<title>2026-11-18 Update rand from 0.6 to 0.10</title></text>
+</g>
+<g transform="translate(0,220)">
+<text x="70" y="18" class="title">Rays cast</text>
+<line x1="70" x2="790" y1="194.0" y2="194.0" class="grid"/>
+<text x="64" y="198.0" class="tick" text-anchor="end">0</text>
+<line x1="70" x2="790" y1="152.5" y2="152.5" class="grid"/>
+<text x="64" y="156.5" class="tick" text-anchor="end">5.83e+06</text>
+<line x1="70" x2="790" y1="111.0" y2="111.0" class="grid"/>
+<text x="64" y="115.0" class="tick" text-anchor="end">1.17e+07</text>
+<line x1="70" x2="790" y1="69.5" y2="69.5" class="grid"/>
+<text x="64" y="73.5" class="tick" text-anchor="end">1.75e+07</text>
+<line x1="70" x2="790" y1="28.0" y2="28.0" class="grid"/>
+<text x="64" y="32.0" class="tick" text-anchor="end">2.33e+07</text>
+<polyline points="70.0,28.0 135.5,152.1 200.9,152.1 266.4,153.6 331.8,153.6 397.3,153.6 462.7,153.6 528.2,153.6 593.6,153.6 659.1,153.6 724.5,153.6 790.0,153.6" fill="none" stroke="#3a9d5d" stroke-width="2"/>
+<circle cx="70.0" cy="28.0" r="3" fill="#3a9d5d"/>
+<circle cx="135.5" cy="152.1" r="3" fill="#3a9d5d"/>
+<circle cx="200.9" cy="152.1" r="3" fill="#3a9d5d"/>
+<circle cx="266.4" cy="153.6" r="3" fill="#3a9d5d"/>
+<circle cx="331.8" cy="153.6" r="3" fill="#3a9d5d"/>
+<circle cx="397.3" cy="153.6" r="3" fill="#3a9d5d"/>
+<circle cx="462.7" cy="153.6" r="3" fill="#3a9d5d"/>
+<circle cx="528.2" cy="153.6" r="3" fill="#3a9d5d"/>
+<circle cx="593.6" cy="153.6" r="3" fill="#3a9d5d"/>
+<circle cx="659.1" cy="153.6" r="3" fill="#3a9d5d"/>
+<circle cx="724.5" cy="153.6" r="3" fill="#3a9d5d"/>
+<circle cx="790.0" cy="153.6" r="3" fill="#3a9d5d"/>
+<text x="790" y="18" class="legend" fill="#3a9d5d" text-anchor="end">rays</text>
+<text x="70.0" y="210" class="tick" text-anchor="middle">9dfb668<title>2026-11-09 Merge pull request #39 from peterbraden/dielectric</title></text>
+<text x="135.5" y="210" class="tick" text-anchor="middle">f02b756<title>2026-11-09 Merge pull request #44 from peterbraden/firework-demo-gravity</title></text>
+<text x="200.9" y="210" class="tick" text-anchor="middle">ef805ae<title>2026-11-09 Merge pull request #49 from peterbraden/bbox-robustness</title></text>
+<text x="266.4" y="210" class="tick" text-anchor="middle">2f817d2<title>2026-11-09 Merge pull request #76 from peterbraden/transforms</title></text>
+<text x="331.8" y="210" class="tick" text-anchor="middle">7254521<title>2026-11-09 Merge pull request #82 from peterbraden/triangle-epsilon</title></text>
+<text x="397.3" y="210" class="tick" text-anchor="middle">9ea7d2f<title>2026-11-10 Merge pull request #107 from peterbraden/claude/simd-gpu-speedups-qlyr96</title></text>
+<text x="462.7" y="210" class="tick" text-anchor="middle">9938bfd<title>2026-11-14 Merge pull request #121 from peterbraden/resume-determinism</title></text>
+<text x="528.2" y="210" class="tick" text-anchor="middle">4303d65<title>2026-11-16 Merge pull request #127 from peterbraden/claude/planet-scale-landscape-8ztfzu</title></text>
+<text x="593.6" y="210" class="tick" text-anchor="middle">bc5ff0e<title>2026-11-17 Merge pull request #135 from peterbraden/claude/volumetric-clouds-grey-bug-ym2mjz</title></text>
+<text x="659.1" y="210" class="tick" text-anchor="middle">55e5e6f<title>2026-11-17 Merge pull request #145 from peterbraden/claude/bad-weather-effects-ifatnk</title></text>
+<text x="724.5" y="210" class="tick" text-anchor="middle">5c50296<title>2026-11-18 Merge pull request #148 from peterbraden/dependabot/github_actions/actions/checkout-7</title></text>
+<text x="790.0" y="210" class="tick" text-anchor="middle">b5657ae<title>2026-11-18 Update rand from 0.6 to 0.10</title></text>
+</g>
+<g transform="translate(0,440)">
+<text x="70" y="18" class="title">Image difference to previous commit (8-bit levels)</text>
+<line x1="70" x2="790" y1="194.0" y2="194.0" class="grid"/>
+<text x="64" y="198.0" class="tick" text-anchor="end">0</text>
+<line x1="70" x2="790" y1="152.5" y2="152.5" class="grid"/>
+<text x="64" y="156.5" class="tick" text-anchor="end">8.1</text>
+<line x1="70" x2="790" y1="111.0" y2="111.0" class="grid"/>
+<text x="64" y="115.0" class="tick" text-anchor="end">16.2</text>
+<line x1="70" x2="790" y1="69.5" y2="69.5" class="grid"/>
+<text x="64" y="73.5" class="tick" text-anchor="end">24.3</text>
+<line x1="70" x2="790" y1="28.0" y2="28.0" class="grid"/>
+<text x="64" y="32.0" class="tick" text-anchor="end">32.4</text>
+<polyline points="135.5,131.2 200.9,170.8 266.4,55.2 331.8,194.0 397.3,194.0 462.7,124.2 528.2,194.0 593.6,194.0 659.1,194.0 724.5,194.0 790.0,194.0" fill="none" stroke="#b03a8c" stroke-width="2"/>
+<circle cx="135.5" cy="131.2" r="3" fill="#b03a8c"/>
+<circle cx="200.9" cy="170.8" r="3" fill="#b03a8c"/>
+<circle cx="266.4" cy="55.2" r="3" fill="#b03a8c"/>
+<circle cx="331.8" cy="194.0" r="3" fill="#b03a8c"/>
+<circle cx="397.3" cy="194.0" r="3" fill="#b03a8c"/>
+<circle cx="462.7" cy="124.2" r="3" fill="#b03a8c"/>
+<circle cx="528.2" cy="194.0" r="3" fill="#b03a8c"/>
+<circle cx="593.6" cy="194.0" r="3" fill="#b03a8c"/>
+<circle cx="659.1" cy="194.0" r="3" fill="#b03a8c"/>
+<circle cx="724.5" cy="194.0" r="3" fill="#b03a8c"/>
+<circle cx="790.0" cy="194.0" r="3" fill="#b03a8c"/>
+<polyline points="135.5,108.8 200.9,160.8 266.4,28.0 331.8,194.0 397.3,194.0 462.7,111.1 528.2,194.0 593.6,194.0 659.1,194.0 724.5,194.0 790.0,194.0" fill="none" stroke="#7a5cc4" stroke-width="2"/>
+<circle cx="135.5" cy="108.8" r="3" fill="#7a5cc4"/>
+<circle cx="200.9" cy="160.8" r="3" fill="#7a5cc4"/>
+<circle cx="266.4" cy="28.0" r="3" fill="#7a5cc4"/>
+<circle cx="331.8" cy="194.0" r="3" fill="#7a5cc4"/>
+<circle cx="397.3" cy="194.0" r="3" fill="#7a5cc4"/>
+<circle cx="462.7" cy="111.1" r="3" fill="#7a5cc4"/>
+<circle cx="528.2" cy="194.0" r="3" fill="#7a5cc4"/>
+<circle cx="593.6" cy="194.0" r="3" fill="#7a5cc4"/>
+<circle cx="659.1" cy="194.0" r="3" fill="#7a5cc4"/>
+<circle cx="724.5" cy="194.0" r="3" fill="#7a5cc4"/>
+<circle cx="790.0" cy="194.0" r="3" fill="#7a5cc4"/>
+<text x="790" y="18" class="legend" fill="#7a5cc4" text-anchor="end">rmse</text>
+<text x="738" y="18" class="legend" fill="#b03a8c" text-anchor="end">mean abs</text>
+<text x="70.0" y="210" class="tick" text-anchor="middle">9dfb668<title>2026-11-09 Merge pull request #39 from peterbraden/dielectric</title></text>
+<text x="135.5" y="210" class="tick" text-anchor="middle">f02b756<title>2026-11-09 Merge pull request #44 from peterbraden/firework-demo-gravity</title></text>
+<text x="200.9" y="210" class="tick" text-anchor="middle">ef805ae<title>2026-11-09 Merge pull request #49 from peterbraden/bbox-robustness</title></text>
+<text x="266.4" y="210" class="tick" text-anchor="middle">2f817d2<title>2026-11-09 Merge pull request #76 from peterbraden/transforms</title></text>
+<text x="331.8" y="210" class="tick" text-anchor="middle">7254521<title>2026-11-09 Merge pull request #82 from peterbraden/triangle-epsilon</title></text>
+<text x="397.3" y="210" class="tick" text-anchor="middle">9ea7d2f<title>2026-11-10 Merge pull request #107 from peterbraden/claude/simd-gpu-speedups-qlyr96</title></text>
+<text x="462.7" y="210" class="tick" text-anchor="middle">9938bfd<title>2026-11-14 Merge pull request #121 from peterbraden/resume-determinism</title></text>
+<text x="528.2" y="210" class="tick" text-anchor="middle">4303d65<title>2026-11-16 Merge pull request #127 from peterbraden/claude/planet-scale-landscape-8ztfzu</title></text>
+<text x="593.6" y="210" class="tick" text-anchor="middle">bc5ff0e<title>2026-11-17 Merge pull request #135 from peterbraden/claude/volumetric-clouds-grey-bug-ym2mjz</title></text>
+<text x="659.1" y="210" class="tick" text-anchor="middle">55e5e6f<title>2026-11-17 Merge pull request #145 from peterbraden/claude/bad-weather-effects-ifatnk</title></text>
+<text x="724.5" y="210" class="tick" text-anchor="middle">5c50296<title>2026-11-18 Merge pull request #148 from peterbraden/dependabot/github_actions/actions/checkout-7</title></text>
+<text x="790.0" y="210" class="tick" text-anchor="middle">b5657ae<title>2026-11-18 Update rand from 0.6 to 0.10</title></text>
+</g>
+</svg>

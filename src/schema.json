@@ -1345,7 +1345,7 @@
       ],
       "example": {
         "type": "text",
-        "font": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "font": ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/System/Library/Fonts/Supplemental/Arial Bold.ttf"],
         "string": "Hi",
         "thickness": 0.3,
         "material": "M",

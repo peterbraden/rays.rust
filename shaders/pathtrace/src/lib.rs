@@ -226,7 +226,9 @@ const NONE: u32 = 0xffff_ffff;
 /// The scene's buffers.
 pub struct Scene<'a> {
     pub params: &'a Params,
-    pub prims: &'a [Prim],
+    /// The primitives, packed (`pack_prims`): what a ray is tested against first, three
+    /// vectors each, then what shading needs of them, five each.
+    pub prims: &'a [Vec4],
     pub nodes: &'a [Node],
     pub materials: &'a [Material],
     pub lights: &'a [Light],
@@ -300,13 +302,65 @@ struct Hit {
     prim: u32,
 }
 
+/// A primitive's first vector, as the tests below name it.
+struct TestRecord {
+    v0: Vec4,
+}
+
+/// Vectors a primitive has in each part of the packed buffer: for the intersection test (a
+/// triangle's first vertex and two edges, a sphere's centre and radius, a plane's height;
+/// the kind in the second's w), and for shading (the other two vertices, with the material
+/// and emitter + 1 in their w; three vertex normals, the first's w saying whether to use them).
+pub const PRIM_TEST: u32 = 3;
+pub const PRIM_SHADING: u32 = 5;
+/// Indices are kept as floats there, exact up to this.
+pub const MAX_PACKED_INDEX: u32 = 1 << 24;
+
+/// A primitive whole again, from both parts: for shading, where the test's saving doesn't
+/// matter and the original vertices do (an edge added back to a vertex isn't the vertex).
+fn whole_prim(s: &Scene, i: u32) -> Prim {
+    let count = s.params.counts.x + s.params.counts.y;
+    let v0 = at(s.prims, PRIM_TEST * i);
+    let kind = at(s.prims, PRIM_TEST * i + 1).w as u32;
+    let at_shading = PRIM_TEST * count + PRIM_SHADING * i;
+    let v1 = at(s.prims, at_shading);
+    let v2 = at(s.prims, at_shading + 1);
+    let n0 = at(s.prims, at_shading + 2);
+    Prim {
+        v0, v1: v1.xyz().extend(0.0), v2: v2.xyz().extend(0.0),
+        n0: n0.xyz().extend(0.0), n1: at(s.prims, at_shading + 3), n2: at(s.prims, at_shading + 4),
+        info: UVec4::new(kind, v1.w as u32, v2.w as u32, n0.w as u32),
+    }
+}
+
+/// The buffer the shader reads primitives from: every primitive's test record, then every
+/// primitive's shading record (`PRIM_TEST`, `PRIM_SHADING`). Edges are differences of the
+/// vertices as the shader's f32, so the test computes what it did from the vertices.
+#[cfg(not(target_arch = "spirv"))]
+pub fn pack_prims(prims: &[Prim]) -> Vec<Vec4> {
+    let mut packed = Vec::with_capacity(prims.len() * (PRIM_TEST + PRIM_SHADING) as usize);
+    for p in prims {
+        let triangle = p.info.x == PRIM_TRIANGLE;
+        let e1 = if triangle { p.v1.xyz() - p.v0.xyz() } else { Vec3::ZERO };
+        let e2 = if triangle { p.v2.xyz() - p.v0.xyz() } else { Vec3::ZERO };
+        packed.extend([p.v0, e1.extend(p.info.x as f32), e2.extend(0.0)]);
+    }
+    for p in prims {
+        packed.extend([p.v1.xyz().extend(p.info.y as f32), p.v2.xyz().extend(p.info.z as f32), p.n0.xyz().extend(p.info.w as f32), p.n1, p.n2]);
+    }
+    packed
+}
+
 /// (t, b1, b2, 1) for a hit within (tmin, tmax), else zero.
 fn intersect_prim(s: &Scene, i: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -> Vec4 {
-    let p = at(s.prims, i);
-    let kind = p.info.x;
+    // The test's own record (`PRIM_TEST` vectors), not the whole primitive.
+    let v0 = at(s.prims, PRIM_TEST * i);
+    let e1 = at(s.prims, PRIM_TEST * i + 1);
+    let kind = e1.w as u32;
     if kind == PRIM_TRIANGLE {
-        let e1 = p.v1.xyz() - p.v0.xyz();
-        let e2 = p.v2.xyz() - p.v0.xyz();
+        let e2 = at(s.prims, PRIM_TEST * i + 2).xyz();
+        let e1 = e1.xyz();
+        let p = TestRecord { v0 };
         let pv = rd.cross(e2);
         let det = e1.dot(pv);
         if det.abs() < 1e-12 {
@@ -329,6 +383,7 @@ fn intersect_prim(s: &Scene, i: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -
         }
         Vec4::new(t, b1, b2, 1.0)
     } else if kind == PRIM_SPHERE {
+        let p = TestRecord { v0 };
         let oc = ro - p.v0.xyz();
         let b = oc.dot(rd);
         // A ray from outside going away from the centre misses, decided without the roots: a
@@ -356,7 +411,7 @@ fn intersect_prim(s: &Scene, i: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -
         if rd.y.abs() < 1e-12 {
             return Vec4::ZERO;
         }
-        let t = (p.v0.x - ro.y) / rd.y;
+        let t = (v0.x - ro.y) / rd.y;
         if t <= tmin || t >= tmax {
             return Vec4::ZERO;
         }
@@ -366,7 +421,7 @@ fn intersect_prim(s: &Scene, i: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -
 
 /// The geometric and shading normals of a hit.
 fn normals(s: &Scene, i: u32, ro: Vec3, rd: Vec3, h: Vec4) -> (Vec3, Vec3) {
-    let p = at(s.prims, i);
+    let p = whole_prim(s, i);
     let kind = p.info.x;
     if kind == PRIM_TRIANGLE {
         let g = (p.v1.xyz() - p.v0.xyz()).cross(p.v2.xyz() - p.v0.xyz()).normalize();
@@ -1629,7 +1684,7 @@ fn emitted(s: &Scene, m: u32, n: Vec3, towards: Vec3) -> Vec3 {
 }
 
 fn prim_area(s: &Scene, i: u32) -> f32 {
-    let p = at(s.prims, i);
+    let p = whole_prim(s, i);
     if p.info.x == PRIM_TRIANGLE {
         (p.v1.xyz() - p.v0.xyz()).cross(p.v2.xyz() - p.v0.xyz()).length() / 2.0
     } else {
@@ -1659,7 +1714,7 @@ pub fn sphere_pdf(c: Vec3, r: f32, org: Vec3, y: Vec3, n: Vec3) -> f32 {
 /// A point on emitting primitive i seen from `org`, its normal, and the density per solid
 /// angle: a sphere by its cone, a triangle by area.
 fn sample_light(s: &Scene, i: u32, org: Vec3, u1: f32, u2: f32) -> (Vec3, Vec3, f32) {
-    let p = at(s.prims, i);
+    let p = whole_prim(s, i);
     if p.info.x == PRIM_SPHERE {
         let (c, r) = (p.v0.xyz(), p.v0.w);
         let to = c - org;
@@ -1698,7 +1753,7 @@ fn sample_light(s: &Scene, i: u32, org: Vec3, u1: f32, u2: f32) -> (Vec3, Vec3, 
 }
 
 fn light_pdf(s: &Scene, i: u32, org: Vec3, y: Vec3, n: Vec3) -> f32 {
-    let p = at(s.prims, i);
+    let p = whole_prim(s, i);
     if p.info.x == PRIM_SPHERE {
         return sphere_pdf(p.v0.xyz(), p.v0.w, org, y, n);
     }
@@ -1934,7 +1989,7 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
     }
     let point = ro + rd * hit.t;
     let (hit_ng, hit_ns) = normals(s, hit.prim, ro, rd, p.hit);
-    let prim = at(s.prims, hit.prim);
+    let prim = whole_prim(s, hit.prim);
     let m = resolve_material(s, prim.info.y, point);
     let mat = at(s.materials, m);
     if mat.kind == MAT_EMITTER {
@@ -2073,7 +2128,7 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
                 dist = d * (1.0 - 1e-4) - eps;
                 if light_pdf > 0.0 {
                     pdf = pmf * light_pdf;
-                    li = emitted(s, at(s.prims, pi).info.y, ny, -wi);
+                    li = emitted(s, whole_prim(s, pi).info.y, ny, -wi);
                 }
             }
         } else if flags & FLAG_SAMPLE_ENV != 0 {
@@ -2232,7 +2287,7 @@ mod queue {
 pub fn intersect_paths(
     #[spirv(global_invocation_id)] gid: UVec3,
     #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Prim],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Vec4],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] nodes: &[Node],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
@@ -2255,7 +2310,7 @@ pub fn intersect_paths(
 pub fn bounce_paths(
     #[spirv(global_invocation_id)] gid: UVec3,
     #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Prim],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Vec4],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] nodes: &[Node],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
@@ -2285,7 +2340,7 @@ pub fn bounce_paths(
 pub fn answer_sky(
     #[spirv(global_invocation_id)] gid: UVec3,
     #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Prim],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Vec4],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] nodes: &[Node],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],

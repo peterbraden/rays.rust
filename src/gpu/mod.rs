@@ -309,7 +309,9 @@ fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
 /// The shader's inputs, built on the CPU (`Buffers::build`).
 pub struct Buffers {
     pub params: Params,
-    pub prims: Vec<GpuPrim>,
+    /// The primitives as the shader reads them (`pathtrace::pack_prims`), and as records.
+    pub prims: Vec<pathtrace::glam::Vec4>,
+    pub prim_records: Vec<GpuPrim>,
     pub nodes: Vec<GpuNode>,
     pub materials: Vec<GpuMaterial>,
     pub lights: Vec<GpuLight>,
@@ -371,6 +373,10 @@ impl Buffers {
         }
         if prims.len() > pathtrace::MAX_LEAF_ITEMS as usize {
             return Err(format!("{} primitives (the shader's traversal counts to {})", prims.len(), pathtrace::MAX_LEAF_ITEMS));
+        }
+        // The packed buffer keeps a primitive's material and emitter as floats.
+        if prims.len().max(flat.materials.len()) >= pathtrace::MAX_PACKED_INDEX as usize {
+            return Err(format!("{} primitives or materials (the shader's buffers count to {})", prims.len().max(flat.materials.len()), pathtrace::MAX_PACKED_INDEX));
         }
         let nodes = gpu_nodes(&exported)?;
 
@@ -455,7 +461,7 @@ impl Buffers {
             seed: UVec4::new(s.render.seed as u32, rr, 0, 0),
             air: UVec4::new(sky_off, aerial_off, sun_off, space_off),
         };
-        Ok(Buffers { params, prims, nodes, materials, lights, tables })
+        Ok(Buffers { params, prims: pathtrace::pack_prims(&prims), prim_records: prims, nodes, materials, lights, tables })
     }
 }
 
@@ -491,7 +497,7 @@ impl GpuRenderer {
     /// Upload the flattened scene, or say why the GPU can't render it. Async, for a browser,
     /// whose WebGPU can't be waited on.
     pub async fn create(s: &Scene, flat: &FlatScene) -> Result<GpuRenderer, String> {
-        let Buffers { params, prims, nodes, materials, lights, tables } = Buffers::build(s, flat)?;
+        let Buffers { params, prims, nodes, materials, lights, tables, .. } = Buffers::build(s, flat)?;
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -1103,13 +1109,13 @@ mod tests {
             let count = (b.params.counts.x + b.params.counts.y) as usize;
             assert_eq!(count, spheres + planes);
             // Every primitive on its own is a scene the traversal searches in full.
-            let alone: Vec<(Params, [GpuPrim; 1], Vec<GpuNode>)> = (0..count).map(|i| {
+            let alone: Vec<(Params, Vec<pathtrace::glam::Vec4>, Vec<GpuNode>)> = (0..count).map(|i| {
                 let plane = i >= b.params.counts.x as usize;
                 let mut params = b.params;
                 params.counts.x = if plane { 0 } else { 1 };
                 params.counts.y = if plane { 1 } else { 0 };
                 let nodes = gpu_nodes(&if plane { vec![] } else { vec![(flat.bvh.export()[0].0, 0, 1)] }).unwrap();
-                (params, [b.prims[i]], nodes)
+                (params, pathtrace::pack_prims(&[b.prim_records[i]]), nodes)
             }).collect();
             for _ in 0..400 {
                 let ro = Vec3::new(next() as f32 * 30. - 15., next() as f32 * 30. - 15., next() as f32 * 30. - 15.);
@@ -1173,7 +1179,7 @@ mod tests {
             pathtrace::stats::take();
             let live_share = live as f64 / slots as f64;
             let short = name.rsplit('/').next().unwrap().trim_end_matches(".json");
-            println!("{:<16} {:>9} {:>9} {:>10} {:>10.1} {:>10.1}   (tree {} levels deep; max depth {}, {:.0}% of path-rounds live)", short, b.prims.len(), b.nodes.len(), total_rays,
+            println!("{:<16} {:>9} {:>9} {:>10} {:>10.1} {:>10.1}   (tree {} levels deep; max depth {}, {:.0}% of path-rounds live)", short, b.prim_records.len(), b.nodes.len(), total_rays,
                 boxes as f64 / total_rays as f64, prims as f64 / total_rays as f64, bvh_depth(&flat.bvh.export()), b.params.dims.w, 100. * live_share);
         }
     }

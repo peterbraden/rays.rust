@@ -55,7 +55,7 @@ impl SurfaceLayer {
 impl SurfaceLayers {
     /// The layer on top at the hit, chosen stochastically by the layers' covers.
     fn layer_at(&self, i: &Intersection) -> &SurfaceLayer {
-        let c = Context::new(i.point, i.normal, 0.).with_fields(i.object.medium.fields());
+        let c = Context::lifted(i.point, i.normal).with_fields(i.object.medium.fields());
         for layer in self.layers[1..].iter().rev() {
             let m = layer.cover(&c);
             if m >= 1. || (m > 0. && crate::geometry::rand() < m) {

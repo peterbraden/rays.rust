@@ -275,7 +275,10 @@ fn mul_range(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
 
 impl Node {
     fn new(op: Op) -> Node {
-        let range = op.range();
+        // Interval arithmetic on infinite bounds (an unbanded `field`) can give NaN, eg.
+        // inf * 0 in a `remap` to a single value; f64::clamp panics on NaN bounds.
+        let (lo, hi) = op.range();
+        let range = (if lo.is_nan() { f64::NEG_INFINITY } else { lo }, if hi.is_nan() { f64::INFINITY } else { hi });
         Node { op, range }
     }
 
@@ -788,6 +791,16 @@ mod tests {
                 assert!(v >= lo && v <= hi, "{}: {} outside {:?}", n, v, g.range());
             }
         }
+    }
+
+    /// A remap of an unbounded field to one value has a NaN range by interval arithmetic
+    /// (inf * 0); evaluating it must not panic.
+    #[test]
+    fn test_unbounded_remap_does_not_panic() {
+        let g = Graph::parse(&json!({"node": "remap", "input": {"node": "field", "field": "wetness"},
+            "from": [0, 10], "to": [1, 1]})).unwrap();
+        let c = Context::new(Vector3::zeros(), Vector3::y(), 0.);
+        assert_eq!(g.eval(&c), 1.);
     }
 
     #[test]

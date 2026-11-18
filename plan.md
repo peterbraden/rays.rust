@@ -1571,3 +1571,112 @@ they can render, and timings on the Mac's GPU and in a browser, not only on lava
 - Whether to split PR #123 into per-chapter PRs for review.
 - f32 for the CPU wavefront integrator when it shares the kernels, or generic kernels.
 - WGSL generated at build time (recommended) or translated by naga in the browser.
+
+## 13. A scheduler: one owner for queues, pixel completion and CPU work
+
+Status: planning. Nothing below is implemented.
+
+Goal: one component that decides what work runs next, where, and in what order, in place of
+the four loops that each decide for themselves today. It starts as a small piece of host code
+and grows into what keeps batches coherent in the data they touch.
+
+### Known: who schedules what today
+
+- `rendercontext::render` (the recursive tracer): regions by passes; `next_pass` decides each
+  region's pixels from their noise (`adaptive::active`). The only place pixel completion
+  exists.
+- `wavefront::integrator`: batches of 4,096 paths a thread, each through every stage; a
+  queue a stage, shading sorted by material kind.
+- `gpu`: a pass is sample k of every pixel; rounds over the queue of live paths, sized on the
+  GPU by the queue's own count (section 12). It has no pixel completion: every pixel takes
+  every pass (it reports made-up sums of squares, `squares_at_least`), so `"adaptive"` does
+  nothing there. A scene it can't flatten falls back whole.
+- The scene builder (`web/app.js`): layers shared between workers, render servers and the GPU
+  worker by layer number.
+
+What makes a scheduler possible is already true everywhere: sample k of pixel p has its own
+random stream, so an image doesn't depend on when or where a sample is traced. Every step
+below must keep that, and test it: the same pixels from any two policies.
+
+### The model
+
+- Work item: a path (pixel, sample index, state), as `PathState` is.
+- Queue: paths waiting for one stage on one resource. Stages: generate, intersect, shade (by
+  material kind), shadow, sky, accumulate. Resource: what the batch must have at hand (a
+  mesh or instance's tree, a texture, a medium's grid, a kernel).
+- Executor: something that drains a queue: a GPU kernel, CPU code (the kernel crate's CPU
+  build, or the renderer's own for what isn't ported: section 12's phase 3), later a render
+  server. Each has a capacity and a cost to reach (a readback, a network hop).
+- Policy: which queue next, how much of it, on which executor, in what order within it.
+- Film: per pixel its sum, sum of squares and count; a pixel is complete when its noise is
+  low enough or it has its samples. Generation draws only from pixels that aren't.
+
+Two rates, which the design has to respect: decisions within a pass (which paths are in
+which queue) are made on the GPU, from data, as the queue counts already are, since the host
+can't see a count without a readback, which in a browser is a frame late. Decisions between
+passes (which pixels, which samples, what goes to the CPU or a server, what is loaded) are
+the host's.
+
+### Steps, small to large
+
+1. Pixel completion on the GPU. Accumulate each pixel's sum of squares (`add_paths`), read
+   it back with the image, and fill a pass's first queue from the pixels still active
+   (`adaptive::active`, as the CPU does): the host already builds that queue from the live
+   camera rays. The GPU then honours `"adaptive"`, and the scheduler exists as the one place
+   that decides which pixels a pass samples, shared with `next_pass`. Test: GPU against the
+   wavefront integrator with adaptive sampling on; the sample map.
+2. One vocabulary. `Stage`, `Queue`, `Batch` and per-queue counters (paths in, time) shared
+   by the CPU wavefront integrator and the GPU host, and reported: the measurements the
+   later steps are judged by.
+3. The CPU queue (section 12, phase 3). After intersection a path whose material or shape
+   the GPU lacks goes to a queue the host reads back, runs on the CPU and writes back for
+   the next stage. The scheduler sets how often (latency against batch size) and may hold
+   such paths over to a later pass rather than stall the GPU's.
+4. Regeneration and width. A path's sample index moves from the pass's parameters into the
+   path, so a slot freed by a finished path takes a new sample at once and the wavefront
+   stays full (van Antwerpen; Laine et al.), within a memory budget for the wavefront.
+5. Order within and between queues. Shading queues by material kind, and a sort key inside
+   a queue (kind, then texture, then mesh and face, as Eisenacher et al.; or a ray's origin
+   and direction). To measure before adopting: Meister et al. find reordering makes tracing
+   1.3 to 2 times faster on recent GPUs, but that its own cost is hard to win back.
+6. Resources. Queues keyed by what they need, and a resident set with a budget (textures
+   and meshes on the GPU, files fetched in a browser, assets a render server has): run the
+   queues whose data is at hand, load for the fullest of the rest (Pharr et al.; Navrátil
+   et al.; Budge et al.). This is where instancing on the GPU (a tree a mesh under a tree
+   of instances, section 12) and textures as loadable units come in, and where servers are
+   chosen by the assets they hold, not by layer number.
+
+### Open questions
+
+- Does the CPU wavefront integrator move onto the same scheduler (section 12's phase 5), or
+  only share its vocabulary?
+- The wavefront's memory budget, and who sets it (the device's limits, the scene, the user).
+- Whether a pass remains a unit at all once paths regenerate (resumable renders save per
+  pixel counts, which survive it; the GPU's pass-indexed random numbers would need the
+  index per path).
+
+### Reading (verified to exist as cited; contents from their abstracts only)
+
+- Laine, Karras, Aila, "Megakernels Considered Harmful: Wavefront Path Tracing on GPUs", HPG
+  2013, doi:10.1145/2492045.2492060. Stage kernels and queues; the case for sorting work.
+- van Antwerpen, "Improving SIMD Efficiency for Parallel Monte Carlo Light Transport on the
+  GPU", HPG 2011, doi:10.1145/2018323.2018330. Stream compaction with sample regeneration.
+- Pharr, Kolb, Gershbein, Hanrahan, "Rendering Complex Scenes with Memory-Coherent Ray
+  Tracing", SIGGRAPH 1997, doi:10.1145/258734.258791. Reordering the work by what is in
+  the cache; geometry and textures created lazily.
+- Navrátil, Fussell, Lin, Mark, "Dynamic Ray Scheduling to Improve Ray Coherence and
+  Bandwidth Utilization", IEEE Symposium on Interactive Ray Tracing 2007,
+  doi:10.1109/RT.2007.4342596. Traversal as a scheduling problem; memory-to-cache bandwidth.
+- Budge, Bernardin, Stuart, Sengupta, Joy, Owens, "Out-of-core Data Management for Path
+  Tracing on Hybrid Resources", Computer Graphics Forum 28(2) (Eurographics 2009),
+  doi:10.1111/j.1467-8659.2009.01378.x. A scheduling and data-management layer under a path
+  tracer, over CPUs and GPUs together.
+- Eisenacher, Nichols, Selle, Burley, "Sorted Deferred Shading for Production Path
+  Tracing", Computer Graphics Forum 32(4) (EGSR 2013), doi:10.1111/cgf.12158. Large sorted
+  ray batches, shading deferred until hits are sorted, for coherent texture access.
+- Lee, Green, Xie, Tabellion, "Vectorized Production Path Tracing", HPG 2017. Queues that
+  keep vector lanes full and data coherent, on the CPU.
+- Meister, Bokšanský, Guthe, Bittner, "On Ray Reordering Techniques for Faster GPU Ray
+  Tracing", I3D 2020, doi:10.1145/3384382.3384534. What reordering gains and costs.
+- Pharr, Jakob, Humphreys, "Physically Based Rendering", 4th ed., chapter 15 (already the
+  basis of `wavefront` and `gpu`).

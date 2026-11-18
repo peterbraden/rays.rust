@@ -854,6 +854,11 @@ impl SceneFile {
             return Some(Arc::new(SceneFile::parse_mammatus(&o)));
         }
 
+        if t == "cumulonimbus" {
+            return Some(Arc::new(SceneFile::parse_cumulonimbus(&o)));
+        }
+
+
         if t == "overcast" {
             return Some(Arc::new(SceneFile::parse_overcast(&o)));
         }
@@ -1778,6 +1783,51 @@ impl SceneFile {
         );
         let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(m));
         create_volume(bounds, field, SceneFile::parse_scattering(o, 0.8))
+    }
+
+    /// A cumulonimbus, the thunderstorm cloud (see `procedural::cumulonimbus`):
+    ///
+    /// `{"type": "cumulonimbus", "center": [x, z], "base": 1200, "tropopause": 11500,
+    /// "cape": 2500, "seed": 0}`
+    ///
+    /// with `efficiency` (the fraction of parcel theory's updraft realised) and `stability`
+    /// (the stratosphere's buoyancy frequency, s⁻¹), which set the overshooting top; `radius` and
+    /// `lean` (the main tower); `wind_direction` ([x, z]), `upper_wind` and `outflow_speed`
+    /// (m/s) and `age` (s), which shape the anvil, and `anvil_thickness`; `flanking` (how many
+    /// towers), `flank_angle` (degrees from upwind) and `flank_spacing`; `glaciation` (m);
+    /// extinctions `density` (liquid) and `ice_density`; `billow_size`, `billowing` (0 to 1) and
+    /// `softness`. `mapping` as for `nubis_clouds`.
+    pub fn parse_cumulonimbus(o: &Value) -> SceneObject {
+        use crate::procedural::cumulonimbus::Cumulonimbus;
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let mut c = Cumulonimbus::new(SceneFile::parse_seed(o).unwrap_or(0));
+        c.center = SceneFile::parse_vec2_def(o, "center", c.center);
+        c.base = num("base", c.base);
+        c.tropopause = num("tropopause", c.tropopause).max(c.base + 1000.);
+        c.cape = num("cape", c.cape).max(0.);
+        c.efficiency = num("efficiency", c.efficiency).clamp(0., 1.);
+        c.stability = num("stability", c.stability).max(1e-3);
+        c.radius = num("radius", c.radius).max(100.);
+        c.lean = num("lean", c.lean);
+        c.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", c.wind_direction).normalize();
+        c.upper_wind = num("upper_wind", c.upper_wind).max(0.);
+        c.outflow_speed = num("outflow_speed", c.outflow_speed).max(0.);
+        c.age = num("age", c.age).max(0.);
+        c.anvil_thickness = num("anvil_thickness", c.anvil_thickness).max(0.);
+        c.flanking = SceneFile::parse_int(&o["flanking"], c.flanking);
+        c.flank_angle = num("flank_angle", c.flank_angle);
+        c.flank_spacing = num("flank_spacing", c.flank_spacing).max(0.);
+        c.glaciation = num("glaciation", c.glaciation);
+        c.density = num("density", c.density).max(0.);
+        c.ice_density = num("ice_density", c.ice_density).max(0.);
+        c.billow_size = num("billow_size", c.billow_size).max(0.);
+        c.billowing = num("billowing", c.billowing).clamp(0., 1.);
+        c.softness = num("softness", c.softness).max(1.);
+        c.build();
+        let (lo, hi) = c.extent();
+        let bounds = BBox::new(Vector3::new(lo.x, c.bottom(), lo.y), Vector3::new(hi.x, c.top(), hi.y));
+        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(c));
+        create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
     }
 
     /// Mountains (see `procedural::terrain`): a meshed heightfield of ridged noise around a

@@ -35,9 +35,10 @@ impl SceneGraph {
 
     pub fn new(objects: Vec<Arc<SceneObject>>) -> SceneGraph {
         // Unbounded objects can't go in the BVH. Nor can participating media: they must be
-        // tested once per ray (see `Geometry::is_stochastic`).
+        // tested once per ray (see `Geometry::is_stochastic`). Nor objects that let light
+        // through (`Geometry::transmits`), which the BVH's shadow test would take as blocking.
         let (infinite_items, bounded): (Vec<_>, Vec<_>) = objects.into_iter()
-            .partition(|x| x.geometry.is_stochastic() || is_unbounded(&x.geometry.bounds()));
+            .partition(|x| x.geometry.is_stochastic() || x.geometry.transmits() || is_unbounded(&x.geometry.bounds()));
         let (bvh, items) = Bvh::build(bounded, |x| x.geometry.bounds());
         SceneGraph { items, infinite_items, bvh }
     }
@@ -86,12 +87,16 @@ impl SceneGraph {
         if self.bvh.any_hit(r, min, max, |i| self.items[i].occludes(r, min, max)) {
             return Color::black();
         }
-        // Solid objects first: if one blocks the ray, the media needn't be tracked.
+        // Solid objects first: if one blocks the ray, the media needn't be tracked. (Most block
+        // it or don't; transparent water lets some through, by colour.)
         let (media, solid): (Vec<_>, Vec<_>) = self.infinite_items.iter().partition(|o| o.is_stochastic());
-        if solid.iter().any(|o| o.transmittance(r, min, max) == 0.) {
-            return Color::black();
-        }
         let mut t = Color::white();
+        for o in solid {
+            t = t * o.transmittance_color(r, min, max);
+            if t.rgb.max() <= 0. {
+                return Color::black();
+            }
+        }
         for o in media {
             t = t * o.transmittance_color(r, min, max);
             if t.rgb.max() <= 0. {

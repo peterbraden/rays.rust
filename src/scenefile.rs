@@ -28,6 +28,7 @@ use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGen
 use crate::procedural::benard_altocumulus::BenardAltocumulus;
 use crate::procedural::lenticular::{Lenticular, MoistLayer};
 use crate::procedural::terrain::{Terrain as Mountains, TerrainMaterial};
+use crate::material::snow::Snow;
 use crate::procedural::mammatus::Mammatus;
 use crate::procedural::precipitation::Precipitation;
 use crate::procedural::overcast::Overcast;
@@ -688,7 +689,12 @@ impl SceneFile {
              && o["cloud"]["join"].as_bool() != Some(false) && flat(o) == flat(&objs[d]));
          let mut hills: Vec<HillCloud> = objs.iter().filter(|o| joins(o)).filter_map(SceneFile::hill_cloud_field).collect();
          let joined: Vec<bool> = objs.iter().map(joins).collect();
-         for (k, obj) in objs.into_iter().enumerate() {
+         // Ice floats on the scene's ocean, on its waves.
+         let ocean = objs.iter().find(|o| o["type"] == "ocean").cloned();
+         for (k, mut obj) in objs.into_iter().enumerate() {
+            if let (Some(ocean), true) = (&ocean, obj["type"] == "iceberg" || obj["type"] == "ice_floes") {
+                if obj.get("ocean").is_none() { obj["ocean"] = ocean.clone(); }
+            }
             // Report the objects that are slow to build (meshes, oceans), by type and source.
             let start = std::time::Instant::now();
             let name = format!("{}{}", obj["type"].as_str().unwrap_or("?"),
@@ -811,6 +817,9 @@ impl SceneFile {
                 Box::new(GrassMedium::new(geometry.field.clone(), &conditions))
             };
             return Some(Arc::new(SceneObject { geometry: Box::new(geometry), medium }));
+        }
+        if t == "iceberg" || t == "ice_floes" {
+            return Some(Arc::new(SceneFile::parse_ice_object(&o, materials, media)));
         }
         if t == "boulder" || t == "pebbles" || t == "bedrock" {
             return Some(Arc::new(SceneFile::parse_rock_object(&o, materials, media)));
@@ -1788,9 +1797,11 @@ impl SceneFile {
     ///
     /// with `relief` and `feature_size` (the ridges), `plains` (relief of the plains around),
     /// `base` (the height of its foot: below zero for an island in a `sea`),
-    /// `snowline` and `treeline` (m), the colours `snow`, `rock`, `forest` and `grass`, and
-    /// `"mapping": "flat"` for flat ground rather than the planet's. A `"cloud"` raises hill cloud
-    /// over it (`parse_hill_cloud`).
+    /// `snowline` and `treeline` (m), the colours `rock`, `forest` and `grass`, `snow` (by
+    /// default physical snow, `material::snow`, settled and older near the snowline; an object
+    /// of its makeup as for a snow material, eg. `{"preset": "fresh"}`; or a colour for diffuse
+    /// snow), and `"mapping": "flat"` for flat ground rather than the planet's. A `"cloud"`
+    /// raises hill cloud over it (`parse_hill_cloud`).
     pub fn parse_terrain(o: &Value) -> SceneObject {
         let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
         let seed = SceneFile::parse_seed(o).unwrap_or(0);
@@ -1799,7 +1810,15 @@ impl SceneFile {
         m.planet_radius = t.planet_radius;
         m.snowline = num("snowline", m.snowline);
         m.treeline = num("treeline", m.treeline);
-        m.snow = SceneFile::parse_color_def(o, "snow", m.snow);
+        match &o["snow"] {
+            Value::Null => {},
+            // An object of snow's makeup (`parse_snow_style`): for all the snow.
+            Value::Object(_) => {
+                let style = SceneFile::parse_snow_style(&o["snow"]);
+                m.snow_materials = [Snow::new(style.clone(), 1., seed), Snow::new(style, 1., seed)];
+            },
+            c => m.snow = Some(SceneFile::parse_color(c)),
+        }
         m.rock = SceneFile::parse_color_def(o, "rock", m.rock);
         m.forest = SceneFile::parse_color_def(o, "forest", m.forest);
         m.grass = SceneFile::parse_color_def(o, "grass", m.grass);
@@ -2385,6 +2404,20 @@ impl SceneFile {
                 },
             }));
         }
+        // {"type": "snow_cover", "material": "A", "cover": 0.5, "snow": {"preset": "fresh"},
+        // "up": [0, 1, 0], "drift": 0.3, "seed": 0}: snow lying on A where it faces the sky
+        // (`material::snow::SnowCover`).
+        if props["type"].as_str() == Some("snow_cover") {
+            assert!(props["material"].as_str() != Some(name.as_str()), "Snow cover '{}' can't contain itself", name);
+            let base = SceneFile::require_material(&props["material"], materials, &format!("snow_cover {}", name));
+            let seed = SceneFile::parse_int(&props["seed"], 0) as u64;
+            let snow = crate::material::snow::Snow::new(SceneFile::parse_snow_style(&props["snow"]),
+                SceneFile::parse_number(&props["snow"]["scale"], 1.).max(1e-9), seed);
+            return Some(Box::new(crate::material::snow::SnowCover::new(base, snow,
+                SceneFile::parse_number(&props["cover"], 0.5).clamp(0., 1.),
+                SceneFile::parse_vec3_def(props, "up", Vector3::y()),
+                SceneFile::parse_number(&props["drift"], 0.3), seed)));
+        }
         match SceneFile::parse_material(props) {
             Some(m) => Some(m),
             None => panic!("Material '{}' has unknown type {}", name, props["type"]),
@@ -2614,6 +2647,19 @@ impl SceneFile {
         if t == "soil" {
             return Some(Box::new(SceneFile::parse_soil(o)));
         }
+
+        // {"type": "snow", "preset": "settled", "grain_size": mm, "soot": ppb, "dust": ppm,
+        // "sparkle": 0 to 1, "scale": scene units per metre, "seed": 0} and {"type": "ice",
+        // "preset": "glacier", "bubble_radius": mm, "bubbles": per cm³, "soot", "dust",
+        // "roughness"}: snow and glacier ice from ice's absorption and their grains or bubbles
+        // (`material::snow`).
+        if t == "snow" {
+            return Some(Box::new(crate::material::snow::Snow::new(SceneFile::parse_snow_style(o),
+                SceneFile::parse_number(&o["scale"], 1.).max(1e-9), SceneFile::parse_int(&o["seed"], 0) as u64)));
+        }
+        if t == "ice" {
+            return Some(Box::new(crate::material::snow::Ice::new(SceneFile::parse_ice_style(o))));
+        }
         
         // Noise materials are handled separately in parse_object_medium
         
@@ -2631,6 +2677,33 @@ impl SceneFile {
         }
             */
         None
+    }
+
+    /// Snow's makeup (`material::snow::SnowStyle`): a `"preset"` (fresh, settled, old, firn,
+    /// dirty; by default settled) with any of `grain_size` (mm), `soot` (ppb), `dust` (ppm) and
+    /// `sparkle` overridden.
+    pub fn parse_snow_style(o: &Value) -> crate::material::snow::SnowStyle {
+        let p = crate::material::snow::SnowStyle::preset(o["preset"].as_str().unwrap_or("settled"));
+        let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        crate::material::snow::SnowStyle {
+            grain_size: n("grain_size", p.grain_size).max(1e-3),
+            impurities: crate::material::snow::Impurities { soot: n("soot", p.impurities.soot).max(0.), dust: n("dust", p.impurities.dust).max(0.) },
+            sparkle: n("sparkle", p.sparkle).clamp(0., 1.),
+        }
+    }
+
+    /// Glacier ice's makeup (`material::snow::IceStyle`): a `"preset"` (white, glacier, blue,
+    /// clear; by default glacier) with any of `bubble_radius` (mm), `bubbles` (per cm³), `soot`
+    /// (ppb), `dust` (ppm) and `roughness` overridden.
+    pub fn parse_ice_style(o: &Value) -> crate::material::snow::IceStyle {
+        let p = crate::material::snow::IceStyle::preset(o["preset"].as_str().unwrap_or("glacier"));
+        let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        crate::material::snow::IceStyle {
+            bubble_radius: n("bubble_radius", p.bubble_radius).max(1e-4),
+            bubbles: n("bubbles", p.bubbles).max(0.),
+            impurities: crate::material::snow::Impurities { soot: n("soot", p.impurities.soot).max(0.), dust: n("dust", p.impurities.dust).max(0.) },
+            roughness: n("roughness", p.roughness).clamp(0., 1.),
+        }
     }
 
     /// `{"type": "soil", "preset": "loam"}`: procedural bare ground (see `material::soil`).
@@ -2730,6 +2803,67 @@ impl SceneFile {
             r = r.with_lichen(lichen, color);
         }
         r
+    }
+
+    /// Icebergs and sea ice floating on the sea at `"sea_level"` (default 0), see
+    /// `procedural::iceberg`, riding the waves of the scene's ocean if it has one (`"ocean"`,
+    /// filled in by `parse_objects`). Each takes a `"seed"`, and a `"material"` or `"medium"` in place of
+    /// its own ice and snow.
+    ///
+    /// - `{"type": "iceberg", "location": [x, z], "size": 100, "shape": "tabular" | "blocky" |
+    ///   "dome" | "pinnacle" | "wedge" | "drydock", "yaw": degrees, "density": 900, "detail": 7}`:
+    ///   an iceberg `size` metres long, floating as its density says.
+    /// - `{"type": "ice_floes", "center": [x, z], "extent": [400, 300], "concentration": 0.6,
+    ///   "size": [2, 60], "thickness": 1}`: floes from `size[0]` to `size[1]` metres across
+    ///   covering `concentration` of the sea; `"style": "brash"` for lumps of glacier ice
+    ///   (brash ice and bergy bits) rather than slabs of sea ice; `"clumping"` (0 to 1, default
+    ///   0.5) gathers them in clumps.
+    pub fn parse_ice_object(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>) -> SceneObject {
+        use crate::procedural::iceberg::{FloeField, FloeMaterial, FloeStyle, Iceberg, IcebergMaterial, Kind};
+        let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
+        let n = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let sea_level = n("sea_level", 0.);
+        // The ocean it floats on, if the scene has one (`parse_objects` passes it in).
+        let waves = o["ocean"].is_object().then(|| crate::ocean::surface(&o["ocean"]));
+        let given = o.get("material").is_some() || o.get("medium").is_some();
+        let medium = |own: Box<dyn MaterialModel + Sync + Send>| -> Box<dyn Medium + Sync + Send> {
+            if given { SceneFile::parse_object_medium(o, materials, media) } else { Box::new(Solid { m: own }) }
+        };
+        if o["type"].as_str() == Some("iceberg") {
+            let mut berg = Iceberg::new(Kind::named(o["shape"].as_str().unwrap_or("blocky")), n("size", 100.).max(0.1), seed);
+            berg.density = n("density", berg.density).clamp(100., 1020.);
+            berg.detail = SceneFile::parse_int(&o["detail"], berg.detail as usize).min(8) as u32;
+            let at = SceneFile::parse_vec2_def(o, "location", crate::na::Vector2::zeros());
+            let yaw = match o["yaw"].as_f64() {
+                Some(y) => y.to_radians(),
+                None => crate::geometry::Pcg32::new(seed, 43).next_f64() * std::f64::consts::TAU,
+            };
+            let rise = waves.as_ref().map_or(0., |w| w.surface_at(at.x, at.y).0);
+            let mesh = berg.mesh(at.x, at.y, sea_level + rise, yaw);
+            let own = IcebergMaterial::new(sea_level, berg.size, seed);
+            return rock::object(&[mesh], medium(Box::new(own)));
+        }
+        let center = SceneFile::parse_vec2_def(o, "center", crate::na::Vector2::zeros());
+        let extent = SceneFile::parse_vec2_def(o, "extent", crate::na::Vector2::new(400., 300.));
+        let size = SceneFile::parse_vec2_def(o, "size", crate::na::Vector2::new(2., 60.));
+        let field = FloeField {
+            center: (center.x, center.y), extent: (extent.x.max(1.), extent.y.max(1.)),
+            concentration: n("concentration", 0.6).clamp(0., 0.95),
+            min_size: size.x.max(0.1), max_size: size.y.max(size.x.max(0.1)),
+            thickness: n("thickness", 1.).max(0.01), sea_level, seed,
+            waves,
+            style: match o["style"].as_str().unwrap_or("floes") {
+                "floes" => FloeStyle::Slab,
+                "brash" => FloeStyle::Brash,
+                x => panic!("Unknown ice_floes style '{}': expected floes or brash", x),
+            },
+            clumping: n("clumping", 0.5).clamp(0., 1.),
+        };
+        let own: Box<dyn MaterialModel + Sync + Send> = match field.style {
+            FloeStyle::Slab => Box::new(FloeMaterial::new(seed)),
+            FloeStyle::Brash => Box::new(IcebergMaterial::new(sea_level, 2., seed).brash()),
+        };
+        rock::object(&[field.mesh()], medium(own))
     }
 
     /// Procedural rocks, all resting on the ground (see `procedural::rock`). Each takes a
@@ -3232,7 +3366,17 @@ impl SceneFile {
                     top: SceneFile::parse_color_def(v, "top", Color::new(0.5, 0.7, 1.)),
                 },
                 Some("space") => Background::Space(Arc::new(crate::procedural::space::Space::parse(v, pixel_angle, sun))),
-                t => panic!("Unknown background type {:?}: expected \"gradient\", \"space\" or a colour", t),
+                // {"type": "overcast", "zenith": colour, "ground": colour}: the CIE overcast sky.
+                Some("overcast") => {
+                    let zenith = SceneFile::parse_color_def(v, "zenith", Color::new(1., 1., 1.));
+                    // "bank": {"direction": [x, z], "darkness": 0.3}: darker cloud low that way.
+                    let bank = v.get("bank").map(|b| {
+                        let d = SceneFile::parse_vec2_def(b, "direction", Vector2::new(0., 1.));
+                        (Vector3::new(d.x, 0., d.y).normalize(), SceneFile::parse_number(&b["darkness"], 0.3).clamp(0., 1.))
+                    });
+                    Background::Overcast { zenith, ground: SceneFile::parse_color_def(v, "ground", zenith * (1. / 3.)), bank }
+                },
+                t => panic!("Unknown background type {:?}: expected \"gradient\", \"space\", \"overcast\" or a colour", t),
             },
             _ => Background::Solid(SceneFile::parse_color(v)),
         }

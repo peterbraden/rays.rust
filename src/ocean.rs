@@ -93,6 +93,40 @@
 //! `detail_distance` (default 300 m) of `detail_center` (put it under the camera). `water` is
 //! the colour the water body sends back, as an albedo, and `roughness` the mean square slope of
 //! the ripples (by default the rest of Cox and Munk's). `"debug": true` shades by normal.
+//!
+//! `"transparent": true` lets you see into the water: what lies beneath the surface (an
+//! iceberg's foot, the underside of a floe, a reef) shows through it, dimmed by the water's
+//! `absorption` (per metre, per channel; by default `[0.38, 0.065, 0.045]`, clear coastal sea:
+//! pure water's absorption, about 0.35 m⁻¹ in the red and a few hundredths in the green and
+//! blue, R. M. Pope and E. S. Fry, "Absorption spectrum (380-700 nm) of pure water. II",
+//! Applied Optics 36(33), 1997, doi:10.1364/AO.36.008710, with a little more in the blue from
+//! dissolved organic matter, as in Jerlov's coastal water types). So white ice a few metres down
+//! glows turquoise, and deeper it fades into the sea's own colour. A ray refracted into the
+//! water is traced to whatever it meets within the depth at which the light would be all but
+//! gone, and the water in front of it adds its own colour as in the simplest model of shallow
+//! water in remote sensing: the deep water's reflectance weighted by 1 - exp(-a ℓ), the
+//! bottom's by exp(-a ℓ) (eg. Z. Lee et al., "Hyperspectral remote sensing for shallow waters",
+//! Applied Optics 37(27), 1998, doi:10.1364/AO.37.006329). Sunlight reaches what is under water
+//! through the surface (Fresnel's transmission, and the water's absorption along the refracted
+//! path down; the shadow ray itself isn't bent), and light leaving it comes back out by
+//! refraction.
+//!
+//! `"transparent": true` lets you see into the water: what lies beneath the surface (an
+//! iceberg's foot, the underside of a floe, a reef) shows through it, dimmed by the water's
+//! `absorption` (per metre, per channel; by default `[0.38, 0.065, 0.045]`, clear coastal sea
+//! water: pure water's absorption, about 0.35 m⁻¹ in the red and a few hundredths in the green
+//! and blue, R. M. Pope and E. S. Fry, "Absorption spectrum (380-700 nm) of pure water. II",
+//! Applied Optics 36(33), 1997, doi:10.1364/AO.36.008710, with a little more in the blue from
+//! dissolved organic matter, as in Jerlov's coastal water types). So white ice a few metres down
+//! glows turquoise, and deeper it fades to the sea's own colour. A ray refracted into the water
+//! is traced to whatever it meets within the depth at which the light would be all but gone;
+//! the water between adds its own colour by the remote-sensing model of shallow water, the
+//! deep water's reflectance R∞ weighted by 1 - exp(-a ℓ), the bottom's by exp(-a ℓ) (eg. Z. Lee
+//! et al., "Hyperspectral remote sensing for shallow waters", Applied Optics 37(27), 1998,
+//! doi:10.1364/AO.37.006329, in its simplest form). Light from the sun reaches what is under
+//! water through the surface (Fresnel's transmission, and the water's absorption along the
+//! refracted path down), and light leaving it comes back out by refraction; the sun's direction
+//! isn't bent for the shadow ray, only its path length in the water is.
 
 extern crate rand as _rand;
 extern crate image;
@@ -600,6 +634,9 @@ pub struct Ocean {
     pub waves: WaveField,
     pub detail_center: Vector2<f64>,
     pub detail_distance: f64,
+    /// For transparent water, its absorption per metre: shadow rays from under water pass up
+    /// through the surface.
+    pub absorption: Option<Color>,
 }
 
 impl Ocean {
@@ -764,6 +801,38 @@ impl Geometry for Ocean {
         }
     }
 
+    /// Light rising through the surface from under transparent water passes (as much as the
+    /// surface transmits and the water doesn't absorb); otherwise the sea blocks it.
+    fn transmittance_color(&self, r: &Ray, min: f64, max: f64) -> Color {
+        let hit = match self.intersects_range(r, min, max) {
+            Some(x) => x,
+            None => return Color::white(),
+        };
+        let absorption = match &self.absorption {
+            Some(a) => a,
+            None => return Color::black(),
+        };
+        let rd = r.rd.normalize();
+        let up = self.up(&hit.point);
+        let start = r.ro + rd * min;
+        let depth = -self.above(&start);
+        if rd.dot(&up) <= 0. || depth < 0. {
+            return Color::black();
+        }
+        // The path in the water, along the direction the light refracts to under the surface.
+        let cos_air = rd.dot(&hit.normal).clamp(0., 1.);
+        let cos_water = (1. - (1. - cos_air * cos_air) / (WATER_INDEX * WATER_INDEX)).max(1e-3).sqrt();
+        let length = depth / cos_water.max(rd.dot(&up));
+        let a = absorption.as_unbounded();
+        Color { rgb: a.rgb.map(|k| (-k * length).exp()) } * (1. - fresnel(cos_air))
+    }
+
+    fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 {
+        crate::color::luminance(&self.transmittance_color(r, min, max))
+    }
+
+    fn transmits(&self) -> bool { self.absorption.is_some() }
+
     fn bounds(&self) -> BBox {
         let h = self.waves.max_height;
         match self.center() {
@@ -792,6 +861,8 @@ pub struct PhysicalOcean {
     pub roughness: f64,
     /// The planet's centre, for the local vertical; None for a flat sea.
     pub center: Option<Vector3<f64>>,
+    /// For transparent water, its absorption per metre (see the module's notes).
+    pub absorption: Option<Color>,
 }
 
 /// Water's refractive index.
@@ -830,9 +901,38 @@ impl PhysicalOcean {
     }
 }
 
+impl PhysicalOcean {
+    /// A ray from under transparent water meeting the surface: it leaves by refraction, as
+    /// much as the surface transmits, dimmed by the water it crossed. (What the surface
+    /// reflects back down, a few percent, or all of it beyond the critical angle, is dropped.)
+    fn leave_water(&self, r: &Ray, intersection: &Intersection, absorption: &Color) -> ScatteredRay {
+        let d = r.rd.normalize();
+        let n = intersection.normal;
+        let black = ScatteredRay { emit: Color::black(), light_sampling: LightSampling::Exclusive, attenuate: Color::black(), ray: None };
+        let out = match crate::material::functions::refract(d, -n, WATER_INDEX) {
+            Some(t) => t.normalize(),
+            None => return black,
+        };
+        let a = absorption.as_unbounded();
+        let through = Color { rgb: a.rgb.map(|k| (-k * intersection.dist).exp()) } * (1. - fresnel(out.dot(&n)));
+        ScatteredRay {
+            emit: Color::black(),
+            light_sampling: LightSampling::Exclusive,
+            attenuate: through,
+            ray: Some(Ray { ro: intersection.point + n * 1e-3, rd: out }),
+        }
+    }
+}
+
 impl MaterialModel for PhysicalOcean {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let v = -r.rd.normalize();
+        // A ray from under transparent water, leaving it.
+        if let Some(a) = &self.absorption {
+            if r.rd.dot(&intersection.normal) > 0. {
+                return self.leave_water(r, intersection, a);
+            }
+        }
         let up = self.center.map_or(Vector3::y(), |c| (intersection.point - c).normalize());
         let mut n = intersection.normal;
         // Seen from beyond a wave's slope: use the mean surface.
@@ -841,9 +941,10 @@ impl MaterialModel for PhysicalOcean {
         }
         let into = Intersection { normal: n, ..*intersection };
         // The water body, lit through the surface, as much as gets in.
-        let mut emit = crate::material::functions::direct_lighting(self.water.as_reflectance() * (1. - fresnel(n.dot(&v))), &into, s);
+        let body = crate::material::functions::direct_lighting(self.water.as_reflectance() * (1. - fresnel(n.dot(&v))), &into, s);
         // The sun's glitter through the ripples: F D / (4 cos θv) per unit irradiance, Smith's
         // shadowing left out (it matters only at grazing angles).
+        let mut glitter = Color::black();
         for sun in s.directional_lights() {
             let l = sun.direction;
             if l.dot(&up) > 0. && n.dot(&l) > 0. {
@@ -851,7 +952,7 @@ impl MaterialModel for PhysicalOcean {
                 let glint = fresnel(h.dot(&v)) * self.ripple_density(&n, &h) / (4. * n.dot(&v));
                 if glint > 1e-6 {
                     let lit = sun.transmittance_from(&intersection.point, s);
-                    emit = emit + sun.irradiance_at(&intersection.point) * lit * glint;
+                    glitter = glitter + sun.irradiance_at(&intersection.point) * lit * glint;
                 }
             }
         }
@@ -859,10 +960,33 @@ impl MaterialModel for PhysicalOcean {
         let m = self.sample_ripple(&n);
         let d = r.rd.normalize();
         let reflected = d - m * 2. * m.dot(&d);
-        let (attenuate, ray) = if reflected.dot(&up) > 0. && m.dot(&v) > 0. {
-            (Color::white() * fresnel(m.dot(&v)), Some(Ray { ro: intersection.point + up * 1e-3, rd: reflected }))
-        } else {
-            (Color::black(), None)
+        let reflects = reflected.dot(&up) > 0. && m.dot(&v) > 0.;
+        let f = fresnel(m.dot(&v).max(0.));
+        let mirror = Ray { ro: intersection.point + up * 1e-3, rd: reflected };
+        // Through transparent water, what lies beneath within reach of the light: the ray
+        // refracted through the ripple, and the fraction of light the water lets through.
+        let beneath = self.absorption.as_ref().and_then(|a| {
+            let t = crate::material::functions::refract(d, m, 1. / WATER_INDEX)?.normalize();
+            let a = a.as_unbounded();
+            let reach = 7. / a.rgb.min().max(1e-3);
+            let down = Ray { ro: intersection.point - up * 1e-3, rd: t };
+            let (object, hit) = s.objects.nearest_raw_intersection(&down, reach, 1e-4)?;
+            if std::ptr::eq(object, intersection.object) { return None; }
+            Some((down, Color { rgb: a.rgb.map(|k| (-k * hit.dist).exp()) }))
+        });
+        let (emit, attenuate, ray) = match beneath {
+            // Deep water: its own colour, and the reflection.
+            None => (glitter + body, Color::white() * if reflects { f } else { 0. }, reflects.then_some(mirror)),
+            // The deep water's colour only from the water in front of what is seen; then
+            // reflect, or go down to it, by Fresnel's odds.
+            Some((down, through)) => {
+                let emit = glitter + body * (Color::white() - through);
+                if reflects && geometry::rand() < f {
+                    (emit, Color::white(), Some(mirror))
+                } else {
+                    (emit, through * if reflects { 1. } else { 1. - f }, Some(down))
+                }
+            }
         };
         ScatteredRay { emit, light_sampling: LightSampling::Exclusive, attenuate, ray }
     }
@@ -876,7 +1000,14 @@ fn physical_material(opts: &Value, waves_slope: f64, wind: Vector2<f64>, center:
         water: SceneFile::parse_color_def(opts, "water", Color::new(0.002, 0.012, 0.03)),
         roughness: SceneFile::parse_number(&opts["roughness"], (cox_munk_slope(wind.norm()) - waves_slope).max(1e-3)),
         center,
+        absorption: absorption(opts),
     }
+}
+
+/// For `"transparent": true`, the water's absorption per metre (see the module's notes).
+fn absorption(opts: &Value) -> Option<Color> {
+    (opts["transparent"].as_bool() == Some(true))
+        .then(|| SceneFile::parse_color_def(opts, "absorption", Color::new(0.38, 0.065, 0.045)))
 }
 
 /// An ocean from its scene object (see the module docs' scene options).
@@ -901,8 +1032,47 @@ pub fn create_ocean(opts: &Value) -> SceneObject {
         waves,
         detail_center: SceneFile::parse_vec2_def(opts, "detail_center", Vector2::zeros()),
         detail_distance: SceneFile::parse_number(&opts["detail_distance"], 300.).max(1.),
+        absorption: absorption(opts),
     };
     SceneObject { geometry: Box::new(ocean), medium: Box::new(Solid { m: material }) }
+}
+
+/// The surface of the ocean a scene object describes, for floating things on its waves: the
+/// same waves as `create_ocean` builds (they are deterministic), shared between the objects
+/// that ask for the same ocean.
+pub fn surface(opts: &Value) -> std::sync::Arc<Ocean> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, Arc<Ocean>>>> = OnceLock::new();
+    let key = opts.to_string();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(o) = cache.lock().unwrap().get(&key) { return o.clone(); }
+    let wind = SceneFile::parse_vec2_def(opts, "wind", Vector2::new(7., 2.));
+    let radius = SceneFile::parse_number(&opts["planet_radius"], crate::planet::EARTH_RADIUS);
+    let ocean = Arc::new(Ocean {
+        planet_radius: (radius > 0.).then_some(radius),
+        waves: WaveField::new(
+            wind,
+            SceneFile::parse_number(&opts["time"], 0.),
+            SceneFile::parse_int(&opts["seed"], 0) as u64,
+            opts["amplitude"].as_f64(),
+            SceneFile::parse_number(&opts["resolved"], 0.8).clamp(0., 1.),
+        ),
+        detail_center: SceneFile::parse_vec2_def(opts, "detail_center", Vector2::zeros()),
+        detail_distance: SceneFile::parse_number(&opts["detail_distance"], 300.).max(1.),
+        absorption: absorption(opts),
+    });
+    cache.lock().unwrap().insert(key, ocean.clone());
+    ocean
+}
+
+impl Ocean {
+    /// The displaced surface's height above the mean at (x, z) (a flat ocean's, or near the
+    /// origin a curved one's), and its normal there.
+    pub fn surface_at(&self, x: f64, z: f64) -> (f64, Vector3<f64>) {
+        let h = self.displaced(x, z) * self.waves.at(x, z).x;
+        (h, self.normal_at(&Vector3::new(x, h, z)))
+    }
 }
 
 #[cfg(test)]
@@ -915,7 +1085,25 @@ mod curved_tests {
             waves: WaveField::new(Vector2::new(7., 2.), 0., 1, None, 0.5),
             detail_center: Vector2::zeros(),
             detail_distance: 300.,
+            absorption: None,
         }
+    }
+
+    /// Transparent water lets light up through it from below, red least; light from above
+    /// doesn't pass down through it, and opaque water blocks both.
+    #[test]
+    fn test_transparent_water_transmits_from_below() {
+        let mut ocean = ocean_with(None);
+        let up = Ray { ro: Vector3::new(30., -3., 40.), rd: Vector3::new(0.2, 1., 0.1).normalize() };
+        let down = Ray { ro: Vector3::new(30., 3., 40.), rd: Vector3::new(0.2, -1., 0.1).normalize() };
+        assert_eq!(ocean.transmittance_color(&up, 1e-6, 1e9), Color::black());
+        ocean.absorption = Some(Color::new(0.38, 0.065, 0.045));
+        let t = ocean.transmittance_color(&up, 1e-6, 1e9);
+        assert!(t.rgb.x < 0.5 && t.rgb.y > 0.6 && t.rgb.z > t.rgb.y, "{:?}", t);
+        assert_eq!(ocean.transmittance_color(&down, 1e-6, 1e9), Color::black());
+        // Deeper, darker.
+        let deep = Ray { ro: Vector3::new(30., -20., 40.), ..up };
+        assert!(ocean.transmittance_color(&deep, 1e-6, 1e9).rgb.y < t.rgb.y);
     }
 
     #[test]

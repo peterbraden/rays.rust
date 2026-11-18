@@ -109,6 +109,16 @@ pub enum Background {
     Gradient { bottom: Color, top: Color },
     /// Stars, the Milky Way, nebulae and galaxies (`procedural::space`).
     Space(std::sync::Arc<crate::procedural::space::Space>),
+    /// A fully overcast sky, by the CIE standard overcast sky (CIE S 011/E:2003, ISO
+    /// 15469:2004 type 1; P. Moon and D. E. Spencer, "Illumination from a non-uniform sky",
+    /// Illuminating Engineering 37, 1942): its radiance depends only on the elevation γ,
+    /// L(γ) = L_z (1 + 2 sin γ) / 3, three times as bright overhead as at the horizon,
+    /// whatever the sun is doing above the cloud. `zenith` is L_z; below the horizon it is
+    /// `ground` (what a camera above the scene's own ground never sees).
+    /// A bank of thicker, darker cloud may stand low in one direction: towards the unit
+    /// horizontal `bank.0`, the sky near the horizon is dimmed to `bank.1` of its radiance,
+    /// less so with elevation and to either side.
+    Overcast { zenith: Color, ground: Color, bank: Option<(Vector3<f64>, f64)> },
 }
 
 impl PartialEq for Background {
@@ -117,6 +127,7 @@ impl PartialEq for Background {
             (Background::Solid(a), Background::Solid(b)) => a == b,
             (Background::Gradient { bottom: a, top: b }, Background::Gradient { bottom: c, top: d }) => a == c && b == d,
             (Background::Space(a), Background::Space(b)) => std::sync::Arc::ptr_eq(a, b),
+            (Background::Overcast { zenith: a, ground: b, bank: e }, Background::Overcast { zenith: c, ground: d, bank: f }) => a == c && b == d && e == f,
             _ => false,
         }
     }
@@ -136,6 +147,17 @@ impl Background {
                 *bottom * (1. - a) + *top * a
             },
             Background::Space(space) => space.radiance(&rd.normalize()),
+            Background::Overcast { zenith, ground, bank } => {
+                let d = rd.normalize();
+                let sin = d.y;
+                if sin < 0. { return *ground; }
+                let dim = bank.map_or(1., |(towards, to)| {
+                    let facing = Vector3::new(d.x, 0., d.z).try_normalize(1e-9).map_or(0., |h| h.dot(&towards));
+                    let w = crate::procedural::nubis_clouds::smoothstep(-0.3, 0.8, facing) * (1. - sin).powf(0.7);
+                    1. - (1. - to) * w
+                });
+                *zenith * (dim * (1. + 2. * sin) / 3.)
+            },
         }
     }
 }

@@ -93,6 +93,18 @@
 //! `detail_distance` (default 300 m) of `detail_center` (put it under the camera). `water` is
 //! the colour the water body sends back, as an albedo, and `roughness` the mean square slope of
 //! the ripples (by default the rest of Cox and Munk's). `"debug": true` shades by normal.
+//!
+//! ## Whitecaps
+//!
+//! Waves break once the wind is more than a breeze, and their foam covers a fraction of the sea
+//! that grows steeply with the wind: W = 3.84·10⁻⁶ U^3.41 at a wind of U m/s (E. C. Monahan and
+//! I. O'Muircheartaigh, "Optimal power-law description of oceanic whitecap coverage dependence on
+//! wind speed", J. Phys. Oceanogr. 10, 1980): a few thousandths in a moderate breeze (7 m/s),
+//! 2% at 12 m/s, 5% at 14 m/s, a fifth of the sea in a gale. The foam is put on the highest
+//! crests (`Foam`): where the waves, the shortest included, stand highest, broken into lace and
+//! drawn out in streaks along the wind, over a fraction W of the sea. Foam is a dense
+//! froth of bubbles, scattering diffusely: it reflects about half the light (`foam_albedo`). Its
+//! coverage can be given as `whitecaps` (a fraction, 0 for none) in place of Monahan's.
 
 extern crate rand as _rand;
 extern crate image;
@@ -575,6 +587,27 @@ impl WaveField {
         w
     }
 
+    /// The height of all the waves at (x, z), the shortest included.
+    pub fn full_height(&self, x: f64, z: f64) -> f64 {
+        self.tiles.iter().map(|t| t.at(x, z).x).sum()
+    }
+
+    /// The height the waves (`full_height`) exceed over `fraction` of the sea, and the spread
+    /// of the heights (their standard deviation), sampled across the largest tile.
+    pub fn height_exceeded(&self, fraction: f64) -> (f64, f64) {
+        let (m, size) = (256, 487.);
+        let mut rng = geometry::Pcg32::new(17, 3);
+        let mut heights: Vec<f64> = (0..m * m).map(|i| {
+            let (x, z) = (((i % m) as f64 + rng.next_f64()) * size / m as f64, ((i / m) as f64 + rng.next_f64()) * size / m as f64);
+            self.full_height(x, z)
+        }).collect();
+        let mean = heights.iter().sum::<f64>() / heights.len() as f64;
+        let sd = (heights.iter().map(|h| (h - mean).powi(2)).sum::<f64>() / heights.len() as f64).sqrt();
+        heights.sort_by(|a, b| a.total_cmp(b));
+        let k = ((1. - fraction.clamp(0., 1.)) * (heights.len() - 1) as f64).round() as usize;
+        (heights[k], sd)
+    }
+
     /// The mean square slope as sampled: between texels, interpolation smooths the shortest
     /// waves, so it is measured on a grid finer than the tiles'.
     fn measure_slope(&self) -> f64 {
@@ -792,6 +825,70 @@ pub struct PhysicalOcean {
     pub roughness: f64,
     /// The planet's centre, for the local vertical; None for a flat sea.
     pub center: Option<Vector3<f64>>,
+    /// Whitecaps, if the wind raises any.
+    pub foam: Option<Foam>,
+}
+
+/// Whitecap coverage by Monahan and O'Muircheartaigh's fit, for a wind of `speed` m/s (at 10 m).
+pub fn whitecap_coverage(speed: f64) -> f64 {
+    (3.84e-6 * speed.max(0.).powf(3.41)).min(1.)
+}
+
+/// Foam on the wave crests (see "Whitecaps" in the module docs). A score, highest where the
+/// waves are steepest and stand highest, broken into lace by fine noise and drawn out in streaks along the wind
+/// (the foam a breaking crest leaves behind it), is foam above `threshold`, fading in over
+/// `softness`: the threshold set so that a fraction `coverage` of the sea is foam.
+pub struct Foam {
+    pub waves: WaveField,
+    pub threshold: f64,
+    pub softness: f64,
+    pub albedo: Color,
+    /// The spread of the waves' heights, which the score is in units of.
+    height_sd: f64,
+    wind: Vector2<f64>,
+    noise: crate::noise::PerlinNoise,
+}
+
+impl Foam {
+    /// A fraction `coverage` of the sea, on the crests of `waves` raised by `wind`.
+    pub fn new(waves: WaveField, wind: Vector2<f64>, coverage: f64, albedo: Color) -> Foam {
+        let (_, sd) = waves.height_exceeded(0.5);
+        let mut foam = Foam {
+            waves, threshold: 0., softness: 0.15, albedo, height_sd: sd.max(1e-9),
+            wind: if wind.norm() > 0. { wind.normalize() } else { Vector2::new(1., 0.) },
+            noise: crate::noise::PerlinNoise::shuffled(0xf0a),
+        };
+        // The score exceeded over `coverage` of the sea.
+        let (m, size) = (256, 487.);
+        let mut rng = geometry::Pcg32::new(23, 5);
+        let mut scores: Vec<f64> = (0..m * m).map(|i| {
+            let (x, z) = (((i % m) as f64 + rng.next_f64()) * size / m as f64, ((i / m) as f64 + rng.next_f64()) * size / m as f64);
+            foam.score(x, z)
+        }).collect();
+        scores.sort_by(|a, b| a.total_cmp(b));
+        foam.threshold = scores[((1. - coverage.clamp(0., 1.)) * (scores.len() - 1) as f64).round() as usize];
+        foam
+    }
+
+    /// How strongly (x, z) is foam: the slope and height against their spreads, plus lace and
+    /// streaks.
+    fn score(&self, x: f64, z: f64) -> f64 {
+        // Waves break where they are steep, mostly near their crests: steepness counts for more
+        // than height, which would gather all the foam on the longest waves' crests.
+        let w = self.waves.at(x, z);
+        let h = self.waves.full_height(x, z) / self.height_sd;
+        let steep = Vector2::new(w.y, w.z).norm() / self.waves.mean_square_slope.sqrt().max(1e-9);
+        let lace = self.noise.fbm(x / 1.5, 0.3, z / 1.5, 3, 0.55, 2.2);
+        let (along, across) = (x * self.wind.x + z * self.wind.y, -x * self.wind.y + z * self.wind.x);
+        let streaks = self.noise.fbm(along / 12., 0.7, across / 1.2, 3, 0.5, 2.);
+        0.5 * h + steep + 6. * (lace - 0.5) + 2. * (streaks - 0.5)
+    }
+
+    /// How much of the surface at (x, z) is foam, 0 to 1.
+    pub fn at(&self, x: f64, z: f64) -> f64 {
+        let t = ((self.score(x, z) - self.threshold) / self.softness * 0.5 + 0.5).clamp(0., 1.);
+        t * t * (3. - 2. * t)
+    }
 }
 
 /// Water's refractive index.
@@ -834,6 +931,16 @@ impl MaterialModel for PhysicalOcean {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let v = -r.rd.normalize();
         let up = self.center.map_or(Vector3::y(), |c| (intersection.point - c).normalize());
+        // Whitecaps: foam over that fraction of the point, chosen at random, scattering
+        // diffusely about the mean surface (foam rides the wave, smoothing its ripples).
+        if let Some(foam) = &self.foam {
+            let f = foam.at(intersection.point.x, intersection.point.z);
+            if f > 0. && geometry::rand() < f {
+                let albedo = foam.albedo.as_reflectance();
+                let n = if up.dot(&v) > 0. { up } else { -up };
+                return crate::material::functions::scatter_bsdf(&crate::material::bsdf::LambertianBSDF { albedo, normal: n }, r, &intersection.point, s);
+            }
+        }
         let mut n = intersection.normal;
         // Seen from beyond a wave's slope: use the mean surface.
         if n.dot(&v) <= 0. {
@@ -876,6 +983,7 @@ fn physical_material(opts: &Value, waves_slope: f64, wind: Vector2<f64>, center:
         water: SceneFile::parse_color_def(opts, "water", Color::new(0.002, 0.012, 0.03)),
         roughness: SceneFile::parse_number(&opts["roughness"], (cox_munk_slope(wind.norm()) - waves_slope).max(1e-3)),
         center,
+        foam: None,
     }
 }
 
@@ -894,7 +1002,15 @@ pub fn create_ocean(opts: &Value) -> SceneObject {
     let material: Box<dyn MaterialModel + Sync + Send> = if opts["debug"].as_bool() == Some(true) {
         Box::new(NormalShade {})
     } else {
-        Box::new(physical_material(opts, waves.mean_square_slope, wind, planet_radius.map(|r| Vector3::new(0., -r, 0.))))
+        let mut m = physical_material(opts, waves.mean_square_slope, wind, planet_radius.map(|r| Vector3::new(0., -r, 0.)));
+        // The foam's own copy of the same waves (the geometry keeps the other).
+        let coverage = SceneFile::parse_number(&opts["whitecaps"], whitecap_coverage(wind.norm())).clamp(0., 1.);
+        if coverage > 0. {
+            let same = WaveField::new(wind, SceneFile::parse_number(&opts["time"], 0.), SceneFile::parse_int(&opts["seed"], 0) as u64,
+                opts["amplitude"].as_f64(), SceneFile::parse_number(&opts["resolved"], 0.8).clamp(0., 1.));
+            m.foam = Some(Foam::new(same, wind, coverage, SceneFile::parse_color_def(opts, "foam_albedo", Color::new(0.5, 0.5, 0.5))));
+        }
+        Box::new(m)
     };
     let ocean = Ocean {
         planet_radius,
@@ -916,6 +1032,20 @@ mod curved_tests {
             detail_center: Vector2::zeros(),
             detail_distance: 300.,
         }
+    }
+
+    #[test]
+    fn test_whitecaps_grow_with_the_wind() {
+        // Monahan and O'Muircheartaigh: about 2% at 12 m/s, none in a calm.
+        assert!((whitecap_coverage(12.) - 0.0186).abs() < 0.001, "{}", whitecap_coverage(12.));
+        assert!(whitecap_coverage(3.) < 1e-3 && whitecap_coverage(0.) == 0.);
+        // The foam covers about that fraction of the sea, on the crests.
+        let wind = Vector2::new(14., 3.);
+        let foam = Foam::new(WaveField::new(wind, 0., 1, None, 0.8), wind, whitecap_coverage(wind.norm()), Color::white());
+        let n = 200;
+        let covered = (0..n * n).map(|i| foam.at((i % n) as f64 * 2.31, (i / n) as f64 * 2.17)).sum::<f64>() / (n * n) as f64;
+        let w = whitecap_coverage(wind.norm());
+        assert!((covered - w).abs() < 0.4 * w, "{} vs {}", covered, w);
     }
 
     #[test]

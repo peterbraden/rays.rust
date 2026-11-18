@@ -143,6 +143,7 @@ mod noise;
 mod terrain;
 mod expr;
 mod graph;
+mod talus;
 mod volume;
 mod glare;
 mod variance;

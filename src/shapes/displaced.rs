@@ -23,6 +23,9 @@
 //!   masks) and the spacing of the vertices there (to filter out finer detail), and moves them
 //!   along the base's normal, so cliffs gain relief as well as level ground; or straight up,
 //!   with `"displacement_direction": "vertical"`.
+//! - `"vertical_displacement"`, a second graph, moves them straight up as well: for things
+//!   that stand up from the ground whatever its slope, like the fallen blocks of a `talus`
+//!   (`talus.rs`), whose tops then lie above where they stand, so a material's mask finds them.
 //! - Each cell is diced into 2^k x 2^k quads, `k` its level, chosen once from the camera so
 //!   that a quad is about `pixels` pixels across where the cell is nearest it, up to
 //!   `max_level` (default 8), and no finer than half the graph's finest detail (or
@@ -142,6 +145,9 @@ pub struct DisplacedTerrain {
     grid: Arc<HeightGrid>,
     graph: Graph,
     vertical: bool,
+    /// A second displacement, straight up, added to the first: things that stand up from the
+    /// ground, like fallen blocks (`talus`), on slopes as on level ground.
+    lift: Option<Graph>,
     /// The displacement's range.
     range: (f64, f64),
     /// Each cell's level, and conservative bounds.
@@ -174,9 +180,15 @@ fn slab(b: &BBox, ro: &Vector3<f64>, inv: &Vector3<f64>, t0: f64, t1: f64) -> Op
 
 impl DisplacedTerrain {
     pub fn new(grid: Arc<HeightGrid>, graph: Graph, vertical: bool, detail: &Detail) -> Result<DisplacedTerrain, String> {
+        DisplacedTerrain::with_lift(grid, graph, vertical, None, detail)
+    }
+
+    /// With `lift`, a displacement straight up added to the first.
+    pub fn with_lift(grid: Arc<HeightGrid>, graph: Graph, vertical: bool, lift: Option<Graph>, detail: &Detail) -> Result<DisplacedTerrain, String> {
         use rayon::prelude::*;
         let range = graph.range();
-        if !(range.0.is_finite() && range.1.is_finite()) {
+        let up = lift.as_ref().map_or((0., 0.), |g| g.range());
+        if !(range.0.is_finite() && range.1.is_finite() && up.0.is_finite() && up.1.is_finite()) {
             return Err("a terrain's displacement must be bounded: give an expression a \"range\"".into());
         }
         let reach = range.0.abs().max(range.1.abs());
@@ -198,9 +210,10 @@ impl DisplacedTerrain {
                 let (rx, rz) = (side(sx), side(sz));
                 let ny = 1. / (1. + sx * sx + sz * sz).sqrt();
                 let down = if range.0 < 0. { range.0 } else { range.0 * ny };
-                let up = if range.1 > 0. { range.1 } else { range.1 * ny };
-                (Vector3::new(x0 - rx, lo + down, z0 - rz), Vector3::new(x0 + cell + rx, hi + up, z0 + cell + rz))
+                let rise = if range.1 > 0. { range.1 } else { range.1 * ny };
+                (Vector3::new(x0 - rx, lo + down, z0 - rz), Vector3::new(x0 + cell + rx, hi + rise, z0 + cell + rz))
             };
+            let (min, max) = (min + Vector3::y() * up.0.min(0.), max + Vector3::y() * up.1.max(0.));
             // Room for rounding.
             let pad = Vector3::repeat(1e-9 * (1. + min.abs().max().max(max.abs().max())));
             BBox::new(min - pad, max + pad)
@@ -210,7 +223,8 @@ impl DisplacedTerrain {
         // A steep cell's surface is longer than the cell is wide: on a cliff, a 1.5 m cell may
         // span 20 m of rock. Its level is chosen for the longer of the two, so quads up a cliff
         // are no taller than a pixel rather than smearing the relief into vertical streaks.
-        let min_spacing = detail.min_spacing.unwrap_or_else(|| (0.5 * graph.finest()).min(cell / 8.)).max(1e-6);
+        let finest = graph.finest().min(lift.as_ref().map_or(f64::INFINITY, |g| g.finest()));
+        let min_spacing = detail.min_spacing.unwrap_or_else(|| (0.5 * finest).min(cell / 8.)).max(1e-6);
         let levels: Vec<u8> = cell_bounds.par_iter().enumerate().map(|(k, b)| {
             let (lo, hi) = grid.smooth_range(k % nx, k / nx);
             let extent = cell.max(hi - lo);
@@ -234,7 +248,7 @@ impl DisplacedTerrain {
         println!("Displaced terrain: {} x {} cells diced to levels {} to {}, up to {:.1} million vertices if all are seen",
             nx, nz, levels.iter().min().unwrap_or(&0), levels.iter().max().unwrap_or(&0), vertices / 1e6);
         let tiles = (0 .. nx * nz).map(|_| OnceLock::new()).collect();
-        Ok(DisplacedTerrain { grid, graph, vertical, range, levels, cell_bounds, tiles, pool: OnceLock::new(), bvh, cells, bounds })
+        Ok(DisplacedTerrain { grid, graph, vertical, lift, range, levels, cell_bounds, tiles, pool: OnceLock::new(), bvh, cells, bounds })
     }
 
     /// The displacement's range.
@@ -257,8 +271,10 @@ impl DisplacedTerrain {
         let (y, hx, hz) = g.smooth(x, z);
         let base = Vector3::new(x, y, z);
         let normal = Vector3::new(-hx, 1., -hz).normalize();
-        let d = self.graph.eval(&Context::new(base, normal, g.cell * scale));
-        base + if self.vertical { Vector3::y() } else { normal } * d
+        let c = Context::new(base, normal, g.cell * scale);
+        let d = self.graph.eval(&c);
+        let up = self.lift.as_ref().map_or(0., |l| l.eval(&c));
+        base + if self.vertical { Vector3::y() } else { normal } * d + Vector3::y() * up
     }
 
     /// The level whose filter the grid corner (cx, cz) is evaluated at: the coarsest of the

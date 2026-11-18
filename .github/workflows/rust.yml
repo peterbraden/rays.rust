@@ -19,7 +19,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: Swatinem/rust-cache@v2
     - name: Install Clippy
       run: rustup component add clippy
@@ -29,7 +29,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: Swatinem/rust-cache@v2
     - name: Build tests
       run: cargo test --no-run
@@ -39,7 +39,7 @@ jobs:
   examples:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: Swatinem/rust-cache@v2
     - name: Build release
       run: cargo build --release

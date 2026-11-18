@@ -62,7 +62,7 @@ impl Drift {
     }
 
     /// Where something at `v` at the start is now.
-    fn forth(&self, v: &Vector3<f64>) -> Vector3<f64> {
+    pub(crate) fn forth(&self, v: &Vector3<f64>) -> Vector3<f64> {
         if self.angle == 0. { *v } else { crate::weather::rotate(v, &self.axis, self.angle) }
     }
 
@@ -169,6 +169,10 @@ pub struct Heaps {
     pub surface: crate::procedural::cauliflower::Surface,
     pub radius: f64,
     pub seed: u32,
+    /// The time now, and how long each cloud lives (s): born as wisps, it fills out into a heap,
+    /// then frays and evaporates, and another is born elsewhere in its cell (`Heap::maturity`).
+    pub time: f64,
+    pub lifetime: f64,
 }
 
 impl Heaps {
@@ -176,6 +180,7 @@ impl Heaps {
         Heaps {
             tree: crate::procedural::cauliflower::Cauliflower::cumulus(), cell: 2000., edge: 15., lift: 0.35, dome: 0.8, lean: 0.25, skew: 2.,
             surface: crate::procedural::cauliflower::Surface::new(seed.wrapping_add(77)), radius, seed: seed as u32,
+            time: 0., lifetime: 2400.,
         }
     }
 
@@ -211,9 +216,24 @@ struct Heap {
     /// (downwind, in the drifting frame).
     tall: f64,
     downwind: Vector3<f64>,
+    /// How far through its life it is (0 to 1).
+    age: f64,
 }
 
 impl Heap {
+    /// How far it has formed (`cauliflower::Surface::condensed`): wisps as it is born, a heap by
+    /// a third of its life, fraying from 0.7 and gone at the end.
+    fn maturity(&self) -> f64 {
+        smoothstep(0., 0.3, self.age).min(1. - smoothstep(0.7, 1., self.age))
+    }
+
+    /// How much of it has formed at `altitude`: rising from the condensation level as it is born
+    /// (`cauliflower::rising`); a dying cloud keeps its height as it frays.
+    fn grown_to(&self, altitude: f64) -> f64 {
+        let reached = crate::procedural::cauliflower::rising(smoothstep(0., 0.35, self.age)) * (self.top - self.base);
+        1. - smoothstep(0.8 * reached, reached, altitude - self.base)
+    }
+
     /// The body's spheres, over a flat disc: more of them the wider it is.
     fn roots(&self, h: &Heaps) -> Vec<crate::procedural::cauliflower::Sphere> {
         crate::procedural::cauliflower::body(&(self.axis * (h.radius + self.base)), &self.axis, self.r0, self.width, h.lift, h.dome, self.tall, self.id, self.hashes[0])
@@ -268,7 +288,12 @@ impl Stratiform {
             for dy in -1..=1 {
                 for dz in -1..=1 {
                     let (ix, iy, iz) = (c.x + dx, c.y + dy, c.z + dz);
-                    let hash = |k: u32| crate::noise::worley_hash(ix as u32, iy as u32, iz as u32, h.seed.wrapping_add(k));
+                    // Each cell's clouds live in turn, from a phase of its own; each a new cloud,
+                    // somewhere else in the cell.
+                    let phase = crate::noise::worley_hash(ix as u32, iy as u32, iz as u32, h.seed.wrapping_add(50));
+                    let x = h.time / h.lifetime + phase;
+                    let (age, cycle) = (x - x.floor(), x.floor() as i64 as u32);
+                    let hash = |k: u32| crate::noise::worley_hash(ix as u32, iy as u32, iz as u32, h.seed.wrapping_add(k).wrapping_add(cycle.wrapping_mul(7919)));
                     let axis = (Vector3::new(ix as f64 + hash(0), iy as f64 + hash(1), iz as f64 + hash(2)) * s).normalize();
                     if !owns(axis * h.radius, s, (ix, iy, iz)) {
                         continue;
@@ -305,8 +330,8 @@ impl Stratiform {
                     let heap = Heap {
                         axis, distance, r0, width, base, reach: width + largest * ext + h.lean * (top_of - base),
                         top: top_of,
-                        id: ((ix as u64) << 42) ^ ((iy as u64) << 21) ^ (iz as u64) ^ ((h.seed as u64) << 13),
-                        hashes: [hash(6), hash(7)], tall, downwind,
+                        id: ((ix as u64) << 42) ^ ((iy as u64) << 21) ^ (iz as u64) ^ ((h.seed as u64) << 13) ^ ((cycle as u64) << 7),
+                        hashes: [hash(6), hash(7)], tall, downwind, age,
                     };
                     if f(&heap) {
                         return beyond;
@@ -325,23 +350,33 @@ impl Stratiform {
         let margin = h.margin();
         // Frayed into wisps: the point looked up, carried through vector noise.
         let q = h.surface.frayed(&p);
-        let mut best = f64::NEG_INFINITY;
+        let mut best = 0f64;
+        let mut billows = None;
         self.heaps_near(h, &up, |heap| {
             if heap.distance > heap.reach + margin || at.altitude > heap.top + margin {
                 return false;
             }
+            let maturity = heap.maturity();
+            if maturity <= 0. {
+                return false;
+            }
+            // Deep enough for its edge, softer the younger (or older) it is.
+            let soft = 1. - maturity;
+            let enough = h.edge * (1. + 24. * soft * soft);
             // Leaning downwind with height: look up where the cloud stood that much upwind.
             let lean = heap.downwind * (h.lean * (at.altitude - heap.base).max(0.));
-            best = best.max(heap.grown(h).depth(&h.tree, &(q - lean), h.edge));
-            best >= h.edge
+            let depth = heap.grown(h).depth(&h.tree, &(q - lean), enough);
+            if depth <= -margin {
+                return false;
+            }
+            // Billows pushing the surface outwards (never in: the spheres are the core), then
+            // the edge.
+            let b = if depth < enough { *billows.get_or_insert_with(|| h.surface.billowing(&q)) } else { 0. };
+            best = best.max(h.surface.condensed(depth + b, h.edge, maturity, &q) * heap.grown_to(at.altitude));
+            best >= 1.
         });
-        if best <= -margin {
-            return 0.;
-        }
-        // Billows pushing the surface outwards (never in: the spheres are the core), then the
-        // edge; and the flat base, where the air saturates.
-        let billows = if best < h.edge { h.surface.billowing(&q) } else { 0. };
-        smoothstep(0., h.edge, best + billows) * smoothstep(base, base + 0.3 * h.edge, at.altitude)
+        // And the flat base, where the air saturates.
+        best * smoothstep(base, base + 0.3 * h.edge, at.altitude)
     }
 
     /// Within a texel of nothing but heaps: how far a ray at `at` can go before it could reach
@@ -486,6 +521,11 @@ pub struct Convective {
     pub time: f64,
     seed: u32,
     shapes: Shapes,
+    /// The towers' thermals as cauliflower (`cauliflower::tower`), their crisp `edge` (m) and
+    /// finer surface.
+    pub tree: crate::procedural::cauliflower::Cauliflower,
+    pub surface: crate::procedural::cauliflower::Surface,
+    pub edge: f64,
 }
 
 /// An active convective cell near a point.
@@ -500,6 +540,8 @@ pub struct Tower {
     pub base: f64,
     pub top: f64,
     pub radius: f64,
+    /// The top it will reach.
+    pub full_top: f64,
     pub mature: bool,
     /// The wind aloft at the tower (unit, horizontal), which its anvil spreads along.
     pub wind: Vector3<f64>,
@@ -509,13 +551,60 @@ pub struct Tower {
     pub column: f64,
     pub anvil: f64,
     pub anvil_left: f64,
+    /// Its axis (a unit vector, in the drifting frame), id and phase, for its thermals.
+    pub axis: Vector3<f64>,
+    pub id: u64,
+    pub phase: f64,
+}
+
+impl Tower {
+    /// How far it has formed (`cauliflower::Surface::condensed`): wisps as it starts, filling
+    /// out over the first fifth of its life; fraying and thinning as its column rains out.
+    pub fn maturity(&self) -> f64 {
+        smoothstep(0., 0.2, self.age).min(self.column)
+    }
+
+    /// Where its top freezes, if it has become a cumulonimbus: the upper third of its column.
+    pub fn glaciation(&self) -> Option<f64> {
+        self.mature.then(|| self.base + 0.67 * (self.top - self.base))
+    }
+
+    /// Its thermals' sphere trees, grown once per thread (as `Heap::grown`).
+    fn grown(&self, c: &Convective) -> std::rc::Rc<crate::procedural::cauliflower::Grown> {
+        use crate::procedural::cauliflower::{glaciated_levels, tower};
+        use std::collections::HashMap;
+        use std::rc::Rc;
+        thread_local! {
+            static GROWN: std::cell::RefCell<HashMap<[u64; 4], Rc<crate::procedural::cauliflower::Grown>>> = std::cell::RefCell::new(HashMap::new());
+        }
+        // About 25000 spheres (a megabyte) each.
+        const KEPT: usize = 16;
+        let key = [self.id, self.base.to_bits(), self.top.to_bits(), self.radius.to_bits() ^ self.mature as u64];
+        GROWN.with(|g| {
+            if let Some(t) = g.borrow().get(&key) {
+                return t.clone();
+            }
+            let roots = tower(&(self.axis * (c.radius + self.base)), &self.axis, self.radius, self.top - self.base, self.full_top - self.base, 0.35, &c.tree, self.id, self.phase);
+            let glaciation = self.glaciation();
+            let r = c.radius;
+            let t = Rc::new(c.tree.grow_capped(&roots, &self.axis, |p| glaciated_levels(&c.tree, glaciation, p.norm() - r)));
+            let mut g = g.borrow_mut();
+            if g.len() >= KEPT {
+                g.clear();
+            }
+            g.insert(key, t.clone());
+            t
+        })
+    }
 }
 
 impl Convective {
     pub fn new(maps: Arc<Maps>, look: Look, cell_size: f64, radius: f64, seed: u64) -> Convective {
         let top_max = maps.deep_top_reach.max();
         Convective { maps, look, cell_size, overshoot: 800., anvil_depth: 1800., radius, top_max, drift: Drift::none(), lifetime: 5400., time: 0.,
-                     seed: seed as u32, shapes: Shapes::new(seed.wrapping_add(5)) }
+                     seed: seed as u32, shapes: Shapes::new(seed.wrapping_add(5)),
+                     tree: crate::procedural::cauliflower::Cauliflower::cumulus(),
+                     surface: crate::procedural::cauliflower::Surface::new(seed.wrapping_add(91)), edge: 15. }
     }
 
     /// The highest any of it reaches.
@@ -581,7 +670,8 @@ impl Convective {
                     let rising = smoothstep(0., 0.4, age);
                     let top = base + height * rising;
                     let mature = reaches && age > 0.3;
-                    let radius = s * (0.09 + 0.1 * h(5)) * (0.7 + 0.3 * growth) * (0.5 + 0.5 * rising);
+                    // Cumulonimbus columns are 5 to 15 km across.
+                    let radius = s * (0.13 + 0.12 * h(5)) * (0.7 + 0.3 * growth) * (0.5 + 0.5 * rising);
                     let column = 1. - smoothstep(0.7, 0.9, age);
                     let anvil = smoothstep(0.3, 0.65, age);
                     let anvil_left = 1. - smoothstep(0.85, 1., age);
@@ -590,7 +680,9 @@ impl Convective {
                     let wind = self.drift.back(&wind);
                     let wind = wind - fdir_drifting * fdir_drifting.dot(&wind);
                     let wind = if wind.norm() > 1e-6 { wind.normalize() } else { crate::weather::tangents(&fdir_drifting).0 };
-                    f(&Tower { offset, distance, strength, base, top, radius, mature, wind, age, column, anvil, anvil_left });
+                    let id = ((ix as u64) << 42) ^ ((iy as u64) << 21) ^ (iz as u64) ^ ((cycle as u64) << 7) ^ ((self.seed as u64) << 13);
+                    f(&Tower { offset, distance, strength, base, top, radius, full_top: base + height, mature, wind, age, column, anvil, anvil_left,
+                               axis: fdir_drifting, id, phase: h(7) });
                 }
             }
         }
@@ -599,13 +691,19 @@ impl Convective {
 
     /// How far out from its axis a tower's cloud can reach (with its lumps and its anvil).
     fn tower_reach(&self, t: &Tower) -> f64 {
-        let column = 1.3 * t.radius;
+        let column = self.column_reach(t.radius);
         if t.mature { column.max(1.95 * self.anvil_radius(t)) } else { column }
+    }
+
+    /// How far a column of `radius` reaches from its axis: its thermals (`cauliflower::tower`,
+    /// within 1.25 of its radius) and their surface.
+    fn column_reach(&self, radius: f64) -> f64 {
+        1.25 * radius + self.surface.margin()
     }
 
     /// The most any tower reaches.
     fn max_reach(&self) -> f64 {
-        (1.3 * 0.19 * self.cell_size).max(1.95 * 0.5 * self.cell_size)
+        self.column_reach(0.25 * self.cell_size).max(1.95 * 0.5 * self.cell_size)
     }
 
     /// The anvil's radius for a tower: limited so that it stays within a cell of its own.
@@ -615,8 +713,9 @@ impl Convective {
 
     /// How much of the densest cloud there is at `at` from towers and their anvils.
     fn tower_fraction(&self, at: &SurfacePoint) -> f64 {
-        let mut best = 0f64;
-        // Lumps on the towers' sides: cauliflower.
+        // The anvils and domes, from noise, and the thermals, crisp.
+        let (mut best, mut crisp) = (0f64, 0f64);
+        // Lumps on the anvils' edges.
         let mut lumps = None;
         self.towers(&at.up, |t| {
             let a = at.altitude;
@@ -630,12 +729,12 @@ impl Convective {
                 remap(perlin, worley_fbm(self.shapes.cells(), &q) - 1., 1.)
             });
             let mut f = 0f64;
-            // The tower: a column with a rounded top, narrowing a little as it rises.
-            let hz = ((a - t.base) / (t.top - t.base)).min(1.);
-            let width = if t.mature { t.radius * (1. - 0.2 * hz) } else { t.radius * (1. - hz.powi(4)).max(0.).sqrt() };
             let edge = t.radius * 0.35;
             let d = t.distance + edge * 1.6 * (0.5 - lump);
-            f = f.max(smoothstep(0., edge, width - d) * smoothstep(t.base, t.base + 150., a) * t.column);
+            // The tower: its thermals (`cauliflower::tower`), forming and fraying as it lives.
+            if t.distance < self.column_reach(t.radius) && a < t.top + self.surface.margin() {
+                crisp = crisp.max(self.thermals(t, at) * (0.4 + 0.6 * t.strength));
+            }
             if t.mature {
                 // The anvil, spread downwind under the tropopause, and the overshooting dome.
                 let ra = self.anvil_radius(t) * (0.3 + 0.7 * t.anvil);
@@ -646,20 +745,44 @@ impl Convective {
                 let across = (shifted - t.wind * along).norm();
                 let da = ((along / (1.3 * ra)).powi(2) + (across / ra).powi(2)).sqrt() * (1. / (0.35 + 0.65 * spread));
                 let vertical = smoothstep(low, low + 0.4 * self.anvil_depth, a) * (1. - smoothstep(t.top - 120., t.top + 60., a));
-                f = f.max((1. - smoothstep(0.7, 1., da + 0.25 * (0.5 - lump))) * vertical * t.anvil_left);
+                f = f.max((1. - smoothstep(0.7, 1., da + 0.1 * (0.5 - lump))) * vertical * t.anvil_left);
                 if a > t.top - 100. {
                     let dome = t.radius * 0.6 * (1. - ((a - t.top) / over).powi(2)).max(0.).sqrt();
                     f = f.max(smoothstep(0., edge, dome - d) * t.column);
                 }
             }
-            best = best.max(f * (0.4 + 0.6 * t.strength));
+            // Ice: thinner than the liquid cloud below (`cauliflower::ICE`).
+            best = best.max(f * (0.4 + 0.6 * t.strength) * crate::procedural::cauliflower::ICE);
         });
         if best <= 0. {
+            return crisp;
+        }
+        // Erode the anvils' edges.
+        let dd = worley_fbm(self.shapes.cells(), &(self.drift.noise_position(&at.position, &at.up) / self.look.detail_size));
+        remap(best, (1. - dd) * self.look.erosion, 1.).max(crisp)
+    }
+
+    /// How much of the densest cloud a tower's thermals put at `at`.
+    fn thermals(&self, t: &Tower, at: &SurfacePoint) -> f64 {
+        use crate::procedural::cauliflower::glaciated;
+        let maturity = t.maturity();
+        if maturity <= 0. {
             return 0.;
         }
-        // Erode the edges.
-        let dd = worley_fbm(self.shapes.cells(), &(self.drift.noise_position(&at.position, &at.up) / self.look.detail_size));
-        remap(best, (1. - dd) * self.look.erosion, 1.)
+        let p = self.drift.back(&at.position);
+        let q = self.surface.frayed(&p);
+        let ice = glaciated(t.glaciation(), at.altitude);
+        let soft = 1. - maturity;
+        let edge = self.edge * (1. + 9. * ice);
+        let enough = edge * (1. + 24. * soft * soft);
+        let depth = t.grown(self).depth(&self.tree, &q, enough);
+        if depth <= -self.surface.margin() {
+            return 0.;
+        }
+        let billows = if depth < enough { self.surface.billowing(&q) * (1. - ice) } else { 0. };
+        // Gone entirely as the column rains out.
+        self.surface.condensed(depth + billows, edge, maturity, &q) * (1. - (1. - crate::procedural::cauliflower::ICE) * ice) * smoothstep(0., 0.15, t.column)
+            * smoothstep(t.base, t.base + 0.3 * self.edge, at.altitude)
     }
 
     /// The shield of anvils over clusters of storms: a sheet under the tropopause.
@@ -671,9 +794,10 @@ impl Convective {
         }
         let top = m.deep.top.at(&at.up);
         let base = top - self.anvil_depth * 1.2;
-        let look = Look { shape_size: self.look.shape_size * 3., ..self.look };
+        // Ice, spread flat and smooth: a sheet, little eroded, and thin (`cauliflower::ICE`).
+        let look = Look { shape_size: self.look.shape_size * 3., detail_size: self.look.detail_size * 3., erosion: 0.4 * self.look.erosion, ..self.look };
         let position = Drift { rise: 0., ..self.drift }.noise_position(&at.position, &at.up);
-        self.shapes.fraction(&look, at.altitude, base, top, cover, 0.1, &position)
+        self.shapes.fraction(&look, at.altitude, base, top, cover, 0., &position) * crate::procedural::cauliflower::ICE
     }
 }
 
@@ -728,7 +852,7 @@ impl PlanetField for Convective {
             // The column (with its lumps and dome) up to its top, and the anvil only near it.
             let over = if t.mature { self.overshoot } else { 0. };
             let vertical = (t.base - altitude).max(altitude - (t.top + over)).max(0.);
-            let horizontal = (t.distance - 1.3 * t.radius).max(0.);
+            let horizontal = (t.distance - self.column_reach(t.radius)).max(0.);
             let mut gap = vertical.max(horizontal);
             if t.mature {
                 let low = t.top - self.anvil_depth;
@@ -964,17 +1088,24 @@ mod tests {
             if compared > 20 { break; }
         }
         assert!(compared > 0, "no growing storms found");
-        // The density changes smoothly over a few seconds, and the bounds hold at any time.
+        // The density changes smoothly, not rearranging as storms grow (half a second: the
+        // towers' thermals have edges 15 m deep, and drift 5 m in that time), and the bounds hold
+        // at any time.
         let mut rng = crate::geometry::Pcg32::new(6, 0);
-        let (a, b) = (field(7000.), field(7005.));
+        let (a, b) = (field(7000.), field(7000.5));
         let (mut diff, mut total) = (0., 0.);
-        for _ in 0..3000 {
+        for k in 0..30000 {
             let u = crate::geometry::point_on_unit_sphere(rng.next_f64(), rng.next_f64());
             if maps.deep.cover.at(&u) < 0.3 { continue; }
+            // Only near storms: the bounds, a tenth of the time.
+            let mut near = false;
+            a.towers(&u, |t| near |= t.distance < 1.3 * t.radius);
+            if !near && k % 10 != 0 { continue; }
             let at = planet.surface_point(&(planet.center() + u * (planet.radius + 1000. + rng.next_f64() * 12000.)));
             let (x, y) = (a.density(&at), b.density(&at));
             diff += (x - y).abs();
             total += x;
+            if k % 10 != 0 { continue; }
             let d = crate::geometry::point_on_unit_sphere(rng.next_f64(), rng.next_f64());
             let (m, len) = a.majorant_from(&at, &at.position, &d, &planet);
             for k in 0..20 {
@@ -982,7 +1113,7 @@ mod tests {
                 assert!(a.density(&q) <= m + 1e-12);
             }
         }
-        assert!(total > 0. && diff < 0.2 * total, "{} of {}", diff, total);
+        assert!(total > 0.05 && diff < 0.2 * total, "{} of {}", diff, total);
     }
 
     #[test]

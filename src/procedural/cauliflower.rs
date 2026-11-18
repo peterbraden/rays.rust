@@ -304,11 +304,16 @@ pub fn body(base_centre: &Vector3<f64>, up: &Vector3<f64>, r0: f64, width: f64, 
 /// than a pillar. So the roots are columns of stacked thermals (`column`): a main one, and
 /// around it others lower the farther out they stand, over a base of short ones (`reach` says
 /// how far out it goes, turrets and all).
-pub fn tower(base_centre: &Vector3<f64>, up: &Vector3<f64>, width: f64, height: f64, lift: f64, tree: &Cauliflower, id: u64, phase: f64) -> Vec<Sphere> {
+///
+/// A growing tower is `height` tall of the `full` height it will reach: its thermals' places are
+/// laid out for the full tower, and only its heads rise (`column`), so it grows smoothly.
+#[allow(clippy::too_many_arguments)]
+pub fn tower(base_centre: &Vector3<f64>, up: &Vector3<f64>, width: f64, height: f64, full: f64, lift: f64, tree: &Cauliflower, id: u64, phase: f64) -> Vec<Sphere> {
     let (t1, t2) = basis(up);
     let mut roots = Vec::new();
+    let full = full.max(height);
     // The main column.
-    column(&mut roots, base_centre, up, 0.55 * width, height, lift, tree, mix(id), phase);
+    column(&mut roots, base_centre, up, 0.55 * width, height, full, lift, tree, mix(id), phase);
     // Flanking columns, lower the farther out; then the broad base of short ones.
     let (inner, outer) = (4, 6);
     for k in 0..inner + outer {
@@ -319,9 +324,9 @@ pub fn tower(base_centre: &Vector3<f64>, up: &Vector3<f64>, width: f64, height: 
         let rho = if ring { 0.6 + 0.08 * u(0) } else { 0.28 + 0.2 * u(0) };
         let a = std::f64::consts::TAU * ((m as f64 + 0.6 * u(1)) / n as f64 + phase + if ring { 0.13 } else { 0. });
         let cw = if ring { (0.3 + 0.08 * u(2)) * width } else { (0.38 + 0.1 * u(2)) * width };
-        let h = if ring { height * (0.12 + 0.15 * u(3)) } else { height * (0.35 + 0.45 * u(3)) * (1. - 0.8 * (rho - 0.28)) };
+        let share = if ring { 0.12 + 0.15 * u(3) } else { (0.35 + 0.45 * u(3)) * (1. - 0.8 * (rho - 0.28)) };
         let at = base_centre + (t1 * a.cos() + t2 * a.sin()) * (rho * width);
-        column(&mut roots, &at, up, cw, h, lift, tree, cid, u(4));
+        column(&mut roots, &at, up, cw, height * share, full * share, lift, tree, cid, u(4));
     }
     roots
 }
@@ -335,31 +340,42 @@ pub fn reach(roots: &[Sphere], base_centre: &Vector3<f64>, up: &Vector3<f64>, tr
     }).fold(0., f64::max)
 }
 
-/// One column of thermals, `width` in radius and `height` tall over `base_centre`: spheres
-/// 0.55 of its width stacked up its axis, each a little off it, the top one the largest (its
-/// head) and standing so that its turrets reach `height`.
+/// One column of thermals, `width` in radius, over `base_centre`, `height` tall of the `full`
+/// height it will reach: spheres 0.55 of its width in places stacked up its axis for the full
+/// column, each a little off it, and on top its head, the largest, rising with `height` so its
+/// turrets reach it. The thermals below the head are those whose places it has passed: as it
+/// rises it uncovers them (each appearing inside the head, where it was), so the column grows
+/// smoothly rather than rearranging.
 #[allow(clippy::too_many_arguments)]
-fn column(roots: &mut Vec<Sphere>, base_centre: &Vector3<f64>, up: &Vector3<f64>, width: f64, height: f64, lift: f64, tree: &Cauliflower, id: u64, phase: f64) {
+fn column(roots: &mut Vec<Sphere>, base_centre: &Vector3<f64>, up: &Vector3<f64>, width: f64, height: f64, full: f64, lift: f64, tree: &Cauliflower, id: u64, phase: f64) {
     let (t1, t2) = basis(up);
     let ext = tree.extent(1.);
     let r = 0.55 * width;
-    // A short, broad column: one sphere.
-    let head = (1.1 * r).min(height / (lift + ext));
-    let top = (height - ext * head).max(lift * head);
-    let bottom = lift * r.min(head);
-    let step = 0.75 * r;
-    let levels = (((top - bottom) / step).ceil() as usize).clamp(0, 24) + 1;
-    for k in 0..levels {
-        let id = mix(id.wrapping_mul(13).wrapping_add(k as u64));
-        let u = |j: u64| unit(id, j);
-        let t = if levels == 1 { 1. } else { k as f64 / (levels - 1) as f64 };
-        let z = bottom + (top - bottom) * t;
-        let radius = if k + 1 == levels { head } else { r * (0.85 + 0.2 * u(0)) };
+    let place = |k: u64| {
+        let u = |j: u64| unit(mix(id.wrapping_mul(13).wrapping_add(k)), j);
         // Off the axis, so the column isn't a stack of beads: at most 0.1 of the width.
         let a = std::f64::consts::TAU * (u(1) + phase);
-        let off = 0.1 * width * u(2).sqrt();
-        roots.push(Sphere { centre: base_centre + up * z + (t1 * a.cos() + t2 * a.sin()) * off, radius, id });
+        (t1 * a.cos() + t2 * a.sin()) * (0.1 * width * u(2).sqrt())
+    };
+    // The head, from a short, broad column (one sphere) up.
+    let head = (1.1 * r).min(height / (lift + ext));
+    let top = (height - ext * head).max(lift * head);
+    let bottom = lift * r;
+    let step = 0.75 * r;
+    let full_head = (1.1 * r).min(full / (lift + ext));
+    let full_top = (full - ext * full_head).max(lift * full_head);
+    let slots = (((full_top - bottom) / step).ceil().max(0.) as usize).min(24);
+    let spacing = if slots > 0 { (full_top - bottom) / slots as f64 } else { step };
+    for k in 0..slots {
+        let z = bottom + spacing * k as f64;
+        if z >= top - 0.5 * spacing {
+            break;
+        }
+        let id = mix(id.wrapping_mul(13).wrapping_add(k as u64));
+        roots.push(Sphere { centre: base_centre + up * z + place(k as u64), radius: r * (0.85 + 0.2 * unit(id, 0)), id });
     }
+    let id = mix(id.wrapping_mul(13).wrapping_add(1000));
+    roots.push(Sphere { centre: base_centre + up * top + place(1000), radius: head, id });
 }
 
 /// A cumulus's surface finer than its spheres: pyroclastic billows (after Tessendorf's Cumulo:
@@ -407,7 +423,7 @@ impl Surface {
     /// time, and the first cloud is thin and ragged, translucent, the sky seen through it,
     /// before it fills out into a heap with sharp edges; a dying one frays and thins the same way
     /// as it evaporates into the drier air around it (entrainment at its edges, the edges first).
-    /// So the less mature the cloud, the less water it holds (density down to a sixth), the
+    /// So the less mature the cloud, the less water it holds (density down to 0.3), the
     /// softer its edge (to 25 times as deep), and the more of it is gaps: condensed only where a
     /// noise (patches about 250 m, the size of the first thermals) exceeds what it lacks.
     pub fn condensed(&self, depth: f64, edge: f64, maturity: f64, q: &Vector3<f64>) -> f64 {
@@ -418,9 +434,13 @@ impl Surface {
         if f <= 0. || soft <= 0. {
             return f;
         }
+        if m <= 0. {
+            return 0.;
+        }
         let x = q / 250. + Vector3::repeat(3.1);
         let n = 0.5 + 0.5 * (0.65 * self.noise.noise(x.x, x.y, x.z) + 0.35 * self.noise.noise(2.1 * x.x, 2.1 * x.y + 5.3, 2.1 * x.z));
-        f * smoothstep(soft - 0.15, soft + 0.15, n) * (0.15 + 0.85 * m * m)
+        // Nothing at all at maturity 0.
+        f * smoothstep(0.8 * soft - 0.2, 0.8 * soft + 0.1, n) * (0.3 + 0.7 * m * m) * smoothstep(0., 0.1, m)
     }
 
     /// The billows' outward push at `p` (m): |noise| per generation.
@@ -460,11 +480,23 @@ pub struct Cumulus {
     tower_top: Option<f64>,
 }
 
+/// How far up a cloud `maturity` formed has grown, as a fraction of its depth: from a fifth
+/// (the first wisps) to all of it by maturity 0.8.
+pub fn rising(maturity: f64) -> f64 {
+    0.2 + 0.8 * smoothstep(0., 0.8, maturity)
+}
+
+/// Ice cloud's extinction as a fraction of liquid cloud's. Extinction is about 3/2 the water
+/// content over the particles' density and effective radius: a cumulus's 0.5 g/m³ of 10 µm
+/// droplets gives 0.075 per metre, an anvil's 0.1 g/m³ of 30 µm crystals 0.0055 (A. J.
+/// Heymsfield and others' anvil measurements; Q. Fu, J. Climate 9, 1996, for ice optics).
+pub const ICE: f64 = 0.12;
+
 /// How glaciated a cloud is at `altitude`, its tops freezing from `glaciation` (0 to 1, over
 /// a kilometre). When a towering cumulus's top freezes it becomes a cumulonimbus: the sharp
 /// cauliflower of liquid droplets gives way to the smooth, then fibrous, outline of ice (calvus,
 /// then capillatus; the WMO's International Cloud Atlas). Ice crystals are fewer and larger
-/// than droplets, so the ice is thinner and its edges soft: here half the density, an edge
+/// than droplets, so the ice is thinner and its edges soft: here `ICE` of the density, an edge
 /// ten times as deep, and turrets only one level below the thermals (`Cauliflower::grow_capped`).
 pub fn glaciated(glaciation: Option<f64>, altitude: f64) -> f64 {
     glaciation.map_or(0., |g| smoothstep(g - 500., g + 500., altitude))
@@ -499,7 +531,7 @@ impl Cumulus {
     pub fn tower(tree: Cauliflower, surface: Surface, centre: crate::na::Vector2<f64>, base: f64, width: f64, height: f64,
                  lift: f64, lean: f64, wind: crate::na::Vector2<f64>, glaciation: Option<f64>, seed: u64) -> Cumulus {
         let at = Vector3::new(centre.x, base, centre.y);
-        let roots = tower(&at, &Vector3::y(), width, height, lift, &tree, mix(seed), unit(seed, 99));
+        let roots = tower(&at, &Vector3::y(), width, height, height, lift, &tree, mix(seed), unit(seed, 99));
         let grown = tree.grow_capped(&roots, &Vector3::y(), |c| glaciated_levels(&tree, glaciation, c.y));
         let wind = Vector3::new(wind.x, 0., wind.y);
         let wind = if wind.norm() > 0. { wind.normalize() } else { Vector3::zeros() };
@@ -545,8 +577,16 @@ impl Cumulus {
             return 0.;
         }
         let billows = if depth < enough { self.surface.billowing(&q) * (1. - ice) } else { 0. };
-        self.surface.condensed(depth + billows, edge, self.maturity, &q) * (1. - 0.5 * ice)
-            * smoothstep(self.base, self.base + 0.3 * self.edge, p.y)
+        self.surface.condensed(depth + billows, edge, self.maturity, &q) * (1. - (1. - ICE) * ice)
+            * smoothstep(self.base, self.base + 0.3 * self.edge, p.y) * self.grown_to(p.y)
+    }
+
+    /// How much of the cloud has formed at `altitude`: a forming cumulus is low wisps at the
+    /// condensation level first, its thermals rising through it, so it reaches up only
+    /// `rising` of its depth, a soft top over the last fifth of that.
+    fn grown_to(&self, altitude: f64) -> f64 {
+        let reached = rising(self.maturity) * (self.top() - self.base);
+        1. - smoothstep(0.8 * reached, reached, altitude - self.base)
     }
 }
 

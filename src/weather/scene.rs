@@ -242,7 +242,7 @@ fn convective(spec: &Value, weather: &Weather, maps: Arc<crate::weather::Maps>) 
 }
 
 /// The low cloud's cumulus as cauliflower heaps (`fields::Heaps`): `{"cell", "edge", "lift",
-/// "lean", "skew", "billows" (a scale), "wisps", "wisp_size", "levels", "ratio", "children",
+/// "lean", "skew", "lifetime" (s), "billows" (a scale), "wisps", "wisp_size", "levels", "ratio", "children",
 /// "embed", "rise"}`, all optional.
 fn heaps(o: &Value, weather: &Weather, seed: u64) -> crate::weather::fields::Heaps {
     let mut h = crate::weather::fields::Heaps::new(weather.params.radius, seed.wrapping_add(101));
@@ -252,6 +252,8 @@ fn heaps(o: &Value, weather: &Weather, seed: u64) -> crate::weather::fields::Hea
     h.dome = number(o, "dome", h.dome).max(0.);
     h.lean = number(o, "lean", h.lean).max(0.);
     h.skew = number(o, "skew", h.skew).max(0.1);
+    h.time = weather.params.time;
+    h.lifetime = number(o, "lifetime", h.lifetime).max(60.);
     let billows = number(o, "billows", 1.).max(0.);
     h.surface.billows.iter_mut().for_each(|b| b.1 *= billows);
     h.surface.wisps = number(o, "wisps", h.surface.wisps).max(0.);
@@ -404,5 +406,38 @@ mod tests {
         }
         assert!(land > 20 && sea > 20, "{} {}", land, sea);
         assert!(!w.overhead().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod find_storms {
+    use super::*;
+    /// `SCENE=file cargo test find_storms -- --ignored --nocapture`: the storms within 80 km.
+    #[test]
+    #[ignore]
+    fn find_storms() {
+        let path = std::env::var("SCENE").unwrap();
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let objects = expand(doc["objects"].as_array().unwrap().clone());
+        let layer = objects.iter().find(|o| o["family"].as_str() == Some("convective")).unwrap();
+        let mut w = layer["weather"].clone();
+        if let Ok(t) = std::env::var("TIME") { w["time"] = serde_json::json!(t.parse::<f64>().unwrap()); }
+        let weather = weather_of(&w);
+        let field = convective(&w["convective"], &weather, weather.maps());
+        let r = weather.params.radius;
+        let mut seen = std::collections::HashMap::new();
+        for i in -40..=40 {
+            for j in -40..=40 {
+                let p = Vector3::new(i as f64 * 2000., r, j as f64 * 2000.);
+                field.towers(&p.normalize(), |t| {
+                    let pos = field.drift.forth(&t.axis) * r - Vector3::new(0., r, 0.);
+                    seen.entry(t.id).or_insert(format!("at ({:.0}, {:.0}) dist {:.0} age {:.2} base {:.0} top {:.0} full {:.0} radius {:.0} mature {}",
+                        pos.x, pos.z, (pos.x * pos.x + pos.z * pos.z).sqrt(), t.age, t.base, t.top, t.full_top, t.radius, t.mature));
+                });
+            }
+        }
+        let mut v: Vec<_> = seen.values().cloned().collect();
+        v.sort_by_key(|s| s.split("dist ").nth(1).unwrap().split(' ').next().unwrap().parse::<f64>().unwrap() as i64);
+        for s in v.iter().take(25) { println!("{}", s); }
     }
 }

@@ -12,7 +12,9 @@
 //!    the light sampling of the vertex before), and retire those paths.
 //! 4. Shade: sorted by material kind, so neighbouring work runs the same code (pbrt keeps a
 //!    queue per material); sample the lights (next-event estimation), queueing a shadow ray
-//!    per light sample, then sample the BSDF for the path's next ray, or retire it.
+//!    per light sample, then sample the BSDF for the path's next ray, or retire it. Paths on
+//!    a material that isn't data sort last, and the scene's own material answers each
+//!    (`host_bounce`; `flat::FlatMaterial::Host`).
 //! 5. Trace the shadow rays, adding what each carries if nothing blocks it.
 //!
 //! and back to 2 until no path is left. Each path carries its own state (throughput, the last
@@ -32,6 +34,8 @@
 //! only the Sobol' sampler; point lights are always all sampled (the light BVH chooses among
 //! area lights only).
 
+use crate::intersection::Intersection;
+use crate::material::model::LightSampling;
 use crate::scheduler::{Stage, Stats};
 use crate::color::Color;
 use crate::shapes::geometry::Geometry;
@@ -69,6 +73,10 @@ struct Path {
     /// Whether the path has scattered off a non-delta BSDF, after which glossy lobes are
     /// regularised (`ggx::regularised`).
     scattered: bool,
+    /// Whether the last bounce's light sampling counted the lights in full
+    /// (`LightSampling::Exclusive`, which only a host material answers): then a light the ray
+    /// hits adds nothing, though a sky does.
+    lights_counted: bool,
     hit: Option<Hit>,
     done: bool,
 }
@@ -171,7 +179,7 @@ fn render_batch(s: &Scene, flat: &FlatScene, k: usize, range: std::ops::Range<us
             (0.5 + fx) / w as f64, (0.5 + fy) / h as f64)?;
         let ray = Ray { ro: ray.ro, rd: ray.rd.normalize() };
         Some(Path { pixel: index as u32, ray, beta: Color::white(), l: Color::black(), weight: weight * wx * wy,
-                    depth: 0, specular: true, prev_pdf: 0., sampler, scattered: false, hit: None, done: false })
+                    depth: 0, specular: true, prev_pdf: 0., sampler, scattered: false, lights_counted: false, hit: None, done: false })
     }).collect();
     lap(&mut stats, Stage::Generate, paths.len());
     let mut done = Vec::with_capacity(paths.len());
@@ -196,10 +204,19 @@ fn render_batch(s: &Scene, flat: &FlatScene, k: usize, range: std::ops::Range<us
         // 4. Shade, sorted by material so that each kind's code runs together.
         paths.sort_unstable_by_key(|p| flat.hit_material(p.hit.unwrap().prim).kind());
         shadows.clear();
-        for (i, p) in paths.iter_mut().enumerate() {
+        // Host materials sort last: the stage's own kinds, then the paths the scene's
+        // materials answer, counted apart.
+        let ported = paths.partition_point(|p| !matches!(flat.hit_material(p.hit.unwrap().prim), FlatMaterial::Host { .. }));
+        for (i, p) in paths[..ported].iter_mut().enumerate() {
             shade(i, p, s, flat, &mut shadows);
         }
-        lap(&mut stats, Stage::Shade, paths.len());
+        lap(&mut stats, Stage::Shade, ported);
+        if ported < paths.len() {
+            for (i, p) in paths[ported..].iter_mut().enumerate() {
+                shade(ported + i, p, s, flat, &mut shadows);
+            }
+            lap(&mut stats, Stage::Host, paths.len() - ported);
+        }
         // 5. Shadow rays.
         rays += shadows.len() as u64;
         for sh in &shadows {
@@ -268,7 +285,7 @@ fn gather_emission(p: &mut Path, s: &Scene, flat: &FlatScene) {
     let Some(h) = p.hit else {
         // Weighted against sampling the sky, where the vertex before did.
         let w = match &s.environment {
-            Some(env) if !p.specular => power_heuristic(p.prev_pdf, env.pdf(&p.ray.rd)),
+            Some(env) if !p.specular && !p.lights_counted => power_heuristic(p.prev_pdf, env.pdf(&p.ray.rd)),
             _ => 1.,
         };
         p.l = p.l + p.beta * sky_radiance(&p.ray, s, flat) * w;
@@ -380,6 +397,7 @@ fn shade(i: usize, p: &mut Path, s: &Scene, flat: &FlatScene, shadows: &mut Vec<
             }
             return specular_bounce(p, s, h.point + outward * eps, reflect(p.ray.rd, n), Color::white());
         },
+        FlatMaterial::Host { object } => return host_bounce(p, s, flat, *object, &h),
         FlatMaterial::Emitter { .. } | FlatMaterial::Checker { .. } => unreachable!("emitters are retired before shading; checkerboards resolve to a square's material"),
     };
     let bsdf = local.bsdf();
@@ -475,6 +493,66 @@ fn specular_bounce(p: &mut Path, s: &Scene, from: Vector3<f64>, rd: Vector3<f64>
     p.beta = p.beta * attenuate;
     p.specular = true;
     p.ray = Ray { ro: from, rd: rd.normalize() };
+    p.depth += 1;
+}
+
+/// A vertex on a material that isn't data (`FlatMaterial::Host`): the scene's own material
+/// answers, as it does the recursive tracer (`trace::trace_sample`, which this follows). It
+/// gathers its direct light itself, with its own shadow rays through the scene's own
+/// acceleration structure, and returns the next ray; the path's sampler and its regularisation
+/// state are lent to the thread for the call, since that code draws from `geometry::rand()`.
+///
+/// This is the CPU's side of the scheduler's CPU queue (`scheduler`): work the stages have no
+/// code for, done one path at a time by code that has. It is why such paths sort last in the
+/// shading stage and are counted apart (`Stage::Host`): what they cost is what porting their
+/// material would save.
+fn host_bounce(p: &mut Path, s: &Scene, flat: &FlatScene, object: u32, h: &Hit) {
+    let o = &flat.hosts[object as usize];
+    let found = Intersection { dist: h.dist, point: h.point, normal: h.shading, face: flat.face(h.prim), object: o, part: 0 };
+    // Off the surface, on the side the ray arrived from (`trace::trace_intersection`).
+    let bias = s.render.shadow_bias.max(found.spawn_offset());
+    let hit = Intersection { point: found.point + found.facing_normal(&p.ray) * bias, ..found };
+    let shaded = crate::trace::shading(&p.ray, &*o.medium, &hit, s);
+    // A moon is sampled as a light (`Scene::moonlight`): a ray that finds it counts it as one
+    // that finds the sun's disc (`trace::trace_sample`).
+    if let Some(moon) = s.moonlight.as_ref().filter(|m| m.is_on(&hit.point)) {
+        let w = match (p.specular, p.lights_counted) {
+            (true, _) => 1.,
+            (_, true) => 0.,
+            _ => power_heuristic(p.prev_pdf, moon.light.disc_pdf(&p.ray.rd)),
+        };
+        if w == 0. {
+            p.done = true;
+            return;
+        }
+        p.beta = p.beta * w;
+    }
+    crate::material::ggx::set_scattered(p.scattered);
+    crate::geometry::begin_sampler(crate::sampler::SampleState::Sobol(p.sampler.clone()));
+    let interaction = o.medium.material_at(hit.point).scatter(&p.ray, &shaded, s);
+    if let Some(crate::sampler::SampleState::Sobol(sampler)) = crate::geometry::take_sampler() {
+        p.sampler = sampler;
+    }
+    p.scattered = crate::material::ggx::has_scattered();
+    p.l = p.l + p.beta * interaction.emit;
+    let Some(ray) = interaction.ray else {
+        // No ray: the weight is the vertex's own colour.
+        p.l = p.l + p.beta * interaction.attenuate;
+        p.done = true;
+        return;
+    };
+    if p.depth >= s.render.max_depth as u32 || !continue_with(p, s, &interaction.attenuate) {
+        p.done = true;
+        return;
+    }
+    p.beta = p.beta * interaction.attenuate;
+    // What the next vertex counts of a light it finds (`trace::light_weight`).
+    (p.specular, p.lights_counted, p.prev_pdf) = match interaction.light_sampling {
+        LightSampling::None => (true, false, 0.),
+        LightSampling::Exclusive => (false, true, 0.),
+        LightSampling::MIS { bsdf_pdf } => (false, false, bsdf_pdf),
+    };
+    p.ray = Ray { ro: ray.ro, rd: ray.rd.normalize() };
     p.depth += 1;
 }
 
@@ -614,6 +692,64 @@ pub mod tests {
         }
         let (a, b) = (tiles(&wavefront, w, h, 2, 2), tiles(&path, w, h, 2, 2));
         for t in 0..4 {
+            for ch in 0..3 {
+                assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "tile {} channel {}: wavefront {} vs path {}", t, ch, a[t][ch], b[t][ch]);
+            }
+        }
+    }
+
+    /// The recursive tracer's mean image over `n` samples a pixel.
+    fn path_image(s: &Scene, n: usize) -> Vec<Color> {
+        let (w, h) = (s.image.width, s.image.height);
+        let mut path = vec![Color::black(); w * h];
+        for (index, p) in path.iter_mut().enumerate() {
+            let (x, y) = (index % w, index / w);
+            for k in 0..n {
+                crate::geometry::seed_rand(9, (k * w * h + index) as u64);
+                let (u, v) = (crate::geometry::rand(), crate::geometry::rand());
+                let (ray, weight) = s.camera.get_ray_weighted(x as f64 / w as f64, y as f64 / h as f64, u / w as f64, v / h as f64).unwrap();
+                *p = *p + crate::trace::trace(&ray, 0, s).1 * (weight / n as f64);
+            }
+        }
+        path
+    }
+
+    /// Materials that aren't data (layered, rough glass, a texture) no longer stop a scene
+    /// being flattened: they are host materials, shaded by the scene's own code, among
+    /// materials the stages shade, under every kind of light (a sun, a point light, an area
+    /// light, the sky), whose weights the two kinds of vertex must agree on.
+    #[test]
+    fn test_host_materials_agree_with_the_path_tracer() {
+        let s = SceneFile::from_string(r#"{
+            "width": 24, "height": 16, "background": [0.2, 0.25, 0.3], "max_depth": 6, "path_termination": "russian_roulette",
+            "sun": { "direction": [-1, 2, -1], "intensity": 2 },
+            "lights": [ { "location": [1, 3, -1], "intensity": 4 } ],
+            "camera": { "location": [0, 1.5, -5], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.6 },
+            "materials": {
+                "F": { "type": "checker", "colors": [[0.7, 0.7, 0.7], [0.3, 0.3, 0.4]], "scale": [4, 4] },
+                "P": { "type": "coated_diffuse", "albedo": [0.7, 0.2, 0.1], "roughness": 0.2 },
+                "G": { "type": "rough_dielectric", "refractive_index": 1.5, "roughness": 0.3 },
+                "C": { "type": "conductor", "metal": "Au", "roughness": 0.2 },
+                "D": { "type": "lambertian", "albedo": [0.6, 0.6, 0.6] },
+                "E": { "type": "diffuse-light", "color": [1, 0.9, 0.8], "intensity": 8 }
+            },
+            "objects": [
+                { "type": "quad", "points": [[-6, 0, -6], [-6, 0, 6], [6, 0, -6], [6, 0, 6]], "material": "F" },
+                { "type": "sphere", "location": [-1.2, 0.5, 0], "radius": 0.5, "material": "P" },
+                { "type": "sphere", "location": [0, 0.5, 0], "radius": 0.5, "material": "G" },
+                { "type": "sphere", "location": [1.2, 0.5, 0], "radius": 0.5, "material": "C" },
+                { "type": "sphere", "location": [0, 0.3, -1.2], "radius": 0.3, "material": "D" },
+                { "type": "quad", "points": [[-0.5, 2.5, 0.5], [0.5, 2.5, 0.5], [-0.5, 2.5, 1.5], [0.5, 2.5, 1.5]], "material": "E" }
+            ]
+        }"#.to_string());
+        let flat = FlatScene::build(&s).unwrap();
+        assert_eq!(flat.hosts.len(), 3);
+        let n = 256;
+        let (_, _, stats) = render_pass_with_stats(&s, &flat, 0);
+        assert!(stats.stage(Stage::Host).items > 0 && stats.stage(Stage::Shade).items > 0);
+        let (w, h) = (s.image.width, s.image.height);
+        let (a, b) = (tiles(&mean_image(&s, n), w, h, 3, 2), tiles(&path_image(&s, n), w, h, 3, 2));
+        for t in 0..6 {
             for ch in 0..3 {
                 assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "tile {} channel {}: wavefront {} vs path {}", t, ch, a[t][ch], b[t][ch]);
             }

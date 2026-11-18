@@ -154,6 +154,9 @@ pub enum Stage {
     /// The vertex at a hit: light sampling (its shadow rays queued, or on the GPU traced
     /// here) and the next ray.
     Shade,
+    /// A vertex the stages have no code for (a material that isn't data,
+    /// `wavefront::flat::FlatMaterial::Host`), shaded by the scene's own material on the CPU.
+    Host,
     /// Shadow rays: whether each light sample arrives.
     Shadow,
     /// The sky's light, where asked for: escaping rays, sky samples, haze. A kernel of its own
@@ -164,7 +167,7 @@ pub enum Stage {
 }
 
 impl Stage {
-    pub const ALL: [Stage; 7] = [Stage::Generate, Stage::Intersect, Stage::Emission, Stage::Shade, Stage::Shadow, Stage::Sky, Stage::Accumulate];
+    pub const ALL: [Stage; 8] = [Stage::Generate, Stage::Intersect, Stage::Emission, Stage::Shade, Stage::Host, Stage::Shadow, Stage::Sky, Stage::Accumulate];
 
     pub fn name(&self) -> &'static str {
         match self {
@@ -172,6 +175,7 @@ impl Stage {
             Stage::Intersect => "intersect",
             Stage::Emission => "emission",
             Stage::Shade => "shade",
+            Stage::Host => "host",
             Stage::Shadow => "shadow",
             Stage::Sky => "sky",
             Stage::Accumulate => "accumulate",
@@ -192,7 +196,7 @@ pub struct StageStats {
 /// integrator and by the GPU's host, and added up (`merge`) across threads and passes.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Stats {
-    stages: [StageStats; 7],
+    stages: [StageStats; 8],
     /// Passes (a sample of every planned pixel) recorded.
     pub passes: u64,
     /// Paths alive at the start of each round of a pass, added up over the passes: the first

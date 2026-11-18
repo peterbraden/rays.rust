@@ -83,6 +83,12 @@ pub fn end_sample() {
     SOBOL.with(|s| *s.borrow_mut() = None);
 }
 
+/// As `end_sample`, returning the sampler as far as it has been drawn from, for a path that
+/// lent its own (`begin_sampler`) and takes it back.
+pub fn take_sampler() -> Option<crate::sampler::SampleState> {
+    SOBOL.with(|s| s.borrow_mut().take())
+}
+
 /// Uniform in [0, 1): the next dimension of the current Sobol' sample, if there is one
 /// (`begin_sample`), and otherwise from this thread's generator.
 pub fn rand() -> f64 {

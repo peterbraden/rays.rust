@@ -94,6 +94,8 @@ fn push_material(m: &FlatMaterial, out: &mut Vec<GpuMaterial>) -> u32 {
             let b = push_material(m2, out);
             GpuMaterial { kind: pathtrace::MAT_CHECKER, a, b, p: Vec4::new(0., 0., *xsize as f32, *zsize as f32), ..blank }
         },
+        // Refused before this (`Buffers::build`): the kernels have no queue for the host yet.
+        FlatMaterial::Host { .. } => blank,
     };
     out[index as usize] = g;
     index
@@ -337,6 +339,9 @@ pub struct Buffers {
 impl Buffers {
     /// The flattened scene as the shader's buffers, or why it can't be.
     pub fn build(s: &Scene, flat: &FlatScene) -> Result<Buffers, String> {
+        if !flat.hosts.is_empty() {
+            return Err(format!("{} objects whose materials the renderer's own code shades (the kernels have no queue for it yet)", flat.hosts.len()));
+        }
         let mut lights = Vec::new();
         for l in &s.lights {
             let i = l.emission.srgb() * l.intensity;

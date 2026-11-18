@@ -1655,6 +1655,20 @@ the host's.
    the GPU lacks goes to a queue the host reads back, runs on the CPU and writes back for
    the next stage. The scheduler sets how often (latency against batch size) and may hold
    such paths over to a later pass rather than stall the GPU's.
+   - Done, the CPU's side: a material that isn't data no longer stops a scene flattening.
+     It is `FlatMaterial::Host`, and the wavefront integrator's shading stage hands its
+     paths, sorted last, to the scene's own material (`integrator::host_bounce`, following
+     `trace::trace_sample`; the path lends the thread its sampler and regularisation state),
+     counted as `Stage::Host`. Emitters must still be data (the stages' light sampling has to
+     know them), and shapes must still flatten. 12 more demo scenes flatten (51 of 93;
+     bumps, textures, pbrt-materials, rocks, the noise media, the moons and worlds).
+     Verified: `test_host_materials_agree_with_the_path_tracer` (layered, rough glass and a
+     texture among ported materials, under a sun, a point light, an area light and a sky,
+     within 5% a tile), and at 160 x 90, 64 spp against the path tracer: mean FLIP 0.013 to
+     0.030 on bumps, textures, pbrt-materials, rocks and noise-simple-demo, and moon.json
+     and worlds.json pixel for pixel (one deterministic vertex, the same Sobol' points).
+     The host's share of the time is now a number: textures.json 6.6 s of host shading for
+     1.3M vertices, 5 us each.
 4. Regeneration and width. A path's sample index moves from the pass's parameters into the
    path, so a slot freed by a finished path takes a new sample at once and the wavefront
    stays full (van Antwerpen; Laine et al.), within a memory budget for the wavefront.

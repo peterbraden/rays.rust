@@ -673,6 +673,7 @@
    "type": "terrain",
    "heightmap": "$hero",
    "displacement": "$butte_relief",
+   "displacement_falloff": 20,
    "displacement_detail": {
     "pixels": 1,
     "offscreen": 8,

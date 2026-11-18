@@ -1113,7 +1113,8 @@ impl SceneFile {
         };
         let lift = o.get("vertical_displacement").map(|v| crate::graph::Graph::parse(v)
             .unwrap_or_else(|e| panic!("terrain's vertical_displacement: {}", e)));
-        DisplacedTerrain::with_lift(grid, graph, vertical, lift, &detail).unwrap_or_else(|e| panic!("{}", e))
+        let falloff = SceneFile::parse_number(&o["displacement_falloff"], 0.);
+        DisplacedTerrain::with_lift(grid, graph, vertical, lift, falloff, &detail).unwrap_or_else(|e| panic!("{}", e))
     }
 
     /// A forest's `"lod"`: `true`, or `{"pixels": 1, "max_level": 12}`, to see each tree at the

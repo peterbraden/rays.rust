@@ -442,6 +442,7 @@
    "type": "terrain",
    "heightmap": "$close",
    "displacement": "$slickrock_relief",
+   "displacement_falloff": 4,
    "displacement_detail": {
     "pixels": 1,
     "offscreen": 8,

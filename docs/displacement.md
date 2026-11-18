@@ -79,6 +79,10 @@ octave's mean in its place, so a coarsely diced distant surface doesn't alias or
   demo's `talus` displaces vertically and the same node with `"output": "mask"` puts rock on
   the blocks and grit between them (`Context::lifted`: at a shading point a block's `position`
   is judged where it stands, its height below).
+- **Fading at the edges.** `"displacement_falloff"` (metres) fades both graphs to nothing
+  within that distance of the grid's edges, so a displaced close-up grid meets the undisplaced
+  grid round it (a coarser terrain with a `hole`) without a step or a slit along the join; the
+  cells' bounds then reach to no displacement as well.
 - **Diced to the pixel.** Each heightmap cell is diced into 2^k x 2^k quads, `k` chosen once per
   cell from the camera so a quad is about `pixels` pixels across, up to `max_level`, and no finer
   than half the graph's finest detail (`min_spacing` overrides). A cell's size is the longer of
@@ -122,6 +126,7 @@ surface, so keep displacement small or masked off where they are.
 - Fuller surface layers (more than two materials, masks from the simulations' fields) on the
   same graphs (Terragen gap 2), and media densities.
 - Put the `landscape` scenery's clipmap through displacement.
+- Vector displacement for overhangs.
 
 ## In the desert scenes
 
@@ -134,5 +139,6 @@ rest of the near country has a `hole` there): wavering bedding breaks, weathered
 alcoves and vertical fluting on the cliffs (a `plan` ridged fractal, the same all the way down
 a face), fallen blocks in patches on the talus, slickrock domes on the top and low swells on
 the floor. The fluting and blocks are a metre or two across, about what a pixel at the butte
-resolves, which a 1.5 m grid alone cannot.
-- Vector displacement for overhangs.
+resolves, which a 1.5 m grid alone cannot. Both fade their displacement out at the close-up
+grid's edges (`displacement_falloff`: 4 m on the overlook, 20 m round the butte), where it
+meets the near country.

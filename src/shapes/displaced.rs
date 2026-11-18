@@ -148,6 +148,9 @@ pub struct DisplacedTerrain {
     /// A second displacement, straight up, added to the first: things that stand up from the
     /// ground, like fallen blocks (`talus`), on slopes as on level ground.
     lift: Option<Graph>,
+    /// Metres over which the displacement fades to nothing at the grid's edges, so it meets
+    /// an undisplaced grid around it (a coarser terrain with a `hole`) without a seam.
+    falloff: f64,
     /// The displacement's range.
     range: (f64, f64),
     /// Each cell's level, and conservative bounds.
@@ -180,14 +183,17 @@ fn slab(b: &BBox, ro: &Vector3<f64>, inv: &Vector3<f64>, t0: f64, t1: f64) -> Op
 
 impl DisplacedTerrain {
     pub fn new(grid: Arc<HeightGrid>, graph: Graph, vertical: bool, detail: &Detail) -> Result<DisplacedTerrain, String> {
-        DisplacedTerrain::with_lift(grid, graph, vertical, None, detail)
+        DisplacedTerrain::with_lift(grid, graph, vertical, None, 0., detail)
     }
 
-    /// With `lift`, a displacement straight up added to the first.
-    pub fn with_lift(grid: Arc<HeightGrid>, graph: Graph, vertical: bool, lift: Option<Graph>, detail: &Detail) -> Result<DisplacedTerrain, String> {
+    /// With `lift`, a displacement straight up added to the first; with `falloff` (metres),
+    /// both fade to nothing at the grid's edges.
+    pub fn with_lift(grid: Arc<HeightGrid>, graph: Graph, vertical: bool, lift: Option<Graph>, falloff: f64, detail: &Detail) -> Result<DisplacedTerrain, String> {
         use rayon::prelude::*;
-        let range = graph.range();
-        let up = lift.as_ref().map_or((0., 0.), |g| g.range());
+        // Faded towards the edges, the displacement takes values between its range and 0.
+        let toward_zero = |r: (f64, f64)| if falloff > 0. { (r.0.min(0.), r.1.max(0.)) } else { r };
+        let range = toward_zero(graph.range());
+        let up = toward_zero(lift.as_ref().map_or((0., 0.), |g| g.range()));
         if !(range.0.is_finite() && range.1.is_finite() && up.0.is_finite() && up.1.is_finite()) {
             return Err("a terrain's displacement must be bounded: give an expression a \"range\"".into());
         }
@@ -248,7 +254,7 @@ impl DisplacedTerrain {
         println!("Displaced terrain: {} x {} cells diced to levels {} to {}, up to {:.1} million vertices if all are seen",
             nx, nz, levels.iter().min().unwrap_or(&0), levels.iter().max().unwrap_or(&0), vertices / 1e6);
         let tiles = (0 .. nx * nz).map(|_| OnceLock::new()).collect();
-        Ok(DisplacedTerrain { grid, graph, vertical, lift, range, levels, cell_bounds, tiles, pool: OnceLock::new(), bvh, cells, bounds })
+        Ok(DisplacedTerrain { grid, graph, vertical, lift, falloff: falloff.max(0.), range, levels, cell_bounds, tiles, pool: OnceLock::new(), bvh, cells, bounds })
     }
 
     /// The displacement's range.
@@ -272,9 +278,26 @@ impl DisplacedTerrain {
         let base = Vector3::new(x, y, z);
         let normal = Vector3::new(-hx, 1., -hz).normalize();
         let c = Context::new(base, normal, g.cell * scale);
-        let d = self.graph.eval(&c);
-        let up = self.lift.as_ref().map_or(0., |l| l.eval(&c));
+        let fade = self.fade(x, z);
+        if fade <= 0. {
+            return base;
+        }
+        let d = fade * self.graph.eval(&c);
+        let up = fade * self.lift.as_ref().map_or(0., |l| l.eval(&c));
         base + if self.vertical { Vector3::y() } else { normal } * d + Vector3::y() * up
+    }
+
+    /// How much of the displacement is kept at (x, z): 1, falling smoothly to 0 within
+    /// `falloff` of the grid's edges.
+    fn fade(&self, x: f64, z: f64) -> f64 {
+        if self.falloff <= 0. {
+            return 1.;
+        }
+        let g = &self.grid;
+        let (x1, z1) = (g.min.0 + g.nx as f64 * g.cell, g.min.1 + g.nz as f64 * g.cell);
+        let inside = (x - g.min.0).min(x1 - x).min(z - g.min.1).min(z1 - z);
+        let t = (inside / self.falloff).clamp(0., 1.);
+        t * t * (3. - 2. * t)
     }
 
     /// The level whose filter the grid corner (cx, cz) is evaluated at: the coarsest of the
@@ -532,6 +555,35 @@ mod tests {
 
     fn terrain(g: Value, detail: Detail) -> DisplacedTerrain {
         DisplacedTerrain::new(grid(8, 8.), Graph::parse(&g).unwrap(), false, &detail).unwrap()
+    }
+
+    /// With a falloff, the edges lie on the undisplaced base (to meet a grid around them), and
+    /// the displaced surface stays within its cells' bounds, whose range now reaches 0.
+    #[test]
+    fn test_falloff_meets_the_base_at_the_edges() {
+        // Displaced only upwards, so the bounds must widen to reach 0.
+        let g = json!({"node": "fractal", "style": "ridged", "scale": 2, "smallest": 0.1, "amplitude": 0.4});
+        let t = DisplacedTerrain::with_lift(grid(8, 8.), Graph::parse(&g).unwrap(), false, None, 1.5,
+            &Detail { level: 3, ..Default::default() }).unwrap();
+        assert!(t.range.0 <= 0.);
+        let level = 3;
+        let n = 8 << level;
+        for q in 0 ..= n {
+            for (gx, gz) in [(q, 0), (q, n), (0, q), (n, q)] {
+                let p = t.point(gx, gz, level as u32);
+                let (y, _, _) = t.grid.smooth(p.x, p.z);
+                assert!((p.y - y).abs() < 1e-12, "edge vertex ({}, {}) displaced", gx, gz);
+            }
+        }
+        // Inside, more than the falloff from the edges, it is displaced as without one.
+        let plain = terrain(g, Detail { level: 3, ..Default::default() });
+        assert_eq!(t.point(n / 2, n / 2, 3), plain.point(n / 2, n / 2, 3));
+        for k in 0 .. 64 {
+            let b = t.cell_bounds[k];
+            for p in &t.dice(k, false).pos {
+                assert!((0 .. 3).all(|a| p[a] >= b.min[a] && p[a] <= b.max[a]), "cell {}: {:?} outside {:?}", k, p, b);
+            }
+        }
     }
 
     /// With no displacement, rays straight down land on the smooth base surface.

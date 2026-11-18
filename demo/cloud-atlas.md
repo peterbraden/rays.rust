@@ -421,13 +421,16 @@ scene uses Reinhard tone mapping with an exposure of 3, as a photograph at dusk 
 
 ![Lightning](./scenes/lightning.png)
 
-`lightning.json`: `{"type": "lightning", "start": [1200, 4500, 10500], "target": [3200, 7200], "seed": 5}`, in
-the cumulonimbus at nautical dusk
+`lightning.json`: `{"type": "lightning", "start": [2000, 7500, 9000], "target": [8000, 4000], "seed": 5}`
+and `{"type": "lightning", "kind": "intracloud", "start": [500, 8000, 9500], "cloud_length": 25000}`,
+in the cumulonimbus at night (`"diffusion": true`)
 
-Two cloud-to-ground strokes caught in a one-second exposure at dusk. The bolts glow
-blue-white and light everything near them: the cloud base above, the rain the second one falls
-through, and the sea below, which reflects them. The storm is otherwise a silhouette against
-the last of the twilight.
+A one-second exposure of a thunderstorm at night. A cloud-to-ground stroke leaves the storm
+high on its flank, at 7.5 km where the leader set out from the charge region, runs out across
+clear air and comes down kilometres in front of the rain; a second strikes through the rain
+shaft, lighting the curtain it falls through. Inside the upper tower an intracloud flash
+spreads through 25 km of channel, and the whole storm glows with its light, against a black
+sky.
 
 The channel is grown as a *stepped leader* (`procedural::lightning`). Leader tips push down
 from the cloud's charge region in steps of tens of metres (`step`), each turning by about 16°
@@ -439,15 +442,18 @@ to a couple of metres (`detail`, `roughness`), so the channel is jagged at every
 branches that lost the race carry only the charge stored along them, so each glows in
 proportion to the length of channel beyond it, fading towards its tips. Inside the cloud the
 flash spreads sideways in a fainter network (`cloud_length`); `"kind": "intracloud"` gives that
-network alone, sheet lightning.
+network alone, sheet lightning. Each generation of branch forks a third as often as the one it
+grew from, so a flash has a few dozen branches, not a bush.
 
 It is as bright as the real thing. A return stroke radiates a few hundred joules per metre in
 the visible and near infrared (Krider et al. 1968), about 1.5·10⁴ lumen-seconds per metre
 (`luminous_energy`); averaged over `strokes` strokes and the `shutter` time, that is the light
 per metre of channel, on the same scale as the sun (whose intensity, 4.9 here, it follows). A
 metre or so from the channel it is far brighter than daylight; a kilometre away it gives a few
-lux, tens of times full moonlight. So the scene is exposed as a night photograph would be
-(`"exposure": 500`), the channel itself blown out, with glare. Its colour is a blackbody at
+lux, tens of times full moonlight: a stroke a kilometre away gives a few lux-seconds, which
+is why lightning is photographed at f/8 and ISO 100 to 400, and its glow inside a cloud at
+ISO 1600 or more. So the scene is exposed as a night photograph would be (`"exposure": 3000`),
+the channel itself blown out, with glare. Its colour is a blackbody at
 25 000 K, near the channel's temperature, an approximation to its spectrum of nitrogen, oxygen
 and hydrogen lines.
 
@@ -458,9 +464,16 @@ samples would miss it; what a camera records of it there is its light per metre,
 segment is widened to half a pixel as seen from the camera, its radiance lowered to keep its
 light per metre (`pixel_width`). The channel casts no shadow.
 
-Light from a channel deep inside a dense cloud reaches the camera only after many
-scatterings, which a path tracer finds by chance, so the glow of lightning inside a cloud is
-noisy; flashes under the cloud base or the anvil, or in rain, are lit cleanly.
+A cloud absorbs next to nothing, so light from a channel inside it can't go anywhere but out:
+nearly all of it emerges, after hundreds of scatterings, and the cloud glows. A path tracer
+finds those paths only by chance, so the storm uses the diffusion approximation
+(`"diffusion"`, as overcast decks do for sunlight): at a path's first vertex in the cloud, each
+light sample's direct light is attenuated as usual, and what it loses on the way arrives
+diffused. In diffusion theory a source at reduced optical depths τ'f from one side of a slab
+and τ'b from the other sends a fraction (τ'b + ⅔) / (τ'f + τ'b + 4⁄3) out of the first, so
+the depths towards the light and beyond it are measured through the cloud's density along the
+same line. A flash deep in the cloud lights it broadly and softly; one near its surface
+brightly, nearby.
 
 ### Iridescence
 
@@ -488,9 +501,10 @@ is still noisy: from orbit, cloud detail is much smaller than a pixel.
 
 ## Not yet
 
-- **Lightning inside dense cloud**: in-cloud flashes light the cloud only through many
-  scatterings, which are noisy to trace; a diffusion approximation for light from inside a
-  cloud (as `"diffusion"` gives for sunlight) would light it cleanly.
+- **Lightning seen through cloud**: the diffusion approximation lights a cloud from a flash
+  inside it, but light doesn't spread sideways from the line to each light sample, so the
+  glow isn't concentrated around channels just under the surface as much as it should be;
+  and channels crawling under the anvil are hidden from this scene's camera.
 - **Cumulonimbus by simulation**: `harris_cumulus` could grow one, with a deeper grid, a weaker
   inversion and ice microphysics; the `cumulonimbus` generator shapes it from parcel theory
   instead.

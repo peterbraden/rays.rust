@@ -9,7 +9,7 @@
   "path_termination": "russian_roulette",
   "output": {
     "tonemap": "reinhard",
-    "exposure": 500,
+    "exposure": 3000,
     "glare": true
   },
   "camera": {
@@ -49,7 +49,7 @@
       "type": "skysphere",
       "sun_direction": [
         0.75,
-        -0.15,
+        -0.28,
         0.65
       ],
       "crepuscular_rays": true
@@ -78,9 +78,11 @@
         0.99
       ],
       "g": 0.85,
-      "oz": true,
       "similarity_after": 4,
-      "seed": 3
+      "seed": 3,
+      "diffusion": {
+        "steps": 24
+      }
     },
     {
       "type": "precipitation",
@@ -104,20 +106,22 @@
     {
       "type": "lightning",
       "start": [
-        1200,
-        4500,
-        10500
+        2000,
+        7500,
+        9000
       ],
       "ground": 0,
       "target": [
-        3200,
-        7200
+        8000,
+        4000
       ],
       "seed": 5,
-      "cloud_length": 8000,
+      "cloud_length": 3000,
       "radius": 0.4,
       "shutter": 1,
-      "strokes": 4
+      "strokes": 4,
+      "cloud_current": 0.4,
+      "cloud_depth": 800
     },
     {
       "type": "lightning",
@@ -136,6 +140,21 @@
       "radius": 0.3,
       "shutter": 1,
       "strokes": 2
+    },
+    {
+      "type": "lightning",
+      "kind": "intracloud",
+      "start": [
+        500,
+        8000,
+        9500
+      ],
+      "seed": 12,
+      "cloud_length": 25000,
+      "cloud_depth": 1000,
+      "cloud_current": 0.5,
+      "radius": 0.3,
+      "strokes": 4
     }
   ]
 }

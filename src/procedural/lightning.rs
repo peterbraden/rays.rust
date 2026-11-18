@@ -489,8 +489,8 @@ impl Default for Leader {
             step: 45.,
             tortuosity: 16.,
             pull: 0.35,
-            branching: 0.07,
-            dying: 0.035,
+            branching: 0.05,
+            dying: 0.05,
             striking_distance: 60.,
             cloud_length: 6000.,
             cloud_depth: 1500.,
@@ -517,7 +517,16 @@ struct Tip {
     at: usize,
     dir: Vector3<f64>,
     cloud: bool,
+    /// 0 for a leader, 1 for a branch of one, 2 for a branch of that, and so on.
+    generation: i32,
 }
+
+/// Each generation of branch forks this much less often than the one it grew from: a few
+/// dozen branches in all, not a bush.
+const FORK_FALLOFF: f64 = 0.35;
+
+/// At most this many leader tips at once.
+const MAX_TIPS: usize = 60;
 
 fn gaussian(rng: &mut Pcg32) -> f64 {
     // Box-Muller.
@@ -547,7 +556,7 @@ impl Leader {
 
         // The leader towards the ground.
         if self.kind == Kind::CloudToGround {
-            let mut tips = vec![Tip { at: 0, dir: Vector3::new(0.3 * gaussian(&mut rng), -1., 0.3 * gaussian(&mut rng)).normalize(), cloud: false }];
+            let mut tips = vec![Tip { at: 0, dir: Vector3::new(0.3 * gaussian(&mut rng), -1., 0.3 * gaussian(&mut rng)).normalize(), cloud: false, generation: 0 }];
             let max_steps = (20. * (self.start.y - self.ground) / self.step) as usize + 100;
             'race: for _ in 0..max_steps {
                 let mut born = vec![];
@@ -566,11 +575,12 @@ impl Leader {
                         break 'race;
                     }
                     // Forks leave at 20° to 50°; branches die out, the leader can't.
-                    if rng.next_f64() < self.branching && tips.len() < 400 {
+                    let generation = tips[k].generation;
+                    if rng.next_f64() < self.branching * FORK_FALLOFF.powi(generation) && tips.len() < MAX_TIPS {
                         let r = random_direction(&mut rng);
                         let side = (r - dir * dir.dot(&r)).normalize();
                         let angle = (20. + 30. * rng.next_f64()).to_radians();
-                        born.push(Tip { at: tips[k].at, dir: (dir * angle.cos() + side * angle.sin()).normalize(), cloud: false });
+                        born.push(Tip { at: tips[k].at, dir: (dir * angle.cos() + side * angle.sin()).normalize(), cloud: false, generation: generation + 1 });
                     }
                     if k > 0 && rng.next_f64() < self.dying {
                         tips.swap_remove(k);
@@ -597,7 +607,7 @@ impl Leader {
         let mut grown = 0.;
         let mut tips: Vec<Tip> = (0..3).map(|i| {
             let a = 2. * PI * (i as f64 + rng.next_f64() * 0.5) / 3.;
-            Tip { at: 0, dir: Vector3::new(a.cos(), 0.15 * gaussian(&mut rng), a.sin()).normalize(), cloud: true }
+            Tip { at: 0, dir: Vector3::new(a.cos(), 0.15 * gaussian(&mut rng), a.sin()).normalize(), cloud: true, generation: 0 }
         }).collect();
         while grown < self.cloud_length && !tips.is_empty() {
             let mut born = vec![];
@@ -617,10 +627,11 @@ impl Leader {
                 points.push(Point { p: to, parent: Some(tips[k].at), cloud: true });
                 tips[k].at = points.len() - 1;
                 tips[k].dir = dir;
-                if rng.next_f64() < self.branching * 0.5 && tips.len() < 16 {
+                let generation = tips[k].generation;
+                if rng.next_f64() < self.branching * 0.5 * FORK_FALLOFF.powi(generation) && tips.len() < 16 {
                     let side = Vector3::new(-dir.z, 0.2 * gaussian(&mut rng), dir.x).normalize() * if rng.next_f64() < 0.5 { 1. } else { -1. };
                     let angle = (25. + 35. * rng.next_f64()).to_radians();
-                    born.push(Tip { at: tips[k].at, dir: (dir * angle.cos() + side * angle.sin()).normalize(), cloud: true });
+                    born.push(Tip { at: tips[k].at, dir: (dir * angle.cos() + side * angle.sin()).normalize(), cloud: true, generation: generation + 1 });
                 }
                 if tips.len() > 1 && rng.next_f64() < self.dying * 0.25 {
                     tips.swap_remove(k);

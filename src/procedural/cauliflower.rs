@@ -110,7 +110,8 @@ impl Cauliflower {
     /// turned by the parent's hash and jittered a little. Evenly spread, each takes its own share
     /// of the surface: neighbours meet in a crease rather than piling into one smooth blob, as
     /// randomly placed turrets did (they cluster).
-    fn child(&self, s: &Sphere, k: usize, n: usize, up: &Vector3<f64>) -> Sphere {
+    fn child(&self, s: &Sphere, k: usize, n: usize, up: &Frame) -> Sphere {
+        let (t1, t2, up) = (&up.t1, &up.t2, &up.up);
         let id = mix(s.id.wrapping_mul(31).wrapping_add(k as u64 + 1));
         let n = n.max(1) as f64;
         let low = -0.25 * self.rise.clamp(0., 4.);
@@ -118,7 +119,6 @@ impl Cauliflower {
         let z = (1. - (1. - low) * ((k as f64 + 0.5) / n + jitter(0))).clamp(low, 1.);
         let a = std::f64::consts::TAU * (0.381_966 * k as f64 + unit(s.id, 7) + jitter(1));
         let r = (1. - z * z).max(0.).sqrt();
-        let (t1, t2) = basis(up);
         let d = t1 * (r * a.cos()) + up * z + t2 * (r * a.sin());
         // Larger on top, smaller on the sides: the head of a cumulus is its biggest domes.
         let upness = d.dot(up).max(0.);
@@ -144,6 +144,7 @@ impl Cauliflower {
     /// outside), along `up`; any depth over `enough` is reported as `enough`, which is all
     /// that's needed and cuts the search short.
     pub fn depth(&self, roots: &[Sphere], up: &Vector3<f64>, p: &Vector3<f64>, enough: f64) -> f64 {
+        let up = &Frame::new(up);
         let mut best = f64::NEG_INFINITY;
         for (i, root) in roots.iter().enumerate() {
             self.visit(root, 0, up, p, enough, &mut best, roots, i);
@@ -155,7 +156,7 @@ impl Cauliflower {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn visit(&self, s: &Sphere, level: usize, up: &Vector3<f64>, p: &Vector3<f64>, enough: f64, best: &mut f64, roots: &[Sphere], from: usize) {
+    fn visit(&self, s: &Sphere, level: usize, up: &Frame, p: &Vector3<f64>, enough: f64, best: &mut f64, roots: &[Sphere], from: usize) {
         let dist = (p - s.centre).norm();
         // Nothing in this subtree reaches the point any deeper than already found.
         if s.radius * self.reach[level] - dist <= *best {
@@ -337,6 +338,21 @@ impl crate::volume::DensityField for Cumulus {
     }
 }
 
+/// The direction turrets grow (`up`), and two unit vectors across it: computed once for a whole
+/// tree rather than for every turret.
+pub struct Frame {
+    pub up: Vector3<f64>,
+    pub t1: Vector3<f64>,
+    pub t2: Vector3<f64>,
+}
+
+impl Frame {
+    pub fn new(up: &Vector3<f64>) -> Frame {
+        let (t1, t2) = basis(up);
+        Frame { up: *up, t1, t2 }
+    }
+}
+
 /// Two unit vectors perpendicular to the unit `up` and each other.
 fn basis(up: &Vector3<f64>) -> (Vector3<f64>, Vector3<f64>) {
     let a = if up.x.abs() < 0.9 { Vector3::x() } else { Vector3::z() };
@@ -356,7 +372,7 @@ mod tests {
         out.push((*s, level));
         if level < c.levels {
             for k in 0..c.child_count(level) {
-                let child = c.child(s, k, c.child_count(level), up);
+                let child = c.child(s, k, c.child_count(level), &Frame::new(up));
                 if !Cauliflower::buried(&child, roots, from) {
                     all_spheres_of(c, &child, level + 1, up, out, roots, from);
                 }

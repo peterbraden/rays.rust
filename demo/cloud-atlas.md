@@ -86,6 +86,7 @@ glitter path running in to the camera.
 | | [Rain and rainbows](#rain-and-rainbows) | `rain.json` |
 | | [Mammatus](#mammatus) | `mammatus.json` |
 | | [Lightning](#lightning) | `lightning.json` |
+| | [Lightning under the anvil](#lightning-under-the-anvil) | `lightning-anvil.json` |
 | | [Iridescence](#iridescence) | `cirrus-iridescence.json` |
 | | [Clouds from orbit](#clouds-from-orbit) | `orbit.json` |
 
@@ -475,6 +476,21 @@ the depths towards the light and beyond it are measured through the cloud's dens
 same line. A flash deep in the cloud lights it broadly and softly; one near its surface
 brightly, nearby.
 
+### Lightning under the anvil
+
+![Lightning under the anvil](./scenes/lightning-anvil.png)
+
+`lightning-anvil.json`: `{"type": "lightning", "kind": "intracloud", "start": [-1500, 9000, 8000], "cloud_length": 40000}`,
+a cloud-to-ground stroke and a flash inside the tower, seen from under the anvil's leading edge
+
+The storm from beneath, at night: the anvil spreads overhead towards the camera (`wind_direction`
+towards it), and the tower rises through the middle of the view. Channels crawl across the sky
+under the anvil's base (spider lightning, `"kind": "intracloud"` held near its `start` height by
+`cloud_depth`), lighting its underside; one comes down to the ground. A flash about a kilometre
+inside the tower lights it from within, through the diffusion approximation. Seen from below, the
+anvil flares down into the tower, its underside hanging in soft lobes and its edges scalloped.
+Exposed as long exposures of storms are (`"exposure": 6000`, about ISO 3200).
+
 ### Iridescence
 
 ![Iridescence](./scenes/cirrus-iridescence.png)
@@ -503,8 +519,8 @@ is still noisy: from orbit, cloud detail is much smaller than a pixel.
 
 - **Lightning seen through cloud**: the diffusion approximation lights a cloud from a flash
   inside it, but light doesn't spread sideways from the line to each light sample, so the
-  glow isn't concentrated around channels just under the surface as much as it should be;
-  and channels crawling under the anvil are hidden from this scene's camera.
+  glow isn't concentrated around channels just under the surface as much as it should be,
+  and turrets lit from inside show less relief than in photographs.
 - **Cumulonimbus by simulation**: `harris_cumulus` could grow one, with a deeper grid, a weaker
   inversion and ice microphysics; the `cumulonimbus` generator shapes it from parcel theory
   instead.

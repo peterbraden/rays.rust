@@ -1,0 +1,155 @@
+{
+  "width": 960,
+  "height": 640,
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 24,
+  "path_termination": "russian_roulette",
+  "output": {
+    "tonemap": "reinhard",
+    "exposure": 6000,
+    "glare": true
+  },
+  "materials": {
+    "FIELDS": {
+      "type": "lambertian",
+      "albedo": [
+        0.05,
+        0.07,
+        0.04
+      ]
+    }
+  },
+  "camera": {
+    "location": [
+      0,
+      2,
+      0
+    ],
+    "lookat": [
+      -1500,
+      7500,
+      12000
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.9
+  },
+  "sun": {
+    "intensity": 4.9
+  },
+  "objects": [
+    {
+      "type": "planet",
+      "material": "FIELDS"
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        0.6,
+        -0.28,
+        0.75
+      ]
+    },
+    {
+      "type": "cumulonimbus",
+      "center": [
+        1000,
+        17000
+      ],
+      "base": 1300,
+      "tropopause": 11500,
+      "cape": 2500,
+      "radius": 3800,
+      "wind_direction": [
+        -0.15,
+        -1
+      ],
+      "upper_wind": 25,
+      "age": 1200,
+      "flanking": 3,
+      "flank_angle": 100,
+      "albedo": [
+        0.99,
+        0.99,
+        0.99
+      ],
+      "g": 0.85,
+      "diffusion": {
+        "steps": 24
+      },
+      "similarity_after": 4,
+      "seed": 3
+    },
+    {
+      "type": "precipitation",
+      "base": 1300,
+      "center": [
+        1500,
+        17500
+      ],
+      "radius": 4000,
+      "coverage": 0.8,
+      "rain_rate": 25,
+      "cell_size": 3000,
+      "shear": 0.15,
+      "wind_direction": [
+        -0.15,
+        -1
+      ],
+      "seed": 2,
+      "fade": 0.5
+    },
+    {
+      "type": "lightning",
+      "kind": "intracloud",
+      "start": [
+        -1500,
+        9000,
+        8000
+      ],
+      "seed": 21,
+      "cloud_length": 40000,
+      "cloud_depth": 150,
+      "cloud_current": 0.6,
+      "radius": 0.3,
+      "strokes": 3
+    },
+    {
+      "type": "lightning",
+      "start": [
+        -2500,
+        9200,
+        9000
+      ],
+      "target": [
+        -5000,
+        9000
+      ],
+      "seed": 5,
+      "cloud_length": 2000,
+      "radius": 0.3,
+      "strokes": 4
+    },
+    {
+      "type": "lightning",
+      "kind": "intracloud",
+      "start": [
+        500,
+        6500,
+        14000
+      ],
+      "seed": 22,
+      "cloud_length": 15000,
+      "cloud_depth": 600,
+      "cloud_current": 0.5,
+      "radius": 0.3,
+      "strokes": 3
+    }
+  ]
+}

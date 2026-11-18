@@ -431,8 +431,8 @@ mod find_storms {
                 let p = Vector3::new(i as f64 * 2000., r, j as f64 * 2000.);
                 field.towers(&p.normalize(), |t| {
                     let pos = field.drift.forth(&t.axis) * r - Vector3::new(0., r, 0.);
-                    seen.entry(t.id).or_insert(format!("at ({:.0}, {:.0}) dist {:.0} age {:.2} base {:.0} top {:.0} full {:.0} radius {:.0} mature {}",
-                        pos.x, pos.z, (pos.x * pos.x + pos.z * pos.z).sqrt(), t.age, t.base, t.top, t.full_top, t.radius, t.mature));
+                    seen.entry(t.id).or_insert(format!("at ({:.0}, {:.0}) dist {:.0} age {:.2} base {:.0} top {:.0} full {:.0} radius {:.0} mature {} wind ({:.2}, {:.2})",
+                        pos.x, pos.z, (pos.x * pos.x + pos.z * pos.z).sqrt(), t.age, t.base, t.top, t.full_top, t.radius, t.mature, field.drift.forth(&t.wind).x, field.drift.forth(&t.wind).z));
                 });
             }
         }

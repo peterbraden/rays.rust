@@ -720,54 +720,98 @@ impl Convective {
 
     /// How much of the densest cloud there is at `at` from towers and their anvils.
     fn tower_fraction(&self, at: &SurfacePoint) -> f64 {
-        // The anvils and domes, from noise, and the thermals, crisp.
-        let (mut best, mut crisp) = (0f64, 0f64);
-        // Lumps on the anvils' edges.
-        let mut lumps = None;
+        // The anvils and domes (ice, from noise), the outflow's cones (frozen, from noise), and
+        // the thermals, crisp.
+        let (mut anvil, mut cone, mut crisp) = (0f64, 0f64, 0f64);
+        // The ice's texture: fibrous, drawn out horizontally (as the shield's).
+        let mut fibres = None;
         self.towers(&at.up, |t| {
             let a = at.altitude;
             let over = if t.mature { self.overshoot } else { 0. };
             if a <= t.base || a >= t.top + over {
                 return;
             }
-            let lump = *lumps.get_or_insert_with(|| {
-                let q = self.drift.noise_position(&at.position, &at.up) / self.look.shape_size;
-                let perlin = stretched(self.shapes.perlin.fbm(q.x, q.y, q.z, 3, 0.5, 2.));
-                remap(perlin, worley_fbm(self.shapes.cells(), &q) - 1., 1.)
-            });
-            let mut f = 0f64;
-            let edge = t.radius * 0.35;
-            let d = t.distance + edge * 1.6 * (0.5 - lump);
+            let lump = *fibres.get_or_insert_with(|| self.fibres(at));
+            let strength = 0.4 + 0.6 * t.strength;
             // The tower: its thermals (`cauliflower::tower`), forming and fraying as it lives.
             if t.distance < self.column_reach(t.radius) && a < t.top + self.surface.margin() {
-                crisp = crisp.max(self.thermals(t, at) * (0.4 + 0.6 * t.strength));
+                crisp = crisp.max(self.thermals(t, at) * strength);
             }
             if t.mature {
-                // The anvil, spread downwind under the tropopause, and the overshooting dome.
-                let ra = self.anvil_radius(t) * (0.3 + 0.7 * t.anvil);
-                let low = t.top - self.anvil_depth;
-                let spread = smoothstep(low, t.top, a);
-                let shifted = t.offset - t.wind * (0.45 * ra * spread);
-                let along = shifted.dot(&t.wind);
-                let across = (shifted - t.wind * along).norm();
-                let da = ((along / (1.3 * ra)).powi(2) + (across / ra).powi(2)).sqrt() * (1. / (0.35 + 0.65 * spread));
-                let vertical = smoothstep(low, low + 0.4 * self.anvil_depth, a) * (1. - smoothstep(t.top - 120., t.top + 60., a));
-                f = f.max((1. - smoothstep(0.7, 1., da + 0.1 * (0.5 - lump))) * vertical * t.anvil_left);
-                if a > t.top - 100. {
-                    let dome = t.radius * 0.6 * (1. - ((a - t.top) / over).powi(2)).max(0.).sqrt();
-                    f = f.max(smoothstep(0., edge, dome - d) * t.column);
-                }
+                let (f, c) = self.anvil(t, a, lump);
+                anvil = anvil.max(f * strength);
+                cone = cone.max(c * strength);
             }
-            // Ice, thinner than the liquid cloud below, but near the storm still fed by its
-            // updraft: thicker than the shield (`cauliflower::ICE`).
-            best = best.max(f * (0.4 + 0.6 * t.strength) * ANVIL);
         });
-        if best <= 0. {
+        if anvil <= 0. && cone <= 0. {
             return crisp;
         }
-        // Erode the anvils' edges.
-        let dd = worley_fbm(self.shapes.cells(), &(self.drift.noise_position(&at.position, &at.up) / self.look.detail_size));
-        remap(best, (1. - dd) * self.look.erosion, 1.).max(crisp)
+        // Ice is thinner than the liquid cloud below (`cauliflower::ICE`), the outflow still fed
+        // by the updraft thicker than the anvil; smooth and fibrous, not billowing. (Eroded by
+        // cellular noise as the liquid cloud is, a fading anvil broke into puffs, like a field of
+        // cumulus; real ones thin into cirrus.)
+        let texture = 0.7 + 0.3 * fibres.unwrap_or(0.5);
+        (anvil * ANVIL).max(cone * GLACIATED) * texture
+    }
+
+    /// Ice's fibrous texture at `at` (0 to 1): noise drawn out horizontally, five times longer
+    /// than tall, as the shear aloft streaks it.
+    fn fibres(&self, at: &SurfacePoint) -> f64 {
+        let position = Drift { rise: 0., ..self.drift }.noise_position(&at.position, &at.up);
+        let vertical = at.up * at.up.dot(&position);
+        let f = (position + vertical * 5.) / (self.look.detail_size * 2.);
+        stretched(self.shapes.perlin.fbm(f.x, f.y, f.z, 3, 0.5, 2.))
+    }
+
+    /// A cumulonimbus's anvil at altitude `a` (its fraction of the densest ice), and the cone of
+    /// its outflow beneath it; `lump` roughens their edges.
+    ///
+    /// The storm's updraft spreads out under the tropopause and the wind aloft carries it away:
+    /// an anvil reaches only a little upwind of the column but streams far downwind, widening
+    /// as it goes (a fan), thickest over the storm and thinning downwind, its top flat at the
+    /// tropopause (the WMO's incus). Beneath it the frozen top of the column widens up into it,
+    /// a cone of outflow, rather than the anvil standing on a stalk.
+    fn anvil(&self, t: &Tower, a: f64, lump: f64) -> (f64, f64) {
+        // Only inwards, so the reach still bounds it.
+        let rough = 0.12 * (1. - lump).clamp(0., 1.);
+        let reach = self.anvil_radius(t);
+        // Spreading as the storm matures.
+        let grown = 0.25 + 0.75 * t.anvil;
+        let half = (reach * grown).max(1.1 * t.radius);
+        let downwind = 1.6 * reach * grown;
+        let upwind = 0.6 * t.radius + 0.15 * half;
+        let along = t.offset.dot(&t.wind);
+        let across = (t.offset - t.wind * along).norm();
+        let s = (along / downwind).clamp(0., 1.);
+        let width = 1.1 * t.radius + (half - 1.1 * t.radius) * s.sqrt();
+        let lengthwise = if along < 0. { -along / upwind } else { along / downwind };
+        let d = (lengthwise.powi(4) + (across / width).powi(4)).powf(0.25);
+        let horizontal = 1. - smoothstep(0.75, 1., d + rough);
+        let depth = self.anvil_depth * (1. - 0.6 * s);
+        let bottom = t.top - depth;
+        // A flat base (where the outflow's ice sublimates into the dry air below) and top.
+        let vertical = smoothstep(bottom, bottom + 0.12 * depth, a) * (1. - smoothstep(t.top - 120., t.top + 60., a));
+        let mut f = horizontal * vertical * t.anvil_left;
+        // The overshooting dome, where the updraft punches through the tropopause.
+        if a > t.top - 100. {
+            let edge = t.radius * 0.35;
+            let dome = t.radius * 0.6 * (1. - ((a - t.top) / self.overshoot.max(1.)).powi(2)).max(0.).sqrt();
+            f = f.max(smoothstep(0., edge, dome - t.distance - edge * 1.6 * (0.5 - lump)) * t.column);
+        }
+        // The cone, from where the column freezes up into the anvil's base over the storm.
+        let mut c = 0.;
+        let (from, to) = (self.outflow_from(t), t.top - 0.7 * self.anvil_depth);
+        if a > from && a < t.top {
+            let z = smoothstep(from, to, a);
+            let rc = t.radius * (0.9 + 1.2 * z * z);
+            c = smoothstep(0., 0.25 * rc, rc - t.distance * (1. + rough)) * smoothstep(0., 0.15, t.column) * t.anvil_left;
+        }
+        (f, c)
+    }
+
+    /// Where a cumulonimbus's outflow cone starts: where its column freezes.
+    fn outflow_from(&self, t: &Tower) -> f64 {
+        t.glaciation().unwrap_or(t.top).min(t.top - self.anvil_depth)
     }
 
     /// How much of the densest cloud a tower's thermals put at `at`.
@@ -814,11 +858,12 @@ impl Convective {
         let position = Drift { rise: 0., ..self.drift }.noise_position(&at.position, &at.up);
         let q = position / (self.look.shape_size * 6.);
         let patches = stretched(self.shapes.perlin.fbm(q.x, q.y, q.z, 5, 0.55, 2.));
-        let vertical = at.up * at.up.dot(&position);
-        let f = (position + vertical * 5.) / (self.look.detail_size * 2.);
-        let fibres = stretched(self.shapes.perlin.fbm(f.x, f.y, f.z, 3, 0.5, 2.));
+        let fibres = self.fibres(at);
         let v = patches * profile * (0.8 + 0.4 * fibres);
-        smoothstep(1. - cover, 1.2 - cover, v) * crate::procedural::cauliflower::ICE
+        // Soft-edged, and half the anvil ice's density: an optical depth of a few, cirrus
+        // spissatus, through which the sun shows (a sharper threshold and thicker ice gave
+        // patches with crisp edges and shaded undersides, like heaps).
+        smoothstep(1. - cover, 1.5 - cover, v) * 0.5 * crate::procedural::cauliflower::ICE
     }
 }
 
@@ -876,7 +921,8 @@ impl PlanetField for Convective {
             let horizontal = (t.distance - self.column_reach(t.radius)).max(0.);
             let mut gap = vertical.max(horizontal);
             if t.mature {
-                let low = t.top - self.anvil_depth;
+                // The anvil's band, and the outflow's cone below it (within the anvil's reach).
+                let low = self.outflow_from(t);
                 let vertical = (low - altitude).max(altitude - t.top).max(0.);
                 gap = gap.min(vertical.max((t.distance - self.tower_reach(t)).max(0.)));
             }

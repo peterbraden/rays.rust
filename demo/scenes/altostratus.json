@@ -5,7 +5,7 @@
   "chunk_size": 64,
   "samples_per_chunk": 8,
   "shadow_bias": 0.01,
-  "max_depth": 64,
+  "max_depth": 32,
   "path_termination": "russian_roulette",
   "output": {
     "tonemap": "reinhard",
@@ -50,24 +50,36 @@
         0.2,
         0.5,
         1
-      ]
+      ],
+      "crepuscular_rays": true
     },
     {
-      "type": "nubis_clouds",
+      "type": "overcast",
       "base": 3000,
-      "top": 4500,
-      "extent": 80000,
-      "coverage": 1,
-      "cloud_type": 0,
+      "thickness": 1500,
+      "density": 0.0025,
+      "thickness_variation": 0.6,
+      "system_size": 12000,
+      "lump_size": 4000,
+      "base_variation": 150,
+      "contrast": 0.25,
+      "anisotropy": 6,
+      "wind_direction": [
+        0.3,
+        1
+      ],
+      "softness": 500,
       "erosion": 0.2,
-      "density": 0.003,
-      "seed": 8,
+      "detail_size": 600,
+      "scud": 0,
       "albedo": [
         0.99,
         0.99,
         0.99
       ],
-      "similarity_after": 4
+      "similarity_after": 2,
+      "seed": 3,
+      "diffusion": true
     }
   ]
 }

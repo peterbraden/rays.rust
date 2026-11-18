@@ -162,7 +162,7 @@ mod tests {
     use crate::shapes::plane::Plane;
     use crate::shapes::sphere::Sphere;
     use crate::color::Color;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use rand::rngs::StdRng;
 
     fn object(g: Box<dyn Geometry + Sync + Send>) -> Arc<SceneObject> {
@@ -173,8 +173,8 @@ mod tests {
     fn test_matches_brute_force_with_unbounded_objects() {
         let mut rng = StdRng::seed_from_u64(7);
         let mut objects: Vec<Arc<SceneObject>> = (0 .. 200).map(|_| object(Box::new(Sphere::new(
-            Vector3::new(rng.gen_range(-20., 20.), rng.gen_range(-1., 6.), rng.gen_range(-20., 20.)),
-            rng.gen_range(0.1, 2.),
+            Vector3::new(rng.random_range(-20.0..20.), rng.random_range(-1.0..6.), rng.random_range(-20.0..20.)),
+            rng.random_range(0.1..2.),
         )))).collect();
         objects.push(object(Box::new(Plane { y: 0. })));
         let all = objects.clone();
@@ -183,10 +183,10 @@ mod tests {
 
         for _ in 0 .. 3000 {
             let r = Ray {
-                ro: Vector3::new(rng.gen_range(-25., 25.), rng.gen_range(-3., 10.), rng.gen_range(-25., 25.)),
-                rd: Vector3::new(rng.gen_range(-1., 1.), rng.gen_range(-1., 1.), rng.gen_range(-1., 1.)),
+                ro: Vector3::new(rng.random_range(-25.0..25.), rng.random_range(-3.0..10.), rng.random_range(-25.0..25.)),
+                rd: Vector3::new(rng.random_range(-1.0..1.), rng.random_range(-1.0..1.), rng.random_range(-1.0..1.)),
             };
-            let (min, max) = (rng.gen_range(0., 1.), rng.gen_range(1., 80.));
+            let (min, max) = (rng.random_range(0.0..1.), rng.random_range(1.0..80.));
             let expected = all.iter().filter_map(|o| o.intersects_beyond(&r, min))
                 .map(|x| x.dist).filter(|&d| d >= min && d < max)
                 .min_by(|a, b| a.total_cmp(b));

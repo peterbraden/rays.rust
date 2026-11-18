@@ -128,7 +128,6 @@
 //! refracted path down), and light leaving it comes back out by refraction; the sun's direction
 //! isn't bent for the shadow ray, only its path length in the water is.
 
-extern crate rand as _rand;
 extern crate image;
 extern crate rustfft;
 
@@ -141,8 +140,7 @@ use crate::intersection::RawIntersection;
 use serde_json::{Value, Map};
 use rustfft::num_complex::Complex;
 use crate::na::{Vector3, Vector2};
-use rand::distributions::{Normal, Distribution};
-use crate::ocean::_rand::Rng;
+use rand_distr::{Distribution, StandardNormal};
 use std::path::Path;
 use crate::color::Color;
 use rustfft::algorithm::Radix4;
@@ -167,8 +165,7 @@ use rand::rngs::StdRng;
 
 /// A standard Gaussian draw: ξr or ξi in eq. 42.
 fn randn(rng: &mut StdRng) -> f64 {
-    let normal = Normal::new(0.0, 1.0);
-    normal.sample(rng)
+    StandardNormal.sample(rng)
 }
 
 /// The Phillips spectrum P_h(k) (eq. 40). `scale` is A; `wind` is the wind velocity, giving both

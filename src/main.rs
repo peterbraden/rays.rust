@@ -159,8 +159,6 @@ use crate::trace::trace;
 use crate::rendercontext::RenderContext;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use rand::thread_rng;
-use rand::seq::SliceRandom;
 
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;

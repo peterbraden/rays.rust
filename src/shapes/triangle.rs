@@ -422,10 +422,10 @@ mod tests {
         // Triangles from 1e-4 to 10 across, and rays aimed at them, some grazing their plane:
         // the filter must pass every triangle the exact test hits within the limit, and
         // should reject most it misses.
-        use rand::{Rng, SeedableRng};
+        use rand::{RngExt, SeedableRng};
         use rand::rngs::StdRng;
         let mut rng: StdRng = SeedableRng::from_seed([7; 32]);
-        let mut u = |a: f64, b: f64| a + (b - a) * rng.gen_range(0., 1.);
+        let mut u = |a: f64, b: f64| a + (b - a) * rng.random_range(0.0..1.);
         let (mut hits, mut passed_misses, mut misses) = (0, 0, 0);
         for _ in 0..2000 {
             let scale = 10f64.powf(u(-4., 1.));

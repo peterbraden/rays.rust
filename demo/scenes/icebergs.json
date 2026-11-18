@@ -29,7 +29,7 @@
   },
   "output": {
     "tonemap": "filmic",
-    "exposure": 1.7
+    "exposure": 1.5
   },
   "camera": {
     "location": [

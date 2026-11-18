@@ -151,18 +151,19 @@ larger ones they broke from, and the field thins out towards its ragged edges. E
 It floats with a tenth of its thickness above the water, snow on top with patches of bare ice,
 and white ice at the sides.
 
-`"style": "brash"` makes brash ice instead, by partitioning the sea's surface. Sites are
-scattered at a density that varies from place to place, and the surface is divided into their
-Voronoi cells, so cell sizes vary widely (`size` gives the smallest and largest). Every cell
-is ice, except a share left as open water (`concentration` is the share of ice; the water
-gathers in lanes, more so with higher `clumping`).
+`"style": "brash"` makes brash ice instead. It partitions the sea's surface into Voronoi
+cells twice, at two scales, so neither layer shows the other's pattern. `concentration` is the
+share of the sea with ice; the rest is open water, gathered in lanes (more so with higher
+`clumping`).
 
-- Each cell is filled with slush: a thin sheet of clear ice at the water's surface, glassy,
-  with the dark water showing through and cloudy white patches.
-- Inside it stands a shard of white ice: the cell's polygon pulled in, with corners broken
-  off, extruded to a slab with a hummocked, snowy top.
-- How slushy a cell is goes by its size. A large cell is nearly all shard; a small one is
-  mostly slush with a small shard or none.
+- **Slush** (the fine partition): fragments of clear ice a few centimetres thick, a hand's
+  width to a metre across. Some overlap and some leave gaps; they lie at slightly different
+  heights and tilts, with a few tipped up out of the water. They range from glass-clear, with
+  the dark water showing through, to cloudy white.
+- **Shards** (the coarse partition, `size` giving the smallest and largest): chunks of white
+  ice. Each is its cell's polygon pulled in off-centre, squeezed, sometimes split in two, with
+  corners broken off and a ragged outline, under an uneven, hummocked, snowy top. Small cells
+  have small shards or none.
 
 Give the background a dark `ground` (the colour of deep water), as rays that pass down
 through the clear ice end there.

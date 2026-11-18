@@ -574,6 +574,7 @@ mod tests {
         assert_eq!(misses, 0);
     }
 
+
     /// Shadow rays agree with the nearest hit.
     #[test]
     fn test_occlusion_agrees_with_intersection() {

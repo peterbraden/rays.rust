@@ -38,6 +38,7 @@ reuse it as `"$name"`.
 | `cells` | Worley noise: `style` `f1`, `edges` (cracks between cells) or `stones` (a rounded stone per cell) |
 | `talus` | Fallen blocks and scree (`src/talus.rs`): angular polyhedra in layers from `largest` to `smallest` metres, many small to few large by a power law (`exponent`), sorted down the slope by `position` (0 at the toe, 1 at the apex; big blocks roll to the toe); `output` `height`, `mask` or `id` |
 | `strata` | Ledges: beds `step` metres thick, each ending in a riser; `breakup` makes them waver |
+| `cross_beds` | A `rock` material's festoon cross-bedding as relief (its `seed`, `scale` and `cross_set` as `set`; `amplitude`), so the laminae its colour shows stand out as ribs |
 | `slope`, `altitude` | Masks from 0 to 1 between `from` and `to` (degrees, metres), with a fractal `breakup`; falling instead where `to` is below `from` |
 | `aspect` | How squarely the surface faces `direction` (default north, `[0, 0, -1]`), as a mask |
 | `field` | What the surface hit knows about itself: on a landscape, its simulation's sediment, ice, flow, wetness and so on (see [surface layers](surface-layers.md)) |
@@ -120,6 +121,18 @@ surface, so keep displacement small or masked off where they are.
 
 - Fuller surface layers (more than two materials, masks from the simulations' fields) on the
   same graphs (Terragen gap 2), and media densities.
-- Put the `landscape` scenery's clipmap and the desert branch's `mesas` (whose overlook uses
-  nested fixed grids down to 8 cm) through displacement, so one coarse grid does.
+- Put the `landscape` scenery's clipmap through displacement.
+
+## In the desert scenes
+
+`desert-overlook.json` stands on slickrock seen from a couple of metres to a few hundred: its
+close-up grid was 8 cm, with the cross-bedding baked into the heights (`laminae`). It is now
+50 cm, displaced by `cross_beds` (worn smooth in patches), low steps where beds crop out round
+the domes, potholes on the level crowns, patches of thin polygonal cracks and rounded
+weathering, in 40% less memory. `desert-butte.json` displaces a 1.5 m grid round its butte (the
+rest of the near country has a `hole` there): wavering bedding breaks, weathered joints,
+alcoves and vertical fluting on the cliffs (a `plan` ridged fractal, the same all the way down
+a face), fallen blocks in patches on the talus, slickrock domes on the top and low swells on
+the floor. The fluting and blocks are a metre or two across, about what a pixel at the butte
+resolves, which a 1.5 m grid alone cannot.
 - Vector displacement for overhangs.

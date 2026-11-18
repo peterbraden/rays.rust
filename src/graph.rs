@@ -44,6 +44,12 @@
 //!   difference between the terraced height and the height, in [-amplitude, amplitude]
 //!   (default `step` / 2); `breakup` (a node, metres) added to the height first, so the beds
 //!   waver and pinch out. Displaced along a slope's normal, it cuts a slope into ledges.
+//! - `cross_beds`: the festoon cross-bedding of a `rock` material (`material::rock::cross_beds`)
+//!   as relief, so the laminae coloured on slickrock stand out as ribs where they are hard and
+//!   are worn back where soft: give the rock's `seed`, `scale` and `cross_set` (`set`), and the
+//!   relief between the softest and hardest laminae (`amplitude`, metres, default 0.05). In
+//!   [-amplitude / 2, amplitude / 2] about a mean of 0; filtered out where the laminae are
+//!   finer than the vertices.
 //! - a number, or `{"node": "constant", "value": v}`.
 //! - an expression, `"0.1 * sin(x)"`, or `{"node": "expr", "expr": ..., "inputs": {"a": node,
 //!   ...}, "range": [lo, hi]}` (`expr.rs`'s syntax), over `x`, `y`, `z`, `slope` (degrees) and
@@ -184,6 +190,7 @@ enum Op {
     /// A surface's field; smoothstepped from `from` to `to` if `band` is given.
     Field { field: Field, default: f64, band: Option<(f64, f64)>, breakup: Option<Box<Node>> },
     Strata { step: f64, sharpness: f64, amplitude: f64, breakup: Option<Box<Node>> },
+    CrossBeds { noise: Box<SeededNoise>, scale: f64, set: f64, amplitude: f64 },
     Expr { expr: Expr, inputs: Vec<Node>, range: (f64, f64) },
     Add(Vec<Node>),
     Multiply(Vec<Node>),
@@ -215,6 +222,9 @@ pub struct Graph {
     root: Node,
     range: (f64, f64),
 }
+
+/// The mean hardness of cross-bedded laminae, about which `cross_beds` relief is centred.
+const CROSS_BED_MEAN: f64 = 0.6;
 
 /// Octaves are rotated, which hides the lattice's axes (as `SeededNoise::fbm` does).
 static ROTATION: LazyLock<crate::na::Rotation3<f64>> = LazyLock::new(|| crate::na::Rotation3::from_euler_angles(0.61, 0.93, 1.27));
@@ -299,6 +309,18 @@ impl Node {
                 let h = c.p.y + breakup.as_ref().map_or(0., |b| b.eval(c));
                 (terrace(h, *step, *sharpness) - h) / step * amplitude
             },
+            Op::CrossBeds { noise, scale, set, amplitude } => {
+                // Laminae are about 0.07 to 0.12 of a set apart: fade them out to their mean
+                // where the vertices are too far apart to show them.
+                let spacing = 0.07 * set * scale;
+                let keep = if c.filter > 0. { smoothstep(2. * c.filter, 4. * c.filter, spacing) } else { 1. };
+                if keep <= 0. {
+                    0.
+                } else {
+                    let l = crate::material::rock::cross_beds(noise, c.p / *scale, *set);
+                    keep * amplitude * (l.hardness - CROSS_BED_MEAN)
+                }
+            },
             Op::Expr { expr, inputs, .. } => {
                 // On the stack, unless there are many inputs.
                 let mut vars = [0.; 16];
@@ -373,6 +395,11 @@ impl Op {
             },
             Op::Cells { amplitude, .. } => (amplitude.min(0.), amplitude.max(0.)),
             Op::Strata { amplitude, .. } => (-amplitude.abs(), amplitude.abs()),
+            // Hardness lies in [0.175, 1].
+            Op::CrossBeds { amplitude, .. } => {
+                let a = amplitude.abs();
+                (a * (0.175 - CROSS_BED_MEAN), a * (1. - CROSS_BED_MEAN))
+            },
             Op::Slope { .. } | Op::Altitude { .. } | Op::Aspect { .. } | Op::Smoothstep { .. } => (0., 1.),
             Op::Field { band: Some(_), .. } => (0., 1.),
             Op::Field { band: None, .. } => (f64::NEG_INFINITY, f64::INFINITY),
@@ -426,6 +453,7 @@ impl Op {
             Op::Cells { scale, .. } => return 0.1 * scale,
             Op::Talus(t) => return t.smallest,
             Op::Const(_) => return f64::INFINITY,
+            Op::CrossBeds { scale, set, .. } => return 0.07 * set * scale,
             Op::Strata { step, breakup, .. } => return breakup.as_ref().map_or(f64::INFINITY, |b| b.finest()).min(0.25 * step),
             Op::Slope { breakup, .. } | Op::Altitude { breakup, .. } | Op::Aspect { breakup, .. }
                 | Op::Field { breakup, .. } => breakup.iter().map(|b| &**b).collect(),
@@ -666,6 +694,13 @@ fn parse_node(v: &Value) -> Result<Node, String> {
             Op::Strata { step, sharpness: num(o, "sharpness", 0.8)?, amplitude: num(o, "amplitude", 0.5 * step)?,
                 breakup: o.get("breakup").map(parse_node).transpose()?.map(Box::new) }
         },
+        "cross_beds" => {
+            let (scale, set) = (num(o, "scale", 1.)?, num(o, "set", 0.4)?);
+            if scale <= 0. || set <= 0. {
+                return Err("cross_beds' scale and set must be positive".into());
+            }
+            Op::CrossBeds { noise: Box::new(SeededNoise::new(seed())), scale, set, amplitude: num(o, "amplitude", 0.05)? }
+        },
         "expr" => {
             let text = o["expr"].as_str().ok_or("an expr node needs an \"expr\" string")?;
             return parse_expr(text, &o["inputs"], pair(o, "range", (f64::NEG_INFINITY, f64::INFINITY))?)
@@ -844,5 +879,29 @@ mod tests {
         let g = graph(json!({"node": "add", "inputs": [{"node": "fractal", "scale": 10, "smallest": 0.05}, {"node": "cells", "scale": 2}]}));
         assert!((g.finest() - 0.05).abs() < 1e-12);
         assert_eq!(graph(json!(3)).finest(), f64::INFINITY);
+    }
+
+    #[test]
+    fn test_cross_beds_follow_the_rocks_laminae() {
+        let g = graph(json!({"node": "cross_beds", "seed": 8, "scale": 30, "set": 0.12, "amplitude": 0.1}));
+        let (lo, hi) = g.range();
+        let noise = SeededNoise::new(8);
+        let (mut sum, mut min, mut max, n) = (0., f64::INFINITY, f64::NEG_INFINITY, 4000);
+        for i in 0 .. n {
+            let p = Vector3::new(0.37 * i as f64, 0.011 * i as f64, 0.21 * i as f64);
+            let v = g.eval(&at(p.x, p.y, p.z));
+            // The rock material's laminae: ribs where they are hard.
+            let l = crate::material::rock::cross_beds(&noise, p / 30., 0.12);
+            assert!((v - 0.1 * (l.hardness - CROSS_BED_MEAN)).abs() < 1e-12);
+            assert!(v >= lo && v <= hi);
+            sum += v;
+            min = min.min(v);
+            max = max.max(v);
+        }
+        assert!((sum / n as f64).abs() < 0.015, "mean {}", sum / n as f64);
+        assert!(max - min > 0.05);
+        // Too fine for vertices a metre apart: nothing.
+        assert_eq!(g.eval(&Context::new(Vector3::new(1., 2., 3.), Vector3::y(), 1.)), 0.);
+        assert!((g.finest() - 0.07 * 0.12 * 30.).abs() < 1e-12);
     }
 }

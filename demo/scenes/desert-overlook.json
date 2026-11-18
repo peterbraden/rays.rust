@@ -277,13 +277,156 @@
     90,
     960
    ],
-   "cell_size": 0.08,
-   "laminae": {
-    "seed": 8,
-    "scale": 30,
-    "set": 0.12,
-    "relief": 0.06
-   }
+   "cell_size": 0.5
+  },
+  "slickrock_relief": {
+   "node": "add",
+   "inputs": [
+    {
+     "node": "multiply",
+     "inputs": [
+      {
+       "node": "cross_beds",
+       "seed": 8,
+       "scale": 30,
+       "set": 0.12,
+       "amplitude": 0.09
+      },
+      {
+       "node": "smoothstep",
+       "from": -0.45,
+       "to": 0.5,
+       "input": {
+        "node": "fractal",
+        "scale": 16,
+        "smallest": 1,
+        "amplitude": 1,
+        "seed": 69
+       }
+      }
+     ]
+    },
+    {
+     "node": "strata",
+     "step": 0.5,
+     "sharpness": 0.7,
+     "amplitude": 0.07,
+     "breakup": {
+      "node": "fractal",
+      "scale": 14,
+      "smallest": 0.4,
+      "amplitude": 0.7,
+      "seed": 61
+     }
+    },
+    {
+     "node": "multiply",
+     "inputs": [
+      -0.35,
+      {
+       "node": "power",
+       "exponent": 0.6,
+       "input": {
+        "node": "cells",
+        "style": "stones",
+        "scale": 2.2,
+        "seed": 62
+       }
+      },
+      {
+       "node": "smoothstep",
+       "from": 0.15,
+       "to": 0.45,
+       "input": {
+        "node": "fractal",
+        "scale": 18,
+        "smallest": 1,
+        "amplitude": 1,
+        "seed": 63
+       }
+      },
+      {
+       "node": "subtract",
+       "a": 1,
+       "b": {
+        "node": "slope",
+        "from": 8,
+        "to": 22,
+        "breakup": {
+         "node": "fractal",
+         "scale": 6,
+         "smallest": 0.5,
+         "amplitude": 6,
+         "seed": 64
+        }
+       }
+      }
+     ]
+    },
+    {
+     "node": "multiply",
+     "inputs": [
+      -0.18,
+      {
+       "node": "subtract",
+       "a": 1,
+       "b": {
+        "node": "smoothstep",
+        "from": 0,
+        "to": 0.05,
+        "input": {
+         "node": "warp",
+         "amount": 0.6,
+         "scale": 3,
+         "seed": 65,
+         "input": {
+          "node": "cells",
+          "style": "edges",
+          "scale": 4.5,
+          "seed": 66,
+          "plan": true
+         }
+        }
+       }
+      },
+      {
+       "node": "smoothstep",
+       "from": -0.15,
+       "to": 0.35,
+       "input": {
+        "node": "fractal",
+        "scale": 22,
+        "smallest": 1,
+        "amplitude": 1,
+        "seed": 71
+       }
+      }
+     ]
+    },
+    {
+     "node": "fractal",
+     "scale": 3,
+     "smallest": 0.05,
+     "amplitude": 0.07,
+     "seed": 67,
+     "style": "billow"
+    },
+    {
+     "node": "fractal",
+     "scale": 9,
+     "smallest": 0.5,
+     "amplitude": 0.25,
+     "seed": 70,
+     "style": "billow"
+    },
+    {
+     "node": "fractal",
+     "scale": 0.5,
+     "smallest": 0.004,
+     "amplitude": 0.012,
+     "seed": 68
+    }
+   ]
   }
  },
  "geometries": {
@@ -297,7 +440,13 @@
   },
   "close": {
    "type": "terrain",
-   "heightmap": "$close"
+   "heightmap": "$close",
+   "displacement": "$slickrock_relief",
+   "displacement_detail": {
+    "pixels": 1,
+    "offscreen": 8,
+    "max_level": 7
+   }
   }
  },
  "materials": {

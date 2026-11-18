@@ -48,7 +48,7 @@
 //!   tablelands past `outer`), `washes` (depth of dry washes across the floor) and `buttes`
 //!   ([[x, z, radius], ...]: buttes placed by hand), `laminae` (`{"seed", "scale", "set",
 //!   "relief"}`: a rock material's cross-bedding as relief on the tops, for a fine grid seen
-//!   close)
+//!   close; a coarser grid displaced by the graph node `cross_beds` does it in less memory)
 //!
 //! To share one heightmap between a terrain and the grass on it, define it once in the scene's
 //! `variables` and refer to it as `"$name"`.

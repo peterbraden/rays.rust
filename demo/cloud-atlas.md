@@ -10,23 +10,44 @@ Every cloud is a participating medium of the same kind (see `src/volume.rs`): de
 through a density field, lit by the sun and the sky, under the same atmosphere that reddens the
 sun and hazes the distance. Cloud layers curve with the planet's surface, so distant clouds drop
 towards the horizon and sink below it. What differs is where the density comes from. There are
-nine generators:
+ten generators:
 
 | Generator | Makes | Approach |
 |---|---|---|
 | `hogan_kew_cirrus` | cirrus, cirrostratus | Ice falling from generating cells in wind shear (Hogan & Kew 2005) |
 | `benard_altocumulus` | altocumulus, cirrocumulus | Rayleigh-Bénard convection cells in a thin layer |
-| `nubis_clouds` | cumulus, stratocumulus, stratus, altostratus | Noise-based modelling (Schneider, Horizon Zero Dawn's Nubis) |
+| `nubis_clouds` | cumulus, stratocumulus | Noise-based modelling (Schneider, Horizon Zero Dawn's Nubis) |
 | `harris_cumulus` | cumulus, as they grow and die | A simulation of a sunny day (Harris et al. 2003) |
 | `lenticular` | lenticular clouds | Moist layers lifted by a mountain's lee waves |
 | `mammatus` | mammatus under an anvil | Sinking, evaporating lobes under a cloud's base |
-| `overcast` | nimbostratus and stratocumulus overcast, scud | A deck lumpy underneath, lit by diffusion through each column |
+| `overcast` | nimbostratus, stratus, altostratus, stratocumulus overcast, scud | A deck lumpy underneath, lit by diffusion through each column |
+| `cumulonimbus` | cumulonimbus: towers, flanking line, anvil, overshooting top | Shaped by parcel theory: updraft from CAPE, overshoot w / N, anvil carried by the wind aloft |
 | `mountains` `"cloud"` | hill fog, cap clouds | Damp air lifted over high ground past its saturation, streaming off the crests |
 | `precipitation` | rain shafts and virga | Raindrops by rain rate (Marshall-Palmer), falling through shear |
 
+And `lightning`, which isn't a cloud but lights one: a branching channel grown as a stepped
+leader, glowing as bright as measured strokes, sampled as a light.
+
+### The ten genera
+
+The WMO's atlas sorts every cloud into ten genera. All ten have a scene:
+
+| Genus | Generator | Scene |
+|---|---|---|
+| Cirrus (Ci) | `hogan_kew_cirrus` | `hogan-kew-cirrus.json` |
+| Cirrocumulus (Cc) | `benard_altocumulus`, small and high | `cirrocumulus.json` |
+| Cirrostratus (Cs) | `hogan_kew_cirrus`, with halos | `cirrostratus-halos.json` |
+| Altocumulus (Ac) | `benard_altocumulus`, `lenticular` | `benard-altocumulus.json`, `altocumulus-undulatus.json`, `lenticular.json` |
+| Altostratus (As) | `overcast`, thin and smooth | `altostratus.json` |
+| Nimbostratus (Ns) | `overcast`, thick, with rain | `overcast.json` |
+| Stratocumulus (Sc) | `nubis_clouds` | `stratocumulus.json` |
+| Stratus (St) | `overcast`, low and even | `stratus.json` |
+| Cumulus (Cu) | `nubis_clouds`, `harris_cumulus` | `nubis-clouds.json`, `harris-cumulus.json` |
+| Cumulonimbus (Cb) | `cumulonimbus` | `cumulonimbus.json`, `lightning.json` |
+
 Render any of them with `cargo run --release -- demo/scenes/<scene>.json`. The scenes stand on the
-sea (`{"type": "ocean"}`, the planet's surface), whose reflections show the sky and clouds again. The altostratus, stratocumulus
-and stratus images are quick previews (480 x 300, 8 samples per pixel), so they are noisy.
+sea (`{"type": "ocean"}`, the planet's surface), whose reflections show the sky and clouds again. The stratocumulus
+image is a quick preview (480 x 300, 8 samples per pixel), so it is noisy.
 
 ### All together
 
@@ -53,10 +74,12 @@ glitter path running in to the camera.
 | | [Overcast: nimbostratus and scud](#overcast-nimbostratus-and-scud) | `overcast.json` |
 | | [Cumulus, modelled](#cumulus-modelled) | `nubis-clouds.json` |
 | | [Cumulus, simulated](#cumulus-simulated) | `harris-cumulus.json` |
+| | [Cumulonimbus](#cumulonimbus) | `cumulonimbus.json` |
 | Phenomena | [Sunset](#sunset) | `sunset.json` |
 | | [Crepuscular rays](#crepuscular-rays) | `crepuscular-rays.json` |
 | | [Rain and rainbows](#rain-and-rainbows) | `rain.json` |
 | | [Mammatus](#mammatus) | `mammatus.json` |
+| | [Lightning](#lightning) | `lightning.json` |
 | | [Iridescence](#iridescence) | `cirrus-iridescence.json` |
 | | [Clouds from orbit](#clouds-from-orbit) | `orbit.json` |
 
@@ -157,12 +180,15 @@ approximation (`"oz": true`). Without it, the render sparkles with noise.
 
 ![Altostratus](./scenes/altostratus.png)
 
-`altostratus.json`: `{"type": "nubis_clouds", "base": 3000, "top": 4500, "coverage": 1, "cloud_type": 0, "density": 0.003}`
+`altostratus.json`: `{"type": "overcast", "base": 3000, "thickness": 1500, "density": 0.0025, "contrast": 0.25, "anisotropy": 6, "diffusion": true}`
 
-A grey or bluish sheet through which the sun shows as if through ground glass. It is Nubis's
-stratus profile at middle height, optically thin (an optical depth of a few through the sheet).
-This is an approximation: real altostratus is a smooth, often fibrous sheet, while Nubis still
-shapes it from billowing noise.
+A grey or bluish sheet through which the sun shows as if through ground glass. It is the
+`overcast` deck at middle height, made smooth and thin: an optical depth of three to six,
+enough to hide the blue sky but not the sun, whose disc still shines through, dimmed, in a
+bright patch of forward-scattered light. Little `contrast` between thicker and thinner
+patches, and lumps drawn out six times along the wind (`anisotropy`), give the faint striations
+of altostratus rather than the lumpy underside of rain cloud. The thinner patches
+(`thickness_variation`) are where the sun shows best.
 
 ## Low clouds
 
@@ -182,9 +208,13 @@ from stratus (0) through stratocumulus (0.5) to cumulus (1).
 
 ![Stratus](./scenes/stratus.png)
 
-`stratus.json`: `{"type": "nubis_clouds", "base": 300, "top": 800, "coverage": 1, "cloud_type": 0}`
+`stratus.json`: `{"type": "overcast", "base": 350, "thickness": 500, "density": 0.03, "contrast": 0.15, "base_variation": 40, "diffusion": true}`
 
-A low, grey overcast: Nubis with the stratus profile and full coverage.
+A low, featureless grey sheet with an even base, hiding the sun completely: the dull sky of a
+damp, still day. It is the `overcast` deck brought down to a few hundred metres and made
+even: little `contrast` between thick and thin, a base that hardly varies, and a little scud.
+An optical depth of 15 to 20 diffuses the sunlight evenly, so the sky is one soft grey, a
+little brighter where the deck is thinner, its base lost in the haze at the horizon.
 
 ### Overcast: nimbostratus and scud
 
@@ -265,6 +295,39 @@ field that fills in, then clumps that break up as the ground's moisture flux fal
 
 At 100 m the grid resolves clouds down to a few hundred metres. Worley erosion adds finer detail
 at their edges.
+
+### Cumulonimbus
+
+![Cumulonimbus](./scenes/cumulonimbus.png)
+
+`cumulonimbus.json`: `{"type": "cumulonimbus", "base": 1300, "tropopause": 11500, "cape": 2500, "radius": 3800, "wind_direction": [1, 0.15], "upper_wind": 25, "age": 900, "flanking": 4, "oz": true}`
+
+The thunderstorm cloud: a cumulus grown through the whole troposphere, with a rain shaft under
+it. Its shape follows the physics of its updraft (`procedural::cumulonimbus`):
+
+- **The tower.** Air rising from the base is buoyant as long as it is warmer than its
+  surroundings, up to the equilibrium level, near the tropopause. Parcel theory gives the
+  strongest updraft from the convective available potential energy, w = sqrt(2 CAPE), about
+  half of it realised once entrainment and the water's weight are counted (`efficiency`).
+  The updraft overshoots the equilibrium level by about w / N into the stable stratosphere,
+  N its buoyancy frequency (`stability`, 0.02 s⁻¹): with CAPE 2500 J/kg, a dome some 1.8 km
+  above the anvil. The tower leans downwind (`lean`), its surface pushed out in turrets a
+  tower's width across, and those covered in cauliflower billows of billows.
+- **Glaciation.** Above about -38 °C (`glaciation`, 8 km) every drop freezes. The hard
+  billows of the liquid tower soften into streaks drawn out along the wind, and the
+  extinction falls from that of dense liquid cloud (`density`, 0.04 per metre) to ice's
+  (`ice_density`).
+- **The anvil.** At the tropopause the outflow spreads, carried downwind by the wind aloft
+  (`upper_wind` × `age`) and fanning out sideways at `outflow_speed`: a flat-topped wedge,
+  thickest at the tower, thinning towards its far edge, a little of it pushed upwind.
+- **The flanking line.** Younger towers stepping down away from the storm on the upwind side
+  (`flanking`, `flank_angle`): cumulus congestus that will feed it.
+
+Lit from the side, the turrets on the near side catch the sun, those beyond are in the
+tower's shadow. Light scattered many times inside a tower so dense would make the render
+noisy, so it uses the Oz approximation (`"oz": true`). Hail, wall clouds and the vault of a
+supercell's updraft are not modelled; mammatus under the anvil is a separate `mammatus` object
+(as in `sunset-squalls.json`).
 
 ## Phenomena
 
@@ -348,6 +411,51 @@ anvil's edge. Its light, reddened by its long path through the air, comes in und
 catches the sides of the nearest pouches, while the anvil overhead hides most of the sky. The
 scene uses Reinhard tone mapping with an exposure of 3, as a photograph at dusk would.
 
+### Lightning
+
+![Lightning](./scenes/lightning.png)
+
+`lightning.json`: `{"type": "lightning", "start": [1200, 4500, 10500], "target": [3200, 7200], "seed": 5}`, in
+the cumulonimbus at nautical dusk
+
+Two cloud-to-ground strokes caught in a one-second exposure at dusk. The bolts glow
+blue-white and light everything near them: the cloud base above, the rain the second one falls
+through, and the sea below, which reflects them. The storm is otherwise a silhouette against
+the last of the twilight.
+
+The channel is grown as a *stepped leader* (`procedural::lightning`). Leader tips push down
+from the cloud's charge region in steps of tens of metres (`step`), each turning by about 16°
+from the last, as measured in photographs of channels (Hill 1968), drawn down by the field and
+towards a `target`. Tips fork (`branching`) and die out (`dying`); when one comes within
+`striking_distance` of the ground, an upward leader meets it and the return stroke flows
+along that path, the main channel. Each straight step is then broken into a fractal path down
+to a couple of metres (`detail`, `roughness`), so the channel is jagged at every scale. The
+branches that lost the race carry only the charge stored along them, so each glows in
+proportion to the length of channel beyond it, fading towards its tips. Inside the cloud the
+flash spreads sideways in a fainter network (`cloud_length`); `"kind": "intracloud"` gives that
+network alone, sheet lightning.
+
+It is as bright as the real thing. A return stroke radiates a few hundred joules per metre in
+the visible and near infrared (Krider et al. 1968), about 1.5·10⁴ lumen-seconds per metre
+(`luminous_energy`); averaged over `strokes` strokes and the `shutter` time, that is the light
+per metre of channel, on the same scale as the sun (whose intensity, 4.9 here, it follows). A
+metre or so from the channel it is far brighter than daylight; a kilometre away it gives a few
+lux, tens of times full moonlight. So the scene is exposed as a night photograph would be
+(`"exposure": 500`), the channel itself blown out, with glare. Its colour is a blackbody at
+25 000 K, near the channel's temperature, an approximation to its spectrum of nitrogen, oxygen
+and hydrogen lines.
+
+The channel is a light, sampled directly: a light BVH over its segments chooses one by the
+light it could send to the point being lit, then a point on the side facing it. Seen from
+kilometres away a channel a few centimetres across is far thinner than a pixel, and most
+samples would miss it; what a camera records of it there is its light per metre, so each
+segment is widened to half a pixel as seen from the camera, its radiance lowered to keep its
+light per metre (`pixel_width`). The channel casts no shadow.
+
+Light from a channel deep inside a dense cloud reaches the camera only after many
+scatterings, which a path tracer finds by chance, so the glow of lightning inside a cloud is
+noisy; flashes under the cloud base or the anvil, or in rain, are lit cleanly.
+
 ### Iridescence
 
 ![Iridescence](./scenes/cirrus-iridescence.png)
@@ -374,10 +482,12 @@ is still noisy: from orbit, cloud detail is much smaller than a pixel.
 
 ## Not yet
 
-- **Nimbostratus**: a thick, dark rain cloud. `precipitation` can now fall from a thick
-  `nubis_clouds` stratus, but there is no scene for it yet.
-- **Cumulonimbus**: anvils and overshooting tops. `harris_cumulus` could grow them with a deeper
-  grid, a weaker inversion and ice microphysics.
+- **Lightning inside dense cloud**: in-cloud flashes light the cloud only through many
+  scatterings, which are noisy to trace; a diffusion approximation for light from inside a
+  cloud (as `"diffusion"` gives for sunlight) would light it cleanly.
+- **Cumulonimbus by simulation**: `harris_cumulus` could grow one, with a deeper grid, a weaker
+  inversion and ice microphysics; the `cumulonimbus` generator shapes it from parcel theory
+  instead.
 - **Castellanus, fractus and other species**: each needs its own mechanism (turrets from
   mid-level convection, shreds torn by the wind).
-- **Snow, hail and lightning**; supernumerary bows (they need wave optics) and fogbows.
+- **Snow and hail**; supernumerary bows (they need wave optics) and fogbows.

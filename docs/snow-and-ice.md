@@ -153,13 +153,19 @@ and white ice at the sides.
 
 `"style": "brash"` makes brash ice instead, by partitioning the sea's surface. Sites are
 scattered at a density that varies from place to place, and the surface is divided into their
-Voronoi cells, so cell sizes vary widely (`size` gives the smallest and largest). Each region
-is ice, slush or open water; like gathers with like (more so with higher `clumping`), giving
-rafts of floes with lanes of water between. `concentration` is the share of ice.
+Voronoi cells, so cell sizes vary widely (`size` gives the smallest and largest). Every cell
+is ice, except a share left as open water (`concentration` is the share of ice; the water
+gathers in lanes, more so with higher `clumping`).
 
-- An ice cell becomes one angular chunk: its polygon with corners broken off, extruded to a
-  slab with a hummocked, snowy top.
-- Slush is the same at a small scale: thin wet fragments with gaps.
+- Each cell is filled with slush: a thin sheet of clear ice at the water's surface, glassy,
+  with the dark water showing through and cloudy white patches.
+- Inside it stands a shard of white ice: the cell's polygon pulled in, with corners broken
+  off, extruded to a slab with a hummocked, snowy top.
+- How slushy a cell is goes by its size. A large cell is nearly all shard; a small one is
+  mostly slush with a small shard or none.
+
+Give the background a dark `ground` (the colour of deep water), as rays that pass down
+through the clear ice end there.
 
 In a scene with an ocean, icebergs and floes float on its waves: each piece rises and falls
 with the surface where it floats, and small pieces tip with its slope. (Pieces as large as the

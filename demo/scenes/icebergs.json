@@ -2,7 +2,7 @@
   "width": 960,
   "height": 720,
   "supersamples": 96,
-  "max_depth": 8,
+  "max_depth": 10,
   "path_termination": "russian_roulette",
   "shadow_bias": 0.001,
   "chunk_size": 64,
@@ -20,7 +20,12 @@
         1
       ],
       "darkness": 0.1
-    }
+    },
+    "ground": [
+      0.004,
+      0.008,
+      0.009
+    ]
   },
   "output": {
     "tonemap": "filmic",
@@ -76,10 +81,10 @@
         170,
         140
       ],
-      "concentration": 0.55,
+      "concentration": 0.88,
       "size": [
-        0.6,
-        5
+        0.3,
+        3.5
       ],
       "clumping": 0.5,
       "seed": 1

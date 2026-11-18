@@ -58,11 +58,11 @@
 //! of glacier ice, each floating at its own waterline, notched there and spreading in a
 //! skirt just below, as the bergs are. With a scene's ocean, every piece rides its waves:
 //! raised or lowered with the surface where it floats, and tipped with its slope.
+use crate::color::Color;
 use crate::geometry::{rand, Pcg32};
 use crate::intersection::Intersection;
 use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::material::snow::{Ice, IceStyle, Snow, SnowStyle};
-use crate::material::subsurface::{Coefficients, Subsurface};
 use crate::na::{Rotation3, Vector3};
 use crate::noise::SeededNoise;
 use crate::procedural::nubis_clouds::smoothstep;
@@ -586,12 +586,12 @@ pub fn creased(mesh: &IndexedMesh, crease: f64) -> IndexedMesh {
 /// far each point was cut back (`fresh`, a texture coordinate), and that picks between
 /// `snow::Ice`'s white, bubbly and blue ice, all the same physics with different bubbles.
 ///
-/// Small pieces (`translucent`) are instead lit through: light wanders inside them
-/// (`material::subsurface`, with ice's own absorption and its bubbles' scattering), so thin
-/// edges glow and thick parts are bluer.
+/// For brash ice (`brash`) it shades white shards standing in slush: a sheet of clear ice
+/// (a dielectric) with cloudy patches, the dark water showing through.
 pub struct IcebergMaterial {
     pub sea_level: f64,
-    body: Option<Subsurface>,
+    /// For brash: the clear ice of its slush.
+    glass: Option<crate::material::dielectric::Dielectric>,
     white: Ice,
     glacier: Ice,
     blue: Ice,
@@ -603,16 +603,12 @@ pub struct IcebergMaterial {
     noise: SeededNoise,
 }
 
-/// The reduced scattering coefficient of a small piece's ice, per metre: light travels a
-/// quarter of a metre between changes of direction.
-pub const ICE_SCATTERING: f64 = 4.;
-
 impl IcebergMaterial {
     pub fn new(sea_level: f64, size: f64, seed: u64) -> IcebergMaterial {
         let clean = |preset: &str, roughness: f64| Ice::new(IceStyle { impurities: Default::default(), roughness, ..IceStyle::preset(preset) });
         IcebergMaterial {
             sea_level,
-            body: None,
+            glass: None,
             white: clean("white", 0.3),
             glacier: clean("glacier", 0.15),
             // Dense ice with few bubbles, as deep in a glacier: a saturated blue.
@@ -624,13 +620,12 @@ impl IcebergMaterial {
         }
     }
 
-    /// Lit through, for small pieces.
-    pub fn translucent(self) -> IcebergMaterial {
+    /// For brash ice: shards of white ice standing in slush, a sheet of clear ice.
+    pub fn brash(self) -> IcebergMaterial {
         IcebergMaterial {
-            body: Some(Subsurface {
-                coefficients: Coefficients::Ice { scattering: ICE_SCATTERING, impurities: Default::default() },
-                g: 0.,
-                refractive_index: crate::material::snow::ICE_REFRACTIVE_INDEX,
+            glass: Some(crate::material::dielectric::Dielectric {
+                refractive_index: crate::spectrum::RefractiveIndex::Constant(crate::material::snow::ICE_REFRACTIVE_INDEX),
+                attenuate: Color::white(),
             }),
             ..self
         }
@@ -685,21 +680,29 @@ impl MaterialModel for IcebergMaterial {
         let outside = r.rd.dot(&intersection.normal) < 0.;
         let i = &intersection.facing(r);
         let f = crate::material::functions::scatter_bsdf;
-        let (snow, fresh) = if self.body.is_some() { (if fresh > 0.5 { 0. } else { snow }, fresh) } else { (snow, fresh) };
+        if let Some(glass) = &self.glass {
+            // Brash: the first texture coordinate says slush, the second how cloudy it is.
+            if fresh > 0.5 {
+                // Clear ice, the dark water showing through, with cloudy patches of bubbles
+                // and of snow frozen in.
+                let p = intersection.point;
+                let cloud = smoothstep(0.35, 0.7, firn + 0.5 * self.noise.fbm(Vector3::new(p.x, 0., p.z) / 0.35, 4));
+                return if rand() < 0.85 * cloud {
+                    let normal = self.bumped(&i.point, &i.normal, &-r.rd.normalize());
+                    f(&self.clear.bsdf(&normal, Some(s)), r, &i.point, s)
+                } else {
+                    glass.scatter(r, intersection, s)
+                };
+            }
+            // A shard: snow on top, white ice at its broken sides.
+            return if outside && rand() < snow {
+                f(&self.snow.bsdf(&i.point, &i.normal, Some(s)), r, &i.point, s)
+            } else {
+                f(&self.white.bsdf(&i.normal, Some(s)), r, &i.point, s)
+            };
+        }
         if outside && rand() < snow {
             return f(&self.snow.bsdf(&i.point, &i.normal, Some(s)), r, &i.point, s);
-        }
-        if let Some(body) = &self.body {
-            // Brash: for it the first texture coordinate says a piece is clear ice.
-            // (Wet pieces are bare: light goes into them, and thin ones show the dark water.)
-            if fresh > 0.5 {
-                return body.scatter(r, intersection, s);
-            }
-            return if outside && rand() < 0.6 * white {
-                f(&self.white.bsdf(&i.normal, Some(s)), r, &i.point, s)
-            } else {
-                body.scatter(r, intersection, s)
-            };
         }
         let u = rand();
         let ice = if u < white { &self.white } else if u < white + blue { &self.blue } else { &self.glacier };
@@ -841,16 +844,19 @@ impl FloeField {
         }
     }
 
-    /// Brash ice, by partitioning the sea's surface: sites are scattered at a density that
-    /// varies from place to place (a coarse grid of `max_size` cells, each split into 1, 4 or
-    /// 16, or for slush into many), and the surface divided into their Voronoi cells, so the
-    /// cells' sizes vary as widely. Each coarse cell is ice, slush or open water, by a random
-    /// draw shifted by a smooth noise so that like gathers with like (floes in rafts, lanes of
-    /// water between). An ice cell becomes one angular chunk: its Voronoi polygon, pulled in
-    /// from its neighbours, with corners broken off by random chords, extruded to a slab that
-    /// floats with a ninth of it above water, a little tilted, its top lumpy with snow. Slush
-    /// is the same at a small scale: small thin fragments, most of them wet and glossy, with
-    /// gaps between.
+    /// Brash ice, by partitioning the sea's surface. Sites are scattered at a density that
+    /// varies from place to place (a coarse grid of `max_size` cells, each split 1, 2, 4 or 8
+    /// ways a side), and the surface divided into their Voronoi cells, so the cells' sizes
+    /// vary as widely. Every cell is ice, but for a share left as open water (by a draw
+    /// shifted by a smooth noise, so that the water gathers in lanes):
+    ///
+    /// - the cell is filled with slush: a thin sheet of clear ice at the water's surface,
+    ///   glassy, with the dark water showing through and cloudy white patches;
+    /// - and inside it stands a shard of white ice: the cell's polygon pulled in, with corners
+    ///   broken off by random chords, extruded to a slab with a hummocked, snowy top.
+    ///
+    /// How slushy a cell is goes by its size: a large cell is nearly all shard, a small one
+    /// mostly slush with a small shard or none.
     fn brash(&self) -> IndexedMesh {
         let mut rng = Pcg32::new(self.seed, 47);
         let noise = SeededNoise::new(self.seed.wrapping_add(7));
@@ -861,37 +867,24 @@ impl FloeField {
         let nz = (self.extent.1 / coarse).ceil().max(1.) as usize;
         let clump_size = 5. * coarse;
         let p_ice = self.concentration.clamp(0., 1.);
-        let p_slush = 0.6 * (1. - p_ice);
-        // Sites: position, kind (0 water, 1 ice, 2 slush), and the spacing they were laid at.
-        let mut sites: Vec<(f64, f64, u8, f64)> = vec![];
+        // Sites: position, whether ice, and the spacing they were laid at.
+        let mut sites: Vec<(f64, f64, bool, f64)> = vec![];
         let mut buckets: Vec<Vec<usize>> = vec![vec![]; nx * nz];
-        let fine = ((coarse / self.min_size).round() as usize).clamp(2, 10);
+        let finest = ((coarse / self.min_size).round() as usize).clamp(1, 8);
         for j in 0..nz {
             for i in 0..nx {
                 let (cx, cz) = (x0 + (i as f64 + 0.5) * coarse, z0 + (j as f64 + 0.5) * coarse);
                 let n = clumps.fbm(Vector3::new(cx, 0., cz) / clump_size, 3);
-                let v = rng.next_f64() + 1.5 * self.clumping * n;
-                let kind = if v > 1. - p_ice { 1 } else if v > 1. - p_ice - p_slush { 2 } else { 0 };
-                // How finely this cell is split: ice into one, four or sixteen pieces (large
-                // ones rarer), slush finely, water coarsely (it only shapes its neighbours).
-                let split = match kind {
-                    1 => { let u = rng.next_f64(); if u < 0.2 { 1 } else if u < 0.6 { 2 } else { 4 } },
-                    2 => fine,
-                    _ => 2,
-                };
+                let u = rng.next_f64();
+                let split = (if u < 0.1 { 1 } else if u < 0.35 { 2 } else if u < 0.7 { 4 } else { 8 }).min(finest);
                 let step = coarse / split as f64;
                 for b in 0..split {
                     for a in 0..split {
                         let x = x0 + i as f64 * coarse + (a as f64 + 0.15 + 0.7 * rng.next_f64()) * step;
                         let z = z0 + j as f64 * coarse + (b as f64 + 0.15 + 0.7 * rng.next_f64()) * step;
-                        // Slush is part fragments, part water; a floe's edge crumbles too.
-                        let k = match kind {
-                            2 => if rng.next_f64() < 0.6 { 2 } else { 0 },
-                            1 => if split > 1 && rng.next_f64() < 0.12 { 0 } else { 1 },
-                            _ => 0,
-                        };
+                        let ice = rng.next_f64() + 1.5 * self.clumping * n > 1. - p_ice;
                         buckets[j * nx + i].push(sites.len());
-                        sites.push((x, z, k, step));
+                        sites.push((x, z, ice, step));
                     }
                 }
             }
@@ -916,66 +909,19 @@ impl FloeField {
             }
             out
         };
-        for (index, &(sx, sz, kind, step)) in sites.iter().enumerate() {
-            if kind == 0 { continue; }
-            // The site's Voronoi cell: a square about it, cut by the bisector with each site near.
-            let w = 1.5 * step;
-            let mut poly = vec![(sx - w, sz - w), (sx - w, sz + w), (sx + w, sz + w), (sx + w, sz - w)];
-            let (ci, cj) = ((((sx - x0) / coarse) as usize).min(nx - 1), (((sz - z0) / coarse) as usize).min(nz - 1));
-            for j in cj.saturating_sub(1)..=(cj + 1).min(nz - 1) {
-                for i in ci.saturating_sub(1)..=(ci + 1).min(nx - 1) {
-                    for &o in &buckets[j * nx + i] {
-                        if o == index { continue; }
-                        let (ox, oz, _, _) = sites[o];
-                        let (dx, dz) = (ox - sx, oz - sz);
-                        let len = dx.hypot(dz);
-                        if len < 1e-9 || len > 4. * w { continue; }
-                        poly = clip(&poly, (sx + dx / 2., sz + dz / 2.), (dx / len, dz / len));
-                        if poly.len() < 3 { break; }
-                    }
-                }
-            }
-            if poly.len() < 3 { continue; }
-            // Pulled in from its neighbours about its centroid (slush more, leaving gaps).
-            let n = poly.len() as f64;
-            let (gx, gz) = poly.iter().fold((0., 0.), |a, p| (a.0 + p.0 / n, a.1 + p.1 / n));
-            let shrink = if kind == 2 { 0.55 + 0.35 * rng.next_f64() } else { 0.86 + 0.1 * rng.next_f64() };
-            let mut poly: Vec<(f64, f64)> = poly.iter().map(|p| (gx + (p.0 - gx) * shrink, gz + (p.1 - gz) * shrink)).collect();
-            // Corners broken off by chords: an angular chunk.
-            let radius = poly.iter().map(|p| (p.0 - gx).hypot(p.1 - gz)).fold(0., f64::max);
-            for _ in 0..2 + (rng.next_f64() * 4.) as usize {
-                let a = rng.next_f64() * TAU;
-                let r = radius * (0.45 + 0.45 * rng.next_f64());
-                let cut = clip(&poly, (gx + a.cos() * r, gz + a.sin() * r), (a.cos(), a.sin()));
-                if cut.len() >= 3 { poly = cut; }
-            }
-            let radius = poly.iter().map(|p| (p.0 - gx).hypot(p.1 - gz)).fold(0., f64::max);
-            if radius < 0.03 { continue; }
-            // A slab: thick for its width if it is glacier ice broken small, thin for slush.
-            let thick = if kind == 2 { radius * (0.25 + 0.3 * rng.next_f64()) } else { (radius * (0.45 + 0.5 * rng.next_f64())).min(2.5) };
-            let (top, bottom) = (0.115 * thick, -0.885 * thick);
-            let bevel = (0.25 * thick).min(0.3 * radius);
-            // Ice broken from a berg is a lump, not a tile: it stands up out of the water in
-            // hummocks (its bulk hangs below). Slush lies flat.
-            let lumpy = if kind == 2 { 0.3 } else { 1.2 + 2.5 * rng.next_f64().powi(2) };
-            let start = positions.len();
+        // A closed solid from rings of a polygon's outline about (gx, gz): each ring is how far
+        // in towards the centre and its height; with a middle point above and below. `bump`
+        // raises a point of ring k.
+        let solid = |poly: &[(f64, f64)], (gx, gz): (f64, f64), rings: &[(f64, f64)], bump: &dyn Fn(f64, f64, usize) -> f64| -> (Vec<Vector3<f64>>, Vec<[usize; 3]>) {
             let m = poly.len();
-            // Rings of the outline: (how far in towards the centroid, height), from the top's
-            // middle down round the edge to the bottom's middle. The top is lumpy.
-            let rings = [(0.45, top + 0.6 * bevel), (0.8, top + 0.4 * bevel), (0.97, top), (1., top - bevel), (0.92, 0.5 * bottom), (0.6, bottom)];
-            let bump = |x: f64, z: f64, k: usize| if k < 3 {
-                let inward = [1., 0.75, 0.3][k];
-                lumpy * bevel * inward * (0.6 * noise.fbm(Vector3::new(x, 0.3 * index as f64, z) / (0.5 * radius), 3) + 0.5).max(0.)
-            } else { 0. };
-            let mut piece: Vec<Vector3<f64>> = vec![];
-            piece.push(Vector3::new(gx, top + 0.7 * bevel + 1.2 * bump(gx, gz, 0), gz));
+            let mut piece = vec![Vector3::new(gx, rings[0].1 + bump(gx, gz, 0), gz)];
             for (k, &(f, y)) in rings.iter().enumerate() {
-                for &(x, z) in &poly {
+                for &(x, z) in poly {
                     let (px, pz) = (gx + (x - gx) * f, gz + (z - gz) * f);
                     piece.push(Vector3::new(px, y + bump(px, pz, k), pz));
                 }
             }
-            piece.push(Vector3::new(gx, bottom, gz));
+            piece.push(Vector3::new(gx, rings[rings.len() - 1].1, gz));
             let mut tris: Vec<[usize; 3]> = vec![];
             for k in 0..m {
                 let k1 = (k + 1) % m;
@@ -991,20 +937,78 @@ impl FloeField {
             // Wound outwards, whichever way round the polygon came.
             let volume: f64 = tris.iter().map(|t| piece[t[0]].dot(&piece[t[1]].cross(&piece[t[2]]))).sum();
             if volume < 0. { for t in tris.iter_mut() { t.swap(1, 2); } }
-            // Tilted a little (small pieces more), and riding the waves.
-            let tip = (if kind == 2 { 0.25 } else { 0.06 + 0.1 / (1. + radius) }) * rng.next_f64();
-            let lean = rng.next_f64() * TAU;
-            let tilt = Rotation3::from_axis_angle(&crate::na::Unit::new_normalize(Vector3::new(lean.cos(), 0., lean.sin())), tip);
+            (piece, tris)
+        };
+        for (index, &(sx, sz, ice, step)) in sites.iter().enumerate() {
+            if !ice { continue; }
+            // The site's Voronoi cell: a square about it, cut by the bisector with each site near.
+            let w = 1.5 * step;
+            let mut cell = vec![(sx - w, sz - w), (sx - w, sz + w), (sx + w, sz + w), (sx + w, sz - w)];
+            let (ci, cj) = ((((sx - x0) / coarse) as usize).min(nx - 1), (((sz - z0) / coarse) as usize).min(nz - 1));
+            for j in cj.saturating_sub(1)..=(cj + 1).min(nz - 1) {
+                for i in ci.saturating_sub(1)..=(ci + 1).min(nx - 1) {
+                    for &o in &buckets[j * nx + i] {
+                        if o == index || cell.len() < 3 { continue; }
+                        let (ox, oz, _, _) = sites[o];
+                        let (dx, dz) = (ox - sx, oz - sz);
+                        let len = dx.hypot(dz);
+                        if len < 1e-9 || len > 4. * w { continue; }
+                        cell = clip(&cell, (sx + dx / 2., sz + dz / 2.), (dx / len, dz / len));
+                    }
+                }
+            }
+            if cell.len() < 3 { continue; }
+            let n = cell.len() as f64;
+            let centre = cell.iter().fold((0., 0.), |a, p| (a.0 + p.0 / n, a.1 + p.1 / n));
+            let (gx, gz) = centre;
+            let radius = cell.iter().map(|p| (p.0 - gx).hypot(p.1 - gz)).fold(0., f64::max);
+            if radius < 0.03 { continue; }
             let (rise, ride) = self.ride(&Floe { x: gx, z: gz, radius });
             let pivot = Vector3::new(gx, 0., gz);
-            for p in piece.iter_mut() {
-                *p = ride * (tilt * (*p - pivot)) + pivot + Vector3::new(0., self.sea_level + rise, 0.);
+            let mut emit = |piece: Vec<Vector3<f64>>, tris: Vec<[usize; 3]>, tilt: Rotation3<f64>, uv: (f64, f64)| {
+                let start = positions.len();
+                texcoords.extend(std::iter::repeat_n(crate::na::Vector2::new(uv.0, uv.1), piece.len()));
+                positions.extend(piece.iter().map(|p| ride * (tilt * (p - pivot)) + pivot + Vector3::new(0., self.sea_level + rise, 0.)));
+                triangles.extend(tris.iter().map(|t| t.map(|i| i + start)));
+            };
+            // Small cells are slushy; large ones nearly all shard.
+            let slushy = 1. - smoothstep(0.6 * self.min_size, 0.45 * coarse, radius);
+            // The slush: a thin sheet of clear ice over the cell, just proud of the water.
+            let sheet = 0.06 + 0.1 * rng.next_f64();
+            let gap = 0.93 + 0.06 * rng.next_f64();
+            let ripple = |x: f64, z: f64, k: usize| if k < 2 { 0.03 * noise.fbm(Vector3::new(x, 0., z) / 0.5, 3) } else { 0. };
+            let rings = [(0.6 * gap, 0.035), (0.97 * gap, 0.03), (gap, 0.01), (0.97 * gap, 0.03 - sheet)];
+            let (piece, tris) = solid(&cell, centre, &rings, &ripple);
+            // (Its second coordinate is how cloudy this cell's slush is.)
+            emit(piece, tris, Rotation3::identity(), (1., 0.2 + 0.6 * rng.next_f64() * (1. - 0.5 * slushy)));
+            pieces += 1;
+            // The shard: the cell pulled in (more, the slushier), its corners broken off by chords.
+            let scale = (0.9 - 0.75 * slushy * (0.4 + 0.6 * rng.next_f64())) * (0.9 + 0.1 * rng.next_f64());
+            if scale < 0.25 || rng.next_f64() < 0.5 * slushy { continue; }
+            let mut poly: Vec<(f64, f64)> = cell.iter().map(|p| (gx + (p.0 - gx) * scale, gz + (p.1 - gz) * scale)).collect();
+            for _ in 0..2 + (rng.next_f64() * 4.) as usize {
+                let a = rng.next_f64() * TAU;
+                let r = scale * radius * (0.45 + 0.45 * rng.next_f64());
+                let cut = clip(&poly, (gx + a.cos() * r, gz + a.sin() * r), (a.cos(), a.sin()));
+                if cut.len() >= 3 { poly = cut; }
             }
-            // Slush is mostly wet ice melted smooth; the odd small floe too.
-            let wet = rng.next_f64() < if kind == 2 { 0.75 } else { 0.08 };
-            texcoords.extend(std::iter::repeat_n(crate::na::Vector2::new(wet as u8 as f64, 0.), piece.len()));
-            triangles.extend(tris.iter().map(|t| t.map(|i| i + start)));
-            positions.extend(piece);
+            let r = poly.iter().map(|p| (p.0 - gx).hypot(p.1 - gz)).fold(0., f64::max);
+            if r < 0.05 { continue; }
+            // A slab that floats with a ninth of it above water, and stands up in hummocks.
+            let thick = (r * (0.45 + 0.5 * rng.next_f64())).min(2.5);
+            let (top, bottom) = (0.115 * thick, -0.885 * thick);
+            let bevel = (0.25 * thick).min(0.3 * r);
+            let lumpy = 1.2 + 2.5 * rng.next_f64().powi(2);
+            let bump = |x: f64, z: f64, k: usize| if k < 3 {
+                let inward = [1., 0.75, 0.3][k];
+                lumpy * bevel * inward * (0.6 * noise.fbm(Vector3::new(x, 0.3 * index as f64, z) / (0.5 * r), 3) + 0.5).max(0.)
+            } else { 0. };
+            let rings = [(0.45, top + 0.6 * bevel), (0.8, top + 0.4 * bevel), (0.97, top), (1., top - bevel), (0.92, 0.5 * bottom), (0.6, bottom)];
+            let (piece, tris) = solid(&poly, centre, &rings, &bump);
+            let lean = rng.next_f64() * TAU;
+            let tip = (0.06 + 0.2 / (1. + r)) * rng.next_f64();
+            let tilt = Rotation3::from_axis_angle(&crate::na::Unit::new_normalize(Vector3::new(lean.cos(), 0., lean.sin())), tip);
+            emit(piece, tris, tilt, (0., 0.));
             pieces += 1;
         }
         println!("Brash: {} pieces, {} triangles", pieces, triangles.len());

@@ -116,6 +116,7 @@ mod paint;
 mod output;
 mod compare;
 mod depth;
+mod time_map;
 //mod wireframe;
 mod geometry;
 mod procedural {
@@ -230,6 +231,12 @@ struct Args {
     ///adaptive sampling spent them
     #[arg(long)]
     sample_map: Option<String>,
+
+    ///Also write a profile of the render: each pixel's time rendering its samples, as a heatmap
+    ///(black through orange to pale yellow at the 99.5th percentile's time); .exr keeps the
+    ///seconds. Path tracer only
+    #[arg(long)]
+    time_map: Option<String>,
 
     ///Start afresh, rather than carrying on from the saved state (<output>.accum)
     #[arg(long)]
@@ -484,6 +491,9 @@ fn main() {
             println!("- Samples per pixel -> {}", path);
         }
     }
+    if let Some(path) = &args.time_map {
+        write_time_map(path, &rc, flat.is_some());
+    }
     //wireframe::wireframe(&s, &mut rc);
     let img = s.output.finish(&rc.snapshot());
     if let Err(e) = writer.write(&img, &rc.output_filename) {
@@ -495,6 +505,34 @@ fn main() {
     }
     paint::poor_mans(&img, &s.output);
     rc.print_stats();
+}
+
+/// Write the render's profile, each pixel's time (see `time_map`), and summarise it.
+fn write_time_map(path: &str, rc: &RenderContext, wavefront: bool) {
+    if wavefront {
+        println!("- The wavefront integrator renders paths in batches, not by pixel: no time map");
+        return;
+    }
+    let times = rc.times();
+    if times.iter().all(|&t| t == 0.) {
+        println!("- Nothing was rendered this run (all from the saved state): no time map; use --fresh");
+        return;
+    }
+    let sum = time_map::summary(times);
+    let raw = path.to_ascii_lowercase().ends_with(".exr");
+    let opts = output::OutputOpts { transfer: output::Transfer::Linear, ..output::OutputOpts::default() };
+    let img = time_map::image(times, rc.width, rc.height, raw);
+    if let Err(e) = output::writer_for(path, opts).and_then(|w| w.write(&img, path)) {
+        eprintln!("{}", e);
+        return;
+    }
+    let us = |t: f64| t * 1e6;
+    println!("- Time per pixel -> {}: mean {:.1} µs, slowest {:.1} µs; {:.2} s on all threads{}",
+        path, us(sum.mean), us(sum.max), sum.total,
+        if raw { String::new() } else { format!("; brightest is {:.1} µs or more", us(sum.scale)) });
+    if rc.resumed_samples > 0 {
+        println!("  (only the samples rendered this run are timed, not those resumed from the saved state)");
+    }
 }
 
 /// Render the scene `runs` times with successive seeds and report its noise (see `variance`).

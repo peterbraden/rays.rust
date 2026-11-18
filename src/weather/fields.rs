@@ -218,6 +218,32 @@ impl Heap {
     fn roots(&self, h: &Heaps) -> Vec<crate::procedural::cauliflower::Sphere> {
         crate::procedural::cauliflower::body(&(self.axis * (h.radius + self.base)), &self.axis, self.r0, self.width, h.lift, h.dome, self.tall, self.id, self.hashes[0])
     }
+
+    /// Its sphere tree, grown once and kept for the thread (`Cauliflower::grow`): a ray looks
+    /// the same few clouds up thousands of times. Keyed by everything the roots depend on, so a
+    /// cloud whose base moves with time is grown afresh.
+    fn grown(&self, h: &Heaps) -> std::rc::Rc<crate::procedural::cauliflower::Grown> {
+        use std::collections::HashMap;
+        use std::rc::Rc;
+        thread_local! {
+            static GROWN: std::cell::RefCell<HashMap<[u64; 4], Rc<crate::procedural::cauliflower::Grown>>> = std::cell::RefCell::new(HashMap::new());
+        }
+        // About 6000 spheres (a quarter of a megabyte) each at most: forget them all now and then.
+        const KEPT: usize = 96;
+        let key = [self.id ^ (h.seed as u64).rotate_left(7), self.base.to_bits(), self.r0.to_bits(), self.width.to_bits()];
+        GROWN.with(|g| {
+            if let Some(t) = g.borrow().get(&key) {
+                return t.clone();
+            }
+            let t = Rc::new(h.tree.grow(&self.roots(h), &self.axis));
+            let mut g = g.borrow_mut();
+            if g.len() >= KEPT {
+                g.clear();
+            }
+            g.insert(key, t.clone());
+            t
+        })
+    }
 }
 
 impl Stratiform {
@@ -306,7 +332,7 @@ impl Stratiform {
             }
             // Leaning downwind with height: look up where the cloud stood that much upwind.
             let lean = heap.downwind * (h.lean * (at.altitude - heap.base).max(0.));
-            best = best.max(h.tree.depth(&heap.roots(h), &heap.axis, &(q - lean), h.edge));
+            best = best.max(heap.grown(h).depth(&h.tree, &(q - lean), h.edge));
             best >= h.edge
         });
         if best <= -margin {

@@ -24,6 +24,9 @@ pub struct RenderContext {
     pub width: usize,
     pub height: usize,
     pub rays_cast: u64,
+    /// What the stages of a wavefront render did (`scheduler::Stats`); empty for the recursive
+    /// tracer, which has none.
+    pub schedule: crate::scheduler::Stats,
     pub start_time: Instant,
     pub progressive_render: bool,
     pub samples_rendered: u64,
@@ -149,6 +152,7 @@ impl RenderContext {
             width,
             height,
             rays_cast: 0,
+            schedule: Default::default(),
             start_time,
             progressive_render,
             samples_rendered: 0,
@@ -326,6 +330,9 @@ impl RenderContext {
         println!("| Rays Cast: {}", self.rays_cast);
         println!("| Elapsed Time: {:?}", elapsed);
         println!("| Rays per sec: {:.2}", self.rays_cast as f64 / elapsed.as_secs_f64());
+        if !self.schedule.is_empty() {
+            println!("{}", self.schedule.report());
+        }
         println!("==========================================");
 
     }

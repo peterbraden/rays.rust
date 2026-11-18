@@ -44,6 +44,22 @@ const VISIBILITY_SCALE: usize = 8;
 /// Passes between reading the accumulated image back.
 const PASSES_PER_READ: usize = 8;
 
+/// Passes between reads whose rounds are counted (`GpuRenderer::rounds_buffer`); passes beyond
+/// these go uncounted, not unrendered.
+const COUNTED_PASSES: usize = 64;
+
+/// What the host is keeping about the passes queued since the image was last read
+/// (`scheduler::Stats`, and what completes it at the read).
+#[derive(Default)]
+struct Block {
+    stats: crate::scheduler::Stats,
+    /// Passes queued whose rounds are being counted.
+    counted: usize,
+    /// When the first of them was queued, and the host's own time in them since.
+    started: Option<web_time::Instant>,
+    host_seconds: f64,
+}
+
 // The buffers' layouts are the shader crate's own (`shaders/pathtrace`), so the two can't drift.
 use pathtrace::{CameraRay as GpuRay, Light as GpuLight, Material as GpuMaterial, Node as GpuNode, Params, PathState, Prim as GpuPrim, SkyQuery};
 use pathtrace::glam::{UVec4, Vec4};
@@ -226,7 +242,14 @@ pub struct GpuRenderer {
     empty_header: wgpu::Buffer,
     paths_buffer: wgpu::Buffer,
     accum_buffer: wgpu::Buffer,
+    /// For the scheduler's measurements (`scheduler::Stats::live`): the paths alive at the
+    /// start of each round after the first, of each pass since the last read. The count is in
+    /// the header of the queue a round reads, and a copy between rounds keeps it; nothing in
+    /// the kernels knows. A word a round, `rounds()` a pass, for `COUNTED_PASSES` passes.
+    rounds_buffer: wgpu::Buffer,
+    /// The image, then the rounds, read together.
     readback: wgpu::Buffer,
+    block: Mutex<Block>,
     pub adapter_name: String,
 }
 
@@ -606,8 +629,13 @@ impl GpuRenderer {
             label: Some("accum"), size: pixels * 32,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
+        let rounds_size = (COUNTED_PASSES * (params.dims.w as usize + 1) * 4) as u64;
+        let rounds_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("rounds"), size: rounds_size,
+            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"), size: pixels * 32,
+            label: Some("readback"), size: pixels * 32 + rounds_size,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let round_groups = [0, 1].map(|side| device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -623,7 +651,7 @@ impl GpuRenderer {
             entries: &[entry(0, &params_buffers[0]), entry(1, &paths_buffer), entry(2, &accum_buffer)],
         });
         Ok(GpuRenderer { device, queue, intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline, round_groups, add_group, params, params_buffers,
-            queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, readback, adapter_name })
+            queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, rounds_buffer, readback, block: Default::default(), adapter_name })
     }
 
     /// Camera rays for sample `k` of every pixel, as the wavefront integrator's.
@@ -668,6 +696,7 @@ impl GpuRenderer {
     /// the scheduler has found complete (`scheduler::plan`) aren't generated, so cost nothing.
     /// A sample's random numbers are its pixel's and its own index's, whichever pass it is in.
     pub fn dispatch_samples(&mut self, s: &Scene, samples: &[Option<u32>]) {
+        let began = web_time::Instant::now();
         let pixels = (s.image.width * s.image.height) as u32;
         for side in 0..2 {
             self.params.seed.z = side as u32;
@@ -688,6 +717,20 @@ impl GpuRenderer {
         head.extend_from_slice(&alive);
         self.queue.write_buffer(&self.queue_buffer, 0, bytemuck::cast_slice(&head));
         self.queue.write_buffer(&self.dispatch_buffer, 0, bytemuck::cast_slice(&first));
+        // The host's part ends here: the rays generated and uploaded. Encoding and submitting
+        // the kernels is counted as the device's, since a driver may run them as they arrive.
+        let seconds = began.elapsed().as_secs_f64();
+        // For the scheduler's measurements: this pass's slot for its rounds' counts, if there
+        // is one left before the next read.
+        let rounds = self.rounds();
+        let slot = {
+            let block = self.block.get_mut().unwrap();
+            block.started.get_or_insert(began);
+            (block.counted < COUNTED_PASSES).then(|| {
+                block.counted += 1;
+                (block.counted - 1) * rounds
+            })
+        };
         let mut encoder = self.device.create_command_encoder(&Default::default());
         // A path has at most `max_depth` + 1 vertices: that many rounds, each over the paths
         // the last left alive.
@@ -705,6 +748,10 @@ impl GpuRenderer {
             }
             // The next round reads the side this one filled, and fills the side it read.
             encoder.copy_buffer_to_buffer(&self.queue_buffer, 16 * (1 - side as u64), &self.dispatch_buffer, 0, 16);
+            if let Some(slot) = slot.filter(|_| round < self.params.dims.w) {
+                // How many paths the next round starts with (the header's count).
+                encoder.copy_buffer_to_buffer(&self.queue_buffer, 16 * (1 - side as u64) + 12, &self.rounds_buffer, 4 * (slot + round as usize + 1) as u64, 4);
+            }
             encoder.copy_buffer_to_buffer(&self.empty_header, 0, &self.queue_buffer, 16 * side as u64, 16);
         }
         {
@@ -715,6 +762,41 @@ impl GpuRenderer {
             pass.dispatch_workgroups(groups.min(pathtrace::MAX_GROUPS), groups.div_ceil(pathtrace::MAX_GROUPS), 1);
         }
         self.queue.submit(Some(encoder.finish()));
+        // What the host knows of the pass already: the paths it generated (which are the first
+        // round's), and that every pixel's path is added to the film. The later rounds are
+        // counted at the read.
+        use crate::scheduler::Stage;
+        let block = self.block.get_mut().unwrap();
+        block.host_seconds += seconds;
+        block.stats.passes += 1;
+        block.stats.record(Stage::Generate, alive.len() as u64, seconds);
+        block.stats.record(Stage::Accumulate, pixels as u64, 0.);
+        if slot.is_some() {
+            block.stats.round(0, alive.len() as u64);
+            self.record_round(alive.len() as u64);
+        }
+    }
+
+    /// Rounds in a pass: a path has at most `max_depth` + 1 vertices.
+    fn rounds(&self) -> usize {
+        self.params.dims.w as usize + 1
+    }
+
+    /// A round of `paths` went through its three kernels. (Their time isn't known apart:
+    /// `scheduler`'s module documentation.)
+    fn record_round(&self, paths: u64) {
+        use crate::scheduler::Stage;
+        if paths > 0 {
+            let mut block = self.block.lock().unwrap();
+            for stage in [Stage::Intersect, Stage::Shade, Stage::Sky] {
+                block.stats.record(stage, paths, 0.);
+            }
+        }
+    }
+
+    /// What the stages have done since this was last asked, complete up to the last read.
+    pub fn take_stats(&self) -> crate::scheduler::Stats {
+        std::mem::take(&mut self.block.lock().unwrap().stats)
     }
 
     /// The image accumulated so far: each pixel's sums (the radiance's, and in w the number of
@@ -723,6 +805,11 @@ impl GpuRenderer {
     pub async fn read_back(&self) -> Result<(Vec<[f32; 4]>, Vec<[f32; 4]>), String> {
         let mut encoder = self.device.create_command_encoder(&Default::default());
         encoder.copy_buffer_to_buffer(&self.accum_buffer, 0, &self.readback, 0, None);
+        let image = self.accum_buffer.size();
+        let counted = std::mem::take(&mut self.block.lock().unwrap().counted);
+        if counted > 0 {
+            encoder.copy_buffer_to_buffer(&self.rounds_buffer, 0, &self.readback, image, (counted * self.rounds() * 4) as u64);
+        }
         self.queue.submit(Some(encoder.finish()));
         let mapped = Mapped::default();
         let slot = mapped.0.clone();
@@ -736,8 +823,23 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("GPU device lost ({})", e))?;
         mapped.await.map_err(|e| format!("couldn't read the GPU's image back ({})", e))?;
-        let both = bytemuck::cast_slice::<u8, [f32; 4]>(&self.readback.get_mapped_range(..).unwrap()).to_vec();
+        let both = bytemuck::cast_slice::<u8, [f32; 4]>(&self.readback.get_mapped_range(..image).unwrap()).to_vec();
+        let rounds = bytemuck::cast_slice::<u8, u32>(&self.readback.get_mapped_range(image..image + (counted * self.rounds() * 4) as u64).unwrap()).to_vec();
         self.readback.unmap();
+        for pass in rounds.chunks(self.rounds()) {
+            for (round, &paths) in pass.iter().enumerate().skip(1) {
+                self.block.lock().unwrap().stats.round(round, paths as u64);
+                self.record_round(paths as u64);
+            }
+        }
+        {
+            // The time since the first of these passes was queued that wasn't the host's.
+            let mut block = self.block.lock().unwrap();
+            if let Some(started) = block.started.take() {
+                let device = started.elapsed().as_secs_f64() - std::mem::take(&mut block.host_seconds);
+                block.stats.device_seconds += device.max(0.);
+            }
+        }
         // Interleaved on the GPU (`pathtrace::add_paths`): a pixel's sums, then its squares.
         Ok((both.iter().step_by(2).copied().collect(), both.iter().skip(1).step_by(2).copied().collect()))
     }
@@ -788,6 +890,7 @@ impl GpuRenderer {
             }
             let (sums, squares) = pollster::block_on(self.read_back()).expect("GPU readback");
             let mut rc = rc.lock().unwrap();
+            rc.schedule.merge(&self.take_stats());
             for y in 0..h {
                 for x in 0..w {
                     let i = y * w + x;
@@ -1287,6 +1390,38 @@ mod tests {
     /// the noisy ones, each taking its own next samples; the picture is the one it gets from
     /// sampling every pixel in full; and a render stopped part-way and resumed from its film
     /// ends where an uninterrupted one does.
+    /// The host counts what the scheduler measures: the paths alive at each round, read from
+    /// the queues' headers. Every pixel starts a path (a pinhole stops none), none can have
+    /// more vertices than the depth allows, and fewer are alive each round.
+    #[test]
+    fn test_counts_live_paths_by_round() {
+        use crate::scheduler::Stage;
+        let s = scene();
+        let flat = FlatScene::build(&s).unwrap();
+        let mut gpu = match GpuRenderer::new(&s, &flat) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("skipped: {}", e);
+                return;
+            },
+        };
+        let passes = 3;
+        gpu.run(&s, 0..passes);
+        let stats = gpu.take_stats();
+        let pixels = (s.image.width * s.image.height) as u64;
+        assert_eq!(stats.passes, passes as u64);
+        assert_eq!(stats.live.len(), gpu.rounds());
+        assert_eq!(stats.live[0], passes as u64 * pixels);
+        assert!(stats.live.windows(2).all(|w| w[1] <= w[0]), "{:?}", stats.live);
+        assert!(stats.live[1] > 0 && *stats.live.last().unwrap() < stats.live[0], "{:?}", stats.live);
+        assert_eq!(stats.stage(Stage::Intersect).items, stats.live.iter().sum::<u64>());
+        assert_eq!(stats.stage(Stage::Generate).items, stats.live[0]);
+        assert_eq!(stats.stage(Stage::Accumulate).items, passes as u64 * pixels);
+        assert!(stats.device_seconds > 0.);
+        // Taken, so the next block starts from nothing.
+        assert!(gpu.take_stats().is_empty());
+    }
+
     #[test]
     fn test_samples_adaptively() {
         let mut s = scene();

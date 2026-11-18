@@ -1638,9 +1638,19 @@ the host's.
    - Known limits: the plan is made once for 8 passes (`PASSES_PER_READ`), as each needs
      the film read back, so a pixel may take up to 7 samples more than it needed; the
      browser's renderer (`web/src/lib.rs`) still gives every pixel every pass.
-2. One vocabulary. `Stage`, `Queue`, `Batch` and per-queue counters (paths in, time) shared
-   by the CPU wavefront integrator and the GPU host, and reported: the measurements the
-   later steps are judged by.
+2. One vocabulary. Done: `scheduler::Stage` names the stages the CPU's wavefront integrator
+   and the GPU's kernels share, and `scheduler::Stats` counts each stage's batches, paths and
+   (where it can be told) time, and the paths alive at each round; both renderers record into
+   it and a render prints it at the end. On the GPU the rounds' counts are the queues' headers,
+   copied aside between rounds (no kernel changed), and time is the whole device's, as
+   splitting it by kernel needs timestamp queries. There is no `Queue` or `Batch` type yet: a
+   batch is a count, and the types can come with the first policy that moves one (step 3).
+   Images are unchanged (GPU: 5 scenes pixel for pixel). First readings, demo.json at 320 x 180,
+   16 spp: the two renderers agree that 21% of path-rounds have a live path (100, 100, 4, 2,
+   1, 1, 0... % by round), instances.json 57%; on the CPU, of 1.67 s across threads, shading
+   takes 52%, emission (the sky) 20%, shadow rays 10%, intersection 9%, camera rays 10%; a
+   batch of 4096 paths is 1159 on average by intersection and 603 by shading, so the
+   by-material sort is already working on small batches.
 3. The CPU queue (section 12, phase 3). After intersection a path whose material or shape
    the GPU lacks goes to a queue the host reads back, runs on the CPU and writes back for
    the next stage. The scheduler sets how often (latency against batch size) and may hold

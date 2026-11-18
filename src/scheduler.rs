@@ -55,6 +55,26 @@
 //! refill within a pass: a path that ends early leaves its slot idle until the next pass
 //! (step 4 of the plan).
 //!
+//! # What is here now: a vocabulary, and counters
+//!
+//! Two renderers here work in stages over batches, the CPU's wavefront integrator
+//! (`wavefront::integrator`) and the GPU's kernels (`gpu`, `pathtrace`), and before this they
+//! shared no words for it. `Stage` names the stages both have; a batch is a number of paths
+//! through one stage; `Stats` counts, for each stage, the batches and paths that went through
+//! it and, where it can be measured, the time, and for each round of a pass (a round takes
+//! every live path one vertex further) how many paths were still alive. Both renderers record
+//! into it and a render ends by reporting it (`Stats::report`). It decides nothing; it is
+//! what the decisions to come will be judged by. Each of the papers below argues from
+//! measurements of this kind: Laine and others from how many paths are in each stage and how
+//! long each kernel runs, van Antwerpen from the share of threads with live paths, Meister
+//! and others from the trace's time against the sort's.
+//!
+//! What it can't yet say: time by stage on the GPU. The host sees a block of passes go in and
+//! an image come out; splitting that by kernel needs the device's timestamp queries, which
+//! WebGPU offers only as an optional feature, so the GPU's time is reported whole
+//! (`Stats::device_seconds`), beside the host's own part (generating camera rays, which is
+//! still the CPU's work). On the CPU a stage's time is the sum over threads, not wall time.
+//!
 //! # What isn't here yet, and what the reading says about it
 //!
 //! Stage queues, and why. Laine, Karras and Aila's argument for a wavefront over one large
@@ -120,6 +140,140 @@
 use crate::adaptive::Region;
 use crate::scene::Adaptive;
 
+/// A stage of a wavefront: one kind of work, done for many paths together (PBR section 15.2;
+/// Laine, Karras and Aila's kernels).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    /// Camera rays: the paths a pass starts, for the pixels `plan` names.
+    Generate,
+    /// The nearest thing along each path's ray.
+    Intersect,
+    /// What a path that escaped, or hit a light, gathers there. The CPU's integrator has it as
+    /// a stage; on the GPU it is part of `Shade`.
+    Emission,
+    /// The vertex at a hit: light sampling (its shadow rays queued, or on the GPU traced
+    /// here) and the next ray.
+    Shade,
+    /// Shadow rays: whether each light sample arrives.
+    Shadow,
+    /// The sky's light, where asked for: escaping rays, sky samples, haze. A kernel of its own
+    /// on the GPU; part of `Emission` and `Shade` on the CPU.
+    Sky,
+    /// Finished paths added to the film.
+    Accumulate,
+}
+
+impl Stage {
+    pub const ALL: [Stage; 7] = [Stage::Generate, Stage::Intersect, Stage::Emission, Stage::Shade, Stage::Shadow, Stage::Sky, Stage::Accumulate];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Stage::Generate => "generate",
+            Stage::Intersect => "intersect",
+            Stage::Emission => "emission",
+            Stage::Shade => "shade",
+            Stage::Shadow => "shadow",
+            Stage::Sky => "sky",
+            Stage::Accumulate => "accumulate",
+        }
+    }
+}
+
+/// What has gone through one stage: batches, the paths (or rays) in them, and the time they
+/// took where that is known (0 where it isn't).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StageStats {
+    pub batches: u64,
+    pub items: u64,
+    pub seconds: f64,
+}
+
+/// What a render's stages did, for judging how work is scheduled. Recorded by the wavefront
+/// integrator and by the GPU's host, and added up (`merge`) across threads and passes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Stats {
+    stages: [StageStats; 7],
+    /// Passes (a sample of every planned pixel) recorded.
+    pub passes: u64,
+    /// Paths alive at the start of each round of a pass, added up over the passes: the first
+    /// is every path generated, each later one those that went on. How quickly it falls is
+    /// how much a queue of live paths saves over dispatching every pixel every round.
+    pub live: Vec<u64>,
+    /// Time the device took for whole blocks of passes, where stages can't be timed apart
+    /// (the GPU: from the first pass queued to the image read back).
+    pub device_seconds: f64,
+}
+
+impl Stats {
+    /// A batch of `items` went through `stage` in `seconds` (0 if not timed).
+    pub fn record(&mut self, stage: Stage, items: u64, seconds: f64) {
+        let s = &mut self.stages[stage as usize];
+        s.batches += 1;
+        s.items += items;
+        s.seconds += seconds;
+    }
+
+    /// `paths` were alive at the start of round `round` of a pass.
+    pub fn round(&mut self, round: usize, paths: u64) {
+        if self.live.len() <= round {
+            self.live.resize(round + 1, 0);
+        }
+        self.live[round] += paths;
+    }
+
+    pub fn stage(&self, stage: Stage) -> StageStats {
+        self.stages[stage as usize]
+    }
+
+    pub fn merge(&mut self, other: &Stats) {
+        for (a, b) in self.stages.iter_mut().zip(&other.stages) {
+            a.batches += b.batches;
+            a.items += b.items;
+            a.seconds += b.seconds;
+        }
+        self.passes += other.passes;
+        for (round, paths) in other.live.iter().enumerate() {
+            self.round(round, *paths);
+        }
+        self.device_seconds += other.device_seconds;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.stages.iter().all(|s| s.batches == 0)
+    }
+
+    /// Of the path-rounds a pass would run with every path dispatched every round (the first
+    /// round's paths, times the rounds), the share that had a live path.
+    pub fn live_share(&self) -> f64 {
+        match self.live.first() {
+            Some(&first) if first > 0 => self.live.iter().sum::<u64>() as f64 / (first * self.live.len() as u64) as f64,
+            _ => 1.,
+        }
+    }
+
+    /// A table of the stages, and the rounds' live paths, for the end of a render.
+    pub fn report(&self) -> String {
+        let mut out = format!("| Stages, over {} passes:\n|   {:<11}{:>10}{:>14}{:>12}{:>12}\n", self.passes, "stage", "batches", "items", "items/batch", "seconds");
+        for stage in Stage::ALL {
+            let s = self.stage(stage);
+            if s.batches == 0 {
+                continue;
+            }
+            let seconds = if s.seconds > 0. { format!("{:.3}", s.seconds) } else { "-".to_string() };
+            out += &format!("|   {:<11}{:>10}{:>14}{:>12.0}{:>12}\n", stage.name(), s.batches, s.items, s.items as f64 / s.batches as f64, seconds);
+        }
+        if self.device_seconds > 0. {
+            out += &format!("|   on the device, stages together: {:.3} s\n", self.device_seconds);
+        }
+        if let Some(&first) = self.live.first().filter(|&&f| f > 0) {
+            let shares: Vec<String> = self.live.iter().map(|&n| format!("{:.0}", 100. * n as f64 / first as f64)).collect();
+            out += &format!("|   paths alive by round, % of those generated: {}\n", shares.join(" "));
+            out += &format!("|   {:.0}% of path-rounds had a live path", 100. * self.live_share());
+        }
+        out
+    }
+}
+
 /// How many more samples each pixel of a region of the film should take in its next pass: up
 /// to `most` for a pixel that isn't complete, none for one that is.
 ///
@@ -157,6 +311,32 @@ mod tests {
         let samples = [0, 5, 14, 16, 20];
         assert_eq!(plan(&film(&[], &[], &samples), 16, None, 1., 8), vec![8, 8, 2, 0, 0]);
         assert_eq!(plan(&film(&[], &[], &samples), 16, None, 1., 1), vec![1, 1, 1, 0, 0]);
+    }
+
+    #[test]
+    fn test_stats_add_up() {
+        let mut a = Stats::default();
+        a.record(Stage::Intersect, 100, 0.5);
+        a.record(Stage::Intersect, 50, 0.25);
+        a.round(0, 100);
+        a.round(1, 50);
+        a.passes = 1;
+        let mut b = Stats::default();
+        b.record(Stage::Shade, 40, 0.);
+        b.round(0, 100);
+        b.round(1, 0);
+        b.round(2, 0);
+        b.passes = 1;
+        a.merge(&b);
+        assert_eq!(a.stage(Stage::Intersect), StageStats { batches: 2, items: 150, seconds: 0.75 });
+        assert_eq!(a.stage(Stage::Shade).items, 40);
+        assert_eq!((a.passes, a.live.clone()), (2, vec![200, 50, 0]));
+        // 250 live path-rounds of 3 rounds of 200.
+        assert!((a.live_share() - 250. / 600.).abs() < 1e-12);
+        assert!(!a.is_empty() && Stats::default().is_empty());
+        let report = a.report();
+        assert!(report.contains("intersect") && report.contains("shade") && !report.contains("shadow"), "{}", report);
+        assert!(report.contains("100 25 0"), "{}", report);
     }
 
     /// With adaptive sampling a pixel whose samples all agree stops once it has the minimum,

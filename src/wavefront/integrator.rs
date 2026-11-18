@@ -32,6 +32,7 @@
 //! only the Sobol' sampler; point lights are always all sampled (the light BVH chooses among
 //! area lights only).
 
+use crate::scheduler::{Stage, Stats};
 use crate::color::Color;
 use crate::shapes::geometry::Geometry;
 use crate::material::bsdf::{power_heuristic, LambertianBSDF, BSDF};
@@ -116,29 +117,47 @@ const BATCH: usize = 4096;
 /// Render sample `k` of every pixel: each pixel's radiance (times its weight), and the number
 /// of rays cast.
 pub fn render_pass(s: &Scene, flat: &FlatScene, k: usize) -> (Vec<Color>, u64) {
+    let (image, rays, _) = render_pass_with_stats(s, flat, k);
+    (image, rays)
+}
+
+/// `render_pass`, with what its stages did (`scheduler::Stats`).
+pub fn render_pass_with_stats(s: &Scene, flat: &FlatScene, k: usize) -> (Vec<Color>, u64, Stats) {
     let (w, h) = (s.image.width, s.image.height);
     let mut image = vec![Color::black(); w * h];
     // Batches of pixels run in parallel, each through all the stages: a queue that streams
     // through memory once per stage would make the stages memory-bound on a CPU (on a GPU,
     // the whole image's queue is the batch).
-    let batches: Vec<(Vec<(u32, Color)>, u64)> = (0..(w * h).div_ceil(BATCH)).into_par_iter()
+    let batches: Vec<_> = (0..(w * h).div_ceil(BATCH)).into_par_iter()
         .map(|b| render_batch(s, flat, k, b * BATCH..((b + 1) * BATCH).min(w * h)))
         .collect();
     let mut rays = 0;
-    for (done, n) in batches {
+    let mut stats = Stats::default();
+    stats.passes = 1;
+    for (done, n, batch_stats) in batches {
         rays += n;
+        stats.merge(&batch_stats);
         for (pixel, c) in done {
             image[pixel as usize] = image[pixel as usize] + c;
         }
     }
-    (image, rays)
+    (image, rays, stats)
 }
 
 /// Sample `k` of the pixels `range`, stage by stage: each finished path's pixel and radiance,
 /// and the number of rays cast.
-fn render_batch(s: &Scene, flat: &FlatScene, k: usize, range: std::ops::Range<usize>) -> (Vec<(u32, Color)>, u64) {
+fn render_batch(s: &Scene, flat: &FlatScene, k: usize, range: std::ops::Range<usize>) -> (Vec<(u32, Color)>, u64, Stats) {
     let (w, h) = (s.image.width, s.image.height);
     let pixels = (w * h) as u64;
+    // Each stage's batch is counted and timed (`scheduler::Stats`): two clock readings a
+    // stage a round, against thousands of paths.
+    let mut stats = Stats::default();
+    let mut clock = web_time::Instant::now();
+    let mut lap = |stats: &mut Stats, stage: Stage, items: usize| {
+        let now = web_time::Instant::now();
+        stats.record(stage, items as u64, (now - clock).as_secs_f64());
+        clock = now;
+    };
     // 1. Camera rays.
     let mut paths: Vec<Path> = range.filter_map(|index| {
         let (x, y) = (index % w, index / w);
@@ -154,19 +173,25 @@ fn render_batch(s: &Scene, flat: &FlatScene, k: usize, range: std::ops::Range<us
         Some(Path { pixel: index as u32, ray, beta: Color::white(), l: Color::black(), weight: weight * wx * wy,
                     depth: 0, specular: true, prev_pdf: 0., sampler, scattered: false, hit: None, done: false })
     }).collect();
+    lap(&mut stats, Stage::Generate, paths.len());
     let mut done = Vec::with_capacity(paths.len());
     let mut shadows: Vec<Shadow> = Vec::new();
     let mut rays = 0u64;
+    let mut round = 0;
     while !paths.is_empty() {
+        stats.round(round, paths.len() as u64);
+        round += 1;
         // 2. Intersect.
         rays += paths.len() as u64;
         for p in paths.iter_mut() {
             p.hit = flat.intersect(&p.ray, 0.);
         }
+        lap(&mut stats, Stage::Intersect, paths.len());
         // 3. Escaped rays and emitters.
         for p in paths.iter_mut() {
             gather_emission(p, s, flat);
         }
+        lap(&mut stats, Stage::Emission, paths.len());
         retire(&mut paths, &mut done);
         // 4. Shade, sorted by material so that each kind's code runs together.
         paths.sort_unstable_by_key(|p| flat.hit_material(p.hit.unwrap().prim).kind());
@@ -174,6 +199,7 @@ fn render_batch(s: &Scene, flat: &FlatScene, k: usize, range: std::ops::Range<us
         for (i, p) in paths.iter_mut().enumerate() {
             shade(i, p, s, flat, &mut shadows);
         }
+        lap(&mut stats, Stage::Shade, paths.len());
         // 5. Shadow rays.
         rays += shadows.len() as u64;
         for sh in &shadows {
@@ -181,9 +207,11 @@ fn render_batch(s: &Scene, flat: &FlatScene, k: usize, range: std::ops::Range<us
                 paths[sh.path].l = paths[sh.path].l + sh.contribution;
             }
         }
+        lap(&mut stats, Stage::Shadow, shadows.len());
         retire(&mut paths, &mut done);
     }
-    (done, rays)
+    lap(&mut stats, Stage::Accumulate, done.len());
+    (done, rays, stats)
 }
 
 /// Move finished paths' radiance to `done`, and drop them from the queue.
@@ -475,8 +503,9 @@ pub fn render(s: &Scene, flat: &FlatScene, rc: &Mutex<RenderContext>, mut after_
     let first = rc.lock().unwrap().min_samples();
     let (w, h) = (s.image.width, s.image.height);
     for k in first..s.render.samples_per_pixel() {
-        let (image, rays) = render_pass(s, flat, k);
+        let (image, rays, stats) = render_pass_with_stats(s, flat, k);
         let mut rc = rc.lock().unwrap();
+        rc.schedule.merge(&stats);
         for y in 0..h {
             for x in 0..w {
                 // A pixel a resumed state has already taken past k (another integrator's

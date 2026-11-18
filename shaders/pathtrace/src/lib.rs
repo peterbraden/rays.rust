@@ -157,6 +157,8 @@ pub const MAT_CONDUCTOR: u32 = 3;
 pub const MAT_EMITTER: u32 = 4;
 pub const MAT_METAL: u32 = 5;
 pub const MAT_CHECKER: u32 = 6;
+/// A material the kernels have no code for: the host shades the vertex (`PATH_HOST`).
+pub const MAT_HOST: u32 = 7;
 /// Hits nearer than this are not hazed (as the renderer's `AERIAL_PERSPECTIVE_FROM`).
 pub const AERIAL_FROM: f32 = 100.0;
 /// No record (`Params::air`), table (`AIR_TABLES`) or moon.
@@ -1875,6 +1877,15 @@ pub const PATH_ACTIVE: u32 = 1;
 pub const PATH_SPECULAR: u32 = 2;
 pub const PATH_SCATTERED: u32 = 4;
 pub const PATH_ADDED: u32 = 8;
+/// Waiting for the host: its ray hit a material the kernels have no code for (`MAT_HOST`), so
+/// it is stopped at the hit, which it keeps (`hit`, `state.z`), and in the host's queue. The
+/// host shades the vertex with the renderer's own material and queues the path again, or ends
+/// it (the renderer's `gpu::host`).
+pub const PATH_HOST: u32 = 16;
+/// The last vertex counted the lights (area lights, the sun) wholly by sampling them, as some
+/// of the host's materials do (the renderer's `LightSampling::Exclusive`): one the ray finds
+/// adds nothing, though a sky does in full.
+pub const PATH_LIGHTS_COUNTED: u32 = 32;
 
 impl PathState {
     /// Pixel `index`'s path in pass `pass` from its camera ray.
@@ -1984,6 +1995,7 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
     let mut rng = p.state.x;
     let flags_p = p.state.y;
     let specular = flags_p & PATH_SPECULAR != 0;
+    let counted = flags_p & PATH_LIGHTS_COUNTED != 0;
     let (mut q0, mut q1) = (SkyQuery::NONE, SkyQuery::NONE);
     let max_depth = s.params.dims.w;
     let flags = s.params.offs2.w;
@@ -1994,12 +2006,12 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
     if hit.prim == NONE {
         // The sky, weighted against sampling it if the last vertex did, and the sun's disc.
         let mut w = 1.0;
-        if !specular && flags & FLAG_SAMPLE_ENV != 0 {
+        if !specular && !counted && flags & FLAG_SAMPLE_ENV != 0 {
             w = power_heuristic(prev_pdf, env_pdf(s, rd));
         }
         q0 = SkyQuery::sky(ro, rd, beta * w);
         if flags & FLAG_SUN != 0 {
-            let ws = if specular { 1.0 } else { power_heuristic(prev_pdf, sun_disc_pdf(s, rd)) };
+            let ws = if specular { 1.0 } else if counted { 0.0 } else { power_heuristic(prev_pdf, sun_disc_pdf(s, rd)) };
             l += beta * sun_disc(s, ro, rd) * ws;
         }
         return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
@@ -2020,10 +2032,17 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
         let mut w = 1.0;
         if !specular && flags & FLAG_SAMPLE_LIGHTS != 0 && prim.info.z > 0 {
             let lp = emitter_probability(s, prim.info.z - 1) * light_pdf(s, hit.prim, ro, point, hit_ng);
-            w = power_heuristic(prev_pdf, lp);
+            w = if counted { 0.0 } else { power_heuristic(prev_pdf, lp) };
         }
         l += beta * le * w;
         return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
+    }
+    if mat.kind == MAT_HOST {
+        // Stopped here for the host, with the hit and the haze before it.
+        let (mut parked, a, b) = finish(p, ro, rd, beta, l, rays, rng, flags_p | PATH_HOST, prev_pdf, depth, q0, q1);
+        parked.state.z = hit.prim;
+        parked.hit = p.hit;
+        return (parked, a, b);
     }
     let wo = -rd;
     let ng = if hit_ng.dot(wo) < 0.0 { -hit_ng } else { hit_ng };
@@ -2092,10 +2111,10 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
             return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
         }
         beta *= attenuate;
-        return carry_on(p, next_from, next_dir.normalize(), beta, l, rays, rng, flags_p | PATH_SPECULAR, prev_pdf, depth + 1, q0, q1);
+        return carry_on(p, next_from, next_dir.normalize(), beta, l, rays, rng, (flags_p | PATH_SPECULAR) & !PATH_LIGHTS_COUNTED, prev_pdf, depth + 1, q0, q1);
     }
 
-    let flags_p = (flags_p | PATH_SCATTERED) & !PATH_SPECULAR;
+    let flags_p = (flags_p | PATH_SCATTERED) & !(PATH_SPECULAR | PATH_LIGHTS_COUNTED);
     // Direct light, one shadow ray at a time, with one evaluation of the lobe and one call
     // of `occluded` (so one copy of each once rust-gpu inlines everything): every point
     // light, then the sun, one area light and the sky. Each gives a direction, a distance,
@@ -2235,11 +2254,20 @@ fn pixel(gid: UVec3, params: &Params) -> Option<usize> {
 // buffer the next dispatch is read from (a buffer bound for writing can't also be a
 // dispatch's arguments), and a fresh header over the side just emptied.
 //
+// A third queue, the host's, takes the paths a round can't advance: those at a material the
+// kernels have no code for. They wait there, out of both sides, until the rounds are done and
+// the host reads them (`HOST_QUEUE`).
+//
 // Every access to the buffer is atomic: naga gives a buffer touched by atomic instructions
 // an atomic element type, as WGSL and Metal require.
 
-/// Words in the queue buffer before the two sides' items: a header each.
-pub const QUEUE_HEADER: u32 = 8;
+/// Words in the queue buffer before the queues' items: a header each for the two sides and
+/// the host's queue.
+pub const QUEUE_HEADER: u32 = 12;
+/// The host's queue, after the two sides: the paths stopped at a material the kernels have no
+/// code for (`PATH_HOST`), for the host to read once the rounds are done. Only its count is
+/// kept, as no kernel is dispatched over it.
+pub const HOST_QUEUE: u32 = 2;
 /// In a side's header, after the dispatch's three words.
 pub const QUEUE_COUNT: u32 = 3;
 /// The most workgroups a dispatch may have in one dimension (WebGPU's default limit).
@@ -2301,6 +2329,15 @@ mod queue {
             }
         }
     }
+
+    /// Append `pixel` to the host's queue.
+    pub fn push_host(queue: &mut [u32], pixel: u32, params: &Params) {
+        unsafe {
+            let slot = atomic_i_add::<u32, SCOPE, SEMANTICS>(queue.get_unchecked_mut((HOST_QUEUE * 4 + QUEUE_COUNT) as usize), 1);
+            atomic_store::<u32, SCOPE, SEMANTICS>(
+                queue.get_unchecked_mut((QUEUE_HEADER + HOST_QUEUE * params.dims.x * params.dims.y + slot) as usize), pixel);
+        }
+    }
 }
 
 /// What each queued path's ray hits (`intersect`): a round's first kernel, small, and all of
@@ -2352,6 +2389,9 @@ pub fn bounce_paths(
     queries[2 * index + 1] = q1;
     if next.state.y & PATH_ACTIVE != 0 {
         queue::push(queue, pixel, params);
+    }
+    if next.state.y & PATH_HOST != 0 {
+        queue::push_host(queue, pixel, params);
     }
 }
 

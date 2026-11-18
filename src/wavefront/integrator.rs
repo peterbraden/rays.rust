@@ -556,6 +556,36 @@ fn host_bounce(p: &mut Path, s: &Scene, flat: &FlatScene, object: u32, h: &Hit) 
     p.depth += 1;
 }
 
+/// A vertex of a path kept elsewhere (the GPU's: `gpu::host`), for `host_vertex`: the ray that
+/// arrived, the throughput, and what the vertex before did; after it, the next ray, or `done`,
+/// and in `l` the light the vertex added.
+pub struct HostVertex {
+    pub ray: Ray,
+    pub beta: Color,
+    pub l: Color,
+    pub depth: u32,
+    pub specular: bool,
+    pub lights_counted: bool,
+    pub prev_pdf: f64,
+    pub scattered: bool,
+    pub done: bool,
+}
+
+/// `host_bounce` for a path kept elsewhere, at `hit`, drawing its numbers from `sampler`.
+/// Nothing if the hit's material is one the stages shade.
+pub fn host_vertex(s: &Scene, flat: &FlatScene, v: &mut HostVertex, hit: &Hit, sampler: crate::sobol::SampleState) {
+    let FlatMaterial::Host { object } = flat.hit_material(hit.prim) else { return };
+    let mut p = Path {
+        pixel: 0, ray: v.ray, beta: v.beta, l: v.l, weight: 1., depth: v.depth, specular: v.specular, prev_pdf: v.prev_pdf, sampler,
+        scattered: v.scattered, lights_counted: v.lights_counted, hit: Some(*hit), done: false,
+    };
+    host_bounce(&mut p, s, flat, *object, hit);
+    *v = HostVertex {
+        ray: p.ray, beta: p.beta, l: p.l, depth: p.depth, specular: p.specular, lights_counted: p.lights_counted, prev_pdf: p.prev_pdf,
+        scattered: p.scattered, done: p.done,
+    };
+}
+
 /// Whether the path goes on after a bounce of weight `attenuate`, by the scene's Russian
 /// roulette (as `trace::continuation_weight`); a survivor's throughput is scaled to match.
 fn continue_with(p: &mut Path, s: &Scene, attenuate: &Color) -> bool {
@@ -720,7 +750,25 @@ pub mod tests {
     /// light, the sky), whose weights the two kinds of vertex must agree on.
     #[test]
     fn test_host_materials_agree_with_the_path_tracer() {
-        let s = SceneFile::from_string(r#"{
+        let s = host_scene();
+        let flat = FlatScene::build(&s).unwrap();
+        assert_eq!(flat.hosts.len(), 3);
+        let n = 256;
+        let (_, _, stats) = render_pass_with_stats(&s, &flat, 0);
+        assert!(stats.stage(Stage::Host).items > 0 && stats.stage(Stage::Shade).items > 0);
+        let (w, h) = (s.image.width, s.image.height);
+        let (a, b) = (tiles(&mean_image(&s, n), w, h, 3, 2), tiles(&path_image(&s, n), w, h, 3, 2));
+        for t in 0..6 {
+            for ch in 0..3 {
+                assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "tile {} channel {}: wavefront {} vs path {}", t, ch, a[t][ch], b[t][ch]);
+            }
+        }
+    }
+
+    /// Three host materials (a texture, a layered one, rough glass) among two the stages
+    /// shade and an area light, under a sun, a point light and a sky.
+    pub fn host_scene() -> Scene {
+        SceneFile::from_string(r#"{
             "width": 24, "height": 16, "background": [0.2, 0.25, 0.3], "max_depth": 6, "path_termination": "russian_roulette",
             "sun": { "direction": [-1, 2, -1], "intensity": 2 },
             "lights": [ { "location": [1, 3, -1], "intensity": 4 } ],
@@ -741,19 +789,7 @@ pub mod tests {
                 { "type": "sphere", "location": [0, 0.3, -1.2], "radius": 0.3, "material": "D" },
                 { "type": "quad", "points": [[-0.5, 2.5, 0.5], [0.5, 2.5, 0.5], [-0.5, 2.5, 1.5], [0.5, 2.5, 1.5]], "material": "E" }
             ]
-        }"#.to_string());
-        let flat = FlatScene::build(&s).unwrap();
-        assert_eq!(flat.hosts.len(), 3);
-        let n = 256;
-        let (_, _, stats) = render_pass_with_stats(&s, &flat, 0);
-        assert!(stats.stage(Stage::Host).items > 0 && stats.stage(Stage::Shade).items > 0);
-        let (w, h) = (s.image.width, s.image.height);
-        let (a, b) = (tiles(&mean_image(&s, n), w, h, 3, 2), tiles(&path_image(&s, n), w, h, 3, 2));
-        for t in 0..6 {
-            for ch in 0..3 {
-                assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "tile {} channel {}: wavefront {} vs path {}", t, ch, a[t][ch], b[t][ch]);
-            }
-        }
+        }"#.to_string())
     }
 
     /// The wavefront integrator and the recursive tracer estimate the same image.

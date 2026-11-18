@@ -365,7 +365,7 @@ fn main() {
     };
     if on_gpu {
         #[cfg(feature = "gpu")]
-        gpu.as_mut().unwrap().render(&s, &rcmtx, after_pass);
+        gpu.as_mut().unwrap().render(&s, flat.as_ref().unwrap(), &rcmtx, after_pass);
     } else if let Some(flat) = &flat {
         wavefront::integrator::render(&s, flat, &rcmtx, |rc| {
             pb.set_position(rc.progress_percentage(&s) as u64);

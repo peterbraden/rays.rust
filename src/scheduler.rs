@@ -75,6 +75,19 @@
 //! (`Stats::device_seconds`), beside the host's own part (generating camera rays, which is
 //! still the CPU's work). On the CPU a stage's time is the sum over threads, not wall time.
 //!
+//! # What is here now: the CPU queue
+//!
+//! The first queue with an executor other than the kernels. A material that isn't data stays
+//! in a flattened scene as `wavefront::flat::FlatMaterial::Host`, and a path at one is work
+//! for the renderer's own code: in the CPU's integrator, the last of the shading stage's
+//! sort (`integrator::host_bounce`); on the GPU, a third queue the kernels fill and the host
+//! drains when a pass's rounds are done, shading each vertex and queueing the path again
+//! (`gpu::host`, which has the policy's detail and what it costs). Both count it as
+//! `Stage::Host`. The policy is fixed for now: drain after the rounds, every pass. What the
+//! scheduler has to decide later is when (a read of the device is a synchronisation, in a
+//! browser a frame's delay), and whether the device waits (it does: a pass can't end with
+//! paths outstanding until paths carry their own sample, the next step).
+//!
 //! # What isn't here yet, and what the reading says about it
 //!
 //! Stage queues, and why. Laine, Karras and Aila's argument for a wavefront over one large
@@ -200,7 +213,9 @@ pub struct Stats {
     /// Passes (a sample of every planned pixel) recorded.
     pub passes: u64,
     /// Paths alive at the start of each round of a pass, added up over the passes: the first
-    /// is every path generated, each later one those that went on. How quickly it falls is
+    /// is every path generated, each later one those that went on. (On the GPU, of a pass's
+    /// first run of rounds: a path waiting for the host isn't alive, and the rounds it takes
+    /// after the host has shaded it count in the stages' items only.) How quickly it falls is
     /// how much a queue of live paths saves over dispatching every pixel every round.
     pub live: Vec<u64>,
     /// Time the device took for whole blocks of passes, where stages can't be timed apart

@@ -409,6 +409,12 @@ impl FlatScene {
     }
 
     /// The material of a hit's primitive (bounded or plane).
+    /// A primitive by a hit's index: bounded, or after those a plane.
+    pub fn prim(&self, prim: u32) -> &Prim {
+        let n = self.prims.len();
+        if (prim as usize) < n { &self.prims[prim as usize] } else { &self.planes[prim as usize - n].0 }
+    }
+
     /// A primitive's place among its object's (0 for a plane, or where no material needs it).
     pub fn face(&self, prim: u32) -> u32 {
         self.prim_face.get(prim as usize).copied().unwrap_or(0)

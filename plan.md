@@ -1669,6 +1669,29 @@ the host's.
      and worlds.json pixel for pixel (one deterministic vertex, the same Sobol' points).
      The host's share of the time is now a number: textures.json 6.6 s of host shading for
      1.3M vertices, 5 us each.
+   - Done, the GPU's side (natively; `gpu::host` has the design): `shade` stops a path at a
+     `MAT_HOST` material (`PATH_HOST`, keeping its hit) and `bounce_paths` appends it to a
+     third queue in the queue buffer (`HOST_QUEUE`; no new binding). After a pass's rounds
+     the host reads the queue and the paths back (`GpuRenderer::pass_with_host`), shades
+     each vertex in parallel with `integrator::host_vertex` (the hit refound in f64 on the
+     kernel's primitive; a Sobol' point keyed by pixel, sample and depth), writes the paths
+     back, and runs the rounds again over those that go on, until none waits. A new flag,
+     `PATH_LIGHTS_COUNTED`, carries `LightSampling::Exclusive` to the next vertex.
+     Verified on lavapipe: `test_host_shades_what_the_kernels_cant` (the wavefront
+     integrator's picture within 5% a tile; also through the WGSL), scenes without host
+     materials pixel for pixel as before (5 scenes) and in a browser (FLIP 0.0025 against
+     native), and at 160 x 90, 64 spp against the path tracer: mean FLIP 0.0135 rocks, 0.030
+     bumps, 0.029 pbrt-materials, 0.023 textures, each the same as the wavefront
+     integrator's.
+   - Measured (llvmpipe, so the device's times mean little): textures.json, 64 passes: 384
+     reads of the host's queue (6 a pass), 1.31M host vertices in 1.0 s of wall time,
+     against 2.07M path-rounds on the device in 1.2 s.
+   - Not yet: in a browser (a pass there is queued without waiting on the device; the host
+     loop needs the page's pass to be asynchronous, and the scene's files and the scene
+     itself in the GPU worker, which it has); shapes the kernels lack (intersection on the
+     host: a queue before `intersect_paths`, and a host that can trace); reading back only
+     the waiting paths (the whole paths buffer is copied each time: 96 bytes a pixel);
+     any policy (every pass drains after its rounds, and the device idles meanwhile).
 4. Regeneration and width. A path's sample index moves from the pass's parameters into the
    path, so a slot freed by a finished path takes a new sample at once and the wavefront
    stays full (van Antwerpen; Laine et al.), within a memory budget for the wavefront.

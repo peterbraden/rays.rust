@@ -10,7 +10,7 @@
   "camera": {
     "location": [
       0,
-      2,
+      10,
       0
     ],
     "lookat": [
@@ -32,8 +32,8 @@
     {
       "type": "ocean",
       "wind": [
-        7,
-        2
+        11.54,
+        3.3
       ],
       "detail_center": [
         0,

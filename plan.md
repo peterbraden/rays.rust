@@ -1722,9 +1722,15 @@ the host's.
      Pixel for pixel as before; 320 x 180, 64 spp on llvmpipe, against one lane and whole
      reads: rocks.json 9.4 s for 11.7 s, bumps.json 8.1 for 10.5, pbrt-materials.json 7.0
      for 9.8, textures.json 7.5 for 7.3 (every path's first vertex is the host's there).
-   - Not yet: lanes in a browser (the page still queues a pass a sample; lanes would give a
-     frame several samples for the dispatches of one); the budget from the device's
-     memory rather than a constant.
+   - In a browser: the scene builder's GPU worker queues a frame's samples in one pass
+     (`Renderer::advance`), where the wavefront has the lanes. Checked in headless Chromium
+     (the page's GPU, an edit, an orbit, a pick, a refused scene); not timed there.
+   - Not yet: the budget from the device's memory rather than a constant; host materials
+     in a browser. The second needs a decision first: there the host's shading would run on
+     the GPU worker's one thread, while the page's CPU workers, which can shade those
+     vertices in parallel, sit idle or render the whole picture themselves. That is two
+     executors for one queue, which is what the scheduler's model is for, and the page's
+     side of it (`web/app.js`) has to be part of the design.
 5. Order within and between queues. Shading queues by material kind, and a sort key inside
    a queue (kind, then texture, then mesh and face, as Eisenacher et al.; or a ray's origin
    and direction). To measure before adopting: Meister et al. find reordering makes tracing

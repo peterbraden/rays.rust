@@ -88,6 +88,20 @@ impl Renderer {
         Ok(())
     }
 
+    /// Queue the next `most` passes together, or as many as the wavefront has lanes for
+    /// (`GpuRenderer::lanes`): the same picture as that many calls of `pass`, for the
+    /// dispatches of one. Returns how many it queued, at once. Not during a readback, as
+    /// `pass`.
+    pub fn advance(&self, most: usize) -> Result<usize, JsValue> {
+        let k = self.inner.passes.get();
+        let mut gpu = self.inner.gpu.try_borrow_mut().map_err(|_| JsValue::from_str("a readback is in progress"))?;
+        let n = most.min(rays::scheduler::lanes(gpu.lanes)).max(1);
+        let pixels = self.inner.scene.image.width * self.inner.scene.image.height;
+        gpu.dispatch_block(&self.inner.scene, &vec![k; pixels], &vec![n; pixels]);
+        self.inner.passes.set(k + n);
+        Ok(n)
+    }
+
     /// The image so far, finished and encoded for display as the command line's PNG is: RGBA,
     /// top row first.
     pub async fn image(&self) -> Result<Vec<u8>, JsValue> {

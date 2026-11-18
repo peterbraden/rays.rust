@@ -59,7 +59,8 @@ async function render(mine, json) {
         const [width, height] = [r.width(), r.height()];
         self.postMessage({ type: 'ready', gen: mine, adapter: r.adapter(), width, height });
         while (gen === mine && r.passes() < MAX_PASSES) {
-            for (let i = 0; i < PASSES_PER_FRAME; i++) { r.pass(); }
+            // Together, where the wavefront is wide enough: the dispatches of one pass.
+            for (let left = PASSES_PER_FRAME; left > 0;) { left -= r.advance(left); }
             // Awaiting the readback is also where a newer scene gets heard.
             const pixels = await r.image();
             if (gen !== mine) { return; }

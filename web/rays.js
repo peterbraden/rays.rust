@@ -92,7 +92,7 @@ export async function instantiate() {
         /**
          * The scene on the GPU (WebGPU), if this browser has one and the scene can be
          * flattened for it; throws with the reason otherwise. See `Renderer` in web/src/lib.rs:
-         * `pass()` queues a sample of every pixel, `await image()` reads the picture back.
+         * `pass()` queues a sample of every pixel (`advance(n)` up to n of them together), `await image()` reads the picture back.
          */
         async gpuRenderer(json) {
             if (dead) { throw new RaysError('This renderer instance has stopped after an error.'); }

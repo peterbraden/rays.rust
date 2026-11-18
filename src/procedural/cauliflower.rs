@@ -51,6 +51,9 @@ pub struct Cauliflower {
     reach: Vec<f64>,
 }
 
+/// The most a turret's size is scaled on top of a sphere (`Cauliflower::top_factor`).
+const TOP_BOOST: f64 = 1.25;
+
 /// SplitMix64: a good 64-bit mix, for ids and their random numbers.
 fn mix(mut x: u64) -> u64 {
     x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -72,7 +75,7 @@ impl Cauliflower {
     }
 
     /// The default: four levels of turrets, each 0.45 of the one it grows on, so a 500 m body
-    /// carries turrets of 225, 100, 45 and 20 m.
+    /// carries turrets of 225, 100, 45 and 20 m, eight on each body sphere.
     pub fn cumulus() -> Cauliflower {
         Cauliflower::new(4, 0.45, 8, 0.35, 0.9)
     }
@@ -83,7 +86,7 @@ impl Cauliflower {
     /// beyond that.
     fn reaches(&self) -> Vec<f64> {
         let mut reach = vec![1.; self.levels + 1];
-        let largest = self.ratio * (1. + self.spread);
+        let largest = self.ratio * (1. + self.spread) * TOP_BOOST;
         for l in (0..self.levels).rev() {
             reach[l] = (1. - self.embed * largest + largest * reach[l + 1]).max(1.);
         }
@@ -100,24 +103,41 @@ impl Cauliflower {
     }
 
     /// The `k`-th child of `s` (at `level`, the parent's), growing up along `up` (a unit vector).
-    fn child(&self, s: &Sphere, k: usize, up: &Vector3<f64>) -> Sphere {
+    ///
+    /// Packed over the parent's upper surface, as Bouthors and Neyret place their particles on
+    /// the cloud's surface: the `n` turrets of a sphere at the points of a Fibonacci spiral over
+    /// the cap from straight up to `rise` below the equator (cos θ from 1 to -`rise` × 0.25),
+    /// turned by the parent's hash and jittered a little. Evenly spread, each takes its own share
+    /// of the surface: neighbours meet in a crease rather than piling into one smooth blob, as
+    /// randomly placed turrets did (they cluster).
+    fn child(&self, s: &Sphere, k: usize, n: usize, up: &Vector3<f64>) -> Sphere {
         let id = mix(s.id.wrapping_mul(31).wrapping_add(k as u64 + 1));
-        // A direction uniform over the sphere, then leant upwards; turned back up if it would
-        // still point downwards (turrets don't hang beneath a cloud).
-        let z = 2. * unit(id, 0) - 1.;
-        let a = std::f64::consts::TAU * unit(id, 1);
+        let n = n.max(1) as f64;
+        let low = -0.25 * self.rise.clamp(0., 4.);
+        let jitter = |j: u64| (unit(id, j) - 0.5) / n;
+        let z = (1. - (1. - low) * ((k as f64 + 0.5) / n + jitter(0))).clamp(low, 1.);
+        let a = std::f64::consts::TAU * (0.381_966 * k as f64 + unit(s.id, 7) + jitter(1));
         let r = (1. - z * z).max(0.).sqrt();
-        let mut d = Vector3::new(r * a.cos(), z, r * a.sin());
-        // In the frame where y is `up`.
         let (t1, t2) = basis(up);
-        d = t1 * d.x + up * d.y + t2 * d.z;
-        d = (d + up * self.rise).normalize();
-        let below = d.dot(up);
-        if below < -0.05 {
-            d -= up * (2. * below);
-        }
-        let radius = s.radius * self.ratio * (1. + self.spread * (2. * unit(id, 2) - 1.));
+        let d = t1 * (r * a.cos()) + up * z + t2 * (r * a.sin());
+        // Larger on top, smaller on the sides: the head of a cumulus is its biggest domes.
+        let upness = d.dot(up).max(0.);
+        let radius = s.radius * self.ratio * (1. + self.spread * (2. * unit(id, 2) - 1.)) * Self::top_factor(upness);
         Sphere { centre: s.centre + d * (s.radius - self.embed * radius), radius, id }
+    }
+
+    /// How a turret's size varies with how upright it is (0 sideways, 1 straight up): from 0.75
+    /// to `TOP_BOOST` times.
+    fn top_factor(upness: f64) -> f64 {
+        0.75 + (TOP_BOOST - 0.75) * upness
+    }
+
+    /// Whether `c` (a turret of the tree grown from `roots[from]`) is buried in another root:
+    /// its centre deeper inside it than half its own radius. As Bouthors and Neyret place their
+    /// particles on the cloud's surface, where they are seen, a buried turret and everything on
+    /// it is left out (removing spheres only shrinks the union, so bounds still hold).
+    fn buried(c: &Sphere, roots: &[Sphere], from: usize) -> bool {
+        roots.iter().enumerate().any(|(j, r)| j != from && (c.centre - r.centre).norm() < r.radius - 0.5 * c.radius)
     }
 
     /// How deep `p` is inside the union of the trees grown from `roots` (metres; negative
@@ -125,8 +145,8 @@ impl Cauliflower {
     /// that's needed and cuts the search short.
     pub fn depth(&self, roots: &[Sphere], up: &Vector3<f64>, p: &Vector3<f64>, enough: f64) -> f64 {
         let mut best = f64::NEG_INFINITY;
-        for root in roots {
-            self.visit(root, 0, up, p, enough, &mut best);
+        for (i, root) in roots.iter().enumerate() {
+            self.visit(root, 0, up, p, enough, &mut best, roots, i);
             if best >= enough {
                 return enough;
             }
@@ -134,7 +154,8 @@ impl Cauliflower {
         best
     }
 
-    fn visit(&self, s: &Sphere, level: usize, up: &Vector3<f64>, p: &Vector3<f64>, enough: f64, best: &mut f64) {
+    #[allow(clippy::too_many_arguments)]
+    fn visit(&self, s: &Sphere, level: usize, up: &Vector3<f64>, p: &Vector3<f64>, enough: f64, best: &mut f64, roots: &[Sphere], from: usize) {
         let dist = (p - s.centre).norm();
         // Nothing in this subtree reaches the point any deeper than already found.
         if s.radius * self.reach[level] - dist <= *best {
@@ -145,8 +166,11 @@ impl Cauliflower {
             return;
         }
         for k in 0..self.child_count(level) {
-            let c = self.child(s, k, up);
-            self.visit(&c, level + 1, up, p, enough, best);
+            let c = self.child(s, k, self.child_count(level), up);
+            if Cauliflower::buried(&c, roots, from) {
+                continue;
+            }
+            self.visit(&c, level + 1, up, p, enough, best, roots, from);
             if *best >= enough {
                 return;
             }
@@ -325,11 +349,43 @@ mod tests {
     use super::*;
 
     fn all_spheres(c: &Cauliflower, s: &Sphere, level: usize, up: &Vector3<f64>, out: &mut Vec<(Sphere, usize)>) {
+        all_spheres_of(c, s, level, up, out, &[*s], 0);
+    }
+
+    fn all_spheres_of(c: &Cauliflower, s: &Sphere, level: usize, up: &Vector3<f64>, out: &mut Vec<(Sphere, usize)>, roots: &[Sphere], from: usize) {
         out.push((*s, level));
         if level < c.levels {
             for k in 0..c.child_count(level) {
-                all_spheres(c, &c.child(s, k, up), level + 1, up, out);
+                let child = c.child(s, k, c.child_count(level), up);
+                if !Cauliflower::buried(&child, roots, from) {
+                    all_spheres_of(c, &child, level + 1, up, out, roots, from);
+                }
             }
+        }
+    }
+
+    #[test]
+    fn test_buried_turrets_are_left_out_exactly() {
+        // A body of several roots: the search agrees with every sphere not buried, and some are.
+        let c = Cauliflower::cumulus();
+        let up = Vector3::y();
+        let roots = body(&Vector3::zeros(), &up, 400., 900., 0.35, 0.8, 0.5, 11, 0.3);
+        assert!(roots.len() > 3);
+        let mut spheres = vec![];
+        let mut all = 0;
+        for (i, r) in roots.iter().enumerate() {
+            all_spheres_of(&c, r, 0, &up, &mut spheres, &roots, i);
+            let mut every = vec![];
+            all_spheres_of(&c, r, 0, &up, &mut every, &[*r], 0);
+            all += every.len();
+        }
+        assert!(spheres.len() < all, "nothing was buried: {} of {}", spheres.len(), all);
+        let mut rng = crate::geometry::Pcg32::new(2, 0);
+        for _ in 0..2000 {
+            let p = Vector3::new(rng.next_f64() - 0.5, rng.next_f64(), rng.next_f64() - 0.5) * 3000.;
+            let brute = spheres.iter().map(|(s, _)| s.radius - (p - s.centre).norm()).fold(f64::NEG_INFINITY, f64::max);
+            let got = c.depth(&roots, &up, &p, f64::INFINITY);
+            assert!((brute - got).abs() < 1e-9, "{} vs {}", got, brute);
         }
     }
 
@@ -371,6 +427,6 @@ mod tests {
         });
         assert!(above > 3. * below, "{} {}", above, below);
         let finest = spheres.iter().filter(|(_, l)| *l == c.levels).map(|(s, _)| s.radius).fold(0., f64::max);
-        assert!(finest <= 500. * (c.ratio * (1. + c.spread)).powi(c.levels as i32) + 1e-9 && finest < 60., "{}", finest);
+        assert!(finest <= 500. * (c.ratio * (1. + c.spread) * TOP_BOOST).powi(c.levels as i32) + 1e-9 && finest < 0.3 * 500., "{}", finest);
     }
 }

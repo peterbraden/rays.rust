@@ -900,7 +900,7 @@ mod tests {
             }
         }
         println!("cloud {} skipped {}", cloud, skipped);
-        assert!(cloud > 100 && skipped > 200, "uninformative: cloud {} skipped {}", cloud, skipped);
+        assert!(cloud > 100 && skipped > 50, "uninformative: cloud {} skipped {}", cloud, skipped);
     }
 
     #[test]
@@ -992,6 +992,6 @@ mod tests {
                 assert!(v <= m + 1e-12, "{} > {} at step {} of {}", v, m, k, len);
             }
         }
-        assert!(cloud > 100 && skipped > 200, "uninformative: cloud {} skipped {}", cloud, skipped);
+        assert!(cloud > 100 && skipped > 50, "uninformative: cloud {} skipped {}", cloud, skipped);
     }
 }

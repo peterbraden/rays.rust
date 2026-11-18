@@ -47,7 +47,7 @@ families:
 | --- | --- | --- |
 | `low` | stratus, stratocumulus, cumulus humilis, based at the condensation level | `fields::Stratiform`: noise (Nubis recipe) for sheets; cumulus as cauliflower heaps (`fields::Heaps`, `procedural::cauliflower`: trees of spheres, domes on domes, crisp edges, flat bases) |
 | `mid` | altostratus, nimbostratus, altocumulus | `fields::Stratiform` |
-| `convective` | cumulus congestus and cumulonimbus towers, anvils spread downwind, overshooting tops, anvil shields over clusters | `fields::Convective` (new) |
+| `convective` | cumulus congestus and cumulonimbus towers, anvils spread downwind, overshooting tops, anvil shields over clusters | `fields::Convective`: towers as clusters of columns of thermals (`cauliflower::tower`), their tops freezing smooth; anvils and shields of thinner ice |
 | `high` | cirrus along the jets and ahead of warm fronts, thickening to cirrostratus | Hogan and Kew's `GlobalCirrus`, its coverage from the weather |
 | `rain` | rain and snow from nimbostratus, shafts beneath cumulonimbus, virga in dry air | `fields::Rain` (new; Marshall-Palmer extinction) |
 
@@ -87,11 +87,19 @@ part of the weather changes continuously with time:
 - **Shapes move and evolve within the moving cover.**
   - Low and mid cloud drift round the planet's axis at their `wind` (8 and 15 m/s). They boil
     as the noise rises through them at `rise` (0.3 and 0.1 m/s).
+  - Cumulus heaps live for `lifetime` (2400 s) each: born as low, translucent wisps at the
+    condensation level, they rise and fill out into crisp heaps by a third of their life, then
+    fray and thin from 70% and are gone, and another is born elsewhere in the cell. So a sky
+    of cumulus always holds clouds at every stage (`cauliflower::Surface::condensed`).
   - Convective cells drift at the convective `wind` (10 m/s). Each lives for `lifetime`
     (5400 s):
-    - its tower rises through the first 40% of its life;
+    - its tower rises through the first 40% of its life, forming as wisps over the first
+      fifth; its thermals are laid out for its full height and only its heads rise, so it
+      grows smoothly;
+    - a storm that reaches the tropopause freezes over the upper third of its column
+      (calvus: the turrets smooth over, the edges soften);
     - a storm that reaches the tropopause then spreads its anvil and rains;
-    - the column rains out and fades, then the anvil fades;
+    - the column rains out, fraying and thinning, then the anvil fades;
     - a new storm starts somewhere else in the cell.
   - The cirrus runs on Hogan and Kew's own clock (`time`, `evolution_period`).
   - Rain streaks fall at `fall_speed` (6 m/s).
@@ -136,7 +144,7 @@ Every parameter is optional.
 
   Some families take more:
   - `low`: `heaps`, `false` for noise alone, or an object of the cauliflower cumulus's
-    settings: `cell` (m between clouds), `edge` (m), `lift` (how high the body's spheres stand
+    settings: `cell` (m between clouds), `lifetime` (s), `edge` (m), `lift` (how high the body's spheres stand
     above the flat base, as a fraction of their radius), `lean` (downwind per metre of height),
     `skew` (of the clouds' depths: many small, few large), `billows` (scales the pyroclastic
     displacement), `wisps` and `wisp_size` (m: fraying by vector noise), and the sphere tree's

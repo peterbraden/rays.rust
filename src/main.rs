@@ -133,6 +133,7 @@ mod procedural {
     pub mod terrain;
     pub mod mammatus;
     pub mod cumulonimbus;
+    pub mod lightning;
     pub mod precipitation;
     pub mod overcast;
     pub mod hill_cloud;

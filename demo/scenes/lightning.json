@@ -1,0 +1,141 @@
+{
+  "width": 960,
+  "height": 600,
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 24,
+  "path_termination": "russian_roulette",
+  "output": {
+    "tonemap": "reinhard",
+    "exposure": 500,
+    "glare": true
+  },
+  "camera": {
+    "location": [
+      0,
+      15,
+      0
+    ],
+    "lookat": [
+      1500,
+      2600,
+      10000
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.9
+  },
+  "sun": {
+    "intensity": 4.9
+  },
+  "objects": [
+    {
+      "type": "ocean",
+      "wind": [
+        6,
+        2
+      ],
+      "detail_center": [
+        0,
+        0
+      ]
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        0.75,
+        -0.15,
+        0.65
+      ],
+      "crepuscular_rays": true
+    },
+    {
+      "type": "cumulonimbus",
+      "center": [
+        -1500,
+        12000
+      ],
+      "base": 1300,
+      "tropopause": 11500,
+      "cape": 2500,
+      "radius": 3800,
+      "wind_direction": [
+        1,
+        0.1
+      ],
+      "upper_wind": 25,
+      "age": 1500,
+      "flanking": 3,
+      "flank_angle": 100,
+      "albedo": [
+        0.99,
+        0.99,
+        0.99
+      ],
+      "g": 0.85,
+      "oz": true,
+      "similarity_after": 4,
+      "seed": 3
+    },
+    {
+      "type": "precipitation",
+      "base": 1300,
+      "center": [
+        -3000,
+        13500
+      ],
+      "radius": 3500,
+      "coverage": 0.8,
+      "rain_rate": 25,
+      "cell_size": 3000,
+      "shear": 0.15,
+      "wind_direction": [
+        1,
+        0.1
+      ],
+      "seed": 2,
+      "fade": 0.5
+    },
+    {
+      "type": "lightning",
+      "start": [
+        1200,
+        4500,
+        10500
+      ],
+      "ground": 0,
+      "target": [
+        3200,
+        7200
+      ],
+      "seed": 5,
+      "cloud_length": 8000,
+      "radius": 0.4,
+      "shutter": 1,
+      "strokes": 4
+    },
+    {
+      "type": "lightning",
+      "start": [
+        -4500,
+        4000,
+        13000
+      ],
+      "ground": 0,
+      "target": [
+        -6000,
+        12500
+      ],
+      "seed": 8,
+      "cloud_length": 4000,
+      "radius": 0.3,
+      "shutter": 1,
+      "strokes": 2
+    }
+  ]
+}

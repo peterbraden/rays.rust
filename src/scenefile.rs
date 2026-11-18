@@ -858,6 +858,9 @@ impl SceneFile {
             return Some(Arc::new(SceneFile::parse_cumulonimbus(&o)));
         }
 
+        if t == "lightning" {
+            return Some(Arc::new(crate::procedural::lightning::parse_lightning(&o)));
+        }
 
         if t == "overcast" {
             return Some(Arc::new(SceneFile::parse_overcast(&o)));
@@ -3208,6 +3211,18 @@ impl SceneFile {
         }
     }
 
+    /// Lightning is bright on the scale of the scene's sun (`procedural::lightning`): give it
+    /// the sun's intensity, unless it has its own `sun_intensity`.
+    pub fn lightning_follows_sun(sun: &Value, objects: &mut [Value]) {
+        if sun.is_null() {
+            return;
+        }
+        let intensity = SceneFile::parse_number(&sun["intensity"], 1.);
+        for o in objects.iter_mut().filter(|o| o["type"].as_str() == Some("lightning") && o.get("sun_intensity").is_none()) {
+            o["sun_intensity"] = serde_json::json!(intensity);
+        }
+    }
+
     /// With a `"sun"` and a skysphere, the sky is lit by that sun: its brightness is set so its
     /// radiance is the air's per unit of sunlight times the sun's `intensity`
     /// (`skysphere::sky_brightness_for_sun`), on the same scale as the sunlight on everything
@@ -3300,6 +3315,7 @@ impl SceneFile {
 
     pub fn from_scenefile(mut s: SceneFile) -> Scene {
         SceneFile::sky_follows_sun(&s.sun, &mut s.objects);
+        SceneFile::lightning_follows_sun(&s.sun, &mut s.objects);
         let max_bounding = BBox::new( // TODO
             Vector3::new(-1000., -1000., -1000.),
             Vector3::new(1000., 1000., 1000.),
@@ -3308,6 +3324,11 @@ impl SceneFile {
         let sun = SceneFile::parse_sun(&s.sun, &s.objects);
         // The camera's view plane spans tan(angle) over the image's height.
         let pixel_angle = s.camera["angle"].as_f64().map_or(0., |a| a.tan() / SceneFile::parse_int(&s.height, 480) as f64);
+        // Lightning is drawn at least about half a pixel wide (`procedural::lightning`).
+        for o in s.objects.iter_mut().filter(|o| o["type"].as_str() == Some("lightning") && o.get("camera").is_none()) {
+            o["camera"] = s.camera["location"].clone();
+            o["pixel_angle"] = serde_json::json!(pixel_angle);
+        }
         let flare = SceneFile::parse_flare(&s.output, &s.camera, SceneFile::parse_int(&s.width, 640), SceneFile::parse_int(&s.height, 480));
         // For texture filtering: the camera's position, axes and the angle between pixels, shrunk
         // by the samples per pixel (`textures::footprint`).

@@ -211,10 +211,11 @@ fn space_record(tables: &mut Vec<f32>, space: &crate::procedural::space::Space) 
 pub struct GpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    /// The two kernels a pass alternates, each round over the queue of paths still alive: a
-    /// vertex of each, then the light its sky queries find (`pathtrace::bounce_paths`,
-    /// `answer_sky`); and the one that ends a pass, adding every path to the image
-    /// (`add_paths`).
+    /// A round's three kernels, each over the queue of paths still alive: what each path's ray
+    /// hits, the rest of its vertex there, then the light its sky queries find
+    /// (`pathtrace::intersect_paths`, `bounce_paths`, `answer_sky`); and the one that ends a
+    /// pass, adding every path to the image (`add_paths`).
+    intersect_pipeline: wgpu::ComputePipeline,
     bounce_pipeline: wgpu::ComputePipeline,
     sky_pipeline: wgpu::ComputePipeline,
     add_pipeline: wgpu::ComputePipeline,
@@ -569,7 +570,8 @@ impl GpuRenderer {
                 cache: None,
             })
         };
-        let (bounce_pipeline, sky_pipeline, add_pipeline) = (kernel("bounce_paths", &layout), kernel("answer_sky", &layout), kernel("add_paths", &add_layout));
+        let (intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline) =
+            (kernel("intersect_paths", &layout), kernel("bounce_paths", &layout), kernel("answer_sky", &layout), kernel("add_paths", &add_layout));
         let storage = |label: &str, bytes: &[u8]| device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(label), contents: bytes, usage: wgpu::BufferUsages::STORAGE,
         });
@@ -621,7 +623,7 @@ impl GpuRenderer {
             layout: &add_layout,
             entries: &[entry(0, &params_buffers[0]), entry(1, &paths_buffer), entry(2, &accum_buffer)],
         });
-        Ok(GpuRenderer { device, queue, bounce_pipeline, sky_pipeline, add_pipeline, round_groups, add_group, params, params_buffers,
+        Ok(GpuRenderer { device, queue, intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline, round_groups, add_group, params, params_buffers,
             queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, readback, adapter_name })
     }
 
@@ -679,6 +681,8 @@ impl GpuRenderer {
             {
                 let mut pass = encoder.begin_compute_pass(&Default::default());
                 pass.set_bind_group(0, &self.round_groups[side], &[]);
+                pass.set_pipeline(&self.intersect_pipeline);
+                pass.dispatch_workgroups_indirect(&self.dispatch_buffer, 0);
                 pass.set_pipeline(&self.bounce_pipeline);
                 pass.dispatch_workgroups_indirect(&self.dispatch_buffer, 0);
                 pass.set_pipeline(&self.sky_pipeline);

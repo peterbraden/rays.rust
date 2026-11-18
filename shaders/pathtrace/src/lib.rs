@@ -296,10 +296,8 @@ fn fract(x: f32) -> f32 {
 
 #[derive(Copy, Clone)]
 struct Hit {
-    pub t: f32,
+    t: f32,
     prim: u32,
-    ng: Vec3,
-    ns: Vec3,
 }
 
 /// (t, b1, b2, 1) for a hit within (tmin, tmax), else zero.
@@ -411,9 +409,11 @@ fn box_entry(bmin: Vec3, bmax: Vec3, ro: Vec3, inv: Vec3, tmax: f32) -> f32 {
     if far < 0.0 || near > far || near > tmax { INF } else { near }
 }
 
-/// The nearest hit beyond `tmin`, or with `any_hit`, whether anything lies before `tmax`.
-fn trace(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> Hit {
-    let mut best = Hit { t: tmax, prim: NONE, ng: Vec3::ZERO, ns: Vec3::ZERO };
+/// The nearest hit beyond `tmin`, or with `any_hit`, whether anything lies before `tmax`: the
+/// primitive (`NONE` for none) and (t, b1, b2, 1) as `intersect_prim` gives them. Its normals
+/// are `normals`' to find, where it is shaded.
+fn trace(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> (u32, Vec4) {
+    let mut best = Hit { t: tmax, prim: NONE };
     let mut best_h = Vec4::ZERO;
     let np = s.params.counts.x;
     // One loop, and so one copy of `intersect_prim` once rust-gpu inlines everything: a leaf's
@@ -439,7 +439,7 @@ fn trace(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> 
                 best.prim = j;
                 best_h = h;
                 if any_hit {
-                    return best;
+                    return (best.prim, best_h);
                 }
             }
             j += 1;
@@ -483,24 +483,19 @@ fn trace(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> 
             node = near;
         }
     }
-    if best.prim != NONE {
-        let (g, n) = normals(s, best.prim, ro, rd, best_h);
-        best.ng = g;
-        best.ns = n;
-    }
-    best
+    (best.prim, best_h)
 }
 
 /// The traversal alone, for the renderer's tests of it: the nearest hit's distance and
 /// primitive (`u32::MAX` for none) in (tmin, tmax), or any hit's.
 #[cfg(not(target_arch = "spirv"))]
 pub fn nearest(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> (f32, u32) {
-    let h = trace(s, ro, rd, tmin, tmax, any_hit);
-    (h.t, h.prim)
+    let (prim, h) = trace(s, ro, rd, tmin, tmax, any_hit);
+    (if prim == NONE { tmax } else { h.x }, prim)
 }
 
 fn occluded(s: &Scene, ro: Vec3, rd: Vec3, tmax: f32) -> bool {
-    trace(s, ro, rd, 0.0, tmax, true).prim != NONE
+    trace(s, ro, rd, 0.0, tmax, true).0 != NONE
 }
 
 // ---- Tables: emitters, the sky and aerial perspective. ----
@@ -1789,8 +1784,11 @@ pub struct PathState {
     pub beta: Vec4,
     /// The light gathered so far, and the rays traced.
     pub l: Vec4,
-    /// The random numbers' state, and `PATH_*` flags.
+    /// The random numbers' state, `PATH_*` flags, and the primitive its ray hits (`NONE` for
+    /// none), once `intersect` has found it.
     pub state: UVec4,
+    /// That hit: its distance and barycentric coordinates (`intersect_prim`).
+    pub hit: Vec4,
 }
 
 /// `PathState::state.y`: still tracing; its last bounce was specular; it has scattered off a
@@ -1807,6 +1805,7 @@ impl PathState {
         PathState {
             o: ray.o, d: ray.d.truncate().normalize_or_zero().extend(0.0), beta: Vec4::new(1.0, 1.0, 1.0, 0.0), l: Vec4::ZERO,
             state: UVec4::new(path_seed(index, pass, seed), if live { PATH_ACTIVE | PATH_SPECULAR } else { PATH_ADDED }, 0, 0),
+            hit: Vec4::ZERO,
         }
     }
 }
@@ -1870,7 +1869,7 @@ fn aerial_transmittance(s: &Scene, o: Vec3, d: Vec3, distance: f32) -> Vec3 {
 /// The path with a new ray, still tracing.
 #[allow(clippy::too_many_arguments)]
 fn carry_on(p: &PathState, o: Vec3, d: Vec3, beta: Vec3, l: Vec3, rays: u32, rng: u32, flags: u32, prev_pdf: f32, depth: u32, q0: SkyQuery, q1: SkyQuery) -> (PathState, SkyQuery, SkyQuery) {
-    (PathState { o: o.extend(p.o.w), d: d.extend(prev_pdf), beta: beta.extend(depth as f32), l: l.extend(rays as f32), state: UVec4::new(rng, flags, 0, 0) }, q0, q1)
+    (PathState { o: o.extend(p.o.w), d: d.extend(prev_pdf), beta: beta.extend(depth as f32), l: l.extend(rays as f32), state: UVec4::new(rng, flags, 0, 0), hit: Vec4::ZERO }, q0, q1)
 }
 
 /// The path, ended at this vertex (its sky queries still to be answered).
@@ -1883,6 +1882,22 @@ fn finish(p: &PathState, o: Vec3, d: Vec3, beta: Vec3, l: Vec3, rays: u32, rng: 
 /// light (asking the sky for its light sample), and the next ray, or the end. Returns the path
 /// and its two sky queries.
 pub fn bounce(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
+    shade(s, &intersect(s, p))
+}
+
+/// The path with what its ray hits found (`PathState::hit`, and the primitive in `state.z`):
+/// the first of a bounce's two stages, and all of its closest-hit traversal.
+pub fn intersect(s: &Scene, p: &PathState) -> PathState {
+    let (prim, h) = trace(s, p.o.xyz(), p.d.xyz(), 0.0, INF, false);
+    let mut found = *p;
+    found.state.z = prim;
+    found.hit = h;
+    found
+}
+
+/// The second stage, at what `intersect` found: haze, emission, direct light (its shadow rays
+/// traced here, and the sky asked for its light sample), and the next ray, or the end.
+pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
     let (ro, rd, prev_pdf) = (p.o.xyz(), p.d.xyz(), p.d.w);
     let mut beta = p.beta.xyz();
     let depth = p.beta.w as u32;
@@ -1896,7 +1911,7 @@ pub fn bounce(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
     let flags = s.params.offs2.w;
     let n_emitters = s.params.counts.z;
 
-    let hit = trace(s, ro, rd, 0.0, INF, false);
+    let hit = Hit { t: p.hit.x, prim: p.state.z };
     rays += 1;
     if hit.prim == NONE {
         // The sky, weighted against sampling it if the last vertex did, and the sun's disc.
@@ -1918,22 +1933,23 @@ pub fn bounce(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
         beta *= aerial_transmittance(s, ro, rd, hit.t);
     }
     let point = ro + rd * hit.t;
+    let (hit_ng, hit_ns) = normals(s, hit.prim, ro, rd, p.hit);
     let prim = at(s.prims, hit.prim);
     let m = resolve_material(s, prim.info.y, point);
     let mat = at(s.materials, m);
     if mat.kind == MAT_EMITTER {
-        let le = emitted(s, m, hit.ns, -rd);
+        let le = emitted(s, m, hit_ns, -rd);
         let mut w = 1.0;
         if !specular && flags & FLAG_SAMPLE_LIGHTS != 0 && prim.info.z > 0 {
-            let lp = emitter_probability(s, prim.info.z - 1) * light_pdf(s, hit.prim, ro, point, hit.ng);
+            let lp = emitter_probability(s, prim.info.z - 1) * light_pdf(s, hit.prim, ro, point, hit_ng);
             w = power_heuristic(prev_pdf, lp);
         }
         l += beta * le * w;
         return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
     }
     let wo = -rd;
-    let ng = if hit.ng.dot(wo) < 0.0 { -hit.ng } else { hit.ng };
-    let ns = if hit.ns.dot(wo) < 0.0 { -hit.ns } else { hit.ns };
+    let ng = if hit_ng.dot(wo) < 0.0 { -hit_ng } else { hit_ng };
+    let ns = if hit_ns.dot(wo) < 0.0 { -hit_ns } else { hit_ns };
     let eps = offset_for(s, point);
     let above = point + ng * eps;
     let floor_alpha = if flags_p & PATH_SCATTERED != 0 { s.params.misc.x } else { 0.0 };
@@ -1974,7 +1990,7 @@ pub fn bounce(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
         }
     } else if mat.kind == MAT_DIELECTRIC {
         // As `functions::scatter_dielectric`.
-        let n = hit.ns;
+        let n = hit_ns;
         let exiting = rd.dot(n) > 0.0;
         let outward = if exiting { -n } else { n };
         let ior = mat.p.x;
@@ -2209,9 +2225,31 @@ mod queue {
     }
 }
 
-/// One vertex of each queued path (`bounce`), its sky queries in its pixel's two slots; those
-/// still alive are queued for the next round. A pass dispatches this `max_depth` + 1 times,
-/// each over the paths the last left alive, with `answer_sky` after each, then `add_paths`.
+/// What each queued path's ray hits (`intersect`): a round's first kernel, small, and all of
+/// its closest-hit traversal.
+#[cfg(target_arch = "spirv")]
+#[spirv(compute(threads(64)))]
+pub fn intersect_paths(
+    #[spirv(global_invocation_id)] gid: UVec3,
+    #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Prim],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] nodes: &[Node],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 5)] tables: &[f32],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] paths: &mut [PathState],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 7)] queue: &mut [u32],
+) {
+    let Some(pixel) = queue::take(queue, gid, params) else { return };
+    let index = pixel as usize;
+    let s = Scene { params, prims, nodes, materials, lights, tables };
+    paths[index] = intersect(&s, &paths[index]);
+}
+
+/// The rest of a vertex of each queued path (`shade`, at what `intersect_paths` found), its
+/// sky queries in its pixel's two slots; those still alive are queued for the next round. A
+/// pass runs `max_depth` + 1 rounds, each over the paths the last left alive: `intersect_paths`,
+/// this, `answer_sky`; then `add_paths`.
 #[cfg(target_arch = "spirv")]
 #[spirv(compute(threads(64)))]
 pub fn bounce_paths(
@@ -2230,7 +2268,7 @@ pub fn bounce_paths(
     let index = pixel as usize;
     let p = paths[index];
     let s = Scene { params, prims, nodes, materials, lights, tables };
-    let (next, q0, q1) = bounce(&s, &p);
+    let (next, q0, q1) = shade(&s, &p);
     paths[index] = next;
     queries[2 * index] = q0;
     queries[2 * index + 1] = q1;

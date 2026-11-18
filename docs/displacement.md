@@ -17,6 +17,15 @@ a landscape is seen: at grazing angles and against the sky. Terragen's answer is
 evaluated at render time, down to the size of a pixel, driven by a network of functions. This is
 ours.
 
+## Talus (`src/talus.rs`)
+
+![Before and after: rounded stones, then angular talus sorted down the slope](talus-comparison.png)
+
+*Top, the demo's talus as rounded `cells` stones, all of a size. Bottom, a `talus` node: angular
+blocks with flat faces and knocked-off corners, from 5 m down to 8 cm, many small to few large,
+the biggest rolled out to the toe and fine scree under the cliff, displaced straight up
+(`"vertical_displacement"`) and masked into their own rock material. 16 samples above, 64 below.*
+
 ## Function graphs (`src/graph.rs`)
 
 A graph is a small tree of functions written in the scene file as nested JSON: a number, an

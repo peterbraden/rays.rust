@@ -16,6 +16,11 @@ stack materials, each masked by altitude, slope and fractal breakup. Ours do the
 [function graph](displacement.md), and can also be masked by what the landscape simulation
 computed, which Terragen can't.
 
+On a landscape curved round its planet (drawn at full scale, or with a `planet` layout), the
+graph's `slope`, `altitude` and `aspect` are judged by the local up and the height above the
+planet's surface (`Fields::vertical`), not by the scene's y, so they hold however far from the
+scene's origin the ground is.
+
 ## The material
 
 ```json

@@ -234,6 +234,18 @@ impl crate::graph::Fields for TerrainMedium {
         let (d, h) = self.place.on_terrain(&self.domain, p);
         self.fields.at(&self.domain, f, &d, h)
     }
+
+    /// Round the sphere of a `planet` layout; a patch is laid out with y up.
+    fn vertical(&self, p: &Vector3<f64>) -> Option<(Vector3<f64>, f64)> {
+        match self.domain.layout {
+            Layout::Patch { .. } => None,
+            Layout::Sphere { .. } => {
+                let q = p - self.place.centre;
+                let r = q.norm();
+                (r > 0.).then(|| (q / r, r - self.domain.radius / self.place.scale))
+            },
+        }
+    }
 }
 
 fn number(o: &Value, k: &str, def: f64) -> f64 { SceneFile::parse_number(&o[k], def) }

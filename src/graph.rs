@@ -136,6 +136,11 @@ impl Field {
 /// A surface's fields (`Field`) at scene points on it; None for one it doesn't have.
 pub trait Fields: Sync + Send {
     fn field(&self, f: Field, p: &Vector3<f64>) -> Option<f64>;
+
+    /// Where the scene's y isn't up at `p` (a landscape curved round a planet): the local up
+    /// (a unit vector) and the height above the planet's surface, in scene units, for `slope`,
+    /// `altitude` and `aspect`. None where y is up.
+    fn vertical(&self, _p: &Vector3<f64>) -> Option<(Vector3<f64>, f64)> { None }
 }
 
 /// Where a graph is evaluated: the point on the surface (before any displacement), the
@@ -178,9 +183,15 @@ impl<'a> Context<'a> {
         Context { fields, ..self }
     }
 
+    /// The local up and height (`Fields::vertical`), where y isn't up.
+    fn vertical(&self) -> Option<(Vector3<f64>, f64)> {
+        self.fields.and_then(|f| f.vertical(&self.p))
+    }
+
     /// The surface's slope, degrees from level.
     pub fn slope(&self) -> f64 {
-        self.normal.y.clamp(-1., 1.).acos().to_degrees()
+        let up = self.vertical().map_or(self.normal.y, |(up, _)| self.normal.dot(&up));
+        up.clamp(-1., 1.).acos().to_degrees()
     }
 }
 
@@ -305,11 +316,16 @@ impl Node {
                 smoothstep(*from, *to, s)
             },
             Op::Altitude { from, to, breakup } => {
-                let h = c.p.y + breakup.as_ref().map_or(0., |b| b.eval(c));
+                let h = c.vertical().map_or(c.p.y, |(_, h)| h) + breakup.as_ref().map_or(0., |b| b.eval(c));
                 smoothstep(*from, *to, h)
             },
             Op::Aspect { direction, from, to, breakup } => {
-                let a = c.normal.dot(direction) + breakup.as_ref().map_or(0., |b| b.eval(c));
+                // Round a planet, the direction laid level where the surface is.
+                let facing = match c.vertical() {
+                    Some((up, _)) => (direction - up * direction.dot(&up)).try_normalize(1e-12).unwrap_or(*direction),
+                    None => *direction,
+                };
+                let a = c.normal.dot(&facing) + breakup.as_ref().map_or(0., |b| b.eval(c));
                 smoothstep(*from, *to, a)
             },
             Op::Field { field, default, band, breakup } => {
@@ -802,6 +818,28 @@ mod tests {
                 assert!(v >= lo && v <= hi, "{}: {} outside {:?}", n, v, g.range());
             }
         }
+    }
+
+    /// Round a planet, slope, altitude and aspect are judged by the local up, not y.
+    #[test]
+    fn test_masks_follow_a_planet_round() {
+        struct Ball;
+        impl Fields for Ball {
+            fn field(&self, _: Field, _: &Vector3<f64>) -> Option<f64> { None }
+            fn vertical(&self, p: &Vector3<f64>) -> Option<(Vector3<f64>, f64)> { Some((p.normalize(), p.norm() - 100.)) }
+        }
+        // On the ball's "equator", level ground faces +x, 5 units up.
+        let c = Context::new(Vector3::new(105., 0., 0.), Vector3::x(), 0.).with_fields(Some(&Ball));
+        assert!(c.slope() < 1e-6);
+        assert_eq!(graph(json!({"node": "altitude", "from": 4, "to": 6})).eval(&c), 0.5);
+        // Level ground faces no direction; a wall facing north (-z) does.
+        let north = graph(json!({"node": "aspect"}));
+        assert_eq!(north.eval(&c), 0.);
+        let wall = Context::new(Vector3::new(105., 0., 0.), -Vector3::z(), 0.).with_fields(Some(&Ball));
+        assert!((wall.slope() - 90.).abs() < 1e-9);
+        assert_eq!(north.eval(&wall), 1.);
+        // Without a vertical, y is up as before.
+        assert!((at(105., 0., 0.).with_fields(None).slope()).abs() < 1e-9);
     }
 
     /// A remap of an unbounded field to one value has a NaN range by interval arithmetic

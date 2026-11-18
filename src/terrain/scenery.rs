@@ -683,6 +683,13 @@ impl Ground {
 }
 
 impl crate::graph::Fields for Ground {
+    /// Round the planet, whose centre is the planet's radius below the scene's origin.
+    fn vertical(&self, p: &Vector3<f64>) -> Option<(Vector3<f64>, f64)> {
+        let v = p + Vector3::y() * self.frame.radius;
+        let r = v.norm();
+        (r > 0.).then(|| (v / r, r - self.frame.radius))
+    }
+
     /// The simulations' fields, each layer's blended into the coarser ones around it as their
     /// surfaces are; the climate's, and the snowline and treeline as the ground cover has them.
     fn field(&self, f: crate::graph::Field, p: &Vector3<f64>) -> Option<f64> {

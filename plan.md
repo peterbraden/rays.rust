@@ -1457,10 +1457,41 @@ UI, file IO and rayon's threads would follow.
      share suggests; on a real GPU, where it is cheaper still, expect less, and measure
      (`scripts/benchmark-gpu.sh`, and `web/test.mjs` for the browser's time a pass).
 
+   Done, on #114: the first stage split, and the test's own record.
+   - A bounce is `intersect` then `shade`; on the GPU a kernel each (`intersect_paths`,
+     `bounce_paths`), run in turn over the round's queue, the hit kept in the path
+     (`PathState::hit`, the primitive in `state.z`; 96 bytes a path from 80). The closest-hit
+     traversal is a kernel of 5 buffers; the shading kernel keeps one copy of the traversal,
+     for its shadow rays, not two. A round is three dispatches from two.
+   - The primitive buffer is packed (`pack_prims`): each primitive's test record first (48
+     bytes: a vertex and two edges, or a centre and radius, with the kind), then each one's
+     shading record (80 bytes). A test read 112 bytes. Shading rebuilds the primitive from
+     both, with the original vertices, so every result is the same bits.
+   - Images unchanged again (pixel-identical on instances, demo, glossy-sun, night-orbit,
+     lamps); GPU tests pass from the SPIR-V and the WGSL; browser against native FLIP 0.0025.
+   - On llvmpipe neither shows: a sample's time is the same within its spread (about 25%).
+     They are for a real GPU's registers and memory traffic: measure there.
+   - How the work divides (`measure_traversal`, the kernel's CPU build on one thread, the
+     share of `radiance`'s time inside the traversal, closest hits and shadow rays together):
+     demo 31%, instances 41%, glossy-sun 23%, spheres 16%, lamps 47%, night-orbit 1%. So on
+     these scenes most of the time is shading and the sky, not intersection; a scene of
+     more geometry than `instances` (126,401 triangles) isn't among those the GPU renders.
+
    Still to come:
-   - Stages: intersect (sorting hits into queues: escaped, emitter, each material kind),
-     shade per material kind, shadow rays, sky; the random numbers drawn in the same order,
-     so images and the GPU-against-CPU-build tests hold.
+   - Shadow rays as a stage (an any-hit kernel), which would leave the shading kernel with
+     no traversal at all. The difficulty, known: a vertex casts one shadow ray for every
+     point light and three more (sun, an area light, the sky), and adds what they find in
+     that order. Kept exact, that is one invocation a path walking that path's rays in
+     order, from a record each (direction, distance, the light to add: 32 bytes), so
+     pixels x (lights + 3) records: 60 MB at 640 x 360 with 5 lights, but 6.7 GB with
+     `lamp-field`'s 900, past any buffer. Options: rounds over part of the queue at a time
+     (a slice sized to the buffer); or point lights chosen one a vertex (which changes the
+     estimator, so the images, and wants the light BVH on the GPU first: phase 4). To
+     decide once the M2 says whether the shading kernel's size still costs.
+   - Shading by material kind: hits sorted into a queue each (escaped, emitter, each
+     kind), a kernel each; the random numbers drawn in the same order, so images and the
+     GPU-against-CPU-build tests hold. The queue buffer has room for more sides.
+   - The traversal's stack: 64 entries and as many entry distances, 512 bytes a thread.
 
    Mesh intersection, the other large speedup. Known (the shader's `trace`, `bvh.rs`): a
    binary SAH BVH, leaves of up to 8; a per-thread stack of 100 in a local array (likely

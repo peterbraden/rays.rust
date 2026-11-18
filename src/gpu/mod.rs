@@ -1143,7 +1143,7 @@ mod tests {
     #[ignore]
     fn measure_traversal() {
         println!("{:<16} {:>9} {:>9} {:>10} {:>10} {:>10}", "scene", "prims", "nodes", "rays", "boxes/ray", "prims/ray");
-        for name in ["demo/demo.json", "demo/scenes/instances.json", "demo/scenes/glossy-sun.json", "demo/scenes/spheres.json"] {
+        for name in ["demo/demo.json", "demo/scenes/instances.json", "demo/scenes/glossy-sun.json", "demo/scenes/spheres.json", "demo/scenes/lamps.json", "demo/scenes/night-orbit.json"] {
             let s = SceneFile::from_file(name, &crate::scenefile::Overrides { width: Some(160), height: Some(90), seed: None });
             let flat = match FlatScene::build(&s) {
                 Ok(f) => f,
@@ -1178,9 +1178,22 @@ mod tests {
             }
             pathtrace::stats::take();
             let live_share = live as f64 / slots as f64;
+            // How the work divides: the share of the megakernel's time (on this CPU, one
+            // thread) that is traversal, closest hits and shadow rays together.
+            pathtrace::stats::time_traversal(true);
+            let start = std::time::Instant::now();
+            for (index, ray) in GpuRenderer::camera_rays(&s, 0).iter().enumerate() {
+                if ray.d.w < 0.5 { continue; }
+                let mut rng = pathtrace::path_seed(index as u32, 0, b.params.seed.x);
+                let mut rays = 0;
+                pathtrace::radiance(&shader, ray.o.truncate(), ray.d.truncate(), &mut rng, &mut rays);
+            }
+            let traversal_share = pathtrace::stats::trace_seconds() / start.elapsed().as_secs_f64();
+            pathtrace::stats::time_traversal(false);
+            pathtrace::stats::take();
             let short = name.rsplit('/').next().unwrap().trim_end_matches(".json");
-            println!("{:<16} {:>9} {:>9} {:>10} {:>10.1} {:>10.1}   (tree {} levels deep; max depth {}, {:.0}% of path-rounds live)", short, b.prim_records.len(), b.nodes.len(), total_rays,
-                boxes as f64 / total_rays as f64, prims as f64 / total_rays as f64, bvh_depth(&flat.bvh.export()), b.params.dims.w, 100. * live_share);
+            println!("{:<16} {:>9} {:>9} {:>10} {:>10.1} {:>10.1}   (tree {} levels deep; max depth {}, {:.0}% of path-rounds live, traversal {:.0}% of the time)", short, b.prim_records.len(), b.nodes.len(), total_rays,
+                boxes as f64 / total_rays as f64, prims as f64 / total_rays as f64, bvh_depth(&flat.bvh.export()), b.params.dims.w, 100. * live_share, 100. * traversal_share);
         }
     }
 

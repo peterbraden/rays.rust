@@ -245,6 +245,17 @@ pub mod stats {
     thread_local! {
         pub static BOXES: Cell<u64> = const { Cell::new(0) };
         pub static PRIMS: Cell<u64> = const { Cell::new(0) };
+        /// Nanoseconds spent in `trace`, while `TIMED` is on (two clock readings a ray).
+        pub static TRACE_NS: Cell<u64> = const { Cell::new(0) };
+        pub static TIMED: Cell<bool> = const { Cell::new(false) };
+    }
+    /// Time traversal from here on (or stop), on this thread; `trace_seconds` reads it.
+    pub fn time_traversal(on: bool) {
+        TIMED.with(|t| t.set(on));
+        TRACE_NS.with(|c| c.set(0));
+    }
+    pub fn trace_seconds() -> f64 {
+        TRACE_NS.with(|c| c.get()) as f64 * 1e-9
     }
     /// (box tests, primitive tests) since the last call, on this thread.
     pub fn take() -> (u64, u64) {
@@ -468,6 +479,18 @@ fn box_entry(bmin: Vec3, bmax: Vec3, ro: Vec3, inv: Vec3, tmax: f32) -> f32 {
 /// primitive (`NONE` for none) and (t, b1, b2, 1) as `intersect_prim` gives them. Its normals
 /// are `normals`' to find, where it is shaded.
 fn trace(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> (u32, Vec4) {
+    #[cfg(not(target_arch = "spirv"))]
+    if stats::TIMED.with(|t| t.get()) {
+        let start = std::time::Instant::now();
+        let found = traverse(s, ro, rd, tmin, tmax, any_hit);
+        stats::TRACE_NS.with(|c| c.set(c.get() + start.elapsed().as_nanos() as u64));
+        return found;
+    }
+    traverse(s, ro, rd, tmin, tmax, any_hit)
+}
+
+#[inline(always)]
+fn traverse(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> (u32, Vec4) {
     let mut best = Hit { t: tmax, prim: NONE };
     let mut best_h = Vec4::ZERO;
     let np = s.params.counts.x;

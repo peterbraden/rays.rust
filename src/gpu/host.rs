@@ -21,11 +21,13 @@
 //!   not one a round, since a read is a synchronisation with the device (and in a browser a
 //!   frame's delay). A scene whose camera sees a host material directly so pays one read a
 //!   pass at least.
-//! - The whole of the paths is read and written back, though only those waiting are needed:
-//!   a kernel has no storage buffer to spare for compacting them (WebGPU's eight). At a large
-//!   image that copy is the cost to remove first (compact in a kernel of its own), and it is
-//!   why such scenes render a lane at a time (`scheduler::lanes`): with every lane's paths
-//!   copied for each read, the wider wavefront cost more than the reads it saved.
+//! - Only the waiting paths are read and written: a kernel gathers them side by side for
+//!   the read (`pathtrace::gather_host`) and another scatters the shaded ones back to their
+//!   slots and queues those that go on (`scatter_host`), each dispatched over the host's
+//!   queue. Their number isn't known until the read, so a guess of them is read with the
+//!   queue's header (a quarter more than last time) and the rest, if there are more, with a
+//!   second read. Reading the whole wavefront instead, as this first did, cost more than a
+//!   wider wavefront saved (`scheduler::lanes`).
 //! - A pass can't end until its waiting paths have, as a pixel has one path a pass. Holding
 //!   them over to a later pass, so the device never idles on the host, needs a path to carry
 //!   its own sample index (plan.md section 13, step 4).

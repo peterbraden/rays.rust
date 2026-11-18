@@ -2277,8 +2277,8 @@ pub fn slots(params: &Params) -> u32 {
 /// the host's queue.
 pub const QUEUE_HEADER: u32 = 12;
 /// The host's queue, after the two sides: the paths stopped at a material the kernels have no
-/// code for (`PATH_HOST`), for the host to read once the rounds are done. Only its count is
-/// kept, as no kernel is dispatched over it.
+/// code for (`PATH_HOST`), for the host to read once the rounds are done (`gather_host`,
+/// `scatter_host`).
 pub const HOST_QUEUE: u32 = 2;
 /// In a side's header, after the dispatch's three words.
 pub const QUEUE_COUNT: u32 = 3;
@@ -2322,12 +2322,32 @@ mod queue {
 
     /// Append `pixel` to the side being written.
     pub fn push(queue: &mut [u32], pixel: u32, params: &Params) {
-        let side = 1 - params.seed.z;
-        let header = (side * 4) as usize;
+        append(queue, 1 - params.seed.z, pixel, params);
+    }
+
+    /// Append `pixel` to the host's queue.
+    pub fn push_host(queue: &mut [u32], pixel: u32, params: &Params) {
+        append(queue, HOST_QUEUE, pixel, params);
+    }
+
+    /// How many paths wait in the host's queue.
+    pub fn host_count(queue: &[u32]) -> u32 {
+        load(queue, HOST_QUEUE * 4 + QUEUE_COUNT)
+    }
+
+    /// Item `i` of the host's queue.
+    pub fn host_item(queue: &[u32], i: u32, params: &Params) -> u32 {
+        load(queue, QUEUE_HEADER + HOST_QUEUE * slots(params) + i)
+    }
+
+    /// Append `pixel` to queue `which` (a side, or the host's), keeping its header's dispatch
+    /// in step with its count.
+    fn append(queue: &mut [u32], which: u32, pixel: u32, params: &Params) {
+        let header = (which * 4) as usize;
         unsafe {
             let slot = atomic_i_add::<u32, SCOPE, SEMANTICS>(queue.get_unchecked_mut(header + QUEUE_COUNT as usize), 1);
             atomic_store::<u32, SCOPE, SEMANTICS>(
-                queue.get_unchecked_mut((QUEUE_HEADER + side * slots(params) + slot) as usize), pixel);
+                queue.get_unchecked_mut((QUEUE_HEADER + which * slots(params) + slot) as usize), pixel);
             // The first item of each workgroup extends the dispatch to cover it: across x
             // until that is full, then a row of y for every `MAX_GROUPS` groups.
             if slot % WORKGROUP == 0 {
@@ -2341,14 +2361,52 @@ mod queue {
             }
         }
     }
+}
 
-    /// Append `pixel` to the host's queue.
-    pub fn push_host(queue: &mut [u32], pixel: u32, params: &Params) {
-        unsafe {
-            let slot = atomic_i_add::<u32, SCOPE, SEMANTICS>(queue.get_unchecked_mut((HOST_QUEUE * 4 + QUEUE_COUNT) as usize), 1);
-            atomic_store::<u32, SCOPE, SEMANTICS>(
-                queue.get_unchecked_mut((QUEUE_HEADER + HOST_QUEUE * slots(params) + slot) as usize), pixel);
-        }
+/// The paths waiting for the host (`PATH_HOST`), copied side by side into `gathered` in the
+/// order of the host's queue, each with its slot in `state.w`: what the host reads is then the
+/// size of its work, not of the wavefront. Dispatched over the host's queue.
+#[cfg(target_arch = "spirv")]
+#[spirv(compute(threads(64)))]
+pub fn gather_host(
+    #[spirv(global_invocation_id)] gid: UVec3,
+    #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] paths: &mut [PathState],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] queue: &mut [u32],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] gathered: &mut [PathState],
+) {
+    let i = gid.x + gid.y * (MAX_GROUPS * WORKGROUP);
+    if i >= queue::host_count(queue) {
+        return;
+    }
+    let slot = queue::host_item(queue, i, params);
+    let mut p = paths[slot as usize];
+    p.state.w = slot;
+    gathered[i as usize] = p;
+}
+
+/// The other way: the paths the host has shaded, from `gathered` back to their slots
+/// (`state.w`), those that go on queued for the next round. Dispatched over the host's queue,
+/// as `gather_host` was.
+#[cfg(target_arch = "spirv")]
+#[spirv(compute(threads(64)))]
+pub fn scatter_host(
+    #[spirv(global_invocation_id)] gid: UVec3,
+    #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] paths: &mut [PathState],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] queue: &mut [u32],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] gathered: &mut [PathState],
+) {
+    let i = gid.x + gid.y * (MAX_GROUPS * WORKGROUP);
+    if i >= queue::host_count(queue) {
+        return;
+    }
+    let mut p = gathered[i as usize];
+    let slot = p.state.w;
+    p.state.w = 0;
+    paths[slot as usize] = p;
+    if p.state.y & PATH_ACTIVE != 0 {
+        queue::push(queue, slot, params);
     }
 }
 

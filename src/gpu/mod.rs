@@ -262,14 +262,31 @@ pub struct GpuRenderer {
     rounds_buffer: wgpu::Buffer,
     /// The image, then the rounds, read together.
     readback: wgpu::Buffer,
-    /// Where the scene has materials the host shades (`host`): the paths, then the host's
-    /// queue (its header, then its items), read when a pass's rounds are done.
-    host_readback: Option<wgpu::Buffer>,
+    /// Where the scene has materials the host shades (`host`): what serves its queue.
+    host_queue: Option<HostQueue>,
     /// The most samples of each pixel a pass may carry at once (`pathtrace::slots`): what the
     /// wavefront's buffers have room for, within `WAVEFRONT_BUDGET`.
     pub lanes: usize,
     block: Mutex<Block>,
     pub adapter_name: String,
+}
+
+/// What serves the host's queue (`host`; `GpuRenderer::serve_host`): the kernels that gather
+/// the waiting paths side by side and scatter them back once shaded (`pathtrace::gather_host`,
+/// `scatter_host`), the buffer they are gathered in, the dispatch over the host's queue (a
+/// copy of its header), and what is read: that header, then the gathered paths.
+struct HostQueue {
+    gather: wgpu::ComputePipeline,
+    scatter: wgpu::ComputePipeline,
+    /// The paths, the queues and `gathered`; the second with the parameters under which a
+    /// kernel's appends go to side 0 of the queue, where the next rounds begin.
+    groups: [wgpu::BindGroup; 2],
+    gathered: wgpu::Buffer,
+    dispatch: wgpu::Buffer,
+    readback: wgpu::Buffer,
+    /// How many paths to read with the header, before their number is known: somewhat more
+    /// than waited last time. (More waiting than that takes a second read.)
+    guess: std::sync::atomic::AtomicUsize,
 }
 
 /// The depth of an exported BVH (`Bvh::export`), leaves included: one for a lone leaf. The
@@ -652,10 +669,6 @@ impl GpuRenderer {
             label: Some("paths"), size: slots * std::mem::size_of::<PathState>() as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
         });
-        let host_readback = (!flat.hosts.is_empty()).then(|| device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("host readback"), size: slots * std::mem::size_of::<PathState>() as u64 + 16 + slots * 4,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        }));
         let queries_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sky queries"), size: 2 * slots * std::mem::size_of::<SkyQuery>() as u64,
             usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
@@ -680,13 +693,41 @@ impl GpuRenderer {
                        entry(4, &lights_buffer), entry(5, &tables_buffer), entry(6, &paths_buffer), entry(7, &queue_buffer),
                        entry(8, &queries_buffer)],
         }));
+        let host_queue = (!flat.hosts.is_empty()).then(|| {
+            let host_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("host"),
+                entries: &[binding(0, wgpu::BufferBindingType::Uniform), binding(1, write), binding(2, write), binding(3, write)],
+            });
+            let size = slots * std::mem::size_of::<PathState>() as u64;
+            let gathered = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("gathered"), size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            });
+            let dispatch = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("host dispatch"), size: 16,
+                usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            });
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("host readback"), size: 16 + size,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            });
+            let groups = [0, 1].map(|side| device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("host"),
+                layout: &host_layout,
+                entries: &[entry(0, &params_buffers[side]), entry(1, &paths_buffer), entry(2, &queue_buffer), entry(3, &gathered)],
+            }));
+            HostQueue {
+                gather: kernel("gather_host", &host_layout), scatter: kernel("scatter_host", &host_layout), groups, gathered, dispatch, readback,
+                guess: std::sync::atomic::AtomicUsize::new(pixels as usize),
+            }
+        });
         let add_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("image"),
             layout: &add_layout,
             entries: &[entry(0, &params_buffers[0]), entry(1, &paths_buffer), entry(2, &accum_buffer)],
         });
         Ok(GpuRenderer { device, queue, intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline, round_groups, add_group, params, params_buffers,
-            queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, rounds_buffer, readback, host_readback, lanes: lanes as usize, block: Default::default(), adapter_name })
+            queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, rounds_buffer, readback, host_queue, lanes: lanes as usize, block: Default::default(), adapter_name })
     }
 
     /// Camera rays for sample `k` of every pixel, as the wavefront integrator's.
@@ -739,7 +780,7 @@ impl GpuRenderer {
     /// most `lanes` of them) at once, each in a lane of the wavefront (`pathtrace::slots`):
     /// the rounds of one sample, for all of them. Returns at once.
     pub fn dispatch_block(&mut self, s: &Scene, first: &[usize], count: &[usize]) {
-        assert!(self.host_readback.is_none(), "a scene with materials the host shades takes its passes through block_with_host");
+        assert!(self.host_queue.is_none(), "a scene with materials the host shades takes its passes through block_with_host");
         let slot = self.begin_pass(s, first, count);
         let mut encoder = self.device.create_command_encoder(&Default::default());
         self.encode_rounds(&mut encoder, slot);
@@ -755,7 +796,7 @@ impl GpuRenderer {
         let mut encoder = self.device.create_command_encoder(&Default::default());
         self.encode_rounds(&mut encoder, slot);
         self.queue.submit(Some(encoder.finish()));
-        while let Some(alive) = self.serve_host(s, flat, first).await? {
+        while self.serve_host(s, flat, first).await? {
             let rounds = self.rounds();
             let slot = {
                 let mut block = self.block.lock().unwrap();
@@ -766,10 +807,11 @@ impl GpuRenderer {
                     run * rounds
                 })
             };
-            if slot.is_some() {
-                self.record_round(alive);
-            }
             let mut encoder = self.device.create_command_encoder(&Default::default());
+            if let Some(slot) = slot {
+                // How many paths these rounds start with: those the host sent on.
+                encoder.copy_buffer_to_buffer(&self.queue_buffer, 12, &self.rounds_buffer, 4 * slot as u64, 4);
+            }
             self.encode_rounds(&mut encoder, slot);
             self.queue.submit(Some(encoder.finish()));
         }
@@ -779,64 +821,77 @@ impl GpuRenderer {
         Ok(())
     }
 
-    /// The paths waiting for the host, shaded (`host::shade`) and written back, those that go
-    /// on queued for the next rounds. How many do, if any.
-    async fn serve_host(&self, s: &Scene, flat: &FlatScene, first: &[usize]) -> Result<Option<u64>, String> {
-        let readback = self.host_readback.as_ref().expect("a scene with host materials");
-        // The slots of the pass's lanes: a path each (`pathtrace::slots`).
+    /// The host's turn: the paths waiting for it gathered and read (`pathtrace::gather_host`),
+    /// shaded (`host::shade`), and scattered back to their slots, those that go on queued for
+    /// the next rounds (`scatter_host`). Whether any waited.
+    async fn serve_host(&self, s: &Scene, flat: &FlatScene, first: &[usize]) -> Result<bool, String> {
+        use std::sync::atomic::Ordering;
+        let host = self.host_queue.as_ref().expect("a scene with host materials");
         let image = s.image.width * s.image.height;
-        let pixels = image as u64 * self.params.seed.w as u64;
-        let paths_size = pixels * std::mem::size_of::<PathState>() as u64;
-        let host_header = 16 * pathtrace::HOST_QUEUE as u64;
-        let host_items = 4 * (pathtrace::QUEUE_HEADER as u64 + pathtrace::HOST_QUEUE as u64 * pixels);
+        let slots = image * self.params.seed.w as usize;
+        let size = std::mem::size_of::<PathState>() as u64;
+        let header = 16 * pathtrace::HOST_QUEUE as u64;
+        let guess = host.guess.load(Ordering::Relaxed).min(slots) as u64;
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        encoder.copy_buffer_to_buffer(&self.paths_buffer, 0, readback, 0, paths_size);
-        encoder.copy_buffer_to_buffer(&self.queue_buffer, host_header, readback, paths_size, 16);
-        encoder.copy_buffer_to_buffer(&self.queue_buffer, host_items, readback, paths_size + 16, pixels * 4);
+        encoder.copy_buffer_to_buffer(&self.queue_buffer, header, &host.dispatch, 0, 16);
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&host.gather);
+            pass.set_bind_group(0, &host.groups[0], &[]);
+            pass.dispatch_workgroups_indirect(&host.dispatch, 0);
+        }
+        encoder.copy_buffer_to_buffer(&self.queue_buffer, header, &host.readback, 0, 16);
+        encoder.copy_buffer_to_buffer(&host.gathered, 0, &host.readback, 16, guess * size);
         self.queue.submit(Some(encoder.finish()));
-        self.map(readback).await?;
-        let (waiting, mut paths) = {
-            let data = readback.get_mapped_range(..).unwrap();
-            let count = bytemuck::pod_read_unaligned::<u32>(&data[paths_size as usize + 12..paths_size as usize + 16]) as usize;
-            let items = paths_size as usize + 16;
-            let waiting: Vec<u32> = bytemuck::pod_collect_to_vec(&data[items..items + 4 * count]);
-            // (Nothing waiting: the paths aren't needed, and needn't be copied.)
-            let paths: Vec<PathState> = if count > 0 { bytemuck::pod_collect_to_vec(&data[..paths_size as usize]) } else { Vec::new() };
-            (waiting, paths)
+        self.map(&host.readback, 0..16 + guess * size).await?;
+        let (count, mut paths) = {
+            let data = host.readback.get_mapped_range(..16 + guess * size).unwrap();
+            let count = bytemuck::pod_read_unaligned::<u32>(&data[12..16]) as u64;
+            let paths: Vec<PathState> = bytemuck::pod_collect_to_vec(&data[16..16 + (count.min(guess) * size) as usize]);
+            (count, paths)
         };
-        readback.unmap();
-        if waiting.is_empty() {
-            return Ok(None);
+        host.readback.unmap();
+        if count == 0 {
+            return Ok(false);
         }
+        if count > guess {
+            // More waited than was read with the header: the rest.
+            let rest = 16 + guess * size..16 + count * size;
+            let mut encoder = self.device.create_command_encoder(&Default::default());
+            encoder.copy_buffer_to_buffer(&host.gathered, guess * size, &host.readback, rest.start, rest.end - rest.start);
+            self.queue.submit(Some(encoder.finish()));
+            self.map(&host.readback, rest.clone()).await?;
+            paths.extend(bytemuck::pod_collect_to_vec::<u8, PathState>(&host.readback.get_mapped_range(rest).unwrap()));
+            host.readback.unmap();
+        }
+        host.guess.store((count + count / 4 + 64) as usize, Ordering::Relaxed);
         let began = web_time::Instant::now();
-        let shaded: Vec<PathState> = waiting.par_iter()
-            .map(|&i| {
-                // Slot i is its pixel's path in a lane, so that sample of the pixel's.
-                let (pixel, lane) = (i as usize % image, i as usize / image);
-                host::shade(s, flat, &paths[i as usize], pixel as u32, (first[pixel] + lane) as u32)
-            }).collect();
-        let mut alive = Vec::new();
-        for (&i, p) in waiting.iter().zip(shaded) {
-            if p.state.y & pathtrace::PATH_ACTIVE != 0 {
-                alive.push(i);
-            }
-            paths[i as usize] = p;
-        }
-        self.queue.write_buffer(&self.paths_buffer, 0, bytemuck::cast_slice(&paths));
-        // The next rounds' first queue (side 0): the paths that go on. The other side and the
-        // host's queue start empty.
-        let first = pathtrace::queue_header(alive.len() as u32);
-        let mut head = first.to_vec();
-        head.extend_from_slice(&pathtrace::EMPTY_QUEUE);
-        head.extend_from_slice(&pathtrace::EMPTY_QUEUE);
-        head.extend_from_slice(&alive);
-        self.queue.write_buffer(&self.queue_buffer, 0, bytemuck::cast_slice(&head));
-        self.queue.write_buffer(&self.dispatch_buffer, 0, bytemuck::cast_slice(&first));
+        let shaded: Vec<PathState> = paths.par_iter().map(|p| {
+            // Its slot (`gather_host`) is its pixel's path in a lane, so that sample of the
+            // pixel's.
+            let (pixel, lane) = (p.state.w as usize % image, p.state.w as usize / image);
+            host::shade(s, flat, p, pixel as u32, (first[pixel] + lane) as u32)
+        }).collect();
+        self.queue.write_buffer(&host.gathered, 0, bytemuck::cast_slice(&shaded));
         let seconds = began.elapsed().as_secs_f64();
+        // The next rounds begin at side 0 of the queue, which the scattered paths that go on
+        // are appended to; then the host's queue is empty again.
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(&self.empty_header, 0, &self.queue_buffer, 0, 16);
+        encoder.copy_buffer_to_buffer(&self.empty_header, 0, &self.queue_buffer, 16, 16);
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&host.scatter);
+            pass.set_bind_group(0, &host.groups[1], &[]);
+            pass.dispatch_workgroups_indirect(&host.dispatch, 0);
+        }
+        encoder.copy_buffer_to_buffer(&self.queue_buffer, 0, &self.dispatch_buffer, 0, 16);
+        encoder.copy_buffer_to_buffer(&self.empty_header, 0, &self.queue_buffer, header, 16);
+        self.queue.submit(Some(encoder.finish()));
         let mut block = self.block.lock().unwrap();
         block.host_seconds += seconds;
-        block.stats.record(crate::scheduler::Stage::Host, waiting.len() as u64, seconds);
-        Ok((!alive.is_empty()).then_some(alive.len() as u64))
+        block.stats.record(crate::scheduler::Stage::Host, count, seconds);
+        Ok(true)
     }
 
     /// A pass's paths, from their camera rays, and its first queue, uploaded: pixel i's
@@ -939,10 +994,10 @@ impl GpuRenderer {
 
     /// Map `buffer` for reading. Natively this waits for the GPU; in a browser it yields until
     /// the buffer can be read.
-    async fn map(&self, buffer: &wgpu::Buffer) -> Result<(), String> {
+    async fn map(&self, buffer: &wgpu::Buffer, range: std::ops::Range<u64>) -> Result<(), String> {
         let mapped = Mapped::default();
         let slot = mapped.0.clone();
-        buffer.map_async(wgpu::MapMode::Read, .., move |r| {
+        buffer.map_async(wgpu::MapMode::Read, range, move |r| {
             let mut slot = slot.lock().unwrap();
             slot.0 = Some(r.map_err(|e| e.to_string()));
             if let Some(waker) = slot.1.take() {
@@ -991,13 +1046,16 @@ impl GpuRenderer {
             encoder.copy_buffer_to_buffer(&self.rounds_buffer, 0, &self.readback, image, (counted * self.rounds() * 4) as u64);
         }
         self.queue.submit(Some(encoder.finish()));
-        self.map(&self.readback).await?;
+        self.map(&self.readback, 0..self.readback.size()).await?;
         let both = bytemuck::cast_slice::<u8, [f32; 4]>(&self.readback.get_mapped_range(..image).unwrap()).to_vec();
         let rounds = bytemuck::cast_slice::<u8, u32>(&self.readback.get_mapped_range(image..image + (counted * self.rounds() * 4) as u64).unwrap()).to_vec();
         self.readback.unmap();
         for (run, pass) in rounds.chunks(self.rounds()).enumerate() {
-            for (round, &paths) in pass.iter().enumerate().skip(1) {
-                if !after_host.contains(&run) {
+            // (A pass's first round was counted when it was queued; a run after the host's
+            // turn has its first here.)
+            let after = after_host.contains(&run);
+            for (round, &paths) in pass.iter().enumerate().skip(if after { 0 } else { 1 }) {
+                if !after {
                     self.block.lock().unwrap().stats.round(round, paths as u64);
                 }
                 self.record_round(paths as u64);
@@ -1040,7 +1098,7 @@ impl GpuRenderer {
             {
                 let rc = rc.lock().unwrap();
                 for b in rc.regions(s) {
-                    let (f, c) = rc.plan(s, &b, crate::scheduler::lanes(self.lanes, self.host_readback.is_some()));
+                    let (f, c) = rc.plan(s, &b, crate::scheduler::lanes(self.lanes));
                     let mut i = 0;
                     for y in b.ymin..b.ymax {
                         for x in b.xmin..b.xmax {
@@ -1056,7 +1114,7 @@ impl GpuRenderer {
                 break;
             }
             self.clear();
-            if self.host_readback.is_some() {
+            if self.host_queue.is_some() {
                 pollster::block_on(self.block_with_host(s, flat, &first, &count)).expect("GPU readback");
             } else {
                 self.dispatch_block(s, &first, &count);
@@ -1615,8 +1673,7 @@ mod tests {
         let host = rc.schedule.stage(Stage::Host);
         // The camera sees host materials, and paths reach them again after a bounce: more
         // than one wait a pass.
-        assert!(host.items > 0 && host.batches > rc.schedule.passes, "{:?} in {} passes", host, rc.schedule.passes);
-        assert_eq!(crate::scheduler::lanes(gpu.lanes, true), 1);
+        assert!(host.items > 0 && host.batches > 0, "{:?} in {} passes", host, rc.schedule.passes);
         let on_gpu: Vec<Color> = (0..w * h).map(|i| rc.get_pixel(i % w, i / w)).collect();
         let cpu = mean_image(&s, 256);
         let (a, b) = (tiles(&on_gpu, w, h, 3, 2), tiles(&cpu, w, h, 3, 2));

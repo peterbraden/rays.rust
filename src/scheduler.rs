@@ -345,13 +345,19 @@ pub fn plan(film: &Region, target: usize, adaptive: Option<&Adaptive>, gain: f64
 /// rounds instead of 640, the device's time 11% less on demo.json, 15% on glossy-sun.json,
 /// 23% on instances.json.
 ///
-/// One, where the host shades some of the vertices (`gpu::host`). Lanes cut its reads of the
-/// device by as much (textures.json: 48 instead of 384), but each read then copies every
-/// lane's paths, there and back, to get at those waiting, and that cost more than the reads
-/// saved: 8.5 s against 7.0 s. Until the waiting paths are gathered by a kernel, so that a
-/// read is the size of the work, such scenes keep one lane.
-pub fn lanes(room: usize, hosts: bool) -> usize {
-    if hosts { 1 } else { room.max(1) }
+/// The same where the host shades some of the vertices (`gpu::host`), now that the paths
+/// waiting for it are gathered by a kernel, so that a read of the device is the size of the
+/// host's work: its reads fall by the lanes too (textures.json: 48 for 384), and the render's
+/// time by a fifth to a quarter on rocks.json, bumps.json and pbrt-materials.json; on
+/// textures.json, where every path's first vertex is the host's, it is unchanged. (Before the
+/// gathering, when each read copied every lane's paths, 8 lanes cost that scene a fifth more
+/// than one, and such scenes were kept to one.)
+///
+/// So the decision is only the room, for now. It is here because it won't stay so: the room
+/// is a budget someone has to set, and a browser's frame wants a pass no longer than its
+/// watchdog allows.
+pub fn lanes(room: usize) -> usize {
+    room.max(1)
 }
 
 #[cfg(test)]
@@ -374,7 +380,7 @@ mod tests {
 
     #[test]
     fn test_lanes() {
-        assert_eq!((lanes(8, false), lanes(8, true), lanes(0, false)), (8, 1, 1));
+        assert_eq!((lanes(8), lanes(0)), (8, 1));
     }
 
     #[test]

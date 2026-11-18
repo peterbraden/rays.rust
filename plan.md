@@ -1713,10 +1713,15 @@ the host's.
      (llvmpipe, 320 x 180, 64 spp, against one lane): 80 rounds for 640; the device's time
      2.06 s for 2.33 s on demo.json, 1.88 for 2.21 on glossy-sun.json, 4.01 for 5.23 on
      instances.json.
-   - Scenes with host materials keep one lane: with 8, textures.json read the device 48
-     times for 384, but took 8.5 s for 7.0 s, as each read copies every lane's paths to
-     reach those waiting. Next: gather the waiting paths in a kernel (the host's queue
-     keeping its dispatch's size, as the sides do), so a read is the size of the work.
+   - Scenes with host materials: at first kept to one lane, as with 8 textures.json read
+     the device 48 times for 384 but took 8.5 s for 7.0 s, each read copying every lane's
+     paths to reach those waiting. Done since: the waiting paths are gathered by a kernel
+     and the shaded ones scattered back by another (`gather_host`, `scatter_host`,
+     dispatched over the host's queue, whose header now keeps its dispatch's size as the
+     sides' do), so a read is the size of the work, and these scenes take every lane too.
+     Pixel for pixel as before; 320 x 180, 64 spp on llvmpipe, against one lane and whole
+     reads: rocks.json 9.4 s for 11.7 s, bumps.json 8.1 for 10.5, pbrt-materials.json 7.0
+     for 9.8, textures.json 7.5 for 7.3 (every path's first vertex is the host's there).
    - Not yet: lanes in a browser (the page still queues a pass a sample; lanes would give a
      frame several samples for the dispatches of one); the budget from the device's
      memory rather than a constant.

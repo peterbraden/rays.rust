@@ -591,7 +591,8 @@ pub struct ScatteringApproximation {
     /// whatever lies above the column's top. Later vertices of the path in such a medium skip
     /// the sun, which the first has counted; they still gather the sky, and light off the
     /// ground. Columns are measured with `diffusion` jittered steps; the medium's box sets
-    /// how far.
+    /// how far. Point and area lights (lightning in a thunderstorm) are diffused the same way,
+    /// along the line to each light sample rather than a column (`diffused_fraction`).
     pub diffusion: Option<u32>,
 }
 
@@ -836,22 +837,36 @@ impl VolumeMaterial {
     fn direct_lighting(&self, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene,
                        phase: &VertexPhase, scatterings: u32, first: u32) -> Color {
         let p = |w: &Vector3<f64>| phase.eval(incoming.dot(w)).as_unbounded();
+        // With diffusion, whether this is the path's first vertex in such a medium, where the
+        // light diffused through it is counted (and only there).
+        let diffusing = self.approximation.diffusion.map(|_| !DIFFUSED.with(|d| d.replace(true)));
+        // Through the scene to a light, along a unit ray, as the phase function scatters it;
+        // with diffusion, plus what the medium in between diffuses (`diffused_fraction`),
+        // scattered evenly.
+        let through = |r: &Ray, d: f64| -> Color {
+            let transmitted = s.objects.transmittance(r, d, f64::MIN_POSITIVE) * p(&r.rd);
+            match diffusing {
+                Some(true) => transmitted + Color::white() * (self.diffused_fraction(&r.ro, &r.rd, d) / (4. * std::f64::consts::PI)),
+                _ => transmitted,
+            }
+        };
         let mut direct = Color::black();
-        // With a light BVH, point lights are sampled with the area lights below.
-        for light in s.lights.iter().filter(|_| s.sums_point_lights()) {
-            let to_light = light.position - point;
-            let d = to_light.norm();
-            let w = to_light / d;
-            let shadow_ray = Ray { ro: *point, rd: w };
-            let transmitted = s.objects.transmittance(&shadow_ray, d, f64::MIN_POSITIVE);
-            direct = direct + light.radiant_intensity(&-w) * p(&w) * (transmitted / (d * d));
+        if diffusing != Some(false) {
+            // With a light BVH, point lights are sampled with the area lights below.
+            for light in s.lights.iter().filter(|_| s.sums_point_lights()) {
+                let to_light = light.position - point;
+                let d = to_light.norm();
+                let w = to_light / d;
+                direct = direct + light.radiant_intensity(&-w) * through(&Ray { ro: *point, rd: w }, d) / (d * d);
+            }
+            direct = direct + crate::material::functions::sample_lights_through(point, s, |_, _| Color::white(), &through);
         }
         if let Some(sun) = &s.sun {
             // Halos, rainbows and diffraction colour the phase function in RGB.
             let sun_phase = self.sun_phase(phase, incoming, s, scatterings).as_unbounded();
             direct = direct + match self.approximation.oz {
                 _ if self.approximation.diffusion.is_some() => {
-                    if DIFFUSED.with(|d| d.replace(true)) {
+                    if diffusing != Some(true) {
                         // Counted at the path's first vertex in such a medium.
                         Color::black()
                     } else {
@@ -871,7 +886,37 @@ impl VolumeMaterial {
             let m = &moon.light;
             direct = direct + m.irradiance_at(point) * p(&m.direction) * m.transmittance_from(point, s);
         }
-        direct + crate::material::functions::sample_lights_with(point, s, |w, _| p(w))
+        direct
+    }
+
+    /// With diffusion, the fraction of a light's light that reaches `point` diffused through
+    /// this medium from a unit direction `d` and distance `length` (the part not transmitted
+    /// unscattered, which the shadow ray counts). A light inside a cloud, which absorbs next
+    /// to nothing, sends nearly all its light out through it, scattered many times, so a
+    /// cloud lit from within glows. In the diffusion approximation a source at reduced optical
+    /// depths τ'f from one side of a slab and τ'b from the other sends a fraction
+    /// (τ'b + ⅔) / (τ'f + τ'b + 4⁄3) out of the first (the diffuse flux falls linearly across
+    /// it; Kokhanovsky, "Cloud Optics", ch. 3): so measure τ'f towards the light and τ'b
+    /// beyond it, along the same line, through this medium's density.
+    fn diffused_fraction(&self, point: &Vector3<f64>, d: &Vector3<f64>, length: f64) -> f64 {
+        let steps = self.approximation.diffusion.unwrap_or(32).max(1);
+        let reduce = 1. - self.mean_albedo() * self.phase.mean_cosine();
+        let jitter = crate::geometry::rand();
+        let depth = |from: Vector3<f64>, len: f64| -> f64 {
+            let step = len / steps as f64;
+            (0..steps).map(|k| self.field.density(&(from + d * ((k as f64 + jitter) * step)))).sum::<f64>() * step * reduce
+        };
+        let front = depth(*point, length);
+        if front <= 0. {
+            return 0.;
+        }
+        // Behind the light, as far again or to the medium's height range, whichever is less.
+        let (lo, hi) = self.column;
+        let to_edge = if d.y > 0. { (hi - (point.y + d.y * length)) / d.y } else if d.y < 0. { (lo - (point.y + d.y * length)) / d.y } else { f64::INFINITY };
+        let back = depth(point + d * length, length.min(to_edge.max(0.)).max(1.));
+        let escaping = (back + 2. / 3.) / (front + back + 4. / 3.);
+        // The part the shadow ray already carried, unscattered, is left out.
+        escaping * (1. - (-front / reduce.max(1e-9)).exp())
     }
 
     /// The phase function for direct sunlight at a vertex seen along `incoming`: with halos,
@@ -1215,6 +1260,32 @@ mod tests {
         assert!(((at(4.) - at(2.)) - (at(2.) - at(0.))).abs() < 1e-12);
         // Darker under a thicker deck: the light under it goes as 1 / (1 + ¾ τ*).
         assert!(diffused_radiance(mu, 16., 0.) < 0.55 * diffused_radiance(mu, 8., 0.));
+    }
+
+    #[test]
+    fn test_light_inside_a_cloud_diffuses_out_through_it() {
+        // A slab 0 to 1000 m of extinction 0.05 (reduced, with g = 0.85: 0.0075 per metre). A
+        // light in its middle, seen from just inside its base: what it loses on the way, it
+        // sends out diffused, half through each face; seen from beyond a thinner layer above
+        // it, more comes out of that side.
+        let m = VolumeMaterial {
+            albedo: Color::white(),
+            phase: PhaseFunction::HenyeyGreenstein { g: 0.85 },
+            approximation: ScatteringApproximation { diffusion: Some(400), ..ScatteringApproximation::default() },
+            diffraction: None, halos: None, rainbow: None,
+            field: Arc::new(ConstantDensity(0.05)), emission: None, extinction: None, column: (0., 1000.),
+        };
+        let up = Vector3::new(0., 1., 0.);
+        let middle = m.diffused_fraction(&Vector3::new(0., 1e-6, 0.), &up, 500.);
+        assert!((middle - 0.5 * (1. - (-25f64).exp())).abs() < 0.01, "{}", middle);
+        // A light 900 m up: nearer the top, so less comes out of the base.
+        let high = m.diffused_fraction(&Vector3::new(0., 1e-6, 0.), &up, 900.);
+        let tf = 0.0075 * 900.;
+        let tb = 0.0075 * 100.;
+        assert!((high - (tb + 2. / 3.) / (tf + tb + 4. / 3.)).abs() < 0.01, "{}", high);
+        // No medium in between: nothing diffused (the shadow ray carries it all).
+        let clear = VolumeMaterial { field: Arc::new(ConstantDensity(0.)), ..m };
+        assert_eq!(clear.diffused_fraction(&Vector3::zeros(), &up, 500.), 0.);
     }
 
     #[test]

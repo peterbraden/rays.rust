@@ -580,6 +580,21 @@ thread_local! {
     static NEXT_SUN_WEIGHT: Cell<Option<SunWeight>> = const { Cell::new(None) };
 }
 
+thread_local! {
+    /// As `NEXT_SUN_WEIGHT`, for the sea's glitter at the continuation's next vertex, against a
+    /// glitter probe's (`VolumeMaterial::glitter_probe`).
+    static NEXT_GLINT_WEIGHT: Cell<Option<SunWeight>> = const { Cell::new(None) };
+}
+
+/// The weight of the sun's glitter seen on a sea reached by `r` (`ocean::PhysicalOcean`): all of
+/// it, unless `r` left a medium that sent a glitter probe.
+pub fn glint_weight_for(r: &Ray) -> f64 {
+    NEXT_GLINT_WEIGHT.with(|w| match w.get() {
+        Some((ro, rd, weight)) if ro == r.ro && rd == r.rd => weight,
+        _ => 1.,
+    })
+}
+
 /// The weight of the sunlight gathered at a volume vertex reached by `r`.
 fn sun_weight_for(r: &Ray) -> f64 {
     NEXT_SUN_WEIGHT.with(|w| match w.get() {
@@ -901,6 +916,44 @@ impl VolumeMaterial {
     }
 }
 
+/// The local vertical over `sea` at `point`.
+fn sea_up(sea: &crate::ocean::Sea, point: &Vector3<f64>) -> Vector3<f64> {
+    sea.center.map_or(Vector3::y(), |c| (point - c).normalize())
+}
+
+impl VolumeMaterial {
+    /// # Glitter probes
+    ///
+    /// Over a sea, a cloud's base is lit by the sun's glitter as well as the sky: a patch of
+    /// the sea below, as bright as the sun's reflection in water, a degree or two of slope wide
+    /// (Cox and Munk). A path scattering in the cloud finds that patch only by chance, and then
+    /// carries all of it: measured on a lone cumulus over the sea, it made most of the speckle
+    /// (relative error 0.052 against 0.020 without the sea). As with the sun probes, that light
+    /// is estimated by two techniques combined by the balance heuristic: the continuation, and a
+    /// probe whose direction is drawn towards the glitter (`ocean::Sea::sample_glitter`: a facet
+    /// from the sea's slopes, the direction it would reflect into the sun). It counts the
+    /// glitter where the probe meets the sea first (`MaterialModel::sun_glint`), weighted by its
+    /// density over the two's sum; the continuation's sea takes the rest
+    /// (`NEXT_GLINT_WEIGHT`). Only the glitter, not the sky the sea reflects, which is dim.
+    #[allow(clippy::too_many_arguments)]
+    fn glitter_probe(&self, incoming: &Vector3<f64>, point: &Vector3<f64>, sea: &crate::ocean::Sea, sun: &Vector3<f64>,
+                     phase: &VertexPhase, s: &Scene) -> Color {
+        let Some(d) = sea.sample_glitter(point, sun, (rand(), rand())) else { return Color::black() };
+        let probe = Ray { ro: *point, rd: d };
+        let found = s.objects.nearest_intersection(&probe, f64::INFINITY, 0.);
+        let mis = chromatic::side_weight(found.as_ref().map(|h| h.dist));
+        let Some(hit) = found else { return Color::black() };
+        let Some(glint) = hit.object.medium.material_at(hit.point).sun_glint(&probe, &hit, s) else { return Color::black() };
+        let air = match &s.atmosphere {
+            Some(sky) if hit.dist > crate::trace::AERIAL_PERSPECTIVE_FROM => Color { rgb: sky.segment(point, &d, hit.dist).0 },
+            _ => Color::white(),
+        };
+        let cos = incoming.dot(&d);
+        let density = phase.pdf(cos) + sea.glitter_pdf(point, sun, &d);
+        phase.eval(cos) * glint * air * mis / density
+    }
+}
+
 impl MaterialModel for VolumeMaterial {
     fn volume_sunlight(&self, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene) -> Option<Color> {
         if self.extinction.is_some() {
@@ -956,6 +1009,18 @@ impl MaterialModel for VolumeMaterial {
         })));
         if let Some(sun) = probe {
             emit = emit + albedo * self.sun_probe(&incoming, &i.point, &sun, &phase, s);
+        }
+        // And the sea's glitter of the sun, by the continuation and a probe towards it.
+        let glitter = match (&s.sea, &s.sun) {
+            (Some(sea), Some(sun)) if self.sun_probes && self.extinction.is_none() && sun.direction.dot(&sea_up(sea, &i.point)) > 0. => Some((*sea, sun.direction)),
+            _ => None,
+        };
+        NEXT_GLINT_WEIGHT.with(|w| w.set(glitter.map(|(sea, sun)| {
+            let p = phase.pdf(incoming.dot(&rd));
+            (i.point, rd, p / (p + sea.glitter_pdf(&i.point, &sun, &rd)))
+        })));
+        if let Some((sea, sun)) = glitter {
+            emit = emit + albedo * self.glitter_probe(&incoming, &i.point, &sea, &sun, &phase, s);
         }
         if let Some(e) = &self.emission {
             // σ_a / σ_t of the emitted radiance (`emission`).

@@ -58,6 +58,9 @@ pub trait MaterialModel: Sync{
     /// current state; None if it can't say (a surface, or a chromatic medium). The other half
     /// of the sun probes' multiple importance sampling (`volume::VertexPhase::sun_probe`).
     fn volume_sunlight(&self, _incoming: &Vector3<f64>, _point: &Vector3<f64>, _s: &crate::scene::Scene) -> Option<Color> { None }
+    /// For a glitter probe (`VolumeMaterial::glitter_probe`): the sun's glitter on this surface
+    /// seen along `r` at `intersection`, if it is a sea.
+    fn sun_glint(&self, _r: &crate::ray::Ray, _intersection: &crate::intersection::Intersection, _s: &crate::scene::Scene) -> Option<Color> { None }
 }
 
 /// The outgoing ray, and the weight to assign the color of the traced ray.

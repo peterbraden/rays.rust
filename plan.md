@@ -759,6 +759,16 @@ exposure fit and mean FLIP; two independent references differ by 1.3% and FLIP 0
   the mean), sun probes still pay, but less: trade cumulus efficiency 1.45 off, 1.61 on
   (0.124 to 0.096 mean); `nubis-clouds` 8.2 to 9.1. Kept on. Against the start (no probes, no
   delta-M, the old ratio tracking), the trade-cumulus scene is 3.4 times as efficient.
+- Glitter probes (`VolumeMaterial::glitter_probe`). On a lone cumulus over the sea, seen from
+  below (`cumulus` object, 160 x 107, 8 samples, 4 renders), the ocean made most of the
+  speckle: mean relMSE 0.052 with it, 0.020 without, and 0.015 against 0.004 even with a
+  single scattering. It is the sun's glitter lighting the cloud's base, found only by
+  continuations that happen to hit the bright patch. A second probe draws its direction from
+  the sea's slopes (`ocean::Sea::sample_glitter`, a Beckmann facet reflecting into the sun),
+  combined with the continuation by the balance heuristic as the sun probes are: 0.052 to
+  0.020 (no worse than without the sea), efficiency 3.4 to 8.4; brightness within 0.5% of a
+  256-sample render without it. No change on `weather-trade-cumulus`, where the glitter is
+  not in view of the clouds that matter.
 - What remains is the grain of deep multiple scattering. Unbiased remedies are larger: learned
   volume path guiding (Herholz et al. 2019), or a denoiser.
 

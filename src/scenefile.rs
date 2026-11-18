@@ -3102,6 +3102,7 @@ impl SceneFile {
         }
         // Weather becomes its families of cloud, which know the sky's sun and the landscape.
         let scene_objects = crate::weather::scene::expand(scene_objects);
+        let sea = scene_objects.iter().find(|o| o["type"].as_str() == Some("ocean")).map(crate::ocean::Sea::parse);
         let objects = SceneFile::parse_objects(scene_objects, &s.materials, &s.media, &geometries);
         // Emitters with a surface we can sample become area lights.
         let area_lights: Vec<Arc<SceneObject>> = objects.iter()
@@ -3167,6 +3168,7 @@ impl SceneFile {
             atmosphere,
             environment: None,
             light_bvh: None,
+            sea,
         };
         scene.light_bvh = match s.light_sampler.as_str() {
             None | Some("power") => None,

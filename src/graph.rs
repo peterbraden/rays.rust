@@ -162,6 +162,17 @@ impl<'a> Context<'a> {
         Context { p, normal, filter: 0., lifted: true, fields: None }
     }
 
+    /// At a shading point: where a displaced surface's point was displaced from, with the
+    /// filter its displacement had there, so the graph gives what the geometry got; on other
+    /// surfaces at the hit itself, `lifted`. With the surface's fields.
+    pub fn at_hit(i: &'a crate::intersection::Intersection) -> Context<'a> {
+        let c = match i.object.geometry.undisplaced(&i.point, i.face) {
+            Some(u) => Context::new(u.point, u.normal, u.filter),
+            None => Context::lifted(i.point, i.normal),
+        };
+        c.with_fields(i.object.medium.fields())
+    }
+
     /// The same, on a surface with these fields.
     pub fn with_fields(self, fields: Option<&'a dyn Fields>) -> Context<'a> {
         Context { fields, ..self }

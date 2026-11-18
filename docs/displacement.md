@@ -77,8 +77,15 @@ octave's mean in its place, so a coarsely diced distant surface doesn't alias or
   the first. Fallen blocks stand upright on a slope (along the normal they'd lean downhill),
   and since a block's top then lies right above where it stands, a material can find it: the
   demo's `talus` displaces vertically and the same node with `"output": "mask"` puts rock on
-  the blocks and grit between them (`Context::lifted`: at a shading point a block's `position`
-  is judged where it stands, its height below).
+  the blocks and grit between them.
+- **Shaded where it came from.** A hit on displaced terrain knows the point of the base it was
+  displaced from (`Geometry::undisplaced`: the cell's quad under the hit, its corners' grid
+  positions interpolated), and graphs used in shading (a `mix` amount, surface layers' masks)
+  and a `rock`'s colour are evaluated there, with the filter the displacement had
+  (`Context::at_hit`, `Intersection::texture_point`). So masks and colours line up exactly with
+  the relief: a talus mask with its blocks however the main displacement moved them, and the
+  ribs of `cross_beds` with the laminae a rock shows. (On surfaces not displaced, `talus` judges
+  a shading point's block by where it stands, its height below: `Context::lifted`.)
 - **Fading at the edges.** `"displacement_falloff"` (metres) fades both graphs to nothing
   within that distance of the grid's edges, so a displaced close-up grid meets the undisplaced
   grid round it (a coarser terrain with a `hole`) without a step or a slit along the join; the

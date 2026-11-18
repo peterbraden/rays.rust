@@ -537,7 +537,9 @@ impl MaterialModel for Rock {
             }
         }
 
-        let albedo = self.albedo(intersection.point, normal).as_reflectance();
+        // Coloured where a displaced surface's point came from, as its relief was made (the
+        // ribs of a `cross_beds` displacement under the laminae shown here).
+        let albedo = self.albedo(intersection.texture_point().point, normal).as_reflectance();
         let shaded = Intersection { normal, ..*intersection };
         // Cosine-weighted about the shading normal; a bounce the bump tilts into the surface is
         // mirrored back out of it.

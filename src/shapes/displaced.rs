@@ -492,6 +492,66 @@ impl DisplacedTerrain {
         best
     }
 
+    /// Where the point `p`, on cell k's diced surface, was displaced from (see
+    /// `Geometry::undisplaced`): found on the quad of the cell's tile nearest it, as the grid
+    /// position its corners were displaced from, interpolated there.
+    fn undisplaced_in(&self, p: &Vector3<f64>, k: usize) -> Option<crate::shapes::geometry::Undisplaced> {
+        let g = &self.grid;
+        let tile = self.tiles.get(k)?.get()?;
+        let n = tile.n;
+        let (ix, iz) = ((k % g.nx) as f64, (k / g.nx) as f64);
+        let tol = 1e-6 * (1. + p.abs().max());
+        let contains = |b: &BBox| (0 .. 3).all(|a| p[a] >= b.min[a] - tol && p[a] <= b.max[a] + tol);
+        // Quads whose blocks hold p, down the quadtree.
+        let mut quads: Vec<(usize, usize)> = vec![];
+        if tile.boxes.is_empty() {
+            quads.push((0, 0));
+        } else {
+            let mut stack = vec![(tile.boxes.len() - 1, 0usize, 0usize)];
+            while let Some((depth, bi, bj)) = stack.pop() {
+                let blocks = n >> (depth + 1);
+                if !contains(&tile.boxes[depth][bj * blocks + bi]) { continue }
+                for (ci, cj) in [(2 * bi, 2 * bj), (2 * bi + 1, 2 * bj), (2 * bi, 2 * bj + 1), (2 * bi + 1, 2 * bj + 1)] {
+                    if depth == 0 { quads.push((ci, cj)) } else { stack.push((depth - 1, ci, cj)) }
+                }
+            }
+        }
+        // The nearest of their triangles, and p's barycentric coordinates on it.
+        let mut best: Option<(f64, [(usize, usize); 3], f64, f64)> = None;
+        for (i, j) in quads {
+            for tri in [[(i, j), (i + 1, j), (i, j + 1)], [(i + 1, j + 1), (i, j + 1), (i + 1, j)]] {
+                let at = |(a, b): (usize, usize)| tile.pos[b * (n + 1) + a];
+                let (a, e1, e2) = (at(tri[0]), at(tri[1]) - at(tri[0]), at(tri[2]) - at(tri[0]));
+                let (d11, d12, d22) = (e1.dot(&e1), e1.dot(&e2), e2.dot(&e2));
+                let det = d11 * d22 - d12 * d12;
+                if det <= 0. { continue }
+                let v = p - a;
+                let (v1, v2) = (v.dot(&e1), v.dot(&e2));
+                let u = ((d22 * v1 - d12 * v2) / det).clamp(0., 1.);
+                let w = ((d11 * v2 - d12 * v1) / det).clamp(0., 1. - u);
+                let dist = (a + e1 * u + e2 * w - p).norm();
+                if best.is_none_or(|b| dist < b.0) {
+                    best = Some((dist, tri, u, w));
+                }
+            }
+        }
+        let (dist, tri, u, w) = best?;
+        // Not on this cell (a `face` some wrapper set): no answer rather than a wrong one.
+        if dist > 1e-3 * g.cell / n as f64 + tol {
+            return None;
+        }
+        let grid_at = |(a, b): (usize, usize)| (a as f64, b as f64);
+        let (a, b, c) = (grid_at(tri[0]), grid_at(tri[1]), grid_at(tri[2]));
+        let (fi, fj) = (a.0 + (b.0 - a.0) * u + (c.0 - a.0) * w, a.1 + (b.1 - a.1) * u + (c.1 - a.1) * w);
+        let (x, z) = (g.min.0 + (ix + fi / n as f64) * g.cell, g.min.1 + (iz + fj / n as f64) * g.cell);
+        let (y, hx, hz) = g.smooth(x, z);
+        Some(crate::shapes::geometry::Undisplaced {
+            point: Vector3::new(x, y, z),
+            normal: Vector3::new(-hx, 1., -hz).normalize(),
+            filter: g.cell / n as f64,
+        })
+    }
+
     /// The nearest hit in [min, max) (world distances).
     fn nearest(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
         let len = r.rd.norm();
@@ -501,7 +561,7 @@ impl DisplacedTerrain {
             let (t0, t1) = (min / len, best / len);
             slab(&self.cell_bounds[k], &r.ro, &inv, t0, t1)?;
             self.intersect_cell(r, k, t0, t1, false).map(|(t, normal)| RawIntersection {
-                dist: t * len, point: r.ro + r.rd * t, normal, face: 0, part: 0,
+                dist: t * len, point: r.ro + r.rd * t, normal, face: k as u32, part: 0,
             })
         }).map(|(_, x)| x)
     }
@@ -533,6 +593,10 @@ impl Geometry for DisplacedTerrain {
 
     fn bounds(&self) -> BBox {
         self.bounds
+    }
+
+    fn undisplaced(&self, p: &Vector3<f64>, face: u32) -> Option<crate::shapes::geometry::Undisplaced> {
+        self.undisplaced_in(p, face as usize)
     }
 
     fn primitives(&self) -> u64 {
@@ -583,6 +647,35 @@ mod tests {
             for p in &t.dice(k, false).pos {
                 assert!((0 .. 3).all(|a| p[a] >= b.min[a] && p[a] <= b.max[a]), "cell {}: {:?} outside {:?}", k, p, b);
             }
+        }
+    }
+
+    /// A hit's undisplaced point is where the surface there was displaced from: straight
+    /// below it for vertical displacement; along the base's normal otherwise, displacing it
+    /// again lands on the hit (to within the quads' flatness).
+    #[test]
+    fn test_undisplaced_finds_where_hits_came_from() {
+        let g = json!({"node": "fractal", "scale": 3, "smallest": 0.5, "amplitude": 0.3});
+        for vertical in [true, false] {
+            let t = DisplacedTerrain::new(grid(8, 8.), Graph::parse(&g).unwrap(), vertical, &Detail { level: 6, min_spacing: Some(0.01), ..Default::default() }).unwrap();
+            let mut rng = crate::geometry::Pcg32::new(3, 9);
+            let mut found = 0;
+            for _ in 0 .. 500 {
+                let ro = Vector3::new(rng.next_f64() * 7. - 3.5, 5., rng.next_f64() * 7. - 3.5);
+                let rd = Vector3::new(rng.next_f64() - 0.5, -2., rng.next_f64() - 0.5);
+                let Some(hit) = t.intersects(&Ray { ro, rd }) else { continue };
+                let u = t.undisplaced(&hit.point, hit.face).expect("a hit's cell knows where it came from");
+                let d = t.graph.eval(&Context::new(u.point, u.normal, 0.));
+                let back = u.point + if vertical { Vector3::y() } else { u.normal } * d;
+                assert!((back - hit.point).norm() < 2e-3, "{:?} back at {:?}, hit {:?}", vertical, back, hit.point);
+                if vertical {
+                    assert!((u.point.x - hit.point.x).abs() < 1e-9 && (u.point.z - hit.point.z).abs() < 1e-9);
+                }
+                found += 1;
+            }
+            assert!(found > 400);
+            // A point on no cell's surface has no answer.
+            assert!(t.undisplaced(&Vector3::new(0., 50., 0.), 0).is_none());
         }
     }
 

@@ -43,8 +43,6 @@ const ENV_HEIGHT: usize = 512;
 const VISIBILITY_SCALE: usize = 8;
 /// Passes between reading the accumulated image back.
 const PASSES_PER_READ: usize = 8;
-const WORKGROUP: u32 = 64;
-const MAX_GROUPS: u32 = 65535;
 
 // The buffers' layouts are the shader crate's own (`shaders/pathtrace`), so the two can't drift.
 use pathtrace::{CameraRay as GpuRay, Light as GpuLight, Material as GpuMaterial, Node as GpuNode, Params, PathState, Prim as GpuPrim, SkyQuery};
@@ -213,13 +211,25 @@ fn space_record(tables: &mut Vec<f32>, space: &crate::procedural::space::Space) 
 pub struct GpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    /// The two kernels a pass alternates: a vertex of every path, then the light its sky queries
-    /// find (`pathtrace::bounce_paths`, `answer_sky`).
+    /// The two kernels a pass alternates, each round over the queue of paths still alive: a
+    /// vertex of each, then the light its sky queries find (`pathtrace::bounce_paths`,
+    /// `answer_sky`); and the one that ends a pass, adding every path to the image
+    /// (`add_paths`).
     bounce_pipeline: wgpu::ComputePipeline,
     sky_pipeline: wgpu::ComputePipeline,
-    bind_group: wgpu::BindGroup,
+    add_pipeline: wgpu::ComputePipeline,
+    /// The scene and the paths, for rounds reading the queue's side 0 and its side 1: they
+    /// differ in their parameters (`Params::seed.z`).
+    round_groups: [wgpu::BindGroup; 2],
+    add_group: wgpu::BindGroup,
     params: Params,
-    params_buffer: wgpu::Buffer,
+    params_buffers: [wgpu::Buffer; 2],
+    /// The two queues of paths (`pathtrace::queue`), and the buffer each round's dispatch is
+    /// read from: the header of the queue it reads, copied there, as a buffer bound for
+    /// writing can't also be a dispatch's arguments. `empty_header` resets a side.
+    queue_buffer: wgpu::Buffer,
+    dispatch_buffer: wgpu::Buffer,
+    empty_header: wgpu::Buffer,
     paths_buffer: wgpu::Buffer,
     accum_buffer: wgpu::Buffer,
     readback: wgpu::Buffer,
@@ -534,23 +544,32 @@ impl GpuRenderer {
         };
         let read = wgpu::BufferBindingType::Storage { read_only: true };
         let write = wgpu::BufferBindingType::Storage { read_only: false };
+        // A round's kernels: the scene (read only), the paths, the queues and the sky queries.
+        // WebGPU allows a kernel eight storage buffers, so the image has a layout of its own,
+        // with the kernel that adds to it.
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene"),
             entries: &[binding(0, wgpu::BufferBindingType::Uniform), binding(1, read), binding(2, read), binding(3, read),
                        binding(4, read), binding(5, read), binding(6, write), binding(7, write), binding(8, write)],
         });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("pathtrace"), bind_group_layouts: &[Some(&layout)], immediate_size: 0,
+        let add_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("image"),
+            entries: &[binding(0, wgpu::BufferBindingType::Uniform), binding(1, read), binding(2, write)],
         });
-        let kernel = |entry_point: &str| device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(entry_point),
-            layout: Some(&pipeline_layout),
-            module: &module,
-            entry_point: Some(entry_point),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        let (bounce_pipeline, sky_pipeline) = (kernel("bounce_paths"), kernel("answer_sky"));
+        let kernel = |entry_point: &str, layout: &wgpu::BindGroupLayout| {
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(entry_point), bind_group_layouts: &[Some(layout)], immediate_size: 0,
+            });
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(entry_point),
+                layout: Some(&pipeline_layout),
+                module: &module,
+                entry_point: Some(entry_point),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        };
+        let (bounce_pipeline, sky_pipeline, add_pipeline) = (kernel("bounce_paths", &layout), kernel("answer_sky", &layout), kernel("add_paths", &add_layout));
         let storage = |label: &str, bytes: &[u8]| device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(label), contents: bytes, usage: wgpu::BufferUsages::STORAGE,
         });
@@ -559,9 +578,20 @@ impl GpuRenderer {
         let materials_buffer = storage("materials", bytemuck::cast_slice(&materials));
         let lights_buffer = storage("lights", bytemuck::cast_slice(&lights));
         let tables_buffer = storage("tables", bytemuck::cast_slice(&tables));
-        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let params_buffers = [0, 1].map(|_| device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("params"), contents: bytemuck::bytes_of(&params),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        }));
+        let queue_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("queues"), size: (pathtrace::QUEUE_HEADER as u64 + 2 * pixels) * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        let dispatch_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("dispatch"), size: 16,
+            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        let empty_header = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("empty queue"), contents: bytemuck::cast_slice(&pathtrace::EMPTY_QUEUE), usage: wgpu::BufferUsages::COPY_SRC,
         });
         let paths_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("paths"), size: pixels * std::mem::size_of::<PathState>() as u64,
@@ -579,14 +609,20 @@ impl GpuRenderer {
             label: Some("readback"), size: pixels * 16,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let round_groups = [0, 1].map(|side| device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("scene"),
             layout: &layout,
-            entries: &[entry(0, &params_buffer), entry(1, &prims_buffer), entry(2, &nodes_buffer), entry(3, &materials_buffer),
-                       entry(4, &lights_buffer), entry(5, &tables_buffer), entry(6, &paths_buffer), entry(7, &accum_buffer),
+            entries: &[entry(0, &params_buffers[side]), entry(1, &prims_buffer), entry(2, &nodes_buffer), entry(3, &materials_buffer),
+                       entry(4, &lights_buffer), entry(5, &tables_buffer), entry(6, &paths_buffer), entry(7, &queue_buffer),
                        entry(8, &queries_buffer)],
+        }));
+        let add_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("image"),
+            layout: &add_layout,
+            entries: &[entry(0, &params_buffers[0]), entry(1, &paths_buffer), entry(2, &accum_buffer)],
         });
-        Ok(GpuRenderer { device, queue, bounce_pipeline, sky_pipeline, bind_group, params, params_buffer, paths_buffer, accum_buffer, readback, adapter_name })
+        Ok(GpuRenderer { device, queue, bounce_pipeline, sky_pipeline, add_pipeline, round_groups, add_group, params, params_buffers,
+            queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, readback, adapter_name })
     }
 
     /// Camera rays for sample `k` of every pixel, as the wavefront integrator's.
@@ -617,29 +653,47 @@ impl GpuRenderer {
     /// a pass is one dispatch, so a browser can give each frame one, within its GPU watchdog.
     pub fn dispatch(&mut self, s: &Scene, k: usize) {
         let pixels = (s.image.width * s.image.height) as u32;
-        let groups = pixels.div_ceil(WORKGROUP);
-        let (gx, gy) = (groups.min(MAX_GROUPS), groups.div_ceil(MAX_GROUPS));
         self.params.dims.z = k as u32;
-        self.queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&self.params));
+        for side in 0..2 {
+            self.params.seed.z = side as u32;
+            self.queue.write_buffer(&self.params_buffers[side], 0, bytemuck::bytes_of(&self.params));
+        }
         let seed = self.params.seed.x;
-        let paths: Vec<PathState> = Self::camera_rays(s, k).iter().enumerate()
-            .map(|(i, ray)| PathState::start(i as u32, k as u32, seed, ray)).collect();
+        let rays = Self::camera_rays(s, k);
+        let paths: Vec<PathState> = rays.iter().enumerate().map(|(i, ray)| PathState::start(i as u32, k as u32, seed, ray)).collect();
         self.queue.write_buffer(&self.paths_buffer, 0, bytemuck::cast_slice(&paths));
+        // The first round's queue (side 0): every pixel whose camera ray got through the lens.
+        // Side 1 starts empty.
+        let alive: Vec<u32> = paths.iter().enumerate().filter(|(_, p)| p.state.y & pathtrace::PATH_ACTIVE != 0).map(|(i, _)| i as u32).collect();
+        let first = pathtrace::queue_header(alive.len() as u32);
+        let mut head = first.to_vec();
+        head.extend_from_slice(&pathtrace::EMPTY_QUEUE);
+        head.extend_from_slice(&alive);
+        self.queue.write_buffer(&self.queue_buffer, 0, bytemuck::cast_slice(&head));
+        self.queue.write_buffer(&self.dispatch_buffer, 0, bytemuck::cast_slice(&first));
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        {
-            // A path has at most `max_depth` + 1 vertices; the last round of `bounce_paths` adds
-            // the paths ended in the one before to the image.
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_bind_group(0, &self.bind_group, &[]);
-            let rounds = self.params.dims.w + 2;
-            for round in 0..rounds {
+        // A path has at most `max_depth` + 1 vertices: that many rounds, each over the paths
+        // the last left alive.
+        for round in 0..=self.params.dims.w {
+            let side = (round % 2) as usize;
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_bind_group(0, &self.round_groups[side], &[]);
                 pass.set_pipeline(&self.bounce_pipeline);
-                pass.dispatch_workgroups(gx, gy, 1);
-                if round + 1 < rounds {
-                    pass.set_pipeline(&self.sky_pipeline);
-                    pass.dispatch_workgroups(gx, gy, 1);
-                }
+                pass.dispatch_workgroups_indirect(&self.dispatch_buffer, 0);
+                pass.set_pipeline(&self.sky_pipeline);
+                pass.dispatch_workgroups_indirect(&self.dispatch_buffer, 0);
             }
+            // The next round reads the side this one filled, and fills the side it read.
+            encoder.copy_buffer_to_buffer(&self.queue_buffer, 16 * (1 - side as u64), &self.dispatch_buffer, 0, 16);
+            encoder.copy_buffer_to_buffer(&self.empty_header, 0, &self.queue_buffer, 16 * side as u64, 16);
+        }
+        {
+            let groups = pixels.div_ceil(pathtrace::WORKGROUP);
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_bind_group(0, &self.add_group, &[]);
+            pass.set_pipeline(&self.add_pipeline);
+            pass.dispatch_workgroups(groups.min(pathtrace::MAX_GROUPS), groups.div_ceil(pathtrace::MAX_GROUPS), 1);
         }
         self.queue.submit(Some(encoder.finish()));
     }
@@ -1089,7 +1143,6 @@ mod tests {
             let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
             pathtrace::stats::take();
             let mut total_rays = 0u64;
-            let start = std::time::Instant::now();
             for k in 0..2 {
                 for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
                     if ray.d.w < 0.5 { continue; }
@@ -1100,9 +1153,24 @@ mod tests {
                 }
             }
             let (boxes, prims) = pathtrace::stats::take();
+            // The queues' saving: of the invocations a pass would make with every pixel
+            // dispatched every round, the share that had a live path to advance.
+            let (mut live, mut slots) = (0u64, 0u64);
+            for (index, ray) in GpuRenderer::camera_rays(&s, 0).iter().enumerate() {
+                let mut p = PathState::start(index as u32, 0, b.params.seed.x, ray);
+                for _ in 0..=b.params.dims.w {
+                    slots += 1;
+                    if p.state.y & pathtrace::PATH_ACTIVE != 0 {
+                        live += 1;
+                        p = pathtrace::bounce(&shader, &p).0;
+                    }
+                }
+            }
+            pathtrace::stats::take();
+            let live_share = live as f64 / slots as f64;
             let short = name.rsplit('/').next().unwrap().trim_end_matches(".json");
-            println!("{:<16} {:>9} {:>9} {:>10} {:>10.1} {:>10.1}   ({:.2} s on one thread, tree {} levels deep)", short, b.prims.len(), b.nodes.len(), total_rays,
-                boxes as f64 / total_rays as f64, prims as f64 / total_rays as f64, start.elapsed().as_secs_f64(), bvh_depth(&flat.bvh.export()));
+            println!("{:<16} {:>9} {:>9} {:>10} {:>10.1} {:>10.1}   (tree {} levels deep; max depth {}, {:.0}% of path-rounds live)", short, b.prims.len(), b.nodes.len(), total_rays,
+                boxes as f64 / total_rays as f64, prims as f64 / total_rays as f64, bvh_depth(&flat.bvh.export()), b.params.dims.w, 100. * live_share);
         }
     }
 

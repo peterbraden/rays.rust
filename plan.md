@@ -1424,12 +1424,40 @@ UI, file IO and rayon's threads would follow.
    identical images (FLIP against the megakernel), then measure on real GPUs (the Mac; the
    browser) against the megakernel to decide which to keep for which device.
 
-   Started: a wavefront by bounce (`bounce_paths`, `answer_sky`; above). Still to come:
-   - Queues of active paths (a u32 atomic counter, `dispatchWorkgroupsIndirect`), so late
-     rounds with few paths left cost little; most for the browser, where a pass is now about
-     20 full-image dispatches. Queues and counters must share buffers: all 8 of WebGPU's
-     storage bindings are in use. Spike first: atomics and indirect dispatch through rust-gpu
-     and naga to Metal and the browser.
+   Started: a wavefront by bounce (`bounce_paths`, `answer_sky`; above).
+
+   Done, on #114: queues of active paths. A round's dispatch covers the paths still alive,
+   not every pixel.
+   - One buffer holds two queues of pixel indices and a four-word header each: the dispatch
+     that covers the queue, as `dispatchWorkgroupsIndirect` reads it, and its count.
+     `bounce_paths` takes its paths from one side and appends those still alive to the other
+     with `atomicAdd`, extending that side's dispatch as it fills (a group in x for the first
+     item of each 64, a row in y for each 65,535 groups); `answer_sky` runs over the same
+     queue; the next round swaps sides (`Params::seed.z`, so two parameter buffers and bind
+     groups). Between rounds the host copies the filled side's header to the buffer the next
+     dispatch reads (a buffer bound for writing can't also be a dispatch's arguments) and an
+     empty header over the side just read: two buffer copies, no kernel.
+   - Within WebGPU's 8 storage buffers a kernel: the image left the rounds' bind group for a
+     kernel of its own, `add_paths`, once a pass; the queues took its place.
+   - The spike's answers: rust-gpu's `atomic_i_add`/`atomic_load`/`atomic_store` on a
+     `&mut [u32]` work (scope `QueueFamily`: `Device` needs a capability under Vulkan's memory
+     model); naga 30 reads them and makes the buffer `array<atomic<u32>>` (so every access
+     to it is atomic), and the WGSL validates for WebGPU. Runs on Vulkan from the SPIR-V and
+     from the WGSL (lavapipe), and in Chromium (WebGPU on SwiftShader). Not yet run on Metal
+     or DX12, whose naga writers these atomics and the indirect dispatch have not been through.
+   - Images unchanged: pixel-identical at 320 x 180, 8 spp on instances, demo, glossy-sun and
+     night-orbit; the ten GPU tests pass; browser against native FLIP 0.0025 on spheres.
+   - What it saves, counted on the kernel's CPU build (`measure_traversal`): of a pass's
+     pixel-rounds, the share with a live path is 21% on demo (max depth 9), 29% on glossy-sun
+     (6), 57% on instances (3) and spheres (2). Dispatches a pass: 2 (d + 1) + 1, from
+     2 (d + 2) - 1, plus two small copies a round.
+   - Timed on llvmpipe only (320 x 180, a sample, median of 3): demo 48.8 -> 35.9 ms,
+     glossy-sun 52.9 -> 41.3, instances 95.9 -> 90.2 (inside its spread). A dead path's
+     invocation was already cheap (one load and a branch), so the gain is less than the live
+     share suggests; on a real GPU, where it is cheaper still, expect less, and measure
+     (`scripts/benchmark-gpu.sh`, and `web/test.mjs` for the browser's time a pass).
+
+   Still to come:
    - Stages: intersect (sorting hits into queues: escaped, emitter, each material kind),
      shade per material kind, shadow rays, sky; the random numbers drawn in the same order,
      so images and the GPU-against-CPU-build tests hold.

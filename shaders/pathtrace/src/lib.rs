@@ -6,9 +6,12 @@
 #![cfg_attr(target_arch = "spirv", no_std)]
 #![allow(clippy::too_many_arguments)]
 
+// (Some are used only by the kernels' entry points, which the CPU build leaves out.)
+#[allow(unused_imports)]
 use spirv_std::glam::{UVec3, UVec4, Vec3, Vec4, Vec4Swizzles};
 #[allow(unused_imports)]
 use spirv_std::num_traits::Float;
+#[allow(unused_imports)]
 use spirv_std::spirv;
 
 /// glam, as the shader sees it, for building its buffers on the CPU.
@@ -2121,14 +2124,95 @@ pub fn radiance(s: &Scene, ro: Vec3, rd: Vec3, rng: &mut u32, rays: &mut u32) ->
 }
 
 /// The pixel this invocation serves (dispatched as rows of at most 65535 workgroups), if any.
+#[cfg(target_arch = "spirv")]
 fn pixel(gid: UVec3, params: &Params) -> Option<usize> {
     let index = gid.x + gid.y * (65535 * 64);
     if index >= params.dims.x * params.dims.y { None } else { Some(index as usize) }
 }
 
-/// One vertex of every pixel's path (`bounce`), its sky queries in two slots a pixel; a path
-/// found ended (its queries answered by `answer_sky` since) adds its light to the image, once.
-/// A pass dispatches this `max_depth` + 2 times, with `answer_sky` after each but the last.
+// ---- Queues of paths: a round's dispatch covers the paths still alive, not every pixel. ----
+//
+// One buffer, `queue`, holds two queues of pixel indices, side 0 and side 1. A round reads the
+// paths to advance from one side (`Params::seed.z`) and writes those still alive after it to
+// the other; the next round swaps them. Each side has a header of four words: the dispatch that
+// covers it (workgroups in x and y, then 1), as `dispatchWorkgroupsIndirect` reads it, and its
+// count. Kernels append with atomics, keeping the header's dispatch in step with the count,
+// so the host needs no kernel between rounds: it copies the filled side's header to the
+// buffer the next dispatch is read from (a buffer bound for writing can't also be a
+// dispatch's arguments), and a fresh header over the side just emptied.
+//
+// Every access to the buffer is atomic: naga gives a buffer touched by atomic instructions
+// an atomic element type, as WGSL and Metal require.
+
+/// Words in the queue buffer before the two sides' items: a header each.
+pub const QUEUE_HEADER: u32 = 8;
+/// In a side's header, after the dispatch's three words.
+pub const QUEUE_COUNT: u32 = 3;
+/// The most workgroups a dispatch may have in one dimension (WebGPU's default limit).
+pub const MAX_GROUPS: u32 = 65535;
+pub const WORKGROUP: u32 = 64;
+
+/// A header for an empty queue: no workgroups (but a depth of one), no items.
+pub const EMPTY_QUEUE: [u32; 4] = [0, 0, 1, 0];
+
+/// The header of a queue of `count` items, as a kernel's appends leave it.
+pub fn queue_header(count: u32) -> [u32; 4] {
+    let groups = count.div_ceil(WORKGROUP);
+    [groups.min(MAX_GROUPS), groups.div_ceil(MAX_GROUPS), 1, count]
+}
+
+#[cfg(target_arch = "spirv")]
+mod queue {
+    use super::*;
+    use spirv_std::arch::{atomic_i_add, atomic_load, atomic_store};
+    use spirv_std::memory::{Scope, Semantics};
+
+    // The widest scope Vulkan's memory model allows without a further capability.
+    const SCOPE: u32 = Scope::QueueFamily as u32;
+    const SEMANTICS: u32 = Semantics::NONE.bits();
+
+    fn load(queue: &[u32], i: u32) -> u32 {
+        unsafe { atomic_load::<u32, SCOPE, SEMANTICS>(queue.get_unchecked(i as usize)) }
+    }
+
+    /// The pixel this invocation is to advance: item `gid` of the side being read, if there
+    /// is one.
+    pub fn take(queue: &[u32], gid: UVec3, params: &Params) -> Option<u32> {
+        let side = params.seed.z;
+        let i = gid.x + gid.y * (MAX_GROUPS * WORKGROUP);
+        if i >= load(queue, side * 4 + QUEUE_COUNT) {
+            return None;
+        }
+        Some(load(queue, QUEUE_HEADER + side * params.dims.x * params.dims.y + i))
+    }
+
+    /// Append `pixel` to the side being written.
+    pub fn push(queue: &mut [u32], pixel: u32, params: &Params) {
+        let side = 1 - params.seed.z;
+        let header = (side * 4) as usize;
+        unsafe {
+            let slot = atomic_i_add::<u32, SCOPE, SEMANTICS>(queue.get_unchecked_mut(header + QUEUE_COUNT as usize), 1);
+            atomic_store::<u32, SCOPE, SEMANTICS>(
+                queue.get_unchecked_mut((QUEUE_HEADER + side * params.dims.x * params.dims.y + slot) as usize), pixel);
+            // The first item of each workgroup extends the dispatch to cover it: across x
+            // until that is full, then a row of y for every `MAX_GROUPS` groups.
+            if slot % WORKGROUP == 0 {
+                let group = slot / WORKGROUP;
+                if group < MAX_GROUPS {
+                    atomic_i_add::<u32, SCOPE, SEMANTICS>(queue.get_unchecked_mut(header), 1);
+                }
+                if group % MAX_GROUPS == 0 {
+                    atomic_i_add::<u32, SCOPE, SEMANTICS>(queue.get_unchecked_mut(header + 1), 1);
+                }
+            }
+        }
+    }
+}
+
+/// One vertex of each queued path (`bounce`), its sky queries in its pixel's two slots; those
+/// still alive are queued for the next round. A pass dispatches this `max_depth` + 1 times,
+/// each over the paths the last left alive, with `answer_sky` after each, then `add_paths`.
+#[cfg(target_arch = "spirv")]
 #[spirv(compute(threads(64)))]
 pub fn bounce_paths(
     #[spirv(global_invocation_id)] gid: UVec3,
@@ -2139,38 +2223,26 @@ pub fn bounce_paths(
     #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 5)] tables: &[f32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] paths: &mut [PathState],
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 7)] accum: &mut [Vec4],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 7)] queue: &mut [u32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 8)] queries: &mut [SkyQuery],
 ) {
-    let Some(index) = pixel(gid, params) else { return };
+    let Some(pixel) = queue::take(queue, gid, params) else { return };
+    let index = pixel as usize;
     let p = paths[index];
-    // Each buffer written once, after the branches (writes in each would join pointers chosen
-    // by branch, which needs SPIR-V's variable pointers).
-    let (mut next, mut q0, mut q1) = (p, SkyQuery::NONE, SkyQuery::NONE);
-    let mut add = Vec4::ZERO;
-    if p.state.y & PATH_ACTIVE != 0 {
-        let s = Scene { params, prims, nodes, materials, lights, tables };
-        (next, q0, q1) = bounce(&s, &p);
-    } else if p.state.y & PATH_ADDED == 0 {
-        // A NaN (from some degenerate case) is dropped, as the CPU renderers drop theirs; its
-        // rays were still cast. (Not `is_finite`: its infinite constant is invalid for naga,
-        // which wgpu translates through.) w counts the rays.
-        let c = p.l.xyz() * p.o.w;
-        #[allow(clippy::eq_op)]
-        let not_nan = c.x == c.x && c.y == c.y && c.z == c.z;
-        add = if not_nan { c } else { Vec3::ZERO }.extend(p.l.w);
-        next.state.y = p.state.y | PATH_ADDED;
-    }
+    let s = Scene { params, prims, nodes, materials, lights, tables };
+    let (next, q0, q1) = bounce(&s, &p);
     paths[index] = next;
     queries[2 * index] = q0;
     queries[2 * index + 1] = q1;
-    if add.w > 0.0 {
-        accum[index] += add;
+    if next.state.y & PATH_ACTIVE != 0 {
+        queue::push(queue, pixel, params);
     }
 }
 
-/// The light every pixel's sky queries find (`sky_light`), added to its path's: the sky, space
-/// and the air's haze, in a kernel of their own, as they are most of the shader's code.
+/// The light the sky queries of the paths just advanced find (`sky_light`), added to each
+/// path's: the sky, space and the air's haze, in a kernel of their own, as they are most of
+/// the shader's code. Dispatched over the same queue as the `bounce_paths` before it.
+#[cfg(target_arch = "spirv")]
 #[spirv(compute(threads(64)))]
 pub fn answer_sky(
     #[spirv(global_invocation_id)] gid: UVec3,
@@ -2181,9 +2253,11 @@ pub fn answer_sky(
     #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 5)] tables: &[f32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] paths: &mut [PathState],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 7)] queue: &mut [u32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 8)] queries: &mut [SkyQuery],
 ) {
-    let Some(index) = pixel(gid, params) else { return };
+    let Some(pixel) = queue::take(queue, gid, params) else { return };
+    let index = pixel as usize;
     let s = Scene { params, prims, nodes, materials, lights, tables };
     let mut light = Vec3::ZERO;
     // Both slots, at one call site of `sky_light`.
@@ -2197,5 +2271,36 @@ pub fn answer_sky(
     }
     if light.dot(light) > 0.0 {
         paths[index].l += light.extend(0.0);
+    }
+}
+
+/// What a finished path adds to its pixel's sum: its light times the camera sample's weight,
+/// and in w the rays it cast. A NaN (from some degenerate case) is dropped, as the CPU
+/// renderers drop theirs; its rays were still cast. (Not `is_finite`: its infinite constant
+/// is invalid for naga, which wgpu translates through.) Nothing for a pixel whose camera ray
+/// the lens stopped (`PATH_ADDED` from the start).
+pub fn path_sum(p: &PathState) -> Vec4 {
+    if p.state.y & PATH_ADDED != 0 {
+        return Vec4::ZERO;
+    }
+    let c = p.l.xyz() * p.o.w;
+    #[allow(clippy::eq_op)]
+    let not_nan = c.x == c.x && c.y == c.y && c.z == c.z;
+    if not_nan { c } else { Vec3::ZERO }.extend(p.l.w)
+}
+
+/// Every pixel's path, finished, added to the image: once a pass, after its last round.
+#[cfg(target_arch = "spirv")]
+#[spirv(compute(threads(64)))]
+pub fn add_paths(
+    #[spirv(global_invocation_id)] gid: UVec3,
+    #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] paths: &[PathState],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] accum: &mut [Vec4],
+) {
+    let Some(index) = pixel(gid, params) else { return };
+    let add = path_sum(&paths[index]);
+    if add.w > 0.0 {
+        accum[index] += add;
     }
 }

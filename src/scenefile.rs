@@ -4265,7 +4265,7 @@ mod tests {
 
     #[test]
     fn test_plane_normal_is_an_orientation_or_a_bump_map() {
-        // A ground plane, bump mapped: its "normal" is an object (demo/scenes/bumps.json).
+        // A ground plane, bump mapped: its "normal" is an object (the bumps plinth of demo/scenes/stress-test.json).
         let bumped = minimal_scene(r#", "materials": { "M": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } },
             "objects": [ { "type": "plane", "y": 0, "material": "M",
                            "normal": { "pattern": "waves", "amount": 0.25 } } ]"#);

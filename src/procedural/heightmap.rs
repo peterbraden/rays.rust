@@ -994,6 +994,27 @@ impl HeightGrid {
         (lo - margin, hi + margin)
     }
 
+    /// Bounds on the smooth surface's slopes over cell (ix, iz): the most |dh/dx| and |dh/dz|.
+    /// The derivative's Catmull-Rom weights sum to 0, and their magnitudes to at most 3, so
+    /// along a row of four vertices the derivative is at most 1.5 times the row's range (per
+    /// cell); the other axis's weights add up to at most 1.25 in magnitude.
+    pub fn smooth_slope_bounds(&self, ix: usize, iz: usize) -> (f64, f64) {
+        let v = |a: isize, b: isize| self.corner_clamped(ix as isize + a, iz as isize + b);
+        let (mut along_x, mut along_z) = (0f64, 0f64);
+        for k in -1 ..= 2 {
+            let row = (-1 ..= 2).map(|a| v(a, k));
+            let col = (-1 ..= 2).map(|b| v(k, b));
+            let range = |it: &mut dyn Iterator<Item = f64>| {
+                let (lo, hi) = it.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), h| (lo.min(h), hi.max(h)));
+                hi - lo
+            };
+            along_x = along_x.max(range(&mut row.into_iter()));
+            along_z = along_z.max(range(&mut col.into_iter()));
+        }
+        let k = 1.25 * 1.5 / self.cell;
+        (k * along_x, k * along_z)
+    }
+
     pub fn bounds(&self) -> BBox {
         let max = self.max();
         BBox::new(

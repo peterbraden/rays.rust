@@ -1081,12 +1081,30 @@ impl SceneFile {
         let eye = (!camera.is_null() && height > 0. && v["level"].is_null()).then(|| {
             (SceneFile::parse_vec3(&camera["location"]), camera["angle"].as_f64().unwrap_or(0.5).tan() / height)
         });
+        // A still perspective camera's view, a few pixels wider than the image for the pixel
+        // filter, so cells out of it can be diced coarser.
+        let width = SceneFile::parse_number(&camera["image_width"], 0.);
+        let still_perspective = matches!(camera["type"].as_str(), None | Some("perspective"))
+            && camera.get("motion").is_none() && camera.get("astigmatism").is_none();
+        let view = (eye.is_some() && width > 0. && still_perspective).then(|| {
+            let frame = crate::camera::Frame::look_at(SceneFile::parse_vec3(&camera["location"]),
+                SceneFile::parse_vec3(&camera["lookat"]), SceneFile::parse_vec3(&camera["up"]));
+            let tan = camera["angle"].as_f64().unwrap_or(0.5).tan();
+            let widen = |pixels: f64| 1. + 8. / pixels;
+            crate::shapes::displaced::View {
+                eye: frame.location, right: frame.camx, up: frame.camy, forward: frame.camz,
+                tan_x: 0.5 * tan * width / height * widen(width), tan_y: 0.5 * tan * widen(height),
+                margin: SceneFile::parse_number(&camera["aperture"], 0.2).abs(),
+            }
+        });
         let detail = Detail {
             eye,
             pixels: SceneFile::parse_number(&v["pixels"], 1.),
             max_level: SceneFile::parse_int(&v["max_level"], 8) as u32,
             min_spacing: v["min_spacing"].as_f64(),
             level: SceneFile::parse_int(&v["level"], 4) as u32,
+            view,
+            offscreen: SceneFile::parse_number(&v["offscreen"], 4.),
         };
         let vertical = match o["displacement_direction"].as_str() {
             None | Some("normal") => false,
@@ -3280,6 +3298,7 @@ impl SceneFile {
             if g["type"].as_str() == Some("terrain") && g.get("displacement").is_some() && g.get("camera").is_none() {
                 g["camera"] = s.camera.clone();
                 g["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+                g["camera"]["image_width"] = serde_json::json!(SceneFile::parse_int(&s.width, 640));
             }
         }
         let geometries = GeometryLibrary::new(named);
@@ -3315,6 +3334,7 @@ impl SceneFile {
             if (o["type"].as_str() == Some("forest") || displaced) && o.get("camera").is_none() {
                 o["camera"] = s.camera.clone();
                 o["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+                o["camera"]["image_width"] = serde_json::json!(SceneFile::parse_int(&s.width, 640));
             }
         }
         // A moon lights the scene with the sunlight it reflects (unless `"light": false`), and

@@ -1,24 +1,25 @@
 {
   "width": 1200,
-  "height": 400,
+  "height": 720,
   "supersamples": 16,
-  "max_depth": 1,
-  "output": { "exposure": 1.6 },
-  "background": { "type": "space", "seed": 21 },
-  "camera": {
-    "location": [0, 0, 0],
-    "lookat": [0, 0, 1],
-    "up": [0, 1, 0],
-    "angle": 0.0175,
-    "aperture": 0
-  },
-  "sun": { "intensity": 6, "direction": [-0.6, 0.15, -0.6] },
+  "max_depth": 4,
+  "output": {"exposure": 1.4},
+  "background": {"type": "space", "seed": 21},
+  "camera": {"location": [0, 0, 0], "lookat": [0, 0, 1], "up": [0, 1, 0], "angle": 0.2, "aperture": 0},
+  "sun": {"intensity": 6, "direction": [-0.55, 0.25, -0.6]},
   "objects": [
-    { "type": "moon", "preset": "mercury", "seed": 1, "position": [22500000.0, 0, 1e9], "earthshine": false },
-    { "type": "moon", "preset": "mars", "seed": 2, "position": [13500000.0, 0, 1e9], "earthshine": false },
-    { "type": "moon", "preset": "callisto", "seed": 3, "position": [4500000.0, 0, 1e9], "earthshine": false },
-    { "type": "moon", "preset": "ganymede", "seed": 4, "position": [-4500000.0, 0, 1e9], "earthshine": false },
-    { "type": "moon", "preset": "europa", "seed": 5, "position": [-13500000.0, 0, 1e9], "earthshine": false },
-    { "type": "moon", "preset": "io", "seed": 6, "position": [-22500000.0, 0, 1e9], "earthshine": false }
+    {"type": "world", "kind": "gas_giant", "seed": 7, "rings": true, "direction": [-0.14, 0.065, 1], "distance": 3400000000.0, "pole": [0.2, 0.9, -0.35], "resolution": 2048},
+    {"type": "world", "kind": "ice_giant", "seed": 12, "direction": [-0.035, 0.065, 1], "distance": 1500000000.0},
+    {"type": "gas_giant", "preset": "uranus", "seed": 1, "position": [74749000.0, 97174000.0, 1494982000.0], "pole": [0.25, 0.35, -0.9], "resolution": 1024},
+    {"type": "gas_giant", "preset": "neptune", "seed": 1, "position": [207542000.0, 96359000.0, 1482444000.0], "pole": [0.1, 0.97, -0.3], "rotation": -70, "resolution": 2048},
+    {"type": "moon", "preset": "mercury", "seed": 1, "position": [-29668000.0, -989000.0, 197785000.0], "earthshine": false},
+    {"type": "moon", "preset": "mars", "seed": 2, "position": [-17927000.0, -996000.0, 199192000.0], "earthshine": false},
+    {"type": "moon", "preset": "callisto", "seed": 3, "position": [-5997000.0, -1000000.0, 199908000.0], "earthshine": false},
+    {"type": "moon", "preset": "ganymede", "seed": 4, "position": [5997000.0, -1000000.0, 199908000.0], "earthshine": false},
+    {"type": "moon", "preset": "europa", "seed": 5, "position": [17927000.0, -996000.0, 199192000.0], "earthshine": false},
+    {"type": "moon", "preset": "io", "seed": 6, "position": [29668000.0, -989000.0, 197785000.0], "earthshine": false},
+    {"type": "world", "kind": "rocky", "seed": 5, "direction": [-0.09, -0.07, 1], "distance": 35000000.0},
+    {"type": "world", "kind": "rocky", "seed": 9, "direction": [0.0, -0.07, 1], "distance": 150000000.0},
+    {"type": "world", "kind": "icy", "seed": 4, "direction": [0.09, -0.07, 1], "distance": 14000000.0}
   ]
 }

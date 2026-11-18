@@ -628,7 +628,7 @@ impl Leader {
                 tips[k].at = points.len() - 1;
                 tips[k].dir = dir;
                 let generation = tips[k].generation;
-                if rng.next_f64() < self.branching * 0.5 * FORK_FALLOFF.powi(generation) && tips.len() < 16 {
+                if rng.next_f64() < self.branching * FORK_FALLOFF.powi(generation).max(0.3) && tips.len() < 32 {
                     let side = Vector3::new(-dir.z, 0.2 * gaussian(&mut rng), dir.x).normalize() * if rng.next_f64() < 0.5 { 1. } else { -1. };
                     let angle = (25. + 35. * rng.next_f64()).to_radians();
                     born.push(Tip { at: tips[k].at, dir: (dir * angle.cos() + side * angle.sin()).normalize(), cloud: true, generation: generation + 1 });

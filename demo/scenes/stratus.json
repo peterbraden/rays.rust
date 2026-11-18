@@ -36,8 +36,8 @@
     {
       "type": "ocean",
       "wind": [
-        7,
-        2
+        2.88,
+        0.82
       ],
       "detail_center": [
         0,

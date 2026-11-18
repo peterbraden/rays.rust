@@ -46,7 +46,13 @@ The WMO's atlas sorts every cloud into ten genera. All ten have a scene:
 | Cumulonimbus (Cb) | `cumulonimbus` | `cumulonimbus.json`, `lightning.json` |
 
 Render any of them with `cargo run --release -- demo/scenes/<scene>.json`. The scenes stand on the
-sea (`{"type": "ocean"}`, the planet's surface), whose reflections show the sky and clouds again. The stratocumulus
+sea (`{"type": "ocean"}`, the planet's surface), whose reflections show the sky and clouds again.
+The sea follows the weather: its `wind` (m/s) raises waves and roughness as measured for that
+wind, and whitecaps over the fraction of the sea that wind breaks (Monahan's fit: a few in a
+moderate breeze, 2% at 12 m/s, 5% at 14 m/s). Fair-weather scenes have a moderate breeze
+(7 m/s); stratus a near calm (3 m/s); altostratus, ahead of a front, a fresh breeze (9 m/s);
+the squalls and rain a strong breeze (11 to 12 m/s); and the thunderstorm's gust front a near
+gale (14 m/s). The stratocumulus
 image is a quick preview (480 x 300, 8 samples per pixel), so it is noisy.
 
 ### All together

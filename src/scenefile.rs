@@ -73,6 +73,20 @@ use rayon::prelude::*;
 
 /// A geometry that may be shared: by several objects, or by instancing transforms.
 pub type SharedGeometry = Arc<dyn Geometry + Sync + Send>;
+
+/// An object's fields (a landscape's simulation), kept with the object, for graphs elsewhere in
+/// the scene to read (a volume's density).
+struct ObjectFields(Arc<SceneObject>);
+
+impl crate::graph::Fields for ObjectFields {
+    fn field(&self, f: crate::graph::Field, p: &Vector3<f64>) -> Option<f64> {
+        self.0.medium.fields()?.field(f, p)
+    }
+
+    fn vertical(&self, p: &Vector3<f64>) -> Option<(Vector3<f64>, f64)> {
+        self.0.medium.fields()?.vertical(p)
+    }
+}
 /// A part of a tree, as detail to make levels of, and its medium (`SceneFile::tree_details`).
 pub type TreeDetail = (crate::shapes::lod::Detail, Box<dyn Medium + Sync + Send>);
 
@@ -705,6 +719,9 @@ impl SceneFile {
                 objects.extend(SceneFile::parse_forest(&obj, materials, media, geometries));
             } else if obj["type"] == "scatter" {
                 objects.extend(SceneFile::parse_scatter(&obj, materials, media, geometries, landscape.as_deref()));
+            } else if obj["type"] == "volume" && matches!(obj.get("density"), Some(Value::Object(_) | Value::String(_))) {
+                let fields = landscape.clone().map(|l| Arc::new(ObjectFields(l)) as Arc<dyn crate::graph::Fields>);
+                objects.push(Arc::new(SceneFile::parse_volume_over(&obj, geometries, fields)));
             } else if obj["type"] == "landscape" {
                 // Kept, as a surface for scatters after it.
                 if let Some(x) = SceneFile::parse_object(obj, materials, media, geometries) {
@@ -1509,7 +1526,10 @@ impl SceneFile {
     /// "g": asymmetry, "noise": {"scale", "octaves", "threshold", "seed"}, "grid": ...}`
     ///
     /// `density` is the extinction coefficient, the chance of a collision per unit distance
-    /// (default 1). Without `noise` it is constant; with it, it varies up to that maximum. With
+    /// (default 1). Without `noise` it is constant; with it, it varies up to that maximum. It
+    /// may instead be a function graph (`graph.rs`), its value the extinction where it is
+    /// evaluated (`volume::GraphDensity`); after a landscape in the scene, the graph reads its
+    /// fields, and `altitude` is the height above the planet. With
     /// `grid` (`volume::grid`), it is the grid's values times `density`: a Mitsuba `.vol` file's
     /// path, or `{"resolution": [nx, ny, nz], "values": [...]}` (x fastest); `min` and `max`
     /// default to the file's bounds. In place of `albedo`, `sigma_a` and `sigma_s` (RGB) give
@@ -1523,7 +1543,15 @@ impl SceneFile {
     /// `droplet_diameter` (in µm, 5 to 50: the Mie scattering of water droplets of that size;
     /// see `PhaseFunction::water_droplets`).
     pub fn parse_volume(o: &Value, geometries: &GeometryLibrary) -> SceneObject {
-        let max_density = SceneFile::parse_number(&o["density"], 1.);
+        SceneFile::parse_volume_over(o, geometries, None)
+    }
+
+    /// As `parse_volume`, a density graph reading `fields` (the landscape's, for a volume after
+    /// one in the scene).
+    pub fn parse_volume_over(o: &Value, geometries: &GeometryLibrary, fields: Option<Arc<dyn crate::graph::Fields>>) -> SceneObject {
+        // A graph for density: its value is the extinction (`volume::GraphDensity`).
+        let graphed = matches!(o.get("density"), Some(Value::Object(_) | Value::String(_)));
+        let max_density = if graphed { 1. } else { SceneFile::parse_number(&o["density"], 1.) };
         let grid = o.get("grid").map(SceneFile::parse_grid);
         let shape = o.get("shape").map(|v| SceneFile::parse_geometry(v, geometries)
             .unwrap_or_else(|| panic!("A volume's shape must be a geometry, got {}", v)));
@@ -1534,6 +1562,11 @@ impl SceneFile {
             _ => BBox::new(SceneFile::parse_vec3(&o["min"]), SceneFile::parse_vec3(&o["max"])),
         };
         let density: Arc<dyn DensityField> = match (grid, o.get("noise")) {
+            _ if graphed => {
+                assert!(o.get("grid").is_none() && o.get("noise").is_none(), "Give a volume a density graph, or a grid or noise, not both");
+                let g = crate::graph::Graph::parse(&o["density"]).unwrap_or_else(|e| panic!("volume's density: {}", e));
+                Arc::new(crate::volume::GraphDensity::new(g, fields).unwrap_or_else(|e| panic!("{}", e)))
+            },
             (Some(_), Some(_)) => panic!("Give a volume either a grid or noise, not both"),
             (Some(g), None) => Arc::new(GridDensity::new(bounds, g, max_density)),
             (None, None) => Arc::new(ConstantDensity(max_density)),
@@ -4524,5 +4557,24 @@ mod tests {
         }).count();
         assert!(hits(1.) > 40, "{}", hits(1.));
         assert_eq!(hits(-10.), 0);
+    }
+
+    #[test]
+    fn test_volumes_take_a_density_graph() {
+        let o = serde_json::json!({ "type": "volume", "min": [-1, -1, -1], "max": [1, 1, 1],
+            "density": { "node": "multiply", "inputs": [3, { "node": "altitude", "from": 0, "to": -0.5 }] } });
+        let v = SceneFile::parse_volume(&o, &GeometryLibrary::empty());
+        // Thick low down, clear high up: transmittance along level rays, averaged.
+        let through = |y: f64| (0..400).map(|_| v.geometry.transmittance(&Ray { ro: Vector3::new(-2., y, 0.), rd: Vector3::x() }, 0., 4.)).sum::<f64>() / 400.;
+        crate::geometry::seed_rand(3, 1);
+        assert!(through(-0.8) < 0.01, "{}", through(-0.8));
+        assert!(through(0.5) > 0.99, "{}", through(0.5));
+    }
+
+    #[test]
+    #[should_panic(expected = "bounded above")]
+    fn test_volume_density_graphs_must_be_bounded() {
+        let o = serde_json::json!({ "type": "volume", "min": [-1, -1, -1], "max": [1, 1, 1], "density": "y" });
+        SceneFile::parse_volume(&o, &GeometryLibrary::empty());
     }
 }

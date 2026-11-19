@@ -199,6 +199,43 @@
           "material": "RockA"
         }
       ]
+    },
+    {
+      "type": "volume",
+      "min": [
+        -30000,
+        1500,
+        -20000
+      ],
+      "max": [
+        40000,
+        3400,
+        50000
+      ],
+      "density": {
+        "node": "multiply",
+        "inputs": [
+          0.02,
+          {
+            "node": "altitude",
+            "from": 2980,
+            "to": 2880,
+            "breakup": {
+              "node": "fractal",
+              "scale": 600,
+              "smallest": 40,
+              "amplitude": 120,
+              "seed": 9
+            }
+          }
+        ]
+      },
+      "albedo": [
+        0.97,
+        0.97,
+        0.97
+      ],
+      "g": 0.6
     }
   ],
   "materials": {

@@ -186,6 +186,34 @@ impl DensityField for ConstantDensity {
     fn minorant(&self) -> f64 { self.0 }
 }
 
+/// Density from a function graph (`graph.rs`), its value the extinction per unit distance,
+/// at least 0; bounded above by the graph's range, as delta tracking needs. With `fields` (a
+/// landscape's), its `field` nodes read the simulation, and `altitude` and `slope` go by the
+/// planet's up: fog that lies in the valleys, or thins with height above the ground.
+pub struct GraphDensity {
+    pub graph: crate::graph::Graph,
+    pub fields: Option<std::sync::Arc<dyn crate::graph::Fields>>,
+}
+
+impl GraphDensity {
+    pub fn new(graph: crate::graph::Graph, fields: Option<std::sync::Arc<dyn crate::graph::Fields>>) -> Result<GraphDensity, String> {
+        let hi = graph.range().1;
+        if !hi.is_finite() {
+            return Err("a volume's density graph must be bounded above: give an expression a \"range\", a field \"from\" and \"to\"".into());
+        }
+        Ok(GraphDensity { graph, fields })
+    }
+}
+
+impl DensityField for GraphDensity {
+    fn density(&self, p: &Vector3<f64>) -> f64 {
+        let c = crate::graph::Context::new(*p, Vector3::y(), 0.).with_fields(self.fields.as_deref());
+        self.graph.eval(&c).max(0.)
+    }
+    fn majorant(&self) -> f64 { self.graph.range().1.max(0.) }
+    fn minorant(&self) -> f64 { self.graph.range().0.max(0.) }
+}
+
 /// Density from fractal Perlin noise: `max_density` where the noise is highest, falling to
 /// nothing where it is below `threshold`, so the volume breaks up into separate puffs.
 pub struct NoiseDensity {
@@ -1030,6 +1058,22 @@ pub fn create_medium(mut volume: Volume, s: Scattering) -> SceneObject {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_graph_density_follows_its_graph() {
+        // Fog two per metre at the ground, thinning to nothing a metre up.
+        let g = crate::graph::Graph::parse(&serde_json::json!({"node": "multiply", "inputs": [2, {"node": "altitude", "from": 1, "to": 0}]})).unwrap();
+        let fog = GraphDensity::new(g, None).unwrap();
+        assert_eq!(fog.density(&Vector3::new(3., -1., 2.)), 2.);
+        assert_eq!(fog.density(&Vector3::new(3., 0.5, 2.)), 1.);
+        assert_eq!(fog.density(&Vector3::new(3., 4., 2.)), 0.);
+        assert_eq!(fog.majorant(), 2.);
+        // Never negative, and bounded above.
+        let below = crate::graph::Graph::parse(&serde_json::json!({"node": "expr", "expr": "y", "range": [-5, 5]})).unwrap();
+        assert_eq!(GraphDensity::new(below, None).unwrap().density(&Vector3::new(0., -3., 0.)), 0.);
+        let unbounded = crate::graph::Graph::parse(&serde_json::json!("y")).unwrap();
+        assert!(GraphDensity::new(unbounded, None).is_err());
+    }
+
     use super::*;
     use crate::geometry::seed_rand;
 

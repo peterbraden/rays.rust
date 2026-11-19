@@ -55,6 +55,12 @@ The demo uses one to put sandstone on steep faces and sand on flats and ledge to
 Its varnish is plan-view noise (`"plan": true`, so constant down a vertical face, as streaks
 are) masked to the steepest, highest rock, mixing a dark rock into the sandstone.
 
+A graph can also be a volume's `density` (`volume::GraphDensity`): its value is the extinction
+per metre, bounded by the graph's range for delta tracking. After a landscape in the scene, it
+reads the landscape's fields and judges `altitude` above the planet, so
+`demo/scenes/alpine-closeup.json` lays banks of fog in the valley below about 2,900 m, ragged
+at their tops.
+
 Every node knows its range by interval arithmetic and clamps to it, so a displaced surface can
 be bounded before it is evaluated. Fractals and cells are filtered: told the spacing of the
 vertices where they are evaluated, they fade out octaves finer than twice that, putting each

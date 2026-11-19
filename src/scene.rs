@@ -355,6 +355,9 @@ pub struct Scene {
     pub light_bvh: Option<crate::light_bvh::LightBvh>,
     /// Each area light's index in `area_lights`, by its address.
     pub area_light_indices: std::collections::HashMap<usize, usize>,
+    /// The sea, if the scene has an ocean, for glitter probes from media
+    /// (`ocean::Sea`, `VolumeMaterial::glitter_probe`).
+    pub sea: Option<crate::ocean::Sea>,
 }
 
 /// With a light BVH, up to this many point lights are still all sampled at every vertex.

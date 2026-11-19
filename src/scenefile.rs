@@ -839,6 +839,16 @@ impl SceneFile {
             }));
         }
 
+        if t == "cumulus" {
+            return Some(Arc::new(SceneFile::parse_cumulus(&o)));
+        }
+        if t == "weather_layer" {
+            return Some(Arc::new(crate::weather::scene::create_layer(&o)));
+        }
+        if t == "weather" {
+            panic!("A weather object is expanded into its layers before parsing (`weather::scene::expand`)");
+        }
+
         if t == "moon" {
             return Some(Arc::new(crate::celestial::moon::parse_moon(&o)));
         }
@@ -1338,6 +1348,7 @@ impl SceneFile {
             rainbow: (o["rainbow"].as_bool() == Some(true)).then(|| Arc::new(RainbowTable::new(100_000))),
             emission: None,
             extinction: None,
+            sun_probes: o["sun_probes"].as_bool().unwrap_or(crate::volume::SUN_PROBES),
         }
     }
 
@@ -1516,6 +1527,11 @@ impl SceneFile {
     /// `follow_wind` renders the clouds as seen drifting with the wind, so in an animation
     /// they stay in view as they grow and dissipate, rather than crossing the sky.
     ///
+    /// Turbulence finer than the grid (`HarrisCumulus::turbulent`, after Kim et al.'s wavelet
+    /// turbulence): `turbulence` (strength, default 0.35; 0 for none) over `turbulence_octaves`
+    /// (default 3) below the cell size, looked up at texture coordinates the simulation carries
+    /// with the flow, each set renewed every `texture_period` seconds (default 600).
+    ///
     /// For rendering: `droplet_radius` (µm, default 10; sets the extinction per gram of
     /// water, and the diffraction), `detail_size`, `erosion` (0 to 1) and `edge` (g/kg of
     /// cloud water the detail can erode), `repeat` (tile the grid across the sky, default
@@ -1546,6 +1562,30 @@ impl SceneFile {
         p.max_step = num("max_step", p.max_step);
         p.seed = SceneFile::parse_seed(o).unwrap_or(0);
         p.start = num("start", p.start);
+        p.texture_period = num("texture_period", p.texture_period).max(1.);
+        // A cloud to start from: `"bubble": {"center": [x, z] (m from the grid's corner; default
+        // its middle), "height": m (of its middle), "radius": m, "depth": m (top to bottom;
+        // default twice the radius: a ball), "warmth": K, "supersaturation": 0.05}`.
+        if let Some(b) = o.get("bubble") {
+            let (nx, _, nz) = p.size;
+            let middle = Vector2::new(nx as f64, nz as f64) * p.cell / 2.;
+            let c = SceneFile::parse_vec2_def(b, "center", middle);
+            p.bubble = Some(crate::procedural::harris_cumulus::Bubble {
+                centre: Vector3::new(c.x, SceneFile::parse_number(&b["height"], 1000.), c.y),
+                radius: SceneFile::parse_number(&b["radius"], 400.).max(1.),
+                height: SceneFile::parse_number(&b["depth"], 2. * SceneFile::parse_number(&b["radius"], 400.)).max(1.) / 2.,
+                warmth: SceneFile::parse_number(&b["warmth"], 2.),
+                supersaturation: SceneFile::parse_number(&b["supersaturation"], 0.05).max(0.),
+            });
+        }
+        // A hero cloud: `"hot_spot": {"center": [x, z] (m from the grid's corner; default its
+        // middle), "radius": m, "boost": 1}`.
+        if let Some(h) = o.get("hot_spot") {
+            let (nx, _, nz) = p.size;
+            let middle = Vector2::new(nx as f64, nz as f64) * p.cell / 2.;
+            p.hot_spot = Some((SceneFile::parse_vec2_def(h, "center", middle), SceneFile::parse_number(&h["radius"], 500.).max(1.),
+                SceneFile::parse_number(&h["boost"], 1.).max(0.)));
+        }
         if o["sounding"].as_str() == Some("arm") {
             // The full day, from dawn.
             p.sounding = Sounding::arm();
@@ -1573,7 +1613,8 @@ impl SceneFile {
             None => CloudSimulation::cached(p.clone(), time, cache.as_deref()),
         };
         let center = SceneFile::parse_vec2_def(o, "center", Vector2::new(0., 0.));
-        let mut c = HarrisCumulus::new(&sim, num("droplet_radius", 10.), center);
+        let mut c = HarrisCumulus::with_turbulence(&sim, num("droplet_radius", 10.), center,
+            num("turbulence", 0.35).max(0.), SceneFile::parse_int(&o["turbulence_octaves"], 3).min(8));
         c.detail_size = num("detail_size", c.detail_size).max(1e-3);
         c.erosion = num("erosion", c.erosion).clamp(0., 1.);
         c.edge = num("edge", c.edge * 1000.) / 1000.;
@@ -1595,6 +1636,45 @@ impl SceneFile {
         };
         let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(c));
         create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// One cauliflower cumulus (see `procedural::cauliflower::Cumulus`), placed by hand:
+    ///
+    /// `{"type": "cumulus", "center": [x, z], "base": 1000, "width": 800, "depth": 1500,
+    /// "seed": 0}`, with `density` (extinction per metre in its core, 0.05), `edge` (m, 15),
+    /// `lift`, `dome` (how much higher the body's middle stands, in its spheres' radius: 0.8),
+    /// `lean` (per metre of height) and `wind_direction` ([x, z]), `billows` (a scale)
+    /// and `wisps`, `wisp_size` (m), and the sphere tree's `levels`, `ratio`, `children`, `embed`
+    /// and `rise`; and how it scatters, as any volume (`g` default 0.85). `"tower": true` makes
+    /// it a towering cumulus of stacked thermals (`width` its radius, `depth` its height), frozen
+    /// above `glaciation` (m) into a cumulonimbus's smooth top; `maturity` (0 to 1) how far it
+    /// has formed: wispy and translucent when young (`Surface::condensed`).
+    pub fn parse_cumulus(o: &Value) -> SceneObject {
+        use crate::procedural::cauliflower::{Cauliflower, Cumulus, Surface};
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let seed = SceneFile::parse_seed(o).unwrap_or(0);
+        let d = Cauliflower::cumulus();
+        let tree = Cauliflower::new(SceneFile::parse_int(&o["levels"], d.levels).min(8), num("ratio", d.ratio).clamp(0.1, 0.8),
+            SceneFile::parse_int(&o["children"], d.children).clamp(1, 32), num("embed", d.embed).clamp(0., 1.), num("rise", d.rise).max(0.));
+        let mut surface = Surface::new(seed.wrapping_add(77));
+        let billows = num("billows", 1.).max(0.);
+        surface.billows.iter_mut().for_each(|b| b.1 *= billows);
+        surface.wisps = num("wisps", surface.wisps).max(0.);
+        surface.wisp_size = num("wisp_size", surface.wisp_size).max(1.);
+        let centre = SceneFile::parse_vec2_def(o, "center", Vector2::zeros());
+        let wind = SceneFile::parse_vec2_def(o, "wind_direction", Vector2::new(1., 0.));
+        let mut c = if o["tower"].as_bool() == Some(true) {
+            Cumulus::tower(tree, surface, centre, num("base", 1000.), num("width", 1500.).max(10.), num("depth", 6000.).max(10.),
+                num("lift", 0.35).clamp(0., 1.), num("lean", 0.).max(0.), wind, o["glaciation"].as_f64(), seed)
+        } else {
+            Cumulus::new(tree, surface, centre, num("base", 1000.), num("width", 800.).max(10.), num("depth", 1500.).max(10.),
+                num("lift", 0.35).clamp(0., 1.), num("dome", 0.8).max(0.), num("lean", 0.25).max(0.), wind, seed)
+        };
+        c.maturity = num("maturity", 1.).clamp(0., 1.);
+        c.max_density = num("density", c.max_density).max(0.);
+        c.edge = num("edge", c.edge).max(1.);
+        let bounds = c.bounds();
+        create_volume(bounds, Arc::new(c), SceneFile::parse_scattering(o, 0.85))
     }
 
     /// A layer of altocumulus as Rayleigh-Bénard convection cells (see
@@ -1984,9 +2064,13 @@ impl SceneFile {
     /// default) and `"flat"` as for `nubis_clouds`.
     /// The phase function defaults to `g` 0.75, for ice crystals; `"halos"` adds sun dogs and
     /// halos (see `SceneFile::parse_halos`).
-    pub fn parse_hogan_kew_cirrus(o: &Value) -> SceneObject {
+    /// Hogan and Kew's cirrus as a scene file describes it (see `parse_hogan_kew_cirrus`), by
+    /// default of `genus`: the layer, and its generating cells' size, spectral slope,
+    /// coverage and seed.
+    pub fn hogan_kew_layer(o: &Value, genus: CirrusGenus) -> (HoganKewCirrus, (f64, f64, f64, u64)) {
         let genus = match o["genus"].as_str() {
-            None | Some("cirrus") => CirrusGenus::Cirrus,
+            None => genus,
+            Some("cirrus") => CirrusGenus::Cirrus,
             Some("cirrostratus") => CirrusGenus::Cirrostratus,
             Some("cirrocumulus") => CirrusGenus::Cirrocumulus,
             Some(g) => panic!("Unknown cirrus genus '{}': expected cirrus, cirrostratus or cirrocumulus", g),
@@ -2001,7 +2085,6 @@ impl SceneFile {
         f.anisotropy = num("anisotropy", f.anisotropy);
         f.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", f.wind_direction);
         f.seed = SceneFile::parse_seed(o).unwrap_or(0);
-        let (base, top) = (f.base, f.top);
         let generating = (f.cell_size, f.spectral_slope, f.coverage, f.seed);
         let mut c = HoganKewCirrus::new(f);
         c.max_density = num("density", c.max_density);
@@ -2027,6 +2110,13 @@ impl SceneFile {
         c.particle_growth = num("particle_growth", c.particle_growth);
         c.young_size = num("young_size", c.young_size).clamp(0.05, 1.);
         c.patch_size = num("patch_size", c.patch_size);
+        (c, generating)
+    }
+
+    pub fn parse_hogan_kew_cirrus(o: &Value) -> SceneObject {
+        let (mut c, generating) = SceneFile::hogan_kew_layer(o, CirrusGenus::Cirrus);
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let (base, top) = (c.base, c.top);
         // By default the layer reaches its own horizon, √(2 R top), so it runs down into the
         // haze there rather than stopping short in clear sky (a 9 km deck stays above the horizon
         // out to 340 km).
@@ -3461,6 +3551,9 @@ impl SceneFile {
                 o["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
             }
         }
+        // Weather becomes its families of cloud, which know the sky's sun and the landscape.
+        let mut scene_objects = crate::weather::scene::expand(scene_objects);
+        let sea = scene_objects.iter().find(|o| o["type"].as_str() == Some("ocean")).map(crate::ocean::Sea::parse);
         // A moon lights the scene with the sunlight it reflects (unless `"light": false`), and
         // a skysphere's air scatters it too.
         let moonlight = match (&sun, scene_objects.iter().find(|o| o["type"].as_str() == Some("moon") && o["light"].as_bool() != Some(false))) {
@@ -3545,6 +3638,7 @@ impl SceneFile {
             atmosphere,
             environment: None,
             light_bvh: None,
+            sea,
         };
         scene.light_bvh = match s.light_sampler.as_str() {
             None | Some("power") => None,
@@ -3693,8 +3787,9 @@ impl SceneFile {
     /// Build a scene from a scene file's JSON, applying command-line overrides first.
     pub fn from_value_overridden(doc: Value, o: &Overrides) -> Scene {
         let (width, height) = (o.width, o.height);
-        let doc = SceneFile::substitute_variables(doc)
+        let mut doc = SceneFile::substitute_variables(doc)
             .unwrap_or_else(|e| panic!("Scene file: {}", e));
+        crate::weather::scene::choose_seeds(&mut doc);
         let mut scene: SceneFile = serde_json::from_value(doc).unwrap();
         if let Some(seed) = o.seed {
             scene.seed = Value::from(seed);

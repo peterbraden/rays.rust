@@ -336,7 +336,7 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
 }
 
 /// Where a patch lies: its centre's (latitude, longitude) in degrees.
-fn site(d: &Value, params: &TerrainParams) -> (f64, f64) {
+pub fn site(d: &Value, params: &TerrainParams) -> (f64, f64) {
     let planet = || Planet::new(params.planet.clone());
     match (d["lat"].as_f64(), d["lon"].as_f64(), d["near"].as_str()) {
         (Some(lat), Some(lon), _) => (lat, lon),

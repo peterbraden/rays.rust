@@ -1,0 +1,78 @@
+{
+  "width": 640,
+  "height": 320,
+  "supersamples": 32,
+  "samples_per_chunk": 4,
+  "shadow_bias": 0.01,
+  "max_depth": 16,
+  "path_termination": "russian_roulette",
+  "camera": {
+    "location": [
+      0,
+      20,
+      0
+    ],
+    "lookat": [
+      3000.0,
+      1500,
+      10000
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.55
+  },
+  "sun": {
+    "intensity": 4.9
+  },
+  "objects": [
+    {
+      "type": "ocean",
+      "wind": [
+        7,
+        2
+      ]
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        0.3,
+        0.55,
+        -0.6
+      ]
+    },
+    {
+      "type": "weather",
+      "time": 0,
+      "low": {
+        "similarity_after": 3
+      },
+      "mid": {
+        "similarity_after": 3
+      },
+      "convective": {
+        "similarity_after": 3
+      },
+      "seed": 11,
+      "cyclones": 0,
+      "anticyclones": 0,
+      "tropical_cyclones": 0,
+      "site": {
+        "lat": 22,
+        "lon": -40
+      },
+      "systems": [
+        {
+          "type": "anticyclone",
+          "offset": [
+            1300000,
+            0
+          ],
+          "intensity": 1
+        }
+      ]
+    }
+  ]
+}

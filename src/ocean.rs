@@ -895,6 +895,109 @@ impl PhysicalOcean {
 }
 
 impl PhysicalOcean {
+    /// The local vertical at `point`, and the normal to shade with seen along `rd`.
+    fn shading_frame(&self, rd: &Vector3<f64>, intersection: &Intersection) -> (Vector3<f64>, Vector3<f64>) {
+        let up = self.center.map_or(Vector3::y(), |c| (intersection.point - c).normalize());
+        // Seen from beyond a wave's slope: use the mean surface.
+        let n = if intersection.normal.dot(rd) >= 0. { up } else { intersection.normal };
+        (up, n)
+    }
+
+    /// The glitter of `sun` (the sun, or moonlight) through the ripples seen along `rd`:
+    /// F D / (4 cos θv) per unit irradiance, Smith's shadowing left out (it matters only at
+    /// grazing angles).
+    fn glint(&self, rd: &Vector3<f64>, intersection: &Intersection, s: &Scene, sun: &crate::light::Sun) -> Color {
+        let (up, n) = self.shading_frame(rd, intersection);
+        let (v, l) = (-rd.normalize(), sun.direction);
+        if l.dot(&up) <= 0. || n.dot(&l) <= 0. {
+            return Color::black();
+        }
+        let h = (l + v).normalize();
+        let glint = fresnel(h.dot(&v)) * self.ripple_density(&n, &h) / (4. * n.dot(&v));
+        if glint <= 1e-6 {
+            return Color::black();
+        }
+        sun.irradiance_at(&intersection.point) * sun.transmittance_from(&intersection.point, s) * glint
+    }
+}
+
+/// The sea as media see it, for glitter probes (`VolumeMaterial::glitter_probe`): the sun's
+/// glitter lights the clouds above (their bases most), but a path scattering in a cloud finds
+/// the glitter only by chance, rarely and brightly. These sample directions towards it: to the
+/// points of a flat sea where facets tilted as Cox and Munk's slopes would reflect the sun.
+#[derive(Clone, Copy, Debug)]
+pub struct Sea {
+    /// The mean square slope of the waves and ripples together.
+    pub roughness: f64,
+    /// The planet's centre, for the local vertical; None for a flat sea.
+    pub center: Option<Vector3<f64>>,
+}
+
+impl Sea {
+    /// From an ocean's scene object.
+    pub fn parse(opts: &Value) -> Sea {
+        let wind = SceneFile::parse_vec2_def(opts, "wind", Vector2::new(7., 2.));
+        let radius = SceneFile::parse_number(&opts["planet_radius"], crate::planet::EARTH_RADIUS);
+        Sea {
+            roughness: cox_munk_slope(wind.norm()).max(opts["roughness"].as_f64().unwrap_or(0.)),
+            center: (radius > 0.).then(|| Vector3::new(0., -radius, 0.)),
+        }
+    }
+
+    fn up(&self, point: &Vector3<f64>) -> Vector3<f64> {
+        self.center.map_or(Vector3::y(), |c| (point - c).normalize())
+    }
+
+    /// Beckmann's density of facet normals `m` about `up`, per steradian of `m` (projected).
+    fn facets(&self, up: &Vector3<f64>, m: &Vector3<f64>) -> f64 {
+        let c = up.dot(m);
+        if c <= 0. {
+            return 0.;
+        }
+        let tan2 = (1. - c * c) / (c * c);
+        (-tan2 / self.roughness).exp() / (std::f64::consts::PI * self.roughness * c.powi(4))
+    }
+
+    /// A direction from `point` towards the sea's glitter of the sun along `sun`: a facet normal
+    /// from the slopes' distribution, the direction that facet reflects into the sun's. None if
+    /// it would not reach the sea.
+    pub fn sample_glitter(&self, point: &Vector3<f64>, sun: &Vector3<f64>, u: (f64, f64)) -> Option<Vector3<f64>> {
+        let up = self.up(point);
+        let r = (-self.roughness * (1. - u.0).ln()).sqrt();
+        let phi = 2. * std::f64::consts::PI * u.1;
+        let t = if up.x.abs() < 0.9 { Vector3::x() } else { Vector3::z() };
+        let a = (t - up * up.dot(&t)).normalize();
+        let b = up.cross(&a);
+        let m = (up + a * (r * phi.cos()) + b * (r * phi.sin())).normalize();
+        let lm = sun.dot(&m);
+        if lm <= 0. {
+            return None;
+        }
+        let d = sun - m * (2. * lm);
+        (d.dot(&up) < 0.).then_some(d)
+    }
+
+    /// The density of `sample_glitter`'s direction `d` from `point`, per steradian.
+    pub fn glitter_pdf(&self, point: &Vector3<f64>, sun: &Vector3<f64>, d: &Vector3<f64>) -> f64 {
+        let up = self.up(point);
+        if d.dot(&up) >= 0. {
+            return 0.;
+        }
+        let h = sun - d;
+        let norm = h.norm();
+        if norm < 1e-12 {
+            return 0.;
+        }
+        let m = h / norm;
+        let lm = sun.dot(&m);
+        if lm <= 0. {
+            return 0.;
+        }
+        self.facets(&up, &m) * up.dot(&m) / (4. * lm)
+    }
+}
+
+impl PhysicalOcean {
     /// A ray from under transparent water meeting the surface: it leaves by refraction, as
     /// much as the surface transmits, dimmed by the water it crossed. (What the surface
     /// reflects back down, a few percent, or all of it beyond the critical angle, is dropped.)
@@ -918,6 +1021,10 @@ impl PhysicalOcean {
 }
 
 impl MaterialModel for PhysicalOcean {
+    fn sun_glint(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> Option<Color> {
+        Some(s.sun.as_ref().map_or(Color::black(), |sun| self.glint(&r.rd, intersection, s, sun)))
+    }
+
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let v = -r.rd.normalize();
         // A ray from under transparent water, leaving it.
@@ -926,28 +1033,16 @@ impl MaterialModel for PhysicalOcean {
                 return self.leave_water(r, intersection, a);
             }
         }
-        let up = self.center.map_or(Vector3::y(), |c| (intersection.point - c).normalize());
-        let mut n = intersection.normal;
-        // Seen from beyond a wave's slope: use the mean surface.
-        if n.dot(&v) <= 0. {
-            n = up;
-        }
+        let (up, n) = self.shading_frame(&r.rd, intersection);
         let into = Intersection { normal: n, ..*intersection };
         // The water body, lit through the surface, as much as gets in.
         let body = crate::material::functions::direct_lighting(self.water.as_reflectance() * (1. - fresnel(n.dot(&v))), &into, s);
-        // The sun's glitter through the ripples: F D / (4 cos θv) per unit irradiance, Smith's
-        // shadowing left out (it matters only at grazing angles).
+        // The glitter of the sun and the moon. The sun's is shared with a glitter probe that
+        // might have found it from the medium the ray left (`VolumeMaterial::glitter_probe`).
         let mut glitter = Color::black();
-        for sun in s.directional_lights() {
-            let l = sun.direction;
-            if l.dot(&up) > 0. && n.dot(&l) > 0. {
-                let h = (l + v).normalize();
-                let glint = fresnel(h.dot(&v)) * self.ripple_density(&n, &h) / (4. * n.dot(&v));
-                if glint > 1e-6 {
-                    let lit = sun.transmittance_from(&intersection.point, s);
-                    glitter = glitter + sun.irradiance_at(&intersection.point) * lit * glint;
-                }
-            }
+        for (k, light) in s.directional_lights().enumerate() {
+            let weight = if k == 0 && s.sun.is_some() { crate::volume::glint_weight_for(r) } else { 1. };
+            glitter = glitter + self.glint(&r.rd, intersection, s, light) * weight;
         }
         // Everything else reflected from a sampled ripple, weighted by Fresnel's equations.
         let m = self.sample_ripple(&n);
@@ -1097,6 +1192,35 @@ mod curved_tests {
         // Deeper, darker.
         let deep = Ray { ro: Vector3::new(30., -20., 40.), ..up };
         assert!(ocean.transmittance_color(&deep, 1e-6, 1e9).rgb.y < t.rgb.y);
+    }
+
+    #[test]
+    fn test_glitter_density_matches_its_sampling() {
+        use rand::{RngExt, SeedableRng};
+        use rand::rngs::StdRng;
+        let mut rng = StdRng::seed_from_u64(5);
+        let point = Vector3::new(0., 1000., 0.);
+        for (roughness, sun) in [(0.04, Vector3::new(0.8, 0.6, 0.)), (0.01, Vector3::new(-0.3, 0.9, 0.3).normalize()), (0.1, Vector3::new(0.97, 0.24, 0.).normalize())] {
+            let sea = Sea { roughness, center: None };
+            let n = 400000;
+            // The share of samples that reach the sea is the density's integral over the sphere.
+            let valid = (0..n).filter(|_| sea.sample_glitter(&point, &sun, (rng.random(), rng.random())).is_some()).count() as f64 / n as f64;
+            let integral = (0..n).map(|_| {
+                let z: f64 = 2. * rng.random::<f64>() - 1.;
+                let phi = 2. * f64::consts::PI * rng.random::<f64>();
+                let r = (1. - z * z).sqrt();
+                sea.glitter_pdf(&point, &sun, &Vector3::new(r * phi.cos(), z, r * phi.sin()))
+            }).sum::<f64>() * 4. * f64::consts::PI / n as f64;
+            assert!((integral - valid).abs() < 0.03 * valid + 0.01, "roughness {}: integral {} vs {} reaching the sea", roughness, integral, valid);
+            // And each sample's direction has the density the pdf gives: E[f / pdf] for f = 1 on a
+            // cap about the mirrored sun is the cap's solid angle.
+            let mirror = Vector3::new(sun.x, -sun.y, sun.z);
+            let cap = 0.97;
+            let est = (0..n).filter_map(|_| sea.sample_glitter(&point, &sun, (rng.random(), rng.random())))
+                .map(|d| if d.dot(&mirror) > cap { 1. / sea.glitter_pdf(&point, &sun, &d) } else { 0. }).sum::<f64>() / n as f64;
+            let solid = 2. * f64::consts::PI * (1. - cap);
+            assert!((est - solid).abs() < 0.03 * solid, "roughness {}: cap {} vs {}", roughness, est, solid);
+        }
     }
 
     #[test]

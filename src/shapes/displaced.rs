@@ -178,6 +178,8 @@ pub struct DisplacedTerrain {
     /// A second displacement, straight up, added to the first: things that stand up from the
     /// ground, like fallen blocks (`talus`), on slopes as on level ground.
     lift: Option<Graph>,
+    /// Displacement in directions of its own, added last.
+    sideways: Sideways,
     /// Metres over which the displacement fades to nothing at the grid's edges, so it meets
     /// an undisplaced grid around it (a coarser terrain with a `hole`) without a seam.
     falloff: f64,
@@ -208,8 +210,50 @@ pub struct Displacement {
     pub graph: Graph,
     pub vertical: bool,
     pub lift: Option<Graph>,
+    pub sideways: Sideways,
     pub falloff: f64,
     pub detail: Detail,
+}
+
+/// Displacement in directions of its own (`"vector_displacement"`), added after the rest:
+/// along the terrain's own x, y and z, and `outward`, horizontally away from the slope (along
+/// the base's normal, flattened), which on a cliff cuts beds back under the ones above or
+/// pushes them out over those below: overhangs.
+#[derive(Default)]
+pub struct Sideways {
+    pub x: Option<Graph>,
+    pub y: Option<Graph>,
+    pub z: Option<Graph>,
+    pub outward: Option<Graph>,
+}
+
+impl Sideways {
+    fn graphs(&self) -> impl Iterator<Item = &Graph> {
+        [&self.x, &self.y, &self.z, &self.outward].into_iter().flatten()
+    }
+
+    /// How far it moves points along x, y and z (each range toward 0 if `toward_zero`).
+    fn ranges(&self, toward_zero: &dyn Fn((f64, f64)) -> (f64, f64)) -> [(f64, f64); 3] {
+        let r = |g: &Option<Graph>| toward_zero(g.as_ref().map_or((0., 0.), |g| g.range()));
+        let o = r(&self.outward);
+        let out = o.0.abs().max(o.1.abs());
+        let (x, y, z) = (r(&self.x), r(&self.y), r(&self.z));
+        [(x.0 - out, x.1 + out), y, (z.0 - out, z.1 + out)]
+    }
+
+    /// The move at a point whose base has `normal`, seen as `c`, kept by `fade`.
+    fn at(&self, c: &Context, normal: &Vector3<f64>, fade: f64) -> Vector3<f64> {
+        let e = |g: &Option<Graph>| g.as_ref().map_or(0., |g| g.eval(c));
+        let mut v = Vector3::new(e(&self.x), e(&self.y), e(&self.z));
+        if let Some(g) = &self.outward {
+            let flat = Vector3::new(normal.x, 0., normal.z);
+            let n = flat.norm();
+            if n > 1e-9 {
+                v += flat / n * g.eval(c);
+            }
+        }
+        v * fade
+    }
 }
 
 /// Where a terrain sits in the coarser one around it (`DisplacedTerrain::nested`): the outer
@@ -249,10 +293,22 @@ impl DisplacedTerrain {
         DisplacedTerrain::nested(grid, graph, vertical, lift, falloff, detail, None, None)
     }
 
+    /// The terrain a scene's displacement `d` asks for, leaving out `hole`, nested in `outer`.
+    pub fn of(grid: Arc<HeightGrid>, d: Displacement, hole: Option<(usize, usize, usize, usize)>, outer: Option<Nest>) -> Result<DisplacedTerrain, String> {
+        DisplacedTerrain::build(grid, d.graph, d.vertical, d.lift, d.sideways, d.falloff, &d.detail, hole, outer)
+    }
+
     /// As `with_lift`, leaving out the cells in `hole` ([x0, x1) x [z0, z1)) for a finer
     /// terrain to fill, and nested in `outer`.
     #[allow(clippy::too_many_arguments)]
     pub fn nested(grid: Arc<HeightGrid>, graph: Graph, vertical: bool, lift: Option<Graph>, falloff: f64, detail: &Detail,
+        hole: Option<(usize, usize, usize, usize)>, outer: Option<Nest>) -> Result<DisplacedTerrain, String>
+    {
+        DisplacedTerrain::build(grid, graph, vertical, lift, Sideways::default(), falloff, detail, hole, outer)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build(grid: Arc<HeightGrid>, graph: Graph, vertical: bool, lift: Option<Graph>, sideways: Sideways, falloff: f64, detail: &Detail,
         hole: Option<(usize, usize, usize, usize)>, outer: Option<Nest>) -> Result<DisplacedTerrain, String>
     {
         use rayon::prelude::*;
@@ -271,7 +327,9 @@ impl DisplacedTerrain {
         let toward_zero = |r: (f64, f64)| if falloff > 0. { (r.0.min(0.), r.1.max(0.)) } else { r };
         let range = toward_zero(graph.range());
         let up = toward_zero(lift.as_ref().map_or((0., 0.), |g| g.range()));
-        if !(range.0.is_finite() && range.1.is_finite() && up.0.is_finite() && up.1.is_finite()) {
+        let aside = sideways.ranges(&toward_zero);
+        if !(range.0.is_finite() && range.1.is_finite() && up.0.is_finite() && up.1.is_finite()
+            && aside.iter().all(|r| r.0.is_finite() && r.1.is_finite())) {
             return Err("a terrain's displacement must be bounded: give an expression a \"range\"".into());
         }
         let reach = range.0.abs().max(range.1.abs());
@@ -297,6 +355,8 @@ impl DisplacedTerrain {
                 (Vector3::new(x0 - rx, lo + down, z0 - rz), Vector3::new(x0 + cell + rx, hi + rise, z0 + cell + rz))
             };
             let (min, max) = (min + Vector3::y() * up.0.min(0.), max + Vector3::y() * up.1.max(0.));
+            let (min, max) = (min + Vector3::new(aside[0].0.min(0.), aside[1].0.min(0.), aside[2].0.min(0.)),
+                max + Vector3::new(aside[0].1.max(0.), aside[1].1.max(0.), aside[2].1.max(0.)));
             // Room for rounding.
             let pad = Vector3::repeat(1e-9 * (1. + min.abs().max().max(max.abs().max())));
             BBox::new(min - pad, max + pad)
@@ -306,7 +366,8 @@ impl DisplacedTerrain {
         // A steep cell's surface is longer than the cell is wide: on a cliff, a 1.5 m cell may
         // span 20 m of rock. Its level is chosen for the longer of the two, so quads up a cliff
         // are no taller than a pixel rather than smearing the relief into vertical streaks.
-        let finest = graph.finest().min(lift.as_ref().map_or(f64::INFINITY, |g| g.finest()));
+        let finest = graph.finest().min(lift.as_ref().map_or(f64::INFINITY, |g| g.finest()))
+            .min(sideways.graphs().map(|g| g.finest()).fold(f64::INFINITY, f64::min));
         let min_spacing = detail.min_spacing.unwrap_or_else(|| (0.5 * finest).min(cell / 8.)).max(1e-6);
         // The camera as each copy of the terrain sees it, in the terrain's own frame (the
         // angle between pixels is the same there, under a uniform scale).
@@ -387,7 +448,7 @@ impl DisplacedTerrain {
         println!("Displaced terrain: {} x {} cells diced to levels {} to {}, up to {:.1} million vertices if all are seen",
             nx, nz, levels.iter().min().unwrap_or(&0), levels.iter().max().unwrap_or(&0), vertices / 1e6);
         let tiles = (0 .. nx * nz).map(|_| OnceLock::new()).collect();
-        Ok(DisplacedTerrain { grid, graph, vertical, lift, falloff: falloff.max(0.), range, levels, cell_bounds, tiles,
+        Ok(DisplacedTerrain { grid, graph, vertical, lift, sideways, falloff: falloff.max(0.), range, levels, cell_bounds, tiles,
             bvh, cells, bounds, place: None, fields: None, hole, outer })
     }
 
@@ -451,7 +512,8 @@ impl DisplacedTerrain {
         }
         let d = fade * self.graph.eval(&c);
         let up = fade * self.lift.as_ref().map_or(0., |l| l.eval(&c));
-        base + if self.vertical { Vector3::y() } else { normal } * d + Vector3::y() * up
+        let aside = self.sideways.at(&c, &normal, fade);
+        base + if self.vertical { Vector3::y() } else { normal } * d + Vector3::y() * up + aside
     }
 
     /// How much of the displacement is kept at (x, z): 1, falling smoothly to 0 within
@@ -1074,5 +1136,44 @@ mod tests {
         let misplaced = Arc::new(HeightGrid::sample(&Hills, (-7., -8.), (9., 8.), 1.));
         assert!(DisplacedTerrain::nested(misplaced, g(), false, None, 0., &Detail::default(), None,
             Some(Nest { outer, offset: (8, 8) })).is_err());
+    }
+
+    fn sideways(base: impl Fn(f64) -> f64, sideways: Sideways) -> DisplacedTerrain {
+        let n = 32;
+        let heights = (0 .. (n + 1) * (n + 1)).map(|k| base(-4. + (k % (n + 1)) as f64 * 0.25)).collect();
+        let grid = Arc::new(HeightGrid::from_heights((-4., -4.), 0.25, n, n, heights));
+        let d = Displacement { graph: Graph::parse(&json!(0)).unwrap(), vertical: false, lift: None, sideways, falloff: 0.,
+            detail: Detail { level: 4, min_spacing: Some(0.01), ..Default::default() } };
+        DisplacedTerrain::of(grid, d, None, None).unwrap()
+    }
+
+    /// Moved along x by a constant, a slope y = x / 2 is the same slope a metre east.
+    #[test]
+    fn test_vector_displacement_moves_points_its_own_way() {
+        let t = sideways(|x| 0.5 * x, Sideways { x: Some(Graph::parse(&json!(1)).unwrap()), ..Default::default() });
+        for x in [-1.5, 0., 1.3] {
+            let hit = t.intersects(&Ray { ro: Vector3::new(x, 10., 0.3), rd: -Vector3::y() }).unwrap();
+            assert!((hit.point.y - 0.5 * (x - 1.)).abs() < 1e-3, "{} at {}", hit.point.y, x);
+        }
+    }
+
+    /// A step pushed outward above a metre overhangs the ground in front of it: straight up
+    /// from there, a ray meets its underside, which it doesn't without.
+    #[test]
+    fn test_outward_displacement_makes_overhangs() {
+        let step = |x: f64| 3. * ((x / 0.5).clamp(0., 1.));
+        let out = || Some(Graph::parse(&json!({"node": "multiply", "inputs": [1.5, {"node": "altitude", "from": 1, "to": 1.5}]})).unwrap());
+        let overhang = sideways(step, Sideways { outward: out(), ..Default::default() });
+        let plain = sideways(step, Sideways::default());
+        let up = Ray { ro: Vector3::new(-0.8, 0.5, 0.2), rd: Vector3::y() };
+        let under = overhang.intersects(&up).expect("no overhang");
+        assert!(under.point.y > 1. && under.point.y < 3., "{}", under.point.y);
+        assert!(under.normal.y < 0., "an underside faces down: {:?}", under.normal);
+        assert!(plain.intersects(&up).is_none());
+        // And rays from above all still meet the ground.
+        for k in 0..200 {
+            let x = -3. + 6. * k as f64 / 200.;
+            assert!(overhang.intersects(&Ray { ro: Vector3::new(x, 10., 0.1), rd: -Vector3::y() }).is_some(), "hole at {}", x);
+        }
     }
 }

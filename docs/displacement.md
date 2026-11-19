@@ -78,6 +78,12 @@ octave's mean in its place, so a coarsely diced distant surface doesn't alias or
   and since a block's top then lies right above where it stands, a material can find it: the
   demo's `talus` displaces vertically and the same node with `"output": "mask"` puts rock on
   the blocks and grit between them.
+- **Any way at all: overhangs.** `"vector_displacement": {"x", "y", "z", "outward"}`, graphs
+  added last: along the terrain's own axes, and `outward`, horizontally away from the slope
+  (the base's normal flattened). A heightfield's cliff can't lean out, but moved outward by a
+  graph of height its soft beds are cut back under the hard ones and its caprock juts over
+  them, so a ray from below meets the underside (`test_outward_displacement_makes_overhangs`).
+  Cells' bounds grow by each graph's range, so rays still find them.
 - **Shaded where it came from.** A hit on displaced terrain knows the point of the base it was
   displaced from (`Geometry::undisplaced`: the cell's quad under the hit, its corners' grid
   positions interpolated), and graphs used in shading (a `mix` amount, surface layers' masks)
@@ -135,11 +141,19 @@ octave's mean in its place, so a coarsely diced distant surface doesn't alias or
 Things placed on a heightmap (grass, rocks, trees) stand on its grid, not on the displaced
 surface, so keep displacement small or masked off where they are.
 
+## Overhangs
+
+![The escarpment with its soft beds cut back and its caprock overhanging](../demo/scenes/overhangs.png)
+
+*`demo/scenes/overhangs.json`: the escarpment of `displaced-terrain.json` with
+`"vector_displacement": {"outward": "$undercut"}` on its cliffs: beds every few metres weathered
+back up to 1.8 m under the ones above, and the caprock's lip jutting 1.4 m out.*
+
 ## What next
 
-- Fuller surface layers (more than two materials, masks from the simulations' fields) on the
-  same graphs (Terragen gap 2), and media densities.
-- Vector displacement for overhangs.
+- Speed: the graph at every vertex is most of the time, and paths are noisy where Terragen
+  caches its lighting.
+- Arches and caves need surfaces of another topology than a heightfield's, displacement or not.
 
 ## On a landscape
 

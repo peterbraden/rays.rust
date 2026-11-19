@@ -1228,8 +1228,7 @@ impl SceneFile {
     /// A terrain displaced by the graph `d` (`shapes::displaced`), diced as its
     /// `"displacement_detail"` and the scene's camera (which the scene gives it) call for.
     pub(crate) fn parse_displaced_terrain(grid: Arc<HeightGrid>, d: &Value, o: &Value) -> crate::shapes::displaced::DisplacedTerrain {
-        let p = SceneFile::parse_displacement(d, o);
-        crate::shapes::displaced::DisplacedTerrain::with_lift(grid, p.graph, p.vertical, p.lift, p.falloff, &p.detail)
+        crate::shapes::displaced::DisplacedTerrain::of(grid, SceneFile::parse_displacement(d, o), None, None)
             .unwrap_or_else(|e| panic!("{}", e))
     }
 
@@ -1268,7 +1267,13 @@ impl SceneFile {
         let lift = o.get("vertical_displacement").map(|v| crate::graph::Graph::parse(v)
             .unwrap_or_else(|e| panic!("terrain's vertical_displacement: {}", e)));
         let falloff = SceneFile::parse_number(&o["displacement_falloff"], 0.);
-        crate::shapes::displaced::Displacement { graph, vertical, lift, falloff, detail }
+        // {"x", "y", "z", "outward"}: graphs moving points along the terrain's axes, and
+        // horizontally away from its slope.
+        let v = &o["vector_displacement"];
+        let axis = |k: &str| v.get(k).map(|g| crate::graph::Graph::parse(g)
+            .unwrap_or_else(|e| panic!("terrain's vector_displacement {}: {}", k, e)));
+        let sideways = crate::shapes::displaced::Sideways { x: axis("x"), y: axis("y"), z: axis("z"), outward: axis("outward") };
+        crate::shapes::displaced::Displacement { graph, vertical, lift, sideways, falloff, detail }
     }
 
     /// A still perspective camera's view (`shapes::displaced::View`), a few pixels wider than

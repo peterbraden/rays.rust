@@ -689,8 +689,7 @@ fn displaced_patches(o: &Value, d: &Value, relief: &Relief, frame: &Frame, view:
             outer: o.clone(),
             offset: (((min.0 - omin.0) / cell).round() as i64, ((min.1 - omin.1) / cell).round() as i64),
         });
-        let terrain = DisplacedTerrain::nested(grid.clone(), displacement.graph, displacement.vertical, displacement.lift,
-            displacement.falloff, &displacement.detail, inner, nest)
+        let terrain = DisplacedTerrain::of(grid.clone(), displacement, inner, nest)
             .unwrap_or_else(|e| panic!("{}", e))
             .placed(local.origin, local.axes)
             .with_fields(ground.clone());

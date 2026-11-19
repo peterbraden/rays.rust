@@ -177,6 +177,11 @@ impl GeometryLibrary {
         GeometryLibrary::new(Map::new())
     }
 
+    /// Whether a geometry of that name is defined.
+    pub fn defines(&self, name: &str) -> bool {
+        self.defined.contains_key(name)
+    }
+
     /// The named geometry, built on first use.
     pub fn get(&self, name: &str) -> SharedGeometry {
         if let Some(g) = self.built.borrow().get(name) {
@@ -688,6 +693,7 @@ impl SceneFile {
              && o["cloud"]["join"].as_bool() != Some(false) && flat(o) == flat(&objs[d]));
          let mut hills: Vec<HillCloud> = objs.iter().filter(|o| joins(o)).filter_map(SceneFile::hill_cloud_field).collect();
          let joined: Vec<bool> = objs.iter().map(joins).collect();
+         let mut landscape: Option<Arc<SceneObject>> = None;
          for (k, obj) in objs.into_iter().enumerate() {
             // Report the objects that are slow to build (meshes, oceans), by type and source.
             let start = std::time::Instant::now();
@@ -697,6 +703,14 @@ impl SceneFile {
                 objects.extend(SceneFile::parse_tree(&obj, materials, media));
             } else if obj["type"] == "forest" {
                 objects.extend(SceneFile::parse_forest(&obj, materials, media, geometries));
+            } else if obj["type"] == "scatter" {
+                objects.extend(SceneFile::parse_scatter(&obj, materials, media, geometries, landscape.as_deref()));
+            } else if obj["type"] == "landscape" {
+                // Kept, as a surface for scatters after it.
+                if let Some(x) = SceneFile::parse_object(obj, materials, media, geometries) {
+                    landscape = Some(x.clone());
+                    objects.push(x)
+                }
             } else if Some(k) == deck && !hills.is_empty() {
                 objects.push(Arc::new(SceneFile::parse_overcast_with(&obj, std::mem::take(&mut hills))));
             } else if obj["type"] == "mountains" && obj.get("cloud").is_some() && !joined[k] {
@@ -1067,6 +1081,147 @@ impl SceneFile {
         vec![Arc::new(SceneObject {
             geometry: Box::new(stand),
             medium: Box::new(Solid { m: Box::new(forest::PartsMaterial { parts }) }),
+        })]
+    }
+
+    /// `{"type": "scatter", "seed": 0, "surface": geometry or [geometries], "area": {"min": [x, z],
+    /// "max": [x, z]}, "spacing": 1, "density": graph, "max_slope": 90, "clearings": 0,
+    /// "patch_size": 20, "patchiness": 0.3, "items": [item, ...]}`
+    ///
+    /// Copies of things strewn over a surface, as Terragen's populations: boulders over a
+    /// moraine, stones on scree, logs in a wood. Placed as a forest's trees are
+    /// (`procedural::forest::place_favouring`: kept apart by `spacing` in proportion to their
+    /// size, items growing in patches by `patchiness`), but only where `density` (a graph,
+    /// evaluated on the surface where each would stand, with its normal, so `slope` and noise
+    /// masks work; 1 by default) lets them, and as thickly as it says. Each item:
+    ///
+    /// - `"geometry"`: a named or inline geometry to copy; or `"boulder": {"angularity": 0.5,
+    ///   "detail": 4}`, `"variants"` (3) distinct seeded boulders of radius 1;
+    /// - `"material"` or `"medium"` (boulders default to a granite `rock`);
+    /// - `"weight"` (1), `"spacing"` (1, relative to the scatter's), `"size"`: a scale, or
+    ///   `[smallest, largest]` (1);
+    /// - `"sink"` (0): how far into the ground, as a fraction of its size; `"align"` (0 to 1,
+    ///   default 0.7): how far it leans with the slope, from upright to square to the ground;
+    ///   `"tilt"` (degrees, 0): a random lean besides.
+    ///
+    /// Every copy is turned to a random heading and half are mirrored. Copies cost a transform
+    /// each, so a scatter costs memory for its distinct items, not for every copy. The surface
+    /// itself isn't drawn: add it as an object too.
+    pub fn parse_scatter(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>,
+                         geometries: &GeometryLibrary, landscape: Option<&SceneObject>) -> Vec<Arc<SceneObject>> {
+        use crate::procedural::forest::{self, ForestLayout, ForestSpecies};
+        // "landscape": the scene's landscape object before this one (not a geometry).
+        let on_landscape = |g: &Value| g.as_str() == Some("landscape") && !geometries.defines("landscape");
+        let surface = |g: &Value| SceneFile::parse_shared_geometry(g, geometries)
+            .unwrap_or_else(|| panic!("scatter surface {} is not a geometry", g));
+        let surfaces: Vec<SharedGeometry> = match &o["surface"] {
+            Value::Null => vec![Arc::new(Plane { y: 0. })],
+            g if on_landscape(g) => vec![],
+            Value::Array(list) => list.iter().map(surface).collect(),
+            g => vec![surface(g)],
+        };
+        let mut refs: Vec<&dyn Geometry> = surfaces.iter().map(|s| &**s as &dyn Geometry).collect();
+        let fields = if on_landscape(&o["surface"]) {
+            let l = landscape.unwrap_or_else(|| panic!("a scatter on the \"landscape\" must come after a landscape object"));
+            refs.push(&*l.geometry);
+            l.medium.fields()
+        } else { None };
+        let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
+        let entries = o["items"].as_array().filter(|e| !e.is_empty())
+            .unwrap_or_else(|| panic!("a scatter needs a list of \"items\""));
+        struct Item { models: Vec<SharedGeometry>, size: (f64, f64), sink: f64, align: f64, tilt: f64 }
+        let mut media_of: Vec<Box<dyn Medium + Sync + Send>> = vec![];
+        let items: Vec<Item> = entries.iter().enumerate().map(|(k, e)| {
+            let given = e.get("material").is_some() || e.get("medium").is_some();
+            let (models, medium): (Vec<SharedGeometry>, Box<dyn Medium + Sync + Send>) = match (e.get("boulder"), e.get("geometry")) {
+                (Some(b), None) => {
+                    let n = SceneFile::parse_int(&e["variants"], 3).max(1);
+                    let detail = b.get("detail").map(|d| SceneFile::parse_int(d, 4) as u32);
+                    let angularity = SceneFile::parse_number(&b["angularity"], 0.5);
+                    let models = (0..n).map(|v| Arc::new(crate::shapes::mesh::SmoothMesh::from_indexed(&[rock::boulder_mesh(
+                        Vector3::zeros(), 1., angularity, detail, seed.wrapping_mul(31).wrapping_add((k * 101 + v) as u64))]))
+                        as SharedGeometry).collect();
+                    let medium: Box<dyn Medium + Sync + Send> = if given { SceneFile::parse_object_medium(e, materials, media) }
+                        else { Box::new(Solid { m: Box::new(Rock::new(RockStyle::preset("granite"), 1., seed + k as u64)) }) };
+                    (models, medium)
+                },
+                (None, Some(g)) => {
+                    assert!(given, "a scatter item {} needs a \"material\" or \"medium\"", e);
+                    let g = SceneFile::parse_shared_geometry(g, geometries)
+                        .unwrap_or_else(|| panic!("scatter item {} is not a geometry", g));
+                    (vec![g], SceneFile::parse_object_medium(e, materials, media))
+                },
+                _ => panic!("a scatter item needs a \"geometry\" or a \"boulder\", not both: {}", e),
+            };
+            media_of.push(medium);
+            let size = match &e["size"] {
+                Value::Array(a) if a.len() == 2 => (SceneFile::parse_number(&a[0], 1.), SceneFile::parse_number(&a[1], 1.)),
+                v => { let s = SceneFile::parse_number(v, 1.); (s, s) },
+            };
+            assert!(size.0 > 0. && size.1 >= size.0, "a scatter item's size must be positive, smallest first: {}", e);
+            Item { models, size, sink: SceneFile::parse_number(&e["sink"], 0.),
+                align: SceneFile::parse_number(&e["align"], 0.7).clamp(0., 1.),
+                tilt: SceneFile::parse_number(&e["tilt"], 0.).to_radians() }
+        }).collect();
+        // Sizes spread evenly between each item's smallest and largest, kept apart in proportion.
+        let species: Vec<ForestSpecies> = entries.iter().zip(&items).map(|(e, item)| ForestSpecies {
+            weight: SceneFile::parse_number(&e["weight"], 1.),
+            spacing: SceneFile::parse_number(&e["spacing"], 1.) * 0.5 * (item.size.0 + item.size.1),
+            scale_v: (item.size.1 - item.size.0) / (item.size.1 + item.size.0),
+        }).collect();
+        let layout = ForestLayout {
+            min: SceneFile::parse_vec2(&o["area"]["min"]),
+            max: SceneFile::parse_vec2(&o["area"]["max"]),
+            spacing: SceneFile::parse_number(&o["spacing"], 1.),
+            clearings: SceneFile::parse_number(&o["clearings"], 0.),
+            patch_size: SceneFile::parse_number(&o["patch_size"], 20.),
+            patchiness: SceneFile::parse_number(&o["patchiness"], 0.3),
+            max_slope: SceneFile::parse_number(&o["max_slope"], 90.),
+            variants: items.iter().map(|i| i.models.len()).max().unwrap_or(1),
+        };
+        // Where the surface is under (x, z), and its normal, facing up.
+        let top = refs.iter().map(|s| { let y = s.bounds().max.y; if y.is_finite() && y < 1e5 { y + 1. } else { 1e5 } })
+            .fold(f64::NEG_INFINITY, f64::max);
+        let ground = |x: f64, z: f64| -> Option<(Vector3<f64>, Vector3<f64>)> {
+            let down = crate::ray::Ray { ro: Vector3::new(x, top, z), rd: -Vector3::y() };
+            let hit = refs.iter().filter_map(|s| s.intersects(&down)).min_by(|a, b| a.dist.total_cmp(&b.dist))?;
+            Some((hit.point, if hit.normal.y < 0. { -hit.normal } else { hit.normal }.normalize()))
+        };
+        let density = o.get("density").map(|d| crate::graph::Graph::parse(d).unwrap_or_else(|e| panic!("scatter's density: {}", e)));
+        let favour = |x: f64, z: f64| match &density {
+            None => 1.,
+            Some(g) => ground(x, z).map_or(0., |(p, n)| g.eval(&crate::graph::Context::new(p, n, 0.).with_fields(fields))),
+        };
+        let placements = forest::place_favouring(&layout, &species, seed, &refs, &favour);
+
+        let mut rng = crate::geometry::Pcg32::new(seed, 0x5ca7);
+        let copies: Vec<Arc<forest::PartOf<crate::shapes::transform::Transform>>> = placements.iter().map(|p| {
+            let item = &items[p.species];
+            let model = item.models[p.variant % item.models.len()].clone();
+            let mid = 0.5 * (item.size.0 + item.size.1);
+            let size = mid * p.scale;
+            let normal = ground(p.position.x, p.position.z).map_or(Vector3::y(), |(_, n)| n);
+            // Leaning with the slope as far as `align` says, then by a random tilt besides.
+            let up = Vector3::y().lerp(&normal, item.align).normalize();
+            let lean = rng.next_f64() * item.tilt;
+            let around = rng.next_f64() * std::f64::consts::TAU;
+            let side = up.cross(&Vector3::new(around.cos(), 0., around.sin())).try_normalize(1e-9).unwrap_or(Vector3::x());
+            let up = Rotation3::from_axis_angle(&crate::na::Unit::new_normalize(side), lean) * up;
+            let stand = Rotation3::rotation_between(&Vector3::y(), &up).unwrap_or_else(Rotation3::identity);
+            let turn = Rotation3::from_axis_angle(&crate::na::Unit::new_normalize(up), p.yaw.to_radians());
+            let mirror = if p.mirror { -1. } else { 1. };
+            let at = p.position - up * (item.sink * size);
+            let m = Translation3::from(at).to_homogeneous() * (turn * stand).to_homogeneous()
+                * Matrix4::new_nonuniform_scaling(&Vector3::new(mirror * size, size, size));
+            Arc::new(forest::PartOf { item: crate::shapes::transform::Transform::new(model, Affine3::from_matrix_unchecked(m)), part: p.species as u32 })
+        }).collect();
+        println!("Scatter: {} copies of {} distinct items", copies.len(), items.iter().map(|i| i.models.len()).sum::<usize>());
+        if copies.is_empty() {
+            return vec![];
+        }
+        vec![Arc::new(SceneObject {
+            geometry: Box::new(GeometrySet::new(&copies)),
+            medium: Box::new(Solid { m: Box::new(forest::PartsMaterial { parts: media_of }) }),
         })]
     }
 
@@ -4343,5 +4498,26 @@ mod tests {
         // An inline terrain with steps of its own; one nowhere moved is left alone.
         assert_eq!(placed(&objects[2]).unwrap(), vec![[0., 5., 0., 1.]]);
         assert!(placed(&objects[3]).is_none());
+    }
+
+    #[test]
+    fn test_scatter_strews_where_density_lets_it() {
+        let o = serde_json::json!({ "type": "scatter", "seed": 4, "area": {"min": [-10, -10], "max": [10, 10]}, "spacing": 1.5,
+            "density": { "node": "smoothstep", "input": "x", "from": -0.01, "to": 0.01 },
+            "items": [ { "boulder": { "angularity": 0.6, "detail": 2 }, "variants": 2, "size": [0.2, 0.6] } ] });
+        let objects = SceneFile::parse_scatter(&o, &Map::new(), &Map::new(), &GeometryLibrary::empty(), None);
+        assert_eq!(objects.len(), 1);
+        let g = &objects[0].geometry;
+        let b = g.bounds();
+        // Only east of x = 0, resting on the ground, no larger than the largest.
+        assert!(b.min.x > -0.7, "{:?}", b);
+        assert!(b.min.y > -0.7 && b.max.y < 1.3, "{:?}", b);
+        // Plenty of them: rays straight down over the east half often meet one, never the west.
+        let hits = |x0: f64| (0..400).filter(|k| {
+            let (x, z) = (x0 + (k % 20) as f64 * 0.45, -9. + (k / 20) as f64 * 0.9);
+            g.intersects(&Ray { ro: Vector3::new(x, 5., z), rd: -Vector3::y() }).is_some()
+        }).count();
+        assert!(hits(1.) > 40, "{}", hits(1.));
+        assert_eq!(hits(-10.), 0);
     }
 }

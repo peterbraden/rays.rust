@@ -128,7 +128,8 @@
       "displacement_detail": {
         "pixels": 1,
         "max_level": 8
-      }
+      },
+      "displacement_reach": 4000
     },
     {
       "type": "ocean",
@@ -143,6 +144,60 @@
         0.5,
         0.35,
         0.6
+      ]
+    },
+    {
+      "type": "scatter",
+      "seed": 2,
+      "surface": "landscape",
+      "area": {
+        "min": [
+          3500,
+          15380
+        ],
+        "max": [
+          3720,
+          15620
+        ]
+      },
+      "spacing": 4,
+      "density": {
+        "node": "multiply",
+        "inputs": [
+          {
+            "node": "field",
+            "field": "sediment",
+            "from": 0.02,
+            "to": 0.6,
+            "breakup": {
+              "node": "fractal",
+              "scale": 40,
+              "amplitude": 0.2,
+              "seed": 4
+            }
+          },
+          {
+            "node": "slope",
+            "from": 45,
+            "to": 35
+          }
+        ]
+      },
+      "items": [
+        {
+          "boulder": {
+            "angularity": 0.7,
+            "detail": 4
+          },
+          "variants": 5,
+          "size": [
+            0.2,
+            1.6
+          ],
+          "sink": 0.15,
+          "tilt": 10,
+          "material": "RockA"
+        }
       ]
     }
   ],

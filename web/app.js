@@ -228,7 +228,11 @@ function restartCamera() {
     const json = JSON.stringify(c);
     for (const w of workers) { w.postMessage({ type: 'camera', gen: mine, json }); }
     for (const s of servers) { if (s.sceneJson) { serverLoop(s, mine, s.sceneJson); } }
-    if (wantGpu()) { renderOnGpu(mine, JSON.stringify(previewDoc())); }
+    // The GPU keeps its scene too, and starts the picture again from the new camera.
+    if (wantGpu()) {
+        gpuWorker ??= spawnGpuWorker();
+        gpuWorker.postMessage({ type: 'camera', gen: mine, camera: json, scene: JSON.stringify(previewDoc()) });
+    }
 }
 
 let sceneFiles = [];     // the current scene's assets, by path, as fetched
@@ -1324,6 +1328,20 @@ function showTab(name) {
         $(`${tab}-view`).hidden = tab !== name;
     }
     if (name === 'json') { syncJsonText(); }
+}
+// The page shows the scene's configuration (with the picture small beside it) or the render
+// alone. The render doesn't stop or start with them: it follows the scene, whichever is shown.
+function showPage(name) {
+    document.body.dataset.page = name;
+    for (const page of ['scene', 'render']) { $(`page-${page}`).setAttribute('aria-selected', String(page === name)); }
+    try { localStorage.setItem('rays-page', name); } catch (e) { /* not kept, then */ }
+}
+$('page-scene').addEventListener('click', () => showPage('scene'));
+$('page-render').addEventListener('click', () => showPage('render'));
+{
+    let page = new URLSearchParams(location.search).get('page');
+    try { page ??= localStorage.getItem('rays-page'); } catch (e) { /* no storage: the default */ }
+    showPage(page === 'render' ? 'render' : 'scene');
 }
 $('tab-outline').addEventListener('click', () => showTab('outline'));
 $('tab-json').addEventListener('click', () => showTab('json'));

@@ -39,13 +39,26 @@ header {
 h1 { font-size: 15px; margin: 0; letter-spacing: 0.04em; }
 h2 { font-size: 11px; margin: 0; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
 #status { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Two pages, Scene and Render (`showPage` in app.js). The scene's page is its configuration at
+   the window's width, the outline beside the selected thing's properties, with the picture
+   small beside them; the render's is the picture alone. The picture is the same canvas in
+   both, so a render carries on across them. */
+#pages { display: flex; gap: 4px; }
+#pages button { border-color: transparent; background: none; padding: 4px 12px; color: var(--muted); }
+#pages button[aria-selected="true"] { background: var(--bg); border-color: var(--line); color: var(--text); }
+body[data-page="scene"] .for-render, body[data-page="render"] .for-scene { display: none; }
 main {
     flex: 1; min-height: 0;
-    display: grid; grid-template-columns: 340px minmax(0, 1fr);
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 30%);
 }
+body[data-page="render"] main { grid-template-columns: minmax(0, 1fr); }
+body[data-page="render"] #sidebar { display: none; }
 main > section { min-height: 0; display: flex; flex-direction: column; }
 #sidebar { background: var(--panel); border-right: 1px solid var(--line); }
-#outline-view { flex: 1; min-height: 0; overflow-y: auto; }
+#outline-view { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); }
+#outline-column, #inspector-column { min-height: 0; overflow-y: auto; }
+#outline-column { border-right: 1px solid var(--line); }
+#inspector { max-width: 720px; }
 #json-view { flex: 1; min-height: 0; display: flex; }
 #json-view[hidden], #outline-view[hidden] { display: none; }
 #tabs { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
@@ -56,7 +69,6 @@ main > section { min-height: 0; display: flex; flex-direction: column; }
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
     padding: 8px 12px; border-bottom: 1px solid var(--line); min-height: 40px;
 }
-#outline + .panel-head { border-top: 1px solid var(--line); }
 button, select, input, textarea {
     font: inherit; color: inherit; background: var(--bg);
     border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px;
@@ -134,6 +146,9 @@ button:hover { border-color: var(--accent); }
     #viewport { order: -1; }
     main { grid-template-rows: minmax(260px, 50vh) auto; }
     #sidebar { border-right: 0; border-top: 1px solid var(--line); }
-    #outline-view { overflow: visible; }
+    body[data-page="render"] main { grid-template-rows: 1fr; }
+    #outline-view { display: block; flex: none; }
+    #outline-column, #inspector-column { overflow: visible; }
+    #outline-column { border-right: 0; border-bottom: 1px solid var(--line); }
     #json { min-height: 320px; }
 }

@@ -6,70 +6,98 @@
 // are showing the scene on the CPU meanwhile, and stop when this one says it is ready.
 //
 // Messages in: `asset` (a file scenes name), `scene` (render this, as generation `gen`),
-// `stop`. Out: `ready` (it has the scene, on which adapter), `frame` (RGBA pixels and how
+// `camera` (the scene it has, from another camera: nothing is made again, the picture starts
+// again; it carries the scene too, for a worker that has none), `stop`. Out: `ready` (it has the scene, on which adapter), `frame` (RGBA pixels and how
 // many passes they hold), `refused` (the GPU can't render this scene, and why: the CPU
 // carries on), `error`. A scene replaces the one before it: the renderer is rebuilt for
-// every edit and camera move.
+// every edit, and kept for a camera move.
 import { instantiate, RaysError } from './rays.js';
 
 const PASSES_PER_FRAME = 4;   // reading a picture back costs more than a pass
 const MAX_PASSES = 4096;
 
 let rays = null;
-let gen = -1;
 const assets = new Map();
-
-// Let queued messages (a newer scene) be handled.
-const pause = () => new Promise(resolve => setTimeout(resolve, 0));
+let renderer = null;     // the scene on the GPU, kept between pictures of it
+let refusal = null;      // why the GPU refused the last scene, if it did
+let want = null;         // the newest thing asked for: { kind, gen, json, camera }
+let busy = false;
 
 async function fresh() {
     rays = await instantiate();
     for (const [path, bytes] of assets) { rays.addAsset(path, bytes); }
 }
 
-self.onmessage = async ({ data: m }) => {
+function release() {
+    // Only between pictures: a renderer can't be freed while one is being read back from it.
+    try { renderer?.free(); } catch (e) { /* the instance has stopped; it goes with it */ }
+    renderer = null;
+}
+
+self.onmessage = ({ data: m }) => {
     if (m.type === 'asset') {
         assets.set(m.path, m.bytes);
         if (rays && !rays.dead) { rays.addAsset(m.path, m.bytes); }
-    } else if (m.type === 'stop') {
-        gen = -1;
-    } else if (m.type === 'scene') {
-        gen = m.gen;
-        // Scenes sent while this worker was busy are waiting behind this one: only the last
-        // is worth making.
-        await pause();
-        if (gen !== m.gen) { return; }
-        render(m.gen, m.json);
+        return;
     }
+    // A camera for a scene still waiting to be made is that scene, from that camera: the
+    // scene it carries is the newer text.
+    const scene = m.type === 'scene' || (m.type === 'camera' && want?.kind === 'scene');
+    want = m.type === 'stop' ? { kind: 'stop' } : { kind: scene ? 'scene' : 'camera', gen: m.gen, json: m.json ?? m.scene, camera: m.camera };
+    if (!busy) { work(); }
 };
 
-async function render(mine, json) {
-    let r = null;
-    try {
-        if (!rays || rays.dead) { await fresh(); }
-        if (gen !== mine) { return; }
+// One thing at a time, and always the newest asked for: requests that arrived while a scene
+// was being made or a picture read back are behind it, and only the last is worth doing.
+async function work() {
+    busy = true;
+    // Let queued messages be handled first.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    while (want) {
+        const w = want;
+        want = null;
+        if (w.kind === 'stop') { continue; }
         try {
-            r = await rays.gpuRenderer(json);
+            if (w.kind === 'camera' && renderer) {
+                renderer.set_camera(w.camera);
+            } else if (w.kind === 'camera' && refusal) {
+                // The same scene the GPU couldn't take before.
+                self.postMessage({ type: 'refused', gen: w.gen, message: refusal });
+                continue;
+            } else {
+                release();
+                refusal = null;
+                if (!rays || rays.dead) { await fresh(); }
+                try {
+                    renderer = await rays.gpuRenderer(w.json);
+                } catch (e) {
+                    if (e instanceof RaysError) { throw e; }
+                    refusal = e.message;
+                    self.postMessage({ type: 'refused', gen: w.gen, message: e.message });
+                    continue;
+                }
+                if (want) { continue; }
+            }
+            await pictures(w.gen, renderer);
         } catch (e) {
-            if (e instanceof RaysError) { throw e; }
-            self.postMessage({ type: 'refused', gen: mine, message: e.message });
-            return;
+            release();
+            self.postMessage({ type: 'error', gen: w.gen, message: e instanceof RaysError ? e.message : String(e.message ?? e) });
         }
-        if (gen !== mine) { return; }
-        const [width, height] = [r.width(), r.height()];
-        self.postMessage({ type: 'ready', gen: mine, adapter: r.adapter(), width, height });
-        while (gen === mine && r.passes() < MAX_PASSES) {
-            // Together, where the wavefront is wide enough: the dispatches of one pass.
-            for (let left = PASSES_PER_FRAME; left > 0;) { left -= r.advance(left); }
-            // Awaiting the readback is also where a newer scene gets heard.
-            const pixels = await r.image();
-            if (gen !== mine) { return; }
-            self.postMessage({ type: 'frame', gen: mine, passes: r.passes(), width, height, pixels }, [pixels.buffer]);
-        }
-    } catch (e) {
-        self.postMessage({ type: 'error', gen: mine, message: e instanceof RaysError ? e.message : String(e.message ?? e) });
-    } finally {
-        // Not before: a renderer can't be freed while a picture is being read back from it.
-        try { r?.free(); } catch (e) { /* the instance has stopped; it goes with it */ }
+    }
+    busy = false;
+}
+
+// Pictures of the scene from its camera, until something else is asked for.
+async function pictures(mine, r) {
+    const [width, height] = [r.width(), r.height()];
+    self.postMessage({ type: 'ready', gen: mine, adapter: r.adapter(), width, height });
+    while (!want && r.passes() < MAX_PASSES) {
+        // The first picture after one sample, so a new view shows as soon as it can; then a
+        // few together, where the wavefront is wide enough: the dispatches of one pass.
+        for (let left = r.passes() === 0 ? 1 : PASSES_PER_FRAME; left > 0;) { left -= r.advance(left); }
+        // Awaiting the readback is also where a newer request gets heard.
+        const pixels = await r.image();
+        if (want) { return; }
+        self.postMessage({ type: 'frame', gen: mine, passes: r.passes(), width, height, pixels }, [pixels.buffer]);
     }
 }

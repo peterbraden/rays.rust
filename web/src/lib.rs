@@ -34,7 +34,8 @@ pub struct Renderer {
 }
 
 struct Inner {
-    scene: Scene,
+    /// Behind a cell for its camera, which `set_camera` replaces; the rest is as it was built.
+    scene: RefCell<Scene>,
     gpu: RefCell<GpuRenderer>,
     passes: Cell<usize>,
     adapter: String,
@@ -52,15 +53,15 @@ impl Renderer {
         let gpu = GpuRenderer::create(&scene, &flat).await.map_err(|e| JsValue::from_str(&e))?;
         let adapter = gpu.adapter_name.clone();
         gpu.clear();
-        Ok(Renderer { inner: Rc::new(Inner { scene, gpu: RefCell::new(gpu), passes: Cell::new(0), adapter }) })
+        Ok(Renderer { inner: Rc::new(Inner { scene: RefCell::new(scene), gpu: RefCell::new(gpu), passes: Cell::new(0), adapter }) })
     }
 
     pub fn width(&self) -> usize {
-        self.inner.scene.image.width
+        self.inner.scene.borrow().image.width
     }
 
     pub fn height(&self) -> usize {
-        self.inner.scene.image.height
+        self.inner.scene.borrow().image.height
     }
 
     /// The GPU's name and API.
@@ -70,7 +71,7 @@ impl Renderer {
 
     /// The samples per pixel the scene asks for.
     pub fn target(&self) -> usize {
-        self.inner.scene.render.samples_per_pixel()
+        self.inner.scene.borrow().render.samples_per_pixel()
     }
 
     /// Passes (samples per pixel) queued so far.
@@ -78,12 +79,30 @@ impl Renderer {
         self.inner.passes.get()
     }
 
+    /// See the same scene from another camera (the scene file's `camera` object), starting the
+    /// picture again. Nothing of the scene is made again: what a scene costs to set up (its
+    /// parsing and flattening, the sky's tables, the GPU's buffers and kernels) is the
+    /// scene's, and the camera only says which rays a pass starts with, which the host makes
+    /// for every pass anyway. (The sky's map of directions to sample was made for the first
+    /// camera's place; it is only a guide to sampling, so the picture stays right.) Not
+    /// during a readback, as `pass`.
+    pub fn set_camera(&self, camera_json: &str) -> Result<(), JsValue> {
+        let gpu = self.inner.gpu.try_borrow_mut().map_err(|_| JsValue::from_str("a readback is in progress"))?;
+        let c: serde_json::Value = serde_json::from_str(camera_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let mut scene = self.inner.scene.borrow_mut();
+        let (w, h) = (scene.image.width as u32, scene.image.height as u32);
+        scene.camera = SceneFile::parse_camera(c, w, h);
+        gpu.clear();
+        self.inner.passes.set(0);
+        Ok(())
+    }
+
     /// Queue the next pass: one sample of every pixel. Returns at once. Not while an `image`
     /// or `linear` is awaited (an error then): the readback holds the renderer.
     pub fn pass(&self) -> Result<(), JsValue> {
         let k = self.inner.passes.get();
         let mut gpu = self.inner.gpu.try_borrow_mut().map_err(|_| JsValue::from_str("a readback is in progress"))?;
-        gpu.dispatch(&self.inner.scene, k);
+        gpu.dispatch(&self.inner.scene.borrow(), k);
         self.inner.passes.set(k + 1);
         Ok(())
     }
@@ -96,8 +115,9 @@ impl Renderer {
         let k = self.inner.passes.get();
         let mut gpu = self.inner.gpu.try_borrow_mut().map_err(|_| JsValue::from_str("a readback is in progress"))?;
         let n = most.min(rays::scheduler::lanes(gpu.lanes)).max(1);
-        let pixels = self.inner.scene.image.width * self.inner.scene.image.height;
-        gpu.dispatch_block(&self.inner.scene, &vec![k; pixels], &vec![n; pixels]);
+        let scene = self.inner.scene.borrow();
+        let pixels = scene.image.width * scene.image.height;
+        gpu.dispatch_block(&scene, &vec![k; pixels], &vec![n; pixels]);
         self.inner.passes.set(k + n);
         Ok(n)
     }
@@ -107,7 +127,8 @@ impl Renderer {
     pub async fn image(&self) -> Result<Vec<u8>, JsValue> {
         let inner = self.inner.clone();
         let img = inner.finished().await?;
-        let opts = &inner.scene.output;
+        let scene = inner.scene.borrow();
+        let opts = &scene.output;
         let mut out = Vec::with_capacity(img.width * img.height * 4);
         for c in &img.pixels {
             let [r, g, b] = opts.quantise(*c);
@@ -130,7 +151,8 @@ impl Inner {
     #[allow(clippy::await_holding_refcell_ref)]
     async fn finished(&self) -> Result<rays::output::LinearImage, JsValue> {
         let (sums, squares) = self.gpu.borrow().read_back().await.map_err(|e| JsValue::from_str(&e))?;
-        let (w, h) = (self.scene.image.width, self.scene.image.height);
+        let scene = self.scene.borrow();
+        let (w, h) = (scene.image.width, scene.image.height);
         let mut rc = RenderContext::new(w, h, false, "web");
         let n = self.passes.get();
         for y in 0..h {
@@ -139,7 +161,7 @@ impl Inner {
                 rc.set_pixel(x, y, colour(sums[y * w + x]), colour(squares[y * w + x]), n);
             }
         }
-        Ok(self.scene.output.finish(&rc.snapshot()))
+        Ok(scene.output.finish(&rc.snapshot()))
     }
 }
 

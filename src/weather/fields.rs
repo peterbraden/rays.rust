@@ -306,8 +306,10 @@ impl Stratiform {
                     }
                     let texel = l.cover.locate(&self.drift.forth(&axis));
                     let (cover, form) = (l.cover.at_texel(&texel), l.form.at_texel(&texel));
-                    // Active more often than the cover: a cloud covers less than its cell.
-                    if hash(3) >= (2.5 * cover).min(1.) * smoothstep(0.35, 0.65, form) {
+                    // Active more often than the cover: a cloud covers less than its cell, and
+                    // fills it only for part of its life (`Heap::maturity`: wisps for a third of
+                    // it, fraying for the last 30%).
+                    if hash(3) >= (4. * cover).min(1.) * smoothstep(0.35, 0.65, form) {
                         continue;
                     }
                     let (base, top) = (l.base.at_texel(&texel), l.top.at_texel(&texel));
@@ -786,12 +788,13 @@ impl Convective {
         let width = 1.1 * t.radius + (half - 1.1 * t.radius) * s.sqrt();
         let lengthwise = if along < 0. { -along / upwind } else { along / downwind };
         let d = (lengthwise.powi(4) + (across / width).powi(4)).powf(0.25);
-        let horizontal = 1. - smoothstep(0.75, 1., d + rough);
-        let depth = self.anvil_depth * (1. - 0.6 * s);
+        // A wedge: a sharp, overhanging edge upwind, thinning downwind to a soft, fading one.
+        let horizontal = 1. - smoothstep(0.92 - 0.45 * s, 1., d + rough);
+        let depth = self.anvil_depth * (1. - 0.85 * s.powf(0.7));
         let bottom = t.top - depth;
         // A flat base (where the outflow's ice sublimates into the dry air below) and top.
         let vertical = smoothstep(bottom, bottom + 0.12 * depth, a) * (1. - smoothstep(t.top - 120., t.top + 60., a));
-        let mut f = horizontal * vertical * t.anvil_left;
+        let mut f = horizontal * vertical * t.anvil_left * (1. - 0.6 * s);
         // The overshooting dome, where the updraft punches through the tropopause.
         if a > t.top - 100. {
             let edge = t.radius * 0.35;

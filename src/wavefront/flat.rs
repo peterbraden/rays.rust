@@ -356,7 +356,9 @@ impl FlatScene {
                 shapes.push((o.clone(), index));
                 continue;
             };
+            let by_face = o.geometry.faces_are_primitives();
             for (face, p) in prims.into_iter().enumerate() {
+                let face = if by_face { face } else { 0 };
                 match p {
                     Prim::Plane { .. } => planes.push((p, index)),
                     _ => bounded.push((p, index, face as u32)),

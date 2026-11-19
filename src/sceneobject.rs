@@ -92,6 +92,10 @@ impl Geometry for SceneObject {
         self.geometry.ocean()
     }
 
+    fn faces_are_primitives(&self) -> bool {
+        self.geometry.faces_are_primitives()
+    }
+
     fn surface_area(&self) -> f64 {
         self.geometry.surface_area()
     }

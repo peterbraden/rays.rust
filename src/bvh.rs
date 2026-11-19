@@ -11,7 +11,8 @@
 //!
 //! ## Why not the octree
 //!
-//! `Octree` subdivides *space*, so an item is stored in every cell its box touches. For a mesh
+//! The octree this replaced (`octree.rs`, since removed: its last user, CSG unions, has a BVH
+//! too) subdivided *space*, so an item was stored in every cell its box touched. For a mesh
 //! of long, thin or large triangles that is many cells each: the 6,320-triangle Utah teapot at
 //! depth 8 makes 745,766 nodes holding 2,033,792 item references, about 120 MB, for 1 MB of
 //! triangles. A BVH subdivides the *items*: each is in exactly one leaf, and there are at most

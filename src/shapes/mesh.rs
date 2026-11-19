@@ -230,6 +230,10 @@ impl Geometry for Mesh {
         }).collect())
     }
 
+    fn faces_are_primitives(&self) -> bool {
+        true
+    }
+
     fn uv(&self, p: &Vector3<f64>, face: u32) -> Option<crate::na::Vector2<f64>> {
         ((face as usize) < self.triangles.triangles.len()).then(|| self.triangles.uv(face as usize, p))
     }
@@ -376,6 +380,10 @@ impl Geometry for SmoothMesh {
             let n = t.map(|v| { let n = self.normals[v as usize]; if n == Vector3::zeros() { face } else { n } });
             crate::wavefront::flat::Prim::Triangle { v: [p[t[0] as usize], p[t[1] as usize], p[t[2] as usize]], n: Some(n) }
         }).collect())
+    }
+
+    fn faces_are_primitives(&self) -> bool {
+        true
     }
 
     fn uv(&self, p: &Vector3<f64>, face: u32) -> Option<crate::na::Vector2<f64>> {

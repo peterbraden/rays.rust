@@ -103,7 +103,6 @@ pub mod shapes {
     pub mod lod;
     pub mod displaced;
 }
-pub mod octree;
 pub mod bvh;
 pub mod scenegraph;
 pub mod scene;

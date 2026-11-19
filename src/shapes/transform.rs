@@ -112,6 +112,10 @@ impl Geometry for Transform {
         self.item.kind()
     }
 
+    fn faces_are_primitives(&self) -> bool {
+        self.item.faces_are_primitives()
+    }
+
     fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
         self.item.flatten()?.iter().map(|p| p.transformed(&self.transform)).collect()
     }

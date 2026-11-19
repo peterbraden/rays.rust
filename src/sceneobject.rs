@@ -84,6 +84,10 @@ impl Geometry for SceneObject {
         self.geometry.flatten()
     }
 
+    fn kind(&self) -> &'static str {
+        self.geometry.kind()
+    }
+
     fn surface_area(&self) -> f64 {
         self.geometry.surface_area()
     }

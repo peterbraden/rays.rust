@@ -127,6 +127,16 @@ pub trait Geometry: Sync{
     // (`wavefront::flat`); None if it can't be.
     fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> { None }
 
+    // What kind of shape this is, for telling someone which of a scene's objects is in the way
+    // of something (the wavefront integrator and the GPU, which need `flatten`): the type's
+    // name, or for a wrapper its contents'.
+    fn kind(&self) -> &'static str {
+        // (Without its path, or what a generic one is of: `Octree<Triangle>` is an `Octree`.)
+        let name = std::any::type_name::<Self>();
+        let name = name.split('<').next().unwrap_or(name);
+        name.rsplit("::").next().unwrap_or(name)
+    }
+
     // The transmittance per colour channel (or wavelength, in spectral mode): the same in all
     // but for chromatic media (`volume::chromatic`).
     fn transmittance_color(&self, r: &Ray, min: f64, max: f64) -> crate::color::Color {
@@ -208,6 +218,7 @@ impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
     fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 { (**self).transmittance(r, min, max) }
     fn transmittance_color(&self, r: &Ray, min: f64, max: f64) -> crate::color::Color { (**self).transmittance_color(r, min, max) }
     fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> { (**self).flatten() }
+    fn kind(&self) -> &'static str { (**self).kind() }
 }
 
 /// A geometry whose hits report `face`, so a composite object made of many of them (eg. the

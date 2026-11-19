@@ -273,10 +273,23 @@ impl FlatScene {
         let mut planes: Vec<(Prim, u32)> = Vec::new();
         let objects = s.objects.items().iter().chain(s.objects.infinite_items.iter());
         let (mut shapes, mut unflat_shapes, mut unflat_materials) = (0, 0, 0);
+        // Which objects are in the way, for whoever wants the scene on the GPU: each by its
+        // place in the scene file's `objects` and its kind of shape.
+        let mut blocking: Vec<String> = Vec::new();
+        let mut blocked = |o: &crate::sceneobject::SceneObject, why: &str| {
+            let name = match s.source_index(o) {
+                Some(i) => format!("objects[{}] ({}{})", i, o.geometry.kind(), why),
+                None => format!("{}{}", o.geometry.kind(), why),
+            };
+            if !blocking.contains(&name) {
+                blocking.push(name);
+            }
+        };
         for o in objects {
             shapes += 1;
             if o.geometry.is_stochastic() {
                 problems.push("participating media".to_string());
+                blocked(o, ", a medium");
                 continue;
             }
             let Some(prims) = o.geometry.flatten() else {
@@ -284,6 +297,7 @@ impl FlatScene {
                     sky = Some(o.clone());
                 } else {
                     unflat_shapes += 1;
+                    blocked(o, "");
                 }
                 continue;
             };
@@ -294,6 +308,7 @@ impl FlatScene {
                 // record its part.
                 None if o.medium.material_at(Vector3::zeros()).is_emitter() || o.medium.part(1).is_some() => {
                     unflat_materials += 1;
+                    blocked(o, ": its material");
                     continue;
                 },
                 None => {
@@ -317,6 +332,12 @@ impl FlatScene {
             problems.push(format!("{} of {} objects whose materials can't be flattened (textured lights, and combined shapes with a material a part)", unflat_materials, shapes));
         }
         problems.dedup();
+        if !blocking.is_empty() {
+            const NAMED: usize = 6;
+            let more = blocking.len().saturating_sub(NAMED);
+            blocking.truncate(NAMED);
+            problems.push(format!("in the way: {}{}", blocking.join(", "), if more > 0 { format!(" and {} more", more) } else { String::new() }));
+        }
         if !problems.is_empty() {
             return Err(problems.join("; "));
         }

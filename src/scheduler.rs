@@ -69,11 +69,12 @@
 //! long each kernel runs, van Antwerpen from the share of threads with live paths, Meister
 //! and others from the trace's time against the sort's.
 //!
-//! What it can't yet say: time by stage on the GPU. The host sees a block of passes go in and
-//! an image come out; splitting that by kernel needs the device's timestamp queries, which
-//! WebGPU offers only as an optional feature, so the GPU's time is reported whole
-//! (`Stats::device_seconds`), beside the host's own part (generating camera rays, which is
-//! still the CPU's work). On the CPU a stage's time is the sum over threads, not wall time.
+//! Time by stage on the GPU comes from the device's own clock, where it has one (wgpu's
+//! timestamp queries, on Vulkan and Metal natively; not asked for in a browser yet): each
+//! kernel runs in a compute pass of its own with a timestamp at each end (`gpu::Timers`).
+//! Without one the host sees only a block of passes go in and an image come out, so that
+//! time is reported whole (`Stats::device_seconds`), beside the host's own part. On the CPU a
+//! stage's time is the sum over threads, not wall time.
 //!
 //! # What is here now: the CPU queue
 //!
@@ -252,6 +253,13 @@ impl Stats {
         s.batches += 1;
         s.items += items;
         s.seconds += seconds;
+    }
+
+    /// Time `stage` took, found apart from its batches (the GPU's kernels, timed by the
+    /// device's clock where it has one: `gpu::Timers`). A stage timed on the host too
+    /// (`Generate`: the camera rays, then the kernel that starts the paths) has both.
+    pub fn add_seconds(&mut self, stage: Stage, seconds: f64) {
+        self.stages[stage as usize].seconds += seconds;
     }
 
     /// `paths` were alive at the start of round `round` of a pass.

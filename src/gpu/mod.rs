@@ -237,6 +237,24 @@ fn space_record(tables: &mut Vec<f32>, space: &crate::procedural::space::Space) 
     base as u32
 }
 
+/// The most kernels timed between reads of the image (`Timers`); the rest run untimed.
+const TIMED_KERNELS: usize = 1024;
+
+/// The device's own clock around each kernel, where it has one (wgpu's timestamp queries:
+/// Vulkan and Metal natively): a compute pass a kernel, a timestamp at each end, resolved and
+/// read with the image. With them the report gives the time of each stage on the device
+/// (`scheduler::Stats`), which the host otherwise sees only whole; they are what says whether
+/// a render is traversal, shading or the sky.
+struct Timers {
+    set: wgpu::QuerySet,
+    resolved: wgpu::Buffer,
+    readback: wgpu::Buffer,
+    /// Nanoseconds a tick.
+    period: f64,
+    /// The stage of each kernel timed since the last read, in the order of their queries.
+    timed: Mutex<Vec<crate::scheduler::Stage>>,
+}
+
 /// A block's camera rays (`GpuRenderer::make_rays`): how many lanes, how many rays live, and
 /// the time making them took.
 struct BlockRays {
@@ -294,6 +312,7 @@ pub struct GpuRenderer {
     pub lanes: usize,
     block: Mutex<Block>,
     pub adapter_name: String,
+    timers: Option<Timers>,
     /// What setting up took, part by part, in seconds: the render's start, which a short
     /// render is mostly made of (plan.md section 12).
     pub setup: Vec<(&'static str, f64)>,
@@ -627,8 +646,10 @@ impl GpuRenderer {
         let slots = lanes * pixels;
         limits.max_storage_buffer_binding_size = available.max_storage_buffer_binding_size;
         limits.max_buffer_size = available.max_buffer_size;
+        let timed = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
         let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("rays"),
+            required_features: if timed { wgpu::Features::TIMESTAMP_QUERY } else { wgpu::Features::empty() },
             required_limits: limits,
             ..Default::default()
         }).await.map_err(|e| format!("can't open the GPU ({})", e))?;
@@ -647,6 +668,20 @@ impl GpuRenderer {
         };
         #[cfg(target_arch = "wasm32")]
         let source = wgpu::ShaderSource::Wgsl(include_str!("pathtrace.wgsl").into());
+        let timers = timed.then(|| {
+            let size = 16 * TIMED_KERNELS as u64;
+            Timers {
+                set: device.create_query_set(&wgpu::QuerySetDescriptor { label: Some("kernels"), ty: wgpu::QueryType::Timestamp, count: 2 * TIMED_KERNELS as u32 }),
+                resolved: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("timestamps"), size, usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+                }),
+                readback: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("timestamps read"), size, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+                }),
+                period: queue.get_timestamp_period() as f64,
+                timed: Mutex::new(Vec::new()),
+            }
+        });
         lap(&mut setup, "the device");
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pathtrace"), source });
         lap(&mut setup, "the shader");
@@ -698,8 +733,9 @@ impl GpuRenderer {
         });
         #[cfg(target_arch = "wasm32")]
         let made: Vec<wgpu::ComputePipeline> = wanted.iter().map(|&(name, layout)| kernel(name, layout)).collect();
-        let [intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline, start_pipeline]: [wgpu::ComputePipeline; 5] =
-            made.try_into().ok().expect("five kernels");
+        let Ok([intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline, start_pipeline]) = <[wgpu::ComputePipeline; 5]>::try_from(made) else {
+            unreachable!("five kernels were asked for")
+        };
         lap(&mut setup, "the kernels");
         let storage = |label: &str, bytes: &[u8]| device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(label), contents: bytes, usage: wgpu::BufferUsages::STORAGE,
@@ -797,7 +833,7 @@ impl GpuRenderer {
         });
         Ok(GpuRenderer { device, queue, intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline, start_pipeline, start_group, rays_buffer,
             round_groups, add_group, params, params_buffers,
-            queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, rounds_buffer, readback, host_queue, lanes: lanes as usize, block: Default::default(), adapter_name, setup })
+            queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, rounds_buffer, readback, host_queue, lanes: lanes as usize, block: Default::default(), adapter_name, timers, setup })
     }
 
     /// Camera rays for sample `k` of every pixel, as the wavefront integrator's.
@@ -1057,14 +1093,12 @@ impl GpuRenderer {
     fn encode_rounds(&self, encoder: &mut wgpu::CommandEncoder, slot: Option<usize>) {
         for round in 0..=self.params.dims.w {
             let side = (round % 2) as usize;
-            {
-                let mut pass = encoder.begin_compute_pass(&Default::default());
+            // A compute pass a kernel, so that each can be timed (`Timers`).
+            use crate::scheduler::Stage;
+            for (stage, pipeline) in [(Stage::Intersect, &self.intersect_pipeline), (Stage::Shade, &self.bounce_pipeline), (Stage::Sky, &self.sky_pipeline)] {
+                let mut pass = self.timed_pass(encoder, stage);
                 pass.set_bind_group(0, &self.round_groups[side], &[]);
-                pass.set_pipeline(&self.intersect_pipeline);
-                pass.dispatch_workgroups_indirect(&self.dispatch_buffer, 0);
-                pass.set_pipeline(&self.bounce_pipeline);
-                pass.dispatch_workgroups_indirect(&self.dispatch_buffer, 0);
-                pass.set_pipeline(&self.sky_pipeline);
+                pass.set_pipeline(pipeline);
                 pass.dispatch_workgroups_indirect(&self.dispatch_buffer, 0);
             }
             // The next round reads the side this one filled, and fills the side it read.
@@ -1083,7 +1117,7 @@ impl GpuRenderer {
         let slots = self.params.dims.x * self.params.dims.y * self.params.seed.w;
         let groups = slots.div_ceil(pathtrace::WORKGROUP);
         {
-            let mut pass = encoder.begin_compute_pass(&Default::default());
+            let mut pass = self.timed_pass(encoder, crate::scheduler::Stage::Generate);
             pass.set_bind_group(0, &self.start_group, &[]);
             pass.set_pipeline(&self.start_pipeline);
             pass.dispatch_workgroups(groups.min(pathtrace::MAX_GROUPS), groups.div_ceil(pathtrace::MAX_GROUPS), 1);
@@ -1091,11 +1125,25 @@ impl GpuRenderer {
         encoder.copy_buffer_to_buffer(&self.queue_buffer, 0, &self.dispatch_buffer, 0, 16);
     }
 
+    /// A compute pass for one kernel of `stage`, with the device's clock read at each end where
+    /// it has one and there are queries left before the next read (`Timers`).
+    fn timed_pass<'a>(&'a self, encoder: &'a mut wgpu::CommandEncoder, stage: crate::scheduler::Stage) -> wgpu::ComputePass<'a> {
+        let timestamp_writes = self.timers.as_ref().and_then(|t| {
+            let mut timed = t.timed.lock().unwrap();
+            (timed.len() < TIMED_KERNELS).then(|| {
+                timed.push(stage);
+                let at = 2 * (timed.len() as u32 - 1);
+                wgpu::ComputePassTimestampWrites { query_set: &t.set, beginning_of_pass_write_index: Some(at), end_of_pass_write_index: Some(at + 1) }
+            })
+        });
+        encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes })
+    }
+
     /// Every pixel's path, added to the image: the end of a pass.
     fn encode_add(&self, encoder: &mut wgpu::CommandEncoder) {
         let pixels = self.params.dims.x * self.params.dims.y;
         let groups = pixels.div_ceil(pathtrace::WORKGROUP);
-        let mut pass = encoder.begin_compute_pass(&Default::default());
+        let mut pass = self.timed_pass(encoder, crate::scheduler::Stage::Accumulate);
         pass.set_bind_group(0, &self.add_group, &[]);
         pass.set_pipeline(&self.add_pipeline);
         pass.dispatch_workgroups(groups.min(pathtrace::MAX_GROUPS), groups.div_ceil(pathtrace::MAX_GROUPS), 1);
@@ -1154,7 +1202,23 @@ impl GpuRenderer {
         if counted > 0 {
             encoder.copy_buffer_to_buffer(&self.rounds_buffer, 0, &self.readback, image, (counted * self.rounds() * 4) as u64);
         }
+        // The kernels' timestamps since the last read, with the image.
+        let timed = self.timers.as_ref().map(|t| std::mem::take(&mut *t.timed.lock().unwrap())).unwrap_or_default();
+        if let Some(t) = self.timers.as_ref().filter(|_| !timed.is_empty()) {
+            encoder.resolve_query_set(&t.set, 0..2 * timed.len() as u32, &t.resolved, 0);
+            encoder.copy_buffer_to_buffer(&t.resolved, 0, &t.readback, 0, 16 * timed.len() as u64);
+        }
         self.queue.submit(Some(encoder.finish()));
+        if let Some(t) = self.timers.as_ref().filter(|_| !timed.is_empty()) {
+            let size = 16 * timed.len() as u64;
+            self.map(&t.readback, 0..size).await?;
+            let ticks: Vec<u64> = bytemuck::pod_collect_to_vec(&t.readback.get_mapped_range(..size).unwrap());
+            t.readback.unmap();
+            let mut block = self.block.lock().unwrap();
+            for (stage, pair) in timed.iter().zip(ticks.chunks(2)) {
+                block.stats.add_seconds(*stage, pair[1].saturating_sub(pair[0]) as f64 * t.period * 1e-9);
+            }
+        }
         self.map(&self.readback, 0..self.readback.size()).await?;
         let both = bytemuck::cast_slice::<u8, [f32; 4]>(&self.readback.get_mapped_range(..image).unwrap()).to_vec();
         let rounds = bytemuck::cast_slice::<u8, u32>(&self.readback.get_mapped_range(image..image + (counted * self.rounds() * 4) as u64).unwrap()).to_vec();

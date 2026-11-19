@@ -1610,6 +1610,13 @@ UI, file IO and rayon's threads would follow.
    0.0210, night-orbit 0.0044 -> 0.0038). The pipelines are made on threads: 0.27 -> about
    0.18 s here; on Metal, where each compiles its kernel, to be measured. Set-up 1.43 ->
    0.30 s.
+   Time by kernel: each kernel now runs in a compute pass of its own with the device's
+   timestamps at its ends, where it has them (`gpu::Timers`; Vulkan and Metal natively), and
+   the report's stage table has the GPU's seconds. On llvmpipe (a CPU, so shares of work, not
+   of a GPU's time), 320 x 240, 64 spp: teapot-sky intersect 1.55 s, shade 1.70, sky 0.89;
+   spheres 0.22, 0.67, 0.58; night-orbit 0.14, 0.62, 13.5 (the sky and space for every
+   escaping ray and sky sample). The M2's table is what should pick the next kernel to work
+   on.
    Next, in order: the start on the M2 with these and the readback (every block reads back the whole
    image's sums and squares: keep the image on the GPU, read it for progressive output and at
    the end); then phase 3, since few scenes reach the GPU yet.

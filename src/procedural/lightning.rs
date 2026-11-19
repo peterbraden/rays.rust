@@ -67,6 +67,19 @@ pub struct Segment {
     pub radius: f64,
     /// The light it gives per metre, relative to the main channel's.
     pub current: f64,
+    /// Which part of the flash it is: they are lit by different strokes (`Flash`).
+    pub part: Part,
+}
+
+/// The parts of a flash, which its strokes light differently.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Part {
+    /// The path to the ground, which every stroke retraces.
+    Main,
+    /// A branch of the stepped leader, lit by the first stroke only.
+    Branch,
+    /// A channel inside the cloud, lit again and again by recoil leaders and K-changes.
+    Cloud,
 }
 
 impl Segment {
@@ -865,7 +878,8 @@ impl Leader {
             let mut path = vec![points[parent].p, points[i].p];
             self.roughen(&mut path, rng);
             for w in path.windows(2) {
-                out.push(Segment { a: w[0], b: w[1], radius, current });
+                let part = if main[i] { Part::Main } else if points[i].cloud { Part::Cloud } else { Part::Branch };
+                out.push(Segment { a: w[0], b: w[1], radius, current, part });
             }
         }
         out
@@ -898,6 +912,62 @@ impl Leader {
     }
 }
 
+/// A flash in time: its strokes, and what of their light an exposure catches. A cloud-to-ground
+/// flash is a few return strokes (`strokes`), typically three to five, some 60 ms apart (the
+/// intervals log-normal, from about 10 to 300 ms); the first is the strongest, later ones about
+/// 40% of it, varying (peak currents' medians 30 and 12 kA; Rakov and Uman, "Lightning: Physics
+/// and Effects", 2003, ch. 4). Later strokes follow dart leaders down the channel the first one
+/// left, so they light the main channel alone: the branches shine only in the first. Two flashes
+/// in five carry a continuing current after one of their later strokes, a glow lasting some
+/// 100 to 300 ms, with about half the light of the first stroke. Channels in the cloud flicker
+/// all through the flash with recoil leaders, as bright as the strokes are on average. An
+/// intracloud flash is a train of such pulses. Times are from the start of the flash.
+pub struct Flash {
+    /// Each stroke's time (s) and luminous energy, relative to the first's.
+    pub strokes: Vec<(f64, f64)>,
+    /// A continuing current: from when, how long, and its luminous energy.
+    pub continuing: Option<(f64, f64, f64)>,
+}
+
+impl Flash {
+    pub fn new(strokes: usize, seed: u64) -> Flash {
+        let mut rng = Pcg32::new(seed, 0x5f);
+        let mut t = 0.;
+        let mut out = vec![];
+        for k in 0..strokes.max(1) {
+            if k > 0 {
+                t += 0.06 * (0.8 * gaussian(&mut rng)).exp();
+            }
+            let energy = if k == 0 { 1. } else { 0.4 * (0.5 * gaussian(&mut rng)).exp() };
+            out.push((t, energy));
+        }
+        let continuing = (out.len() > 1 && rng.next_f64() < 0.4).then(|| {
+            let after = out[1 + (rng.next_f64() * (out.len() - 1) as f64) as usize % (out.len() - 1)].0;
+            (after + 0.002, 0.1 + 0.2 * rng.next_f64(), 0.5)
+        });
+        Flash { strokes: out, continuing }
+    }
+
+    /// The light an exposure from `open` for `shutter` seconds catches, relative to a first
+    /// stroke's: of the main channel, of the branches, and of the channels in the cloud.
+    pub fn caught(&self, open: f64, shutter: f64) -> (f64, f64, f64) {
+        let close = open + shutter;
+        let within = |t: f64| t >= open && t < close;
+        let mut main = self.strokes.iter().filter(|s| within(s.0)).map(|s| s.1).sum::<f64>();
+        if let Some((from, length, energy)) = self.continuing {
+            let overlap = (close.min(from + length) - open.max(from)).max(0.);
+            main += energy * overlap / length;
+        }
+        let branch = if within(self.strokes[0].0) { self.strokes[0].1 } else { 0. };
+        // The cloud's flickering: the strokes' mean light, through the flash's duration.
+        let end = self.strokes.last().unwrap().0 + 0.05;
+        let overlap = (close.min(end) - open.max(0.)).max(0.);
+        let total = self.strokes.iter().map(|s| s.1).sum::<f64>();
+        let cloud = total * overlap / end;
+        (main, branch, cloud)
+    }
+}
+
 /// A lightning flash (see the module's documentation):
 ///
 /// `{"type": "lightning", "start": [x, y, z], "ground": 0, "seed": 0}`
@@ -907,7 +977,8 @@ impl Leader {
 /// `cloud_depth`, `cloud_current`, `branch_current`, `branch_scale`, `detail`, `roughness`,
 /// `radius` (at least `pixel_width` pixels wide, 0.5 by default, from the `camera` at
 /// `pixel_angle`, both set from the scene's); its light: `luminous_energy` (lm s per metre per stroke), `strokes`, `shutter`
-/// (s), `temperature` (K: a blackbody in place of lightning's spectrum), and `sun_intensity` (the scene's sun's, set from it).
+/// (s), `time` (s from the flash's start at which the shutter opens; `Flash`), `temperature` (K: a
+/// blackbody in place of lightning's spectrum), and `sun_intensity` (the scene's sun's, set from it).
 pub fn parse_lightning(o: &Value) -> SceneObject {
     let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
     let d = Leader::default();
@@ -952,10 +1023,23 @@ pub fn parse_lightning(o: &Value) -> SceneObject {
             s.radius = s.radius.max(width * angle * d / 2.);
         }
     }
+    // Its strokes in time, and what the exposure catches of each part's light: each segment is
+    // scaled to its part's share, against the main channel's.
+    let flash = Flash::new(num("strokes", 4.).round().max(1.) as usize, leader.seed);
+    let shutter = num("shutter", 1.).max(1e-6);
+    let (main, branch, cloud) = flash.caught(num("time", 0.), shutter);
+    let reference = if main > 0. { main } else { branch.max(cloud).max(1e-12) };
+    for s in segments.iter_mut() {
+        s.current *= match s.part {
+            Part::Main => main / reference,
+            Part::Branch => branch / reference,
+            Part::Cloud => cloud / reference,
+        };
+    }
     let channel = Channel::new(segments, leader.radius);
     // The main channel's luminous flux per metre, averaged over the exposure, leaving its
     // surface diffusely: luminance Φ' / (2π r) / π, on the scene's scale.
-    let flux = num("luminous_energy", 1.5e4) * num("strokes", 4.) / num("shutter", 1.).max(1e-6);
+    let flux = num("luminous_energy", 1.5e4) * reference / shutter;
     let luminance = flux / (2. * PI * leader.radius) / PI;
     let radiance = luminance / SUN_ILLUMINANCE * num("sun_intensity", 1.);
     let material = LightningMaterial {
@@ -1003,7 +1087,7 @@ mod tests {
 
     #[test]
     fn test_capsule_hits_and_lookup() {
-        let s = Segment { a: Vector3::new(0., 0., 0.), b: Vector3::new(0., 10., 0.), radius: 1., current: 1. };
+        let s = Segment { a: Vector3::new(0., 0., 0.), b: Vector3::new(0., 10., 0.), radius: 1., current: 1., part: Part::Main };
         let rd = Vector3::new(1., 0., 0.);
         assert!((s.hit(&Vector3::new(-5., 5., 0.), &rd, 0.).unwrap() - 4.).abs() < 1e-9);
         // The cap at the top.
@@ -1114,6 +1198,26 @@ mod tests {
             assert!(reach > 4000., "seed {}: reach {}", seed, reach);
             assert!(mean_dy < 400., "seed {}: {}", seed, mean_dy);
         }
+    }
+
+    #[test]
+    fn test_strokes_in_time() {
+        let f = Flash::new(4, 3);
+        assert_eq!(f.strokes.len(), 4);
+        assert_eq!(f.strokes[0], (0., 1.));
+        // Later strokes follow, weaker, tens of milliseconds apart.
+        assert!(f.strokes.windows(2).all(|w| w[1].0 > w[0].0 && w[1].0 - w[0].0 < 1.));
+        assert!(f.strokes[1..].iter().all(|s| s.1 < 1.));
+        // A long exposure catches them all; the branches only the first.
+        let (main, branch, cloud) = f.caught(0., 2.);
+        let total: f64 = f.strokes.iter().map(|s| s.1).sum::<f64>() + f.continuing.map_or(0., |c| c.2);
+        assert!((main - total).abs() < 1e-9 && branch == 1. && cloud > 0.);
+        // A short one after the first stroke catches the main channel alone (or nothing).
+        let (t1, e1) = f.strokes[1];
+        let (main, branch, _) = f.caught(t1 - 1e-4, 2e-4);
+        assert!(branch == 0. && main >= e1);
+        // Before the flash, nothing.
+        assert_eq!(f.caught(-1., 0.5), (0., 0., 0.));
     }
 }
 

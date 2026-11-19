@@ -18,7 +18,11 @@
 //! The channel here is grown that way: leader tips step together, `step` metres a step,
 //! turning by about `tortuosity` degrees, drawn down by the field (and towards `target`),
 //! branching with probability `branching` per step and dying out, until one comes within
-//! `striking_distance` of the ground. Each straight step is then broken into a fractal path
+//! `striking_distance` of the ground (10 I^0.65 m for a first stroke of peak current I kA, so
+//! about 90 m; `peak_current`). Then an upward connecting leader rises from the ground to meet
+//! it, the last stretch of the main channel, while a few others rise around it, lose, and stay
+//! short faint streamers (in the field model, `Field`, the leader grows as described there).
+//! Each straight step is then broken into a fractal path
 //! down to `detail` metres, by midpoint displacement. Each part of the channel glows in
 //! proportion to the current through it: the main channel fully, a branch as the length of
 //! channel beyond it (the charge that drains through it) against `branch_scale`.
@@ -511,7 +515,8 @@ impl Default for Leader {
             pull: 0.35,
             branching: 0.05,
             dying: 0.05,
-            striking_distance: 60.,
+            // 10 I^0.65 m for a first stroke of the median 30 kA (Golde; Eriksson).
+            striking_distance: 91.,
             cloud_length: 6000.,
             cloud_depth: 1500.,
             cloud_current: 0.25,
@@ -663,6 +668,8 @@ impl Leader {
         let sigma = self.tortuosity.to_radians() / 1.25;
         let mut main_tip: Option<usize> = None;
 
+        // Upward leaders that didn't connect.
+        let mut streamers: Vec<Vec<Vector3<f64>>> = vec![];
         // The leader towards the ground.
         if self.kind == Kind::CloudToGround {
             let mut tips = vec![Tip { at: 0, dir: Vector3::new(0.3 * gaussian(&mut rng), -1., 0.3 * gaussian(&mut rng)).normalize(), cloud: false, generation: 0 }];
@@ -746,12 +753,30 @@ impl Leader {
                     stalled.swap(0, lowest);
                 }
             }
-            // The last gap closes with a short upward leader: straight to the ground.
+            // The last gap closes with an upward connecting leader, rising from the ground to
+            // meet the tip; it becomes the bottom of the main channel.
             if let Some(tip) = main_tip {
                 let p = points[tip].p;
-                let foot = Vector3::new(p.x + 0.3 * (p.y - self.ground) * gaussian(&mut rng), self.ground - 1., p.z + 0.3 * (p.y - self.ground) * gaussian(&mut rng));
-                points.push(Point { p: foot, parent: Some(tip), cloud: false });
-                main_tip = Some(points.len() - 1);
+                let gap = (p.y - self.ground).max(1.);
+                let foot = Vector3::new(p.x + 0.3 * gap * gaussian(&mut rng), self.ground - 1., p.z + 0.3 * gap * gaussian(&mut rng));
+                let path = self.upward(foot, p, f64::INFINITY, &mut rng);
+                // Attached from the tip down: the tree's parents run back to the start.
+                let mut parent = tip;
+                // (It ends at the tip, which is already there.)
+                let ends_at_tip = path.last().is_some_and(|q| (q - p).norm() < 1e-9);
+                for q in path[..path.len() - ends_at_tip as usize].iter().rev() {
+                    points.push(Point { p: *q, parent: Some(parent), cloud: false });
+                    parent = points.len() - 1;
+                }
+                main_tip = Some(parent);
+                // Others rise too, from the ground around, and lose the race.
+                for _ in 0..(rng.next_f64() * 4.) as usize {
+                    let a = 2. * PI * rng.next_f64();
+                    let r = self.striking_distance * (0.5 + 1.5 * rng.next_f64());
+                    let base = foot + Vector3::new(a.cos() * r, 0., a.sin() * r);
+                    let reach = self.striking_distance * (0.15 + 0.35 * rng.next_f64());
+                    streamers.push(self.upward(base, p, reach, &mut rng));
+                }
             }
         }
 
@@ -832,7 +857,42 @@ impl Leader {
             stuck = if advanced { 0 } else { stuck + 1 };
         }
 
-        self.segments(&points, main_tip, &mut rng)
+        let mut out = self.segments(&points, main_tip, &mut rng);
+        // Faint, lit by the first stroke's approach, like the branches.
+        let current = 0.12 * self.branch_current / 0.45;
+        for mut path in streamers {
+            if path.len() < 2 { continue; }
+            self.roughen(&mut path, &mut rng);
+            for w in path.windows(2) {
+                out.push(Segment { a: w[0], b: w[1], radius: self.radius * 0.4, current, part: Part::Branch });
+            }
+        }
+        out
+    }
+
+    /// An upward leader from `from` on the ground towards the descending tip `to`, as far as
+    /// `reach` or until it meets it: a wandering path of steps a sixth of the gap.
+    fn upward(&self, from: Vector3<f64>, to: Vector3<f64>, reach: f64, rng: &mut Pcg32) -> Vec<Vector3<f64>> {
+        let gap = (to - from).norm();
+        let step = (gap / 6.).max(2. * self.detail);
+        let sigma = self.tortuosity.to_radians() / 1.25;
+        let mut path = vec![from];
+        let mut dir = (to - from).normalize();
+        let mut grown = 0.;
+        while grown < reach && path.len() < 200 {
+            let at = *path.last().unwrap();
+            let left = to - at;
+            if left.norm() <= step {
+                path.push(to);
+                break;
+            }
+            let kick = Vector3::new(gaussian(rng), gaussian(rng), gaussian(rng)) * sigma;
+            dir = (dir + left.normalize() * 0.6 + kick).normalize();
+            let len = step.min(reach - grown);
+            path.push(at + dir * len);
+            grown += len;
+        }
+        path
     }
 
     /// The direction the field draws a leader at p: down, and towards the target.
@@ -973,7 +1033,7 @@ impl Flash {
 /// `{"type": "lightning", "start": [x, y, z], "ground": 0, "seed": 0}`
 ///
 /// with `kind` ("cloud_to_ground" or "intracloud"), `target` ([x, z]), `step`, `tortuosity`
-/// (degrees), `pull`, `branching`, `dying`, `striking_distance`, `cloud_length`,
+/// (degrees), `pull`, `branching`, `dying`, `striking_distance` (or `peak_current`, kA), `cloud_length`,
 /// `cloud_depth`, `cloud_current`, `branch_current`, `branch_scale`, `detail`, `roughness`,
 /// `radius` (at least `pixel_width` pixels wide, 0.5 by default, from the `camera` at
 /// `pixel_angle`, both set from the scene's); its light: `luminous_energy` (lm s per metre per stroke), `strokes`, `shutter`
@@ -996,7 +1056,11 @@ pub fn parse_lightning(o: &Value) -> SceneObject {
         pull: num("pull", d.pull).max(0.),
         branching: num("branching", d.branching).clamp(0., 1.),
         dying: num("dying", d.dying).clamp(0., 1.),
-        striking_distance: num("striking_distance", d.striking_distance).max(1.),
+        // Given, or from the first stroke's peak current in kA (10 I^0.65 m).
+        striking_distance: match (o.get("striking_distance"), o["peak_current"].as_f64()) {
+            (None, Some(i)) => 10. * i.max(1.).powf(0.65),
+            _ => num("striking_distance", d.striking_distance).max(1.),
+        },
         cloud_length: num("cloud_length", d.cloud_length).max(0.),
         cloud_depth: num("cloud_depth", d.cloud_depth).max(1.),
         cloud_current: num("cloud_current", d.cloud_current).max(0.),
@@ -1218,6 +1282,23 @@ mod tests {
         assert!(branch == 0. && main >= e1);
         // Before the flash, nothing.
         assert_eq!(f.caught(-1., 0.5), (0., 0., 0.));
+    }
+
+    #[test]
+    fn test_upward_leaders_meet_the_strike() {
+        let mut streamers = 0;
+        for seed in 0..8 {
+            let l = Leader { seed, cloud_length: 0., ..Leader::default() };
+            let s = l.grow();
+            // The main channel reaches the ground, through the connecting leader.
+            assert!(s.iter().any(|s| s.part == Part::Main && s.a.y.min(s.b.y) < 0.), "seed {}", seed);
+            // Leaders that lost rise from the ground no higher than the striking distance.
+            for b in s.iter().filter(|s| s.part == Part::Branch && s.a.y.min(s.b.y) < 1.) {
+                streamers += 1;
+                assert!(b.a.y.max(b.b.y) < l.striking_distance * 1.2, "seed {}: {}", seed, b.a.y.max(b.b.y));
+            }
+        }
+        assert!(streamers > 0);
     }
 }
 

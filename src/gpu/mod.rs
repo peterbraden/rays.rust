@@ -420,6 +420,15 @@ pub struct Buffers {
 impl Buffers {
     /// The flattened scene as the shader's buffers, or why it can't be.
     pub fn build(s: &Scene, flat: &FlatScene) -> Result<Buffers, String> {
+        // A shape its own code intersects needs a kernel of its kind, and none has one yet.
+        if let Some((o, _)) = flat.shapes.first() {
+            let names: Vec<String> = flat.shapes.iter().take(4).map(|(o, _)| match s.source_index(o) {
+                Some(i) => format!("objects[{}] ({})", i, o.geometry.kind()),
+                None => o.geometry.kind().to_string(),
+            }).collect();
+            let _ = o;
+            return Err(format!("{} shapes the kernels can't intersect yet: {}{}", flat.shapes.len(), names.join(", "), if flat.shapes.len() > 4 { " ..." } else { "" }));
+        }
         // A browser's passes are queued without waiting on the device, which serving the
         // host's queue must (`host`).
         if cfg!(target_arch = "wasm32") && !flat.hosts.is_empty() {

@@ -1620,6 +1620,20 @@ UI, file IO and rayon's threads would follow.
    Next, in order: the start on the M2 with these and the readback (every block reads back the whole
    image's sums and squares: keep the image on the GPU, read it for progressive output and at
    the end); then phase 3, since few scenes reach the GPU yet.
+   What keeps the demo scenes off the GPU, surveyed (November 2026; 63 scenes, 14 too slow
+   to build for the survey): 13 render there. Of the rest, by what is in the way: the ocean
+   and a cloud volume together 14 (the cloud atlas), the ocean alone 6, rings 3, an ocean and
+   volume with crepuscular rays 2, grass and terrain 2, and one each of block terrain,
+   terrain with a volume, terrain with a volume and a forest, displaced terrain with a
+   forest, fireworks, grass with terrain and forest, a volume alone (orbit), a volume with
+   crepuscular rays (overcast), and the stress test (everything). So: the ocean first, then
+   media; nothing else moves more than three scenes.
+   Done towards it: a refusal names the objects in the way (`Geometry::kind`), and a shape
+   that isn't primitives is kept whole in the flat scene and intersected by its own code
+   (`FlatScene::shapes`), so the CPU's wavefront integrator renders oceans, terrain, rings,
+   tori, CSG and the rest (FLIP against trace at 160 x 90, 32 spp: ocean-1 0.0245, ocean-boat
+   0.0145, block-terrain 0.0157, saturn 0.0004); the GPU needs a kernel for each kind, and
+   says which it lacks.
 3. The fallback framework: per-area status, classification, CPU queues for materials first,
    then intersection. Exit: every flattenable demo scene plus at least one with a
    procedural shape and one with an unported material renders through the GPU path with CPU

@@ -11,6 +11,15 @@
 //! be flattened (procedural shapes, CSG, media, crepuscular rays, spectral and motion-blurred
 //! renders) is reported, and the scene renders the usual way.
 //!
+//! A shape that isn't primitives (an ocean, a terrain, a combined shape: anything whose
+//! `flatten` is None) doesn't stop a scene being flattened either. It is kept whole, as a
+//! shape the scene's own code intersects (`FlatScene::shapes`), tested after the primitives
+//! as the planes are; its hits carry what its material may ask of them (`Hit::face`, `part`).
+//! The CPU's integrator renders such scenes; the GPU takes those of the kinds it has a kernel
+//! for and says which it hasn't (`gpu::Buffers::build`). Only what lets light through to
+//! shadow rays in part (transparent water, media) is still refused: the stages' shadow rays
+//! are blocked or not.
+//!
 //! A material that isn't data (textured, layered, procedural: anything whose `flat` is None)
 //! doesn't stop a scene being flattened if its shape can be. It is kept as `FlatMaterial::Host`,
 //! naming its object, and a path that hits it is shaded by the scene's own material, as the
@@ -39,6 +48,10 @@ pub enum Prim {
     Plane { y: f64 },
 }
 
+/// The nearest a shape its own code intersects is asked for a hit: such shapes find their
+/// surfaces by marching or iterating, and a ray leaving one starts within that error of it.
+const MIN_SHAPE: f64 = 1e-9;
+
 /// A surface hit: distance, point, geometric normal, and the normal to shade with.
 #[derive(Clone, Copy, Debug)]
 pub struct Hit {
@@ -47,6 +60,11 @@ pub struct Hit {
     pub geometric: Vector3<f64>,
     pub shading: Vector3<f64>,
     pub prim: u32,
+    /// Which face and part of its object was hit, for a material that asks (`Geometry::uv`,
+    /// `Medium::part`): a primitive's place among its object's, or what a shape the scene's
+    /// own code intersects reported.
+    pub face: u32,
+    pub part: u32,
 }
 
 impl Prim {
@@ -246,6 +264,9 @@ pub struct FlatScene {
     /// With `"light_sampler": "bvh"`, the light BVH over `emitters` (`light_bvh`), in place of
     /// choosing by power.
     pub light_bvh: Option<crate::light_bvh::LightBvh>,
+    /// Objects that aren't primitives, intersected by their own code, and their materials. A
+    /// hit's `prim` counts them after the primitives and the planes.
+    pub shapes: Vec<(std::sync::Arc<crate::sceneobject::SceneObject>, u32)>,
     /// The objects whose materials are `FlatMaterial::Host`.
     pub hosts: Vec<std::sync::Arc<crate::sceneobject::SceneObject>>,
     /// Where there are hosts: each primitive's place among its object's (its face, for
@@ -270,9 +291,10 @@ impl FlatScene {
         let mut materials: Vec<FlatMaterial> = Vec::new();
         let mut bounded: Vec<(Prim, u32, u32)> = Vec::new();
         let mut hosts = Vec::new();
+        let mut shapes = Vec::new();
         let mut planes: Vec<(Prim, u32)> = Vec::new();
         let objects = s.objects.items().iter().chain(s.objects.infinite_items.iter());
-        let (mut shapes, mut unflat_shapes, mut unflat_materials) = (0, 0, 0);
+        let (mut shapes_seen, mut unflat_shapes, mut unflat_materials) = (0, 0, 0);
         // Which objects are in the way, for whoever wants the scene on the GPU: each by its
         // place in the scene file's `objects` and its kind of shape.
         let mut blocking: Vec<String> = Vec::new();
@@ -286,27 +308,33 @@ impl FlatScene {
             }
         };
         for o in objects {
-            shapes += 1;
+            shapes_seen += 1;
             if o.geometry.is_stochastic() {
                 problems.push("participating media".to_string());
                 blocked(o, ", a medium");
                 continue;
             }
-            let Some(prims) = o.geometry.flatten() else {
-                if o.medium.material_at(Vector3::zeros()).is_sky() {
+            let prims = match o.geometry.flatten() {
+                Some(prims) => Some(prims),
+                None if o.medium.material_at(Vector3::zeros()).is_sky() => {
                     sky = Some(o.clone());
-                } else {
+                    continue;
+                },
+                // Light passes it in part, which the stages' shadow rays can't say.
+                None if o.geometry.transmits() => {
                     unflat_shapes += 1;
-                    blocked(o, "");
-                }
-                continue;
+                    blocked(o, ", which light passes through");
+                    continue;
+                },
+                // Kept whole, for its own code to intersect.
+                None => None,
             };
             let m = match o.medium.flat_material() {
                 Some(m) => m,
                 // An emitter must be data: the stages' light sampling has to know it. So must
                 // a medium of several parts' (a combined shape's), as a primitive doesn't
                 // record its part.
-                None if o.medium.material_at(Vector3::zeros()).is_emitter() || o.medium.part(1).is_some() => {
+                None if o.medium.material_at(Vector3::zeros()).is_emitter() || (prims.is_some() && o.medium.part(1).is_some()) => {
                     unflat_materials += 1;
                     blocked(o, ": its material");
                     continue;
@@ -316,8 +344,18 @@ impl FlatScene {
                     FlatMaterial::Host { object: hosts.len() as u32 - 1 }
                 },
             };
+            // (An emitter has to be primitives too: the stages sample lights by their areas.)
+            if prims.is_none() && matches!(m, FlatMaterial::Emitter { .. }) {
+                unflat_shapes += 1;
+                blocked(o, ", a light");
+                continue;
+            }
             let index = materials.len() as u32;
             materials.push(m);
+            let Some(prims) = prims else {
+                shapes.push((o.clone(), index));
+                continue;
+            };
             for (face, p) in prims.into_iter().enumerate() {
                 match p {
                     Prim::Plane { .. } => planes.push((p, index)),
@@ -326,10 +364,10 @@ impl FlatScene {
             }
         }
         if unflat_shapes > 0 {
-            problems.push(format!("{} of {} objects whose shapes can't be flattened (only spheres, triangles, meshes, boxes, flat quads, planes and their transforms can)", unflat_shapes, shapes));
+            problems.push(format!("{} of {} objects whose shapes can't be flattened (light passes through them in part, or they are lights that aren't spheres, triangles, meshes, boxes or flat quads)", unflat_shapes, shapes_seen));
         }
         if unflat_materials > 0 {
-            problems.push(format!("{} of {} objects whose materials can't be flattened (textured lights, and combined shapes with a material a part)", unflat_materials, shapes));
+            problems.push(format!("{} of {} objects whose materials can't be flattened (textured lights, and combined shapes with a material a part)", unflat_materials, shapes_seen));
         }
         problems.dedup();
         if !blocking.is_empty() {
@@ -374,7 +412,7 @@ impl FlatScene {
             crate::light_bvh::LightBvh::new(&bounds)
         });
         let emitter_choice = Distribution1D::new(if powers.is_empty() { vec![1.] } else { powers });
-        Ok(FlatScene { prims, prim_material, bvh, planes, materials, emitters, emitter_choice, emitter_index, sky, light_bvh, hosts, prim_face })
+        Ok(FlatScene { prims, prim_material, bvh, planes, materials, emitters, emitter_choice, emitter_index, sky, light_bvh, shapes, hosts, prim_face })
     }
 
     /// One emitter to sample from `p` (its index in `emitters`), and the chance of choosing it.
@@ -406,7 +444,14 @@ impl FlatScene {
         let mut best: Option<Hit> = None;
         for (k, (p, _)) in self.planes.iter().enumerate() {
             if let Some((t, g, n)) = p.intersect(r, min, best.map_or(f64::INFINITY, |b| b.dist)) {
-                best = Some(Hit { dist: t, point: r.ro + r.rd * t, geometric: g, shading: n, prim: (self.prims.len() + k) as u32 });
+                best = Some(Hit { dist: t, point: r.ro + r.rd * t, geometric: g, shading: n, prim: (self.prims.len() + k) as u32, face: 0, part: 0 });
+            }
+        }
+        // Shapes their own code intersects: one normal, the shape's.
+        for (k, (o, _)) in self.shapes.iter().enumerate() {
+            if let Some(x) = o.geometry.intersects_range(r, min.max(MIN_SHAPE), best.map_or(f64::INFINITY, |b| b.dist)) {
+                let prim = (self.prims.len() + self.planes.len() + k) as u32;
+                best = Some(Hit { dist: x.dist, point: x.point, geometric: x.normal, shading: x.normal, prim, face: x.face, part: x.part });
             }
         }
         let max = best.map_or(f64::INFINITY, |b| b.dist);
@@ -418,7 +463,7 @@ impl FlatScene {
         if let Some((i, x)) = found {
             // The shading normal again, for the one primitive hit.
             let shading = self.prims[i].intersect(r, min, x.dist * (1. + 1e-12) + 1e-300).map_or(x.normal, |h| h.2);
-            return Some(Hit { dist: x.dist, point: x.point, geometric: x.normal, shading, prim: i as u32 });
+            return Some(Hit { dist: x.dist, point: x.point, geometric: x.normal, shading, prim: i as u32, face: self.face(i as u32), part: 0 });
         }
         best
     }
@@ -426,6 +471,7 @@ impl FlatScene {
     /// Whether anything lies along `r` (unit direction) between `min` and `max`.
     pub fn occluded(&self, r: &Ray, min: f64, max: f64) -> bool {
         self.planes.iter().any(|(p, _)| p.intersect(r, min, max).is_some())
+            || self.shapes.iter().any(|(o, _)| o.geometry.occludes(r, min.max(MIN_SHAPE), max))
             || self.bvh.any_hit(r, min, max, |i| self.prims[i].intersect(r, min, max).is_some())
     }
 
@@ -443,7 +489,14 @@ impl FlatScene {
 
     pub fn hit_material(&self, prim: u32) -> &FlatMaterial {
         let n = self.prims.len() as u32;
-        if prim < n { self.material(prim) } else { &self.materials[self.planes[(prim - n) as usize].1 as usize] }
+        let planes = self.planes.len() as u32;
+        if prim < n {
+            self.material(prim)
+        } else if prim < n + planes {
+            &self.materials[self.planes[(prim - n) as usize].1 as usize]
+        } else {
+            &self.materials[self.shapes[(prim - n - planes) as usize].1 as usize]
+        }
     }
 }
 
@@ -506,7 +559,8 @@ mod tests {
                          { "type": "volume", "min": [-1, -1, -1], "max": [1, 1, 1] } ]
         }"#.to_string());
         let e = FlatScene::build(&s).err().unwrap();
-        assert!(e.contains("participating media") && e.contains("1 of 3 objects whose shapes"), "{}", e);
+        // The torus is kept, for its own code to intersect; the medium is what is in the way.
+        assert!(e.contains("participating media") && e.contains("objects[2]") && !e.contains("objects[0]"), "{}", e);
         let ok = SceneFile::from_string(r#"{
             "camera": { "location": [0, 1, -3], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
             "materials": { "L": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }, "E": { "type": "diffuse-light", "color": [1, 1, 1] } },

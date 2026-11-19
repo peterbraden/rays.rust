@@ -508,7 +508,7 @@ fn specular_bounce(p: &mut Path, s: &Scene, from: Vector3<f64>, rd: Vector3<f64>
 /// material would save.
 fn host_bounce(p: &mut Path, s: &Scene, flat: &FlatScene, object: u32, h: &Hit) {
     let o = &flat.hosts[object as usize];
-    let found = Intersection { dist: h.dist, point: h.point, normal: h.shading, face: flat.face(h.prim), object: o, part: 0 };
+    let found = Intersection { dist: h.dist, point: h.point, normal: h.shading, face: h.face, object: o, part: h.part };
     // Off the surface, on the side the ray arrived from (`trace::trace_intersection`).
     let bias = s.render.shadow_bias.max(found.spawn_offset());
     let hit = Intersection { point: found.point + found.facing_normal(&p.ray) * bias, ..found };
@@ -756,6 +756,40 @@ pub mod tests {
         let n = 256;
         let (_, _, stats) = render_pass_with_stats(&s, &flat, 0);
         assert!(stats.stage(Stage::Host).items > 0 && stats.stage(Stage::Shade).items > 0);
+        let (w, h) = (s.image.width, s.image.height);
+        let (a, b) = (tiles(&mean_image(&s, n), w, h, 3, 2), tiles(&path_image(&s, n), w, h, 3, 2));
+        for t in 0..6 {
+            for ch in 0..3 {
+                assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "tile {} channel {}: wavefront {} vs path {}", t, ch, a[t][ch], b[t][ch]);
+            }
+        }
+    }
+
+    /// Shapes that aren't primitives (a torus, a cone) are kept whole and intersected by their
+    /// own code, among primitives, whether their materials are the stages' or their own; they
+    /// shadow and are shadowed as the rest.
+    #[test]
+    fn test_shapes_their_own_code_intersects_agree_with_the_path_tracer() {
+        let s = SceneFile::from_string(r#"{
+            "width": 24, "height": 16, "background": [0.2, 0.25, 0.3], "max_depth": 6, "path_termination": "russian_roulette",
+            "sun": { "direction": [-1, 2, -1], "intensity": 2 },
+            "lights": [ { "location": [1, 3, -1], "intensity": 4 } ],
+            "camera": { "location": [0, 2, -5], "lookat": [0, 0.4, 0], "up": [0, 1, 0], "angle": 0.6 },
+            "materials": {
+                "F": { "type": "lambertian", "albedo": [0.6, 0.6, 0.6] },
+                "P": { "type": "coated_diffuse", "albedo": [0.7, 0.2, 0.1], "roughness": 0.2 },
+                "C": { "type": "conductor", "metal": "Au", "roughness": 0.2 }
+            },
+            "objects": [
+                { "type": "plane", "y": 0, "material": "F" },
+                { "type": "torus", "center": [-0.9, 0.3, 0], "major": 0.7, "minor": 0.3, "material": "C" },
+                { "type": "cone", "base": [1, 0, 0], "cap": [1, 1.2, 0], "base_radius": 0.6, "cap_radius": 0, "material": "P" },
+                { "type": "sphere", "location": [0, 0.3, -1.2], "radius": 0.3, "material": "F" }
+            ]
+        }"#.to_string());
+        let flat = FlatScene::build(&s).unwrap();
+        assert_eq!((flat.shapes.len(), flat.hosts.len()), (2, 1));
+        let n = 256;
         let (w, h) = (s.image.width, s.image.height);
         let (a, b) = (tiles(&mean_image(&s, n), w, h, 3, 2), tiles(&path_image(&s, n), w, h, 3, 2));
         for t in 0..6 {

@@ -108,3 +108,30 @@ is constituents, 95 MB cards and 90 MB their BVHs.
 Building is mostly placing the trees (about 50 s: 35 million darts, 10 million of them
 evaluating noise fields), not growing them (about 12 s); with `"lod"`, many more variants
 cost little, as distant ones are kept only as cards.
+
+## Denser: a canopy and an understory
+
+[`demo/scenes/forest-dense.json`](../demo/scenes/forest-dense.json) layers two forests over the
+same hills: a canopy of 11 species at 6 m spacing, 10 variants each, and an understory of hazel,
+hawthorn, juniper and shrubs at 4 m filling the gaps beneath and between them. That is 1.49
+million trees (381,000 and 1.11 million) from 142 distinct ones, seen from 330 m up.
+
+![A denser forest](../demo/scenes/forest-dense.png)
+
+At 1200 × 700 and 32 samples per pixel, on 4 cores: built in 256 s (placing the trees is most of
+it), rendered in 399 s, in 3.1 GB at most. The seven trees nearest the camera are seen in full;
+20 million triangles of cards and bark are built, standing for 2.8 billion placed.
+
+## In daylight: sun, sky and clouds
+
+[`demo/scenes/forest-sunlit.json`](../demo/scenes/forest-sunlit.json) is the stress test with
+the light outdoors: the physical sky (multiple scattering, aerial perspective) and its sun, low
+and to the side, and a field of cumulus (`nubis_clouds`) whose shadows fall on the forest, so
+every shadow ray from a leaf also crosses the clouds' volume. Four forests reach to the horizon,
+coarser with distance: the canopy and understory near the camera, then canopies at 8 m and 10 m
+spacing out to 14 km, 2.65 million trees from 220 distinct ones.
+
+![A forest in daylight](../demo/scenes/forest-sunlit.png)
+
+At 1200 × 700 and 32 samples per pixel, on 4 cores: built in 337 s, rendered in 426 s (171
+million rays, at 402,000 a second), in 3.9 GB at most.

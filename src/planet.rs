@@ -96,6 +96,14 @@ impl DensityField for PlanetMapping {
         self.field.minorant()
     }
 
+    /// Up the column in the field's own coordinates, where up is up: the planet's curve
+    /// lowers the field by the same amount all the way up.
+    fn column_depths(&self, p: &Vector3<f64>, lo: f64, hi: f64, steps: u32) -> (f64, f64) {
+        let q = self.planet.local_coordinates(p);
+        let drop = p.y - q.y;
+        self.field.column_depths(&q, lo - drop, hi - drop, steps)
+    }
+
     /// The field's local majorant along the ray's direction in planet-local coordinates, its
     /// length converted back to the scene's, and trusted only `CURVED_STEP` at a time.
     fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {

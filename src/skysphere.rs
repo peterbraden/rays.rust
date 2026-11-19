@@ -358,6 +358,21 @@ impl SkyMaterial {
     /// parallel (rayon) loop, so a render thread building one inside its `OnceLock` could steal
     /// another render job whose ray then waits on that same `OnceLock`: a deadlock, as `LUTSky`
     /// once had. The sun's table comes first, as the multiple scattering table reads it.
+    /// The same air lit from unit `direction` with `brightness` (its tables built afresh).
+    pub fn relit(&self, direction: Vector3<f64>, brightness: f64) -> SkyMaterial {
+        SkyMaterial {
+            atmosphere: self.atmosphere.clone(), earth: self.earth.clone(),
+            sun_direction: direction.normalize(), brightness,
+            rayleigh_thickness: self.rayleigh_thickness, mie_thickness: self.mie_thickness,
+            rayleigh_coefficients: self.rayleigh_coefficients, mie_coefficient: self.mie_coefficient,
+            mie_anisotropy: self.mie_anisotropy, ozone: self.ozone,
+            sun_table: std::sync::OnceLock::new(),
+            multiple_scattering: self.multiple_scattering, ground_albedo: self.ground_albedo,
+            ms_table: std::sync::OnceLock::new(), spectral_ms: std::sync::OnceLock::new(),
+            crepuscular_rays: self.crepuscular_rays,
+        }.with_tables()
+    }
+
     pub fn with_tables(self) -> SkyMaterial {
         let p = self.earth.center + Vector3::new(0., self.earth.radius + 1., 0.);
         self.sun_depths_at(&p);
@@ -1107,12 +1122,43 @@ pub struct LUTSky {
     sky: SkyMaterial,
     lut: SkyViewLUT,
     spectral_luts: std::sync::OnceLock<Vec<SkyViewLUT>>,
+    /// The same air lit by a moon's light instead of the sun's (`moonlit`).
+    moonlit: Option<Box<LUTSky>>,
 }
 
 impl LUTSky {
     pub fn new(sky: SkyMaterial) -> LUTSky {
         let lut = SkyViewLUT::build(&sky.rgb_air(), LUT_WIDTH, LUT_HEIGHT);
-        LUTSky { sky, lut, spectral_luts: std::sync::OnceLock::new() }
+        LUTSky { sky, lut, spectral_luts: std::sync::OnceLock::new(), moonlit: None }
+    }
+
+    /// This sky, also lit by moonlight: the same air with the moon in place of the sun, its
+    /// light `share` of the sun's (the night sky's faint blue is moonlight scattered as
+    /// daylight is).
+    pub fn moonlit(self, direction: Vector3<f64>, share: f64) -> LUTSky {
+        let moon = self.sky.relit(direction, self.sky.brightness * share);
+        LUTSky { moonlit: Some(Box::new(LUTSky::new(moon))), ..self }
+    }
+
+    /// The light scattered by the air along `r`, without what shows through it from space.
+    fn air_radiance(&self, r: &Ray) -> Vector3<f64> {
+        let d = r.rd.normalize();
+        let altitude = (r.ro - self.sky.earth.center).norm() - self.sky.earth.radius;
+        let looked_up = match crate::spectrum::current() {
+            _ if d.y < 0. => None,
+            None => self.lut.lookup(&d, altitude),
+            Some(w) => self.lookup_spectral(&d, altitude, &w.lambda),
+        };
+        // The phase functions, which peak sharply around the sun, are applied exactly.
+        let air = self.sky.air();
+        let v = match looked_up {
+            Some((rayleigh, mie, multiple)) => air.apply_phase(&d, rayleigh, mie, multiple),
+            None => air.radiance(r),
+        } * SKY_CALIBRATION;
+        match &self.moonlit {
+            Some(m) => v + m.air_radiance(r),
+            None => v,
+        }
     }
 
     fn spectral_luts(&self) -> &[SkyViewLUT] {
@@ -1157,20 +1203,7 @@ impl MaterialModel for LUTSky {
     fn is_sky(&self) -> bool { true }
 
     fn scatter(&self, r: &Ray, _intersection: &Intersection, s: &Scene) -> ScatteredRay {
-        let d = r.rd.normalize();
-        let altitude = (r.ro - self.sky.earth.center).norm() - self.sky.earth.radius;
-        let spectral = crate::spectrum::current();
-        let looked_up = match spectral {
-            _ if d.y < 0. => None,
-            None => self.lut.lookup(&d, altitude),
-            Some(w) => self.lookup_spectral(&d, altitude, &w.lambda),
-        };
-        // The phase functions, which peak sharply around the sun, are applied exactly.
-        let air = self.sky.air();
-        let v = match looked_up {
-            Some((rayleigh, mie, multiple)) => air.apply_phase(&d, rayleigh, mie, multiple),
-            None => air.radiance(r),
-        } * SKY_CALIBRATION;
+        let v = self.air_radiance(r);
         let v = v + self.sky.space_seen(r, s, &v);
         ScatteredRay { light_sampling: LightSampling::None, emit: Color::black(), attenuate: Color::new(v.x, v.y, v.z), ray: None }
     }
@@ -1205,6 +1238,10 @@ impl SkyMaterial {
         self.earth.radius
     }
 
+    pub fn earth_centre(&self) -> Vector3<f64> {
+        self.earth.center
+    }
+
     pub fn sun_direction(&self) -> Vector3<f64> {
         self.sun_direction
     }
@@ -1223,7 +1260,12 @@ pub fn create_sky_sphere(o: &Value) -> SceneObject {
     let sky = parse_sky_material(o);
     // The lookup table is on by default; "lut": false integrates every ray exactly.
     let m: Box<dyn MaterialModel + Sync + Send> = if o["lut"].as_bool().unwrap_or(true) {
-        Box::new(LUTSky::new(sky))
+        let sky = LUTSky::new(sky);
+        // Lit by a moon too (set by the scene, `celestial::moon::Moonlight`).
+        Box::new(match o.get("moonlight") {
+            Some(m) => sky.moonlit(SceneFile::parse_vec3(&m["direction"]), SceneFile::parse_number(&m["share"], 0.)),
+            None => sky,
+        })
     } else {
         Box::new(sky)
     };

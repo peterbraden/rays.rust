@@ -1,0 +1,48 @@
+{
+  "width": 960,
+  "height": 540,
+  "supersamples": 256,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.0001,
+  "max_depth": 8,
+  "path_termination": "russian_roulette",
+  "output": { "tonemap": "reinhard", "exposure": 0.75 },
+
+  "materials": {
+    "SNOWFIELD": { "type": "snow", "preset": "settled", "sparkle": 0.08, "seed": 1 },
+    "OLD_SNOW": { "type": "snow", "preset": "old", "seed": 2 },
+    "FIRN": { "type": "snow", "preset": "firn", "seed": 3 },
+    "DIRTY": { "type": "snow", "preset": "dirty", "seed": 4 },
+    "WHITE_ICE": { "type": "ice", "preset": "white" },
+    "GLACIER_ICE": { "type": "ice", "preset": "glacier" },
+    "BLUE_ICE": { "type": "ice", "preset": "blue" },
+    "GRANITE": { "type": "rock", "preset": "granite", "seed": 1 },
+    "BASALT": { "type": "rock", "preset": "basalt", "seed": 2 },
+    "SNOWY_GRANITE": { "type": "snow_cover", "material": "GRANITE", "cover": 0.45, "snow": { "preset": "fresh" }, "drift": 0.4, "seed": 5 },
+    "SNOWY_BASALT": { "type": "snow_cover", "material": "BASALT", "cover": 0.3, "snow": { "preset": "fresh" }, "drift": 0.25, "seed": 6 }
+  },
+
+  "camera": {
+    "location": [0.2, 1.3, -7],
+    "lookat": [0, 0.5, 0],
+    "up": [0, 1, 0],
+    "angle": 0.75,
+    "aperture": 0.005
+  },
+
+  "sun": { "intensity": 4.9 },
+
+  "objects": [
+    { "type": "plane", "y": 0, "material": "SNOWFIELD" },
+    { "type": "boulder", "location": [-2.4, -0.25, 3.2], "radius": 1.1, "angularity": 0.6, "seed": 5, "material": "SNOWY_GRANITE" },
+    { "type": "boulder", "location": [-0.6, -0.1, 5.5], "radius": 0.7, "angularity": 0.8, "seed": 9, "material": "SNOWY_BASALT" },
+    { "type": "boulder", "location": [0.6, -0.15, 0.6], "radius": 0.6, "angularity": 0.9, "seed": 12, "material": "WHITE_ICE" },
+    { "type": "boulder", "location": [1.9, -0.2, 1.8], "radius": 0.8, "angularity": 0.9, "seed": 14, "material": "GLACIER_ICE" },
+    { "type": "boulder", "location": [3.6, -0.2, 3.2], "radius": 0.9, "angularity": 0.9, "seed": 16, "material": "BLUE_ICE" },
+    { "type": "boulder", "location": [-0.5, -0.62, -2.4], "radius": 0.7, "angularity": 0.1, "seed": 20, "material": "OLD_SNOW" },
+    { "type": "boulder", "location": [-1.9, -0.62, -1.8], "radius": 0.7, "angularity": 0.1, "seed": 21, "material": "FIRN" },
+    { "type": "boulder", "location": [-3.4, -0.62, -1.0], "radius": 0.7, "angularity": 0.1, "seed": 22, "material": "DIRTY" },
+    { "type": "skysphere", "sun_direction": [-0.35, 0.5, 1] }
+  ]
+}

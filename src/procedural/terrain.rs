@@ -9,13 +9,17 @@
 //! planet's curve so the range meets the ground and drops behind the horizon with distance.
 //!
 //! Snow lies above `snowline` where slopes are gentle enough to hold it, rock shows on steep
-//! slopes and above `treeline`, and below are forest and grassland.
+//! slopes and above `treeline`, and below are forest and grassland. The snow is
+//! `material::snow`'s, settled high up and older and coarser towards the snowline, unless a
+//! colour is given for it.
 
 use crate::color::Color;
 use crate::intersection::Intersection;
 use crate::material::functions::scatter_bsdf;
 use crate::material::bsdf::LambertianBSDF;
 use crate::material::model::{MaterialModel, ScatteredRay};
+use crate::material::snow::{Snow, SnowStyle};
+use crate::geometry::rand;
 use crate::na::{Vector2, Vector3};
 use crate::noise::PerlinNoise;
 use crate::procedural::nubis_clouds::smoothstep;
@@ -145,7 +149,10 @@ impl Terrain {
 pub struct TerrainMaterial {
     pub snowline: f64,
     pub treeline: f64,
-    pub snow: Color,
+    /// A colour for diffuse snow, in place of `snow_materials`.
+    pub snow: Option<Color>,
+    /// Snow high up, and older snow towards the snowline.
+    pub snow_materials: [Snow; 2],
     pub rock: Color,
     pub forest: Color,
     pub grass: Color,
@@ -158,7 +165,8 @@ impl TerrainMaterial {
         TerrainMaterial {
             snowline: 2400.,
             treeline: 1800.,
-            snow: Color::new(0.85, 0.87, 0.9),
+            snow: None,
+            snow_materials: [Snow::new(SnowStyle::preset("settled"), 1., seed), Snow::new(SnowStyle::preset("old"), 1., seed)],
             rock: Color::new(0.16, 0.14, 0.12),
             forest: Color::new(0.035, 0.05, 0.03),
             grass: Color::new(0.11, 0.12, 0.06),
@@ -178,7 +186,19 @@ impl TerrainMaterial {
         }
     }
 
+    /// The mean albedo at `p`, whose surface normal is `normal`.
     pub fn albedo(&self, p: &Vector3<f64>, normal: &Vector3<f64>) -> Color {
+        let (below, snow, age) = self.cover(p, normal);
+        below * (1. - snow) + self.snow_albedo(age) * snow
+    }
+
+    /// The mean albedo of snow of age `age` (0 to 1).
+    fn snow_albedo(&self, age: f64) -> Color {
+        self.snow.unwrap_or_else(|| self.snow_materials[0].albedo() * (1. - age) + self.snow_materials[1].albedo() * age)
+    }
+
+    /// The ground's albedo where there's no snow, the share of snow, and its age (0 to 1).
+    pub fn cover(&self, p: &Vector3<f64>, normal: &Vector3<f64>) -> (Color, f64, f64) {
         let (height, up) = self.frame(p);
         let flatness = normal.dot(&up);
         let n = |s: f64, o: f64| self.noise.fbm(p.x / s, o, p.z / s, 4, 0.5, 2.);
@@ -190,15 +210,27 @@ impl TerrainMaterial {
         let rock = (1. - smoothstep(0.6, 0.8, flatness)).max(smoothstep(tree - 100., tree + 150., height));
         let vegetation = self.grass * (1. - smoothstep(0.4, 0.6, n(2500., 0.5))) + self.forest * smoothstep(0.4, 0.6, n(2500., 0.5));
         let below = vegetation * (1. - rock) + self.rock * rock * (0.7 + 0.6 * n(300., 0.7));
-        below * (1. - snow) + self.snow * snow
+        let age = 1. - smoothstep(line, line + 700., height);
+        (below, snow, age)
     }
 }
 
 impl MaterialModel for TerrainMaterial {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
-        let intersection = &intersection.facing(r);
-        let albedo = self.albedo(&intersection.point, &intersection.normal);
-        scatter_bsdf(&LambertianBSDF { albedo: albedo.as_reflectance(), normal: intersection.normal }, r, &intersection.point, s)
+        let i = &intersection.facing(r);
+        let (below, snow, age) = self.cover(&i.point, &i.normal);
+        let albedo = if rand() < snow {
+            match self.snow {
+                Some(c) => c,
+                None => {
+                    let m = &self.snow_materials[(rand() < age) as usize];
+                    return scatter_bsdf(&m.bsdf(&i.point, &i.normal, Some(s)), r, &i.point, s);
+                }
+            }
+        } else {
+            below
+        };
+        scatter_bsdf(&LambertianBSDF { albedo: albedo.as_reflectance(), normal: i.normal }, r, &i.point, s)
     }
 }
 
@@ -232,7 +264,7 @@ mod tests {
         let up = Vector3::y();
         let cliff = Vector3::new(1., 0.3, 0.).normalize();
         let high = Vector3::new(0., 3500., 0.);
-        assert!((m.albedo(&high, &up).rgb.x - m.snow.rgb.x).abs() < 1e-9);
+        assert!((m.albedo(&high, &up).rgb.x - m.snow_albedo(0.).rgb.x).abs() < 1e-9);
         assert!(m.albedo(&high, &cliff).rgb.x < 0.5);
         assert!(m.albedo(&Vector3::new(0., 200., 0.), &up).rgb.x < 0.2);
     }

@@ -141,6 +141,44 @@ pub struct Rock {
     pub lichen_color: Color,
     /// 0 for dry, 1 for soaked.
     pub wetness: f64,
+    /// Formations by elevation: (y in scene units, colour), sorted by y, the body colour
+    /// blending between them; their boundaries warped up and down by up to `layer_warp`.
+    pub layers: Vec<(f64, Color)>,
+    pub layer_warp: f64,
+    /// Colours for individual beds of the strata, each bed taking one; empty for
+    /// `strata_color` alone.
+    pub beds: Vec<Color>,
+    /// Broad patches of another colour, as iron oxides stain and bleach sandstone: their
+    /// colour and how much of the surface they take, 0 to 1.
+    pub variety: f64,
+    pub variety_color: Color,
+    /// Desert varnish: dark streaks of manganese and iron oxide running down steep faces where
+    /// water runs, 0 to 1, and its colour.
+    pub varnish: f64,
+    pub varnish_color: Color,
+    /// Depth of vertical flutes worn into steep faces, bump mapped.
+    pub flutes: f64,
+    /// Cross-bedding, 0 to 1: laminae inclined within sets `cross_set` thick (in units of
+    /// `scale`), each set's dipping its own way, as the foresets of the dunes that became
+    /// aeolian sandstone (Navajo, De Chelly) do; drawn in place of level strata where strong.
+    pub cross_bedding: f64,
+    pub cross_set: f64,
+    /// Pitting, 0 to 1: the small cavities of honeycomb weathering (tafoni) on steep faces,
+    /// `pit_size` across (in units of `scale`), dark and recessed.
+    pub pits: f64,
+    pub pit_size: f64,
+    /// Fractal relief for close-up detail, as POV-Ray's turbulent normals: octaves of
+    /// turbulence (|noise|, creased like weathered stone) from `fractal_size` down to the size
+    /// of a pixel where the surface is seen, so it holds detail however near the camera comes
+    /// and doesn't alias far away. `fractal` scales its slopes; each octave's amplitude falls
+    /// by 2^-`fractal_h` (1: equally steep at every scale; less: rougher in the small).
+    pub fractal: f64,
+    pub fractal_size: f64,
+    pub fractal_h: f64,
+    /// Fractures: the cell walls of cellular (Worley) noise `crackle_size` across, as
+    /// POV-Ray's crackle pattern, recessed `crackle` deep and dark with grime.
+    pub crackle: f64,
+    pub crackle_size: f64,
     noise: SeededNoise,
     /// Noise levels above which the given fraction of the surface is grain or lichen.
     dark_threshold: f64,
@@ -151,6 +189,64 @@ pub struct Rock {
 fn smoothstep(e0: f64, e1: f64, x: f64) -> f64 {
     let t = ((x - e0) / (e1 - e0)).clamp(0., 1.);
     t * t * (3. - 2. * t)
+}
+
+/// Where a point lies in cross-bedded sandstone (`cross_beds`).
+#[derive(Clone, Copy, Debug)]
+pub struct Lamina {
+    /// Which lamina (whole part) and where across it (fraction), counted within its set.
+    pub phase: f64,
+    /// A number for the lamina, unique within the rock, for its colour and hardness.
+    pub id: i64,
+    /// 1 on a set's bounding surface, falling to 0 within a few percent of the set's thickness.
+    pub boundary: f64,
+    /// How hard the lamina is, 0 to 1: coarse, well-cemented laminae weather out as ribs, fine
+    /// ones are worn back, so this is its relief on a weathered face.
+    pub hardness: f64,
+}
+
+/// Cross-bedded sandstone at `q` (in the rock's own units), in sets about `set` thick: the
+/// foresets of the dunes that became aeolian sandstone (Navajo, De Chelly). After the
+/// sedimentology (eg. Rubin, "Cross-bedding, bedforms, and paleocurrents", SEPM 1987):
+/// - Sets are wedges between bounding surfaces that are near level but tilted and wavy, each
+///   set truncating the tops of the laminae of the one below.
+/// - Within a set, laminae dip steeply (up to the angle of repose) near its top and curve down
+///   to meet its base tangentially, as a dune's avalanche face does at its toe.
+/// - Each set dips its own way, as the wind and dunes did; laminae are of varying thickness,
+///   with crisp edges, and differ from each other in colour and hardness.
+pub fn cross_beds(noise: &SeededNoise, q: Vector3<f64>, set: f64) -> Lamina {
+    let set = set.max(1e-9);
+    // Bounding surfaces: level on average, tilted and wavy, so the sets are wedges.
+    let tilt = 0.08 * (q.x + 0.6 * q.z) / set;
+    let y = q.y / set + tilt * 0.5 + 0.35 * noise.fbm(q / (5. * set) + Vector3::new(5., 0., 0.), 2);
+    let k = y.floor();
+    let within = y - k;
+    let hash = |salt: f64| ((k * 12.9898 + salt * 78.233).sin() * 43_758.545_3).fract().abs();
+    let azimuth = hash(1.) * std::f64::consts::TAU;
+    let (along, across) = ((q.x * azimuth.cos() + q.z * azimuth.sin()) / set, (-q.x * azimuth.sin() + q.z * azimuth.cos()) / set);
+    // Tangential foresets: a lamina is a curve along which `along` grows as the square root of
+    // the height in the set, so it is steep above and flattens towards the base; troughs bend
+    // the laminae across the set.
+    let steepness = 0.8 + 0.8 * hash(2.);
+    // Troughs: the laminae bend into festoons, arcs a few set-thicknesses across, so a level
+    // surface cutting them shows the swirls of slickrock rather than straight stripes.
+    let width = 1.2 + 1.2 * hash(3.);
+    let t = (across / width).rem_euclid(1.) - 0.5;
+    let trough = 2.5 * width * t * t + 0.4 * noise.fbm(Vector3::new(across * 0.3, k * 3.3, along * 0.3), 2);
+    let coordinate = along + trough - steepness * within.max(0.).sqrt();
+    // Laminae of varying thickness: the coordinate stretched by noise before it is counted.
+    let spacing = 0.07 + 0.05 * hash(4.);
+    let wobble = 0.5 * noise.fbm(Vector3::new(coordinate * 3., k * 7.1, across * 0.5), 2);
+    let phase = coordinate / spacing + wobble;
+    let n = phase.floor();
+    let id = (n as i64).wrapping_mul(7919).wrapping_add((k as i64).wrapping_mul(104_729));
+    let h = ((id as f64 * 0.618_033_988_7).fract() + 1.).fract();
+    // Each lamina's hardness from its number; a thin, softer parting at its edges.
+    let f = phase - n;
+    let parting = smoothstep(0.2, 0., f.min(1. - f));
+    let hardness = (0.35 + 0.65 * h) * (1. - 0.5 * parting);
+    let boundary = smoothstep(0.05, 0., within.min(1. - within));
+    Lamina { phase, id, boundary, hardness }
 }
 
 /// Refractive index of water.
@@ -174,6 +270,10 @@ impl Rock {
         let light_threshold = quantile(style.light_grain_amount, &|p| noise.noise(p + Vector3::new(31.4, 0., 0.)));
         Rock {
             style, scale, weathering: 0.3, lichen: 0., lichen_color: Color::new(0.38, 0.40, 0.26), wetness: 0.,
+            layers: vec![], layer_warp: 0., beds: vec![], variety: 0., variety_color: Color::new(0.7, 0.55, 0.4),
+            varnish: 0., varnish_color: Color::new(0.12, 0.07, 0.05), flutes: 0.,
+            cross_bedding: 0., cross_set: 1., pits: 0., pit_size: 0.05,
+            fractal: 0., fractal_size: 1., fractal_h: 1., crackle: 0., crackle_size: 1.,
             noise, dark_threshold, light_threshold, lichen_threshold: 0.,
         }
     }
@@ -203,22 +303,108 @@ impl Rock {
 
     /// Height of the bump-mapped relief, in units of `scale`.
     fn relief(&self, q: Vector3<f64>) -> f64 {
+        self.relief_to(q, f64::INFINITY)
+    }
+
+    /// The relief, with fractal detail down to wavelength `finest`.
+    fn relief_to(&self, q: Vector3<f64>, finest: f64) -> f64 {
+        let fine = if finest.is_finite() {
+            self.fractal_relief(q, finest) - self.crackle * self.crackle_size * 0.05 * self.crackle_at(q)
+        } else { 0. };
         let b = q / self.style.bump_size;
-        self.noise.fbm(b, 4) * self.style.bump_size * 0.6
+        let flutes = if self.flutes > 0. {
+            // Noise stretched tall: grooves running down the face.
+            let f = Vector3::new(q.x * 0.6, q.y * 0.05, q.z * 0.6) + Vector3::new(0., 0., 23.);
+            self.flutes * (1. - self.noise.fbm(f, 3).abs()).powi(2) * 0.5
+        } else { 0. };
+        let pits = if self.pits > 0. { -self.pit(q) * self.pit_size * 0.6 } else { 0. };
+        // The preset's relief at its own strength, `bump`; the fractal detail at its own.
+        fine + self.style.bump * (flutes + pits + self.noise.fbm(b, 4) * self.style.bump_size * 0.6
             + self.noise.ridged(b * 0.5 + Vector3::new(0., 0., 9.), 3) * self.style.bump_size * 0.3
-            - self.crack(q) * self.style.bump_size * 0.15 * self.style.cracks
+            - self.crack(q) * self.style.bump_size * 0.15 * self.style.cracks)
+    }
+
+    /// Fractal relief at `q`, its octaves stopping at wavelength `finest` (in units of
+    /// `scale`), the last faded in by how far it is above it. In units of `scale`.
+    fn fractal_relief(&self, q: Vector3<f64>, finest: f64) -> f64 {
+        if self.fractal <= 0. { return 0. }
+        let (mut sum, mut wavelength, mut amplitude) = (0., self.fractal_size, self.fractal_size);
+        let falloff = 0.5f64.powf(self.fractal_h);
+        for k in 0 .. 16 {
+            let fade = ((wavelength / finest.max(1e-9) - 1.)).clamp(0., 1.);
+            if fade <= 0. { break }
+            // Turbulence: folded noise, creased where it crosses zero. Each octave turned, so
+            // their lattices don't line up.
+            let r = crate::na::Rotation3::from_euler_angles(0.61 * k as f64, 0.93 * k as f64, 1.27 * k as f64);
+            let n = self.noise.noise(r * q / wavelength + Vector3::new(17.3 * k as f64, 0., 5.));
+            sum += amplitude * fade * (0.5 - n.abs());
+            wavelength *= 0.5;
+            amplitude *= falloff;
+        }
+        self.fractal * 0.3 * sum
+    }
+
+    /// The fracture pattern at `q`: 1 on a crack between Worley cells, falling to 0 within
+    /// `width` (relative to the cell size) of it.
+    fn crackle_at(&self, q: Vector3<f64>) -> f64 {
+        if self.crackle <= 0. { return 0. }
+        let u = q / self.crackle_size.max(1e-9);
+        let cell = u.map(|x| x.floor());
+        let (mut f1, mut f2) = (f64::MAX, f64::MAX);
+        for i in -1 ..= 1 {
+            for j in -1 ..= 1 {
+                for k in -1 ..= 1 {
+                    let c = cell + Vector3::new(i as f64, j as f64, k as f64);
+                    let h = |salt: f64| ((c.x * 127.1 + c.y * 311.7 + c.z * 74.7 + salt).sin() * 43_758.545_3).fract().abs();
+                    let d = (c + Vector3::new(h(0.), h(13.), h(29.)) - u).norm_squared();
+                    if d < f1 { f2 = f1; f1 = d; } else if d < f2 { f2 = d; }
+                }
+            }
+        }
+        // F2 - F1 is 0 on the walls between cells.
+        let wall = f2.sqrt() - f1.sqrt();
+        // Cracks fade in and out along their length.
+        let presence = smoothstep(-0.3, 0.2, self.noise.noise(u * 0.7 + Vector3::new(3., 0., 11.)));
+        smoothstep(0.08, 0., wall) * presence
+    }
+
+    /// How far a point lies in a pit: 1 at its middle, 0 outside pits. Pits are the high spots
+    /// of fine noise, gathered in patches by a broader noise, as tafoni cluster.
+    fn pit(&self, q: Vector3<f64>) -> f64 {
+        let size = self.pit_size.max(1e-9);
+        let patch = smoothstep(-0.2, 0.3, self.noise.fbm(q / (12. * size) + Vector3::new(0., 70., 0.), 2) + self.pits - 0.5);
+        let n = self.noise.noise(q / size + Vector3::new(13., 0., 7.));
+        smoothstep(0.3, 0.55, n) * patch
+    }
+
+    /// The cross-bedded laminae at `q` (`cross_beds`): the lamina's phase and how close the
+    /// point is to a set's bounding surface (1 on it).
+    fn cross_beds(&self, q: Vector3<f64>) -> (f64, f64) {
+        let l = cross_beds(&self.noise, q, self.cross_set);
+        (l.phase, l.boundary)
     }
 
     /// The shading normal: the surface normal tilted by the relief.
     pub fn bumped_normal(&self, p: Vector3<f64>, normal: Vector3<f64>) -> Vector3<f64> {
-        if self.style.bump <= 0. { return normal }
+        self.bumped_normal_filtered(p, normal, 0.)
+    }
+
+    /// As `bumped_normal`, with fractal detail no finer than `width` (scene units: about a
+    /// pixel's size where the surface is seen; 0 for the coarse relief alone).
+    pub fn bumped_normal_filtered(&self, p: Vector3<f64>, normal: Vector3<f64>, width: f64) -> Vector3<f64> {
+        if self.style.bump <= 0. && self.fractal <= 0. && self.crackle <= 0. { return normal }
         let q = p / self.scale;
-        let e = self.style.bump_size * 0.05;
-        let d = |axis: Vector3<f64>| (self.relief(q + axis * e) - self.relief(q - axis * e)) / (2. * e);
+        let finest = if width > 0. { 2. * width / self.scale } else { f64::INFINITY };
+        let mut e = self.style.bump_size * 0.05;
+        if finest.is_finite() && (self.fractal > 0. || self.crackle > 0.) {
+            e = e.min(0.25 * finest);
+        }
+        let d = |axis: Vector3<f64>| (self.relief_to(q + axis * e, finest) - self.relief_to(q - axis * e, finest)) / (2. * e);
         let g = Vector3::new(d(Vector3::x()), d(Vector3::y()), d(Vector3::z()));
         // Only the part of the gradient along the surface tilts it.
         let tangential = g - normal * g.dot(&normal);
-        (normal - tangential * self.style.bump).try_normalize(1e-12).unwrap_or(normal)
+        // `relief_to` has already scaled each part by its strength.
+        (normal - tangential).try_normalize(1e-12).unwrap_or(normal)
     }
 
     /// The diffuse reflectance at a point, given its shading normal.
@@ -229,6 +415,22 @@ impl Rock {
         // Mottling between the body colours.
         let mottle = smoothstep(-0.4, 0.4, self.noise.fbm(q * 1.3, 5));
         let mut c = st.color.blend(&st.secondary, mottle);
+        if !self.layers.is_empty() {
+            // The formation's colour at this elevation, mottled as the body colours are.
+            let y = p.y + self.layer_warp * self.noise.fbm(Vector3::new(p.x, 0., p.z) / (40. * self.scale.max(1e-9)) + Vector3::new(9., 0., 0.), 3);
+            let k = self.layers.partition_point(|(ly, _)| *ly < y);
+            let layer = if k == 0 { self.layers[0].1 } else if k == self.layers.len() { self.layers[k - 1].1 } else {
+                let ((y0, c0), (y1, c1)) = (self.layers[k - 1], self.layers[k]);
+                c0.blend(&c1, smoothstep(0., 1., (y - y0) / (y1 - y0)))
+            };
+            let tone = crate::color::luminance(&c) / crate::color::luminance(&st.color).max(1e-9);
+            c = layer * tone;
+        }
+        // Broad stains and bleaching.
+        if self.variety > 0. {
+            let v = self.noise.fbm(q * 0.12 + Vector3::new(0., 51., 0.), 4);
+            c = c.blend(&self.variety_color, smoothstep(0.35 - 0.7 * self.variety, 0.6 - 0.7 * self.variety, v) * 0.85);
+        }
 
         // Strata: bands across the vertical, warped so they wander like real bedding.
         if st.strata_amount > 0. {
@@ -237,7 +439,22 @@ impl Rock {
             let band = (0.5 + 0.5 * (phase * std::f64::consts::TAU).sin()).powi(3);
             // A second, finer set of laminations within the beds.
             let fine = 0.5 + 0.5 * (phase * 4.7 * std::f64::consts::TAU).sin();
-            c = c.blend(&st.strata_color, st.strata_amount * (0.75 * band + 0.25 * fine));
+            let bed = if self.beds.is_empty() { st.strata_color } else {
+                // Each bed its own colour, from a hash of its number.
+                let n = (phase + 0.25).floor() as i64;
+                let h = (n.wrapping_mul(0x9e37_79b9_7f4a_7c15u64 as i64) as u64 >> 33) as usize;
+                self.beds[h % self.beds.len()]
+            };
+            c = c.blend(&bed, st.strata_amount * (0.75 * band + 0.25 * fine) * (1. - self.cross_bedding));
+        }
+        if self.cross_bedding > 0. {
+            let l = cross_beds(&self.noise, q, self.cross_set);
+            // Each lamina its own colour; harder ones (the ribs) paler, the partings between
+            // them darker; a set's bounding surface a thin darker line.
+            let bed = if self.beds.is_empty() { st.strata_color } else { self.beds[l.id.rem_euclid(self.beds.len() as i64) as usize] };
+            c = c.blend(&bed, self.cross_bedding * 0.65);
+            c = c * (1. + self.cross_bedding * 0.25 * (l.hardness - 0.6));
+            c = c * (1. - 0.3 * self.cross_bedding * l.boundary);
         }
 
         // Mineral grains.
@@ -253,6 +470,28 @@ impl Rock {
         // Broad weathering, and grime in the cracks.
         let tone = 1. + self.weathering * self.noise.fbm(q * 0.25 + Vector3::new(0., 0., 40.), 3);
         c = c * (tone * (1. - 0.6 * self.crack(q)));
+
+        // Grime gathers in the cracks and the creases of the fractal relief.
+        if self.crackle > 0. {
+            c = c * (1. - 0.55 * self.crackle * self.crackle_at(q));
+        }
+        if self.fractal > 0. {
+            let crease = self.fractal_relief(q, 0.25 * self.fractal_size) / (0.3 * self.fractal * self.fractal_size);
+            c = c * (1. + 0.6 * crease.clamp(-0.5, 0.5));
+        }
+
+        // Pits are shadowed inside.
+        if self.pits > 0. {
+            c = c * (1. - 0.6 * self.pit(q));
+        }
+
+        // Desert varnish streaks steep faces, in vertical runs where water has run down.
+        if self.varnish > 0. {
+            let steep = smoothstep(0.35, 0.75, 1. - normal.y.abs());
+            let f = Vector3::new(q.x * 0.35, q.y * 0.03, q.z * 0.35) + Vector3::new(40., 0., 0.);
+            let streak = smoothstep(0.05, 0.35, self.noise.fbm(f, 4) + 0.3 * (self.varnish - 0.5));
+            c = c.blend(&self.varnish_color, 0.8 * steep * streak * self.varnish.min(1.));
+        }
 
         // Lichen grows on the surfaces facing the sky.
         if self.lichen > 0. {
@@ -277,7 +516,13 @@ impl Rock {
 impl MaterialModel for Rock {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let geometric = intersection.facing_normal(r);
-        let normal = self.bumped_normal(intersection.point, geometric);
+        // About a pixel's width where the surface is seen, so the fractal detail stops there.
+        let width = s.footprint.as_ref().map_or(0., |f| {
+            let dist = (intersection.point - f.location).norm();
+            let cos = (r.rd.normalize().dot(&geometric)).abs().max(0.2);
+            dist * f.spread * (s.render.samples_per_pixel() as f64).sqrt() / cos
+        });
+        let normal = self.bumped_normal_filtered(intersection.point, geometric, width);
 
         if self.wetness > 0. {
             let cos_i = (r.rd.dot(&normal) / r.rd.norm()).abs();
@@ -332,6 +577,89 @@ mod tests {
             let (lo, hi) = seen.iter().fold((1f64, 0f64), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
             assert!(hi - lo > 0.02, "{} is flat: {} to {}", name, lo, hi);
         }
+    }
+
+    fn mean_albedo(rock: &Rock, y: f64, normal: Vector3<f64>) -> Color {
+        let mut rng = crate::geometry::Pcg32::new(1, 1);
+        let mut sum = Color::black();
+        for _ in 0 .. 400 {
+            let p = Vector3::new(rng.next_f64() * 50., y, rng.next_f64() * 50.);
+            sum = sum + rock.albedo(p, normal);
+        }
+        sum * (1. / 400.)
+    }
+
+    #[test]
+    fn test_layers_colour_the_rock_by_elevation() {
+        let mut rock = Rock::new(RockStyle::preset("sandstone"), 1., 2);
+        rock.layers = vec![(0., Color::new(0.6, 0.1, 0.1)), (100., Color::new(0.1, 0.1, 0.6))];
+        let (low, high) = (mean_albedo(&rock, -10., Vector3::y()), mean_albedo(&rock, 110., Vector3::y()));
+        assert!(low.rgb.x > 2. * low.rgb.z && high.rgb.z > 2. * high.rgb.x, "{} {}", low.rgb, high.rgb);
+    }
+
+    #[test]
+    fn test_varnish_darkens_steep_faces_only() {
+        let plain = Rock::new(RockStyle::preset("sandstone"), 1., 2);
+        let mut varnished = Rock::new(RockStyle::preset("sandstone"), 1., 2);
+        varnished.varnish = 1.;
+        let wall = Vector3::x();
+        let lum = |c: Color| crate::color::luminance(&c);
+        assert!(lum(mean_albedo(&varnished, 5., wall)) < 0.85 * lum(mean_albedo(&plain, 5., wall)));
+        assert!((lum(mean_albedo(&varnished, 5., Vector3::y())) - lum(mean_albedo(&plain, 5., Vector3::y()))).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_cross_beds_dip_within_level_sets() {
+        let mut rock = Rock::new(RockStyle::preset("sandstone"), 1., 2);
+        rock.cross_set = 1.;
+        // Within a set, the laminae's phase changes along the ground (they dip); every set has
+        // level bounding surfaces at whole multiples of its thickness, give or take its warp.
+        let (a, _) = rock.cross_beds(Vector3::new(0., 0.5, 0.));
+        let (b, _) = rock.cross_beds(Vector3::new(0.5, 0.5, 0.5));
+        assert!((a - b).abs() > 0.5, "{} {}", a, b);
+        let mid = rock.cross_beds(Vector3::new(3., 10.5, 3.)).1;
+        assert!(mid < 0.5, "{}", mid);
+    }
+
+    #[test]
+    fn test_pits_darken_and_recess() {
+        let plain = Rock::new(RockStyle::preset("sandstone"), 1., 2);
+        let mut pitted = Rock::new(RockStyle::preset("sandstone"), 1., 2);
+        pitted.pits = 1.;
+        let lum = |c: Color| crate::color::luminance(&c);
+        let wall = Vector3::x();
+        assert!(lum(mean_albedo(&pitted, 5., wall)) < 0.97 * lum(mean_albedo(&plain, 5., wall)));
+    }
+
+    #[test]
+    fn test_fractal_detail_follows_the_pixel_size() {
+        let mut rock = Rock::new(RockStyle::preset("sandstone"), 10., 8);
+        rock.fractal = 0.5;
+        rock.fractal_size = 0.1;
+        let n = Vector3::new(0., 0., -1.);
+        // The mean tilt of the shading normal along a line, at a given pixel width.
+        let tilt = |width: f64| (0 .. 200).map(|k| {
+            let p = Vector3::new(k as f64 * 0.0137, 1.3, -3.);
+            rock.bumped_normal_filtered(p, n, width).dot(&n).acos()
+        }).sum::<f64>() / 200.;
+        // Seen closer (smaller pixels), finer octaves change the normal; seen from afar, the
+        // fractal fades out rather than aliasing.
+        let change = (0 .. 200).map(|k| {
+            let p = Vector3::new(k as f64 * 0.0137, 1.3, -3.);
+            rock.bumped_normal_filtered(p, n, 0.001).dot(&rock.bumped_normal_filtered(p, n, 0.05)).min(1.).acos()
+        }).sum::<f64>() / 200.;
+        assert!(change > 0.05, "{}", change);
+        assert!(tilt(100.) < tilt(0.001) * 0.6, "{} {}", tilt(100.), tilt(0.001));
+    }
+
+    #[test]
+    fn test_crackle_draws_thin_cracks() {
+        let mut rock = Rock::new(RockStyle::preset("sandstone"), 1., 8);
+        rock.crackle = 1.;
+        rock.crackle_size = 1.;
+        let on: usize = (0 .. 2000).filter(|k| rock.crackle_at(Vector3::new(*k as f64 * 0.0377, 0.31, 0.77)) > 0.5).count();
+        // Cracks cover a small part of the surface.
+        assert!(on > 10 && on < 400, "{}", on);
     }
 
     #[test]

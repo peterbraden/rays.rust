@@ -60,6 +60,25 @@ pub struct RenderOpts {
     pub motion: bool,
     /// Whether to render with the wavefront integrator (`wavefront`), where the scene allows.
     pub wavefront: bool,
+    /// Whether each pixel stops sampling once its noise is low enough (`adaptive`), before
+    /// `supersamples`, which is then the most a pixel takes.
+    pub adaptive: Option<Adaptive>,
+}
+
+/// Adaptive sampling (`crate::adaptive`): `"adaptive": 0.01`, or
+/// `"adaptive": {"threshold": 0.01, "min_samples": 16}`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Adaptive {
+    /// A pixel stops when its standard error, relative to its displayed value, is below this.
+    pub threshold: f64,
+    /// Every pixel takes at least this many samples before its noise is judged: an estimate of
+    /// the noise from fewer is too unreliable, and stopping early on a pixel that hasn't yet
+    /// found a rare bright path darkens it.
+    pub min_samples: usize,
+}
+
+impl Adaptive {
+    pub const DEFAULT_MIN_SAMPLES: usize = 16;
 }
 
 /// How a pixel's samples choose their random numbers.
@@ -90,6 +109,16 @@ pub enum Background {
     Gradient { bottom: Color, top: Color },
     /// Stars, the Milky Way, nebulae and galaxies (`procedural::space`).
     Space(std::sync::Arc<crate::procedural::space::Space>),
+    /// A fully overcast sky, by the CIE standard overcast sky (CIE S 011/E:2003, ISO
+    /// 15469:2004 type 1; P. Moon and D. E. Spencer, "Illumination from a non-uniform sky",
+    /// Illuminating Engineering 37, 1942): its radiance depends only on the elevation γ,
+    /// L(γ) = L_z (1 + 2 sin γ) / 3, three times as bright overhead as at the horizon,
+    /// whatever the sun is doing above the cloud. `zenith` is L_z; below the horizon it is
+    /// `ground` (what a camera above the scene's own ground never sees).
+    /// A bank of thicker, darker cloud may stand low in one direction: towards the unit
+    /// horizontal `bank.0`, the sky near the horizon is dimmed to `bank.1` of its radiance,
+    /// less so with elevation and to either side.
+    Overcast { zenith: Color, ground: Color, bank: Option<(Vector3<f64>, f64)> },
 }
 
 impl PartialEq for Background {
@@ -98,6 +127,7 @@ impl PartialEq for Background {
             (Background::Solid(a), Background::Solid(b)) => a == b,
             (Background::Gradient { bottom: a, top: b }, Background::Gradient { bottom: c, top: d }) => a == c && b == d,
             (Background::Space(a), Background::Space(b)) => std::sync::Arc::ptr_eq(a, b),
+            (Background::Overcast { zenith: a, ground: b, bank: e }, Background::Overcast { zenith: c, ground: d, bank: f }) => a == c && b == d && e == f,
             _ => false,
         }
     }
@@ -117,6 +147,17 @@ impl Background {
                 *bottom * (1. - a) + *top * a
             },
             Background::Space(space) => space.radiance(&rd.normalize()),
+            Background::Overcast { zenith, ground, bank } => {
+                let d = rd.normalize();
+                let sin = d.y;
+                if sin < 0. { return *ground; }
+                let dim = bank.map_or(1., |(towards, to)| {
+                    let facing = Vector3::new(d.x, 0., d.z).try_normalize(1e-9).map_or(0., |h| h.dot(&towards));
+                    let w = crate::procedural::nubis_clouds::smoothstep(-0.3, 0.8, facing) * (1. - sin).powf(0.7);
+                    1. - (1. - to) * w
+                });
+                *zenith * (dim * (1. + 2. * sin) / 3.)
+            },
         }
     }
 }
@@ -302,6 +343,8 @@ pub struct Scene {
     pub area_light_choice: crate::environment::Distribution1D,
     /// A directional light, sampled directly by diffuse surfaces and media.
     pub sun: Option<Sun>,
+    /// The sunlight a moon reflects, sampled like the sun (`celestial::moon::Moonlight`).
+    pub moonlight: Option<crate::celestial::moon::Moonlight>,
     /// The skysphere's atmosphere, if any, for aerial perspective: light from distant objects
     /// is attenuated and hazed by the air it crosses.
     pub atmosphere: Option<Arc<SkyMaterial>>,
@@ -321,6 +364,11 @@ pub struct Scene {
 pub const BVH_POINT_LIGHTS: usize = 16;
 
 impl Scene {
+    /// The distant lights sampled directly: the sun, and moonlight.
+    pub fn directional_lights(&self) -> impl Iterator<Item = &Sun> {
+        self.sun.iter().chain(self.moonlight.iter().map(|m| &m.light))
+    }
+
     /// Whether `object` is one of the area lights that diffuse surfaces sample directly.
     pub fn is_sampled_light(&self, object: &SceneObject) -> bool {
         self.render.sample_lights && self.area_light_indices.contains_key(&(object as *const SceneObject as usize))

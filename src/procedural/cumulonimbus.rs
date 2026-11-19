@@ -198,9 +198,12 @@ impl Cumulonimbus {
         let top = self.towers[0].foot + self.wind_direction * reach;
         let far = top + self.wind_direction * self.anvil_length();
         let back = top - self.wind_direction * self.anvil_back();
-        let width = self.anvil_half_width(self.anvil_length()) * 1.3;
-        add(far, width);
-        add(back, self.anvil_half_width(0.) * 1.3);
+        // The anvil's ragged edges reach a third beyond its half-width, its ends a tower's
+        // radius beyond its length, and it sags and flares around the tower.
+        let reach = |s: f64| self.anvil_half_width(s) * 1.4 + self.radius;
+        add(far + self.wind_direction * self.radius, reach(self.anvil_length()));
+        add(back - self.wind_direction * self.radius, reach(0.));
+        add(top, 3.5 * self.radius);
         (lo, hi)
     }
 
@@ -256,11 +259,14 @@ impl Cumulonimbus {
         // A wedge: thickest at the tower, thinning towards its far end (most of the ice has
         // spread and settled there), its edges cut off steeply across and at the end.
         let across = (n / half).abs();
-        let edge = (1. - across.powi(4)).max(0.).powf(0.35) * (1. - along.powi(6)).max(0.).powf(0.35);
+        // Upwind, where the outflow pushes against the wind, the end is rounded.
+        let end = if s >= 0. { (1. - along.powi(6)).max(0.).powf(0.35) } else { (1. - along * along).max(0.).sqrt() };
+        let edge = (1. - across.powi(4)).max(0.).powf(0.35) * end;
         // Its underside hangs in soft lobes as the ice sinks out of it.
         let lobes = self.noise.fbm(p.x / 2500., 0.9, p.z / 2500., 3, 0.5, 2.);
         // And it sags towards the tower, flaring down to meet it rather than sitting on it.
-        let sag = 0.6 * self.anvil_thickness * (-(d.norm() / (1.5 * self.radius)).powi(2)).exp();
+        let sag = 0.6 * self.anvil_thickness * (-(d.norm() / (1.5 * self.radius)).powi(2)).exp()
+            * (1. - smoothstep(back, back + self.radius, -s));
         let thickness = self.anvil_thickness * (1. - 0.85 * along.min(1.)).powf(1.5) * edge * (0.75 + 0.5 * lobes) + sag;
         // A flat top, rising and falling a little.
         let top = self.tropopause + 150. * (self.noise.fbm(p.x / 15000., 0.7, p.z / 15000., 2, 0.5, 2.) - 0.5);
@@ -430,6 +436,31 @@ mod tests {
         assert_eq!(c.density(&Vector3::new(axis.x, c.base - 500., axis.y)), 0.);
         let far = c.center - c.wind_direction * 40_000.;
         assert_eq!(c.density(&Vector3::new(far.x, c.tropopause - 300., far.y)), 0.);
+    }
+
+    #[test]
+    fn test_anvil_ends_smoothly() {
+        // Upwind of the tower and out to the sides through the anvil, the density changes
+        // gradually: nothing slices it off along a line.
+        for (seed, age, thickness) in [(0, 1800., 2200.), (3, 900., 1600.), (5, 1200., 2200.)] {
+            let mut c = Cumulonimbus::new(seed);
+            (c.age, c.anvil_thickness, c.radius) = (age, thickness, 3800.);
+            c.wind_direction = Vector2::new(1., 0.15).normalize();
+            c.build();
+            let top = c.axis(&c.towers[0], c.tropopause);
+            let w = c.wind_direction;
+            for y in [c.tropopause - 300., c.tropopause - 1500.] {
+                for dir in [-w, Vector2::new(-w.y, w.x), Vector2::new(w.y, -w.x)] {
+                    let mut last = c.density(&Vector3::new(top.x, y, top.y));
+                    for k in 1..800 {
+                        let q = top + dir * (k as f64 * 25.);
+                        let here = c.density(&Vector3::new(q.x, y, q.y));
+                        assert!((here - last).abs() < 0.6 * c.ice_density, "seed {} at {} {}: {} after {}", seed, q, y, here, last);
+                        last = here;
+                    }
+                }
+            }
+        }
     }
 
     #[test]

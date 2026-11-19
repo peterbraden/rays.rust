@@ -43,6 +43,12 @@ pub const GRAVITY: f64 = 9.81;
 const CP: f64 = 1005.;
 const RD: f64 = 287.;
 const LV: f64 = 2.5e6;
+/// Latent heat of fusion, J/kg.
+const LF: f64 = 3.34e5;
+/// Between these temperatures (K) cloud is mixed-phase, all water above and all ice below
+/// (homogeneous freezing at about -38 °C).
+const FREEZING: f64 = 273.15;
+const GLACIATED: f64 = 235.15;
 const P0: f64 = 1e5;
 const KAPPA: f64 = RD / CP;
 /// Kessler's autoconversion: cloud water beyond this (kg/kg) turns to rain at this rate (per
@@ -72,6 +78,19 @@ pub fn exner_of(p: f64) -> f64 {
 /// by Tetens' formula.
 pub fn saturation_mixing_ratio(t: f64, p: f64) -> f64 {
     380.2 / p * (17.67 * (t - 273.15) / (t - 29.65)).exp()
+}
+
+/// Saturation mixing ratio over ice (Magnus's formula over ice), kg/kg.
+pub fn saturation_mixing_ratio_ice(t: f64, p: f64) -> f64 {
+    let c = t - 273.15;
+    380.2 / p * (22.46 * c / (272.62 + c)).exp()
+}
+
+/// The share of a cloud's condensate that is ice at temperature `t`: none above freezing, all
+/// below about -38 °C, linear between (the diagnostic mixed phase of bulk models, eg. the
+/// ECMWF's).
+pub fn ice_fraction(t: f64) -> f64 {
+    ((FREEZING - t) / (FREEZING - GLACIATED)).clamp(0., 1.)
 }
 
 /// A quantity given at points (heights, or times), linear between them and constant beyond.
@@ -137,6 +156,30 @@ impl Sounding {
             water: Profile::new(&z, &[15.0, 15.0, 14.0, 13.50, 3.00, 3.00]).scaled(1., 1e-3),
             surface_pressure: 97000.,
         }
+    }
+
+    /// The analytic sounding of M. L. Weisman and J. B. Klemp, "The dependence of numerically
+    /// simulated convective storms on vertical wind shear and buoyancy", Mon. Wea. Rev. 110,
+    /// 1982, the standard case for simulating thunderstorms: θ rising as z^(5/4) from 300 K to
+    /// 343 K at a 12 km tropopause, isothermal at 213 K above it; relative humidity falling
+    /// from 1 to 0.25 there, with a well-mixed surface layer of `surface_water` (kg/kg; 14 g/kg
+    /// in the paper, a CAPE of about 2200 J/kg).
+    pub fn weisman_klemp(surface_water: f64) -> Sounding {
+        let (theta0, theta_tr, z_tr, t_tr) = (300., 343., 12_000., 213.);
+        let heights: Vec<f64> = (0..=40).map(|k| k as f64 * 500.).collect();
+        let theta: Vec<f64> = heights.iter().map(|&z| if z <= z_tr {
+            theta0 + (theta_tr - theta0) * (z / z_tr).powf(1.25)
+        } else {
+            theta_tr * (GRAVITY / (CP * t_tr) * (z - z_tr)).exp()
+        }).collect();
+        let surface_pressure = 1e5;
+        let water: Vec<f64> = heights.iter().zip(&theta).map(|(&z, &th)| {
+            let rh = if z <= z_tr { 1. - 0.75 * (z / z_tr).powf(1.25) } else { 0.25 };
+            let p = pressure_at(z, surface_pressure);
+            let q = rh * saturation_mixing_ratio(th * exner_of(p), p);
+            q.min(surface_water)
+        }).collect();
+        Sounding { theta: Profile::new(&heights, &theta), water: Profile::new(&heights, &water), surface_pressure }
     }
 
     pub fn arm() -> Sounding {
@@ -227,6 +270,10 @@ pub struct SimulationParams {
     pub hot_spot: Option<(Vector2<f64>, f64, f64)>,
     /// A cloud to start from (`Bubble`), rather than waiting for the ground to raise one.
     pub bubble: Option<Bubble>,
+    /// Ice: below freezing, condensate is mixed-phase (`ice_fraction`), saturation is over the
+    /// mixture of water and ice, and condensing releases the latent heat of deposition in
+    /// proportion. Deep convection needs it: freezing's extra heat drives the upper tower.
+    pub ice: bool,
 }
 
 /// # A cloud to start from
@@ -272,6 +319,7 @@ impl Default for SimulationParams {
             texture_period: 600.,
             hot_spot: None,
             bubble: None,
+            ice: false,
         }
     }
 }
@@ -682,13 +730,14 @@ impl CloudSimulation {
         let (nx, _, nz) = self.params.size;
         let slab = nx * nz;
         let (exner, pressure) = (&self.exner, &self.pressure);
+        let ice = self.params.ice;
         self.theta.data.par_chunks_mut(slab)
             .zip(self.vapour.data.par_chunks_mut(slab))
             .zip(self.cloud.data.par_chunks_mut(slab))
             .enumerate()
             .for_each(|(j, ((theta, vapour), cloud))| {
                 for n in 0..slab {
-                    let (dv, dc, dth) = adjust(theta[n], vapour[n], cloud[n], exner[j], pressure[j]);
+                    let (dv, dc, dth) = adjust_phase(theta[n], vapour[n], cloud[n], exner[j], pressure[j], ice);
                     vapour[n] += dv;
                     cloud[n] += dc;
                     theta[n] += dth;
@@ -1047,17 +1096,31 @@ impl CloudSimulation {
 /// The change in (vapour, cloud water, θ) that brings a cell to saturation: Newton's method on
 /// the saturation curve, as condensing warms the air and raises it.
 fn adjust(theta: f64, vapour: f64, cloud: f64, exner: f64, pressure: f64) -> (f64, f64, f64) {
+    adjust_phase(theta, vapour, cloud, exner, pressure, false)
+}
+
+/// As `adjust`, with `ice` the mixed phase below freezing (`SimulationParams::ice`): the
+/// saturation mixing ratio and latent heat are blended between water's and ice's by the ice
+/// fraction at the cell's temperature before adjustment.
+fn adjust_phase(theta: f64, vapour: f64, cloud: f64, exner: f64, pressure: f64, ice: bool) -> (f64, f64, f64) {
+    let f = if ice { ice_fraction(theta * exner) } else { 0. };
+    let latent = LV + f * LF;
+    let saturation = |t: f64| if f > 0. {
+        (1. - f) * saturation_mixing_ratio(t, pressure) + f * saturation_mixing_ratio_ice(t, pressure)
+    } else {
+        saturation_mixing_ratio(t, pressure)
+    };
     let mut condensed = 0.;
     for _ in 0..3 {
-        let t = (theta + LV / (CP * exner) * condensed) * exner;
-        let qs = saturation_mixing_ratio(t, pressure);
-        // d qs / dT, from Tetens' formula.
-        let slope = qs * 17.67 * 243.5 / ((t - 29.65) * (t - 29.65));
-        condensed += (vapour - condensed - qs) / (1. + LV / CP * slope);
+        let t = (theta + latent / (CP * exner) * condensed) * exner;
+        let qs = saturation(t);
+        // d qs / dT, by a central difference.
+        let slope = (saturation(t + 0.01) - saturation(t - 0.01)) / 0.02;
+        condensed += (vapour - condensed - qs) / (1. + latent / CP * slope);
         // No more evaporates than there is cloud.
         condensed = condensed.max(-cloud);
     }
-    (-condensed, condensed, LV / (CP * exner) * condensed)
+    (-condensed, condensed, latent / (CP * exner) * condensed)
 }
 
 /// Solves (φ[j-1] - 2φ[j] + φ[j+1]) / h² + λ φ[j] = d[j] up a column, with zero flux through
@@ -1464,6 +1527,37 @@ mod tests {
                 assert!(v <= qs * 1.0001);
             }
         }
+    }
+
+    #[test]
+    fn test_mixed_phase_adjustment() {
+        // At -20 °C, saturation over the mixture lies between water's and ice's, and freezing
+        // adds latent heat: a cell made supersaturated by the same amount warms more with ice.
+        let z = 7000.;
+        let p = pressure_at(z, 1e5);
+        let exner = exner_of(p);
+        let t = 253.15;
+        let theta = t / exner;
+        let (qw, qi) = (saturation_mixing_ratio(t, p), saturation_mixing_ratio_ice(t, p));
+        assert!(qi < qw && (ice_fraction(t) - 0.5).abs() < 0.03);
+        let vapour = 1.2 * qw;
+        let (_, dc_w, dth_w) = adjust_phase(theta, vapour, 0., exner, p, false);
+        let (dv, dc_i, dth_i) = adjust_phase(theta, vapour, 0., exner, p, true);
+        assert!((dv + dc_i).abs() < 1e-15);
+        assert!(dc_i > dc_w && dth_i > dth_w);
+        // Above freezing nothing changes.
+        let p2 = pressure_at(500., 1e5);
+        let th2 = 295. / exner_of(p2);
+        assert_eq!(adjust_phase(th2, 0.02, 0., exner_of(p2), p2, true), adjust(th2, 0.02, 0., exner_of(p2), p2));
+    }
+
+    #[test]
+    fn test_weisman_klemp_sounding() {
+        let s = Sounding::weisman_klemp(0.014);
+        assert!((s.theta.value(0.) - 300.).abs() < 1e-9 && (s.theta.value(12_000.) - 343.).abs() < 1e-9);
+        // Moist below, capped at the surface layer's mixing ratio; dry aloft.
+        assert!((s.water.value(0.) - 0.014).abs() < 1e-9);
+        assert!(s.water.value(8000.) < 1e-3);
     }
 
     #[test]

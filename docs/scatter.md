@@ -16,7 +16,7 @@ They are what Terragen calls populations, and what a forest is for trees.
 - **Where.** Over `area` (x and z) of the `surface`: a named or inline geometry, a list of them
   (copies stand on the highest), the plane y = 0 by default, or `"landscape"` for the scene's
   landscape object listed before the scatter.
-- **How thickly.** `density` is a [function graph](displacement.md) from 0 to 1, evaluated on
+- **How thickly.** `density` (or `where`, as forests and grass call it) is a [function graph](displacement.md) from 0 to 1, evaluated on
   the surface where each copy would stand, with its normal: `slope` and noise masks, and on a
   landscape its simulation's fields, so boulders lie where the simulation left scree. Where it
   is lower, copies are fewer and further apart.

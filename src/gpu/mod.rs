@@ -12,9 +12,10 @@
 //! `radiance`, on the CPU against the renderer's own and the GPU's.
 //!
 //! What stays on the CPU: camera rays (generated each pass and uploaded, so every camera,
-//! realistic lenses included, works unchanged), and a map of the sky (equirectangular,
-//! `ENV_WIDTH` × `ENV_HEIGHT`), which the shader samples directions from in proportion to its
-//! brightness and, for a background other than a skysphere's, looks up. A skysphere's air is
+//! realistic lenses included, works unchanged), and a map of the sky (equirectangular), which
+//! the shader samples directions from in proportion to its brightness and, for a background
+//! other than a skysphere's or space, looks up (`ENV_WIDTH` × `ENV_HEIGHT` then; the CPU's
+//! sampling resolution, `SAMPLING_WIDTH`, where it only chooses directions). A skysphere's air is
 //! the GPU's own: its parameters and tables (`skysphere::AirExport`, as `air_record`s) let the
 //! shader evaluate it per ray as the CPU does, for escaping rays, aerial perspective from each
 //! ray's origin, and sunlight at each point. Each pass's radiance accumulates on the GPU, and
@@ -36,11 +37,18 @@ use rayon::prelude::*;
 use std::sync::Mutex;
 use wgpu::util::DeviceExt;
 
-/// The baked sky's resolution.
+/// The baked sky's resolution where the shader looks its light up in the map (a plain
+/// background), and how many texels a side a cell of its visibility
+/// (`environment::visibility`) covers, so that the visibility is at the CPU's resolution.
 const ENV_WIDTH: usize = 1024;
 const ENV_HEIGHT: usize = 512;
-/// Texels per side of a cell of the sky map's visibility (`environment::visibility`).
 const VISIBILITY_SCALE: usize = 8;
+/// Its resolution where the shader evaluates the sky or space for each ray, and the map only
+/// chooses directions to sample: the CPU's own (`environment`), a ray of visibility a texel.
+/// Each texel there is the sky's scattering integrated, which at the full resolution was most
+/// of setting the GPU up (1.1 s of 1.5 on four cores).
+const SAMPLING_WIDTH: usize = 128;
+const SAMPLING_HEIGHT: usize = 64;
 /// Passes between reading the accumulated image back.
 const PASSES_PER_READ: usize = 8;
 
@@ -126,10 +134,10 @@ fn cdf(f: &[f64]) -> Vec<f32> {
 }
 
 /// The direction through texel (x, y) of the baked sky's map, as the shader's `env_sample`.
-fn env_direction(x: usize, y: usize) -> Vector3<f64> {
+fn env_direction(x: usize, y: usize, width: usize, height: usize) -> Vector3<f64> {
     use std::f64::consts::PI;
-    let u = (x as f64 + 0.5) / ENV_WIDTH as f64;
-    let v = (y as f64 + 0.5) / ENV_HEIGHT as f64;
+    let u = (x as f64 + 0.5) / width as f64;
+    let v = (y as f64 + 0.5) / height as f64;
     let (phi, theta) = ((u - 0.5) * 2. * PI, v * PI);
     Vector3::new(theta.sin() * phi.cos(), theta.cos(), theta.sin() * phi.sin())
 }
@@ -286,6 +294,9 @@ pub struct GpuRenderer {
     pub lanes: usize,
     block: Mutex<Block>,
     pub adapter_name: String,
+    /// What setting up took, part by part, in seconds: the render's start, which a short
+    /// render is mostly made of (plan.md section 12).
+    pub setup: Vec<(&'static str, f64)>,
 }
 
 /// What serves the host's queue (`host`; `GpuRenderer::serve_host`): the kernels that gather
@@ -466,8 +477,13 @@ impl Buffers {
         // origin: exact for camera rays, near enough for paths that stay near the camera (from
         // the world's origin, an orbiting camera saw the night side's ground-level sky).
         let origin = crate::environment::viewpoint(s);
-        let texels: Vec<Color> = (0..ENV_WIDTH * ENV_HEIGHT).into_par_iter().map(|i| {
-            let d = env_direction(i % ENV_WIDTH, i / ENV_WIDTH);
+        // The map's size: full where the shader reads the light from it, the CPU's where it
+        // only chooses directions (`SAMPLING_WIDTH`).
+        let per_ray = matches!(s.render.background, crate::scene::Background::Space(_))
+            || flat.sky.as_ref().is_some_and(|sky| sky.medium.material_at(Vector3::zeros()).air().is_some());
+        let (env_width, env_height, scale) = if per_ray { (SAMPLING_WIDTH, SAMPLING_HEIGHT, 1) } else { (ENV_WIDTH, ENV_HEIGHT, VISIBILITY_SCALE) };
+        let texels: Vec<Color> = (0..env_width * env_height).into_par_iter().map(|i| {
+            let d = env_direction(i % env_width, i / env_width, env_width, env_height);
             crate::wavefront::integrator::sky_radiance(&Ray { ro: origin, rd: d }, s, flat)
         }).collect();
         for t in &texels {
@@ -476,23 +492,23 @@ impl Buffers {
         // Rows by brightness times sin θ (a row's share of the sphere) times how much of the
         // sky the scene lets through from the camera, as the CPU's `Environment` (so no shadow
         // rays are spent on the ground), then within each row. The visibility is found on a
-        // grid of VISIBILITY_SCALE² texels, the CPU's resolution, for a ray per cell.
-        let (vw, vh) = (ENV_WIDTH / VISIBILITY_SCALE, ENV_HEIGHT / VISIBILITY_SCALE);
+        // grid of `scale`² texels, the CPU's resolution, for a ray per cell.
+        let (vw, vh) = (env_width / scale, env_height / scale);
         let visible: Vec<f64> = (0..vw * vh).into_par_iter().map(|i| {
-            let (x, y) = ((i % vw) * VISIBILITY_SCALE + VISIBILITY_SCALE / 2, (i / vw) * VISIBILITY_SCALE + VISIBILITY_SCALE / 2);
-            crate::environment::visibility(s, &origin, &env_direction(x, y))
+            let (x, y) = ((i % vw) * scale + scale / 2, (i / vw) * scale + scale / 2);
+            crate::environment::visibility(s, &origin, &env_direction(x, y, env_width, env_height))
         }).collect();
         let weight = |x: usize, y: usize| {
-            let theta = (y as f64 + 0.5) / ENV_HEIGHT as f64 * std::f64::consts::PI;
-            let v = visible[(y / VISIBILITY_SCALE) * vw + x / VISIBILITY_SCALE];
-            crate::color::luminance(&texels[y * ENV_WIDTH + x]).max(0.) * theta.sin() * v + 1e-9
+            let theta = (y as f64 + 0.5) / env_height as f64 * std::f64::consts::PI;
+            let v = visible[(y / scale) * vw + x / scale];
+            crate::color::luminance(&texels[y * env_width + x]).max(0.) * theta.sin() * v + 1e-9
         };
-        let rows: Vec<f64> = (0..ENV_HEIGHT).map(|y| (0..ENV_WIDTH).map(|x| weight(x, y)).sum()).collect();
+        let rows: Vec<f64> = (0..env_height).map(|y| (0..env_width).map(|x| weight(x, y)).sum()).collect();
         let marginal_off = tables.len() as u32;
         tables.extend(cdf(&rows));
         let conditional_off = tables.len() as u32;
-        for y in 0..ENV_HEIGHT {
-            let row: Vec<f64> = (0..ENV_WIDTH).map(|x| weight(x, y)).collect();
+        for y in 0..env_height {
+            let row: Vec<f64> = (0..env_width).map(|x| weight(x, y)).collect();
             tables.extend(cdf(&row));
         }
 
@@ -528,7 +544,7 @@ impl Buffers {
             dims: UVec4::new(s.image.width as u32, s.image.height as u32, 0, s.render.max_depth as u32),
             counts: UVec4::new(flat.prims.len() as u32, flat.planes.len() as u32, flat.emitters.len() as u32, s.lights.len() as u32),
             offs: UVec4::new(emitter_off, cdf_off, env_off, marginal_off),
-            offs2: UVec4::new(conditional_off, ENV_WIDTH as u32, ENV_HEIGHT as u32, flags),
+            offs2: UVec4::new(conditional_off, env_width as u32, env_height as u32, flags),
             misc: Vec4::new(s.render.regularise as f32, s.black_threshold as f32, s.render.shadow_bias as f32, rr_min),
             sun_dir,
             sun_irr,
@@ -571,7 +587,15 @@ impl GpuRenderer {
     /// Upload the flattened scene, or say why the GPU can't render it. Async, for a browser,
     /// whose WebGPU can't be waited on.
     pub async fn create(s: &Scene, flat: &FlatScene) -> Result<GpuRenderer, String> {
+        let mut setup = Vec::new();
+        let mut clock = web_time::Instant::now();
+        let mut lap = |setup: &mut Vec<(&'static str, f64)>, what: &'static str| {
+            let now = web_time::Instant::now();
+            setup.push((what, (now - clock).as_secs_f64()));
+            clock = now;
+        };
         let Buffers { params, prims, nodes, materials, lights, tables, .. } = Buffers::build(s, flat)?;
+        lap(&mut setup, "the scene's buffers");
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -623,7 +647,9 @@ impl GpuRenderer {
         };
         #[cfg(target_arch = "wasm32")]
         let source = wgpu::ShaderSource::Wgsl(include_str!("pathtrace.wgsl").into());
+        lap(&mut setup, "the device");
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pathtrace"), source });
+        lap(&mut setup, "the shader");
         // One layout for both kernels, so they share a bind group: the parameters, the scene's
         // buffers (read only), the paths, the image and the sky queries.
         let binding = |binding: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
@@ -661,9 +687,20 @@ impl GpuRenderer {
             label: Some("start"),
             entries: &[binding(0, wgpu::BufferBindingType::Uniform), binding(1, read), binding(2, write), binding(3, write)],
         });
-        let (intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline) =
-            (kernel("intersect_paths", &layout), kernel("bounce_paths", &layout), kernel("answer_sky", &layout), kernel("add_paths", &add_layout));
-        let start_pipeline = kernel("start_paths", &start_layout);
+        // Each kernel is compiled by the driver when its pipeline is made, the large ones
+        // (shading, the sky) for a good part of a second: all at once, on threads, where there
+        // are threads.
+        let wanted = [("intersect_paths", &layout), ("bounce_paths", &layout), ("answer_sky", &layout), ("add_paths", &add_layout), ("start_paths", &start_layout)];
+        #[cfg(not(target_arch = "wasm32"))]
+        let made: Vec<wgpu::ComputePipeline> = std::thread::scope(|scope| {
+            let threads: Vec<_> = wanted.iter().map(|&(name, layout)| { let kernel = &kernel; scope.spawn(move || kernel(name, layout)) }).collect();
+            threads.into_iter().map(|t| t.join().expect("a kernel's pipeline")).collect()
+        });
+        #[cfg(target_arch = "wasm32")]
+        let made: Vec<wgpu::ComputePipeline> = wanted.iter().map(|&(name, layout)| kernel(name, layout)).collect();
+        let [intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline, start_pipeline]: [wgpu::ComputePipeline; 5] =
+            made.try_into().ok().expect("five kernels");
+        lap(&mut setup, "the kernels");
         let storage = |label: &str, bytes: &[u8]| device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(label), contents: bytes, usage: wgpu::BufferUsages::STORAGE,
         });
@@ -760,7 +797,7 @@ impl GpuRenderer {
         });
         Ok(GpuRenderer { device, queue, intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline, start_pipeline, start_group, rays_buffer,
             round_groups, add_group, params, params_buffers,
-            queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, rounds_buffer, readback, host_queue, lanes: lanes as usize, block: Default::default(), adapter_name })
+            queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, rounds_buffer, readback, host_queue, lanes: lanes as usize, block: Default::default(), adapter_name, setup })
     }
 
     /// Camera rays for sample `k` of every pixel, as the wavefront integrator's.

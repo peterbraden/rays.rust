@@ -1600,8 +1600,17 @@ UI, file IO and rayon's threads would follow.
    this branch (image identical, 0.387 -> 0.384 s at 16 spp). Render time at 16 / 64 / 256 spp:
    path tracer 0.39 / 1.57 / 6.24 s, CPU wavefront 0.43 / 1.70 / 6.75 s, GPU 0.63 / 1.09 /
    2.71 s. A sample after the 64th: 24.3, 26.3 and 8.4 ms. The GPU starts about 0.5 s behind.
-   Next, in order: time that start (likely the shader's compilation and the sky map baked on
-   one thread; not yet measured natively) and the readback (every block reads back the whole
+   The start, timed (`GpuRenderer::setup`, printed with the adapter; four cores and llvmpipe,
+   teapot-sky): 1.43 s, of which the scene's buffers 1.10 s, the device 0.05, the shader's
+   module 0.01, the kernels' pipelines 0.27. The buffers were the sky map: 1024 x 512 texels,
+   each the sky's scattering integrated (in parallel already), though with a skysphere's air
+   or space the shader evaluates the sky for each ray and the map only chooses directions to
+   sample. Baked there at the CPU's sampling resolution (128 x 64, a visibility ray a
+   texel): the buffers 0.055 s, FLIP against trace unchanged (teapot-sky 0.0253, demo
+   0.0210, night-orbit 0.0044 -> 0.0038). The pipelines are made on threads: 0.27 -> about
+   0.18 s here; on Metal, where each compiles its kernel, to be measured. Set-up 1.43 ->
+   0.30 s.
+   Next, in order: the start on the M2 with these and the readback (every block reads back the whole
    image's sums and squares: keep the image on the GPU, read it for progressive output and at
    the end); then phase 3, since few scenes reach the GPU yet.
 3. The fallback framework: per-area status, classification, CPU queues for materials first,

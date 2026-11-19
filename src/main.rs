@@ -306,6 +306,8 @@ fn main() {
         (Some(f), true) => match gpu::GpuRenderer::new(&s, f) {
             Ok(g) => {
                 println!("- GPU: {}", g.adapter_name);
+                let parts: Vec<String> = g.setup.iter().map(|(what, seconds)| format!("{} {:.0} ms", what, seconds * 1e3)).collect();
+                println!("- GPU set up in {:.0} ms: {}", g.setup.iter().map(|p| p.1).sum::<f64>() * 1e3, parts.join(", "));
                 Some(g)
             },
             Err(e) => {

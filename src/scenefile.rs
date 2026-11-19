@@ -139,6 +139,10 @@ impl crate::graph::Fields for ObjectFields {
     fn vertical(&self, p: &Vector3<f64>) -> Option<(Vector3<f64>, f64)> {
         self.0.medium.fields()?.vertical(p)
     }
+
+    fn biome(&self, p: &Vector3<f64>) -> Option<crate::terrain::climate::Biome> {
+        self.0.medium.fields()?.biome(p)
+    }
 }
 /// A part of a tree, as detail to make levels of, and its medium (`SceneFile::tree_details`).
 pub type TreeDetail = (crate::shapes::lod::Detail, Box<dyn Medium + Sync + Send>);

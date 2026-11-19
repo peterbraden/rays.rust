@@ -41,6 +41,7 @@ reuse it as `"$name"`.
 | `cross_beds` | A `rock` material's festoon cross-bedding as relief (its `seed`, `scale` and `cross_set` as `set`; `amplitude`), so the laminae its colour shows stand out as ribs; filtered by the narrow laminae, a fortieth of a set (`rock::LAMINA_FINEST`: nine in ten crossed along any line are wider), not their spacing along the foresets |
 | `slope`, `altitude` | Masks from 0 to 1 between `from` and `to` (degrees, metres), with a fractal `breakup`; falling instead where `to` is below `from` |
 | `aspect` | How squarely the surface faces `direction` (default north, `[0, 0, -1]`), as a mask |
+| `biome` | 1 where the landscape's climate is one of the biomes `is` names (`ice`, `tundra`, `taiga`, `temperate_forest`, `grassland`, `steppe`, `cold_desert`, `hot_desert`, `savanna`, `rainforest`), else 0; its edges wander as the ground cover's do |
 | `field` | What the surface hit knows about itself: on a landscape, its simulation's sediment, ice, flow, wetness and so on (see [surface layers](surface-layers.md)), when shading or displacing it; give `from` and `to` to displace by one, as a raw field is unbounded |
 | `add`, `multiply`, `min`, `max`, `subtract` | Arithmetic |
 | `blend` | `a` where `mask` is 0, `b` where 1 |

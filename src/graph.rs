@@ -141,6 +141,9 @@ pub trait Fields: Sync + Send {
     /// (a unit vector) and the height above the planet's surface, in scene units, for `slope`,
     /// `altitude` and `aspect`. None where y is up.
     fn vertical(&self, _p: &Vector3<f64>) -> Option<(Vector3<f64>, f64)> { None }
+
+    /// The climate's biome at `p` (`biome` nodes); None where there is no climate.
+    fn biome(&self, _p: &Vector3<f64>) -> Option<crate::terrain::climate::Biome> { None }
 }
 
 /// Where a graph is evaluated: the point on the surface (before any displacement), the
@@ -211,6 +214,8 @@ enum Op {
     Aspect { direction: Vector3<f64>, from: f64, to: f64, breakup: Option<Box<Node>> },
     /// A surface's field; smoothstepped from `from` to `to` if `band` is given.
     Field { field: Field, default: f64, band: Option<(f64, f64)>, breakup: Option<Box<Node>> },
+    /// 1 where the climate's biome is one of these, else 0 (`default` without a climate).
+    Biome { of: Vec<crate::terrain::climate::Biome>, default: f64 },
     Strata { step: f64, sharpness: f64, amplitude: f64, breakup: Option<Box<Node>> },
     CrossBeds { noise: Box<SeededNoise>, scale: f64, set: f64, amplitude: f64 },
     Expr { expr: Expr, inputs: Vec<Node>, range: (f64, f64) },
@@ -328,6 +333,10 @@ impl Node {
                 let a = c.normal.dot(&facing) + breakup.as_ref().map_or(0., |b| b.eval(c));
                 smoothstep(*from, *to, a)
             },
+            Op::Biome { of, default } => match c.fields.and_then(|f| f.biome(&c.p)) {
+                Some(b) => if of.contains(&b) { 1. } else { 0. },
+                None => *default,
+            },
             Op::Field { field, default, band, breakup } => {
                 let v = c.fields.and_then(|f| f.field(*field, &c.p)).unwrap_or(*default)
                     + breakup.as_ref().map_or(0., |b| b.eval(c));
@@ -433,6 +442,7 @@ impl Op {
             },
             Op::Slope { .. } | Op::Altitude { .. } | Op::Aspect { .. } | Op::Smoothstep { .. } => (0., 1.),
             Op::Field { band: Some(_), .. } => (0., 1.),
+            Op::Biome { default, .. } => (default.min(0.), default.max(1.)),
             Op::Field { band: None, .. } => (f64::NEG_INFINITY, f64::INFINITY),
             Op::Expr { range, .. } => *range,
             Op::Add(v) => v.iter().map(Node::range).fold((0., 0.), |a, b| (a.0 + b.0, a.1 + b.1)),
@@ -483,7 +493,7 @@ impl Op {
             Op::Fractal { smallest, .. } => return *smallest,
             Op::Cells { scale, .. } => return 0.1 * scale,
             Op::Talus(t) => return t.smallest,
-            Op::Const(_) => return f64::INFINITY,
+            Op::Const(_) | Op::Biome { .. } => return f64::INFINITY,
             Op::CrossBeds { scale, set, .. } => return crate::material::rock::LAMINA_FINEST * set * scale,
             Op::Strata { step, breakup, .. } => return breakup.as_ref().map_or(f64::INFINITY, |b| b.finest()).min(0.25 * step),
             Op::Slope { breakup, .. } | Op::Altitude { breakup, .. } | Op::Aspect { breakup, .. }
@@ -715,6 +725,15 @@ fn parse_node(v: &Value) -> Result<Node, String> {
             Op::Aspect { direction: direction.normalize(), from: num(o, "from", 0.)?, to: num(o, "to", 1.)?,
                 breakup: o.get("breakup").map(parse_node).transpose()?.map(Box::new) }
         },
+        "biome" => {
+            let names: Vec<&str> = match &o["is"] {
+                Value::String(s) => vec![s.as_str()],
+                Value::Array(a) => a.iter().filter_map(Value::as_str).collect(),
+                _ => return Err("a biome node needs \"is\": a biome's name, or a list of them".into()),
+            };
+            let of = names.iter().map(|n| crate::terrain::climate::Biome::parse(n)).collect::<Result<Vec<_>, _>>()?;
+            Op::Biome { of, default: num(o, "default", 0.)? }
+        },
         "field" => {
             let field = Field::parse(o["field"].as_str().ok_or("a field node needs a \"field\" name")?)?;
             let band = match (o.get("from"), o.get("to")) {
@@ -883,6 +902,23 @@ mod tests {
         assert!(fractal(json!(2.5)).is_err());
         assert!(fractal(json!("7")).is_err());
         assert!(Graph::parse(&json!({"node": "cross_beds", "seed": -4})).is_err());
+    }
+
+    #[test]
+    fn test_biome_nodes_pick_out_climates() {
+        use crate::terrain::climate::Biome;
+        // Taiga to the north (z < 0), grassland to the south.
+        struct Zoned;
+        impl Fields for Zoned {
+            fn field(&self, _: Field, _: &Vector3<f64>) -> Option<f64> { None }
+            fn biome(&self, p: &Vector3<f64>) -> Option<Biome> { Some(if p.z < 0. { Biome::Taiga } else { Biome::Grassland }) }
+        }
+        let forest = graph(json!({"node": "biome", "is": ["taiga", "temperate_forest"]}));
+        assert_eq!(forest.eval(&at(0., 0., -5.).with_fields(Some(&Zoned))), 1.);
+        assert_eq!(forest.eval(&at(0., 0., 5.).with_fields(Some(&Zoned))), 0.);
+        // Without a climate, the default.
+        assert_eq!(graph(json!({"node": "biome", "is": "taiga", "default": 1})).eval(&at(0., 0., 5.)), 1.);
+        assert!(Graph::parse(&json!({"node": "biome", "is": "jungle"})).err().unwrap().contains("rainforest"));
     }
 
     struct Deep;

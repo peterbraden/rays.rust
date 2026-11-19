@@ -730,6 +730,19 @@ impl Ground {
         self.layer_at(&d).is_some_and(|l| l.wet(&d))
     }
 
+    /// The climate at `d`, `h` metres up, its edges wandering with the weather from year to
+    /// year (noise in temperature and rain), as the ground cover and `biome` nodes see it. None
+    /// without a climate.
+    fn wandering_climate(&self, d: &Vector3<f64>, h: f64) -> Option<crate::terrain::climate::Local> {
+        let q = d * self.frame.radius;
+        let n = |s: f64, o: f64| self.noise.fbm(q.x / s + o * 17., q.y / s, q.z / s, 4, 0.5, 2.);
+        let mut local = self.climate.as_ref()?.local(d, h);
+        local.mean += 3. * (n(40000., 0.15) - 0.5);
+        local.summer += 3. * (n(40000., 0.15) - 0.5);
+        local.precipitation *= (1.2 * (n(25000., 0.45) - 0.5)).exp();
+        Some(local)
+    }
+
     /// The albedo at scene point `p`, whose surface normal is `normal`.
     pub fn albedo(&self, p: &Vector3<f64>, normal: &Vector3<f64>) -> Color {
         let up = (p - self.frame.centre()).normalize();
@@ -766,11 +779,8 @@ impl Ground {
         // What grows here: by the climate's biome, its edges wandering with the weather from
         // year to year (noise in temperature and rain); without a climate, forest and grass.
         let (mut ground, dry) = match &self.climate {
-            Some(c) => {
-                let mut local = c.local(&d, h);
-                local.mean += 3. * (n(40000., 0.15) - 0.5);
-                local.summer += 3. * (n(40000., 0.15) - 0.5);
-                local.precipitation *= (1.2 * (n(25000., 0.45) - 0.5)).exp();
+            Some(_) => {
+                let local = self.wandering_climate(&d, h).expect("a climate");
                 let biome = Biome::of(&local);
                 let mut g = match biome {
                     Biome::Ice => colour(SCREE),
@@ -829,6 +839,11 @@ impl crate::graph::Fields for Ground {
 
     /// The simulations' fields, each layer's blended into the coarser ones around it as their
     /// surfaces are; the climate's, and the snowline and treeline as the ground cover has them.
+    fn biome(&self, p: &Vector3<f64>) -> Option<Biome> {
+        let (d, h) = self.frame.on_planet(p);
+        self.wandering_climate(&d, h).map(|l| Biome::of(&l))
+    }
+
     fn field(&self, f: crate::graph::Field, p: &Vector3<f64>) -> Option<f64> {
         use crate::graph::Field;
         let (d, h) = self.frame.on_planet(p);

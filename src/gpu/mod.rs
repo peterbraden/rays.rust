@@ -92,7 +92,7 @@ fn c4(c: &Color) -> Vec4 {
 }
 
 /// Flatten `m` into `out` (checkerboards' squares after it), returning its index.
-fn push_material(m: &FlatMaterial, out: &mut Vec<GpuMaterial>) -> u32 {
+fn push_material(m: &FlatMaterial, out: &mut Vec<GpuMaterial>, kernels: &[Option<GpuMaterial>]) -> u32 {
     let index = out.len() as u32;
     let blank = GpuMaterial::zeroed();
     out.push(blank);
@@ -109,12 +109,13 @@ fn push_material(m: &FlatMaterial, out: &mut Vec<GpuMaterial>) -> u32 {
         FlatMaterial::Emitter { radiance, two_sided } => GpuMaterial { kind: pathtrace::MAT_EMITTER, a: *two_sided as u32, c0: c4(radiance), ..blank },
         FlatMaterial::Specular { albedo, roughness } => GpuMaterial { kind: pathtrace::MAT_METAL, c0: c4(albedo), p: Vec4::new(0., *roughness as f32, 0., 0.), ..blank },
         FlatMaterial::Checker { m1, m2, xsize, zsize } => {
-            let a = push_material(m1, out);
-            let b = push_material(m2, out);
+            let a = push_material(m1, out, kernels);
+            let b = push_material(m2, out, kernels);
             GpuMaterial { kind: pathtrace::MAT_CHECKER, a, b, p: Vec4::new(0., 0., *xsize as f32, *zsize as f32), ..blank }
         },
         // The kernels stop a path here for the host (`host`).
-        FlatMaterial::Host { object } => GpuMaterial { kind: pathtrace::MAT_HOST, a: *object, ..blank },
+        // unless they have a kernel of this material after all (`host_kernels`).
+        FlatMaterial::Host { object } => kernels[*object as usize].unwrap_or(GpuMaterial { kind: pathtrace::MAT_HOST, a: *object, ..blank }),
     };
     out[index as usize] = g;
     index
@@ -415,6 +416,19 @@ pub struct Buffers {
     pub materials: Vec<GpuMaterial>,
     pub lights: Vec<GpuLight>,
     pub tables: Vec<f32>,
+    /// Whether any vertex is the host's to shade (`host`).
+    pub hosts: bool,
+}
+
+/// For each of the flat scene's host materials, the kernels' record of it if they have its
+/// code after all: a material that isn't data to the CPU's integrator, but is one the shader
+/// has been given. So far the sea's water (`pathtrace::MAT_WATER`), where no moon lights it
+/// (the kernel's glitter is the sun's alone).
+fn host_kernels(s: &Scene, flat: &FlatScene) -> Vec<Option<GpuMaterial>> {
+    flat.hosts.iter().map(|o| {
+        let (water, roughness, radius) = o.medium.material_at(Vector3::zeros()).water().filter(|_| s.moonlight.is_none())?;
+        Some(GpuMaterial { kind: pathtrace::MAT_WATER, c0: c4(&water), p: Vec4::new(radius as f32, roughness as f32, 0., 0.), ..GpuMaterial::zeroed() })
+    }).collect()
 }
 
 impl Buffers {
@@ -433,8 +447,10 @@ impl Buffers {
         }
         // A browser's passes are queued without waiting on the device, which serving the
         // host's queue must (`host`).
-        if cfg!(target_arch = "wasm32") && !flat.hosts.is_empty() {
-            return Err(format!("{} objects whose materials the renderer's own code shades, which the GPU's host can't yet do in a browser", flat.hosts.len()));
+        let kernels = host_kernels(s, flat);
+        let hosts = kernels.iter().filter(|k| k.is_none()).count();
+        if cfg!(target_arch = "wasm32") && hosts > 0 {
+            return Err(format!("{} objects whose materials the renderer's own code shades, which the GPU's host can't yet do in a browser", hosts));
         }
         let mut lights = Vec::new();
         for l in &s.lights {
@@ -452,7 +468,7 @@ impl Buffers {
 
         // Primitives: the bounded ones in the BVH's order, then the planes.
         let mut materials = Vec::new();
-        let material_index: Vec<u32> = flat.materials.iter().map(|m| push_material(m, &mut materials)).collect();
+        let material_index: Vec<u32> = flat.materials.iter().map(|m| push_material(m, &mut materials, &kernels)).collect();
         // A buffer may not be empty (wgpu refuses to bind it): a scene of sky alone has none.
         if materials.is_empty() {
             materials.push(GpuMaterial::zeroed());
@@ -595,7 +611,7 @@ impl Buffers {
             seed: UVec4::new(s.render.seed as u32, rr, 0, 1),
             air: UVec4::new(sky_off, aerial_off, sun_off, space_off),
         };
-        Ok(Buffers { params, prims: pathtrace::pack_prims(&prims), prim_records: prims, nodes, materials, lights, tables })
+        Ok(Buffers { params, prims: pathtrace::pack_prims(&prims), prim_records: prims, nodes, materials, lights, tables, hosts: hosts > 0 })
     }
 }
 
@@ -638,7 +654,7 @@ impl GpuRenderer {
             setup.push((what, (now - clock).as_secs_f64()));
             clock = now;
         };
-        let Buffers { params, prims, nodes, materials, lights, tables, .. } = Buffers::build(s, flat)?;
+        let Buffers { params, prims, nodes, materials, lights, tables, hosts: any_host, .. } = Buffers::build(s, flat)?;
         lap(&mut setup, "the scene's buffers");
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -817,7 +833,7 @@ impl GpuRenderer {
                        entry(4, &lights_buffer), entry(5, &tables_buffer), entry(6, &paths_buffer), entry(7, &queue_buffer),
                        entry(8, &queries_buffer)],
         }));
-        let host_queue = (!flat.hosts.is_empty()).then(|| {
+        let host_queue = any_host.then(|| {
             let host_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("host"),
                 entries: &[binding(0, wgpu::BufferBindingType::Uniform), binding(1, write), binding(2, write), binding(3, write)],
@@ -1865,9 +1881,56 @@ mod tests {
         assert!(gpu.take_stats().is_empty());
     }
 
+    /// The kernel's sea against the renderer's, ray by ray: where a ray meets it (the wave
+    /// march and the planet's sphere, in f32) and the normal there (the tiles' slopes).
+    #[test]
+    fn test_the_sea_matches_the_renderer() {
+        use crate::shapes::geometry::Geometry;
+        use pathtrace::glam::Vec3;
+        for radius in ["0", "6360000"] {
+            let s = SceneFile::from_string(format!(r#"{{
+                "width": 4, "height": 4, "background": [0, 0, 0],
+                "camera": {{ "location": [0, 3, -12], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.7 }},
+                "objects": [ {{ "type": "ocean", "wind": [7, 2], "planet_radius": {}, "detail_center": [0, -6], "detail_distance": 30 }} ]
+            }}"#, radius));
+            let flat = FlatScene::build(&s).unwrap();
+            let b = Buffers::build(&s, &flat).unwrap();
+            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let sea = &flat.shapes[0].0;
+            let mut rng = crate::geometry::Pcg32::new(5, 0);
+            let mut next = move || rng.next_f64();
+            let (mut both, mut one, mut worst_t, mut worst_n, mut sum_t) = (0, 0, 0f64, 0f64, 0f64);
+            for _ in 0..4000 {
+                // From above the waves, down at the sea near and far.
+                let ro = Vector3::new(next() * 40. - 20., 0.6 + next() * 6., next() * 40. - 26.);
+                let rd = Vector3::new(next() - 0.5, -next() * 0.6 - 0.002, next() - 0.5).normalize();
+                let (ro32, rd32) = (Vec3::new(ro.x as f32, ro.y as f32, ro.z as f32), Vec3::new(rd.x as f32, rd.y as f32, rd.z as f32).normalize());
+                let ray = Ray { ro: Vector3::new(ro32.x as f64, ro32.y as f64, ro32.z as f64), rd: Vector3::new(rd32.x as f64, rd32.y as f64, rd32.z as f64).normalize() };
+                let cpu = sea.geometry.intersects(&ray);
+                let (t, prim) = pathtrace::nearest(&shader, ro32, rd32, 0., f32::MAX, false);
+                match (cpu, prim != u32::MAX) {
+                    (Some(x), true) => {
+                        both += 1;
+                        let dt = (t as f64 - x.dist).abs();
+                        sum_t += dt;
+                        worst_t = worst_t.max(dt / (1. + x.dist));
+                        let n = pathtrace::sea_normal(&shader, ro32 + rd32 * x.dist as f32);
+                        let dn = (Vector3::new(n.x as f64, n.y as f64, n.z as f64) - x.normal).norm();
+                        worst_n = worst_n.max(dn);
+                    },
+                    (None, false) => {},
+                    _ => one += 1,
+                }
+            }
+            println!("radius {}: {} hits, {} disagree on hitting, mean |dt| {:.2e}, worst relative dt {:.2e}, worst normal {:.2e}", radius, both, one, sum_t / both as f64, worst_t, worst_n);
+            assert!(both > 3000 && one * 200 < both, "{} of {} rays disagree on hitting the sea", one, both);
+            assert!(worst_n < 2e-3, "normals differ by {}", worst_n);
+        }
+    }
+
     /// The sea is a shape the kernels intersect themselves (`pathtrace::ocean_hit`: the
-    /// planet's sphere or a plane, marched over its waves near the camera), its material the
-    /// host's. As a plane and as the planet, with a sphere standing in it to shadow it and be
+    /// planet's sphere or a plane, marched over its waves near the camera), and its water a
+    /// material they shade (`MAT_WATER`). As a plane and as the planet, with a sphere standing in it to shadow it and be
     /// reflected, the picture is the wavefront integrator's, whose sea is the renderer's own.
     #[test]
     fn test_intersects_the_sea() {
@@ -1897,6 +1960,8 @@ mod tests {
             let rc = Mutex::new(RenderContext::new(w, h, false, "test.png"));
             gpu.render(&s, &flat, &rc, |_| ());
             let rc = rc.into_inner().unwrap();
+            // Its water too is the kernels' (`pathtrace::MAT_WATER`): nothing waits for the host.
+            assert_eq!(rc.schedule.stage(crate::scheduler::Stage::Host).items, 0);
             let on_gpu: Vec<Color> = (0..w * h).map(|i| rc.get_pixel(i % w, i / w)).collect();
             let cpu = mean_image(&s, 128);
             let (a, b) = (tiles(&on_gpu, w, h, 3, 2), tiles(&cpu, w, h, 3, 2));

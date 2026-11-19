@@ -48,6 +48,11 @@ pub trait MaterialModel: Sync{
     /// can't be.
     fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> { None }
 
+    /// The sea's water, if this is its material and the GPU's kernel for it does all this one
+    /// does (opaque water): what the water body sends back, the ripples' mean square slope,
+    /// and the planet's radius (0 for a flat sea). See `ocean::PhysicalOcean`.
+    fn water(&self) -> Option<(Color, f64, f64)> { None }
+
     /// Whether this is the sky's material, which the wavefront integrator evaluates for rays
     /// that escape the scene.
     fn is_sky(&self) -> bool { false }

@@ -179,6 +179,12 @@ pub const MAT_METAL: u32 = 5;
 pub const MAT_CHECKER: u32 = 6;
 /// A material the kernels have no code for: the host shades the vertex (`PATH_HOST`).
 pub const MAT_HOST: u32 = 7;
+/// The sea's material (the renderer's `ocean::PhysicalOcean`, opaque water): what the water
+/// body sends back (`c0`), the ripples' mean square slope (`p.y`), and the planet's radius
+/// for the local vertical (`p.x`; 0 for a flat sea).
+pub const MAT_WATER: u32 = 8;
+/// Water's refractive index.
+pub const WATER_INDEX: f32 = 1.333;
 /// Hits nearer than this are not hazed (as the renderer's `AERIAL_PERSPECTIVE_FROM`).
 pub const AERIAL_FROM: f32 = 100.0;
 /// No record (`Params::air`), table (`AIR_TABLES`) or moon.
@@ -663,6 +669,12 @@ fn ocean_hit(s: &Scene, ro: Vec3, rd: Vec3) -> f32 {
     } else {
         smooth
     }
+}
+
+/// `ocean_normal`, for the renderer's tests.
+#[cfg(not(target_arch = "spirv"))]
+pub fn sea_normal(s: &Scene, p: Vec3) -> Vec3 {
+    ocean_normal(s, p)
 }
 
 /// `Ocean::normal_at`: the waves' slopes about the local vertical.
@@ -1778,6 +1790,27 @@ pub struct Lobe {
     pub b: Vec3,
 }
 
+/// `ocean::fresnel`: the reflectance of unpolarised light from air onto water.
+fn water_fresnel(cos_i: f32) -> f32 {
+    let cos_i = cos_i.clamp(0.0, 1.0);
+    let sin_t = (1.0 - cos_i * cos_i).sqrt() / WATER_INDEX;
+    let cos_t = (1.0 - sin_t * sin_t).max(0.0).sqrt();
+    let rs = (cos_i - WATER_INDEX * cos_t) / (cos_i + WATER_INDEX * cos_t);
+    let rp = (WATER_INDEX * cos_i - cos_t) / (WATER_INDEX * cos_i + cos_t);
+    (rs * rs + rp * rp) / 2.0
+}
+
+/// `PhysicalOcean::ripple_density`: Beckmann's distribution of the ripples' normals `m` about
+/// `n`, of mean square slope `roughness`.
+fn ripple_density(n: Vec3, m: Vec3, roughness: f32) -> f32 {
+    let c = n.dot(m);
+    if c <= 0.0 {
+        return 0.0;
+    }
+    let tan2 = (1.0 - c * c) / (c * c);
+    (-tan2 / roughness).exp() / (PI * roughness * c * c * c * c)
+}
+
 fn basis(n: Vec3) -> (Vec3, Vec3) {
     // Duff et al.'s orthonormal basis.
     let s = if n.z >= 0.0 { 1.0 } else { -1.0 };
@@ -2306,7 +2339,18 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
     let mut next_from = above;
     let mut attenuate = Vec3::ONE;
     let mut lobe = Lobe::new(0, ns);
-    if mat.kind == MAT_DIFFUSE {
+    // The sea (`PhysicalOcean::scatter`): the water body as a diffuse surface under what the
+    // surface lets in, the sun's glitter through the ripples, and one reflection from a
+    // sampled ripple. Its lights are counted by sampling them alone (no sky sample: the
+    // reflection finds the sky).
+    let water = mat.kind == MAT_WATER;
+    let water_up = if water && mat.p.x > 0.0 { (point + Vec3::new(0.0, mat.p.x, 0.0)).normalize() } else { Vec3::Y };
+    // Seen from beyond a wave's slope: the mean surface.
+    let water_n = if hit_ns.dot(wo) <= 0.0 { water_up } else { hit_ns };
+    if water {
+        lobe = Lobe::new(0, water_n);
+        lobe.albedo = mat.c0.xyz() * (1.0 - water_fresnel(water_n.dot(wo)));
+    } else if mat.kind == MAT_DIFFUSE {
         lobe.albedo = mat.c0.xyz();
     } else if mat.kind == MAT_PLASTIC {
         let alpha = (mat.p.y * mat.p.y).max(floor_alpha);
@@ -2422,7 +2466,7 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
                     li = emitted(s, whole_prim(s, pi).info.y, ny, -wi);
                 }
             }
-        } else if flags & FLAG_SAMPLE_ENV != 0 {
+        } else if !water && flags & FLAG_SAMPLE_ENV != 0 {
             // The sky, by its brightness: its light found by the `sky` kernel (`q1`).
             let es = env_sample(s, rand(&mut rng), rand(&mut rng));
             if es.w > 0.0 {
@@ -2432,8 +2476,21 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
             }
         }
         if li.dot(li) > 0.0 {
-            let (f, lobe_pdf) = lobe.eval_pdf(wo, wi);
-            let w = if pdf > 0.0 { power_heuristic(pdf, lobe_pdf) / pdf } else { 1.0 };
+            let (mut f, lobe_pdf) = lobe.eval_pdf(wo, wi);
+            let mut w = if pdf > 0.0 { power_heuristic(pdf, lobe_pdf) / pdf } else { 1.0 };
+            if water {
+                // Light sampling alone; and with the sun, its glitter: F D / (4 cos θv).
+                if pdf > 0.0 {
+                    w = 1.0 / pdf;
+                }
+                if k == n_lights && wi.dot(water_up) > 0.0 && water_n.dot(wi) > 0.0 {
+                    let h = (wi + wo).normalize();
+                    let glint = water_fresnel(h.dot(wo)) * ripple_density(water_n, h, mat.p.y) / (4.0 * water_n.dot(wo));
+                    if glint > 1e-6 {
+                        f += Vec3::splat(glint);
+                    }
+                }
+            }
             if f.dot(f) > 0.0 {
                 rays += 1;
                 if !occluded(s, above, wi, dist) {
@@ -2450,6 +2507,29 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
     // The next ray.
     if depth >= max_depth {
         return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
+    }
+    if water {
+        // A ripple's normal about the surface's (`sample_ripple`: Gaussian slopes), and the
+        // reflection from it, weighted by Fresnel's equations.
+        let r = (-mat.p.y * (1.0 - rand(&mut rng)).ln()).sqrt();
+        let phi = 2.0 * PI * rand(&mut rng);
+        let t = if water_n.x.abs() < 0.9 { Vec3::X } else { Vec3::Z };
+        let a = (t - water_n * water_n.dot(t)).normalize();
+        let b = water_n.cross(a);
+        let m = (water_n - a * (r * phi.cos()) - b * (r * phi.sin())).normalize();
+        let reflected = rd - m * 2.0 * m.dot(rd);
+        let weight = Vec3::splat(water_fresnel(m.dot(wo).max(0.0)));
+        if !(reflected.dot(water_up) > 0.0 && m.dot(wo) > 0.0) || !survives(s, depth, weight, &mut beta, &mut rng) {
+            return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
+        }
+        beta *= weight;
+        // From where the renderer's reflection leaves: the hit, off the surface by its bias,
+        // then a millimetre up. Not `above`, whose offset is some ten times that: these rays
+        // skim the waves, and how many meet the next one depends on where they start. (Both
+        // at least what f32 resolves at this point, for a sea a planet wide.)
+        let reach = 2e-6 * (1.0 + point.abs().max_element());
+        let from = point + ng * s.params.misc.z.max(reach) + water_up * reach.max(1e-3);
+        return carry_on(p, from, reflected.normalize(), beta, l, rays, rng, flags_p | PATH_LIGHTS_COUNTED, 0.0, depth + 1, q0, q1);
     }
     let wi = lobe.sample(wo, rand(&mut rng), rand(&mut rng), rand(&mut rng));
     let (f, pdf) = lobe.eval_pdf(wo, wi);

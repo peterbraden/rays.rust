@@ -228,7 +228,9 @@ Where the time goes:
 Done: candidates 1-3. A bounding volume hierarchy built with the surface area heuristic
 (`bvh.rs`) replaced the octree everywhere (scene, meshes, ocean, CSG unions, box terrain,
 fireworks), with any-hit queries for shadow rays and ray ranges passed through `Geometry`; the
-sky is a lookup table. The octree (`octree.rs`) is kept, unused, with its own improvements
+sky is a lookup table. (CSG unions in fact kept their parts in an octree until November 2026,
+when they moved to a `GeometrySet` and `octree.rs` was removed; it is in the history.) The
+octree (`octree.rs`) was kept, unused, with its own improvements
 (Revelles et al. traversal, a limit on items copied by a split, triangle leaves tested four at
 a time with vector instructions) for comparison. Rendering on 4 cores, against the octree as it
 was: ocean-boat about 16 times faster, the cornell box and demo 6 times, spheres-on-water 5
@@ -1644,8 +1646,23 @@ UI, file IO and rayon's threads would follow.
    CPU integrator's. Known: far from the origin f32 resolves the smallest tile's texels
    coarsely (normals only: a tenth of a texel at 100 km); the march stops after 1,024
    steps; pebble-beach's primitives (859 MB) exceed lavapipe's largest buffer; transparent
-   water is still refused. In a browser these scenes still wait on the sea's material,
-   which is the next port: on ocean-1 the host shades 253,000 of 673,000 vertices.
+   water is still refused.
+   The sea's water, on the GPU (`MAT_WATER`, after `PhysicalOcean::scatter`: the water body
+   as a diffuse surface under what the surface lets in, lit by sampling the lights alone;
+   the sun's glitter through Beckmann ripples; one reflection from a sampled ripple by
+   Fresnel's equations), where the water is opaque and no moon lights it; it stays a host
+   material to the CPU's integrator (`MaterialModel::water` says the kernels have it). So
+   ocean scenes need no host, and render in a browser (ocean-2 in Chromium: FLIP 0.0001
+   against native). ocean-1 at 160 x 90, 32 spp on llvmpipe: 5.1 s with the host's water,
+   2.3 s with the kernel's.
+   Two things found on the way, worth knowing again. Host shading had hidden the kernel's
+   own hits and normals (the host finds the hit again on the CPU), so they are now tested
+   ray by ray (`test_the_sea_matches_the_renderer`: distances to 4e-7, normals to 3e-4). And
+   the kernel's water was first about 1% too bright on ocean-1, level with the path tracer
+   only to FLIP 0.0156 at 1,024 spp where the host's water reached 0.0073: its reflected ray
+   left from `above`, a centimetre off the surface there, where the renderer's leaves a
+   millimetre up, and rays that skim the waves met the next one less often. From the
+   renderer's place: 0.0078.
 3. The fallback framework: per-area status, classification, CPU queues for materials first,
    then intersection. Exit: every flattenable demo scene plus at least one with a
    procedural shape and one with an unported material renders through the GPU path with CPU

@@ -946,6 +946,11 @@ impl PhysicalOcean {
 }
 
 impl MaterialModel for PhysicalOcean {
+    fn water(&self) -> Option<(Color, f64, f64)> {
+        // (Transparent water goes down to what is beneath, which the kernel doesn't.)
+        self.absorption.is_none().then(|| (self.water.as_reflectance(), self.roughness, self.center.map_or(0., |c| -c.y)))
+    }
+
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let v = -r.rd.normalize();
         // A ray from under transparent water, leaving it.

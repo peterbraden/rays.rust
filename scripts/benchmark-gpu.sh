@@ -28,7 +28,7 @@ print("" if not m else "%.3f" % (float(m.group(1)) * unit[m.group(2)]))' "$1"
 
 scenes=("$@")
 if [ ${#scenes[@]} -eq 0 ]; then
-    for f in demo/*.json demo/scenes/*.json; do
+    for f in demo/*.json demo/scenes/*.json demo/benchmarks/*.json; do
         if timeout 120 "$RAYS" "$f" --fresh --gpu --samples 1 --width 64 --height 64 -o "$OUT/probe.png" 2>&1 | grep -q '^- GPU:'; then
             scenes+=("$f")
         fi

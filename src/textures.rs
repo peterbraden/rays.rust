@@ -356,10 +356,12 @@ pub struct Footprint {
     pub spread: f64,
 }
 
-/// A colour: constant, or from an image, or a grey level from the surface's slope.
+/// A colour: constant, from an image, or a grey level from a function graph (`graph.rs`),
+/// evaluated at the hit with its normal, so it can mask by slope and altitude.
 pub enum ColorTexture {
     Constant(Color),
     Image(ImageMap),
+    Graph(std::sync::Arc<crate::graph::Graph>),
     Slope(SlopeTexture),
     Terrain(TerrainTexture),
 }
@@ -438,6 +440,10 @@ impl ColorTexture {
         match self {
             ColorTexture::Constant(c) => *c,
             ColorTexture::Image(m) => m.eval(i, s),
+            ColorTexture::Graph(g) => {
+                let v = g.eval(&crate::graph::Context::new(i.point, i.normal, 0.));
+                Color::new(v, v, v)
+            },
             ColorTexture::Slope(t) => { let a = t.amount(&i.point, &i.normal); Color::new(a, a, a) },
             ColorTexture::Terrain(t) => { let a = t.amount(&i.point); Color::new(a, a, a) },
         }
@@ -448,6 +454,12 @@ impl ColorTexture {
         match self {
             ColorTexture::Constant(c) => *c,
             ColorTexture::Image(m) => m.image.average(),
+            // Without sampling the surface, the middle of its range.
+            ColorTexture::Graph(g) => {
+                let (lo, hi) = g.range();
+                let v = if lo.is_finite() && hi.is_finite() { 0.5 * (lo + hi) } else { 0.5 };
+                Color::new(v, v, v)
+            },
             ColorTexture::Slope(_) | ColorTexture::Terrain(_) => Color::new(0.5, 0.5, 0.5),
         }
     }

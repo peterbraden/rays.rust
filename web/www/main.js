@@ -5,7 +5,7 @@ import init, { Renderer, provide } from './pkg/rays_web.js';
 
 const READ_EVERY = 8;
 const params = new URLSearchParams(location.search);
-const scenePath = params.get('scene') || 'demo/scenes/spheres.json';
+const scenePath = params.get('scene') || 'demo/benchmarks/spheres.json';
 const width = Number(params.get('width') || 0);
 const height = Number(params.get('height') || 0);
 const status = document.getElementById('status');

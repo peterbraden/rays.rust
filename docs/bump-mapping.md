@@ -5,10 +5,9 @@ its shape: the normal that its material shades with is tilted by a pattern (Blin
 of wrinkled surfaces", SIGGRAPH 1978). The patterns are modelled on POV-Ray's `normal` patterns
 of the same names, though not identical to them.
 
-![Bump patterns](../demo/scenes/bumps.png)
-
-From left to right in [`demo/scenes/bumps.json`](../demo/scenes/bumps.json): bumps, dents,
-wrinkles, ripples and waves, on a floor of waves.
+From left to right on a plinth in the front row of
+[`demo/scenes/stress-test.json`](../demo/scenes/stress-test.json) (materials prefixed `BUMP_`):
+bumps, dents, wrinkles, ripples and waves, on a plinth of waves.
 
 ```json
 { "type": "sphere", "location": [0, 1, 0], "radius": 1, "material": "GOLD",

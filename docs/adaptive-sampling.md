@@ -61,7 +61,7 @@ tracer is used instead.
 
 ## Measurements
 
-`demo/scenes/glossy-sun.json` (480 × 240), 4 threads.
+`demo/benchmarks/glossy-sun.json` (480 × 240), 4 threads.
 
 Noise measured with `--variance 4`, efficiency = 1 / (relMSE × time):
 

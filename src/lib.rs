@@ -58,6 +58,7 @@ pub mod material {
     pub mod bump;
     pub mod rock;
     pub mod soil;
+    pub mod snow;
     pub mod phase;
     pub mod diffraction;
     pub mod ice_halos;
@@ -100,6 +101,7 @@ pub mod shapes {
     pub mod tessellated;
     pub mod text;
     pub mod lod;
+    pub mod displaced;
 }
 pub mod octree;
 pub mod bvh;
@@ -119,6 +121,7 @@ pub mod output;
 #[cfg(feature = "cli")]
 pub mod compare;
 pub mod depth;
+pub mod time_map;
 //mod wireframe;
 pub mod geometry;
 pub mod procedural {
@@ -130,6 +133,7 @@ pub mod procedural {
     pub mod heightmap;
     pub mod grass;
     pub mod rock;
+    pub mod iceberg;
     pub mod nubis_clouds;
     pub mod hogan_kew_cirrus;
     pub mod benard_altocumulus;
@@ -137,6 +141,8 @@ pub mod procedural {
     pub mod terrain;
     pub mod mammatus;
     pub mod precipitation;
+    pub mod overcast;
+    pub mod hill_cloud;
     pub mod harris_cumulus;
     pub mod space;
 }
@@ -144,6 +150,7 @@ pub mod participatingmedia;
 pub mod noise;
 pub mod terrain;
 pub mod expr;
+pub mod graph;
 pub mod volume;
 pub mod glare;
 pub mod variance;

@@ -511,6 +511,14 @@ fn full_scale_landscape(o: &Value, params: TerrainParams) -> SceneObject {
         let t = evolve(o, t, &key);
         if k == 0 {
             if let Some(path) = o["map"].as_str() { write_map(&t, path, 2048); }
+            // Where the glaciers are, to frame them.
+            let ice = (0..t.domain.len()).filter(|&i| t.ice[i] >= crate::terrain::simulation::ICE_FREE);
+            let cells = ice.clone().count();
+            if let Some(i) = ice.max_by(|&a, &b| t.ice[a].total_cmp(&t.ice[b])) {
+                let at = frame.to_scene(&t.domain.dirs[i], t.surface()[i]);
+                println!("Landscape: glaciers cover {:.0} km²; the thickest ice, {:.0} m, is at [{:.0}, {:.0}, {:.0}]",
+                    cells as f64 * l.spacing * l.spacing / 1e6, t.ice[i], at.x, at.y, at.z);
+            }
         }
         built.push(Layer::new(t, p.min_river_width));
     }

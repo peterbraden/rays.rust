@@ -12,8 +12,9 @@ physically by the scene's `sun` (`src/celestial/`):
 
 Scenes: `demo/scenes/saturn.json` (the rings' lit face and the planet's shadow across them),
 `saturn-shadows.json` (from the rings' unlit side: their shadows on the planet),
-`jupiter.json` (with Io and its shadow), `ice-giants.json` (Neptune and Uranus),
-`worlds.json` (Mercury, Mars, Callisto, Ganymede, Europa and Io), `worlds-from-seeds.json`.
+`jupiter.json` (with Io and its shadow), and `worlds.json`: a family portrait under one sun, of
+giants (a seeded ringed gas giant, a seeded ice giant, Uranus and Neptune), the rocky and icy
+presets at one distance (Mercury, Mars, Callisto, Ganymede, Europa and Io), and worlds from seeds.
 
 Their brightness is physical: they reflect the scene's sun, whose `intensity` is the
 irradiance where they are. The sun of intensity 6 is the Earth's; at Jupiter it is 6 / 5.2²

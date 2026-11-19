@@ -46,11 +46,9 @@ const STARTER = {
 // Scene files in the repository, by path from its root (which is where their own asset paths
 // start from too).
 const SCENES = [
-    'demo/scenes/spheres.json', 'demo/demo.json', 'demo/scenes/instances.json',
-    'demo/scenes/sky-sunset.json', 'demo/scenes/sky-custom.json', 'demo/scenes/block-terrain.json',
-    'demo/scenes/fireworks.json', 'demo/scenes/noise-simple-demo.json',
-    'demo/scenes/spheres-on-water.json', 'demo/scenes/ocean-1.json', 'demo/scenes/ocean-boat.json',
-    'demo/scenes/grass-meadow.json',
+    'demo/benchmarks/spheres.json', 'demo/demo.json', 'demo/benchmarks/glossy-sun.json',
+    'demo/benchmarks/lamps.json', 'demo/scenes/block-terrain.json', 'demo/scenes/fireworks.json',
+    'demo/scenes/ocean-1.json', 'demo/scenes/ocean-boat.json', 'demo/scenes/grass-meadow.json',
 ];
 
 // What scene files may contain, from the renderer (src/schema.json): filled in at start.

@@ -1599,7 +1599,7 @@ mod tests {
     #[ignore]
     fn measure_traversal() {
         println!("{:<16} {:>9} {:>9} {:>10} {:>10} {:>10}", "scene", "prims", "nodes", "rays", "boxes/ray", "prims/ray");
-        for name in ["demo/demo.json", "demo/scenes/instances.json", "demo/scenes/glossy-sun.json", "demo/scenes/spheres.json", "demo/scenes/lamps.json", "demo/scenes/night-orbit.json"] {
+        for name in ["demo/demo.json", "demo/benchmarks/teapot-sky.json", "demo/benchmarks/glossy-sun.json", "demo/benchmarks/spheres.json", "demo/benchmarks/lamps.json", "demo/scenes/night-orbit.json"] {
             let s = SceneFile::from_file(name, &crate::scenefile::Overrides { width: Some(160), height: Some(90), seed: None });
             let flat = match FlatScene::build(&s) {
                 Ok(f) => f,

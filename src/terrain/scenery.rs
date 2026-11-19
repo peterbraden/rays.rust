@@ -50,8 +50,12 @@
 //! climate they ran in, by latitude: snow above the snowline (the glaciers' equilibrium line
 //! altitude at the final time) on slopes gentle enough to hold it, bare rock on steep slopes
 //! and above the alpine meadows, forest below the treeline, grassland and fields on the valley
-//! floors. Albedos are those of real surfaces (conifer forest about 0.05, grass 0.1, rock 0.2,
-//! snow 0.8), so the sun and sky light it as they would the real thing. Rivers and lakes are
+//! floors. Albedos are those of real surfaces (conifer forest about 0.05, grass 0.1, rock 0.2),
+//! so the sun and sky light it as they would the real thing. Snow and glacier ice are
+//! `material::snow`'s, worked out from ice's absorption: snow is settled high up and older,
+//! coarser and dustier towards the snowline, where it turns to firn; below the snowline a
+//! glacier is bare ice, mostly the white, bubble-rich ice of its weathered surface with bluer
+//! ice showing through, and streaked with rock debris towards its snout. Rivers and lakes are
 //! water, reflecting the sky by Fresnel's equations as the ocean does.
 
 use crate::color::Color;
@@ -60,6 +64,7 @@ use crate::intersection::Intersection;
 use crate::material::bsdf::LambertianBSDF;
 use crate::material::functions::scatter_bsdf;
 use crate::material::model::{MaterialModel, ScatteredRay};
+use crate::material::snow::{Ice, IceStyle, Snow, SnowStyle};
 use crate::material::texture::Medium;
 use crate::na::Vector3;
 use crate::noise::{PerlinNoise, SeededNoise};
@@ -534,11 +539,26 @@ pub struct Ground {
     glaciers: GlacierParams,
     time: f64,
     noise: PerlinNoise,
+    /// Snow, high on the mountains and near the snowline; a glacier's white surface ice and
+    /// the bluer ice beneath.
+    snow: [Snow; 2],
+    ice: [Ice; 2],
+}
+
+/// What covers the ground at a point: the shares of snow and of glacier ice, the rest bare
+/// ground of colour `ground`.
+#[derive(Clone, Copy, Debug)]
+pub struct Cover {
+    pub ground: Color,
+    pub snow: f64,
+    /// How old the snow is, from 0 (settled) to 1 (old snow and firn).
+    pub snow_age: f64,
+    pub ice: f64,
+    /// How much of the ice is blue rather than white, 0 to 1.
+    pub blue: f64,
 }
 
 /// Albedos of real surfaces (linear, as the renderer's colours are).
-const SNOW: [f64; 3] = [0.82, 0.85, 0.88];
-const GLACIER_ICE: [f64; 3] = [0.45, 0.52, 0.58];
 const ROCK: [f64; 3] = [0.20, 0.18, 0.16];
 const SCREE: [f64; 3] = [0.26, 0.25, 0.23];
 const FOREST: [f64; 3] = [0.028, 0.042, 0.022];
@@ -556,6 +576,8 @@ impl Ground {
         Ground {
             frame, layers, snowline: p.snowline, treeline: p.treeline, climate, glaciers, time,
             noise: PerlinNoise::shuffled(seed.wrapping_add(77)),
+            snow: [Snow::new(SnowStyle::preset("settled"), 1., seed), Snow::new(SnowStyle::preset("firn"), 1., seed)],
+            ice: [Ice::new(IceStyle::preset("white")), Ice::new(IceStyle::preset("glacier"))],
         }
     }
 
@@ -590,8 +612,16 @@ impl Ground {
         self.layer_at(&d).is_some_and(|l| l.wet(&d))
     }
 
-    /// The albedo at scene point `p`, whose surface normal is `normal`.
+    /// The mean albedo at scene point `p`, whose surface normal is `normal`.
     pub fn albedo(&self, p: &Vector3<f64>, normal: &Vector3<f64>) -> Color {
+        let c = self.cover(p, normal);
+        let snow = self.snow[0].albedo() * (1. - c.snow_age) + self.snow[1].albedo() * c.snow_age;
+        let ice = self.ice[0].reflectance() * (1. - c.blue) + self.ice[1].reflectance() * c.blue;
+        c.ground * (1. - c.snow - c.ice) + snow * c.snow + ice * c.ice
+    }
+
+    /// What covers the ground at scene point `p`, whose surface normal is `normal`.
+    pub fn cover(&self, p: &Vector3<f64>, normal: &Vector3<f64>) -> Cover {
         let up = (p - self.frame.centre()).normalize();
         let flat = normal.dot(&up);
         let (d, h) = self.frame.on_planet(p);
@@ -613,14 +643,42 @@ impl Ground {
         let mix = |a: Color, b: Color, t: f64| { let t = t.clamp(0., 1.); a * (1. - t) + b * t };
         let snowline = self.snowline(&d);
         let treeline = self.treeline(&d);
-        if class == LAVA { return colour(BASALT) * (0.8 + 0.4 * n(200., 0.9)) * grain; }
+        let bare = |ground: Color| Cover { ground, snow: 0., snow_age: 0., ice: 0., blue: 0. };
+        // Snow ages towards the snowline: coarser, dustier, turning to firn.
+        let age = |h: f64| 1. - smoothstep(snowline, snowline + 800., h + (n(300., 0.35) - 0.5) * 300.);
+        if class == LAVA { return bare(colour(BASALT) * (0.8 + 0.4 * n(200., 0.9)) * grain); }
         if class == ICE {
             // Snow over the glacier's accumulation zone, bare ice below the snowline.
             let snow = smoothstep(snowline - 300., snowline + 100., h + (n(700., 0.2) - 0.5) * 300.);
-            let ice = mix(colour(GLACIER_ICE), colour(SNOW), snow.max(0.3));
             // Ice doesn't hold to cliffs: the rock walls above and beside a glacier show.
+            let held = smoothstep(0.6, 0.8, flat);
+            // Bare ice: the weathered surface's white ice, bluer ice where it is fresh (in
+            // bands, as the ice's layers and the summer's melt expose it), and rock debris
+            // carried on the ice, more of it towards the snout.
+            let blue = smoothstep(0.45, 0.7, n(80., 0.4) + 0.3 * (n(15., 0.45) - 0.5));
+            let low = smoothstep(snowline - 300., snowline - 1500., h);
+            let debris = (1. - snow) * smoothstep(0.55, 0.75, n(350., 0.6) + 0.35 * low - 0.1);
             let stone = colour(ROCK) * (0.7 + 0.6 * n(250., 0.7)) * grain;
-            return mix(stone, ice, smoothstep(0.6, 0.8, flat));
+            let ground = mix(stone, colour(GRAVEL) * (0.8 + 0.4 * n(40., 0.65)), held);
+            // Crevasses: where the ice steepens it speeds up and stretches, and opens in
+            // cracks across its flow (along the slope's contours), tens of metres apart, their
+            // walls deep blue ice (a few metres of it is enough to absorb the red).
+            let downhill = normal - up * flat;
+            let steep = 1. - smoothstep(0.94, 0.985, flat);
+            let crevasse = if steep > 0. && downhill.norm() > 1e-6 {
+                let along = q.dot(&downhill.normalize());
+                let phase = (along / 30. + 3. * n(120., 0.85)).rem_euclid(1.);
+                held * steep * (1. - smoothstep(0.08, 0.22, phase)) * smoothstep(0.35, 0.5, n(60., 0.95))
+            } else { 0. };
+            let bare_ice = held * (1. - snow) * (1. - debris);
+            let ice = bare_ice + crevasse * (1. - bare_ice);
+            return Cover {
+                ground,
+                snow: held * snow * (1. - crevasse),
+                snow_age: age(h),
+                ice,
+                blue: if ice > 0. { (bare_ice * (1. - crevasse) * blue + crevasse) / ice } else { 0. },
+            };
         }
         let tree = treeline + (n(1500., 0.3) - 0.5) * 400.;
         // What grows here: by the climate's biome, its edges wandering with the weather from
@@ -675,7 +733,7 @@ impl Ground {
         // lower in sheltered places.
         let line = snowline + (n(900., 0.1) - 0.5) * 500.;
         let snow = smoothstep(line - 150., line + 150., h) * smoothstep(0.72, 0.88, flat + 0.15 * (n(120., 0.3) - 0.5));
-        mix(ground, colour(SNOW), snow)
+        Cover { ground, snow, snow_age: age(h), ice: 0., blue: 0. }
     }
 }
 
@@ -685,9 +743,15 @@ pub struct Land {
 
 impl MaterialModel for Land {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
-        let intersection = &intersection.facing(r);
-        let albedo = self.ground.albedo(&intersection.point, &intersection.normal);
-        scatter_bsdf(&LambertianBSDF { albedo: albedo.as_reflectance(), normal: intersection.normal }, r, &intersection.point, s)
+        let i = &intersection.facing(r);
+        let g = &self.ground;
+        let c = g.cover(&i.point, &i.normal);
+        // One of the surfaces covering the point, chosen by its share.
+        match crate::material::snow::pick(&[1. - c.snow - c.ice, c.snow, c.ice]) {
+            1 => scatter_bsdf(&g.snow[(rand() < c.snow_age) as usize].bsdf(&i.point, &i.normal, Some(s)), r, &i.point, s),
+            2 => scatter_bsdf(&g.ice[(rand() < c.blue) as usize].bsdf(&i.normal, Some(s)), r, &i.point, s),
+            _ => scatter_bsdf(&LambertianBSDF { albedo: c.ground.as_reflectance(), normal: i.normal }, r, &i.point, s),
+        }
     }
 }
 
@@ -705,7 +769,7 @@ impl LandscapeMedium {
         LandscapeMedium {
             land: Land { ground: ground.clone() },
             // Rivers are shallow and carry silt, sending back more green and brown than the sea.
-            water: PhysicalOcean { water: Color::new(0.01, 0.018, 0.018), roughness: 0.004, center: Some(centre) },
+            water: PhysicalOcean { water: Color::new(0.01, 0.018, 0.018), roughness: 0.004, center: Some(centre), absorption: None },
             ground,
         }
     }

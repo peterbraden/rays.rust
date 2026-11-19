@@ -523,10 +523,10 @@ mod tests {
         // A rough surface of small triangles, as the ocean is, with rays from above it and
         // grazing along it, limited by min and max: the mesh must find exactly the nearest
         // triangle hit in range.
-        use rand::{Rng, SeedableRng};
+        use rand::{RngExt, SeedableRng};
         use rand::rngs::StdRng;
         let mut rng = StdRng::seed_from_u64(6);
-        let mut u = |a: f64, b: f64| rng.gen_range(a, b);
+        let mut u = |a: f64, b: f64| rng.random_range(a..b);
         let n = 24;
         let mut positions = vec![];
         for z in 0 ..= n {
@@ -591,15 +591,15 @@ mod tests {
 
     #[test]
     fn test_ranges_agree_with_brute_force() {
-        use rand::{Rng, SeedableRng};
+        use rand::{RngExt, SeedableRng};
         let (_, mesh) = tessellated_sphere(12);
         let mut rng = rand::rngs::StdRng::seed_from_u64(5);
         for _ in 0 .. 1000 {
             let r = Ray {
-                ro: Vector3::new(rng.gen_range(-3., 3.), rng.gen_range(-3., 3.), rng.gen_range(-3., 3.)),
-                rd: Vector3::new(rng.gen_range(-1., 1.), rng.gen_range(-1., 1.), rng.gen_range(-1., 1.)),
+                ro: Vector3::new(rng.random_range(-3.0..3.), rng.random_range(-3.0..3.), rng.random_range(-3.0..3.)),
+                rd: Vector3::new(rng.random_range(-1.0..1.), rng.random_range(-1.0..1.), rng.random_range(-1.0..1.)),
             };
-            let (min, max) = (rng.gen_range(0., 2.), rng.gen_range(2., 6.));
+            let (min, max) = (rng.random_range(0.0..2.), rng.random_range(2.0..6.));
             let expected = (0 .. mesh.primitives() as usize).filter_map(|i| mesh.triangle(i).intersects(&r))
                 .map(|x| x.dist).filter(|&d| d >= min && d < max)
                 .min_by(|a, b| a.total_cmp(b));

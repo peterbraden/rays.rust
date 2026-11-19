@@ -21,6 +21,8 @@ pub struct RenderContext {
     /// (`adaptive`).
     squares: Vec<Color>,
     samples: Vec<usize>,
+    /// Each pixel's time spent rendering its samples this run, in seconds (`time_map`).
+    times: Vec<f64>,
     pub width: usize,
     pub height: usize,
     pub rays_cast: u64,
@@ -122,6 +124,8 @@ pub struct RenderedChunk {
     pixels: Vec<Color>,
     squares: Vec<Color>,
     samples: Vec<usize>,
+    /// Each pixel's time rendering them, in seconds.
+    times: Vec<f64>,
     rays_cast: u64,
 }
 
@@ -149,6 +153,7 @@ impl RenderContext {
             image: vec![Color::black(); width*height],
             squares: vec![Color::black(); width*height],
             samples: vec![0; width*height],
+            times: vec![0.; width*height],
             width,
             height,
             rays_cast: 0,
@@ -191,6 +196,11 @@ impl RenderContext {
                 Color::new(v, v, v)
             }).collect();
         LinearImage { width: self.width, height: self.height, pixels }
+    }
+
+    /// Each pixel's time spent rendering this run, in seconds, row by row from the bottom.
+    pub fn times(&self) -> &[f64] {
+        &self.times
     }
 
     /// The accumulated samples, encoded as a state file for a render identified by `key`.
@@ -254,6 +264,7 @@ impl RenderContext {
             for x in b.xmin .. b.xmax {
                 if p.samples[i] > 0 {
                     self.set_pixel(x, y, p.pixels[i], p.squares[i], p.samples[i]);
+                    self.times[y * self.width + x] += p.times[i];
                 }
                 i += 1;
             }
@@ -434,22 +445,29 @@ impl RenderableChunk {
             pixels: Vec::with_capacity(size),
             squares: Vec::with_capacity(size),
             samples: Vec::with_capacity(size),
+            times: Vec::with_capacity(size),
             rays_cast: 0,
         };
         // Pixels are rendered in parallel too, so a layer with few chunks of uneven cost (eg. sky
         // and a horizon of grazing rays) still keeps every thread busy. Results are collected in
         // order, so they are the same however the work is scheduled.
         let w = b.width();
-        let results: Vec<(u64, usize, Color, Color)> = (0 .. size).into_par_iter()
+        // Each pixel is timed on the thread that renders it, for `--time-map`.
+        let results: Vec<((u64, usize, Color, Color), f64)> = (0 .. size).into_par_iter()
             .map(|i| match self.count[i] {
-                0 => (0, 0, Color::black(), Color::black()),
-                n => render_pixel(b.xmin + i % w, b.ymin + i / w, self.first[i], n, s),
+                0 => ((0, 0, Color::black(), Color::black()), 0.),
+                n => {
+                    let start = crate::time_map::thread_time();
+                    let r = render_pixel(b.xmin + i % w, b.ymin + i / w, self.first[i], n, s);
+                    (r, crate::time_map::thread_time() - start)
+                },
             })
             .collect();
-        for (cast, samples, pixel, squares) in results {
+        for ((cast, samples, pixel, squares), time) in results {
             chunk.pixels.push(pixel);
             chunk.squares.push(squares);
             chunk.samples.push(samples);
+            chunk.times.push(time);
             chunk.rays_cast += cast;
         }
         chunk

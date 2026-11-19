@@ -3,7 +3,7 @@
 # tracer, bound for JavaScript by wasm-bindgen (`cargo install wasm-bindgen-cli` at the version
 # in web/Cargo.lock), into web/www/pkg. Then serve the repository's root, eg.
 #   python3 -m http.server 8000
-# and open http://localhost:8000/web/www/?scene=demo/scenes/spheres.json in a browser with
+# and open http://localhost:8000/web/www/?scene=demo/benchmarks/spheres.json in a browser with
 # WebGPU (Chrome, Edge; Safari 26; Firefox 141 on Windows).
 set -e
 cd "$(dirname "$0")/../web"

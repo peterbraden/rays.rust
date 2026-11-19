@@ -1,0 +1,65 @@
+{
+  "width": 320,
+  "height": 240,
+
+  "supersamples": 16,
+  "chunk_size": 64,
+  "samples_per_chunk": 4,
+
+  "background": [0.0, 0.0, 0.0],
+  "shadow_bias": 0.0001,
+  "max_depth": 4,
+
+  "materials": {
+    "RED_PLASTIC": {
+      "type": "plastic",
+      "refractive_index": 1.5,
+      "albedo": [0.8, 0.15, 0.1],
+      "roughness": 0.1,
+      "opacity": 0.2
+    },
+    "WHITE": {
+      "type": "lambertian",
+      "albedo": [0.8, 0.8, 0.8]
+    },
+    "GREY": {
+      "type": "lambertian",
+      "albedo": [0.3, 0.3, 0.3]
+    }
+  },
+  "media": {
+    "CHECKS": {
+      "type": "checkered-y-plane",
+      "m1": "WHITE",
+      "m2": "GREY"
+    }
+  },
+
+  "camera": {
+    "location": [4, 4, -7],
+    "lookat": [0, 1.2, 0],
+    "up": [0, 1, 0],
+    "angle": 0.6,
+    "aperture": 0.0
+  },
+
+  "lights": [],
+  "variables": {},
+
+  "objects": [
+    {
+      "type": "mesh",
+      "src": "demo/teapot.obj",
+      "scale": [1, 1, 1],
+      "material": "RED_PLASTIC"
+    },
+    {
+      "type": "checkeredplane",
+      "y": 0,
+      "medium": "CHECKS"
+    },
+    {
+      "type": "skysphere"
+    }
+  ]
+}

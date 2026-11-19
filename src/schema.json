@@ -8071,6 +8071,70 @@
         {"name": "color", "kind": "color", "default": [1, 1, 1], "doc": "Colour of the glow."}
       ],
       "example": {"type": "firework", "center": [0, 2, 0], "radius": 3, "time": 0.9}
+    },
+    "iceberg": {
+      "label": "Iceberg",
+      "group": "Water",
+      "doc": "An iceberg floating at sea level as its density says, riding the scene's ocean if it has one; without a material or medium, glacier ice and snow.",
+      "example": {"type": "iceberg", "location": [0, 0], "size": 20, "shape": "blocky", "detail": 3},
+      "fields": [
+        {"name": "location", "kind": "vec2", "default": [0, 0], "doc": "Where it floats, [x, z]."},
+        {"name": "size", "kind": "number", "default": 100, "doc": "Its length, m.", "min": 0.1},
+        {"name": "shape", "kind": "enum", "default": "blocky", "doc": "Its form.", "options": ["tabular", "blocky", "dome", "pinnacle", "wedge", "drydock"]},
+        {"name": "yaw", "kind": "number", "default": null, "doc": "Its heading, degrees; absent means one chosen by its seed."},
+        {"name": "density", "kind": "number", "default": 900, "doc": "Its ice's density, kg/m³, which sets how much of it floats above the sea.", "min": 100, "max": 1020},
+        {"name": "detail", "kind": "integer", "default": 7, "doc": "How finely its surface is subdivided.", "min": 0, "max": 8},
+        {"name": "sea_level", "kind": "number", "default": 0, "doc": "Height of the sea it floats on."},
+        {"name": "seed", "kind": "integer", "default": 0, "doc": "Random seed."}
+      ]
+    },
+    "ice_floes": {
+      "label": "Ice floes",
+      "group": "Water",
+      "doc": "Pack ice: floes of sea ice, or lumps of glacier ice (brash), covering part of the sea and riding the scene's ocean if it has one.",
+      "example": {"type": "ice_floes", "center": [0, 0], "extent": [40, 30], "size": [2, 8], "concentration": 0.5},
+      "fields": [
+        {"name": "center", "kind": "vec2", "default": [0, 0], "doc": "Centre of the field, [x, z]."},
+        {"name": "extent", "kind": "vec2", "default": [400, 300], "doc": "Half its size along x and z, m."},
+        {"name": "concentration", "kind": "number", "default": 0.6, "doc": "Fraction of the sea the ice covers.", "min": 0, "max": 0.95},
+        {"name": "size", "kind": "vec2", "default": [2, 60], "doc": "Smallest and largest floes across, m."},
+        {"name": "thickness", "kind": "number", "default": 1, "doc": "Thickness of the floes, m.", "min": 0.01},
+        {"name": "style", "kind": "enum", "default": "floes", "doc": "Slabs of sea ice, or brash: lumps of glacier ice.", "options": ["floes", "brash"]},
+        {"name": "clumping", "kind": "number", "default": 0.5, "doc": "How much the floes gather in clumps.", "min": 0, "max": 1},
+        {"name": "sea_level", "kind": "number", "default": 0, "doc": "Height of the sea they float on."},
+        {"name": "seed", "kind": "integer", "default": 0, "doc": "Random seed."}
+      ]
+    },
+    "overcast": {
+      "label": "Overcast",
+      "group": "Clouds",
+      "doc": "The overcast of bad weather: a nimbostratus deck kilometres thick, its underside hanging in lumps along the wind, with scud below; lit through diffusion.",
+      "example": {"type": "overcast", "base": 900, "thickness": 2500, "extent": 5000},
+      "needs": ["sun", "skysphere"],
+      "fields": [
+        {"name": "base", "kind": "number", "default": 900, "doc": "Height of the cloud base, m."},
+        {"name": "thickness", "kind": "number", "default": 2500, "doc": "Depth of the deck, m.", "min": 1},
+        {"name": "density", "kind": "number", "default": 0.03, "doc": "Extinction where the cloud is densest, per m.", "min": 0},
+        {"name": "system_size", "kind": "number", "default": 8000, "doc": "Size of the broad patches of thicker and thinner cloud, m.", "min": 1},
+        {"name": "thickness_variation", "kind": "number", "default": 0.5, "doc": "How much those patches vary the deck's thickness.", "min": 0, "max": 1},
+        {"name": "lump_size", "kind": "number", "default": 1000, "doc": "Size of the rounded masses on its underside, m.", "min": 1},
+        {"name": "base_variation", "kind": "number", "default": 300, "doc": "How far the underside's masses hang, m.", "min": 0},
+        {"name": "contrast", "kind": "number", "default": 0.8, "doc": "How much thinner the cloud is between the masses.", "min": 0, "max": 1},
+        {"name": "anisotropy", "kind": "number", "default": 2, "doc": "How much longer the masses are along the wind.", "min": 0.1},
+        {"name": "wind_direction", "kind": "vec2", "default": [1, 0], "doc": "Direction [x, z] the rolls lie along."},
+        {"name": "breaks", "kind": "number", "default": 0, "doc": "Gaps in the deck.", "min": 0, "max": 1},
+        {"name": "softness", "kind": "number", "default": 120, "doc": "Softness of the ragged base, m.", "min": 0},
+        {"name": "detail_size", "kind": "number", "default": 220, "doc": "Size of the ragged base's detail, m.", "min": 1},
+        {"name": "erosion", "kind": "number", "default": 0.5, "doc": "How much that detail eats into the base.", "min": 0, "max": 1},
+        {"name": "scud", "kind": "number", "default": 0.25, "doc": "How much scud (ragged low cloud) hangs below.", "min": 0, "max": 1},
+        {"name": "scud_depth", "kind": "number", "default": 450, "doc": "Depth of the scud layer, m.", "min": 1},
+        {"name": "scud_size", "kind": "number", "default": 600, "doc": "Size of the scud's fragments, m.", "min": 1},
+        {"name": "scud_density", "kind": "number", "default": 0.02, "doc": "Extinction of the scud, per m.", "min": 0},
+        {"name": "center", "kind": "vec2", "default": [0, 0], "doc": "Centre [x, z] of the deck."},
+        {"name": "extent", "kind": "number", "default": 60000, "doc": "Half the deck's width, m.", "min": 1},
+        {"name": "fade", "kind": "number", "default": 0, "doc": "Fraction of the extent over which it fades out.", "min": 0, "max": 1},
+        {"name": "seed", "kind": "integer", "default": 0, "doc": "Random seed."}
+      ]
     }
   },
   "materials": {
@@ -9049,6 +9113,35 @@
         }
       ],
       "example": {"type": "mix", "materials": ["M", "M"], "amount": 0.5}
+    },
+    "snow": {
+      "label": "Snow",
+      "group": "Other",
+      "doc": "Snow, coloured by ice's measured absorption and the size of its grains, with soot and dust, and glints from its grains.",
+      "example": {"type": "snow", "preset": "settled"},
+      "fields": [
+        {"name": "preset", "kind": "enum", "default": "settled", "doc": "Kind of snow; the fields below default from it.", "options": ["fresh", "settled", "old", "firn", "dirty"]},
+        {"name": "grain_size", "kind": "number", "default": 0.3, "doc": "Grain size, mm (default from the preset; settled's shown).", "min": 0.001},
+        {"name": "soot", "kind": "number", "default": 15, "doc": "Soot, parts per billion (default from the preset; settled's shown).", "min": 0},
+        {"name": "dust", "kind": "number", "default": 5, "doc": "Dust, parts per million (default from the preset; settled's shown).", "min": 0},
+        {"name": "sparkle", "kind": "number", "default": 0.06, "doc": "How much the grains glint (default from the preset; settled's shown).", "min": 0, "max": 1},
+        {"name": "scale", "kind": "number", "default": 1, "doc": "Scene units per metre.", "min": 1e-09},
+        {"name": "seed", "kind": "integer", "default": 0, "doc": "Random seed."}
+      ]
+    },
+    "ice": {
+      "label": "Glacier ice",
+      "group": "Other",
+      "doc": "Glacier ice: a Fresnel surface over light diffused by its bubbles, coloured by ice's absorption.",
+      "example": {"type": "ice", "preset": "glacier"},
+      "fields": [
+        {"name": "preset", "kind": "enum", "default": "glacier", "doc": "Kind of ice; the fields below default from it.", "options": ["white", "glacier", "blue", "clear"]},
+        {"name": "bubble_radius", "kind": "number", "default": 0.6, "doc": "Bubbles' radius, mm (default from the preset; glacier's shown).", "min": 0.0001},
+        {"name": "bubbles", "kind": "number", "default": 4, "doc": "Bubbles per cm³ (default from the preset; glacier's shown).", "min": 0},
+        {"name": "soot", "kind": "number", "default": 0, "doc": "Soot, parts per billion.", "min": 0},
+        {"name": "dust", "kind": "number", "default": 1, "doc": "Dust, parts per million (default from the preset; glacier's shown).", "min": 0},
+        {"name": "roughness", "kind": "number", "default": 0.08, "doc": "Roughness of its surface (default from the preset; glacier's shown).", "min": 0, "max": 1}
+      ]
     }
   },
   "media": {

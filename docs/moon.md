@@ -10,8 +10,7 @@ horizon and veils it by day, it can hide the sun, and the planet's shadow falls 
 { "type": "moon", "seed": 1, "direction": [0.35, 0.5, 1] }
 ```
 
-Scenes: `demo/scenes/moon.json` (a quarter moon through a telescope), `moonrise.json` (the
-full moon rising at dusk), `moon-daytime.json` (a pale gibbous moon in the blue sky),
+Scenes: `demo/scenes/moon.json` (a quarter moon through a telescope),
 `moon-crescent.json` (a crescent after sunset, its night side lit by earthshine), and lit by
 the moon: `moon-glade.json` (its path of light on the sea) and `moonlit-alpine.json`.
 

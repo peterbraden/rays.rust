@@ -536,21 +536,21 @@ impl<T: Geometry> GeometryBvh<T> {
 mod tests {
     use super::*;
     use crate::shapes::sphere::Sphere;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use rand::rngs::StdRng;
 
     fn spheres(n: usize, seed: u64) -> Vec<Sphere> {
         let mut rng = StdRng::seed_from_u64(seed);
         (0 .. n).map(|_| Sphere::new(
-            Vector3::new(rng.gen_range(-10., 10.), rng.gen_range(-10., 10.), rng.gen_range(-10., 10.)),
-            rng.gen_range(0.05, 1.5),
+            Vector3::new(rng.random_range(-10.0..10.), rng.random_range(-10.0..10.), rng.random_range(-10.0..10.)),
+            rng.random_range(0.05..1.5),
         )).collect()
     }
 
     fn random_ray(rng: &mut StdRng) -> Ray {
         Ray {
-            ro: Vector3::new(rng.gen_range(-15., 15.), rng.gen_range(-15., 15.), rng.gen_range(-15., 15.)),
-            rd: Vector3::new(rng.gen_range(-1., 1.), rng.gen_range(-1., 1.), rng.gen_range(-1., 1.)) * 3.,
+            ro: Vector3::new(rng.random_range(-15.0..15.), rng.random_range(-15.0..15.), rng.random_range(-15.0..15.)),
+            rd: Vector3::new(rng.random_range(-1.0..1.), rng.random_range(-1.0..1.), rng.random_range(-1.0..1.)) * 3.,
         }
     }
 
@@ -569,7 +569,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(2);
         for _ in 0 .. 2000 {
             let r = random_ray(&mut rng);
-            let (min, max) = (rng.gen_range(0., 3.), rng.gen_range(3., 60.));
+            let (min, max) = (rng.random_range(0.0..3.), rng.random_range(3.0..60.));
             let expected = brute_force(&original, &r, min, max);
             let found = bvh.nearest(&r, min, max, |i, _| items[i].intersects_beyond(&r, min)).map(|(_, x)| x.dist);
             assert_eq!(expected, found, "{}", r);
@@ -590,7 +590,7 @@ mod tests {
             let mut rng = StdRng::seed_from_u64(8);
             for _ in 0 .. 1000 {
                 let r = random_ray(&mut rng);
-                let (min, max) = (rng.gen_range(0., 3.), rng.gen_range(3., 60.));
+                let (min, max) = (rng.random_range(0.0..3.), rng.random_range(3.0..60.));
                 let expected = brute_force(&original, &r, min, max);
                 let found = bvh.nearest(&r, min, max, |i, _| collapsed[i].intersects_beyond(&r, min)).map(|(_, x)| x.dist);
                 assert_eq!(expected, found, "{}", r);
@@ -654,7 +654,7 @@ mod tests {
         // components starting on the grid, running along faces: where box tests meet infinite
         // and NaN slab distances, and entries equal to exits.
         let mut rng = StdRng::seed_from_u64(5);
-        let mut int = |a: i32, b: i32| rng.gen_range(a, b + 1) as f64;
+        let mut int = |a: i32, b: i32| rng.random_range(a..b + 1) as f64;
         let original: Vec<BBox> = (0..120).map(|_| {
             let (x, y, z) = (int(-16, 14), int(-16, 14), int(-16, 14));
             BBox::new(Vector3::new(x, y, z), Vector3::new(x + int(0, 2), y + int(0, 2), z + int(0, 2)))

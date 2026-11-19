@@ -78,6 +78,11 @@ Rays.rust is a raytracer written in Rust with the following features:
   shapes, materials, lights, media, plants and camera effects in one garden; spectral, light
   BVH, motion blur, realistic lens, flare and adaptive sampling at once), not new scenes.
   Fixed scenes for measurements (`scripts/variance.sh`) are in demo/benchmarks/
+- Render speed over history: `scripts/benchmark.py` builds master commits in a scratch worktree
+  (target/bench) and renders `demo/benchmarks/teapot-sky.json` (mesh, plane, skysphere; kept in
+  the oldest scene format so every commit can read it) 5 times each, appending time, rays and
+  the image difference to the previous row to `demo/benchmarks/history.csv` (skipping commits
+  already there; `--history N --every K` to backfill); `scripts/plot-benchmark.py` graphs it as SVG
 
 ## Development Best Practices
 - Make small, incremental changes focused on a single concern

@@ -481,6 +481,9 @@ pub struct Leader {
     /// target), with branches dying at the rate `dying`.
     pub field: bool,
     pub eta: f64,
+    /// The radius of the charge layers the in-cloud channels spread through (m); by default a
+    /// quarter of `cloud_length`, at least 2 km.
+    pub charge_radius: Option<f64>,
 }
 
 impl Default for Leader {
@@ -507,6 +510,7 @@ impl Default for Leader {
             seed: 0,
             field: true,
             eta: 3.,
+            charge_radius: None,
         }
     }
 }
@@ -538,6 +542,33 @@ impl Field {
             (l.start - up * 1500., 0.15, 500.),
         ];
         Field { ground: l.ground, charges, per_metre: -4e-5, pending: (Vector3::zeros(), 0.), chunk: 4. * l.step }
+    }
+
+    /// The field for a flash's channels inside the cloud: positive leaders working through the
+    /// negative charge layer, which in the stratiform part of a storm and its anvil spreads
+    /// tens of kilometres sideways. The layer is a disc of `radius` at the start's height (a
+    /// grid of charges, -1 in all) with the positive layer 4 km above it (+1), and the channel
+    /// deposits positive charge. Near the middle of the layer its own field is weak, and the
+    /// channel's charge pushes its tips outwards to fresh charge: so the channels spread through
+    /// the layer, held in it, branching (spider lightning; Rakov and Uman 2003, ch. 9).
+    fn layer(l: &Leader, radius: f64) -> Field {
+        let n = 9;
+        let spacing = 2. * radius / (n - 1) as f64;
+        let mut cells = vec![];
+        for i in 0..n {
+            for j in 0..n {
+                let (x, z) = (-radius + i as f64 * spacing, -radius + j as f64 * spacing);
+                if x * x + z * z <= radius * radius * 1.05 {
+                    cells.push(Vector3::new(x, 0., z));
+                }
+            }
+        }
+        let q = 1. / cells.len() as f64;
+        let soft = spacing.max(4. * l.cloud_depth.min(radius));
+        let up = Vector3::new(0., 4000., 0.);
+        let mut charges: Vec<(Vector3<f64>, f64, f64)> = cells.iter().map(|c| (l.start + c, -q, soft)).collect();
+        charges.extend(cells.iter().map(|c| (l.start + up + c, q, soft)));
+        Field { ground: l.ground, charges, per_metre: 3e-4, pending: (Vector3::zeros(), 0.), chunk: 4. * l.step }
     }
 
     /// Adds the charge of the channel from `a` to `b`.
@@ -717,37 +748,75 @@ impl Leader {
             let a = 2. * PI * (i as f64 + rng.next_f64() * 0.5) / 3.;
             Tip { at: 0, dir: Vector3::new(a.cos(), 0.15 * gaussian(&mut rng), a.sin()).normalize(), cloud: true, generation: 0 }
         }).collect();
-        while grown < self.cloud_length && !tips.is_empty() {
+        let radius = self.charge_radius.unwrap_or((self.cloud_length / 4.).max(2000.));
+        let mut layer = Field::layer(self, radius);
+        let mut stalled: Vec<u32> = vec![0; tips.len()];
+        let mut stuck = 0;
+        while grown < self.cloud_length && !tips.is_empty() && stuck < 200 {
+            // The field just ahead of each tip; a positive leader moves with it.
+            let ahead: Vec<(f64, Vector3<f64>)> = if self.field {
+                tips.iter().map(|t| {
+                    let e = layer.at(&(points[t.at].p + t.dir * self.step));
+                    let n = e.norm().max(1e-300);
+                    (e.dot(&t.dir).max(0.) + 0.05 * n, e / n)
+                }).collect()
+            } else {
+                vec![(1., Vector3::zeros()); tips.len()]
+            };
+            let strongest = ahead.iter().map(|a| a.0).fold(0., f64::max).max(1e-300);
             let mut born = vec![];
             let mut k = 0;
+            let mut advanced = false;
             while k < tips.len() && grown < self.cloud_length {
+                let (strength, along) = ahead[k];
+                if self.field && rng.next_f64() > (strength / strongest).powf(self.eta + 2.) {
+                    stalled[k] += 1;
+                    if tips.len() > 1 && stalled[k] > 15 {
+                        tips.swap_remove(k);
+                        stalled.swap_remove(k);
+                    } else {
+                        k += 1;
+                    }
+                    continue;
+                }
+                stalled[k] = 0;
+                advanced = true;
                 let from = points[tips[k].at].p;
-                // Held near the charge layer, spreading outwards.
-                let level = (self.start.y - from.y) / self.cloud_depth.max(1.);
-                let out = Vector3::new(from.x - self.start.x, 0., from.z - self.start.z);
-                let out = if out.norm() > 1. { out.normalize() } else { tips[k].dir };
-                let field = Vector3::new(0., level, 0.) * 0.8 + out;
+                let field = if self.field {
+                    // Along the field, and held in the layer.
+                    along + Vector3::new(0., (self.start.y - from.y) / self.cloud_depth.max(1.), 0.) * 0.5
+                } else {
+                    // Held near the charge layer, spreading outwards.
+                    let level = (self.start.y - from.y) / self.cloud_depth.max(1.);
+                    let out = Vector3::new(from.x - self.start.x, 0., from.z - self.start.z);
+                    let out = if out.norm() > 1. { out.normalize() } else { tips[k].dir };
+                    Vector3::new(0., level, 0.) * 0.8 + out
+                };
                 let kick = Vector3::new(gaussian(&mut rng), gaussian(&mut rng) * 0.6, gaussian(&mut rng)) * sigma * 1.2;
-                let dir = (tips[k].dir + field * sigma * 2. + kick).normalize();
+                let dir = (tips[k].dir + field * sigma * if self.field { 5. } else { 2. } + kick).normalize();
                 let len = step_length(self.step, &mut rng);
                 let to = from + dir * len;
                 grown += len;
                 points.push(Point { p: to, parent: Some(tips[k].at), cloud: true });
+                layer.add(&from, &to);
                 tips[k].at = points.len() - 1;
                 tips[k].dir = dir;
                 let generation = tips[k].generation;
-                if rng.next_f64() < self.branching * FORK_FALLOFF.powi(generation).max(0.3) && tips.len() < 32 {
+                if rng.next_f64() < self.branching * if self.field { 0.5 } else { 1. } * FORK_FALLOFF.powi(generation).max(0.3) && tips.len() < 32 {
                     let side = Vector3::new(-dir.z, 0.2 * gaussian(&mut rng), dir.x).normalize() * if rng.next_f64() < 0.5 { 1. } else { -1. };
                     let angle = (25. + 35. * rng.next_f64()).to_radians();
                     born.push(Tip { at: tips[k].at, dir: (dir * angle.cos() + side * angle.sin()).normalize(), cloud: true, generation: generation + 1 });
                 }
-                if tips.len() > 1 && rng.next_f64() < self.dying * 0.25 {
+                if tips.len() > 1 && !self.field && rng.next_f64() < self.dying * 0.25 {
                     tips.swap_remove(k);
+                    stalled.swap_remove(k);
                 } else {
                     k += 1;
                 }
             }
+            stalled.extend(born.iter().map(|_| 0));
             tips.extend(born);
+            stuck = if advanced { 0 } else { stuck + 1 };
         }
 
         self.segments(&points, main_tip, &mut rng)
@@ -867,6 +936,7 @@ pub fn parse_lightning(o: &Value) -> SceneObject {
         radius: num("radius", d.radius).max(1e-3),
         field: o["field"].as_bool().unwrap_or(d.field),
         eta: num("eta", d.eta).max(0.),
+        charge_radius: o.get("charge_radius").map(|v| SceneFile::parse_number(v, 2000.).max(100.)),
         seed: SceneFile::parse_seed(o).unwrap_or(0),
     };
     let mut segments = leader.grow();
@@ -1031,4 +1101,19 @@ mod tests {
         let beside = Vector3::new(300., 2500., 0.);
         assert!((-f.at(&beside)).y > (-after).y);
     }
+
+    #[test]
+    fn test_in_cloud_channels_spread_through_their_charge_layer() {
+        // A positive leader in the negative charge layer: held at its height, pushed outwards
+        // by its own charge, a few long channels spreading kilometres through it.
+        for seed in 0..3 {
+            let l = Leader { kind: Kind::Intracloud, seed, start: Vector3::new(0., 9000., 0.), cloud_length: 30000., cloud_depth: 300., ..Leader::default() };
+            let s = l.grow();
+            let reach = s.iter().map(|s| (s.b.x * s.b.x + s.b.z * s.b.z).sqrt()).fold(0., f64::max);
+            let mean_dy = s.iter().map(|s| (s.b.y - 9000.).abs()).sum::<f64>() / s.len() as f64;
+            assert!(reach > 4000., "seed {}: reach {}", seed, reach);
+            assert!(mean_dy < 400., "seed {}: {}", seed, mean_dy);
+        }
+    }
 }
+

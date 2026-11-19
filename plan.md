@@ -1583,7 +1583,16 @@ UI, file IO and rayon's threads would follow.
      90, 32 spp); compile and first pass 7.8 s (7.4 s before).
    Next, by these: the host's part of a block (paths built in parallel; uploaded as camera
    rays, 32 bytes, with the paths started by a kernel, not 96; then the next block built
-   while the GPU runs this one). Shadow rays as a stage, and shading by material, wait: the
+   while the GPU runs this one).
+   Done, the three, a commit each. A 64 spp render at 640 x 360 on the M2, before -> after
+   each: spheres 2.03 -> 1.72 -> 1.47 -> 1.30 s, sky-sunset 1.90 -> 1.66 -> 1.38 -> 1.24, demo
+   2.29 -> 2.05 -> 1.86 -> 1.72 (a block's preparation, spheres: 705 -> 479 -> 257 ms, then
+   overlapped). The paths are started by `start_paths` from the rays (whose d.w carries the
+   sample's number), which no longer renormalises them (unit already, from the host's f64), so
+   images differ only in rays' last bits: FLIP against trace unchanged to four places. The
+   rays' buffer counts in the budget: 4 lanes at 640 x 360, not 5. The next block's rays are
+   made on a guess (every pixel carried on) and kept only if the scheduler's plan matches,
+   which it did for every block here; adaptive sampling's plans fall back. Shadow rays as a stage, and shading by material, wait: the
    traversal is 16-46% of the CPU build's time on these scenes, and the host is the larger
    cost on the light ones.
 3. The fallback framework: per-area status, classification, CPU queues for materials first,

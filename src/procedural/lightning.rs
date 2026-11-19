@@ -29,9 +29,9 @@
 //! hundred joules per metre between 0.4 and 1.1 µm (E. P. Krider, R. C. Noggle and M. A. Uman,
 //! J. Appl. Meteorol. 7, 1968; Y. Guo and E. P. Krider, J. Geophys. Res. 87, 1982), about 1.5·10⁴
 //! lm s/m in the visible. The light is on the scene's scale, on which a sun of intensity 1 gives
-//! 1.27·10⁵ lux (`sun_intensity`, set from the scene's sun). Its colour is a blackbody at
-//! `temperature` (the channel's spectrum is mostly lines of nitrogen, oxygen and hydrogen, at
-//! some 30 000 K, which look bluish white).
+//! 1.27·10⁵ lux (`sun_intensity`, set from the scene's sun). Its colour is lightning's measured
+//! spectrum (`spectrum::lightning`: lines of ionised nitrogen and of hydrogen's Hα over a
+//! continuum, bluish white), or a blackbody at `temperature` if one is given.
 //!
 //! As a light, the channel is sampled segment by segment: a light BVH (`light_bvh`) over its
 //! segments chooses one by how much light it could send to the point being lit, then a point on
@@ -477,6 +477,11 @@ pub struct Leader {
     /// The main channel's radius (m); others are narrower as they are fainter.
     pub radius: f64,
     pub seed: u64,
+    /// Whether the leader grows in the storm's electric field (`Field`): tips advance with
+    /// probability (E / E_max)^`eta` and are drawn along it. Otherwise straight down (or to the
+    /// target), with branches dying at the rate `dying`.
+    pub field: bool,
+    pub eta: f64,
 }
 
 impl Default for Leader {
@@ -501,7 +506,68 @@ impl Default for Leader {
             roughness: 0.18,
             radius: 0.3,
             seed: 0,
+            field: true,
+            eta: 3.,
         }
+    }
+}
+
+/// The storm's electric field, for a leader growing in it (`Leader::field`), in arbitrary
+/// units: the cloud as a tripole of charge regions, the negative charge where the flash starts
+/// (-1), a positive one 4 km above it (+1) and a small positive pocket 1.5 km below it (+0.15),
+/// each spread over a kilometre or so; the leader's own negative charge, about a millicoulomb
+/// per metre against the tens of coulombs in the charge region (Rakov and Uman, "Lightning:
+/// Physics and Effects", 2003, ch. 4); and for each charge its image in the conducting ground.
+/// The channel's charge strengthens the field at its tips, screens the space beside it, and,
+/// with its image, draws the leading tip to the ground ever harder as it nears it.
+struct Field {
+    ground: f64,
+    charges: Vec<(Vector3<f64>, f64, f64)>,
+    /// The channel's charge per metre, and charge not yet placed (gathered into charges of
+    /// about `chunk` metres of channel each).
+    per_metre: f64,
+    pending: (Vector3<f64>, f64),
+    chunk: f64,
+}
+
+impl Field {
+    fn new(l: &Leader) -> Field {
+        let up = Vector3::new(0., 1., 0.);
+        let charges = vec![
+            (l.start, -1., 800.),
+            (l.start + up * 4000., 1., 1200.),
+            (l.start - up * 1500., 0.15, 500.),
+        ];
+        Field { ground: l.ground, charges, per_metre: -4e-5, pending: (Vector3::zeros(), 0.), chunk: 4. * l.step }
+    }
+
+    /// Adds the charge of the channel from `a` to `b`.
+    fn add(&mut self, a: &Vector3<f64>, b: &Vector3<f64>) {
+        let len = (b - a).norm();
+        let (sum, q) = self.pending;
+        let mid = (a + b) / 2.;
+        let q_new = q + self.per_metre * len;
+        let sum = sum + mid * self.per_metre * len;
+        if q_new.abs() >= self.chunk * self.per_metre.abs() {
+            self.charges.push((sum / q_new, q_new, 0.5 * self.chunk));
+            self.pending = (Vector3::zeros(), 0.);
+        } else {
+            self.pending = (sum, q_new);
+        }
+    }
+
+    /// The field at p.
+    fn at(&self, p: &Vector3<f64>) -> Vector3<f64> {
+        let mut e = Vector3::zeros();
+        for (c, q, soft) in &self.charges {
+            let image = Vector3::new(c.x, 2. * self.ground - c.y, c.z);
+            for (at, sign) in [(c, 1.), (&image, -1.)] {
+                let r = p - at;
+                let d2 = r.norm_squared() + soft * soft;
+                e += r * (q * sign / (d2 * d2.sqrt()));
+            }
+        }
+        e
     }
 }
 
@@ -558,16 +624,55 @@ impl Leader {
         if self.kind == Kind::CloudToGround {
             let mut tips = vec![Tip { at: 0, dir: Vector3::new(0.3 * gaussian(&mut rng), -1., 0.3 * gaussian(&mut rng)).normalize(), cloud: false, generation: 0 }];
             let max_steps = (20. * (self.start.y - self.ground) / self.step) as usize + 100;
+            let mut storm = Field::new(self);
+            // Steps each tip has gone without advancing.
+            let mut stalled: Vec<u32> = vec![0];
             'race: for _ in 0..max_steps {
+                // The field just ahead of each tip, where it would grow, along its way.
+                let ahead: Vec<(f64, Vector3<f64>)> = tips.iter().map(|t| {
+                    if !self.field { return (1., self.field_at(&points[t.at].p)); }
+                    let probe = points[t.at].p + t.dir * self.step;
+                    let e = storm.at(&probe);
+                    // A negative leader moves against the field.
+                    let drive = -e;
+                    let n = drive.norm().max(1e-300);
+                    (drive.dot(&t.dir).max(0.) + 0.05 * n, drive / n)
+                }).collect();
+                let strongest = ahead.iter().map(|a| a.0).fold(0., f64::max).max(1e-300);
                 let mut born = vec![];
                 let mut k = 0;
                 while k < tips.len() {
+                    let (strength, along) = ahead[k];
+                    // Tips advance in proportion to the field at them, as in the dielectric
+                    // breakdown model; the strongest always does.
+                    if self.field && rng.next_f64() > (strength / strongest).powf(self.eta) {
+                        stalled[k] += 1;
+                        // A tip left behind for long enough has lost the race.
+                        if k > 0 && stalled[k] > 15 {
+                            tips.swap_remove(k);
+                            stalled.swap_remove(k);
+                        } else {
+                            k += 1;
+                        }
+                        continue;
+                    }
+                    stalled[k] = 0;
                     let from = points[tips[k].at].p;
-                    let field = self.field_at(&from);
+                    let field = if self.field {
+                        match self.target {
+                            None => along,
+                            // Drawn to the target too: whatever draws a real leader there (the
+                            // charges near the cloud's edge, a tall object) isn't modelled.
+                            Some(_) => (along + self.field_at(&from) * 2.).normalize(),
+                        }
+                    } else {
+                        self.field_at(&from)
+                    };
                     let kick = Vector3::new(gaussian(&mut rng), gaussian(&mut rng), gaussian(&mut rng)) * sigma;
                     let dir = (tips[k].dir + field * self.pull * sigma * 2. + kick).normalize();
                     let to = from + dir * step_length(self.step, &mut rng);
                     points.push(Point { p: to, parent: Some(tips[k].at), cloud: false });
+                    storm.add(&from, &to);
                     tips[k].at = points.len() - 1;
                     tips[k].dir = dir;
                     if to.y - self.ground < self.striking_distance {
@@ -582,16 +687,20 @@ impl Leader {
                         let angle = (20. + 30. * rng.next_f64()).to_radians();
                         born.push(Tip { at: tips[k].at, dir: (dir * angle.cos() + side * angle.sin()).normalize(), cloud: false, generation: generation + 1 });
                     }
-                    if k > 0 && rng.next_f64() < self.dying {
+                    // Without the field, branches die out at a fixed rate; in it, they stall.
+                    if k > 0 && !self.field && rng.next_f64() < self.dying {
                         tips.swap_remove(k);
+                        stalled.swap_remove(k);
                     } else {
                         k += 1;
                     }
                 }
                 // A branch that overtakes the leader may become it: the lowest tip leads.
+                stalled.extend(born.iter().map(|_| 0));
                 tips.extend(born);
                 if let Some(lowest) = (0..tips.len()).min_by(|a, b| points[tips[*a].at].p.y.total_cmp(&points[tips[*b].at].p.y)) {
                     tips.swap(0, lowest);
+                    stalled.swap(0, lowest);
                 }
             }
             // The last gap closes with a short upward leader: straight to the ground.
@@ -730,7 +839,7 @@ impl Leader {
 /// `cloud_depth`, `cloud_current`, `branch_current`, `branch_scale`, `detail`, `roughness`,
 /// `radius` (at least `pixel_width` pixels wide, 0.5 by default, from the `camera` at
 /// `pixel_angle`, both set from the scene's); its light: `luminous_energy` (lm s per metre per stroke), `strokes`, `shutter`
-/// (s), `temperature` (K), and `sun_intensity` (the scene's sun's, set from it).
+/// (s), `temperature` (K: a blackbody in place of lightning's spectrum), and `sun_intensity` (the scene's sun's, set from it).
 pub fn parse_lightning(o: &Value) -> SceneObject {
     let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
     let d = Leader::default();
@@ -757,6 +866,8 @@ pub fn parse_lightning(o: &Value) -> SceneObject {
         detail: num("detail", d.detail).max(0.1),
         roughness: num("roughness", d.roughness).max(0.),
         radius: num("radius", d.radius).max(1e-3),
+        field: o["field"].as_bool().unwrap_or(d.field),
+        eta: num("eta", d.eta).max(0.),
         seed: SceneFile::parse_seed(o).unwrap_or(0),
     };
     let mut segments = leader.grow();
@@ -779,7 +890,11 @@ pub fn parse_lightning(o: &Value) -> SceneObject {
     let luminance = flux / (2. * PI * leader.radius) / PI;
     let radiance = luminance / SUN_ILLUMINANCE * num("sun_intensity", 1.);
     let material = LightningMaterial {
-        emission: Emission::blackbody(num("temperature", 25_000.)),
+        // Its measured spectrum of lines, or a blackbody if given a temperature.
+        emission: match o["temperature"].as_f64() {
+            Some(t) => Emission::blackbody(t),
+            None => Emission::lightning(),
+        },
         radiance,
         mean: channel.mean_radiance,
     };
@@ -891,5 +1006,30 @@ mod tests {
         let bounds = a.area_lights[0].geometry.bounds();
         assert!(bounds.max.y > 3000. && bounds.min.y < 0.);
         assert!(bounds.max.x - bounds.min.x > 50.);
+    }
+
+    #[test]
+    fn test_field_draws_a_negative_leader_down_and_ahead() {
+        let l = Leader::default();
+        let mut f = Field::new(&l);
+        // Beneath the negative charge region, a negative leader is driven down (-E points down).
+        let below = l.start - Vector3::new(0., 2500., 0.);
+        assert!((-f.at(&below)).y < 0.);
+        // A channel reaching down from the cloud strengthens the field ahead of its tip: the end
+        // effect of a charged conductor, which grows as it nears the ground.
+        let tip = Vector3::new(0., 1200., 0.);
+        let ahead = tip - Vector3::new(0., 100., 0.);
+        let before = f.at(&ahead).norm();
+        let mut y = l.start.y;
+        while y > tip.y {
+            f.add(&Vector3::new(0., y, 0.), &Vector3::new(0., y - 50., 0.));
+            y -= 50.;
+        }
+        let after = f.at(&ahead);
+        assert!(after.norm() > 3. * before, "{} vs {}", after.norm(), before);
+        assert!((-after).y < 0.);
+        // Beside the channel, its charge screens: the drive down is weaker there than ahead.
+        let beside = Vector3::new(300., 2500., 0.);
+        assert!((-f.at(&beside)).y > (-after).y);
     }
 }

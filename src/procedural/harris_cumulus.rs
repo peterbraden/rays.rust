@@ -217,6 +217,37 @@ pub struct SimulationParams {
     pub seed: u64,
     /// The time of day (s since the forcing's start) at which the simulation begins.
     pub start: f64,
+    /// How often (s) each set of the texture coordinates carried with the flow is renewed
+    /// (`CloudSimulation::texture`), the two sets half a period apart.
+    pub texture_period: f64,
+    /// A patch of ground heating more strongly than the rest (a town, a dry field): its
+    /// centre (m, across the grid from its corner), radius (m), and how much more it gives off
+    /// at its middle (1 doubles the fluxes there), falling off as a Gaussian. It launches one
+    /// thermal stronger than the others, and so one cloud, where it is: a hero cumulus.
+    pub hot_spot: Option<(Vector2<f64>, f64, f64)>,
+    /// A cloud to start from (`Bubble`), rather than waiting for the ground to raise one.
+    pub bubble: Option<Bubble>,
+}
+
+/// # A cloud to start from
+///
+/// As in studies of single clouds (the "warm bubble" that starts most simulations of moist
+/// convection, eg. Weisman and Klemp's), a ball of air warmer than its surroundings by
+/// `warmth` K at its middle and saturated with `supersaturation` to spare, falling off to the
+/// sounding at `radius` (as cos²): its first step condenses the excess into cloud, whose
+/// latent heat keeps it buoyant, and it rises and grows into a cumulus in minutes, where it is
+/// put, without the hour of heating that raises clouds from a clear morning (and with it the
+/// whole field of them).
+#[derive(Debug, Clone, Copy)]
+pub struct Bubble {
+    /// Its middle: (x, height, z), m, across the grid from its corner.
+    pub centre: Vector3<f64>,
+    pub radius: f64,
+    /// Its vertical semi-axis (m): a tall ellipsoid seeds a cloud's body, cloudy from its base
+    /// up, where a ball rises as a lone thermal, a dome on a thin stem.
+    pub height: f64,
+    pub warmth: f64,
+    pub supersaturation: f64,
 }
 
 impl Default for SimulationParams {
@@ -238,6 +269,9 @@ impl Default for SimulationParams {
             max_step: 4.,
             seed: 0,
             start: 4. * 3600.,
+            texture_period: 600.,
+            hot_spot: None,
+            bubble: None,
         }
     }
 }
@@ -326,6 +360,14 @@ pub struct CloudSimulation {
     pub theta: Field,
     pub vapour: Field,
     pub cloud: Field,
+    /// Texture coordinates carried with the flow, for detail finer than the grid that moves
+    /// with the air (Kim, Thürey, James and Gross, "Wavelet Turbulence for Fluid Simulation",
+    /// SIGGRAPH 2008, section 4): two sets, as displacements D = T - x from each cell's centre
+    /// (x, y, z for each), so they wrap with the periodic grid. A coordinate stays with its air,
+    /// DT/Dt = 0, so DD/Dt = -u. Each set is renewed (D = 0) every `texture_period`, before it
+    /// is stretched beyond recognition, half a period after the other; `texture_weights` blends
+    /// them, each fading out before it is renewed.
+    pub texture: Vec<Field>,
     exner: Vec<f64>,
     pressure: Vec<f64>,
     patches: PerlinNoise,
@@ -353,6 +395,7 @@ impl CloudSimulation {
             theta: Field::new(nx, ny, nz, h, half),
             vapour: Field::new(nx, ny, nz, h, half),
             cloud: Field::new(nx, ny, nz, h, half),
+            texture: (0..6).map(|_| Field::new(nx, ny, nz, h, half)).collect(),
             exner: pressure.iter().map(|p| exner_of(*p)).collect(),
             pressure,
             patches,
@@ -365,6 +408,21 @@ impl CloudSimulation {
             let jitter = |s: u32| if z < 200. { (worley_hash(i as u32, j as u32, k as u32, seed.wrapping_add(s)) - 0.5) * 2. } else { 0. };
             sim.theta.data[n] = sounding.theta.value(z) + 0.1 * jitter(0);
             sim.vapour.data[n] = sounding.water.value(z) + 2.5e-5 * jitter(1);
+        }
+        if let Some(b) = sim.params.bubble {
+            for n in 0..sim.theta.data.len() {
+                let d = sim.theta.position(n) - b.centre;
+                let r = (Vector3::new(d.x / b.radius, d.y / b.height, d.z / b.radius)).norm();
+                if r >= 1. {
+                    continue;
+                }
+                let f = (std::f64::consts::FRAC_PI_2 * r).cos().powi(2);
+                let j = sim.theta.ijk(n).1;
+                sim.theta.data[n] += b.warmth * f;
+                // Saturated, and then some, at its own (warmer) temperature.
+                let saturated = saturation_mixing_ratio(sim.theta.data[n] * sim.exner[j], sim.pressure[j]) * (1. + b.supersaturation);
+                sim.vapour.data[n] += (saturated - sim.vapour.data[n]).max(0.) * f;
+            }
         }
         sim
     }
@@ -431,7 +489,11 @@ impl CloudSimulation {
         };
         let factors: Vec<f64> = (0..nx * nz).into_par_iter().map(|n| {
             let (i, k) = (n % nx, n / nx);
-            pattern(i, k) * (1. + (worley_hash(i as u32, k as u32, 0, seed) - 0.5) * 0.5)
+            let spot = p.hot_spot.map_or(1., |(centre, radius, boost)| {
+                let x = Vector2::new((i as f64 + 0.5) * h, (k as f64 + 0.5) * h) - centre;
+                1. + boost * (-(x.norm_squared() / (radius * radius))).exp()
+            });
+            spot * pattern(i, k) * (1. + (worley_hash(i as u32, k as u32, 0, seed) - 0.5) * 0.5)
         }).collect();
         for (n, f) in factors.iter().enumerate() {
             self.theta.data[n] += heat_flux * f * heat;
@@ -808,7 +870,9 @@ impl CloudSimulation {
         let theta = self.advect(&self.theta, dt, false);
         let vapour = self.advect(&self.vapour, dt, false);
         let cloud = self.advect(&self.cloud, dt, false);
+        let texture = self.advect_texture(dt);
         (self.u, self.v, self.w, self.theta, self.vapour, self.cloud) = (u, v, w, theta, vapour, cloud);
+        self.texture = texture;
         self.subgrid(dt);
         self.surface_fluxes(dt);
         self.surface_mixing(dt);
@@ -818,6 +882,64 @@ impl CloudSimulation {
         self.project();
         self.time += dt;
         self.steps += 1;
+    }
+
+    /// The texture coordinates' displacements carried along the flow for `dt` (DD/Dt = -u), each
+    /// set renewed when its period comes round.
+    fn advect_texture(&self, dt: f64) -> Vec<Field> {
+        let period = self.params.texture_period;
+        (0..6).map(|n| {
+            let set = n / 3;
+            let phase = 0.5 * set as f64;
+            let cycle = |t: f64| (t / period + phase).floor();
+            let mut f = self.advect(&self.texture[n], dt, false);
+            if cycle(self.time + dt) > cycle(self.time) {
+                f.data.iter_mut().for_each(|x| *x = 0.);
+                return f;
+            }
+            let axis = n % 3;
+            let positions: Vec<Vector3<f64>> = (0..f.data.len()).map(|m| f.position(m)).collect();
+            f.data.par_iter_mut().zip(positions.par_iter()).for_each(|(x, p)| *x -= self.velocity(p)[axis] * dt);
+            f
+        }).collect()
+    }
+
+    /// The weights of the two texture sets now: each rises from 0 when it is renewed to 1 half
+    /// a period later and falls back to 0 as it is renewed again; together they sum to 1.
+    pub fn texture_weights(&self) -> (f64, f64) {
+        let w = |phase: f64| {
+            let x = self.time / self.params.texture_period + phase;
+            1. - (2. * (x - x.floor()) - 1.).abs()
+        };
+        (w(0.), w(0.5))
+    }
+
+    /// The eddy viscosity of the turbulence too small for the grid, per cell (m²/s): Smagorinsky's,
+    /// with Lilly's correction for stable air (as `subgrid` uses, before its limit for stability).
+    pub fn eddy_viscosity(&self) -> Vec<f64> {
+        let (nx, ny, nz) = self.params.size;
+        let h = self.params.cell;
+        let slab = nx * nz;
+        let grads = self.velocity_gradients();
+        let theta = &self.theta;
+        let stability = |n: usize| {
+            let j = n / slab;
+            let (up, down) = ((j + 1).min(ny - 1), j.saturating_sub(1));
+            let (a, b) = (theta.data[n % slab + up * slab], theta.data[n % slab + down * slab]);
+            GRAVITY / theta.data[n] * (a - b) / ((up - down).max(1) as f64 * h)
+        };
+        grads.par_iter().enumerate().map(|(n, g)| {
+            let mut s2 = 0.;
+            for a in 0..3 {
+                for b in 0..3 {
+                    let sab = 0.5 * (g[a][b] + g[b][a]);
+                    s2 += sab * sab;
+                }
+            }
+            let strain2 = 2. * s2;
+            let damping = (1. - 3. * stability(n) / strain2.max(1e-12)).max(0.).sqrt();
+            (SMAGORINSKY * h).powi(2) * strain2.sqrt() * damping
+        }).collect::<Vec<f64>>().into_iter().take(nx * ny * nz).collect()
     }
 
     /// Runs to `time`, reporting progress every simulated minute.
@@ -847,7 +969,7 @@ impl CloudSimulation {
         let mut bytes = Vec::with_capacity(8 * (2 + 6 * self.theta.data.len() + self.v.data.len()));
         bytes.extend_from_slice(&self.time.to_le_bytes());
         bytes.extend_from_slice(&self.steps.to_le_bytes());
-        for f in [&self.u, &self.v, &self.w, &self.theta, &self.vapour, &self.cloud] {
+        for f in [&self.u, &self.v, &self.w, &self.theta, &self.vapour, &self.cloud].into_iter().chain(self.texture.iter()) {
             for x in &f.data {
                 bytes.extend_from_slice(&x.to_le_bytes());
             }
@@ -861,14 +983,14 @@ impl CloudSimulation {
     pub fn load(params: SimulationParams, path: &std::path::Path) -> std::io::Result<CloudSimulation> {
         let mut sim = CloudSimulation::new(params);
         let bytes = std::fs::read(path)?;
-        let expected = 8 * (2 + sim.u.data.len() + sim.v.data.len() + sim.w.data.len() + 3 * sim.theta.data.len());
+        let expected = 8 * (2 + sim.u.data.len() + sim.v.data.len() + sim.w.data.len() + 9 * sim.theta.data.len());
         if bytes.len() != expected {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong size"));
         }
         let mut words = bytes.chunks_exact(8).map(|c| <[u8; 8]>::try_from(c).unwrap());
         sim.time = f64::from_le_bytes(words.next().unwrap());
         sim.steps = u64::from_le_bytes(words.next().unwrap());
-        for f in [&mut sim.u, &mut sim.v, &mut sim.w, &mut sim.theta, &mut sim.vapour, &mut sim.cloud] {
+        for f in [&mut sim.u, &mut sim.v, &mut sim.w, &mut sim.theta, &mut sim.vapour, &mut sim.cloud].into_iter().chain(sim.texture.iter_mut()) {
             for x in f.data.iter_mut() {
                 *x = f64::from_le_bytes(words.next().unwrap());
             }
@@ -999,6 +1121,15 @@ pub struct HarrisCumulus {
     max: f64,
     detail: std::sync::OnceLock<crate::procedural::nubis_clouds::WorleyTexture>,
     seed: u32,
+    /// Turbulence finer than the grid (`turbulent`): its strength (0 for none), the octaves
+    /// below the grid's scale, and per cell the two texture sets' displacements and the
+    /// strength of the sub-grid turbulence (0 to 1), with the sets' weights now.
+    pub turbulence: f64,
+    pub octaves: usize,
+    texture: Vec<[f32; 6]>,
+    eddies: Vec<f32>,
+    weights: (f64, f64),
+    noise: PerlinNoise,
 }
 
 /// Cells along each side of a majorant block.
@@ -1007,20 +1138,44 @@ const BLOCK: usize = 4;
 impl HarrisCumulus {
     /// The clouds of `sim`, the grid centred over `center` on the ground.
     pub fn new(sim: &CloudSimulation, droplet_radius: f64, center: Vector2<f64>) -> HarrisCumulus {
+        HarrisCumulus::with_turbulence(sim, droplet_radius, center, 0.35, 3)
+    }
+
+    /// As `new`, with turbulence of `strength` over `octaves` finer than the grid (`turbulent`).
+    pub fn with_turbulence(sim: &CloudSimulation, droplet_radius: f64, center: Vector2<f64>, strength: f64, octaves: usize) -> HarrisCumulus {
         let (nx, ny, nz) = sim.params.size;
         let h = sim.params.cell;
         let cloud: Vec<f32> = sim.cloud.data.iter().map(|q| q.max(0.) as f32).collect();
+        // The sub-grid turbulence's kinetic energy, k = (ν / (C_k Δ))² (Deardorff), from the
+        // simulation's own eddy viscosity; as a strength, its velocity over that plus 0.5 m/s.
+        let eddies: Vec<f32> = sim.eddy_viscosity().iter().map(|nu| {
+            let speed = nu / (0.1 * h);
+            (speed / (speed + 0.5)) as f32
+        }).collect();
+        let texture: Vec<[f32; 6]> = (0..cloud.len()).map(|n| {
+            let mut t = [0f32; 6];
+            for (a, f) in sim.texture.iter().enumerate() {
+                t[a] = f.data[n] as f32;
+            }
+            t
+        }).collect();
+        // A point's density comes from up to this far off (`turbulent`): the blocks' bounds
+        // reach that many cells beyond them.
+        // Per set at most √3 (a noise vector) times the octaves' sizes, 2 - 2^(1 - octaves) cells; the
+        // blend's rescaling adds up to √2.
+        let reach = strength.max(0.) * (2. - 0.5f64.powi(octaves as i32 - 1)) * 3f64.sqrt() * 2f64.sqrt();
+        let margin = 1 + reach.ceil() as i64;
         let counts = (nx.div_ceil(BLOCK), ny.div_ceil(BLOCK), nz.div_ceil(BLOCK));
         // Each block's largest value over the cells a point in it interpolates between: one
         // more on each side.
         let blocks = (0..counts.0 * counts.1 * counts.2).into_par_iter().map(|b| {
             let (bx, by, bz) = (b % counts.0, b / (counts.0 * counts.2), (b / counts.0) % counts.2);
             let mut m = 0f32;
-            for j in (by * BLOCK) as i64 - 1..=((by + 1) * BLOCK) as i64 {
+            for j in (by * BLOCK) as i64 - margin..=((by + 1) * BLOCK) as i64 + margin - 1 {
                 let j = j.clamp(0, ny as i64 - 1) as usize;
-                for k in (bz * BLOCK) as i64 - 1..=((bz + 1) * BLOCK) as i64 {
+                for k in (bz * BLOCK) as i64 - margin..=((bz + 1) * BLOCK) as i64 + margin - 1 {
                     let k = k.rem_euclid(nz as i64) as usize;
-                    for i in (bx * BLOCK) as i64 - 1..=((bx + 1) * BLOCK) as i64 {
+                    for i in (bx * BLOCK) as i64 - margin..=((bx + 1) * BLOCK) as i64 + margin - 1 {
                         let i = i.rem_euclid(nx as i64) as usize;
                         m = m.max(cloud[i + nx * (k + nz * j)]);
                     }
@@ -1049,7 +1204,81 @@ impl HarrisCumulus {
             max,
             detail: std::sync::OnceLock::new(),
             seed: sim.params.seed as u32,
+            turbulence: strength.max(0.),
+            octaves,
+            texture,
+            eddies,
+            weights: sim.texture_weights(),
+            noise: PerlinNoise::shuffled(sim.params.seed.wrapping_add(23)),
         }
+    }
+
+    /// Per-cell values at grid-local `l`, interpolated between cells' centres (periodic across
+    /// the ground): `get(n)` of the cell numbered n.
+    fn interpolate<const N: usize>(&self, l: &Vector3<f64>, get: impl Fn(usize) -> [f64; N]) -> [f64; N] {
+        let (nx, ny, nz) = self.size;
+        let g = l / self.h - Vector3::repeat(0.5);
+        let (x0, z0) = (g.x.floor(), g.z.floor());
+        let (fx, fz) = (g.x - x0, g.z - z0);
+        let gy = g.y.clamp(0., (ny - 1) as f64);
+        let y0 = (gy.floor() as usize).min(ny - 2);
+        let fy = gy - y0 as f64;
+        let (xa, za) = ((x0 as i64).rem_euclid(nx as i64) as usize, (z0 as i64).rem_euclid(nz as i64) as usize);
+        let (xb, zb) = ((xa + 1) % nx, (za + 1) % nz);
+        let mut out = [0.; N];
+        for (i, wx) in [(xa, 1. - fx), (xb, fx)] {
+            for (j, wy) in [(y0, 1. - fy), (y0 + 1, fy)] {
+                for (k, wz) in [(za, 1. - fz), (zb, fz)] {
+                    let v = get(i + nx * (k + nz * j));
+                    for a in 0..N {
+                        out[a] += v[a] * wx * wy * wz;
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// # Turbulence finer than the grid
+    ///
+    /// After Kim, Thürey, James and Gross, "Wavelet Turbulence for Fluid Simulation", SIGGRAPH
+    /// 2008: the simulation resolves eddies down to its cells (100 m), not the billows of a
+    /// cloud's edge. Below that, turbulence is synthesised: noise in `octaves` from the cell's
+    /// size down, each half the last, displacing where the cloud water is looked up. By
+    /// Kolmogorov's scaling an eddy of size ℓ moves its air about ℓ in its own turnover time,
+    /// so each octave displaces by its size, times `turbulence`, times the local strength of
+    /// the turbulence the grid can't resolve (from the simulation's eddy viscosity, so it acts
+    /// where the air is churning: rising turrets, mixing edges, not the calm air or a cloud's
+    /// still core). The noise is looked up at texture coordinates the simulation carried with
+    /// the flow (`CloudSimulation::texture`), so the detail moves with the cloud and boils as it
+    /// does rather than sliding through it; the two sets blended, as each is renewed in turn,
+    /// rescaled so the blend keeps the noise's strength.
+    fn turbulent(&self, l: &Vector3<f64>) -> Vector3<f64> {
+        if self.turbulence <= 0. || self.octaves == 0 {
+            return Vector3::zeros();
+        }
+        let [strength] = self.interpolate(l, |n| [self.eddies[n] as f64]);
+        if strength < 1e-3 {
+            return Vector3::zeros();
+        }
+        let d = self.interpolate(l, |n| self.texture[n].map(|x| x as f64));
+        let (wa, wb) = self.weights;
+        let norm = 1. / (wa * wa + wb * wb).sqrt().max(1e-6);
+        let mut offset = Vector3::zeros();
+        for (set, w) in [(0, wa), (1, wb)] {
+            if w <= 0. {
+                continue;
+            }
+            let t = l + Vector3::new(d[3 * set], d[3 * set + 1], d[3 * set + 2]);
+            let mut size = self.h;
+            for octave in 0..self.octaves {
+                let q = t / size + Vector3::repeat(17.31 * (octave + 7 * set) as f64);
+                let n = |o: f64| self.noise.noise(q.x + o, q.y - o, q.z + 0.5 * o);
+                offset += Vector3::new(n(0.), n(31.7), n(73.1)) * (size * w);
+                size *= 0.5;
+            }
+        }
+        offset * (self.turbulence * strength * norm)
     }
 
     fn size_m(&self) -> Vector3<f64> {
@@ -1092,7 +1321,7 @@ impl HarrisCumulus {
         if !self.inside(&l) {
             return 0.;
         }
-        let q = self.water(&l);
+        let q = self.water(&(l + self.turbulent(&l)));
         if q <= 0. {
             return 0.;
         }
@@ -1259,6 +1488,24 @@ mod tests {
     }
 
     #[test]
+    fn test_a_seeded_cloud_forms_and_rises() {
+        // A saturated warm bubble in conditionally unstable air: cloud at once, rising.
+        let mut p = small((16, 40, 16), 50.);
+        p.forcing = Forcing::steady(0., 0.);
+        let z = [0., 600., 3000.];
+        p.sounding = Sounding { theta: Profile::new(&z, &[300., 300., 307.]), water: Profile::new(&z, &[0.016, 0.015, 0.006]), surface_pressure: 1e5 };
+        p.bubble = Some(Bubble { centre: Vector3::new(400., 900., 400.), radius: 300., height: 300., warmth: 1.5, supersaturation: 0.05 });
+        let mut sim = CloudSimulation::new(p);
+        let top = |s: &CloudSimulation| (0..s.cloud.data.len()).filter(|n| s.cloud.data[*n] > 1e-5)
+            .map(|n| s.cloud.position(n).y).fold(0., f64::max);
+        sim.advance_to(10., |_| {});
+        let early = top(&sim);
+        assert!(early > 800., "no cloud from the bubble: top {}", early);
+        sim.advance_to(300., |_| {});
+        assert!(top(&sim) > early + 200., "the cloud didn't rise: {} -> {}", early, top(&sim));
+    }
+
+    #[test]
     fn test_warm_bubble_rises() {
         // In neutral, dry air.
         let mut p = small((16, 24, 16), 50.);
@@ -1311,6 +1558,64 @@ mod tests {
             }
             // Cloud water becomes extinction: 10 µm droplets, 1 g/kg, 0.15 per metre.
             assert!((f.extinction * 1e-3 - 0.15).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn test_texture_coordinates_ride_the_wind() {
+        // In a steady wind and still air, each set's displacement is minus the wind's travel
+        // since it was last renewed; the weights sum to one, and each is zero as it renews.
+        let mut p = small((16, 6, 16), 50.);
+        p.wind = Vector2::new(4., -2.);
+        p.forcing = Forcing::steady(0., 0.);
+        p.texture_period = 100.;
+        let mut sim = CloudSimulation::new(p);
+        for _ in 0..30 {
+            let t0 = sim.time;
+            sim.texture = sim.advect_texture(2.5);
+            sim.time += 2.5;
+            let (wa, wb) = sim.texture_weights();
+            assert!((wa + wb - 1.).abs() < 1e-9);
+            for set in 0..2 {
+                let phase = 0.5 * set as f64;
+                // Time since this set was renewed.
+                let since = ((sim.time / 100. + phase).fract() * 100.).min(sim.time);
+                let n = sim.cloud.idx(5, 3, 9);
+                let (dx, dz) = (sim.texture[3 * set].data[n], sim.texture[3 * set + 2].data[n]);
+                assert!((dx + 4. * since).abs() < 1e-6 && (dz - 2. * since).abs() < 1e-6, "set {} at {} (from {}): {} {}", set, sim.time, t0, dx, dz);
+            }
+        }
+    }
+
+    #[test]
+    fn test_turbulence_stays_within_the_majorant() {
+        // Churning air (random velocities), so the sub-grid turbulence is strong, and a strong
+        // setting: the density, looked up displaced, stays under the blocks' bounds.
+        use crate::volume::DensityField;
+        let mut sim = CloudSimulation::new(small((16, 12, 16), 50.));
+        for (n, q) in sim.cloud.data.iter_mut().enumerate() {
+            *q = (worley_hash(n as u32, 0, 0, 1) - 0.8).max(0.) * 3e-3;
+        }
+        for (n, x) in sim.u.data.iter_mut().enumerate() { *x = (worley_hash(n as u32, 9, 2, 3) - 0.5) * 8.; }
+        for (n, x) in sim.w.data.iter_mut().enumerate() { *x = (worley_hash(n as u32, 4, 9, 6) - 0.5) * 8.; }
+        sim.texture = sim.advect_texture(5.);
+        sim.time = 37.;
+        let f = HarrisCumulus::with_turbulence(&sim, 10., Vector2::zeros(), 1., 3);
+        let moved = (0..500).filter(|k| {
+            let l = Vector3::new(*k as f64 * 13.1 % 800., 300., *k as f64 * 7.7 % 800.);
+            f.turbulent(&l).norm() > 5.
+        }).count();
+        assert!(moved > 200, "the turbulence barely acts: {}", moved);
+        let mut rng = crate::geometry::Pcg32::new(5, 0);
+        let mut u = || rng.next_f64();
+        for _ in 0..2000 {
+            let p = Vector3::new(u() * 2000. - 1000., u() * 700. - 50., u() * 2000. - 1000.);
+            let d = Vector3::new(u() - 0.5, u() - 0.5, u() - 0.5).normalize();
+            let (m, len) = f.majorant_from(&p, &d);
+            for k in 0..20 {
+                let t = len.min(1000.) * (k as f64 + 0.5) / 20.;
+                assert!(f.density(&(p + d * t)) <= m * (1. + 1e-6), "{} along {} at {}", p, d, t);
+            }
         }
     }
 

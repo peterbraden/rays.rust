@@ -378,7 +378,7 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
 }
 
 /// Where a patch lies: its centre's (latitude, longitude) in degrees.
-fn site(d: &Value, params: &TerrainParams) -> (f64, f64) {
+pub fn site(d: &Value, params: &TerrainParams) -> (f64, f64) {
     let planet = || Planet::new(params.planet.clone());
     match (d["lat"].as_f64(), d["lon"].as_f64(), d["near"].as_str()) {
         (Some(lat), Some(lon), _) => (lat, lon),
@@ -561,8 +561,16 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
         parent = Some(initial);
         let key = format!("patch {:.9} {:.9} {} {}", lat, lon, l.cells, l.spacing);
         let t = evolve(o, t, &key);
-        if k == 0 && let Some(path) = o["map"].as_str() {
-            write_map(&t, path, 2048);
+        if k == 0 {
+            if let Some(path) = o["map"].as_str() { write_map(&t, path, 2048); }
+            // Where the glaciers are, to frame them.
+            let ice = (0..t.domain.len()).filter(|&i| t.ice[i] >= crate::terrain::simulation::ICE_FREE);
+            let cells = ice.clone().count();
+            if let Some(i) = ice.max_by(|&a, &b| t.ice[a].total_cmp(&t.ice[b])) {
+                let at = frame.to_scene(&t.domain.dirs[i], t.surface()[i]);
+                println!("Landscape: glaciers cover {:.0} km²; the thickest ice, {:.0} m, is at [{:.0}, {:.0}, {:.0}]",
+                    cells as f64 * l.spacing * l.spacing / 1e6, t.ice[i], at.x, at.y, at.z);
+            }
         }
         built.push(Layer::new(t, p.min_river_width));
     }

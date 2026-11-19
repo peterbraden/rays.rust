@@ -6,9 +6,10 @@ same coordinates (except that POV-Ray is left-handed: see `text`). Any of them c
 turned and stretched (see [Placing shapes](#placing-shapes)), given a `material`, and (the solid
 ones) combined with others (see [Combining shapes](#combining-shapes-csg)).
 
-![Every shape](../demo/scenes/shapes.png)
+![The stress test](../demo/scenes/stress-test.png)
 
-[`demo/scenes/shapes.json`](../demo/scenes/shapes.json) has an example of each.
+[`demo/scenes/stress-test.json`](../demo/scenes/stress-test.json) has an example of each, on
+the plinth in the middle of its second row (objects prefixed `SHAPE_`).
 
 Points are `[x, y, z]`, 2D points `[a, b]`. Fields marked * are required; the rest show their
 defaults.
@@ -109,9 +110,8 @@ rather than taking it along.
 | `intersection` | `items`* | Where the shapes all overlap. |
 | `difference` | `items`* (or `a`*, `b`*) | The first shape with the others cut away. |
 
-![CSG](../demo/scenes/csg.png)
-
-[`demo/scenes/csg.json`](../demo/scenes/csg.json) has an example of each. Combinations nest, and
+[`demo/scenes/stress-test.json`](../demo/scenes/stress-test.json) has an example of each, on the
+leftmost plinth of its front row (objects prefixed `CSG_`). Combinations nest, and
 can be placed with `transform` steps like any shape. Any shape can also have:
 
 - `"inverse": true`: turned inside out, so that its inside is everything outside it. An

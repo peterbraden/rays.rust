@@ -119,6 +119,11 @@ pub trait Geometry: Sync{
     // it out of its octree, which can list an object in several cells.
     fn is_stochastic(&self) -> bool { false }
 
+    // Whether light can pass through this solid object (in part, by `transmittance_color`), as
+    // through transparent water; the scene graph then asks it, rather than taking any hit as a
+    // shadow.
+    fn transmits(&self) -> bool { false }
+
     // The fraction of light that passes through this object between `min` and `max` along the
     // ray (world distances, like `intersects`' `dist`): 0 or 1 for solid objects - by default,
     // whether it is hit there - and in between for participating media. A medium may return a
@@ -214,6 +219,7 @@ impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
     fn sample_from(&self, from: &Vector3<f64>, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>, f64)> { (**self).sample_from(from, u) }
     fn pdf_from(&self, from: &Vector3<f64>, y: &Vector3<f64>, n: &Vector3<f64>) -> f64 { (**self).pdf_from(from, y, n) }
     fn is_stochastic(&self) -> bool { (**self).is_stochastic() }
+    fn transmits(&self) -> bool { (**self).transmits() }
     fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 { (**self).transmittance(r, min, max) }
     fn transmittance_color(&self, r: &Ray, min: f64, max: f64) -> crate::color::Color { (**self).transmittance_color(r, min, max) }
     fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> { (**self).flatten() }

@@ -968,6 +968,10 @@ impl SceneFile {
             return Some(Arc::new(SceneFile::parse_mammatus(&o)));
         }
 
+        if t == "fractus" {
+            return Some(Arc::new(SceneFile::parse_fractus(&o)));
+        }
+
         if t == "cumulonimbus" {
             return Some(Arc::new(SceneFile::parse_cumulonimbus(&o)));
         }
@@ -2214,7 +2218,8 @@ impl SceneFile {
     /// (0 to 1) and `wavelength` (waves across the wind), `patchiness` (0 to 1) and
     /// `patch_size`, `warp` (in cells), `lumpiness` (0 to 1), `detail_size` and `erosion` (0 to
     /// 1), `fade` (the fraction of `extent` over which the layer fades out), and
-    /// `particle_radius` (µm, for `diffraction`). `mapping` as for `nubis_clouds` (`"regional"` or `"flat"`).
+    /// `particle_radius` (µm, for `diffraction`), and `castellanus` (0 to 1, the share of cells
+    /// growing turrets) with `turret_height` (in layer thicknesses). `mapping` as for `nubis_clouds` (`"regional"` or `"flat"`).
     pub fn parse_benard_altocumulus(o: &Value) -> SceneObject {
         let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
         let mut c = BenardAltocumulus::new(num("base", 4000.), num("thickness", 200.).max(1.), SceneFile::parse_seed(o).unwrap_or(0));
@@ -2236,6 +2241,8 @@ impl SceneFile {
         c.center = SceneFile::parse_vec2_def(o, "center", c.center);
         c.fade = num("fade", c.fade).clamp(0., 1.);
         c.particle_radius = o["particle_radius"].as_f64();
+        c.castellanus = num("castellanus", c.castellanus).clamp(0., 1.);
+        c.turret_height = num("turret_height", c.turret_height).max(1.);
         let bounds = BBox::new(
             Vector3::new(c.center.x - c.extent, c.bottom(), c.center.y - c.extent),
             Vector3::new(c.center.x + c.extent, c.top(), c.center.y + c.extent),
@@ -2392,6 +2399,34 @@ impl SceneFile {
         );
         let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(m));
         create_volume(bounds, field, SceneFile::parse_scattering(o, 0.8))
+    }
+
+    /// Fractus, shreds of low cloud torn by the wind (see `procedural::fractus`):
+    ///
+    /// `{"type": "fractus", "base": 500, "depth": 600, "spacing": 1500, "coverage": 0.6,
+    /// "size": 450, "stretch": 2.5, "wind_direction": [x, z], "raggedness": 0.6, "density": 0.03,
+    /// "center": [x, z], "extent": 40000, "seed": 0}`; `mapping` as for `nubis_clouds`.
+    pub fn parse_fractus(o: &Value) -> SceneObject {
+        use crate::procedural::fractus::Fractus;
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let mut f = Fractus::new(SceneFile::parse_seed(o).unwrap_or(0));
+        f.base = num("base", f.base);
+        f.depth = num("depth", f.depth).max(0.);
+        f.spacing = num("spacing", f.spacing).max(1.);
+        f.coverage = num("coverage", f.coverage).clamp(0., 1.);
+        f.size = num("size", f.size).max(1.);
+        f.stretch = num("stretch", f.stretch).max(1.);
+        f.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", f.wind_direction).normalize();
+        f.raggedness = num("raggedness", f.raggedness).clamp(0., 1.);
+        f.density = num("density", f.density).max(0.);
+        f.center = SceneFile::parse_vec2_def(o, "center", f.center);
+        f.extent = num("extent", f.extent).max(1.);
+        let bounds = BBox::new(
+            Vector3::new(f.center.x - f.extent, f.bottom(), f.center.y - f.extent),
+            Vector3::new(f.center.x + f.extent, f.top(), f.center.y + f.extent),
+        );
+        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(f));
+        create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
     }
 
     /// A cumulonimbus, the thunderstorm cloud (see `procedural::cumulonimbus`):

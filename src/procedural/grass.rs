@@ -1159,8 +1159,10 @@ struct Generator<'a> {
 /// A rule for where grass grows (`"where"`): a graph from 0 to 1, read on the ground with its
 /// normal, and the fields it may read (a landscape's).
 pub struct Rule<'a> {
-    pub graph: crate::graph::Graph,
+    pub graph: Option<crate::graph::Graph>,
     pub fields: Option<&'a dyn crate::graph::Fields>,
+    /// How much room other things leave at (x, z), 0 to 1 (`ecosystem::Occupancy::free`).
+    pub room: Option<&'a (dyn Fn(f64, f64) -> f64 + Sync)>,
 }
 
 impl Generator<'_> {
@@ -1175,8 +1177,12 @@ impl Generator<'_> {
         let slope_ok = 1. - smoothstep(c.max_slope - 10f64.to_radians(), c.max_slope, slope);
         let altitude = smoothstep(c.min_altitude, c.min_altitude + c.altitude_fade, y)
             * (1. - smoothstep(c.max_altitude - c.altitude_fade, c.max_altitude, y));
-        let ruled = self.rule.map_or(1., |r| r.graph.eval(
-            &crate::graph::Context::new(Vector3::new(x, y, z), *normal, 0.).with_fields(r.fields)).clamp(0., 1.));
+        let ruled = self.rule.map_or(1., |r| {
+            let left = r.room.map_or(1., |f| f(x, z));
+            if left <= 0. { return 0. }
+            left * r.graph.as_ref().map_or(1., |g| g.eval(
+                &crate::graph::Context::new(Vector3::new(x, y, z), *normal, 0.).with_fields(r.fields)).clamp(0., 1.))
+        });
         (patch, slope_ok * altitude * ruled)
     }
 
@@ -1935,7 +1941,7 @@ mod tests {
     #[test]
     fn test_grass_grows_where_its_rule_says() {
         let grid = HeightGrid::sample(&Hill, (-5., -5.), (5., 5.), 0.25);
-        let rule = Rule { graph: crate::graph::Graph::parse(&json!({"node": "smoothstep", "input": "x", "from": -0.01, "to": 0.01})).unwrap(), fields: None };
+        let rule = Rule { graph: Some(crate::graph::Graph::parse(&json!({"node": "smoothstep", "input": "x", "from": -0.01, "to": 0.01})).unwrap()), fields: None, room: None };
         let species = vec![Species::from_json(&json!("lawn"))];
         let f = GrassField::ruled(&grid, species, &Conditions::from_json(&json!("lush")), 200., 7, (-4., -4.), (4., 4.), Some(&rule));
         assert!(f.len() > 1000, "{}", f.len());

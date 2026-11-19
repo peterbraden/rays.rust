@@ -125,6 +125,7 @@ mod procedural {
     pub mod tree;
     pub mod succulent;
     pub mod forest;
+    pub mod ecosystem;
     pub mod heightmap;
     pub mod grass;
     pub mod rock;

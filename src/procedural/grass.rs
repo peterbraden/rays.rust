@@ -17,6 +17,11 @@
 //!   ground: a lawn looks like turf from about 5000
 //! - `min`, `max`: [x, z] corners of the area to grow in (default: the whole heightmap)
 //! - `seed`: the same seed gives the same field
+//! - `where`: a rule for where grass grows and how thickly, a function graph from 0 to 1 read on
+//!   the ground with its normal (`slope`, `altitude`, noise; on a landscape, its fields), as a
+//!   forest's or a scatter's; it multiplies the conditions' own limits
+//! - `"heightmap": "landscape"`: grow on the scene's landscape object before it, sampled every
+//!   `cell` metres (0.25) over `min` to `max` (both needed), its displaced surface included
 //! - `material`: render every blade with this scene material instead (eg. for debugging)
 //!
 //! ## Species
@@ -122,7 +127,7 @@
 //! - `mow_height` (m): blades are cut flat at this height. `mow_stripes`: `{ "width": m,
 //!   "direction": [x, z] }` - alternate stripes lean opposite ways, as after a mower
 //! - `trampled` (0 to 1): blades pressed over and shortened
-//! - `max_slope` (degrees): no grass on slopes steeper than this
+//! - `max_slope` (degrees): no grass on slopes steeper than this (see also `where`, below)
 //! - `min_altitude`, `max_altitude` (m), `altitude_fade` (m): grow only between these heights,
 //!   eg. above a water line or below a tree line
 //! - `species_zones` (m): with several species, group them into patches of about this size
@@ -1147,6 +1152,17 @@ struct Generator<'a> {
     /// The dead blades of litter, and their look.
     litter: &'a Species,
     litter_look: usize,
+    /// Where grass may grow, and how thickly (`Rule`).
+    rule: Option<&'a Rule<'a>>,
+}
+
+/// A rule for where grass grows (`"where"`): a graph from 0 to 1, read on the ground with its
+/// normal, and the fields it may read (a landscape's).
+pub struct Rule<'a> {
+    pub graph: Option<crate::graph::Graph>,
+    pub fields: Option<&'a dyn crate::graph::Fields>,
+    /// How much room other things leave at (x, z), 0 to 1 (`ecosystem::Occupancy::free`).
+    pub room: Option<&'a (dyn Fn(f64, f64) -> f64 + Sync)>,
 }
 
 impl Generator<'_> {
@@ -1161,7 +1177,13 @@ impl Generator<'_> {
         let slope_ok = 1. - smoothstep(c.max_slope - 10f64.to_radians(), c.max_slope, slope);
         let altitude = smoothstep(c.min_altitude, c.min_altitude + c.altitude_fade, y)
             * (1. - smoothstep(c.max_altitude - c.altitude_fade, c.max_altitude, y));
-        (patch, slope_ok * altitude)
+        let ruled = self.rule.map_or(1., |r| {
+            let left = r.room.map_or(1., |f| f(x, z));
+            if left <= 0. { return 0. }
+            left * r.graph.as_ref().map_or(1., |g| g.eval(
+                &crate::graph::Context::new(Vector3::new(x, y, z), *normal, 0.).with_fields(r.fields)).clamp(0., 1.))
+        });
+        (patch, slope_ok * altitude * ruled)
     }
 
     fn pick_species(&self, x: f64, z: f64, rng: &mut Pcg32) -> usize {
@@ -1630,6 +1652,13 @@ pub struct GrassField {
 impl GrassField {
     /// Grow a field of `density` blades per square metre over [min, max] of the heightmap.
     pub fn new(grid: &HeightGrid, species: Vec<Species>, conditions: &Conditions, density: f64, seed: u64, min: (f64, f64), max: (f64, f64)) -> GrassField {
+        GrassField::ruled(grid, species, conditions, density, seed, min, max, None)
+    }
+
+    /// As `new`, growing only as `rule` lets it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn ruled(grid: &HeightGrid, species: Vec<Species>, conditions: &Conditions, density: f64, seed: u64,
+        min: (f64, f64), max: (f64, f64), rule: Option<&Rule>) -> GrassField {
         assert!(!species.is_empty(), "grass needs at least one species");
         assert!(species.len() <= 256, "grass can have at most 256 species");
         let total: f64 = species.iter().map(|s| s.weight).sum();
@@ -1651,7 +1680,7 @@ impl GrassField {
         let generator = Generator {
             grid, species: &species, conditions, noise: PerlinNoise::new(), seed,
             min, max, clump_density: density.max(0.) / per_clump, first_look: &first_look,
-            litter: &litter, litter_look,
+            litter: &litter, litter_look, rule,
         };
         let tiles_x = ((max.0 - min.0) / TILE).ceil().max(0.) as usize;
         let tiles_z = ((max.1 - min.1) / TILE).ceil().max(0.) as usize;
@@ -1867,7 +1896,11 @@ impl Medium for GrassMedium {
 /// Parse a grass object (see the module documentation) into its geometry, and the conditions
 /// for its medium.
 pub fn create_grass(o: &Value) -> (GrassGeometry, Conditions) {
-    let grid = HeightGrid::from_json(&o["heightmap"]);
+    create_grass_on(o, HeightGrid::from_json(&o["heightmap"]), None)
+}
+
+/// As `create_grass`, on `grid`, growing only as `rule` lets it.
+pub fn create_grass_on(o: &Value, grid: HeightGrid, rule: Option<&Rule>) -> (GrassGeometry, Conditions) {
     let species: Vec<Species> = match &o["species"] {
         Value::Array(list) => list.iter().map(Species::from_json).collect(),
         Value::Null => vec![Species::from_json(&Value::Null)],
@@ -1878,11 +1911,11 @@ pub fn create_grass(o: &Value) -> (GrassGeometry, Conditions) {
         Some(v) => (v[0].as_f64().unwrap(), v[1].as_f64().unwrap()),
         None => def,
     };
-    let field = GrassField::new(
+    let field = GrassField::ruled(
         &grid, species, &conditions,
         SceneFile::parse_number(&o["density"], 600.),
         SceneFile::parse_int(&o["seed"], 0) as u64,
-        corner("min", grid.min), corner("max", grid.max()));
+        corner("min", grid.min), corner("max", grid.max()), rule);
     (GrassGeometry { field: Arc::new(field) }, conditions)
 }
 
@@ -1902,6 +1935,17 @@ mod tests {
         let c = Conditions::from_json(&conditions);
         let f = GrassField::new(&grid, species, &c, density, 7, (-4., -4.), (4., 4.));
         (grid, f)
+    }
+
+    /// A rule keeps grass to where it says: east of x = 0 here.
+    #[test]
+    fn test_grass_grows_where_its_rule_says() {
+        let grid = HeightGrid::sample(&Hill, (-5., -5.), (5., 5.), 0.25);
+        let rule = Rule { graph: Some(crate::graph::Graph::parse(&json!({"node": "smoothstep", "input": "x", "from": -0.01, "to": 0.01})).unwrap()), fields: None, room: None };
+        let species = vec![Species::from_json(&json!("lawn"))];
+        let f = GrassField::ruled(&grid, species, &Conditions::from_json(&json!("lush")), 200., 7, (-4., -4.), (4., 4.), Some(&rule));
+        assert!(f.len() > 1000, "{}", f.len());
+        assert!(f.blades.iter().all(|b| b.hi[0] > -0.3), "a blade west of the line");
     }
 
     #[test]

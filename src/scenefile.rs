@@ -74,6 +74,80 @@ use rayon::prelude::*;
 
 /// A geometry that may be shared: by several objects, or by instancing transforms.
 pub type SharedGeometry = Arc<dyn Geometry + Sync + Send>;
+
+/// An object's fields (a landscape's simulation), kept with the object, for graphs elsewhere in
+/// the scene to read (a volume's density).
+struct ObjectFields(Arc<SceneObject>);
+
+/// Objects made by placing things, and where each stands with the radius it claims.
+pub(crate) type Placements = (Vec<Arc<SceneObject>>, Vec<(Vector3<f64>, f64)>);
+
+/// What things placed by rules stand on (a forest, a scatter, grass): geometries, and maybe the
+/// scene's landscape object, with its fields for the rules to read.
+pub(crate) struct Footing<'a> {
+    refs: Vec<&'a dyn Geometry>,
+    fields: Option<&'a dyn crate::graph::Fields>,
+    top: f64,
+}
+
+impl<'a> Footing<'a> {
+    pub(crate) fn new(surfaces: &'a [SharedGeometry], landscape: Option<&'a SceneObject>) -> Footing<'a> {
+        let mut refs: Vec<&dyn Geometry> = surfaces.iter().map(|s| &**s as &dyn Geometry).collect();
+        if let Some(l) = landscape {
+            refs.push(&*l.geometry);
+        }
+        let top = refs.iter().map(|s| { let y = s.bounds().max.y; if y.is_finite() && y < 1e5 { y + 1. } else { 1e5 } })
+            .fold(f64::NEG_INFINITY, f64::max);
+        Footing { refs, fields: landscape.and_then(|l| l.medium.fields()), top }
+    }
+
+    /// The ground under (x, z), and its normal, facing up.
+    pub(crate) fn at(&self, x: f64, z: f64) -> Option<(Vector3<f64>, Vector3<f64>)> {
+        let down = crate::ray::Ray { ro: Vector3::new(x, self.top, z), rd: -Vector3::y() };
+        let hit = self.refs.iter().filter_map(|s| s.intersects(&down)).min_by(|a, b| a.dist.total_cmp(&b.dist))?;
+        Some((hit.point, if hit.normal.y < 0. { -hit.normal } else { hit.normal }.normalize()))
+    }
+
+    /// A rule (a graph, 0 to 1) at the ground under (x, z); 0 off the ground.
+    pub(crate) fn rule(&self, g: &crate::graph::Graph, x: f64, z: f64) -> f64 {
+        self.at(x, z).map_or(0., |(p, n)| g.eval(&crate::graph::Context::new(p, n, 0.).with_fields(self.fields)).clamp(0., 1.))
+    }
+
+    /// Where `o` stands: its `"surface"` (a named or inline geometry, or a list of them; the
+    /// plane y = 0 by default), or `"landscape"`, the scene's landscape object before it.
+    pub(crate) fn surfaces(o: &Value, geometries: &GeometryLibrary, landscape: Option<&'a SceneObject>, what: &str)
+        -> (Vec<SharedGeometry>, Option<&'a SceneObject>)
+    {
+        let surface = |g: &Value| SceneFile::parse_shared_geometry(g, geometries)
+            .unwrap_or_else(|| panic!("{} surface {} is not a geometry", what, g));
+        match &o["surface"] {
+            Value::Null => (vec![Arc::new(Plane { y: 0. })], None),
+            Value::String(n) if n == "landscape" && !geometries.defines("landscape") => (vec![], Some(landscape
+                .unwrap_or_else(|| panic!("a {} on the \"landscape\" must come after a landscape object", what)))),
+            Value::Array(list) => (list.iter().map(surface).collect(), None),
+            g => (vec![surface(g)], None),
+        }
+    }
+
+    /// The rule `o` is placed by: its `"where"` (or, for a scatter, `"density"`).
+    pub(crate) fn parse_rule(o: &Value, what: &str) -> Option<crate::graph::Graph> {
+        o.get("where").map(|d| crate::graph::Graph::parse(d).unwrap_or_else(|e| panic!("{}'s \"where\": {}", what, e)))
+    }
+}
+
+impl crate::graph::Fields for ObjectFields {
+    fn field(&self, f: crate::graph::Field, p: &Vector3<f64>) -> Option<f64> {
+        self.0.medium.fields()?.field(f, p)
+    }
+
+    fn vertical(&self, p: &Vector3<f64>) -> Option<(Vector3<f64>, f64)> {
+        self.0.medium.fields()?.vertical(p)
+    }
+
+    fn biome(&self, p: &Vector3<f64>) -> Option<crate::terrain::climate::Biome> {
+        self.0.medium.fields()?.biome(p)
+    }
+}
 /// A part of a tree, as detail to make levels of, and its medium (`SceneFile::tree_details`).
 pub type TreeDetail = (crate::shapes::lod::Detail, Box<dyn Medium + Sync + Send>);
 
@@ -176,6 +250,11 @@ impl GeometryLibrary {
 
     pub fn empty() -> GeometryLibrary {
         GeometryLibrary::new(Map::new())
+    }
+
+    /// Whether a geometry of that name is defined.
+    pub fn defines(&self, name: &str) -> bool {
+        self.defined.contains_key(name)
     }
 
     /// The named geometry, built on first use.
@@ -699,6 +778,7 @@ impl SceneFile {
              && o["cloud"]["join"].as_bool() != Some(false) && flat(o) == flat(&objs[d]));
          let mut hills: Vec<HillCloud> = objs.iter().filter(|o| joins(o)).filter_map(SceneFile::hill_cloud_field).collect();
          let joined: Vec<bool> = objs.iter().map(joins).collect();
+         let mut landscape: Option<Arc<SceneObject>> = None;
          // Ice floats on the scene's ocean, on its waves.
          let ocean = objs.iter().find(|o| o["type"] == "ocean").cloned();
          // Objects kept from the last build (see `keep_objects_between_builds`), and those to
@@ -712,10 +792,16 @@ impl SceneFile {
             if let (Some(ocean), true) = (&ocean, obj["type"] == "iceberg" || obj["type"] == "ice_floes") {
                 if obj.get("ocean").is_none() { obj["ocean"] = ocean.clone(); }
             }
-            let composite = (Some(i) == deck && !hills.is_empty()) || (obj["type"] == "mountains" && obj.get("cloud").is_some());
+            // (Nor what grows on, or reads, the landscape before it: forests, grass, ecosystems,
+            // scatters and volumes over one.)
+            let on_landscape = landscape.is_some() && matches!(obj["type"].as_str(), Some("forest" | "grass" | "ecosystem" | "scatter" | "volume"));
+            let composite = (Some(i) == deck && !hills.is_empty()) || (obj["type"] == "mountains" && obj.get("cloud").is_some()) || on_landscape;
             let reusable = reuse && !composite;
             let key = if reusable { SceneFile::object_key(&obj, materials, media, geometries) } else { String::new() };
             if reusable && let Some(built) = previous.get(&key).or(kept.get(&key)) {
+                if obj["type"] == "landscape" {
+                    landscape = built.first().cloned();
+                }
                 objects.extend(built.iter().map(|x| (i, x.clone())));
                 kept.insert(key, built.clone());
                 continue;
@@ -727,7 +813,23 @@ impl SceneFile {
             let built: Vec<Arc<SceneObject>> = if obj["type"] == "tree" {
                 SceneFile::parse_tree(&obj, materials, media)
             } else if obj["type"] == "forest" {
-                SceneFile::parse_forest(&obj, materials, media, geometries)
+                SceneFile::parse_forest(&obj, materials, media, geometries, landscape.as_deref()).into_iter().collect()
+            } else if obj["type"] == "grass" && (obj.get("where").is_some() || matches!(obj["heightmap"].as_str(), Some("landscape" | "surface"))) {
+                vec![Arc::new(SceneFile::parse_ruled_grass(&obj, materials, media, geometries, landscape.as_deref()))]
+            } else if obj["type"] == "ecosystem" {
+                SceneFile::parse_ecosystem(&obj, materials, media, geometries, landscape.as_deref()).into_iter().collect()
+            } else if obj["type"] == "scatter" {
+                SceneFile::parse_scatter(&obj, materials, media, geometries, landscape.as_deref()).into_iter().collect()
+            } else if obj["type"] == "volume" && matches!(obj.get("density"), Some(Value::Object(_) | Value::String(_))) {
+                let fields = landscape.clone().map(|l| Arc::new(ObjectFields(l)) as Arc<dyn crate::graph::Fields>);
+                vec![Arc::new(SceneFile::parse_volume_over(&obj, geometries, fields))]
+            } else if obj["type"] == "landscape" {
+                // Kept, as a surface for scatters after it.
+                let x: Vec<Arc<SceneObject>> = SceneFile::parse_object(obj, materials, media, geometries).into_iter().collect();
+                if let Some(first) = x.first() {
+                    landscape = Some(first.clone());
+                }
+                x
             } else if Some(i) == deck && !hills.is_empty() {
                 vec![Arc::new(SceneFile::parse_overcast_with(&obj, std::mem::take(&mut hills)))]
             } else if obj["type"] == "mountains" && obj.get("cloud").is_some() && !joined[i] {
@@ -871,7 +973,7 @@ impl SceneFile {
             return Some(Arc::new(d));
         }
         if t == "landscape" {
-            return Some(Arc::new(create_terrain(&o)));
+            return Some(Arc::new(create_terrain(&o, materials)));
         }
         if t == "firework" {
             let d = create_firework(&o);
@@ -906,6 +1008,16 @@ impl SceneFile {
                 geometry: crate::planet::ground(&planet),
                 medium: SceneFile::parse_object_medium(&o, materials, media),
             }));
+        }
+
+        if t == "cumulus" {
+            return Some(Arc::new(SceneFile::parse_cumulus(&o)));
+        }
+        if t == "weather_layer" {
+            return Some(Arc::new(crate::weather::scene::create_layer(&o)));
+        }
+        if t == "weather" {
+            panic!("A weather object is expanded into its layers before parsing (`weather::scene::expand`)");
         }
 
         if t == "moon" {
@@ -1001,22 +1113,30 @@ impl SceneFile {
     /// "bark": name, "dead_bark": name, "leaves": name or [names], "params": {...}}, ...]}`
     ///
     /// Trees over `area` of the surface (a named or inline geometry, or several, the trees
-    /// standing on the highest; default the plane y = 0), placed by `crate::procedural::forest`.
+    /// standing on the highest; default the plane y = 0; or `"landscape"`, the scene's landscape
+    /// object before it), placed by `crate::procedural::forest`. `"where"` is a rule for where
+    /// they grow and how thickly: a graph from 0 to 1 read on the ground with its normal
+    /// (`slope`, `altitude`, `aspect`, noise, and on a landscape its fields: below the
+    /// `treeline`, where it's `wetness`...).
     /// Each species grows `variants` distinct trees, each placed many times by instancing
     /// transforms, so memory goes with the distinct trees, not the forest's size. The top-level
     /// `params` apply to every species, then each species' own. Given `autumn`, each distinct
     /// tree is that far through autumn, give or take `autumn_spread`. The surface itself isn't
     /// drawn: add it as an object too.
     pub fn parse_forest(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>,
-                        geometries: &GeometryLibrary) -> Vec<Arc<SceneObject>> {
+                        geometries: &GeometryLibrary, landscape: Option<&SceneObject>) -> Vec<Arc<SceneObject>> {
+        SceneFile::forest_in(o, materials, media, geometries, landscape, None).0
+    }
+
+    /// As `parse_forest`, growing only as `room` (0 to 1 at (x, z)) leaves room for; and where
+    /// each tree stands and the radius it keeps clear (half its share of `spacing`).
+    pub(crate) fn forest_in(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>,
+                        geometries: &GeometryLibrary, landscape: Option<&SceneObject>,
+                        room: Option<&dyn Fn(f64, f64) -> f64>) -> Placements {
         use crate::procedural::forest::{self, ForestLayout, ForestSpecies};
-        let surface = |g: &Value| SceneFile::parse_shared_geometry(g, geometries)
-            .unwrap_or_else(|| panic!("forest surface {} is not a geometry", g));
-        let surfaces: Vec<SharedGeometry> = match &o["surface"] {
-            Value::Null => vec![Arc::new(Plane { y: 0. })],
-            Value::Array(list) => list.iter().map(surface).collect(),
-            g => vec![surface(g)],
-        };
+        let (surfaces, on) = Footing::surfaces(o, geometries, landscape, "forest");
+        let footing = Footing::new(&surfaces, on);
+        let rule = Footing::parse_rule(o, "forest");
         let layout = ForestLayout {
             min: SceneFile::parse_vec2(&o["area"]["min"]),
             max: SceneFile::parse_vec2(&o["area"]["max"]),
@@ -1035,22 +1155,30 @@ impl SceneFile {
             scale_v: SceneFile::parse_number(&e["scale_v"], 0.2),
         }).collect();
         let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
-        let refs: Vec<&dyn Geometry> = surfaces.iter().map(|s| &**s as &dyn Geometry).collect();
+        let refs = footing.refs.clone();
         // {"favour": {"terrain": "washes", "scale": 150, "spread": 1, "strength": 0.8}}: trees
         // crowd along a mesas heightmap's feature (`parse_color_texture`), `strength` of them
         // kept only there.
-        let placements = match o.get("favour") {
-            Some(f) => {
-                let feature = match SceneFile::parse_color_texture(f) {
-                    crate::textures::ColorTexture::Terrain(t) => t,
-                    _ => panic!("a forest's \"favour\" must be a terrain texture, got {}", f),
-                };
-                let strength = SceneFile::parse_number(&f["strength"], 0.8).clamp(0., 1.);
-                forest::place_favouring(&layout, &species, seed, &refs,
-                    &|x, z| 1. - strength + strength * feature.amount(&Vector3::new(x, 0., z)))
-            },
-            None => forest::place(&layout, &species, seed, &refs),
+        let feature = o.get("favour").map(|f| {
+            let feature = match SceneFile::parse_color_texture(f) {
+                crate::textures::ColorTexture::Terrain(t) => t,
+                _ => panic!("a forest's \"favour\" must be a terrain texture, got {}", f),
+            };
+            (feature, SceneFile::parse_number(&f["strength"], 0.8).clamp(0., 1.))
+        });
+        // "where": a rule (a graph) for where trees grow and how thickly, read on the ground.
+        let placements = if feature.is_none() && rule.is_none() && room.is_none() {
+            forest::place(&layout, &species, seed, &refs)
+        } else {
+            forest::place_favouring(&layout, &species, seed, &refs, &|x, z| {
+                let favoured = feature.as_ref().map_or(1., |(f, strength)| 1. - strength + strength * f.amount(&Vector3::new(x, 0., z)))
+                    * room.map_or(1., |r| r(x, z));
+                if favoured <= 0. { return 0. }
+                favoured * rule.as_ref().map_or(1., |g| footing.rule(g, x, z))
+            })
         };
+        let claims: Vec<(Vector3<f64>, f64)> = placements.iter()
+            .map(|p| (p.position, 0.5 * layout.spacing * species[p.species].spacing * p.scale)).collect();
 
         let spread = SceneFile::parse_number(&o["autumn_spread"], 0.1);
         let mut rng = crate::geometry::Pcg32::new(seed, 0x7a71);
@@ -1139,19 +1267,276 @@ impl SceneFile {
         println!("Forest: {} trees, from {} distinct; {} primitives built, {} placed{}", placements.len(), distinct.len(), built, primitives,
             if lod.is_some() { format!("; trees at each level of detail: {:?}", per_level) } else { String::new() });
         if trees.is_empty() {
-            return vec![];
+            return (vec![], claims);
         }
         let stand = forest::Stand::new(trees);
-        vec![Arc::new(SceneObject {
+        (vec![Arc::new(SceneObject {
             geometry: Box::new(stand),
             medium: Box::new(Solid { m: Box::new(forest::PartsMaterial { parts }) }),
-        })]
+        })], claims)
+    }
+
+    /// `{"type": "ecosystem", "seed": 0, "surface": geometry or "landscape", "area": {"min": [x, z],
+    /// "max": [x, z]}, "populations": [{"forest": {...}}, {"scatter": {...}}, {"grass": {...}}]}`
+    ///
+    /// Populations that compete for the ground (`procedural::ecosystem`): each a forest, scatter
+    /// or grass as its own object would be, with its own `"where"` rule, placed in the order
+    /// listed (largest first), each growing only in the room those before it leave. A tree or a
+    /// boulder keeps its `base` clear (a fraction of its spacing radius for trees, 0.25; of its
+    /// size for scatters, 0.9) and shades its `canopy` (1.3 of its spacing radius for trees;
+    /// none for scatters) by `shade` (0.6 for trees, 0 for scatters), where the populations
+    /// after it grow that much less thickly. Each takes the ecosystem's `surface`, `seed` and
+    /// `area` unless it has its own; without an `area`, it covers a square `reach` metres out
+    /// from under the camera on each side (300 for forests, 150 for scatters, 25 for grass),
+    /// thinning out to nothing over its last `fade` (a fraction, 0.4 for grass, 0 else). Grass
+    /// grows on the surface itself (`"heightmap": "surface"`), sampled every `cell` metres.
+    pub fn parse_ecosystem(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>,
+                           geometries: &GeometryLibrary, landscape: Option<&SceneObject>) -> Vec<Arc<SceneObject>> {
+        use crate::procedural::ecosystem::{Claim, Occupancy};
+        let populations = o["populations"].as_array().filter(|p| !p.is_empty())
+            .unwrap_or_else(|| panic!("an ecosystem needs a list of \"populations\""));
+        let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
+        let camera = SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::zeros());
+        let mut occupancy = Occupancy::new(1.);
+        let mut objects: Vec<Arc<SceneObject>> = vec![];
+        for (k, p) in populations.iter().enumerate() {
+            let (kind, spec) = ["forest", "scatter", "grass"].iter().find_map(|kind| p.get(*kind).map(|s| (*kind, s)))
+                .unwrap_or_else(|| panic!("an ecosystem's population is a \"forest\", \"scatter\" or \"grass\": {}", p));
+            let mut spec = spec.clone();
+            for key in ["surface", "camera"] {
+                if spec.get(key).is_none() && o.get(key).is_some() { spec[key] = o[key].clone(); }
+            }
+            if spec.get("seed").is_none() { spec["seed"] = Value::from(seed.wrapping_mul(31).wrapping_add(k as u64 + 1)); }
+            let given = spec.clone();
+            let num = |key: &str, def: f64| SceneFile::parse_number(&given[key], def);
+            let reach = SceneFile::parse_number(&spec["reach"], match kind { "forest" => 300., "scatter" => 150., _ => 25. });
+            let area = spec.get("area").or(o.get("area")).cloned().unwrap_or_else(|| serde_json::json!({
+                "min": [camera.x - reach, camera.z - reach], "max": [camera.x + reach, camera.z + reach] }));
+            // About the camera, thinning out over the last `fade` of the reach (0.4 of it for
+            // grass, none for the rest), in a circle, so it has no edge to see.
+            let about = spec.get("area").is_none() && o.get("area").is_none();
+            let fade = if about { num("fade", if kind == "grass" { 0.4 } else { 0. }).clamp(0., 1.) } else { 0. };
+            let room = |x: f64, z: f64| {
+                let thin = if fade > 0. {
+                    let t = (((x - camera.x).hypot(z - camera.z) / reach - (1. - fade)) / fade).clamp(0., 1.);
+                    1. - t * t * (3. - 2. * t)
+                } else { 1. };
+                if thin <= 0. { 0. } else { thin * occupancy.free(x, z) }
+            };
+            let (made, claims): (Vec<Arc<SceneObject>>, Vec<Claim>) = match kind {
+                "forest" => {
+                    spec["area"] = area;
+                    let (made, placed) = SceneFile::forest_in(&spec, materials, media, geometries, landscape, Some(&room));
+                    let (base, canopy, shade) = (num("base", 0.25), num("canopy", 1.3), num("shade", 0.6));
+                    (made, placed.iter().map(|(p, r)| Claim { x: p.x, z: p.z, base: base * r, shade_radius: canopy * r, shade }).collect())
+                },
+                "scatter" => {
+                    spec["area"] = area;
+                    let (made, placed) = SceneFile::scatter_in(&spec, materials, media, geometries, landscape, Some(&room));
+                    let (base, canopy, shade) = (num("base", 0.9), num("canopy", 0.), num("shade", 0.));
+                    (made, placed.iter().map(|(p, r)| Claim { x: p.x, z: p.z, base: base * r, shade_radius: canopy * r, shade }).collect())
+                },
+                _ => {
+                    if spec.get("heightmap").is_none() { spec["heightmap"] = Value::from("surface"); }
+                    if spec.get("min").is_none() { spec["min"] = area["min"].clone(); spec["max"] = area["max"].clone(); }
+                    (vec![Arc::new(SceneFile::grass_in(&spec, materials, media, geometries, landscape, Some(&room)))], vec![])
+                },
+            };
+            println!("Ecosystem: population {} ({}): {} placed", k, kind, claims.len());
+            objects.extend(made);
+            occupancy.extend(claims);
+        }
+        objects
+    }
+
+    /// `{"type": "scatter", "seed": 0, "surface": geometry or [geometries], "area": {"min": [x, z],
+    /// "max": [x, z]}, "spacing": 1, "density": graph, "max_slope": 90, "clearings": 0,
+    /// "patch_size": 20, "patchiness": 0.3, "items": [item, ...]}`
+    ///
+    /// Copies of things strewn over a surface, as Terragen's populations: boulders over a
+    /// moraine, stones on scree, logs in a wood. Placed as a forest's trees are
+    /// (`procedural::forest::place_favouring`: kept apart by `spacing` in proportion to their
+    /// size, items growing in patches by `patchiness`), but only where `density` (a graph,
+    /// evaluated on the surface where each would stand, with its normal, so `slope` and noise
+    /// masks work; 1 by default) lets them, and as thickly as it says. Each item:
+    ///
+    /// - `"geometry"`: a named or inline geometry to copy; or `"boulder": {"angularity": 0.5,
+    ///   "detail": 4}`, `"variants"` (3) distinct seeded boulders of radius 1;
+    /// - `"material"` or `"medium"` (boulders default to a granite `rock`);
+    /// - `"weight"` (1), `"spacing"` (1, relative to the scatter's), `"size"`: a scale, or
+    ///   `[smallest, largest]` (1);
+    /// - `"sink"` (0): how far into the ground, as a fraction of its size; `"align"` (0 to 1,
+    ///   default 0.7): how far it leans with the slope, from upright to square to the ground;
+    ///   `"tilt"` (degrees, 0): a random lean besides.
+    ///
+    /// Every copy is turned to a random heading and half are mirrored. Copies cost a transform
+    /// each, so a scatter costs memory for its distinct items, not for every copy. The surface
+    /// itself isn't drawn: add it as an object too.
+    pub fn parse_scatter(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>,
+                         geometries: &GeometryLibrary, landscape: Option<&SceneObject>) -> Vec<Arc<SceneObject>> {
+        SceneFile::scatter_in(o, materials, media, geometries, landscape, None).0
+    }
+
+    /// As `parse_scatter`, only as thickly as `room` (0 to 1 at (x, z)) leaves room for; and
+    /// where each copy stands and its size.
+    pub(crate) fn scatter_in(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>,
+                         geometries: &GeometryLibrary, landscape: Option<&SceneObject>,
+                         room: Option<&dyn Fn(f64, f64) -> f64>) -> Placements {
+        use crate::procedural::forest::{self, ForestLayout, ForestSpecies};
+        let (surfaces, on) = Footing::surfaces(o, geometries, landscape, "scatter");
+        let footing = Footing::new(&surfaces, on);
+        let refs = footing.refs.clone();
+        let seed = SceneFile::parse_int(&o["seed"], 0) as u64;
+        let entries = o["items"].as_array().filter(|e| !e.is_empty())
+            .unwrap_or_else(|| panic!("a scatter needs a list of \"items\""));
+        struct Item { models: Vec<SharedGeometry>, size: (f64, f64), sink: f64, align: f64, tilt: f64 }
+        let mut media_of: Vec<Box<dyn Medium + Sync + Send>> = vec![];
+        let items: Vec<Item> = entries.iter().enumerate().map(|(k, e)| {
+            let given = e.get("material").is_some() || e.get("medium").is_some();
+            let (models, medium): (Vec<SharedGeometry>, Box<dyn Medium + Sync + Send>) = match (e.get("boulder"), e.get("geometry")) {
+                (Some(b), None) => {
+                    let n = SceneFile::parse_int(&e["variants"], 3).max(1);
+                    let detail = b.get("detail").map(|d| SceneFile::parse_int(d, 4) as u32);
+                    let angularity = SceneFile::parse_number(&b["angularity"], 0.5);
+                    let models = (0..n).map(|v| Arc::new(crate::shapes::mesh::SmoothMesh::from_indexed(&[rock::boulder_mesh(
+                        Vector3::zeros(), 1., angularity, detail, seed.wrapping_mul(31).wrapping_add((k * 101 + v) as u64))]))
+                        as SharedGeometry).collect();
+                    let medium: Box<dyn Medium + Sync + Send> = if given { SceneFile::parse_object_medium(e, materials, media) }
+                        else { Box::new(Solid { m: Box::new(Rock::new(RockStyle::preset("granite"), 1., seed + k as u64)) }) };
+                    (models, medium)
+                },
+                (None, Some(g)) => {
+                    assert!(given, "a scatter item {} needs a \"material\" or \"medium\"", e);
+                    let g = SceneFile::parse_shared_geometry(g, geometries)
+                        .unwrap_or_else(|| panic!("scatter item {} is not a geometry", g));
+                    (vec![g], SceneFile::parse_object_medium(e, materials, media))
+                },
+                _ => panic!("a scatter item needs a \"geometry\" or a \"boulder\", not both: {}", e),
+            };
+            media_of.push(medium);
+            let size = match &e["size"] {
+                Value::Array(a) if a.len() == 2 => (SceneFile::parse_number(&a[0], 1.), SceneFile::parse_number(&a[1], 1.)),
+                v => { let s = SceneFile::parse_number(v, 1.); (s, s) },
+            };
+            assert!(size.0 > 0. && size.1 >= size.0, "a scatter item's size must be positive, smallest first: {}", e);
+            Item { models, size, sink: SceneFile::parse_number(&e["sink"], 0.),
+                align: SceneFile::parse_number(&e["align"], 0.7).clamp(0., 1.),
+                tilt: SceneFile::parse_number(&e["tilt"], 0.).to_radians() }
+        }).collect();
+        // Sizes spread evenly between each item's smallest and largest, kept apart in proportion.
+        let species: Vec<ForestSpecies> = entries.iter().zip(&items).map(|(e, item)| ForestSpecies {
+            weight: SceneFile::parse_number(&e["weight"], 1.),
+            spacing: SceneFile::parse_number(&e["spacing"], 1.) * 0.5 * (item.size.0 + item.size.1),
+            scale_v: (item.size.1 - item.size.0) / (item.size.1 + item.size.0),
+        }).collect();
+        let layout = ForestLayout {
+            min: SceneFile::parse_vec2(&o["area"]["min"]),
+            max: SceneFile::parse_vec2(&o["area"]["max"]),
+            spacing: SceneFile::parse_number(&o["spacing"], 1.),
+            clearings: SceneFile::parse_number(&o["clearings"], 0.),
+            patch_size: SceneFile::parse_number(&o["patch_size"], 20.),
+            patchiness: SceneFile::parse_number(&o["patchiness"], 0.3),
+            max_slope: SceneFile::parse_number(&o["max_slope"], 90.),
+            variants: items.iter().map(|i| i.models.len()).max().unwrap_or(1),
+        };
+        let ground = |x: f64, z: f64| footing.at(x, z);
+        let density = Footing::parse_rule(o, "scatter").or_else(|| o.get("density")
+            .map(|d| crate::graph::Graph::parse(d).unwrap_or_else(|e| panic!("scatter's density: {}", e))));
+        let favour = |x: f64, z: f64| {
+            let left = room.map_or(1., |r| r(x, z));
+            if left <= 0. { 0. } else { left * density.as_ref().map_or(1., |g| footing.rule(g, x, z)) }
+        };
+        let placements = forest::place_favouring(&layout, &species, seed, &refs, &favour);
+
+        let claims: Vec<(Vector3<f64>, f64)> = placements.iter()
+            .map(|p| (p.position, 0.5 * (items[p.species].size.0 + items[p.species].size.1) * p.scale)).collect();
+        let mut rng = crate::geometry::Pcg32::new(seed, 0x5ca7);
+        let copies: Vec<Arc<forest::PartOf<crate::shapes::transform::Transform>>> = placements.iter().map(|p| {
+            let item = &items[p.species];
+            let model = item.models[p.variant % item.models.len()].clone();
+            let mid = 0.5 * (item.size.0 + item.size.1);
+            let size = mid * p.scale;
+            let normal = ground(p.position.x, p.position.z).map_or(Vector3::y(), |(_, n)| n);
+            // Leaning with the slope as far as `align` says, then by a random tilt besides.
+            let up = Vector3::y().lerp(&normal, item.align).normalize();
+            let lean = rng.next_f64() * item.tilt;
+            let around = rng.next_f64() * std::f64::consts::TAU;
+            let side = up.cross(&Vector3::new(around.cos(), 0., around.sin())).try_normalize(1e-9).unwrap_or(Vector3::x());
+            let up = Rotation3::from_axis_angle(&crate::na::Unit::new_normalize(side), lean) * up;
+            let stand = Rotation3::rotation_between(&Vector3::y(), &up).unwrap_or_else(Rotation3::identity);
+            let turn = Rotation3::from_axis_angle(&crate::na::Unit::new_normalize(up), p.yaw.to_radians());
+            let mirror = if p.mirror { -1. } else { 1. };
+            let at = p.position - up * (item.sink * size);
+            let m = Translation3::from(at).to_homogeneous() * (turn * stand).to_homogeneous()
+                * Matrix4::new_nonuniform_scaling(&Vector3::new(mirror * size, size, size));
+            Arc::new(forest::PartOf { item: crate::shapes::transform::Transform::new(model, Affine3::from_matrix_unchecked(m)), part: p.species as u32 })
+        }).collect();
+        println!("Scatter: {} copies of {} distinct items", copies.len(), items.iter().map(|i| i.models.len()).sum::<usize>());
+        if copies.is_empty() {
+            return (vec![], claims);
+        }
+        (vec![Arc::new(SceneObject {
+            geometry: Box::new(GeometrySet::new(&copies)),
+            medium: Box::new(Solid { m: Box::new(forest::PartsMaterial { parts: media_of }) }),
+        })], claims)
+    }
+
+    /// Grass with a `"where"` rule (a graph, 0 to 1, read on the ground: slope, altitude, noise,
+    /// and a landscape's fields), or on the landscape (`"heightmap": "landscape"`, over `min`
+    /// to `max`, the scene's landscape object before it sampled every `"cell"` metres, 0.25 by
+    /// default, so the grass stands on its displaced surface).
+    pub fn parse_ruled_grass(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>, geometries: &GeometryLibrary,
+        landscape: Option<&SceneObject>) -> SceneObject {
+        SceneFile::grass_in(o, materials, media, geometries, landscape, None)
+    }
+
+    /// As `parse_ruled_grass`, only as thickly as `room` (0 to 1 at (x, z)) leaves room for.
+    pub(crate) fn grass_in(o: &Value, materials: &Map<String, Value>, media: &Map<String, Value>, geometries: &GeometryLibrary,
+        landscape: Option<&SceneObject>, room: Option<&(dyn Fn(f64, f64) -> f64 + Sync)>) -> SceneObject {
+        use crate::procedural::grass::{create_grass_on, GrassMedium, Rule};
+        // On the landscape, or on what `surface` names ("heightmap": "surface"), sampled.
+        let (surfaces, land) = match o["heightmap"].as_str() {
+            Some("landscape") => (vec![], Some(landscape.unwrap_or_else(|| panic!("grass on the \"landscape\" must come after a landscape object")))),
+            Some("surface") => Footing::surfaces(o, geometries, landscape, "grass"),
+            _ => (vec![], None),
+        };
+        let sampled = land.is_some() || !surfaces.is_empty();
+        let grid = match sampled {
+            true => {
+                let (min, max) = (SceneFile::parse_vec2(&o["min"]), SceneFile::parse_vec2(&o["max"]));
+                let footing = Footing::new(&surfaces, land);
+                struct Dropped<'a>(&'a Footing<'a>);
+                impl crate::procedural::heightmap::HeightSource for Dropped<'_> {
+                    fn height(&self, x: f64, z: f64) -> f64 { self.0.at(x, z).map_or(0., |(p, _)| p.y) }
+                }
+                HeightGrid::sample(&Dropped(&footing), (min.x, min.y), (max.x, max.y), SceneFile::parse_number(&o["cell"], 0.25).max(0.01))
+            },
+            false => HeightGrid::from_json(&o["heightmap"]),
+        };
+        let graph = Footing::parse_rule(o, "grass");
+        let rule = (graph.is_some() || room.is_some())
+            .then(|| Rule { graph, fields: land.or(landscape).and_then(|l| l.medium.fields()), room });
+        let (geometry, conditions) = create_grass_on(o, grid, rule.as_ref());
+        println!("Grass: {} blades{}", geometry.field.len(), if rule.is_some() { " where its rule lets it grow" } else { "" });
+        let medium: Box<dyn Medium + Sync + Send> = if o.get("material").is_some() || o.get("medium").is_some() {
+            SceneFile::parse_object_medium(o, materials, media)
+        } else {
+            Box::new(GrassMedium::new(geometry.field.clone(), &conditions))
+        };
+        SceneObject { geometry: Box::new(geometry), medium }
     }
 
     /// A terrain displaced by the graph `d` (`shapes::displaced`), diced as its
     /// `"displacement_detail"` and the scene's camera (which the scene gives it) call for.
-    fn parse_displaced_terrain(grid: Arc<HeightGrid>, d: &Value, o: &Value) -> crate::shapes::displaced::DisplacedTerrain {
-        use crate::shapes::displaced::{Detail, DisplacedTerrain};
+    pub(crate) fn parse_displaced_terrain(grid: Arc<HeightGrid>, d: &Value, o: &Value) -> crate::shapes::displaced::DisplacedTerrain {
+        crate::shapes::displaced::DisplacedTerrain::of(grid, SceneFile::parse_displacement(d, o), None, None)
+            .unwrap_or_else(|e| panic!("{}", e))
+    }
+
+    /// What a terrain's displacement `d` and the rest of its object `o` ask for: the graph, its
+    /// direction, the lift, the falloff and the detail it is diced to.
+    pub(crate) fn parse_displacement(d: &Value, o: &Value) -> crate::shapes::displaced::Displacement {
+        use crate::shapes::displaced::Detail;
         let graph = crate::graph::Graph::parse(d).unwrap_or_else(|e| panic!("terrain's displacement: {}", e));
         let v = &o["displacement_detail"];
         let camera = &o["camera"];
@@ -1159,19 +1544,152 @@ impl SceneFile {
         let eye = (!camera.is_null() && height > 0. && v["level"].is_null()).then(|| {
             (SceneFile::parse_vec3(&camera["location"]), camera["angle"].as_f64().unwrap_or(0.5).tan() / height)
         });
+        let view = eye.and(SceneFile::parse_view(camera));
         let detail = Detail {
             eye,
             pixels: SceneFile::parse_number(&v["pixels"], 1.),
             max_level: SceneFile::parse_int(&v["max_level"], 8) as u32,
             min_spacing: v["min_spacing"].as_f64(),
             level: SceneFile::parse_int(&v["level"], 4) as u32,
+            view,
+            offscreen: SceneFile::parse_number(&v["offscreen"], 4.),
+            // Where the scene puts it, found by `displaced_instances`.
+            instances: o["displacement_instances"].as_array().map_or_else(Vec::new, |a| a.iter().map(|m| {
+                let n: Vec<f64> = m.as_array().map_or_else(Vec::new, |r| r.iter().filter_map(Value::as_f64).collect());
+                assert_eq!(n.len(), 16, "displacement_instances are 4 x 4 matrices, row by row");
+                Affine3::from_matrix_unchecked(Matrix4::from_row_slice(&n))
+            }).collect()),
         };
         let vertical = match o["displacement_direction"].as_str() {
             None | Some("normal") => false,
             Some("vertical") => true,
             Some(x) => panic!("Unknown displacement_direction '{}': expected \"normal\" or \"vertical\"", x),
         };
-        DisplacedTerrain::new(grid, graph, vertical, &detail).unwrap_or_else(|e| panic!("{}", e))
+        let lift = o.get("vertical_displacement").map(|v| crate::graph::Graph::parse(v)
+            .unwrap_or_else(|e| panic!("terrain's vertical_displacement: {}", e)));
+        let falloff = SceneFile::parse_number(&o["displacement_falloff"], 0.);
+        // {"x", "y", "z", "outward"}: graphs moving points along the terrain's axes, and
+        // horizontally away from its slope.
+        let v = &o["vector_displacement"];
+        let axis = |k: &str| v.get(k).map(|g| crate::graph::Graph::parse(g)
+            .unwrap_or_else(|e| panic!("terrain's vector_displacement {}: {}", k, e)));
+        let sideways = crate::shapes::displaced::Sideways { x: axis("x"), y: axis("y"), z: axis("z"), outward: axis("outward") };
+        crate::shapes::displaced::Displacement { graph, vertical, lift, sideways, falloff, detail }
+    }
+
+    /// A still perspective camera's view (`shapes::displaced::View`), a few pixels wider than
+    /// the image for the pixel filter, so cells out of it can be diced coarser; None for other
+    /// cameras, or without an image size.
+    fn parse_view(camera: &Value) -> Option<crate::shapes::displaced::View> {
+        let width = SceneFile::parse_number(&camera["image_width"], 0.);
+        let height = SceneFile::parse_number(&camera["image_height"], 0.);
+        let still_perspective = matches!(camera["type"].as_str(), None | Some("perspective"))
+            && camera.get("motion").is_none() && camera.get("astigmatism").is_none();
+        (width > 0. && height > 0. && still_perspective).then(|| {
+            let frame = crate::camera::Frame::look_at(SceneFile::parse_vec3(&camera["location"]),
+                SceneFile::parse_vec3(&camera["lookat"]), SceneFile::parse_vec3(&camera["up"]));
+            let tan = camera["angle"].as_f64().unwrap_or(0.5).tan();
+            let widen = |pixels: f64| 1. + 8. / pixels;
+            // A ray from the lens, `aperture` off its centre, aimed through the focal plane,
+            // strays from its pinhole ray by aperture * |1 - z / focus| at depth z: within
+            // the planes moved out by the aperture and turned out by aperture / focus.
+            let aperture = SceneFile::parse_number(&camera["aperture"], 0.2).abs();
+            let focus = camera["focus_distance"].as_f64()
+                .unwrap_or_else(|| (SceneFile::parse_vec3(&camera["lookat"]) - frame.location).norm());
+            // (A lens focused at its own plane blurs everything: the view is then everything ahead.)
+            let defocus = aperture / focus.max(1e-9);
+            crate::shapes::displaced::View {
+                eye: frame.location, right: frame.camx, up: frame.camy, forward: frame.camz,
+                tan_x: 0.5 * tan * width / height * widen(width) + defocus,
+                tan_y: 0.5 * tan * widen(height) + defocus,
+                margin: aperture,
+            }
+        })
+    }
+
+    /// Where the scene puts each displaced terrain: the transforms around every reference to it,
+    /// through named geometries (`{"type": "transform", "item": "cliff"}`, a terrain's own
+    /// `"transform"` steps, `rotate`s), written into each terrain as `"displacement_instances"`
+    /// so it is diced for the camera as each copy sees it. Terrains nowhere transformed are left
+    /// alone.
+    fn displaced_instances(objects: &mut [Value], geometries: &mut Map<String, Value>) {
+        // (In a named geometry or not, its JSON pointer there, where it is put.)
+        type Found = Vec<(Option<String>, String, Affine3<f64>)>;
+        fn walk(v: &Value, root: &Option<String>, ptr: String, at: Affine3<f64>, geometries: &Map<String, Value>, depth: usize, found: &mut Found) {
+            if depth > 64 { return; }
+            let refer = |name: &str, at: Affine3<f64>, found: &mut Found| {
+                if let Some(g) = geometries.get(name) {
+                    walk(g, &Some(name.to_string()), String::new(), at, geometries, depth + 1, found);
+                }
+            };
+            match v {
+                Value::Object(o) => {
+                    let mut at = at;
+                    match o.get("type").and_then(Value::as_str) {
+                        Some("transform") => at *= SceneFile::parse_affine(v),
+                        Some("rotate") => at *= Affine3::from_matrix_unchecked(Rotation3::from_euler_angles(
+                            SceneFile::parse_number(&v["roll"], 0.).to_radians(),
+                            SceneFile::parse_number(&v["pitch"], 0.).to_radians(),
+                            SceneFile::parse_number(&v["yaw"], 0.).to_radians()).to_homogeneous()),
+                        _ => {},
+                    }
+                    if !v["transform"].is_null() {
+                        at *= SceneFile::parse_steps(&v["transform"]);
+                    }
+                    if v["type"].as_str() == Some("terrain") && v.get("displacement").is_some() {
+                        found.push((root.clone(), ptr, at));
+                        return;
+                    }
+                    for (k, child) in o {
+                        match (k.as_str(), child) {
+                            ("item" | "a" | "b" | "clipped_by", Value::String(name)) => refer(name, at, found),
+                            ("items", Value::Array(items)) => for (i, item) in items.iter().enumerate() {
+                                match item {
+                                    Value::String(name) => refer(name, at, found),
+                                    _ => walk(item, root, format!("{}/items/{}", ptr, i), at, geometries, depth + 1, found),
+                                }
+                            },
+                            ("camera" | "transform" | "motion" | "heightmap" | "displacement" | "vertical_displacement", _) => {},
+                            (_, Value::Object(_) | Value::Array(_)) => walk(child, root, format!("{}/{}", ptr, k.replace('~', "~0").replace('/', "~1")), at, geometries, depth + 1, found),
+                            _ => {},
+                        }
+                    }
+                },
+                Value::Array(items) => for (i, item) in items.iter().enumerate() {
+                    walk(item, root, format!("{}/{}", ptr, i), at, geometries, depth + 1, found);
+                },
+                _ => {},
+            }
+        }
+        let mut found: Found = vec![];
+        for (i, o) in objects.iter().enumerate() {
+            walk(o, &None, format!("/{}", i), Affine3::identity(), geometries, 0, &mut found);
+        }
+        let mut placed: HashMap<(Option<String>, String), Vec<Affine3<f64>>> = HashMap::new();
+        for (root, ptr, at) in found {
+            placed.entry((root, ptr)).or_default().push(at);
+        }
+        for ((root, ptr), ats) in placed {
+            if ats.iter().all(|a| (a.matrix() - Matrix4::identity()).abs().max() < 1e-12) {
+                continue;
+            }
+            let matrices: Vec<Value> = ats.iter().map(|a| {
+                let m = a.matrix();
+                Value::from((0..16).map(|k| m[(k / 4, k % 4)]).collect::<Vec<f64>>())
+            }).collect();
+            let target = match &root {
+                Some(name) => geometries.get_mut(name).and_then(|g| g.pointer_mut(&ptr)),
+                None => {
+                    // "/i/rest": the i'th object, then the rest within it.
+                    let rest = ptr.splitn(3, '/').nth(2).map_or(String::new(), |r| format!("/{}", r));
+                    let i: usize = ptr.split('/').nth(1).and_then(|i| i.parse().ok()).unwrap_or(0);
+                    objects.get_mut(i).and_then(|o| o.pointer_mut(&rest))
+                },
+            };
+            if let Some(t) = target {
+                t["displacement_instances"] = Value::from(matrices);
+            }
+        }
     }
 
     /// A forest's `"lod"`: `true`, or `{"pixels": 1, "max_level": 12}`, to see each tree at the
@@ -1292,7 +1810,10 @@ impl SceneFile {
     /// "g": asymmetry, "noise": {"scale", "octaves", "threshold", "seed"}, "grid": ...}`
     ///
     /// `density` is the extinction coefficient, the chance of a collision per unit distance
-    /// (default 1). Without `noise` it is constant; with it, it varies up to that maximum. With
+    /// (default 1). Without `noise` it is constant; with it, it varies up to that maximum. It
+    /// may instead be a function graph (`graph.rs`), its value the extinction where it is
+    /// evaluated (`volume::GraphDensity`); after a landscape in the scene, the graph reads its
+    /// fields, and `altitude` is the height above the planet. With
     /// `grid` (`volume::grid`), it is the grid's values times `density`: a Mitsuba `.vol` file's
     /// path, or `{"resolution": [nx, ny, nz], "values": [...]}` (x fastest); `min` and `max`
     /// default to the file's bounds. In place of `albedo`, `sigma_a` and `sigma_s` (RGB) give
@@ -1306,7 +1827,15 @@ impl SceneFile {
     /// `droplet_diameter` (in µm, 5 to 50: the Mie scattering of water droplets of that size;
     /// see `PhaseFunction::water_droplets`).
     pub fn parse_volume(o: &Value, geometries: &GeometryLibrary) -> SceneObject {
-        let max_density = SceneFile::parse_number(&o["density"], 1.);
+        SceneFile::parse_volume_over(o, geometries, None)
+    }
+
+    /// As `parse_volume`, a density graph reading `fields` (the landscape's, for a volume after
+    /// one in the scene).
+    pub fn parse_volume_over(o: &Value, geometries: &GeometryLibrary, fields: Option<Arc<dyn crate::graph::Fields>>) -> SceneObject {
+        // A graph for density: its value is the extinction (`volume::GraphDensity`).
+        let graphed = matches!(o.get("density"), Some(Value::Object(_) | Value::String(_)));
+        let max_density = if graphed { 1. } else { SceneFile::parse_number(&o["density"], 1.) };
         let grid = o.get("grid").map(SceneFile::parse_grid);
         let shape = o.get("shape").map(|v| SceneFile::parse_geometry(v, geometries)
             .unwrap_or_else(|| panic!("A volume's shape must be a geometry, got {}", v)));
@@ -1317,6 +1846,11 @@ impl SceneFile {
             _ => BBox::new(SceneFile::parse_vec3(&o["min"]), SceneFile::parse_vec3(&o["max"])),
         };
         let density: Arc<dyn DensityField> = match (grid, o.get("noise")) {
+            _ if graphed => {
+                assert!(o.get("grid").is_none() && o.get("noise").is_none(), "Give a volume a density graph, or a grid or noise, not both");
+                let g = crate::graph::Graph::parse(&o["density"]).unwrap_or_else(|e| panic!("volume's density: {}", e));
+                Arc::new(crate::volume::GraphDensity::new(g, fields).unwrap_or_else(|e| panic!("{}", e)))
+            },
             (Some(_), Some(_)) => panic!("Give a volume either a grid or noise, not both"),
             (Some(g), None) => Arc::new(GridDensity::new(bounds, g, max_density)),
             (None, None) => Arc::new(ConstantDensity(max_density)),
@@ -1407,6 +1941,7 @@ impl SceneFile {
             rainbow: (o["rainbow"].as_bool() == Some(true)).then(|| Arc::new(RainbowTable::new(100_000))),
             emission: None,
             extinction: None,
+            sun_probes: o["sun_probes"].as_bool().unwrap_or(crate::volume::SUN_PROBES),
         }
     }
 
@@ -1585,6 +2120,11 @@ impl SceneFile {
     /// `follow_wind` renders the clouds as seen drifting with the wind, so in an animation
     /// they stay in view as they grow and dissipate, rather than crossing the sky.
     ///
+    /// Turbulence finer than the grid (`HarrisCumulus::turbulent`, after Kim et al.'s wavelet
+    /// turbulence): `turbulence` (strength, default 0.35; 0 for none) over `turbulence_octaves`
+    /// (default 3) below the cell size, looked up at texture coordinates the simulation carries
+    /// with the flow, each set renewed every `texture_period` seconds (default 600).
+    ///
     /// For rendering: `droplet_radius` (µm, default 10; sets the extinction per gram of
     /// water, and the diffraction), `detail_size`, `erosion` (0 to 1) and `edge` (g/kg of
     /// cloud water the detail can erode), `repeat` (tile the grid across the sky, default
@@ -1615,6 +2155,30 @@ impl SceneFile {
         p.max_step = num("max_step", p.max_step);
         p.seed = SceneFile::parse_seed(o).unwrap_or(0);
         p.start = num("start", p.start);
+        p.texture_period = num("texture_period", p.texture_period).max(1.);
+        // A cloud to start from: `"bubble": {"center": [x, z] (m from the grid's corner; default
+        // its middle), "height": m (of its middle), "radius": m, "depth": m (top to bottom;
+        // default twice the radius: a ball), "warmth": K, "supersaturation": 0.05}`.
+        if let Some(b) = o.get("bubble") {
+            let (nx, _, nz) = p.size;
+            let middle = Vector2::new(nx as f64, nz as f64) * p.cell / 2.;
+            let c = SceneFile::parse_vec2_def(b, "center", middle);
+            p.bubble = Some(crate::procedural::harris_cumulus::Bubble {
+                centre: Vector3::new(c.x, SceneFile::parse_number(&b["height"], 1000.), c.y),
+                radius: SceneFile::parse_number(&b["radius"], 400.).max(1.),
+                height: SceneFile::parse_number(&b["depth"], 2. * SceneFile::parse_number(&b["radius"], 400.)).max(1.) / 2.,
+                warmth: SceneFile::parse_number(&b["warmth"], 2.),
+                supersaturation: SceneFile::parse_number(&b["supersaturation"], 0.05).max(0.),
+            });
+        }
+        // A hero cloud: `"hot_spot": {"center": [x, z] (m from the grid's corner; default its
+        // middle), "radius": m, "boost": 1}`.
+        if let Some(h) = o.get("hot_spot") {
+            let (nx, _, nz) = p.size;
+            let middle = Vector2::new(nx as f64, nz as f64) * p.cell / 2.;
+            p.hot_spot = Some((SceneFile::parse_vec2_def(h, "center", middle), SceneFile::parse_number(&h["radius"], 500.).max(1.),
+                SceneFile::parse_number(&h["boost"], 1.).max(0.)));
+        }
         if o["sounding"].as_str() == Some("arm") {
             // The full day, from dawn.
             p.sounding = Sounding::arm();
@@ -1642,7 +2206,8 @@ impl SceneFile {
             None => CloudSimulation::cached(p.clone(), time, cache.as_deref()),
         };
         let center = SceneFile::parse_vec2_def(o, "center", Vector2::new(0., 0.));
-        let mut c = HarrisCumulus::new(&sim, num("droplet_radius", 10.), center);
+        let mut c = HarrisCumulus::with_turbulence(&sim, num("droplet_radius", 10.), center,
+            num("turbulence", 0.35).max(0.), SceneFile::parse_int(&o["turbulence_octaves"], 3).min(8));
         c.detail_size = num("detail_size", c.detail_size).max(1e-3);
         c.erosion = num("erosion", c.erosion).clamp(0., 1.);
         c.edge = num("edge", c.edge * 1000.) / 1000.;
@@ -1664,6 +2229,45 @@ impl SceneFile {
         };
         let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(c));
         create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// One cauliflower cumulus (see `procedural::cauliflower::Cumulus`), placed by hand:
+    ///
+    /// `{"type": "cumulus", "center": [x, z], "base": 1000, "width": 800, "depth": 1500,
+    /// "seed": 0}`, with `density` (extinction per metre in its core, 0.05), `edge` (m, 15),
+    /// `lift`, `dome` (how much higher the body's middle stands, in its spheres' radius: 0.8),
+    /// `lean` (per metre of height) and `wind_direction` ([x, z]), `billows` (a scale)
+    /// and `wisps`, `wisp_size` (m), and the sphere tree's `levels`, `ratio`, `children`, `embed`
+    /// and `rise`; and how it scatters, as any volume (`g` default 0.85). `"tower": true` makes
+    /// it a towering cumulus of stacked thermals (`width` its radius, `depth` its height), frozen
+    /// above `glaciation` (m) into a cumulonimbus's smooth top; `maturity` (0 to 1) how far it
+    /// has formed: wispy and translucent when young (`Surface::condensed`).
+    pub fn parse_cumulus(o: &Value) -> SceneObject {
+        use crate::procedural::cauliflower::{Cauliflower, Cumulus, Surface};
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let seed = SceneFile::parse_seed(o).unwrap_or(0);
+        let d = Cauliflower::cumulus();
+        let tree = Cauliflower::new(SceneFile::parse_int(&o["levels"], d.levels).min(8), num("ratio", d.ratio).clamp(0.1, 0.8),
+            SceneFile::parse_int(&o["children"], d.children).clamp(1, 32), num("embed", d.embed).clamp(0., 1.), num("rise", d.rise).max(0.));
+        let mut surface = Surface::new(seed.wrapping_add(77));
+        let billows = num("billows", 1.).max(0.);
+        surface.billows.iter_mut().for_each(|b| b.1 *= billows);
+        surface.wisps = num("wisps", surface.wisps).max(0.);
+        surface.wisp_size = num("wisp_size", surface.wisp_size).max(1.);
+        let centre = SceneFile::parse_vec2_def(o, "center", Vector2::zeros());
+        let wind = SceneFile::parse_vec2_def(o, "wind_direction", Vector2::new(1., 0.));
+        let mut c = if o["tower"].as_bool() == Some(true) {
+            Cumulus::tower(tree, surface, centre, num("base", 1000.), num("width", 1500.).max(10.), num("depth", 6000.).max(10.),
+                num("lift", 0.35).clamp(0., 1.), num("lean", 0.).max(0.), wind, o["glaciation"].as_f64(), seed)
+        } else {
+            Cumulus::new(tree, surface, centre, num("base", 1000.), num("width", 800.).max(10.), num("depth", 1500.).max(10.),
+                num("lift", 0.35).clamp(0., 1.), num("dome", 0.8).max(0.), num("lean", 0.25).max(0.), wind, seed)
+        };
+        c.maturity = num("maturity", 1.).clamp(0., 1.);
+        c.max_density = num("density", c.max_density).max(0.);
+        c.edge = num("edge", c.edge).max(1.);
+        let bounds = c.bounds();
+        create_volume(bounds, Arc::new(c), SceneFile::parse_scattering(o, 0.85))
     }
 
     /// A layer of altocumulus as Rayleigh-Bénard convection cells (see
@@ -2053,9 +2657,13 @@ impl SceneFile {
     /// default) and `"flat"` as for `nubis_clouds`.
     /// The phase function defaults to `g` 0.75, for ice crystals; `"halos"` adds sun dogs and
     /// halos (see `SceneFile::parse_halos`).
-    pub fn parse_hogan_kew_cirrus(o: &Value) -> SceneObject {
+    /// Hogan and Kew's cirrus as a scene file describes it (see `parse_hogan_kew_cirrus`), by
+    /// default of `genus`: the layer, and its generating cells' size, spectral slope,
+    /// coverage and seed.
+    pub fn hogan_kew_layer(o: &Value, genus: CirrusGenus) -> (HoganKewCirrus, (f64, f64, f64, u64)) {
         let genus = match o["genus"].as_str() {
-            None | Some("cirrus") => CirrusGenus::Cirrus,
+            None => genus,
+            Some("cirrus") => CirrusGenus::Cirrus,
             Some("cirrostratus") => CirrusGenus::Cirrostratus,
             Some("cirrocumulus") => CirrusGenus::Cirrocumulus,
             Some(g) => panic!("Unknown cirrus genus '{}': expected cirrus, cirrostratus or cirrocumulus", g),
@@ -2070,7 +2678,6 @@ impl SceneFile {
         f.anisotropy = num("anisotropy", f.anisotropy);
         f.wind_direction = SceneFile::parse_vec2_def(o, "wind_direction", f.wind_direction);
         f.seed = SceneFile::parse_seed(o).unwrap_or(0);
-        let (base, top) = (f.base, f.top);
         let generating = (f.cell_size, f.spectral_slope, f.coverage, f.seed);
         let mut c = HoganKewCirrus::new(f);
         c.max_density = num("density", c.max_density);
@@ -2096,6 +2703,13 @@ impl SceneFile {
         c.particle_growth = num("particle_growth", c.particle_growth);
         c.young_size = num("young_size", c.young_size).clamp(0.05, 1.);
         c.patch_size = num("patch_size", c.patch_size);
+        (c, generating)
+    }
+
+    pub fn parse_hogan_kew_cirrus(o: &Value) -> SceneObject {
+        let (mut c, generating) = SceneFile::hogan_kew_layer(o, CirrusGenus::Cirrus);
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let (base, top) = (c.base, c.top);
         // By default the layer reaches its own horizon, √(2 R top), so it runs down into the
         // haze there rather than stopping short in clear sky (a 9 km deck stays above the horizon
         // out to 340 km).
@@ -2472,6 +3086,25 @@ impl SceneFile {
                     v => { let a = SceneFile::parse_number(v, 0.5).clamp(0., 1.); Color::new(a, a, a).into() },
                 },
             }));
+        }
+        // {"type": "surface_layers", "layers": [{"material": "A"}, {"material": "B", "mask":
+        // graph, "coverage": 1}, ...]}: materials stacked from the bottom up, each over those
+        // below by its mask (`material::surface_layers`).
+        if props["type"].as_str() == Some("surface_layers") {
+            use crate::material::surface_layers::{SurfaceLayer, SurfaceLayers};
+            let layers = props["layers"].as_array().filter(|a| !a.is_empty())
+                .unwrap_or_else(|| panic!("Surface layers '{}' need a list of \"layers\"", name));
+            let layers = layers.iter().enumerate().map(|(k, l)| {
+                let key = &l["material"];
+                assert!(key.as_str() != Some(name.as_str()), "Surface layers '{}' can't contain themselves", name);
+                SurfaceLayer {
+                    material: SceneFile::require_material(key, materials, &format!("surface layer {} of {}", k, name)),
+                    mask: l.get("mask").map(|m| crate::graph::Graph::parse(m)
+                        .unwrap_or_else(|e| panic!("surface layer {} of {}'s mask: {}", k, name, e))),
+                    coverage: SceneFile::parse_number(&l["coverage"], 1.),
+                }
+            }).collect();
+            return Some(Box::new(SurfaceLayers { layers }));
         }
         // {"type": "snow_cover", "material": "A", "cover": 0.5, "snow": {"preset": "fresh"},
         // "up": [0, 1, 0], "drift": 0.3, "seed": 0}: snow lying on A where it faces the sky
@@ -3489,16 +4122,19 @@ impl SceneFile {
             || s.geometries.values().any(SceneFile::has_motion);
         // A displaced terrain is diced for the camera (`parse_displaced_terrain`), named or not.
         let mut named = s.geometries;
+        let mut objects = s.objects;
+        SceneFile::displaced_instances(&mut objects, &mut named);
         for g in named.values_mut() {
             if g["type"].as_str() == Some("terrain") && g.get("displacement").is_some() && g.get("camera").is_none() {
                 g["camera"] = s.camera.clone();
                 g["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+                g["camera"]["image_width"] = serde_json::json!(SceneFile::parse_int(&s.width, 640));
             }
         }
         let geometries = GeometryLibrary::new(named);
-        geometries.preload(&s.objects);
+        geometries.preload(&objects);
         // A landscape is meshed finest where the camera is.
-        let mut scene_objects = s.objects;
+        let mut scene_objects = objects;
         // A world from a seed becomes the giant or the rocky or icy body it turns out to be.
         for o in scene_objects.iter_mut() {
             if o["type"].as_str() == Some("world") {
@@ -3510,6 +4146,9 @@ impl SceneFile {
         for o in scene_objects.iter_mut() {
             if o["type"].as_str() == Some("landscape") && o.get("camera").is_none() {
                 o["camera"] = s.camera.clone();
+                // Its displacement is diced to the camera's pixels.
+                o["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+                o["camera"]["image_width"] = serde_json::json!(SceneFile::parse_int(&s.width, 640));
             }
             // A moon draws craters down to the camera's pixels, and orbits the scene's planet.
             if matches!(o["type"].as_str(), Some("moon") | Some("gas_giant")) {
@@ -3525,11 +4164,15 @@ impl SceneFile {
             // A forest sees each tree at the detail the camera needs (`parse_forest_lod`), and a
             // displaced terrain is diced as finely (`parse_displaced_terrain`).
             let displaced = o["type"].as_str() == Some("terrain") && o.get("displacement").is_some();
-            if (o["type"].as_str() == Some("forest") || displaced) && o.get("camera").is_none() {
+            if (matches!(o["type"].as_str(), Some("forest" | "ecosystem")) || displaced) && o.get("camera").is_none() {
                 o["camera"] = s.camera.clone();
                 o["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+                o["camera"]["image_width"] = serde_json::json!(SceneFile::parse_int(&s.width, 640));
             }
         }
+        // Weather becomes its families of cloud, which know the sky's sun and the landscape.
+        let mut scene_objects = crate::weather::scene::expand(scene_objects);
+        let sea = scene_objects.iter().find(|o| o["type"].as_str() == Some("ocean")).map(crate::ocean::Sea::parse);
         // A moon lights the scene with the sunlight it reflects (unless `"light": false`), and
         // a skysphere's air scatters it too.
         let moonlight = match (&sun, scene_objects.iter().find(|o| o["type"].as_str() == Some("moon") && o["light"].as_bool() != Some(false))) {
@@ -3617,6 +4260,7 @@ impl SceneFile {
             atmosphere,
             environment: None,
             light_bvh: None,
+            sea,
         };
         scene.light_bvh = match s.light_sampler.as_str() {
             None | Some("power") => None,
@@ -3765,8 +4409,9 @@ impl SceneFile {
     /// Build a scene from a scene file's JSON, applying command-line overrides first.
     pub fn from_value_overridden(doc: Value, o: &Overrides) -> Scene {
         let (width, height) = (o.width, o.height);
-        let doc = SceneFile::substitute_variables(doc)
+        let mut doc = SceneFile::substitute_variables(doc)
             .unwrap_or_else(|e| panic!("Scene file: {}", e));
+        crate::weather::scene::choose_seeds(&mut doc);
         let mut scene: SceneFile = serde_json::from_value(doc).unwrap();
         if let Some(seed) = o.seed {
             scene.seed = Value::from(seed);
@@ -4234,6 +4879,18 @@ mod tests {
         assert!((t.average().rgb.x - 0.5).abs() < 1e-12);
     }
 
+    /// A forest's "where" rule keeps its trees to where it says: east of x = 0 here.
+    #[test]
+    fn test_forest_grows_where_its_rule_says() {
+        let objects = SceneFile::parse_forest(&serde_json::json!({ "type": "forest", "seed": 3, "spacing": 2,
+            "area": {"min": [-20, -20], "max": [20, 20]}, "clearings": 0,
+            "where": { "node": "smoothstep", "input": "x", "from": -0.01, "to": 0.01 },
+            "species": [ { "species": "shrub" } ] }), &Map::new(), &Map::new(), &GeometryLibrary::empty(), None);
+        let b = objects[0].geometry.bounds();
+        assert!(b.min.x > -3., "{:?}", b);
+        assert!(b.max.x > 15., "{:?}", b);
+    }
+
     #[test]
     fn test_forest_instances_a_few_distinct_trees() {
         let s = SceneFile::from_string(r#"{
@@ -4263,7 +4920,7 @@ mod tests {
         // One species, one variant: every shrub is a copy of one.
         let objects = SceneFile::parse_forest(&serde_json::json!({ "type": "forest", "seed": 2, "spacing": 2,
             "variants": 1, "clearings": 0, "area": { "min": [-10, -10], "max": [10, 10] },
-            "species": [ { "species": "shrub" } ] }), &Map::new(), &Map::new(), &GeometryLibrary::empty());
+            "species": [ { "species": "shrub" } ] }), &Map::new(), &Map::new(), &GeometryLibrary::empty(), None);
         assert_eq!(objects.len(), 1);
         let one = tree::generate(&tree::params("shrub", &Value::Null), 0, Vector3::zeros());
         // Between 20 and 120 shrubs' triangles, though only one shrub's are stored.
@@ -4277,7 +4934,7 @@ mod tests {
         let forest = |eye: [f64; 3], lod: bool| SceneFile::parse_forest(&serde_json::json!({ "type": "forest", "seed": 2,
             "spacing": 2, "variants": 1, "clearings": 0, "area": { "min": [-10, -10], "max": [10, 10] }, "lod": lod,
             "camera": { "location": eye, "angle": 0.5, "image_height": 200 },
-            "species": [ { "species": "shrub" } ] }), &Map::new(), &Map::new(), &GeometryLibrary::empty())[0].geometry.primitives();
+            "species": [ { "species": "shrub" } ] }), &Map::new(), &Map::new(), &GeometryLibrary::empty(), None)[0].geometry.primitives();
         let full = forest([0., 1000., 0.], false);
         // Close up, nearby shrubs are seen in full.
         assert!(forest([0., 1., -11.], true) as f64 > 0.2 * full as f64);
@@ -4352,5 +5009,108 @@ mod tests {
     fn test_black_threshold_independent_of_shadow_bias() {
         assert_eq!(minimal_scene("").black_threshold, 1e-7);
         assert_eq!(minimal_scene(r#", "black_threshold": 0.01"#).black_threshold, 0.01);
+    }
+
+    #[test]
+    fn test_view_widens_for_defocus() {
+        use crate::shapes::bbox::BBox;
+        // Focused 1 m off with a 0.5 m lens: far beyond the focus, rays from the lens's edge
+        // reach well outside the pinhole frustum (half-width 0.3 at unit depth), up to 0.8.
+        let view = SceneFile::parse_view(&serde_json::json!({
+            "location": [0, 0, 0], "lookat": [0, 0, 1], "up": [0, 1, 0], "angle": 0.5,
+            "aperture": 0.5, "image_width": 100, "image_height": 100})).unwrap();
+        let at = |x: f64| BBox::new(Vector3::new(x, -0.5, 100.), Vector3::new(x + 1., 0.5, 101.));
+        assert!(!view.excludes(&at(60.)) && !view.excludes(&at(-61.)));
+        assert!(view.excludes(&at(120.)) && view.excludes(&at(-121.)));
+        // A pinhole sees no wider than its image.
+        let pinhole = SceneFile::parse_view(&serde_json::json!({
+            "location": [0, 0, 0], "lookat": [0, 0, 1], "up": [0, 1, 0], "angle": 0.5,
+            "aperture": 0, "image_width": 100, "image_height": 100})).unwrap();
+        assert!(pinhole.excludes(&at(60.)));
+        assert!(SceneFile::parse_view(&serde_json::json!({"type": "orthographic",
+            "image_width": 100, "image_height": 100})).is_none());
+    }
+
+    #[test]
+    fn test_displaced_terrains_learn_where_they_are_put() {
+        let terrain = serde_json::json!({ "type": "terrain", "heightmap": {}, "displacement": 0 });
+        let mut geometries = serde_json::json!({
+            "cliff": terrain,
+            "pair": { "type": "union", "items": ["cliff", { "type": "transform", "item": "cliff", "translate": [0, 0, 50] }] },
+        }).as_object().unwrap().clone();
+        let mut objects = vec![
+            serde_json::json!({ "type": "transform", "item": "pair", "translate": [100, 0, 0] }),
+            serde_json::json!({ "type": "transform", "item": "cliff", "scale": 2 }),
+            serde_json::json!({ "type": "terrain", "heightmap": {}, "displacement": 0, "transform": [{ "translate": [0, 5, 0] }] }),
+            terrain.clone(),
+        ];
+        SceneFile::displaced_instances(&mut objects, &mut geometries);
+        let placed = |v: &Value| v["displacement_instances"].as_array().map(|a| a.iter()
+            .map(|m| [m[3].as_f64().unwrap(), m[7].as_f64().unwrap(), m[11].as_f64().unwrap(), m[0].as_f64().unwrap()]).collect::<Vec<_>>());
+        // The named cliff: twice in the pair (moved 100 east, once 50 south besides), and
+        // scaled by 2 where it stands.
+        let mut cliff = placed(&geometries["cliff"]).unwrap();
+        cliff.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(cliff, vec![[0., 0., 0., 2.], [100., 0., 0., 1.], [100., 0., 50., 1.]]);
+        // An inline terrain with steps of its own; one nowhere moved is left alone.
+        assert_eq!(placed(&objects[2]).unwrap(), vec![[0., 5., 0., 1.]]);
+        assert!(placed(&objects[3]).is_none());
+    }
+
+    #[test]
+    fn test_scatter_strews_where_density_lets_it() {
+        let o = serde_json::json!({ "type": "scatter", "seed": 4, "area": {"min": [-10, -10], "max": [10, 10]}, "spacing": 1.5,
+            "density": { "node": "smoothstep", "input": "x", "from": -0.01, "to": 0.01 },
+            "items": [ { "boulder": { "angularity": 0.6, "detail": 2 }, "variants": 2, "size": [0.2, 0.6] } ] });
+        let objects = SceneFile::parse_scatter(&o, &Map::new(), &Map::new(), &GeometryLibrary::empty(), None);
+        assert_eq!(objects.len(), 1);
+        let g = &objects[0].geometry;
+        let b = g.bounds();
+        // Only east of x = 0, resting on the ground, no larger than the largest.
+        assert!(b.min.x > -0.7, "{:?}", b);
+        assert!(b.min.y > -0.7 && b.max.y < 1.3, "{:?}", b);
+        // Plenty of them: rays straight down over the east half often meet one, never the west.
+        let hits = |x0: f64| (0..400).filter(|k| {
+            let (x, z) = (x0 + (k % 20) as f64 * 0.45, -9. + (k / 20) as f64 * 0.9);
+            g.intersects(&Ray { ro: Vector3::new(x, 5., z), rd: -Vector3::y() }).is_some()
+        }).count();
+        assert!(hits(1.) > 40, "{}", hits(1.));
+        assert_eq!(hits(-10.), 0);
+    }
+
+    #[test]
+    fn test_volumes_take_a_density_graph() {
+        let o = serde_json::json!({ "type": "volume", "min": [-1, -1, -1], "max": [1, 1, 1],
+            "density": { "node": "multiply", "inputs": [3, { "node": "altitude", "from": 0, "to": -0.5 }] } });
+        let v = SceneFile::parse_volume(&o, &GeometryLibrary::empty());
+        // Thick low down, clear high up: transmittance along level rays, averaged.
+        let through = |y: f64| (0..400).map(|_| v.geometry.transmittance(&Ray { ro: Vector3::new(-2., y, 0.), rd: Vector3::x() }, 0., 4.)).sum::<f64>() / 400.;
+        crate::geometry::seed_rand(3, 1);
+        assert!(through(-0.8) < 0.01, "{}", through(-0.8));
+        assert!(through(0.5) > 0.99, "{}", through(0.5));
+    }
+
+    #[test]
+    #[should_panic(expected = "bounded above")]
+    fn test_volume_density_graphs_must_be_bounded() {
+        let o = serde_json::json!({ "type": "volume", "min": [-1, -1, -1], "max": [1, 1, 1], "density": "y" });
+        SceneFile::parse_volume(&o, &GeometryLibrary::empty());
+    }
+
+    /// In an ecosystem, what comes later grows in the room what came before leaves it.
+    #[test]
+    fn test_ecosystem_populations_compete_for_room() {
+        let boulders = serde_json::json!({ "scatter": { "spacing": 0.8,
+            "items": [ { "boulder": { "detail": 1 }, "variants": 1, "size": 0.15 } ] } });
+        let shrubs = serde_json::json!({ "forest": { "spacing": 4, "clearings": 0, "shade": 1, "canopy": 1.3,
+            "species": [ { "species": "shrub" } ] } });
+        let ecosystem = |populations: Vec<Value>| SceneFile::parse_ecosystem(&serde_json::json!({ "type": "ecosystem", "seed": 5,
+            "area": {"min": [-12, -12], "max": [12, 12]}, "populations": populations }), &Map::new(), &Map::new(), &GeometryLibrary::empty(), None);
+        let alone = ecosystem(vec![boulders.clone()]);
+        let under = ecosystem(vec![shrubs, boulders]);
+        assert_eq!(under.len(), 2);
+        let (a, b) = (alone[0].geometry.primitives(), under[1].geometry.primitives());
+        assert!(4 * b < 3 * a, "{} boulders' worth under shrubs against {} alone", b, a);
+        assert!(b > 0);
     }
 }

@@ -8105,6 +8105,75 @@
         {"name": "seed", "kind": "integer", "default": 0, "doc": "Random seed."}
       ]
     },
+    "weather": {
+      "label": "Weather",
+      "group": "Clouds",
+      "doc": "A whole sky's weather from one seed: lows, fronts and highs placed over the planet, and the cloud each family of them makes (low, mid, convective, high, rain). Becomes a volume a family. See docs/weather.md.",
+      "example": {"type": "weather", "seed": 1, "map_size": 64},
+      "needs": ["sun", "skysphere"],
+      "fields": [
+        {"name": "seed", "kind": "json", "default": null, "doc": "The weather's seed; absent or \"random\" for a new sky each render (the seed chosen is printed)."},
+        {"name": "humidity", "kind": "number", "default": 1, "doc": "How moist the air is, as a scale.", "min": 0},
+        {"name": "instability", "kind": "number", "default": 1, "doc": "How readily the air convects, as a scale.", "min": 0},
+        {"name": "day_of_year", "kind": "json", "default": null, "doc": "The season, as the day of the year; by default from the sun's direction, or random."},
+        {"name": "map_size", "kind": "integer", "default": 512, "doc": "Texels along each cube face of the weather's maps.", "min": 16},
+        {"name": "low", "kind": "json", "default": null, "doc": "Low cloud: false to leave it out, or its amount and look (amount, density, shape_size, detail_size, erosion)."},
+        {"name": "mid", "kind": "json", "default": null, "doc": "Middle cloud: false, or its amount and look."},
+        {"name": "convective", "kind": "json", "default": null, "doc": "Cumulus and cumulonimbus: false, or amount, cell_size, overshoot, anvil_depth and its look."},
+        {"name": "high", "kind": "json", "default": null, "doc": "Cirrus: false, or amount and Hogan and Kew's cirrus parameters."},
+        {"name": "rain", "kind": "json", "default": null, "doc": "Rain shafts: false, or shower_rate, streakiness, streak_size."},
+        {"name": "systems", "kind": "json", "default": null, "doc": "Systems to add: a list of {type: cyclone | anticyclone | tropical_cyclone, lat, lon or offset, radius, intensity, stage}."},
+        {"name": "map", "kind": "path", "default": null, "doc": "Write a satellite's view of the weather to this PNG."}
+      ]
+    },
+    "weather_layer": {
+      "label": "Weather layer",
+      "group": "Clouds",
+      "doc": "One family of a weather's cloud, as a volume. A weather object becomes these when a scene is read: add a weather, not this.",
+      "example": {"type": "weather_layer", "family": "low", "weather": {"seed": 1, "map_size": 64}},
+      "needs": ["sun", "skysphere"],
+      "fields": [
+        {"name": "family", "kind": "enum", "options": ["low", "mid", "convective", "high", "rain"], "default": "low", "doc": "Which family of cloud."},
+        {"name": "weather", "kind": "json", "required": true, "doc": "The weather it belongs to, as a weather object's fields."}
+      ]
+    },
+    "cumulus": {
+      "label": "Cumulus",
+      "group": "Clouds",
+      "doc": "One cauliflower cumulus placed by hand: a tree of spheres, billowed and wisped at its edges; with tower, a towering cumulus of stacked thermals, frozen above its glaciation height into a cumulonimbus's smooth top.",
+      "example": {"type": "cumulus", "center": [0, 0], "base": 1000, "width": 800, "depth": 1500, "seed": 0},
+      "needs": ["sun", "skysphere"],
+      "fields": [
+        {"name": "center", "kind": "vec2", "default": [0, 0], "doc": "Where it stands, [x, z]."},
+        {"name": "base", "kind": "number", "default": 1000, "doc": "Height of its base, m."},
+        {"name": "width", "kind": "number", "default": 800, "doc": "Its width (a tower's radius), m.", "min": 1},
+        {"name": "depth", "kind": "number", "default": 1500, "doc": "Its depth (a tower's height), m.", "min": 1},
+        {"name": "seed", "kind": "integer", "default": 0, "doc": "Its shape's seed."},
+        {"name": "density", "kind": "number", "default": 0.05, "doc": "Extinction in its core, per m.", "min": 0},
+        {"name": "edge", "kind": "number", "default": 15, "doc": "How soft its edge is, m.", "min": 0},
+        {"name": "tower", "kind": "boolean", "default": false, "doc": "A towering cumulus of stacked thermals."},
+        {"name": "glaciation", "kind": "json", "default": null, "doc": "With tower: the height above which it is frozen smooth, m."},
+        {"name": "maturity", "kind": "number", "default": 1, "doc": "How far it has formed: wispy and translucent when young.", "min": 0, "max": 1}
+      ]
+    },
+    "scatter": {
+      "label": "Scatter",
+      "group": "Rocks",
+      "doc": "Copies of things strewn over a surface: boulders over a moraine, stones on scree, logs in a wood. Placed as a forest's trees are, where a density graph lets them. The surface itself isn't drawn: add it as an object too.",
+      "example": {"type": "scatter", "seed": 0, "area": {"min": [-10, -10], "max": [10, 10]}, "spacing": 3, "items": [{"boulder": {"angularity": 0.5, "detail": 2}, "size": [0.3, 0.8]}]},
+      "fields": [
+        {"name": "seed", "kind": "integer", "default": 0, "doc": "The placement's seed."},
+        {"name": "surface", "kind": "json", "default": null, "doc": "The geometry, or list of geometries, they stand on; by default the landscape, or flat ground."},
+        {"name": "area", "kind": "json", "required": true, "doc": "Where: {min: [x, z], max: [x, z]}."},
+        {"name": "spacing", "kind": "number", "default": 1, "doc": "How far apart, in proportion to their size.", "min": 0},
+        {"name": "density", "kind": "json", "default": null, "doc": "A graph of how thickly they lie, evaluated on the surface (slope and noise masks work); 1 by default."},
+        {"name": "max_slope", "kind": "number", "default": 90, "doc": "The steepest ground they stand on, degrees.", "min": 0, "max": 90},
+        {"name": "clearings", "kind": "number", "default": 0, "doc": "The share of the area left clear.", "min": 0, "max": 1},
+        {"name": "patch_size", "kind": "number", "default": 20, "doc": "Size of the patches items grow in, m.", "min": 0},
+        {"name": "patchiness", "kind": "number", "default": 0.3, "doc": "How strongly items keep to their patches.", "min": 0, "max": 1},
+        {"name": "items", "kind": "json", "required": true, "doc": "What to strew: a list of {geometry or boulder, material, weight, spacing, size, sink, align, tilt}."}
+      ]
+    },
     "overcast": {
       "label": "Overcast",
       "group": "Clouds",

@@ -42,6 +42,7 @@ pub mod material {
     pub mod layered;
     pub mod subsurface;
     pub mod mix;
+    pub mod surface_layers;
     pub mod hair;
     pub mod ambient;
     pub mod texture;
@@ -102,6 +103,7 @@ pub mod shapes {
     pub mod text;
     pub mod lod;
     pub mod displaced;
+    pub mod group;
 }
 pub mod bvh;
 pub mod scenegraph;
@@ -129,11 +131,13 @@ pub mod procedural {
     pub mod tree;
     pub mod succulent;
     pub mod forest;
+    pub mod ecosystem;
     pub mod heightmap;
     pub mod grass;
     pub mod rock;
     pub mod iceberg;
     pub mod nubis_clouds;
+    pub mod cauliflower;
     pub mod hogan_kew_cirrus;
     pub mod benard_altocumulus;
     pub mod lenticular;
@@ -150,6 +154,7 @@ pub mod noise;
 pub mod terrain;
 pub mod expr;
 pub mod graph;
+pub mod talus;
 pub mod volume;
 pub mod glare;
 pub mod variance;
@@ -157,6 +162,7 @@ pub mod adaptive;
 pub mod environment;
 pub mod sobol;
 pub mod planet;
+pub mod weather;
 pub mod celestial;
 
 /// Parse JSON, for callers that don't depend on `serde_json` themselves. Panics if invalid.

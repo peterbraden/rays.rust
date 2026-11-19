@@ -116,87 +116,6 @@
         }
       ]
     },
-    "blocks": {
-      "node": "add",
-      "inputs": [
-        {
-          "node": "multiply",
-          "inputs": [
-            {
-              "node": "power",
-              "exponent": 0.35,
-              "input": {
-                "node": "cells",
-                "style": "stones",
-                "scale": 4,
-                "amplitude": 1.6,
-                "seed": 4
-              }
-            },
-            {
-              "node": "smoothstep",
-              "from": -0.15,
-              "to": 0.15,
-              "input": {
-                "node": "fractal",
-                "scale": 9,
-                "smallest": 0.5,
-                "seed": 41
-              }
-            }
-          ]
-        },
-        {
-          "node": "multiply",
-          "inputs": [
-            {
-              "node": "power",
-              "exponent": 0.4,
-              "input": {
-                "node": "cells",
-                "style": "stones",
-                "scale": 1.4,
-                "amplitude": 0.35,
-                "seed": 5
-              }
-            },
-            {
-              "node": "smoothstep",
-              "from": -0.2,
-              "to": 0.2,
-              "input": {
-                "node": "fractal",
-                "scale": 6,
-                "smallest": 0.5,
-                "seed": 42
-              }
-            }
-          ]
-        },
-        {
-          "node": "cells",
-          "style": "stones",
-          "scale": 0.25,
-          "amplitude": 0.07,
-          "seed": 6
-        },
-        {
-          "node": "fractal",
-          "scale": 1,
-          "smallest": 0.005,
-          "amplitude": 0.02,
-          "seed": 9
-        },
-        {
-          "node": "fractal",
-          "style": "billow",
-          "scale": 6,
-          "smallest": 0.3,
-          "amplitude": 0.4,
-          "seed": 43
-        }
-      ]
-    },
     "sand": {
       "node": "add",
       "inputs": [
@@ -214,57 +133,6 @@
           "smallest": 0.005,
           "amplitude": 0.04,
           "seed": 13
-        },
-        {
-          "node": "multiply",
-          "inputs": [
-            {
-              "node": "power",
-              "exponent": 0.5,
-              "input": {
-                "node": "cells",
-                "style": "stones",
-                "scale": 0.45,
-                "amplitude": 0.14,
-                "seed": 14
-              }
-            },
-            {
-              "node": "smoothstep",
-              "from": 0.5,
-              "to": 0.7,
-              "input": {
-                "node": "fractal",
-                "style": "billow",
-                "scale": 4,
-                "smallest": 0.2,
-                "seed": 15
-              }
-            }
-          ]
-        },
-        {
-          "node": "multiply",
-          "inputs": [
-            {
-              "node": "cells",
-              "style": "stones",
-              "scale": 0.12,
-              "amplitude": 0.035,
-              "seed": 18
-            },
-            {
-              "node": "smoothstep",
-              "from": 0.4,
-              "to": 0.7,
-              "input": {
-                "node": "fractal",
-                "scale": 3,
-                "smallest": 0.2,
-                "seed": 19
-              }
-            }
-          ]
         }
       ]
     },
@@ -278,18 +146,6 @@
         "smallest": 0.5,
         "amplitude": 8,
         "seed": 1
-      }
-    },
-    "talus_zone": {
-      "node": "slope",
-      "from": 12,
-      "to": 20,
-      "breakup": {
-        "node": "fractal",
-        "scale": 5,
-        "smallest": 0.3,
-        "amplitude": 6,
-        "seed": 16
       }
     },
     "rocky": {
@@ -405,6 +261,117 @@
           "to": 70
         }
       ]
+    },
+    "talus_position": {
+      "node": "altitude",
+      "from": 1.8,
+      "to": 11,
+      "breakup": {
+        "node": "add",
+        "inputs": [
+          {
+            "node": "fractal",
+            "scale": 30,
+            "smallest": 2,
+            "amplitude": 2.5,
+            "seed": 61
+          },
+          {
+            "node": "fractal",
+            "scale": 6,
+            "smallest": 0.5,
+            "amplitude": 1,
+            "seed": 63
+          }
+        ]
+      }
+    },
+    "talus_mask": {
+      "node": "subtract",
+      "a": 1,
+      "b": {
+        "node": "altitude",
+        "from": 13,
+        "to": 15,
+        "breakup": {
+          "node": "fractal",
+          "scale": 8,
+          "smallest": 1,
+          "amplitude": 1.5,
+          "seed": 62
+        }
+      }
+    },
+    "talus": {
+      "node": "talus",
+      "largest": 5,
+      "smallest": 0.08,
+      "exponent": 2.6,
+      "cover": 0.22,
+      "sorting": 0.75,
+      "height": 0.45,
+      "seed": 71,
+      "position": "$talus_position",
+      "mask": "$talus_mask"
+    },
+    "talus_rock": {
+      "node": "talus",
+      "largest": 5,
+      "smallest": 0.08,
+      "exponent": 2.6,
+      "cover": 0.22,
+      "sorting": 0.75,
+      "height": 0.45,
+      "seed": 71,
+      "position": "$talus_position",
+      "mask": "$talus_mask",
+      "output": "mask"
+    },
+    "talus_tint": {
+      "node": "talus",
+      "largest": 5,
+      "smallest": 0.08,
+      "exponent": 2.6,
+      "cover": 0.22,
+      "sorting": 0.75,
+      "height": 0.45,
+      "seed": 71,
+      "position": "$talus_position",
+      "mask": "$talus_mask",
+      "output": "id"
+    },
+    "apron": {
+      "node": "add",
+      "inputs": [
+        {
+          "node": "fractal",
+          "style": "billow",
+          "scale": 6,
+          "smallest": 0.3,
+          "amplitude": 0.35,
+          "seed": 43
+        },
+        {
+          "node": "fractal",
+          "scale": 1,
+          "smallest": 0.005,
+          "amplitude": 0.03,
+          "seed": 9
+        }
+      ]
+    },
+    "block_faces": {
+      "node": "multiply",
+      "inputs": [
+        "$talus_rock",
+        {
+          "node": "fractal",
+          "scale": 0.8,
+          "smallest": 0.01,
+          "amplitude": 0.06,
+          "seed": 72
+        }
+      ]
     }
   },
   "materials": {
@@ -459,10 +426,10 @@
     "GROUND": {
       "type": "mix",
       "materials": [
-        "SAND",
-        "CLIFF"
+        "LOOSE",
+        "BLOCKS"
       ],
-      "amount": "$rocky"
+      "amount": "$talus_rock"
     },
     "BARK": {
       "type": "lambertian",
@@ -532,6 +499,77 @@
         "VARNISH"
       ],
       "amount": "$varnish"
+    },
+    "BLOCK": {
+      "type": "rock",
+      "preset": "sandstone",
+      "scale": 1,
+      "seed": 6,
+      "color": [
+        0.58,
+        0.28,
+        0.14
+      ],
+      "secondary": [
+        0.7,
+        0.4,
+        0.22
+      ],
+      "weathering": 0.5,
+      "lichen": 0.02,
+      "strata_spacing": 0.5,
+      "strata_amount": 0.2,
+      "strata_color": [
+        0.45,
+        0.22,
+        0.12
+      ]
+    },
+    "BLOCK_DARK": {
+      "type": "rock",
+      "preset": "sandstone",
+      "scale": 1,
+      "seed": 7,
+      "color": [
+        0.3,
+        0.15,
+        0.08
+      ],
+      "secondary": [
+        0.42,
+        0.22,
+        0.12
+      ],
+      "weathering": 0.4,
+      "lichen": 0.0,
+      "strata_spacing": 0.5,
+      "strata_amount": 0.15,
+      "strata_color": [
+        0.24,
+        0.12,
+        0.07
+      ]
+    },
+    "BLOCKS": {
+      "type": "mix",
+      "materials": [
+        "BLOCK",
+        "BLOCK_DARK"
+      ],
+      "amount": {
+        "node": "smoothstep",
+        "from": 0.35,
+        "to": 0.85,
+        "input": "$talus_tint"
+      }
+    },
+    "LOOSE": {
+      "type": "mix",
+      "materials": [
+        "SAND",
+        "CLIFF"
+      ],
+      "amount": "$rocky"
     }
   },
   "media": {},
@@ -565,8 +603,8 @@
           "a": {
             "node": "blend",
             "a": "$sand",
-            "b": "$blocks",
-            "mask": "$talus_zone"
+            "b": "$apron",
+            "mask": "$talus_position"
           },
           "b": "$slickrock",
           "mask": "$above"
@@ -577,6 +615,13 @@
       "displacement_detail": {
         "pixels": 1,
         "max_level": 8
+      },
+      "vertical_displacement": {
+        "node": "add",
+        "inputs": [
+          "$talus",
+          "$block_faces"
+        ]
       }
     }
   },

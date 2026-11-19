@@ -167,7 +167,8 @@ pub fn viewpoint(s: &Scene) -> Vector3<f64> {
 /// they would be blocked. A heuristic: it is exact only at `origin`, and the light's density
 /// stays consistent wherever it is wrong, so the estimate stays unbiased.
 pub fn visibility(s: &Scene, origin: &Vector3<f64>, d: &Vector3<f64>) -> f64 {
-    s.objects.transmittance(&Ray { ro: *origin, rd: *d }, SUN_SHADOW_DISTANCE, f64::MIN_POSITIVE).rgb.mean()
+    // Only a guess, so displaced terrain is seen roughly, without dicing it.
+    crate::shapes::displaced::roughly(|| s.objects.transmittance(&Ray { ro: *origin, rd: *d }, SUN_SHADOW_DISTANCE, f64::MIN_POSITIVE).rgb.mean())
 }
 
 /// The sky as a light: what a ray that escapes the scene sees (besides the sun's disc), and a

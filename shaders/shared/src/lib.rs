@@ -83,7 +83,16 @@ impl Real for f64 {
     #[inline]
     fn of(n: i32) -> f64 { n as f64 }
     #[inline]
-    fn floor(self) -> f64 { f64::floor(self) }
+    fn floor(self) -> f64 {
+        // `self.floor()`, exactly, without calling libm's `floor` (which it is without
+        // SSE4.1): noise takes three a point.
+        if self.abs() < 4.5e15 {
+            let t = self as i64 as f64;
+            if t > self { t - 1. } else { t }
+        } else {
+            f64::floor(self)
+        }
+    }
     #[inline]
     fn sqrt(self) -> f64 { f64::sqrt(self) }
     #[inline]

@@ -123,6 +123,13 @@ impl shared::Tables<f64> for PerlinNoise {
     }
 }
 
+/// `x.floor()`, exactly, without calling libm's `floor` (which it is without SSE4.1): noise
+/// takes three a point. The shared noise's own (`shared::Real::floor` at f64), here for its test.
+#[inline]
+fn floor(x: f64) -> f64 {
+    shared::Real::floor(x)
+}
+
 /// Hash a cell (and seed) to a number in [0, 1]. Cells are numbered by their lowest corner,
 /// converted via i64 so negative cells wrap rather than saturating to 0.
 pub fn worley_hash(ix: u32, iy: u32, iz: u32, s: u32) -> f64 {
@@ -319,6 +326,23 @@ impl SeededNoise {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_floor_matches_libm() {
+        let mut rng = Pcg32::new(4, 2);
+        for k in 0 .. 100000 {
+            let x = match k % 4 {
+                0 => (rng.next_f64() - 0.5) * 20.,
+                1 => (rng.next_f64() - 0.5) * 1e6,
+                2 => ((rng.next_f64() - 0.5) * 40.).round(),
+                _ => (rng.next_f64() - 0.5) * 1e18,
+            };
+            assert_eq!(floor(x), x.floor(), "{}", x);
+        }
+        for x in [0., -0.5, -1., 1. - f64::EPSILON, -f64::MIN_POSITIVE, 4.5e15 - 0.5, -4.5e15 + 0.5] {
+            assert_eq!(floor(x), x.floor(), "{}", x);
+        }
+    }
     
     #[test]
     fn test_perlin_noise_range() {

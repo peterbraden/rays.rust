@@ -1,0 +1,74 @@
+{
+  "width": 240,
+  "height": 160,
+  "supersamples": 32,
+  "samples_per_chunk": 2,
+  "max_depth": 16,
+  "shadow_bias": 1,
+  "path_termination": "russian_roulette",
+  "background": {
+    "type": "space"
+  },
+  "materials": {
+    "GROUND": {
+      "type": "lambertian",
+      "albedo": [
+        0.06,
+        0.09,
+        0.15
+      ]
+    }
+  },
+  "camera": {
+    "location": [
+      0,
+      5000000,
+      0
+    ],
+    "lookat": [
+      0,
+      0,
+      0
+    ],
+    "up": [
+      0,
+      0,
+      -1
+    ],
+    "angle": 0.45,
+    "aperture": 0
+  },
+  "sun": {
+    "intensity": 6
+  },
+  "objects": [
+    {
+      "type": "planet",
+      "material": "GROUND"
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        0.5,
+        0.6,
+        -1
+      ]
+    },
+    {
+      "type": "weather",
+      "seed": 7,
+      "map": "demo/scenes/weather-orbit-map.png",
+      "low": {
+        "similarity_after": 2
+      },
+      "mid": {
+        "similarity_after": 2
+      },
+      "convective": {
+        "similarity_after": 2
+      },
+      "map_width": 1024,
+      "time": 0
+    }
+  ]
+}

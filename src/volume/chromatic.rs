@@ -104,7 +104,28 @@ pub fn settle(hit: Option<f64>) {
 
 /// The weight of light gathered at this point of the path, per channel: r_c / mean(r).
 pub fn weight() -> Color {
-    let r = RATIOS.with(|r| r.get());
+    weight_of(RATIOS.with(|r| r.get()))
+}
+
+/// For a side ray that doesn't continue the path (a sun probe, `VolumeMaterial::sun_probe`):
+/// the weight of light gathered where it hit (at `hit`), as `settle` then `weight` would give,
+/// but leaving the path's ratios as they were, and forgetting the side ray's collisions.
+pub fn side_weight(hit: Option<f64>) -> Color {
+    let hit = hit.unwrap_or(f64::INFINITY);
+    let mut ratios = RATIOS.with(|r| r.get());
+    PENDING.with(|p| {
+        let mut p = p.borrow_mut();
+        for c in p.iter().filter(|c| if c.real { c.t == hit } else { c.t < hit }) {
+            for (k, v) in ratios.iter_mut().enumerate() {
+                *v *= c.ratios[k];
+            }
+        }
+        p.clear();
+    });
+    weight_of(ratios)
+}
+
+fn weight_of(r: [f64; 3]) -> Color {
     if r == [1.; 3] {
         return Color::white();
     }

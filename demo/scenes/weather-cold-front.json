@@ -1,0 +1,81 @@
+{
+  "width": 640,
+  "height": 320,
+  "supersamples": 32,
+  "samples_per_chunk": 4,
+  "shadow_bias": 0.01,
+  "max_depth": 16,
+  "path_termination": "russian_roulette",
+  "camera": {
+    "location": [
+      0,
+      20,
+      0
+    ],
+    "lookat": [
+      10000,
+      900,
+      0
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.35
+  },
+  "sun": {
+    "intensity": 4.9
+  },
+  "objects": [
+    {
+      "type": "ocean",
+      "wind": [
+        7,
+        2
+      ]
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        -0.7,
+        0.45,
+        0.3
+      ]
+    },
+    {
+      "type": "weather",
+      "seed": 2,
+      "site": {
+        "lat": 48,
+        "lon": -20
+      },
+      "cyclones": 0,
+      "systems": [
+        {
+          "type": "cyclone",
+          "offset": [
+            82000,
+            891000
+          ],
+          "radius": 1200000,
+          "stage": 0.5,
+          "intensity": 1,
+          "tilt": 0
+        }
+      ],
+      "map": "demo/scenes/weather-cold-front-map.png",
+      "low": {
+        "similarity_after": 3
+      },
+      "mid": {
+        "similarity_after": 3
+      },
+      "convective": {
+        "similarity_after": 3
+      },
+      "map_width": 1024,
+      "time": 0
+    }
+  ]
+}

@@ -23,7 +23,10 @@
 //!   mountains behind it); or `{"type": "planet",
 //!   "cells"}`, a cubed sphere with `cells` x `cells` per face.
 //! - Ground cover: ice, rivers, sea floor, bare rock on steep slopes, alluvium (sediment over
-//!   2 m deep), lava, then a tint by elevation.
+//!   2 m deep), lava, then a tint by elevation; or `"material"`, the name of a material for
+//!   all the ground but the rivers, typically `surface_layers` masked by what the simulation
+//!   left (`field` nodes in its graphs: sediment, ice, flow, wetness and so on, see
+//!   `graph::Field`).
 //! - `scale`: metres per scene unit (default 1000). `exaggeration`: vertical exaggeration.
 //! - A patch is drawn in a local frame: x east, y up, z south, sea level at y = 0, centred on
 //!   the origin, ignoring the planet's curvature. A planet is drawn centred on `centre`
@@ -64,7 +67,7 @@ use crate::terrain::planet::Planet;
 use crate::terrain::simulation::{Terrain, TerrainParams, ICE_FREE};
 use crate::terrain::volcano::VolcanoParams;
 use crate::terrain::channel::{point_cell, WaterLines};
-use crate::terrain::scenery::{self, Frame, Ground, LandscapeMedium, Layer, Relief, SceneryParams, Viewpoint};
+use crate::terrain::scenery::{self, Clipmap, Frame, Ground, Hole, LandscapeMedium, Layer, Local, Relief, SceneryParams, Surface, Viewpoint};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -85,6 +88,15 @@ impl Placement {
                 Vector3::new(x, h * self.exaggeration, -z) / self.scale + self.centre
             }
             Layout::Sphere { .. } => self.centre + d * (domain.radius + h * self.exaggeration) / self.scale,
+        }
+    }
+
+    /// The direction on the planet under scene position `p`, and its height there (metres).
+    pub fn on_terrain(&self, domain: &Domain, p: &Vector3<f64>) -> (Vector3<f64>, f64) {
+        let q = (p - self.centre) * self.scale;
+        match &domain.layout {
+            Layout::Patch { up, east, north, .. } => ((up * domain.radius + east * q.x - north * q.z).normalize(), q.y / self.exaggeration),
+            Layout::Sphere { .. } => (q.normalize(), (q.norm() - domain.radius) / self.exaggeration),
         }
     }
 
@@ -146,6 +158,10 @@ pub struct TerrainMedium {
     materials: Vec<Box<dyn MaterialModel + Sync + Send>>,
     /// Rivers and lakes drawn as lines (patches).
     water: Option<WaterLines>,
+    /// What the simulation left, for graphs' `field` nodes.
+    fields: crate::terrain::fields::SimFields,
+    /// The scene's material for the ground, in place of the cover classes.
+    ground: Option<Box<dyn MaterialModel + Sync + Send>>,
 }
 
 const ICE: u8 = 0;
@@ -162,7 +178,8 @@ const ROCK_SLOPE: f64 = 0.8;
 
 impl TerrainMedium {
     /// `min_river_width`: draw rivers at least this wide, metres (thin ones vanish from afar).
-    pub fn new(t: Terrain, place: Placement, min_river_width: f64) -> TerrainMedium {
+    pub fn new(t: Terrain, place: Placement, min_river_width: f64, ground: Option<Box<dyn MaterialModel + Sync + Send>>) -> TerrainMedium {
+        let fields = crate::terrain::fields::SimFields::new(&t);
         let slope2 = slope_squared(&t.domain, &t.bed);
         let water = map::water_lines(&t, min_river_width);
         let lines = water.is_some();
@@ -188,7 +205,7 @@ impl TerrainMedium {
         ];
         for b in 0..BANDS { materials.push(lambertian(land_colour((b as f64 + 0.5) * BAND_HEIGHT))); }
         let jitter = t.domain.min_spacing() / place.scale;
-        TerrainMedium { domain: t.domain, place, jitter, class, materials, water }
+        TerrainMedium { domain: t.domain, place, jitter, class, materials, water, fields, ground }
     }
 }
 
@@ -201,8 +218,33 @@ impl Medium for TerrainMedium {
             let q = [q.x, -q.z];
             if water.wet(point_cell(&self.domain, q), q) { return &*self.materials[RIVER as usize]; }
         }
+        if let Some(g) = &self.ground
+            && (self.water.is_some() || self.class[self.place.cell_at(&self.domain, &pt)] != RIVER) {
+            return &**g;
+        }
         let j = Vector3::new(rand() - 0.5, rand() - 0.5, rand() - 0.5) * self.jitter;
         &*self.materials[self.class[self.place.cell_at(&self.domain, &(pt + j))] as usize]
+    }
+
+    fn fields(&self) -> Option<&dyn crate::graph::Fields> { Some(self) }
+}
+
+impl crate::graph::Fields for TerrainMedium {
+    fn field(&self, f: crate::graph::Field, p: &Vector3<f64>) -> Option<f64> {
+        let (d, h) = self.place.on_terrain(&self.domain, p);
+        self.fields.at(&self.domain, f, &d, h)
+    }
+
+    /// Round the sphere of a `planet` layout; a patch is laid out with y up.
+    fn vertical(&self, p: &Vector3<f64>) -> Option<(Vector3<f64>, f64)> {
+        match self.domain.layout {
+            Layout::Patch { .. } => None,
+            Layout::Sphere { .. } => {
+                let q = p - self.place.centre;
+                let r = q.norm();
+                (r > 0.).then(|| (q / r, r - self.domain.radius / self.place.scale))
+            },
+        }
     }
 }
 
@@ -336,7 +378,7 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
 }
 
 /// Where a patch lies: its centre's (latitude, longitude) in degrees.
-fn site(d: &Value, params: &TerrainParams) -> (f64, f64) {
+pub fn site(d: &Value, params: &TerrainParams) -> (f64, f64) {
     let planet = || Planet::new(params.planet.clone());
     match (d["lat"].as_f64(), d["lon"].as_f64(), d["near"].as_str()) {
         (Some(lat), Some(lon), _) => (lat, lon),
@@ -379,12 +421,17 @@ fn evolve(o: &Value, mut t: Terrain, key: &str) -> Terrain {
     t
 }
 
-pub fn create_terrain(o: &Value) -> SceneObject {
+/// The landscape's `"material"`, if it names one, for its ground.
+fn ground_material(o: &Value, materials: &serde_json::Map<String, Value>) -> Option<Box<dyn MaterialModel + Sync + Send>> {
+    o.get("material").map(|m| SceneFile::require_material(m, materials, "landscape"))
+}
+
+pub fn create_terrain(o: &Value, materials: &serde_json::Map<String, Value>) -> SceneObject {
     let mut params = terrain_params(o);
     // Without a `scale`, the landscape is drawn as itself, in metres on the scene's planet.
     if o.get("scale").is_none() {
         if o.get("radius").is_none() { params.planet.radius = crate::planet::EARTH_RADIUS; }
-        return full_scale_landscape(o, params);
+        return full_scale_landscape(o, params, ground_material(o, materials));
     }
     let t = evolved(o, params);
     if let Some(path) = o["map"].as_str() { write_map(&t, path, 2048); }
@@ -394,7 +441,7 @@ pub fn create_terrain(o: &Value) -> SceneObject {
         centre: SceneFile::parse_vec3_def(o, "centre", Vector3::zeros()),
     };
     let geometry = mesh(&t, &place);
-    SceneObject { geometry: Box::new(geometry), medium: Box::new(TerrainMedium::new(t, place, number(o, "min_river_width", 0.))) }
+    SceneObject { geometry: Box::new(geometry), medium: Box::new(TerrainMedium::new(t, place, number(o, "min_river_width", 0.), ground_material(o, materials))) }
 }
 
 /// A patch level of a full-scale landscape: cells along a side, and their spacing (m).
@@ -451,8 +498,13 @@ fn focus(o: &Value, frame: &Frame, ahead: f64) -> Vector3<f64> {
 /// - The mesh: `resolution` (vertices along a clipmap ring), `min_spacing` (m), `globe` (cells
 ///   per face edge beyond the rings), `roughness` of the detail below the finest cells.
 /// - Ground cover: `snowline` and `treeline` (m; by default from the climate, by latitude),
-///   `min_river_width` (m).
-fn full_scale_landscape(o: &Value, params: TerrainParams) -> SceneObject {
+///   `min_river_width` (m); or `"material"`, a material for the ground but rivers and lakes,
+///   whose graphs' `field` nodes read the simulations (blended between patches) and the climate.
+/// - `displacement`: a graph displacing the ground about the camera at render time, as on a
+///   `terrain` (see `displaced_patch`), with `displacement_detail`, `vertical_displacement`
+///   and so on as there; `displacement_reach` (m, default 1000) out from under the camera on
+///   each side, on a heightfield of `displacement_spacing` (m, default 2).
+fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> SceneObject {
     let mut p = SceneryParams::default();
     p.resolution = SceneFile::parse_int(&o["resolution"], p.resolution).max(8);
     p.min_spacing = number(o, "min_spacing", p.min_spacing).max(1e-3);
@@ -530,12 +582,136 @@ fn full_scale_landscape(o: &Value, params: TerrainParams) -> SceneObject {
     let layers = Arc::new(built);
     let relief = Relief::new(layers.clone(), &planet, radius, p.roughness, finest);
     let view = Viewpoint { location: SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.)) };
-    let geometry = scenery::mesh(&relief, &frame, &view, &p);
+    let (foot, height) = frame.on_planet(&view.location);
+    let ground = relief.height(&foot, relief.slope(&foot), 1.);
+    println!("Landscape: the camera is {:.1} m above the ground under it ({:.1} m above sea level)", height - ground, ground);
     let climate = params.climate.as_ref().map(|c| crate::terrain::climate::climate(c, &planet));
     if let (Some(path), Some(c)) = (o["climate_map"].as_str(), &climate) { crate::terrain::map::write_climate_map(&planet, c, path, 2048); }
-    let ground = Ground::new(layers, climate, params.glacier.clone().unwrap_or_default(), time, params.planet.seed, frame, &p);
+    // Built first, so the displacement's graphs can read its fields.
+    let ground = Arc::new(Ground::new(layers, climate, params.glacier.clone().unwrap_or_default(), time, params.planet.seed, frame.clone(), &p));
+    let patches = o.get("displacement").map(|d| displaced_patches(o, d, &relief, &frame, &view, &p, ground.clone()));
+    let mesh = scenery::mesh(&relief, &frame, &view, &p, patches.as_ref().map(|(h, _)| h));
+    let geometry: Box<dyn Geometry + Send + Sync> = match patches {
+        Some((_, terrains)) => {
+            let mut parts: Vec<Box<dyn Geometry + Send + Sync>> = vec![Box::new(mesh)];
+            parts.extend(terrains);
+            Box::new(crate::shapes::group::Group::new(parts))
+        },
+        None => Box::new(mesh),
+    };
     println!("Landscape: {} triangles in {:.1?}", geometry.primitives(), start.elapsed());
-    SceneObject { geometry: Box::new(geometry), medium: Box::new(LandscapeMedium::new(ground)) }
+    SceneObject { geometry, medium: Box::new(LandscapeMedium::with_ground(ground, material)) }
+}
+
+/// The ground about the camera displaced at render time (`shapes::displaced`), out to
+/// `displacement_reach` metres on each side: nested square patches of `displacement_cells`
+/// cells a side (512), the finest `displacement_spacing` metres apart (2), each next twice as
+/// coarse and twice as wide, leaving a hole for the one inside it, which meets it without
+/// cracks (`displaced::Nest`); and the hole they leave in the clipmap's mesh. The outermost's
+/// displacement fades out towards its edge over at least three of the rings' spacings there,
+/// so the rings' triangles that overlap it (moved onto its surface) meet it undisplaced.
+///
+/// They stand upright in a `Local` frame on the planet under the camera, put into the scene by
+/// transforms; the frame is snapped to whole multiples of the reach, and the patches to the
+/// outermost's cells, so that nearby cameras (an animation's frames) share them, and their
+/// graphs are evaluated at the scene's points, so the displacement stays put as they move. For
+/// a camera with `motion`, they are centred on the middle of the path and reach the same
+/// distance past either end.
+fn displaced_patches(o: &Value, d: &Value, relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams, ground: Arc<Ground>)
+    -> (Hole, Vec<Box<dyn Geometry + Send + Sync>>)
+{
+    use crate::procedural::heightmap::{HeightGrid, HeightSource};
+    use crate::shapes::displaced::{DisplacedTerrain, Nest};
+    let camera = &o["camera"];
+    let start_at = view.location;
+    let end_at = SceneFile::parse_vec3_def(&camera["motion"], "location", start_at);
+    let middle = (start_at + end_at) / 2.;
+    let finest = number(o, "displacement_spacing", 2.).max(0.01);
+    let cells = (SceneFile::parse_int(&o["displacement_cells"], 512).max(8) / 4 * 4) as i64;
+    let (tx, tz) = frame.tangent(&frame.on_planet(&middle).0);
+    let reach = number(o, "displacement_reach", 1000.).max(1.);
+    let coarse = |c: f64| (c / reach).round() * reach;
+    let local = Local::under(frame, coarse(tx), coarse(tz));
+    let (m, e) = (local.to_local(&middle), local.to_local(&end_at));
+    let reach = reach + (e.x - m.x).hypot(e.z - m.z);
+    // Patches k = 0 (finest) to n - 1: cells finest * 2^k, half-widths cells / 2 of them; a
+    // single patch is cut to the reach.
+    let half = |k: usize| (cells / 2) as f64 * finest * (1u64 << k) as f64;
+    let n = (0..12).find(|&k| half(k) >= reach).unwrap_or(11) + 1;
+    let outermost = finest * (1u64 << (n - 1)) as f64;
+    let snap = |c: f64| (c / outermost).round() * outermost;
+    let (cx, cz) = (snap(m.x), snap(m.z));
+    let begun = std::time::Instant::now();
+    let clipmap = Clipmap::new(relief, frame, view, p);
+    // Diced for the camera as it sees them, in the frame (from the middle of its path, if it
+    // moves).
+    let mut po = o.clone();
+    let json = |v: Vector3<f64>| serde_json::json!([v.x, v.y, v.z]);
+    po["camera"]["lookat"] = json(local.to_local(&SceneFile::parse_vec3_def(camera, "lookat", middle)));
+    po["camera"]["location"] = json(local.to_local(&middle));
+    po["camera"]["up"] = json(local.axes.transpose() * SceneFile::parse_vec3_def(camera, "up", Vector3::y()));
+    let mut matrix = crate::na::Matrix4::identity();
+    matrix.fixed_view_mut::<3, 3>(0, 0).copy_from(&local.axes);
+    matrix.fixed_view_mut::<3, 1>(0, 3).copy_from(&local.origin);
+    let placement = crate::na::Affine3::from_matrix_unchecked(matrix);
+
+    /// A patch's heights: the landscape's surface, joining the outer patch's within a few cells
+    /// of its edge, so their bases agree where they meet.
+    struct Joined<'a> { surface: &'a Surface<'a>, outer: Option<&'a HeightGrid>, min: (f64, f64), max: (f64, f64), band: f64 }
+    impl HeightSource for Joined<'_> {
+        fn height(&self, x: f64, z: f64) -> f64 {
+            let Some(outer) = self.outer else { return self.surface.height(x, z) };
+            let edge = (x - self.min.0).min(self.max.0 - x).min(z - self.min.1).min(self.max.1 - z);
+            let t = (edge / self.band).clamp(0., 1.);
+            let w = t * t * (3. - 2. * t);
+            let theirs = outer.smooth(x, z).0;
+            if w <= 0. { theirs } else { theirs + (self.surface.height(x, z) - theirs) * w }
+        }
+    }
+
+    let mut parts: Vec<Box<dyn Geometry + Send + Sync>> = vec![];
+    // The patch just made: the terrain, its heights and its corner.
+    type Made = (Arc<DisplacedTerrain>, Arc<HeightGrid>, (f64, f64));
+    let mut outer: Option<Made> = None;
+    let mut hole = None;
+    for k in (0..n).rev() {
+        let cell = finest * (1u64 << k) as f64;
+        let h = if n == 1 { (reach / cell).ceil() * cell } else { half(k) };
+        let (min, max) = ((cx - h, cz - h), (cx + h, cz + h));
+        let surface = Surface { relief, frame, local: &local, clipmap: &clipmap, cell };
+        let joined = Joined { surface: &surface, outer: outer.as_ref().map(|o| &*o.1), min, max, band: 3. * cell };
+        let grid = Arc::new(HeightGrid::sample(&joined, min, max, cell));
+        let mut displacement = SceneFile::parse_displacement(d, &po);
+        let falloff = if k == n - 1 {
+            // The rings are coarsest at the outermost patch's corners.
+            let coarsest = [min, (min.0, max.1), (max.0, min.1), max].iter().map(|&(x, z)| {
+                let (tx, tz) = frame.tangent(&frame.on_planet(&local.to_scene(&Vector3::new(x, 0., z))).0);
+                clipmap.local(tx, tz).unwrap_or(reach)
+            }).fold(cell, f64::max);
+            number(o, "displacement_falloff", 0.).max(3. * coarsest)
+        } else { 0. };
+        displacement.falloff = falloff;
+        // The middle half of each but the finest is left to the next one in.
+        let inner = (k > 0).then(|| { let q = (grid.nx / 4, 3 * grid.nx / 4); (q.0, q.1, q.0, q.1) });
+        let nest = outer.as_ref().map(|(o, _, omin)| Nest {
+            outer: o.clone(),
+            offset: (((min.0 - omin.0) / cell).round() as i64, ((min.1 - omin.1) / cell).round() as i64),
+        });
+        let terrain = DisplacedTerrain::of(grid.clone(), displacement, inner, nest)
+            .unwrap_or_else(|e| panic!("{}", e))
+            .placed(local.origin, local.axes)
+            .with_fields(ground.clone());
+        let terrain = Arc::new(terrain);
+        parts.push(Box::new(crate::shapes::transform::Transform::new(terrain.clone() as Arc<dyn Geometry + Sync + Send>, placement)));
+        if k == n - 1 {
+            hole = Some(Hole { local: local.clone(), min, max, surface: grid.clone() });
+        }
+        println!("Landscape: displaced to {:.0} m about the camera on a {} x {} grid of {:.2} m{}",
+            h, grid.nx, grid.nz, grid.cell, if falloff > 0. { format!(", fading over {:.0} m", falloff) } else { String::new() });
+        outer = Some((terrain, grid, min));
+    }
+    println!("Landscape: {} displaced patches in {:.1?}", n, begun.elapsed());
+    (hole.unwrap(), parts)
 }
 
 #[cfg(test)]
@@ -573,7 +749,7 @@ mod tests {
         }"#).unwrap();
         let p = terrain_params(&o);
         assert_eq!(p.glacier.as_ref().unwrap().acceleration, 20.);
-        let obj = create_terrain(&o);
+        let obj = create_terrain(&o, &serde_json::Map::new());
         assert_eq!(obj.geometry.primitives(), 16 * 16 * 2);
         // A ray straight down onto the middle hits the terrain.
         let r = Ray { ro: Vector3::new(0.1, 100., 0.1), rd: Vector3::new(0., -1., 0.) };
@@ -592,7 +768,7 @@ mod tests {
             "camera": { "location": [0, 3000, 0], "lookat": [0, 0, -1000] }
         }"#).unwrap();
         assert_eq!(levels(&o, 2e5), vec![Level { cells: 16, spacing: 1000. }, Level { cells: 16, spacing: 5000. }, Level { cells: 16, spacing: 25000. }]);
-        let obj = create_terrain(&o);
+        let obj = create_terrain(&o, &serde_json::Map::new());
         // A ray straight down onto the site meets ground within a few km of sea level.
         let r = Ray { ro: Vector3::new(10., 20000., 10.), rd: Vector3::new(0., -1., 0.) };
         let hit = obj.geometry.intersects(&r).expect("no hit");

@@ -1,0 +1,718 @@
+{
+  "output": {
+    "exposure": 1.5
+  },
+  "width": 960,
+  "height": 540,
+  "supersamples": 32,
+  "chunk_size": 64,
+  "samples_per_chunk": 4,
+  "max_depth": 6,
+  "sun": {
+    "intensity": 1
+  },
+  "variables": {
+    "sun": [
+      0.85,
+      0.3,
+      -0.3
+    ],
+    "land": {
+      "type": "image",
+      "src": "./demo/textures/escarpment-height.png",
+      "height": 60,
+      "min": [
+        -150,
+        -20
+      ],
+      "max": [
+        250,
+        300
+      ],
+      "cell_size": 1
+    },
+    "beds": {
+      "node": "strata",
+      "step": 4.5,
+      "sharpness": 0.7,
+      "amplitude": 0.5,
+      "breakup": {
+        "node": "add",
+        "inputs": [
+          {
+            "node": "expr",
+            "expr": "2.5 * sin(0.18 * y) + 0.8 * sin(0.5 * y + 1)",
+            "range": [
+              -3.3,
+              3.3
+            ]
+          },
+          {
+            "node": "fractal",
+            "scale": 30,
+            "smallest": 1,
+            "amplitude": 1.2,
+            "seed": 2
+          }
+        ]
+      }
+    },
+    "joints": {
+      "node": "multiply",
+      "inputs": [
+        -2.8,
+        {
+          "node": "subtract",
+          "a": 1,
+          "b": {
+            "node": "smoothstep",
+            "from": 0.0,
+            "to": 0.4,
+            "input": {
+              "node": "warp",
+              "amount": 2,
+              "scale": 14,
+              "seed": 7,
+              "input": {
+                "node": "cells",
+                "style": "edges",
+                "scale": 13,
+                "seed": 11,
+                "plan": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "sandstone": {
+      "node": "add",
+      "inputs": [
+        "$beds",
+        "$joints",
+        "$alcoves",
+        {
+          "node": "fractal",
+          "style": "billow",
+          "scale": 15,
+          "smallest": 0.5,
+          "amplitude": 1.2,
+          "seed": 33
+        },
+        {
+          "node": "fractal",
+          "style": "billow",
+          "scale": 3,
+          "smallest": 0.05,
+          "amplitude": 0.25,
+          "seed": 3
+        },
+        {
+          "node": "fractal",
+          "scale": 0.6,
+          "smallest": 0.004,
+          "amplitude": 0.03,
+          "seed": 8
+        }
+      ]
+    },
+    "sand": {
+      "node": "add",
+      "inputs": [
+        {
+          "node": "fractal",
+          "style": "billow",
+          "scale": 5,
+          "smallest": 0.2,
+          "amplitude": 0.25,
+          "seed": 12
+        },
+        {
+          "node": "fractal",
+          "scale": 2,
+          "smallest": 0.005,
+          "amplitude": 0.04,
+          "seed": 13
+        }
+      ]
+    },
+    "cliff_zone": {
+      "node": "slope",
+      "from": 40,
+      "to": 52,
+      "breakup": {
+        "node": "fractal",
+        "scale": 8,
+        "smallest": 0.5,
+        "amplitude": 8,
+        "seed": 1
+      }
+    },
+    "rocky": {
+      "node": "slope",
+      "from": 28,
+      "to": 38,
+      "breakup": {
+        "node": "fractal",
+        "scale": 1.5,
+        "smallest": 0.05,
+        "amplitude": 6,
+        "seed": 17
+      }
+    },
+    "slickrock": {
+      "node": "add",
+      "inputs": [
+        {
+          "node": "fractal",
+          "style": "billow",
+          "scale": 7,
+          "smallest": 0.05,
+          "amplitude": 0.5,
+          "seed": 21
+        },
+        {
+          "node": "fractal",
+          "scale": 0.8,
+          "smallest": 0.004,
+          "amplitude": 0.025,
+          "seed": 22
+        }
+      ]
+    },
+    "above": {
+      "node": "altitude",
+      "from": 22,
+      "to": 26,
+      "breakup": {
+        "node": "fractal",
+        "scale": 10,
+        "smallest": 0.5,
+        "amplitude": 3,
+        "seed": 23
+      }
+    },
+    "alcoves": {
+      "node": "multiply",
+      "inputs": [
+        -2.5,
+        {
+          "node": "cells",
+          "style": "stones",
+          "scale": 14,
+          "seed": 31
+        },
+        {
+          "node": "smoothstep",
+          "from": 0.45,
+          "to": 0.7,
+          "input": {
+            "node": "fractal",
+            "scale": 40,
+            "smallest": 2,
+            "seed": 32
+          }
+        }
+      ]
+    },
+    "varnish": {
+      "node": "multiply",
+      "inputs": [
+        {
+          "node": "smoothstep",
+          "from": -0.1,
+          "to": 0.25,
+          "input": {
+            "node": "add",
+            "inputs": [
+              {
+                "node": "fractal",
+                "plan": true,
+                "scale": 3,
+                "smallest": 0.2,
+                "seed": 51
+              },
+              {
+                "node": "fractal",
+                "plan": true,
+                "scale": 0.6,
+                "smallest": 0.05,
+                "amplitude": 0.3,
+                "seed": 52
+              }
+            ]
+          }
+        },
+        {
+          "node": "altitude",
+          "from": 14,
+          "to": 26,
+          "breakup": {
+            "node": "fractal",
+            "scale": 6,
+            "smallest": 0.5,
+            "amplitude": 5,
+            "seed": 53
+          }
+        },
+        {
+          "node": "slope",
+          "from": 55,
+          "to": 70
+        }
+      ]
+    },
+    "talus_position": {
+      "node": "altitude",
+      "from": 1.8,
+      "to": 11,
+      "breakup": {
+        "node": "add",
+        "inputs": [
+          {
+            "node": "fractal",
+            "scale": 30,
+            "smallest": 2,
+            "amplitude": 2.5,
+            "seed": 61
+          },
+          {
+            "node": "fractal",
+            "scale": 6,
+            "smallest": 0.5,
+            "amplitude": 1,
+            "seed": 63
+          }
+        ]
+      }
+    },
+    "talus_mask": {
+      "node": "subtract",
+      "a": 1,
+      "b": {
+        "node": "altitude",
+        "from": 13,
+        "to": 15,
+        "breakup": {
+          "node": "fractal",
+          "scale": 8,
+          "smallest": 1,
+          "amplitude": 1.5,
+          "seed": 62
+        }
+      }
+    },
+    "talus": {
+      "node": "talus",
+      "largest": 5,
+      "smallest": 0.08,
+      "exponent": 2.6,
+      "cover": 0.22,
+      "sorting": 0.75,
+      "height": 0.45,
+      "seed": 71,
+      "position": "$talus_position",
+      "mask": "$talus_mask"
+    },
+    "talus_rock": {
+      "node": "talus",
+      "largest": 5,
+      "smallest": 0.08,
+      "exponent": 2.6,
+      "cover": 0.22,
+      "sorting": 0.75,
+      "height": 0.45,
+      "seed": 71,
+      "position": "$talus_position",
+      "mask": "$talus_mask",
+      "output": "mask"
+    },
+    "talus_tint": {
+      "node": "talus",
+      "largest": 5,
+      "smallest": 0.08,
+      "exponent": 2.6,
+      "cover": 0.22,
+      "sorting": 0.75,
+      "height": 0.45,
+      "seed": 71,
+      "position": "$talus_position",
+      "mask": "$talus_mask",
+      "output": "id"
+    },
+    "apron": {
+      "node": "add",
+      "inputs": [
+        {
+          "node": "fractal",
+          "style": "billow",
+          "scale": 6,
+          "smallest": 0.3,
+          "amplitude": 0.35,
+          "seed": 43
+        },
+        {
+          "node": "fractal",
+          "scale": 1,
+          "smallest": 0.005,
+          "amplitude": 0.03,
+          "seed": 9
+        }
+      ]
+    },
+    "block_faces": {
+      "node": "multiply",
+      "inputs": [
+        "$talus_rock",
+        {
+          "node": "fractal",
+          "scale": 0.8,
+          "smallest": 0.01,
+          "amplitude": 0.06,
+          "seed": 72
+        }
+      ]
+    },
+    "undercut": {
+      "node": "multiply",
+      "inputs": [
+        "$cliff_zone",
+        {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "expr",
+              "expr": "-1.8 * pow(max(0, sin(0.75 * y + 0.4 * sin(0.21 * x))), 4)",
+              "range": [
+                -1.8,
+                0
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                1.4,
+                {
+                  "node": "altitude",
+                  "from": 21,
+                  "to": 23.5,
+                  "breakup": {
+                    "node": "fractal",
+                    "scale": 12,
+                    "smallest": 0.5,
+                    "amplitude": 1.5,
+                    "seed": 41
+                  }
+                },
+                {
+                  "node": "altitude",
+                  "from": 27,
+                  "to": 25
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "materials": {
+    "SANDSTONE": {
+      "type": "rock",
+      "preset": "sandstone",
+      "scale": 1,
+      "seed": 4,
+      "color": [
+        0.62,
+        0.29,
+        0.14
+      ],
+      "secondary": [
+        0.7,
+        0.38,
+        0.2
+      ],
+      "weathering": 0.4,
+      "lichen": 0.03,
+      "strata_spacing": 0.7,
+      "strata_amount": 0.25,
+      "strata_color": [
+        0.46,
+        0.22,
+        0.12
+      ]
+    },
+    "SAND": {
+      "type": "soil",
+      "preset": "sand",
+      "seed": 2,
+      "color": [
+        0.56,
+        0.36,
+        0.22
+      ],
+      "humus": [
+        0.48,
+        0.3,
+        0.18
+      ],
+      "stones": 0.03,
+      "crumbs": 0.02,
+      "litter": 0.03,
+      "stone_color": [
+        0.5,
+        0.32,
+        0.22
+      ]
+    },
+    "GROUND": {
+      "type": "mix",
+      "materials": [
+        "LOOSE",
+        "BLOCKS"
+      ],
+      "amount": "$talus_rock"
+    },
+    "BARK": {
+      "type": "lambertian",
+      "albedo": [
+        0.3,
+        0.27,
+        0.23
+      ]
+    },
+    "JUNIPER": {
+      "type": "leaf",
+      "reflectance": [
+        0.12,
+        0.16,
+        0.1
+      ],
+      "transmittance": [
+        0.06,
+        0.1,
+        0.04
+      ],
+      "roughness": 0.4
+    },
+    "SHRUB": {
+      "type": "leaf",
+      "reflectance": [
+        0.26,
+        0.27,
+        0.21
+      ],
+      "transmittance": [
+        0.06,
+        0.08,
+        0.04
+      ],
+      "roughness": 0.6
+    },
+    "VARNISH": {
+      "type": "rock",
+      "preset": "sandstone",
+      "scale": 1,
+      "seed": 5,
+      "color": [
+        0.13,
+        0.07,
+        0.045
+      ],
+      "secondary": [
+        0.22,
+        0.12,
+        0.07
+      ],
+      "weathering": 0.3,
+      "lichen": 0.0,
+      "strata_spacing": 0.7,
+      "strata_amount": 0.15,
+      "strata_color": [
+        0.1,
+        0.05,
+        0.035
+      ]
+    },
+    "CLIFF": {
+      "type": "mix",
+      "materials": [
+        "SANDSTONE",
+        "VARNISH"
+      ],
+      "amount": "$varnish"
+    },
+    "BLOCK": {
+      "type": "rock",
+      "preset": "sandstone",
+      "scale": 1,
+      "seed": 6,
+      "color": [
+        0.58,
+        0.28,
+        0.14
+      ],
+      "secondary": [
+        0.7,
+        0.4,
+        0.22
+      ],
+      "weathering": 0.5,
+      "lichen": 0.02,
+      "strata_spacing": 0.5,
+      "strata_amount": 0.2,
+      "strata_color": [
+        0.45,
+        0.22,
+        0.12
+      ]
+    },
+    "BLOCK_DARK": {
+      "type": "rock",
+      "preset": "sandstone",
+      "scale": 1,
+      "seed": 7,
+      "color": [
+        0.3,
+        0.15,
+        0.08
+      ],
+      "secondary": [
+        0.42,
+        0.22,
+        0.12
+      ],
+      "weathering": 0.4,
+      "lichen": 0.0,
+      "strata_spacing": 0.5,
+      "strata_amount": 0.15,
+      "strata_color": [
+        0.24,
+        0.12,
+        0.07
+      ]
+    },
+    "BLOCKS": {
+      "type": "mix",
+      "materials": [
+        "BLOCK",
+        "BLOCK_DARK"
+      ],
+      "amount": {
+        "node": "smoothstep",
+        "from": 0.35,
+        "to": 0.85,
+        "input": "$talus_tint"
+      }
+    },
+    "LOOSE": {
+      "type": "mix",
+      "materials": [
+        "SAND",
+        "CLIFF"
+      ],
+      "amount": "$rocky"
+    }
+  },
+  "media": {},
+  "camera": {
+    "location": [
+      -70,
+      4,
+      5
+    ],
+    "lookat": [
+      40,
+      20,
+      90
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.5,
+    "aperture": 0.0
+  },
+  "geometries": {
+    "land": {
+      "type": "terrain",
+      "heightmap": "$land",
+      "displacement": {
+        "node": "blend",
+        "a": {
+          "node": "blend",
+          "a": {
+            "node": "blend",
+            "a": "$sand",
+            "b": "$apron",
+            "mask": "$talus_position"
+          },
+          "b": "$slickrock",
+          "mask": "$above"
+        },
+        "b": "$sandstone",
+        "mask": "$cliff_zone"
+      },
+      "displacement_detail": {
+        "pixels": 1,
+        "max_level": 8
+      },
+      "vertical_displacement": {
+        "node": "add",
+        "inputs": [
+          "$talus",
+          "$block_faces"
+        ]
+      },
+      "vector_displacement": {
+        "outward": "$undercut"
+      }
+    }
+  },
+  "objects": [
+    {
+      "type": "transform",
+      "item": "land",
+      "material": "GROUND"
+    },
+    {
+      "type": "forest",
+      "seed": 4,
+      "surface": "land",
+      "area": {
+        "min": [
+          -120,
+          6
+        ],
+        "max": [
+          200,
+          70
+        ]
+      },
+      "spacing": 8,
+      "clearings": 0.5,
+      "patch_size": 25,
+      "patchiness": 0.85,
+      "max_slope": 18,
+      "variants": 3,
+      "species": [
+        {
+          "species": "shrub",
+          "weight": 3,
+          "bark": "BARK",
+          "leaves": "SHRUB",
+          "params": {
+            "scale": 0.55
+          }
+        }
+      ]
+    },
+    {
+      "type": "skysphere",
+      "ozone": true,
+      "multiple_scattering": true,
+      "sun_direction": "$sun"
+    }
+  ]
+}

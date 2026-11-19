@@ -20,7 +20,7 @@ pub fn trace (r: &Ray, depth: u64, s: &Scene) -> (u64, Color) {
 
 /// Segments shorter than this (scene units: metres, in sky scenes) cross too little air to
 /// matter: 100 m of sea-level air takes about half a percent of blue light.
-const AERIAL_PERSPECTIVE_FROM: f64 = 100.;
+pub(crate) const AERIAL_PERSPECTIVE_FROM: f64 = 100.;
 
 /// Shadow rays per camera ray for crepuscular rays (`SkyMaterial::shadowed_loss`).
 const CREPUSCULAR_SAMPLES: usize = 2;
@@ -326,6 +326,34 @@ mod tests {
         let (sampled, hit) = (mean(&scene(true), 20000), mean(&scene(false), 60000));
         assert!(sampled > 0.02, "{}", sampled);
         assert!((sampled - hit).abs() < 0.03 * hit, "light sampling {} vs hitting {}", sampled, hit);
+    }
+
+    #[test]
+    fn test_layered_area_light_sampling_agrees_with_hitting_it() {
+        // A quad light that glows only where its top layer covers a black one (x > 0, and half
+        // of that): light sampling must evaluate the layers' masks where it samples.
+        let scene = |sample_lights: bool| SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 1, "sample_lights": {},
+            "camera": {{ "location": [0, 0.5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "materials": {{
+                "F": {{ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }},
+                "Dark": {{ "type": "lambertian", "albedo": [0, 0, 0] }},
+                "Glow": {{ "type": "diffuse-light", "color": [1, 1, 1], "intensity": 1 }},
+                "L": {{ "type": "surface_layers", "layers": [ {{ "material": "Dark" }},
+                    {{ "material": "Glow", "coverage": 0.5,
+                       "mask": {{ "node": "smoothstep", "input": "x", "from": -0.01, "to": 0.01 }} }} ] }}
+            }},
+            "objects": [
+                {{ "type": "plane", "y": 0, "material": "F" }},
+                {{ "type": "quad", "points": [[-1, 1, -1], [1, 1, -1], [-1, 1, 1], [1, 1, 1]], "material": "L" }}
+            ]
+        }}"#, sample_lights));
+        crate::geometry::seed_rand(2, 1);
+        let r = Ray { ro: Vector3::new(0.2, 0.5, 0.3), rd: Vector3::new(0., -1., 0.) };
+        let mean = |s: &Scene, n: usize| (0..n).map(|_| trace(&r, 0, s).1.rgb.x).sum::<f64>() / n as f64;
+        let (sampled, hit) = (mean(&scene(true), 20000), mean(&scene(false), 60000));
+        assert!(sampled > 0.01, "{}", sampled);
+        assert!((sampled - hit).abs() < 0.04 * hit, "light sampling {} vs hitting {}", sampled, hit);
     }
 
     /// A floor under a grid of 8 × 8 point lights and 8 × 8 small quad lights facing down, with
@@ -672,8 +700,9 @@ mod tests {
         // white Lambertian surface's E / π.
         let ((exact, exact_se), (truncated, truncated_se)) = with_deep_stack(|| {
             crate::geometry::seed_rand(25, 1);
-            (slab_reflection(50., 0.999, 0.85, r#", "delta_m": false"#, 20_000),
-             slab_reflection(50., 0.999, 0.85, "", 20_000))
+            // Without sun probes, which also tame exact transport's noise: delta-M alone.
+            (slab_reflection(50., 0.999, 0.85, r#", "delta_m": false, "sun_probes": false"#, 20_000),
+             slab_reflection(50., 0.999, 0.85, r#", "sun_probes": false"#, 20_000))
         });
         let pi = std::f64::consts::PI;
         let se = (exact_se.powi(2) + truncated_se.powi(2)).sqrt();
@@ -1103,6 +1132,34 @@ mod tests {
         let se = (sampled_sd.powi(2) / n as f64 + unsampled_sd.powi(2) / n as f64).sqrt();
         assert!((sampled - unsampled).abs() < 4. * se, "{} vs {} (se {})", sampled, unsampled, se);
         assert!(sampled_sd < unsampled_sd * 0.75, "sd {} vs {}", sampled_sd, unsampled_sd);
+    }
+
+    /// Mean and standard deviation of n samples through a sunlit cube of forward-scattering
+    /// medium (g 0.85, the sun to the side), with or without sun probes.
+    fn sunlit_cube(probes: bool, n: usize) -> (f64, f64) {
+        let s = SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 100000, "shadow_bias": 0.0001,
+            "sun": {{ "direction": [1, 0.3, -0.2], "intensity": 1 }},
+            "camera": {{ "location": [0, 0, -3], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }},
+            "objects": [ {{ "type": "volume", "min": [-1, -1, -1], "max": [1, 1, 1], "density": 3, "g": 0.85,
+                           "albedo": [0.98, 0.98, 0.98], "sun_probes": {} }} ]
+        }}"#, probes));
+        let r = Ray { ro: Vector3::new(0.1, 0.2, -3.), rd: Vector3::new(0., 0., 1.) };
+        let v: Vec<f64> = (0..n).map(|_| trace(&r, 0, &s).1.rgb.x).collect();
+        let mean = v.iter().sum::<f64>() / n as f64;
+        let var = v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64;
+        (mean, var.sqrt())
+    }
+
+    #[test]
+    fn test_sun_probes_are_unbiased_and_less_noisy() {
+        crate::geometry::seed_rand(8, 1);
+        let n = 60_000;
+        let (with, with_sd) = sunlit_cube(true, n);
+        let (without, without_sd) = sunlit_cube(false, n);
+        let se = (with_sd.powi(2) / n as f64 + without_sd.powi(2) / n as f64).sqrt();
+        assert!((with - without).abs() < 4. * se, "{} vs {} (se {})", with, without, se);
+        assert!(with_sd < without_sd, "sd {} vs {}", with_sd, without_sd);
     }
 
     #[test]

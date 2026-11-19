@@ -95,7 +95,13 @@
     3500,
     7500
    ],
-   "cell_size": 1.5
+   "cell_size": 1.5,
+   "hole": [
+    -899.5,
+    1650.5,
+    149.5,
+    2749.5
+   ]
   },
   "far": {
    "type": "mesas",
@@ -278,6 +284,376 @@
     "set": 0.12,
     "relief": 0.06
    }
+  },
+  "hero": {
+   "type": "mesas",
+   "height": 260,
+   "scale": 900,
+   "coverage": 0.12,
+   "cliff": 22,
+   "benches": 0,
+   "talus": 0.48,
+   "talus_width": 130,
+   "towers": 0.06,
+   "relief": 0.08,
+   "domes": 70,
+   "height_variation": 0.12,
+   "roughness": 0.6,
+   "floor_amplitude": 6,
+   "floor_scale": 200,
+   "floor_ledges": 0,
+   "seed": 21,
+   "domain": [
+    -40000,
+    -8000,
+    40000,
+    60000
+   ],
+   "uplift": [
+    0,
+    0,
+    1000,
+    220
+   ],
+   "valley": [
+    300,
+    4500,
+    4000,
+    12000
+   ],
+   "joints": [
+    45,
+    14
+   ],
+   "taper": 0.6,
+   "shoulder": 0.05,
+   "washes": 3,
+   "buttes": [
+    [
+     -500,
+     2300,
+     200
+    ],
+    [
+     700,
+     3000,
+     260
+    ],
+    [
+     -1500,
+     3900,
+     300
+    ],
+    [
+     1500,
+     4300,
+     220
+    ],
+    [
+     200,
+     5200,
+     350
+    ],
+    [
+     -2000,
+     6300,
+     500
+    ]
+   ],
+   "min": [
+    -900,
+    1650
+   ],
+   "max": [
+    150,
+    2750
+   ],
+   "cell_size": 1.5
+  },
+  "butte_cliff": {
+   "node": "add",
+   "inputs": [
+    {
+     "node": "strata",
+     "step": 13,
+     "sharpness": 0.6,
+     "amplitude": 0.9,
+     "breakup": {
+      "node": "add",
+      "inputs": [
+       {
+        "node": "expr",
+        "expr": "4 * sin(0.05 * y) + 1.5 * sin(0.17 * y + 1)",
+        "range": [
+         -5.5,
+         5.5
+        ]
+       },
+       {
+        "node": "fractal",
+        "scale": 70,
+        "smallest": 3,
+        "amplitude": 3,
+        "seed": 2
+       }
+      ]
+     }
+    },
+    {
+     "node": "multiply",
+     "inputs": [
+      -5,
+      {
+       "node": "subtract",
+       "a": 1,
+       "b": {
+        "node": "smoothstep",
+        "from": 0,
+        "to": 0.3,
+        "input": {
+         "node": "warp",
+         "amount": 4,
+         "scale": 30,
+         "seed": 7,
+         "input": {
+          "node": "cells",
+          "style": "edges",
+          "scale": 24,
+          "seed": 11,
+          "plan": true
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "node": "fractal",
+     "scale": 9,
+     "smallest": 0.8,
+     "amplitude": 1.6,
+     "seed": 34,
+     "style": "ridged",
+     "plan": true
+    },
+    {
+     "node": "multiply",
+     "inputs": [
+      -4,
+      {
+       "node": "cells",
+       "style": "stones",
+       "scale": 26,
+       "seed": 31
+      },
+      {
+       "node": "smoothstep",
+       "from": 0.45,
+       "to": 0.7,
+       "input": {
+        "node": "fractal",
+        "scale": 80,
+        "smallest": 4,
+        "amplitude": 1,
+        "seed": 32
+       }
+      }
+     ]
+    },
+    {
+     "node": "fractal",
+     "scale": 30,
+     "smallest": 1.5,
+     "amplitude": 2.5,
+     "seed": 33,
+     "style": "billow"
+    },
+    {
+     "node": "fractal",
+     "scale": 4,
+     "smallest": 0.4,
+     "amplitude": 0.3,
+     "seed": 3
+    }
+   ]
+  },
+  "butte_talus": {
+   "node": "add",
+   "inputs": [
+    {
+     "node": "multiply",
+     "inputs": [
+      {
+       "node": "power",
+       "exponent": 0.35,
+       "input": {
+        "node": "cells",
+        "style": "stones",
+        "scale": 9,
+        "amplitude": 3,
+        "seed": 4
+       }
+      },
+      {
+       "node": "smoothstep",
+       "from": 0.2,
+       "to": 0.45,
+       "input": {
+        "node": "fractal",
+        "scale": 30,
+        "smallest": 2,
+        "amplitude": 1,
+        "seed": 41
+       }
+      }
+     ]
+    },
+    {
+     "node": "multiply",
+     "inputs": [
+      {
+       "node": "power",
+       "exponent": 0.4,
+       "input": {
+        "node": "cells",
+        "style": "stones",
+        "scale": 3.5,
+        "amplitude": 0.8,
+        "seed": 5
+       }
+      },
+      {
+       "node": "smoothstep",
+       "from": 0,
+       "to": 0.3,
+       "input": {
+        "node": "fractal",
+        "scale": 15,
+        "smallest": 1,
+        "amplitude": 1,
+        "seed": 42
+       }
+      }
+     ]
+    },
+    {
+     "node": "fractal",
+     "scale": 14,
+     "smallest": 0.8,
+     "amplitude": 0.6,
+     "seed": 43,
+     "style": "billow"
+    }
+   ]
+  },
+  "butte_floor": {
+   "node": "add",
+   "inputs": [
+    {
+     "node": "fractal",
+     "scale": 25,
+     "smallest": 1,
+     "amplitude": 0.6,
+     "seed": 12
+    },
+    {
+     "node": "fractal",
+     "scale": 3,
+     "smallest": 0.1,
+     "amplitude": 0.04,
+     "seed": 13
+    }
+   ]
+  },
+  "butte_top": {
+   "node": "add",
+   "inputs": [
+    {
+     "node": "fractal",
+     "scale": 14,
+     "smallest": 0.5,
+     "amplitude": 0.8,
+     "seed": 21,
+     "style": "billow"
+    },
+    {
+     "node": "multiply",
+     "inputs": [
+      -0.8,
+      {
+       "node": "power",
+       "exponent": 0.6,
+       "input": {
+        "node": "cells",
+        "style": "stones",
+        "scale": 5,
+        "seed": 62
+       }
+      },
+      {
+       "node": "smoothstep",
+       "from": 0.15,
+       "to": 0.45,
+       "input": {
+        "node": "fractal",
+        "scale": 25,
+        "smallest": 2,
+        "amplitude": 1,
+        "seed": 63
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "butte_relief": {
+   "node": "blend",
+   "a": {
+    "node": "blend",
+    "a": {
+     "node": "blend",
+     "a": "$butte_floor",
+     "b": "$butte_talus",
+     "mask": {
+      "node": "slope",
+      "from": 15,
+      "to": 23,
+      "breakup": {
+       "node": "fractal",
+       "scale": 8,
+       "smallest": 0.5,
+       "amplitude": 5,
+       "seed": 16
+      }
+     }
+    },
+    "b": "$butte_top",
+    "mask": {
+     "node": "altitude",
+     "from": 180,
+     "to": 200,
+     "breakup": {
+      "node": "fractal",
+      "scale": 30,
+      "smallest": 2,
+      "amplitude": 10,
+      "seed": 23
+     }
+    }
+   },
+   "b": "$butte_cliff",
+   "mask": {
+    "node": "slope",
+    "from": 48,
+    "to": 60,
+    "breakup": {
+     "node": "fractal",
+     "scale": 14,
+     "smallest": 1,
+     "amplitude": 8,
+     "seed": 1
+    }
+   }
   }
  },
  "geometries": {
@@ -292,6 +668,17 @@
   "close": {
    "type": "terrain",
    "heightmap": "$close"
+  },
+  "hero": {
+   "type": "terrain",
+   "heightmap": "$hero",
+   "displacement": "$butte_relief",
+   "displacement_falloff": 20,
+   "displacement_detail": {
+    "pixels": 1,
+    "offscreen": 8,
+    "max_level": 6
+   }
   }
  },
  "materials": {
@@ -1055,6 +1442,11 @@
     0,
     9000
    ]
+  },
+  {
+   "type": "transform",
+   "item": "hero",
+   "material": "GROUND"
   },
   {
    "type": "transform",

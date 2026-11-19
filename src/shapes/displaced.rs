@@ -48,7 +48,7 @@
 use crate::bvh::Bvh;
 use crate::graph::{Context, Graph};
 use crate::intersection::RawIntersection;
-use crate::na::Vector3;
+use crate::na::{Matrix3, Vector3};
 use crate::procedural::heightmap::{intersect_triangle, HeightGrid};
 use crate::ray::Ray;
 use crate::shapes::bbox::BBox;
@@ -167,6 +167,12 @@ pub struct DisplacedTerrain {
     bvh: Bvh,
     cells: Vec<u32>,
     bounds: BBox,
+    /// Where the terrain is put in the scene, when it is placed by a transform around it: its
+    /// origin and axes there, so its graphs are evaluated at the scene's points, as they are
+    /// when shading (`graph::Context::at_hit`), and nearby placements displace alike.
+    place: Option<(Vector3<f64>, Matrix3<f64>)>,
+    /// What its graphs' `field` nodes read (a landscape's simulation).
+    fields: Option<Arc<dyn crate::graph::Fields>>,
 }
 
 /// Where the ray enters and leaves the box, in multiples of its direction, within [t0, t1].
@@ -258,7 +264,23 @@ impl DisplacedTerrain {
         println!("Displaced terrain: {} x {} cells diced to levels {} to {}, up to {:.1} million vertices if all are seen",
             nx, nz, levels.iter().min().unwrap_or(&0), levels.iter().max().unwrap_or(&0), vertices / 1e6);
         let tiles = (0 .. nx * nz).map(|_| OnceLock::new()).collect();
-        Ok(DisplacedTerrain { grid, graph, vertical, lift, falloff: falloff.max(0.), range, levels, cell_bounds, tiles, pool: OnceLock::new(), bvh, cells, bounds })
+        Ok(DisplacedTerrain { grid, graph, vertical, lift, falloff: falloff.max(0.), range, levels, cell_bounds, tiles,
+            pool: OnceLock::new(), bvh, cells, bounds, place: None, fields: None })
+    }
+
+    /// Evaluate the graphs where the terrain will be in the scene: at `origin + axes * p` for
+    /// its own point p (the transform it will be put through, which must be a rotation and a
+    /// translation).
+    pub fn placed(mut self, origin: Vector3<f64>, axes: Matrix3<f64>) -> DisplacedTerrain {
+        self.place = Some((origin, axes));
+        self
+    }
+
+    /// Let its graphs read `fields` (as `field` nodes, and the planet's up for `slope` and
+    /// `altitude`).
+    pub fn with_fields(mut self, fields: Arc<dyn crate::graph::Fields>) -> DisplacedTerrain {
+        self.fields = Some(fields);
+        self
     }
 
     /// The displacement's range.
@@ -281,7 +303,10 @@ impl DisplacedTerrain {
         let (y, hx, hz) = g.smooth(x, z);
         let base = Vector3::new(x, y, z);
         let normal = Vector3::new(-hx, 1., -hz).normalize();
-        let c = Context::new(base, normal, g.cell * scale);
+        let c = match &self.place {
+            Some((origin, axes)) => Context::new(origin + axes * base, axes * normal, g.cell * scale),
+            None => Context::new(base, normal, g.cell * scale),
+        }.with_fields(self.fields.as_deref());
         let fade = self.fade(x, z);
         if fade <= 0. {
             return base;
@@ -626,6 +651,32 @@ mod tests {
 
     /// With a falloff, the edges lie on the undisplaced base (to meet a grid around them), and
     /// the displaced surface stays within its cells' bounds, whose range now reaches 0.
+    #[test]
+    fn test_placed_graphs_read_the_scene_and_fields() {
+        struct East;
+        impl crate::graph::Fields for East {
+            fn field(&self, _: crate::graph::Field, p: &Vector3<f64>) -> Option<f64> { Some(p.x) }
+        }
+        let rise = |g: &DisplacedTerrain, x: f64, z: f64| g.intersects(&Ray { ro: Vector3::new(x, 50., z), rd: -Vector3::y() }).unwrap().point.y;
+        let flat = || Arc::new(HeightGrid::from_heights((-4., -4.), 1., 8, 8, vec![0.; 81]));
+        let detail = Detail { level: 2, ..Detail::default() };
+        // Displaced by the scene's x, a hundred metres east of where the terrain thinks it is.
+        let graph = || Graph::parse(&serde_json::json!({"node": "expr", "expr": "0.01 * x", "range": [-10, 10]})).unwrap();
+        let here = DisplacedTerrain::new(flat(), graph(), true, &detail).unwrap();
+        let there = DisplacedTerrain::new(flat(), graph(), true, &detail).unwrap()
+            .placed(Vector3::new(100., 0., 0.), Matrix3::identity());
+        assert!((rise(&here, 1.5, 0.5) - 0.015).abs() < 1e-9);
+        assert!((rise(&there, 1.5, 0.5) - 1.015).abs() < 1e-9);
+        // A field, read at the scene's points too.
+        let sediment = || Graph::parse(&serde_json::json!({"node": "field", "field": "sediment", "from": 0, "to": 200})).unwrap();
+        let unread = DisplacedTerrain::new(flat(), sediment(), true, &detail).unwrap();
+        assert!(rise(&unread, 1.5, 0.5).abs() < 1e-9);
+        let read = DisplacedTerrain::new(flat(), sediment(), true, &detail).unwrap()
+            .placed(Vector3::new(100., 0., 0.), Matrix3::identity())
+            .with_fields(Arc::new(East));
+        assert!((rise(&read, 1.5, 0.5) - crate::procedural::nubis_clouds::smoothstep(0., 200., 101.5)).abs() < 1e-9);
+    }
+
     #[test]
     fn test_roughly_is_undone_by_a_panic() {
         let seen = std::panic::catch_unwind(|| roughly(|| -> () { panic!("in a guess") }));

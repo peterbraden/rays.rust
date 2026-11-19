@@ -44,7 +44,8 @@ chosen layer are the only ones evaluated.
 
 A landscape (`"type": "landscape"`, a scaled patch or full scale) takes `"material"`: a
 material for all its ground but rivers and lakes, in place of its fixed cover classes. Graphs
-evaluated on it, in `surface_layers` masks or a `mix`'s amount, can read its fields with
+evaluated on it, in `surface_layers` masks, a `mix`'s amount or its `displacement` (see
+[displacement](displacement.md#on-a-landscape)), can read its fields with
 `{"node": "field", "field": name}` (smoothly 0 to 1 between `from` and `to` if given, the raw
 value otherwise; either moved first by a `breakup`; `default`, 0, on surfaces without fields):
 

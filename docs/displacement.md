@@ -41,7 +41,7 @@ reuse it as `"$name"`.
 | `cross_beds` | A `rock` material's festoon cross-bedding as relief (its `seed`, `scale` and `cross_set` as `set`; `amplitude`), so the laminae its colour shows stand out as ribs |
 | `slope`, `altitude` | Masks from 0 to 1 between `from` and `to` (degrees, metres), with a fractal `breakup`; falling instead where `to` is below `from` |
 | `aspect` | How squarely the surface faces `direction` (default north, `[0, 0, -1]`), as a mask |
-| `field` | What the surface hit knows about itself: on a landscape, its simulation's sediment, ice, flow, wetness and so on (see [surface layers](surface-layers.md)) |
+| `field` | What the surface hit knows about itself: on a landscape, its simulation's sediment, ice, flow, wetness and so on (see [surface layers](surface-layers.md)), when shading or displacing it; give `from` and `to` to displace by one, as a raw field is unbounded |
 | `add`, `multiply`, `min`, `max`, `subtract` | Arithmetic |
 | `blend` | `a` where `mask` is 0, `b` where 1 |
 | `clamp`, `abs`, `power`, `smoothstep`, `remap`, `terrace` | Shaping |
@@ -139,15 +139,25 @@ surface, so keep displacement small or masked off where they are.
 ![Before and after: a mountainside as the clipmap draws it, then displaced](landscape-displacement-comparison.png)
 
 *`demo/scenes/alpine-closeup.json`, 960 x 540 at 32 samples. Top, the landscape's mesh alone;
-bottom, the ground within a kilometre displaced: rock ribs where it is steep, stones on the
-scree. 5 min 14 s against 3 min 2 s, and 1.3 GB (4 cores).*
+bottom, the ground within a kilometre displaced by a graph that reads the simulation: rock
+ribs where it is steep and the simulation left the rock bare, stones where it left scree.*
 
 A full-scale `landscape` takes the same `"displacement"` (and `displacement_detail`,
 `vertical_displacement`, `displacement_falloff`). The ground within `displacement_reach`
 metres of the camera (1000 by default, each way) becomes a heightfield of the landscape's own
 surface, `displacement_spacing` metres apart (2), displaced as a terrain is; the clipmap's mesh
-leaves that square out. Its graphs can read the simulation's fields, as the ground's materials
-do, and are shaded where each point came from.
+leaves that square out. Its graphs read the simulation's fields as the ground's materials
+do (`field` nodes, and `slope` and `altitude` by the planet's up), so relief can follow what
+the simulation left: ribs of rock only where the sediment is thin, stones where the scree
+material is, smooth ice on the glaciers. It is shaded where each point came from.
+
+The patch stands upright in the planet's tangent frame under the camera (`scenery::Local`),
+put into the scene by a transform, so it holds however far from the scene's origin the camera
+is. Its graphs are evaluated at the scene's points, and the frame and grid are snapped (the
+frame to whole multiples of the reach, the grid to eight cells), so cameras near each other,
+an animation's frames, see the same displacement rather than one that crawls with them. A
+camera with `motion` gets a patch centred on the middle of its path, reaching as far past
+either end; the camera's view, for dicing, is taken into the patch's frame.
 
 The patch draws the relief to the spacing of the ring each point lies in (`scenery::Clipmap`)
 where that is coarser than its own, so at its edge it is the surface the rings draw. The

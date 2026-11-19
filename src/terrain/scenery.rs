@@ -472,43 +472,77 @@ impl Clipmap {
     }
 }
 
+/// A frame on the planet's tangent plane at a point of the ground, in the scene: x east, y up
+/// and z south there, as the scene's own axes are at its origin, so that a heightfield in it
+/// stands upright however far from the origin it is.
+#[derive(Clone, Debug)]
+pub struct Local {
+    /// Where sea level is under the point, and the frame's axes (columns), in the scene.
+    pub origin: Vector3<f64>,
+    pub axes: crate::na::Matrix3<f64>,
+}
+
+impl Local {
+    /// The frame under tangent-plane point (`x`, `z`) of `frame`.
+    pub fn under(frame: &Frame, x: f64, z: f64) -> Local {
+        let d = frame.dir(x, z);
+        let (lat, lon) = Domain::lat_lon(&d);
+        let (up, east, north) = Domain::frame(lat, lon);
+        // Planet directions into the scene: as Frame::to_scene, without the translation.
+        let scene = |v: Vector3<f64>| Vector3::new(v.dot(&frame.east), v.dot(&frame.up), -v.dot(&frame.north));
+        Local {
+            origin: frame.to_scene(&d, 0.),
+            axes: crate::na::Matrix3::from_columns(&[scene(east), scene(up), -scene(north)]),
+        }
+    }
+
+    pub fn to_scene(&self, p: &Vector3<f64>) -> Vector3<f64> { self.origin + self.axes * p }
+
+    pub fn to_local(&self, p: &Vector3<f64>) -> Vector3<f64> { self.axes.transpose() * (p - self.origin) }
+}
+
 /// A part of the ground drawn by something else (a displaced patch about the camera): a square
-/// in the scene's x and z, and the surface it has there, which the mesh's vertices inside it
-/// are moved onto, so the mesh's triangles that overlap its edge follow it.
+/// in a `Local` frame's x and z, and the surface it has there, which the mesh's vertices inside
+/// it are moved onto, so the mesh's triangles that overlap its edge follow it.
 pub struct Hole {
+    pub local: Local,
     pub min: (f64, f64),
     pub max: (f64, f64),
     pub surface: Arc<crate::procedural::heightmap::HeightGrid>,
 }
 
 impl Hole {
+    /// Whether scene point `p` is over the square.
     fn inside(&self, p: &Vector3<f64>) -> bool {
-        p.x > self.min.0 && p.x < self.max.0 && p.z > self.min.1 && p.z < self.max.1
+        let q = self.local.to_local(p);
+        q.x > self.min.0 && q.x < self.max.0 && q.z > self.min.1 && q.z < self.max.1
     }
 }
 
-/// The landscape's surface in the scene, as a heightfield over its x and z: the relief drawn
+/// The landscape's surface as a heightfield over a `Local` frame's x and z: the relief drawn
 /// to the spacing of the clipmap ring each point lies in, or `cell` where that is finer, so
 /// that where it meets the rings it agrees with them.
 pub struct Surface<'a> {
     pub relief: &'a Relief,
     pub frame: &'a Frame,
+    pub local: &'a Local,
     pub clipmap: &'a Clipmap,
     pub cell: f64,
 }
 
 impl crate::procedural::heightmap::HeightSource for Surface<'_> {
     fn height(&self, x: f64, z: f64) -> f64 {
-        let (d, _) = self.frame.on_planet(&Vector3::new(x, 0., z));
+        let at = |y: f64| self.frame.on_planet(&self.local.to_scene(&Vector3::new(x, y, z)));
+        let (d, _) = at(0.);
         let (tx, tz) = self.frame.tangent(&d);
-        let local = self.clipmap.local(tx, tz).unwrap_or(self.cell).max(self.cell);
+        let spacing = self.clipmap.local(tx, tz).unwrap_or(self.cell).max(self.cell);
         let slope = self.relief.slope(&d);
         // The point above (x, z) at the surface's height: moving up the column barely turns
         // the direction from the planet's centre, so this settles in a few steps.
         let mut y = 0.;
         for _ in 0..4 {
-            let (d, h) = self.frame.on_planet(&Vector3::new(x, y, z));
-            y += (self.relief.height(&d, slope, local) - h) * self.frame.exaggeration;
+            let (d, h) = at(y);
+            y += (self.relief.height(&d, slope, spacing) - h) * self.frame.exaggeration;
         }
         y
     }
@@ -613,12 +647,14 @@ pub fn mesh(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams,
         normals[k] = (normals[a] + normals[b]).normalize();
     }
     if let Some(patch) = patch {
-        // Within the patch, onto its surface (straight up, as the patch is a heightfield).
+        // Within the patch, onto its surface (straight up its frame, as it is a heightfield).
         for (p, n) in positions.iter_mut().zip(normals.iter_mut()) {
             if patch.inside(p) {
-                let (y, hx, hz) = patch.surface.smooth(p.x, p.z);
-                p.y = y;
-                *n = Vector3::new(-hx, 1., -hz).normalize();
+                let mut q = patch.local.to_local(p);
+                let (y, hx, hz) = patch.surface.smooth(q.x, q.z);
+                q.y = y;
+                *p = patch.local.to_scene(&q);
+                *n = patch.local.axes * Vector3::new(-hx, 1., -hz).normalize();
             }
         }
         triangles.retain(|t| !t.iter().all(|&k| patch.inside(&positions[k])));
@@ -844,7 +880,12 @@ pub struct LandscapeMedium {
 
 impl LandscapeMedium {
     pub fn new(ground: Ground, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> LandscapeMedium {
-        let ground = Arc::new(ground);
+        LandscapeMedium::with_ground(Arc::new(ground), material)
+    }
+
+    /// As `new`, with ground shared with something else that reads it (a displaced patch's
+    /// graphs).
+    pub fn with_ground(ground: Arc<Ground>, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> LandscapeMedium {
         let centre = ground.frame.centre();
         LandscapeMedium {
             land: material.unwrap_or_else(|| Box::new(Land { ground: ground.clone() })),
@@ -963,6 +1004,22 @@ mod tests {
     }
 
     #[test]
+    fn test_local_frames_stand_upright() {
+        let f = Frame::new(45., 7., 6.36e6, 1.);
+        // At the scene's origin, the scene's own axes.
+        let o = Local::under(&f, 0., 0.);
+        assert!(o.origin.norm() < 1e-6 && (o.axes - crate::na::Matrix3::identity()).norm() < 1e-9);
+        // Far off, up is away from the planet's centre, and the axes are a rotation.
+        let far = Local::under(&f, 150e3, -90e3);
+        let radial = (far.origin - f.centre()).normalize();
+        assert!((far.axes.column(1) - radial).norm() < 1e-9);
+        assert!((far.axes.transpose() * far.axes - crate::na::Matrix3::identity()).norm() < 1e-9);
+        assert!((far.axes.determinant() - 1.).abs() < 1e-9);
+        let p = Vector3::new(3., 4., 5.);
+        assert!((far.to_local(&far.to_scene(&p)) - p).norm() < 1e-6);
+    }
+
+    #[test]
     fn test_displaced_patch_meets_the_rings() {
         use crate::shapes::displaced::{DisplacedTerrain, Detail};
         use crate::shapes::geometry::Geometry;
@@ -970,34 +1027,47 @@ mod tests {
         let r = Relief::new(layers, &planet, 6.36e6, 1., 1000.);
         let f = Frame::new(lat, lon, 6.36e6, 1.);
         let p = SceneryParams { resolution: 64, globe: 8, ..SceneryParams::default() };
-        let view = Viewpoint { location: Vector3::new(0., r.base(&f.dir(0., 0.)) + 50., 0.) };
-        let clipmap = Clipmap::new(&r, &f, &view, &p);
-        let surface = Surface { relief: &r, frame: &f, clipmap: &clipmap, cell: 2. };
-        let grid = Arc::new(crate::procedural::heightmap::HeightGrid::sample(&surface, (-200., -200.), (200., 200.), 2.));
-        let hole = Hole { min: (-200., -200.), max: (200., 200.), surface: grid.clone() };
-        let rings = mesh(&r, &f, &view, &p, None);
-        let flat = crate::graph::Graph::parse(&serde_json::json!(0)).unwrap();
-        let patch = DisplacedTerrain::new(grid.clone(), flat, false, &Detail::default()).unwrap();
-        let both = crate::shapes::group::Group::new(vec![Box::new(mesh(&r, &f, &view, &p, Some(&hole))), Box::new(patch)]);
-        let down = |x: f64, z: f64| Ray { ro: Vector3::new(x, 20000., z), rd: Vector3::new(0., -1., 0.) };
-        let y = |g: &dyn Geometry, x: f64, z: f64| g.intersects(&down(x, z)).map(|h| h.point.y);
-        let mut last: Option<f64> = None;
-        for k in 0..400 {
-            let x = 120. + 0.37 * k as f64;
-            let z = 0.3 * x - 40.;
-            // No crack where the patch meets the rings, and no step.
-            let h = y(&both, x, z).unwrap_or_else(|| panic!("crack at {}", x));
-            if let Some(l) = last {
-                assert!((h - l).abs() < 1., "step of {} at {}", h - l, x);
-            }
-            last = Some(h);
-            // Inside, the patch's surface (as diced); near its edge, close to the rings'.
-            if x < 190. {
-                assert!((h - grid.smooth(x, z).0).abs() < 0.01, "{} vs the patch's {}", h, grid.smooth(x, z).0);
-            }
-            if (180. ..200.).contains(&x) {
-                let ring = y(&rings, x, z).unwrap();
-                assert!((h - ring).abs() < 1., "{} vs the rings' {} at {}", h, ring, x);
+        // At the scene's origin, and far enough off that the ground's up is turned a degree
+        // and a half from the scene's.
+        for (x0, z0) in [(0., 0.), (140e3, -70e3)] {
+            let local = Local::under(&f, x0, z0);
+            let (d, h) = f.on_planet(&local.origin);
+            let ground = r.height(&d, r.slope(&d), 2.) - h;
+            let view = Viewpoint { location: local.to_scene(&Vector3::new(0., ground + 50., 0.)) };
+            let clipmap = Clipmap::new(&r, &f, &view, &p);
+            let surface = Surface { relief: &r, frame: &f, local: &local, clipmap: &clipmap, cell: 2. };
+            let grid = Arc::new(crate::procedural::heightmap::HeightGrid::sample(&surface, (-200., -200.), (200., 200.), 2.));
+            let hole = Hole { local: local.clone(), min: (-200., -200.), max: (200., 200.), surface: grid.clone() };
+            let rings = mesh(&r, &f, &view, &p, None);
+            let flat = crate::graph::Graph::parse(&serde_json::json!(0)).unwrap();
+            let patch = DisplacedTerrain::new(grid.clone(), flat, false, &Detail::default()).unwrap();
+            let mut m = crate::na::Matrix4::identity();
+            m.fixed_view_mut::<3, 3>(0, 0).copy_from(&local.axes);
+            m.fixed_view_mut::<3, 1>(0, 3).copy_from(&local.origin);
+            let placed = crate::shapes::transform::Transform::new(Arc::new(patch) as Arc<dyn Geometry + Sync + Send>,
+                crate::na::Affine3::from_matrix_unchecked(m));
+            let both = crate::shapes::group::Group::new(vec![Box::new(mesh(&r, &f, &view, &p, Some(&hole))), Box::new(placed)]);
+            // Rays straight down the frame's up, and heights along it.
+            let down = |x: f64, z: f64| Ray { ro: local.to_scene(&Vector3::new(x, ground + 20000., z)), rd: -local.axes.column(1).into_owned() };
+            let y = |g: &dyn Geometry, x: f64, z: f64| g.intersects(&down(x, z)).map(|h| local.to_local(&h.point).y);
+            let mut last: Option<f64> = None;
+            for k in 0..400 {
+                let x = 120. + 0.37 * k as f64;
+                let z = 0.3 * x - 40.;
+                // No crack where the patch meets the rings, and no step.
+                let h = y(&both, x, z).unwrap_or_else(|| panic!("crack at {} ({}, {})", x, x0, z0));
+                if let Some(l) = last {
+                    assert!((h - l).abs() < 1., "step of {} at {} ({}, {})", h - l, x, x0, z0);
+                }
+                last = Some(h);
+                // Inside, the patch's surface (as diced); near its edge, close to the rings'.
+                if x < 190. {
+                    assert!((h - grid.smooth(x, z).0).abs() < 0.01, "{} vs the patch's {}", h, grid.smooth(x, z).0);
+                }
+                if (180. ..200.).contains(&x) {
+                    let ring = y(&rings, x, z).unwrap();
+                    assert!((h - ring).abs() < 1., "{} vs the rings' {} at {} ({}, {})", h, ring, x, x0, z0);
+                }
             }
         }
     }

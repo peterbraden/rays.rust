@@ -67,7 +67,7 @@ use crate::terrain::planet::Planet;
 use crate::terrain::simulation::{Terrain, TerrainParams, ICE_FREE};
 use crate::terrain::volcano::VolcanoParams;
 use crate::terrain::channel::{point_cell, WaterLines};
-use crate::terrain::scenery::{self, Clipmap, Frame, Ground, Hole, LandscapeMedium, Layer, Relief, SceneryParams, Surface, Viewpoint};
+use crate::terrain::scenery::{self, Clipmap, Frame, Ground, Hole, LandscapeMedium, Layer, Local, Relief, SceneryParams, Surface, Viewpoint};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -577,17 +577,18 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     let (foot, height) = frame.on_planet(&view.location);
     let ground = relief.height(&foot, relief.slope(&foot), 1.);
     println!("Landscape: the camera is {:.1} m above the ground under it ({:.1} m above sea level)", height - ground, ground);
-    let patch = o.get("displacement").map(|d| displaced_patch(o, d, &relief, &frame, &view, &p));
-    let mesh = scenery::mesh(&relief, &frame, &view, &p, patch.as_ref().map(|(h, _)| h));
-    let geometry: Box<dyn Geometry + Send + Sync> = match patch {
-        Some((_, terrain)) => Box::new(crate::shapes::group::Group::new(vec![Box::new(mesh), Box::new(terrain)])),
-        None => Box::new(mesh),
-    };
     let climate = params.climate.as_ref().map(|c| crate::terrain::climate::climate(c, &planet));
     if let (Some(path), Some(c)) = (o["climate_map"].as_str(), &climate) { crate::terrain::map::write_climate_map(&planet, c, path, 2048); }
-    let ground = Ground::new(layers, climate, params.glacier.clone().unwrap_or_default(), time, params.planet.seed, frame, &p);
+    // Built first, so the displacement's graphs can read its fields.
+    let ground = Arc::new(Ground::new(layers, climate, params.glacier.clone().unwrap_or_default(), time, params.planet.seed, frame.clone(), &p));
+    let patch = o.get("displacement").map(|d| displaced_patch(o, d, &relief, &frame, &view, &p, ground.clone()));
+    let mesh = scenery::mesh(&relief, &frame, &view, &p, patch.as_ref().map(|(h, _)| h));
+    let geometry: Box<dyn Geometry + Send + Sync> = match patch {
+        Some((_, terrain)) => Box::new(crate::shapes::group::Group::new(vec![Box::new(mesh), terrain])),
+        None => Box::new(mesh),
+    };
     println!("Landscape: {} triangles in {:.1?}", geometry.primitives(), start.elapsed());
-    SceneObject { geometry, medium: Box::new(LandscapeMedium::new(ground, material)) }
+    SceneObject { geometry, medium: Box::new(LandscapeMedium::with_ground(ground, material)) }
 }
 
 /// The ground about the camera displaced at render time (`shapes::displaced`): a heightfield
@@ -595,30 +596,59 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
 /// graph `d`, and the hole it leaves in the clipmap's mesh. Its displacement fades out towards
 /// its edges over at least three of the rings' spacings there, so the rings' triangles that
 /// overlap its edge (moved onto its surface) meet it undisplaced.
-fn displaced_patch(o: &Value, d: &Value, relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams)
-    -> (Hole, crate::shapes::displaced::DisplacedTerrain)
+///
+/// It stands upright in a `Local` frame on the planet under the camera, put into the scene by
+/// a transform; the frame is snapped to whole multiples of the reach, and the grid to eight
+/// cells, so that nearby cameras (an animation's frames) share both, and its graphs are
+/// evaluated at the scene's points, so the displacement stays put as they move. For a camera
+/// with `motion`, it is centred on the middle of the path and reaches the same distance past
+/// either end.
+fn displaced_patch(o: &Value, d: &Value, relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams, ground: Arc<Ground>)
+    -> (Hole, Box<dyn Geometry + Send + Sync>)
 {
-    let reach = number(o, "displacement_reach", 1000.).max(1.);
+    let camera = &o["camera"];
+    let start_at = view.location;
+    let end_at = SceneFile::parse_vec3_def(&camera["motion"], "location", start_at);
+    let middle = (start_at + end_at) / 2.;
     let cell = number(o, "displacement_spacing", 2.).max(0.01);
-    let clipmap = Clipmap::new(relief, frame, view, p);
+    let (tx, tz) = frame.tangent(&frame.on_planet(&middle).0);
+    let reach = number(o, "displacement_reach", 1000.).max(1.);
+    let coarse = |c: f64| (c / reach).round() * reach;
+    let local = Local::under(frame, coarse(tx), coarse(tz));
+    let (m, e) = (local.to_local(&middle), local.to_local(&end_at));
+    let reach = reach + (e.x - m.x).hypot(e.z - m.z);
     let snap = |c: f64| (c / (8. * cell)).round() * 8. * cell;
-    let (cx, cz) = (snap(view.location.x), snap(view.location.z));
+    let (cx, cz) = (snap(m.x), snap(m.z));
     let (min, max) = ((cx - reach, cz - reach), (cx + reach, cz + reach));
-    let start = std::time::Instant::now();
-    let surface = Surface { relief, frame, clipmap: &clipmap, cell };
+    let begun = std::time::Instant::now();
+    let clipmap = Clipmap::new(relief, frame, view, p);
+    let surface = Surface { relief, frame, local: &local, clipmap: &clipmap, cell };
     let grid = Arc::new(crate::procedural::heightmap::HeightGrid::sample(&surface, min, max, cell));
     // The rings are coarsest at the patch's corners.
     let coarsest = [min, (min.0, max.1), (max.0, min.1), max].iter().map(|&(x, z)| {
-        let (tx, tz) = frame.tangent(&frame.on_planet(&Vector3::new(x, 0., z)).0);
+        let (tx, tz) = frame.tangent(&frame.on_planet(&local.to_scene(&Vector3::new(x, 0., z))).0);
         clipmap.local(tx, tz).unwrap_or(reach)
     }).fold(cell, f64::max);
     let falloff = number(o, "displacement_falloff", 0.).max(3. * coarsest);
+    // The terrain is diced for the camera as it sees it, in the frame (from the middle of its
+    // path, if it moves).
     let mut po = o.clone();
     po["displacement_falloff"] = serde_json::json!(falloff);
-    let terrain = SceneFile::parse_displaced_terrain(grid.clone(), d, &po);
+    let json = |v: Vector3<f64>| serde_json::json!([v.x, v.y, v.z]);
+    po["camera"]["lookat"] = json(local.to_local(&SceneFile::parse_vec3_def(camera, "lookat", middle)));
+    po["camera"]["location"] = json(local.to_local(&middle));
+    po["camera"]["up"] = json(local.axes.transpose() * SceneFile::parse_vec3_def(camera, "up", Vector3::y()));
+    let terrain = SceneFile::parse_displaced_terrain(grid.clone(), d, &po)
+        .placed(local.origin, local.axes)
+        .with_fields(ground);
+    let mut matrix = crate::na::Matrix4::identity();
+    matrix.fixed_view_mut::<3, 3>(0, 0).copy_from(&local.axes);
+    matrix.fixed_view_mut::<3, 1>(0, 3).copy_from(&local.origin);
+    let placed = crate::shapes::transform::Transform::new(Arc::new(terrain) as Arc<dyn Geometry + Sync + Send>,
+        crate::na::Affine3::from_matrix_unchecked(matrix));
     println!("Landscape: displaced {:.0} m about the camera on a {} x {} grid of {:.2} m, fading over {:.0} m, in {:.1?}",
-        reach, grid.nx, grid.nz, grid.cell, falloff, start.elapsed());
-    (Hole { min, max, surface: grid }, terrain)
+        reach, grid.nx, grid.nz, grid.cell, falloff, begun.elapsed());
+    (Hole { local, min, max, surface: grid }, Box::new(placed))
 }
 
 #[cfg(test)]

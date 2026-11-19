@@ -44,6 +44,10 @@
 //! agree. Beyond the rings, out of reach of the tangent plane, a cubed-sphere mesh covers the
 //! rest of the planet coarsely.
 //!
+//! With a `"displacement"`, the ground about the camera is instead a heightfield of this
+//! surface (`Surface`) displaced at render time (`shapes::displaced`), and the rings leave it
+//! out (`Hole`); see docs/displacement.md.
+//!
 //! ## Ground cover
 //!
 //! From what the simulations left at each point (glacier ice, alluvium, lava, rivers) and the

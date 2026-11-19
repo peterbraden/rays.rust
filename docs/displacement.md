@@ -132,8 +132,28 @@ surface, so keep displacement small or masked off where they are.
 
 - Fuller surface layers (more than two materials, masks from the simulations' fields) on the
   same graphs (Terragen gap 2), and media densities.
-- Put the `landscape` scenery's clipmap through displacement.
 - Vector displacement for overhangs.
+
+## On a landscape
+
+A full-scale `landscape` takes the same `"displacement"` (and `displacement_detail`,
+`vertical_displacement`, `displacement_falloff`). The ground within `displacement_reach`
+metres of the camera (1000 by default, each way) becomes a heightfield of the landscape's own
+surface, `displacement_spacing` metres apart (2), displaced as a terrain is; the clipmap's mesh
+leaves that square out. Its graphs can read the simulation's fields, as the ground's materials
+do, and are shaded where each point came from.
+
+The patch draws the relief to the spacing of the ring each point lies in (`scenery::Clipmap`)
+where that is coarser than its own, so at its edge it is the surface the rings draw. The
+rings' triangles that overlap its edge have their vertices inside moved onto its surface, and
+its displacement fades out over at least three ring spacings there, so the two meet without a
+crack or a step (`test_displaced_patch_meets_the_rings`). Beyond the patch a pixel covers more
+than the displacement's detail anyway.
+
+`demo/scenes/alpine-closeup.json` stands 2 m up a mountainside in the range of
+`alpine-layers.json`: ribs of rock on the steep ground, stones on the scree. The landscape
+prints how high the camera is above the ground under it, which helps place one: away from the
+scene's origin, the planet's curve lowers the ground (about 20 m at 16 km).
 
 ## In the desert scenes
 

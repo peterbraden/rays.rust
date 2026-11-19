@@ -433,10 +433,18 @@ shaft, lighting the curtain it falls through. Inside the upper tower an intraclo
 spreads through 25 km of channel, and the whole storm glows with its light, against a black
 sky.
 
-The channel is grown as a *stepped leader* (`procedural::lightning`). Leader tips push down
-from the cloud's charge region in steps of tens of metres (`step`), each turning by about 16°
-from the last, as measured in photographs of channels (Hill 1968), drawn down by the field and
-towards a `target`. Tips fork (`branching`) and die out (`dying`); when one comes within
+The channel is grown as a *stepped leader* (`procedural::lightning`), in the storm's electric
+field. The cloud is a tripole of charge regions: the negative one where the flash starts, a
+positive one 4 km above it and a small positive pocket below; the leader carries negative
+charge of its own, about a millicoulomb per metre; and each charge has its image in the
+conducting ground. Leader tips push out in steps of tens of metres (`step`). At each step every
+tip probes the field just ahead of it, and advances with probability (E / E_max)^η, as in the
+dielectric breakdown model (Niemeyer, Pietronero and Wiesmann 1984; η = 3, `eta`, for the
+sparse branching of lightning); a tip left behind for long stalls. So the channel's own charge
+screens the branches beside it, which stay short, and with its image draws the leading tip to
+the ground ever harder as it nears it. Each step turns by about 16° from the last, as measured
+in photographs of channels (Hill 1968), about the field's direction, and a `target` draws it
+too. Tips fork (`branching`); when one comes within
 `striking_distance` of the ground, an upward leader meets it and the return stroke flows
 along that path, the main channel. Each straight step is then broken into a fractal path down
 to a couple of metres (`detail`, `roughness`), so the channel is jagged at every scale. The
@@ -454,9 +462,12 @@ metre or so from the channel it is far brighter than daylight; a kilometre away 
 lux, tens of times full moonlight: a stroke a kilometre away gives a few lux-seconds, which
 is why lightning is photographed at f/8 and ISO 100 to 400, and its glow inside a cloud at
 ISO 1600 or more. So the scene is exposed as a night photograph would be (`"exposure": 3000`),
-the channel itself blown out, with glare. Its colour is a blackbody at
-25 000 K, near the channel's temperature, an approximation to its spectrum of nitrogen, oxygen
-and hydrogen lines.
+the channel itself blown out, with glare. Its colour is its spectrum
+(`spectrum::lightning`): a channel at some 30 000 K emits mostly lines, broadened by its pressure
+to a few nanometres, of singly ionised nitrogen in the blue and green, hydrogen's Hα in the red
+and neutral oxygen and nitrogen in the near infrared, over a continuum (Orville 1968; Salanave
+1961). That is bluish white, far whiter than a blackbody at the channel's temperature; in
+spectral rendering each line is traced at its wavelength.
 
 The channel is a light, sampled directly: a light BVH over its segments chooses one by the
 light it could send to the point being lit, then a point on the side facing it. Seen from
@@ -470,11 +481,18 @@ nearly all of it emerges, after hundreds of scatterings, and the cloud glows. A 
 finds those paths only by chance, so the storm uses the diffusion approximation
 (`"diffusion"`, as overcast decks do for sunlight): at a path's first vertex in the cloud, each
 light sample's direct light is attenuated as usual, and what it loses on the way arrives
-diffused. In diffusion theory a source at reduced optical depths τ'f from one side of a slab
-and τ'b from the other sends a fraction (τ'b + ⅔) / (τ'f + τ'b + 4⁄3) out of the first, so
-the depths towards the light and beyond it are measured through the cloud's density along the
-same line. A flash deep in the cloud lights it broadly and softly; one near its surface
-brightly, nearby.
+diffused. Light from a source inside a cloud is trapped, scattered to and fro until it leaks
+out, so near the surface over it the cloud is brighter than the source alone would make it
+there. The diffusion solution for a point source buried in a half-space is a dipole, the source
+and its negative image above the surface (Farrell, Patterson and Wilson 1992; the same as
+Jensen et al.'s BSSRDF for subsurface scattering): straight over a deep source, four times as
+bright as in empty space, and fading to the sides, so the glow gathers over the channels. The
+cloud's coefficients are measured along the line to each light sample, and the light that
+leaves by the cloud's far side is taken off by diffusion's split through a slab. Real cloud
+droplets absorb about a hundred-thousandth of the light at each scattering, so trapped light
+spreads for kilometres; at the albedo of 0.99 the other cloud scenes use it would die out in a
+few hundred metres, so the storm has 0.9999. Paths in the cloud end after a few vertices
+(`max_depth`), since later ones gather nothing at night: the first has counted the flashes.
 
 ### Lightning under the anvil
 
@@ -526,10 +544,13 @@ is still noisy: from orbit, cloud detail is much smaller than a pixel.
 
 ## Not yet
 
-- **Lightning seen through cloud**: the diffusion approximation lights a cloud from a flash
-  inside it, but light doesn't spread sideways from the line to each light sample, so the
-  glow isn't concentrated around channels just under the surface as much as it should be,
-  and turrets lit from inside show less relief than in photographs.
+- **Lightning seen through cloud**: the dipole treats the cloud near each point as a
+  half-space whose surface faces the camera; real turrets are curved and lit from several
+  sides, so their relief when lit from within is softer than in photographs.
+- **Lightning's physics**: the leader's field is from point charges, not solved around the
+  conducting channel; there are no upward leaders from the ground, no time (strokes, dart
+  leaders, continuing current, the channel cooling); and in-cloud channels grow by rules rather
+  than in the field.
 - **Cumulonimbus by simulation**: `harris_cumulus` could grow one, with a deeper grid, a weaker
   inversion and ice microphysics; the `cumulonimbus` generator shapes it from parcel theory
   instead.

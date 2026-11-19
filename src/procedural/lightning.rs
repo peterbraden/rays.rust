@@ -245,10 +245,9 @@ impl Channel {
             }
             if node.count > 0 {
                 for k in node.start..node.start + node.count {
-                    if let Some(t) = self.segments[k].hit(ro, rd, min) {
-                        if t < best.map_or(max, |b| b.0) {
-                            best = Some((t, k));
-                        }
+                    if let Some(t) = self.segments[k].hit(ro, rd, min)
+                        && t < best.map_or(max, |b| b.0) {
+                        best = Some((t, k));
                     }
                 }
             } else {

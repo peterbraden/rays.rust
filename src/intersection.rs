@@ -60,6 +60,14 @@ impl<'a> Intersection<'a> {
         self.object.geometry.uv(&self.point, self.face)
     }
 
+    /// Where to evaluate textures and masks for this hit, and the normal there: on a surface
+    /// displaced at render time, the point it was displaced from (`Geometry::undisplaced`), so
+    /// they line up with the relief, which was computed there; elsewhere the hit itself.
+    pub fn texture_point(&self) -> crate::shapes::geometry::Undisplaced {
+        self.object.geometry.undisplaced(&self.point, self.face)
+            .unwrap_or(crate::shapes::geometry::Undisplaced { point: self.point, normal: self.normal, filter: 0. })
+    }
+
     /// How far off the surface to start rays leaving this hit, so they don't hit the surface
     /// again by error in where the hit was found (Pharr, Jakob and Humphreys, "Physically Based
     /// Rendering", 4th ed., section 6.8, "Managing Rounding Error"). pbrt bounds each shape's

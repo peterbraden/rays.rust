@@ -35,9 +35,10 @@ impl SceneGraph {
 
     pub fn new(objects: Vec<Arc<SceneObject>>) -> SceneGraph {
         // Unbounded objects can't go in the BVH. Nor can participating media: they must be
-        // tested once per ray (see `Geometry::is_stochastic`).
+        // tested once per ray (see `Geometry::is_stochastic`). Nor objects that let light
+        // through (`Geometry::transmits`), which the BVH's shadow test would take as blocking.
         let (infinite_items, bounded): (Vec<_>, Vec<_>) = objects.into_iter()
-            .partition(|x| x.geometry.is_stochastic() || is_unbounded(&x.geometry.bounds()));
+            .partition(|x| x.geometry.is_stochastic() || x.geometry.transmits() || is_unbounded(&x.geometry.bounds()));
         let (bvh, items) = Bvh::build(bounded, |x| x.geometry.bounds());
         SceneGraph { items, infinite_items, bvh }
     }
@@ -86,12 +87,16 @@ impl SceneGraph {
         if self.bvh.any_hit(r, min, max, |i| self.items[i].occludes(r, min, max)) {
             return Color::black();
         }
-        // Solid objects first: if one blocks the ray, the media needn't be tracked.
+        // Solid objects first: if one blocks the ray, the media needn't be tracked. (Most block
+        // it or don't; transparent water lets some through, by colour.)
         let (media, solid): (Vec<_>, Vec<_>) = self.infinite_items.iter().partition(|o| o.is_stochastic());
-        if solid.iter().any(|o| o.transmittance(r, min, max) == 0.) {
-            return Color::black();
-        }
         let mut t = Color::white();
+        for o in solid {
+            t = t * o.transmittance_color(r, min, max);
+            if t.rgb.max() <= 0. {
+                return Color::black();
+            }
+        }
         for o in media {
             t = t * o.transmittance_color(r, min, max);
             if t.rgb.max() <= 0. {
@@ -157,7 +162,7 @@ mod tests {
     use crate::shapes::plane::Plane;
     use crate::shapes::sphere::Sphere;
     use crate::color::Color;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use rand::rngs::StdRng;
 
     fn object(g: Box<dyn Geometry + Sync + Send>) -> Arc<SceneObject> {
@@ -168,8 +173,8 @@ mod tests {
     fn test_matches_brute_force_with_unbounded_objects() {
         let mut rng = StdRng::seed_from_u64(7);
         let mut objects: Vec<Arc<SceneObject>> = (0 .. 200).map(|_| object(Box::new(Sphere::new(
-            Vector3::new(rng.gen_range(-20., 20.), rng.gen_range(-1., 6.), rng.gen_range(-20., 20.)),
-            rng.gen_range(0.1, 2.),
+            Vector3::new(rng.random_range(-20.0..20.), rng.random_range(-1.0..6.), rng.random_range(-20.0..20.)),
+            rng.random_range(0.1..2.),
         )))).collect();
         objects.push(object(Box::new(Plane { y: 0. })));
         let all = objects.clone();
@@ -178,10 +183,10 @@ mod tests {
 
         for _ in 0 .. 3000 {
             let r = Ray {
-                ro: Vector3::new(rng.gen_range(-25., 25.), rng.gen_range(-3., 10.), rng.gen_range(-25., 25.)),
-                rd: Vector3::new(rng.gen_range(-1., 1.), rng.gen_range(-1., 1.), rng.gen_range(-1., 1.)),
+                ro: Vector3::new(rng.random_range(-25.0..25.), rng.random_range(-3.0..10.), rng.random_range(-25.0..25.)),
+                rd: Vector3::new(rng.random_range(-1.0..1.), rng.random_range(-1.0..1.), rng.random_range(-1.0..1.)),
             };
-            let (min, max) = (rng.gen_range(0., 1.), rng.gen_range(1., 80.));
+            let (min, max) = (rng.random_range(0.0..1.), rng.random_range(1.0..80.));
             let expected = all.iter().filter_map(|o| o.intersects_beyond(&r, min))
                 .map(|x| x.dist).filter(|&d| d >= min && d < max)
                 .min_by(|a, b| a.total_cmp(b));

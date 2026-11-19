@@ -1,0 +1,126 @@
+{
+  "width": 960,
+  "height": 720,
+  "supersamples": 96,
+  "max_depth": 10,
+  "path_termination": "russian_roulette",
+  "shadow_bias": 0.001,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "background": {
+    "type": "overcast",
+    "zenith": [
+      0.95,
+      1.0,
+      1.1
+    ],
+    "bank": {
+      "direction": [
+        0.1,
+        1
+      ],
+      "darkness": 0.1
+    },
+    "ground": [
+      0.004,
+      0.008,
+      0.009
+    ]
+  },
+  "output": {
+    "tonemap": "filmic",
+    "exposure": 1.5
+  },
+  "camera": {
+    "location": [
+      0,
+      2.6,
+      -30
+    ],
+    "lookat": [
+      0,
+      -4,
+      60
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.95,
+    "aperture": 0.001
+  },
+  "objects": [
+    {
+      "type": "ocean",
+      "wind": [
+        2,
+        1
+      ],
+      "planet_radius": 0,
+      "transparent": true,
+      "absorption": [
+        1.2,
+        0.5,
+        0.45
+      ],
+      "detail_center": [
+        0,
+        -30
+      ],
+      "detail_distance": 200
+    },
+    {
+      "type": "ice_floes",
+      "style": "brash",
+      "center": [
+        0,
+        35
+      ],
+      "extent": [
+        170,
+        140
+      ],
+      "concentration": 0.88,
+      "size": [
+        0.3,
+        3.5
+      ],
+      "clumping": 0.5,
+      "seed": 1
+    },
+    {
+      "type": "iceberg",
+      "shape": "dome",
+      "size": 18,
+      "location": [
+        7,
+        -9
+      ],
+      "yaw": 200,
+      "seed": 12
+    },
+    {
+      "type": "iceberg",
+      "shape": "tabular",
+      "size": 380,
+      "location": [
+        60,
+        150
+      ],
+      "yaw": 8,
+      "seed": 4
+    },
+    {
+      "type": "iceberg",
+      "shape": "blocky",
+      "size": 60,
+      "location": [
+        -150,
+        260
+      ],
+      "yaw": 40,
+      "seed": 2
+    }
+  ]
+}

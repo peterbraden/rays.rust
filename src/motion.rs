@@ -195,6 +195,10 @@ impl Geometry for AnimatedTransform {
         self.now().uv(p, face)
     }
 
+    fn undisplaced(&self, p: &Vector3<f64>, face: u32) -> Option<crate::shapes::geometry::Undisplaced> {
+        self.now().undisplaced(p, face)
+    }
+
     fn tolerance(&self) -> f64 {
         self.now().tolerance()
     }

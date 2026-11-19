@@ -63,6 +63,11 @@ pub enum Coefficients {
     Albedo { albedo: Color, radius: Color },
     /// Absorption and scattering coefficients (per scene unit).
     Sigma { sigma_a: Color, sigma_s: Color },
+    /// Glacier ice, in metres: ice's own absorption at each wavelength
+    /// (`snow::ice_absorption`; in RGB mode at 630, 532 and 465 nm) with its impurities', and
+    /// its bubbles' scattering coefficient `scattering` (per metre, the same at all
+    /// wavelengths: bubbles are far larger than light's).
+    Ice { scattering: f64, impurities: crate::material::snow::Impurities },
 }
 
 pub struct Subsurface {
@@ -96,6 +101,12 @@ impl Subsurface {
                     alpha[c] = if sigma_t[c] > 0. { ss / sigma_t[c] } else { 0. };
                 }
                 (sigma_t, alpha)
+            },
+            Coefficients::Ice { scattering, impurities } => {
+                let lambda = crate::spectrum::current().map_or(crate::material::conductor::RGB_WAVELENGTHS, |w| w.lambda);
+                let a = Vector3::from(lambda.map(|l| crate::material::snow::ice_absorption(l) + impurities.absorption(l)));
+                let t = a.add_scalar(*scattering);
+                (t, t.map(|t| scattering / t))
             },
             Coefficients::Sigma { sigma_a, sigma_s } => {
                 let (a, s) = (sigma_a.as_unbounded().rgb, sigma_s.as_unbounded().rgb);

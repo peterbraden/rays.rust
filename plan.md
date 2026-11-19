@@ -723,6 +723,66 @@ Findings:
   takes the tangent of an integer edge index each time), and skip runs of texels with a
   coarser map of their maxima, as a mipmap. Faster samples are the cure for this speckle.
 
+### Cloud grain in the weather scenes (sun probes)
+
+Measured on `weather-trade-cumulus` at 96 x 48, 4 samples, 4 renders (`--variance`; mean /
+median relMSE, seconds a render); a converged reference at 256 samples for bias (`--compare`:
+exposure fit and mean FLIP; two independent references differ by 1.3% and FLIP 0.065).
+
+- Unlike `orbit`, the noise is multiple scattering: low cloud only, the median grows with the
+  depth (1: 0.0035, 2: 0.0063, 3: 0.0081, 5: 0.011, 8: 0.014, 16: 0.018), and the mean (the
+  fireflies) far faster.
+- The fireflies are sunlight: without the sun the mean drops from 1.24 to 0.038; at g = 0.5
+  rather than 0.85, to 0.21. A vertex gathers the sun through the phase function at the angle
+  between its incoming direction and the sun's, whose forward peak at g = 0.85 is 80 times its
+  mean, met only by rare paths.
+- Not the transmittance estimator: averaging four shadow estimates moved it from 0.38 to 0.33.
+- The approximations are biased here: Oz octaves (depth 2) 0.034 mean but 18% darker, FLIP
+  0.26; similarity from the first scattering 15% off, FLIP 0.19.
+- Guiding the path's own direction towards the sun (a defensive mixture of the phase function
+  about the incoming direction and about the sun) made it far worse (mean 1.24 to 2.3, 6.3 and
+  105 at shares 0.1, 0.25, 0.5): every unguided bounce weighs 1 / (1 - share), compounding over
+  the dozens of bounces in a thick cloud.
+- Sun probes (`VolumeMaterial::sun_probe`): the next vertex's sunlight by two techniques with
+  MIS, the continuation and a probe drawn about the sun; the path keeps its weight. Unbiased
+  (exposure 0.993, FLIP 0.054 against the reference). Low cloud: mean 1.24 to 0.46, median
+  0.036 to 0.040, 1.37 to 2.03 s, efficiency 1.8x. The whole scene: 0.266 / 0.053 in 8.0 s to
+  0.114 / 0.050 in 7.9 s, efficiency 2.4x. `nubis-clouds`: 0.27 to 0.10, efficiency 2.2x. On by
+  default (`"sun_probes": false` to turn off).
+- Time: rays leaving a weather family upwards stepped through empty texels to the far side of
+  its planet-sized bounds; they now stop above its highest cloud (8.0 to 7.0 s). The maps took
+  13 s to build, most of it an annual insolation mean computed and discarded per texel: 4 s.
+- ZSobol' (blue-noise error) measured the same here (0.111 / 0.048) and looked much the same:
+  the error is per-path variance, not clumping between samples.
+- After merging delta-M truncation (#135: the forward peak truncated after the first
+  scattering, g' = g / (1 + g), so deep vertices' phase peaks are about 5 rather than 80 times
+  the mean), sun probes still pay, but less: trade cumulus efficiency 1.45 off, 1.61 on
+  (0.124 to 0.096 mean); `nubis-clouds` 8.2 to 9.1. Kept on. Against the start (no probes, no
+  delta-M, the old ratio tracking), the trade-cumulus scene is 3.4 times as efficient.
+- Glitter probes (`VolumeMaterial::glitter_probe`). On a lone cumulus over the sea, seen from
+  below (`cumulus` object, 160 x 107, 8 samples, 4 renders), the ocean made most of the
+  speckle: mean relMSE 0.052 with it, 0.020 without, and 0.015 against 0.004 even with a
+  single scattering. It is the sun's glitter lighting the cloud's base, found only by
+  continuations that happen to hit the bright patch. A second probe draws its direction from
+  the sea's slopes (`ocean::Sea::sample_glitter`, a Beckmann facet reflecting into the sun),
+  combined with the continuation by the balance heuristic as the sun probes are: 0.052 to
+  0.020 (no worse than without the sea), efficiency 3.4 to 8.4; brightness within 0.5% of a
+  256-sample render without it. No change on `weather-trade-cumulus`, where the glitter is
+  not in view of the clouds that matter.
+- Render time (4 cores, 96 x 48, 4 samples). Trade cumulus took 58 s, almost all of it in the
+  low cloud's heaps, and as long with one bounce as with 64. Callgrind: a third of it grew
+  whole cauliflower trees (some 20000 spheres) for lookups that visit a few dozen, as a low
+  sun's shadow rays touch thousands of clouds a few times each; a cache of whole trees, shared
+  or per thread, couldn't keep up (38000 grown in one small render), and searching each cloud
+  as generated was slower still. Trees now grow lazily (`cauliflower::Grown`: turrets made when
+  first reached, kept behind a `OnceLock`, shared through `TreeCache`): 58 s to 16.6 s,
+  pixel-identical, 777 to 541 MiB. Sun depths from the table in the sky's own integral saved
+  only setup time, so it stays exact. In `weather-tropical-storms` the families together cost
+  more than apart (more scattering in a cloudier sky), and the sun and glitter probes are 45%
+  of the time (48 s to 27 s without).
+- What remains is the grain of deep multiple scattering. Unbiased remedies are larger: learned
+  volume path guiding (Herholz et al. 2019), or a denoiser.
+
 ### Reading (verified; details in each PR)
 
 - Veach and Guibas, "Optimally Combining Sampling Techniques for Monte Carlo Rendering",

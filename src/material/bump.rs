@@ -121,6 +121,8 @@ impl Medium for Bumped {
     fn part(&self, k: u32) -> Option<&(dyn Medium + Sync + Send)> {
         self.inner.part(k)
     }
+
+    fn fields(&self) -> Option<&dyn crate::graph::Fields> { self.inner.fields() }
 }
 
 #[cfg(test)]

@@ -107,14 +107,15 @@ impl PerlinNoise {
     /// Get noise value at a 3D point
     pub fn noise(&self, x: f64, y: f64, z: f64) -> f64 {
         // Unit cube that contains point
-        let x_i = x.floor() as i32 & 255;
-        let y_i = y.floor() as i32 & 255;
-        let z_i = z.floor() as i32 & 255;
+        let (fx, fy, fz) = (floor(x), floor(y), floor(z));
+        let x_i = fx as i32 & 255;
+        let y_i = fy as i32 & 255;
+        let z_i = fz as i32 & 255;
         
         // Relative coordinates of point in cube
-        let x = x - x.floor();
-        let y = y - y.floor();
-        let z = z - z.floor();
+        let x = x - fx;
+        let y = y - fy;
+        let z = z - fz;
         
         // Compute fade curves for each coordinate
         let u = self.fade(x);
@@ -201,6 +202,18 @@ impl PerlinNoise {
         
         // Dot product of gradient vector with offset vector
         grad.x * x + grad.y * y + grad.z * z
+    }
+}
+
+/// `x.floor()`, exactly, without calling libm's `floor` (which it is without SSE4.1): noise
+/// takes three a point.
+#[inline]
+fn floor(x: f64) -> f64 {
+    if x.abs() < 4.5e15 {
+        let t = x as i64 as f64;
+        if t > x { t - 1. } else { t }
+    } else {
+        x.floor()
     }
 }
 
@@ -385,6 +398,23 @@ impl SeededNoise {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_floor_matches_libm() {
+        let mut rng = Pcg32::new(4, 2);
+        for k in 0 .. 100000 {
+            let x = match k % 4 {
+                0 => (rng.next_f64() - 0.5) * 20.,
+                1 => (rng.next_f64() - 0.5) * 1e6,
+                2 => ((rng.next_f64() - 0.5) * 40.).round(),
+                _ => (rng.next_f64() - 0.5) * 1e18,
+            };
+            assert_eq!(floor(x), x.floor(), "{}", x);
+        }
+        for x in [0., -0.5, -1., 1. - f64::EPSILON, -f64::MIN_POSITIVE, 4.5e15 - 0.5, -4.5e15 + 0.5] {
+            assert_eq!(floor(x), x.floor(), "{}", x);
+        }
+    }
     
     #[test]
     fn test_perlin_noise_range() {

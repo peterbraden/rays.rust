@@ -44,14 +44,22 @@
 //! agree. Beyond the rings, out of reach of the tangent plane, a cubed-sphere mesh covers the
 //! rest of the planet coarsely.
 //!
+//! With a `"displacement"`, the ground about the camera is instead a heightfield of this
+//! surface (`Surface`) displaced at render time (`shapes::displaced`), and the rings leave it
+//! out (`Hole`); see docs/displacement.md.
+//!
 //! ## Ground cover
 //!
 //! From what the simulations left at each point (glacier ice, alluvium, lava, rivers) and the
 //! climate they ran in, by latitude: snow above the snowline (the glaciers' equilibrium line
 //! altitude at the final time) on slopes gentle enough to hold it, bare rock on steep slopes
 //! and above the alpine meadows, forest below the treeline, grassland and fields on the valley
-//! floors. Albedos are those of real surfaces (conifer forest about 0.05, grass 0.1, rock 0.2,
-//! snow 0.8), so the sun and sky light it as they would the real thing. Rivers and lakes are
+//! floors. Albedos are those of real surfaces (conifer forest about 0.05, grass 0.1, rock 0.2),
+//! so the sun and sky light it as they would the real thing. Snow and glacier ice are
+//! `material::snow`'s, worked out from ice's absorption: snow is settled high up and older,
+//! coarser and dustier towards the snowline, where it turns to firn; below the snowline a
+//! glacier is bare ice, mostly the white, bubble-rich ice of its weathered surface with bluer
+//! ice showing through, and streaked with rock debris towards its snout. Rivers and lakes are
 //! water, reflecting the sky by Fresnel's equations as the ocean does.
 
 use crate::color::Color;
@@ -60,6 +68,7 @@ use crate::intersection::Intersection;
 use crate::material::bsdf::LambertianBSDF;
 use crate::material::functions::scatter_bsdf;
 use crate::material::model::{MaterialModel, ScatteredRay};
+use crate::material::snow::{Ice, IceStyle, Snow, SnowStyle};
 use crate::material::texture::Medium;
 use crate::na::Vector3;
 use crate::noise::{PerlinNoise, SeededNoise};
@@ -213,11 +222,14 @@ pub struct Layer {
     water: Option<WaterLines>,
     /// Width of the band inside a patch's edge over which it blends into what is around it.
     blend: f64,
+    /// What the simulation left, for graphs' `field` nodes.
+    fields: crate::terrain::fields::SimFields,
 }
 
 impl Layer {
     pub fn new(t: Terrain, min_river_width: f64) -> Layer {
         let corners = corner_heights(&t);
+        let fields = crate::terrain::fields::SimFields::new(&t);
         let water = map::water_lines(&t, min_river_width);
         let class = (0..t.domain.len()).map(|i| {
             if t.ice[i] >= ICE_FREE { ICE }
@@ -233,7 +245,7 @@ impl Layer {
             Layout::Patch { n, spacing, .. } => (spacing, (0.05 * n as f64 * spacing).max(3. * spacing)),
             Layout::Sphere { n } => (std::f64::consts::FRAC_PI_2 * t.domain.radius / n as f64, 0.),
         };
-        Layer { spacing, corners, class, water, blend, domain: t.domain }
+        Layer { spacing, corners, class, water, blend, fields, domain: t.domain }
     }
 
     /// Tangent coordinates of `d` on a patch, if it is on the patch's side of the planet.
@@ -408,22 +420,144 @@ pub struct Viewpoint {
 /// there.
 struct Vertex { d: Vector3<f64>, local: f64 }
 
-/// The landscape's mesh: clipmap rings about the camera, and a coarse globe beyond them.
-pub fn mesh(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams) -> SmoothMesh {
-    let n = (p.resolution / 4).max(4) * 4;
-    let half = (n / 2) as i64;
-    let (foot, cam_h) = frame.on_planet(&view.location);
-    let ground = relief.base(&foot);
-    let above = (cam_h - ground.max(0.)).max(1.);
-    // The nearest ground is about the camera's height away: there a ring's spacing is its
-    // half-width over N / 4.
-    let s0 = (above * 4. / n as f64).max(p.min_spacing);
-    // Out to the horizon, and the mountains beyond it, or a quarter of the way round.
-    let reach = ((2. * relief.radius * (cam_h.max(0.) + 9000.)).sqrt() + (2. * relief.radius * 9000f64).sqrt())
-        .min(0.3 * relief.radius);
-    // From far off, the globe's mesh is fine enough: the rings stay within reach.
-    let s0 = s0.min(reach / half as f64);
-    let (cx, cz) = frame.tangent(&foot);
+/// The layout of the clipmap's rings: square rings of `2 half + 1` vertices a side, each centred
+/// on twice its spacing's grid near the camera's foot (`cx`, `cz` on the tangent plane), the
+/// first `s0` apart, out to `reach`.
+pub struct Clipmap {
+    half: i64,
+    s0: f64,
+    reach: f64,
+    cx: f64,
+    cz: f64,
+}
+
+impl Clipmap {
+    pub fn new(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams) -> Clipmap {
+        let n = (p.resolution / 4).max(4) * 4;
+        let half = (n / 2) as i64;
+        let (foot, cam_h) = frame.on_planet(&view.location);
+        let ground = relief.base(&foot);
+        let above = (cam_h - ground.max(0.)).max(1.);
+        // The nearest ground is about the camera's height away: there a ring's spacing is its
+        // half-width over N / 4.
+        let s0 = (above * 4. / n as f64).max(p.min_spacing);
+        // Out to the horizon, and the mountains beyond it, or a quarter of the way round.
+        let reach = ((2. * relief.radius * (cam_h.max(0.) + 9000.)).sqrt() + (2. * relief.radius * 9000f64).sqrt())
+            .min(0.3 * relief.radius);
+        // From far off, the globe's mesh is fine enough: the rings stay within reach.
+        let s0 = s0.min(reach / half as f64);
+        let (cx, cz) = frame.tangent(&foot);
+        Clipmap { half, s0, reach, cx, cz }
+    }
+
+    /// Ring `level`'s centre, in units of s0: snapped to twice its spacing, so it lies on its
+    /// parent's grid.
+    fn centre(&self, level: u32) -> (i64, i64) {
+        let step = 1i64 << level;
+        let snap = |c: f64| ((c / self.s0 / (2 * step) as f64).round() as i64) * 2 * step;
+        (snap(self.cx), snap(self.cz))
+    }
+
+    /// The spacing the relief is drawn to at tangent-plane point (`x`, `z`) by the ring it lies
+    /// in: its own spacing, tending to its parent's towards its edge (see `mesh`); None beyond
+    /// the rings.
+    pub fn local(&self, x: f64, z: f64) -> Option<f64> {
+        let (gx, gz) = (x / self.s0, z / self.s0);
+        for level in 0..=30 {
+            let step = 1i64 << level;
+            let (kx, kz) = self.centre(level);
+            let w = (self.half * step) as f64;
+            let r = (gx - kx as f64).abs().max((gz - kz as f64).abs()) / w;
+            if r <= 1. {
+                return Some(self.s0 * step as f64 * (1. + smoothstep(0.75, 1., r)));
+            }
+            if w * self.s0 >= self.reach { break; }
+        }
+        None
+    }
+}
+
+/// A frame on the planet's tangent plane at a point of the ground, in the scene: x east, y up
+/// and z south there, as the scene's own axes are at its origin, so that a heightfield in it
+/// stands upright however far from the origin it is.
+#[derive(Clone, Debug)]
+pub struct Local {
+    /// Where sea level is under the point, and the frame's axes (columns), in the scene.
+    pub origin: Vector3<f64>,
+    pub axes: crate::na::Matrix3<f64>,
+}
+
+impl Local {
+    /// The frame under tangent-plane point (`x`, `z`) of `frame`.
+    pub fn under(frame: &Frame, x: f64, z: f64) -> Local {
+        let d = frame.dir(x, z);
+        let (lat, lon) = Domain::lat_lon(&d);
+        let (up, east, north) = Domain::frame(lat, lon);
+        // Planet directions into the scene: as Frame::to_scene, without the translation.
+        let scene = |v: Vector3<f64>| Vector3::new(v.dot(&frame.east), v.dot(&frame.up), -v.dot(&frame.north));
+        Local {
+            origin: frame.to_scene(&d, 0.),
+            axes: crate::na::Matrix3::from_columns(&[scene(east), scene(up), -scene(north)]),
+        }
+    }
+
+    pub fn to_scene(&self, p: &Vector3<f64>) -> Vector3<f64> { self.origin + self.axes * p }
+
+    pub fn to_local(&self, p: &Vector3<f64>) -> Vector3<f64> { self.axes.transpose() * (p - self.origin) }
+}
+
+/// A part of the ground drawn by something else (a displaced patch about the camera): a square
+/// in a `Local` frame's x and z, and the surface it has there, which the mesh's vertices inside
+/// it are moved onto, so the mesh's triangles that overlap its edge follow it.
+pub struct Hole {
+    pub local: Local,
+    pub min: (f64, f64),
+    pub max: (f64, f64),
+    pub surface: Arc<crate::procedural::heightmap::HeightGrid>,
+}
+
+impl Hole {
+    /// Whether scene point `p` is over the square.
+    fn inside(&self, p: &Vector3<f64>) -> bool {
+        let q = self.local.to_local(p);
+        q.x > self.min.0 && q.x < self.max.0 && q.z > self.min.1 && q.z < self.max.1
+    }
+}
+
+/// The landscape's surface as a heightfield over a `Local` frame's x and z: the relief drawn
+/// to the spacing of the clipmap ring each point lies in, or `cell` where that is finer, so
+/// that where it meets the rings it agrees with them.
+pub struct Surface<'a> {
+    pub relief: &'a Relief,
+    pub frame: &'a Frame,
+    pub local: &'a Local,
+    pub clipmap: &'a Clipmap,
+    pub cell: f64,
+}
+
+impl crate::procedural::heightmap::HeightSource for Surface<'_> {
+    fn height(&self, x: f64, z: f64) -> f64 {
+        let at = |y: f64| self.frame.on_planet(&self.local.to_scene(&Vector3::new(x, y, z)));
+        let (d, _) = at(0.);
+        let (tx, tz) = self.frame.tangent(&d);
+        let spacing = self.clipmap.local(tx, tz).unwrap_or(self.cell).max(self.cell);
+        let slope = self.relief.slope(&d);
+        // The point above (x, z) at the surface's height: moving up the column barely turns
+        // the direction from the planet's centre, so this settles in a few steps.
+        let mut y = 0.;
+        for _ in 0..4 {
+            let (d, h) = at(y);
+            y += (self.relief.height(&d, slope, spacing) - h) * self.frame.exaggeration;
+        }
+        y
+    }
+}
+
+/// The landscape's mesh: clipmap rings about the camera, and a coarse globe beyond them,
+/// leaving out the triangles wholly inside `patch`.
+pub fn mesh(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams, patch: Option<&Hole>) -> SmoothMesh {
+    let clipmap = Clipmap::new(relief, frame, view, p);
+    let Clipmap { half, s0, reach, .. } = clipmap;
     let mut vertices: Vec<Vertex> = vec![];
     let mut triangles: Vec<[usize; 3]> = vec![];
     // Odd vertices on each ring's outer edge, to put on the straight edge between their
@@ -436,9 +570,7 @@ pub fn mesh(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams)
     loop {
         let step = 1i64 << level;
         let s = s0 * step as f64;
-        // Centre snapped to twice this ring's spacing, so it lies on its parent's grid.
-        let snap = |c: f64| ((c / s0 / (2 * step) as f64).round() as i64) * 2 * step;
-        let (kx, kz) = (snap(cx), snap(cz));
+        let (kx, kz) = clipmap.centre(level);
         let w = half * step;
         let base = vertices.len();
         let width = 2 * half as usize + 1;
@@ -519,6 +651,19 @@ pub fn mesh(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams)
         positions[k] = (positions[a] + positions[b]) / 2.;
         normals[k] = (normals[a] + normals[b]).normalize();
     }
+    if let Some(patch) = patch {
+        // Within the patch, onto its surface (straight up its frame, as it is a heightfield).
+        for (p, n) in positions.iter_mut().zip(normals.iter_mut()) {
+            if patch.inside(p) {
+                let mut q = patch.local.to_local(p);
+                let (y, hx, hz) = patch.surface.smooth(q.x, q.z);
+                q.y = y;
+                *p = patch.local.to_scene(&q);
+                *n = patch.local.axes * Vector3::new(-hx, 1., -hz).normalize();
+            }
+        }
+        triangles.retain(|t| !t.iter().all(|&k| patch.inside(&positions[k])));
+    }
     SmoothMesh::from_indexed(&[IndexedMesh { positions, normals, triangles, texcoords: vec![] }])
 }
 
@@ -534,11 +679,26 @@ pub struct Ground {
     glaciers: GlacierParams,
     time: f64,
     noise: PerlinNoise,
+    /// Snow, high on the mountains and near the snowline; a glacier's white surface ice and
+    /// the bluer ice beneath.
+    snow: [Snow; 2],
+    ice: [Ice; 2],
+}
+
+/// What covers the ground at a point: the shares of snow and of glacier ice, the rest bare
+/// ground of colour `ground`.
+#[derive(Clone, Copy, Debug)]
+pub struct Cover {
+    pub ground: Color,
+    pub snow: f64,
+    /// How old the snow is, from 0 (settled) to 1 (old snow and firn).
+    pub snow_age: f64,
+    pub ice: f64,
+    /// How much of the ice is blue rather than white, 0 to 1.
+    pub blue: f64,
 }
 
 /// Albedos of real surfaces (linear, as the renderer's colours are).
-const SNOW: [f64; 3] = [0.82, 0.85, 0.88];
-const GLACIER_ICE: [f64; 3] = [0.45, 0.52, 0.58];
 const ROCK: [f64; 3] = [0.20, 0.18, 0.16];
 const SCREE: [f64; 3] = [0.26, 0.25, 0.23];
 const FOREST: [f64; 3] = [0.028, 0.042, 0.022];
@@ -556,6 +716,8 @@ impl Ground {
         Ground {
             frame, layers, snowline: p.snowline, treeline: p.treeline, climate, glaciers, time,
             noise: PerlinNoise::shuffled(seed.wrapping_add(77)),
+            snow: [Snow::new(SnowStyle::preset("settled"), 1., seed), Snow::new(SnowStyle::preset("firn"), 1., seed)],
+            ice: [Ice::new(IceStyle::preset("white")), Ice::new(IceStyle::preset("glacier"))],
         }
     }
 
@@ -590,8 +752,29 @@ impl Ground {
         self.layer_at(&d).is_some_and(|l| l.wet(&d))
     }
 
-    /// The albedo at scene point `p`, whose surface normal is `normal`.
+    /// The climate at `d`, `h` metres up, its edges wandering with the weather from year to
+    /// year (noise in temperature and rain), as the ground cover and `biome` nodes see it. None
+    /// without a climate.
+    fn wandering_climate(&self, d: &Vector3<f64>, h: f64) -> Option<crate::terrain::climate::Local> {
+        let q = d * self.frame.radius;
+        let n = |s: f64, o: f64| self.noise.fbm(q.x / s + o * 17., q.y / s, q.z / s, 4, 0.5, 2.);
+        let mut local = self.climate.as_ref()?.local(d, h);
+        local.mean += 3. * (n(40000., 0.15) - 0.5);
+        local.summer += 3. * (n(40000., 0.15) - 0.5);
+        local.precipitation *= (1.2 * (n(25000., 0.45) - 0.5)).exp();
+        Some(local)
+    }
+
+    /// The mean albedo at scene point `p`, whose surface normal is `normal`.
     pub fn albedo(&self, p: &Vector3<f64>, normal: &Vector3<f64>) -> Color {
+        let c = self.cover(p, normal);
+        let snow = self.snow[0].albedo() * (1. - c.snow_age) + self.snow[1].albedo() * c.snow_age;
+        let ice = self.ice[0].reflectance() * (1. - c.blue) + self.ice[1].reflectance() * c.blue;
+        c.ground * (1. - c.snow - c.ice) + snow * c.snow + ice * c.ice
+    }
+
+    /// What covers the ground at scene point `p`, whose surface normal is `normal`.
+    pub fn cover(&self, p: &Vector3<f64>, normal: &Vector3<f64>) -> Cover {
         let up = (p - self.frame.centre()).normalize();
         let flat = normal.dot(&up);
         let (d, h) = self.frame.on_planet(p);
@@ -613,24 +796,49 @@ impl Ground {
         let mix = |a: Color, b: Color, t: f64| { let t = t.clamp(0., 1.); a * (1. - t) + b * t };
         let snowline = self.snowline(&d);
         let treeline = self.treeline(&d);
-        if class == LAVA { return colour(BASALT) * (0.8 + 0.4 * n(200., 0.9)) * grain; }
+        let bare = |ground: Color| Cover { ground, snow: 0., snow_age: 0., ice: 0., blue: 0. };
+        // Snow ages towards the snowline: coarser, dustier, turning to firn.
+        let age = |h: f64| 1. - smoothstep(snowline, snowline + 800., h + (n(300., 0.35) - 0.5) * 300.);
+        if class == LAVA { return bare(colour(BASALT) * (0.8 + 0.4 * n(200., 0.9)) * grain); }
         if class == ICE {
             // Snow over the glacier's accumulation zone, bare ice below the snowline.
             let snow = smoothstep(snowline - 300., snowline + 100., h + (n(700., 0.2) - 0.5) * 300.);
-            let ice = mix(colour(GLACIER_ICE), colour(SNOW), snow.max(0.3));
             // Ice doesn't hold to cliffs: the rock walls above and beside a glacier show.
+            let held = smoothstep(0.6, 0.8, flat);
+            // Bare ice: the weathered surface's white ice, bluer ice where it is fresh (in
+            // bands, as the ice's layers and the summer's melt expose it), and rock debris
+            // carried on the ice, more of it towards the snout.
+            let blue = smoothstep(0.45, 0.7, n(80., 0.4) + 0.3 * (n(15., 0.45) - 0.5));
+            let low = smoothstep(snowline - 300., snowline - 1500., h);
+            let debris = (1. - snow) * smoothstep(0.55, 0.75, n(350., 0.6) + 0.35 * low - 0.1);
             let stone = colour(ROCK) * (0.7 + 0.6 * n(250., 0.7)) * grain;
-            return mix(stone, ice, smoothstep(0.6, 0.8, flat));
+            let ground = mix(stone, colour(GRAVEL) * (0.8 + 0.4 * n(40., 0.65)), held);
+            // Crevasses: where the ice steepens it speeds up and stretches, and opens in
+            // cracks across its flow (along the slope's contours), tens of metres apart, their
+            // walls deep blue ice (a few metres of it is enough to absorb the red).
+            let downhill = normal - up * flat;
+            let steep = 1. - smoothstep(0.94, 0.985, flat);
+            let crevasse = if steep > 0. && downhill.norm() > 1e-6 {
+                let along = q.dot(&downhill.normalize());
+                let phase = (along / 30. + 3. * n(120., 0.85)).rem_euclid(1.);
+                held * steep * (1. - smoothstep(0.08, 0.22, phase)) * smoothstep(0.35, 0.5, n(60., 0.95))
+            } else { 0. };
+            let bare_ice = held * (1. - snow) * (1. - debris);
+            let ice = bare_ice + crevasse * (1. - bare_ice);
+            return Cover {
+                ground,
+                snow: held * snow * (1. - crevasse),
+                snow_age: age(h),
+                ice,
+                blue: if ice > 0. { (bare_ice * (1. - crevasse) * blue + crevasse) / ice } else { 0. },
+            };
         }
         let tree = treeline + (n(1500., 0.3) - 0.5) * 400.;
         // What grows here: by the climate's biome, its edges wandering with the weather from
         // year to year (noise in temperature and rain); without a climate, forest and grass.
         let (mut ground, dry) = match &self.climate {
-            Some(c) => {
-                let mut local = c.local(&d, h);
-                local.mean += 3. * (n(40000., 0.15) - 0.5);
-                local.summer += 3. * (n(40000., 0.15) - 0.5);
-                local.precipitation *= (1.2 * (n(25000., 0.45) - 0.5)).exp();
+            Some(_) => {
+                let local = self.wandering_climate(&d, h).expect("a climate");
                 let biome = Biome::of(&local);
                 let mut g = match biome {
                     Biome::Ice => colour(SCREE),
@@ -675,7 +883,51 @@ impl Ground {
         // lower in sheltered places.
         let line = snowline + (n(900., 0.1) - 0.5) * 500.;
         let snow = smoothstep(line - 150., line + 150., h) * smoothstep(0.72, 0.88, flat + 0.15 * (n(120., 0.3) - 0.5));
-        mix(ground, colour(SNOW), snow)
+        Cover { ground, snow, snow_age: age(h), ice: 0., blue: 0. }
+    }
+}
+
+impl crate::graph::Fields for Ground {
+    /// Round the planet, whose centre is the planet's radius below the scene's origin.
+    fn vertical(&self, p: &Vector3<f64>) -> Option<(Vector3<f64>, f64)> {
+        let v = p + Vector3::y() * self.frame.radius;
+        let r = v.norm();
+        (r > 0.).then(|| (v / r, r - self.frame.radius))
+    }
+
+    /// The simulations' fields, each layer's blended into the coarser ones around it as their
+    /// surfaces are; the climate's, and the snowline and treeline as the ground cover has them.
+    fn biome(&self, p: &Vector3<f64>) -> Option<Biome> {
+        let (d, h) = self.frame.on_planet(p);
+        self.wandering_climate(&d, h).map(|l| Biome::of(&l))
+    }
+
+    fn field(&self, f: crate::graph::Field, p: &Vector3<f64>) -> Option<f64> {
+        use crate::graph::Field;
+        let (d, h) = self.frame.on_planet(p);
+        match f {
+            Field::Elevation => return Some(h),
+            Field::Snowline => return Some(h - self.snowline(&d)),
+            Field::Treeline => return Some(h - self.treeline(&d)),
+            Field::Temperature | Field::Precipitation => {
+                let local = self.climate.as_ref()?.local(&d, h);
+                return Some(if f == Field::Temperature { local.mean } else { local.precipitation });
+            },
+            _ => {},
+        }
+        let (mut sum, mut left) = (0., 1.);
+        for l in self.layers.iter() {
+            let w = l.weight(&d);
+            if w <= 0. { continue; }
+            sum += left * w * l.fields.at(&l.domain, f, &d, h)?;
+            left *= 1. - w;
+            if left <= 1e-6 { break; }
+        }
+        // Beyond every simulation (with no planet-wide one), the last one's edge.
+        if left > 1e-6 && let Some(l) = self.layers.last() {
+            sum += left * l.fields.at(&l.domain, f, &d, h)?;
+        }
+        Some(sum)
     }
 }
 
@@ -685,27 +937,39 @@ pub struct Land {
 
 impl MaterialModel for Land {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
-        let intersection = &intersection.facing(r);
-        let albedo = self.ground.albedo(&intersection.point, &intersection.normal);
-        scatter_bsdf(&LambertianBSDF { albedo: albedo.as_reflectance(), normal: intersection.normal }, r, &intersection.point, s)
+        let i = &intersection.facing(r);
+        let g = &self.ground;
+        let c = g.cover(&i.point, &i.normal);
+        // One of the surfaces covering the point, chosen by its share.
+        match crate::material::snow::pick(&[1. - c.snow - c.ice, c.snow, c.ice]) {
+            1 => scatter_bsdf(&g.snow[(rand() < c.snow_age) as usize].bsdf(&i.point, &i.normal, Some(s)), r, &i.point, s),
+            2 => scatter_bsdf(&g.ice[(rand() < c.blue) as usize].bsdf(&i.normal, Some(s)), r, &i.point, s),
+            _ => scatter_bsdf(&LambertianBSDF { albedo: c.ground.as_reflectance(), normal: i.normal }, r, &i.point, s),
+        }
     }
 }
 
-/// The landscape's materials: water in its rivers and lakes, land elsewhere.
+/// The landscape's materials: water in its rivers and lakes, land elsewhere (the ground cover,
+/// or the scene's own material).
 pub struct LandscapeMedium {
     ground: Arc<Ground>,
-    land: Land,
+    land: Box<dyn MaterialModel + Sync + Send>,
     water: PhysicalOcean,
 }
 
 impl LandscapeMedium {
-    pub fn new(ground: Ground) -> LandscapeMedium {
-        let ground = Arc::new(ground);
+    pub fn new(ground: Ground, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> LandscapeMedium {
+        LandscapeMedium::with_ground(Arc::new(ground), material)
+    }
+
+    /// As `new`, with ground shared with something else that reads it (a displaced patch's
+    /// graphs).
+    pub fn with_ground(ground: Arc<Ground>, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> LandscapeMedium {
         let centre = ground.frame.centre();
         LandscapeMedium {
-            land: Land { ground: ground.clone() },
+            land: material.unwrap_or_else(|| Box::new(Land { ground: ground.clone() })),
             // Rivers are shallow and carry silt, sending back more green and brown than the sea.
-            water: PhysicalOcean { water: Color::new(0.01, 0.018, 0.018), roughness: 0.004, center: Some(centre), foam: None },
+            water: PhysicalOcean { water: Color::new(0.01, 0.018, 0.018), roughness: 0.004, center: Some(centre), foam: None, absorption: None },
             ground,
         }
     }
@@ -713,8 +977,10 @@ impl LandscapeMedium {
 
 impl Medium for LandscapeMedium {
     fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
-        if self.ground.wet(&pt) { &self.water } else { &self.land }
+        if self.ground.wet(&pt) { &self.water } else { &*self.land }
     }
+
+    fn fields(&self) -> Option<&dyn crate::graph::Fields> { Some(&*self.ground) }
 }
 
 #[cfg(test)]
@@ -796,7 +1062,7 @@ mod tests {
         let r = Relief::new(layers, &planet, 6.36e6, 1., 1000.);
         let f = Frame::new(lat, lon, 6.36e6, 1.);
         let p = SceneryParams { resolution: 32, globe: 8, ..SceneryParams::default() };
-        let m = mesh(&r, &f, &Viewpoint { location: Vector3::new(0., 5000., 0.) }, &p);
+        let m = mesh(&r, &f, &Viewpoint { location: Vector3::new(0., 5000., 0.) }, &p, None);
         use crate::shapes::geometry::Geometry;
         // A ray straight down from the camera meets the ground.
         let down = Ray { ro: Vector3::new(1., 20000., 1.), rd: Vector3::new(0., -1., 0.) };
@@ -813,6 +1079,75 @@ mod tests {
             let x = -40000. + 200. * k as f64;
             let r = Ray { ro: Vector3::new(x, 20000., 0.37 * x), rd: Vector3::new(0., -1., 0.) };
             assert!(m.intersects(&r).is_some(), "crack at {}", x);
+        }
+    }
+
+    #[test]
+    fn test_local_frames_stand_upright() {
+        let f = Frame::new(45., 7., 6.36e6, 1.);
+        // At the scene's origin, the scene's own axes.
+        let o = Local::under(&f, 0., 0.);
+        assert!(o.origin.norm() < 1e-6 && (o.axes - crate::na::Matrix3::identity()).norm() < 1e-9);
+        // Far off, up is away from the planet's centre, and the axes are a rotation.
+        let far = Local::under(&f, 150e3, -90e3);
+        let radial = (far.origin - f.centre()).normalize();
+        assert!((far.axes.column(1) - radial).norm() < 1e-9);
+        assert!((far.axes.transpose() * far.axes - crate::na::Matrix3::identity()).norm() < 1e-9);
+        assert!((far.axes.determinant() - 1.).abs() < 1e-9);
+        let p = Vector3::new(3., 4., 5.);
+        assert!((far.to_local(&far.to_scene(&p)) - p).norm() < 1e-6);
+    }
+
+    #[test]
+    fn test_displaced_patch_meets_the_rings() {
+        use crate::shapes::displaced::{DisplacedTerrain, Detail};
+        use crate::shapes::geometry::Geometry;
+        let (planet, layers, (lat, lon)) = layers();
+        let r = Relief::new(layers, &planet, 6.36e6, 1., 1000.);
+        let f = Frame::new(lat, lon, 6.36e6, 1.);
+        let p = SceneryParams { resolution: 64, globe: 8, ..SceneryParams::default() };
+        // At the scene's origin, and far enough off that the ground's up is turned a degree
+        // and a half from the scene's.
+        for (x0, z0) in [(0., 0.), (140e3, -70e3)] {
+            let local = Local::under(&f, x0, z0);
+            let (d, h) = f.on_planet(&local.origin);
+            let ground = r.height(&d, r.slope(&d), 2.) - h;
+            let view = Viewpoint { location: local.to_scene(&Vector3::new(0., ground + 50., 0.)) };
+            let clipmap = Clipmap::new(&r, &f, &view, &p);
+            let surface = Surface { relief: &r, frame: &f, local: &local, clipmap: &clipmap, cell: 2. };
+            let grid = Arc::new(crate::procedural::heightmap::HeightGrid::sample(&surface, (-200., -200.), (200., 200.), 2.));
+            let hole = Hole { local: local.clone(), min: (-200., -200.), max: (200., 200.), surface: grid.clone() };
+            let rings = mesh(&r, &f, &view, &p, None);
+            let flat = crate::graph::Graph::parse(&serde_json::json!(0)).unwrap();
+            let patch = DisplacedTerrain::new(grid.clone(), flat, false, &Detail::default()).unwrap();
+            let mut m = crate::na::Matrix4::identity();
+            m.fixed_view_mut::<3, 3>(0, 0).copy_from(&local.axes);
+            m.fixed_view_mut::<3, 1>(0, 3).copy_from(&local.origin);
+            let placed = crate::shapes::transform::Transform::new(Arc::new(patch) as Arc<dyn Geometry + Sync + Send>,
+                crate::na::Affine3::from_matrix_unchecked(m));
+            let both = crate::shapes::group::Group::new(vec![Box::new(mesh(&r, &f, &view, &p, Some(&hole))), Box::new(placed)]);
+            // Rays straight down the frame's up, and heights along it.
+            let down = |x: f64, z: f64| Ray { ro: local.to_scene(&Vector3::new(x, ground + 20000., z)), rd: -local.axes.column(1).into_owned() };
+            let y = |g: &dyn Geometry, x: f64, z: f64| g.intersects(&down(x, z)).map(|h| local.to_local(&h.point).y);
+            let mut last: Option<f64> = None;
+            for k in 0..400 {
+                let x = 120. + 0.37 * k as f64;
+                let z = 0.3 * x - 40.;
+                // No crack where the patch meets the rings, and no step.
+                let h = y(&both, x, z).unwrap_or_else(|| panic!("crack at {} ({}, {})", x, x0, z0));
+                if let Some(l) = last {
+                    assert!((h - l).abs() < 1., "step of {} at {} ({}, {})", h - l, x, x0, z0);
+                }
+                last = Some(h);
+                // Inside, the patch's surface (as diced); near its edge, close to the rings'.
+                if x < 190. {
+                    assert!((h - grid.smooth(x, z).0).abs() < 0.01, "{} vs the patch's {}", h, grid.smooth(x, z).0);
+                }
+                if (180. ..200.).contains(&x) {
+                    let ring = y(&rings, x, z).unwrap();
+                    assert!((h - ring).abs() < 1., "{} vs the rings' {} at {} ({}, {})", h, ring, x, x0, z0);
+                }
+            }
         }
     }
 }

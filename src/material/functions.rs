@@ -258,7 +258,8 @@ fn sample_area_light_from(point: &Vector3<f64>, s: &Scene, i: usize, chosen: f64
     // Texture coordinates of the sampled point, for textured emitters; a shape of many parts
     // (a mesh) doesn't say which part was sampled, so it takes the texture's mean.
     let uv = if light.geometry.primitives() == 1 { light.geometry.uv(&y, 0) } else { None };
-    let emitted = light.medium.material_at(y).emitted_at(&n_y, &-w, uv);
+    let at = crate::graph::Context::lifted(y, n_y).with_fields(light.medium.fields());
+    let emitted = light.medium.material_at(y).emitted_in(&at, &-w, uv);
     if emitted == Color::black() {
         return Color::black();
     }

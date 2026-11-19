@@ -13,9 +13,8 @@ use crate::material::functions::{scatter_lambertian, scatter_dielectric, diffuse
 use crate::shapes::geometry::Geometry;
 use crate::scenefile::SceneFile;
 use crate::material::normal::NormalShade;
-use rand::{SeedableRng, Rng};
+use rand::{SeedableRng, RngExt};
 use rand::rngs::StdRng;
-use rand::distributions::{Normal, Distribution};
 use crate::geometry::point_on_unit_sphere;
 use crate::shapes::csg::Union;
 use crate::bvh::GeometryBvh;
@@ -25,7 +24,7 @@ use std::sync::Arc;
 use std::f64;
 
 fn rand(rng: &mut StdRng) -> f64 {
-    rng.gen_range(0.0, 1.0)
+    rng.random_range(0.0..1.0)
 }
 
 struct Particle {

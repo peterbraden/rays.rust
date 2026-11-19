@@ -354,6 +354,16 @@ impl CubeSphere {
 /// sampled at every texel's corners, interpolated bilinearly within a face. A corner on an edge
 /// between faces is the same direction from either, so the map is continuous across them, and
 /// as in a flat map the most a texel reaches is its largest corner.
+/// A place on a `CubeMap`: the texel and the position within it.
+#[derive(Clone, Copy, Debug)]
+pub struct Texel {
+    pub face: usize,
+    pub i: usize,
+    pub j: usize,
+    fs: f64,
+    ft: f64,
+}
+
 pub struct CubeMap {
     pub cube: CubeSphere,
     corners: Vec<f32>,
@@ -363,12 +373,26 @@ pub struct CubeMap {
 impl CubeMap {
     pub fn new(size: usize, f: impl Fn(&Vector3<f64>) -> f64 + Sync) -> CubeMap {
         use rayon::prelude::*;
+        let corners: Vec<f32> = CubeMap::corner_directions(size).par_iter().map(|d| f(d) as f32).collect();
+        CubeMap::from_corners(size, corners)
+    }
+
+    /// The directions of a map's texel corners, in the order `from_corners` takes their values:
+    /// for several maps from one pass over the sphere.
+    pub fn corner_directions(size: usize) -> Vec<Vector3<f64>> {
         let cube = CubeSphere { size };
         let n = size + 1;
-        let corners: Vec<f32> = (0..6 * n * n).into_par_iter().map(|k| {
+        (0..6 * n * n).map(|k| {
             let (face, j, i) = (k / (n * n), (k / n) % n, k % n);
-            f(&cube.direction(face, i as f64, j as f64)) as f32
-        }).collect();
+            cube.direction(face, i as f64, j as f64)
+        }).collect()
+    }
+
+    /// A map from its values at `corner_directions(size)`.
+    pub fn from_corners(size: usize, corners: Vec<f32>) -> CubeMap {
+        let cube = CubeSphere { size };
+        let n = size + 1;
+        assert_eq!(corners.len(), 6 * n * n);
         let texel_max = (0..6 * size * size).map(|k| {
             let (face, j, i) = (k / (size * size), (k / size) % size, k % size);
             let at = |i: usize, j: usize| corners[face * n * n + j * n + i];
@@ -384,17 +408,33 @@ impl CubeMap {
     }
 
     pub fn at(&self, d: &Vector3<f64>) -> f64 {
+        self.at_texel(&self.locate(d))
+    }
+
+    /// Where a unit direction is on the map, for reading several maps of the same size there
+    /// (`at_texel`) at the cost of finding it once.
+    pub fn locate(&self, d: &Vector3<f64>) -> Texel {
         let (face, s, t) = self.cube.locate(d);
         let (i, j) = ((s as usize).min(self.cube.size - 1), (t as usize).min(self.cube.size - 1));
-        let (fs, ft) = (s - i as f64, t - j as f64);
+        Texel { face, i, j, fs: s - i as f64, ft: t - j as f64 }
+    }
+
+    /// The map's value at a place `locate` found, on this map or another of the same size.
+    pub fn at_texel(&self, l: &Texel) -> f64 {
         let n = self.cube.size + 1;
-        let c = |i: usize, j: usize| self.corners[face * n * n + j * n + i] as f64;
+        let c = |i: usize, j: usize| self.corners[l.face * n * n + j * n + i] as f64;
+        let (i, j, fs, ft) = (l.i, l.j, l.fs, l.ft);
         (c(i, j) * (1. - fs) + c(i + 1, j) * fs) * (1. - ft) + (c(i, j + 1) * (1. - fs) + c(i + 1, j + 1) * fs) * ft
     }
 
     /// The most the map reaches anywhere over the texel (`face`, `i`, `j`).
     pub fn texel_max(&self, face: usize, i: usize, j: usize) -> f64 {
         self.texel_max[face * self.cube.size * self.cube.size + j * self.cube.size + i] as f64
+    }
+
+    /// The most the map reaches anywhere.
+    pub fn max(&self) -> f64 {
+        self.corners.iter().cloned().fold(f32::MIN, f32::max) as f64
     }
 }
 

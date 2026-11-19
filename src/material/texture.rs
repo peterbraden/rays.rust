@@ -18,6 +18,9 @@ pub trait Medium : Sync{
     /// The material as data, if the medium is one material throughout and it can be
     /// flattened (`wavefront::flat`).
     fn flat_material(&self) -> Option<crate::wavefront::flat::FlatMaterial> { None }
+    /// What the surface knows about itself at its points, for function graphs' `field` nodes
+    /// (`graph::Fields`): a landscape's simulation.
+    fn fields(&self) -> Option<&dyn crate::graph::Fields> { None }
 }
 
 /// The media of an object whose parts have their own: `base` for the object itself (and parts
@@ -43,6 +46,8 @@ impl Medium for PartMedia {
     fn normal_at_hit(&self, i: &crate::intersection::Intersection, s: &crate::scene::Scene) -> Vector3<f64> {
         self.base.normal_at_hit(i, s)
     }
+
+    fn fields(&self) -> Option<&dyn crate::graph::Fields> { self.base.fields() }
 }
 
 /// A medium whose surface is normal mapped (`textures::NormalMap`).
@@ -64,6 +69,8 @@ impl Medium for NormalMapped {
     fn part(&self, k: u32) -> Option<&(dyn Medium + Sync + Send)> {
         self.inner.part(k)
     }
+
+    fn fields(&self) -> Option<&dyn crate::graph::Fields> { self.inner.fields() }
 }
 
 pub struct Solid {

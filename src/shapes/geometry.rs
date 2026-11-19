@@ -11,6 +11,15 @@ pub const MAX_CROSSINGS: usize = 64;
 /// How far past each hit, relative to its distance, the default `crossings` looks for the next.
 pub const CROSSING_STEP: f64 = 1e-9;
 
+/// Where a point on a displaced surface was moved from (`Geometry::undisplaced`).
+#[derive(Clone, Copy, Debug)]
+pub struct Undisplaced {
+    pub point: Vector3<f64>,
+    pub normal: Vector3<f64>,
+    /// The spacing the displacement was filtered to there (`graph::Context::filter`).
+    pub filter: f64,
+}
+
 // 
 // - Roughly equivalent to the Shape class in PBRT
 // - We don't include transforms in geometry, preferring to compose as:
@@ -147,6 +156,11 @@ pub trait Geometry: Sync{
     /// hit. None for shapes without one.
     fn uv(&self, _p: &Vector3<f64>, _face: u32) -> Option<Vector2<f64>> { None }
 
+    /// For a surface displaced at render time, where the point `p` (hit as part `face`) was
+    /// moved from: so textures and masks evaluated there line up with the relief. None for
+    /// other shapes.
+    fn undisplaced(&self, _p: &Vector3<f64>, _face: u32) -> Option<Undisplaced> { None }
+
     /// The accuracy of this shape's hits, in its own units, beyond floating-point rounding: the
     /// tolerance of an iterative solver (an isosurface's `accuracy`), or 0 for shapes solved in
     /// closed form. See `Intersection::spawn_offset`.
@@ -199,6 +213,7 @@ impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
     fn surface_area(&self) -> f64 { (**self).surface_area() }
     fn sample_surface(&self, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>)> { (**self).sample_surface(u) }
     fn uv(&self, p: &Vector3<f64>, face: u32) -> Option<Vector2<f64>> { (**self).uv(p, face) }
+    fn undisplaced(&self, p: &Vector3<f64>, face: u32) -> Option<crate::shapes::geometry::Undisplaced> { (**self).undisplaced(p, face) }
     fn tolerance(&self) -> f64 { (**self).tolerance() }
     fn tangent(&self, p: &Vector3<f64>, face: u32) -> Option<Vector3<f64>> { (**self).tangent(p, face) }
     fn sample_from(&self, from: &Vector3<f64>, u: [f64; 3]) -> Option<(Vector3<f64>, Vector3<f64>, f64)> { (**self).sample_from(from, u) }

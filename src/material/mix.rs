@@ -39,6 +39,12 @@ impl MaterialModel for Mix {
         let a = self.mean_amount();
         self.materials[0].emitted(normal, towards) * (1. - a) + self.materials[1].emitted(normal, towards) * a
     }
+
+    /// Each material's emission there, by the mean amount: so layers within keep their masks.
+    fn emitted_in(&self, c: &crate::graph::Context, towards: &Vector3<f64>, uv: Option<crate::na::Vector2<f64>>) -> Color {
+        let a = self.mean_amount();
+        self.materials[0].emitted_in(c, towards, uv) * (1. - a) + self.materials[1].emitted_in(c, towards, uv) * a
+    }
 }
 
 #[cfg(test)]

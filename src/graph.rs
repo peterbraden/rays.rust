@@ -22,15 +22,34 @@
 //!   `plan`, and `style`: `"f1"` (distance to the nearest feature point, in cells), `"edges"`
 //!   (F2 - F1: zero along the cracks between cells), or `"stones"` (a rounded stone in each
 //!   cell, each its own size and height, as Terragen's Fake Stones), each in [0, amplitude].
-//! - `slope`: the surface's slope, 0 below `from` degrees and 1 above `to`, smoothly;
+//! - `talus`: fallen blocks and scree, angular and fractured, many small to few large, sorted
+//!   down the slope (`talus.rs`). Heights in metres; meant for a terrain's
+//!   `"vertical_displacement"`, so blocks stand upright on a slope and a material can find them.
+//! - `slope`: the surface's slope, 0 below `from` degrees and 1 above `to`, smoothly (falling
+//!   instead where `to` is below `from`, as for every node with `from` and `to`);
 //!   `breakup` (a node, in degrees) added to the slope first, so the edge of the zone is
 //!   ragged rather than a contour.
 //! - `altitude`: as `slope`, by height (y, metres) from `from` to `to`, with `breakup` in metres.
+//! - `aspect`: how squarely the surface faces `direction` (a vector, default `[0, 0, -1]`, which
+//!   is north on a landscape): the normal's component along it, 0 on level ground and 1 on a
+//!   wall facing it, as shaded north faces keep their snow; smoothly from `from` (default 0) to
+//!   `to` (default 1), with `breakup`.
+//! - `field`: what the surface knows about itself, given by the object hit (`Fields`): for a
+//!   landscape, what its simulation left there (see `Field`: `sediment`, `ice`, `lava`, `flow`,
+//!   `wetness`, `convexity`, `elevation`, `snowline`, `treeline`, `temperature`,
+//!   `precipitation`), `default` (0) on surfaces without it. With `from` and `to`, smoothly from
+//!   0 to 1 between them; without, the value itself; either way with `breakup` added first.
 //! - `strata`: ledges: beds `step` metres thick (default 1), each eroded back from the one
 //!   above it and ending in a riser `sharpness` of the way to vertical (default 0.8), as the
 //!   difference between the terraced height and the height, in [-amplitude, amplitude]
 //!   (default `step` / 2); `breakup` (a node, metres) added to the height first, so the beds
 //!   waver and pinch out. Displaced along a slope's normal, it cuts a slope into ledges.
+//! - `cross_beds`: the festoon cross-bedding of a `rock` material (`material::rock::cross_beds`)
+//!   as relief, so the laminae coloured on slickrock stand out as ribs where they are hard and
+//!   are worn back where soft: give the rock's `seed`, `scale` and `cross_set` (`set`), and the
+//!   relief between the softest and hardest laminae (`amplitude`, metres, default 0.05). In
+//!   [-amplitude / 2, amplitude / 2] about a mean of 0; filtered out where the laminae are
+//!   finer than the vertices.
 //! - a number, or `{"node": "constant", "value": v}`.
 //! - an expression, `"0.1 * sin(x)"`, or `{"node": "expr", "expr": ..., "inputs": {"a": node,
 //!   ...}, "range": [lo, hi]}` (`expr.rs`'s syntax), over `x`, `y`, `z`, `slope` (degrees) and
@@ -62,24 +81,120 @@ use crate::noise::SeededNoise;
 use serde_json::Value;
 use std::sync::LazyLock;
 
+/// What a surface can say about itself at a point, for `field` nodes: a landscape knows what its
+/// simulation left there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Field {
+    /// Loose sediment over the rock (alluvium, colluvium, lake fill), metres thick.
+    Sediment,
+    /// Glacier ice, metres thick.
+    Ice,
+    /// Volcanic rock under the sediment, metres thick.
+    Lava,
+    /// How much water flows past: log10 of the area draining through the point, m².
+    Flow,
+    /// The topographic wetness index, ln(a / tan β), a the area drained per unit width of
+    /// contour (m) and β the slope (Beven and Kirkby, "A physically based, variable
+    /// contributing area model of basin hydrology", Hydrological Sciences Bulletin 24, 1979):
+    /// high in hollows and valley floors where water gathers, low on ridges and steep slopes.
+    Wetness,
+    /// How far the ground stands above the mean of its surroundings, metres: positive on ridges
+    /// and spurs, negative in hollows and gullies.
+    Convexity,
+    /// Height above sea level, metres (unlike `altitude`, the planet's curvature and a
+    /// landscape's scale and exaggeration taken out).
+    Elevation,
+    /// Height above the snowline, metres: where the summer stays below freezing.
+    Snowline,
+    /// Height above the treeline, metres: where the warmest month reaches 10 °C.
+    Treeline,
+    /// Mean annual temperature, °C (from the climate model).
+    Temperature,
+    /// Precipitation, mm a year (from the climate model).
+    Precipitation,
+}
+
+impl Field {
+    pub fn parse(s: &str) -> Result<Field, String> {
+        Ok(match s {
+            "sediment" => Field::Sediment,
+            "ice" => Field::Ice,
+            "lava" => Field::Lava,
+            "flow" => Field::Flow,
+            "wetness" => Field::Wetness,
+            "convexity" => Field::Convexity,
+            "elevation" => Field::Elevation,
+            "snowline" => Field::Snowline,
+            "treeline" => Field::Treeline,
+            "temperature" => Field::Temperature,
+            "precipitation" => Field::Precipitation,
+            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature or precipitation", s)),
+        })
+    }
+}
+
+/// A surface's fields (`Field`) at scene points on it; None for one it doesn't have.
+pub trait Fields: Sync + Send {
+    fn field(&self, f: Field, p: &Vector3<f64>) -> Option<f64>;
+
+    /// Where the scene's y isn't up at `p` (a landscape curved round a planet): the local up
+    /// (a unit vector) and the height above the planet's surface, in scene units, for `slope`,
+    /// `altitude` and `aspect`. None where y is up.
+    fn vertical(&self, _p: &Vector3<f64>) -> Option<(Vector3<f64>, f64)> { None }
+
+    /// The climate's biome at `p` (`biome` nodes); None where there is no climate.
+    fn biome(&self, _p: &Vector3<f64>) -> Option<crate::terrain::climate::Biome> { None }
+}
+
 /// Where a graph is evaluated: the point on the surface (before any displacement), the
-/// surface's unit normal there, and the size of the smallest detail worth keeping (metres; 0
-/// for all of it).
-#[derive(Clone, Copy, Debug)]
-pub struct Context {
+/// surface's unit normal there, the size of the smallest detail worth keeping (metres; 0
+/// for all of it), and what the surface knows about itself (`Fields`), if anything.
+#[derive(Clone, Copy)]
+pub struct Context<'a> {
     pub p: Vector3<f64>,
     pub normal: Vector3<f64>,
     pub filter: f64,
+    /// The point is on the surface the graph displaced (a shading point), not the surface
+    /// before displacement: `talus` then finds its blocks' footing below it.
+    pub lifted: bool,
+    pub fields: Option<&'a dyn Fields>,
 }
 
-impl Context {
-    pub fn new(p: Vector3<f64>, normal: Vector3<f64>, filter: f64) -> Context {
-        Context { p, normal, filter }
+impl<'a> Context<'a> {
+    pub fn new(p: Vector3<f64>, normal: Vector3<f64>, filter: f64) -> Context<'a> {
+        Context { p, normal, filter, lifted: false, fields: None }
+    }
+
+    /// At a shading point on the displaced surface, unfiltered (see `lifted`).
+    pub fn lifted(p: Vector3<f64>, normal: Vector3<f64>) -> Context<'a> {
+        Context { p, normal, filter: 0., lifted: true, fields: None }
+    }
+
+    /// At a shading point: where a displaced surface's point was displaced from, with the
+    /// filter its displacement had there, so the graph gives what the geometry got; on other
+    /// surfaces at the hit itself, `lifted`. With the surface's fields.
+    pub fn at_hit(i: &'a crate::intersection::Intersection) -> Context<'a> {
+        let c = match i.object.geometry.undisplaced(&i.point, i.face) {
+            Some(u) => Context::new(u.point, u.normal, u.filter),
+            None => Context::lifted(i.point, i.normal),
+        };
+        c.with_fields(i.object.medium.fields())
+    }
+
+    /// The same, on a surface with these fields.
+    pub fn with_fields(self, fields: Option<&'a dyn Fields>) -> Context<'a> {
+        Context { fields, ..self }
+    }
+
+    /// The local up and height (`Fields::vertical`), where y isn't up.
+    fn vertical(&self) -> Option<(Vector3<f64>, f64)> {
+        self.fields.and_then(|f| f.vertical(&self.p))
     }
 
     /// The surface's slope, degrees from level.
     pub fn slope(&self) -> f64 {
-        self.normal.y.clamp(-1., 1.).acos().to_degrees()
+        let up = self.vertical().map_or(self.normal.y, |(up, _)| self.normal.dot(&up));
+        up.clamp(-1., 1.).acos().to_degrees()
     }
 }
 
@@ -90,13 +205,19 @@ enum FractalStyle { Perlin, Ridged, Billow }
 enum CellStyle { F1, Edges, Stones }
 
 #[derive(Clone)]
-enum Node {
+enum Op {
     Const(f64),
     Fractal { noise: Box<SeededNoise>, style: FractalStyle, scale: f64, smallest: f64, roughness: f64, lacunarity: f64, amplitude: f64, plan: bool },
     Cells { seed: u32, style: CellStyle, scale: f64, amplitude: f64, plan: bool },
     Slope { from: f64, to: f64, breakup: Option<Box<Node>> },
     Altitude { from: f64, to: f64, breakup: Option<Box<Node>> },
+    Aspect { direction: Vector3<f64>, from: f64, to: f64, breakup: Option<Box<Node>> },
+    /// A surface's field; smoothstepped from `from` to `to` if `band` is given.
+    Field { field: Field, default: f64, band: Option<(f64, f64)>, breakup: Option<Box<Node>> },
+    /// 1 where the climate's biome is one of these, else 0 (`default` without a climate).
+    Biome { of: Vec<crate::terrain::climate::Biome>, default: f64 },
     Strata { step: f64, sharpness: f64, amplitude: f64, breakup: Option<Box<Node>> },
+    CrossBeds { noise: Box<SeededNoise>, scale: f64, set: f64, amplitude: f64 },
     Expr { expr: Expr, inputs: Vec<Node>, range: (f64, f64) },
     Add(Vec<Node>),
     Multiply(Vec<Node>),
@@ -111,6 +232,15 @@ enum Node {
     Remap { input: Box<Node>, from: (f64, f64), to: (f64, f64) },
     Terrace { input: Box<Node>, step: f64, sharpness: f64 },
     Warp { input: Box<Node>, by: [Box<Node>; 3] },
+    Talus(Box<crate::talus::Talus<Node>>),
+}
+
+/// A node: its operation, and the bounds on its value, found once when it is parsed (every
+/// evaluation clamps to them).
+#[derive(Clone)]
+struct Node {
+    op: Op,
+    range: (f64, f64),
 }
 
 /// A parsed graph: its output node.
@@ -119,6 +249,9 @@ pub struct Graph {
     root: Node,
     range: (f64, f64),
 }
+
+/// The mean hardness of cross-bedded laminae, about which `cross_beds` relief is centred.
+const CROSS_BED_MEAN: f64 = 0.6;
 
 /// Octaves are rotated, which hides the lattice's axes (as `SeededNoise::fbm` does).
 static ROTATION: LazyLock<crate::na::Rotation3<f64>> = LazyLock::new(|| crate::na::Rotation3::from_euler_angles(0.61, 0.93, 1.27));
@@ -138,8 +271,12 @@ static OCTAVE_MEANS: LazyLock<(f64, f64)> = LazyLock::new(|| {
     (ridged / n as f64, billow / n as f64)
 });
 
+/// 0 below `lo`, 1 above `hi`, smoothly between; falling instead where `hi` is below `lo`.
 fn smoothstep(lo: f64, hi: f64, x: f64) -> f64 {
-    if hi <= lo {
+    if hi < lo {
+        return 1. - smoothstep(hi, lo, x);
+    }
+    if hi == lo {
         return if x >= hi { 1. } else { 0. };
     }
     let t = ((x - lo) / (hi - lo)).clamp(0., 1.);
@@ -164,110 +301,188 @@ fn mul_range(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
 }
 
 impl Node {
+    fn new(op: Op) -> Node {
+        // Interval arithmetic on infinite bounds (an unbanded `field`) can give NaN, eg.
+        // inf * 0 in a `remap` to a single value; f64::clamp panics on NaN bounds.
+        let (lo, hi) = op.range();
+        let range = (if lo.is_nan() { f64::NEG_INFINITY } else { lo }, if hi.is_nan() { f64::INFINITY } else { hi });
+        Node { op, range }
+    }
+
     fn eval(&self, c: &Context) -> f64 {
-        let v = match self {
-            Node::Const(v) => *v,
-            Node::Fractal { noise, style, scale, smallest, roughness, lacunarity, amplitude, plan } => {
+        let v = match &self.op {
+            Op::Const(v) => *v,
+            Op::Fractal { noise, style, scale, smallest, roughness, lacunarity, amplitude, plan } => {
                 fractal(noise, *style, *scale, *smallest, *roughness, *lacunarity, *plan, c) * amplitude
             },
-            Node::Cells { seed, style, scale, amplitude, plan } => cells(*seed, *style, *scale, *plan, c) * amplitude,
-            Node::Slope { from, to, breakup } => {
+            Op::Cells { seed, style, scale, amplitude, plan } => cells(*seed, *style, *scale, *plan, c) * amplitude,
+            Op::Slope { from, to, breakup } => {
                 let s = c.slope() + breakup.as_ref().map_or(0., |b| b.eval(c));
                 smoothstep(*from, *to, s)
             },
-            Node::Altitude { from, to, breakup } => {
-                let h = c.p.y + breakup.as_ref().map_or(0., |b| b.eval(c));
+            Op::Altitude { from, to, breakup } => {
+                let h = c.vertical().map_or(c.p.y, |(_, h)| h) + breakup.as_ref().map_or(0., |b| b.eval(c));
                 smoothstep(*from, *to, h)
             },
-            Node::Strata { step, sharpness, amplitude, breakup } => {
+            Op::Aspect { direction, from, to, breakup } => {
+                // Round a planet, the direction laid level where the surface is.
+                let facing = match c.vertical() {
+                    Some((up, _)) => (direction - up * direction.dot(&up)).try_normalize(1e-12).unwrap_or(*direction),
+                    None => *direction,
+                };
+                let a = c.normal.dot(&facing) + breakup.as_ref().map_or(0., |b| b.eval(c));
+                smoothstep(*from, *to, a)
+            },
+            Op::Biome { of, default } => match c.fields.and_then(|f| f.biome(&c.p)) {
+                Some(b) => if of.contains(&b) { 1. } else { 0. },
+                None => *default,
+            },
+            Op::Field { field, default, band, breakup } => {
+                let v = c.fields.and_then(|f| f.field(*field, &c.p)).unwrap_or(*default)
+                    + breakup.as_ref().map_or(0., |b| b.eval(c));
+                match band {
+                    Some((from, to)) => smoothstep(*from, *to, v),
+                    None => v,
+                }
+            },
+            Op::Strata { step, sharpness, amplitude, breakup } => {
                 let h = c.p.y + breakup.as_ref().map_or(0., |b| b.eval(c));
                 (terrace(h, *step, *sharpness) - h) / step * amplitude
             },
-            Node::Expr { expr, inputs, .. } => {
-                let mut vars = vec![c.p.x, c.p.y, c.p.z, c.slope()];
-                vars.extend(inputs.iter().map(|n| n.eval(c)));
-                expr.eval(&vars)
+            Op::CrossBeds { noise, scale, set, amplitude } => {
+                // Fade the laminae out to their mean where the vertices are too far apart to
+                // show them.
+                let spacing = crate::material::rock::LAMINA_FINEST * set * scale;
+                let keep = if c.filter > 0. { smoothstep(2. * c.filter, 4. * c.filter, spacing) } else { 1. };
+                if keep <= 0. {
+                    0.
+                } else {
+                    let l = crate::material::rock::cross_beds(noise, c.p / *scale, *set);
+                    keep * amplitude * (l.hardness - CROSS_BED_MEAN)
+                }
             },
-            Node::Add(v) => v.iter().map(|n| n.eval(c)).sum(),
-            Node::Multiply(v) => v.iter().map(|n| n.eval(c)).product(),
-            Node::Min(v) => v.iter().map(|n| n.eval(c)).fold(f64::INFINITY, f64::min),
-            Node::Max(v) => v.iter().map(|n| n.eval(c)).fold(f64::NEG_INFINITY, f64::max),
-            Node::Subtract(a, b) => a.eval(c) - b.eval(c),
-            Node::Blend { a, b, mask } => {
+            Op::Expr { expr, inputs, .. } => {
+                // On the stack, unless there are many inputs.
+                let mut vars = [0.; 16];
+                if inputs.len() + 4 > vars.len() {
+                    let mut vars = vec![c.p.x, c.p.y, c.p.z, c.slope()];
+                    vars.extend(inputs.iter().map(|n| n.eval(c)));
+                    return expr.eval(&vars).clamp(self.range.0, self.range.1);
+                }
+                vars[.. 4].copy_from_slice(&[c.p.x, c.p.y, c.p.z, c.slope()]);
+                for (v, n) in vars[4 ..].iter_mut().zip(inputs) {
+                    *v = n.eval(c);
+                }
+                expr.eval(&vars[.. 4 + inputs.len()])
+            },
+            Op::Add(v) => v.iter().map(|n| n.eval(c)).sum(),
+            Op::Multiply(v) => {
+                // Inputs after a zero are left unevaluated: often a mask, or stones where there
+                // are none.
+                let mut product = 1.;
+                for n in v {
+                    product *= n.eval(c);
+                    if product == 0. { break }
+                }
+                product
+            },
+            Op::Min(v) => v.iter().map(|n| n.eval(c)).fold(f64::INFINITY, f64::min),
+            Op::Max(v) => v.iter().map(|n| n.eval(c)).fold(f64::NEG_INFINITY, f64::max),
+            Op::Subtract(a, b) => a.eval(c) - b.eval(c),
+            Op::Blend { a, b, mask } => {
                 let m = mask.eval(c).clamp(0., 1.);
                 // Only what is seen: either side alone where the mask is 0 or 1.
                 if m <= 0. { a.eval(c) } else if m >= 1. { b.eval(c) } else { a.eval(c) * (1. - m) + b.eval(c) * m }
             },
-            Node::Clamp { input, lo, hi } => input.eval(c).clamp(*lo, *hi),
-            Node::Abs(a) => a.eval(c).abs(),
-            Node::Power { input, exponent } => {
+            Op::Clamp { input, lo, hi } => input.eval(c).clamp(*lo, *hi),
+            Op::Abs(a) => a.eval(c).abs(),
+            Op::Power { input, exponent } => {
                 let v = input.eval(c);
                 v.signum() * v.abs().powf(*exponent)
             },
-            Node::Smoothstep { input, from, to } => smoothstep(*from, *to, input.eval(c)),
-            Node::Remap { input, from, to } => {
+            Op::Smoothstep { input, from, to } => smoothstep(*from, *to, input.eval(c)),
+            Op::Remap { input, from, to } => {
                 let t = if from.1 != from.0 { (input.eval(c) - from.0) / (from.1 - from.0) } else { 0. };
                 to.0 + t * (to.1 - to.0)
             },
-            Node::Terrace { input, step, sharpness } => terrace(input.eval(c), *step, *sharpness),
-            Node::Warp { input, by } => {
+            Op::Terrace { input, step, sharpness } => terrace(input.eval(c), *step, *sharpness),
+            Op::Warp { input, by } => {
                 let d = Vector3::new(by[0].eval(c), by[1].eval(c), by[2].eval(c));
                 input.eval(&Context { p: c.p + d, ..*c })
             },
+            Op::Talus(t) => t.eval(c, |n, c| n.eval(c)),
         };
-        let (lo, hi) = self.range();
-        v.clamp(lo, hi)
+        v.clamp(self.range.0, self.range.1)
     }
 
+    fn range(&self) -> (f64, f64) {
+        self.range
+    }
+
+    fn finest(&self) -> f64 {
+        self.op.finest()
+    }
+}
+
+impl Op {
     /// Bounds on the node's value, by interval arithmetic.
     fn range(&self) -> (f64, f64) {
         match self {
-            Node::Const(v) => (*v, *v),
-            Node::Fractal { style, amplitude, .. } => {
+            Op::Const(v) => (*v, *v),
+            Op::Fractal { style, amplitude, .. } => {
                 let a = amplitude.abs();
                 match style { FractalStyle::Perlin => (-a, a), _ => (amplitude.min(0.), amplitude.max(0.)) }
             },
-            Node::Cells { amplitude, .. } => (amplitude.min(0.), amplitude.max(0.)),
-            Node::Strata { amplitude, .. } => (-amplitude.abs(), amplitude.abs()),
-            Node::Slope { .. } | Node::Altitude { .. } | Node::Smoothstep { .. } => (0., 1.),
-            Node::Expr { range, .. } => *range,
-            Node::Add(v) => v.iter().map(Node::range).fold((0., 0.), |a, b| (a.0 + b.0, a.1 + b.1)),
-            Node::Multiply(v) => v.iter().map(Node::range).fold((1., 1.), mul_range),
-            Node::Min(v) => v.iter().map(Node::range).fold((f64::INFINITY, f64::INFINITY), |a, b| (a.0.min(b.0), a.1.min(b.1))),
-            Node::Max(v) => v.iter().map(Node::range).fold((f64::NEG_INFINITY, f64::NEG_INFINITY), |a, b| (a.0.max(b.0), a.1.max(b.1))),
-            Node::Subtract(a, b) => {
+            Op::Cells { amplitude, .. } => (amplitude.min(0.), amplitude.max(0.)),
+            Op::Strata { amplitude, .. } => (-amplitude.abs(), amplitude.abs()),
+            // Hardness lies in [0.175, 1].
+            Op::CrossBeds { amplitude, .. } => {
+                let a = amplitude.abs();
+                (a * (0.175 - CROSS_BED_MEAN), a * (1. - CROSS_BED_MEAN))
+            },
+            Op::Slope { .. } | Op::Altitude { .. } | Op::Aspect { .. } | Op::Smoothstep { .. } => (0., 1.),
+            Op::Field { band: Some(_), .. } => (0., 1.),
+            Op::Biome { default, .. } => (default.min(0.), default.max(1.)),
+            Op::Field { band: None, .. } => (f64::NEG_INFINITY, f64::INFINITY),
+            Op::Expr { range, .. } => *range,
+            Op::Add(v) => v.iter().map(Node::range).fold((0., 0.), |a, b| (a.0 + b.0, a.1 + b.1)),
+            Op::Multiply(v) => v.iter().map(Node::range).fold((1., 1.), mul_range),
+            Op::Min(v) => v.iter().map(Node::range).fold((f64::INFINITY, f64::INFINITY), |a, b| (a.0.min(b.0), a.1.min(b.1))),
+            Op::Max(v) => v.iter().map(Node::range).fold((f64::NEG_INFINITY, f64::NEG_INFINITY), |a, b| (a.0.max(b.0), a.1.max(b.1))),
+            Op::Subtract(a, b) => {
                 let (a, b) = (a.range(), b.range());
                 (a.0 - b.1, a.1 - b.0)
             },
-            Node::Blend { a, b, .. } => {
+            Op::Blend { a, b, .. } => {
                 let (a, b) = (a.range(), b.range());
                 (a.0.min(b.0), a.1.max(b.1))
             },
-            Node::Clamp { input, lo, hi } => {
+            Op::Clamp { input, lo, hi } => {
                 let r = input.range();
                 (r.0.clamp(*lo, *hi), r.1.clamp(*lo, *hi))
             },
-            Node::Abs(a) => {
+            Op::Abs(a) => {
                 let (lo, hi) = a.range();
                 if lo >= 0. { (lo, hi) } else if hi <= 0. { (-hi, -lo) } else { (0., hi.max(-lo)) }
             },
-            Node::Power { input, exponent } => {
+            Op::Power { input, exponent } => {
                 let (lo, hi) = input.range();
                 let m = lo.abs().max(hi.abs()).powf(*exponent);
                 (if lo < 0. { -m } else { lo.powf(*exponent).min(m) }, if hi > 0. { m } else { -(hi.abs().powf(*exponent)) })
             },
-            Node::Remap { input, from, to } => {
+            Op::Remap { input, from, to } => {
                 let r = input.range();
                 let f = |v: f64| if from.1 != from.0 { to.0 + (v - from.0) / (from.1 - from.0) * (to.1 - to.0) } else { to.0 };
                 let (a, b) = (f(r.0), f(r.1));
                 (a.min(b), a.max(b))
             },
             // Terracing keeps values within a step of where they were.
-            Node::Terrace { input, step, .. } => {
+            Op::Terrace { input, step, .. } => {
                 let r = input.range();
                 (r.0 - step.abs(), r.1 + step.abs())
             },
-            Node::Warp { input, .. } => input.range(),
+            Op::Warp { input, .. } => input.range(),
+            Op::Talus(t) => t.range(),
         }
     }
 
@@ -275,18 +490,21 @@ impl Node {
     /// scale; infinite for a node with none.
     fn finest(&self) -> f64 {
         let children: Vec<&Node> = match self {
-            Node::Fractal { smallest, .. } => return *smallest,
-            Node::Cells { scale, .. } => return 0.1 * scale,
-            Node::Const(_) => return f64::INFINITY,
-            Node::Strata { step, breakup, .. } => return breakup.as_ref().map_or(f64::INFINITY, |b| b.finest()).min(0.25 * step),
-            Node::Slope { breakup, .. } | Node::Altitude { breakup, .. } => breakup.iter().map(|b| &**b).collect(),
-            Node::Expr { inputs, .. } => inputs.iter().collect(),
-            Node::Add(v) | Node::Multiply(v) | Node::Min(v) | Node::Max(v) => v.iter().collect(),
-            Node::Subtract(a, b) => vec![a, b],
-            Node::Blend { a, b, mask } => vec![a, b, mask],
-            Node::Clamp { input, .. } | Node::Abs(input) | Node::Power { input, .. } | Node::Smoothstep { input, .. }
-                | Node::Remap { input, .. } | Node::Terrace { input, .. } => vec![input],
-            Node::Warp { input, by } => vec![input, &by[0], &by[1], &by[2]],
+            Op::Fractal { smallest, .. } => return *smallest,
+            Op::Cells { scale, .. } => return 0.1 * scale,
+            Op::Talus(t) => return t.smallest,
+            Op::Const(_) | Op::Biome { .. } => return f64::INFINITY,
+            Op::CrossBeds { scale, set, .. } => return crate::material::rock::LAMINA_FINEST * set * scale,
+            Op::Strata { step, breakup, .. } => return breakup.as_ref().map_or(f64::INFINITY, |b| b.finest()).min(0.25 * step),
+            Op::Slope { breakup, .. } | Op::Altitude { breakup, .. } | Op::Aspect { breakup, .. }
+                | Op::Field { breakup, .. } => breakup.iter().map(|b| &**b).collect(),
+            Op::Expr { inputs, .. } => inputs.iter().collect(),
+            Op::Add(v) | Op::Multiply(v) | Op::Min(v) | Op::Max(v) => v.iter().collect(),
+            Op::Subtract(a, b) => vec![a, b],
+            Op::Blend { a, b, mask } => vec![a, b, mask],
+            Op::Clamp { input, .. } | Op::Abs(input) | Op::Power { input, .. } | Op::Smoothstep { input, .. }
+                | Op::Remap { input, .. } | Op::Terrace { input, .. } => vec![input],
+            Op::Warp { input, by } => vec![input, &by[0], &by[1], &by[2]],
         };
         children.into_iter().map(Node::finest).fold(f64::INFINITY, f64::min)
     }
@@ -444,17 +662,23 @@ fn children(o: &Value) -> Result<Vec<Node>, String> {
 
 fn parse_node(v: &Value) -> Result<Node, String> {
     match v {
-        Value::Number(n) => return Ok(Node::Const(n.as_f64().unwrap())),
+        Value::Number(n) => return Ok(Node::new(Op::Const(n.as_f64().unwrap()))),
         Value::String(s) => return parse_expr(s, &Value::Null, (f64::NEG_INFINITY, f64::INFINITY)),
         Value::Object(_) => {},
         _ => return Err(format!("a graph node is a number, an expression or an object, not {}", v)),
     }
     let o = v;
     let kind = o["node"].as_str().or_else(|| o["type"].as_str()).ok_or_else(|| format!("graph node needs a \"node\": {}", o))?;
-    let seed = || o["seed"].as_u64().unwrap_or(0);
+    let seed = || -> Result<u64, String> {
+        match &o["seed"] {
+            Value::Null => Ok(0),
+            s => s.as_u64().or_else(|| s.as_f64().filter(|f| *f >= 0. && f.fract() == 0. && *f < 2f64.powi(64)).map(|f| f as u64))
+                .ok_or_else(|| format!("a seed is a whole number, at least 0, not {}", s)),
+        }
+    };
     let plan = o["plan"].as_bool().unwrap_or(false);
-    Ok(match kind {
-        "constant" => Node::Const(num(o, "value", 0.)?),
+    Ok(Node::new(match kind {
+        "constant" => Op::Const(num(o, "value", 0.)?),
         "fractal" => {
             let scale = num(o, "scale", 10.)?;
             let style = match o["style"].as_str().unwrap_or("perlin") {
@@ -467,7 +691,7 @@ fn parse_node(v: &Value) -> Result<Node, String> {
             if lacunarity <= 1. || scale <= 0. {
                 return Err("a fractal's scale must be positive and its lacunarity above 1".into());
             }
-            Node::Fractal { noise: Box::new(SeededNoise::new(seed())), style, scale, smallest: num(o, "smallest", scale / 256.)?.max(1e-6),
+            Op::Fractal { noise: Box::new(SeededNoise::new(seed()?)), style, scale, smallest: num(o, "smallest", scale / 256.)?.max(1e-6),
                 roughness: num(o, "roughness", 0.5)?, lacunarity, amplitude: num(o, "amplitude", 1.)?, plan }
         },
         "cells" => {
@@ -481,54 +705,93 @@ fn parse_node(v: &Value) -> Result<Node, String> {
             if scale <= 0. {
                 return Err("cells' scale must be positive".into());
             }
-            Node::Cells { seed: seed() as u32, style, scale, amplitude: num(o, "amplitude", 1.)?, plan }
+            Op::Cells { seed: seed()? as u32, style, scale, amplitude: num(o, "amplitude", 1.)?, plan }
         },
         "slope" | "altitude" => {
             let (from, to) = (num(o, "from", 0.)?, num(o, "to", if kind == "slope" { 90. } else { 1. })?);
             let breakup = o.get("breakup").map(parse_node).transpose()?.map(Box::new);
-            if kind == "slope" { Node::Slope { from, to, breakup } } else { Node::Altitude { from, to, breakup } }
+            if kind == "slope" { Op::Slope { from, to, breakup } } else { Op::Altitude { from, to, breakup } }
+        },
+        "aspect" => {
+            let direction = match &o["direction"] {
+                Value::Null => -Vector3::z(),
+                Value::Array(a) if a.len() == 3 && a.iter().all(Value::is_number) =>
+                    Vector3::new(a[0].as_f64().unwrap(), a[1].as_f64().unwrap(), a[2].as_f64().unwrap()),
+                v => return Err(format!("aspect's \"direction\" must be [x, y, z], got {}", v)),
+            };
+            if direction.norm() == 0. {
+                return Err("aspect's direction must not be zero".into());
+            }
+            Op::Aspect { direction: direction.normalize(), from: num(o, "from", 0.)?, to: num(o, "to", 1.)?,
+                breakup: o.get("breakup").map(parse_node).transpose()?.map(Box::new) }
+        },
+        "biome" => {
+            let names: Vec<&str> = match &o["is"] {
+                Value::String(s) => vec![s.as_str()],
+                Value::Array(a) => a.iter().filter_map(Value::as_str).collect(),
+                _ => return Err("a biome node needs \"is\": a biome's name, or a list of them".into()),
+            };
+            let of = names.iter().map(|n| crate::terrain::climate::Biome::parse(n)).collect::<Result<Vec<_>, _>>()?;
+            Op::Biome { of, default: num(o, "default", 0.)? }
+        },
+        "field" => {
+            let field = Field::parse(o["field"].as_str().ok_or("a field node needs a \"field\" name")?)?;
+            let band = match (o.get("from"), o.get("to")) {
+                (None, None) => None,
+                _ => Some((num(o, "from", 0.)?, num(o, "to", 1.)?)),
+            };
+            Op::Field { field, default: num(o, "default", 0.)?, band, breakup: o.get("breakup").map(parse_node).transpose()?.map(Box::new) }
         },
         "strata" => {
             let step = num(o, "step", 1.)?;
             if step <= 0. {
                 return Err("strata's step must be positive".into());
             }
-            Node::Strata { step, sharpness: num(o, "sharpness", 0.8)?, amplitude: num(o, "amplitude", 0.5 * step)?,
+            Op::Strata { step, sharpness: num(o, "sharpness", 0.8)?, amplitude: num(o, "amplitude", 0.5 * step)?,
                 breakup: o.get("breakup").map(parse_node).transpose()?.map(Box::new) }
+        },
+        "cross_beds" => {
+            let (scale, set) = (num(o, "scale", 1.)?, num(o, "set", 0.4)?);
+            if scale <= 0. || set <= 0. {
+                return Err("cross_beds' scale and set must be positive".into());
+            }
+            Op::CrossBeds { noise: Box::new(SeededNoise::new(seed()?)), scale, set, amplitude: num(o, "amplitude", 0.05)? }
         },
         "expr" => {
             let text = o["expr"].as_str().ok_or("an expr node needs an \"expr\" string")?;
-            parse_expr(text, &o["inputs"], pair(o, "range", (f64::NEG_INFINITY, f64::INFINITY))?)?
+            return parse_expr(text, &o["inputs"], pair(o, "range", (f64::NEG_INFINITY, f64::INFINITY))?)
         },
-        "add" => Node::Add(children(o)?),
-        "multiply" => Node::Multiply(children(o)?),
-        "min" => Node::Min(children(o)?),
-        "max" => Node::Max(children(o)?),
-        "subtract" => Node::Subtract(child(o, "a")?, child(o, "b")?),
-        "blend" => Node::Blend { a: child(o, "a")?, b: child(o, "b")?, mask: child(o, "mask")? },
-        "clamp" => Node::Clamp { input: child(o, "input")?, lo: num(o, "min", f64::NEG_INFINITY)?, hi: num(o, "max", f64::INFINITY)? },
-        "abs" => Node::Abs(child(o, "input")?),
-        "power" => Node::Power { input: child(o, "input")?, exponent: num(o, "exponent", 1.)? },
-        "smoothstep" => Node::Smoothstep { input: child(o, "input")?, from: num(o, "from", 0.)?, to: num(o, "to", 1.)? },
-        "remap" => Node::Remap { input: child(o, "input")?, from: pair(o, "from", (0., 1.))?, to: pair(o, "to", (0., 1.))? },
-        "terrace" => Node::Terrace { input: child(o, "input")?, step: num(o, "step", 1.)?, sharpness: num(o, "sharpness", 0.8)? },
+        "add" => Op::Add(children(o)?),
+        "multiply" => Op::Multiply(children(o)?),
+        "min" => Op::Min(children(o)?),
+        "max" => Op::Max(children(o)?),
+        "subtract" => Op::Subtract(child(o, "a")?, child(o, "b")?),
+        "blend" => Op::Blend { a: child(o, "a")?, b: child(o, "b")?, mask: child(o, "mask")? },
+        "clamp" => Op::Clamp { input: child(o, "input")?, lo: num(o, "min", f64::NEG_INFINITY)?, hi: num(o, "max", f64::INFINITY)? },
+        "abs" => Op::Abs(child(o, "input")?),
+        "power" => Op::Power { input: child(o, "input")?, exponent: num(o, "exponent", 1.)? },
+        "smoothstep" => Op::Smoothstep { input: child(o, "input")?, from: num(o, "from", 0.)?, to: num(o, "to", 1.)? },
+        "remap" => Op::Remap { input: child(o, "input")?, from: pair(o, "from", (0., 1.))?, to: pair(o, "to", (0., 1.))? },
+        "terrace" => Op::Terrace { input: child(o, "input")?, step: num(o, "step", 1.)?, sharpness: num(o, "sharpness", 0.8)? },
         "warp" => {
             let by = if o.get("x").is_some() || o.get("y").is_some() || o.get("z").is_some() {
-                let axis = |k: &str| o.get(k).map_or(Ok(Box::new(Node::Const(0.))), |v| parse_node(v).map(Box::new));
+                let axis = |k: &str| o.get(k).map_or(Ok(Box::new(Node::new(Op::Const(0.)))), |v| parse_node(v).map(Box::new));
                 [axis("x")?, axis("y")?, axis("z")?]
             } else {
                 // A vector of noise: three fractals of the same scale, seeded apart.
                 let (amount, scale, octaves) = (num(o, "amount", 1.)?, num(o, "scale", 10.)?, num(o, "octaves", 3.)?.max(1.));
                 let lacunarity: f64 = 2.03;
                 let smallest = scale / lacunarity.powf(octaves - 1.) * 0.999;
-                let axis = |k: u64| Box::new(Node::Fractal { noise: Box::new(SeededNoise::new(seed().wrapping_mul(3).wrapping_add(k + 101))),
-                    style: FractalStyle::Perlin, scale, smallest, roughness: 0.5, lacunarity, amplitude: amount, plan: false });
+                let base = seed()?;
+                let axis = |k: u64| Box::new(Node::new(Op::Fractal { noise: Box::new(SeededNoise::new(base.wrapping_mul(3).wrapping_add(k + 101))),
+                    style: FractalStyle::Perlin, scale, smallest, roughness: 0.5, lacunarity, amplitude: amount, plan: false }));
                 [axis(0), axis(1), axis(2)]
             };
-            Node::Warp { input: child(o, "input")?, by }
+            Op::Warp { input: child(o, "input")?, by }
         },
+        "talus" => Op::Talus(Box::new(crate::talus::Talus::parse(o, seed()?, |k| o.get(k).map(parse_node).transpose())?)),
         k => return Err(format!("unknown graph node \"{}\"", k)),
-    })
+    }))
 }
 
 fn parse_expr(text: &str, inputs: &Value, range: (f64, f64)) -> Result<Node, String> {
@@ -541,7 +804,7 @@ fn parse_expr(text: &str, inputs: &Value, range: (f64, f64)) -> Result<Node, Str
         }
     }
     let expr = Expr::parse(text, &names).map_err(|e| format!("in expression \"{}\": {}", text, e))?;
-    Ok(Node::Expr { expr, inputs: nodes, range })
+    Ok(Node::new(Op::Expr { expr, inputs: nodes, range }))
 }
 
 #[cfg(test)]
@@ -549,7 +812,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn at(x: f64, y: f64, z: f64) -> Context {
+    fn at(x: f64, y: f64, z: f64) -> Context<'static> {
         Context::new(Vector3::new(x, y, z), Vector3::y(), 0.)
     }
 
@@ -584,6 +847,38 @@ mod tests {
         }
     }
 
+    /// Round a planet, slope, altitude and aspect are judged by the local up, not y.
+    #[test]
+    fn test_masks_follow_a_planet_round() {
+        struct Ball;
+        impl Fields for Ball {
+            fn field(&self, _: Field, _: &Vector3<f64>) -> Option<f64> { None }
+            fn vertical(&self, p: &Vector3<f64>) -> Option<(Vector3<f64>, f64)> { Some((p.normalize(), p.norm() - 100.)) }
+        }
+        // On the ball's "equator", level ground faces +x, 5 units up.
+        let c = Context::new(Vector3::new(105., 0., 0.), Vector3::x(), 0.).with_fields(Some(&Ball));
+        assert!(c.slope() < 1e-6);
+        assert_eq!(graph(json!({"node": "altitude", "from": 4, "to": 6})).eval(&c), 0.5);
+        // Level ground faces no direction; a wall facing north (-z) does.
+        let north = graph(json!({"node": "aspect"}));
+        assert_eq!(north.eval(&c), 0.);
+        let wall = Context::new(Vector3::new(105., 0., 0.), -Vector3::z(), 0.).with_fields(Some(&Ball));
+        assert!((wall.slope() - 90.).abs() < 1e-9);
+        assert_eq!(north.eval(&wall), 1.);
+        // Without a vertical, y is up as before.
+        assert!((at(105., 0., 0.).with_fields(None).slope()).abs() < 1e-9);
+    }
+
+    /// A remap of an unbounded field to one value has a NaN range by interval arithmetic
+    /// (inf * 0); evaluating it must not panic.
+    #[test]
+    fn test_unbounded_remap_does_not_panic() {
+        let g = Graph::parse(&json!({"node": "remap", "input": {"node": "field", "field": "wetness"},
+            "from": [0, 10], "to": [1, 1]})).unwrap();
+        let c = Context::new(Vector3::zeros(), Vector3::y(), 0.);
+        assert_eq!(g.eval(&c), 1.);
+    }
+
     #[test]
     fn test_arithmetic_and_expressions() {
         let g = graph(json!({"node": "add", "inputs": [1, {"node": "multiply", "inputs": [2, 3]},
@@ -596,6 +891,66 @@ mod tests {
         assert_eq!(graph(json!("x + z")).eval(&at(1., 0., 2.)), 3.);
         assert!(Graph::parse(&json!({"node": "frob"})).is_err());
         assert!(Graph::parse(&json!({"node": "blend", "a": 1})).err().unwrap().contains("\"b\""));
+    }
+
+    #[test]
+    fn test_seeds_are_whole_numbers() {
+        let fractal = |seed: Value| Graph::parse(&json!({"node": "fractal", "seed": seed}));
+        assert!(fractal(json!(3)).is_ok());
+        assert!(fractal(json!(3.0)).is_ok());
+        assert!(fractal(json!(-1)).is_err());
+        assert!(fractal(json!(2.5)).is_err());
+        assert!(fractal(json!("7")).is_err());
+        assert!(Graph::parse(&json!({"node": "cross_beds", "seed": -4})).is_err());
+    }
+
+    #[test]
+    fn test_biome_nodes_pick_out_climates() {
+        use crate::terrain::climate::Biome;
+        // Taiga to the north (z < 0), grassland to the south.
+        struct Zoned;
+        impl Fields for Zoned {
+            fn field(&self, _: Field, _: &Vector3<f64>) -> Option<f64> { None }
+            fn biome(&self, p: &Vector3<f64>) -> Option<Biome> { Some(if p.z < 0. { Biome::Taiga } else { Biome::Grassland }) }
+        }
+        let forest = graph(json!({"node": "biome", "is": ["taiga", "temperate_forest"]}));
+        assert_eq!(forest.eval(&at(0., 0., -5.).with_fields(Some(&Zoned))), 1.);
+        assert_eq!(forest.eval(&at(0., 0., 5.).with_fields(Some(&Zoned))), 0.);
+        // Without a climate, the default.
+        assert_eq!(graph(json!({"node": "biome", "is": "taiga", "default": 1})).eval(&at(0., 0., 5.)), 1.);
+        assert!(Graph::parse(&json!({"node": "biome", "is": "jungle"})).err().unwrap().contains("rainforest"));
+    }
+
+    struct Deep;
+    impl Fields for Deep {
+        fn field(&self, f: Field, p: &Vector3<f64>) -> Option<f64> {
+            (f == Field::Sediment).then_some(p.x)
+        }
+    }
+
+    #[test]
+    fn test_fields_and_aspect() {
+        let g = graph(json!({"node": "field", "field": "sediment", "from": 1, "to": 3}));
+        assert_eq!(g.range(), (0., 1.));
+        assert_eq!(g.eval(&at(5., 0., 0.).with_fields(Some(&Deep))), 1.);
+        assert_eq!(g.eval(&at(2., 0., 0.).with_fields(Some(&Deep))), 0.5);
+        // Off a surface with fields, the default.
+        assert_eq!(g.eval(&at(5., 0., 0.)), 0.);
+        let raw = graph(json!({"node": "field", "field": "ice", "default": 7}));
+        assert_eq!(raw.eval(&at(5., 0., 0.).with_fields(Some(&Deep))), 7.);
+        assert!(Graph::parse(&json!({"node": "field", "field": "mud"})).is_err());
+        // A breakup moves a raw field as it does a banded one.
+        let broken = graph(json!({"node": "field", "field": "sediment", "breakup": 0.5}));
+        assert_eq!(broken.eval(&at(2., 0., 0.).with_fields(Some(&Deep))), 2.5);
+        // A wall facing north (-z) faces north fully; level ground and a south wall don't.
+        let north = graph(json!({"node": "aspect", "from": 0, "to": 1}));
+        let facing = |n: Vector3<f64>| north.eval(&Context::new(Vector3::zeros(), n, 0.));
+        assert_eq!(facing(-Vector3::z()), 1.);
+        assert_eq!(facing(Vector3::y()), 0.);
+        assert_eq!(facing(Vector3::z()), 0.);
+        // Reversed edges fall.
+        let gentle = graph(json!({"node": "slope", "from": 40, "to": 30}));
+        assert_eq!(gentle.eval(&at(0., 0., 0.)), 1.);
     }
 
     #[test]
@@ -644,5 +999,29 @@ mod tests {
         let g = graph(json!({"node": "add", "inputs": [{"node": "fractal", "scale": 10, "smallest": 0.05}, {"node": "cells", "scale": 2}]}));
         assert!((g.finest() - 0.05).abs() < 1e-12);
         assert_eq!(graph(json!(3)).finest(), f64::INFINITY);
+    }
+
+    #[test]
+    fn test_cross_beds_follow_the_rocks_laminae() {
+        let g = graph(json!({"node": "cross_beds", "seed": 8, "scale": 30, "set": 0.12, "amplitude": 0.1}));
+        let (lo, hi) = g.range();
+        let noise = SeededNoise::new(8);
+        let (mut sum, mut min, mut max, n) = (0., f64::INFINITY, f64::NEG_INFINITY, 4000);
+        for i in 0 .. n {
+            let p = Vector3::new(0.37 * i as f64, 0.011 * i as f64, 0.21 * i as f64);
+            let v = g.eval(&at(p.x, p.y, p.z));
+            // The rock material's laminae: ribs where they are hard.
+            let l = crate::material::rock::cross_beds(&noise, p / 30., 0.12);
+            assert!((v - 0.1 * (l.hardness - CROSS_BED_MEAN)).abs() < 1e-12);
+            assert!(v >= lo && v <= hi);
+            sum += v;
+            min = min.min(v);
+            max = max.max(v);
+        }
+        assert!((sum / n as f64).abs() < 0.015, "mean {}", sum / n as f64);
+        assert!(max - min > 0.05);
+        // Too fine for vertices a metre apart: nothing.
+        assert_eq!(g.eval(&Context::new(Vector3::new(1., 2., 3.), Vector3::y(), 1.)), 0.);
+        assert!((g.finest() - crate::material::rock::LAMINA_FINEST * 0.12 * 30.).abs() < 1e-12);
     }
 }

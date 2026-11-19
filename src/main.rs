@@ -40,6 +40,7 @@ mod material {
     pub mod layered;
     pub mod subsurface;
     pub mod mix;
+    pub mod surface_layers;
     pub mod hair;
     pub mod ambient;
     pub mod texture;
@@ -98,6 +99,7 @@ mod shapes {
     pub mod text;
     pub mod lod;
     pub mod displaced;
+    pub mod group;
 }
 mod octree;
 mod bvh;
@@ -125,6 +127,7 @@ mod procedural {
     pub mod tree;
     pub mod succulent;
     pub mod forest;
+    pub mod ecosystem;
     pub mod heightmap;
     pub mod grass;
     pub mod rock;
@@ -147,6 +150,7 @@ mod noise;
 mod terrain;
 mod expr;
 mod graph;
+mod talus;
 mod volume;
 mod glare;
 mod variance;

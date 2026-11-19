@@ -165,6 +165,15 @@ impl Geometry for Transform {
         self.item.uv(&self.inverse.transform_point(&Point3::from(*p)).coords, face)
     }
 
+    fn undisplaced(&self, p: &Vector3<f64>, face: u32) -> Option<crate::shapes::geometry::Undisplaced> {
+        let u = self.item.undisplaced(&self.inverse.transform_point(&Point3::from(*p)).coords, face)?;
+        Some(crate::shapes::geometry::Undisplaced {
+            point: self.transform.transform_point(&Point3::from(u.point)).coords,
+            normal: (self.normal_matrix * u.normal).normalize(),
+            filter: u.filter * self.uniform_scale.unwrap_or(1.),
+        })
+    }
+
     fn tangent(&self, p: &Vector3<f64>, face: u32) -> Option<Vector3<f64>> {
         let t = self.item.tangent(&self.inverse.transform_point(&Point3::from(*p)).coords, face)?;
         Some(self.transform.transform_vector(&t).normalize())

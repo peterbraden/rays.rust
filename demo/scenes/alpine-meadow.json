@@ -1,0 +1,736 @@
+{
+  "width": 960,
+  "height": 540,
+  "supersamples": 32,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 6,
+  "path_termination": "russian_roulette",
+  "output": {
+    "tonemap": "reinhard",
+    "exposure": 1.5
+  },
+  "camera": {
+    "location": [
+      7000,
+      2943.6,
+      15200
+    ],
+    "lookat": [
+      3000,
+      3300,
+      15400
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.6,
+    "aperture": 0.001
+  },
+  "sun": {
+    "intensity": 4.9
+  },
+  "objects": [
+    {
+      "type": "landscape",
+      "seed": 0,
+      "time": 100000,
+      "domain": {
+        "near": "mountains",
+        "cells": 128,
+        "spacing": 750
+      },
+      "focus": [
+        0,
+        0,
+        0
+      ],
+      "cache": "demo/scenes/.landscape-cache",
+      "material": "Ground",
+      "climate": {
+        "warming": -7
+      },
+      "displacement": {
+        "node": "add",
+        "inputs": [
+          {
+            "node": "multiply",
+            "inputs": [
+              {
+                "node": "slope",
+                "from": 22,
+                "to": 38,
+                "breakup": {
+                  "node": "fractal",
+                  "scale": 20,
+                  "amplitude": 8
+                }
+              },
+              {
+                "node": "field",
+                "field": "sediment",
+                "from": 1.0,
+                "to": 0.05,
+                "breakup": {
+                  "node": "fractal",
+                  "scale": 200,
+                  "seed": 7,
+                  "amplitude": 0.3
+                }
+              },
+              {
+                "node": "fractal",
+                "style": "ridged",
+                "scale": 6,
+                "smallest": 0.04,
+                "roughness": 0.55,
+                "amplitude": 1.2,
+                "seed": 3
+              }
+            ]
+          },
+          {
+            "node": "multiply",
+            "inputs": [
+              {
+                "node": "field",
+                "field": "sediment",
+                "from": 0.05,
+                "to": 1.0,
+                "breakup": {
+                  "node": "fractal",
+                  "scale": 200,
+                  "seed": 7,
+                  "amplitude": 0.3
+                }
+              },
+              {
+                "node": "cells",
+                "style": "stones",
+                "scale": 0.7,
+                "amplitude": 0.25,
+                "seed": 5
+              }
+            ]
+          },
+          {
+            "node": "fractal",
+            "scale": 3,
+            "smallest": 0.02,
+            "amplitude": 0.15,
+            "seed": 7
+          }
+        ]
+      },
+      "displacement_detail": {
+        "pixels": 1,
+        "max_level": 8
+      },
+      "displacement_reach": 2000
+    },
+    {
+      "type": "ocean",
+      "wind": [
+        7,
+        2
+      ]
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        0.5,
+        0.35,
+        0.6
+      ]
+    },
+    {
+      "type": "ecosystem",
+      "seed": 3,
+      "surface": "landscape",
+      "populations": [
+        {
+          "forest": {
+            "reach": 150,
+            "spacing": 7,
+            "clearings": 0.2,
+            "patch_size": 25,
+            "max_slope": 35,
+            "species": [
+              {
+                "species": "juniper",
+                "weight": 1
+              }
+            ],
+            "where": {
+              "node": "multiply",
+              "inputs": [
+                {
+                  "node": "slope",
+                  "from": 30,
+                  "to": 18
+                },
+                {
+                  "node": "smoothstep",
+                  "input": {
+                    "node": "fractal",
+                    "scale": 40,
+                    "smallest": 2,
+                    "seed": 11
+                  },
+                  "from": -0.1,
+                  "to": 0.3
+                }
+              ]
+            }
+          }
+        },
+        {
+          "scatter": {
+            "reach": 100,
+            "spacing": 3,
+            "where": {
+              "node": "smoothstep",
+              "input": {
+                "node": "fractal",
+                "scale": 25,
+                "smallest": 1,
+                "seed": 12
+              },
+              "from": 0.05,
+              "to": 0.35
+            },
+            "items": [
+              {
+                "boulder": {
+                  "angularity": 0.7,
+                  "detail": 4
+                },
+                "variants": 5,
+                "size": [
+                  0.15,
+                  1.2
+                ],
+                "sink": 0.2,
+                "tilt": 12,
+                "material": "RockA"
+              }
+            ]
+          }
+        },
+        {
+          "grass": {
+            "reach": 30,
+            "cell": 0.25,
+            "density": 350,
+            "species": [
+              "tussock",
+              "fescue"
+            ],
+            "conditions": "autumn",
+            "where": {
+              "node": "slope",
+              "from": 35,
+              "to": 22
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "materials": {
+    "RockA": {
+      "type": "rock",
+      "preset": "granite",
+      "scale": 1,
+      "seed": 1,
+      "color": [
+        0.13,
+        0.12,
+        0.11
+      ],
+      "secondary": [
+        0.155,
+        0.145,
+        0.13
+      ],
+      "dark_grain_amount": 0,
+      "light_grain_amount": 0,
+      "cracks": 0,
+      "bump": 0,
+      "fractal": 0.9,
+      "fractal_size": 300,
+      "fractal_h": 0.8,
+      "weathering": 0.4
+    },
+    "RockB": {
+      "type": "rock",
+      "preset": "granite",
+      "scale": 1,
+      "seed": 2,
+      "color": [
+        0.06,
+        0.058,
+        0.055
+      ],
+      "secondary": [
+        0.08,
+        0.075,
+        0.07
+      ],
+      "dark_grain_amount": 0,
+      "light_grain_amount": 0,
+      "cracks": 0,
+      "bump": 0,
+      "fractal": 0.9,
+      "fractal_size": 300,
+      "fractal_h": 0.8,
+      "weathering": 0.4
+    },
+    "Rock": {
+      "type": "mix",
+      "materials": [
+        "RockA",
+        "RockB"
+      ],
+      "amount": {
+        "node": "smoothstep",
+        "input": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "fractal",
+              "scale": 500,
+              "seed": 1,
+              "amplitude": 1,
+              "style": "perlin",
+              "smallest": 10
+            },
+            {
+              "node": "strata",
+              "step": 60,
+              "sharpness": 0.5,
+              "amplitude": 0.35,
+              "breakup": {
+                "node": "fractal",
+                "scale": 400,
+                "seed": 21,
+                "amplitude": 40,
+                "style": "perlin"
+              }
+            },
+            {
+              "node": "field",
+              "field": "convexity",
+              "from": -20,
+              "to": 20
+            }
+          ]
+        },
+        "from": 0.1,
+        "to": 0.9
+      }
+    },
+    "ScreeA": {
+      "type": "lambertian",
+      "albedo": [
+        0.24,
+        0.23,
+        0.21
+      ]
+    },
+    "ScreeB": {
+      "type": "lambertian",
+      "albedo": [
+        0.16,
+        0.155,
+        0.145
+      ]
+    },
+    "Scree": {
+      "type": "mix",
+      "materials": [
+        "ScreeA",
+        "ScreeB"
+      ],
+      "amount": {
+        "node": "smoothstep",
+        "input": {
+          "node": "fractal",
+          "scale": 150,
+          "seed": 2,
+          "amplitude": 1,
+          "style": "perlin",
+          "smallest": 4
+        },
+        "from": -0.3,
+        "to": 0.3
+      }
+    },
+    "MeadowA": {
+      "type": "lambertian",
+      "albedo": [
+        0.075,
+        0.1,
+        0.04
+      ]
+    },
+    "MeadowB": {
+      "type": "lambertian",
+      "albedo": [
+        0.15,
+        0.14,
+        0.075
+      ]
+    },
+    "Meadow": {
+      "type": "mix",
+      "materials": [
+        "MeadowA",
+        "MeadowB"
+      ],
+      "amount": {
+        "node": "smoothstep",
+        "input": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "fractal",
+              "scale": 900,
+              "seed": 3,
+              "amplitude": 1,
+              "style": "perlin",
+              "smallest": 30
+            },
+            {
+              "node": "field",
+              "field": "convexity",
+              "from": -15,
+              "to": 25
+            }
+          ]
+        },
+        "from": -0.1,
+        "to": 0.6
+      }
+    },
+    "Forest": {
+      "type": "lambertian",
+      "albedo": [
+        0.026,
+        0.038,
+        0.02
+      ]
+    },
+    "Pasture": {
+      "type": "mix",
+      "materials": [
+        "MeadowA",
+        "PastureB"
+      ],
+      "amount": {
+        "node": "smoothstep",
+        "input": {
+          "node": "fractal",
+          "scale": 300,
+          "seed": 5,
+          "amplitude": 1,
+          "style": "perlin",
+          "smallest": 10
+        },
+        "from": -0.3,
+        "to": 0.3
+      }
+    },
+    "PastureB": {
+      "type": "lambertian",
+      "albedo": [
+        0.06,
+        0.11,
+        0.035
+      ]
+    },
+    "Wet": {
+      "type": "lambertian",
+      "albedo": [
+        0.035,
+        0.055,
+        0.03
+      ]
+    },
+    "Snow": {
+      "type": "lambertian",
+      "albedo": [
+        0.86,
+        0.88,
+        0.91
+      ]
+    },
+    "IceA": {
+      "type": "lambertian",
+      "albedo": [
+        0.42,
+        0.5,
+        0.56
+      ]
+    },
+    "IceB": {
+      "type": "lambertian",
+      "albedo": [
+        0.25,
+        0.26,
+        0.26
+      ]
+    },
+    "Ice": {
+      "type": "mix",
+      "materials": [
+        "IceA",
+        "IceB"
+      ],
+      "amount": {
+        "node": "smoothstep",
+        "input": {
+          "node": "fractal",
+          "scale": 250,
+          "seed": 6,
+          "amplitude": 1,
+          "style": "perlin",
+          "smallest": 6
+        },
+        "from": 0.1,
+        "to": 0.6
+      }
+    },
+    "Ground": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": "Rock"
+        },
+        {
+          "material": "Scree",
+          "mask": {
+            "node": "multiply",
+            "inputs": [
+              {
+                "node": "field",
+                "field": "sediment",
+                "from": 0.05,
+                "to": 1.0,
+                "breakup": {
+                  "node": "fractal",
+                  "scale": 200,
+                  "seed": 7,
+                  "amplitude": 0.3,
+                  "style": "perlin"
+                }
+              },
+              {
+                "node": "slope",
+                "from": 40,
+                "to": 33,
+                "breakup": {
+                  "node": "fractal",
+                  "scale": 120,
+                  "seed": 16,
+                  "amplitude": 4,
+                  "style": "perlin"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "material": "Scree",
+          "mask": {
+            "node": "multiply",
+            "inputs": [
+              {
+                "node": "field",
+                "field": "snowline",
+                "from": -500,
+                "to": -250,
+                "breakup": {
+                  "node": "fractal",
+                  "scale": 400,
+                  "seed": 17,
+                  "amplitude": 150,
+                  "style": "perlin"
+                }
+              },
+              {
+                "node": "slope",
+                "from": 30,
+                "to": 20
+              }
+            ]
+          }
+        },
+        {
+          "material": "Meadow",
+          "mask": {
+            "node": "multiply",
+            "inputs": [
+              {
+                "node": "slope",
+                "from": 30,
+                "to": 20,
+                "breakup": {
+                  "node": "fractal",
+                  "scale": 300,
+                  "seed": 8,
+                  "amplitude": 6,
+                  "style": "perlin"
+                }
+              },
+              {
+                "node": "field",
+                "field": "snowline",
+                "from": -200,
+                "to": -450,
+                "breakup": {
+                  "node": "fractal",
+                  "scale": 800,
+                  "seed": 9,
+                  "amplitude": 150,
+                  "style": "perlin"
+                }
+              },
+              {
+                "node": "smoothstep",
+                "input": {
+                  "node": "add",
+                  "inputs": [
+                    {
+                      "node": "field",
+                      "field": "sediment",
+                      "from": 0.2,
+                      "to": 2
+                    },
+                    {
+                      "node": "fractal",
+                      "scale": 500,
+                      "seed": 18,
+                      "amplitude": 0.5,
+                      "style": "perlin",
+                      "smallest": 15
+                    }
+                  ]
+                },
+                "from": 0.2,
+                "to": 0.6
+              }
+            ]
+          }
+        },
+        {
+          "material": "Wet",
+          "mask": {
+            "node": "multiply",
+            "inputs": [
+              {
+                "node": "field",
+                "field": "wetness",
+                "from": 15,
+                "to": 17.5,
+                "breakup": {
+                  "node": "fractal",
+                  "scale": 900,
+                  "seed": 12,
+                  "amplitude": 1.5,
+                  "style": "perlin",
+                  "smallest": 30
+                }
+              },
+              {
+                "node": "slope",
+                "from": 6,
+                "to": 3
+              }
+            ]
+          }
+        },
+        {
+          "material": "Ice",
+          "mask": {
+            "node": "field",
+            "field": "ice",
+            "from": 3,
+            "to": 25,
+            "breakup": {
+              "node": "fractal",
+              "scale": 300,
+              "seed": 13,
+              "amplitude": 2,
+              "style": "perlin"
+            }
+          }
+        },
+        {
+          "material": "Snow",
+          "mask": {
+            "node": "multiply",
+            "inputs": [
+              {
+                "node": "field",
+                "field": "snowline",
+                "from": -100,
+                "to": 100,
+                "breakup": {
+                  "node": "add",
+                  "inputs": [
+                    {
+                      "node": "fractal",
+                      "scale": 700,
+                      "seed": 14,
+                      "amplitude": 150,
+                      "style": "perlin",
+                      "smallest": 20
+                    },
+                    {
+                      "node": "multiply",
+                      "inputs": [
+                        {
+                          "node": "aspect",
+                          "from": 0,
+                          "to": 1
+                        },
+                        250
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "node": "max",
+                "inputs": [
+                  {
+                    "node": "slope",
+                    "from": 45,
+                    "to": 35,
+                    "breakup": {
+                      "node": "fractal",
+                      "scale": 80,
+                      "seed": 15,
+                      "amplitude": 5,
+                      "style": "perlin"
+                    }
+                  },
+                  {
+                    "node": "field",
+                    "field": "ice",
+                    "from": 5,
+                    "to": 20
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

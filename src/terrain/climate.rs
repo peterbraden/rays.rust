@@ -327,6 +327,25 @@ pub enum Biome {
 }
 
 impl Biome {
+    pub const ALL: [Biome; 10] = [Biome::Ice, Biome::Tundra, Biome::Taiga, Biome::TemperateForest, Biome::Grassland,
+        Biome::Steppe, Biome::ColdDesert, Biome::HotDesert, Biome::Savanna, Biome::Rainforest];
+
+    /// The name a scene gives it: `ice`, `tundra`, `taiga`, `temperate_forest`, `grassland`,
+    /// `steppe`, `cold_desert`, `hot_desert`, `savanna`, `rainforest`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Biome::Ice => "ice", Biome::Tundra => "tundra", Biome::Taiga => "taiga",
+            Biome::TemperateForest => "temperate_forest", Biome::Grassland => "grassland", Biome::Steppe => "steppe",
+            Biome::ColdDesert => "cold_desert", Biome::HotDesert => "hot_desert", Biome::Savanna => "savanna",
+            Biome::Rainforest => "rainforest",
+        }
+    }
+
+    pub fn parse(name: &str) -> Result<Biome, String> {
+        Biome::ALL.iter().copied().find(|b| b.name() == name).ok_or_else(|| format!("unknown biome \"{}\": one of {}",
+            name, Biome::ALL.iter().map(|b| b.name()).collect::<Vec<_>>().join(", ")))
+    }
+
     /// The biome of a climate (Köppen's main groups, with Whittaker's in mind).
     pub fn of(c: &Local) -> Biome {
         if c.summer < 0. { return Biome::Ice; }

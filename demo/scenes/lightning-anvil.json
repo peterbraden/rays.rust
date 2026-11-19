@@ -150,6 +150,47 @@
       "cloud_current": 0.5,
       "radius": 0.3,
       "strokes": 3
+    },
+    {
+      "type": "lightning",
+      "kind": "intracloud",
+      "start": [
+        5000,
+        9800,
+        13000
+      ],
+      "seed": 24,
+      "cloud_length": 12000,
+      "cloud_depth": 300,
+      "cloud_current": 0.5,
+      "radius": 0.3,
+      "strokes": 2
+    },
+    {
+      "type": "volume",
+      "min": [
+        -40000,
+        0,
+        -10000
+      ],
+      "max": [
+        40000,
+        3000,
+        60000
+      ],
+      "density": 1,
+      "sigma_a": [
+        0,
+        0,
+        0
+      ],
+      "sigma_s": [
+        1.6e-05,
+        2.4e-05,
+        4.3e-05
+      ],
+      "g": 0.3
     }
-  ]
+  ],
+  "light_sampler": "bvh"
 }

@@ -489,7 +489,16 @@ under the anvil's base (spider lightning, `"kind": "intracloud"` held near its `
 `cloud_depth`), lighting its underside; one comes down to the ground. A flash about a kilometre
 inside the tower lights it from within, through the diffusion approximation. Seen from below, the
 anvil flares down into the tower, its underside hanging in soft lobes and its edges scalloped.
-Exposed as long exposures of storms are (`"exposure": 6000`, about ISO 3200).
+A further flash spreads through the anvil off to the left; in a long exposure a storm flashes
+many times, and each lights its own part of it. Exposed as long exposures of storms are
+(`"exposure": 6000`, about ISO 3200).
+
+The clear air glows too. At night the sky is no light source, but the air is still there to
+scatter the flashes: the lowest 3 km are a `volume` with the sea-level air's scattering, Rayleigh's
+for the molecules (5.8, 13.5 and 33·10⁻⁶ per metre in red, green and blue) plus a little haze, so
+the sky around the storm is deep blue where the flashes light it, brightest around each channel,
+with the cloud dark against it. With several flashes, `"light_sampler": "bvh"` samples the ones
+near each point rather than choosing by their total power. `lightning.json` has the same air.
 
 ### Iridescence
 

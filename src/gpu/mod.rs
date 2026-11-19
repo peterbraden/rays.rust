@@ -229,6 +229,18 @@ fn space_record(tables: &mut Vec<f32>, space: &crate::procedural::space::Space) 
     base as u32
 }
 
+/// A block's camera rays (`GpuRenderer::make_rays`): how many lanes, how many rays live, and
+/// the time making them took.
+struct BlockRays {
+    lanes: usize,
+    live: u64,
+    began: web_time::Instant,
+    seconds: f64,
+    /// Made while the block before ran on the GPU, so not part of this block's time.
+    ahead: bool,
+    rays: Vec<GpuRay>,
+}
+
 /// A scene uploaded to the GPU, with the pipeline that renders it.
 pub struct GpuRenderer {
     device: wgpu::Device,
@@ -805,8 +817,14 @@ impl GpuRenderer {
     /// most `lanes` of them) at once, each in a lane of the wavefront (`pathtrace::slots`):
     /// the rounds of one sample, for all of them. Returns at once.
     pub fn dispatch_block(&mut self, s: &Scene, first: &[usize], count: &[usize]) {
+        let rays = Self::make_rays(s, first, count);
+        self.dispatch_rays(rays);
+    }
+
+    /// `dispatch_block` from rays made already (`make_rays`).
+    fn dispatch_rays(&mut self, rays: BlockRays) {
         assert!(self.host_queue.is_none(), "a scene with materials the host shades takes its passes through block_with_host");
-        let slot = self.begin_pass(s, first, count);
+        let slot = self.begin_pass_with(rays);
         let mut encoder = self.device.create_command_encoder(&Default::default());
         self.encode_start(&mut encoder);
         self.encode_rounds(&mut encoder, slot);
@@ -818,7 +836,13 @@ impl GpuRenderer {
     /// rounds, the paths waiting for the host are read back, shaded and queued again, until
     /// none waits; then the pass is added to the image. This waits on the device.
     pub async fn block_with_host(&mut self, s: &Scene, flat: &FlatScene, first: &[usize], count: &[usize]) -> Result<(), String> {
-        let slot = self.begin_pass(s, first, count);
+        let rays = Self::make_rays(s, first, count);
+        self.block_with_host_rays(s, flat, first, rays).await
+    }
+
+    /// `block_with_host` from rays made already (`make_rays`).
+    async fn block_with_host_rays(&mut self, s: &Scene, flat: &FlatScene, first: &[usize], rays: BlockRays) -> Result<(), String> {
+        let slot = self.begin_pass_with(rays);
         let mut encoder = self.device.create_command_encoder(&Default::default());
         self.encode_start(&mut encoder);
         self.encode_rounds(&mut encoder, slot);
@@ -925,34 +949,30 @@ impl GpuRenderer {
     /// samples `first[i]..first[i] + count[i]`, one a lane. Returns the pass's slot for its
     /// rounds' counts (the scheduler's measurements), if there is one left before the next
     /// read.
-    fn begin_pass(&mut self, s: &Scene, first: &[usize], count: &[usize]) -> Option<usize> {
+    fn begin_pass_with(&mut self, rays: BlockRays) -> Option<usize> {
         let began = web_time::Instant::now();
-        let image = s.image.width * s.image.height;
-        let lanes = count.iter().copied().max().unwrap_or(0).max(1);
+        let lanes = rays.lanes;
         assert!(lanes <= self.lanes, "a pass of {} samples a pixel, with lanes for {}", lanes, self.lanes);
-        let pixels = image as u32;
+        let pixels = self.params.dims.x * self.params.dims.y;
         self.params.seed.w = lanes as u32;
         for side in 0..2 {
             self.params.seed.z = side as u32;
             self.queue.write_buffer(&self.params_buffers[side], 0, bytemuck::bytes_of(&self.params));
         }
-        // (A pixel that takes no sample in a lane has a dead ray there, so a path that adds
-        // nothing.)
-        // Every lane's camera rays at once, in parallel; the kernel starts the paths from them
-        // (`pathtrace::start_paths`), so 32 bytes a path cross to the GPU, not 96.
-        let rays: Vec<GpuRay> = (0..image * lanes).into_par_iter().map(|j| {
-            let (lane, i) = (j / image, j % image);
-            if lane < count[i] { Self::camera_ray(s, i, first[i] + lane) } else { GpuRay::zeroed() }
-        }).collect();
-        self.queue.write_buffer(&self.rays_buffer, 0, bytemuck::cast_slice(&rays));
-        let live = rays.par_iter().filter(|r| r.d.w >= 0.5).count() as u64;
+        self.queue.write_buffer(&self.rays_buffer, 0, bytemuck::cast_slice(&rays.rays));
+        let live = rays.live;
         // Every queue starts empty: the kernel fills side 0, and the first round's dispatch is
         // copied from it.
         let empty: Vec<u32> = (0..3).flat_map(|_| pathtrace::EMPTY_QUEUE).collect();
         self.queue.write_buffer(&self.queue_buffer, 0, bytemuck::cast_slice(&empty));
         // The host's part ends here: the rays generated and uploaded. Encoding and submitting
         // the kernels is counted as the device's, since a driver may run them as they arrive.
-        let seconds = began.elapsed().as_secs_f64();
+        // Rays made while the block before ran are none of this block's time.
+        let (began, seconds) = if rays.ahead {
+            (began, began.elapsed().as_secs_f64())
+        } else {
+            (rays.began, rays.seconds + began.elapsed().as_secs_f64())
+        };
         let rounds = self.rounds();
         // What the host knows of the pass already: the paths it generated (which are the first
         // round's), and that every pixel's path is added to the film. The later rounds are
@@ -975,6 +995,23 @@ impl GpuRenderer {
             self.record_round(live);
         }
         slot
+    }
+
+    /// A block's camera rays: pixel i's samples `first[i]..first[i] + count[i]`, one a lane,
+    /// every lane's at once, in parallel (`pathtrace::start_paths` starts the paths from them,
+    /// so 32 bytes a path cross to the GPU, not 96). A pixel that takes no sample in a lane has
+    /// a dead ray there, so a path that adds nothing. Only the CPU's work: `render` makes the
+    /// next block's while the GPU runs this one.
+    fn make_rays(s: &Scene, first: &[usize], count: &[usize]) -> BlockRays {
+        let began = web_time::Instant::now();
+        let image = s.image.width * s.image.height;
+        let lanes = count.iter().copied().max().unwrap_or(0).max(1);
+        let rays: Vec<GpuRay> = (0..image * lanes).into_par_iter().map(|j| {
+            let (lane, i) = (j / image, j % image);
+            if lane < count[i] { Self::camera_ray(s, i, first[i] + lane) } else { GpuRay::zeroed() }
+        }).collect();
+        let live = rays.par_iter().filter(|r| r.d.w >= 0.5).count() as u64;
+        BlockRays { lanes, live, began, seconds: began.elapsed().as_secs_f64(), ahead: false, rays }
     }
 
     /// A path has at most `max_depth` + 1 vertices: that many rounds, each over the paths the
@@ -1124,6 +1161,12 @@ impl GpuRenderer {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn render(&mut self, s: &Scene, flat: &FlatScene, rc: &Mutex<RenderContext>, mut after: impl FnMut(&RenderContext)) {
         let (w, h) = (s.image.width, s.image.height);
+        // The next block's rays, made while the GPU runs this one: for the block that carries
+        // every pixel on from where this one leaves it, which is the next one unless the
+        // scheduler decides otherwise (adaptive sampling's pixels stopping, or the end); kept
+        // only if it doesn't, so a guess costs time, never the picture.
+        let mut ahead: Option<(Vec<usize>, Vec<usize>, BlockRays)> = None;
+        let target = s.render.samples_per_pixel();
         loop {
             // The scheduler's part (`scheduler::plan`): which pixels take samples in the next
             // few passes, and how many each. Decided a region at a time, as the recursive
@@ -1148,11 +1191,24 @@ impl GpuRenderer {
             if passes == 0 {
                 break;
             }
+            let rays = match ahead.take() {
+                Some((f, c, rays)) if f == first && c == count => BlockRays { ahead: true, ..rays },
+                _ => Self::make_rays(s, &first, &count),
+            };
             self.clear();
             if self.host_queue.is_some() {
-                pollster::block_on(self.block_with_host(s, flat, &first, &count)).expect("GPU readback");
+                pollster::block_on(self.block_with_host_rays(s, flat, &first, rays)).expect("GPU readback");
             } else {
-                self.dispatch_block(s, &first, &count);
+                self.dispatch_rays(rays);
+                // The GPU is busy: guess the next block, and make its rays meanwhile.
+                let lanes = crate::scheduler::lanes(self.lanes);
+                let next_first: Vec<usize> = first.iter().zip(&count).map(|(f, c)| f + c).collect();
+                let next_count: Vec<usize> = next_first.iter().zip(&count)
+                    .map(|(f, c)| if *c == 0 { 0 } else { target.saturating_sub(*f).min(lanes) }).collect();
+                if next_count.iter().any(|c| *c > 0) {
+                    let rays = Self::make_rays(s, &next_first, &next_count);
+                    ahead = Some((next_first, next_count, rays));
+                }
             }
             let (sums, squares) = pollster::block_on(self.read_back()).expect("GPU readback");
             let mut rc = rc.lock().unwrap();

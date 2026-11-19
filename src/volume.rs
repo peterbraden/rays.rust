@@ -911,10 +911,13 @@ impl VolumeMaterial {
         // Through the scene to a light, along a unit ray, as the phase function scatters it;
         // with diffusion, plus what the medium in between diffuses (`diffused_gain`),
         // scattered evenly.
+        // The surface the diffused light comes out through, at this point: where the cloud
+        // thins, so that turrets are lit where they face a flash inside.
+        let inward = if diffusing == Some(true) { self.inward(point, incoming) } else { *incoming };
         let through = |r: &Ray, d: f64| -> Color {
             let transmitted = s.objects.transmittance(r, d, f64::MIN_POSITIVE) * p(&r.rd);
             match diffusing {
-                Some(true) => transmitted + Color::white() * (self.diffused_gain(&r.ro, &r.rd, d, incoming) / (4. * std::f64::consts::PI)),
+                Some(true) => transmitted + Color::white() * (self.diffused_gain(&r.ro, &r.rd, d, &inward) / (4. * std::f64::consts::PI)),
                 _ => transmitted,
             }
         };
@@ -958,10 +961,25 @@ impl VolumeMaterial {
         direct
     }
 
+    /// The direction into the medium at `point`, near its surface: up its density's gradient
+    /// (by central differences over 25 m), or `incoming`, the way the path came in, where the
+    /// density hardly varies.
+    fn inward(&self, point: &Vector3<f64>, incoming: &Vector3<f64>) -> Vector3<f64> {
+        let h = 25.;
+        let at = |dx: f64, dy: f64, dz: f64| self.field.density(&(point + Vector3::new(dx, dy, dz)));
+        let g = Vector3::new(at(h, 0., 0.) - at(-h, 0., 0.), at(0., h, 0.) - at(0., -h, 0.), at(0., 0., h) - at(0., 0., -h));
+        let mean = at(0., 0., 0.).max(1e-12);
+        // A gradient of less than a hundredth of the density per metre isn't a surface.
+        if g.norm() / (2. * h) < 0.01 * mean / 25. {
+            return *incoming;
+        }
+        g.normalize()
+    }
+
     /// With diffusion, the light that reaches `point` diffused through this medium from a light
     /// a distance `length` away along the unit direction `d`, as a multiple of what would reach
     /// it through empty space (the part not transmitted unscattered, which the shadow ray
-    /// counts, left out). `incoming` is the direction the path entered the medium by, so the
+    /// counts, left out). `inward` is the direction into the medium there (`inward`), so the
     /// point lies just inside a surface facing back along it.
     ///
     /// A cloud absorbs next to nothing, so light from a source inside it is trapped, scattered
@@ -979,7 +997,7 @@ impl VolumeMaterial {
     /// out of the near side, (τ'b + ⅔) / (τ'f + τ'b + 4⁄3) for reduced depths τ'f in front of
     /// the source and τ'b behind it (Kokhanovsky, "Cloud Optics", ch. 3), which is one for a
     /// deep cloud behind it.
-    fn diffused_gain(&self, point: &Vector3<f64>, d: &Vector3<f64>, length: f64, incoming: &Vector3<f64>) -> f64 {
+    fn diffused_gain(&self, point: &Vector3<f64>, d: &Vector3<f64>, length: f64, inward: &Vector3<f64>) -> f64 {
         let steps = self.approximation.diffusion.unwrap_or(32).max(1);
         let albedo = self.mean_albedo();
         let reduce = 1. - albedo * self.phase.mean_cosine();
@@ -1002,8 +1020,8 @@ impl VolumeMaterial {
         let diffusion = 1. / (3. * sigma_r);
         let sigma_a = sigma_r / reduce.max(1e-9) * (1. - albedo);
         let sigma_tr = (3. * sigma_a * sigma_r).sqrt();
-        // The source's depth under the surface the path came in by, and its image above it.
-        let z = (length * d.dot(incoming)).max(0.);
+        // The source's depth under the surface, and its image above it.
+        let z = (length * d.dot(inward)).max(0.);
         let rho2 = (length * length - z * z).max(0.);
         let (r1, r2) = (length, (rho2 + (z + 4. * diffusion).powi(2)).sqrt());
         let dipole = length * length / diffusion * ((-sigma_tr * r1).exp() / r1 - (-sigma_tr * r2).exp() / r2);
@@ -1505,6 +1523,27 @@ mod tests {
         assert!(((at(4.) - at(2.)) - (at(2.) - at(0.))).abs() < 1e-12);
         // Darker under a thicker deck: the light under it goes as 1 / (1 + ¾ τ*).
         assert!(diffused_radiance(mu, 16., 0.) < 0.55 * diffused_radiance(mu, 8., 0.));
+    }
+
+    #[test]
+    fn test_inward_follows_the_clouds_surface() {
+        // A cloud whose density rises across y = 0 over a hundred metres.
+        struct Edge;
+        impl DensityField for Edge {
+            fn density(&self, p: &Vector3<f64>) -> f64 { 0.05 * ((p.y + 50.) / 100.).clamp(0., 1.) }
+            fn majorant(&self) -> f64 { 0.05 }
+        }
+        let m = |field: Arc<dyn DensityField>| VolumeMaterial {
+            albedo: Color::white(), phase: PhaseFunction::HenyeyGreenstein { g: 0.85 },
+            approximation: ScatteringApproximation { diffusion: Some(32), ..ScatteringApproximation::default() },
+            diffraction: None, halos: None, rainbow: None, field, emission: None, extinction: None, sun_probes: false, column: (-100., 1e4),
+        };
+        // Whatever way the path came in, into the cloud is up.
+        let slant = Vector3::new(0.9, 0.3, 0.3).normalize();
+        let n = m(Arc::new(Edge)).inward(&Vector3::new(0., 0., 0.), &slant);
+        assert!((n - Vector3::new(0., 1., 0.)).norm() < 1e-6, "{}", n);
+        // Inside an even cloud there is no surface: the way the path came in.
+        assert_eq!(m(Arc::new(ConstantDensity(0.05))).inward(&Vector3::zeros(), &slant), slant);
     }
 
     #[test]

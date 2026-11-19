@@ -9,7 +9,7 @@
   "path_termination": "russian_roulette",
   "output": {
     "tonemap": "reinhard",
-    "exposure": 3000,
+    "exposure": 9000,
     "glare": true
   },
   "camera": {
@@ -147,14 +147,15 @@
       "start": [
         500,
         8000,
-        9500
+        10000
       ],
       "seed": 12,
       "cloud_length": 25000,
       "cloud_depth": 1000,
       "cloud_current": 0.5,
       "radius": 0.3,
-      "strokes": 4
+      "strokes": 4,
+      "charge_radius": 3000
     },
     {
       "type": "volume",

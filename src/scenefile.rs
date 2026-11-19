@@ -1866,7 +1866,9 @@ impl SceneFile {
 
     /// How a volume scatters: `albedo`, its phase function (`g` defaulting to `default_g`, or
     /// `droplet_diameter`), approximations, `diffraction`, `halos`, and `"rainbow": true` for
-    /// raindrops' bows in direct sunlight.
+    /// raindrops' bows in direct sunlight, by geometric optics, or `"rainbow": {"drop_radius":
+    /// µm, "spread": 0.1}` by Airy's wave optics (supernumerary bows; for fog's 10-20 µm
+    /// droplets, the fogbow).
     pub fn parse_scattering(o: &Value, default_g: f64) -> Scattering {
         Scattering {
             albedo: SceneFile::parse_color_def(o, "albedo", Color::white()),
@@ -1874,7 +1876,14 @@ impl SceneFile {
             approximation: SceneFile::parse_scattering_approximation(o),
             diffraction: SceneFile::parse_diffraction(o),
             halos: SceneFile::parse_halos(o),
-            rainbow: (o["rainbow"].as_bool() == Some(true)).then(|| Arc::new(RainbowTable::new(100_000))),
+            // `true` for geometric optics; `{"drop_radius": µm, "spread": 0.1}` for wave optics
+            // (supernumeraries; the fogbow of small droplets).
+            rainbow: match o.get("rainbow") {
+                Some(Value::Bool(true)) => Some(Arc::new(RainbowTable::new(100_000))),
+                Some(v) if v.is_object() => Some(Arc::new(RainbowTable::airy(40_000,
+                    SceneFile::parse_number(&v["drop_radius"], 500.), SceneFile::parse_number(&v["spread"], 0.1)))),
+                _ => None,
+            },
             emission: None,
             extinction: None,
             sun_probes: o["sun_probes"].as_bool().unwrap_or(crate::volume::SUN_PROBES),
@@ -2115,12 +2124,19 @@ impl SceneFile {
             p.hot_spot = Some((SceneFile::parse_vec2_def(h, "center", middle), SceneFile::parse_number(&h["radius"], 500.).max(1.),
                 SceneFile::parse_number(&h["boost"], 1.).max(0.)));
         }
-        if o["sounding"].as_str() == Some("arm") {
+        p.ice = o["ice"].as_bool().unwrap_or(false);
+        if o["sounding"].as_str() == Some("weisman_klemp") {
+            // Thunderstorms: no daily cycle, the storm started from a bubble.
+            p.sounding = crate::procedural::harris_cumulus::Sounding::weisman_klemp(num("surface_water", 14.) * 1e-3);
+            p.forcing = Forcing::steady(num("heat_flux", 0.), num("moisture_flux", 0.));
+            p.start = num("start", 0.);
+            p.ice = o["ice"].as_bool().unwrap_or(true);
+        } else if o["sounding"].as_str() == Some("arm") {
             // The full day, from dawn.
             p.sounding = Sounding::arm();
             p.start = num("start", 0.);
         } else if let Some(name) = o["sounding"].as_str() {
-            assert!(name == "arm_mid_morning", "harris_cumulus: unknown sounding '{}': expected arm, arm_mid_morning or a profile", name);
+            assert!(name == "arm_mid_morning", "harris_cumulus: unknown sounding '{}': expected arm, arm_mid_morning, weisman_klemp or a profile", name);
         } else if let Some(sounding) = o.get("sounding") {
             let list = |k: &str| -> Vec<f64> {
                 sounding[k].as_array().unwrap_or_else(|| panic!("harris_cumulus: the sounding needs \"{}\"", k))
@@ -2261,7 +2277,9 @@ impl SceneFile {
     /// `wind_direction` ([x, z]), `streak_size` and `streakiness` (0 to 1), `base_variation` (how
     /// far below the base, varying, the drops emerge from the cloud), and `fade` (the
     /// fraction of `radius` over which it fades out). The phase function defaults to `g` 0.85;
-    /// `"rainbow": true` gives the drops' bows in sunlight.
+    /// `"rainbow": true` gives the drops' bows in sunlight. `kind`: "rain" (the default),
+    /// "snow" (with `melting_level`, rain below it) or "hail" (`hail_size`, mm); `rain_rate`
+    /// is then mm/h of water.
     pub fn parse_precipitation(o: &Value) -> SceneObject {
         let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
         let mut r = Precipitation::new(num("base", 1500.), SceneFile::parse_seed(o).unwrap_or(0));
@@ -2278,6 +2296,18 @@ impl SceneFile {
         r.center = SceneFile::parse_vec2_def(o, "center", r.center);
         r.radius = num("radius", r.radius).max(1.);
         r.fade = num("fade", r.fade).clamp(0., 1.);
+        use crate::procedural::precipitation::Kind;
+        r.kind = match o["kind"].as_str() {
+            None | Some("rain") => Kind::Rain,
+            Some("snow") => Kind::Snow,
+            Some("hail") => Kind::Hail(num("hail_size", 8.).max(1.)),
+            Some(k) => panic!("precipitation's \"kind\" is rain, snow or hail, not {:?}", k),
+        };
+        r.melting_level = o["melting_level"].as_f64();
+        // Without a shear of its own, it drifts by its fall speed: rain's default shear, scaled.
+        if o.get("shear").is_none() {
+            r.shear *= Kind::Rain.fall_speed() / r.kind.fall_speed();
+        }
         // Drifting downwind as it falls: the bounds reach from where it leaves the cloud to
         // where it lands.
         let reach = r.radius + r.drift().abs();

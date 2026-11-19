@@ -135,7 +135,8 @@ pub struct Light {
 pub struct CameraRay {
     /// Origin, and the sample's weight.
     pub o: Vec4,
-    /// Direction, and 1 if there is a ray.
+    /// Direction, and the sample's number plus one if there is a ray (0 if the lens stopped it,
+    /// or the pixel takes no sample in its lane): `start_paths` starts each path from its ray.
     pub d: Vec4,
 }
 
@@ -1892,8 +1893,11 @@ impl PathState {
     /// Pixel `index`'s path in pass `pass` from its camera ray.
     pub fn start(index: u32, pass: u32, seed: u32, ray: &CameraRay) -> PathState {
         let live = ray.d.w >= 0.5;
+        // The ray's direction is unit already (normalised by the host, in f64): not normalised
+        // again, which on the GPU (`start_paths`) would round differently on each backend.
+        let d = if live { ray.d.truncate() } else { Vec3::ZERO };
         PathState {
-            o: ray.o, d: ray.d.truncate().normalize_or_zero().extend(0.0), beta: Vec4::new(1.0, 1.0, 1.0, 0.0), l: Vec4::ZERO,
+            o: ray.o, d: d.extend(0.0), beta: Vec4::new(1.0, 1.0, 1.0, 0.0), l: Vec4::ZERO,
             state: UVec4::new(path_seed(index, pass, seed), if live { PATH_ACTIVE | PATH_SPECULAR } else { PATH_ADDED }, 0, 0),
             hit: Vec4::ZERO,
         }
@@ -2221,7 +2225,7 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
 /// queries): for the tests, on the CPU. `rays` counts the rays traced.
 #[cfg(not(target_arch = "spirv"))]
 pub fn radiance(s: &Scene, ro: Vec3, rd: Vec3, rng: &mut u32, rays: &mut u32) -> Vec3 {
-    let ray = CameraRay { o: ro.extend(1.0), d: rd.extend(1.0) };
+    let ray = CameraRay { o: ro.extend(1.0), d: rd.normalize().extend(1.0) };
     let mut p = PathState::start(0, 0, 0, &ray);
     p.state.x = *rng;
     loop {
@@ -2360,6 +2364,33 @@ mod queue {
                 }
             }
         }
+    }
+}
+
+/// A pass's paths, each from its camera ray (`PathState::start`), and the live ones queued for
+/// the first round: on the GPU, so the host uploads the rays (32 bytes a path), not the paths.
+/// Dispatched over every slot, with the parameters whose side (`seed.z`) is 1, so the queue it
+/// fills is side 0, the first round's.
+#[cfg(target_arch = "spirv")]
+#[spirv(compute(threads(64)))]
+pub fn start_paths(
+    #[spirv(global_invocation_id)] gid: UVec3,
+    #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] rays: &[CameraRay],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] paths: &mut [PathState],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] queue: &mut [u32],
+) {
+    let j = gid.x + gid.y * (MAX_GROUPS * WORKGROUP);
+    if j >= slots(params) {
+        return;
+    }
+    let ray = rays[j as usize];
+    let pixel = j % (params.dims.x * params.dims.y);
+    let sample = if ray.d.w >= 0.5 { ray.d.w as u32 - 1 } else { 0 };
+    let path = PathState::start(pixel, sample, params.seed.x, &ray);
+    paths[j as usize] = path;
+    if path.state.y & PATH_ACTIVE != 0 {
+        queue::push(queue, j, params);
     }
 }
 

@@ -2,7 +2,7 @@
 # own, on rust-gpu's pinned nightly (rust-toolchain.toml), so the renderer stays on stable:
 # `scripts/build-shaders.sh` runs the builder, which writes `src/gpu/pathtrace.spv`.
 [workspace]
-members = ["pathtrace", "builder"]
+members = ["pathtrace", "builder", "shared"]
 resolver = "2"
 
 [profile.release.build-override]

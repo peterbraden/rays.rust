@@ -2572,6 +2572,70 @@ fn pixel(gid: UVec3, params: &Params) -> Option<usize> {
     if index >= params.dims.x * params.dims.y { None } else { Some(index as usize) }
 }
 
+// ---- Clouds: the renderer's own density functions (the `shared` crate, generic over the
+// float they compute in), compiled here at f32 with their tables read from `tables`. ----
+
+/// A buffer of floats as the shared functions read their tables: texels as they are, and
+/// integers (a permutation) as the floats that hold them exactly.
+pub struct FloatTables<'a>(pub &'a [f32]);
+
+impl shared::Tables<f32> for FloatTables<'_> {
+    #[inline]
+    fn value(&self, i: u32) -> f32 {
+        at(self.0, i)
+    }
+
+    #[inline]
+    fn index(&self, i: u32) -> u32 {
+        at(self.0, i) as u32
+    }
+}
+
+/// A Nubis cloud layer's record in a table: its recipe's seven numbers (`shared::clouds::Nubis`,
+/// in its fields' order), then the shape noise's permutation (512 entries), then the Worley
+/// texture.
+pub const NUBIS_HEADER: u32 = 7;
+pub const NUBIS_PERMUTATION: u32 = 512;
+
+/// The layer whose record begins at `base`.
+pub fn load_nubis(tables: &[f32], base: u32) -> shared::clouds::Nubis<f32> {
+    shared::clouds::Nubis {
+        base: at(tables, base), top: at(tables, base + 1), coverage: at(tables, base + 2), cloud_type: at(tables, base + 3),
+        shape_size: at(tables, base + 4), detail_size: at(tables, base + 5), erosion: at(tables, base + 6),
+        perm: base + NUBIS_HEADER, worley: base + NUBIS_HEADER + NUBIS_PERMUTATION,
+    }
+}
+
+/// The cloud's density, as a fraction of its densest, at `p` under weather `weather`: the
+/// renderer's `NubisCloudLayer::fraction_at`, the same functions at f32.
+pub fn nubis_fraction(tables: &[f32], base: u32, p: Vec3, weather: f32) -> f32 {
+    let layer = load_nubis(tables, base);
+    match layer.height(p.y) {
+        Some(h) => layer.fraction(&FloatTables(tables), h, weather, p.x, p.y, p.z),
+        None => 0.0,
+    }
+}
+
+/// The clouds' density at a grid of points, for checking what the shared functions compute on
+/// a device against the renderer's: point i is `points[i]` (its w the weather), and its
+/// density goes back in its w. Not part of a render; the volume kernels will call
+/// `nubis_fraction` as this does.
+#[cfg(target_arch = "spirv")]
+#[spirv(compute(threads(64)))]
+pub fn probe_clouds(
+    #[spirv(global_invocation_id)] gid: UVec3,
+    #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] tables: &[f32],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] points: &mut [Vec4],
+) {
+    // (`counts.x` points; the record at `offs.x`.)
+    if gid.x >= params.counts.x {
+        return;
+    }
+    let q = points[gid.x as usize];
+    points[gid.x as usize].w = nubis_fraction(tables, params.offs.x, q.xyz(), q.w);
+}
+
 // ---- Queues of paths: a round's dispatch covers the paths still alive, not every pixel. ----
 //
 // One buffer, `queue`, holds two queues of pixel indices, side 0 and side 1. A round reads the

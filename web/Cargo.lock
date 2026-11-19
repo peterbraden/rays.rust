@@ -940,6 +940,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "glam 0.34.3",
+ "shared",
  "spirv-std",
 ]
 
@@ -1155,6 +1156,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
+ "shared",
  "termcolor",
  "tobj",
  "ttf-parser",
@@ -1270,6 +1272,13 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "shared"
+version = "0.1.0"
+dependencies = [
+ "spirv-std",
 ]
 
 [[package]]

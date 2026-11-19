@@ -1,0 +1,13 @@
+# Code the renderer and its GPU shader both run: written once, generic over the float it
+# computes in, so the CPU calls it at f64 and rust-gpu compiles it at f32 (see src/lib.rs).
+# No dependencies on the CPU; on the GPU, spirv-std for the float functions core lacks.
+[package]
+name = "shared"
+version = "0.1.0"
+edition = "2021"
+
+[target.'cfg(target_arch = "spirv")'.dependencies]
+spirv-std = "0.11"
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(target_arch, values("spirv"))'] }

@@ -5,7 +5,7 @@
 set -e
 cd "$(dirname "$0")/.."
 sources() {
-    find shaders/pathtrace shaders/builder -type f \( -name '*.rs' -o -name Cargo.toml \) -not -path '*/target/*' | LC_ALL=C sort |
+    find shaders/pathtrace shaders/builder shaders/shared -type f \( -name '*.rs' -o -name Cargo.toml \) -not -path '*/target/*' | LC_ALL=C sort |
         xargs sha256sum
     sha256sum shaders/Cargo.toml shaders/Cargo.lock shaders/rust-toolchain.toml
 }

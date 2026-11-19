@@ -14,8 +14,6 @@ use std::f64::consts::PI;
 pub struct PerlinNoise {
     /// Permutation table for pseudo-random generation
     perm: [usize; 512],
-    /// Gradient vectors for 3D noise
-    grad3: [Vector3<f64>; 12],
 }
 
 impl PerlinNoise {
@@ -68,23 +66,7 @@ impl PerlinNoise {
         perm[..256].copy_from_slice(&base_perm);
         perm[256..512].copy_from_slice(&base_perm);
         
-        // 12 gradient vectors for 3D noise
-        let grad3 = [
-            Vector3::new(1.0, 1.0, 0.0),
-            Vector3::new(-1.0, 1.0, 0.0),
-            Vector3::new(1.0, -1.0, 0.0),
-            Vector3::new(-1.0, -1.0, 0.0),
-            Vector3::new(1.0, 0.0, 1.0),
-            Vector3::new(-1.0, 0.0, 1.0),
-            Vector3::new(1.0, 0.0, -1.0),
-            Vector3::new(-1.0, 0.0, -1.0),
-            Vector3::new(0.0, 1.0, 1.0),
-            Vector3::new(0.0, -1.0, 1.0),
-            Vector3::new(0.0, 1.0, -1.0),
-            Vector3::new(0.0, -1.0, -1.0),
-        ];
-        
-        Self { perm, grad3 }
+        Self { perm }
     }
 
     /// A generator whose permutation table is shuffled by `seed`, so different seeds give
@@ -104,103 +86,40 @@ impl PerlinNoise {
         n
     }
     
-    /// Get noise value at a 3D point
+    /// Get noise value at a 3D point: the shared function (`shared::noise::perlin`, which the
+    /// GPU's shader compiles too), from this generator's permutation.
     pub fn noise(&self, x: f64, y: f64, z: f64) -> f64 {
-        // Unit cube that contains point
-        let x_i = x.floor() as i32 & 255;
-        let y_i = y.floor() as i32 & 255;
-        let z_i = z.floor() as i32 & 255;
-        
-        // Relative coordinates of point in cube
-        let x = x - x.floor();
-        let y = y - y.floor();
-        let z = z - z.floor();
-        
-        // Compute fade curves for each coordinate
-        let u = self.fade(x);
-        let v = self.fade(y);
-        let w = self.fade(z);
-        
-        // Hash coordinates of the 8 cube corners
-        let a = self.perm[x_i as usize] + y_i as usize;
-        let aa = self.perm[a] + z_i as usize;
-        let ab = self.perm[a + 1] + z_i as usize;
-        let b = self.perm[(x_i + 1) as usize] + y_i as usize;
-        let ba = self.perm[b] + z_i as usize;
-        let bb = self.perm[b + 1] + z_i as usize;
-        
-        // Blend gradients from 8 corners of cube
-        let g1 = self.grad(self.perm[aa], x, y, z);
-        let g2 = self.grad(self.perm[ba], x - 1.0, y, z);
-        let g3 = self.grad(self.perm[ab], x, y - 1.0, z);
-        let g4 = self.grad(self.perm[bb], x - 1.0, y - 1.0, z);
-        let g5 = self.grad(self.perm[aa + 1], x, y, z - 1.0);
-        let g6 = self.grad(self.perm[ba + 1], x - 1.0, y, z - 1.0);
-        let g7 = self.grad(self.perm[ab + 1], x, y - 1.0, z - 1.0);
-        let g8 = self.grad(self.perm[bb + 1], x - 1.0, y - 1.0, z - 1.0);
-        
-        // Interpolate gradients
-        let lerp1 = self.lerp(g1, g2, u);
-        let lerp2 = self.lerp(g3, g4, u);
-        let lerp3 = self.lerp(g5, g6, u);
-        let lerp4 = self.lerp(g7, g8, u);
-        
-        let lerp5 = self.lerp(lerp1, lerp2, v);
-        let lerp6 = self.lerp(lerp3, lerp4, v);
-        
-        // Scale to [-1, 1]
-        self.lerp(lerp5, lerp6, w)
+        shared::noise::perlin(self, 0, x, y, z)
     }
-    
+
     /// Generate fractal Brownian motion (fBm) noise
-    /// 
+    ///
     /// fBm sums multiple octaves of Perlin noise at different frequencies and amplitudes
     /// to create more complex, natural-looking patterns.
-    /// 
+    ///
     /// # Arguments
     /// * `x`, `y`, `z` - Coordinates to sample noise at
     /// * `octaves` - Number of noise layers to sum
     /// * `persistence` - How much each octave's amplitude decreases (typically 0.5)
     /// * `lacunarity` - How much each octave's frequency increases (typically 2.0)
     pub fn fbm(&self, x: f64, y: f64, z: f64, octaves: u32, persistence: f64, lacunarity: f64) -> f64 {
-        let mut result = 0.0;
-        let mut amplitude = 1.0;
-        let mut frequency = 1.0;
-        let mut max_value = 0.0;
-        
-        for _ in 0..octaves {
-            result += self.noise(x * frequency, y * frequency, z * frequency) * amplitude;
-            max_value += amplitude;
-            amplitude *= persistence;
-            frequency *= lacunarity;
-        }
-        
-        // Normalize to [0, 1]
-        if max_value == 0.0 {
-            // No octaves: no variation.
-            return 0.5;
-        }
-        (result / max_value + 1.0) * 0.5
+        shared::noise::fbm(self, 0, x, y, z, octaves, persistence, lacunarity)
     }
-    
-    /// Fade function - 6t^5 - 15t^4 + 10t^3
-    fn fade(&self, t: f64) -> f64 {
-        t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+
+    /// The permutation table (the 256 twice), for whoever lays it out elsewhere (the GPU).
+    pub fn permutation(&self) -> &[usize; 512] {
+        &self.perm
     }
-    
-    /// Linear interpolation
-    fn lerp(&self, a: f64, b: f64, t: f64) -> f64 {
-        a + t * (b - a)
+}
+
+/// The permutation, as the shared noise functions read it.
+impl shared::Tables<f64> for PerlinNoise {
+    fn value(&self, _i: u32) -> f64 {
+        0.
     }
-    
-    /// Gradient function for 3D noise
-    fn grad(&self, hash: usize, x: f64, y: f64, z: f64) -> f64 {
-        // Use hash to pick one of the 12 gradient vectors
-        let h = hash % 12;
-        let grad = &self.grad3[h];
-        
-        // Dot product of gradient vector with offset vector
-        grad.x * x + grad.y * y + grad.z * z
+
+    fn index(&self, i: u32) -> u32 {
+        self.perm[i as usize] as u32
     }
 }
 
@@ -438,16 +357,22 @@ mod tests {
     
     #[test]
     fn test_perlin_grad_uses_all_gradients() {
-        let perlin = PerlinNoise::new();
+        // Perlin's twelve gradients: the edges of a cube.
+        let grad3 = [
+            Vector3::new(1.0, 1.0, 0.0), Vector3::new(-1.0, 1.0, 0.0), Vector3::new(1.0, -1.0, 0.0), Vector3::new(-1.0, -1.0, 0.0),
+            Vector3::new(1.0, 0.0, 1.0), Vector3::new(-1.0, 0.0, 1.0), Vector3::new(1.0, 0.0, -1.0), Vector3::new(-1.0, 0.0, -1.0),
+            Vector3::new(0.0, 1.0, 1.0), Vector3::new(0.0, -1.0, 1.0), Vector3::new(0.0, 1.0, -1.0), Vector3::new(0.0, -1.0, -1.0),
+        ];
         let mut seen = [false; 12];
-        for hash in 0..256 {
+        for hash in 0..256u32 {
             // Recover the index by probing with unit axes.
             let g = Vector3::new(
-                perlin.grad(hash, 1., 0., 0.),
-                perlin.grad(hash, 0., 1., 0.),
-                perlin.grad(hash, 0., 0., 1.),
+                shared::noise::grad(hash, 1., 0., 0.),
+                shared::noise::grad(hash, 0., 1., 0.),
+                shared::noise::grad(hash, 0., 0., 1.),
             );
-            let i = perlin.grad3.iter().position(|v| *v == g).unwrap();
+            let i = grad3.iter().position(|v: &Vector3<f64>| *v == g).unwrap();
+            assert_eq!(i as u32, hash % 12);
             seen[i] = true;
         }
         assert!(seen.iter().all(|s| *s), "unused gradients: {:?}", seen);

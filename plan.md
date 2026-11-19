@@ -1663,6 +1663,23 @@ UI, file IO and rayon's threads would follow.
    left from `above`, a centimetre off the surface there, where the renderer's leaves a
    millimetre up, and rays that skim the waves met the next one less often. From the
    renderer's place: 0.0078.
+   Clouds, begun (November 2026). Not by porting: the shader is Rust, and what stops it
+   compiling the renderer's own functions is their f64, their heap tables, their `dyn` and
+   std, not the language. So a function both need is written once, in a crate of its own
+   (`shaders/shared`), generic over the float (`Real`), its tables behind a trait (`Tables`),
+   its constants ratios of integers so that f64 gets the double a literal would have been.
+   The experiment, which held: Perlin's noise and the Nubis clouds' density moved there;
+   the renderer calls them at f64 and its images are the same to the byte (benard-altocumulus,
+   altostratus, desert-butte, crepuscular-rays; desert-noon differs between two runs of the
+   old binary, so can't say) and as fast (altostratus, 240 x 135, 16 spp: 3.5 s for 3.6);
+   rust-gpu compiles them at f32 and naga takes the WGSL; over 4,096 points through a
+   layer the f32 density is within 8.5e-7 of the renderer's, and the kernel that calls it on
+   the device (`probe_clouds`, lavapipe, SPIR-V and WGSL) within 1.8e-7 of that.
+   Next: the weather map and the layer's bounds the same way; then the tracking through a
+   medium as a kernel (delta tracking and ratio-tracked shadows over `nubis_fraction`),
+   which is new work wherever the density comes from; then the other cloud kinds, moved
+   one by one. The ocean's shape and water, ported earlier, should move here too, so
+   that their second copies go.
 3. The fallback framework: per-area status, classification, CPU queues for materials first,
    then intersection. Exit: every flattenable demo scene plus at least one with a
    procedural shape and one with an unported material renders through the GPU path with CPU

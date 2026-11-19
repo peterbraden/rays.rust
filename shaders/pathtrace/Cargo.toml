@@ -8,6 +8,8 @@ crate-type = ["dylib", "lib"]
 
 [dependencies]
 spirv-std = "0.11"
+# What the renderer computes too, written once (generic over the float).
+shared = { path = "../shared" }
 
 # On the CPU (the renderer uses this crate's buffer layouts and runs its code in tests), the
 # structs are plain data for bytemuck, and glam's types are too.

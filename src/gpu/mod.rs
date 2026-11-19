@@ -1881,6 +1881,106 @@ mod tests {
         assert!(gpu.take_stats().is_empty());
     }
 
+    /// The clouds' density is one definition (`shared::clouds`), which the renderer computes at
+    /// f64 and the shader at f32. At points through a layer, under every strength of weather:
+    /// the shader's functions run on the CPU agree with the renderer's to f32's precision, and
+    /// the kernel that calls them on the device (`probe_clouds`) agrees with those.
+    #[test]
+    fn test_clouds_are_the_renderers_on_the_device() {
+        use crate::procedural::nubis_clouds::NubisCloudLayer;
+        use pathtrace::glam::Vec3;
+        let layer = NubisCloudLayer::new(1500., 4000., crate::na::Vector2::new(0., 0.), 20000., 7);
+        let record = layer.export();
+        let mut rng = crate::geometry::Pcg32::new(3, 0);
+        let mut next = move || rng.next_f64();
+        let n = 4096;
+        let points: Vec<Vec4> = (0..n).map(|_| Vec4::new(
+            (next() * 16000. - 8000.) as f32, (1400. + next() * 2700.) as f32, (next() * 16000. - 8000.) as f32, next() as f32)).collect();
+        // The renderer's, at f64, from the same f32 points; and the shader's functions here.
+        let weather = std::cell::Cell::new(0.);
+        let exact: Vec<f64> = points.iter().map(|q| {
+            weather.set(q.w as f64);
+            layer.fraction_for_test(q.y as f64, weather.get(), &Vector3::new(q.x as f64, q.y as f64, q.z as f64))
+        }).collect();
+        let (mut cloudy, mut worst) = (0, 0f64);
+        for (q, e) in points.iter().zip(&exact) {
+            let f = pathtrace::nubis_fraction(&record, 0, Vec3::new(q.x, q.y, q.z), q.w) as f64;
+            worst = worst.max((f - e).abs());
+            cloudy += (*e > 0.) as usize;
+        }
+        println!("{} of {} points in cloud; f32 within {:.1e} of the renderer's f64", cloudy, n, worst);
+        assert!(cloudy > n / 20, "{} of {} points in cloud", cloudy, n);
+        assert!(worst < 2e-3, "the shader's density differs from the renderer's by {}", worst);
+
+        // On the device.
+        let Some(on_device) = probe(&record, &points) else { return };
+        let worst = points.iter().zip(&on_device)
+            .map(|(q, d)| (pathtrace::nubis_fraction(&record, 0, Vec3::new(q.x, q.y, q.z), q.w) - d).abs()).fold(0f32, f32::max);
+        println!("on the device: within {:.1e} of the shader's functions on the CPU", worst);
+        assert!(worst < 1e-4, "the device's density differs from the shader's on the CPU by {}", worst);
+    }
+
+    /// `probe_clouds` run on the device over `points`, for the cloud whose record is `record`;
+    /// None without a device.
+    fn probe(record: &[f32], points: &[Vec4]) -> Option<Vec<f32>> {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = match instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await {
+                Ok(a) => a,
+                Err(e) => {
+                    eprintln!("skipped: {}", e);
+                    return None;
+                },
+            };
+            let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor::default()).await.ok()?;
+            let source = if adapter.get_info().backend != wgpu::Backend::Vulkan || std::env::var_os("RAYS_GPU_WGSL").is_some() {
+                wgpu::ShaderSource::Wgsl(include_str!("pathtrace.wgsl").into())
+            } else {
+                wgpu::util::make_spirv(include_bytes!("pathtrace.spv"))
+            };
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pathtrace"), source });
+            let mut params = Params::zeroed();
+            params.counts.x = points.len() as u32;
+            let buffer = |contents: &[u8], usage| device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents, usage });
+            let uniform = buffer(bytemuck::bytes_of(&params), wgpu::BufferUsages::UNIFORM);
+            let tables = buffer(bytemuck::cast_slice(record), wgpu::BufferUsages::STORAGE);
+            let out = buffer(bytemuck::cast_slice(points), wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC);
+            let read = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: out.size(), usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            let entry = |binding: u32, ty| wgpu::BindGroupLayoutEntry {
+                binding, visibility: wgpu::ShaderStages::COMPUTE, count: None,
+                ty: wgpu::BindingType::Buffer { ty, has_dynamic_offset: false, min_binding_size: None },
+            };
+            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[
+                entry(0, wgpu::BufferBindingType::Uniform),
+                entry(1, wgpu::BufferBindingType::Storage { read_only: true }),
+                entry(2, wgpu::BufferBindingType::Storage { read_only: false }),
+            ] });
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
+            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: None, layout: Some(&pipeline_layout), module: &module, entry_point: Some("probe_clouds"),
+                compilation_options: Default::default(), cache: None,
+            });
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &layout, entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: tables.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: out.as_entire_binding() },
+            ] });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &group, &[]);
+                pass.dispatch_workgroups((points.len() as u32).div_ceil(pathtrace::WORKGROUP), 1, 1);
+            }
+            encoder.copy_buffer_to_buffer(&out, 0, &read, 0, None);
+            queue.submit(Some(encoder.finish()));
+            read.map_async(wgpu::MapMode::Read, .., |r| r.expect("mapping the probe's points"));
+            device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+            let values: Vec<[f32; 4]> = bytemuck::pod_collect_to_vec(&read.get_mapped_range(..).unwrap());
+            Some(values.iter().map(|v| v[3]).collect())
+        })
+    }
+
     /// The kernel's sea against the renderer's, ray by ray: where a ray meets it (the wave
     /// march and the planet's sphere, in f32) and the normal there (the tiles' slopes).
     #[test]

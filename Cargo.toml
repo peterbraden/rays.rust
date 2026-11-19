@@ -5,6 +5,8 @@ version = "0.0.1"
 edition = "2024"
 
 [dependencies]
+# What the renderer and its GPU shader both compute, written once (shaders/shared).
+shared = { path = "shaders/shared" }
 # Only the formats used: PNG and EXR output, and common formats for heightmap images. The
 # default set includes an AVIF encoder, which is large and does not run in a plain WebAssembly
 # module.

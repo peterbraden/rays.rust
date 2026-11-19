@@ -769,6 +769,17 @@ exposure fit and mean FLIP; two independent references differ by 1.3% and FLIP 0
   0.020 (no worse than without the sea), efficiency 3.4 to 8.4; brightness within 0.5% of a
   256-sample render without it. No change on `weather-trade-cumulus`, where the glitter is
   not in view of the clouds that matter.
+- Render time (4 cores, 96 x 48, 4 samples). Trade cumulus took 58 s, almost all of it in the
+  low cloud's heaps, and as long with one bounce as with 64. Callgrind: a third of it grew
+  whole cauliflower trees (some 20000 spheres) for lookups that visit a few dozen, as a low
+  sun's shadow rays touch thousands of clouds a few times each; a cache of whole trees, shared
+  or per thread, couldn't keep up (38000 grown in one small render), and searching each cloud
+  as generated was slower still. Trees now grow lazily (`cauliflower::Grown`: turrets made when
+  first reached, kept behind a `OnceLock`, shared through `TreeCache`): 58 s to 16.6 s,
+  pixel-identical, 777 to 541 MiB. Sun depths from the table in the sky's own integral saved
+  only setup time, so it stays exact. In `weather-tropical-storms` the families together cost
+  more than apart (more scattering in a cloudier sky), and the sun and glitter probes are 45%
+  of the time (48 s to 27 s without).
 - What remains is the grain of deep multiple scattering. Unbiased remedies are larger: learned
   volume path guiding (Herholz et al. 2019), or a denoiser.
 

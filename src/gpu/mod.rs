@@ -738,21 +738,24 @@ impl GpuRenderer {
     /// The camera ray of each pixel's sample `samples[pixel]`; a dead ray (as one the lens
     /// stops) for a pixel that takes none.
     pub fn camera_rays_for(s: &Scene, samples: &[Option<u32>]) -> Vec<GpuRay> {
-        let (w, h) = (s.image.width, s.image.height);
-        let pixels = (w * h) as u64;
-        (0..w * h).into_par_iter().map(|index| {
-            let Some(k) = samples[index] else { return GpuRay::zeroed() };
-            let k = k as usize;
-            let (x, y) = (index % w, index / w);
-            let stream = k as u64 * pixels + index as u64;
-            crate::geometry::seed_rand(s.render.seed ^ 0x5bd1_e995, stream);
-            let mut sampler = crate::sobol::SampleState::new(crate::sobol::hash(s.render.seed, index as u64), k as u32);
-            let ((fx, wx), (fy, wy)) = (s.render.filter.sample_weighted(sampler.next()), s.render.filter.sample_weighted(sampler.next()));
-            match s.camera.get_ray_weighted(x as f64 / w as f64, y as f64 / h as f64, (0.5 + fx) / w as f64, (0.5 + fy) / h as f64) {
-                Some((ray, weight)) => GpuRay { o: v4(&ray.ro, (weight * wx * wy) as f32), d: v4(&ray.rd.normalize(), 1.) },
-                None => GpuRay::zeroed(),
-            }
+        (0..s.image.width * s.image.height).into_par_iter().map(|index| match samples[index] {
+            Some(k) => Self::camera_ray(s, index, k as usize),
+            None => GpuRay::zeroed(),
         }).collect()
+    }
+
+    /// Pixel `index`'s camera ray for its sample `k` (zero if the lens stops it).
+    fn camera_ray(s: &Scene, index: usize, k: usize) -> GpuRay {
+        let (w, h) = (s.image.width, s.image.height);
+        let (x, y) = (index % w, index / w);
+        let stream = k as u64 * (w * h) as u64 + index as u64;
+        crate::geometry::seed_rand(s.render.seed ^ 0x5bd1_e995, stream);
+        let mut sampler = crate::sobol::SampleState::new(crate::sobol::hash(s.render.seed, index as u64), k as u32);
+        let ((fx, wx), (fy, wy)) = (s.render.filter.sample_weighted(sampler.next()), s.render.filter.sample_weighted(sampler.next()));
+        match s.camera.get_ray_weighted(x as f64 / w as f64, y as f64 / h as f64, (0.5 + fx) / w as f64, (0.5 + fy) / h as f64) {
+            Some((ray, weight)) => GpuRay { o: v4(&ray.ro, (weight * wx * wy) as f32), d: v4(&ray.rd.normalize(), 1.) },
+            None => GpuRay::zeroed(),
+        }
     }
 
     /// Zero the image accumulated on the GPU.
@@ -912,16 +915,21 @@ impl GpuRenderer {
         let seed = self.params.seed.x;
         // (A pixel that takes no sample in a lane has a dead ray there, so a path that adds
         // nothing.)
-        let mut paths: Vec<PathState> = Vec::with_capacity(image * lanes);
-        for lane in 0..lanes {
-            let samples: Vec<Option<u32>> = (0..image).map(|i| (lane < count[i]).then(|| (first[i] + lane) as u32)).collect();
-            let rays = Self::camera_rays_for(s, &samples);
-            paths.extend(rays.iter().enumerate().map(|(i, ray)| PathState::start(i as u32, samples[i].unwrap_or(0), seed, ray)));
-        }
+        // Every lane's paths at once, in parallel (lane by lane, a pixel at a time on one
+        // thread, this was half a light scene's time).
+        let paths: Vec<PathState> = (0..image * lanes).into_par_iter().map(|j| {
+            let (lane, i) = (j / image, j % image);
+            let k = (first[i] + lane) as u32;
+            if lane < count[i] {
+                PathState::start(i as u32, k, seed, &Self::camera_ray(s, i, k as usize))
+            } else {
+                PathState::start(i as u32, 0, seed, &GpuRay::zeroed())
+            }
+        }).collect();
         self.queue.write_buffer(&self.paths_buffer, 0, bytemuck::cast_slice(&paths));
         // The first round's queue (side 0): every pixel whose camera ray got through the lens.
         // Side 1 and the host's queue start empty.
-        let alive: Vec<u32> = paths.iter().enumerate().filter(|(_, p)| p.state.y & pathtrace::PATH_ACTIVE != 0).map(|(i, _)| i as u32).collect();
+        let alive: Vec<u32> = (0..paths.len()).into_par_iter().filter(|&i| paths[i].state.y & pathtrace::PATH_ACTIVE != 0).map(|i| i as u32).collect();
         let first = pathtrace::queue_header(alive.len() as u32);
         let mut head = first.to_vec();
         head.extend_from_slice(&pathtrace::EMPTY_QUEUE);

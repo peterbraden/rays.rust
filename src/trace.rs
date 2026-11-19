@@ -89,7 +89,7 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, prior: LightSampling) -> (u64, Col
 fn light_weight(prior: LightSampling, light_pdf: impl FnOnce() -> f64) -> f64 {
     match prior {
         LightSampling::None => 1.,
-        LightSampling::Exclusive => 0.,
+        LightSampling::Exclusive | LightSampling::Directional => 0.,
         LightSampling::MIS { bsdf_pdf } => power_heuristic(bsdf_pdf, light_pdf()),
     }
 }
@@ -122,7 +122,11 @@ fn shading<'a>(r: &Ray, medium: &(dyn Medium + Sync + Send), intersection: &Inte
 fn trace_sample(r: &Ray, intersection: &Intersection, depth: u64, s: &Scene, prior: LightSampling) -> (u64, Color){
     let mut cast = 1;
     let weight = if s.is_sampled_light(intersection.object) {
-        light_weight(prior, || area_light_pdf(&r.ro, &intersection.point, &intersection.normal, intersection.object, s))
+        match prior {
+            // Only the distant lights were sampled where the ray came from.
+            LightSampling::Directional => 1.,
+            _ => light_weight(prior, || area_light_pdf(&r.ro, &intersection.point, &intersection.normal, intersection.object, s)),
+        }
     } else if let Some(moon) = s.moonlight.as_ref().filter(|m| m.is_on(&intersection.point)) {
         // Moonlight is sampled as a disc, like the sun: a ray that reaches the moon counts it
         // as one that reaches the sun's disc does.

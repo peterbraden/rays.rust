@@ -971,7 +971,9 @@ impl MaterialModel for PhysicalOcean {
         } else {
             (Color::black(), None)
         };
-        ScatteredRay { emit, light_sampling: LightSampling::Exclusive, attenuate, ray }
+        // The glitter of the sun and moon was sampled above; area lights (lightning) only the
+        // water body sampled, so their reflections in the ripples count when this ray hits them.
+        ScatteredRay { emit, light_sampling: LightSampling::Directional, attenuate, ray }
     }
 }
 
@@ -1032,6 +1034,26 @@ mod curved_tests {
             detail_center: Vector2::zeros(),
             detail_distance: 300.,
         }
+    }
+
+    /// Area lights, such as lightning, are seen reflected in the sea: its glitter samples only
+    /// the sun and moon, so the reflected ray must count the lights it hits.
+    #[test]
+    fn test_sea_reflects_area_lights() {
+        let s = crate::scenefile::SceneFile::from_string(r#"{
+            "width": 10, "height": 10, "max_depth": 4,
+            "camera": { "location": [0, 5, 0], "lookat": [0, -50, 100], "up": [0, 1, 0], "angle": 0.5 },
+            "materials": { "LIGHT": { "type": "diffuse-light", "intensity": 1, "two_sided": true } },
+            "objects": [
+                { "type": "ocean", "planet_radius": 0, "wind": [1, 0], "whitecaps": 0, "water": [0, 0, 0] },
+                { "type": "sphere", "location": [0, 50, 100], "radius": 15, "material": "LIGHT" }
+            ]
+        }"#.to_string());
+        // Towards the light's mirror image, 61° from the vertical: water reflects some 6%.
+        let to_image = Vector3::new(0., -55., 100.).normalize();
+        let n = 400;
+        let mean = (0..n).map(|_| crate::trace::trace(&Ray { ro: Vector3::new(0., 5., 0.), rd: to_image }, 0, &s).1.rgb.y).sum::<f64>() / n as f64;
+        assert!(mean > 0.02 && mean < 0.2, "{}", mean);
     }
 
     #[test]

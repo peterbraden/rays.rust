@@ -166,8 +166,10 @@ back up to 1.8 m under the ones above, and the caprock's lip jutting 1.4 m out.*
 ![Before and after: a mountainside as the clipmap draws it, then displaced](landscape-displacement-comparison.png)
 
 *`demo/scenes/alpine-closeup.json`, 960 x 540 at 32 samples. Top, the landscape's mesh alone;
-bottom, the ground within a kilometre displaced by a graph that reads the simulation: rock
-ribs where it is steep and the simulation left the rock bare, stones where it left scree.*
+bottom, the ground within 4 km displaced by a graph that reads the simulation: rock ribs where
+it is steep and the simulation left the rock bare, stones where it left scree. Both have the
+scene's boulders (a `scatter` on the scree) and fog in the valley (a volume whose density is a
+graph of altitude). 7 min 56 s against 4 min 17 s (4 cores).*
 
 A full-scale `landscape` takes the same `"displacement"` (and `displacement_detail`,
 `vertical_displacement`, `displacement_falloff`). The ground within `displacement_reach`

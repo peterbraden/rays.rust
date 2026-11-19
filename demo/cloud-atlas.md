@@ -433,6 +433,11 @@ shaft, lighting the curtain it falls through. Inside the upper tower an intraclo
 spreads through 25 km of channel, and the whole storm glows with its light, against a black
 sky.
 
+The sea shows the lightning the way water does: it reflects only a few percent of the light
+falling on it diffusely (its body is dark), so it isn't lit up like ground; instead it mirrors
+whatever is bright. The bolt lays a path of glitter across the waves towards the camera, and
+the lit rain a fainter sheen.
+
 The channel is grown as a *stepped leader* (`procedural::lightning`), in the storm's electric
 field. The cloud is a tripole of charge regions: the negative one where the flash starts, a
 positive one 4 km above it and a small positive pocket below; the leader carries negative

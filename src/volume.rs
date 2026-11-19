@@ -592,7 +592,7 @@ pub struct ScatteringApproximation {
     /// the sun, which the first has counted; they still gather the sky, and light off the
     /// ground. Columns are measured with `diffusion` jittered steps; the medium's box sets
     /// how far. Point and area lights (lightning in a thunderstorm) are diffused the same way,
-    /// along the line to each light sample rather than a column (`diffused_fraction`).
+    /// along the line to each light sample rather than a column (`diffused_gain`).
     pub diffusion: Option<u32>,
 }
 
@@ -841,12 +841,12 @@ impl VolumeMaterial {
         // light diffused through it is counted (and only there).
         let diffusing = self.approximation.diffusion.map(|_| !DIFFUSED.with(|d| d.replace(true)));
         // Through the scene to a light, along a unit ray, as the phase function scatters it;
-        // with diffusion, plus what the medium in between diffuses (`diffused_fraction`),
+        // with diffusion, plus what the medium in between diffuses (`diffused_gain`),
         // scattered evenly.
         let through = |r: &Ray, d: f64| -> Color {
             let transmitted = s.objects.transmittance(r, d, f64::MIN_POSITIVE) * p(&r.rd);
             match diffusing {
-                Some(true) => transmitted + Color::white() * (self.diffused_fraction(&r.ro, &r.rd, d) / (4. * std::f64::consts::PI)),
+                Some(true) => transmitted + Color::white() * (self.diffused_gain(&r.ro, &r.rd, d, incoming) / (4. * std::f64::consts::PI)),
                 _ => transmitted,
             }
         };
@@ -889,34 +889,57 @@ impl VolumeMaterial {
         direct
     }
 
-    /// With diffusion, the fraction of a light's light that reaches `point` diffused through
-    /// this medium from a unit direction `d` and distance `length` (the part not transmitted
-    /// unscattered, which the shadow ray counts). A light inside a cloud, which absorbs next
-    /// to nothing, sends nearly all its light out through it, scattered many times, so a
-    /// cloud lit from within glows. In the diffusion approximation a source at reduced optical
-    /// depths τ'f from one side of a slab and τ'b from the other sends a fraction
-    /// (τ'b + ⅔) / (τ'f + τ'b + 4⁄3) out of the first (the diffuse flux falls linearly across
-    /// it; Kokhanovsky, "Cloud Optics", ch. 3): so measure τ'f towards the light and τ'b
-    /// beyond it, along the same line, through this medium's density.
-    fn diffused_fraction(&self, point: &Vector3<f64>, d: &Vector3<f64>, length: f64) -> f64 {
+    /// With diffusion, the light that reaches `point` diffused through this medium from a light
+    /// a distance `length` away along the unit direction `d`, as a multiple of what would reach
+    /// it through empty space (the part not transmitted unscattered, which the shadow ray
+    /// counts, left out). `incoming` is the direction the path entered the medium by, so the
+    /// point lies just inside a surface facing back along it.
+    ///
+    /// A cloud absorbs next to nothing, so light from a source inside it is trapped, scattered
+    /// to and fro until it leaks out, and near the surface over the source it is brighter than
+    /// the source alone would make it there. The diffusion solution for a point source at depth
+    /// z under the surface of a half-space is a dipole (Farrell, Patterson and Wilson, Med.
+    /// Phys. 19, 1992; as Jensen et al.'s BSSRDF, SIGGRAPH 2001): the fluence at the surface is
+    /// P / (4π D) (e^(-σ_tr r₁) / r₁ - e^(-σ_tr r₂) / r₂), r₁ the distance to the source and r₂
+    /// to its negative image mirrored above the extrapolated boundary 2D over the surface, with
+    /// D = 1 / 3σ'_t and σ_tr = √(3 σ_a σ'_t) from the reduced extinction σ'_t = σ_t (1 - α g)
+    /// and absorption σ_a = σ_t (1 - α). Against the free-space P / (4π d²), straight over a
+    /// deep source and without absorption, that is four times as bright. The coefficients
+    /// are the mean along the line to the light. A cloud isn't a half-space: light leaves by
+    /// its far side too, so the dipole is scaled by the share diffusion through a slab sends
+    /// out of the near side, (τ'b + ⅔) / (τ'f + τ'b + 4⁄3) for reduced depths τ'f in front of
+    /// the source and τ'b behind it (Kokhanovsky, "Cloud Optics", ch. 3), which is one for a
+    /// deep cloud behind it.
+    fn diffused_gain(&self, point: &Vector3<f64>, d: &Vector3<f64>, length: f64, incoming: &Vector3<f64>) -> f64 {
         let steps = self.approximation.diffusion.unwrap_or(32).max(1);
-        let reduce = 1. - self.mean_albedo() * self.phase.mean_cosine();
+        let albedo = self.mean_albedo();
+        let reduce = 1. - albedo * self.phase.mean_cosine();
         let jitter = crate::geometry::rand();
         let depth = |from: Vector3<f64>, len: f64| -> f64 {
             let step = len / steps as f64;
             (0..steps).map(|k| self.field.density(&(from + d * ((k as f64 + jitter) * step)))).sum::<f64>() * step * reduce
         };
         let front = depth(*point, length);
-        if front <= 0. {
+        if front <= 0. || length <= 0. {
             return 0.;
         }
         // Behind the light, as far again or to the medium's height range, whichever is less.
         let (lo, hi) = self.column;
         let to_edge = if d.y > 0. { (hi - (point.y + d.y * length)) / d.y } else if d.y < 0. { (lo - (point.y + d.y * length)) / d.y } else { f64::INFINITY };
         let back = depth(point + d * length, length.min(to_edge.max(0.)).max(1.));
-        let escaping = (back + 2. / 3.) / (front + back + 4. / 3.);
+        let escaping = (back + 2. / 3.) / (front + back + 4. / 3.) * 2.;
+        // The mean coefficients along the line.
+        let sigma_r = front / length;
+        let diffusion = 1. / (3. * sigma_r);
+        let sigma_a = sigma_r / reduce.max(1e-9) * (1. - albedo);
+        let sigma_tr = (3. * sigma_a * sigma_r).sqrt();
+        // The source's depth under the surface the path came in by, and its image above it.
+        let z = (length * d.dot(incoming)).max(0.);
+        let rho2 = (length * length - z * z).max(0.);
+        let (r1, r2) = (length, (rho2 + (z + 4. * diffusion).powi(2)).sqrt());
+        let dipole = length * length / diffusion * ((-sigma_tr * r1).exp() / r1 - (-sigma_tr * r2).exp() / r2);
         // The part the shadow ray already carried, unscattered, is left out.
-        escaping * (1. - (-front / reduce.max(1e-9)).exp())
+        dipole.max(0.) * escaping.min(1.) * (1. - (-front / reduce.max(1e-9)).exp())
     }
 
     /// The phase function for direct sunlight at a vertex seen along `incoming`: with halos,
@@ -1263,29 +1286,35 @@ mod tests {
     }
 
     #[test]
-    fn test_light_inside_a_cloud_diffuses_out_through_it() {
-        // A slab 0 to 1000 m of extinction 0.05 (reduced, with g = 0.85: 0.0075 per metre). A
-        // light in its middle, seen from just inside its base: what it loses on the way, it
-        // sends out diffused, half through each face; seen from beyond a thinner layer above
-        // it, more comes out of that side.
-        let m = VolumeMaterial {
-            albedo: Color::white(),
+    fn test_light_inside_a_cloud_glows_through_its_surface() {
+        // A deep cloud above y = 0 of extinction 0.05, g = 0.85: reduced extinction 0.0075 per
+        // metre, D = 44 m. A path entering it from below, straight up.
+        let cloud = |albedo: f64| VolumeMaterial {
+            albedo: Color::white() * albedo,
             phase: PhaseFunction::HenyeyGreenstein { g: 0.85 },
             approximation: ScatteringApproximation { diffusion: Some(400), ..ScatteringApproximation::default() },
             diffraction: None, halos: None, rainbow: None,
-            field: Arc::new(ConstantDensity(0.05)), emission: None, extinction: None, column: (0., 1000.),
+            field: Arc::new(ConstantDensity(0.05)), emission: None, extinction: None, column: (0., 1e6),
         };
-        let up = Vector3::new(0., 1., 0.);
-        let middle = m.diffused_fraction(&Vector3::new(0., 1e-6, 0.), &up, 500.);
-        assert!((middle - 0.5 * (1. - (-25f64).exp())).abs() < 0.01, "{}", middle);
-        // A light 900 m up: nearer the top, so less comes out of the base.
-        let high = m.diffused_fraction(&Vector3::new(0., 1e-6, 0.), &up, 900.);
-        let tf = 0.0075 * 900.;
-        let tb = 0.0075 * 100.;
-        assert!((high - (tb + 2. / 3.) / (tf + tb + 4. / 3.)).abs() < 0.01, "{}", high);
+        let m = cloud(1.);
+        let (at, up) = (Vector3::new(0., 1e-6, 0.), Vector3::new(0., 1., 0.));
+        // Straight over a source 500 m deep: the dipole, D²/D (1/r₁ - 1/r₂) with r₂ = 500 + 4D.
+        let dd = 1. / (3. * 0.0075);
+        let expected = 500f64.powi(2) / dd * (1. / 500. - 1. / (500. + 4. * dd));
+        let over = m.diffused_gain(&at, &up, 500., &up);
+        assert!((over - expected).abs() < 0.02 * expected, "{} vs {}", over, expected);
+        // Several times brighter than the source would be in empty space.
+        assert!(over > 2.5, "{}", over);
+        // 400 m to the side of a source 300 m deep, the light (gain over distance squared) is a
+        // third of that straight over it: the glow gathers over the channel.
+        let slant = Vector3::new(0.8, 0.6, 0.);
+        let (side, straight) = (m.diffused_gain(&at, &slant, 500., &up) / 500f64.powi(2), m.diffused_gain(&at, &up, 300., &up) / 300f64.powi(2));
+        assert!(side < 0.4 * straight && side > 0.2 * straight, "{} {}", side, straight);
+        // Absorption dims it: with an albedo of 0.99 the light dies out within some 400 m.
+        assert!(cloud(0.99).diffused_gain(&at, &up, 500., &up) < 0.5 * over);
         // No medium in between: nothing diffused (the shadow ray carries it all).
-        let clear = VolumeMaterial { field: Arc::new(ConstantDensity(0.)), ..m };
-        assert_eq!(clear.diffused_fraction(&Vector3::zeros(), &up, 500.), 0.);
+        let clear = VolumeMaterial { field: Arc::new(ConstantDensity(0.)), ..cloud(1.) };
+        assert_eq!(clear.diffused_gain(&at, &up, 500., &up), 0.);
     }
 
     #[test]

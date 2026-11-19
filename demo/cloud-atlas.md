@@ -310,7 +310,10 @@ at their edges.
 `cumulonimbus.json`: `{"type": "cumulonimbus", "base": 1300, "tropopause": 11500, "cape": 2500, "radius": 3800, "wind_direction": [1, 0.15], "upper_wind": 25, "age": 900, "flanking": 4, "oz": true}`
 
 The thunderstorm cloud: a cumulus grown through the whole troposphere, with a rain shaft under
-it. Its shape follows the physics of its updraft (`procedural::cumulonimbus`):
+it. Its shape follows the physics of its updraft (`procedural::cumulonimbus`). This is one
+storm, placed and shaped by hand; storms as part of a whole planet's weather, along fronts and
+in the ITCZ, growing and raining out, come from `"weather"`'s convective layer
+(docs/weather.md):
 
 - **The tower.** Air rising from the base is buoyant as long as it is warmer than its
   surroundings, up to the equilibrium level, near the tropopause. Parcel theory gives the

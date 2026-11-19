@@ -41,7 +41,12 @@ usual, so there is a picture meanwhile; when the GPU is ready they stop (the wor
 scene, to answer clicks and draw drafts while the camera moves) and its pictures replace
 theirs. Otherwise the status line says why not (no WebGPU; what couldn't be flattened) and
 the CPU carries on, as it does when "CPU" is chosen. The GPU's copy is remade for every edit
-and camera move, and render servers are not used while it is rendering.
+and kept for a camera move (`Renderer::set_camera`), and render servers are not used while
+it is rendering.
+
+The page has two tabs: Scene (the outline, the selected thing's properties and the scene
+file, with the picture small beside them) and Render (the picture alone, with its size, the
+renderer, servers and saving the image). `?page=render` opens on the second.
 
 ## Render servers
 

@@ -179,65 +179,58 @@ impl Cauliflower {
     }
 }
 
-/// A tree grown once and kept (`Cauliflower::grow`): every sphere not buried, with its level and
-/// children, so a cloud looked up millions of times needn't regenerate its turrets (their
-/// hashes, directions and burial tests) at each lookup.
+/// A tree grown as it is looked at (`Cauliflower::grow`) and kept, so a cloud looked up
+/// millions of times needn't regenerate its turrets (their hashes, directions and burial tests)
+/// at each lookup.
+///
+/// Lazily: a sphere's turrets are generated the first time a lookup reaches them, and kept
+/// (behind a `OnceLock`, so threads share them). A lookup visits only the few dozen spheres
+/// whose reach covers its point, while a whole cumulus has some 20000; growing every tree in
+/// full was a third of a cumulus scene's render, as the shadow rays of a low sun touch
+/// thousands of clouds, most only a few times.
 pub struct Grown {
-    nodes: Vec<Node>,
-    roots: usize,
+    roots: Vec<Node>,
+    /// The root spheres, for the burial test (`Cauliflower::buried`).
+    spheres: Vec<Sphere>,
+    frame: Frame,
+    /// The levels a sphere centred at a point keeps (`Cauliflower::grow_capped`).
+    cap: Box<dyn Fn(&Vector3<f64>) -> usize + Send + Sync>,
 }
 
 struct Node {
-    centre: Vector3<f64>,
-    radius: f64,
+    sphere: Sphere,
     level: u8,
-    first: u32,
-    count: u8,
+    /// The root this grew from.
+    from: u16,
+    children: std::sync::OnceLock<Box<[Node]>>,
 }
 
 impl Cauliflower {
-    /// The whole tree grown from `roots` along `up`, as `depth` would visit it.
+    /// The tree grown from `roots` along `up` (lazily: `Grown`).
     pub fn grow(&self, roots: &[Sphere], up: &Vector3<f64>) -> Grown {
-        self.grow_capped(roots, up, |_| self.levels)
+        let levels = self.levels;
+        self.grow_capped(roots, up, move |_| levels)
     }
 
     /// As `grow`, but a sphere centred at `c` carries turrets only down to level `cap(c)`: a
     /// glaciated top's smooth domes (`Cumulus::glaciation`). Fewer levels only shrink the
     /// union, so the levels' reach still bounds it.
-    pub fn grow_capped(&self, roots: &[Sphere], up: &Vector3<f64>, cap: impl Fn(&Vector3<f64>) -> usize) -> Grown {
-        let frame = Frame::new(up);
-        let mut nodes: Vec<Node> = roots.iter().map(|r| Node { centre: r.centre, radius: r.radius, level: 0, first: 0, count: 0 }).collect();
-        let mut spheres: Vec<(Sphere, usize)> = roots.iter().enumerate().map(|(i, r)| (*r, i)).collect();
-        // Breadth first, so each node's children are contiguous.
-        let mut i = 0;
-        while i < nodes.len() {
-            let level = nodes[i].level as usize;
-            if level < self.levels && level < cap(&nodes[i].centre) {
-                let (s, from) = spheres[i];
-                let first = nodes.len();
-                for k in 0..self.child_count(level) {
-                    let c = self.child(&s, k, self.child_count(level), &frame);
-                    if Cauliflower::buried(&c, roots, from) {
-                        continue;
-                    }
-                    nodes.push(Node { centre: c.centre, radius: c.radius, level: level as u8 + 1, first: 0, count: 0 });
-                    spheres.push((c, from));
-                }
-                nodes[i].first = first as u32;
-                nodes[i].count = (nodes.len() - first) as u8;
-            }
-            i += 1;
+    pub fn grow_capped(&self, roots: &[Sphere], up: &Vector3<f64>, cap: impl Fn(&Vector3<f64>) -> usize + Send + Sync + 'static) -> Grown {
+        Grown {
+            roots: roots.iter().enumerate().map(|(i, r)| Node { sphere: *r, level: 0, from: i as u16, children: std::sync::OnceLock::new() }).collect(),
+            spheres: roots.to_vec(),
+            frame: Frame::new(up),
+            cap: Box::new(cap),
         }
-        Grown { nodes, roots: roots.len() }
     }
 }
 
 impl Grown {
-    /// As `Cauliflower::depth`, from the kept tree (`tree` for the levels' reach).
+    /// As `Cauliflower::depth`, from the kept tree (`tree` must be the one that grew it).
     pub fn depth(&self, tree: &Cauliflower, p: &Vector3<f64>, enough: f64) -> f64 {
         let mut best = f64::NEG_INFINITY;
-        for i in 0..self.roots {
-            self.visit(tree, i, p, enough, &mut best);
+        for n in self.roots.iter() {
+            self.visit(tree, n, p, enough, &mut best);
             if best >= enough {
                 return enough;
             }
@@ -245,17 +238,17 @@ impl Grown {
         best
     }
 
-    fn visit(&self, tree: &Cauliflower, i: usize, p: &Vector3<f64>, enough: f64, best: &mut f64) {
-        let n = &self.nodes[i];
-        let dist = (p - n.centre).norm();
-        if n.radius * tree.reach[n.level as usize] - dist <= *best {
+    fn visit(&self, tree: &Cauliflower, n: &Node, p: &Vector3<f64>, enough: f64, best: &mut f64) {
+        let s = &n.sphere;
+        let dist = (p - s.centre).norm();
+        if s.radius * tree.reach[n.level as usize] - dist <= *best {
             return;
         }
-        *best = best.max(n.radius - dist);
-        if *best >= enough {
+        *best = best.max(s.radius - dist);
+        if *best >= enough || n.level as usize >= tree.levels {
             return;
         }
-        for c in n.first as usize..n.first as usize + n.count as usize {
+        for c in self.children(tree, n).iter() {
             self.visit(tree, c, p, enough, best);
             if *best >= enough {
                 return;
@@ -263,8 +256,116 @@ impl Grown {
         }
     }
 
+    /// `n`'s turrets, generated the first time they are needed.
+    fn children<'a>(&self, tree: &Cauliflower, n: &'a Node) -> &'a [Node] {
+        n.children.get_or_init(|| {
+            let level = n.level as usize;
+            if level >= tree.levels || level >= (self.cap)(&n.sphere.centre) {
+                return Box::new([]);
+            }
+            let count = tree.child_count(level);
+            (0..count).map(|k| tree.child(&n.sphere, k, count, &self.frame))
+                .filter(|c| !Cauliflower::buried(c, &self.spheres, n.from as usize))
+                .map(|c| Node { sphere: c, level: n.level + 1, from: n.from, children: std::sync::OnceLock::new() })
+                .collect()
+        })
+    }
+
+    /// How many spheres have been grown so far.
     pub fn len(&self) -> usize {
-        self.nodes.len()
+        fn count(n: &Node) -> usize {
+            1 + n.children.get().map_or(0, |c| c.iter().map(count).sum())
+        }
+        self.roots.iter().map(count).sum()
+    }
+}
+
+/// Grown trees shared by every render thread, so each cloud is grown once however many
+/// threads look at it, and kept while it is in use: a ray through a field of cumulus, and the
+/// shadow rays from it, cross many clouds, and a cache of a few per thread, emptied when full,
+/// kept growing them again (a sixth of a cumulus scene's time).
+///
+/// In shards, each behind its own lock, that evict their least recently used tree; and in
+/// front of them a few trees per thread, as a ray looks the same cloud up many times in a row.
+pub struct TreeCache {
+    shards: Vec<std::sync::Mutex<Shard>>,
+    per_shard: usize,
+    id: usize,
+}
+
+#[derive(Default)]
+struct Shard {
+    trees: std::collections::HashMap<[u64; 4], (std::sync::Arc<Grown>, u64)>,
+    clock: u64,
+}
+
+/// How many trees, of any cache, each thread keeps references to in front of the shared
+/// shards (only references: forgetting them all when full costs nothing to regrow).
+const FRONT: usize = 512;
+
+thread_local! {
+    static FRONT_TREES: std::cell::RefCell<std::collections::HashMap<(usize, [u64; 4]), std::sync::Arc<Grown>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+impl TreeCache {
+    /// A cache of about `capacity` trees.
+    pub fn new(capacity: usize) -> TreeCache {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+        let n = 32;
+        TreeCache {
+            shards: (0..n).map(|_| std::sync::Mutex::new(Shard::default())).collect(),
+            per_shard: capacity.div_ceil(n).max(1),
+            id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+
+    /// A number unique to this cache, for keying what goes with it.
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    /// The tree for `key`, grown by `grow` if it isn't kept.
+    pub fn get(&self, key: [u64; 4], grow: impl FnOnce() -> Grown) -> std::sync::Arc<Grown> {
+        let found = FRONT_TREES.with(|f| f.borrow().get(&(self.id, key)).cloned());
+        if let Some(t) = found {
+            return t;
+        }
+        let t = self.shared(key, grow);
+        FRONT_TREES.with(|f| {
+            let mut f = f.borrow_mut();
+            if f.len() >= FRONT {
+                f.clear();
+            }
+            f.insert((self.id, key), t.clone());
+        });
+        t
+    }
+
+    fn shared(&self, key: [u64; 4], grow: impl FnOnce() -> Grown) -> std::sync::Arc<Grown> {
+        let h = mix(key[0] ^ mix(key[1] ^ mix(key[2] ^ mix(key[3]))));
+        let shard = &self.shards[(h % self.shards.len() as u64) as usize];
+        {
+            let mut s = shard.lock().unwrap();
+            s.clock += 1;
+            let now = s.clock;
+            if let Some(entry) = s.trees.get_mut(&key) {
+                entry.1 = now;
+                return entry.0.clone();
+            }
+        }
+        // Grown outside the lock: two threads may both grow it, and one is kept.
+        let tree = std::sync::Arc::new(grow());
+        let mut s = shard.lock().unwrap();
+        if s.trees.len() >= self.per_shard && !s.trees.contains_key(&key) {
+            let oldest = s.trees.iter().min_by_key(|(_, (_, used))| *used).map(|(k, _)| *k);
+            if let Some(k) = oldest {
+                s.trees.remove(&k);
+            }
+        }
+        s.clock += 1;
+        let now = s.clock;
+        s.trees.entry(key).or_insert((tree, now)).0.clone()
     }
 }
 
@@ -503,8 +604,8 @@ pub fn glaciated(glaciation: Option<f64>, altitude: f64) -> f64 {
 }
 
 /// The turret levels a sphere centred at `altitude` keeps under `glaciation`.
-pub fn glaciated_levels(tree: &Cauliflower, glaciation: Option<f64>, altitude: f64) -> usize {
-    if glaciated(glaciation, altitude) > 0.5 { 1 } else { tree.levels }
+pub fn glaciated_levels(levels: usize, glaciation: Option<f64>, altitude: f64) -> usize {
+    if glaciated(glaciation, altitude) > 0.5 { 1 } else { levels }
 }
 
 impl Cumulus {
@@ -532,7 +633,8 @@ impl Cumulus {
                  lift: f64, lean: f64, wind: crate::na::Vector2<f64>, glaciation: Option<f64>, seed: u64) -> Cumulus {
         let at = Vector3::new(centre.x, base, centre.y);
         let roots = tower(&at, &Vector3::y(), width, height, height, lift, &tree, mix(seed), unit(seed, 99));
-        let grown = tree.grow_capped(&roots, &Vector3::y(), |c| glaciated_levels(&tree, glaciation, c.y));
+        let levels = tree.levels;
+        let grown = tree.grow_capped(&roots, &Vector3::y(), move |c| glaciated_levels(levels, glaciation, c.y));
         let wind = Vector3::new(wind.x, 0., wind.y);
         let wind = if wind.norm() > 0. { wind.normalize() } else { Vector3::zeros() };
         let r0 = roots.iter().map(|r| r.radius).fold(0., f64::max);

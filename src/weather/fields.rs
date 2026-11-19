@@ -173,6 +173,8 @@ pub struct Heaps {
     /// then frays and evaporates, and another is born elsewhere in its cell (`Heap::maturity`).
     pub time: f64,
     pub lifetime: f64,
+    /// The clouds' trees, shared by the render threads: about 150 kB each.
+    pub trees: Arc<crate::procedural::cauliflower::TreeCache>,
 }
 
 impl Heaps {
@@ -180,7 +182,7 @@ impl Heaps {
         Heaps {
             tree: crate::procedural::cauliflower::Cauliflower::cumulus(), cell: 2000., edge: 15., lift: 0.35, dome: 0.8, lean: 0.25, skew: 2.,
             surface: crate::procedural::cauliflower::Surface::new(seed.wrapping_add(77)), radius, seed: seed as u32,
-            time: 0., lifetime: 2400.,
+            time: 0., lifetime: 2400., trees: Arc::new(crate::procedural::cauliflower::TreeCache::new(2048)),
         }
     }
 
@@ -202,6 +204,7 @@ impl Heaps {
 /// One cloud of the heaps, near a point: its axis (a unit vector, in the drifting frame), the
 /// point's horizontal distance from it, the radius of its body's spheres and of the disc they
 /// stand on, its base and highest top (altitudes), and how far it reaches from its axis.
+#[derive(Clone, Copy)]
 struct Heap {
     axis: Vector3<f64>,
     distance: f64,
@@ -239,30 +242,14 @@ impl Heap {
         crate::procedural::cauliflower::body(&(self.axis * (h.radius + self.base)), &self.axis, self.r0, self.width, h.lift, h.dome, self.tall, self.id, self.hashes[0])
     }
 
-    /// Its sphere tree, grown once and kept for the thread (`Cauliflower::grow`): a ray looks
-    /// the same few clouds up thousands of times. Keyed by everything the roots depend on, so a
-    /// cloud whose base moves with time is grown afresh.
-    fn grown(&self, h: &Heaps) -> std::rc::Rc<crate::procedural::cauliflower::Grown> {
-        use std::collections::HashMap;
-        use std::rc::Rc;
-        thread_local! {
-            static GROWN: std::cell::RefCell<HashMap<[u64; 4], Rc<crate::procedural::cauliflower::Grown>>> = std::cell::RefCell::new(HashMap::new());
-        }
-        // About 6000 spheres (a quarter of a megabyte) each at most: forget them all now and then.
-        const KEPT: usize = 96;
+    /// Its sphere tree, grown once and shared (`cauliflower::TreeCache`), keyed by everything
+    /// the roots depend on, so a cloud whose base moves with time is grown afresh.
+    /// How deep `p` is in its spheres (as `Cauliflower::depth`), from its tree, grown once and
+    /// shared (`cauliflower::TreeCache`), keyed by everything the roots depend on, so a cloud
+    /// whose base moves with time is grown afresh.
+    fn depth(&self, h: &Heaps, p: &Vector3<f64>, enough: f64) -> f64 {
         let key = [self.id ^ (h.seed as u64).rotate_left(7), self.base.to_bits(), self.r0.to_bits(), self.width.to_bits()];
-        GROWN.with(|g| {
-            if let Some(t) = g.borrow().get(&key) {
-                return t.clone();
-            }
-            let t = Rc::new(h.tree.grow(&self.roots(h), &self.axis));
-            let mut g = g.borrow_mut();
-            if g.len() >= KEPT {
-                g.clear();
-            }
-            g.insert(key, t.clone());
-            t
-        })
+        h.trees.get(key, || h.tree.grow(&self.roots(h), &self.axis)).depth(&h.tree, p, enough)
     }
 }
 
@@ -277,12 +264,10 @@ impl Stratiform {
     /// the point is from the reach of any cloud not reported (in cells not looked at, or too far
     /// off to reach it).
     fn heaps_near(&self, h: &Heaps, up: &Vector3<f64>, mut f: impl FnMut(&Heap) -> bool) -> f64 {
-        let l = self.layer();
         let s = h.cell;
         let surface = up * h.radius;
         let c = (surface / s).map(|v| v.floor() as i64);
         let block = (0..3).map(|k| (surface[k] - (c[k] - 1) as f64 * s).min((c[k] + 2) as f64 * s - surface[k])).fold(f64::INFINITY, f64::min);
-        let ext = h.tree.extent(1.);
         let mut beyond = block - h.max_reach();
         for dx in -1..=1 {
             for dy in -1..=1 {
@@ -304,37 +289,10 @@ impl Stratiform {
                         beyond = beyond.min(distance - h.max_reach());
                         continue;
                     }
-                    let texel = l.cover.locate(&self.drift.forth(&axis));
-                    let (cover, form) = (l.cover.at_texel(&texel), l.form.at_texel(&texel));
-                    // Active more often than the cover: a cloud covers less than its cell, and
-                    // fills it only for part of its life (`Heap::maturity`: wisps for a third of
-                    // it, fraying for the last 30%).
-                    if hash(3) >= (4. * cover).min(1.) * smoothstep(0.35, 0.65, form) {
-                        continue;
-                    }
-                    let (base, top) = (l.base.at_texel(&texel), l.top.at_texel(&texel));
-                    // Many small, a few large.
-                    let tall = hash(4).powf(h.skew);
-                    let depth = (top - base) * (0.25 + 0.75 * tall);
-                    // The body: spheres over a flat disc `width` in radius, sized so that their
-                    // turrets (to `extent` times their radius) top out at about the cloud's depth;
-                    // small clouds narrow, larger ones wider.
-                    let r0 = (depth / ((1. + h.dome) * (h.lift + ext))).clamp(30., 0.15 * s);
-                    let largest = r0 * (1. + h.dome);
-                    let width = (s * (0.12 + 0.33 * (0.25 + 0.75 * tall).powf(0.7) * (0.7 + 0.3 * hash(5)))).clamp(r0, 0.45 * s);
-                    let top_of = base + largest * (h.lift + ext);
-                    // Leaning downwind with height: the wind aloft, in the drifting frame, level.
-                    let m = &self.maps;
-                    let wind = Vector3::new(m.wind[0].at_texel(&texel), m.wind[1].at_texel(&texel), m.wind[2].at_texel(&texel));
-                    let wind = self.drift.back(&wind);
-                    let wind = wind - axis * axis.dot(&wind);
-                    let downwind = if wind.norm() > 1e-6 { wind.normalize() } else { Vector3::zeros() };
-                    let heap = Heap {
-                        axis, distance, r0, width, base, reach: width + largest * ext + h.lean * (top_of - base),
-                        top: top_of,
-                        id: ((ix as u64) << 42) ^ ((iy as u64) << 21) ^ (iz as u64) ^ ((h.seed as u64) << 13) ^ ((cycle as u64) << 7),
-                        hashes: [hash(6), hash(7)], tall, downwind, age,
-                    };
+                    // The cloud itself is the same wherever it is looked up from: each thread
+                    // works it out once (`heap_in`).
+                    let Some(mut heap) = self.heap_in(h, (ix, iy, iz), cycle, age, axis, &hash) else { continue };
+                    heap.distance = distance;
                     if f(&heap) {
                         return beyond;
                     }
@@ -342,6 +300,65 @@ impl Stratiform {
             }
         }
         beyond
+    }
+
+    /// The cloud of cell (`ix`, `iy`, `iz`) in its `cycle`, at `age`, on `axis` (`hash` its
+    /// random numbers), or None if the cell has none: from the maps there, whose texel lookups
+    /// (the cube-sphere's arctangents) are dear, so each thread keeps the cells it has worked
+    /// out (`HEAP_CELLS`).
+    fn heap_in(&self, h: &Heaps, (ix, iy, iz): (i64, i64, i64), cycle: u32, age: f64, axis: Vector3<f64>, hash: &dyn Fn(u32) -> f64) -> Option<Heap> {
+        use std::collections::HashMap;
+        thread_local! {
+            static HEAP_CELLS: std::cell::RefCell<HashMap<(usize, i64, i64, i64, u32), Option<Heap>>> = std::cell::RefCell::new(HashMap::new());
+        }
+        let key = (h.trees.id(), ix, iy, iz, cycle);
+        if let Some(found) = HEAP_CELLS.with(|c| c.borrow().get(&key).copied()) {
+            return found.map(|heap| Heap { age, ..heap });
+        }
+        let found = (|| {
+        let l = self.layer();
+        let s = h.cell;
+        let ext = h.tree.extent(1.);
+        let texel = l.cover.locate(&self.drift.forth(&axis));
+        let (cover, form) = (l.cover.at_texel(&texel), l.form.at_texel(&texel));
+        // Active more often than the cover: a cloud covers less than its cell, and
+        // fills it only for part of its life (`Heap::maturity`: wisps for a third of
+        // it, fraying for the last 30%).
+        if hash(3) >= (4. * cover).min(1.) * smoothstep(0.35, 0.65, form) {
+            return None;
+        }
+        let (base, top) = (l.base.at_texel(&texel), l.top.at_texel(&texel));
+        // Many small, a few large.
+        let tall = hash(4).powf(h.skew);
+        let depth = (top - base) * (0.25 + 0.75 * tall);
+        // The body: spheres over a flat disc `width` in radius, sized so that their
+        // turrets (to `extent` times their radius) top out at about the cloud's depth;
+        // small clouds narrow, larger ones wider.
+        let r0 = (depth / ((1. + h.dome) * (h.lift + ext))).clamp(30., 0.15 * s);
+        let largest = r0 * (1. + h.dome);
+        let width = (s * (0.12 + 0.33 * (0.25 + 0.75 * tall).powf(0.7) * (0.7 + 0.3 * hash(5)))).clamp(r0, 0.45 * s);
+        let top_of = base + largest * (h.lift + ext);
+        // Leaning downwind with height: the wind aloft, in the drifting frame, level.
+        let m = &self.maps;
+        let wind = Vector3::new(m.wind[0].at_texel(&texel), m.wind[1].at_texel(&texel), m.wind[2].at_texel(&texel));
+        let wind = self.drift.back(&wind);
+        let wind = wind - axis * axis.dot(&wind);
+        let downwind = if wind.norm() > 1e-6 { wind.normalize() } else { Vector3::zeros() };
+        Some(Heap {
+            axis, distance: 0., r0, width, base, reach: width + largest * ext + h.lean * (top_of - base),
+            top: top_of,
+            id: ((ix as u64) << 42) ^ ((iy as u64) << 21) ^ (iz as u64) ^ ((h.seed as u64) << 13) ^ ((cycle as u64) << 7),
+            hashes: [hash(6), hash(7)], tall, downwind, age,
+        })
+        })();
+        HEAP_CELLS.with(|c| {
+            let mut c = c.borrow_mut();
+            if c.len() >= 65536 {
+                c.clear();
+            }
+            c.insert(key, found);
+        });
+        found
     }
 
     /// How much of the densest cloud (0 to 1) the cauliflower heaps put at `at`, whose layer's
@@ -367,7 +384,7 @@ impl Stratiform {
             let enough = h.edge * (1. + 24. * soft * soft);
             // Leaning downwind with height: look up where the cloud stood that much upwind.
             let lean = heap.downwind * (h.lean * (at.altitude - heap.base).max(0.));
-            let depth = heap.grown(h).depth(&h.tree, &(q - lean), enough);
+            let depth = heap.depth(h, &(q - lean), enough);
             if depth <= -margin {
                 return false;
             }
@@ -535,6 +552,8 @@ pub struct Convective {
     pub tree: crate::procedural::cauliflower::Cauliflower,
     pub surface: crate::procedural::cauliflower::Surface,
     pub edge: f64,
+    /// The towers' trees, shared by the render threads: about 600 kB each.
+    trees: crate::procedural::cauliflower::TreeCache,
 }
 
 /// An active convective cell near a point.
@@ -578,31 +597,16 @@ impl Tower {
         self.mature.then(|| self.base + 0.67 * (self.top - self.base))
     }
 
-    /// Its thermals' sphere trees, grown once per thread (as `Heap::grown`).
-    fn grown(&self, c: &Convective) -> std::rc::Rc<crate::procedural::cauliflower::Grown> {
+    /// Its thermals' sphere trees, grown once and shared (as `Heap::grown`).
+    fn grown(&self, c: &Convective) -> Arc<crate::procedural::cauliflower::Grown> {
         use crate::procedural::cauliflower::{glaciated_levels, tower};
-        use std::collections::HashMap;
-        use std::rc::Rc;
-        thread_local! {
-            static GROWN: std::cell::RefCell<HashMap<[u64; 4], Rc<crate::procedural::cauliflower::Grown>>> = std::cell::RefCell::new(HashMap::new());
-        }
-        // About 25000 spheres (a megabyte) each.
-        const KEPT: usize = 16;
         let key = [self.id, self.base.to_bits(), self.top.to_bits(), self.radius.to_bits() ^ self.mature as u64];
-        GROWN.with(|g| {
-            if let Some(t) = g.borrow().get(&key) {
-                return t.clone();
-            }
+        c.trees.get(key, || {
             let roots = tower(&(self.axis * (c.radius + self.base)), &self.axis, self.radius, self.top - self.base, self.full_top - self.base, 0.35, &c.tree, self.id, self.phase);
             let glaciation = self.glaciation();
             let r = c.radius;
-            let t = Rc::new(c.tree.grow_capped(&roots, &self.axis, |p| glaciated_levels(&c.tree, glaciation, p.norm() - r)));
-            let mut g = g.borrow_mut();
-            if g.len() >= KEPT {
-                g.clear();
-            }
-            g.insert(key, t.clone());
-            t
+            let levels = c.tree.levels;
+            c.tree.grow_capped(&roots, &self.axis, move |p| glaciated_levels(levels, glaciation, p.norm() - r))
         })
     }
 }
@@ -613,7 +617,8 @@ impl Convective {
         Convective { maps, look, cell_size, overshoot: 800., anvil_depth: 1800., radius, top_max, drift: Drift::none(), lifetime: 5400., time: 0.,
                      seed: seed as u32, shapes: Shapes::new(seed.wrapping_add(5)),
                      tree: crate::procedural::cauliflower::Cauliflower::cumulus(),
-                     surface: crate::procedural::cauliflower::Surface::new(seed.wrapping_add(91)), edge: 15. }
+                     surface: crate::procedural::cauliflower::Surface::new(seed.wrapping_add(91)), edge: 15.,
+                     trees: crate::procedural::cauliflower::TreeCache::new(128) }
     }
 
     /// The highest any of it reaches.

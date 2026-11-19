@@ -136,6 +136,12 @@ surface, so keep displacement small or masked off where they are.
 
 ## On a landscape
 
+![Before and after: a mountainside as the clipmap draws it, then displaced](landscape-displacement-comparison.png)
+
+*`demo/scenes/alpine-closeup.json`, 960 x 540 at 32 samples. Top, the landscape's mesh alone;
+bottom, the ground within a kilometre displaced: rock ribs where it is steep, stones on the
+scree. 5 min 14 s against 3 min 2 s, and 1.3 GB (4 cores).*
+
 A full-scale `landscape` takes the same `"displacement"` (and `displacement_detail`,
 `vertical_displacement`, `displacement_falloff`). The ground within `displacement_reach`
 metres of the camera (1000 by default, each way) becomes a heightfield of the landscape's own

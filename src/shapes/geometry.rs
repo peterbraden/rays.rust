@@ -127,6 +127,9 @@ pub trait Geometry: Sync{
     // (`wavefront::flat`); None if it can't be.
     fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> { None }
 
+    // The sea, if that is what this is: the GPU has a kernel for its shape (`ocean::Ocean::export`).
+    fn ocean(&self) -> Option<&crate::ocean::Ocean> { None }
+
     // What kind of shape this is, for telling someone which of a scene's objects is in the way
     // of something (the wavefront integrator and the GPU, which need `flatten`): the type's
     // name, or for a wrapper its contents'.
@@ -219,6 +222,7 @@ impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
     fn transmittance_color(&self, r: &Ray, min: f64, max: f64) -> crate::color::Color { (**self).transmittance_color(r, min, max) }
     fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> { (**self).flatten() }
     fn kind(&self) -> &'static str { (**self).kind() }
+    fn ocean(&self) -> Option<&crate::ocean::Ocean> { (**self).ocean() }
 }
 
 /// A geometry whose hits report `face`, so a composite object made of many of them (eg. the

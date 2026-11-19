@@ -476,6 +476,18 @@ impl FlatScene {
     }
 
     /// The material of a hit's primitive (bounded or plane).
+    /// The hit of `r` on primitive `prim` again (a hit some other arithmetic found: the GPU's,
+    /// in f32), or on the shape that index is of.
+    pub fn refine(&self, prim: u32, r: &Ray) -> Option<Hit> {
+        let listed = self.prims.len() + self.planes.len();
+        if (prim as usize) < listed {
+            let (dist, geometric, shading) = self.prim(prim).intersect(r, 0., f64::INFINITY)?;
+            return Some(Hit { dist, point: r.ro + r.rd * dist, geometric, shading, prim, face: self.face(prim), part: 0 });
+        }
+        let x = self.shapes[prim as usize - listed].0.geometry.intersects_range(r, MIN_SHAPE, f64::INFINITY)?;
+        Some(Hit { dist: x.dist, point: x.point, geometric: x.normal, shading: x.normal, prim, face: x.face, part: x.part })
+    }
+
     /// A primitive by a hit's index: bounded, or after those a plane.
     pub fn prim(&self, prim: u32) -> &Prim {
         let n = self.prims.len();

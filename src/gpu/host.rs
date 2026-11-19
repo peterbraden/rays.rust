@@ -62,8 +62,7 @@ pub fn shade(s: &Scene, flat: &FlatScene, p: &PathState, pixel: u32, sample: u32
     // the precision the renderer's materials offset their rays by. (A ray that grazed the
     // primitive in f32 and misses it in f64 ends here: its vertex was an edge's.)
     let prim = p.state.z;
-    let Some((dist, geometric, shading)) = flat.prim(prim).intersect(&ray, 0., f64::INFINITY) else { return next };
-    let hit = Hit { dist, point: ray.ro + ray.rd * dist, geometric, shading, prim, face: flat.face(prim), part: 0 };
+    let Some(hit) = flat.refine(prim, &ray) else { return next };
     let depth = p.beta.w as u32;
     let mut v = HostVertex {
         ray,

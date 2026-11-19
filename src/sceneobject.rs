@@ -88,6 +88,10 @@ impl Geometry for SceneObject {
         self.geometry.kind()
     }
 
+    fn ocean(&self) -> Option<&crate::ocean::Ocean> {
+        self.geometry.ocean()
+    }
+
     fn surface_area(&self) -> f64 {
         self.geometry.surface_area()
     }

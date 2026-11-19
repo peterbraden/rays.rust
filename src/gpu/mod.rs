@@ -420,14 +420,16 @@ pub struct Buffers {
 impl Buffers {
     /// The flattened scene as the shader's buffers, or why it can't be.
     pub fn build(s: &Scene, flat: &FlatScene) -> Result<Buffers, String> {
-        // A shape its own code intersects needs a kernel of its kind, and none has one yet.
-        if let Some((o, _)) = flat.shapes.first() {
-            let names: Vec<String> = flat.shapes.iter().take(4).map(|(o, _)| match s.source_index(o) {
+        // A shape its own code intersects needs a kernel of its kind: there is one for the
+        // sea (`pathtrace::ocean_hit`), of which the kernels take one.
+        let unported: Vec<String> = flat.shapes.iter().enumerate()
+            .filter(|(k, (o, _))| o.geometry.ocean().is_none() || *k > 0)
+            .take(4).map(|(_, (o, _))| match s.source_index(o) {
                 Some(i) => format!("objects[{}] ({})", i, o.geometry.kind()),
                 None => o.geometry.kind().to_string(),
             }).collect();
-            let _ = o;
-            return Err(format!("{} shapes the kernels can't intersect yet: {}{}", flat.shapes.len(), names.join(", "), if flat.shapes.len() > 4 { " ..." } else { "" }));
+        if !unported.is_empty() {
+            return Err(format!("shapes the kernels can't intersect yet: {}{}", unported.join(", "), if flat.shapes.len() > 4 { " ..." } else { "" }));
         }
         // A browser's passes are queued without waiting on the device, which serving the
         // host's queue must (`host`).
@@ -475,6 +477,13 @@ impl Buffers {
             to_gpu(p, flat.prim_material[i], flat.emitter_index[i].map_or(0, |e| e + 1))
         }).collect();
         prims.extend(flat.planes.iter().map(|(p, m)| to_gpu(p, *m, 0)));
+        // The sea, after the planes and tested as they are, outside the tree.
+        let ocean = flat.shapes.first().map(|(o, m)| (o.geometry.ocean().expect("the sea"), *m));
+        if let Some((_, m)) = ocean {
+            let mut g = GpuPrim::zeroed();
+            g.info = UVec4::new(pathtrace::PRIM_OCEAN, material_index[m as usize], 0, 0);
+            prims.push(g);
+        }
         if prims.is_empty() {
             prims.push(GpuPrim::zeroed());
         }
@@ -540,6 +549,12 @@ impl Buffers {
             tables.extend(cdf(&row));
         }
 
+        // The sea's waves (`Ocean::export`); `dims.z` says where, plus one.
+        let ocean_off = ocean.map_or(0, |(sea, _)| {
+            let at = tables.len() as u32;
+            tables.extend(sea.export());
+            at + 1
+        });
         // The air: the sky's (for escaping rays), the aerial perspective's, the sun's.
         let sky_air = flat.sky.as_ref().and_then(|sky| sky.medium.material_at(Vector3::zeros()).air());
         let sky_off = sky_air.map_or(pathtrace::NO_AIR, |a| air_record(&mut tables, &a));
@@ -569,8 +584,9 @@ impl Buffers {
             _ => (0, 0.),
         };
         let params = Params {
-            dims: UVec4::new(s.image.width as u32, s.image.height as u32, 0, s.render.max_depth as u32),
-            counts: UVec4::new(flat.prims.len() as u32, flat.planes.len() as u32, flat.emitters.len() as u32, s.lights.len() as u32),
+            dims: UVec4::new(s.image.width as u32, s.image.height as u32, ocean_off, s.render.max_depth as u32),
+            // (The sea is tested with the planes.)
+            counts: UVec4::new(flat.prims.len() as u32, (flat.planes.len() + flat.shapes.len()) as u32, flat.emitters.len() as u32, s.lights.len() as u32),
             offs: UVec4::new(emitter_off, cdf_off, env_off, marginal_off),
             offs2: UVec4::new(conditional_off, env_width as u32, env_height as u32, flags),
             misc: Vec4::new(s.render.regularise as f32, s.black_threshold as f32, s.render.shadow_bias as f32, rr_min),
@@ -1847,6 +1863,49 @@ mod tests {
         assert!(stats.device_seconds > 0.);
         // Taken, so the next block starts from nothing.
         assert!(gpu.take_stats().is_empty());
+    }
+
+    /// The sea is a shape the kernels intersect themselves (`pathtrace::ocean_hit`: the
+    /// planet's sphere or a plane, marched over its waves near the camera), its material the
+    /// host's. As a plane and as the planet, with a sphere standing in it to shadow it and be
+    /// reflected, the picture is the wavefront integrator's, whose sea is the renderer's own.
+    #[test]
+    fn test_intersects_the_sea() {
+        use crate::wavefront::integrator::tests::{mean_image, tiles};
+        for radius in ["0", "6360000"] {
+            let mut s = SceneFile::from_string(format!(r#"{{
+                "width": 24, "height": 16, "background": [0.3, 0.4, 0.6], "max_depth": 4, "path_termination": "russian_roulette",
+                "sun": {{ "direction": [-1, 1, 1], "intensity": 3 }},
+                "camera": {{ "location": [0, 3, -12], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.7 }},
+                "materials": {{ "R": {{ "type": "lambertian", "albedo": [0.7, 0.2, 0.1] }} }},
+                "objects": [
+                    {{ "type": "ocean", "wind": [7, 2], "planet_radius": {}, "detail_center": [0, -6], "detail_distance": 30 }},
+                    {{ "type": "sphere", "location": [0, 0.6, 0], "radius": 1.5, "material": "R" }}
+                ]
+            }}"#, radius));
+            s.render.supersamples = 128;
+            let flat = FlatScene::build(&s).unwrap();
+            assert_eq!(flat.shapes.len(), 1);
+            let mut gpu = match GpuRenderer::new(&s, &flat) {
+                Ok(g) => g,
+                Err(e) => {
+                    eprintln!("skipped: {}", e);
+                    return;
+                },
+            };
+            let (w, h) = (s.image.width, s.image.height);
+            let rc = Mutex::new(RenderContext::new(w, h, false, "test.png"));
+            gpu.render(&s, &flat, &rc, |_| ());
+            let rc = rc.into_inner().unwrap();
+            let on_gpu: Vec<Color> = (0..w * h).map(|i| rc.get_pixel(i % w, i / w)).collect();
+            let cpu = mean_image(&s, 128);
+            let (a, b) = (tiles(&on_gpu, w, h, 3, 2), tiles(&cpu, w, h, 3, 2));
+            for t in 0..6 {
+                for ch in 0..3 {
+                    assert!((a[t][ch] - b[t][ch]).abs() < 0.06 * b[t][ch] + 2e-3, "radius {}, tile {} channel {}: GPU {} vs CPU {}", radius, t, ch, a[t][ch], b[t][ch]);
+                }
+            }
+        }
     }
 
     /// The CPU queue (`host`): paths that hit a material the kernels have no code for wait

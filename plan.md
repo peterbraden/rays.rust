@@ -1634,6 +1634,18 @@ UI, file IO and rayon's threads would follow.
    tori, CSG and the rest (FLIP against trace at 160 x 90, 32 spp: ocean-1 0.0245, ocean-boat
    0.0145, block-terrain 0.0157, saturn 0.0004); the GPU needs a kernel for each kind, and
    says which it lacks.
+   The sea's shape, on the GPU (`pathtrace::ocean_hit`, a port of `Ocean::intersects`: the
+   planet's sphere in `excess`'s form, or a plane; a march over the three wave tiles, in
+   `tables`, where they displace it; the waves' slopes in the normal everywhere), tested
+   with the planes for nearest hits and shadow rays alike; its material is still the
+   host's. Verified on lavapipe (SPIR-V and WGSL): `test_intersects_the_sea` (a plane and a
+   planet, against the wavefront integrator, 6% a tile), and FLIP against trace at 160 x 90,
+   32 spp: ocean-1 0.0252, ocean-boat 0.0121, ocean-2 0.0166, moon-glade 0.0185, each as the
+   CPU integrator's. Known: far from the origin f32 resolves the smallest tile's texels
+   coarsely (normals only: a tenth of a texel at 100 km); the march stops after 1,024
+   steps; pebble-beach's primitives (859 MB) exceed lavapipe's largest buffer; transparent
+   water is still refused. In a browser these scenes still wait on the sea's material,
+   which is the next port: on ocean-1 the host shades 253,000 of 673,000 vertices.
 3. The fallback framework: per-area status, classification, CPU queues for materials first,
    then intersection. Exit: every flattenable demo scene plus at least one with a
    procedural shape and one with an unported material renders through the GPU path with CPU

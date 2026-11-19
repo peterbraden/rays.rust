@@ -761,7 +761,35 @@ impl Ocean {
     }
 }
 
+impl Ocean {
+    /// The sea's shape as data, for the GPU's kernel of it (`pathtrace::ocean_hit`; the layout
+    /// is `pathtrace::OCEAN_*`): the planet's radius (0 for a plane), where the waves displace
+    /// it, their greatest height and slope, and the tiles of waves, each its size, its texels
+    /// a side and where they begin from the record's start.
+    pub fn export(&self) -> Vec<f32> {
+        let tiles = &self.waves.tiles;
+        let header = 8 + 3 * tiles.len();
+        let mut out = vec![
+            self.planet_radius.unwrap_or(0.) as f32, self.detail_center.x as f32, self.detail_center.y as f32, self.detail_distance as f32,
+            self.waves.max_height as f32, self.waves.max_slope as f32, tiles.len() as f32, DISPLACED.min(tiles.len()) as f32,
+        ];
+        let mut at = header;
+        for t in tiles {
+            out.extend([t.size as f32, t.n as f32, f32::from_bits(at as u32)]);
+            at += 3 * t.texels.len();
+        }
+        for t in tiles {
+            out.extend(t.texels.iter().flatten());
+        }
+        out
+    }
+}
+
 impl Geometry for Ocean {
+    fn ocean(&self) -> Option<&Ocean> {
+        Some(self)
+    }
+
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         let r = Ray { ro: r.ro, rd: r.rd.normalize() };
         let h = self.waves.max_height;

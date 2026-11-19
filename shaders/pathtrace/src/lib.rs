@@ -8,7 +8,7 @@
 
 // (Some are used only by the kernels' entry points, which the CPU build leaves out.)
 #[allow(unused_imports)]
-use spirv_std::glam::{UVec3, UVec4, Vec3, Vec4, Vec4Swizzles};
+use spirv_std::glam::{UVec3, UVec4, Vec2, Vec3, Vec4, Vec4Swizzles};
 #[allow(unused_imports)]
 use spirv_std::num_traits::Float;
 #[allow(unused_imports)]
@@ -21,7 +21,8 @@ pub use spirv_std::glam;
 #[cfg_attr(not(target_arch = "spirv"), derive(bytemuck::Pod, bytemuck::Zeroable))]
 #[repr(C)]
 pub struct Params {
-    /// Width, height, pass, max depth.
+    /// Width, height, where the sea's record is in `tables` plus one (0 for none: `PRIM_OCEAN`),
+    /// max depth.
     pub dims: UVec4,
     /// Bounded primitives, planes, emitters, lights.
     pub counts: UVec4,
@@ -151,6 +152,23 @@ pub const FLAG_AERIAL: u32 = 8;
 pub const PRIM_TRIANGLE: u32 = 0;
 pub const PRIM_SPHERE: u32 = 1;
 pub const PRIM_PLANE: u32 = 2;
+/// The sea (the renderer's `ocean::Ocean`; `ocean_hit`): one at most, after the planes, its
+/// record in `tables` at `Params::dims.z` - 1.
+pub const PRIM_OCEAN: u32 = 3;
+/// The sea's record: the planet's radius (0 for the plane y = 0), where its waves displace the
+/// surface (the centre's x and z, and how far from it), the waves' greatest height and slope,
+/// how many tiles of waves there are and how many of them displace (the rest only tilt the
+/// normal); then for each tile its size in metres, its texels a side, and where its texels
+/// (height, and the slopes along x and z) begin, from the record's start.
+pub const OCEAN_RADIUS: u32 = 0;
+pub const OCEAN_CENTRE: u32 = 1;
+pub const OCEAN_DETAIL: u32 = 3;
+pub const OCEAN_MAX: u32 = 4;
+pub const OCEAN_TILES: u32 = 6;
+pub const OCEAN_HEADER: u32 = 8;
+/// The most steps a ray is marched over the waves (`ocean_march`); the renderer's march has no
+/// limit, and takes far fewer.
+pub const OCEAN_STEPS: u32 = 1024;
 /// `Material::kind`.
 pub const MAT_DIFFUSE: u32 = 0;
 pub const MAT_PLASTIC: u32 = 1;
@@ -422,7 +440,7 @@ fn intersect_prim(s: &Scene, i: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -
             return Vec4::ZERO;
         }
         Vec4::new(t, 0.0, 0.0, 1.0)
-    } else {
+    } else if kind == PRIM_PLANE {
         if rd.y.abs() < 1e-12 {
             return Vec4::ZERO;
         }
@@ -431,7 +449,230 @@ fn intersect_prim(s: &Scene, i: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -
             return Vec4::ZERO;
         }
         Vec4::new(t, 0.0, 0.0, 1.0)
+    } else {
+        // The sea, from where the ray's range begins (as `Geometry::intersects_beyond`).
+        let t = tmin + ocean_hit(s, ro + rd * tmin, rd);
+        if t <= tmin || t >= tmax {
+            return Vec4::ZERO;
+        }
+        Vec4::new(t, 0.0, 0.0, 1.0)
     }
+}
+
+// ---- The sea: the renderer's `ocean::Ocean`, its shape. A sphere (the planet) or a plane,
+// displaced by waves near a centre and smooth beyond, with the waves' slopes in its normal
+// everywhere. The waves are tiles of heights and slopes in `tables`; a planet's distances are
+// kept in the forms `excess` and `sphere_roots` give, as the air's are. ----
+
+struct Ocean {
+    base: u32,
+    radius: f32,
+    centre: Vec2,
+    detail: f32,
+    max_height: f32,
+    max_slope: f32,
+    tiles: u32,
+    displaced: u32,
+}
+
+fn load_ocean(s: &Scene) -> Ocean {
+    let base = s.params.dims.z - 1;
+    Ocean {
+        base,
+        radius: at(s.tables, base + OCEAN_RADIUS),
+        centre: Vec2::new(at(s.tables, base + OCEAN_CENTRE), at(s.tables, base + OCEAN_CENTRE + 1)),
+        detail: at(s.tables, base + OCEAN_DETAIL),
+        max_height: at(s.tables, base + OCEAN_MAX),
+        max_slope: at(s.tables, base + OCEAN_MAX + 1),
+        tiles: at(s.tables, base + OCEAN_TILES) as u32,
+        displaced: at(s.tables, base + OCEAN_TILES + 1) as u32,
+    }
+}
+
+/// The planet's centre, for `excess` (whose k, |c|² - r², is 0 for it).
+fn ocean_centre(o: &Ocean) -> Vec3 {
+    Vec3::new(0.0, -o.radius, 0.0)
+}
+
+/// `WaveTile::at`: a tile's height and slopes at (x, z), bilinear, the tile repeating.
+fn wave_tile(s: &Scene, o: &Ocean, k: u32, x: f32, z: f32) -> Vec3 {
+    let record = o.base + OCEAN_HEADER + 3 * k;
+    let size = at(s.tables, record);
+    let n = at(s.tables, record + 1);
+    let texels = o.base + at(s.tables, record + 2).to_bits();
+    let (u, v) = (x / size * n, z / size * n);
+    let (u0, v0) = (u.floor(), v.floor());
+    let (fu, fv) = (u - u0, v - v0);
+    let n = n as i32;
+    let i0 = ((u0 as i32 % n) + n) % n;
+    let j0 = ((v0 as i32 % n) + n) % n;
+    let i1 = (i0 + 1) % n;
+    let j1 = (j0 + 1) % n;
+    let t00 = tv3(s, texels + 3 * (j0 * n + i0) as u32);
+    let t10 = tv3(s, texels + 3 * (j0 * n + i1) as u32);
+    let t01 = tv3(s, texels + 3 * (j1 * n + i0) as u32);
+    let t11 = tv3(s, texels + 3 * (j1 * n + i1) as u32);
+    (t00 * (1.0 - fu) + t10 * fu) * (1.0 - fv) + (t01 * (1.0 - fu) + t11 * fu) * fv
+}
+
+/// `WaveField::at`: the height of the tiles that displace, and the slopes of all.
+fn waves(s: &Scene, o: &Ocean, x: f32, z: f32) -> Vec3 {
+    let mut w = Vec3::ZERO;
+    let mut k = 0;
+    while k < o.tiles {
+        let v = wave_tile(s, o, k, x, z);
+        w += if k < o.displaced { v } else { Vec3::new(0.0, v.y, v.z) };
+        k += 1;
+    }
+    w
+}
+
+/// Height above the mean surface.
+fn ocean_altitude(o: &Ocean, p: Vec3) -> f32 {
+    if o.radius > 0.0 {
+        let c = ocean_centre(o);
+        excess(p, c, 0.0) / ((p - c).length() + o.radius)
+    } else {
+        p.y
+    }
+}
+
+fn ocean_up(o: &Ocean, p: Vec3) -> Vec3 {
+    if o.radius > 0.0 { (p - ocean_centre(o)).normalize() } else { Vec3::Y }
+}
+
+/// `Ocean::above`: height above the displaced surface.
+fn ocean_above(s: &Scene, o: &Ocean, p: Vec3) -> f32 {
+    let altitude = ocean_altitude(o, p);
+    let d = (Vec2::new(p.x, p.z) - o.centre).length() / o.detail;
+    let a = 1.0 - smoothstep(0.5, 1.0, d);
+    if a <= 0.0 {
+        return altitude;
+    }
+    altitude - a * waves(s, o, p.x, p.z).x
+}
+
+/// `Ocean::below`: the stretch of the ray below altitude `level` (z is 0 if there is none).
+fn ocean_below(o: &Ocean, ro: Vec3, rd: Vec3, level: f32) -> Vec3 {
+    if o.radius > 0.0 {
+        // |c|² - (r + level)², with |c| = r.
+        let k = -(2.0 * o.radius * level + level * level);
+        return match sphere_roots(ro, rd, ocean_centre(o), k) {
+            Some((a, b)) => Vec3::new(a, b, 1.0),
+            None => Vec3::ZERO,
+        };
+    }
+    let t = (level - ro.y) / rd.y;
+    if rd.y < 0.0 {
+        Vec3::new(t, INF, 1.0)
+    } else if rd.y > 0.0 {
+        Vec3::new(-INF, t, 1.0)
+    } else if ro.y < level {
+        Vec3::new(-INF, INF, 1.0)
+    } else {
+        Vec3::ZERO
+    }
+}
+
+/// `Ocean::detail_span`: where the ray is within the displaced region, horizontally.
+fn ocean_detail_span(o: &Ocean, ro: Vec3, rd: Vec3) -> Vec3 {
+    let from = Vec2::new(ro.x, ro.z) - o.centre;
+    let d = Vec2::new(rd.x, rd.z);
+    let a = d.dot(d);
+    if a < 1e-18 {
+        return if from.length() < o.detail { Vec3::new(-INF, INF, 1.0) } else { Vec3::ZERO };
+    }
+    let b = from.dot(d);
+    let disc = b * b - a * (from.dot(from) - o.detail * o.detail);
+    if disc < 0.0 {
+        return Vec3::ZERO;
+    }
+    Vec3::new((-b - disc.sqrt()) / a, (-b + disc.sqrt()) / a, 1.0)
+}
+
+/// `Ocean::march`: the first crossing of the displaced surface from t0 to t1, from above or
+/// below, stepping no further than the surface could come to meet the ray, then bisecting;
+/// negative if there is none.
+fn ocean_march(s: &Scene, o: &Ocean, ro: Vec3, rd: Vec3, t0: f32, t1: f32) -> f32 {
+    let fade_rate = 1.5 / (0.5 * o.detail) * o.max_height;
+    let mut t = t0 + 1e-4;
+    let start = ocean_above(s, o, ro + rd * t);
+    let side = if start < 0.0 { -1.0 } else { 1.0 };
+    let mut f = start.abs();
+    let mut steps = 0;
+    while t < t1 && steps < OCEAN_STEPS {
+        let up = ocean_up(o, ro + rd * t);
+        let along = rd.dot(up);
+        let descent = (-side * along).max(0.0);
+        let horizontal = (1.0 - along * along).max(0.0).sqrt();
+        let rate = descent + horizontal * (o.max_slope + fade_rate) + 1e-6;
+        let step = (f / rate).max(0.01).min(t1 - t + 0.01);
+        let next = t + step;
+        let g = side * ocean_above(s, o, ro + rd * next);
+        if g <= 0.0 {
+            let (mut lo, mut hi) = (t, next);
+            let mut k = 0;
+            while k < 20 {
+                let mid = 0.5 * (lo + hi);
+                if side * ocean_above(s, o, ro + rd * mid) > 0.0 { lo = mid } else { hi = mid }
+                k += 1;
+            }
+            return hi;
+        }
+        t = next;
+        f = g;
+        steps += 1;
+    }
+    -1.0
+}
+
+/// `Ocean::intersects`: the distance to the sea along unit rd, the nearer of the displaced
+/// surface near the centre and the smooth one beyond; negative if the ray misses it.
+fn ocean_hit(s: &Scene, ro: Vec3, rd: Vec3) -> f32 {
+    let o = load_ocean(s);
+    let h = o.max_height;
+    let detail = ocean_detail_span(&o, ro, rd);
+    // The smooth surface, where it is beyond the displaced region.
+    let level = ocean_below(&o, ro, rd, 0.0);
+    let mut smooth = -1.0;
+    if level.z > 0.0 {
+        let outside_a = detail.z == 0.0 || level.x < detail.x || level.x > detail.y;
+        let outside_b = detail.z == 0.0 || level.y < detail.x || level.y > detail.y;
+        if level.x > 0.0 && level.x < INF && outside_a {
+            smooth = level.x;
+        } else if level.y > 0.0 && level.y < INF && outside_b {
+            smooth = level.y;
+        }
+    }
+    // The displaced region: below the crests and above the troughs, near the centre.
+    let mut displaced = -1.0;
+    let crests = ocean_below(&o, ro, rd, h);
+    if detail.z > 0.0 && crests.z > 0.0 {
+        let troughs = ocean_below(&o, ro, rd, -h);
+        let inner = if troughs.z > 0.0 && troughs.x > 0.0 && troughs.x < INF { troughs.x } else { INF };
+        let start = detail.x.max(crests.x).max(0.0);
+        let end = detail.y.min(crests.y).min(inner).min(start + 1e7);
+        if start < end {
+            displaced = ocean_march(s, &o, ro, rd, start, end);
+        }
+    }
+    if displaced >= 0.0 && smooth >= 0.0 {
+        displaced.min(smooth)
+    } else if displaced >= 0.0 {
+        displaced
+    } else {
+        smooth
+    }
+}
+
+/// `Ocean::normal_at`: the waves' slopes about the local vertical.
+fn ocean_normal(s: &Scene, p: Vec3) -> Vec3 {
+    let o = load_ocean(s);
+    let up = ocean_up(&o, p);
+    let east = (Vec3::X - up * up.x).normalize();
+    let north = east.cross(up);
+    let w = waves(s, &o, p.x, p.z);
+    (up - east * w.y - north * w.z).normalize()
 }
 
 /// The geometric and shading normals of a hit.
@@ -450,6 +691,9 @@ fn normals(s: &Scene, i: u32, ro: Vec3, rd: Vec3, h: Vec4) -> (Vec3, Vec3) {
         (g, n)
     } else if kind == PRIM_SPHERE {
         let n = (ro + rd * h.x - p.v0.xyz()) / p.v0.w;
+        (n, n)
+    } else if kind == PRIM_OCEAN {
+        let n = ocean_normal(s, ro + rd * h.x);
         (n, n)
     } else {
         // A plane faces each ray, as the renderer's `Plane`.

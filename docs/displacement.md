@@ -151,9 +151,15 @@ ribs where it is steep and the simulation left the rock bare, stones where it le
 
 A full-scale `landscape` takes the same `"displacement"` (and `displacement_detail`,
 `vertical_displacement`, `displacement_falloff`). The ground within `displacement_reach`
-metres of the camera (1000 by default, each way) becomes a heightfield of the landscape's own
-surface, `displacement_spacing` metres apart (2), displaced as a terrain is; the clipmap's mesh
-leaves that square out. Its graphs read the simulation's fields as the ground's materials
+metres of the camera (1000 by default, each way) becomes heightfields of the landscape's own
+surface, displaced as a terrain is; the clipmap's mesh leaves that square out. They are nested
+squares of `displacement_cells` cells a side (512), the finest `displacement_spacing` metres
+apart (2), each next one twice as coarse and twice as wide, out to the reach: eight kilometres
+takes five, and costs about what one does, since what dices them is the camera's pixels. Each
+leaves a hole for the one inside it (`displaced::Nest`), which takes the points along its edge
+from the outer one, at the levels the outer's cells there are diced to, so they meet without a
+crack (`test_nested_terrains_meet_without_cracks`); its heights join the outer's within a few
+cells of the edge. Its graphs read the simulation's fields as the ground's materials
 do (`field` nodes, and `slope` and `altitude` by the planet's up), so relief can follow what
 the simulation left: ribs of rock only where the sediment is thin, stones where the scree
 material is, smooth ice on the glaciers. It is shaded where each point came from.
@@ -166,12 +172,13 @@ an animation's frames, see the same displacement rather than one that crawls wit
 camera with `motion` gets a patch centred on the middle of its path, reaching as far past
 either end; the camera's view, for dicing, is taken into the patch's frame.
 
-The patch draws the relief to the spacing of the ring each point lies in (`scenery::Clipmap`)
-where that is coarser than its own, so at its edge it is the surface the rings draw. The
-rings' triangles that overlap its edge have their vertices inside moved onto its surface, and
-its displacement fades out over at least three ring spacings there, so the two meet without a
-crack or a step (`test_displaced_patch_meets_the_rings`). Beyond the patch a pixel covers more
-than the displacement's detail anyway.
+The patches draw the relief to the spacing of the ring each point lies in (`scenery::Clipmap`)
+where that is coarser than their own, so at the outermost's edge it is the surface the rings
+draw. The rings' triangles that overlap that edge have their vertices inside moved onto its
+surface, and its displacement fades out over at least three ring spacings there, so the two
+meet without a crack or a step (`test_displaced_patch_meets_the_rings`). Set the reach to
+where a pixel covers more than the displacement's detail: a few kilometres for a camera on the
+ground, more for wide aerial views.
 
 `demo/scenes/alpine-closeup.json` stands 2 m up a mountainside in the range of
 `alpine-layers.json`: ribs of rock on the steep ground, stones on the scree. The landscape

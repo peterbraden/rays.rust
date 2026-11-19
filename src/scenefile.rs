@@ -1073,7 +1073,15 @@ impl SceneFile {
     /// A terrain displaced by the graph `d` (`shapes::displaced`), diced as its
     /// `"displacement_detail"` and the scene's camera (which the scene gives it) call for.
     pub(crate) fn parse_displaced_terrain(grid: Arc<HeightGrid>, d: &Value, o: &Value) -> crate::shapes::displaced::DisplacedTerrain {
-        use crate::shapes::displaced::{Detail, DisplacedTerrain};
+        let p = SceneFile::parse_displacement(d, o);
+        crate::shapes::displaced::DisplacedTerrain::with_lift(grid, p.graph, p.vertical, p.lift, p.falloff, &p.detail)
+            .unwrap_or_else(|e| panic!("{}", e))
+    }
+
+    /// What a terrain's displacement `d` and the rest of its object `o` ask for: the graph, its
+    /// direction, the lift, the falloff and the detail it is diced to.
+    pub(crate) fn parse_displacement(d: &Value, o: &Value) -> crate::shapes::displaced::Displacement {
+        use crate::shapes::displaced::Detail;
         let graph = crate::graph::Graph::parse(d).unwrap_or_else(|e| panic!("terrain's displacement: {}", e));
         let v = &o["displacement_detail"];
         let camera = &o["camera"];
@@ -1105,7 +1113,7 @@ impl SceneFile {
         let lift = o.get("vertical_displacement").map(|v| crate::graph::Graph::parse(v)
             .unwrap_or_else(|e| panic!("terrain's vertical_displacement: {}", e)));
         let falloff = SceneFile::parse_number(&o["displacement_falloff"], 0.);
-        DisplacedTerrain::with_lift(grid, graph, vertical, lift, falloff, &detail).unwrap_or_else(|e| panic!("{}", e))
+        crate::shapes::displaced::Displacement { graph, vertical, lift, falloff, detail }
     }
 
     /// A still perspective camera's view (`shapes::displaced::View`), a few pixels wider than

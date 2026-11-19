@@ -197,6 +197,29 @@ pub struct DisplacedTerrain {
     place: Option<(Vector3<f64>, Matrix3<f64>)>,
     /// What its graphs' `field` nodes read (a landscape's simulation).
     fields: Option<Arc<dyn crate::graph::Fields>>,
+    /// Cells left out for a finer terrain nested inside (`Nest`): [x0, x1) x [z0, z1).
+    hole: Option<(usize, usize, usize, usize)>,
+    /// The coarser terrain this one is nested in, whose edge it meets.
+    outer: Option<Nest>,
+}
+
+/// A displacement as a scene asks for it (`SceneFile::parse_displacement`).
+pub struct Displacement {
+    pub graph: Graph,
+    pub vertical: bool,
+    pub lift: Option<Graph>,
+    pub falloff: f64,
+    pub detail: Detail,
+}
+
+/// Where a terrain sits in the coarser one around it (`DisplacedTerrain::nested`): the outer
+/// terrain, of exactly twice its cell, and its own first cell's position in the outer's grid in
+/// its own cells (even, so its edges lie on the outer's grid lines). Along its edges it takes
+/// its points from the outer terrain, at the level the outer's cells there are diced to, so the
+/// two meet without a crack.
+pub struct Nest {
+    pub outer: Arc<DisplacedTerrain>,
+    pub offset: (i64, i64),
 }
 
 /// Where the ray enters and leaves the box, in multiples of its direction, within [t0, t1].
@@ -223,7 +246,27 @@ impl DisplacedTerrain {
     /// With `lift`, a displacement straight up added to the first; with `falloff` (metres),
     /// both fade to nothing at the grid's edges.
     pub fn with_lift(grid: Arc<HeightGrid>, graph: Graph, vertical: bool, lift: Option<Graph>, falloff: f64, detail: &Detail) -> Result<DisplacedTerrain, String> {
+        DisplacedTerrain::nested(grid, graph, vertical, lift, falloff, detail, None, None)
+    }
+
+    /// As `with_lift`, leaving out the cells in `hole` ([x0, x1) x [z0, z1)) for a finer
+    /// terrain to fill, and nested in `outer`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn nested(grid: Arc<HeightGrid>, graph: Graph, vertical: bool, lift: Option<Graph>, falloff: f64, detail: &Detail,
+        hole: Option<(usize, usize, usize, usize)>, outer: Option<Nest>) -> Result<DisplacedTerrain, String>
+    {
         use rayon::prelude::*;
+        if let Some(n) = &outer {
+            let o = &n.outer.grid;
+            let aligned = (o.cell - 2. * grid.cell).abs() <= 1e-9 * o.cell && n.offset.0 % 2 == 0 && n.offset.1 % 2 == 0
+                && grid.nx.is_multiple_of(2) && grid.nz.is_multiple_of(2)
+                && (o.min.0 + n.offset.0 as f64 * grid.cell - grid.min.0).abs() <= 1e-6 * grid.cell
+                && (o.min.1 + n.offset.1 as f64 * grid.cell - grid.min.1).abs() <= 1e-6 * grid.cell;
+            if !aligned {
+                return Err("a nested terrain must have half the outer's cell, an even number of them, and lie on its grid".into());
+            }
+        }
+        let in_hole = |ix: usize, iz: usize| hole.is_some_and(|(x0, x1, z0, z1)| ix >= x0 && ix < x1 && iz >= z0 && iz < z1);
         // Faded towards the edges, the displacement takes values between its range and 0.
         let toward_zero = |r: (f64, f64)| if falloff > 0. { (r.0.min(0.), r.1.max(0.)) } else { r };
         let range = toward_zero(graph.range());
@@ -294,14 +337,58 @@ impl DisplacedTerrain {
             };
             level.min(finest).min(15) as u8
         }).collect();
-        let (bvh, cells) = Bvh::build((0 .. (nx * nz) as u32).collect(), |&k| cell_bounds[k as usize]);
+        let mut levels = levels;
+        let mut cell_bounds = cell_bounds;
+        // Beside a hole, at least level 1: a nested terrain's cells are half as wide, and their
+        // corners halfway along this cell's edge must be vertices of it.
+        if let Some((x0, x1, z0, z1)) = hole {
+            for iz in z0.saturating_sub(1) .. (z1 + 1).min(nz) {
+                for ix in x0.saturating_sub(1) .. (x1 + 1).min(nx) {
+                    if !in_hole(ix, iz) { levels[iz * nx + ix] = levels[iz * nx + ix].max(1); }
+                }
+            }
+        }
+        // Along a nested terrain's edge, at least as fine as the outer's cells across it (so
+        // its edges follow theirs), and bounds allowing for the outer's points there.
+        if let Some(n) = &outer {
+            let o = &n.outer;
+            let across = |ix: i64, iz: i64| o.level((ix + n.offset.0).div_euclid(2) as isize, (iz + n.offset.1).div_euclid(2) as isize)
+                .map_or(0, |l| l.saturating_sub(1)) as u8;
+            // How far the two bases part along the edge, sampled at quarter cells.
+            let mut parted: f64 = 0.;
+            let (x1, z1) = (grid.min.0 + nx as f64 * cell, grid.min.1 + nz as f64 * cell);
+            for k in 0 ..= 4 * nx.max(nz) {
+                let t = k as f64 * cell / 4.;
+                for (x, z) in [(grid.min.0 + t, grid.min.1), (grid.min.0 + t, z1), (grid.min.0, grid.min.1 + t), (x1, grid.min.1 + t)] {
+                    if x <= x1 + 1e-9 && z <= z1 + 1e-9 {
+                        parted = parted.max((o.grid.smooth(x, z).0 - grid.smooth(x, z).0).abs());
+                    }
+                }
+            }
+            let pad = Vector3::repeat(parted + 0.1 * reach + 1e-3 * cell);
+            for iz in 0 .. nz as i64 {
+                for ix in 0 .. nx as i64 {
+                    if ix > 0 && iz > 0 && ix < nx as i64 - 1 && iz < nz as i64 - 1 { continue; }
+                    let k = (iz as usize) * nx + ix as usize;
+                    let outside = [(ix - 1, iz), (ix + 1, iz), (ix, iz - 1), (ix, iz + 1), (ix - 1, iz - 1), (ix + 1, iz - 1), (ix - 1, iz + 1), (ix + 1, iz + 1)];
+                    for (i, j) in outside {
+                        if i < 0 || j < 0 || i >= nx as i64 || j >= nz as i64 {
+                            levels[k] = levels[k].max(across(i, j));
+                        }
+                    }
+                    cell_bounds[k] = BBox::new(cell_bounds[k].min.coords - pad, cell_bounds[k].max.coords + pad);
+                }
+            }
+        }
+        let (bvh, cells) = Bvh::build((0 .. (nx * nz) as u32).filter(|&k| !in_hole(k as usize % nx, k as usize / nx)).collect(),
+            |&k| cell_bounds[k as usize]);
         let bounds = bvh.bounds();
         let vertices: f64 = levels.iter().map(|&l| ((1u64 << l) as f64 + 1.).powi(2)).sum();
         println!("Displaced terrain: {} x {} cells diced to levels {} to {}, up to {:.1} million vertices if all are seen",
             nx, nz, levels.iter().min().unwrap_or(&0), levels.iter().max().unwrap_or(&0), vertices / 1e6);
         let tiles = (0 .. nx * nz).map(|_| OnceLock::new()).collect();
         Ok(DisplacedTerrain { grid, graph, vertical, lift, falloff: falloff.max(0.), range, levels, cell_bounds, tiles,
-            bvh, cells, bounds, place: None, fields: None })
+            bvh, cells, bounds, place: None, fields: None, hole, outer })
     }
 
     /// Evaluate the graphs where the terrain will be in the scene: at `origin + axes * p` for
@@ -324,9 +411,18 @@ impl DisplacedTerrain {
         self.range
     }
 
+    /// Cell (ix, iz)'s level; for one across a nested terrain's edge, the level in its own cells
+    /// that the outer's cell there is diced to; None for none (off the grid, or in its hole).
     fn level(&self, ix: isize, iz: isize) -> Option<u32> {
         let (nx, nz) = (self.grid.nx as isize, self.grid.nz as isize);
-        (ix >= 0 && iz >= 0 && ix < nx && iz < nz).then(|| self.levels[(iz * nx + ix) as usize] as u32)
+        if ix >= 0 && iz >= 0 && ix < nx && iz < nz {
+            let in_hole = self.hole.is_some_and(|(x0, x1, z0, z1)|
+                ix as usize >= x0 && (ix as usize) < x1 && iz as usize >= z0 && (iz as usize) < z1);
+            return (!in_hole).then(|| self.levels[(iz * nx + ix) as usize] as u32);
+        }
+        let n = self.outer.as_ref()?;
+        let l = n.outer.level((ix as i64 + n.offset.0).div_euclid(2) as isize, (iz as i64 + n.offset.1).div_euclid(2) as isize)?;
+        Some(l.saturating_sub(1))
     }
 
     /// The displaced surface at grid vertex (gx, gz) of level `level` (2^level vertices to a
@@ -334,6 +430,12 @@ impl DisplacedTerrain {
     /// shares the point computes it identically.
     fn point(&self, gx: i64, gz: i64, level: u32) -> Vector3<f64> {
         let g = &self.grid;
+        // On a nested terrain's edge, the outer's point, as the outer computes it: half as many
+        // of its cells, so the same spacing at one level finer.
+        if let Some(n) = &self.outer
+            && (gx == 0 || gz == 0 || gx == (g.nx as i64) << level || gz == (g.nz as i64) << level) {
+            return n.outer.point(gx + (n.offset.0 << level), gz + (n.offset.1 << level), level + 1);
+        }
         let scale = 0.5f64.powi(level as i32);
         let (x, z) = (g.min.0 + (gx as f64 * g.cell) * scale, g.min.1 + (gz as f64 * g.cell) * scale);
         let (y, hx, hz) = g.smooth(x, z);
@@ -664,7 +766,7 @@ impl Geometry for DisplacedTerrain {
     }
 
     fn primitives(&self) -> u64 {
-        (self.grid.nx * self.grid.nz * 2) as u64
+        (self.cells.len() * 2) as u64
     }
 }
 
@@ -925,5 +1027,52 @@ mod tests {
         let squash = Affine3::from_matrix_unchecked(crate::na::Matrix4::new_nonuniform_scaling(&Vector3::new(1., 2., 1.)));
         assert!(view.through(&squash).is_none());
         assert!(view.through(&shift(5.)).is_some());
+    }
+
+    /// A smooth surface sampled into grids of any cell.
+    struct Hills;
+    impl crate::procedural::heightmap::HeightSource for Hills {
+        fn height(&self, x: f64, z: f64) -> f64 { 0.6 * (x * 0.37).sin() + 0.4 * (z * 0.23).cos() + 0.1 * (x * z * 0.05).sin() }
+    }
+
+    /// A terrain nested in one of twice its cell meets it without cracks, whatever the levels
+    /// either side of the join.
+    #[test]
+    fn test_nested_terrains_meet_without_cracks() {
+        let g = || Graph::parse(&json!({"node": "fractal", "scale": 1.5, "smallest": 0.01, "amplitude": 0.3})).unwrap();
+        // A camera near one side of the inner terrain: the levels fall across the join.
+        let detail = Detail { eye: Some((Vector3::new(-3., 1., 0.5), 0.004)), max_level: 7, ..Default::default() };
+        let outer_grid = Arc::new(HeightGrid::sample(&Hills, (-16., -16.), (16., 16.), 2.));
+        // The inner covers [-8, 8]^2: the outer's cells 4 to 12 each way.
+        let outer = Arc::new(DisplacedTerrain::nested(outer_grid, g(), false, None, 0., &detail, Some((4, 12, 4, 12)), None).unwrap());
+        let inner_grid = Arc::new(HeightGrid::sample(&Hills, (-8., -8.), (8., 8.), 1.));
+        let inner = DisplacedTerrain::nested(inner_grid, g(), false, None, 0., &detail, None,
+            Some(Nest { outer: outer.clone(), offset: (8, 8) })).unwrap();
+        let both = crate::shapes::group::Group::new(vec![Box::new(outer.clone()), Box::new(inner)]);
+        let mut rng = crate::geometry::Pcg32::new(5, 7);
+        let mut misses = 0;
+        for _ in 0 .. 20000 {
+            // At a point on the join, from above at a slant, to just below the whole surface.
+            let along = rng.next_f64() * 16. - 8.;
+            let side = if rng.next_f64() < 0.5 { -8. } else { 8. };
+            let (x, z) = if rng.next_f64() < 0.5 { (side, along) } else { (along, side) };
+            let dir = Vector3::new(0.6 * (rng.next_f64() - 0.5), -1., 0.6 * (rng.next_f64() - 0.5)).normalize();
+            let r = Ray { ro: Vector3::new(x, -1.8, z) - dir * 30., rd: dir };
+            if both.intersects(&r).is_none() { misses += 1 }
+        }
+        assert_eq!(misses, 0);
+        // The hole is left to the inner: straight down its middle, only the inner is hit.
+        assert!(outer.intersects(&Ray { ro: Vector3::new(0.3, 20., 0.2), rd: -Vector3::y() }).is_none());
+        assert!(both.intersects(&Ray { ro: Vector3::new(0.3, 20., 0.2), rd: -Vector3::y() }).is_some());
+    }
+
+    #[test]
+    fn test_nesting_must_line_up() {
+        let g = || Graph::parse(&json!(0)).unwrap();
+        let outer = Arc::new(DisplacedTerrain::nested(Arc::new(HeightGrid::sample(&Hills, (-16., -16.), (16., 16.), 2.)), g(), false,
+            None, 0., &Detail::default(), Some((4, 12, 4, 12)), None).unwrap());
+        let misplaced = Arc::new(HeightGrid::sample(&Hills, (-7., -8.), (9., 8.), 1.));
+        assert!(DisplacedTerrain::nested(misplaced, g(), false, None, 0., &Detail::default(), None,
+            Some(Nest { outer, offset: (8, 8) })).is_err());
     }
 }

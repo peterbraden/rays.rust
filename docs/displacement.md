@@ -38,7 +38,7 @@ reuse it as `"$name"`.
 | `cells` | Worley noise: `style` `f1`, `edges` (cracks between cells) or `stones` (a rounded stone per cell) |
 | `talus` | Fallen blocks and scree (`src/talus.rs`): angular polyhedra in layers from `largest` to `smallest` metres, many small to few large by a power law (`exponent`), sorted down the slope by `position` (0 at the toe, 1 at the apex; big blocks roll to the toe); `output` `height`, `mask` or `id` |
 | `strata` | Ledges: beds `step` metres thick, each ending in a riser; `breakup` makes them waver |
-| `cross_beds` | A `rock` material's festoon cross-bedding as relief (its `seed`, `scale` and `cross_set` as `set`; `amplitude`), so the laminae its colour shows stand out as ribs |
+| `cross_beds` | A `rock` material's festoon cross-bedding as relief (its `seed`, `scale` and `cross_set` as `set`; `amplitude`), so the laminae its colour shows stand out as ribs; filtered by the narrow laminae, a fortieth of a set (`rock::LAMINA_FINEST`: nine in ten crossed along any line are wider), not their spacing along the foresets |
 | `slope`, `altitude` | Masks from 0 to 1 between `from` and `to` (degrees, metres), with a fractal `breakup`; falling instead where `to` is below `from` |
 | `aspect` | How squarely the surface faces `direction` (default north, `[0, 0, -1]`), as a mask |
 | `field` | What the surface hit knows about itself: on a landscape, its simulation's sediment, ice, flow, wetness and so on (see [surface layers](surface-layers.md)), when shading or displacing it; give `from` and `to` to displace by one, as a raw field is unbounded |
@@ -108,11 +108,18 @@ octave's mean in its place, so a coarsely diced distant surface doesn't alias or
   frustum, a few pixels wider, and wider still for what its lens blurs in from beyond the focus)
   are seen only through the shadows and light they cast, and are diced `offscreen` times
   coarser (`"displacement_detail": {"offscreen": 4}`, the default; 1 dices them like the rest).
+- **Moved and copied.** A displaced terrain inside transforms, or a named geometry placed
+  several times (`{"type": "transform", "item": "cliff", ...}`), learns where each copy is
+  (`SceneFile::displaced_instances` follows the scene's transforms and references, and writes
+  them into the terrain as `displacement_instances`). Each cell is diced as finely as the copy
+  of it nearest the camera needs, and counts as out of view only where every copy is (a copy
+  scaled unevenly is never culled, its view no longer being a frustum).
 - **Guesses don't dice.** The sky's sampling table (`environment`) only guesses which of the sky
   the camera sees, so it sees displaced terrain as its heightmap's flat cells
   (`displaced::roughly`) rather than dicing every cell around the camera.
 - **Dicing on all cores.** Cells diced outside a render's threads (dropping a forest's trees
-  onto the terrain) are diced on a pool of the terrain's own when they are large.
+  onto the terrain) are diced on a pool of threads shared by every displaced terrain when they
+  are large.
 - **Same surface for every ray.** The level depends on the cell, not the ray, so camera, shadow
   and bounce rays all meet the same geometry.
 - **No cracks.** Where a cell meets a coarser neighbour, its edge follows the neighbour's; points

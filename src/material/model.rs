@@ -44,6 +44,13 @@ pub trait MaterialModel: Sync{
         self.emitted(normal, towards)
     }
 
+    /// As `emitted_at`, at the point of the surface `c` describes (where it is, its normal and
+    /// its object's fields), for materials whose emission varies over it as a graph says
+    /// (`surface_layers`); sampled lights are evaluated here.
+    fn emitted_in(&self, c: &crate::graph::Context, towards: &Vector3<f64>, uv: Option<crate::na::Vector2<f64>>) -> Color {
+        self.emitted_at(&c.normal, towards, uv)
+    }
+
     /// This material as data, for the wavefront integrator (`wavefront::flat`); None if it
     /// can't be.
     fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> { None }

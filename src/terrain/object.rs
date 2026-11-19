@@ -561,8 +561,8 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
         parent = Some(initial);
         let key = format!("patch {:.9} {:.9} {} {}", lat, lon, l.cells, l.spacing);
         let t = evolve(o, t, &key);
-        if k == 0 {
-            if let Some(path) = o["map"].as_str() { write_map(&t, path, 2048); }
+        if k == 0 && let Some(path) = o["map"].as_str() {
+            write_map(&t, path, 2048);
         }
         built.push(Layer::new(t, p.min_river_width));
     }

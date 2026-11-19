@@ -40,6 +40,11 @@ picks the layer on top stochastically, so each keeps its own BSDF (a `rock` with
 on the rock layer, a plain Lambertian for snow) and the result is unbiased. Masks above the
 chosen layer are the only ones evaluated.
 
+A layer may glow (a `diffuse-light`, say, for lava). Where a light is sampled, its layers'
+emissions are added by how much of the surface each is on top of there
+(`MaterialModel::emitted_in`, the masks evaluated at the sampled point), which is what
+scattering there gives on average, so sampling the light agrees with hitting it.
+
 ## Fields
 
 A landscape (`"type": "landscape"`, a scaled patch or full scale) takes `"material"`: a

@@ -48,13 +48,17 @@
 use crate::bvh::Bvh;
 use crate::graph::{Context, Graph};
 use crate::intersection::RawIntersection;
-use crate::na::{Matrix3, Vector3};
+use crate::na::{Affine3, Matrix3, Vector3};
 use crate::procedural::heightmap::{intersect_triangle, HeightGrid};
 use crate::ray::Ray;
 use crate::shapes::bbox::BBox;
 use crate::shapes::geometry::Geometry;
 use std::cell::Cell;
 use std::sync::{Arc, OnceLock};
+
+/// Threads for dicing large cells asked for from outside a thread pool, shared by every
+/// displaced terrain (one pool each would start a thread per core for each).
+static DICING: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
 
 thread_local! {
     static ROUGHLY: Cell<bool> = const { Cell::new(false) };
@@ -91,11 +95,16 @@ pub struct Detail {
     /// coarser.
     pub view: Option<View>,
     pub offscreen: f64,
+    /// Where copies of the terrain are put in the scene (transforms around it, or instances of
+    /// a named geometry), when the camera above is the scene's: each cell is diced as finely as
+    /// the nearest copy of it needs, and is out of view only if every copy is. Empty for a
+    /// terrain where it stands.
+    pub instances: Vec<Affine3<f64>>,
 }
 
 impl Default for Detail {
     fn default() -> Detail {
-        Detail { eye: None, pixels: 1., max_level: 8, min_spacing: None, level: 4, view: None, offscreen: 1. }
+        Detail { eye: None, pixels: 1., max_level: 8, min_spacing: None, level: 4, view: None, offscreen: 1., instances: vec![] }
     }
 }
 
@@ -113,6 +122,23 @@ pub struct View {
 }
 
 impl View {
+    /// This view seen from a frame `to_frame` maps the scene into: None unless that is a
+    /// rotation, translation and uniform scale, which keep the view a frustum.
+    pub fn through(&self, to_frame: &Affine3<f64>) -> Option<View> {
+        let linear: Matrix3<f64> = to_frame.matrix().fixed_view::<3, 3>(0, 0).into();
+        let gram = linear.transpose() * linear;
+        let s2 = gram[(0, 0)];
+        if !s2.is_finite() || s2 <= 0. || (gram - Matrix3::identity() * s2).abs().max() > 1e-9 * s2 {
+            return None;
+        }
+        let s = s2.sqrt();
+        Some(View {
+            eye: to_frame.transform_point(&crate::na::Point3::from(self.eye)).coords,
+            right: linear * self.right / s, up: linear * self.up / s, forward: linear * self.forward / s,
+            tan_x: self.tan_x, tan_y: self.tan_y, margin: self.margin * s,
+        })
+    }
+
     /// Whether the box lies wholly outside the view: all its corners beyond one of the planes
     /// bounding it (the four sides, and the plane of the lens behind).
     pub fn excludes(&self, b: &BBox) -> bool {
@@ -161,8 +187,6 @@ pub struct DisplacedTerrain {
     levels: Vec<u8>,
     cell_bounds: Vec<BBox>,
     tiles: Vec<OnceLock<Tile>>,
-    /// Threads for dicing large cells asked for from outside a thread pool.
-    pool: OnceLock<Option<rayon::ThreadPool>>,
     /// Over the cells, by index into `cells`.
     bvh: Bvh,
     cells: Vec<u32>,
@@ -241,20 +265,32 @@ impl DisplacedTerrain {
         // are no taller than a pixel rather than smearing the relief into vertical streaks.
         let finest = graph.finest().min(lift.as_ref().map_or(f64::INFINITY, |g| g.finest()));
         let min_spacing = detail.min_spacing.unwrap_or_else(|| (0.5 * finest).min(cell / 8.)).max(1e-6);
+        // The camera as each copy of the terrain sees it, in the terrain's own frame (the
+        // angle between pixels is the same there, under a uniform scale).
+        let pixel_angle = detail.eye.map_or(0., |(_, a)| a);
+        let eyes: Vec<(Vector3<f64>, Option<View>)> = match detail.eye {
+            None => vec![],
+            Some((eye, _)) if detail.instances.is_empty() => vec![(eye, detail.view.clone())],
+            Some((eye, _)) => detail.instances.iter().filter_map(|t| {
+                let to_frame = t.try_inverse()?;
+                Some((to_frame.transform_point(&crate::na::Point3::from(eye)).coords,
+                    detail.view.as_ref().and_then(|v| v.through(&to_frame))))
+            }).collect(),
+        };
         let levels: Vec<u8> = cell_bounds.par_iter().enumerate().map(|(k, b)| {
             let (lo, hi) = grid.smooth_range(k % nx, k / nx);
             let extent = cell.max(hi - lo);
             let finest = ((extent / min_spacing).log2().floor().max(0.) as u32).min(detail.max_level);
-            let level = match detail.eye {
-                None => detail.level,
-                Some((eye, pixel_angle)) => {
+            let level = if eyes.is_empty() { detail.level } else {
+                // As finely as the copy that needs it most.
+                eyes.iter().map(|(eye, view)| {
                     let nearest = Vector3::new(eye.x.clamp(b.min.x, b.max.x), eye.y.clamp(b.min.y, b.max.y), eye.z.clamp(b.min.z, b.max.z));
                     // Cells out of view are seen only by the light they shade or reflect.
-                    let unseen = detail.view.as_ref().is_some_and(|v| v.excludes(b));
+                    let unseen = view.as_ref().is_some_and(|v| v.excludes(b));
                     let footprint = (nearest - eye).norm().max(1e-6) * pixel_angle * detail.pixels
                         * if unseen { detail.offscreen.max(1.) } else { 1. };
                     (extent / footprint).log2().ceil().max(0.) as u32
-                },
+                }).max().unwrap_or(detail.level)
             };
             level.min(finest).min(15) as u8
         }).collect();
@@ -265,7 +301,7 @@ impl DisplacedTerrain {
             nx, nz, levels.iter().min().unwrap_or(&0), levels.iter().max().unwrap_or(&0), vertices / 1e6);
         let tiles = (0 .. nx * nz).map(|_| OnceLock::new()).collect();
         Ok(DisplacedTerrain { grid, graph, vertical, lift, falloff: falloff.max(0.), range, levels, cell_bounds, tiles,
-            pool: OnceLock::new(), bvh, cells, bounds, place: None, fields: None })
+            bvh, cells, bounds, place: None, fields: None })
     }
 
     /// Evaluate the graphs where the terrain will be in the scene: at `origin + axes * p` for
@@ -427,11 +463,11 @@ impl DisplacedTerrain {
     fn tile(&self, k: usize) -> &Tile {
         self.tiles[k].get_or_init(|| {
             // Asked from outside a thread pool (placing a forest, say), a large cell is diced
-            // on a pool of the terrain's own. Not from a render's threads: one waiting there
-            // takes up other pixels meanwhile, which may want this same cell (see
+            // on a pool shared by every displaced terrain. Not from a render's threads: one
+            // waiting there takes up other pixels meanwhile, which may want this same cell (see
             // `geometry::build_apart`), and the render keeps every core busy anyway.
             if self.levels[k] >= 5 && rayon::current_thread_index().is_none()
-                && let Some(pool) = self.pool.get_or_init(|| rayon::ThreadPoolBuilder::new().build().ok()) {
+                && let Some(pool) = DICING.get_or_init(|| rayon::ThreadPoolBuilder::new().build().ok()) {
                 return pool.install(|| self.dice(k, true));
             }
             self.dice(k, false)
@@ -857,5 +893,37 @@ mod tests {
         let near = t.levels[0];
         let far = t.levels[t.levels.len() - 1];
         assert!(near > far, "near {} far {}", near, far);
+    }
+
+    /// A terrain put elsewhere in the scene is diced for the camera as its copies see it: as
+    /// finely as the nearest copy needs, and out of view only where every copy is.
+    #[test]
+    fn test_copies_are_diced_for_the_camera_as_they_see_it() {
+        let g = json!({"node": "fractal", "scale": 1, "smallest": 0.001, "amplitude": 0.1});
+        let shift = |x: f64| Affine3::from_matrix_unchecked(crate::na::Translation3::new(x, 0., 0.).to_homogeneous());
+        let local_eye = Vector3::new(-3.5, 0.5, -3.5);
+        let here = terrain(g.clone(), Detail { eye: Some((local_eye, 0.002)), max_level: 10, ..Default::default() });
+        // The same view of a copy a kilometre east, and of that and another far off.
+        let eye = local_eye + Vector3::new(1000., 0., 0.);
+        let one = terrain(g.clone(), Detail { eye: Some((eye, 0.002)), max_level: 10, instances: vec![shift(1000.)], ..Default::default() });
+        let two = terrain(g.clone(), Detail { eye: Some((eye, 0.002)), max_level: 10, instances: vec![shift(1000.), shift(-5000.)], ..Default::default() });
+        assert_eq!(here.levels, one.levels);
+        assert_eq!(here.levels, two.levels);
+        // Taken where it stands, it would be diced as if a kilometre off.
+        let unplaced = terrain(g.clone(), Detail { eye: Some((eye, 0.002)), max_level: 10, ..Default::default() });
+        assert!(unplaced.levels.iter().max() < here.levels.iter().max());
+        // A view through the copy's placement culls as it would where it stands.
+        let view = View { eye: Vector3::new(0., 1., 0.), right: Vector3::new(0., 0., 1.), up: Vector3::y(), forward: Vector3::x(),
+            tan_x: 0.58, tan_y: 0.58, margin: 0. };
+        let moved = View { eye: view.eye + Vector3::new(1000., 0., 0.), ..view.clone() };
+        let detail = |eye: Vector3<f64>, view: View, instances: Vec<Affine3<f64>>|
+            Detail { eye: Some((eye, 0.002)), max_level: 10, view: Some(view), offscreen: 4., instances, ..Default::default() };
+        let stands = terrain(g.clone(), detail(view.eye, view.clone(), vec![]));
+        let copied = terrain(g, detail(moved.eye, moved.clone(), vec![shift(1000.)]));
+        assert_eq!(stands.levels, copied.levels);
+        // A copy scaled unevenly isn't culled at all (its view is no longer a frustum).
+        let squash = Affine3::from_matrix_unchecked(crate::na::Matrix4::new_nonuniform_scaling(&Vector3::new(1., 2., 1.)));
+        assert!(view.through(&squash).is_none());
+        assert!(view.through(&shift(5.)).is_some());
     }
 }

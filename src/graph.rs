@@ -341,9 +341,9 @@ impl Node {
                 (terrace(h, *step, *sharpness) - h) / step * amplitude
             },
             Op::CrossBeds { noise, scale, set, amplitude } => {
-                // Laminae are about 0.07 to 0.12 of a set apart: fade them out to their mean
-                // where the vertices are too far apart to show them.
-                let spacing = 0.07 * set * scale;
+                // Fade the laminae out to their mean where the vertices are too far apart to
+                // show them.
+                let spacing = crate::material::rock::LAMINA_FINEST * set * scale;
                 let keep = if c.filter > 0. { smoothstep(2. * c.filter, 4. * c.filter, spacing) } else { 1. };
                 if keep <= 0. {
                     0.
@@ -484,7 +484,7 @@ impl Op {
             Op::Cells { scale, .. } => return 0.1 * scale,
             Op::Talus(t) => return t.smallest,
             Op::Const(_) => return f64::INFINITY,
-            Op::CrossBeds { scale, set, .. } => return 0.07 * set * scale,
+            Op::CrossBeds { scale, set, .. } => return crate::material::rock::LAMINA_FINEST * set * scale,
             Op::Strata { step, breakup, .. } => return breakup.as_ref().map_or(f64::INFINITY, |b| b.finest()).min(0.25 * step),
             Op::Slope { breakup, .. } | Op::Altitude { breakup, .. } | Op::Aspect { breakup, .. }
                 | Op::Field { breakup, .. } => breakup.iter().map(|b| &**b).collect(),
@@ -986,6 +986,6 @@ mod tests {
         assert!(max - min > 0.05);
         // Too fine for vertices a metre apart: nothing.
         assert_eq!(g.eval(&Context::new(Vector3::new(1., 2., 3.), Vector3::y(), 1.)), 0.);
-        assert!((g.finest() - 0.07 * 0.12 * 30.).abs() < 1e-12);
+        assert!((g.finest() - crate::material::rock::LAMINA_FINEST * 0.12 * 30.).abs() < 1e-12);
     }
 }

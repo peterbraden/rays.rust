@@ -301,6 +301,34 @@ mod tests {
         assert!((sampled - hit).abs() < 0.03 * hit, "light sampling {} vs hitting {}", sampled, hit);
     }
 
+    #[test]
+    fn test_layered_area_light_sampling_agrees_with_hitting_it() {
+        // A quad light that glows only where its top layer covers a black one (x > 0, and half
+        // of that): light sampling must evaluate the layers' masks where it samples.
+        let scene = |sample_lights: bool| SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 1, "sample_lights": {},
+            "camera": {{ "location": [0, 0.5, 0], "lookat": [0, 0, 0], "up": [0, 0, 1], "angle": 0.5 }},
+            "materials": {{
+                "F": {{ "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }},
+                "Dark": {{ "type": "lambertian", "albedo": [0, 0, 0] }},
+                "Glow": {{ "type": "diffuse-light", "color": [1, 1, 1], "intensity": 1 }},
+                "L": {{ "type": "surface_layers", "layers": [ {{ "material": "Dark" }},
+                    {{ "material": "Glow", "coverage": 0.5,
+                       "mask": {{ "node": "smoothstep", "input": "x", "from": -0.01, "to": 0.01 }} }} ] }}
+            }},
+            "objects": [
+                {{ "type": "plane", "y": 0, "material": "F" }},
+                {{ "type": "quad", "points": [[-1, 1, -1], [1, 1, -1], [-1, 1, 1], [1, 1, 1]], "material": "L" }}
+            ]
+        }}"#, sample_lights));
+        crate::geometry::seed_rand(2, 1);
+        let r = Ray { ro: Vector3::new(0.2, 0.5, 0.3), rd: Vector3::new(0., -1., 0.) };
+        let mean = |s: &Scene, n: usize| (0..n).map(|_| trace(&r, 0, s).1.rgb.x).sum::<f64>() / n as f64;
+        let (sampled, hit) = (mean(&scene(true), 20000), mean(&scene(false), 60000));
+        assert!(sampled > 0.01, "{}", sampled);
+        assert!((sampled - hit).abs() < 0.04 * hit, "light sampling {} vs hitting {}", sampled, hit);
+    }
+
     /// A floor under a grid of 8 × 8 point lights and 8 × 8 small quad lights facing down, with
     /// `sampler` choosing which to sample.
     fn many_lights(sampler: &str) -> Scene {

@@ -75,9 +75,33 @@ impl MaterialModel for SurfaceLayers {
         self.layers.iter().any(|l| l.material.is_emitter())
     }
 
+    /// Without a point there are no masks: the most any layer emits, so a light whose top
+    /// layer alone glows is still found and sampled (`emitted_in` gives the true amount).
     fn emitted(&self, normal: &Vector3<f64>, towards: &Vector3<f64>) -> Color {
-        // Without the hit there are no masks: the base's.
-        self.layers[0].material.emitted(normal, towards)
+        let total = |c: &Color| c.rgb.x + c.rgb.y + c.rgb.z;
+        self.layers.iter().map(|l| l.material.emitted(normal, towards))
+            .fold(Color::black(), |a, b| if total(&b) > total(&a) { b } else { a })
+    }
+
+    /// Each layer's emission by how much of the surface it is on top of there: what scattering
+    /// at the point gives on average, as it picks the layer on top.
+    fn emitted_in(&self, c: &Context, towards: &Vector3<f64>, uv: Option<crate::na::Vector2<f64>>) -> Color {
+        if !self.is_emitter() {
+            return Color::black();
+        }
+        let mut sum = Color::black();
+        let mut below = 1.;
+        for layer in self.layers[1..].iter().rev() {
+            let m = layer.cover(c);
+            if m > 0. && layer.material.is_emitter() {
+                sum = sum + layer.material.emitted_in(c, towards, uv) * (below * m);
+            }
+            below *= 1. - m;
+            if below <= 0. {
+                return sum;
+            }
+        }
+        sum + self.layers[0].material.emitted_in(c, towards, uv) * below
     }
 }
 

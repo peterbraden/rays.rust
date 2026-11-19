@@ -851,8 +851,8 @@ impl crate::graph::Fields for Ground {
             if left <= 1e-6 { break; }
         }
         // Beyond every simulation (with no planet-wide one), the last one's edge.
-        if left > 1e-6 {
-            if let Some(l) = self.layers.last() { sum += left * l.fields.at(&l.domain, f, &d, h)?; }
+        if left > 1e-6 && let Some(l) = self.layers.last() {
+            sum += left * l.fields.at(&l.domain, f, &d, h)?;
         }
         Some(sum)
     }

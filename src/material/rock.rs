@@ -205,6 +205,10 @@ pub struct Lamina {
     pub hardness: f64,
 }
 
+/// The width, in sets, that nine laminae in ten are wider than, crossed along any line through
+/// the rock (`test_laminae_are_mostly_wider_than_the_finest`): the detail to resolve them.
+pub const LAMINA_FINEST: f64 = 0.025;
+
 /// Cross-bedded sandstone at `q` (in the rock's own units), in sets about `set` thick: the
 /// foresets of the dunes that became aeolian sandstone (Navajo, De Chelly). After the
 /// sedimentology (eg. Rubin, "Cross-bedding, bedforms, and paleocurrents", SEPM 1987):
@@ -558,6 +562,29 @@ impl MaterialModel for Rock {
 
 #[cfg(test)]
 mod tests {
+    /// Laminae seen along any line through the rock are mostly wider than `LAMINA_FINEST` sets,
+    /// though their spacing is 0.07 to 0.12 of a set along the foresets: troughs bend them and
+    /// the foresets steepen towards a set's base.
+    #[test]
+    fn test_laminae_are_mostly_wider_than_the_finest() {
+        let noise = SeededNoise::new(3);
+        let mut widths = vec![];
+        for line in 0..200 {
+            let a = line as f64 * 2.399;
+            let dir = Vector3::new(a.cos() * (line as f64 * 0.7).sin(), (line as f64 * 1.3).cos() * 0.6, a.sin()).normalize();
+            let start = Vector3::new(line as f64 * 1.7, line as f64 * 0.31, -(line as f64) * 0.9);
+            let step = 0.001;
+            let (mut last, mut since) = (cross_beds(&noise, start, 1.).id, 0.);
+            for k in 1..10000 {
+                let l = cross_beds(&noise, start + dir * (k as f64 * step), 1.);
+                since += step;
+                if l.id != last { widths.push(since); since = 0.; last = l.id; }
+            }
+        }
+        let narrower = widths.iter().filter(|&&w| w < LAMINA_FINEST).count() as f64 / widths.len() as f64;
+        assert!(narrower < 0.1, "{:.0}% of laminae are narrower than {}", 100. * narrower, LAMINA_FINEST);
+    }
+
     use super::*;
 
     const PRESETS: [&str; 6] = ["granite", "basalt", "sandstone", "limestone", "slate", "quartzite"];

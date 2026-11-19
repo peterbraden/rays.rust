@@ -1090,6 +1090,12 @@ impl SceneFile {
             level: SceneFile::parse_int(&v["level"], 4) as u32,
             view,
             offscreen: SceneFile::parse_number(&v["offscreen"], 4.),
+            // Where the scene puts it, found by `displaced_instances`.
+            instances: o["displacement_instances"].as_array().map_or_else(Vec::new, |a| a.iter().map(|m| {
+                let n: Vec<f64> = m.as_array().map_or_else(Vec::new, |r| r.iter().filter_map(Value::as_f64).collect());
+                assert_eq!(n.len(), 16, "displacement_instances are 4 x 4 matrices, row by row");
+                Affine3::from_matrix_unchecked(Matrix4::from_row_slice(&n))
+            }).collect()),
         };
         let vertical = match o["displacement_direction"].as_str() {
             None | Some("normal") => false,
@@ -1130,6 +1136,91 @@ impl SceneFile {
                 margin: aperture,
             }
         })
+    }
+
+    /// Where the scene puts each displaced terrain: the transforms around every reference to it,
+    /// through named geometries (`{"type": "transform", "item": "cliff"}`, a terrain's own
+    /// `"transform"` steps, `rotate`s), written into each terrain as `"displacement_instances"`
+    /// so it is diced for the camera as each copy sees it. Terrains nowhere transformed are left
+    /// alone.
+    fn displaced_instances(objects: &mut [Value], geometries: &mut Map<String, Value>) {
+        // (In a named geometry or not, its JSON pointer there, where it is put.)
+        type Found = Vec<(Option<String>, String, Affine3<f64>)>;
+        fn walk(v: &Value, root: &Option<String>, ptr: String, at: Affine3<f64>, geometries: &Map<String, Value>, depth: usize, found: &mut Found) {
+            if depth > 64 { return; }
+            let refer = |name: &str, at: Affine3<f64>, found: &mut Found| {
+                if let Some(g) = geometries.get(name) {
+                    walk(g, &Some(name.to_string()), String::new(), at, geometries, depth + 1, found);
+                }
+            };
+            match v {
+                Value::Object(o) => {
+                    let mut at = at;
+                    match o.get("type").and_then(Value::as_str) {
+                        Some("transform") => at *= SceneFile::parse_affine(v),
+                        Some("rotate") => at *= Affine3::from_matrix_unchecked(Rotation3::from_euler_angles(
+                            SceneFile::parse_number(&v["roll"], 0.).to_radians(),
+                            SceneFile::parse_number(&v["pitch"], 0.).to_radians(),
+                            SceneFile::parse_number(&v["yaw"], 0.).to_radians()).to_homogeneous()),
+                        _ => {},
+                    }
+                    if !v["transform"].is_null() {
+                        at *= SceneFile::parse_steps(&v["transform"]);
+                    }
+                    if v["type"].as_str() == Some("terrain") && v.get("displacement").is_some() {
+                        found.push((root.clone(), ptr, at));
+                        return;
+                    }
+                    for (k, child) in o {
+                        match (k.as_str(), child) {
+                            ("item" | "a" | "b" | "clipped_by", Value::String(name)) => refer(name, at, found),
+                            ("items", Value::Array(items)) => for (i, item) in items.iter().enumerate() {
+                                match item {
+                                    Value::String(name) => refer(name, at, found),
+                                    _ => walk(item, root, format!("{}/items/{}", ptr, i), at, geometries, depth + 1, found),
+                                }
+                            },
+                            ("camera" | "transform" | "motion" | "heightmap" | "displacement" | "vertical_displacement", _) => {},
+                            (_, Value::Object(_) | Value::Array(_)) => walk(child, root, format!("{}/{}", ptr, k.replace('~', "~0").replace('/', "~1")), at, geometries, depth + 1, found),
+                            _ => {},
+                        }
+                    }
+                },
+                Value::Array(items) => for (i, item) in items.iter().enumerate() {
+                    walk(item, root, format!("{}/{}", ptr, i), at, geometries, depth + 1, found);
+                },
+                _ => {},
+            }
+        }
+        let mut found: Found = vec![];
+        for (i, o) in objects.iter().enumerate() {
+            walk(o, &None, format!("/{}", i), Affine3::identity(), geometries, 0, &mut found);
+        }
+        let mut placed: HashMap<(Option<String>, String), Vec<Affine3<f64>>> = HashMap::new();
+        for (root, ptr, at) in found {
+            placed.entry((root, ptr)).or_default().push(at);
+        }
+        for ((root, ptr), ats) in placed {
+            if ats.iter().all(|a| (a.matrix() - Matrix4::identity()).abs().max() < 1e-12) {
+                continue;
+            }
+            let matrices: Vec<Value> = ats.iter().map(|a| {
+                let m = a.matrix();
+                Value::from((0..16).map(|k| m[(k / 4, k % 4)]).collect::<Vec<f64>>())
+            }).collect();
+            let target = match &root {
+                Some(name) => geometries.get_mut(name).and_then(|g| g.pointer_mut(&ptr)),
+                None => {
+                    // "/i/rest": the i'th object, then the rest within it.
+                    let rest = ptr.splitn(3, '/').nth(2).map_or(String::new(), |r| format!("/{}", r));
+                    let i: usize = ptr.split('/').nth(1).and_then(|i| i.parse().ok()).unwrap_or(0);
+                    objects.get_mut(i).and_then(|o| o.pointer_mut(&rest))
+                },
+            };
+            if let Some(t) = target {
+                t["displacement_instances"] = Value::from(matrices);
+            }
+        }
     }
 
     /// A forest's `"lod"`: `true`, or `{"pixels": 1, "max_level": 12}`, to see each tree at the
@@ -3331,6 +3422,8 @@ impl SceneFile {
             || s.geometries.values().any(SceneFile::has_motion);
         // A displaced terrain is diced for the camera (`parse_displaced_terrain`), named or not.
         let mut named = s.geometries;
+        let mut objects = s.objects;
+        SceneFile::displaced_instances(&mut objects, &mut named);
         for g in named.values_mut() {
             if g["type"].as_str() == Some("terrain") && g.get("displacement").is_some() && g.get("camera").is_none() {
                 g["camera"] = s.camera.clone();
@@ -3339,9 +3432,9 @@ impl SceneFile {
             }
         }
         let geometries = GeometryLibrary::new(named);
-        geometries.preload(&s.objects);
+        geometries.preload(&objects);
         // A landscape is meshed finest where the camera is.
-        let mut scene_objects = s.objects;
+        let mut scene_objects = objects;
         // A world from a seed becomes the giant or the rocky or icy body it turns out to be.
         for o in scene_objects.iter_mut() {
             if o["type"].as_str() == Some("world") {
@@ -4216,5 +4309,31 @@ mod tests {
         assert!(pinhole.excludes(&at(60.)));
         assert!(SceneFile::parse_view(&serde_json::json!({"type": "orthographic",
             "image_width": 100, "image_height": 100})).is_none());
+    }
+
+    #[test]
+    fn test_displaced_terrains_learn_where_they_are_put() {
+        let terrain = serde_json::json!({ "type": "terrain", "heightmap": {}, "displacement": 0 });
+        let mut geometries = serde_json::json!({
+            "cliff": terrain,
+            "pair": { "type": "union", "items": ["cliff", { "type": "transform", "item": "cliff", "translate": [0, 0, 50] }] },
+        }).as_object().unwrap().clone();
+        let mut objects = vec![
+            serde_json::json!({ "type": "transform", "item": "pair", "translate": [100, 0, 0] }),
+            serde_json::json!({ "type": "transform", "item": "cliff", "scale": 2 }),
+            serde_json::json!({ "type": "terrain", "heightmap": {}, "displacement": 0, "transform": [{ "translate": [0, 5, 0] }] }),
+            terrain.clone(),
+        ];
+        SceneFile::displaced_instances(&mut objects, &mut geometries);
+        let placed = |v: &Value| v["displacement_instances"].as_array().map(|a| a.iter()
+            .map(|m| [m[3].as_f64().unwrap(), m[7].as_f64().unwrap(), m[11].as_f64().unwrap(), m[0].as_f64().unwrap()]).collect::<Vec<_>>());
+        // The named cliff: twice in the pair (moved 100 east, once 50 south besides), and
+        // scaled by 2 where it stands.
+        let mut cliff = placed(&geometries["cliff"]).unwrap();
+        cliff.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(cliff, vec![[0., 0., 0., 2.], [100., 0., 0., 1.], [100., 0., 50., 1.]]);
+        // An inline terrain with steps of its own; one nowhere moved is left alone.
+        assert_eq!(placed(&objects[2]).unwrap(), vec![[0., 5., 0., 1.]]);
+        assert!(placed(&objects[3]).is_none());
     }
 }

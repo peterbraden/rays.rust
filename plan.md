@@ -1595,6 +1595,15 @@ UI, file IO and rayon's threads would follow.
    which it did for every block here; adaptive sampling's plans fall back. Shadow rays as a stage, and shading by material, wait: the
    traversal is 16-46% of the CPU build's time on these scenes, and the host is the larger
    cost on the light ones.
+   Against master's benchmark (`scripts/benchmark.py`, `demo/benchmarks/teapot-sky.json`,
+   320 x 240) on the M2, after merging master (November 2026): the path tracer is unchanged by
+   this branch (image identical, 0.387 -> 0.384 s at 16 spp). Render time at 16 / 64 / 256 spp:
+   path tracer 0.39 / 1.57 / 6.24 s, CPU wavefront 0.43 / 1.70 / 6.75 s, GPU 0.63 / 1.09 /
+   2.71 s. A sample after the 64th: 24.3, 26.3 and 8.4 ms. The GPU starts about 0.5 s behind.
+   Next, in order: time that start (likely the shader's compilation and the sky map baked on
+   one thread; not yet measured natively) and the readback (every block reads back the whole
+   image's sums and squares: keep the image on the GPU, read it for progressive output and at
+   the end); then phase 3, since few scenes reach the GPU yet.
 3. The fallback framework: per-area status, classification, CPU queues for materials first,
    then intersection. Exit: every flattenable demo scene plus at least one with a
    procedural shape and one with an unported material renders through the GPU path with CPU

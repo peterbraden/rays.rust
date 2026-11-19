@@ -1072,7 +1072,7 @@ impl SceneFile {
 
     /// A terrain displaced by the graph `d` (`shapes::displaced`), diced as its
     /// `"displacement_detail"` and the scene's camera (which the scene gives it) call for.
-    fn parse_displaced_terrain(grid: Arc<HeightGrid>, d: &Value, o: &Value) -> crate::shapes::displaced::DisplacedTerrain {
+    pub(crate) fn parse_displaced_terrain(grid: Arc<HeightGrid>, d: &Value, o: &Value) -> crate::shapes::displaced::DisplacedTerrain {
         use crate::shapes::displaced::{Detail, DisplacedTerrain};
         let graph = crate::graph::Graph::parse(d).unwrap_or_else(|e| panic!("terrain's displacement: {}", e));
         let v = &o["displacement_detail"];
@@ -3353,6 +3353,9 @@ impl SceneFile {
         for o in scene_objects.iter_mut() {
             if o["type"].as_str() == Some("landscape") && o.get("camera").is_none() {
                 o["camera"] = s.camera.clone();
+                // Its displacement is diced to the camera's pixels.
+                o["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+                o["camera"]["image_width"] = serde_json::json!(SceneFile::parse_int(&s.width, 640));
             }
             // A moon draws craters down to the camera's pixels, and orbits the scene's planet.
             if matches!(o["type"].as_str(), Some("moon") | Some("gas_giant")) {

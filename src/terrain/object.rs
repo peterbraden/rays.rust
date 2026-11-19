@@ -67,7 +67,7 @@ use crate::terrain::planet::Planet;
 use crate::terrain::simulation::{Terrain, TerrainParams, ICE_FREE};
 use crate::terrain::volcano::VolcanoParams;
 use crate::terrain::channel::{point_cell, WaterLines};
-use crate::terrain::scenery::{self, Frame, Ground, LandscapeMedium, Layer, Relief, SceneryParams, Viewpoint};
+use crate::terrain::scenery::{self, Clipmap, Frame, Ground, Hole, LandscapeMedium, Layer, Relief, SceneryParams, Surface, Viewpoint};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -500,6 +500,10 @@ fn focus(o: &Value, frame: &Frame, ahead: f64) -> Vector3<f64> {
 /// - Ground cover: `snowline` and `treeline` (m; by default from the climate, by latitude),
 ///   `min_river_width` (m); or `"material"`, a material for the ground but rivers and lakes,
 ///   whose graphs' `field` nodes read the simulations (blended between patches) and the climate.
+/// - `displacement`: a graph displacing the ground about the camera at render time, as on a
+///   `terrain` (see `displaced_patch`), with `displacement_detail`, `vertical_displacement`
+///   and so on as there; `displacement_reach` (m, default 1000) out from under the camera on
+///   each side, on a heightfield of `displacement_spacing` (m, default 2).
 fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> SceneObject {
     let mut p = SceneryParams::default();
     p.resolution = SceneFile::parse_int(&o["resolution"], p.resolution).max(8);
@@ -570,12 +574,51 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     let layers = Arc::new(built);
     let relief = Relief::new(layers.clone(), &planet, radius, p.roughness, finest);
     let view = Viewpoint { location: SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.)) };
-    let geometry = scenery::mesh(&relief, &frame, &view, &p);
+    let (foot, height) = frame.on_planet(&view.location);
+    let ground = relief.height(&foot, relief.slope(&foot), 1.);
+    println!("Landscape: the camera is {:.1} m above the ground under it ({:.1} m above sea level)", height - ground, ground);
+    let patch = o.get("displacement").map(|d| displaced_patch(o, d, &relief, &frame, &view, &p));
+    let mesh = scenery::mesh(&relief, &frame, &view, &p, patch.as_ref().map(|(h, _)| h));
+    let geometry: Box<dyn Geometry + Send + Sync> = match patch {
+        Some((_, terrain)) => Box::new(crate::shapes::group::Group::new(vec![Box::new(mesh), Box::new(terrain)])),
+        None => Box::new(mesh),
+    };
     let climate = params.climate.as_ref().map(|c| crate::terrain::climate::climate(c, &planet));
     if let (Some(path), Some(c)) = (o["climate_map"].as_str(), &climate) { crate::terrain::map::write_climate_map(&planet, c, path, 2048); }
     let ground = Ground::new(layers, climate, params.glacier.clone().unwrap_or_default(), time, params.planet.seed, frame, &p);
     println!("Landscape: {} triangles in {:.1?}", geometry.primitives(), start.elapsed());
-    SceneObject { geometry: Box::new(geometry), medium: Box::new(LandscapeMedium::new(ground, material)) }
+    SceneObject { geometry, medium: Box::new(LandscapeMedium::new(ground, material)) }
+}
+
+/// The ground about the camera displaced at render time (`shapes::displaced`): a heightfield
+/// of the landscape's surface `displacement_reach` metres out on each side, displaced by the
+/// graph `d`, and the hole it leaves in the clipmap's mesh. Its displacement fades out towards
+/// its edges over at least three of the rings' spacings there, so the rings' triangles that
+/// overlap its edge (moved onto its surface) meet it undisplaced.
+fn displaced_patch(o: &Value, d: &Value, relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams)
+    -> (Hole, crate::shapes::displaced::DisplacedTerrain)
+{
+    let reach = number(o, "displacement_reach", 1000.).max(1.);
+    let cell = number(o, "displacement_spacing", 2.).max(0.01);
+    let clipmap = Clipmap::new(relief, frame, view, p);
+    let snap = |c: f64| (c / (8. * cell)).round() * 8. * cell;
+    let (cx, cz) = (snap(view.location.x), snap(view.location.z));
+    let (min, max) = ((cx - reach, cz - reach), (cx + reach, cz + reach));
+    let start = std::time::Instant::now();
+    let surface = Surface { relief, frame, clipmap: &clipmap, cell };
+    let grid = Arc::new(crate::procedural::heightmap::HeightGrid::sample(&surface, min, max, cell));
+    // The rings are coarsest at the patch's corners.
+    let coarsest = [min, (min.0, max.1), (max.0, min.1), max].iter().map(|&(x, z)| {
+        let (tx, tz) = frame.tangent(&frame.on_planet(&Vector3::new(x, 0., z)).0);
+        clipmap.local(tx, tz).unwrap_or(reach)
+    }).fold(cell, f64::max);
+    let falloff = number(o, "displacement_falloff", 0.).max(3. * coarsest);
+    let mut po = o.clone();
+    po["displacement_falloff"] = serde_json::json!(falloff);
+    let terrain = SceneFile::parse_displaced_terrain(grid.clone(), d, &po);
+    println!("Landscape: displaced {:.0} m about the camera on a {} x {} grid of {:.2} m, fading over {:.0} m, in {:.1?}",
+        reach, grid.nx, grid.nz, grid.cell, falloff, start.elapsed());
+    (Hole { min, max, surface: grid }, terrain)
 }
 
 #[cfg(test)]

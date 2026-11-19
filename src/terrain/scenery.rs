@@ -411,22 +411,110 @@ pub struct Viewpoint {
 /// there.
 struct Vertex { d: Vector3<f64>, local: f64 }
 
-/// The landscape's mesh: clipmap rings about the camera, and a coarse globe beyond them.
-pub fn mesh(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams) -> SmoothMesh {
-    let n = (p.resolution / 4).max(4) * 4;
-    let half = (n / 2) as i64;
-    let (foot, cam_h) = frame.on_planet(&view.location);
-    let ground = relief.base(&foot);
-    let above = (cam_h - ground.max(0.)).max(1.);
-    // The nearest ground is about the camera's height away: there a ring's spacing is its
-    // half-width over N / 4.
-    let s0 = (above * 4. / n as f64).max(p.min_spacing);
-    // Out to the horizon, and the mountains beyond it, or a quarter of the way round.
-    let reach = ((2. * relief.radius * (cam_h.max(0.) + 9000.)).sqrt() + (2. * relief.radius * 9000f64).sqrt())
-        .min(0.3 * relief.radius);
-    // From far off, the globe's mesh is fine enough: the rings stay within reach.
-    let s0 = s0.min(reach / half as f64);
-    let (cx, cz) = frame.tangent(&foot);
+/// The layout of the clipmap's rings: square rings of `2 half + 1` vertices a side, each centred
+/// on twice its spacing's grid near the camera's foot (`cx`, `cz` on the tangent plane), the
+/// first `s0` apart, out to `reach`.
+pub struct Clipmap {
+    half: i64,
+    s0: f64,
+    reach: f64,
+    cx: f64,
+    cz: f64,
+}
+
+impl Clipmap {
+    pub fn new(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams) -> Clipmap {
+        let n = (p.resolution / 4).max(4) * 4;
+        let half = (n / 2) as i64;
+        let (foot, cam_h) = frame.on_planet(&view.location);
+        let ground = relief.base(&foot);
+        let above = (cam_h - ground.max(0.)).max(1.);
+        // The nearest ground is about the camera's height away: there a ring's spacing is its
+        // half-width over N / 4.
+        let s0 = (above * 4. / n as f64).max(p.min_spacing);
+        // Out to the horizon, and the mountains beyond it, or a quarter of the way round.
+        let reach = ((2. * relief.radius * (cam_h.max(0.) + 9000.)).sqrt() + (2. * relief.radius * 9000f64).sqrt())
+            .min(0.3 * relief.radius);
+        // From far off, the globe's mesh is fine enough: the rings stay within reach.
+        let s0 = s0.min(reach / half as f64);
+        let (cx, cz) = frame.tangent(&foot);
+        Clipmap { half, s0, reach, cx, cz }
+    }
+
+    /// Ring `level`'s centre, in units of s0: snapped to twice its spacing, so it lies on its
+    /// parent's grid.
+    fn centre(&self, level: u32) -> (i64, i64) {
+        let step = 1i64 << level;
+        let snap = |c: f64| ((c / self.s0 / (2 * step) as f64).round() as i64) * 2 * step;
+        (snap(self.cx), snap(self.cz))
+    }
+
+    /// The spacing the relief is drawn to at tangent-plane point (`x`, `z`) by the ring it lies
+    /// in: its own spacing, tending to its parent's towards its edge (see `mesh`); None beyond
+    /// the rings.
+    pub fn local(&self, x: f64, z: f64) -> Option<f64> {
+        let (gx, gz) = (x / self.s0, z / self.s0);
+        for level in 0..=30 {
+            let step = 1i64 << level;
+            let (kx, kz) = self.centre(level);
+            let w = (self.half * step) as f64;
+            let r = (gx - kx as f64).abs().max((gz - kz as f64).abs()) / w;
+            if r <= 1. {
+                return Some(self.s0 * step as f64 * (1. + smoothstep(0.75, 1., r)));
+            }
+            if w * self.s0 >= self.reach { break; }
+        }
+        None
+    }
+}
+
+/// A part of the ground drawn by something else (a displaced patch about the camera): a square
+/// in the scene's x and z, and the surface it has there, which the mesh's vertices inside it
+/// are moved onto, so the mesh's triangles that overlap its edge follow it.
+pub struct Hole {
+    pub min: (f64, f64),
+    pub max: (f64, f64),
+    pub surface: Arc<crate::procedural::heightmap::HeightGrid>,
+}
+
+impl Hole {
+    fn inside(&self, p: &Vector3<f64>) -> bool {
+        p.x > self.min.0 && p.x < self.max.0 && p.z > self.min.1 && p.z < self.max.1
+    }
+}
+
+/// The landscape's surface in the scene, as a heightfield over its x and z: the relief drawn
+/// to the spacing of the clipmap ring each point lies in, or `cell` where that is finer, so
+/// that where it meets the rings it agrees with them.
+pub struct Surface<'a> {
+    pub relief: &'a Relief,
+    pub frame: &'a Frame,
+    pub clipmap: &'a Clipmap,
+    pub cell: f64,
+}
+
+impl crate::procedural::heightmap::HeightSource for Surface<'_> {
+    fn height(&self, x: f64, z: f64) -> f64 {
+        let (d, _) = self.frame.on_planet(&Vector3::new(x, 0., z));
+        let (tx, tz) = self.frame.tangent(&d);
+        let local = self.clipmap.local(tx, tz).unwrap_or(self.cell).max(self.cell);
+        let slope = self.relief.slope(&d);
+        // The point above (x, z) at the surface's height: moving up the column barely turns
+        // the direction from the planet's centre, so this settles in a few steps.
+        let mut y = 0.;
+        for _ in 0..4 {
+            let (d, h) = self.frame.on_planet(&Vector3::new(x, y, z));
+            y += (self.relief.height(&d, slope, local) - h) * self.frame.exaggeration;
+        }
+        y
+    }
+}
+
+/// The landscape's mesh: clipmap rings about the camera, and a coarse globe beyond them,
+/// leaving out the triangles wholly inside `patch`.
+pub fn mesh(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams, patch: Option<&Hole>) -> SmoothMesh {
+    let clipmap = Clipmap::new(relief, frame, view, p);
+    let Clipmap { half, s0, reach, .. } = clipmap;
     let mut vertices: Vec<Vertex> = vec![];
     let mut triangles: Vec<[usize; 3]> = vec![];
     // Odd vertices on each ring's outer edge, to put on the straight edge between their
@@ -439,9 +527,7 @@ pub fn mesh(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams)
     loop {
         let step = 1i64 << level;
         let s = s0 * step as f64;
-        // Centre snapped to twice this ring's spacing, so it lies on its parent's grid.
-        let snap = |c: f64| ((c / s0 / (2 * step) as f64).round() as i64) * 2 * step;
-        let (kx, kz) = (snap(cx), snap(cz));
+        let (kx, kz) = clipmap.centre(level);
         let w = half * step;
         let base = vertices.len();
         let width = 2 * half as usize + 1;
@@ -521,6 +607,17 @@ pub fn mesh(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams)
     for (k, a, b) in seams {
         positions[k] = (positions[a] + positions[b]) / 2.;
         normals[k] = (normals[a] + normals[b]).normalize();
+    }
+    if let Some(patch) = patch {
+        // Within the patch, onto its surface (straight up, as the patch is a heightfield).
+        for (p, n) in positions.iter_mut().zip(normals.iter_mut()) {
+            if patch.inside(p) {
+                let (y, hx, hz) = patch.surface.smooth(p.x, p.z);
+                p.y = y;
+                *n = Vector3::new(-hx, 1., -hz).normalize();
+            }
+        }
+        triangles.retain(|t| !t.iter().all(|&k| patch.inside(&positions[k])));
     }
     SmoothMesh::from_indexed(&[IndexedMesh { positions, normals, triangles, texcoords: vec![] }])
 }
@@ -841,7 +938,7 @@ mod tests {
         let r = Relief::new(layers, &planet, 6.36e6, 1., 1000.);
         let f = Frame::new(lat, lon, 6.36e6, 1.);
         let p = SceneryParams { resolution: 32, globe: 8, ..SceneryParams::default() };
-        let m = mesh(&r, &f, &Viewpoint { location: Vector3::new(0., 5000., 0.) }, &p);
+        let m = mesh(&r, &f, &Viewpoint { location: Vector3::new(0., 5000., 0.) }, &p, None);
         use crate::shapes::geometry::Geometry;
         // A ray straight down from the camera meets the ground.
         let down = Ray { ro: Vector3::new(1., 20000., 1.), rd: Vector3::new(0., -1., 0.) };
@@ -858,6 +955,46 @@ mod tests {
             let x = -40000. + 200. * k as f64;
             let r = Ray { ro: Vector3::new(x, 20000., 0.37 * x), rd: Vector3::new(0., -1., 0.) };
             assert!(m.intersects(&r).is_some(), "crack at {}", x);
+        }
+    }
+
+    #[test]
+    fn test_displaced_patch_meets_the_rings() {
+        use crate::shapes::displaced::{DisplacedTerrain, Detail};
+        use crate::shapes::geometry::Geometry;
+        let (planet, layers, (lat, lon)) = layers();
+        let r = Relief::new(layers, &planet, 6.36e6, 1., 1000.);
+        let f = Frame::new(lat, lon, 6.36e6, 1.);
+        let p = SceneryParams { resolution: 64, globe: 8, ..SceneryParams::default() };
+        let view = Viewpoint { location: Vector3::new(0., r.base(&f.dir(0., 0.)) + 50., 0.) };
+        let clipmap = Clipmap::new(&r, &f, &view, &p);
+        let surface = Surface { relief: &r, frame: &f, clipmap: &clipmap, cell: 2. };
+        let grid = Arc::new(crate::procedural::heightmap::HeightGrid::sample(&surface, (-200., -200.), (200., 200.), 2.));
+        let hole = Hole { min: (-200., -200.), max: (200., 200.), surface: grid.clone() };
+        let rings = mesh(&r, &f, &view, &p, None);
+        let flat = crate::graph::Graph::parse(&serde_json::json!(0)).unwrap();
+        let patch = DisplacedTerrain::new(grid.clone(), flat, false, &Detail::default()).unwrap();
+        let both = crate::shapes::group::Group::new(vec![Box::new(mesh(&r, &f, &view, &p, Some(&hole))), Box::new(patch)]);
+        let down = |x: f64, z: f64| Ray { ro: Vector3::new(x, 20000., z), rd: Vector3::new(0., -1., 0.) };
+        let y = |g: &dyn Geometry, x: f64, z: f64| g.intersects(&down(x, z)).map(|h| h.point.y);
+        let mut last: Option<f64> = None;
+        for k in 0..400 {
+            let x = 120. + 0.37 * k as f64;
+            let z = 0.3 * x - 40.;
+            // No crack where the patch meets the rings, and no step.
+            let h = y(&both, x, z).unwrap_or_else(|| panic!("crack at {}", x));
+            if let Some(l) = last {
+                assert!((h - l).abs() < 1., "step of {} at {}", h - l, x);
+            }
+            last = Some(h);
+            // Inside, the patch's surface (as diced); near its edge, close to the rings'.
+            if x < 190. {
+                assert!((h - grid.smooth(x, z).0).abs() < 0.01, "{} vs the patch's {}", h, grid.smooth(x, z).0);
+            }
+            if (180. ..200.).contains(&x) {
+                let ring = y(&rings, x, z).unwrap();
+                assert!((h - ring).abs() < 1., "{} vs the rings' {} at {}", h, ring, x);
+            }
         }
     }
 }

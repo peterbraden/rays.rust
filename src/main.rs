@@ -98,6 +98,7 @@ mod shapes {
     pub mod text;
     pub mod lod;
     pub mod displaced;
+    pub mod group;
 }
 mod octree;
 mod bvh;

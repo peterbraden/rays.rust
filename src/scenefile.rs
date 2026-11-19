@@ -1081,22 +1081,7 @@ impl SceneFile {
         let eye = (!camera.is_null() && height > 0. && v["level"].is_null()).then(|| {
             (SceneFile::parse_vec3(&camera["location"]), camera["angle"].as_f64().unwrap_or(0.5).tan() / height)
         });
-        // A still perspective camera's view, a few pixels wider than the image for the pixel
-        // filter, so cells out of it can be diced coarser.
-        let width = SceneFile::parse_number(&camera["image_width"], 0.);
-        let still_perspective = matches!(camera["type"].as_str(), None | Some("perspective"))
-            && camera.get("motion").is_none() && camera.get("astigmatism").is_none();
-        let view = (eye.is_some() && width > 0. && still_perspective).then(|| {
-            let frame = crate::camera::Frame::look_at(SceneFile::parse_vec3(&camera["location"]),
-                SceneFile::parse_vec3(&camera["lookat"]), SceneFile::parse_vec3(&camera["up"]));
-            let tan = camera["angle"].as_f64().unwrap_or(0.5).tan();
-            let widen = |pixels: f64| 1. + 8. / pixels;
-            crate::shapes::displaced::View {
-                eye: frame.location, right: frame.camx, up: frame.camy, forward: frame.camz,
-                tan_x: 0.5 * tan * width / height * widen(width), tan_y: 0.5 * tan * widen(height),
-                margin: SceneFile::parse_number(&camera["aperture"], 0.2).abs(),
-            }
-        });
+        let view = eye.and(SceneFile::parse_view(camera));
         let detail = Detail {
             eye,
             pixels: SceneFile::parse_number(&v["pixels"], 1.),
@@ -1115,6 +1100,36 @@ impl SceneFile {
             .unwrap_or_else(|e| panic!("terrain's vertical_displacement: {}", e)));
         let falloff = SceneFile::parse_number(&o["displacement_falloff"], 0.);
         DisplacedTerrain::with_lift(grid, graph, vertical, lift, falloff, &detail).unwrap_or_else(|e| panic!("{}", e))
+    }
+
+    /// A still perspective camera's view (`shapes::displaced::View`), a few pixels wider than
+    /// the image for the pixel filter, so cells out of it can be diced coarser; None for other
+    /// cameras, or without an image size.
+    fn parse_view(camera: &Value) -> Option<crate::shapes::displaced::View> {
+        let width = SceneFile::parse_number(&camera["image_width"], 0.);
+        let height = SceneFile::parse_number(&camera["image_height"], 0.);
+        let still_perspective = matches!(camera["type"].as_str(), None | Some("perspective"))
+            && camera.get("motion").is_none() && camera.get("astigmatism").is_none();
+        (width > 0. && height > 0. && still_perspective).then(|| {
+            let frame = crate::camera::Frame::look_at(SceneFile::parse_vec3(&camera["location"]),
+                SceneFile::parse_vec3(&camera["lookat"]), SceneFile::parse_vec3(&camera["up"]));
+            let tan = camera["angle"].as_f64().unwrap_or(0.5).tan();
+            let widen = |pixels: f64| 1. + 8. / pixels;
+            // A ray from the lens, `aperture` off its centre, aimed through the focal plane,
+            // strays from its pinhole ray by aperture * |1 - z / focus| at depth z: within
+            // the planes moved out by the aperture and turned out by aperture / focus.
+            let aperture = SceneFile::parse_number(&camera["aperture"], 0.2).abs();
+            let focus = camera["focus_distance"].as_f64()
+                .unwrap_or_else(|| (SceneFile::parse_vec3(&camera["lookat"]) - frame.location).norm());
+            // (A lens focused at its own plane blurs everything: the view is then everything ahead.)
+            let defocus = aperture / focus.max(1e-9);
+            crate::shapes::displaced::View {
+                eye: frame.location, right: frame.camx, up: frame.camy, forward: frame.camz,
+                tan_x: 0.5 * tan * width / height * widen(width) + defocus,
+                tan_y: 0.5 * tan * widen(height) + defocus,
+                margin: aperture,
+            }
+        })
     }
 
     /// A forest's `"lod"`: `true`, or `{"pixels": 1, "max_level": 12}`, to see each tree at the
@@ -4178,5 +4193,25 @@ mod tests {
     fn test_black_threshold_independent_of_shadow_bias() {
         assert_eq!(minimal_scene("").black_threshold, 1e-7);
         assert_eq!(minimal_scene(r#", "black_threshold": 0.01"#).black_threshold, 0.01);
+    }
+
+    #[test]
+    fn test_view_widens_for_defocus() {
+        use crate::shapes::bbox::BBox;
+        // Focused 1 m off with a 0.5 m lens: far beyond the focus, rays from the lens's edge
+        // reach well outside the pinhole frustum (half-width 0.3 at unit depth), up to 0.8.
+        let view = SceneFile::parse_view(&serde_json::json!({
+            "location": [0, 0, 0], "lookat": [0, 0, 1], "up": [0, 1, 0], "angle": 0.5,
+            "aperture": 0.5, "image_width": 100, "image_height": 100})).unwrap();
+        let at = |x: f64| BBox::new(Vector3::new(x, -0.5, 100.), Vector3::new(x + 1., 0.5, 101.));
+        assert!(!view.excludes(&at(60.)) && !view.excludes(&at(-61.)));
+        assert!(view.excludes(&at(120.)) && view.excludes(&at(-121.)));
+        // A pinhole sees no wider than its image.
+        let pinhole = SceneFile::parse_view(&serde_json::json!({
+            "location": [0, 0, 0], "lookat": [0, 0, 1], "up": [0, 1, 0], "angle": 0.5,
+            "aperture": 0, "image_width": 100, "image_height": 100})).unwrap();
+        assert!(pinhole.excludes(&at(60.)));
+        assert!(SceneFile::parse_view(&serde_json::json!({"type": "orthographic",
+            "image_width": 100, "image_height": 100})).is_none());
     }
 }

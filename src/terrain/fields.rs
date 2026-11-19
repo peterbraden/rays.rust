@@ -27,6 +27,14 @@ pub struct SimFields {
     wetness: Vec<f64>,
     convexity: Vec<f64>,
     snowline: Vec<f64>,
+    /// The least and most of `flow` and `wetness` at the corners, to which their splines'
+    /// overshoot is clamped.
+    flow_range: (f64, f64),
+    wetness_range: (f64, f64),
+}
+
+fn bounds(v: &[f64]) -> (f64, f64) {
+    v.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &x| (lo.min(x), hi.max(x)))
 }
 
 impl SimFields {
@@ -60,12 +68,15 @@ impl SimFields {
             let values: Vec<f64> = (0..n).map(|i| cell(i, f)).collect();
             d.corner_cells.iter().map(|cells| cells.iter().map(|&c| values[c]).sum::<f64>() / cells.len() as f64).collect()
         };
+        let (flow, wetness) = (corners(Field::Flow), corners(Field::Wetness));
         SimFields {
             sediment: corners(Field::Sediment),
             ice: corners(Field::Ice),
             lava: corners(Field::Lava),
-            flow: corners(Field::Flow),
-            wetness: corners(Field::Wetness),
+            flow_range: bounds(&flow),
+            wetness_range: bounds(&wetness),
+            flow,
+            wetness,
             convexity: corners(Field::Convexity),
             snowline: corners(Field::Snowline),
         }
@@ -85,8 +96,9 @@ impl SimFields {
             Field::Sediment => s(&self.sediment).max(0.),
             Field::Ice => s(&self.ice).max(0.),
             Field::Lava => s(&self.lava).max(0.),
-            Field::Flow => s(&self.flow),
-            Field::Wetness => s(&self.wetness),
+            // Nor can the splines take these beyond what the simulation found anywhere.
+            Field::Flow => s(&self.flow).max(self.flow_range.0).min(self.flow_range.1),
+            Field::Wetness => s(&self.wetness).max(self.wetness_range.0).min(self.wetness_range.1),
             Field::Convexity => s(&self.convexity),
             Field::Elevation => h,
             Field::Snowline => h - s(&self.snowline),

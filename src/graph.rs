@@ -38,7 +38,7 @@
 //!   landscape, what its simulation left there (see `Field`: `sediment`, `ice`, `lava`, `flow`,
 //!   `wetness`, `convexity`, `elevation`, `snowline`, `treeline`, `temperature`,
 //!   `precipitation`), `default` (0) on surfaces without it. With `from` and `to`, smoothly from
-//!   0 to 1 between them (`breakup` added first, as for `slope`); without, the value itself.
+//!   0 to 1 between them; without, the value itself; either way with `breakup` added first.
 //! - `strata`: ledges: beds `step` metres thick (default 1), each eroded back from the one
 //!   above it and ending in a riser `sharpness` of the way to vertical (default 0.8), as the
 //!   difference between the terraced height and the height, in [-amplitude, amplitude]
@@ -329,9 +329,10 @@ impl Node {
                 smoothstep(*from, *to, a)
             },
             Op::Field { field, default, band, breakup } => {
-                let v = c.fields.and_then(|f| f.field(*field, &c.p)).unwrap_or(*default);
+                let v = c.fields.and_then(|f| f.field(*field, &c.p)).unwrap_or(*default)
+                    + breakup.as_ref().map_or(0., |b| b.eval(c));
                 match band {
-                    Some((from, to)) => smoothstep(*from, *to, v + breakup.as_ref().map_or(0., |b| b.eval(c))),
+                    Some((from, to)) => smoothstep(*from, *to, v),
                     None => v,
                 }
             },
@@ -658,7 +659,13 @@ fn parse_node(v: &Value) -> Result<Node, String> {
     }
     let o = v;
     let kind = o["node"].as_str().or_else(|| o["type"].as_str()).ok_or_else(|| format!("graph node needs a \"node\": {}", o))?;
-    let seed = || o["seed"].as_u64().unwrap_or(0);
+    let seed = || -> Result<u64, String> {
+        match &o["seed"] {
+            Value::Null => Ok(0),
+            s => s.as_u64().or_else(|| s.as_f64().filter(|f| *f >= 0. && f.fract() == 0. && *f < 2f64.powi(64)).map(|f| f as u64))
+                .ok_or_else(|| format!("a seed is a whole number, at least 0, not {}", s)),
+        }
+    };
     let plan = o["plan"].as_bool().unwrap_or(false);
     Ok(Node::new(match kind {
         "constant" => Op::Const(num(o, "value", 0.)?),
@@ -674,7 +681,7 @@ fn parse_node(v: &Value) -> Result<Node, String> {
             if lacunarity <= 1. || scale <= 0. {
                 return Err("a fractal's scale must be positive and its lacunarity above 1".into());
             }
-            Op::Fractal { noise: Box::new(SeededNoise::new(seed())), style, scale, smallest: num(o, "smallest", scale / 256.)?.max(1e-6),
+            Op::Fractal { noise: Box::new(SeededNoise::new(seed()?)), style, scale, smallest: num(o, "smallest", scale / 256.)?.max(1e-6),
                 roughness: num(o, "roughness", 0.5)?, lacunarity, amplitude: num(o, "amplitude", 1.)?, plan }
         },
         "cells" => {
@@ -688,7 +695,7 @@ fn parse_node(v: &Value) -> Result<Node, String> {
             if scale <= 0. {
                 return Err("cells' scale must be positive".into());
             }
-            Op::Cells { seed: seed() as u32, style, scale, amplitude: num(o, "amplitude", 1.)?, plan }
+            Op::Cells { seed: seed()? as u32, style, scale, amplitude: num(o, "amplitude", 1.)?, plan }
         },
         "slope" | "altitude" => {
             let (from, to) = (num(o, "from", 0.)?, num(o, "to", if kind == "slope" { 90. } else { 1. })?);
@@ -729,7 +736,7 @@ fn parse_node(v: &Value) -> Result<Node, String> {
             if scale <= 0. || set <= 0. {
                 return Err("cross_beds' scale and set must be positive".into());
             }
-            Op::CrossBeds { noise: Box::new(SeededNoise::new(seed())), scale, set, amplitude: num(o, "amplitude", 0.05)? }
+            Op::CrossBeds { noise: Box::new(SeededNoise::new(seed()?)), scale, set, amplitude: num(o, "amplitude", 0.05)? }
         },
         "expr" => {
             let text = o["expr"].as_str().ok_or("an expr node needs an \"expr\" string")?;
@@ -756,13 +763,14 @@ fn parse_node(v: &Value) -> Result<Node, String> {
                 let (amount, scale, octaves) = (num(o, "amount", 1.)?, num(o, "scale", 10.)?, num(o, "octaves", 3.)?.max(1.));
                 let lacunarity: f64 = 2.03;
                 let smallest = scale / lacunarity.powf(octaves - 1.) * 0.999;
-                let axis = |k: u64| Box::new(Node::new(Op::Fractal { noise: Box::new(SeededNoise::new(seed().wrapping_mul(3).wrapping_add(k + 101))),
+                let base = seed()?;
+                let axis = |k: u64| Box::new(Node::new(Op::Fractal { noise: Box::new(SeededNoise::new(base.wrapping_mul(3).wrapping_add(k + 101))),
                     style: FractalStyle::Perlin, scale, smallest, roughness: 0.5, lacunarity, amplitude: amount, plan: false }));
                 [axis(0), axis(1), axis(2)]
             };
             Op::Warp { input: child(o, "input")?, by }
         },
-        "talus" => Op::Talus(Box::new(crate::talus::Talus::parse(o, seed(), |k| o.get(k).map(parse_node).transpose())?)),
+        "talus" => Op::Talus(Box::new(crate::talus::Talus::parse(o, seed()?, |k| o.get(k).map(parse_node).transpose())?)),
         k => return Err(format!("unknown graph node \"{}\"", k)),
     }))
 }
@@ -866,6 +874,17 @@ mod tests {
         assert!(Graph::parse(&json!({"node": "blend", "a": 1})).err().unwrap().contains("\"b\""));
     }
 
+    #[test]
+    fn test_seeds_are_whole_numbers() {
+        let fractal = |seed: Value| Graph::parse(&json!({"node": "fractal", "seed": seed}));
+        assert!(fractal(json!(3)).is_ok());
+        assert!(fractal(json!(3.0)).is_ok());
+        assert!(fractal(json!(-1)).is_err());
+        assert!(fractal(json!(2.5)).is_err());
+        assert!(fractal(json!("7")).is_err());
+        assert!(Graph::parse(&json!({"node": "cross_beds", "seed": -4})).is_err());
+    }
+
     struct Deep;
     impl Fields for Deep {
         fn field(&self, f: Field, p: &Vector3<f64>) -> Option<f64> {
@@ -884,6 +903,9 @@ mod tests {
         let raw = graph(json!({"node": "field", "field": "ice", "default": 7}));
         assert_eq!(raw.eval(&at(5., 0., 0.).with_fields(Some(&Deep))), 7.);
         assert!(Graph::parse(&json!({"node": "field", "field": "mud"})).is_err());
+        // A breakup moves a raw field as it does a banded one.
+        let broken = graph(json!({"node": "field", "field": "sediment", "breakup": 0.5}));
+        assert_eq!(broken.eval(&at(2., 0., 0.).with_fields(Some(&Deep))), 2.5);
         // A wall facing north (-z) faces north fully; level ground and a south wall don't.
         let north = graph(json!({"node": "aspect", "from": 0, "to": 1}));
         let facing = |n: Vector3<f64>| north.eval(&Context::new(Vector3::zeros(), n, 0.));

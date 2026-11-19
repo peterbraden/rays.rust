@@ -105,9 +105,9 @@ octave's mean in its place, so a coarsely diced distant surface doesn't alias or
   down by the graph's range. On gentle ground that is little more than the cell, so a ray grazing
   the ground dices only the cells it passes close to, not every cell within the graph's reach.
 - **Out of view, coarser.** Cells wholly outside the camera's view (a still perspective camera's
-  frustum, a few pixels wider) are seen only through the shadows and light they cast, and are
-  diced `offscreen` times coarser (`"displacement_detail": {"offscreen": 4}`, the default; 1
-  dices them like the rest).
+  frustum, a few pixels wider, and wider still for what its lens blurs in from beyond the focus)
+  are seen only through the shadows and light they cast, and are diced `offscreen` times
+  coarser (`"displacement_detail": {"offscreen": 4}`, the default; 1 dices them like the rest).
 - **Guesses don't dice.** The sky's sampling table (`environment`) only guesses which of the sky
   the camera sees, so it sees displaced terrain as its heightmap's flat cells
   (`displaced::roughly`) rather than dicing every cell around the camera.

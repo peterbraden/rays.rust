@@ -65,10 +65,14 @@ thread_local! {
 /// (`environment`). A ray grazing the ground from the camera passes close to many cells, and
 /// dicing them all for that guess cost more than the render.
 pub fn roughly<T>(f: impl FnOnce() -> T) -> T {
-    let before = ROUGHLY.with(|r| r.replace(true));
-    let v = f();
-    ROUGHLY.with(|r| r.set(before));
-    v
+    // Restored when dropped, so a panic in `f` (caught further up) can't leave this thread
+    // seeing terrain roughly for the rest of the render.
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) { ROUGHLY.with(|r| r.set(self.0)); }
+    }
+    let _restore = Restore(ROUGHLY.with(|r| r.replace(true)));
+    f()
 }
 
 /// How finely to dice: from the camera, or everywhere alike.
@@ -516,8 +520,8 @@ impl DisplacedTerrain {
                 }
             }
         }
-        // The nearest of their triangles, and p's barycentric coordinates on it.
-        let mut best: Option<(f64, [(usize, usize); 3], f64, f64)> = None;
+        // The nearest point on their triangles to p, and its grid coordinates in the cell.
+        let mut best: Option<(f64, (f64, f64))> = None;
         for (i, j) in quads {
             for tri in [[(i, j), (i + 1, j), (i, j + 1)], [(i + 1, j + 1), (i, j + 1), (i + 1, j)]] {
                 let at = |(a, b): (usize, usize)| tile.pos[b * (n + 1) + a];
@@ -531,18 +535,17 @@ impl DisplacedTerrain {
                 let w = ((d11 * v2 - d12 * v1) / det).clamp(0., 1. - u);
                 let dist = (a + e1 * u + e2 * w - p).norm();
                 if best.is_none_or(|b| dist < b.0) {
-                    best = Some((dist, tri, u, w));
+                    let grid_at = |(a, b): (usize, usize)| (a as f64, b as f64);
+                    let (a, b, c) = (grid_at(tri[0]), grid_at(tri[1]), grid_at(tri[2]));
+                    best = Some((dist, (a.0 + (b.0 - a.0) * u + (c.0 - a.0) * w, a.1 + (b.1 - a.1) * u + (c.1 - a.1) * w)));
                 }
             }
         }
-        let (dist, tri, u, w) = best?;
+        let (dist, (fi, fj)) = best?;
         // Not on this cell (a `face` some wrapper set): no answer rather than a wrong one.
         if dist > 1e-3 * g.cell / n as f64 + tol {
             return None;
         }
-        let grid_at = |(a, b): (usize, usize)| (a as f64, b as f64);
-        let (a, b, c) = (grid_at(tri[0]), grid_at(tri[1]), grid_at(tri[2]));
-        let (fi, fj) = (a.0 + (b.0 - a.0) * u + (c.0 - a.0) * w, a.1 + (b.1 - a.1) * u + (c.1 - a.1) * w);
         let (x, z) = (g.min.0 + (ix + fi / n as f64) * g.cell, g.min.1 + (iz + fj / n as f64) * g.cell);
         let (y, hx, hz) = g.smooth(x, z);
         Some(crate::shapes::geometry::Undisplaced {
@@ -623,6 +626,14 @@ mod tests {
 
     /// With a falloff, the edges lie on the undisplaced base (to meet a grid around them), and
     /// the displaced surface stays within its cells' bounds, whose range now reaches 0.
+    #[test]
+    fn test_roughly_is_undone_by_a_panic() {
+        let seen = std::panic::catch_unwind(|| roughly(|| -> () { panic!("in a guess") }));
+        assert!(seen.is_err());
+        assert!(!ROUGHLY.with(|r| r.get()));
+        assert!(roughly(|| ROUGHLY.with(|r| r.get())));
+    }
+
     #[test]
     fn test_falloff_meets_the_base_at_the_edges() {
         // Displaced only upwards, so the bounds must widen to reach 0.

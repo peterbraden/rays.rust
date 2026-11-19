@@ -1559,6 +1559,33 @@ UI, file IO and rayon's threads would follow.
      spread as large as the difference. The WGSL grew from 772 KB to 816 KB. To measure on the
      M2 and in a browser on a real GPU before building on it (`scripts/benchmark-gpu.sh`).
    - Still to do of 1: a pass's time with shading off.
+
+   Measured on the M2 (Metal), #114's GPU at 63032db (November 2026):
+   - Correct there: the 13 GPU tests pass on Metal, the queues, the intersection kernel and
+     the host queue included; images as before (FLIP against `trace` unchanged on all 17
+     scenes); browser against native FLIP 0.0025.
+   - A one-sample pass's GPU time (`gpu.run`, 640 x 360, fastest of 3), before the queues ->
+     now: demo 22.8 -> 17.4 ms, instances 39.6 -> 23.6, glossy-sun 18.9 -> 15.1, spheres
+     7.7 -> 10.2 (two rounds to save, and a third dispatch and the queue's copies a round).
+   - Through `render` (blocks of 5 lanes at 640 x 360), a sample's cost, from 8 and 64 spp
+     (`scripts/benchmark-gpu.sh`; the CPU wavefront integrator's in brackets): demo 10.6 ms
+     (43.2), instances 34.6 (89.4), glossy-sun 24.4 (41.2), spheres 23.2 (43.9), sky-sunset
+     20.5 (47.1), deep-space 21.5 (138.8), limb-sunset 58.8 (278.5), stratosphere 30.1
+     (322.4); geometric mean 2.7x the CPU's. The light scenes cost twice what a one-sample
+     pass does, because:
+   - The host, not the GPU, is half of a light scene's time. Per 64 spp (13 blocks) on
+     spheres: planning 15 ms, `begin_pass` 705 ms, the GPU and readback 832 ms, merging 21
+     ms; sky-sunset 621 and 781; demo 607 and 1189. `begin_pass` builds a block's paths one
+     pixel at a time (`PathState::start`, 1.15 million a block, one thread), filters the live
+     ones on one thread, and uploads 110 MB of path states; and none of it overlaps the GPU,
+     which waits for the block before it to be read back.
+   - In Chromium on the M2: spheres 35.5 -> 23.8 ms a pass, night-orbit 131 -> 64.8 (160 x
+     90, 32 spp); compile and first pass 7.8 s (7.4 s before).
+   Next, by these: the host's part of a block (paths built in parallel; uploaded as camera
+   rays, 32 bytes, with the paths started by a kernel, not 96; then the next block built
+   while the GPU runs this one). Shadow rays as a stage, and shading by material, wait: the
+   traversal is 16-46% of the CPU build's time on these scenes, and the host is the larger
+   cost on the light ones.
 3. The fallback framework: per-area status, classification, CPU queues for materials first,
    then intersection. Exit: every flattenable demo scene plus at least one with a
    procedural shape and one with an unported material renders through the GPU path with CPU

@@ -115,7 +115,7 @@ impl Geometry for Glyphs {
 /// characters (beyond their advance widths). Curves are flattened into `steps` edges.
 pub fn text(font_path: &str, string: &str, thickness: f64, offset: P2, steps: usize) -> Box<dyn Geometry + Sync + Send> {
     assert!(thickness > 0., "text thickness must be positive");
-    let data = std::fs::read(font_path).unwrap_or_else(|e| panic!("Failed to read font {}: {}", font_path, e));
+    let data = crate::assets::read(font_path).unwrap_or_else(|e| panic!("Failed to read font: {}", e));
     let face = ttf_parser::Face::parse(&data, 0).unwrap_or_else(|e| panic!("Failed to parse font {}: {}", font_path, e));
     let scale = 1. / face.units_per_em() as f64;
 

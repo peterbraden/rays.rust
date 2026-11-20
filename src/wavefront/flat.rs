@@ -8,8 +8,24 @@
 //! Shapes and materials describe themselves (`Geometry::flatten`, `MaterialModel::flat`), so
 //! the scene file is parsed, and transforms and instances applied, exactly as for the
 //! recursive tracer. The skysphere stays an object, evaluated for rays that escape. What can't
-//! be flattened (procedural shapes, CSG, textures, media, crepuscular rays, spectral and
-//! motion-blurred renders) is reported, and the scene renders the usual way.
+//! be flattened (procedural shapes, CSG, media, crepuscular rays, spectral and motion-blurred
+//! renders) is reported, and the scene renders the usual way.
+//!
+//! A shape that isn't primitives (an ocean, a terrain, a combined shape: anything whose
+//! `flatten` is None) doesn't stop a scene being flattened either. It is kept whole, as a
+//! shape the scene's own code intersects (`FlatScene::shapes`), tested after the primitives
+//! as the planes are; its hits carry what its material may ask of them (`Hit::face`, `part`).
+//! The CPU's integrator renders such scenes; the GPU takes those of the kinds it has a kernel
+//! for and says which it hasn't (`gpu::Buffers::build`). Only what lets light through to
+//! shadow rays in part (transparent water, media) is still refused: the stages' shadow rays
+//! are blocked or not.
+//!
+//! A material that isn't data (textured, layered, procedural: anything whose `flat` is None)
+//! doesn't stop a scene being flattened if its shape can be. It is kept as `FlatMaterial::Host`,
+//! naming its object, and a path that hits it is shaded by the scene's own material, as the
+//! recursive tracer would (`integrator::host_bounce`). That is the fallback the plan's
+//! scheduler is for (plan.md sections 12 and 13; `scheduler`'s "CPU queue"): the stages cover
+//! what has been ported, and the rest is a queue of its own served by the renderer's code.
 
 use crate::bvh::Bvh;
 use crate::color::Color;
@@ -28,9 +44,13 @@ pub enum Prim {
     /// normal follows the winding, (v1 - v0) × (v2 - v0).
     Triangle { v: [Vector3<f64>; 3], n: Option<[Vector3<f64>; 3]> },
     Sphere { center: Vector3<f64>, radius: f64 },
-    /// The infinite plane y = `y`, facing up; kept out of the BVH.
+    /// The infinite plane y = `y`, its normal facing each ray (as `Plane`); kept out of the BVH.
     Plane { y: f64 },
 }
+
+/// The nearest a shape its own code intersects is asked for a hit: such shapes find their
+/// surfaces by marching or iterating, and a ray leaving one starts within that error of it.
+const MIN_SHAPE: f64 = 1e-9;
 
 /// A surface hit: distance, point, geometric normal, and the normal to shade with.
 #[derive(Clone, Copy, Debug)]
@@ -40,6 +60,11 @@ pub struct Hit {
     pub geometric: Vector3<f64>,
     pub shading: Vector3<f64>,
     pub prim: u32,
+    /// Which face and part of its object was hit, for a material that asks (`Geometry::uv`,
+    /// `Medium::part`): a primitive's place among its object's, or what a shape the scene's
+    /// own code intersects reported.
+    pub face: u32,
+    pub part: u32,
 }
 
 impl Prim {
@@ -114,7 +139,9 @@ impl Prim {
                 if t <= min || t >= max {
                     return None;
                 }
-                let n = Vector3::new(0., 1., 0.);
+                // Facing the ray, as `Plane::intersects`: a plane has no inside, so emitters on
+                // it shine both ways, and glass is always entered.
+                let n = Vector3::new(0., if r.rd.y > 0. { -1. } else { 1. }, 0.);
                 Some((t, n, n))
             },
         }
@@ -143,10 +170,18 @@ impl Prim {
         let linear = t.matrix().fixed_view::<3, 3>(0, 0).into_owned();
         let normal_matrix = linear.try_inverse()?.transpose();
         match self {
-            Prim::Triangle { v, n } => Some(Prim::Triangle {
-                v: [point(&v[0]), point(&v[1]), point(&v[2])],
-                n: n.map(|n| [(normal_matrix * n[0]).normalize(), (normal_matrix * n[1]).normalize(), (normal_matrix * n[2]).normalize()]),
-            }),
+            Prim::Triangle { v, n } => {
+                let v = [point(&v[0]), point(&v[1]), point(&v[2])];
+                let n = n.map(|n| [(normal_matrix * n[0]).normalize(), (normal_matrix * n[1]).normalize(), (normal_matrix * n[2]).normalize()]);
+                // A mirroring transformation reverses the winding, and with it the geometric
+                // normal, which must still point the way the transformed normal does (as
+                // `Transform`'s normal matrix keeps it): swap two corners.
+                Some(if linear.determinant() < 0. {
+                    Prim::Triangle { v: [v[0], v[2], v[1]], n: n.map(|n| [n[0], n[2], n[1]]) }
+                } else {
+                    Prim::Triangle { v, n }
+                })
+            },
             Prim::Sphere { center, radius } => {
                 let gram = linear.transpose() * linear;
                 let s2 = gram.trace() / 3.;
@@ -170,6 +205,9 @@ pub enum FlatMaterial {
     Emitter { radiance: Color, two_sided: bool },
     /// Two materials in a checkerboard across x and z (`CheckeredYPlane`).
     Checker { m1: Box<FlatMaterial>, m2: Box<FlatMaterial>, xsize: f64, zsize: f64 },
+    /// A material that isn't data: `FlatScene::hosts[object]`'s own, asked through
+    /// `MaterialModel::scatter` as the recursive tracer does.
+    Host { object: u32 },
 }
 
 impl FlatMaterial {
@@ -183,6 +221,7 @@ impl FlatMaterial {
             FlatMaterial::Emitter { .. } => 4,
             FlatMaterial::Specular { .. } => 5,
             FlatMaterial::Checker { .. } => 6,
+            FlatMaterial::Host { .. } => 7,
         }
     }
 
@@ -225,6 +264,17 @@ pub struct FlatScene {
     /// With `"light_sampler": "bvh"`, the light BVH over `emitters` (`light_bvh`), in place of
     /// choosing by power.
     pub light_bvh: Option<crate::light_bvh::LightBvh>,
+    /// Objects that aren't primitives, intersected by their own code, and their materials. A
+    /// hit's `prim` counts them after the primitives and the planes.
+    pub shapes: Vec<(std::sync::Arc<crate::sceneobject::SceneObject>, u32)>,
+    /// The objects whose materials are `FlatMaterial::Host`.
+    pub hosts: Vec<std::sync::Arc<crate::sceneobject::SceneObject>>,
+    /// Where there are hosts: each primitive's place among its object's (its face, for
+    /// `Geometry::uv`: a mesh flattens to its triangles in order). Empty otherwise.
+    pub prim_face: Vec<u32>,
+    /// Participating media, as data (`volume::Volume::flat`). The GPU's kernels track paths
+    /// through them; this crate's own stages don't (`FlatScene::needs_kernels`).
+    pub media: Vec<crate::volume::FlatMedium>,
 }
 
 impl FlatScene {
@@ -242,46 +292,114 @@ impl FlatScene {
         }
         let mut sky = None;
         let mut materials: Vec<FlatMaterial> = Vec::new();
-        let mut bounded: Vec<(Prim, u32)> = Vec::new();
+        let mut bounded: Vec<(Prim, u32, u32)> = Vec::new();
+        let mut hosts = Vec::new();
+        let mut shapes = Vec::new();
         let mut planes: Vec<(Prim, u32)> = Vec::new();
+        let mut media = Vec::new();
         let objects = s.objects.items().iter().chain(s.objects.infinite_items.iter());
-        let (mut shapes, mut unflat_shapes, mut unflat_materials) = (0, 0, 0);
-        for o in objects {
-            shapes += 1;
-            if o.geometry.is_stochastic() {
-                problems.push("participating media".to_string());
-                continue;
+        let (mut shapes_seen, mut unflat_shapes, mut unflat_materials) = (0, 0, 0);
+        // Which objects are in the way, for whoever wants the scene on the GPU: each by its
+        // place in the scene file's `objects` and its kind of shape.
+        let mut blocking: Vec<String> = Vec::new();
+        let mut blocked = |o: &crate::sceneobject::SceneObject, why: &str| {
+            let name = match s.source_index(o) {
+                Some(i) => format!("objects[{}] ({}{})", i, o.geometry.kind(), why),
+                None => format!("{}{}", o.geometry.kind(), why),
+            };
+            if !blocking.contains(&name) {
+                blocking.push(name);
             }
-            let Some(prims) = o.geometry.flatten() else {
-                if o.medium.material_at(Vector3::zeros()).is_sky() {
-                    sky = Some(o.clone());
-                } else {
-                    unflat_shapes += 1;
+        };
+        for o in objects {
+            shapes_seen += 1;
+            if o.geometry.is_stochastic() {
+                let material = o.medium.material_at(Vector3::zeros());
+                match (o.geometry.medium(), material.medium()) {
+                    (Some(volume), Some(scattering)) => match volume.flat(scattering) {
+                        Ok(m) => media.push(m),
+                        Err(why) => {
+                            problems.push("participating media the kernels have no code for".to_string());
+                            blocked(o, &format!(", a medium: {}", why));
+                        },
+                    },
+                    _ => {
+                        problems.push("participating media the kernels have no code for".to_string());
+                        blocked(o, ", a medium");
+                    },
                 }
                 continue;
+            }
+            let prims = match o.geometry.flatten() {
+                Some(prims) => Some(prims),
+                None if o.medium.material_at(Vector3::zeros()).is_sky() => {
+                    sky = Some(o.clone());
+                    continue;
+                },
+                // Light passes it in part, which the stages' shadow rays can't say.
+                None if o.geometry.transmits() => {
+                    unflat_shapes += 1;
+                    blocked(o, ", which light passes through");
+                    continue;
+                },
+                // Kept whole, for its own code to intersect.
+                None => None,
             };
-            let Some(m) = o.medium.flat_material() else { unflat_materials += 1; continue };
+            let m = match o.medium.flat_material() {
+                Some(m) => m,
+                // An emitter must be data: the stages' light sampling has to know it. So must
+                // a medium of several parts' (a combined shape's), as a primitive doesn't
+                // record its part.
+                None if o.medium.material_at(Vector3::zeros()).is_emitter() || (prims.is_some() && o.medium.part(1).is_some()) => {
+                    unflat_materials += 1;
+                    blocked(o, ": its material");
+                    continue;
+                },
+                None => {
+                    hosts.push(o.clone());
+                    FlatMaterial::Host { object: hosts.len() as u32 - 1 }
+                },
+            };
+            // (An emitter has to be primitives too: the stages sample lights by their areas.)
+            if prims.is_none() && matches!(m, FlatMaterial::Emitter { .. }) {
+                unflat_shapes += 1;
+                blocked(o, ", a light");
+                continue;
+            }
             let index = materials.len() as u32;
             materials.push(m);
-            for p in prims {
+            let Some(prims) = prims else {
+                shapes.push((o.clone(), index));
+                continue;
+            };
+            let by_face = o.geometry.faces_are_primitives();
+            for (face, p) in prims.into_iter().enumerate() {
+                let face = if by_face { face } else { 0 };
                 match p {
                     Prim::Plane { .. } => planes.push((p, index)),
-                    _ => bounded.push((p, index)),
+                    _ => bounded.push((p, index, face as u32)),
                 }
             }
         }
         if unflat_shapes > 0 {
-            problems.push(format!("{} of {} objects whose shapes can't be flattened (only spheres, triangles, meshes, boxes, flat quads, planes and their transforms can)", unflat_shapes, shapes));
+            problems.push(format!("{} of {} objects whose shapes can't be flattened (light passes through them in part, or they are lights that aren't spheres, triangles, meshes, boxes or flat quads)", unflat_shapes, shapes_seen));
         }
         if unflat_materials > 0 {
-            problems.push(format!("{} of {} objects whose materials can't be flattened (only untextured lambertian, plastic, metal, dielectric, isotropic conductor and diffuse-light can)", unflat_materials, shapes));
+            problems.push(format!("{} of {} objects whose materials can't be flattened (textured lights, and combined shapes with a material a part)", unflat_materials, shapes_seen));
         }
         problems.dedup();
+        if !blocking.is_empty() {
+            const NAMED: usize = 6;
+            let more = blocking.len().saturating_sub(NAMED);
+            blocking.truncate(NAMED);
+            problems.push(format!("in the way: {}{}", blocking.join(", "), if more > 0 { format!(" and {} more", more) } else { String::new() }));
+        }
         if !problems.is_empty() {
             return Err(problems.join("; "));
         }
-        let (bvh, bounded) = Bvh::build(bounded, |(p, _)| p.bounds());
-        let (prims, prim_material): (Vec<Prim>, Vec<u32>) = bounded.into_iter().unzip();
+        let (bvh, bounded) = Bvh::build(bounded, |(p, _, _)| p.bounds());
+        let prim_face = if hosts.is_empty() { Vec::new() } else { bounded.iter().map(|b| b.2).collect() };
+        let (prims, prim_material): (Vec<Prim>, Vec<u32>) = bounded.into_iter().map(|(p, m, _)| (p, m)).unzip();
         // Emitters, by power: luminance times area (times two if two-sided).
         let mut emitters = Vec::new();
         let mut powers = Vec::new();
@@ -312,7 +430,13 @@ impl FlatScene {
             crate::light_bvh::LightBvh::new(&bounds)
         });
         let emitter_choice = Distribution1D::new(if powers.is_empty() { vec![1.] } else { powers });
-        Ok(FlatScene { prims, prim_material, bvh, planes, materials, emitters, emitter_choice, emitter_index, sky, light_bvh })
+        Ok(FlatScene { prims, prim_material, bvh, planes, materials, emitters, emitter_choice, emitter_index, sky, light_bvh, shapes, hosts, prim_face, media })
+    }
+
+    /// Why only the GPU's kernels can render this flat scene, if so: this crate's stages
+    /// (`integrator`) have no participating media.
+    pub fn needs_kernels(&self) -> Option<String> {
+        (!self.media.is_empty()).then(|| "participating media, which only the GPU's kernels track".to_string())
     }
 
     /// One emitter to sample from `p` (its index in `emitters`), and the chance of choosing it.
@@ -344,7 +468,14 @@ impl FlatScene {
         let mut best: Option<Hit> = None;
         for (k, (p, _)) in self.planes.iter().enumerate() {
             if let Some((t, g, n)) = p.intersect(r, min, best.map_or(f64::INFINITY, |b| b.dist)) {
-                best = Some(Hit { dist: t, point: r.ro + r.rd * t, geometric: g, shading: n, prim: (self.prims.len() + k) as u32 });
+                best = Some(Hit { dist: t, point: r.ro + r.rd * t, geometric: g, shading: n, prim: (self.prims.len() + k) as u32, face: 0, part: 0 });
+            }
+        }
+        // Shapes their own code intersects: one normal, the shape's.
+        for (k, (o, _)) in self.shapes.iter().enumerate() {
+            if let Some(x) = o.geometry.intersects_range(r, min.max(MIN_SHAPE), best.map_or(f64::INFINITY, |b| b.dist)) {
+                let prim = (self.prims.len() + self.planes.len() + k) as u32;
+                best = Some(Hit { dist: x.dist, point: x.point, geometric: x.normal, shading: x.normal, prim, face: x.face, part: x.part });
             }
         }
         let max = best.map_or(f64::INFINITY, |b| b.dist);
@@ -356,7 +487,7 @@ impl FlatScene {
         if let Some((i, x)) = found {
             // The shading normal again, for the one primitive hit.
             let shading = self.prims[i].intersect(r, min, x.dist * (1. + 1e-12) + 1e-300).map_or(x.normal, |h| h.2);
-            return Some(Hit { dist: x.dist, point: x.point, geometric: x.normal, shading, prim: i as u32 });
+            return Some(Hit { dist: x.dist, point: x.point, geometric: x.normal, shading, prim: i as u32, face: self.face(i as u32), part: 0 });
         }
         best
     }
@@ -364,13 +495,44 @@ impl FlatScene {
     /// Whether anything lies along `r` (unit direction) between `min` and `max`.
     pub fn occluded(&self, r: &Ray, min: f64, max: f64) -> bool {
         self.planes.iter().any(|(p, _)| p.intersect(r, min, max).is_some())
+            || self.shapes.iter().any(|(o, _)| o.geometry.occludes(r, min.max(MIN_SHAPE), max))
             || self.bvh.any_hit(r, min, max, |i| self.prims[i].intersect(r, min, max).is_some())
     }
 
     /// The material of a hit's primitive (bounded or plane).
+    /// The hit of `r` on primitive `prim` again (a hit some other arithmetic found: the GPU's,
+    /// in f32), or on the shape that index is of.
+    pub fn refine(&self, prim: u32, r: &Ray) -> Option<Hit> {
+        let listed = self.prims.len() + self.planes.len();
+        if (prim as usize) < listed {
+            let (dist, geometric, shading) = self.prim(prim).intersect(r, 0., f64::INFINITY)?;
+            return Some(Hit { dist, point: r.ro + r.rd * dist, geometric, shading, prim, face: self.face(prim), part: 0 });
+        }
+        let x = self.shapes[prim as usize - listed].0.geometry.intersects_range(r, MIN_SHAPE, f64::INFINITY)?;
+        Some(Hit { dist: x.dist, point: x.point, geometric: x.normal, shading: x.normal, prim, face: x.face, part: x.part })
+    }
+
+    /// A primitive by a hit's index: bounded, or after those a plane.
+    pub fn prim(&self, prim: u32) -> &Prim {
+        let n = self.prims.len();
+        if (prim as usize) < n { &self.prims[prim as usize] } else { &self.planes[prim as usize - n].0 }
+    }
+
+    /// A primitive's place among its object's (0 for a plane, or where no material needs it).
+    pub fn face(&self, prim: u32) -> u32 {
+        self.prim_face.get(prim as usize).copied().unwrap_or(0)
+    }
+
     pub fn hit_material(&self, prim: u32) -> &FlatMaterial {
         let n = self.prims.len() as u32;
-        if prim < n { self.material(prim) } else { &self.materials[self.planes[(prim - n) as usize].1 as usize] }
+        let planes = self.planes.len() as u32;
+        if prim < n {
+            self.material(prim)
+        } else if prim < n + planes {
+            &self.materials[self.planes[(prim - n) as usize].1 as usize]
+        } else {
+            &self.materials[self.shapes[(prim - n - planes) as usize].1 as usize]
+        }
     }
 }
 
@@ -397,6 +559,13 @@ mod tests {
             Box::new(crate::shapes::transform::Transform::new(
                 std::sync::Arc::new(crate::shapes::sphere::Sphere::new(Vector3::zeros(), 0.5)) as std::sync::Arc<dyn Geometry + Sync + Send>,
                 crate::na::Affine3::from_matrix_unchecked(crate::na::Matrix4::new_scaling(1.5) * crate::na::Matrix4::new_translation(&Vector3::new(0.3, 0., 0.))))),
+            // Mirrored: the winding reverses, and the normals must still point out.
+            Box::new(crate::shapes::transform::Transform::new(
+                std::sync::Arc::new(BBox::new(Vector3::new(-0.7, -0.5, -0.9), Vector3::new(0.8, 0.6, 0.4))) as std::sync::Arc<dyn Geometry + Sync + Send>,
+                crate::na::Affine3::from_matrix_unchecked(crate::na::Matrix4::new_nonuniform_scaling(&Vector3::new(-1., 1., 1.2))))),
+            Box::new(crate::shapes::transform::Transform::new(
+                std::sync::Arc::new(crate::shapes::bilinear::BilinearPatch::new(Vector3::new(-1., 0.2, -1.), Vector3::new(1., 0.2, -1.), Vector3::new(-1., 0.2, 1.), Vector3::new(1., 0.2, 1.))) as std::sync::Arc<dyn Geometry + Sync + Send>,
+                crate::na::Affine3::from_matrix_unchecked(crate::na::Matrix4::new_nonuniform_scaling(&Vector3::new(1., -1., 1.))))),
         ];
         for shape in &shapes {
             let prims = shape.flatten().unwrap();
@@ -423,10 +592,12 @@ mod tests {
             "materials": { "N": { "type": "noise" }, "L": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } },
             "objects": [ { "type": "torus", "center": [0, 0, 0], "major": 1, "minor": 0.2, "material": "L" },
                          { "type": "sphere", "location": [0, 0, 0], "radius": 1, "material": "L" },
-                         { "type": "volume", "min": [-1, -1, -1], "max": [1, 1, 1] } ]
+                         { "type": "volume", "min": [-1, -1, -1], "max": [1, 1, 1], "noise": { "scale": 1 } } ]
         }"#.to_string());
         let e = FlatScene::build(&s).err().unwrap();
-        assert!(e.contains("participating media") && e.contains("1 of 3 objects whose shapes"), "{}", e);
+        // The torus is kept, for its own code to intersect; the medium is what is in the way:
+        // one of noise, which no kernel has the code for (a constant one is carried as data).
+        assert!(e.contains("participating media") && e.contains("objects[2]") && !e.contains("objects[0]"), "{}", e);
         let ok = SceneFile::from_string(r#"{
             "camera": { "location": [0, 1, -3], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
             "materials": { "L": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] }, "E": { "type": "diffuse-light", "color": [1, 1, 1] } },
@@ -436,5 +607,6 @@ mod tests {
         }"#.to_string());
         let f = FlatScene::build(&ok).unwrap();
         assert_eq!((f.prims.len(), f.planes.len(), f.emitters.len()), (13, 1, 1));
+        assert!(f.media.is_empty() && f.needs_kernels().is_none());
     }
 }

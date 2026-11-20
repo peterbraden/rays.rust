@@ -55,10 +55,19 @@ pub trait MaterialModel: Sync{
     /// can't be.
     fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> { None }
 
+    /// The sea's water, if this is its material and the GPU's kernel for it does all this one
+    /// does (opaque water): what the water body sends back, the ripples' mean square slope,
+    /// and the planet's radius (0 for a flat sea). See `ocean::PhysicalOcean`.
+    fn water(&self) -> Option<(Color, f64, f64)> { None }
+    /// A medium's scattering, if that is what this is (`volume::Volume::flat`).
+    fn medium(&self) -> Option<&crate::volume::VolumeMaterial> { None }
+
     /// Whether this is the sky's material, which the wavefront integrator evaluates for rays
     /// that escape the scene.
     fn is_sky(&self) -> bool { false }
 
+    /// A sky's air, for the GPU to evaluate as the CPU does (`skysphere::AirExport`).
+    fn air(&self) -> Option<crate::skysphere::AirExport> { None }
     /// For a scattering medium: the sunlight a scattering at `point` sends back along
     /// `incoming` (a unit vector, the way the light arriving there travelled), exactly as its
     /// own `scatter` gathers it (albedo, phase function, sun, transmittance), for the path's
@@ -96,6 +105,9 @@ pub enum LightSampling {
     /// The lights were sampled alone, so their emission is already counted and the ray ignores
     /// it (as for a point-like light, which only light sampling can find).
     Exclusive,
+    /// Only the distant lights, the sun and moonlight, were sampled (as for the glitter of the
+    /// sea): the ray ignores their discs, but area lights it hits count in full.
+    Directional,
     /// The lights were sampled with multiple importance sampling (`material::bsdf`), and the
     /// ray's direction was sampled from the BSDF with density `bsdf_pdf` per steradian: their
     /// emission counts weighted by the power heuristic against the lights' own density.

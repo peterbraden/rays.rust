@@ -297,16 +297,62 @@ impl Climate {
     fn n(&self) -> usize { match self.domain.layout { Layout::Sphere { n } => n, _ => unreachable!() } }
 }
 
+/// A climate's fields without its grid, to save and restore: what a world keeps of its climate
+/// (`world`).
+#[derive(serde_derive::Serialize, serde_derive::Deserialize)]
+pub struct ClimateState {
+    cells: usize,
+    temperature: Vec<f64>,
+    season: Vec<f64>,
+    precipitation: Vec<f64>,
+    continentality: Vec<f64>,
+}
+
+impl Climate {
+    pub fn state(&self) -> ClimateState {
+        ClimateState {
+            cells: self.n(), temperature: self.temperature.clone(), season: self.season.clone(),
+            precipitation: self.precipitation.clone(), continentality: self.continentality.clone(),
+        }
+    }
+
+    /// The climate a state was taken from, on a planet of `radius`; None if the state isn't of
+    /// these parameters' grid.
+    pub fn from_state(s: ClimateState, params: ClimateParams, radius: f64) -> Option<Climate> {
+        let n = params.cells.max(4);
+        if s.cells != n { return None; }
+        let domain = Domain::sphere(n, radius);
+        let corners = domain.corners.len();
+        if [&s.temperature, &s.season, &s.precipitation, &s.continentality].iter().any(|f| f.len() != corners) { return None; }
+        Some(Climate {
+            temperature: s.temperature, season: s.season, precipitation: s.precipitation,
+            continentality: s.continentality, domain, params,
+        })
+    }
+
+    /// Cells of the grid it was computed on.
+    pub fn cells(&self) -> usize { 6 * self.n() * self.n() }
+}
+
 /// The climate for a planet, computed once per process and shared.
 pub fn climate(params: &ClimateParams, planet: &Planet) -> Arc<Climate> {
+    climate_from(params, planet, || {
+        let start = web_time::Instant::now();
+        let c = Climate::new(params.clone(), planet);
+        println!("Climate: {} cells in {:.1?}", c.cells(), start.elapsed());
+        c
+    })
+}
+
+/// The climate for a planet if this process has it, or else the one `make` returns (read from
+/// a world's directory, say), which it then shares with every later caller.
+pub fn climate_from(params: &ClimateParams, planet: &Planet, make: impl FnOnce() -> Climate) -> Arc<Climate> {
     static CLIMATES: OnceLock<Mutex<HashMap<String, Arc<Climate>>>> = OnceLock::new();
     let key = format!("{:?} {:?}", params, planet.params);
     let cache = CLIMATES.get_or_init(|| Mutex::new(HashMap::new()));
     let mut map = cache.lock().unwrap();
     if let Some(c) = map.get(&key) { return c.clone(); }
-    let start = std::time::Instant::now();
-    let c = Arc::new(Climate::new(params.clone(), planet));
-    println!("Climate: {} cells in {:.1?}", 6 * c.n() * c.n(), start.elapsed());
+    let c = Arc::new(make());
     map.insert(key, c.clone());
     c
 }

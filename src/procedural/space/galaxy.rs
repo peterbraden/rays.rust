@@ -104,6 +104,21 @@ impl Galaxy {
         )
     }
 
+    /// Its parameters for the GPU, in the order of the shader's `GALAXY_*`: its kind (0
+    /// spiral, 1 elliptical), centre, radius, cos of its reach, brightness, the disc's normal and
+    /// axes, the axes on the sky, the axis ratio, arms, pitch, phase and its noise's offset.
+    pub fn export(&self) -> Vec<f64> {
+        let mut v = vec![if self.kind == Kind::Spiral { 0. } else { 1. }];
+        v.extend(self.centre.iter());
+        v.extend([self.radius, self.cos_reach, self.brightness]);
+        for a in [self.normal, self.disc_axes.0, self.disc_axes.1, self.sky_axes.0, self.sky_axes.1] {
+            v.extend(a.iter());
+        }
+        v.extend([self.axis_ratio, self.arms, self.pitch, self.phase]);
+        v.extend(self.noise.offset().iter());
+        v
+    }
+
     /// The light of the galaxy in unit direction `d`.
     pub fn radiance(&self, d: &Vector3<f64>) -> Vector3<f64> {
         let c = d.dot(&self.centre);

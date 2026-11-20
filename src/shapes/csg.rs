@@ -20,7 +20,7 @@ use crate::ray::Ray;
 use crate::intersection::RawIntersection;
 use crate::shapes::bbox::BBox;
 use crate::bvh::GeometryBvh;
-use crate::octree::Octree;
+use crate::shapes::geometry_set::GeometrySet;
 use crate::shapes::geometry::Geometry;
 use crate::na::Vector3;
 use std::sync::Arc;
@@ -59,8 +59,8 @@ pub struct Csg {
     op: Op,
     parts: Vec<(Arc<Item>, BBox)>,
     bounds: BBox,
-    /// For unions, which show every part's nearest hit: the parts in an octree.
-    tree: Option<Octree<Item>>,
+    /// For unions, which show every part's nearest hit: the parts in a BVH.
+    tree: Option<GeometrySet<Item>>,
 }
 
 impl Csg {
@@ -75,7 +75,7 @@ impl Csg {
         };
         let tree = (op == Op::Union).then(|| {
             let items: Vec<Arc<Item>> = parts.iter().map(|(p, _)| p.clone()).collect();
-            Octree::new(8, bounds, &items)
+            GeometrySet::new(&items)
         });
         Csg { op, parts, bounds, tree }
     }
@@ -123,7 +123,7 @@ impl Csg {
 impl Geometry for Csg {
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
         if let Some(tree) = &self.tree {
-            return tree.raw_intersection(r, f64::INFINITY, 0.);
+            return tree.intersects(r);
         }
         self.candidates(r).into_iter().find_map(|(i, x)| self.kept(i, x))
     }

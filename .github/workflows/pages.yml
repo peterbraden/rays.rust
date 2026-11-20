@@ -1,0 +1,50 @@
+name: Deploy the scene builder to GitHub Pages
+
+# Builds the renderer for the browser and publishes the scene builder (web/) with the demo
+# scenes and meshes it loads. The site is static: with no render server to share the work,
+# the page renders everything itself, on the GPU where the browser has WebGPU and the scene
+# allows, otherwise on the CPU.
+#
+# Needs, once, in the repository's settings: Pages > Build and deployment > Source set to
+# "GitHub Actions".
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a newer push replaces one still waiting.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install wasm-bindgen
+        run: cargo install wasm-bindgen-cli --version "$(grep -A1 '^name = "wasm-bindgen"$' web/Cargo.lock | sed -n 's/version = "\(.*\)"/\1/p')"
+      - name: Build the renderer for the browser
+        run: scripts/build-web.sh
+      - name: Assemble the site
+        run: web/site.sh _site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

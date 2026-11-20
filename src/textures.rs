@@ -100,7 +100,8 @@ impl Image {
 
     /// Load an image file; 8-bit images decoded from sRGB unless `linear`.
     pub fn load(path: &str, linear: Option<bool>) -> Result<Image, String> {
-        let img = image::open(path).map_err(|e| format!("Can't read texture {}: {}", path, e))?;
+        let bytes = crate::assets::read(path).map_err(|e| format!("Can't read texture: {}", e))?;
+        let img = image::load_from_memory(&bytes).map_err(|e| format!("Can't read texture {}: {}", path, e))?;
         let float = matches!(img.color(), image::ColorType::Rgb32F | image::ColorType::Rgba32F);
         let linear = linear.unwrap_or(float);
         let rgb = img.to_rgb32f();

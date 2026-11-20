@@ -1,168 +1,12 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
-//extern crate image;
-extern crate nalgebra as na;
-extern crate rand;
-#[macro_use]
-extern crate clap;
-#[macro_use]
-extern crate serde_derive;
-extern crate serde_json;
-extern crate rayon;
-extern crate tobj;
-extern crate ordered_float;
-extern crate num_complex;
-extern crate rustfft;
-extern crate termcolor;
-
-
 use clap::Parser;
 use rayon::prelude::*;
+use rays::*;
 
-mod ray;
-mod color;
-mod spectrum;
-mod motion;
-mod sampler;
-mod textures;
-mod film;
-mod lens;
-mod flare;
-mod material {
-    pub mod model;
-    pub mod bsdf;
-    pub mod ggx;
-    pub mod dielectric;
-    pub mod specular;
-    pub mod conductor;
-    pub mod rough_dielectric;
-    pub mod layered;
-    pub mod subsurface;
-    pub mod mix;
-    pub mod surface_layers;
-    pub mod hair;
-    pub mod ambient;
-    pub mod texture;
-    pub mod lambertian;
-    pub mod diffuse_light;
-    pub mod normal;
-    pub mod uv;
-    pub mod functions;
-    pub mod legacy;
-    pub mod plastic;
-    pub mod leaf;
-    pub mod noise;
-    pub mod grass;
-    pub mod bump;
-    pub mod rock;
-    pub mod soil;
-    pub mod snow;
-    pub mod phase;
-    pub mod diffraction;
-    pub mod ice_halos;
-    pub mod rainbow;
-}
-mod intersection;
-mod sceneobject;
-mod light;
-mod light_bvh;
-mod wavefront;
-mod shapes {
-    pub mod transform;
-    pub mod bbox;
-    pub mod geometry;
-    pub mod geometry_set;
-    pub mod csg;
-    pub mod sphere;
-    pub mod plane;
-    pub mod triangle;
-    pub mod mesh;
-    pub mod ply;
-    pub mod wo3;
-    pub mod infinite;
-    pub mod repeating_mesh;
-    pub mod polynomial;
-    pub mod cone;
-    pub mod disc;
-    pub mod bilinear;
-    pub mod curve;
-    pub mod subdivision;
-    pub mod algebraic;
-    pub mod polygon;
-    pub mod revolution;
-    pub mod sweep;
-    pub mod blob;
-    pub mod implicit;
-    pub mod julia;
-    pub mod tessellated;
-    pub mod text;
-    pub mod lod;
-    pub mod displaced;
-    pub mod group;
-}
-mod octree;
-mod bvh;
-mod scenegraph;
-mod scene;
-mod scenefile;
-mod nff;
-mod tungsten;
-mod scenefile_shapes;
-mod skysphere;
-mod ocean;
-mod camera;
-mod trace;
-mod rendercontext;
-mod paint;
-mod output;
-mod compare;
-mod depth;
-mod time_map;
-//mod wireframe;
-mod geometry;
-mod procedural {
-    pub mod box_terrain;
-    pub mod fireworks;
-    pub mod tree;
-    pub mod succulent;
-    pub mod forest;
-    pub mod ecosystem;
-    pub mod heightmap;
-    pub mod grass;
-    pub mod rock;
-    pub mod iceberg;
-    pub mod nubis_clouds;
-    pub mod cauliflower;
-    pub mod hogan_kew_cirrus;
-    pub mod benard_altocumulus;
-    pub mod lenticular;
-    pub mod terrain;
-    pub mod mammatus;
-    pub mod precipitation;
-    pub mod overcast;
-    pub mod hill_cloud;
-    pub mod harris_cumulus;
-    pub mod space;
-}
-mod participatingmedia;
-mod noise;
-mod terrain;
-mod expr;
-mod graph;
-mod talus;
-mod volume;
-mod glare;
-mod variance;
-mod adaptive;
-mod environment;
-mod sobol;
-mod planet;
-mod weather;
-mod celestial;
-
-use crate::trace::trace;
-use crate::rendercontext::RenderContext;
+use rays::trace::trace;
+use rays::rendercontext::RenderContext;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -251,6 +95,11 @@ struct Args {
     #[arg(long)]
     wavefront: bool,
 
+    ///Render on the GPU (as "integrator": "gpu"; needs a build with `--features gpu`), if the
+    ///scene can be flattened; otherwise with the wavefront integrator or the path tracer
+    #[arg(long)]
+    gpu: bool,
+
     ///Write the scene file, as JSON in our format, to this file. For a scene in another
     ///renderer's format (eg. .nff), this is the translation
     #[arg(long)]
@@ -293,7 +142,44 @@ fn peak_memory() -> Option<u64> {
     None
 }
 
+/// rays serve: run as a render server, and host the scene builder
+#[derive(Parser, Debug)]
+#[command(name = "rays serve", about = "Serve the scene builder, and render layers for it over HTTP", long_about = None)]
+struct ServeArgs {
+    ///Port to listen on
+    #[arg(long, default_value_t = 8787)]
+    port: u16,
+
+    ///Address to listen on. The default is this machine only; 0.0.0.0 listens on every
+    ///network interface, for other machines to use this one. There is no authentication
+    #[arg(long, default_value = "127.0.0.1")]
+    bind: String,
+
+    ///Directory to serve files from, and that scenes' asset paths are relative to
+    #[arg(long, default_value = ".")]
+    root: String,
+
+    ///Origin of a page allowed to call the render API, eg. https://user.github.io. May be
+    ///repeated. Pages served from this machine are always allowed
+    #[arg(long)]
+    allow_origin: Vec<String>,
+}
+
 fn main() {
+    // `rays serve ...` is a different program from `rays <scene>`: it has its own options.
+    if std::env::args().nth(1).as_deref() == Some("serve") {
+        let a = ServeArgs::parse_from(std::env::args().skip(1));
+        if let Err(e) = std::env::set_current_dir(&a.root) {
+            eprintln!("Can't use {} as the root: {}", a.root, e);
+            std::process::exit(1);
+        }
+        let root = std::env::current_dir().unwrap();
+        if let Err(e) = rays::server::serve(rays::server::Options { bind: a.bind, port: a.port, root, allow_origins: a.allow_origin }) {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
     let args = Args::parse();
 
     println!("{}",
@@ -341,10 +227,12 @@ fn main() {
             min_samples: s.render.adaptive.map_or(scene::Adaptive::DEFAULT_MIN_SAMPLES, |a| a.min_samples),
         });
     }
-    // The wavefront integrator's samples differ from the path tracer's: a saved state is one's.
-    // It doesn't sample adaptively, so then the path tracer renders.
+    // The wavefront integrator's and the GPU's samples differ from the path tracer's: a saved
+    // state is one's. The wavefront integrator doesn't sample adaptively, so then the path
+    // tracer renders; the GPU does (`scheduler::plan`).
     let key = rendercontext::render_key(&contents, (args.width, args.height, args.seed))
-        ^ if args.wavefront && s.render.adaptive.is_none() { 0x7761_7665_6672_6f6e } else { 0 };
+        ^ if args.wavefront && s.render.adaptive.is_none() { 0x7761_7665_6672_6f6e } else { 0 }
+        ^ if args.gpu { 0x6770_7500_0000_0001 } else { 0 };
     if !args.fresh && std::path::Path::new(&state_path).exists() {
         match rc.load_state(&state_path, key) {
             Ok(()) => println!("- Resuming from {:.1} samples per pixel on average, {} at least ({})",
@@ -391,10 +279,13 @@ fn main() {
         return;
     }
 
-    if args.wavefront {
+    if args.wavefront || args.gpu {
         s.render.wavefront = true;
     }
-    if s.render.wavefront && s.render.adaptive.is_some() {
+    if args.gpu {
+        s.render.gpu = true;
+    }
+    if s.render.wavefront && !s.render.gpu && s.render.adaptive.is_some() {
         println!("- The wavefront integrator doesn't sample adaptively; rendering with the path tracer");
         s.render.wavefront = false;
     }
@@ -413,6 +304,46 @@ fn main() {
     } else {
         None
     };
+    #[cfg(feature = "gpu")]
+    let mut gpu = match (&flat, s.render.gpu) {
+        (Some(f), true) => match gpu::GpuRenderer::new(&s, f) {
+            Ok(g) => {
+                println!("- GPU: {}", g.adapter_name);
+                let parts: Vec<String> = g.setup.iter().map(|(what, seconds)| format!("{} {:.0} ms", what, seconds * 1e3)).collect();
+                println!("- GPU set up in {:.0} ms: {}", g.setup.iter().map(|p| p.1).sum::<f64>() * 1e3, parts.join(", "));
+                Some(g)
+            },
+            Err(e) => {
+                println!("- The GPU can't render this scene ({}); rendering with the wavefront integrator", e);
+                None
+            },
+        },
+        _ => None,
+    };
+    // Without the GPU, an adaptively sampled scene is the path tracer's: the wavefront
+    // integrator the GPU would fall back to doesn't sample adaptively.
+    #[cfg(feature = "gpu")]
+    let gpu_missing = gpu.is_none();
+    #[cfg(not(feature = "gpu"))]
+    let gpu_missing = true;
+    let flat = if gpu_missing && flat.is_some() && s.render.adaptive.is_some() {
+        println!("- The wavefront integrator doesn't sample adaptively; rendering with the path tracer");
+        None
+    } else {
+        flat
+    };
+    // And so is one only the GPU's kernels have the code for.
+    let flat = match flat.as_ref().filter(|_| gpu_missing).and_then(|f| f.needs_kernels()) {
+        Some(why) => {
+            println!("- The wavefront integrator can't render this scene ({}); rendering with the path tracer", why);
+            None
+        },
+        None => flat,
+    };
+    #[cfg(not(feature = "gpu"))]
+    if s.render.gpu {
+        println!("- This build has no GPU support (build with --features gpu); rendering with the wavefront integrator");
+    }
     let rcmtx = Mutex::new(rc);
 
     println!("{}",
@@ -427,7 +358,32 @@ fn main() {
     let last_progressive = Mutex::new(Instant::now());
     let last_state = Mutex::new(Instant::now());
 
-    if let Some(flat) = &flat {
+    #[cfg(feature = "gpu")]
+    let on_gpu = gpu.is_some();
+    #[cfg(not(feature = "gpu"))]
+    let on_gpu = false;
+    #[cfg(feature = "gpu")]
+    let after_pass = |rc: &RenderContext| {
+        pb.set_position(rc.progress_percentage(&s) as u64);
+        pb.set_message(rc.progress(&s));
+        pb.tick();
+        let mut last = last_progressive.lock().unwrap();
+        if rc.progressive_render && last.elapsed() >= progressive_interval {
+            *last = Instant::now();
+            if let Err(e) = writer.write(&s.output.finish(&rc.snapshot()), &rc.output_filename) {
+                eprintln!("{}", e);
+            }
+        }
+        let mut last = last_state.lock().unwrap();
+        if last.elapsed() >= STATE_INTERVAL {
+            *last = Instant::now();
+            save_state(&state_path, &rc.encode_state(key));
+        }
+    };
+    if on_gpu {
+        #[cfg(feature = "gpu")]
+        gpu.as_mut().unwrap().render(&s, flat.as_ref().unwrap(), &rcmtx, after_pass);
+    } else if let Some(flat) = &flat {
         wavefront::integrator::render(&s, flat, &rcmtx, |rc| {
             pb.set_position(rc.progress_percentage(&s) as u64);
             pb.set_message(rc.progress(&s));

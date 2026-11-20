@@ -11,7 +11,8 @@
 //!
 //! ## Why not the octree
 //!
-//! `Octree` subdivides *space*, so an item is stored in every cell its box touches. For a mesh
+//! The octree this replaced (`octree.rs`, since removed: its last user, CSG unions, has a BVH
+//! too) subdivided *space*, so an item was stored in every cell its box touched. For a mesh
 //! of long, thin or large triangles that is many cells each: the 6,320-triangle Utah teapot at
 //! depth 8 makes 745,766 nodes holding 2,033,792 item references, about 120 MB, for 1 MB of
 //! triangles. A BVH subdivides the *items*: each is in exactly one leaf, and there are at most
@@ -154,6 +155,13 @@ fn surface_area(b: &BBox) -> f64 {
 }
 
 impl Bvh {
+    /// The nodes as data, for uploading to a GPU (`gpu`): each node's bounds, then for a leaf
+    /// the index of its first item and how many, for an interior node the index of its second
+    /// child (the first follows it) and 0.
+    pub fn export(&self) -> Vec<(BBox, u32, u32)> {
+        self.nodes.iter().map(|n| (n.bounds, n.offset, n.count)).collect()
+    }
+
     /// Build a tree over `items`, returning it with the items reordered into leaf order: the
     /// indices the tree passes to callers index the returned `Vec`.
     pub fn build<T: Sync>(items: Vec<T>, bounds_of: impl Fn(&T) -> BBox + Sync) -> (Bvh, Vec<T>) {

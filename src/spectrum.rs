@@ -351,6 +351,29 @@ pub fn planck(lambda: f64, kelvin: f64) -> f64 {
     (2. * H * C * C) / (l.powi(5) * ((H * C / (l * KB * kelvin)).exp() - 1.))
 }
 
+/// The spectrum of a lightning channel, relative (spectral radiance, arbitrary units): the
+/// time-integrated light of return strokes. Hot (some 30 000 K) and dense, the channel emits
+/// mostly lines, broadened by the pressure to a few nanometres: singly ionised nitrogen (N II)
+/// in the blue and green, hydrogen's Hα in the red from the water vapour in the channel, and in
+/// the near infrared neutral oxygen and nitrogen; over a continuum from the free electrons
+/// (R. E. Orville, "A high-speed time-resolved spectroscopic study of the lightning return
+/// stroke", J. Atmos. Sci. 25, 1968; L. E. Salanave, "The optical spectrum of lightning",
+/// Science 134, 1961). Line strengths vary from stroke to stroke; these are typical.
+pub fn lightning(lambda: f64) -> f64 {
+    // (centre nm, relative area, full width at half maximum nm)
+    const LINES: [(f64, f64, f64); 11] = [
+        (399.5, 0.25, 2.), (444.7, 0.2, 2.), (463.0, 0.5, 3.), (480.3, 0.25, 2.), (500.5, 1.0, 3.),
+        (518.0, 0.2, 2.), (567.9, 0.5, 3.), (594.2, 0.35, 2.), (656.3, 1.3, 4.),
+        (746.8, 0.6, 2.), (777.4, 1.2, 2.),
+    ];
+    let lines: f64 = LINES.iter().map(|(c, a, w)| {
+        let sigma = w / 2.3548;
+        a * (-0.5 * ((lambda - c) / sigma).powi(2)).exp() / (sigma * (2. * std::f64::consts::PI).sqrt())
+    }).sum();
+    // The continuum carries about two fifths of the visible light.
+    lines + 0.0086 * planck(lambda, 20_000.) / planck(550., 20_000.)
+}
+
 /// What an emitter emits.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Emission {
@@ -359,6 +382,8 @@ pub enum Emission {
     /// A blackbody at `kelvin`, scaled to a luminance (Y) of one: `scale` is one over the
     /// unscaled luminance, and `srgb` its colour, for RGB mode.
     Blackbody { kelvin: f64, scale: f64, srgb: Color },
+    /// A lightning channel's spectrum (`lightning`), scaled to a luminance of one.
+    Lightning { scale: f64, srgb: Color },
 }
 
 impl Emission {
@@ -369,11 +394,18 @@ impl Emission {
         Emission::Blackbody { kelvin, scale, srgb: xyz_to_srgb(&(xyz * scale)) }
     }
 
+    /// Lightning's spectrum (`lightning`) at unit luminance.
+    pub fn lightning() -> Emission {
+        let xyz = spectrum_to_xyz(lightning);
+        let scale = 1. / xyz.y;
+        Emission::Lightning { scale, srgb: xyz_to_srgb(&(xyz * scale)) }
+    }
+
     /// The emission's colour in linear sRGB.
     pub fn srgb(&self) -> Color {
         match self {
             Emission::Rgb(c) => *c,
-            Emission::Blackbody { srgb, .. } => *srgb,
+            Emission::Blackbody { srgb, .. } | Emission::Lightning { srgb, .. } => *srgb,
         }
     }
 
@@ -383,6 +415,7 @@ impl Emission {
             (_, None) => self.srgb(),
             (Emission::Rgb(c), Some(_)) => illuminant(*c),
             (Emission::Blackbody { kelvin, scale, .. }, Some(w)) => w.map(|l| planck(l, *kelvin) * scale),
+            (Emission::Lightning { scale, .. }, Some(w)) => w.map(|l| lightning(l) * scale),
         }
     }
 }
@@ -595,5 +628,16 @@ mod tests {
         let after = end_sample().unwrap();
         assert!(after.secondary_terminated);
         assert_eq!(n, glass.at(w.lambda[0]));
+    }
+
+    #[test]
+    fn test_lightning_is_bluish_white() {
+        // Unit luminance; whiter than a blackbody at the channel's temperature, whose blue the
+        // red of Hα and the green N II lines balance: bluish white.
+        let c = Emission::lightning().srgb();
+        let hot = Emission::blackbody(25_000.).srgb();
+        assert!((crate::color::luminance(&c) - 1.).abs() < 0.02);
+        assert!(c.rgb.z > c.rgb.y && c.rgb.z > c.rgb.x);
+        assert!(c.rgb.x / c.rgb.z > hot.rgb.x / hot.rgb.z);
     }
 }

@@ -66,6 +66,16 @@ impl<T: Geometry + Sync + Send> Geometry for GeometrySet<T> {
         if self.items.is_empty() { BBox::empty() } else { self.bvh.transformed_bounds(t) }
     }
 
+    /// Its items' primitives together, if every item has them: a set of triangles is as flat
+    /// as a mesh.
+    fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
+        let mut all = Vec::new();
+        for item in &self.items {
+            all.extend(item.flatten()?);
+        }
+        Some(all)
+    }
+
     /// The primitives of every item: an instanced tree counts all its triangles each time.
     fn primitives(&self) -> u64 {
         self.primitives

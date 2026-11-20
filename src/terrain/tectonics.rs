@@ -523,23 +523,82 @@ impl Crust {
     pub fn plate_at(&self, d: &Vector3<f64>) -> u16 { self.plate[self.domain.cell_at(d)] }
 }
 
+/// A crust's fields without its grid (which is rebuilt from the cells along a face's edge), to
+/// save and restore: what a world keeps of its plate tectonics (`world`).
+#[derive(serde_derive::Serialize, serde_derive::Deserialize)]
+pub struct CrustState {
+    cells: usize,
+    elevation: Vec<f64>,
+    orogeny: Vec<f64>,
+    activity: Vec<f64>,
+    margin: Vec<f64>,
+    volcanism: Vec<f64>,
+    plate: Vec<u16>,
+    continental: Vec<bool>,
+}
+
+impl Crust {
+    pub fn state(&self) -> CrustState {
+        let crate::terrain::domain::Layout::Sphere { n } = self.domain.layout else { unreachable!() };
+        CrustState {
+            cells: n, elevation: self.elevation.clone(), orogeny: self.orogeny.clone(), activity: self.activity.clone(),
+            margin: self.margin.clone(), volcanism: self.volcanism.clone(), plate: self.plate.clone(), continental: self.continental.clone(),
+        }
+    }
+
+    /// The crust a state was taken from, on a planet of `radius`; None if the state isn't of a
+    /// grid of `cells` along a face's edge.
+    pub fn from_state(s: CrustState, cells: usize, radius: f64) -> Option<Crust> {
+        if s.cells != cells { return None; }
+        let domain = Domain::sphere(cells, radius);
+        let (corners, n) = (domain.corners.len(), domain.len());
+        let fields = [&s.elevation, &s.orogeny, &s.activity, &s.margin, &s.volcanism];
+        if fields.iter().any(|f| f.len() != corners) || s.plate.len() != n || s.continental.len() != n { return None; }
+        Some(Crust {
+            domain, elevation: s.elevation, orogeny: s.orogeny, activity: s.activity, margin: s.margin,
+            volcanism: s.volcanism, plate: s.plate, continental: s.continental,
+        })
+    }
+}
+
+/// Simulate the plates for these parameters: the crust they leave, and a line about it.
+/// `progress` is told the fraction of the planet's age simulated, after each step.
+pub fn simulate(params: &TectonicsParams, seed: u64, radius: f64, progress: &mut dyn FnMut(f64)) -> (Crust, String) {
+    let start = web_time::Instant::now();
+    let mut t = Tectonics::new(params.clone(), seed, radius);
+    while t.time < params.age - 1e-9 {
+        let dt = params.step.min(params.age - t.time);
+        t.step(dt);
+        progress((t.time / params.age).min(1.));
+    }
+    let mut ages: Vec<f64> = t.current.iter().filter(|c| !c.continental).map(|c| c.age).collect();
+    ages.sort_by(|a, b| a.total_cmp(b));
+    let pct = |q: f64| ages.get((q * ages.len() as f64) as usize).copied().unwrap_or(0.);
+    let summary = format!("Tectonics: {} plates over {} Myr in {:.1?}; {:.0}% continent; ocean floor ages {:.0}, {:.0}, {:.0} Myr (10, 50, 90%)",
+        t.plates.len(), params.age, start.elapsed(), 100. * t.continental_fraction(), pct(0.1), pct(0.5), pct(0.9));
+    (t.into_crust(), summary)
+}
+
 /// The crust for these parameters, simulated once per process and shared.
 pub fn crust(params: &TectonicsParams, seed: u64, radius: f64) -> Arc<Crust> {
+    crust_from(params, seed, radius, || {
+        let (c, summary) = simulate(params, seed, radius, &mut |_| ());
+        println!("{}", summary);
+        c
+    })
+}
+
+/// The crust for these parameters if this process has it, or else the one `make` returns (read
+/// from a world's directory, say, or simulated with its progress reported), which it then
+/// shares with every later caller.
+pub fn crust_from(params: &TectonicsParams, seed: u64, radius: f64, make: impl FnOnce() -> Crust) -> Arc<Crust> {
     static CRUSTS: OnceLock<Mutex<HashMap<String, Arc<Crust>>>> = OnceLock::new();
     let key = format!("{:?} {} {}", params, seed, radius);
     let cache = CRUSTS.get_or_init(|| Mutex::new(HashMap::new()));
     // Held while simulating, so that threads asking for the same crust wait for it.
     let mut map = cache.lock().unwrap();
     if let Some(c) = map.get(&key) { return c.clone(); }
-    let start = std::time::Instant::now();
-    let mut t = Tectonics::new(params.clone(), seed, radius);
-    t.run();
-    let mut ages: Vec<f64> = t.current.iter().filter(|c| !c.continental).map(|c| c.age).collect();
-    ages.sort_by(|a, b| a.total_cmp(b));
-    let pct = |q: f64| ages.get((q * ages.len() as f64) as usize).copied().unwrap_or(0.);
-    println!("Tectonics: {} plates over {} Myr in {:.1?}; {:.0}% continent; ocean floor ages {:.0}, {:.0}, {:.0} Myr (10, 50, 90%)",
-        t.plates.len(), params.age, start.elapsed(), 100. * t.continental_fraction(), pct(0.1), pct(0.5), pct(0.9));
-    let c = Arc::new(t.into_crust());
+    let c = Arc::new(make());
     map.insert(key, c.clone());
     c
 }

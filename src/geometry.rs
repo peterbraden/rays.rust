@@ -83,6 +83,12 @@ pub fn end_sample() {
     SOBOL.with(|s| *s.borrow_mut() = None);
 }
 
+/// As `end_sample`, returning the sampler as far as it has been drawn from, for a path that
+/// lent its own (`begin_sampler`) and takes it back.
+pub fn take_sampler() -> Option<crate::sampler::SampleState> {
+    SOBOL.with(|s| s.borrow_mut().take())
+}
+
 /// Uniform in [0, 1): the next dimension of the current Sobol' sample, if there is one
 /// (`begin_sample`), and otherwise from this thread's generator.
 pub fn rand() -> f64 {
@@ -170,7 +176,11 @@ mod tests {
 /// up another pixel's meanwhile, which then waits for the same, unfinished table: a deadlock.
 /// rayon's `install` on another pool doesn't help, as its caller also takes up work while it
 /// waits; a plain thread just waits.
+/// Without threads (a browser), there are no other threads to deadlock with: `f` runs here.
 pub fn build_apart<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    #[cfg(target_arch = "wasm32")]
+    return f();
+    #[cfg(not(target_arch = "wasm32"))]
     std::thread::scope(|scope| {
         scope.spawn(|| match rayon::ThreadPoolBuilder::new().build() {
             Ok(pool) => pool.install(f),

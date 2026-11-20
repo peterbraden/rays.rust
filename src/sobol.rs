@@ -202,6 +202,7 @@ pub const DIMENSIONS: u32 = 64;
 
 /// Where a sample is in the sequence, with the current group's shuffled index and scrambles
 /// computed once for its four dimensions.
+#[derive(Clone)]
 pub struct SampleState {
     seed: u64,
     index: u32,

@@ -69,7 +69,10 @@ pub fn choose_seeds(doc: &mut Value) {
     if let Some(objects) = doc.get_mut("objects").and_then(|o| o.as_array_mut()) {
         for o in objects.iter_mut().filter(|o| is_weather(o)) {
             if o.get("seed").is_none_or(|s| s.as_str() == Some("random")) {
-                let seed = rand::random::<u32>() as u64;
+                // From the clock, not the system's random numbers: the library builds for a
+                // browser too, where those need a dependency it keeps out (getrandom).
+                let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
+                let seed = crate::sobol::hash(now, 0x7765_6174) & 0xffff_ffff;
                 println!("Weather: seed {} (chosen at random: add \"seed\": {} to the weather to keep it)", seed, seed);
                 o["seed"] = Value::from(seed);
             }
@@ -84,6 +87,7 @@ pub fn expand(objects: Vec<Value>) -> Vec<Value> {
         .map(|sky| crate::skysphere::parse_sky_material(sky).sun_direction());
     let landscape = objects.iter().find(|o| o["type"].as_str() == Some("landscape") && o.get("scale").is_none()).cloned();
     let mut out = vec![];
+    let mut weathers = vec![];
     for o in objects {
         if !is_weather(&o) {
             out.push(o);
@@ -102,11 +106,22 @@ pub fn expand(objects: Vec<Value>) -> Vec<Value> {
         if let (None, Some(l)) = (w.get("landscape"), &landscape) {
             w["landscape"] = l.clone();
         }
+        weathers.push(w.clone());
         for family in FAMILIES {
             if w[family] == Value::Bool(false) {
                 continue;
             }
             out.push(serde_json::json!({ "type": "weather_layer", "family": family, "weather": w }));
+        }
+    }
+    // A sea under the weather blows with its surface wind at the scene's origin: an ocean
+    // with `"wind": "weather"` (`Weather::surface_wind`).
+    if let Some(w) = weathers.first() {
+        for sea in out.iter_mut().filter(|s| s["type"].as_str() == Some("ocean") && s["wind"].as_str() == Some("weather")) {
+            let weather = weather_of(w);
+            let wind = weather.frame.to_scene(&weather.surface_wind(&weather.frame.up));
+            println!("Weather: the sea's wind at the origin, {:.1} m/s", (wind.x * wind.x + wind.z * wind.z).sqrt());
+            sea["wind"] = serde_json::json!([wind.x, wind.z]);
         }
     }
     out
@@ -125,12 +140,15 @@ pub fn weather_params(o: &Value) -> (WeatherParams, Option<Ground>) {
     let l = &o["landscape"];
     if l.is_object() {
         let tp = crate::terrain::object::terrain_params(l);
-        let planet = Arc::new(crate::terrain::planet::Planet::new(tp.planet.clone()));
-        let climate = tp.climate.as_ref().map(|c| crate::terrain::climate::climate(c, &planet));
+        // From the landscape's world, where it keeps one, so its plates aren't simulated here
+        // only to be read from there a moment later.
+        let crate::world::Survey { planet, climate, site } = crate::world::survey(&tp, &crate::terrain::object::site_of(&l["domain"]),
+            crate::terrain::object::world_directory(l), &mut |e| { if e.stage != "site" { crate::world::report(e); } true }).unwrap_or_else(|e| panic!("{}", e));
+        let planet = Arc::new(planet);
         if let Some(c) = &tp.climate {
             p.climate = c.clone();
         }
-        p.site = crate::terrain::object::site(&l["domain"], &tp);
+        p.site = site;
         p.radius = tp.planet.radius;
         ground = Some(Ground { planet, climate });
     } else {

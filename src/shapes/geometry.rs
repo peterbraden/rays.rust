@@ -136,6 +136,27 @@ pub trait Geometry: Sync{
     // (`wavefront::flat`); None if it can't be.
     fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> { None }
 
+    // Whether a hit's `face` is which of `flatten`'s primitives was hit, as a mesh's is (its
+    // triangle, for `uv`); otherwise the flat scene's hits report face 0, as the shape's do.
+    fn faces_are_primitives(&self) -> bool { false }
+
+    // The sea, if that is what this is: the GPU has a kernel for its shape (`ocean::Ocean::export`).
+    fn ocean(&self) -> Option<&crate::ocean::Ocean> { None }
+
+    // The medium, if that is what this is: the GPU's kernels track light through some
+    // (`volume::Volume::flat`).
+    fn medium(&self) -> Option<&crate::volume::Volume> { None }
+
+    // What kind of shape this is, for telling someone which of a scene's objects is in the way
+    // of something (the wavefront integrator and the GPU, which need `flatten`): the type's
+    // name, or for a wrapper its contents'.
+    fn kind(&self) -> &'static str {
+        // (Without its path, or what a generic one is of: `Octree<Triangle>` is an `Octree`.)
+        let name = std::any::type_name::<Self>();
+        let name = name.split('<').next().unwrap_or(name);
+        name.rsplit("::").next().unwrap_or(name)
+    }
+
     // The transmittance per colour channel (or wavelength, in spectral mode): the same in all
     // but for chromatic media (`volume::chromatic`).
     fn transmittance_color(&self, r: &Ray, min: f64, max: f64) -> crate::color::Color {
@@ -223,6 +244,10 @@ impl<G: Geometry + Send + ?Sized> Geometry for std::sync::Arc<G> {
     fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 { (**self).transmittance(r, min, max) }
     fn transmittance_color(&self, r: &Ray, min: f64, max: f64) -> crate::color::Color { (**self).transmittance_color(r, min, max) }
     fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> { (**self).flatten() }
+    fn kind(&self) -> &'static str { (**self).kind() }
+    fn ocean(&self) -> Option<&crate::ocean::Ocean> { (**self).ocean() }
+    fn medium(&self) -> Option<&crate::volume::Volume> { (**self).medium() }
+    fn faces_are_primitives(&self) -> bool { (**self).faces_are_primitives() }
 }
 
 /// A geometry whose hits report `face`, so a composite object made of many of them (eg. the
@@ -290,22 +315,21 @@ impl<T: Geometry> Geometry for Tagged<T> {
 mod tests {
     use super::*;
     use crate::shapes::triangle::Triangle;
-    use crate::octree::Octree;
+    use crate::shapes::geometry_set::GeometrySet;
     use std::sync::Arc;
 
     #[test]
     fn test_tagged_hits_report_their_face() {
-        // Two parallel triangles, the nearer tagged 7 and the farther 3, in an octree.
+        // Two parallel triangles, the nearer tagged 7 and the farther 3, in a set.
         let at = |z: f64, face: u32| Arc::new(Tagged {
             item: Triangle::new(Vector3::new(-1., -1., z), Vector3::new(1., -1., z), Vector3::new(0., 1., z)),
             face,
         });
         let items = vec![at(2., 3), at(1., 7)];
-        let bounds = items.iter().fold(BBox::empty(), |b, t| b.union(&t.bounds()));
-        let tree = Octree::new(8, bounds, &items);
+        let tree = GeometrySet::new(&items);
         let r = Ray { ro: Vector3::new(0., 0., -5.), rd: Vector3::new(0., 0., 1.) };
-        assert_eq!(tree.raw_intersection(&r, f64::INFINITY, 0.).unwrap().face, 7);
+        assert_eq!(tree.intersects(&r).unwrap().face, 7);
         let back = Ray { ro: Vector3::new(0., 0., 5.), rd: Vector3::new(0., 0., -1.) };
-        assert_eq!(tree.raw_intersection(&back, f64::INFINITY, 0.).unwrap().face, 3);
+        assert_eq!(tree.intersects(&back).unwrap().face, 3);
     }
 }

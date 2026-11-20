@@ -84,6 +84,18 @@ impl Geometry for SceneObject {
         self.geometry.flatten()
     }
 
+    fn kind(&self) -> &'static str {
+        self.geometry.kind()
+    }
+
+    fn ocean(&self) -> Option<&crate::ocean::Ocean> {
+        self.geometry.ocean()
+    }
+
+    fn faces_are_primitives(&self) -> bool {
+        self.geometry.faces_are_primitives()
+    }
+
     fn surface_area(&self) -> f64 {
         self.geometry.surface_area()
     }

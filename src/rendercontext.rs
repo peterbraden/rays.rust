@@ -1,4 +1,4 @@
-use std::time::{Instant};
+use web_time::Instant;
 
 use crate::scene::Scene;
 use crate::color::Color;
@@ -26,6 +26,9 @@ pub struct RenderContext {
     pub width: usize,
     pub height: usize,
     pub rays_cast: u64,
+    /// What the stages of a wavefront render did (`scheduler::Stats`); empty for the recursive
+    /// tracer, which has none.
+    pub schedule: crate::scheduler::Stats,
     pub start_time: Instant,
     pub progressive_render: bool,
     pub samples_rendered: u64,
@@ -154,6 +157,7 @@ impl RenderContext {
             width,
             height,
             rays_cast: 0,
+            schedule: Default::default(),
             start_time,
             progressive_render,
             samples_rendered: 0,
@@ -163,6 +167,11 @@ impl RenderContext {
     }
 
     /// The fewest samples any pixel has.
+    /// How many samples pixel (x, y) has.
+    pub fn samples_at(&self, x: usize, y: usize) -> usize {
+        self.samples[y * self.width + x]
+    }
+
     pub fn min_samples(&self) -> usize {
         self.samples.iter().copied().min().unwrap_or(0)
     }
@@ -273,22 +282,25 @@ impl RenderContext {
     /// pixel still too noisy (`adaptive::active`). None once every pixel is done. It depends
     /// only on the region's own pixels, so it is the same however the render is scheduled.
     pub fn next_pass(&self, s: &Scene, region: usize, b: &Bounds, layer: usize) -> Option<RenderableChunk> {
+        let (first, count) = self.plan(s, b, s.render.samples_per_layer());
+        count.iter().any(|&n| n > 0).then_some(RenderableChunk { bounds: *b, first, count, region, layer })
+    }
+
+    /// For each pixel of region `b`, row by row: its next sample's index (its count so far),
+    /// and how many it should take in its next pass, at most `most` (`scheduler::plan`: none
+    /// for a pixel that is complete).
+    pub fn plan(&self, s: &Scene, b: &Bounds, most: usize) -> (Vec<usize>, Vec<usize>) {
         let target = s.render.samples_per_pixel();
-        let per_layer = s.render.samples_per_layer();
         let index: Vec<usize> = (b.ymin..b.ymax).flat_map(|y| (b.xmin..b.xmax).map(move |x| y * self.width + x)).collect();
         let first: Vec<usize> = index.iter().map(|&i| self.samples[i]).collect();
-        let active = match &s.render.adaptive {
-            None => first.iter().map(|&n| n < target).collect(),
-            Some(a) => {
-                let sum: Vec<Color> = index.iter().map(|&i| self.image[i]).collect();
-                let squares: Vec<Color> = index.iter().map(|&i| self.squares[i]).collect();
-                let r = crate::adaptive::Region { width: b.width(), sum: &sum, squares: &squares, samples: &first };
-                crate::adaptive::active(&r, target, a, crate::adaptive::display_gain(s))
-            },
+        // The sums are read only by adaptive sampling.
+        let (sum, squares): (Vec<Color>, Vec<Color>) = match &s.render.adaptive {
+            None => (Vec::new(), Vec::new()),
+            Some(_) => (index.iter().map(|&i| self.image[i]).collect(), index.iter().map(|&i| self.squares[i]).collect()),
         };
-        let count: Vec<usize> = first.iter().zip(&active)
-            .map(|(&n, &on)| if on { per_layer.min(target.saturating_sub(n)) } else { 0 }).collect();
-        count.iter().any(|&n| n > 0).then_some(RenderableChunk { bounds: *b, first, count, region, layer })
+        let film = crate::adaptive::Region { width: b.width(), sum: &sum, squares: &squares, samples: &first };
+        let count = crate::scheduler::plan(&film, target, s.render.adaptive.as_ref(), crate::adaptive::display_gain(s), most);
+        (first, count)
     }
 
     /// The current estimate as a linear image, top row first.
@@ -329,6 +341,9 @@ impl RenderContext {
         println!("| Rays Cast: {}", self.rays_cast);
         println!("| Elapsed Time: {:?}", elapsed);
         println!("| Rays per sec: {:.2}", self.rays_cast as f64 / elapsed.as_secs_f64());
+        if !self.schedule.is_empty() {
+            println!("{}", self.schedule.report());
+        }
         println!("==========================================");
 
     }
@@ -469,7 +484,7 @@ const R2: (f64, f64) = (0.754_877_666_246_692_7, 0.569_840_290_998_053_2);
 /// so a render depends only on the seed and how many samples it takes, not on which thread
 /// renders which chunk, nor on how the samples were split between passes or runs.
 /// Returns the rays cast, the samples taken, and their sum and sum of squares.
-fn render_pixel(x: usize, y: usize, first: usize, count: usize, s: &Scene) -> (u64, usize, Color, Color) {
+pub(crate) fn render_pixel(x: usize, y: usize, first: usize, count: usize, s: &Scene) -> (u64, usize, Color, Color) {
     let pixels = (s.image.width * s.image.height) as u64;
     let index = (y * s.image.width + x) as u64;
     // This pixel's offset of the sequence.

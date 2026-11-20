@@ -147,6 +147,16 @@ pub fn scattered() {
     PATH_SCATTERED.with(|r| r.set(true));
 }
 
+/// Whether the current path has scattered, and setting it: for an integrator that keeps its
+/// paths' state itself and lends it to this thread for a vertex (`wavefront::integrator`).
+pub fn has_scattered() -> bool {
+    PATH_SCATTERED.with(|r| r.get())
+}
+
+pub fn set_scattered(scattered: bool) {
+    PATH_SCATTERED.with(|r| r.set(scattered));
+}
+
 /// α for a GGX vertex of roughness `alpha` on the current path, regularised: unchanged at the
 /// path's first scattering, and at least the scene's floor after it (see "Path
 /// regularisation").

@@ -186,7 +186,7 @@ pub fn sample_area_light_with(point: &Vector3<f64>, s: &Scene, response: impl Fn
     }
     let (_, _, i) = s.area_light_choice.sample(rand());
     let chosen = s.area_light_choice.probability(i);
-    sample_area_light_from(point, s, i, chosen, response)
+    sample_area_light_from(point, s, i, chosen, response, &|r: &Ray, d: f64| s.objects.transmittance(r, d, f64::MIN_POSITIVE))
 }
 
 /// One sample of light from the sampled lights at `point`, `response` as for
@@ -194,8 +194,22 @@ pub fn sample_area_light_with(point: &Vector3<f64>, s: &Scene, response: impl Fn
 /// by its importance there (the point lights aren't then summed separately); otherwise one
 /// area light chosen by power, if `sample_lights` is on.
 pub fn sample_lights_with(point: &Vector3<f64>, s: &Scene, response: impl Fn(&Vector3<f64>, f64) -> Color) -> Color {
+    sample_lights_through(point, s, response, &|r: &Ray, d: f64| s.objects.transmittance(r, d, f64::MIN_POSITIVE))
+}
+
+/// As `sample_lights_with`, with what reaches `point` from a light along a ray (towards it,
+/// unit direction) over a distance left to `transmit`: the scene's transmittance, or an
+/// approximation of light diffused through a cloud (`volume`'s `diffusion`).
+pub fn sample_lights_through(point: &Vector3<f64>, s: &Scene, response: impl Fn(&Vector3<f64>, f64) -> Color,
+                             transmit: &dyn Fn(&Ray, f64) -> Color) -> Color {
     let bvh = match &s.light_bvh {
-        None => return if s.render.sample_lights { sample_area_light_with(point, s, response) } else { Color::black() },
+        None => {
+            if !s.render.sample_lights || s.area_lights.is_empty() {
+                return Color::black();
+            }
+            let (_, _, i) = s.area_light_choice.sample(rand());
+            return sample_area_light_from(point, s, i, s.area_light_choice.probability(i), response, transmit);
+        },
         Some(b) => b,
     };
     let (i, chosen) = match bvh.sample(point, rand()) {
@@ -204,7 +218,7 @@ pub fn sample_lights_with(point: &Vector3<f64>, s: &Scene, response: impl Fn(&Ve
     };
     let areas = s.bvh_area_lights();
     if i < areas {
-        return sample_area_light_from(point, s, i, chosen, response);
+        return sample_area_light_from(point, s, i, chosen, response, transmit);
     }
     // A point light: a delta in direction, so no MIS (an infinite density).
     let light = &s.lights[i - areas];
@@ -219,12 +233,13 @@ pub fn sample_lights_with(point: &Vector3<f64>, s: &Scene, response: impl Fn(&Ve
     if intensity == Color::black() {
         return intensity;
     }
-    let transmitted = s.objects.transmittance(&Ray { ro: *point, rd: w }, d2.sqrt(), f64::MIN_POSITIVE);
+    let transmitted = transmit(&Ray { ro: *point, rd: w }, d2.sqrt());
     r * intensity * transmitted / (d2 * chosen)
 }
 
 /// One sample of area light `i`, chosen with probability `chosen`.
-fn sample_area_light_from(point: &Vector3<f64>, s: &Scene, i: usize, chosen: f64, response: impl Fn(&Vector3<f64>, f64) -> Color) -> Color {
+fn sample_area_light_from(point: &Vector3<f64>, s: &Scene, i: usize, chosen: f64, response: impl Fn(&Vector3<f64>, f64) -> Color,
+                          transmit: &dyn Fn(&Ray, f64) -> Color) -> Color {
     let light = &s.area_lights[i];
     // A point on the light, with its density per solid angle (`Geometry::sample_from`: by area
     // for most shapes, by the subtended cone for spheres).
@@ -250,7 +265,7 @@ fn sample_area_light_from(point: &Vector3<f64>, s: &Scene, i: usize, chosen: f64
     }
     // Stop the shadow ray just short of the light, which would otherwise block itself.
     let shadow_ray = Ray { ro: *point, rd: w };
-    let transmitted = s.objects.transmittance(&shadow_ray, d * (1. - 1e-6), f64::MIN_POSITIVE);
+    let transmitted = transmit(&shadow_ray, d * (1. - 1e-6));
     if transmitted.rgb.max() <= 0. {
         return Color::black();
     }

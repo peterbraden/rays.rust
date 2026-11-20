@@ -157,6 +157,20 @@ fn coordinates(d: &Vector3<f64>) -> (f64, f64, f64) {
     (u.min(1. - 1e-12), (theta / PI).min(1. - 1e-12), theta.sin())
 }
 
+/// Where the sky's distribution is tabulated from: the camera's position.
+pub fn viewpoint(s: &Scene) -> Vector3<f64> {
+    s.camera.get_ray(0.5, 0.5, 0., 0.).ro
+}
+
+/// How much of the sky in direction `d` the scene lets through from `origin` (0 behind the
+/// ground), so that sampling the sky by its brightness times this spends no shadow rays where
+/// they would be blocked. A heuristic: it is exact only at `origin`, and the light's density
+/// stays consistent wherever it is wrong, so the estimate stays unbiased.
+pub fn visibility(s: &Scene, origin: &Vector3<f64>, d: &Vector3<f64>) -> f64 {
+    // Only a guess, so displaced terrain is seen roughly, without dicing it.
+    crate::shapes::displaced::roughly(|| s.objects.transmittance(&Ray { ro: *origin, rd: *d }, SUN_SHADOW_DISTANCE, f64::MIN_POSITIVE).rgb.mean())
+}
+
 /// The sky as a light: what a ray that escapes the scene sees (besides the sun's disc), and a
 /// distribution over directions roughly in proportion to its brightness.
 pub struct Environment {
@@ -168,7 +182,7 @@ pub struct Environment {
 impl Environment {
     /// Tabulate the scene's sky as seen from the camera, or None if none of it is visible.
     pub fn build(s: &Scene) -> Option<Environment> {
-        let origin = s.camera.get_ray(0.5, 0.5, 0., 0.).ro;
+        let origin = viewpoint(s);
         let up = Ray { ro: origin, rd: Vector3::new(0., 1., 0.) };
         // The skysphere reports every ray hitting it, infinitely far off.
         let sky = s.objects.infinite_items.iter()
@@ -179,9 +193,7 @@ impl Environment {
             let (u, v) = ((k % WIDTH) as f64 + 0.5, (k / WIDTH) as f64 + 0.5);
             let (u, v) = (u / WIDTH as f64, v / HEIGHT as f64);
             let ray = Ray { ro: origin, rd: direction(u, v) };
-            // Only a guess, so displaced terrain is seen roughly, without dicing it.
-            let visible = crate::shapes::displaced::roughly(|| s.objects.transmittance(&ray, SUN_SHADOW_DISTANCE, f64::MIN_POSITIVE).rgb.mean());
-            luminance(&env.radiance(&ray, s)).max(0.) * visible * (PI * v).sin()
+            luminance(&env.radiance(&ray, s)).max(0.) * visibility(s, &origin, &ray.rd) * (PI * v).sin()
         }).collect();
         env.distribution = Distribution2D::new(&values, WIDTH);
         if env.distribution.integral() > 0. { Some(env) } else { None }

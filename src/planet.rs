@@ -37,14 +37,9 @@ impl Planet {
     /// northwards), the azimuthal equidistant projection about the origin's foot. Near the
     /// origin this is (x, y, z).
     pub fn local_coordinates(&self, p: &Vector3<f64>) -> Vector3<f64> {
-        let v = p - self.center();
-        let r = v.norm();
-        let horizontal = Vector2::new(v.x, v.z);
-        let sideways = horizontal.norm();
-        // The angle from the pole, by atan2 so it is exact near the origin.
-        let theta = sideways.atan2(v.y);
-        let along = if sideways > 0. { horizontal * (self.radius * theta / sideways) } else { Vector2::zeros() };
-        Vector3::new(along.x, r - self.radius, along.y)
+        // (`shared::media::planet_local`, which a kernel of the GPU's computes too.)
+        let q = shared::media::planet_local(self.radius, p.x, p.y, p.z);
+        Vector3::new(q.0, q.1, q.2)
     }
 
     /// The inverse of `local_coordinates`.
@@ -84,6 +79,15 @@ pub struct PlanetMapping {
 }
 
 impl DensityField for PlanetMapping {
+    /// A flat cloud layer, curved by the kernel as here (`shared::media::OnPlanet`).
+    fn export(&self) -> Option<crate::volume::FieldExport> {
+        use crate::volume::FieldExport;
+        match self.field.export()? {
+            FieldExport::Nubis { record, radius } if radius == 0. => Some(FieldExport::Nubis { record, radius: self.planet.radius }),
+            _ => None,
+        }
+    }
+
     fn density(&self, p: &Vector3<f64>) -> f64 {
         self.field.density(&self.planet.local_coordinates(p))
     }
@@ -107,15 +111,9 @@ impl DensityField for PlanetMapping {
     /// The field's local majorant along the ray's direction in planet-local coordinates, its
     /// length converted back to the scene's, and trusted only `CURVED_STEP` at a time.
     fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
-        let q = self.planet.local_coordinates(p);
-        let eps = 1.;
-        let dq = (self.planet.local_coordinates(&(p + d * eps)) - q) / eps;
-        let speed = dq.norm();
-        if speed <= 0. {
-            return (self.majorant(), CURVED_STEP);
-        }
-        let (majorant, length) = self.field.majorant_from(&q, &(dq / speed));
-        (majorant, (length / speed).min(CURVED_STEP))
+        use shared::media::Medium;
+        let field = crate::volume::Field(&*self.field);
+        shared::media::OnPlanet { radius: self.planet.radius, medium: &field }.majorant_from(p.x, p.y, p.z, d.x, d.y, d.z)
     }
 
     fn particle_radius(&self, p: &Vector3<f64>) -> Option<f64> {

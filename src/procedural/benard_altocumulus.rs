@@ -29,6 +29,12 @@
 //! 4. **Patches.** Large-scale noise thins the layer in places (`patchiness`), into the patches
 //!    and holes of a real sheet.
 //! 5. **Detail.** As in Nubis, Worley noise erodes each cloudlet's edges.
+//! 6. **Castellanus.** When the layer turns unstable, by cooling aloft or moist air lifted into
+//!    it, the rising air in some cells keeps rising: a turret grows from the cloudlet, taller
+//!    than it is wide, its head billowing, all of them on the layer's common base and lined up
+//!    with the cells' rows (the WMO's castellanus; a sign that thunderstorms may follow later in
+//!    the day). `castellanus` is the share of cells with a turret, `turret_height` how tall
+//!    they grow, in layer thicknesses.
 
 use crate::na::{Vector2, Vector3};
 use std::sync::OnceLock;
@@ -78,6 +84,10 @@ pub struct BenardAltocumulus {
     /// Mean droplet radius (micrometres), for diffraction: altocumulus droplets are small and
     /// even, which is why it shows coronae and iridescence.
     pub particle_radius: Option<f64>,
+    /// The share of cells that grow a turret (0 to 1), and how tall the tallest grow, in layer
+    /// thicknesses (castellanus).
+    pub castellanus: f64,
+    pub turret_height: f64,
     seed: u32,
     warp_noise: PerlinNoise,
     patch_noise: PerlinNoise,
@@ -116,6 +126,8 @@ impl BenardAltocumulus {
             extent: 50_000.,
             fade: 0.3,
             particle_radius: None,
+            castellanus: 0.,
+            turret_height: 3.,
             seed: seed as u32,
             warp_noise: PerlinNoise::shuffled(seed.wrapping_mul(3).wrapping_add(1)),
             patch_noise: PerlinNoise::shuffled(seed.wrapping_mul(3).wrapping_add(2)),
@@ -130,7 +142,8 @@ impl BenardAltocumulus {
     }
 
     pub fn top(&self) -> f64 {
-        self.base + self.thickness * (1.5 + 0.3 * self.undulation)
+        let turrets = if self.castellanus > 0. { self.turret_height * 1.2 } else { 0. };
+        self.base + self.thickness * (1.5 + 0.3 * self.undulation).max(turrets + 0.5)
     }
 
     fn detail(&self) -> &WorleyTexture {
@@ -223,7 +236,27 @@ impl BenardAltocumulus {
         let turrets = worley_fbm(self.detail(), &(Vector3::new(p.x, self.base, p.z) / (2. * self.detail_size)));
         let top = (1. - t * t).sqrt() * reach.min(1.).sqrt() * (0.6 + 0.8 * turrets);
         let bottom = 0.15 * t * t;
-        let inside = (h - bottom).min(top - h);
+        let mut inside = (h - bottom).min(top - h);
+        // 6. A turret, on some cells: narrower than the cloudlet, rising from it with a round,
+        // billowing head.
+        let chosen = (cell.hash.0 * 7.31 + cell.hash.1 * 3.17).fract();
+        if chosen < self.castellanus {
+            let rise = self.turret_height * (0.5 + 0.5 * (chosen / self.castellanus.max(1e-9)));
+            let width = 0.65 * (0.85 + 0.3 * cell.hash.1);
+            let r = t / width;
+            if r < 1.4 {
+                // A stem rising to a broader, billowing head, with bulges up its flanks: a
+                // little cumulus on the layer. Billows a third of the turret across push its
+                // outline out and in; its top is rounded over the head.
+                let up = (h / rise).clamp(0., 1.);
+                let billows = worley_fbm(self.detail(), &(Vector3::new(p.x, p.y * 0.8, p.z) / (1.6 * self.detail_size)));
+                let bulges = (self.warp_noise.fbm(u * 3., p.y / (0.8 * self.thickness), v * 3., 2, 0.5, 2.) - 0.5) * 2.;
+                let profile = lerp(0.55, 1., smoothstep(0.3, 0.75, up)) * (1. - ((up - 0.75) / 0.25).max(0.).powi(2)).max(0.).sqrt();
+                let radius = profile * (1. + 0.25 * bulges) + 0.45 * (billows - 0.5);
+                let flank = (radius - r) * 2.;
+                inside = inside.max((h - bottom).min(rise * (0.85 + 0.3 * billows) - h).min(flank));
+            }
+        }
         if inside <= 0. {
             return 0.;
         }
@@ -289,6 +322,26 @@ mod tests {
                 assert_eq!(f, 0.);
             }
         }
+    }
+
+    #[test]
+    fn test_castellanus_turrets_rise_from_the_layer() {
+        let mut c = layer();
+        (c.castellanus, c.turret_height) = (0.4, 5.);
+        // Cloud far above the layer's domes (over twice its thickness), only with turrets, and
+        // all of it within the slab the majorant covers.
+        let (mut high, mut rng) = (0, Pcg32::new(4, 1));
+        for _ in 0..20000 {
+            let p = Vector3::new(uniform(&mut rng, -4000., 4000.), uniform(&mut rng, c.bottom() - 100., c.top() + 100.), uniform(&mut rng, -4000., 4000.));
+            let d = c.density(&p);
+            if d > 0. {
+                assert!(p.y >= c.bottom() && p.y <= c.top(), "{}", p);
+                if p.y > c.base + 2.5 * c.thickness { high += 1; }
+            }
+        }
+        assert!(high > 10, "{}", high);
+        let plain = layer();
+        assert!((0..20000).all(|k| plain.density(&Vector3::new((k % 200) as f64 * 40. - 4000., plain.base + 2.5 * plain.thickness, (k / 200) as f64 * 80. - 4000.)) == 0.));
     }
 
     #[test]

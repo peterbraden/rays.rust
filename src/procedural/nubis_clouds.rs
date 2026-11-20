@@ -35,53 +35,12 @@ use std::sync::OnceLock;
 use crate::noise::{PerlinNoise, worley_hash};
 use crate::volume::DensityField;
 
-/// (v - lo) / (hi - lo), clamped to [0, 1]; a step at `hi` if the range is empty, with `hi`
-/// itself below it, so a threshold of 1 on a value in [0, 1] (no coverage) passes nothing.
-pub(crate) fn remap(v: f64, lo: f64, hi: f64) -> f64 {
-    if hi <= lo {
-        return if v > hi { 1. } else { 0. };
-    }
-    ((v - lo) / (hi - lo)).clamp(0., 1.)
-}
+// The recipe itself (the height profiles, the noise's remapping, the shape and its erosion) is
+// in `shared::clouds`, generic over the float it computes in, so that the GPU's shader compiles
+// the same functions at f32 (see that crate). Here are the renderer's f64 names for them.
 
-pub(crate) fn smoothstep(lo: f64, hi: f64, v: f64) -> f64 {
-    let t = remap(v, lo, hi);
-    t * t * (3. - 2. * t)
-}
-
-pub(crate) fn lerp(a: f64, b: f64, t: f64) -> f64 {
-    a + (b - a) * t
-}
-
-/// Where in the layer (0 at its base, 1 at its top) clouds of a type rise and fall: density
-/// grows from `rise.0` to `rise.1` and dies away from `fall.0` to `fall.1`.
-#[derive(Clone, Copy)]
-struct Profile {
-    rise: (f64, f64),
-    fall: (f64, f64),
-}
-
-const STRATUS: Profile = Profile { rise: (0., 0.08), fall: (0.15, 0.3) };
-const STRATOCUMULUS: Profile = Profile { rise: (0., 0.12), fall: (0.35, 0.65) };
-const CUMULUS: Profile = Profile { rise: (0., 0.08), fall: (0.6, 1.) };
-
-/// The profile of `cloud_type`, from 0 (stratus) through 0.5 (stratocumulus) to 1 (cumulus).
-fn profile_of(cloud_type: f64) -> Profile {
-    let (a, b, t) = if cloud_type < 0.5 {
-        (&STRATUS, &STRATOCUMULUS, cloud_type * 2.)
-    } else {
-        (&STRATOCUMULUS, &CUMULUS, cloud_type * 2. - 1.)
-    };
-    let mix = |x: (f64, f64), y: (f64, f64)| (lerp(x.0, y.0, t), lerp(x.1, y.1, t));
-    Profile { rise: mix(a.rise, b.rise), fall: mix(a.fall, b.fall) }
-}
-
-/// The fraction of cloud density allowed at height `h` through the layer; zero from
-/// `profile_of(cloud_type).fall.1` up.
-fn height_profile(h: f64, cloud_type: f64) -> f64 {
-    let Profile { rise, fall } = profile_of(cloud_type);
-    smoothstep(rise.0, rise.1, h) * (1. - smoothstep(fall.0, fall.1, h))
-}
+// (Now `crate::math`'s; re-exported for the modules that import them from here.)
+pub(crate) use crate::math::{lerp, remap, smoothstep, stretched};
 
 /// The weather map: noise sampled at the corners of a grid of square texels over the layer's
 /// region, and interpolated bilinearly between them. Zero outside the region.
@@ -109,32 +68,26 @@ impl WeatherMap {
         WeatherMap { origin, texel, n, corners, texel_max }
     }
 
-    /// The texel holding (x, z), and the position within it in [0, 1]^2; None outside the map.
-    fn locate(&self, x: f64, z: f64) -> Option<(usize, usize, f64, f64)> {
-        let u = (x - self.origin.x) / self.texel;
-        let v = (z - self.origin.y) / self.texel;
-        if !(u >= 0. && v >= 0. && u <= self.n as f64 && v <= self.n as f64) {
-            return None;
-        }
-        let i = (u.floor() as usize).min(self.n - 1);
-        let j = (v.floor() as usize).min(self.n - 1);
-        Some((i, j, u - i as f64, v - j as f64))
+    /// The map as the shared code reads it (`shared::clouds::WeatherGrid`), its corners and
+    /// maxima in tables at `corners` and `maxima`.
+    fn grid(&self, corners: u32, maxima: u32) -> shared::clouds::WeatherGrid<f64> {
+        shared::clouds::WeatherGrid { x: self.origin.x, z: self.origin.y, texel: self.texel, n: self.n as u32, corners, maxima }
     }
 
     fn at(&self, x: f64, z: f64) -> f64 {
-        match self.locate(x, z) {
-            None => 0.,
-            Some((i, j, fu, fv)) => {
-                let c = |i: usize, j: usize| self.corners[j * (self.n + 1) + i];
-                lerp(lerp(c(i, j), c(i + 1, j), fu), lerp(c(i, j + 1), c(i + 1, j + 1), fu), fv)
-            },
-        }
+        self.grid(0, 0).at(self, x, z)
     }
 }
 
-/// Fractal Perlin noise is in [0, 1] but rarely strays far from 0.5; stretch it to use the range.
-pub(crate) fn stretched(n: f64) -> f64 {
-    ((n - 0.5) * 2.2 + 0.5).clamp(0., 1.)
+/// The corners, alone, from 0.
+impl shared::Tables<f64> for WeatherMap {
+    fn value(&self, i: u32) -> f64 {
+        self.corners[i as usize]
+    }
+
+    fn index(&self, _i: u32) -> u32 {
+        0
+    }
 }
 
 /// Worley noise (distance to the nearest feature point, one point per unit cell) precomputed
@@ -146,9 +99,9 @@ pub(crate) struct WorleyTexture {
 }
 
 impl WorleyTexture {
-    const PERIOD: usize = 16;
-    const PER_CELL: usize = 4;
-    const N: usize = Self::PERIOD * Self::PER_CELL;
+    const PERIOD: usize = shared::clouds::WORLEY_PERIOD as usize;
+    const PER_CELL: usize = shared::clouds::WORLEY_PER_CELL as usize;
+    const N: usize = shared::clouds::WORLEY_N as usize;
 
     pub(crate) fn new(seed: u32) -> WorleyTexture {
         let p = Self::PERIOD as i64;
@@ -177,25 +130,57 @@ impl WorleyTexture {
 
     /// The distance to the nearest feature point from `p`, in cells, interpolated.
     pub(crate) fn at(&self, p: &Vector3<f64>) -> f64 {
-        let n = Self::N as i64;
-        let q = p * Self::PER_CELL as f64;
-        let (x0, y0, z0) = (q.x.floor(), q.y.floor(), q.z.floor());
-        let (fx, fy, fz) = (q.x - x0, q.y - y0, q.z - z0);
-        let (x0, y0, z0) = (x0 as i64, y0 as i64, z0 as i64);
-        let t = |dx: i64, dy: i64, dz: i64| {
-            let (x, y, z) = ((x0 + dx).rem_euclid(n), (y0 + dy).rem_euclid(n), (z0 + dz).rem_euclid(n));
-            self.texels[(z * n * n + y * n + x) as usize] as f64
-        };
-        let along_x = |dy, dz| lerp(t(0, dy, dz), t(1, dy, dz), fx);
-        lerp(lerp(along_x(0, 0), along_x(1, 0), fy), lerp(along_x(0, 1), along_x(1, 1), fy), fz)
+        shared::clouds::worley(self, 0, p.x, p.y, p.z)
+    }
+
+    /// The texels, for whoever lays them out elsewhere (the GPU).
+    pub(crate) fn texels(&self) -> &[f32] {
+        &self.texels
+    }
+}
+
+impl shared::Tables<f64> for WorleyTexture {
+    fn value(&self, i: u32) -> f64 {
+        self.texels[i as usize] as f64
+    }
+
+    fn index(&self, _i: u32) -> u32 {
+        0
     }
 }
 
 /// Inverted Worley noise (high at feature points, falling away between them), in three octaves:
 /// round, billowing cells.
 pub(crate) fn worley_fbm(w: &WorleyTexture, p: &Vector3<f64>) -> f64 {
-    let cell = |q: Vector3<f64>| (1. - w.at(&q)).clamp(0., 1.);
-    0.625 * cell(*p) + 0.25 * cell(p * 2.) + 0.125 * cell(p * 4.)
+    shared::clouds::worley_fbm(w, 0, p.x, p.y, p.z)
+}
+
+/// A layer's tables as its shared recipe reads them: the shape noise's permutation, then the
+/// Worley texture, then (for a flat layer) the weather map's corners and its texels' maxima.
+/// The weather map is built when first read, as ever.
+struct LayerTables<'a> {
+    layer: &'a NubisCloudLayer,
+    cells: &'a WorleyTexture,
+}
+
+/// Where the Worley texture begins, after the permutation's 512 entries, and the weather map's
+/// corners, after its texels.
+const WORLEY_AT: u32 = 512;
+const CORNERS_AT: u32 = WORLEY_AT + shared::clouds::WORLEY_N * shared::clouds::WORLEY_N * shared::clouds::WORLEY_N;
+
+impl shared::Tables<f64> for LayerTables<'_> {
+    fn value(&self, i: u32) -> f64 {
+        if i < CORNERS_AT {
+            return self.cells.texels[(i - WORLEY_AT) as usize] as f64;
+        }
+        let map = self.layer.weather_map();
+        let k = (i - CORNERS_AT) as usize;
+        if k < map.corners.len() { map.corners[k] } else { map.texel_max[k - map.corners.len()] }
+    }
+
+    fn index(&self, i: u32) -> u32 {
+        self.layer.shape.permutation()[i as usize] as u32
+    }
 }
 
 pub struct NubisCloudLayer {
@@ -265,27 +250,53 @@ impl NubisCloudLayer {
         self.cells.get_or_init(|| WorleyTexture::new(self.seed as u32))
     }
 
-    /// The column strength (0 clear, to 1) for a weather map value.
-    fn cell(&self, weather: f64) -> f64 {
-        remap(weather, 1. - self.coverage, 1.)
+    /// The layer as data, for the GPU's shader, which computes its density and walks through
+    /// it with the same functions (`pathtrace::load_nubis`, which has the layout).
+    pub fn export(&self) -> Vec<f32> {
+        let map = self.weather_map();
+        let mut out = vec![
+            self.base as f32, self.top as f32, self.coverage as f32, self.cloud_type as f32,
+            self.shape_size as f32, self.detail_size as f32, self.erosion as f32, self.max_density as f32,
+            map.origin.x as f32, map.origin.y as f32, map.texel as f32, map.n as f32,
+            (self.center.x - self.extent) as f32, (self.center.y - self.extent) as f32,
+            (self.center.x + self.extent) as f32, (self.center.y + self.extent) as f32,
+        ];
+        out.extend(self.shape.permutation().iter().map(|&p| p as f32));
+        out.extend(self.cells().texels());
+        out.extend(map.corners.iter().map(|&c| c as f32));
+        out.extend(map.texel_max.iter().map(|&c| c as f32));
+        out
     }
 
-    /// How far up the layer (0 to 1) clouds in a column of `cell` strength may reach: stronger
-    /// cells grow taller for heaped (cumulus) clouds; layered (stratus) ones stay level.
-    fn reach(&self, cell: f64) -> f64 {
-        lerp(1., lerp(0.3, 1., cell.sqrt()), self.cloud_type)
+    /// `fraction_at` with the weather given, for tests of the shader's copy of it.
+    #[cfg(test)]
+    pub(crate) fn fraction_for_test(&self, altitude: f64, weather: f64, p: &Vector3<f64>) -> f64 {
+        self.fraction_at(altitude, || weather, p)
     }
 
-    /// The highest any cloud can be over weather of at most `weather`, or None if none can be.
-    /// The cell strength and reach only grow with the weather, and the profile is zero from
-    /// `fall.1` of the reach up.
-    fn column_top(&self, weather: f64) -> Option<f64> {
-        let cell = self.cell(weather);
-        if cell <= 0. {
-            return None;
+    /// The layer's recipe, as the shared code takes it (`shared::clouds::Nubis`).
+    fn recipe(&self) -> shared::clouds::Nubis<f64> {
+        shared::clouds::Nubis {
+            base: self.base, top: self.top, coverage: self.coverage, cloud_type: self.cloud_type,
+            shape_size: self.shape_size, detail_size: self.detail_size, erosion: self.erosion,
+            perm: 0, worley: WORLEY_AT,
         }
-        let h = (self.reach(cell) * profile_of(self.cloud_type).fall.1).min(1.);
-        Some(self.base + h * (self.top - self.base))
+    }
+
+    /// The layer as a medium (`shared::clouds::NubisField`), flat, with its weather map.
+    fn field(&self) -> shared::clouds::NubisField<f64> {
+        let map = self.weather_map();
+        shared::clouds::NubisField {
+            recipe: self.recipe(), max_density: self.max_density,
+            weather: map.grid(CORNERS_AT, CORNERS_AT + map.corners.len() as u32),
+        }
+    }
+
+    /// The highest any cloud can be over weather of at most `weather`, or None if none can be
+    /// (`shared::clouds::NubisField::column_top`, which needs no weather map).
+    fn column_top(&self, weather: f64) -> Option<f64> {
+        let unmapped = shared::clouds::WeatherGrid { x: 0., z: 0., texel: 1., n: 1, corners: 0, maxima: 0 };
+        shared::clouds::NubisField { recipe: self.recipe(), max_density: self.max_density, weather: unmapped }.column_top(weather)
     }
 
     /// Cloud density as a fraction of `max_density`, in [0, 1].
@@ -293,45 +304,25 @@ impl NubisCloudLayer {
         self.fraction_at(p.y, || self.weather_map().at(p.x, p.z), p)
     }
 
-    /// The cloud recipe, given where its inputs come from: the height `altitude`, the weather
-    /// map's value over the point (asked for only if needed), and the position `p` at which to
-    /// evaluate the shape and detail noise. Flat layers take these from flat coordinates,
-    /// global ones from the planet (`GlobalNubis`).
+    /// The cloud recipe (`shared::clouds::Nubis::fraction`), given where its inputs come from:
+    /// the height `altitude`, the weather map's value over the point (asked for only if
+    /// needed), and the position `p` at which to evaluate the shape and detail noise. Flat
+    /// layers take these from flat coordinates, global ones from the planet (`GlobalNubis`).
     fn fraction_at(&self, altitude: f64, weather: impl FnOnce() -> f64, p: &Vector3<f64>) -> f64 {
-        // 1. Height in the layer.
-        let h = (altitude - self.base) / (self.top - self.base);
-        if !(0. ..=1.).contains(&h) {
-            return 0.;
-        }
-        // 2. The weather map: how strongly this column of sky is cloud, from 0 (clear) to 1.
-        let cell = self.cell(weather());
-        if cell <= 0. {
-            return 0.;
-        }
-        let profile = height_profile(h / self.reach(cell), self.cloud_type);
-        if profile <= 0. {
-            return 0.;
-        }
-
-        // 3. The base shape, cut to the cell's strength.
-        let q = p / self.shape_size;
-        let perlin = stretched(self.shape.fbm(q.x, q.y, q.z, 4, 0.5, 2.0));
-        let perlin_worley = remap(perlin, worley_fbm(self.cells(), &q) - 1., 1.);
-        let shape = remap(perlin_worley * profile, 0.7 * (1. - cell), 1.);
-        if shape <= 0. {
-            return 0.;
-        }
-
-        // 4. Erode the edges: billowing detail high up, its inverse (wisps) near the base.
-        let d = worley_fbm(self.cells(), &(p / self.detail_size));
-        let detail = lerp(1. - d, d, (h * 5.).min(1.));
-        remap(shape, detail * self.erosion, 1.)
+        let recipe = self.recipe();
+        let Some(h) = recipe.height(altitude) else { return 0. };
+        let tables = LayerTables { layer: self, cells: self.cells() };
+        recipe.fraction(&tables, h, weather(), p.x, p.y, p.z)
     }
 }
 
 impl DensityField for NubisCloudLayer {
+    fn export(&self) -> Option<crate::volume::FieldExport> {
+        Some(crate::volume::FieldExport::Nubis { record: NubisCloudLayer::export(self), radius: 0. })
+    }
+
     fn density(&self, p: &Vector3<f64>) -> f64 {
-        self.max_density * self.fraction(p)
+        self.field().density(&LayerTables { layer: self, cells: self.cells() }, p.x, p.y, p.z)
     }
 
     fn majorant(&self) -> f64 {
@@ -339,35 +330,9 @@ impl DensityField for NubisCloudLayer {
     }
 
     /// Within one texel of the weather map, clouds lie only below `column_top` of its strongest
-    /// corner: there the bound is `max_density`, elsewhere zero. Holds to the texel's edge, or
-    /// to that height if the ray crosses it first.
+    /// corner (`shared::clouds::NubisField::majorant_from`).
     fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
-        let map = self.weather_map();
-        // Classify by a point a centimetre along the ray, so one on a texel's edge (or the
-        // clouds' top) counts as where it is entering, even through the rounding of a planet's
-        // mapping (a hair's breadth ahead, rays crawled across texel edges).
-        let ahead = p + d * 0.01;
-        let (i, j) = match map.locate(ahead.x, ahead.z) {
-            Some((i, j, _, _)) => (i, j),
-            None => return (self.max_density, f64::INFINITY),
-        };
-        let (x0, z0) = (map.origin.x + i as f64 * map.texel, map.origin.y + j as f64 * map.texel);
-        let exit = |p: f64, d: f64, lo: f64| {
-            if d > 0. { (lo + map.texel - p) / d } else if d < 0. { (lo - p) / d } else { f64::INFINITY }
-        };
-        let edge = exit(p.x, d.x, x0).min(exit(p.z, d.z, z0)).max(0.);
-        match self.column_top(map.texel_max[j * map.n + i]) {
-            None => (0., edge),
-            Some(top) => {
-                let to_top = if d.y != 0. { (top - p.y) / d.y } else { f64::INFINITY };
-                if ahead.y > top {
-                    // Above the clouds: clear until the ray comes down to them.
-                    (0., if to_top > 0. { edge.min(to_top) } else { edge })
-                } else {
-                    (self.max_density, if to_top > 0. { edge.min(to_top) } else { edge })
-                }
-            },
-        }
+        self.field().majorant_from(&LayerTables { layer: self, cells: self.cells() }, p.x, p.y, p.z, d.x, d.y, d.z)
     }
 }
 
@@ -663,11 +628,11 @@ mod tests {
     fn test_height_profiles() {
         // Zero at the base, and above each type's top.
         for t in [0., 0.25, 0.5, 1.] {
-            assert_eq!(height_profile(0., t), 0.);
+            assert_eq!(shared::clouds::height_profile(0., t), 0.);
         }
-        assert_eq!(height_profile(0.5, 0.), 0.);
-        assert!(height_profile(0.5, 1.) > 0.9);
-        assert!(height_profile(0.1, 0.) > 0.5);
+        assert_eq!(shared::clouds::height_profile(0.5, 0.), 0.);
+        assert!(shared::clouds::height_profile(0.5, 1.) > 0.9);
+        assert!(shared::clouds::height_profile(0.1, 0.) > 0.5);
     }
 }
 

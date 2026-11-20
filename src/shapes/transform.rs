@@ -108,6 +108,14 @@ impl Transform {
 const UNBOUNDED: f64 = 1e300;
 
 impl Geometry for Transform {
+    fn kind(&self) -> &'static str {
+        self.item.kind()
+    }
+
+    fn faces_are_primitives(&self) -> bool {
+        self.item.faces_are_primitives()
+    }
+
     fn flatten(&self) -> Option<Vec<crate::wavefront::flat::Prim>> {
         self.item.flatten()?.iter().map(|p| p.transformed(&self.transform)).collect()
     }

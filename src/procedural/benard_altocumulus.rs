@@ -244,15 +244,17 @@ impl BenardAltocumulus {
             let rise = self.turret_height * (0.5 + 0.5 * (chosen / self.castellanus.max(1e-9)));
             let width = 0.65 * (0.85 + 0.3 * cell.hash.1);
             let r = t / width;
-            if r < 1.2 {
-                // Billows on its flanks and head, bigger than the dome's.
-                let billows = worley_fbm(self.detail(), &(p / (3. * self.detail_size)));
-                // A column narrowing a little with height, its head rounded over the top
-                // tenth of its rise, the whole outline pushed out by billows.
+            if r < 1.4 {
+                // A stem rising to a broader, billowing head, with bulges up its flanks: a
+                // little cumulus on the layer. Billows a third of the turret across push its
+                // outline out and in; its top is rounded over the head.
                 let up = (h / rise).clamp(0., 1.);
-                let radius = (1. - 0.25 * up) * (1. - ((up - 0.8) / 0.2).max(0.).powi(2)).max(0.).sqrt();
-                let flank = (radius + 0.25 * (billows - 0.5) - r) * 2.;
-                inside = inside.max((h - bottom).min(rise * (0.9 + 0.2 * billows) - h).min(flank));
+                let billows = worley_fbm(self.detail(), &(Vector3::new(p.x, p.y * 0.8, p.z) / (1.6 * self.detail_size)));
+                let bulges = (self.warp_noise.fbm(u * 3., p.y / (0.8 * self.thickness), v * 3., 2, 0.5, 2.) - 0.5) * 2.;
+                let profile = lerp(0.55, 1., smoothstep(0.3, 0.75, up)) * (1. - ((up - 0.75) / 0.25).max(0.).powi(2)).max(0.).sqrt();
+                let radius = profile * (1. + 0.25 * bulges) + 0.45 * (billows - 0.5);
+                let flank = (radius - r) * 2.;
+                inside = inside.max((h - bottom).min(rise * (0.85 + 0.3 * billows) - h).min(flank));
             }
         }
         if inside <= 0. {

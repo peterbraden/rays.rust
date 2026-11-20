@@ -63,8 +63,8 @@
         0.3
       ],
       "patchiness": 0.5,
-      "castellanus": 0.5,
-      "turret_height": 4,
+      "castellanus": 0.4,
+      "turret_height": 6,
       "albedo": [
         0.99,
         0.99,

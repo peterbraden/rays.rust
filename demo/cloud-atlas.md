@@ -635,13 +635,13 @@ is still noisy: from orbit, cloud detail is much smaller than a pixel.
 
 ## Not yet
 
-- **Lightning seen through cloud**: the dipole treats the cloud near each point as a
-  half-space whose surface faces the camera; real turrets are curved and lit from several
-  sides, so their relief when lit from within is softer than in photographs.
-- **Lightning's physics**: the leader's field is from point charges, not solved around the
-  conducting channel; there are no upward leaders from the ground, no time (strokes, dart
-  leaders, continuing current, the channel cooling); and in-cloud channels grow by rules rather
-  than in the field.
+- **Lightning seen through cloud**: the dipole finds the cloud's surface near each point from
+  the density's gradient over 25 m, so turrets' relief follows their curvature; but it still
+  treats that surface as a plane, so light from a flash deep inside a tower reaches its far
+  side too evenly.
+- **Lightning's physics**: the leader's field is from point charges and their images, not
+  solved around the conducting channel; the channel's light in time is a sequence of strokes
+  without its cooling between them.
 - **A simulated storm's microphysics**: rain in the simulation is Kessler's simplest scheme,
   and ice is a mixed phase decided by temperature alone; a storm with graupel and hail, and
   rain that falls through the cloud rather than leaving it at once, needs a fuller scheme.

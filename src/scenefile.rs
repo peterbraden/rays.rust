@@ -972,6 +972,10 @@ impl SceneFile {
             return Some(Arc::new(SceneFile::parse_fractus(&o)));
         }
 
+        if t == "shelf_cloud" || t == "roll_cloud" {
+            return Some(Arc::new(SceneFile::parse_arcus(&o, t == "roll_cloud")));
+        }
+
         if t == "cumulonimbus" {
             return Some(Arc::new(SceneFile::parse_cumulonimbus(&o)));
         }
@@ -2456,6 +2460,45 @@ impl SceneFile {
             Vector3::new(f.center.x + f.extent, f.top(), f.center.y + f.extent),
         );
         let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(f));
+        create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
+    }
+
+    /// The clouds of a storm's gust front (see `procedural::arcus`): `"shelf_cloud"` (arcus), a
+    /// wedge under the storm's base, or `"roll_cloud"` (volutus), a detached tube ahead of it.
+    ///
+    /// `{"type": "shelf_cloud", "center": [x, z], "motion": [x, z], "length": 30000,
+    /// "waviness": 600, "low": 500, "base": 1400, "depth": 5000, "top": 3000, "face_slope": 1.6,
+    /// "tier_spacing": 220, "tier_lip": 90, "scud": 180, "density": 0.04, "softness": 40,
+    /// "seed": 0}`; a roll cloud takes `height`, `ahead` and `radius` in place of the shelf's
+    /// heights. `center` is on the leading edge; `motion` is the way the front advances.
+    /// `mapping` as for `nubis_clouds`.
+    pub fn parse_arcus(o: &Value, roll: bool) -> SceneObject {
+        use crate::procedural::arcus::{Arcus, Form};
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        let mut a = Arcus::new(if roll { Form::Roll } else { Form::Shelf }, SceneFile::parse_seed(o).unwrap_or(0));
+        a.center = SceneFile::parse_vec2_def(o, "center", a.center);
+        a.motion = SceneFile::parse_vec2_def(o, "motion", a.motion).normalize();
+        a.length = num("length", a.length).max(1.);
+        a.waviness = num("waviness", a.waviness).max(0.);
+        a.low = num("low", a.low);
+        a.base = num("base", a.base).max(a.low);
+        a.depth = num("depth", a.depth).max(1.);
+        a.top = num("top", a.top).max(a.base);
+        a.face_slope = num("face_slope", a.face_slope).max(0.);
+        a.tier_spacing = num("tier_spacing", a.tier_spacing).max(1.);
+        a.tier_lip = num("tier_lip", a.tier_lip).max(0.);
+        a.scud = num("scud", a.scud).max(0.);
+        a.height = num("height", a.height);
+        a.ahead = num("ahead", a.ahead);
+        a.radius = num("radius", a.radius).max(1.);
+        a.density = num("density", a.density).max(0.);
+        a.softness = num("softness", a.softness).max(1.);
+        let r = a.reach();
+        let bounds = BBox::new(
+            Vector3::new(a.center.x - r, a.bottom(), a.center.y - r),
+            Vector3::new(a.center.x + r, a.top_height(), a.center.y + r),
+        );
+        let (bounds, field) = SceneFile::curved(o, bounds, Arc::new(a));
         create_volume(bounds, field, SceneFile::parse_scattering(o, 0.85))
     }
 

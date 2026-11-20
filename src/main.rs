@@ -141,6 +141,7 @@ mod procedural {
     pub mod mammatus;
     pub mod cumulonimbus;
     pub mod fractus;
+    pub mod arcus;
     pub mod lightning;
     pub mod precipitation;
     pub mod overcast;

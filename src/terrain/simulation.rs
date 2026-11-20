@@ -226,9 +226,18 @@ impl Terrain {
 
     /// Advance to time `t` (no earlier than now).
     pub fn run_to(&mut self, t: f64) {
+        self.run_while(t, &mut |_| true);
+    }
+
+    /// Advance to time `t`, or until `carry_on`, asked after each step, says to stop. The steps
+    /// are the same either way, so a run stopped at a step and taken up again from there
+    /// arrives at the same state, provided it stopped a whole number of `step`s from zero
+    /// (as every stop here does but the last, at `t`).
+    pub fn run_while(&mut self, t: f64, carry_on: &mut dyn FnMut(&Terrain) -> bool) {
         while self.time < t - 1e-9 {
             let dt = self.params.step.min(t - self.time);
             self.step(dt);
+            if !carry_on(self) { break; }
         }
     }
 
@@ -340,6 +349,18 @@ pub struct Snapshot {
     channels: Vec<crate::terrain::channel::Channel>,
     oxbows: Vec<crate::terrain::channel::Oxbow>,
     rivers_found: Option<f64>,
+}
+
+impl Snapshot {
+    /// The time it was taken at, years.
+    pub fn time(&self) -> f64 { self.time }
+
+    /// Whether it is of a domain with as many cells as `t`'s, so `t` can restore it.
+    pub fn fits(&self, t: &Terrain) -> bool {
+        let n = t.domain.len();
+        [&self.bed, &self.sediment, &self.lava, &self.sediment_flux, &self.ice, &self.drainage, &self.sliding].iter().all(|f| f.len() == n)
+            && self.sea.len() == n && self.receiver.len() == n
+    }
 }
 
 impl Terrain {

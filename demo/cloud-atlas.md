@@ -515,7 +515,7 @@ keeps the geometric rays alone.
 
 ![Glory](./scenes/glory.png)
 
-`glory.json`: above a stratus deck, the sun behind, `"mie": {"radius": 6, "variance": 0.04}`
+`glory.json`: looking down on a stratus deck towards the antisolar point, the sun behind, `"mie": {"radius": 6, "variance": 0.04}`
 
 Coloured rings round the antisolar point on cloud below, seen round an aircraft's shadow or a
 climber's (the Brocken spectre), and the white cloudbow 38° out from it. Geometric optics has

@@ -8,7 +8,7 @@
   "max_depth": 32,
   "path_termination": "russian_roulette",
   "output": {"tonemap": "reinhard", "exposure": 0.9},
-  "camera": {"location": [0, 2000, 0], "lookat": [0, 1400, 800], "up": [0, 1, 0], "angle": 1.4},
+  "camera": {"location": [0, 2000, 0], "lookat": [0, 1400, 800], "up": [0, 1, 0], "angle": 0.45},
   "sun": {"intensity": 4.9},
   "objects": [
     {"type": "ocean", "wind": [6, 2], "detail_center": [0, 0]},

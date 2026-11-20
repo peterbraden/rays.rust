@@ -247,6 +247,11 @@ impl<F: Real, T: Tables<F>> Medium<F> for NubisMedium<'_, F, T> {
     }
 
     #[inline]
+    fn bound(&self) -> F {
+        self.0.max_density
+    }
+
+    #[inline]
     fn majorant_from(&self, x: F, y: F, z: F, dx: F, dy: F, dz: F) -> (F, F) {
         self.0.majorant_from(self.1, x, y, z, dx, dy, dz)
     }

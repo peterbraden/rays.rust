@@ -136,12 +136,17 @@ const RATIO_TRACKING_ROULETTE: f64 = 0.02;
 const RATIO_TRACKING_SLACK: f64 = 2.;
 
 /// A density field as the shared walks take one (`shared::media::Medium`).
-struct Field<'a>(&'a dyn DensityField);
+pub(crate) struct Field<'a>(pub(crate) &'a dyn DensityField);
 
 impl shared::media::Medium<f64> for Field<'_> {
     #[inline]
     fn density(&self, x: f64, y: f64, z: f64) -> f64 {
         self.0.density(&Vector3::new(x, y, z))
+    }
+
+    #[inline]
+    fn bound(&self) -> f64 {
+        self.0.majorant()
     }
 
     #[inline]

@@ -8,6 +8,8 @@ use crate::{Random, Real};
 /// direction with how far the bound holds (0 where it is known to be empty there).
 pub trait Medium<F: Real> {
     fn density(&self, x: F, y: F, z: F) -> F;
+    /// A bound on the density everywhere.
+    fn bound(&self) -> F;
     fn majorant_from(&self, x: F, y: F, z: F, dx: F, dy: F, dz: F) -> (F, F);
 }
 
@@ -78,4 +80,59 @@ pub fn ratio_track<F: Real, M: Medium<F>, R: Random<F>>(medium: &M, o: (F, F, F)
         t = end;
     }
     Some(transmitted)
+}
+
+/// How far a local bound through `OnPlanet` is trusted along a straight ray: over this, the
+/// ray's altitude departs from the straight line in planet-local coordinates by L² / 2R, 8 cm
+/// on the Earth, which the fields' bounds aren't padded for.
+#[inline]
+pub fn curved_step<F: Real>() -> F {
+    F::of(1000)
+}
+
+/// Planet-local coordinates of a scene point, for a planet of `radius` whose surface touches
+/// the origin from below: (distance along the surface eastwards, altitude, northwards), the
+/// azimuthal equidistant projection about the origin's foot. Near the origin this is (x, y, z).
+pub fn planet_local<F: Real>(radius: F, x: F, y: F, z: F) -> (F, F, F) {
+    let up = y + radius;
+    let sideways = (x * x + z * z).sqrt();
+    // The angle from the pole, by atan2 so it is exact near the origin.
+    let theta = sideways.atan2(up);
+    let k = radius * theta / sideways;
+    let (ax, az) = if sideways > F::of(0) { (x * k, z * k) } else { (F::of(0), F::of(0)) };
+    (ax, F::above_sphere(x, y, z, radius), az)
+}
+
+/// A medium written in flat coordinates, curved round a planet (the renderer's
+/// `planet::PlanetMapping`): its heights become altitudes, so it drops away with distance.
+pub struct OnPlanet<'a, F: Real, M: Medium<F>> {
+    pub radius: F,
+    pub medium: &'a M,
+}
+
+impl<F: Real, M: Medium<F>> Medium<F> for OnPlanet<'_, F, M> {
+    #[inline]
+    fn density(&self, x: F, y: F, z: F) -> F {
+        let q = planet_local(self.radius, x, y, z);
+        self.medium.density(q.0, q.1, q.2)
+    }
+
+    #[inline]
+    fn bound(&self) -> F {
+        self.medium.bound()
+    }
+
+    /// The medium's local bound along the ray's direction in planet-local coordinates, its
+    /// length converted back to the scene's, and trusted only `curved_step` at a time.
+    fn majorant_from(&self, x: F, y: F, z: F, dx: F, dy: F, dz: F) -> (F, F) {
+        let q = planet_local(self.radius, x, y, z);
+        let ahead = planet_local(self.radius, x + dx, y + dy, z + dz);
+        let dq = (ahead.0 - q.0, ahead.1 - q.1, ahead.2 - q.2);
+        let speed = (dq.0 * dq.0 + dq.1 * dq.1 + dq.2 * dq.2).sqrt();
+        if speed <= F::of(0) {
+            return (self.medium.bound(), curved_step());
+        }
+        let (majorant, length) = self.medium.majorant_from(q.0, q.1, q.2, dq.0 / speed, dq.1 / speed, dq.2 / speed);
+        (majorant, (length / speed).min(curved_step()))
+    }
 }

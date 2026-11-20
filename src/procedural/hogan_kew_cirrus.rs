@@ -70,6 +70,78 @@ pub enum CirrusGenus {
     Cirrocumulus,
 }
 
+/// The species of cirrus (WMO International Cloud Atlas), as changes to its genus's typical
+/// parameters: how the generating cells are laid out and how their ice falls.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CirrusSpecies {
+    /// Hooked trails, like commas, from the wind turning with height (the genus's default).
+    Uncinus,
+    /// Long filaments, straight or gently curved, with no hooks or tufts at their heads: the
+    /// wind barely turns, and the cells are drawn out along it.
+    Fibratus,
+    /// Small rounded tufts, their bases ragged where trails of ice fall from them and soon
+    /// sublimate.
+    Floccus,
+    /// Dense patches, thick enough to look grey towards the sun.
+    Spissatus,
+}
+
+impl CirrusSpecies {
+    pub fn parse(name: &str) -> Option<CirrusSpecies> {
+        Some(match name {
+            "uncinus" => CirrusSpecies::Uncinus,
+            "fibratus" => CirrusSpecies::Fibratus,
+            "floccus" => CirrusSpecies::Floccus,
+            "spissatus" => CirrusSpecies::Spissatus,
+            _ => return None,
+        })
+    }
+
+    /// The generating field's layout.
+    pub fn field(self, f: &mut CirrusField) {
+        match self {
+            CirrusSpecies::Uncinus => {},
+            CirrusSpecies::Fibratus => { f.coverage = 0.3; f.anisotropy = 5.; f.cell_size = 3000.; },
+            CirrusSpecies::Floccus => { f.coverage = 0.15; f.anisotropy = 1.2; f.cell_size = 1300.; f.spectral_slope = 2.6; },
+            CirrusSpecies::Spissatus => { f.coverage = 0.35; f.anisotropy = 1.5; f.cell_size = 5000.; f.spectral_slope = 2.2; },
+        }
+    }
+
+    /// How the ice falls from it.
+    pub fn fall(self, c: &mut HoganKewCirrus) {
+        match self {
+            CirrusSpecies::Uncinus => {},
+            CirrusSpecies::Fibratus => {
+                // Little turning, gentle shear: trails straight back along the wind, all fibre.
+                c.veer = 0.1;
+                c.shear = 0.0025;
+                c.fibres = 1.;
+                c.fibre_width = 180.;
+                c.generating_depth = 0.08;
+            },
+            CirrusSpecies::Floccus => {
+                // Thick, rounded heads, few fibres; short trails, soon gone.
+                c.veer = 0.4;
+                c.generating_depth = 0.3;
+                c.fall_depth = 0.5;
+                c.sublimation = 3.;
+                c.fibres = 0.25;
+                c.fibre_width = 150.;
+                c.flow = 1000.;
+                c.edge = 0.3;
+            },
+            CirrusSpecies::Spissatus => {
+                // Thick, filled cells: little room between fibres.
+                c.veer = 0.3;
+                c.generating_depth = 0.5;
+                c.fall_depth = 0.5;
+                c.fibres = 0.3;
+                c.max_density *= 1.5;
+            },
+        }
+    }
+}
+
 /// A periodic 2D Gaussian random field with a power-law spectrum, in two independent
 /// realisations, normalised to zero mean and unit variance.
 struct GeneratingField {

@@ -1267,7 +1267,10 @@ impl Foam {
         let noise = crate::noise::PerlinNoise::shuffled(0xf0a);
         let lace_sd = {
             let mut rng = geometry::Pcg32::new(29, 1);
-            let v: Vec<f64> = (0..4096).map(|_| noise.fbm(rng.next_f64() * 300., 0.3, rng.next_f64() * 300., 3, 0.55, 2.2)).collect();
+            let v: Vec<f64> = (0..4096).map(|_| {
+                let (x, z) = (rng.next_f64() * 300., rng.next_f64() * 300.);
+                0.65 * noise.fbm(x / 1.6, 0.3, z / 1.6, 3, 0.55, 2.2) + 0.35 * noise.fbm(x / 6., 4.1, z / 6., 2, 0.5, 2.)
+            }).collect();
             let mean = v.iter().sum::<f64>() / v.len() as f64;
             (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / v.len() as f64).sqrt().max(1e-6)
         };
@@ -1299,17 +1302,32 @@ impl Foam {
         }
         let stretch = 1. + 5. * crate::procedural::nubis_clouds::smoothstep(12., 22., self.speed);
         let (along, across) = (p.0 * self.wind.x + p.1 * self.wind.y, -p.0 * self.wind.y + p.1 * self.wind.x);
-        let n = self.noise.fbm(along / (1.6 * stretch), 0.3, across / 1.6, 3, 0.55, 2.2);
+        // Patches a few metres across, broken into bubble rafts a metre or so.
+        let n = 0.65 * self.noise.fbm(along / (1.6 * stretch), 0.3, across / 1.6, 3, 0.55, 2.2)
+            + 0.35 * self.noise.fbm(along / (6. * stretch), 4.1, across / 6., 2, 0.5, 2.);
         // Its rank among the noise's values, so a fraction r is foam.
         let rank = 0.5 * (1. + erf((n - 0.5) / (self.lace_sd * std::f64::consts::SQRT_2)));
         let t = ((r - rank) / 0.06 * 0.5 + 0.5).clamp(0., 1.);
         t * t * (3. - 2. * t)
     }
 
+    /// A breaking crest's fresh foam of strength `f` at `p`: solid at its core, its edges torn
+    /// into tongues and filaments drawn downwind, as the crest spills.
+    fn ragged(&self, f: f64, p: (f64, f64)) -> f64 {
+        if f <= 0. {
+            return 0.;
+        }
+        let (along, across) = (p.0 * self.wind.x + p.1 * self.wind.y, -p.0 * self.wind.y + p.1 * self.wind.x);
+        let n = self.noise.fbm(along / 1.4 + 31.7, 1.9, across / 0.6, 4, 0.6, 2.1);
+        let rank = 0.5 * (1. + erf((n - 0.5) / (self.lace_sd * std::f64::consts::SQRT_2)));
+        let t = ((1.3 * f - rank) / 0.05 * 0.5 + 0.5).clamp(0., 1.);
+        t * t * (3. - 2. * t)
+    }
+
     /// How much of the surface at (x, z) is foam, 0 to 1, and how much of that is fresh.
     pub fn cover(&self, x: f64, z: f64) -> (f64, f64) {
         let (fresh, residual, p) = self.sample(x, z);
-        let lace = self.lace(residual, p);
+        let (fresh, lace) = (self.ragged(fresh, p), self.lace(residual, p));
         let covered = fresh.max(lace);
         (covered, if covered > 0. { fresh / covered } else { 0. })
     }
@@ -1502,10 +1520,10 @@ impl MaterialModel for PhysicalOcean {
         let mut bubbles = 0.;
         if let Some(foam) = &self.foam {
             let (fresh, residual, p) = foam.sample(intersection.point.x, intersection.point.z);
-            let lace = foam.lace(residual, p);
-            let covered = fresh.max(lace);
+            let (solid, lace) = (foam.ragged(fresh, p), foam.lace(residual, p));
+            let covered = solid.max(lace);
             if covered > 0. && geometry::rand() < covered {
-                let thin = if fresh >= lace { 1. } else { RESIDUAL_FOAM };
+                let thin = if solid >= lace { 1. } else { RESIDUAL_FOAM };
                 let albedo = foam.albedo.as_reflectance() * thin;
                 let normal = if up.dot(&v) > 0. { up } else { -up };
                 return crate::material::functions::scatter_bsdf(&crate::material::bsdf::LambertianBSDF { albedo, normal }, r, &intersection.point, s);

@@ -94,4 +94,20 @@ jobs:
     - name: Render in the browser, and compare with the native GPU renderer
       run: |
         node web/test.mjs demo/benchmarks/spheres.json 160 90 32 web-spheres.png
-        cargo run --release --features gpu -- --gpu --width 160 --height 90 --samples 32 -o native-spheres.png demo/benchmarks/spheres.json --compare web-spheres.png --max-flip 0.01
+        # Which of the two is off, when they differ: each against the CPU's wavefront stages
+        # (other samples, so only a rough guide: some 0.05 of noise at 32 samples a pixel).
+        cargo build --release --features gpu
+        ./target/release/rays --wavefront --width 160 --height 90 --samples 32 -o cpu-spheres.png demo/benchmarks/spheres.json --compare web-spheres.png | grep -E "FLIP|Exposure" | sed 's/^/CPU against the browser: /'
+        ./target/release/rays --gpu --width 160 --height 90 --samples 32 -o native-cpu.png demo/benchmarks/spheres.json --compare cpu-spheres.png | grep -E "GPU|FLIP|Exposure" | sed 's/^/the native GPU against the CPU: /'
+        cargo run --release --features gpu -- --gpu --fresh --width 160 --height 90 --samples 32 -o native-spheres.png demo/benchmarks/spheres.json --compare web-spheres.png --max-flip 0.01
+    - name: Keep the pictures
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: web-comparison
+        path: |
+          web-spheres.png
+          native-spheres.png
+          native-spheres.flip.png
+          cpu-spheres.png
+        if-no-files-found: ignore

@@ -22,6 +22,9 @@ try {
   const state = await page.evaluate(() => ({ error: window.rays.error, timings: window.rays.timings, status: document.getElementById('status').textContent }));
   if (state.error) throw new Error(state.error);
   console.log(state.status);
+  // Which device rendered it (SwiftShader, unless the machine has a GPU the browser takes).
+  const adapter = await page.evaluate(async () => { const a = await navigator.gpu.requestAdapter(); return a ? `${a.info.vendor} ${a.info.architecture} ${a.info.device} ${a.info.description}`.trim() : 'none'; });
+  console.log(`adapter: ${adapter}`);
   console.log(JSON.stringify(state.timings));
   const png = await page.evaluate(() => window.rays.png());
   writeFileSync(out, Buffer.from(png.split(',')[1], 'base64'));

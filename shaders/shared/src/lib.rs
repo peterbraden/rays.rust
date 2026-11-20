@@ -20,6 +20,7 @@
 #![cfg_attr(target_arch = "spirv", no_std)]
 
 pub mod clouds;
+pub mod media;
 pub mod noise;
 
 use core::ops::{Add, Div, Mul, Neg, Sub};
@@ -32,6 +33,19 @@ pub trait Real: Copy + PartialOrd + Add<Output = Self> + Sub<Output = Self> + Mu
     fn sqrt(self) -> Self;
     /// Towards zero, as `as i32`.
     fn to_i32(self) -> i32;
+    fn ln(self) -> Self;
+    fn exp(self) -> Self;
+    /// Further than anything: infinity where there is one (the GPU's shaders have no constant
+    /// for it).
+    fn far() -> Self;
+    /// The least a walk along a ray advances, relative to how far along it is: so that a
+    /// stretch reported as empty at a boundary can't stall it.
+    fn hair() -> Self;
+
+    #[inline]
+    fn abs(self) -> Self {
+        if self < Self::of(0) { -self } else { self }
+    }
 
     /// n / d: the nearest value to that ratio, as a decimal literal for it would be.
     #[inline]
@@ -75,6 +89,24 @@ impl Real for f32 {
     }
     #[inline]
     fn to_i32(self) -> i32 { self as i32 }
+    #[inline]
+    fn ln(self) -> f32 {
+        #[cfg(target_arch = "spirv")]
+        return spirv_std::num_traits::Float::ln(self);
+        #[cfg(not(target_arch = "spirv"))]
+        f32::ln(self)
+    }
+    #[inline]
+    fn exp(self) -> f32 {
+        #[cfg(target_arch = "spirv")]
+        return spirv_std::num_traits::Float::exp(self);
+        #[cfg(not(target_arch = "spirv"))]
+        f32::exp(self)
+    }
+    #[inline]
+    fn far() -> f32 { 1e30 }
+    #[inline]
+    fn hair() -> f32 { 1e-6 }
 }
 
 // (The GPU has no f64: its build leaves this out.)
@@ -97,6 +129,20 @@ impl Real for f64 {
     fn sqrt(self) -> f64 { f64::sqrt(self) }
     #[inline]
     fn to_i32(self) -> i32 { self as i32 }
+    #[inline]
+    fn ln(self) -> f64 { f64::ln(self) }
+    #[inline]
+    fn exp(self) -> f64 { f64::exp(self) }
+    #[inline]
+    fn far() -> f64 { f64::INFINITY }
+    #[inline]
+    fn hair() -> f64 { 1e-12 }
+}
+
+/// Uniform random numbers in [0, 1), from wherever a caller's come: the renderer's sampler,
+/// or a kernel's hash.
+pub trait Random<F: Real> {
+    fn next(&mut self) -> F;
 }
 
 /// Where a shared function's tables are: numbers by index, as floats (a texture's texels) or

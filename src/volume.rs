@@ -135,6 +135,31 @@ const RATIO_TRACKING_ROULETTE: f64 = 0.02;
 /// Jarosz 2014, section 5: looser bounds trade steps for variance, towards exp(-∫σ) exactly).
 const RATIO_TRACKING_SLACK: f64 = 2.;
 
+/// A density field as the shared walks take one (`shared::media::Medium`).
+struct Field<'a>(&'a dyn DensityField);
+
+impl shared::media::Medium<f64> for Field<'_> {
+    #[inline]
+    fn density(&self, x: f64, y: f64, z: f64) -> f64 {
+        self.0.density(&Vector3::new(x, y, z))
+    }
+
+    #[inline]
+    fn majorant_from(&self, x: f64, y: f64, z: f64, dx: f64, dy: f64, dz: f64) -> (f64, f64) {
+        self.0.majorant_from(&Vector3::new(x, y, z), &Vector3::new(dx, dy, dz))
+    }
+}
+
+/// The path's random numbers (`geometry::rand`), as the shared walks draw them.
+struct PathRandom;
+
+impl shared::Random<f64> for PathRandom {
+    #[inline]
+    fn next(&mut self) -> f64 {
+        rand()
+    }
+}
+
 /// The extinction coefficient through a volume: the chance of a collision per unit distance.
 pub trait DensityField: Sync + Send {
     fn density(&self, p: &Vector3<f64>) -> f64;
@@ -389,29 +414,13 @@ impl Geometry for Volume {
             return None;
         }
         let d = r.rd.normalize();
+        // The walk is `shared::media::delta_track`, which a kernel of the GPU's compiles too.
+        let (medium, o, dir) = (Field(&*self.density), (r.ro.x, r.ro.y, r.ro.z), (d.x, d.y, d.z));
         for (entry, exit) in self.spans(&r.ro, &d) {
-            let mut t = entry.max(min);
-            while t < exit {
-                let (majorant, length) = self.density.majorant_from(&(r.ro + d * t), &d);
-                // Always advance, if only by a hair, so a stretch reported as empty at a
-                // boundary can't stall the walk.
-                let end = (t + length.max(t.abs().max(1.) * 1e-12)).min(exit);
-                if majorant > 0. {
-                    // Scaling the density scales the majorant alike: steps shrink, and the
-                    // chance of a collision being real is unchanged.
-                    let step = -(1. - rand()).ln() / (majorant * scale);
-                    if t + step < end {
-                        t += step;
-                        let point = r.ro + d * t;
-                        if rand() * majorant < self.density.density(&point) {
-                            // Media have no surface; facing back along the ray keeps the shadow
-                            // bias from moving the point sideways.
-                            return Some(RawIntersection { face: 0, part: 0, dist: t, point, normal: -d });
-                        }
-                        continue;
-                    }
-                }
-                t = end;
+            if let Some(t) = shared::media::delta_track(&medium, o, dir, entry.max(min), exit, scale, &mut PathRandom) {
+                // Media have no surface; facing back along the ray keeps the shadow bias from
+                // moving the point sideways.
+                return Some(RawIntersection { face: 0, part: 0, dist: t, point: r.ro + d * t, normal: -d });
             }
         }
         None
@@ -443,33 +452,17 @@ impl Geometry for Volume {
         let d = r.rd.normalize();
         let control = self.density.minorant();
         let mut transmitted = 1.;
+        // The walk is `shared::media::ratio_track`.
+        let (medium, o, dir) = (Field(&*self.density), (r.ro.x, r.ro.y, r.ro.z), (d.x, d.y, d.z));
         for (entry, exit) in self.spans(&r.ro, &d) {
             let stop = exit.min(max);
-            let mut t = entry.max(min);
+            let t = entry.max(min);
             if t >= stop {
                 continue;
             }
-            transmitted *= (-control * scale * (stop - t)).exp();
-            while t < stop {
-                let (majorant, length) = self.density.majorant_from(&(r.ro + d * t), &d);
-                let end = (t + length.max(t.abs().max(1.) * 1e-12)).min(stop);
-                let residual = (majorant - control) * RATIO_TRACKING_SLACK;
-                if residual > 0. {
-                    let step = -(1. - rand()).ln() / (residual * scale);
-                    if t + step < end {
-                        t += step;
-                        transmitted *= 1. - (self.density.density(&(r.ro + d * t)) - control) / residual;
-                        if transmitted < RATIO_TRACKING_ROULETTE {
-                            // Survive with probability T / threshold, carrying the threshold.
-                            if rand() * RATIO_TRACKING_ROULETTE >= transmitted {
-                                return 0.;
-                            }
-                            transmitted = RATIO_TRACKING_ROULETTE;
-                        }
-                        continue;
-                    }
-                }
-                t = end;
+            match shared::media::ratio_track(&medium, o, dir, t, stop, control, scale, transmitted, &mut PathRandom) {
+                Some(left) => transmitted = left,
+                None => return 0.,
             }
         }
         transmitted

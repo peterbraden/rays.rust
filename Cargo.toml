@@ -43,7 +43,7 @@ tiny_http = { version = "0.12", optional = true }
 web-time = "1.1"
 # The GPU path tracer (`gpu`), built only with `--features gpu`.
 wgpu = { version = "30", optional = true }
-pollster = { version = "0.4", optional = true }
+pollster = { version = "1.0", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
 # The shader crate, also compiled for the CPU: its buffer layouts and its code, for tests.
 pathtrace = { path = "shaders/pathtrace", optional = true }

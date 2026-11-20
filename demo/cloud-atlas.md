@@ -74,16 +74,21 @@ glitter path running in to the camera.
 | Middle | [Altocumulus](#altocumulus) | `benard-altocumulus.json` |
 | | [Altocumulus undulatus](#altocumulus-undulatus) | `altocumulus-undulatus.json` |
 | | [Altocumulus lenticularis](#altocumulus-lenticularis) | `lenticular.json` |
+| | [Altocumulus castellanus](#altocumulus-castellanus) | `altocumulus-castellanus.json` |
 | | [Altostratus](#altostratus) | `altostratus.json` |
 | Low | [Stratocumulus](#stratocumulus) | `stratocumulus.json` |
 | | [Stratus](#stratus) | `stratus.json` |
 | | [Overcast: nimbostratus and scud](#overcast-nimbostratus-and-scud) | `overcast.json` |
+| | [Fractus](#fractus) | `fractus.json` |
 | | [Cumulus, modelled](#cumulus-modelled) | `nubis-clouds.json` |
 | | [Cumulus, simulated](#cumulus-simulated) | `harris-cumulus.json` |
 | | [Cumulonimbus](#cumulonimbus) | `cumulonimbus.json` |
+| | [Cumulonimbus, simulated](#cumulonimbus-simulated) | `cumulonimbus-simulated.json` |
 | Phenomena | [Sunset](#sunset) | `sunset.json` |
 | | [Crepuscular rays](#crepuscular-rays) | `crepuscular-rays.json` |
 | | [Rain and rainbows](#rain-and-rainbows) | `rain.json` |
+| | [Snow showers](#snow-showers) | `snow-showers.json` |
+| | [Fogbow](#fogbow) | `fogbow.json` |
 | | [Mammatus](#mammatus) | `mammatus.json` |
 | | [Lightning](#lightning) | `lightning.json` |
 | | [Lightning under the anvil](#lightning-under-the-anvil) | `lightning-anvil.json` |
@@ -183,6 +188,20 @@ slope.
 Seen from the side, a lens is lit mostly by light scattered many times, so the scene uses the Oz
 approximation (`"oz": true`). Without it, the render sparkles with noise.
 
+### Altocumulus castellanus
+
+![Altocumulus castellanus](./scenes/altocumulus-castellanus.png)
+
+`altocumulus-castellanus.json`: `{"type": "benard_altocumulus", "castellanus": 0.4, "turret_height": 6}`
+
+Altocumulus whose cloudlets grow turrets: when a mid-level layer turns unstable, by cooling
+aloft or by moist air lifted into it, the rising air in some cells keeps rising, and those
+cloudlets grow into little cumulus with stems and billowing heads, all standing on the layer's
+common base and lined up in its rows. It is a forecaster's sign: castellanus in the morning, a
+thunderstorm by afternoon. `castellanus` is the share of cells that grow one, `turret_height`
+how tall the tallest grow, in layer thicknesses. Seen from far off along the layer, as here,
+the turrets stand up like battlements.
+
 ### Altostratus
 
 ![Altostratus](./scenes/altostratus.png)
@@ -258,6 +277,21 @@ damper air (`humidity_variation`) cap some summits and leave others bare. In a s
 overcast it joins the deck's volume, so the light diffused down through the deck lights it too;
 on its own, a thin cloud in a dark scene would be lit only by random walks that reach the
 deck, which are noisy.
+
+### Fractus
+
+![Fractus](./scenes/fractus.png)
+
+`fractus.json`: `{"type": "fractus", "base": 350, "depth": 500, "spacing": 900, "coverage": 0.45, "size": 300}`,
+under broken stratocumulus
+
+Ragged shreds of low cloud, torn from the base of other cloud or stirred up by a strong wind,
+drifting fast and changing shape by the minute: stratus or cumulus fractus, and under rain,
+pannus (`procedural::fractus`). Each shred stands at its own height in a layer, is drawn out
+along the wind and leans downwind, and falls apart into lumps and wisps with sky between: noise
+a third of its size cuts it into pieces, finer noise wears their edges, and the density inside
+follows the noise rather than filling the outline, so each is grey in places and thin in others.
+The overcast deck's scud is the same thing under a deck, and now drifts on under its `breaks`.
 
 ### Cumulus, modelled
 
@@ -339,6 +373,26 @@ noisy, so it uses the Oz approximation (`"oz": true`). Hail, wall clouds and the
 supercell's updraft are not modelled; mammatus under the anvil is a separate `mammatus` object
 (as in `sunset-squalls.json`).
 
+### Cumulonimbus, simulated
+
+![Simulated cumulonimbus](./scenes/cumulonimbus-simulated.png)
+
+`cumulonimbus-simulated.json`: `{"type": "harris_cumulus", "sounding": "weisman_klemp", "ice": true, "grid": [64, 34, 64], "cell": 500, "time": 2400, "bubble": {...}}`
+
+A thunderstorm grown by the cloud simulation, rather than shaped by hand. The air is Weisman
+and Klemp's analytic sounding, the standard case for simulated storms (M. L. Weisman and
+J. B. Klemp, Mon. Wea. Rev. 1982): conditionally unstable up to a tropopause at 12 km, moist
+below and dry above, with a CAPE of about 2200 J/kg. A warm bubble, 2 K warmer than its
+surroundings and 10 km across, starts the storm. Its updraft reaches 48 m/s (parcel theory
+gives 66 m/s for this sounding, and real updrafts realise two thirds or so), its top reaches
+the tropopause within fifteen minutes and overshoots to 14 km, and then the cloud spreads
+sideways under the stable stratosphere: the anvil, flat-topped. Above freezing it condenses
+water, below it a mixture of water and ice (`"ice": true`), whose latent heat of freezing
+drives the upper tower half a kilometre higher. The grid is 32 km across and 17 km deep, in
+500 m cells, so detail below that is added (`turbulence`); the simulation takes about ten
+minutes, and is cached. The rain is Kessler's simplest scheme, which drains cloud water beyond
+a gram per kilogram at once, so the core is thinner than a real storm's.
+
 ## Phenomena
 
 ### Sunset
@@ -400,6 +454,35 @@ index falls from blue to red, and averaged over the sun's disc (`src/material/ra
 primary bow lies 42° from the point opposite the sun, red outside; the fainter secondary lies at
 51°, its colours reversed. Between them is Alexander's dark band, and inside the primary the sky
 is brighter. Like halos, the bow applies to direct sunlight at a path's first scattering.
+
+### Snow showers
+
+![Snow showers](./scenes/snow-showers.png)
+
+`snow-showers.json`: `{"type": "precipitation", "kind": "snow", "rain_rate": 1.2}` under cumulus
+
+Snow falls slowly, about a metre a second, so on the same wind it drifts several times as far
+as rain, and its shafts lean far over; and snowflakes are large for the water they hold, so a
+little snow stops a lot of light: Gunn and Marshall's distribution of flake sizes, with flakes
+three times their melted diameter, gives a visibility of some 500 m at 1.2 mm/h of water,
+against kilometres for rain of the same rate. A `melting_level` turns it to rain below; `"kind":
+"hail"` falls as ice stones of `hail_size` mm, which stop little light for the ice they carry.
+
+### Fogbow
+
+![Fogbow](./scenes/fogbow.png)
+
+`fogbow.json`: a bank of sea fog, `"rainbow": {"drop_radius": 12, "spread": 0.25}`, the sun low behind
+
+The rainbow of fog: broad, nearly white, a little inside the rainbow's 42°, with a faint bluish
+inner edge. Fog droplets are some ten micrometres across, a few dozen wavelengths, too small
+for the rays that explain the rainbow. Near a bow the light on either side of the rainbow ray
+interferes, which Airy's theory gives as Ai² of the angle from it scaled by the drop's size
+(`material::rainbow`). For raindrops the main peak is narrow and sits at the geometric 42°;
+for fog droplets it is several degrees wide, so each colour's bow overlaps the others' into
+white, and moves inwards. For drizzle, a fifth of a millimetre, the same theory gives the
+supernumerary bows: pale pink and green fringes just inside the primary. `"rainbow": true`
+keeps the geometric rays alone.
 
 ### Mammatus
 
@@ -559,9 +642,10 @@ is still noisy: from orbit, cloud detail is much smaller than a pixel.
   conducting channel; there are no upward leaders from the ground, no time (strokes, dart
   leaders, continuing current, the channel cooling); and in-cloud channels grow by rules rather
   than in the field.
-- **Cumulonimbus by simulation**: `harris_cumulus` could grow one, with a deeper grid, a weaker
-  inversion and ice microphysics; the `cumulonimbus` generator shapes it from parcel theory
-  instead.
-- **Castellanus, fractus and other species**: each needs its own mechanism (turrets from
-  mid-level convection, shreds torn by the wind).
-- **Snow and hail**; supernumerary bows (they need wave optics) and fogbows.
+- **A simulated storm's microphysics**: rain in the simulation is Kessler's simplest scheme,
+  and ice is a mixed phase decided by temperature alone; a storm with graupel and hail, and
+  rain that falls through the cloud rather than leaving it at once, needs a fuller scheme.
+- **Other species**: fibratus, floccus, volutus (roll clouds), arcus (shelf clouds) and the
+  rest each need their own mechanism.
+- **Small droplets' optics**: below about 10 µm, Airy's theory of the bow fails and Mie theory is
+  needed; the glory, round the camera's shadow on cloud, needs it too.

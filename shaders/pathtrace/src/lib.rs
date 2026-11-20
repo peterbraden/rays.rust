@@ -2275,17 +2275,37 @@ fn finish(p: &PathState, o: Vec3, d: Vec3, beta: Vec3, l: Vec3, rays: u32, rng: 
 /// light (asking the sky for its light sample), and the next ray, or the end. Returns the path
 /// and its two sky queries.
 pub fn bounce(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
-    shade(s, &intersect(s, p))
+    shade::<WithMedia>(s, &intersect::<WithMedia>(s, p))
+}
+
+/// Whether a kernel has the media's code. A scene without media runs kernels compiled
+/// without it (`NoMedia`): the clouds' density and the walks through them are a large part of
+/// a kernel that has them, which every device would compile, and which a browser's software
+/// device (SwiftShader, in the tests) doesn't survive compiling beside the rest. A constant of
+/// the type, so the compiler drops the code rather than the device skipping it.
+pub trait Media {
+    const ON: bool;
+}
+
+pub struct WithMedia;
+pub struct NoMedia;
+
+impl Media for WithMedia {
+    const ON: bool = true;
+}
+
+impl Media for NoMedia {
+    const ON: bool = false;
 }
 
 /// The path with what its ray hits found (`PathState::hit`, and the primitive in `state.z`):
 /// the first of a bounce's two stages, and all of its closest-hit traversal.
-pub fn intersect(s: &Scene, p: &PathState) -> PathState {
+pub fn intersect<M: Media>(s: &Scene, p: &PathState) -> PathState {
     let (prim, h) = trace(s, p.o.xyz(), p.d.xyz(), 0.0, INF, false);
     let mut found = *p;
     found.state.z = prim;
     found.hit = h;
-    if s.params.media.y > 0 {
+    if M::ON {
         // A collision in a medium before the surface is the vertex instead.
         let mut rng = p.state.x;
         let reach = if prim == NONE { INF } else { h.x };
@@ -2301,7 +2321,7 @@ pub fn intersect(s: &Scene, p: &PathState) -> PathState {
 
 /// The second stage, at what `intersect` found: haze, emission, direct light (its shadow rays
 /// traced here, and the sky asked for its light sample), and the next ray, or the end.
-pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
+pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
     let (ro, rd, prev_pdf) = (p.o.xyz(), p.d.xyz(), p.d.w);
     let mut beta = p.beta.xyz();
     let depth = p.beta.w as u32;
@@ -2339,7 +2359,7 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
     }
     let point = ro + rd * hit.t;
     // A collision in a medium: a vertex with no surface, which scatters by a phase function.
-    let in_medium = hit.prim >= MEDIUM_HIT;
+    let in_medium = M::ON && hit.prim >= MEDIUM_HIT;
     let medium = s.params.media.x + (hit.prim & 0xff) * MEDIUM_SIZE;
     let (mut hit_ng, mut hit_ns) = (-rd, -rd);
     let mut mat = Material { kind: MAT_MEDIUM, a: 0, b: 0, pad: 0, c0: Vec4::ZERO, c1: Vec4::ZERO, p: Vec4::ZERO };
@@ -2382,7 +2402,7 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
     let mut scatterings = (flags_p >> PATH_SCATTERINGS_SHIFT) & 0xff;
     let mut peak = 0.0;
     let mut medium_albedo = Vec3::ZERO;
-    if in_medium {
+    if M::ON && in_medium {
         if scatterings == 0 && flags_p & PATH_SCATTERED != 0 && at(s.tables, medium + MEDIUM_SCALE) != 1.0 {
             scatterings = 1;
         }
@@ -2556,7 +2576,7 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
                 // Light sampling alone.
                 w = 1.0 / pdf;
             }
-            if in_medium {
+            if M::ON && in_medium {
                 f = medium_albedo * medium_phase(s.tables, medium, peak, rd.dot(wi));
             }
             if water {
@@ -2573,7 +2593,7 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
                 rays += 1;
                 if !occluded(s, above, wi, dist) {
                     // Past the media in the way.
-                    if s.params.media.y > 0 {
+                    if M::ON {
                         w *= media_transmittance(s, above, wi, dist, flags_p, true, &mut rng);
                     }
                     if k == n_lights + 2 {
@@ -2590,7 +2610,7 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
     if depth >= max_depth {
         return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
     }
-    if in_medium {
+    if M::ON && in_medium {
         // By the phase function, which the direction is drawn in proportion to.
         let wi = medium_scatter(s.tables, medium, peak, rd, &mut rng);
         if !survives(s, depth, medium_albedo, &mut beta, &mut rng) {
@@ -3200,7 +3220,7 @@ pub fn intersect_paths(
     let Some(pixel) = queue::take(queue, gid, params) else { return };
     let index = pixel as usize;
     let s = Scene { params, prims, nodes, materials, lights, tables };
-    paths[index] = intersect(&s, &paths[index]);
+    paths[index] = intersect::<NoMedia>(&s, &paths[index]);
 }
 
 /// The rest of a vertex of each queued path (`shade`, at what `intersect_paths` found), its
@@ -3225,7 +3245,64 @@ pub fn bounce_paths(
     let index = pixel as usize;
     let p = paths[index];
     let s = Scene { params, prims, nodes, materials, lights, tables };
-    let (next, q0, q1) = shade(&s, &p);
+    let (next, q0, q1) = shade::<NoMedia>(&s, &p);
+    paths[index] = next;
+    queries[2 * index] = q0;
+    queries[2 * index + 1] = q1;
+    if next.state.y & PATH_ACTIVE != 0 {
+        queue::push(queue, pixel, params);
+    }
+    if next.state.y & PATH_HOST != 0 {
+        queue::push_host(queue, pixel, params);
+    }
+}
+
+/// `intersect_paths` for a scene with media (`WithMedia`): the walk through them too.
+/// What each queued path's ray hits (`intersect`): a round's first kernel, small, and all of
+/// its closest-hit traversal.
+#[cfg(target_arch = "spirv")]
+#[spirv(compute(threads(64)))]
+pub fn intersect_paths_media(
+    #[spirv(global_invocation_id)] gid: UVec3,
+    #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Vec4],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] nodes: &[Node],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 5)] tables: &[f32],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] paths: &mut [PathState],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 7)] queue: &mut [u32],
+) {
+    let Some(pixel) = queue::take(queue, gid, params) else { return };
+    let index = pixel as usize;
+    let s = Scene { params, prims, nodes, materials, lights, tables };
+    paths[index] = intersect::<WithMedia>(&s, &paths[index]);
+}
+
+/// `bounce_paths` for a scene with media.
+/// The rest of a vertex of each queued path (`shade`, at what `intersect_paths` found), its
+/// sky queries in its pixel's two slots; those still alive are queued for the next round. A
+/// pass runs `max_depth` + 1 rounds, each over the paths the last left alive: `intersect_paths`,
+/// this, `answer_sky`; then `add_paths`.
+#[cfg(target_arch = "spirv")]
+#[spirv(compute(threads(64)))]
+pub fn bounce_paths_media(
+    #[spirv(global_invocation_id)] gid: UVec3,
+    #[spirv(uniform, descriptor_set = 0, binding = 0)] params: &Params,
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] prims: &[Vec4],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] nodes: &[Node],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] materials: &[Material],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 4)] lights: &[Light],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 5)] tables: &[f32],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 6)] paths: &mut [PathState],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 7)] queue: &mut [u32],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 8)] queries: &mut [SkyQuery],
+) {
+    let Some(pixel) = queue::take(queue, gid, params) else { return };
+    let index = pixel as usize;
+    let p = paths[index];
+    let s = Scene { params, prims, nodes, materials, lights, tables };
+    let (next, q0, q1) = shade::<WithMedia>(&s, &p);
     paths[index] = next;
     queries[2 * index] = q0;
     queries[2 * index + 1] = q1;

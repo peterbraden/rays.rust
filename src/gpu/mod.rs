@@ -816,7 +816,9 @@ impl GpuRenderer {
         // Each kernel is compiled by the driver when its pipeline is made, the large ones
         // (shading, the sky) for a good part of a second: all at once, on threads, where there
         // are threads.
-        let wanted = [("intersect_paths", &layout), ("bounce_paths", &layout), ("answer_sky", &layout), ("add_paths", &add_layout), ("start_paths", &start_layout)];
+        // A scene with media takes the kernels that have their code (`pathtrace::Media`).
+        let (intersect, bounce) = if params.media.y > 0 { ("intersect_paths_media", "bounce_paths_media") } else { ("intersect_paths", "bounce_paths") };
+        let wanted = [(intersect, &layout), (bounce, &layout), ("answer_sky", &layout), ("add_paths", &add_layout), ("start_paths", &start_layout)];
         #[cfg(not(target_arch = "wasm32"))]
         let made: Vec<wgpu::ComputePipeline> = std::thread::scope(|scope| {
             let threads: Vec<_> = wanted.iter().map(|&(name, layout)| { let kernel = &kernel; scope.spawn(move || kernel(name, layout)) }).collect();

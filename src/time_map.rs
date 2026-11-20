@@ -16,7 +16,8 @@ use crate::output::LinearImage;
 const PERCENTILE: f64 = 0.995;
 
 /// The CPU time the calling thread has used, in seconds: differences of it time a pixel.
-#[cfg(unix)]
+/// (The command line's: `libc` comes with the `cli` feature, and a browser has no such clock.)
+#[cfg(all(unix, feature = "cli"))]
 pub fn thread_time() -> f64 {
     let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
     if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) } != 0 {
@@ -26,15 +27,15 @@ pub fn thread_time() -> f64 {
 }
 
 /// Without a per-thread CPU clock, the wall clock.
-#[cfg(not(unix))]
+#[cfg(not(all(unix, feature = "cli")))]
 pub fn thread_time() -> f64 {
     wall_time()
 }
 
 /// Seconds since the first call.
 fn wall_time() -> f64 {
-    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()
+    static START: std::sync::OnceLock<web_time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(web_time::Instant::now).elapsed().as_secs_f64()
 }
 
 /// A summary of a render's times per pixel, in seconds.

@@ -60,8 +60,10 @@
 //! renamed, so a reader never sees half a file and two builds may share a directory. They are
 //! JSON, as the patches' snapshots were: `serde_json` is built with `float_roundtrip`, so the
 //! numbers come back to the bit, which is what lets a reused world give the same picture as a
-//! fresh one. A crust on the default 96 cells a face edge is about 7 MB, a climate on 64 about
-//! 2 MB, a patch of 128 x 128 cells about 2 MB.
+//! fresh one. They are not small, but small beside the time they save: for
+//! `demo/scenes/landscape.json` a crust on the default 96 cells a face edge is 3.1 MB, the
+//! climate on 64 is 1.6 MB, the planet's simulation 1.9 MB and each patch of 128 x 128 cells
+//! about 1.4 MB, 11 MB in all with the pictures.
 //!
 //! Stages are found by their keys, not through any index, so scenes of one world share its
 //! planet and whichever patches they have in common. Beside them, each build writes a

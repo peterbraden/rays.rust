@@ -503,6 +503,9 @@ pub fn world_directory(o: &Value) -> Option<&std::path::Path> {
 /// - `focus`: a scene point to centre the patches on; by default the ground the scene's camera
 ///   (passed in as `camera`) looks over. Patches are snapped to an eighth of their width, so
 ///   nearby cameras share them (and their cache).
+/// - `cache`: the world directory: the plates, the climate, the site and each simulation are
+///   kept there by key and taken from there when they are found, with a manifest of the
+///   stages (`world`, which builds all of them). Without it they are built in memory.
 /// - The mesh: `resolution` (vertices along a clipmap ring), `min_spacing` (m), `globe` (cells
 ///   per face edge beyond the rings), `roughness` of the detail below the finest cells.
 /// - Ground cover: `snowline` and `treeline` (m; by default from the climate, by latitude),

@@ -1982,7 +1982,8 @@ the host's.
 
 ## 14. From one seed: a world, a view, a picture
 
-Status: a plan (November 2026), nothing built. Goal: from a single seed the renderer builds a
+Status: piece 1 is built natively (November 2026: `src/world.rs`, see "Done" under it); the
+rest is a plan. Goal: from a single seed the renderer builds a
 world and renders an interesting picture of it, with nothing chosen by hand; everything it
 chose is then an ordinary scene file, to be tweaked (the scene builder is the editor).
 
@@ -1993,6 +1994,7 @@ chose is then an ordinary scene file, to be tweaked (the scene builder is the ed
   as it goes. Each patch's evolution is cached by a hash of its parameters and domain
   (`Terrain::run_cached`: a snapshot a file, by years), so it resumes in time; the planet and
   the climate aren't cached, and nothing lists what a world is made of or how far it has got.
+  (So it was; piece 1 below is now built.)
 - Weather takes a seed and chooses its own (`weather::scene::choose_seeds`, `expand`): the
   one part that already goes from a seed to scene objects before the scene is keyed.
 - Ground cover, forests, ecosystems and scatters are placed by rules on the landscape
@@ -2022,6 +2024,37 @@ chose is then an ordinary scene file, to be tweaked (the scene builder is the ed
    - A World tab in the scene builder: the stages as they run, with their maps. In a browser
      the build runs in a worker (state in the origin's private file system) or on a server;
      the long stages are minutes natively, so a server is the likely home.
+   Done (native): `src/world.rs`, whose module documentation has the design.
+   - Stages `plates`, `climate`, `site`, `planet` (the whole planet's erosion) and a
+     `patch <spacing> m` a level, each keyed by an FNV-1a hash of its parameters and the keys
+     of the stages it reads, kept as `<stage>-<key>[-<years>].json` in the landscape's
+     `"cache"` directory beside a manifest, `world-<key>.json` (stages, keys, what each reads,
+     status, fraction, seconds, file, a 512-pixel map of each). The plates and the climate are
+     now kept too. A long stage checkpoints every 30 s (`.part.json`), so a killed build
+     resumes within a stage; `world::build(description, directory, on_progress)` reports
+     `Progress` events (stage, fraction, message, picture) and stops when the callback says
+     so. `full_scale_landscape` builds through it and reports through `world::report`, which
+     prints unless a host installs a reporter; the weather reads the planet through
+     `world::survey`.
+   - Measured (4 cores): `demo/scenes/landscape.json`'s world takes 178 s fresh (181 s before
+     the change) and 11.0 s reused (15.6 s before, when the plates and climate were simulated
+     again: 4.6 s; the rest is the mesh), in 11 MB (5.9 MB before). The image at 96 x 54, 2
+     samples, is the same to the byte before and after, fresh and reused; a small world
+     killed (SIGKILL) part-way through its finest patch and run again gave the same image as
+     one built in memory.
+   - Not done: the stages after the patches (ground, what grows, weather, time of day,
+     viewpoint: they are still scene parsing); sub-seeds hashed from the seed and the stage's
+     name (every stage still draws from the landscape's one seed, as changing that changes
+     every existing landscape: for piece 4's `world` object); streaming the events from
+     `rays serve` and the World tab; a browser's private file system as the directory (on
+     wasm the build runs in memory). Caches written before this (`landscape-<hash>-<years>.json`)
+     aren't read: a world is rebuilt once into the new names.
+   - Found on the way: a scene with `weather` and a full-scale `landscape` isn't the same
+     between two runs of one binary (before this change too), so only the landscape's own
+     images could be compared; and the weather takes the landscape's planet at the default
+     radius (6371 km) while the landscape is drawn on the scene's (6360 km), so it simulates
+     a second crust and puts the site elsewhere (-37.73°, 327.65° against -30.727°, 44.807°
+     in the test scene).
 2. The desert's relief from the terrain generation. Two levels, as the mesas work has both:
    - Process: rock in layers of differing resistance in the simulation (a caprock over
      shales), so stream power and hillslope retreat leave scarps, benches and buttes where

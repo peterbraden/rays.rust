@@ -2144,7 +2144,7 @@
           "name": "cache",
           "kind": "path",
           "default": null,
-          "doc": "Directory where simulated states are kept and reused."
+          "doc": "Directory where simulated states are kept and reused. For a full-scale landscape it is the world directory: plates, climate, site and each simulation, with a manifest (world-<key>.json) of the stages."
         },
         {
           "name": "domain",

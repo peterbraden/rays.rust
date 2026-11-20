@@ -55,6 +55,14 @@ jobs:
   gpu:
     # The GPU path tracer (--features gpu) on Mesa's software Vulkan driver, lavapipe.
     runs-on: ubuntu-latest
+    # lavapipe at 128-bit vectors. On runners with an AMD EPYC 9V45 (Zen 5; Mesa 26.0.8 on
+    # LLVM 21) the kernels as rust-gpu's SPIR-V render a few percent too bright at the
+    # driver's native 256 bits: the same every run, right through the WGSL, right at 128
+    # bits, right on other runners, and right on an Intel AVX-512 machine with the same Mesa
+    # (plan.md section 12). Which of the driver's code for that CPU and our SPIR-V is at
+    # fault isn't known; the "Diagnose" step below runs at the native width to find out.
+    env:
+      LP_NATIVE_VECTOR_WIDTH: 128
     steps:
     - uses: actions/checkout@v7
     - uses: Swatinem/rust-cache@v2
@@ -70,19 +78,19 @@ jobs:
       run: cargo build --release --features gpu
     - name: Run GPU tests
       run: "cargo test --release --features gpu gpu::"
-    - name: Diagnose the GPU tests
-      # On some runners the device's renders have come out a few percent brighter than the
-      # CPU's, on others not, for the same commit; never yet off CI. This says what the
-      # runner is, and whether it takes the tests running at once: information only, the
-      # step above is the test.
+    - name: Diagnose the GPU tests at the driver's native width
+      # Information only (the step above is the test): what the runner is, the tests that
+      # fail on the one kind at the native width, as built and through the WGSL, and the
+      # device against the shader run on the CPU for those tests' scenes with one thing taken
+      # out at a time (gpu::tests::measure_device_against_shader).
       if: always()
       run: |
-        grep -m1 "model name" /proc/cpuinfo; nproc; grep -m1 -o "avx512[a-z]*" /proc/cpuinfo || echo "no avx512"
-        apt list --installed 2>/dev/null | grep -E "mesa-vulkan-drivers|libllvm" || true
-        echo "as built:"; cargo test --release --features gpu -- gpu::tests::test_agrees gpu::tests::test_shader_on_the_cpu 2>&1 | grep -E "vs CPU|test result" || true
-        echo "through the WGSL:"; RAYS_GPU_WGSL=1 cargo test --release --features gpu -- gpu::tests::test_agrees gpu::tests::test_shader_on_the_cpu 2>&1 | grep -E "vs CPU|test result" || true
-        echo "128-bit vectors:"; LP_NATIVE_VECTOR_WIDTH=128 cargo test --release --features gpu -- gpu::tests::test_agrees gpu::tests::test_shader_on_the_cpu 2>&1 | grep -E "vs CPU|test result" || true
-        echo "by part:"; cargo test --release --features gpu -- gpu::tests::measure_device_against_shader --ignored --nocapture 2>&1 | grep -E "device / shader|  at \(|panicked" || true
+        unset LP_NATIVE_VECTOR_WIDTH
+        grep -m1 "model name" /proc/cpuinfo
+        apt list --installed 2>/dev/null | grep -E "mesa-vulkan-drivers" || true
+        echo "as built:"; cargo test --release --features gpu -- gpu::tests::test_agrees gpu::tests::test_shader_on_the_cpu 2>&1 | grep -E "vs CPU|test result: .* [1-9][0-9]* (passed|failed)" || true
+        echo "through the WGSL:"; RAYS_GPU_WGSL=1 cargo test --release --features gpu -- gpu::tests::test_agrees gpu::tests::test_shader_on_the_cpu 2>&1 | grep -E "vs CPU|test result: .* [1-9][0-9]* (passed|failed)" || true
+        echo "by part:"; cargo test --release --features gpu -- gpu::tests::measure_device_against_shader --ignored --nocapture 2>&1 | grep -E "device / shader|panicked" || true
     - name: Render on the GPU
       # spheres.json reaches the GPU; the smoke test scene falls back to the path tracer.
       run: cargo run --release --features gpu -- --gpu --width 60 --height 40 demo/benchmarks/spheres.json | tee /dev/stderr | grep -q "^- GPU:"
@@ -91,6 +99,9 @@ jobs:
     # The browser version (web/): the library for wasm32, rendering through WebGPU in headless
     # Chromium (SwiftShader), compared with the native GPU renderer's image of the same scene.
     runs-on: ubuntu-latest
+    # (The native one on lavapipe at 128-bit vectors: see the gpu job.)
+    env:
+      LP_NATIVE_VECTOR_WIDTH: 128
     steps:
     - uses: actions/checkout@v7
     - uses: Swatinem/rust-cache@v2

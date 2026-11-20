@@ -1769,6 +1769,19 @@ UI, file IO and rayon's threads would follow.
    Of the 13 Nubis demo scenes, altostratus, nubis-clouds, stratocumulus and stratus now
    render on the GPU; the rest wait on the Oz approximation (7 scenes use it), crepuscular
    rays, terrain shapes, or the global mapping (`orbit`).
+   On CI: lavapipe on one kind of runner (AMD EPYC 9V45, Zen 5; Mesa 26.0.8, LLVM 21)
+   renders the kernels a few percent too bright as rust-gpu's SPIR-V at its native 256-bit
+   vectors (three tests: 3% on the materials scene, 20% in a tile of the hard cases). The
+   same every run, alone or with other tests; right through the WGSL, right at 128-bit
+   vectors, right on other runners, right on an Intel AVX-512 machine with that Mesa in a
+   chroot, and unchanged by the driver poisoning its memory. So not a race and not memory
+   nobody wrote: the code the driver's compiler makes for that CPU from one shape of our
+   SPIR-V. Whether the driver or something undefined in the SPIR-V is at fault isn't known.
+   CI runs lavapipe at 128 bits (`LP_NATIVE_VECTOR_WIDTH`), and a diagnostic step at the
+   native width compares the device with the shader run on the CPU, sample for sample, for
+   the failing scenes less one ingredient at a time
+   (`gpu::tests::measure_device_against_shader`); a small scene of a floor, a ball and a
+   sphere light differed there by 0.1%, only with the sphere light.
    Next: Oz (a sum of sun transmittances at scaled densities, at a path's first vertex in a
    medium), then the other cloud kinds, moved one by one, and the global mapping. The
    ocean's shape and water, ported earlier, should move to `shared` too, so that their

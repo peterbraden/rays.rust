@@ -29,3 +29,4 @@ Cargo.lock
 
 # Terrain evolved by landscape scenes
 .landscape-cache/
+.claude/worktrees/

@@ -2280,60 +2280,101 @@ mod tests {
     #[test]
     #[ignore]
     fn measure_device_against_shader() {
-        // (what, the lamps, the objects, depth)
-        let plane = r#"{ "type": "plane", "y": 0, "material": "F" }"#;
-        let ball = r#"{ "type": "sphere", "location": [0, 0.5, 0], "radius": 0.5, "material": "F" }"#;
-        let glass = r#"{ "type": "sphere", "location": [0, 0.5, 0], "radius": 0.5, "material": "G" }"#;
-        let light = r#"{ "type": "sphere", "location": [0, 2.5, 1], "radius": 0.3, "material": "E" }"#;
-        let lamp = r#"{ "location": [1, 3, -1], "intensity": 4 }"#;
-        let variants = [
-            ("everything", lamp.to_string(), format!("{plane}, {glass}, {light}"), 6),
-            ("everything, no bounces", lamp.to_string(), format!("{plane}, {glass}, {light}"), 0),
-            ("no lamp, no bounces", String::new(), format!("{plane}, {ball}, {light}"), 0),
-            ("a lamp over a floor alone", lamp.to_string(), plane.to_string(), 0),
-            ("a lamp, a floor and a ball", lamp.to_string(), format!("{plane}, {ball}"), 0),
-            ("a ball alone, no lamp", String::new(), ball.to_string(), 0),
-            ("nothing", String::new(), String::new(), 0),
+        // The two scenes of the tests that fail there (`scene` and `hard_scene`), whole and
+        // with one thing taken out at a time: (what is left out, its text in the scene).
+        let materials = r#"{
+            "width": 24, "height": 16, "supersamples": 32, "background": [0.2, 0.25, 0.3], "max_depth": 6,
+            "path_termination": "russian_roulette",
+            "sun": { "direction": [-1, 2, -1], "intensity": 2 },
+            "lights": [ { "location": [1, 3, -1], "intensity": 4 } ],
+            "camera": { "location": [0, 1.5, -5], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.6 },
+            "materials": {
+                "F": { "type": "lambertian", "albedo": [0.6, 0.6, 0.6] },
+                "P": { "type": "plastic", "albedo": [0.7, 0.2, 0.1], "roughness": 0.3 },
+                "G": { "type": "dielectric", "refractive_index": 1.5 },
+                "C": { "type": "conductor", "metal": "Au", "roughness": 0.2 },
+                "E": { "type": "diffuse-light", "color": [1, 0.9, 0.8], "intensity": 8 }
+            },
+            "objects": [
+                { "type": "plane", "y": 0, "material": "F" },
+                { "type": "sphere", "location": [-1.2, 0.5, 0], "radius": 0.5, "material": "P" },
+                { "type": "sphere", "location": [0, 0.5, 0], "radius": 0.5, "material": "G" },
+                { "type": "sphere", "location": [1.2, 0.5, 0], "radius": 0.5, "material": "C" },
+                { "type": "sphere", "location": [0, 2.5, 1], "radius": 0.3, "material": "E" }
+            ]
+        }"#;
+        let hard = r#"{
+            "width": 16, "height": 16, "supersamples": 32, "background": [0, 0, 0], "max_depth": 6, "path_termination": "russian_roulette",
+            "camera": { "location": [0, 1.5, -5], "lookat": [0, 1, 0], "up": [0, 1, 0], "angle": 0.7 },
+            "materials": {
+                "F": { "type": "lambertian", "albedo": [0.6, 0.6, 0.6] },
+                "G": { "type": "dielectric", "refractive_index": 1.5 },
+                "SKY": { "type": "diffuse-light", "color": [0.2, 0.25, 0.3], "intensity": 1 },
+                "QUAD": { "type": "diffuse-light", "color": [1, 0.8, 0.6], "intensity": 3 },
+                "STAR": { "type": "diffuse-light", "color": [1, 1, 1], "intensity": 4e8 }
+            },
+            "objects": [
+                { "type": "plane", "y": 0, "material": "F" },
+                { "type": "plane", "y": 8, "material": "SKY" },
+                { "type": "transform", "item": { "type": "quad", "points": [[-1, 3, -1], [-1, 3, 1], [1, 3, -1], [1, 3, 1]] }, "scale": [-1, 1, 1], "material": "QUAD" },
+                { "type": "sphere", "location": [0, 0.6, 0], "radius": 0.6, "material": "G" },
+                { "type": "sphere", "location": [-1.8, 0.5, 0.5], "radius": 0.5, "material": "F" },
+                { "type": "sphere", "location": [-40, 7, -30], "radius": 0.01, "material": "STAR" }
+            ]
+        }"#;
+        let cases: [(&str, &str, &[(&str, &str, &str)]); 2] = [
+            ("materials", materials, &[
+                ("nothing", "", ""),
+                ("the sun", r#""sun": { "direction": [-1, 2, -1], "intensity": 2 },"#, ""),
+                ("the lamp", r#"{ "location": [1, 3, -1], "intensity": 4 }"#, ""),
+                ("the sphere light", r#",
+                { "type": "sphere", "location": [0, 2.5, 1], "radius": 0.3, "material": "E" }"#, ""),
+                ("the plastic", r#""material": "P""#, r#""material": "F""#),
+                ("the glass", r#""material": "G""#, r#""material": "F""#),
+                ("the gold", r#""material": "C""#, r#""material": "F""#),
+                ("the bounces", r#""max_depth": 6"#, r#""max_depth": 0"#),
+                ("roulette", r#""path_termination": "russian_roulette","#, ""),
+            ]),
+            ("hard", hard, &[
+                ("nothing", "", ""),
+                ("the star", r#",
+                { "type": "sphere", "location": [-40, 7, -30], "radius": 0.01, "material": "STAR" }"#, ""),
+                ("the quad light", r#"{ "type": "transform", "item": { "type": "quad", "points": [[-1, 3, -1], [-1, 3, 1], [1, 3, -1], [1, 3, 1]] }, "scale": [-1, 1, 1], "material": "QUAD" },"#, ""),
+                ("the ceiling light", r#"{ "type": "plane", "y": 8, "material": "SKY" },"#, ""),
+                ("the glass", r#""material": "G""#, r#""material": "F""#),
+                ("the bounces", r#""max_depth": 6"#, r#""max_depth": 0"#),
+            ]),
         ];
-        for (what, lamps, objects, depth) in variants {
-            let s = SceneFile::from_string(format!(r#"{{
-                "width": 24, "height": 16, "supersamples": 32, "background": [0.2, 0.25, 0.3], "max_depth": {depth},
-                "path_termination": "russian_roulette",
-                "lights": [ {lamps} ],
-                "camera": {{ "location": [0, 1.5, -5], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.6 }},
-                "materials": {{
-                    "F": {{ "type": "lambertian", "albedo": [0.6, 0.6, 0.6] }},
-                    "G": {{ "type": "dielectric", "refractive_index": 1.5 }},
-                    "E": {{ "type": "diffuse-light", "color": [1, 0.9, 0.8], "intensity": 8 }}
-                }},
-                "objects": [ {objects} ]
-            }}"#));
-            let flat = FlatScene::build(&s).unwrap();
-            let mut gpu = GpuRenderer::new(&s, &flat).unwrap();
-            let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
-            let (w, passes) = (s.image.width, 32);
-            let mut cpu = vec![0f64; w * s.image.height];
-            for k in 0..passes {
-                for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
-                    if ray.d.w < 0.5 {
-                        continue;
+        for (name, scene, variants) in cases {
+            for (what, out, instead) in variants {
+                assert!(out.is_empty() || scene.contains(out), "{}: no {:?} to take out", name, out);
+                let s = SceneFile::from_string(scene.replacen(out, instead, 1));
+                let flat = FlatScene::build(&s).unwrap();
+                let mut gpu = GpuRenderer::new(&s, &flat).unwrap();
+                let b = Buffers::build(&s, &flat).unwrap();
+                let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+                let (w, passes) = (s.image.width, 32);
+                let mut cpu = vec![0f64; w * s.image.height];
+                for k in 0..passes {
+                    for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
+                        if ray.d.w < 0.5 {
+                            continue;
+                        }
+                        let mut rng = pathtrace::path_seed(index as u32, k as u32, b.params.seed.x);
+                        let mut rays = 0;
+                        let c = pathtrace::radiance(&shader, ray.o.truncate(), ray.d.truncate(), &mut rng, &mut rays) * ray.o.w;
+                        cpu[index] += c.x as f64;
                     }
-                    let mut rng = pathtrace::path_seed(index as u32, k as u32, b.params.seed.x);
-                    let mut rays = 0;
-                    let c = pathtrace::radiance(&shader, ray.o.truncate(), ray.d.truncate(), &mut rng, &mut rays) * ray.o.w;
-                    cpu[index] += c.x as f64;
                 }
-            }
-            let sums = gpu.run(&s, 0..passes);
-            let off: Vec<usize> = (0..cpu.len()).filter(|&i| (sums[i][0] as f64 - cpu[i]).abs() > 1e-3 * cpu[i].abs() + 1e-4).collect();
-            let (g, c): (f64, f64) = (sums.iter().map(|v| v[0] as f64).sum(), cpu.iter().sum());
-            let brighter = off.iter().filter(|&&i| sums[i][0] as f64 > cpu[i]).count();
-            eprintln!("{}: device / shader {:.4}, {} of {} pixels differ, {} of them brighter", what, g / c, off.len(), cpu.len(), brighter);
-            // Where, and by how much: (x, y) device against shader, over the 32 samples.
-            let some: Vec<String> = off.iter().take(10).map(|&i| format!("({}, {}) {:.3} vs {:.3}", i % w, i / w, sums[i][0], cpu[i])).collect();
-            if !some.is_empty() {
-                eprintln!("  at {}", some.join("; "));
+                let sums = gpu.run(&s, 0..passes);
+                let off: Vec<usize> = (0..cpu.len()).filter(|&i| (sums[i][0] as f64 - cpu[i]).abs() > 1e-3 * cpu[i].abs() + 1e-4).collect();
+                let (g, c): (f64, f64) = (sums.iter().map(|v| v[0] as f64).sum(), cpu.iter().sum());
+                let brighter = off.iter().filter(|&&i| sums[i][0] as f64 > cpu[i]).count();
+                // The largest differences: (x, y) device against shader, over the 32 samples.
+                let mut worst = off.clone();
+                worst.sort_by(|a, b| (sums[*b][0] as f64 - cpu[*b]).abs().total_cmp(&(sums[*a][0] as f64 - cpu[*a]).abs()));
+                let some: Vec<String> = worst.iter().take(4).map(|&i| format!("({}, {}) {:.3} vs {:.3}", i % w, i / w, sums[i][0], cpu[i])).collect();
+                eprintln!("{} without {}: device / shader {:.4}, {} of {} pixels differ, {} brighter; worst {}", name, what, g / c, off.len(), cpu.len(), brighter, some.join("; "));
             }
         }
     }

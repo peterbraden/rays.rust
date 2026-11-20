@@ -2280,30 +2280,40 @@ mod tests {
     #[test]
     #[ignore]
     fn measure_device_against_shader() {
-        let variant = |glass: &str, light: &str, depth: usize, sample_lights: bool| {
-            let mut s = SceneFile::from_string(format!(r#"{{
+        // (what, the lamps, the objects, depth)
+        let plane = r#"{ "type": "plane", "y": 0, "material": "F" }"#;
+        let ball = r#"{ "type": "sphere", "location": [0, 0.5, 0], "radius": 0.5, "material": "F" }"#;
+        let glass = r#"{ "type": "sphere", "location": [0, 0.5, 0], "radius": 0.5, "material": "G" }"#;
+        let light = r#"{ "type": "sphere", "location": [0, 2.5, 1], "radius": 0.3, "material": "E" }"#;
+        let lamp = r#"{ "location": [1, 3, -1], "intensity": 4 }"#;
+        let variants = [
+            ("everything", lamp.to_string(), format!("{plane}, {glass}, {light}"), 6),
+            ("everything, no bounces", lamp.to_string(), format!("{plane}, {glass}, {light}"), 0),
+            ("no lamp, no bounces", String::new(), format!("{plane}, {ball}, {light}"), 0),
+            ("a lamp over a floor alone", lamp.to_string(), plane.to_string(), 0),
+            ("a lamp, a floor and a ball", lamp.to_string(), format!("{plane}, {ball}"), 0),
+            ("a ball alone, no lamp", String::new(), ball.to_string(), 0),
+            ("nothing", String::new(), String::new(), 0),
+        ];
+        for (what, lamps, objects, depth) in variants {
+            let s = SceneFile::from_string(format!(r#"{{
                 "width": 24, "height": 16, "supersamples": 32, "background": [0.2, 0.25, 0.3], "max_depth": {depth},
                 "path_termination": "russian_roulette",
-                "lights": [ {{ "location": [1, 3, -1], "intensity": 4 }} ],
+                "lights": [ {lamps} ],
                 "camera": {{ "location": [0, 1.5, -5], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.6 }},
                 "materials": {{
                     "F": {{ "type": "lambertian", "albedo": [0.6, 0.6, 0.6] }},
                     "G": {{ "type": "dielectric", "refractive_index": 1.5 }},
                     "E": {{ "type": "diffuse-light", "color": [1, 0.9, 0.8], "intensity": 8 }}
                 }},
-                "objects": [
-                    {{ "type": "plane", "y": 0, "material": "F" }},
-                    {{ "type": "sphere", "location": [0, 0.5, 0], "radius": 0.5, "material": "{glass}" }},
-                    {{ "type": "sphere", "location": [0, 2.5, 1], "radius": 0.3, "material": "{light}" }}
-                ]
+                "objects": [ {objects} ]
             }}"#));
-            s.render.sample_lights = sample_lights;
             let flat = FlatScene::build(&s).unwrap();
             let mut gpu = GpuRenderer::new(&s, &flat).unwrap();
             let b = Buffers::build(&s, &flat).unwrap();
             let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
-            let passes = 32;
-            let mut cpu = vec![0f64; s.image.width * s.image.height];
+            let (w, passes) = (s.image.width, 32);
+            let mut cpu = vec![0f64; w * s.image.height];
             for k in 0..passes {
                 for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
                     if ray.d.w < 0.5 {
@@ -2316,18 +2326,16 @@ mod tests {
                 }
             }
             let sums = gpu.run(&s, 0..passes);
-            let off = sums.iter().zip(&cpu).filter(|(g, c)| (g[0] as f64 - **c).abs() > 1e-3 * c.abs() + 1e-4).count();
+            let off: Vec<usize> = (0..cpu.len()).filter(|&i| (sums[i][0] as f64 - cpu[i]).abs() > 1e-3 * cpu[i].abs() + 1e-4).collect();
             let (g, c): (f64, f64) = (sums.iter().map(|v| v[0] as f64).sum(), cpu.iter().sum());
-            eprintln!("glass {} light {} depth {} sampling lights {}: device / shader {:.4}, {} of {} pixels differ", glass, light, depth, sample_lights, g / c, off, cpu.len());
-        };
-        for depth in [0, 1, 2, 6] {
-            variant("G", "E", depth, true);
+            let brighter = off.iter().filter(|&&i| sums[i][0] as f64 > cpu[i]).count();
+            eprintln!("{}: device / shader {:.4}, {} of {} pixels differ, {} of them brighter", what, g / c, off.len(), cpu.len(), brighter);
+            // Where, and by how much: (x, y) device against shader, over the 32 samples.
+            let some: Vec<String> = off.iter().take(10).map(|&i| format!("({}, {}) {:.3} vs {:.3}", i % w, i / w, sums[i][0], cpu[i])).collect();
+            if !some.is_empty() {
+                eprintln!("  at {}", some.join("; "));
+            }
         }
-        variant("F", "E", 6, true);
-        variant("G", "F", 6, true);
-        variant("F", "F", 6, true);
-        variant("G", "E", 6, false);
-        variant("F", "E", 6, false);
     }
 
     /// A cloud scene on the device against the path tracer, in bands of rows from the bottom

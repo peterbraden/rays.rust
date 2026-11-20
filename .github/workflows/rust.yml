@@ -82,7 +82,7 @@ jobs:
         echo "as built:"; cargo test --release --features gpu -- gpu::tests::test_agrees gpu::tests::test_shader_on_the_cpu 2>&1 | grep -E "vs CPU|test result" || true
         echo "through the WGSL:"; RAYS_GPU_WGSL=1 cargo test --release --features gpu -- gpu::tests::test_agrees gpu::tests::test_shader_on_the_cpu 2>&1 | grep -E "vs CPU|test result" || true
         echo "128-bit vectors:"; LP_NATIVE_VECTOR_WIDTH=128 cargo test --release --features gpu -- gpu::tests::test_agrees gpu::tests::test_shader_on_the_cpu 2>&1 | grep -E "vs CPU|test result" || true
-        echo "by part:"; cargo test --release --features gpu -- gpu::tests::measure_device_against_shader --ignored --nocapture 2>&1 | grep -E "device / shader|panicked" || true
+        echo "by part:"; cargo test --release --features gpu -- gpu::tests::measure_device_against_shader --ignored --nocapture 2>&1 | grep -E "device / shader|  at \(|panicked" || true
     - name: Render on the GPU
       # spheres.json reaches the GPU; the smoke test scene falls back to the path tracer.
       run: cargo run --release --features gpu -- --gpu --width 60 --height 40 demo/benchmarks/spheres.json | tee /dev/stderr | grep -q "^- GPU:"

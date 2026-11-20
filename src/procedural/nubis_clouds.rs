@@ -333,6 +333,10 @@ impl NubisCloudLayer {
 }
 
 impl DensityField for NubisCloudLayer {
+    fn export(&self) -> Option<crate::volume::FieldExport> {
+        Some(crate::volume::FieldExport::Nubis { record: NubisCloudLayer::export(self), radius: 0. })
+    }
+
     fn density(&self, p: &Vector3<f64>) -> f64 {
         self.field().density(&LayerTables { layer: self, cells: self.cells() }, p.x, p.y, p.z)
     }

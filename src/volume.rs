@@ -200,6 +200,12 @@ pub trait DensityField: Sync + Send {
         0.
     }
 
+    /// The field as data, for the kernels that have its code (`FieldExport`); None for one that
+    /// only this code can evaluate.
+    fn export(&self) -> Option<FieldExport> {
+        None
+    }
+
     /// The mean radius (micrometres) of the particles at `p`, for media whose particle size
     /// varies; None to use the material's.
     fn particle_radius(&self, _p: &Vector3<f64>) -> Option<f64> {
@@ -211,6 +217,7 @@ pub trait DensityField: Sync + Send {
 pub struct ConstantDensity(pub f64);
 
 impl DensityField for ConstantDensity {
+    fn export(&self) -> Option<FieldExport> { Some(FieldExport::Constant(self.0)) }
     fn density(&self, _p: &Vector3<f64>) -> f64 { self.0 }
     fn majorant(&self) -> f64 { self.0 }
     fn minorant(&self) -> f64 { self.0 }
@@ -301,6 +308,7 @@ pub struct Scaled {
 }
 
 impl DensityField for Scaled {
+    fn export(&self) -> Option<FieldExport> { self.field.export().map(|f| f.scaled(self.by)) }
     fn density(&self, p: &Vector3<f64>) -> f64 { self.by * self.field.density(p) }
     fn majorant(&self) -> f64 { self.by * self.field.majorant() }
     fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
@@ -526,6 +534,79 @@ impl Geometry for Volume {
     }
 
     fn is_stochastic(&self) -> bool { true }
+
+    fn medium(&self) -> Option<&Volume> { Some(self) }
+}
+
+/// A density field as data: the kinds a kernel of the GPU's can evaluate, with the shared
+/// crate's code (`pathtrace::KernelMedium`).
+pub enum FieldExport {
+    /// The same extinction everywhere.
+    Constant(f64),
+    /// A Nubis cloud layer's record (`NubisCloudLayer::export`), flat, or curved round a planet
+    /// of `radius` (`planet::PlanetMapping`) where that isn't 0.
+    Nubis { record: Vec<f32>, radius: f64 },
+}
+
+impl FieldExport {
+    /// With every density multiplied by `by`.
+    fn scaled(self, by: f64) -> FieldExport {
+        match self {
+            FieldExport::Constant(d) => FieldExport::Constant(d * by),
+            FieldExport::Nubis { mut record, radius } => {
+                // Its densest extinction, which the rest is a fraction of.
+                record[7] *= by as f32;
+                FieldExport::Nubis { record, radius }
+            },
+        }
+    }
+}
+
+/// A medium as data, for the wavefront's flat scene (`wavefront::flat::FlatScene::media`): what
+/// the GPU's kernels track paths through and scatter them by (`pathtrace::media_collision`,
+/// its `shade`).
+pub struct FlatMedium {
+    pub bounds: BBox,
+    pub field: FieldExport,
+    /// A lower bound on the extinction (`DensityField::minorant`).
+    pub lower: f64,
+    /// `Volume::truncated`: the factor on densities for segments of a path that has scattered
+    /// here, and on this medium's for one that has left a surface.
+    pub scale: f64,
+    pub phase: PhaseFunction,
+    pub albedo: Color,
+    /// The fraction of scattering in the forward peak that truncated vertices leave out
+    /// (`VolumeMaterial::forward_peak`).
+    pub peak: f64,
+}
+
+impl Volume {
+    /// The medium as data, scattering as `material` says; or why a kernel couldn't render it:
+    /// they have the plain path tracing of a grey medium filling its box, with delta-M
+    /// truncation, lit by the sun, the lights and the sky. Sun and glitter probes they leave
+    /// out: those change a render's noise, not its mean.
+    pub fn flat(&self, material: &VolumeMaterial) -> Result<FlatMedium, String> {
+        let a = &material.approximation;
+        let unported = [
+            (self.shape.is_some(), "it fills a shape"),
+            (self.chromatic.is_some() || material.extinction.is_some(), "it is chromatic"),
+            (material.diffraction.is_some(), "diffraction"),
+            (material.halos.is_some(), "halos"),
+            (material.rainbow.is_some(), "rainbows"),
+            (material.emission.is_some(), "it emits"),
+            (a.similarity_after.is_some(), "the similarity approximation"),
+            (a.oz.is_some(), "the Oz approximation"),
+            (a.diffusion.is_some(), "the diffusion approximation"),
+        ];
+        if let Some((_, why)) = unported.iter().find(|(is, _)| *is) {
+            return Err(why.to_string());
+        }
+        let field = self.density.export().ok_or("its density")?;
+        Ok(FlatMedium {
+            bounds: self.bounds, field, lower: self.density.minorant(), scale: self.truncated,
+            phase: material.phase, albedo: material.albedo.as_reflectance(), peak: material.forward_peak(1),
+        })
+    }
 }
 
 impl Volume {
@@ -1096,6 +1177,8 @@ fn diffused_radiance(mu: f64, column: f64, below: f64) -> f64 {
 }
 
 impl MaterialModel for VolumeMaterial {
+    fn medium(&self) -> Option<&VolumeMaterial> { Some(self) }
+
     fn volume_sunlight(&self, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene) -> Option<Color> {
         if self.extinction.is_some() {
             return None;

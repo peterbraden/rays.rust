@@ -332,6 +332,14 @@ fn main() {
     } else {
         flat
     };
+    // And so is one only the GPU's kernels have the code for.
+    let flat = match flat.as_ref().filter(|_| gpu_missing).and_then(|f| f.needs_kernels()) {
+        Some(why) => {
+            println!("- The wavefront integrator can't render this scene ({}); rendering with the path tracer", why);
+            None
+        },
+        None => flat,
+    };
     #[cfg(not(feature = "gpu"))]
     if s.render.gpu {
         println!("- This build has no GPU support (build with --features gpu); rendering with the wavefront integrator");

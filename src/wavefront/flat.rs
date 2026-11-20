@@ -272,6 +272,9 @@ pub struct FlatScene {
     /// Where there are hosts: each primitive's place among its object's (its face, for
     /// `Geometry::uv`: a mesh flattens to its triangles in order). Empty otherwise.
     pub prim_face: Vec<u32>,
+    /// Participating media, as data (`volume::Volume::flat`). The GPU's kernels track paths
+    /// through them; this crate's own stages don't (`FlatScene::needs_kernels`).
+    pub media: Vec<crate::volume::FlatMedium>,
 }
 
 impl FlatScene {
@@ -293,6 +296,7 @@ impl FlatScene {
         let mut hosts = Vec::new();
         let mut shapes = Vec::new();
         let mut planes: Vec<(Prim, u32)> = Vec::new();
+        let mut media = Vec::new();
         let objects = s.objects.items().iter().chain(s.objects.infinite_items.iter());
         let (mut shapes_seen, mut unflat_shapes, mut unflat_materials) = (0, 0, 0);
         // Which objects are in the way, for whoever wants the scene on the GPU: each by its
@@ -310,8 +314,20 @@ impl FlatScene {
         for o in objects {
             shapes_seen += 1;
             if o.geometry.is_stochastic() {
-                problems.push("participating media".to_string());
-                blocked(o, ", a medium");
+                let material = o.medium.material_at(Vector3::zeros());
+                match (o.geometry.medium(), material.medium()) {
+                    (Some(volume), Some(scattering)) => match volume.flat(scattering) {
+                        Ok(m) => media.push(m),
+                        Err(why) => {
+                            problems.push("participating media the kernels have no code for".to_string());
+                            blocked(o, &format!(", a medium: {}", why));
+                        },
+                    },
+                    _ => {
+                        problems.push("participating media the kernels have no code for".to_string());
+                        blocked(o, ", a medium");
+                    },
+                }
                 continue;
             }
             let prims = match o.geometry.flatten() {
@@ -414,7 +430,13 @@ impl FlatScene {
             crate::light_bvh::LightBvh::new(&bounds)
         });
         let emitter_choice = Distribution1D::new(if powers.is_empty() { vec![1.] } else { powers });
-        Ok(FlatScene { prims, prim_material, bvh, planes, materials, emitters, emitter_choice, emitter_index, sky, light_bvh, shapes, hosts, prim_face })
+        Ok(FlatScene { prims, prim_material, bvh, planes, materials, emitters, emitter_choice, emitter_index, sky, light_bvh, shapes, hosts, prim_face, media })
+    }
+
+    /// Why only the GPU's kernels can render this flat scene, if so: this crate's stages
+    /// (`integrator`) have no participating media.
+    pub fn needs_kernels(&self) -> Option<String> {
+        (!self.media.is_empty()).then(|| "participating media, which only the GPU's kernels track".to_string())
     }
 
     /// One emitter to sample from `p` (its index in `emitters`), and the chance of choosing it.

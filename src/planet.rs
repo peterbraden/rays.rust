@@ -79,6 +79,15 @@ pub struct PlanetMapping {
 }
 
 impl DensityField for PlanetMapping {
+    /// A flat cloud layer, curved by the kernel as here (`shared::media::OnPlanet`).
+    fn export(&self) -> Option<crate::volume::FieldExport> {
+        use crate::volume::FieldExport;
+        match self.field.export()? {
+            FieldExport::Nubis { record, radius } if radius == 0. => Some(FieldExport::Nubis { record, radius: self.planet.radius }),
+            _ => None,
+        }
+    }
+
     fn density(&self, p: &Vector3<f64>) -> f64 {
         self.field.density(&self.planet.local_coordinates(p))
     }

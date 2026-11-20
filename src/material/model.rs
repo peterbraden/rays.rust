@@ -59,6 +59,8 @@ pub trait MaterialModel: Sync{
     /// does (opaque water): what the water body sends back, the ripples' mean square slope,
     /// and the planet's radius (0 for a flat sea). See `ocean::PhysicalOcean`.
     fn water(&self) -> Option<(Color, f64, f64)> { None }
+    /// A medium's scattering, if that is what this is (`volume::Volume::flat`).
+    fn medium(&self) -> Option<&crate::volume::VolumeMaterial> { None }
 
     /// Whether this is the sky's material, which the wavefront integrator evaluates for rays
     /// that escape the scene.

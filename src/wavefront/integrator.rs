@@ -729,7 +729,7 @@ pub mod tests {
     }
 
     /// The recursive tracer's mean image over `n` samples a pixel.
-    fn path_image(s: &Scene, n: usize) -> Vec<Color> {
+    pub fn path_image(s: &Scene, n: usize) -> Vec<Color> {
         let (w, h) = (s.image.width, s.image.height);
         let mut path = vec![Color::black(); w * h];
         for (index, p) in path.iter_mut().enumerate() {

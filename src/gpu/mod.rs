@@ -145,6 +145,35 @@ fn env_direction(x: usize, y: usize, width: usize, height: usize) -> Vector3<f64
 
 /// Append `air` (and its moonlit copy) to `tables` as the shader's record (`pathtrace::AIR_*`),
 /// returning where it starts.
+/// The media's records (`pathtrace::MEDIUM_SIZE` floats each, one after another), after the
+/// cloud layers' own that they point to: where the first begins.
+fn media_records(tables: &mut Vec<f32>, media: &[crate::volume::FlatMedium]) -> u32 {
+    use crate::material::phase::PhaseFunction;
+    use crate::volume::FieldExport;
+    let fields: Vec<(u32, f32, f32)> = media.iter().map(|m| match &m.field {
+        FieldExport::Constant(d) => (pathtrace::MEDIUM_CONSTANT, *d as f32, 0.),
+        FieldExport::Nubis { record, radius } => {
+            let at = tables.len() as u32;
+            tables.extend(record);
+            (pathtrace::MEDIUM_NUBIS, f32::from_bits(at), *radius as f32)
+        },
+    }).collect();
+    let first = tables.len() as u32;
+    for (m, (kind, density, radius)) in media.iter().zip(fields) {
+        let (lo, hi) = (m.bounds.min, m.bounds.max);
+        let phase = match m.phase {
+            PhaseFunction::HenyeyGreenstein { g } => [pathtrace::PHASE_HENYEY_GREENSTEIN as f32, g as f32, 0., 0., 0.],
+            PhaseFunction::HgDraine { g_hg, g_d, alpha, w_d } => [pathtrace::PHASE_DROPLETS as f32, g_hg as f32, g_d as f32, alpha as f32, w_d as f32],
+        };
+        tables.push(kind as f32);
+        tables.extend([lo.x as f32, lo.y as f32, lo.z as f32, hi.x as f32, hi.y as f32, hi.z as f32]);
+        tables.extend([density, radius, m.scale as f32, m.lower as f32]);
+        tables.extend(phase);
+        tables.extend([m.albedo.rgb.x as f32, m.albedo.rgb.y as f32, m.albedo.rgb.z as f32, m.peak as f32]);
+    }
+    first
+}
+
 fn air_record(tables: &mut Vec<f32>, air: &crate::skysphere::AirExport) -> u32 {
     use pathtrace::*;
     let base = tables.len();
@@ -452,6 +481,22 @@ impl Buffers {
         if cfg!(target_arch = "wasm32") && hosts > 0 {
             return Err(format!("{} objects whose materials the renderer's own code shades, which the GPU's host can't yet do in a browser", hosts));
         }
+        if !flat.media.is_empty() {
+            // The host's materials would trace their own shadow rays through the media, with
+            // none of the path's state there; and a medium's vertex has no kernel for moonlight.
+            if hosts > 0 {
+                return Err(format!("participating media beside {} objects whose materials the renderer's own code shades", hosts));
+            }
+            if s.moonlight.is_some() {
+                return Err("participating media lit by a moon".into());
+            }
+            if flat.light_bvh.is_some() {
+                return Err("participating media with a light BVH".into());
+            }
+            if flat.media.len() > pathtrace::MAX_MEDIA as usize {
+                return Err(format!("{} media (the kernels count to {})", flat.media.len(), pathtrace::MAX_MEDIA));
+            }
+        }
         let mut lights = Vec::new();
         for l in &s.lights {
             let i = l.emission.srgb() * l.intensity;
@@ -571,6 +616,7 @@ impl Buffers {
             tables.extend(sea.export());
             at + 1
         });
+        let media = media_records(&mut tables, &flat.media);
         // The air: the sky's (for escaping rays), the aerial perspective's, the sun's.
         let sky_air = flat.sky.as_ref().and_then(|sky| sky.medium.material_at(Vector3::zeros()).air());
         let sky_off = sky_air.map_or(pathtrace::NO_AIR, |a| air_record(&mut tables, &a));
@@ -610,6 +656,7 @@ impl Buffers {
             sun_irr,
             seed: UVec4::new(s.render.seed as u32, rr, 0, 1),
             air: UVec4::new(sky_off, aerial_off, sun_off, space_off),
+            media: UVec4::new(media, flat.media.len() as u32, 0, 0),
         };
         Ok(Buffers { params, prims: pathtrace::pack_prims(&prims), prim_records: prims, nodes, materials, lights, tables, hosts: hosts > 0 })
     }
@@ -2152,6 +2199,62 @@ mod tests {
         for t in 0..6 {
             for ch in 0..3 {
                 assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "tile {} channel {}: GPU {} vs CPU {}", t, ch, a[t][ch], b[t][ch]);
+            }
+        }
+    }
+
+    /// A scene with fog in a box over a floor, in sun, a lamp, an area light and a sky: seen
+    /// directly and in a mirror (all its scattering), and by light off the floor and by its own
+    /// (truncated), shadowing the floor and shadowed by a ball.
+    fn foggy_scene(density: &str) -> Scene {
+        SceneFile::from_string(format!(r#"{{
+            "width": 24, "height": 16, "background": [0.2, 0.25, 0.3], "max_depth": 24, "path_termination": "russian_roulette",
+            "sun": {{ "direction": [-1, 2, -1], "intensity": 2 }},
+            "lights": [ {{ "location": [1, 3, -1], "intensity": 4 }} ],
+            "camera": {{ "location": [0, 1.5, -5], "lookat": [0, 0.6, 0], "up": [0, 1, 0], "angle": 0.6 }},
+            "materials": {{
+                "F": {{ "type": "lambertian", "albedo": [0.6, 0.6, 0.6] }},
+                "M": {{ "type": "metal", "reflective": [0.9, 0.9, 0.9] }},
+                "E": {{ "type": "diffuse-light", "color": [1, 0.9, 0.8], "intensity": 8 }}
+            }},
+            "objects": [
+                {{ "type": "quad", "points": [[-6, 0, -6], [-6, 0, 6], [6, 0, -6], [6, 0, 6]], "material": "F" }},
+                {{ "type": "sphere", "location": [1.5, 0.5, 0], "radius": 0.5, "material": "M" }},
+                {{ "type": "sphere", "location": [-0.3, 1.6, -0.2], "radius": 0.25, "material": "F" }},
+                {{ "type": "quad", "points": [[-0.5, 2.5, 0.5], [0.5, 2.5, 0.5], [-0.5, 2.5, 1.5], [0.5, 2.5, 1.5]], "material": "E" }},
+                {{ "type": "volume", "min": [-1.2, 0.2, -0.8], "max": [0.8, 1.3, 0.8], {density}, "albedo": [0.9, 0.8, 0.7], "g": 0.8 }}
+            ]
+        }}"#, density = density))
+    }
+
+    /// Participating media in the kernels (`pathtrace::media_collision`, the medium's vertex
+    /// in `shade`, `media_transmittance`): the picture is the path tracer's, tile by tile.
+    #[test]
+    fn test_media_are_the_path_tracers() {
+        use crate::wavefront::integrator::tests::{path_image, tiles};
+        let mut s = foggy_scene(r#""density": 1.5"#);
+        s.render.supersamples = 512;
+        let flat = FlatScene::build(&s).unwrap();
+        assert_eq!(flat.media.len(), 1);
+        assert!(flat.media[0].peak > 0. && flat.media[0].scale < 1.);
+        assert!(flat.needs_kernels().is_some());
+        let mut gpu = match GpuRenderer::new(&s, &flat) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("skipped: {}", e);
+                return;
+            },
+        };
+        let (w, h) = (s.image.width, s.image.height);
+        let rc = Mutex::new(RenderContext::new(w, h, false, "test.png"));
+        gpu.render(&s, &flat, &rc, |_| ());
+        let rc = rc.into_inner().unwrap();
+        let on_gpu: Vec<Color> = (0..w * h).map(|i| rc.get_pixel(i % w, i / w)).collect();
+        let cpu = path_image(&s, 512);
+        let (a, b) = (tiles(&on_gpu, w, h, 3, 2), tiles(&cpu, w, h, 3, 2));
+        for t in 0..6 {
+            for ch in 0..3 {
+                assert!((a[t][ch] - b[t][ch]).abs() < 0.04 * b[t][ch] + 1e-3, "tile {} channel {}: GPU {} vs CPU {}", t, ch, a[t][ch], b[t][ch]);
             }
         }
     }

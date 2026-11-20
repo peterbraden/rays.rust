@@ -42,6 +42,8 @@ pub struct Params {
     /// Records of the air in `tables` (`AIR_*`), or `NO_AIR`: the sky's (for rays that escape),
     /// the aerial perspective's, the sun's (its reddening); and space's (`SPACE_*`).
     pub air: UVec4,
+    /// The media (`MEDIUM_*`): where their records begin in `tables`, and how many.
+    pub media: UVec4,
 }
 
 #[derive(Copy, Clone)]
@@ -183,6 +185,8 @@ pub const MAT_HOST: u32 = 7;
 /// body sends back (`c0`), the ripples' mean square slope (`p.y`), and the planet's radius
 /// for the local vertical (`p.x`; 0 for a flat sea).
 pub const MAT_WATER: u32 = 8;
+/// No surface's: a vertex in a medium (`MEDIUM_HIT`), which scatters by its phase function.
+pub const MAT_MEDIUM: u32 = 9;
 /// Water's refractive index.
 pub const WATER_INDEX: f32 = 1.333;
 /// Hits nearer than this are not hazed (as the renderer's `AERIAL_PERSPECTIVE_FROM`).
@@ -2165,6 +2169,15 @@ pub const PATH_HOST: u32 = 16;
 /// of the host's materials do (the renderer's `LightSampling::Exclusive`): one the ray finds
 /// adds nothing, though a sky does in full.
 pub const PATH_LIGHTS_COUNTED: u32 = 32;
+/// From this bit of the flags up, eight bits: the medium the path last scattered in, plus one
+/// (0 before it has scattered in any), which sets how its segments cross every medium
+/// (`segment_scale`).
+pub const PATH_MEDIUM_SHIFT: u32 = 8;
+/// `PathState::state.z` of a path whose ray collides in a medium before it hits anything: this
+/// plus the medium's number (and `hit.x` how far along).
+pub const MEDIUM_HIT: u32 = 0xffff_ff00;
+/// The most media a scene may hold.
+pub const MAX_MEDIA: u32 = 255;
 
 impl PathState {
     /// Pixel `index`'s path in pass `pass` from its camera ray.
@@ -2263,6 +2276,17 @@ pub fn intersect(s: &Scene, p: &PathState) -> PathState {
     let mut found = *p;
     found.state.z = prim;
     found.hit = h;
+    if s.params.media.y > 0 {
+        // A collision in a medium before the surface is the vertex instead.
+        let mut rng = p.state.x;
+        let reach = if prim == NONE { INF } else { h.x };
+        let (t, m) = media_collision(s, p.o.xyz(), p.d.xyz(), reach, p.state.y, &mut rng);
+        found.state.x = rng;
+        if m != NONE {
+            found.state.z = MEDIUM_HIT + m;
+            found.hit = Vec4::new(t, 0.0, 0.0, 0.0);
+        }
+    }
     found
 }
 
@@ -2305,19 +2329,28 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
         beta *= aerial_transmittance(s, ro, rd, hit.t);
     }
     let point = ro + rd * hit.t;
-    let (hit_ng, hit_ns) = normals(s, hit.prim, ro, rd, p.hit);
-    let prim = whole_prim(s, hit.prim);
-    let m = resolve_material(s, prim.info.y, point);
-    let mat = at(s.materials, m);
-    if mat.kind == MAT_EMITTER {
-        let le = emitted(s, m, hit_ns, -rd);
-        let mut w = 1.0;
-        if !specular && flags & FLAG_SAMPLE_LIGHTS != 0 && prim.info.z > 0 {
-            let lp = emitter_probability(s, prim.info.z - 1) * light_pdf(s, hit.prim, ro, point, hit_ng);
-            w = if counted { 0.0 } else { power_heuristic(prev_pdf, lp) };
+    // A collision in a medium: a vertex with no surface, which scatters by a phase function.
+    let in_medium = hit.prim >= MEDIUM_HIT;
+    let medium = s.params.media.x + (hit.prim & 0xff) * MEDIUM_SIZE;
+    let (mut hit_ng, mut hit_ns) = (-rd, -rd);
+    let mut mat = Material { kind: MAT_MEDIUM, a: 0, b: 0, pad: 0, c0: Vec4::ZERO, c1: Vec4::ZERO, p: Vec4::ZERO };
+    if !in_medium {
+        let (g, n) = normals(s, hit.prim, ro, rd, p.hit);
+        hit_ng = g;
+        hit_ns = n;
+        let prim = whole_prim(s, hit.prim);
+        let m = resolve_material(s, prim.info.y, point);
+        mat = at(s.materials, m);
+        if mat.kind == MAT_EMITTER {
+            let le = emitted(s, m, hit_ns, -rd);
+            let mut w = 1.0;
+            if !specular && flags & FLAG_SAMPLE_LIGHTS != 0 && prim.info.z > 0 {
+                let lp = emitter_probability(s, prim.info.z - 1) * light_pdf(s, hit.prim, ro, point, hit_ng);
+                w = if counted { 0.0 } else { power_heuristic(prev_pdf, lp) };
+            }
+            l += beta * le * w;
+            return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
         }
-        l += beta * le * w;
-        return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
     }
     if mat.kind == MAT_HOST {
         // Stopped here for the host, with the hit and the haze before it.
@@ -2330,7 +2363,19 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
     let ng = if hit_ng.dot(wo) < 0.0 { -hit_ng } else { hit_ng };
     let ns = if hit_ns.dot(wo) < 0.0 { -hit_ns } else { hit_ns };
     let eps = offset_for(s, point);
-    let above = point + ng * eps;
+    // (A medium has no surface to stand off.)
+    let above = if in_medium { point } else { point + ng * eps };
+    // In a medium: all its scattering if the camera sees this vertex directly (through
+    // mirrors and glass too), and without its forward peak once the path has scattered in a
+    // medium or left a surface (delta-M truncation), its albedo that of what is left.
+    let truncated = in_medium && flags_p & (PATH_SCATTERED | (0xff << PATH_MEDIUM_SHIFT)) != 0;
+    let peak = if truncated { at(s.tables, medium + MEDIUM_PEAK) } else { 0.0 };
+    let mut medium_albedo = Vec3::ZERO;
+    if in_medium {
+        let a = medium + MEDIUM_ALBEDO;
+        let whole = Vec3::new(at(s.tables, a), at(s.tables, a + 1), at(s.tables, a + 2));
+        medium_albedo = whole * (1.0 - peak) / (Vec3::ONE - whole * peak);
+    }
     let floor_alpha = if flags_p & PATH_SCATTERED != 0 { s.params.misc.x } else { 0.0 };
 
     // Delta bounces: mirrors, glass, smooth coats.
@@ -2407,7 +2452,14 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
         return carry_on(p, next_from, next_dir.normalize(), beta, l, rays, rng, (flags_p | PATH_SPECULAR) & !PATH_LIGHTS_COUNTED, prev_pdf, depth + 1, q0, q1);
     }
 
-    let flags_p = (flags_p | PATH_SCATTERED) & !(PATH_SPECULAR | PATH_LIGHTS_COUNTED);
+    let mut flags_p = (flags_p | PATH_SCATTERED) & !(PATH_SPECULAR | PATH_LIGHTS_COUNTED);
+    if in_medium {
+        // Light leaving this vertex, towards the lights and onwards, has scattered here.
+        flags_p = (flags_p & !(0xff << PATH_MEDIUM_SHIFT)) | (((hit.prim & 0xff) + 1) << PATH_MEDIUM_SHIFT);
+    }
+    // A medium's lights, like the sea's, are counted by sampling them alone, and the sun as a
+    // point; the sky is found by the path's next ray.
+    let exclusive = water || in_medium;
     // Direct light, one shadow ray at a time, with one evaluation of the lobe and one call
     // of `occluded` (so one copy of each once rust-gpu inlines everything): every point
     // light, then the sun, one area light and the sky. Each gives a direction, a distance,
@@ -2432,7 +2484,7 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
             if flags & FLAG_SUN != 0 {
                 let sd = s.params.sun_dir.xyz();
                 let solid_angle = sun_solid_angle(s);
-                if lobe.pdf(wo, sd) * solid_angle < POINT_SUN {
+                if in_medium || lobe.pdf(wo, sd) * solid_angle < POINT_SUN {
                     wi = sd;
                     li = s.params.sun_irr.xyz() * sun_transmittance(s, above);
                 } else {
@@ -2466,7 +2518,7 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
                     li = emitted(s, whole_prim(s, pi).info.y, ny, -wi);
                 }
             }
-        } else if !water && flags & FLAG_SAMPLE_ENV != 0 {
+        } else if !exclusive && flags & FLAG_SAMPLE_ENV != 0 {
             // The sky, by its brightness: its light found by the `sky` kernel (`q1`).
             let es = env_sample(s, rand(&mut rng), rand(&mut rng));
             if es.w > 0.0 {
@@ -2478,11 +2530,15 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
         if li.dot(li) > 0.0 {
             let (mut f, lobe_pdf) = lobe.eval_pdf(wo, wi);
             let mut w = if pdf > 0.0 { power_heuristic(pdf, lobe_pdf) / pdf } else { 1.0 };
+            if exclusive && pdf > 0.0 {
+                // Light sampling alone.
+                w = 1.0 / pdf;
+            }
+            if in_medium {
+                f = medium_albedo * medium_phase(s.tables, medium, peak, rd.dot(wi));
+            }
             if water {
-                // Light sampling alone; and with the sun, its glitter: F D / (4 cos θv).
-                if pdf > 0.0 {
-                    w = 1.0 / pdf;
-                }
+                // With the sun, its glitter: F D / (4 cos θv).
                 if k == n_lights && wi.dot(water_up) > 0.0 && water_n.dot(wi) > 0.0 {
                     let h = (wi + wo).normalize();
                     let glint = water_fresnel(h.dot(wo)) * ripple_density(water_n, h, mat.p.y) / (4.0 * water_n.dot(wo));
@@ -2494,6 +2550,10 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
             if f.dot(f) > 0.0 {
                 rays += 1;
                 if !occluded(s, above, wi, dist) {
+                    // Past the media in the way.
+                    if s.params.media.y > 0 {
+                        w *= media_transmittance(s, above, wi, dist, flags_p, true, &mut rng);
+                    }
                     if k == n_lights + 2 {
                         q1 = SkyQuery::sky(above, wi, beta * f * w);
                     } else {
@@ -2507,6 +2567,15 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
     // The next ray.
     if depth >= max_depth {
         return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
+    }
+    if in_medium {
+        // By the phase function, which the direction is drawn in proportion to.
+        let wi = medium_scatter(s.tables, medium, peak, rd, &mut rng);
+        if !survives(s, depth, medium_albedo, &mut beta, &mut rng) {
+            return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
+        }
+        beta *= medium_albedo;
+        return carry_on(p, point, wi, beta, l, rays, rng, flags_p | PATH_LIGHTS_COUNTED, 0.0, depth + 1, q0, q1);
     }
     if water {
         // A ripple's normal about the surface's (`sample_ripple`: Gaussian slopes), and the
@@ -2702,6 +2771,186 @@ pub fn probe_clouds(
     let i = gid.x as usize;
     let (a, b) = (points[2 * i], points[2 * i + 1]);
     points[2 * i + 1].w = probe(tables, params.offs.x, gid.x, a, b, params.counts.y == 1);
+}
+
+// ---- Media in a render: a path's ray is tracked through each medium before the surface it
+// hits (`media_collision`, in `intersect`), a collision is a vertex of the path (`shade`), and
+// every shadow ray is dimmed by the media it crosses (`media_transmittance`). The walks, the
+// densities and the phase functions are the renderer's own, from the `shared` crate; the
+// vertex follows the renderer's `volume::VolumeMaterial::scatter`, which has the account of
+// what it does and why. ----
+
+/// A medium's record in `tables` (the renderer's `gpu::media_records`), `MEDIUM_SIZE` floats:
+/// its kind; its box (least corner, greatest); its extinction (`MEDIUM_CONSTANT`) or the bits
+/// of where its cloud layer's record is (`MEDIUM_NUBIS`); the radius of the planet it curves
+/// round, or 0 where it is flat; the factor on every medium's density for segments of a path
+/// that last scattered here, and on its own for one that has left a surface (delta-M
+/// truncation: the renderer's `Volume::truncated`); a lower bound on its extinction; its phase
+/// function (`PHASE_*`: Henyey-Greenstein's g, or the droplets' blend's g, Draine's g and α,
+/// and Draine's share); its albedo; and the fraction of its scattering in the forward peak that
+/// truncation takes as none.
+pub const MEDIUM_SIZE: u32 = 20;
+pub const MEDIUM_BOX: u32 = 1;
+pub const MEDIUM_DENSITY: u32 = 7;
+pub const MEDIUM_RADIUS: u32 = 8;
+pub const MEDIUM_SCALE: u32 = 9;
+pub const MEDIUM_LOWER: u32 = 10;
+pub const MEDIUM_PHASE: u32 = 11;
+pub const MEDIUM_ALBEDO: u32 = 16;
+pub const MEDIUM_PEAK: u32 = 19;
+pub const MEDIUM_CONSTANT: u32 = 0;
+pub const MEDIUM_NUBIS: u32 = 1;
+pub const PHASE_HENYEY_GREENSTEIN: u32 = 0;
+pub const PHASE_DROPLETS: u32 = 1;
+
+/// A medium as the shared walks take one.
+pub struct KernelMedium<'a> {
+    pub tables: FloatTables<'a>,
+    pub kind: u32,
+    pub sigma: f32,
+    pub radius: f32,
+    pub field: shared::clouds::NubisField<f32>,
+}
+
+impl shared::media::Medium<f32> for KernelMedium<'_> {
+    fn density(&self, x: f32, y: f32, z: f32) -> f32 {
+        if self.kind == MEDIUM_CONSTANT {
+            return self.sigma;
+        }
+        let q = if self.radius > 0.0 { shared::media::planet_local(self.radius, x, y, z) } else { (x, y, z) };
+        self.field.density(&self.tables, q.0, q.1, q.2)
+    }
+
+    fn bound(&self) -> f32 {
+        if self.kind == MEDIUM_CONSTANT { self.sigma } else { self.field.max_density }
+    }
+
+    fn majorant_from(&self, x: f32, y: f32, z: f32, dx: f32, dy: f32, dz: f32) -> (f32, f32) {
+        if self.kind == MEDIUM_CONSTANT {
+            return (self.sigma, INF);
+        }
+        let layer = shared::clouds::NubisMedium(&self.field, &self.tables);
+        if self.radius > 0.0 {
+            shared::media::OnPlanet { radius: self.radius, medium: &layer }.majorant_from(x, y, z, dx, dy, dz)
+        } else {
+            layer.majorant_from(x, y, z, dx, dy, dz)
+        }
+    }
+}
+
+/// The medium whose record begins at `base`.
+pub fn load_medium(tables: &[f32], base: u32) -> KernelMedium<'_> {
+    let kind = at(tables, base) as u32;
+    // A constant medium has no layer: any record's numbers do, unread.
+    let layer = if kind == MEDIUM_NUBIS { at(tables, base + MEDIUM_DENSITY).to_bits() } else { base };
+    KernelMedium {
+        tables: FloatTables(tables), kind, sigma: at(tables, base + MEDIUM_DENSITY),
+        radius: at(tables, base + MEDIUM_RADIUS), field: load_nubis(tables, layer),
+    }
+}
+
+/// The stretch of the ray, within `tmin` to `tmax`, inside the medium's box: empty if the
+/// first isn't less than the second.
+fn medium_span(tables: &[f32], base: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -> (f32, f32) {
+    let b = base + MEDIUM_BOX;
+    let lo = Vec3::new(at(tables, b), at(tables, b + 1), at(tables, b + 2));
+    let hi = Vec3::new(at(tables, b + 3), at(tables, b + 4), at(tables, b + 5));
+    let inv = Vec3::ONE / rd;
+    let (p, q) = ((lo - ro) * inv, (hi - ro) * inv);
+    let (near, far) = slab(p.x, q.x, tmin, tmax);
+    let (near, far) = slab(p.y, q.y, near, far);
+    slab(p.z, q.z, near, far)
+}
+
+/// The factor on the density of the medium at `base` for a segment of a path with these
+/// flags (the renderer's `Volume::segment_scale`): as the medium it last scattered in set it;
+/// before any, the medium's own truncation once the path has `left` a vertex that isn't a
+/// mirror's or glass's; and as given for what the camera sees directly.
+fn segment_scale(s: &Scene, flags: u32, left: bool, base: u32) -> f32 {
+    let last = (flags >> PATH_MEDIUM_SHIFT) & 0xff;
+    if last > 0 {
+        at(s.tables, s.params.media.x + (last - 1) * MEDIUM_SIZE + MEDIUM_SCALE)
+    } else if left {
+        at(s.tables, base + MEDIUM_SCALE)
+    } else {
+        1.0
+    }
+}
+
+/// The first collision of the ray in any medium before `reach`: how far, and which medium
+/// (`NONE` if it gets through them all), by delta tracking.
+pub fn media_collision(s: &Scene, ro: Vec3, rd: Vec3, reach: f32, flags: u32, rng: &mut u32) -> (f32, u32) {
+    let mut best = reach;
+    let mut which = NONE;
+    let mut random = Hashed(*rng);
+    let left = flags & PATH_SCATTERED != 0;
+    let mut m = 0;
+    while m < s.params.media.y {
+        let base = s.params.media.x + m * MEDIUM_SIZE;
+        let (near, far) = medium_span(s.tables, base, ro, rd, 0.0, best);
+        let scale = segment_scale(s, flags, left, base);
+        if near < far && scale > 0.0 {
+            let medium = load_medium(s.tables, base);
+            if let Some(t) = shared::media::delta_track(&medium, (ro.x, ro.y, ro.z), (rd.x, rd.y, rd.z), near, far, scale, &mut random) {
+                best = t;
+                which = m;
+            }
+        }
+        m += 1;
+    }
+    *rng = random.0;
+    (best, which)
+}
+
+/// How much light gets through the media along the ray as far as `tmax`: one estimate, by
+/// residual ratio tracking, whose mean is exp(-optical depth).
+pub fn media_transmittance(s: &Scene, ro: Vec3, rd: Vec3, tmax: f32, flags: u32, left: bool, rng: &mut u32) -> f32 {
+    let mut through = 1.0;
+    let mut random = Hashed(*rng);
+    let mut m = 0;
+    while m < s.params.media.y && through > 0.0 {
+        let base = s.params.media.x + m * MEDIUM_SIZE;
+        let (near, far) = medium_span(s.tables, base, ro, rd, 0.0, tmax);
+        let scale = segment_scale(s, flags, left, base);
+        if near < far && scale > 0.0 {
+            let medium = load_medium(s.tables, base);
+            let lower = at(s.tables, base + MEDIUM_LOWER);
+            through = match shared::media::ratio_track(&medium, (ro.x, ro.y, ro.z), (rd.x, rd.y, rd.z), near, far, lower, scale, through, &mut random) {
+                Some(left) => left,
+                None => 0.0,
+            };
+        }
+        m += 1;
+    }
+    *rng = random.0;
+    through
+}
+
+/// The phase function of the medium at `base` for the cosine of the angle scattered through,
+/// without a fraction `peak` of its scattering (delta-M truncation; 0 for all of it).
+fn medium_phase(tables: &[f32], base: u32, peak: f32, cos: f32) -> f32 {
+    let p = base + MEDIUM_PHASE;
+    if at(tables, p) as u32 == PHASE_DROPLETS {
+        shared::phase::HgDraine { g_hg: at(tables, p + 1), g_d: at(tables, p + 2), alpha: at(tables, p + 3), w_d: at(tables, p + 4) }.eval(cos)
+    } else {
+        shared::phase::henyey_greenstein(cos, shared::phase::without_peak(at(tables, p + 1), peak))
+    }
+}
+
+/// A direction scattered into from `incoming`, in proportion to `medium_phase`.
+fn medium_scatter(tables: &[f32], base: u32, peak: f32, incoming: Vec3, rng: &mut u32) -> Vec3 {
+    let p = base + MEDIUM_PHASE;
+    let v = (incoming.x, incoming.y, incoming.z);
+    let d = if at(tables, p) as u32 == PHASE_DROPLETS {
+        let mut random = Hashed(*rng);
+        let d = shared::phase::HgDraine { g_hg: at(tables, p + 1), g_d: at(tables, p + 2), alpha: at(tables, p + 3), w_d: at(tables, p + 4) }.sample(v, &mut random);
+        *rng = random.0;
+        d
+    } else {
+        let (u1, u2) = (rand(rng), rand(rng));
+        shared::phase::sample_henyey_greenstein(v, shared::phase::without_peak(at(tables, p + 1), peak), u1, u2)
+    };
+    Vec3::new(d.0, d.1, d.2)
 }
 
 // ---- Queues of paths: a round's dispatch covers the paths still alive, not every pixel. ----

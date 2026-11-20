@@ -82,3 +82,35 @@ impl<F: Real> HgDraine<F> {
         }
     }
 }
+
+// ---- Delta-M truncation (W. J. Wiscombe, "The Delta-M Method: Rapid Yet Accurate Radiative
+// Flux Calculations for Strongly Asymmetric Phase Functions", Journal of the Atmospheric
+// Sciences 34, 1977): a fraction f of a medium's scattering, its phase function's forward
+// peak, taken as no scattering at all. The renderer's `volume::VolumeMaterial` has the account
+// of where it applies; these are its rules, which a kernel follows too. ----
+
+/// The fraction of Henyey-Greenstein scattering of mean cosine `g` in the peak: g², which
+/// keeps the phase function's first two moments.
+#[inline]
+pub fn forward_peak<F: Real>(g: F) -> F {
+    g * g
+}
+
+/// The mean cosine of what is left of Henyey-Greenstein scattering without a fraction `f`.
+#[inline]
+pub fn without_peak<F: Real>(g: F, f: F) -> F {
+    (g - f) / (F::of(1) - f)
+}
+
+/// The factor on a medium's extinction once a fraction `f` of its scattering, of single
+/// scattering albedo `albedo`, counts as none.
+#[inline]
+pub fn truncated_extinction<F: Real>(albedo: F, f: F) -> F {
+    F::of(1) - f * albedo
+}
+
+/// The albedo of what is left.
+#[inline]
+pub fn truncated_albedo<F: Real>(albedo: F, f: F) -> F {
+    albedo * (F::of(1) - f) / (F::of(1) - f * albedo)
+}

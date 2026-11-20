@@ -796,7 +796,7 @@ impl VolumeMaterial {
     /// leaves the extinction σ (1 - f α) and the albedo α (1 - f) / (1 - f α).
     fn forward_peak(&self, scatterings: u32) -> f64 {
         match self.phase {
-            PhaseFunction::HenyeyGreenstein { g } if g > 0. && self.approximation.delta_m && scatterings >= 1 => g * g,
+            PhaseFunction::HenyeyGreenstein { g } if g > 0. && self.approximation.delta_m && scatterings >= 1 => shared::phase::forward_peak(g),
             _ => 0.,
         }
     }
@@ -811,7 +811,7 @@ impl VolumeMaterial {
     fn base_phase(&self, scatterings: u32) -> PhaseFunction {
         let f = self.forward_peak(scatterings);
         match self.phase {
-            PhaseFunction::HenyeyGreenstein { g } if f > 0. => PhaseFunction::HenyeyGreenstein { g: (g - f) / (1. - f) },
+            PhaseFunction::HenyeyGreenstein { g } if f > 0. => PhaseFunction::HenyeyGreenstein { g: shared::phase::without_peak(g, f) },
             p => p,
         }
     }
@@ -855,15 +855,15 @@ impl VolumeMaterial {
         let mut scale = 1.;
         let mut albedo = self.mean_albedo();
         if let Some(d) = self.diffraction.as_ref().filter(|_| self.truncated(scatterings)) {
-            scale *= 1. - d.fraction * albedo;
-            albedo = albedo * (1. - d.fraction) / (1. - d.fraction * albedo);
+            scale *= shared::phase::truncated_extinction(albedo, d.fraction);
+            albedo = shared::phase::truncated_albedo(albedo, d.fraction);
         }
         // Diffraction is truncated wherever the forward peak is, so then the base phase function
         // is all the scattering left.
         let f = self.forward_peak(scatterings);
         if f > 0. {
-            scale *= 1. - f * albedo;
-            albedo = albedo * (1. - f) / (1. - f * albedo);
+            scale *= shared::phase::truncated_extinction(albedo, f);
+            albedo = shared::phase::truncated_albedo(albedo, f);
         }
         if self.reduced(scatterings) {
             scale *= 1. - albedo * self.mean_cosine(scatterings);
@@ -880,11 +880,11 @@ impl VolumeMaterial {
     fn adjusted_albedo(&self, a: Color, scatterings: u32) -> Color {
         let mut a = a.rgb;
         if let Some(d) = self.diffraction.as_ref().filter(|_| self.truncated(scatterings)) {
-            a = a.map(|a| a * (1. - d.fraction) / (1. - d.fraction * a));
+            a = a.map(|a| shared::phase::truncated_albedo(a, d.fraction));
         }
         let f = self.forward_peak(scatterings);
         if f > 0. {
-            a = a.map(|a| a * (1. - f) / (1. - f * a));
+            a = a.map(|a| shared::phase::truncated_albedo(a, f));
         }
         if self.reduced(scatterings) {
             let g = self.mean_cosine(scatterings);

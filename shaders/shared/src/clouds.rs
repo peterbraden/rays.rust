@@ -3,6 +3,7 @@
 //! noise carved by Worley cells and cut to the weather's strength, and edges eroded by finer
 //! cells. The weather map is the caller's: a flat layer's and a planet's differ.
 
+use crate::media::Medium;
 use crate::noise::fbm;
 use crate::{lerp, remap, smoothstep, Real, Tables};
 
@@ -129,5 +130,124 @@ impl<F: Real> Nubis<F> {
         let d = worley_fbm(tables, self.worley, x / self.detail_size, y / self.detail_size, z / self.detail_size);
         let detail = lerp(one - d, d, (h * F::of(5)).min(one));
         remap(shape, detail * self.erosion, one)
+    }
+}
+
+/// A weather map: noise sampled at the corners of a grid of `n` by `n` square texels from
+/// (`x`, `z`), interpolated between them, and zero outside. In its tables, the (n + 1)^2
+/// corners at `corners`, and at `maxima` the largest corner of each texel: the most the map
+/// reaches anywhere over it.
+#[derive(Clone, Copy)]
+pub struct WeatherGrid<F: Real> {
+    pub x: F,
+    pub z: F,
+    pub texel: F,
+    pub n: u32,
+    pub corners: u32,
+    pub maxima: u32,
+}
+
+impl<F: Real> WeatherGrid<F> {
+    /// The texel holding (x, z), and the position within it in [0, 1]^2; None outside the map.
+    pub fn locate(&self, x: F, z: F) -> Option<(u32, u32, F, F)> {
+        let u = (x - self.x) / self.texel;
+        let v = (z - self.z) / self.texel;
+        let n = F::of(self.n as i32);
+        if !(u >= F::of(0) && v >= F::of(0) && u <= n && v <= n) {
+            return None;
+        }
+        let i = (u.floor().to_i32() as u32).min(self.n - 1);
+        let j = (v.floor().to_i32() as u32).min(self.n - 1);
+        Some((i, j, u - F::of(i as i32), v - F::of(j as i32)))
+    }
+
+    pub fn at<T: Tables<F>>(&self, tables: &T, x: F, z: F) -> F {
+        match self.locate(x, z) {
+            None => F::of(0),
+            Some((i, j, fu, fv)) => {
+                let row = self.n + 1;
+                let c = |i: u32, j: u32| tables.value(self.corners + j * row + i);
+                lerp(lerp(c(i, j), c(i + 1, j), fu), lerp(c(i, j + 1), c(i + 1, j + 1), fu), fv)
+            },
+        }
+    }
+}
+
+/// How far along a ray the coordinate `p`, moving at `d`, leaves the cell from `lo` to
+/// `lo + size`.
+#[inline]
+fn leaves<F: Real>(p: F, d: F, lo: F, size: F) -> F {
+    if d > F::of(0) { (lo + size - p) / d } else if d < F::of(0) { (lo - p) / d } else { F::far() }
+}
+
+/// A flat layer of Nubis cloud as a medium: its recipe, its densest extinction, and its
+/// weather map.
+#[derive(Clone, Copy)]
+pub struct NubisField<F: Real> {
+    pub recipe: Nubis<F>,
+    pub max_density: F,
+    pub weather: WeatherGrid<F>,
+}
+
+impl<F: Real> NubisField<F> {
+    /// The highest any cloud can be over weather of at most `weather`, or None if none can be.
+    /// The cell strength and reach only grow with the weather, and the profile is zero from
+    /// its fall's end of the reach up.
+    pub fn column_top(&self, weather: F) -> Option<F> {
+        let cell = self.recipe.cell(weather);
+        if cell <= F::of(0) {
+            return None;
+        }
+        let h = (self.recipe.reach(cell) * profile_of(self.recipe.cloud_type).3).min(F::of(1));
+        Some(self.recipe.base + h * (self.recipe.top - self.recipe.base))
+    }
+
+    /// The extinction at a point.
+    pub fn density<T: Tables<F>>(&self, tables: &T, x: F, y: F, z: F) -> F {
+        match self.recipe.height(y) {
+            Some(h) => self.max_density * self.recipe.fraction(tables, h, self.weather.at(tables, x, z), x, y, z),
+            None => F::of(0),
+        }
+    }
+
+    /// Within one texel of the weather map, clouds lie only below `column_top` of its strongest
+    /// corner: there the bound is the densest extinction, elsewhere zero. Holds to the texel's
+    /// edge, or to that height if the ray crosses it first.
+    pub fn majorant_from<T: Tables<F>>(&self, tables: &T, x: F, y: F, z: F, dx: F, dy: F, dz: F) -> (F, F) {
+        let map = &self.weather;
+        // Classify by a point a centimetre along the ray, so one on a texel's edge (or the
+        // clouds' top) counts as where it is entering.
+        let near = F::ratio(1, 100);
+        let (ax, ay, az) = (x + dx * near, y + dy * near, z + dz * near);
+        let (i, j) = match map.locate(ax, az) {
+            Some((i, j, _, _)) => (i, j),
+            None => return (self.max_density, F::far()),
+        };
+        let (x0, z0) = (map.x + F::of(i as i32) * map.texel, map.z + F::of(j as i32) * map.texel);
+        let edge = leaves(x, dx, x0, map.texel).min(leaves(z, dz, z0, map.texel)).max(F::of(0));
+        match self.column_top(tables.value(map.maxima + j * map.n + i)) {
+            None => (F::of(0), edge),
+            Some(top) => {
+                let to_top = if dy != F::of(0) { (top - y) / dy } else { F::far() };
+                let length = if to_top > F::of(0) { edge.min(to_top) } else { edge };
+                // Above the clouds: clear until the ray comes down to them.
+                if ay > top { (F::of(0), length) } else { (self.max_density, length) }
+            },
+        }
+    }
+}
+
+/// A layer with its tables: what a walk through it takes (`media::Medium`).
+pub struct NubisMedium<'a, F: Real, T: Tables<F>>(pub &'a NubisField<F>, pub &'a T);
+
+impl<F: Real, T: Tables<F>> Medium<F> for NubisMedium<'_, F, T> {
+    #[inline]
+    fn density(&self, x: F, y: F, z: F) -> F {
+        self.0.density(self.1, x, y, z)
+    }
+
+    #[inline]
+    fn majorant_from(&self, x: F, y: F, z: F, dx: F, dy: F, dz: F) -> (F, F) {
+        self.0.majorant_from(self.1, x, y, z, dx, dy, dz)
     }
 }

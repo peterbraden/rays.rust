@@ -1888,41 +1888,87 @@ mod tests {
     #[test]
     fn test_clouds_are_the_renderers_on_the_device() {
         use crate::procedural::nubis_clouds::NubisCloudLayer;
-        use pathtrace::glam::Vec3;
         let layer = NubisCloudLayer::new(1500., 4000., crate::na::Vector2::new(0., 0.), 20000., 7);
         let record = layer.export();
         let mut rng = crate::geometry::Pcg32::new(3, 0);
         let mut next = move || rng.next_f64();
         let n = 4096;
-        let points: Vec<Vec4> = (0..n).map(|_| Vec4::new(
-            (next() * 16000. - 8000.) as f32, (1400. + next() * 2700.) as f32, (next() * 16000. - 8000.) as f32, next() as f32)).collect();
+        let points: Vec<Vec4> = (0..n).flat_map(|_| [Vec4::new(
+            (next() * 16000. - 8000.) as f32, (1400. + next() * 2700.) as f32, (next() * 16000. - 8000.) as f32, next() as f32), Vec4::ZERO]).collect();
         // The renderer's, at f64, from the same f32 points; and the shader's functions here.
-        let weather = std::cell::Cell::new(0.);
-        let exact: Vec<f64> = points.iter().map(|q| {
-            weather.set(q.w as f64);
-            layer.fraction_for_test(q.y as f64, weather.get(), &Vector3::new(q.x as f64, q.y as f64, q.z as f64))
+        let exact: Vec<f64> = points.chunks(2).map(|q| {
+            layer.fraction_for_test(q[0].y as f64, q[0].w as f64, &Vector3::new(q[0].x as f64, q[0].y as f64, q[0].z as f64))
         }).collect();
-        let (mut cloudy, mut worst) = (0, 0f64);
-        for (q, e) in points.iter().zip(&exact) {
-            let f = pathtrace::nubis_fraction(&record, 0, Vec3::new(q.x, q.y, q.z), q.w) as f64;
-            worst = worst.max((f - e).abs());
-            cloudy += (*e > 0.) as usize;
-        }
+        let here: Vec<f32> = points.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], false)).collect();
+        let cloudy = exact.iter().filter(|e| **e > 0.).count();
+        let worst = here.iter().zip(&exact).map(|(f, e)| (*f as f64 - e).abs()).fold(0., f64::max);
         println!("{} of {} points in cloud; f32 within {:.1e} of the renderer's f64", cloudy, n, worst);
         assert!(cloudy > n / 20, "{} of {} points in cloud", cloudy, n);
         assert!(worst < 2e-3, "the shader's density differs from the renderer's by {}", worst);
 
         // On the device.
-        let Some(on_device) = probe(&record, &points) else { return };
-        let worst = points.iter().zip(&on_device)
-            .map(|(q, d)| (pathtrace::nubis_fraction(&record, 0, Vec3::new(q.x, q.y, q.z), q.w) - d).abs()).fold(0f32, f32::max);
+        let Some(on_device) = probe(&record, &points, false) else { return };
+        let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
         println!("on the device: within {:.1e} of the shader's functions on the CPU", worst);
         assert!(worst < 1e-4, "the device's density differs from the shader's on the CPU by {}", worst);
     }
 
-    /// `probe_clouds` run on the device over `points`, for the cloud whose record is `record`;
-    /// None without a device.
-    fn probe(record: &[f32], points: &[Vec4]) -> Option<Vec<f32>> {
+    /// Light through a cloud is one walk (`shared::media::ratio_track` over the shared
+    /// density and its bounds), which the renderer's `Volume::transmittance` takes at f64 and a
+    /// kernel at f32. Along rays through a layer, up, down and aslant: the shader's estimate,
+    /// averaged, is the renderer's (they draw different random numbers, so to within their
+    /// noise), and the kernel on the device computes what the shader's function does here.
+    #[test]
+    fn test_light_through_clouds_is_the_renderers_on_the_device() {
+        use crate::procedural::nubis_clouds::NubisCloudLayer;
+        use crate::shapes::geometry::Geometry;
+        let (centre, extent) = (crate::na::Vector2::new(0., 0.), 20000.);
+        let layer = std::sync::Arc::new(NubisCloudLayer::new(1500., 4000., centre, extent, 7));
+        let record = layer.export();
+        let bounds = crate::shapes::bbox::BBox::new(Vector3::new(-extent, 1500., -extent), Vector3::new(extent, 4000., extent));
+        let volume = crate::volume::Volume::new(bounds, layer.clone());
+        let mut rng = crate::geometry::Pcg32::new(9, 0);
+        let mut next = move || rng.next_f64();
+        let n = 256;
+        // From the ground up through the layer, and from above it down, far enough to cross.
+        let rays: Vec<Vec4> = (0..n).flat_map(|i| {
+            let up = i % 2 == 0;
+            let o = Vec4::new((next() * 12000. - 6000.) as f32, if up { 10. } else { 6000. }, (next() * 12000. - 6000.) as f32, 20000.);
+            let d = Vector3::new(next() - 0.5, if up { 0.3 + next() } else { -0.3 - next() }, next() - 0.5).normalize();
+            [o, Vec4::new(d.x as f32, d.y as f32, d.z as f32, 0.)]
+        }).collect();
+        let here: Vec<f32> = rays.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], true)).collect();
+        // The renderer's, with as many estimates and more: its mean, to compare means with.
+        let samples = 16 * pathtrace::PROBE_ESTIMATES as usize;
+        crate::volume::begin_path();
+        let exact: Vec<f64> = rays.chunks(2).enumerate().map(|(i, q)| {
+            let unit = Vector3::new(q[1].x as f64, q[1].y as f64, q[1].z as f64).normalize();
+            let ray = Ray { ro: Vector3::new(q[0].x as f64, q[0].y as f64, q[0].z as f64), rd: unit };
+            crate::geometry::seed_rand(77, i as u64);
+            (0..samples).map(|_| volume.transmittance(&ray, 0., q[0].w as f64)).sum::<f64>() / samples as f64
+        }).collect();
+        let (mut shadowed, mut sum, mut sum_exact, mut worst) = (0, 0., 0., 0f64);
+        for (h, e) in here.iter().zip(&exact) {
+            shadowed += (*e < 0.9) as usize;
+            sum += *h as f64;
+            sum_exact += e;
+            worst = worst.max((*h as f64 - e).abs());
+        }
+        println!("{} of {} rays shadowed; mean through {:.4} against the renderer's {:.4}; worst ray differs by {:.3}", shadowed, n, sum / n as f64, sum_exact / n as f64, worst);
+        assert!(shadowed > n / 8, "{} of {} rays cross cloud", shadowed, n);
+        // The means over all the rays agree closely; a ray's own 64 estimates are noisier.
+        assert!((sum - sum_exact).abs() / (n as f64) < 0.01, "mean {} against {}", sum / n as f64, sum_exact / n as f64);
+        assert!(worst < 0.2, "a ray's transmittance differs by {}", worst);
+
+        let Some(on_device) = probe(&record, &rays, true) else { return };
+        let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
+        println!("on the device: within {:.1e} of the shader's function on the CPU", worst);
+        assert!(worst < 2e-2, "the device's transmittance differs from the shader's on the CPU by {}", worst);
+    }
+
+    /// `probe_clouds` run on the device over `points` (two vectors a probe: `pathtrace::probe`),
+    /// for the cloud whose record is `record`; None without a device.
+    fn probe(record: &[f32], points: &[Vec4], rays: bool) -> Option<Vec<f32>> {
         pollster::block_on(async {
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
             let adapter = match instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await {
@@ -1940,7 +1986,8 @@ mod tests {
             };
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pathtrace"), source });
             let mut params = Params::zeroed();
-            params.counts.x = points.len() as u32;
+            params.counts.x = points.len() as u32 / 2;
+            params.counts.y = rays as u32;
             let buffer = |contents: &[u8], usage| device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents, usage });
             let uniform = buffer(bytemuck::bytes_of(&params), wgpu::BufferUsages::UNIFORM);
             let tables = buffer(bytemuck::cast_slice(record), wgpu::BufferUsages::STORAGE);
@@ -1970,14 +2017,14 @@ mod tests {
                 let mut pass = encoder.begin_compute_pass(&Default::default());
                 pass.set_pipeline(&pipeline);
                 pass.set_bind_group(0, &group, &[]);
-                pass.dispatch_workgroups((points.len() as u32).div_ceil(pathtrace::WORKGROUP), 1, 1);
+                pass.dispatch_workgroups((points.len() as u32 / 2).div_ceil(pathtrace::WORKGROUP), 1, 1);
             }
             encoder.copy_buffer_to_buffer(&out, 0, &read, 0, None);
             queue.submit(Some(encoder.finish()));
             read.map_async(wgpu::MapMode::Read, .., |r| r.expect("mapping the probe's points"));
             device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
             let values: Vec<[f32; 4]> = bytemuck::pod_collect_to_vec(&read.get_mapped_range(..).unwrap());
-            Some(values.iter().map(|v| v[3]).collect())
+            Some(values.chunks(2).map(|v| v[1][3]).collect())
         })
     }
 

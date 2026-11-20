@@ -79,26 +79,25 @@ impl WeatherMap {
         WeatherMap { origin, texel, n, corners, texel_max }
     }
 
-    /// The texel holding (x, z), and the position within it in [0, 1]^2; None outside the map.
-    fn locate(&self, x: f64, z: f64) -> Option<(usize, usize, f64, f64)> {
-        let u = (x - self.origin.x) / self.texel;
-        let v = (z - self.origin.y) / self.texel;
-        if !(u >= 0. && v >= 0. && u <= self.n as f64 && v <= self.n as f64) {
-            return None;
-        }
-        let i = (u.floor() as usize).min(self.n - 1);
-        let j = (v.floor() as usize).min(self.n - 1);
-        Some((i, j, u - i as f64, v - j as f64))
+    /// The map as the shared code reads it (`shared::clouds::WeatherGrid`), its corners and
+    /// maxima in tables at `corners` and `maxima`.
+    fn grid(&self, corners: u32, maxima: u32) -> shared::clouds::WeatherGrid<f64> {
+        shared::clouds::WeatherGrid { x: self.origin.x, z: self.origin.y, texel: self.texel, n: self.n as u32, corners, maxima }
     }
 
     fn at(&self, x: f64, z: f64) -> f64 {
-        match self.locate(x, z) {
-            None => 0.,
-            Some((i, j, fu, fv)) => {
-                let c = |i: usize, j: usize| self.corners[j * (self.n + 1) + i];
-                lerp(lerp(c(i, j), c(i + 1, j), fu), lerp(c(i, j + 1), c(i + 1, j + 1), fu), fv)
-            },
-        }
+        self.grid(0, 0).at(self, x, z)
+    }
+}
+
+/// The corners, alone, from 0.
+impl shared::Tables<f64> for WeatherMap {
+    fn value(&self, i: u32) -> f64 {
+        self.corners[i as usize]
+    }
+
+    fn index(&self, _i: u32) -> u32 {
+        0
     }
 }
 
@@ -173,22 +172,30 @@ pub(crate) fn worley_fbm(w: &WorleyTexture, p: &Vector3<f64>) -> f64 {
 }
 
 /// A layer's tables as its shared recipe reads them: the shape noise's permutation, then the
-/// Worley texture.
+/// Worley texture, then (for a flat layer) the weather map's corners and its texels' maxima.
+/// The weather map is built when first read, as ever.
 struct LayerTables<'a> {
-    shape: &'a PerlinNoise,
+    layer: &'a NubisCloudLayer,
     cells: &'a WorleyTexture,
 }
 
-/// Where the Worley texture begins, after the permutation's 512 entries.
+/// Where the Worley texture begins, after the permutation's 512 entries, and the weather map's
+/// corners, after its texels.
 const WORLEY_AT: u32 = 512;
+const CORNERS_AT: u32 = WORLEY_AT + shared::clouds::WORLEY_N * shared::clouds::WORLEY_N * shared::clouds::WORLEY_N;
 
 impl shared::Tables<f64> for LayerTables<'_> {
     fn value(&self, i: u32) -> f64 {
-        self.cells.texels[(i - WORLEY_AT) as usize] as f64
+        if i < CORNERS_AT {
+            return self.cells.texels[(i - WORLEY_AT) as usize] as f64;
+        }
+        let map = self.layer.weather_map();
+        let k = (i - CORNERS_AT) as usize;
+        if k < map.corners.len() { map.corners[k] } else { map.texel_max[k - map.corners.len()] }
     }
 
     fn index(&self, i: u32) -> u32 {
-        self.shape.permutation()[i as usize] as u32
+        self.layer.shape.permutation()[i as usize] as u32
     }
 }
 
@@ -259,16 +266,21 @@ impl NubisCloudLayer {
         self.cells.get_or_init(|| WorleyTexture::new(self.seed as u32))
     }
 
-    /// The layer as data, for the GPU's shader, which computes its density with the same
-    /// functions (`pathtrace::load_nubis`): the recipe's seven numbers, the shape noise's
-    /// permutation, then the Worley texture.
+    /// The layer as data, for the GPU's shader, which computes its density and walks through
+    /// it with the same functions (`pathtrace::load_nubis`, which has the layout).
     pub fn export(&self) -> Vec<f32> {
+        let map = self.weather_map();
         let mut out = vec![
             self.base as f32, self.top as f32, self.coverage as f32, self.cloud_type as f32,
-            self.shape_size as f32, self.detail_size as f32, self.erosion as f32,
+            self.shape_size as f32, self.detail_size as f32, self.erosion as f32, self.max_density as f32,
+            map.origin.x as f32, map.origin.y as f32, map.texel as f32, map.n as f32,
+            (self.center.x - self.extent) as f32, (self.center.y - self.extent) as f32,
+            (self.center.x + self.extent) as f32, (self.center.y + self.extent) as f32,
         ];
         out.extend(self.shape.permutation().iter().map(|&p| p as f32));
         out.extend(self.cells().texels());
+        out.extend(map.corners.iter().map(|&c| c as f32));
+        out.extend(map.texel_max.iter().map(|&c| c as f32));
         out
     }
 
@@ -287,17 +299,20 @@ impl NubisCloudLayer {
         }
     }
 
-    /// The highest any cloud can be over weather of at most `weather`, or None if none can be.
-    /// The cell strength and reach only grow with the weather, and the profile is zero from
-    /// its fall's end of the reach up.
-    fn column_top(&self, weather: f64) -> Option<f64> {
-        let recipe = self.recipe();
-        let cell = recipe.cell(weather);
-        if cell <= 0. {
-            return None;
+    /// The layer as a medium (`shared::clouds::NubisField`), flat, with its weather map.
+    fn field(&self) -> shared::clouds::NubisField<f64> {
+        let map = self.weather_map();
+        shared::clouds::NubisField {
+            recipe: self.recipe(), max_density: self.max_density,
+            weather: map.grid(CORNERS_AT, CORNERS_AT + map.corners.len() as u32),
         }
-        let h = (recipe.reach(cell) * shared::clouds::profile_of(self.cloud_type).3).min(1.);
-        Some(self.base + h * (self.top - self.base))
+    }
+
+    /// The highest any cloud can be over weather of at most `weather`, or None if none can be
+    /// (`shared::clouds::NubisField::column_top`, which needs no weather map).
+    fn column_top(&self, weather: f64) -> Option<f64> {
+        let unmapped = shared::clouds::WeatherGrid { x: 0., z: 0., texel: 1., n: 1, corners: 0, maxima: 0 };
+        shared::clouds::NubisField { recipe: self.recipe(), max_density: self.max_density, weather: unmapped }.column_top(weather)
     }
 
     /// Cloud density as a fraction of `max_density`, in [0, 1].
@@ -312,14 +327,14 @@ impl NubisCloudLayer {
     fn fraction_at(&self, altitude: f64, weather: impl FnOnce() -> f64, p: &Vector3<f64>) -> f64 {
         let recipe = self.recipe();
         let Some(h) = recipe.height(altitude) else { return 0. };
-        let tables = LayerTables { shape: &self.shape, cells: self.cells() };
+        let tables = LayerTables { layer: self, cells: self.cells() };
         recipe.fraction(&tables, h, weather(), p.x, p.y, p.z)
     }
 }
 
 impl DensityField for NubisCloudLayer {
     fn density(&self, p: &Vector3<f64>) -> f64 {
-        self.max_density * self.fraction(p)
+        self.field().density(&LayerTables { layer: self, cells: self.cells() }, p.x, p.y, p.z)
     }
 
     fn majorant(&self) -> f64 {
@@ -327,35 +342,9 @@ impl DensityField for NubisCloudLayer {
     }
 
     /// Within one texel of the weather map, clouds lie only below `column_top` of its strongest
-    /// corner: there the bound is `max_density`, elsewhere zero. Holds to the texel's edge, or
-    /// to that height if the ray crosses it first.
+    /// corner (`shared::clouds::NubisField::majorant_from`).
     fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
-        let map = self.weather_map();
-        // Classify by a point a centimetre along the ray, so one on a texel's edge (or the
-        // clouds' top) counts as where it is entering, even through the rounding of a planet's
-        // mapping (a hair's breadth ahead, rays crawled across texel edges).
-        let ahead = p + d * 0.01;
-        let (i, j) = match map.locate(ahead.x, ahead.z) {
-            Some((i, j, _, _)) => (i, j),
-            None => return (self.max_density, f64::INFINITY),
-        };
-        let (x0, z0) = (map.origin.x + i as f64 * map.texel, map.origin.y + j as f64 * map.texel);
-        let exit = |p: f64, d: f64, lo: f64| {
-            if d > 0. { (lo + map.texel - p) / d } else if d < 0. { (lo - p) / d } else { f64::INFINITY }
-        };
-        let edge = exit(p.x, d.x, x0).min(exit(p.z, d.z, z0)).max(0.);
-        match self.column_top(map.texel_max[j * map.n + i]) {
-            None => (0., edge),
-            Some(top) => {
-                let to_top = if d.y != 0. { (top - p.y) / d.y } else { f64::INFINITY };
-                if ahead.y > top {
-                    // Above the clouds: clear until the ray comes down to them.
-                    (0., if to_top > 0. { edge.min(to_top) } else { edge })
-                } else {
-                    (self.max_density, if to_top > 0. { edge.min(to_top) } else { edge })
-                }
-            },
-        }
+        self.field().majorant_from(&LayerTables { layer: self, cells: self.cells() }, p.x, p.y, p.z, d.x, d.y, d.z)
     }
 }
 

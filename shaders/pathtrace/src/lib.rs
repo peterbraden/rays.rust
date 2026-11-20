@@ -2591,35 +2591,103 @@ impl shared::Tables<f32> for FloatTables<'_> {
     }
 }
 
-/// A Nubis cloud layer's record in a table: its recipe's seven numbers (`shared::clouds::Nubis`,
-/// in its fields' order), then the shape noise's permutation (512 entries), then the Worley
-/// texture.
-pub const NUBIS_HEADER: u32 = 7;
+/// A flat Nubis cloud layer's record in a table (`shared::clouds::NubisField`; the renderer's
+/// `NubisCloudLayer::export`): its recipe's seven numbers in their fields' order, its densest
+/// extinction, its weather map's corner (x, z), texel and texels a side, and the square it
+/// fills (least x and z, greatest x and z); then the shape noise's permutation (512 entries),
+/// the Worley texture, the weather map's corners and its texels' maxima.
+pub const NUBIS_HEADER: u32 = 16;
 pub const NUBIS_PERMUTATION: u32 = 512;
 
 /// The layer whose record begins at `base`.
-pub fn load_nubis(tables: &[f32], base: u32) -> shared::clouds::Nubis<f32> {
-    shared::clouds::Nubis {
-        base: at(tables, base), top: at(tables, base + 1), coverage: at(tables, base + 2), cloud_type: at(tables, base + 3),
-        shape_size: at(tables, base + 4), detail_size: at(tables, base + 5), erosion: at(tables, base + 6),
-        perm: base + NUBIS_HEADER, worley: base + NUBIS_HEADER + NUBIS_PERMUTATION,
+pub fn load_nubis(tables: &[f32], base: u32) -> shared::clouds::NubisField<f32> {
+    let worley = base + NUBIS_HEADER + NUBIS_PERMUTATION;
+    let n = at(tables, base + 11) as u32;
+    let corners = worley + shared::clouds::WORLEY_N * shared::clouds::WORLEY_N * shared::clouds::WORLEY_N;
+    shared::clouds::NubisField {
+        recipe: shared::clouds::Nubis {
+            base: at(tables, base), top: at(tables, base + 1), coverage: at(tables, base + 2), cloud_type: at(tables, base + 3),
+            shape_size: at(tables, base + 4), detail_size: at(tables, base + 5), erosion: at(tables, base + 6),
+            perm: base + NUBIS_HEADER, worley,
+        },
+        max_density: at(tables, base + 7),
+        weather: shared::clouds::WeatherGrid {
+            x: at(tables, base + 8), z: at(tables, base + 9), texel: at(tables, base + 10), n,
+            corners, maxima: corners + (n + 1) * (n + 1),
+        },
     }
 }
 
 /// The cloud's density, as a fraction of its densest, at `p` under weather `weather`: the
 /// renderer's `NubisCloudLayer::fraction_at`, the same functions at f32.
 pub fn nubis_fraction(tables: &[f32], base: u32, p: Vec3, weather: f32) -> f32 {
-    let layer = load_nubis(tables, base);
+    let layer = load_nubis(tables, base).recipe;
     match layer.height(p.y) {
         Some(h) => layer.fraction(&FloatTables(tables), h, weather, p.x, p.y, p.z),
         None => 0.0,
     }
 }
 
-/// The clouds' density at a grid of points, for checking what the shared functions compute on
-/// a device against the renderer's: point i is `points[i]` (its w the weather), and its
-/// density goes back in its w. Not part of a render; the volume kernels will call
-/// `nubis_fraction` as this does.
+/// A kernel's random numbers (`rand`), as the shared walks draw them.
+pub struct Hashed(pub u32);
+
+impl shared::Random<f32> for Hashed {
+    #[inline]
+    fn next(&mut self) -> f32 {
+        rand(&mut self.0)
+    }
+}
+
+/// How much light gets through the cloud layer along the ray from `tmin` to `tmax`: the
+/// renderer's `Volume::transmittance` for a box of it, the same walk
+/// (`shared::media::ratio_track`) at f32. One estimate, whose mean is exp(-optical depth).
+pub fn nubis_transmittance(tables: &[f32], base: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, rng: &mut u32) -> f32 {
+    let field = load_nubis(tables, base);
+    // The stretch of the ray in the layer's box.
+    let inv = Vec3::ONE / rd;
+    let lo = Vec3::new(at(tables, base + 12), field.recipe.base, at(tables, base + 13));
+    let hi = Vec3::new(at(tables, base + 14), field.recipe.top, at(tables, base + 15));
+    let (a, b) = ((lo - ro) * inv, (hi - ro) * inv);
+    let (near, far) = slab(a.x, b.x, tmin, tmax);
+    let (near, far) = slab(a.y, b.y, near, far);
+    let (near, far) = slab(a.z, b.z, near, far);
+    if near >= far {
+        return 1.0;
+    }
+    let mut random = Hashed(*rng);
+    let medium = shared::clouds::NubisMedium(&field, &FloatTables(tables));
+    let through = shared::media::ratio_track(&medium, (ro.x, ro.y, ro.z), (rd.x, rd.y, rd.z), near, far, 0.0, 1.0, 1.0, &mut random);
+    *rng = random.0;
+    match through {
+        Some(t) => t,
+        None => 0.0,
+    }
+}
+
+/// How many estimates of the transmittance `probe_clouds` averages for a ray.
+pub const PROBE_ESTIMATES: u32 = 64;
+
+/// What `probe_clouds` computes for probe `i`: the density at a point (its w the weather),
+/// or, with `rays`, the mean of `PROBE_ESTIMATES` estimates of the transmittance along the ray
+/// from `a` (its w how far) in direction `b`, from the random numbers `pcg(i)` begins.
+pub fn probe(tables: &[f32], base: u32, i: u32, a: Vec4, b: Vec4, rays: bool) -> f32 {
+    if !rays {
+        return nubis_fraction(tables, base, a.xyz(), a.w);
+    }
+    let mut rng = pcg(i);
+    let mut sum = 0.0;
+    let mut k = 0;
+    while k < PROBE_ESTIMATES {
+        sum += nubis_transmittance(tables, base, a.xyz(), b.xyz(), 0.0, a.w, &mut rng);
+        k += 1;
+    }
+    sum / PROBE_ESTIMATES as f32
+}
+
+/// The clouds on the device, for checking what the shared functions compute there against the
+/// renderer's (`probe`): `counts.x` probes of the layer whose record is at `offs.x`, two
+/// vectors each in `points`, the answer in the second's w; `counts.y` says whether they are
+/// rays. Not part of a render; the volume kernels will call these functions as this does.
 #[cfg(target_arch = "spirv")]
 #[spirv(compute(threads(64)))]
 pub fn probe_clouds(
@@ -2628,12 +2696,12 @@ pub fn probe_clouds(
     #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] tables: &[f32],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] points: &mut [Vec4],
 ) {
-    // (`counts.x` points; the record at `offs.x`.)
     if gid.x >= params.counts.x {
         return;
     }
-    let q = points[gid.x as usize];
-    points[gid.x as usize].w = nubis_fraction(tables, params.offs.x, q.xyz(), q.w);
+    let i = gid.x as usize;
+    let (a, b) = (points[2 * i], points[2 * i + 1]);
+    points[2 * i + 1].w = probe(tables, params.offs.x, gid.x, a, b, params.counts.y == 1);
 }
 
 // ---- Queues of paths: a round's dispatch covers the paths still alive, not every pixel. ----

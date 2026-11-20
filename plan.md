@@ -1735,10 +1735,22 @@ UI, file IO and rayon's threads would follow.
    rust-gpu compiles them at f32 and naga takes the WGSL; over 4,096 points through a
    layer the f32 density is within 8.5e-7 of the renderer's, and the kernel that calls it on
    the device (`probe_clouds`, lavapipe, SPIR-V and WGSL) within 1.8e-7 of that.
-   Next: the weather map and the layer's bounds the same way; then the tracking through a
-   medium as a kernel (delta tracking and ratio-tracked shadows over `nubis_fraction`),
-   which is new work wherever the density comes from; then the other cloud kinds, moved
-   one by one. The ocean's shape and water, ported earlier, should move here too, so
+   Since: the walks through a medium (`shared::media`: delta tracking, residual ratio
+   tracking, over a `Medium` and a `Random`), which `volume::Volume` now takes; and the rest
+   of a flat Nubis layer (`shared::clouds::NubisField`: the weather map, the density, the
+   bound on it within a weather texel). Images still the same to the byte, a little faster
+   (altostratus 4.4 s for 4.8). On the GPU, `nubis_transmittance` is that walk at f32 through
+   the layer's box: over 256 rays up and down through a layer, 64 estimates each, its mean is
+   0.5578 against 0.5577 for the renderer's `Volume::transmittance` (the worst ray 0.013
+   apart, within their noise), and the kernel on the device is within 3e-4 of the shader's
+   function run on the CPU (lavapipe, SPIR-V and WGSL).
+   Next: scattering in the layer as a kernel. A path's ray is walked through the cloud
+   before its surface hit (`delta_track`), a collision is a vertex of a new kind (the phase
+   function, the sun through `nubis_transmittance`, the truncations of `volume`'s path
+   state, which then has to live in `PathState`), and every shadow ray is multiplied by the
+   cloud's transmittance. The phase functions and `VolumeMaterial`'s default choices
+   (delta-M truncation, sun probes) are the part to move to `shared` first. Then the other
+   cloud kinds, moved one by one. The ocean's shape and water, ported earlier, should move here too, so
    that their second copies go.
 3. The fallback framework: per-area status, classification, CPU queues for materials first,
    then intersection. Exit: every flattenable demo scene plus at least one with a

@@ -1744,14 +1744,32 @@ UI, file IO and rayon's threads would follow.
    0.5578 against 0.5577 for the renderer's `Volume::transmittance` (the worst ray 0.013
    apart, within their noise), and the kernel on the device is within 3e-4 of the shader's
    function run on the CPU (lavapipe, SPIR-V and WGSL).
-   Next: scattering in the layer as a kernel. A path's ray is walked through the cloud
-   before its surface hit (`delta_track`), a collision is a vertex of a new kind (the phase
-   function, the sun through `nubis_transmittance`, the truncations of `volume`'s path
-   state, which then has to live in `PathState`), and every shadow ray is multiplied by the
-   cloud's transmittance. The phase functions and `VolumeMaterial`'s default choices
-   (delta-M truncation, sun probes) are the part to move to `shared` first. Then the other
-   cloud kinds, moved one by one. The ocean's shape and water, ported earlier, should move here too, so
-   that their second copies go.
+   Since: media in a render. The phase functions, the planet's curve of a medium and
+   delta-M truncation's rules moved to `shared` (byte-identical), and the kernels track
+   paths through media: `intersect` walks a path's ray through each medium before its
+   surface hit (`pathtrace::media_collision`, `delta_track`), a collision is a vertex
+   (`MEDIUM_HIT`, shaded in `shade` after `VolumeMaterial::scatter`: the phase function,
+   truncation and the similarity relations, sun, lamps and an area light sampled alone, the
+   sky left to the next ray), and every shadow ray is dimmed by the media it crosses
+   (`media_transmittance`, `ratio_track`). The path's state (`volume`'s thread-locals on the
+   CPU) is sixteen bits of its flags: the medium it last scattered in and how many times it
+   has. The flat scene carries media as data (`Volume::flat`, `FlatScene::media`): a grey
+   medium filling its box, constant or a Nubis layer, flat or round the planet. The CPU's
+   wavefront stages have none, so such a scene is the GPU's or the path tracer's
+   (`FlatScene::needs_kernels`). No sun or glitter probes: they change the noise, not the mean.
+   Measured (lavapipe): fog in a box within 0.5% of the path tracer, plain, untruncated,
+   with similarity and thick; `nubis-clouds` within 1% in the clouds in linear light
+   (`gpu::tests::measure_clouds`). That comparison found a bias in the path tracer: a sun
+   probe's vertex gathered the sun through densities scaled for the vertex that sent it,
+   2 to 3% dark where the similarity relations begin (fixed in `volume_sunlight`). It also
+   shows the sea's horizon 5% brighter on the GPU with no cloud at all: still to be found.
+   Of the 13 Nubis demo scenes, altostratus, nubis-clouds, stratocumulus and stratus now
+   render on the GPU; the rest wait on the Oz approximation (7 scenes use it), crepuscular
+   rays, terrain shapes, or the global mapping (`orbit`).
+   Next: Oz (a sum of sun transmittances at scaled densities, at a path's first vertex in a
+   medium), then the other cloud kinds, moved one by one, and the global mapping. The
+   ocean's shape and water, ported earlier, should move to `shared` too, so that their
+   second copies go.
 3. The fallback framework: per-area status, classification, CPU queues for materials first,
    then intersection. Exit: every flattenable demo scene plus at least one with a
    procedural shape and one with an unported material renders through the GPU path with CPU

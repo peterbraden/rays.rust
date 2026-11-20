@@ -2273,6 +2273,63 @@ mod tests {
         }
     }
 
+    /// The device against the shader run on the CPU, sample for sample, for variations of a
+    /// small scene: which part of the kernels a device computes differently. Written to find
+    /// why lavapipe on one kind of CI runner (AMD Zen 5, Mesa 26, LLVM 21) rendered a few
+    /// percent brighter than on others; run with `--ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn measure_device_against_shader() {
+        let variant = |glass: &str, light: &str, depth: usize, sample_lights: bool| {
+            let mut s = SceneFile::from_string(format!(r#"{{
+                "width": 24, "height": 16, "supersamples": 32, "background": [0.2, 0.25, 0.3], "max_depth": {depth},
+                "path_termination": "russian_roulette",
+                "lights": [ {{ "location": [1, 3, -1], "intensity": 4 }} ],
+                "camera": {{ "location": [0, 1.5, -5], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.6 }},
+                "materials": {{
+                    "F": {{ "type": "lambertian", "albedo": [0.6, 0.6, 0.6] }},
+                    "G": {{ "type": "dielectric", "refractive_index": 1.5 }},
+                    "E": {{ "type": "diffuse-light", "color": [1, 0.9, 0.8], "intensity": 8 }}
+                }},
+                "objects": [
+                    {{ "type": "plane", "y": 0, "material": "F" }},
+                    {{ "type": "sphere", "location": [0, 0.5, 0], "radius": 0.5, "material": "{glass}" }},
+                    {{ "type": "sphere", "location": [0, 2.5, 1], "radius": 0.3, "material": "{light}" }}
+                ]
+            }}"#));
+            s.render.sample_lights = sample_lights;
+            let flat = FlatScene::build(&s).unwrap();
+            let mut gpu = GpuRenderer::new(&s, &flat).unwrap();
+            let b = Buffers::build(&s, &flat).unwrap();
+            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let passes = 32;
+            let mut cpu = vec![0f64; s.image.width * s.image.height];
+            for k in 0..passes {
+                for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
+                    if ray.d.w < 0.5 {
+                        continue;
+                    }
+                    let mut rng = pathtrace::path_seed(index as u32, k as u32, b.params.seed.x);
+                    let mut rays = 0;
+                    let c = pathtrace::radiance(&shader, ray.o.truncate(), ray.d.truncate(), &mut rng, &mut rays) * ray.o.w;
+                    cpu[index] += c.x as f64;
+                }
+            }
+            let sums = gpu.run(&s, 0..passes);
+            let off = sums.iter().zip(&cpu).filter(|(g, c)| (g[0] as f64 - **c).abs() > 1e-3 * c.abs() + 1e-4).count();
+            let (g, c): (f64, f64) = (sums.iter().map(|v| v[0] as f64).sum(), cpu.iter().sum());
+            eprintln!("glass {} light {} depth {} sampling lights {}: device / shader {:.4}, {} of {} pixels differ", glass, light, depth, sample_lights, g / c, off, cpu.len());
+        };
+        for depth in [0, 1, 2, 6] {
+            variant("G", "E", depth, true);
+        }
+        variant("F", "E", 6, true);
+        variant("G", "F", 6, true);
+        variant("F", "F", 6, true);
+        variant("G", "E", 6, false);
+        variant("F", "E", 6, false);
+    }
+
     /// A cloud scene on the device against the path tracer, in bands of rows from the bottom
     /// of the picture, in linear light: `RAYS_SCENE` the scene file (a Nubis layer over the
     /// sea by default), `RAYS_EDIT` a JSON object of fields to set first, an object's as

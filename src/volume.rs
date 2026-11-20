@@ -33,7 +33,7 @@ use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::material::phase::PhaseFunction;
 use crate::material::diffraction::DiffractionTable;
 use crate::material::ice_halos::{Crystals, HaloTable};
-use crate::material::rainbow::RainbowTable;
+use crate::material::rainbow::DropletPhase;
 use std::sync::OnceLock;
 use std::sync::Arc;
 use crate::material::texture::Solid;
@@ -704,7 +704,8 @@ pub struct ScatteringApproximation {
     /// whatever lies above the column's top. Later vertices of the path in such a medium skip
     /// the sun, which the first has counted; they still gather the sky, and light off the
     /// ground. Columns are measured with `diffusion` jittered steps; the medium's box sets
-    /// how far.
+    /// how far. Point and area lights (lightning in a thunderstorm) are diffused the same way,
+    /// along the line to each light sample rather than a column (`diffused_gain`).
     pub diffusion: Option<u32>,
 }
 
@@ -735,9 +736,10 @@ pub struct VolumeMaterial {
     pub approximation: ScatteringApproximation,
     pub diffraction: Option<Diffraction>,
     pub halos: Option<Halos>,
-    /// Rainbows from raindrops (see `material::rainbow`): like halos, the traced drops' phase
-    /// function for direct sunlight at a path's first scattering.
-    pub rainbow: Option<Arc<RainbowTable>>,
+    /// Rainbows from raindrops (see `material::rainbow`), or small droplets' Mie scattering
+    /// (`material::mie`: the glory and cloudbow): like halos, the drops' phase function for
+    /// direct sunlight at a path's first scattering.
+    pub rainbow: Option<Arc<dyn DropletPhase>>,
     /// The volume's density field, for the particle size where it has one.
     pub field: Arc<dyn DensityField>,
     /// Light the medium emits (`emission`).
@@ -989,22 +991,39 @@ impl VolumeMaterial {
     fn direct_lighting(&self, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene,
                        phase: &VertexPhase, scatterings: u32, first: u32, sun_weight: f64) -> Color {
         let p = |w: &Vector3<f64>| phase.eval(incoming.dot(w)).as_unbounded();
+        // With diffusion, whether this is the path's first vertex in such a medium, where the
+        // light diffused through it is counted (and only there).
+        let diffusing = self.approximation.diffusion.map(|_| !DIFFUSED.with(|d| d.replace(true)));
+        // Through the scene to a light, along a unit ray, as the phase function scatters it;
+        // with diffusion, plus what the medium in between diffuses (`diffused_gain`),
+        // scattered evenly.
+        // The surface the diffused light comes out through, at this point: where the cloud
+        // thins, so that turrets are lit where they face a flash inside.
+        let inward = if diffusing == Some(true) { self.inward(point, incoming) } else { *incoming };
+        let through = |r: &Ray, d: f64| -> Color {
+            let transmitted = s.objects.transmittance(r, d, f64::MIN_POSITIVE) * p(&r.rd);
+            match diffusing {
+                Some(true) => transmitted + Color::white() * (self.diffused_gain(&r.ro, &r.rd, d, &inward) / (4. * std::f64::consts::PI)),
+                _ => transmitted,
+            }
+        };
         let mut direct = Color::black();
-        // With a light BVH, point lights are sampled with the area lights below.
-        for light in s.lights.iter().filter(|_| s.sums_point_lights()) {
-            let to_light = light.position - point;
-            let d = to_light.norm();
-            let w = to_light / d;
-            let shadow_ray = Ray { ro: *point, rd: w };
-            let transmitted = s.objects.transmittance(&shadow_ray, d, f64::MIN_POSITIVE);
-            direct = direct + light.radiant_intensity(&-w) * p(&w) * (transmitted / (d * d));
+        if diffusing != Some(false) {
+            // With a light BVH, point lights are sampled with the area lights below.
+            for light in s.lights.iter().filter(|_| s.sums_point_lights()) {
+                let to_light = light.position - point;
+                let d = to_light.norm();
+                let w = to_light / d;
+                direct = direct + light.radiant_intensity(&-w) * through(&Ray { ro: *point, rd: w }, d) / (d * d);
+            }
+            direct = direct + crate::material::functions::sample_lights_through(point, s, |_, _| Color::white(), &through);
         }
         if let Some(sun) = &s.sun {
             // Halos, rainbows and diffraction colour the phase function in RGB.
             let sun_phase = self.sun_phase(phase, incoming, s, scatterings).as_unbounded();
             direct = direct + match self.approximation.oz {
                 _ if self.approximation.diffusion.is_some() => {
-                    if DIFFUSED.with(|d| d.replace(true)) {
+                    if diffusing != Some(true) {
                         // Counted at the path's first vertex in such a medium.
                         Color::black()
                     } else {
@@ -1025,7 +1044,75 @@ impl VolumeMaterial {
             let m = &moon.light;
             direct = direct + m.irradiance_at(point) * p(&m.direction) * m.transmittance_from(point, s);
         }
-        direct + crate::material::functions::sample_lights_with(point, s, |w, _| p(w))
+        direct
+    }
+
+    /// The direction into the medium at `point`, near its surface: up its density's gradient
+    /// (by central differences over 25 m), or `incoming`, the way the path came in, where the
+    /// density hardly varies.
+    fn inward(&self, point: &Vector3<f64>, incoming: &Vector3<f64>) -> Vector3<f64> {
+        let h = 25.;
+        let at = |dx: f64, dy: f64, dz: f64| self.field.density(&(point + Vector3::new(dx, dy, dz)));
+        let g = Vector3::new(at(h, 0., 0.) - at(-h, 0., 0.), at(0., h, 0.) - at(0., -h, 0.), at(0., 0., h) - at(0., 0., -h));
+        let mean = at(0., 0., 0.).max(1e-12);
+        // A gradient of less than a hundredth of the density per metre isn't a surface.
+        if g.norm() / (2. * h) < 0.01 * mean / 25. {
+            return *incoming;
+        }
+        g.normalize()
+    }
+
+    /// With diffusion, the light that reaches `point` diffused through this medium from a light
+    /// a distance `length` away along the unit direction `d`, as a multiple of what would reach
+    /// it through empty space (the part not transmitted unscattered, which the shadow ray
+    /// counts, left out). `inward` is the direction into the medium there (`inward`), so the
+    /// point lies just inside a surface facing back along it.
+    ///
+    /// A cloud absorbs next to nothing, so light from a source inside it is trapped, scattered
+    /// to and fro until it leaks out, and near the surface over the source it is brighter than
+    /// the source alone would make it there. The diffusion solution for a point source at depth
+    /// z under the surface of a half-space is a dipole (Farrell, Patterson and Wilson, Med.
+    /// Phys. 19, 1992; as Jensen et al.'s BSSRDF, SIGGRAPH 2001): the fluence at the surface is
+    /// P / (4π D) (e^(-σ_tr r₁) / r₁ - e^(-σ_tr r₂) / r₂), r₁ the distance to the source and r₂
+    /// to its negative image mirrored above the extrapolated boundary 2D over the surface, with
+    /// D = 1 / 3σ'_t and σ_tr = √(3 σ_a σ'_t) from the reduced extinction σ'_t = σ_t (1 - α g)
+    /// and absorption σ_a = σ_t (1 - α). Against the free-space P / (4π d²), straight over a
+    /// deep source and without absorption, that is four times as bright. The coefficients
+    /// are the mean along the line to the light. A cloud isn't a half-space: light leaves by
+    /// its far side too, so the dipole is scaled by the share diffusion through a slab sends
+    /// out of the near side, (τ'b + ⅔) / (τ'f + τ'b + 4⁄3) for reduced depths τ'f in front of
+    /// the source and τ'b behind it (Kokhanovsky, "Cloud Optics", ch. 3), which is one for a
+    /// deep cloud behind it.
+    fn diffused_gain(&self, point: &Vector3<f64>, d: &Vector3<f64>, length: f64, inward: &Vector3<f64>) -> f64 {
+        let steps = self.approximation.diffusion.unwrap_or(32).max(1);
+        let albedo = self.mean_albedo();
+        let reduce = 1. - albedo * self.phase.mean_cosine();
+        let jitter = crate::geometry::rand();
+        let depth = |from: Vector3<f64>, len: f64| -> f64 {
+            let step = len / steps as f64;
+            (0..steps).map(|k| self.field.density(&(from + d * ((k as f64 + jitter) * step)))).sum::<f64>() * step * reduce
+        };
+        let front = depth(*point, length);
+        if front <= 0. || length <= 0. {
+            return 0.;
+        }
+        // Behind the light, as far again or to the medium's height range, whichever is less.
+        let (lo, hi) = self.column;
+        let to_edge = if d.y > 0. { (hi - (point.y + d.y * length)) / d.y } else if d.y < 0. { (lo - (point.y + d.y * length)) / d.y } else { f64::INFINITY };
+        let back = depth(point + d * length, length.min(to_edge.max(0.)).max(1.));
+        let escaping = (back + 2. / 3.) / (front + back + 4. / 3.) * 2.;
+        // The mean coefficients along the line.
+        let sigma_r = front / length;
+        let diffusion = 1. / (3. * sigma_r);
+        let sigma_a = sigma_r / reduce.max(1e-9) * (1. - albedo);
+        let sigma_tr = (3. * sigma_a * sigma_r).sqrt();
+        // The source's depth under the surface, and its image above it.
+        let z = (length * d.dot(inward)).max(0.);
+        let rho2 = (length * length - z * z).max(0.);
+        let (r1, r2) = (length, (rho2 + (z + 4. * diffusion).powi(2)).sqrt());
+        let dipole = length * length / diffusion * ((-sigma_tr * r1).exp() / r1 - (-sigma_tr * r2).exp() / r2);
+        // The part the shadow ray already carried, unscattered, is left out.
+        dipole.max(0.) * escaping.min(1.) * (1. - (-front / reduce.max(1e-9)).exp())
     }
 
     /// The phase function for direct sunlight at a vertex seen along `incoming`: with halos,
@@ -1290,7 +1377,7 @@ pub struct Scattering {
     pub approximation: ScatteringApproximation,
     pub diffraction: Option<Diffraction>,
     pub halos: Option<Halos>,
-    pub rainbow: Option<Arc<RainbowTable>>,
+    pub rainbow: Option<Arc<dyn DropletPhase>>,
     pub emission: Option<emission::VolumeEmission>,
     /// Absorption and scattering coefficients per unit density (RGB), for a chromatic medium;
     /// `albedo` should then be their ratio.
@@ -1533,6 +1620,59 @@ mod tests {
         assert!(((at(4.) - at(2.)) - (at(2.) - at(0.))).abs() < 1e-12);
         // Darker under a thicker deck: the light under it goes as 1 / (1 + ¾ τ*).
         assert!(diffused_radiance(mu, 16., 0.) < 0.55 * diffused_radiance(mu, 8., 0.));
+    }
+
+    #[test]
+    fn test_inward_follows_the_clouds_surface() {
+        // A cloud whose density rises across y = 0 over a hundred metres.
+        struct Edge;
+        impl DensityField for Edge {
+            fn density(&self, p: &Vector3<f64>) -> f64 { 0.05 * ((p.y + 50.) / 100.).clamp(0., 1.) }
+            fn majorant(&self) -> f64 { 0.05 }
+        }
+        let m = |field: Arc<dyn DensityField>| VolumeMaterial {
+            albedo: Color::white(), phase: PhaseFunction::HenyeyGreenstein { g: 0.85 },
+            approximation: ScatteringApproximation { diffusion: Some(32), ..ScatteringApproximation::default() },
+            diffraction: None, halos: None, rainbow: None, field, emission: None, extinction: None, sun_probes: false, column: (-100., 1e4),
+        };
+        // Whatever way the path came in, into the cloud is up.
+        let slant = Vector3::new(0.9, 0.3, 0.3).normalize();
+        let n = m(Arc::new(Edge)).inward(&Vector3::new(0., 0., 0.), &slant);
+        assert!((n - Vector3::new(0., 1., 0.)).norm() < 1e-6, "{}", n);
+        // Inside an even cloud there is no surface: the way the path came in.
+        assert_eq!(m(Arc::new(ConstantDensity(0.05))).inward(&Vector3::zeros(), &slant), slant);
+    }
+
+    #[test]
+    fn test_light_inside_a_cloud_glows_through_its_surface() {
+        // A deep cloud above y = 0 of extinction 0.05, g = 0.85: reduced extinction 0.0075 per
+        // metre, D = 44 m. A path entering it from below, straight up.
+        let cloud = |albedo: f64| VolumeMaterial {
+            albedo: Color::white() * albedo,
+            phase: PhaseFunction::HenyeyGreenstein { g: 0.85 },
+            approximation: ScatteringApproximation { diffusion: Some(400), ..ScatteringApproximation::default() },
+            diffraction: None, halos: None, rainbow: None,
+            field: Arc::new(ConstantDensity(0.05)), emission: None, extinction: None, sun_probes: false, column: (0., 1e6),
+        };
+        let m = cloud(1.);
+        let (at, up) = (Vector3::new(0., 1e-6, 0.), Vector3::new(0., 1., 0.));
+        // Straight over a source 500 m deep: the dipole, D²/D (1/r₁ - 1/r₂) with r₂ = 500 + 4D.
+        let dd = 1. / (3. * 0.0075);
+        let expected = 500f64.powi(2) / dd * (1. / 500. - 1. / (500. + 4. * dd));
+        let over = m.diffused_gain(&at, &up, 500., &up);
+        assert!((over - expected).abs() < 0.02 * expected, "{} vs {}", over, expected);
+        // Several times brighter than the source would be in empty space.
+        assert!(over > 2.5, "{}", over);
+        // 400 m to the side of a source 300 m deep, the light (gain over distance squared) is a
+        // third of that straight over it: the glow gathers over the channel.
+        let slant = Vector3::new(0.8, 0.6, 0.);
+        let (side, straight) = (m.diffused_gain(&at, &slant, 500., &up) / 500f64.powi(2), m.diffused_gain(&at, &up, 300., &up) / 300f64.powi(2));
+        assert!(side < 0.4 * straight && side > 0.2 * straight, "{} {}", side, straight);
+        // Absorption dims it: with an albedo of 0.99 the light dies out within some 400 m.
+        assert!(cloud(0.99).diffused_gain(&at, &up, 500., &up) < 0.5 * over);
+        // No medium in between: nothing diffused (the shadow ray carries it all).
+        let clear = VolumeMaterial { field: Arc::new(ConstantDensity(0.)), ..cloud(1.) };
+        assert_eq!(clear.diffused_gain(&at, &up, 500., &up), 0.);
     }
 
     #[test]

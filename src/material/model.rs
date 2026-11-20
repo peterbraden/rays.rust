@@ -105,6 +105,9 @@ pub enum LightSampling {
     /// The lights were sampled alone, so their emission is already counted and the ray ignores
     /// it (as for a point-like light, which only light sampling can find).
     Exclusive,
+    /// Only the distant lights, the sun and moonlight, were sampled (as for the glitter of the
+    /// sea): the ray ignores their discs, but area lights it hits count in full.
+    Directional,
     /// The lights were sampled with multiple importance sampling (`material::bsdf`), and the
     /// ray's direction was sampled from the BSDF with density `bsdf_pdf` per steradian: their
     /// emission counts weighted by the power heuristic against the lights' own density.

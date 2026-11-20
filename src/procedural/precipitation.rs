@@ -15,11 +15,76 @@
 //! evaporates (`fall_depth`, the distance over which it falls to 1/e): rain falls a long way and
 //! reaches the ground; virga, often snow or small drops falling from mid-level cloud,
 //! evaporates on the way, its streaks fraying out as they go.
+//!
+//! **Snow and hail** (`kind`). Snow falls at about 1 m/s rather than rain's 6 or 7, so it
+//! drifts several times as far on the same wind (`shear` defaults to suit), and its flakes are
+//! far larger than drops of the same water: with Gunn and Marshall's distribution of melted
+//! diameters, N(D) = N₀ e^(-ΛD), N₀ = 3800 S^-0.87 m⁻³ mm⁻¹, Λ = 2.55 S^-0.48 mm⁻¹ for a
+//! snowfall of S mm/h of water (K. L. S. Gunn and J. S. Marshall, "The distribution with size
+//! of aggregate snowflakes", J. Meteor. 15, 1958), and flakes three times their melted
+//! diameter (a density of about 0.04), the extinction is 9 π N₀ / Λ³: 0.0065 per metre at
+//! 1 mm/h, a visibility of some 500 m (`snow_extinction`). Above a `melting_level` it is snow
+//! and below it rain, the same water. Hail is ice stones `hail_size` mm across on average
+//! (exponentially distributed), falling at 3.6 √D m/s (D in mm): it carries a lot of ice for
+//! the light it stops, so a hail shaft is thin unless it rains too (`hail_extinction`).
 
 use crate::na::{Vector2, Vector3};
 use crate::noise::PerlinNoise;
 use crate::procedural::nubis_clouds::{lerp, smoothstep};
 use crate::volume::DensityField;
+
+/// What falls.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Kind {
+    Rain,
+    Snow,
+    /// Stones of this mean diameter (mm).
+    Hail(f64),
+}
+
+impl Kind {
+    /// Typical fall speed, m/s.
+    pub fn fall_speed(&self) -> f64 {
+        match self {
+            Kind::Rain => 6.5,
+            Kind::Snow => 1.,
+            Kind::Hail(d) => 3.62 * d.max(1.).sqrt(),
+        }
+    }
+
+    /// Extinction per metre at `rate` mm/h of water.
+    pub fn extinction(&self, rate: f64) -> f64 {
+        match self {
+            Kind::Rain => rain_extinction(rate),
+            Kind::Snow => snow_extinction(rate),
+            Kind::Hail(d) => hail_extinction(rate, *d),
+        }
+    }
+}
+
+/// Extinction (per metre) of snow falling at `rate` mm/h of water, for Gunn and Marshall's
+/// distribution of melted diameters and flakes three times as wide.
+pub fn snow_extinction(rate: f64) -> f64 {
+    if rate <= 0. {
+        return 0.;
+    }
+    let n0 = 3800. * rate.powf(-0.87) * 1e-6; // m⁻³ mm⁻¹, with D² in mm² to m²
+    let lambda = 2.55 * rate.powf(-0.48);
+    9. * std::f64::consts::PI * n0 / lambda.powi(3)
+}
+
+/// Extinction (per metre) of hail of mean diameter `size` mm falling at `rate` mm/h of water
+/// (as ice), exponentially distributed in size and falling at 3.62 √D m/s.
+pub fn hail_extinction(rate: f64, size: f64) -> f64 {
+    if rate <= 0. {
+        return 0.;
+    }
+    let lambda = 1000. / size.max(0.1); // m⁻¹
+    // Water flux R = N₀ (π/6) 3.62 √1000 Γ(4.5) / Λ^4.5 (D in metres), solved for N₀.
+    let flux = rate / 3.6e6;
+    let n0 = flux / (std::f64::consts::PI / 6. * 3.62 * 1000f64.sqrt() * 11.631_728 / lambda.powf(4.5));
+    std::f64::consts::PI * n0 / lambda.powi(3)
+}
 
 /// Extinction (per metre) of rain falling at `rate` mm/h, for the Marshall-Palmer distribution
 /// of drop sizes.
@@ -57,6 +122,9 @@ pub struct Precipitation {
     pub center: Vector2<f64>,
     pub radius: f64,
     pub fade: f64,
+    /// What falls; and for snow, the height below which it has melted to rain.
+    pub kind: Kind,
+    pub melting_level: Option<f64>,
     cells: PerlinNoise,
     streaks: PerlinNoise,
 }
@@ -78,14 +146,27 @@ impl Precipitation {
             center: Vector2::zeros(),
             radius: 30_000.,
             fade: 0.3,
+            kind: Kind::Rain,
+            melting_level: None,
             cells: PerlinNoise::shuffled(seed.wrapping_mul(7).wrapping_add(3)),
             streaks: PerlinNoise::shuffled(seed.wrapping_mul(7).wrapping_add(4)),
         }
     }
 
-    /// The most extinction anywhere: the full rain rate, with the streaks' strengthening.
+    /// The most extinction anywhere: the full rate, with the streaks' strengthening, in
+    /// whichever form stops more light.
     pub fn peak_extinction(&self) -> f64 {
-        rain_extinction(self.rain_rate) * (1. + 0.5 * self.streakiness)
+        let rate = self.rain_rate * (1. + 0.5 * self.streakiness);
+        let melted = if self.melting_level.is_some() { rain_extinction(rate) } else { 0. };
+        self.kind.extinction(rate).max(melted)
+    }
+
+    /// What is falling at height y.
+    fn kind_at(&self, y: f64) -> Kind {
+        match self.melting_level {
+            Some(m) if y < m => Kind::Rain,
+            _ => self.kind,
+        }
     }
 
     /// How far a shaft drifts by the ground.
@@ -139,8 +220,7 @@ impl DensityField for Precipitation {
         if i <= 0. {
             return 0.;
         }
-        // Extinction grows as rate^0.63 (Λ⁻³); scale the full rate's.
-        rain_extinction(self.rain_rate) * i.powf(0.63)
+        self.kind_at(p.y).extinction(self.rain_rate * i)
     }
 
     fn majorant(&self) -> f64 {
@@ -161,9 +241,10 @@ impl DensityField for Precipitation {
         (self.peak_extinction(), exit + 0.01)
     }
 
-    /// Raindrops: about 3.67 / Λ mm across, the median of the distribution by volume.
-    fn particle_radius(&self, _p: &Vector3<f64>) -> Option<f64> {
-        Some(3.67 / (4.1 * self.rain_rate.max(0.1).powf(-0.21)) / 2. * 1000.)
+    /// Raindrops: about 3.67 / Λ mm across, the median of the distribution by volume. (Snow
+    /// and hail are far too large to diffract visibly.)
+    fn particle_radius(&self, p: &Vector3<f64>) -> Option<f64> {
+        (self.kind_at(p.y) == Kind::Rain).then(|| 3.67 / (4.1 * self.rain_rate.max(0.1).powf(-0.21)) / 2. * 1000.)
     }
 }
 
@@ -203,6 +284,31 @@ mod tests {
         let mean = |y: f64| (0..4000).map(|k| r.intensity(&Vector3::new((k % 63) as f64 * 300. + r.shear * (2000. - y), y, (k / 63) as f64 * 300.))).sum::<f64>();
         assert!(mean(1000.) < 0.2 * mean(1800.));
         assert_eq!(mean(100.), 0.);
+    }
+
+    #[test]
+    fn test_majorant_bounds_density_for_every_kind() {
+        for (kind, melting) in [(Kind::Snow, None), (Kind::Snow, Some(800.)), (Kind::Hail(10.), None)] {
+            let mut r = Precipitation::new(2000., 5);
+            (r.kind, r.melting_level) = (kind, melting);
+            for k in 0..4000 {
+                let p = Vector3::new((k % 63) as f64 * 311. - 9000., (k % 41) as f64 * 50., (k / 63) as f64 * 290. - 9000.);
+                assert!(r.density(&p) <= r.peak_extinction() + 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn test_snow_and_hail_extinction() {
+        // Snow at 1 mm/h of water: some 500 m visibility (3 / σ), far more extinction than
+        // rain of the same rate; hail barely any.
+        let snow = snow_extinction(1.);
+        assert!(3. / snow > 300. && 3. / snow < 900., "{}", 3. / snow);
+        assert!(snow > 10. * rain_extinction(1.));
+        assert!(hail_extinction(10., 8.) < 0.2 * rain_extinction(10.));
+        // Bigger stones, fewer of them for the same ice: less extinction.
+        assert!(hail_extinction(10., 20.) < hail_extinction(10., 5.));
+        assert!(Kind::Snow.fall_speed() < Kind::Rain.fall_speed() && Kind::Rain.fall_speed() < Kind::Hail(10.).fall_speed());
     }
 
     #[test]

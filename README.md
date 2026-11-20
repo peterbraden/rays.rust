@@ -7,7 +7,7 @@
 
 [See full gallery of test scenes](./demo/scenes.md)
 
-[See the cloud atlas](./demo/cloud-atlas.md): every kind of cloud it can render, with a scene for each.
+[See the cloud atlas](./demo/cloud-atlas.md): every kind of cloud it can render, all ten genera, and lightning, with a scene for each.
 
 [The stress test](./demo/scenes/stress-test.json): most of its shapes, materials, lights, media,
 plants and camera features in one scene, to check that they all still work together.

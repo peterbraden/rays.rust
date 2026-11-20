@@ -2088,7 +2088,7 @@ mod tests {
             let s = SceneFile::from_string(format!(r#"{{
                 "width": 4, "height": 4, "background": [0, 0, 0],
                 "camera": {{ "location": [0, 3, -12], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.7 }},
-                "objects": [ {{ "type": "ocean", "wind": [7, 2], "planet_radius": {}, "detail_center": [0, -6], "detail_distance": 30 }} ]
+                "objects": [ {{ "type": "ocean", "wind": [7, 2], "choppiness": 0, "whitecaps": 0, "planet_radius": {}, "detail_center": [0, -6], "detail_distance": 30 }} ]
             }}"#, radius));
             let flat = FlatScene::build(&s).unwrap();
             let b = Buffers::build(&s, &flat).unwrap();
@@ -2139,7 +2139,7 @@ mod tests {
                 "camera": {{ "location": [0, 3, -12], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.7 }},
                 "materials": {{ "R": {{ "type": "lambertian", "albedo": [0.7, 0.2, 0.1] }} }},
                 "objects": [
-                    {{ "type": "ocean", "wind": [7, 2], "planet_radius": {}, "detail_center": [0, -6], "detail_distance": 30 }},
+                    {{ "type": "ocean", "wind": [7, 2], "choppiness": 0, "whitecaps": 0, "planet_radius": {}, "detail_center": [0, -6], "detail_distance": 30 }},
                     {{ "type": "sphere", "location": [0, 0.6, 0], "radius": 1.5, "material": "R" }}
                 ]
             }}"#, radius));
@@ -2158,6 +2158,8 @@ mod tests {
             gpu.render(&s, &flat, &rc, |_| ());
             let rc = rc.into_inner().unwrap();
             // Its water too is the kernels' (`pathtrace::MAT_WATER`): nothing waits for the host.
+            // (A flat-crested sea without foam, `"choppiness": 0, "whitecaps": 0`: the kernels
+            // have neither the choppy displacement nor the foam yet.)
             assert_eq!(rc.schedule.stage(crate::scheduler::Stage::Host).items, 0);
             let on_gpu: Vec<Color> = (0..w * h).map(|i| rc.get_pixel(i % w, i / w)).collect();
             let cpu = mean_image(&s, 128);

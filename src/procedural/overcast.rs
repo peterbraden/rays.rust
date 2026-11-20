@@ -24,7 +24,8 @@
 //!    the drier air below.
 //! 4. **Scud.** Ragged fragments of cloud under the base, down to `scud_depth` below it: fractal
 //!    noise thresholded so only its strongest parts (`scud`, the fraction of the sky they
-//!    cover) are cloud, drawn out along the wind, thickest just under the base.
+//!    cover) are cloud, drawn out along the wind, thickest just under the base. They carry on
+//!    under the `breaks`, as fractus on its own: the shreds of low cloud a wind tears off.
 //!
 //! Rain falling from it is a separate `precipitation` volume: give it the deck's base.
 
@@ -192,7 +193,15 @@ impl Overcast {
         }
         match self.column_at(p.x, p.z) {
             Some(column) if p.y <= column.top => self.extinction_in(&column, p),
-            _ => 0.,
+            Some(_) => 0.,
+            // Under a break in the deck, shreds still drift: fractus, torn from the deck's
+            // edges and carried on the wind.
+            None if self.scud > 0. && self.breaks > 0. => {
+                let region = self.region(p.x, p.z);
+                let open_base = self.base + 0.4 * self.base_variation;
+                self.scud_density * self.scud_fraction(p, open_base) * region * self.scud
+            },
+            None => 0.,
         }
     }
 
@@ -390,6 +399,28 @@ mod tests {
         o.breaks = 0.5;
         let clear = (0..400).filter(|i| column(&o, (i % 20) as f64 * 731., (i / 20) as f64 * 677.) < 0.5).count();
         assert!(clear > 20 && clear < 300, "{}", clear);
+    }
+
+    #[test]
+    fn test_fractus_drifts_under_the_breaks() {
+        let mut o = deck();
+        (o.breaks, o.scud) = (0.6, 0.8);
+        // Gaps in the deck with shreds under some of them, and every density bounded.
+        let mut under_gaps = 0;
+        let mut rng = Pcg32::new(3, 2);
+        for i in 0..400 {
+            let (x, z) = ((i % 20) as f64 * 731., (i / 20) as f64 * 677.);
+            if o.column_at(x, z).is_some() { continue; }
+            for _ in 0..20 {
+                let y = o.base - rng.next_f64() * o.scud_depth;
+                let d = o.density(&Vector3::new(x, y, z));
+                assert!(d <= o.peak() + 1e-12);
+                if d > 0. { under_gaps += 1; }
+            }
+        }
+        assert!(under_gaps > 0);
+        let (m, _) = o.majorant_from(&Vector3::new(0., o.base - 100., 0.), &Vector3::new(1., 0., 0.));
+        assert!(m >= o.scud_density);
     }
 
     #[test]

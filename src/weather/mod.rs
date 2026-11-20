@@ -664,6 +664,31 @@ impl Weather {
         w - g * g.dot(&w)
     }
 
+    /// The wind near the ground (geographic, m/s, at 10 m): the general circulation's surface
+    /// winds (the trades blowing west and towards the equator, the westerlies under the storm
+    /// tracks, the polar easterlies) and the systems' own circulation round their centres, which
+    /// is already the flow near the ground (`System::circulation`: slowed by friction and turned
+    /// in across the isobars).
+    pub fn surface_wind(&self, g: &Vector3<f64>) -> Vector3<f64> {
+        let latd = g.y.clamp(-1., 1.).asin().to_degrees();
+        let east = Vector3::y().cross(g);
+        let east = if east.norm() > 1e-9 { east.normalize() } else { Vector3::x() };
+        let north = g.cross(&east);
+        let a = latd.abs();
+        let bump = |centre: f64, width: f64| (-((a - centre) / width).powi(2)).exp();
+        let trades = bump(self.params.climate.hadley * 0.5, 12.);
+        let zonal = -7. * trades + 8. * bump(self.storm_track(latd), 10.) - 4. * bump(75., 8.);
+        // Equatorward in the trades.
+        let meridional = -latd.signum() * 3. * trades;
+        let mut w = east * zonal + north * meridional;
+        for s in &self.systems {
+            if let Some(local) = s.local(g, self.params.radius) {
+                w += s.to_geo(&s.circulation(&local));
+            }
+        }
+        w - g * g.dot(&w)
+    }
+
     /// What is overhead at the scene's origin, in words.
     pub fn overhead(&self) -> String {
         let c = self.column(&self.frame.up);
@@ -859,6 +884,39 @@ mod tests {
         let mut p = WeatherParams::new(seed);
         p.map_size = 32;
         Weather::new(p, None)
+    }
+
+    #[test]
+    fn test_surface_winds() {
+        let mut p = WeatherParams::new(3);
+        p.map_size = 8;
+        p.systems = vec![];
+        let calm = Weather::new(p.clone(), None);
+        let at = |w: &Weather, latd: f64| {
+            let g = Vector3::new(latd.to_radians().cos(), latd.to_radians().sin(), 0.);
+            let v = w.surface_wind(&g);
+            let east = Vector3::y().cross(&g).normalize();
+            (v.dot(&east), v.dot(&g.cross(&east)), v.norm())
+        };
+        // The trades blow west and towards the equator; the westerlies east under the storm
+        // tracks.
+        let (u, v, _) = at(&calm, 15.);
+        assert!(u < -3. && v < 0., "{} {}", u, v);
+        let (u, v, _) = at(&calm, -15.);
+        assert!(u < -3. && v > 0., "{} {}", u, v);
+        let (u, _, _) = at(&calm, calm.storm_track(50.));
+        assert!(u > 4., "{}", u);
+        // Round a tropical cyclone, a storm.
+        let mut p = p;
+        p.systems = vec![SystemSpec { kind: Kind::Tropical, lat_lon: Some((18., 0.)), offset: None, radius: None, intensity: None,
+            stage: None, tilt: None, eye: None, velocity: None }];
+        let storm = Weather::new(p, None);
+        let s = &storm.systems[0];
+        let near = (1..200).map(|k| {
+            let latd = 18. + k as f64 * 0.02;
+            at(&storm, latd).2
+        }).fold(0., f64::max);
+        assert!(near > 25., "{} (eye {}, radius {})", near, s.eye, s.radius);
     }
 
     #[test]

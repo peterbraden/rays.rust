@@ -80,19 +80,56 @@
 //! The exact slope is another FFT: ε(x, t) = Σ_k i k h̃(k, t) exp(i k·x) (eq. 37). Choppy waves
 //! displace each point horizontally to x + λD(x, t), with D(x, t) = Σ_k -i (k/k) h̃(k, t)
 //! exp(i k·x) (eq. 44), sharpening crests and broadening troughs. Both are computed in
-//! `create_tile`. The ocean's normals come from the slopes; the choppy displacement isn't used.
+//! `create_tile`. See "Choppy crests and breaking" below for how the sea uses them.
 //!
 //! ## Scene options
 //!
 //! `{"type": "ocean", "wind": [7, 2], "planet_radius": 6360000, "detail_center": [x, z]}`: the
 //! sea (`Ocean`), lit physically (`PhysicalOcean`). By default it is the planet's surface, a
 //! sphere of the Earth's radius; `"planet_radius": 0` makes it the flat plane y = 0. The radius
-//! changes only its shape. The waves are for a wind of `wind` m/s ([x, z]), scaled so their
-//! slopes carry `resolved` (default 0.8) of Cox and Munk's for the wind, unless `amplitude`
-//! (Phillips's constant) is given, at `time` s with `seed`; they are displaced within
+//! changes only its shape. The waves are for a wind of `wind` m/s ([x, z]), scaled to the
+//! significant wave height that wind raises (`significant_wave_height`: Pierson and
+//! Moskowitz's fully developed sea, or with `fetch`, m, the younger sea of a limited stretch of
+//! open water upwind), or to `wave_height` (m) if given; or, the older calibration, so their
+//! slopes carry `resolved` of Cox and Munk's; or by `amplitude` (Phillips's constant). Crests
+//! are sharpened by `choppiness` (default 1; 0 for none). At `time` s with `seed`; displaced within
 //! `detail_distance` (default 300 m) of `detail_center` (put it under the camera). `water` is
 //! the colour the water body sends back, as an albedo, and `roughness` the mean square slope of
 //! the ripples (by default the rest of Cox and Munk's). `"debug": true` shades by normal.
+//!
+//! ## Choppy crests and breaking
+//!
+//! Linear waves are sinusoids, as round on top as below. Real wind waves have sharp crests and
+//! broad, flat troughs: their water moves in orbits, forwards at the crest and back in the
+//! trough, so it crowds together at the crests. The choppy displacement is that motion to first
+//! order (the Lagrangian or Gerstner surface, for λ = 1): the point of the sea that was at p
+//! is at p + λD(p). The height field at a place x is then the height at the p with
+//! p + λD(p) = x, found by fixed-point iteration (`WaveField::source`), and the slopes there
+//! are the grid's through the inverse of the map's Jacobian, steeper where it squeezes the
+//! surface together. Where the Jacobian J = det(I + λ∇D) reaches zero the surface folds over:
+//! the crest is too steep to stand and breaks. (Tessendorf's notes, section 4.6, use the same
+//! sign of J to find "where the waves are about to break".)
+//!
+//! ## Whitecaps
+//!
+//! Waves break once the wind is more than a breeze, and their foam covers a fraction of the sea
+//! that grows steeply with the wind: W = 3.84·10⁻⁶ U^3.41 at a wind of U m/s (E. C. Monahan and
+//! I. O'Muircheartaigh, "Optimal power-law description of oceanic whitecap coverage dependence on
+//! wind speed", J. Phys. Oceanogr. 10, 1980): a few thousandths in a moderate breeze (7 m/s),
+//! 2% at 12 m/s, 5% at 14 m/s, a fifth of the sea in a gale. A crest breaks where the choppy
+//! surface is squeezed towards folding, its Jacobian below a threshold (`Foam`): there the foam
+//! is fresh and dense. Foam stays with the water it formed in, which the crest moves on from,
+//! and fades over a few seconds (whitecaps thin from dense stage A foam to a residual patch,
+//! stage B, decaying with an e-folding time of a few seconds: Monahan and Lu 1990, Callaghan et
+//! al. 2012). So the foam at a point is the strongest breaking it saw over the last six
+//! seconds, faded by how long ago: each breaking crest trails a patch that thins into lace
+//! (noise ranked so a patch of strength r covers a fraction r) and, as the wind rises towards a
+//! gale, is drawn out in streaks along it. The Jacobians are found on each displaced tile's
+//! grid at a dozen past times, and the threshold is set so foam covers W of the sea. Fresh foam
+//! is a dense froth scattering diffusely (`foam_albedo`, default 0.6); residual foam is
+//! thinner, at 70% of that; and between the patches, the bubble clouds the breaking drove
+//! down linger, paling the water and turning it greener. The coverage can be given as
+//! `whitecaps` (a fraction, 0 for none) in place of Monahan's.
 //!
 //! `"transparent": true` lets you see into the water: what lies beneath the surface (an
 //! iceberg's foot, the underside of a floe, a reef) shows through it, dimmed by the water's
@@ -162,6 +199,7 @@ use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::geometry;
 use rand::{SeedableRng};
 use rand::rngs::StdRng;
+use rayon::prelude::*;
 
 /// A standard Gaussian draw: ξr or ξi in eq. 42.
 fn randn(rng: &mut StdRng) -> f64 {
@@ -464,17 +502,76 @@ mod tests {
 // out a wave is smaller than a pixel, and its slopes matter more than its heights, so the
 // displacement fades out and the waves remain only in the normals.
 
-/// The sea's heights and slopes (∂h/∂x, ∂h/∂z) over a periodic tile `size` metres across.
+/// The sea's heights and slopes (∂h/∂x, ∂h/∂z) over a periodic tile `size` metres across, and
+/// for a tile that displaces the surface, its choppy displacement and the displacement's
+/// gradient (see "Choppy crests and breaking" in the module docs).
 struct WaveTile {
     n: usize,
     size: f64,
     texels: Vec<[f32; 3]>,
+    /// D_x, D_z, ∂D_x/∂x, ∂D_z/∂z, ∂D_x/∂z (eq. 44 and its derivatives), at the same scale as
+    /// the heights.
+    chop: Option<Vec<[f32; 5]>>,
+    /// The amplitudes h̃0, the time, and the scale applied since, to evaluate the tile at other
+    /// times (for the foam's history).
+    h0: Vec<Complex<f64>>,
+    time: f64,
+    gain: f64,
+}
+
+/// `texels` on an `n` x `n` periodic grid `size` metres across, at (x, z), interpolated
+/// bilinearly.
+fn bilinear<const N: usize>(n: usize, size: f64, texels: &[[f32; N]], x: f64, z: f64) -> [f64; N] {
+    let (u, v) = (x / size * n as f64, z / size * n as f64);
+    let n = n as i64;
+    let (u0, v0) = (u.floor(), v.floor());
+    let (fu, fv) = (u - u0, v - v0);
+    let mut out = [0.; N];
+    for (du, dv, w) in [(0, 0, (1. - fu) * (1. - fv)), (1, 0, fu * (1. - fv)), (0, 1, (1. - fu) * fv), (1, 1, fu * fv)] {
+        let (i, j) = ((u0 as i64 + du).rem_euclid(n), (v0 as i64 + dv).rem_euclid(n));
+        let t = &texels[(j * n + i) as usize];
+        for a in 0..N {
+            out[a] += t[a] as f64 * w;
+        }
+    }
+    out
+}
+
+/// The inverse transforms of h̃(k, t) times each of `multipliers` (functions of k), on the tile's
+/// grid with the centred spectrum's sign undone.
+fn tile_fields(h0: &[Complex<f64>], n: usize, size: f64, time: f64, multipliers: &[&dyn Fn(Vector2<f64>) -> Complex<f64>]) -> Vec<Vec<f64>> {
+    let mut ht = vec![Complex::new(0., 0.); n * n];
+    let mut ks = vec![Vector2::zeros(); n * n];
+    for j in 0..n {
+        for i in 0..n {
+            let ind = j * n + i;
+            let k = gen_k(i as f64 - n as f64 / 2., j as f64 - n as f64 / 2., size, size);
+            let wt = dispersion(k, 9.81) * time;
+            let neg_k = ((n - j) % n) * n + (n - i) % n;
+            ht[ind] = h0[ind] * Complex::new(wt.cos(), wt.sin()) + h0[neg_k].conj() * Complex::new(wt.cos(), -wt.sin());
+            ks[ind] = k;
+        }
+    }
+    let n2 = (n * n) as f64;
+    multipliers.iter().map(|m| {
+        let f: Vec<Complex<f64>> = ht.iter().zip(&ks).map(|(h, k)| h * m(*k)).collect();
+        ifft2(f, n).into_iter().enumerate().map(|(ind, x)| {
+            let sign = if (ind % n + ind / n).is_multiple_of(2) { -1. } else { 1. };
+            x.re * n2 * sign
+        }).collect()
+    }).collect()
+}
+
+/// The choppy displacement's multipliers: -i k/|k| (eq. 44), and its gradient, k_a k_b / |k|.
+fn unit(k: Vector2<f64>) -> Vector2<f64> {
+    let len = k.norm();
+    if len > 1e-9 { k / len } else { Vector2::zeros() }
 }
 
 impl WaveTile {
     /// The waves of the Phillips spectrum for `wind` with wavenumbers from `k_min` up to
-    /// `k_max`, on an `n` x `n` grid, at `time`.
-    fn new(wind: Vector2<f64>, size: f64, n: usize, k_min: f64, k_max: f64, time: f64, seed: u64) -> WaveTile {
+    /// `k_max`, on an `n` x `n` grid, at `time`; with the choppy displacement if `choppy`.
+    fn new(wind: Vector2<f64>, size: f64, n: usize, k_min: f64, k_max: f64, time: f64, seed: u64, choppy: bool) -> WaveTile {
         let mut s = [0u8; 32];
         s[..8].copy_from_slice(&seed.to_le_bytes());
         let mut rng: StdRng = SeedableRng::from_seed(s);
@@ -487,14 +584,22 @@ impl WaveTile {
                 }
             }
         }
-        let tile = create_tile(n, size, size, 9.81, time, false, true, h0);
-        let (h, (sx, sz)) = (tile.heights, tile.slopes.unwrap());
-        // Undo the centred spectrum's (-1)^(x+z) (see the module docs).
-        let texels = (0..n * n).map(|ind| {
-            let sign = if (ind % n + ind / n).is_multiple_of(2) { -1. } else { 1. };
-            [(h[ind].re * sign) as f32, (sx[ind].re * sign) as f32, (sz[ind].re * sign) as f32]
-        }).collect();
-        WaveTile { n, size, texels }
+        let one = |_: Vector2<f64>| Complex::new(1., 0.);
+        let sx = |k: Vector2<f64>| Complex::new(0., k.x);
+        let sz = |k: Vector2<f64>| Complex::new(0., k.y);
+        let dx = |k: Vector2<f64>| Complex::new(0., -unit(k).x);
+        let dz = |k: Vector2<f64>| Complex::new(0., -unit(k).y);
+        let jxx = |k: Vector2<f64>| Complex::new(unit(k).x * k.x, 0.);
+        let jzz = |k: Vector2<f64>| Complex::new(unit(k).y * k.y, 0.);
+        let jxz = |k: Vector2<f64>| Complex::new(unit(k).x * k.y, 0.);
+        let mut wanted: Vec<&dyn Fn(Vector2<f64>) -> Complex<f64>> = vec![&one, &sx, &sz];
+        if choppy {
+            wanted.extend_from_slice(&[&dx, &dz, &jxx, &jzz, &jxz]);
+        }
+        let f = tile_fields(&h0, n, size, time, &wanted);
+        let texels = (0..n * n).map(|i| [f[0][i] as f32, f[1][i] as f32, f[2][i] as f32]).collect();
+        let chop = choppy.then(|| (0..n * n).map(|i| [f[3][i] as f32, f[4][i] as f32, f[5][i] as f32, f[6][i] as f32, f[7][i] as f32]).collect());
+        WaveTile { n, size, texels, chop, h0, time, gain: 1. }
     }
 
     fn scale(&mut self, k: f64) {
@@ -503,20 +608,45 @@ impl WaveTile {
                 *v *= k as f32;
             }
         }
+        if let Some(c) = self.chop.as_mut() {
+            for t in c.iter_mut() {
+                for v in t.iter_mut() {
+                    *v *= k as f32;
+                }
+            }
+        }
+        self.gain *= k;
     }
 
-    /// Height and slopes at (x, z), interpolated bilinearly.
+    /// `texels` on the tile's grid at (x, z), interpolated bilinearly.
+    fn lerp<const N: usize>(&self, texels: &[[f32; N]], x: f64, z: f64) -> [f64; N] {
+        bilinear(self.n, self.size, texels, x, z)
+    }
+
+    /// Height and slopes at (x, z) of the undisplaced grid.
     fn at(&self, x: f64, z: f64) -> Vector3<f64> {
-        let n = self.n as i64;
-        let (u, v) = (x / self.size * self.n as f64, z / self.size * self.n as f64);
-        let (u0, v0) = (u.floor(), v.floor());
-        let (fu, fv) = (u - u0, v - v0);
-        let t = |du: i64, dv: i64| {
-            let (i, j) = ((u0 as i64 + du).rem_euclid(n), (v0 as i64 + dv).rem_euclid(n));
-            let s = self.texels[(j * n + i) as usize];
-            Vector3::new(s[0] as f64, s[1] as f64, s[2] as f64)
-        };
-        (t(0, 0) * (1. - fu) + t(1, 0) * fu) * (1. - fv) + (t(0, 1) * (1. - fu) + t(1, 1) * fu) * fv
+        let [h, sx, sz] = self.lerp(&self.texels, x, z);
+        Vector3::new(h, sx, sz)
+    }
+
+    /// The choppy displacement and its gradient at (x, z) of the undisplaced grid (zero if the
+    /// tile has none).
+    fn chop_at(&self, x: f64, z: f64) -> [f64; 5] {
+        match &self.chop {
+            Some(c) => self.lerp(c, x, z),
+            None => [0.; 5],
+        }
+    }
+
+    /// The Jacobian of the choppy map x + λD at each texel, `dt` seconds from the tile's time:
+    /// below 1 where the surface is squeezed together, at 0 where it folds over.
+    fn jacobian(&self, lambda: f64, dt: f64) -> Vec<f64> {
+        let jxx = |k: Vector2<f64>| Complex::new(unit(k).x * k.x, 0.);
+        let jzz = |k: Vector2<f64>| Complex::new(unit(k).y * k.y, 0.);
+        let jxz = |k: Vector2<f64>| Complex::new(unit(k).x * k.y, 0.);
+        let f = tile_fields(&self.h0, self.n, self.size, self.time + dt, &[&jxx, &jzz, &jxz]);
+        let l = lambda * self.gain;
+        (0..self.n * self.n).map(|i| (1. + l * f[0][i]) * (1. + l * f[1][i]) - (l * f[2][i]).powi(2)).collect()
     }
 
     /// The largest height and slope in the tile.
@@ -534,6 +664,55 @@ pub fn cox_munk_slope(speed: f64) -> f64 {
     0.003 + 0.00512 * speed.max(0.)
 }
 
+/// Significant wave height (m) of the sea a wind of `speed` m/s raises: the fully developed sea
+/// of Pierson and Moskowitz, H_s = 0.22 U²/g (W. J. Pierson and L. Moskowitz, J. Geophys. Res.
+/// 69(24), 1964, for the wind at 10 m), or with a `fetch` (m) of open water upwind the younger
+/// sea it has had room to raise, H_s = 0.0016 U √(F/g) (JONSWAP: K. Hasselmann et al., 1973),
+/// whichever is lower.
+pub fn significant_wave_height(speed: f64, fetch: Option<f64>) -> f64 {
+    let g = 9.81;
+    let developed = 0.22 * speed * speed / g;
+    match fetch {
+        Some(f) => developed.min(0.0016 * speed * (f.max(0.) / g).sqrt()),
+        None => developed,
+    }
+}
+
+/// How the sea's waves are scaled and shaped.
+#[derive(Clone, Copy, Debug)]
+pub struct SeaState {
+    /// Phillips's constant, if given; overrides the rest of the scaling.
+    pub amplitude: Option<f64>,
+    /// Scale the waves so their slopes are this fraction of Cox and Munk's (the older
+    /// calibration), rather than to a wave height.
+    pub resolved: Option<f64>,
+    /// The significant wave height (m), if given; otherwise from the wind and `fetch`.
+    pub wave_height: Option<f64>,
+    pub fetch: Option<f64>,
+    /// The choppy displacement's strength, λ: 1 for the first-order Lagrangian (Gerstner)
+    /// surface, 0 for none.
+    pub choppiness: f64,
+}
+
+impl Default for SeaState {
+    fn default() -> SeaState {
+        SeaState { amplitude: None, resolved: None, wave_height: None, fetch: None, choppiness: 1. }
+    }
+}
+
+impl SeaState {
+    /// From an ocean's scene object.
+    pub fn parse(opts: &Value) -> SeaState {
+        SeaState {
+            amplitude: opts["amplitude"].as_f64(),
+            resolved: opts["resolved"].as_f64().map(|r| r.clamp(0., 1.)),
+            wave_height: opts["wave_height"].as_f64().map(|h| h.max(0.)),
+            fetch: opts["fetch"].as_f64(),
+            choppiness: SceneFile::parse_number(&opts["choppiness"], 1.).max(0.),
+        }
+    }
+}
+
 /// The sea's surface as the sum of three tiles of incommensurate sizes, so that the pattern
 /// repeats only far away: swell and wind waves on one, on the next the shorter waves it has no
 /// room for, down to a metre, and on the last wavelets down to 12 cm, the chop that gives water
@@ -542,6 +721,9 @@ pub fn cox_munk_slope(speed: f64) -> f64 {
 /// How many of the wave tiles displace the surface; the rest only tilt its normals.
 const DISPLACED: usize = 2;
 
+/// The smallest Jacobian the slopes are sharpened by, short of the fold.
+const MIN_JACOBIAN: f64 = 0.2;
+
 pub struct WaveField {
     tiles: Vec<WaveTile>,
     /// Bounds on the height and the slope of the displaced surface.
@@ -549,21 +731,36 @@ pub struct WaveField {
     pub max_slope: f64,
     /// The mean square slope of the waves (as interpolated).
     pub mean_square_slope: f64,
+    /// The choppy map is x + `lambda` D: negative, so points crowd towards the crests (a Gerstner
+    /// wave's particles orbit forwards at its crest), sharpening them.
+    lambda: f64,
+    /// The wind, m/s.
+    pub wind: Vector2<f64>,
 }
 
 impl WaveField {
-    /// The waves for `wind` (m/s) at `time`. The Phillips spectrum's constant is arbitrary; with
-    /// `amplitude` it is that, and otherwise the waves are scaled so their mean square slope is
-    /// `resolved` of Cox and Munk's for the wind.
+    /// The waves for `wind` (m/s) at `time`, without choppiness. The Phillips spectrum's constant
+    /// is arbitrary; with `amplitude` it is that, and otherwise the waves are scaled so their
+    /// mean square slope is `resolved` of Cox and Munk's for the wind.
     pub fn new(wind: Vector2<f64>, time: f64, seed: u64, amplitude: Option<f64>, resolved: f64) -> WaveField {
-        let (big, small, tiny, n) = (487., 61.3, 7.9, 256);
+        WaveField::sea(wind, time, seed, SeaState { amplitude, resolved: Some(resolved), choppiness: 0., ..SeaState::default() })
+    }
+
+    /// The waves for `wind` (m/s) at `time`, scaled and shaped by `state`: by default to the
+    /// wave height the wind raises (`significant_wave_height`), with choppy crests.
+    pub fn sea(wind: Vector2<f64>, time: f64, seed: u64, state: SeaState) -> WaveField {
+        // The largest tile holds the wind sea's peak, λ_p = 2π g / ω_p², ω_p = 0.877 g/U
+        // (Pierson-Moskowitz), with room to spare.
+        let peak = 2. * std::f64::consts::PI * wind.norm().powi(2) / (0.877f64.powi(2) * 9.81);
+        let (big, small, tiny, n) = (487f64.max(1.2 * peak), 61.3, 7.9, 256);
+        let choppy = state.choppiness > 0.;
         // Each tile takes over just short of the previous one's shortest waves.
         let k_split = std::f64::consts::PI * n as f64 / big * 0.9;
         let k_tiny = std::f64::consts::PI * (n / 2) as f64 / small * 0.9;
         let mut tiles = vec![
-            WaveTile::new(wind, big, n, 0., k_split, time, seed),
-            WaveTile::new(wind, small, n / 2, k_split, k_tiny, time, seed.wrapping_add(1)),
-            WaveTile::new(wind, tiny, n / 2, k_tiny, f64::INFINITY, time, seed.wrapping_add(2)),
+            WaveTile::new(wind, big, n, 0., k_split, time, seed, choppy),
+            WaveTile::new(wind, small, n / 2, k_split, k_tiny, time, seed.wrapping_add(1), choppy),
+            WaveTile::new(wind, tiny, n / 2, k_tiny, f64::INFINITY, time, seed.wrapping_add(2), false),
         ];
         // Each wave's amplitude should be √P(k) Δk, but `create_amplitude_tile` leaves out the
         // grid's spacing Δk = 2π/L, which is larger on a smaller tile: put it back, relative to
@@ -571,50 +768,147 @@ impl WaveField {
         for t in tiles.iter_mut().skip(1) {
             t.scale(big / t.size);
         }
-        let mut field = WaveField { tiles: vec![], max_height: 0., max_slope: 0., mean_square_slope: 0. };
-        let k = match amplitude {
-            Some(a) => a.sqrt(),
-            None => {
-                field.tiles = std::mem::take(&mut tiles);
+        // Measured unchopped (the displacement scales with the waves, so it would be wrong until
+        // they are), then chopped.
+        let mut field = WaveField { tiles: vec![], max_height: 0., max_slope: 0., mean_square_slope: 0.,
+            lambda: 0., wind };
+        field.tiles = std::mem::take(&mut tiles);
+        let k = match (state.amplitude, state.resolved) {
+            (Some(a), _) => a.sqrt(),
+            (None, Some(resolved)) => {
                 let mss = field.measure_slope();
-                tiles = std::mem::take(&mut field.tiles);
                 if mss > 0. { (resolved * cox_munk_slope(wind.norm()) / mss).sqrt() } else { 0. }
             },
+            (None, None) => {
+                let target = state.wave_height.unwrap_or_else(|| significant_wave_height(wind.norm(), state.fetch));
+                let (_, sd) = field.height_exceeded(0.5);
+                if sd > 0. { target / (4. * sd) } else { 0. }
+            },
         };
-        for t in tiles.iter_mut() {
+        for t in field.tiles.iter_mut() {
             t.scale(k);
         }
-        let (h, s) = tiles[..DISPLACED].iter().map(|t| t.maxima()).fold((0., 0.), |a, b| (a.0 + b.0, a.1 + b.1));
-        field.tiles = tiles;
+        field.lambda = -state.choppiness;
+        let (h, _) = field.tiles[..DISPLACED].iter().map(|t| t.maxima()).fold((0., 0.), |a, b| (a.0 + b.0, a.1 + b.1));
         field.max_height = h;
-        field.max_slope = s;
         field.mean_square_slope = field.measure_slope();
+        field.max_slope = field.measure_max_slope();
         field
     }
 
-    /// Height (of the displaced tiles) and slopes (of all) at horizontal position (x, z).
+    /// Where on the undisplaced grid the point now at (x, z) came from: the choppy map
+    /// p + λD(p) inverted by fixed-point iteration (it contracts wherever the surface hasn't
+    /// folded).
+    pub fn source(&self, x: f64, z: f64) -> (f64, f64) {
+        if self.lambda == 0. {
+            return (x, z);
+        }
+        let mut p = (x, z);
+        for _ in 0..3 {
+            let (mut dx, mut dz) = (0., 0.);
+            for t in &self.tiles[..DISPLACED] {
+                let c = t.chop_at(p.0, p.1);
+                dx += c[0];
+                dz += c[1];
+            }
+            p = (x - self.lambda * dx, z - self.lambda * dz);
+        }
+        p
+    }
+
+    /// The Jacobian of the choppy map at a point of the grid: how much the surface there is
+    /// stretched (above 1) or squeezed together (below), and the matrix's entries.
+    fn squeeze(&self, p: (f64, f64)) -> (f64, f64, f64, f64) {
+        let (mut jxx, mut jzz, mut jxz) = (0., 0., 0.);
+        for t in &self.tiles[..DISPLACED] {
+            let c = t.chop_at(p.0, p.1);
+            jxx += c[2];
+            jzz += c[3];
+            jxz += c[4];
+        }
+        let (a, d, b) = (1. + self.lambda * jxx, 1. + self.lambda * jzz, self.lambda * jxz);
+        (a * d - b * b, a, d, b)
+    }
+
+    /// Height (of the displaced tiles) and slopes (of all) at horizontal position (x, z): the
+    /// choppy surface's, whose slopes are the grid's through the inverse of the map's Jacobian.
     pub fn at(&self, x: f64, z: f64) -> Vector3<f64> {
+        let p = self.source(x, z);
         let mut w = Vector3::zeros();
-        for (i, t) in self.tiles.iter().enumerate() {
+        for t in &self.tiles[..DISPLACED] {
+            w += t.at(p.0, p.1);
+        }
+        if self.lambda != 0. {
+            // ∇_x h = M⁻¹ ∇_p h for the symmetric M = I + λ∇D.
+            let (det, a, d, b) = self.squeeze(p);
+            let det = det.max(MIN_JACOBIAN);
+            let (sx, sz) = (w.y, w.z);
+            w.y = (d * sx - b * sz) / det;
+            w.z = (a * sz - b * sx) / det;
+        }
+        for t in &self.tiles[DISPLACED..] {
             let v = t.at(x, z);
-            w += if i < DISPLACED { v } else { Vector3::new(0., v.y, v.z) };
+            w += Vector3::new(0., v.y, v.z);
         }
         w
+    }
+
+    /// The height of all the waves at (x, z), the shortest included.
+    pub fn full_height(&self, x: f64, z: f64) -> f64 {
+        let p = self.source(x, z);
+        self.tiles[..DISPLACED].iter().map(|t| t.at(p.0, p.1).x).sum::<f64>()
+            + self.tiles[DISPLACED..].iter().map(|t| t.at(x, z).x).sum::<f64>()
+    }
+
+    /// The height the waves (`full_height`) exceed over `fraction` of the sea, and the spread
+    /// of the heights (their standard deviation), sampled across the largest tile.
+    pub fn height_exceeded(&self, fraction: f64) -> (f64, f64) {
+        let (m, size) = (256, self.tiles[0].size);
+        let mut rng = geometry::Pcg32::new(17, 3);
+        let mut heights: Vec<f64> = (0..m * m).map(|i| {
+            let (x, z) = (((i % m) as f64 + rng.next_f64()) * size / m as f64, ((i / m) as f64 + rng.next_f64()) * size / m as f64);
+            self.full_height(x, z)
+        }).collect();
+        let mean = heights.iter().sum::<f64>() / heights.len() as f64;
+        let sd = (heights.iter().map(|h| (h - mean).powi(2)).sum::<f64>() / heights.len() as f64).sqrt();
+        heights.sort_by(|a, b| a.total_cmp(b));
+        let k = ((1. - fraction.clamp(0., 1.)) * (heights.len() - 1) as f64).round() as usize;
+        (heights[k], sd)
     }
 
     /// The mean square slope as sampled: between texels, interpolation smooths the shortest
     /// waves, so it is measured on a grid finer than the tiles'.
     fn measure_slope(&self) -> f64 {
-        let (m, size) = (1024, 487.);
+        let (m, size) = (1024, self.tiles[0].size);
         let step = size / m as f64;
-        let mut sum = 0.;
-        for j in 0..m {
-            for i in 0..m {
+        let sum: f64 = (0..m).into_par_iter().map(|j| {
+            (0..m).map(|i| {
                 let s = self.at((i as f64 + 0.37) * step, (j as f64 + 0.61) * step);
-                sum += s.y * s.y + s.z * s.z;
-            }
-        }
+                s.y * s.y + s.z * s.z
+            }).sum::<f64>()
+        }).sum();
         sum / (m * m) as f64
+    }
+
+    /// The steepest the displaced surface gets (of its displaced tiles), sharpened crests
+    /// included, sampled finely across the largest tile.
+    fn measure_max_slope(&self) -> f64 {
+        let (m, size) = (1024, self.tiles[0].size);
+        let step = size / m as f64;
+        let plain: f64 = self.tiles[..DISPLACED].iter().map(|t| t.maxima().1).sum();
+        if self.lambda == 0. {
+            return plain;
+        }
+        let sharpened = (0..m).into_par_iter().map(|j| {
+            (0..m).map(|i| {
+                let (x, z) = ((i as f64 + 0.37) * step, (j as f64 + 0.61) * step);
+                let p = self.source(x, z);
+                let det = self.squeeze(p).0.max(MIN_JACOBIAN);
+                let s: Vector3<f64> = self.tiles[..DISPLACED].iter().map(|t| t.at(p.0, p.1)).sum();
+                (s.y * s.y + s.z * s.z).sqrt() / det.min(1.)
+            }).fold(0., f64::max)
+        }).reduce(|| 0., f64::max);
+        plain.max(sharpened)
     }
 }
 
@@ -787,7 +1081,9 @@ impl Ocean {
 
 impl Geometry for Ocean {
     fn ocean(&self) -> Option<&Ocean> {
-        Some(self)
+        // The kernel marches a height field (`export`): a sea with choppy crests, whose
+        // surface is displaced sideways too, is this code's alone until that is ported.
+        self.waves.tiles.iter().all(|t| t.chop.is_none()).then_some(self)
     }
 
     fn intersects(&self, r: &Ray) -> Option<RawIntersection> {
@@ -884,6 +1180,192 @@ pub struct PhysicalOcean {
     pub center: Option<Vector3<f64>>,
     /// For transparent water, its absorption per metre (see the module's notes).
     pub absorption: Option<Color>,
+    /// Whitecaps, if the wind raises any.
+    pub foam: Option<Foam>,
+}
+
+/// Residual foam's albedo, as a fraction of fresh foam's: a thinner layer of larger bubbles.
+const RESIDUAL_FOAM: f64 = 0.7;
+
+/// The light that bubbles under the surface send back, as an albedo added to the water's: a
+/// dense bubble cloud scatters most light it meets, but what comes back up has crossed some
+/// water, which takes the red (as the turquoise under a breaking wave).
+const BUBBLES: Color = Color { rgb: Vector3::new(0.01, 0.05, 0.06) };
+
+/// Whitecap coverage by Monahan and O'Muircheartaigh's fit, for a wind of `speed` m/s (at 10 m).
+pub fn whitecap_coverage(speed: f64) -> f64 {
+    (3.84e-6 * speed.max(0.).powf(3.41)).min(1.)
+}
+
+/// How far back (s) the foam's history goes, in steps of `FOAM_STEP`; and how quickly foam left
+/// by a breaking crest fades, its e-folding time (s): a whitecap's dense foam thins into a
+/// residual patch within seconds (stage A to stage B), which itself lasts some seconds more
+/// (Monahan and Lu, 1990; A. H. Callaghan et al., Geophys. Res. Lett. 39, 2012).
+const FOAM_HISTORY: usize = 12;
+const FOAM_STEP: f64 = 0.5;
+const FOAM_DECAY: f64 = 3.5;
+/// The Jacobian's range over which a crest goes from whole to breaking.
+const FOAM_EDGE: f64 = 0.12;
+
+/// Foam from breaking waves (see "Whitecaps" in the module docs). A wave breaks where the choppy
+/// surface is squeezed towards folding over, its Jacobian below `threshold`: there the whitecap
+/// is fresh, dense foam. Foam stays with the water it formed in, which the crest leaves behind,
+/// and fades over seconds: so each crest that broke trails a residual patch, broken into lace as
+/// it thins, and in a gale drawn out in streaks along the wind. The threshold is set so foam
+/// covers a fraction `coverage` of the sea.
+pub struct Foam {
+    pub waves: WaveField,
+    pub threshold: f64,
+    /// Fresh foam's albedo; residual foam is thinner, and darker.
+    pub albedo: Color,
+    /// Per displaced tile, fresh and residual foam at each texel.
+    tiles: Vec<(usize, f64, Vec<[f32; 2]>)>,
+    wind: Vector2<f64>,
+    speed: f64,
+    noise: crate::noise::PerlinNoise,
+    /// The lace noise's spread, to turn it into a uniform rank.
+    lace_sd: f64,
+}
+
+/// A breaking crest's foam for Jacobian `j` against `threshold`: 1 well below it, 0 above.
+fn breaking(j: f64, threshold: f64) -> f64 {
+    let t = ((threshold + FOAM_EDGE - j) / (2. * FOAM_EDGE)).clamp(0., 1.);
+    t * t * (3. - 2. * t)
+}
+
+/// Fresh and residual foam at a texel with Jacobians `history` (now, then earlier).
+fn foam_from(history: impl Iterator<Item = f64>, threshold: f64) -> (f64, f64) {
+    let (mut fresh, mut residual) = (0., 0f64);
+    for (k, j) in history.enumerate() {
+        let b = breaking(j, threshold);
+        if k == 0 {
+            fresh = b;
+        } else {
+            residual = residual.max(b * (-(k as f64) * FOAM_STEP / FOAM_DECAY).exp());
+        }
+    }
+    (fresh, residual)
+}
+
+/// The error function, by Abramowitz and Stegun 7.1.26 (to 1.5e-7).
+fn erf(x: f64) -> f64 {
+    let t = 1. / (1. + 0.3275911 * x.abs());
+    let y = 1. - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * (-x * x).exp();
+    if x >= 0. { y } else { -y }
+}
+
+impl Foam {
+    /// A fraction `coverage` of the sea, on the crests of `waves` raised by `wind`.
+    pub fn new(waves: WaveField, wind: Vector2<f64>, coverage: f64, albedo: Color) -> Foam {
+        // A sea without choppy crests still breaks where they would be.
+        let lambda = if waves.lambda != 0. { waves.lambda } else { -1. };
+        let history: Vec<Vec<Vec<f64>>> = waves.tiles[..DISPLACED].iter().map(|t| {
+            (0..=FOAM_HISTORY).into_par_iter().map(|k| t.jacobian(lambda, -(k as f64) * FOAM_STEP)).collect()
+        }).collect();
+        let texels = |tile: usize| history[tile][0].len();
+        let foam_at = |tile: usize, i: usize, threshold: f64| foam_from(history[tile].iter().map(|h| h[i]), threshold);
+        // The share of the sea foam covers, the tiles' foam taken as independent.
+        let covered = |threshold: f64| {
+            1. - (0..history.len()).map(|tile| {
+                let m = (0..texels(tile)).into_par_iter().map(|i| {
+                    let (f, r) = foam_at(tile, i, threshold);
+                    f.max(r)
+                }).sum::<f64>() / texels(tile) as f64;
+                1. - m
+            }).product::<f64>()
+        };
+        let target = coverage.clamp(0., 1.);
+        let (mut lo, mut hi) = (-1.5, 1.);
+        let threshold = if target <= 0. {
+            -10.
+        } else if covered(hi) < target {
+            hi
+        } else {
+            for _ in 0..30 {
+                let mid = 0.5 * (lo + hi);
+                if covered(mid) < target { lo = mid } else { hi = mid }
+            }
+            0.5 * (lo + hi)
+        };
+        let tiles = waves.tiles[..DISPLACED].iter().enumerate().map(|(k, t)| {
+            let foam = (0..texels(k)).map(|i| {
+                let (f, r) = foam_at(k, i, threshold);
+                [f as f32, r as f32]
+            }).collect();
+            (t.n, t.size, foam)
+        }).collect();
+        let noise = crate::noise::PerlinNoise::shuffled(0xf0a);
+        let lace_sd = {
+            let mut rng = geometry::Pcg32::new(29, 1);
+            let v: Vec<f64> = (0..4096).map(|_| {
+                let (x, z) = (rng.next_f64() * 300., rng.next_f64() * 300.);
+                0.65 * noise.fbm(x / 1.6, 0.3, z / 1.6, 3, 0.55, 2.2) + 0.35 * noise.fbm(x / 6., 4.1, z / 6., 2, 0.5, 2.)
+            }).collect();
+            let mean = v.iter().sum::<f64>() / v.len() as f64;
+            (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / v.len() as f64).sqrt().max(1e-6)
+        };
+        Foam {
+            speed: wind.norm(),
+            wind: if wind.norm() > 0. { wind.normalize() } else { Vector2::new(1., 0.) },
+            waves, threshold, albedo, tiles, noise, lace_sd,
+        }
+    }
+
+    /// Fresh and residual foam at (x, z), and the point of the undisplaced sea it rides on.
+    pub fn sample(&self, x: f64, z: f64) -> (f64, f64, (f64, f64)) {
+        let p = self.waves.source(x, z);
+        let (mut clear_f, mut clear_r) = (1., 1.);
+        for (n, size, foam) in &self.tiles {
+            let [f, r] = bilinear(*n, *size, foam, p.0, p.1);
+            clear_f *= 1. - f;
+            clear_r *= 1. - r;
+        }
+        (1. - clear_f, 1. - clear_r, p)
+    }
+
+    /// Residual foam of strength `r` at `p` broken into lace: covering about a fraction r of
+    /// the surface, in patches that shrink and part as it thins, and in a gale drawn out along
+    /// the wind.
+    fn lace(&self, r: f64, p: (f64, f64)) -> f64 {
+        if r <= 0. {
+            return 0.;
+        }
+        let stretch = 1. + 5. * crate::procedural::nubis_clouds::smoothstep(12., 22., self.speed);
+        let (along, across) = (p.0 * self.wind.x + p.1 * self.wind.y, -p.0 * self.wind.y + p.1 * self.wind.x);
+        // Patches a few metres across, broken into bubble rafts a metre or so.
+        let n = 0.65 * self.noise.fbm(along / (1.6 * stretch), 0.3, across / 1.6, 3, 0.55, 2.2)
+            + 0.35 * self.noise.fbm(along / (6. * stretch), 4.1, across / 6., 2, 0.5, 2.);
+        // Its rank among the noise's values, so a fraction r is foam.
+        let rank = 0.5 * (1. + erf((n - 0.5) / (self.lace_sd * std::f64::consts::SQRT_2)));
+        let t = ((r - rank) / 0.06 * 0.5 + 0.5).clamp(0., 1.);
+        t * t * (3. - 2. * t)
+    }
+
+    /// A breaking crest's fresh foam of strength `f` at `p`: solid at its core, its edges torn
+    /// into tongues and filaments drawn downwind, as the crest spills.
+    fn ragged(&self, f: f64, p: (f64, f64)) -> f64 {
+        if f <= 0. {
+            return 0.;
+        }
+        let (along, across) = (p.0 * self.wind.x + p.1 * self.wind.y, -p.0 * self.wind.y + p.1 * self.wind.x);
+        let n = self.noise.fbm(along / 1.4 + 31.7, 1.9, across / 0.6, 4, 0.6, 2.1);
+        let rank = 0.5 * (1. + erf((n - 0.5) / (self.lace_sd * std::f64::consts::SQRT_2)));
+        let t = ((1.3 * f - rank) / 0.05 * 0.5 + 0.5).clamp(0., 1.);
+        t * t * (3. - 2. * t)
+    }
+
+    /// How much of the surface at (x, z) is foam, 0 to 1, and how much of that is fresh.
+    pub fn cover(&self, x: f64, z: f64) -> (f64, f64) {
+        let (fresh, residual, p) = self.sample(x, z);
+        let (fresh, lace) = (self.ragged(fresh, p), self.lace(residual, p));
+        let covered = fresh.max(lace);
+        (covered, if covered > 0. { fresh / covered } else { 0. })
+    }
+
+    /// How much of the surface at (x, z) is foam, 0 to 1.
+    pub fn at(&self, x: f64, z: f64) -> f64 {
+        self.cover(x, z).0
+    }
 }
 
 /// Water's refractive index.
@@ -1050,8 +1532,9 @@ impl PhysicalOcean {
 
 impl MaterialModel for PhysicalOcean {
     fn water(&self) -> Option<(Color, f64, f64)> {
-        // (Transparent water goes down to what is beneath, which the kernel doesn't.)
-        self.absorption.is_none().then(|| (self.water.as_reflectance(), self.roughness, self.center.map_or(0., |c| -c.y)))
+        // (Transparent water goes down to what is beneath, which the kernel doesn't; nor has
+        // it foam.)
+        (self.absorption.is_none() && self.foam.is_none()).then(|| (self.water.as_reflectance(), self.roughness, self.center.map_or(0., |c| -c.y)))
     }
 
     fn sun_glint(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> Option<Color> {
@@ -1067,9 +1550,28 @@ impl MaterialModel for PhysicalOcean {
             }
         }
         let (up, n) = self.shading_frame(&r.rd, intersection);
+        // Whitecaps: foam over that fraction of the point, chosen at random, scattering
+        // diffusely about the mean surface (foam rides the wave, smoothing its ripples). Fresh
+        // foam is a dense froth; residual foam a thin skin of bubbles over the water, darker.
+        let mut bubbles = 0.;
+        if let Some(foam) = &self.foam {
+            let (fresh, residual, p) = foam.sample(intersection.point.x, intersection.point.z);
+            let (solid, lace) = (foam.ragged(fresh, p), foam.lace(residual, p));
+            let covered = solid.max(lace);
+            if covered > 0. && geometry::rand() < covered {
+                let thin = if solid >= lace { 1. } else { RESIDUAL_FOAM };
+                let albedo = foam.albedo.as_reflectance() * thin;
+                let normal = if up.dot(&v) > 0. { up } else { -up };
+                return crate::material::functions::scatter_bsdf(&crate::material::bsdf::LambertianBSDF { albedo, normal }, r, &intersection.point, s);
+            }
+            // Between the patches, the clouds of bubbles a breaking crest drove down linger
+            // under the surface, scattering light back up through the water: paler, greener sea.
+            bubbles = fresh.max(0.5 * residual);
+        }
         let into = Intersection { normal: n, ..*intersection };
         // The water body, lit through the surface, as much as gets in.
-        let body = crate::material::functions::direct_lighting(self.water.as_reflectance() * (1. - fresnel(n.dot(&v))), &into, s);
+        let water = self.water.as_reflectance() + BUBBLES.as_reflectance() * bubbles;
+        let body = crate::material::functions::direct_lighting(water * (1. - fresnel(n.dot(&v))), &into, s);
         // The glitter of the sun and the moon. The sun's is shared with a glitter probe that
         // might have found it from the medium the ray left (`VolumeMaterial::glitter_probe`).
         let mut glitter = Color::black();
@@ -1109,7 +1611,9 @@ impl MaterialModel for PhysicalOcean {
                 }
             }
         };
-        ScatteredRay { emit, light_sampling: LightSampling::Exclusive, attenuate, ray }
+        // The glitter of the sun and moon was sampled above; area lights (lightning) only the
+        // water body sampled, so their reflections in the ripples count when this ray hits them.
+        ScatteredRay { emit, light_sampling: LightSampling::Directional, attenuate, ray }
     }
 }
 
@@ -1121,6 +1625,7 @@ fn physical_material(opts: &Value, waves_slope: f64, wind: Vector2<f64>, center:
         water: SceneFile::parse_color_def(opts, "water", Color::new(0.002, 0.012, 0.03)),
         roughness: SceneFile::parse_number(&opts["roughness"], (cox_munk_slope(wind.norm()) - waves_slope).max(1e-3)),
         center,
+        foam: None,
         absorption: absorption(opts),
     }
 }
@@ -1131,22 +1636,32 @@ fn absorption(opts: &Value) -> Option<Color> {
         .then(|| SceneFile::parse_color_def(opts, "absorption", Color::new(0.38, 0.065, 0.045)))
 }
 
+/// The waves an ocean's scene object describes (deterministic, so built alike wherever needed).
+fn waves_of(opts: &Value) -> WaveField {
+    WaveField::sea(
+        SceneFile::parse_vec2_def(opts, "wind", Vector2::new(7., 2.)),
+        SceneFile::parse_number(&opts["time"], 0.),
+        SceneFile::parse_int(&opts["seed"], 0) as u64,
+        SeaState::parse(opts),
+    )
+}
+
 /// An ocean from its scene object (see the module docs' scene options).
 pub fn create_ocean(opts: &Value) -> SceneObject {
     let wind = SceneFile::parse_vec2_def(opts, "wind", Vector2::new(7., 2.));
-    let waves = WaveField::new(
-        wind,
-        SceneFile::parse_number(&opts["time"], 0.),
-        SceneFile::parse_int(&opts["seed"], 0) as u64,
-        opts["amplitude"].as_f64(),
-        SceneFile::parse_number(&opts["resolved"], 0.8).clamp(0., 1.),
-    );
+    let waves = waves_of(opts);
     let radius = SceneFile::parse_number(&opts["planet_radius"], crate::planet::EARTH_RADIUS);
     let planet_radius = (radius > 0.).then_some(radius);
     let material: Box<dyn MaterialModel + Sync + Send> = if opts["debug"].as_bool() == Some(true) {
         Box::new(NormalShade {})
     } else {
-        Box::new(physical_material(opts, waves.mean_square_slope, wind, planet_radius.map(|r| Vector3::new(0., -r, 0.))))
+        let mut m = physical_material(opts, waves.mean_square_slope, wind, planet_radius.map(|r| Vector3::new(0., -r, 0.)));
+        // The foam's own copy of the same waves (the geometry keeps the other).
+        let coverage = SceneFile::parse_number(&opts["whitecaps"], whitecap_coverage(wind.norm())).clamp(0., 1.);
+        if coverage > 0. {
+            m.foam = Some(Foam::new(waves_of(opts), wind, coverage, SceneFile::parse_color_def(opts, "foam_albedo", Color::new(0.6, 0.6, 0.6))));
+        }
+        Box::new(m)
     };
     let ocean = Ocean {
         planet_radius,
@@ -1168,17 +1683,10 @@ pub fn surface(opts: &Value) -> std::sync::Arc<Ocean> {
     let key = opts.to_string();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(o) = cache.lock().unwrap().get(&key) { return o.clone(); }
-    let wind = SceneFile::parse_vec2_def(opts, "wind", Vector2::new(7., 2.));
     let radius = SceneFile::parse_number(&opts["planet_radius"], crate::planet::EARTH_RADIUS);
     let ocean = Arc::new(Ocean {
         planet_radius: (radius > 0.).then_some(radius),
-        waves: WaveField::new(
-            wind,
-            SceneFile::parse_number(&opts["time"], 0.),
-            SceneFile::parse_int(&opts["seed"], 0) as u64,
-            opts["amplitude"].as_f64(),
-            SceneFile::parse_number(&opts["resolved"], 0.8).clamp(0., 1.),
-        ),
+        waves: waves_of(opts),
         detail_center: SceneFile::parse_vec2_def(opts, "detail_center", Vector2::zeros()),
         detail_distance: SceneFile::parse_number(&opts["detail_distance"], 300.).max(1.),
         absorption: absorption(opts),
@@ -1254,6 +1762,116 @@ mod curved_tests {
             let solid = 2. * f64::consts::PI * (1. - cap);
             assert!((est - solid).abs() < 0.03 * solid, "roughness {}: cap {} vs {}", roughness, est, solid);
         }
+    }
+
+    /// Area lights, such as lightning, are seen reflected in the sea: its glitter samples only
+    /// the sun and moon, so the reflected ray must count the lights it hits.
+    #[test]
+    fn test_sea_reflects_area_lights() {
+        let s = crate::scenefile::SceneFile::from_string(r#"{
+            "width": 10, "height": 10, "max_depth": 4,
+            "camera": { "location": [0, 5, 0], "lookat": [0, -50, 100], "up": [0, 1, 0], "angle": 0.5 },
+            "materials": { "LIGHT": { "type": "diffuse-light", "intensity": 1, "two_sided": true } },
+            "objects": [
+                { "type": "ocean", "planet_radius": 0, "wind": [1, 0], "whitecaps": 0, "water": [0, 0, 0] },
+                { "type": "sphere", "location": [0, 50, 100], "radius": 15, "material": "LIGHT" }
+            ]
+        }"#.to_string());
+        // Towards the light's mirror image, 61° from the vertical: water reflects some 6%.
+        let to_image = Vector3::new(0., -55., 100.).normalize();
+        let n = 400;
+        let mean = (0..n).map(|_| crate::trace::trace(&Ray { ro: Vector3::new(0., 5., 0.), rd: to_image }, 0, &s).1.rgb.y).sum::<f64>() / n as f64;
+        assert!(mean > 0.02 && mean < 0.2, "{}", mean);
+    }
+
+    #[test]
+    fn test_whitecaps_grow_with_the_wind() {
+        // Monahan and O'Muircheartaigh: about 2% at 12 m/s, none in a calm.
+        assert!((whitecap_coverage(12.) - 0.0186).abs() < 0.001, "{}", whitecap_coverage(12.));
+        assert!(whitecap_coverage(3.) < 1e-3 && whitecap_coverage(0.) == 0.);
+        // The foam covers about that fraction of the sea, on the crests.
+        let wind = Vector2::new(14., 3.);
+        let foam = Foam::new(WaveField::new(wind, 0., 1, None, 0.8), wind, whitecap_coverage(wind.norm()), Color::white());
+        let n = 200;
+        let covered = (0..n * n).map(|i| foam.at((i % n) as f64 * 2.31, (i / n) as f64 * 2.17)).sum::<f64>() / (n * n) as f64;
+        let w = whitecap_coverage(wind.norm());
+        assert!((covered - w).abs() < 0.4 * w, "{} vs {}", covered, w);
+    }
+
+    #[test]
+    fn test_wave_height_follows_the_wind() {
+        for (u, fetch) in [(7., None), (15., None), (15., Some(20_000.))] {
+            let w = WaveField::sea(Vector2::new(u, 2.), 0., 1, SeaState { fetch, ..SeaState::default() });
+            let (_, sd) = w.height_exceeded(0.5);
+            let hs = significant_wave_height(Vector2::new(u, 2.).norm(), fetch);
+            assert!((4. * sd / hs - 1.).abs() < 0.1, "{} m/s: {} vs {}", u, 4. * sd, hs);
+        }
+        // A short fetch raises a lower sea than the open ocean.
+        assert!(significant_wave_height(15., Some(20_000.)) < 0.6 * significant_wave_height(15., None));
+    }
+
+    #[test]
+    fn test_choppy_crests_are_sharp_and_troughs_broad() {
+        // Points crowd towards the crests, so less of the surface stands above the mean, and its
+        // steepest slopes are steeper.
+        let wind = Vector2::new(14., 3.);
+        let above = |w: &WaveField| {
+            let n = 300;
+            (0..n * n).filter(|i| w.full_height((i % n) as f64 * 1.63, (i / n) as f64 * 1.71) > 0.).count() as f64 / (n * n) as f64
+        };
+        let smooth = WaveField::sea(wind, 0., 1, SeaState { choppiness: 0., ..SeaState::default() });
+        let choppy = WaveField::sea(wind, 0., 1, SeaState::default());
+        assert!(above(&choppy) < above(&smooth) - 0.02, "{} vs {}", above(&choppy), above(&smooth));
+        let steepest = |w: &WaveField| {
+            let n = 300;
+            let mut s: Vec<f64> = (0..n * n).map(|i| {
+                let a = w.at((i % n) as f64 * 1.63, (i / n) as f64 * 1.71);
+                (a.y * a.y + a.z * a.z).sqrt()
+            }).collect();
+            s.sort_by(|a, b| a.total_cmp(b));
+            s[s.len() * 999 / 1000]
+        };
+        assert!(steepest(&choppy) > steepest(&smooth), "{} vs {}", steepest(&choppy), steepest(&smooth));
+        // Some crests are squeezed well together, towards breaking.
+        let squeezed = (0..200 * 200).map(|i| choppy.squeeze(choppy.source((i % 200) as f64 * 2.4, (i / 200) as f64 * 2.4)).0).fold(1., f64::min);
+        assert!(squeezed < 0.7, "{}", squeezed);
+        assert!(choppy.max_slope >= steepest(&choppy));
+        // The map is inverted: the point found maps back to where it was asked for.
+        let (x, z) = (37.2, 81.9);
+        let p = choppy.source(x, z);
+        let (mut dx, mut dz) = (0., 0.);
+        for t in &choppy.tiles[..DISPLACED] {
+            let c = t.chop_at(p.0, p.1);
+            dx += c[0];
+            dz += c[1];
+        }
+        let back = (p.0 + choppy.lambda * dx, p.1 + choppy.lambda * dz);
+        assert!((back.0 - x).abs() < 0.05 && (back.1 - z).abs() < 0.05, "{:?}", back);
+    }
+
+    #[test]
+    fn test_foam_breaks_on_crests_and_trails_behind() {
+        let wind = Vector2::new(16., 3.);
+        let waves = WaveField::sea(wind, 0., 1, SeaState::default());
+        let w = whitecap_coverage(wind.norm());
+        let foam = Foam::new(WaveField::sea(wind, 0., 1, SeaState::default()), wind, w, Color::white());
+        let n = 300;
+        let (mut fresh, mut residual, mut crest, mut count) = (0., 0., 0., 0.);
+        let (_, sd) = waves.height_exceeded(0.5);
+        for i in 0..n * n {
+            let (x, z) = ((i % n) as f64 * 1.63, (i / n) as f64 * 1.71);
+            let (f, r, _) = foam.sample(x, z);
+            fresh += f;
+            residual += r;
+            if f > 0.5 {
+                crest += waves.full_height(x, z) / sd;
+                count += 1.;
+            }
+        }
+        // Breaking crests stand above the mean; foam they left lingers over more of the sea than
+        // is breaking now.
+        assert!(count > 0. && crest / count > 0.3, "{}", crest / count.max(1.));
+        assert!(residual > 1.5 * fresh, "{} vs {}", residual, fresh);
     }
 
     #[test]
@@ -1334,5 +1952,18 @@ mod curved_tests {
         }
         // Up into the sky: nothing.
         assert!(o.intersects(&Ray { ro, rd: Vector3::new(0., 1., 1.).normalize() }).is_none());
+    }
+}
+
+#[cfg(test)]
+mod probe {
+    #[test]
+    #[ignore]
+    fn probe_sea_state() {
+        for u in [3., 7., 12., 18., 25.] {
+            let w = super::WaveField::sea(crate::na::Vector2::new(u, 0.), 0., 1, super::SeaState::default());
+            let (_, sd) = w.height_exceeded(0.5);
+            println!("U {:4} Hs {:6.2} m (PM {:6.2})  mss {:.4} (CM {:.4}) max h {:.2}", u, 4. * sd, 0.21 * u * u / 9.81, w.mean_square_slope, super::cox_munk_slope(u), w.max_height);
+        }
     }
 }

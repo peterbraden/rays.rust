@@ -2169,6 +2169,10 @@ pub const PATH_HOST: u32 = 16;
 /// of the host's materials do (the renderer's `LightSampling::Exclusive`): one the ray finds
 /// adds nothing, though a sky does in full.
 pub const PATH_LIGHTS_COUNTED: u32 = 32;
+/// With `PATH_LIGHTS_COUNTED`: only the distant lights were (the renderer's
+/// `LightSampling::Directional`, as the sea's glitter): an area light the ray finds counts in
+/// full.
+pub const PATH_DIRECTIONAL: u32 = 64;
 /// From this bit of the flags up, eight bits: the medium the path last scattered in, plus one
 /// (0 before it has scattered in any), which sets how its segments cross every medium
 /// (`segment_scale`).
@@ -2349,7 +2353,7 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
         if mat.kind == MAT_EMITTER {
             let le = emitted(s, m, hit_ns, -rd);
             let mut w = 1.0;
-            if !specular && flags & FLAG_SAMPLE_LIGHTS != 0 && prim.info.z > 0 {
+            if !specular && flags_p & PATH_DIRECTIONAL == 0 && flags & FLAG_SAMPLE_LIGHTS != 0 && prim.info.z > 0 {
                 let lp = emitter_probability(s, prim.info.z - 1) * light_pdf(s, hit.prim, ro, point, hit_ng);
                 w = if counted { 0.0 } else { power_heuristic(prev_pdf, lp) };
             }
@@ -2467,10 +2471,10 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
             return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
         }
         beta *= attenuate;
-        return carry_on(p, next_from, next_dir.normalize(), beta, l, rays, rng, (flags_p | PATH_SPECULAR) & !PATH_LIGHTS_COUNTED, prev_pdf, depth + 1, q0, q1);
+        return carry_on(p, next_from, next_dir.normalize(), beta, l, rays, rng, (flags_p | PATH_SPECULAR) & !(PATH_LIGHTS_COUNTED | PATH_DIRECTIONAL), prev_pdf, depth + 1, q0, q1);
     }
 
-    let mut flags_p = (flags_p | PATH_SCATTERED) & !(PATH_SPECULAR | PATH_LIGHTS_COUNTED);
+    let mut flags_p = (flags_p | PATH_SCATTERED) & !(PATH_SPECULAR | PATH_LIGHTS_COUNTED | PATH_DIRECTIONAL);
     if in_medium {
         // Light leaving this vertex, towards the lights and onwards, has scattered here.
         flags_p = (flags_p & !PATH_MEDIA) | (((hit.prim & 0xff) + 1) << PATH_MEDIUM_SHIFT) | ((scatterings + 1).min(255) << PATH_SCATTERINGS_SHIFT);

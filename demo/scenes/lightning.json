@@ -1,0 +1,187 @@
+{
+  "width": 960,
+  "height": 600,
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 8,
+  "path_termination": "russian_roulette",
+  "output": {
+    "tonemap": "reinhard",
+    "exposure": 9000,
+    "glare": true
+  },
+  "camera": {
+    "location": [
+      0,
+      15,
+      0
+    ],
+    "lookat": [
+      1500,
+      2600,
+      10000
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.9
+  },
+  "sun": {
+    "intensity": 4.9
+  },
+  "objects": [
+    {
+      "type": "ocean",
+      "wind": [
+        13.28,
+        4.43
+      ],
+      "detail_center": [
+        0,
+        0
+      ]
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        0.75,
+        -0.28,
+        0.65
+      ],
+      "crepuscular_rays": true
+    },
+    {
+      "type": "cumulonimbus",
+      "center": [
+        -1500,
+        12000
+      ],
+      "base": 1300,
+      "tropopause": 11500,
+      "cape": 2500,
+      "radius": 3800,
+      "wind_direction": [
+        1,
+        0.1
+      ],
+      "upper_wind": 25,
+      "age": 1500,
+      "flanking": 3,
+      "flank_angle": 100,
+      "albedo": [
+        0.9999,
+        0.9999,
+        0.9999
+      ],
+      "g": 0.85,
+      "similarity_after": 4,
+      "seed": 3,
+      "diffusion": {
+        "steps": 24
+      }
+    },
+    {
+      "type": "precipitation",
+      "base": 1300,
+      "center": [
+        -3000,
+        13500
+      ],
+      "radius": 3500,
+      "coverage": 0.8,
+      "rain_rate": 25,
+      "cell_size": 3000,
+      "shear": 0.15,
+      "wind_direction": [
+        1,
+        0.1
+      ],
+      "seed": 2,
+      "fade": 0.5
+    },
+    {
+      "type": "lightning",
+      "start": [
+        2000,
+        7500,
+        9000
+      ],
+      "ground": 0,
+      "target": [
+        8000,
+        4000
+      ],
+      "seed": 5,
+      "cloud_length": 3000,
+      "radius": 0.4,
+      "shutter": 1,
+      "strokes": 4,
+      "cloud_current": 0.4,
+      "cloud_depth": 800
+    },
+    {
+      "type": "lightning",
+      "start": [
+        -4500,
+        4000,
+        13000
+      ],
+      "ground": 0,
+      "target": [
+        -6000,
+        12500
+      ],
+      "seed": 8,
+      "cloud_length": 4000,
+      "radius": 0.3,
+      "shutter": 1,
+      "strokes": 2
+    },
+    {
+      "type": "lightning",
+      "kind": "intracloud",
+      "start": [
+        500,
+        8000,
+        10000
+      ],
+      "seed": 12,
+      "cloud_length": 25000,
+      "cloud_depth": 1000,
+      "cloud_current": 0.5,
+      "radius": 0.3,
+      "strokes": 4,
+      "charge_radius": 3000
+    },
+    {
+      "type": "volume",
+      "min": [
+        -40000,
+        0,
+        -10000
+      ],
+      "max": [
+        40000,
+        3000,
+        60000
+      ],
+      "density": 1,
+      "sigma_a": [
+        0,
+        0,
+        0
+      ],
+      "sigma_s": [
+        1.6e-05,
+        2.4e-05,
+        4.3e-05
+      ],
+      "g": 0.3
+    }
+  ],
+  "light_sampler": "bvh"
+}

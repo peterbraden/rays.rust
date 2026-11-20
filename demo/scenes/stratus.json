@@ -5,8 +5,12 @@
   "chunk_size": 64,
   "samples_per_chunk": 8,
   "shadow_bias": 0.01,
-  "max_depth": 64,
+  "max_depth": 32,
   "path_termination": "russian_roulette",
+  "output": {
+    "tonemap": "reinhard",
+    "exposure": 2.0
+  },
   "camera": {
     "location": [
       0,
@@ -15,7 +19,7 @@
     ],
     "lookat": [
       0,
-      300,
+      250,
       2000
     ],
     "up": [
@@ -32,8 +36,8 @@
     {
       "type": "ocean",
       "wind": [
-        7,
-        2
+        2.88,
+        0.82
       ],
       "detail_center": [
         0,
@@ -46,24 +50,38 @@
         -0.6,
         0.55,
         -0.5
-      ]
+      ],
+      "crepuscular_rays": true
     },
     {
-      "type": "nubis_clouds",
-      "base": 300,
-      "top": 800,
-      "extent": 60000,
-      "coverage": 1,
-      "cloud_type": 0,
-      "erosion": 0.1,
-      "density": 0.05,
-      "seed": 7,
+      "type": "overcast",
+      "base": 350,
+      "thickness": 500,
+      "density": 0.03,
+      "thickness_variation": 0.3,
+      "system_size": 6000,
+      "lump_size": 2500,
+      "base_variation": 40,
+      "contrast": 0.15,
+      "anisotropy": 3,
+      "wind_direction": [
+        1,
+        0.3
+      ],
+      "softness": 150,
+      "erosion": 0.3,
+      "detail_size": 300,
+      "scud": 0.08,
+      "scud_depth": 150,
+      "scud_density": 0.01,
       "albedo": [
         0.99,
         0.99,
         0.99
       ],
-      "similarity_after": 4
+      "similarity_after": 2,
+      "seed": 7,
+      "diffusion": true
     }
   ]
 }

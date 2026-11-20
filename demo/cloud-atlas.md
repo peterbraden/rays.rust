@@ -10,23 +10,50 @@ Every cloud is a participating medium of the same kind (see `src/volume.rs`): de
 through a density field, lit by the sun and the sky, under the same atmosphere that reddens the
 sun and hazes the distance. Cloud layers curve with the planet's surface, so distant clouds drop
 towards the horizon and sink below it. What differs is where the density comes from. There are
-nine generators:
+ten generators:
 
 | Generator | Makes | Approach |
 |---|---|---|
 | `hogan_kew_cirrus` | cirrus, cirrostratus | Ice falling from generating cells in wind shear (Hogan & Kew 2005) |
 | `benard_altocumulus` | altocumulus, cirrocumulus | Rayleigh-Bénard convection cells in a thin layer |
-| `nubis_clouds` | cumulus, stratocumulus, stratus, altostratus | Noise-based modelling (Schneider, Horizon Zero Dawn's Nubis) |
+| `nubis_clouds` | cumulus, stratocumulus | Noise-based modelling (Schneider, Horizon Zero Dawn's Nubis) |
 | `harris_cumulus` | cumulus, as they grow and die | A simulation of a sunny day (Harris et al. 2003) |
 | `lenticular` | lenticular clouds | Moist layers lifted by a mountain's lee waves |
 | `mammatus` | mammatus under an anvil | Sinking, evaporating lobes under a cloud's base |
-| `overcast` | nimbostratus and stratocumulus overcast, scud | A deck lumpy underneath, lit by diffusion through each column |
+| `overcast` | nimbostratus, stratus, altostratus, stratocumulus overcast, scud | A deck lumpy underneath, lit by diffusion through each column |
+| `cumulonimbus` | cumulonimbus: towers, flanking line, anvil, overshooting top | Shaped by parcel theory: updraft from CAPE, overshoot w / N, anvil carried by the wind aloft |
 | `mountains` `"cloud"` | hill fog, cap clouds | Damp air lifted over high ground past its saturation, streaming off the crests |
 | `precipitation` | rain shafts and virga | Raindrops by rain rate (Marshall-Palmer), falling through shear |
 
+And `lightning`, which isn't a cloud but lights one: a branching channel grown as a stepped
+leader, glowing as bright as measured strokes, sampled as a light.
+
+### The ten genera
+
+The WMO's atlas sorts every cloud into ten genera. All ten have a scene:
+
+| Genus | Generator | Scene |
+|---|---|---|
+| Cirrus (Ci) | `hogan_kew_cirrus` | `hogan-kew-cirrus.json` |
+| Cirrocumulus (Cc) | `benard_altocumulus`, small and high | `cirrocumulus.json` |
+| Cirrostratus (Cs) | `hogan_kew_cirrus`, with halos | `cirrostratus-halos.json` |
+| Altocumulus (Ac) | `benard_altocumulus`, `lenticular` | `benard-altocumulus.json`, `altocumulus-undulatus.json`, `lenticular.json` |
+| Altostratus (As) | `overcast`, thin and smooth | `altostratus.json` |
+| Nimbostratus (Ns) | `overcast`, thick, with rain | `overcast.json` |
+| Stratocumulus (Sc) | `nubis_clouds` | `stratocumulus.json` |
+| Stratus (St) | `overcast`, low and even | `stratus.json` |
+| Cumulus (Cu) | `nubis_clouds`, `harris_cumulus` | `nubis-clouds.json`, `harris-cumulus.json` |
+| Cumulonimbus (Cb) | `cumulonimbus` | `cumulonimbus.json`, `lightning.json` |
+
 Render any of them with `cargo run --release -- demo/scenes/<scene>.json`. The scenes stand on the
-sea (`{"type": "ocean"}`, the planet's surface), whose reflections show the sky and clouds again. The altostratus, stratocumulus
-and stratus images are quick previews (480 x 300, 8 samples per pixel), so they are noisy.
+sea (`{"type": "ocean"}`, the planet's surface), whose reflections show the sky and clouds again.
+The sea follows the weather: its `wind` (m/s) raises waves and roughness as measured for that
+wind, and whitecaps over the fraction of the sea that wind breaks (Monahan's fit: a few in a
+moderate breeze, 2% at 12 m/s, 5% at 14 m/s). Fair-weather scenes have a moderate breeze
+(7 m/s); stratus a near calm (3 m/s); altostratus, ahead of a front, a fresh breeze (9 m/s);
+the squalls and rain a strong breeze (11 to 12 m/s); and the thunderstorm's gust front a near
+gale (14 m/s). The stratocumulus
+image is a quick preview (480 x 300, 8 samples per pixel), so it is noisy.
 
 ### All together
 
@@ -47,16 +74,26 @@ glitter path running in to the camera.
 | Middle | [Altocumulus](#altocumulus) | `benard-altocumulus.json` |
 | | [Altocumulus undulatus](#altocumulus-undulatus) | `altocumulus-undulatus.json` |
 | | [Altocumulus lenticularis](#altocumulus-lenticularis) | `lenticular.json` |
+| | [Altocumulus castellanus](#altocumulus-castellanus) | `altocumulus-castellanus.json` |
 | | [Altostratus](#altostratus) | `altostratus.json` |
 | Low | [Stratocumulus](#stratocumulus) | `stratocumulus.json` |
 | | [Stratus](#stratus) | `stratus.json` |
 | | [Overcast: nimbostratus and scud](#overcast-nimbostratus-and-scud) | `overcast.json` |
+| | [Fractus](#fractus) | `fractus.json` |
 | | [Cumulus, modelled](#cumulus-modelled) | `nubis-clouds.json` |
 | | [Cumulus, simulated](#cumulus-simulated) | `harris-cumulus.json` |
+| | [Cumulonimbus](#cumulonimbus) | `cumulonimbus.json` |
+| | [Cumulonimbus, simulated](#cumulonimbus-simulated) | `cumulonimbus-simulated.json` |
+| | [Shelf cloud (arcus)](#shelf-cloud-arcus) | `gust-front.json` |
 | Phenomena | [Sunset](#sunset) | `sunset.json` |
 | | [Crepuscular rays](#crepuscular-rays) | `crepuscular-rays.json` |
 | | [Rain and rainbows](#rain-and-rainbows) | `rain.json` |
+| | [Snow showers](#snow-showers) | `snow-showers.json` |
+| | [Fogbow](#fogbow) | `fogbow.json` |
+| | [Glory](#glory) | `glory.json` |
 | | [Mammatus](#mammatus) | `mammatus.json` |
+| | [Lightning](#lightning) | `lightning.json` |
+| | [Lightning under the anvil](#lightning-under-the-anvil) | `lightning-anvil.json` |
 | | [Iridescence](#iridescence) | `cirrus-iridescence.json` |
 | | [Clouds from orbit](#clouds-from-orbit) | `orbit.json` |
 
@@ -74,6 +111,11 @@ cirrus clouds" (QJRMS 2005). Ice crystals form in generating cells near the top 
 anisotropic random field with a k^-5/3 spectrum. They then fall through wind that strengthens and
 veers with depth, so each cell trails a curved fallstreak. Fibres, a large-scale flow that bends
 the streaks, and varied fall speeds make them wispy. `time` animates the layer.
+
+`"species"` changes how the cells are laid out and how their ice falls: `"uncinus"` (the
+default, hooked), `"fibratus"` (long filaments with no hooks or tufts, as the wind barely turns
+with height), `"floccus"` (small rounded tufts whose short trails soon sublimate) and
+`"spissatus"` (dense, filled patches, grey towards the sun).
 
 ### Cirrocumulus
 
@@ -153,16 +195,33 @@ slope.
 Seen from the side, a lens is lit mostly by light scattered many times, so the scene uses the Oz
 approximation (`"oz": true`). Without it, the render sparkles with noise.
 
+### Altocumulus castellanus
+
+![Altocumulus castellanus](./scenes/altocumulus-castellanus.png)
+
+`altocumulus-castellanus.json`: `{"type": "benard_altocumulus", "castellanus": 0.4, "turret_height": 6}`
+
+Altocumulus whose cloudlets grow turrets: when a mid-level layer turns unstable, by cooling
+aloft or by moist air lifted into it, the rising air in some cells keeps rising, and those
+cloudlets grow into little cumulus with stems and billowing heads, all standing on the layer's
+common base and lined up in its rows. It is a forecaster's sign: castellanus in the morning, a
+thunderstorm by afternoon. `castellanus` is the share of cells that grow one, `turret_height`
+how tall the tallest grow, in layer thicknesses. Seen from far off along the layer, as here,
+the turrets stand up like battlements.
+
 ### Altostratus
 
 ![Altostratus](./scenes/altostratus.png)
 
-`altostratus.json`: `{"type": "nubis_clouds", "base": 3000, "top": 4500, "coverage": 1, "cloud_type": 0, "density": 0.003}`
+`altostratus.json`: `{"type": "overcast", "base": 3000, "thickness": 1500, "density": 0.0025, "contrast": 0.25, "anisotropy": 6, "diffusion": true}`
 
-A grey or bluish sheet through which the sun shows as if through ground glass. It is Nubis's
-stratus profile at middle height, optically thin (an optical depth of a few through the sheet).
-This is an approximation: real altostratus is a smooth, often fibrous sheet, while Nubis still
-shapes it from billowing noise.
+A grey or bluish sheet through which the sun shows as if through ground glass. It is the
+`overcast` deck at middle height, made smooth and thin: an optical depth of three to six,
+enough to hide the blue sky but not the sun, whose disc still shines through, dimmed, in a
+bright patch of forward-scattered light. Little `contrast` between thicker and thinner
+patches, and lumps drawn out six times along the wind (`anisotropy`), give the faint striations
+of altostratus rather than the lumpy underside of rain cloud. The thinner patches
+(`thickness_variation`) are where the sun shows best.
 
 ## Low clouds
 
@@ -182,9 +241,13 @@ from stratus (0) through stratocumulus (0.5) to cumulus (1).
 
 ![Stratus](./scenes/stratus.png)
 
-`stratus.json`: `{"type": "nubis_clouds", "base": 300, "top": 800, "coverage": 1, "cloud_type": 0}`
+`stratus.json`: `{"type": "overcast", "base": 350, "thickness": 500, "density": 0.03, "contrast": 0.15, "base_variation": 40, "diffusion": true}`
 
-A low, grey overcast: Nubis with the stratus profile and full coverage.
+A low, featureless grey sheet with an even base, hiding the sun completely: the dull sky of a
+damp, still day. It is the `overcast` deck brought down to a few hundred metres and made
+even: little `contrast` between thick and thin, a base that hardly varies, and a little scud.
+An optical depth of 15 to 20 diffuses the sunlight evenly, so the sky is one soft grey, a
+little brighter where the deck is thinner, its base lost in the haze at the horizon.
 
 ### Overcast: nimbostratus and scud
 
@@ -221,6 +284,21 @@ damper air (`humidity_variation`) cap some summits and leave others bare. In a s
 overcast it joins the deck's volume, so the light diffused down through the deck lights it too;
 on its own, a thin cloud in a dark scene would be lit only by random walks that reach the
 deck, which are noisy.
+
+### Fractus
+
+![Fractus](./scenes/fractus.png)
+
+`fractus.json`: `{"type": "fractus", "base": 350, "depth": 500, "spacing": 900, "coverage": 0.45, "size": 300}`,
+under broken stratocumulus
+
+Ragged shreds of low cloud, torn from the base of other cloud or stirred up by a strong wind,
+drifting fast and changing shape by the minute: stratus or cumulus fractus, and under rain,
+pannus (`procedural::fractus`). Each shred stands at its own height in a layer, is drawn out
+along the wind and leans downwind, and falls apart into lumps and wisps with sky between: noise
+a third of its size cuts it into pieces, finer noise wears their edges, and the density inside
+follows the noise rather than filling the outline, so each is grey in places and thin in others.
+The overcast deck's scud is the same thing under a deck, and now drifts on under its `breaks`.
 
 ### Cumulus, modelled
 
@@ -265,6 +343,82 @@ field that fills in, then clumps that break up as the ground's moisture flux fal
 
 At 100 m the grid resolves clouds down to a few hundred metres. Worley erosion adds finer detail
 at their edges.
+
+### Cumulonimbus
+
+![Cumulonimbus](./scenes/cumulonimbus.png)
+
+`cumulonimbus.json`: `{"type": "cumulonimbus", "base": 1300, "tropopause": 11500, "cape": 2500, "radius": 3800, "wind_direction": [1, 0.15], "upper_wind": 25, "age": 900, "flanking": 4, "oz": true}`
+
+The thunderstorm cloud: a cumulus grown through the whole troposphere, with a rain shaft under
+it. Its shape follows the physics of its updraft (`procedural::cumulonimbus`). This is one
+storm, placed and shaped by hand; storms as part of a whole planet's weather, along fronts and
+in the ITCZ, growing and raining out, come from `"weather"`'s convective layer
+(docs/weather.md):
+
+- **The tower.** Air rising from the base is buoyant as long as it is warmer than its
+  surroundings, up to the equilibrium level, near the tropopause. Parcel theory gives the
+  strongest updraft from the convective available potential energy, w = sqrt(2 CAPE), about
+  half of it realised once entrainment and the water's weight are counted (`efficiency`).
+  The updraft overshoots the equilibrium level by about w / N into the stable stratosphere,
+  N its buoyancy frequency (`stability`, 0.02 s⁻¹): with CAPE 2500 J/kg, a dome some 1.8 km
+  above the anvil. The tower leans downwind (`lean`), its surface pushed out in turrets a
+  tower's width across, and those covered in cauliflower billows of billows.
+- **Glaciation.** Above about -38 °C (`glaciation`, 8 km) every drop freezes. The hard
+  billows of the liquid tower soften into streaks drawn out along the wind, and the
+  extinction falls from that of dense liquid cloud (`density`, 0.04 per metre) to ice's
+  (`ice_density`).
+- **The anvil.** At the tropopause the outflow spreads, carried downwind by the wind aloft
+  (`upper_wind` × `age`) and fanning out sideways at `outflow_speed`: a flat-topped wedge,
+  thickest at the tower, thinning towards its far edge, a little of it pushed upwind.
+- **The flanking line.** Younger towers stepping down away from the storm on the upwind side
+  (`flanking`, `flank_angle`): cumulus congestus that will feed it.
+
+Lit from the side, the turrets on the near side catch the sun, those beyond are in the
+tower's shadow. Light scattered many times inside a tower so dense would make the render
+noisy, so it uses the Oz approximation (`"oz": true`). Hail, wall clouds and the vault of a
+supercell's updraft are not modelled; mammatus under the anvil is a separate `mammatus` object
+(as in `sunset-squalls.json`).
+
+### Cumulonimbus, simulated
+
+![Simulated cumulonimbus](./scenes/cumulonimbus-simulated.png)
+
+`cumulonimbus-simulated.json`: `{"type": "harris_cumulus", "sounding": "weisman_klemp", "ice": true, "grid": [64, 34, 64], "cell": 500, "time": 2400, "bubble": {...}}`
+
+A thunderstorm grown by the cloud simulation, rather than shaped by hand. The air is Weisman
+and Klemp's analytic sounding, the standard case for simulated storms (M. L. Weisman and
+J. B. Klemp, Mon. Wea. Rev. 1982): conditionally unstable up to a tropopause at 12 km, moist
+below and dry above, with a CAPE of about 2200 J/kg. A warm bubble, 2 K warmer than its
+surroundings and 10 km across, starts the storm. Its updraft reaches 48 m/s (parcel theory
+gives 66 m/s for this sounding, and real updrafts realise two thirds or so), its top reaches
+the tropopause within fifteen minutes and overshoots to 14 km, and then the cloud spreads
+sideways under the stable stratosphere: the anvil, flat-topped. Above freezing it condenses
+water, below it a mixture of water and ice (`"ice": true`), whose latent heat of freezing
+drives the upper tower half a kilometre higher. The grid is 32 km across and 17 km deep, in
+500 m cells, so detail below that is added (`turbulence`); the simulation takes about ten
+minutes, and is cached. With `"rain": true` rain is a field of its own (Kessler's warm-rain
+scheme as Klemp and Wilhelmson wrote it, 1978): cloud water turns to rain, and rain sweeps up
+more cloud as it falls at its terminal speed, a few metres a second; its weight drags the air
+down, and where it falls into dry air below the base it evaporates and cools it, which drives
+the storm's downdraught. Below freezing it is graupel, falling slower. Rain is drawn faintly, as
+shafts, since its drops are fifty times larger than the cloud's for the same water.
+
+### Shelf cloud (arcus)
+
+![Shelf cloud](./scenes/gust-front.png)
+
+`gust-front.json`: `{"type": "shelf_cloud", "low": 550, "base": 1500, "top": 7000, "depth": 8000, "tier_spacing": 250}` before a cumulonimbus
+
+A thunderstorm's downdraught spreads over the ground as a pool of rain-cooled air, and its
+leading edge, the gust front, shoves the warm, damp air ahead up past its condensation level.
+The cloud it makes is attached to the storm's base: a wedge whose lowest edge leads, its face
+leaning up and back to the storm, smooth where the air is lifted steadily and stepped in tiers
+where it rises in layers, its underside rising behind the edge, ragged with scud where the
+outflow churns it (`procedural::arcus`). `"roll_cloud"` is the other form, volutus: a long
+horizontal tube detached from the storm, ahead of the front or after it weakens, turning about
+its axis on the shear between the outflow and the air above, smooth and streaked along its
+length.
 
 ## Phenomena
 
@@ -328,6 +482,50 @@ primary bow lies 42° from the point opposite the sun, red outside; the fainter 
 51°, its colours reversed. Between them is Alexander's dark band, and inside the primary the sky
 is brighter. Like halos, the bow applies to direct sunlight at a path's first scattering.
 
+### Snow showers
+
+![Snow showers](./scenes/snow-showers.png)
+
+`snow-showers.json`: `{"type": "precipitation", "kind": "snow", "rain_rate": 1.2}` under cumulus
+
+Snow falls slowly, about a metre a second, so on the same wind it drifts several times as far
+as rain, and its shafts lean far over; and snowflakes are large for the water they hold, so a
+little snow stops a lot of light: Gunn and Marshall's distribution of flake sizes, with flakes
+three times their melted diameter, gives a visibility of some 500 m at 1.2 mm/h of water,
+against kilometres for rain of the same rate. A `melting_level` turns it to rain below; `"kind":
+"hail"` falls as ice stones of `hail_size` mm, which stop little light for the ice they carry.
+
+### Fogbow
+
+![Fogbow](./scenes/fogbow.png)
+
+`fogbow.json`: a bank of sea fog, `"rainbow": {"drop_radius": 12, "spread": 0.25}`, the sun low behind
+
+The rainbow of fog: broad, nearly white, a little inside the rainbow's 42°, with a faint bluish
+inner edge. Fog droplets are some ten micrometres across, a few dozen wavelengths, too small
+for the rays that explain the rainbow. Near a bow the light on either side of the rainbow ray
+interferes, which Airy's theory gives as Ai² of the angle from it scaled by the drop's size
+(`material::rainbow`). For raindrops the main peak is narrow and sits at the geometric 42°;
+for fog droplets it is several degrees wide, so each colour's bow overlaps the others' into
+white, and moves inwards. For drizzle, a fifth of a millimetre, the same theory gives the
+supernumerary bows: pale pink and green fringes just inside the primary. `"rainbow": true`
+keeps the geometric rays alone.
+
+### Glory
+
+![Glory](./scenes/glory.png)
+
+`glory.json`: looking down on a stratus deck towards the antisolar point, the sun behind, `"mie": {"radius": 6, "variance": 0.04}`
+
+Coloured rings round the antisolar point on cloud below, seen round an aircraft's shadow or a
+climber's (the Brocken spectre), and the white cloudbow 38° out from it. Geometric optics has
+no glory: no ray through a drop comes straight back. It comes from light tunnelling along the
+drop's surface and leaving from its far side, which only the full Mie solution of Maxwell's
+equations for a sphere has (`material::mie`, Bohren and Huffman's series). The table averages
+it over a gamma distribution of droplet sizes and three wavelengths per colour channel, and is
+used for direct sunlight at a path's first scattering, as the rainbow's is. Smaller droplets
+give wider rings; a spread of sizes washes out all but the first few.
+
 ### Mammatus
 
 ![Mammatus](./scenes/mammatus.png)
@@ -347,6 +545,111 @@ clusters, deepest a few kilometres in from the edge. In the scene the sun is set
 anvil's edge. Its light, reddened by its long path through the air, comes in under the base and
 catches the sides of the nearest pouches, while the anvil overhead hides most of the sky. The
 scene uses Reinhard tone mapping with an exposure of 3, as a photograph at dusk would.
+
+### Lightning
+
+![Lightning](./scenes/lightning.png)
+
+`lightning.json`: `{"type": "lightning", "start": [2000, 7500, 9000], "target": [8000, 4000], "seed": 5}`
+and `{"type": "lightning", "kind": "intracloud", "start": [500, 8000, 9500], "cloud_length": 25000}`,
+in the cumulonimbus at night (`"diffusion": true`)
+
+A one-second exposure of a thunderstorm at night. A cloud-to-ground stroke leaves the storm
+high on its flank, at 7.5 km where the leader set out from the charge region, runs out across
+clear air and comes down kilometres in front of the rain; a second strikes through the rain
+shaft, lighting the curtain it falls through. Inside the upper tower an intracloud flash
+spreads through 25 km of channel, and the whole storm glows with its light, against a black
+sky.
+
+The sea shows the lightning the way water does: it reflects only a few percent of the light
+falling on it diffusely (its body is dark), so it isn't lit up like ground; instead it mirrors
+whatever is bright. The bolt lays a path of glitter across the waves towards the camera, and
+the lit rain a fainter sheen.
+
+The channel is grown as a *stepped leader* (`procedural::lightning`), in the storm's electric
+field. The cloud is a tripole of charge regions: the negative one where the flash starts, a
+positive one 4 km above it and a small positive pocket below; the leader carries negative
+charge of its own, about a millicoulomb per metre; and each charge has its image in the
+conducting ground. Leader tips push out in steps of tens of metres (`step`). At each step every
+tip probes the field just ahead of it, and advances with probability (E / E_max)^η, as in the
+dielectric breakdown model (Niemeyer, Pietronero and Wiesmann 1984; η = 3, `eta`, for the
+sparse branching of lightning); a tip left behind for long stalls. So the channel's own charge
+screens the branches beside it, which stay short, and with its image draws the leading tip to
+the ground ever harder as it nears it. Each step turns by about 16° from the last, as measured
+in photographs of channels (Hill 1968), about the field's direction, and a `target` draws it
+too. Tips fork (`branching`); when one comes within
+`striking_distance` of the ground, an upward leader meets it and the return stroke flows
+along that path, the main channel. Each straight step is then broken into a fractal path down
+to a couple of metres (`detail`, `roughness`), so the channel is jagged at every scale. The
+branches that lost the race carry only the charge stored along them, so each glows in
+proportion to the length of channel beyond it, fading towards its tips. Inside the cloud the
+flash spreads sideways in a fainter network (`cloud_length`); `"kind": "intracloud"` gives that
+network alone, sheet lightning. Each generation of branch forks a third as often as the one it
+grew from, so a flash has a few dozen branches, not a bush.
+
+It is as bright as the real thing. A return stroke radiates a few hundred joules per metre in
+the visible and near infrared (Krider et al. 1968), about 1.5·10⁴ lumen-seconds per metre
+(`luminous_energy`); averaged over `strokes` strokes and the `shutter` time, that is the light
+per metre of channel, on the same scale as the sun (whose intensity, 4.9 here, it follows). A
+metre or so from the channel it is far brighter than daylight; a kilometre away it gives a few
+lux, tens of times full moonlight: a stroke a kilometre away gives a few lux-seconds, which
+is why lightning is photographed at f/8 and ISO 100 to 400, and its glow inside a cloud at
+ISO 1600 or more. So the scene is exposed as a night photograph would be (`"exposure": 3000`),
+the channel itself blown out, with glare. Its colour is its spectrum
+(`spectrum::lightning`): a channel at some 30 000 K emits mostly lines, broadened by its pressure
+to a few nanometres, of singly ionised nitrogen in the blue and green, hydrogen's Hα in the red
+and neutral oxygen and nitrogen in the near infrared, over a continuum (Orville 1968; Salanave
+1961). That is bluish white, far whiter than a blackbody at the channel's temperature; in
+spectral rendering each line is traced at its wavelength.
+
+The channel is a light, sampled directly: a light BVH over its segments chooses one by the
+light it could send to the point being lit, then a point on the side facing it. Seen from
+kilometres away a channel a few centimetres across is far thinner than a pixel, and most
+samples would miss it; what a camera records of it there is its light per metre, so each
+segment is widened to half a pixel as seen from the camera, its radiance lowered to keep its
+light per metre (`pixel_width`). The channel casts no shadow.
+
+A cloud absorbs next to nothing, so light from a channel inside it can't go anywhere but out:
+nearly all of it emerges, after hundreds of scatterings, and the cloud glows. A path tracer
+finds those paths only by chance, so the storm uses the diffusion approximation
+(`"diffusion"`, as overcast decks do for sunlight): at a path's first vertex in the cloud, each
+light sample's direct light is attenuated as usual, and what it loses on the way arrives
+diffused. Light from a source inside a cloud is trapped, scattered to and fro until it leaks
+out, so near the surface over it the cloud is brighter than the source alone would make it
+there. The diffusion solution for a point source buried in a half-space is a dipole, the source
+and its negative image above the surface (Farrell, Patterson and Wilson 1992; the same as
+Jensen et al.'s BSSRDF for subsurface scattering): straight over a deep source, four times as
+bright as in empty space, and fading to the sides, so the glow gathers over the channels. The
+cloud's coefficients are measured along the line to each light sample, and the light that
+leaves by the cloud's far side is taken off by diffusion's split through a slab. Real cloud
+droplets absorb about a hundred-thousandth of the light at each scattering, so trapped light
+spreads for kilometres; at the albedo of 0.99 the other cloud scenes use it would die out in a
+few hundred metres, so the storm has 0.9999. Paths in the cloud end after a few vertices
+(`max_depth`), since later ones gather nothing at night: the first has counted the flashes.
+
+### Lightning under the anvil
+
+![Lightning under the anvil](./scenes/lightning-anvil.png)
+
+`lightning-anvil.json`: `{"type": "lightning", "kind": "intracloud", "start": [-1500, 9000, 8000], "cloud_length": 40000}`,
+a cloud-to-ground stroke and a flash inside the tower, seen from under the anvil's leading edge
+
+The storm from beneath, at night: the anvil spreads overhead towards the camera (`wind_direction`
+towards it), and the tower rises through the middle of the view. Channels crawl across the sky
+under the anvil's base (spider lightning, `"kind": "intracloud"` held near its `start` height by
+`cloud_depth`), lighting its underside; one comes down to the ground. A flash about a kilometre
+inside the tower lights it from within, through the diffusion approximation. Seen from below, the
+anvil flares down into the tower, its underside hanging in soft lobes and its edges scalloped.
+A further flash spreads through the anvil off to the left; in a long exposure a storm flashes
+many times, and each lights its own part of it. Exposed as long exposures of storms are
+(`"exposure": 6000`, about ISO 3200).
+
+The clear air glows too. At night the sky is no light source, but the air is still there to
+scatter the flashes: the lowest 3 km are a `volume` with the sea-level air's scattering, Rayleigh's
+for the molecules (5.8, 13.5 and 33·10⁻⁶ per metre in red, green and blue) plus a little haze, so
+the sky around the storm is deep blue where the flashes light it, brightest around each channel,
+with the cloud dark against it. With several flashes, `"light_sampler": "bvh"` samples the ones
+near each point rather than choosing by their total power. `lightning.json` has the same air.
 
 ### Iridescence
 
@@ -374,10 +677,18 @@ is still noisy: from orbit, cloud detail is much smaller than a pixel.
 
 ## Not yet
 
-- **Nimbostratus**: a thick, dark rain cloud. `precipitation` can now fall from a thick
-  `nubis_clouds` stratus, but there is no scene for it yet.
-- **Cumulonimbus**: anvils and overshooting tops. `harris_cumulus` could grow them with a deeper
-  grid, a weaker inversion and ice microphysics.
-- **Castellanus, fractus and other species**: each needs its own mechanism (turrets from
-  mid-level convection, shreds torn by the wind).
-- **Snow, hail and lightning**; supernumerary bows (they need wave optics) and fogbows.
+- **Lightning seen through cloud**: the dipole finds the cloud's surface near each point from
+  the density's gradient over 25 m, so turrets' relief follows their curvature; but it still
+  treats that surface as a plane, so light from a flash deep inside a tower reaches its far
+  side too evenly.
+- **Lightning's physics**: the leader's field is from point charges and their images, not
+  solved around the conducting channel; the channel's light in time is a sequence of strokes
+  without its cooling between them.
+- **A simulated storm's microphysics**: rain is a single moment (its mass, not its drops'
+  sizes); graupel is rain below freezing rather than grown by riming, there is no hail, and
+  melting's latent heat is left out.
+- **Other features**: tuba (funnel clouds), murus (wall clouds), pileus and velum (caps over
+  rising towers), fluctus (Kelvin-Helmholtz waves), asperitas and cavum (fallstreak holes)
+  each need their own mechanism.
+- **The glory's shadow**: Mie scattering is used for direct sunlight at a path's first
+  scattering only; nothing casts the observer's shadow at its centre.

@@ -30,10 +30,7 @@
   "objects": [
     {
       "type": "ocean",
-      "wind": [
-        7,
-        2
-      ]
+      "wind": "weather"
     },
     {
       "type": "skysphere",

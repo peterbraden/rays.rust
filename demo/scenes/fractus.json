@@ -1,0 +1,99 @@
+{
+  "width": 960,
+  "height": 600,
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 32,
+  "path_termination": "russian_roulette",
+  "output": {
+    "tonemap": "reinhard",
+    "exposure": 1.0
+  },
+  "camera": {
+    "location": [
+      0,
+      12,
+      0
+    ],
+    "lookat": [
+      0,
+      900,
+      3000
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 0.9
+  },
+  "sun": {
+    "intensity": 4.9
+  },
+  "objects": [
+    {
+      "type": "ocean",
+      "wind": [
+        10,
+        4
+      ],
+      "detail_center": [
+        0,
+        0
+      ]
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        0.4,
+        0.5,
+        -0.75
+      ],
+      "crepuscular_rays": true
+    },
+    {
+      "type": "overcast",
+      "base": 2200,
+      "thickness": 500,
+      "density": 0.012,
+      "breaks": 0.8,
+      "wind_direction": [
+        1,
+        0.4
+      ],
+      "anisotropy": 3,
+      "scud": 0,
+      "albedo": [
+        0.99,
+        0.99,
+        0.99
+      ],
+      "similarity_after": 2,
+      "seed": 8,
+      "diffusion": true
+    },
+    {
+      "type": "fractus",
+      "base": 350,
+      "depth": 500,
+      "spacing": 900,
+      "coverage": 0.45,
+      "size": 300,
+      "stretch": 2.5,
+      "wind_direction": [
+        1,
+        0.4
+      ],
+      "density": 0.035,
+      "albedo": [
+        0.99,
+        0.99,
+        0.99
+      ],
+      "similarity_after": 4,
+      "seed": 3
+    }
+  ]
+}

@@ -87,6 +87,7 @@ pub fn expand(objects: Vec<Value>) -> Vec<Value> {
         .map(|sky| crate::skysphere::parse_sky_material(sky).sun_direction());
     let landscape = objects.iter().find(|o| o["type"].as_str() == Some("landscape") && o.get("scale").is_none()).cloned();
     let mut out = vec![];
+    let mut weathers = vec![];
     for o in objects {
         if !is_weather(&o) {
             out.push(o);
@@ -105,11 +106,22 @@ pub fn expand(objects: Vec<Value>) -> Vec<Value> {
         if let (None, Some(l)) = (w.get("landscape"), &landscape) {
             w["landscape"] = l.clone();
         }
+        weathers.push(w.clone());
         for family in FAMILIES {
             if w[family] == Value::Bool(false) {
                 continue;
             }
             out.push(serde_json::json!({ "type": "weather_layer", "family": family, "weather": w }));
+        }
+    }
+    // A sea under the weather blows with its surface wind at the scene's origin: an ocean
+    // with `"wind": "weather"` (`Weather::surface_wind`).
+    if let Some(w) = weathers.first() {
+        for sea in out.iter_mut().filter(|s| s["type"].as_str() == Some("ocean") && s["wind"].as_str() == Some("weather")) {
+            let weather = weather_of(w);
+            let wind = weather.frame.to_scene(&weather.surface_wind(&weather.frame.up));
+            println!("Weather: the sea's wind at the origin, {:.1} m/s", (wind.x * wind.x + wind.z * wind.z).sqrt());
+            sea["wind"] = serde_json::json!([wind.x, wind.z]);
         }
     }
     out

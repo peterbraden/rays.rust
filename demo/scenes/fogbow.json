@@ -1,0 +1,80 @@
+{
+  "width": 960,
+  "height": 540,
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 16,
+  "path_termination": "russian_roulette",
+  "output": {
+    "tonemap": "reinhard",
+    "exposure": 1.0
+  },
+  "camera": {
+    "location": [
+      0,
+      15,
+      0
+    ],
+    "lookat": [
+      0,
+      180,
+      3000
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "angle": 1.05
+  },
+  "sun": {
+    "intensity": 4.9
+  },
+  "objects": [
+    {
+      "type": "ocean",
+      "wind": [
+        3,
+        1
+      ],
+      "detail_center": [
+        0,
+        0
+      ]
+    },
+    {
+      "type": "skysphere",
+      "sun_direction": [
+        0.0,
+        0.2,
+        -0.98
+      ]
+    },
+    {
+      "type": "volume",
+      "min": [
+        -6000,
+        0,
+        150
+      ],
+      "max": [
+        6000,
+        250,
+        6000
+      ],
+      "density": 0.006,
+      "albedo": [
+        0.999,
+        0.999,
+        0.999
+      ],
+      "rainbow": {
+        "drop_radius": 12,
+        "spread": 0.25
+      },
+      "g": 0.85
+    }
+  ]
+}

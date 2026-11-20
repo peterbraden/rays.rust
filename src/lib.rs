@@ -65,6 +65,7 @@ pub mod material {
     pub mod diffraction;
     pub mod ice_halos;
     pub mod rainbow;
+    pub mod mie;
 }
 pub mod intersection;
 pub mod sceneobject;
@@ -147,6 +148,10 @@ pub mod procedural {
     pub mod precipitation;
     pub mod overcast;
     pub mod hill_cloud;
+    pub mod cumulonimbus;
+    pub mod fractus;
+    pub mod arcus;
+    pub mod lightning;
     pub mod valley_fog;
     pub mod harris_cumulus;
     pub mod space;

@@ -77,6 +77,9 @@ struct Path {
     /// (`LightSampling::Exclusive`, which only a host material answers): then a light the ray
     /// hits adds nothing, though a sky does.
     lights_counted: bool,
+    /// Of those, only the distant ones (`LightSampling::Directional`): an area light the ray
+    /// finds counts in full.
+    directional: bool,
     hit: Option<Hit>,
     done: bool,
 }
@@ -179,7 +182,7 @@ fn render_batch(s: &Scene, flat: &FlatScene, k: usize, range: std::ops::Range<us
             (0.5 + fx) / w as f64, (0.5 + fy) / h as f64)?;
         let ray = Ray { ro: ray.ro, rd: ray.rd.normalize() };
         Some(Path { pixel: index as u32, ray, beta: Color::white(), l: Color::black(), weight: weight * wx * wy,
-                    depth: 0, specular: true, prev_pdf: 0., sampler, scattered: false, lights_counted: false, hit: None, done: false })
+                    depth: 0, specular: true, prev_pdf: 0., sampler, scattered: false, lights_counted: false, directional: false, hit: None, done: false })
     }).collect();
     lap(&mut stats, Stage::Generate, paths.len());
     let mut done = Vec::with_capacity(paths.len());
@@ -318,7 +321,7 @@ fn gather_emission(p: &mut Path, s: &Scene, flat: &FlatScene) {
             // Weighted against light sampling, if the vertex before sampled this light.
             let sampled = flat.emitter_index.get(h.prim as usize).copied().flatten();
             let w = match sampled {
-                Some(e) if !p.specular && s.render.sample_lights => {
+                Some(e) if !p.specular && !p.directional && s.render.sample_lights => {
                     let prim = &flat.prims[h.prim as usize];
                     let light_pdf = flat.emitter_pmf(&p.ray.ro, e as usize) * light_pdf(prim, &p.ray.ro, &h.point, &h.geometric);
                     power_heuristic(p.prev_pdf, light_pdf)
@@ -549,9 +552,10 @@ fn host_bounce(p: &mut Path, s: &Scene, flat: &FlatScene, object: u32, h: &Hit) 
     // What the next vertex counts of a light it finds (`trace::light_weight`).
     (p.specular, p.lights_counted, p.prev_pdf) = match interaction.light_sampling {
         LightSampling::None => (true, false, 0.),
-        LightSampling::Exclusive => (false, true, 0.),
+        LightSampling::Exclusive | LightSampling::Directional => (false, true, 0.),
         LightSampling::MIS { bsdf_pdf } => (false, false, bsdf_pdf),
     };
+    p.directional = interaction.light_sampling == LightSampling::Directional;
     p.ray = Ray { ro: ray.ro, rd: ray.rd.normalize() };
     p.depth += 1;
 }
@@ -566,6 +570,7 @@ pub struct HostVertex {
     pub depth: u32,
     pub specular: bool,
     pub lights_counted: bool,
+    pub directional: bool,
     pub prev_pdf: f64,
     pub scattered: bool,
     pub done: bool,
@@ -577,11 +582,11 @@ pub fn host_vertex(s: &Scene, flat: &FlatScene, v: &mut HostVertex, hit: &Hit, s
     let FlatMaterial::Host { object } = flat.hit_material(hit.prim) else { return };
     let mut p = Path {
         pixel: 0, ray: v.ray, beta: v.beta, l: v.l, weight: 1., depth: v.depth, specular: v.specular, prev_pdf: v.prev_pdf, sampler,
-        scattered: v.scattered, lights_counted: v.lights_counted, hit: Some(*hit), done: false,
+        scattered: v.scattered, lights_counted: v.lights_counted, directional: v.directional, hit: Some(*hit), done: false,
     };
     host_bounce(&mut p, s, flat, *object, hit);
     *v = HostVertex {
-        ray: p.ray, beta: p.beta, l: p.l, depth: p.depth, specular: p.specular, lights_counted: p.lights_counted, prev_pdf: p.prev_pdf,
+        ray: p.ray, beta: p.beta, l: p.l, depth: p.depth, specular: p.specular, lights_counted: p.lights_counted, directional: p.directional, prev_pdf: p.prev_pdf,
         scattered: p.scattered, done: p.done,
     };
 }

@@ -46,7 +46,7 @@ use crate::scene::Scene;
 use crate::wavefront::flat::{FlatScene, Hit};
 use crate::wavefront::integrator::{host_vertex, HostVertex};
 use pathtrace::glam::{Vec3, Vec4};
-use pathtrace::{PathState, PATH_ACTIVE, PATH_HOST, PATH_LIGHTS_COUNTED, PATH_SCATTERED, PATH_SPECULAR};
+use pathtrace::{PathState, PATH_ACTIVE, PATH_DIRECTIONAL, PATH_HOST, PATH_LIGHTS_COUNTED, PATH_SCATTERED, PATH_SPECULAR};
 
 /// A waiting path (`PATH_HOST`) of `pixel`'s sample `sample`, after its vertex: with its next
 /// ray and queued to go on, or ended.
@@ -71,6 +71,7 @@ pub fn shade(s: &Scene, flat: &FlatScene, p: &PathState, pixel: u32, sample: u32
         depth,
         specular: p.state.y & PATH_SPECULAR != 0,
         lights_counted: p.state.y & PATH_LIGHTS_COUNTED != 0,
+        directional: p.state.y & PATH_DIRECTIONAL != 0,
         prev_pdf: p.d.w as f64,
         scattered: p.state.y & PATH_SCATTERED != 0,
         done: false,
@@ -86,6 +87,6 @@ pub fn shade(s: &Scene, flat: &FlatScene, p: &PathState, pixel: u32, sample: u32
     next.d = f32s(&v.ray.rd).extend(v.prev_pdf as f32);
     next.beta = f32s(&v.beta.rgb).extend(v.depth as f32);
     let flag = |on: bool, bit: u32| if on { bit } else { 0 };
-    next.state.y = PATH_ACTIVE | flag(v.specular, PATH_SPECULAR) | flag(v.scattered, PATH_SCATTERED) | flag(v.lights_counted, PATH_LIGHTS_COUNTED);
+    next.state.y = PATH_ACTIVE | flag(v.specular, PATH_SPECULAR) | flag(v.scattered, PATH_SCATTERED) | flag(v.lights_counted, PATH_LIGHTS_COUNTED) | flag(v.directional, PATH_DIRECTIONAL);
     next
 }

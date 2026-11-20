@@ -115,6 +115,25 @@ fn rainbow_ray(n: f64, p: usize) -> (f64, f64, f64, f64) {
     (b, dev(b), curvature, (carried(rs) + carried(rp)) / 2.)
 }
 
+/// A droplets' phase function per colour channel, for direct sunlight at a path's first
+/// scattering: raindrops' bows (`RainbowTable`) or small droplets' Mie scattering
+/// (`material::mie::MieTable`).
+pub trait DropletPhase: Send + Sync {
+    fn eval(&self, cos_theta: f64) -> Color;
+}
+
+impl DropletPhase for RainbowTable {
+    fn eval(&self, cos_theta: f64) -> Color {
+        RainbowTable::eval(self, cos_theta)
+    }
+}
+
+impl DropletPhase for crate::material::mie::MieTable {
+    fn eval(&self, cos_theta: f64) -> Color {
+        crate::material::mie::MieTable::eval(self, cos_theta)
+    }
+}
+
 pub struct RainbowTable {
     /// Per bin, the phase function (per steradian) of the light refracted and reflected, for
     /// each channel.

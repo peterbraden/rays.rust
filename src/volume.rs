@@ -33,7 +33,7 @@ use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::material::phase::PhaseFunction;
 use crate::material::diffraction::DiffractionTable;
 use crate::material::ice_halos::{Crystals, HaloTable};
-use crate::material::rainbow::RainbowTable;
+use crate::material::rainbow::DropletPhase;
 use std::sync::OnceLock;
 use std::sync::Arc;
 use crate::material::texture::Solid;
@@ -651,9 +651,10 @@ pub struct VolumeMaterial {
     pub approximation: ScatteringApproximation,
     pub diffraction: Option<Diffraction>,
     pub halos: Option<Halos>,
-    /// Rainbows from raindrops (see `material::rainbow`): like halos, the traced drops' phase
-    /// function for direct sunlight at a path's first scattering.
-    pub rainbow: Option<Arc<RainbowTable>>,
+    /// Rainbows from raindrops (see `material::rainbow`), or small droplets' Mie scattering
+    /// (`material::mie`: the glory and cloudbow): like halos, the drops' phase function for
+    /// direct sunlight at a path's first scattering.
+    pub rainbow: Option<Arc<dyn DropletPhase>>,
     /// The volume's density field, for the particle size where it has one.
     pub field: Arc<dyn DensityField>,
     /// Light the medium emits (`emission`).
@@ -1280,7 +1281,7 @@ pub struct Scattering {
     pub approximation: ScatteringApproximation,
     pub diffraction: Option<Diffraction>,
     pub halos: Option<Halos>,
-    pub rainbow: Option<Arc<RainbowTable>>,
+    pub rainbow: Option<Arc<dyn DropletPhase>>,
     pub emission: Option<emission::VolumeEmission>,
     /// Absorption and scattering coefficients per unit density (RGB), for a chromatic medium;
     /// `albedo` should then be their ratio.

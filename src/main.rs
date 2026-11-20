@@ -62,6 +62,7 @@ mod material {
     pub mod diffraction;
     pub mod ice_halos;
     pub mod rainbow;
+    pub mod mie;
 }
 mod intersection;
 mod sceneobject;

@@ -19,8 +19,7 @@ use std::f64::consts::PI;
 /// Approximate Mie Scattering Function for Fog and Cloud Rendering", SIGGRAPH 2023 Talks, for
 /// a closer fit).
 pub fn henyey_greenstein(cos_theta: f64, g: f64) -> f64 {
-    let denom = 1. + g * g - 2. * g * cos_theta;
-    (1. - g * g) / (4. * PI * denom * denom.sqrt())
+    shared::phase::henyey_greenstein(cos_theta, g)
 }
 
 /// Sample a direction from the Henyey-Greenstein distribution around `incoming`, the unit
@@ -37,16 +36,8 @@ pub fn henyey_greenstein(cos_theta: f64, g: f64) -> f64 {
 /// (Pharr, Jakob and Humphreys, "Physically Based Rendering", 3rd ed., section 15.2.3, writes
 /// it for a direction pointing back along the incoming ray, so with the sign flipped.)
 pub fn sample_henyey_greenstein(incoming: &Vector3<f64>, g: f64, u1: f64, u2: f64) -> Vector3<f64> {
-    let cos_theta = if g.abs() < 1e-3 {
-        1. - 2. * u1
-    } else {
-        let s = (1. - g * g) / (1. - g + 2. * g * u1);
-        (1. + g * g - s * s) / (2. * g)
-    }.clamp(-1., 1.);
-    let sin_theta = (1. - cos_theta * cos_theta).max(0.).sqrt();
-    let phi = 2. * PI * u2;
-    let (t, b) = orthonormal_basis(incoming);
-    (t * (sin_theta * phi.cos()) + b * (sin_theta * phi.sin()) + incoming * cos_theta).normalize()
+    let d = shared::phase::sample_henyey_greenstein((incoming.x, incoming.y, incoming.z), g, u1, u2);
+    Vector3::new(d.0, d.1, d.2)
 }
 
 /// Draine's phase function, from B. T. Draine, "Scattering by Interstellar Dust Grains. I.
@@ -57,8 +48,7 @@ pub fn sample_henyey_greenstein(incoming: &Vector3<f64>, g: f64, u1: f64, u2: f6
 /// p(cos θ) = HG(cos θ, g) (1 + α cos² θ) / (1 + α (1 + 2g²) / 3)
 /// ```
 pub fn draine(cos_theta: f64, g: f64, alpha: f64) -> f64 {
-    henyey_greenstein(cos_theta, g) * (1. + alpha * cos_theta * cos_theta)
-        / (1. + alpha * (1. + 2. * g * g) / 3.)
+    shared::phase::draine(cos_theta, g, alpha)
 }
 
 /// How a medium scatters, as a function of the angle between the directions of travel before
@@ -97,8 +87,7 @@ impl PhaseFunction {
     pub fn eval(&self, cos_theta: f64) -> f64 {
         match *self {
             PhaseFunction::HenyeyGreenstein { g } => henyey_greenstein(cos_theta, g),
-            PhaseFunction::HgDraine { g_hg, g_d, alpha, w_d } =>
-                (1. - w_d) * henyey_greenstein(cos_theta, g_hg) + w_d * draine(cos_theta, g_d, alpha),
+            PhaseFunction::HgDraine { g_hg, g_d, alpha, w_d } => shared::phase::HgDraine { g_hg, g_d, alpha, w_d }.eval(cos_theta),
         }
     }
 
@@ -126,16 +115,8 @@ impl PhaseFunction {
         match *self {
             PhaseFunction::HenyeyGreenstein { g } => sample_henyey_greenstein(incoming, g, rand(), rand()),
             PhaseFunction::HgDraine { g_hg, g_d, alpha, w_d } => {
-                if rand() >= w_d {
-                    return sample_henyey_greenstein(incoming, g_hg, rand(), rand());
-                }
-                loop {
-                    let d = sample_henyey_greenstein(incoming, g_d, rand(), rand());
-                    let mu = d.dot(incoming);
-                    if rand() * (1. + alpha) < 1. + alpha * mu * mu {
-                        return d;
-                    }
-                }
+                let d = shared::phase::HgDraine { g_hg, g_d, alpha, w_d }.sample((incoming.x, incoming.y, incoming.z), &mut ThreadRandom);
+                Vector3::new(d.0, d.1, d.2)
             },
         }
     }
@@ -144,13 +125,18 @@ impl PhaseFunction {
 /// Two unit vectors perpendicular to the unit vector `n` and to each other, after Duff et al.,
 /// "Building an Orthonormal Basis, Revisited", Journal of Computer Graphics Techniques 6(1), 2017.
 pub(crate) fn orthonormal_basis(n: &Vector3<f64>) -> (Vector3<f64>, Vector3<f64>) {
-    let sign = 1f64.copysign(n.z);
-    let a = -1. / (sign + n.z);
-    let b = n.x * n.y * a;
-    (
-        Vector3::new(1. + sign * n.x * n.x * a, sign * b, -sign * n.x),
-        Vector3::new(b, sign + n.y * n.y * a, -n.y),
-    )
+    let (t, b) = shared::phase::orthonormal_basis((n.x, n.y, n.z));
+    (Vector3::new(t.0, t.1, t.2), Vector3::new(b.0, b.1, b.2))
+}
+
+/// This thread's random numbers (`geometry::rand`), as the shared functions draw them.
+struct ThreadRandom;
+
+impl shared::Random<f64> for ThreadRandom {
+    #[inline]
+    fn next(&mut self) -> f64 {
+        crate::geometry::rand()
+    }
 }
 
 #[cfg(test)]

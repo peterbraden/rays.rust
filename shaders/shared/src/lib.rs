@@ -22,6 +22,7 @@
 pub mod clouds;
 pub mod media;
 pub mod noise;
+pub mod phase;
 
 use core::ops::{Add, Div, Mul, Neg, Sub};
 
@@ -35,6 +36,14 @@ pub trait Real: Copy + PartialOrd + Add<Output = Self> + Sub<Output = Self> + Mu
     fn to_i32(self) -> i32;
     fn ln(self) -> Self;
     fn exp(self) -> Self;
+    fn sin(self) -> Self;
+    fn cos(self) -> Self;
+    fn pi() -> Self;
+    /// 1 with this number's sign (a negative zero's too, where the float tells them apart).
+    fn sign(self) -> Self;
+    /// The most tries a rejection sampler takes before it keeps what it has: without limit for
+    /// the renderer, as ever; a kernel's loops must end.
+    fn tries() -> u32;
     /// Further than anything: infinity where there is one (the GPU's shaders have no constant
     /// for it).
     fn far() -> Self;
@@ -104,6 +113,26 @@ impl Real for f32 {
         f32::exp(self)
     }
     #[inline]
+    fn sin(self) -> f32 {
+        #[cfg(target_arch = "spirv")]
+        return spirv_std::num_traits::Float::sin(self);
+        #[cfg(not(target_arch = "spirv"))]
+        f32::sin(self)
+    }
+    #[inline]
+    fn cos(self) -> f32 {
+        #[cfg(target_arch = "spirv")]
+        return spirv_std::num_traits::Float::cos(self);
+        #[cfg(not(target_arch = "spirv"))]
+        f32::cos(self)
+    }
+    #[inline]
+    fn pi() -> f32 { core::f32::consts::PI }
+    #[inline]
+    fn sign(self) -> f32 { if self < 0.0 { -1.0 } else { 1.0 } }
+    #[inline]
+    fn tries() -> u32 { 64 }
+    #[inline]
     fn far() -> f32 { 1e30 }
     #[inline]
     fn hair() -> f32 { 1e-6 }
@@ -133,6 +162,16 @@ impl Real for f64 {
     fn ln(self) -> f64 { f64::ln(self) }
     #[inline]
     fn exp(self) -> f64 { f64::exp(self) }
+    #[inline]
+    fn sin(self) -> f64 { f64::sin(self) }
+    #[inline]
+    fn cos(self) -> f64 { f64::cos(self) }
+    #[inline]
+    fn pi() -> f64 { core::f64::consts::PI }
+    #[inline]
+    fn sign(self) -> f64 { 1f64.copysign(self) }
+    #[inline]
+    fn tries() -> u32 { u32::MAX }
     #[inline]
     fn far() -> f64 { f64::INFINITY }
     #[inline]

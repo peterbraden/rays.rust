@@ -56,6 +56,14 @@ const KAPPA: f64 = RD / CP;
 /// beneath the inversion.
 const RAIN_THRESHOLD: f64 = 1e-3;
 const RAIN_RATE: f64 = 1e-3;
+/// Kessler's accretion: rain collects cloud water at k qc qr^0.875 (per second).
+const ACCRETION: f64 = 2.2;
+/// Graupel's fall speed, as a fraction of rain's at the same content: rimed ice is light and
+/// open, falling 2 to 3 m/s where rain falls 6 to 8.
+const GRAUPEL_FALL: f64 = 0.4;
+/// Rain's extinction per kg/kg, relative to cloud water's, in rendering: by 3 LWC / (2 ρ_w r)
+/// for an effective radius of 0.5 mm against cloud droplets' 10 µm.
+pub const RAIN_OPTICS: f64 = 0.02;
 /// Smagorinsky's constant, C_s.
 const SMAGORINSKY: f64 = 0.18;
 /// Height (m) over which the surface layer's turbulent mixing fades.
@@ -274,6 +282,14 @@ pub struct SimulationParams {
     /// mixture of water and ice, and condensing releases the latent heat of deposition in
     /// proportion. Deep convection needs it: freezing's extra heat drives the upper tower.
     pub ice: bool,
+    /// Rain as a field of its own (Kessler's warm-rain scheme as in Klemp and Wilhelmson, "The
+    /// simulation of three-dimensional convective storm dynamics", Journal of the Atmospheric
+    /// Sciences 35, 1978): cloud water turns to rain (autoconversion) and rain sweeps up cloud
+    /// (accretion); rain falls through the air at its terminal speed, weighing it down, and
+    /// evaporates where the air is unsaturated, cooling it, which drives the storm's downdraught
+    /// and the cold pool spreading from it. Below freezing it is graupel, falling slower and
+    /// sublimating. Without it, rain leaves as it forms.
+    pub rain: bool,
 }
 
 /// # A cloud to start from
@@ -320,6 +336,7 @@ impl Default for SimulationParams {
             hot_spot: None,
             bubble: None,
             ice: false,
+            rain: false,
         }
     }
 }
@@ -408,6 +425,9 @@ pub struct CloudSimulation {
     pub theta: Field,
     pub vapour: Field,
     pub cloud: Field,
+    /// Rain (or graupel, below freezing), kg/kg, at the cells' centres: zero without
+    /// `SimulationParams::rain`.
+    pub rain: Field,
     /// Texture coordinates carried with the flow, for detail finer than the grid that moves
     /// with the air (Kim, Thürey, James and Gross, "Wavelet Turbulence for Fluid Simulation",
     /// SIGGRAPH 2008, section 4): two sets, as displacements D = T - x from each cell's centre
@@ -443,6 +463,7 @@ impl CloudSimulation {
             theta: Field::new(nx, ny, nz, h, half),
             vapour: Field::new(nx, ny, nz, h, half),
             cloud: Field::new(nx, ny, nz, h, half),
+            rain: Field::new(nx, ny, nz, h, half),
             texture: (0..6).map(|_| Field::new(nx, ny, nz, h, half)).collect(),
             exner: pressure.iter().map(|p| exner_of(*p)).collect(),
             pressure,
@@ -731,6 +752,8 @@ impl CloudSimulation {
         let slab = nx * nz;
         let (exner, pressure) = (&self.exner, &self.pressure);
         let ice = self.params.ice;
+        // With rain of its own, `precipitate` converts it.
+        let keep = self.params.rain;
         self.theta.data.par_chunks_mut(slab)
             .zip(self.vapour.data.par_chunks_mut(slab))
             .zip(self.cloud.data.par_chunks_mut(slab))
@@ -741,11 +764,87 @@ impl CloudSimulation {
                     vapour[n] += dv;
                     cloud[n] += dc;
                     theta[n] += dth;
-                    if cloud[n] > RAIN_THRESHOLD {
+                    if !keep && cloud[n] > RAIN_THRESHOLD {
                         cloud[n] -= (cloud[n] - RAIN_THRESHOLD) * rain;
                     }
                 }
             });
+    }
+
+    /// Kessler's warm rain (`SimulationParams::rain`), per cell: autoconversion of cloud water
+    /// beyond `RAIN_THRESHOLD` and accretion of it by rain; rain's evaporation in unsaturated air
+    /// (Klemp and Wilhelmson 1978, eq. 2.14, ρ in kg/m³ and p in Pa),
+    ///
+    /// ```text
+    /// E = (1 - q_v/q_vs) C (ρ q_r)^0.525 / (ρ (5.4e5 + 2.55e8 / (p q_vs))),   C = 1.6 + 124.9 (ρ q_r)^0.2046,
+    /// ```
+    ///
+    /// its latent heat taken from θ (with that of fusion too, for graupel); then the fall, at
+    /// V = 36.34 (ρ q_r)^0.1364 √(ρ₀/ρ) m/s (a fraction of that for graupel), by upwind fluxes
+    /// between levels in as many substeps as keep each under a cell; what reaches the ground is
+    /// gone.
+    fn precipitate(&mut self, dt: f64) {
+        let (nx, ny, nz) = self.params.size;
+        let slab = nx * nz;
+        let h = self.params.cell;
+        let ice = self.params.ice;
+        let rho = |j: usize, theta: f64| self.pressure[j] / (RD * theta * self.exner[j]);
+        let rho0 = rho(0, self.params.sounding.theta.value(0.5 * h));
+        let (exner, pressure) = (&self.exner, &self.pressure);
+        // Conversions and evaporation.
+        self.theta.data.par_chunks_mut(slab)
+            .zip(self.vapour.data.par_chunks_mut(slab))
+            .zip(self.cloud.data.par_chunks_mut(slab))
+            .zip(self.rain.data.par_chunks_mut(slab))
+            .enumerate()
+            .for_each(|(j, (((theta, vapour), cloud), rain))| {
+                for n in 0..slab {
+                    let (qc, qr) = (cloud[n].max(0.), rain[n].max(0.));
+                    let auto = RAIN_RATE * (qc - RAIN_THRESHOLD).max(0.);
+                    let accrete = ACCRETION * qc * qr.powf(0.875);
+                    let gained = ((auto + accrete) * dt).min(qc);
+                    cloud[n] -= gained;
+                    let mut qr = qr + gained;
+                    let t = theta[n] * exner[j];
+                    let p = pressure[j];
+                    let qs = saturation_mixing_ratio(t, p);
+                    if qr > 0. && vapour[n] < qs {
+                        let r = p / (RD * t);
+                        let rq = r * qr;
+                        let c = 1.6 + 124.9 * rq.powf(0.2046);
+                        let e = (1. - vapour[n] / qs) * c * rq.powf(0.525) / (r * (5.4e5 + 2.55e8 / (p * qs)));
+                        let evaporated = (e * dt).min(qr).min(qs - vapour[n]);
+                        let f = if ice { ice_fraction(t) } else { 0. };
+                        qr -= evaporated;
+                        vapour[n] += evaporated;
+                        theta[n] -= (LV + f * LF) / (CP * exner[j]) * evaporated;
+                    }
+                    rain[n] = qr;
+                }
+            });
+        // The fall: speeds per cell, then flux-form upwind steps downwards.
+        let densities: Vec<f64> = (0..ny * slab).into_par_iter().map(|n| rho(n / slab, self.theta.data[n])).collect();
+        let speeds: Vec<f64> = (0..ny * slab).into_par_iter().map(|n| {
+            let r = densities[n];
+            let q = self.rain.data[n];
+            if q <= 0. { return 0.; }
+            let v = 36.34 * (r * q).powf(0.1364) * (rho0 / r).sqrt();
+            let f = if ice { ice_fraction(self.theta.data[n] * self.exner[n / slab]) } else { 0. };
+            v * (1. - f + f * GRAUPEL_FALL)
+        }).collect();
+        let fastest = speeds.iter().cloned().fold(0., f64::max);
+        let substeps = ((fastest * dt / (0.8 * h)).ceil() as usize).max(1);
+        let tau = dt / substeps as f64;
+        let rain = &mut self.rain.data;
+        for _ in 0..substeps {
+            // Mass flux (kg/m²/s) out of the bottom of each cell, into the one below.
+            let flux: Vec<f64> = (0..ny * slab).map(|n| densities[n] * rain[n] * speeds[n]).collect();
+            for n in 0..ny * slab {
+                let j = n / slab;
+                let from_above = if j + 1 < ny { flux[n + slab] } else { 0. };
+                rain[n] = (rain[n] + tau * (from_above - flux[n]) / (densities[n] * h)).max(0.);
+            }
+        }
     }
 
     /// Buoyancy, vorticity confinement, and the sponge at the top.
@@ -756,10 +855,13 @@ impl CloudSimulation {
         // Buoyancy at the cells' centres, against each level's mean (a horizontally uniform
         // part would only be balanced by pressure).
         let (theta_mean, vapour_mean, cloud_mean) = (self.level_means(&self.theta), self.level_means(&self.vapour), self.level_means(&self.cloud));
+        // Rain's weight drags the air down with the cloud water's.
+        let rain_mean = if self.params.rain { self.level_means(&self.rain) } else { vec![0.; ny] };
         let buoyancy: Vec<f64> = (0..nx * ny * nz).into_par_iter().map(|n| {
             let j = n / slab;
             GRAVITY * ((self.theta.data[n] - theta_mean[j]) / theta_mean[j]
-                + 0.608 * (self.vapour.data[n] - vapour_mean[j]) - (self.cloud.data[n] - cloud_mean[j]))
+                + 0.608 * (self.vapour.data[n] - vapour_mean[j]) - (self.cloud.data[n] - cloud_mean[j])
+                - (self.rain.data[n] - rain_mean[j]))
         }).collect();
         // Vorticity confinement: a force pushing along N x ω, N the direction in which the
         // vorticity's magnitude grows.
@@ -919,6 +1021,10 @@ impl CloudSimulation {
         let theta = self.advect(&self.theta, dt, false);
         let vapour = self.advect(&self.vapour, dt, false);
         let cloud = self.advect(&self.cloud, dt, false);
+        if self.params.rain {
+            self.rain = self.advect(&self.rain, dt, false);
+            self.rain.data.iter_mut().for_each(|q| *q = q.max(0.));
+        }
         let texture = self.advect_texture(dt);
         (self.u, self.v, self.w, self.theta, self.vapour, self.cloud) = (u, v, w, theta, vapour, cloud);
         self.texture = texture;
@@ -927,6 +1033,9 @@ impl CloudSimulation {
         self.surface_mixing(dt);
         self.large_scale(dt);
         self.condense(dt);
+        if self.params.rain {
+            self.precipitate(dt);
+        }
         self.forces(dt);
         self.project();
         self.time += dt;
@@ -1018,7 +1127,8 @@ impl CloudSimulation {
         let mut bytes = Vec::with_capacity(8 * (2 + 6 * self.theta.data.len() + self.v.data.len()));
         bytes.extend_from_slice(&self.time.to_le_bytes());
         bytes.extend_from_slice(&self.steps.to_le_bytes());
-        for f in [&self.u, &self.v, &self.w, &self.theta, &self.vapour, &self.cloud].into_iter().chain(self.texture.iter()) {
+        let rain = if self.params.rain { Some(&self.rain) } else { None };
+        for f in [&self.u, &self.v, &self.w, &self.theta, &self.vapour, &self.cloud].into_iter().chain(self.texture.iter()).chain(rain) {
             for x in &f.data {
                 bytes.extend_from_slice(&x.to_le_bytes());
             }
@@ -1032,14 +1142,16 @@ impl CloudSimulation {
     pub fn load(params: SimulationParams, path: &std::path::Path) -> std::io::Result<CloudSimulation> {
         let mut sim = CloudSimulation::new(params);
         let bytes = std::fs::read(path)?;
-        let expected = 8 * (2 + sim.u.data.len() + sim.v.data.len() + sim.w.data.len() + 9 * sim.theta.data.len());
+        let fields = if sim.params.rain { 10 } else { 9 };
+        let expected = 8 * (2 + sim.u.data.len() + sim.v.data.len() + sim.w.data.len() + fields * sim.theta.data.len());
         if bytes.len() != expected {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong size"));
         }
         let mut words = bytes.chunks_exact(8).map(|c| <[u8; 8]>::try_from(c).unwrap());
         sim.time = f64::from_le_bytes(words.next().unwrap());
         sim.steps = u64::from_le_bytes(words.next().unwrap());
-        for f in [&mut sim.u, &mut sim.v, &mut sim.w, &mut sim.theta, &mut sim.vapour, &mut sim.cloud].into_iter().chain(sim.texture.iter_mut()) {
+        let rain = if sim.params.rain { Some(&mut sim.rain) } else { None };
+        for f in [&mut sim.u, &mut sim.v, &mut sim.w, &mut sim.theta, &mut sim.vapour, &mut sim.cloud].into_iter().chain(sim.texture.iter_mut()).chain(rain) {
             for x in f.data.iter_mut() {
                 *x = f64::from_le_bytes(words.next().unwrap());
             }
@@ -1208,7 +1320,9 @@ impl HarrisCumulus {
     pub fn with_turbulence(sim: &CloudSimulation, droplet_radius: f64, center: Vector2<f64>, strength: f64, octaves: usize) -> HarrisCumulus {
         let (nx, ny, nz) = sim.params.size;
         let h = sim.params.cell;
-        let cloud: Vec<f32> = sim.cloud.data.iter().map(|q| q.max(0.) as f32).collect();
+        // Rain, faint beside cloud for its large drops: shafts below the base.
+        let cloud: Vec<f32> = sim.cloud.data.iter().zip(&sim.rain.data)
+            .map(|(q, r)| (q.max(0.) + RAIN_OPTICS * r.max(0.)) as f32).collect();
         // The sub-grid turbulence's kinetic energy, k = (ν / (C_k Δ))² (Deardorff), from the
         // simulation's own eddy viscosity; as a strength, its velocity over that plus 0.5 m/s.
         let eddies: Vec<f32> = sim.eddy_viscosity().iter().map(|nu| {
@@ -1597,6 +1711,84 @@ mod tests {
         assert!(early > 800., "no cloud from the bubble: top {}", early);
         sim.advance_to(300., |_| {});
         assert!(top(&sim) > early + 200., "the cloud didn't rise: {} -> {}", early, top(&sim));
+    }
+
+    /// A still column of horizontally uniform air with rain in it, for the rain alone.
+    fn rainy(water: f64) -> CloudSimulation {
+        let mut p = small((4, 30, 4), 100.);
+        p.forcing = Forcing::steady(0., 0.);
+        p.rain = true;
+        p.sounding = Sounding { theta: Profile::constant(300.), water: Profile::constant(water), surface_pressure: 1e5 };
+        let mut sim = CloudSimulation::new(p);
+        for n in 0..sim.rain.data.len() {
+            let j = sim.rain.ijk(n).1;
+            sim.vapour.data[n] = water;
+            sim.theta.data[n] = 300.;
+            if (20..24).contains(&j) {
+                sim.rain.data[n] = 2e-3;
+            }
+        }
+        sim
+    }
+
+    #[test]
+    fn test_rain_falls_and_cools_the_air_it_evaporates_in() {
+        let mut sim = rainy(2e-3);
+        let slab = 16;
+        let column = |s: &CloudSimulation| (0..30).map(|j| s.rain.data[j * slab]).collect::<Vec<f64>>();
+        let centre = |c: &[f64]| c.iter().enumerate().map(|(j, q)| j as f64 * q).sum::<f64>() / c.iter().sum::<f64>();
+        let (start, water0) = (centre(&column(&sim)), sim.rain.data[20 * slab]);
+        let energy = |s: &CloudSimulation| (0..30).map(|j| {
+            let n = j * slab;
+            CP * s.theta.data[n] * s.exner[j] + LV * s.vapour.data[n]
+        }).collect::<Vec<f64>>();
+        let e0 = energy(&sim);
+        for _ in 0..30 {
+            sim.precipitate(10.);
+        }
+        // Fallen several hundred metres in five minutes (at several m/s).
+        let c = column(&sim);
+        assert!(centre(&c) < start - 5., "{} -> {}", start, centre(&c));
+        // Some evaporated into the dry air, cooling it, with the latent heat conserved.
+        let below = 12 * slab;
+        assert!(sim.vapour.data[below] > 2e-3 + 1e-6, "{}", sim.vapour.data[below]);
+        assert!(sim.theta.data[below] < 300. - 0.01, "{}", sim.theta.data[below]);
+        for (a, b) in e0.iter().zip(energy(&sim)) {
+            assert!((a - b).abs() < 1e-6 * a, "{} vs {}", a, b);
+        }
+        assert!(water0 > 0.);
+        assert!(sim.rain.data.iter().all(|q| *q >= 0.));
+    }
+
+    #[test]
+    fn test_cloud_water_turns_to_rain() {
+        let mut sim = rainy(0.);
+        // Saturated air (no evaporation), with cloud beyond the threshold and no rain yet.
+        for n in 0..sim.rain.data.len() {
+            let j = sim.rain.ijk(n).1;
+            sim.rain.data[n] = 0.;
+            sim.vapour.data[n] = saturation_mixing_ratio(300. * sim.exner[j], sim.pressure[j]);
+            sim.cloud.data[n] = if j == 20 { 3e-3 } else { 0. };
+        }
+        let n = 20 * 16;
+        sim.precipitate(1.);
+        let first = sim.rain.data[n] + sim.rain.data[n - 16];
+        assert!(first > 1e-7, "{}", first);
+        // Once there is rain it sweeps up cloud faster than autoconversion alone.
+        let before = sim.cloud.data[n];
+        sim.precipitate(10.);
+        let swept = before - sim.cloud.data[n];
+        assert!(swept > 10. * RAIN_RATE * (before - RAIN_THRESHOLD), "{}", swept);
+    }
+
+    #[test]
+    fn test_rain_survives_saving() {
+        let sim = rainy(2e-3);
+        let path = std::env::temp_dir().join(format!("rays-rain-{}.state", std::process::id()));
+        sim.save(&path).unwrap();
+        let back = CloudSimulation::load(sim.params.clone(), &path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(back.rain.data, sim.rain.data);
     }
 
     #[test]

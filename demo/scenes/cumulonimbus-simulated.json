@@ -56,6 +56,7 @@
       "type": "harris_cumulus",
       "sounding": "weisman_klemp",
       "ice": true,
+      "rain": true,
       "grid": [
         64,
         34,

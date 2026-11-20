@@ -84,11 +84,13 @@ glitter path running in to the camera.
 | | [Cumulus, simulated](#cumulus-simulated) | `harris-cumulus.json` |
 | | [Cumulonimbus](#cumulonimbus) | `cumulonimbus.json` |
 | | [Cumulonimbus, simulated](#cumulonimbus-simulated) | `cumulonimbus-simulated.json` |
+| | [Shelf cloud (arcus)](#shelf-cloud-arcus) | `gust-front.json` |
 | Phenomena | [Sunset](#sunset) | `sunset.json` |
 | | [Crepuscular rays](#crepuscular-rays) | `crepuscular-rays.json` |
 | | [Rain and rainbows](#rain-and-rainbows) | `rain.json` |
 | | [Snow showers](#snow-showers) | `snow-showers.json` |
 | | [Fogbow](#fogbow) | `fogbow.json` |
+| | [Glory](#glory) | `glory.json` |
 | | [Mammatus](#mammatus) | `mammatus.json` |
 | | [Lightning](#lightning) | `lightning.json` |
 | | [Lightning under the anvil](#lightning-under-the-anvil) | `lightning-anvil.json` |
@@ -109,6 +111,11 @@ cirrus clouds" (QJRMS 2005). Ice crystals form in generating cells near the top 
 anisotropic random field with a k^-5/3 spectrum. They then fall through wind that strengthens and
 veers with depth, so each cell trails a curved fallstreak. Fibres, a large-scale flow that bends
 the streaks, and varied fall speeds make them wispy. `time` animates the layer.
+
+`"species"` changes how the cells are laid out and how their ice falls: `"uncinus"` (the
+default, hooked), `"fibratus"` (long filaments with no hooks or tufts, as the wind barely turns
+with height), `"floccus"` (small rounded tufts whose short trails soon sublimate) and
+`"spissatus"` (dense, filled patches, grey towards the sun).
 
 ### Cirrocumulus
 
@@ -390,8 +397,28 @@ sideways under the stable stratosphere: the anvil, flat-topped. Above freezing i
 water, below it a mixture of water and ice (`"ice": true`), whose latent heat of freezing
 drives the upper tower half a kilometre higher. The grid is 32 km across and 17 km deep, in
 500 m cells, so detail below that is added (`turbulence`); the simulation takes about ten
-minutes, and is cached. The rain is Kessler's simplest scheme, which drains cloud water beyond
-a gram per kilogram at once, so the core is thinner than a real storm's.
+minutes, and is cached. With `"rain": true` rain is a field of its own (Kessler's warm-rain
+scheme as Klemp and Wilhelmson wrote it, 1978): cloud water turns to rain, and rain sweeps up
+more cloud as it falls at its terminal speed, a few metres a second; its weight drags the air
+down, and where it falls into dry air below the base it evaporates and cools it, which drives
+the storm's downdraught. Below freezing it is graupel, falling slower. Rain is drawn faintly, as
+shafts, since its drops are fifty times larger than the cloud's for the same water.
+
+### Shelf cloud (arcus)
+
+![Shelf cloud](./scenes/gust-front.png)
+
+`gust-front.json`: `{"type": "shelf_cloud", "low": 550, "base": 1500, "top": 7000, "depth": 8000, "tier_spacing": 250}` before a cumulonimbus
+
+A thunderstorm's downdraught spreads over the ground as a pool of rain-cooled air, and its
+leading edge, the gust front, shoves the warm, damp air ahead up past its condensation level.
+The cloud it makes is attached to the storm's base: a wedge whose lowest edge leads, its face
+leaning up and back to the storm, smooth where the air is lifted steadily and stepped in tiers
+where it rises in layers, its underside rising behind the edge, ragged with scud where the
+outflow churns it (`procedural::arcus`). `"roll_cloud"` is the other form, volutus: a long
+horizontal tube detached from the storm, ahead of the front or after it weakens, turning about
+its axis on the shear between the outflow and the air above, smooth and streaked along its
+length.
 
 ## Phenomena
 
@@ -483,6 +510,21 @@ for fog droplets it is several degrees wide, so each colour's bow overlaps the o
 white, and moves inwards. For drizzle, a fifth of a millimetre, the same theory gives the
 supernumerary bows: pale pink and green fringes just inside the primary. `"rainbow": true`
 keeps the geometric rays alone.
+
+### Glory
+
+![Glory](./scenes/glory.png)
+
+`glory.json`: above a stratus deck, the sun behind, `"mie": {"radius": 6, "variance": 0.04}`
+
+Coloured rings round the antisolar point on cloud below, seen round an aircraft's shadow or a
+climber's (the Brocken spectre), and the white cloudbow 38° out from it. Geometric optics has
+no glory: no ray through a drop comes straight back. It comes from light tunnelling along the
+drop's surface and leaving from its far side, which only the full Mie solution of Maxwell's
+equations for a sphere has (`material::mie`, Bohren and Huffman's series). The table averages
+it over a gamma distribution of droplet sizes and three wavelengths per colour channel, and is
+used for direct sunlight at a path's first scattering, as the rainbow's is. Smaller droplets
+give wider rings; a spread of sizes washes out all but the first few.
 
 ### Mammatus
 
@@ -642,10 +684,11 @@ is still noisy: from orbit, cloud detail is much smaller than a pixel.
 - **Lightning's physics**: the leader's field is from point charges and their images, not
   solved around the conducting channel; the channel's light in time is a sequence of strokes
   without its cooling between them.
-- **A simulated storm's microphysics**: rain in the simulation is Kessler's simplest scheme,
-  and ice is a mixed phase decided by temperature alone; a storm with graupel and hail, and
-  rain that falls through the cloud rather than leaving it at once, needs a fuller scheme.
-- **Other species**: fibratus, floccus, volutus (roll clouds), arcus (shelf clouds) and the
-  rest each need their own mechanism.
-- **Small droplets' optics**: below about 10 µm, Airy's theory of the bow fails and Mie theory is
-  needed; the glory, round the camera's shadow on cloud, needs it too.
+- **A simulated storm's microphysics**: rain is a single moment (its mass, not its drops'
+  sizes); graupel is rain below freezing rather than grown by riming, there is no hail, and
+  melting's latent heat is left out.
+- **Other features**: tuba (funnel clouds), murus (wall clouds), pileus and velum (caps over
+  rising towers), fluctus (Kelvin-Helmholtz waves), asperitas and cavum (fallstreak holes)
+  each need their own mechanism.
+- **The glory's shadow**: Mie scattering is used for direct sunlight at a path's first
+  scattering only; nothing casts the observer's shadow at its centre.

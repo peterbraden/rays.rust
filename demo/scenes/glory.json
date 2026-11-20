@@ -1,0 +1,20 @@
+{
+  "width": 960,
+  "height": 600,
+  "supersamples": 64,
+  "chunk_size": 64,
+  "samples_per_chunk": 8,
+  "shadow_bias": 0.01,
+  "max_depth": 32,
+  "path_termination": "russian_roulette",
+  "output": {"tonemap": "reinhard", "exposure": 0.9},
+  "camera": {"location": [0, 2000, 0], "lookat": [0, 1400, 800], "up": [0, 1, 0], "angle": 1.4},
+  "sun": {"intensity": 4.9},
+  "objects": [
+    {"type": "ocean", "wind": [6, 2], "detail_center": [0, 0]},
+    {"type": "skysphere", "sun_direction": [0, 0.6, -0.8]},
+    {"type": "nubis_clouds", "base": 900, "top": 1300, "extent": 60000, "coverage": 1.0, "cloud_type": 0.0,
+     "density": 0.04, "seed": 4, "albedo": [0.99, 0.99, 0.99], "similarity_after": 4,
+     "mie": {"radius": 6, "variance": 0.04}}
+  ]
+}

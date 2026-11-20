@@ -128,12 +128,15 @@ pub fn weather_params(o: &Value) -> (WeatherParams, Option<Ground>) {
     let l = &o["landscape"];
     if l.is_object() {
         let tp = crate::terrain::object::terrain_params(l);
-        let planet = Arc::new(crate::terrain::planet::Planet::new(tp.planet.clone()));
-        let climate = tp.climate.as_ref().map(|c| crate::terrain::climate::climate(c, &planet));
+        // From the landscape's world, where it keeps one, so its plates aren't simulated here
+        // only to be read from there a moment later.
+        let crate::world::Survey { planet, climate, site } = crate::world::survey(&tp, &crate::terrain::object::site_of(&l["domain"]),
+            crate::terrain::object::world_directory(l), &mut |e| { if e.stage != "site" { crate::world::report(e); } true }).unwrap_or_else(|e| panic!("{}", e));
+        let planet = Arc::new(planet);
         if let Some(c) = &tp.climate {
             p.climate = c.clone();
         }
-        p.site = crate::terrain::object::site(&l["domain"], &tp);
+        p.site = site;
         p.radius = tp.planet.radius;
         ground = Some(Ground { planet, climate });
     } else {

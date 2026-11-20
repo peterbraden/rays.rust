@@ -19,7 +19,7 @@
     ],
     "lookat": [
       0,
-      900,
+      500,
       6000
     ],
     "up": [
@@ -58,8 +58,8 @@
       "base": 1200,
       "top": 3500,
       "extent": 60000,
-      "coverage": 0.75,
-      "cloud_type": 0.8,
+      "coverage": 0.55,
+      "cloud_type": 0.9,
       "density": 0.04,
       "albedo": [
         0.99,
@@ -73,8 +73,8 @@
       "type": "precipitation",
       "kind": "snow",
       "base": 1300,
-      "rain_rate": 1.2,
-      "coverage": 0.55,
+      "rain_rate": 2.5,
+      "coverage": 0.4,
       "cell_size": 3000,
       "wind_direction": [
         1,
@@ -85,9 +85,9 @@
       "seed": 6,
       "center": [
         0,
-        6000
+        9000
       ],
-      "radius": 20000,
+      "radius": 6000,
       "albedo": [
         0.995,
         0.995,

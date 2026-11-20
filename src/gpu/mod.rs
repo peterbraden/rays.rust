@@ -170,6 +170,9 @@ fn media_records(tables: &mut Vec<f32>, media: &[crate::volume::FlatMedium]) -> 
         tables.extend([density, radius, m.scale as f32, m.lower as f32]);
         tables.extend(phase);
         tables.extend([m.albedo.rgb.x as f32, m.albedo.rgb.y as f32, m.albedo.rgb.z as f32, m.peak as f32]);
+        // (Never, without the similarity relations: a path counts 255 scatterings at most.)
+        let (from, scale) = m.reduced.map_or((1e9, 1.), |(n, scale)| (n as f32, scale as f32));
+        tables.extend([scale, from, m.mean_cosine.0 as f32, m.mean_cosine.1 as f32]);
     }
     first
 }
@@ -2228,11 +2231,18 @@ mod tests {
     }
 
     /// Participating media in the kernels (`pathtrace::media_collision`, the medium's vertex
-    /// in `shade`, `media_transmittance`): the picture is the path tracer's, tile by tile.
+    /// in `shade`, `media_transmittance`): the picture is the path tracer's, tile by tile,
+    /// with delta-M truncation and with the similarity relations too.
     #[test]
     fn test_media_are_the_path_tracers() {
+        for density in [r#""density": 1.5"#, r#""density": 6, "similarity_after": 2"#] {
+            media_agree(density);
+        }
+    }
+
+    fn media_agree(density: &str) {
         use crate::wavefront::integrator::tests::{path_image, tiles};
-        let mut s = foggy_scene(r#""density": 1.5"#);
+        let mut s = foggy_scene(density);
         s.render.supersamples = 512;
         let flat = FlatScene::build(&s).unwrap();
         assert_eq!(flat.media.len(), 1);
@@ -2254,8 +2264,50 @@ mod tests {
         let (a, b) = (tiles(&on_gpu, w, h, 3, 2), tiles(&cpu, w, h, 3, 2));
         for t in 0..6 {
             for ch in 0..3 {
-                assert!((a[t][ch] - b[t][ch]).abs() < 0.04 * b[t][ch] + 1e-3, "tile {} channel {}: GPU {} vs CPU {}", t, ch, a[t][ch], b[t][ch]);
+                assert!((a[t][ch] - b[t][ch]).abs() < 0.04 * b[t][ch] + 1e-3, "{}: tile {} channel {}: GPU {} vs CPU {}", density, t, ch, a[t][ch], b[t][ch]);
             }
+        }
+    }
+
+    /// A cloud scene on the device against the path tracer, in bands of rows from the bottom
+    /// of the picture, in linear light: `RAYS_SCENE` the scene file (a Nubis layer over the
+    /// sea by default), `RAYS_EDIT` a JSON object of fields to set first, an object's as
+    /// `"2.similarity_after"`. How the clouds' port was checked, and how the path tracer's sun
+    /// probes were found to be dark where the similarity relations begin. (The band at the
+    /// horizon differs by some 5% without any cloud: the sea's, still to be found.)
+    #[test]
+    #[ignore]
+    fn measure_clouds() {
+        use crate::wavefront::integrator::tests::path_image;
+        let file = std::env::var("RAYS_SCENE").unwrap_or("demo/scenes/nubis-clouds.json".into());
+        let mut v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        v["width"] = 32.into();
+        v["height"] = 18.into();
+        if let Ok(edit) = std::env::var("RAYS_EDIT") {
+            let e: serde_json::Value = serde_json::from_str(&edit).unwrap();
+            for (k, x) in e.as_object().unwrap() {
+                if let Some((o, f)) = k.split_once('.') {
+                    v["objects"][o.parse::<usize>().unwrap()][f] = x.clone();
+                } else {
+                    v[k] = x.clone();
+                }
+            }
+        }
+        let n = 512;
+        let mut s = SceneFile::from_string(v.to_string());
+        s.render.supersamples = n;
+        let flat = FlatScene::build(&s).unwrap();
+        let mut gpu = GpuRenderer::new(&s, &flat).unwrap();
+        let (w, h) = (s.image.width, s.image.height);
+        let rc = Mutex::new(RenderContext::new(w, h, false, "test.png"));
+        gpu.render(&s, &flat, &rc, |_| ());
+        let rc = rc.into_inner().unwrap();
+        let img = path_image(&s, n);
+        for band in 0..6 {
+            let rows = band * 3..band * 3 + 3;
+            let g: f64 = rows.clone().flat_map(|y| (0..w).map(move |x| (x, y))).map(|(x, y)| rc.get_pixel(x, y).rgb.mean()).sum();
+            let c: f64 = rows.flat_map(|y| (0..w).map(move |x| (x, y))).map(|(x, y)| img[y * w + x].rgb.mean()).sum();
+            eprintln!("rows from {}: GPU {:.4} CPU {:.4} ratio {:.4}", band * 3, g / (3 * w) as f64, c / (3 * w) as f64, g / c);
         }
     }
 

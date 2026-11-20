@@ -2173,6 +2173,11 @@ pub const PATH_LIGHTS_COUNTED: u32 = 32;
 /// (0 before it has scattered in any), which sets how its segments cross every medium
 /// (`segment_scale`).
 pub const PATH_MEDIUM_SHIFT: u32 = 8;
+/// And eight more: how many times it has scattered in media, as the renderer counts them (a
+/// first scattering reached off a surface counts two), up to 255.
+pub const PATH_SCATTERINGS_SHIFT: u32 = 16;
+/// Both.
+pub const PATH_MEDIA: u32 = 0xffff << PATH_MEDIUM_SHIFT;
 /// `PathState::state.z` of a path whose ray collides in a medium before it hits anything: this
 /// plus the medium's number (and `hit.x` how far along).
 pub const MEDIUM_HIT: u32 = 0xffff_ff00;
@@ -2368,13 +2373,26 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
     // In a medium: all its scattering if the camera sees this vertex directly (through
     // mirrors and glass too), and without its forward peak once the path has scattered in a
     // medium or left a surface (delta-M truncation), its albedo that of what is left.
-    let truncated = in_medium && flags_p & (PATH_SCATTERED | (0xff << PATH_MEDIUM_SHIFT)) != 0;
-    let peak = if truncated { at(s.tables, medium + MEDIUM_PEAK) } else { 0.0 };
+    // And from as many scatterings as the similarity relations begin at, isotropically, with
+    // the albedo they give (`peak` 1 then: none of the phase function's shape is left).
+    let mut scatterings = (flags_p >> PATH_SCATTERINGS_SHIFT) & 0xff;
+    let mut peak = 0.0;
     let mut medium_albedo = Vec3::ZERO;
     if in_medium {
+        if scatterings == 0 && flags_p & PATH_SCATTERED != 0 && at(s.tables, medium + MEDIUM_SCALE) != 1.0 {
+            scatterings = 1;
+        }
+        if scatterings >= 1 {
+            peak = at(s.tables, medium + MEDIUM_PEAK);
+        }
         let a = medium + MEDIUM_ALBEDO;
         let whole = Vec3::new(at(s.tables, a), at(s.tables, a + 1), at(s.tables, a + 2));
         medium_albedo = whole * (1.0 - peak) / (Vec3::ONE - whole * peak);
+        if scatterings as f32 >= at(s.tables, medium + MEDIUM_REDUCED_FROM) {
+            let g = at(s.tables, medium + MEDIUM_MEAN_COSINE + scatterings.min(1));
+            medium_albedo = medium_albedo * (1.0 - g) / (Vec3::ONE - medium_albedo * g);
+            peak = 1.0;
+        }
     }
     let floor_alpha = if flags_p & PATH_SCATTERED != 0 { s.params.misc.x } else { 0.0 };
 
@@ -2455,7 +2473,7 @@ pub fn shade(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
     let mut flags_p = (flags_p | PATH_SCATTERED) & !(PATH_SPECULAR | PATH_LIGHTS_COUNTED);
     if in_medium {
         // Light leaving this vertex, towards the lights and onwards, has scattered here.
-        flags_p = (flags_p & !(0xff << PATH_MEDIUM_SHIFT)) | (((hit.prim & 0xff) + 1) << PATH_MEDIUM_SHIFT);
+        flags_p = (flags_p & !PATH_MEDIA) | (((hit.prim & 0xff) + 1) << PATH_MEDIUM_SHIFT) | ((scatterings + 1).min(255) << PATH_SCATTERINGS_SHIFT);
     }
     // A medium's lights, like the sea's, are counted by sampling them alone, and the sun as a
     // point; the sky is found by the path's next ray.
@@ -2787,9 +2805,12 @@ pub fn probe_clouds(
 /// that last scattered here, and on its own for one that has left a surface (delta-M
 /// truncation: the renderer's `Volume::truncated`); a lower bound on its extinction; its phase
 /// function (`PHASE_*`: Henyey-Greenstein's g, or the droplets' blend's g, Draine's g and α,
-/// and Draine's share); its albedo; and the fraction of its scattering in the forward peak that
-/// truncation takes as none.
-pub const MEDIUM_SIZE: u32 = 20;
+/// and Draine's share); its albedo; the fraction of its scattering in the forward peak that
+/// truncation takes as none; and for the similarity relations (the renderer's
+/// `ScatteringApproximation::similarity_after`), that factor on densities once a path has
+/// scattered as often as they begin at, that number, and the mean cosine of its scattering
+/// whole and truncated.
+pub const MEDIUM_SIZE: u32 = 24;
 pub const MEDIUM_BOX: u32 = 1;
 pub const MEDIUM_DENSITY: u32 = 7;
 pub const MEDIUM_RADIUS: u32 = 8;
@@ -2798,6 +2819,9 @@ pub const MEDIUM_LOWER: u32 = 10;
 pub const MEDIUM_PHASE: u32 = 11;
 pub const MEDIUM_ALBEDO: u32 = 16;
 pub const MEDIUM_PEAK: u32 = 19;
+pub const MEDIUM_REDUCED_SCALE: u32 = 20;
+pub const MEDIUM_REDUCED_FROM: u32 = 21;
+pub const MEDIUM_MEAN_COSINE: u32 = 22;
 pub const MEDIUM_CONSTANT: u32 = 0;
 pub const MEDIUM_NUBIS: u32 = 1;
 pub const PHASE_HENYEY_GREENSTEIN: u32 = 0;
@@ -2869,7 +2893,9 @@ fn medium_span(tables: &[f32], base: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f
 fn segment_scale(s: &Scene, flags: u32, left: bool, base: u32) -> f32 {
     let last = (flags >> PATH_MEDIUM_SHIFT) & 0xff;
     if last > 0 {
-        at(s.tables, s.params.media.x + (last - 1) * MEDIUM_SIZE + MEDIUM_SCALE)
+        let it = s.params.media.x + (last - 1) * MEDIUM_SIZE;
+        let reduced = ((flags >> PATH_SCATTERINGS_SHIFT) & 0xff) as f32 >= at(s.tables, it + MEDIUM_REDUCED_FROM);
+        at(s.tables, it + if reduced { MEDIUM_REDUCED_SCALE } else { MEDIUM_SCALE })
     } else if left {
         at(s.tables, base + MEDIUM_SCALE)
     } else {
@@ -2927,10 +2953,13 @@ pub fn media_transmittance(s: &Scene, ro: Vec3, rd: Vec3, tmax: f32, flags: u32,
 }
 
 /// The phase function of the medium at `base` for the cosine of the angle scattered through,
-/// without a fraction `peak` of its scattering (delta-M truncation; 0 for all of it).
+/// without a fraction `peak` of its scattering (delta-M truncation; 0 for all of it; 1 for
+/// none of its shape: isotropic, as the similarity relations have it).
 fn medium_phase(tables: &[f32], base: u32, peak: f32, cos: f32) -> f32 {
     let p = base + MEDIUM_PHASE;
-    if at(tables, p) as u32 == PHASE_DROPLETS {
+    if peak >= 1.0 {
+        shared::phase::henyey_greenstein(cos, 0.0)
+    } else if at(tables, p) as u32 == PHASE_DROPLETS {
         shared::phase::HgDraine { g_hg: at(tables, p + 1), g_d: at(tables, p + 2), alpha: at(tables, p + 3), w_d: at(tables, p + 4) }.eval(cos)
     } else {
         shared::phase::henyey_greenstein(cos, shared::phase::without_peak(at(tables, p + 1), peak))
@@ -2941,7 +2970,10 @@ fn medium_phase(tables: &[f32], base: u32, peak: f32, cos: f32) -> f32 {
 fn medium_scatter(tables: &[f32], base: u32, peak: f32, incoming: Vec3, rng: &mut u32) -> Vec3 {
     let p = base + MEDIUM_PHASE;
     let v = (incoming.x, incoming.y, incoming.z);
-    let d = if at(tables, p) as u32 == PHASE_DROPLETS {
+    let d = if peak >= 1.0 {
+        let (u1, u2) = (rand(rng), rand(rng));
+        shared::phase::sample_henyey_greenstein(v, 0.0, u1, u2)
+    } else if at(tables, p) as u32 == PHASE_DROPLETS {
         let mut random = Hashed(*rng);
         let d = shared::phase::HgDraine { g_hg: at(tables, p + 1), g_d: at(tables, p + 2), alpha: at(tables, p + 3), w_d: at(tables, p + 4) }.sample(v, &mut random);
         *rng = random.0;

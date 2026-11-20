@@ -592,10 +592,11 @@ mod tests {
             "materials": { "N": { "type": "noise" }, "L": { "type": "lambertian", "albedo": [0.5, 0.5, 0.5] } },
             "objects": [ { "type": "torus", "center": [0, 0, 0], "major": 1, "minor": 0.2, "material": "L" },
                          { "type": "sphere", "location": [0, 0, 0], "radius": 1, "material": "L" },
-                         { "type": "volume", "min": [-1, -1, -1], "max": [1, 1, 1] } ]
+                         { "type": "volume", "min": [-1, -1, -1], "max": [1, 1, 1], "noise": { "scale": 1 } } ]
         }"#.to_string());
         let e = FlatScene::build(&s).err().unwrap();
-        // The torus is kept, for its own code to intersect; the medium is what is in the way.
+        // The torus is kept, for its own code to intersect; the medium is what is in the way:
+        // one of noise, which no kernel has the code for (a constant one is carried as data).
         assert!(e.contains("participating media") && e.contains("objects[2]") && !e.contains("objects[0]"), "{}", e);
         let ok = SceneFile::from_string(r#"{
             "camera": { "location": [0, 1, -3], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 },
@@ -606,5 +607,6 @@ mod tests {
         }"#.to_string());
         let f = FlatScene::build(&ok).unwrap();
         assert_eq!((f.prims.len(), f.planes.len(), f.emitters.len()), (13, 1, 1));
+        assert!(f.media.is_empty() && f.needs_kernels().is_none());
     }
 }

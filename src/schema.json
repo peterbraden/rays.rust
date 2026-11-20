@@ -8174,6 +8174,32 @@
         {"name": "items", "kind": "json", "required": true, "doc": "What to strew: a list of {geometry or boulder, material, weight, spacing, size, sink, align, tilt}."}
       ]
     },
+    "valley_fog": {
+      "label": "Valley fog",
+      "group": "Clouds",
+      "doc": "Fog pooled in the valleys: cold air over the lowest ground of the scene's other objects, found by casting rays down onto them. Scatters as any volume (albedo, g).",
+      "example": {"type": "valley_fog", "center": [0, 0], "extent": 2000, "resolution": 64, "depth": 150, "density": 0.02},
+      "fields": [
+        {"name": "center", "kind": "json", "default": null, "doc": "The middle of the square it covers, [x, z]; with extent. Without them, the solid objects of bounded size."},
+        {"name": "extent", "kind": "number", "default": null, "doc": "Half the square's side, m.", "min": 1},
+        {"name": "resolution", "kind": "integer", "default": 512, "doc": "Cells a side of the grid the ground is found on.", "min": 2},
+        {"name": "pool_size", "kind": "number", "default": 1500, "doc": "How far the cold air pools: about a valley's width, m.", "min": 1},
+        {"name": "depth", "kind": "json", "default": 150, "doc": "How deep it fills above the lowest ground, m: a number or a function graph."},
+        {"name": "density", "kind": "json", "default": 0.02, "doc": "Extinction per metre: a number or a function graph."},
+        {"name": "top", "kind": "number", "default": null, "doc": "An inversion's altitude the fog doesn't rise past, m."},
+        {"name": "softness", "kind": "number", "default": 15, "doc": "How far the top fades over, m.", "min": 0},
+        {"name": "top_variation", "kind": "number", "default": 12, "doc": "The height of the top's billows, m.", "min": 0},
+        {"name": "billow_size", "kind": "number", "default": 120, "doc": "How far apart the billows are, m.", "min": 1},
+        {"name": "raggedness", "kind": "number", "default": 6, "doc": "How much fine detail frays the top, m.", "min": 0},
+        {"name": "detail_size", "kind": "number", "default": 25, "doc": "The size of that detail, m.", "min": 1},
+        {"name": "variation", "kind": "number", "default": 0.3, "doc": "How patchy it is.", "min": 0, "max": 1},
+        {"name": "haze", "kind": "number", "default": 0, "doc": "Extinction of haze thinning above the fog, per metre.", "min": 0},
+        {"name": "haze_height", "kind": "number", "default": 150, "doc": "The height the haze thins over, m.", "min": 1},
+        {"name": "albedo", "kind": "color", "default": [1, 1, 1], "doc": "The fraction of light scattered rather than absorbed."},
+        {"name": "g", "kind": "number", "default": 0.85, "doc": "How strongly it scatters forwards.", "min": -1, "max": 1},
+        {"name": "seed", "kind": "integer", "default": 0, "doc": "The noise's seed."}
+      ]
+    },
     "overcast": {
       "label": "Overcast",
       "group": "Clouds",

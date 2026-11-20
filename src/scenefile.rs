@@ -771,6 +771,8 @@ impl SceneFile {
     /// no object, or several (a tree, a forest).
     pub fn parse_objects_indexed(objs: Vec<Value>, materials: &Map<String, Value>, media: &Map<String, Value>, geometries: &GeometryLibrary) -> Vec<(usize, Arc<SceneObject>)> {
          let mut objects: Vec<(usize, Arc<SceneObject>)> = Vec::new();
+         // Valley fog finds the ground among the other objects, so is built after them.
+         let fogs: Vec<(usize, Value)> = objs.iter().enumerate().filter(|(_, o)| o["type"] == "valley_fog").map(|(i, o)| (i, o.clone())).collect();
          // Hill cloud joins the first overcast deck, mapped as it is, to be lit with it.
          let deck = objs.iter().position(|o| o["type"] == "overcast");
          let flat = |o: &Value| o["mapping"].as_str() == Some("flat") || o["curved"].as_bool() == Some(false);
@@ -789,6 +791,9 @@ impl SceneFile {
          let previous = if reuse { KEPT_OBJECTS.lock().unwrap().take().unwrap_or_default() } else { HashMap::new() };
          let mut kept: HashMap<String, Vec<Arc<SceneObject>>> = HashMap::new();
          for (i, mut obj) in objs.into_iter().enumerate() {
+            if obj["type"] == "valley_fog" {
+                continue;
+            }
             if let (Some(ocean), true) = (&ocean, obj["type"] == "iceberg" || obj["type"] == "ice_floes") {
                 if obj.get("ocean").is_none() { obj["ocean"] = ocean.clone(); }
             }
@@ -847,6 +852,12 @@ impl SceneFile {
                 println!("- Built {} in {:.2} s", name, t);
             }
          }
+         for (i, fog) in fogs {
+            let start = web_time::Instant::now();
+            let ground: Vec<Arc<SceneObject>> = objects.iter().map(|(_, o)| o.clone()).collect();
+            objects.push((i, Arc::new(SceneFile::parse_valley_fog(&fog, &ground))));
+            println!("- Built valley_fog in {:.2} s", start.elapsed().as_secs_f64());
+         }
          if reuse { *KEPT_OBJECTS.lock().unwrap() = Some(kept); }
          objects
     }
@@ -889,6 +900,70 @@ impl SceneFile {
     pub fn keep_objects_between_builds(keep: bool) {
         KEEP_OBJECTS.store(keep, std::sync::atomic::Ordering::Relaxed);
         if !keep { *KEPT_OBJECTS.lock().unwrap() = None; }
+    }
+
+    /// Fog pooled in the valleys (see `procedural::valley_fog`), over the ground the scene's
+    /// other objects make, found by casting rays straight down on a grid:
+    ///
+    /// `{"type": "valley_fog", "center": [x, z], "extent": 10000, "resolution": 512,
+    /// "pool_size": 1500, "depth": 150, "density": 0.02, "seed": 0}`
+    ///
+    /// The cold air pools over the lowest ground within `pool_size` metres (about a valley's
+    /// width), and fills `depth` metres above it, up to `top` (an inversion's altitude, if
+    /// given): `depth` and `density` (extinction per metre) may be function graphs
+    /// (`crate::graph`). The top fades over `softness` m, heaves in billows `top_variation` m
+    /// high and `billow_size` m apart, and is frayed by `raggedness` m of detail `detail_size`
+    /// across; `variation` (0 to 1) makes it patchy. `haze` (extinction) thins above it over
+    /// `haze_height` m. Without `center` and `extent`, the fog covers the solid objects of
+    /// bounded size. Scattering (`albedo`, `g`, approximations) as for any volume.
+    pub fn parse_valley_fog(o: &Value, objects: &[Arc<SceneObject>]) -> SceneObject {
+        use crate::procedural::valley_fog::ValleyFog;
+        let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
+        // The ground: solid objects (not media, not the sky) of bounded size, and those
+        // bigger, such as the planet, beneath them.
+        let solid: Vec<&Arc<SceneObject>> = objects.iter().filter(|x| !x.geometry.is_stochastic()).collect();
+        let bounded: Vec<BBox> = solid.iter().map(|x| x.bounds())
+            .filter(|b| (b.max - b.min).iter().all(|e| e.is_finite() && *e < 1e6)).collect();
+        let (center, extent) = match (o.get("center"), o.get("extent")) {
+            (Some(_), Some(_)) => (SceneFile::parse_vec2_def(o, "center", Vector2::zeros()), num("extent", 1.).max(1.)),
+            _ => {
+                let lo = bounded.iter().fold(Vector3::repeat(f64::INFINITY), |a, b| a.inf(&b.min.coords));
+                let hi = bounded.iter().fold(Vector3::repeat(f64::NEG_INFINITY), |a, b| a.sup(&b.max.coords));
+                assert!(lo.x.is_finite(), "valley_fog needs a \"center\" and \"extent\", or ground of bounded size to cover");
+                (Vector2::new(0.5 * (lo.x + hi.x), 0.5 * (lo.z + hi.z)), (0.5 * (hi.x - lo.x)).max(0.5 * (hi.z - lo.z)).max(1.))
+            },
+        };
+        let high = bounded.iter().map(|b| b.max.y).fold(0., f64::max) + 10.;
+        let low = bounded.iter().map(|b| b.min.y).fold(0., f64::min) - 10_000.;
+        let ground = |x: f64, z: f64| -> Option<f64> {
+            let r = crate::ray::Ray { ro: Vector3::new(x, high, z), rd: Vector3::new(0., -1., 0.) };
+            solid.iter().filter_map(|s| s.intersects(&r)).map(|i| i.dist)
+                .filter(|d| *d <= high - low).fold(None, |a: Option<f64>, d| Some(a.map_or(d, |a| a.min(d))))
+                .map(|d| high - d)
+        };
+        let resolution = SceneFile::parse_int(&o["resolution"], 512).max(2);
+        let mut f = ValleyFog::new(center, extent, resolution, num("pool_size", 1500.).max(1.), SceneFile::parse_seed(o).unwrap_or(0), ground);
+        let graph = |k: &str, what: &str| o.get(k).map(|v| crate::graph::Graph::parse(v).unwrap_or_else(|e| panic!("valley_fog's {}: {}", what, e)));
+        if let Some(g) = graph("density", "density") {
+            f.density = g;
+        }
+        if let Some(g) = graph("depth", "depth") {
+            f.depth = g;
+        }
+        f.top = num("top", f.top);
+        f.softness = num("softness", f.softness).max(0.);
+        f.top_variation = num("top_variation", f.top_variation).max(0.);
+        f.billow_size = num("billow_size", f.billow_size).max(1.);
+        f.raggedness = num("raggedness", f.raggedness).max(0.);
+        f.detail_size = num("detail_size", f.detail_size).max(1.);
+        f.variation = num("variation", f.variation).clamp(0., 1.);
+        f.haze = num("haze", f.haze).max(0.);
+        f.haze_height = num("haze_height", f.haze_height).max(1.);
+        let bounds = BBox::new(
+            Vector3::new(center.x - extent, f.bottom() - 1., center.y - extent),
+            Vector3::new(center.x + extent, f.ceiling(), center.y + extent),
+        );
+        create_volume(bounds, Arc::new(f), SceneFile::parse_scattering(o, 0.85))
     }
 
     /// An object's medium, bump mapped if its `"normal"` is an object (see `parse_bump`). A

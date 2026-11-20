@@ -39,19 +39,8 @@ use crate::volume::DensityField;
 // in `shared::clouds`, generic over the float it computes in, so that the GPU's shader compiles
 // the same functions at f32 (see that crate). Here are the renderer's f64 names for them.
 
-/// (v - lo) / (hi - lo), clamped to [0, 1]; a step at `hi` if the range is empty, with `hi`
-/// itself below it, so a threshold of 1 on a value in [0, 1] (no coverage) passes nothing.
-pub(crate) fn remap(v: f64, lo: f64, hi: f64) -> f64 {
-    shared::remap(v, lo, hi)
-}
-
-pub(crate) fn smoothstep(lo: f64, hi: f64, v: f64) -> f64 {
-    shared::smoothstep(lo, hi, v)
-}
-
-pub(crate) fn lerp(a: f64, b: f64, t: f64) -> f64 {
-    shared::lerp(a, b, t)
-}
+// (Now `crate::math`'s; re-exported for the modules that import them from here.)
+pub(crate) use crate::math::{lerp, remap, smoothstep, stretched};
 
 /// The weather map: noise sampled at the corners of a grid of square texels over the layer's
 /// region, and interpolated bilinearly between them. Zero outside the region.
@@ -99,11 +88,6 @@ impl shared::Tables<f64> for WeatherMap {
     fn index(&self, _i: u32) -> u32 {
         0
     }
-}
-
-/// Fractal Perlin noise is in [0, 1] but rarely strays far from 0.5; stretch it to use the range.
-pub(crate) fn stretched(n: f64) -> f64 {
-    shared::clouds::stretched(n)
 }
 
 /// Worley noise (distance to the nearest feature point, one point per unit cell) precomputed

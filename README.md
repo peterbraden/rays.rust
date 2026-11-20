@@ -1,5 +1,4 @@
 # rays.rust
-[![Build Status](https://travis-ci.org/peterbraden/rays.rust.svg?branch=master)](https://travis-ci.org/peterbraden/rays.rust)
 
 ## Gallery
 

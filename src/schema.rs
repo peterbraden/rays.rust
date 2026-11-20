@@ -173,6 +173,77 @@ mod tests {
     /// Each entry's example builds, and so does the example with every field's default written
     /// out: a default of the wrong kind, or a field the parser rejects, fails here. Entries
     /// marked slow are skipped (they take seconds to minutes each without optimisation).
+    /// What the demo scenes use that the schema doesn't yet describe: an object type, and
+    /// fields of others (mostly a cloud's scattering options, and what the cloud atlas added).
+    /// The parser reads them; the editor can't offer them. This list may only shrink: add the
+    /// field to `schema.json` and take it out of here.
+    const UNDESCRIBED_TYPES: [&str; 1] = ["ecosystem"];
+    const UNDESCRIBED_FIELDS: &[(&str, &[&str])] = &[
+        ("benard_altocumulus", &["castellanus", "turret_height"]),
+        ("cumulonimbus", &["diffusion", "oz", "similarity_after"]),
+        ("cumulus", &["albedo", "wind_direction"]),
+        ("fractus", &["similarity_after"]),
+        ("harris_cumulus", &["bubble", "ice", "rain", "turbulence", "turbulence_octaves"]),
+        ("landscape", &["displacement", "displacement_detail", "displacement_reach"]),
+        ("lightning", &["charge_radius"]),
+        ("mountains", &["cloud"]),
+        ("nubis_clouds", &["mie"]),
+        ("ocean", &["absorption", "transparent"]),
+        ("overcast", &["albedo", "diffusion", "similarity_after"]),
+        ("precipitation", &["kind"]),
+        ("shelf_cloud", &["diffusion", "similarity_after"]),
+        ("valley_fog", &["similarity_after"]),
+        ("weather", &["anticyclones", "cyclones", "itcz", "map_width", "site", "time", "tropical_cyclones"]),
+        ("world", &["pole", "resolution", "rings"]),
+    ];
+
+    /// Every scene in `demo/` is one the schema describes: each object's type has an entry, and
+    /// each of its fields is one the entry lists (or is common to all objects). So a scene with
+    /// a misspelt or forgotten key fails here, though the parser would read it silently as the
+    /// default; and so the schema can't fall behind the scenes without this saying so.
+    #[test]
+    fn test_demo_scenes_use_what_the_schema_describes() {
+        let schema = schema();
+        let common: Vec<&str> = schema["sections"]["object_common"]["fields"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap()).collect();
+        let mut problems = Vec::new();
+        let mut scenes = 0;
+        for dir in ["demo", "demo/scenes", "demo/benchmarks"] {
+            let mut files: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
+            files.sort();
+            for file in files {
+                let scene: Value = match serde_json::from_str(&std::fs::read_to_string(&file).unwrap()) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        problems.push(format!("{}: not JSON ({})", file.display(), e));
+                        continue;
+                    },
+                };
+                // (Another renderer's format, translated on reading, has no list of objects.)
+                let Some(objects) = scene["objects"].as_array() else { continue };
+                scenes += 1;
+                for (i, o) in objects.iter().enumerate() {
+                    let t = o["type"].as_str().unwrap_or("");
+                    let entry = &schema["objects"][t];
+                    if entry.is_null() {
+                        if !UNDESCRIBED_TYPES.contains(&t) {
+                            problems.push(format!("{}: objects[{}] is a \"{}\", which the schema has no entry for", file.display(), i, t));
+                        }
+                        continue;
+                    }
+                    let fields: Vec<&str> = entry["fields"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap()).collect();
+                    let undescribed = UNDESCRIBED_FIELDS.iter().find(|(name, _)| *name == t).map_or(&[][..], |(_, f)| *f);
+                    for key in o.as_object().unwrap().keys().map(|k| k.as_str()) {
+                        if key != "type" && !fields.contains(&key) && !common.contains(&key) && !undescribed.contains(&key) {
+                            problems.push(format!("{}: objects[{}] ({}) has \"{}\", which the schema doesn't list", file.display(), i, t, key));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(scenes > 60, "only {} scenes found", scenes);
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+    }
+
     #[test]
     fn test_examples_and_defaults_build() {
         let schema = schema();

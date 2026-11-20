@@ -124,6 +124,7 @@ pub mod output;
 #[cfg(feature = "cli")]
 pub mod compare;
 pub mod depth;
+pub mod math;
 pub mod time_map;
 //mod wireframe;
 pub mod geometry;

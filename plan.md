@@ -3,7 +3,10 @@
 Eight workstreams. Each lists what we know (verified in the code or by measurement) separately
 from what we are assuming, and the questions that need answering before work starts.
 
-Status: planning. Nothing below is implemented.
+Status: a working document. Sections 1 to 8 are the original workstreams, several since
+built (the wavefront integrator, flare, spectral rendering and more: `CLAUDE.md` lists what
+exists); sections 12 to 14 are current (the GPU path, the scheduler, the world from one
+seed), each saying what is done, with measurements, and what is next.
 
 
 ## Process

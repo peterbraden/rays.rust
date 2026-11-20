@@ -1979,3 +1979,88 @@ the host's.
   Tracing", I3D 2020, doi:10.1145/3384382.3384534. What reordering gains and costs.
 - Pharr, Jakob, Humphreys, "Physically Based Rendering", 4th ed., chapter 15 (already the
   basis of `wavefront` and `gpu`).
+
+## 14. From one seed: a world, a view, a picture
+
+Status: a plan (November 2026), nothing built. Goal: from a single seed the renderer builds a
+world and renders an interesting picture of it, with nothing chosen by hand; everything it
+chose is then an ordinary scene file, to be tweaked (the scene builder is the editor).
+
+### Known: what stands between a seed and a picture today
+
+- A full-scale `landscape` builds its planet (tectonics, the planet's simulation, climate) and
+  its nested patches inside scene parsing (`terrain::object::full_scale_landscape`), printing
+  as it goes. Each patch's evolution is cached by a hash of its parameters and domain
+  (`Terrain::run_cached`: a snapshot a file, by years), so it resumes in time; the planet and
+  the climate aren't cached, and nothing lists what a world is made of or how far it has got.
+- Weather takes a seed and chooses its own (`weather::scene::choose_seeds`, `expand`): the
+  one part that already goes from a seed to scene objects before the scene is keyed.
+- Ground cover, forests, ecosystems and scatters are placed by rules on the landscape
+  (docs/ecosystems.md), but a scene has to say which, and where.
+- The camera is placed by hand in every scene. The landscape's site can be found
+  (`"near": "mountains"`), the camera can't.
+- The desert scenes' relief (`procedural::heightmap`'s `mesas`: caprock scarps, talus by a
+  distance transform, joints, ledges, washes, laminae) is a heightmap type of its own, laid
+  out by noise and by hand, apart from the simulated landscapes. The simulation's rock has an
+  erodibility a cell, but no layers: nothing in it makes a cliff.
+- `rays serve` renders layers of a scene it was sent whole, and builds it itself.
+
+### The pieces
+
+1. A world as a staged build with a state. Stages: the planet (plates, relief, climate), the
+   site, the patches nested about it, the ground (cover, rock, snow and ice), what grows and
+   lies on it, the weather, the time of day, the viewpoint. Each stage is keyed by the seed,
+   its own parameters and the keys of the stages it reads, and writes its result under that
+   key in a world directory beside a manifest (the stages, their keys, how far each has got,
+   how long it took, a small picture of it: the planet and climate maps exist already). So a
+   build stops and resumes at any stage, a tweak rebuilds from the stage it touches, and two
+   scenes of one world share it. Sub-seeds are hashes of the seed and the stage's name, so
+   changing one stage doesn't reshuffle the others.
+   - The library gets `world::build(seed or description, on_progress)`, apart from scene
+     parsing; the scene's `landscape` then reads a built world. Progress is events (stage,
+     fraction, picture), which the command line prints and `rays serve` streams.
+   - A World tab in the scene builder: the stages as they run, with their maps. In a browser
+     the build runs in a worker (state in the origin's private file system) or on a server;
+     the long stages are minutes natively, so a server is the likely home.
+2. The desert's relief from the terrain generation. Two levels, as the mesas work has both:
+   - Process: rock in layers of differing resistance in the simulation (a caprock over
+     shales), so stream power and hillslope retreat leave scarps, benches and buttes where
+     the climate is dry and the strata flat; talus under them (`src/talus.rs`).
+   - Detail below the cells: the mesas' devices (joints, ledges, laminae, gullies, washes,
+     rounded shoulders) as relief conditioned on the simulation's fields (which layer
+     outcrops, slope, flow, biome), through the displacement graphs, not laid out by noise.
+   What `mesas` does that a simulation can't reach stays as a heightmap type; the test is
+   whether `desert-mesas.json` can be a `landscape` at a desert site.
+3. A viewpoint chosen by the renderer, seeded. Candidates from the terrain (shoulders of
+   ridges, valley sides, shores, river bends, a little above the ground), scored on cheap
+   views of each (the depth image and `trace::draft` exist): how the depth is spread between
+   near, middle and far; where the horizon falls; how much relief, water, snow and cover are
+   in view and how varied; the sun's angle on what is seen (the time of day is chosen with
+   it); nothing blocking the lens. One of the best few, by the seed. Reading to do first, and
+   to verify before citing: viewpoint entropy and terrain viewpoint selection.
+4. One seed to a scene file: `{"world": {"seed": n}}` expands, as `weather` does, into the
+   landscape, weather, sun, camera and output it chose; `--dump-scene` writes that, and it is
+   what the editor opens.
+5. A render farm. The scheduler's model (section 13) with servers as executors:
+   - Work is samples of pixels, and sample k of pixel p has its own random stream, so any
+     split gives the same picture. A lease is a tile and a range of samples; results are sums
+     and sums of squares, merged in sample order so the film doesn't depend on who finished
+     first. The coordinator owns the film and `scheduler::plan` (adaptive sampling included).
+   - Sharing the scene: a scene is its file, its assets and its built world, each named by
+     its content's hash; a server fetches what it lacks. The world is built once and shipped,
+     not rebuilt on every node: builds aren't yet the same to the bit between runs
+     (desert-noon differs between two runs of one binary), which is worth fixing for its own
+     sake but shouldn't be what a farm rests on.
+   - Load: leases sized by each server's measured rate, re-issued when one goes quiet.
+   - Locality: a server's caches are by region of the view (displacement diced lazily,
+     textures, trees' levels of detail), so its leases are neighbouring tiles along a
+     space-filling curve, and stay with it: the scheduler's "resources" (step 6) with a
+     server's memory as the resident set. GPU nodes take the scenes that flatten.
+   - `rays serve` has no authentication and is local by default: a farm needs at least a
+     shared token before it listens anywhere else.
+
+### Order
+
+1 first (a world with a state, and progress), as 3, 4 and 5 read it. Then 3 and 4, which make
+the one-seed picture. 2 alongside, as it is the terrain's own work. 5 after 1, when there is a
+world to ship.

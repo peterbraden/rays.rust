@@ -70,6 +70,19 @@ jobs:
       run: cargo build --release --features gpu
     - name: Run GPU tests
       run: "cargo test --release --features gpu gpu::"
+    - name: Diagnose the GPU tests
+      # On some runners the device's renders have come out a few percent brighter than the
+      # CPU's, on others not, for the same commit; never yet off CI. This says what the
+      # runner is, and whether it takes the tests running at once: information only, the
+      # step above is the test.
+      if: always()
+      run: |
+        grep -m1 "model name" /proc/cpuinfo; nproc; grep -m1 -o "avx512[a-z]*" /proc/cpuinfo || echo "no avx512"
+        apt list --installed 2>/dev/null | grep -E "mesa-vulkan-drivers|libllvm" || true
+        for i in 1 2 3; do
+          echo "alone, run $i:"; cargo test --release --features gpu -- gpu::tests::test_agrees gpu::tests::test_shader_on_the_cpu --test-threads=1 2>&1 | grep -E "vs CPU|test result" || true
+          echo "together, run $i:"; cargo test --release --features gpu -- gpu:: 2>&1 | grep -E "vs CPU|test result" || true
+        done
     - name: Render on the GPU
       # spheres.json reaches the GPU; the smoke test scene falls back to the path tracer.
       run: cargo run --release --features gpu -- --gpu --width 60 --height 40 demo/benchmarks/spheres.json | tee /dev/stderr | grep -q "^- GPU:"

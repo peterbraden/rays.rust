@@ -24,7 +24,7 @@ use crate::procedural::rock::{self, Bedrock, Assorted};
 use crate::material::rock::{Rock, RockStyle};
 use crate::material::soil::{Soil, SoilStyle};
 use crate::procedural::nubis_clouds::{NubisCloudLayer, GlobalNubis};
-use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGenus, GlobalCirrus};
+use crate::procedural::hogan_kew_cirrus::{HoganKewCirrus, CirrusField, CirrusGenus, CirrusSpecies, GlobalCirrus};
 use crate::procedural::benard_altocumulus::BenardAltocumulus;
 use crate::procedural::lenticular::{Lenticular, MoistLayer};
 use crate::procedural::terrain::{Terrain as Mountains, TerrainMaterial};
@@ -1882,9 +1882,13 @@ impl SceneFile {
             halos: SceneFile::parse_halos(o),
             // `true` for geometric optics; `{"drop_radius": µm, "spread": 0.1}` for wave optics
             // (supernumeraries; the fogbow of small droplets).
-            rainbow: match o.get("rainbow") {
-                Some(Value::Bool(true)) => Some(Arc::new(RainbowTable::new(100_000))),
-                Some(v) if v.is_object() => Some(Arc::new(RainbowTable::airy(40_000,
+            // `"mie": {"radius": µm, "variance": 0.1}` for small droplets by Mie theory: the
+            // glory, the cloudbow and the forward peak.
+            rainbow: match (o.get("rainbow"), o.get("mie")) {
+                (_, Some(v)) if v.is_object() => Some(Arc::new(crate::material::mie::MieTable::new(
+                    SceneFile::parse_number(&v["radius"], 5.), SceneFile::parse_number(&v["variance"], 0.1)))),
+                (Some(Value::Bool(true)), _) => Some(Arc::new(RainbowTable::new(100_000))),
+                (Some(v), _) if v.is_object() => Some(Arc::new(RainbowTable::airy(40_000,
                     SceneFile::parse_number(&v["drop_radius"], 500.), SceneFile::parse_number(&v["spread"], 0.1)))),
                 _ => None,
             },
@@ -2063,7 +2067,9 @@ impl SceneFile {
     /// false drops the air mass's slow tendencies. The fluxes vary by `patchiness` (0 to 1) in
     /// patches `patch_size` across that change over `patch_period` seconds; `wind` ([x, z] m/s,
     /// default [10, 0]) carries everything; `friction_velocity` (m/s) stirs the air near the
-    /// ground; `vorticity` (confinement); `max_step` (s); `seed`.
+    /// ground; `vorticity` (confinement); `max_step` (s); `seed`. `"ice": true` for mixed-phase
+    /// cloud, and `"rain": true` for rain (graupel below freezing, with ice) that falls through
+    /// the air, weighs it down and evaporates, cooling it (`SimulationParams::rain`).
     ///
     /// `state` renders a state saved by `CloudSimulation::save` instead of simulating.
     /// `follow_wind` renders the clouds as seen drifting with the wind, so in an animation
@@ -2129,6 +2135,8 @@ impl SceneFile {
                 SceneFile::parse_number(&h["boost"], 1.).max(0.)));
         }
         p.ice = o["ice"].as_bool().unwrap_or(false);
+        // Rain as a field of its own, falling and evaporating (`SimulationParams::rain`).
+        p.rain = o["rain"].as_bool().unwrap_or(false);
         if o["sounding"].as_str() == Some("weisman_klemp") {
             // Thunderstorms: no daily cycle, the storm started from a bubble.
             p.sounding = crate::procedural::harris_cumulus::Sounding::weisman_klemp(num("surface_water", 14.) * 1e-3);
@@ -2754,6 +2762,9 @@ impl SceneFile {
             Some(g) => panic!("Unknown cirrus genus '{}': expected cirrus, cirrostratus or cirrocumulus", g),
         };
         let mut f = CirrusField::new(genus);
+        let species = o["species"].as_str().map(|n| CirrusSpecies::parse(n)
+            .unwrap_or_else(|| panic!("Unknown cirrus species '{}': expected uncinus, fibratus, floccus or spissatus", n)));
+        if let Some(s) = species { s.field(&mut f); }
         let num = |k: &str, d: f64| SceneFile::parse_number(&o[k], d);
         f.base = num("base", f.base);
         f.top = num("top", f.top);
@@ -2765,6 +2776,7 @@ impl SceneFile {
         f.seed = SceneFile::parse_seed(o).unwrap_or(0);
         let generating = (f.cell_size, f.spectral_slope, f.coverage, f.seed);
         let mut c = HoganKewCirrus::new(f);
+        if let Some(s) = species { s.fall(&mut c); }
         c.max_density = num("density", c.max_density);
         c.generating_depth = num("generating_depth", c.generating_depth);
         c.fall_depth = num("fall_depth", c.fall_depth);

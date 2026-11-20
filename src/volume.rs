@@ -578,12 +578,17 @@ pub struct FlatMedium {
     /// The fraction of scattering in the forward peak that truncated vertices leave out
     /// (`VolumeMaterial::forward_peak`).
     pub peak: f64,
+    /// The similarity relations (`ScatteringApproximation::similarity_after`): how many
+    /// scatterings they begin at, and the factor on densities from then on.
+    pub reduced: Option<(u32, f64)>,
+    /// The mean cosine of the scattering angle, whole and truncated.
+    pub mean_cosine: (f64, f64),
 }
 
 impl Volume {
     /// The medium as data, scattering as `material` says; or why a kernel couldn't render it:
     /// they have the plain path tracing of a grey medium filling its box, with delta-M
-    /// truncation, lit by the sun, the lights and the sky. Sun and glitter probes they leave
+    /// truncation and the similarity relations, lit by the sun, the lights and the sky. Sun and glitter probes they leave
     /// out: those change a render's noise, not its mean.
     pub fn flat(&self, material: &VolumeMaterial) -> Result<FlatMedium, String> {
         let a = &material.approximation;
@@ -594,7 +599,6 @@ impl Volume {
             (material.halos.is_some(), "halos"),
             (material.rainbow.is_some(), "rainbows"),
             (material.emission.is_some(), "it emits"),
-            (a.similarity_after.is_some(), "the similarity approximation"),
             (a.oz.is_some(), "the Oz approximation"),
             (a.diffusion.is_some(), "the diffusion approximation"),
         ];
@@ -605,6 +609,8 @@ impl Volume {
         Ok(FlatMedium {
             bounds: self.bounds, field, lower: self.density.minorant(), scale: self.truncated,
             phase: material.phase, albedo: material.albedo.as_reflectance(), peak: material.forward_peak(1),
+            reduced: a.similarity_after.map(|n| (n, material.density_scale(n.max(1)))),
+            mean_cosine: (material.mean_cosine(0), material.mean_cosine(1)),
         })
     }
 }
@@ -1199,7 +1205,16 @@ impl MaterialModel for VolumeMaterial {
         }
         let phase = self.phase_at(point, scatterings);
         let sun_phase = self.sun_phase(&phase, incoming, s, scatterings).as_unbounded();
-        Some(self.albedo_at(scatterings).as_reflectance() * sun.irradiance_at(point) * sun_phase * sun.transmittance_from(point, s))
+        // The sunlight reaches the vertex as it would if the path scattered here (`scatter`):
+        // through media scaled for a path that has scattered once more. (Without this the
+        // probe's sunlight came through the densities of the vertex that sent it, which differ
+        // where the similarity relations begin: against the GPU's kernels, which send no
+        // probes, a cumulus layer with `similarity_after` 4 was 2 to 3% too dark.)
+        let saved = (path_scatterings(), path_density_scale());
+        set_path(scatterings + 1, self.density_scale(scatterings + 1));
+        let through = sun.transmittance_from(point, s);
+        set_path(saved.0, saved.1);
+        Some(self.albedo_at(scatterings).as_reflectance() * sun.irradiance_at(point) * sun_phase * through)
     }
 
     fn scatter(&self, r: &Ray, i: &Intersection, s: &Scene) -> ScatteredRay {

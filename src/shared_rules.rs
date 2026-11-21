@@ -26,6 +26,10 @@ mod tests {
             if path.extension().is_some_and(|e| e == "rs") {
                 let name = path.file_name().unwrap().to_string_lossy().to_string();
                 for (n, line) in std::fs::read_to_string(&path).unwrap().lines().enumerate() {
+                    // (A file's tests, which end it, are the CPU's alone: no kernel has them.)
+                    if line.starts_with("#[cfg(test)]") {
+                        break;
+                    }
                     let line = line.split("//").next().unwrap();
                     out.push((name.clone(), n + 1, line.to_string()));
                 }

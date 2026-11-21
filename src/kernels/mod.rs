@@ -604,3 +604,35 @@ pub fn camera_ray(s: &Scene, index: usize, k: usize, origin: &Vector3<f64>) -> G
         None => GpuRay::zeroed(),
     }
 }
+
+#[cfg(test)]
+mod measure {
+    /// What the clouds' density costs, part by part, at f32 as the kernels run it: for
+    /// deciding what to compute several at a time. `--ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn measure_density() {
+        use crate::procedural::benard_altocumulus::BenardAltocumulus;
+        use pathtrace::FloatTables;
+        let layer = BenardAltocumulus::new(4000., 200., 2);
+        let record = layer.export();
+        let tables = FloatTables(&record);
+        let b = pathtrace::load_benard(&record, 0);
+        let mut rng = crate::geometry::Pcg32::new(5, 0);
+        let n = 2_000_000;
+        let points: Vec<(f32, f32, f32)> = (0..n).map(|_| ((rng.next_f64() * 16000. - 8000.) as f32, (b.bottom() + rng.next_f64() as f32 * (b.top() - b.bottom())), (rng.next_f64() * 16000. - 8000.) as f32)).collect();
+        let time = |what: &str, f: &dyn Fn(&(f32, f32, f32)) -> f32| {
+            let start = std::time::Instant::now();
+            let sum: f32 = points.iter().map(f).sum();
+            println!("{:>28}: {:6.1} ns a call (sum {})", what, start.elapsed().as_secs_f64() * 1e9 / n as f64, sum);
+        };
+        time("perlin", &|p| shared::noise::perlin(&tables, b.warp_perm, p.0 / 300., p.1 / 300., p.2 / 300.));
+        time("fbm, 2 octaves", &|p| shared::noise::fbm(&tables, b.warp_perm, p.0 / 300., 0.25, p.2 / 300., 2, 0.5, 2.));
+        time("fbm, 3 octaves", &|p| shared::noise::fbm(&tables, b.patch_perm, p.0 / 12000., 0.5, p.2 / 12000., 3, 0.5, 2.));
+        time("worley_fbm", &|p| shared::clouds::worley_fbm(&tables, b.worley, p.0 / 80., p.1 / 80., p.2 / 80.));
+        time("cell hash x 50", &|p| (0..50).map(|k| shared::noise::cell_hash::<f32>(p.0 as i32 as u32, k, 0, 7)).sum());
+        time("altocumulus's fraction", &|p| b.fraction(&tables, p.0, p.1, p.2));
+        let cloudy = points.iter().filter(|p| b.fraction(&tables, p.0, p.1, p.2) > 0.).count();
+        println!("{} of {} points in cloud", cloudy, n);
+    }
+}

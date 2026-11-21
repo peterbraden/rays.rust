@@ -298,7 +298,7 @@ cards.
 ## Status
 
 - [x] Literature survey, five clusters (first pass from search snippets: blocked hosts).
-- [x] Full-text verification of 31 papers (second pass, paper hosts allowed); corrections folded
+- [x] Full-text verification of 30 papers (second pass, paper hosts allowed); corrections folded
       in.
 - [x] Fixed the SGGX citation in `src/shapes/lod.rs` and `docs/adaptive-meshes.md`: ACM TOG 34(4),
       SIGGRAPH 2015, doi:10.1145/2766988, not EGSR or CGF.

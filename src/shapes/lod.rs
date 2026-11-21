@@ -431,33 +431,7 @@ pub fn simplify(triangles: &[Arc<SmoothTriangle>], cell: f64) -> Vec<Arc<SmoothT
 pub fn consolidate(triangles: &[Arc<Tagged<Triangle>>], size: f64) -> CardSet {
     let mut clusters = Clusters::default();
     let mut cards: Vec<Card> = vec![];
-    let centre = |t: &Triangle| (t.v0 + t.v1 + t.v2) / 3.;
-    let mut order: Vec<usize> = (0 .. triangles.len()).collect();
-    let mut stack = vec![(0, order.len())];
-    while let Some((start, end)) = stack.pop() {
-        let group = &mut order[start .. end];
-        let (mut lo, mut hi) = (Vector3::repeat(f64::INFINITY), Vector3::repeat(f64::NEG_INFINITY));
-        let (mut clo, mut chi) = (lo, hi);
-        for &i in group.iter() {
-            let t = &triangles[i].item;
-            for p in [t.v0, t.v1, t.v2] {
-                lo = lo.inf(&p);
-                hi = hi.sup(&p);
-            }
-            let c = centre(t);
-            clo = clo.inf(&c);
-            chi = chi.sup(&c);
-        }
-        let spread = chi - clo;
-        let axis = spread.imax();
-        if (hi - lo).max() > size && group.len() > 2 && spread[axis] > 0. {
-            // Split at the median along the axis the centres spread furthest.
-            let mid = group.len() / 2;
-            group.select_nth_unstable_by(mid, |&a, &b| centre(&triangles[a].item)[axis].total_cmp(&centre(&triangles[b].item)[axis]));
-            stack.push((start, start + mid));
-            stack.push((start + mid, end));
-            continue;
-        }
+    for group in groups(triangles, size) {
         let members: Vec<&Tagged<Triangle>> = group.iter().map(|&i| &*triangles[i]).collect();
         if members.len() <= 2 {
             // Too few to gain by: keep them, as triangles.
@@ -487,6 +461,42 @@ pub fn consolidate(triangles: &[Arc<Tagged<Triangle>>], size: f64) -> CardSet {
     // A card is cheaper to test than a node to visit, and smaller: leaves of a few.
     let (bvh, cards) = Bvh::build_with_leaves(cards, Card::bounds, CARDS_PER_LEAF);
     CardSet { bvh, cards, clusters }
+}
+
+/// The clusters `consolidate` gathers the aggregate `triangles` into, as indices into it: split
+/// at the median along the axis their centres spread furthest until each is no more than `size`
+/// across, or has two triangles or fewer.
+fn groups(triangles: &[Arc<Tagged<Triangle>>], size: f64) -> Vec<Vec<usize>> {
+    let centre = |t: &Triangle| (t.v0 + t.v1 + t.v2) / 3.;
+    let mut order: Vec<usize> = (0 .. triangles.len()).collect();
+    let mut stack = vec![(0, order.len())];
+    let mut out = vec![];
+    while let Some((start, end)) = stack.pop() {
+        let group = &mut order[start .. end];
+        let (mut lo, mut hi) = (Vector3::repeat(f64::INFINITY), Vector3::repeat(f64::NEG_INFINITY));
+        let (mut clo, mut chi) = (lo, hi);
+        for &i in group.iter() {
+            let t = &triangles[i].item;
+            for p in [t.v0, t.v1, t.v2] {
+                lo = lo.inf(&p);
+                hi = hi.sup(&p);
+            }
+            let c = centre(t);
+            clo = clo.inf(&c);
+            chi = chi.sup(&c);
+        }
+        let spread = chi - clo;
+        let axis = spread.imax();
+        if (hi - lo).max() > size && group.len() > 2 && spread[axis] > 0. {
+            let mid = group.len() / 2;
+            group.select_nth_unstable_by(mid, |&a, &b| centre(&triangles[a].item)[axis].total_cmp(&centre(&triangles[b].item)[axis]));
+            stack.push((start, start + mid));
+            stack.push((start + mid, end));
+            continue;
+        }
+        out.push(group.to_vec());
+    }
+    out
 }
 
 /// The card for a cluster: its corner and edges (see the module's notes).
@@ -551,6 +561,10 @@ fn card(members: &[&Tagged<Triangle>]) -> Option<(Vector3<f64>, Vector3<f64>, Ve
     let (u, v) = (a1 * (w * k), a2 * (h * k));
     Some((mid - 0.5 * (u + v), u, v))
 }
+
+#[cfg(test)]
+#[path = "lod_research.rs"]
+mod research;
 
 #[cfg(test)]
 mod tests {

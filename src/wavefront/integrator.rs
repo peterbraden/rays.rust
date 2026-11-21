@@ -184,6 +184,8 @@ impl<'a> Kernels<'a> {
     /// The paths `paths` (each its place in the caller's list, its pixel and its sample's
     /// number), stage by stage: each finished path's place, radiance and rays; the seconds
     /// the batch took; and what its stages did.
+    // (Never inlined: a profiler collects inside it, `--toggle-collect=*Kernels*batch*`.)
+    #[inline(never)]
     fn batch<M: pathtrace::Media>(&self, wanted: &[(u32, u32, u32)]) -> (Vec<(u32, Color, u64)>, f64, Stats) {
         let began = crate::time_map::thread_time();
         let (s, flat) = (self.s, self.flat);

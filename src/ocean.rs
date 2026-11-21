@@ -524,11 +524,15 @@ struct WaveTile {
 fn bilinear<const N: usize>(n: usize, size: f64, texels: &[[f32; N]], x: f64, z: f64) -> [f64; N] {
     let (u, v) = (x / size * n as f64, z / size * n as f64);
     let n = n as i64;
-    let (u0, v0) = (u.floor(), v.floor());
+    // (`floor` without the library's call, which it is on a plain x86-64: `shared::Real`'s.)
+    let (u0, v0) = (shared::Real::floor(u), shared::Real::floor(v));
     let (fu, fv) = (u - u0, v - v0);
     let mut out = [0.; N];
+    // (A tile is a power of two across: its indices wrap by a mask, which is the remainder
+    // without the eight divisions a lookup it took, in the middle of every march's step.)
+    debug_assert!(n & (n - 1) == 0);
     for (du, dv, w) in [(0, 0, (1. - fu) * (1. - fv)), (1, 0, fu * (1. - fv)), (0, 1, (1. - fu) * fv), (1, 1, fu * fv)] {
-        let (i, j) = ((u0 as i64 + du).rem_euclid(n), (v0 as i64 + dv).rem_euclid(n));
+        let (i, j) = ((u0 as i64 + du) & (n - 1), (v0 as i64 + dv) & (n - 1));
         let t = &texels[(j * n + i) as usize];
         for a in 0..N {
             out[a] += t[a] as f64 * w;
@@ -1066,6 +1070,8 @@ impl Ocean {
     /// start.
     pub fn export(&self) -> Vec<f32> {
         let tiles = &self.waves.tiles;
+        // (The kernel wraps a tile's indices by a mask.)
+        assert!(tiles.iter().all(|t| t.n.is_power_of_two()), "a wave tile's size must be a power of two");
         let header = 14 + 4 * tiles.len();
         let mut out = vec![
             self.planet_radius.unwrap_or(0.) as f32, self.detail_center.x as f32, self.detail_center.y as f32, self.detail_distance as f32,

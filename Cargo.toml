@@ -53,6 +53,10 @@ pathtrace = { path = "shaders/pathtrace" }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 wgpu = { version = "30", optional = true, features = ["spirv"] }
 
+# The tests count the kernels' traversal work (`pathtrace::stats`); a render doesn't.
+[dev-dependencies]
+pathtrace = { path = "shaders/pathtrace", features = ["stats"] }
+
 [lib]
 name = "rays"
 path = "src/lib.rs"

@@ -116,15 +116,15 @@ pub struct Kernels<'a> {
     pub buffers: Buffers,
 }
 
-/// A kernel's ray, as the scene's own code takes one.
-fn host_ray(ro: Vec3, rd: Vec3) -> Ray {
-    Ray { ro: Vector3::new(ro.x as f64, ro.y as f64, ro.z as f64), rd: Vector3::new(rd.x as f64, rd.y as f64, rd.z as f64).normalize() }
+/// A kernel's ray (in the frame about `origin`), as the scene's own code takes one.
+fn host_ray(ro: Vec3, rd: Vec3, origin: &Vector3<f64>) -> Ray {
+    Ray { ro: Vector3::new(ro.x as f64, ro.y as f64, ro.z as f64) + origin, rd: Vector3::new(rd.x as f64, rd.y as f64, rd.z as f64).normalize() }
 }
 
 /// Shadow rays past the shapes the kernels can't test.
 impl pathtrace::HostShapes for Kernels<'_> {
     fn occluded(&self, ro: Vec3, rd: Vec3, tmax: f32) -> bool {
-        let r = host_ray(ro, rd);
+        let r = host_ray(ro, rd, &self.buffers.origin);
         self.buffers.host_shapes.iter().any(|&k| self.flat.shapes[k].0.geometry.occludes(&r, crate::wavefront::flat::MIN_SHAPE, tmax as f64))
     }
 }
@@ -201,7 +201,7 @@ impl<'a> Kernels<'a> {
         };
         // Camera rays, and the paths they start (`pathtrace::start_paths` on the GPU).
         let mut paths: Vec<((u32, u32, u32), PathState)> = wanted.iter().filter_map(|&(place, pixel, k)| {
-            let ray = crate::kernels::camera_ray(s, pixel as usize, k as usize);
+            let ray = crate::kernels::camera_ray(s, pixel as usize, k as usize, &self.buffers.origin);
             (ray.d.w >= 0.5).then(|| ((place, pixel, k), PathState::start(pixel, k, self.buffers.params.seed.x, &ray)))
         }).collect();
         lap(&mut stats, Stage::Generate, paths.len());
@@ -215,7 +215,7 @@ impl<'a> Kernels<'a> {
             for (_, p) in paths.iter_mut() {
                 let mut found = pathtrace::intersect_surface(&scene, p);
                 if !host_shapes.is_empty() {
-                    let r = host_ray(p.o.truncate(), p.d.truncate());
+                    let r = host_ray(p.o.truncate(), p.d.truncate(), &self.buffers.origin);
                     let mut reach = if found.state.z == u32::MAX { f64::INFINITY } else { found.hit.x as f64 };
                     for &shape in host_shapes {
                         if let Some(x) = flat.shapes[shape].0.geometry.intersects_range(&r, crate::wavefront::flat::MIN_SHAPE, reach) {
@@ -244,7 +244,7 @@ impl<'a> Kernels<'a> {
             // 4. The host's vertices.
             let mut waiting = 0;
             for ((_, pixel, k), p) in paths.iter_mut().filter(|(_, p)| p.state.y & PATH_HOST != 0) {
-                *p = crate::kernels::host::shade(s, flat, p, *pixel, *k);
+                *p = crate::kernels::host::shade(s, flat, &self.buffers.origin, p, *pixel, *k);
                 waiting += 1;
             }
             if waiting > 0 {
@@ -488,6 +488,64 @@ pub mod tests {
             assert_eq!(resumed.samples_at(x, y), adaptive.samples_at(x, y), "pixel {}'s samples", i);
             assert_eq!(resumed.get_pixel(x, y), adaptive.get_pixel(x, y), "pixel {}", i);
         }
+    }
+
+    /// The render's frame is about the camera (`kernels::origin`), so where in the world a
+    /// scene stands doesn't matter to the kernels' f32: the same scene 7,000 km from the
+    /// world's origin, where a float's steps are half a metre, is the same picture pixel for
+    /// pixel; primitives, a plane, lights, an emitter, plastic and glass. (Laid out about the
+    /// world's origin instead, its primitives are on a float's grid there.)
+    ///
+    /// Only the kernels' part of a scene: what the scene's own code does, it does in the
+    /// world's frame, in f64, and not all of it the same everywhere. Found with this test: a
+    /// torus (the host's to intersect: a quartic in the world's coordinates) and rough glass
+    /// (the host's to shade: its rays start off the surface by a fraction of the point's
+    /// distance from the world's origin, `Intersection::spawn_offset`) each change a tenth of
+    /// this picture's pixels out there. Moving a shape or a material into the kernels is what
+    /// mends that.
+    #[test]
+    fn test_a_scene_far_from_the_origin_is_the_scene_at_it() {
+        let scene = |d: [f64; 3]| {
+            let at = |p: [f64; 3]| format!("[{}, {}, {}]", p[0] + d[0], p[1] + d[1], p[2] + d[2]);
+            SceneFile::from_string(format!(r#"{{
+                "width": 24, "height": 16, "background": [0.2, 0.25, 0.3], "max_depth": 5, "path_termination": "russian_roulette",
+                "sun": {{ "direction": [-1, 2, -1], "intensity": 2 }},
+                "lights": [ {{ "location": {light}, "intensity": 4 }} ],
+                "camera": {{ "location": {eye}, "lookat": {look}, "up": [0, 1, 0], "angle": 0.6, "aperture": 0 }},
+                "materials": {{
+                    "F": {{ "type": "lambertian", "albedo": [0.6, 0.6, 0.6] }},
+                    "P": {{ "type": "plastic", "albedo": [0.7, 0.2, 0.1], "roughness": 0.3 }},
+                    "R": {{ "type": "dielectric", "refractive_index": 1.5 }},
+                    "E": {{ "type": "diffuse-light", "color": [1, 0.9, 0.8], "intensity": 8 }}
+                }},
+                "objects": [
+                    {{ "type": "plane", "y": {floor}, "material": "F" }},
+                    {{ "type": "sphere", "location": {ball}, "radius": 0.5, "material": "P" }},
+                    {{ "type": "sphere", "location": {glass}, "radius": 0.4, "material": "R" }},
+                    {{ "type": "box", "min": {lo}, "max": {hi}, "material": "F" }},
+                    {{ "type": "sphere", "location": {lamp}, "radius": 0.3, "material": "E" }}
+                ]
+            }}"#, light = at([1., 3., -1.]), eye = at([0., 1.5, -5.]), look = at([0., 0.5, 0.]), floor = d[1], ball = at([-1.2, 0.5, 0.]),
+                glass = at([0., 0.4, -0.8]), lo = at([-0.4, 0., 0.6]), hi = at([0.4, 0.8, 1.4]), lamp = at([0., 2.5, 1.])))
+        };
+        let (near, far) = (scene([0., 0., 0.]), scene([3_000_000., 200_000., -7_000_000.]));
+        let (a, b) = (mean_image(&near, 32), mean_image(&far, 32));
+        let (w, h) = (near.image.width, near.image.height);
+        let differing = (0..w * h).filter(|&i| (a[i].rgb - b[i].rgb).norm() > 1e-3 * (0.05 + a[i].rgb.norm())).count();
+        assert_eq!(differing, 0, "{} of {} pixels differ", differing, w * h);
+        let (ta, tb) = (tiles(&a, w, h, 3, 2), tiles(&b, w, h, 3, 2));
+        for t in 0..6 {
+            for ch in 0..3 {
+                assert!((ta[t][ch] - tb[t][ch]).abs() < 0.01 * ta[t][ch] + 1e-4, "tile {} channel {}: at the origin {} vs far from it {}", t, ch, ta[t][ch], tb[t][ch]);
+            }
+        }
+        // And about the world's origin, the far scene's primitives are on a float's grid there.
+        let flat = FlatScene::build(&far).unwrap();
+        let world = crate::kernels::Buffers::build_at(&far, &flat, &Vector3::zeros()).unwrap();
+        let local = crate::kernels::Buffers::build(&far, &flat).unwrap();
+        let fine = |b: &crate::kernels::Buffers| b.prim_records.iter().filter(|p| p.info.x == pathtrace::PRIM_TRIANGLE)
+            .any(|p| (p.v0.x.fract() != 0. && (p.v0.x * 2.).fract() != 0.) || (p.v1.x * 2.).fract() != 0. || (p.v2.x * 2.).fract() != 0.);
+        assert!(fine(&local) && !fine(&world));
     }
 
     #[test]

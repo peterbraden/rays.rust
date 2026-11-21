@@ -96,7 +96,7 @@ pub(crate) fn env_direction(x: usize, y: usize, width: usize, height: usize) -> 
 /// returning where it starts.
 /// The media's records (`pathtrace::MEDIUM_SIZE` floats each, one after another), after the
 /// cloud layers' own that they point to: where the first begins.
-pub(crate) fn media_records(tables: &mut Vec<f32>, media: &[crate::volume::FlatMedium]) -> u32 {
+pub(crate) fn media_records(tables: &mut Vec<f32>, media: &[crate::volume::FlatMedium], origin: &Vector3<f64>) -> u32 {
     use crate::material::phase::PhaseFunction;
     use crate::volume::FieldExport;
     let fields: Vec<(u32, f32, f32)> = media.iter().map(|m| match &m.field {
@@ -114,7 +114,8 @@ pub(crate) fn media_records(tables: &mut Vec<f32>, media: &[crate::volume::FlatM
     }).collect();
     let first = tables.len() as u32;
     for (m, (kind, density, radius)) in media.iter().zip(fields) {
-        let (lo, hi) = (m.bounds.min, m.bounds.max);
+        // (Its box in the render's frame; its density stays where it is in the world.)
+        let (lo, hi) = (m.bounds.min.coords - origin, m.bounds.max.coords - origin);
         let phase = match m.phase {
             PhaseFunction::HenyeyGreenstein { g } => [pathtrace::PHASE_HENYEY_GREENSTEIN as f32, g as f32, 0., 0., 0.],
             PhaseFunction::HgDraine { g_hg, g_d, alpha, w_d } => [pathtrace::PHASE_DROPLETS as f32, g_hg as f32, g_d as f32, alpha as f32, w_d as f32],
@@ -133,13 +134,14 @@ pub(crate) fn media_records(tables: &mut Vec<f32>, media: &[crate::volume::FlatM
     first
 }
 
-pub(crate) fn air_record(tables: &mut Vec<f32>, air: &crate::skysphere::AirExport) -> u32 {
+pub(crate) fn air_record(tables: &mut Vec<f32>, air: &crate::skysphere::AirExport, origin: &Vector3<f64>) -> u32 {
     use pathtrace::*;
     let base = tables.len();
     tables.resize(base + AIR_HEADER as usize, 0.);
     let put = |tables: &mut Vec<f32>, i: u32, v: f64| tables[base + i as usize] = v as f32;
     let put3 = |tables: &mut Vec<f32>, i: u32, v: &Vector3<f64>| (0..3).for_each(|k| tables[base + i as usize + k] = v[k] as f32);
-    let c = air.earth_centre;
+    // (In the render's frame.)
+    let c = air.earth_centre - origin;
     put3(tables, AIR_CENTRE, &c);
     put(tables, AIR_RADII, air.earth_radius);
     put(tables, AIR_RADII + 1, air.atmosphere_radius);
@@ -168,7 +170,7 @@ pub(crate) fn air_record(tables: &mut Vec<f32>, air: &crate::skysphere::AirExpor
     offset(tables, 0, Some(air.sun_table.iter().flat_map(|d| d.map(|x| x as f32)).collect()));
     offset(tables, 1, air.multiple.as_ref().map(|m| m.iter().flat_map(|v| [v.x as f32, v.y as f32, v.z as f32]).collect()));
     offset(tables, 2, air.lut.as_ref().map(|l| l.iter().flat_map(|(r, m, s)| [r, m, s]).flat_map(|v| [v.x as f32, v.y as f32, v.z as f32]).collect()));
-    let moon = air.moon.as_ref().map_or(NO_AIR, |m| air_record(tables, m));
+    let moon = air.moon.as_ref().map_or(NO_AIR, |m| air_record(tables, m, origin));
     tables[base + (AIR_TABLES + 3) as usize] = f32::from_bits(moon);
     base as u32
 }
@@ -307,6 +309,21 @@ pub struct Buffers {
     /// intersects (`pathtrace::PRIM_HOST`), and their names, for a device that can't ask it.
     pub host_shapes: Vec<usize>,
     pub unported: Vec<String>,
+    /// The render's origin in the world (`origin`), which every position here is relative to.
+    pub origin: Vector3<f64>,
+}
+
+/// The render's origin for a scene: at the camera, to the nearest whole number a float holds
+/// exactly (so that adding it back in the kernels, for what is tabulated by where it is in the
+/// world, rounds once and not twice; and so that cameras a step apart share a frame).
+///
+/// f64 is for where things are in the world; a render needs where they are from the camera.
+/// A float holds a direction to 6e-8, far finer than a pixel, so a point kept relative to the
+/// camera is placed to a small fraction of a pixel however far off it is, and to micrometres
+/// near by, wherever in the world the camera stands. The frame is chosen here, on the host, in
+/// f64, and the kernels are given nothing but numbers in it (plan.md section 15).
+pub fn origin(s: &Scene) -> Vector3<f64> {
+    crate::environment::viewpoint(s).map(|v| v.round() as f32 as f64)
 }
 
 impl Buffers {
@@ -331,6 +348,12 @@ fn host_kernels(s: &Scene, flat: &FlatScene) -> Vec<Option<GpuMaterial>> {
 impl Buffers {
     /// The flattened scene as the shader's buffers, or why it can't be.
     pub fn build(s: &Scene, flat: &FlatScene) -> Result<Buffers, String> {
+        Buffers::build_at(s, flat, &origin(s))
+    }
+
+    /// `build`, about `origin`: every position in the buffers is relative to it
+    /// (`pathtrace::Params::origin`).
+    pub fn build_at(s: &Scene, flat: &FlatScene, origin: &Vector3<f64>) -> Result<Buffers, String> {
         // A shape its own code intersects needs a kernel of its kind: there is one for the
         // sea (`pathtrace::ocean_hit`), of which the kernels take one. The rest are the
         // host's (`pathtrace::PRIM_HOST`), where the device can ask it.
@@ -369,7 +392,7 @@ impl Buffers {
                 Profile::Spot { axis, cos_falloff_start, cos_total } => (1., *axis, *cos_falloff_start, *cos_total),
                 _ => return Err("goniometric and projection lights".into()),
             };
-            lights.push(GpuLight { pos: v4(&l.position, kind), intensity: c4(&i), axis: v4(&axis, start as f32), extra: Vec4::new(end as f32, 0., 0., 0.) });
+            lights.push(GpuLight { pos: v4(&(l.position - origin), kind), intensity: c4(&i), axis: v4(&axis, start as f32), extra: Vec4::new(end as f32, 0., 0., 0.) });
         }
         if lights.is_empty() {
             lights.push(GpuLight::zeroed());
@@ -387,14 +410,14 @@ impl Buffers {
             g.info = UVec4::new(pathtrace::PRIM_TRIANGLE, material_index[m as usize], emitter, 0);
             match p {
                 Prim::Triangle { v, n } => {
-                    g.v0 = v4(&v[0], 0.); g.v1 = v4(&v[1], 0.); g.v2 = v4(&v[2], 0.);
+                    g.v0 = v4(&(v[0] - origin), 0.); g.v1 = v4(&(v[1] - origin), 0.); g.v2 = v4(&(v[2] - origin), 0.);
                     if let Some(n) = n {
                         g.n0 = v4(&n[0], 0.); g.n1 = v4(&n[1], 0.); g.n2 = v4(&n[2], 0.);
                         g.info.w = 1;
                     }
                 },
-                Prim::Sphere { center, radius } => { g.v0 = v4(center, *radius as f32); g.info.x = pathtrace::PRIM_SPHERE; },
-                Prim::Plane { y } => { g.v0 = Vec4::new(*y as f32, 0., 0., 0.); g.info.x = pathtrace::PRIM_PLANE; },
+                Prim::Sphere { center, radius } => { g.v0 = v4(&(center - origin), *radius as f32); g.info.x = pathtrace::PRIM_SPHERE; },
+                Prim::Plane { y } => { g.v0 = Vec4::new((*y - origin.y) as f32, 0., 0., 0.); g.info.x = pathtrace::PRIM_PLANE; },
             }
             g
         };
@@ -422,7 +445,8 @@ impl Buffers {
             prims.push(GpuPrim::zeroed());
         }
         // The shader's traversal stack holds at most one child per level of interior nodes.
-        let exported = flat.bvh.export();
+        let exported: Vec<_> = flat.bvh.export().into_iter()
+            .map(|(b, x, y)| (crate::shapes::bbox::BBox::new(b.min.coords - origin, b.max.coords - origin), x, y)).collect();
         let depth = bvh_depth(&exported);
         if depth > pathtrace::STACK {
             return Err(format!("a BVH {} levels deep (the shader's stack holds {})", depth, pathtrace::STACK));
@@ -447,7 +471,7 @@ impl Buffers {
         // The sky as seen from the camera, as the CPU integrators see it from each ray's
         // origin: exact for camera rays, near enough for paths that stay near the camera (from
         // the world's origin, an orbiting camera saw the night side's ground-level sky).
-        let origin = crate::environment::viewpoint(s);
+        let viewpoint = crate::environment::viewpoint(s);
         // The map's size: full where the shader reads the light from it, the CPU's where it
         // only chooses directions (`SAMPLING_WIDTH`).
         let per_ray = matches!(s.render.background, crate::scene::Background::Space(_))
@@ -455,7 +479,7 @@ impl Buffers {
         let (env_width, env_height, scale) = if per_ray { (SAMPLING_WIDTH, SAMPLING_HEIGHT, 1) } else { (ENV_WIDTH, ENV_HEIGHT, VISIBILITY_SCALE) };
         let texels: Vec<Color> = (0..env_width * env_height).into_par_iter().map(|i| {
             let d = env_direction(i % env_width, i / env_width, env_width, env_height);
-            crate::wavefront::integrator::sky_radiance(&Ray { ro: origin, rd: d }, s, flat)
+            crate::wavefront::integrator::sky_radiance(&Ray { ro: viewpoint, rd: d }, s, flat)
         }).collect();
         for t in &texels {
             tables.extend([t.rgb.x as f32, t.rgb.y as f32, t.rgb.z as f32]);
@@ -467,7 +491,7 @@ impl Buffers {
         let (vw, vh) = (env_width / scale, env_height / scale);
         let visible: Vec<f64> = (0..vw * vh).into_par_iter().map(|i| {
             let (x, y) = ((i % vw) * scale + scale / 2, (i / vw) * scale + scale / 2);
-            crate::environment::visibility(s, &origin, &env_direction(x, y, env_width, env_height))
+            crate::environment::visibility(s, &viewpoint, &env_direction(x, y, env_width, env_height))
         }).collect();
         let weight = |x: usize, y: usize| {
             let theta = (y as f64 + 0.5) / env_height as f64 * std::f64::consts::PI;
@@ -489,18 +513,28 @@ impl Buffers {
             let object = &flat.shapes[sea.unwrap()].0;
             let at = tables.len();
             tables.extend(waves.export());
+            // In the render's frame: where its waves are displaced, and the planet's centre
+            // with |c|² - r² (or for a plane, sea level in the centre's y).
+            let radius = tables[at + pathtrace::OCEAN_RADIUS as usize] as f64;
+            let centre = Vector3::new(0., -radius, 0.) - origin;
+            tables[at + pathtrace::OCEAN_CENTRE as usize] -= origin.x as f32;
+            tables[at + pathtrace::OCEAN_CENTRE as usize + 1] -= origin.z as f32;
+            for k in 0..3 {
+                tables[at + pathtrace::OCEAN_PLANET as usize + k] = centre[k] as f32;
+            }
+            tables[at + pathtrace::OCEAN_EXCESS as usize] = (centre.norm_squared() - radius * radius) as f32;
             if let Some(foam) = object.medium.material_at(Vector3::zeros()).water().and_then(|w| w.foam) {
                 tables[at + pathtrace::OCEAN_FOAM as usize] = f32::from_bits((tables.len() - at) as u32);
                 tables.extend(foam);
             }
             at as u32 + 1
         });
-        let media = media_records(&mut tables, &flat.media);
+        let media = media_records(&mut tables, &flat.media, origin);
         // The air: the sky's (for escaping rays), the aerial perspective's, the sun's.
         let sky_air = flat.sky.as_ref().and_then(|sky| sky.medium.material_at(Vector3::zeros()).air());
-        let sky_off = sky_air.map_or(pathtrace::NO_AIR, |a| air_record(&mut tables, &a));
-        let aerial_off = s.atmosphere.as_ref().map_or(pathtrace::NO_AIR, |a| air_record(&mut tables, &a.export()));
-        let sun_off = s.sun.as_ref().and_then(|sun| sun.atmosphere.as_ref()).map_or(pathtrace::NO_AIR, |a| air_record(&mut tables, &a.export()));
+        let sky_off = sky_air.map_or(pathtrace::NO_AIR, |a| air_record(&mut tables, &a, origin));
+        let aerial_off = s.atmosphere.as_ref().map_or(pathtrace::NO_AIR, |a| air_record(&mut tables, &a.export(), origin));
+        let sun_off = s.sun.as_ref().and_then(|sun| sun.atmosphere.as_ref()).map_or(pathtrace::NO_AIR, |a| air_record(&mut tables, &a.export(), origin));
         // Space, if it is the background.
         let space_off = match &s.render.background {
             crate::scene::Background::Space(space) => space_record(&mut tables, space),
@@ -536,27 +570,28 @@ impl Buffers {
             seed: UVec4::new(s.render.seed as u32, rr, 0, 1),
             air: UVec4::new(sky_off, aerial_off, sun_off, space_off),
             media: UVec4::new(media, flat.media.len() as u32, 0, 0),
+            origin: v4(origin, 0.),
         };
-        Ok(Buffers { params, prims: pathtrace::pack_prims(&prims), prim_records: prims, nodes, materials, lights, tables, hosts: hosts > 0, host_shapes, unported })
+        Ok(Buffers { params, prims: pathtrace::pack_prims(&prims), prim_records: prims, nodes, materials, lights, tables, hosts: hosts > 0, host_shapes, unported, origin: *origin })
     }
 }
 
-/// Camera rays for sample `k` of every pixel.
-pub fn camera_rays(s: &Scene, k: usize) -> Vec<GpuRay> {
-    camera_rays_for(s, &vec![Some(k as u32); s.image.width * s.image.height])
+/// Camera rays for sample `k` of every pixel, in the frame about `origin`.
+pub fn camera_rays(s: &Scene, k: usize, origin: &Vector3<f64>) -> Vec<GpuRay> {
+    camera_rays_for(s, &vec![Some(k as u32); s.image.width * s.image.height], origin)
 }
 
 /// The camera ray of each pixel's sample `samples[pixel]`; a dead ray (as one the lens
 /// stops) for a pixel that takes none.
-pub fn camera_rays_for(s: &Scene, samples: &[Option<u32>]) -> Vec<GpuRay> {
+pub fn camera_rays_for(s: &Scene, samples: &[Option<u32>], origin: &Vector3<f64>) -> Vec<GpuRay> {
     (0..s.image.width * s.image.height).into_par_iter().map(|index| match samples[index] {
-        Some(k) => camera_ray(s, index, k as usize),
+        Some(k) => camera_ray(s, index, k as usize, origin),
         None => GpuRay::zeroed(),
     }).collect()
 }
 
 /// Pixel `index`'s camera ray for its sample `k` (zero if the lens stops it).
-pub fn camera_ray(s: &Scene, index: usize, k: usize) -> GpuRay {
+pub fn camera_ray(s: &Scene, index: usize, k: usize, origin: &Vector3<f64>) -> GpuRay {
     let (w, h) = (s.image.width, s.image.height);
     let (x, y) = (index % w, index / w);
     let stream = k as u64 * (w * h) as u64 + index as u64;
@@ -565,7 +600,7 @@ pub fn camera_ray(s: &Scene, index: usize, k: usize) -> GpuRay {
     let ((fx, wx), (fy, wy)) = (s.render.filter.sample_weighted(sampler.next()), s.render.filter.sample_weighted(sampler.next()));
     match s.camera.get_ray_weighted(x as f64 / w as f64, y as f64 / h as f64, (0.5 + fx) / w as f64, (0.5 + fy) / h as f64) {
         // d.w: the sample's number plus one, for `pathtrace::start_paths`.
-        Some((ray, weight)) => GpuRay { o: v4(&ray.ro, (weight * wx * wy) as f32), d: v4(&ray.rd.normalize(), (k + 1) as f32) },
+        Some((ray, weight)) => GpuRay { o: v4(&(ray.ro - origin), (weight * wx * wy) as f32), d: v4(&ray.rd.normalize(), (k + 1) as f32) },
         None => GpuRay::zeroed(),
     }
 }

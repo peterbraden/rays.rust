@@ -48,16 +48,18 @@ use crate::wavefront::integrator::{host_vertex, HostVertex};
 use pathtrace::glam::{Vec3, Vec4};
 use pathtrace::{PathState, PATH_ACTIVE, PATH_DIRECTIONAL, PATH_HOST, PATH_LIGHTS_COUNTED, PATH_SCATTERED, PATH_SPECULAR};
 
-/// A waiting path (`PATH_HOST`) of `pixel`'s sample `sample`, after its vertex: with its next
+/// A waiting path (`PATH_HOST`) of `pixel`'s sample `sample`, in the frame about `origin`
+/// (`kernels::origin`), after its vertex: with its next
 /// ray and queued to go on, or ended.
-pub fn shade(s: &Scene, flat: &FlatScene, p: &PathState, pixel: u32, sample: u32) -> PathState {
+pub fn shade(s: &Scene, flat: &FlatScene, origin: &Vector3<f64>, p: &PathState, pixel: u32, sample: u32) -> PathState {
     let mut next = *p;
     let flags = p.state.y & !(PATH_HOST | PATH_ACTIVE);
     next.state.y = flags;
     next.state.z = 0;
     next.hit = Vec4::ZERO;
     let f64s = |v: Vec3| Vector3::new(v.x as f64, v.y as f64, v.z as f64);
-    let ray = Ray { ro: f64s(p.o.truncate()), rd: f64s(p.d.truncate()).normalize() };
+    // (The kernels' frame is about `origin`; the scene's own code is in the world's.)
+    let ray = Ray { ro: f64s(p.o.truncate()) + origin, rd: f64s(p.d.truncate()).normalize() };
     // The hit again, on the primitive the kernel found but in f64: a point on the surface to
     // the precision the renderer's materials offset their rays by. (A ray that grazed the
     // primitive in f32 and misses it in f64 ends here: its vertex was an edge's.)
@@ -85,10 +87,11 @@ pub fn shade(s: &Scene, flat: &FlatScene, p: &PathState, pixel: u32, sample: u32
     }
     // The next ray leaves from where the scene's own code put it, off the surface by what
     // f64 needs; the kernels' f32 rounds a point by up to 6e-8 of its distance from the
-    // origin, which far off is more than that (64 m at Saturn's 1.5 million km: the ray would
+    // render's origin, which far off is more than that (64 m at Saturn's 1.5 million km: the ray would
     // start on either side of its rings). So further off, on the side it leaves by.
     let side = if v.ray.rd.dot(&hit.geometric) >= 0. { hit.geometric } else { -hit.geometric };
-    let from = v.ray.ro + side * (4e-6 * (1. + v.ray.ro.amax()));
+    let from = v.ray.ro - origin;
+    let from = from + side * (4e-6 * (1. + from.amax()));
     next.o = f32s(&from).extend(p.o.w);
     next.d = f32s(&v.ray.rd).extend(v.prev_pdf as f32);
     next.beta = f32s(&v.beta.rgb).extend(v.depth as f32);

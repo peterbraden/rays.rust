@@ -44,6 +44,13 @@ pub struct Params {
     pub air: UVec4,
     /// The media (`MEDIUM_*`): where their records begin in `tables`, and how many.
     pub media: UVec4,
+    /// The render's origin in the world (the renderer's `kernels::origin`: at the camera).
+    /// Every position here is relative to it: rays, primitives, boxes, lights, centres. So
+    /// f32 holds what is near the camera finely wherever in the world that is, and what is
+    /// far to a constant fraction of its distance, which is a constant fraction of a pixel.
+    /// Only what is tabulated by where it is in the world (the waves' tiles, the foam's and
+    /// the clouds' noise) adds it back (`world`).
+    pub origin: Vec4,
 }
 
 #[derive(Copy, Clone)]
@@ -177,7 +184,11 @@ pub const OCEAN_TILES: u32 = 6;
 pub const OCEAN_LAMBDA: u32 = 8;
 /// Where the sea's foam's record begins, from the sea's (as bits; 0 for none).
 pub const OCEAN_FOAM: u32 = 9;
-pub const OCEAN_HEADER: u32 = 10;
+/// The planet's centre in the render's frame, and |c|² - r² for it, as the air's are
+/// (`excess`): filled in by whoever lays the record out (the renderer's `kernels`).
+pub const OCEAN_PLANET: u32 = 10;
+pub const OCEAN_EXCESS: u32 = 13;
+pub const OCEAN_HEADER: u32 = 14;
 pub const OCEAN_TILE: u32 = 4;
 /// The least Jacobian of the choppy map the slopes are sharpened by (the renderer's
 /// `ocean::MIN_JACOBIAN`).
@@ -524,6 +535,11 @@ struct Ocean {
     tiles: u32,
     displaced: u32,
     lambda: f32,
+    /// The planet's centre, and |c|² - r² (`excess`'s k for sea level).
+    planet: Vec3,
+    k: f32,
+    /// The render's origin in the world, along x and z: where the waves' tiles are laid.
+    shift: Vec2,
 }
 
 fn load_ocean(s: &Scene) -> Ocean {
@@ -538,12 +554,10 @@ fn load_ocean(s: &Scene) -> Ocean {
         tiles: at(s.tables, base + OCEAN_TILES) as u32,
         displaced: at(s.tables, base + OCEAN_TILES + 1) as u32,
         lambda: at(s.tables, base + OCEAN_LAMBDA),
+        planet: tv3(s, base + OCEAN_PLANET),
+        k: at(s.tables, base + OCEAN_EXCESS),
+        shift: Vec2::new(s.params.origin.x, s.params.origin.z),
     }
-}
-
-/// The planet's centre, for `excess` (whose k, |c|² - r², is 0 for it).
-fn ocean_centre(o: &Ocean) -> Vec3 {
-    Vec3::new(0.0, -o.radius, 0.0)
 }
 
 /// Where (x, z) lies in a tile of `n` texels a side over `size` metres, which repeats: the
@@ -649,15 +663,15 @@ fn waves(s: &Scene, o: &Ocean, x: f32, z: f32, slopes: bool) -> Vec3 {
 /// Height above the mean surface.
 fn ocean_altitude(o: &Ocean, p: Vec3) -> f32 {
     if o.radius > 0.0 {
-        let c = ocean_centre(o);
-        excess(p, c, 0.0) / ((p - c).length() + o.radius)
+        excess(p, o.planet, o.k) / ((p - o.planet).length() + o.radius)
     } else {
-        p.y
+        // (A flat sea's level is in its centre's y.)
+        p.y - o.planet.y
     }
 }
 
 fn ocean_up(o: &Ocean, p: Vec3) -> Vec3 {
-    if o.radius > 0.0 { (p - ocean_centre(o)).normalize() } else { Vec3::Y }
+    if o.radius > 0.0 { (p - o.planet).normalize() } else { Vec3::Y }
 }
 
 /// `Ocean::above`: height above the displaced surface.
@@ -668,19 +682,20 @@ fn ocean_above(s: &Scene, o: &Ocean, p: Vec3) -> f32 {
     if a <= 0.0 {
         return altitude;
     }
-    altitude - a * waves(s, o, p.x, p.z, false).x
+    altitude - a * waves(s, o, p.x + o.shift.x, p.z + o.shift.y, false).x
 }
 
 /// `Ocean::below`: the stretch of the ray below altitude `level` (z is 0 if there is none).
 fn ocean_below(o: &Ocean, ro: Vec3, rd: Vec3, level: f32) -> Vec3 {
     if o.radius > 0.0 {
-        // |c|² - (r + level)², with |c| = r.
-        let k = -(2.0 * o.radius * level + level * level);
-        return match sphere_roots(ro, rd, ocean_centre(o), k) {
+        // |c|² - (r + level)².
+        let k = o.k - (2.0 * o.radius * level + level * level);
+        return match sphere_roots(ro, rd, o.planet, k) {
             Some((a, b)) => Vec3::new(a, b, 1.0),
             None => Vec3::ZERO,
         };
     }
+    let level = level + o.planet.y;
     let t = (level - ro.y) / rd.y;
     if rd.y < 0.0 {
         Vec3::new(t, INF, 1.0)
@@ -789,6 +804,7 @@ fn ocean_hit(s: &Scene, ro: Vec3, rd: Vec3) -> f32 {
 /// with w 1; else in x how much the bubbles under a breaking crest pale the water, with w 0.
 fn sea_foam(s: &Scene, x: f32, z: f32, rng: &mut u32) -> Vec4 {
     let o = load_ocean(s);
+    let (x, z) = (x + o.shift.x, z + o.shift.y);
     let place = at(s.tables, o.base + OCEAN_FOAM).to_bits();
     if place == 0 {
         return Vec4::ZERO;
@@ -838,7 +854,7 @@ fn ocean_normal(s: &Scene, p: Vec3) -> Vec3 {
     let up = ocean_up(&o, p);
     let east = (Vec3::X - up * up.x).normalize();
     let north = east.cross(up);
-    let w = waves(s, &o, p.x, p.z, true);
+    let w = waves(s, &o, p.x + o.shift.x, p.z + o.shift.y, true);
     (up - east * w.y - north * w.z).normalize()
 }
 
@@ -1110,6 +1126,11 @@ struct Air {
     multiple: u32,
     lut: u32,
     moon: u32,
+}
+
+/// Where a point of the render's frame is in the world's: for what is tabulated there.
+fn world(s: &Scene, p: Vec3) -> Vec3 {
+    p + s.params.origin.xyz()
 }
 
 fn tv3(s: &Scene, i: u32) -> Vec3 {
@@ -2612,7 +2633,7 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
     // sampled ripple. Its lights are counted by sampling them alone (no sky sample: the
     // reflection finds the sky).
     let mut water = mat.kind == MAT_WATER;
-    let water_up = if water && mat.p.x > 0.0 { (point + Vec3::new(0.0, mat.p.x, 0.0)).normalize() } else { Vec3::Y };
+    let water_up = if water && mat.p.x > 0.0 { ocean_up(&load_ocean(s), point) } else { Vec3::Y };
     // Seen from beyond a wave's slope: the mean surface.
     let water_n = if hit_ns.dot(wo) <= 0.0 { water_up } else { hit_ns };
     // Whitecaps: foam over a fraction of the point, chosen at random, scattering diffusely
@@ -3226,7 +3247,9 @@ pub fn media_collision(s: &Scene, ro: Vec3, rd: Vec3, reach: f32, flags: u32, rn
         let scale = segment_scale(s, flags, left, base);
         if near < far && scale > 0.0 {
             let medium = load_medium(s.tables, base);
-            if let Some(t) = shared::media::delta_track(&medium, (ro.x, ro.y, ro.z), (rd.x, rd.y, rd.z), near, far, scale, &mut random) {
+            // (The density is tabulated by where it is in the world.)
+            let from = world(s, ro);
+            if let Some(t) = shared::media::delta_track(&medium, (from.x, from.y, from.z), (rd.x, rd.y, rd.z), near, far, scale, &mut random) {
                 best = t;
                 which = m;
             }
@@ -3251,7 +3274,8 @@ pub fn media_transmittance(s: &Scene, ro: Vec3, rd: Vec3, tmax: f32, flags: u32,
         if near < far && scale > 0.0 {
             let medium = load_medium(s.tables, base);
             let lower = at(s.tables, base + MEDIUM_LOWER);
-            through = match shared::media::ratio_track(&medium, (ro.x, ro.y, ro.z), (rd.x, rd.y, rd.z), near, far, lower, scale, through, &mut random) {
+            let from = world(s, ro);
+            through = match shared::media::ratio_track(&medium, (from.x, from.y, from.z), (rd.x, rd.y, rd.z), near, far, lower, scale, through, &mut random) {
                 Some(left) => left,
                 None => 0.0,
             };

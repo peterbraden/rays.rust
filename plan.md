@@ -2269,6 +2269,31 @@ shares a batch's time among its paths by their rays), and of step 5, the loop: `
 now a way to render a chunk, not a renderer. demo.json, 320 x 200, 64 spp, four cores: the
 recursive tracer 5.8 s, the kernels 2.9 s; two runs of the kernels the same file.
 
+Done, step 2's frame (November 2026). The kernels' frame is about the camera
+(`kernels::origin`: the viewpoint to the nearest whole number a float holds; in
+`pathtrace::Params::origin`), and the host lays the scene out in it in f64: primitives,
+planes, the tree's boxes, lights, media's boxes, camera rays, the air's centres with their
+|c|² - r² (which `excess` already took), and the sea's (its planet's centre and excess in
+its record, where it had assumed the world's origin). Host vertices and host shapes go to
+and from the world's frame at the queue. What is tabulated by where it is in the world adds
+the origin back in f32 (the waves' tiles, the foam's noise, the clouds' densities): no
+worse than before, and no better; the phase from the host, as planned, is still to do, and
+is what the far sea's foam needs.
+- The test the frame is for: a scene of primitives, a plane, lights, an emitter, plastic
+  and glass renders the same 7,000 km from the world's origin as at it, every pixel within
+  a thousandth (`test_a_scene_far_from_the_origin_is_the_scene_at_it`); laid out about the
+  world's origin its triangles are on a half-metre grid there.
+- What it showed of the host's code, which computes in the world's frame in f64: a torus
+  (its quartic) and rough glass (ray offsets that grow with the distance from the world's
+  origin) each changed a tenth of that picture's pixels out there. `trace` has the same
+  flaws; nothing renders there today. Each goes when its shape or material is a kernel's.
+- The sea ray by ray in the frame (camera off the origin): as before, none of 4,000 rays
+  disagree. demo, ocean-1, block-terrain, benard-altocumulus, saturn: FLIP unchanged.
+- Not done: a far body in a frame of its own (the two-float subtraction): Saturn and the
+  Moon are the host's shapes, in f64, and what f32 cost there was where rays start again
+  (above). The planet as a sphere primitive still rounds half a metre at its centre's
+  distance; `excess`'s form would mend it, as for the sea.
+
 ### GPU-ready by construction
 
 What a kernel can't hold is refused where the code is written, not when someone next builds

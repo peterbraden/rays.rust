@@ -1059,17 +1059,20 @@ impl Ocean {
     /// The sea's shape as data, for the GPU's kernel of it (`pathtrace::ocean_hit`; the layout
     /// is `pathtrace::OCEAN_*`): the planet's radius (0 for a plane), where the waves displace
     /// it, their greatest height and slope, how many tiles of waves there are and how many
-    /// displace, the choppy map's λ, and a place for where its foam's record is (which whoever
-    /// lays that out fills in); then for each tile its size, its texels a side, and where
+    /// displace, the choppy map's λ, and places for where its foam's record is and for the
+    /// planet in the render's frame (which whoever lays the record out fills in:
+    /// `kernels::Buffers`); then for each tile its size, its texels a side, and where
     /// its texels and its choppy displacement's (0 if it has none) begin from the record's
     /// start.
     pub fn export(&self) -> Vec<f32> {
         let tiles = &self.waves.tiles;
-        let header = 10 + 4 * tiles.len();
+        let header = 14 + 4 * tiles.len();
         let mut out = vec![
             self.planet_radius.unwrap_or(0.) as f32, self.detail_center.x as f32, self.detail_center.y as f32, self.detail_distance as f32,
             self.waves.max_height as f32, self.waves.max_slope as f32, tiles.len() as f32, DISPLACED.min(tiles.len()) as f32,
             self.waves.lambda as f32, 0.,
+            // (The planet's centre in the render's frame, and its `excess`: laid out with it.)
+            0., 0., 0., 0.,
         ];
         let mut at = header;
         for t in tiles {

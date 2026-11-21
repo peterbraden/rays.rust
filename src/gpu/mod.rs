@@ -153,6 +153,10 @@ pub struct GpuRenderer {
     /// What setting up took, part by part, in seconds: the render's start, which a short
     /// render is mostly made of (plan.md section 12).
     pub setup: Vec<(&'static str, f64)>,
+    /// The render's origin, which the scene's buffers are laid out about (`kernels::origin`):
+    /// the camera's, when the scene was uploaded. Rays from a camera since moved are still
+    /// given in this frame.
+    pub origin: Vector3<f64>,
 }
 
 /// What serves the host's queue (`host`; `GpuRenderer::serve_host`): the kernels that gather
@@ -216,7 +220,7 @@ impl GpuRenderer {
             setup.push((what, (now - clock).as_secs_f64()));
             clock = now;
         };
-        let Buffers { params, prims, nodes, materials, lights, tables, hosts: any_host, unported, .. } = Buffers::build(s, flat)?;
+        let Buffers { params, prims, nodes, materials, lights, tables, hosts: any_host, unported, origin, .. } = Buffers::build(s, flat)?;
         // A kernel can't stop for the host in the midst of a shadow ray.
         if !unported.is_empty() {
             return Err(format!("shapes the kernels can't intersect yet: {}{}", unported.iter().take(4).cloned().collect::<Vec<_>>().join(", "), if unported.len() > 4 { " ..." } else { "" }));
@@ -447,20 +451,7 @@ impl GpuRenderer {
         });
         Ok(GpuRenderer { device, queue, intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline, start_pipeline, start_group, rays_buffer,
             round_groups, add_group, params, params_buffers,
-            queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, rounds_buffer, readback, host_queue, lanes: lanes as usize, block: Default::default(), adapter_name, timers, setup })
-    }
-
-    /// Camera rays for sample `k` of every pixel (`kernels::camera_rays`).
-    pub fn camera_rays(s: &Scene, k: usize) -> Vec<GpuRay> {
-        crate::kernels::camera_rays(s, k)
-    }
-
-    pub fn camera_rays_for(s: &Scene, samples: &[Option<u32>]) -> Vec<GpuRay> {
-        crate::kernels::camera_rays_for(s, samples)
-    }
-
-    fn camera_ray(s: &Scene, index: usize, k: usize) -> GpuRay {
-        crate::kernels::camera_ray(s, index, k)
+            queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, rounds_buffer, readback, host_queue, lanes: lanes as usize, block: Default::default(), adapter_name, timers, setup, origin })
     }
 
     /// Zero the image accumulated on the GPU.
@@ -488,7 +479,7 @@ impl GpuRenderer {
     /// most `lanes` of them) at once, each in a lane of the wavefront (`pathtrace::slots`):
     /// the rounds of one sample, for all of them. Returns at once.
     pub fn dispatch_block(&mut self, s: &Scene, first: &[usize], count: &[usize]) {
-        let rays = Self::make_rays(s, first, count);
+        let rays = Self::make_rays(s, first, count, &self.origin);
         self.dispatch_rays(rays);
     }
 
@@ -507,7 +498,7 @@ impl GpuRenderer {
     /// rounds, the paths waiting for the host are read back, shaded and queued again, until
     /// none waits; then the pass is added to the image. This waits on the device.
     pub async fn block_with_host(&mut self, s: &Scene, flat: &FlatScene, first: &[usize], count: &[usize]) -> Result<(), String> {
-        let rays = Self::make_rays(s, first, count);
+        let rays = Self::make_rays(s, first, count, &self.origin);
         self.block_with_host_rays(s, flat, first, rays).await
     }
 
@@ -588,11 +579,12 @@ impl GpuRenderer {
         }
         host.guess.store((count + count / 4 + 64) as usize, Ordering::Relaxed);
         let began = web_time::Instant::now();
+        let origin = self.origin;
         let shaded: Vec<PathState> = paths.par_iter().map(|p| {
             // Its slot (`gather_host`) is its pixel's path in a lane, so that sample of the
             // pixel's.
             let (pixel, lane) = (p.state.w as usize % image, p.state.w as usize / image);
-            host::shade(s, flat, p, pixel as u32, (first[pixel] + lane) as u32)
+            host::shade(s, flat, &origin, p, pixel as u32, (first[pixel] + lane) as u32)
         }).collect();
         self.queue.write_buffer(&host.gathered, 0, bytemuck::cast_slice(&shaded));
         let seconds = began.elapsed().as_secs_f64();
@@ -673,13 +665,13 @@ impl GpuRenderer {
     /// so 32 bytes a path cross to the GPU, not 96). A pixel that takes no sample in a lane has
     /// a dead ray there, so a path that adds nothing. Only the CPU's work: `render` makes the
     /// next block's while the GPU runs this one.
-    fn make_rays(s: &Scene, first: &[usize], count: &[usize]) -> BlockRays {
+    fn make_rays(s: &Scene, first: &[usize], count: &[usize], origin: &Vector3<f64>) -> BlockRays {
         let began = web_time::Instant::now();
         let image = s.image.width * s.image.height;
         let lanes = count.iter().copied().max().unwrap_or(0).max(1);
         let rays: Vec<GpuRay> = (0..image * lanes).into_par_iter().map(|j| {
             let (lane, i) = (j / image, j % image);
-            if lane < count[i] { Self::camera_ray(s, i, first[i] + lane) } else { GpuRay::zeroed() }
+            if lane < count[i] { crate::kernels::camera_ray(s, i, first[i] + lane, origin) } else { GpuRay::zeroed() }
         }).collect();
         let live = rays.par_iter().filter(|r| r.d.w >= 0.5).count() as u64;
         BlockRays { lanes, live, began, seconds: began.elapsed().as_secs_f64(), ahead: false, rays }
@@ -892,7 +884,7 @@ impl GpuRenderer {
             }
             let rays = match ahead.take() {
                 Some((f, c, rays)) if f == first && c == count => BlockRays { ahead: true, ..rays },
-                _ => Self::make_rays(s, &first, &count),
+                _ => Self::make_rays(s, &first, &count, &self.origin),
             };
             self.clear();
             if self.host_queue.is_some() {
@@ -905,7 +897,7 @@ impl GpuRenderer {
                 let next_count: Vec<usize> = next_first.iter().zip(&count)
                     .map(|(f, c)| if *c == 0 { 0 } else { target.saturating_sub(*f).min(lanes) }).collect();
                 if next_count.iter().any(|c| *c > 0) {
-                    let rays = Self::make_rays(s, &next_first, &next_count);
+                    let rays = Self::make_rays(s, &next_first, &next_count, &self.origin);
                     ahead = Some((next_first, next_count, rays));
                 }
             }
@@ -1015,7 +1007,7 @@ mod tests {
         for (name, sky) in skies {
             let s = scene(sky);
             let flat = FlatScene::build(&s).unwrap();
-            let b = Buffers::build(&s, &flat).unwrap();
+            let b = Buffers::build_at(&s, &flat, &Vector3::zeros()).unwrap(); // (Probed at the world's own positions.)
             let shader = b.scene(None);
             let (mut sky_err, mut seg_err, mut sun_err) = (0f64, 0f64, 0f64);
             for h in altitudes {
@@ -1063,7 +1055,7 @@ mod tests {
         for name in ["demo/scenes/deep-space.json", "demo/scenes/night-orbit.json"] {
             let s = SceneFile::from_file(name, &crate::scenefile::Overrides { width: Some(64), height: Some(36), seed: None });
             let flat = FlatScene::build(&s).unwrap();
-            let b = Buffers::build(&s, &flat).unwrap();
+            let b = Buffers::build_at(&s, &flat, &Vector3::zeros()).unwrap(); // (Probed at the world's own positions.)
             let shader = b.scene(None);
             let crate::scene::Background::Space(space) = &s.render.background else { panic!("{} has no space", name) };
             if name.contains("deep-space") {
@@ -1125,7 +1117,7 @@ mod tests {
         let passes = 16;
         let mut on_shader = Vector3::zeros();
         for k in 0..passes {
-            for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
+            for (index, ray) in crate::kernels::camera_rays(&s, k, &b.origin).iter().enumerate() {
                 if ray.d.w < 0.5 {
                     continue;
                 }
@@ -1213,7 +1205,7 @@ mod tests {
             let mut cpu = Vector3::zeros();
             let mut cpu_rays = 0u64;
             for k in 0..passes {
-                for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
+                for (index, ray) in crate::kernels::camera_rays(&s, k, &b.origin).iter().enumerate() {
                     if ray.d.w < 0.5 {
                         continue;
                     }
@@ -1259,7 +1251,7 @@ mod tests {
                 "objects": [{}]
             }}"#, objects.join(",")));
             let flat = FlatScene::build(&s).unwrap();
-            let b = Buffers::build(&s, &flat).unwrap();
+            let b = Buffers::build_at(&s, &flat, &Vector3::zeros()).unwrap(); // (Probed at the world's own positions.)
             let shader = b.scene(None);
             let count = (b.params.counts.x + b.params.counts.y) as usize;
             assert_eq!(count, spheres + planes);
@@ -1309,7 +1301,7 @@ mod tests {
             pathtrace::stats::take();
             let mut total_rays = 0u64;
             for k in 0..2 {
-                for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
+                for (index, ray) in crate::kernels::camera_rays(&s, k, &b.origin).iter().enumerate() {
                     if ray.d.w < 0.5 { continue; }
                     let mut rng = pathtrace::path_seed(index as u32, k as u32, b.params.seed.x);
                     let mut rays = 0;
@@ -1321,7 +1313,7 @@ mod tests {
             // The queues' saving: of the invocations a pass would make with every pixel
             // dispatched every round, the share that had a live path to advance.
             let (mut live, mut slots) = (0u64, 0u64);
-            for (index, ray) in GpuRenderer::camera_rays(&s, 0).iter().enumerate() {
+            for (index, ray) in crate::kernels::camera_rays(&s, 0, &b.origin).iter().enumerate() {
                 let mut p = PathState::start(index as u32, 0, b.params.seed.x, ray);
                 for _ in 0..=b.params.dims.w {
                     slots += 1;
@@ -1337,7 +1329,7 @@ mod tests {
             // thread) that is traversal, closest hits and shadow rays together.
             pathtrace::stats::time_traversal(true);
             let start = std::time::Instant::now();
-            for (index, ray) in GpuRenderer::camera_rays(&s, 0).iter().enumerate() {
+            for (index, ray) in crate::kernels::camera_rays(&s, 0, &b.origin).iter().enumerate() {
                 if ray.d.w < 0.5 { continue; }
                 let mut rng = pathtrace::path_seed(index as u32, 0, b.params.seed.x);
                 let mut rays = 0;
@@ -1642,8 +1634,11 @@ mod tests {
                 // From above the waves, down at the sea near and far.
                 let ro = Vector3::new(next() * 40. - 20., 0.6 + next() * 6., next() * 40. - 26.);
                 let rd = Vector3::new(next() - 0.5, -next() * 0.6 - 0.002, next() - 0.5).normalize();
-                let (ro32, rd32) = (Vec3::new(ro.x as f32, ro.y as f32, ro.z as f32), Vec3::new(rd.x as f32, rd.y as f32, rd.z as f32).normalize());
-                let ray = Ray { ro: Vector3::new(ro32.x as f64, ro32.y as f64, ro32.z as f64), rd: Vector3::new(rd32.x as f64, rd32.y as f64, rd32.z as f64).normalize() };
+                // The kernel's ray is in the render's frame, about the camera (`kernels::origin`);
+                // the renderer's, the same ray in the world's.
+                let local = ro - b.origin;
+                let (ro32, rd32) = (Vec3::new(local.x as f32, local.y as f32, local.z as f32), Vec3::new(rd.x as f32, rd.y as f32, rd.z as f32).normalize());
+                let ray = Ray { ro: Vector3::new(ro32.x as f64, ro32.y as f64, ro32.z as f64) + b.origin, rd: Vector3::new(rd32.x as f64, rd32.y as f64, rd32.z as f64).normalize() };
                 let cpu = sea.geometry.intersects(&ray);
                 let (t, prim) = pathtrace::nearest(&shader, ro32, rd32, 0., f32::MAX, false);
                 match (cpu, prim != u32::MAX) {
@@ -1897,7 +1892,7 @@ mod tests {
                 let (w, passes) = (s.image.width, 32);
                 let mut cpu = vec![0f64; w * s.image.height];
                 for k in 0..passes {
-                    for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
+                    for (index, ray) in crate::kernels::camera_rays(&s, k, &b.origin).iter().enumerate() {
                         if ray.d.w < 0.5 {
                             continue;
                         }

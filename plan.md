@@ -2254,6 +2254,13 @@ bound on a pixel's noise.
   the furnace at 64 spp strays 19% where it strayed under 15%), and the light BVH
   (lamp-field's 900 lamps are chosen by power on the CPU too now).
 - `trace` is still the default, and what renders a scene the kernels refuse.
+Done, of step 4: the CPU's wavefront takes its samples in the scheduler's blocks
+(`Kernels::block`, `scheduler::plan`), as the GPU's, so it samples adaptively and resumes; a
+block's sums are its passes' to the bit. Testing that found why renders didn't repeat run
+to run: the sky's tables are built from the camera's position, read off a camera ray, whose
+origin is a random point of the lens. Seeded (`environment::viewpoint`), a scene set up
+twice is laid out the same to the bit, and a resumed render is the uninterrupted one. Still
+to come of step 4: the time map on the wavefront.
 
 ### GPU-ready by construction
 

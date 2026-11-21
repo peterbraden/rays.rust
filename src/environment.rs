@@ -157,8 +157,11 @@ fn coordinates(d: &Vector3<f64>) -> (f64, f64, f64) {
     (u.min(1. - 1e-12), (theta / PI).min(1. - 1e-12), theta.sin())
 }
 
-/// Where the sky's distribution is tabulated from: the camera's position.
+/// Where the sky's distribution is tabulated from: the camera's position. (A ray's origin is
+/// a point of the lens, drawn at random: always the same one, so that a scene set up twice
+/// has the same tables, and a render resumed is the render uninterrupted.)
 pub fn viewpoint(s: &Scene) -> Vector3<f64> {
+    crate::geometry::seed_rand(0x7669_6577, 0);
     s.camera.get_ray(0.5, 0.5, 0., 0.).ro
 }
 

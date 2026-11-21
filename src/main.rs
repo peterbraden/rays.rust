@@ -285,10 +285,6 @@ fn main() {
     if args.gpu {
         s.render.gpu = true;
     }
-    if s.render.wavefront && !s.render.gpu && s.render.adaptive.is_some() {
-        println!("- The wavefront integrator doesn't sample adaptively; rendering with the path tracer");
-        s.render.wavefront = false;
-    }
     let flat = if s.render.wavefront {
         match wavefront::flat::FlatScene::build(&s) {
             Ok(f) => {
@@ -320,18 +316,10 @@ fn main() {
         },
         _ => None,
     };
-    // Without the GPU, an adaptively sampled scene is the path tracer's: the wavefront
-    // integrator the GPU would fall back to doesn't sample adaptively.
     #[cfg(feature = "gpu")]
     let gpu_missing = gpu.is_none();
     #[cfg(not(feature = "gpu"))]
     let gpu_missing = true;
-    let flat = if gpu_missing && flat.is_some() && s.render.adaptive.is_some() {
-        println!("- The wavefront integrator doesn't sample adaptively; rendering with the path tracer");
-        None
-    } else {
-        flat
-    };
     // Without the GPU the kernels run here, over the same buffers.
     let kernels = match flat.as_ref().filter(|_| gpu_missing).map(|f| wavefront::integrator::Kernels::new(&s, f)) {
         Some(Ok(k)) => Some(k),

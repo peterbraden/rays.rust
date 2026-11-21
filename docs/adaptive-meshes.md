@@ -84,11 +84,25 @@ Rendered at 600 × 350 with 64 samples per pixel, on 4 cores, against the same s
 
 At one pixel, rendering is 2.5 times faster in a sixth of the memory. The difference from full
 detail is a little above the noise between two full renders, spread evenly over the trees, with
-no seams between levels and no change of hue; but the forest is about 3% brighter (in displayed
-values, 1-2% far off, 3-4% near). The likeliest cause is what cards can't keep: a cluster's
-leaves shade one another, while its card is one sunlit layer; thin twigs that vertex clustering
-removes may add to it. Storing each card's self-shadowing, or making the coarsest levels volumes
-as Loubet and Neyret do, would be the next step.
+no seams between levels and no change of hue.
+
+The table above was made with cards sized by a random-overlap estimate. Those cards were hit a
+quarter less often than their leaves at the finer levels, and the forest came out brighter than
+in full detail. Measured in linear light, binned by depth, on another machine (600 × 350, 64 spp,
+4 cores; both images clamped at the full render's 99.9th percentile against sun-glint
+fireflies):
+
+| | Build | Render | Peak memory | Mean FLIP vs full | Brightness vs full: near / far / all |
+|---|---|---|---|---|---|
+| Full detail | 186 s | 338 s | 3.98 GB | | |
+| Cards by random overlap | 189 s | 108 s | 0.71 GB | 0.0585 | +7.4% / +2.2% / +4.6% |
+| Cards hit as often as their leaves | 208 s | 108 s | 0.70 GB | 0.0545 | −2.5% / −0.7% / −1.2% |
+
+Sizing each card by its leaves' measured coverage costs about a tenth more build time, and
+removes most of the brightening. Sky alone gave the same brightening as the sun, so it wasn't
+the self-shadowing a card can't keep, though that may account for some of what is left. What
+remains, a little darker near the camera, where levels are finest, may be the cards' coverage
+seen from grazing directions, beyond the hemisphere's average.
 
 ## Memory
 

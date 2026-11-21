@@ -303,6 +303,18 @@ pub struct Buffers {
     pub tables: Vec<f32>,
     /// Whether any vertex is the host's to shade (`host`).
     pub hosts: bool,
+    /// The shapes (of `FlatScene::shapes`) the kernels have no test for, which the host
+    /// intersects (`pathtrace::PRIM_HOST`), and their names, for a device that can't ask it.
+    pub host_shapes: Vec<usize>,
+    pub unported: Vec<String>,
+}
+
+impl Buffers {
+    /// The buffers as the kernels' functions take them, on the CPU; `host` answers shadow
+    /// rays for the shapes the kernels can't test.
+    pub fn scene<'a>(&'a self, host: Option<&'a dyn pathtrace::HostShapes>) -> pathtrace::Scene<'a> {
+        pathtrace::Scene { params: &self.params, prims: &self.prims, nodes: &self.nodes, materials: &self.materials, lights: &self.lights, tables: &self.tables, host }
+    }
 }
 
 /// For each of the flat scene's host materials, the kernels' record of it if they have its
@@ -320,18 +332,19 @@ impl Buffers {
     /// The flattened scene as the shader's buffers, or why it can't be.
     pub fn build(s: &Scene, flat: &FlatScene) -> Result<Buffers, String> {
         // A shape its own code intersects needs a kernel of its kind: there is one for the
-        // sea (`pathtrace::ocean_hit`), of which the kernels take one.
-        let unported: Vec<String> = flat.shapes.iter().enumerate()
-            .filter(|(k, (o, _))| o.geometry.ocean().is_none() || *k > 0)
-            .take(4).map(|(_, (o, _))| match s.source_index(o) {
+        // sea (`pathtrace::ocean_hit`), of which the kernels take one. The rest are the
+        // host's (`pathtrace::PRIM_HOST`), where the device can ask it.
+        let sea = flat.shapes.iter().position(|(o, _)| o.geometry.ocean().is_some());
+        let host_shapes: Vec<usize> = (0..flat.shapes.len()).filter(|k| Some(*k) != sea).collect();
+        let unported: Vec<String> = host_shapes.iter().map(|&k| {
+            let o = &flat.shapes[k].0;
+            match s.source_index(o) {
                 Some(i) => format!("objects[{}] ({})", i, o.geometry.kind()),
                 None => o.geometry.kind().to_string(),
-            }).collect();
-        if !unported.is_empty() {
-            return Err(format!("shapes the kernels can't intersect yet: {}{}", unported.join(", "), if flat.shapes.len() > 4 { " ..." } else { "" }));
-        }
+            }
+        }).collect();
         let kernels = host_kernels(s, flat);
-        let hosts = kernels.iter().filter(|k| k.is_none()).count();
+        let hosts = kernels.iter().filter(|k| k.is_none()).count() + host_shapes.len();
         if !flat.media.is_empty() {
             // The host's materials would trace their own shadow rays through the media, with
             // none of the path's state there; and a medium's vertex has no kernel for moonlight.
@@ -341,7 +354,7 @@ impl Buffers {
             if s.moonlight.is_some() {
                 return Err("participating media lit by a moon".into());
             }
-            if flat.light_bvh.is_some() {
+            if s.light_bvh.is_some() {
                 return Err("participating media with a light BVH".into());
             }
             if flat.media.len() > pathtrace::MAX_MEDIA as usize {
@@ -389,11 +402,20 @@ impl Buffers {
             to_gpu(p, flat.prim_material[i], flat.emitter_index[i].map_or(0, |e| e + 1))
         }).collect();
         prims.extend(flat.planes.iter().map(|(p, m)| to_gpu(p, *m, 0)));
-        // The sea, after the planes and tested as they are, outside the tree.
-        let ocean = flat.shapes.first().map(|(o, m)| (o.geometry.ocean().expect("the sea"), *m));
-        if let Some((_, m)) = ocean {
+        // The shapes, after the planes and tested as they are, outside the tree: the sea by
+        // its kernel, the others never (the host's, as their vertices are: `MAT_HOST`).
+        let ocean = sea.map(|k| (flat.shapes[k].0.geometry.ocean().expect("the sea"), flat.shapes[k].1));
+        let host_material = materials.len() as u32;
+        if !host_shapes.is_empty() {
+            materials.push(GpuMaterial { kind: pathtrace::MAT_HOST, ..GpuMaterial::zeroed() });
+        }
+        for (k, (_, m)) in flat.shapes.iter().enumerate() {
             let mut g = GpuPrim::zeroed();
-            g.info = UVec4::new(pathtrace::PRIM_OCEAN, material_index[m as usize], 0, 0);
+            g.info = if Some(k) == sea {
+                UVec4::new(pathtrace::PRIM_OCEAN, material_index[*m as usize], 0, 0)
+            } else {
+                UVec4::new(pathtrace::PRIM_HOST, host_material, 0, 0)
+            };
             prims.push(g);
         }
         if prims.is_empty() {
@@ -463,10 +485,10 @@ impl Buffers {
 
         // The sea's waves (`Ocean::export`); `dims.z` says where, plus one.
         // Then its foam (`Foam::export`), which the sea's record says the place of.
-        let ocean_off = ocean.map_or(0, |(sea, _)| {
-            let object = &flat.shapes[0].0;
+        let ocean_off = ocean.map_or(0, |(waves, _)| {
+            let object = &flat.shapes[sea.unwrap()].0;
             let at = tables.len();
-            tables.extend(sea.export());
+            tables.extend(waves.export());
             if let Some(foam) = object.medium.material_at(Vector3::zeros()).water().and_then(|w| w.foam) {
                 tables[at + pathtrace::OCEAN_FOAM as usize] = f32::from_bits((tables.len() - at) as u32);
                 tables.extend(foam);
@@ -515,7 +537,7 @@ impl Buffers {
             air: UVec4::new(sky_off, aerial_off, sun_off, space_off),
             media: UVec4::new(media, flat.media.len() as u32, 0, 0),
         };
-        Ok(Buffers { params, prims: pathtrace::pack_prims(&prims), prim_records: prims, nodes, materials, lights, tables, hosts: hosts > 0 })
+        Ok(Buffers { params, prims: pathtrace::pack_prims(&prims), prim_records: prims, nodes, materials, lights, tables, hosts: hosts > 0, host_shapes, unported })
     }
 }
 

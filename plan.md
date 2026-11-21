@@ -2230,6 +2230,31 @@ section is that, taken to its end.
 5. `trace`'s loop removed; `--wavefront` and `"integrator"` become no-ops kept for old scene
    files. From here an area moves from host to kernel by use, as now.
 
+Done, step 1 (November 2026). `kernels` holds the scene as the kernels read it, apart from
+the device; `wavefront::integrator` runs `pathtrace::intersect_surface`, `intersect_media`,
+`shade` and `sky_light` over its batches, and its own stages are deleted with what in
+`flat` only they used (the f64 traversal, the light choice): 880 lines of second copy for
+150 of rounds. Part of step 3 came with it, since the stages had rendered shapes their own
+code intersects and that was not to be lost: `PRIM_HOST`, a shape the host intersects between
+the kernels' two halves of the intersection and answers shadow rays for (`HostShapes`, a
+call from within a kernel: so the CPU's only, and the GPU leaves such scenes to it), its
+vertices the host's. Media render on the CPU for the first time outside `trace`.
+Against `trace` at 160 x 100, 32 spp against 64 (FLIP): demo 0.024, ocean-1 0.028,
+block-terrain 0.015 (a host shape), benard-altocumulus 0.065 (as the GPU: noise, no sun
+probes), saturn 0.0025 (the path tracer's own at 32 spp). The tests against the path tracer
+(hard cases, host materials, host shapes, the furnace's mean) pass unchanged but for one
+bound on a pixel's noise.
+- Found: saturn was first 0.031, all of it in the rings. A host vertex's next ray started
+  where f64 put it, a hair off the surface; narrowed to f32 at 1.5 million km a point moves
+  64 m, so half the rays through the rings started on the wrong side of them. The host's
+  rays now start 4e-6 of their distance from the origin further off, on the side they leave
+  by. This is the precision problem of step 2 met on the CPU, as hoped, and its kind: not
+  where things are seen (directions are fine) but where a ray starts again.
+- Given up until the kernels have them: Sobol' points for the kernels' vertices (a pixel of
+  the furnace at 64 spp strays 19% where it strayed under 15%), and the light BVH
+  (lamp-field's 900 lamps are chosen by power on the CPU too now).
+- `trace` is still the default, and what renders a scene the kernels refuse.
+
 ### GPU-ready by construction
 
 What a kernel can't hold is refused where the code is written, not when someone next builds

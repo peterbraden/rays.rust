@@ -216,7 +216,11 @@ impl GpuRenderer {
             setup.push((what, (now - clock).as_secs_f64()));
             clock = now;
         };
-        let Buffers { params, prims, nodes, materials, lights, tables, hosts: any_host, .. } = Buffers::build(s, flat)?;
+        let Buffers { params, prims, nodes, materials, lights, tables, hosts: any_host, unported, .. } = Buffers::build(s, flat)?;
+        // A kernel can't stop for the host in the midst of a shadow ray.
+        if !unported.is_empty() {
+            return Err(format!("shapes the kernels can't intersect yet: {}{}", unported.iter().take(4).cloned().collect::<Vec<_>>().join(", "), if unported.len() > 4 { " ..." } else { "" }));
+        }
         // A browser's passes are queued without waiting on the device, which serving the
         // host's queue must (`host`).
         if cfg!(target_arch = "wasm32") && any_host {
@@ -1012,7 +1016,7 @@ mod tests {
             let s = scene(sky);
             let flat = FlatScene::build(&s).unwrap();
             let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let shader = b.scene(None);
             let (mut sky_err, mut seg_err, mut sun_err) = (0f64, 0f64, 0f64);
             for h in altitudes {
                 let o = Vector3::new(30., h, -20.);
@@ -1060,7 +1064,7 @@ mod tests {
             let s = SceneFile::from_file(name, &crate::scenefile::Overrides { width: Some(64), height: Some(36), seed: None });
             let flat = FlatScene::build(&s).unwrap();
             let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let shader = b.scene(None);
             let crate::scene::Background::Space(space) = &s.render.background else { panic!("{} has no space", name) };
             if name.contains("deep-space") {
                 assert!(space.stars.is_some() && space.milky_way.is_some() && !space.nebulae.is_empty() && !space.galaxies.is_empty(),
@@ -1117,7 +1121,7 @@ mod tests {
         }"#.to_string());
         let flat = FlatScene::build(&s).unwrap();
         let b = Buffers::build(&s, &flat).unwrap();
-        let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+        let shader = b.scene(None);
         let passes = 16;
         let mut on_shader = Vector3::zeros();
         for k in 0..passes {
@@ -1204,7 +1208,7 @@ mod tests {
                 },
             };
             let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let shader = b.scene(None);
             let passes = 32;
             let mut cpu = Vector3::zeros();
             let mut cpu_rays = 0u64;
@@ -1256,7 +1260,7 @@ mod tests {
             }}"#, objects.join(",")));
             let flat = FlatScene::build(&s).unwrap();
             let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let shader = b.scene(None);
             let count = (b.params.counts.x + b.params.counts.y) as usize;
             assert_eq!(count, spheres + planes);
             // Every primitive on its own is a scene the traversal searches in full.
@@ -1274,7 +1278,7 @@ mod tests {
                 let (tmin, tmax) = match (next() * 3.) as u32 { 0 => (0., f32::MAX), 1 => (0., next() as f32 * 20.), _ => (next() as f32 * 20., f32::MAX) };
                 let mut expected = (tmax, u32::MAX);
                 for (i, (params, prim, nodes)) in alone.iter().enumerate() {
-                    let single = pathtrace::Scene { params, prims: prim, nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+                    let single = pathtrace::Scene { params, prims: prim, nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables, host: None };
                     let (t, hit) = pathtrace::nearest(&single, ro, rd, tmin, expected.0, false);
                     if hit != u32::MAX { expected = (t, i as u32); }
                 }
@@ -1301,7 +1305,7 @@ mod tests {
                 Err(e) => { println!("{:<16} not flattened: {}", name, e); continue; },
             };
             let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let shader = b.scene(None);
             pathtrace::stats::take();
             let mut total_rays = 0u64;
             for k in 0..2 {
@@ -1629,7 +1633,7 @@ mod tests {
             }}"#, choppiness, radius));
             let flat = FlatScene::build(&s).unwrap();
             let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let shader = b.scene(None);
             let sea = &flat.shapes[0].0;
             let mut rng = crate::geometry::Pcg32::new(5, 0);
             let mut next = move || rng.next_f64();
@@ -1789,7 +1793,6 @@ mod tests {
         let flat = FlatScene::build(&s).unwrap();
         assert_eq!(flat.media.len(), 1);
         assert!(flat.media[0].peak > 0. && flat.media[0].scale < 1.);
-        assert!(flat.needs_kernels().is_some());
         let mut gpu = match GpuRenderer::new(&s, &flat) {
             Ok(g) => g,
             Err(e) => {
@@ -1890,7 +1893,7 @@ mod tests {
                 let flat = FlatScene::build(&s).unwrap();
                 let mut gpu = GpuRenderer::new(&s, &flat).unwrap();
                 let b = Buffers::build(&s, &flat).unwrap();
-                let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+                let shader = b.scene(None);
                 let (w, passes) = (s.image.width, 32);
                 let mut cpu = vec![0f64; w * s.image.height];
                 for k in 0..passes {
@@ -2030,7 +2033,7 @@ mod tests {
         gpu.render(&s, &flat, &rc, |_| ());
         let (gpu_image, gpu_rays) = { let rc = rc.lock().unwrap(); (rc.snapshot(), rc.rays_cast) };
         let rc = Mutex::new(RenderContext::new(24, 16, false, "test.png"));
-        crate::wavefront::integrator::render(&s, &flat, &rc, |_| ());
+        crate::wavefront::integrator::render(&crate::wavefront::integrator::Kernels::new(&s, &flat).unwrap(), &rc, |_| ());
         let (cpu_image, cpu_rays) = { let rc = rc.lock().unwrap(); (rc.snapshot(), rc.rays_cast) };
         // Russian roulette ends paths by different random numbers, so the counts differ a little.
         assert!((gpu_rays as f64 - cpu_rays as f64).abs() < 0.02 * cpu_rays as f64, "rays: GPU {} vs CPU {}", gpu_rays, cpu_rays);

@@ -83,7 +83,13 @@ pub fn shade(s: &Scene, flat: &FlatScene, p: &PathState, pixel: u32, sample: u32
     if v.done {
         return next;
     }
-    next.o = f32s(&v.ray.ro).extend(p.o.w);
+    // The next ray leaves from where the scene's own code put it, off the surface by what
+    // f64 needs; the kernels' f32 rounds a point by up to 6e-8 of its distance from the
+    // origin, which far off is more than that (64 m at Saturn's 1.5 million km: the ray would
+    // start on either side of its rings). So further off, on the side it leaves by.
+    let side = if v.ray.rd.dot(&hit.geometric) >= 0. { hit.geometric } else { -hit.geometric };
+    let from = v.ray.ro + side * (4e-6 * (1. + v.ray.ro.amax()));
+    next.o = f32s(&from).extend(p.o.w);
     next.d = f32s(&v.ray.rd).extend(v.prev_pdf as f32);
     next.beta = f32s(&v.beta.rgb).extend(v.depth as f32);
     let flag = |on: bool, bit: u32| if on { bit } else { 0 };

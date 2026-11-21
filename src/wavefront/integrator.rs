@@ -1,53 +1,56 @@
-//! The wavefront path tracer (Pharr, Jakob and Humphreys, "Physically Based Rendering", 4th
-//! ed., chapter 15; cited below as PBR).
+//! The wavefront path tracer on the CPU (Pharr, Jakob and Humphreys, "Physically Based
+//! Rendering", 4th ed., chapter 15; cited below as PBR).
 //!
 //! The recursive tracer (`trace`) follows one path at a time to its end, branching on what it
 //! hits through trait objects. A wavefront renderer instead keeps every path of a pass (one
 //! sample per pixel) in a queue and advances them all together, one stage at a time, each
-//! stage a single loop over many paths doing one kind of work (PBR section 15.2):
+//! stage a single loop over many paths doing one kind of work (PBR section 15.2).
 //!
-//! 1. Generate camera rays.
-//! 2. Intersect: the nearest hit of every path's ray.
-//! 3. Escaped rays and emitters: add the background or the light hit (weighted by MIS against
-//!    the light sampling of the vertex before), and retire those paths.
-//! 4. Shade: sorted by material kind, so neighbouring work runs the same code (pbrt keeps a
-//!    queue per material); sample the lights (next-event estimation), queueing a shadow ray
-//!    per light sample, then sample the BSDF for the path's next ray, or retire it. Paths on
-//!    a material that isn't data sort last, and the scene's own material answers each
-//!    (`host_bounce`; `flat::FlatMaterial::Host`).
-//! 5. Trace the shadow rays, adding what each carries if nothing blocks it.
+//! The stages are the kernels' (`shaders/pathtrace`: the one copy of the wavefront's
+//! intersection and shading, in f32, over the scene laid out as its records, `kernels`),
+//! which the GPU runs as a shader (`gpu`) and this runs as the same crate compiled for the
+//! CPU. A round, over the paths still alive:
 //!
-//! and back to 2 until no path is left. Each path carries its own state (throughput, the last
-//! BSDF density for MIS, its Sobol' sample), as pbrt's do, since no stage may rely on the
-//! thread-local state a recursive path keeps (`geometry::rand`'s sampler, the wavelengths).
-//! The structure is what a GPU renderer needs, with the scene as data (`flat`). On the CPU,
-//! the pass's pixels are split into batches of a few thousand paths, run in parallel, each
+//! 1. Intersect: the surface each path's ray hits (`pathtrace::intersect_surface`); then the
+//!    shapes the kernels have no test for, by their own code (`FlatScene::shapes`,
+//!    `pathtrace::PRIM_HOST`); then the walk through the media as far as that
+//!    (`intersect_media`).
+//! 2. Shade (`pathtrace::shade`): the sky or a light the ray found, haze, direct light with
+//!    its shadow rays, and the next ray; with what it asks of the sky (`SkyQuery`).
+//! 3. The sky's answers (`pathtrace::sky_light`).
+//! 4. The host's vertices: paths stopped at a material or a shape the kernels have no code
+//!    for (`pathtrace::PATH_HOST`) are shaded by the scene's own `MaterialModel::scatter`
+//!    (`kernels::host::shade`, `host_bounce`), and go on.
+//!
+//! and round again until no path is left. On the GPU the host's vertices wait in a queue that
+//! is read back; here they are in memory, and the host is asked at once, shadow rays included
+//! (`pathtrace::HostShapes`), which is why a shape only the host can intersect renders here
+//! and not there. Nothing else differs: the same code, the same random numbers (a hash a
+//! path; a Sobol' point a host vertex), so the same picture but for the two machines'
+//! arithmetic.
+//!
+//! The pass's pixels are split into batches of a few thousand paths, run in parallel, each
 //! through all the stages: a whole image's queue streamed through memory at every stage made
 //! the stages memory-bound, twice as slow as the recursive tracer.
 //!
-//! Its estimates match the recursive tracer's: the same BSDFs (`material::bsdf`, `ggx`,
-//! `plastic`), the same Fresnel choices, light sampling by power with the power heuristic, and
-//! the same depth limit and Russian roulette, sphere lights sampled by their cone, the sun's
-//! disc for lobes narrow enough to resolve it, the sky by its brightness, area lights by power
-//! or the light BVH, glossy lobes regularised after the first non-delta bounce
-//! (`ggx::regularised`), and each path's random numbers from its own Sobol' sample. Differences:
-//! only the Sobol' sampler; point lights are always all sampled (the light BVH chooses among
-//! area lights only).
+//! This replaced stages of its own in f64, a second copy of the kernels' shading that had to
+//! be kept in step with them and with `trace` (plan.md section 15). What it gave up with
+//! them, until the kernels have it: Sobol' points for the paths' own vertices, and the light
+//! BVH (area lights are chosen by power).
 
 use crate::intersection::Intersection;
+use crate::kernels::Buffers;
 use crate::material::model::LightSampling;
 use crate::scheduler::{Stage, Stats};
 use crate::color::Color;
-use crate::shapes::geometry::Geometry;
-use crate::material::bsdf::{power_heuristic, LambertianBSDF, BSDF};
-use crate::material::functions::{fresnel_reflectance, reflect, refract};
-use crate::material::ggx::{Fresnel, GGX, MIN_ALPHA};
-use crate::material::plastic::PlasticBSDF;
+use crate::material::bsdf::power_heuristic;
 use crate::na::Vector3;
 use crate::ray::Ray;
 use crate::rendercontext::RenderContext;
 use crate::scene::{PathTermination, Scene};
 use crate::wavefront::flat::{FlatMaterial, FlatScene, Hit};
+use pathtrace::glam::{Vec3, Vec4};
+use pathtrace::{PathState, SkyQuery, PATH_ACTIVE, PATH_HOST};
 use rayon::prelude::*;
 use std::sync::Mutex;
 
@@ -90,183 +93,153 @@ impl Path {
     }
 }
 
-/// A shadow ray from shading: the path it belongs to (its place in the queue), and what it
-/// adds if unblocked.
-struct Shadow {
-    path: usize,
-    ray: Ray,
-    max: f64,
-    contribution: Color,
-}
-
-/// How far to start a ray off a surface at `p`, to clear rounding in the hit.
-fn offset(p: &Vector3<f64>, s: &Scene) -> f64 {
-    s.render.shadow_bias.max(1e-7 * (1. + p.amax())) * 2.
-}
-
-/// A material's BSDF at a hit, where it has one (non-delta).
-enum Local {
-    Lambert(LambertianBSDF),
-    Plastic(PlasticBSDF),
-    Ggx(GGX),
-}
-
-impl Local {
-    fn bsdf(&self) -> &dyn BSDF {
-        match self {
-            Local::Lambert(b) => b,
-            Local::Plastic(b) => b,
-            Local::Ggx(b) => b,
-        }
-    }
-}
 
 /// Paths per batch: a queue small enough to stay in cache through every stage, and enough
 /// batches to keep every thread busy.
 const BATCH: usize = 4096;
 
-/// Render sample `k` of every pixel: each pixel's radiance (times its weight), and the number
-/// of rays cast.
-pub fn render_pass(s: &Scene, flat: &FlatScene, k: usize) -> (Vec<Color>, u64) {
-    let (image, rays, _) = render_pass_with_stats(s, flat, k);
-    (image, rays)
+/// A flat scene laid out for the kernels, with the scene whose own code answers for what they
+/// lack: what a pass on the CPU runs over.
+pub struct Kernels<'a> {
+    s: &'a Scene,
+    flat: &'a FlatScene,
+    pub buffers: Buffers,
 }
 
-/// `render_pass`, with what its stages did (`scheduler::Stats`).
-pub fn render_pass_with_stats(s: &Scene, flat: &FlatScene, k: usize) -> (Vec<Color>, u64, Stats) {
-    let (w, h) = (s.image.width, s.image.height);
-    let mut image = vec![Color::black(); w * h];
-    // Batches of pixels run in parallel, each through all the stages: a queue that streams
-    // through memory once per stage would make the stages memory-bound on a CPU (on a GPU,
-    // the whole image's queue is the batch).
-    let batches: Vec<_> = (0..(w * h).div_ceil(BATCH)).into_par_iter()
-        .map(|b| render_batch(s, flat, k, b * BATCH..((b + 1) * BATCH).min(w * h)))
-        .collect();
-    let mut rays = 0;
-    let mut stats = Stats::default();
-    stats.passes = 1;
-    for (done, n, batch_stats) in batches {
-        rays += n;
-        stats.merge(&batch_stats);
-        for (pixel, c) in done {
-            image[pixel as usize] = image[pixel as usize] + c;
-        }
+/// A kernel's ray, as the scene's own code takes one.
+fn host_ray(ro: Vec3, rd: Vec3) -> Ray {
+    Ray { ro: Vector3::new(ro.x as f64, ro.y as f64, ro.z as f64), rd: Vector3::new(rd.x as f64, rd.y as f64, rd.z as f64).normalize() }
+}
+
+/// Shadow rays past the shapes the kernels can't test.
+impl pathtrace::HostShapes for Kernels<'_> {
+    fn occluded(&self, ro: Vec3, rd: Vec3, tmax: f32) -> bool {
+        let r = host_ray(ro, rd);
+        self.buffers.host_shapes.iter().any(|&k| self.flat.shapes[k].0.geometry.occludes(&r, crate::wavefront::flat::MIN_SHAPE, tmax as f64))
     }
-    (image, rays, stats)
 }
 
-/// Sample `k` of the pixels `range`, stage by stage: each finished path's pixel and radiance,
-/// and the number of rays cast.
-fn render_batch(s: &Scene, flat: &FlatScene, k: usize, range: std::ops::Range<usize>) -> (Vec<(u32, Color)>, u64, Stats) {
-    let (w, h) = (s.image.width, s.image.height);
-    let pixels = (w * h) as u64;
-    // Each stage's batch is counted and timed (`scheduler::Stats`): two clock readings a
-    // stage a round, against thousands of paths.
-    let mut stats = Stats::default();
-    let mut clock = web_time::Instant::now();
-    let mut lap = |stats: &mut Stats, stage: Stage, items: usize| {
-        let now = web_time::Instant::now();
-        stats.record(stage, items as u64, (now - clock).as_secs_f64());
-        clock = now;
-    };
-    // 1. Camera rays.
-    let mut paths: Vec<Path> = range.filter_map(|index| {
-        let (x, y) = (index % w, index / w);
-        let stream = k as u64 * pixels + index as u64;
-        // The camera's own random numbers (a lens) come from the thread's generator.
-        crate::geometry::seed_rand(s.render.seed ^ 0x5bd1_e995, stream);
-        // Sample k of the pixel's Sobol' sequence, as the recursive tracer's.
-        let mut sampler = crate::sobol::SampleState::new(crate::sobol::hash(s.render.seed, index as u64), k as u32);
-        let ((fx, wx), (fy, wy)) = (s.render.filter.sample_weighted(sampler.next()), s.render.filter.sample_weighted(sampler.next()));
-        let (ray, weight) = s.camera.get_ray_weighted(x as f64 / w as f64, y as f64 / h as f64,
-            (0.5 + fx) / w as f64, (0.5 + fy) / h as f64)?;
-        let ray = Ray { ro: ray.ro, rd: ray.rd.normalize() };
-        Some(Path { pixel: index as u32, ray, beta: Color::white(), l: Color::black(), weight: weight * wx * wy,
-                    depth: 0, specular: true, prev_pdf: 0., sampler, scattered: false, lights_counted: false, directional: false, hit: None, done: false })
-    }).collect();
-    lap(&mut stats, Stage::Generate, paths.len());
-    let mut done = Vec::with_capacity(paths.len());
-    let mut shadows: Vec<Shadow> = Vec::new();
-    let mut rays = 0u64;
-    let mut round = 0;
-    while !paths.is_empty() {
-        stats.round(round, paths.len() as u64);
-        round += 1;
-        // 2. Intersect.
-        rays += paths.len() as u64;
-        for p in paths.iter_mut() {
-            p.hit = flat.intersect(&p.ray, 0.);
-        }
-        lap(&mut stats, Stage::Intersect, paths.len());
-        // 3. Escaped rays and emitters.
-        for p in paths.iter_mut() {
-            gather_emission(p, s, flat);
-        }
-        lap(&mut stats, Stage::Emission, paths.len());
-        retire(&mut paths, &mut done);
-        // 4. Shade, sorted by material so that each kind's code runs together.
-        paths.sort_unstable_by_key(|p| flat.hit_material(p.hit.unwrap().prim).kind());
-        shadows.clear();
-        // Host materials sort last: the stage's own kinds, then the paths the scene's
-        // materials answer, counted apart.
-        let ported = paths.partition_point(|p| !matches!(flat.hit_material(p.hit.unwrap().prim), FlatMaterial::Host { .. }));
-        for (i, p) in paths[..ported].iter_mut().enumerate() {
-            shade(i, p, s, flat, &mut shadows);
-        }
-        lap(&mut stats, Stage::Shade, ported);
-        if ported < paths.len() {
-            for (i, p) in paths[ported..].iter_mut().enumerate() {
-                shade(ported + i, p, s, flat, &mut shadows);
-            }
-            lap(&mut stats, Stage::Host, paths.len() - ported);
-        }
-        // 5. Shadow rays.
-        rays += shadows.len() as u64;
-        for sh in &shadows {
-            if !flat.occluded(&sh.ray, 0., sh.max) {
-                paths[sh.path].l = paths[sh.path].l + sh.contribution;
+impl<'a> Kernels<'a> {
+    /// The scene as the kernels read it, or why they can't render it.
+    pub fn new(s: &'a Scene, flat: &'a FlatScene) -> Result<Kernels<'a>, String> {
+        Ok(Kernels { s, flat, buffers: Buffers::build(s, flat)? })
+    }
+
+    /// Render sample `k` of every pixel: each pixel's radiance (times its weight), the number
+    /// of rays cast, and what the stages did (`scheduler::Stats`).
+    pub fn pass(&self, k: usize) -> (Vec<Color>, u64, Stats) {
+        let (w, h) = (self.s.image.width, self.s.image.height);
+        let mut image = vec![Color::black(); w * h];
+        // Batches of pixels run in parallel, each through all the stages: a queue that streams
+        // through memory once per stage would make the stages memory-bound on a CPU (on a GPU,
+        // the whole image's queue is the batch).
+        let media = !self.flat.media.is_empty();
+        let batches: Vec<_> = (0..(w * h).div_ceil(BATCH)).into_par_iter()
+            .map(|b| {
+                let range = b * BATCH..((b + 1) * BATCH).min(w * h);
+                // (A scene without media runs the stages compiled without them, as on the GPU.)
+                if media { self.batch::<pathtrace::WithMedia>(k, range) } else { self.batch::<pathtrace::NoMedia>(k, range) }
+            })
+            .collect();
+        let mut rays = 0;
+        let mut stats = Stats::default();
+        stats.passes = 1;
+        for (done, n, batch_stats) in batches {
+            rays += n;
+            stats.merge(&batch_stats);
+            for (pixel, c) in done {
+                image[pixel as usize] = image[pixel as usize] + c;
             }
         }
-        lap(&mut stats, Stage::Shadow, shadows.len());
-        retire(&mut paths, &mut done);
+        (image, rays, stats)
     }
-    lap(&mut stats, Stage::Accumulate, done.len());
-    (done, rays, stats)
-}
 
-/// Move finished paths' radiance to `done`, and drop them from the queue.
-fn retire(paths: &mut Vec<Path>, done: &mut Vec<(u32, Color)>) {
-    for p in paths.iter().filter(|p| p.done) {
-        done.push((p.pixel, (p.l * p.weight).ignore_nan()));
+    /// Sample `k` of the pixels `range`, stage by stage: each finished path's pixel and
+    /// radiance, and the number of rays cast.
+    fn batch<M: pathtrace::Media>(&self, k: usize, range: std::ops::Range<usize>) -> (Vec<(u32, Color)>, u64, Stats) {
+        let (s, flat) = (self.s, self.flat);
+        let host_shapes = &self.buffers.host_shapes;
+        let scene = self.buffers.scene(if host_shapes.is_empty() { None } else { Some(self) });
+        let listed = flat.prims.len() + flat.planes.len();
+        // Each stage's batch is counted and timed (`scheduler::Stats`): two clock readings a
+        // stage a round, against thousands of paths.
+        let mut stats = Stats::default();
+        let mut clock = web_time::Instant::now();
+        let mut lap = |stats: &mut Stats, stage: Stage, items: usize| {
+            let now = web_time::Instant::now();
+            stats.record(stage, items as u64, (now - clock).as_secs_f64());
+            clock = now;
+        };
+        // Camera rays, and the paths they start (`pathtrace::start_paths` on the GPU).
+        let mut paths: Vec<(u32, PathState)> = range.filter_map(|index| {
+            let ray = crate::kernels::camera_ray(s, index, k);
+            (ray.d.w >= 0.5).then(|| (index as u32, PathState::start(index as u32, k as u32, self.buffers.params.seed.x, &ray)))
+        }).collect();
+        lap(&mut stats, Stage::Generate, paths.len());
+        let mut done = Vec::with_capacity(paths.len());
+        let mut queries: Vec<(usize, SkyQuery)> = Vec::new();
+        let mut rays = 0u64;
+        let mut round = 0;
+        while !paths.is_empty() {
+            stats.round(round, paths.len() as u64);
+            round += 1;
+            // 1. Intersect: the kernels' surfaces, the host's shapes, then the media.
+            for (_, p) in paths.iter_mut() {
+                let mut found = pathtrace::intersect_surface(&scene, p);
+                if !host_shapes.is_empty() {
+                    let r = host_ray(p.o.truncate(), p.d.truncate());
+                    let mut reach = if found.state.z == u32::MAX { f64::INFINITY } else { found.hit.x as f64 };
+                    for &shape in host_shapes {
+                        if let Some(x) = flat.shapes[shape].0.geometry.intersects_range(&r, crate::wavefront::flat::MIN_SHAPE, reach) {
+                            reach = x.dist;
+                            found.state.z = (listed + shape) as u32;
+                            found.hit = Vec4::new(x.dist as f32, 0., 0., 1.);
+                        }
+                    }
+                }
+                *p = pathtrace::intersect_media::<M>(&scene, &found);
+            }
+            lap(&mut stats, Stage::Intersect, paths.len());
+            // 2. Shade.
+            queries.clear();
+            for (i, (_, p)) in paths.iter_mut().enumerate() {
+                let (next, q0, q1) = pathtrace::shade::<M>(&scene, p);
+                *p = next;
+                queries.extend([q0, q1].into_iter().filter(|q| q.weight.truncate().length_squared() > 0.).map(|q| (i, q)));
+            }
+            lap(&mut stats, Stage::Shade, paths.len());
+            // 3. The sky's answers.
+            for (i, q) in &queries {
+                paths[*i].1.l += pathtrace::sky_light(&scene, q).extend(0.);
+            }
+            lap(&mut stats, Stage::Sky, queries.len());
+            // 4. The host's vertices.
+            let mut waiting = 0;
+            for (pixel, p) in paths.iter_mut().filter(|(_, p)| p.state.y & PATH_HOST != 0) {
+                *p = crate::kernels::host::shade(s, flat, p, *pixel, k as u32);
+                waiting += 1;
+            }
+            if waiting > 0 {
+                lap(&mut stats, Stage::Host, waiting);
+            }
+            // Finished paths leave the queue.
+            paths.retain(|(pixel, p)| {
+                if p.state.y & PATH_ACTIVE != 0 {
+                    return true;
+                }
+                let sum = pathtrace::path_sum(p);
+                rays += sum.w as u64;
+                done.push((*pixel, Color::new(sum.x as f64, sum.y as f64, sum.z as f64)));
+                false
+            });
+        }
+        lap(&mut stats, Stage::Accumulate, done.len());
+        (done, rays, stats)
     }
-    paths.retain(|p| !p.done);
-}
-
-/// A point on an emitting primitive seen from `from`, its normal, and the density per solid
-/// angle: a sphere by the cone it subtends, as the recursive tracer's (`Geometry::sample_from`),
-/// a triangle by area.
-fn sample_light(prim: &crate::wavefront::flat::Prim, from: &Vector3<f64>, u: [f64; 3]) -> (Vector3<f64>, Vector3<f64>, f64) {
-    use crate::wavefront::flat::Prim;
-    if let Prim::Sphere { center, radius } = prim {
-        return crate::shapes::sphere::Sphere::new(*center, *radius).sample_from(from, u).unwrap_or((*center, Vector3::y(), 0.));
-    }
-    let (y, n) = prim.sample([u[0], u[1]]);
-    (y, n, light_pdf(prim, from, &y, &n))
-}
-
-/// The density per solid angle with which `sample_light` from `from` picks `y`, normal `n`.
-fn light_pdf(prim: &crate::wavefront::flat::Prim, from: &Vector3<f64>, y: &Vector3<f64>, n: &Vector3<f64>) -> f64 {
-    use crate::wavefront::flat::Prim;
-    if let Prim::Sphere { center, radius } = prim {
-        return crate::shapes::sphere::Sphere::new(*center, *radius).pdf_from(from, y, n);
-    }
-    let w = y - from;
-    let d2 = w.norm_squared();
-    let cos = n.dot(&w).abs() / d2.sqrt();
-    if cos <= 0. { 0. } else { d2 / (cos * prim.area()) }
 }
 
 /// As `trace`: segments shorter than this cross too little air to matter.
+#[allow(dead_code)]
 const AERIAL_PERSPECTIVE_FROM: f64 = 100.;
 
 /// What a ray that escaped the flattened scene sees: the skysphere, by its material, or the
@@ -283,222 +256,6 @@ pub fn sky_radiance(r: &Ray, s: &Scene, flat: &FlatScene) -> Color {
     s.render.background.radiance(&r.rd)
 }
 
-/// Stage 3 for one path: the background if its ray escaped, or the light it hit.
-fn gather_emission(p: &mut Path, s: &Scene, flat: &FlatScene) {
-    let Some(h) = p.hit else {
-        // Weighted against sampling the sky, where the vertex before did.
-        let w = match &s.environment {
-            Some(env) if !p.specular && !p.lights_counted => power_heuristic(p.prev_pdf, env.pdf(&p.ray.rd)),
-            _ => 1.,
-        };
-        p.l = p.l + p.beta * sky_radiance(&p.ray, s, flat) * w;
-        // The sun's disc, seen by the camera or through a mirror (other rays weigh it nearly
-        // nothing against sampling it as a point; `trace`).
-        if let Some(sun) = &s.sun {
-            // In full after a delta bounce; otherwise against sampling the disc, as `trace`.
-            let w = if p.specular { 1. } else { power_heuristic(p.prev_pdf, sun.disc_pdf(&p.ray.rd)) };
-            if w > 0. {
-                p.l = p.l + p.beta * sun.disc_radiance(&p.ray.ro, &p.ray.rd) * w;
-            }
-        }
-        p.done = true;
-        return;
-    };
-    // Aerial perspective, as `trace`: the air between attenuates what lies beyond the hit,
-    // and adds its own light.
-    if let Some(sky) = &s.atmosphere
-        && h.dist > AERIAL_PERSPECTIVE_FROM {
-        let (transmittance, inscattered) = sky.segment(&p.ray.ro, &p.ray.rd, h.dist);
-        p.l = p.l + p.beta * Color { rgb: inscattered };
-        p.beta = p.beta * Color { rgb: transmittance };
-    }
-    let m = flat.hit_material(h.prim).at(&h.point);
-    if let FlatMaterial::Emitter { .. } = m {
-        // The side it emits from by the normal it shades with, as `trace` (for a smooth mesh,
-        // the interpolated normal, not the winding).
-        let le = m.emitted(&h.shading, &-p.ray.rd);
-        if le != Color::black() {
-            // Weighted against light sampling, if the vertex before sampled this light.
-            let sampled = flat.emitter_index.get(h.prim as usize).copied().flatten();
-            let w = match sampled {
-                Some(e) if !p.specular && !p.directional && s.render.sample_lights => {
-                    let prim = &flat.prims[h.prim as usize];
-                    let light_pdf = flat.emitter_pmf(&p.ray.ro, e as usize) * light_pdf(prim, &p.ray.ro, &h.point, &h.geometric);
-                    power_heuristic(p.prev_pdf, light_pdf)
-                },
-                _ => 1.,
-            };
-            p.l = p.l + p.beta * le * w;
-        }
-        // Emitters don't scatter.
-        p.done = true;
-    }
-}
-
-/// Stage 4 for one path: next-event estimation and the next ray.
-fn shade(i: usize, p: &mut Path, s: &Scene, flat: &FlatScene, shadows: &mut Vec<Shadow>) {
-    let h = p.hit.unwrap();
-    let wo = -p.ray.rd;
-    // Shade the side the ray arrived on.
-    let ng = if h.geometric.dot(&wo) >= 0. { h.geometric } else { -h.geometric };
-    let ns = if h.shading.dot(&wo) >= 0. { h.shading } else { -h.shading };
-    let eps = offset(&h.point, s);
-    let above = h.point + ng * eps;
-    // As `ggx::regularised`: a roughness floor once the path has scattered.
-    let floor = if p.scattered { s.render.regularise } else { 0. };
-    let local = match flat.hit_material(h.prim).at(&h.point) {
-        FlatMaterial::Diffuse { albedo } => Local::Lambert(LambertianBSDF { albedo: *albedo, normal: ns }),
-        FlatMaterial::Plastic { albedo, refractive_index, roughness } => {
-            let alpha = (roughness * roughness).max(floor);
-            if alpha >= MIN_ALPHA {
-                Local::Plastic(PlasticBSDF {
-                    coat: GGX::new(alpha, Fresnel::Dielectric(*refractive_index), ns),
-                    base: LambertianBSDF { albedo: *albedo, normal: ns },
-                    refractive_index: *refractive_index,
-                })
-            } else {
-                // A smooth coat: a mirror with Fresnel's probability, else the diffuse base.
-                let coat = fresnel_reflectance(wo.dot(&ns).abs(), 1. / refractive_index, *refractive_index);
-                if p.u() < coat {
-                    return specular_bounce(p, s, above, reflect(p.ray.rd, ns), Color::white());
-                }
-                Local::Lambert(LambertianBSDF { albedo: *albedo, normal: ns })
-            }
-        },
-        FlatMaterial::Conductor { optics, roughness } => {
-            let (eta, k) = optics.current();
-            let fresnel = Fresnel::Conductor { eta, k };
-            let alpha = (roughness * roughness).max(floor);
-            if alpha >= MIN_ALPHA {
-                Local::Ggx(GGX::new(alpha, fresnel, ns))
-            } else {
-                let tint = fresnel.eval(wo.dot(&ns).abs());
-                return specular_bounce(p, s, above, reflect(p.ray.rd, ns), tint);
-            }
-        },
-        FlatMaterial::Specular { albedo, roughness } => {
-            let fresnel = Fresnel::Schlick(*albedo);
-            let alpha = (roughness * roughness).max(floor);
-            if alpha >= MIN_ALPHA {
-                Local::Ggx(GGX::new(alpha, fresnel, ns))
-            } else {
-                let tint = fresnel.eval(wo.dot(&ns).abs());
-                return specular_bounce(p, s, above, reflect(p.ray.rd, ns), tint);
-            }
-        },
-        FlatMaterial::Dielectric { refractive_index, tint } => {
-            // As `functions::scatter_dielectric`: the outward normal says whether it enters.
-            let n = h.shading;
-            let exiting = p.ray.rd.dot(&n) > 0.;
-            let outward = if exiting { -n } else { n };
-            let ni_over_nt = if exiting { *refractive_index } else { 1. / refractive_index };
-            let r = fresnel_reflectance(p.ray.rd.dot(&n).abs(), ni_over_nt, *refractive_index);
-            if let Some(t) = refract(p.ray.rd, outward, ni_over_nt)
-                && p.u() >= r {
-                let below = h.point - outward * eps;
-                return specular_bounce(p, s, below, t.normalize(), *tint);
-            }
-            return specular_bounce(p, s, h.point + outward * eps, reflect(p.ray.rd, n), Color::white());
-        },
-        FlatMaterial::Host { object } => return host_bounce(p, s, flat, *object, &h),
-        FlatMaterial::Emitter { .. } | FlatMaterial::Checker { .. } => unreachable!("emitters are retired before shading; checkerboards resolve to a square's material"),
-    };
-    let bsdf = local.bsdf();
-    p.scattered = true;
-    // Next-event estimation: every point light, the sun (as a point), and one area light.
-    for light in &s.lights {
-        let to = light.position - above;
-        let d2 = to.norm_squared();
-        let wi = to / d2.sqrt();
-        let f = bsdf.eval(&wo, &wi);
-        if f != Color::black() {
-            let c = p.beta * f * light.radiant_intensity(&-wi) / d2;
-            shadows.push(Shadow { path: i, ray: Ray { ro: above, rd: wi }, max: d2.sqrt(), contribution: c });
-        }
-    }
-    // The sun, as `functions::sun_light_mis`: a point for lobes that can't resolve its disc,
-    // and otherwise a direction on the disc weighted against the BSDF's density.
-    if let Some(sun) = &s.sun {
-        if bsdf.pdf(&wo, &sun.direction) * sun.solid_angle() < crate::material::functions::POINT_SUN {
-            let f = bsdf.eval(&wo, &sun.direction);
-            if f != Color::black() {
-                shadows.push(Shadow { path: i, ray: Ray { ro: above, rd: sun.direction }, max: crate::light::SUN_SHADOW_DISTANCE,
-                                      contribution: p.beta * f * sun.irradiance_at(&above) });
-            }
-        } else {
-            let (wi, radiance, pdf) = sun.sample_disc_at(&above, [p.u(), p.u()]);
-            let f = bsdf.eval(&wo, &wi);
-            if f != Color::black() && pdf > 0. {
-                let w = power_heuristic(pdf, bsdf.pdf(&wo, &wi));
-                shadows.push(Shadow { path: i, ray: Ray { ro: above, rd: wi }, max: crate::light::SUN_SHADOW_DISTANCE,
-                                      contribution: p.beta * f * radiance * (w / pdf) });
-            }
-        }
-    }
-    let u_light = p.u();
-    if let Some((e, pmf)) = (s.render.sample_lights && !flat.emitters.is_empty()).then(|| flat.choose_emitter(&above, u_light)).flatten() {
-        let prim_index = flat.emitters[e] as usize;
-        let prim = &flat.prims[prim_index];
-        let (y, n_y, pdf) = sample_light(prim, &above, [p.u(), p.u(), p.u()]);
-        let to = y - above;
-        let d = to.norm();
-        let wi = to / d;
-        let le = flat.material(prim_index as u32).emitted(&n_y, &-wi);
-        if le != Color::black() && pdf > 0. {
-            let light_pdf = pmf * pdf;
-            let f = bsdf.eval(&wo, &wi);
-            if f != Color::black() {
-                let w = power_heuristic(light_pdf, bsdf.pdf(&wo, &wi));
-                shadows.push(Shadow { path: i, ray: Ray { ro: above, rd: wi }, max: d * (1. - 1e-6) - eps,
-                                      contribution: p.beta * f * le * (w / light_pdf) });
-            }
-        }
-    }
-    if let Some(env) = &s.environment {
-        let (wi, pdf) = env.sample([p.u(), p.u()]);
-        if pdf > 0. {
-            let f = bsdf.eval(&wo, &wi);
-            if f != Color::black() {
-                let ray = Ray { ro: above, rd: wi };
-                let w = power_heuristic(pdf, bsdf.pdf(&wo, &wi));
-                shadows.push(Shadow { path: i, contribution: p.beta * f * env.radiance(&ray, s) * (w / pdf), ray, max: crate::light::SUN_SHADOW_DISTANCE });
-            }
-        }
-    }
-    // The next ray.
-    if p.depth >= s.render.max_depth as u32 {
-        p.done = true;
-        return;
-    }
-    match bsdf.sample(&wo, [p.u(), p.u(), p.u()]) {
-        Some(sample) => {
-            if !continue_with(p, s, &sample.weight) {
-                return;
-            }
-            p.beta = p.beta * sample.weight;
-            p.prev_pdf = sample.pdf;
-            p.specular = false;
-            // Off the side the new ray leaves by.
-            let side = if sample.wi.dot(&ng) >= 0. { ng } else { -ng };
-            p.ray = Ray { ro: h.point + side * eps, rd: sample.wi.normalize() };
-            p.depth += 1;
-        },
-        None => p.done = true,
-    }
-}
-
-/// A delta bounce: weight `attenuate`, from `from` along `rd`.
-fn specular_bounce(p: &mut Path, s: &Scene, from: Vector3<f64>, rd: Vector3<f64>, attenuate: Color) {
-    if p.depth >= s.render.max_depth as u32 || !continue_with(p, s, &attenuate) {
-        p.done = true;
-        return;
-    }
-    p.beta = p.beta * attenuate;
-    p.specular = true;
-    p.ray = Ray { ro: from, rd: rd.normalize() };
-    p.depth += 1;
-}
-
 /// A vertex on a material that isn't data (`FlatMaterial::Host`): the scene's own material
 /// answers, as it does the recursive tracer (`trace::trace_sample`, which this follows). It
 /// gathers its direct light itself, with its own shadow rays through the scene's own
@@ -509,8 +266,7 @@ fn specular_bounce(p: &mut Path, s: &Scene, from: Vector3<f64>, rd: Vector3<f64>
 /// code for, done one path at a time by code that has. It is why such paths sort last in the
 /// shading stage and are counted apart (`Stage::Host`): what they cost is what porting their
 /// material would save.
-fn host_bounce(p: &mut Path, s: &Scene, flat: &FlatScene, object: u32, h: &Hit) {
-    let o = &flat.hosts[object as usize];
+fn host_bounce(p: &mut Path, s: &Scene, o: &std::sync::Arc<crate::sceneobject::SceneObject>, h: &Hit) {
     let found = Intersection { dist: h.dist, point: h.point, normal: h.shading, face: h.face, object: o, part: h.part };
     // Off the surface, on the side the ray arrived from (`trace::trace_intersection`).
     let bias = s.render.shadow_bias.max(found.spawn_offset());
@@ -579,12 +335,21 @@ pub struct HostVertex {
 /// `host_bounce` for a path kept elsewhere, at `hit`, drawing its numbers from `sampler`.
 /// Nothing if the hit's material is one the stages shade.
 pub fn host_vertex(s: &Scene, flat: &FlatScene, v: &mut HostVertex, hit: &Hit, sampler: crate::sobol::SampleState) {
-    let FlatMaterial::Host { object } = flat.hit_material(hit.prim) else { return };
+    // A shape the host intersects is the host's to shade whatever its material; else a
+    // material that isn't data.
+    let listed = flat.prims.len() + flat.planes.len();
+    let o = if hit.prim as usize >= listed {
+        &flat.shapes[hit.prim as usize - listed].0
+    } else if let FlatMaterial::Host { object } = flat.hit_material(hit.prim) {
+        &flat.hosts[*object as usize]
+    } else {
+        return;
+    };
     let mut p = Path {
         pixel: 0, ray: v.ray, beta: v.beta, l: v.l, weight: 1., depth: v.depth, specular: v.specular, prev_pdf: v.prev_pdf, sampler,
         scattered: v.scattered, lights_counted: v.lights_counted, directional: v.directional, hit: Some(*hit), done: false,
     };
-    host_bounce(&mut p, s, flat, *object, hit);
+    host_bounce(&mut p, s, o, hit);
     *v = HostVertex {
         ray: p.ray, beta: p.beta, l: p.l, depth: p.depth, specular: p.specular, lights_counted: p.lights_counted, directional: p.directional, prev_pdf: p.prev_pdf,
         scattered: p.scattered, done: p.done,
@@ -612,11 +377,12 @@ fn continue_with(p: &mut Path, s: &Scene, attenuate: &Color) -> bool {
 
 /// Render up to the scene's samples per pixel, a pass of one sample per pixel at a time, from
 /// where `rc` has got to; `after_pass` sees the context after each.
-pub fn render(s: &Scene, flat: &FlatScene, rc: &Mutex<RenderContext>, mut after_pass: impl FnMut(&RenderContext)) {
+pub fn render(kernels: &Kernels, rc: &Mutex<RenderContext>, mut after_pass: impl FnMut(&RenderContext)) {
+    let s = kernels.s;
     let first = rc.lock().unwrap().min_samples();
     let (w, h) = (s.image.width, s.image.height);
     for k in first..s.render.samples_per_pixel() {
-        let (image, rays, stats) = render_pass_with_stats(s, flat, k);
+        let (image, rays, stats) = kernels.pass(k);
         let mut rc = rc.lock().unwrap();
         rc.schedule.merge(&stats);
         for y in 0..h {
@@ -642,9 +408,10 @@ pub mod tests {
     /// The mean of a pass's pixels over `passes` passes.
     pub fn mean_image(s: &Scene, passes: usize) -> Vec<Color> {
         let flat = FlatScene::build(s).unwrap();
+        let kernels = Kernels::new(s, &flat).unwrap();
         let mut sum = vec![Color::black(); s.image.width * s.image.height];
         for k in 0..passes {
-            let (img, _) = render_pass(s, &flat, k);
+            let (img, _, _) = kernels.pass(k);
             for (a, b) in sum.iter_mut().zip(img) {
                 *a = *a + b;
             }
@@ -667,8 +434,10 @@ pub mod tests {
         let image = mean_image(&s, 64);
         let mean = image.iter().map(|c| c.rgb.x).sum::<f64>() / image.len() as f64;
         assert!((mean - 1.).abs() < 0.01, "{}", mean);
+        // (A pixel's own noise is that of the kernels' hashed random numbers, wider than the
+        // Sobol' points the stages here once drew.)
         for c in image {
-            assert!((c.rgb.x - 1.).abs() < 0.15, "{:?}", c.rgb);
+            assert!((c.rgb.x - 1.).abs() < 0.3, "{:?}", c.rgb);
         }
     }
 
@@ -759,7 +528,7 @@ pub mod tests {
         let flat = FlatScene::build(&s).unwrap();
         assert_eq!(flat.hosts.len(), 3);
         let n = 256;
-        let (_, _, stats) = render_pass_with_stats(&s, &flat, 0);
+        let (_, _, stats) = Kernels::new(&s, &flat).unwrap().pass(0);
         assert!(stats.stage(Stage::Host).items > 0 && stats.stage(Stage::Shade).items > 0);
         let (w, h) = (s.image.width, s.image.height);
         let (a, b) = (tiles(&mean_image(&s, n), w, h, 3, 2), tiles(&path_image(&s, n), w, h, 3, 2));

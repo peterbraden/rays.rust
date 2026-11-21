@@ -157,6 +157,11 @@ pub const PRIM_PLANE: u32 = 2;
 /// The sea (the renderer's `ocean::Ocean`; `ocean_hit`): one at most, after the planes, its
 /// record in `tables` at `Params::dims.z` - 1.
 pub const PRIM_OCEAN: u32 = 3;
+/// A shape the kernels have no test for, which keeps its place among the primitives: the
+/// host finds what a ray hits of it (the renderer's `wavefront::integrator`, between
+/// `intersect_surface` and `intersect_media`, and `HostShapes` for shadow rays), and shades
+/// it (`MAT_HOST`). Only where the host can be asked at each ray: on the CPU.
+pub const PRIM_HOST: u32 = 4;
 /// The sea's record: the planet's radius (0 for the plane y = 0), where its waves displace the
 /// surface (the centre's x and z, and how far from it), the waves' greatest height and slope,
 /// how many tiles of waves there are and how many of them displace (the rest only tilt the
@@ -285,6 +290,17 @@ pub struct Scene<'a> {
     pub materials: &'a [Material],
     pub lights: &'a [Light],
     pub tables: &'a [f32],
+    /// On the CPU, the shapes the kernels have no test for (`PRIM_HOST`), for shadow rays.
+    #[cfg(not(target_arch = "spirv"))]
+    pub host: Option<&'a dyn HostShapes>,
+}
+
+/// The host's shapes (`PRIM_HOST`), as a shadow ray asks after them: whether any lies along
+/// the ray from `ro` in unit direction `rd` before `tmax`. A call to the host from the midst
+/// of a kernel, so the CPU's alone; a device that can't make it refuses such scenes.
+#[cfg(not(target_arch = "spirv"))]
+pub trait HostShapes: Sync {
+    fn occluded(&self, ro: Vec3, rd: Vec3, tmax: f32) -> bool;
 }
 
 /// How much work traversal does, counted on the CPU build only (the shader has nowhere to
@@ -479,13 +495,16 @@ fn intersect_prim(s: &Scene, i: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -
             return Vec4::ZERO;
         }
         Vec4::new(t, 0.0, 0.0, 1.0)
-    } else {
+    } else if kind == PRIM_OCEAN {
         // The sea, from where the ray's range begins (as `Geometry::intersects_beyond`).
         let t = tmin + ocean_hit(s, ro + rd * tmin, rd);
         if t <= tmin || t >= tmax {
             return Vec4::ZERO;
         }
         Vec4::new(t, 0.0, 0.0, 1.0)
+    } else {
+        // A shape the host intersects (`PRIM_HOST`): never by this.
+        Vec4::ZERO
     }
 }
 
@@ -843,6 +862,9 @@ fn normals(s: &Scene, i: u32, ro: Vec3, rd: Vec3, h: Vec4) -> (Vec3, Vec3) {
     } else if kind == PRIM_OCEAN {
         let n = ocean_normal(s, ro + rd * h.x);
         (n, n)
+    } else if kind == PRIM_HOST {
+        // The host's to find, with the rest of its vertex.
+        (-rd, -rd)
     } else {
         // A plane faces each ray, as the renderer's `Plane`.
         let n = if rd.y > 0.0 { -Vec3::Y } else { Vec3::Y };
@@ -969,6 +991,12 @@ pub fn nearest(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: boo
 }
 
 fn occluded(s: &Scene, ro: Vec3, rd: Vec3, tmax: f32) -> bool {
+    #[cfg(not(target_arch = "spirv"))]
+    if let Some(host) = s.host {
+        if host.occluded(ro, rd, tmax) {
+            return true;
+        }
+    }
     trace(s, ro, rd, 0.0, tmax, true).0 != NONE
 }
 
@@ -2433,15 +2461,26 @@ impl Media for NoMedia {
 /// The path with what its ray hits found (`PathState::hit`, and the primitive in `state.z`):
 /// the first of a bounce's two stages, and all of its closest-hit traversal.
 pub fn intersect<M: Media>(s: &Scene, p: &PathState) -> PathState {
+    intersect_media::<M>(s, &intersect_surface(s, p))
+}
+
+/// The surface the path's ray hits, of those the kernels test.
+pub fn intersect_surface(s: &Scene, p: &PathState) -> PathState {
     let (prim, h) = trace(s, p.o.xyz(), p.d.xyz(), 0.0, INF, false);
     let mut found = *p;
     found.state.z = prim;
     found.hit = h;
+    found
+}
+
+/// The path's walk through the media as far as the surface `found` for it: a collision
+/// before the surface is the vertex instead.
+pub fn intersect_media<M: Media>(s: &Scene, found: &PathState) -> PathState {
+    let mut found = *found;
     if M::ON {
-        // A collision in a medium before the surface is the vertex instead.
-        let mut rng = p.state.x;
-        let reach = if prim == NONE { INF } else { h.x };
-        let (t, m) = media_collision(s, p.o.xyz(), p.d.xyz(), reach, p.state.y, &mut rng);
+        let mut rng = found.state.x;
+        let reach = if found.state.z == NONE { INF } else { found.hit.x };
+        let (t, m) = media_collision(s, found.o.xyz(), found.d.xyz(), reach, found.state.y, &mut rng);
         found.state.x = rng;
         if m != NONE {
             found.state.z = MEDIUM_HIT + m;

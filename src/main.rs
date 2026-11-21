@@ -332,13 +332,14 @@ fn main() {
     } else {
         flat
     };
-    // And so is one only the GPU's kernels have the code for.
-    let flat = match flat.as_ref().filter(|_| gpu_missing).and_then(|f| f.needs_kernels()) {
-        Some(why) => {
+    // Without the GPU the kernels run here, over the same buffers.
+    let kernels = match flat.as_ref().filter(|_| gpu_missing).map(|f| wavefront::integrator::Kernels::new(&s, f)) {
+        Some(Ok(k)) => Some(k),
+        Some(Err(why)) => {
             println!("- The wavefront integrator can't render this scene ({}); rendering with the path tracer", why);
             None
         },
-        None => flat,
+        None => None,
     };
     #[cfg(not(feature = "gpu"))]
     if s.render.gpu {
@@ -383,8 +384,8 @@ fn main() {
     if on_gpu {
         #[cfg(feature = "gpu")]
         gpu.as_mut().unwrap().render(&s, flat.as_ref().unwrap(), &rcmtx, after_pass);
-    } else if let Some(flat) = &flat {
-        wavefront::integrator::render(&s, flat, &rcmtx, |rc| {
+    } else if let Some(kernels) = &kernels {
+        wavefront::integrator::render(kernels, &rcmtx, |rc| {
             pb.set_position(rc.progress_percentage(&s) as u64);
             pb.set_message(rc.progress(&s));
             pb.tick();
@@ -455,7 +456,7 @@ fn main() {
         }
     }
     if let Some(path) = &args.time_map {
-        write_time_map(path, &rc, flat.is_some());
+        write_time_map(path, &rc, on_gpu || kernels.is_some());
     }
     //wireframe::wireframe(&s, &mut rc);
     let img = s.output.finish(&rc.snapshot());

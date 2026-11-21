@@ -50,7 +50,7 @@ pub enum Prim {
 
 /// The nearest a shape its own code intersects is asked for a hit: such shapes find their
 /// surfaces by marching or iterating, and a ray leaving one starts within that error of it.
-const MIN_SHAPE: f64 = 1e-9;
+pub(crate) const MIN_SHAPE: f64 = 1e-9;
 
 /// A surface hit: distance, point, geometric normal, and the normal to shade with.
 #[derive(Clone, Copy, Debug)]
@@ -211,20 +211,6 @@ pub enum FlatMaterial {
 }
 
 impl FlatMaterial {
-    /// A small number per kind, by which the shading stage sorts its work.
-    pub fn kind(&self) -> u8 {
-        match self {
-            FlatMaterial::Diffuse { .. } => 0,
-            FlatMaterial::Plastic { .. } => 1,
-            FlatMaterial::Dielectric { .. } => 2,
-            FlatMaterial::Conductor { .. } => 3,
-            FlatMaterial::Emitter { .. } => 4,
-            FlatMaterial::Specular { .. } => 5,
-            FlatMaterial::Checker { .. } => 6,
-            FlatMaterial::Host { .. } => 7,
-        }
-    }
-
     /// The material at `p`: itself, or for a checkerboard, the square's (as `CheckeredYPlane`).
     pub fn at(&self, p: &Vector3<f64>) -> &FlatMaterial {
         match self {
@@ -261,9 +247,6 @@ pub struct FlatScene {
     pub emitter_index: Vec<Option<u32>>,
     /// The skysphere, evaluated (by its material) for rays that escape.
     pub sky: Option<std::sync::Arc<crate::sceneobject::SceneObject>>,
-    /// With `"light_sampler": "bvh"`, the light BVH over `emitters` (`light_bvh`), in place of
-    /// choosing by power.
-    pub light_bvh: Option<crate::light_bvh::LightBvh>,
     /// Objects that aren't primitives, intersected by their own code, and their materials. A
     /// hit's `prim` counts them after the primitives and the planes.
     pub shapes: Vec<(std::sync::Arc<crate::sceneobject::SceneObject>, u32)>,
@@ -414,89 +397,12 @@ impl FlatScene {
                 }
             }
         }
-        // The light BVH's bounds: each emitter's box, power (π L A), and normals (a flat
-        // triangle's one, either way if two-sided; a sphere's all).
-        let light_bvh = s.light_bvh.is_some().then(|| {
-            let bounds: Vec<crate::light_bvh::LightBounds> = emitters.iter().map(|&i| {
-                let p = &prims[i as usize];
-                let FlatMaterial::Emitter { radiance, two_sided } = &materials[prim_material[i as usize] as usize] else { unreachable!() };
-                let phi = PI * crate::color::luminance(radiance).max(0.) * p.area() * if *two_sided { 2. } else { 1. };
-                let (w, cos_theta_o) = match p {
-                    Prim::Triangle { v, .. } => ((v[1] - v[0]).cross(&(v[2] - v[0])).normalize(), 1.),
-                    _ => (Vector3::z(), -1.),
-                };
-                crate::light_bvh::LightBounds { bounds: p.bounds(), phi, w, cos_theta_o, cos_theta_e: 0., two_sided: *two_sided }
-            }).collect();
-            crate::light_bvh::LightBvh::new(&bounds)
-        });
         let emitter_choice = Distribution1D::new(if powers.is_empty() { vec![1.] } else { powers });
-        Ok(FlatScene { prims, prim_material, bvh, planes, materials, emitters, emitter_choice, emitter_index, sky, light_bvh, shapes, hosts, prim_face, media })
-    }
-
-    /// Why only the GPU's kernels can render this flat scene, if so: this crate's stages
-    /// (`integrator`) have no participating media.
-    pub fn needs_kernels(&self) -> Option<String> {
-        (!self.media.is_empty()).then(|| "participating media, which only the GPU's kernels track".to_string())
-    }
-
-    /// One emitter to sample from `p` (its index in `emitters`), and the chance of choosing it.
-    pub fn choose_emitter(&self, p: &Vector3<f64>, u: f64) -> Option<(usize, f64)> {
-        match &self.light_bvh {
-            Some(bvh) => bvh.sample(p, u),
-            None => {
-                let (_, _, e) = self.emitter_choice.sample(u);
-                Some((e, self.emitter_choice.probability(e)))
-            },
-        }
-    }
-
-    /// The chance that `choose_emitter` from `p` picks emitter `e`.
-    pub fn emitter_pmf(&self, p: &Vector3<f64>, e: usize) -> f64 {
-        match &self.light_bvh {
-            Some(bvh) => bvh.pmf(p, e),
-            None => self.emitter_choice.probability(e),
-        }
+        Ok(FlatScene { prims, prim_material, bvh, planes, materials, emitters, emitter_choice, emitter_index, sky, shapes, hosts, prim_face, media })
     }
 
     pub fn material(&self, prim: u32) -> &FlatMaterial {
         &self.materials[self.prim_material[prim as usize] as usize]
-    }
-
-    /// The nearest hit along `r` (unit direction) beyond `min`. Planes get indices after the
-    /// bounded primitives.
-    pub fn intersect(&self, r: &Ray, min: f64) -> Option<Hit> {
-        let mut best: Option<Hit> = None;
-        for (k, (p, _)) in self.planes.iter().enumerate() {
-            if let Some((t, g, n)) = p.intersect(r, min, best.map_or(f64::INFINITY, |b| b.dist)) {
-                best = Some(Hit { dist: t, point: r.ro + r.rd * t, geometric: g, shading: n, prim: (self.prims.len() + k) as u32, face: 0, part: 0 });
-            }
-        }
-        // Shapes their own code intersects: one normal, the shape's.
-        for (k, (o, _)) in self.shapes.iter().enumerate() {
-            if let Some(x) = o.geometry.intersects_range(r, min.max(MIN_SHAPE), best.map_or(f64::INFINITY, |b| b.dist)) {
-                let prim = (self.prims.len() + self.planes.len() + k) as u32;
-                best = Some(Hit { dist: x.dist, point: x.point, geometric: x.normal, shading: x.normal, prim, face: x.face, part: x.part });
-            }
-        }
-        let max = best.map_or(f64::INFINITY, |b| b.dist);
-        let found = self.bvh.nearest(r, min, max, |i, best| {
-            self.prims[i].intersect(r, min, best).map(|(t, g, _)| RawIntersection {
-                dist: t, point: r.ro + r.rd * t, normal: g, face: 0, part: 0,
-            })
-        });
-        if let Some((i, x)) = found {
-            // The shading normal again, for the one primitive hit.
-            let shading = self.prims[i].intersect(r, min, x.dist * (1. + 1e-12) + 1e-300).map_or(x.normal, |h| h.2);
-            return Some(Hit { dist: x.dist, point: x.point, geometric: x.normal, shading, prim: i as u32, face: self.face(i as u32), part: 0 });
-        }
-        best
-    }
-
-    /// Whether anything lies along `r` (unit direction) between `min` and `max`.
-    pub fn occluded(&self, r: &Ray, min: f64, max: f64) -> bool {
-        self.planes.iter().any(|(p, _)| p.intersect(r, min, max).is_some())
-            || self.shapes.iter().any(|(o, _)| o.geometry.occludes(r, min.max(MIN_SHAPE), max))
-            || self.bvh.any_hit(r, min, max, |i| self.prims[i].intersect(r, min, max).is_some())
     }
 
     /// The material of a hit's primitive (bounded or plane).
@@ -607,6 +513,6 @@ mod tests {
         }"#.to_string());
         let f = FlatScene::build(&ok).unwrap();
         assert_eq!((f.prims.len(), f.planes.len(), f.emitters.len()), (13, 1, 1));
-        assert!(f.media.is_empty() && f.needs_kernels().is_none());
+        assert!(f.media.is_empty());
     }
 }

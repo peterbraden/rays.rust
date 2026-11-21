@@ -171,3 +171,24 @@ formula catches up.
     distribution vs self-shadowing, with the measurements to tell them apart;
   - support-function fitting of constituent sets, which beats both moment-matched SGGX for
     broadleaves and uniform subsampling.
+
+## Follow-up: the fix
+
+PR #171 sizes each card so it is hit as often as its leaves. It rasterises the union of the
+leaves' projections along 8 directions spread over the hemisphere, and gives the card the same
+mean cross-section (dividing by a flat card's mean `|n·d|`). Two earlier attempts:
+
+- matching along the normal and a 60° ring left a 5–15% deficit;
+- matching over the whole sphere with a box-overlap model overshot by up to 3× at coarse levels.
+
+The hemisphere version brings cards to 0.99–1.06 of their leaves' hit probability at L2–L5. On
+`forest-aerial` (600 × 350, 64 spp):
+
+| | Mean FLIP vs full | Brightness near / far / all | Build |
+|---|---|---|---|
+| Before | 0.0585 | +7.4% / +2.2% / +4.6% | 189 s |
+| After | 0.0545 | −2.5% / −0.7% / −1.2% | 208 s |
+
+The research branch carries the same change, so later measurements here use the corrected cards.
+What remains, slightly dark near the camera, is now small enough that the self-shadowing term of
+stage 3 could be measured against it.

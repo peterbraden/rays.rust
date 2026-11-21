@@ -310,6 +310,8 @@ cards.
 - [x] Stage 0 measurements ([stage0.md](stage0.md)): the brightening is a hit-probability
       deficit, not self-shadowing; memory sits at L2–L3; compact models beat the 32-leaf sample
       at L4 and coarser.
-- [ ] Fix card hit probability per card, over directions (a renderer change, its own PR).
+- [x] Fix card hit probability per card, over directions: PR #171 sizes each card by its
+      leaves' rasterised coverage over the hemisphere. Brightness vs full +4.6% → −1.2%, FLIP
+      0.0585 → 0.0545, build about 10% longer ([stage0.md](stage0.md#follow-up-the-fix)).
 - [ ] Stages 1–3.
 - [ ] Read what could not be fetched (see [log.md](log.md)).

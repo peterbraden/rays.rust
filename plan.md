@@ -2315,6 +2315,35 @@ Not done, and why:
   next cloud kinds go there one by one, and the host's media never get a queue.
 - Spectral rendering and motion blur in the kernels (wavelengths and a time on the path).
 
+### SIMD on the CPU's wavefront: measured (November 2026)
+
+The question: now that the CPU runs the kernels over batches, do vector instructions pay?
+What was measured, on four cores with AVX-512 available, 320 x 200:
+- Where the time is (`--wavefront`'s stage table): demo and teapot-sky are shading and the
+  sky, traversal under a third; ocean-1 is the wave march; the cloud scenes are the walks
+  through the medium.
+- Building for the machine's own CPU (`-C target-cpu=native`): 8 to 10% on the heavy scenes,
+  15% on teapot-sky, nothing on demo. The compiler vectorises little of this by itself.
+- Perlin's noise in lanes (`kernels::measure::measure_lanes`: 4, 8 and 16 points at once,
+  each lane the scalar's operations in order, so the same bits): 1.1x. Its cost is the chain
+  of table reads, eleven a point, which lanes leave as they are; only gathers would move
+  them, and those are AVX2's, which a baseline build hasn't.
+- A profile of a real render (callgrind, collecting inside `Kernels::batch`) said something
+  else was wrong: on nubis-clouds 60% of the instructions were the walk asking for local
+  bounds, a few percent the densities. Counted on the scene's own camera rays
+  (`measure_camera_walks`), the f32 walk asked for 2,784 bounds a ray where f64 asks for
+  183: it stalled at the weather map's edges (above, in the commit that fixed it). Fixed:
+  8.1 s to 2.0 s, faster than the path tracer's 2.8 s. That was worth four times, on the
+  GPU too, against lanes' tenth.
+- Tried and dropped: noise's gradient without a branch (three times faster at scattered
+  points, nothing in a render, where a ray's neighbouring points share their hashes; kept
+  for the 15% it takes off the shader's size) and `floor` at f32 without the library's
+  call (nothing).
+So: not yet. A micro-benchmark at scattered points misled twice here; profile a render.
+What would pay next, by the stage tables: the sea's march (12 us a ray: the choppy map's
+three rounds of tile reads a step), the sky's fixed march (a quarter of the simple scenes,
+branch-free: the one stage lanes fit as it stands), and a wide BVH when the GPU wants one.
+
 ### GPU-ready by construction
 
 What a kernel can't hold is refused where the code is written, not when someone next builds

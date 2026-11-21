@@ -791,6 +791,93 @@ mod measure {
         }
     }
 
+    /// Perlin's noise at `N` points at once, a lane each: `shared::noise::perlin`'s operations
+    /// in its order, lane by lane (so each lane's result is the scalar one's to the bit), the
+    /// table read a lane at a time and the arithmetic written as loops over the lanes for the
+    /// compiler to turn into vector instructions. A prototype, to measure what lanes are worth.
+    fn perlin_lanes<const N: usize>(tables: &[f32], perm: u32, x: [f32; N], y: [f32; N], z: [f32; N]) -> [f32; N] {
+        let p = |i: u32| tables[(perm + i) as usize] as u32;
+        let fade = |t: f32| t * t * t * (t * (t * 6. - 15.) + 10.);
+        let (mut fx, mut fy, mut fz) = ([0f32; N], [0f32; N], [0f32; N]);
+        let mut hash = [[0u32; N]; 8];
+        for l in 0..N {
+            let (x0, y0, z0) = (x[l].floor(), y[l].floor(), z[l].floor());
+            let (xi, yi, zi) = ((x0 as i32 & 255) as u32, (y0 as i32 & 255) as u32, (z0 as i32 & 255) as u32);
+            (fx[l], fy[l], fz[l]) = (x[l] - x0, y[l] - y0, z[l] - z0);
+            let a = p(xi) + yi;
+            let (aa, ab) = (p(a) + zi, p(a + 1) + zi);
+            let b = p(xi + 1) + yi;
+            let (ba, bb) = (p(b) + zi, p(b + 1) + zi);
+            for (k, h) in [p(aa), p(ba), p(ab), p(bb), p(aa + 1), p(ba + 1), p(ab + 1), p(bb + 1)].into_iter().enumerate() {
+                hash[k][l] = h % 12;
+            }
+        }
+        // The eight corners' gradients, then the blend: all lanes at once.
+        let mut out = [0f32; N];
+        let mut g = [[0f32; N]; 8];
+        for k in 0..8 {
+            let (ox, oy, oz) = ((k & 1) as f32, ((k >> 1) & 1) as f32, ((k >> 2) & 1) as f32);
+            for l in 0..N {
+                let (x, y, z) = (fx[l] - ox, fy[l] - oy, fz[l] - oz);
+                let h = hash[k][l];
+                let first = if h < 8 { x } else { y };
+                let second = if h < 4 { y } else { z };
+                let first = if h & 1 == 0 { first } else { -first };
+                let second = if h & 2 == 0 { second } else { -second };
+                g[k][l] = first + second;
+            }
+        }
+        for l in 0..N {
+            let (u, v, w) = (fade(fx[l]), fade(fy[l]), fade(fz[l]));
+            let mix = |a: f32, b: f32, t: f32| a + t * (b - a);
+            let near = mix(mix(g[0][l], g[1][l], u), mix(g[2][l], g[3][l], u), v);
+            let far = mix(mix(g[4][l], g[5][l], u), mix(g[6][l], g[7][l], u), v);
+            out[l] = mix(near, far, w);
+        }
+        out
+    }
+
+    /// Noise in lanes against noise a point at a time: the same bits, and the time of each.
+    #[test]
+    #[ignore]
+    fn measure_lanes() {
+        use crate::procedural::benard_altocumulus::BenardAltocumulus;
+        let record = BenardAltocumulus::new(4000., 200., 2).export();
+        let tables = pathtrace::FloatTables(&record);
+        let perm = pathtrace::load_benard(&record, 0).warp_perm;
+        let mut rng = crate::geometry::Pcg32::new(5, 0);
+        let n = 1 << 21;
+        // Scattered points, and points along rays (as a walk meets them: neighbours alike).
+        for (what, along) in [("scattered", false), ("along rays", true)] {
+            let mut at = (0f32, 0f32, 0f32);
+            let points: Vec<(f32, f32, f32)> = (0..n).map(|i| {
+                if !along || i % 64 == 0 {
+                    at = ((rng.next_f64() * 60. - 30.) as f32, (rng.next_f64() * 60.) as f32, (rng.next_f64() * 60. - 30.) as f32);
+                } else {
+                    at = (at.0 + 0.031, at.1 + 0.007, at.2 + 0.019);
+                }
+                at
+            }).collect();
+            let start = std::time::Instant::now();
+            let one: Vec<f32> = points.iter().map(|p| shared::noise::perlin(&tables, perm, p.0, p.1, p.2)).collect();
+            let scalar = start.elapsed().as_secs_f64() * 1e9 / n as f64;
+            let mut line = format!("{:>10}: {:5.1} ns a point one at a time", what, scalar);
+            for lanes in [4usize, 8, 16] {
+                let start = std::time::Instant::now();
+                let mut many = Vec::with_capacity(n);
+                match lanes {
+                    4 => for c in points.chunks_exact(4) { many.extend(perlin_lanes::<4>(&record, perm, std::array::from_fn(|l| c[l].0), std::array::from_fn(|l| c[l].1), std::array::from_fn(|l| c[l].2))); },
+                    8 => for c in points.chunks_exact(8) { many.extend(perlin_lanes::<8>(&record, perm, std::array::from_fn(|l| c[l].0), std::array::from_fn(|l| c[l].1), std::array::from_fn(|l| c[l].2))); },
+                    _ => for c in points.chunks_exact(16) { many.extend(perlin_lanes::<16>(&record, perm, std::array::from_fn(|l| c[l].0), std::array::from_fn(|l| c[l].1), std::array::from_fn(|l| c[l].2))); },
+                }
+                let t = start.elapsed().as_secs_f64() * 1e9 / n as f64;
+                assert!(one.iter().zip(&many).all(|(a, b)| a.to_bits() == b.to_bits()), "{} lanes differ from one", lanes);
+                line += &format!(", {:.1} in {} lanes ({:.2}x)", t, lanes, scalar / t);
+            }
+            println!("{}", line);
+        }
+    }
+
     /// What the clouds' density costs, part by part, at f32 as the kernels run it: for
     /// deciding what to compute several at a time. `--ignored --nocapture`.
     #[test]

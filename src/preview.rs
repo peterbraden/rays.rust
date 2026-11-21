@@ -167,7 +167,7 @@ mod tests {
             }
         }
         let rc = Mutex::new(RenderContext::new(w, h, false, "t.json"));
-        render(&p.scene, &rc, |_| None::<()>, |_| ());
+        render(&p.scene, &rc, None, |_| None::<()>, |_| ());
         let img = rc.lock().unwrap().snapshot();
         for (i, px) in img.pixels.iter().enumerate() {
             for ch in 0 .. 3 {

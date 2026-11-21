@@ -2033,7 +2033,7 @@ mod tests {
         gpu.render(&s, &flat, &rc, |_| ());
         let (gpu_image, gpu_rays) = { let rc = rc.lock().unwrap(); (rc.snapshot(), rc.rays_cast) };
         let rc = Mutex::new(RenderContext::new(24, 16, false, "test.png"));
-        crate::wavefront::integrator::render(&crate::wavefront::integrator::Kernels::new(&s, &flat).unwrap(), &rc, |_| ());
+        crate::rendercontext::render(&s, &rc, Some(&crate::wavefront::integrator::Kernels::new(&s, &flat).unwrap()), |_| None::<()>, |_| ());
         let (cpu_image, cpu_rays) = { let rc = rc.lock().unwrap(); (rc.snapshot(), rc.rays_cast) };
         // Russian roulette ends paths by different random numbers, so the counts differ a little.
         assert!((gpu_rays as f64 - cpu_rays as f64).abs() < 0.02 * cpu_rays as f64, "rays: GPU {} vs CPU {}", gpu_rays, cpu_rays);

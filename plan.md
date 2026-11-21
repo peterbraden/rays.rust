@@ -2259,8 +2259,15 @@ Done, of step 4: the CPU's wavefront takes its samples in the scheduler's blocks
 block's sums are its passes' to the bit. Testing that found why renders didn't repeat run
 to run: the sky's tables are built from the camera's position, read off a camera ray, whose
 origin is a random point of the lens. Seeded (`environment::viewpoint`), a scene set up
-twice is laid out the same to the bit, and a resumed render is the uninterrupted one. Still
-to come of step 4: the time map on the wavefront.
+twice is laid out the same to the bit, and a resumed render is the uninterrupted one.
+Then the CPU's two render loops became one: `rendercontext::render`, the path tracer's
+driver (regions, passes lowest layer first, adaptive sampling, saved states, progress, the
+time map), renders each chunk with the kernels where the scene is laid out for them
+(`Kernels::samples`) and a path at a time by the scene's own code where it isn't
+(`render_pixel`, `trace`). So step 4 is done on the CPU (a time map under the kernels
+shares a batch's time among its paths by their rays), and of step 5, the loop: `trace` is
+now a way to render a chunk, not a renderer. demo.json, 320 x 200, 64 spp, four cores: the
+recursive tracer 5.8 s, the kernels 2.9 s; two runs of the kernels the same file.
 
 ### GPU-ready by construction
 

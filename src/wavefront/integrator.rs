@@ -98,6 +98,16 @@ impl Path {
 /// batches to keep every thread busy.
 const BATCH: usize = 4096;
 
+/// What `Kernels::samples` rendered, for each pixel asked for: the sum of its samples and of
+/// their squares, the rays they cast and the seconds they took; and what the stages did.
+pub struct Samples {
+    pub sums: Vec<Color>,
+    pub squares: Vec<Color>,
+    pub rays: Vec<u64>,
+    pub seconds: Vec<f64>,
+    pub stats: Stats,
+}
+
 /// A flat scene laid out for the kernels, with the scene whose own code answers for what they
 /// lack: what a pass on the CPU runs over.
 pub struct Kernels<'a> {
@@ -128,49 +138,54 @@ impl<'a> Kernels<'a> {
     /// Render sample `k` of every pixel: each pixel's radiance (times its weight), the number
     /// of rays cast, and what the stages did (`scheduler::Stats`).
     pub fn pass(&self, k: usize) -> (Vec<Color>, u64, Stats) {
-        let pixels = self.s.image.width * self.s.image.height;
-        let (image, _, rays, stats) = self.block(&vec![k; pixels], &vec![1; pixels]);
-        (image, rays, stats)
+        let pixels: Vec<usize> = (0..self.s.image.width * self.s.image.height).collect();
+        let done = self.samples(&pixels, &vec![k; pixels.len()], &vec![1; pixels.len()]);
+        (done.sums, done.rays.iter().sum(), done.stats)
     }
 
-    /// Render `count[pixel]` samples of each pixel from its sample `first[pixel]` (what the
-    /// scheduler planned: `scheduler::plan`): each pixel's sum of them and of their squares,
-    /// the rays cast, and what the stages did. A sample is the same whichever block it is in.
-    pub fn block(&self, first: &[usize], count: &[usize]) -> (Vec<Color>, Vec<Color>, u64, Stats) {
-        let (w, h) = (self.s.image.width, self.s.image.height);
-        let (mut sums, mut squares) = (vec![Color::black(); w * h], vec![Color::black(); w * h]);
+    /// Render `count[i]` samples of pixel `pixels[i]` (its index in the image) from its sample
+    /// `first[i]`, as the scheduler planned (`scheduler::plan`): a region's pass
+    /// (`rendercontext::RenderableChunk`). A sample is the same whichever pass it is in, and a
+    /// pixel's are added in their order, so the sums are those of as many passes of one.
+    pub fn samples(&self, pixels: &[usize], first: &[usize], count: &[usize]) -> Samples {
+        let n = pixels.len();
         let passes = count.iter().copied().max().unwrap_or(0);
-        // Batches of pixels run in parallel, each through all the stages: a queue that streams
+        let media = !self.flat.media.is_empty();
+        // Batches of paths run in parallel, each through all the stages: a queue that streams
         // through memory once per stage would make the stages memory-bound on a CPU (on a GPU,
         // the whole image's queue is the batch).
-        let media = !self.flat.media.is_empty();
-        let batches: Vec<_> = (0..(w * h).div_ceil(BATCH) * passes).into_par_iter()
+        let batches: Vec<_> = (0..n.div_ceil(BATCH) * passes).into_par_iter()
             .map(|j| {
-                let (b, lane) = (j / passes, j % passes);
-                let range = b * BATCH..((b + 1) * BATCH).min(w * h);
-                let sample = |pixel: usize| (lane < count[pixel]).then(|| first[pixel] + lane);
+                // (Pass by pass: so a pixel's samples are collected in their order.)
+                let (lane, b) = (j / n.div_ceil(BATCH), j % n.div_ceil(BATCH));
+                let paths: Vec<(u32, u32, u32)> = (b * BATCH..((b + 1) * BATCH).min(n)).filter(|&i| lane < count[i])
+                    .map(|i| (i as u32, pixels[i] as u32, (first[i] + lane) as u32)).collect();
                 // (A scene without media runs the stages compiled without them, as on the GPU.)
-                if media { self.batch::<pathtrace::WithMedia>(&sample, range) } else { self.batch::<pathtrace::NoMedia>(&sample, range) }
+                if media { self.batch::<pathtrace::WithMedia>(&paths) } else { self.batch::<pathtrace::NoMedia>(&paths) }
             })
             .collect();
-        let mut rays = 0;
-        let mut stats = Stats::default();
-        stats.passes = passes as u64;
-        for (done, n, batch_stats) in batches {
-            rays += n;
-            stats.merge(&batch_stats);
-            for (pixel, c) in done {
-                sums[pixel as usize] = sums[pixel as usize] + c;
-                squares[pixel as usize] = squares[pixel as usize] + Color { rgb: c.rgb.component_mul(&c.rgb) };
+        let mut out = Samples { sums: vec![Color::black(); n], squares: vec![Color::black(); n], rays: vec![0; n], seconds: vec![0.; n], stats: Stats::default() };
+        out.stats.passes = passes as u64;
+        for (done, seconds, stats) in batches {
+            out.stats.merge(&stats);
+            // A batch's time, shared among its paths by the rays each traced.
+            let traced: u64 = done.iter().map(|d| d.2).sum();
+            for (i, c, rays) in done {
+                let i = i as usize;
+                out.sums[i] = out.sums[i] + c;
+                out.squares[i] = out.squares[i] + Color { rgb: c.rgb.component_mul(&c.rgb) };
+                out.rays[i] += rays;
+                out.seconds[i] += seconds * rays as f64 / traced.max(1) as f64;
             }
         }
-        (sums, squares, rays, stats)
+        out
     }
 
-    /// The sample `sample` names of each of the pixels `range` (none for a pixel that takes
-    /// none), stage by stage: each finished path's pixel and radiance, and the number of rays
-    /// cast.
-    fn batch<M: pathtrace::Media>(&self, sample: &(dyn Fn(usize) -> Option<usize> + Sync), range: std::ops::Range<usize>) -> (Vec<(u32, Color)>, u64, Stats) {
+    /// The paths `paths` (each its place in the caller's list, its pixel and its sample's
+    /// number), stage by stage: each finished path's place, radiance and rays; the seconds
+    /// the batch took; and what its stages did.
+    fn batch<M: pathtrace::Media>(&self, wanted: &[(u32, u32, u32)]) -> (Vec<(u32, Color, u64)>, f64, Stats) {
+        let began = crate::time_map::thread_time();
         let (s, flat) = (self.s, self.flat);
         let host_shapes = &self.buffers.host_shapes;
         let scene = self.buffers.scene(if host_shapes.is_empty() { None } else { Some(self) });
@@ -185,16 +200,13 @@ impl<'a> Kernels<'a> {
             clock = now;
         };
         // Camera rays, and the paths they start (`pathtrace::start_paths` on the GPU).
-        // Each with its pixel and its sample's number.
-        let mut paths: Vec<((u32, u32), PathState)> = range.filter_map(|index| {
-            let k = sample(index)?;
-            let ray = crate::kernels::camera_ray(s, index, k);
-            (ray.d.w >= 0.5).then(|| ((index as u32, k as u32), PathState::start(index as u32, k as u32, self.buffers.params.seed.x, &ray)))
+        let mut paths: Vec<((u32, u32, u32), PathState)> = wanted.iter().filter_map(|&(place, pixel, k)| {
+            let ray = crate::kernels::camera_ray(s, pixel as usize, k as usize);
+            (ray.d.w >= 0.5).then(|| ((place, pixel, k), PathState::start(pixel, k, self.buffers.params.seed.x, &ray)))
         }).collect();
         lap(&mut stats, Stage::Generate, paths.len());
         let mut done = Vec::with_capacity(paths.len());
         let mut queries: Vec<(usize, SkyQuery)> = Vec::new();
-        let mut rays = 0u64;
         let mut round = 0;
         while !paths.is_empty() {
             stats.round(round, paths.len() as u64);
@@ -231,7 +243,7 @@ impl<'a> Kernels<'a> {
             lap(&mut stats, Stage::Sky, queries.len());
             // 4. The host's vertices.
             let mut waiting = 0;
-            for ((pixel, k), p) in paths.iter_mut().filter(|(_, p)| p.state.y & PATH_HOST != 0) {
+            for ((_, pixel, k), p) in paths.iter_mut().filter(|(_, p)| p.state.y & PATH_HOST != 0) {
                 *p = crate::kernels::host::shade(s, flat, p, *pixel, *k);
                 waiting += 1;
             }
@@ -239,18 +251,17 @@ impl<'a> Kernels<'a> {
                 lap(&mut stats, Stage::Host, waiting);
             }
             // Finished paths leave the queue.
-            paths.retain(|((pixel, _), p)| {
+            paths.retain(|((place, _, _), p)| {
                 if p.state.y & PATH_ACTIVE != 0 {
                     return true;
                 }
                 let sum = pathtrace::path_sum(p);
-                rays += sum.w as u64;
-                done.push((*pixel, Color::new(sum.x as f64, sum.y as f64, sum.z as f64)));
+                done.push((*place, Color::new(sum.x as f64, sum.y as f64, sum.z as f64), sum.w as u64));
                 false
             });
         }
         lap(&mut stats, Stage::Accumulate, done.len());
-        (done, rays, stats)
+        (done, crate::time_map::thread_time() - began, stats)
     }
 }
 
@@ -391,52 +402,6 @@ fn continue_with(p: &mut Path, s: &Scene, attenuate: &Color) -> bool {
     true
 }
 
-/// The most samples of a pixel in a block: how often the scheduler looks at the film.
-const BLOCK: usize = 8;
-
-/// Render up to the scene's samples per pixel, from where `rc` has got to, a block of a few
-/// samples a pixel at a time: which pixels take samples, and how many, is the scheduler's to
-/// say (`scheduler::plan`, as for the GPU: adaptive sampling's pixels stop when they are
-/// quiet); `after_block` sees the context after each.
-pub fn render(kernels: &Kernels, rc: &Mutex<RenderContext>, mut after_block: impl FnMut(&RenderContext)) {
-    let s = kernels.s;
-    let (w, h) = (s.image.width, s.image.height);
-    loop {
-        let (mut first, mut count) = (vec![0usize; w * h], vec![0usize; w * h]);
-        {
-            let rc = rc.lock().unwrap();
-            for b in rc.regions(s) {
-                let (f, c) = rc.plan(s, &b, BLOCK);
-                let mut i = 0;
-                for y in b.ymin..b.ymax {
-                    for x in b.xmin..b.xmax {
-                        first[y * w + x] = f[i];
-                        count[y * w + x] = c[i];
-                        i += 1;
-                    }
-                }
-            }
-        }
-        if count.iter().all(|c| *c == 0) {
-            break;
-        }
-        let (sums, squares, rays, stats) = kernels.block(&first, &count);
-        let mut rc = rc.lock().unwrap();
-        rc.schedule.merge(&stats);
-        for y in 0..h {
-            for x in 0..w {
-                let i = y * w + x;
-                if count[i] > 0 {
-                    // A sample the lens stopped added nothing, and is a black sample all the same.
-                    rc.set_pixel(x, y, sums[i], squares[i], count[i]);
-                }
-            }
-        }
-        rc.rays_cast += rays;
-        after_block(&rc);
-    }
-}
-
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -484,7 +449,7 @@ pub mod tests {
         let film = |s: &Scene, rc: RenderContext| {
             let flat = FlatScene::build(s).unwrap();
             let rc = Mutex::new(rc);
-            render(&Kernels::new(s, &flat).unwrap(), &rc, |_| ());
+            crate::rendercontext::render(s, &rc, Some(&Kernels::new(s, &flat).unwrap()), |_| None::<()>, |_| ());
             rc.into_inner().unwrap()
         };
         // A scene set up twice is laid out the same, to the bit.

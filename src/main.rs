@@ -372,26 +372,8 @@ fn main() {
     if on_gpu {
         #[cfg(feature = "gpu")]
         gpu.as_mut().unwrap().render(&s, flat.as_ref().unwrap(), &rcmtx, after_pass);
-    } else if let Some(kernels) = &kernels {
-        wavefront::integrator::render(kernels, &rcmtx, |rc| {
-            pb.set_position(rc.progress_percentage(&s) as u64);
-            pb.set_message(rc.progress(&s));
-            pb.tick();
-            let mut last = last_progressive.lock().unwrap();
-            if rc.progressive_render && last.elapsed() >= progressive_interval {
-                *last = Instant::now();
-                if let Err(e) = writer.write(&s.output.finish(&rc.snapshot()), &rc.output_filename) {
-                    eprintln!("{}", e);
-                }
-            }
-            let mut last = last_state.lock().unwrap();
-            if last.elapsed() >= STATE_INTERVAL {
-                *last = Instant::now();
-                save_state(&state_path, &rc.encode_state(key));
-            }
-        });
     } else {
-    rendercontext::render(&s, &rcmtx,
+    rendercontext::render(&s, &rcmtx, kernels.as_ref(),
         |rc| {
             pb.set_position(rc.progress_percentage(&s) as u64);
             pb.set_message(rc.progress(&s));
@@ -444,7 +426,7 @@ fn main() {
         }
     }
     if let Some(path) = &args.time_map {
-        write_time_map(path, &rc, on_gpu || kernels.is_some());
+        write_time_map(path, &rc, on_gpu);
     }
     //wireframe::wireframe(&s, &mut rc);
     let img = s.output.finish(&rc.snapshot());
@@ -462,7 +444,7 @@ fn main() {
 /// Write the render's profile, each pixel's time (see `time_map`), and summarise it.
 fn write_time_map(path: &str, rc: &RenderContext, wavefront: bool) {
     if wavefront {
-        println!("- The wavefront integrator renders paths in batches, not by pixel: no time map");
+        println!("- The GPU renders paths in batches, not by pixel: no time map");
         return;
     }
     let times = rc.times();
@@ -500,7 +482,7 @@ fn measure_variance(s: &mut scene::Scene, runs: usize, output_filename: &str, wr
         s.render.seed = base.wrapping_add(i as u64);
         let rc = Mutex::new(RenderContext::new(s.image.width, s.image.height, false, output_filename));
         let start = Instant::now();
-        rendercontext::render(s, &rc, |_| None::<()>, |_| ());
+        rendercontext::render(s, &rc, None, |_| None::<()>, |_| ());
         let t = start.elapsed().as_secs_f64();
         seconds += t;
         println!("- Render {} of {} (seed {}): {:.2} s", i + 1, runs, s.render.seed, t);

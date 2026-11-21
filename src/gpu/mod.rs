@@ -157,6 +157,11 @@ fn media_records(tables: &mut Vec<f32>, media: &[crate::volume::FlatMedium]) -> 
             tables.extend(record);
             (pathtrace::MEDIUM_NUBIS, f32::from_bits(at), *radius as f32)
         },
+        FieldExport::Benard { record, radius } => {
+            let at = tables.len() as u32;
+            tables.extend(record);
+            (pathtrace::MEDIUM_BENARD, f32::from_bits(at), *radius as f32)
+        },
     }).collect();
     let first = tables.len() as u32;
     for (m, (kind, density, radius)) in media.iter().zip(fields) {
@@ -173,6 +178,8 @@ fn media_records(tables: &mut Vec<f32>, media: &[crate::volume::FlatMedium]) -> 
         // (Never, without the similarity relations: a path counts 255 scatterings at most.)
         let (from, scale) = m.reduced.map_or((1e9, 1.), |(n, scale)| (n as f32, scale as f32));
         tables.extend([scale, from, m.mean_cosine.0 as f32, m.mean_cosine.1 as f32]);
+        let oz = m.oz.map_or([0.; 4], |o| [o.octaves as f32, o.a as f32, o.b as f32, o.c as f32]);
+        tables.extend(oz);
     }
     first
 }
@@ -1951,7 +1958,7 @@ mod tests {
         let exact: Vec<f64> = points.chunks(2).map(|q| {
             layer.fraction_for_test(q[0].y as f64, q[0].w as f64, &Vector3::new(q[0].x as f64, q[0].y as f64, q[0].z as f64))
         }).collect();
-        let here: Vec<f32> = points.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], false)).collect();
+        let here: Vec<f32> = points.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], pathtrace::PROBE_DENSITY)).collect();
         let cloudy = exact.iter().filter(|e| **e > 0.).count();
         let worst = here.iter().zip(&exact).map(|(f, e)| (*f as f64 - e).abs()).fold(0., f64::max);
         println!("{} of {} points in cloud; f32 within {:.1e} of the renderer's f64", cloudy, n, worst);
@@ -1959,10 +1966,42 @@ mod tests {
         assert!(worst < 2e-3, "the shader's density differs from the renderer's by {}", worst);
 
         // On the device.
-        let Some(on_device) = probe(&record, &points, false) else { return };
+        let Some(on_device) = probe(&record, &points, pathtrace::PROBE_DENSITY) else { return };
         let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
         println!("on the device: within {:.1e} of the shader's functions on the CPU", worst);
         assert!(worst < 1e-4, "the device's density differs from the shader's on the CPU by {}", worst);
+    }
+
+    /// Altocumulus likewise (`shared::altocumulus`): through a layer with waves and turrets,
+    /// the shader's density is the renderer's to f32's precision, here and on the device.
+    #[test]
+    fn test_altocumulus_is_the_renderers_on_the_device() {
+        use crate::procedural::benard_altocumulus::BenardAltocumulus;
+        let mut layer = BenardAltocumulus::new(4000., 250., 5);
+        (layer.undulation, layer.castellanus, layer.turret_height, layer.anisotropy, layer.patchiness) = (0.3, 0.4, 3., 1.6, 0.);
+        layer.wind_direction = crate::na::Vector2::new(1., 0.3).normalize();
+        let record = layer.export();
+        let mut rng = crate::geometry::Pcg32::new(5, 0);
+        let mut next = move || rng.next_f64();
+        let n = 4096;
+        let (lo, hi) = (layer.bottom() - 50., layer.top() + 50.);
+        let points: Vec<Vec4> = (0..n).flat_map(|_| [Vec4::new(
+            (next() * 16000. - 8000.) as f32, (lo + next() * (hi - lo)) as f32, (next() * 16000. - 8000.) as f32, 0.), Vec4::ZERO]).collect();
+        let exact: Vec<f64> = points.chunks(2).map(|q| layer.fraction(&Vector3::new(q[0].x as f64, q[0].y as f64, q[0].z as f64))).collect();
+        let here: Vec<f32> = points.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], pathtrace::PROBE_ALTOCUMULUS)).collect();
+        let cloudy = exact.iter().filter(|e| **e > 0.).count();
+        // (Edges are steep: a point's density moves by what f32 moves the point, so the mean
+        // difference is the measure, with a looser bound on the worst.)
+        let differences: Vec<f64> = here.iter().zip(&exact).map(|(f, e)| (*f as f64 - e).abs()).collect();
+        let (worst, mean) = (differences.iter().cloned().fold(0., f64::max), differences.iter().sum::<f64>() / n as f64);
+        println!("{} of {} points in cloud; f32 within {:.1e} of the renderer's f64 (mean {:.1e})", cloudy, n, worst, mean);
+        assert!(cloudy > n / 40, "{} of {} points in cloud", cloudy, n);
+        assert!(worst < 2e-2 && mean < 1e-4, "the shader's density differs from the renderer's by {} (mean {})", worst, mean);
+
+        let Some(on_device) = probe(&record, &points, pathtrace::PROBE_ALTOCUMULUS) else { return };
+        let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
+        println!("on the device: within {:.1e} of the shader's functions on the CPU", worst);
+        assert!(worst < 1e-3, "the device's density differs from the shader's on the CPU by {}", worst);
     }
 
     /// Light through a cloud is one walk (`shared::media::ratio_track` over the shared
@@ -1989,7 +2028,7 @@ mod tests {
             let d = Vector3::new(next() - 0.5, if up { 0.3 + next() } else { -0.3 - next() }, next() - 0.5).normalize();
             [o, Vec4::new(d.x as f32, d.y as f32, d.z as f32, 0.)]
         }).collect();
-        let here: Vec<f32> = rays.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], true)).collect();
+        let here: Vec<f32> = rays.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], pathtrace::PROBE_RAYS)).collect();
         // The renderer's, with as many estimates and more: its mean, to compare means with.
         let samples = 16 * pathtrace::PROBE_ESTIMATES as usize;
         crate::volume::begin_path();
@@ -2012,7 +2051,7 @@ mod tests {
         assert!((sum - sum_exact).abs() / (n as f64) < 0.01, "mean {} against {}", sum / n as f64, sum_exact / n as f64);
         assert!(worst < 0.2, "a ray's transmittance differs by {}", worst);
 
-        let Some(on_device) = probe(&record, &rays, true) else { return };
+        let Some(on_device) = probe(&record, &rays, pathtrace::PROBE_RAYS) else { return };
         let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
         println!("on the device: within {:.1e} of the shader's function on the CPU", worst);
         assert!(worst < 2e-2, "the device's transmittance differs from the shader's on the CPU by {}", worst);
@@ -2020,7 +2059,7 @@ mod tests {
 
     /// `probe_clouds` run on the device over `points` (two vectors a probe: `pathtrace::probe`),
     /// for the cloud whose record is `record`; None without a device.
-    fn probe(record: &[f32], points: &[Vec4], rays: bool) -> Option<Vec<f32>> {
+    fn probe(record: &[f32], points: &[Vec4], what: u32) -> Option<Vec<f32>> {
         pollster::block_on(async {
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
             let adapter = match instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await {
@@ -2039,7 +2078,7 @@ mod tests {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pathtrace"), source });
             let mut params = Params::zeroed();
             params.counts.x = points.len() as u32 / 2;
-            params.counts.y = rays as u32;
+            params.counts.y = what;
             let buffer = |contents: &[u8], usage| device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents, usage });
             let uniform = buffer(bytemuck::bytes_of(&params), wgpu::BufferUsages::UNIFORM);
             let tables = buffer(bytemuck::cast_slice(record), wgpu::BufferUsages::STORAGE);
@@ -2236,10 +2275,11 @@ mod tests {
 
     /// Participating media in the kernels (`pathtrace::media_collision`, the medium's vertex
     /// in `shade`, `media_transmittance`): the picture is the path tracer's, tile by tile,
-    /// with delta-M truncation and with the similarity relations too.
+    /// with delta-M truncation, with the similarity relations and with the Oz approximation's
+    /// sunlight too.
     #[test]
     fn test_media_are_the_path_tracers() {
-        for density in [r#""density": 1.5"#, r#""density": 6, "similarity_after": 2"#] {
+        for density in [r#""density": 1.5"#, r#""density": 6, "similarity_after": 2"#, r#""density": 6, "oz": true"#] {
             media_agree(density);
         }
     }

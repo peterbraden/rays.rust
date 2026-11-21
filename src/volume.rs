@@ -546,6 +546,9 @@ pub enum FieldExport {
     /// A Nubis cloud layer's record (`NubisCloudLayer::export`), flat, or curved round a planet
     /// of `radius` (`planet::PlanetMapping`) where that isn't 0.
     Nubis { record: Vec<f32>, radius: f64 },
+    /// A layer of altocumulus's record (`BenardAltocumulus::export`), flat or round a planet
+    /// likewise.
+    Benard { record: Vec<f32>, radius: f64 },
 }
 
 impl FieldExport {
@@ -557,6 +560,10 @@ impl FieldExport {
                 // Its densest extinction, which the rest is a fraction of.
                 record[7] *= by as f32;
                 FieldExport::Nubis { record, radius }
+            },
+            FieldExport::Benard { mut record, radius } => {
+                record[2] *= by as f32;
+                FieldExport::Benard { record, radius }
             },
         }
     }
@@ -583,12 +590,14 @@ pub struct FlatMedium {
     pub reduced: Option<(u32, f64)>,
     /// The mean cosine of the scattering angle, whole and truncated.
     pub mean_cosine: (f64, f64),
+    /// The Oz approximation of the sunlight scattered many times, if the medium takes it.
+    pub oz: Option<Oz>,
 }
 
 impl Volume {
     /// The medium as data, scattering as `material` says; or why a kernel couldn't render it:
     /// they have the plain path tracing of a grey medium filling its box, with delta-M
-    /// truncation and the similarity relations, lit by the sun, the lights and the sky. Sun and glitter probes they leave
+    /// truncation, the similarity relations and the Oz approximation, lit by the sun, the lights and the sky. Sun and glitter probes they leave
     /// out: those change a render's noise, not its mean.
     pub fn flat(&self, material: &VolumeMaterial) -> Result<FlatMedium, String> {
         let a = &material.approximation;
@@ -599,7 +608,6 @@ impl Volume {
             (material.halos.is_some(), "halos"),
             (material.rainbow.is_some(), "rainbows"),
             (material.emission.is_some(), "it emits"),
-            (a.oz.is_some(), "the Oz approximation"),
             (a.diffusion.is_some(), "the diffusion approximation"),
         ];
         if let Some((_, why)) = unported.iter().find(|(is, _)| *is) {
@@ -611,6 +619,7 @@ impl Volume {
             phase: material.phase, albedo: material.albedo.as_reflectance(), peak: material.forward_peak(1),
             reduced: a.similarity_after.map(|n| (n, material.density_scale(n.max(1)))),
             mean_cosine: (material.mean_cosine(0), material.mean_cosine(1)),
+            oz: a.oz,
         })
     }
 }

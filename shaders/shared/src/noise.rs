@@ -80,3 +80,16 @@ pub fn fbm<F: Real, T: Tables<F>>(tables: &T, perm: u32, x: F, y: F, z: F, octav
     }
     (result / max_value + F::of(1)) * F::ratio(1, 2)
 }
+
+/// Hash a cell (and seed) to a number in [0, 1]: Worley noise's feature points, and whatever
+/// else is particular to a cell. (Negative cells are numbered by their two's complement.)
+pub fn cell_hash<F: Real>(ix: u32, iy: u32, iz: u32, s: u32) -> F {
+    let mut h = (ix.wrapping_mul(73856093)) ^ (iy.wrapping_mul(19349663)) ^ (iz.wrapping_mul(83492791)) ^ s.wrapping_mul(0x9E37_79B9);
+    // Avalanche (murmur3 finaliser) so neighbouring cells are uncorrelated.
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x85eb_ca6b);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0xc2b2_ae35);
+    h ^= h >> 16;
+    F::unit(h)
+}

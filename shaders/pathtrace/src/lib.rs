@@ -2400,6 +2400,16 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
     // And from as many scatterings as the similarity relations begin at, isotropically, with
     // the albedo they give (`peak` 1 then: none of the phase function's shape is left).
     let mut scatterings = (flags_p >> PATH_SCATTERINGS_SHIFT) & 0xff;
+    // The Oz approximation (the renderer's `VolumeMaterial::oz_sunlight`): at the path's first
+    // scattering in any medium the sun is a sum of octaves, each through thinner media by a
+    // broader phase function; at later ones it has been counted.
+    let oz = if M::ON && in_medium { at(s.tables, medium + MEDIUM_OZ) as u32 } else { 0 };
+    let sun_counted = oz > 0 && scatterings > 0;
+    let oz_by = if oz > 0 {
+        Vec4::new(at(s.tables, medium + MEDIUM_OZ + 1), at(s.tables, medium + MEDIUM_OZ + 2), at(s.tables, medium + MEDIUM_OZ + 3), at(s.tables, medium + MEDIUM_MEAN_COSINE + 1))
+    } else {
+        Vec4::ONE
+    };
     let mut peak = 0.0;
     let mut medium_albedo = Vec3::ZERO;
     if M::ON && in_medium {
@@ -2523,7 +2533,7 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
             li = light.intensity.xyz() * spot(&light, -wi) / d2;
         } else if k == n_lights {
             // The sun: a point for lobes that can't resolve its disc, else its disc with MIS.
-            if flags & FLAG_SUN != 0 {
+            if flags & FLAG_SUN != 0 && !sun_counted {
                 let sd = s.params.sun_dir.xyz();
                 let solid_angle = sun_solid_angle(s);
                 if in_medium || lobe.pdf(wo, sd) * solid_angle < POINT_SUN {
@@ -2592,9 +2602,23 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
             if f.dot(f) > 0.0 {
                 rays += 1;
                 if !occluded(s, above, wi, dist) {
-                    // Past the media in the way.
+                    // Past the media in the way; the sun, with Oz, an octave at a time.
                     if M::ON {
-                        w *= media_transmittance(s, above, wi, dist, flags_p, true, &mut rng);
+                        let octaves = if k == n_lights && oz > 0 { oz } else { 1 };
+                        let (mut thinned, mut share) = (1.0, 1.0);
+                        let mut g = oz_by.w;
+                        let mut sum = Vec3::ZERO;
+                        let mut octave = 0;
+                        while octave < octaves {
+                            let through = media_transmittance(s, above, wi, dist, flags_p, true, thinned, &mut rng);
+                            let fi = if octave == 0 { f } else { medium_albedo * shared::phase::henyey_greenstein(rd.dot(wi), g) };
+                            sum += fi * (share * through);
+                            thinned *= oz_by.x;
+                            share *= oz_by.y;
+                            g *= oz_by.z;
+                            octave += 1;
+                        }
+                        f = sum;
                     }
                     if k == n_lights + 2 {
                         q1 = SkyQuery::sky(above, wi, beta * f * w);
@@ -2778,11 +2802,20 @@ pub fn nubis_transmittance(tables: &[f32], base: u32, ro: Vec3, rd: Vec3, tmin: 
 /// How many estimates of the transmittance `probe_clouds` averages for a ray.
 pub const PROBE_ESTIMATES: u32 = 64;
 
+/// What `probe` is asked for: a Nubis layer's density, light through it along rays, or a layer
+/// of altocumulus's density.
+pub const PROBE_DENSITY: u32 = 0;
+pub const PROBE_RAYS: u32 = 1;
+pub const PROBE_ALTOCUMULUS: u32 = 2;
+
 /// What `probe_clouds` computes for probe `i`: the density at a point (its w the weather),
-/// or, with `rays`, the mean of `PROBE_ESTIMATES` estimates of the transmittance along the ray
+/// or, with `PROBE_RAYS`, the mean of `PROBE_ESTIMATES` estimates of the transmittance along the ray
 /// from `a` (its w how far) in direction `b`, from the random numbers `pcg(i)` begins.
-pub fn probe(tables: &[f32], base: u32, i: u32, a: Vec4, b: Vec4, rays: bool) -> f32 {
-    if !rays {
+pub fn probe(tables: &[f32], base: u32, i: u32, a: Vec4, b: Vec4, what: u32) -> f32 {
+    if what == PROBE_ALTOCUMULUS {
+        return load_benard(tables, base).fraction(&FloatTables(tables), a.x, a.y, a.z);
+    }
+    if what != PROBE_RAYS {
         return nubis_fraction(tables, base, a.xyz(), a.w);
     }
     let mut rng = pcg(i);
@@ -2797,8 +2830,8 @@ pub fn probe(tables: &[f32], base: u32, i: u32, a: Vec4, b: Vec4, rays: bool) ->
 
 /// The clouds on the device, for checking what the shared functions compute there against the
 /// renderer's (`probe`): `counts.x` probes of the layer whose record is at `offs.x`, two
-/// vectors each in `points`, the answer in the second's w; `counts.y` says whether they are
-/// rays. Not part of a render; the volume kernels will call these functions as this does.
+/// vectors each in `points`, the answer in the second's w; `counts.y` says what is asked
+/// (`PROBE_*`). Not part of a render; the volume kernels will call these functions as this does.
 #[cfg(target_arch = "spirv")]
 #[spirv(compute(threads(64)))]
 pub fn probe_clouds(
@@ -2812,7 +2845,7 @@ pub fn probe_clouds(
     }
     let i = gid.x as usize;
     let (a, b) = (points[2 * i], points[2 * i + 1]);
-    points[2 * i + 1].w = probe(tables, params.offs.x, gid.x, a, b, params.counts.y == 1);
+    points[2 * i + 1].w = probe(tables, params.offs.x, gid.x, a, b, params.counts.y);
 }
 
 // ---- Media in a render: a path's ray is tracked through each medium before the surface it
@@ -2824,7 +2857,7 @@ pub fn probe_clouds(
 
 /// A medium's record in `tables` (the renderer's `gpu::media_records`), `MEDIUM_SIZE` floats:
 /// its kind; its box (least corner, greatest); its extinction (`MEDIUM_CONSTANT`) or the bits
-/// of where its cloud layer's record is (`MEDIUM_NUBIS`); the radius of the planet it curves
+/// of where its cloud layer's record is (`MEDIUM_NUBIS`, `MEDIUM_BENARD`); the radius of the planet it curves
 /// round, or 0 where it is flat; the factor on every medium's density for segments of a path
 /// that last scattered here, and on its own for one that has left a surface (delta-M
 /// truncation: the renderer's `Volume::truncated`); a lower bound on its extinction; its phase
@@ -2833,8 +2866,8 @@ pub fn probe_clouds(
 /// truncation takes as none; and for the similarity relations (the renderer's
 /// `ScatteringApproximation::similarity_after`), that factor on densities once a path has
 /// scattered as often as they begin at, that number, and the mean cosine of its scattering
-/// whole and truncated.
-pub const MEDIUM_SIZE: u32 = 24;
+/// whole and truncated; and the Oz approximation's octaves and factors (`MEDIUM_OZ`).
+pub const MEDIUM_SIZE: u32 = 28;
 pub const MEDIUM_BOX: u32 = 1;
 pub const MEDIUM_DENSITY: u32 = 7;
 pub const MEDIUM_RADIUS: u32 = 8;
@@ -2846,10 +2879,33 @@ pub const MEDIUM_PEAK: u32 = 19;
 pub const MEDIUM_REDUCED_SCALE: u32 = 20;
 pub const MEDIUM_REDUCED_FROM: u32 = 21;
 pub const MEDIUM_MEAN_COSINE: u32 = 22;
+/// The Oz approximation's octaves (0 without it), then its factors a octave on the extinction,
+/// the weight and the mean cosine (the renderer's `volume::Oz`).
+pub const MEDIUM_OZ: u32 = 24;
 pub const MEDIUM_CONSTANT: u32 = 0;
 pub const MEDIUM_NUBIS: u32 = 1;
+pub const MEDIUM_BENARD: u32 = 2;
 pub const PHASE_HENYEY_GREENSTEIN: u32 = 0;
 pub const PHASE_DROPLETS: u32 = 1;
+
+/// A layer of altocumulus's record in a table (`shared::altocumulus::Benard`; the renderer's
+/// `BenardAltocumulus::export`): its recipe's 23 numbers in their fields' order, and its seed's
+/// bits; then the permutations of the lattice's warp and of the patches (512 entries each)
+/// and the Worley texture.
+pub const BENARD_HEADER: u32 = 24;
+
+/// The layer whose record begins at `base`.
+pub fn load_benard(tables: &[f32], base: u32) -> shared::altocumulus::Benard<f32> {
+    // (No closure over `tables`: one that holds a slice is a struct naga refuses.)
+    shared::altocumulus::Benard {
+        base: at(tables, base), thickness: at(tables, base + 1), max_density: at(tables, base + 2), cell_size: at(tables, base + 3), coverage: at(tables, base + 4), regularity: at(tables, base + 5), anisotropy: at(tables, base + 6),
+        wind: (at(tables, base + 7), at(tables, base + 8)), undulation: at(tables, base + 9), wavelength: at(tables, base + 10), patchiness: at(tables, base + 11), patch_size: at(tables, base + 12), warp: at(tables, base + 13),
+        lumpiness: at(tables, base + 14), detail_size: at(tables, base + 15), erosion: at(tables, base + 16), center: (at(tables, base + 17), at(tables, base + 18)), extent: at(tables, base + 19), fade: at(tables, base + 20),
+        castellanus: at(tables, base + 21), turret_height: at(tables, base + 22), seed: at(tables, base + 23).to_bits(),
+        warp_perm: base + BENARD_HEADER, patch_perm: base + BENARD_HEADER + NUBIS_PERMUTATION,
+        worley: base + BENARD_HEADER + 2 * NUBIS_PERMUTATION,
+    }
+}
 
 /// A medium as the shared walks take one.
 pub struct KernelMedium<'a> {
@@ -2857,7 +2913,45 @@ pub struct KernelMedium<'a> {
     pub kind: u32,
     pub sigma: f32,
     pub radius: f32,
-    pub field: shared::clouds::NubisField<f32>,
+    pub nubis: shared::clouds::NubisField<f32>,
+    pub benard: shared::altocumulus::Benard<f32>,
+}
+
+/// A medium's cloud layer in its own flat coordinates, of whichever kind: so that what is
+/// around it (the planet's curve) is compiled once.
+struct KernelLayer<'a> {
+    tables: &'a FloatTables<'a>,
+    kind: u32,
+    nubis: &'a shared::clouds::NubisField<f32>,
+    benard: &'a shared::altocumulus::Benard<f32>,
+}
+
+impl shared::media::Medium<f32> for KernelLayer<'_> {
+    fn density(&self, x: f32, y: f32, z: f32) -> f32 {
+        if self.kind == MEDIUM_BENARD {
+            self.benard.max_density * self.benard.fraction(self.tables, x, y, z)
+        } else {
+            self.nubis.density(self.tables, x, y, z)
+        }
+    }
+
+    fn bound(&self) -> f32 {
+        if self.kind == MEDIUM_BENARD { self.benard.max_density } else { self.nubis.max_density }
+    }
+
+    fn majorant_from(&self, x: f32, y: f32, z: f32, dx: f32, dy: f32, dz: f32) -> (f32, f32) {
+        if self.kind == MEDIUM_BENARD {
+            self.benard.majorant_from(y, dy)
+        } else {
+            self.nubis.majorant_from(self.tables, x, y, z, dx, dy, dz)
+        }
+    }
+}
+
+impl<'a> KernelMedium<'a> {
+    fn layer(&'a self) -> KernelLayer<'a> {
+        KernelLayer { tables: &self.tables, kind: self.kind, nubis: &self.nubis, benard: &self.benard }
+    }
 }
 
 impl shared::media::Medium<f32> for KernelMedium<'_> {
@@ -2866,18 +2960,18 @@ impl shared::media::Medium<f32> for KernelMedium<'_> {
             return self.sigma;
         }
         let q = if self.radius > 0.0 { shared::media::planet_local(self.radius, x, y, z) } else { (x, y, z) };
-        self.field.density(&self.tables, q.0, q.1, q.2)
+        self.layer().density(q.0, q.1, q.2)
     }
 
     fn bound(&self) -> f32 {
-        if self.kind == MEDIUM_CONSTANT { self.sigma } else { self.field.max_density }
+        if self.kind == MEDIUM_CONSTANT { self.sigma } else { self.layer().bound() }
     }
 
     fn majorant_from(&self, x: f32, y: f32, z: f32, dx: f32, dy: f32, dz: f32) -> (f32, f32) {
         if self.kind == MEDIUM_CONSTANT {
             return (self.sigma, INF);
         }
-        let layer = shared::clouds::NubisMedium(&self.field, &self.tables);
+        let layer = self.layer();
         if self.radius > 0.0 {
             shared::media::OnPlanet { radius: self.radius, medium: &layer }.majorant_from(x, y, z, dx, dy, dz)
         } else {
@@ -2889,11 +2983,13 @@ impl shared::media::Medium<f32> for KernelMedium<'_> {
 /// The medium whose record begins at `base`.
 pub fn load_medium(tables: &[f32], base: u32) -> KernelMedium<'_> {
     let kind = at(tables, base) as u32;
-    // A constant medium has no layer: any record's numbers do, unread.
-    let layer = if kind == MEDIUM_NUBIS { at(tables, base + MEDIUM_DENSITY).to_bits() } else { base };
+    // A medium has one layer's record at most: the other kinds' are any record's numbers,
+    // unread.
+    let record = at(tables, base + MEDIUM_DENSITY).to_bits();
     KernelMedium {
-        tables: FloatTables(tables), kind, sigma: at(tables, base + MEDIUM_DENSITY),
-        radius: at(tables, base + MEDIUM_RADIUS), field: load_nubis(tables, layer),
+        tables: FloatTables(tables), kind, sigma: at(tables, base + MEDIUM_DENSITY), radius: at(tables, base + MEDIUM_RADIUS),
+        nubis: load_nubis(tables, if kind == MEDIUM_NUBIS { record } else { base }),
+        benard: load_benard(tables, if kind == MEDIUM_BENARD { record } else { base }),
     }
 }
 
@@ -2953,15 +3049,16 @@ pub fn media_collision(s: &Scene, ro: Vec3, rd: Vec3, reach: f32, flags: u32, rn
 }
 
 /// How much light gets through the media along the ray as far as `tmax`: one estimate, by
-/// residual ratio tracking, whose mean is exp(-optical depth).
-pub fn media_transmittance(s: &Scene, ro: Vec3, rd: Vec3, tmax: f32, flags: u32, left: bool, rng: &mut u32) -> f32 {
+/// residual ratio tracking, whose mean is exp(-optical depth). With every density times
+/// `thinned` besides (an octave of the Oz approximation).
+pub fn media_transmittance(s: &Scene, ro: Vec3, rd: Vec3, tmax: f32, flags: u32, left: bool, thinned: f32, rng: &mut u32) -> f32 {
     let mut through = 1.0;
     let mut random = Hashed(*rng);
     let mut m = 0;
     while m < s.params.media.y && through > 0.0 {
         let base = s.params.media.x + m * MEDIUM_SIZE;
         let (near, far) = medium_span(s.tables, base, ro, rd, 0.0, tmax);
-        let scale = segment_scale(s, flags, left, base);
+        let scale = segment_scale(s, flags, left, base) * thinned;
         if near < far && scale > 0.0 {
             let medium = load_medium(s.tables, base);
             let lower = at(s.tables, base + MEDIUM_LOWER);

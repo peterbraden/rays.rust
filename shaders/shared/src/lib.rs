@@ -16,9 +16,11 @@
 //! - No recursion, no slices of local arrays, no closures over buffers: what rust-gpu and
 //!   naga take (the renderer's CLAUDE.md lists what they don't).
 //!
-//! So far: Perlin's noise, and the Nubis clouds' density (`clouds`).
+//! So far: Perlin's noise, the walks through a medium (`media`), phase functions (`phase`),
+//! the Nubis clouds' density (`clouds`) and altocumulus's (`altocumulus`).
 #![cfg_attr(target_arch = "spirv", no_std)]
 
+pub mod altocumulus;
 pub mod clouds;
 pub mod media;
 pub mod noise;
@@ -56,6 +58,17 @@ pub trait Real: Copy + PartialOrd + Add<Output = Self> + Sub<Output = Self> + Mu
     /// The least a walk along a ray advances, relative to how far along it is: so that a
     /// stretch reported as empty at a boundary can't stall it.
     fn hair() -> Self;
+
+    /// A hash's 32 bits as a number in [0, 1].
+    fn unit(bits: u32) -> Self;
+
+    /// To the nearest integer, halves away from zero. (By `floor`: a GPU's own rounding may
+    /// take halves either way.)
+    #[inline]
+    fn round(self) -> Self {
+        let half = Self::ratio(1, 2);
+        if self < Self::of(0) { -((-self + half).floor()) } else { (self + half).floor() }
+    }
 
     #[inline]
     fn abs(self) -> Self {
@@ -104,6 +117,8 @@ impl Real for f32 {
     }
     #[inline]
     fn to_i32(self) -> i32 { self as i32 }
+    #[inline]
+    fn unit(bits: u32) -> f32 { bits as f32 / u32::MAX as f32 }
     #[inline]
     fn ln(self) -> f32 {
         #[cfg(target_arch = "spirv")]
@@ -176,6 +191,8 @@ impl Real for f64 {
     fn sqrt(self) -> f64 { f64::sqrt(self) }
     #[inline]
     fn to_i32(self) -> i32 { self as i32 }
+    #[inline]
+    fn unit(bits: u32) -> f64 { bits as f64 / u32::MAX as f64 }
     #[inline]
     fn ln(self) -> f64 { f64::ln(self) }
     #[inline]

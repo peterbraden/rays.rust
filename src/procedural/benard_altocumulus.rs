@@ -38,11 +38,12 @@
 
 use crate::na::{Vector2, Vector3};
 use std::sync::OnceLock;
-use crate::noise::{PerlinNoise, worley_hash};
-use crate::procedural::nubis_clouds::{lerp, remap, smoothstep, stretched, worley_fbm, WorleyTexture};
+use crate::noise::PerlinNoise;
+use crate::procedural::nubis_clouds::WorleyTexture;
 use crate::volume::DensityField;
 
 /// Rows of the hexagonal lattice are this far apart, for centres a unit apart.
+#[cfg(test)]
 const ROW: f64 = 0.866_025_403_784_438_6;
 
 pub struct BenardAltocumulus {
@@ -94,13 +95,24 @@ pub struct BenardAltocumulus {
     cells: OnceLock<WorleyTexture>,
 }
 
-/// Where a point lies among the cells: `edge` from 0 at its cell's centre to 1 at its edge,
-/// `radial` its distance from the centre in half-spacings, and two numbers in [0, 1]
-/// particular to the cell.
-struct CellPoint {
-    edge: f64,
-    radial: f64,
-    hash: (f64, f64),
+/// The layer's tables as its shared recipe reads them: the permutation of the noise that
+/// warps the lattice, then the patches', then the Worley texture of the detail.
+struct LayerTables<'a> {
+    layer: &'a BenardAltocumulus,
+    cells: &'a WorleyTexture,
+}
+
+const PATCH_AT: u32 = 512;
+const WORLEY_AT: u32 = 1024;
+
+impl shared::Tables<f64> for LayerTables<'_> {
+    fn value(&self, i: u32) -> f64 {
+        self.cells.texels()[(i - WORLEY_AT) as usize] as f64
+    }
+
+    fn index(&self, i: u32) -> u32 {
+        if i < PATCH_AT { self.layer.warp_noise.permutation()[i as usize] as u32 } else { self.layer.patch_noise.permutation()[(i - PATCH_AT) as usize] as u32 }
+    }
 }
 
 impl BenardAltocumulus {
@@ -135,136 +147,54 @@ impl BenardAltocumulus {
         }
     }
 
+    /// The layer's recipe, as the shared code takes it (`shared::altocumulus::Benard`, where
+    /// the density is: the GPU's shader compiles the same functions at f32).
+    fn recipe(&self) -> shared::altocumulus::Benard<f64> {
+        shared::altocumulus::Benard {
+            base: self.base, thickness: self.thickness, max_density: self.max_density, cell_size: self.cell_size,
+            coverage: self.coverage, regularity: self.regularity, anisotropy: self.anisotropy,
+            wind: (self.wind_direction.x, self.wind_direction.y), undulation: self.undulation, wavelength: self.wavelength,
+            patchiness: self.patchiness, patch_size: self.patch_size, warp: self.warp, lumpiness: self.lumpiness,
+            detail_size: self.detail_size, erosion: self.erosion, center: (self.center.x, self.center.y),
+            extent: self.extent, fade: self.fade, castellanus: self.castellanus, turret_height: self.turret_height,
+            seed: self.seed, warp_perm: 0, patch_perm: PATCH_AT, worley: WORLEY_AT,
+        }
+    }
+
     /// The heights between which there can be cloud: bases are raised or lowered by up to a
     /// tenth of the thickness per cell, and by a third of it on the waves.
     pub fn bottom(&self) -> f64 {
-        self.base - self.thickness * (0.1 + 0.3 * self.undulation)
+        self.recipe().bottom()
     }
 
     pub fn top(&self) -> f64 {
-        let turrets = if self.castellanus > 0. { self.turret_height * 1.2 } else { 0. };
-        self.base + self.thickness * (1.5 + 0.3 * self.undulation).max(turrets + 0.5)
+        self.recipe().top()
     }
 
     fn detail(&self) -> &WorleyTexture {
         self.cells.get_or_init(|| WorleyTexture::new(self.seed.wrapping_add(7)))
     }
 
-    /// Along and across the wind, in metres.
-    fn wind_frame(&self, x: f64, z: f64) -> (f64, f64) {
-        let w = self.wind_direction;
-        (x * w.x + z * w.y, -x * w.y + z * w.x)
-    }
-
-    /// The cell around (`u`, `v`), in lattice units: centres a unit apart.
-    fn cell_at(&self, u: f64, v: f64) -> CellPoint {
-        let jitter = 0.5 * (1. - self.regularity.clamp(0., 1.));
-        let j0 = (v / ROW).round() as i64;
-        let (mut f1, mut f2, mut nearest) = (f64::MAX, f64::MAX, (0i64, 0i64));
-        for j in j0 - 2..=j0 + 2 {
-            let shift = if j.rem_euclid(2) == 1 { 0.5 } else { 0. };
-            let i0 = (u - shift).round() as i64;
-            for i in i0 - 2..=i0 + 2 {
-                let h = |k: u32| worley_hash(i as u32, j as u32, 0, self.seed.wrapping_add(k)) - 0.5;
-                let c = Vector2::new(i as f64 + shift + 2. * jitter * h(0), j as f64 * ROW + 2. * jitter * h(1));
-                let d = (c - Vector2::new(u, v)).norm_squared();
-                if d < f1 {
-                    f2 = f1;
-                    f1 = d;
-                    nearest = (i, j);
-                } else if d < f2 {
-                    f2 = d;
-                }
-            }
-        }
-        // Half the gap between the nearest two centres' distances is (nearly) the distance to
-        // the boundary between them: 0.5 at the middle of a regular cell.
-        let to_edge = (f2.sqrt() - f1.sqrt()) / 2.;
-        let (i, j) = nearest;
-        let h = |k: u32| worley_hash(i as u32, j as u32, 0, self.seed.wrapping_add(k));
-        CellPoint { edge: (1. - 2. * to_edge).clamp(0., 1.), radial: 2. * f1.sqrt(), hash: (h(2), h(3)) }
-    }
-
     /// Cloud density as a fraction of `max_density`, in [0, 1].
     pub fn fraction(&self, p: &Vector3<f64>) -> f64 {
-        if p.y < self.bottom() || p.y > self.top() {
-            return 0.;
-        }
-        let from_centre = (Vector2::new(p.x, p.z) - self.center).abs().max() / self.extent;
-        let edge_fade = smoothstep(0., self.fade.max(1e-9), 1. - from_centre);
-        if edge_fade <= 0. {
-            return 0.;
-        }
-        // 4. Patches.
-        let patches = {
-            let n = stretched(self.patch_noise.fbm(p.x / self.patch_size, 0.5, p.z / self.patch_size, 3, 0.5, 2.));
-            lerp(1., smoothstep(0.3, 0.6, n), self.patchiness)
-        };
-        let strength = edge_fade * patches;
-        if strength <= 0. {
-            return 0.;
-        }
-        // 1. The cells, in the wind's frame, warped.
-        let (along, across) = self.wind_frame(p.x, p.z);
-        let (mut u, mut v) = (along / (self.cell_size * self.anisotropy), across / self.cell_size);
-        let warp = |s: f64| (self.warp_noise.fbm(u * 0.35, s, v * 0.35, 2, 0.5, 2.) - 0.5) * 2. * self.warp;
-        (u, v) = (u + warp(0.25), v + warp(0.75));
-        // 3. Waves across the wind, their crests wandering a little.
-        let wave = if self.undulation > 0. {
-            let wander = (self.warp_noise.fbm(along / self.wavelength * 0.3, 0.1, across / self.wavelength * 0.3, 2, 0.5, 2.) - 0.5) * 4.;
-            0.5 + 0.5 * (std::f64::consts::TAU * along / self.wavelength + wander).cos()
-        } else {
-            1.
-        };
-        let cell = self.cell_at(u, v);
-        // 2. This cell's cloudlet: its reach towards the edge, and how far out we are in it.
-        let reach = self.coverage * strength * lerp(1., wave, self.undulation) * (0.8 + 0.4 * cell.hash.0);
-        if reach <= 0. {
-            return 0.;
-        }
-        // Round, not the cell's polygon (which only keeps neighbours apart), with a lumpy
-        // outline.
-        let lumps = 1. + (self.warp_noise.fbm(u * 2.5, 0.6, v * 2.5, 2, 0.5, 2.) - 0.5) * 2. * self.lumpiness;
-        let t = lerp(cell.radial, cell.edge, 0.35) * lumps / reach;
-        if t >= 1. {
-            return 0.;
-        }
-        let offset = (cell.hash.1 - 0.5) * 0.2 + (wave - 0.5) * 0.6 * self.undulation;
-        let h = (p.y - self.base) / self.thickness - offset;
-        // A dome, smaller for smaller cloudlets and with turrets on top, over a base that sags
-        // towards the edge.
-        let turrets = worley_fbm(self.detail(), &(Vector3::new(p.x, self.base, p.z) / (2. * self.detail_size)));
-        let top = (1. - t * t).sqrt() * reach.min(1.).sqrt() * (0.6 + 0.8 * turrets);
-        let bottom = 0.15 * t * t;
-        let mut inside = (h - bottom).min(top - h);
-        // 6. A turret, on some cells: narrower than the cloudlet, rising from it with a round,
-        // billowing head.
-        let chosen = (cell.hash.0 * 7.31 + cell.hash.1 * 3.17).fract();
-        if chosen < self.castellanus {
-            let rise = self.turret_height * (0.5 + 0.5 * (chosen / self.castellanus.max(1e-9)));
-            let width = 0.65 * (0.85 + 0.3 * cell.hash.1);
-            let r = t / width;
-            if r < 1.4 {
-                // A stem rising to a broader, billowing head, with bulges up its flanks: a
-                // little cumulus on the layer. Billows a third of the turret across push its
-                // outline out and in; its top is rounded over the head.
-                let up = (h / rise).clamp(0., 1.);
-                let billows = worley_fbm(self.detail(), &(Vector3::new(p.x, p.y * 0.8, p.z) / (1.6 * self.detail_size)));
-                let bulges = (self.warp_noise.fbm(u * 3., p.y / (0.8 * self.thickness), v * 3., 2, 0.5, 2.) - 0.5) * 2.;
-                let profile = lerp(0.55, 1., smoothstep(0.3, 0.75, up)) * (1. - ((up - 0.75) / 0.25).max(0.).powi(2)).max(0.).sqrt();
-                let radius = profile * (1. + 0.25 * bulges) + 0.45 * (billows - 0.5);
-                let flank = (radius - r) * 2.;
-                inside = inside.max((h - bottom).min(rise * (0.85 + 0.3 * billows) - h).min(flank));
-            }
-        }
-        if inside <= 0. {
-            return 0.;
-        }
-        // Neighbours stay apart: the sinking air at the boundary is clear.
-        let body = smoothstep(0., 0.3, inside) * smoothstep(0., 0.4, 1. - t) * smoothstep(0., 0.2, 1. - cell.edge);
-        // 5. Erode the edges.
-        let d = worley_fbm(self.detail(), &(p / self.detail_size));
-        remap(body, (1. - d) * self.erosion, 1.)
+        self.recipe().fraction(&LayerTables { layer: self, cells: self.detail() }, p.x, p.y, p.z)
+    }
+
+    /// The layer as data, for the GPU's shader (`pathtrace::load_benard`, which has the
+    /// layout): the recipe's numbers in their fields' order and the seed's bits, then the two
+    /// permutations and the Worley texture.
+    pub fn export(&self) -> Vec<f32> {
+        let r = self.recipe();
+        let mut out: Vec<f32> = [
+            r.base, r.thickness, r.max_density, r.cell_size, r.coverage, r.regularity, r.anisotropy, r.wind.0, r.wind.1,
+            r.undulation, r.wavelength, r.patchiness, r.patch_size, r.warp, r.lumpiness, r.detail_size, r.erosion,
+            r.center.0, r.center.1, r.extent, r.fade, r.castellanus, r.turret_height,
+        ].iter().map(|&v| v as f32).collect();
+        out.push(f32::from_bits(self.seed));
+        out.extend(self.warp_noise.permutation().iter().map(|&p| p as f32));
+        out.extend(self.patch_noise.permutation().iter().map(|&p| p as f32));
+        out.extend(self.detail().texels());
+        out
     }
 }
 
@@ -279,15 +209,13 @@ impl DensityField for BenardAltocumulus {
 
     /// The layer is a slab: `max_density` within it, nothing above or below.
     fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
-        let (lo, hi) = (self.bottom(), self.top());
-        let to = |y: f64| if d.y != 0. { (y - p.y) / d.y } else { f64::INFINITY };
-        if p.y < lo {
-            (0., if d.y > 0. { to(lo) } else { f64::INFINITY })
-        } else if p.y > hi {
-            (0., if d.y < 0. { to(hi) } else { f64::INFINITY })
-        } else {
-            (self.max_density, if d.y > 0. { to(hi) } else if d.y < 0. { to(lo) } else { f64::INFINITY })
-        }
+        self.recipe().majorant_from(p.y, d.y)
+    }
+
+    /// As data, where nothing but the density is asked of it (a droplet size is, for
+    /// diffraction).
+    fn export(&self) -> Option<crate::volume::FieldExport> {
+        Some(crate::volume::FieldExport::Benard { record: BenardAltocumulus::export(self), radius: 0. })
     }
 
     fn particle_radius(&self, _p: &Vector3<f64>) -> Option<f64> {

@@ -75,6 +75,7 @@ pub mod light_bvh;
 pub mod wavefront;
 #[cfg(feature = "gpu")]
 pub mod gpu;
+pub mod kernels;
 pub mod shapes {
     pub mod transform;
     pub mod bbox;

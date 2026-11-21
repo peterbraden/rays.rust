@@ -2182,3 +2182,120 @@ chose is then an ordinary scene file, to be tweaked (the scene builder is the ed
 1 first (a world with a state, and progress), as 3, 4 and 5 read it. Then 3 and 4, which make
 the one-seed picture. 2 alongside, as it is the terrain's own work. 5 after 1, when there is a
 world to ship.
+
+## 15. One renderer: the wavefront, on whichever device there is
+
+The direction (November 2026): one integrator, the wavefront, whose kernels run on the GPU
+when there is one and on the CPU when there isn't; code written and tested only on the CPU is
+ready for the GPU; and less code to keep. Old scenes go on rendering as they do.
+
+Where we are. Three copies of light transport: `trace` (recursive, f64, `dyn` materials and
+shapes, thread-local path state; renders everything, 1,231 lines and all of `material/`), the
+CPU wavefront integrator's own stages (`wavefront::integrator`, f64, 878 lines; no media),
+and the kernels (`shaders/pathtrace`, f32, 3,700 lines; the GPU runs them, and the tests run
+them on the CPU through `radiance`). Section 12's step 5 was to remove the second; this
+section is that, taken to its end.
+
+### The shape of it
+
+- One driver of queues (the scheduler's), two backends for a kernel: wgpu, or the same crate
+  compiled natively and run over the queue with rayon. The kernels are already both.
+- What the kernels have no code for goes through host queues, by area, as the GPU's
+  materials do today (`HOST_QUEUE`, `gpu::host`): a material shaded by the scene's own
+  `MaterialModel::scatter`; and, to add, a shape intersected by its own code, and a medium
+  walked by its own. On the CPU backend a host queue costs nothing extra (the paths are in
+  memory); on the GPU it is a round trip, which is what makes porting an area worth doing.
+- `trace` then has no loop of its own: what remains of it is what the host queues call. The
+  CPU wavefront integrator's stages go first (they duplicate the kernels and nothing else
+  calls them); `trace` goes when every demo scene renders through the wavefront at parity.
+
+### Steps, each ending with pictures compared
+
+1. A CPU backend for the kernels: `render_pass` calls `pathtrace::intersect`, `shade` and the
+   sky's functions over its queues in place of its own stages, the host queue as now. Gate:
+   the flattenable scenes against `trace` by FLIP, and against the GPU sample for sample
+   (the same f32 code and random numbers: differences are the device's sin and exp, last
+   bits). Then delete the stages. Known cost: f32 on the CPU, which is step 2's to make
+   harmless; where a scene shows it first, that scene is step 2's test.
+2. The local frame (below).
+3. Host queues for shapes and for media on both backends, so no scene is refused: the
+   refusals in `FlatScene::build` and `Buffers::build` become classifications. The hard
+   part, known: host code reads the path's state from thread-locals that `trace` sets
+   (`volume`'s scatterings and density scale, `NEXT_SUN_WEIGHT`, the sample's wavelengths
+   and time: 12 `thread_local!`s). Each becomes a field of the path that the host stage
+   sets before it calls and reads back after; spectral rendering and motion blur need the
+   path to carry wavelengths and a time, which the kernels then honour or hand to the host.
+4. Adaptive sampling, the time map and resumable accumulation on the wavefront's passes
+   (the GPU's already has the first and last).
+5. `trace`'s loop removed; `--wavefront` and `"integrator"` become no-ops kept for old scene
+   files. From here an area moves from host to kernel by use, as now.
+
+### GPU-ready by construction
+
+What a kernel can't hold is refused where the code is written, not when someone next builds
+the shaders:
+- `shaders/shared` is `no_std` with no allocator on the CPU too (done): `Box`, `Vec`,
+  `String` aren't in scope.
+- `shared_rules` (done; `cargo test`, stable): its source may not name `dyn`, the heap's
+  types, f64 or f32 outside the floats' own implementations, a float literal (constants are
+  `Real::ratio`), an inclusive range or `is_finite`; and every public function must be
+  called by the shader or by another function there, since rust-gpu compiles a generic
+  function only where something calls it. That last rule found three already
+  (`phase::forward_peak` and the truncation's two): right on the CPU, never compiled for the
+  GPU; listed as host-only by name.
+- The proof stays rust-gpu and naga compiling it, in CI. To add there: the kernels built
+  for the CPU with every shared function called at f32 against its f64 at random points (the
+  pattern of `test_altocumulus_is_the_renderers_on_the_device`), as one table-driven test
+  that a new function joins by a line.
+- New light transport, shapes and media are written in `shared` first, and the renderer
+  calls them. The rules could be clippy's (`disallowed_types`) but clippy can't see float
+  literals or uncalled generics, and a test needs no configuration.
+What this can't promise: that a function is small enough once rust-gpu has inlined it
+(the WGSL is 4.4 MB), or that a device's compiler is right (lavapipe on Zen 5, section 12).
+
+### f32 everywhere a render computes: the local frame
+
+f64 is for where things are in the world; a render needs where they are from the camera.
+f32 holds a direction to 6e-8, a fifteen-thousandth of a pixel's angle at 1,000 pixels across
+a 60 degree view: so a point stored relative to the camera is placed to far less than a
+pixel at any distance, and what fails today is only what is stored relative to something
+else. The plan is to choose the frame on the host, in f64, once, and give the kernels
+nothing but local numbers.
+- The render's origin is the camera (snapped, so nearby cameras share buffers; a moving
+  camera re-bases by a translation of the records, not a rebuild). `FlatScene` subtracts it
+  in f64 before narrowing: primitives, boxes, lights, media.
+- Things defined about a far centre keep that centre in a form that cancels exactly: the
+  planet's `excess` (|p - c|² - r² from p·p + 2 r y, already how the air, the sea and
+  `above_sphere` work), generalised to a record's centre given as the offset from the origin
+  plus the precomputed constant; a moon or giant thousands of kilometres off is its own
+  frame, the ray taken into it by one subtraction done in two floats (a double-single
+  difference, 48 bits: the one place more than f32 is needed, and it is three operations).
+- Fields evaluated at world positions (noise, tiles, weather maps, the foam) take the
+  origin's phase from the host: for a lattice of period P (Perlin's 256, a tile's size), the
+  origin is sent as its cell modulo P and its fraction, worked out in f64, and the kernel
+  adds the local offset to the fraction. The far sea's foam and the smallest wave tile
+  (blocky today beyond tens of kilometres) are this.
+- Ray offsets scale with the hit's distance from the origin (`offset_for` does) and no
+  longer with its world coordinates.
+- Time and wavelength are already small numbers.
+Then the CPU backend and the GPU compute the same thing, and `trace`'s f64 is a reference
+for tests, not a second renderer. Assumed, to check on the scenes that stress it (orbit,
+moon, landscape-orbit, the far sea): that nothing needs more than the two-float subtraction.
+Known not to be covered: building the world (tectonics, the landscape's simulation, the
+weather) stays f64 on the host; only what a path touches is narrowed.
+
+### What it removes
+
+`wavefront::integrator`'s stages (step 1); the ports in `pathtrace` that duplicate
+`ocean.rs` and `skysphere.rs` once those move to `shared` (the sea's shape and water, the
+air: some 900 lines of second copies); `trace`'s loop and the `Camera`/`RenderContext`
+paths that only it uses (step 5). What stays, on purpose: `MaterialModel`, `Geometry` and
+`Medium` as the host queues' interface, for everything not yet in a kernel.
+
+### Open decisions
+
+- Whether the CPU backend may be f32 before the local frame is in (step 1 before 2, as
+  written: it shows the precision problems on the CPU, where they can be debugged), or the
+  frame comes first.
+- Whether `trace` is kept, frozen, as the tests' reference after step 5, or the references
+  become stored images.

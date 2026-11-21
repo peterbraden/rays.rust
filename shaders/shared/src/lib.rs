@@ -19,7 +19,13 @@
 //! So far: Perlin's noise, the walks through a medium (`media`), phase functions (`phase`),
 //! the Nubis clouds' density (`clouds`), altocumulus's (`altocumulus`) and the pattern of the
 //! sea's foam (`sea`).
-#![cfg_attr(target_arch = "spirv", no_std)]
+// No standard library and no allocator, on the CPU too: so `Box`, `Vec`, `String` and
+// `format!` aren't in scope for code here whichever machine it is first written and tested
+// on. (std is linked on the CPU only for the floats' functions that `Real`'s implementations
+// below call; the renderer's `shared_rules` tests hold the rest of what a kernel can't take.)
+#![no_std]
+#[cfg(not(target_arch = "spirv"))]
+extern crate std;
 
 pub mod altocumulus;
 pub mod clouds;

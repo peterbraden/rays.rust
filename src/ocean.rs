@@ -524,8 +524,7 @@ struct WaveTile {
 fn bilinear<const N: usize>(n: usize, size: f64, texels: &[[f32; N]], x: f64, z: f64) -> [f64; N] {
     let (u, v) = (x / size * n as f64, z / size * n as f64);
     let n = n as i64;
-    // (`floor` without the library's call, which it is on a plain x86-64: `shared::Real`'s.)
-    let (u0, v0) = (shared::Real::floor(u), shared::Real::floor(v));
+    let (u0, v0) = (u.floor(), v.floor());
     let (fu, fv) = (u - u0, v - v0);
     let mut out = [0.; N];
     // (A tile is a power of two across: its indices wrap by a mask, which is the remainder

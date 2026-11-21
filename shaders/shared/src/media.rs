@@ -99,7 +99,7 @@ pub fn planet_local<F: Real>(radius: F, x: F, y: F, z: F) -> (F, F, F) {
     let up = y + radius;
     let sideways = (x * x + z * z).sqrt();
     // The angle from the pole, by atan2 so it is exact near the origin.
-    let theta = sideways.atan2(up);
+    let theta = sideways.small_angle(up);
     let k = radius * theta / sideways;
     let (ax, az) = if sideways > F::of(0) { (x * k, z * k) } else { (F::of(0), F::of(0)) };
     (ax, F::above_sphere(x, y, z, radius), az)

@@ -384,24 +384,8 @@ fn rand(state: &mut u32) -> f32 {
     (*state >> 8) as f32 * (1.0 / 16777216.0)
 }
 
-/// The whole number at or below `x`. On the CPU by a conversion and a comparison: a build
-/// for any x86-64 has no instruction for it and calls the library's `floorf`, which was a
-/// sixth of the sea's march. (Past 2^23 every float is whole.) A shader has its own.
-#[inline(always)]
-fn floor(x: f32) -> f32 {
-    #[cfg(target_arch = "spirv")]
-    return x.floor();
-    #[cfg(not(target_arch = "spirv"))]
-    if x.abs() < 8_388_608.0 {
-        let t = x as i32 as f32;
-        if t > x { t - 1.0 } else { t }
-    } else {
-        x
-    }
-}
-
 fn fract(x: f32) -> f32 {
-    x - floor(x)
+    x - x.floor()
 }
 
 // ---- Geometry. ----
@@ -584,7 +568,7 @@ fn load_ocean(s: &Scene) -> Ocean {
 /// four texels around it (at (0, 0), (1, 0), (0, 1) and (1, 1)) and how far it is between them.
 fn tile_cell(size: f32, n: f32, x: f32, z: f32) -> (UVec4, Vec2) {
     let (u, v) = (x / size * n, z / size * n);
-    let (u0, v0) = (floor(u), floor(v));
+    let (u0, v0) = (u.floor(), v.floor());
     // (A tile is a power of two across, which the host sees to (`Ocean::export`): wrapped by
     // a mask, where six remainders were six divisions a lookup, and a march makes hundreds.)
     let n = n as i32;
@@ -1082,8 +1066,8 @@ fn env_lookup(s: &Scene, d: Vec3) -> Vec3 {
     let (w, h) = (s.params.offs2.y, s.params.offs2.z);
     let u = fract(d.z.atan2(d.x) / (2.0 * PI) + 0.5) * w as f32 - 0.5;
     let v = (d.y.clamp(-1.0, 1.0).acos() / PI * h as f32 - 0.5).clamp(0.0, (h - 1) as f32);
-    let x0 = floor(u);
-    let y0 = floor(v);
+    let x0 = u.floor();
+    let y0 = v.floor();
     let (fx, fy) = (u - x0, v - y0);
     let xi = ((x0 as i32 + w as i32) as u32) % w;
     let yi = y0 as u32;
@@ -1379,10 +1363,10 @@ fn lut_slice(s: &Scene, a: &Air, slice: u32, d: Vec3) -> (Vec3, Vec3, Vec3) {
     let l = d.y.clamp(0.0, 1.0).asin();
     let v = (l / (PI / 2.0)).sqrt() * (LUT_HEIGHT - 1) as f32;
     let u = fract(d.z.atan2(d.x) / (2.0 * PI)) * LUT_WIDTH as f32;
-    let x0 = (floor(u) as u32) % LUT_WIDTH;
-    let y0 = (floor(v) as u32).min(LUT_HEIGHT - 2);
+    let x0 = (u.floor() as u32) % LUT_WIDTH;
+    let y0 = (v.floor() as u32).min(LUT_HEIGHT - 2);
     let (x1, y1) = ((x0 + 1) % LUT_WIDTH, y0 + 1);
-    let (fx, fy) = (u - floor(u), v - y0 as f32);
+    let (fx, fy) = (u - u.floor(), v - y0 as f32);
     let base = a.lut + slice * LUT_WIDTH * LUT_HEIGHT * 9;
     let t = UVec4::new(base + 9 * (y0 * LUT_WIDTH + x0), base + 9 * (y0 * LUT_WIDTH + x1), base + 9 * (y1 * LUT_WIDTH + x0), base + 9 * (y1 * LUT_WIDTH + x1));
     let w = Vec4::new((1.0 - fx) * (1.0 - fy), fx * (1.0 - fy), (1.0 - fx) * fy, fx * fy);
@@ -1557,7 +1541,7 @@ fn galactic(s: &Scene, space: u32, d: Vec3) -> (f32, f32) {
 
 /// `PerlinNoise::noise`, with the permutation table at `perm`.
 fn perlin(s: &Scene, perm: u32, p: Vec3) -> f32 {
-    let f = Vec3::new(floor(p.x), floor(p.y), floor(p.z));
+    let f = Vec3::new(p.x.floor(), p.y.floor(), p.z.floor());
     let xi = ((f.x as i32) & 255) as u32;
     let yi = ((f.y as i32) & 255) as u32;
     let zi = ((f.z as i32) & 255) as u32;

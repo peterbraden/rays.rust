@@ -23,10 +23,15 @@
 //!   the plane that the cluster's leaves cover most of: the major axis of their normals' second
 //!   moment, `Σ a n nᵀ`, as of the SGGX microflake distribution that Eric Heitz, Jonathan Dupuy,
 //!   Cyril Crassin and Carsten Dachsbacher fit to such aggregates ("The SGGX Microflake
-//!   Distribution", EGSR 2015, doi:10.1111/cgf.12667). Its size is the area the leaves cover,
-//!   with overlaps counted as for leaves scattered at random over the cluster's extent `R`:
-//!   `R (1 - exp(-S / R))` of their projected area `S`, Beer-Lambert's law as in canopy models
-//!   (Monsi and Saeki's, 1953).
+//!   Distribution", ACM TOG 34(4), SIGGRAPH 2015, doi:10.1145/2766988). Its size is chosen so
+//!   that rays hit it as often as they would the leaves: the area the leaves cover together,
+//!   the union of their projections measured by rasterising them (`covered_area`), along
+//!   directions spread over the hemisphere, averaged and divided by a flat card's mean `|n·d|`.
+//!   Leaves aren't scattered at random, as a Beer-Lambert estimate of their overlaps,
+//!   `R (1 - exp(-S / R))` of their projected area `S` over the cluster's extent `R`, would have
+//!   them: a leaf's own triangles never overlap and leaves on a twig spread out. That estimate
+//!   made cards hit a quarter less often than their leaves at the finer levels, and the forest
+//!   5% brighter in linear light than in full detail (`forest-aerial`).
 //!
 //!   A flat card shaded with its own normal would look like a flat card: the crown's sheen, its
 //!   light and shade, come from leaves facing every way. So a card keeps its leaves' normals
@@ -489,6 +494,86 @@ pub fn consolidate(triangles: &[Arc<Tagged<Triangle>>], size: f64) -> CardSet {
     CardSet { bvh, cards, clusters }
 }
 
+/// The directions a card's coverage is measured along: spread evenly, by solid angle, over the
+/// hemisphere about its normal `n` (`e` any direction across `n`), as a Fibonacci lattice. A
+/// card is seen from both sides alike, so one hemisphere stands for the sphere.
+fn coverage_directions(n: &Vector3<f64>, e: &Vector3<f64>) -> Vec<Vector3<f64>> {
+    let f = n.cross(e);
+    let count = 8;
+    let golden = std::f64::consts::PI * (3. - 5f64.sqrt());
+    (0 .. count).map(|i| {
+        let z = 1. - (i as f64 + 0.5) / count as f64;
+        let r = (1. - z * z).sqrt();
+        let phi = golden * i as f64;
+        *n * z + (*e * phi.cos() + f * phi.sin()) * r
+    }).collect()
+}
+
+/// The most cells across each side of the grid `covered_area` rasterises on; fewer for a
+/// cluster of few triangles, about 50 cells to a triangle, enough to measure their union to a
+/// few percent.
+const COVERAGE_CELLS: usize = 48;
+
+/// The area the triangles of `members` cover together, seen along `d`: the union of their
+/// projections, rasterised by cell centres on a grid over their bounds, a row at a time into
+/// bitmasks.
+fn covered_area(members: &[&Tagged<Triangle>], d: &Vector3<f64>) -> f64 {
+    let any = if d.x.abs() < 0.9 { Vector3::x() } else { Vector3::y() };
+    let s = d.cross(&any).normalize();
+    let t = d.cross(&s);
+    let project = |m: &Tagged<Triangle>| [m.item.v0, m.item.v1, m.item.v2].map(|v| (v.dot(&s), v.dot(&t)));
+    let (mut lo, mut hi) = ((f64::INFINITY, f64::INFINITY), (f64::NEG_INFINITY, f64::NEG_INFINITY));
+    for m in members {
+        for (x, y) in project(m) {
+            lo = (lo.0.min(x), lo.1.min(y));
+            hi = (hi.0.max(x), hi.1.max(y));
+        }
+    }
+    let (w, h) = (hi.0 - lo.0, hi.1 - lo.1);
+    if w <= 0. || h <= 0. {
+        return 0.;
+    }
+    let n = ((7. * (members.len() as f64).sqrt()).ceil() as usize).clamp(12, COVERAGE_CELLS);
+    let (cw, ch) = (w / n as f64, h / n as f64);
+    let mut rows = [0u64; COVERAGE_CELLS];
+    for m in members {
+        let p = project(m);
+        let (ymin, ymax) = (p[0].1.min(p[1].1).min(p[2].1), p[0].1.max(p[1].1).max(p[2].1));
+        // The rows whose centres the triangle spans.
+        let j0 = ((ymin - lo.1) / ch - 0.5).ceil().max(0.) as usize;
+        let j1 = (((ymax - lo.1) / ch - 0.5).floor().min(n as f64 - 1.)).max(-1.);
+        if j1 < 0. {
+            continue;
+        }
+        for (j, row) in rows.iter_mut().enumerate().take(j1 as usize + 1).skip(j0) {
+            let y = lo.1 + (j as f64 + 0.5) * ch;
+            // Where the row's line crosses the triangle's edges.
+            let (mut xa, mut xb) = (f64::INFINITY, f64::NEG_INFINITY);
+            for k in 0 .. 3 {
+                let ((x0, y0), (x1, y1)) = (p[k], p[(k + 1) % 3]);
+                if (y0 <= y && y <= y1) || (y1 <= y && y <= y0) {
+                    let x = if y1 == y0 { x0.min(x1) } else { x0 + (y - y0) * (x1 - x0) / (y1 - y0) };
+                    let x_far = if y1 == y0 { x0.max(x1) } else { x };
+                    xa = xa.min(x);
+                    xb = xb.max(x_far);
+                }
+            }
+            if xa > xb {
+                continue;
+            }
+            let i0 = ((xa - lo.0) / cw - 0.5).ceil().max(0.) as usize;
+            let i1 = ((xb - lo.0) / cw - 0.5).floor().min(n as f64 - 1.);
+            if i1 < i0 as f64 {
+                continue;
+            }
+            let i1 = i1 as usize;
+            let span = if i1 - i0 + 1 >= 64 { u64::MAX } else { ((1u64 << (i1 - i0 + 1)) - 1) << i0 };
+            *row |= span;
+        }
+    }
+    rows[.. n].iter().map(|r| r.count_ones()).sum::<u32>() as f64 * cw * ch
+}
+
 /// The card for a cluster: its corner and edges (see the module's notes).
 fn card(members: &[&Tagged<Triangle>]) -> Option<(Vector3<f64>, Vector3<f64>, Vector3<f64>)> {
     let mut moment = Matrix3::zeros();
@@ -544,8 +629,17 @@ fn card(members: &[&Tagged<Triangle>]) -> Option<(Vector3<f64>, Vector3<f64>, Ve
     if extent <= 0. || shown <= 0. {
         return None;
     }
-    // The area covered, with overlaps as for pieces scattered at random over the extent.
-    let covered = extent * (1. - (-shown / extent).exp());
+    // The area the leaves cover, measured by rasterising them seen along directions over the
+    // hemisphere; the card is made as large as gives the same cross-section on average over
+    // those directions (a flat card's shrinks as |n·d|). Pieces of a
+    // cluster aren't scattered at random: a leaf's own triangles never overlap, and leaves on a
+    // twig spread out, so a random-overlap estimate would undercount what they cover.
+    let (mut leaves, mut flat) = (0., 0.);
+    for d in coverage_directions(&normal, &e1) {
+        leaves += covered_area(members, &d);
+        flat += normal.dot(&d).abs();
+    }
+    let covered = leaves / flat;
     let k = (covered / extent).sqrt();
     let mid = centre + a1 * (0.5 * (lo.0 + hi.0)) + a2 * (0.5 * (lo.1 + hi.1));
     let (u, v) = (a1 * (w * k), a2 * (h * k));
@@ -618,6 +712,43 @@ mod tests {
             assert!(faces.binary_search(&h.face).is_ok());
             assert!(h.dist <= 10. + 1e-6);
         }
+    }
+
+    #[test]
+    fn test_card_is_hit_as_often_as_its_leaves() {
+        // A spray of leaves along a twig, tilted every way and not overlapping, as leaves are:
+        // a random-overlap estimate would make its card too small.
+        let mut rng = Pcg32::new(11, 3);
+        let mut all = vec![];
+        for k in 0 .. 12 {
+            let at = Vector3::new((k % 4) as f64 * 0.12, 0., (k / 4) as f64 * 0.12);
+            let tilt = Vector3::new(rng.next_f64() - 0.5, 0., rng.next_f64() - 0.5) * 1.2;
+            let (a, b) = ((Vector3::x() + Vector3::y() * tilt.x).normalize() * 0.08, (Vector3::z() + Vector3::y() * tilt.z).normalize() * 0.08);
+            all.push(Arc::new(Tagged { item: Triangle::new(at, at + b, at + a), face: 2 * k }));
+            all.push(Arc::new(Tagged { item: Triangle::new(at + a, at + b, at + a + b), face: 2 * k + 1 }));
+        }
+        let set = consolidate(&all, 10.);
+        assert_eq!(set.cards().len(), 1);
+        let leaves = GeometrySet::new(&all);
+        let b = leaves.bounds();
+        let (centre, radius) = ((b.min.coords + b.max.coords) * 0.5, (b.max - b.min).norm() * 0.5);
+        // Over directions spread evenly over the sphere, the card and the leaves are hit as often.
+        let (mut on_card, mut on_leaves) = (0, 0);
+        for i in 0 .. 64 {
+            let y = 1. - 2. * (i as f64 + 0.5) / 64.;
+            let phi = 2.4 * i as f64;
+            let d = Vector3::new((1. - y * y).sqrt() * phi.cos(), y, (1. - y * y).sqrt() * phi.sin());
+            let any = if d.x.abs() < 0.9 { Vector3::x() } else { Vector3::y() };
+            let (s, t) = (d.cross(&any).normalize(), d.cross(&d.cross(&any).normalize()));
+            for _ in 0 .. 400 {
+                let (r, a) = (radius * rng.next_f64().sqrt(), 2. * std::f64::consts::PI * rng.next_f64());
+                let ray = Ray { ro: centre + s * (r * a.cos()) + t * (r * a.sin()) - d * (3. * radius), rd: d };
+                on_card += set.intersects(&ray).is_some() as usize;
+                on_leaves += leaves.intersects(&ray).is_some() as usize;
+            }
+        }
+        let ratio = on_card as f64 / on_leaves as f64;
+        assert!((ratio - 1.).abs() < 0.08, "card hit {} times for the leaves' {}", on_card, on_leaves);
     }
 
     #[test]

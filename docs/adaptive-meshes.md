@@ -38,11 +38,15 @@ Two kinds of geometry need two ways of being simplified:
   SIGGRAPH 2007), keeping the area the eye sees:
   - the card lies in the plane the leaves cover most of: the major eigenvector of the second
     moment of their normals, `Σ a n nᵀ`, as of the SGGX microflake distribution (Heitz et al.,
-    EGSR 2015);
+    SIGGRAPH 2015);
   - its sides follow the principal axes of the leaves' spread over that plane, and its area is
-    what the leaves cover, overlaps counted as for leaves scattered at random over the cluster's
-    extent `R`: `R (1 - exp(-S/R))` of their projected area `S` (Beer-Lambert, as in canopy
-    models).
+    chosen so that rays hit it as often as they would the leaves: the area the leaves cover
+    together (the union of their projections, rasterised), averaged over 8 directions spread
+    over the hemisphere, divided by a flat card's mean `|n · d|` over them. An estimate of their
+    overlaps as for leaves scattered at random over the cluster (Beer-Lambert,
+    `R (1 - exp(-S/R))`) made cards too small: a leaf's own triangles never overlap, and leaves
+    on a twig spread out, so at the finer levels cards were hit a quarter less often than their
+    leaves.
 
   **Normal perturbation.** A flat card shaded with its own normal would look like a flat card;
   a crown's light and shade come from leaves facing every way. So each card keeps its leaves'

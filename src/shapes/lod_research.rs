@@ -372,7 +372,7 @@ fn test_refitted_zonotope_matches_projected_area() {
 #[ignore]
 fn lod_research() {
     let species = ["quaking-aspen", "california-black-oak", "weeping-willow", "scots-pine", "norway-spruce", "hazel"];
-    let levels = [2, 4, 6];
+    let levels = [2, 3, 4, 5, 6, 7];
     let dirs = sphere(128);
     // Views from above (the forest seen from the air); lights from the upper hemisphere.
     let views: Vec<Vector3<f64>> = sphere(24).into_iter().filter(|d| d.y < -0.1).collect();

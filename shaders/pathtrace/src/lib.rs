@@ -160,14 +160,33 @@ pub const PRIM_OCEAN: u32 = 3;
 /// The sea's record: the planet's radius (0 for the plane y = 0), where its waves displace the
 /// surface (the centre's x and z, and how far from it), the waves' greatest height and slope,
 /// how many tiles of waves there are and how many of them displace (the rest only tilt the
-/// normal); then for each tile its size in metres, its texels a side, and where its texels
-/// (height, and the slopes along x and z) begin, from the record's start.
+/// normal), and the choppy map's λ (the renderer's `WaveField::lambda`; 0 for none); then for
+/// each tile (`OCEAN_TILE` numbers) its size in metres, its texels a side, where its texels
+/// (height, and the slopes along x and z) begin from the record's start, and where its choppy
+/// displacement's do (five numbers a texel, the renderer's `WaveTile::chop`; 0 for none).
 pub const OCEAN_RADIUS: u32 = 0;
 pub const OCEAN_CENTRE: u32 = 1;
 pub const OCEAN_DETAIL: u32 = 3;
 pub const OCEAN_MAX: u32 = 4;
 pub const OCEAN_TILES: u32 = 6;
-pub const OCEAN_HEADER: u32 = 8;
+pub const OCEAN_LAMBDA: u32 = 8;
+/// Where the sea's foam's record begins, from the sea's (as bits; 0 for none).
+pub const OCEAN_FOAM: u32 = 9;
+pub const OCEAN_HEADER: u32 = 10;
+pub const OCEAN_TILE: u32 = 4;
+/// The least Jacobian of the choppy map the slopes are sharpened by (the renderer's
+/// `ocean::MIN_JACOBIAN`).
+pub const OCEAN_MIN_JACOBIAN: f32 = 0.2;
+/// The foam's record (the renderer's `ocean::Foam::export`): its albedo, the wind's direction
+/// and speed, the spread of the lace's noise, and how many tiles; then for each tile its
+/// texels a side, its size in metres and where its texels (fresh foam, residual foam) begin
+/// from the record's start; then the noise's permutation (512 entries); then the texels.
+pub const FOAM_WIND: u32 = 3;
+pub const FOAM_TILES: u32 = 7;
+pub const FOAM_HEADER: u32 = 8;
+/// Residual foam's albedo, as a fraction of fresh foam's (the renderer's
+/// `ocean::RESIDUAL_FOAM`).
+pub const RESIDUAL_FOAM: f32 = 0.7;
 /// The most steps a ray is marched over the waves (`ocean_march`); the renderer's march has no
 /// limit, and takes far fewer.
 pub const OCEAN_STEPS: u32 = 1024;
@@ -182,8 +201,9 @@ pub const MAT_CHECKER: u32 = 6;
 /// A material the kernels have no code for: the host shades the vertex (`PATH_HOST`).
 pub const MAT_HOST: u32 = 7;
 /// The sea's material (the renderer's `ocean::PhysicalOcean`, opaque water): what the water
-/// body sends back (`c0`), the ripples' mean square slope (`p.y`), and the planet's radius
-/// for the local vertical (`p.x`; 0 for a flat sea).
+/// body sends back (`c0`), what bubbles under a breaking crest add to that (`c1`), the
+/// ripples' mean square slope (`p.y`), and the planet's radius for the local vertical (`p.x`;
+/// 0 for a flat sea). Its foam, if any, is with the sea's record (`OCEAN_FOAM`, `sea_foam`).
 pub const MAT_WATER: u32 = 8;
 /// No surface's: a vertex in a medium (`MEDIUM_HIT`), which scatters by its phase function.
 pub const MAT_MEDIUM: u32 = 9;
@@ -471,7 +491,8 @@ fn intersect_prim(s: &Scene, i: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -
 
 // ---- The sea: the renderer's `ocean::Ocean`, its shape. A sphere (the planet) or a plane,
 // displaced by waves near a centre and smooth beyond, with the waves' slopes in its normal
-// everywhere. The waves are tiles of heights and slopes in `tables`; a planet's distances are
+// everywhere; the waves' crests sharpened by the choppy displacement, which moves the
+// surface sideways: a point's height is its source's on the undisplaced grid (`wave_source`). The waves are tiles of heights and slopes in `tables`; a planet's distances are
 // kept in the forms `excess` and `sphere_roots` give, as the air's are. ----
 
 struct Ocean {
@@ -483,6 +504,7 @@ struct Ocean {
     max_slope: f32,
     tiles: u32,
     displaced: u32,
+    lambda: f32,
 }
 
 fn load_ocean(s: &Scene) -> Ocean {
@@ -496,6 +518,7 @@ fn load_ocean(s: &Scene) -> Ocean {
         max_slope: at(s.tables, base + OCEAN_MAX + 1),
         tiles: at(s.tables, base + OCEAN_TILES) as u32,
         displaced: at(s.tables, base + OCEAN_TILES + 1) as u32,
+        lambda: at(s.tables, base + OCEAN_LAMBDA),
     }
 }
 
@@ -504,37 +527,104 @@ fn ocean_centre(o: &Ocean) -> Vec3 {
     Vec3::new(0.0, -o.radius, 0.0)
 }
 
-/// `WaveTile::at`: a tile's height and slopes at (x, z), bilinear, the tile repeating.
-fn wave_tile(s: &Scene, o: &Ocean, k: u32, x: f32, z: f32) -> Vec3 {
-    let record = o.base + OCEAN_HEADER + 3 * k;
-    let size = at(s.tables, record);
-    let n = at(s.tables, record + 1);
-    let texels = o.base + at(s.tables, record + 2).to_bits();
+/// Where (x, z) lies in a tile of `n` texels a side over `size` metres, which repeats: the
+/// four texels around it (at (0, 0), (1, 0), (0, 1) and (1, 1)) and how far it is between them.
+fn tile_cell(size: f32, n: f32, x: f32, z: f32) -> (UVec4, Vec2) {
     let (u, v) = (x / size * n, z / size * n);
     let (u0, v0) = (u.floor(), v.floor());
-    let (fu, fv) = (u - u0, v - v0);
     let n = n as i32;
     let i0 = ((u0 as i32 % n) + n) % n;
     let j0 = ((v0 as i32 % n) + n) % n;
     let i1 = (i0 + 1) % n;
     let j1 = (j0 + 1) % n;
-    let t00 = tv3(s, texels + 3 * (j0 * n + i0) as u32);
-    let t10 = tv3(s, texels + 3 * (j0 * n + i1) as u32);
-    let t01 = tv3(s, texels + 3 * (j1 * n + i0) as u32);
-    let t11 = tv3(s, texels + 3 * (j1 * n + i1) as u32);
-    (t00 * (1.0 - fu) + t10 * fu) * (1.0 - fv) + (t01 * (1.0 - fu) + t11 * fu) * fv
+    (UVec4::new((j0 * n + i0) as u32, (j0 * n + i1) as u32, (j1 * n + i0) as u32, (j1 * n + i1) as u32), Vec2::new(u - u0, v - v0))
 }
 
-/// `WaveField::at`: the height of the tiles that displace, and the slopes of all.
-fn waves(s: &Scene, o: &Ocean, x: f32, z: f32) -> Vec3 {
-    let mut w = Vec3::ZERO;
+/// `WaveTile::at`: a tile's height and slopes at (x, z), bilinear, the tile repeating.
+fn wave_tile(s: &Scene, o: &Ocean, k: u32, x: f32, z: f32) -> Vec3 {
+    let record = o.base + OCEAN_HEADER + OCEAN_TILE * k;
+    let texels = o.base + at(s.tables, record + 2).to_bits();
+    let (c, f) = tile_cell(at(s.tables, record), at(s.tables, record + 1), x, z);
+    let t00 = tv3(s, texels + 3 * c.x);
+    let t10 = tv3(s, texels + 3 * c.y);
+    let t01 = tv3(s, texels + 3 * c.z);
+    let t11 = tv3(s, texels + 3 * c.w);
+    (t00 * (1.0 - f.x) + t10 * f.x) * (1.0 - f.y) + (t01 * (1.0 - f.x) + t11 * f.x) * f.y
+}
+
+/// `WaveTile::chop_at`: a tile's choppy displacement (D_x, D_z) at (x, z) of the undisplaced
+/// grid, and its gradient (∂D_x/∂x, ∂D_z/∂z, ∂D_x/∂z).
+fn chop_tile(s: &Scene, o: &Ocean, k: u32, x: f32, z: f32) -> (Vec2, Vec3) {
+    let record = o.base + OCEAN_HEADER + OCEAN_TILE * k;
+    let texels = o.base + at(s.tables, record + 3).to_bits();
+    let (c, f) = tile_cell(at(s.tables, record), at(s.tables, record + 1), x, z);
+    let w = Vec4::new((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+    let (mut d, mut j) = (Vec2::ZERO, Vec3::ZERO);
+    let mut corner = 0;
+    while corner < 4 {
+        let (t, weight) = if corner == 0 { (c.x, w.x) } else if corner == 1 { (c.y, w.y) } else if corner == 2 { (c.z, w.z) } else { (c.w, w.w) };
+        let i = texels + 5 * t;
+        d += Vec2::new(at(s.tables, i), at(s.tables, i + 1)) * weight;
+        j += tv3(s, i + 2) * weight;
+        corner += 1;
+    }
+    (d, j)
+}
+
+/// `WaveField::source` and `squeeze`: where on the undisplaced grid the point now at (x, z)
+/// came from, the choppy map p + λD(p) inverted by three rounds of fixed-point iteration; and
+/// with `gradient`, the sum of the displacement's gradient there (a fourth round's reading).
+fn wave_source(s: &Scene, o: &Ocean, x: f32, z: f32, gradient: bool) -> (Vec2, Vec3) {
+    let here = Vec2::new(x, z);
+    let mut p = here;
+    let mut jacobian = Vec3::ZERO;
+    if o.lambda != 0.0 {
+        let rounds = if gradient { 4 } else { 3 };
+        let mut round = 0;
+        while round < rounds {
+            let (mut d, mut j) = (Vec2::ZERO, Vec3::ZERO);
+            let mut k = 0;
+            while k < o.displaced {
+                let (dk, jk) = chop_tile(s, o, k, p.x, p.y);
+                d += dk;
+                j += jk;
+                k += 1;
+            }
+            if round < 3 {
+                p = here - d * o.lambda;
+            } else {
+                jacobian = j;
+            }
+            round += 1;
+        }
+    }
+    (p, jacobian)
+}
+
+/// `WaveField::at`: the height of the tiles that displace, and the slopes of all; the choppy
+/// surface's, whose slopes (asked for with `slopes`; a march needs only heights) are the
+/// grid's through the inverse of the map's Jacobian.
+fn waves(s: &Scene, o: &Ocean, x: f32, z: f32, slopes: bool) -> Vec3 {
+    let (p, j) = wave_source(s, o, x, z, slopes);
+    let (mut w, mut ripples) = (Vec3::ZERO, Vec3::ZERO);
     let mut k = 0;
     while k < o.tiles {
-        let v = wave_tile(s, o, k, x, z);
-        w += if k < o.displaced { v } else { Vec3::new(0.0, v.y, v.z) };
+        let q = if k < o.displaced { p } else { Vec2::new(x, z) };
+        let v = wave_tile(s, o, k, q.x, q.y);
+        if k < o.displaced {
+            w += v;
+        } else {
+            ripples += Vec3::new(0.0, v.y, v.z);
+        }
         k += 1;
     }
-    w
+    if slopes && o.lambda != 0.0 {
+        // ∇_x h = M⁻¹ ∇_p h for the symmetric M = I + λ∇D.
+        let (a, d, b) = (1.0 + o.lambda * j.x, 1.0 + o.lambda * j.y, o.lambda * j.z);
+        let det = (a * d - b * b).max(OCEAN_MIN_JACOBIAN);
+        w = Vec3::new(w.x, (d * w.y - b * w.z) / det, (a * w.z - b * w.y) / det);
+    }
+    w + ripples
 }
 
 /// Height above the mean surface.
@@ -559,7 +649,7 @@ fn ocean_above(s: &Scene, o: &Ocean, p: Vec3) -> f32 {
     if a <= 0.0 {
         return altitude;
     }
-    altitude - a * waves(s, o, p.x, p.z).x
+    altitude - a * waves(s, o, p.x, p.z, false).x
 }
 
 /// `Ocean::below`: the stretch of the ray below altitude `level` (z is 0 if there is none).
@@ -675,6 +765,48 @@ fn ocean_hit(s: &Scene, ro: Vec3, rd: Vec3) -> f32 {
     }
 }
 
+/// The sea's foam at a point of it (the foam of `PhysicalOcean::scatter`): where foam covers
+/// the point (by one random number, over the fraction of it that foam covers), its albedo,
+/// with w 1; else in x how much the bubbles under a breaking crest pale the water, with w 0.
+fn sea_foam(s: &Scene, x: f32, z: f32, rng: &mut u32) -> Vec4 {
+    let o = load_ocean(s);
+    let place = at(s.tables, o.base + OCEAN_FOAM).to_bits();
+    if place == 0 {
+        return Vec4::ZERO;
+    }
+    let base = o.base + place;
+    // `Foam::sample`: foam rides the water it formed in, on the undisplaced sea.
+    let (p, _) = wave_source(s, &o, x, z, false);
+    let tiles = at(s.tables, base + FOAM_TILES) as u32;
+    let (mut clear_fresh, mut clear_residual) = (1.0, 1.0);
+    let mut k = 0;
+    while k < tiles {
+        let record = base + FOAM_HEADER + 3 * k;
+        let texels = base + at(s.tables, record + 2).to_bits();
+        let (c, f) = tile_cell(at(s.tables, record + 1), at(s.tables, record), p.x, p.y);
+        let w = Vec4::new((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+        let fresh = at(s.tables, texels + 2 * c.x) * w.x + at(s.tables, texels + 2 * c.y) * w.y + at(s.tables, texels + 2 * c.z) * w.z + at(s.tables, texels + 2 * c.w) * w.w;
+        let residual = at(s.tables, texels + 2 * c.x + 1) * w.x + at(s.tables, texels + 2 * c.y + 1) * w.y + at(s.tables, texels + 2 * c.z + 1) * w.z + at(s.tables, texels + 2 * c.w + 1) * w.w;
+        clear_fresh *= 1.0 - fresh;
+        clear_residual *= 1.0 - residual;
+        k += 1;
+    }
+    let (fresh, residual) = (1.0 - clear_fresh, 1.0 - clear_residual);
+    let pattern = shared::sea::FoamPattern {
+        wind: (at(s.tables, base + FOAM_WIND), at(s.tables, base + FOAM_WIND + 1)), speed: at(s.tables, base + FOAM_WIND + 2),
+        lace_sd: at(s.tables, base + FOAM_WIND + 3), perm: base + FOAM_HEADER + 3 * tiles,
+    };
+    let tables = FloatTables(s.tables);
+    let solid = pattern.ragged(&tables, fresh, (p.x, p.y));
+    let lace = pattern.lace(&tables, residual, (p.x, p.y));
+    let covered = solid.max(lace);
+    if covered > 0.0 && rand(rng) < covered {
+        let thin = if solid >= lace { 1.0 } else { RESIDUAL_FOAM };
+        return (tv3(s, base) * thin).extend(1.0);
+    }
+    Vec4::new(fresh.max(0.5 * residual), 0.0, 0.0, 0.0)
+}
+
 /// `ocean_normal`, for the renderer's tests.
 #[cfg(not(target_arch = "spirv"))]
 pub fn sea_normal(s: &Scene, p: Vec3) -> Vec3 {
@@ -687,7 +819,7 @@ fn ocean_normal(s: &Scene, p: Vec3) -> Vec3 {
     let up = ocean_up(&o, p);
     let east = (Vec3::X - up * up.x).normalize();
     let north = east.cross(up);
-    let w = waves(s, &o, p.x, p.z);
+    let w = waves(s, &o, p.x, p.z, true);
     (up - east * w.y - north * w.z).normalize()
 }
 
@@ -2440,13 +2572,31 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
     // surface lets in, the sun's glitter through the ripples, and one reflection from a
     // sampled ripple. Its lights are counted by sampling them alone (no sky sample: the
     // reflection finds the sky).
-    let water = mat.kind == MAT_WATER;
+    let mut water = mat.kind == MAT_WATER;
     let water_up = if water && mat.p.x > 0.0 { (point + Vec3::new(0.0, mat.p.x, 0.0)).normalize() } else { Vec3::Y };
     // Seen from beyond a wave's slope: the mean surface.
     let water_n = if hit_ns.dot(wo) <= 0.0 { water_up } else { hit_ns };
+    // Whitecaps: foam over a fraction of the point, chosen at random, scattering diffusely
+    // about the mean surface, as any diffuse surface does; between the patches, bubbles under
+    // the surface pale the water.
+    let mut foamed = false;
+    let mut water_body = mat.c0.xyz();
+    if water {
+        let foam = sea_foam(s, point.x, point.z, &mut rng);
+        if foam.w > 0.0 {
+            water = false;
+            foamed = true;
+            lobe = Lobe::new(0, if water_up.dot(wo) > 0.0 { water_up } else { -water_up });
+            lobe.albedo = foam.xyz();
+        } else {
+            water_body += mat.c1.xyz() * foam.x;
+        }
+    }
     if water {
         lobe = Lobe::new(0, water_n);
-        lobe.albedo = mat.c0.xyz() * (1.0 - water_fresnel(water_n.dot(wo)));
+        lobe.albedo = water_body * (1.0 - water_fresnel(water_n.dot(wo)));
+    } else if foamed {
+        // (Its lobe is set.)
     } else if mat.kind == MAT_DIFFUSE {
         lobe.albedo = mat.c0.xyz();
     } else if mat.kind == MAT_PLASTIC {

@@ -17,7 +17,8 @@
 //!   naga take (the renderer's CLAUDE.md lists what they don't).
 //!
 //! So far: Perlin's noise, the walks through a medium (`media`), phase functions (`phase`),
-//! the Nubis clouds' density (`clouds`) and altocumulus's (`altocumulus`).
+//! the Nubis clouds' density (`clouds`), altocumulus's (`altocumulus`) and the pattern of the
+//! sea's foam (`sea`).
 #![cfg_attr(target_arch = "spirv", no_std)]
 
 pub mod altocumulus;
@@ -25,6 +26,7 @@ pub mod clouds;
 pub mod media;
 pub mod noise;
 pub mod phase;
+pub mod sea;
 
 use core::ops::{Add, Div, Mul, Neg, Sub};
 

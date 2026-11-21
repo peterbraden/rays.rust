@@ -465,8 +465,8 @@ pub struct Buffers {
 /// (the kernel's glitter is the sun's alone).
 fn host_kernels(s: &Scene, flat: &FlatScene) -> Vec<Option<GpuMaterial>> {
     flat.hosts.iter().map(|o| {
-        let (water, roughness, radius) = o.medium.material_at(Vector3::zeros()).water().filter(|_| s.moonlight.is_none())?;
-        Some(GpuMaterial { kind: pathtrace::MAT_WATER, c0: c4(&water), p: Vec4::new(radius as f32, roughness as f32, 0., 0.), ..GpuMaterial::zeroed() })
+        let w = o.medium.material_at(Vector3::zeros()).water().filter(|_| s.moonlight.is_none())?;
+        Some(GpuMaterial { kind: pathtrace::MAT_WATER, c0: c4(&w.body), c1: c4(&w.bubbles), p: Vec4::new(w.radius as f32, w.roughness as f32, 0., 0.), ..GpuMaterial::zeroed() })
     }).collect()
 }
 
@@ -621,10 +621,16 @@ impl Buffers {
         }
 
         // The sea's waves (`Ocean::export`); `dims.z` says where, plus one.
+        // Then its foam (`Foam::export`), which the sea's record says the place of.
         let ocean_off = ocean.map_or(0, |(sea, _)| {
-            let at = tables.len() as u32;
+            let object = &flat.shapes[0].0;
+            let at = tables.len();
             tables.extend(sea.export());
-            at + 1
+            if let Some(foam) = object.medium.material_at(Vector3::zeros()).water().and_then(|w| w.foam) {
+                tables[at + pathtrace::OCEAN_FOAM as usize] = f32::from_bits((tables.len() - at) as u32);
+                tables.extend(foam);
+            }
+            at as u32 + 1
         });
         let media = media_records(&mut tables, &flat.media);
         // The air: the sky's (for escaping rays), the aerial perspective's, the sun's.
@@ -2125,12 +2131,14 @@ mod tests {
     fn test_the_sea_matches_the_renderer() {
         use crate::shapes::geometry::Geometry;
         use pathtrace::glam::Vec3;
-        for radius in ["0", "6360000"] {
+        // A plane and the planet, flat-crested and with choppy crests (a brisk wind's, so that
+        // they are sharp).
+        for (radius, choppiness) in [("0", 0), ("6360000", 0), ("0", 1), ("6360000", 1)] {
             let s = SceneFile::from_string(format!(r#"{{
                 "width": 4, "height": 4, "background": [0, 0, 0],
                 "camera": {{ "location": [0, 3, -12], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.7 }},
-                "objects": [ {{ "type": "ocean", "wind": [7, 2], "choppiness": 0, "whitecaps": 0, "planet_radius": {}, "detail_center": [0, -6], "detail_distance": 30 }} ]
-            }}"#, radius));
+                "objects": [ {{ "type": "ocean", "wind": [7, 2], "choppiness": {}, "whitecaps": 0, "planet_radius": {}, "detail_center": [0, -6], "detail_distance": 30 }} ]
+            }}"#, choppiness, radius));
             let flat = FlatScene::build(&s).unwrap();
             let b = Buffers::build(&s, &flat).unwrap();
             let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
@@ -2160,7 +2168,7 @@ mod tests {
                     _ => one += 1,
                 }
             }
-            println!("radius {}: {} hits, {} disagree on hitting, mean |dt| {:.2e}, worst relative dt {:.2e}, worst normal {:.2e}", radius, both, one, sum_t / both as f64, worst_t, worst_n);
+            println!("radius {}, choppiness {}: {} hits, {} disagree on hitting, mean |dt| {:.2e}, worst relative dt {:.2e}, worst normal {:.2e}", radius, choppiness, both, one, sum_t / both as f64, worst_t, worst_n);
             assert!(both > 3000 && one * 200 < both, "{} of {} rays disagree on hitting the sea", one, both);
             assert!(worst_n < 2e-3, "normals differ by {}", worst_n);
         }
@@ -2173,17 +2181,20 @@ mod tests {
     #[test]
     fn test_intersects_the_sea() {
         use crate::wavefront::integrator::tests::{mean_image, tiles};
-        for radius in ["0", "6360000"] {
+        // Flat-crested without foam, then with choppy crests, and with more foam than this
+        // wind raises (whitecaps over a third of it), so that the foam counts.
+        for (radius, sea) in [("0", r#""choppiness": 0, "whitecaps": 0"#), ("6360000", r#""choppiness": 0, "whitecaps": 0"#),
+                              ("0", r#""whitecaps": 0.35"#), ("6360000", r#""choppiness": 1"#)] {
             let mut s = SceneFile::from_string(format!(r#"{{
                 "width": 24, "height": 16, "background": [0.3, 0.4, 0.6], "max_depth": 4, "path_termination": "russian_roulette",
                 "sun": {{ "direction": [-1, 1, 1], "intensity": 3 }},
                 "camera": {{ "location": [0, 3, -12], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.7 }},
                 "materials": {{ "R": {{ "type": "lambertian", "albedo": [0.7, 0.2, 0.1] }} }},
                 "objects": [
-                    {{ "type": "ocean", "wind": [7, 2], "choppiness": 0, "whitecaps": 0, "planet_radius": {}, "detail_center": [0, -6], "detail_distance": 30 }},
+                    {{ "type": "ocean", "wind": [7, 2], {}, "planet_radius": {}, "detail_center": [0, -6], "detail_distance": 30 }},
                     {{ "type": "sphere", "location": [0, 0.6, 0], "radius": 1.5, "material": "R" }}
                 ]
-            }}"#, radius));
+            }}"#, sea, radius));
             s.render.supersamples = 128;
             let flat = FlatScene::build(&s).unwrap();
             assert_eq!(flat.shapes.len(), 1);
@@ -2198,16 +2209,15 @@ mod tests {
             let rc = Mutex::new(RenderContext::new(w, h, false, "test.png"));
             gpu.render(&s, &flat, &rc, |_| ());
             let rc = rc.into_inner().unwrap();
-            // Its water too is the kernels' (`pathtrace::MAT_WATER`): nothing waits for the host.
-            // (A flat-crested sea without foam, `"choppiness": 0, "whitecaps": 0`: the kernels
-            // have neither the choppy displacement nor the foam yet.)
+            // Its water too is the kernels' (`pathtrace::MAT_WATER`), foam and all: nothing
+            // waits for the host.
             assert_eq!(rc.schedule.stage(crate::scheduler::Stage::Host).items, 0);
             let on_gpu: Vec<Color> = (0..w * h).map(|i| rc.get_pixel(i % w, i / w)).collect();
             let cpu = mean_image(&s, 128);
             let (a, b) = (tiles(&on_gpu, w, h, 3, 2), tiles(&cpu, w, h, 3, 2));
             for t in 0..6 {
                 for ch in 0..3 {
-                    assert!((a[t][ch] - b[t][ch]).abs() < 0.06 * b[t][ch] + 2e-3, "radius {}, tile {} channel {}: GPU {} vs CPU {}", radius, t, ch, a[t][ch], b[t][ch]);
+                    assert!((a[t][ch] - b[t][ch]).abs() < 0.06 * b[t][ch] + 2e-3, "radius {}, {}: tile {} channel {}: GPU {} vs CPU {}", radius, sea, t, ch, a[t][ch], b[t][ch]);
                 }
             }
         }

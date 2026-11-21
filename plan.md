@@ -1782,10 +1782,60 @@ UI, file IO and rayon's threads would follow.
    the failing scenes less one ingredient at a time
    (`gpu::tests::measure_device_against_shader`); a small scene of a floor, a ball and a
    sphere light differed there by 0.1%, only with the sphere light.
-   Next: Oz (a sum of sun transmittances at scaled densities, at a path's first vertex in a
-   medium), then the other cloud kinds, moved one by one, and the global mapping. The
-   ocean's shape and water, ported earlier, should move to `shared` too, so that their
-   second copies go.
+   Since (late November 2026), surveyed again first, 79 scenes, each tried at one sample: 13
+   reached the GPU, and none with a sea. The rough seas merged since (choppy crests and foam,
+   both on by default) had taken every ocean scene off it: the kernel marched a plain height
+   field, and its water had no foam. What was in the way of the rest: the sea 14 (6 of them
+   landscapes), a cloud's density 22 (altocumulus 4; the weather's fields 5; the others one
+   or two each), terrain, grass and forests 13, crepuscular rays with something else 9,
+   diffusion 5, the rings 4, rainbows, halos and diffraction 5, and 8 too slow to say.
+   Done, in that order of what was cheapest for the scenes it moved:
+   - Oz in the kernels' media (`MEDIUM_OZ`): at a path's first scattering the sun is the
+     octaves' sum, one walk of `media_transmittance` each at the thinned density, and later
+     vertices leave the sun out. A tile test against the path tracer. By itself it moves no
+     demo scene: each of the seven that use it wants something more (crepuscular rays,
+     terrain, another cloud).
+   - Altocumulus (`benard_altocumulus`), moved to `shared::altocumulus` and not ported: the
+     renderer's density is the same bits at 900,000 points (old function against new, with
+     waves and turrets; renders themselves differ run to run, so a checksum of a picture
+     can't say), the shader's f32 within 4e-5 of it and the device within 5e-6 of that. A
+     third kind of medium (`MEDIUM_BENARD`), curved round the planet by the code the Nubis
+     layers use (`KernelLayer`).
+   - The sea's choppy crests in its kernel (`wave_source`: the map inverted by three rounds
+     of fixed-point iteration, then the slopes through its Jacobian), from the displacement's
+     tiles (five numbers a texel). Ray by ray against the renderer, 4,000 rays, a plane and
+     the planet: none disagree on hitting, distances to 3e-7, normals to 3e-4.
+   - Foam in the kernel's water (`sea_foam`): the tiles of fresh and residual foam at the
+     point's source, broken up by `shared::sea` (the lace and the torn crests, moved there
+     with the same bits at 600,000 points), a diffuse surface where it covers the point,
+     bubbles paling the water where it doesn't. Tile tests against the CPU's integrator with
+     foam over a third of the sea.
+   Now on the GPU again: ocean-1, ocean-2, ocean-boat, moon-glade, nubis-clouds and
+   stratocumulus; and new, altocumulus-castellanus, altocumulus-undulatus, benard-altocumulus
+   and cirrocumulus: 23 scenes. In linear light at 512 spp (`measure_clouds`, 32 x 18, bands
+   of rows): benard-altocumulus within 0.8% of the path tracer in every band; nubis-clouds
+   within 0.8% but for the sea's horizon band, 4.5% bright as before (still to be found).
+   ocean-1 at 160 x 100, 32 spp: FLIP 0.028 against the path tracer at 64.
+   Known:
+   - Noise, not mean: with no sun probes a sunlit altocumulus is far noisier at equal
+     samples (at 32 spp the comparison's exposure fit read 0.89, a least-squares fit pulled
+     down by fireflies; at 512, 0.993, the path tracer's own). Probes in the kernels are the
+     remedy.
+   - The shader has grown: the WGSL from 2.4 MB to 4.4 MB (altocumulus's five noise calls and
+     the choppy map, each inlined at every call of a density or of the sea). To measure on
+     Metal and in a browser, where the compile was already seconds; if it costs, the
+     altocumulus's noise calls fold into a loop, and the march needs only one copy of the
+     height.
+   - Far from the origin f32 resolves the foam's noise coarsely (its filaments are 0.6 m
+     across: blocky beyond some tens of kilometres, where a pixel holds many).
+   - The landscapes (landscape, landscape-orbit, terrain-alpine, -coast, -volcanic,
+     moonlit-alpine) now flatten and are refused only for size: 130 to 386 MB of primitives
+     against lavapipe's 128 MB buffer. A real device may take them as they are (untried);
+     otherwise the primitives want more than one buffer, or 16-bit normals.
+   Next: crepuscular rays (crepuscular-rays is ready but for them), then the other cloud
+   kinds, moved one by one (cumulus, mammatus, lenticular and cirrus a scene each; the
+   weather's fields five), sun probes, and the global mapping. The ocean's shape and water,
+   ported earlier, should move to `shared` too, so that their second copies go.
 3. The fallback framework: per-area status, classification, CPU queues for materials first,
    then intersection. Exit: every flattenable demo scene plus at least one with a
    procedural shape and one with an unported material renders through the GPU path with CPU

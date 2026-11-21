@@ -2294,6 +2294,27 @@ is what the far sea's foam needs.
   (above). The planet as a sphere primitive still rounds half a metre at its centre's
   distance; `excess`'s form would mend it, as for the sea.
 
+Where that leaves the scenes (surveyed through `--wavefront` on the CPU, the 81, each at one
+sample with five minutes to build): 40 render through the kernels (9 reached them before
+this section, on the GPU alone), 31 are refused and rendered by `trace` as before, and 10
+took longer than the survey allowed. Of the 31, 30 are media the kernels have no code for
+(a cloud's density, diffusion, rainbows, halos; 9 of them with crepuscular rays too), and
+the other is the stress test (spectral, motion blur).
+Not done, and why:
+- The default. `trace` still renders unless `--wavefront` or `--gpu` is asked for. The
+  kernels would be the default tomorrow (they render the demo in half the time), but for
+  what they lack that a picture shows: Sobol' points (they draw from a hash: more noise at
+  equal samples), the scene's `sampler` choice, sun and glitter probes (sunlit clouds are
+  noisier: benard-altocumulus FLIP 0.065 against 0.037 at 32 spp) and the light BVH. Sobol'
+  in the kernels first, then the switch, then `--wavefront` and `"integrator"` as no-ops.
+- Media through the host in the wavefront's rounds (the rest of step 3), and with them the
+  thread-locals. Judged not worth doing as such: a scene with a medium the kernels lack is
+  rendered a path at a time by the scene's own code under the same driver now, and the
+  pictures would be the same; what changes them, and removes code, is the density moving
+  to `shared` (altocumulus was a day's pattern: 400 lines moved, none duplicated). So the
+  next cloud kinds go there one by one, and the host's media never get a queue.
+- Spectral rendering and motion blur in the kernels (wavelengths and a time on the path).
+
 ### GPU-ready by construction
 
 What a kernel can't hold is refused where the code is written, not when someone next builds

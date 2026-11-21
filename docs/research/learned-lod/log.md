@@ -82,3 +82,10 @@ The papers left unread are listed below.
 | LISA; Hsu et al. 2019; Strictly Conservative Neural Implicits | Spatial learned index; learned sketch; provable conservative bounds | ACM, OpenReview check, Wiley |
 | Double Bounded Neural Ray Queries (IJCAI 2026) | Claims up to 300× | ijcai.org not allowed |
 | NGLOD, VBNF, Instant NGP, NGF, Zeltner 2024, NeuMIP | Neural compression of surfaces and materials (abstracts only; judged a poor fit for leaf aggregates) | arXiv was blocked in the first pass |
+
+## 2026-11-21: stage 0
+
+Ran `src/shapes/lod_research.rs` (six species, levels 2–7) and rendered `forest-aerial` at
+600 × 350 and 16 spp: full detail, LOD, sky-only versions of both, and LOD with cards enlarged
+×1.2 by a temporary change. Results and their reading are in [stage0.md](stage0.md). The diagnosis
+of the brightening changed, from self-shadowing to hit probability.

@@ -65,6 +65,10 @@ Two targets follow from it:
     transparency while losing local self-shadowing "leads to overly bright LoDs". Weier et al. 2023
     report "noticeable undesired brightening" of Hybrid LoD on their Oak Tree.
   - So a replacement that also models correlation could improve accuracy, not just save memory.
+  - **Stage 0 found otherwise for this scene** ([stage0.md](stage0.md)). The bias, 4.5% in linear
+    light, comes from cards being hit 20–26% less often than their leaves at the fine levels.
+    Enlarging the cards removes it (−0.5%). Self-shadowing would predict a bias growing with
+    distance, and the bias falls with distance.
 
 ## What the literature does
 
@@ -262,7 +266,8 @@ cards.
 2. **Fitted lobes and palettes.** One SGGX lobe, or a 2–4-lobe mixture, per card (6 B per lobe, with
    Algorithm 1 sampling), plus a per-tree palette of faces with per-lobe class weights.
    - Compare with stage 1 at equal bytes.
-3. **Self-shadowing.** Loubet & Neyret 2018's scalar A per card plus α_ms, fitted from single-bounce
+3. **Self-shadowing** (lower priority after stage 0: measure the residual once hit probability is
+   fixed). Loubet & Neyret 2018's scalar A per card plus α_ms, fitted from single-bounce
    escape energies cast at build time (their Eq. 7.10–7.16; Eq. 7.13 read as a least-squares
    minimum).
    - Alternatively, a per-constituent depth fraction g, weighted g^(Λ(v)+Λ(l)) as in Heitz &
@@ -302,6 +307,9 @@ cards.
       in.
 - [x] Fixed the SGGX citation in `src/shapes/lod.rs` and `docs/adaptive-meshes.md`: ACM TOG 34(4),
       SIGGRAPH 2015, doi:10.1145/2766988, not EGSR or CGF.
-- [ ] Stage 0 measurements.
+- [x] Stage 0 measurements ([stage0.md](stage0.md)): the brightening is a hit-probability
+      deficit, not self-shadowing; memory sits at L2–L3; compact models beat the 32-leaf sample
+      at L4 and coarser.
+- [ ] Fix card hit probability per card, over directions (a renderer change, its own PR).
 - [ ] Stages 1–3.
 - [ ] Read what could not be fetched (see [log.md](log.md)).

@@ -23,7 +23,7 @@
 //!   the plane that the cluster's leaves cover most of: the major axis of their normals' second
 //!   moment, `Σ a n nᵀ`, as of the SGGX microflake distribution that Eric Heitz, Jonathan Dupuy,
 //!   Cyril Crassin and Carsten Dachsbacher fit to such aggregates ("The SGGX Microflake
-//!   Distribution", EGSR 2015, doi:10.1111/cgf.12667). Its size is the area the leaves cover,
+//!   Distribution", ACM TOG 34(4), SIGGRAPH 2015, doi:10.1145/2766988). Its size is the area the leaves cover,
 //!   with overlaps counted as for leaves scattered at random over the cluster's extent `R`:
 //!   `R (1 - exp(-S / R))` of their projected area `S`, Beer-Lambert's law as in canopy models
 //!   (Monsi and Saeki's, 1953).

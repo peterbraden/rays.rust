@@ -38,7 +38,7 @@ Two kinds of geometry need two ways of being simplified:
   SIGGRAPH 2007), keeping the area the eye sees:
   - the card lies in the plane the leaves cover most of: the major eigenvector of the second
     moment of their normals, `Σ a n nᵀ`, as of the SGGX microflake distribution (Heitz et al.,
-    EGSR 2015);
+    SIGGRAPH 2015);
   - its sides follow the principal axes of the leaves' spread over that plane, and its area is
     what the leaves cover, overlaps counted as for leaves scattered at random over the cluster's
     extent `R`: `R (1 - exp(-S/R))` of their projected area `S` (Beer-Lambert, as in canopy

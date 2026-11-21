@@ -607,6 +607,190 @@ pub fn camera_ray(s: &Scene, index: usize, k: usize, origin: &Vector3<f64>) -> G
 
 #[cfg(test)]
 mod measure {
+    use std::cell::Cell;
+
+    /// A medium that counts what a walk asks of it.
+    struct Counting<'a, F: shared::Real, M: shared::media::Medium<F>> {
+        medium: &'a M,
+        densities: Cell<u64>,
+        bounds: Cell<u64>,
+        short: Cell<u64>,
+        marker: std::marker::PhantomData<F>,
+    }
+
+    impl<F: shared::Real, M: shared::media::Medium<F>> shared::media::Medium<F> for Counting<'_, F, M> {
+        fn density(&self, x: F, y: F, z: F) -> F {
+            self.densities.set(self.densities.get() + 1);
+            self.medium.density(x, y, z)
+        }
+        fn bound(&self) -> F { self.medium.bound() }
+        fn majorant_from(&self, x: F, y: F, z: F, dx: F, dy: F, dz: F) -> (F, F) {
+            self.bounds.set(self.bounds.get() + 1);
+            let (m, l) = self.medium.majorant_from(x, y, z, dx, dy, dz);
+            if l < F::of(1) { self.short.set(self.short.get() + 1); }
+            (m, l)
+        }
+    }
+
+    struct Tables64<'a>(&'a [f32]);
+    impl shared::Tables<f64> for Tables64<'_> {
+        fn value(&self, i: u32) -> f64 { self.0[i as usize] as f64 }
+        fn index(&self, i: u32) -> u32 { self.0[i as usize] as u32 }
+    }
+    struct Rng(crate::geometry::Pcg32);
+    impl shared::Random<f32> for Rng { fn next(&mut self) -> f32 { (self.0.next_f64() as f32).min(0.999_999_9) } }
+    impl shared::Random<f64> for Rng { fn next(&mut self) -> f64 { self.0.next_f64() } }
+
+    /// The walk to a first collision along a cloud scene's own camera rays (`RAYS_SCENE`), as
+    /// the kernels walk it and as f64 would the same layer: what each asks of the medium.
+    #[test]
+    #[ignore]
+    fn measure_camera_walks() {
+        use crate::wavefront::flat::FlatScene;
+        use shared::media::OnPlanet;
+        let file = std::env::var("RAYS_SCENE").unwrap_or("demo/scenes/nubis-clouds.json".into());
+        let s = crate::scenefile::SceneFile::from_file(&file, &crate::scenefile::Overrides { width: Some(80), height: Some(50), seed: None });
+        let flat = FlatScene::build(&s).unwrap();
+        let b = super::Buffers::build(&s, &flat).unwrap();
+        let medium = &flat.media[0];
+        let crate::volume::FieldExport::Nubis { record, radius } = &medium.field else { panic!("a Nubis layer") };
+        let base = b.params.media.x;
+        let kernel = pathtrace::load_medium(&b.tables, base);
+        let f32s = pathtrace::load_nubis(record, 0);
+        let (r, w) = (&f32s.recipe, &f32s.weather);
+        let f64s = shared::clouds::NubisField::<f64> {
+            recipe: shared::clouds::Nubis { base: r.base as f64, top: r.top as f64, coverage: r.coverage as f64, cloud_type: r.cloud_type as f64,
+                shape_size: r.shape_size as f64, detail_size: r.detail_size as f64, erosion: r.erosion as f64, perm: r.perm, worley: r.worley },
+            max_density: f32s.max_density as f64,
+            weather: shared::clouds::WeatherGrid { x: w.x as f64, z: w.z as f64, texel: w.texel as f64, n: w.n, corners: w.corners, maxima: w.maxima },
+        };
+        let t64 = Tables64(record);
+        let m64 = shared::clouds::NubisMedium(&f64s, &t64);
+        let p64 = OnPlanet { radius: *radius, medium: &m64 };
+        let c32 = Counting { medium: &kernel, densities: Cell::new(0), bounds: Cell::new(0), short: Cell::new(0), marker: std::marker::PhantomData };
+        let c64 = Counting { medium: &p64, densities: Cell::new(0), bounds: Cell::new(0), short: Cell::new(0), marker: std::marker::PhantomData };
+        let (mut n, mut hits32, mut hits64, mut length) = (0u64, 0u64, 0u64, 0f64);
+        let (mut us32, mut us64) = (0f64, 0f64);
+        let mut per_ray = Vec::new();
+        for index in 0..s.image.width * s.image.height {
+            let ray = super::camera_ray(&s, index, 0, &crate::na::Vector3::zeros());
+            if ray.d.w < 0.5 { continue; }
+            let (o, d) = (crate::na::Vector3::new(ray.o.x as f64, ray.o.y as f64, ray.o.z as f64), crate::na::Vector3::new(ray.d.x as f64, ray.d.y as f64, ray.d.z as f64));
+            let inv = crate::na::Vector3::new(1. / d.x, 1. / d.y, 1. / d.z);
+            let Some((near, far)) = medium.bounds.entry_exit(&o, &inv) else { continue };
+            let near = near.max(0.);
+            if near >= far { continue; }
+            n += 1;
+            length += far - near;
+            if std::env::var("RAYS_TRACE_WALK").is_ok_and(|v| v.parse::<usize>() == Ok(index)) {
+                use shared::media::Medium;
+                let (o32, d32) = ((o.x as f32, o.y as f32, o.z as f32), (d.x as f32, d.y as f32, d.z as f32));
+                let (mut t, mut shown) = (near as f32, 0);
+                while t < far as f32 && shown < 40 {
+                    let p = (o32.0 + d32.0 * t, o32.1 + d32.1 * t, o32.2 + d32.2 * t);
+                    let (m, l) = kernel.majorant_from(p.0, p.1, p.2, d32.0, d32.1, d32.2);
+                    let q = shared::media::planet_local(*radius as f32, p.0, p.1, p.2);
+                    if l < 1. {
+                        println!("t {:.4}: bound {} for {:e} m; local ({:.4}, {:.4}, {:.4}); texel coords ({:.5}, {:.5})", t, m, l, q.0, q.1, q.2, (q.0 - w.x) / w.texel, (q.2 - w.z) / w.texel);
+                        shown += 1;
+                    }
+                    t = (t + l.max(t.abs().max(1.) * 1e-6)).min(far as f32);
+                }
+                println!("ray {}: from {:?} along {:?}, box {:.1} to {:.1}; layer {} to {}", index, o32, d32, near, far, r.base, r.top);
+            }
+            let (mut a, mut c) = (Rng(crate::geometry::Pcg32::new(7, index as u64)), Rng(crate::geometry::Pcg32::new(7, index as u64)));
+            let start = std::time::Instant::now();
+            hits32 += shared::media::delta_track(&c32, (o.x as f32, o.y as f32, o.z as f32), (d.x as f32, d.y as f32, d.z as f32), near as f32, far as f32, 1., &mut a).is_some() as u64;
+            us32 += start.elapsed().as_secs_f64() * 1e6;
+            let start = std::time::Instant::now();
+            hits64 += shared::media::delta_track(&c64, (o.x, o.y, o.z), (d.x, d.y, d.z), near, far, 1., &mut c).is_some() as u64;
+            us64 += start.elapsed().as_secs_f64() * 1e6;
+            per_ray.push((c32.short.get(), index));
+        }
+        let mut last = 0;
+        let mut by_ray: Vec<(u64, usize)> = per_ray.iter().map(|&(total, i)| { let d = total - last; last = total; (d, i) }).collect();
+        by_ray.sort();
+        // (`RAYS_TRACE_WALK=<ray>` prints such a ray's short steps: how a stall is found.)
+        println!("most steps under a metre, and the ray: {:?}; {} rays with over 100", by_ray.iter().rev().take(5).collect::<Vec<_>>(), by_ray.iter().filter(|r| r.0 > 100).count());
+        let per = |v: u64| v as f64 / n as f64;
+        println!("{} rays through the box, {:.0} m of it each on average; radius {:e}", n, length / n as f64, radius);
+        println!("f32 (the kernel's medium): {:.1} bounds ({:.1} under a metre), {:.1} densities, {:.0}% collide, {:.1} us a ray", per(c32.bounds.get()), per(c32.short.get()), per(c32.densities.get()), 100. * per(hits32), us32 / n as f64);
+        println!("f64 (the same layer):      {:.1} bounds ({:.1} under a metre), {:.1} densities, {:.0}% collide, {:.1} us a ray", per(c64.bounds.get()), per(c64.short.get()), per(c64.densities.get()), 100. * per(hits64), us64 / n as f64);
+    }
+
+    /// How many steps a walk through a Nubis layer round the planet takes at f32, as the
+    /// kernels walk it, against f64, as the renderer does: the same layer, the same rays.
+    #[test]
+    #[ignore]
+    fn measure_walks() {
+        use crate::procedural::nubis_clouds::NubisCloudLayer;
+        use shared::media::{Medium, OnPlanet};
+        let mut layer = NubisCloudLayer::new(1500., 3000., crate::na::Vector2::new(0., 0.), 80000., 4);
+        (layer.coverage, layer.max_density) = (0.55, 0.03);
+        let record = layer.export();
+        let f32s = pathtrace::load_nubis(&record, 0);
+        let (r, w) = (&f32s.recipe, &f32s.weather);
+        let f64s = shared::clouds::NubisField::<f64> {
+            recipe: shared::clouds::Nubis { base: r.base as f64, top: r.top as f64, coverage: r.coverage as f64, cloud_type: r.cloud_type as f64,
+                shape_size: r.shape_size as f64, detail_size: r.detail_size as f64, erosion: r.erosion as f64, perm: r.perm, worley: r.worley },
+            max_density: f32s.max_density as f64,
+            weather: shared::clouds::WeatherGrid { x: w.x as f64, z: w.z as f64, texel: w.texel as f64, n: w.n, corners: w.corners, maxima: w.maxima },
+        };
+        let (t32, t64) = (pathtrace::FloatTables(&record), Tables64(&record));
+        let (m32, m64) = (shared::clouds::NubisMedium(&f32s, &t32), shared::clouds::NubisMedium(&f64s, &t64));
+        for radius in [0f64, 6.36e6] {
+            let (p32, p64) = (OnPlanet { radius: radius as f32, medium: &m32 }, OnPlanet { radius, medium: &m64 });
+            let c32 = Counting { medium: &p32, densities: Cell::new(0), bounds: Cell::new(0), short: Cell::new(0), marker: std::marker::PhantomData };
+            let c64 = Counting { medium: &p64, densities: Cell::new(0), bounds: Cell::new(0), short: Cell::new(0), marker: std::marker::PhantomData };
+            let f32flat = Counting { medium: &m32, densities: Cell::new(0), bounds: Cell::new(0), short: Cell::new(0), marker: std::marker::PhantomData };
+            let f64flat = Counting { medium: &m64, densities: Cell::new(0), bounds: Cell::new(0), short: Cell::new(0), marker: std::marker::PhantomData };
+            let mut rng = crate::geometry::Pcg32::new(3, 0);
+            let n = 20_000;
+            let (mut through32, mut through64) = (0f64, 0f64);
+            for i in 0..n {
+                // From the ground up through the layer, near and far, and along it.
+                let o = (rng.next_f64() * 60000. - 30000., 2., rng.next_f64() * 60000. - 30000.);
+                let d = crate::na::Vector3::new(rng.next_f64() - 0.5, 0.02 + rng.next_f64() * 0.6, rng.next_f64() - 0.5).normalize();
+                let (mut a, mut b) = (Rng(crate::geometry::Pcg32::new(7, i)), Rng(crate::geometry::Pcg32::new(7, i)));
+                let far = 3000. / d.y;
+                if radius > 0. {
+                    through32 += shared::media::ratio_track(&c32, (o.0 as f32, o.1 as f32, o.2 as f32), (d.x as f32, d.y as f32, d.z as f32), 0., far as f32, 0., 1., 1., &mut a).unwrap_or(0.) as f64;
+                    through64 += shared::media::ratio_track(&c64, o, (d.x, d.y, d.z), 0., far, 0., 1., 1., &mut b).unwrap_or(0.);
+                } else {
+                    through32 += shared::media::ratio_track(&f32flat, (o.0 as f32, o.1 as f32, o.2 as f32), (d.x as f32, d.y as f32, d.z as f32), 0., far as f32, 0., 1., 1., &mut a).unwrap_or(0.) as f64;
+                    through64 += shared::media::ratio_track(&f64flat, o, (d.x, d.y, d.z), 0., far, 0., 1., 1., &mut b).unwrap_or(0.);
+                }
+            }
+            let (x, y) = if radius > 0. { ((c32.bounds.get(), c32.densities.get(), c32.short.get()), (c64.bounds.get(), c64.densities.get(), c64.short.get())) }
+                else { ((f32flat.bounds.get(), f32flat.densities.get(), f32flat.short.get()), (f64flat.bounds.get(), f64flat.densities.get(), f64flat.short.get())) };
+            // And the time of each, uncounted.
+            let time = |f: &mut dyn FnMut(u64) -> f64| {
+                let start = std::time::Instant::now();
+                let sum: f64 = (0..2000).map(|i| f(i)).sum();
+                (start.elapsed().as_secs_f64() * 1e6 / 2000., sum)
+            };
+            let ray = |i: u64| {
+                let mut rng = crate::geometry::Pcg32::new(11, i);
+                let o = (rng.next_f64() * 60000. - 30000., 2., rng.next_f64() * 60000. - 30000.);
+                (o, crate::na::Vector3::new(rng.next_f64() - 0.5, 0.02 + rng.next_f64() * 0.6, rng.next_f64() - 0.5).normalize())
+            };
+            let (us32, _) = time(&mut |i| {
+                let (o, d) = ray(i);
+                let mut a = Rng(crate::geometry::Pcg32::new(7, i));
+                let (o, d, far) = ((o.0 as f32, o.1 as f32, o.2 as f32), (d.x as f32, d.y as f32, d.z as f32), (3000. / d.y) as f32);
+                (if radius > 0. { shared::media::ratio_track(&p32, o, d, 0., far, 0., 1., 1., &mut a) } else { shared::media::ratio_track(&m32, o, d, 0., far, 0., 1., 1., &mut a) }).unwrap_or(0.) as f64
+            });
+            let (us64, _) = time(&mut |i| {
+                let (o, d) = ray(i);
+                let mut b = Rng(crate::geometry::Pcg32::new(7, i));
+                (if radius > 0. { shared::media::ratio_track(&p64, o, (d.x, d.y, d.z), 0., 3000. / d.y, 0., 1., 1., &mut b) } else { shared::media::ratio_track(&m64, o, (d.x, d.y, d.z), 0., 3000. / d.y, 0., 1., 1., &mut b) }).unwrap_or(0.)
+            });
+            println!("radius {:e}: {:.1} us a ray at f32, {:.1} at f64", radius, us32, us64);
+            println!("radius {:e}: a ray, f32: {:.1} bounds ({:.1} under a metre), {:.1} densities, through {:.4}; f64: {:.1} bounds ({:.1} under a metre), {:.1} densities, through {:.4}",
+                radius, x.0 as f64 / n as f64, x.2 as f64 / n as f64, x.1 as f64 / n as f64, through32 / n as f64, y.0 as f64 / n as f64, y.2 as f64 / n as f64, y.1 as f64 / n as f64, through64 / n as f64);
+        }
+    }
+
     /// What the clouds' density costs, part by part, at f32 as the kernels run it: for
     /// deciding what to compute several at a time. `--ignored --nocapture`.
     #[test]

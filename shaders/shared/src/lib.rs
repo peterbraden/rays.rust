@@ -66,6 +66,19 @@ pub trait Real: Copy + PartialOrd + Add<Output = Self> + Sub<Output = Self> + Mu
     /// The least a walk along a ray advances, relative to how far along it is: so that a
     /// stretch reported as empty at a boundary can't stall it.
     fn hair() -> Self;
+    /// The scale at which a point at (x, y, z), `t` along a ray, is resolved, for the least a
+    /// walk advances (`hair` of this): f64's is the distance along the ray, as ever; f32's,
+    /// whose steps are a fraction of a coordinate's size and not of `t`'s, the largest of
+    /// them. (A ray beginning 8 km from the origin on a cell's edge, nearly along it, crept a
+    /// micrometre a step by `t` alone: 800,000 steps to cross a centimetre.)
+    fn scale_at(t: Self, x: Self, y: Self, z: Self) -> Self;
+    /// Twice the least fraction by which two of these floats differ: how close to a boundary
+    /// a coordinate is the boundary, for all it can tell.
+    fn grain() -> Self;
+    /// How far apart two points are taken to find a direction by their difference, in metres
+    /// at a planet's scale: far enough for the float to resolve the difference (1 for f64, so
+    /// its results are what they were).
+    fn stride() -> Self;
 
     /// A hash's 32 bits as a number in [0, 1].
     fn unit(bits: u32) -> Self;
@@ -177,6 +190,14 @@ impl Real for f32 {
     fn far() -> f32 { 1e30 }
     #[inline]
     fn hair() -> f32 { 1e-6 }
+    #[inline]
+    fn stride() -> f32 { 64.0 }
+    #[inline]
+    fn scale_at(t: f32, x: f32, y: f32, z: f32) -> f32 {
+        Real::max(Real::max(Real::abs(t), Real::abs(x)), Real::max(Real::max(Real::abs(y), Real::abs(z)), 1.0))
+    }
+    #[inline]
+    fn grain() -> f32 { 2.4e-7 }
 }
 
 // (The GPU has no f64: its build leaves this out.)
@@ -226,6 +247,12 @@ impl Real for f64 {
     fn far() -> f64 { f64::INFINITY }
     #[inline]
     fn hair() -> f64 { 1e-12 }
+    #[inline]
+    fn stride() -> f64 { 1. }
+    #[inline]
+    fn scale_at(t: f64, _x: f64, _y: f64, _z: f64) -> f64 { f64::max(f64::abs(t), 1.) }
+    #[inline]
+    fn grain() -> f64 { 4.5e-16 }
 }
 
 /// Uniform random numbers in [0, 1), from wherever a caller's come: the renderer's sampler,

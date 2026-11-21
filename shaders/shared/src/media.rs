@@ -32,9 +32,10 @@ pub fn slack<F: Real>() -> F {
 pub fn delta_track<F: Real, M: Medium<F>, R: Random<F>>(medium: &M, o: (F, F, F), d: (F, F, F), from: F, exit: F, scale: F, random: &mut R) -> Option<F> {
     let mut t = from;
     while t < exit {
-        let (majorant, length) = medium.majorant_from(o.0 + d.0 * t, o.1 + d.1 * t, o.2 + d.2 * t, d.0, d.1, d.2);
+        let (x, y, z) = (o.0 + d.0 * t, o.1 + d.1 * t, o.2 + d.2 * t);
+        let (majorant, length) = medium.majorant_from(x, y, z, d.0, d.1, d.2);
         // Always advance, if only by a hair.
-        let end = (t + length.max(t.abs().max(F::of(1)) * F::hair())).min(exit);
+        let end = (t + length.max(F::scale_at(t, x, y, z) * F::hair())).min(exit);
         if majorant > F::of(0) {
             // Scaling the density scales the majorant alike: steps shrink, and the chance of
             // a collision being real is unchanged.
@@ -59,8 +60,9 @@ pub fn ratio_track<F: Real, M: Medium<F>, R: Random<F>>(medium: &M, o: (F, F, F)
     let mut t = from;
     let mut transmitted = transmitted * (-control * scale * (stop - t)).exp();
     while t < stop {
-        let (majorant, length) = medium.majorant_from(o.0 + d.0 * t, o.1 + d.1 * t, o.2 + d.2 * t, d.0, d.1, d.2);
-        let end = (t + length.max(t.abs().max(F::of(1)) * F::hair())).min(stop);
+        let (x, y, z) = (o.0 + d.0 * t, o.1 + d.1 * t, o.2 + d.2 * t);
+        let (majorant, length) = medium.majorant_from(x, y, z, d.0, d.1, d.2);
+        let end = (t + length.max(F::scale_at(t, x, y, z) * F::hair())).min(stop);
         let residual = (majorant - control) * slack();
         if residual > F::of(0) {
             let step = -(F::of(1) - random.next()).ln() / (residual * scale);
@@ -126,8 +128,14 @@ impl<F: Real, M: Medium<F>> Medium<F> for OnPlanet<'_, F, M> {
     /// length converted back to the scene's, and trusted only `curved_step` at a time.
     fn majorant_from(&self, x: F, y: F, z: F, dx: F, dy: F, dz: F) -> (F, F) {
         let q = planet_local(self.radius, x, y, z);
-        let ahead = planet_local(self.radius, x + dx, y + dy, z + dz);
-        let dq = (ahead.0 - q.0, ahead.1 - q.1, ahead.2 - q.2);
+        // The direction there by a difference, over a stride the float can resolve: a metre
+        // for f64; for f32, whose steps 50 km out are 4 mm, a metre's difference had its
+        // vertical part wrong by half a degree, so that a level ray's rise or fall, which the
+        // bounds below turn on, was noise (and the walk through a layer crawled: six times the
+        // steps of f64's).
+        let h = F::stride();
+        let ahead = planet_local(self.radius, x + dx * h, y + dy * h, z + dz * h);
+        let dq = ((ahead.0 - q.0) / h, (ahead.1 - q.1) / h, (ahead.2 - q.2) / h);
         let speed = (dq.0 * dq.0 + dq.1 * dq.1 + dq.2 * dq.2).sqrt();
         if speed <= F::of(0) {
             return (self.medium.bound(), curved_step());

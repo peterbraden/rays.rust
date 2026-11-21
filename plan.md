@@ -1782,13 +1782,14 @@ UI, file IO and rayon's threads would follow.
    the failing scenes less one ingredient at a time
    (`gpu::tests::measure_device_against_shader`); a small scene of a floor, a ball and a
    sphere light differed there by 0.1%, only with the sphere light.
-   Since (late November 2026), surveyed again first, 79 scenes, each tried at one sample: 13
-   reached the GPU, and none with a sea. The rough seas merged since (choppy crests and foam,
-   both on by default) had taken every ocean scene off it: the kernel marched a plain height
-   field, and its water had no foam. What was in the way of the rest: the sea 14 (6 of them
-   landscapes), a cloud's density 22 (altocumulus 4; the weather's fields 5; the others one
-   or two each), terrain, grass and forests 13, crepuscular rays with something else 9,
-   diffusion 5, the rings 4, rainbows, halos and diffraction 5, and 8 too slow to say.
+   Since (late November 2026), surveyed again first, the 79 demo scenes and the two in
+   `demo/`, each tried at one sample: 9 reached the GPU, and none with a sea. The rough seas
+   merged since (choppy crests and foam, both on by default) had taken every ocean scene off
+   it: the kernel marched a plain height field, and its water had no foam. What was named as
+   in the way of the rest (a scene may have several): the sea 13 (6 of them landscapes), a
+   cloud's density 25 (altocumulus 4; the weather's fields 5; the others one or two each),
+   terrain, grass and forests 12, crepuscular rays 10, diffusion 7, rainbows, halos and
+   diffraction 5, the rings 4; and 8 were too slow to say.
    Done, in that order of what was cheapest for the scenes it moved:
    - Oz in the kernels' media (`MEDIUM_OZ`): at a path's first scattering the sun is the
      octaves' sum, one walk of `media_transmittance` each at the thinned density, and later
@@ -1812,7 +1813,7 @@ UI, file IO and rayon's threads would follow.
      foam over a third of the sea.
    Now on the GPU again: ocean-1, ocean-2, ocean-boat, moon-glade, nubis-clouds and
    stratocumulus; and new, altocumulus-castellanus, altocumulus-undulatus, benard-altocumulus
-   and cirrocumulus: 23 scenes. In linear light at 512 spp (`measure_clouds`, 32 x 18, bands
+   and cirrocumulus: 19 of the 81. In linear light at 512 spp (`measure_clouds`, 32 x 18, bands
    of rows): benard-altocumulus within 0.8% of the path tracer in every band; nubis-clouds
    within 0.8% but for the sea's horizon band, 4.5% bright as before (still to be found).
    ocean-1 at 160 x 100, 32 spp: FLIP 0.028 against the path tracer at 64.

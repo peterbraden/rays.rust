@@ -55,6 +55,10 @@ only strong rock keeps the steep sides of glacial troughs. At time zero the nois
 relaxed to what its rock holds before anything else happens. `slope_strength` scales every
 limit (0 for no landslides).
 
+Glaciers erode only where their bed is at the melting point: thin ice on cold summits and
+plateaus freezes to its bed and protects it, while thick, warm-based valley glaciers dig
+troughs between (`glacier`'s "Frozen beds").
+
 So the same mountains erode differently under the two processes. Rivers leave quartzite and
 basalt standing as ridges and cut valleys along the shale. Glaciers dig into quartzite, basalt
 and schist, and leave granite as domes.

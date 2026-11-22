@@ -564,24 +564,26 @@ impl Terrain {
         let snow: Vec<f64> = self.rain_factor().iter().map(|r| r.clamp(0.2, 3.)).collect();
         while done < ice_time * (1. - 1e-9) {
             let t = self.time + done * g.acceleration;
+            let ela: Vec<f64> = (0..n).map(|i| match &self.ela {
+                // Today's climate is an interglacial: the glacial cycle lowers the snowline from
+                // there.
+                Some(e) => e[i] + g.ela_amplitude * ((TAU * t / g.period).cos() - 1.),
+                None => g.ela(self.latitude[i], t),
+            }).collect();
             let balance: Vec<f64> = (0..n).map(|i| {
-                let ela = match &self.ela {
-                    // Today's climate is an interglacial: the glacial cycle lowers the snowline
-                    // from there.
-                    Some(e) => e[i] + g.ela_amplitude * ((TAU * t / g.period).cos() - 1.),
-                    None => g.ela(self.latitude[i], t),
-                };
                 // Snow falls as the rain does: more on windward slopes, less in their lee.
-                let m = g.mass_balance(self.bed[i] + self.ice[i], ela);
+                let m = g.mass_balance(self.bed[i] + self.ice[i], ela[i]);
                 if m > 0. { m * snow[i] } else { m }
             }).collect();
             // Nothing to do while it is too warm for ice anywhere.
             if balance.iter().all(|&m| m <= 0.) && self.ice.iter().all(|&h| h <= 0.) { break; }
             let step = flow_ice(&self.domain, g, &self.bed, &mut self.ice, &balance, fixed, (ice_time - done).min(g.max_step));
+            // Only ice whose bed is at the melting point slides, and erodes.
+            let sliding: Vec<f64> = (0..n).map(|i| step.sliding[i] * g.basal_melting(self.bed[i] + self.ice[i], self.ice[i], ela[i])).collect();
             let before = self.bed.clone();
-            erode(g, &mut self.bed, &step.sliding, &erodibility, fixed, step.dt * g.acceleration);
+            erode(g, &mut self.bed, &sliding, &erodibility, fixed, step.dt * g.acceleration);
             self.record(&before);
-            for (m, s) in mean_sliding.iter_mut().zip(&step.sliding) { *m += s * step.dt / ice_time; }
+            for (m, s) in mean_sliding.iter_mut().zip(&sliding) { *m += s * step.dt / ice_time; }
             done += step.dt;
             self.ice_steps += 1;
             self.ice_iterations += step.iterations;

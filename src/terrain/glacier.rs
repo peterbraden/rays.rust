@@ -127,10 +127,34 @@
 //! doi:10.1126/science.aab2386) found l ≈ 2 at Franz Josef Glacier; with l = 2, K_g changes
 //! units and must be refitted.
 //!
-//! Not modelled: ice temperature (A and sliding are those of temperate ice everywhere); water
-//! pressure in sliding; the bed's isostatic response to the ice's weight; debris.
+//! ## Frozen beds
+//!
+//! Ice only slides, and so only erodes, where its bed is at the melting point. Where it is thin
+//! and the air very cold, its bed freezes to the rock, and it protects rather than erodes:
+//! much of the Fennoscandian and Laurentide ice sheets' beds were frozen at the Last Glacial
+//! Maximum (Kleman and Hättestrand, "Frozen-bed Fennoscandian and Laurentide ice sheets during
+//! the Last Glacial Maximum", Nature 402, 1999), and high plateaus and summits came through
+//! glaciation little changed while warm-based glaciers dug troughs between them. The bed's
+//! temperature is estimated from the surface's, warmed through the ice by the geothermal flux
+//! G conducting through it (`basal_melting`): T_b = T_s + G H / k (k = 2.1 W/m/K, so 29 K per
+//! kilometre of ice for G = 0.06 W/m²), which neglects cold ice carried down by accumulation
+//! and so errs warm; against the pressure melting point, -0.00087 K per metre of ice. The
+//! surface's mean annual temperature is that at the equilibrium line, about -6 °C (Ohmura,
+//! Kasser and Funk, "Climate at the equilibrium line of glaciers", J. Glaciology 38(130),
+//! 1992, find -2 to -12 °C from maritime to continental glaciers), less the lapse rate above
+//! it. Sliding, and erosion, take the share of the bed at the melting point: none 3 K below
+//! it, all at it.
+//!
+//! Not modelled: ice temperature's effect on Glen's A (that of temperate ice everywhere);
+//! water pressure in sliding; debris. (The bed's isostatic response to the ice's weight is
+//! `isostasy`'s.)
 
 use crate::terrain::domain::Domain;
+
+/// Thermal conductivity of ice, W/m/K.
+const ICE_CONDUCTIVITY: f64 = 2.1;
+/// Fall of ice's melting point with depth, K per metre of ice.
+const PRESSURE_MELTING: f64 = 8.7e-4;
 use crate::terrain::simulation::ICE_FREE;
 use rayon::prelude::*;
 
@@ -175,6 +199,11 @@ pub struct GlacierParams {
     /// Morphological acceleration factor (see `simulation`): years of landscape evolution per
     /// year of ice flow.
     pub acceleration: f64,
+    /// Geothermal heat flux warming the ice's bed, W/m²; 0 for temperate ice everywhere
+    /// (every bed sliding).
+    pub geothermal_flux: f64,
+    /// Mean annual air temperature at the equilibrium line, °C.
+    pub ela_temperature: f64,
 }
 
 impl Default for GlacierParams {
@@ -199,6 +228,8 @@ impl Default for GlacierParams {
             max_speed: 1000.,
             max_stiffness: 50.,
             acceleration: 10.,
+            geothermal_flux: 0.06,
+            ela_temperature: -6.,
         }
     }
 }
@@ -209,6 +240,17 @@ impl GlacierParams {
         let c = lat.cos();
         self.ela_pole + (self.ela_equator - self.ela_pole) * c * c
             + self.ela_amplitude * (std::f64::consts::TAU * t / self.period).cos()
+    }
+
+    /// The share of the bed at the melting point, so sliding, under `h` metres of ice whose
+    /// surface is `s` metres up, where the equilibrium line is at `ela` (see "Frozen beds").
+    pub fn basal_melting(&self, s: f64, h: f64, ela: f64) -> f64 {
+        if self.geothermal_flux <= 0. { return 1.; }
+        let surface = self.ela_temperature - crate::terrain::climate::LAPSE_RATE * (s - ela);
+        let base = surface + self.geothermal_flux * h / ICE_CONDUCTIVITY;
+        let melting = -PRESSURE_MELTING * h;
+        let t = ((base - melting + 3.) / 3.).clamp(0., 1.);
+        t * t * (3. - 2. * t)
     }
 
     pub fn mass_balance(&self, s: f64, ela: f64) -> f64 {
@@ -436,6 +478,19 @@ pub fn erode(p: &GlacierParams, bed: &mut [f64], sliding: &[f64], erodibility: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_thin_ice_on_cold_summits_is_frozen_to_its_bed() {
+        let g = GlacierParams::default();
+        // A thin ice cap 1500 m above the equilibrium line: about -16 °C at the surface.
+        assert_eq!(g.basal_melting(4500., 50., 3000.), 0.);
+        // A valley glacier 300 m thick near the equilibrium line slides.
+        assert_eq!(g.basal_melting(3100., 300., 3000.), 1.);
+        // Thick ice is warmed through to its bed even where the air is cold.
+        assert_eq!(g.basal_melting(4500., 800., 3000.), 1.);
+        // Temperate ice everywhere without the geothermal flux.
+        assert_eq!(GlacierParams { geothermal_flux: 0., ..g }.basal_melting(4500., 50., 3000.), 1.);
+    }
 
     fn volume(d: &Domain, h: &[f64]) -> f64 { h.iter().zip(&d.area).map(|(a, b)| a * b).sum() }
 

@@ -6,7 +6,8 @@
 //! steps, each applying, in turn (operator splitting, as in Braun et al. 1999's ICE-CASCADE and
 //! FastScape):
 //!
-//! 1. tectonic uplift (`planet`);
+//! 1. tectonic uplift (`planet`), and, in a mountain belt, the rock carried sideways towards
+//!    the foreland with its folds (`carry`);
 //! 2. volcanic eruptions: cones and lava flows (`volcano`);
 //! 3. glaciers: mass balance, ice flow and glacial erosion, in sub-steps (`glacier`), the
 //!    eroded rock leaving in meltwater as sediment for the rivers (Hallet, Hunter and Bogen,
@@ -69,7 +70,7 @@
 //! The sea and, for a patch, its edge are base level: their cells are held fixed and drain
 //! water and ice. Sea level is 0 and constant (no eustatic change with the ice ages, yet).
 
-use crate::terrain::domain::Domain;
+use crate::terrain::domain::{Domain, Layout};
 use crate::terrain::flow::{route, Flow};
 use crate::terrain::fluvial::{diffuse_varying, erode_and_deposit, landslide, FluvialParams};
 use crate::terrain::glacier::{erode, flow_ice, GlacierParams};
@@ -174,6 +175,18 @@ pub struct Terrain {
     pub exhumed: Vec<f64>,
     /// How far the crust's isostatic response has moved each cell since time zero, metres.
     pub rebound: Vec<f64>,
+    /// The belt's own uplift at each cell, metres per year, before the folds' growth (which
+    /// moves with the rock, as the belt's doesn't).
+    belt_uplift: Vec<f64>,
+    /// How fast the rock moves sideways, towards the foreland, (east, north) m/yr: zero but on a
+    /// patch in a mountain belt.
+    pub velocity: (f64, f64),
+    /// How far the rock has moved since time zero, (east, north) metres...
+    pub displacement: (f64, f64),
+    /// ... and by how many whole cells the ground has been moved with it, (east, north).
+    pub shifted: (i64, i64),
+    /// Detail of the folds down to this wavelength, metres.
+    finest: f64,
     /// The ground at time zero, from which the load on the crust is reckoned.
     ground0: Vec<f64>,
     /// Cells that were sea at time zero. Ground eroded below sea level later is a lake bed
@@ -218,7 +231,24 @@ impl Terrain {
         let structure: Vec<Structure> = domain.dirs.par_iter().map(|d| planet.structure(d, finest)).collect();
         // Folds still growing: anticlines rise faster than synclines.
         let growth = params.planet.geology.fold_growth;
-        let uplift = domain.dirs.iter().zip(&structure).map(|(d, s)| planet.uplift(d) * (1. + growth * s.crest).max(0.)).collect();
+        let belt_uplift: Vec<f64> = domain.dirs.iter().map(|d| planet.uplift(d)).collect();
+        let uplift = belt_uplift.iter().zip(&structure).map(|(u, s)| u * (1. + growth * s.crest).max(0.)).collect();
+        // Thrust sheets carry the rock towards the foreland, at the belt's strength.
+        let velocity = match &domain.layout {
+            Layout::Patch { up, east, north, .. } => {
+                let o = planet.orogeny(up);
+                let rate = params.planet.geology.shortening_rate;
+                if o <= 1e-3 || rate == 0. { (0., 0.) } else {
+                    let f = planet.trend().foreland(up);
+                    let size = f.norm();
+                    if size < 1e-9 { (0., 0.) } else {
+                        let speed = rate * o.min(1.) * size.tanh();
+                        (speed * f.dot(east) / size, speed * f.dot(north) / size)
+                    }
+                }
+            }
+            Layout::Sphere { .. } => (0., 0.),
+        };
         let latitude = domain.dirs.iter().map(|d| d.y.clamp(-1., 1.).asin()).collect();
         let n = domain.len();
         let sea = bed.iter().map(|&b| b < 0.).collect();
@@ -235,7 +265,7 @@ impl Terrain {
         let wind = crate::terrain::climate::wind(&params.climate.clone().unwrap_or_default(), centre.y.clamp(-1., 1.).asin());
         let mut t = Terrain {
             precipitation: base_precipitation.clone(), base_precipitation, wind,
-            domain, params, planet, time: 0., ela, bed, uplift, structure, exhumed: vec![0.; n], rebound: vec![0.; n], ground0: vec![], latitude, sea, vents, rivers: Rivers::default(),
+            domain, params, planet, time: 0., ela, bed, uplift, structure, exhumed: vec![0.; n], rebound: vec![0.; n], ground0: vec![], belt_uplift, velocity, displacement: (0., 0.), shifted: (0, 0), finest, latitude, sea, vents, rivers: Rivers::default(),
             sediment: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
             ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
@@ -362,6 +392,7 @@ impl Terrain {
             *x += rise;
         }
 
+        self.carry(dt, &fixed);
         self.rain();
 
         if let Some(v) = &self.params.volcano {
@@ -445,6 +476,65 @@ impl Terrain {
         self.rock(i).critical_slope() / (1. + 0.3 * self.structure[i].fracture)
     }
 
+    /// Carry the rock towards the foreland for `dt` years (`velocity`): the ground moves by
+    /// whole cells as the displacement passes each (moved a fraction of a cell each step, by
+    /// interpolation, it would be smoothed by far more than its hillslopes ever smooth it), and
+    /// the bedrock's structure is that of the rock each cell now holds, from where it was at
+    /// time zero, so rock comes in from the planet's geology beyond the patch's edge. Base level
+    /// (`fixed`) stays where it is.
+    fn carry(&mut self, dt: f64, fixed: &[bool]) {
+        if self.velocity == (0., 0.) { return; }
+        let Layout::Patch { spacing, .. } = self.domain.layout else { return };
+        self.displacement.0 += self.velocity.0 * dt;
+        self.displacement.1 += self.velocity.1 * dt;
+        let target = ((self.displacement.0 / spacing).round() as i64, (self.displacement.1 / spacing).round() as i64);
+        if target == self.shifted { return; }
+        while self.shifted != target {
+            let dx = (target.0 - self.shifted.0).signum();
+            let dy = if dx == 0 { (target.1 - self.shifted.1).signum() } else { 0 };
+            self.shift_cells(dx, dy, fixed);
+            self.shifted.0 += dx;
+            self.shifted.1 += dy;
+        }
+        self.place_structure();
+    }
+
+    /// Move the ground one cell east (`dx`) or north (`dy`), each cell but base level taking
+    /// its upwind neighbour's (the edge's own where there is none).
+    fn shift_cells(&mut self, dx: i64, dy: i64, fixed: &[bool]) {
+        let Layout::Patch { n, .. } = self.domain.layout else { return };
+        let n = n as i64;
+        let source: Vec<usize> = (0..self.domain.len()).map(|k| {
+            let (i, j) = (k as i64 % n, k as i64 / n);
+            if fixed[k] { return k; }
+            ((j - dy).clamp(0, n - 1) * n + (i - dx).clamp(0, n - 1)) as usize
+        }).collect();
+        for f in [&mut self.bed, &mut self.sediment, &mut self.lava, &mut self.ice, &mut self.exhumed, &mut self.rebound, &mut self.ground0, &mut self.sliding] {
+            let old = f.clone();
+            for (k, &s) in source.iter().enumerate() { f[k] = old[s]; }
+        }
+    }
+
+    /// Where the rock now at cell `i` was at time zero.
+    pub fn origin(&self, i: usize) -> crate::na::Vector3<f64> {
+        let d = self.domain.dirs[i];
+        let Layout::Patch { up, east, north, spacing, .. } = self.domain.layout else { return d };
+        if self.shifted == (0, 0) { return d; }
+        let (x, z) = Domain::tangent(up, east, north, self.domain.radius, &d);
+        let (x, z) = (x - self.shifted.0 as f64 * spacing, z - self.shifted.1 as f64 * spacing);
+        (up * self.domain.radius + east * x + north * z).normalize()
+    }
+
+    /// The structure of the rock each cell holds, and the uplift there: the belt's, where the
+    /// cell is, and the folds' growth, which goes with the rock.
+    fn place_structure(&mut self) {
+        let origins: Vec<crate::na::Vector3<f64>> = (0..self.domain.len()).map(|i| self.origin(i)).collect();
+        let (planet, finest) = (&self.planet, self.finest);
+        self.structure = origins.par_iter().map(|d| planet.structure(d, finest)).collect();
+        let growth = self.params.planet.geology.fold_growth;
+        self.uplift = self.belt_uplift.iter().zip(&self.structure).map(|(u, s)| u * (1. + growth * s.crest).max(0.)).collect();
+    }
+
     /// Let the crust respond to the load erosion, deposition and ice have put on it or taken
     /// off since time zero (`isostasy`), relaxing towards equilibrium over `dt` years. It moves
     /// the rock as uplift does; base level (the sea, a patch's edge) is held.
@@ -520,6 +610,12 @@ pub struct Snapshot {
     exhumed: Vec<f64>,
     #[serde(default)]
     rebound: Vec<f64>,
+    #[serde(default)]
+    displacement: (f64, f64),
+    #[serde(default)]
+    shifted: (i64, i64),
+    #[serde(default)]
+    ground0: Vec<f64>,
     channels: Vec<crate::terrain::channel::Channel>,
     oxbows: Vec<crate::terrain::channel::Oxbow>,
     rivers_found: Option<f64>,
@@ -543,6 +639,7 @@ impl Terrain {
             time: self.time, bed: self.bed.clone(), sediment: self.sediment.clone(), lava: self.lava.clone(),
             sediment_flux: self.sediment_flux.clone(), ice: self.ice.clone(), sea: self.sea.clone(),
             drainage: self.drainage.clone(), receiver: self.receiver.clone(), sliding: self.sliding.clone(), exhumed: self.exhumed.clone(), rebound: self.rebound.clone(),
+            displacement: self.displacement, shifted: self.shifted, ground0: self.ground0.clone(),
             channels: self.rivers.channels.clone(), oxbows: self.rivers.oxbows.clone(), rivers_found: self.rivers.found,
         }
     }
@@ -564,6 +661,12 @@ impl Terrain {
         self.exhumed = if s.exhumed.len() == self.domain.len() { s.exhumed }
             else { self.uplift.iter().zip(&self.sea).map(|(u, &sea)| if sea { 0. } else { u * s.time }).collect() };
         self.rebound = if s.rebound.len() == self.domain.len() { s.rebound } else { vec![0.; self.domain.len()] };
+        if s.ground0.len() == self.domain.len() { self.ground0 = s.ground0; }
+        self.displacement = s.displacement;
+        if s.shifted != self.shifted {
+            self.shifted = s.shifted;
+            self.place_structure();
+        }
         self.rivers.channels = s.channels;
         self.rivers.oxbows = s.oxbows;
         self.rivers.found = s.rivers_found;
@@ -695,6 +798,44 @@ mod tests {
         let eroded = -mean(&|i| t.bed[i] - t.ground0[i] - t.exhumed[i]);
         let rebound = mean(&|i| t.rebound[i]);
         assert!(eroded > 0. && rebound > 0. && rebound < eroded * 2700. / 3300., "eroded {} rebound {}", eroded, rebound);
+    }
+
+    #[test]
+    fn test_thrust_sheets_carry_the_rock_towards_the_foreland() {
+        let mut params = TerrainParams::default();
+        params.glacier = None;
+        params.step = 500.;
+        params.planet.geology.shortening_rate = 0.5;
+        let planet = Planet::new(params.planet.clone());
+        let (lat, lon) = planet.most_mountainous(2000);
+        let mut t = Terrain::new(Domain::patch(lat, lon, 24, 1000., params.planet.radius), params);
+        let speed = t.velocity.0.hypot(t.velocity.1);
+        assert!(speed > 0.01, "{:?}", t.velocity);
+        let before = t.bed.clone();
+        // Long enough to move three cells.
+        t.run_to((3000. / speed / 500.).ceil() * 500.);
+        let cells = t.shifted.0.abs() + t.shifted.1.abs();
+        assert!(cells >= 3, "{:?} after {:?}", t.shifted, t.displacement);
+        // The cells move the way the rock does.
+        assert!(t.shifted.0 as f64 * t.velocity.0 >= 0. && t.shifted.1 as f64 * t.velocity.1 >= 0.);
+        // Each cell's rock is the planet's from where it was at time zero.
+        for i in [100, 300, 450] {
+            assert_eq!(t.structure[i], t.planet.structure(&t.origin(i), t.finest));
+        }
+        // And the relief went with it: the ground now looks more like the ground of time zero
+        // moved by the shift than as it was.
+        let n = 24i64;
+        let at = |k: i64, di: i64, dj: i64| -> Option<usize> {
+            let (i, j) = (k % n - di, k / n - dj);
+            (i > 0 && j > 0 && i < n - 1 && j < n - 1).then_some((j * n + i) as usize)
+        };
+        let misfit = |di: i64, dj: i64| -> f64 {
+            let pairs: Vec<(f64, f64)> = (0..n * n).filter_map(|k| at(k, di, dj).map(|s| (t.bed[k as usize], before[s]))).collect();
+            let mean = |f: &dyn Fn(&(f64, f64)) -> f64| pairs.iter().map(f).sum::<f64>() / pairs.len() as f64;
+            let (ma, mb) = (mean(&|p| p.0), mean(&|p| p.1));
+            mean(&|p| ((p.0 - ma) - (p.1 - mb)).powi(2))
+        };
+        assert!(misfit(t.shifted.0, t.shifted.1) < misfit(0, 0), "{} vs {}", misfit(t.shifted.0, t.shifted.1), misfit(0, 0));
     }
 
     #[test]

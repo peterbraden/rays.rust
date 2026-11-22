@@ -98,6 +98,14 @@ anticlines. Folding shapes the ranges in three ways:
 - **Lithology**: as erosion cuts down, the folded beds crop out in bands along the belt.
   Breached anticlines expose older rock in their cores, ringed by younger beds.
 
+The belts keep shortening: their thrust sheets carry the rock towards the foreland
+(`shortening_rate`, 5 mm/yr in the strongest belts; the Zagros shortens at about 10), folds,
+beds and ground together, through the belt's uplift, which stays where it is. Over a few
+million years that is further than a fold's wavelength, so divides migrate and folds pass
+through the zone of uplift. The ground moves by whole cells as the rock passes each (moving
+it by fractions of a cell would blur it), and each cell's rock is that of where it came
+from, so rock enters from the planet's geology beyond the patch's edge.
+
 Folds narrower than about two cells of a simulation are left out of it, so a planet-wide
 simulation sees only the broad structure, and the nested patches add the folds.
 
@@ -114,7 +122,7 @@ simulation sees only the broad structure, and the nested patches add the folds.
 ```
 
 - `geology`: `strata_thickness` (600 m), `contrast` (5), `fold_amplitude` (1500 m),
-  `fold_wavelength` (8000 m), `fold_relief` (0.5), `fold_growth` (0.5), `fold_vergence` (0.6), `thrust_throw` (800 m), `fracturing` (1.5), `slope_strength` (1), `warp_amplitude`
+  `fold_wavelength` (8000 m), `fold_relief` (0.5), `fold_growth` (0.5), `fold_vergence` (0.6), `thrust_throw` (800 m), `fracturing` (1.5), `slope_strength` (1), `shortening_rate` (0.005 m/yr), `warp_amplitude`
   (400 m), `cover_thickness` (3000 m), `exhumation` (4000 m), `plutons` (1; 0 for none). The
   older top-level `strata_thickness`, `strata_contrast` and `fold_amplitude` are still read.
 - `sediment_erodibility` (3), `lava_erodibility` (0.3): to rivers; `sediment_glacial_erodibility`

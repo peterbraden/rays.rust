@@ -103,6 +103,11 @@
 //! Where they lean, their forelimbs break along thrusts that repeat the beds towards the
 //! foreland (`thrust_throw`, `fold`).
 //!
+//! Belts keep shortening, and their thrust sheets carry the rock towards the foreland at
+//! millimetres to centimetres a year (`shortening_rate`; the Zagros about a centimetre),
+//! folds and ground with it, through the belt's uplift, which stays where it is: over a few
+//! million years, further than a fold's wavelength (see `Terrain`'s displacement).
+//!
 //! Folding shapes the landscape three ways:
 //!
 //! 1. **Initial relief**: a share (`fold_relief`) of the structural relief is topography at
@@ -150,6 +155,10 @@ pub struct GeologyParams {
     /// Scales every rock's critical slope (`Rock::critical_slope`), beyond which slopes fail in
     /// landslides; 0 for no landslides.
     pub slope_strength: f64,
+    /// How fast the strongest mountain belts carry their rock towards the foreland, m/yr:
+    /// thrust sheets, with their folds and their ground, moving through the belt's uplift
+    /// (`Terrain`'s displacement; patches only).
+    pub shortening_rate: f64,
     /// Gentle undulation of the strata everywhere, metres.
     pub warp_amplitude: f64,
     /// Typical thickness of the sedimentary cover over the basement, metres.
@@ -165,7 +174,7 @@ impl Default for GeologyParams {
     fn default() -> GeologyParams {
         GeologyParams {
             strata_thickness: 600., contrast: 5., fold_amplitude: 1500., fold_wavelength: 8000.,
-            fold_relief: 0.5, fold_growth: 0.5, fold_vergence: 0.6, thrust_throw: 800., fracturing: 1.5, slope_strength: 1., warp_amplitude: 400., cover_thickness: 3000.,
+            fold_relief: 0.5, fold_growth: 0.5, fold_vergence: 0.6, thrust_throw: 800., fracturing: 1.5, slope_strength: 1., shortening_rate: 0.005, warp_amplitude: 400., cover_thickness: 3000.,
             exhumation: 4000., plutons: 1.,
         }
     }

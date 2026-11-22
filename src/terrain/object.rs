@@ -38,7 +38,7 @@
 //!   `VolcanoParams` by field name. Geology (`geology`, docs/geology.md): `"geology"`,
 //!   overrides of `GeologyParams` by field name (`strata_thickness`, `contrast`,
 //!   `fold_amplitude`, `fold_wavelength`, `fold_relief`, `fold_growth`, `fold_vergence`,
-//!   `thrust_throw`, `fracturing`, `slope_strength`, `warp_amplitude`,
+//!   `thrust_throw`, `fracturing`, `slope_strength`, `shortening_rate`, `warp_amplitude`,
 //!   `cover_thickness`, `exhumation`, `plutons`); also, at the top level, `strata_thickness`
 //!   (m), `strata_contrast` and `fold_amplitude` (m); and `sediment_erodibility`,
 //!   `lava_erodibility`, `sediment_glacial_erodibility`, `lava_glacial_erodibility`.
@@ -301,12 +301,12 @@ fn geology_params(o: &Value) -> crate::terrain::geology::GeologyParams {
     g.contrast = number(o, "strata_contrast", g.contrast);
     g.fold_amplitude = number(o, "fold_amplitude", g.fold_amplitude);
     let v = &o["geology"];
-    let fields: [(&str, &mut f64); 14] = [
+    let fields: [(&str, &mut f64); 15] = [
         ("strata_thickness", &mut g.strata_thickness), ("contrast", &mut g.contrast),
         ("fold_amplitude", &mut g.fold_amplitude), ("fold_wavelength", &mut g.fold_wavelength),
         ("fold_relief", &mut g.fold_relief), ("fold_growth", &mut g.fold_growth), ("fold_vergence", &mut g.fold_vergence),
         ("thrust_throw", &mut g.thrust_throw), ("fracturing", &mut g.fracturing),
-        ("slope_strength", &mut g.slope_strength),
+        ("slope_strength", &mut g.slope_strength), ("shortening_rate", &mut g.shortening_rate),
         ("warp_amplitude", &mut g.warp_amplitude), ("cover_thickness", &mut g.cover_thickness),
         ("exhumation", &mut g.exhumation), ("plutons", &mut g.plutons),
     ];

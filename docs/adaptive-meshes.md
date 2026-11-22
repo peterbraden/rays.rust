@@ -50,7 +50,7 @@ Two kinds of geometry need two ways of being simplified:
 
   **Normal perturbation.** A flat card shaded with its own normal would look like a flat card;
   a crown's light and shade come from leaves facing every way. So each card keeps its leaves'
-  normals and faces (up to 32, an even sample of a larger cluster), and a ray that hits it is
+  normals and faces, and a ray that hits it is
   shaded as one of them, chosen in proportion to the area that leaf shows the ray, `a |n · d|`:
   the distribution of visible normals of microfacet theory (Heitz, "Understanding the
   Masking-Shadowing Function", JCGT 2014), whose facets are the original leaves. The face carries
@@ -58,6 +58,16 @@ Two kinds of geometry need two ways of being simplified:
   survive. Averaged over a pixel's samples, the card reflects and transmits as its leaves would.
   The choice is a hash of the ray, so it doesn't use up the sampler's dimensions and doesn't
   depend on the order objects are searched.
+
+  **What a card keeps.** A leaf's triangles with the same normal are merged into one
+  constituent (exact: the choice is by area, which adds), which halves the lists of broadleaf
+  trees. A cluster still of more than 16 keeps 16 representatives: grouped by k-means on their
+  normals' axes, each one of its group's own normals, with the face of a leaf drawn from the
+  group by area (so autumn colours stay in proportion), and their areas refitted by
+  non-negative least squares so that their projected area matches the cluster's from every
+  direction. Measured against all of a cluster's leaves, the expected shading of the leaf a hit
+  chooses is then within 1–2% at every level, where an even sample of 32 had 6–10% from the
+  fourth level on.
 
 The level is chosen per placed tree, not per ray as R-LODs do (Yoon, Lauterbach and Manocha,
 2006): every ray, from the camera, a light or a bounce, then meets the same surface, so shadows
@@ -121,7 +131,10 @@ A ray tracer keeps every tree it may hit for the whole render, so what's kept mu
   bytes (position, turn, scale and mirroring), not a general transform per part at 368.
 
 On the forest above, these took the peak from 1.8 GB to 0.67 GB. Of what's left, about 235 MB
-is constituents, 95 MB cards and 90 MB their BVHs.
+was constituents, 95 MB cards and 90 MB their BVHs. Merging a leaf's triangles and keeping at
+most 16 representatives (above) then took the peak from 700 MiB to 618 MiB and the render from
+108 s to 93 s (600 × 350, 64 spp; the faster render from choosing among fewer), with mean FLIP
+against full detail 0.0545 before and 0.0543 after.
 
 Building is mostly placing the trees (about 50 s: 35 million darts, 10 million of them
 evaluating noise fields), not growing them (about 12 s); with `"lod"`, many more variants

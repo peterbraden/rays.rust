@@ -237,8 +237,8 @@ impl<'a> Kernels<'a> {
             lap(&mut stats, Stage::Intersect, paths.len());
             // 2. Shade.
             queries.clear();
-            for (i, (_, p)) in paths.iter_mut().enumerate() {
-                let (next, q0, q1) = pathtrace::shade::<M>(&scene, p);
+            for (i, ((_, pixel, _), p)) in paths.iter_mut().enumerate() {
+                let (next, q0, q1) = pathtrace::shade::<M>(&scene, p, *pixel);
                 *p = next;
                 if q0.weight.truncate().length_squared() > 0. || q1.weight.truncate().length_squared() > 0. {
                     queries.push((i, q0, q1));
@@ -742,6 +742,40 @@ pub mod tests {
         }"#.to_string())
     }
 
+    /// The kernels' Sobol' points are the renderer's (`sobol`), computed without its tables;
+    /// and a pixel's samples of a decision are stratified: of 64, one in each 64th of each of
+    /// the first two coordinates, as a (0, 2)-sequence's are, however scrambled.
+    #[test]
+    fn test_the_kernels_sobol_points_are_the_renderers() {
+        let mut rng = crate::geometry::Pcg32::new(3, 5);
+        for i in 0..20_000u32 {
+            let index = if i < 4096 { i } else { rng.next_u32() };
+            let x = pathtrace::sobol4(index);
+            for (d, x) in [x.x, x.y, x.z, x.w].into_iter().enumerate() {
+                assert_eq!(x, crate::sobol::sobol(index, d), "point {} dimension {}", index, d);
+            }
+            let seed = rng.next_u32();
+            assert_eq!(pathtrace::owen_scramble(index, seed), crate::sobol::owen_scramble(index, seed));
+        }
+        let s = SceneFile::from_string(r#"{ "width": 4, "height": 4, "background": [0, 0, 0],
+            "camera": { "location": [0, 0, -5], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.6 },
+            "materials": { "F": { "type": "lambertian", "albedo": [0.6, 0.6, 0.6] } },
+            "objects": [ { "type": "sphere", "location": [0, 0, 5], "radius": 1, "material": "F" } ] }"#.to_string());
+        let flat = FlatScene::build(&s).unwrap();
+        let buffers = crate::kernels::Buffers::build(&s, &flat).unwrap();
+        let scene = buffers.scene(None);
+        for (pixel, depth, which) in [(0, 0, pathtrace::SOBOL_SCATTER), (7, 2, pathtrace::SOBOL_LIGHT), (11, 5, pathtrace::SOBOL_SKY)] {
+            let (mut xs, mut ys) = ([false; 64], [false; 64]);
+            for sample in 0..64 {
+                let u = pathtrace::decide(&scene, pixel, sample, depth, which, &mut 0);
+                assert!((0. ..1.).contains(&u.x) && (0. ..1.).contains(&u.y) && (0. ..1.).contains(&u.z) && (0. ..1.).contains(&u.w));
+                let (x, y) = ((u.x * 64.) as usize, (u.y * 64.) as usize);
+                assert!(!xs[x] && !ys[y], "pixel {} depth {}: two samples in a stratum", pixel, depth);
+                (xs[x], ys[y]) = (true, true);
+            }
+        }
+    }
+
     /// A checkerboard's squares are where the world has them, not about the camera (whose
     /// frame the kernels compute in): from a camera an odd number of squares from the origin,
     /// each tile of the picture is the path tracer's.
@@ -757,7 +791,7 @@ pub mod tests {
             "media": { "CHECKS": { "type": "checkered-y-plane", "m1": "A", "m2": "B", "xsize": 5, "zsize": 5 } },
             "objects": [ { "type": "checkeredplane", "y": 0, "medium": "CHECKS" } ]
         }"#.to_string());
-        let n = 32;
+        let n = 256;
         let kernels = mean_image(&s, n);
         let (w, h) = (s.image.width, s.image.height);
         let path: Vec<Color> = (0..w * h).map(|index| {

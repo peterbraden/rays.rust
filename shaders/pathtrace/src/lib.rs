@@ -384,6 +384,86 @@ fn rand(state: &mut u32) -> f32 {
     (*state >> 8) as f32 * (1.0 / 16777216.0)
 }
 
+// ---- Sobol' points for a vertex's sampling decisions (the renderer's `sobol`: its
+// documentation has the sources). A path's other numbers stay the hash's. ----
+
+/// The bits of an index.
+const SOBOL_BITS: usize = 32;
+
+/// Direction numbers v_1 to v_32 of the first four dimensions, a dimension a component: the
+/// first's 2^-k; then, by Joe and Kuo's degree s, polynomial a and initial values m,
+/// (1, 0, [1]), (2, 1, [1, 3]) and (3, 1, [1, 3, 1]).
+const SOBOL_DIRECTIONS: [[u32; 4]; SOBOL_BITS] = sobol_directions();
+
+const fn sobol_directions() -> [[u32; 4]; SOBOL_BITS] {
+    let mut v = [[0u32; 4]; SOBOL_BITS];
+    v[0] = [0x8000_0000, 0x8000_0000, 0x8000_0000, 0x8000_0000];
+    v[1] = [0x4000_0000, 0xc000_0000, 0xc000_0000, 0xc000_0000];
+    v[2] = [0x2000_0000, 0xa000_0000, 0x6000_0000, 0x2000_0000];
+    let mut k = 3;
+    while k < SOBOL_BITS {
+        v[k] = [
+            v[k - 1][0] >> 1,
+            v[k - 1][1] ^ (v[k - 1][1] >> 1),
+            v[k - 2][2] ^ (v[k - 2][2] >> 2) ^ v[k - 1][2],
+            v[k - 3][3] ^ (v[k - 3][3] >> 3) ^ v[k - 2][3],
+        ];
+        k += 1;
+    }
+    v
+}
+
+/// The `index`-th Sobol' point's first four coordinates, unscrambled: the XOR of each
+/// dimension's direction numbers for the set bits of `index`, as the renderer's
+/// `sobol::sobol` (whose tables are these by the byte).
+pub fn sobol4(index: u32) -> UVec4 {
+    let mut x = UVec4::ZERO;
+    let mut k = 0;
+    while k < SOBOL_BITS {
+        if (index >> k) & 1 != 0 {
+            let v = SOBOL_DIRECTIONS[k];
+            x ^= UVec4::new(v[0], v[1], v[2], v[3]);
+        }
+        k += 1;
+    }
+    x
+}
+
+/// Nested uniform scrambling of `x` by `seed` (the renderer's `sobol::owen_scramble`).
+pub fn owen_scramble(x: u32, seed: u32) -> u32 {
+    let mut v = x.reverse_bits();
+    v ^= v.wrapping_mul(0x3d20adea);
+    v = v.wrapping_add(seed);
+    v = v.wrapping_mul((seed >> 16) | 1);
+    v ^= v.wrapping_mul(0x05526c56);
+    v ^= v.wrapping_mul(0x53a22864);
+    v.reverse_bits()
+}
+
+/// Vertices of a path whose decisions draw Sobol' points; deeper ones the hash's numbers, as
+/// the renderer's samples do beyond `sobol::DIMENSIONS`: there stratification gains little.
+pub const SOBOL_DEPTH: u32 = 6;
+/// A vertex's groups of four dimensions: the next direction (and which lobe), a point on an
+/// area light (and which light), and a direction to the sky with a point of the sun's disc.
+pub const SOBOL_SCATTER: u32 = 0;
+pub const SOBOL_LIGHT: u32 = 1;
+pub const SOBOL_SKY: u32 = 2;
+
+/// Four numbers in [0, 1) for a decision (`SOBOL_*`) at a path's vertex `depth`: for sample
+/// `sample` of a pixel, point `sample` of a four-dimensional Sobol' sequence, Owen-scrambled
+/// and shuffled by a seed of the pixel's and the decision's (Burley's padding, as the
+/// renderer's `sobol::sample`), so a pixel's samples are stratified in each decision and
+/// decisions are independent of each other. Deep in a path, the hash's numbers.
+pub fn decide(s: &Scene, pixel: u32, sample: u32, depth: u32, which: u32, rng: &mut u32) -> Vec4 {
+    if depth >= SOBOL_DEPTH {
+        return Vec4::new(rand(rng), rand(rng), rand(rng), rand(rng));
+    }
+    let h = pcg(pcg(pixel ^ s.params.seed.x.wrapping_mul(0x9e3779b9)) ^ (depth * 3 + which + 1).wrapping_mul(0x85eb_ca6b));
+    let x = sobol4(owen_scramble(sample, h));
+    let scrambled = UVec4::new(owen_scramble(x.x, pcg(h ^ 1)), owen_scramble(x.y, pcg(h ^ 2)), owen_scramble(x.z, pcg(h ^ 3)), owen_scramble(x.w, pcg(h ^ 4)));
+    Vec4::new((scrambled.x >> 8) as f32, (scrambled.y >> 8) as f32, (scrambled.z >> 8) as f32, (scrambled.w >> 8) as f32) * (1.0 / 16777216.0)
+}
+
 fn fract(x: f32) -> f32 {
     x - x.floor()
 }
@@ -2397,8 +2477,9 @@ pub struct PathState {
     pub beta: Vec4,
     /// The light gathered so far, and the rays traced.
     pub l: Vec4,
-    /// The random numbers' state, `PATH_*` flags, and the primitive its ray hits (`NONE` for
-    /// none), once `intersect` has found it.
+    /// The random numbers' state, `PATH_*` flags, the primitive its ray hits (`NONE` for
+    /// none), once `intersect` has found it, and which of its pixel's samples the path is
+    /// (for `decide`; while it waits in the host's queue, its slot, `gather_host`).
     pub state: UVec4,
     /// That hit: its distance and barycentric coordinates (`intersect_prim`).
     pub hit: Vec4,
@@ -2447,7 +2528,7 @@ impl PathState {
         let d = if live { ray.d.truncate() } else { Vec3::ZERO };
         PathState {
             o: ray.o, d: d.extend(0.0), beta: Vec4::new(1.0, 1.0, 1.0, 0.0), l: Vec4::ZERO,
-            state: UVec4::new(path_seed(index, pass, seed), if live { PATH_ACTIVE | PATH_SPECULAR } else { PATH_ADDED }, 0, 0),
+            state: UVec4::new(path_seed(index, pass, seed), if live { PATH_ACTIVE | PATH_SPECULAR } else { PATH_ADDED }, 0, pass),
             hit: Vec4::ZERO,
         }
     }
@@ -2512,7 +2593,7 @@ fn aerial_transmittance(s: &Scene, o: Vec3, d: Vec3, distance: f32) -> Vec3 {
 /// The path with a new ray, still tracing.
 #[allow(clippy::too_many_arguments)]
 fn carry_on(p: &PathState, o: Vec3, d: Vec3, beta: Vec3, l: Vec3, rays: u32, rng: u32, flags: u32, prev_pdf: f32, depth: u32, q0: SkyQuery, q1: SkyQuery) -> (PathState, SkyQuery, SkyQuery) {
-    (PathState { o: o.extend(p.o.w), d: d.extend(prev_pdf), beta: beta.extend(depth as f32), l: l.extend(rays as f32), state: UVec4::new(rng, flags, 0, 0), hit: Vec4::ZERO }, q0, q1)
+    (PathState { o: o.extend(p.o.w), d: d.extend(prev_pdf), beta: beta.extend(depth as f32), l: l.extend(rays as f32), state: UVec4::new(rng, flags, 0, p.state.w), hit: Vec4::ZERO }, q0, q1)
 }
 
 /// The path, ended at this vertex (its sky queries still to be answered).
@@ -2524,8 +2605,8 @@ fn finish(p: &PathState, o: Vec3, d: Vec3, beta: Vec3, l: Vec3, rays: u32, rng: 
 /// One vertex of a path (`PathState`): trace its ray; at what it hits, haze, emission, direct
 /// light (asking the sky for its light sample), and the next ray, or the end. Returns the path
 /// and its two sky queries.
-pub fn bounce(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
-    shade::<WithMedia>(s, &intersect::<WithMedia>(s, p))
+pub fn bounce(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQuery, SkyQuery) {
+    shade::<WithMedia>(s, &intersect::<WithMedia>(s, p), pixel)
 }
 
 /// Whether a kernel has the media's code. A scene without media runs kernels compiled
@@ -2582,7 +2663,7 @@ pub fn intersect_media<M: Media>(s: &Scene, found: &PathState) -> PathState {
 
 /// The second stage, at what `intersect` found: haze, emission, direct light (its shadow rays
 /// traced here, and the sky asked for its light sample), and the next ray, or the end.
-pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
+pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQuery, SkyQuery) {
     let (ro, rd, prev_pdf) = (p.o.xyz(), p.d.xyz(), p.d.w);
     let mut beta = p.beta.xyz();
     let depth = p.beta.w as u32;
@@ -2821,10 +2902,11 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
                 } else {
                     // Uniformly in the cone, by 1 - cos θ (as `sun_angle`, without the
                     // rounding of cos θ near 1).
-                    let one_minus = rand(&mut rng) * solid_angle / (2.0 * PI);
+                    let u = decide(s, pixel, p.state.w, depth, SOBOL_SKY, &mut rng);
+                    let one_minus = u.z * solid_angle / (2.0 * PI);
                     let cos_t = 1.0 - one_minus;
                     let sin_t = (one_minus * (2.0 - one_minus)).max(0.0).sqrt();
-                    let phi = 2.0 * PI * rand(&mut rng);
+                    let phi = 2.0 * PI * u.w;
                     let (t, b) = basis(sd);
                     wi = t * (sin_t * phi.cos()) + b * (sin_t * phi.sin()) + sd * cos_t;
                     pdf = sun_disc_pdf(s, wi);
@@ -2836,10 +2918,11 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
         } else if k == n_lights + 1 {
             // One area light, by power.
             if flags & FLAG_SAMPLE_LIGHTS != 0 && n_emitters > 0 {
-                let e = search(s, s.params.offs.y, n_emitters, rand(&mut rng));
+                let u = decide(s, pixel, p.state.w, depth, SOBOL_LIGHT, &mut rng);
+                let e = search(s, s.params.offs.y, n_emitters, u.z);
                 let pmf = emitter_probability(s, e);
                 let pi = at(s.tables, s.params.offs.x + e).to_bits();
-                let (y, ny, light_pdf) = sample_light(s, pi, above, rand(&mut rng), rand(&mut rng));
+                let (y, ny, light_pdf) = sample_light(s, pi, above, u.x, u.y);
                 let to = y - above;
                 let d = to.length();
                 wi = to / d;
@@ -2851,7 +2934,8 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
             }
         } else if !exclusive && flags & FLAG_SAMPLE_ENV != 0 {
             // The sky, by its brightness: its light found by the `sky` kernel (`q1`).
-            let es = env_sample(s, rand(&mut rng), rand(&mut rng));
+            let u = decide(s, pixel, p.state.w, depth, SOBOL_SKY, &mut rng);
+            let es = env_sample(s, u.x, u.y);
             if es.w > 0.0 {
                 wi = es.xyz();
                 pdf = es.w;
@@ -2945,7 +3029,8 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
         let from = point + ng * s.params.misc.z.max(reach) + water_up * reach.max(1e-3);
         return carry_on(p, from, reflected.normalize(), beta, l, rays, rng, flags_p | PATH_LIGHTS_COUNTED, 0.0, depth + 1, q0, q1);
     }
-    let wi = lobe.sample(wo, rand(&mut rng), rand(&mut rng), rand(&mut rng));
+    let u = decide(s, pixel, p.state.w, depth, SOBOL_SCATTER, &mut rng);
+    let wi = lobe.sample(wo, u.x, u.y, u.z);
     let (f, pdf) = lobe.eval_pdf(wo, wi);
     if wi.dot(wi) == 0.0 || pdf <= 0.0 {
         return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
@@ -2966,8 +3051,11 @@ pub fn radiance(s: &Scene, ro: Vec3, rd: Vec3, rng: &mut u32, rays: &mut u32) ->
     let ray = CameraRay { o: ro.extend(1.0), d: rd.normalize().extend(1.0) };
     let mut p = PathState::start(0, 0, 0, &ray);
     p.state.x = *rng;
+    // Its decisions' points (`decide`) scrambled by the generator's state, so that calls with
+    // one generator after another are independent samples.
+    let pixel = pcg(*rng ^ 0x5bd1_e995);
     loop {
-        let (next, q0, q1) = bounce(s, &p);
+        let (next, q0, q1) = bounce(s, &p, pixel);
         p = next;
         p.l += (sky_light(s, &q0) + sky_light(s, &q1)).extend(0.0);
         if p.state.y & PATH_ACTIVE == 0 {
@@ -3580,7 +3668,8 @@ pub fn scatter_host(
     }
     let mut p = gathered[i as usize];
     let slot = p.state.w;
-    p.state.w = 0;
+    // (Its sample's number is still in its slot.)
+    p.state.w = paths[slot as usize].state.w;
     paths[slot as usize] = p;
     if p.state.y & PATH_ACTIVE != 0 {
         queue::push(queue, slot, params);
@@ -3630,7 +3719,7 @@ pub fn bounce_paths(
     let index = pixel as usize;
     let p = paths[index];
     let s = Scene { params, prims, nodes, materials, lights, tables };
-    let (next, q0, q1) = shade::<NoMedia>(&s, &p);
+    let (next, q0, q1) = shade::<NoMedia>(&s, &p, pixel % (params.dims.x * params.dims.y));
     paths[index] = next;
     queries[2 * index] = q0;
     queries[2 * index + 1] = q1;
@@ -3687,7 +3776,7 @@ pub fn bounce_paths_media(
     let index = pixel as usize;
     let p = paths[index];
     let s = Scene { params, prims, nodes, materials, lights, tables };
-    let (next, q0, q1) = shade::<WithMedia>(&s, &p);
+    let (next, q0, q1) = shade::<WithMedia>(&s, &p, pixel % (params.dims.x * params.dims.y));
     paths[index] = next;
     queries[2 * index] = q0;
     queries[2 * index + 1] = q1;

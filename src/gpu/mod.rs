@@ -1336,7 +1336,7 @@ mod tests {
                     slots += 1;
                     if p.state.y & pathtrace::PATH_ACTIVE != 0 {
                         live += 1;
-                        p = pathtrace::bounce(&shader, &p).0;
+                        p = pathtrace::bounce(&shader, &p, index as u32).0;
                     }
                 }
             }

@@ -2306,10 +2306,18 @@ Not done, and why:
   `scene::Integrator`, `"integrator": "auto"`. `--gpu` takes a software adapter too,
   `--wavefront` keeps to the CPU, `--path-tracer` is `trace`. A saved state is keyed by
   the integrator that rendered it.) What the kernels still lack that a picture shows, now
-  that they are what most scenes get: Sobol' points (they draw from a hash: more noise at
-  equal samples), the scene's `sampler` choice, sun and glitter probes (sunlit clouds are
-  noisier: benard-altocumulus FLIP 0.065 against 0.037 at 32 spp) and the light BVH.
-  Sobol' in the kernels is next.
+  that they are what most scenes get: the scene's `sampler` choice, sun and glitter probes
+  (sunlit clouds are noisier: benard-altocumulus FLIP 0.065 against 0.037 at 32 spp) and
+  the light BVH.
+- (Done since: Sobol' points. `pathtrace::decide`: a vertex's decisions, the next direction,
+  an area light's point, the sky's direction and the sun's disc, each take a group of four
+  Owen-scrambled Sobol' dimensions seeded by pixel, depth and decision (Burley's padding,
+  stateless: nothing to carry but the sample's number, in `state.w`), for a path's first six
+  vertices. Against a converged reference at 64 spp, 200 x 125, mean FLIP: demo 0.0189 ->
+  0.0158 (the path tracer with Sobol' points 0.0157, with independent numbers 0.0189),
+  teapot-sky 0.0242 -> 0.0162 (0.0159, 0.0242): the kernels' noise was the path tracer's
+  without its sampler, and is now the path tracer's. For about 4% of teapot-sky's time.
+  That measurement also found the kernels' checkerboards laid out about the camera.)
 - Media through the host in the wavefront's rounds (the rest of step 3), and with them the
   thread-locals. Judged not worth doing as such: a scene with a medium the kernels lack is
   rendered a path at a time by the scene's own code under the same driver now, and the

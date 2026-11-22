@@ -139,10 +139,17 @@
 //! G conducting through it (`basal_melting`): T_b = T_s + G H / k (k = 2.1 W/m/K, so 29 K per
 //! kilometre of ice for G = 0.06 W/m²), which neglects cold ice carried down by accumulation
 //! and so errs warm; against the pressure melting point, -0.00087 K per metre of ice. The
-//! surface's mean annual temperature is that at the equilibrium line, about -6 °C (Ohmura,
-//! Kasser and Funk, "Climate at the equilibrium line of glaciers", J. Glaciology 38(130),
-//! 1992, find -2 to -12 °C from maritime to continental glaciers), less the lapse rate above
-//! it. Sliding, and erosion, take the share of the bed at the melting point: none 3 K below
+//! air's mean annual temperature at the equilibrium line is about -6 °C (Ohmura, Kasser and
+//! Funk, "Climate at the equilibrium line of glaciers", J. Glaciology 38(130), 1992, find -2
+//! to -12 °C from maritime to continental glaciers), less the lapse rate above it; but where
+//! the summer melts the snow, its meltwater percolates into the firn and freezes there,
+//! warming it to near 0 °C (Cuffey and Paterson, "The Physics of Glaciers", 4th ed., 2010,
+//! ch. 9), which is why most mountain glaciers are temperate though the air over them averages
+//! well below freezing. So the ice's surface is the air's temperature warmed by `refreezing`
+//! (8 K) at the equilibrium line, fading to nothing 1500 m above it (the dry snow zone), and no
+//! warmer than 0 °C: glaciers near the snowline slide, and only high, cold summits freeze to
+//! their beds. (Without the refreezing, frozen beds kept summits from eroding, and so high and
+//! icy: three times the ice of temperate beds after 100,000 years.) Sliding, and erosion, take the share of the bed at the melting point: none 3 K below
 //! it, all at it.
 //!
 //! Not modelled: ice temperature's effect on Glen's A (that of temperate ice everywhere);
@@ -155,6 +162,9 @@ use crate::terrain::domain::Domain;
 const ICE_CONDUCTIVITY: f64 = 2.1;
 /// Fall of ice's melting point with depth, K per metre of ice.
 const PRESSURE_MELTING: f64 = 8.7e-4;
+/// Height above the equilibrium line of the dry snow zone, where the summer no longer melts the
+/// snow and refreezing meltwater no longer warms the firn, metres.
+const DRY_SNOW: f64 = 1500.;
 use crate::terrain::simulation::ICE_FREE;
 use rayon::prelude::*;
 
@@ -204,6 +214,9 @@ pub struct GlacierParams {
     pub geothermal_flux: f64,
     /// Mean annual air temperature at the equilibrium line, °C.
     pub ela_temperature: f64,
+    /// How much meltwater refreezing in the firn warms the ice's surface above the air near the
+    /// equilibrium line, K.
+    pub refreezing: f64,
 }
 
 impl Default for GlacierParams {
@@ -230,6 +243,7 @@ impl Default for GlacierParams {
             acceleration: 10.,
             geothermal_flux: 0.06,
             ela_temperature: -6.,
+            refreezing: 8.,
         }
     }
 }
@@ -246,7 +260,11 @@ impl GlacierParams {
     /// surface is `s` metres up, where the equilibrium line is at `ela` (see "Frozen beds").
     pub fn basal_melting(&self, s: f64, h: f64, ela: f64) -> f64 {
         if self.geothermal_flux <= 0. { return 1.; }
-        let surface = self.ela_temperature - crate::terrain::climate::LAPSE_RATE * (s - ela);
+        // Meltwater percolating into the firn and freezing there warms it above the air: by up
+        // to `refreezing` near the equilibrium line, fading to nothing where it no longer
+        // melts, `DRY_SNOW` above it.
+        let melting_zone = (1. - (s - ela) / DRY_SNOW).clamp(0., 1.);
+        let surface = (self.ela_temperature - crate::terrain::climate::LAPSE_RATE * (s - ela) + self.refreezing * melting_zone).min(0.);
         let base = surface + self.geothermal_flux * h / ICE_CONDUCTIVITY;
         let melting = -PRESSURE_MELTING * h;
         let t = ((base - melting + 3.) / 3.).clamp(0., 1.);
@@ -482,10 +500,13 @@ mod tests {
     #[test]
     fn test_thin_ice_on_cold_summits_is_frozen_to_its_bed() {
         let g = GlacierParams::default();
-        // A thin ice cap 1500 m above the equilibrium line: about -16 °C at the surface.
+        // A thin ice cap 1500 m above the equilibrium line, in the dry snow zone: about -16 °C at
+        // the surface.
         assert_eq!(g.basal_melting(4500., 50., 3000.), 0.);
         // A valley glacier 300 m thick near the equilibrium line slides.
         assert_eq!(g.basal_melting(3100., 300., 3000.), 1.);
+        // And so does thin ice 500 m above it, where meltwater warms the firn.
+        assert_eq!(g.basal_melting(3500., 60., 3000.), 1.);
         // Thick ice is warmed through to its bed even where the air is cold.
         assert_eq!(g.basal_melting(4500., 800., 3000.), 1.);
         // Temperate ice everywhere without the geothermal flux.

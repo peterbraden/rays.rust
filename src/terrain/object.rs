@@ -279,7 +279,7 @@ fn number(o: &Value, k: &str, def: f64) -> f64 { SceneFile::parse_number(&o[k], 
 /// Override fields of `GlacierParams` named in `o`.
 fn glacier_params(o: &Value) -> GlacierParams {
     let mut g = GlacierParams::default();
-    let fields: [(&str, &mut f64); 18] = [
+    let fields: [(&str, &mut f64); 19] = [
         ("glen_a", &mut g.glen_a), ("glen_n", &mut g.glen_n), ("sliding", &mut g.sliding),
         ("erosion", &mut g.erosion), ("erosion_exponent", &mut g.erosion_exponent),
         ("ela_equator", &mut g.ela_equator), ("ela_pole", &mut g.ela_pole),
@@ -288,6 +288,7 @@ fn glacier_params(o: &Value) -> GlacierParams {
         ("max_step", &mut g.max_step), ("min_step", &mut g.min_step), ("max_speed", &mut g.max_speed), ("max_stiffness", &mut g.max_stiffness),
         ("acceleration", &mut g.acceleration),
         ("geothermal_flux", &mut g.geothermal_flux), ("ela_temperature", &mut g.ela_temperature),
+        ("refreezing", &mut g.refreezing),
     ];
     for (k, v) in fields {
         if let Some(x) = o.get(k).and_then(|x| x.as_f64()) { *v = x; }

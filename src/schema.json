@@ -2643,6 +2643,7 @@
             },
             {"name": "geothermal_flux", "kind": "number", "default": 0.06, "doc": "Geothermal flux warming the ice's bed, W/m²; thin cold ice freezes to its bed and doesn't erode; 0 for temperate ice everywhere."},
             {"name": "ela_temperature", "kind": "number", "default": -6, "doc": "Mean annual air temperature at the equilibrium line, °C."},
+            {"name": "refreezing", "kind": "number", "default": 8, "doc": "Warming of the ice's surface by meltwater refreezing in the firn near the equilibrium line, K."},
             {"name": "picard", "kind": "integer", "default": 2, "doc": "Solves per ice step.", "min": 1}
           ]
         },

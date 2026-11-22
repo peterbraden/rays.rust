@@ -430,11 +430,17 @@ mod tests {
     #[test]
     fn test_rock_strength_varies_with_depth() {
         let p = planet(2);
-        let d = Vector3::new(0.3, 0.5, 0.8).normalize();
+        // On land outside the mountain belts, in the sedimentary cover (the sea floor is basalt
+        // all the way down, and the belts' cores crystalline).
+        let d = samples().into_iter().find(|d| p.continent(d) > 0.3 && p.orogeny(d) < 0.05 && p.structure(d, 100.).basement < -1500.).unwrap();
+        assert!(p.structure(&d, 100.).oceanic < 0.5);
         let k: Vec<f64> = (0..20).map(|i| p.rock(&d, i as f64 * 50., 100.).erodibility(geology::Process::Rivers, 5.)).collect();
         let (lo, hi) = (k.iter().cloned().fold(f64::MAX, f64::min), k.iter().cloned().fold(0., f64::max));
         // Cutting down 1 km passes through hard and soft layers.
         assert!(hi / lo > 2., "{:?}", k);
+        // At sea, basalt.
+        let sea = samples().into_iter().find(|d| p.continent(d) < -0.3).unwrap();
+        assert_eq!(p.rock(&sea, -4000., 100.), geology::Rock::Basalt);
         let any = samples().iter().any(|d| p.volcanism(d) > 0.5);
         assert!(any);
     }

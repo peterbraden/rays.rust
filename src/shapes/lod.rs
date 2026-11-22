@@ -116,20 +116,11 @@ impl Constituent {
 pub struct Clusters {
     starts: Vec<u32>,
     items: Vec<Constituent>,
-    /// Each cluster's bounds (of its leaves and its cards), within which a ray starts from the
-    /// cluster.
-    boxes: Vec<[f32; 6]>,
-    /// The fraction of light a leaf of each cluster gets past the cluster's other leaves, in
-    /// 255ths: what a ray leaving the cluster sees of it, in place of its cards.
-    lit: Vec<u8>,
 }
 
 impl Clusters {
     /// A card's constituents, each a normal, area and face; returns its number.
-    fn push(&mut self, items: &[(Vector3<f64>, f64, u32)], bounds: &BBox, lit: f64) -> u32 {
-        self.boxes.push([bounds.min.x as f32, bounds.min.y as f32, bounds.min.z as f32,
-                         bounds.max.x as f32, bounds.max.y as f32, bounds.max.z as f32]);
-        self.lit.push((lit.clamp(0., 1.) * 255.).round() as u8);
+    fn push(&mut self, items: &[(Vector3<f64>, f64, u32)]) -> u32 {
         if self.starts.is_empty() {
             self.starts.push(0);
         }
@@ -145,22 +136,6 @@ impl Clusters {
 
     pub fn len(&self) -> usize {
         self.starts.len().saturating_sub(1)
-    }
-
-    /// Whether `p` is within cluster `c`'s bounds: a ray from there leaves the cluster.
-    fn inside(&self, c: u32, p: &Vector3<f64>) -> bool {
-        let b = &self.boxes[c as usize];
-        let (x, y, z) = (p.x as f32, p.y as f32, p.z as f32);
-        x >= b[0] && y >= b[1] && z >= b[2] && x <= b[3] && y <= b[4] && z <= b[5]
-    }
-
-    /// The fraction of light that gets past cluster `c`'s other leaves to one of its own.
-    pub fn lit(&self, c: u32) -> f64 {
-        self.lit[c as usize] as f64 / 255.
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     /// The constituents of card `c`.
@@ -210,19 +185,34 @@ const CARDS_PER_LEAF: usize = 4;
 /// Marks a card that is a kept triangle, whose `data` is then its face.
 const TRIANGLE: u32 = 1 << 31;
 
-/// A rectangle standing for a cluster of small pieces (see the module's notes), in 40 bytes:
-/// `corner`, and the edges `u` and `v` from it, in single precision (to within a micrometre on a
-/// tree, far below a card's own error). A ray hitting it is shaded as one of its constituents,
-/// chosen by `Clusters::choose`: the hit reports that one's normal and face. A piece kept as it
-/// is, a cluster of one, is a card cut to the triangle of its edges, with `TRIANGLE` set in its
-/// `data` and its face below; otherwise `data` is its cluster's number.
+/// What stands for a cluster of small pieces (see the module's notes), in 56 bytes: up to three
+/// rectangles across the cluster's box, crossed. The box is centred at `corner`, `u` and `v`
+/// long across (`u` along the plane its leaves cover most of, `v` across it in that plane) and
+/// `thick` deep along their normal `n`. The first rectangle lies across `n`, `offset` from the
+/// centre along it, `u` by `v` scaled by `scale[0]`; the others lie across `u` (`v` by the depth)
+/// and across `v` (`u` by the depth), scaled by `scale[1]` and `scale[2]`, in 4096ths; a scale of
+/// 0 is no rectangle. Single precision is within a micrometre on a tree, far below a card's own
+/// error. A ray hitting it is shaded as one of its constituents, chosen by `Clusters::choose`;
+/// a ray leaving it (from within its box) doesn't meet it, but is shadowed with the probability
+/// `lit` (255ths) leaves no light, as its leaves shadow one another.
+///
+/// A piece kept as it is, a cluster of one, is a card cut to the triangle of edges `u` and `v`
+/// from `corner`, with `TRIANGLE` set in its `data` and its face below; otherwise `data` is its
+/// cluster's number.
 #[derive(Clone, Copy, Debug)]
 pub struct Card {
     corner: [f32; 3],
     u: [f32; 3],
     v: [f32; 3],
+    thick: f32,
+    offset: f32,
+    scale: [u16; 3],
+    lit: u8,
     data: u32,
 }
+
+/// The largest scale a card's rectangle can have, against its face of the box.
+const MAX_SCALE: f64 = 65535. / 4096.;
 
 fn vector(a: &[f32; 3]) -> Vector3<f64> {
     Vector3::new(a[0] as f64, a[1] as f64, a[2] as f64)
@@ -232,7 +222,37 @@ fn single(v: &Vector3<f64>) -> [f32; 3] {
     [v.x as f32, v.y as f32, v.z as f32]
 }
 
+/// Where a ray hits the parallelogram from `corner` along `u` and `v` (or its triangle): the
+/// multiple of its direction, and the coordinates along the edges.
+fn parallelogram_hit(corner: &Vector3<f64>, u: &Vector3<f64>, v: &Vector3<f64>, triangle: bool, r: &Ray) -> Option<(f64, f64, f64)> {
+    let n = u.cross(v);
+    let denom = r.rd.dot(&n);
+    if denom == 0. {
+        return None;
+    }
+    let t = (corner - r.ro).dot(&n) / denom;
+    if t <= 0. || !t.is_finite() {
+        return None;
+    }
+    // The coordinates along the edges, which needn't be at right angles: by the inverse of
+    // their Gram matrix.
+    let d = r.ro + r.rd * t - corner;
+    let (uu, uv, vv, du, dv) = (u.dot(u), u.dot(v), v.dot(v), d.dot(u), d.dot(v));
+    let det = uu * vv - uv * uv;
+    let (a, b) = ((du * vv - dv * uv) / det, (dv * uu - du * uv) / det);
+    if !(a >= 0. && b >= 0.) || if triangle { a + b > 1. } else { a > 1. || b > 1. } {
+        return None;
+    }
+    Some((t, a, b))
+}
+
 impl Card {
+    /// A kept triangle, of `face`.
+    fn triangle(t: &Triangle, face: u32) -> Card {
+        assert!(face & TRIANGLE == 0, "face {} is too large to keep", face);
+        Card { corner: single(&t.v0), u: single(&(t.v1 - t.v0)), v: single(&(t.v2 - t.v0)), thick: 0., offset: 0., scale: [4096, 0, 0], lit: 255, data: face | TRIANGLE }
+    }
+
     pub fn corner(&self) -> Vector3<f64> { vector(&self.corner) }
     pub fn u(&self) -> Vector3<f64> { vector(&self.u) }
     pub fn v(&self) -> Vector3<f64> { vector(&self.v) }
@@ -241,42 +261,75 @@ impl Card {
         self.data & TRIANGLE != 0
     }
 
+    /// The normal of the plane its leaves cover most of (of a triangle, its own).
     pub fn normal(&self) -> Vector3<f64> {
         self.u().cross(&self.v()).normalize()
     }
 
-    /// Where a ray hits it: the multiple of its direction, and the coordinates along the edges.
+    /// The fraction of light that gets past its leaves to one of them.
+    pub fn lit(&self) -> f64 {
+        self.lit as f64 / 255.
+    }
+
+    /// Its rectangles (or its triangle), each a corner and two edges.
+    pub fn planes(&self) -> impl Iterator<Item = (Vector3<f64>, Vector3<f64>, Vector3<f64>)> + '_ {
+        let (c, u, v) = (self.corner(), self.u(), self.v());
+        let triangle = self.is_triangle();
+        let n = if triangle { Vector3::zeros() } else { self.normal() * self.thick as f64 };
+        let main = c + self.normal() * if triangle { 0. } else { self.offset as f64 };
+        (0 .. 3).filter(move |&i| self.scale[i] > 0).map(move |i| {
+            if triangle {
+                return (c, u, v);
+            }
+            let k = self.scale[i] as f64 / 4096.;
+            let (centre, a, b) = match i { 0 => (main, u * k, v * k), 1 => (c, v * k, n * k), _ => (c, u * k, n * k) };
+            (centre - 0.5 * (a + b), a, b)
+        })
+    }
+
+    /// Where a ray hits it, nearest: the multiple of its direction, and the coordinates along
+    /// the edges of the rectangle hit.
     fn hit(&self, r: &Ray) -> Option<(f64, f64, f64)> {
-        let (corner, u, v) = (self.corner(), self.u(), self.v());
-        let n = u.cross(&v);
-        let denom = r.rd.dot(&n);
-        if denom == 0. {
-            return None;
+        let triangle = self.is_triangle();
+        self.planes().filter_map(|(c, a, b)| parallelogram_hit(&c, &a, &b, triangle, r)).min_by(|x, y| x.0.total_cmp(&y.0))
+    }
+
+    /// Whether `p` is within its box (and its rectangles, which may reach beyond): a ray from
+    /// there leaves its cluster.
+    fn inside(&self, p: &Vector3<f64>) -> bool {
+        if self.is_triangle() {
+            return false;
         }
-        let t = (corner - r.ro).dot(&n) / denom;
-        if t <= 0. || !t.is_finite() {
-            return None;
-        }
-        // The coordinates along the edges, which needn't be at right angles: by the inverse of
-        // their Gram matrix.
-        let d = r.ro + r.rd * t - corner;
-        let (uu, uv, vv, du, dv) = (u.dot(&u), u.dot(&v), v.dot(&v), d.dot(&u), d.dot(&v));
-        let det = uu * vv - uv * uv;
-        let (a, b) = ((du * vv - dv * uv) / det, (dv * uu - du * uv) / det);
-        if !(a >= 0. && b >= 0.) || if self.is_triangle() { a + b > 1. } else { a > 1. || b > 1. } {
-            return None;
-        }
-        Some((t, a, b))
+        let (u, v) = (self.u(), self.v());
+        let (lu, lv) = (u.norm(), v.norm());
+        let n = self.normal();
+        let k = self.scale.map(|s| s as f64 / 4096.);
+        let reach_u = 0.5 * lu * k[0].max(k[2]).max(1.);
+        let reach_v = 0.5 * lv * k[0].max(k[1]).max(1.);
+        let reach_n = (0.5 * self.thick as f64 * k[1].max(k[2]).max(1.)).max((self.offset as f64).abs());
+        let d = p - self.corner();
+        let slack = 1e-6 * (lu + lv);
+        d.dot(&u).abs() / lu <= reach_u + slack && d.dot(&v).abs() / lv <= reach_v + slack && d.dot(&n).abs() <= reach_n + slack
     }
 
     pub fn bounds(&self) -> BBox {
-        let (c, u, v) = (self.corner(), self.u(), self.v());
-        let (a, b, d, e) = (c, c + u, c + v, c + u + v);
-        BBox::new(a.inf(&b).inf(&d).inf(&e), a.sup(&b).sup(&d).sup(&e))
+        let mut b = BBox::new(Vector3::repeat(f64::INFINITY), Vector3::repeat(f64::NEG_INFINITY));
+        for (c, u, v) in self.planes() {
+            for p in [c, c + u, c + v, c + u + v] {
+                b = BBox::new(b.min.coords.inf(&p), b.max.coords.sup(&p));
+            }
+        }
+        b
     }
 
+    /// The area of its rectangles together (of a triangle, its own).
     pub fn surface_area(&self) -> f64 {
-        self.u().cross(&self.v()).norm() * if self.is_triangle() { 0.5 } else { 1. }
+        self.planes().map(|(_, u, v)| u.cross(&v).norm()).sum::<f64>() * if self.is_triangle() { 0.5 } else { 1. }
+    }
+
+    /// The area of its first rectangle, across its normal.
+    pub fn main_area(&self) -> f64 {
+        self.planes().next().filter(|_| self.scale[0] > 0).map_or(0., |(_, u, v)| u.cross(&v).norm()) * if self.is_triangle() { 0.5 } else { 1. }
     }
 }
 
@@ -330,7 +383,7 @@ impl Geometry for CardSet {
             // A ray leaving a cluster doesn't meet that cluster's own cards: they stand for its
             // leaves as seen from outside.
             let card = &self.cards[i];
-            if !card.is_triangle() && self.clusters.inside(card.data, &r.ro) {
+            if card.inside(&r.ro) {
                 return None;
             }
             let hit = card.hit(r)?;
@@ -350,11 +403,11 @@ impl Geometry for CardSet {
     fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
         !self.cards.is_empty() && self.bvh.any_hit(r, min, max, |i| {
             let card = &self.cards[i];
-            if !card.is_triangle() && self.clusters.inside(card.data, &r.ro) {
+            if card.inside(&r.ro) {
                 // Leaving its own cluster, a ray is shadowed by the cluster's other leaves as
                 // often as they shadow one another, not by its cards; decided once for the ray
                 // and the cluster.
-                return hash01(r, card.data as f64, 0.25) >= self.clusters.lit(card.data);
+                return hash01(r, card.data as f64, 0.25) >= card.lit();
             }
             card.hit(r).is_some_and(|(t, _, _)| {
                 let d = t * r.rd.norm();
@@ -489,37 +542,23 @@ pub fn consolidate(triangles: &[Arc<Tagged<Triangle>>], size: f64) -> CardSet {
         if members.len() <= 2 {
             // Too few to gain by: keep them, as triangles.
             for m in members {
-                let t = &m.item;
-                assert!(m.face & TRIANGLE == 0, "face {} is too large to keep", m.face);
-                cards.push(Card { corner: single(&t.v0), u: single(&(t.v1 - t.v0)), v: single(&(t.v2 - t.v0)), data: m.face | TRIANGLE });
+                cards.push(Card::triangle(&m.item, m.face));
             }
             continue;
         }
-        let (made, lit) = card(&members);
-        if !made.is_empty() {
+        if let Some(mut card) = card(&members) {
             let all: Vec<(Vector3<f64>, f64, u32)> = members.iter().map(|m| {
                 let t = &m.item;
                 (t.normal, 0.5 * (t.v1 - t.v0).cross(&(t.v2 - t.v0)).norm(), m.face)
             }).collect();
             let kept = constituents(&all, clusters.len() as u64);
-            let mut bounds = BBox::new(Vector3::repeat(f64::INFINITY), Vector3::repeat(f64::NEG_INFINITY));
-            for m in &members {
-                bounds = bounds.union(&m.item.bounds());
-            }
-            for (corner, u, v) in &made {
-                bounds = bounds.union(&Card { corner: single(corner), u: single(u), v: single(v), data: 0 }.bounds());
-            }
-            let c = clusters.push(&kept, &bounds, lit);
-            for (corner, u, v) in made {
-                cards.push(Card { corner: single(&corner), u: single(&u), v: single(&v), data: c });
-            }
+            card.data = clusters.push(&kept);
+            cards.push(card);
         }
     }
     // Kept for the whole render, and grown by pushing: give back the slack.
     clusters.starts.shrink_to_fit();
     clusters.items.shrink_to_fit();
-    clusters.boxes.shrink_to_fit();
-    clusters.lit.shrink_to_fit();
     // A card is cheaper to test than a node to visit, and smaller: leaves of a few.
     let (bvh, cards) = Bvh::build_with_leaves(cards, Card::bounds, CARDS_PER_LEAF);
     CardSet { bvh, cards, clusters }
@@ -672,7 +711,7 @@ fn groups(triangles: &[Arc<Tagged<Triangle>>], size: f64) -> Vec<Vec<usize>> {
 /// card is seen from both sides alike, so one hemisphere stands for the sphere.
 fn coverage_directions(n: &Vector3<f64>, e: &Vector3<f64>) -> Vec<Vector3<f64>> {
     let f = n.cross(e);
-    let count = 12;
+    let count = 10;
     let golden = std::f64::consts::PI * (3. - 5f64.sqrt());
     (0 .. count).map(|i| {
         let z = 1. - (i as f64 + 0.5) / count as f64;
@@ -748,7 +787,7 @@ fn covered_area(members: &[&Tagged<Triangle>], d: &Vector3<f64>) -> f64 {
 }
 
 /// The card for a cluster: its corner and edges (see the module's notes).
-fn card(members: &[&Tagged<Triangle>]) -> (Vec<(Vector3<f64>, Vector3<f64>, Vector3<f64>)>, f64) {
+fn card(members: &[&Tagged<Triangle>]) -> Option<Card> {
     let mut moment = Matrix3::zeros();
     let (mut centre, mut total) = (Vector3::zeros(), 0.);
     for m in members {
@@ -759,7 +798,7 @@ fn card(members: &[&Tagged<Triangle>]) -> (Vec<(Vector3<f64>, Vector3<f64>, Vect
         total += area;
     }
     if total <= 0. {
-        return (vec![], 1.);
+        return None;
     }
     centre /= total;
     let eigen = moment.symmetric_eigen();
@@ -800,7 +839,7 @@ fn card(members: &[&Tagged<Triangle>]) -> (Vec<(Vector3<f64>, Vector3<f64>, Vect
     let (w, h) = (hi.0 - lo.0, hi.1 - lo.1);
     let extent = w * h;
     if extent <= 0. || shown <= 0. {
-        return (vec![], 1.);
+        return None;
     }
     // The cluster's thickness along the normal.
     let (mut below, mut above) = (0f64, 0f64);
@@ -831,8 +870,8 @@ fn card(members: &[&Tagged<Triangle>]) -> (Vec<(Vector3<f64>, Vector3<f64>, Vect
     let target: Vec<f64> = dirs.iter().map(|d| covered_area(members, d)).collect();
     // One card, if it alone is hit within `CARD_TOLERANCE` of the leaves over the directions
     // (relative root-mean-square); otherwise those of the three that carry their weight.
-    let single = nnls(&dirs.iter().map(|d| vec![normal.dot(d).abs()]).collect::<Vec<_>>(), &target)[0];
-    let miss = dirs.iter().zip(&target).map(|(d, t)| (single * normal.dot(d).abs() - t).powi(2)).sum::<f64>();
+    let one = nnls(&dirs.iter().map(|d| vec![normal.dot(d).abs()]).collect::<Vec<_>>(), &target)[0];
+    let miss = dirs.iter().zip(&target).map(|(d, t)| (one * normal.dot(d).abs() - t).powi(2)).sum::<f64>();
     let alone = miss.sqrt() <= CARD_TOLERANCE * target.iter().map(|t| t * t).sum::<f64>().sqrt();
     let mut keep: Vec<usize> = (0 .. 3).filter(|&i| (i == 0 || !alone) && faces[i].1.cross(&faces[i].2).norm() > 0.).collect();
     let mut areas = vec![0.; 3];
@@ -847,19 +886,23 @@ fn card(members: &[&Tagged<Triangle>]) -> (Vec<(Vector3<f64>, Vector3<f64>, Vect
         let most = areas.iter().cloned().fold(0., f64::max);
         keep.retain(|&i| areas[i] > 0.05 * most);
     }
-    let make = |areas: &[f64]| -> Vec<(Vector3<f64>, Vector3<f64>, Vector3<f64>)> {
-        keep.iter().map(|&i| {
-            let (_, u, v, at) = faces[i];
-            let k = (areas[i] / u.cross(&v).norm()).sqrt();
-            let (u, v) = (u * k, v * k);
-            (at - 0.5 * (u + v), u, v)
-        }).collect()
+    let make = |areas: &[f64], lit: f64| -> Card {
+        let mut scale = [0u16; 3];
+        for &i in keep.iter().filter(|&&i| areas[i] > 0.) {
+            let k = (areas[i] / faces[i].1.cross(&faces[i].2).norm()).sqrt().min(MAX_SCALE);
+            scale[i] = ((k * 4096.).round() as u16).max(1);
+        }
+        Card {
+            corner: single(&side), u: single(&(a1 * w)), v: single(&(a2 * h)),
+            thick: thick as f32, offset: (mid - side).dot(&normal) as f32,
+            scale, lit: (lit.clamp(0., 1.) * 255.).round() as u8, data: 0,
+        }
     };
     // Crossed cards overlap seen at a slant, so together they cover less than the sum of their
     // cross-sections: measure what they do cover, as the leaves', and refit to make up for it.
     if keep.len() > 1 {
-        for _ in 0 .. 3 {
-            let planes: Vec<Tagged<Triangle>> = make(&areas).into_iter().flat_map(|(c, u, v)| [
+        for _ in 0 .. 2 {
+            let planes: Vec<Tagged<Triangle>> = make(&areas, 1.).planes().flat_map(|(c, u, v)| [
                 Tagged { item: Triangle::new(c, c + u, c + v), face: 0 },
                 Tagged { item: Triangle::new(c + u, c + u + v, c + v), face: 0 },
             ]).collect();
@@ -875,8 +918,8 @@ fn card(members: &[&Tagged<Triangle>]) -> (Vec<(Vector3<f64>, Vector3<f64>, Vect
             }
         }
     }
-    let lit = self_lit(members);
-    (make(&areas), lit)
+    let card = make(&areas, self_lit(members));
+    (card.scale != [0; 3]).then_some(card)
 }
 
 /// How much light gets past a cluster's other leaves to one of them: the fraction of rays from
@@ -1024,11 +1067,12 @@ mod tests {
         // Seen from above, the cards cover what the leaves do, overlaps allowed for: about
         // the leaves' projected area for a sparse cluster, and never more than it.
         let shown: f64 = all.iter().map(|t| t.item.normal.y.abs() * 0.5 * (t.item.v1 - t.item.v0).cross(&(t.item.v2 - t.item.v0)).norm()).sum();
-        let covered: f64 = cards.iter().map(|c| c.surface_area() * c.normal().y.abs()).sum();
+        let covered: f64 = cards.iter().map(|c| c.main_area() * c.normal().y.abs()).sum();
         assert!(covered <= shown * 1.001 && covered > 0.5 * shown, "{} of {}", covered, shown);
         // The set is hit where its cards are, and gives a kept leaf's face.
         for card in cards.iter().take(50) {
-            let centre = card.corner() + (card.u() + card.v()) * if card.is_triangle() { 1. / 3. } else { 0.5 };
+            let (c, u, v) = card.planes().next().unwrap();
+            let centre = c + (u + v) * if card.is_triangle() { 1. / 3. } else { 0.5 };
             let h = set.intersects(&Ray { ro: centre + card.normal() * 10., rd: -card.normal() }).expect("a card is hit");
             assert!(faces.binary_search(&h.face).is_ok());
             assert!(h.dist <= 10. + 1e-6);
@@ -1117,6 +1161,13 @@ mod tests {
             let (a, b) = (area(&all, &d), area(&kept, &d));
             assert!((b / a - 1.).abs() < 0.06, "{} against {}", b, a);
         }
+    }
+
+    #[test]
+    fn test_a_card_is_compact() {
+        // Up to three crossed rectangles, their box and the cluster's self-shadowing, in less
+        // than three single cards would take.
+        assert_eq!(std::mem::size_of::<Card>(), 56);
     }
 
     #[test]

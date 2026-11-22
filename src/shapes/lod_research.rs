@@ -253,10 +253,10 @@ fn measure(leaves: &[Arc<Tagged<Triangle>>], size: f64, views: &[Vector3<f64>], 
             continue;
         }
         let members: Vec<&Tagged<Triangle>> = group.iter().map(|&i| &*leaves[i]).collect();
-        let (made, lit_estimate) = card(&members);
-        t.lit_estimate += lit_estimate;
-        let Some(&(_, u, v)) = made.first() else { continue };
-        t.planes += made.len();
+        let Some(the_card) = card(&members) else { continue };
+        t.lit_estimate += the_card.lit();
+        let (u, v) = (the_card.u(), the_card.v());
+        t.planes += the_card.planes().count();
         t.cards += 1;
         t.members += members.len();
         t.kept += members.len().min(OLD_KEPT);
@@ -317,8 +317,7 @@ fn measure(leaves: &[Arc<Tagged<Triangle>>], size: f64, views: &[Vector3<f64>], 
         let geometry = GeometrySet::new(&tris);
         let b = geometry.bounds();
         let (centre, radius) = ((b.min.coords + b.max.coords) * 0.5, (b.max - b.min).norm() * 0.5);
-        let the_cards: Vec<Card> = made.iter().map(|(c, u, v)| Card { corner: single(c), u: single(u), v: single(v), data: 0 }).collect();
-        let hit_cards = |ray: &Ray| the_cards.iter().any(|c| c.hit(ray).is_some());
+        let hit_cards = |ray: &Ray| the_card.hit(ray).is_some();
         let rays = 96;
         for d in views {
             let (e1, e2) = frame(d);

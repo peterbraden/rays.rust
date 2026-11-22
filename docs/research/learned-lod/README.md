@@ -300,6 +300,18 @@ cards.
   placements are about 60 B each, 15 MB for the forest. So the constituents remain worth
   attacking, but the payoff is bounded by 235 MB.
 
+## Pictures
+
+Each sheet is a set of renders of `forest-aerial` against full detail. The right column maps
+brightness in linear light (red brighter, blue darker, to ±15%), blurred to show bias rather
+than noise. The sheets are made by `scripts/lod-comparison-sheets.py` from the stage renders.
+
+- [From the air](images/aerial.png), and [a crop](images/aerial-crop.png): full detail, the old
+  cards, this branch's cards, and the volume prototype.
+- [From 90 m up](images/low.png): trees side on.
+- [Crossed cards](images/crossed.png): crossed cards alone shadow themselves (stage 2); with
+  measured self-shadowing (stage 3).
+
 ## Status
 
 **What the branch ships.** The renderer changes the measurements justified:

@@ -731,37 +731,75 @@ fn ocean_detail_span(o: &Ocean, ro: Vec3, rd: Vec3) -> Vec3 {
 }
 
 /// `Ocean::march`: the first crossing of the displaced surface from t0 to t1, from above or
-/// below, stepping no further than the surface could come to meet the ray, then bisecting;
-/// negative if there is none.
+/// below, stepping no further than the surface could come to meet the ray, then placing the
+/// crossing between the step's ends; negative if there is none.
 fn ocean_march(s: &Scene, o: &Ocean, ro: Vec3, rd: Vec3, t0: f32, t1: f32) -> f32 {
     let fade_rate = 1.5 / (0.5 * o.detail) * o.max_height;
-    let mut t = t0 + 1e-4;
-    let start = ocean_above(s, o, ro + rd * t);
-    let side = if start < 0.0 { -1.0 } else { 1.0 };
-    let mut f = start.abs();
+    // One loop, and one place the surface is asked for (each is the choppy map inverted and
+    // the tiles read, and rust-gpu makes a copy of all that wherever it is called): `x` is
+    // where to ask next, first for the side the ray starts on, then a step at a time, and
+    // once a step has crossed, between the two sides of the crossing.
+    let mut x = t0 + 1e-4;
+    let (mut t, mut f, mut side) = (x, 0.0, 1.0);
+    // The crossing's bracket, and how many times it has been narrowed (0 while marching).
+    let (mut lo, mut flo, mut hi, mut fhi) = (0.0, 0.0, 0.0, 0.0);
+    let mut narrowed = 0;
+    let mut started = false;
     let mut steps = 0;
-    while t < t1 && steps < OCEAN_STEPS {
-        let up = ocean_up(o, ro + rd * t);
-        let along = rd.dot(up);
-        let descent = (-side * along).max(0.0);
-        let horizontal = (1.0 - along * along).max(0.0).sqrt();
-        let rate = descent + horizontal * (o.max_slope + fade_rate) + 1e-6;
-        let step = (f / rate).max(0.01).min(t1 - t + 0.01);
-        let next = t + step;
-        let g = side * ocean_above(s, o, ro + rd * next);
-        if g <= 0.0 {
-            let (mut lo, mut hi) = (t, next);
-            let mut k = 0;
-            while k < 20 {
-                let mid = 0.5 * (lo + hi);
-                if side * ocean_above(s, o, ro + rd * mid) > 0.0 { lo = mid } else { hi = mid }
-                k += 1;
+    while steps < OCEAN_STEPS {
+        let above = ocean_above(s, o, ro + rd * x);
+        if !started {
+            started = true;
+            side = if above < 0.0 { -1.0 } else { 1.0 };
+            f = above.abs();
+        } else if narrowed == 0 {
+            let g = side * above;
+            if g <= 0.0 {
+                // Crossed between t and x.
+                lo = t;
+                flo = f;
+                hi = x;
+                fhi = g;
+                narrowed = 1;
+            } else {
+                t = x;
+                f = g;
+                steps += 1;
             }
-            return hi;
+        } else {
+            // By false position, the end that stays put weighing half as much each time
+            // (the Illinois rule, so neither end can stall): the surface is nearly straight
+            // across one step, and four askings place the crossing as twenty halvings did.
+            let g = side * above;
+            if g > 0.0 {
+                lo = x;
+                flo = g;
+                fhi *= 0.5;
+            } else {
+                hi = x;
+                fhi = g;
+                flo *= 0.5;
+            }
+            narrowed += 1;
         }
-        t = next;
-        f = g;
-        steps += 1;
+        if narrowed == 0 {
+            if t >= t1 {
+                break;
+            }
+            let up = ocean_up(o, ro + rd * t);
+            let along = rd.dot(up);
+            let descent = (-side * along).max(0.0);
+            let horizontal = (1.0 - along * along).max(0.0).sqrt();
+            let rate = descent + horizontal * (o.max_slope + fade_rate) + 1e-6;
+            let step = (f / rate).max(0.01).min(t1 - t + 0.01);
+            x = t + step;
+        } else {
+            let span = flo - fhi;
+            x = if span > 0.0 { (lo + (hi - lo) * flo / span).clamp(lo, hi) } else { hi };
+            if narrowed > 4 {
+                return x;
+            }
+        }
     }
     -1.0
 }

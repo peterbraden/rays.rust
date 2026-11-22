@@ -1043,13 +1043,23 @@ impl Ocean {
             let next = t + step;
             let g = side * self.above(&(r.ro + r.rd * next));
             if g <= 0. {
-                // Crossed: bisect.
-                let (mut lo, mut hi) = (t, next);
-                for _ in 0..24 {
-                    let mid = 0.5 * (lo + hi);
-                    if side * self.above(&(r.ro + r.rd * mid)) > 0. { lo = mid } else { hi = mid }
+                // Crossed between t and next. Placed by false position, the end that stays put
+                // weighing half as much each time (the Illinois rule, so neither end stalls):
+                // the surface is nearly straight across one step, and each asking is the
+                // choppy map inverted, so six of them, to a hundredth of a micrometre, where
+                // twenty-four halvings were a fifth of a render of the sea.
+                let (mut lo, mut flo, mut hi, mut fhi) = (t, f, next, g);
+                let between = |lo: f64, flo: f64, hi: f64, fhi: f64| if flo - fhi > 0. { (lo + (hi - lo) * flo / (flo - fhi)).clamp(lo, hi) } else { hi };
+                for _ in 0..6 {
+                    let x = between(lo, flo, hi, fhi);
+                    let v = side * self.above(&(r.ro + r.rd * x));
+                    if v > 0. {
+                        (lo, flo, fhi) = (x, v, fhi * 0.5);
+                    } else {
+                        (hi, fhi, flo) = (x, v, flo * 0.5);
+                    }
                 }
-                return Some(hi);
+                return Some(between(lo, flo, hi, fhi));
             }
             t = next;
             f = g;

@@ -2406,6 +2406,18 @@ sparse one's.
   map for 26%, the test still finding no cloud over it; benard-altocumulus and
   altocumulus-undulatus another sixth faster.
 
+And the sea's march: once a step crossed the surface the crossing was placed by twenty
+halvings (twenty-four in the renderer's), each asking for the surface, which is the choppy
+map inverted and eight tiles read: a fifth of a render of the sea. By false position with
+the Illinois rule instead, four askings (six in the renderer's f64), the surface being
+nearly straight across a step; and the kernel's march is one loop with one place the
+surface is asked for, where it had three (the shader 5% smaller). Against the renderer ray
+by ray as before (none of 4,000 disagree; distances to 8e-7 on average). ocean-1, 320 x
+200, 16 spp: 4.4 -> 3.8 s by the kernels, 5.3 -> 4.7 s by the path tracer; ocean-boat 1.9
+-> 1.1 s and 2.0 -> 1.2 s. What is left of the sea is the march's own steps, a hundred a
+ray, each bounded by the steepest slope anywhere: a map of the tiles' highest waves by
+area would let a ray skimming over them stride.
+
 ### GPU-ready by construction
 
 What a kernel can't hold is refused where the code is written, not when someone next builds

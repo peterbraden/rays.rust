@@ -316,5 +316,9 @@ cards.
 - [x] Stages 1 and 4 ([stage1.md](stage1.md), PR #172): merge a leaf's triangles exactly, and
       keep 16 NNLS-refitted representatives in place of a 32-leaf sample. Constituents about
       halved, error 1–2% (from 6–10%), peak 700 → 618 MiB, render −14%.
-- [ ] Stage 2 (SGGX lobes and palettes) and stage 3 (self-shadowing, against the residual).
+- [x] Side views and crossed cards ([stage2.md](stage2.md)): broadleaf cards miss 34–82% of
+      their leaves' hits from the side at L3+; crossed cards fix the hit rate but self-shadow
+      artificially and darken the image 13–23% (reverted). A cluster LOD must match both the
+      transmittance of rays entering it and of rays leaving it.
+- [ ] SGGX lobes and palettes; self-shadowing; a representation right for both transmittances.
 - [ ] Read what could not be fetched (see [log.md](log.md)).

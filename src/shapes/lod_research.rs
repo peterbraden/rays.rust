@@ -251,7 +251,7 @@ fn measure(leaves: &[Arc<Tagged<Triangle>>], size: f64, views: &[Vector3<f64>], 
             continue;
         }
         let members: Vec<&Tagged<Triangle>> = group.iter().map(|&i| &*leaves[i]).collect();
-        let made = card(&members);
+        let made: Vec<_> = card(&members).into_iter().collect();
         let Some(&(_, u, v)) = made.first() else { continue };
         t.planes += made.len();
         t.cards += 1;

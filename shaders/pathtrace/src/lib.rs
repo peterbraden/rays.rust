@@ -3279,6 +3279,8 @@ pub const PROBE_ALTOCUMULUS: u32 = 2;
 pub const PROBE_CIRRUS: u32 = 3;
 /// And of precipitation's, as a fraction of its greatest.
 pub const PROBE_RAIN: u32 = 4;
+/// And of mammatus's.
+pub const PROBE_MAMMATUS: u32 = 5;
 
 /// What `probe_clouds` computes for probe `i`: the density at a point (its w the weather),
 /// or, with `PROBE_RAYS`, the mean of `PROBE_ESTIMATES` estimates of the transmittance along the ray
@@ -3289,6 +3291,9 @@ pub fn probe(tables: &[f32], base: u32, i: u32, a: Vec4, b: Vec4, what: u32) -> 
     }
     if what == PROBE_CIRRUS {
         return load_cirrus(tables, base).fraction(&FloatTables(tables), a.x, a.y, a.z);
+    }
+    if what == PROBE_MAMMATUS {
+        return load_mammatus(tables, base).fraction(&FloatTables(tables), a.x, a.y, a.z);
     }
     if what == PROBE_RAIN {
         let rain = load_rain(tables, base);
@@ -3336,7 +3341,7 @@ pub fn probe_clouds(
 
 /// A medium's record in `tables` (the renderer's `gpu::media_records`), `MEDIUM_SIZE` floats:
 /// its kind; its box (least corner, greatest); its extinction (`MEDIUM_CONSTANT`) or the bits
-/// of where its cloud layer's record is (`MEDIUM_NUBIS`, `MEDIUM_BENARD`, `MEDIUM_CIRRUS`, `MEDIUM_RAIN`); the radius of the planet it curves
+/// of where its cloud layer's record is (`MEDIUM_NUBIS`, `MEDIUM_BENARD`, `MEDIUM_CIRRUS`, `MEDIUM_RAIN`, `MEDIUM_MAMMATUS`); the radius of the planet it curves
 /// round, or 0 where it is flat; the factor on every medium's density for segments of a path
 /// that last scattered here, and on its own for one that has left a surface (delta-M
 /// truncation: the renderer's `Volume::truncated`); a lower bound on its extinction; its phase
@@ -3366,6 +3371,7 @@ pub const MEDIUM_NUBIS: u32 = 1;
 pub const MEDIUM_BENARD: u32 = 2;
 pub const MEDIUM_CIRRUS: u32 = 3;
 pub const MEDIUM_RAIN: u32 = 4;
+pub const MEDIUM_MAMMATUS: u32 = 5;
 pub const PHASE_HENYEY_GREENSTEIN: u32 = 0;
 pub const PHASE_DROPLETS: u32 = 1;
 
@@ -3435,6 +3441,27 @@ pub fn load_rain(tables: &[f32], base: u32) -> shared::rain::Rain<f32> {
     }
 }
 
+/// Mammatus's record in a table (`shared::mammatus::Mammatus`; the renderer's
+/// `Mammatus::export`): its recipe's 29 numbers in their fields' order and its seed's bits;
+/// then the permutation of its noise (512 entries).
+pub const MAMMATUS_HEADER: u32 = 30;
+
+/// The mammatus whose record begins at `base`.
+pub fn load_mammatus(tables: &[f32], base: u32) -> shared::mammatus::Mammatus<f32> {
+    shared::mammatus::Mammatus {
+        base: at(tables, base), thickness: at(tables, base + 1), base_variation: at(tables, base + 2), base_size: at(tables, base + 3),
+        sag: at(tables, base + 4), sag_distance: at(tables, base + 5), base_softness: at(tables, base + 6),
+        top_variation: at(tables, base + 7), anvil_density: at(tables, base + 8), pouch_density: at(tables, base + 9),
+        pouch_size: at(tables, base + 10), pouch_depth: at(tables, base + 11), coverage: at(tables, base + 12),
+        regularity: at(tables, base + 13), clustering: at(tables, base + 14), cluster_size: at(tables, base + 15),
+        edge_sharpness: at(tables, base + 16), roughness: at(tables, base + 17), detail_size: at(tables, base + 18),
+        edge_direction: (at(tables, base + 19), at(tables, base + 20)), edge_distance: at(tables, base + 21),
+        edge_raggedness: at(tables, base + 22), edge_taper: at(tables, base + 23), center: (at(tables, base + 24), at(tables, base + 25)),
+        extent: at(tables, base + 26), fade: at(tables, base + 27), pouch_band: at(tables, base + 28),
+        seed: at(tables, base + 29).to_bits(), perm: base + MAMMATUS_HEADER,
+    }
+}
+
 /// A medium as the shared walks take one.
 pub struct KernelMedium<'a> {
     pub tables: FloatTables<'a>,
@@ -3445,6 +3472,7 @@ pub struct KernelMedium<'a> {
     pub benard: shared::altocumulus::Benard<f32>,
     pub cirrus: shared::cirrus::Cirrus<f32>,
     pub rain: shared::rain::Rain<f32>,
+    pub mammatus: shared::mammatus::Mammatus<f32>,
 }
 
 /// A medium's cloud layer in its own flat coordinates, of whichever kind: so that what is
@@ -3456,6 +3484,7 @@ struct KernelLayer<'a> {
     benard: &'a shared::altocumulus::Benard<f32>,
     cirrus: &'a shared::cirrus::Cirrus<f32>,
     rain: &'a shared::rain::Rain<f32>,
+    mammatus: &'a shared::mammatus::Mammatus<f32>,
 }
 
 impl shared::media::Medium<f32> for KernelLayer<'_> {
@@ -3466,13 +3495,15 @@ impl shared::media::Medium<f32> for KernelLayer<'_> {
             self.cirrus.max_density * self.cirrus.fraction(self.tables, x, y, z)
         } else if self.kind == MEDIUM_RAIN {
             self.rain.density(self.tables, x, y, z)
+        } else if self.kind == MEDIUM_MAMMATUS {
+            self.mammatus.density(self.tables, x, y, z)
         } else {
             self.nubis.density(self.tables, x, y, z)
         }
     }
 
     fn bound(&self) -> f32 {
-        if self.kind == MEDIUM_BENARD { self.benard.max_density } else if self.kind == MEDIUM_CIRRUS { self.cirrus.max_density } else if self.kind == MEDIUM_RAIN { self.rain.peak_extinction() } else { self.nubis.max_density }
+        if self.kind == MEDIUM_BENARD { self.benard.max_density } else if self.kind == MEDIUM_CIRRUS { self.cirrus.max_density } else if self.kind == MEDIUM_RAIN { self.rain.peak_extinction() } else if self.kind == MEDIUM_MAMMATUS { self.mammatus.bound() } else { self.nubis.max_density }
     }
 
     fn majorant_from(&self, x: f32, y: f32, z: f32, dx: f32, dy: f32, dz: f32) -> (f32, f32) {
@@ -3482,6 +3513,8 @@ impl shared::media::Medium<f32> for KernelLayer<'_> {
             self.cirrus.majorant_from(y, dy)
         } else if self.kind == MEDIUM_RAIN {
             self.rain.majorant_from(y, dy)
+        } else if self.kind == MEDIUM_MAMMATUS {
+            self.mammatus.majorant_from(x, y, z, dx, dy, dz)
         } else {
             self.nubis.majorant_from(self.tables, x, y, z, dx, dy, dz)
         }
@@ -3490,7 +3523,7 @@ impl shared::media::Medium<f32> for KernelLayer<'_> {
 
 impl<'a> KernelMedium<'a> {
     fn layer(&'a self) -> KernelLayer<'a> {
-        KernelLayer { tables: &self.tables, kind: self.kind, nubis: &self.nubis, benard: &self.benard, cirrus: &self.cirrus, rain: &self.rain }
+        KernelLayer { tables: &self.tables, kind: self.kind, nubis: &self.nubis, benard: &self.benard, cirrus: &self.cirrus, rain: &self.rain, mammatus: &self.mammatus }
     }
 }
 
@@ -3532,6 +3565,7 @@ pub fn load_medium(tables: &[f32], base: u32) -> KernelMedium<'_> {
         benard: load_benard(tables, if kind == MEDIUM_BENARD { record } else { base }),
         cirrus: load_cirrus(tables, if kind == MEDIUM_CIRRUS { record } else { base }),
         rain: load_rain(tables, if kind == MEDIUM_RAIN { record } else { base }),
+        mammatus: load_mammatus(tables, if kind == MEDIUM_MAMMATUS { record } else { base }),
     }
 }
 

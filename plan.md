@@ -2341,6 +2341,10 @@ Not done, and why:
   `media_transmittance` are called from a second place, and rust-gpu inlines both, so the
   WGSL grew from 4.7 to 6.4 MB. One call site again would mean the shadow sample waiting
   for the vertex's light loop, which a ray that escapes never reaches.)
+- (Done since: mammatus, in `shared::mammatus`, the same bits in the renderer. Each kind of
+  cloud is compiled into a kernel wherever it walks media, and there are four such places
+  (the collision, the shadow rays of a vertex and of the crepuscular sample, the probe), so
+  the WGSL is 7.8 MB with six kinds: the walks want one call site a kernel.)
 - Media through the host in the wavefront's rounds (the rest of step 3), and with them the
   thread-locals. Judged not worth doing as such: a scene with a medium the kernels lack is
   rendered a path at a time by the scene's own code under the same driver now, and the

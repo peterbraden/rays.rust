@@ -563,6 +563,8 @@ pub enum FieldExport {
     Cirrus { record: Vec<f32>, radius: f64 },
     /// Precipitation's record (`Precipitation::export`), likewise.
     Rain { record: Vec<f32>, radius: f64 },
+    /// Mammatus's record (`Mammatus::export`), likewise.
+    Mammatus { record: Vec<f32>, radius: f64 },
 }
 
 impl FieldExport {
@@ -585,6 +587,12 @@ impl FieldExport {
             },
             // (Its extinction isn't a multiple of anything in its record.)
             FieldExport::Rain { .. } => return None,
+            FieldExport::Mammatus { mut record, radius } => {
+                // The anvil's density and the pouches'.
+                record[8] *= by as f32;
+                record[9] *= by as f32;
+                FieldExport::Mammatus { record, radius }
+            },
         })
     }
 }

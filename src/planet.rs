@@ -84,6 +84,7 @@ impl DensityField for PlanetMapping {
         use crate::volume::FieldExport;
         match self.field.export()? {
             FieldExport::Nubis { record, radius } if radius == 0. => Some(FieldExport::Nubis { record, radius: self.planet.radius }),
+            FieldExport::Benard { record, radius } if radius == 0. => Some(FieldExport::Benard { record, radius: self.planet.radius }),
             _ => None,
         }
     }

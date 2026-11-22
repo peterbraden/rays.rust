@@ -143,8 +143,9 @@ alias nor blur:
 
 ## Wavefront rendering
 
-After PBRT's chapter 15, `"integrator": "wavefront"` (or `--wavefront`) renders with a
-wavefront path tracer: every path of a pass in a queue, advanced a stage at a time (camera
+After PBRT's chapter 15, scenes render with a wavefront path tracer where they can (on a
+GPU if the build has one, else on the CPU; `--path-tracer` or `"integrator": "path"` for
+the recursive path tracer, `--wavefront` to keep to the CPU): every path of a pass in a queue, advanced a stage at a time (camera
 rays, intersection, emission, shading sorted by material, shadow rays) over the scene
 flattened into arrays of triangles and spheres with a material table: the structure a GPU
 renderer needs. It covers spheres, triangles, meshes, boxes, quads, planes and their
@@ -155,7 +156,8 @@ tracer's (on `demo.json` at 512 samples, mean FLIP 0.0016 against seed-to-seed 0
 about 1.2 to 1.4 times its time on the CPU.
 
 The same flattened scene renders on a GPU, through wgpu (Metal, Vulkan or DirectX 12), with
-`--gpu` (or `"integrator": "gpu"`) in a build with the `gpu` feature:
+in a build with the `gpu` feature (`--gpu`, or `"integrator": "gpu"`, to use a software
+adapter too):
 
 ```
 cargo run --release --features gpu -- demo/scenes/spheres.json --gpu

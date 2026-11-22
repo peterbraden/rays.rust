@@ -27,6 +27,18 @@ use crate::scene::Scene;
 ///  PBRT uses:
 ///  - eta - the difference in refractive index of the interaction, default 1
 ///
+/// The sea's water as data, for the GPU's kernel of it (`pathtrace::MAT_WATER`): what the water
+/// body sends back, and what bubbles under a breaking crest add to that; the ripples' mean
+/// square slope; the planet's radius (0 for a flat sea); and its foam's record
+/// (`ocean::Foam::export`), if the wind raises any.
+pub struct Water {
+    pub body: Color,
+    pub bubbles: Color,
+    pub roughness: f64,
+    pub radius: f64,
+    pub foam: Option<Vec<f32>>,
+}
+
 pub trait MaterialModel: Sync{
     /// Scatter an intersection ray.
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay;
@@ -56,9 +68,8 @@ pub trait MaterialModel: Sync{
     fn flat(&self) -> Option<crate::wavefront::flat::FlatMaterial> { None }
 
     /// The sea's water, if this is its material and the GPU's kernel for it does all this one
-    /// does (opaque water): what the water body sends back, the ripples' mean square slope,
-    /// and the planet's radius (0 for a flat sea). See `ocean::PhysicalOcean`.
-    fn water(&self) -> Option<(Color, f64, f64)> { None }
+    /// does (opaque water). See `ocean::PhysicalOcean`.
+    fn water(&self) -> Option<Water> { None }
     /// A medium's scattering, if that is what this is (`volume::Volume::flat`).
     fn medium(&self) -> Option<&crate::volume::VolumeMaterial> { None }
 

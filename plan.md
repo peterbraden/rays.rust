@@ -2365,6 +2365,19 @@ Not done, and why:
   which looked the same case (0.0957 against 0.0690 at 16 spp), isn't: it has the Oz
   approximation, whose sun no probe finds. Both scenes have a sea, and the kernels send no
   glitter probes: the next suspect.)
+- (Done since: glitter probes, which were the cause: without their sea the two scenes'
+  noise is the path tracer's on the kernels (benard 0.0463 against 0.0458, mammatus 0.0338
+  against 0.0346). With them: mammatus at 16 spp FLIP 0.0957 -> 0.0721 (the path tracer
+  0.0690), benard-altocumulus at 32 spp 0.0581 -> 0.0509 (0.0479). mammatus then read 5%
+  redder on the kernels than by `trace`. Twelve seeds each didn't settle it (the means are
+  a few pixels' fireflies); the mean without each render's three brightest pixels did, to
+  half a percent a seed: probes on or off changed the kernels' by 4% and the path tracer's
+  by nothing. Counting what each tracer's probes found: sent and reaching the sea alike,
+  lit 4.4% of the kernels' and 3.4% of the path tracer's, whose probe took the glint at the
+  hit as found, on the surface, where an ordinary vertex is moved off it first: under a low
+  sun the shadow ray met the sea it left. `VolumeMaterial::glitter_probe` now offsets it,
+  and the two agree to 0.3%. A lesson for these comparisons: when two unbiased estimators
+  disagree, the newer one isn't the suspect by default.)
 - Media through the host in the wavefront's rounds (the rest of step 3), and with them the
   thread-locals. Judged not worth doing as such: a scene with a medium the kernels lack is
   rendered a path at a time by the scene's own code under the same driver now, and the

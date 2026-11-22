@@ -1297,6 +1297,11 @@ impl VolumeMaterial {
         let found = s.objects.nearest_intersection(&probe, f64::INFINITY, 0.);
         let mis = chromatic::side_weight(found.as_ref().map(|h| h.dist));
         let Some(hit) = found else { return Color::black() };
+        // Off the surface, as a vertex there would be shaded (`trace::trace_intersection`): its
+        // shadow ray to the sun starts from the point, and from the surface itself a low sun's
+        // meets the sea it left.
+        let bias = s.render.shadow_bias.max(hit.spawn_offset());
+        let hit = Intersection { point: hit.point + hit.facing_normal(&probe) * bias, ..hit };
         let Some(glint) = hit.object.medium.material_at(hit.point).sun_glint(&probe, &hit, s) else { return Color::black() };
         let air = match &s.atmosphere {
             Some(sky) if hit.dist > crate::trace::AERIAL_PERSPECTIVE_FROM => Color { rgb: sky.segment(point, &d, hit.dist).0 },

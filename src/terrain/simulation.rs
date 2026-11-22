@@ -17,7 +17,8 @@
 //!    (`orographic`: discharge, not area, drives the rivers; glaciers' snow follows it too), then river erosion and deposition on
 //!    ice-free ground (`flow`, `fluvial`);
 //! 5. deltas: what rivers bring to the sea spreads over the sea floor (`marine`);
-//! 6. landslides where slopes are steeper than their rock holds (`fluvial::landslide`), and
+//! 6. limestone dissolving (`dissolve`; its rain also sinks, to rise at springs, in routing),
+//!    landslides where slopes are steeper than their rock holds (`fluvial::landslide`), and
 //!    hillslope diffusion (`fluvial`), faster on weak rock and sediment;
 //! 7. meandering rivers, a sub-grid model drawn over the terrain (`channel`);
 //! 8. the crust's isostatic response to what erosion, deposition and ice have changed of its
@@ -369,7 +370,51 @@ impl Terrain {
     }
 
     fn route(&self) -> Flow {
-        route(&self.domain, &self.surface(), &self.outlets(), &self.rain_factor())
+        let rain = self.rain_factor();
+        let mut flow = route(&self.domain, &self.surface(), &self.outlets(), &rain);
+        let g = &self.params.planet.geology;
+        if g.infiltration > 0. && g.karst_rate >= 0. {
+            // Rain on exposed limestone sinks, follows the drainage underground, and comes up
+            // at the first cell downstream that isn't limestone: the rivers' discharge is only
+            // what runs over the surface.
+            let karst: Vec<bool> = (0..self.domain.len()).map(|i| self.ice[i] < ICE_FREE && self.rock(i) == Rock::Limestone).collect();
+            if karst.iter().any(|&k| k) {
+                let sinks = g.infiltration.clamp(0., 1.);
+                let mut surface = vec![0.; self.domain.len()];
+                let mut under = vec![0.; self.domain.len()];
+                for &i in flow.stack.iter().rev() {
+                    let water = rain[i] * self.domain.area[i];
+                    let r = flow.receiver[i];
+                    // (At an outlet, what is underground comes up too: it leaves the patch.)
+                    if karst[i] && r != i {
+                        surface[i] += water * (1. - sinks);
+                        under[i] += water * sinks;
+                    } else {
+                        surface[i] += water + under[i];
+                        under[i] = 0.;
+                    }
+                    if r != i {
+                        surface[r] += surface[i];
+                        under[r] += under[i];
+                    }
+                }
+                flow.area = surface;
+            }
+        }
+        flow
+    }
+
+    /// Lower exposed limestone by solution for `dt` years, in proportion to the rain; the rock
+    /// leaves in solution, not as sediment.
+    fn dissolve(&mut self, fixed: &[bool], dt: f64) {
+        let rate = self.params.planet.geology.karst_rate;
+        if rate <= 0. { return; }
+        let before = self.bed.clone();
+        for i in 0..self.domain.len() {
+            if fixed[i] || self.ice[i] >= ICE_FREE || self.rock(i) != Rock::Limestone { continue; }
+            self.bed[i] -= rate * self.precipitation[i] / 1000. * dt;
+        }
+        self.record(&before);
     }
 
     /// Advance to time `t` (no earlier than now).
@@ -432,6 +477,7 @@ impl Terrain {
             self.record(&before);
         }
         self.slide(&fixed, LANDSLIDE_PASSES, 1);
+        self.dissolve(&fixed, dt);
 
         // Soil creeps faster on weak rock, which weathers faster, and on loose sediment: slopes
         // on shale relax while hard beds hold cliffs.
@@ -848,6 +894,32 @@ mod tests {
             mean(&|p| ((p.0 - ma) - (p.1 - mb)).powi(2))
         };
         assert!(misfit(t.shifted.0, t.shifted.1) < misfit(0, 0), "{} vs {}", misfit(t.shifted.0, t.shifted.1), misfit(0, 0));
+    }
+
+    #[test]
+    fn test_rain_on_limestone_sinks_and_rises_at_springs() {
+        let t = small(2);
+        let karst: Vec<usize> = (0..t.domain.len()).filter(|&i| t.rock(i) == Rock::Limestone && t.ice[i] < ICE_FREE).collect();
+        assert!(!karst.is_empty());
+        let flow = t.route();
+        let plain = route(&t.domain, &t.surface(), &t.outlets(), &t.rain_factor());
+        // All the water still leaves through the outlets.
+        let out = |f: &Flow| (0..t.domain.len()).filter(|&i| f.receiver[i] == i).map(|i| f.area[i]).sum::<f64>();
+        assert!((out(&flow) - out(&plain)).abs() < 1e-6 * out(&plain), "{} vs {}", out(&flow), out(&plain));
+        // But less of it runs over the limestone: at the heads of its valleys, only what
+        // doesn't sink (rivers coming onto it from elsewhere keep their water).
+        let heads: Vec<usize> = karst.iter().copied().filter(|&i| !t.outlets()[i] && (0..t.domain.len()).all(|j| plain.receiver[j] != i || j == i)).collect();
+        assert!(!heads.is_empty());
+        let keep = 1. - t.params.planet.geology.infiltration;
+        for &i in &heads { assert!((flow.area[i] - keep * plain.area[i]).abs() < 1e-6 * plain.area[i]); }
+        // And exposed limestone, alone, is lowered by solution.
+        let mut d = small(2);
+        let before = d.bed.clone();
+        let fixed = d.outlets();
+        d.dissolve(&fixed, 1000.);
+        for i in 0..d.domain.len() {
+            if karst.contains(&i) && !fixed[i] { assert!(d.bed[i] < before[i]); } else { assert_eq!(d.bed[i], before[i]); }
+        }
     }
 
     #[test]

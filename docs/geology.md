@@ -61,6 +61,13 @@ Glaciers erode only where their bed is at the melting point: thin ice on cold su
 plateaus freezes to its bed and protects it, while thick, warm-based valley glaciers dig
 troughs between (`glacier`'s "Frozen beds").
 
+Limestone dissolves. Exposed, it is lowered in proportion to the rain (`karst_rate`, 40 mm a
+thousand years per metre of annual rain), the rock leaving in solution; and most of the rain
+on it sinks underground (`infiltration`, 70%), follows the drainage beneath the limestone and
+rises at springs where the limestone ends. Limestone uplands lose their surface streams
+(dry valleys), while the rivers below still get the water. So limestone stands as plateaus
+in dry climates and is worn down in wet ones.
+
 So the same mountains erode differently under the two processes. Rivers leave quartzite and
 basalt standing as ridges and cut valleys along the shale. Glaciers dig into quartzite, basalt
 and schist, and leave granite as domes.
@@ -128,7 +135,7 @@ simulation sees only the broad structure, and the nested patches add the folds.
 ```
 
 - `geology`: `strata_thickness` (600 m), `contrast` (5), `fold_amplitude` (1500 m),
-  `fold_wavelength` (8000 m), `fold_relief` (0.5), `fold_growth` (0.5), `fold_vergence` (0.6), `thrust_throw` (800 m), `fracturing` (1.5), `slope_strength` (1), `shortening_rate` (0.005 m/yr), `warp_amplitude`
+  `fold_wavelength` (8000 m), `fold_relief` (0.5), `fold_growth` (0.5), `fold_vergence` (0.6), `thrust_throw` (800 m), `fracturing` (1.5), `slope_strength` (1), `shortening_rate` (0.005 m/yr), `karst_rate` (4e-5), `infiltration` (0.7), `warp_amplitude`
   (400 m), `cover_thickness` (3000 m), `exhumation` (4000 m), `plutons` (1; 0 for none). The
   older top-level `strata_thickness`, `strata_contrast` and `fold_amplitude` are still read.
 - `sediment_erodibility` (3), `lava_erodibility` (0.3): to rivers; `sediment_glacial_erodibility`
@@ -147,5 +154,5 @@ plates converge obliquely, real belts mostly partition the motion between strike
 and shortening across the belt, so folds run along the belt anyway, as here); thrusts offset
 the strata but don't stand as scarps at time zero; fracturing comes only from the folds and
 thrusts (not from unloading, cooling or weathering);
-there is no karst, and no soil whose depth limits how fast the rock beneath it weathers (at a
+karst is only solution and sinking streams (no caves, dolines or collapse), and there is no soil whose depth limits how fast the rock beneath it weathers (at a
 simulation's cell sizes, creep is far slower than bare rock weathers, so it would rarely bind).

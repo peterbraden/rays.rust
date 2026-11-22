@@ -108,6 +108,14 @@
 //! folds and ground with it, through the belt's uplift, which stays where it is: over a few
 //! million years, further than a fold's wavelength (see `Terrain`'s displacement).
 //!
+//! Limestone dissolves (karst): exposed, it is lowered in proportion to the rain, the rock
+//! leaving in solution (`karst_rate`: 40 mm a thousand years per metre of annual rain, within
+//! the measured range of carbonate denudation, tens of mm a thousand years in humid climates,
+//! as Ford and Williams, "Karst Hydrogeology and Geomorphology", 2007, review), and most of the
+//! rain on it sinks underground (`infiltration`), to come up again at springs where the
+//! limestone ends, so limestone uplands have dry valleys while the water still reaches the
+//! rivers below (`Terrain`'s routing).
+//!
 //! Folding shapes the landscape three ways:
 //!
 //! 1. **Initial relief**: a share (`fold_relief`) of the structural relief is topography at
@@ -159,6 +167,12 @@ pub struct GeologyParams {
     /// thrust sheets, with their folds and their ground, moving through the belt's uplift
     /// (`Terrain`'s displacement; patches only).
     pub shortening_rate: f64,
+    /// Lowering of exposed limestone by solution, metres per metre of annual rain (so m/yr for
+    /// 1 m/yr of rain); 0 for no karst.
+    pub karst_rate: f64,
+    /// Share of the rain on exposed limestone that sinks underground, to come up again at
+    /// springs where the limestone ends.
+    pub infiltration: f64,
     /// Gentle undulation of the strata everywhere, metres.
     pub warp_amplitude: f64,
     /// Typical thickness of the sedimentary cover over the basement, metres.
@@ -174,7 +188,7 @@ impl Default for GeologyParams {
     fn default() -> GeologyParams {
         GeologyParams {
             strata_thickness: 600., contrast: 5., fold_amplitude: 1500., fold_wavelength: 8000.,
-            fold_relief: 0.5, fold_growth: 0.5, fold_vergence: 0.6, thrust_throw: 800., fracturing: 1.5, slope_strength: 1., shortening_rate: 0.005, warp_amplitude: 400., cover_thickness: 3000.,
+            fold_relief: 0.5, fold_growth: 0.5, fold_vergence: 0.6, thrust_throw: 800., fracturing: 1.5, slope_strength: 1., shortening_rate: 0.005, karst_rate: 4e-5, infiltration: 0.7, warp_amplitude: 400., cover_thickness: 3000.,
             exhumation: 4000., plutons: 1.,
         }
     }

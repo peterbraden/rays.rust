@@ -2374,6 +2374,8 @@
             {"name": "fracturing", "kind": "number", "default": 1.5, "doc": "Extra glacial erodibility of the most fractured rock (crests, thrust zones); rivers feel a third.", "min": 0},
             {"name": "slope_strength", "kind": "number", "default": 1, "doc": "Scales the steepest slope each rock stands at before landslides; 0 for none.", "min": 0},
             {"name": "shortening_rate", "kind": "number", "default": 0.005, "doc": "How fast the strongest belts carry their rock and folds towards the foreland, m/yr (patches)."},
+            {"name": "karst_rate", "kind": "number", "default": 4e-05, "doc": "Lowering of exposed limestone by solution, m per m of annual rain; 0 for no karst.", "min": 0},
+            {"name": "infiltration", "kind": "number", "default": 0.7, "doc": "Share of rain on limestone sinking underground, to rise at springs below it.", "min": 0, "max": 1},
             {"name": "warp_amplitude", "kind": "number", "default": 400, "doc": "Gentle undulation of the strata everywhere, m."},
             {"name": "cover_thickness", "kind": "number", "default": 3000, "doc": "Typical thickness of the sedimentary cover over the basement, m."},
             {"name": "exhumation", "kind": "number", "default": 4000, "doc": "How far the basement was raised in the strongest belts before time zero, m."},

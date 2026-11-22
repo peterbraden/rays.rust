@@ -143,6 +143,11 @@ const LANDSLIDE_PASSES: usize = 30;
 /// ... and at time zero, to relax the noise topography to what its rock holds.
 const INITIAL_LANDSLIDE_PASSES: usize = 2000;
 const INITIAL_LANDSLIDE_ROUNDS: usize = 20;
+/// The cell spacing the rocks' critical slopes are for, metres...
+const LANDSLIDE_SPACING: f64 = 300.;
+/// ... and how they steepen on finer grids: a model choice for the mild scale dependence of
+/// slopes measured over different distances.
+const LANDSLIDE_SCALING: f64 = 0.2;
 /// Slopes may exceed their limit by this, metres over a link, before they fail.
 const LANDSLIDE_TOLERANCE: f64 = 0.1;
 
@@ -471,9 +476,14 @@ impl Terrain {
     }
 
     /// The steepest slope cell `i` stands at before failing, rise over run: its rock's, less
-    /// where folding fractured it.
+    /// where folding fractured it, for this domain's cells. Slopes measured over longer
+    /// distances are gentler, as they average cliffs with the benches between them, so the
+    /// rocks' limits (for cells of `LANDSLIDE_SPACING`) are steeper on finer grids and gentler on
+    /// coarser, as (`LANDSLIDE_SPACING` / spacing)^`LANDSLIDE_SCALING`; then nested patches of
+    /// different spacings agree roughly on how steep the ground stands.
     pub fn critical_slope(&self, i: usize) -> f64 {
-        self.rock(i).critical_slope() / (1. + 0.3 * self.structure[i].fracture)
+        let scale = (LANDSLIDE_SPACING / self.domain.min_spacing()).powf(LANDSLIDE_SCALING);
+        scale * self.rock(i).critical_slope() / (1. + 0.3 * self.structure[i].fracture)
     }
 
     /// Carry the rock towards the foreland for `dt` years (`velocity`): the ground moves by

@@ -53,7 +53,9 @@ debris lies as sediment at their feet (`fluvial::landslide`). Ice holds up the w
 carves, so they don't fail while it is there; when it melts, walls in weak rock fall in, and
 only strong rock keeps the steep sides of glacial troughs. At time zero the noise topography is
 relaxed to what its rock holds before anything else happens. `slope_strength` scales every
-limit (0 for no landslides).
+limit (0 for no landslides). The limits are for cells of 300 m; as slopes measured over
+longer distances are gentler, they are steeper on finer grids and gentler on coarser, as
+(300 m / spacing)^0.2, so nested patches agree roughly on how steep the ground stands.
 
 Glaciers erode only where their bed is at the melting point: thin ice on cold summits and
 plateaus freezes to its bed and protects it, while thick, warm-based valley glaciers dig

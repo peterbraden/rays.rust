@@ -114,6 +114,14 @@ the self-shadowing a card can't keep, though that may account for some of what i
 remains, a little darker near the camera, where levels are finest, may be the cards' coverage
 seen from grazing directions, beyond the hemisphere's average.
 
+From low down the cards fare worse. With the same forest seen from 90 m up (trees mostly side
+on, 32 spp), the old cards were 7–8% too bright at mid range and these are 3–6% too dark (mean
+FLIP 0.0313 before and 0.0296 after). Broadleaf crowns' leaves face mostly up, and so do their
+cards, so from the side a card is hit a fifth to two thirds as often as its leaves at the coarser
+levels. Crossed cards fitted to the leaves' coverage make up the hits, but darken the forest
+further: a ray leaving one of a cluster's cards meets its others, far more often than leaves
+shade one another.
+
 ## Memory
 
 A ray tracer keeps every tree it may hit for the whole render, so what's kept must be small:

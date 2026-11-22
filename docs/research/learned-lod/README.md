@@ -336,6 +336,8 @@ branch's history (commits `ac51d87` to `f56d824`) and written up in their notes,
       quality hangs on how far a ray counts as leaving a cluster; crossed cards over-shadow rays
       starting anywhere near them, since clumping reaches across a crown. Transmittance has to
       depend on distance from a ray's origin: the principled route is a non-exponential volume.
-- [ ] A volume at coarse levels with distance-dependent (non-exponential) transmittance measured
-      per cluster; SGGX lobes and palettes.
+- [x] Transmittance in a crown, measured ([stage5.md](stage5.md)): `T_c` (from a leaf) is heavy
+      tailed and not predicted from `T_u` by the reciprocal non-exponential relation (errors
+      0.20–0.42); a gamma law fitted to each separately fits within about 0.01.
+- [ ] A crown volume at coarse levels with the two measured laws; SGGX lobes and palettes.
 - [ ] Read what could not be fetched (see [log.md](log.md)).

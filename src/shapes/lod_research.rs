@@ -460,3 +460,187 @@ fn lod_research() {
     std::fs::write(&out, csv).unwrap();
     println!("written to {out}");
 }
+
+/// The distance along `r` (direction of unit length) at which it enters and leaves the box `b`,
+/// if it meets it.
+fn slab(b: &BBox, r: &Ray) -> Option<(f64, f64)> {
+    let (mut near, mut far) = (f64::NEG_INFINITY, f64::INFINITY);
+    for k in 0 .. 3 {
+        let (lo, hi) = ((b.min[k] - r.ro[k]) / r.rd[k], (b.max[k] - r.ro[k]) / r.rd[k]);
+        near = near.max(lo.min(hi));
+        far = far.min(lo.max(hi));
+    }
+    (near <= far && far > 0.).then_some((near.max(0.), far))
+}
+
+/// The Kaplan-Meier estimate of the chance of a free path longer than each of `at`, from free
+/// paths `(length, ended)`: those that left the crown first are censored, not ended.
+fn survival(mut paths: Vec<(f64, bool)>, at: &[f64]) -> Vec<f64> {
+    paths.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut at_risk = paths.len() as f64;
+    let (mut s, mut k) = (1., 0);
+    let mut out = vec![];
+    for &t in at {
+        while k < paths.len() && paths[k].0 <= t {
+            if paths[k].1 {
+                s *= 1. - 1. / at_risk;
+            }
+            at_risk -= 1.;
+            k += 1;
+        }
+        out.push(s);
+    }
+    out
+}
+
+/// Transmittance in a tree's crown, for docs/research/learned-lod (stage 5): the chance of a
+/// free path longer than `s` for rays entering the crown's box from outside (`T_u`) and for
+/// rays leaving a point on a leaf (`T_c`), each by Kaplan-Meier over a few thousand rays. The
+/// gamma law of Jarabo et al. 2018, `T_u = (1 + s/λ)^-α`, is fitted to `T_u`, and with it
+/// `T_c = T_u'(s)/T_u'(0) = (1 + s/λ)^-(α+1)` predicted (d'Eon 2018; Bitterli et al. 2018);
+/// an exponential fit predicts `T_c = T_u`. Run by hand:
+///
+///     cargo test --release --lib lod_transmittance -- --ignored --nocapture
+#[test]
+#[ignore]
+fn lod_transmittance() {
+    let species = ["quaking-aspen", "california-black-oak", "weeping-willow", "scots-pine", "norway-spruce", "hazel"];
+    let mut csv = String::from("species,lambda,alpha,mu,rms_gamma_u,rms_exp_u,rms_gamma_c,rms_exp_c,rms_gamma_c_refit\n");
+    for name in species {
+        let mesh = tree::generate(&tree::species(name).unwrap(), 1, Vector3::zeros());
+        let leaves = GeometrySet::new(&mesh.leaves);
+        let b = leaves.bounds();
+        let size = (b.max - b.min).norm();
+        let mut rng = Pcg32::new(17, 1);
+        let unit = |rng: &mut Pcg32| {
+            let z = 2. * rng.next_f64() - 1.;
+            let phi = 2. * std::f64::consts::PI * rng.next_f64();
+            let r = (1. - z * z).sqrt();
+            Vector3::new(r * phi.cos(), z, r * phi.sin())
+        };
+        let rays = 20000;
+        // Entering: aimed at a point uniform in the box, from far outside.
+        let mut entering = vec![];
+        for _ in 0 .. rays {
+            let d = unit(&mut rng);
+            let q = b.min.coords + (b.max - b.min).component_mul(&Vector3::new(rng.next_f64(), rng.next_f64(), rng.next_f64()));
+            let r = Ray { ro: q - d * (2. * size), rd: d };
+            let Some((t0, t1)) = slab(&b, &r) else { continue };
+            match leaves.intersects(&r) {
+                Some(h) if h.dist < t1 => entering.push((h.dist - t0, true)),
+                _ => entering.push((t1 - t0, false)),
+            }
+        }
+        // From points uncorrelated with the leaves, uniform in the box, every way: the
+        // uncorrelated-origin transmittance of the theory (for a medium as uniform as the box).
+        let mut within = vec![];
+        for _ in 0 .. rays {
+            let d = unit(&mut rng);
+            let p = b.min.coords + (b.max - b.min).component_mul(&Vector3::new(rng.next_f64(), rng.next_f64(), rng.next_f64()));
+            let r = Ray { ro: p, rd: d };
+            let exit = slab(&b, &r).map_or(0., |(_, t1)| t1);
+            match leaves.intersects(&r) {
+                Some(h) if h.dist < exit => within.push((h.dist, true)),
+                _ => within.push((exit, false)),
+            }
+        }
+        // Leaving: from a point on a leaf, drawn by area, every way.
+        let areas: Vec<f64> = mesh.leaves.iter().map(|t| area(&t.item)).collect();
+        let total: f64 = areas.iter().sum();
+        let mut leaving = vec![];
+        let mut others = vec![];
+        for _ in 0 .. rays {
+            let mut left = rng.next_f64() * total;
+            let k = areas.iter().position(|a| { left -= a; left < 0. }).unwrap_or(areas.len() - 1);
+            let t = &mesh.leaves[k].item;
+            let (mut u, mut v) = (rng.next_f64(), rng.next_f64());
+            if u + v > 1. {
+                u = 1. - u;
+                v = 1. - v;
+            }
+            let p = t.v0 + (t.v1 - t.v0) * u + (t.v2 - t.v0) * v;
+            let d = unit(&mut rng);
+            let r = Ray { ro: p + d * (1e-6 * size), rd: d };
+            let exit = slab(&b, &r).map_or(0., |(_, t1)| t1);
+            match leaves.intersects(&r) {
+                Some(h) if h.dist < exit => leaving.push((h.dist, true)),
+                _ => leaving.push((exit, false)),
+            }
+            // The same, passing through the ray's own leaf (its fold and other triangles).
+            let own = mesh.leaves[k].face;
+            let mut from = 0.;
+            let other = loop {
+                match leaves.intersects_beyond(&r, from) {
+                    Some(h) if h.dist < exit && h.face == own => from = h.dist + 1e-9 * size,
+                    Some(h) if h.dist < exit => break (h.dist, true),
+                    _ => break (exit, false),
+                }
+            };
+            others.push(other);
+        }
+        let grid: Vec<f64> = (1 ..= 60).map(|i| size * 0.5 * i as f64 / 60.).collect();
+        let su = survival(entering, &grid);
+        let sc = survival(leaving, &grid);
+        let sw = survival(within, &grid);
+        let so = survival(others, &grid);
+        // Fit (1 + s/λ)^-α to T_u: for each λ the best α is linear in log T.
+        let used: Vec<usize> = (0 .. grid.len()).filter(|&i| su[i] > 0.02).collect();
+        let fit = |s: &[f64], plus: f64| -> (f64, f64, f64) {
+            let mut best = (f64::INFINITY, 0., 0.);
+            for j in 0 .. 300 {
+                let lambda = size * 1e-4 * 10f64.powf(j as f64 / 60.);
+                let (mut num, mut den) = (0., 0.);
+                for &i in &used {
+                    let x = (1. + grid[i] / lambda).ln();
+                    num += -s[i].max(1e-9).ln() * x;
+                    den += x * x;
+                }
+                let alpha = (num / den - plus).max(1e-6);
+                let err: f64 = used.iter().map(|&i| ((1. + grid[i] / lambda).powf(-(alpha + plus)) - s[i]).powi(2)).sum::<f64>();
+                if err < best.0 {
+                    best = (err, lambda, alpha);
+                }
+            }
+            best
+        };
+        let (_, lambda, alpha) = fit(&su, 0.);
+        let mu = {
+            let (mut num, mut den) = (0., 0.);
+            for &i in &used {
+                num += -su[i].max(1e-9).ln() * grid[i];
+                den += grid[i] * grid[i];
+            }
+            num / den
+        };
+        let rms = |pred: &dyn Fn(f64) -> f64, s: &[f64]| (used.iter().map(|&i| (pred(grid[i]) - s[i]).powi(2)).sum::<f64>() / used.len() as f64).sqrt();
+        let gamma_u = |x: f64| (1. + x / lambda).powf(-alpha);
+        let gamma_c = |x: f64| (1. + x / lambda).powf(-(alpha + 1.));
+        let exp = |x: f64| (-mu * x).exp();
+        // For comparison, the gamma law fitted to T_c directly (how well the form can do).
+        let (_, lambda_c, alpha_c) = fit(&sc, 0.);
+        let refit = |x: f64| (1. + x / lambda_c).powf(-alpha_c);
+        let r = [rms(&gamma_u, &su), rms(&exp, &su), rms(&gamma_c, &sc), rms(&exp, &sc), rms(&refit, &sc)];
+        // The same prediction from the uncorrelated origins within the box.
+        let (_, lambda_w, alpha_w) = fit(&sw, 0.);
+        let gamma_w = |x: f64| (1. + x / lambda_w).powf(-alpha_w);
+        let gamma_wc = |x: f64| (1. + x / lambda_w).powf(-(alpha_w + 1.));
+        println!("    from within the box: λ {:.3} m, α {:.2}, fit rms {:.4}; T_c predicted from it rms {:.4}",
+            lambda_w, alpha_w, rms(&gamma_w, &sw), rms(&gamma_wc, &sc));
+        println!("    T_c fitted directly: λ {:.3} m, α {:.3}", lambda_c, alpha_c);
+        let (_, lambda_o, alpha_o) = fit(&so, 0.);
+        let near = |x: f64| grid.iter().position(|&g| g >= x).unwrap_or(0);
+        println!("    T_c past its own leaf: λ {:.3} m, α {:.3}; at {:.2} m {:.3} (with own leaf {:.3}), {:.2} m {:.3} ({:.3})",
+            lambda_o, alpha_o, grid[0], so[0], sc[0], grid[near(2.)], so[near(2.)], sc[near(2.)]);
+        println!("{name:22} crown {size:.1} m: λ {:.3} m, α {alpha:.2}, μ {mu:.3}/m", lambda);
+        println!("    T_u fit rms: gamma {:.4}, exponential {:.4}", r[0], r[1]);
+        println!("    T_c predicted rms: gamma (α+1) {:.4}, exponential {:.4}; gamma fitted to T_c itself {:.4}", r[2], r[3], r[4]);
+        for i in [2, 5, 11, 23, 47] {
+            println!("    s {:5.2} m: T_u {:.3} (gamma {:.3}), within {:.3}, T_c {:.3} (predicted {:.3}, from within {:.3}, exponential {:.3})",
+                grid[i], su[i], gamma_u(grid[i]), sw[i], sc[i], gamma_c(grid[i]), gamma_wc(grid[i]), exp(grid[i]));
+        }
+        csv += &format!("{name},{lambda:.4},{alpha:.4},{mu:.4},{:.4},{:.4},{:.4},{:.4},{:.4}\n", r[0], r[1], r[2], r[3], r[4]);
+    }
+    let out = std::env::var("LOD_TRANSMITTANCE_OUT").unwrap_or_else(|_| "target/lod-transmittance.csv".into());
+    std::fs::write(&out, csv).unwrap();
+    println!("written to {out}");
+}

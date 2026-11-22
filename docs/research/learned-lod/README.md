@@ -313,5 +313,8 @@ cards.
 - [x] Fix card hit probability per card, over directions: PR #171 sizes each card by its
       leaves' rasterised coverage over the hemisphere. Brightness vs full +4.6% → −1.2%, FLIP
       0.0585 → 0.0545, build about 10% longer ([stage0.md](stage0.md#follow-up-the-fix)).
-- [ ] Stages 1–3.
+- [x] Stages 1 and 4 ([stage1.md](stage1.md), PR #172): merge a leaf's triangles exactly, and
+      keep 16 NNLS-refitted representatives in place of a 32-leaf sample. Constituents about
+      halved, error 1–2% (from 6–10%), peak 700 → 618 MiB, render −14%.
+- [ ] Stage 2 (SGGX lobes and palettes) and stage 3 (self-shadowing, against the residual).
 - [ ] Read what could not be fetched (see [log.md](log.md)).

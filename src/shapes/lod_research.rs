@@ -25,6 +25,9 @@ use super::*;
 use crate::geometry::Pcg32;
 use crate::procedural::tree;
 
+/// The most constituents a card kept before `constituents`: an even sample of a larger cluster.
+const OLD_KEPT: usize = 32;
+
 /// Leaf reflectance and transmittance (the forest scenes' summer leaf, green).
 const RHO: f64 = 0.42;
 const TAU: f64 = 0.36;
@@ -212,10 +215,14 @@ struct Tally {
     cards: usize,
     members: usize,
     kept: usize,
+    /// Constituents left if a leaf's triangles with the same normal are merged (≤ 32).
+    merged: usize,
     over: usize,
     /// Per model: Σ over sampled clusters and direction pairs of the model's response, and of
     /// its absolute error, weighted by the cluster's projected area.
-    model: [(f64, f64); 7],
+    model: [(f64, f64); 9],
+    /// Constituents per card as `constituents` keeps them.
+    new_kept: usize,
     truth: f64,
     weight: f64,
     sigma_err: [f64; 4],
@@ -229,7 +236,7 @@ struct Tally {
     lit: (f64, f64),
 }
 
-const MODELS: [&str; 7] = ["kept", "sggx", "z4", "z4-nnls", "z8", "z8-nnls", "card-normal"];
+const MODELS: [&str; 9] = ["kept", "sggx", "z4", "z4-nnls", "z8", "z8-nnls", "card-normal", "z16-nnls", "new"];
 
 fn measure(leaves: &[Arc<Tagged<Triangle>>], size: f64, views: &[Vector3<f64>], lights: &[Vector3<f64>],
            dirs: &[Vector3<f64>], sample_every: usize, rng: &mut Pcg32) -> Tally {
@@ -243,16 +250,20 @@ fn measure(leaves: &[Arc<Tagged<Triangle>>], size: f64, views: &[Vector3<f64>], 
         let Some((corner, u, v)) = card(&members) else { continue };
         t.cards += 1;
         t.members += members.len();
-        t.kept += members.len().min(MAX_CONSTITUENTS);
-        t.over += (members.len() > MAX_CONSTITUENTS) as usize;
+        t.kept += members.len().min(OLD_KEPT);
+        t.over += (members.len() > OLD_KEPT) as usize;
+        let mut keys: Vec<(u32, [i16; 2])> = members.iter().map(|m| (m.face, encode_normal(&m.item.normal))).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        t.merged += keys.len().min(OLD_KEPT);
         if gi % sample_every != 0 {
             continue;
         }
         t.sampled += 1;
         let set: Set = members.iter().map(|m| (m.item.normal, area(&m.item))).collect();
-        let kept: Set = if set.len() <= MAX_CONSTITUENTS { set.clone() } else {
-            let step = set.len() as f64 / MAX_CONSTITUENTS as f64;
-            (0 .. MAX_CONSTITUENTS).map(|k| set[(k as f64 * step) as usize]).collect()
+        let kept: Set = if set.len() <= OLD_KEPT { set.clone() } else {
+            let step = set.len() as f64 / OLD_KEPT as f64;
+            (0 .. OLD_KEPT).map(|k| set[(k as f64 * step) as usize]).collect()
         };
         let card_normal = u.cross(&v).normalize();
         let s = sggx(&set);
@@ -260,6 +271,10 @@ fn measure(leaves: &[Arc<Tagged<Triangle>>], size: f64, views: &[Vector3<f64>], 
         let z4n = reduced(&set, 4, true, dirs);
         let z8 = reduced(&set, 8, false, dirs);
         let z8n = reduced(&set, 8, true, dirs);
+        let z16n = reduced(&set, 16, true, dirs);
+        let all: Vec<(Vector3<f64>, f64, u32)> = members.iter().map(|m| (m.item.normal, area(&m.item), m.face)).collect();
+        let new: Set = constituents(&all, gi as u64).into_iter().map(|k| (k.0, k.1)).collect();
+        t.new_kept += new.len();
         let flat: Set = vec![(card_normal, 1.)];
         for (k, m) in [&z4, &z4n, &z8, &z8n].iter().enumerate() {
             t.sigma_err[k] += sigma_error(&set, m, dirs);
@@ -276,6 +291,8 @@ fn measure(leaves: &[Arc<Tagged<Triangle>>], size: f64, views: &[Vector3<f64>], 
                     chosen(&z8, d, l),
                     chosen(&z8n, d, l),
                     chosen(&flat, d, l),
+                    chosen(&z16n, d, l),
+                    chosen(&new, d, l),
                 ];
                 for (acc, x) in t.model.iter_mut().zip(r) {
                     acc.0 += w * x;
@@ -400,7 +417,8 @@ fn lod_research() {
                 t.over as f64 / t.cards as f64, t.sampled, truth);
             print!("{name:22} L{level} size {size:.3} m: {} clusters, {} cards, {:.1} leaves/card ({:.1} kept, {:.0}% over 32)",
                 t.clusters, t.cards, t.members as f64 / t.cards as f64, t.kept as f64 / t.cards as f64, 100. * t.over as f64 / t.cards as f64);
-            println!();
+            println!("    constituents as now kept: {:.1} per sampled card", t.new_kept as f64 / t.sampled.max(1) as f64);
+            println!("    merging a leaf's triangles of one normal: {:.1} constituents per card ({} triangles a leaf)", t.merged as f64 / t.cards as f64, mesh.leaf_triangles);
             for (k, m) in MODELS.iter().enumerate() {
                 let bias = t.model[k].0 / t.weight / truth - 1.;
                 let abs = t.model[k].1 / t.weight / truth;

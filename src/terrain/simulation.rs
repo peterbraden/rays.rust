@@ -515,10 +515,11 @@ impl Terrain {
     fn slide(&mut self, fixed: &[bool], passes: usize, rounds: usize) {
         let strength = self.params.planet.geology.slope_strength;
         if strength <= 0. { return; }
+        let scale = self.slope_scale();
         for _ in 0..rounds {
-            let critical: Vec<f64> = (0..self.domain.len()).map(|i| {
+            let critical: Vec<f64> = (0..self.domain.len()).into_par_iter().map(|i| {
                 if self.ice[i] >= ICE_FREE { return f64::INFINITY; }
-                strength * self.critical_slope(i)
+                strength * self.critical_slope_at(i, scale)
             }).collect();
             let before = self.bed.clone();
             let (moved, _) = landslide(&self.domain, &mut self.bed, fixed, &critical, LANDSLIDE_TOLERANCE, passes);
@@ -534,7 +535,17 @@ impl Terrain {
     /// coarser, as (`LANDSLIDE_SPACING` / spacing)^`LANDSLIDE_SCALING`; then nested patches of
     /// different spacings agree roughly on how steep the ground stands.
     pub fn critical_slope(&self, i: usize) -> f64 {
-        let scale = (LANDSLIDE_SPACING / self.domain.min_spacing()).powf(LANDSLIDE_SCALING);
+        self.critical_slope_at(i, self.slope_scale())
+    }
+
+    /// How much steeper the rocks' critical slopes are on this domain's cells than on cells of
+    /// `LANDSLIDE_SPACING` (see `critical_slope`; `min_spacing` looks at every link, so this is
+    /// worked out once, not per cell).
+    fn slope_scale(&self) -> f64 {
+        (LANDSLIDE_SPACING / self.domain.min_spacing()).powf(LANDSLIDE_SCALING)
+    }
+
+    fn critical_slope_at(&self, i: usize, scale: f64) -> f64 {
         scale * self.rock(i).critical_slope() / (1. + 0.3 * self.structure[i].fracture)
     }
 

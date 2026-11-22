@@ -3,7 +3,7 @@
 //! lattice of cells, a domed cloudlet in each, waves across the wind, patches, eroded edges and
 //! castellanus turrets.
 
-use crate::clouds::{stretched, worley_fbm};
+use crate::clouds::{stretched, worley_fbm, WeatherGrid};
 use crate::media::Medium;
 use crate::noise::{cell_hash, fbm};
 use crate::{lerp, remap, smoothstep, Real, Tables};
@@ -38,6 +38,29 @@ pub struct Benard<F: Real> {
     pub warp_perm: u32,
     pub patch_perm: u32,
     pub worley: u32,
+    /// A map of how high cloud can be over each of its texels (`majorant_from`): the grid,
+    /// with the texels' tops at its `maxima` (below the layer where a texel holds none), or
+    /// no texels (`n` 0) for none, and the whole slab is taken as cloud.
+    pub tops: WeatherGrid<F>,
+}
+
+/// Leave a cell's edge by: how far along a ray the coordinate `p`, moving at `d`, leaves the
+/// cell from `lo` to `lo + size`.
+#[inline]
+fn leaves<F: Real>(p: F, d: F, lo: F, size: F) -> F {
+    if d > F::of(0) { (lo + size - p) / d } else if d < F::of(0) { (lo - p) / d } else { F::far() }
+}
+
+/// A column of the layer that holds cloud (`Benard::column`): where it is in the warped
+/// lattice, its cell, its cloudlet's reach and how far out in it the column is, and how far
+/// its cloudlet's base is raised or lowered, in layer thicknesses.
+struct Column<F: Real> {
+    u: F,
+    v: F,
+    cell: CellPoint<F>,
+    reach: F,
+    t: F,
+    offset: F,
 }
 
 /// Where a point lies among the cells: `edge` from 0 at its cell's centre to 1 at its edge,
@@ -100,23 +123,24 @@ impl<F: Real> Benard<F> {
         }
     }
 
-    /// Cloud density as a fraction of `max_density`, in [0, 1].
-    pub fn fraction<T: Tables<F>>(&self, tables: &T, x: F, y: F, z: F) -> F {
+    /// What a column of the layer holds, by where it is among the cells: nothing in the gaps
+    /// between cloudlets or where the layer thins away (None); else its cloudlet's reach
+    /// towards its cell's edge and how far out in it the column is (`t`, under 1). With
+    /// `least`, a cloudlet's reach is at least that: a cloudlet no smaller than the real one,
+    /// for bounding where cloud can be (`column_top`); the density takes none.
+    fn column<T: Tables<F>>(&self, tables: &T, x: F, z: F, least: F) -> Option<Column<F>> {
         let (zero, half, one, two) = (F::of(0), F::ratio(1, 2), F::of(1), F::of(2));
-        if y < self.bottom() || y > self.top() {
-            return zero;
-        }
         let from_centre = (x - self.center.0).abs().max((z - self.center.1).abs()) / self.extent;
         let edge_fade = smoothstep(zero, self.fade.max(F::ratio(1, 1_000_000_000)), one - from_centre);
         if edge_fade <= zero {
-            return zero;
+            return None;
         }
         // 4. Patches.
         let n = stretched(fbm(tables, self.patch_perm, x / self.patch_size, half, z / self.patch_size, 3, half, two));
         let patches = lerp(one, smoothstep(F::ratio(3, 10), F::ratio(6, 10), n), self.patchiness);
         let strength = edge_fade * patches;
         if strength <= zero {
-            return zero;
+            return None;
         }
         // 1. The cells, in the wind's frame, warped.
         let (along, across) = (x * self.wind.0 + z * self.wind.1, -x * self.wind.1 + z * self.wind.0);
@@ -136,8 +160,9 @@ impl<F: Real> Benard<F> {
         let cell = self.cell_at(u, v);
         // 2. This cell's cloudlet: its reach towards the edge, and how far out we are in it.
         let reach = self.coverage * strength * lerp(one, wave, self.undulation) * (F::ratio(8, 10) + F::ratio(4, 10) * cell.hash.0);
+        let reach = if least > reach { least } else { reach };
         if reach <= zero {
-            return zero;
+            return None;
         }
         // Round, not the cell's polygon (which only keeps neighbours apart), with a lumpy
         // outline.
@@ -145,9 +170,54 @@ impl<F: Real> Benard<F> {
         let lumps = one + (fbm(tables, self.warp_perm, u * f, F::ratio(6, 10), v * f, 2, half, two) - half) * two * self.lumpiness;
         let t = lerp(cell.radial, cell.edge, F::ratio(35, 100)) * lumps / reach;
         if t >= one {
+            return None;
+        }
+        // How far this cell's cloudlet is raised or lowered, and on the waves.
+        let offset = (cell.hash.1 - half) * F::ratio(2, 10) + (wave - half) * F::ratio(6, 10) * self.undulation;
+        Some(Column { u, v, cell, reach, t, offset })
+    }
+
+    /// The turret of a column's cell, if it has one: how tall it grows, in layer thicknesses,
+    /// and how far out in it the column is (1.4 is its edge at its broadest).
+    fn turret(&self, c: &Column<F>) -> Option<(F, F)> {
+        let half = F::ratio(1, 2);
+        let chosen = c.cell.hash.0 * F::ratio(731, 100) + c.cell.hash.1 * F::ratio(317, 100);
+        let chosen = chosen - chosen.floor();
+        if chosen < self.castellanus {
+            let rise = self.turret_height * (half + half * (chosen / self.castellanus.max(F::ratio(1, 1_000_000_000))));
+            let width = F::ratio(65, 100) * (F::ratio(85, 100) + F::ratio(3, 10) * c.cell.hash.1);
+            let r = c.t / width;
+            if r < F::ratio(14, 10) {
+                return Some((rise, r));
+            }
+        }
+        None
+    }
+
+    /// The highest cloud can be in the column at (x, z), or None if it holds none: its
+    /// cloudlet's dome at its tallest (the turrets' noise at its most), or its turret's top,
+    /// for a cloudlet reaching at least `least` (so one no smaller than the real one: what
+    /// the map of tops is sampled from, `majorant_from`).
+    pub fn column_top<T: Tables<F>>(&self, tables: &T, x: F, z: F, least: F) -> Option<F> {
+        let one = F::of(1);
+        let c = self.column(tables, x, z, least)?;
+        let dome = (one - c.t * c.t).sqrt() * c.reach.min(one).sqrt() * F::ratio(14, 10);
+        let top = match self.turret(&c) {
+            Some((rise, _)) => dome.max(rise * F::ratio(115, 100)),
+            None => dome,
+        };
+        Some(self.base + (c.offset + top) * self.thickness)
+    }
+
+    /// Cloud density as a fraction of `max_density`, in [0, 1].
+    pub fn fraction<T: Tables<F>>(&self, tables: &T, x: F, y: F, z: F) -> F {
+        let (zero, half, one, two) = (F::of(0), F::ratio(1, 2), F::of(1), F::of(2));
+        if y < self.bottom() || y > self.top() {
             return zero;
         }
-        let offset = (cell.hash.1 - half) * F::ratio(2, 10) + (wave - half) * F::ratio(6, 10) * self.undulation;
+        let Some(column) = self.column(tables, x, z, zero) else { return zero };
+        let (u, v, cell, reach, t) = (column.u, column.v, &column.cell, column.reach, column.t);
+        let offset = column.offset;
         let h = (y - self.base) / self.thickness - offset;
         // A dome, smaller for smaller cloudlets and with turrets on top, over a base that sags
         // towards the edge.
@@ -158,26 +228,19 @@ impl<F: Real> Benard<F> {
         let mut inside = (h - bottom).min(top - h);
         // 6. A turret, on some cells: narrower than the cloudlet, rising from it with a round,
         // billowing head.
-        let chosen = cell.hash.0 * F::ratio(731, 100) + cell.hash.1 * F::ratio(317, 100);
-        let chosen = chosen - chosen.floor();
-        if chosen < self.castellanus {
-            let rise = self.turret_height * (half + half * (chosen / self.castellanus.max(F::ratio(1, 1_000_000_000))));
-            let width = F::ratio(65, 100) * (F::ratio(85, 100) + F::ratio(3, 10) * cell.hash.1);
-            let r = t / width;
-            if r < F::ratio(14, 10) {
-                // A stem rising to a broader, billowing head, with bulges up its flanks: a
-                // little cumulus on the layer. Billows a third of the turret across push its
-                // outline out and in; its top is rounded over the head.
-                let up = (h / rise).clamp(zero, one);
-                let bs = F::ratio(16, 10) * self.detail_size;
-                let billows = worley_fbm(tables, self.worley, x / bs, y * F::ratio(8, 10) / bs, z / bs);
-                let bulges = (fbm(tables, self.warp_perm, u * F::of(3), y / (F::ratio(8, 10) * self.thickness), v * F::of(3), 2, half, two) - half) * two;
-                let over = ((up - F::ratio(3, 4)) / F::ratio(1, 4)).max(zero);
-                let profile = lerp(F::ratio(55, 100), one, smoothstep(F::ratio(3, 10), F::ratio(3, 4), up)) * (one - over * over).max(zero).sqrt();
-                let radius = profile * (one + F::ratio(1, 4) * bulges) + F::ratio(45, 100) * (billows - half);
-                let flank = (radius - r) * two;
-                inside = inside.max((h - bottom).min(rise * (F::ratio(85, 100) + F::ratio(3, 10) * billows) - h).min(flank));
-            }
+        if let Some((rise, r)) = self.turret(&column) {
+            // A stem rising to a broader, billowing head, with bulges up its flanks: a
+            // little cumulus on the layer. Billows a third of the turret across push its
+            // outline out and in; its top is rounded over the head.
+            let up = (h / rise).clamp(zero, one);
+            let bs = F::ratio(16, 10) * self.detail_size;
+            let billows = worley_fbm(tables, self.worley, x / bs, y * F::ratio(8, 10) / bs, z / bs);
+            let bulges = (fbm(tables, self.warp_perm, u * F::of(3), y / (F::ratio(8, 10) * self.thickness), v * F::of(3), 2, half, two) - half) * two;
+            let over = ((up - F::ratio(3, 4)) / F::ratio(1, 4)).max(zero);
+            let profile = lerp(F::ratio(55, 100), one, smoothstep(F::ratio(3, 10), F::ratio(3, 4), up)) * (one - over * over).max(zero).sqrt();
+            let radius = profile * (one + F::ratio(1, 4) * bulges) + F::ratio(45, 100) * (billows - half);
+            let flank = (radius - r) * two;
+            inside = inside.max((h - bottom).min(rise * (F::ratio(85, 100) + F::ratio(3, 10) * billows) - h).min(flank));
         }
         if inside <= zero {
             return zero;
@@ -190,7 +253,7 @@ impl<F: Real> Benard<F> {
     }
 
     /// The layer is a slab: `max_density` within it, nothing above or below.
-    pub fn majorant_from(&self, y: F, dy: F) -> (F, F) {
+    fn slab(&self, y: F, dy: F) -> (F, F) {
         let (lo, hi) = (self.bottom(), self.top());
         let zero = F::of(0);
         let to_lo = if dy != zero { (lo - y) / dy } else { F::far() };
@@ -202,6 +265,39 @@ impl<F: Real> Benard<F> {
         } else {
             (self.max_density, if dy > zero { to_hi } else if dy < zero { to_lo } else { F::far() })
         }
+    }
+
+    /// A bound on the density from a point along a unit direction, and how far it holds.
+    /// The slab's, and within it the map's (`tops`): over one of its texels cloud lies only
+    /// below the texel's top, so above that, and over a texel that holds none, the air is
+    /// clear as far as the texel's edge (or, coming down, as far as the top). Most of the
+    /// slab is: the cloudlets are domes with gaps between, and the slab is as tall as the
+    /// tallest turret. Without this a walk asked for the density, which is a dozen noise
+    /// lookups, at every step of the slab's worth, nine in ten of them for nothing.
+    pub fn majorant_from<T: Tables<F>>(&self, tables: &T, x: F, y: F, z: F, dx: F, dy: F, dz: F) -> (F, F) {
+        let zero = F::of(0);
+        let (bound, length) = self.slab(y, dy);
+        let map = &self.tops;
+        if bound <= zero || map.n == 0 {
+            return (bound, length);
+        }
+        // (Beyond the map is beyond the layer's extent, where it has faded to nothing.)
+        let (i, j) = match map.entering(x, z, dx, dz) {
+            Some(cell) => cell,
+            None => return (zero, length),
+        };
+        let (x0, z0) = (map.x + F::of(i as i32) * map.texel, map.z + F::of(j as i32) * map.texel);
+        let edge = leaves(x, dx, x0, map.texel).min(leaves(z, dz, z0, map.texel)).max(zero).min(length);
+        let top = tables.value(map.maxima + j * map.n + i);
+        if top <= self.bottom() {
+            return (zero, edge);
+        }
+        // As a Nubis layer's column (`clouds::NubisField::majorant_from`): a point at the top
+        // counts as where the ray is going.
+        let ay = y + dy * F::ratio(1, 100);
+        let to_top = if dy != zero { (top - y) / dy } else { F::far() };
+        let length = if to_top > zero { edge.min(to_top) } else { edge };
+        if ay > top { (zero, length) } else { (self.max_density, length) }
     }
 }
 
@@ -220,7 +316,7 @@ impl<F: Real, T: Tables<F>> Medium<F> for BenardMedium<'_, F, T> {
     }
 
     #[inline]
-    fn majorant_from(&self, _x: F, y: F, _z: F, _dx: F, dy: F, _dz: F) -> (F, F) {
-        self.0.majorant_from(y, dy)
+    fn majorant_from(&self, x: F, y: F, z: F, dx: F, dy: F, dz: F) -> (F, F) {
+        self.0.majorant_from(self.1, x, y, z, dx, dy, dz)
     }
 }

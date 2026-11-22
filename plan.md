@@ -2377,6 +2377,34 @@ bounds as the Nubis layers have (a map of where a column can hold cloud), which 
 the evaluations several times over, on the GPU too. The simple scenes have no hot spot
 left (traversal 29%, the sky's tables 17%, shading 15%).
 
+Done since: altocumulus's local bounds. The density was asked for at every tentative
+collision in the layer's slab, and 2 to 11% of the slab is cloud (the cloudlets are domes
+with gaps between, and the slab is as tall as the tallest turret). Now a map of how high
+cloud can be over each texel, a quarter of a cell across (`Benard::tops`, in the layer's
+record after its Worley texture; `majorant_from` as a Nubis layer's column tops), lets the
+walk skip what is above it: 26% of a plain layer's slab, 54 to 80% of a waved, turreted or
+sparse one's.
+- The density split into a column's part and a height's (`Benard::column`), the same bits
+  (a fingerprint of 1.6 million values, before and after).
+- The map is sampled, not derived (no bound on a warped, lumpy outline comes cheaply): the
+  highest a column's cloud can be (`column_top`: the dome at its noise's most, a turret's
+  top) at 25 points a texel, for cloudlets taken no smaller than a quarter reach, each texel
+  the highest of its own and its neighbours' and a tenth of a thickness over. Tested, not
+  proved: at 9 points a texel and 0.15, a handful of two million points had cloud over a
+  texel marked clear (a cloudlet 90 m across between samples 78 m apart); as it is, none in
+  ten million across five kinds of layer (`test_the_map_of_tops_bounds_the_cloud`).
+- It costs ten million samples for the default layer: 2 s on four cores, at f32 through the
+  kernel's functions, built apart from the render's threads (which otherwise wait on it
+  and leave it one). Skipped where a texel would be coarser than half a cell
+  (cirrocumulus), where it would bound nothing.
+- 240 x 150, 8 spp, kernels / path tracer: altocumulus-castellanus 46 -> 20 s / 60 -> 28 s,
+  altocumulus-undulatus 12.0 -> 8.2 s / 16.9 -> 11.5 s, benard-altocumulus 8.9 -> 8.2 s /
+  13.4 -> 12.2 s; against the path tracer as before (castellanus FLIP 0.036 for 0.0375).
+  The GPU's kernels take the same bound from the same record.
+- Left: the bound is loose where the layer is whole (a dome's top at its noise's most, and
+  the least reach, where the real cloudlet is lower), so a plain layer gains a tenth; a
+  map of each texel's actual highest sample would be tighter and as easily tested.
+
 ### GPU-ready by construction
 
 What a kernel can't hold is refused where the code is written, not when someone next builds

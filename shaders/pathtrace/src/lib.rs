@@ -3120,9 +3120,10 @@ pub const PHASE_DROPLETS: u32 = 1;
 
 /// A layer of altocumulus's record in a table (`shared::altocumulus::Benard`; the renderer's
 /// `BenardAltocumulus::export`): its recipe's 23 numbers in their fields' order, and its seed's
-/// bits; then the permutations of the lattice's warp and of the patches (512 entries each)
-/// and the Worley texture.
-pub const BENARD_HEADER: u32 = 24;
+/// bits, and its map of column tops (`Benard::tops`: its corner's x and z, its texel and its
+/// texels a side, 0 for none); then the permutations of the lattice's warp and of the
+/// patches (512 entries each), the Worley texture, and the map's tops.
+pub const BENARD_HEADER: u32 = 28;
 
 /// The layer whose record begins at `base`.
 pub fn load_benard(tables: &[f32], base: u32) -> shared::altocumulus::Benard<f32> {
@@ -3134,6 +3135,11 @@ pub fn load_benard(tables: &[f32], base: u32) -> shared::altocumulus::Benard<f32
         castellanus: at(tables, base + 21), turret_height: at(tables, base + 22), seed: at(tables, base + 23).to_bits(),
         warp_perm: base + BENARD_HEADER, patch_perm: base + BENARD_HEADER + NUBIS_PERMUTATION,
         worley: base + BENARD_HEADER + 2 * NUBIS_PERMUTATION,
+        tops: shared::clouds::WeatherGrid {
+            x: at(tables, base + 24), z: at(tables, base + 25), texel: at(tables, base + 26), n: at(tables, base + 27) as u32,
+            corners: 0,
+            maxima: base + BENARD_HEADER + 2 * NUBIS_PERMUTATION + shared::clouds::WORLEY_N * shared::clouds::WORLEY_N * shared::clouds::WORLEY_N,
+        },
     }
 }
 
@@ -3171,7 +3177,7 @@ impl shared::media::Medium<f32> for KernelLayer<'_> {
 
     fn majorant_from(&self, x: f32, y: f32, z: f32, dx: f32, dy: f32, dz: f32) -> (f32, f32) {
         if self.kind == MEDIUM_BENARD {
-            self.benard.majorant_from(y, dy)
+            self.benard.majorant_from(self.tables, x, y, z, dx, dy, dz)
         } else {
             self.nubis.majorant_from(self.tables, x, y, z, dx, dy, dz)
         }

@@ -13,6 +13,9 @@
 #   --resume     carry on from each scene's saved render state rather than starting afresh:
 #                after raising a scene's samples, only the missing ones are rendered. Only
 #                when the renderer hasn't changed since the state was saved
+#   --cpu        render on the CPU only (by default each scene is rendered with --gpu, which
+#                falls back to the wavefront integrator or the path tracer, saying why, for
+#                scenes the GPU can't take)
 #   --list       list the scenes and stop
 # Scene names (eg. `orbit spheres`) limit the run to those; by default, every scene in demo/
 # and demo/scenes/.
@@ -20,11 +23,18 @@
 # Renders start afresh (--fresh) unless --resume: a saved render state is keyed by the scene
 # file, not the renderer, so after renderer changes resuming one would mix old samples with new.
 # A failed scene is reported and the run carries on. Each scene's output goes to
-# target/render-all/<name>.log, and a line per scene to target/render-all/summary.txt.
+# target/render-all/<name>.log, and a line per scene, naming what rendered it, to
+# target/render-all/summary.txt.
+#
+# Each run is also a benchmark: a row per scene (times, integrator, rays, memory, the scene
+# file's hash and the picture's difference from HEAD's) is appended to
+# demo/benchmarks/render-all.csv (target/render-all/previews.csv with --samples), and the run
+# ends with a report comparing it with the previous one on this machine
+# (scripts/render-all-stats.py; `scripts/render-all-stats.py report` repeats it).
 set -u
 cd "$(dirname "$0")/.."
 
-missing=0; samples=""; commit=0; list=0; resume=0
+missing=0; samples=""; commit=0; list=0; resume=0; cpu=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --missing) missing=1 ;;
@@ -32,7 +42,8 @@ while [ $# -gt 0 ]; do
         --commit) commit=1 ;;
         --list) list=1 ;;
         --resume) resume=1 ;;
-        -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --cpu) cpu=1 ;;
+        -h|--help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) echo "Unknown option $1" >&2; exit 1 ;;
         *) break ;;
     esac
@@ -63,9 +74,21 @@ out=target/render-all
 mkdir -p "$out"
 summary="$out/summary.txt"
 echo "# $(date '+%Y-%m-%d %H:%M') $(git rev-parse --short HEAD) ${samples:+($samples spp preview)}" >> "$summary"
+run=$(date -u "+%Y-%m-%dT%H:%M:%SZ"); head=$(git rev-parse HEAD)
+# Whether the renderer differs from HEAD's (the run's own images don't count).
+dirty=0; git diff --quiet HEAD -- src shaders Cargo.toml Cargo.lock || dirty=1
+stats=(); [ -n "$samples" ] && stats=(--preview "$samples")
+# A row of statistics for the scene; a failure here mustn't stop the run.
+record() {
+    python3 scripts/render-all-stats.py record --run "$run" --commit "$head" --dirty "$dirty" \
+        --scene "$scene" --status "$1" --wall "$took" --log "$out/$name.log" --image "$image" \
+        ${stats[@]+"${stats[@]}"} || echo "    (statistics not recorded)"
+}
 
+features=(); [ $cpu = 1 ] || features=(--features gpu)
 echo "Building..."
-cargo build --release --quiet 2> "$out/build.log" || { echo "Build failed: see $out/build.log"; exit 1; }
+cargo build --release --quiet "${features[@]}" 2> "$out/build.log" \
+    || { echo "Build failed: see $out/build.log"; exit 1; }
 
 failed=0; done_count=0; total=${#scenes[@]}; run_start=$(date +%s)
 for scene in "${scenes[@]}"; do
@@ -78,6 +101,7 @@ for scene in "${scenes[@]}"; do
     fi
     args=()
     [ $resume = 1 ] || args+=(--fresh)
+    [ $cpu = 1 ] || args+=(--gpu)
     if [ -n "$samples" ]; then
         image="$out/$name.png"
         args+=(--samples "$samples" -o "$image")
@@ -86,8 +110,15 @@ for scene in "${scenes[@]}"; do
     start=$(date +%s)
     if ./target/release/rays "$scene" "${args[@]}" > "$out/$name.log" 2>&1; then
         took=$(( $(date +%s) - start ))
-        echo "    done in ${took}s -> $image"
-        echo "$name ok ${took}s" >> "$summary"
+        # What rendered it: the GPU, or whichever integrator --gpu fell back to.
+        if grep -q '^- GPU: ' "$out/$name.log"; then by=gpu
+        elif grep -q '^- Wavefront integrator: ' "$out/$name.log" \
+            && ! grep -q 'rendering with the path tracer' "$out/$name.log"; then by=wavefront
+        else by=path-tracer
+        fi
+        echo "    done in ${took}s on the $by -> $image"
+        echo "$name ok ${took}s $by" >> "$summary"
+        record ok
         if [ $commit = 1 ]; then
             git add "$image" && git commit -q -m "Render the $name scene" -- "$image" \
                 || echo "    commit failed"
@@ -97,9 +128,16 @@ for scene in "${scenes[@]}"; do
         failed=$((failed + 1))
         echo "    FAILED after ${took}s: $(tail -1 "$out/$name.log")"
         echo "$name FAILED ${took}s" >> "$summary"
+        record failed
     fi
 done
 
 elapsed=$(( $(date +%s) - run_start ))
 echo "Finished in $((elapsed / 3600))h $((elapsed % 3600 / 60))m: $failed failed. Summary: $summary"
+echo
+python3 scripts/render-all-stats.py report --run "$run" ${samples:+--preview} || true
+if [ $commit = 1 ]; then
+    git add demo/benchmarks/render-all.csv && git commit -q -m "Record the render-all run's statistics" \
+        -- demo/benchmarks/render-all.csv || echo "Committing the statistics failed"
+fi
 [ $failed = 0 ]

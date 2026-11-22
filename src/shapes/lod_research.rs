@@ -238,6 +238,8 @@ struct Tally {
     cast: (f64, f64, f64),
     /// Σ over leaves (by area) of the fraction unshadowed toward the light by the cluster.
     lit: (f64, f64),
+    /// Σ over sampled clusters of `card`'s estimate of the light a leaf gets past the others.
+    lit_estimate: f64,
 }
 
 const MODELS: [&str; 9] = ["kept", "sggx", "z4", "z4-nnls", "z8", "z8-nnls", "card-normal", "z16-nnls", "new"];
@@ -251,7 +253,8 @@ fn measure(leaves: &[Arc<Tagged<Triangle>>], size: f64, views: &[Vector3<f64>], 
             continue;
         }
         let members: Vec<&Tagged<Triangle>> = group.iter().map(|&i| &*leaves[i]).collect();
-        let made: Vec<_> = card(&members).into_iter().collect();
+        let (made, lit_estimate) = card(&members);
+        t.lit_estimate += lit_estimate;
         let Some(&(_, u, v)) = made.first() else { continue };
         t.planes += made.len();
         t.cards += 1;
@@ -456,8 +459,8 @@ fn lod_research() {
                 100. * t.sigma_err[0] / s, 100. * t.sigma_err[1] / s, 100. * t.sigma_err[2] / s, 100. * t.sigma_err[3] / s);
             let nv = (t.sampled * views.len()) as f64;
             println!("    hit probability: leaves {:.3}, card {:.3} (card/leaves {:.3}); from the side card/leaves {:.3}", t.hits.0 / nv, t.hits.1 / nv, t.hits.1 / t.hits.0, t.side_hits.1 / t.side_hits.0);
-            println!("    response of the leaf hit, against the a|n·d| choice: unshadowed {:+.2}%, shadowed by its cluster {:+.2}%; lit fraction from leaves {:.3}",
-                100. * (t.cast.1 / t.cast.0 - 1.), 100. * (t.cast.2 / t.cast.0 - 1.), t.lit.0 / t.lit.1);
+            println!("    response of the leaf hit, against the a|n·d| choice: unshadowed {:+.2}%, shadowed by its cluster {:+.2}%; lit fraction from leaves {:.3} (estimated {:.3})",
+                100. * (t.cast.1 / t.cast.0 - 1.), 100. * (t.cast.2 / t.cast.0 - 1.), t.lit.0 / t.lit.1, t.lit_estimate / t.cards as f64);
             row += &format!(",{:.4},{:.4},{:.4},{:.4},{:.4},{:.4}\n", t.hits.0 / nv, t.hits.1 / nv, t.cast.0, t.cast.1, t.cast.2, t.lit.0 / t.lit.1);
             csv += &row;
         }

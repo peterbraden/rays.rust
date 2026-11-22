@@ -333,12 +333,13 @@ pub fn place_favouring(layout: &ForestLayout, species: &[ForestSpecies], seed: u
     let side = reach.max(((hi.x - lo.x) * (hi.y - lo.y) / 4e6).sqrt());
     let (nx, nz) = (((hi.x - lo.x) / side).floor() as i64 + 3, ((hi.y - lo.y) / side).floor() as i64 + 3);
     let cell = |x: f64, z: f64| (((x - lo.x) / side).floor() as i64 + 1, ((z - lo.y) / side).floor() as i64 + 1);
-    let mut grid: Vec<Vec<usize>> = vec![vec![]; (nx * nz) as usize];
+    // Each cell holds its trees' x, z and radius together: the check below reads nothing else,
+    // tens of millions of times.
+    let mut grid: Vec<Vec<[f64; 3]>> = vec![vec![]; (nx * nz) as usize];
     let at = |(i, j): (i64, i64)| (0 .. nx).contains(&i).then_some(()).and((0 .. nz).contains(&j).then_some((j * nx + i) as usize));
     // The smallest radius any tree can have.
     let smallest = species.iter().map(|s| radius(s, (1. - s.scale_v.abs()).max(0.))).fold(f64::INFINITY, f64::min);
     let mut placed: Vec<Placement> = vec![];
-    let mut radii: Vec<f64> = vec![];
 
     // Enough darts to fill the area at the closest spacing many times over.
     let closest = species.iter().map(|s| layout.spacing * s.spacing).fold(f64::INFINITY, f64::min).max(1e-9);
@@ -350,76 +351,101 @@ pub fn place_favouring(layout: &ForestLayout, species: &[ForestSpecies], seed: u
     };
     let start = surfaces.iter().map(top).fold(f64::NEG_INFINITY, f64::max);
 
-    for _ in 0 .. darts {
-        let (x, z) = (layout.min.x + rng.next_f64() * size.x, layout.min.y + rng.next_f64() * size.y);
-        let (pick, spread, yaw, mirror, which) = (rng.next_f64(), rng.next_f64() * 2. - 1., rng.next_f64() * 360., rng.next_f64() < 0.5, rng.next_f64());
-
-        // Most darts land too near a tree already placed: reject those first, before the noise
-        // fields of the clearings and species, if they're too near even at the smallest radius
-        // any tree can have. A rejected dart changes nothing, so the same trees are kept as by
-        // testing at the species' own radius alone.
+    // Whether a tree of radius `r` at (x, z) would stand too near one already in `grid`.
+    let near = |grid: &[Vec<[f64; 3]>], x: f64, z: f64, r: f64| {
         let (cx, cz) = cell(x, z);
-        let near = |r: f64| (cx - 1 ..= cx + 1).any(|i| (cz - 1 ..= cz + 1).any(|j| {
-            at((i, j)).is_some_and(|k| grid[k].iter().any(|&n| {
-                let q = placed[n].position;
-                (q.x - x).hypot(q.z - z) < r + radii[n]
+        (cx - 1 ..= cx + 1).any(|i| (cz - 1 ..= cz + 1).any(|j| {
+            at((i, j)).is_some_and(|k| grid[k].iter().any(|&[qx, qz, qr]| {
+                let (dx, dz, apart) = (qx - x, qz - z, r + qr);
+                dx * dx + dz * dz < apart * apart
             }))
-        }));
-        if near(smallest) {
-            continue;
-        }
-        if field(&noise, clearing_at, layout.patch_size, x, z) < threshold {
-            continue;
-        }
-        // A uniform number from one already drawn, so forests without a favour are unchanged.
-        // The favour sets how much room a tree needs there, as well as its chance: dart
-        // throwing fills every gap in the end, so thinning alone wouldn't show.
-        let favoured = favour(x, z).clamp(0., 1.);
-        if favoured < (which * 7919.).fract() {
-            continue;
-        }
-
-        // The species, by weight, favouring those whose stand this is.
-        let weights: Vec<f64> = species.iter().zip(&stands).map(|(s, at)| {
+        }))
+    };
+    // The noise fields a dart needs, the clearings' and each species' stand: the costly part of
+    // a dart that isn't rejected outright.
+    let fields = |x: f64, z: f64| -> (f64, Vec<f64>) {
+        let weights = species.iter().zip(&stands).map(|(s, at)| {
             let stand = (field(&noise, *at, layout.patch_size, x, z) - 0.5) / 0.15;
             s.weight.max(0.) * (3. * layout.patchiness * stand).exp()
         }).collect();
-        let total: f64 = weights.iter().sum();
-        if total <= 0. {
-            continue;
-        }
-        let mut k = 0;
-        let mut acc = weights[0] / total;
-        while acc < pick && k + 1 < weights.len() {
-            k += 1;
-            acc += weights[k] / total;
-        }
-        let s = &species[k];
-        let scale = 1. + spread * s.scale_v;
-        let r = radius(s, scale) / favoured.max(0.25).sqrt();
+        (field(&noise, clearing_at, layout.patch_size, x, z), weights)
+    };
 
-        if near(r) {
-            continue;
-        }
+    // Darts are thrown in turn, each against the trees before it, so the forest is the same
+    // however it's computed. But the noise fields of a chunk of darts are found in parallel
+    // first, for every dart not already too near a tree placed before the chunk: those include
+    // every dart that will get as far as needing them, since trees are only ever added.
+    const CHUNK: usize = 1 << 15;
+    let mut thrown = 0;
+    while thrown < darts {
+        let n = CHUNK.min(darts - thrown);
+        thrown += n;
+        let chunk: Vec<(f64, f64, f64, f64, f64, bool, f64)> = (0 .. n).map(|_| {
+            let (x, z) = (layout.min.x + rng.next_f64() * size.x, layout.min.y + rng.next_f64() * size.y);
+            (x, z, rng.next_f64(), rng.next_f64() * 2. - 1., rng.next_f64() * 360., rng.next_f64() < 0.5, rng.next_f64())
+        }).collect();
+        let found: Vec<Option<(f64, Vec<f64>)>> = {
+            use rayon::prelude::*;
+            let grid = &grid;
+            chunk.par_iter().map(|&(x, z, ..)| (!near(grid, x, z, smallest)).then(|| fields(x, z))).collect()
+        };
+        for (&(x, z, pick, spread, yaw, mirror, which), found) in chunk.iter().zip(found) {
+            // Most darts land too near a tree already placed: reject those first, before the
+            // noise fields of the clearings and species, if they're too near even at the
+            // smallest radius any tree can have. A rejected dart changes nothing, so the same
+            // trees are kept as by testing at the species' own radius alone.
+            let Some((clearing, weights)) = found else { continue };
+            if near(&grid, x, z, smallest) {
+                continue;
+            }
+            if clearing < threshold {
+                continue;
+            }
+            // A uniform number from one already drawn, so forests without a favour are
+            // unchanged. The favour sets how much room a tree needs there, as well as its
+            // chance: dart throwing fills every gap in the end, so thinning alone wouldn't show.
+            let favoured = favour(x, z).clamp(0., 1.);
+            if favoured < (which * 7919.).fract() {
+                continue;
+            }
 
-        // Drop it onto the highest surface below.
-        let down = Ray { ro: Vector3::new(x, start, z), rd: Vector3::new(0., -1., 0.) };
-        let hit = surfaces.iter().filter_map(|s| s.intersects(&down)).min_by(|a, b| a.dist.total_cmp(&b.dist));
-        let hit = match hit { Some(h) => h, None => continue };
-        let up = if hit.normal.y < 0. { -hit.normal } else { hit.normal };
-        let slope = up.normalize().y.clamp(-1., 1.).acos().to_degrees();
-        if slope > layout.max_slope {
-            continue;
-        }
+            // The species, by weight, favouring those whose stand this is.
+            let total: f64 = weights.iter().sum();
+            if total <= 0. {
+                continue;
+            }
+            let mut k = 0;
+            let mut acc = weights[0] / total;
+            while acc < pick && k + 1 < weights.len() {
+                k += 1;
+                acc += weights[k] / total;
+            }
+            let s = &species[k];
+            let scale = 1. + spread * s.scale_v;
+            let r = radius(s, scale) / favoured.max(0.25).sqrt();
 
-        grid[at((cx, cz)).expect("a tree within the area")].push(placed.len());
-        radii.push(r);
-        placed.push(Placement {
-            species: k,
-            variant: ((which * layout.variants.max(1) as f64) as usize).min(layout.variants.max(1) - 1),
-            position: Vector3::new(x, hit.point.y, z),
-            yaw, scale, mirror, slope,
-        });
+            if near(&grid, x, z, r) {
+                continue;
+            }
+
+            // Drop it onto the highest surface below.
+            let down = Ray { ro: Vector3::new(x, start, z), rd: Vector3::new(0., -1., 0.) };
+            let hit = surfaces.iter().filter_map(|s| s.intersects(&down)).min_by(|a, b| a.dist.total_cmp(&b.dist));
+            let hit = match hit { Some(h) => h, None => continue };
+            let up = if hit.normal.y < 0. { -hit.normal } else { hit.normal };
+            let slope = up.normalize().y.clamp(-1., 1.).acos().to_degrees();
+            if slope > layout.max_slope {
+                continue;
+            }
+
+            grid[at(cell(x, z)).expect("a tree within the area")].push([x, z, r]);
+            placed.push(Placement {
+                species: k,
+                variant: ((which * layout.variants.max(1) as f64) as usize).min(layout.variants.max(1) - 1),
+                position: Vector3::new(x, hit.point.y, z),
+                yaw, scale, mirror, slope,
+            });
+        }
     }
     placed
 }

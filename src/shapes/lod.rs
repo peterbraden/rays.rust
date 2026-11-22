@@ -265,52 +265,9 @@ pub struct CardSet {
     bvh: Bvh,
     cards: Vec<Card>,
     clusters: Clusters,
-    /// Research prototype (`lod_volume`): the coarsest clusters as volumes, behind their own BVH.
-    volumes: Vec<volume::Volume>,
-    volume_bvh: Option<Bvh>,
 }
 
 impl CardSet {
-    /// The nearest card `r` hits within `min .. max`, shaded.
-    fn card_hit(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
-        if self.cards.is_empty() {
-            return None;
-        }
-        // Search by distance alone, then choose the constituent of the nearest card only: many
-        // cards may be hit on the way to it.
-        let mut nearest = None;
-        self.bvh.nearest(r, min, max, |i, best| {
-            let hit = self.cards[i].hit(r)?;
-            let dist = hit.0 * r.rd.norm();
-            if dist < min || dist >= best {
-                return None;
-            }
-            nearest = Some(hit);
-            Some(RawIntersection { dist, point: Vector3::zeros(), normal: Vector3::zeros(), face: 0, part: 0 })
-        }).map(|(i, x)| {
-            // The last hit accepted is the nearest; find it again if a farther one came after.
-            let hit = nearest.filter(|h| h.0 * r.rd.norm() == x.dist).or_else(|| self.cards[i].hit(r)).unwrap();
-            self.shade(i, r, hit)
-        })
-    }
-
-    /// The nearest volume `r` is stopped in within `min .. max`, shaded as one of its
-    /// constituents.
-    fn volume_hit(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
-        let bvh = self.volume_bvh.as_ref()?;
-        bvh.nearest(r, min, max, |i, best| {
-            let v = &self.volumes[i];
-            let t = v.hit(r, hash01(r, v.cluster as f64, 0.75))?;
-            let dist = t * r.rd.norm();
-            if dist < min || dist >= best {
-                return None;
-            }
-            let d = r.rd.normalize();
-            let k = self.clusters.choose(v.cluster, &d, hash01(r, v.cluster as f64, 0.5));
-            Some(RawIntersection { dist, point: r.ro + r.rd * t, normal: k.normal(), face: k.face, part: 0 })
-        }).map(|(_, x)| x)
-    }
-
     pub fn cards(&self) -> &[Card] {
         &self.cards
     }
@@ -342,34 +299,40 @@ impl Geometry for CardSet {
     }
 
     fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
-        let card = self.card_hit(r, min, max);
-        let max = card.as_ref().map_or(max, |h| h.dist);
-        self.volume_hit(r, min, max).or(card)
+        if self.cards.is_empty() {
+            return None;
+        }
+        // Search by distance alone, then choose the constituent of the nearest card only: many
+        // cards may be hit on the way to it.
+        let mut nearest = None;
+        self.bvh.nearest(r, min, max, |i, best| {
+            let hit = self.cards[i].hit(r)?;
+            let dist = hit.0 * r.rd.norm();
+            if dist < min || dist >= best {
+                return None;
+            }
+            nearest = Some(hit);
+            Some(RawIntersection { dist, point: Vector3::zeros(), normal: Vector3::zeros(), face: 0, part: 0 })
+        }).map(|(i, x)| {
+            // The last hit accepted is the nearest; find it again if a farther one came after.
+            let hit = nearest.filter(|h| h.0 * r.rd.norm() == x.dist).or_else(|| self.cards[i].hit(r)).unwrap();
+            self.shade(i, r, hit)
+        })
     }
 
     fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
-        (!self.cards.is_empty() && self.bvh.any_hit(r, min, max, |i| self.cards[i].hit(r).is_some_and(|(t, _, _)| {
+        !self.cards.is_empty() && self.bvh.any_hit(r, min, max, |i| self.cards[i].hit(r).is_some_and(|(t, _, _)| {
             let d = t * r.rd.norm();
             d >= min && d < max
-        }))) || self.volume_bvh.as_ref().is_some_and(|bvh| bvh.any_hit(r, min, max, |i| {
-            let v = &self.volumes[i];
-            v.hit(r, hash01(r, v.cluster as f64, 0.75)).is_some_and(|t| {
-                let d = t * r.rd.norm();
-                d >= min && d < max
-            })
         }))
     }
 
     fn bounds(&self) -> BBox {
-        match &self.volume_bvh {
-            Some(v) if self.cards.is_empty() => v.bounds(),
-            Some(v) => self.bvh.bounds().union(&v.bounds()),
-            None => self.bvh.bounds(),
-        }
+        self.bvh.bounds()
     }
 
     fn primitives(&self) -> u64 {
-        (self.cards.len() + self.volumes.len()) as u64
+        self.cards.len() as u64
     }
 
     fn surface_area(&self) -> f64 {
@@ -483,40 +446,47 @@ pub fn simplify(triangles: &[Arc<SmoothTriangle>], cell: f64) -> Vec<Arc<SmoothT
 /// The aggregate `triangles` gathered into clusters `size` across, each made a `Card` (see the
 /// module's notes); a cluster of one or two triangles keeps them.
 pub fn consolidate(triangles: &[Arc<Tagged<Triangle>>], size: f64) -> CardSet {
-    let mut clusters = Clusters::default();
-    let mut cards: Vec<Card> = vec![];
-    let mut volumes: Vec<volume::Volume> = vec![];
-    for group in groups(triangles, size) {
+    use rayon::prelude::*;
+    /// What a cluster becomes: its pieces kept as triangles, or a card and its constituents.
+    enum Made {
+        Kept(Vec<Card>),
+        Card(Card, Vec<(Vector3<f64>, f64, u32)>),
+        Nothing,
+    }
+    // Clusters are made independently, in parallel; each draws its representatives by its own
+    // number, so the result doesn't depend on the order they're made in.
+    let groups = groups(triangles, size);
+    let made: Vec<Made> = groups.par_iter().enumerate().map(|(g, group)| {
         let members: Vec<&Tagged<Triangle>> = group.iter().map(|&i| &*triangles[i]).collect();
         if members.len() <= 2 {
             // Too few to gain by: keep them, as triangles.
-            for m in members {
+            return Made::Kept(members.iter().map(|m| {
                 let t = &m.item;
                 assert!(m.face & TRIANGLE == 0, "face {} is too large to keep", m.face);
-                cards.push(Card { corner: single(&t.v0), u: single(&(t.v1 - t.v0)), v: single(&(t.v2 - t.v0)), data: m.face | TRIANGLE });
-            }
-            continue;
+                Card { corner: single(&t.v0), u: single(&(t.v1 - t.v0)), v: single(&(t.v2 - t.v0)), data: m.face | TRIANGLE }
+            }).collect());
         }
-        if volume::threshold().is_some_and(|n| members.len() >= n) {
-            let all: Vec<(Vector3<f64>, f64, u32)> = members.iter().map(|m| {
-                let t = &m.item;
-                (t.normal, 0.5 * (t.v1 - t.v0).cross(&(t.v2 - t.v0)).norm(), m.face)
-            }).collect();
-            let kept = constituents(&all, cards.len() as u64);
-            let c = clusters.push(&kept);
-            if let Some(v) = volume::volume(&members, c, 256) {
-                volumes.push(v);
-                continue;
-            }
+        match card(&members) {
+            Some((corner, u, v)) => {
+                let all: Vec<(Vector3<f64>, f64, u32)> = members.iter().map(|m| {
+                    let t = &m.item;
+                    (t.normal, 0.5 * (t.v1 - t.v0).cross(&(t.v2 - t.v0)).norm(), m.face)
+                }).collect();
+                Made::Card(Card { corner: single(&corner), u: single(&u), v: single(&v), data: 0 }, constituents(&all, g as u64))
+            },
+            None => Made::Nothing,
         }
-        if let Some((corner, u, v)) = card(&members) {
-            let all: Vec<(Vector3<f64>, f64, u32)> = members.iter().map(|m| {
-                let t = &m.item;
-                (t.normal, 0.5 * (t.v1 - t.v0).cross(&(t.v2 - t.v0)).norm(), m.face)
-            }).collect();
-            let kept = constituents(&all, cards.len() as u64);
-            let c = clusters.push(&kept);
-            cards.push(Card { corner: single(&corner), u: single(&u), v: single(&v), data: c });
+    }).collect();
+    let mut clusters = Clusters::default();
+    let mut cards: Vec<Card> = vec![];
+    for m in made {
+        match m {
+            Made::Kept(kept) => cards.extend(kept),
+            Made::Card(mut card, kept) => {
+                card.data = clusters.push(&kept);
+                cards.push(card);
+            },
+            Made::Nothing => {},
         }
     }
     // Kept for the whole render, and grown by pushing: give back the slack.
@@ -524,11 +494,7 @@ pub fn consolidate(triangles: &[Arc<Tagged<Triangle>>], size: f64) -> CardSet {
     clusters.items.shrink_to_fit();
     // A card is cheaper to test than a node to visit, and smaller: leaves of a few.
     let (bvh, cards) = Bvh::build_with_leaves(cards, Card::bounds, CARDS_PER_LEAF);
-    let (volume_bvh, volumes) = if volumes.is_empty() { (None, volumes) } else {
-        let (b, v) = Bvh::build_with_leaves(volumes, volume::Volume::bounds, 1);
-        (Some(b), v)
-    };
-    CardSet { bvh, cards, clusters, volumes, volume_bvh }
+    CardSet { bvh, cards, clusters }
 }
 
 /// What a card keeps of the pieces `all` (normal, area, face) of its cluster. Pieces of one face
@@ -841,9 +807,6 @@ fn card(members: &[&Tagged<Triangle>]) -> Option<(Vector3<f64>, Vector3<f64>, Ve
     let (u, v) = (a1 * (w * k), a2 * (h * k));
     Some((mid - 0.5 * (u + v), u, v))
 }
-
-#[path = "lod_volume.rs"]
-mod volume;
 
 #[cfg(test)]
 #[path = "lod_research.rs"]

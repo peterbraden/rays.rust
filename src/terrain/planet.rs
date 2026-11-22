@@ -430,8 +430,13 @@ mod tests {
         let p = planet(1);
         let pts = samples();
         let diff = pts.iter().map(|d| (p.elevation(d, 1000.) - p.elevation(d, 50000.)).abs()).fold(0., f64::max);
-        // The ridges' fine octaves, and the folds, which are too narrow for the coarse grid.
+        // The ridges' fine octaves, and the folds, which are too narrow for the coarse grid: their
+        // relief, and the ridges' emphasis on the anticlines (up to the mountains' height,
+        // 1.2 H at most, times the share).
         let g = &p.params.geology;
-        assert!(diff < 600. + g.fold_relief * g.fold_amplitude, "{}", diff);
+        assert!(diff < 600. + g.fold_relief * (g.fold_amplitude + 1.2 * p.params.mountain_height), "{}", diff);
+        // But the folds average out: the coarse grid isn't higher or lower overall.
+        let bias = pts.iter().map(|d| p.elevation(d, 1000.) - p.elevation(d, 50000.)).sum::<f64>() / pts.len() as f64;
+        assert!(bias.abs() < 50., "{}", bias);
     }
 }

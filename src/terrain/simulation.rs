@@ -21,7 +21,8 @@
 //! 6. limestone dissolving (`dissolve`; its rain also sinks, to rise at springs, in routing),
 //!    landslides where slopes are steeper than their rock holds (`fluvial::landslide`), and
 //!    hillslope diffusion (`fluvial`), faster on weak rock and sediment;
-//! 7. meandering rivers, a sub-grid model drawn over the terrain (`channel`);
+//! 7. meandering rivers, a sub-grid model drawn over the terrain (`channel`), cutting back the
+//!    valley walls they press against (`cut_walls`);
 //! 8. the crust's isostatic response to what erosion, deposition and ice have changed of its
 //!    load (`isostasy`): it rises as rock is taken off and sinks under ice.
 //!
@@ -194,6 +195,9 @@ pub struct Terrain {
     pub shifted: (i64, i64),
     /// Detail of the folds down to this wavelength, metres.
     finest: f64,
+    /// Rock meandering channels cut from their valley walls at the last step, joining each
+    /// river cell's sediment at the next, m³/yr.
+    banks: Vec<f64>,
     /// The ground at time zero, from which the load on the crust is reckoned.
     ground0: Vec<f64>,
     /// Cells that were sea at time zero. Ground eroded below sea level later is a lake bed
@@ -272,7 +276,7 @@ impl Terrain {
         let wind = crate::terrain::climate::wind(&params.climate.clone().unwrap_or_default(), centre.y.clamp(-1., 1.).asin());
         let mut t = Terrain {
             precipitation: base_precipitation.clone(), base_precipitation, wind,
-            domain, params, planet, time: 0., ela, bed, uplift, structure, exhumed: vec![0.; n], rebound: vec![0.; n], ground0: vec![], belt_uplift, velocity, displacement: (0., 0.), shifted: (0, 0), finest, latitude, sea, vents, rivers: Rivers::default(),
+            domain, params, planet, time: 0., ela, bed, uplift, structure, exhumed: vec![0.; n], rebound: vec![0.; n], ground0: vec![], belt_uplift, velocity, displacement: (0., 0.), shifted: (0, 0), finest, banks: vec![0.; n], latitude, sea, vents, rivers: Rivers::default(),
             sediment: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
             ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
@@ -470,7 +474,8 @@ impl Terrain {
         let before = self.bed.clone();
         let lateral = lateral_erosion(&self.domain, &flow, &mut self.bed, &fixed, &erodibility, &lake, &self.params.fluvial, dt);
         self.record(&before);
-        let source: Vec<f64> = glacial.iter().zip(&lateral).map(|(a, b)| a + b).collect();
+        let source: Vec<f64> = (0..self.domain.len()).map(|i| glacial[i] + lateral[i] + self.banks[i]).collect();
+        self.banks.iter_mut().for_each(|b| *b = 0.);
         let before = self.bed.clone();
         self.sediment_flux = erode_and_deposit(&self.domain, &flow, &mut self.bed, &fixed, &erodibility, &lake, &source, &self.params.fluvial, dt);
         self.record(&before);
@@ -499,7 +504,8 @@ impl Terrain {
                 if r == i { 0. } else { (self.bed[i] - self.bed[r]).max(0.) / flow.receiver_dist[i] }
             }).collect();
             let wet: Vec<bool> = (0..n).map(|i| fixed[i] || self.ice[i] >= ICE_FREE || lake[i] > LAKE).collect();
-            self.rivers.step(&self.domain, self.params.planet.seed, self.time, dt, &flow.receiver, &flow.area, &slope, &self.sediment, &wet, &self.bed, c);
+            let pushes = self.rivers.step(&self.domain, self.params.planet.seed, self.time, dt, &flow.receiver, &flow.area, &slope, &self.sediment, &wet, &self.bed, c);
+            self.cut_walls(&pushes, &fixed, dt);
         }
         self.receiver = flow.receiver.clone();
         self.drainage = flow.area;
@@ -608,6 +614,28 @@ impl Terrain {
         self.uplift = self.belt_uplift.iter().zip(&self.structure).map(|(u, s)| u * (1. + growth * s.crest).max(0.)).collect();
     }
 
+    /// Cut back the valley walls meandering channels pressed against (`channel::Push`): each
+    /// by the area its bank would have swept times its height above the river, slowed by its
+    /// erodibility relative to alluvium, never below the river. The rock taken is the river's
+    /// sediment at the next step (`banks`).
+    fn cut_walls(&mut self, pushes: &[crate::terrain::channel::Push], fixed: &[bool], dt: f64) {
+        if pushes.is_empty() { return; }
+        let erodibility = self.erodibility();
+        let alluvium = self.params.sediment_erodibility.max(1e-9);
+        let before = self.bed.clone();
+        for push in pushes {
+            let (wall, river) = (push.wall, push.river);
+            if fixed[wall] || self.ice[wall] >= ICE_FREE { continue; }
+            let height = self.bed[wall] - before[river];
+            if height <= 0. { continue; }
+            let volume = push.area * height * (erodibility[wall] / alluvium).min(1.);
+            let lowered = (volume / self.domain.area[wall]).min(height);
+            self.bed[wall] -= lowered;
+            self.banks[river] += lowered * self.domain.area[wall] / dt;
+        }
+        self.record(&before);
+    }
+
     /// Let the crust respond to the load erosion, deposition and ice have put on it or taken
     /// off since time zero (`isostasy`), relaxing towards equilibrium over `dt` years. It moves
     /// the rock as uplift does; base level (the sea, a patch's edge) is held.
@@ -691,6 +719,8 @@ pub struct Snapshot {
     shifted: (i64, i64),
     #[serde(default)]
     ground0: Vec<f64>,
+    #[serde(default)]
+    banks: Vec<f64>,
     channels: Vec<crate::terrain::channel::Channel>,
     oxbows: Vec<crate::terrain::channel::Oxbow>,
     rivers_found: Option<f64>,
@@ -714,7 +744,7 @@ impl Terrain {
             time: self.time, bed: self.bed.clone(), sediment: self.sediment.clone(), lava: self.lava.clone(),
             sediment_flux: self.sediment_flux.clone(), ice: self.ice.clone(), sea: self.sea.clone(),
             drainage: self.drainage.clone(), receiver: self.receiver.clone(), sliding: self.sliding.clone(), exhumed: self.exhumed.clone(), rebound: self.rebound.clone(),
-            displacement: self.displacement, shifted: self.shifted, ground0: self.ground0.clone(),
+            displacement: self.displacement, shifted: self.shifted, ground0: self.ground0.clone(), banks: self.banks.clone(),
             channels: self.rivers.channels.clone(), oxbows: self.rivers.oxbows.clone(), rivers_found: self.rivers.found,
         }
     }
@@ -737,6 +767,7 @@ impl Terrain {
             else { self.uplift.iter().zip(&self.sea).map(|(u, &sea)| if sea { 0. } else { u * s.time }).collect() };
         self.rebound = if s.rebound.len() == self.domain.len() { s.rebound } else { vec![0.; self.domain.len()] };
         if s.ground0.len() == self.domain.len() { self.ground0 = s.ground0; }
+        self.banks = if s.banks.len() == self.domain.len() { s.banks } else { vec![0.; self.domain.len()] };
         self.displacement = s.displacement;
         if s.shifted != self.shifted {
             self.shifted = s.shifted;
@@ -974,6 +1005,23 @@ mod tests {
         eprintln!("k_sn hard {} soft {}; hillslopes hard {} soft {} ({} channel cells)", hard, soft, slopes(true), slopes(false), ksn.len());
         assert!(hard > soft, "k_sn on hard rock {} vs soft {}", hard, soft);
         assert!(slopes(true) > slopes(false));
+    }
+
+    #[test]
+    fn test_meanders_cut_back_their_valley_walls() {
+        let mut params = TerrainParams::default();
+        params.glacier = None;
+        params.step = 500.;
+        let planet = Planet::new(params.planet.clone());
+        let (lat, lon) = planet.most_coastal(2000);
+        let mut t = Terrain::new(Domain::patch(lat, lon, 64, 500., params.planet.radius), params);
+        let mut cut = 0.;
+        for _ in 0..60 {
+            t.step(500.);
+            cut += t.banks.iter().sum::<f64>();
+        }
+        assert!(!t.rivers.channels.is_empty(), "no meandering rivers");
+        assert!(cut > 0., "no valley wall was cut");
     }
 
     #[test]

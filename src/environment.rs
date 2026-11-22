@@ -170,6 +170,11 @@ pub fn viewpoint(s: &Scene) -> Vector3<f64> {
 /// they would be blocked. A heuristic: it is exact only at `origin`, and the light's density
 /// stays consistent wherever it is wrong, so the estimate stays unbiased.
 pub fn visibility(s: &Scene, origin: &Vector3<f64>, d: &Vector3<f64>) -> f64 {
+    // Through a medium the transmittance is an estimate, from random numbers: this
+    // direction's own, always, so that the table is the same each time the scene is set up
+    // (and a render of clouds is the same render twice, which it wasn't).
+    let bits = d.x.to_bits() ^ d.y.to_bits().rotate_left(21) ^ d.z.to_bits().rotate_left(42);
+    crate::geometry::seed_rand(0x7669_7369, bits);
     // Only a guess, so displaced terrain is seen roughly, without dicing it.
     crate::shapes::displaced::roughly(|| s.objects.transmittance(&Ray { ro: *origin, rd: *d }, SUN_SHADOW_DISTANCE, f64::MIN_POSITIVE).rgb.mean())
 }

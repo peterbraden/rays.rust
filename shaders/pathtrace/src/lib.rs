@@ -1359,7 +1359,17 @@ fn scattering(s: &Scene, a: &Air, o: Vec3, d: Vec3) -> (Vec3, Vec3, Vec3) {
 }
 
 /// One of `SkyViewLUT`'s slices, bilinear (`lookup_slice`).
-fn lut_slice(s: &Scene, a: &Air, slice: u32, d: Vec3) -> (Vec3, Vec3, Vec3) {
+fn lut_slice(s: &Scene, a: &Air, slice: u32, place: (UVec4, Vec4)) -> (Vec3, Vec3, Vec3) {
+    let base = a.lut + slice * LUT_WIDTH * LUT_HEIGHT * 9;
+    let (t, w) = (place.0 + UVec4::splat(base), place.1);
+    // Rayleigh, Mie and multiple scattering, each bilinear.
+    (lut_texels(s, t, w, 0), lut_texels(s, t, w, 3), lut_texels(s, t, w, 6))
+}
+
+/// Where a direction is in a slice of the table: its four texels, from the slice's start, and
+/// their weights. The same in every slice, so found once for the two a lookup reads (its
+/// arcsine and arctangent were a tenth of a simple scene's render when found for each).
+fn lut_place(d: Vec3) -> (UVec4, Vec4) {
     let l = d.y.clamp(0.0, 1.0).asin();
     let v = (l / (PI / 2.0)).sqrt() * (LUT_HEIGHT - 1) as f32;
     let u = fract(d.z.atan2(d.x) / (2.0 * PI)) * LUT_WIDTH as f32;
@@ -1367,14 +1377,10 @@ fn lut_slice(s: &Scene, a: &Air, slice: u32, d: Vec3) -> (Vec3, Vec3, Vec3) {
     let y0 = (v.floor() as u32).min(LUT_HEIGHT - 2);
     let (x1, y1) = ((x0 + 1) % LUT_WIDTH, y0 + 1);
     let (fx, fy) = (u - u.floor(), v - y0 as f32);
-    let base = a.lut + slice * LUT_WIDTH * LUT_HEIGHT * 9;
-    let t = UVec4::new(base + 9 * (y0 * LUT_WIDTH + x0), base + 9 * (y0 * LUT_WIDTH + x1), base + 9 * (y1 * LUT_WIDTH + x0), base + 9 * (y1 * LUT_WIDTH + x1));
-    let w = Vec4::new((1.0 - fx) * (1.0 - fy), fx * (1.0 - fy), (1.0 - fx) * fy, fx * fy);
-    // Rayleigh, Mie and multiple scattering, each bilinear.
-    (lut_texels(s, t, w, 0), lut_texels(s, t, w, 3), lut_texels(s, t, w, 6))
+    let t = UVec4::new(9 * (y0 * LUT_WIDTH + x0), 9 * (y0 * LUT_WIDTH + x1), 9 * (y1 * LUT_WIDTH + x0), 9 * (y1 * LUT_WIDTH + x1));
+    (t, Vec4::new((1.0 - fx) * (1.0 - fy), fx * (1.0 - fy), (1.0 - fx) * fy, fx * fy))
 }
 
-/// The four texels `t` (offsets) weighted by `w`, at `c` within each.
 fn lut_texels(s: &Scene, t: UVec4, w: Vec4, c: u32) -> Vec3 {
     tv3(s, t.x + c) * w.x + tv3(s, t.y + c) * w.y + tv3(s, t.z + c) * w.z + tv3(s, t.w + c) * w.w
 }
@@ -1398,8 +1404,9 @@ fn lut_lookup(s: &Scene, a: &Air, d: Vec3, altitude: f32) -> Option<(Vec3, Vec3,
     let i = i.clamp(1, LUT_SLICES - 1);
     let (h0, h1) = (lut_altitude(s, a, i - 1), lut_altitude(s, a, i));
     let f = (aa - h0) / (h1 - h0);
-    let (r0, m0, s0) = lut_slice(s, a, i - 1, d);
-    let (r1, m1, s1) = lut_slice(s, a, i, d);
+    let place = lut_place(d);
+    let (r0, m0, s0) = lut_slice(s, a, i - 1, place);
+    let (r1, m1, s1) = lut_slice(s, a, i, place);
     Some((r0 * (1.0 - f) + r1 * f, m0 * (1.0 - f) + m1 * f, s0 * (1.0 - f) + s1 * f))
 }
 

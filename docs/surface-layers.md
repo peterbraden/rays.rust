@@ -65,8 +65,12 @@ value otherwise; either moved first by a `breakup`; `default`, 0, on surfaces wi
 | `elevation` | Metres above sea level, the planet's curvature and the scale taken out |
 | `snowline`, `treeline` | Metres above the snowline and treeline, from the climate model (or by latitude) |
 | `temperature`, `precipitation` | The climate's mean annual °C and mm a year (full scale only) |
+| `rock` | The rock exposed, by number: 0 sediment, 1 shale, 2 sandstone, 3 limestone, 4 quartzite, 5 schist, 6 gneiss, 7 granite, 8 basalt (docs/geology.md) |
+| `hardness` | How hard that rock is to rivers, from -1.4 (sediment) to 1.5 (basalt) |
 
 Each is kept at the simulation's cell corners and interpolated by Catmull-Rom splines, so
-masks follow the landscape without showing its grid; at full scale the nested patches are
+masks follow the landscape without showing its grid (but `rock` and `hardness`: the bedrock's
+structure is interpolated, and the rock looked up at the point's own height, so beds are sharp
+bands across the slopes); at full scale the nested patches are
 blended as their surfaces are. The thresholds in the demo came from looking at the fields
 first: render a `mix` of two `flat` materials with the field `remap`ped to its amount.

@@ -78,6 +78,7 @@ use crate::ray::Ray;
 use crate::scene::Scene;
 use crate::shapes::mesh::{IndexedMesh, SmoothMesh};
 use crate::terrain::channel::{point_cell, WaterLines};
+use crate::terrain::geology::Rock;
 use crate::terrain::domain::{sphere_dir, Domain, Layout};
 use crate::terrain::climate::{Biome, Climate};
 use crate::terrain::glacier::GlacierParams;
@@ -746,6 +747,22 @@ impl Ground {
         self.layers.iter().find(|l| l.contains(d))
     }
 
+    /// The rock exposed at `d`, `h` metres up (`SimFields::rock`): from the finest simulation
+    /// that is more than half of the blend there, so it isn't averaged between simulations.
+    pub fn rock(&self, d: &Vector3<f64>, h: f64) -> Option<Rock> {
+        let l = self.layers.iter().find(|l| l.weight(d) > 0.5).or(self.layers.last())?;
+        Some(l.fields.rock(&l.domain, d, h))
+    }
+
+    /// The colour of bare rock at `d`, `h` metres up: the bedrock's own (a sediment-covered
+    /// cell's steep slopes show the default rock), weathered towards a common grey.
+    fn stone(&self, d: &Vector3<f64>, h: f64) -> Color {
+        match self.rock(d, h) {
+            Some(r) if r != Rock::Sediment => colour(ROCK) * 0.3 + colour(r.colour()) * 0.7,
+            _ => colour(ROCK),
+        }
+    }
+
     /// Whether scene point `p` is in a river or lake.
     pub fn wet(&self, p: &Vector3<f64>) -> bool {
         let (d, _) = self.frame.on_planet(p);
@@ -811,7 +828,7 @@ impl Ground {
             let blue = smoothstep(0.45, 0.7, n(80., 0.4) + 0.3 * (n(15., 0.45) - 0.5));
             let low = smoothstep(snowline - 300., snowline - 1500., h);
             let debris = (1. - snow) * smoothstep(0.55, 0.75, n(350., 0.6) + 0.35 * low - 0.1);
-            let stone = colour(ROCK) * (0.7 + 0.6 * n(250., 0.7)) * grain;
+            let stone = self.stone(&d, h) * (0.7 + 0.6 * n(250., 0.7)) * grain;
             let ground = mix(stone, colour(GRAVEL) * (0.8 + 0.4 * n(40., 0.65)), held);
             // Crevasses: where the ice steepens it speeds up and stretches, and opens in
             // cracks across its flow (along the slope's contours), tens of metres apart, their
@@ -877,7 +894,7 @@ impl Ground {
         // Bare rock on steep slopes (about 40°), and scree and rock above the meadows.
         let high = smoothstep(tree + 300., tree + 900., h + (n(600., 0.6) - 0.5) * 300.);
         let rock = (1. - smoothstep(0.7, 0.85, flat)).max(high * (1. - 0.6 * smoothstep(0.92, 0.99, flat)));
-        let stone = mix(colour(ROCK), colour(SCREE), smoothstep(0.85, 0.95, flat)) * (0.7 + 0.6 * n(250., 0.7));
+        let stone = mix(self.stone(&d, h), colour(SCREE), smoothstep(0.85, 0.95, flat)) * (0.7 + 0.6 * n(250., 0.7));
         ground = mix(ground, stone, rock) * grain;
         // Snow lies above the snowline where slopes are gentle enough to hold it, and drifts
         // lower in sheltered places.
@@ -913,6 +930,9 @@ impl crate::graph::Fields for Ground {
                 let local = self.climate.as_ref()?.local(&d, h);
                 return Some(if f == Field::Temperature { local.mean } else { local.precipitation });
             },
+            // A rock's number can't be blended between simulations.
+            Field::Rock => return self.rock(&d, h).map(|r| r.index() as f64),
+            Field::Hardness => return self.rock(&d, h).map(|r| -r.scores().0),
             _ => {},
         }
         let (mut sum, mut left) = (0., 1.);
@@ -1112,6 +1132,9 @@ mod tests {
             let local = Local::under(&f, x0, z0);
             let (d, h) = f.on_planet(&local.origin);
             let ground = r.height(&d, r.slope(&d), 2.) - h;
+            // The synthetic detail, which the rings carry less of than the patch, grows with
+            // the slope (`Relief::detail`), and so may their difference near the patch's edge.
+            let tolerance = 5. * (0.05 + r.slope(&d));
             let view = Viewpoint { location: local.to_scene(&Vector3::new(0., ground + 50., 0.)) };
             let clipmap = Clipmap::new(&r, &f, &view, &p);
             let surface = Surface { relief: &r, frame: &f, local: &local, clipmap: &clipmap, cell: 2. };
@@ -1145,7 +1168,7 @@ mod tests {
                 }
                 if (180. ..200.).contains(&x) {
                     let ring = y(&rings, x, z).unwrap();
-                    assert!((h - ring).abs() < 1., "{} vs the rings' {} at {} ({}, {})", h, ring, x, x0, z0);
+                    assert!((h - ring).abs() < tolerance, "{} vs the rings' {} at {} ({}, {})", h, ring, x, x0, z0);
                 }
             }
         }

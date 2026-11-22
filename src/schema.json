@@ -2218,6 +2218,12 @@
           "doc": "Also write a shaded relief map image of the (finest) patch here."
         },
         {
+          "name": "geology_map",
+          "kind": "path",
+          "default": null,
+          "doc": "Also write a map of the rock exposed on the (finest) patch here."
+        },
+        {
           "name": "step",
           "kind": "number",
           "default": 100,
@@ -2337,19 +2343,37 @@
           "name": "strata_thickness",
           "kind": "number",
           "default": 600,
-          "doc": "Thickness of one hard plus one soft bedrock layer, m."
+          "doc": "Mean thickness of one hard plus one soft bed of the cover, m."
         },
         {
           "name": "strata_contrast",
           "kind": "number",
           "default": 5,
-          "doc": "Ratio of erodibility between softest and hardest bedrock."
+          "doc": "Ratio of erodibility between softest and hardest bedrock (geology's contrast)."
         },
         {
           "name": "fold_amplitude",
           "kind": "number",
-          "default": 800,
-          "doc": "How far bedrock layers are folded up and down, m."
+          "default": 1500,
+          "doc": "Structural amplitude of the mountain belts' folds, m."
+        },
+        {
+          "name": "geology",
+          "kind": "object",
+          "default": null,
+          "doc": "The bedrock: folded strata over basement, with plutons (docs/geology.md).",
+          "fields": [
+            {"name": "strata_thickness", "kind": "number", "default": 600, "doc": "Mean thickness of a hard and a soft bed together, m."},
+            {"name": "contrast", "kind": "number", "default": 5, "doc": "Ratio of erodibility between the softest and hardest rocks.", "min": 1},
+            {"name": "fold_amplitude", "kind": "number", "default": 1500, "doc": "Structural amplitude of the mountain belts' folds, m."},
+            {"name": "fold_wavelength", "kind": "number", "default": 8000, "doc": "Crest-to-crest spacing of the folds, m.", "min": 100},
+            {"name": "fold_relief", "kind": "number", "default": 0.5, "doc": "Share of the folds' relief that is topography at time zero; ridges raised on anticlines."},
+            {"name": "fold_growth", "kind": "number", "default": 0.5, "doc": "Extra uplift at anticline crests (less in synclines), as a fraction."},
+            {"name": "warp_amplitude", "kind": "number", "default": 400, "doc": "Gentle undulation of the strata everywhere, m."},
+            {"name": "cover_thickness", "kind": "number", "default": 3000, "doc": "Typical thickness of the sedimentary cover over the basement, m."},
+            {"name": "exhumation", "kind": "number", "default": 4000, "doc": "How far the basement was raised in the strongest belts before time zero, m."},
+            {"name": "plutons", "kind": "number", "default": 1, "doc": "How many granite plutons: 0 for none.", "min": 0}
+          ]
         },
         {
           "name": "sediment_erodibility",
@@ -2361,7 +2385,19 @@
           "name": "lava_erodibility",
           "kind": "number",
           "default": 0.3,
-          "doc": "Erodibility of volcanic rock relative to average bedrock."
+          "doc": "Erodibility of volcanic rock by rivers relative to average bedrock."
+        },
+        {
+          "name": "sediment_glacial_erodibility",
+          "kind": "number",
+          "default": 3,
+          "doc": "Erodibility of sediment by glaciers relative to average bedrock."
+        },
+        {
+          "name": "lava_glacial_erodibility",
+          "kind": "number",
+          "default": 1.5,
+          "doc": "Erodibility of volcanic rock by glaciers (columnar joints) relative to average bedrock."
         },
         {
           "name": "fluvial",

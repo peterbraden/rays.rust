@@ -20,14 +20,22 @@
 //!
 //! ## Geology
 //!
-//! The ground is layered. At the bottom is bedrock, whose erodibility varies with position and
-//! depth (`Planet::erodibility`: folded strata of hard and soft rock). On it lies volcanic rock
-//! (`lava`), and on top sediment (`sediment`): alluvium, lake fill, colluvium from hillslopes.
-//! Ground gained by deposition or creep is sediment; ground lost is taken from the sediment,
-//! then the lava, then the bedrock, so erosion cuts through the layers in order. Rivers and
-//! glaciers erode whatever is exposed with its own erodibility: sediment 3 times average
-//! bedrock, lava 0.3 times (both model choices; fresh basalt is strong, unconsolidated sediment
-//! weak). Uplift moves all layers together.
+//! The ground is layered. At the bottom is bedrock (`geology`): a folded sedimentary cover of
+//! hard and soft beds over crystalline basement, with granite plutons, each cell's structure
+//! fixed at time zero (`structure`). On it lies volcanic rock (`lava`), and on top sediment
+//! (`sediment`): alluvium, lake fill, colluvium from hillslopes. Ground gained by deposition or
+//! creep is sediment; ground lost is taken from the sediment, then the lava, then the bedrock,
+//! so erosion cuts through the layers in order. Uplift moves all layers together, and carries
+//! the bedrock up through its column (`exhumed`), so erosion that keeps pace with it cuts into
+//! ever deeper rock.
+//!
+//! Rivers and glaciers erode whatever is exposed, each with its own erodibility for each rock
+//! (`erodibility`, `glacial_erodibility`; `geology::Rock::erodibility`): glaciers quarry
+//! jointed rock such as basalt and quartzite that rivers can hardly cut, and leave massive
+//! granite standing. Sediment is 3 times as erodible as average bedrock to both; lava 0.3 times
+//! to rivers but 1.5 times to glaciers (model choices: fresh basalt is strong, but columnar
+//! joints are easily quarried). In the mountain belts the folds' anticlines are uplifted faster
+//! than their synclines (`GeologyParams::fold_growth`).
 
 //! Everything is a deterministic function of the parameters (including the seed) and t, and
 //! the state at t2 is the state at t1 advanced by t2 - t1. So an animation renders successive
@@ -62,6 +70,8 @@ use crate::terrain::volcano::{erupt, vents, Vent, VolcanoParams};
 use crate::terrain::marine::{self, MarineParams};
 use crate::terrain::channel::{ChannelParams, Rivers};
 use crate::terrain::fluvial::LAKE;
+use crate::terrain::geology::{Process, Rock, Structure};
+use rayon::prelude::*;
 use std::f64::consts::TAU;
 
 #[derive(Clone, Debug)]
@@ -83,6 +93,10 @@ pub struct TerrainParams {
     pub sediment_erodibility: f64,
     /// Erodibility of volcanic rock, relative to average bedrock.
     pub lava_erodibility: f64,
+    /// Erodibility of sediment by glaciers, relative to average bedrock.
+    pub sediment_glacial_erodibility: f64,
+    /// Erodibility of volcanic rock by glaciers, relative to average bedrock.
+    pub lava_glacial_erodibility: f64,
     /// Length of a landscape evolution step, years.
     pub step: f64,
 }
@@ -99,6 +113,8 @@ impl Default for TerrainParams {
             climate: None,
             sediment_erodibility: 3.,
             lava_erodibility: 0.3,
+            sediment_glacial_erodibility: 3.,
+            lava_glacial_erodibility: 1.5,
             step: 100.,
         }
     }
@@ -126,6 +142,10 @@ pub struct Terrain {
     pub ice: Vec<f64>,
     /// Tectonic uplift rate, metres per year.
     pub uplift: Vec<f64>,
+    /// The bedrock's structure under each cell (`geology`).
+    pub structure: Vec<Structure>,
+    /// How far uplift has carried each cell's rock up since time zero, metres.
+    pub exhumed: Vec<f64>,
     /// Cells that were sea at time zero. Ground eroded below sea level later is a lake bed
     /// (eg. a glacially overdeepened basin), not sea.
     pub sea: Vec<bool>,
@@ -158,8 +178,11 @@ impl Terrain {
         let planet = Planet::new(params.planet.clone());
         // Detail down to about two cells.
         let finest = 2. * domain.min_spacing();
-        let bed: Vec<f64> = domain.dirs.iter().map(|d| planet.elevation(d, finest)).collect();
-        let uplift = domain.dirs.iter().map(|d| planet.uplift(d)).collect();
+        let bed: Vec<f64> = domain.dirs.par_iter().map(|d| planet.elevation(d, finest)).collect();
+        let structure: Vec<Structure> = domain.dirs.par_iter().map(|d| planet.structure(d, finest)).collect();
+        // Folds still growing: anticlines rise faster than synclines.
+        let growth = params.planet.geology.fold_growth;
+        let uplift = domain.dirs.iter().zip(&structure).map(|(d, s)| planet.uplift(d) * (1. + growth * s.crest).max(0.)).collect();
         let latitude = domain.dirs.iter().map(|d| d.y.clamp(-1., 1.).asin()).collect();
         let n = domain.len();
         let sea = bed.iter().map(|&b| b < 0.).collect();
@@ -169,7 +192,7 @@ impl Terrain {
             domain.dirs.iter().map(|d| climate.local(d, 0.).snowline(0.)).collect()
         });
         let mut t = Terrain {
-            domain, params, planet, time: 0., ela, bed, uplift, latitude, sea, vents, rivers: Rivers::default(),
+            domain, params, planet, time: 0., ela, bed, uplift, structure, exhumed: vec![0.; n], latitude, sea, vents, rivers: Rivers::default(),
             sediment: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
             ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
@@ -190,14 +213,37 @@ impl Terrain {
         self.bed[i] - self.sediment[i] - self.lava[i]
     }
 
-    /// Erodibility of the material exposed at each cell, relative to average bedrock.
-    pub fn erodibility(&self) -> Vec<f64> {
-        (0..self.domain.len()).map(|i| {
-            if self.sediment[i] > 0.5 { self.params.sediment_erodibility }
-            else if self.lava[i] > 0.5 { self.params.lava_erodibility }
-            else { self.planet.erodibility(&self.domain.dirs[i], self.bedrock(i)) }
+    /// The rock at elevation `z` under cell `i`, beneath any sediment and lava.
+    pub fn bedrock_at(&self, i: usize, z: f64) -> Rock {
+        let s = &self.structure[i];
+        self.planet.column.rock(s, s.coordinate(z, self.exhumed[i]))
+    }
+
+    /// What is exposed at cell `i`: sediment, lava, or the bedrock.
+    pub fn rock(&self, i: usize) -> Rock {
+        if self.sediment[i] > 0.5 { Rock::Sediment }
+        else if self.lava[i] > 0.5 { Rock::Basalt }
+        else { self.bedrock_at(i, self.bedrock(i)) }
+    }
+
+    /// Erodibility of what is exposed at each cell by `process`, relative to average bedrock.
+    pub fn erodibility_by(&self, process: Process) -> Vec<f64> {
+        let p = &self.params;
+        let contrast = p.planet.geology.contrast;
+        (0..self.domain.len()).into_par_iter().map(|i| match (self.rock(i), process) {
+            (Rock::Sediment, Process::Rivers) => p.sediment_erodibility,
+            (Rock::Sediment, Process::Glaciers) => p.sediment_glacial_erodibility,
+            (Rock::Basalt, Process::Rivers) => p.lava_erodibility,
+            (Rock::Basalt, Process::Glaciers) => p.lava_glacial_erodibility,
+            (r, process) => r.erodibility(process, contrast),
         }).collect()
     }
+
+    /// Erodibility of what is exposed at each cell by rivers, relative to average bedrock.
+    pub fn erodibility(&self) -> Vec<f64> { self.erodibility_by(Process::Rivers) }
+
+    /// ... and by glaciers.
+    pub fn glacial_erodibility(&self) -> Vec<f64> { self.erodibility_by(Process::Glaciers) }
 
     /// Update the layers for the change of ground from `before`: ground gained is sediment;
     /// ground lost is taken from the sediment, then the lava, then the bedrock.
@@ -243,8 +289,10 @@ impl Terrain {
 
     pub fn step(&mut self, dt: f64) {
         let fixed = self.outlets();
-        for (i, ((b, u), f)) in self.bed.iter_mut().zip(&self.uplift).zip(&fixed).enumerate() {
-            if !f { *b += u * dt; } else if self.domain.boundary[i] { *b += self.boundary_rate[i] * dt; }
+        for (i, (((b, x), u), f)) in self.bed.iter_mut().zip(&mut self.exhumed).zip(&self.uplift).zip(&fixed).enumerate() {
+            let rise = if !f { u * dt } else if self.domain.boundary[i] { self.boundary_rate[i] * dt } else { 0. };
+            *b += rise;
+            *x += rise;
         }
 
         if let Some(v) = &self.params.volcano {
@@ -300,7 +348,7 @@ impl Terrain {
     fn glaciate(&mut self, g: &GlacierParams, fixed: &[bool], dt: f64) -> Vec<f64> {
         let n = self.domain.len();
         let start = self.bed.clone();
-        let erodibility = self.erodibility();
+        let erodibility = self.glacial_erodibility();
         // Ice flows for dt / acceleration years, and erodes as if for dt.
         let ice_time = dt / g.acceleration;
         let mut done = 0.;
@@ -346,6 +394,9 @@ pub struct Snapshot {
     drainage: Vec<f64>,
     receiver: Vec<usize>,
     sliding: Vec<f64>,
+    /// Absent from snapshots taken before rock was carried up with the ground.
+    #[serde(default)]
+    exhumed: Vec<f64>,
     channels: Vec<crate::terrain::channel::Channel>,
     oxbows: Vec<crate::terrain::channel::Oxbow>,
     rivers_found: Option<f64>,
@@ -359,7 +410,7 @@ impl Snapshot {
     pub fn fits(&self, t: &Terrain) -> bool {
         let n = t.domain.len();
         [&self.bed, &self.sediment, &self.lava, &self.sediment_flux, &self.ice, &self.drainage, &self.sliding].iter().all(|f| f.len() == n)
-            && self.sea.len() == n && self.receiver.len() == n
+            && (self.exhumed.is_empty() || self.exhumed.len() == n) && self.sea.len() == n && self.receiver.len() == n
     }
 }
 
@@ -368,7 +419,7 @@ impl Terrain {
         Snapshot {
             time: self.time, bed: self.bed.clone(), sediment: self.sediment.clone(), lava: self.lava.clone(),
             sediment_flux: self.sediment_flux.clone(), ice: self.ice.clone(), sea: self.sea.clone(),
-            drainage: self.drainage.clone(), receiver: self.receiver.clone(), sliding: self.sliding.clone(),
+            drainage: self.drainage.clone(), receiver: self.receiver.clone(), sliding: self.sliding.clone(), exhumed: self.exhumed.clone(),
             channels: self.rivers.channels.clone(), oxbows: self.rivers.oxbows.clone(), rivers_found: self.rivers.found,
         }
     }
@@ -386,6 +437,9 @@ impl Terrain {
         self.drainage = s.drainage;
         self.receiver = s.receiver;
         self.sliding = s.sliding;
+        // An older snapshot: the uplift since time zero, as it would have been at sea's edge.
+        self.exhumed = if s.exhumed.len() == self.domain.len() { s.exhumed }
+            else { self.uplift.iter().zip(&self.sea).map(|(u, &sea)| if sea { 0. } else { u * s.time }).collect() };
         self.rivers.channels = s.channels;
         self.rivers.oxbows = s.oxbows;
         self.rivers.found = s.rivers_found;
@@ -486,8 +540,10 @@ mod tests {
         let mut t = Terrain::new(Domain::patch(lat, lon, 24, 1000., params.planet.radius), params);
         let start = t.bed.clone();
         t.run_to(50_000.);
-        // The cells with the most drainage are lowered relative to uplift alone.
-        let big = (0..t.domain.len()).filter(|&i| !t.domain.boundary[i])
+        // The bedrock channel with the most drainage is lowered relative to uplift alone. (The
+        // most drained cell of all may lie in a basin behind a sill of hard rock or a growing
+        // fold, which fills with sediment instead.)
+        let big = (0..t.domain.len()).filter(|&i| !t.domain.boundary[i] && t.sediment[i] < 1.)
             .max_by(|&a, &b| t.drainage[a].total_cmp(&t.drainage[b])).unwrap();
         assert!(t.bed[big] < start[big] + t.uplift[big] * 50_000. - 1.);
     }

@@ -112,6 +112,13 @@ pub enum Field {
     Temperature,
     /// Precipitation, mm a year (from the climate model).
     Precipitation,
+    /// The rock exposed (`terrain::geology::Rock`), by number: 0 sediment, 1 shale,
+    /// 2 sandstone, 3 limestone, 4 quartzite, 5 schist, 6 gneiss, 7 granite, 8 basalt. The
+    /// bedrock is that at the point's own height, so beds show as bands across slopes.
+    Rock,
+    /// How hard the exposed rock is to rivers: its score from -1.5 (basalt, hardest) to 1.4
+    /// (sediment) negated, so positive is harder (`Rock::scores`).
+    Hardness,
 }
 
 impl Field {
@@ -128,7 +135,9 @@ impl Field {
             "treeline" => Field::Treeline,
             "temperature" => Field::Temperature,
             "precipitation" => Field::Precipitation,
-            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature or precipitation", s)),
+            "rock" => Field::Rock,
+            "hardness" => Field::Hardness,
+            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, rock or hardness", s)),
         })
     }
 }

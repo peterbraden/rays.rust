@@ -22,7 +22,8 @@
 //!   "volcanoes"`, its most volcanic mountains, or with `"near": "coast"`, a coast with
 //!   mountains behind it); or `{"type": "planet",
 //!   "cells"}`, a cubed sphere with `cells` x `cells` per face.
-//! - Ground cover: ice, rivers, sea floor, bare rock on steep slopes, alluvium (sediment over
+//! - Ground cover: ice, rivers, sea floor, bare rock on steep slopes (coloured by the bedrock
+//!   at each point's height, `geology::Rock::colour`), alluvium (sediment over
 //!   2 m deep), lava, then a tint by elevation; or `"material"`, the name of a material for
 //!   all the ground but the rivers, typically `surface_layers` masked by what the simulation
 //!   left (`field` nodes in its graphs: sediment, ice, flow, wetness and so on, see
@@ -34,14 +35,19 @@
 //! - Processes: `radius` (m), `step` (years), `land_bias`, `mountain_height` (m),
 //!   `uplift_rate` (m/yr), `belt_frequency`; `fluvial`: `{k, m, n, diffusivity, deposition}`;
 //!   `glacier` and `volcanoes`: `false` to disable, or overrides of `GlacierParams` and
-//!   `VolcanoParams` by field name. Geology: `strata_thickness` (m), `strata_contrast`,
-//!   `fold_amplitude` (m), `sediment_erodibility`, `lava_erodibility`.
+//!   `VolcanoParams` by field name. Geology (`geology`, docs/geology.md): `"geology"`,
+//!   overrides of `GeologyParams` by field name (`strata_thickness`, `contrast`,
+//!   `fold_amplitude`, `fold_wavelength`, `fold_relief`, `fold_growth`, `warp_amplitude`,
+//!   `cover_thickness`, `exhumation`, `plutons`); also, at the top level, `strata_thickness`
+//!   (m), `strata_contrast` and `fold_amplitude` (m); and `sediment_erodibility`,
+//!   `lava_erodibility`, `sediment_glacial_erodibility`, `lava_glacial_erodibility`.
 //! - `min_river_width`: draw rivers at least this wide, metres (default 0: their modelled
 //!   widths, which may be thinner than a pixel from afar). On patches, rivers, meandering
 //!   channels and ox-bow lakes are drawn as lines at their widths (`channel`).
 //! - `channels`: `false` for no meandering, or overrides of `ChannelParams`; `marine`: `false`
 //!   for no deltas, or `{diffusivity, depth_scale}`.
-//! - `map`: also write a shaded relief map to this PNG path.
+//! - `map`: also write a shaded relief map to this PNG path; `geology_map`: also write one
+//!   coloured by the rock exposed (for a full-scale landscape, both of the finest patch).
 //!
 //! Water is not part of the terrain: add a plane at y = 0 (patch) or a sphere (planet).
 
@@ -61,6 +67,7 @@ use crate::shapes::geometry::Geometry;
 use crate::shapes::mesh::vertex_normals;
 use crate::shapes::triangle::{SmoothTriangle, Triangle};
 use crate::terrain::domain::{Domain, Layout};
+use crate::terrain::geology::Rock;
 use crate::terrain::glacier::{slope_squared, GlacierParams};
 use crate::terrain::map::{self, is_river, land_colour, write_map};
 use crate::terrain::planet::Planet;
@@ -205,6 +212,7 @@ impl TerrainMedium {
             lambertian(map::ALLUVIUM_COLOUR),
         ];
         for b in 0..BANDS { materials.push(lambertian(land_colour((b as f64 + 0.5) * BAND_HEIGHT))); }
+        for r in Rock::ALL { materials.push(lambertian(r.colour())); }
         let jitter = t.domain.min_spacing() / place.scale;
         TerrainMedium { domain: t.domain, place, jitter, class, materials, water, fields, ground }
     }
@@ -224,7 +232,14 @@ impl Medium for TerrainMedium {
             return &**g;
         }
         let j = Vector3::new(rand() - 0.5, rand() - 0.5, rand() - 0.5) * self.jitter;
-        &*self.materials[self.class[self.place.cell_at(&self.domain, &(pt + j))] as usize]
+        let class = self.class[self.place.cell_at(&self.domain, &(pt + j))];
+        if class == ROCK {
+            // Bare rock: the bedrock at the point's own height, so beds show as bands.
+            let (d, h) = self.place.on_terrain(&self.domain, &pt);
+            let rock = match self.fields.rock(&self.domain, &d, h) { Rock::Sediment => return &*self.materials[ROCK as usize], r => r };
+            return &*self.materials[BAND0 as usize + BANDS + rock.index()];
+        }
+        &*self.materials[class as usize]
     }
 
     fn fields(&self) -> Option<&dyn crate::graph::Fields> { Some(self) }
@@ -270,6 +285,28 @@ fn glacier_params(o: &Value) -> GlacierParams {
     g
 }
 
+/// The bedrock's parameters: the older top-level `strata_thickness`, `strata_contrast` and
+/// `fold_amplitude`, then overrides of `GeologyParams` by field name in `"geology"`.
+fn geology_params(o: &Value) -> crate::terrain::geology::GeologyParams {
+    let mut g = crate::terrain::geology::GeologyParams::default();
+    g.strata_thickness = number(o, "strata_thickness", g.strata_thickness);
+    g.contrast = number(o, "strata_contrast", g.contrast);
+    g.fold_amplitude = number(o, "fold_amplitude", g.fold_amplitude);
+    let v = &o["geology"];
+    let fields: [(&str, &mut f64); 10] = [
+        ("strata_thickness", &mut g.strata_thickness), ("contrast", &mut g.contrast),
+        ("fold_amplitude", &mut g.fold_amplitude), ("fold_wavelength", &mut g.fold_wavelength),
+        ("fold_relief", &mut g.fold_relief), ("fold_growth", &mut g.fold_growth),
+        ("warp_amplitude", &mut g.warp_amplitude), ("cover_thickness", &mut g.cover_thickness),
+        ("exhumation", &mut g.exhumation), ("plutons", &mut g.plutons),
+    ];
+    for (k, f) in fields {
+        if let Some(x) = v.get(k).and_then(|x| x.as_f64()) { *f = x; }
+    }
+    g.fold_wavelength = g.fold_wavelength.max(100.);
+    g
+}
+
 pub fn terrain_params(o: &Value) -> TerrainParams {
     let mut p = TerrainParams::default();
     p.planet.seed = SceneFile::parse_int(&o["seed"], 0) as u64;
@@ -285,9 +322,7 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
     p.fluvial.n = number(f, "n", p.fluvial.n);
     p.fluvial.diffusivity = number(f, "diffusivity", p.fluvial.diffusivity);
     p.fluvial.deposition = number(f, "deposition", p.fluvial.deposition);
-    p.planet.strata_thickness = number(o, "strata_thickness", p.planet.strata_thickness);
-    p.planet.strata_contrast = number(o, "strata_contrast", p.planet.strata_contrast);
-    p.planet.fold_amplitude = number(o, "fold_amplitude", p.planet.fold_amplitude);
+    p.planet.geology = geology_params(o);
     // Plate tectonics: on by default at full scale, `false` for noise alone, or overrides of
     // `TectonicsParams` by field name.
     p.planet.tectonics = match &o["tectonics"] {
@@ -329,6 +364,8 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
     };
     p.sediment_erodibility = number(o, "sediment_erodibility", p.sediment_erodibility);
     p.lava_erodibility = number(o, "lava_erodibility", p.lava_erodibility);
+    p.sediment_glacial_erodibility = number(o, "sediment_glacial_erodibility", p.sediment_glacial_erodibility);
+    p.lava_glacial_erodibility = number(o, "lava_glacial_erodibility", p.lava_glacial_erodibility);
     p.volcano = match &o["volcanoes"] {
         Value::Bool(false) => None,
         v => {
@@ -448,6 +485,7 @@ pub fn create_terrain(o: &Value, materials: &serde_json::Map<String, Value>) -> 
     }
     let t = evolved(o, params);
     if let Some(path) = o["map"].as_str() { write_map(&t, path, 2048); }
+    if let Some(path) = o["geology_map"].as_str() { map::write_geology_map(&t, path, 2048); }
     let place = Placement {
         scale: number(o, "scale", 1000.),
         exaggeration: number(o, "exaggeration", 1.),
@@ -542,6 +580,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     let frame = world.frame.clone();
     if let Some(t) = world.patches.first() {
         if let Some(path) = o["map"].as_str() { write_map(t, path, 2048); }
+        if let Some(path) = o["geology_map"].as_str() { map::write_geology_map(t, path, 2048); }
         // Where the glaciers are, to frame them.
         let ice = (0..t.domain.len()).filter(|&i| t.ice[i] >= crate::terrain::simulation::ICE_FREE);
         let cells = ice.clone().count();

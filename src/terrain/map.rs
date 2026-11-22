@@ -84,6 +84,20 @@ fn cell_colour(t: &Terrain, i: usize) -> [f64; 3] {
 /// Write a shaded relief map of `t` to `path`, about `width` pixels wide (a patch is drawn at a
 /// whole number of pixels per cell).
 pub fn write_map(t: &Terrain, path: &str, width: usize) {
+    write_shaded(t, path, width, &|i| cell_colour(t, i));
+}
+
+/// Write a geological map of the terrain to `path`, as `write_map` but coloured by the rock
+/// exposed at each cell (`Terrain::rock`, in `geology::Rock::map_colour`), sea floor included,
+/// with ice in white.
+pub fn write_geology_map(t: &Terrain, path: &str, width: usize) {
+    write_shaded(t, path, width, &|i| {
+        if t.ice[i] >= ICE_FREE { return [0.92, 0.94, 0.96]; }
+        t.rock(i).map_colour()
+    });
+}
+
+fn write_shaded(t: &Terrain, path: &str, width: usize, colour: &dyn Fn(usize) -> [f64; 3]) {
     let (w, h, cells, spacing): (usize, usize, Vec<usize>, f64) = match &t.domain.layout {
         Layout::Patch { n, spacing, .. } => {
             let cells = (0..n * n).map(|p| {
@@ -113,7 +127,7 @@ pub fn write_map(t: &Terrain, path: &str, width: usize) {
             let normal = Vector3::new(-2. * dx, 2. * dy, 1.).normalize();
             let light = Vector3::new(-1., 1., 1.4).normalize();
             let shade = (0.35 + 0.75 * normal.dot(&light)).clamp(0., 1.3);
-            let c = cell_colour(t, cells[y * w + x]);
+            let c = colour(cells[y * w + x]);
             let shade = if t.bed[cells[y * w + x]] < 0. { 1. } else { shade };
             let px = |v: f64| ((v * shade).clamp(0., 1.) * 255.) as u8;
             img.put_pixel(x as u32, y as u32, image::Rgb([px(c[0]), px(c[1]), px(c[2])]));

@@ -147,6 +147,16 @@ Bare rock in the default ground cover takes the colour of the rock at the point'
 so beds show as bands across cliffs. In function graphs, `field` nodes can read `rock` (its
 number) and `hardness`; see [surface layers](surface-layers.md).
 
+## Validation
+
+`terrain::simulation::tests::test_channels_and_slopes_are_steeper_on_hard_rock` (ignored; run
+with `cargo test --release test_channels_and_slopes -- --ignored --nocapture`) evolves a
+mountain patch for 400,000 years without glaciers and checks what real ranges show: channels
+on rock resistant to rivers are steeper for their drainage (their steepness index
+k_sn = S A^0.5, Kirby and Whipple 2012), and so are hillslopes. On seed 0, k_sn is 720 on hard
+rock and 310 on weak, and hillslopes 0.81 and 0.72. The parameters' values are otherwise not
+calibrated against real landscapes.
+
 ## Not modelled
 
 The direction of shortening comes from the belt's shape, not from the plates' motion (where

@@ -922,6 +922,43 @@ mod tests {
         }
     }
 
+    /// Validation, run with `--ignored --nocapture` (half a minute in a release build).
+    #[test]
+    #[ignore]
+    fn test_channels_and_slopes_are_steeper_on_hard_rock() {
+        // After long enough for the rivers to come near steady state with the uplift, channels
+        // on rock that resists rivers are steeper for their drainage (higher steepness index
+        // k_sn = S A^0.5) than on weak rock, as in real ranges (Kirby and Whipple, "Expression
+        // of active tectonics in erosional landscapes", J. Structural Geology 44, 2012), and so
+        // are their hillslopes.
+        let mut params = TerrainParams::default();
+        params.glacier = None;
+        params.volcano = None;
+        params.channels = None;
+        params.step = 2000.;
+        let planet = Planet::new(params.planet.clone());
+        let (lat, lon) = planet.most_mountainous(2000);
+        let mut t = Terrain::new(Domain::patch(lat, lon, 48, 500., params.planet.radius), params);
+        let start = std::time::Instant::now();
+        t.run_to(400_000.);
+        eprintln!("ran in {:.1?}", start.elapsed());
+        let flow = t.route();
+        let n = t.domain.len();
+        let hardness = |i: usize| -t.rock(i).scores().0;
+        let ksn: Vec<(f64, f64)> = (0..n).filter(|&i| !t.outlets()[i] && flow.area[i] > 2e6 && t.sediment[i] < 1. && flow.receiver[i] != i).map(|i| {
+            let s = (t.bed[i] - t.bed[flow.receiver[i]]).max(0.) / flow.receiver_dist[i];
+            (hardness(i), s * flow.area[i].sqrt())
+        }).collect();
+        let median = |mut v: Vec<f64>| { v.sort_by(|a, b| a.total_cmp(b)); if v.is_empty() { f64::NAN } else { v[v.len() / 2] } };
+        let hard = median(ksn.iter().filter(|c| c.0 > 0.4).map(|c| c.1).collect());
+        let soft = median(ksn.iter().filter(|c| c.0 < -0.2).map(|c| c.1).collect());
+        let slope2 = crate::terrain::glacier::slope_squared(&t.domain, &t.bed);
+        let slopes = |hard: bool| median((0..n).filter(|&i| !t.outlets()[i] && t.sediment[i] < 1. && flow.area[i] < 1e6 && (hardness(i) > 0.4) == hard && (hardness(i) < -0.2) != hard).map(|i| slope2[i].sqrt()).collect());
+        eprintln!("k_sn hard {} soft {}; hillslopes hard {} soft {} ({} channel cells)", hard, soft, slopes(true), slopes(false), ksn.len());
+        assert!(hard > soft, "k_sn on hard rock {} vs soft {}", hard, soft);
+        assert!(slopes(true) > slopes(false));
+    }
+
     #[test]
     fn test_rivers_cut_valleys() {
         let mut params = TerrainParams::default();

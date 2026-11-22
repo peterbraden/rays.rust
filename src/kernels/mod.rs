@@ -551,6 +551,10 @@ impl Buffers {
 
         let mut flags = 0u32;
         if aerial_off != pathtrace::NO_AIR { flags |= pathtrace::FLAG_AERIAL; }
+        // Crepuscular rays: the sun's shadows in the air the camera looks through.
+        if aerial_off != pathtrace::NO_AIR && s.sun.is_some() && s.atmosphere.as_ref().is_some_and(|a| a.crepuscular_rays) {
+            flags |= pathtrace::FLAG_CREPUSCULAR;
+        }
         if s.render.sample_lights { flags |= pathtrace::FLAG_SAMPLE_LIGHTS; }
         if s.environment.is_some() { flags |= pathtrace::FLAG_SAMPLE_ENV; }
         let (sun_dir, sun_irr) = match &s.sun {

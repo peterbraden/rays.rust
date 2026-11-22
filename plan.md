@@ -2332,6 +2332,15 @@ Not done, and why:
 - (Done since: precipitation, in `shared::rain`, the same bits in the renderer for rain,
   snow melting to rain, and hail. No scene is the kernels' for it alone: each that rains
   also has crepuscular rays, a rainbow, the diffusion approximation or a cumulonimbus.)
+- (Done since: crepuscular rays, at the camera's vertex in `shade`: every piece of the
+  air's single scattering was in the bounce kernel already, for the haze's transmittance and
+  the sun's. crepuscular-rays and snow-showers render through the kernels (crepuscular-rays
+  at 16 spp against a 64 spp reference: FLIP 0.0547, the path tracer's own 0.0492). Comparing
+  them found `trace` clamping each sample at nothing after taking the shadowed air from it,
+  which left shadowed tiles 5% too bright; the clamp is gone. The cost: `occluded` and
+  `media_transmittance` are called from a second place, and rust-gpu inlines both, so the
+  WGSL grew from 4.7 to 6.4 MB. One call site again would mean the shadow sample waiting
+  for the vertex's light loop, which a ray that escapes never reaches.)
 - Media through the host in the wavefront's rounds (the rest of step 3), and with them the
   thread-locals. Judged not worth doing as such: a scene with a medium the kernels lack is
   rendered a path at a time by the scene's own code under the same driver now, and the

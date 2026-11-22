@@ -731,6 +731,39 @@ pub mod tests {
         }
     }
 
+    /// Crepuscular rays (`pathtrace::shadowed_loss`): under a slab that shadows the air, with
+    /// a gap the sun shines through, the sky and the haze before the ground lose what the
+    /// path tracer takes from them (`SkyMaterial::shadowed_loss`), tile by tile; and they lose
+    /// something, or this tests nothing.
+    #[test]
+    fn test_crepuscular_rays_agree_with_the_path_tracer() {
+        let scene = |rays: bool| SceneFile::from_string(format!(r#"{{
+            "width": 24, "height": 16, "max_depth": 3, "sun": {{ "intensity": 3 }},
+            "camera": {{ "location": [0, 300, -6000], "lookat": [0, 1500, 0], "up": [0, 1, 0], "angle": 0.9, "aperture": 0 }},
+            "materials": {{ "F": {{ "type": "lambertian", "albedo": [0.3, 0.3, 0.3] }} }},
+            "objects": [
+                {{ "type": "skysphere", "sun_direction": [0.3, 0.5, 1], "crepuscular_rays": {rays} }},
+                {{ "type": "quad", "points": [[-40000, 0, -40000], [-40000, 0, 40000], [40000, 0, -40000], [40000, 0, 40000]], "material": "F" }},
+                {{ "type": "box", "min": [-30000, 4000, -30000], "max": [-600, 4200, 30000], "material": "F" }},
+                {{ "type": "box", "min": [600, 4000, -30000], "max": [30000, 4200, 30000], "material": "F" }}
+            ]
+        }}"#, rays = rays));
+        let (s, plain) = (scene(true), scene(false));
+        assert!(s.sun.is_some() && s.atmosphere.as_ref().unwrap().crepuscular_rays);
+        let (w, h) = (s.image.width, s.image.height);
+        let n = 256;
+        let (a, b) = (tiles(&mean_image(&s, n), w, h, 3, 2), tiles(&path_image(&s, n), w, h, 3, 2));
+        let without = tiles(&mean_image(&plain, n), w, h, 3, 2);
+        let mut lost = 0.;
+        for t in 0..6 {
+            for ch in 0..3 {
+                assert!((a[t][ch] - b[t][ch]).abs() < 0.04 * b[t][ch] + 1e-4, "tile {} channel {}: wavefront {} vs path {}", t, ch, a[t][ch], b[t][ch]);
+            }
+            lost += (without[t][2] - a[t][2]) / without[t][2] / 6.;
+        }
+        assert!(lost > 0.03, "the shadowed air takes {} of the picture's blue", lost);
+    }
+
     /// Shapes that aren't primitives (a torus, a cone) are kept whole and intersected by their
     /// own code, among primitives, whether their materials are the stages' or their own; they
     /// shadow and are shadowed as the rest.

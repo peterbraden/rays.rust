@@ -157,6 +157,8 @@ pub const FLAG_SAMPLE_LIGHTS: u32 = 1;
 pub const FLAG_SAMPLE_ENV: u32 = 2;
 pub const FLAG_SUN: u32 = 4;
 pub const FLAG_AERIAL: u32 = 8;
+/// The air along a camera ray is tested for shadow (`shadowed_loss`): crepuscular rays.
+pub const FLAG_CREPUSCULAR: u32 = 16;
 /// `Prim::info.x`.
 pub const PRIM_TRIANGLE: u32 = 0;
 pub const PRIM_SPHERE: u32 = 1;
@@ -2590,6 +2592,97 @@ fn aerial_transmittance(s: &Scene, o: Vec3, d: Vec3, distance: f32) -> Vec3 {
     transmittance(&a, depth)
 }
 
+/// Samples of the air's shadow per camera ray (the renderer's `trace::CREPUSCULAR_SAMPLES`).
+const CREPUSCULAR_SAMPLES: u32 = 2;
+
+/// Crepuscular rays (the renderer's `SkyMaterial::shadowed_loss`): the part of the sunlight
+/// scattered once towards `o` along the camera's ray `d`, as far as `distance`, that doesn't
+/// arrive because the air there is in shadow, behind clouds or below mountains. The sky's
+/// radiance and the aerial haze (`segment`) take the air to be lit everywhere; this is taken
+/// from them. Steps of the ray are chosen in proportion to the light each scatters, a point
+/// in each tested for the sun, and its shadow stands for its step's.
+fn shadowed_loss<M: Media>(s: &Scene, o: Vec3, d: Vec3, distance: f32, flags_p: u32, rng: &mut u32, rays: &mut u32) -> Vec3 {
+    let a = load_air(s, s.params.air.y);
+    let (start, end) = match view_ray_span(&a, o, d) {
+        Some((start, end)) if start < distance => (start, end.min(distance)),
+        _ => return Vec3::ZERO,
+    };
+    let mu = d.dot(a.sun);
+    let (rayleigh, mie) = (rayleigh_phase(mu), mie_phase(mu, a.g));
+    let scale = a.brightness * SKY_CALIBRATION;
+    // Each step's light (`Air::single_scattering_steps`), twice over: for the total, then to
+    // find the steps the samples fall in.
+    let mut total = 0.0;
+    let (mut u0, mut u1) = (0.0, 0.0);
+    let (mut t0, mut t1) = (Vec4::ZERO, Vec4::ZERO);
+    let (mut c0, mut c1) = (Vec4::ZERO, Vec4::ZERO);
+    let mut pass = 0;
+    while pass < 2 {
+        let mut depth = Vec3::ZERO;
+        let mut k = 0;
+        while k < SKY_STEPS {
+            let (t, step) = span_sample(&a, o, d, start, end, SKY_STEPS, k);
+            let p = o + d * t;
+            let here = depths(&a, altitude(&a, p), step);
+            depth += here * 0.5;
+            let lit = transmittance(&a, depth + sun_depths_at(s, &a, p));
+            let c = lit * (a.rayleigh * (here.x * rayleigh) + Vec3::splat(a.mie * here.y * mie)) * scale;
+            depth += here * 0.5;
+            let w = c.x + c.y + c.z;
+            if pass == 0 {
+                total += w;
+            } else if w > 0.0 {
+                // (The first step that takes a sample's number below zero is its own.)
+                if u0 >= 0.0 {
+                    u0 -= w;
+                    if u0 < 0.0 {
+                        t0 = Vec4::new(t, step, w, 0.0);
+                        c0 = c.extend(0.0);
+                    }
+                }
+                if u1 >= 0.0 {
+                    u1 -= w;
+                    if u1 < 0.0 {
+                        t1 = Vec4::new(t, step, w, 0.0);
+                        c1 = c.extend(0.0);
+                    }
+                }
+            }
+            k += 1;
+        }
+        if total <= 0.0 {
+            return Vec3::ZERO;
+        }
+        u0 = rand(rng) * total;
+        u1 = rand(rng) * total;
+        pass += 1;
+    }
+    let mut loss = Vec3::ZERO;
+    let sun = s.params.sun_dir.xyz();
+    let mut j = 0;
+    while j < CREPUSCULAR_SAMPLES {
+        let (at_step, c) = if j == 0 { (t0, c0) } else { (t1, c1) };
+        if at_step.z > 0.0 {
+            let from = o + d * (at_step.x + (rand(rng) - 0.5) * at_step.y);
+            *rays += 1;
+            let mut lit = 0.0;
+            if !occluded(s, from, sun, 1e30) {
+                lit = 1.0;
+                if M::ON {
+                    // (As the camera's own rays cross the media: this is before the path
+                    // scatters.)
+                    lit = media_transmittance(s, from, sun, 1e30, flags_p, false, 1.0, rng);
+                }
+            }
+            if lit < 1.0 {
+                loss += c.xyz() * ((1.0 - lit) * total / at_step.z);
+            }
+        }
+        j += 1;
+    }
+    loss / CREPUSCULAR_SAMPLES as f32
+}
+
 /// The path with a new ray, still tracing.
 #[allow(clippy::too_many_arguments)]
 fn carry_on(p: &PathState, o: Vec3, d: Vec3, beta: Vec3, l: Vec3, rays: u32, rng: u32, flags: u32, prev_pdf: f32, depth: u32, q0: SkyQuery, q1: SkyQuery) -> (PathState, SkyQuery, SkyQuery) {
@@ -2680,6 +2773,14 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
 
     let hit = Hit { t: p.hit.x, prim: p.state.z };
     rays += 1;
+    // Crepuscular rays: the camera's ray alone, as far as what it meets. (Taken from the
+    // sample whatever the path goes on to find: a sample can be less than nothing.)
+    if depth == 0 && flags & FLAG_CREPUSCULAR != 0 {
+        let reach = if hit.prim == NONE { INF } else { hit.t };
+        if reach > AERIAL_FROM {
+            l -= beta * shadowed_loss::<M>(s, ro, rd, reach, flags_p, &mut rng, &mut rays);
+        }
+    }
     if hit.prim == NONE {
         // The sky, weighted against sampling it if the last vertex did, and the sun's disc.
         let mut w = 1.0;

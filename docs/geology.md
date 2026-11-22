@@ -66,6 +66,10 @@ anticlines. Folding shapes the ranges in three ways:
 - **Vergence**: the folds lean towards the foreland, their steep limbs facing away from the
   belt's centre (`fold_vergence`), so the ranges have steep fronts and gentler backs. They are
   upright at the belt's centre, where real orogens fan out both ways.
+- **Thrusts**: where the folds lean, their steep limbs break along thrusts, each sheet riding
+  up over the next towards the foreland (`thrust_throw`), so the same beds crop out again
+  behind each thrust, hard against soft. The thrusts offset the strata but not the initial
+  relief, and die out where the folds end.
 - **Lithology**: as erosion cuts down, the folded beds crop out in bands along the belt.
   Breached anticlines expose older rock in their cores, ringed by younger beds.
 
@@ -85,7 +89,7 @@ simulation sees only the broad structure, and the nested patches add the folds.
 ```
 
 - `geology`: `strata_thickness` (600 m), `contrast` (5), `fold_amplitude` (1500 m),
-  `fold_wavelength` (8000 m), `fold_relief` (0.5), `fold_growth` (0.5), `fold_vergence` (0.6), `warp_amplitude`
+  `fold_wavelength` (8000 m), `fold_relief` (0.5), `fold_growth` (0.5), `fold_vergence` (0.6), `thrust_throw` (800 m), `warp_amplitude`
   (400 m), `cover_thickness` (3000 m), `exhumation` (4000 m), `plutons` (1; 0 for none). The
   older top-level `strata_thickness`, `strata_contrast` and `fold_amplitude` are still read.
 - `sediment_erodibility` (3), `lava_erodibility` (0.3): to rivers; `sediment_glacial_erodibility`
@@ -99,6 +103,6 @@ number) and `hardness`; see [surface layers](surface-layers.md).
 
 ## Not modelled
 
-The direction of shortening comes from the belt's shape, not from the plates' motion; there
-are no thrust faults, joints that vary within a rock, karst, or
-soil whose depth limits how fast the rock beneath it weathers.
+The direction of shortening comes from the belt's shape, not from the plates' motion; thrusts
+offset the strata but don't stand as scarps at time zero; there are no joints that vary within
+a rock, no karst, and no soil whose depth limits how fast the rock beneath it weathers.

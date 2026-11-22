@@ -90,6 +90,9 @@
 //! belt's strength (`Trend::foreland`, the smoothed gradient of that strength, fading to
 //! nothing at the centre, where real orogens fan out both ways; see `fold_shape`).
 //!
+//! Where they lean, their forelimbs break along thrusts that repeat the beds towards the
+//! foreland (`thrust_throw`, `fold`).
+//!
 //! Folding shapes the landscape three ways:
 //!
 //! 1. **Initial relief**: a share (`fold_relief`) of the structural relief is topography at
@@ -128,6 +131,9 @@ pub struct GeologyParams {
     /// How far folds lean towards the foreland, 0 (upright) to below 1: their steep limbs face
     /// away from the belt's centre, by up to 1 + fold_vergence times the gentle limb's slope.
     pub fold_vergence: f64,
+    /// Throw of the thrusts on the leaning folds' forelimbs, metres: how far each sheet's
+    /// strata ride up over the next.
+    pub thrust_throw: f64,
     /// Gentle undulation of the strata everywhere, metres.
     pub warp_amplitude: f64,
     /// Typical thickness of the sedimentary cover over the basement, metres.
@@ -143,7 +149,7 @@ impl Default for GeologyParams {
     fn default() -> GeologyParams {
         GeologyParams {
             strata_thickness: 600., contrast: 5., fold_amplitude: 1500., fold_wavelength: 8000.,
-            fold_relief: 0.5, fold_growth: 0.5, fold_vergence: 0.6, warp_amplitude: 400., cover_thickness: 3000.,
+            fold_relief: 0.5, fold_growth: 0.5, fold_vergence: 0.6, thrust_throw: 800., warp_amplitude: 400., cover_thickness: 3000.,
             exhumation: 4000., plutons: 1.,
         }
     }
@@ -496,8 +502,28 @@ pub fn phasor(seed: u64, p: &Vector3<f64>, along: &Vector3<f64>, wavelength: f64
 /// with `lean` given the sign of `along`'s component towards the foreland (as `Planet` does),
 /// the folds are the same whichever sign `along` has.
 pub fn fold_shape(seed: u64, p: &Vector3<f64>, along: &Vector3<f64>, wavelength: f64, lean: f64) -> f64 {
+    fold(seed, p, along, wavelength, lean).0
+}
+
+/// The folds at `p` as `fold_shape`, and the offset of the strata by thrusts on their
+/// forelimbs, from -1/2 to 1/2 of the thrusts' throw.
+///
+/// Where folds lean, their steep forelimbs break along thrusts, and each thrust sheet rides up
+/// over the next towards the foreland (an imbricate stack, as in the Canadian Rockies' Front
+/// Ranges or the Appalachians' Valley and Ridge). Each sheet's strata are raised more towards
+/// its leading edge, and drop by the throw at the thrust in the middle of the forelimb (the
+/// warped phase π/2 on the leaning side): a sawtooth in the phase, so the same beds crop out
+/// again behind each thrust. The throw fades with the lean, so the belts' upright centres
+/// have none, and where the phase is undefined, so thrusts die out where folds end. Like the
+/// folds, the offset doesn't depend on the sign of `along`.
+pub fn fold(seed: u64, p: &Vector3<f64>, along: &Vector3<f64>, wavelength: f64, lean: f64) -> (f64, f64) {
     let (phase, defined) = phasor(seed, p, along, wavelength);
-    defined * (phase + lean.clamp(-0.95, 0.95) * (1. - phase.cos())).cos()
+    let lean = lean.clamp(-0.95, 0.95);
+    let warped = phase + lean * (1. - phase.cos());
+    let ahead = lean.signum() * warped - std::f64::consts::FRAC_PI_2;
+    let sawtooth = ahead.rem_euclid(TAU) / TAU - 0.5;
+    let leaning = (3. * lean.abs()).min(1.);
+    (defined * warped.cos(), defined * leaning * sawtooth)
 }
 
 /// How much of folds of `wavelength` a grid resolving detail of wavelength `finest` keeps: all
@@ -653,6 +679,32 @@ mod tests {
         let (forward, upright, back) = (falling(0.6), falling(0.), falling(-0.6));
         assert!((upright - 0.5).abs() < 0.05, "{}", upright);
         assert!(forward < 0.42 && back > 0.58, "{} {}", forward, back);
+    }
+
+    #[test]
+    fn test_thrusts_repeat_the_beds_towards_the_foreland() {
+        // Walking towards the foreland along leaning folds, the strata's offset climbs slowly
+        // and drops at a thrust about once a wavelength; never the other way.
+        let along = Vector3::new(0., 0., 1.);
+        let (mut drops, mut rises) = (0, 0);
+        for row in 0..20 {
+            let mut last: Option<f64> = None;
+            for i in 0..4000 {
+                let p = Vector3::new(6.371e6, row as f64 * 5000., 0.) + along * (i as f64 * 20.);
+                let (_, t) = fold(5, &p, &along, 8000., 0.6);
+                if let Some(l) = last {
+                    if t - l < -0.3 { drops += 1; }
+                    if t - l > 0.3 { rises += 1; }
+                }
+                last = Some(t);
+            }
+        }
+        // 20 rows of 80 km: about 200 wavelengths, some where the phase is undefined.
+        assert!(drops > 100 && rises < drops / 10, "{} drops, {} rises", drops, rises);
+        // The same whichever way the direction points, and no thrusts in upright folds.
+        let p = Vector3::new(6.371e6, 1234., 5678.);
+        assert!((fold(5, &p, &along, 8000., 0.6).1 - fold(5, &p, &-along, 8000., -0.6).1).abs() < 1e-9);
+        assert_eq!(fold(5, &p, &along, 8000., 0.).1, 0.);
     }
 
     #[test]

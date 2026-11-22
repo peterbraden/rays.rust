@@ -1957,6 +1957,41 @@ mod tests {
         }
     }
 
+    /// How far the kernels on the device are from the same kernels on the CPU, sample for
+    /// sample: each pixel's first sample, by both, and how many differ in their bits and by
+    /// how much. `RAYS_SCENE` names a scene; `--ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn measure_device_against_cpu() {
+        let scenes: Vec<String> = match std::env::var("RAYS_SCENE") {
+            Ok(f) => f.split(',').map(String::from).collect(),
+            Err(_) => vec!["demo/demo.json".into()],
+        };
+        for file in scenes {
+            let s = SceneFile::from_file(&file, &crate::scenefile::Overrides { width: Some(96), height: Some(60), seed: None });
+            let flat = FlatScene::build(&s).unwrap();
+            let kernels = crate::wavefront::integrator::Kernels::new(&s, &flat).unwrap();
+            let mut gpu = match GpuRenderer::new(&s, &flat) {
+                Ok(g) => g,
+                Err(e) => { println!("{}: not on the device ({})", file, e); continue; },
+            };
+            let (cpu, _, _) = kernels.pass(0);
+            let sums = gpu.run(&s, 0..1);
+            let n = cpu.len();
+            let (mut same, mut ulp, mut near, mut close, mut far, mut worst) = (0, 0, 0, 0, 0, 0f64);
+            for i in 0..n {
+                let c = [cpu[i].rgb.x as f32, cpu[i].rgb.y as f32, cpu[i].rgb.z as f32];
+                let g = [sums[i][0], sums[i][1], sums[i][2]];
+                let bits = (0..3).map(|k| (c[k].to_bits() as i64 - g[k].to_bits() as i64).abs()).max().unwrap();
+                let rel = (0..3).map(|k| ((c[k] - g[k]).abs() / c[k].abs().max(g[k].abs()).max(1e-6)) as f64).fold(0., f64::max);
+                worst = worst.max(rel);
+                if bits == 0 { same += 1 } else if bits <= 4 { ulp += 1 } else if rel < 1e-5 { near += 1 } else if rel < 1e-3 { close += 1 } else { far += 1 }
+            }
+            println!("{}: of {} pixels, {} the same bits, {} within 4 steps of a float, {} within 1e-5, {} within 1e-3, {} further (a different path); worst {:.1e}",
+                file, n, same, ulp, near, close, far, worst);
+        }
+    }
+
     /// Pixel completion (`scheduler::plan`): with adaptive sampling the GPU stops sampling the
     /// pixels that are quiet (a flat background: every sample the same) and carries on with
     /// the noisy ones, each taking its own next samples; the picture is the one it gets from

@@ -208,7 +208,7 @@ impl<'a> Kernels<'a> {
         }).collect();
         lap(&mut stats, Stage::Generate, paths.len());
         let mut done = Vec::with_capacity(paths.len());
-        let mut queries: Vec<(usize, SkyQuery)> = Vec::new();
+        let mut queries: Vec<(usize, SkyQuery, SkyQuery)> = Vec::new();
         let mut round = 0;
         while !paths.is_empty() {
             stats.round(round, paths.len() as u64);
@@ -235,12 +235,18 @@ impl<'a> Kernels<'a> {
             for (i, (_, p)) in paths.iter_mut().enumerate() {
                 let (next, q0, q1) = pathtrace::shade::<M>(&scene, p);
                 *p = next;
-                queries.extend([q0, q1].into_iter().filter(|q| q.weight.truncate().length_squared() > 0.).map(|q| (i, q)));
+                if q0.weight.truncate().length_squared() > 0. || q1.weight.truncate().length_squared() > 0. {
+                    queries.push((i, q0, q1));
+                }
             }
             lap(&mut stats, Stage::Shade, paths.len());
-            // 3. The sky's answers.
-            for (i, q) in &queries {
-                paths[*i].1.l += pathtrace::sky_light(&scene, q).extend(0.);
+            // 3. The sky's answers: a vertex's two summed, then added, as `answer_sky` adds
+            // them on the GPU (in any other order the sums differ in their last bits).
+            for (i, q0, q1) in &queries {
+                let light = Vec3::ZERO + pathtrace::sky_light(&scene, q0) + pathtrace::sky_light(&scene, q1);
+                if light.dot(light) > 0. {
+                    paths[*i].1.l += light.extend(0.);
+                }
             }
             lap(&mut stats, Stage::Sky, queries.len());
             // 4. The host's vertices.

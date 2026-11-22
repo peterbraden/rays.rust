@@ -1121,7 +1121,17 @@ fn env_pdf(s: &Scene, d: Vec3) -> f32 {
     let v = d.y.clamp(-1.0, 1.0).acos() / PI;
     let x = ((u * w as f32) as u32).min(w - 1);
     let y = ((v * h as f32) as u32).min(h - 1);
-    let sin_theta = (v * PI).sin();
+    // sin θ from the direction itself, not back through the arccosine: a device's inverse
+    // trigonometry is its own (Mesa's is a polynomial good to a part in 10^5), and through
+    // this density it was in every pixel a sky lights. It still chooses the texel, which only
+    // a direction on a texel's edge can tell.
+    env_density(s, x, y, (1.0 - d.y * d.y).max(0.0).sqrt())
+}
+
+/// The density with which the sky's table gives a direction in its texel (x, y), sin θ from
+/// the zenith.
+fn env_density(s: &Scene, x: u32, y: u32, sin_theta: f32) -> f32 {
+    let (w, h) = (s.params.offs2.y, s.params.offs2.z);
     if sin_theta <= 0.0 {
         return 0.0;
     }
@@ -1131,8 +1141,6 @@ fn env_pdf(s: &Scene, d: Vec3) -> f32 {
     let p_col = (at(s.tables, cond + x + 1) - at(s.tables, cond + x)) * w as f32;
     p_row * p_col / (2.0 * PI * PI * sin_theta)
 }
-
-/// A direction from the sky, in proportion to its brightness, and its density.
 fn env_sample(s: &Scene, u1: f32, u2: f32) -> Vec4 {
     let (w, h) = (s.params.offs2.y, s.params.offs2.z);
     // A texel by the distributions, then a point uniformly within it (from what is left of
@@ -1150,7 +1158,8 @@ fn env_sample(s: &Scene, u1: f32, u2: f32) -> Vec4 {
     let phi = (u - 0.5) * 2.0 * PI;
     let theta = v * PI;
     let d = Vec3::new(theta.sin() * phi.cos(), theta.cos(), theta.sin() * phi.sin());
-    d.extend(env_pdf(s, d))
+    // (Its density by the texel it was drawn in, not found again from the direction.)
+    d.extend(env_density(s, x, y, (1.0 - d.y * d.y).max(0.0).sqrt()))
 }
 
 // ---- The atmosphere, per ray, as the renderer's `skysphere` (in f32). ----

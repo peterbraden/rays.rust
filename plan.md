@@ -2418,6 +2418,36 @@ by ray as before (none of 4,000 disagree; distances to 8e-7 on average). ocean-1
 ray, each bounded by the steepest slope anywhere: a map of the tiles' highest waves by
 area would let a ray skimming over them stride.
 
+### The kernels on the device against the kernels on the CPU, bit for bit (November 2026)
+
+`gpu::tests::measure_device_against_cpu` renders each pixel's first sample both ways and
+counts the pixels whose bits differ (lavapipe here; another device will count otherwise).
+What it found, on scenes of one ingredient each (96 x 60):
+- An area light, a box and a plane under a black sky: 85% of pixels the same bits, the
+  rest within 4 steps of a float. Traversal, the materials, light sampling and the random
+  numbers are the same on both.
+- The same under a plain sky: 20% the same, most of the rest 1e-5 to 1e-3 apart. The sky's
+  sampling density took sin θ back through the arccosine of the direction, and a device's
+  inverse trigonometry is its own (Mesa's a polynomial good to a part in 10^5). From the
+  direction itself (`env_density`): 85 to 92% the same, the rest within 4 steps but for
+  half a percent of pixels whose paths part.
+- And the CPU added a vertex's two sky answers one after the other where `answer_sky` sums
+  them first: now as the GPU's.
+What is left, by kind:
+1. The device's own functions where a value passes through them: exp, pow and log (the
+   air's march, the media's walks), asin and atan2 as coordinates into the sky's tables,
+   sin and cos in sampling. demo.json, under a skysphere, is 9% the same bits and 60%
+   1e-5 to 1e-3 apart for these. Only our own functions, in `shared`, would close it.
+2. Last bits where the device's compiler orders or fuses arithmetic its own way, or its
+   sqrt is a step out: the '4 steps' above.
+3. Paths that part: a comparison that falls the other side (a texel of the sky's table
+   chosen by atan2 and acos, a Fresnel choice, Russian roulette, a traversal's tie) after
+   1 or 2. Half a percent of pixels a sample on these scenes, more where a path is long
+   (nubis-clouds 2%).
+4. The host's sums: the GPU adds a block's samples in f32 on the device, the CPU each in
+   f64; and adaptive sampling looks at the film at different sample counts on the two.
+5. What the GPU doesn't render at all (host shapes), which is the CPU's either way.
+
 ### GPU-ready by construction
 
 What a kernel can't hold is refused where the code is written, not when someone next builds

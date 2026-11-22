@@ -56,7 +56,8 @@
 //! - `channels`: `false` for no meandering, or overrides of `ChannelParams`; `marine`: `false`
 //!   for no deltas, or `{diffusivity, depth_scale}`.
 //! - `map`: also write a shaded relief map to this PNG path; `geology_map`: also write one
-//!   coloured by the rock exposed (for a full-scale landscape, both of the finest patch).
+//!   coloured by the rock exposed; `rain_map`: one coloured by the rain (for a full-scale
+//!   landscape, each of the finest patch).
 //!
 //! Water is not part of the terrain: add a plane at y = 0 (patch) or a sphere (planet).
 
@@ -535,6 +536,7 @@ pub fn create_terrain(o: &Value, materials: &serde_json::Map<String, Value>) -> 
     let t = evolved(o, params);
     if let Some(path) = o["map"].as_str() { write_map(&t, path, 2048); }
     if let Some(path) = o["geology_map"].as_str() { map::write_geology_map(&t, path, 2048); }
+    if let Some(path) = o["rain_map"].as_str() { map::write_rain_map(&t, path, 2048); }
     let place = Placement {
         scale: number(o, "scale", 1000.),
         exaggeration: number(o, "exaggeration", 1.),
@@ -630,6 +632,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     if let Some(t) = world.patches.first() {
         if let Some(path) = o["map"].as_str() { write_map(t, path, 2048); }
         if let Some(path) = o["geology_map"].as_str() { map::write_geology_map(t, path, 2048); }
+        if let Some(path) = o["rain_map"].as_str() { map::write_rain_map(t, path, 2048); }
         // Where the glaciers are, to frame them.
         let ice = (0..t.domain.len()).filter(|&i| t.ice[i] >= crate::terrain::simulation::ICE_FREE);
         let cells = ice.clone().count();

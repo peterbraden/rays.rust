@@ -2224,6 +2224,12 @@
           "doc": "Also write a map of the rock exposed on the (finest) patch here."
         },
         {
+          "name": "rain_map",
+          "kind": "path",
+          "default": null,
+          "doc": "Also write a map of the rain on the (finest) patch here."
+        },
+        {
           "name": "step",
           "kind": "number",
           "default": 100,

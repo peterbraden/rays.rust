@@ -97,6 +97,19 @@ pub fn write_geology_map(t: &Terrain, path: &str, width: usize) {
     });
 }
 
+/// Write a map of the rain at the last step to `path`, as `write_map` but coloured by the rain
+/// (`Terrain::precipitation`): browns where it is dry, through greens, to blues where it is
+/// wettest (from 0 to 4000 mm a year, on a square-root scale).
+pub fn write_rain_map(t: &Terrain, path: &str, width: usize) {
+    const STOPS: [[f64; 3]; 5] = [[0.55, 0.38, 0.20], [0.85, 0.75, 0.45], [0.45, 0.70, 0.35], [0.20, 0.55, 0.70], [0.12, 0.20, 0.60]];
+    write_shaded(t, path, width, &|i| {
+        let x = (t.precipitation[i] / 4000.).clamp(0., 1.).sqrt() * (STOPS.len() - 1) as f64;
+        let k = (x.floor() as usize).min(STOPS.len() - 2);
+        let f = x - k as f64;
+        std::array::from_fn(|c| STOPS[k][c] * (1. - f) + STOPS[k + 1][c] * f)
+    });
+}
+
 fn write_shaded(t: &Terrain, path: &str, width: usize, colour: &dyn Fn(usize) -> [f64; 3]) {
     let (w, h, cells, spacing): (usize, usize, Vec<usize>, f64) = match &t.domain.layout {
         Layout::Patch { n, spacing, .. } => {

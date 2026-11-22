@@ -3176,6 +3176,8 @@ pub const PROBE_RAYS: u32 = 1;
 pub const PROBE_ALTOCUMULUS: u32 = 2;
 /// And of cirrus's.
 pub const PROBE_CIRRUS: u32 = 3;
+/// And of precipitation's, as a fraction of its greatest.
+pub const PROBE_RAIN: u32 = 4;
 
 /// What `probe_clouds` computes for probe `i`: the density at a point (its w the weather),
 /// or, with `PROBE_RAYS`, the mean of `PROBE_ESTIMATES` estimates of the transmittance along the ray
@@ -3186,6 +3188,10 @@ pub fn probe(tables: &[f32], base: u32, i: u32, a: Vec4, b: Vec4, what: u32) -> 
     }
     if what == PROBE_CIRRUS {
         return load_cirrus(tables, base).fraction(&FloatTables(tables), a.x, a.y, a.z);
+    }
+    if what == PROBE_RAIN {
+        let rain = load_rain(tables, base);
+        return rain.density(&FloatTables(tables), a.x, a.y, a.z) / rain.peak_extinction();
     }
     if what != PROBE_RAYS {
         return nubis_fraction(tables, base, a.xyz(), a.w);
@@ -3229,7 +3235,7 @@ pub fn probe_clouds(
 
 /// A medium's record in `tables` (the renderer's `gpu::media_records`), `MEDIUM_SIZE` floats:
 /// its kind; its box (least corner, greatest); its extinction (`MEDIUM_CONSTANT`) or the bits
-/// of where its cloud layer's record is (`MEDIUM_NUBIS`, `MEDIUM_BENARD`, `MEDIUM_CIRRUS`); the radius of the planet it curves
+/// of where its cloud layer's record is (`MEDIUM_NUBIS`, `MEDIUM_BENARD`, `MEDIUM_CIRRUS`, `MEDIUM_RAIN`); the radius of the planet it curves
 /// round, or 0 where it is flat; the factor on every medium's density for segments of a path
 /// that last scattered here, and on its own for one that has left a surface (delta-M
 /// truncation: the renderer's `Volume::truncated`); a lower bound on its extinction; its phase
@@ -3258,6 +3264,7 @@ pub const MEDIUM_CONSTANT: u32 = 0;
 pub const MEDIUM_NUBIS: u32 = 1;
 pub const MEDIUM_BENARD: u32 = 2;
 pub const MEDIUM_CIRRUS: u32 = 3;
+pub const MEDIUM_RAIN: u32 = 4;
 pub const PHASE_HENYEY_GREENSTEIN: u32 = 0;
 pub const PHASE_DROPLETS: u32 = 1;
 
@@ -3308,6 +3315,25 @@ pub fn load_cirrus(tables: &[f32], base: u32) -> shared::cirrus::Cirrus<f32> {
     }
 }
 
+/// Precipitation's record in a table (`shared::rain::Rain`; the renderer's
+/// `Precipitation::export`): its recipe's 21 numbers in their fields' order (what falls as a
+/// number, and whether it evaporates and melts as 0 or 1); then the permutations of the
+/// cells' noise and of the streaks' (512 entries each).
+pub const RAIN_HEADER: u32 = 21;
+
+/// The precipitation whose record begins at `base`.
+pub fn load_rain(tables: &[f32], base: u32) -> shared::rain::Rain<f32> {
+    shared::rain::Rain {
+        base: at(tables, base), ground: at(tables, base + 1), rain_rate: at(tables, base + 2), cell_size: at(tables, base + 3),
+        coverage: at(tables, base + 4), fall_depth: at(tables, base + 5), shear: at(tables, base + 6),
+        wind: (at(tables, base + 7), at(tables, base + 8)), streak_size: at(tables, base + 9), streakiness: at(tables, base + 10),
+        base_variation: at(tables, base + 11), center: (at(tables, base + 12), at(tables, base + 13)), radius: at(tables, base + 14),
+        fade: at(tables, base + 15), kind: at(tables, base + 16) as u32, hail_size: at(tables, base + 17),
+        melting_level: at(tables, base + 18), evaporates: at(tables, base + 19) > 0.5, melts: at(tables, base + 20) > 0.5,
+        cells: base + RAIN_HEADER, streaks: base + RAIN_HEADER + NUBIS_PERMUTATION,
+    }
+}
+
 /// A medium as the shared walks take one.
 pub struct KernelMedium<'a> {
     pub tables: FloatTables<'a>,
@@ -3317,6 +3343,7 @@ pub struct KernelMedium<'a> {
     pub nubis: shared::clouds::NubisField<f32>,
     pub benard: shared::altocumulus::Benard<f32>,
     pub cirrus: shared::cirrus::Cirrus<f32>,
+    pub rain: shared::rain::Rain<f32>,
 }
 
 /// A medium's cloud layer in its own flat coordinates, of whichever kind: so that what is
@@ -3327,6 +3354,7 @@ struct KernelLayer<'a> {
     nubis: &'a shared::clouds::NubisField<f32>,
     benard: &'a shared::altocumulus::Benard<f32>,
     cirrus: &'a shared::cirrus::Cirrus<f32>,
+    rain: &'a shared::rain::Rain<f32>,
 }
 
 impl shared::media::Medium<f32> for KernelLayer<'_> {
@@ -3335,13 +3363,15 @@ impl shared::media::Medium<f32> for KernelLayer<'_> {
             self.benard.max_density * self.benard.fraction(self.tables, x, y, z)
         } else if self.kind == MEDIUM_CIRRUS {
             self.cirrus.max_density * self.cirrus.fraction(self.tables, x, y, z)
+        } else if self.kind == MEDIUM_RAIN {
+            self.rain.density(self.tables, x, y, z)
         } else {
             self.nubis.density(self.tables, x, y, z)
         }
     }
 
     fn bound(&self) -> f32 {
-        if self.kind == MEDIUM_BENARD { self.benard.max_density } else if self.kind == MEDIUM_CIRRUS { self.cirrus.max_density } else { self.nubis.max_density }
+        if self.kind == MEDIUM_BENARD { self.benard.max_density } else if self.kind == MEDIUM_CIRRUS { self.cirrus.max_density } else if self.kind == MEDIUM_RAIN { self.rain.peak_extinction() } else { self.nubis.max_density }
     }
 
     fn majorant_from(&self, x: f32, y: f32, z: f32, dx: f32, dy: f32, dz: f32) -> (f32, f32) {
@@ -3349,6 +3379,8 @@ impl shared::media::Medium<f32> for KernelLayer<'_> {
             self.benard.majorant_from(self.tables, x, y, z, dx, dy, dz)
         } else if self.kind == MEDIUM_CIRRUS {
             self.cirrus.majorant_from(y, dy)
+        } else if self.kind == MEDIUM_RAIN {
+            self.rain.majorant_from(y, dy)
         } else {
             self.nubis.majorant_from(self.tables, x, y, z, dx, dy, dz)
         }
@@ -3357,7 +3389,7 @@ impl shared::media::Medium<f32> for KernelLayer<'_> {
 
 impl<'a> KernelMedium<'a> {
     fn layer(&'a self) -> KernelLayer<'a> {
-        KernelLayer { tables: &self.tables, kind: self.kind, nubis: &self.nubis, benard: &self.benard, cirrus: &self.cirrus }
+        KernelLayer { tables: &self.tables, kind: self.kind, nubis: &self.nubis, benard: &self.benard, cirrus: &self.cirrus, rain: &self.rain }
     }
 }
 
@@ -3398,6 +3430,7 @@ pub fn load_medium(tables: &[f32], base: u32) -> KernelMedium<'_> {
         nubis: load_nubis(tables, if kind == MEDIUM_NUBIS { record } else { base }),
         benard: load_benard(tables, if kind == MEDIUM_BENARD { record } else { base }),
         cirrus: load_cirrus(tables, if kind == MEDIUM_CIRRUS { record } else { base }),
+        rain: load_rain(tables, if kind == MEDIUM_RAIN { record } else { base }),
     }
 }
 

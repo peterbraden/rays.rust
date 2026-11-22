@@ -318,7 +318,7 @@ pub struct Scaled {
 }
 
 impl DensityField for Scaled {
-    fn export(&self) -> Option<FieldExport> { self.field.export().map(|f| f.scaled(self.by)) }
+    fn export(&self) -> Option<FieldExport> { self.field.export().and_then(|f| f.scaled(self.by)) }
     fn density(&self, p: &Vector3<f64>) -> f64 { self.by * self.field.density(p) }
     fn majorant(&self) -> f64 { self.by * self.field.majorant() }
     fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
@@ -561,12 +561,14 @@ pub enum FieldExport {
     Benard { record: Vec<f32>, radius: f64 },
     /// A layer of cirrus's record (`HoganKewCirrus::export`), likewise.
     Cirrus { record: Vec<f32>, radius: f64 },
+    /// Precipitation's record (`Precipitation::export`), likewise.
+    Rain { record: Vec<f32>, radius: f64 },
 }
 
 impl FieldExport {
-    /// With every density multiplied by `by`.
-    fn scaled(self, by: f64) -> FieldExport {
-        match self {
+    /// With every density multiplied by `by`, where the record has a number that does that.
+    fn scaled(self, by: f64) -> Option<FieldExport> {
+        Some(match self {
             FieldExport::Constant(d) => FieldExport::Constant(d * by),
             FieldExport::Nubis { mut record, radius } => {
                 // Its densest extinction, which the rest is a fraction of.
@@ -581,7 +583,9 @@ impl FieldExport {
                 record[2] *= by as f32;
                 FieldExport::Cirrus { record, radius }
             },
-        }
+            // (Its extinction isn't a multiple of anything in its record.)
+            FieldExport::Rain { .. } => return None,
+        })
     }
 }
 

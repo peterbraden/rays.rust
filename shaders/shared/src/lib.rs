@@ -17,7 +17,7 @@
 //!   naga take (the renderer's CLAUDE.md lists what they don't).
 //!
 //! So far: Perlin's noise, the walks through a medium (`media`), phase functions (`phase`),
-//! the Nubis clouds' density (`clouds`), altocumulus's (`altocumulus`), cirrus's (`cirrus`) and the pattern of the
+//! the Nubis clouds' density (`clouds`), altocumulus's (`altocumulus`), cirrus's (`cirrus`), precipitation's (`rain`) and the pattern of the
 //! sea's foam (`sea`).
 // No standard library and no allocator, on the CPU too: so `Box`, `Vec`, `String` and
 // `format!` aren't in scope for code here whichever machine it is first written and tested
@@ -33,6 +33,7 @@ pub mod clouds;
 pub mod media;
 pub mod noise;
 pub mod phase;
+pub mod rain;
 pub mod sea;
 
 use core::ops::{Add, Div, Mul, Neg, Sub};

@@ -2329,6 +2329,9 @@ Not done, and why:
   state in thread-locals; the host now sets it from the path's flags (`volume::resume_path`).
   desert-noon, desert-butte, desert-mesas, desert-overlook and forest-sunlit, Nubis clouds
   over terrain, render through the kernels.)
+- (Done since: precipitation, in `shared::rain`, the same bits in the renderer for rain,
+  snow melting to rain, and hail. No scene is the kernels' for it alone: each that rains
+  also has crepuscular rays, a rainbow, the diffusion approximation or a cumulonimbus.)
 - Media through the host in the wavefront's rounds (the rest of step 3), and with them the
   thread-locals. Judged not worth doing as such: a scene with a medium the kernels lack is
   rendered a path at a time by the scene's own code under the same driver now, and the

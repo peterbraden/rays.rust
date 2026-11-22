@@ -320,5 +320,9 @@ cards.
       their leaves' hits from the side at L3+; crossed cards fix the hit rate but self-shadow
       artificially and darken the image 13–23% (reverted). A cluster LOD must match both the
       transmittance of rays entering it and of rays leaving it.
-- [ ] SGGX lobes and palettes; self-shadowing; a representation right for both transmittances.
+- [x] Both transmittances ([stage3.md](stage3.md)): crossed cards for rays entering a cluster,
+      measured self-shadowing for rays leaving it. Best FLIP from both viewpoints (0.0454 from
+      the air, 0.0251 from low down) but 40% more memory and twice the build: needs a compact
+      crossed-card primitive.
+- [ ] Compact crossed-card primitive; cheaper build; SGGX lobes and palettes.
 - [ ] Read what could not be fetched (see [log.md](log.md)).

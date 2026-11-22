@@ -8,6 +8,8 @@ on the planet, and `Terrain` carries it through the landscape's evolution.
 
 ![The patch over seed 0's most mountainous ground at time zero: shaded relief (left) and the rock exposed (right)](geology-folds.png)
 
+![The same ground after 100,000 years of uplift, rivers and glaciers (128 cells of 400 m): strike ranges along the anticlines, sediment filling the synclinal valleys between them](geology-evolved.png)
+
 ## Rocks, rivers and ice
 
 | Rock | Rivers | Glaciers | Why they differ |

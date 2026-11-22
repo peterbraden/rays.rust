@@ -143,6 +143,9 @@ pub struct GeologyParams {
     /// How much more erodible the most fractured rock (anticline crests, thrust zones) is to
     /// glaciers, which quarry it: 1 doubles it; rivers feel a third of this.
     pub fracturing: f64,
+    /// Scales every rock's critical slope (`Rock::critical_slope`), beyond which slopes fail in
+    /// landslides; 0 for no landslides.
+    pub slope_strength: f64,
     /// Gentle undulation of the strata everywhere, metres.
     pub warp_amplitude: f64,
     /// Typical thickness of the sedimentary cover over the basement, metres.
@@ -158,7 +161,7 @@ impl Default for GeologyParams {
     fn default() -> GeologyParams {
         GeologyParams {
             strata_thickness: 600., contrast: 5., fold_amplitude: 1500., fold_wavelength: 8000.,
-            fold_relief: 0.5, fold_growth: 0.5, fold_vergence: 0.6, thrust_throw: 800., fracturing: 1.5, warp_amplitude: 400., cover_thickness: 3000.,
+            fold_relief: 0.5, fold_growth: 0.5, fold_vergence: 0.6, thrust_throw: 800., fracturing: 1.5, slope_strength: 1., warp_amplitude: 400., cover_thickness: 3000.,
             exhumation: 4000., plutons: 1.,
         }
     }
@@ -230,6 +233,25 @@ impl Rock {
     pub fn erodibility(self, process: Process, contrast: f64) -> f64 {
         let (r, g) = self.scores();
         contrast.max(1.).powf(0.5 * if process == Process::Rivers { r } else { g })
+    }
+
+    /// The steepest slope (rise over run) the rock stands at over a simulation's cells before it
+    /// fails in landslides: loose sediment at its angle of repose (about 33°), weak shale and
+    /// schist a little less, and massive granite steepest (56°). The order follows rock mass
+    /// strength (Selby, "A rock mass strength classification for geomorphic purposes",
+    /// Zeitschrift für Geomorphologie 24, 1980); the values are a model choice.
+    pub fn critical_slope(self) -> f64 {
+        match self {
+            Rock::Sediment => 0.65,
+            Rock::Shale => 0.6,
+            Rock::Sandstone => 0.9,
+            Rock::Limestone => 1.0,
+            Rock::Quartzite => 1.2,
+            Rock::Schist => 0.7,
+            Rock::Gneiss => 1.2,
+            Rock::Granite => 1.5,
+            Rock::Basalt => 1.1,
+        }
     }
 
     /// The rock's colour on a geological map (sRGB), in the customary hues: yellows for

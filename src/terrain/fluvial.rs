@@ -261,6 +261,45 @@ pub fn diffuse_varying(domain: &Domain, h: &mut [f64], fixed: &[bool], kappa: &[
     }
 }
 
+/// Let slopes steeper than they can stand fail: each cell whose slope down to a neighbour
+/// exceeds its `critical` slope (rise over run; infinite where it can't fail, eg. buttressed
+/// by ice) sends rock down to its steepest such neighbour, enough to bring that slope to the
+/// limit. Cells are taken from the highest down, each moving what it must at once, so a
+/// failure cascades down the whole slope in one pass; passes repeat until no slope exceeds its
+/// limit by more than `tolerance` (or `max_passes` have run). What fails lands on the
+/// neighbour, or leaves the model if that is fixed (the sea, a patch's edge); fixed cells
+/// don't change. Returns the volume moved, m³.
+///
+/// This is threshold hillslope behaviour (Schmidt and Montgomery, "Limits to relief", Science
+/// 270, 1995; Burbank et al., Nature 379, 1996): where rivers and glaciers cut down faster
+/// than slopes can follow by creep, the slopes steepen until they fail in landslides, so their
+/// steepness, and the ranges' relief, is set by the strength of the rock.
+pub fn landslide(domain: &Domain, h: &mut [f64], fixed: &[bool], critical: &[f64], tolerance: f64, max_passes: usize) -> f64 {
+    let n = h.len();
+    let mut moved = 0.;
+    let mut order: Vec<usize> = (0..n).filter(|&i| !fixed[i] && critical[i].is_finite()).collect();
+    for _ in 0..max_passes {
+        order.sort_by(|&a, &b| h[b].total_cmp(&h[a]).then(a.cmp(&b)));
+        let mut any = false;
+        for &i in &order {
+            let steepest = domain.links(i).iter()
+                .map(|l| (l.to, h[i] - h[l.to] - critical[i] * l.dist))
+                .filter(|&(_, excess)| excess > tolerance)
+                .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)));
+            let Some((j, excess)) = steepest else { continue };
+            any = true;
+            // The volume that closes the excess between the two (into a fixed cell, which
+            // doesn't rise, the excess alone).
+            let volume = if fixed[j] { excess * domain.area[i] } else { excess / (1. / domain.area[i] + 1. / domain.area[j]) };
+            h[i] -= volume / domain.area[i];
+            if !fixed[j] { h[j] += volume / domain.area[j]; }
+            moved += volume;
+        }
+        if !any { break; }
+    }
+    moved
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,6 +398,31 @@ mod tests {
         diffuse(&d, &mut h, &vec![false; d.len()], 1., 1e4);
         assert!((mass(&h) - before).abs() < 1e-9 * before);
         assert!(h[40] < 100. && h.iter().all(|&x| x >= -1e-9));
+    }
+
+    #[test]
+    fn test_slopes_fail_down_to_what_their_rock_holds() {
+        // A cone too steep for any rock, on weak rock on one side and strong on the other.
+        let d = Domain::patch(0., 0., 24, 100., 6.371e6);
+        let n = d.len();
+        let mut h: Vec<f64> = (0..n).map(|k| {
+            let (i, j) = ((k % 24) as f64 - 11.5, (k / 24) as f64 - 11.5);
+            if d.boundary[k] { 0. } else { (2000. - 250. * i.hypot(j)).max(0.) }
+        }).collect();
+        let critical: Vec<f64> = (0..n).map(|k| if k % 24 < 12 { 0.6 } else { 1.5 }).collect();
+        let volume = |h: &[f64]| (0..n).filter(|&k| !d.boundary[k]).map(|k| h[k] * d.area[k]).sum::<f64>();
+        let before = volume(&h);
+        let moved = landslide(&d, &mut h, &d.boundary, &critical, 0.01, 2000);
+        assert!(moved > 0.);
+        // No slope is left steeper than its rock holds (bar the tolerance).
+        for k in 0..n {
+            if d.boundary[k] { continue; }
+            for l in d.links(k) { assert!(h[k] - h[l.to] <= critical[k] * l.dist + 0.02, "cell {}", k); }
+        }
+        // Volume is kept, but for what fell off the edge; the weak side has been brought lower.
+        assert!(volume(&h) <= before + 1e-6 * before);
+        let side = |lo: usize, hi: usize| (0..n).filter(|&k| (lo..hi).contains(&(k % 24)) && !d.boundary[k]).map(|k| h[k]).fold(0., f64::max);
+        assert!(side(1, 10) < side(14, 23), "{} vs {}", side(1, 10), side(14, 23));
     }
 
     #[test]

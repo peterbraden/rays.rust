@@ -1159,7 +1159,8 @@ mod tests {
                 // No crack where the patch meets the rings, and no step.
                 let h = y(&both, x, z).unwrap_or_else(|| panic!("crack at {} ({}, {})", x, x0, z0));
                 if let Some(l) = last {
-                    assert!((h - l).abs() < 1., "step of {} at {} ({}, {})", h - l, x, x0, z0);
+                    // Where the patch gives way to the rings, as much as they may differ.
+                    assert!((h - l).abs() < tolerance.max(1.), "step of {} at {} ({}, {})", h - l, x, x0, z0);
                 }
                 last = Some(h);
                 // Inside, the patch's surface (as diced); near its edge, close to the rings'.

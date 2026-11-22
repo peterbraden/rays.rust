@@ -43,6 +43,18 @@ of it than rivers: the most fractured rock is `1 + fracturing` times as erodible
 GSA Bulletin 112, 2000, find plucking dominant in jointed rock). So glaciers dig out
 anticline crests and thrust zones, while rivers barely notice them.
 
+Slopes can only stand so steep before they fail, and how steep depends on the rock (Schmidt
+and Montgomery, "Limits to relief", Science 270, 1995): where rivers or glaciers cut down
+faster than the slopes can follow, the slopes steepen until they fall in landslides. Each rock
+has a critical slope over a simulation's cells (`Rock::critical_slope`, after Selby's rock
+mass strength), from loose sediment and shale at about 31-33° to massive granite at 56°,
+lowered where the rock is fractured. Steeper slopes fail onto their steepest neighbour, and the
+debris lies as sediment at their feet (`fluvial::landslide`). Ice holds up the walls it
+carves, so they don't fail while it is there; when it melts, walls in weak rock fall in, and
+only strong rock keeps the steep sides of glacial troughs. At time zero the noise topography is
+relaxed to what its rock holds before anything else happens. `slope_strength` scales every
+limit (0 for no landslides).
+
 So the same mountains erode differently under the two processes. Rivers leave quartzite and
 basalt standing as ridges and cut valleys along the shale. Glaciers dig into quartzite, basalt
 and schist, and leave granite as domes.
@@ -98,7 +110,7 @@ simulation sees only the broad structure, and the nested patches add the folds.
 ```
 
 - `geology`: `strata_thickness` (600 m), `contrast` (5), `fold_amplitude` (1500 m),
-  `fold_wavelength` (8000 m), `fold_relief` (0.5), `fold_growth` (0.5), `fold_vergence` (0.6), `thrust_throw` (800 m), `fracturing` (1.5), `warp_amplitude`
+  `fold_wavelength` (8000 m), `fold_relief` (0.5), `fold_growth` (0.5), `fold_vergence` (0.6), `thrust_throw` (800 m), `fracturing` (1.5), `slope_strength` (1), `warp_amplitude`
   (400 m), `cover_thickness` (3000 m), `exhumation` (4000 m), `plutons` (1; 0 for none). The
   older top-level `strata_thickness`, `strata_contrast` and `fold_amplitude` are still read.
 - `sediment_erodibility` (3), `lava_erodibility` (0.3): to rivers; `sediment_glacial_erodibility`
@@ -114,4 +126,5 @@ number) and `hardness`; see [surface layers](surface-layers.md).
 
 The direction of shortening comes from the belt's shape, not from the plates' motion; thrusts
 offset the strata but don't stand as scarps at time zero; fracturing comes only from the folds and thrusts (not from unloading, cooling or weathering);
-there are no karst, and no soil whose depth limits how fast the rock beneath it weathers.
+there is no karst, and no soil whose depth limits how fast the rock beneath it weathers (at a
+simulation's cell sizes, creep is far slower than bare rock weathers, so it would rarely bind).

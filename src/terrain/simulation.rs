@@ -15,7 +15,8 @@
 //! 4. flow routing over the ice and rock surface, then river erosion and deposition on
 //!    ice-free ground (`flow`, `fluvial`);
 //! 5. deltas: what rivers bring to the sea spreads over the sea floor (`marine`);
-//! 6. hillslope diffusion (`fluvial`), faster on weak rock and sediment;
+//! 6. landslides where slopes are steeper than their rock holds (`fluvial::landslide`), and
+//!    hillslope diffusion (`fluvial`), faster on weak rock and sediment;
 //! 7. meandering rivers, a sub-grid model drawn over the terrain (`channel`).
 //!
 //! ## Geology
@@ -37,7 +38,9 @@
 //! joints are easily quarried). Hillslopes creep in proportion to the rivers' erodibility too
 //! (weak rock weathers faster into soil that creeps), so slopes on shale relax while hard beds
 //! hold cliffs. In the mountain belts the folds' anticlines are uplifted faster
-//! than their synclines (`GeologyParams::fold_growth`).
+//! than their synclines (`GeologyParams::fold_growth`). Slopes steeper than their rock holds
+//! fail in landslides (`slide`), but not under ice, which buttresses them; and at time zero the
+//! noise topography is first relaxed to what its rock holds.
 
 //! Everything is a deterministic function of the parameters (including the seed) and t, and
 //! the state at t2 is the state at t1 advanced by t2 - t1. So an animation renders successive
@@ -65,7 +68,7 @@
 
 use crate::terrain::domain::Domain;
 use crate::terrain::flow::{route, Flow};
-use crate::terrain::fluvial::{diffuse_varying, erode_and_deposit, FluvialParams};
+use crate::terrain::fluvial::{diffuse_varying, erode_and_deposit, landslide, FluvialParams};
 use crate::terrain::glacier::{erode, flow_ice, GlacierParams};
 use crate::terrain::planet::{Planet, PlanetParams};
 use crate::terrain::volcano::{erupt, vents, Vent, VolcanoParams};
@@ -121,6 +124,15 @@ impl Default for TerrainParams {
         }
     }
 }
+
+/// Passes of landsliding per step: enough to bring slopes oversteepened in a step back to what
+/// their rock holds, as failure is all but instant on a landscape's timescales.
+const LANDSLIDE_PASSES: usize = 30;
+/// ... and at time zero, to relax the noise topography to what its rock holds.
+const INITIAL_LANDSLIDE_PASSES: usize = 2000;
+const INITIAL_LANDSLIDE_ROUNDS: usize = 20;
+/// Slopes may exceed their limit by this, metres over a link, before they fail.
+const LANDSLIDE_TOLERANCE: f64 = 0.1;
 
 /// Ice thinner than this (metres) counts as ice-free ground.
 pub const ICE_FREE: f64 = 1.;
@@ -198,6 +210,10 @@ impl Terrain {
             sediment: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
             ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
+        // The noise topography may stand steeper than its rock can: it fails first, its debris
+        // collecting in the valleys.
+        let outlets = t.outlets();
+        t.slide(&outlets, INITIAL_LANDSLIDE_PASSES, INITIAL_LANDSLIDE_ROUNDS);
         let flow = t.route();
         t.drainage = flow.area;
         t.receiver = flow.receiver;
@@ -329,6 +345,8 @@ impl Terrain {
             marine::deposit(&self.domain, &mut self.bed, &self.sediment, &sea, &supply, m, dt);
             self.record(&before);
         }
+        self.slide(&fixed, LANDSLIDE_PASSES, 1);
+
         // Soil creeps faster on weak rock, which weathers faster, and on loose sediment: slopes
         // on shale relax while hard beds hold cliffs.
         let kappa: Vec<f64> = self.erodibility().iter().map(|k| self.params.fluvial.diffusivity * k).collect();
@@ -348,6 +366,32 @@ impl Terrain {
         self.receiver = flow.receiver.clone();
         self.drainage = flow.area;
         self.time += dt;
+    }
+
+    /// Let slopes steeper than their rock holds fail (`fluvial::landslide`), in up to `passes`
+    /// passes a round, but not under ice, which buttresses them: walls that glaciers left steep
+    /// fall in when it melts, unless the rock is strong. What falls is sediment where it lands.
+    /// As failing exposes other rock (and buries some under debris), each of up to `rounds`
+    /// rounds looks at the rock again, until nothing more fails.
+    fn slide(&mut self, fixed: &[bool], passes: usize, rounds: usize) {
+        let strength = self.params.planet.geology.slope_strength;
+        if strength <= 0. { return; }
+        for _ in 0..rounds {
+            let critical: Vec<f64> = (0..self.domain.len()).map(|i| {
+                if self.ice[i] >= ICE_FREE { return f64::INFINITY; }
+                strength * self.critical_slope(i)
+            }).collect();
+            let before = self.bed.clone();
+            let moved = landslide(&self.domain, &mut self.bed, fixed, &critical, LANDSLIDE_TOLERANCE, passes);
+            self.record(&before);
+            if moved == 0. { break; }
+        }
+    }
+
+    /// The steepest slope cell `i` stands at before failing, rise over run: its rock's, less
+    /// where folding fractured it.
+    pub fn critical_slope(&self, i: usize) -> f64 {
+        self.rock(i).critical_slope() / (1. + 0.5 * self.structure[i].fracture)
     }
 
     /// Returns the rate glaciers eroded each cell over the step, m³/yr.
@@ -499,10 +543,21 @@ mod tests {
     }
 
     #[test]
-    fn test_time_zero_is_the_noise_topography() {
+    fn test_time_zero_is_the_noise_topography_where_it_can_stand() {
         let t = small(1);
-        let d = &t.domain.dirs[100];
-        assert_eq!(t.bed[100], t.planet.elevation(d, 2000.));
+        let noise: Vec<f64> = t.domain.dirs.iter().map(|d| t.planet.elevation(d, 2000.)).collect();
+        // Much of it is the noise topography as it was; what has changed failed, or lies under
+        // its debris.
+        let kept = (0..t.domain.len()).filter(|&i| t.bed[i] == noise[i]).count();
+        assert!(kept * 3 > t.domain.len(), "{} of {}", kept, t.domain.len());
+        for i in 0..t.domain.len() {
+            assert!(t.bed[i] == noise[i] || t.bed[i] < noise[i] || t.sediment[i] > 0.);
+        }
+        // And nothing stands steeper than its rock holds.
+        for i in (0..t.domain.len()).filter(|&i| !t.domain.boundary[i]) {
+            let limit = t.critical_slope(i);
+            for l in t.domain.links(i) { assert!(t.bed[i] - t.bed[l.to] <= limit * l.dist + 0.2, "cell {}", i); }
+        }
     }
 
     #[test]

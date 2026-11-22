@@ -8,6 +8,7 @@ pub mod planet;
 pub mod tectonics;
 pub mod geology;
 pub mod climate;
+pub mod orographic;
 pub mod flow;
 pub mod fluvial;
 pub mod glacier;

@@ -45,6 +45,10 @@
 //! - `min_river_width`: draw rivers at least this wide, metres (default 0: their modelled
 //!   widths, which may be thinner than a pixel from afar). On patches, rivers, meandering
 //!   channels and ox-bow lakes are drawn as lines at their widths (`channel`).
+//! - `orographic`: rain made by the terrain (`terrain::orographic`), which rivers gather and
+//!   glaciers' snow follows: `false` for the climate's rain everywhere, or overrides of
+//!   `OrographicParams` (`wind_speed`, `fallout_time`, `scale_height`, `gain_length`,
+//!   `sea_recharge`, `saturation_recovery`, `reference`).
 //! - `channels`: `false` for no meandering, or overrides of `ChannelParams`; `marine`: `false`
 //!   for no deltas, or `{diffusivity, depth_scale}`.
 //! - `map`: also write a shaded relief map to this PNG path; `geology_map`: also write one
@@ -364,6 +368,23 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
             }
             if let Some(x) = v.get("cells").and_then(|x| x.as_u64()) { c.cells = x as usize; }
             Some(c)
+        }
+    };
+    // Rain made by the terrain: `false` for none, or overrides of `OrographicParams`.
+    p.orographic = match &o["orographic"] {
+        Value::Bool(false) => None,
+        v => {
+            let mut x = crate::terrain::orographic::OrographicParams::default();
+            let fields: [(&str, &mut f64); 7] = [
+                ("saturation_recovery", &mut x.saturation_recovery), ("wind_speed", &mut x.wind_speed), ("fallout_time", &mut x.fallout_time), ("scale_height", &mut x.scale_height),
+                ("gain_length", &mut x.gain_length), ("sea_recharge", &mut x.sea_recharge), ("reference", &mut x.reference),
+            ];
+            for (k, f) in fields {
+                if let Some(n) = v.get(k).and_then(|n| n.as_f64()) { *f = n; }
+            }
+            x.reference = x.reference.max(1.);
+            x.wind_speed = x.wind_speed.max(0.1);
+            Some(x)
         }
     };
     p.sediment_erodibility = number(o, "sediment_erodibility", p.sediment_erodibility);

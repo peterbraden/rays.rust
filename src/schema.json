@@ -2392,6 +2392,21 @@
           "doc": "Erodibility of volcanic rock by rivers relative to average bedrock."
         },
         {
+          "name": "orographic",
+          "kind": "object",
+          "default": null,
+          "doc": "Rain made by the terrain, gathered by the rivers; false for the climate's rain everywhere.",
+          "fields": [
+            {"name": "wind_speed", "kind": "number", "default": 10, "doc": "Wind speed, m/s."},
+            {"name": "fallout_time", "kind": "number", "default": 800, "doc": "Time cloud takes to fall as rain, s."},
+            {"name": "scale_height", "kind": "number", "default": 2500, "doc": "Scale height of water vapour, m."},
+            {"name": "gain_length", "kind": "number", "default": 50000, "doc": "How much rain falling cloud makes, as a length at the climate's rate, m."},
+            {"name": "sea_recharge", "kind": "number", "default": 200000, "doc": "Distance over which air over the sea regains its vapour, m."},
+            {"name": "saturation_recovery", "kind": "number", "default": 30000, "doc": "Distance over which air come down from a crest mixes back towards saturation, m."},
+            {"name": "reference", "kind": "number", "default": 1000, "doc": "Rain without a climate, and that the rivers' erodibility is for, mm/yr."}
+          ]
+        },
+        {
           "name": "sediment_glacial_erodibility",
           "kind": "number",
           "default": 3,

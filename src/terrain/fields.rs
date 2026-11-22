@@ -33,6 +33,8 @@ pub struct SimFields {
     wetness: Vec<f64>,
     convexity: Vec<f64>,
     snowline: Vec<f64>,
+    /// The simulation's rain, mm/yr.
+    precipitation: Vec<f64>,
     /// The bedrock's structure (`Structure::to_array`) and exhumation.
     structure: [Vec<f64>; 10],
     exhumed: Vec<f64>,
@@ -94,6 +96,7 @@ impl SimFields {
             convexity: corners(Field::Convexity),
             snowline: corners(Field::Snowline),
             structure,
+            precipitation: average(&|c| t.precipitation[c]),
             exhumed: average(&|c| t.exhumed[c]),
             column: t.planet.column.clone(),
         }
@@ -133,7 +136,8 @@ impl SimFields {
             Field::Treeline => h - (s(&self.snowline) - TREELINE_BELOW_SNOWLINE),
             Field::Rock => self.rock(domain, d, h).index() as f64,
             Field::Hardness => -self.rock(domain, d, h).scores().0,
-            Field::Temperature | Field::Precipitation => return None,
+            Field::Precipitation => s(&self.precipitation).max(0.),
+            Field::Temperature => return None,
         })
     }
 }
@@ -180,6 +184,7 @@ mod tests {
             assert!((f.at(&t.domain, Field::Snowline, d, 1000.).unwrap() - (1000. - line)).abs() < 1e-9);
         }
         assert_eq!(f.at(&t.domain, Field::Temperature, &t.domain.dirs[0], 0.), None);
+        assert!(f.at(&t.domain, Field::Precipitation, &t.domain.dirs[100], 0.).unwrap() > 0.);
         // At a cell's centre on bare rock, the rock is the simulation's own there.
         let bare: Vec<usize> = (0..t.domain.len()).filter(|&i| !t.domain.boundary[i] && t.sediment[i] == 0. && t.lava[i] == 0.).collect();
         assert!(!bare.is_empty());

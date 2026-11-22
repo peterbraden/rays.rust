@@ -12,7 +12,8 @@
 //!    eroded rock leaving in meltwater as sediment for the rivers (Hallet, Hunter and Bogen,
 //!    "Rates of erosion and sediment evacuation by glaciers", Global and Planetary Change 12,
 //!    1996, estimate glacial erosion rates from that sediment);
-//! 4. flow routing over the ice and rock surface, then river erosion and deposition on
+//! 4. flow routing over the ice and rock surface, gathering the rain the terrain makes
+//!    (`orographic`: discharge, not area, drives the rivers; glaciers' snow follows it too), then river erosion and deposition on
 //!    ice-free ground (`flow`, `fluvial`);
 //! 5. deltas: what rivers bring to the sea spreads over the sea floor (`marine`);
 //! 6. landslides where slopes are steeper than their rock holds (`fluvial::landslide`), and
@@ -94,6 +95,9 @@ pub struct TerrainParams {
     /// The climate, from latitude (`climate`): it sets the glaciers' snowline cell by cell. None
     /// for the glaciers' own snowline by latitude.
     pub climate: Option<crate::terrain::climate::ClimateParams>,
+    /// Rain made by the terrain (`orographic`), which the rivers gather and the glaciers'
+    /// snow follows; None for rain everywhere the climate's (or uniform without a climate).
+    pub orographic: Option<crate::terrain::orographic::OrographicParams>,
     /// Erodibility of sediment, relative to average bedrock.
     pub sediment_erodibility: f64,
     /// Erodibility of volcanic rock, relative to average bedrock.
@@ -116,6 +120,7 @@ impl Default for TerrainParams {
             marine: Some(MarineParams::default()),
             channels: Some(ChannelParams::default()),
             climate: None,
+            orographic: Some(crate::terrain::orographic::OrographicParams::default()),
             sediment_erodibility: 3.,
             lava_erodibility: 0.3,
             sediment_glacial_erodibility: 3.,
@@ -184,6 +189,12 @@ pub struct Terrain {
     pub rivers: Rivers,
     /// Each cell's equilibrium line altitude in today's climate, if there is a climate model.
     pub ela: Option<Vec<f64>>,
+    /// The climate's rain at each cell, mm/yr (`OrographicParams::reference` without one).
+    pub base_precipitation: Vec<f64>,
+    /// The rain at each cell at the last step, with what the terrain makes, mm/yr.
+    pub precipitation: Vec<f64>,
+    /// The prevailing wind over the domain, (eastward, northward).
+    pub wind: (f64, f64),
 }
 
 impl Terrain {
@@ -201,11 +212,18 @@ impl Terrain {
         let n = domain.len();
         let sea = bed.iter().map(|&b| b < 0.).collect();
         let vents = match &params.volcano { Some(v) => vents(&planet, &domain, v), None => vec![] };
-        let ela = params.climate.as_ref().map(|c| {
-            let climate = crate::terrain::climate::climate(c, &planet);
-            domain.dirs.iter().map(|d| climate.local(d, 0.).snowline(0.)).collect()
-        });
+        let climate = params.climate.as_ref().map(|c| crate::terrain::climate::climate(c, &planet));
+        let ela = climate.as_ref().map(|climate| domain.dirs.iter().map(|d| climate.local(d, 0.).snowline(0.)).collect());
+        let reference = params.orographic.as_ref().map_or(crate::terrain::orographic::OrographicParams::default().reference, |o| o.reference);
+        let base_precipitation: Vec<f64> = match &climate {
+            Some(c) => domain.dirs.iter().map(|d| c.local(d, 0.).precipitation).collect(),
+            None => vec![reference; n],
+        };
+        // The prevailing wind at the domain's middle latitude.
+        let centre: crate::na::Vector3<f64> = domain.dirs.iter().sum::<crate::na::Vector3<f64>>().normalize();
+        let wind = crate::terrain::climate::wind(&params.climate.clone().unwrap_or_default(), centre.y.clamp(-1., 1.).asin());
         let mut t = Terrain {
+            precipitation: base_precipitation.clone(), base_precipitation, wind,
             domain, params, planet, time: 0., ela, bed, uplift, structure, exhumed: vec![0.; n], latitude, sea, vents, rivers: Rivers::default(),
             sediment: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
             ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
@@ -214,6 +232,7 @@ impl Terrain {
         // collecting in the valleys.
         let outlets = t.outlets();
         t.slide(&outlets, INITIAL_LANDSLIDE_PASSES, INITIAL_LANDSLIDE_ROUNDS);
+        t.rain();
         let flow = t.route();
         t.drainage = flow.area;
         t.receiver = flow.receiver;
@@ -285,8 +304,25 @@ impl Terrain {
         self.bed.iter().zip(&self.ice).map(|(b, h)| b + h).collect()
     }
 
+    /// Each cell's rain relative to the rain the rivers' erodibility is for: what it adds to
+    /// the discharge downstream.
+    fn rain_factor(&self) -> Vec<f64> {
+        match &self.params.orographic {
+            Some(o) => self.precipitation.iter().map(|p| p / o.reference).collect(),
+            None => vec![1.; self.domain.len()],
+        }
+    }
+
+    /// Work out the rain over the present surface (`orographic`).
+    fn rain(&mut self) {
+        self.precipitation = match &self.params.orographic {
+            Some(o) => crate::terrain::orographic::rain(&self.domain, &self.surface(), &self.outlets(), &self.base_precipitation, self.wind, o),
+            None => self.base_precipitation.clone(),
+        };
+    }
+
     fn route(&self) -> Flow {
-        route(&self.domain, &self.surface(), &self.outlets(), &vec![1.; self.domain.len()])
+        route(&self.domain, &self.surface(), &self.outlets(), &self.rain_factor())
     }
 
     /// Advance to time `t` (no earlier than now).
@@ -313,6 +349,8 @@ impl Terrain {
             *b += rise;
             *x += rise;
         }
+
+        self.rain();
 
         if let Some(v) = &self.params.volcano {
             erupt(&self.domain, &self.vents, v, self.time, dt, &mut self.bed, &mut self.lava, &fixed);
@@ -403,6 +441,7 @@ impl Terrain {
         let ice_time = dt / g.acceleration;
         let mut done = 0.;
         let mut mean_sliding = vec![0.; n];
+        let snow: Vec<f64> = self.rain_factor().iter().map(|r| r.clamp(0.2, 3.)).collect();
         while done < ice_time * (1. - 1e-9) {
             let t = self.time + done * g.acceleration;
             let balance: Vec<f64> = (0..n).map(|i| {
@@ -412,7 +451,9 @@ impl Terrain {
                     Some(e) => e[i] + g.ela_amplitude * ((TAU * t / g.period).cos() - 1.),
                     None => g.ela(self.latitude[i], t),
                 };
-                g.mass_balance(self.bed[i] + self.ice[i], ela)
+                // Snow falls as the rain does: more on windward slopes, less in their lee.
+                let m = g.mass_balance(self.bed[i] + self.ice[i], ela);
+                if m > 0. { m * snow[i] } else { m }
             }).collect();
             // Nothing to do while it is too warm for ice anywhere.
             if balance.iter().all(|&m| m <= 0.) && self.ice.iter().all(|&h| h <= 0.) { break; }

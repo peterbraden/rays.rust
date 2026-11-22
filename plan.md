@@ -2354,6 +2354,17 @@ Not done, and why:
   crepuscular-rays is the CPU kernels', region by region to three places, and its noise is
   as before (FLIP 0.0548 at 16 spp). What a kind of cloud costs is still its code at each
   of the walks: the collision's, the shadow rays', the probe's.)
+- (Done since: sun probes. A medium's vertex sends one (`pathtrace::send_probe`) with the
+  path: it waits in the path's `hit`, and the next round's `intersect` traces it and the
+  shadow ray from the collision it meets as two more turns of its loop (`find_all`, which
+  the CPU runs with a finder that knows the host's shapes), so no kernel gained a traversal
+  or a walk: 7.5 MB of WGSL. benard-altocumulus at 32 spp against a 256 spp reference: FLIP
+  0.0618 without, 0.0581 with, the path tracer 0.0479; the mean unchanged (the kernels are
+  0.6% brighter than the path tracer there with or without, which is something else, not
+  found). The gain is less than the probes' share of the gap was taken to be. mammatus,
+  which looked the same case (0.0957 against 0.0690 at 16 spp), isn't: it has the Oz
+  approximation, whose sun no probe finds. Both scenes have a sea, and the kernels send no
+  glitter probes: the next suspect.)
 - Media through the host in the wavefront's rounds (the rest of step 3), and with them the
   thread-locals. Judged not worth doing as such: a scene with a medium the kernels lack is
   rendered a path at a time by the scene's own code under the same driver now, and the

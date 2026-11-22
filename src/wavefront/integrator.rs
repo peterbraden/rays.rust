@@ -131,6 +131,33 @@ impl pathtrace::HostShapes for Kernels<'_> {
     }
 }
 
+/// The CPU's finder: the kernels' surfaces, the host's shapes by their own code, then the
+/// media as far as what those found.
+struct WithHost<'a, M: pathtrace::Media> {
+    kernels: &'a Kernels<'a>,
+    host_shapes: &'a [usize],
+    listed: usize,
+    media: std::marker::PhantomData<M>,
+}
+
+impl<M: pathtrace::Media> pathtrace::Finder for WithHost<'_, M> {
+    fn find(&self, scene: &pathtrace::Scene, p: &PathState) -> PathState {
+        let mut found = pathtrace::intersect_surface(scene, p);
+        if !self.host_shapes.is_empty() {
+            let r = host_ray(p.o.truncate(), p.d.truncate(), &self.kernels.buffers.origin);
+            let mut reach = if found.state.z == u32::MAX { f64::INFINITY } else { found.hit.x as f64 };
+            for &shape in self.host_shapes {
+                if let Some(x) = self.kernels.flat.shapes[shape].0.geometry.intersects_range(&r, crate::wavefront::flat::MIN_SHAPE, reach) {
+                    reach = x.dist;
+                    found.state.z = (self.listed + shape) as u32;
+                    found.hit = Vec4::new(x.dist as f32, 0., 0., 1.);
+                }
+            }
+        }
+        pathtrace::intersect_media::<M>(scene, &found)
+    }
+}
+
 impl<'a> Kernels<'a> {
     /// The scene as the kernels read it, or why they can't render it.
     pub fn new(s: &'a Scene, flat: &'a FlatScene) -> Result<Kernels<'a>, String> {
@@ -220,35 +247,11 @@ impl<'a> Kernels<'a> {
         while !paths.is_empty() {
             stats.round(round, paths.len() as u64);
             round += 1;
-            // 1. Intersect: the kernels' surfaces, the host's shapes, then the media.
-            let find = |p: &PathState| {
-                let mut found = pathtrace::intersect_surface(&scene, p);
-                if !host_shapes.is_empty() {
-                    let r = host_ray(p.o.truncate(), p.d.truncate(), &self.buffers.origin);
-                    let mut reach = if found.state.z == u32::MAX { f64::INFINITY } else { found.hit.x as f64 };
-                    for &shape in host_shapes {
-                        if let Some(x) = flat.shapes[shape].0.geometry.intersects_range(&r, crate::wavefront::flat::MIN_SHAPE, reach) {
-                            reach = x.dist;
-                            found.state.z = (listed + shape) as u32;
-                            found.hit = Vec4::new(x.dist as f32, 0., 0., 1.);
-                        }
-                    }
-                }
-                pathtrace::intersect_media::<M>(&scene, &found)
-            };
+            // 1. Intersect: the kernels' surfaces, the host's shapes, then the media; a
+            // path's own ray and those traced for it (`pathtrace::find_all`).
+            let finder = WithHost::<M> { kernels: self, host_shapes, listed, media: std::marker::PhantomData };
             for (_, p) in paths.iter_mut() {
-                let mut found = find(p);
-                // Crepuscular rays: a camera ray's shadow rays, traced as it was
-                // (`pathtrace::intersect`, with the host's shapes in the sun's way too).
-                let mut rng = found.state.x;
-                let (a0, c0, a1, c1) = pathtrace::crepuscular_samples(&scene, &found, &mut rng);
-                found.state.x = rng;
-                for (from, light) in [(a0, c0), (a1, c1)] {
-                    if from.w != 0. {
-                        found = pathtrace::shadowed(&found, &find(&pathtrace::shadow_ray(&scene, &found, from)), light);
-                    }
-                }
-                *p = found;
+                *p = pathtrace::find_all(&scene, p, &finder);
             }
             lap(&mut stats, Stage::Intersect, paths.len());
             // 2. Shade.

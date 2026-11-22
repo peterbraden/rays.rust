@@ -150,6 +150,7 @@ pub(crate) fn media_records(tables: &mut Vec<f32>, media: &[crate::volume::FlatM
         tables.extend([scale, from, m.mean_cosine.0 as f32, m.mean_cosine.1 as f32]);
         let oz = m.oz.map_or([0.; 4], |o| [o.octaves as f32, o.a as f32, o.b as f32, o.c as f32]);
         tables.extend(oz);
+        tables.push(m.sun_probes as u32 as f32);
     }
     first
 }

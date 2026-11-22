@@ -2506,6 +2506,10 @@ pub const PATH_LIGHTS_COUNTED: u32 = 32;
 /// `LightSampling::Directional`, as the sea's glitter): an area light the ray finds counts in
 /// full.
 pub const PATH_DIRECTIONAL: u32 = 64;
+/// The sunlight at the path's next vertex in a medium is shared with a sun probe
+/// (`send_probe`): that vertex takes the share in the ray's `d.w` (which holds no density
+/// then: the last vertex was a medium's, whose lights are counted by sampling them).
+pub const PATH_SUN_SHARED: u32 = 128;
 /// From this bit of the flags up, eight bits: the medium the path last scattered in, plus one
 /// (0 before it has scattered in any), which sets how its segments cross every medium
 /// (`segment_scale`).
@@ -2747,17 +2751,46 @@ impl Media for NoMedia {
     const ON: bool = false;
 }
 
+/// What finds the first thing along a ray, a path's own or one traced for it: the kernels'
+/// surfaces and media (`Kernel`), and on the CPU the host's shapes among them.
+pub trait Finder {
+    /// The ray (a path's `o`, `d`, flags and random numbers) with what it meets: `hit`, and
+    /// the primitive or the medium in `state.z`.
+    fn find(&self, s: &Scene, ray: &PathState) -> PathState;
+}
+
+/// The kernels' own finder: their surfaces, then the media as far as those.
+pub struct Kernel<M: Media>(pub core::marker::PhantomData<M>);
+
+impl<M: Media> Finder for Kernel<M> {
+    #[inline]
+    fn find(&self, s: &Scene, ray: &PathState) -> PathState {
+        intersect_media::<M>(s, &intersect_surface(s, ray))
+    }
+}
+
 /// The path with what its ray hits found (`PathState::hit`, and the primitive in `state.z`):
 /// the first of a bounce's two stages, and all of its closest-hit traversal.
 pub fn intersect<M: Media>(s: &Scene, p: &PathState) -> PathState {
-    // The path's own ray, then for a camera's ray in a scene with crepuscular rays, its two
-    // shadow rays (`crepuscular_samples`): each through the one traversal and the one walk.
-    let mut found = *p;
-    let mut ray = *p;
+    find_all(s, p, &Kernel::<M>(core::marker::PhantomData))
+}
+
+/// `intersect`, by `finder`: the path's own ray, and the rays traced for it, each a turn of
+/// one loop, so that a kernel holds one traversal and one walk through the media. After the
+/// path's ray, for a camera's in a scene with crepuscular rays, its two shadow rays
+/// (`crepuscular_samples`); and for a path whose last vertex sent a sun probe (`send_probe`,
+/// waiting in `hit`), the probe, and from the collision it meets its shadow ray to the sun.
+pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
+    let probe = p.hit;
+    let mut own = *p;
+    own.hit = Vec4::ZERO;
+    let mut found = own;
+    let mut ray = own;
     let (mut a0, mut c0, mut a1, mut c1) = (Vec4::ZERO, Vec3::ZERO, Vec4::ZERO, Vec3::ZERO);
+    let (mut probed, mut probe_from) = (Vec3::ZERO, Vec3::ZERO);
     let mut job = 0;
-    while job < 3 {
-        if job > 0 {
+    while job < 5 {
+        if job == 1 || job == 2 {
             let from = if job == 1 { a0 } else { a1 };
             if from.w == 0.0 {
                 job += 1;
@@ -2765,7 +2798,23 @@ pub fn intersect<M: Media>(s: &Scene, p: &PathState) -> PathState {
             }
             ray = shadow_ray(s, &found, from);
         }
-        let hit = intersect_media::<M>(s, &intersect_surface(s, &ray));
+        if job == 3 {
+            if probe.w <= 0.0 {
+                break;
+            }
+            // (From the vertex, as the path's own ray, which was found the same way.)
+            ray = own;
+            ray.d = probe.xyz().extend(0.0);
+            ray.state.x = found.state.x;
+        }
+        if job == 4 {
+            if probed.dot(probed) == 0.0 {
+                break;
+            }
+            ray = shadow_ray(s, &ray, probe_from.extend(1.0));
+            ray.state.x = found.state.x;
+        }
+        let hit = finder.find(s, &ray);
         if job == 0 {
             found = hit;
             let mut rng = found.state.x;
@@ -2775,6 +2824,22 @@ pub fn intersect<M: Media>(s: &Scene, p: &PathState) -> PathState {
             c0 = samples.1;
             a1 = samples.2;
             c1 = samples.3;
+        } else if job == 3 {
+            found.state.x = hit.state.x;
+            found.l.w += 1.0;
+            if hit.state.z != NONE && hit.state.z >= MEDIUM_HIT {
+                let (light, x, flags) = probe_sunlight(s, &own, probe, &hit);
+                probed = light;
+                probe_from = x;
+                // (Its shadow ray crosses the media as that vertex's would.)
+                ray.state.y = flags;
+            }
+        } else if job == 4 {
+            found.state.x = hit.state.x;
+            found.l.w += 1.0;
+            if hit.state.z == NONE {
+                found.l += probed.extend(0.0);
+            }
         } else {
             found = shadowed(&found, &hit, if job == 1 { c0 } else { c1 });
         }
@@ -2809,6 +2874,79 @@ pub fn intersect_media<M: Media>(s: &Scene, found: &PathState) -> PathState {
     found
 }
 
+/// How a path with these flags scatters at a vertex in the medium at `medium`: how many times
+/// it counts as having scattered in media, the fraction of the phase function's scattering
+/// taken as none (delta-M truncation; 1 for isotropic, by the similarity relations), and the
+/// albedo of what is left. All of the scattering if the camera sees the vertex directly
+/// (through mirrors and glass too), and without its forward peak once the path has scattered
+/// in a medium or left a surface.
+fn medium_vertex(s: &Scene, medium: u32, flags_p: u32) -> (u32, f32, Vec3) {
+    let mut scatterings = (flags_p >> PATH_SCATTERINGS_SHIFT) & 0xff;
+    if scatterings == 0 && flags_p & PATH_SCATTERED != 0 && at(s.tables, medium + MEDIUM_SCALE) != 1.0 {
+        scatterings = 1;
+    }
+    let mut peak = 0.0;
+    if scatterings >= 1 {
+        peak = at(s.tables, medium + MEDIUM_PEAK);
+    }
+    let a = medium + MEDIUM_ALBEDO;
+    let whole = Vec3::new(at(s.tables, a), at(s.tables, a + 1), at(s.tables, a + 2));
+    let mut albedo = whole * (1.0 - peak) / (Vec3::ONE - whole * peak);
+    if scatterings as f32 >= at(s.tables, medium + MEDIUM_REDUCED_FROM) {
+        let g = at(s.tables, medium + MEDIUM_MEAN_COSINE + scatterings.min(1));
+        albedo = albedo * (1.0 - g) / (Vec3::ONE - albedo * g);
+        peak = 1.0;
+    }
+    (scatterings, peak, albedo)
+}
+
+/// The path's flags once it has scattered at a vertex in medium number `m` that counted
+/// `scatterings` before it.
+fn scattered_in(flags_p: u32, m: u32, scatterings: u32) -> u32 {
+    (flags_p & !PATH_MEDIA) | ((m + 1) << PATH_MEDIUM_SHIFT) | ((scatterings + 1).min(255) << PATH_SCATTERINGS_SHIFT)
+}
+
+/// Sun probes (the renderer's `VolumeMaterial::sun_probe`, which has the account): the
+/// sunlight a path gathers at its next vertex in a cloud is the sun's times the phase function
+/// between the path's direction and the sun's, whose forward peak makes the fireflies of
+/// sunlit clouds. So it is estimated by two techniques, weighted by the balance heuristic: the
+/// path's continuation `wi`, drawn from this vertex's phase function about the ray `rd`, and a
+/// probe drawn from the same function about the sun, which meets the next vertex's peak. Both
+/// find that vertex by the same free flight. Returns the continuation's share of the sunlight
+/// at its next vertex, and the probe: its direction, and its estimate's weight against the
+/// path's throughput (the phase function towards it over the two densities' sum), 0 for none.
+fn send_probe(s: &Scene, medium: u32, peak: f32, rd: Vec3, wi: Vec3, rng: &mut u32) -> (f32, Vec4) {
+    let sun = s.params.sun_dir.xyz();
+    let ours = medium_phase(s.tables, medium, peak, rd.dot(wi));
+    let share = ours / (ours + medium_phase(s.tables, medium, peak, sun.dot(wi)));
+    let d = medium_scatter(s.tables, medium, peak, sun, rng);
+    let towards = medium_phase(s.tables, medium, peak, rd.dot(d));
+    let density = towards + medium_phase(s.tables, medium, peak, sun.dot(d));
+    (share, d.extend(if density > 0.0 { towards / density } else { 0.0 }))
+}
+
+/// What a probe that met a collision in a medium (`hit`, traced along `d` from the path's
+/// vertex) would gather of the sun there, before its shadow ray: the light, times the path's
+/// throughput and the probe's weight; the point; and the path's flags as that vertex's shadow
+/// rays cross the media. No light where the sun is counted otherwise (the Oz approximation).
+fn probe_sunlight(s: &Scene, p: &PathState, d: Vec4, hit: &PathState) -> (Vec3, Vec3, u32) {
+    let m = hit.state.z & 0xff;
+    let medium = s.params.media.x + m * MEDIUM_SIZE;
+    let x = p.o.xyz() + d.xyz() * hit.hit.x;
+    let (scatterings, peak, albedo) = medium_vertex(s, medium, p.state.y);
+    let flags = scattered_in(p.state.y, m, scatterings) | PATH_SCATTERED;
+    if at(s.tables, medium + MEDIUM_OZ) > 0.0 && scatterings > 0 {
+        return (Vec3::ZERO, x, flags);
+    }
+    let sun = s.params.sun_dir.xyz();
+    let mut light = albedo * medium_phase(s.tables, medium, peak, d.xyz().dot(sun)) * s.params.sun_irr.xyz() * sun_transmittance(s, x);
+    // Through the air on the way, as the continuation's would be.
+    if s.params.offs2.w & FLAG_AERIAL != 0 && hit.hit.x > AERIAL_FROM {
+        light *= aerial_transmittance(s, p.o.xyz(), d.xyz(), hit.hit.x);
+    }
+    (light * p.beta.xyz() * d.w, x, flags)
+}
+
 /// The second stage, at what `intersect` found: haze, emission, direct light (its shadow rays
 /// traced here, and the sky asked for its light sample), and the next ray, or the end.
 pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQuery, SkyQuery) {
@@ -2818,7 +2956,9 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
     let mut l = p.l.xyz();
     let mut rays = p.l.w as u32;
     let mut rng = p.state.x;
-    let flags_p = p.state.y;
+    // The share of the sun's light at this vertex that isn't a probe's (`send_probe`).
+    let sun_share = if p.state.y & PATH_SUN_SHARED != 0 { prev_pdf } else { 1.0 };
+    let flags_p = p.state.y & !PATH_SUN_SHARED;
     let specular = flags_p & PATH_SPECULAR != 0;
     let counted = flags_p & PATH_LIGHTS_COUNTED != 0;
     let (mut q0, mut q1) = (SkyQuery::NONE, SkyQuery::NONE);
@@ -2889,35 +3029,23 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
     // medium or left a surface (delta-M truncation), its albedo that of what is left.
     // And from as many scatterings as the similarity relations begin at, isotropically, with
     // the albedo they give (`peak` 1 then: none of the phase function's shape is left).
-    let mut scatterings = (flags_p >> PATH_SCATTERINGS_SHIFT) & 0xff;
+    let (mut scatterings, mut peak, mut medium_albedo) = (0, 0.0, Vec3::ZERO);
+    if M::ON && in_medium {
+        let v = medium_vertex(s, medium, flags_p);
+        scatterings = v.0;
+        peak = v.1;
+        medium_albedo = v.2;
+    }
     // The Oz approximation (the renderer's `VolumeMaterial::oz_sunlight`): at the path's first
     // scattering in any medium the sun is a sum of octaves, each through thinner media by a
     // broader phase function; at later ones it has been counted.
     let oz = if M::ON && in_medium { at(s.tables, medium + MEDIUM_OZ) as u32 } else { 0 };
-    let sun_counted = oz > 0 && scatterings > 0;
+    let sun_counted = oz > 0 && (flags_p >> PATH_SCATTERINGS_SHIFT) & 0xff > 0;
     let oz_by = if oz > 0 {
         Vec4::new(at(s.tables, medium + MEDIUM_OZ + 1), at(s.tables, medium + MEDIUM_OZ + 2), at(s.tables, medium + MEDIUM_OZ + 3), at(s.tables, medium + MEDIUM_MEAN_COSINE + 1))
     } else {
         Vec4::ONE
     };
-    let mut peak = 0.0;
-    let mut medium_albedo = Vec3::ZERO;
-    if M::ON && in_medium {
-        if scatterings == 0 && flags_p & PATH_SCATTERED != 0 && at(s.tables, medium + MEDIUM_SCALE) != 1.0 {
-            scatterings = 1;
-        }
-        if scatterings >= 1 {
-            peak = at(s.tables, medium + MEDIUM_PEAK);
-        }
-        let a = medium + MEDIUM_ALBEDO;
-        let whole = Vec3::new(at(s.tables, a), at(s.tables, a + 1), at(s.tables, a + 2));
-        medium_albedo = whole * (1.0 - peak) / (Vec3::ONE - whole * peak);
-        if scatterings as f32 >= at(s.tables, medium + MEDIUM_REDUCED_FROM) {
-            let g = at(s.tables, medium + MEDIUM_MEAN_COSINE + scatterings.min(1));
-            medium_albedo = medium_albedo * (1.0 - g) / (Vec3::ONE - medium_albedo * g);
-            peak = 1.0;
-        }
-    }
     let floor_alpha = if flags_p & PATH_SCATTERED != 0 { s.params.misc.x } else { 0.0 };
 
     // Delta bounces: mirrors, glass, smooth coats.
@@ -3015,7 +3143,7 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
     let mut flags_p = (flags_p | PATH_SCATTERED) & !(PATH_SPECULAR | PATH_LIGHTS_COUNTED | PATH_DIRECTIONAL);
     if in_medium {
         // Light leaving this vertex, towards the lights and onwards, has scattered here.
-        flags_p = (flags_p & !PATH_MEDIA) | (((hit.prim & 0xff) + 1) << PATH_MEDIUM_SHIFT) | ((scatterings + 1).min(255) << PATH_SCATTERINGS_SHIFT);
+        flags_p = scattered_in(flags_p, hit.prim & 0xff, scatterings);
     }
     // A medium's lights, like the sea's, are counted by sampling them alone, and the sun as a
     // point; the sky is found by the path's next ray.
@@ -3047,6 +3175,9 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
                 if in_medium || lobe.pdf(wo, sd) * solid_angle < POINT_SUN {
                     wi = sd;
                     li = s.params.sun_irr.xyz() * sun_transmittance(s, above);
+                    if in_medium {
+                        li *= sun_share;
+                    }
                 } else {
                     // Uniformly in the cone, by 1 - cos θ (as `sun_angle`, without the
                     // rounding of cos θ near 1).
@@ -3152,6 +3283,16 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
             return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
         }
         beta *= medium_albedo;
+        // The next vertex's sunlight by the continuation and by a probe, where the phase
+        // function is peaked enough to need it (and the sun isn't counted by the Oz
+        // approximation's octaves, at the first vertex alone).
+        let mean_cosine = if peak >= 1.0 { 0.0 } else { at(s.tables, medium + MEDIUM_MEAN_COSINE + if peak > 0.0 { 1 } else { 0 }) };
+        if flags & FLAG_SUN != 0 && oz == 0 && mean_cosine > 0.2 && at(s.tables, medium + MEDIUM_PROBES) > 0.0 {
+            let (share, probe) = send_probe(s, medium, peak, rd, wi, &mut rng);
+            let (mut next, a, b) = carry_on(p, point, wi, beta, l, rays, rng, flags_p | PATH_LIGHTS_COUNTED | PATH_SUN_SHARED, share, depth + 1, q0, q1);
+            next.hit = probe;
+            return (next, a, b);
+        }
         return carry_on(p, point, wi, beta, l, rays, rng, flags_p | PATH_LIGHTS_COUNTED, 0.0, depth + 1, q0, q1);
     }
     if water {
@@ -3403,7 +3544,7 @@ pub fn probe_clouds(
 /// `ScatteringApproximation::similarity_after`), that factor on densities once a path has
 /// scattered as often as they begin at, that number, and the mean cosine of its scattering
 /// whole and truncated; and the Oz approximation's octaves and factors (`MEDIUM_OZ`).
-pub const MEDIUM_SIZE: u32 = 28;
+pub const MEDIUM_SIZE: u32 = 29;
 pub const MEDIUM_BOX: u32 = 1;
 pub const MEDIUM_DENSITY: u32 = 7;
 pub const MEDIUM_RADIUS: u32 = 8;
@@ -3418,6 +3559,8 @@ pub const MEDIUM_MEAN_COSINE: u32 = 22;
 /// The Oz approximation's octaves (0 without it), then its factors a octave on the extinction,
 /// the weight and the mean cosine (the renderer's `volume::Oz`).
 pub const MEDIUM_OZ: u32 = 24;
+/// Whether its vertices send sun probes (the renderer's `VolumeMaterial::sun_probes`).
+pub const MEDIUM_PROBES: u32 = 28;
 pub const MEDIUM_CONSTANT: u32 = 0;
 pub const MEDIUM_NUBIS: u32 = 1;
 pub const MEDIUM_BENARD: u32 = 2;

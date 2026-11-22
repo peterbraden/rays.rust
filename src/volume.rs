@@ -628,12 +628,14 @@ pub struct FlatMedium {
     pub mean_cosine: (f64, f64),
     /// The Oz approximation of the sunlight scattered many times, if the medium takes it.
     pub oz: Option<Oz>,
+    /// Whether its vertices send sun probes (`VolumeMaterial::sun_probes`).
+    pub sun_probes: bool,
 }
 
 impl Volume {
     /// The medium as data, scattering as `material` says; or why a kernel couldn't render it:
     /// they have the plain path tracing of a grey medium filling its box, with delta-M
-    /// truncation, the similarity relations and the Oz approximation, lit by the sun, the lights and the sky. Sun and glitter probes they leave
+    /// truncation, the similarity relations and the Oz approximation, lit by the sun, the lights and the sky, with sun probes (`pathtrace::send_probe`). Glitter probes they leave
     /// out: those change a render's noise, not its mean.
     pub fn flat(&self, material: &VolumeMaterial) -> Result<FlatMedium, String> {
         let a = &material.approximation;
@@ -656,6 +658,7 @@ impl Volume {
             reduced: a.similarity_after.map(|n| (n, material.density_scale(n.max(1)))),
             mean_cosine: (material.mean_cosine(0), material.mean_cosine(1)),
             oz: a.oz,
+            sun_probes: material.sun_probes,
         })
     }
 }

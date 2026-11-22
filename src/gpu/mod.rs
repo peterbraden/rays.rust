@@ -1581,6 +1581,34 @@ mod tests {
         }
     }
 
+    /// A cumulonimbus likewise (`shared::cumulonimbus`).
+    #[test]
+    fn test_cumulonimbus_is_the_renderers_on_the_device() {
+        use crate::procedural::cumulonimbus::Cumulonimbus;
+        let layer = Cumulonimbus::new(5);
+        let record = layer.export();
+        let mut rng = crate::geometry::Pcg32::new(5, 0);
+        let mut next = move || rng.next_f64();
+        let n = 8192;
+        // About the main tower and the anvil's near end.
+        let points: Vec<Vec4> = (0..n).flat_map(|_| [Vec4::new(
+            (next() * 16000. - 5000.) as f32, (layer.bottom() + next() * (layer.top() - layer.bottom())) as f32, (next() * 10000. - 5000.) as f32, 0.), Vec4::ZERO]).collect();
+        let exact: Vec<f64> = points.chunks(2).map(|q| layer.fraction(&Vector3::new(q[0].x as f64, q[0].y as f64, q[0].z as f64)).0).collect();
+        let here: Vec<f32> = points.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], pathtrace::PROBE_CUMULONIMBUS)).collect();
+        let cloudy = exact.iter().filter(|e| **e > 0.).count();
+        let differences: Vec<f64> = here.iter().zip(&exact).map(|(f, e)| (*f as f64 - e).abs()).collect();
+        let (worst, mean) = (differences.iter().cloned().fold(0., f64::max), differences.iter().sum::<f64>() / n as f64);
+        println!("{} of {} points in cloud; f32 within {:.1e} of the renderer's f64 (mean {:.1e})", cloudy, n, worst, mean);
+        assert!(cloudy > n / 40, "{} of {} points in cloud", cloudy, n);
+        assert!(worst < 5e-2 && mean < 2e-4, "the shader's density differs from the renderer's by {} (mean {})", worst, mean);
+
+        let Some(on_device) = probe(&record, &points, pathtrace::PROBE_CUMULONIMBUS) else { return };
+        let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
+        let mean = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).sum::<f32>() / n as f32;
+        println!("on the device: within {:.1e} of the shader's functions on the CPU (mean {:.1e})", worst, mean);
+        assert!(worst < 5e-2 && mean < 2e-4, "the device's density differs from the shader's on the CPU by {} (mean {})", worst, mean);
+    }
+
     /// Mammatus likewise (`shared::mammatus`).
     #[test]
     fn test_mammatus_is_the_renderers_on_the_device() {

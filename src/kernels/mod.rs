@@ -126,6 +126,11 @@ pub(crate) fn media_records(tables: &mut Vec<f32>, media: &[crate::volume::FlatM
             tables.extend(record);
             (pathtrace::MEDIUM_MAMMATUS, f32::from_bits(at), *radius as f32)
         },
+        FieldExport::Cumulonimbus { record, radius } => {
+            let at = tables.len() as u32;
+            tables.extend(record);
+            (pathtrace::MEDIUM_CUMULONIMBUS, f32::from_bits(at), *radius as f32)
+        },
     }).collect();
     let first = tables.len() as u32;
     for (m, (kind, density, radius)) in media.iter().zip(fields) {

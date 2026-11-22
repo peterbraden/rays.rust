@@ -2345,6 +2345,8 @@ Not done, and why:
   cloud is compiled into a kernel wherever it walks media, and there are four such places
   (the collision, the shadow rays of a vertex and of the crepuscular sample, the probe), so
   the WGSL is 7.8 MB with six kinds: the walks want one call site a kernel.)
+- (Done since: cumulonimbus, in `shared::cumulonimbus`, the same bits in the renderer at
+  300,000 points. The WGSL is 9.5 MB.)
 - Media through the host in the wavefront's rounds (the rest of step 3), and with them the
   thread-locals. Judged not worth doing as such: a scene with a medium the kernels lack is
   rendered a path at a time by the scene's own code under the same driver now, and the

@@ -1,8 +1,13 @@
-import sys, importlib.util, numpy as np
+"""Comparison sheets for docs/research/learned-lod: renders against full detail, with maps of
+the brightness difference in linear light.
+
+    scripts/lod-comparison-sheets.py <directory of the stage renders (.exr)> [output directory]
+"""
+import sys, os, importlib.util, numpy as np
 from PIL import Image, ImageDraw, ImageFont
-spec=importlib.util.spec_from_file_location('c','/home/user/rays.rust/scripts/compare-linear.py'); c=importlib.util.module_from_spec(spec); spec.loader.exec_module(c)
-R='/tmp/claude-0/-home-user-rays-rust/68517cbd-7562-597b-b10a-4dd73f225831/scratchpad/renders/'
-OUT='/home/user/rays.rust/docs/research/learned-lod/images/'
+spec=importlib.util.spec_from_file_location('c',os.path.join(os.path.dirname(os.path.abspath(__file__)),'compare-linear.py')); c=importlib.util.module_from_spec(spec); spec.loader.exec_module(c)
+R=os.path.join(sys.argv[1],'')
+OUT=os.path.join(sys.argv[2] if len(sys.argv)>2 else 'docs/research/learned-lod/images','')
 def srgb(x):
     x=np.clip(x,0,1); return np.where(x<=0.0031308,12.92*x,1.055*x**(1/2.4)-0.055)
 def load(n): return c.read(R+n+'.exr')[...,:3]

@@ -72,3 +72,25 @@ these:
 
 To be worth shipping, a volume would have to be cheaper to trace, or used where cards fail
 (broadleaf crowns seen from the side).
+
+## The darkening from low down: what it isn't
+
+Two candidates were eliminated:
+
+- **Not the bark's simplification.** With the bark at full detail (a temporary switch) and the
+  leaves still as cards, the mid range came out *darker*: 0.952 and 0.949 against the cards'
+  0.985 and 0.967. Peak memory was 2.1 GB. Vertex clustering removes twigs, and that brightens
+  the trees, partly hiding the leaves' error. The leaves' stand-ins, cards and volumes alike, are
+  about 5% too dark from the side.
+- **Not the constituent a hit chooses.** Seen from the side, as from above, the leaf a ray
+  actually hits first has the same expected response as the `a|n·d|` choice:
+  - within 0.4% for the broadleaves (to 2.3% for hazel's single L7 cluster);
+  - within 1.3% for willow, and 0.3–2.6% brighter for the conifers.
+
+  The harness now measures this for side views too.
+
+**Left:** shadowing *between* clusters. Shadow rays that start inside a crown meet neighbouring
+clusters' stand-ins. Stage 4 found crossed cards over-shadow such rays. Single cards and volumes
+may do so too, from the side, where a ray to the sun crosses more of the crown. Measuring it
+means comparing, inside a whole tree, the transmittance toward the sky from first-hit points:
+through the leaves, and through the stand-ins.

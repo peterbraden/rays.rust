@@ -231,6 +231,8 @@ struct Tally {
     hits: (f64, f64),
     /// The same from the side (views within 17° of horizontal).
     side_hits: (f64, f64),
+    /// From the side: Σ response of the a|n·d| choice, and of the leaf hit (unshadowed).
+    side_cast: (f64, f64),
     /// From ray casting: Σ response of the a|n·d| choice, of the leaf hit, of the leaf hit
     /// shadowed by its own cluster; all weighted by hits.
     cast: (f64, f64, f64),
@@ -350,7 +352,14 @@ fn measure(leaves: &[Arc<Tagged<Triangle>>], size: f64, views: &[Vector3<f64>], 
                 let (x, y) = (radius * r1.sqrt() * (2. * std::f64::consts::PI * r2).cos(), radius * r1.sqrt() * (2. * std::f64::consts::PI * r2).sin());
                 let ray = Ray { ro: centre + e1 * x + e2 * y - d * (3. * radius), rd: d };
                 card_hits += hit_cards(&ray) as u8 as f64;
-                leaf_hits += geometry.intersects(&ray).is_some() as u8 as f64;
+                if let Some(h) = geometry.intersects(&ray) {
+                    leaf_hits += 1.;
+                    let n = members.iter().find(|m| m.face == h.face).map_or(h.normal, |m| m.item.normal);
+                    for l in lights {
+                        t.side_cast.0 += chosen(&kept, &d, l);
+                        t.side_cast.1 += response(&n, &d, l);
+                    }
+                }
             }
             t.side_hits.0 += leaf_hits;
             t.side_hits.1 += card_hits;
@@ -451,6 +460,7 @@ fn lod_research() {
                 100. * t.sigma_err[0] / s, 100. * t.sigma_err[1] / s, 100. * t.sigma_err[2] / s, 100. * t.sigma_err[3] / s);
             let nv = (t.sampled * views.len()) as f64;
             println!("    hit probability: leaves {:.3}, card {:.3} (card/leaves {:.3}); from the side card/leaves {:.3}", t.hits.0 / nv, t.hits.1 / nv, t.hits.1 / t.hits.0, t.side_hits.1 / t.side_hits.0);
+            println!("    from the side, response of the leaf hit against the a|n·d| choice: {:+.2}%", 100. * (t.side_cast.1 / t.side_cast.0 - 1.));
             println!("    response of the leaf hit, against the a|n·d| choice: unshadowed {:+.2}%, shadowed by its cluster {:+.2}%; lit fraction from leaves {:.3}",
                 100. * (t.cast.1 / t.cast.0 - 1.), 100. * (t.cast.2 / t.cast.0 - 1.), t.lit.0 / t.lit.1);
             row += &format!(",{:.4},{:.4},{:.4},{:.4},{:.4},{:.4}\n", t.hits.0 / nv, t.hits.1 / nv, t.cast.0, t.cast.1, t.cast.2, t.lit.0 / t.lit.1);

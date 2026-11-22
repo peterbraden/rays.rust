@@ -2371,6 +2371,7 @@
             {"name": "fold_growth", "kind": "number", "default": 0.5, "doc": "Extra uplift at anticline crests (less in synclines), as a fraction."},
             {"name": "fold_vergence", "kind": "number", "default": 0.6, "doc": "How far folds lean towards the foreland: 0 upright, up to 0.95.", "min": -0.95, "max": 0.95},
             {"name": "thrust_throw", "kind": "number", "default": 800, "doc": "Throw of the thrusts on the leaning folds' forelimbs, m: beds repeat behind each.", "min": 0},
+            {"name": "fracturing", "kind": "number", "default": 1.5, "doc": "Extra glacial erodibility of the most fractured rock (crests, thrust zones); rivers feel a third.", "min": 0},
             {"name": "warp_amplitude", "kind": "number", "default": 400, "doc": "Gentle undulation of the strata everywhere, m."},
             {"name": "cover_thickness", "kind": "number", "default": 3000, "doc": "Typical thickness of the sedimentary cover over the basement, m."},
             {"name": "exhumation", "kind": "number", "default": 4000, "doc": "How far the basement was raised in the strongest belts before time zero, m."},

@@ -72,7 +72,7 @@ use crate::terrain::volcano::{erupt, vents, Vent, VolcanoParams};
 use crate::terrain::marine::{self, MarineParams};
 use crate::terrain::channel::{ChannelParams, Rivers};
 use crate::terrain::fluvial::LAKE;
-use crate::terrain::geology::{Process, Rock, Structure};
+use crate::terrain::geology::{fractured, Process, Rock, Structure};
 use rayon::prelude::*;
 use std::f64::consts::TAU;
 
@@ -237,7 +237,8 @@ impl Terrain {
             (Rock::Sediment, Process::Glaciers) => p.sediment_glacial_erodibility,
             (Rock::Basalt, Process::Rivers) => p.lava_erodibility,
             (Rock::Basalt, Process::Glaciers) => p.lava_glacial_erodibility,
-            (r, process) => r.erodibility(process, contrast),
+            // Bedrock, more erodible where folding and faulting fractured it.
+            (r, process) => r.erodibility(process, contrast) * fractured(self.structure[i].fracture, process, p.planet.geology.fracturing),
         }).collect()
     }
 
@@ -530,6 +531,23 @@ mod tests {
         assert_eq!(d.bed, c.bed);
         assert_eq!(d.time, 2000.);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_glaciers_make_more_of_fractured_rock_than_rivers() {
+        let t = small(3);
+        let (rivers, glaciers) = (t.erodibility(), t.glacial_erodibility());
+        let bedrock: Vec<usize> = (0..t.domain.len()).filter(|&i| !matches!(t.rock(i), Rock::Sediment | Rock::Basalt)).collect();
+        // Each cell's glacial over river erodibility, relative to its rock's own.
+        let gain = |i: usize| {
+            let r = t.rock(i);
+            (glaciers[i] / rivers[i]) / (r.erodibility(Process::Glaciers, 5.) / r.erodibility(Process::Rivers, 5.))
+        };
+        let fractured: Vec<usize> = bedrock.iter().copied().filter(|&i| t.structure[i].fracture > 0.5).collect();
+        let sound: Vec<usize> = bedrock.iter().copied().filter(|&i| t.structure[i].fracture < 0.05).collect();
+        assert!(!fractured.is_empty() && !sound.is_empty(), "{} fractured, {} sound", fractured.len(), sound.len());
+        assert!(fractured.iter().all(|&i| gain(i) > 1.3), "{:?}", fractured.iter().map(|&i| gain(i)).collect::<Vec<_>>());
+        assert!(sound.iter().all(|&i| (gain(i) - 1.).abs() < 0.1));
     }
 
     #[test]

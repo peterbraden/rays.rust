@@ -34,6 +34,15 @@ sources. The values are model choices (`Rock::scores`), and `contrast` scales th
 Hillslopes creep in proportion to the rivers' erodibility too: weak rock weathers faster into
 soil that creeps, so slopes on shale relax while hard beds hold cliffs.
 
+Rock is also weaker where it is fractured. Folding cracks an anticline's crest open as its
+outer arc is stretched, and thrusts are flanked by damage zones. Molnar, Anderson and Anderson
+("Tectonics, fracturing of rock, and erosion", JGR 112, 2007) argue that fracturing sets much
+of rock's erodibility. Quarrying depends on it more than abrasion does, so glaciers make more
+of it than rivers: the most fractured rock is `1 + fracturing` times as erodible to glaciers
+(2.5 by default) and `1 + 0.35 fracturing` times to rivers (Whipple, Hancock and Anderson,
+GSA Bulletin 112, 2000, find plucking dominant in jointed rock). So glaciers dig out
+anticline crests and thrust zones, while rivers barely notice them.
+
 So the same mountains erode differently under the two processes. Rivers leave quartzite and
 basalt standing as ridges and cut valleys along the shale. Glaciers dig into quartzite, basalt
 and schist, and leave granite as domes.
@@ -89,7 +98,7 @@ simulation sees only the broad structure, and the nested patches add the folds.
 ```
 
 - `geology`: `strata_thickness` (600 m), `contrast` (5), `fold_amplitude` (1500 m),
-  `fold_wavelength` (8000 m), `fold_relief` (0.5), `fold_growth` (0.5), `fold_vergence` (0.6), `thrust_throw` (800 m), `warp_amplitude`
+  `fold_wavelength` (8000 m), `fold_relief` (0.5), `fold_growth` (0.5), `fold_vergence` (0.6), `thrust_throw` (800 m), `fracturing` (1.5), `warp_amplitude`
   (400 m), `cover_thickness` (3000 m), `exhumation` (4000 m), `plutons` (1; 0 for none). The
   older top-level `strata_thickness`, `strata_contrast` and `fold_amplitude` are still read.
 - `sediment_erodibility` (3), `lava_erodibility` (0.3): to rivers; `sediment_glacial_erodibility`
@@ -104,5 +113,5 @@ number) and `hardness`; see [surface layers](surface-layers.md).
 ## Not modelled
 
 The direction of shortening comes from the belt's shape, not from the plates' motion; thrusts
-offset the strata but don't stand as scarps at time zero; there are no joints that vary within
-a rock, no karst, and no soil whose depth limits how fast the rock beneath it weathers.
+offset the strata but don't stand as scarps at time zero; fracturing comes only from the folds and thrusts (not from unloading, cooling or weathering);
+there are no karst, and no soil whose depth limits how fast the rock beneath it weathers.

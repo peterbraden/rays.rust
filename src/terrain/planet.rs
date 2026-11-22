@@ -230,20 +230,25 @@ impl Planet {
 
     /// The folds of the mountain belts at `d`, where the belts' strength is `orogeny` and detail
     /// of wavelength `finest` is resolved: their shape (`Structure::crest`), how far they raise
-    /// the strata, and how far thrusts offset the strata, metres.
-    fn belt_folds(&self, d: &Vector3<f64>, orogeny: f64, finest: f64) -> (f64, f64, f64) {
+    /// the strata, metres (`fold`), how far thrusts offset the strata, metres (`thrust`), and
+    /// how fractured the rock is (`fracture`).
+    fn belt_folds(&self, d: &Vector3<f64>, orogeny: f64, finest: f64) -> geology::Fold {
         let g = &self.params.geology;
+        let none = geology::Fold { shape: 0., thrust: 0., fracture: 0. };
         let fade = geology::fade(finest, g.fold_wavelength);
-        if orogeny <= 1e-3 || fade <= 0. { return (0., 0., 0.); }
+        if orogeny <= 1e-3 || fade <= 0. { return none; }
         let trend = self.trend();
         let across = trend.shortening(d);
         // Leaning towards the foreland: upright at the belt's centre, where it is fanned.
         let lean = g.fold_vergence * across.dot(&trend.foreland(d)).tanh();
-        let (shape, thrust) = geology::fold(self.params.seed, &(d * self.params.radius), &across, g.fold_wavelength, lean);
+        let f = geology::fold(self.params.seed, &(d * self.params.radius), &across, g.fold_wavelength, lean);
         // Folds rise and fall along their axes over a few wavelengths: periclines.
         let plunge = smoothstep(-0.35, 0.35, self.plunges.fbm(d, self.params.radius / (5. * g.fold_wavelength), 2));
-        let crest = orogeny * fade * (0.25 + 0.75 * plunge) * shape;
-        (crest, g.fold_amplitude * crest, g.thrust_throw * orogeny * fade * thrust)
+        geology::Fold {
+            shape: orogeny * fade * (0.25 + 0.75 * plunge) * f.shape,
+            thrust: g.thrust_throw * orogeny * fade * f.thrust,
+            fracture: orogeny.min(1.) * fade * f.fracture,
+        }
     }
 
     /// The bedrock's structure at `d` (`geology::Structure`), with folds down to wavelength
@@ -251,7 +256,8 @@ impl Planet {
     pub fn structure(&self, d: &Vector3<f64>, finest: f64) -> Structure {
         let g = &self.params.geology;
         let o = self.orogeny(d);
-        let (crest, fold, thrust) = self.belt_folds(d, o, finest);
+        let folds = self.belt_folds(d, o, finest);
+        let (crest, fold, thrust) = (folds.shape, g.fold_amplitude * folds.shape, folds.thrust);
         let warp = g.warp_amplitude * self.folds.fbm(d, RELIEF_FREQUENCY, 4);
         let cover = g.cover_thickness * (0.4 * self.provinces.fbm(d, RELIEF_FREQUENCY, 3)).exp();
         let basement = -cover + g.exhumation * o * o;
@@ -260,7 +266,7 @@ impl Planet {
         let strength = self.plutons.fbm(d, PLUTON_FREQUENCY, 3) + 0.35 * magma - 0.55;
         let pluton = if g.plutons > 0. { basement - 1000. + 10000. * g.plutons * strength } else { -1e5 };
         Structure {
-            fold: fold + thrust + warp, crest, basement, pluton, grade: o,
+            fold: fold + thrust + warp, crest, fracture: folds.fracture, basement, pluton, grade: o,
             beds: (0.3 * self.provinces.octave(2, d, 23.)).exp(),
             shift: 3000. * self.provinces.octave(3, d, 9.),
             schist: self.provinces.octave(1, d, 37.),
@@ -303,7 +309,8 @@ impl Planet {
             // about that.
             let ridges = self.relief.ridged(d, RIDGE_FREQUENCY, self.octaves(RIDGE_FREQUENCY, finest).max(3));
             let o = self.orogeny(d);
-            let (crest, fold, _) = self.belt_folds(d, o, finest);
+            let crest = self.belt_folds(d, o, finest).shape;
+            let fold = self.params.geology.fold_amplitude * crest;
             let mountains = self.params.mountain_height * o * (ridges * ridges - 0.2) * self.fold_emphasis(crest);
             return base + hills + mountains + self.params.geology.fold_relief * fold;
         }
@@ -315,7 +322,8 @@ impl Planet {
         // sharp crests.
         let ridges = self.relief.ridged(d, RIDGE_FREQUENCY, self.octaves(RIDGE_FREQUENCY, finest).max(3));
         let o = self.orogeny(d);
-        let (crest, fold, _) = self.belt_folds(d, o, finest);
+        let crest = self.belt_folds(d, o, finest).shape;
+        let fold = self.params.geology.fold_amplitude * crest;
         let mountains = self.params.mountain_height * o * (0.2 + ridges * ridges) * self.fold_emphasis(crest);
         base + hills + mountains + self.params.geology.fold_relief * fold
     }

@@ -38,6 +38,12 @@
 //! - **Schist**, split along its foliation, is quarried easily; **limestone** is soft (Mohs 3)
 //!   and so abraded easily, though strong against rivers' impacts.
 //!
+//! Folding and faulting fracture rock (`Fold::fracture`: anticline crests, whose outer arcs
+//! are stretched, and thrusts' damage zones), and fractured rock is weaker (Molnar, Anderson
+//! and Anderson, "Tectonics, fracturing of rock, and erosion", JGR 112, 2007): to glaciers
+//! fully, as quarrying works on fractures, and to rivers by a share, as they mostly abrade
+//! (`fractured`, `fracturing`).
+//!
 //! Each rock has a score for each process (`Rock::scores`) between -1 (most resistant) and 1
 //! (least), and its erodibility, relative to average bedrock, is `contrast^(score / 2)`: the
 //! hardest rock is `contrast` times less erodible than the softest (`GeologyParams::contrast`,
@@ -134,6 +140,9 @@ pub struct GeologyParams {
     /// Throw of the thrusts on the leaning folds' forelimbs, metres: how far each sheet's
     /// strata ride up over the next.
     pub thrust_throw: f64,
+    /// How much more erodible the most fractured rock (anticline crests, thrust zones) is to
+    /// glaciers, which quarry it: 1 doubles it; rivers feel a third of this.
+    pub fracturing: f64,
     /// Gentle undulation of the strata everywhere, metres.
     pub warp_amplitude: f64,
     /// Typical thickness of the sedimentary cover over the basement, metres.
@@ -149,7 +158,7 @@ impl Default for GeologyParams {
     fn default() -> GeologyParams {
         GeologyParams {
             strata_thickness: 600., contrast: 5., fold_amplitude: 1500., fold_wavelength: 8000.,
-            fold_relief: 0.5, fold_growth: 0.5, fold_vergence: 0.6, thrust_throw: 800., warp_amplitude: 400., cover_thickness: 3000.,
+            fold_relief: 0.5, fold_growth: 0.5, fold_vergence: 0.6, thrust_throw: 800., fracturing: 1.5, warp_amplitude: 400., cover_thickness: 3000.,
             exhumation: 4000., plutons: 1.,
         }
     }
@@ -279,6 +288,8 @@ pub struct Structure {
     pub shift: f64,
     /// Where positive, the basement is schist rather than gneiss.
     pub schist: f64,
+    /// How fractured the bedrock is by folding and faulting, 0 to 1 (`Fold::fracture`).
+    pub fracture: f64,
 }
 
 impl Structure {
@@ -287,12 +298,12 @@ impl Structure {
     pub fn coordinate(&self, z: f64, exhumed: f64) -> f64 { z - exhumed - self.fold }
 
     /// The fields as an array, to average or interpolate.
-    pub fn to_array(&self) -> [f64; 8] {
-        [self.fold, self.crest, self.basement, self.pluton, self.grade, self.beds, self.shift, self.schist]
+    pub fn to_array(&self) -> [f64; 9] {
+        [self.fold, self.crest, self.basement, self.pluton, self.grade, self.beds, self.shift, self.schist, self.fracture]
     }
 
-    pub fn from_array(a: [f64; 8]) -> Structure {
-        Structure { fold: a[0], crest: a[1], basement: a[2], pluton: a[3], grade: a[4], beds: a[5], shift: a[6], schist: a[7] }
+    pub fn from_array(a: [f64; 9]) -> Structure {
+        Structure { fold: a[0], crest: a[1], basement: a[2], pluton: a[3], grade: a[4], beds: a[5], shift: a[6], schist: a[7], fracture: a[8] }
     }
 }
 
@@ -502,7 +513,7 @@ pub fn phasor(seed: u64, p: &Vector3<f64>, along: &Vector3<f64>, wavelength: f64
 /// with `lean` given the sign of `along`'s component towards the foreland (as `Planet` does),
 /// the folds are the same whichever sign `along` has.
 pub fn fold_shape(seed: u64, p: &Vector3<f64>, along: &Vector3<f64>, wavelength: f64, lean: f64) -> f64 {
-    fold(seed, p, along, wavelength, lean).0
+    fold(seed, p, along, wavelength, lean).shape
 }
 
 /// The folds at `p` as `fold_shape`, and the offset of the strata by thrusts on their
@@ -516,15 +527,43 @@ pub fn fold_shape(seed: u64, p: &Vector3<f64>, along: &Vector3<f64>, wavelength:
 /// again behind each thrust. The throw fades with the lean, so the belts' upright centres
 /// have none, and where the phase is undefined, so thrusts die out where folds end. Like the
 /// folds, the offset doesn't depend on the sign of `along`.
-pub fn fold(seed: u64, p: &Vector3<f64>, along: &Vector3<f64>, wavelength: f64, lean: f64) -> (f64, f64) {
+pub fn fold(seed: u64, p: &Vector3<f64>, along: &Vector3<f64>, wavelength: f64, lean: f64) -> Fold {
     let (phase, defined) = phasor(seed, p, along, wavelength);
     let lean = lean.clamp(-0.95, 0.95);
     let warped = phase + lean * (1. - phase.cos());
     let ahead = lean.signum() * warped - std::f64::consts::FRAC_PI_2;
     let sawtooth = ahead.rem_euclid(TAU) / TAU - 0.5;
     let leaning = (3. * lean.abs()).min(1.);
-    (defined * warped.cos(), defined * leaning * sawtooth)
+    // Fractured rock: open joints across an anticline's crest, where its outer arc is
+    // stretched, and the damage zone either side of a thrust.
+    let crest = warped.cos().max(0.).powi(2);
+    let off = ahead.rem_euclid(TAU);
+    let zone = leaning * (-(off.min(TAU - off) / 0.35).powi(2)).exp();
+    Fold { shape: defined * warped.cos(), thrust: defined * leaning * sawtooth, fracture: defined * crest.max(zone) }
 }
+
+/// The folds at a point (`fold`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fold {
+    /// From -1 in a trough to 1 at a crest.
+    pub shape: f64,
+    /// The thrusts' offset of the strata, from -1/2 to 1/2 of their throw.
+    pub thrust: f64,
+    /// How fractured the rock is by the folding and faulting, 0 to 1: across anticline crests
+    /// and in thrusts' damage zones.
+    pub fracture: f64,
+}
+
+/// How much more erodible bedrock fractured to `fracture` (0 to 1) is to `process`, for a
+/// `fracturing` of 1 at the most fractured: glaciers quarry the loosened blocks, so the
+/// fractures count fully for them, and rivers pluck them too but mostly abrade, so a share.
+pub fn fractured(fracture: f64, process: Process, fracturing: f64) -> f64 {
+    let share = if process == Process::Glaciers { 1. } else { RIVERS_SHARE_OF_FRACTURING };
+    1. + fracturing.max(0.) * share * fracture.clamp(0., 1.)
+}
+
+/// The share of fracturing's effect on glaciers that rivers feel.
+const RIVERS_SHARE_OF_FRACTURING: f64 = 0.35;
 
 /// How much of folds of `wavelength` a grid resolving detail of wavelength `finest` keeps: all
 /// of them a few cells wide, none narrower than about two cells.
@@ -691,7 +730,7 @@ mod tests {
             let mut last: Option<f64> = None;
             for i in 0..4000 {
                 let p = Vector3::new(6.371e6, row as f64 * 5000., 0.) + along * (i as f64 * 20.);
-                let (_, t) = fold(5, &p, &along, 8000., 0.6);
+                let t = fold(5, &p, &along, 8000., 0.6).thrust;
                 if let Some(l) = last {
                     if t - l < -0.3 { drops += 1; }
                     if t - l > 0.3 { rises += 1; }
@@ -703,8 +742,27 @@ mod tests {
         assert!(drops > 100 && rises < drops / 10, "{} drops, {} rises", drops, rises);
         // The same whichever way the direction points, and no thrusts in upright folds.
         let p = Vector3::new(6.371e6, 1234., 5678.);
-        assert!((fold(5, &p, &along, 8000., 0.6).1 - fold(5, &p, &-along, 8000., -0.6).1).abs() < 1e-9);
-        assert_eq!(fold(5, &p, &along, 8000., 0.).1, 0.);
+        assert!((fold(5, &p, &along, 8000., 0.6).thrust - fold(5, &p, &-along, 8000., -0.6).thrust).abs() < 1e-9);
+        assert_eq!(fold(5, &p, &along, 8000., 0.).thrust, 0.);
+    }
+
+    #[test]
+    fn test_crests_and_thrusts_are_fractured() {
+        // Along leaning folds, the rock is most fractured at anticline crests and at thrusts,
+        // and least in syncline troughs.
+        let along = Vector3::new(0., 0., 1.);
+        let (mut crests, mut troughs) = (vec![], vec![]);
+        for i in 0..20000 {
+            let p = Vector3::new(6.371e6, 0., 0.) + along * (i as f64 * 20.);
+            let f = fold(7, &p, &along, 8000., 0.6);
+            if f.shape > 0.9 { crests.push(f.fracture); }
+            if f.shape < -0.9 { troughs.push(f.fracture); }
+        }
+        let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+        assert!(mean(&crests) > 0.7 && mean(&troughs) < 0.2, "{} {}", mean(&crests), mean(&troughs));
+        // Glaciers make more of it than rivers do.
+        assert!(fractured(1., Process::Glaciers, 1.5) > 2. && fractured(1., Process::Rivers, 1.5) < 1.6);
+        assert_eq!(fractured(0., Process::Glaciers, 1.5), 1.);
     }
 
     #[test]

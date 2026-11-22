@@ -742,6 +742,44 @@ pub mod tests {
         }"#.to_string())
     }
 
+    /// A checkerboard's squares are where the world has them, not about the camera (whose
+    /// frame the kernels compute in): from a camera an odd number of squares from the origin,
+    /// each tile of the picture is the path tracer's.
+    #[test]
+    fn test_a_checkerboard_is_laid_out_in_the_world() {
+        let s = SceneFile::from_string(r#"{
+            "width": 24, "height": 16, "background": [0.5, 0.5, 0.5], "max_depth": 3,
+            "camera": { "location": [7, 9, -15], "lookat": [7, 0, -14.9], "up": [0, 0, 1], "angle": 0.5, "aperture": 0 },
+            "materials": {
+                "A": { "type": "lambertian", "albedo": [0.9, 0.9, 0.9] },
+                "B": { "type": "lambertian", "albedo": [0.05, 0.05, 0.05] }
+            },
+            "media": { "CHECKS": { "type": "checkered-y-plane", "m1": "A", "m2": "B", "xsize": 5, "zsize": 5 } },
+            "objects": [ { "type": "checkeredplane", "y": 0, "medium": "CHECKS" } ]
+        }"#.to_string());
+        let n = 32;
+        let kernels = mean_image(&s, n);
+        let (w, h) = (s.image.width, s.image.height);
+        let path: Vec<Color> = (0..w * h).map(|index| {
+            let (x, y) = (index % w, index / w);
+            let mut sum = Color::black();
+            for k in 0..n {
+                crate::geometry::seed_rand(7, (k * w * h + index) as u64);
+                let (u, v) = (crate::geometry::rand(), crate::geometry::rand());
+                let (ray, weight) = s.camera.get_ray_weighted(x as f64 / w as f64, y as f64 / h as f64, u / w as f64, v / h as f64).unwrap();
+                sum = sum + crate::trace::trace(&ray, 0, &s).1 * weight;
+            }
+            sum / n as f64
+        }).collect();
+        let (a, b) = (tiles(&kernels, w, h, 6, 4), tiles(&path, w, h, 6, 4));
+        // (The picture has both kinds of square, or it tests nothing.)
+        let brightness: Vec<f64> = b.iter().map(|t| t[0]).collect();
+        assert!(brightness.iter().cloned().fold(0., f64::max) > 3. * brightness.iter().cloned().fold(f64::INFINITY, f64::min), "{:?}", brightness);
+        for t in 0..a.len() {
+            assert!((a[t][0] - b[t][0]).abs() < 0.1 * b[t][0] + 1e-3, "tile {}: the kernels {} vs the path tracer {}", t, a[t][0], b[t][0]);
+        }
+    }
+
     /// The wavefront integrator and the recursive tracer estimate the same image.
     #[test]
     fn test_agrees_with_the_path_tracer() {

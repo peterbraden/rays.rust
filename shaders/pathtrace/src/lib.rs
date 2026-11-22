@@ -2216,7 +2216,9 @@ pub fn power_heuristic(p: f32, q: f32) -> f32 {
     if p2 + q2 == 0.0 { 0.0 } else { p2 / (p2 + q2) }
 }
 
-fn resolve_material(s: &Scene, m_in: u32, p: Vec3) -> u32 {
+fn resolve_material(s: &Scene, m_in: u32, at_point: Vec3) -> u32 {
+    // The squares are laid out in the world, not about the camera.
+    let p = world(s, at_point);
     let mut m = m_in;
     let mut k = 0;
     while k < 4 {

@@ -505,8 +505,10 @@ mod tests {
         assert_eq!(g.basal_melting(4500., 50., 3000.), 0.);
         // A valley glacier 300 m thick near the equilibrium line slides.
         assert_eq!(g.basal_melting(3100., 300., 3000.), 1.);
-        // And so does thin ice 500 m above it, where meltwater warms the firn.
-        assert_eq!(g.basal_melting(3500., 60., 3000.), 1.);
+        // And so does ice 150 m thick 500 m above it, where meltwater warms the firn (it would
+        // be frozen to its bed at the air's temperature).
+        assert_eq!(g.basal_melting(3500., 150., 3000.), 1.);
+        assert_eq!(GlacierParams { refreezing: 0., ..g.clone() }.basal_melting(3500., 150., 3000.), 0.);
         // Thick ice is warmed through to its bed even where the air is cold.
         assert_eq!(g.basal_melting(4500., 800., 3000.), 1.);
         // Temperate ice everywhere without the geothermal flux.

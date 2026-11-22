@@ -382,7 +382,7 @@ impl Terrain {
                 strength * self.critical_slope(i)
             }).collect();
             let before = self.bed.clone();
-            let moved = landslide(&self.domain, &mut self.bed, fixed, &critical, LANDSLIDE_TOLERANCE, passes);
+            let (moved, _) = landslide(&self.domain, &mut self.bed, fixed, &critical, LANDSLIDE_TOLERANCE, passes);
             self.record(&before);
             if moved == 0. { break; }
         }
@@ -391,7 +391,7 @@ impl Terrain {
     /// The steepest slope cell `i` stands at before failing, rise over run: its rock's, less
     /// where folding fractured it.
     pub fn critical_slope(&self, i: usize) -> f64 {
-        self.rock(i).critical_slope() / (1. + 0.5 * self.structure[i].fracture)
+        self.rock(i).critical_slope() / (1. + 0.3 * self.structure[i].fracture)
     }
 
     /// Returns the rate glaciers eroded each cell over the step, m³/yr.
@@ -556,7 +556,7 @@ mod tests {
         // And nothing stands steeper than its rock holds.
         for i in (0..t.domain.len()).filter(|&i| !t.domain.boundary[i]) {
             let limit = t.critical_slope(i);
-            for l in t.domain.links(i) { assert!(t.bed[i] - t.bed[l.to] <= limit * l.dist + 0.2, "cell {}", i); }
+            for l in t.domain.links(i) { assert!(t.bed[i] - t.bed[l.to] <= crate::terrain::fluvial::LOOSE * limit * l.dist + 0.2, "cell {}", i); }
         }
     }
 

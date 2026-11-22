@@ -261,41 +261,85 @@ pub fn diffuse_varying(domain: &Domain, h: &mut [f64], fixed: &[bool], kappa: &[
     }
 }
 
-/// Let slopes steeper than they can stand fail: each cell whose slope down to a neighbour
+/// Let slopes steeper than they can stand fail: each cell whose slope down to its neighbours
 /// exceeds its `critical` slope (rise over run; infinite where it can't fail, eg. buttressed
-/// by ice) sends rock down to its steepest such neighbour, enough to bring that slope to the
-/// limit. Cells are taken from the highest down, each moving what it must at once, so a
-/// failure cascades down the whole slope in one pass; passes repeat until no slope exceeds its
-/// limit by more than `tolerance` (or `max_passes` have run). What fails lands on the
-/// neighbour, or leaves the model if that is fixed (the sea, a patch's edge); fixed cells
-/// don't change. Returns the volume moved, m³.
+/// by ice) sends rock down to those neighbours, shared by how far each slope exceeds the limit
+/// (sent all to the steepest, debris ran down in lines). Cells are taken from the highest
+/// down, each moving its share at once, so a failure cascades down the whole slope in one
+/// pass; passes repeat, over just the cells that moved or whose neighbours did, until no slope
+/// exceeds its limit by more than `tolerance` (or `max_passes` have run). What fails lands on
+/// the neighbours, or leaves the model where they are fixed (the sea, a patch's edge); fixed
+/// cells don't change. Returns the volume moved, m³, and which cells debris landed on.
+///
+/// Debris is loose and mixes as it falls, so the cells it landed on are then smoothed among
+/// themselves, conserving volume (`diffuse_varying`, with no exchange with the rest): limits
+/// on the slopes to each of the eight neighbours otherwise leave the debris in faceted ridges
+/// along the grid's diagonals.
 ///
 /// This is threshold hillslope behaviour (Schmidt and Montgomery, "Limits to relief", Science
 /// 270, 1995; Burbank et al., Nature 379, 1996): where rivers and glaciers cut down faster
 /// than slopes can follow by creep, the slopes steepen until they fail in landslides, so their
 /// steepness, and the ranges' relief, is set by the strength of the rock.
-pub fn landslide(domain: &Domain, h: &mut [f64], fixed: &[bool], critical: &[f64], tolerance: f64, max_passes: usize) -> f64 {
+pub fn landslide(domain: &Domain, h: &mut [f64], fixed: &[bool], critical: &[f64], tolerance: f64, max_passes: usize) -> (f64, Vec<bool>) {
+    let n = h.len();
+    let mut failed = vec![false; n];
+    let mut moved = fail(domain, h, fixed, critical, tolerance, max_passes, &mut failed);
+    if moved > 0. {
+        // Mix the debris: each cell it landed on exchanging up to a few tenths of its
+        // difference with such neighbours, a few times; then let whatever that steepened much fail.
+        let kappa: Vec<f64> = (0..n).map(|i| if failed[i] && !fixed[i] { 0.2 * domain.area[i] } else { 0. }).collect();
+        diffuse_varying(domain, h, fixed, &kappa, 3.);
+        // Slopes the mixing leaves a little over the limit stay: failed again to the limit, the
+        // facets would come back.
+        let loose: Vec<f64> = critical.iter().map(|c| c * LOOSE).collect();
+        moved += fail(domain, h, fixed, &loose, tolerance, max_passes, &mut failed);
+    }
+    (moved, failed)
+}
+
+/// How far over its limit `landslide` leaves a slope after mixing the debris.
+pub const LOOSE: f64 = 1.15;
+
+/// `landslide`'s passes of failure, marking the cells debris landed on in `failed`; returns
+/// the volume moved.
+fn fail(domain: &Domain, h: &mut [f64], fixed: &[bool], critical: &[f64], tolerance: f64, max_passes: usize, failed: &mut [bool]) -> f64 {
     let n = h.len();
     let mut moved = 0.;
-    let mut order: Vec<usize> = (0..n).filter(|&i| !fixed[i] && critical[i].is_finite()).collect();
+    let can_fail = |i: usize| !fixed[i] && critical[i].is_finite();
+    let mut active: Vec<usize> = (0..n).filter(|&i| can_fail(i)).collect();
+    let mut touched = vec![false; n];
+    let mut excesses: Vec<(usize, f64)> = Vec::with_capacity(8);
     for _ in 0..max_passes {
-        order.sort_by(|&a, &b| h[b].total_cmp(&h[a]).then(a.cmp(&b)));
-        let mut any = false;
-        for &i in &order {
-            let steepest = domain.links(i).iter()
+        if active.is_empty() { break; }
+        active.sort_by(|&a, &b| h[b].total_cmp(&h[a]).then(a.cmp(&b)));
+        let mut changed: Vec<usize> = vec![];
+        for &i in &active {
+            excesses.clear();
+            excesses.extend(domain.links(i).iter()
                 .map(|l| (l.to, h[i] - h[l.to] - critical[i] * l.dist))
-                .filter(|&(_, excess)| excess > tolerance)
-                .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)));
-            let Some((j, excess)) = steepest else { continue };
-            any = true;
-            // The volume that closes the excess between the two (into a fixed cell, which
-            // doesn't rise, the excess alone).
-            let volume = if fixed[j] { excess * domain.area[i] } else { excess / (1. / domain.area[i] + 1. / domain.area[j]) };
-            h[i] -= volume / domain.area[i];
-            if !fixed[j] { h[j] += volume / domain.area[j]; }
-            moved += volume;
+                .filter(|&(_, excess)| excess > tolerance));
+            if excesses.is_empty() { continue; }
+            let total: f64 = excesses.iter().map(|e| e.1).sum();
+            let steepest = excesses.iter().map(|e| e.1).fold(0., f64::max);
+            for &(j, excess) in &excesses {
+                // Shares of the volume that would close the steepest excess (into a fixed
+                // cell, which doesn't rise, as if into an equal one), by excess.
+                let area_j = if fixed[j] { domain.area[i] } else { domain.area[j] };
+                let volume = steepest / (1. / domain.area[i] + 1. / area_j) * excess / total;
+                h[i] -= volume / domain.area[i];
+                if !fixed[j] { h[j] += volume / domain.area[j]; changed.push(j); failed[j] = true; }
+                moved += volume;
+            }
+            changed.push(i);
         }
-        if !any { break; }
+        // Next, the cells that moved and their neighbours.
+        active.clear();
+        for &c in &changed {
+            for k in std::iter::once(c).chain(domain.links(c).iter().map(|l| l.to)) {
+                if !touched[k] && can_fail(k) { touched[k] = true; active.push(k); }
+            }
+        }
+        for &k in &active { touched[k] = false; }
     }
     moved
 }
@@ -412,12 +456,12 @@ mod tests {
         let critical: Vec<f64> = (0..n).map(|k| if k % 24 < 12 { 0.6 } else { 1.5 }).collect();
         let volume = |h: &[f64]| (0..n).filter(|&k| !d.boundary[k]).map(|k| h[k] * d.area[k]).sum::<f64>();
         let before = volume(&h);
-        let moved = landslide(&d, &mut h, &d.boundary, &critical, 0.01, 2000);
+        let (moved, _) = landslide(&d, &mut h, &d.boundary, &critical, 0.01, 2000);
         assert!(moved > 0.);
-        // No slope is left steeper than its rock holds (bar the tolerance).
+        // No slope is left steeper than its rock holds (bar what mixing the debris leaves).
         for k in 0..n {
             if d.boundary[k] { continue; }
-            for l in d.links(k) { assert!(h[k] - h[l.to] <= critical[k] * l.dist + 0.02, "cell {}", k); }
+            for l in d.links(k) { assert!(h[k] - h[l.to] <= LOOSE * critical[k] * l.dist + 0.02, "cell {}", k); }
         }
         // Volume is kept, but for what fell off the edge; the weak side has been brought lower.
         assert!(volume(&h) <= before + 1e-6 * before);

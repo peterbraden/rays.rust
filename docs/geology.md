@@ -47,7 +47,7 @@ Slopes can only stand so steep before they fail, and how steep depends on the ro
 and Montgomery, "Limits to relief", Science 270, 1995): where rivers or glaciers cut down
 faster than the slopes can follow, the slopes steepen until they fall in landslides. Each rock
 has a critical slope over a simulation's cells (`Rock::critical_slope`, after Selby's rock
-mass strength), from loose sediment and shale at about 31-33° to massive granite at 56°,
+mass strength), from loose debris at about 37° and shale at 42° to massive granite at 63°,
 lowered where the rock is fractured. Steeper slopes fail onto their steepest neighbour, and the
 debris lies as sediment at their feet (`fluvial::landslide`). Ice holds up the walls it
 carves, so they don't fail while it is there; when it melts, walls in weak rock fall in, and

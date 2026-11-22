@@ -235,22 +235,24 @@ impl Rock {
         contrast.max(1.).powf(0.5 * if process == Process::Rivers { r } else { g })
     }
 
-    /// The steepest slope (rise over run) the rock stands at over a simulation's cells before it
-    /// fails in landslides: loose sediment at its angle of repose (about 33°), weak shale and
-    /// schist a little less, and massive granite steepest (56°). The order follows rock mass
-    /// strength (Selby, "A rock mass strength classification for geomorphic purposes",
-    /// Zeitschrift für Geomorphologie 24, 1980); the values are a model choice.
+    /// The steepest slope (rise over run) the rock stands at over a simulation's cells (hundreds
+    /// of metres) before it fails in landslides: loose debris at its angle of repose (about
+    /// 37°), weak shale and schist a little steeper, and massive granite steepest (63°). Over
+    /// such distances real ranges' slopes rarely exceed 35-45° but in strong rock, so these
+    /// bind only on the steepest ground. The order follows rock mass strength (Selby, "A rock
+    /// mass strength classification for geomorphic purposes", Zeitschrift für Geomorphologie
+    /// 24, 1980); the values are a model choice.
     pub fn critical_slope(self) -> f64 {
         match self {
-            Rock::Sediment => 0.65,
-            Rock::Shale => 0.6,
-            Rock::Sandstone => 0.9,
-            Rock::Limestone => 1.0,
-            Rock::Quartzite => 1.2,
-            Rock::Schist => 0.7,
-            Rock::Gneiss => 1.2,
-            Rock::Granite => 1.5,
-            Rock::Basalt => 1.1,
+            Rock::Sediment => 0.75,
+            Rock::Shale => 0.9,
+            Rock::Sandstone => 1.2,
+            Rock::Limestone => 1.4,
+            Rock::Quartzite => 1.6,
+            Rock::Schist => 1.0,
+            Rock::Gneiss => 1.6,
+            Rock::Granite => 2.0,
+            Rock::Basalt => 1.5,
         }
     }
 

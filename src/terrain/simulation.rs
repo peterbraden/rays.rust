@@ -15,7 +15,7 @@
 //! 4. flow routing over the ice and rock surface, then river erosion and deposition on
 //!    ice-free ground (`flow`, `fluvial`);
 //! 5. deltas: what rivers bring to the sea spreads over the sea floor (`marine`);
-//! 6. hillslope diffusion (`fluvial`);
+//! 6. hillslope diffusion (`fluvial`), faster on weak rock and sediment;
 //! 7. meandering rivers, a sub-grid model drawn over the terrain (`channel`).
 //!
 //! ## Geology
@@ -34,7 +34,9 @@
 //! jointed rock such as basalt and quartzite that rivers can hardly cut, and leave massive
 //! granite standing. Sediment is 3 times as erodible as average bedrock to both; lava 0.3 times
 //! to rivers but 1.5 times to glaciers (model choices: fresh basalt is strong, but columnar
-//! joints are easily quarried). In the mountain belts the folds' anticlines are uplifted faster
+//! joints are easily quarried). Hillslopes creep in proportion to the rivers' erodibility too
+//! (weak rock weathers faster into soil that creeps), so slopes on shale relax while hard beds
+//! hold cliffs. In the mountain belts the folds' anticlines are uplifted faster
 //! than their synclines (`GeologyParams::fold_growth`).
 
 //! Everything is a deterministic function of the parameters (including the seed) and t, and
@@ -63,7 +65,7 @@
 
 use crate::terrain::domain::Domain;
 use crate::terrain::flow::{route, Flow};
-use crate::terrain::fluvial::{diffuse, erode_and_deposit, FluvialParams};
+use crate::terrain::fluvial::{diffuse_varying, erode_and_deposit, FluvialParams};
 use crate::terrain::glacier::{erode, flow_ice, GlacierParams};
 use crate::terrain::planet::{Planet, PlanetParams};
 use crate::terrain::volcano::{erupt, vents, Vent, VolcanoParams};
@@ -326,8 +328,11 @@ impl Terrain {
             marine::deposit(&self.domain, &mut self.bed, &self.sediment, &sea, &supply, m, dt);
             self.record(&before);
         }
+        // Soil creeps faster on weak rock, which weathers faster, and on loose sediment: slopes
+        // on shale relax while hard beds hold cliffs.
+        let kappa: Vec<f64> = self.erodibility().iter().map(|k| self.params.fluvial.diffusivity * k).collect();
         let before = self.bed.clone();
-        diffuse(&self.domain, &mut self.bed, &fixed, self.params.fluvial.diffusivity, dt);
+        diffuse_varying(&self.domain, &mut self.bed, &fixed, &kappa, dt);
         self.record(&before);
 
         if let Some(c) = &self.params.channels {

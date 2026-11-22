@@ -31,6 +31,9 @@ easily the rock is quarried along its joints as well as how hard it is to abrade
 Iverson 2012, Krabbendam and Glasser 2011, Dühnforth et al. 2010). The order follows those
 sources. The values are model choices (`Rock::scores`), and `contrast` scales them all.
 
+Hillslopes creep in proportion to the rivers' erodibility too: weak rock weathers faster into
+soil that creeps, so slopes on shale relax while hard beds hold cliffs.
+
 So the same mountains erode differently under the two processes. Rivers leave quartzite and
 basalt standing as ridges and cut valleys along the shale. Glaciers dig into quartzite, basalt
 and schist, and leave granite as domes.
@@ -98,5 +101,4 @@ number) and `hardness`; see [surface layers](surface-layers.md).
 
 The direction of shortening comes from the belt's shape, not from the plates' motion; there
 are no thrust faults, joints that vary within a rock, karst, or
-weathering into soil that depends on the rock; and hillslopes creep at the same rate on every
-rock.
+soil whose depth limits how fast the rock beneath it weathers.

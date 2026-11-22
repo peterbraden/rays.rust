@@ -85,7 +85,11 @@
 //! near a critical slope; the linear law here does not.
 //!
 //! On the cell graph, the flux between cells sharing an edge of width w, centres d apart, is
-//! κ w (h_j - h_i) / d (a finite-volume Laplacian). Steps are explicit, sub-divided to keep
+//! κ w (h_j - h_i) / d (a finite-volume Laplacian). κ may vary from cell to cell
+//! (`diffuse_varying`: the landscape makes it the rivers' erodibility of the rock times the
+//! diffusivity, as weak rock weathers faster into soil that creeps); between two cells it is
+//! the harmonic mean of theirs, as for conductances in series, which keeps the scheme
+//! conservative. Steps are explicit, sub-divided to keep
 //! within the stability limit.
 
 use crate::terrain::domain::Domain;
@@ -226,10 +230,22 @@ fn solve_incision(h1: f64, hr: f64, f: f64, n: f64) -> f64 {
 
 /// Diffuse hillslopes for `dt` years. Cells marked `fixed` don't change.
 pub fn diffuse(domain: &Domain, h: &mut [f64], fixed: &[bool], kappa: f64, dt: f64) {
-    if kappa <= 0. || dt <= 0. { return; }
+    diffuse_varying(domain, h, fixed, &vec![kappa; domain.len()], dt);
+}
+
+/// Diffuse hillslopes for `dt` years, each cell with its own diffusivity `kappa` (m²/yr): the
+/// flux between two cells takes the harmonic mean of theirs, as conductances in series do, so
+/// a hard cell beside a soft one passes little, and what leaves one cell enters the other.
+/// Cells marked `fixed` don't change.
+pub fn diffuse_varying(domain: &Domain, h: &mut [f64], fixed: &[bool], kappa: &[f64], dt: f64) {
+    if dt <= 0. || kappa.iter().all(|&k| k <= 0.) { return; }
+    let between = |i: usize, j: usize| {
+        let (a, b) = (kappa[i].max(0.), kappa[j].max(0.));
+        if a + b > 0. { 2. * a * b / (a + b) } else { 0. }
+    };
     // Explicit diffusion is stable while each cell gives away at most half its excess per step.
     let limit = (0..domain.len()).map(|i| {
-        let conductance: f64 = domain.links(i).iter().map(|l| kappa * l.width / l.dist).sum();
+        let conductance: f64 = domain.links(i).iter().map(|l| between(i, l.to) * l.width / l.dist).sum();
         if conductance > 0. { 0.5 * domain.area[i] / conductance } else { f64::INFINITY }
     }).fold(f64::INFINITY, f64::min);
     let steps = (dt / limit).ceil().max(1.) as usize;
@@ -238,7 +254,7 @@ pub fn diffuse(domain: &Domain, h: &mut [f64], fixed: &[bool], kappa: f64, dt: f
     for _ in 0..steps {
         next.par_iter_mut().enumerate().for_each(|(i, x)| {
             if fixed[i] { *x = h[i]; return; }
-            let flux: f64 = domain.links(i).iter().map(|l| kappa * l.width * (h[l.to] - h[i]) / l.dist).sum();
+            let flux: f64 = domain.links(i).iter().map(|l| between(i, l.to) * l.width * (h[l.to] - h[i]) / l.dist).sum();
             *x = h[i] + step * flux / domain.area[i];
         });
         h.copy_from_slice(&next);
@@ -343,5 +359,23 @@ mod tests {
         diffuse(&d, &mut h, &vec![false; d.len()], 1., 1e4);
         assert!((mass(&h) - before).abs() < 1e-9 * before);
         assert!(h[40] < 100. && h.iter().all(|&x| x >= -1e-9));
+    }
+
+    #[test]
+    fn test_soft_ground_creeps_faster() {
+        // Two equal bumps, one on soft ground and one on hard: mass is conserved, and the soft
+        // one flattens more.
+        let d = Domain::sphere(6, 1000.);
+        let (soft, hard) = (40, 150);
+        let mut h: Vec<f64> = (0..d.len()).map(|i| if i == soft || i == hard { 100. } else { 0. }).collect();
+        let kappa: Vec<f64> = (0..d.len()).map(|i| {
+            let near = |c: usize| i == c || d.links(c).iter().any(|l| l.to == i);
+            if near(soft) { 3. } else if near(hard) { 0.3 } else { 1. }
+        }).collect();
+        let mass = |h: &[f64]| h.iter().zip(&d.area).map(|(a, b)| a * b).sum::<f64>();
+        let before = mass(&h);
+        diffuse_varying(&d, &mut h, &vec![false; d.len()], &kappa, 5e3);
+        assert!((mass(&h) - before).abs() < 1e-9 * before);
+        assert!(h[soft] < h[hard] - 5., "{} vs {}", h[soft], h[hard]);
     }
 }

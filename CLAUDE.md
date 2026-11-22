@@ -36,6 +36,7 @@ Rays.rust is a raytracer written in Rust with the following features:
 
 ## Build Commands
 - Build and run: `cargo run --release -- demo/demo.json`
+- x86-64 builds target x86-64-v3 (AVX2; `.cargo/config.toml`): same images, quicker; `RUSTFLAGS="-C target-cpu=x86-64"` for a processor older than 2013
 - Run tests: `cargo test` (and the GPU's: `cargo test --release --features gpu gpu::`)
 - Run specific test: `cargo test <test_name>`
 - Lint code: `cargo clippy`

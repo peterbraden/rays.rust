@@ -2372,8 +2372,9 @@ inlined, so `--toggle-collect=*Kernels*batch*` collects in it), then timed at 32
 - A build for x86-64-v3 (AVX2's generation; `RUSTFLAGS="-C target-cpu=x86-64-v3"`) gives the
   same images to the byte on all five scenes, on both CPU paths, and is faster where there
   is arithmetic to vectorise: ocean-1 3.7 -> 2.9 s by the kernels and 4.7 -> 3.4 s by the
-  path tracer, teapot-sky and nubis-clouds a tenth, demo and altocumulus nothing. Not
-  switched on: it is a decision about which machines a binary runs on.
+  path tracer, teapot-sky and nubis-clouds a tenth, demo and altocumulus nothing. Switched
+  on since (`.cargo/config.toml`): a binary needs a processor of 2013 or later (Haswell;
+  AMD's Excavator, 2015), and `RUSTFLAGS="-C target-cpu=x86-64"` builds one for any.
 What is left, by the profiles: altocumulus is half Perlin's noise, asked for at every
 tentative collision in the layer's slab though 85% of the slab is clear air: it wants local
 bounds as the Nubis layers have (a map of where a column can hold cloud), which would cut

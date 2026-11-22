@@ -221,7 +221,7 @@ impl<'a> Kernels<'a> {
             stats.round(round, paths.len() as u64);
             round += 1;
             // 1. Intersect: the kernels' surfaces, the host's shapes, then the media.
-            for (_, p) in paths.iter_mut() {
+            let find = |p: &PathState| {
                 let mut found = pathtrace::intersect_surface(&scene, p);
                 if !host_shapes.is_empty() {
                     let r = host_ray(p.o.truncate(), p.d.truncate(), &self.buffers.origin);
@@ -234,7 +234,21 @@ impl<'a> Kernels<'a> {
                         }
                     }
                 }
-                *p = pathtrace::intersect_media::<M>(&scene, &found);
+                pathtrace::intersect_media::<M>(&scene, &found)
+            };
+            for (_, p) in paths.iter_mut() {
+                let mut found = find(p);
+                // Crepuscular rays: a camera ray's shadow rays, traced as it was
+                // (`pathtrace::intersect`, with the host's shapes in the sun's way too).
+                let mut rng = found.state.x;
+                let (a0, c0, a1, c1) = pathtrace::crepuscular_samples(&scene, &found, &mut rng);
+                found.state.x = rng;
+                for (from, light) in [(a0, c0), (a1, c1)] {
+                    if from.w != 0. {
+                        found = pathtrace::shadowed(&found, &find(&pathtrace::shadow_ray(&scene, &found, from)), light);
+                    }
+                }
+                *p = found;
             }
             lap(&mut stats, Stage::Intersect, paths.len());
             // 2. Shade.
@@ -731,7 +745,7 @@ pub mod tests {
         }
     }
 
-    /// Crepuscular rays (`pathtrace::shadowed_loss`): under a slab that shadows the air, with
+    /// Crepuscular rays (`pathtrace::crepuscular_samples`): under a slab that shadows the air, with
     /// a gap the sun shines through, the sky and the haze before the ground lose what the
     /// path tracer takes from them (`SkyMaterial::shadowed_loss`), tile by tile; and they lose
     /// something, or this tests nothing.

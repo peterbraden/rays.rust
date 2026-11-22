@@ -157,7 +157,7 @@ pub const FLAG_SAMPLE_LIGHTS: u32 = 1;
 pub const FLAG_SAMPLE_ENV: u32 = 2;
 pub const FLAG_SUN: u32 = 4;
 pub const FLAG_AERIAL: u32 = 8;
-/// The air along a camera ray is tested for shadow (`shadowed_loss`): crepuscular rays.
+/// The air along a camera ray is tested for shadow (`crepuscular_samples`): crepuscular rays.
 pub const FLAG_CREPUSCULAR: u32 = 16;
 /// `Prim::info.x`.
 pub const PRIM_TRIANGLE: u32 = 0;
@@ -2593,19 +2593,32 @@ fn aerial_transmittance(s: &Scene, o: Vec3, d: Vec3, distance: f32) -> Vec3 {
 }
 
 /// Samples of the air's shadow per camera ray (the renderer's `trace::CREPUSCULAR_SAMPLES`).
-const CREPUSCULAR_SAMPLES: u32 = 2;
+pub const CREPUSCULAR_SAMPLES: u32 = 2;
 
 /// Crepuscular rays (the renderer's `SkyMaterial::shadowed_loss`): the part of the sunlight
-/// scattered once towards `o` along the camera's ray `d`, as far as `distance`, that doesn't
-/// arrive because the air there is in shadow, behind clouds or below mountains. The sky's
-/// radiance and the aerial haze (`segment`) take the air to be lit everywhere; this is taken
-/// from them. Steps of the ray are chosen in proportion to the light each scatters, a point
-/// in each tested for the sun, and its shadow stands for its step's.
-fn shadowed_loss<M: Media>(s: &Scene, o: Vec3, d: Vec3, distance: f32, flags_p: u32, rng: &mut u32, rays: &mut u32) -> Vec3 {
+/// scattered once towards the camera along its ray, as far as what the ray meets, that
+/// doesn't arrive because the air there is in shadow, behind clouds or below mountains. The
+/// sky's radiance and the aerial haze (`segment`) take the air to be lit everywhere; this is
+/// taken from them. Steps of the ray are chosen in proportion to the light each scatters and a
+/// point picked in each: for each of the two samples, that point (its w 1, or 0 for no
+/// sample) and the light to take from the path if the sun can't be seen from it
+/// (`shadow_ray`, `shadowed`). Asked of a path whose ray's hit has just been found
+/// (`intersect`), since the shadow rays are traced as its own was, by the same code; none
+/// but for a camera's ray in a scene with such rays.
+pub fn crepuscular_samples(s: &Scene, found: &PathState, rng: &mut u32) -> (Vec4, Vec3, Vec4, Vec3) {
+    let none = (Vec4::ZERO, Vec3::ZERO, Vec4::ZERO, Vec3::ZERO);
+    if found.beta.w != 0.0 || s.params.offs2.w & FLAG_CREPUSCULAR == 0 {
+        return none;
+    }
+    let (o, d) = (found.o.xyz(), found.d.xyz());
+    let distance = if found.state.z == NONE { INF } else { found.hit.x };
+    if distance <= AERIAL_FROM {
+        return none;
+    }
     let a = load_air(s, s.params.air.y);
     let (start, end) = match view_ray_span(&a, o, d) {
         Some((start, end)) if start < distance => (start, end.min(distance)),
-        _ => return Vec3::ZERO,
+        _ => return none,
     };
     let mu = d.dot(a.sun);
     let (rayleigh, mie) = (rayleigh_phase(mu), mie_phase(mu, a.g));
@@ -2615,7 +2628,7 @@ fn shadowed_loss<M: Media>(s: &Scene, o: Vec3, d: Vec3, distance: f32, flags_p: 
     let mut total = 0.0;
     let (mut u0, mut u1) = (0.0, 0.0);
     let (mut t0, mut t1) = (Vec4::ZERO, Vec4::ZERO);
-    let (mut c0, mut c1) = (Vec4::ZERO, Vec4::ZERO);
+    let (mut c0, mut c1) = (Vec3::ZERO, Vec3::ZERO);
     let mut pass = 0;
     while pass < 2 {
         let mut depth = Vec3::ZERO;
@@ -2637,50 +2650,62 @@ fn shadowed_loss<M: Media>(s: &Scene, o: Vec3, d: Vec3, distance: f32, flags_p: 
                     u0 -= w;
                     if u0 < 0.0 {
                         t0 = Vec4::new(t, step, w, 0.0);
-                        c0 = c.extend(0.0);
+                        c0 = c;
                     }
                 }
                 if u1 >= 0.0 {
                     u1 -= w;
                     if u1 < 0.0 {
                         t1 = Vec4::new(t, step, w, 0.0);
-                        c1 = c.extend(0.0);
+                        c1 = c;
                     }
                 }
             }
             k += 1;
         }
         if total <= 0.0 {
-            return Vec3::ZERO;
+            return none;
         }
         u0 = rand(rng) * total;
         u1 = rand(rng) * total;
         pass += 1;
     }
-    let mut loss = Vec3::ZERO;
-    let sun = s.params.sun_dir.xyz();
-    let mut j = 0;
-    while j < CREPUSCULAR_SAMPLES {
-        let (at_step, c) = if j == 0 { (t0, c0) } else { (t1, c1) };
-        if at_step.z > 0.0 {
-            let from = o + d * (at_step.x + (rand(rng) - 0.5) * at_step.y);
-            *rays += 1;
-            let mut lit = 0.0;
-            if !occluded(s, from, sun, 1e30) {
-                lit = 1.0;
-                if M::ON {
-                    // (As the camera's own rays cross the media: this is before the path
-                    // scatters.)
-                    lit = media_transmittance(s, from, sun, 1e30, flags_p, false, 1.0, rng);
-                }
-            }
-            if lit < 1.0 {
-                loss += c.xyz() * ((1.0 - lit) * total / at_step.z);
-            }
-        }
-        j += 1;
+    let beta = found.beta.xyz();
+    let share = total / CREPUSCULAR_SAMPLES as f32;
+    let (mut a0, mut a1) = (Vec4::ZERO, Vec4::ZERO);
+    if t0.z > 0.0 {
+        a0 = (o + d * (t0.x + (rand(rng) - 0.5) * t0.y)).extend(1.0);
+        c0 *= beta * (share / t0.z);
     }
-    loss / CREPUSCULAR_SAMPLES as f32
+    if t1.z > 0.0 {
+        a1 = (o + d * (t1.x + (rand(rng) - 0.5) * t1.y)).extend(1.0);
+        c1 *= beta * (share / t1.z);
+    }
+    (a0, c0, a1, c1)
+}
+
+/// The ray from a crepuscular sample's point towards the sun, as a path's (the camera path
+/// `found`, whose random numbers it draws on), to be traced as one (`intersect`).
+pub fn shadow_ray(s: &Scene, found: &PathState, from: Vec4) -> PathState {
+    let mut ray = *found;
+    ray.o = from.xyz().extend(found.o.w);
+    ray.d = s.params.sun_dir.xyz().extend(0.0);
+    ray.state.z = 0;
+    ray.hit = Vec4::ZERO;
+    ray
+}
+
+/// The camera path after a crepuscular sample's ray has been traced to `hit`: without the
+/// sample's light if anything was in the sun's way, a surface or a medium's collision (one
+/// estimate of what the medium lets through), and with the random numbers the ray drew.
+pub fn shadowed(found: &PathState, hit: &PathState, light: Vec3) -> PathState {
+    let mut after = *found;
+    after.state.x = hit.state.x;
+    after.l.w += 1.0;
+    if hit.state.z != NONE {
+        after.l -= light.extend(0.0);
+    }
+    after
 }
 
 /// The path with a new ray, still tracing.
@@ -2725,7 +2750,37 @@ impl Media for NoMedia {
 /// The path with what its ray hits found (`PathState::hit`, and the primitive in `state.z`):
 /// the first of a bounce's two stages, and all of its closest-hit traversal.
 pub fn intersect<M: Media>(s: &Scene, p: &PathState) -> PathState {
-    intersect_media::<M>(s, &intersect_surface(s, p))
+    // The path's own ray, then for a camera's ray in a scene with crepuscular rays, its two
+    // shadow rays (`crepuscular_samples`): each through the one traversal and the one walk.
+    let mut found = *p;
+    let mut ray = *p;
+    let (mut a0, mut c0, mut a1, mut c1) = (Vec4::ZERO, Vec3::ZERO, Vec4::ZERO, Vec3::ZERO);
+    let mut job = 0;
+    while job < 3 {
+        if job > 0 {
+            let from = if job == 1 { a0 } else { a1 };
+            if from.w == 0.0 {
+                job += 1;
+                continue;
+            }
+            ray = shadow_ray(s, &found, from);
+        }
+        let hit = intersect_media::<M>(s, &intersect_surface(s, &ray));
+        if job == 0 {
+            found = hit;
+            let mut rng = found.state.x;
+            let samples = crepuscular_samples(s, &found, &mut rng);
+            found.state.x = rng;
+            a0 = samples.0;
+            c0 = samples.1;
+            a1 = samples.2;
+            c1 = samples.3;
+        } else {
+            found = shadowed(&found, &hit, if job == 1 { c0 } else { c1 });
+        }
+        job += 1;
+    }
+    found
 }
 
 /// The surface the path's ray hits, of those the kernels test.
@@ -2773,14 +2828,6 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
 
     let hit = Hit { t: p.hit.x, prim: p.state.z };
     rays += 1;
-    // Crepuscular rays: the camera's ray alone, as far as what it meets. (Taken from the
-    // sample whatever the path goes on to find: a sample can be less than nothing.)
-    if depth == 0 && flags & FLAG_CREPUSCULAR != 0 {
-        let reach = if hit.prim == NONE { INF } else { hit.t };
-        if reach > AERIAL_FROM {
-            l -= beta * shadowed_loss::<M>(s, ro, rd, reach, flags_p, &mut rng, &mut rays);
-        }
-    }
     if hit.prim == NONE {
         // The sky, weighted against sampling it if the last vertex did, and the sun's disc.
         let mut w = 1.0;

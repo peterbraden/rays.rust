@@ -2347,6 +2347,13 @@ Not done, and why:
   the WGSL is 7.8 MB with six kinds: the walks want one call site a kernel.)
 - (Done since: cumulonimbus, in `shared::cumulonimbus`, the same bits in the renderer at
   300,000 points. The WGSL is 9.5 MB.)
+- (Done since: the crepuscular samples' shadow rays moved from `shade` to `intersect`,
+  where they are two more turns of the loop that traces the path's own ray: one traversal
+  and one walk a kernel again. Measured first: of the 9.5 MB of WGSL the sample's own walk
+  through media was 2.1 MB and its any-hit traversal 0.4 MB. Now 7.2 MB; the GPU's picture of
+  crepuscular-rays is the CPU kernels', region by region to three places, and its noise is
+  as before (FLIP 0.0548 at 16 spp). What a kind of cloud costs is still its code at each
+  of the walks: the collision's, the shadow rays', the probe's.)
 - Media through the host in the wavefront's rounds (the rest of step 3), and with them the
   thread-locals. Judged not worth doing as such: a scene with a medium the kernels lack is
   rendered a path at a time by the scene's own code under the same driver now, and the

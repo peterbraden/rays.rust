@@ -213,6 +213,8 @@ fn sigma_error(set: &Set, model: &Set, dirs: &[Vector3<f64>]) -> f64 {
 struct Tally {
     clusters: usize,
     cards: usize,
+    /// Card planes made (a cluster may have up to three).
+    planes: usize,
     members: usize,
     kept: usize,
     /// Constituents left if a leaf's triangles with the same normal are merged (≤ 32).
@@ -229,6 +231,8 @@ struct Tally {
     sampled: usize,
     /// Σ over sampled clusters of hits on the leaves and on the card, per ray.
     hits: (f64, f64),
+    /// The same from the side (views within 17° of horizontal).
+    side_hits: (f64, f64),
     /// From ray casting: Σ response of the a|n·d| choice, of the leaf hit, of the leaf hit
     /// shadowed by its own cluster; all weighted by hits.
     cast: (f64, f64, f64),
@@ -247,7 +251,9 @@ fn measure(leaves: &[Arc<Tagged<Triangle>>], size: f64, views: &[Vector3<f64>], 
             continue;
         }
         let members: Vec<&Tagged<Triangle>> = group.iter().map(|&i| &*leaves[i]).collect();
-        let Some((corner, u, v)) = card(&members) else { continue };
+        let made = card(&members);
+        let Some(&(_, u, v)) = made.first() else { continue };
+        t.planes += made.len();
         t.cards += 1;
         t.members += members.len();
         t.kept += members.len().min(OLD_KEPT);
@@ -308,7 +314,8 @@ fn measure(leaves: &[Arc<Tagged<Triangle>>], size: f64, views: &[Vector3<f64>], 
         let geometry = GeometrySet::new(&tris);
         let b = geometry.bounds();
         let (centre, radius) = ((b.min.coords + b.max.coords) * 0.5, (b.max - b.min).norm() * 0.5);
-        let the_card = Card { corner: single(&corner), u: single(&u), v: single(&v), data: 0 };
+        let the_cards: Vec<Card> = made.iter().map(|(c, u, v)| Card { corner: single(c), u: single(u), v: single(v), data: 0 }).collect();
+        let hit_cards = |ray: &Ray| the_cards.iter().any(|c| c.hit(ray).is_some());
         let rays = 96;
         for d in views {
             let (e1, e2) = frame(d);
@@ -317,7 +324,7 @@ fn measure(leaves: &[Arc<Tagged<Triangle>>], size: f64, views: &[Vector3<f64>], 
                 let (r1, r2) = (rng.next_f64(), rng.next_f64());
                 let (x, y) = (radius * r1.sqrt() * (2. * std::f64::consts::PI * r2).cos(), radius * r1.sqrt() * (2. * std::f64::consts::PI * r2).sin());
                 let ray = Ray { ro: centre + e1 * x + e2 * y - d * (3. * radius), rd: *d };
-                if the_card.hit(&ray).is_some() {
+                if hit_cards(&ray) {
                     card_hits += 1.;
                 }
                 if let Some(h) = geometry.intersects(&ray) {
@@ -335,6 +342,22 @@ fn measure(leaves: &[Arc<Tagged<Triangle>>], size: f64, views: &[Vector3<f64>], 
             }
             t.hits.0 += leaf_hits / rays as f64;
             t.hits.1 += card_hits / rays as f64;
+        }
+        // From the side, where an upward card is seen edge on.
+        for k in 0 .. 8 {
+            let phi = std::f64::consts::PI * k as f64 / 4.;
+            let d = Vector3::new(phi.cos(), -0.15 + 0.3 * ((k % 3) as f64 / 2.), phi.sin()).normalize();
+            let (e1, e2) = frame(&d);
+            let (mut leaf_hits, mut card_hits) = (0., 0.);
+            for _ in 0 .. rays {
+                let (r1, r2) = (rng.next_f64(), rng.next_f64());
+                let (x, y) = (radius * r1.sqrt() * (2. * std::f64::consts::PI * r2).cos(), radius * r1.sqrt() * (2. * std::f64::consts::PI * r2).sin());
+                let ray = Ray { ro: centre + e1 * x + e2 * y - d * (3. * radius), rd: d };
+                card_hits += hit_cards(&ray) as u8 as f64;
+                leaf_hits += geometry.intersects(&ray).is_some() as u8 as f64;
+            }
+            t.side_hits.0 += leaf_hits;
+            t.side_hits.1 += card_hits;
         }
         // Unshadowed fraction from random points on the leaves, toward each light.
         for l in lights {
@@ -417,6 +440,7 @@ fn lod_research() {
                 t.over as f64 / t.cards as f64, t.sampled, truth);
             print!("{name:22} L{level} size {size:.3} m: {} clusters, {} cards, {:.1} leaves/card ({:.1} kept, {:.0}% over 32)",
                 t.clusters, t.cards, t.members as f64 / t.cards as f64, t.kept as f64 / t.cards as f64, 100. * t.over as f64 / t.cards as f64);
+            println!("    card planes per cluster: {:.2}", t.planes as f64 / t.cards as f64);
             println!("    constituents as now kept: {:.1} per sampled card", t.new_kept as f64 / t.sampled.max(1) as f64);
             println!("    merging a leaf's triangles of one normal: {:.1} constituents per card ({} triangles a leaf)", t.merged as f64 / t.cards as f64, mesh.leaf_triangles);
             for (k, m) in MODELS.iter().enumerate() {
@@ -431,7 +455,7 @@ fn lod_research() {
             println!("    projected area, max rel. error: z4 {:.1}%  z4-nnls {:.1}%  z8 {:.1}%  z8-nnls {:.1}%",
                 100. * t.sigma_err[0] / s, 100. * t.sigma_err[1] / s, 100. * t.sigma_err[2] / s, 100. * t.sigma_err[3] / s);
             let nv = (t.sampled * views.len()) as f64;
-            println!("    hit probability: leaves {:.3}, card {:.3} (card/leaves {:.3})", t.hits.0 / nv, t.hits.1 / nv, t.hits.1 / t.hits.0);
+            println!("    hit probability: leaves {:.3}, card {:.3} (card/leaves {:.3}); from the side card/leaves {:.3}", t.hits.0 / nv, t.hits.1 / nv, t.hits.1 / t.hits.0, t.side_hits.1 / t.side_hits.0);
             println!("    response of the leaf hit, against the a|n·d| choice: unshadowed {:+.2}%, shadowed by its cluster {:+.2}%; lit fraction from leaves {:.3}",
                 100. * (t.cast.1 / t.cast.0 - 1.), 100. * (t.cast.2 / t.cast.0 - 1.), t.lit.0 / t.lit.1);
             row += &format!(",{:.4},{:.4},{:.4},{:.4},{:.4},{:.4}\n", t.hits.0 / nv, t.hits.1 / nv, t.cast.0, t.cast.1, t.cast.2, t.lit.0 / t.lit.1);

@@ -755,11 +755,60 @@ impl Ground {
     }
 
     /// The colour of bare rock at `d`, `h` metres up: the bedrock's own (a sediment-covered
-    /// cell's steep slopes show the default rock), weathered towards a common grey.
+    /// cell's steep slopes show the default rock), weathered towards a common grey, with the
+    /// rock's own texture: shale and schist finely laminated, sandstone in beds with iron
+    /// stains, limestone pale with dark streaks where water runs down it, granite speckled with
+    /// pale weathered patches, gneiss in bands of foliation, quartzite cut by dark joints,
+    /// basalt dark with rusty weathering. Seen from afar the textures average out (they are
+    /// metres across), so the rock's colour is what shows.
     fn stone(&self, d: &Vector3<f64>, h: f64) -> Color {
+        let Some(rock) = self.rock(d, h).filter(|&r| r != Rock::Sediment) else { return colour(ROCK) };
+        let q = d * self.frame.radius;
+        // Noise in [-1/2, 1/2] at scale `s` metres, stretched `v` times vertically.
+        let n = |s: f64, v: f64, o: f64| self.noise.fbm(q.x / s + o * 13., q.y / s + h / (s * v), q.z / s, 3, 0.5, 2.) - 0.5;
+        let band = |period: f64, phase: f64| (std::f64::consts::TAU * (h + phase) / period).sin();
+        let base = colour(ROCK) * 0.3 + colour(rock.colour()) * 0.7;
+        let (light, tint) = match rock {
+            Rock::Shale => (0.12 * band(1.5, 2. * n(20., 1., 0.1)), [1., 1., 1.]),
+            Rock::Schist => (0.1 * band(0.8, 3. * n(15., 1., 0.2)) + 0.15 * n(3., 1., 0.3), [1., 1., 1.03]),
+            Rock::Sandstone => {
+                let iron = (n(25., 0.5, 0.4) + 0.2).max(0.);
+                (0.15 * band(6., 10. * n(60., 1., 0.5)), [1. + 0.5 * iron, 1. + 0.1 * iron, 1. - 0.3 * iron])
+            }
+            Rock::Limestone => {
+                // Streaks: noise along the ground only, so they run straight down the face.
+                let streak = self.noise.fbm(q.x / 4., q.y / 4. + 7.7, q.z / 4., 2, 0.5, 2.) - 0.5;
+                (-0.35 * (streak + 0.15).max(0.) * 2. + 0.05 * band(4., 0.), [1., 1., 1.])
+            }
+            Rock::Granite => (0.18 * n(0.6, 1., 0.6) + 0.25 * (n(80., 1., 0.7) + 0.1).max(0.), [1.02, 1., 0.98]),
+            Rock::Gneiss => {
+                // Foliation dipping across the ground, not level like bedding.
+                let dip = q.dot(&Vector3::new(0.6, 0.3, 0.74)) * 0.5;
+                (0.22 * band(3., dip + 4. * n(30., 1., 0.8)), [1., 1., 1.])
+            }
+            Rock::Quartzite => {
+                let joint = (self.noise.fbm(q.x / 6., q.y / 6. + h / 6., q.z / 6. + 3.3, 2, 0.5, 2.) - 0.5).abs();
+                (-0.3 * (1. - smoothstep(0., 0.03, joint)), [1., 1., 1.])
+            }
+            Rock::Basalt => {
+                let rust = (n(10., 1., 0.9) + 0.1).max(0.);
+                (0.1 * n(2., 1., 1.), [1. + 1.2 * rust, 1. + 0.4 * rust, 1.])
+            }
+            Rock::Sediment => (0., [1., 1., 1.]),
+        };
+        let shade = 1. + light;
+        Color::new(base.rgb.x * tint[0] * shade, base.rgb.y * tint[1] * shade, base.rgb.z * tint[2] * shade)
+    }
+
+    /// How readily the rock at `d`, `h` metres up goes bare, in steepness: positive for rock
+    /// that keeps thin soils (quartzite, granite, limestone), bare on gentler slopes; negative
+    /// for rock that weathers to soil (shale, schist), mantled until steeper.
+    fn bareness(&self, d: &Vector3<f64>, h: f64) -> f64 {
         match self.rock(d, h) {
-            Some(r) if r != Rock::Sediment => colour(ROCK) * 0.3 + colour(r.colour()) * 0.7,
-            _ => colour(ROCK),
+            Some(Rock::Quartzite) | Some(Rock::Granite) => 0.06,
+            Some(Rock::Limestone) | Some(Rock::Gneiss) | Some(Rock::Basalt) => 0.03,
+            Some(Rock::Shale) | Some(Rock::Schist) => -0.04,
+            _ => 0.,
         }
     }
 
@@ -893,7 +942,10 @@ impl Ground {
         ground = mix(ground, colour(SAND), 1. - smoothstep(2., 12., h + 8. * n(150., 0.4)));
         // Bare rock on steep slopes (about 40°), and scree and rock above the meadows.
         let high = smoothstep(tree + 300., tree + 900., h + (n(600., 0.6) - 0.5) * 300.);
-        let rock = (1. - smoothstep(0.7, 0.85, flat)).max(high * (1. - 0.6 * smoothstep(0.92, 0.99, flat)));
+        // (Bare at gentler slopes on rock that keeps thin soils, steeper on rock that weathers to
+        // soil.)
+        let bare = self.bareness(&d, h);
+        let rock = (1. - smoothstep(0.7 + bare, 0.85 + bare, flat)).max(high * (1. - 0.6 * smoothstep(0.92, 0.99, flat)));
         let stone = mix(self.stone(&d, h), colour(SCREE), smoothstep(0.85, 0.95, flat)) * (0.7 + 0.6 * n(250., 0.7));
         ground = mix(ground, stone, rock) * grain;
         // Snow lies above the snowline where slopes are gentle enough to hold it, and drifts

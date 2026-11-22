@@ -355,6 +355,10 @@ branch's history (commits `ac51d87` to `f56d824`) and written up in their notes,
       behind `LOD_VOLUME_TRIANGLES`): as good as the corrected cards from the air, slightly
       better from the side, 50% slower from the air. Self-shadowing must be measured from the
       leaves hits are on (the hotspot correlation), not all leaves.
+- [x] Memory, accuracy and speed across every scheme and `pixels` ([tradeoffs.md](tradeoffs.md)):
+      the coverage fix, merged constituents, the speed work and crossed cards move the frontier;
+      `pixels` slides along it; compact crossed cards and volumes don't help. Next: the coarse
+      levels' brightening (+3% at p2 to +13% at p8).
 - [ ] The residual darkening from low down (−3% to −6% at mid range), common to cards and
       volumes; SGGX lobes and palettes.
 - [ ] Read what could not be fetched (see [log.md](log.md)).

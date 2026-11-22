@@ -662,7 +662,11 @@ impl Terrain {
         let ice_time = dt / g.acceleration;
         let mut done = 0.;
         let mut mean_sliding = vec![0.; n];
-        let snow: Vec<f64> = self.rain_factor().iter().map(|r| r.clamp(0.2, 3.)).collect();
+        // Snow follows the rain the terrain redistributes (more to windward, less in the lee),
+        // relative to the climate's own rain there: the snowline already reflects how wet the
+        // climate is (it lies lower where more snow falls), so scaling by the rain itself would
+        // count that twice.
+        let snow: Vec<f64> = (0..n).map(|i| (self.precipitation[i] / self.base_precipitation[i].max(1.)).clamp(0.3, 3.)).collect();
         while done < ice_time * (1. - 1e-9) {
             let t = self.time + done * g.acceleration;
             let ela: Vec<f64> = (0..n).map(|i| match &self.ela {

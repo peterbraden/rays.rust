@@ -236,10 +236,10 @@ impl Planet {
         let fade = geology::fade(finest, g.fold_wavelength);
         if orogeny <= 1e-3 || fade <= 0. { return (0., 0.); }
         let across = self.trend().shortening(d);
-        let (phase, defined) = geology::phasor(self.params.seed, &(d * self.params.radius), &across, g.fold_wavelength);
+        let shape = geology::fold_shape(self.params.seed, &(d * self.params.radius), &across, g.fold_wavelength);
         // Folds rise and fall along their axes over a few wavelengths: periclines.
         let plunge = smoothstep(-0.35, 0.35, self.plunges.fbm(d, self.params.radius / (5. * g.fold_wavelength), 2));
-        let crest = orogeny * fade * defined * (0.25 + 0.75 * plunge) * phase.sin();
+        let crest = orogeny * fade * (0.25 + 0.75 * plunge) * shape;
         (crest, g.fold_amplitude * crest)
     }
 
@@ -422,6 +422,31 @@ mod tests {
         assert!(hi / lo > 2., "{:?}", k);
         let any = samples().iter().any(|d| p.volcanism(d) > 0.5);
         assert!(any);
+    }
+
+    #[test]
+    fn test_belts_have_no_seams() {
+        // Walking across and along a mountain belt in small steps, the ground never jumps: no
+        // seams where the trend's direction or the folds' phase changes.
+        let p = planet(0);
+        let (lat, lon) = p.most_mountainous(4000);
+        let (up, east, north) = crate::terrain::domain::Domain::frame(lat, lon);
+        let step = 25.;
+        let mut worst: f64 = 0.;
+        for k in 0..8 {
+            let a = k as f64 * std::f64::consts::PI / 8.;
+            let dir = east * a.cos() + north * a.sin();
+            let at = |i: i64| (up + dir * (i as f64 * step / p.params.radius)).normalize();
+            let mut last = p.elevation(&at(-8000), 50.);
+            for i in -7999..8000 {
+                let e = p.elevation(&at(i), 50.);
+                worst = worst.max((e - last).abs() / step);
+                last = e;
+            }
+        }
+        // Ridge flanks reach slopes of about 4; a seam would be a single step of up to the
+        // folds' full relief, slope 60.
+        assert!(worst < 6., "a step of slope {}", worst);
     }
 
     #[test]

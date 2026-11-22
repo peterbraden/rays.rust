@@ -419,6 +419,12 @@ const LATTICE: f64 = 3. * KERNEL_SIGMA;
 /// fades the waves out there: it is the sum's magnitude relative to that of as many kernels
 /// with random phases (the root of the sum of their squared weights), through a smoothstep
 /// from 0 to 0.6, so a wave scaled by it is continuous.
+///
+/// The direction `along` is a line, not an arrow (the trend's sign means nothing, and flips
+/// where its angle wraps), so the waves mustn't depend on its sign. Each kernel has a random
+/// real amplitude rather than a random phase: then the sum for -`along` is the complex
+/// conjugate of that for `along`, the phase is negated, and an even profile of it (`cos`, as in
+/// `fold_shape`) is the same either way.
 pub fn phasor(seed: u64, p: &Vector3<f64>, along: &Vector3<f64>, wavelength: f64) -> (f64, f64) {
     let spacing = LATTICE * wavelength;
     let sigma = KERNEL_SIGMA * wavelength;
@@ -433,15 +439,17 @@ pub fn phasor(seed: u64, p: &Vector3<f64>, along: &Vector3<f64>, wavelength: f64
                 for _ in 0..KERNELS {
                     let mut r = || { h = mix(h); unit(h) };
                     let x = Vector3::new(c.x as f64 + r(), c.y as f64 + r(), c.z as f64 + r()) * spacing;
-                    let phase = r() * TAU;
+                    // A random real amplitude, rather than the paper's random phase, so that the
+                    // sum for -k is the conjugate of that for k (see the doc comment).
+                    let amplitude = (r() * TAU).cos();
                     let off = p - x;
                     let r2 = off.norm_squared();
                     if r2 >= spacing * spacing { continue; }
                     // A Gaussian windowed to reach zero, with zero slope, at the cutoff: cut
                     // off abruptly, the kernels' edges were steps in the folds.
                     let window = 1. - r2 / (spacing * spacing);
-                    let w = (-0.5 * r2 / (sigma * sigma)).exp() * window * window;
-                    let a = k.dot(&off) + phase;
+                    let w = amplitude * (-0.5 * r2 / (sigma * sigma)).exp() * window * window;
+                    let a = k.dot(&off);
                     re += w * a.cos();
                     im += w * a.sin();
                     power += w * w;
@@ -452,6 +460,14 @@ pub fn phasor(seed: u64, p: &Vector3<f64>, along: &Vector3<f64>, wavelength: f64
     if power <= 0. { return (0., 0.); }
     let m = (re.hypot(im) / power.sqrt() / 0.6).min(1.);
     (im.atan2(re), m * m * (3. - 2. * m))
+}
+
+/// The folds' shape at `p`, from -1 in a trough to 1 at a crest, faded where the phase is
+/// undefined: phasor noise's waves along `along` (whose sign means nothing), as the cosine of
+/// the phase, which doesn't depend on it.
+pub fn fold_shape(seed: u64, p: &Vector3<f64>, along: &Vector3<f64>, wavelength: f64) -> f64 {
+    let (phase, defined) = phasor(seed, p, along, wavelength);
+    defined * phase.cos()
 }
 
 /// How much of folds of `wavelength` a grid resolving detail of wavelength `finest` keeps: all
@@ -536,7 +552,7 @@ mod tests {
         // sinusoid would.
         let along = Vector3::new(0.6, 0.8, 0.);
         let wavelength = 1000.;
-        let wave = |p: &Vector3<f64>| { let (phase, m) = phasor(9, p, &along, wavelength); m * phase.sin() };
+        let wave = |p: &Vector3<f64>| fold_shape(9, p, &along, wavelength);
         let step = wavelength / 1000.;
         let mut worst: f64 = 0.;
         for row in 0..40 {
@@ -559,7 +575,7 @@ mod tests {
         // times that only near the points where their phase is undefined.
         let along = Vector3::new(0., 0.8, 0.6);
         let wavelength = 8000.;
-        let wave = |p: &Vector3<f64>| { let (phase, m) = phasor(3, p, &along, wavelength); m * phase.sin() };
+        let wave = |p: &Vector3<f64>| fold_shape(3, p, &along, wavelength);
         let (h, dir) = (20., Vector3::new(0., 0.6, -0.8));
         let mut curvature: Vec<f64> = (0..60).flat_map(|row| (0..600).map(move |i| (row, i))).map(|(row, i)| {
             let p = Vector3::new(6.371e6, row as f64 * 1371., 0.) + dir * (i as f64 * 61.);
@@ -569,6 +585,19 @@ mod tests {
         let k2 = (TAU / wavelength).powi(2);
         let p99 = curvature[curvature.len() * 99 / 100] / k2;
         assert!(p99 < 3., "{}", p99);
+    }
+
+    #[test]
+    fn test_folds_dont_depend_on_the_sign_of_their_direction() {
+        // The trend is a line, not an arrow: `Trend::shortening` may give either sign, and
+        // flips it along lines where its angle wraps. The folds must be the same either way.
+        let mut worst: f64 = 0.;
+        for i in 0..200 {
+            let p = Vector3::new(6.371e6, i as f64 * 517., i as f64 * 211.);
+            let along = Vector3::new(0., (i as f64 * 0.3).cos(), (i as f64 * 0.3).sin());
+            worst = worst.max((fold_shape(4, &p, &along, 8000.) - fold_shape(4, &p, &-along, 8000.)).abs());
+        }
+        assert!(worst < 1e-9, "{}", worst);
     }
 
     #[test]

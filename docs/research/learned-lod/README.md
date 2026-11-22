@@ -339,5 +339,10 @@ branch's history (commits `ac51d87` to `f56d824`) and written up in their notes,
 - [x] Transmittance in a crown, measured ([stage5.md](stage5.md)): `T_c` (from a leaf) is heavy
       tailed and not predicted from `T_u` by the reciprocal non-exponential relation (errors
       0.20–0.42); a gamma law fitted to each separately fits within about 0.01.
-- [ ] A crown volume at coarse levels with the two measured laws; SGGX lobes and palettes.
+- [x] Coarse clusters as volumes with measured transmittance ([stage6.md](stage6.md), prototype
+      behind `LOD_VOLUME_TRIANGLES`): as good as the corrected cards from the air, slightly
+      better from the side, 50% slower from the air. Self-shadowing must be measured from the
+      leaves hits are on (the hotspot correlation), not all leaves.
+- [ ] The residual darkening from low down (−3% to −6% at mid range), common to cards and
+      volumes; SGGX lobes and palettes.
 - [ ] Read what could not be fetched (see [log.md](log.md)).

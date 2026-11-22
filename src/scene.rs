@@ -58,10 +58,8 @@ pub struct RenderOpts {
     /// does each sample take a time.
     pub shutter: crate::motion::Shutter,
     pub motion: bool,
-    /// Whether to render with the wavefront integrator (`wavefront`), where the scene allows.
-    pub wavefront: bool,
-    /// Whether to render on the GPU (`gpu`, built with the `gpu` feature), where it can.
-    pub gpu: bool,
+    /// What renders the scene (`"integrator"`).
+    pub integrator: Integrator,
     /// Whether each pixel stops sampling once its noise is low enough (`adaptive`), before
     /// `supersamples`, which is then the most a pixel takes.
     pub adaptive: Option<Adaptive>,
@@ -470,4 +468,21 @@ mod tests {
             "mean {} var {} inner {}", mean, var, inner);
         assert!(t.iter().all(|x| x.abs() <= 1.));
     }
+}
+
+/// What renders a scene. All are the same estimator; the kernels (`wavefront`, `kernels`) are
+/// the renderer, on whichever device there is, and the recursive path tracer (`trace`) what
+/// renders the scenes they can't yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Integrator {
+    /// The GPU if there is one, else the kernels on the CPU, else the path tracer: the first
+    /// that can render the scene.
+    #[default]
+    Auto,
+    /// The recursive path tracer.
+    Path,
+    /// The kernels on the CPU (the path tracer if they can't render the scene).
+    Wavefront,
+    /// The GPU, whatever kind of device it is (then as `Wavefront`).
+    Gpu,
 }

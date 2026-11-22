@@ -90,15 +90,21 @@ struct Args {
     #[arg(long)]
     fresh: bool,
 
-    ///Render with the wavefront integrator (as the scene's "integrator": "wavefront"), if the
-    ///scene can be flattened into its primitives and materials; otherwise, as usual
+    ///Render with the wavefront integrator (the kernels) on the CPU, not the GPU (as the
+    ///scene's "integrator": "wavefront"); with the path tracer if they can't render the scene
     #[arg(long)]
     wavefront: bool,
 
-    ///Render on the GPU (as "integrator": "gpu"; needs a build with `--features gpu`), if the
-    ///scene can be flattened; otherwise with the wavefront integrator or the path tracer
+    ///Render on the GPU even if it is a software one (as "integrator": "gpu"; needs a build
+    ///with `--features gpu`); otherwise with the wavefront integrator or the path tracer.
+    ///Unasked, a scene renders on a hardware GPU if there is one, else with the wavefront
+    ///integrator on the CPU, else with the path tracer: the first that can render it
     #[arg(long)]
     gpu: bool,
+
+    ///Render with the recursive path tracer (as "integrator": "path")
+    #[arg(long, conflicts_with_all = ["wavefront", "gpu"])]
+    path_tracer: bool,
 
     ///Write the scene file, as JSON in our format, to this file. For a scene in another
     ///renderer's format (eg. .nff), this is the translation
@@ -219,6 +225,72 @@ fn main() {
     if let Some(path) = &args.output {
         rc.output_filename = path.clone();
     }
+    // What renders the scene: the first of the GPU, the kernels on the CPU and the path tracer
+    // that can, unless one was asked for.
+    if args.path_tracer {
+        s.render.integrator = scene::Integrator::Path;
+    } else if args.gpu {
+        s.render.integrator = scene::Integrator::Gpu;
+    } else if args.wavefront {
+        s.render.integrator = scene::Integrator::Wavefront;
+    }
+    let flat = if s.render.integrator != scene::Integrator::Path {
+        match wavefront::flat::FlatScene::build(&s) {
+            Ok(f) => {
+                println!("- Wavefront integrator: {} primitives, {} planes, {} materials, {} emitters",
+                    f.prims.len(), f.planes.len(), f.materials.len(), f.emitters.len());
+                Some(f)
+            },
+            Err(e) => {
+                println!("- The wavefront integrator can't render this scene ({}); rendering with the path tracer", e);
+                None
+            },
+        }
+    } else {
+        None
+    };
+    #[cfg(feature = "gpu")]
+    let try_gpu = match s.render.integrator {
+        scene::Integrator::Gpu => true,
+        // Unasked, only a GPU that is one.
+        scene::Integrator::Auto => gpu::GpuRenderer::hardware().is_ok(),
+        _ => false,
+    };
+    #[cfg(feature = "gpu")]
+    let mut gpu = match (&flat, try_gpu) {
+        (Some(f), true) => match gpu::GpuRenderer::new(&s, f) {
+            Ok(g) => {
+                println!("- GPU: {}", g.adapter_name);
+                let parts: Vec<String> = g.setup.iter().map(|(what, seconds)| format!("{} {:.0} ms", what, seconds * 1e3)).collect();
+                println!("- GPU set up in {:.0} ms: {}", g.setup.iter().map(|p| p.1).sum::<f64>() * 1e3, parts.join(", "));
+                Some(g)
+            },
+            Err(e) => {
+                println!("- The GPU can't render this scene ({}); rendering with the wavefront integrator", e);
+                None
+            },
+        },
+        _ => None,
+    };
+    #[cfg(feature = "gpu")]
+    let on_gpu = gpu.is_some();
+    #[cfg(not(feature = "gpu"))]
+    let on_gpu = false;
+    #[cfg(not(feature = "gpu"))]
+    if s.render.integrator == scene::Integrator::Gpu {
+        println!("- This build has no GPU support (build with --features gpu); rendering with the wavefront integrator");
+    }
+    // Without the GPU the kernels run here, over the same buffers.
+    let buffers = match flat.as_ref().filter(|_| !on_gpu).map(|f| kernels::Buffers::build(&s, f)) {
+        Some(Ok(b)) => Some(b),
+        Some(Err(why)) => {
+            println!("- The wavefront integrator can't render this scene ({}); rendering with the path tracer", why);
+            None
+        },
+        None => None,
+    };
+    println!("- Integrator: {}", if on_gpu { "the kernels on the GPU" } else if buffers.is_some() { "the kernels on the CPU (wavefront)" } else { "the path tracer" });
+
     // Carry on from where an earlier render of the same scene stopped, if there was one.
     let state_path = rendercontext::state_path_for(&rc.output_filename);
     if let Some(t) = args.noise_threshold {
@@ -227,12 +299,9 @@ fn main() {
             min_samples: s.render.adaptive.map_or(scene::Adaptive::DEFAULT_MIN_SAMPLES, |a| a.min_samples),
         });
     }
-    // The wavefront integrator's and the GPU's samples differ from the path tracer's: a saved
-    // state is one's. The wavefront integrator doesn't sample adaptively, so then the path
-    // tracer renders; the GPU does (`scheduler::plan`).
+    // Each integrator's samples are its own, so a saved state is one's.
     let key = rendercontext::render_key(&contents, (args.width, args.height, args.seed))
-        ^ if args.wavefront && s.render.adaptive.is_none() { 0x7761_7665_6672_6f6e } else { 0 }
-        ^ if args.gpu { 0x6770_7500_0000_0001 } else { 0 };
+        ^ if on_gpu { 0x6770_7500_0000_0001 } else if buffers.is_some() { 0x7761_7665_6672_6f6e } else { 0 };
     if !args.fresh && std::path::Path::new(&state_path).exists() {
         match rc.load_state(&state_path, key) {
             Ok(()) => println!("- Resuming from {:.1} samples per pixel on average, {} at least ({})",
@@ -279,60 +348,7 @@ fn main() {
         return;
     }
 
-    if args.wavefront || args.gpu {
-        s.render.wavefront = true;
-    }
-    if args.gpu {
-        s.render.gpu = true;
-    }
-    let flat = if s.render.wavefront {
-        match wavefront::flat::FlatScene::build(&s) {
-            Ok(f) => {
-                println!("- Wavefront integrator: {} primitives, {} planes, {} materials, {} emitters",
-                    f.prims.len(), f.planes.len(), f.materials.len(), f.emitters.len());
-                Some(f)
-            },
-            Err(e) => {
-                println!("- The wavefront integrator can't render this scene ({}); rendering with the path tracer", e);
-                None
-            },
-        }
-    } else {
-        None
-    };
-    #[cfg(feature = "gpu")]
-    let mut gpu = match (&flat, s.render.gpu) {
-        (Some(f), true) => match gpu::GpuRenderer::new(&s, f) {
-            Ok(g) => {
-                println!("- GPU: {}", g.adapter_name);
-                let parts: Vec<String> = g.setup.iter().map(|(what, seconds)| format!("{} {:.0} ms", what, seconds * 1e3)).collect();
-                println!("- GPU set up in {:.0} ms: {}", g.setup.iter().map(|p| p.1).sum::<f64>() * 1e3, parts.join(", "));
-                Some(g)
-            },
-            Err(e) => {
-                println!("- The GPU can't render this scene ({}); rendering with the wavefront integrator", e);
-                None
-            },
-        },
-        _ => None,
-    };
-    #[cfg(feature = "gpu")]
-    let gpu_missing = gpu.is_none();
-    #[cfg(not(feature = "gpu"))]
-    let gpu_missing = true;
-    // Without the GPU the kernels run here, over the same buffers.
-    let kernels = match flat.as_ref().filter(|_| gpu_missing).map(|f| wavefront::integrator::Kernels::new(&s, f)) {
-        Some(Ok(k)) => Some(k),
-        Some(Err(why)) => {
-            println!("- The wavefront integrator can't render this scene ({}); rendering with the path tracer", why);
-            None
-        },
-        None => None,
-    };
-    #[cfg(not(feature = "gpu"))]
-    if s.render.gpu {
-        println!("- This build has no GPU support (build with --features gpu); rendering with the wavefront integrator");
-    }
+    let kernels = flat.as_ref().zip(buffers).map(|(f, b)| wavefront::integrator::Kernels::with(&s, f, b));
     let rcmtx = Mutex::new(rc);
 
     println!("{}",
@@ -347,10 +363,6 @@ fn main() {
     let last_progressive = Mutex::new(Instant::now());
     let last_state = Mutex::new(Instant::now());
 
-    #[cfg(feature = "gpu")]
-    let on_gpu = gpu.is_some();
-    #[cfg(not(feature = "gpu"))]
-    let on_gpu = false;
     #[cfg(feature = "gpu")]
     let after_pass = |rc: &RenderContext| {
         pb.set_position(rc.progress_percentage(&s) as u64);

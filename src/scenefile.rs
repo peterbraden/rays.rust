@@ -4488,12 +4488,13 @@ impl SceneFile {
                 spectral: s.spectral.as_bool().unwrap_or(false),
                 shutter: SceneFile::parse_shutter(&s.shutter),
                 motion,
-                wavefront: match s.integrator.as_str() {
-                    None | Some("path") => false,
-                    Some("wavefront") | Some("gpu") => true,
-                    Some(x) => panic!("Unknown integrator '{}': expected \"path\", \"wavefront\" or \"gpu\"", x),
+                integrator: match s.integrator.as_str() {
+                    None | Some("auto") => crate::scene::Integrator::Auto,
+                    Some("path") => crate::scene::Integrator::Path,
+                    Some("wavefront") => crate::scene::Integrator::Wavefront,
+                    Some("gpu") => crate::scene::Integrator::Gpu,
+                    Some(x) => panic!("Unknown integrator '{}': expected \"auto\", \"path\", \"wavefront\" or \"gpu\"", x),
                 },
-                gpu: s.integrator.as_str() == Some("gpu"),
                 adaptive: SceneFile::parse_adaptive(&s.adaptive),
                 sampler: match s.sampler.as_str() {
                     None | Some("sobol") => Sampler::Sobol,

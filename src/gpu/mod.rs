@@ -210,6 +210,23 @@ impl GpuRenderer {
         pollster::block_on(Self::create(s, flat))
     }
 
+    /// Whether there is a GPU worth choosing unasked, or why not: none at all, or a software
+    /// rasteriser (lavapipe, SwiftShader), for which the kernels are quicker compiled for the
+    /// CPU itself.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn hardware() -> Result<(), String> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        })).map_err(|e| format!("no GPU adapter ({})", e))?;
+        let info = adapter.get_info();
+        if info.device_type == wgpu::DeviceType::Cpu {
+            return Err(format!("{} is a software rasteriser", info.name));
+        }
+        Ok(())
+    }
+
     /// Upload the flattened scene, or say why the GPU can't render it. Async, for a browser,
     /// whose WebGPU can't be waited on.
     pub async fn create(s: &Scene, flat: &FlatScene) -> Result<GpuRenderer, String> {

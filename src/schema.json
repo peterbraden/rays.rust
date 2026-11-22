@@ -101,9 +101,9 @@
         {
           "name": "integrator",
           "kind": "enum",
-          "default": "path",
-          "doc": "The path tracer, or its wavefront form (paths traced in batches).",
-          "options": ["path", "wavefront"]
+          "default": "auto",
+          "doc": "What renders the scene: the first of the GPU, the wavefront kernels on the CPU and the recursive path tracer that can (auto), or one of them by name.",
+          "options": ["auto", "path", "wavefront", "gpu"]
         },
         {
           "name": "sampler",

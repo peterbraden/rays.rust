@@ -2301,12 +2301,15 @@ took longer than the survey allowed. Of the 31, 30 are media the kernels have no
 (a cloud's density, diffusion, rainbows, halos; 9 of them with crepuscular rays too), and
 the other is the stress test (spectral, motion blur).
 Not done, and why:
-- The default. `trace` still renders unless `--wavefront` or `--gpu` is asked for. The
-  kernels would be the default tomorrow (they render the demo in half the time), but for
-  what they lack that a picture shows: Sobol' points (they draw from a hash: more noise at
+- (Done since: the default. A scene renders with the first that can of a hardware GPU (a
+  build with `gpu`), the kernels on the CPU and `trace`, which says why it was needed;
+  `scene::Integrator`, `"integrator": "auto"`. `--gpu` takes a software adapter too,
+  `--wavefront` keeps to the CPU, `--path-tracer` is `trace`. A saved state is keyed by
+  the integrator that rendered it.) What the kernels still lack that a picture shows, now
+  that they are what most scenes get: Sobol' points (they draw from a hash: more noise at
   equal samples), the scene's `sampler` choice, sun and glitter probes (sunlit clouds are
-  noisier: benard-altocumulus FLIP 0.065 against 0.037 at 32 spp) and the light BVH. Sobol'
-  in the kernels first, then the switch, then `--wavefront` and `"integrator"` as no-ops.
+  noisier: benard-altocumulus FLIP 0.065 against 0.037 at 32 spp) and the light BVH.
+  Sobol' in the kernels is next.
 - Media through the host in the wavefront's rounds (the rest of step 3), and with them the
   thread-locals. Judged not worth doing as such: a scene with a medium the kernels lack is
   rendered a path at a time by the scene's own code under the same driver now, and the

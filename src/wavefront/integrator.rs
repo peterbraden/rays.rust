@@ -132,7 +132,12 @@ impl pathtrace::HostShapes for Kernels<'_> {
 impl<'a> Kernels<'a> {
     /// The scene as the kernels read it, or why they can't render it.
     pub fn new(s: &'a Scene, flat: &'a FlatScene) -> Result<Kernels<'a>, String> {
-        Ok(Kernels { s, flat, buffers: Buffers::build(s, flat)? })
+        Ok(Kernels::with(s, flat, Buffers::build(s, flat)?))
+    }
+
+    /// As `new`, with the scene's buffers already laid out (`Buffers::build`).
+    pub fn with(s: &'a Scene, flat: &'a FlatScene, buffers: Buffers) -> Kernels<'a> {
+        Kernels { s, flat, buffers }
     }
 
     /// Render sample `k` of every pixel: each pixel's radiance (times its weight), the number

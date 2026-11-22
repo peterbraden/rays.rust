@@ -122,6 +122,45 @@ levels. Crossed cards fitted to the leaves' coverage make up the hits, but darke
 further: a ray leaving one of a cluster's cards meets its others, far more often than leaves
 shade one another.
 
+## Speed
+
+**Profiling.** A render of `forest-aerial` was profiled by sampling its threads' stacks under
+gdb. That found four costs:
+
+- **Pixels were timed when nobody asked.** Every pixel read its thread's CPU clock twice for
+  `--time-map`, even when no time map was requested. That clock is a system call, and it cost
+  about 8% of a render. Pixels are now timed only when a time map is asked for.
+- **Aerial perspective was integrated in 32 steps.** For every camera ray that met something,
+  the air in front was integrated in the sky's 32 steps: about a tenth of the render. It now
+  takes steps a quarter of the haze's scale height long, from 4 to 32. That is the same to
+  1e-3 in transmittance and 0.5% in in-scattering over landscape distances. The GPU shader
+  takes the same steps.
+- **The build placed trees on one thread.** Each of tens of millions of darts checked its
+  neighbours through the placements, calling `hypot`. Each grid cell now holds its trees' x, z
+  and radius, compared by squared distance. And each chunk of darts' noise fields is found in
+  parallel ahead of the sequential throw, for the darts not already rejected against trees
+  placed before the chunk. The forest is the same.
+- **A level's cards were made one cluster at a time.** They are now made in parallel.
+
+Card tests now use Möller and Trumbore's test, which rejects a miss along the first edge early.
+
+**Measured on one machine,** 600 × 350, 32 spp, `"pixels": 1`:
+
+| | Build | Render |
+|---|---|---|
+| Before | 253 s | 68 s |
+| After | 90–96 s | 60–62 s |
+
+**The rest of the render** is mostly traversing the BVHs of placed trees and their cards.
+
+**Coarser levels are the other lever.** At 64 spp:
+
+| `pixels` | Primitives built / placed | Build | Peak | Render | Mean FLIP vs full | Brightness |
+|---|---|---|---|---|---|---|
+| 1 | 2.57 M / 164 M | ~92 s | 632 MiB | ~130 s | 0.054 | −1.2% |
+| 2 | 0.66 M / 38 M | 78 s | 390 MiB | 102 s | 0.066 | +2.9% |
+| 4 | 0.15 M / 10 M | 66 s | 331 MiB | 87 s | 0.090 | +8.3% |
+
 ## Memory
 
 A ray tracer keeps every tree it may hit for the whole render, so what's kept must be small:

@@ -225,27 +225,30 @@ impl Card {
     }
 
     /// Where a ray hits it: the multiple of its direction, and the coordinates along the edges.
+    /// By Möller and Trumbore's test ("Fast, minimum storage ray-triangle intersection", 1997)
+    /// for a parallelogram, which rejects a miss along the first edge before computing the
+    /// second: most cards a ray is tested against are missed.
+    #[inline]
     fn hit(&self, r: &Ray) -> Option<(f64, f64, f64)> {
         let (corner, u, v) = (self.corner(), self.u(), self.v());
-        let n = u.cross(&v);
-        let denom = r.rd.dot(&n);
-        if denom == 0. {
+        let p = r.rd.cross(&v);
+        let det = u.dot(&p);
+        if det == 0. {
             return None;
         }
-        let t = (corner - r.ro).dot(&n) / denom;
-        if t <= 0. || !t.is_finite() {
+        let inv = 1. / det;
+        let o = r.ro - corner;
+        let a = o.dot(&p) * inv;
+        if !(0. ..= 1.).contains(&a) {
             return None;
         }
-        // The coordinates along the edges, which needn't be at right angles: by the inverse of
-        // their Gram matrix.
-        let d = r.ro + r.rd * t - corner;
-        let (uu, uv, vv, du, dv) = (u.dot(&u), u.dot(&v), v.dot(&v), d.dot(&u), d.dot(&v));
-        let det = uu * vv - uv * uv;
-        let (a, b) = ((du * vv - dv * uv) / det, (dv * uu - du * uv) / det);
-        if !(a >= 0. && b >= 0.) || if self.is_triangle() { a + b > 1. } else { a > 1. || b > 1. } {
+        let q = o.cross(&u);
+        let b = r.rd.dot(&q) * inv;
+        if !(b >= 0. && if self.is_triangle() { a + b <= 1. } else { b <= 1. }) {
             return None;
         }
-        Some((t, a, b))
+        let t = v.dot(&q) * inv;
+        (t > 0. && t.is_finite()).then_some((t, a, b))
     }
 
     pub fn bounds(&self) -> BBox {

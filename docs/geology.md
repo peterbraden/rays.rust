@@ -124,7 +124,10 @@ number) and `hardness`; see [surface layers](surface-layers.md).
 
 ## Not modelled
 
-The direction of shortening comes from the belt's shape, not from the plates' motion; thrusts
-offset the strata but don't stand as scarps at time zero; fracturing comes only from the folds and thrusts (not from unloading, cooling or weathering);
+The direction of shortening comes from the belt's shape, not from the plates' motion (where
+plates converge obliquely, real belts mostly partition the motion between strike-slip faults
+and shortening across the belt, so folds run along the belt anyway, as here); thrusts offset
+the strata but don't stand as scarps at time zero; fracturing comes only from the folds and
+thrusts (not from unloading, cooling or weathering);
 there is no karst, and no soil whose depth limits how fast the rock beneath it weathers (at a
 simulation's cell sizes, creep is far slower than bare rock weathers, so it would rarely bind).

@@ -189,9 +189,9 @@ const TRIANGLE: u32 = 1 << 31;
 /// rectangles across the cluster's box, crossed. The box is centred at `corner`, `u` and `v`
 /// long across (`u` along the plane its leaves cover most of, `v` across it in that plane) and
 /// `thick` deep along their normal `n`. The first rectangle lies across `n`, `offset` from the
-/// centre along it, `u` by `v` scaled by `scale[0]` (in 4096ths); the others lie across `u` and
-/// across `v`, the whole of `v` and of `u` long, through the centre, as deep along `n` as
-/// `scale[1]` and `scale[2]` say (`depth`). A scale of 0 is no rectangle. Single precision is within a micrometre on a tree, far below a card's own
+/// centre along it, `u` by `v` scaled by `scale[0]`; the others lie across `u` (`v` by the depth)
+/// and across `v` (`u` by the depth), scaled by `scale[1]` and `scale[2]`, in 4096ths; a scale of
+/// 0 is no rectangle. Single precision is within a micrometre on a tree, far below a card's own
 /// error. A ray hitting it is shaded as one of its constituents, chosen by `Clusters::choose`;
 /// a ray leaving it (from within its box) doesn't meet it, but is shadowed with the probability
 /// `lit` (255ths) leaves no light, as its leaves shadow one another.
@@ -271,27 +271,18 @@ impl Card {
         self.lit as f64 / 255.
     }
 
-    /// How deep along its normal its side rectangle `i` (1 or 2) is: `scale[i]` in 65535ths of
-    /// its box's longer side.
-    fn depth(&self, i: usize) -> f64 {
-        self.scale[i] as f64 / 65535. * self.u().norm().max(self.v().norm())
-    }
-
     /// Its rectangles (or its triangle), each a corner and two edges.
     pub fn planes(&self) -> impl Iterator<Item = (Vector3<f64>, Vector3<f64>, Vector3<f64>)> + '_ {
         let (c, u, v) = (self.corner(), self.u(), self.v());
         let triangle = self.is_triangle();
-        let n = if triangle { Vector3::zeros() } else { self.normal() };
+        let n = if triangle { Vector3::zeros() } else { self.normal() * self.thick as f64 };
         let main = c + self.normal() * if triangle { 0. } else { self.offset as f64 };
         (0 .. 3).filter(move |&i| self.scale[i] > 0).map(move |i| {
             if triangle {
                 return (c, u, v);
             }
-            let (centre, a, b) = match i {
-                0 => { let k = self.scale[0] as f64 / 4096.; (main, u * k, v * k) },
-                1 => (c, v, n * self.depth(1)),
-                _ => (c, u, n * self.depth(2)),
-            };
+            let k = self.scale[i] as f64 / 4096.;
+            let (centre, a, b) = match i { 0 => (main, u * k, v * k), 1 => (c, v * k, n * k), _ => (c, u * k, n * k) };
             (centre - 0.5 * (a + b), a, b)
         })
     }
@@ -299,31 +290,8 @@ impl Card {
     /// Where a ray hits it, nearest: the multiple of its direction, and the coordinates along
     /// the edges of the rectangle hit.
     fn hit(&self, r: &Ray) -> Option<(f64, f64, f64)> {
-        let (c, u, v) = (self.corner(), self.u(), self.v());
-        if self.is_triangle() {
-            return parallelogram_hit(&c, &u, &v, true, r);
-        }
-        let n = u.cross(&v).normalize();
-        let longer = u.norm().max(v.norm());
-        let mut best: Option<(f64, f64, f64)> = None;
-        let mut try_one = |centre: Vector3<f64>, a: Vector3<f64>, b: Vector3<f64>| {
-            if let Some(h) = parallelogram_hit(&(centre - 0.5 * (a + b)), &a, &b, false, r) {
-                if best.is_none_or(|x| h.0 < x.0) {
-                    best = Some(h);
-                }
-            }
-        };
-        if self.scale[0] > 0 {
-            let k = self.scale[0] as f64 / 4096.;
-            try_one(c + n * self.offset as f64, u * k, v * k);
-        }
-        if self.scale[1] > 0 {
-            try_one(c, v, n * (self.scale[1] as f64 / 65535. * longer));
-        }
-        if self.scale[2] > 0 {
-            try_one(c, u, n * (self.scale[2] as f64 / 65535. * longer));
-        }
-        best
+        let triangle = self.is_triangle();
+        self.planes().filter_map(|(c, a, b)| parallelogram_hit(&c, &a, &b, triangle, r)).min_by(|x, y| x.0.total_cmp(&y.0))
     }
 
     /// Whether `p` is within its box (and its rectangles, which may reach beyond): a ray from
@@ -335,10 +303,10 @@ impl Card {
         let (u, v) = (self.u(), self.v());
         let (lu, lv) = (u.norm(), v.norm());
         let n = self.normal();
-        let k = self.scale[0] as f64 / 4096.;
-        let reach_u = 0.5 * lu * k.max(1.);
-        let reach_v = 0.5 * lv * k.max(1.);
-        let reach_n = (0.5 * (self.thick as f64).max(self.depth(1)).max(self.depth(2))).max((self.offset as f64).abs());
+        let k = self.scale.map(|s| s as f64 / 4096.);
+        let reach_u = 0.5 * lu * k[0].max(k[2]).max(1.);
+        let reach_v = 0.5 * lv * k[0].max(k[1]).max(1.);
+        let reach_n = (0.5 * self.thick as f64 * k[1].max(k[2]).max(1.)).max((self.offset as f64).abs());
         let d = p - self.corner();
         let slack = 1e-6 * (lu + lv);
         d.dot(&u).abs() / lu <= reach_u + slack && d.dot(&v).abs() / lv <= reach_v + slack && d.dot(&n).abs() <= reach_n + slack
@@ -905,7 +873,7 @@ fn card(members: &[&Tagged<Triangle>]) -> Option<Card> {
     let one = nnls(&dirs.iter().map(|d| vec![normal.dot(d).abs()]).collect::<Vec<_>>(), &target)[0];
     let miss = dirs.iter().zip(&target).map(|(d, t)| (one * normal.dot(d).abs() - t).powi(2)).sum::<f64>();
     let alone = miss.sqrt() <= CARD_TOLERANCE * target.iter().map(|t| t * t).sum::<f64>().sqrt();
-    let mut keep: Vec<usize> = (0 .. 3).filter(|&i| i == 0 || !alone).collect();
+    let mut keep: Vec<usize> = (0 .. 3).filter(|&i| (i == 0 || !alone) && faces[i].1.cross(&faces[i].2).norm() > 0.).collect();
     let mut areas = vec![0.; 3];
     for _ in 0 .. 2 {
         let rows: Vec<Vec<f64>> = dirs.iter().map(|d| keep.iter().map(|&i| faces[i].0.dot(d).abs()).collect()).collect();
@@ -920,18 +888,9 @@ fn card(members: &[&Tagged<Triangle>]) -> Option<Card> {
     }
     let make = |areas: &[f64], lit: f64| -> Card {
         let mut scale = [0u16; 3];
-        let longer = w.max(h);
         for &i in keep.iter().filter(|&&i| areas[i] > 0.) {
-            scale[i] = if i == 0 {
-                let k = (areas[i] / (w * h)).sqrt().min(MAX_SCALE);
-                ((k * 4096.).round() as u16).max(1)
-            } else {
-                // A side rectangle spans its box's length, and is as deep as gives its area,
-                // up to the box's longer side: it stays within the cluster.
-                let length = if i == 1 { h } else { w };
-                let depth = (areas[i] / length).min(longer);
-                ((depth / longer * 65535.).round() as u16).max(1)
-            };
+            let k = (areas[i] / faces[i].1.cross(&faces[i].2).norm()).sqrt().min(MAX_SCALE);
+            scale[i] = ((k * 4096.).round() as u16).max(1);
         }
         Card {
             corner: single(&side), u: single(&(a1 * w)), v: single(&(a2 * h)),
@@ -1238,16 +1197,14 @@ mod tests {
         }
         let set = consolidate(&all, 10.);
         assert_eq!(set.clusters().len(), 1);
-        // Its card's first rectangle lies in the plane most of its leaves cover.
-        let card = set.cards()[0];
+        // The largest of the cluster's cards lies in the plane most of its leaves cover.
+        let card = *set.cards().iter().max_by(|a, b| a.surface_area().total_cmp(&b.surface_area())).unwrap();
         assert!(card.normal().y.abs() > 0.99, "{:?}", card.normal());
         let mut rng = Pcg32::new(3, 3);
         let (mut hits, mut slanted, mut side) = (0, 0, 0);
-        // Over the rectangle across its normal.
-        let (c, u, v) = card.planes().next().unwrap();
         for _ in 0 .. 2000 {
-            let p = c + u * rng.next_f64() + v * rng.next_f64();
-            let (x, z) = (p.x, p.z);
+            let b = card.bounds();
+            let (x, z) = (b.min.x + rng.next_f64() * (b.max.x - b.min.x), b.min.z + rng.next_f64() * (b.max.z - b.min.z));
             let down = Ray { ro: Vector3::new(x, 10., z), rd: -Vector3::y() };
             if let Some(h) = set.intersects(&down) {
                 hits += 1;

@@ -42,7 +42,9 @@ pub struct Params {
     /// Records of the air in `tables` (`AIR_*`), or `NO_AIR`: the sky's (for rays that escape),
     /// the aerial perspective's, the sun's (its reddening); and space's (`SPACE_*`).
     pub air: UVec4,
-    /// The media (`MEDIUM_*`): where their records begin in `tables`, and how many.
+    /// The media (`MEDIUM_*`): where their records begin in `tables`, and how many; and the
+    /// bits of the mean square slope of the sea's glitter as media see it (the renderer's
+    /// `ocean::Sea`), 0 for no sea a glitter probe could find (`send_glitter_probe`).
     pub media: UVec4,
     /// The render's origin in the world (the renderer's `kernels::origin`: at the camera).
     /// Every position here is relative to it: rays, primitives, boxes, lights, centres. So
@@ -2507,8 +2509,10 @@ pub const PATH_LIGHTS_COUNTED: u32 = 32;
 /// full.
 pub const PATH_DIRECTIONAL: u32 = 64;
 /// The sunlight at the path's next vertex in a medium is shared with a sun probe
-/// (`send_probe`): that vertex takes the share in the ray's `d.w` (which holds no density
-/// then: the last vertex was a medium's, whose lights are counted by sampling them).
+/// (`send_probe`), and the sun's glitter on a sea it meets with a glitter probe
+/// (`send_glitter_probe`): that vertex takes the shares in the ray's `d.w` (`pack_shares`;
+/// it holds no density then: the last vertex was a medium's, whose lights are counted by
+/// sampling them).
 pub const PATH_SUN_SHARED: u32 = 128;
 /// From this bit of the flags up, eight bits: the medium the path last scattered in, plus one
 /// (0 before it has scattered in any), which sets how its segments cross every medium
@@ -2779,17 +2783,19 @@ pub fn intersect<M: Media>(s: &Scene, p: &PathState) -> PathState {
 /// one loop, so that a kernel holds one traversal and one walk through the media. After the
 /// path's ray, for a camera's in a scene with crepuscular rays, its two shadow rays
 /// (`crepuscular_samples`); and for a path whose last vertex sent a sun probe (`send_probe`,
-/// waiting in `hit`), the probe, and from the collision it meets its shadow ray to the sun.
+/// waiting in `hit`), the probe, and from the collision it meets its shadow ray to the sun;
+/// and likewise its glitter probe (`send_glitter_probe`), and from the sea it meets.
 pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
-    let probe = p.hit;
+    let (probe, glitter) = if p.state.y & PATH_SUN_SHARED != 0 { unpack_probes(p.hit, p.state.z) } else { (Vec4::ZERO, Vec4::ZERO) };
     let mut own = *p;
     own.hit = Vec4::ZERO;
+    own.state.z = 0;
     let mut found = own;
     let mut ray = own;
     let (mut a0, mut c0, mut a1, mut c1) = (Vec4::ZERO, Vec3::ZERO, Vec4::ZERO, Vec3::ZERO);
     let (mut probed, mut probe_from) = (Vec3::ZERO, Vec3::ZERO);
     let mut job = 0;
-    while job < 5 {
+    while job < 7 {
         if job == 1 || job == 2 {
             let from = if job == 1 { a0 } else { a1 };
             if from.w == 0.0 {
@@ -2798,18 +2804,22 @@ pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
             }
             ray = shadow_ray(s, &found, from);
         }
-        if job == 3 {
-            if probe.w <= 0.0 {
-                break;
+        if job == 3 || job == 5 {
+            let sent = if job == 3 { probe } else { glitter };
+            probed = Vec3::ZERO;
+            if sent.w <= 0.0 {
+                job += 2;
+                continue;
             }
             // (From the vertex, as the path's own ray, which was found the same way.)
             ray = own;
-            ray.d = probe.xyz().extend(0.0);
+            ray.d = sent.xyz().extend(0.0);
             ray.state.x = found.state.x;
         }
-        if job == 4 {
+        if job == 4 || job == 6 {
             if probed.dot(probed) == 0.0 {
-                break;
+                job += 1;
+                continue;
             }
             ray = shadow_ray(s, &ray, probe_from.extend(1.0));
             ray.state.x = found.state.x;
@@ -2834,7 +2844,15 @@ pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
                 // (Its shadow ray crosses the media as that vertex's would.)
                 ray.state.y = flags;
             }
-        } else if job == 4 {
+        } else if job == 5 {
+            found.state.x = hit.state.x;
+            found.l.w += 1.0;
+            if hit.state.z != NONE && hit.state.z < MEDIUM_HIT {
+                let (light, x) = probe_glitter(s, &own, glitter, &hit);
+                probed = light;
+                probe_from = x;
+            }
+        } else if job == 4 || job == 6 {
             found.state.x = hit.state.x;
             found.l.w += 1.0;
             if hit.state.z == NONE {
@@ -2925,6 +2943,154 @@ fn send_probe(s: &Scene, medium: u32, peak: f32, rd: Vec3, wi: Vec3, rng: &mut u
     (share, d.extend(if density > 0.0 { towards / density } else { 0.0 }))
 }
 
+/// Two shares in [0, 1] as one float that holds them to a part in 4095 each.
+fn pack_shares(a: f32, b: f32) -> f32 {
+    (a.clamp(0.0, 1.0) * 4095.0 + 0.5).floor() * 4096.0 + (b.clamp(0.0, 1.0) * 4095.0 + 0.5).floor()
+}
+
+fn unpack_shares(packed: f32) -> (f32, f32) {
+    let a = (packed / 4096.0).floor();
+    (a / 4095.0, (packed - a * 4096.0) / 4095.0)
+}
+
+/// A unit vector as two numbers (an octahedron unfolded: Meyer et al., "On Floating-Point
+/// Normal Vectors", EGSR 2010), and back.
+fn fold(v: Vec3) -> Vec2 {
+    let sum = v.x.abs() + v.y.abs() + v.z.abs();
+    if sum == 0.0 {
+        return Vec2::ZERO;
+    }
+    let n = v / sum;
+    if n.z >= 0.0 {
+        Vec2::new(n.x, n.y)
+    } else {
+        Vec2::new((1.0 - n.y.abs()) * if n.x >= 0.0 { 1.0 } else { -1.0 }, (1.0 - n.x.abs()) * if n.y >= 0.0 { 1.0 } else { -1.0 })
+    }
+}
+
+fn unfold(e: Vec2) -> Vec3 {
+    let z = 1.0 - e.x.abs() - e.y.abs();
+    let t = (-z).max(0.0);
+    Vec3::new(e.x - if e.x >= 0.0 { t } else { -t }, e.y - if e.y >= 0.0 { t } else { -t }, z).normalize()
+}
+
+/// The two probes a vertex sends, as a path carries them to the next round's `intersect`:
+/// their directions folded into `hit`, and their weights (in [0, 1]; 0 for no probe) to 16
+/// bits each in `state.z`, which a path between its rounds has no other use for.
+fn pack_probes(sun: Vec4, glitter: Vec4) -> (Vec4, u32) {
+    let (a, b) = (fold(sun.xyz()), fold(glitter.xyz()));
+    let bits = |w: f32| (w.clamp(0.0, 1.0) * 65535.0 + 0.5) as u32;
+    (Vec4::new(a.x, a.y, b.x, b.y), (bits(sun.w) << 16) | bits(glitter.w))
+}
+
+fn unpack_probes(hit: Vec4, weights: u32) -> (Vec4, Vec4) {
+    let (a, b) = ((weights >> 16) as f32 / 65535.0, (weights & 0xffff) as f32 / 65535.0);
+    (unfold(Vec2::new(hit.x, hit.y)).extend(a), unfold(Vec2::new(hit.z, hit.w)).extend(b))
+}
+
+/// The mean square slope of the sea's glitter as media see it (`Params::media`), or 0.
+fn sea_glitter(s: &Scene) -> f32 {
+    f32::from_bits(s.params.media.z)
+}
+
+/// The density, per steradian, of `glitter_towards`'s direction `d` from a point where up is
+/// `up` (the renderer's `ocean::Sea::glitter_pdf`): Beckmann's density of the facet that
+/// would reflect `d` into the sun's direction.
+fn glitter_pdf(roughness: f32, up: Vec3, sun: Vec3, d: Vec3) -> f32 {
+    if d.dot(up) >= 0.0 {
+        return 0.0;
+    }
+    let h = sun - d;
+    let norm = h.length();
+    if norm < 1e-12 {
+        return 0.0;
+    }
+    let m = h / norm;
+    let lm = sun.dot(m);
+    let c = up.dot(m);
+    if lm <= 0.0 || c <= 0.0 {
+        return 0.0;
+    }
+    let tan2 = (1.0 - c * c) / (c * c);
+    let facets = (-tan2 / roughness).exp() / (PI * roughness * (c * c) * (c * c));
+    facets * c / (4.0 * lm)
+}
+
+/// A direction towards the sea's glitter of the sun (`ocean::Sea::sample_glitter`): a facet
+/// normal from the slopes' distribution, and the direction it reflects into the sun's; zero
+/// if that wouldn't reach the sea.
+fn glitter_towards(roughness: f32, up: Vec3, sun: Vec3, u1: f32, u2: f32) -> Vec3 {
+    let r = (-roughness * (1.0 - u1).ln()).sqrt();
+    let phi = 2.0 * PI * u2;
+    let t = if up.x.abs() < 0.9 { Vec3::X } else { Vec3::Z };
+    let a = (t - up * up.dot(t)).normalize();
+    let b = up.cross(a);
+    let m = (up + a * (r * phi.cos()) + b * (r * phi.sin())).normalize();
+    let lm = sun.dot(m);
+    if lm <= 0.0 {
+        return Vec3::ZERO;
+    }
+    let d = sun - m * (2.0 * lm);
+    if d.dot(up) < 0.0 { d } else { Vec3::ZERO }
+}
+
+/// Glitter probes (the renderer's `VolumeMaterial::glitter_probe`): the sun's glitter on the
+/// sea lights the clouds above, their bases most, but a path scattering in a cloud finds it
+/// only by chance, rarely and brightly. As with `send_probe`: that light by the path's
+/// continuation `wi` and by a probe drawn towards the glitter. Returns the continuation's
+/// share of the glitter where it meets the sea next, and the probe (its weight 0 for none).
+fn send_glitter_probe(s: &Scene, medium: u32, peak: f32, point: Vec3, rd: Vec3, wi: Vec3, rng: &mut u32) -> (f32, Vec4) {
+    let roughness = sea_glitter(s);
+    let sun = s.params.sun_dir.xyz();
+    let up = ocean_up(&load_ocean(s), point);
+    if sun.dot(up) <= 0.0 {
+        return (1.0, Vec4::ZERO);
+    }
+    let ours = medium_phase(s.tables, medium, peak, rd.dot(wi));
+    let share = ours / (ours + glitter_pdf(roughness, up, sun, wi));
+    let d = glitter_towards(roughness, up, sun, rand(rng), rand(rng));
+    if d.dot(d) == 0.0 {
+        return (share, Vec4::ZERO);
+    }
+    let towards = medium_phase(s.tables, medium, peak, rd.dot(d));
+    let density = towards + glitter_pdf(roughness, up, sun, d);
+    (share, d.extend(if density > 0.0 { towards / density } else { 0.0 }))
+}
+
+/// What a glitter probe that met the sea (`hit`, traced along `d` from the path's vertex)
+/// would gather of the sun's glitter there (the renderer's `PhysicalOcean::glint`), before
+/// its shadow ray: the light, times the path's throughput and the probe's weight; and where
+/// its shadow ray starts. None from anything but the kernels' water.
+fn probe_glitter(s: &Scene, p: &PathState, d: Vec4, hit: &PathState) -> (Vec3, Vec3) {
+    let none = (Vec3::ZERO, Vec3::ZERO);
+    let (ro, rd) = (p.o.xyz(), d.xyz());
+    let x = ro + rd * hit.hit.x;
+    let mat = at(s.materials, resolve_material(s, whole_prim(s, hit.state.z).info.y, x));
+    if mat.kind != MAT_WATER {
+        return none;
+    }
+    let (g, n) = normals(s, hit.state.z, ro, rd, hit.hit);
+    let wo = -rd;
+    let up = if mat.p.x > 0.0 { ocean_up(&load_ocean(s), x) } else { Vec3::Y };
+    // Seen from beyond a wave's slope: the mean surface.
+    let n = if n.dot(wo) <= 0.0 { up } else { n };
+    let sun = s.params.sun_dir.xyz();
+    if sun.dot(up) <= 0.0 || n.dot(sun) <= 0.0 {
+        return none;
+    }
+    let h = (sun + wo).normalize();
+    let glint = water_fresnel(h.dot(wo)) * ripple_density(n, h, mat.p.y) / (4.0 * n.dot(wo));
+    if glint <= 1e-6 {
+        return none;
+    }
+    let mut light = s.params.sun_irr.xyz() * sun_transmittance(s, x) * glint;
+    if s.params.offs2.w & FLAG_AERIAL != 0 && hit.hit.x > AERIAL_FROM {
+        light *= aerial_transmittance(s, ro, rd, hit.hit.x);
+    }
+    let ng = if g.dot(wo) < 0.0 { -g } else { g };
+    (light * p.beta.xyz() * d.w, x + ng * offset_for(s, x))
+}
+
 /// What a probe that met a collision in a medium (`hit`, traced along `d` from the path's
 /// vertex) would gather of the sun there, before its shadow ray: the light, times the path's
 /// throughput and the probe's weight; the point; and the path's flags as that vertex's shadow
@@ -2957,7 +3123,8 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
     let mut rays = p.l.w as u32;
     let mut rng = p.state.x;
     // The share of the sun's light at this vertex that isn't a probe's (`send_probe`).
-    let sun_share = if p.state.y & PATH_SUN_SHARED != 0 { prev_pdf } else { 1.0 };
+    // and of its glitter on the sea that isn't a glitter probe's.
+    let (sun_share, glint_share) = if p.state.y & PATH_SUN_SHARED != 0 { unpack_shares(prev_pdf) } else { (1.0, 1.0) };
     let flags_p = p.state.y & !PATH_SUN_SHARED;
     let specular = flags_p & PATH_SPECULAR != 0;
     let counted = flags_p & PATH_LIGHTS_COUNTED != 0;
@@ -3237,7 +3404,7 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
                     let h = (wi + wo).normalize();
                     let glint = water_fresnel(h.dot(wo)) * ripple_density(water_n, h, mat.p.y) / (4.0 * water_n.dot(wo));
                     if glint > 1e-6 {
-                        f += Vec3::splat(glint);
+                        f += Vec3::splat(glint * glint_share);
                     }
                 }
             }
@@ -3285,12 +3452,26 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQ
         beta *= medium_albedo;
         // The next vertex's sunlight by the continuation and by a probe, where the phase
         // function is peaked enough to need it (and the sun isn't counted by the Oz
-        // approximation's octaves, at the first vertex alone).
-        let mean_cosine = if peak >= 1.0 { 0.0 } else { at(s.tables, medium + MEDIUM_MEAN_COSINE + if peak > 0.0 { 1 } else { 0 }) };
-        if flags & FLAG_SUN != 0 && oz == 0 && mean_cosine > 0.2 && at(s.tables, medium + MEDIUM_PROBES) > 0.0 {
-            let (share, probe) = send_probe(s, medium, peak, rd, wi, &mut rng);
-            let (mut next, a, b) = carry_on(p, point, wi, beta, l, rays, rng, flags_p | PATH_LIGHTS_COUNTED | PATH_SUN_SHARED, share, depth + 1, q0, q1);
-            next.hit = probe;
+        // approximation's octaves, at the first vertex alone); and the sun's glitter on the
+        // sea, where there is one, likewise.
+        if flags & FLAG_SUN != 0 && at(s.tables, medium + MEDIUM_PROBES) > 0.0 {
+            let mean_cosine = if peak >= 1.0 { 0.0 } else { at(s.tables, medium + MEDIUM_MEAN_COSINE + if peak > 0.0 { 1 } else { 0 }) };
+            let (mut share, mut probe) = (1.0, Vec4::ZERO);
+            if oz == 0 && mean_cosine > 0.2 {
+                let sent = send_probe(s, medium, peak, rd, wi, &mut rng);
+                share = sent.0;
+                probe = sent.1;
+            }
+            let (mut glint_share, mut glitter) = (1.0, Vec4::ZERO);
+            if sea_glitter(s) > 0.0 {
+                let sent = send_glitter_probe(s, medium, peak, point, rd, wi, &mut rng);
+                glint_share = sent.0;
+                glitter = sent.1;
+            }
+            let (mut next, a, b) = carry_on(p, point, wi, beta, l, rays, rng, flags_p | PATH_LIGHTS_COUNTED | PATH_SUN_SHARED, pack_shares(share, glint_share), depth + 1, q0, q1);
+            let packed = pack_probes(probe, glitter);
+            next.hit = packed.0;
+            next.state.z = packed.1;
             return (next, a, b);
         }
         return carry_on(p, point, wi, beta, l, rays, rng, flags_p | PATH_LIGHTS_COUNTED, 0.0, depth + 1, q0, q1);

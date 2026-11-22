@@ -748,6 +748,38 @@ pub mod tests {
         }
     }
 
+    /// A cloud over a sea, lit from above by the sun and from below by its glitter: the
+    /// kernels' vertices in the cloud send sun probes and glitter probes
+    /// (`pathtrace::send_probe`, `send_glitter_probe`) as the path tracer's do, and share the
+    /// light with them, so the picture is the path tracer's, tile by tile; with the phase
+    /// function whole, and with the Oz approximation, under which only the glitter is probed.
+    #[test]
+    fn test_probes_agree_with_the_path_tracer() {
+        for scattering in [r#""density": 0.6"#, r#""density": 0.6, "oz": true"#] {
+            let s = SceneFile::from_string(format!(r#"{{
+                "width": 24, "height": 16, "background": [0.3, 0.4, 0.6], "max_depth": 24, "path_termination": "russian_roulette",
+                "sun": {{ "direction": [-0.4, 1, 0.6], "intensity": 3 }},
+                "camera": {{ "location": [0, 1.2, -14], "lookat": [0, 2.6, 0], "up": [0, 1, 0], "angle": 0.8 }},
+                "objects": [
+                    {{ "type": "ocean", "wind": [7, 2], "choppiness": 0, "whitecaps": 0, "planet_radius": 0, "detail_center": [0, -6], "detail_distance": 30 }},
+                    {{ "type": "volume", "min": [-9, 3, -6], "max": [9, 5, 8], {scattering}, "albedo": [0.95, 0.95, 0.95], "g": 0.85 }}
+                ]
+            }}"#, scattering = scattering));
+            let flat = FlatScene::build(&s).unwrap();
+            assert!(flat.media.len() == 1 && flat.media[0].sun_probes && s.sea.is_some());
+            let buffers = crate::kernels::Buffers::build(&s, &flat).unwrap();
+            assert!(f32::from_bits(buffers.params.media.z) > 0., "the kernels' water, for glitter probes to find");
+            let n = 768;
+            let (w, h) = (s.image.width, s.image.height);
+            let (a, b) = (tiles(&mean_image(&s, n), w, h, 3, 2), tiles(&path_image(&s, n), w, h, 3, 2));
+            for t in 0..6 {
+                for ch in 0..3 {
+                    assert!((a[t][ch] - b[t][ch]).abs() < 0.04 * b[t][ch] + 1e-3, "{}: tile {} channel {}: wavefront {} vs path {}", scattering, t, ch, a[t][ch], b[t][ch]);
+                }
+            }
+        }
+    }
+
     /// Crepuscular rays (`pathtrace::crepuscular_samples`): under a slab that shadows the air, with
     /// a gap the sun shines through, the sky and the haze before the ground lose what the
     /// path tracer takes from them (`SkyMaterial::shadowed_loss`), tile by tile; and they lose

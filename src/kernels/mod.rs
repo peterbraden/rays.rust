@@ -592,7 +592,11 @@ impl Buffers {
             sun_irr,
             seed: UVec4::new(s.render.seed as u32, rr, 0, 1),
             air: UVec4::new(sky_off, aerial_off, sun_off, space_off),
-            media: UVec4::new(media, flat.media.len() as u32, 0, 0),
+            // (A glitter probe finds the sun's glitter on water the kernels shade: `host_kernels`.)
+            media: UVec4::new(media, flat.media.len() as u32, match (&s.sea, sea, kernels.iter().any(|k| k.is_some())) {
+                (Some(glitter), Some(_), true) => (glitter.roughness as f32).to_bits(),
+                _ => 0,
+            }, 0),
             origin: v4(origin, 0.),
         };
         Ok(Buffers { params, prims: pathtrace::pack_prims(&prims), prim_records: prims, nodes, materials, lights, tables, hosts: hosts > 0, host_shapes, unported, origin: *origin })

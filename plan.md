@@ -2324,6 +2324,11 @@ Not done, and why:
   hogan-kew-cirrus and sunset render through the kernels. Global cirrus (orbit, the
   weather's) has a density of its own, a 3D field sampled on the sphere, and is still the
   path tracer's; so are halos and diffraction, which ask each point's crystal size.)
+- (Done since: media beside the host's vertices. A material or shape of the scene's own
+  code traces its shadow rays through the scene's media by that code, which keeps a path's
+  state in thread-locals; the host now sets it from the path's flags (`volume::resume_path`).
+  desert-noon, desert-butte, desert-mesas, desert-overlook and forest-sunlit, Nubis clouds
+  over terrain, render through the kernels.)
 - Media through the host in the wavefront's rounds (the rest of step 3), and with them the
   thread-locals. Judged not worth doing as such: a scene with a medium the kernels lack is
   rendered a path at a time by the scene's own code under the same driver now, and the

@@ -394,66 +394,15 @@ impl HoganKewCirrus {
     /// u(z) = (a - s z) (cos θz, sin θz), whose integral has a closed form. With θ → 0 it is
     /// (-s Z² / 2, 0), straight back along the wind.
     fn wind_integral(&self, fallen: f64) -> Vector2<f64> {
-        let (a, s, z) = (self.generating_wind, self.shear, fallen);
-        let theta = self.veer / (self.top - self.base);
-        let phi = theta * z;
-        let (along, across) = if phi.abs() < 1e-6 {
-            (a * z - s * z * z / 2., theta * (a * z * z / 2. - s * z * z * z / 3.))
-        } else {
-            ((a - s * z) * phi.sin() / theta + s * (1. - phi.cos()) / (theta * theta),
-             a / theta - (a - s * z) * phi.cos() / theta - s * phi.sin() / (theta * theta))
-        };
-        Vector2::new(along - a * z, across)
-    }
-
-    /// Where ice at depth `fallen`, now at `x` in the cells' frame, left its cell, for fall
-    /// speed `v`.
-    fn source(&self, x: &Vector2<f64>, fallen: f64, v: f64) -> Vector2<f64> {
-        let i = self.wind_integral(fallen) / v;
-        let across = Vector2::new(-self.wind.y, self.wind.x);
-        x - self.wind * i.x - across * i.y
-    }
-
-    /// The large-scale flow's warp of horizontal position (x, z), so that what is straight
-    /// along the wind in the generating field is curved in the sky.
-    fn warp(&self, x: &Vector2<f64>) -> Vector2<f64> {
-        if self.flow <= 0. {
-            return *x;
-        }
-        let q = x / self.flow_size;
-        let h = 1e-3;
-        let psi = |dx: f64, dz: f64| self.curl_noise.noise(q.x + dx, 3.7, q.y + dz);
-        let dpsi_dx = (psi(h, 0.) - psi(-h, 0.)) / (2. * h);
-        let dpsi_dz = (psi(0., h) - psi(0., -h)) / (2. * h);
-        x + Vector2::new(dpsi_dz, -dpsi_dx) * self.flow
+        let i = self.recipe().wind_integral(fallen);
+        Vector2::new(i.0, i.1)
     }
 
     /// The fall speed of the ice at `p` (in the cells' frame, so the pattern travels with
     /// them): the mean, varied by up to `fall_speed_spread` either way by noise a few fibres
     /// across.
     fn fall_speed_at(&self, p: &Vector3<f64>) -> f64 {
-        if self.fall_speed_spread <= 0. {
-            return self.fall_speed;
-        }
-        let q = p / (self.fibre_width * 3.);
-        self.fall_speed * (1. + self.fall_speed_spread * self.curl_noise.noise(q.x, q.y, q.z).clamp(-1., 1.))
-    }
-
-    /// The generating elements at source position `q`, in [0, 1]: small, separate blobs of
-    /// noise, with no direction of their own and the same at every height, since each is the
-    /// head of a strand. Looked up at the source of the ice, each draws out into a strand along
-    /// its own fall, curving as the fall does.
-    fn fibre(&self, q: &Vector2<f64>) -> f64 {
-        let q = q / self.fibre_width;
-        let (mut sum, mut weight, mut amp, mut freq) = (0., 0., 1., 1.);
-        for _ in 0..3 {
-            let n = self.detail_noise.noise(q.x * freq, 0.37, q.y * freq);
-            sum += amp * n.max(0.).powi(2) * 4.;
-            weight += amp;
-            amp *= 0.5;
-            freq *= 2.2;
-        }
-        (sum / weight).min(1.)
+        self.recipe().fall_speed_at(&self.tables(), p.x, p.y, p.z)
     }
 
     /// The fraction of the generating level that is cloud.
@@ -464,90 +413,94 @@ impl HoganKewCirrus {
     /// The vertical profile at a depth `d` (0 at the top, 1 at the base, as a fraction): ice
     /// grows through the generating depth, then sublimates as it falls.
     fn profile(&self, d: f64) -> f64 {
-        let g = self.generating_depth.min(self.fall_depth);
-        if d < g {
-            return (d / g).sqrt();
-        }
-        let x = (d - g) / (self.fall_depth - g).max(1e-9);
-        (1. - x).clamp(0., 1.).powf(self.sublimation)
+        self.recipe().profile(d)
     }
 
     /// The lowest height with any ice.
     fn lowest(&self) -> f64 {
-        self.top - self.fall_depth.min(1.) * (self.top - self.base)
+        self.recipe().lowest()
     }
 
     /// The cells' strength (0 to 1) at the generating level, at (x, z) in the cells' own,
     /// drifting frame.
     fn cells(&self, x: f64, z: f64) -> f64 {
-        let w = if self.evolution_period.is_finite() { 2. * PI * self.time / self.evolution_period } else { 0. };
-        let f = self.field.at(x, z, (w.cos(), w.sin()));
-        ((f - self.threshold) / self.edge).clamp(0., 1.)
+        self.recipe().cells(&self.tables(), x, z)
     }
 
-    /// The horizontal displacement (x, z) of curl noise: the curl of a scalar potential is
-    /// divergence-free, so it swirls the ice without bunching or thinning it.
-    fn curl(&self, p: &Vector3<f64>) -> Vector2<f64> {
-        let s = self.turbulence_size;
-        let q = p / s;
-        let h = 1e-3;
-        let psi = |dx: f64, dz: f64| self.curl_noise.noise(q.x + dx, q.y, q.z + dz);
-        let dpsi_dx = (psi(h, 0.) - psi(-h, 0.)) / (2. * h);
-        let dpsi_dz = (psi(0., h) - psi(0., -h)) / (2. * h);
-        Vector2::new(dpsi_dz, -dpsi_dx)
-    }
-
-    /// `p` in the cells' frame, in which the pattern of fibres and eddies travels too, and its
-    /// (x, z) there after the eddies have displaced it, at fractional depth `d`; the source of
-    /// its ice is then back along the fall from there.
-    fn frame(&self, p: &Vector3<f64>, d: f64) -> (Vector3<f64>, Vector2<f64>) {
-        let mut x = Vector2::new(p.x, p.z) - self.wind * (self.generating_wind * self.time);
-        let framed = Vector3::new(x.x, p.y, x.y);
-        if self.turbulence > 0. {
-            x += self.curl(&framed) * (self.turbulence * d);
-        }
-        (framed, x)
-    }
-
-    /// Ice density as a fraction of `max_density`, in [0, 1].
+    /// Ice density as a fraction of `max_density`, in [0, 1]: where this ice came from, back
+    /// along its fall at a fall speed that varies from point to point (crystals of different
+    /// sizes fall at different speeds, so streaks fray rather than show copies of their
+    /// cells), in the cells there, gathered into fibres that belong to the ice (so they curve
+    /// with the streaks and the flow), in patches (`shared::cirrus::Cirrus::fraction`).
     pub fn fraction(&self, p: &Vector3<f64>) -> f64 {
-        if p.y < self.base || p.y > self.top {
-            return 0.;
+        self.recipe().fraction(&self.tables(), p.x, p.y, p.z)
+    }
+}
+
+/// The layer's tables as its shared recipe reads them: the permutation of the fibres' noise,
+/// then the flow's, then the generating field at the layer's time.
+struct LayerTables<'a> {
+    layer: &'a HoganKewCirrus,
+    phase: (f64, f64),
+}
+
+const CURL_AT: u32 = 512;
+const FIELD_AT: u32 = 1024;
+
+impl shared::Tables<f64> for LayerTables<'_> {
+    fn value(&self, i: u32) -> f64 {
+        let i = (i - FIELD_AT) as usize;
+        self.phase.0 * self.layer.field.real[i] + self.phase.1 * self.layer.field.imaginary[i]
+    }
+
+    fn index(&self, i: u32) -> u32 {
+        if i < CURL_AT { self.layer.detail_noise.permutation()[i as usize] as u32 } else { self.layer.curl_noise.permutation()[(i - CURL_AT) as usize] as u32 }
+    }
+}
+
+impl HoganKewCirrus {
+    /// The layer's recipe, as the shared code takes it (`shared::cirrus::Cirrus`, where the
+    /// density is: the GPU's shader compiles the same functions at f32).
+    fn recipe(&self) -> shared::cirrus::Cirrus<f64> {
+        shared::cirrus::Cirrus {
+            base: self.base, top: self.top, max_density: self.max_density, generating_depth: self.generating_depth,
+            fall_depth: self.fall_depth, sublimation: self.sublimation, wind: (self.wind.x, self.wind.y), shear: self.shear,
+            generating_wind: self.generating_wind, fall_speed: self.fall_speed, fall_speed_spread: self.fall_speed_spread,
+            veer: self.veer, edge: self.edge, flow_size: self.flow_size, flow: self.flow, fibre_width: self.fibre_width,
+            fibres: self.fibres, turbulence_size: self.turbulence_size, turbulence: self.turbulence,
+            drift: self.generating_wind * self.time, patchiness: self.patchiness, patch_size: self.patch_size,
+            center: (self.center.x, self.center.y), extent: self.extent, fade: self.fade, texel: self.field.texel,
+            threshold: self.threshold, detail_perm: 0, curl_perm: CURL_AT, field: FIELD_AT,
         }
-        let fallen = self.top - p.y;
-        let d = fallen / (self.top - self.base);
-        let profile = self.profile(d);
-        if profile <= 0. {
-            return 0.;
-        }
-        let (framed, x) = self.frame(p, d);
-        let fall_speed = self.fall_speed_at(&framed);
-        let edge_fade = {
-            let from_centre = (Vector2::new(p.x, p.z) - self.center).abs().max() / self.extent;
-            let t = ((1. - from_centre) / self.fade.max(1e-9)).clamp(0., 1.);
-            t * t * (3. - 2. * t)
-        };
-        if edge_fade <= 0. {
-            return 0.;
-        }
-        // Where this ice came from: back along its fall, at a fall speed that varies from
-        // point to point (crystals of different sizes fall at different speeds), so that
-        // streaks fray rather than show copies of their cells. The fibres belong to the ice,
-        // so they are looked up there too, and curve with the streaks and with the flow.
-        let source = self.warp(&self.source(&x, fallen, fall_speed));
-        let cells = self.cells(source.x, source.y);
-        if cells <= 0. {
-            return 0.;
-        }
-        let detail = 1. - self.fibres * (1. - self.fibre(&source));
-        let patches = if self.patchiness > 0. {
-            let q = Vector2::new(framed.x, framed.z) / self.patch_size;
-            let n = self.detail_noise.fbm(q.x, 17.5, q.y, 3, 0.5, 2.);
-            1. - self.patchiness * (1. - ((n - 0.4) * 5.).clamp(0., 1.))
-        } else {
-            1.
-        };
-        (edge_fade * profile * cells * detail * patches).clamp(0., 1.)
+    }
+
+    /// How far round its cycle the generating field is: the weights of its two realisations.
+    fn phase(&self) -> (f64, f64) {
+        let w = if self.evolution_period.is_finite() { 2. * PI * self.time / self.evolution_period } else { 0. };
+        (w.cos(), w.sin())
+    }
+
+    fn tables(&self) -> LayerTables<'_> {
+        LayerTables { layer: self, phase: self.phase() }
+    }
+
+    /// The layer as data, for the GPU's shader (`pathtrace::load_cirrus`, which has the
+    /// layout): the recipe's numbers in their fields' order, then the two permutations and
+    /// the generating field at the layer's time.
+    pub fn export(&self) -> Vec<f32> {
+        let r = self.recipe();
+        let mut out: Vec<f32> = [
+            r.base, r.top, r.max_density, r.generating_depth, r.fall_depth, r.sublimation, r.wind.0, r.wind.1, r.shear,
+            r.generating_wind, r.fall_speed, r.fall_speed_spread, r.veer, r.edge, r.flow_size, r.flow, r.fibre_width,
+            r.fibres, r.turbulence_size, r.turbulence, r.drift, r.patchiness, r.patch_size, r.center.0, r.center.1,
+            // (No infinity for a kernel: a layer without an edge is one very wide.)
+            r.extent.min(1e30), r.fade, r.texel, r.threshold,
+        ].iter().map(|&v| v as f32).collect();
+        out.extend(self.detail_noise.permutation().iter().map(|&p| p as f32));
+        out.extend(self.curl_noise.permutation().iter().map(|&p| p as f32));
+        let phase = self.phase();
+        out.extend(self.field.real.iter().zip(&self.field.imaginary).map(|(a, b)| (phase.0 * a + phase.1 * b) as f32));
+        out
     }
 }
 
@@ -561,27 +514,24 @@ impl DensityField for HoganKewCirrus {
     }
 
     /// Crystals grow as they fall, and are smallest where the ice is newest: at the edges of
-    /// the cells, traced back along the (mean) fall.
+    /// the cells, traced back along the fall.
     fn particle_radius(&self, p: &Vector3<f64>) -> Option<f64> {
         let fallen = (self.top - p.y).clamp(0., self.top - self.base);
         let d = fallen / (self.top - self.base);
-        let (framed, x) = self.frame(p, d);
-        let source = self.warp(&self.source(&x, fallen, self.fall_speed_at(&framed)));
-        let maturity = self.cells(source.x, source.y);
+        let maturity = self.recipe().maturity(&self.tables(), p.x, p.y, p.z);
         let young = self.young_size + (1. - self.young_size) * maturity;
         Some(self.particle_radius * (1. + self.particle_growth * d) * young)
     }
 
     /// Nothing below `lowest`: zero there until the ray climbs to it.
     fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
-        let lowest = self.lowest();
-        let to_lowest = if d.y != 0. { (lowest - p.y) / d.y } else { f64::INFINITY };
-        let ahead = p.y + d.y * 1e-9 * (self.top - self.base);
-        if ahead < lowest {
-            (0., if to_lowest > 0. { to_lowest } else { f64::INFINITY })
-        } else {
-            (self.max_density, if to_lowest > 0. { to_lowest } else { f64::INFINITY })
-        }
+        self.recipe().majorant_from(p.y, d.y)
+    }
+
+    /// As data, where nothing but the density is asked of it (a crystal size is, for
+    /// diffraction and halos).
+    fn export(&self) -> Option<crate::volume::FieldExport> {
+        Some(crate::volume::FieldExport::Cirrus { record: HoganKewCirrus::export(self), radius: 0. })
     }
 }
 

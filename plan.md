@@ -2318,6 +2318,12 @@ Not done, and why:
   teapot-sky 0.0242 -> 0.0162 (0.0159, 0.0242): the kernels' noise was the path tracer's
   without its sampler, and is now the path tracer's. For about 4% of teapot-sky's time.
   That measurement also found the kernels' checkerboards laid out about the camera.)
+- (Done since: cirrus. Hogan and Kew's density moved to `shared::cirrus`, the same bits in
+  the renderer at 120,000 points over three genera before the old copy went; the generating
+  field's two realisations mixed for the layer's time into one table of 1024 x 1024 floats.
+  hogan-kew-cirrus and sunset render through the kernels. Global cirrus (orbit, the
+  weather's) has a density of its own, a 3D field sampled on the sphere, and is still the
+  path tracer's; so are halos and diffraction, which ask each point's crystal size.)
 - Media through the host in the wavefront's rounds (the rest of step 3), and with them the
   thread-locals. Judged not worth doing as such: a scene with a medium the kernels lack is
   rendered a path at a time by the scene's own code under the same driver now, and the

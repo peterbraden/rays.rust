@@ -549,6 +549,8 @@ pub enum FieldExport {
     /// A layer of altocumulus's record (`BenardAltocumulus::export`), flat or round a planet
     /// likewise.
     Benard { record: Vec<f32>, radius: f64 },
+    /// A layer of cirrus's record (`HoganKewCirrus::export`), likewise.
+    Cirrus { record: Vec<f32>, radius: f64 },
 }
 
 impl FieldExport {
@@ -564,6 +566,10 @@ impl FieldExport {
             FieldExport::Benard { mut record, radius } => {
                 record[2] *= by as f32;
                 FieldExport::Benard { record, radius }
+            },
+            FieldExport::Cirrus { mut record, radius } => {
+                record[2] *= by as f32;
+                FieldExport::Cirrus { record, radius }
             },
         }
     }

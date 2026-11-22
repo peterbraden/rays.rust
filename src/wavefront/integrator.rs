@@ -85,6 +85,8 @@ struct Path {
     directional: bool,
     hit: Option<Hit>,
     done: bool,
+    /// Its scatterings in media and the scale they left on densities (`HostVertex::volume`).
+    volume: (u32, f64),
 }
 
 impl Path {
@@ -327,6 +329,10 @@ fn host_bounce(p: &mut Path, s: &Scene, o: &std::sync::Arc<crate::sceneobject::S
         p.beta = p.beta * w;
     }
     crate::material::ggx::set_scattered(p.scattered);
+    // Its shadow rays cross the media as the path's segments do (`Volume::segment_scale`), and
+    // leave a vertex (`trace::trace_sample`).
+    crate::volume::resume_path(p.volume.0, p.volume.1, p.scattered);
+    crate::volume::at_vertex();
     crate::geometry::begin_sampler(crate::sampler::SampleState::Sobol(p.sampler.clone()));
     let interaction = o.medium.material_at(hit.point).scatter(&p.ray, &shaded, s);
     if let Some(crate::sampler::SampleState::Sobol(sampler)) = crate::geometry::take_sampler() {
@@ -369,6 +375,9 @@ pub struct HostVertex {
     pub directional: bool,
     pub prev_pdf: f64,
     pub scattered: bool,
+    /// How many times the path has scattered in media, and the factor that left on their
+    /// densities for its segments (`volume::resume_path`); (0, 1) before any.
+    pub volume: (u32, f64),
     pub done: bool,
 }
 
@@ -387,12 +396,12 @@ pub fn host_vertex(s: &Scene, flat: &FlatScene, v: &mut HostVertex, hit: &Hit, s
     };
     let mut p = Path {
         pixel: 0, ray: v.ray, beta: v.beta, l: v.l, weight: 1., depth: v.depth, specular: v.specular, prev_pdf: v.prev_pdf, sampler,
-        scattered: v.scattered, lights_counted: v.lights_counted, directional: v.directional, hit: Some(*hit), done: false,
+        scattered: v.scattered, lights_counted: v.lights_counted, directional: v.directional, hit: Some(*hit), done: false, volume: v.volume,
     };
     host_bounce(&mut p, s, o, hit);
     *v = HostVertex {
         ray: p.ray, beta: p.beta, l: p.l, depth: p.depth, specular: p.specular, lights_counted: p.lights_counted, directional: p.directional, prev_pdf: p.prev_pdf,
-        scattered: p.scattered, done: p.done,
+        scattered: p.scattered, done: p.done, volume: p.volume,
     };
 }
 
@@ -677,6 +686,47 @@ pub mod tests {
         for t in 0..6 {
             for ch in 0..3 {
                 assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "tile {} channel {}: wavefront {} vs path {}", t, ch, a[t][ch], b[t][ch]);
+            }
+        }
+    }
+
+    /// Media beside vertices the host shades (a layered floor, a torus of its own code): the
+    /// host's shadow rays cross the medium by the scene's own code with the path's state
+    /// there (`kernels::host::volume_state`: truncated once the path has left a vertex, and as
+    /// its last scattering in the medium left it), so the picture is the path tracer's, with
+    /// delta-M truncation alone, with the similarity relations and with the Oz approximation.
+    #[test]
+    fn test_media_beside_host_vertices_agree_with_the_path_tracer() {
+        for density in [r#""density": 1.5"#, r#""density": 6, "similarity_after": 2"#, r#""density": 6, "oz": true"#] {
+            let s = SceneFile::from_string(format!(r#"{{
+                "width": 24, "height": 16, "background": [0.2, 0.25, 0.3], "max_depth": 24, "path_termination": "russian_roulette",
+                "sun": {{ "direction": [-1, 2, -1], "intensity": 2 }},
+                "lights": [ {{ "location": [1, 3, -1], "intensity": 4 }} ],
+                "camera": {{ "location": [0, 1.5, -5], "lookat": [0, 0.6, 0], "up": [0, 1, 0], "angle": 0.6 }},
+                "materials": {{
+                    "F": {{ "type": "coated_diffuse", "albedo": [0.6, 0.6, 0.6], "roughness": 0.3 }},
+                    "M": {{ "type": "lambertian", "albedo": [0.7, 0.5, 0.3] }},
+                    "E": {{ "type": "diffuse-light", "color": [1, 0.9, 0.8], "intensity": 8 }}
+                }},
+                "objects": [
+                    {{ "type": "quad", "points": [[-6, 0, -6], [-6, 0, 6], [6, 0, -6], [6, 0, 6]], "material": "F" }},
+                    {{ "type": "torus", "location": [1.5, 0.3, 0], "major": 0.5, "minor": 0.2, "material": "M" }},
+                    {{ "type": "sphere", "location": [-0.3, 1.6, -0.2], "radius": 0.25, "material": "M" }},
+                    {{ "type": "quad", "points": [[-0.5, 2.5, 0.5], [0.5, 2.5, 0.5], [-0.5, 2.5, 1.5], [0.5, 2.5, 1.5]], "material": "E" }},
+                    {{ "type": "volume", "min": [-1.2, 0.2, -0.8], "max": [0.8, 1.3, 0.8], {density}, "albedo": [0.9, 0.8, 0.7], "g": 0.8 }}
+                ]
+            }}"#, density = density));
+            let flat = FlatScene::build(&s).unwrap();
+            assert!(flat.media.len() == 1 && !flat.hosts.is_empty() && !flat.shapes.is_empty());
+            let n = 512;
+            let (_, _, stats) = Kernels::new(&s, &flat).unwrap().pass(0);
+            assert!(stats.stage(Stage::Host).items > 0);
+            let (w, h) = (s.image.width, s.image.height);
+            let (a, b) = (tiles(&mean_image(&s, n), w, h, 3, 2), tiles(&path_image(&s, n), w, h, 3, 2));
+            for t in 0..6 {
+                for ch in 0..3 {
+                    assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "{}: tile {} channel {}: wavefront {} vs path {}", density, t, ch, a[t][ch], b[t][ch]);
+                }
             }
         }
     }

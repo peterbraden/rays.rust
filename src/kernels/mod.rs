@@ -374,11 +374,9 @@ impl Buffers {
         let kernels = host_kernels(s, flat);
         let hosts = kernels.iter().filter(|k| k.is_none()).count() + host_shapes.len();
         if !flat.media.is_empty() {
-            // The host's materials would trace their own shadow rays through the media, with
-            // none of the path's state there; and a medium's vertex has no kernel for moonlight.
-            if hosts > 0 {
-                return Err(format!("participating media beside {} objects whose materials the renderer's own code shades", hosts));
-            }
+            // (The host's materials trace their own shadow rays through the media, by the
+            // scene's own code, with the path's state there: `host::volume_state`.) A medium's
+            // vertex has no kernel for moonlight.
             if s.moonlight.is_some() {
                 return Err("participating media lit by a moon".into());
             }

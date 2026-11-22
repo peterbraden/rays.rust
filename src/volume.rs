@@ -75,6 +75,16 @@ pub fn begin_path() {
     chromatic::begin_path();
 }
 
+/// Take up a path kept elsewhere (the wavefront's, whose vertex the host shades:
+/// `wavefront::integrator::host_bounce`): it has scattered `scatterings` times in media, which
+/// left their densities scaled by `scale` for its segments, and has or hasn't `left` a vertex
+/// that isn't a mirror's or glass's.
+pub fn resume_path(scatterings: u32, scale: f64, left: bool) {
+    begin_path();
+    PATH.with(|p| p.set((scatterings, scale)));
+    VERTICES.with(|v| v.set(left as u32));
+}
+
 /// The path is at a vertex, about to scatter: its shadow rays and its continuation leave it.
 /// A specular vertex is then taken back (`specular_vertex`), so that what the camera sees in a
 /// mirror or through glass is seen as directly.

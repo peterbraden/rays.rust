@@ -194,29 +194,28 @@ pub fn volume(members: &[&Tagged<Triangle>], cluster: u32, rays: usize) -> Optio
     let (c, axes, half) = volume.frame();
     // Entering: aimed at points uniform in the box, from outside, every way.
     let mut entering = vec![];
+    // The points rays from outside meet first: where hits are, and whence rays leave.
+    let mut seen = vec![];
     for _ in 0 .. rays {
         let d = unit(&mut rng);
         let q = c + axes[0] * half[0] * (2. * rng.next_f64() - 1.) + axes[1] * half[1] * (2. * rng.next_f64() - 1.) + axes[2] * half[2] * (2. * rng.next_f64() - 1.);
         let r = Ray { ro: q - d * (2. * diagonal), rd: d };
         let Some((t0, t1)) = volume.slab(&r) else { continue };
         match leaves.intersects(&r) {
-            Some(h) if h.dist < t1 => entering.push((h.dist - t0, true)),
+            Some(h) if h.dist < t1 => {
+                entering.push((h.dist - t0, true));
+                seen.push(h.point);
+            },
             _ => entering.push((t1 - t0, false)),
         }
     }
-    // Leaving: from points on the leaves, drawn by area, every way.
-    let areas: Vec<f64> = members.iter().map(|m| area(&m.item)).collect();
+    // Leaving: from the points rays from outside meet first, every way. Those are the leaves a
+    // hit is on, and they're lit better than leaves within (the correlation of what's seen with
+    // what's lit, as in a canopy's hotspot); drawn from all the leaves by area, rays leaving
+    // would be shadowed as interior leaves are.
     let mut leaving = vec![];
-    for _ in 0 .. rays {
-        let mut left = rng.next_f64() * total;
-        let k = areas.iter().position(|a| { left -= a; left < 0. }).unwrap_or(areas.len() - 1);
-        let t = &members[k].item;
-        let (mut a, mut b) = (rng.next_f64(), rng.next_f64());
-        if a + b > 1. {
-            a = 1. - a;
-            b = 1. - b;
-        }
-        let p = t.v0 + (t.v1 - t.v0) * a + (t.v2 - t.v0) * b;
+    for k in 0 .. rays {
+        let Some(&p) = seen.get(k % seen.len().max(1)) else { break };
         let d = unit(&mut rng);
         let r = Ray { ro: p + d * (1e-6 * diagonal), rd: d };
         let exit = volume.slab(&r).map_or(0., |(_, t1)| t1);

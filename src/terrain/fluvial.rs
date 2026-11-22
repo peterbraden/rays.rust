@@ -71,9 +71,30 @@
 //! kilometre high at the edges of deep lakes on coarse grids). Sediment reaching the sea or a patch's edge
 //! leaves the model (there are no deltas or marine deposits).
 //!
-//! Not modelled: thresholds for incision; precipitation varying over the planet (drainage area
-//! is a proxy for discharge only under uniform rain); lateral erosion by meandering rivers,
-//! which widens real alluvial valleys.
+//! ## Lateral erosion
+//!
+//! Rivers don't only cut down: where they bend, the flow presses against the outer bank and
+//! cuts it back, so rivers shift across their valleys, widen them and plane bedrock into
+//! straths, and work towards wherever their banks give way. Langston and Tucker ("Developing
+//! and exploring a theory for the lateral erosion of bedrock channels for use in landscape
+//! evolution models", Earth Surface Dynamics 6, 2018, doi:10.5194/esurf-6-1-2018) add this to
+//! grid models: where flow turns through a cell, the neighbour on the outside of the bend is
+//! eroded sideways at a rate tied to the river's vertical erosion and the bend's sharpness. Here
+//! (`lateral_erosion`) the bank retreats at
+//!
+//! ```text
+//! E_l = λ K k_bank A^m S^n (1 - cos θ)
+//! ```
+//!
+//! θ the angle the flow turns through (from the largest donor's direction to the receiver's),
+//! k_bank the bank's own erodibility, λ = 0.5 (a model choice; they explore lateral to vertical
+//! coefficients of this order). The bank is lowered by the volume the retreat removes (the
+//! retreat times the bank's height times the cell's width), never below the channel, and that
+//! volume joins the river's sediment, so it is conserved. Straight reaches don't erode sideways.
+//!
+//! Not modelled: thresholds for incision; avulsion (rivers switching course across an
+//! aggrading plain, other than by the routing following the surface); levees and overbank
+//! deposition.
 //!
 //! ## Hillslopes: linear diffusion
 //!
@@ -106,12 +127,71 @@ pub struct FluvialParams {
     pub diffusivity: f64,
     /// Dimensionless deposition coefficient G (0: no deposition, detachment-limited).
     pub deposition: f64,
+    /// Lateral erosion at bends relative to vertical incision, λ (0: rivers only cut down).
+    pub lateral: f64,
 }
 
 impl Default for FluvialParams {
     fn default() -> FluvialParams {
-        FluvialParams { k: 1e-5, m: 0.5, n: 1., diffusivity: 0.01, deposition: 1. }
+        FluvialParams { k: 1e-5, m: 0.5, n: 1., diffusivity: 0.01, deposition: 1., lateral: 0.5 }
     }
+}
+
+/// Cut back the outer banks of bends for `dt` years (see "Lateral erosion"): each river
+/// cell's bank, the neighbour on the outside of the bend if it stands higher, is lowered by
+/// the volume its retreat removes, never below the channel. `erodibility` scales K per cell (0
+/// where nothing erodes, eg. under ice); cells of `lake` deeper than `LAKE` and `fixed` ones
+/// neither cut nor are cut. Returns the sediment each river cell gains, m³/yr, to add to its
+/// sediment flux.
+#[allow(clippy::too_many_arguments)]
+pub fn lateral_erosion(domain: &Domain, flow: &Flow, h: &mut [f64], fixed: &[bool], erodibility: &[f64], lake: &[f64], p: &FluvialParams, dt: f64) -> Vec<f64> {
+    let n = h.len();
+    let mut gained = vec![0.; n];
+    if p.lateral <= 0. || dt <= 0. { return gained; }
+    // Each cell's largest donor: where its flow comes from.
+    let mut donor = vec![usize::MAX; n];
+    for i in 0..n {
+        let r = flow.receiver[i];
+        if r != i && (donor[r] == usize::MAX || flow.area[i] > flow.area[donor[r]]) { donor[r] = i; }
+    }
+    let tangent = |from: usize, to: usize| {
+        let d = domain.dirs[from];
+        let v = domain.dirs[to] - d;
+        let t = v - d * d.dot(&v);
+        let size = t.norm();
+        if size > 0. { t / size } else { t }
+    };
+    // What each river cell would take from its bank: (bank, metres the bank is lowered).
+    let cuts: Vec<Option<(usize, f64)>> = (0..n).into_par_iter().map(|i| {
+        let (r, u) = (flow.receiver[i], donor[i]);
+        if r == i || u == usize::MAX || fixed[i] || erodibility[i] <= 0. || lake[i] > LAKE { return None; }
+        let (inflow, outflow) = (tangent(u, i), tangent(i, r));
+        let turn = 1. - inflow.dot(&outflow).clamp(-1., 1.);
+        if turn < 1e-3 { return None; }
+        let outside = inflow - outflow;
+        let (link, _) = domain.links(i).iter()
+            .filter(|l| l.to != r && l.to != u)
+            .map(|l| (l, tangent(i, l.to).dot(&outside)))
+            .filter(|&(_, a)| a > 0.)
+            .max_by(|a, b| a.1.total_cmp(&b.1))?;
+        let j = link.to;
+        let height = h[j] - h[i];
+        if height <= 0. || fixed[j] || erodibility[j] <= 0. || lake[j] > LAKE { return None; }
+        let slope = (h[i] - h[r]).max(0.) / flow.receiver_dist[i];
+        let retreat = p.lateral * p.k * erodibility[j] * flow.area[i].powf(p.m) * slope.powf(p.n) * turn * dt;
+        let width = if link.width > 0. { link.width } else { link.dist / std::f64::consts::SQRT_2 };
+        Some((j, (retreat * height * width / domain.area[j]).min(height)))
+    }).collect();
+    // A bank cut from several sides is lowered by the most any asks, shared among them.
+    let mut lowered = vec![0f64; n];
+    let mut asked = vec![0f64; n];
+    for &(j, d) in cuts.iter().flatten() { lowered[j] = lowered[j].max(d); asked[j] += d; }
+    for (i, c) in cuts.iter().enumerate() {
+        let Some((j, d)) = *c else { continue };
+        gained[i] = lowered[j] * domain.area[j] * d / asked[j] / dt;
+    }
+    for (x, l) in h.iter_mut().zip(&lowered) { *x -= l; }
+    gained
 }
 
 /// Lake depth (metres of water over the surface) above which a cell counts as lake bed.
@@ -467,6 +547,34 @@ mod tests {
         assert!(volume(&h) <= before + 1e-6 * before);
         let side = |lo: usize, hi: usize| (0..n).filter(|&k| (lo..hi).contains(&(k % 24)) && !d.boundary[k]).map(|k| h[k]).fold(0., f64::max);
         assert!(side(1, 10) < side(14, 23), "{} vs {}", side(1, 10), side(14, 23));
+    }
+
+    #[test]
+    fn test_rivers_cut_the_outside_of_their_bends() {
+        // A river running east along row 8 of a valley, turning north at column 8: the bank on
+        // the outside of the bend (east of the turn) is cut back, the inside isn't, and the
+        // rock taken off joins the river.
+        let d = Domain::patch(0., 0., 16, 100., 6.371e6);
+        let n = d.len();
+        let at = |i: usize, j: usize| j * 16 + i;
+        let mut h = vec![100.; n];
+        for i in 0..=8 { h[at(i, 8)] = 20. - i as f64; }
+        for j in 9..16 { h[at(8, j)] = 12. - (j - 8) as f64; }
+        let mut outlet = vec![false; n];
+        outlet[at(8, 15)] = true;
+        let f = route(&d, &h, &outlet, &vec![1.; n]);
+        assert_eq!(f.receiver[at(8, 8)], at(8, 9));
+        let before = h.clone();
+        let p = FluvialParams { k: 1e-3, ..FluvialParams::default() };
+        let gained = lateral_erosion(&d, &f, &mut h, &outlet, &vec![1.; n], &vec![0.; n], &p, 100.);
+        // The outer bank is east of the turn, behind the flow's old heading.
+        assert!(h[at(9, 8)] < before[at(9, 8)], "outer bank {} -> {}", before[at(9, 8)], h[at(9, 8)]);
+        assert!(h[at(9, 8)] >= before[at(8, 8)]);
+        assert_eq!(h[at(7, 9)], before[at(7, 9)]);
+        // Conserved: what the banks lost, the river gained.
+        let lost: f64 = (0..n).map(|k| (before[k] - h[k]) * d.area[k]).sum();
+        let got: f64 = gained.iter().sum::<f64>() * 100.;
+        assert!(lost > 0. && (lost - got).abs() < 1e-6 * lost, "{} vs {}", lost, got);
     }
 
     #[test]

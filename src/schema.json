@@ -2454,6 +2454,12 @@
               "kind": "number",
               "default": 1,
               "doc": "Deposition coefficient G; 0 for none."
+            },
+            {
+              "name": "lateral",
+              "kind": "number",
+              "default": 0.5,
+              "doc": "Lateral erosion of bends' outer banks relative to incision; 0: rivers only cut down."
             }
           ]
         },

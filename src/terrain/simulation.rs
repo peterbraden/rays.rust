@@ -13,7 +13,8 @@
 //!    eroded rock leaving in meltwater as sediment for the rivers (Hallet, Hunter and Bogen,
 //!    "Rates of erosion and sediment evacuation by glaciers", Global and Planetary Change 12,
 //!    1996, estimate glacial erosion rates from that sediment);
-//! 4. flow routing over the ice and rock surface, gathering the rain the terrain makes
+//! 4. rivers cutting back the outer banks of their bends (`fluvial::lateral_erosion`), and
+//!    flow routing over the ice and rock surface, gathering the rain the terrain makes
 //!    (`orographic`: discharge, not area, drives the rivers; glaciers' snow follows it too), then river erosion and deposition on
 //!    ice-free ground (`flow`, `fluvial`);
 //! 5. deltas: what rivers bring to the sea spreads over the sea floor (`marine`);
@@ -73,7 +74,7 @@
 
 use crate::terrain::domain::{Domain, Layout};
 use crate::terrain::flow::{route, Flow};
-use crate::terrain::fluvial::{diffuse_varying, erode_and_deposit, landslide, FluvialParams};
+use crate::terrain::fluvial::{diffuse_varying, erode_and_deposit, landslide, lateral_erosion, FluvialParams};
 use crate::terrain::glacier::{erode, flow_ice, GlacierParams};
 use crate::terrain::planet::{Planet, PlanetParams};
 use crate::terrain::volcano::{erupt, vents, Vent, VolcanoParams};
@@ -465,8 +466,13 @@ impl Terrain {
             .map(|i| (flow.filled[i] - surface[i]).min(ice_free.filled[i] - self.bed[i]).max(0.)).collect();
         let erodibility: Vec<f64> = self.erodibility().iter().zip(&self.ice)
             .map(|(&k, &h)| if h < ICE_FREE { k } else { 0. }).collect();
+        // Rivers cut back the outer banks of their bends; what they take joins their sediment.
         let before = self.bed.clone();
-        self.sediment_flux = erode_and_deposit(&self.domain, &flow, &mut self.bed, &fixed, &erodibility, &lake, &glacial, &self.params.fluvial, dt);
+        let lateral = lateral_erosion(&self.domain, &flow, &mut self.bed, &fixed, &erodibility, &lake, &self.params.fluvial, dt);
+        self.record(&before);
+        let source: Vec<f64> = glacial.iter().zip(&lateral).map(|(a, b)| a + b).collect();
+        let before = self.bed.clone();
+        self.sediment_flux = erode_and_deposit(&self.domain, &flow, &mut self.bed, &fixed, &erodibility, &lake, &source, &self.params.fluvial, dt);
         self.record(&before);
         if let Some(m) = &self.params.marine {
             // What the rivers bring to the sea builds deltas.

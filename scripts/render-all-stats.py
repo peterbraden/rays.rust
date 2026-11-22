@@ -93,6 +93,9 @@ def parse_log(path):
         elif m := re.match(r"- Built in ([0-9.]+) s(?:, peak memory (\d+) MiB)?", l):
             row["build_s"] = m.group(1)
             row["peak_build_mib"] = m.group(2) or ""
+        elif m := re.match(r"- Integrator: (.+)", l):
+            row["integrator"] = ("gpu" if "GPU" in m.group(1) else "wavefront"
+                                 if "wavefront" in m.group(1) else "path-tracer")
         elif m := re.match(r"- GPU: (.+)", l):
             row["gpu"] = m.group(1)
         elif m := re.match(r"- The GPU can't render this scene \((.*)\); rendering with", l):
@@ -106,7 +109,10 @@ def parse_log(path):
             row["render_s"] = "" if seconds is None else f"{seconds:.3f}"
         elif m := re.match(r"\| Rays per sec: ([0-9.]+)", l):
             row["mrays_per_s"] = f"{float(m.group(1)) / 1e6:.3f}"
-    if "gpu" in row:
+    if "integrator" in row:
+        pass
+    elif "gpu" in row:
+        # Logs before rays named its integrator.
         row["integrator"] = "gpu"
     elif any(l.startswith("- Wavefront integrator: ") for l in lines) and wavefront_refused is None:
         row["integrator"] = "wavefront"

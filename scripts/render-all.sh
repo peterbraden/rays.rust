@@ -13,9 +13,9 @@
 #   --resume     carry on from each scene's saved render state rather than starting afresh:
 #                after raising a scene's samples, only the missing ones are rendered. Only
 #                when the renderer hasn't changed since the state was saved
-#   --cpu        render on the CPU only (by default each scene is rendered with --gpu, which
-#                falls back to the wavefront integrator or the path tracer, saying why, for
-#                scenes the GPU can't take)
+#   --cpu        build without the GPU, so scenes render on the CPU (by default rays renders
+#                each scene with the first of the GPU, the wavefront integrator and the path
+#                tracer that can, saying why it passed over the others)
 #   --list       list the scenes and stop
 # Scene names (eg. `orbit spheres`) limit the run to those; by default, every scene in demo/
 # and demo/scenes/.
@@ -101,7 +101,6 @@ for scene in "${scenes[@]}"; do
     fi
     args=()
     [ $resume = 1 ] || args+=(--fresh)
-    [ $cpu = 1 ] || args+=(--gpu)
     if [ -n "$samples" ]; then
         image="$out/$name.png"
         args+=(--samples "$samples" -o "$image")
@@ -110,12 +109,11 @@ for scene in "${scenes[@]}"; do
     start=$(date +%s)
     if ./target/release/rays "$scene" "${args[@]}" > "$out/$name.log" 2>&1; then
         took=$(( $(date +%s) - start ))
-        # What rendered it: the GPU, or whichever integrator --gpu fell back to.
-        if grep -q '^- GPU: ' "$out/$name.log"; then by=gpu
-        elif grep -q '^- Wavefront integrator: ' "$out/$name.log" \
-            && ! grep -q 'rendering with the path tracer' "$out/$name.log"; then by=wavefront
-        else by=path-tracer
-        fi
+        case "$(grep -m1 '^- Integrator: ' "$out/$name.log")" in
+            *GPU*) by=gpu ;;
+            *wavefront*) by=wavefront ;;
+            *) by=path-tracer ;;
+        esac
         echo "    done in ${took}s on the $by -> $image"
         echo "$name ok ${took}s $by" >> "$summary"
         record ok

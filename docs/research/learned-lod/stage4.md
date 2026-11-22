@@ -19,7 +19,7 @@ detail, in linear light.
 | Compact, side cards full length, oriented box | 661 MiB | 365 s | 208 s | 0.0632 | −5.1% | 0.0293 |
 | The same, leaving = axis-aligned box | 666 MiB | 343 s | 230 s | 0.0531 | −3.0% | — |
 
-- **Memory.** The compact primitive brings memory back near the shipped constituents's.
+- **Memory.** The compact primitive brings memory back near the single card's.
 - **Quality** depends on the region in which a ray counts as leaving a cluster, and so meets its
   self-shadowing `A` instead of the cluster's cards.
 - **Why stage 3 looked best.** Its side cards were scaled up without a cap. That made its
@@ -27,7 +27,7 @@ detail, in linear light.
 - **The isolating test.** On the same compact cards, widening the leaving region from the
   oriented box to the axis-aligned one improved FLIP from 0.0632 to 0.0531 and brightness from
   −5% to −3%.
-- **Speed.** Every crossed-card variant renders slower than the shipped constituents, at 145–230 s against 93 s. A
+- **Speed.** Every crossed-card variant renders slower than the single card, at 145–230 s against 93 s. A
   primitive with three rectangles and a larger box costs more per ray.
 
 ## What this says
@@ -50,7 +50,7 @@ probability from outside, `T_u`, matches the leaves'.
 
 ## Where this leaves the work
 
-**Shippable now:** the coverage fix and the shipped constituents, the coverage fix and the constituents.
+**Shippable now, and in this branch:** the coverage fix and the constituents.
 - They improve brightness and FLIP from above and from the side.
 - Memory and render time go down.
 - The single card's limits remain: it is weak from the side, and it can't shadow itself.

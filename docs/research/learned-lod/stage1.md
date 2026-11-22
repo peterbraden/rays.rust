@@ -1,8 +1,8 @@
 # Stage 1: fewer, better constituents
 
 Stage 0 found where constituent memory sits and how inaccurate the 32-leaf cap was. This stage
-replaces the cap with a fitted set of representatives, in PR the shipped constituents, stacked on the card-coverage
-fix in the coverage fix. It follows the proposal's stages 1 and 4: reduced zonotopes, refitted, with a fixed
+replaces the cap with a fitted set of representatives, on this branch after the card-coverage
+fix. It follows the proposal's stages 1 and 4: reduced zonotopes, refitted, with a fixed
 budget.
 
 ## What a card keeps now

@@ -332,7 +332,7 @@ branch's history (commits `ac51d87` to `f56d824`) and written up in their notes,
       measured self-shadowing for rays leaving it. Best FLIP from both viewpoints (0.0454 from
       the air, 0.0251 from low down) but 40% more memory and twice the build: needs a compact
       crossed-card primitive.
-- [x] Compact crossed card ([stage4.md](stage4.md)): memory back near the shipped constituents's (664 MiB), but
+- [x] Compact crossed card ([stage4.md](stage4.md)): memory back near the single card's (664 MiB), but
       quality hangs on how far a ray counts as leaving a cluster; crossed cards over-shadow rays
       starting anywhere near them, since clumping reaches across a crown. Transmittance has to
       depend on distance from a ray's origin: the principled route is a non-exponential volume.

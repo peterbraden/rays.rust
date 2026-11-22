@@ -6,7 +6,7 @@ looks at the forest from low down, where an upward-facing card is seen edge on.
 ## Cards from the side
 
 The harness (`src/shapes/lod_research.rs`) now also casts rays within 17° of horizontal.
-[stage2-clusters.csv](stage2-clusters.csv) has the cards of the coverage fix and the shipped constituents. Card hits per leaf
+[stage2-clusters.csv](stage2-clusters.csv) has the cards of the coverage fix and the new constituents. Card hits per leaf
 hit, from above and from the side:
 
 | Species | L2 | L3 | L4 | L5 | L6 | L7 |

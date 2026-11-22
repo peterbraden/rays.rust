@@ -195,13 +195,16 @@ impl<F: Real> Benard<F> {
     }
 
     /// The highest cloud can be in the column at (x, z), or None if it holds none: its
-    /// cloudlet's dome at its tallest (the turrets' noise at its most), or its turret's top,
+    /// cloudlet's dome, or its turret's top at its tallest (its billows at their most),
     /// for a cloudlet reaching at least `least` (so one no smaller than the real one: what
     /// the map of tops is sampled from, `majorant_from`).
     pub fn column_top<T: Tables<F>>(&self, tables: &T, x: F, z: F, least: F) -> Option<F> {
-        let one = F::of(1);
+        let (one, two) = (F::of(1), F::of(2));
         let c = self.column(tables, x, z, least)?;
-        let dome = (one - c.t * c.t).sqrt() * c.reach.min(one).sqrt() * F::ratio(14, 10);
+        // (The dome's own turrets, as `fraction` has them: they vary across the layer, not up it.)
+        let ds = two * self.detail_size;
+        let turrets = worley_fbm(tables, self.worley, x / ds, self.base / ds, z / ds);
+        let dome = (one - c.t * c.t).sqrt() * c.reach.min(one).sqrt() * (F::ratio(6, 10) + F::ratio(8, 10) * turrets);
         let top = match self.turret(&c) {
             Some((rise, _)) => dome.max(rise * F::ratio(115, 100)),
             None => dome,

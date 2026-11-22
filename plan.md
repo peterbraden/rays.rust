@@ -2401,9 +2401,10 @@ sparse one's.
   altocumulus-undulatus 12.0 -> 8.2 s / 16.9 -> 11.5 s, benard-altocumulus 8.9 -> 8.2 s /
   13.4 -> 12.2 s; against the path tracer as before (castellanus FLIP 0.036 for 0.0375).
   The GPU's kernels take the same bound from the same record.
-- Left: the bound is loose where the layer is whole (a dome's top at its noise's most, and
-  the least reach, where the real cloudlet is lower), so a plain layer gains a tenth; a
-  map of each texel's actual highest sample would be tighter and as easily tested.
+- Then tightened: a dome's height varies across the layer, not up it, so a column's top
+  takes the dome's own noise in place of its most. A plain layer's slab is 42% above the
+  map for 26%, the test still finding no cloud over it; benard-altocumulus and
+  altocumulus-undulatus another sixth faster.
 
 ### GPU-ready by construction
 

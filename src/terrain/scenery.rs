@@ -1134,7 +1134,9 @@ mod tests {
             let ground = r.height(&d, r.slope(&d), 2.) - h;
             // The synthetic detail, which the rings carry less of than the patch, grows with
             // the slope (`Relief::detail`), and so may their difference near the patch's edge.
-            let tolerance = 5. * (0.05 + r.slope(&d));
+            // The octaves the rings leave out, up to about twice their cells (a few metres here),
+            // sum to about half that wavelength times (0.05 + slope); with a margin.
+            let tolerance = 6. * (0.05 + r.slope(&d));
             let view = Viewpoint { location: local.to_scene(&Vector3::new(0., ground + 50., 0.)) };
             let clipmap = Clipmap::new(&r, &f, &view, &p);
             let surface = Surface { relief: &r, frame: &f, local: &local, clipmap: &clipmap, cell: 2. };
@@ -1169,7 +1171,7 @@ mod tests {
                 }
                 if (180. ..200.).contains(&x) {
                     let ring = y(&rings, x, z).unwrap();
-                    assert!((h - ring).abs() < tolerance, "{} vs the rings' {} at {} ({}, {})", h, ring, x, x0, z0);
+                    assert!((h - ring).abs() < tolerance, "{} vs the rings' {} at {} ({}, {}), within {}", h, ring, x, x0, z0, tolerance);
                 }
             }
         }

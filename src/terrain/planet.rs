@@ -235,8 +235,11 @@ impl Planet {
         let g = &self.params.geology;
         let fade = geology::fade(finest, g.fold_wavelength);
         if orogeny <= 1e-3 || fade <= 0. { return (0., 0.); }
-        let across = self.trend().shortening(d);
-        let shape = geology::fold_shape(self.params.seed, &(d * self.params.radius), &across, g.fold_wavelength);
+        let trend = self.trend();
+        let across = trend.shortening(d);
+        // Leaning towards the foreland: upright at the belt's centre, where it is fanned.
+        let lean = g.fold_vergence * across.dot(&trend.foreland(d)).tanh();
+        let shape = geology::fold_shape(self.params.seed, &(d * self.params.radius), &across, g.fold_wavelength, lean);
         // Folds rise and fall along their axes over a few wavelengths: periclines.
         let plunge = smoothstep(-0.35, 0.35, self.plunges.fbm(d, self.params.radius / (5. * g.fold_wavelength), 2));
         let crest = orogeny * fade * (0.25 + 0.75 * plunge) * shape;

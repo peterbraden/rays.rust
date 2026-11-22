@@ -85,6 +85,11 @@
 //! axes the folds' amplitude rises and falls (`plunge` noise a few wavelengths long), making
 //! doubly plunging periclines.
 //!
+//! The folds lean towards the foreland (`fold_vergence`), as those of fold-thrust belts do:
+//! the steep limb of each anticline faces away from the belt's centre, which lies up the
+//! belt's strength (`Trend::foreland`, the smoothed gradient of that strength, fading to
+//! nothing at the centre, where real orogens fan out both ways; see `fold_shape`).
+//!
 //! Folding shapes the landscape three ways:
 //!
 //! 1. **Initial relief**: a share (`fold_relief`) of the structural relief is topography at
@@ -120,6 +125,9 @@ pub struct GeologyParams {
     /// How much faster anticline crests are uplifted than the belt as a whole (and synclines
     /// slower): uplift times 1 + fold_growth at a crest.
     pub fold_growth: f64,
+    /// How far folds lean towards the foreland, 0 (upright) to below 1: their steep limbs face
+    /// away from the belt's centre, by up to 1 + fold_vergence times the gentle limb's slope.
+    pub fold_vergence: f64,
     /// Gentle undulation of the strata everywhere, metres.
     pub warp_amplitude: f64,
     /// Typical thickness of the sedimentary cover over the basement, metres.
@@ -135,7 +143,7 @@ impl Default for GeologyParams {
     fn default() -> GeologyParams {
         GeologyParams {
             strata_thickness: 600., contrast: 5., fold_amplitude: 1500., fold_wavelength: 8000.,
-            fold_relief: 0.5, fold_growth: 0.5, warp_amplitude: 400., cover_thickness: 3000.,
+            fold_relief: 0.5, fold_growth: 0.5, fold_vergence: 0.6, warp_amplitude: 400., cover_thickness: 3000.,
             exhumation: 4000., plutons: 1.,
         }
     }
@@ -342,6 +350,9 @@ pub struct Trend {
     domain: Domain,
     /// The tensor's components xx, xy, xz, yy, yz, zz at the grid's corners.
     tensor: [Vec<f64>; 6],
+    /// The way to the foreland (down the belts' strength) at the corners: the smoothed
+    /// gradient, negated, over its 90th percentile.
+    foreland: [Vec<f64>; 3],
 }
 
 impl Trend {
@@ -355,7 +366,8 @@ impl Trend {
         let domain = Domain::sphere(Trend::CELLS, radius);
         let n = domain.len();
         let o: Vec<f64> = domain.dirs.par_iter().map(&orogeny).collect();
-        let mut t: Vec<[f64; 6]> = (0..n).into_par_iter().map(|i| {
+        // Per cell: the tensor's six components, then the gradient's three.
+        let mut t: Vec<[f64; 9]> = (0..n).into_par_iter().map(|i| {
             let d = domain.dirs[i];
             let links = domain.edges(i);
             let mut g = Vector3::zeros();
@@ -365,20 +377,25 @@ impl Trend {
                 g += along * (o[l.to] - o[i]) / l.dist;
             }
             if !links.is_empty() { g *= 2. / links.len() as f64; }
-            [g.x * g.x, g.x * g.y, g.x * g.z, g.y * g.y, g.y * g.z, g.z * g.z]
+            [g.x * g.x, g.x * g.y, g.x * g.z, g.y * g.y, g.y * g.z, g.z * g.z, g.x, g.y, g.z]
         }).collect();
         for _ in 0..Trend::SMOOTHING {
             t = (0..n).into_par_iter().map(|i| {
                 let links = domain.links(i);
                 let mut s = t[i];
-                for l in links { for k in 0..6 { s[k] += t[l.to][k]; } }
+                for l in links { for k in 0..9 { s[k] += t[l.to][k]; } }
                 s.map(|x| x / (1 + links.len()) as f64)
             }).collect();
         }
-        let tensor = std::array::from_fn(|k| {
-            domain.corner_cells.iter().map(|cells| cells.iter().map(|&c| t[c][k]).sum::<f64>() / cells.len() as f64).collect()
-        });
-        Trend { domain, tensor }
+        let mut sizes: Vec<f64> = t.iter().map(|c| (c[6] * c[6] + c[7] * c[7] + c[8] * c[8]).sqrt()).collect();
+        sizes.sort_by(|a, b| a.total_cmp(b));
+        let reference = sizes[sizes.len() * 9 / 10].max(1e-30);
+        let corners = |k: usize, scale: f64| -> Vec<f64> {
+            domain.corner_cells.iter().map(|cells| cells.iter().map(|&c| t[c][k]).sum::<f64>() * scale / cells.len() as f64).collect()
+        };
+        let tensor = std::array::from_fn(|k| corners(k, 1.));
+        let foreland = std::array::from_fn(|k| corners(6 + k, -1. / reference));
+        Trend { domain, tensor, foreland }
     }
 
     /// The direction of shortening at `d`: a unit vector tangent to the sphere, across the
@@ -390,6 +407,13 @@ impl Trend {
         let (a, b, cc) = (e1.dot(&(m * e1)), e1.dot(&(m * e2)), e2.dot(&(m * e2)));
         let theta = 0.5 * (2. * b).atan2(a - cc);
         e1 * theta.cos() + e2 * theta.sin()
+    }
+
+    /// The way to the foreland at `d`: tangent to the sphere, down the belts' strength, about
+    /// 1 long on a belt's flanks and shrinking to nothing at its centre (and away from belts).
+    pub fn foreland(&self, d: &Vector3<f64>) -> Vector3<f64> {
+        let v = Vector3::from_fn(|k, _| crate::terrain::scenery::sample(&self.domain, &self.foreland[k], d));
+        v - d * d.dot(&v)
     }
 }
 
@@ -464,10 +488,16 @@ pub fn phasor(seed: u64, p: &Vector3<f64>, along: &Vector3<f64>, wavelength: f64
 
 /// The folds' shape at `p`, from -1 in a trough to 1 at a crest, faded where the phase is
 /// undefined: phasor noise's waves along `along` (whose sign means nothing), as the cosine of
-/// the phase, which doesn't depend on it.
-pub fn fold_shape(seed: u64, p: &Vector3<f64>, along: &Vector3<f64>, wavelength: f64) -> f64 {
+/// the phase ψ, which doesn't depend on it.
+///
+/// `lean` (in (-1, 1)) makes them asymmetric: the phase is warped to ψ + lean (1 - cos ψ), so
+/// a crest's limb on the side `along` points to is shorter and steeper, by a factor of up to
+/// 1 + lean, for positive `lean`. The phase increases along `along` and is negated with it, so
+/// with `lean` given the sign of `along`'s component towards the foreland (as `Planet` does),
+/// the folds are the same whichever sign `along` has.
+pub fn fold_shape(seed: u64, p: &Vector3<f64>, along: &Vector3<f64>, wavelength: f64, lean: f64) -> f64 {
     let (phase, defined) = phasor(seed, p, along, wavelength);
-    defined * phase.cos()
+    defined * (phase + lean.clamp(-0.95, 0.95) * (1. - phase.cos())).cos()
 }
 
 /// How much of folds of `wavelength` a grid resolving detail of wavelength `finest` keeps: all
@@ -552,7 +582,7 @@ mod tests {
         // sinusoid would.
         let along = Vector3::new(0.6, 0.8, 0.);
         let wavelength = 1000.;
-        let wave = |p: &Vector3<f64>| fold_shape(9, p, &along, wavelength);
+        let wave = |p: &Vector3<f64>| fold_shape(9, p, &along, wavelength, 0.6);
         let step = wavelength / 1000.;
         let mut worst: f64 = 0.;
         for row in 0..40 {
@@ -575,7 +605,7 @@ mod tests {
         // times that only near the points where their phase is undefined.
         let along = Vector3::new(0., 0.8, 0.6);
         let wavelength = 8000.;
-        let wave = |p: &Vector3<f64>| fold_shape(3, p, &along, wavelength);
+        let wave = |p: &Vector3<f64>| fold_shape(3, p, &along, wavelength, 0.);
         let (h, dir) = (20., Vector3::new(0., 0.6, -0.8));
         let mut curvature: Vec<f64> = (0..60).flat_map(|row| (0..600).map(move |i| (row, i))).map(|(row, i)| {
             let p = Vector3::new(6.371e6, row as f64 * 1371., 0.) + dir * (i as f64 * 61.);
@@ -595,9 +625,34 @@ mod tests {
         for i in 0..200 {
             let p = Vector3::new(6.371e6, i as f64 * 517., i as f64 * 211.);
             let along = Vector3::new(0., (i as f64 * 0.3).cos(), (i as f64 * 0.3).sin());
-            worst = worst.max((fold_shape(4, &p, &along, 8000.) - fold_shape(4, &p, &-along, 8000.)).abs());
+            // Leaning one way, given as the direction's component towards the foreland.
+            let lean = 0.5 * (i as f64 * 0.7).sin();
+            worst = worst.max((fold_shape(4, &p, &along, 8000., lean) - fold_shape(4, &p, &-along, 8000., -lean)).abs());
         }
         assert!(worst < 1e-9, "{}", worst);
+    }
+
+    #[test]
+    fn test_leaning_folds_are_steeper_towards_the_foreland() {
+        // Along the waves, the shape falls from crest to trough over less of the way than it
+        // rises: a fraction of about 0.35 for a lean of 0.6.
+        let along = Vector3::new(0., 0., 1.);
+        let falling = |lean: f64| {
+            let (mut falls, mut total) = (0, 0);
+            for row in 0..40 {
+                let mut last = None;
+                for i in 0..2000 {
+                    let p = Vector3::new(6.371e6, row as f64 * 3000., 0.) + along * (i as f64 * 40.);
+                    let w = fold_shape(2, &p, &along, 8000., lean);
+                    if let Some(l) = last { total += 1; if w < l { falls += 1; } }
+                    last = Some(w);
+                }
+            }
+            falls as f64 / total as f64
+        };
+        let (forward, upright, back) = (falling(0.6), falling(0.), falling(-0.6));
+        assert!((upright - 0.5).abs() < 0.05, "{}", upright);
+        assert!(forward < 0.42 && back > 0.58, "{} {}", forward, back);
     }
 
     #[test]
@@ -611,6 +666,12 @@ mod tests {
             assert!(s.dot(&north).abs() > 0.95, "{:?} {:?}", d, s);
             assert!(s.dot(&d).abs() < 1e-9);
         }
+        // The foreland is away from the belt's centre on either side, and nowhere at it.
+        let north = Vector3::new(1., 0.15, 0.).normalize();
+        assert!(t.foreland(&north).y > 0.3, "{:?}", t.foreland(&north));
+        let south = Vector3::new(0., -0.15, 1.).normalize();
+        assert!(t.foreland(&south).y < -0.3, "{:?}", t.foreland(&south));
+        assert!(t.foreland(&Vector3::new(1., 0., 0.)).norm() < 0.2);
     }
 }
 

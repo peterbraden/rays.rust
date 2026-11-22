@@ -2369,6 +2369,7 @@
             {"name": "fold_wavelength", "kind": "number", "default": 8000, "doc": "Crest-to-crest spacing of the folds, m.", "min": 100},
             {"name": "fold_relief", "kind": "number", "default": 0.5, "doc": "Share of the folds' relief that is topography at time zero; ridges raised on anticlines."},
             {"name": "fold_growth", "kind": "number", "default": 0.5, "doc": "Extra uplift at anticline crests (less in synclines), as a fraction."},
+            {"name": "fold_vergence", "kind": "number", "default": 0.6, "doc": "How far folds lean towards the foreland: 0 upright, up to 0.95.", "min": -0.95, "max": 0.95},
             {"name": "warp_amplitude", "kind": "number", "default": 400, "doc": "Gentle undulation of the strata everywhere, m."},
             {"name": "cover_thickness", "kind": "number", "default": 3000, "doc": "Typical thickness of the sedimentary cover over the basement, m."},
             {"name": "exhumation", "kind": "number", "default": 4000, "doc": "How far the basement was raised in the strongest belts before time zero, m."},

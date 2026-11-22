@@ -37,7 +37,8 @@
 //!   `glacier` and `volcanoes`: `false` to disable, or overrides of `GlacierParams` and
 //!   `VolcanoParams` by field name. Geology (`geology`, docs/geology.md): `"geology"`,
 //!   overrides of `GeologyParams` by field name (`strata_thickness`, `contrast`,
-//!   `fold_amplitude`, `fold_wavelength`, `fold_relief`, `fold_growth`, `warp_amplitude`,
+//!   `fold_amplitude`, `fold_wavelength`, `fold_relief`, `fold_growth`, `fold_vergence`,
+//!   `warp_amplitude`,
 //!   `cover_thickness`, `exhumation`, `plutons`); also, at the top level, `strata_thickness`
 //!   (m), `strata_contrast` and `fold_amplitude` (m); and `sediment_erodibility`,
 //!   `lava_erodibility`, `sediment_glacial_erodibility`, `lava_glacial_erodibility`.
@@ -293,10 +294,10 @@ fn geology_params(o: &Value) -> crate::terrain::geology::GeologyParams {
     g.contrast = number(o, "strata_contrast", g.contrast);
     g.fold_amplitude = number(o, "fold_amplitude", g.fold_amplitude);
     let v = &o["geology"];
-    let fields: [(&str, &mut f64); 10] = [
+    let fields: [(&str, &mut f64); 11] = [
         ("strata_thickness", &mut g.strata_thickness), ("contrast", &mut g.contrast),
         ("fold_amplitude", &mut g.fold_amplitude), ("fold_wavelength", &mut g.fold_wavelength),
-        ("fold_relief", &mut g.fold_relief), ("fold_growth", &mut g.fold_growth),
+        ("fold_relief", &mut g.fold_relief), ("fold_growth", &mut g.fold_growth), ("fold_vergence", &mut g.fold_vergence),
         ("warp_amplitude", &mut g.warp_amplitude), ("cover_thickness", &mut g.cover_thickness),
         ("exhumation", &mut g.exhumation), ("plutons", &mut g.plutons),
     ];
@@ -304,6 +305,7 @@ fn geology_params(o: &Value) -> crate::terrain::geology::GeologyParams {
         if let Some(x) = v.get(k).and_then(|x| x.as_f64()) { *f = x; }
     }
     g.fold_wavelength = g.fold_wavelength.max(100.);
+    g.fold_vergence = g.fold_vergence.clamp(-0.95, 0.95);
     g
 }
 

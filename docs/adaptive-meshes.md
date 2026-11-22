@@ -40,13 +40,17 @@ Two kinds of geometry need two ways of being simplified:
     moment of their normals, `Σ a n nᵀ`, as of the SGGX microflake distribution (Heitz et al.,
     SIGGRAPH 2015);
   - its sides follow the principal axes of the leaves' spread over that plane, and its area is
-    what the leaves cover, overlaps counted as for leaves scattered at random over the cluster's
-    extent `R`: `R (1 - exp(-S/R))` of their projected area `S` (Beer-Lambert, as in canopy
-    models).
+    chosen so that rays hit it as often as they would the leaves: the area the leaves cover
+    together (the union of their projections, rasterised), averaged over 8 directions spread
+    over the hemisphere, divided by a flat card's mean `|n · d|` over them. An estimate of their
+    overlaps as for leaves scattered at random over the cluster (Beer-Lambert,
+    `R (1 - exp(-S/R))`) made cards too small: a leaf's own triangles never overlap, and leaves
+    on a twig spread out, so at the finer levels cards were hit a quarter less often than their
+    leaves.
 
   **Normal perturbation.** A flat card shaded with its own normal would look like a flat card;
   a crown's light and shade come from leaves facing every way. So each card keeps its leaves'
-  normals and faces (up to 32, an even sample of a larger cluster), and a ray that hits it is
+  normals and faces, and a ray that hits it is
   shaded as one of them, chosen in proportion to the area that leaf shows the ray, `a |n · d|`:
   the distribution of visible normals of microfacet theory (Heitz, "Understanding the
   Masking-Shadowing Function", JCGT 2014), whose facets are the original leaves. The face carries
@@ -54,6 +58,16 @@ Two kinds of geometry need two ways of being simplified:
   survive. Averaged over a pixel's samples, the card reflects and transmits as its leaves would.
   The choice is a hash of the ray, so it doesn't use up the sampler's dimensions and doesn't
   depend on the order objects are searched.
+
+  **What a card keeps.** A leaf's triangles with the same normal are merged into one
+  constituent (exact: the choice is by area, which adds), which halves the lists of broadleaf
+  trees. A cluster still of more than 16 keeps 16 representatives: grouped by k-means on their
+  normals' axes, each one of its group's own normals, with the face of a leaf drawn from the
+  group by area (so autumn colours stay in proportion), and their areas refitted by
+  non-negative least squares so that their projected area matches the cluster's from every
+  direction. Measured against all of a cluster's leaves, the expected shading of the leaf a hit
+  chooses is then within 1–2% at every level, where an even sample of 32 had 6–10% from the
+  fourth level on.
 
 The level is chosen per placed tree, not per ray as R-LODs do (Yoon, Lauterbach and Manocha,
 2006): every ray, from the camera, a light or a bounce, then meets the same surface, so shadows
@@ -80,11 +94,33 @@ Rendered at 600 × 350 with 64 samples per pixel, on 4 cores, against the same s
 
 At one pixel, rendering is 2.5 times faster in a sixth of the memory. The difference from full
 detail is a little above the noise between two full renders, spread evenly over the trees, with
-no seams between levels and no change of hue; but the forest is about 3% brighter (in displayed
-values, 1-2% far off, 3-4% near). The likeliest cause is what cards can't keep: a cluster's
-leaves shade one another, while its card is one sunlit layer; thin twigs that vertex clustering
-removes may add to it. Storing each card's self-shadowing, or making the coarsest levels volumes
-as Loubet and Neyret do, would be the next step.
+no seams between levels and no change of hue.
+
+The table above was made with cards sized by a random-overlap estimate. Those cards were hit a
+quarter less often than their leaves at the finer levels, and the forest came out brighter than
+in full detail. Measured in linear light, binned by depth, on another machine (600 × 350, 64 spp,
+4 cores; both images clamped at the full render's 99.9th percentile against sun-glint
+fireflies):
+
+| | Build | Render | Peak memory | Mean FLIP vs full | Brightness vs full: near / far / all |
+|---|---|---|---|---|---|
+| Full detail | 186 s | 338 s | 3.98 GB | | |
+| Cards by random overlap | 189 s | 108 s | 0.71 GB | 0.0585 | +7.4% / +2.2% / +4.6% |
+| Cards hit as often as their leaves | 208 s | 108 s | 0.70 GB | 0.0545 | −2.5% / −0.7% / −1.2% |
+
+Sizing each card by its leaves' measured coverage costs about a tenth more build time, and
+removes most of the brightening. Sky alone gave the same brightening as the sun, so it wasn't
+the self-shadowing a card can't keep, though that may account for some of what is left. What
+remains, a little darker near the camera, where levels are finest, may be the cards' coverage
+seen from grazing directions, beyond the hemisphere's average.
+
+From low down the cards fare worse. With the same forest seen from 90 m up (trees mostly side
+on, 32 spp), the old cards were 7–8% too bright at mid range and these are 3–6% too dark (mean
+FLIP 0.0313 before and 0.0296 after). Broadleaf crowns' leaves face mostly up, and so do their
+cards, so from the side a card is hit a fifth to two thirds as often as its leaves at the coarser
+levels. Crossed cards fitted to the leaves' coverage make up the hits, but darken the forest
+further: a ray leaving one of a cluster's cards meets its others, far more often than leaves
+shade one another.
 
 ## Memory
 
@@ -103,7 +139,10 @@ A ray tracer keeps every tree it may hit for the whole render, so what's kept mu
   bytes (position, turn, scale and mirroring), not a general transform per part at 368.
 
 On the forest above, these took the peak from 1.8 GB to 0.67 GB. Of what's left, about 235 MB
-is constituents, 95 MB cards and 90 MB their BVHs.
+was constituents, 95 MB cards and 90 MB their BVHs. Merging a leaf's triangles and keeping at
+most 16 representatives (above) then took the peak from 700 MiB to 618 MiB and the render from
+108 s to 93 s (600 × 350, 64 spp; the faster render from choosing among fewer), with mean FLIP
+against full detail 0.0545 before and 0.0543 after.
 
 Building is mostly placing the trees (about 50 s: 35 million darts, 10 million of them
 evaluating noise fields), not growing them (about 12 s); with `"lod"`, many more variants

@@ -6,7 +6,7 @@ looks at the forest from low down, where an upward-facing card is seen edge on.
 ## Cards from the side
 
 The harness (`src/shapes/lod_research.rs`) now also casts rays within 17° of horizontal.
-[stage2-clusters.csv](stage2-clusters.csv) has the cards of #171 and #172. Card hits per leaf
+[stage2-clusters.csv](stage2-clusters.csv) has the cards of the coverage fix and the shipped constituents. Card hits per leaf
 hit, from above and from the side:
 
 | Species | L2 | L3 | L4 | L5 | L6 | L7 |
@@ -28,7 +28,7 @@ hit, from above and from the side:
 The view is `forest-aerial` with the camera at 90 m: trees seen from the side, mostly levels
 4–7. Renders are 600 × 350 at 32 spp, compared in linear light by depth.
 
-| Depth (m) | Old cards | #171 + #172 | Crossed cards |
+| Depth (m) | Old cards | coverage fix + constituents | Crossed cards |
 |---|---|---|---|
 | 268–355 | 1.007 | 0.995 | 0.984 |
 | 355–394 | 1.083 | 0.985 | 0.856 |

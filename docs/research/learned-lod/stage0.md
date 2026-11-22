@@ -174,7 +174,7 @@ formula catches up.
 
 ## Follow-up: the fix
 
-PR #171 sizes each card so it is hit as often as its leaves. It rasterises the union of the
+the card sizing fix sizes each card so it is hit as often as its leaves. It rasterises the union of the
 leaves' projections along 8 directions spread over the hemisphere, and gives the card the same
 mean cross-section (dividing by a flat card's mean `|n·d|`). Two earlier attempts:
 

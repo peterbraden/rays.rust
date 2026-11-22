@@ -1,8 +1,8 @@
 # Stage 1: fewer, better constituents
 
 Stage 0 found where constituent memory sits and how inaccurate the 32-leaf cap was. This stage
-replaces the cap with a fitted set of representatives, in PR #172, stacked on the card-coverage
-fix in #171. It follows the proposal's stages 1 and 4: reduced zonotopes, refitted, with a fixed
+replaces the cap with a fitted set of representatives, in PR the shipped constituents, stacked on the card-coverage
+fix in the coverage fix. It follows the proposal's stages 1 and 4: reduced zonotopes, refitted, with a fixed
 budget.
 
 ## What a card keeps now
@@ -34,7 +34,7 @@ absolute error of the chosen leaf's expected response, against the full cluster:
 | 4 | 20–30 → 8–16 | 2.7–8.7% → 0.2–1.9% |
 | 5–7 | 27–32 → 13–16 | 4.9–9.8% → 0.8–2.1% |
 
-Mean bias stays under 0.5%. On `forest-aerial` (600 × 350, 64 spp), with #171's cards:
+Mean bias stays under 0.5%. On `forest-aerial` (600 × 350, 64 spp), with the coverage fix's cards:
 
 - peak memory 700 → 618 MiB;
 - render 108 → 93 s, faster because a hit chooses among fewer constituents;

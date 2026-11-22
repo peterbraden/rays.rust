@@ -39,14 +39,14 @@ compared with full detail in linear light.
 | | From the air: FLIP | Brightness, near / far / all | From low down: FLIP | Brightness at mid range |
 |---|---|---|---|---|
 | Old cards | 0.0585 | +7.4% / +2.2% / +4.6% | 0.0313 | +7% to +8% |
-| #171 + #172 (one card, sized) | 0.0543 | −2.5% / −0.7% / −1.2% | 0.0296 | −3% to −6% |
+| coverage fix + constituents (one card, sized) | 0.0543 | −2.5% / −0.7% / −1.2% | 0.0296 | −3% to −6% |
 | Crossed cards alone | 0.1001 | −19% / −9% / −13.5% | 0.0497 | −15% to −23% |
 | **Crossed cards, `T_c` by measured `A`** | **0.0454** | **−1.1% / +2.2% / +0.3%** | **0.0251** | **+1% to +5%** |
 
 Matching both transmittances gives the lowest error from both viewpoints: FLIP down 16% from the
-air and 15% from low down, against #172.
+air and 15% from low down, against the shipped single card.
 
-**What it costs** against #172, from the air:
+**What it costs** against the shipped single card, from the air:
 - peak memory 618 → 866 MiB;
 - build 200 → 387 s;
 - render 93 → 145 s.

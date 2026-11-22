@@ -213,8 +213,6 @@ fn sigma_error(set: &Set, model: &Set, dirs: &[Vector3<f64>]) -> f64 {
 struct Tally {
     clusters: usize,
     cards: usize,
-    /// Card planes made (a cluster may have up to three).
-    planes: usize,
     members: usize,
     kept: usize,
     /// Constituents left if a leaf's triangles with the same normal are merged (≤ 32).
@@ -238,8 +236,6 @@ struct Tally {
     cast: (f64, f64, f64),
     /// Σ over leaves (by area) of the fraction unshadowed toward the light by the cluster.
     lit: (f64, f64),
-    /// Σ over sampled clusters of `card`'s estimate of the light a leaf gets past the others.
-    lit_estimate: f64,
 }
 
 const MODELS: [&str; 9] = ["kept", "sggx", "z4", "z4-nnls", "z8", "z8-nnls", "card-normal", "z16-nnls", "new"];
@@ -253,10 +249,8 @@ fn measure(leaves: &[Arc<Tagged<Triangle>>], size: f64, views: &[Vector3<f64>], 
             continue;
         }
         let members: Vec<&Tagged<Triangle>> = group.iter().map(|&i| &*leaves[i]).collect();
-        let Some(the_card) = card(&members) else { continue };
-        t.lit_estimate += the_card.lit();
-        let (u, v) = (the_card.u(), the_card.v());
-        t.planes += the_card.planes().count();
+        let Some((corner, u, v)) = card(&members) else { continue };
+        let the_card = Card { corner: single(&corner), u: single(&u), v: single(&v), data: 0 };
         t.cards += 1;
         t.members += members.len();
         t.kept += members.len().min(OLD_KEPT);
@@ -442,7 +436,6 @@ fn lod_research() {
                 t.over as f64 / t.cards as f64, t.sampled, truth);
             print!("{name:22} L{level} size {size:.3} m: {} clusters, {} cards, {:.1} leaves/card ({:.1} kept, {:.0}% over 32)",
                 t.clusters, t.cards, t.members as f64 / t.cards as f64, t.kept as f64 / t.cards as f64, 100. * t.over as f64 / t.cards as f64);
-            println!("    card planes per cluster: {:.2}", t.planes as f64 / t.cards as f64);
             println!("    constituents as now kept: {:.1} per sampled card", t.new_kept as f64 / t.sampled.max(1) as f64);
             println!("    merging a leaf's triangles of one normal: {:.1} constituents per card ({} triangles a leaf)", t.merged as f64 / t.cards as f64, mesh.leaf_triangles);
             for (k, m) in MODELS.iter().enumerate() {
@@ -458,8 +451,8 @@ fn lod_research() {
                 100. * t.sigma_err[0] / s, 100. * t.sigma_err[1] / s, 100. * t.sigma_err[2] / s, 100. * t.sigma_err[3] / s);
             let nv = (t.sampled * views.len()) as f64;
             println!("    hit probability: leaves {:.3}, card {:.3} (card/leaves {:.3}); from the side card/leaves {:.3}", t.hits.0 / nv, t.hits.1 / nv, t.hits.1 / t.hits.0, t.side_hits.1 / t.side_hits.0);
-            println!("    response of the leaf hit, against the a|n·d| choice: unshadowed {:+.2}%, shadowed by its cluster {:+.2}%; lit fraction from leaves {:.3} (estimated {:.3})",
-                100. * (t.cast.1 / t.cast.0 - 1.), 100. * (t.cast.2 / t.cast.0 - 1.), t.lit.0 / t.lit.1, t.lit_estimate / t.cards as f64);
+            println!("    response of the leaf hit, against the a|n·d| choice: unshadowed {:+.2}%, shadowed by its cluster {:+.2}%; lit fraction from leaves {:.3}",
+                100. * (t.cast.1 / t.cast.0 - 1.), 100. * (t.cast.2 / t.cast.0 - 1.), t.lit.0 / t.lit.1);
             row += &format!(",{:.4},{:.4},{:.4},{:.4},{:.4},{:.4}\n", t.hits.0 / nv, t.hits.1 / nv, t.cast.0, t.cast.1, t.cast.2, t.lit.0 / t.lit.1);
             csv += &row;
         }

@@ -302,6 +302,14 @@ cards.
 
 ## Status
 
+**What the branch ships.** The renderer changes the measurements justified:
+- cards sized by their leaves' measured coverage (stage 0's fix);
+- fewer, better constituents (stage 1).
+
+It also carries the measurement harness. The crossed-card experiments of stages 2–4 are in the
+branch's history (commits `ac51d87` to `f56d824`) and written up in their notes, not in the code.
+
+
 - [x] Literature survey, five clusters (first pass from search snippets: blocked hosts).
 - [x] Full-text verification of 30 papers (second pass, paper hosts allowed); corrections folded
       in.
@@ -310,10 +318,10 @@ cards.
 - [x] Stage 0 measurements ([stage0.md](stage0.md)): the brightening is a hit-probability
       deficit, not self-shadowing; memory sits at L2–L3; compact models beat the 32-leaf sample
       at L4 and coarser.
-- [x] Fix card hit probability per card, over directions: PR #171 sizes each card by its
+- [x] Fix card hit probability per card, over directions: the card sizing fix sizes each card by its
       leaves' rasterised coverage over the hemisphere. Brightness vs full +4.6% → −1.2%, FLIP
       0.0585 → 0.0545, build about 10% longer ([stage0.md](stage0.md#follow-up-the-fix)).
-- [x] Stages 1 and 4 ([stage1.md](stage1.md), PR #172): merge a leaf's triangles exactly, and
+- [x] Stages 1 and 4 ([stage1.md](stage1.md)): merge a leaf's triangles exactly, and
       keep 16 NNLS-refitted representatives in place of a 32-leaf sample. Constituents about
       halved, error 1–2% (from 6–10%), peak 700 → 618 MiB, render −14%.
 - [x] Side views and crossed cards ([stage2.md](stage2.md)): broadleaf cards miss 34–82% of
@@ -324,7 +332,7 @@ cards.
       measured self-shadowing for rays leaving it. Best FLIP from both viewpoints (0.0454 from
       the air, 0.0251 from low down) but 40% more memory and twice the build: needs a compact
       crossed-card primitive.
-- [x] Compact crossed card ([stage4.md](stage4.md)): memory back near #172's (664 MiB), but
+- [x] Compact crossed card ([stage4.md](stage4.md)): memory back near the shipped constituents's (664 MiB), but
       quality hangs on how far a ray counts as leaving a cluster; crossed cards over-shadow rays
       starting anywhere near them, since clumping reaches across a crown. Transmittance has to
       depend on distance from a ray's origin: the principled route is a non-exponential volume.

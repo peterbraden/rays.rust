@@ -7,6 +7,7 @@ pub mod domain;
 pub mod planet;
 pub mod tectonics;
 pub mod geology;
+pub mod isostasy;
 pub mod climate;
 pub mod orographic;
 pub mod flow;

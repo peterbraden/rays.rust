@@ -2392,6 +2392,19 @@
           "doc": "Erodibility of volcanic rock by rivers relative to average bedrock."
         },
         {
+          "name": "isostasy",
+          "kind": "object",
+          "default": null,
+          "doc": "The crust rising as erosion unloads it and sinking under ice; false for none.",
+          "fields": [
+            {"name": "elastic_thickness", "kind": "number", "default": 20000, "doc": "Elastic thickness of the lithosphere, m: sets how widely loads are supported."},
+            {"name": "mantle_density", "kind": "number", "default": 3300, "doc": "Density of the mantle, kg/m³."},
+            {"name": "rock_density", "kind": "number", "default": 2700, "doc": "Density of the crust's rock, kg/m³."},
+            {"name": "ice_density", "kind": "number", "default": 917, "doc": "Density of ice, kg/m³."},
+            {"name": "relaxation", "kind": "number", "default": 4000, "doc": "The mantle's relaxation time, years."}
+          ]
+        },
+        {
           "name": "orographic",
           "kind": "object",
           "default": null,

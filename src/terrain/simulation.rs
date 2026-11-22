@@ -18,7 +18,9 @@
 //! 5. deltas: what rivers bring to the sea spreads over the sea floor (`marine`);
 //! 6. landslides where slopes are steeper than their rock holds (`fluvial::landslide`), and
 //!    hillslope diffusion (`fluvial`), faster on weak rock and sediment;
-//! 7. meandering rivers, a sub-grid model drawn over the terrain (`channel`).
+//! 7. meandering rivers, a sub-grid model drawn over the terrain (`channel`);
+//! 8. the crust's isostatic response to what erosion, deposition and ice have changed of its
+//!    load (`isostasy`): it rises as rock is taken off and sinks under ice.
 //!
 //! ## Geology
 //!
@@ -95,6 +97,9 @@ pub struct TerrainParams {
     /// The climate, from latitude (`climate`): it sets the glaciers' snowline cell by cell. None
     /// for the glaciers' own snowline by latitude.
     pub climate: Option<crate::terrain::climate::ClimateParams>,
+    /// The crust's isostatic response to erosion, deposition and ice (`isostasy`); None for
+    /// none.
+    pub isostasy: Option<crate::terrain::isostasy::IsostasyParams>,
     /// Rain made by the terrain (`orographic`), which the rivers gather and the glaciers'
     /// snow follows; None for rain everywhere the climate's (or uniform without a climate).
     pub orographic: Option<crate::terrain::orographic::OrographicParams>,
@@ -121,6 +126,7 @@ impl Default for TerrainParams {
             channels: Some(ChannelParams::default()),
             climate: None,
             orographic: Some(crate::terrain::orographic::OrographicParams::default()),
+            isostasy: Some(crate::terrain::isostasy::IsostasyParams::default()),
             sediment_erodibility: 3.,
             lava_erodibility: 0.3,
             sediment_glacial_erodibility: 3.,
@@ -163,8 +169,13 @@ pub struct Terrain {
     pub uplift: Vec<f64>,
     /// The bedrock's structure under each cell (`geology`).
     pub structure: Vec<Structure>,
-    /// How far uplift has carried each cell's rock up since time zero, metres.
+    /// How far uplift has carried each cell's rock up since time zero, metres (tectonic uplift
+    /// and isostatic rebound).
     pub exhumed: Vec<f64>,
+    /// How far the crust's isostatic response has moved each cell since time zero, metres.
+    pub rebound: Vec<f64>,
+    /// The ground at time zero, from which the load on the crust is reckoned.
+    ground0: Vec<f64>,
     /// Cells that were sea at time zero. Ground eroded below sea level later is a lake bed
     /// (eg. a glacially overdeepened basin), not sea.
     pub sea: Vec<bool>,
@@ -224,7 +235,7 @@ impl Terrain {
         let wind = crate::terrain::climate::wind(&params.climate.clone().unwrap_or_default(), centre.y.clamp(-1., 1.).asin());
         let mut t = Terrain {
             precipitation: base_precipitation.clone(), base_precipitation, wind,
-            domain, params, planet, time: 0., ela, bed, uplift, structure, exhumed: vec![0.; n], latitude, sea, vents, rivers: Rivers::default(),
+            domain, params, planet, time: 0., ela, bed, uplift, structure, exhumed: vec![0.; n], rebound: vec![0.; n], ground0: vec![], latitude, sea, vents, rivers: Rivers::default(),
             sediment: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
             ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
@@ -232,6 +243,7 @@ impl Terrain {
         // collecting in the valleys.
         let outlets = t.outlets();
         t.slide(&outlets, INITIAL_LANDSLIDE_PASSES, INITIAL_LANDSLIDE_ROUNDS);
+        t.ground0 = t.bed.clone();
         t.rain();
         let flow = t.route();
         t.drainage = flow.area;
@@ -403,6 +415,7 @@ impl Terrain {
         }
         self.receiver = flow.receiver.clone();
         self.drainage = flow.area;
+        self.compensate(&fixed, dt);
         self.time += dt;
     }
 
@@ -430,6 +443,23 @@ impl Terrain {
     /// where folding fractured it.
     pub fn critical_slope(&self, i: usize) -> f64 {
         self.rock(i).critical_slope() / (1. + 0.3 * self.structure[i].fracture)
+    }
+
+    /// Let the crust respond to the load erosion, deposition and ice have put on it or taken
+    /// off since time zero (`isostasy`), relaxing towards equilibrium over `dt` years. It moves
+    /// the rock as uplift does; base level (the sea, a patch's edge) is held.
+    fn compensate(&mut self, fixed: &[bool], dt: f64) {
+        let Some(p) = self.params.isostasy.clone() else { return };
+        let column: Vec<f64> = (0..self.domain.len()).map(|i| self.bed[i] - self.ground0[i] - self.exhumed[i]).collect();
+        let target = crate::terrain::isostasy::equilibrium(&self.domain, &column, &self.ice, &p);
+        let relax = 1. - (-dt / p.relaxation).exp();
+        for i in 0..self.domain.len() {
+            if fixed[i] { continue; }
+            let dw = (target[i] - self.rebound[i]) * relax;
+            self.bed[i] += dw;
+            self.exhumed[i] += dw;
+            self.rebound[i] += dw;
+        }
     }
 
     /// Returns the rate glaciers eroded each cell over the step, m³/yr.
@@ -488,6 +518,8 @@ pub struct Snapshot {
     /// Absent from snapshots taken before rock was carried up with the ground.
     #[serde(default)]
     exhumed: Vec<f64>,
+    #[serde(default)]
+    rebound: Vec<f64>,
     channels: Vec<crate::terrain::channel::Channel>,
     oxbows: Vec<crate::terrain::channel::Oxbow>,
     rivers_found: Option<f64>,
@@ -501,7 +533,7 @@ impl Snapshot {
     pub fn fits(&self, t: &Terrain) -> bool {
         let n = t.domain.len();
         [&self.bed, &self.sediment, &self.lava, &self.sediment_flux, &self.ice, &self.drainage, &self.sliding].iter().all(|f| f.len() == n)
-            && (self.exhumed.is_empty() || self.exhumed.len() == n) && self.sea.len() == n && self.receiver.len() == n
+            && (self.exhumed.is_empty() || self.exhumed.len() == n) && (self.rebound.is_empty() || self.rebound.len() == n) && self.sea.len() == n && self.receiver.len() == n
     }
 }
 
@@ -510,7 +542,7 @@ impl Terrain {
         Snapshot {
             time: self.time, bed: self.bed.clone(), sediment: self.sediment.clone(), lava: self.lava.clone(),
             sediment_flux: self.sediment_flux.clone(), ice: self.ice.clone(), sea: self.sea.clone(),
-            drainage: self.drainage.clone(), receiver: self.receiver.clone(), sliding: self.sliding.clone(), exhumed: self.exhumed.clone(),
+            drainage: self.drainage.clone(), receiver: self.receiver.clone(), sliding: self.sliding.clone(), exhumed: self.exhumed.clone(), rebound: self.rebound.clone(),
             channels: self.rivers.channels.clone(), oxbows: self.rivers.oxbows.clone(), rivers_found: self.rivers.found,
         }
     }
@@ -528,9 +560,10 @@ impl Terrain {
         self.drainage = s.drainage;
         self.receiver = s.receiver;
         self.sliding = s.sliding;
-        // An older snapshot: the uplift since time zero, as it would have been at sea's edge.
+        // An older snapshot: the uplift since time zero.
         self.exhumed = if s.exhumed.len() == self.domain.len() { s.exhumed }
             else { self.uplift.iter().zip(&self.sea).map(|(u, &sea)| if sea { 0. } else { u * s.time }).collect() };
+        self.rebound = if s.rebound.len() == self.domain.len() { s.rebound } else { vec![0.; self.domain.len()] };
         self.rivers.channels = s.channels;
         self.rivers.oxbows = s.oxbows;
         self.rivers.found = s.rivers_found;
@@ -644,6 +677,24 @@ mod tests {
         assert!(!fractured.is_empty() && !sound.is_empty(), "{} fractured, {} sound", fractured.len(), sound.len());
         assert!(fractured.iter().all(|&i| gain(i) > 1.3), "{:?}", fractured.iter().map(|&i| gain(i)).collect::<Vec<_>>());
         assert!(sound.iter().all(|&i| (gain(i) - 1.).abs() < 0.1));
+    }
+
+    #[test]
+    fn test_erosion_lifts_the_crust() {
+        // Without ice, the mountains erode, and the crust rises by up to ρ_rock / ρ_mantle of
+        // the rock taken off (less while the mantle is still relaxing).
+        let mut params = TerrainParams::default();
+        params.glacier = None;
+        params.step = 500.;
+        let planet = Planet::new(params.planet.clone());
+        let (lat, lon) = planet.most_mountainous(2000);
+        let mut t = Terrain::new(Domain::patch(lat, lon, 24, 1000., params.planet.radius), params);
+        t.run_to(20_000.);
+        let inner: Vec<usize> = (0..t.domain.len()).filter(|&i| !t.domain.boundary[i] && !t.sea[i]).collect();
+        let mean = |f: &dyn Fn(usize) -> f64| inner.iter().map(|&i| f(i)).sum::<f64>() / inner.len() as f64;
+        let eroded = -mean(&|i| t.bed[i] - t.ground0[i] - t.exhumed[i]);
+        let rebound = mean(&|i| t.rebound[i]);
+        assert!(eroded > 0. && rebound > 0. && rebound < eroded * 2700. / 3300., "eroded {} rebound {}", eroded, rebound);
     }
 
     #[test]

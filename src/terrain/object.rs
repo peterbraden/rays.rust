@@ -45,6 +45,9 @@
 //! - `min_river_width`: draw rivers at least this wide, metres (default 0: their modelled
 //!   widths, which may be thinner than a pixel from afar). On patches, rivers, meandering
 //!   channels and ox-bow lakes are drawn as lines at their widths (`channel`).
+//! - `isostasy`: the crust rising as erosion unloads it and sinking under ice
+//!   (`terrain::isostasy`): `false` for none, or overrides of `IsostasyParams`
+//!   (`elastic_thickness`, `mantle_density`, `rock_density`, `ice_density`, `relaxation`).
 //! - `orographic`: rain made by the terrain (`terrain::orographic`), which rivers gather and
 //!   glaciers' snow follows: `false` for the climate's rain everywhere, or overrides of
 //!   `OrographicParams` (`wind_speed`, `fallout_time`, `scale_height`, `gain_length`,
@@ -368,6 +371,23 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
             }
             if let Some(x) = v.get("cells").and_then(|x| x.as_u64()) { c.cells = x as usize; }
             Some(c)
+        }
+    };
+    // The crust's isostatic response: `false` for none, or overrides of `IsostasyParams`.
+    p.isostasy = match &o["isostasy"] {
+        Value::Bool(false) => None,
+        v => {
+            let mut x = crate::terrain::isostasy::IsostasyParams::default();
+            let fields: [(&str, &mut f64); 5] = [
+                ("elastic_thickness", &mut x.elastic_thickness), ("mantle_density", &mut x.mantle_density),
+                ("rock_density", &mut x.rock_density), ("ice_density", &mut x.ice_density), ("relaxation", &mut x.relaxation),
+            ];
+            for (k, f) in fields {
+                if let Some(n) = v.get(k).and_then(|n| n.as_f64()) { *f = n; }
+            }
+            x.relaxation = x.relaxation.max(1.);
+            x.mantle_density = x.mantle_density.max(1.);
+            Some(x)
         }
     };
     // Rain made by the terrain: `false` for none, or overrides of `OrographicParams`.

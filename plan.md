@@ -2344,6 +2344,39 @@ What would pay next, by the stage tables: the sea's march (12 us a ray: the chop
 three rounds of tile reads a step), the sky's fixed march (a quarter of the simple scenes,
 branch-free: the one stage lanes fit as it stands), and a wide BVH when the GPU wants one.
 
+### Profiling the CPU's wavefront: a second round (November 2026)
+
+By callgrind inside `Kernels::batch` on real renders (96 x 60, 2 spp; `batch` is never
+inlined, so `--toggle-collect=*Kernels*batch*` collects in it), then timed at 320 x 200,
+16 spp on four cores. What was found, and what each was worth:
+- The sea: over half its instructions were the choppy map's tile lookups, whose indices
+  wrapped by six integer divisions each (eight in the renderer's own `bilinear`). Masks, a
+  tile being a power of two across: ocean-1 6.9 -> 5.1 s by the kernels, 8.1 -> 6.5 s by
+  the path tracer, the same image.
+- A mesh's traversal: f32's `min` and `max` in the box test (a quarter of teapot-sky's
+  instructions, allowing for a NaN already ruled out), and the tests' thread-local counters
+  at every box and primitive, running in every render since the kernels became the CPU's
+  stages (now pathtrace's `stats` feature). About a tenth of demo and teapot-sky.
+- Clouds round the planet: `atan2f`, a sixth of nubis-clouds, for an angle of a sixtieth of
+  a radian. A series at f32 (`Real::small_angle`): 6.9 -> 5.4 s.
+- Not wins, though a profile said so: `floor` at f32 without the library's call (8% of
+  altocumulus's instructions; timed, slower in noise and a wash in the sea), and the sky
+  table's arcsine and arctangent found once for its two slices (the compiler had). An
+  instruction count is not a time: divisions were undercounted, the library's floor
+  overcounted. Time every change.
+- Found on the way: cloud scenes didn't render the same twice (the sky table's visibility
+  rays through the clouds drew unseeded numbers). Seeded.
+- A build for x86-64-v3 (AVX2's generation; `RUSTFLAGS="-C target-cpu=x86-64-v3"`) gives the
+  same images to the byte on all five scenes, on both CPU paths, and is faster where there
+  is arithmetic to vectorise: ocean-1 3.7 -> 2.9 s by the kernels and 4.7 -> 3.4 s by the
+  path tracer, teapot-sky and nubis-clouds a tenth, demo and altocumulus nothing. Not
+  switched on: it is a decision about which machines a binary runs on.
+What is left, by the profiles: altocumulus is half Perlin's noise, asked for at every
+tentative collision in the layer's slab though 85% of the slab is clear air: it wants local
+bounds as the Nubis layers have (a map of where a column can hold cloud), which would cut
+the evaluations several times over, on the GPU too. The simple scenes have no hot spot
+left (traversal 29%, the sky's tables 17%, shading 15%).
+
 ### GPU-ready by construction
 
 What a kernel can't hold is refused where the code is written, not when someone next builds

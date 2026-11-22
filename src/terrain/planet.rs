@@ -266,7 +266,11 @@ impl Planet {
         let strength = self.plutons.fbm(d, PLUTON_FREQUENCY, 3) + 0.35 * magma - 0.55;
         let pluton = if g.plutons > 0. { basement - 1000. + 10000. * g.plutons * strength } else { -1e5 };
         Structure {
-            fold: fold + thrust + warp, crest, fracture: folds.fracture, basement, pluton, grade: o,
+            fold: fold + thrust + warp, crest, fracture: folds.fracture,
+            oceanic: match &self.crust {
+                Some(c) => 1. - c.margin(d),
+                None => 1. - smoothstep(-0.03, 0.03, self.continent(d)),
+            }, basement, pluton, grade: o,
             beds: (0.3 * self.provinces.octave(2, d, 23.)).exp(),
             shift: 3000. * self.provinces.octave(3, d, 9.),
             schist: self.provinces.octave(1, d, 37.),

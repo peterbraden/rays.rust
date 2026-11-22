@@ -69,6 +69,10 @@ simulation began (`exhumation`), and the cover near it is metamorphosed: sandsto
 quartzite, shale to schist. Granite plutons rise into the cover as domes, mostly in the belts
 and volcanic arcs (`plutons`).
 
+Oceanic crust, where the plates' crust is oceanic (or, without plate tectonics, where the
+continents' noise is below sea level), is basalt all the way down: the sea floor and the
+volcanic islands on it.
+
 Uplift carries the rock up with the ground (`Terrain::exhumed`), so erosion that keeps pace
 with uplift cuts into older rock.
 

@@ -64,6 +64,10 @@
 //! metamorphosed, sandstone to quartzite and shale to schist (`grade`). Granite plutons rise
 //! into it as domes, mostly in the belts and volcanic arcs (`pluton`, the height of their roof).
 //!
+//! Oceanic crust is basalt throughout (`oceanic`: where the plates' crust is oceanic, or, without
+//! plate tectonics, where the continents' noise is below sea level), so the sea floor and the
+//! volcanic islands on it are basalt rather than continental basement.
+//!
 //! Rock moves with the ground: uplift carries the strata up, so erosion keeping pace with it
 //! cuts down into older rock (`Terrain::exhumed`). A point's position in the column is its
 //! *rock coordinate*, ζ = z - exhumed - fold: its elevation, less the uplift since time zero
@@ -314,6 +318,9 @@ pub struct Structure {
     pub schist: f64,
     /// How fractured the bedrock is by folding and faulting, 0 to 1 (`Fold::fracture`).
     pub fracture: f64,
+    /// How much of the crust here is oceanic, 0 to 1: where it is mostly, the bedrock is basalt
+    /// (the ocean floor, and volcanic islands on it), whatever the depth.
+    pub oceanic: f64,
 }
 
 impl Structure {
@@ -322,12 +329,12 @@ impl Structure {
     pub fn coordinate(&self, z: f64, exhumed: f64) -> f64 { z - exhumed - self.fold }
 
     /// The fields as an array, to average or interpolate.
-    pub fn to_array(&self) -> [f64; 9] {
-        [self.fold, self.crest, self.basement, self.pluton, self.grade, self.beds, self.shift, self.schist, self.fracture]
+    pub fn to_array(&self) -> [f64; 10] {
+        [self.fold, self.crest, self.basement, self.pluton, self.grade, self.beds, self.shift, self.schist, self.fracture, self.oceanic]
     }
 
-    pub fn from_array(a: [f64; 9]) -> Structure {
-        Structure { fold: a[0], crest: a[1], basement: a[2], pluton: a[3], grade: a[4], beds: a[5], shift: a[6], schist: a[7], fracture: a[8] }
+    pub fn from_array(a: [f64; 10]) -> Structure {
+        Structure { fold: a[0], crest: a[1], basement: a[2], pluton: a[3], grade: a[4], beds: a[5], shift: a[6], schist: a[7], fracture: a[8], oceanic: a[9] }
     }
 }
 
@@ -366,6 +373,7 @@ impl Column {
 
     /// The rock at rock coordinate `zeta` under a point whose structure is `s`.
     pub fn rock(&self, s: &Structure, zeta: f64) -> Rock {
+        if s.oceanic > 0.5 { return Rock::Basalt; }
         if zeta < s.pluton { return Rock::Granite; }
         if zeta < s.basement { return if s.schist > 0. { Rock::Schist } else { Rock::Gneiss }; }
         let rock = self.bed(zeta + s.shift, s.beds);
@@ -634,6 +642,9 @@ mod tests {
         let s = Structure { basement: -2000., pluton: -1e5, beds: 1., schist: -1., ..Structure::default() };
         assert_eq!(c.rock(&s, -2500.), Rock::Gneiss);
         assert_eq!(c.rock(&Structure { pluton: 0., ..s }, -10.), Rock::Granite);
+        // Oceanic crust is basalt at any depth.
+        assert_eq!(c.rock(&Structure { oceanic: 1., ..s }, -5000.), Rock::Basalt);
+        assert_eq!(c.rock(&Structure { oceanic: 1., ..s }, 100.), Rock::Basalt);
         // Deep in a strong belt the cover is metamorphosed.
         let deep = Structure { grade: 1., ..s };
         let found: Vec<Rock> = (0..40).map(|k| c.rock(&deep, -1990. + k as f64 * 20.)).collect();

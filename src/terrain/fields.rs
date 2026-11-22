@@ -34,7 +34,7 @@ pub struct SimFields {
     convexity: Vec<f64>,
     snowline: Vec<f64>,
     /// The bedrock's structure (`Structure::to_array`) and exhumation.
-    structure: [Vec<f64>; 9],
+    structure: [Vec<f64>; 10],
     exhumed: Vec<f64>,
     column: Column,
     /// The least and most of `flow` and `wetness` at the corners, to which their splines'

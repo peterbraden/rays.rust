@@ -152,6 +152,10 @@ pub(crate) fn media_records(tables: &mut Vec<f32>, media: &[crate::volume::FlatM
         tables.extend(oz);
         tables.push(m.sun_probes as u32 as f32);
     }
+    // (Every kind's loader reads from each record: `pathtrace::LAYER_HEADER_MOST`.)
+    if !media.is_empty() {
+        tables.extend(std::iter::repeat_n(0., pathtrace::LAYER_HEADER_MOST as usize));
+    }
     first
 }
 

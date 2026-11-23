@@ -3860,6 +3860,24 @@ pub fn load_cumulonimbus(tables: &[f32], base: u32) -> shared::cumulonimbus::Cum
     }
 }
 
+/// The most any kind of layer's loader reads from where its record begins, before the tables
+/// it points to: a medium loads every kind's recipe from its own record when its layer is of
+/// another kind (`load_medium`, so that one struct holds them all for rust-gpu), so the
+/// tables run on this far past the last medium's (the renderer's `kernels::media_records`).
+pub const LAYER_HEADER_MOST: u32 = most(&[NUBIS_HEADER, BENARD_HEADER, CIRRUS_HEADER, RAIN_HEADER, MAMMATUS_HEADER, CUMULONIMBUS_HEADER]);
+
+const fn most(of: &[u32]) -> u32 {
+    let mut m = 0;
+    let mut i = 0;
+    while i < of.len() {
+        if of[i] > m {
+            m = of[i];
+        }
+        i += 1;
+    }
+    m
+}
+
 /// A medium as the shared walks take one.
 pub struct KernelMedium<'a> {
     pub tables: FloatTables<'a>,

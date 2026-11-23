@@ -117,7 +117,10 @@ mod tests {
         let c = compare(&a, &a, &OutputOpts::default()).unwrap();
         assert!((c.exposure - 1.).abs() < 1e-12);
         assert_eq!(c.rmse, 0.);
-        assert!(c.flip_mean < 1e-6, "{}", c.flip_mean);
+        // (FLIP is computed in f32 by NVIDIA's C++ library, whose rounding depends on how its
+        // compiler builds it: identical images gave 1.9e-6 on CI's runners, none here. Its
+        // differences that mean anything are a hundred times that.)
+        assert!(c.flip_mean < 1e-4, "{}", c.flip_mean);
     }
 
     #[test]

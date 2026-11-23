@@ -10,6 +10,7 @@ medium and as flakes falling through the shutter (motion blur) and out of focus 
 The placements are random but seeded, so rerunning writes the same file:
 
     python3 scripts/make-christmas-tree.py
+    python3 scripts/make-christmas-tree.py --preview /tmp/preview.json  # cheap, for framing
     cargo run --release -- demo/scenes/christmas-tree.json
 """
 
@@ -19,6 +20,10 @@ import random
 import sys
 
 rng = random.Random(25)
+
+
+# Rotations are nalgebra's Euler angles, in degrees: roll about x, pitch about y (the vertical),
+# yaw about z.
 
 
 def r3(v):
@@ -112,15 +117,15 @@ def cylinder(a, b, r, mat):
 # The ground: snow lying in drifts round the clearing (behind the tree and to the sides, out
 # of the camera's way), and a few snow-covered boulders.
 add({"type": "plane", "y": 0, "material": "SNOW", "normal": {"pattern": "bumps", "amount": 0.25, "scale": 1.5}})
-for _ in range(14):
-    a = rng.uniform(-1.9, 1.9)
-    d = rng.uniform(4.5, 14)
-    w = rng.uniform(1.2, 3.5)
+for _ in range(16):
+    a = rng.uniform(-2.0, 2.0)
+    d = rng.uniform(5, 15)
+    w = rng.uniform(2, 5)
     add({"type": "transform", "item": {"type": "sphere", "location": [0, 0, 0], "radius": 1},
-         "scale": r3([w, rng.uniform(0.12, 0.3), w * rng.uniform(0.6, 1.4)]),
-         "rotate": {"yaw": round(rng.uniform(0, 180), 1)},
+         "scale": r3([w, rng.uniform(0.06, 0.16), w * rng.uniform(0.5, 1.2)]),
+         "rotate": {"pitch": round(rng.uniform(0, 180), 1)},
          "translate": r3([d * math.sin(a), -0.02, d * math.cos(a) + 2]), "material": "SNOW"})
-for i, (x, z, r) in enumerate([(-3.2, 2.5, 0.55), (-2.6, 3.4, 0.3), (4.3, 4.6, 0.5), (2.9, -1.2, 0.25)]):
+for i, (x, z, r) in enumerate([(-4.2, 3.5, 0.55), (-3.6, 4.4, 0.3), (5.5, 6.5, 0.45), (2.9, -1.6, 0.22)]):
     add({"type": "boulder", "location": [x, -0.15 * r, z], "radius": r, "angularity": 0.6, "seed": 3 + i, "material": "SNOWY_GRANITE"})
 
 # The Christmas tree.
@@ -206,7 +211,7 @@ for k in range(10):
 points.append(points[0])
 star_y = TREE_H + 0.12
 add({"type": "transform", "item": {"type": "prism", "height1": -0.015, "height2": 0.015, "points": points},
-     "rotate": {"pitch": 90}, "translate": [0, star_y, 0], "material": "STAR"})
+     "rotate": {"roll": -90}, "translate": [0, star_y, 0], "material": "STAR"})
 add(sphere([0, star_y, -0.025], 0.03, "STAR_GLOW"))
 add(cylinder([0, TREE_H - 0.15, 0], [0, star_y - 0.1, 0], 0.008, "CAP"))
 
@@ -237,13 +242,19 @@ while len(presents) < 9:
          "translate": r3([-0.03, ht + 0.03, 0]), "material": ribbon},
     ]
     for part in parts:
-        add({"type": "transform", "item": part, "rotate": {"yaw": yaw}, "translate": r3([c[0], sunk, c[2]])})
+        add({"type": "transform", "item": part, "rotate": {"pitch": yaw}, "translate": r3([c[0], sunk, c[2]])})
+
+# Young spruces at the clearing's edge, framing the tree.
+for i, (x, z, h) in enumerate([(-3.4, -2.6, 1.6), (-6.5, 4.5, 2.4), (5.2, 1.5, 1.9), (7.5, 7.5, 3.0)]):
+    add({"type": "tree", "species": "norway-spruce", "seed": 20 + i, "location": [x, 0, z],
+         "bark": "SNOWY_BARK", "leaves": ["LADEN_NEEDLE_1", "LADEN_NEEDLE_2"],
+         "params": {"scale": h, "scale_v": 0, "base_size": 0.08, "leaf_scale": 0.12}})
 
 # The dark forest round the clearing, its trees laden with snow.
 add({"type": "forest", "seed": 12, "lod": {"pixels": 1},
      "area": {"min": [-70, -30], "max": [70, 90]}, "spacing": 4.5, "clearings": 0.05,
      "patch_size": 30, "patchiness": 0.3, "variants": 8,
-     "where": "min(1, max(0, (sqrt(x * x + (z - 1) * (z - 1)) - 7) / 2)) * min(1, max(0, (sqrt(x * x + (z + 8) * (z + 8)) - 6) / 2))",
+     "where": "min(1, max(0, (sqrt(x * x + (z - 2) * (z - 2)) - 11) / 3)) * min(1, max(0, (sqrt(x * x + (z + 10) * (z + 10)) - 7) / 2))",
      "species": [
          {"species": "norway-spruce", "weight": 4, "spacing": 0.8, "bark": "SNOWY_BARK", "leaves": ["LADEN_NEEDLE_1", "LADEN_NEEDLE_2"]},
          {"species": "balsam-fir", "weight": 3, "spacing": 0.7, "bark": "SNOWY_BARK", "leaves": ["LADEN_NEEDLE_1", "LADEN_NEEDLE_2"]},
@@ -259,7 +270,7 @@ add({"type": "precipitation", "kind": "snow", "base": 40, "ground": 0, "rain_rat
      "albedo": [0.995, 0.995, 0.995], "g": 0.75})
 
 # Snowflakes falling while the shutter is open, near the camera, many out of focus.
-camera = {"location": [0.35, 1.3, -5.6], "lookat": [0, 1.6, 0], "up": [0, 1, 0], "angle": 0.62,
+camera = {"location": [-0.6, 1.35, -6.4], "lookat": [0.55, 1.75, 0], "up": [0, 1, 0], "angle": 0.62,
           "aperture": 0.035}
 loc = camera["location"]
 look = camera["lookat"]
@@ -274,14 +285,15 @@ if up[1] < 0:
     up = [-x for x in up]
 WIDTH, HEIGHT = 960, 600
 half = math.tan(camera["angle"] / 2) * 1.15
-for _ in range(1000):
-    depth = 0.6 + 14 * rng.random() ** 1.6
+for _ in range(500):
+    # Most near the lens, out of focus; a few further off, small, so as not to veil the tree.
+    depth = 0.5 + 3 * rng.random() if rng.random() < 0.6 else 3.5 + 12 * rng.random()
     sx = rng.uniform(-half, half)
     sy = rng.uniform(-half, half) * HEIGHT / WIDTH
     p = [loc[i] + depth * (fwd[i] + sx * right[i] + sy * up[i]) for i in range(3)]
     if p[1] < 0.05:
         continue
-    radius = rng.uniform(0.004, 0.011)
+    radius = rng.uniform(0.004, 0.009) if depth < 3.5 else rng.uniform(0.003, 0.006)
     fall = rng.uniform(0.04, 0.08)
     drift = [rng.uniform(-0.02, 0.03), -fall, rng.uniform(-0.01, 0.01)]
     end = [p[i] + drift[i] for i in range(3)]
@@ -308,7 +320,26 @@ scene = {
     "objects": objects,
 }
 
-out = sys.argv[1] if len(sys.argv) > 1 else "demo/scenes/christmas-tree.json"
+# A preview for working on the composition: the same objects, cheaply lit. The bulbs and the
+# star are plain bright paint, lit by one point light high behind the camera and a grey sky; no fog, no falling
+# snow as a medium, no motion blur, RGB, shallow paths.
+args = [a for a in sys.argv[1:] if a != "--preview"]
+if "--preview" in sys.argv[1:]:
+    for name, m in materials.items():
+        if m["type"] == "diffuse-light":
+            colour = m.get("color", [1, 0.75, 0.4])
+            materials[name] = {"type": "lambertian", "albedo": [0.9 * c for c in colour]}
+    objects = [o for o in objects if o["type"] not in ("volume", "precipitation")]
+    for o in objects:
+        o.pop("motion", None)
+    scene.update({"objects": objects, "spectral": False, "light_sampler": "uniform", "max_depth": 3,
+                  "supersamples": 16, "adaptive": {"threshold": 0}, "shutter": [0, 0],
+                  "background": [0.25, 0.27, 0.32], "output": {"exposure": 1.0, "tonemap": "filmic"},
+                  # A key light high over the clearing, cheap to sample.
+                  "lights": [{"location": [2, 30, -4], "intensity": 3000}]})
+    for k in ("light_sampler", "shutter"):
+        scene.pop(k)
+out = args[0] if args else "demo/scenes/christmas-tree.json"
 with open(out, "w") as f:
     # One object a line, so the file stays readable and diffs stay small.
     f.write("{\n")

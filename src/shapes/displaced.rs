@@ -282,6 +282,36 @@ fn slab(b: &BBox, ro: &Vector3<f64>, inv: &Vector3<f64>, t0: f64, t1: f64) -> Op
     Some(near)
 }
 
+/// Conservative bounds of cell (`ix`, `iz`) of `grid` displaced by `range` (along the base's
+/// normal, or straight up if `vertical`), lifted by `up` and moved by `aside` along x, y, z.
+fn cell_bound(grid: &HeightGrid, ix: usize, iz: usize, range: (f64, f64), up: (f64, f64), aside: &[(f64, f64); 3], vertical: bool) -> BBox {
+    let cell = grid.cell;
+    let reach = range.0.abs().max(range.1.abs());
+    let (lo, hi) = grid.smooth_range(ix, iz);
+    let (x0, z0) = (grid.min.0 + ix as f64 * cell, grid.min.1 + iz as f64 * cell);
+    let (min, max) = if vertical {
+        (Vector3::new(x0, lo + range.0, z0), Vector3::new(x0 + cell, hi + range.1, z0 + cell))
+    } else {
+        // Moved along the base's normal, (-hx, 1, -hz) normalised: sideways by at most reach
+        // times |hx| / sqrt(1 + hx^2) (and so in z), and up or down by the displacement times
+        // a y component between 1 and 1 / sqrt(1 + hx^2 + hz^2). On gentle ground that keeps
+        // the bounds to a little more than the cell, so rays dice only cells they come near.
+        let (sx, sz) = grid.smooth_slope_bounds(ix, iz);
+        let side = |s: f64| reach * (s / (1. + s * s).sqrt()).min(1.);
+        let (rx, rz) = (side(sx), side(sz));
+        let ny = 1. / (1. + sx * sx + sz * sz).sqrt();
+        let down = if range.0 < 0. { range.0 } else { range.0 * ny };
+        let rise = if range.1 > 0. { range.1 } else { range.1 * ny };
+        (Vector3::new(x0 - rx, lo + down, z0 - rz), Vector3::new(x0 + cell + rx, hi + rise, z0 + cell + rz))
+    };
+    let (min, max) = (min + Vector3::y() * up.0.min(0.), max + Vector3::y() * up.1.max(0.));
+    let (min, max) = (min + Vector3::new(aside[0].0.min(0.), aside[1].0.min(0.), aside[2].0.min(0.)),
+        max + Vector3::new(aside[0].1.max(0.), aside[1].1.max(0.), aside[2].1.max(0.)));
+    // Room for rounding.
+    let pad = Vector3::repeat(1e-9 * (1. + min.abs().max().max(max.abs().max())));
+    BBox::new(min - pad, max + pad)
+}
+
 impl DisplacedTerrain {
     pub fn new(grid: Arc<HeightGrid>, graph: Graph, vertical: bool, detail: &Detail) -> Result<DisplacedTerrain, String> {
         DisplacedTerrain::with_lift(grid, graph, vertical, None, 0., detail)
@@ -334,33 +364,8 @@ impl DisplacedTerrain {
         }
         let reach = range.0.abs().max(range.1.abs());
         let (nx, nz, cell) = (grid.nx, grid.nz, grid.cell);
-        let cell_bounds: Vec<BBox> = (0 .. nx * nz).into_par_iter().map(|k| {
-            let (ix, iz) = (k % nx, k / nx);
-            let (lo, hi) = grid.smooth_range(ix, iz);
-            let (x0, z0) = (grid.min.0 + ix as f64 * cell, grid.min.1 + iz as f64 * cell);
-            let (min, max) = if vertical {
-                (Vector3::new(x0, lo + range.0, z0), Vector3::new(x0 + cell, hi + range.1, z0 + cell))
-            } else {
-                // Moved along the base's normal, (-hx, 1, -hz) normalised: sideways by at most
-                // reach times |hx| / sqrt(1 + hx^2) (and so in z), and up or down by the
-                // displacement times a y component between 1 and 1 / sqrt(1 + hx^2 + hz^2). On
-                // gentle ground that keeps the bounds to a little more than the cell, so rays
-                // dice only cells they come near.
-                let (sx, sz) = grid.smooth_slope_bounds(ix, iz);
-                let side = |s: f64| reach * (s / (1. + s * s).sqrt()).min(1.);
-                let (rx, rz) = (side(sx), side(sz));
-                let ny = 1. / (1. + sx * sx + sz * sz).sqrt();
-                let down = if range.0 < 0. { range.0 } else { range.0 * ny };
-                let rise = if range.1 > 0. { range.1 } else { range.1 * ny };
-                (Vector3::new(x0 - rx, lo + down, z0 - rz), Vector3::new(x0 + cell + rx, hi + rise, z0 + cell + rz))
-            };
-            let (min, max) = (min + Vector3::y() * up.0.min(0.), max + Vector3::y() * up.1.max(0.));
-            let (min, max) = (min + Vector3::new(aside[0].0.min(0.), aside[1].0.min(0.), aside[2].0.min(0.)),
-                max + Vector3::new(aside[0].1.max(0.), aside[1].1.max(0.), aside[2].1.max(0.)));
-            // Room for rounding.
-            let pad = Vector3::repeat(1e-9 * (1. + min.abs().max().max(max.abs().max())));
-            BBox::new(min - pad, max + pad)
-        }).collect();
+        let cell_bounds: Vec<BBox> = (0 .. nx * nz).into_par_iter()
+            .map(|k| cell_bound(&grid, k % nx, k / nx, range, up, &aside, vertical)).collect();
         // Dice no finer than half the finest detail, or an eighth of a cell, so the smooth base
         // itself looks smooth.
         // A steep cell's surface is longer than the cell is wide: on a cliff, a 1.5 m cell may
@@ -464,6 +469,48 @@ impl DisplacedTerrain {
     /// `altitude`).
     pub fn with_fields(mut self, fields: Arc<dyn crate::graph::Fields>) -> DisplacedTerrain {
         self.fields = Some(fields);
+        self
+    }
+
+    /// Bound each cell by what its displacement can be there (`Graph::range_near`, at the
+    /// cell's centre with the fields and placement it has now, for its steepest base), rather
+    /// than by the displacement's whole range, and rebuild the hierarchy over them. Only where
+    /// the displacement is a graph that knows its local bounds (the landscape's own detail):
+    /// sand varies by centimetres where granite does by metres, and a ray grazing the ground
+    /// dices only the cells it comes near. Cells along a nested terrain's edge keep their
+    /// bounds, which allow for the outer's points.
+    pub fn tighten(mut self) -> DisplacedTerrain {
+        use rayon::prelude::*;
+        if self.lift.is_some() || self.sideways.graphs().next().is_some() { return self; }
+        let g = self.grid.clone();
+        let (nx, nz) = (g.nx, g.nz);
+        let toward_zero = |r: (f64, f64)| if self.falloff > 0. { (r.0.min(0.), r.1.max(0.)) } else { r };
+        let aside = [(0., 0.); 3];
+        let tightened: Vec<BBox> = (0 .. nx * nz).into_par_iter().map(|k| {
+            let (ix, iz) = (k % nx, k / nx);
+            if self.outer.is_some() && (ix == 0 || iz == 0 || ix == nx - 1 || iz == nz - 1) { return self.cell_bounds[k]; }
+            let (x, z) = (g.min.0 + (ix as f64 + 0.5) * g.cell, g.min.1 + (iz as f64 + 0.5) * g.cell);
+            let (y, hx, hz) = g.smooth(x, z);
+            let base = Vector3::new(x, y, z);
+            let normal = Vector3::new(-hx, 1., -hz).normalize();
+            let c = match &self.place {
+                Some((origin, axes)) => Context::new(origin + axes * base, axes * normal, g.cell),
+                None => Context::new(base, normal, g.cell),
+            }.with_fields(self.fields.as_deref());
+            let (sx, sz) = g.smooth_slope_bounds(ix, iz);
+            let steepest = sx.hypot(sz).atan().to_degrees() + 5.;
+            let r = self.graph.range_near(&c, steepest);
+            let r = (r.0.max(self.range.0), r.1.min(self.range.1));
+            cell_bound(&g, ix, iz, toward_zero(r), (0., 0.), &aside, self.vertical)
+        }).collect();
+        let hole = self.hole;
+        let in_hole = |ix: usize, iz: usize| hole.is_some_and(|(x0, x1, z0, z1)| ix >= x0 && ix < x1 && iz >= z0 && iz < z1);
+        let (bvh, cells) = Bvh::build((0 .. (nx * nz) as u32).filter(|&k| !in_hole(k as usize % nx, k as usize / nx)).collect(),
+            |&k| tightened[k as usize]);
+        self.bounds = bvh.bounds();
+        self.bvh = bvh;
+        self.cells = cells;
+        self.cell_bounds = tightened;
         self
     }
 
@@ -1027,6 +1074,49 @@ mod tests {
         assert!(sideways > 0.3, "{}", sideways);
         let flat = t.cell_bounds[0];
         assert!(flat.max.x - flat.min.x < 1. + 0.8, "{:?}", flat);
+    }
+
+    /// Sand on the west, bare granite on the east, rising into a cliff between.
+    struct SandAndGranite;
+
+    impl crate::graph::Fields for SandAndGranite {
+        fn field(&self, f: crate::graph::Field, p: &Vector3<f64>) -> Option<f64> {
+            use crate::graph::Field;
+            use crate::terrain::geology::Rock;
+            let sandy = p.x < 0.;
+            Some(match f {
+                Field::Sediment => if sandy { 10. } else { 0. },
+                Field::Sand => if sandy { 10. } else { 0. },
+                Field::Rock => if sandy { 0. } else { Rock::Granite.index() as f64 },
+                Field::Hardness => if sandy { 0. } else { -Rock::Granite.scores().0 },
+                _ => 0.,
+            })
+        }
+    }
+
+    /// The landscape's own detail bounds each cell by the ground there: thinly on sand, more
+    /// on rock, and every diced vertex stays within its cell's bounds.
+    #[test]
+    fn test_tightened_cells_hold_the_ground_detail() {
+        let n = 8;
+        let heights = (0 .. (n + 1) * (n + 1)).map(|k| {
+            let i = (k % (n + 1)) as f64;
+            6. / (1. + (-(i - 6.) * 2.).exp())
+        }).collect();
+        let grid = Arc::new(HeightGrid::from_heights((-4., -4.), 1., n, n, heights));
+        let g = Graph::parse(&json!({"node": "ground", "seed": 2})).unwrap();
+        let t = DisplacedTerrain::new(grid, g, false, &Detail { level: 5, ..Default::default() }).unwrap()
+            .with_fields(Arc::new(SandAndGranite)).tighten();
+        let height = |k: usize| t.cell_bounds[k].max.y - t.cell_bounds[k].min.y;
+        // A sand cell's bounds are a fraction of the ±4 m reach; a granite cell's aren't.
+        assert!(height(2 * n + 1) < 1.5, "sand {}", height(2 * n + 1));
+        assert!(height(2 * n + 6) > 3., "granite {}", height(2 * n + 6));
+        for k in 0 .. n * n {
+            let b = t.cell_bounds[k];
+            for p in &t.dice(k, false).pos {
+                assert!((0 .. 3).all(|a| p[a] >= b.min[a] && p[a] <= b.max[a]), "cell {}: {:?} outside {:?}", k, p, b);
+            }
+        }
     }
 
     /// Cells outside the camera's view are diced coarser than those in it, at the same distance.

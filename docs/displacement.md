@@ -38,6 +38,7 @@ reuse it as `"$name"`.
 | `cells` | Worley noise: `style` `f1`, `edges` (cracks between cells) or `stones` (a rounded stone per cell) |
 | `talus` | Fallen blocks and scree (`src/talus.rs`): angular polyhedra in layers from `largest` to `smallest` metres, many small to few large by a power law (`exponent`), sorted down the slope by `position` (0 at the toe, 1 at the apex; big blocks roll to the toe); `output` `height`, `mask` or `id` |
 | `strata` | Ledges: beds `step` metres thick, each ending in a riser; `breakup` makes them waver |
+| `ground` | A landscape's own detail from what its simulation left at each point (`terrain::detail`): ledges of hard beds and each rock's texture on bare rock, stones on scree, hummocks and boulders on till, swales on alluvium, smooth sand, cracked playas, smooth ice; `seed`, `amplitude` (1). Bounds each displaced cell by the ground there (`DisplacedTerrain::tighten`). A full-scale landscape uses it by default near the ground |
 | `cross_beds` | A `rock` material's festoon cross-bedding as relief (its `seed`, `scale` and `cross_set` as `set`; `amplitude`), so the laminae its colour shows stand out as ribs; filtered by the narrow laminae, a fortieth of a set (`rock::LAMINA_FINEST`: nine in ten crossed along any line are wider), not their spacing along the foresets |
 | `slope`, `altitude` | Masks from 0 to 1 between `from` and `to` (degrees, metres), with a fractal `breakup`; falling instead where `to` is below `from` |
 | `aspect` | How squarely the surface faces `direction` (default north, `[0, 0, -1]`), as a mask |
@@ -207,6 +208,21 @@ ground, more for wide aerial views.
 `alpine-layers.json`: ribs of rock on the steep ground, stones on the scree. The landscape
 prints how high the camera is above the ground under it, which helps place one: away from the
 scene's origin, the planet's curve lowers the ground (about 20 m at 16 km).
+
+### Procedural by default
+
+A full-scale landscape whose camera is within 2 km of the ground displaces it with its own
+detail unless the scene says otherwise (a graph of its own, or `"displacement": false`): a
+`ground` node, out to 40 times the camera's height (500 m to 4 km), on nested grids whose
+finest spacing is about a hundredth of it (a power of two from 6 cm to 2 m). The detail
+follows the simulation (`terrain::detail`): where it left bare rock, hard beds stand out as
+ledges at their own heights and soft ones are cut back, and the rock has its own texture
+(granite's blocks, sandstone's joints, limestone's flutes, basalt's columns); scree is stony,
+till hummocky with boulders, alluvium gently swaled, sand smooth, playas cracked, glaciers
+smooth. Each cell of the displaced grids is bounded by the detail the fields there allow
+(`Graph::range_near`, `DisplacedTerrain::tighten`), so rays grazing sand or alluvium dice
+only the cells they touch: a camera standing in a desert basin rendered 13 times faster than
+with the detail's whole range.
 
 ## In the desert scenes
 

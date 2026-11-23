@@ -717,6 +717,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     let (foot, height) = frame.on_planet(&view.location);
     let ground = relief.height(&foot, relief.slope(&foot), 1.);
     say(format!("Landscape: the camera is {:.1} m above the ground under it ({:.1} m above sea level)", height - ground, ground));
+    let (o, displacement) = &procedural_displacement(o, height - ground, params.planet.seed);
     if let (Some(path), Some(c)) = (o["climate_map"].as_str(), &climate) { crate::terrain::map::write_climate_map(&planet, c, path, 2048); }
     // Built first, so the displacement's graphs can read its fields.
     let ground = Arc::new(Ground::new(layers, climate, params.glacier.clone().unwrap_or_default(), time, params.planet.seed, frame.clone(), &p));
@@ -724,7 +725,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
         let half = description.levels.first().map_or(32e3, |l| l.cells as f64 * l.spacing / 2.);
         write_cover_map(&ground, &relief, &frame, half, path, 1024);
     }
-    let patches = o.get("displacement").map(|d| displaced_patches(o, d, &relief, &frame, &view, &p, ground.clone()));
+    let patches = displacement.as_ref().map(|d| displaced_patches(o, d, &relief, &frame, &view, &p, ground.clone()));
     let mesh = scenery::mesh(&relief, &frame, &view, &p, patches.as_ref().map(|(h, _)| h));
     let geometry: Box<dyn Geometry + Send + Sync> = match patches {
         Some((_, terrains)) => {
@@ -736,6 +737,36 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     };
     say(format!("Landscape: {} triangles in {:.1?}", geometry.primitives(), start.elapsed()));
     SceneObject { geometry, medium: Box::new(LandscapeMedium::with_ground(ground, material)) }
+}
+
+/// Cameras higher than this above the ground, metres, see no detail worth displacing: from
+/// there a pixel covers more than the ground's own detail (`terrain::detail`) within the reach.
+const DISPLACEMENT_HEIGHT: f64 = 2000.;
+
+/// A full-scale landscape's displacement: the scene's graph (`"displacement"`), none if it is
+/// `false`, or the landscape's own detail (`terrain::detail`, a `ground` node) if it is `true`
+/// or `"ground"`, or if it isn't given and the camera is `height` metres above the ground,
+/// within `DISPLACEMENT_HEIGHT`. For the landscape's own, the reach and the finest spacing,
+/// unless the scene gives them, follow the camera's height: 40 times its height out, from 500 m
+/// to 4 km, and about a hundredth of it, from 6 cm to 2 m. Returns the object with those settings,
+/// and the graph.
+fn procedural_displacement(o: &Value, height: f64, seed: u64) -> (Value, Option<Value>) {
+    let own = || serde_json::json!({"node": "ground", "seed": seed});
+    let graph = match o.get("displacement") {
+        Some(Value::Bool(false)) => return (o.clone(), None),
+        Some(Value::Bool(true)) => own(),
+        Some(Value::String(s)) if s == "ground" => own(),
+        Some(g) => return (o.clone(), Some(g.clone())),
+        None if height.abs() <= DISPLACEMENT_HEIGHT => own(),
+        None => return (o.clone(), None),
+    };
+    let mut o = o.clone();
+    let height = height.abs().max(1.);
+    if o.get("displacement_reach").is_none() { o["displacement_reach"] = (40. * height).clamp(500., 4000.).into(); }
+    // A power of two, so the nested grids' cells, each twice the last, lie exactly on each
+    // other's.
+    if o.get("displacement_spacing").is_none() { o["displacement_spacing"] = 2f64.powf((height / 100.).clamp(1. / 16., 2.).log2().round()).into(); }
+    (o, Some(graph))
 }
 
 /// Write the ground cover's albedo (`Ground::albedo`), seen from straight above, over `half`
@@ -858,7 +889,8 @@ fn displaced_patches(o: &Value, d: &Value, relief: &Relief, frame: &Frame, view:
         let terrain = DisplacedTerrain::of(grid.clone(), displacement, inner, nest)
             .unwrap_or_else(|e| panic!("{}", e))
             .placed(local.origin, local.axes)
-            .with_fields(ground.clone());
+            .with_fields(ground.clone())
+            .tighten();
         let terrain = Arc::new(terrain);
         parts.push(Box::new(crate::shapes::transform::Transform::new(terrain.clone() as Arc<dyn Geometry + Sync + Send>, placement)));
         if k == n - 1 {

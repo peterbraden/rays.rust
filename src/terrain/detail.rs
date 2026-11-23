@@ -1,0 +1,225 @@
+//! # The ground's own detail, below the simulation's cells
+//!
+//! A landscape's simulation stops at its finest cells, tens to hundreds of metres across; the
+//! clipmap adds noise below that, the same everywhere. What the ground looks like within a few
+//! metres depends on what it is, and the simulation knows that at every point: which rock is
+//! exposed at the point's own height and how hard it is, how much sediment lies on it and of
+//! what kind (alluvium, till, sand, a playa's lake beds), whether ice covers it, how steep it
+//! is. `ground` turns that into relief, metres outwards from the surface, for a landscape's
+//! displacement near the camera (`graph`'s `ground` node; `object::full_scale_landscape` uses
+//! it unless the scene gives a graph of its own), so that close up the ground follows the
+//! geology without a scene placing anything by hand:
+//!
+//! - **Bare rock** (thin sediment, or slopes too steep to hold it) weathers by what it is.
+//!   Hard beds stand out as ledges and soft ones are cut back between them (differential
+//!   weathering, as on every cliff of bedded rock), and since the rock is the one at each
+//!   point's height, the ledges follow the beds across the slopes. And each rock has its own
+//!   texture: granite in rounded blocks and domes (sheeting and spheroidal weathering), gneiss
+//!   and schist in ribs along their foliation, sandstone and quartzite in blocks cut by joints,
+//!   limestone fluted by solution (karren), shale finely crumbled, basalt in columns. Steeper
+//!   faces show more of it.
+//! - **Scree**, sediment on steep slopes below the cliffs: a slope of stones.
+//! - **Till and moraines**: hummocky ground scattered with boulders, unsorted.
+//! - **Alluvium** on gentle ground: low swales and bars, fine gravel.
+//! - **Sand**: smooth, drifted over the ground beneath (dunes are drawn larger, `scenery`).
+//! - **Playas**: flat lake beds, cracked into polygons.
+//! - **Glacier ice**: smooth, gently undulating.
+//!
+//! Each is blended by how much of it the fields say is there, so the ground changes as
+//! gradually as the simulation does, and detail finer than the context's filter (the spacing
+//! the surface is diced to) is left out, so it doesn't alias.
+
+use crate::graph::{cells, fractal, CellStyle, Context, Field, FractalStyle};
+use crate::noise::SeededNoise;
+use crate::terrain::geology::Rock;
+
+/// The most the detail raises or lowers the ground, metres, times its `amplitude`: a bound for
+/// the displaced surface's bounding boxes.
+pub const REACH: f64 = 4.;
+
+/// How much of each kind of ground there is at a point.
+struct Kinds { ice: f64, bare: f64, scree: f64, glacial: f64, alluvium: f64, blown: f64, pan: f64 }
+
+impl Kinds {
+    fn at(c: &Context, f: &dyn crate::graph::Fields, slope: f64) -> Kinds {
+        let field = |x: Field| f.field(x, &c.p).unwrap_or(0.);
+        let steep = |from: f64, to: f64| smoothstep(from, to, slope);
+        let ice = smoothstep(1., 5., field(Field::Ice));
+        let sediment = field(Field::Sediment);
+        // Rock shows through thin sediment, and on slopes too steep to hold any.
+        let bare = (1. - smoothstep(0.1, 1.5, sediment)).max(steep(38., 50.));
+        let glacial = smoothstep(1., 4., field(Field::Till)) * smoothstep(0.5, 2., sediment);
+        let blown = smoothstep(0.5, 3., field(Field::Sand));
+        let pan = field(Field::Playa).clamp(0., 1.);
+        let scree = steep(22., 32.) * (1. - glacial) * (1. - blown);
+        let alluvium = ((1. - glacial) * (1. - blown) * (1. - pan) - scree).max(0.);
+        Kinds { ice, bare, scree, glacial, alluvium, blown, pan }
+    }
+}
+
+/// A bound on the ground's detail near `c`, metres either way, for ground no steeper than
+/// `slope` degrees, whatever rock it is (a cliff crosses many beds): what `ground` gives within
+/// a few metres of `c`, where the fields barely change, with a margin; for bounding a displaced
+/// surface's cells more tightly than `REACH` does (sand varies by centimetres, granite by
+/// metres).
+pub fn bound(c: &Context, slope: f64, amplitude: f64) -> f64 {
+    let Some(f) = c.fields else { return 0. };
+    let k = Kinds::at(c, f, slope);
+    // The most each kind gives (ledges and granite's blocks for rock).
+    let rock = 0.7 * 1.5 + 1.2 + 1.0 * 0.6;
+    let loose = k.scree * 0.5 + k.glacial * (1.5 + 0.9) + k.alluvium * 0.34 + k.blown * 0.15 + k.pan * 0.05;
+    let h = (k.bare * rock + (1. - k.bare) * loose).min(REACH);
+    amplitude.abs() * ((1. - k.ice) * h + k.ice * 0.4) * 1.25 + 0.02
+}
+
+/// The ground's detail at `c` (see the module docs), metres outwards, times `amplitude`.
+/// `noise` and `seed` vary it. Without fields (not on a landscape), nothing.
+pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f64 {
+    let Some(f) = c.fields else { return 0. };
+    let field = |x: Field| f.field(x, &c.p).unwrap_or(0.);
+    let slope = c.slope();
+    let steep = |from: f64, to: f64| smoothstep(from, to, slope);
+    // How much of each detail survives the filter: all of it for features four times the
+    // filter, none below twice.
+    let keep = |size: f64| if c.filter > 0. { smoothstep(2. * c.filter, 4. * c.filter, size) } else { 1. };
+    let fbm = |style: FractalStyle, scale: f64, smallest: f64, roughness: f64| {
+        if keep(scale) <= 0. { return 0. }
+        let v = fractal(noise, style, scale, smallest, roughness, 2., false, c);
+        // Ridged and billowed noise centred on zero.
+        match style { FractalStyle::Perlin => v, _ => v - 0.4 }
+    };
+    let stones = |style: CellStyle, scale: f64, salt: u32| {
+        let k = keep(scale);
+        if k <= 0. { 0. } else { k * cells(seed ^ salt, style, scale, false, c) }
+    };
+
+    let Kinds { ice, bare, scree, glacial, alluvium, blown, pan } = Kinds::at(c, f, slope);
+    let glacier = 0.4 * fbm(FractalStyle::Perlin, 30., 2., 0.5);
+    if ice >= 1. {
+        return amplitude * glacier;
+    }
+    let mut h = 0.;
+
+    if bare > 0. {
+        let rock = f.field(Field::Rock, &c.p).map(|r| Rock::ALL[(r.round() as usize).min(Rock::ALL.len() - 1)]).unwrap_or(Rock::Sediment);
+        let hardness = field(Field::Hardness);
+        // Faces show more of their rock than level ground does.
+        let face = 0.4 + 0.6 * steep(20., 55.);
+        // Ledges of hard beds, recesses of soft, on slopes: the rock is the one at each
+        // point's height, so they follow the beds.
+        let ledges = 0.7 * hardness.clamp(-1.5, 1.5) * steep(25., 50.);
+        let texture = match rock {
+            // Rounded blocks and domes.
+            Rock::Granite => 1.2 * stones(CellStyle::Stones, 4., 0x61) + 1.0 * fbm(FractalStyle::Billow, 18., 0.5, 0.5),
+            // Ribs along the foliation, and crumbling between.
+            Rock::Gneiss => 0.8 * fbm(FractalStyle::Ridged, 5., 0.1, 0.55),
+            Rock::Schist => 0.6 * fbm(FractalStyle::Ridged, 3., 0.05, 0.6),
+            // Blocks bounded by joints: the joints are grooves.
+            Rock::Sandstone | Rock::Quartzite => {
+                -0.5 * (1. - smoothstep(0., 0.12, stones(CellStyle::Edges, 3., 0x71))) + 0.3 * fbm(FractalStyle::Perlin, 6., 0.1, 0.5)
+            }
+            // Solution flutes and pits.
+            Rock::Limestone => 0.5 * fbm(FractalStyle::Ridged, 1.5, 0.03, 0.6) - 0.3 * stones(CellStyle::Stones, 2.5, 0x81),
+            // Fine crumbling.
+            Rock::Shale => 0.25 * fbm(FractalStyle::Perlin, 1., 0.03, 0.6),
+            // Columns: their tops cells, their joints grooves.
+            Rock::Basalt => 0.4 * stones(CellStyle::F1, 0.8, 0x91) - 0.3 * (1. - smoothstep(0., 0.1, stones(CellStyle::Edges, 0.8, 0x91))),
+            Rock::Sediment => 0.,
+        };
+        h += bare * (ledges + face * texture);
+    }
+
+    let loose = 1. - bare;
+    if loose > 0. {
+        let mut s = 0.;
+        if scree > 0. {
+            s += scree * (0.35 * stones(CellStyle::Stones, 0.6, 0xa1) + 0.15 * stones(CellStyle::Stones, 0.25, 0xa3));
+        }
+        if glacial > 0. {
+            // Hummocks, and boulders in patches.
+            let boulders = smoothstep(0.1, 0.4, fbm(FractalStyle::Perlin, 40., 10., 0.5));
+            s += glacial * (1.5 * fbm(FractalStyle::Perlin, 25., 2., 0.5) + boulders * 0.9 * stones(CellStyle::Stones, 2., 0xb1));
+        }
+        if alluvium > 0. {
+            s += alluvium * (0.3 * fbm(FractalStyle::Perlin, 30., 3., 0.5) + 0.04 * fbm(FractalStyle::Perlin, 0.4, 0.05, 0.6));
+        }
+        if blown > 0. {
+            s += blown * 0.15 * fbm(FractalStyle::Perlin, 12., 2., 0.4);
+        }
+        if pan > 0. {
+            // Polygons a couple of metres across, the cracks between them a few centimetres
+            // deep.
+            s += pan * -0.05 * (1. - smoothstep(0., 0.08, stones(CellStyle::Edges, 2., 0xc1)));
+        }
+        h += loose * s;
+    }
+    amplitude * ((1. - ice) * h.clamp(-REACH, REACH) + ice * glacier)
+}
+
+fn smoothstep(lo: f64, hi: f64, x: f64) -> f64 {
+    let t = ((x - lo) / (hi - lo)).clamp(0., 1.);
+    t * t * (3. - 2. * t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::na::Vector3;
+
+    /// Fields the same everywhere.
+    struct Uniform { sediment: f64, rock: Rock, ice: f64, till: f64, sand: f64, playa: f64 }
+
+    impl crate::graph::Fields for Uniform {
+        fn field(&self, f: Field, _p: &Vector3<f64>) -> Option<f64> {
+            Some(match f {
+                Field::Sediment => self.sediment,
+                Field::Ice => self.ice,
+                Field::Till => self.till,
+                Field::Sand => self.sand,
+                Field::Playa => self.playa,
+                Field::Rock => self.rock.index() as f64,
+                Field::Hardness => -self.rock.scores().0,
+                _ => 0.,
+            })
+        }
+    }
+
+    fn bare(rock: Rock) -> Uniform { Uniform { sediment: 0., rock, ice: 0., till: 0., sand: 0., playa: 0. } }
+
+    /// The spread (standard deviation) of the detail over a patch of ground with this normal.
+    fn spread(f: &Uniform, normal: Vector3<f64>, filter: f64) -> f64 {
+        let noise = SeededNoise::new(1);
+        let v: Vec<f64> = (0..2500).map(|k| {
+            let p = Vector3::new((k % 50) as f64 * 0.37, (k / 50) as f64 * 0.11, (k / 50) as f64 * 0.37);
+            ground(&Context::new(p, normal, filter).with_fields(Some(f)), &noise, 1, 1.)
+        }).collect();
+        let mean = v.iter().sum::<f64>() / v.len() as f64;
+        (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / v.len() as f64).sqrt()
+    }
+
+    #[test]
+    fn test_the_ground_has_the_detail_of_what_it_is() {
+        let level = Vector3::y();
+        let steep = Vector3::new(0.8, 0.6, 0.).normalize();
+        let alluvium = Uniform { sediment: 5., ..bare(Rock::Sediment) };
+        // Bare rock is rougher than alluvium; granite's blocks rougher than shale's crumbs.
+        let (rock, flat) = (spread(&bare(Rock::Granite), steep, 0.), spread(&alluvium, level, 0.));
+        assert!(rock > 2. * flat, "granite {} alluvium {}", rock, flat);
+        assert!(spread(&bare(Rock::Granite), steep, 0.) > spread(&bare(Rock::Shale), steep, 0.));
+        // Hard rock stands out of a slope, soft rock is cut back.
+        let at = |f: &Uniform| ground(&Context::new(Vector3::new(1., 2., 3.), steep, 0.).with_fields(Some(f)), &SeededNoise::new(1), 1, 1.);
+        let mean = |r: Rock| (0..400).map(|k| {
+            let f = bare(r);
+            ground(&Context::new(Vector3::new(k as f64 * 0.7, 0., k as f64 * 0.3), steep, 0.).with_fields(Some(&f)), &SeededNoise::new(1), 1, 1.)
+        }).sum::<f64>() / 400.;
+        assert!(mean(Rock::Quartzite) > mean(Rock::Shale) + 0.5, "{} {}", mean(Rock::Quartzite), mean(Rock::Shale));
+        let _ = at(&bare(Rock::Basalt));
+        // Seen coarsely (a 5 m filter), shale's crumbs are gone.
+        assert!(spread(&bare(Rock::Shale), steep, 5.) < 0.2 * spread(&bare(Rock::Shale), steep, 0.));
+        // Glaciers are smooth; nothing is beyond the bound.
+        assert!(spread(&Uniform { ice: 50., ..bare(Rock::Granite) }, level, 0.) < 0.2);
+        for f in [bare(Rock::Granite), Uniform { till: 10., sediment: 10., ..bare(Rock::Sediment) }, Uniform { playa: 1., sediment: 5., ..bare(Rock::Sediment) }] {
+            assert!(spread(&f, steep, 0.) <= REACH);
+        }
+    }
+}

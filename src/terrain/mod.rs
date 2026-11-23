@@ -11,6 +11,7 @@ pub mod isostasy;
 pub mod climate;
 pub mod orographic;
 pub mod aeolian;
+pub mod detail;
 pub mod flow;
 pub mod fluvial;
 pub mod glacier;

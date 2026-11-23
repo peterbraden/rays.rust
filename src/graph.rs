@@ -221,10 +221,10 @@ impl<'a> Context<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum FractalStyle { Perlin, Ridged, Billow }
+pub(crate) enum FractalStyle { Perlin, Ridged, Billow }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum CellStyle { F1, Edges, Stones }
+pub(crate) enum CellStyle { F1, Edges, Stones }
 
 #[derive(Clone)]
 enum Op {
@@ -240,6 +240,8 @@ enum Op {
     Biome { of: Vec<crate::terrain::climate::Biome>, default: f64 },
     Strata { step: f64, sharpness: f64, amplitude: f64, breakup: Option<Box<Node>> },
     CrossBeds { noise: Box<SeededNoise>, scale: f64, set: f64, amplitude: f64 },
+    /// A landscape's own detail, from what its simulation left (`terrain::detail`).
+    Ground { noise: Box<SeededNoise>, seed: u32, amplitude: f64 },
     Expr { expr: Expr, inputs: Vec<Node>, range: (f64, f64) },
     Add(Vec<Node>),
     Multiply(Vec<Node>),
@@ -383,6 +385,7 @@ impl Node {
                     keep * amplitude * (l.hardness - CROSS_BED_MEAN)
                 }
             },
+            Op::Ground { noise, seed, amplitude } => crate::terrain::detail::ground(c, noise, *seed, *amplitude),
             Op::Expr { expr, inputs, .. } => {
                 // On the stack, unless there are many inputs.
                 let mut vars = [0.; 16];
@@ -466,6 +469,10 @@ impl Op {
             Op::Field { band: Some(_), .. } => (0., 1.),
             Op::Biome { default, .. } => (default.min(0.), default.max(1.)),
             Op::Field { band: None, .. } => (f64::NEG_INFINITY, f64::INFINITY),
+            Op::Ground { amplitude, .. } => {
+                let a = amplitude.abs() * crate::terrain::detail::REACH;
+                (-a, a)
+            },
             Op::Expr { range, .. } => *range,
             Op::Add(v) => v.iter().map(Node::range).fold((0., 0.), |a, b| (a.0 + b.0, a.1 + b.1)),
             Op::Multiply(v) => v.iter().map(Node::range).fold((1., 1.), mul_range),
@@ -517,6 +524,8 @@ impl Op {
             Op::Talus(t) => return t.smallest,
             Op::Const(_) | Op::Biome { .. } => return f64::INFINITY,
             Op::CrossBeds { scale, set, .. } => return crate::material::rock::LAMINA_FINEST * set * scale,
+            // Limestone's flutes and playas' cracks.
+            Op::Ground { .. } => return 0.03,
             Op::Strata { step, breakup, .. } => return breakup.as_ref().map_or(f64::INFINITY, |b| b.finest()).min(0.25 * step),
             Op::Slope { breakup, .. } | Op::Altitude { breakup, .. } | Op::Aspect { breakup, .. }
                 | Op::Field { breakup, .. } => breakup.iter().map(|b| &**b).collect(),
@@ -535,7 +544,7 @@ impl Op {
 /// A fractal's value at the context's point, filtered (see the module documentation): in
 /// [-1, 1] for Perlin, [0, 1] for ridged and billowed.
 #[allow(clippy::too_many_arguments)]
-fn fractal(noise: &SeededNoise, style: FractalStyle, scale: f64, smallest: f64, roughness: f64, lacunarity: f64, plan: bool, c: &Context) -> f64 {
+pub(crate) fn fractal(noise: &SeededNoise, style: FractalStyle, scale: f64, smallest: f64, roughness: f64, lacunarity: f64, plan: bool, c: &Context) -> f64 {
     let p = if plan { Vector3::new(c.p.x, 0., c.p.z) } else { c.p } / scale;
     let (ridged_mean, billow_mean) = *OCTAVE_MEANS;
     let mean = match style { FractalStyle::Perlin => 0., FractalStyle::Ridged => ridged_mean, FractalStyle::Billow => billow_mean };
@@ -578,7 +587,7 @@ fn fractal(noise: &SeededNoise, style: FractalStyle, scale: f64, smallest: f64, 
 
 /// Cellular noise at the context's point: one feature point jittered in each cell of a lattice
 /// `scale` across.
-fn cells(seed: u32, style: CellStyle, scale: f64, plan: bool, c: &Context) -> f64 {
+pub(crate) fn cells(seed: u32, style: CellStyle, scale: f64, plan: bool, c: &Context) -> f64 {
     let p = c.p / scale;
     let (cx, cy, cz) = (p.x.floor() as i64, if plan { 0 } else { p.y.floor() as i64 }, p.z.floor() as i64);
     let ys: &[i64] = if plan { &[0] } else { &[-1, 0, 1] };
@@ -636,6 +645,19 @@ impl Graph {
         let root = parse_node(v)?;
         let range = root.range();
         Ok(Graph { root, range })
+    }
+
+    /// Bounds on the graph's value near `c` (within a few metres), on ground no steeper than
+    /// `slope` degrees: tighter than `range` where a node knows its local bounds (`ground`,
+    /// from the fields there); `range` otherwise.
+    pub fn range_near(&self, c: &Context, slope: f64) -> (f64, f64) {
+        match &self.root.op {
+            Op::Ground { amplitude, .. } => {
+                let b = crate::terrain::detail::bound(c, slope, *amplitude).min(self.range.1);
+                (-b, b)
+            },
+            _ => self.range,
+        }
     }
 
     pub fn eval(&self, c: &Context) -> f64 {
@@ -772,6 +794,7 @@ fn parse_node(v: &Value) -> Result<Node, String> {
             Op::Strata { step, sharpness: num(o, "sharpness", 0.8)?, amplitude: num(o, "amplitude", 0.5 * step)?,
                 breakup: o.get("breakup").map(parse_node).transpose()?.map(Box::new) }
         },
+        "ground" => Op::Ground { noise: Box::new(SeededNoise::new(seed()?)), seed: seed()? as u32, amplitude: num(o, "amplitude", 1.)? },
         "cross_beds" => {
             let (scale, set) = (num(o, "scale", 1.)?, num(o, "set", 0.4)?);
             if scale <= 0. || set <= 0. {

@@ -64,7 +64,8 @@
 //!   for no deltas, or `{diffusivity, depth_scale, jet, cliff_retreat, longshore}`.
 //! - `map`: also write a shaded relief map to this PNG path; `geology_map`: also write one
 //!   coloured by the rock exposed; `rain_map`: one coloured by the rain (for a full-scale
-//!   landscape, each of the finest patch).
+//!   landscape, each of the finest patch); `cover_map` (full scale): the ground cover's albedo
+//!   seen from above about the site, to check what it makes of the simulations.
 //!
 //! Water is not part of the terrain: add a plane at y = 0 (patch) or a sphere (planet).
 
@@ -293,7 +294,7 @@ fn number(o: &Value, k: &str, def: f64) -> f64 { SceneFile::parse_number(&o[k], 
 /// Override fields of `GlacierParams` named in `o`.
 fn glacier_params(o: &Value) -> GlacierParams {
     let mut g = GlacierParams::default();
-    let fields: [(&str, &mut f64); 19] = [
+    let fields: [(&str, &mut f64); 21] = [
         ("glen_a", &mut g.glen_a), ("glen_n", &mut g.glen_n), ("sliding", &mut g.sliding),
         ("erosion", &mut g.erosion), ("erosion_exponent", &mut g.erosion_exponent),
         ("ela_equator", &mut g.ela_equator), ("ela_pole", &mut g.ela_pole),
@@ -303,6 +304,7 @@ fn glacier_params(o: &Value) -> GlacierParams {
         ("acceleration", &mut g.acceleration),
         ("geothermal_flux", &mut g.geothermal_flux), ("ela_temperature", &mut g.ela_temperature),
         ("refreezing", &mut g.refreezing),
+        ("debris", &mut g.debris), ("lodgement", &mut g.lodgement),
     ];
     for (k, v) in fields {
         if let Some(x) = o.get(k).and_then(|x| x.as_f64()) { *v = x; }
@@ -694,6 +696,10 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     if let (Some(path), Some(c)) = (o["climate_map"].as_str(), &climate) { crate::terrain::map::write_climate_map(&planet, c, path, 2048); }
     // Built first, so the displacement's graphs can read its fields.
     let ground = Arc::new(Ground::new(layers, climate, params.glacier.clone().unwrap_or_default(), time, params.planet.seed, frame.clone(), &p));
+    if let Some(path) = o["cover_map"].as_str() {
+        let half = description.levels.first().map_or(32e3, |l| l.cells as f64 * l.spacing / 2.);
+        write_cover_map(&ground, &relief, &frame, half, path, 1024);
+    }
     let patches = o.get("displacement").map(|d| displaced_patches(o, d, &relief, &frame, &view, &p, ground.clone()));
     let mesh = scenery::mesh(&relief, &frame, &view, &p, patches.as_ref().map(|(h, _)| h));
     let geometry: Box<dyn Geometry + Send + Sync> = match patches {
@@ -706,6 +712,29 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     };
     say(format!("Landscape: {} triangles in {:.1?}", geometry.primitives(), start.elapsed()));
     SceneObject { geometry, medium: Box::new(LandscapeMedium::with_ground(ground, material)) }
+}
+
+/// Write the ground cover's albedo (`Ground::albedo`), seen from straight above, over `half`
+/// metres either side of the site, north up, `width` pixels square, display-encoded, to `path`:
+/// for checking what the ground cover makes of the simulations without rendering.
+fn write_cover_map(ground: &Ground, relief: &Relief, frame: &crate::terrain::scenery::Frame, half: f64, path: &str, width: usize) {
+    use rayon::prelude::*;
+    let pixels: Vec<[u8; 3]> = (0..width * width).into_par_iter().map(|k| {
+        let (i, j) = (k % width, k / width);
+        let x = ((i as f64 + 0.5) / width as f64 * 2. - 1.) * half;
+        let z = (1. - (j as f64 + 0.5) / width as f64 * 2.) * half;
+        let d = frame.dir(x, z);
+        let slope = relief.slope(&d);
+        let local = 2. * half / width as f64;
+        let h = relief.height(&d, slope, local);
+        let normal = (frame.to_scene(&relief.normal(&d, slope, local), 0.) - frame.centre()).normalize();
+        let c = ground.albedo(&frame.to_scene(&d, h), &normal);
+        let encode = |v: f64| (v.clamp(0., 1.).powf(1. / 2.2) * 255.) as u8;
+        [encode(c.rgb.x), encode(c.rgb.y), encode(c.rgb.z)]
+    }).collect();
+    let mut img = image::RgbImage::new(width as u32, width as u32);
+    for (k, c) in pixels.into_iter().enumerate() { img.put_pixel((k % width) as u32, (k / width) as u32, image::Rgb(c)); }
+    img.save(path).unwrap();
 }
 
 /// The ground about the camera displaced at render time (`shapes::displaced`), out to

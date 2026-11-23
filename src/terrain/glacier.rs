@@ -152,8 +152,24 @@
 //! icy: three times the ice of temperate beds after 100,000 years.) Sliding, and erosion, take the share of the bed at the melting point: none 3 K below
 //! it, all at it.
 //!
+//! ## Debris: till and moraines
+//!
+//! What glaciers quarry and abrade doesn't all leave in their meltwater. Much is carried in
+//! and on the ice towards its margin, lodged beneath it as till on the way, and dumped where
+//! it melts out at the margin, building ridges where the margin stands still: terminal and
+//! lateral moraines (Benn and Evans, "Glaciers and Glaciation", 2nd ed., 2010, ch. 9-11). Here
+//! (`carry_debris`) a share `debris` (half) of the rock eroded in each step goes with the ice,
+//! down its surface's steepest descent from cell to cell; in the ablation zone, where the ice
+//! melts and its basal debris is pressed into the bed, each cell keeps `lodgement` of the load
+//! as till; what reaches the margin is dropped on the first ice-free cell, the moraine. The
+//! ice reaches its debris to the margin within the step (it travels tens to hundreds of metres
+//! a year, so kilometres within a landscape step), and as the margin advances and retreats
+//! with the glacial cycle, it leaves moraines at each of its stands. The rest of the rock
+//! leaves in the meltwater, for the rivers to carry or lay down as outwash.
+//!
 //! Not modelled: ice temperature's effect on Glen's A (that of temperate ice everywhere);
-//! water pressure in sliding; debris. (The bed's isostatic response to the ice's weight is
+//! water pressure in sliding; debris covering the ice and insulating it from melt; drumlins
+//! and eskers (finer than a simulation's cells). (The bed's isostatic response to the ice's weight is
 //! `isostasy`'s.)
 
 use crate::terrain::domain::Domain;
@@ -217,6 +233,11 @@ pub struct GlacierParams {
     /// How much meltwater refreezing in the firn warms the ice's surface above the air near the
     /// equilibrium line, K.
     pub refreezing: f64,
+    /// Share of the eroded rock the ice carries to its margin as debris, rather than its
+    /// meltwater to the rivers (see "Debris").
+    pub debris: f64,
+    /// Share of the ice's debris load lodged as till in each cell of its ablation zone.
+    pub lodgement: f64,
 }
 
 impl Default for GlacierParams {
@@ -244,6 +265,8 @@ impl Default for GlacierParams {
             geothermal_flux: 0.06,
             ela_temperature: -6.,
             refreezing: 8.,
+            debris: 0.5,
+            lodgement: 0.1,
         }
     }
 }
@@ -485,6 +508,49 @@ fn conjugate_gradient(apply: &dyn Fn(&[f64], &mut [f64]), precondition: &dyn Fn(
 
 /// Lower the bed under sliding ice for `dt` years; `erodibility` scales K_g per cell (for the
 /// rock exposed there).
+/// Carry `load` (m³ of debris in each cell) with the ice of thickness `ice` over `bed` to its
+/// margin (see "Debris"): down the ice surface, lodging `lodgement` of the load in each cell
+/// where `balance` is negative, and dropping the rest on the first ice-free cell. Returns the
+/// thickness laid in each cell, metres, and the volume (m³) that reached cells marked `fixed`
+/// (the sea or a patch's edge), left in the cell it came from, for the meltwater to take.
+pub fn carry_debris(domain: &Domain, bed: &[f64], ice: &[f64], balance: &[f64], load: &[f64], fixed: &[bool], p: &GlacierParams) -> (Vec<f64>, Vec<f64>) {
+    let n = bed.len();
+    let mut laid = vec![0.; n];
+    let mut lost = vec![0.; n];
+    let surface: Vec<f64> = bed.iter().zip(ice).map(|(b, h)| b + h).collect();
+    let iced = |i: usize| ice[i] >= ICE_FREE;
+    let mut order: Vec<usize> = (0..n).filter(|&i| iced(i) || load[i] > 0.).collect();
+    order.sort_by(|&a, &b| surface[b].total_cmp(&surface[a]).then(a.cmp(&b)));
+    let mut carried = load.to_vec();
+    let lodge = p.lodgement.clamp(0., 1.);
+    for &i in &order {
+        let mut l = carried[i];
+        if l <= 0. { continue; }
+        if !iced(i) {
+            // Rock eroded where there is (no longer) ice lies where it is.
+            if fixed[i] { lost[i] += l } else { laid[i] += l / domain.area[i]; }
+            continue;
+        }
+        if balance[i] < 0. && !fixed[i] {
+            laid[i] += lodge * l / domain.area[i];
+            l *= 1. - lodge;
+        }
+        // On down the ice's surface.
+        let next = domain.links(i).iter()
+            .map(|e| (e.to, (surface[i] - surface[e.to]) / e.dist))
+            .filter(|&(_, s)| s > 0.)
+            .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)));
+        match next {
+            Some((j, _)) if iced(j) => carried[j] += l,
+            // The margin: a moraine on the ground beyond, unless that is the sea or the edge.
+            Some((j, _)) if !fixed[j] => laid[j] += l / domain.area[j],
+            // A hollow in the ice's surface, or the margin at the sea: it stays.
+            _ => if fixed[i] { lost[i] += l } else if next.is_none() { laid[i] += l / domain.area[i] } else { lost[i] += l },
+        }
+    }
+    (laid, lost)
+}
+
 pub fn erode(p: &GlacierParams, bed: &mut [f64], sliding: &[f64], erodibility: &[f64], fixed: &[bool], dt: f64) {
     for i in 0..bed.len() {
         if !fixed[i] {
@@ -513,6 +579,34 @@ mod tests {
         assert_eq!(g.basal_melting(4500., 800., 3000.), 1.);
         // Temperate ice everywhere without the geothermal flux.
         assert_eq!(GlacierParams { geothermal_flux: 0., ..g }.basal_melting(4500., 50., 3000.), 1.);
+    }
+
+    #[test]
+    fn test_debris_is_lodged_as_till_and_dropped_at_the_margin() {
+        // A glacier down a slope towards the east, over the first ten columns of a patch: its
+        // upper half accumulating, its lower half melting. Debris from the top is carried down,
+        // a share lodged in each melting cell, and the rest heaped just beyond the snout.
+        let n = 16;
+        let d = Domain::patch(45., 0., n, 100., 6.371e6);
+        let col = |k: usize| k % n;
+        let bed: Vec<f64> = (0..n * n).map(|k| 1000. - 20. * col(k) as f64).collect();
+        let ice: Vec<f64> = (0..n * n).map(|k| if col(k) < 10 { 50. } else { 0. }).collect();
+        let balance: Vec<f64> = (0..n * n).map(|k| if col(k) < 5 { 1. } else { -1. }).collect();
+        let row = 8 * n;
+        let mut load = vec![0.; n * n];
+        load[row + 1] = 1e4;
+        let fixed = vec![false; n * n];
+        let p = GlacierParams::default();
+        let (laid, lost) = carry_debris(&d, &bed, &ice, &balance, &load, &fixed, &p);
+        let volume = |k: usize| laid[k] * d.area[k];
+        // Nothing lodged where it accumulates; till where it melts; the most at the margin.
+        assert!(volume(row + 3) == 0., "{}", volume(row + 3));
+        assert!(volume(row + 6) > 0.);
+        let margin = volume(row + 10);
+        assert!(margin > 0.5 * 1e4 && (row..row + n).all(|k| volume(k) <= margin), "{:?}", (row..row + n).map(volume).collect::<Vec<_>>());
+        // All of it is laid somewhere.
+        let total: f64 = (0..n * n).map(volume).sum::<f64>() + lost.iter().sum::<f64>();
+        assert!((total - 1e4).abs() < 1e-6, "{}", total);
     }
 
     fn volume(d: &Domain, h: &[f64]) -> f64 { h.iter().zip(&d.area).map(|(a, b)| a * b).sum() }

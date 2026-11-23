@@ -2695,6 +2695,8 @@
             {"name": "geothermal_flux", "kind": "number", "default": 0.06, "doc": "Geothermal flux warming the ice's bed, W/m²; thin cold ice freezes to its bed and doesn't erode; 0 for temperate ice everywhere."},
             {"name": "ela_temperature", "kind": "number", "default": -6, "doc": "Mean annual air temperature at the equilibrium line, °C."},
             {"name": "refreezing", "kind": "number", "default": 8, "doc": "Warming of the ice's surface by meltwater refreezing in the firn near the equilibrium line, K."},
+            {"name": "debris", "kind": "number", "default": 0.5, "doc": "Share of the rock glaciers erode that the ice carries to its margin (till and moraines) rather than its meltwater to the rivers."},
+            {"name": "lodgement", "kind": "number", "default": 0.1, "doc": "Share of the ice's debris lodged as till in each cell where it melts."},
             {"name": "picard", "kind": "integer", "default": 2, "doc": "Solves per ice step.", "min": 1}
           ]
         },
@@ -2764,6 +2766,12 @@
           "kind": "path",
           "default": null,
           "doc": "Full scale: also write a map of the whole planet here."
+        },
+        {
+          "name": "cover_map",
+          "kind": "path",
+          "default": null,
+          "doc": "Full scale: also write the ground cover's albedo seen from above, over the finest patch's extent about the site, here."
         },
         {
           "name": "climate_map",

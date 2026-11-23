@@ -829,10 +829,10 @@ impl Ground {
         self.layer_at(&d).is_some_and(|l| l.fields.salt_lake(&l.domain, &d) > crate::terrain::simulation::SALT_LAKE_DEPTH)
     }
 
-    /// How much of the ground at `d`, `h` metres up, is a playa (`graph::Field::Playa`), from
-    /// the finest simulation there.
-    fn playa(&self, d: &Vector3<f64>, h: f64) -> f64 {
-        self.layer_at(d).and_then(|l| l.fields.at(&l.domain, crate::graph::Field::Playa, d, h)).unwrap_or(0.)
+    /// How much of the ground at scene point `p` is a playa (`graph::Field::Playa`), blended
+    /// between the simulations as their surfaces are.
+    fn playa(&self, p: &Vector3<f64>) -> f64 {
+        crate::graph::Fields::field(self, crate::graph::Field::Playa, p).unwrap_or(0.)
     }
 
     /// The climate at `d`, `h` metres up, its edges wandering with the weather from year to
@@ -958,7 +958,7 @@ impl Ground {
         // Playas: the flat floors of closed basins, white with salt where the water last
         // evaporated, cracked into polygons a few metres across, darker and browner where the
         // clay is damp or dust has blown over it.
-        let playa = self.playa(&d, h);
+        let playa = self.playa(p);
         if playa > 0. {
             let extent = smoothstep(0.35, 0.65, playa + 0.3 * (n(600., 0.25) - 0.5)) * smoothstep(0.96, 0.99, flat);
             if extent > 0. {

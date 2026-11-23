@@ -209,6 +209,9 @@ pub struct Terrain {
     pub bed: Vec<f64>,
     /// Thickness of sediment at the top of the ground, metres.
     pub sediment: Vec<f64>,
+    /// How much of the sediment is glacial, metres: till and moraines (`glacier`'s "Debris"),
+    /// no more than the sediment.
+    pub till: Vec<f64>,
     /// Thickness of volcanic rock beneath the sediment, metres.
     pub lava: Vec<f64>,
     /// Sediment flux leaving each cell in rivers at the last step, m³/yr.
@@ -328,7 +331,7 @@ impl Terrain {
         let mut t = Terrain {
             precipitation: base_precipitation.clone(), base_precipitation, wind, temperature,
             domain, params, planet, time: 0., ela, bed, uplift, structure, exhumed: vec![0.; n], rebound: vec![0.; n], ground0: vec![], belt_uplift, velocity, displacement: (0., 0.), shifted: (0, 0), finest, banks: vec![0.; n], channel: vec![], latitude, sea, vents, rivers: Rivers::default(),
-            sediment: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
+            sediment: vec![0.; n], till: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
             ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
         // The noise topography may stand steeper than its rock can: it is cut down to what the
@@ -451,6 +454,8 @@ impl Terrain {
                 *lava -= loss.min(*lava);
             }
         }
+        // Erosion takes the till with the rest of the sediment.
+        for (t, s) in self.till.iter_mut().zip(&self.sediment) { *t = t.min(*s); }
     }
 
     pub fn surface(&self) -> Vec<f64> {
@@ -908,7 +913,7 @@ impl Terrain {
             if fixed[k] { return k; }
             ((j - dy).clamp(0, n - 1) * n + (i - dx).clamp(0, n - 1)) as usize
         }).collect();
-        for f in [&mut self.bed, &mut self.sediment, &mut self.lava, &mut self.ice, &mut self.exhumed, &mut self.rebound, &mut self.ground0, &mut self.sliding] {
+        for f in [&mut self.bed, &mut self.sediment, &mut self.till, &mut self.lava, &mut self.ice, &mut self.exhumed, &mut self.rebound, &mut self.ground0, &mut self.sliding] {
             let old = f.clone();
             for (k, &s) in source.iter().enumerate() { f[k] = old[s]; }
         }
@@ -976,7 +981,6 @@ impl Terrain {
     /// Returns the rate glaciers eroded each cell over the step, m³/yr.
     fn glaciate(&mut self, g: &GlacierParams, fixed: &[bool], dt: f64) -> Vec<f64> {
         let n = self.domain.len();
-        let start = self.bed.clone();
         let erodibility = self.glacial_erodibility();
         // Ice flows for dt / acceleration years, and erodes as if for dt.
         let ice_time = dt / g.acceleration;
@@ -987,6 +991,8 @@ impl Terrain {
         // climate is (it lies lower where more snow falls), so scaling by the rain itself would
         // count that twice.
         let snow: Vec<f64> = (0..n).map(|i| (self.precipitation[i] / self.base_precipitation[i].max(1.)).clamp(0.3, 3.)).collect();
+        // What the meltwater carries off to the rivers, m³.
+        let mut meltwater = vec![0.; n];
         while done < ice_time * (1. - 1e-9) {
             let t = self.time + done * g.acceleration;
             let ela: Vec<f64> = (0..n).map(|i| match &self.ela {
@@ -1008,13 +1014,28 @@ impl Terrain {
             let before = self.bed.clone();
             erode(g, &mut self.bed, &sliding, &erodibility, fixed, step.dt * g.acceleration);
             self.record(&before);
+            // The ice carries a share of what it eroded to its margin: till and moraines.
+            let eroded: Vec<f64> = (0..n).map(|i| (before[i] - self.bed[i]).max(0.) * self.domain.area[i]).collect();
+            let share = g.debris.clamp(0., 1.);
+            let load: Vec<f64> = eroded.iter().map(|e| e * share).collect();
+            for i in 0..n { meltwater[i] += eroded[i] * (1. - share); }
+            if share > 0. {
+                let (laid, lost) = crate::terrain::glacier::carry_debris(&self.domain, &self.bed, &self.ice, &balance, &load, fixed, g);
+                let before = self.bed.clone();
+                for i in 0..n {
+                    self.bed[i] += laid[i];
+                    meltwater[i] += lost[i];
+                }
+                self.record(&before);
+                for i in 0..n { self.till[i] = (self.till[i] + laid[i]).min(self.sediment[i]); }
+            }
             for (m, s) in mean_sliding.iter_mut().zip(&sliding) { *m += s * step.dt / ice_time; }
             done += step.dt;
             self.ice_steps += 1;
             self.ice_iterations += step.iterations;
         }
         self.sliding = mean_sliding;
-        (0..n).map(|i| (start[i] - self.bed[i]).max(0.) * self.domain.area[i] / dt).collect()
+        meltwater.iter().map(|m| m / dt).collect()
     }
 }
 
@@ -1071,6 +1092,8 @@ pub struct Snapshot {
     banks: Vec<f64>,
     #[serde(default)]
     channel: Vec<u32>,
+    #[serde(default)]
+    till: Vec<f64>,
     channels: Vec<crate::terrain::channel::Channel>,
     oxbows: Vec<crate::terrain::channel::Oxbow>,
     rivers_found: Option<f64>,
@@ -1094,7 +1117,7 @@ impl Terrain {
             time: self.time, bed: self.bed.clone(), sediment: self.sediment.clone(), lava: self.lava.clone(),
             sediment_flux: self.sediment_flux.clone(), ice: self.ice.clone(), sea: self.sea.clone(),
             drainage: self.drainage.clone(), receiver: self.receiver.clone(), sliding: self.sliding.clone(), exhumed: self.exhumed.clone(), rebound: self.rebound.clone(),
-            displacement: self.displacement, shifted: self.shifted, ground0: self.ground0.clone(), banks: self.banks.clone(), channel: self.channel.clone(),
+            displacement: self.displacement, shifted: self.shifted, ground0: self.ground0.clone(), banks: self.banks.clone(), channel: self.channel.clone(), till: self.till.clone(),
             channels: self.rivers.channels.clone(), oxbows: self.rivers.oxbows.clone(), rivers_found: self.rivers.found,
         }
     }
@@ -1119,6 +1142,7 @@ impl Terrain {
         if s.ground0.len() == self.domain.len() { self.ground0 = s.ground0; }
         self.banks = if s.banks.len() == self.domain.len() { s.banks } else { vec![0.; self.domain.len()] };
         self.channel = s.channel;
+        self.till = if s.till.len() == self.domain.len() { s.till } else { vec![0.; self.domain.len()] };
         self.displacement = s.displacement;
         if s.shifted != self.shifted {
             self.shifted = s.shifted;

@@ -19,3 +19,4 @@ pub mod object;
 pub mod scenery;
 pub mod fields;
 pub mod hydraulics;
+pub mod rivers;

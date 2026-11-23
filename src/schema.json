@@ -2212,6 +2212,13 @@
           "doc": "Draw rivers at least this wide, m."
         },
         {
+          "name": "river_flow",
+          "kind": "number",
+          "default": 1,
+          "doc": "Full scale: the rivers' discharge, as a multiple of their mean annual flow (10 fills their channels).",
+          "min": 0
+        },
+        {
           "name": "map",
           "kind": "path",
           "default": null,

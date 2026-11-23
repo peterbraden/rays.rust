@@ -66,6 +66,7 @@ use crate::color::Color;
 use crate::geometry::rand;
 use crate::intersection::Intersection;
 use crate::material::bsdf::LambertianBSDF;
+use crate::material::lambertian::Lambertian;
 use crate::material::functions::scatter_bsdf;
 use crate::material::model::{MaterialModel, ScatteredRay};
 use crate::material::snow::{Ice, IceStyle, Snow, SnowStyle};
@@ -150,6 +151,8 @@ pub struct SceneryParams {
     pub treeline: Option<f64>,
     /// Rivers are drawn at least this wide, metres.
     pub min_river_width: f64,
+    /// The rivers' hydraulics (the flow they show).
+    pub hydraulics: crate::terrain::hydraulics::HydraulicParams,
     /// Cells per face edge of the mesh over the whole planet.
     pub globe: usize,
 }
@@ -158,7 +161,7 @@ impl Default for SceneryParams {
     fn default() -> SceneryParams {
         SceneryParams {
             resolution: 384, min_spacing: 0.5, roughness: 1., exaggeration: 1.,
-            snowline: None, treeline: None, min_river_width: 0., globe: 192,
+            snowline: None, treeline: None, min_river_width: 0., hydraulics: Default::default(), globe: 192,
         }
     }
 }
@@ -220,6 +223,9 @@ pub struct Layer {
     corners: Vec<f64>,
     class: Vec<u8>,
     water: Option<WaterLines>,
+    /// Its rivers as courses, levelled and carved once the relief is known.
+    pub rivers: Option<crate::terrain::rivers::Rivers>,
+    min_river_width: f64,
     /// Width of the band inside a patch's edge over which it blends into what is around it.
     blend: f64,
     /// What the simulation left, for graphs' `field` nodes.
@@ -227,9 +233,11 @@ pub struct Layer {
 }
 
 impl Layer {
-    pub fn new(t: Terrain, min_river_width: f64) -> Layer {
+    pub fn new(t: Terrain, min_river_width: f64, hydraulics: &crate::terrain::hydraulics::HydraulicParams) -> Layer {
         let corners = corner_heights(&t);
-        let fields = crate::terrain::fields::SimFields::new(&t);
+        let water = crate::terrain::hydraulics::Hydraulics::of(&t, hydraulics);
+        let fields = crate::terrain::fields::SimFields::with_hydraulics(&t, &water);
+        let rivers = matches!(t.domain.layout, Layout::Patch { .. }).then(|| crate::terrain::rivers::Rivers::new(&t, &water));
         let water = map::water_lines(&t, min_river_width);
         let class = (0..t.domain.len()).map(|i| {
             if t.ice[i] >= ICE_FREE { ICE }
@@ -245,7 +253,7 @@ impl Layer {
             Layout::Patch { n, spacing, .. } => (spacing, (0.05 * n as f64 * spacing).max(3. * spacing)),
             Layout::Sphere { n } => (std::f64::consts::FRAC_PI_2 * t.domain.radius / n as f64, 0.),
         };
-        Layer { spacing, corners, class, water, blend, fields, domain: t.domain }
+        Layer { spacing, corners, class, water, rivers, min_river_width, blend, fields, domain: t.domain }
     }
 
     /// Tangent coordinates of `d` on a patch, if it is on the patch's side of the planet.
@@ -283,10 +291,45 @@ impl Layer {
 
     fn class_at(&self, d: &Vector3<f64>) -> u8 { self.class[self.domain.cell_at(d)] }
 
-    fn wet(&self, d: &Vector3<f64>) -> bool {
-        let (Some(water), Some((x, z))) = (&self.water, self.tangent(d)) else { return false };
-        water.wet(point_cell(&self.domain, [x, z]), [x, z])
+    /// What is at direction `d` and height `h`: the surface of water (a river drawn on the
+    /// ground, or an ox-bow lake), a river's bed under its own surface, or land. `surfaced`
+    /// says whether a river of the given half width has a surface of its own at `d` (near
+    /// the camera: `rivers::Carve::ribbon`), where the ground under it is never water.
+    fn river_at(&self, d: &Vector3<f64>, h: f64, surfaced: impl Fn(f64) -> bool) -> RiverAt {
+        let Some((x, z)) = self.tangent(d) else { return RiverAt::Land };
+        let (Some(water), q) = (&self.water, [x, z]) else { return RiverAt::Land };
+        let wet = |w: bool| if w { RiverAt::Water } else { RiverAt::Land };
+        match self.rivers.as_ref().and_then(|r| r.carve.get()) {
+            Some(carve) => match carve.level(q, self.min_river_width) {
+                Some((level, half, grain)) if h < level - 0.05 || surfaced(half) => if h < level + 0.05 { RiverAt::Bed(grain) } else { RiverAt::Land },
+                Some(_) => RiverAt::Water,
+                None => wet(water.wet_oxbow(point_cell(&self.domain, q), q)),
+            },
+            None => wet(water.wet(point_cell(&self.domain, q), q)),
+        }
     }
+
+    /// The patch point of direction `d`, if it is on the patch's side of the planet.
+    fn carve_point(&self, d: &Vector3<f64>) -> Option<crate::terrain::channel::Point> {
+        self.tangent(d).map(|(x, z)| [x, z])
+    }
+
+    /// The carving of its rivers at direction `d`, if levelled: patch point and carve.
+    fn carve(&self, d: &Vector3<f64>) -> Option<(crate::terrain::channel::Point, &crate::terrain::rivers::Carve)> {
+        let carve = self.rivers.as_ref()?.carve.get()?;
+        let (x, z) = self.tangent(d)?;
+        Some(([x, z], carve))
+    }
+}
+
+/// What the ground is at a point, as far as water goes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RiverAt {
+    Land,
+    /// The surface of water drawn on the ground (a river from afar, a lake).
+    Water,
+    /// A river's bed, under its own surface; with the median grain, metres.
+    Bed(f64),
 }
 
 /// Heights of the landscape, from its layers and the planet's own topography.
@@ -310,12 +353,22 @@ impl Relief {
     /// planet's own relief down to it put back.
     pub fn new(layers: Arc<Vec<Layer>>, planet: &Planet, radius: f64, roughness: f64, finest: f64) -> Relief {
         let seed = planet.params.seed;
-        Relief {
+        let relief = Relief {
             layers, radius, finest, roughness,
             planet: Planet::new(planet.params.clone()),
             noise: SeededNoise::new(seed.wrapping_add(0x5ce7e)),
             ridges: SeededNoise::new(seed.wrapping_add(0x41d9e)),
+        };
+        // The rivers' levels follow the uncarved ground (`rivers`).
+        for l in relief.layers.iter() {
+            if let Some(r) = &l.rivers {
+                r.level(|q, local| {
+                    let d = crate::terrain::rivers::patch_dir(&l.domain, q);
+                    relief.uncarved(&d, relief.slope(&d), local)
+                });
+            }
         }
+        relief
     }
 
     /// The large-scale height at `d`, before synthetic detail: each layer blending into the
@@ -364,6 +417,10 @@ impl Relief {
     /// mesh's spacing `local` there can carry.
     pub fn detail(&self, d: &Vector3<f64>, slope: f64, local: f64) -> f64 {
         let p = d * self.radius;
+        // Rivers clear their valley floors of relief at every scale (`terrain::rivers`).
+        let from_water = self.layers.iter().find(|l| l.contains(d))
+            .and_then(|l| Some(l.rivers.as_ref()?.skeleton.from_water(l.carve_point(d)?)))
+            .unwrap_or(f64::INFINITY);
         let mut sum = 0.;
         let mut wavelength = LONGEST_DETAIL;
         let mut octave = 0.;
@@ -372,7 +429,8 @@ impl Relief {
             // cells its slopes are smoothed by its own diffusion.
             let resolved = smoothstep(4. * self.finest, 8. * self.finest, wavelength);
             let carried = 1. - smoothstep(wavelength / 4., wavelength / 2., local);
-            let w = (1. - resolved) * carried;
+            let cleared = if from_water.is_finite() { smoothstep(0., (wavelength / 2.).min(crate::terrain::rivers::CLEAR), from_water) } else { 1. };
+            let w = (1. - resolved) * carried * cleared;
             if w > 0. {
                 // Warped ridged noise: sharp crests and spurs between gullies, with a little
                 // plain noise to break them up.
@@ -394,6 +452,15 @@ impl Relief {
     /// The surface's height at `d` with detail down to spacing `local`, given its large-scale
     /// slope there.
     pub fn height(&self, d: &Vector3<f64>, slope: f64, local: f64) -> f64 {
+        let g = self.uncarved(d, slope, local);
+        match self.layers.iter().find(|l| l.contains(d)).and_then(|l| l.carve(d)) {
+            Some((q, carve)) => carve.carved(q, g, local),
+            None => g,
+        }
+    }
+
+    /// The height before rivers cut their channels.
+    pub fn uncarved(&self, d: &Vector3<f64>, slope: f64, local: f64) -> f64 {
         self.base(d) + self.detail(d, slope, local)
     }
 
@@ -683,6 +750,9 @@ pub struct Ground {
     /// the bluer ice beneath.
     snow: [Snow; 2],
     ice: [Ice; 2],
+    /// The mesh's spacing about the camera, once known: where rivers have surfaces of their
+    /// own.
+    pub clipmap: std::sync::OnceLock<Clipmap>,
 }
 
 /// What covers the ground at a point: the shares of snow and of glacier ice, the rest bare
@@ -718,6 +788,7 @@ impl Ground {
             noise: PerlinNoise::shuffled(seed.wrapping_add(77)),
             snow: [Snow::new(SnowStyle::preset("settled"), 1., seed), Snow::new(SnowStyle::preset("firn"), 1., seed)],
             ice: [Ice::new(IceStyle::preset("white")), Ice::new(IceStyle::preset("glacier"))],
+            clipmap: std::sync::OnceLock::new(),
         }
     }
 
@@ -748,8 +819,17 @@ impl Ground {
 
     /// Whether scene point `p` is in a river or lake.
     pub fn wet(&self, p: &Vector3<f64>) -> bool {
-        let (d, _) = self.frame.on_planet(p);
-        self.layer_at(&d).is_some_and(|l| l.wet(&d))
+        self.river_at(p) == RiverAt::Water
+    }
+
+    /// What `p` is as far as water goes (`Layer::river_at`).
+    pub fn river_at(&self, p: &Vector3<f64>) -> RiverAt {
+        let (d, h) = self.frame.on_planet(p);
+        let surfaced = |half: f64| self.clipmap.get().is_some_and(|c| {
+            let (x, z) = self.frame.tangent(&d);
+            c.local(x, z).is_some_and(|s| s < half)
+        });
+        self.layer_at(&d).map_or(RiverAt::Land, |l| l.river_at(&d, h, surfaced))
     }
 
     /// The climate at `d`, `h` metres up, its edges wandering with the weather from year to
@@ -955,6 +1035,8 @@ pub struct LandscapeMedium {
     ground: Arc<Ground>,
     land: Box<dyn MaterialModel + Sync + Send>,
     water: PhysicalOcean,
+    /// Rivers' beds, under water: sand, and gravel and coarser.
+    beds: [Lambertian; 2],
 }
 
 impl LandscapeMedium {
@@ -971,13 +1053,37 @@ impl LandscapeMedium {
             // Rivers are shallow and carry silt, sending back more green and brown than the sea.
             water: PhysicalOcean { water: Color::new(0.01, 0.018, 0.018), roughness: 0.004, center: Some(centre), foam: None, absorption: None },
             ground,
+            beds: [Lambertian { albedo: crate::textures::ColorTexture::Constant(bed_albedo(SAND_ALBEDO)) }, Lambertian { albedo: crate::textures::ColorTexture::Constant(bed_albedo(GRAVEL_ALBEDO)) }],
         }
     }
 }
 
+/// Dry sand and river gravel (cobbles of mixed rock), as albedos.
+const SAND_ALBEDO: [f64; 3] = [0.55, 0.50, 0.40];
+const GRAVEL_ALBEDO: [f64; 3] = [0.30, 0.28, 0.25];
+
+/// A dry albedo wetted. A film of water over the grains turns back, by total internal
+/// reflection at its surface, much of the light the grains scatter up, so it meets the grains
+/// again and more of it is absorbed (Ångström's model, which Lekner and Dorf, "Why some things
+/// are darker when wet", Applied Optics 27(7), 1988, doi:10.1364/AO.27.001278, extend). With x
+/// the fraction of diffuse light the water's surface turns back (about 0.6 for water) and a the
+/// grains' albedo, the light that escapes after any number of returns is a (1 - x) / (1 - a x).
+/// Here the dry albedo stands in for a (to check against their paper, which also accounts for
+/// the water changing the grains' own scattering); bright sand darkens by a third, dark gravel
+/// by half, as wet sand and stones do.
+fn bed_albedo(dry: [f64; 3]) -> Color {
+    const X: f64 = 0.6;
+    let wet = |a: f64| a * (1. - X) / (1. - a * X);
+    Color::new(wet(dry[0]), wet(dry[1]), wet(dry[2]))
+}
+
 impl Medium for LandscapeMedium {
     fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
-        if self.ground.wet(&pt) { &self.water } else { &*self.land }
+        match self.ground.river_at(&pt) {
+            RiverAt::Water => &self.water,
+            RiverAt::Bed(grain) => &self.beds[(grain > 0.002) as usize],
+            RiverAt::Land => &*self.land,
+        }
     }
 
     fn fields(&self) -> Option<&dyn crate::graph::Fields> { Some(&*self.ground) }
@@ -1031,7 +1137,7 @@ mod tests {
         let fine = Terrain::new(Domain::patch(lat, lon, 16, 1000., params.planet.radius), params.clone());
         let coarse = Terrain::new(Domain::patch(lat + 0.01, lon, 16, 4000., params.planet.radius), params.clone());
         let globe = Terrain::new(Domain::sphere(16, params.planet.radius), params);
-        (planet, Arc::new(vec![Layer::new(fine, 0.), Layer::new(coarse, 0.), Layer::new(globe, 0.)]), (lat, lon))
+        (planet, Arc::new(vec![Layer::new(fine, 0., &Default::default()), Layer::new(coarse, 0., &Default::default()), Layer::new(globe, 0., &Default::default())]), (lat, lon))
     }
 
     #[test]

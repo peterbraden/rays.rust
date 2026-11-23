@@ -440,11 +440,18 @@ fn ground_material(o: &Value, materials: &serde_json::Map<String, Value>) -> Opt
 }
 
 pub fn create_terrain(o: &Value, materials: &serde_json::Map<String, Value>) -> SceneObject {
+    create_landscape(o, materials).swap_remove(0)
+}
+
+/// The landscape, and at full scale the water in its rivers near the camera (a surface of its
+/// own, which transparent water needs to see the ground beneath it), in that order.
+pub fn create_landscape(o: &Value, materials: &serde_json::Map<String, Value>) -> Vec<SceneObject> {
     let mut params = terrain_params(o);
     // Without a `scale`, the landscape is drawn as itself, in metres on the scene's planet.
     if o.get("scale").is_none() {
         if o.get("radius").is_none() { params.planet.radius = crate::planet::EARTH_RADIUS; }
-        return full_scale_landscape(o, params, ground_material(o, materials));
+        let (land, water) = full_scale_landscape(o, params, ground_material(o, materials));
+        return std::iter::once(land).chain(water).collect();
     }
     let t = evolved(o, params);
     if let Some(path) = o["map"].as_str() { write_map(&t, path, 2048); }
@@ -454,7 +461,7 @@ pub fn create_terrain(o: &Value, materials: &serde_json::Map<String, Value>) -> 
         centre: SceneFile::parse_vec3_def(o, "centre", Vector3::zeros()),
     };
     let geometry = mesh(&t, &place);
-    SceneObject { geometry: Box::new(geometry), medium: Box::new(TerrainMedium::new(t, place, number(o, "min_river_width", 0.), ground_material(o, materials))) }
+    vec![SceneObject { geometry: Box::new(geometry), medium: Box::new(TerrainMedium::new(t, place, number(o, "min_river_width", 0.), ground_material(o, materials))) }]
 }
 
 pub use crate::world::Level;
@@ -509,13 +516,15 @@ pub fn world_directory(o: &Value) -> Option<&std::path::Path> {
 /// - The mesh: `resolution` (vertices along a clipmap ring), `min_spacing` (m), `globe` (cells
 ///   per face edge beyond the rings), `roughness` of the detail below the finest cells.
 /// - Ground cover: `snowline` and `treeline` (m; by default from the climate, by latitude),
-///   `min_river_width` (m); or `"material"`, a material for the ground but rivers and lakes,
+///   `min_river_width` (m), `river_flow` (the rivers' discharge as a multiple of their mean
+///   annual flow: `terrain::hydraulics`; near the camera rivers get channels and transparent
+///   surfaces of their own, `terrain::rivers`); or `"material"`, a material for the ground but rivers and lakes,
 ///   whose graphs' `field` nodes read the simulations (blended between patches) and the climate.
 /// - `displacement`: a graph displacing the ground about the camera at render time, as on a
 ///   `terrain` (see `displaced_patch`), with `displacement_detail`, `vertical_displacement`
 ///   and so on as there; `displacement_reach` (m, default 1000) out from under the camera on
 ///   each side, on a heightfield of `displacement_spacing` (m, default 2).
-fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> SceneObject {
+fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> (SceneObject, Option<SceneObject>) {
     let mut p = SceneryParams::default();
     p.resolution = SceneFile::parse_int(&o["resolution"], p.resolution).max(8);
     p.min_spacing = number(o, "min_spacing", p.min_spacing).max(1e-3);
@@ -525,6 +534,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     p.snowline = o["snowline"].as_f64();
     p.treeline = o["treeline"].as_f64();
     p.min_river_width = number(o, "min_river_width", p.min_river_width);
+    p.hydraulics.flow = number(o, "river_flow", p.hydraulics.flow).max(0.);
     let radius = params.planet.radius;
     let time = number(o, "time", 0.);
     let planet_cells = match &o["planet"] { Value::Bool(false) => None, v => Some(SceneFile::parse_int(&v["cells"], 64).max(2)) };
@@ -553,7 +563,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
         }
     }
     let World { planet, climate, globe, patches, .. } = world;
-    let built: Vec<Layer> = patches.into_iter().chain(globe).map(|t| Layer::new(t, p.min_river_width)).collect();
+    let built: Vec<Layer> = patches.into_iter().chain(globe).map(|t| Layer::new(t, p.min_river_width, &p.hydraulics)).collect();
 
     let start = web_time::Instant::now();
     if let Some(path) = o["planet_map"].as_str() { crate::terrain::map::write_planet_map(&planet, path, 2048); }
@@ -568,6 +578,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     let ground = Arc::new(Ground::new(layers, climate, params.glacier.clone().unwrap_or_default(), time, params.planet.seed, frame.clone(), &p));
     let patches = o.get("displacement").map(|d| displaced_patches(o, d, &relief, &frame, &view, &p, ground.clone()));
     let mesh = scenery::mesh(&relief, &frame, &view, &p, patches.as_ref().map(|(h, _)| h));
+    let ground_for_water = ground.clone();
     let geometry: Box<dyn Geometry + Send + Sync> = match patches {
         Some((_, terrains)) => {
             let mut parts: Vec<Box<dyn Geometry + Send + Sync>> = vec![Box::new(mesh)];
@@ -577,7 +588,60 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
         None => Box::new(mesh),
     };
     say(format!("Landscape: {} triangles in {:.1?}", geometry.primitives(), start.elapsed()));
-    SceneObject { geometry, medium: Box::new(LandscapeMedium::with_ground(ground, material)) }
+    let _ = ground_for_water.clipmap.set(Clipmap::new(&relief, &frame, &view, &p));
+    let water = river_water(&relief, &frame, &view, &p);
+    (SceneObject { geometry, medium: Box::new(LandscapeMedium::with_ground(ground, material)) }, water)
+}
+
+/// The rivers' water near the camera, where the mesh is fine enough to carve their channels
+/// (`terrain::rivers`): transparent, so their beds show through.
+fn river_water(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams) -> Option<SceneObject> {
+    use crate::shapes::mesh::{IndexedMesh, SmoothMesh};
+    use crate::terrain::rivers::patch_dir;
+    let clipmap = Clipmap::new(relief, frame, view, p);
+    let (mut positions, mut normals, mut triangles) = (vec![], vec![], vec![]);
+    for l in relief.layers.iter() {
+        let Some(carve) = l.rivers.as_ref().and_then(|r| r.carve.get()) else { continue };
+        let keep = |q: crate::terrain::channel::Point, half: f64| {
+            let d = patch_dir(&l.domain, q);
+            let finest = relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l));
+            let (x, z) = frame.tangent(&d);
+            finest && clipmap.local(x, z).is_some_and(|s| s < half)
+        };
+        let (vertices, tris) = carve.ribbon(keep);
+        let base = positions.len();
+        for (q, level) in vertices {
+            let d = patch_dir(&l.domain, q);
+            positions.push(frame.to_scene(&d, level));
+            normals.push((frame.to_scene(&d, 0.) - frame.centre()).normalize());
+        }
+        triangles.extend(tris.into_iter().map(|t| [t[0] + base, t[1] + base, t[2] + base]));
+    }
+    // Where the nearest river is, to frame it.
+    let near = relief.layers.iter().filter_map(|l| {
+        let carve = l.rivers.as_ref()?.carve.get()?;
+        let (foot, _) = frame.on_planet(&view.location);
+        let q = crate::terrain::rivers::patch_point(&l.domain, &foot)?;
+        let (p, level, node) = carve.nearest(q)?;
+        let at = frame.to_scene(&patch_dir(&l.domain, p), level);
+        Some(((at - view.location).norm(), at, node))
+    }).min_by(|a, b| a.0.total_cmp(&b.0));
+    if let Some((distance, at, n)) = near {
+        say(format!("Landscape: the nearest river, {:.0} m wide and {:.2} m deep, is {:.0} m away at [{:.0}, {:.1}, {:.0}]",
+            2. * n.half, 1.5 * n.depth, distance, at.x, at.y, at.z));
+    }
+    if triangles.is_empty() { return None; }
+    say(format!("Landscape: rivers' water in {} triangles", triangles.len()));
+    let mesh = SmoothMesh::from_indexed(&[IndexedMesh { positions, normals, triangles, texcoords: vec![] }]);
+    // Clear water, a little more absorbing than the sea's (its colour from suspended sediment
+    // is for step 3).
+    let absorption = crate::color::Color::new(0.45, 0.09, 0.07);
+    let water = crate::ocean::PhysicalOcean {
+        water: crate::color::Color::new(0.01, 0.018, 0.018), roughness: 0.004, center: Some(frame.centre()),
+        absorption: Some(absorption), foam: None,
+    };
+    let surface = crate::terrain::rivers::WaterSurface { mesh, absorption };
+    Some(SceneObject { geometry: Box::new(surface), medium: Box::new(crate::material::texture::Solid { m: Box::new(water) }) })
 }
 
 /// The ground about the camera displaced at render time (`shapes::displaced`), out to

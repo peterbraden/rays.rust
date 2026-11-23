@@ -45,12 +45,16 @@ fn bounds(v: &[f64]) -> (f64, f64) {
 
 impl SimFields {
     pub fn new(t: &Terrain) -> SimFields {
+        SimFields::with_hydraulics(t, &Hydraulics::of(t, &HydraulicParams::default()))
+    }
+
+    /// As `new`, with the rivers' hydraulics already found.
+    pub fn with_hydraulics(t: &Terrain, water: &Hydraulics) -> SimFields {
         let d = &t.domain;
         let n = d.len();
         let slope2 = slope_squared(d, &t.bed);
         let spacing = d.min_spacing();
         let glaciers = t.params.glacier.clone().unwrap_or_default();
-        let water = Hydraulics::of(t, &HydraulicParams::default());
         let cell = |i: usize, f: Field| -> f64 {
             match f {
                 Field::Sediment => t.sediment[i],

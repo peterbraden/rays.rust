@@ -830,7 +830,7 @@ impl SceneFile {
                 vec![Arc::new(SceneFile::parse_volume_over(&obj, geometries, fields))]
             } else if obj["type"] == "landscape" {
                 // Kept, as a surface for scatters after it.
-                let x: Vec<Arc<SceneObject>> = SceneFile::parse_object(obj, materials, media, geometries).into_iter().collect();
+                let x: Vec<Arc<SceneObject>> = crate::terrain::object::create_landscape(&obj, materials).into_iter().map(Arc::new).collect();
                 if let Some(first) = x.first() {
                     landscape = Some(first.clone());
                 }

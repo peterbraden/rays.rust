@@ -367,6 +367,8 @@ impl Rivers {
 pub struct WaterLines {
     segments: Vec<(Point, Point, f64)>,
     by_cell: Vec<Vec<u32>>,
+    /// The ox-bow lakes' segments are first, before this index.
+    oxbows: usize,
 }
 
 impl WaterLines {
@@ -375,11 +377,12 @@ impl WaterLines {
     pub fn new(domain: &Domain, channels: &[Channel], oxbows: &[Oxbow], river_cells: &[(usize, usize, f64)]) -> WaterLines {
         let mut segments = vec![];
         let covered: BTreeSet<usize> = channels.iter().flat_map(|c| c.path.iter().copied()).collect();
-        for c in channels {
-            for w in c.points.windows(2) { segments.push((w[0], w[1], c.width)); }
-        }
         for o in oxbows {
             for w in o.points.windows(2) { segments.push((w[0], w[1], o.width)); }
+        }
+        let first_river = segments.len();
+        for c in channels {
+            for w in c.points.windows(2) { segments.push((w[0], w[1], c.width)); }
         }
         for &(i, r, width) in river_cells {
             if covered.contains(&i) && covered.contains(&r) { continue; }
@@ -398,7 +401,18 @@ impl WaterLines {
             }
             for c in cells { by_cell[c].push(k as u32); }
         }
-        WaterLines { segments, by_cell }
+        WaterLines { segments, by_cell, oxbows: first_river }
+    }
+
+    /// Is there an ox-bow lake at `q` (in `cell`)?
+    pub fn wet_oxbow(&self, cell: usize, q: Point) -> bool {
+        self.by_cell[cell].iter().any(|&k| (k as usize) < self.oxbows && {
+            let (a, b, w) = self.segments[k as usize];
+            let (ab, aq) = ([b[0] - a[0], b[1] - a[1]], [q[0] - a[0], q[1] - a[1]]);
+            let len2 = ab[0] * ab[0] + ab[1] * ab[1];
+            let t = if len2 > 0. { ((aq[0] * ab[0] + aq[1] * ab[1]) / len2).clamp(0., 1.) } else { 0. };
+            dist(q, [a[0] + ab[0] * t, a[1] + ab[1] * t]) < 0.5 * w
+        })
     }
 
     /// Is there water at `q` (in `cell`)?

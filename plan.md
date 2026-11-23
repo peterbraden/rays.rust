@@ -2135,7 +2135,8 @@ world to ship.
 
 ## 15. Water: rivers, waterfalls and coasts from hydraulics
 
-Status: step 1 built (November 2026: `src/terrain/hydraulics.rs`); the rest is a plan. Goal: water on a landscape whose look follows from its physics.
+Status: steps 1 and 2 built (November 2026: `src/terrain/hydraulics.rs`, `src/terrain/rivers.rs`;
+see "Done" below); the rest is a plan. Goal: water on a landscape whose look follows from its physics.
 How much water a river carries, how deep and fast it runs, whether it is glassy or white, where
 it falls and how the fall breaks into spray, how waves slow, turn, steepen and break on a
 coast: each from the quantities that decide it in hydraulics and coastal engineering, computed
@@ -2274,10 +2275,12 @@ transport amplitudes in position and wavevector, though for deep water).
    `froude`). Still to do: in the maps, and as a world stage.
    Tests: Manning's closed form for a wide channel, continuity, the downstream hydraulic-geometry
    exponents emerging near Leopold and Maddock's, Budyko's limits (energy- and water-limited).
-2. River surfaces: the water surface along each reach by the standard step from its control,
-   the channel's cross-section carved into the ground beneath it (displaced landscapes), and the
-   water a surface of its own, transparent over its bed. Tests: backwater (M1) and drawdown (M2)
-   profiles against the direct step method's tabulated cases; the surface never runs uphill.
+2. Done (as below, without the standard step). River surfaces: the water's level along each
+   reach, the channel's cross-section carved into the ground beneath it, and the water a
+   surface of its own, transparent over its bed. Still to do: the gradually varied flow's
+   backwater and drawdown near controls (by the standard step; tests against the M1 and M2
+   profiles), which falls (step 4) need at their lips; displaced landscapes (the displacement
+   graph still roughens the carved bed).
 3. Surface character: roughness and advected ripples from the turbulence, whitewater where the
    flow self-aerates (by Fr, slope and reach type), foam shading shared with the sea. A
    `"river"` plot in the stress test; a mountain-to-lowland demo.
@@ -2298,10 +2301,45 @@ transport amplitudes in position and wavevector, though for deep water).
    contours, shoaling against linear theory, the breaking index, setup against Longuet-Higgins
    and Stewart. A coast demo from `terrain-coast.json`'s world.
 8. Lakes: still water with fetch-limited waves (the ocean's JONSWAP by the lake's fetch along
-   the wind), level at the spill height the flow routing finds.
+   the wind), level at the spill height the flow routing finds. Rivers already find the
+   stretches that are lakes (`rivers::lakes`).
 9. Later: GPU kernels for the new water (until then, host materials and shapes, as the sea was
    before its kernel); waterfalls retreating and plunge pools deepening in the terrain
    simulation (Scheingross and Lamb); a local 3D simulation for close-up breakers.
+
+### Done
+
+- Step 1 (`terrain::hydraulics`): runoff by Thornthwaite and Budyko-Fu, discharge gathered down
+  the receiver tree, the channel a parabola of the simulation's width whose bankfull depth
+  carries `bankfull_ratio` (10, a model choice) times the mean flow, Manning-Strickler with a
+  threshold-channel grain, Froude, reach types; fields `discharge`, `water_depth`, `flow_speed`,
+  `froude`. The parabola gives Leopold and Maddock's at-a-station exponents (tested), where a
+  rectangle had put the mean flow a few centimetres deep across the whole bankfull width.
+- Step 2 (`terrain::rivers`, full-scale landscapes): courses between junctions, smoothed
+  (Chaikin) and bent into meanders of 11 widths' wavelength (Leopold and Wolman) with a
+  sinuosity falling with slope (a model choice), tapering to the junctions; levels that never
+  rise downstream, below the banks by the freeboard and below the simulation's own bed (see
+  below); channels carved where the mesh resolves them; a transparent surface of their own
+  there (`WaterSurface`, which lets light up through it as the sea does); beds of wet sand or
+  gravel by grain size (Ångström's wetting, after Lekner and Dorf); the mask as before far
+  away and on lakes. `river_flow` sets the flow shown. The landscape reports the nearest river.
+- Found on the way:
+  - The drawn surface is a spline through cell corners, each the mean of the cells there, so
+    in narrow valleys it stands tens to hundreds of metres above the simulation's bed, unevenly
+    along the river. Levels follow the bed; channels are cut down to it with 1:1 banks.
+  - The synthetic relief below the cells (`Relief::detail`) laid hills across valley floors;
+    each octave now fades out within half its wavelength of the water (rivers clear their
+    floors).
+  - Rivers pass through basins (glacial overdeepenings): those stretches are lakes (filling
+    to the spill level would stand over 5 m deep), drawn by the mask until step 8.
+  - The sea's material sent rays into transparent water 1 mm under the hit, less than the
+    trace's own offset far from the origin (1e-7 of the coordinates: over a millimetre at
+    13 km), so they found the surface again and saw nothing beneath; now
+    `functions::surface_offset`.
+- Open: the simulation's width (c√A) is wide for the discharge on these mountain patches
+  (42 m wide and 25 cm deep at the mean flow), so from above a river reads as pale sand under
+  clear water. Width from discharge (w ∝ Q^0.5 with a sourced coefficient) and the water's
+  colour from its suspended sediment (step 3) are the next things to look at.
 
 ### Order
 
@@ -2314,6 +2352,9 @@ independent of rivers after 1 (they need only the bed). 8 is small and can go an
 Bibliographic details checked by search, from abstracts or secondary sources unless noted;
 "unverified" marks what couldn't be checked.
 
+- Meanders: Leopold and Wolman, "River meanders", GSA Bulletin 71, 1960 (λ ≈ 10.9 w^1.01;
+  unverified); Langbein and Leopold, USGS PP 422-H, 1966 (sine-generated curves; unverified);
+  Schumm, GSA Bulletin 74, 1963 (sinuosity and bank silt-clay; unverified).
 - Rivers and runoff: Budyko, "Climate and Life", Academic Press, 1974; Fu, Scientia
   Atmospherica Sinica 5(1), 1981 (in Chinese); Zhang et al., WRR 40, W02502, 2004,
   doi:10.1029/2003WR002710 (w = 2.6 reproduces Budyko's curve: a default, not a fit);

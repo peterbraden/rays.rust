@@ -2378,6 +2378,22 @@ Not done, and why:
   sun the shadow ray met the sea it left. `VolumeMaterial::glitter_probe` now offsets it,
   and the two agree to 0.3%. A lesson for these comparisons: when two unbiased estimators
   disagree, the newer one isn't the suspect by default.)
+- The shader's size, measured (WGSL, by kernel; a render compiles only the kernels its
+  scene needs, the `_media` ones only with media). Against 3dc74bb, before this section's
+  clouds and probes: bounce_paths_media 1339K -> 2946K, intersect_paths_media 583K -> 2287K,
+  intersect_paths 134K -> 463K, bounce_paths 636K -> 681K. Two changes: a kernel without
+  media holds no probe code (`Finder::MEDIA`), and the layers' bounds have one call site
+  (`shared::media::planet_ray`): intersect_paths 247K, the media kernels 2814K and 2176K,
+  the module 7.8 -> 7.4 MB. What the rest is: each kind of cloud 150K (Nubis, rain) to 500K
+  (cumulonimbus) a media kernel; Perlin's noise, inlined at each of some sixty call sites
+  in the densities, 1.1 MB of each; Worley's 0.1 MB. Taking the cube's eight corners in a
+  loop made each copy larger, not smaller. What would shrink it is fewer call sites: a
+  density's noise funnelled through one call in a loop over what it asks for; not done,
+  since what it buys isn't known: lavapipe here (Mesa 25.2.8, LLVM 20) compiles the plain
+  kernels in 0.4 s and the media kernels in 1.2-1.5 s at 128, 256 and 512 bits alike, before
+  and after. The hang on CI (Mesa 26.0.8, LLVM 21, a Xeon Platinum 8573C, lavapipe at its
+  native width) was in tests whose scenes have no media, whose kernels hardly grew; it is
+  not reproduced here, and its cause is unknown.
 - Media through the host in the wavefront's rounds (the rest of step 3), and with them the
   thread-locals. Judged not worth doing as such: a scene with a medium the kernels lack is
   rendered a path at a time by the scene's own code under the same driver now, and the

@@ -2758,6 +2758,9 @@ impl Media for NoMedia {
 /// What finds the first thing along a ray, a path's own or one traced for it: the kernels'
 /// surfaces and media (`Kernel`), and on the CPU the host's shapes among them.
 pub trait Finder {
+    /// Whether the scene has media: only then does a path carry probes to trace.
+    const MEDIA: bool;
+
     /// The ray (a path's `o`, `d`, flags and random numbers) with what it meets: `hit`, and
     /// the primitive or the medium in `state.z`.
     fn find(&self, s: &Scene, ray: &PathState) -> PathState;
@@ -2767,6 +2770,8 @@ pub trait Finder {
 pub struct Kernel<M: Media>(pub core::marker::PhantomData<M>);
 
 impl<M: Media> Finder for Kernel<M> {
+    const MEDIA: bool = M::ON;
+
     #[inline]
     fn find(&self, s: &Scene, ray: &PathState) -> PathState {
         intersect_media::<M>(s, &intersect_surface(s, ray))
@@ -2786,7 +2791,7 @@ pub fn intersect<M: Media>(s: &Scene, p: &PathState) -> PathState {
 /// waiting in `hit`), the probe, and from the collision it meets its shadow ray to the sun;
 /// and likewise its glitter probe (`send_glitter_probe`), and from the sea it meets.
 pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
-    let (probe, glitter) = if p.state.y & PATH_SUN_SHARED != 0 { unpack_probes(p.hit, p.state.z) } else { (Vec4::ZERO, Vec4::ZERO) };
+    let (probe, glitter) = if F::MEDIA && p.state.y & PATH_SUN_SHARED != 0 { unpack_probes(p.hit, p.state.z) } else { (Vec4::ZERO, Vec4::ZERO) };
     let mut own = *p;
     own.hit = Vec4::ZERO;
     own.state.z = 0;
@@ -2795,7 +2800,9 @@ pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
     let (mut a0, mut c0, mut a1, mut c1) = (Vec4::ZERO, Vec3::ZERO, Vec4::ZERO, Vec3::ZERO);
     let (mut probed, mut probe_from) = (Vec3::ZERO, Vec3::ZERO);
     let mut job = 0;
-    while job < 7 {
+    // (Without media no probes: their turns, and their code, are left out.)
+    let jobs = if F::MEDIA { 7 } else { 3 };
+    while job < jobs {
         if job == 1 || job == 2 {
             let from = if job == 1 { a0 } else { a1 };
             if from.w == 0.0 {
@@ -2804,7 +2811,7 @@ pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
             }
             ray = shadow_ray(s, &found, from);
         }
-        if job == 3 || job == 5 {
+        if F::MEDIA && (job == 3 || job == 5) {
             let sent = if job == 3 { probe } else { glitter };
             probed = Vec3::ZERO;
             if sent.w <= 0.0 {
@@ -2816,7 +2823,7 @@ pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
             ray.d = sent.xyz().extend(0.0);
             ray.state.x = found.state.x;
         }
-        if job == 4 || job == 6 {
+        if F::MEDIA && (job == 4 || job == 6) {
             if probed.dot(probed) == 0.0 {
                 job += 1;
                 continue;
@@ -2834,7 +2841,7 @@ pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
             c0 = samples.1;
             a1 = samples.2;
             c1 = samples.3;
-        } else if job == 3 {
+        } else if F::MEDIA && job == 3 {
             found.state.x = hit.state.x;
             found.l.w += 1.0;
             if hit.state.z != NONE && hit.state.z >= MEDIUM_HIT {
@@ -2844,7 +2851,7 @@ pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
                 // (Its shadow ray crosses the media as that vertex's would.)
                 ray.state.y = flags;
             }
-        } else if job == 5 {
+        } else if F::MEDIA && job == 5 {
             found.state.x = hit.state.x;
             found.l.w += 1.0;
             if hit.state.z != NONE && hit.state.z < MEDIUM_HIT {
@@ -2852,7 +2859,7 @@ pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
                 probed = light;
                 probe_from = x;
             }
-        } else if job == 4 || job == 6 {
+        } else if F::MEDIA && (job == 4 || job == 6) {
             found.state.x = hit.state.x;
             found.l.w += 1.0;
             if hit.state.z == NONE {
@@ -3967,11 +3974,20 @@ impl shared::media::Medium<f32> for KernelMedium<'_> {
             return (self.sigma, INF);
         }
         let layer = self.layer();
+        // (Round the planet by a change of coordinates, `OnPlanet`'s, and flat without one:
+        // so that the layers' bounds, inlined at each call, are called from one place.)
+        let (mut q, mut dq, mut speed) = ((x, y, z), (dx, dy, dz), 1.0);
         if self.radius > 0.0 {
-            shared::media::OnPlanet { radius: self.radius, medium: &layer }.majorant_from(x, y, z, dx, dy, dz)
-        } else {
-            layer.majorant_from(x, y, z, dx, dy, dz)
+            let curved = shared::media::planet_ray(self.radius, x, y, z, dx, dy, dz);
+            if curved.2 <= 0.0 {
+                return (layer.bound(), shared::media::curved_step());
+            }
+            q = curved.0;
+            dq = curved.1;
+            speed = curved.2;
         }
+        let (majorant, length) = layer.majorant_from(q.0, q.1, q.2, dq.0, dq.1, dq.2);
+        if self.radius > 0.0 { (majorant, (length / speed).min(shared::media::curved_step())) } else { (majorant, length) }
     }
 }
 

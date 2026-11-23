@@ -357,8 +357,10 @@ pub enum Site {
     Volcanoes,
     /// ... a coast with mountains behind it, ...
     Coast,
-    /// ... or a plateau of flat strata in the subtropics (mesa country).
+    /// ... a plateau of flat strata in the subtropics (mesa country), ...
     Plateau,
+    /// ... or a stretched province of fault blocks in the subtropics (basin and range).
+    Rift,
 }
 
 /// Samples of the planet a site is chosen from.
@@ -373,6 +375,7 @@ impl Site {
             Site::Volcanoes => planet.most_volcanic(SITE_SAMPLES),
             Site::Coast => planet.most_coastal(SITE_SAMPLES),
             Site::Plateau => planet.most_plateau(SITE_SAMPLES),
+            Site::Rift => planet.most_rifted(SITE_SAMPLES),
         }
     }
 }

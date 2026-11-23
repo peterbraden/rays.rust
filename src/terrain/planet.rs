@@ -59,6 +59,14 @@ pub struct PlanetParams {
     pub plateau_uplift: f64,
     /// How far the plateaus stand above the lowlands at time zero, metres.
     pub plateau_height: f64,
+    /// Rifting: provinces of stretched continent broken into tilted fault blocks (the Basin
+    /// and Range, the East African rift's flanks), `extension`. How fast a block's crest rises
+    /// relative to the basin before it, metres per year...
+    pub rift_rate: f64,
+    /// ... how far it stands above it at time zero, metres...
+    pub rift_relief: f64,
+    /// ... and the spacing of the faults, metres: a range and a basin.
+    pub rift_spacing: f64,
     /// Plate tectonics, to place the continents, ocean basins, mountain belts and volcanoes;
     /// None for noise fields alone.
     pub tectonics: Option<TectonicsParams>,
@@ -76,6 +84,9 @@ impl Default for PlanetParams {
             geology: GeologyParams::default(),
             plateau_uplift: 2e-4,
             plateau_height: 800.,
+            rift_rate: 4e-4,
+            rift_relief: 1200.,
+            rift_spacing: 25e3,
             tectonics: None,
         }
     }
@@ -150,6 +161,7 @@ pub struct Planet {
     plutons: Octaves,
     plunges: Octaves,
     plateaus: Octaves,
+    rifts: Octaves,
     /// The crust from plate tectonics, if simulated.
     pub crust: Option<Arc<Crust>>,
     /// The sedimentary column.
@@ -183,6 +195,7 @@ impl Planet {
             params, continents: Octaves::new(seed, 1), belts: Octaves::new(seed, 2), relief: Octaves::new(seed, 3),
             folds: Octaves::new(seed, 4), provinces: Octaves::new(seed, 5), hotspots: Octaves::new(seed, 6),
             plutons: Octaves::new(seed, 7), plunges: Octaves::new(seed, 8), plateaus: Octaves::new(seed, 9),
+            rifts: Octaves::new(seed, 10),
             column,
             crust, trend: OnceLock::new(),
         }
@@ -277,6 +290,9 @@ impl Planet {
         let o = self.orogeny(d);
         let folds = self.belt_folds(d, o, finest);
         let (crest, fold, thrust) = (folds.shape, g.fold_amplitude * folds.shape, folds.thrust);
+        // Fault blocks carry their strata with them, tilted.
+        let blocks = self.fault_blocks(d, finest);
+        let faulted = self.params.rift_relief * blocks.height();
         let warp = g.warp_amplitude * self.folds.fbm(d, RELIEF_FREQUENCY, 4);
         let cover = g.cover_thickness * (0.4 * self.provinces.fbm(d, RELIEF_FREQUENCY, 3)).exp();
         let basement = -cover + g.exhumation * o * o;
@@ -285,7 +301,7 @@ impl Planet {
         let strength = self.plutons.fbm(d, PLUTON_FREQUENCY, 3) + 0.35 * magma - 0.55;
         let pluton = if g.plutons > 0. { basement - 1000. + 10000. * g.plutons * strength } else { -1e5 };
         Structure {
-            fold: fold + thrust + warp, crest, fracture: folds.fracture,
+            fold: fold + thrust + warp + faulted, crest, fracture: folds.fracture.max(blocks.fracture),
             oceanic: match &self.crust {
                 Some(c) => 1. - c.margin(d),
                 None => 1. - smoothstep(-0.03, 0.03, self.continent(d)),
@@ -325,6 +341,50 @@ impl Planet {
         field * smoothstep(0.05, 0.25, self.continent(d)) * (1. - smoothstep(0.05, 0.3, self.orogeny(d)))
     }
 
+    /// How stretched the continent at `d` is, 0 to 1: provinces several hundred kilometres
+    /// across, away from the mountain belts and the plateaus, broken into fault blocks
+    /// (`fault_blocks`). (The Basin and Range lies behind a belt, stretched as it collapsed;
+    /// here the provinces are placed by noise, as the plateaus are.)
+    pub fn extension(&self, d: &Vector3<f64>) -> f64 {
+        let p = &self.params;
+        if p.rift_rate == 0. && p.rift_relief == 0. { return 0.; }
+        let field = smoothstep(0.1, 0.35, self.rifts.fbm(d, PLATEAU_FREQUENCY, 3));
+        field * smoothstep(0.05, 0.25, self.continent(d)) * (1. - smoothstep(0.05, 0.3, self.orogeny(d))) * (1. - self.plateau(d))
+    }
+
+    /// The fault blocks of the stretched provinces at `d`, with detail down to wavelength
+    /// `finest` metres resolved (`geology::fault_blocks`, in the direction of extension there,
+    /// which turns slowly across a province): how far a block raises the ground and the strata,
+    /// relative to the rift's relief, from -1/2 in a basin to 1/2 at a crest, how strongly
+    /// the province is faulted there, and how fractured the rock is by the faults. The ranges
+    /// stand above the regional level: the ground rises by `offset + lift / 2` of the relief at
+    /// time zero, from the basins' floors at the regional level, and the blocks keep slipping
+    /// by `offset`, their crests rising and their basins sinking.
+    pub fn fault_blocks(&self, d: &Vector3<f64>, finest: f64) -> geology::Blocks {
+        let p = &self.params;
+        let none = geology::Blocks { offset: 0., lift: 0., fracture: 0. };
+        let e = self.extension(d);
+        let fade = geology::fade(finest, p.rift_spacing);
+        if e <= 1e-3 || fade <= 0. { return none; }
+        // The direction of extension, turning over hundreds of kilometres.
+        let east = Vector3::y().cross(d);
+        let east = if east.norm() < 1e-9 { Vector3::x() } else { east.normalize() };
+        let north = d.cross(&east);
+        let angle = std::f64::consts::PI * self.rifts.fbm(d, PLATEAU_FREQUENCY / 2., 2) + 0.5;
+        let across = east * angle.cos() + north * angle.sin();
+        // Which way the faults dip, by domains; between them, where the polarity flips
+        // (accommodation zones), the blocks are symmetric horsts and grabens.
+        let polarity = smoothstep(-0.15, 0.15, self.rifts.octave(4, d, 11.));
+        // Fault traces wander, and the ranges are segments a few times as long as they are
+        // spaced, en echelon, dying out and taking over from each other.
+        let w = p.radius / p.rift_spacing;
+        let warp = Vector3::new(self.rifts.octave(5, d, w), self.rifts.octave(6, d, w), self.rifts.octave(7, d, w)) * (0.2 * p.rift_spacing);
+        let segment = smoothstep(-0.3, 0.2, self.rifts.fbm(d, w / 4., 2));
+        let b = geology::fault_blocks(p.seed, &(d * p.radius + warp), &across, p.rift_spacing, polarity);
+        let lift = e * fade * segment;
+        geology::Blocks { offset: lift * b.offset, lift, fracture: e.min(1.) * fade * segment * b.fracture }
+    }
+
     /// Tectonic uplift rate, metres per year: the mountain belts', and the plateaus'.
     pub fn uplift(&self, d: &Vector3<f64>) -> f64 {
         let plateau = self.params.plateau_uplift * self.plateau(d);
@@ -351,6 +411,16 @@ impl Planet {
         })
     }
 
+    /// As `most_plateau`, but for a stretched province of fault blocks in the subtropics,
+    /// where its basins are dry: basin and range.
+    pub fn most_rifted(&self, samples: usize) -> (f64, f64) {
+        self.best_site_in(samples, 15. ..40., |d| {
+            let e = self.extension(d);
+            if e <= 0. { return -10.; }
+            2. * e + 0.1 * self.continent(d)
+        })
+    }
+
     /// Elevation above sea level at time zero, metres, with detail down to wavelength `finest`.
     pub fn elevation(&self, d: &Vector3<f64>, finest: f64) -> f64 {
         if let Some(crust) = &self.crust {
@@ -364,7 +434,8 @@ impl Planet {
             let crest = self.belt_folds(d, o, finest).shape;
             let fold = self.params.geology.fold_amplitude * crest;
             let mountains = self.params.mountain_height * o * (ridges * ridges - 0.2) * self.fold_emphasis(crest);
-            return base + hills + mountains + self.params.geology.fold_relief * fold + self.params.plateau_height * self.plateau(d);
+            return base + hills + mountains + self.params.geology.fold_relief * fold + self.params.plateau_height * self.plateau(d)
+                + self.params.rift_relief * self.fault_blocks(d, finest).height();
         }
         let c = self.continent(d);
         let base = if c >= 0. { 1500. * c } else { -4500. * (-6. * c).tanh() };
@@ -378,6 +449,7 @@ impl Planet {
         let fold = self.params.geology.fold_amplitude * crest;
         let mountains = self.params.mountain_height * o * (0.2 + ridges * ridges) * self.fold_emphasis(crest);
         base + hills + mountains + self.params.geology.fold_relief * fold + self.params.plateau_height * self.plateau(d)
+            + self.params.rift_relief * self.fault_blocks(d, finest).height()
     }
 
     /// How much the ridges are raised where the folds' shape is `crest`: the ranges stand on

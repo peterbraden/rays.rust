@@ -20,7 +20,8 @@
 //! - `domain`: `{"type": "patch", "cells", "spacing" (m), "lat", "lon"}`, where a patch without
 //!   `lat`/`lon` is placed on this seed's most mountainous spot (or, with `"near":
 //!   "volcanoes"`, its most volcanic mountains, with `"near": "plateau"`, a plateau of flat
-//!   strata in the subtropics (mesa country), or with `"near": "coast"`, a coast with
+//!   strata in the subtropics (mesa country), with `"near": "rift"`, fault blocks in the
+//!   subtropics (basin and range), or with `"near": "coast"`, a coast with
 //!   mountains behind it); or `{"type": "planet",
 //!   "cells"}`, a cubed sphere with `cells` x `cells` per face.
 //! - Ground cover: ice, rivers, sea floor, bare rock on steep slopes (coloured by the bedrock
@@ -34,7 +35,7 @@
 //!   the origin, ignoring the planet's curvature. A planet is drawn centred on `centre`
 //!   (default the origin), its sea level a sphere of radius `radius / scale`.
 //! - Processes: `radius` (m), `step` (years), `land_bias`, `mountain_height` (m),
-//!   `uplift_rate` (m/yr), `belt_frequency`, `plateau_uplift` (m/yr), `plateau_height` (m); `fluvial`: `{k, m, n, diffusivity, deposition, lateral, avulsion}`;
+//!   `uplift_rate` (m/yr), `belt_frequency`, `plateau_uplift` (m/yr), `plateau_height` (m), `rift_rate` (m/yr), `rift_relief` (m), `rift_spacing` (m); `fluvial`: `{k, m, n, diffusivity, deposition, lateral, avulsion}`;
 //!   `glacier` and `volcanoes`: `false` to disable, or overrides of `GlacierParams` and
 //!   `VolcanoParams` by field name. Geology (`geology`, docs/geology.md): `"geology"`,
 //!   overrides of `GeologyParams` by field name (`strata_thickness`, `contrast`,
@@ -339,6 +340,9 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
     p.planet.belt_frequency = number(o, "belt_frequency", p.planet.belt_frequency);
     p.planet.plateau_uplift = number(o, "plateau_uplift", p.planet.plateau_uplift);
     p.planet.plateau_height = number(o, "plateau_height", p.planet.plateau_height);
+    p.planet.rift_rate = number(o, "rift_rate", p.planet.rift_rate);
+    p.planet.rift_relief = number(o, "rift_relief", p.planet.rift_relief);
+    p.planet.rift_spacing = number(o, "rift_spacing", p.planet.rift_spacing).max(1000.);
     p.step = number(o, "step", p.step);
     let f = &o["fluvial"];
     p.fluvial.k = number(f, "k", p.fluvial.k);
@@ -487,6 +491,7 @@ pub fn site_of(d: &Value) -> Site {
         (_, _, Some("volcanoes")) => Site::Volcanoes,
         (_, _, Some("coast")) => Site::Coast,
         (_, _, Some("plateau")) => Site::Plateau,
+        (_, _, Some("rift")) => Site::Rift,
         (_, _, None | Some("mountains")) => Site::Mountains,
         (_, _, Some(x)) => panic!("Unknown terrain domain \"near\": {}", x),
     }

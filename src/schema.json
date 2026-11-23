@@ -2188,7 +2188,7 @@
               "kind": "enum",
               "default": "mountains",
               "doc": "Patch without lat/lon: centre it on the most such place.",
-              "options": ["mountains", "volcanoes", "coast", "plateau"]
+              "options": ["mountains", "volcanoes", "coast", "plateau", "rift"]
             }
           ]
         },
@@ -2272,6 +2272,9 @@
           "default": 800,
           "doc": "How far the plateaus stand above the lowlands at time zero, m."
         },
+        {"name": "rift_rate", "kind": "number", "default": 0.0004, "doc": "How fast tilted fault blocks' crests rise relative to their basins in stretched provinces (basin and range), m/yr."},
+        {"name": "rift_relief", "kind": "number", "default": 1200, "doc": "How far the fault blocks' crests stand above their basins at time zero, m."},
+        {"name": "rift_spacing", "kind": "number", "default": 25000, "doc": "Spacing of the normal faults, m: a range and a basin."},
         {
           "name": "tectonics",
           "kind": "object",

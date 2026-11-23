@@ -173,6 +173,30 @@ balances the inflow, as a shallow salt lake or none at all, leaving a flat playa
 (the module docs of `terrain::simulation`, "Closed basins"; `evaporation` scales it, 0 for
 none). Maps show salt lakes in green-blue and playas in white.
 
+## Rifts: basin and range
+
+Where a continent is stretched, its brittle upper crust breaks along normal faults into tilted
+blocks: half-grabens, each block's back sloping gently up to a crest at the fault, and dropping
+at the fault's scarp to the floor of the basin beyond (the Basin and Range, whose ranges are
+spaced 25-35 km apart; the flanks of the East African rift). Away from the mountain belts and
+the plateaus, provinces several hundred kilometres across are stretched (`Planet::extension`)
+and broken into such blocks (`Planet::fault_blocks`, `geology::fault_blocks`): a sawtooth in
+phasor noise along the direction of extension, which turns slowly across a province, the
+faults `rift_spacing` apart (25 km), their traces wandering, the ranges ending and taking over
+from each other en echelon, and the faults dipping one way or the other by domains, with
+symmetric horsts and grabens between. At time zero the crests stand up to `rift_relief`
+(1200 m) above the basins, whose floors are at the regional level, and the faults keep
+slipping, the crests rising and the basins sinking relative to each other at up to
+`rift_rate` (0.4 mm/yr; the Wasatch fault's is 1-2). The blocks carry and tilt their strata,
+and the rock along the faults is fractured. Patches `"near": "rift"` are centred on a
+stretched province in the subtropics.
+
+![A stretched province after a million years (128 cells of 1 km): tilted ranges with their scarps facing west, half-grabens filling with alluvium, and playas against the faults where the basins are closed](geology-basin-range.png)
+
+In a dry climate the basins are closed (above): their floors fill with the ranges' alluvium,
+and their lowest ground, against the fault where the hanging wall is tilted down, is a playa,
+as Death Valley's is against the Black Mountains.
+
 ## Validation
 
 `terrain::simulation::tests::test_channels_and_slopes_are_steeper_on_hard_rock` (ignored; run

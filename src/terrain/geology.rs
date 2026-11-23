@@ -601,6 +601,45 @@ pub fn fold(seed: u64, p: &Vector3<f64>, along: &Vector3<f64>, wavelength: f64, 
     Fold { shape: defined * warped.cos(), thrust: defined * leaning * sawtooth, fracture: defined * crest.max(zone) }
 }
 
+/// Tilted fault blocks at `p`, where the crust is stretched along `across`, the faults
+/// `spacing` apart: half-grabens. Each block is a sawtooth in phasor noise's phase along
+/// `across`: its back-slope rises over most of the spacing to a crest at the fault's footwall,
+/// and drops at the fault, over a tenth of it, to the floor of the next basin, the hanging
+/// wall tilted down against the fault (Wernicke and Burchfiel, "Modes of extensional
+/// tectonics", J. Struct. Geol. 4, 1982; the ranges of the Basin and Range are spaced 25-35 km
+/// apart). The faults dip the way `across` points where `polarity` is 1, the other way where
+/// it is 0, and between, the two are blended into symmetric horsts and grabens. Unlike folds',
+/// the blocks depend on `across`'s sign, so it must vary smoothly.
+pub fn fault_blocks(seed: u64, p: &Vector3<f64>, across: &Vector3<f64>, spacing: f64, polarity: f64) -> Blocks {
+    let (phase, defined) = phasor(seed ^ 0x5eed_b10c, p, across, spacing);
+    let s = (phase + std::f64::consts::PI) / TAU;
+    const SCARP: f64 = 0.1;
+    let tilted = |s: f64| if s < 1. - SCARP { s / (1. - SCARP) } else { (1. - s) / SCARP };
+    let t = polarity.clamp(0., 1.);
+    let offset = t * tilted(s) + (1. - t) * tilted(1. - s) - 0.5;
+    // The damage zones of the faults, along each scarp (which ever way it faces).
+    let near = s.min(1. - s);
+    Blocks { offset: defined * offset, lift: defined, fracture: defined * (-(near / 0.05).powi(2)).exp() }
+}
+
+/// Fault blocks at a point (`fault_blocks`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Blocks {
+    /// How far the block raises the ground and its strata, from -1/2 at the foot of a fault
+    /// to 1/2 at a block's crest, relative to the rift's relief.
+    pub offset: f64,
+    /// How strongly the ground is faulted, 0 to 1.
+    pub lift: f64,
+    /// How fractured the rock is near the faults, 0 to 1.
+    pub fracture: f64,
+}
+
+impl Blocks {
+    /// How far the blocks raise the ground and strata at time zero relative to the relief:
+    /// from the basins' floors at the regional level to the crests (`Planet::fault_blocks`).
+    pub fn height(&self) -> f64 { self.offset + 0.5 * self.lift }
+}
+
 /// The folds at a point (`fold`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Fold {
@@ -634,6 +673,27 @@ pub fn fade(finest: f64, wavelength: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_fault_blocks_are_tilted_with_steep_scarps() {
+        // Along the direction of extension, the ground climbs slowly up each block's back and
+        // drops steeply at its fault: the steepest descent is several times the steepest
+        // climb. With the polarity flipped, the faults face the other way.
+        let across = Vector3::x();
+        let profile = |polarity: f64| -> Vec<f64> {
+            (0..2000).map(|k| fault_blocks(3, &Vector3::new(k as f64 * 50., 0., 0.), &across, 25e3, polarity).offset).collect()
+        };
+        let steepest = |h: &[f64]| -> (f64, f64) {
+            h.windows(2).fold((0f64, 0f64), |(up, down), w| (up.max(w[1] - w[0]), down.max(w[0] - w[1])))
+        };
+        let (up, down) = steepest(&profile(1.));
+        assert!(down > 4. * up, "climb {} drop {}", up, down);
+        let (up, down) = steepest(&profile(0.));
+        assert!(up > 4. * down, "climb {} drop {}", up, down);
+        let h = profile(1.);
+        assert!(h.iter().all(|x| (-0.5..=0.5).contains(x)));
+        assert!(h.iter().cloned().fold(f64::MIN, f64::max) - h.iter().cloned().fold(f64::MAX, f64::min) > 0.6);
+    }
 
     #[test]
     fn test_glaciers_and_rivers_rank_rocks_differently() {

@@ -290,7 +290,10 @@ impl Terrain {
         // Folds still growing: anticlines rise faster than synclines.
         let growth = params.planet.geology.fold_growth;
         let belt_uplift: Vec<f64> = domain.dirs.iter().map(|d| planet.uplift(d)).collect();
-        let uplift = belt_uplift.iter().zip(&structure).map(|(u, s)| u * (1. + growth * s.crest).max(0.)).collect();
+        // Fault blocks keep slipping: their crests rise and their basins sink.
+        let rift = params.planet.rift_rate;
+        let uplift = belt_uplift.iter().zip(&structure).zip(&domain.dirs)
+            .map(|((u, s), d)| u * (1. + growth * s.crest).max(0.) + if rift != 0. { rift * planet.fault_blocks(d, finest).offset } else { 0. }).collect();
         // Thrust sheets carry the rock towards the foreland, at the belt's strength.
         let velocity = match &domain.layout {
             Layout::Patch { up, east, north, .. } => {

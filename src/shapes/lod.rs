@@ -407,6 +407,147 @@ pub enum Detail {
     Aggregate(Vec<Arc<Tagged<Triangle>>>, Albedo),
 }
 
+impl Detail {
+    /// This part with detail smaller than `size` dropped, as `geometry` makes it, encoded for a
+    /// cache (`decode`). A part made from its bytes is the same as one made directly.
+    pub fn encode(&self, size: f64) -> Vec<u8> {
+        let mut w = Bytes::new(MAGIC);
+        match self {
+            Detail::Surface(t) => {
+                let t = if size <= 0. { t.clone() } else { simplify(t, size) };
+                w.u8(0);
+                w.u32(t.len() as u32);
+                for t in &t {
+                    for v in [t.v0, t.v1, t.v2, t.normalv0, t.normalv1, t.normalv2] {
+                        w.vector(&v);
+                    }
+                }
+            },
+            Detail::Aggregate(t, _) if size <= 0. => {
+                w.u8(1);
+                w.u32(t.len() as u32);
+                for t in t {
+                    for v in [t.item.v0, t.item.v1, t.item.v2, t.item.normal] {
+                        w.vector(&v);
+                    }
+                    w.u32(t.face);
+                }
+            },
+            Detail::Aggregate(t, albedo) => {
+                let set = consolidate_with(t, size, *albedo);
+                w.u8(2);
+                w.u32(set.cards.len() as u32);
+                for c in &set.cards {
+                    for x in c.corner.iter().chain(&c.u).chain(&c.v) {
+                        w.f32(*x);
+                    }
+                    w.u32(c.data);
+                }
+                let k = &set.clusters;
+                w.u32(k.starts.len() as u32);
+                k.starts.iter().for_each(|x| w.u32(*x));
+                w.u32(k.items.len() as u32);
+                for i in &k.items {
+                    w.u16(i.normal[0] as u16);
+                    w.u16(i.normal[1] as u16);
+                    w.u16(i.area);
+                    w.u32(i.face);
+                }
+                w.u32(k.lit.len() as u32);
+                k.lit.iter().for_each(|x| w.u8(*x));
+            },
+        }
+        w.0
+    }
+}
+
+/// Marks a part encoded by `Detail::encode`, and its format: change the number when the
+/// format, or what makes a level (cards, their shadowing), changes.
+const MAGIC: &[u8; 8] = b"RAYSLOD1";
+
+/// A part of a model encoded by `Detail::encode`, made again; `None` if `bytes` aren't one.
+pub fn decode(bytes: &[u8]) -> Option<Arc<dyn Geometry + Sync + Send>> {
+    let mut r = Reader { bytes, at: 0 };
+    if r.take(MAGIC.len())? != MAGIC {
+        return None;
+    }
+    let geometry: Arc<dyn Geometry + Sync + Send> = match r.u8()? {
+        0 => {
+            let n = r.u32()? as usize;
+            let mut t = Vec::with_capacity(n);
+            for _ in 0 .. n {
+                let v: Vec<Vector3<f64>> = (0 .. 6).map(|_| r.vector()).collect::<Option<_>>()?;
+                t.push(Arc::new(SmoothTriangle::new(v[0], v[1], v[2], v[3], v[4], v[5])));
+            }
+            Arc::new(GeometrySet::new(&t))
+        },
+        1 => {
+            let n = r.u32()? as usize;
+            let mut t = Vec::with_capacity(n);
+            for _ in 0 .. n {
+                let v: Vec<Vector3<f64>> = (0 .. 4).map(|_| r.vector()).collect::<Option<_>>()?;
+                t.push(Arc::new(Tagged { item: Triangle::new_with_normal(v[0], v[1], v[2], v[3]), face: r.u32()? }));
+            }
+            Arc::new(GeometrySet::new(&t))
+        },
+        2 => {
+            let n = r.u32()? as usize;
+            let mut cards = Vec::with_capacity(n);
+            for _ in 0 .. n {
+                let f: Vec<f32> = (0 .. 9).map(|_| r.f32()).collect::<Option<_>>()?;
+                cards.push(Card { corner: [f[0], f[1], f[2]], u: [f[3], f[4], f[5]], v: [f[6], f[7], f[8]], data: r.u32()? });
+            }
+            let starts = (0 .. r.u32()?).map(|_| r.u32()).collect::<Option<Vec<_>>>()?;
+            let items = (0 .. r.u32()?).map(|_| Some(Constituent {
+                normal: [r.u16()? as i16, r.u16()? as i16],
+                area: r.u16()?,
+                face: r.u32()?,
+            })).collect::<Option<Vec<_>>>()?;
+            let lit = (0 .. r.u32()?).map(|_| r.u8()).collect::<Option<Vec<_>>>()?;
+            let (bvh, cards) = Bvh::build_with_leaves(cards, Card::bounds, CARDS_PER_LEAF);
+            Arc::new(CardSet { bvh, cards, clusters: Clusters { starts, items, lit } })
+        },
+        _ => return None,
+    };
+    (r.at == bytes.len()).then_some(geometry)
+}
+
+/// Little-endian bytes being written.
+pub(crate) struct Bytes(pub Vec<u8>);
+
+impl Bytes {
+    pub fn new(magic: &[u8]) -> Bytes { Bytes(magic.to_vec()) }
+    pub fn u8(&mut self, x: u8) { self.0.push(x) }
+    pub fn u16(&mut self, x: u16) { self.0.extend_from_slice(&x.to_le_bytes()) }
+    pub fn u32(&mut self, x: u32) { self.0.extend_from_slice(&x.to_le_bytes()) }
+    pub fn f32(&mut self, x: f32) { self.0.extend_from_slice(&x.to_le_bytes()) }
+    pub fn vector(&mut self, v: &Vector3<f64>) {
+        for x in v.iter() {
+            self.0.extend_from_slice(&x.to_le_bytes());
+        }
+    }
+}
+
+/// Little-endian bytes being read; `None` past their end.
+pub(crate) struct Reader<'a> {
+    pub bytes: &'a [u8],
+    pub at: usize,
+}
+
+impl Reader<'_> {
+    pub fn take(&mut self, n: usize) -> Option<&[u8]> {
+        let s = self.bytes.get(self.at .. self.at + n)?;
+        self.at += n;
+        Some(s)
+    }
+    pub fn u8(&mut self) -> Option<u8> { Some(self.take(1)?[0]) }
+    pub fn u16(&mut self) -> Option<u16> { Some(u16::from_le_bytes(self.take(2)?.try_into().ok()?)) }
+    pub fn u32(&mut self) -> Option<u32> { Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?)) }
+    pub fn f32(&mut self) -> Option<f32> { Some(f32::from_le_bytes(self.take(4)?.try_into().ok()?)) }
+    pub fn f64(&mut self) -> Option<f64> { Some(f64::from_le_bytes(self.take(8)?.try_into().ok()?)) }
+    pub fn vector(&mut self) -> Option<Vector3<f64>> { Some(Vector3::new(self.f64()?, self.f64()?, self.f64()?)) }
+}
+
 /// How much light a piece of an aggregate reflects and transmits (each as a luminance), for
 /// the light its cluster's leaves scatter on to each other (`self_lit`).
 #[derive(Clone, Copy, Debug)]
@@ -1033,6 +1174,33 @@ mod tests {
             let (a, b) = ((Vector3::x() + tilt.y * Vector3::y()).normalize(), (Vector3::z() - tilt.x * Vector3::y() + tilt.z * Vector3::x()).normalize());
             Arc::new(Tagged { item: Triangle::new(at, at + b * size, at + a * size), face: k as u32 })
         }).collect()
+    }
+
+    #[test]
+    fn test_levels_read_back_as_made() {
+        // Cards (with their shadowing), a level's own leaves, and a simplified surface.
+        let all = leaves(400, 2., 0.1, 3);
+        let surface: Vec<Arc<SmoothTriangle>> = all.iter().map(|t| {
+            let n = t.item.normal;
+            Arc::new(SmoothTriangle::new(t.item.v0, t.item.v1, t.item.v2, n, n, n))
+        }).collect();
+        let mut rng = Pcg32::new(5, 5);
+        for (detail, size) in [(Detail::Aggregate(all.clone(), Albedo::GREEN_LEAF), 0.4), (Detail::Aggregate(all.clone(), Albedo::GREEN_LEAF), 0.),
+                               (Detail::Surface(surface), 0.3)] {
+            let bytes = detail.encode(size);
+            let (a, b) = (decode(&bytes).unwrap(), detail.geometry(size));
+            assert_eq!(decode(&bytes[.. bytes.len() - 1]).map(|_| ()), None);
+            assert_eq!(a.primitives(), b.primitives());
+            for _ in 0 .. 500 {
+                let ro = Vector3::new(rng.next_f64() * 4. - 2., 3., rng.next_f64() * 4. - 2.);
+                let r = Ray { ro, rd: Vector3::new(rng.next_f64() - 0.5, -1., rng.next_f64() - 0.5) };
+                match (a.intersects(&r), b.intersects(&r)) {
+                    (Some(x), Some(y)) => assert!((x.dist - y.dist).abs() < 1e-6 && x.face == y.face, "{x:?} {y:?}"),
+                    (None, None) => {},
+                    (x, y) => panic!("{x:?} {y:?}"),
+                }
+            }
+        }
     }
 
     #[test]

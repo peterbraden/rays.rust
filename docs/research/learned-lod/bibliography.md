@@ -142,7 +142,7 @@ blocked here; anything said about it is from memory and unverified.
 | Lacewell, Burley, Boulos, Shirley. *Raytracing Prefiltered Occlusion for Aggregate Geometry*. RT 2008 | Not fetched |
 | Neyret. *Modeling, Animating, and Rendering Complex Scenes Using Volumetric Textures*. IEEE TVCG 4(1), 1998 | Abstract |
 | Décoret, Durand, Sillion, Dorsey. *Billboard Clouds for Extreme Model Simplification*. SIGGRAPH 2003 | Abstract |
-| Yoon, Lauterbach, Manocha. *R-LODs*. Visual Computer 22, 2006 | Abstract |
+| Yoon, Lauterbach, Manocha. *R-LODs*. Visual Computer 22, 2006 | Abstract (see [Out-of-core and streamed geometry](#out-of-core-and-streamed-geometry)) |
 | Gobbetti, Marton. *Far Voxels*. SIGGRAPH 2005 | Abstract |
 | Bruneton, Neyret. *Real-time Realistic Rendering and Lighting of Forests*. CGF 31(2), 2012 | Abstract |
 | van Antwerpen, Gautron, Biddulph, Kubisch, Schmid, Stich. *Real-time Path Tracing of Massive Dynamic Foliage*. HPG 2026. doi:10.1145/3820021 | Abstract and press (dl.acm.org blocked) |
@@ -195,3 +195,32 @@ blocked here; anything said about it is from memory and unverified.
   (second-hand).
 - **Miller et al.** Transmittance is exponential if and only if the indicator along the ray is
   Markov (Theorem 4). Then σ = |ω·∇v|/v, which factors as density times projected area (Eq. 12–14).
+
+## Out-of-core and streamed geometry
+
+| Paper | Status |
+|---|---|
+| Wald, Dietrich, Slusallek. *An Interactive Out-of-Core Rendering Framework for Visualizing Massively Complex Models*. EGSR 2004, pp. 81–92. doi:10.2312/EGWR/EGSR04/081-092 | Full text |
+| Karis, Stubbe, Wihlidal. *Nanite: A Deep Dive*. SIGGRAPH 2021 course, Advances in Real-Time Rendering in Games (slides with speaker notes) | Full text (LOD, streaming, compression and results closely; rasterizer and materials skimmed) |
+| Pharr, Kolb, Gershbein, Hanrahan. *Rendering Complex Scenes with Memory-Coherent Ray Tracing*. SIGGRAPH 1997, pp. 101–108. doi:10.1145/258734.258791 | Not fetched |
+| Christensen, Laur, Fong, Wooten, Batali. *Ray Differentials and Multiresolution Geometry Caching for Distribution Ray Tracing in Complex Scenes*. CGF 22(3), Eurographics 2003, pp. 543–552. doi:10.1111/1467-8659.t01-1-00702 | Not fetched (abstract from search results) |
+| Yoon, Lauterbach, Manocha. *R-LODs: Fast LOD-based Ray Tracing of Massive Models*. The Visual Computer 22, pp. 772–784, 2006. doi:10.1007/s00371-006-0062-y | Not fetched (abstract from search results) |
+| Eisenacher, Nichols, Selle, Burley. *Sorted Deferred Shading for Production Path Tracing*. CGF 32(4), EGSR 2013, pp. 125–132. doi:10.1111/cgf.12158 | Not fetched (abstract from search results) |
+
+- **Wald et al.** Precomputed BSPs and geometry stored in binary and mapped with `mmap()`; the
+  render threads detect missing tiles through a hash table and cancel the ray instead of faulting.
+  - 4–8 fetcher threads; fetch priority from voxel size over distance, in 8 queues; "second
+    chance" eviction from about 80% memory use.
+  - The manager costs 16–26% of frame rate with everything resident (Table 3).
+  - Proxies for missing subtrees: 18 directions of averaged colour and normal, 80 bytes each,
+    66 MB to 1.2 GB (Table 1); averaged normals make them "overly bright".
+  - 30–40 GB on disk, about one day of preprocessing; per-view working sets 36 MB to 2.3 GB
+    (Table 2).
+- **Nanite.** Cluster-group DAG with a unique, parallel cut from monotonic errors.
+  - Streams cluster groups in fixed 128 KB pages (~1% slack); root page and the whole culling
+    hierarchy always resident; requests prioritised by LOD error, low-priority pages evicted.
+  - Lumen in the Land of Nanite: 433M input triangles, memory format 7.67 GB, disk format 4.61 GB,
+    5.6 bytes per Nanite triangle, 11.4 per input triangle.
+  - "Not great with aggregates" (grass, leaves, hair); shadows rasterised, not ray traced.
+- **Pharr, Christensen, Yoon, Eisenacher.** Unread; see the
+  [notes](notes/streaming.md) for what is known second-hand.

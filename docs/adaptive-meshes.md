@@ -15,6 +15,7 @@ pixels it covers (`src/shapes/lod.rs`).
 | `lod` | off | `true`, or an object with the fields below, to choose each tree's detail by its distance from the camera. |
 | `lod.pixels` | 2 | The largest detail dropped, in pixels. Smaller is finer and slower; 1 for close-up stills (see [Coarse levels](#coarse-levels-cards-that-shadow-themselves)). |
 | `lod.max_level` | 12 | The coarsest level used. |
+| `cache` | none | A directory to keep each distinct tree's levels in, read back instead of growing the tree again (`src/procedural/tree_cache.rs`; docs/research/learned-lod/caching.md). |
 
 ## How
 

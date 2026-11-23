@@ -371,6 +371,9 @@ branch's history (commits `ac51d87` to `f56d824`) and written up in their notes,
       clusters' cards shadowed by their leaves at the leaves' own albedo, now the default. FLIP
       −16% at `pixels: 4` and −20% at 8, brightness within ±2% at every setting, no memory or
       measurable speed cost.
+- [x] A forest's levels kept on disk ([caching.md](caching.md), `"cache"` on a forest): a warm
+      build 83 → 37 s, peak 392 → 313 MiB, renders bit-identical; literature in
+      [notes/streaming.md](notes/streaming.md).
 - [ ] The residual darkening from low down (−3% to −6% at mid range), common to cards and
       volumes; SGGX lobes and palettes.
 - [ ] Read what could not be fetched (see [log.md](log.md)).

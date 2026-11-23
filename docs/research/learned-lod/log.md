@@ -89,3 +89,36 @@ Ran `src/shapes/lod_research.rs` (six species, levels 2–7) and rendered `fores
 600 × 350 and 16 spp: full detail, LOD, sky-only versions of both, and LOD with cards enlarged
 ×1.2 by a temporary change. Results and their reading are in [stage0.md](stage0.md). The diagnosis
 of the brightening changed, from self-shadowing to hit probability.
+
+## 2026-11-23: out-of-core and streamed geometry
+
+**Question.** What does the literature say about an on-disk cache of the forest's card levels:
+memory mapping, eviction, per-ray against per-object resolution, ray reordering, shadow
+consistency, measured costs? See [notes/streaming.md](notes/streaming.md).
+
+**Fetched and read:**
+- Wald, Dietrich, Slusallek 2004: full text, from diglib.eg.org (an EGSR PDF open there).
+- Nanite: A Deep Dive (SIGGRAPH 2021 course): slides with speaker notes, from
+  advances.realtimerendering.com.
+
+**Blocked** (no way around a refusal was tried):
+- Pharr et al. 1997: graphics.stanford.edu, pharr.org and pbr-book.org: proxy 403.
+- Christensen et al. 2003: graphics.pixar.com: proxy 403; diglib.eg.org has the record but its PDF
+  needs authentication (401).
+- Yoon et al. 2006 (R-LODs): gamma.cs.unc.edu (DNS failure, then 403), sgvr.kaist.ac.kr and
+  link.springer.com: 403.
+- Eisenacher et al. 2013: disneyanimation.com hosts: 403; diglib.eg.org PDF: 401.
+- van Antwerpen et al. 2026 and the Moana Island notes: dl.acm.org and disneyanimation.com.
+- An arXiv full-text search (out-of-core ray tracing; foliage LOD for ray tracing; geometry
+  streaming for path tracing) found nothing relevant.
+
+**Findings that matter for the cache:**
+- `mmap` of precomputed binary structures is the published method (Wald Sec. 4), and was simple.
+  Its fault detection cost 16–26% (Table 3), but only because the model did not fit in memory.
+- Both systems keep coarse data and selection metadata always resident and prioritise loading by
+  projected size or error.
+- Stand-ins used while data is missing change the image (Wald's proxies are too bright); a batch
+  render should load what it needs before tracing so the image does not depend on timing.
+- Nothing read measures ray-traced shadow consistency across levels; that is Christensen et al.
+  2003's subject, which is unread.
+

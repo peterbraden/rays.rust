@@ -96,6 +96,15 @@
 //! tens of times the mean flow, more where snowmelt or storms make the floods, less where
 //! groundwater evens the flow (a source for typical values is still to find).
 //!
+//! ## Near a control: gradually varied flow
+//!
+//! Where something sets the depth (a lake's level, a fall's lip, where the flow passes
+//! through critical depth), the depth departs from normal for some way upstream, as the
+//! gradually varied flow equation says: dy/dx = (S₀ - S_f) / (1 - Fr²), S_f the friction slope
+//! at the local depth. On a mild channel (normal depth above critical), a fall's lip draws the
+//! surface down (an M2 profile) to critical depth; a deeper control backs it up (M1).
+//! `Channel::profile` integrates it by the direct step method.
+//!
 //! ## What the flow is like
 //!
 //! The Froude number Fr = V / √(g A_x / T) compares the flow's speed with that of waves on it.
@@ -351,6 +360,83 @@ pub fn full_depth(q: f64, width: f64, slope: f64, n: f64) -> f64 {
     (0.5 * (lo + hi)).exp()
 }
 
+/// A prismatic channel's cross-section: a parabola `width` wide and `bankfull` deep at the
+/// centre when full, of Manning's roughness `n`, on `slope`.
+#[derive(Clone, Copy, Debug)]
+pub struct Channel {
+    pub width: f64,
+    pub bankfull: f64,
+    pub slope: f64,
+    pub n: f64,
+}
+
+impl Channel {
+    /// Area, top width and wetted perimeter at depth `d` (at the centre).
+    pub fn section(&self, d: f64) -> (f64, f64, f64) { parabola(d, self.width, self.bankfull) }
+
+    /// The friction slope of discharge `q` at depth `d`: Manning's equation solved for S.
+    pub fn friction_slope(&self, q: f64, d: f64) -> f64 {
+        let (a, _, p) = self.section(d);
+        (q * self.n / (a * (a / p).powf(2. / 3.))).powi(2)
+    }
+
+    /// The Froude number squared of discharge `q` at depth `d`: Q² T / (g A³).
+    pub fn froude2(&self, q: f64, d: f64) -> f64 {
+        let (a, t, _) = self.section(d);
+        q * q * t / (G * a.powi(3))
+    }
+
+    /// The specific energy of discharge `q` at depth `d`: d + V² / 2g.
+    pub fn energy(&self, q: f64, d: f64) -> f64 {
+        let (a, _, _) = self.section(d);
+        d + (q / a).powi(2) / (2. * G)
+    }
+
+    /// The normal depth of discharge `q`.
+    pub fn normal(&self, q: f64) -> f64 { parabola_depth(q, self.width, self.bankfull, self.slope, self.n) }
+
+    /// The critical depth of discharge `q`, where the Froude number is 1 (and the specific
+    /// energy least).
+    pub fn critical(&self, q: f64) -> f64 {
+        let (mut lo, mut hi) = (1e-6f64.ln(), 1e4f64.ln());
+        for _ in 0..80 {
+            let mid = 0.5 * (lo + hi);
+            if self.froude2(q, mid.exp()) > 1. { lo = mid } else { hi = mid }
+        }
+        (0.5 * (lo + hi)).exp()
+    }
+
+    /// The water surface profile upstream of a control where the depth is `control`: depths
+    /// at distances upstream, by the direct step method (Chow 1959, ch. 10), from the control
+    /// until within 1% of the normal depth or `length` metres. Each step changes the depth by
+    /// a fixed fraction of the way to normal and finds the distance that takes from the
+    /// energy equation, Δx = ΔE / (S₀ - S̄_f). For subcritical flow only (a mild channel, the
+    /// normal depth above critical): an M1 profile backing up behind a control deeper than
+    /// normal, or M2 drawing down towards a lower one, such as the critical depth at a fall's
+    /// lip. Empty otherwise.
+    pub fn profile(&self, q: f64, control: f64, length: f64) -> Vec<(f64, f64)> {
+        let (yn, yc) = (self.normal(q), self.critical(q));
+        if yn <= yc || control < yc * 0.999 { return vec![]; }
+        let steps = 400;
+        let mut out = vec![(0., control)];
+        let (mut x, mut y) = (0., control);
+        for k in 1..=steps {
+            // Geometric steps towards normal, finer where the profile is steepest (near the
+            // control).
+            let next = yn + (control - yn) * (1. - k as f64 / steps as f64).powi(3);
+            let sf = 0.5 * (self.friction_slope(q, y) + self.friction_slope(q, next));
+            // Δx along the flow is negative going upstream: count it as distance upstream.
+            let dx = -(self.energy(q, next) - self.energy(q, y)) / (self.slope - sf);
+            if !dx.is_finite() || dx < 0. { break; }
+            x += dx;
+            y = next;
+            out.push((x, y));
+            if x > length || ((y - yn) / yn).abs() < 0.01 { break; }
+        }
+        out
+    }
+}
+
 /// The flow of mean discharge `mean` (m³/s), at `p`'s multiple of it, down a parabolic channel
 /// `width` wide on `slope`, its bed of sediment or (`bedrock`) bare rock.
 pub fn reach(mean: f64, width: f64, slope: f64, bedrock: bool, p: &HydraulicParams) -> Reach {
@@ -595,4 +681,46 @@ mod tests {
             assert!(r.depth.is_finite() && r.speed.is_finite() && r.froude.is_finite());
         }
     }
+    fn mild() -> Channel { Channel { width: 20., bankfull: 2., slope: 5e-4, n: 0.03 } }
+
+    #[test]
+    fn test_critical_depth_minimises_energy() {
+        let c = mild();
+        let yc = c.critical(10.);
+        assert!((c.froude2(10., yc) - 1.).abs() < 1e-6);
+        // The specific energy is least there.
+        assert!(c.energy(10., yc) < c.energy(10., yc * 1.05) && c.energy(10., yc) < c.energy(10., yc * 0.95));
+        // A wide parabola's critical depth: Q²T = g A³ with A = 2/3 T y and T ∝ √y.
+        assert!(c.normal(10.) > yc, "a mild channel");
+    }
+
+    #[test]
+    fn test_drawdown_to_a_fall_and_backwater_behind_a_dam() {
+        let c = mild();
+        let q = 10.;
+        let (yn, yc) = (c.normal(q), c.critical(q));
+        // M2: from critical depth at the lip, rising upstream towards normal.
+        let m2 = c.profile(q, yc, 1e5);
+        assert!(m2.len() > 10);
+        assert!(m2.windows(2).all(|w| w[1].0 > w[0].0 && w[1].1 > w[0].1));
+        assert!((m2.last().unwrap().1 - yn).abs() / yn < 0.011);
+        // M1: from a dammed depth, falling upstream towards normal, over a longer distance.
+        let m1 = c.profile(q, 2. * yn, 1e6);
+        assert!(m1.windows(2).all(|w| w[1].0 > w[0].0 && w[1].1 < w[0].1));
+        assert!((m1.last().unwrap().1 - yn).abs() / yn < 0.011);
+        // Each satisfies the gradually varied flow equation along it.
+        for p in [&m2, &m1] {
+            for w in p.windows(2).skip(1) {
+                let (dx, dy) = (w[1].0 - w[0].0, w[1].1 - w[0].1);
+                let y = 0.5 * (w[0].1 + w[1].1);
+                // (x runs upstream, so dy/dx along the flow is minus the step's.)
+                let slope = -(c.slope - c.friction_slope(q, y)) / (1. - c.froude2(q, y));
+                assert!((dy / dx - slope).abs() < 0.05 * slope.abs() + 1e-9, "{} vs {}", dy / dx, slope);
+            }
+        }
+        // Steep channels have no subcritical profile.
+        let steep = Channel { slope: 0.05, ..c };
+        assert!(steep.profile(q, steep.critical(q), 1e4).is_empty());
+    }
+
 }

@@ -47,12 +47,14 @@ Slopes can only stand so steep before they fail, and how steep depends on the ro
 and Montgomery, "Limits to relief", Science 270, 1995): where rivers or glaciers cut down
 faster than the slopes can follow, the slopes steepen until they fall in landslides. Each rock
 has a critical slope over a simulation's cells (`Rock::critical_slope`, after Selby's rock
-mass strength), from loose debris at about 37° and shale at 42° to massive granite at 63°,
+mass strength), from loose debris and shale at about 32° to massive granite at 43° (mean slopes
+in active ranges level off at about 30°: Montgomery and Brandon 2002),
 lowered where the rock is fractured. Steeper slopes fail onto their steepest neighbour, and the
 debris lies as sediment at their feet (`fluvial::landslide`). Ice holds up the walls it
 carves, so they don't fail while it is there; when it melts, walls in weak rock fall in, and
 only strong rock keeps the steep sides of glacial troughs. At time zero the noise topography is
-relaxed to what its rock holds before anything else happens. `slope_strength` scales every
+cut down to what its rock holds, without debris, as if worn back before it began
+(`fluvial::cap_slopes`). `slope_strength` scales every
 limit (0 for no landslides). The limits are for cells of 300 m; as slopes measured over
 longer distances are gentler, they are steeper on finer grids and gentler on coarser, as
 (300 m / spacing)^0.2, so nested patches agree roughly on how steep the ground stands.
@@ -168,8 +170,11 @@ all round its rim.
 with `cargo test --release test_channels_and_slopes -- --ignored --nocapture`) evolves a
 mountain patch for 400,000 years without glaciers and checks what real ranges show: channels
 on rock resistant to rivers are steeper for their drainage (their steepness index
-k_sn = S A^0.5, Kirby and Whipple 2012), and so are hillslopes. On seed 0, k_sn is 720 on hard
-rock and 310 on weak, and hillslopes 0.81 and 0.72. The parameters' values are otherwise not
+k_sn = S A^0.5, Kirby and Whipple 2012), and so are hillslopes. On seed 0, k_sn is 525 on hard
+rock and 295 on weak, and hillslopes 0.55 and 0.52 (29° and 27°). Over a million years a
+mountain patch's mean slope (500 m cells) settles at a median of 25° (real ranges: 20-25° at
+that resolution, levelling off at about 30° on finer grids), and river networks follow Hack's
+law with exponents of 0.50-0.58 (0.5-0.6 in real basins). The parameters' values are otherwise not
 calibrated against real landscapes.
 
 ## Not modelled

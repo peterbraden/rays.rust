@@ -1213,13 +1213,15 @@ mod tests {
                 // No crack where the patch meets the rings, and no step.
                 let h = y(&both, x, z).unwrap_or_else(|| panic!("crack at {} ({}, {})", x, x0, z0));
                 if let Some(l) = last {
-                    // Where the patch gives way to the rings, as much as they may differ.
-                    assert!((h - l).abs() < tolerance.max(1.), "step of {} at {} ({}, {})", h - l, x, x0, z0);
+                    // Where the patch gives way to the rings, as much as they may differ: each may be
+                    // `tolerance` from the surface, on either side.
+                    assert!((h - l).abs() < (2. * tolerance).max(1.), "step of {} at {} ({}, {})", h - l, x, x0, z0);
                 }
                 last = Some(h);
-                // Inside, the patch's surface (as diced); near its edge, close to the rings'.
-                if x < 190. {
-                    assert!((h - grid.smooth(x, z).0).abs() < 0.01, "{} vs the patch's {}", h, grid.smooth(x, z).0);
+                // Inside, the patch's surface (as diced); near its edge, from 180 m, where the rings
+                // may stand a little above it, close to the rings'.
+                if x < 180. {
+                    assert!((h - grid.smooth(x, z).0).abs() < 0.01, "{} vs the patch's {} at {} ({}, {})", h, grid.smooth(x, z).0, x, x0, z0);
                 }
                 if (180. ..200.).contains(&x) {
                     let ring = y(&rings, x, z).unwrap();

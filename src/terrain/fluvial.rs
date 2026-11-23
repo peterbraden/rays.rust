@@ -395,6 +395,36 @@ pub fn landslide(domain: &Domain, h: &mut [f64], fixed: &[bool], critical: &[f64
     (moved, failed)
 }
 
+/// Cut `h` down so that no slope exceeds its cell's `critical` slope: each cell lowered to no
+/// more than its neighbours' heights plus its slope limit over the distance to them, worked out
+/// from the lowest cells up (as Dijkstra's shortest paths, with the limit as the cost). What is
+/// cut is gone, not moved: for a starting topography whose steepest parts stand where no rock
+/// could, as if worn back before it began. `fixed` cells stay as they are, as do cells whose
+/// limit is infinite.
+pub fn cap_slopes(domain: &Domain, h: &mut [f64], fixed: &[bool], critical: &[f64]) {
+    #[derive(PartialEq)]
+    struct Low(f64, usize);
+    impl Eq for Low {}
+    impl PartialOrd for Low { fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(o)) } }
+    impl Ord for Low { fn cmp(&self, o: &Self) -> std::cmp::Ordering { o.0.total_cmp(&self.0).then(o.1.cmp(&self.1)) } }
+    let n = h.len();
+    let mut done = vec![false; n];
+    let mut heap: std::collections::BinaryHeap<Low> = (0..n).map(|i| Low(h[i], i)).collect();
+    while let Some(Low(level, c)) = heap.pop() {
+        if done[c] || level > h[c] { continue; }
+        done[c] = true;
+        for l in domain.links(c) {
+            let j = l.to;
+            if done[j] || fixed[j] || !critical[j].is_finite() { continue; }
+            let cap = level + critical[j] * l.dist;
+            if cap < h[j] {
+                h[j] = cap;
+                heap.push(Low(cap, j));
+            }
+        }
+    }
+}
+
 /// How far over its limit `landslide` leaves a slope after mixing the debris.
 pub const LOOSE: f64 = 1.15;
 
@@ -593,6 +623,27 @@ mod tests {
         let lost: f64 = (0..n).map(|k| (before[k] - h[k]) * d.area[k]).sum();
         let got: f64 = gained.iter().sum::<f64>() * 100.;
         assert!(lost > 0. && (lost - got).abs() < 1e-6 * lost, "{} vs {}", lost, got);
+    }
+
+    #[test]
+    fn test_capping_slopes_cuts_down_to_the_limit_and_no_more() {
+        let d = Domain::patch(0., 0., 24, 100., 6.371e6);
+        let n = d.len();
+        let mut h: Vec<f64> = (0..n).map(|k| {
+            let (i, j) = ((k % 24) as f64 - 11.5, (k / 24) as f64 - 11.5);
+            if d.boundary[k] { 0. } else { (2000. - 250. * i.hypot(j)).max(0.) }
+        }).collect();
+        let before = h.clone();
+        let critical = vec![0.7; n];
+        cap_slopes(&d, &mut h, &d.boundary, &critical);
+        for k in 0..n {
+            assert!(h[k] <= before[k]);
+            for l in d.links(k) { assert!(h[k] - h[l.to] <= 0.7 * l.dist + 1e-6, "cell {}", k); }
+        }
+        // Ground already gentle enough isn't touched.
+        let mut flat = vec![5.; n];
+        cap_slopes(&d, &mut flat, &d.boundary, &critical);
+        assert!(flat.iter().all(|&x| x == 5.));
     }
 
     #[test]

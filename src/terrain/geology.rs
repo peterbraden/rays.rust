@@ -262,24 +262,28 @@ impl Rock {
         contrast.max(1.).powf(0.5 * if process == Process::Rivers { r } else { g })
     }
 
-    /// The steepest slope (rise over run) the rock stands at over a simulation's cells (hundreds
-    /// of metres) before it fails in landslides: loose debris at its angle of repose (about
-    /// 37°), weak shale and schist a little steeper, and massive granite steepest (63°). Over
-    /// such distances real ranges' slopes rarely exceed 35-45° but in strong rock, so these
-    /// bind only on the steepest ground. The order follows rock mass strength (Selby, "A rock
-    /// mass strength classification for geomorphic purposes", Zeitschrift für Geomorphologie
-    /// 24, 1980); the values are a model choice.
+    /// The steepest slope (rise over run) the rock stands at over a simulation's cells (300 m;
+    /// see `Terrain::critical_slope`) before it fails in landslides: loose debris and weak shale
+    /// at about 32°, massive granite at 43°. Where rivers cut down fast, hillslopes steepen to
+    /// such limits and stay there: mean slopes in active ranges level off at about 30° however
+    /// fast the land rises (Montgomery and Brandon, "Topographic controls on erosion rates in
+    /// tectonically active mountain ranges", EPSL 201, 2002), steeper in strong rock and gentler
+    /// in weak (Schmidt and Montgomery 1995). The order follows rock mass strength (Selby, "A
+    /// rock mass strength classification for geomorphic purposes", Zeitschrift für
+    /// Geomorphologie 24, 1980); the values are a model choice. (Set steeper, they let slopes
+    /// steepen over a million years to a median of 34° on 500 m cells, against the 20-25° real
+    /// ranges have at that resolution.)
     pub fn critical_slope(self) -> f64 {
         match self {
-            Rock::Sediment => 0.75,
-            Rock::Shale => 0.9,
-            Rock::Sandstone => 1.2,
-            Rock::Limestone => 1.4,
-            Rock::Quartzite => 1.6,
-            Rock::Schist => 1.0,
-            Rock::Gneiss => 1.6,
-            Rock::Granite => 2.0,
-            Rock::Basalt => 1.5,
+            Rock::Sediment => 0.62,
+            Rock::Shale => 0.62,
+            Rock::Sandstone => 0.78,
+            Rock::Limestone => 0.84,
+            Rock::Quartzite => 0.9,
+            Rock::Schist => 0.67,
+            Rock::Gneiss => 0.84,
+            Rock::Granite => 0.93,
+            Rock::Basalt => 0.84,
         }
     }
 

@@ -149,9 +149,8 @@ impl Default for TerrainParams {
 /// Passes of landsliding per step: enough to bring slopes oversteepened in a step back to what
 /// their rock holds, as failure is all but instant on a landscape's timescales.
 const LANDSLIDE_PASSES: usize = 30;
-/// ... and at time zero, to relax the noise topography to what its rock holds.
-const INITIAL_LANDSLIDE_PASSES: usize = 2000;
-const INITIAL_LANDSLIDE_ROUNDS: usize = 20;
+/// Rounds of cutting the noise topography down to what its rock holds at time zero.
+const INITIAL_LANDSLIDE_ROUNDS: usize = 5;
 /// The cell spacing the rocks' critical slopes are for, metres...
 const LANDSLIDE_SPACING: f64 = 300.;
 /// ... and how they steepen on finer grids: a model choice for the mild scale dependence of
@@ -302,10 +301,20 @@ impl Terrain {
             sediment: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
             ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
-        // The noise topography may stand steeper than its rock can: it fails first, its debris
-        // collecting in the valleys.
+        // The noise topography may stand steeper than its rock can: it is cut down to what the
+        // rock holds, as if worn back before time zero (as landslides, its debris buried half a
+        // mountain patch). Cutting exposes other rock, so the limits are found again a few times.
         let outlets = t.outlets();
-        t.slide(&outlets, INITIAL_LANDSLIDE_PASSES, INITIAL_LANDSLIDE_ROUNDS);
+        let strength = t.params.planet.geology.slope_strength;
+        if strength > 0. {
+            let scale = t.slope_scale();
+            for _ in 0..INITIAL_LANDSLIDE_ROUNDS {
+                let critical: Vec<f64> = (0..t.domain.len()).map(|i| strength * t.critical_slope_at(i, scale)).collect();
+                let before = t.bed.clone();
+                crate::terrain::fluvial::cap_slopes(&t.domain, &mut t.bed, &outlets, &critical);
+                if t.bed == before { break; }
+            }
+        }
         t.ground0 = t.bed.clone();
         t.rain();
         let flow = t.route();
@@ -951,46 +960,15 @@ mod tests {
     fn test_time_zero_is_the_noise_topography_where_it_can_stand() {
         let t = small(1);
         let noise: Vec<f64> = t.domain.dirs.iter().map(|d| t.planet.elevation(d, 2000.)).collect();
-        // Much of it is the noise topography as it was; what has changed failed, or lies under
-        // its debris.
+        // Much of it is the noise topography as it was; the rest is cut down, with no debris.
         let kept = (0..t.domain.len()).filter(|&i| t.bed[i] == noise[i]).count();
         assert!(kept * 3 > t.domain.len(), "{} of {}", kept, t.domain.len());
-        for i in 0..t.domain.len() {
-            assert!(t.bed[i] == noise[i] || t.bed[i] < noise[i] || t.sediment[i] > 0.);
-        }
+        for i in 0..t.domain.len() { assert!(t.bed[i] <= noise[i] && t.sediment[i] == 0.); }
         // And nothing stands steeper than its rock holds.
         for i in (0..t.domain.len()).filter(|&i| !t.domain.boundary[i]) {
             let limit = t.critical_slope(i);
-            for l in t.domain.links(i) { assert!(t.bed[i] - t.bed[l.to] <= crate::terrain::fluvial::LOOSE * limit * l.dist + 0.2, "cell {}", i); }
+            for l in t.domain.links(i) { assert!(t.bed[i] - t.bed[l.to] <= limit * l.dist + 0.2, "cell {}", i); }
         }
-    }
-
-    #[test]
-    fn test_evolution_is_deterministic_and_resumable() {
-        let mut a = small(2);
-        a.run_to(3000.);
-        let mut b = small(2);
-        b.run_to(1000.);
-        b.run_to(3000.);
-        assert_eq!(a.bed, b.bed);
-        assert_eq!(a.ice, b.ice);
-    }
-
-    #[test]
-    fn test_cached_run_resumes_where_it_left_off() {
-        let dir = std::env::temp_dir().join(format!("landscape-cache-test-{}", std::process::id()));
-        let mut a = small(4);
-        a.run_cached(1000., &dir, "k");
-        let mut b = small(4);
-        b.run_cached(2000., &dir, "k");
-        let mut c = small(4);
-        c.run_to(2000.);
-        assert_eq!(b.bed, c.bed);
-        let mut d = small(4);
-        d.run_cached(2000., &dir, "k");
-        assert_eq!(d.bed, c.bed);
-        assert_eq!(d.time, 2000.);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

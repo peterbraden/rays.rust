@@ -73,6 +73,7 @@
 //!   water", Limnology and Oceanography 49(3), 2004.
 //! - H. Chanson, "Air Bubble Entrainment in Free-Surface Turbulent Shear Flows", Academic
 //!   Press, 1997 (unverified).
+//!
 //! (Bibliographic details from search results and memory; to verify.)
 
 use crate::color::Color;

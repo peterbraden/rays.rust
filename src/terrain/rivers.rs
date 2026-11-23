@@ -532,10 +532,12 @@ const SKELETON_GRID: f64 = 256.;
 /// widths, and at most half the relief's wavelength.
 pub fn cleared(half: f64) -> f64 { 8. * half + 30. }
 
+/// A segment of the skeleton: its ends, the half widths and the simulation's beds there.
+type Bone = (Point, Point, f64, f64, f64, f64);
+
 /// The courses' lines, coarsely, for the distance from the water (`Relief::detail`).
 pub struct Skeleton {
-    /// Ends, half widths and the simulation's beds there.
-    segments: Vec<(Point, Point, f64, f64, f64, f64)>,
+    segments: Vec<Bone>,
     grid: HashMap<(i64, i64), Vec<u32>>,
 }
 

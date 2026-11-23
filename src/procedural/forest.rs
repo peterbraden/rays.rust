@@ -96,63 +96,104 @@ impl MaterialModel for PartsMaterial {
 /// numbered (`PartOf`).
 pub type Model = std::sync::Arc<dyn Geometry + Sync + Send>;
 
-/// A tree placed in a forest: its model, turned `yaw` about the vertical (as cosine and sine),
-/// scaled by `scale`, mirrored in x if `mirror`, and moved to `at`. A forest places hundreds of
-/// thousands of trees, so this keeps to what a forest's placement needs, about 60 bytes, where
-/// a general instancing `Transform` keeps a pair of 4x4 matrices.
+/// A tree placed in a forest: its model (by number, in its `Stand`), turned `yaw` about the
+/// vertical (as cosine and sine), scaled by `scale`, mirrored in x if `mirror`, and moved to
+/// `at`. A forest places hundreds of thousands of trees, so this keeps to what a forest's
+/// placement needs, in 28 bytes of single precision (a tenth of a millimetre a few kilometres
+/// out; arithmetic is in double), where a general instancing `Transform` keeps a pair of 4x4
+/// matrices.
+#[derive(Clone, Copy, Debug)]
 pub struct Placed {
-    pub model: Model,
-    pub at: Vector3<f64>,
-    pub cos: f64,
-    pub sin: f64,
-    pub scale: f64,
-    pub mirror: bool,
+    at: [f32; 3],
+    cos: f32,
+    sin: f32,
+    scale: f32,
+    /// The model's number, with `MIRROR` set if mirrored.
+    model: u32,
 }
 
+/// Marks a mirrored placement in `Placed::model`.
+const MIRROR: u32 = 1 << 31;
+
 impl Placed {
-    pub fn new(model: Model, at: Vector3<f64>, yaw_degrees: f64, scale: f64, mirror: bool) -> Placed {
+    pub fn new(model: u32, at: Vector3<f64>, yaw_degrees: f64, scale: f64, mirror: bool) -> Placed {
+        assert!(model < MIRROR, "too many tree models in a forest");
         let yaw = yaw_degrees.to_radians();
-        Placed { model, at, cos: yaw.cos(), sin: yaw.sin(), scale, mirror }
+        Placed {
+            at: [at.x as f32, at.y as f32, at.z as f32],
+            cos: yaw.cos() as f32,
+            sin: yaw.sin() as f32,
+            scale: scale as f32,
+            model: model | if mirror { MIRROR } else { 0 },
+        }
+    }
+
+    /// Which of its stand's models this places.
+    pub fn model(&self) -> usize {
+        (self.model & !MIRROR) as usize
+    }
+
+    pub fn at(&self) -> Vector3<f64> {
+        Vector3::new(self.at[0] as f64, self.at[1] as f64, self.at[2] as f64)
+    }
+
+    pub fn scale(&self) -> f64 {
+        self.scale as f64
+    }
+
+    /// The turn about the vertical, as its cosine and sine.
+    pub fn turn(&self) -> (f64, f64) {
+        (self.cos as f64, self.sin as f64)
+    }
+
+    pub fn mirrored(&self) -> bool {
+        self.model & MIRROR != 0
     }
 
     fn sx(&self) -> f64 {
-        if self.mirror { -1. } else { 1. }
+        if self.mirrored() { -1. } else { 1. }
     }
 
     /// A world vector in the model's frame: unturned, unscaled, unmirrored.
     fn to_local(&self, v: &Vector3<f64>) -> Vector3<f64> {
-        let (x, z) = (self.cos * v.x - self.sin * v.z, self.sin * v.x + self.cos * v.z);
-        Vector3::new(self.sx() * x, v.y, z) / self.scale
+        let (c, s) = self.turn();
+        let (x, z) = (c * v.x - s * v.z, s * v.x + c * v.z);
+        Vector3::new(self.sx() * x, v.y, z) / self.scale()
     }
 
     /// A point of the model's in the world.
     fn to_world(&self, p: &Vector3<f64>) -> Vector3<f64> {
-        let (x, y, z) = (self.sx() * p.x * self.scale, p.y * self.scale, p.z * self.scale);
-        self.at + Vector3::new(self.cos * x + self.sin * z, y, -self.sin * x + self.cos * z)
+        let (c, s) = self.turn();
+        let k = self.scale();
+        let (x, y, z) = (self.sx() * p.x * k, p.y * k, p.z * k);
+        self.at() + Vector3::new(c * x + s * z, y, -s * x + c * z)
     }
 
     /// A normal of the model's in the world: the scale is uniform, so only turned and mirrored.
     fn normal_to_world(&self, n: &Vector3<f64>) -> Vector3<f64> {
+        let (c, s) = self.turn();
         let x = self.sx() * n.x;
-        Vector3::new(self.cos * x + self.sin * n.z, n.y, -self.sin * x + self.cos * n.z).normalize()
+        Vector3::new(c * x + s * n.z, n.y, -s * x + c * n.z).normalize()
     }
 
     fn local_ray(&self, r: &Ray) -> Ray {
-        Ray { ro: self.to_local(&(r.ro - self.at)), rd: self.to_local(&r.rd) }
+        Ray { ro: self.to_local(&(r.ro - self.at())), rd: self.to_local(&r.rd) }
     }
 
-    fn hit_range(&self, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
+    fn hit_range(&self, model: &Model, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
         // Distances along the ray shrink with the model, its scale being uniform.
-        self.model.intersects_range(&self.local_ray(r), min / self.scale, max / self.scale).map(|h| RawIntersection {
-            dist: h.dist * self.scale,
+        let k = self.scale();
+        model.intersects_range(&self.local_ray(r), min / k, max / k).map(|h| RawIntersection {
+            dist: h.dist * k,
             point: self.to_world(&h.point),
             normal: self.normal_to_world(&h.normal),
             ..h
         })
     }
 
-    pub fn bounds(&self) -> BBox {
-        let b = self.model.bounds();
+    /// Its bounds, where `model` is its model.
+    pub fn bounds(&self, model: &Model) -> BBox {
+        let b = model.bounds();
         let mut out = BBox::empty();
         for k in 0 .. 8 {
             let corner = Vector3::new(
@@ -165,18 +206,20 @@ impl Placed {
     }
 }
 
-/// The trees of a forest, stored in one array behind a BVH (`crate::bvh::Bvh`).
+/// The trees of a forest, stored in one array behind a BVH (`crate::bvh::Bvh`), and the models
+/// they place.
 pub struct Stand {
     bvh: crate::bvh::Bvh,
     trees: Vec<Placed>,
+    models: Vec<Model>,
     primitives: u64,
 }
 
 impl Stand {
-    pub fn new(trees: Vec<Placed>) -> Stand {
-        let primitives = trees.iter().map(|t| t.model.primitives()).sum();
-        let (bvh, trees) = crate::bvh::Bvh::build(trees, Placed::bounds);
-        Stand { bvh, trees, primitives }
+    pub fn new(models: Vec<Model>, trees: Vec<Placed>) -> Stand {
+        let primitives = trees.iter().map(|t| models[t.model()].primitives()).sum();
+        let (bvh, trees) = crate::bvh::Bvh::build(trees, |t| t.bounds(&models[t.model()]));
+        Stand { bvh, trees, models, primitives }
     }
 }
 
@@ -193,13 +236,16 @@ impl Geometry for Stand {
         if self.trees.is_empty() {
             return None;
         }
-        self.bvh.nearest(r, min, max, |i, best| self.trees[i].hit_range(r, min, best)).map(|(_, x)| x)
+        self.bvh.nearest(r, min, max, |i, best| {
+            let t = &self.trees[i];
+            t.hit_range(&self.models[t.model()], r, min, best)
+        }).map(|(_, x)| x)
     }
 
     fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
         !self.trees.is_empty() && self.bvh.any_hit(r, min, max, |i| {
             let t = &self.trees[i];
-            t.model.occludes(&t.local_ray(r), min / t.scale, max / t.scale)
+            self.models[t.model()].occludes(&t.local_ray(r), min / t.scale(), max / t.scale())
         })
     }
 
@@ -476,6 +522,11 @@ mod tests {
     }
 
     #[test]
+    fn test_a_placement_is_small() {
+        assert_eq!(std::mem::size_of::<Placed>(), 28);
+    }
+
+    #[test]
     fn test_placed_trees_match_their_transforms() {
         use crate::shapes::transform::Transform;
         use crate::na::Rotation3;
@@ -484,20 +535,23 @@ mod tests {
         for _ in 0 .. 50 {
             let (at, yaw, scale, mirror) = (Vector3::new(rng.next_f64() * 20., rng.next_f64(), rng.next_f64() * 20.),
                 rng.next_f64() * 360., 0.5 + rng.next_f64(), rng.next_f64() < 0.5);
-            let placed = Placed::new(model.clone(), at, yaw, scale, mirror);
-            let transform = Transform::from_parts(model.clone(), at, Rotation3::from_axis_angle(&Vector3::y_axis(), yaw.to_radians()),
+            let placed = Placed::new(0, at, yaw, scale, mirror);
+            // Against the transform of what the placement keeps, in single precision.
+            let (c, s) = placed.turn();
+            let scale = placed.scale();
+            let transform = Transform::from_parts(model.clone(), placed.at(), Rotation3::from_axis_angle(&Vector3::y_axis(), s.atan2(c)),
                 Vector3::new(if mirror { -scale } else { scale }, scale, scale));
-            let stand = Stand::new(vec![Placed::new(model.clone(), at, yaw, scale, mirror)]);
-            let (a, b) = (placed.bounds(), transform.bounds());
-            assert!((a.min - b.min).norm() < 1e-6 && (a.max - b.max).norm() < 1e-6, "{:?} {:?}", a, b);
+            let stand = Stand::new(vec![model.clone()], vec![placed]);
+            let (a, b) = (placed.bounds(&model), transform.bounds());
+            assert!((a.min - b.min).norm() < 1e-5 && (a.max - b.max).norm() < 1e-5, "{:?} {:?}", a, b);
             for _ in 0 .. 20 {
                 let target = (a.min.coords + a.max.coords) * 0.5 + Vector3::new(rng.next_f64() - 0.5, rng.next_f64() - 0.5, rng.next_f64() - 0.5) * 2.;
                 let ro = target + Vector3::new(rng.next_f64() - 0.5, rng.next_f64(), rng.next_f64() - 0.5).normalize() * 30.;
                 let r = Ray { ro, rd: (target - ro) * 0.7 };
                 match (stand.intersects(&r), transform.intersects(&r)) {
                     (Some(x), Some(y)) => {
-                        assert!((x.dist - y.dist).abs() < 1e-9 && (x.point - y.point).norm() < 1e-9, "{:?} {:?}", x, y);
-                        assert!((x.normal - y.normal.normalize()).norm() < 1e-9, "{:?} {:?}", x.normal, y.normal);
+                        assert!((x.dist - y.dist).abs() < 1e-5 && (x.point - y.point).norm() < 1e-5, "{:?} {:?}", x, y);
+                        assert!((x.normal - y.normal.normalize()).norm() < 1e-5, "{:?} {:?}", x.normal, y.normal);
                         assert!(stand.occludes(&r, 0., x.dist + 1e-6) && !stand.occludes(&r, 0., x.dist - 1e-6));
                     },
                     (None, None) => assert!(!stand.occludes(&r, 0., f64::INFINITY)),

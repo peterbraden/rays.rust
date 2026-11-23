@@ -1332,6 +1332,7 @@ impl SceneFile {
         // placed as many times as there are trees at that level; the whole forest is one
         // object, so a ray searches one structure and stops at the first tree it meets.
         let mut trees: Vec<forest::Placed> = vec![];
+        let mut all_models: Vec<forest::Model> = vec![];
         let mut parts: Vec<Box<dyn Medium + Sync + Send>> = vec![];
         let mut per_level: Vec<usize> = vec![];
         let (mut primitives, mut built) = (0u64, 0u64);
@@ -1346,17 +1347,22 @@ impl SceneFile {
                 }
                 parts.push(medium);
             }
-            let models: std::collections::BTreeMap<usize, forest::Model> = models.into_iter()
-                .map(|(level, items)| (level, Arc::new(GeometrySet::new(&items)) as forest::Model)).collect();
-            built += models.values().map(|m| m.primitives()).sum::<u64>();
+            // Each model by its number in the stand.
+            let models: std::collections::BTreeMap<usize, (u32, u64)> = models.into_iter().map(|(level, items)| {
+                let model = Arc::new(GeometrySet::new(&items)) as forest::Model;
+                let primitives = model.primitives();
+                all_models.push(model);
+                (level, ((all_models.len() - 1) as u32, primitives))
+            }).collect();
+            built += models.values().map(|m| m.1).sum::<u64>();
             for (level, at, yaw, scale, mirror) in places {
                 if per_level.len() <= level {
                     per_level.resize(level + 1, 0);
                 }
                 per_level[level] += 1;
-                if let Some(model) = models.get(&level) {
-                    primitives += model.primitives();
-                    trees.push(forest::Placed::new(model.clone(), at, yaw, scale, mirror));
+                if let Some(&(model, count)) = models.get(&level) {
+                    primitives += count;
+                    trees.push(forest::Placed::new(model, at, yaw, scale, mirror));
                 }
             }
         }
@@ -1365,7 +1371,7 @@ impl SceneFile {
         if trees.is_empty() {
             return (vec![], claims);
         }
-        let stand = forest::Stand::new(trees);
+        let stand = forest::Stand::new(all_models, trees);
         (vec![Arc::new(SceneObject {
             geometry: Box::new(stand),
             medium: Box::new(Solid { m: Box::new(forest::PartsMaterial { parts }) }),

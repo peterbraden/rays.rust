@@ -134,3 +134,25 @@ placements, which costs the same at every level.
 - fewer full-detail trees in flight while building (the peak);
 - smaller placements (f32, about 32 bytes instead of 72) and a compressed BVH over them;
 - and for time, the rest of the scene.
+
+### Compact placements, measured
+
+A placement is now 28 bytes rather than 72: its model as a number into the stand's list, with a
+mirror bit, and its position, turn and scale in single precision; arithmetic stays in double.
+
+Measured back to back with the previous binary, 64 spp:
+
+| | Resident while rendering | Render | FLIP |
+|---|---|---|---|
+| `pixels: 2`, before → after | 383 → 341 MiB | 110 → 110 s | 0.0627 → 0.0625 |
+| `pixels: 4`, before → after | 309 → 288 MiB | 95 → 93 s | 0.0752 → 0.0752 |
+
+The FLIP difference comes from positions rounded to single precision, which changes the noise
+pattern.
+
+**Grouping trees in the BVH's leaves** (2 or 4 a leaf, to cut nodes) was within noise:
+274–350 MiB and 87–113 s.
+
+**Neither moves render time, and the build's peak is unchanged.** Traversing the placements is not
+where the forest's time goes, and the peak is set by growing the full-detail trees. The next gains
+in memory are at the build, not in the stand.

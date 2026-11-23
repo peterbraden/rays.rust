@@ -102,3 +102,35 @@ measured.
    hasn't been profiled yet.
 5. **SGGX lobes for coarse conifer levels** ([stage0](stage0.md)). They matter only once the
    floor comes down.
+
+## Why coarser than `pixels: 2` gains little
+
+Measured on `forest-aerial` (600 × 350, 64 spp; memory mid-render from glibc's `malloc_stats` and
+`/proc`):
+
+| | Peak at build | Resident while rendering | Live heap | Render |
+|---|---|---|---|---|
+| No forest | 65 MiB | — | 64 MiB | 55 s |
+| `pixels: 2` | 400 MiB | 370 MiB (297 after `malloc_trim`) | — | 103 s |
+| `pixels: 4` | 337 MiB | 316 MiB (246 after `malloc_trim`) | 163 MiB | 89 s |
+| `pixels: 8` | 334 MiB | 310 MiB | — | ~83 s |
+
+**Memory.** Going from `pixels: 2` to 4 cuts the cards built from 660 k to 145 k, which saves only
+about 60 MiB. At `pixels: 4` the forest's own live data is about 100 MiB:
+- 243,000 placements and the BVH over them;
+- the 84 models' materials, with 21 MiB of per-leaf autumn states sized for the full-detail trees;
+- the cards themselves.
+
+None of the per-tree part depends on the level. The rest of the peak is memory freed after the
+build: growing full-detail trees, several at a time. Of 318 MB that glibc holds mid-render, only
+163 MB is in use; `malloc_trim` returns about 70 MiB of it.
+
+**Time.** Without the forest the scene renders in 55 s, with its sky, aerial perspective, terrain and
+soil. The forest adds 48 s at `pixels: 2` and 34 s at 4. Much of that is traversing the 243,000
+placements, which costs the same at every level.
+
+**What would lower the floor:**
+- trimming or reusing the allocator's memory after the build (resident memory only);
+- fewer full-detail trees in flight while building (the peak);
+- smaller placements (f32, about 32 bytes instead of 72) and a compressed BVH over them;
+- and for time, the rest of the scene.

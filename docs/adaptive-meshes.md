@@ -7,13 +7,13 @@ samples. A forest's `"lod"` sees each placed tree at a level of detail made for 
 pixels it covers (`src/shapes/lod.rs`).
 
 ```json
-{ "type": "forest", "lod": { "pixels": 1 }, ... }
+{ "type": "forest", "lod": { "pixels": 2 }, ... }
 ```
 
 | Field | Default | |
 |---|---|---|
 | `lod` | off | `true`, or an object with the fields below, to choose each tree's detail by its distance from the camera. |
-| `lod.pixels` | 1 | The largest detail dropped, in pixels. Smaller is finer and slower. |
+| `lod.pixels` | 2 | The largest detail dropped, in pixels. Smaller is finer and slower; 1 for close-up stills (see [Coarse levels](#coarse-levels-cards-that-shadow-themselves)). |
 | `lod.max_level` | 12 | The coarsest level used. |
 
 ## How

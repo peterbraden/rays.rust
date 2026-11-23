@@ -149,6 +149,11 @@ impl crate::graph::Fields for ObjectFields {
     }
 }
 /// A part of a tree, as detail to make levels of, and its medium (`SceneFile::tree_details`).
+/// The detail a forest's `"lod"` drops by default, in pixels: since its coarse levels shadow
+/// themselves, 2 is within 1% of full detail's brightness, with 38% less memory and about 15%
+/// less render time than 1 (docs/research/learned-lod/stage7.md).
+pub const FOREST_LOD_PIXELS: f64 = 2.;
+
 pub type TreeDetail = (crate::shapes::lod::Detail, Box<dyn Medium + Sync + Send>);
 
 /// The scene file's named geometries, `"geometries": {"dragon": {"type": "mesh", ...}}`. Wherever
@@ -1783,14 +1788,15 @@ impl SceneFile {
         }
     }
 
-    /// A forest's `"lod"`: `true`, or `{"pixels": 1, "max_level": 12}`, to see each tree at the
+    /// A forest's `"lod"`: `true`, or `{"pixels": 2, "max_level": 12}`, to see each tree at the
     /// level of detail the size of a pixel where it stands calls for (`shapes::lod`), dropping
-    /// detail up to `pixels` across. It needs the scene's camera, which the scene gives it.
+    /// detail up to `pixels` across (by default 2: docs/adaptive-meshes.md). It needs the
+    /// scene's camera, which the scene gives it.
     fn parse_forest_lod(o: &Value) -> Option<crate::procedural::forest::Lod> {
         let pixels = match &o["lod"] {
             Value::Null | Value::Bool(false) => return None,
-            Value::Bool(true) => 1.,
-            v => SceneFile::parse_number(&v["pixels"], 1.),
+            Value::Bool(true) => FOREST_LOD_PIXELS,
+            v => SceneFile::parse_number(&v["pixels"], FOREST_LOD_PIXELS),
         };
         let camera = &o["camera"];
         let height = SceneFile::parse_number(&camera["image_height"], 0.);

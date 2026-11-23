@@ -664,10 +664,15 @@ fn lod_transmittance() {
 fn lod_tree_levels() {
     let species = ["quaking-aspen", "california-black-oak", "weeping-willow", "scots-pine", "norway-spruce", "hazel"];
     let sun = Vector3::new(-0.5, 0.75, 0.6).normalize();
-    // Looking down 10°–40°, all round.
+    // Looking down 10°–40°, all round, or as `$LOD_VIEW_DOWN` says (from, step), eg. "0,2"
+    // for views from low down.
+    let (from, step) = std::env::var("LOD_VIEW_DOWN").ok().and_then(|v| {
+        let v: Vec<f64> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+        (v.len() == 2).then(|| (v[0], v[1]))
+    }).unwrap_or((10., 10.));
     let views: Vec<Vector3<f64>> = (0 .. 12).map(|k| {
         let phi = std::f64::consts::PI * k as f64 / 6.;
-        let down = (10. + 10. * (k % 4) as f64).to_radians();
+        let down = (from + step * (k % 4) as f64).to_radians();
         Vector3::new(phi.cos() * down.cos(), -down.sin(), phi.sin() * down.cos())
     }).collect();
     println!("species level cards hit lit response hit*lit*resp (each / leaves)");

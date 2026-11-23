@@ -374,6 +374,10 @@ branch's history (commits `ac51d87` to `f56d824`) and written up in their notes,
 - [x] A forest's levels kept on disk ([caching.md](caching.md), `"cache"` on a forest): a warm
       build 83 → 1.8 s with placements kept too, peak 392 → 313 MiB, renders bit-identical; literature in
       [notes/streaming.md](notes/streaming.md).
-- [ ] The residual darkening from low down (−3% to −6% at mid range), common to cards and
+- [x] The low view's far darkening ([stage8.md](stage8.md)): broadleaves' flat coarse cards
+      vanish from the side; crossed cards for clusters of 64 pieces or more, with their own
+      leaves' shadowing, now the default: FLIP −11% from the air, −16% from low down at
+      `pixels: 2`, for 7% more memory.
+- [ ] The far half of the low view overshoots to +5%; oak at L5 still under-covered from the side (−3% to −6% at mid range), common to cards and
       volumes; SGGX lobes and palettes.
 - [ ] Read what could not be fetched (see [log.md](log.md)).

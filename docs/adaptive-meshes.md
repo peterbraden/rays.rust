@@ -147,6 +147,18 @@ Memory is unchanged, and builds and renders are unchanged within run-to-run nois
 behind it, and what didn't work (crossed cards at coarse levels, coverage fitted near the
 horizon), is in `docs/research/learned-lod/stage7.md`.
 
+### Crossed cards for crowns that face every way
+
+From near the horizontal, broadleaves' coarse cards, lying mostly flat, were hit a tenth to a
+half as often as their leaves, and the far half of a low view was 4.5% too dark. A cluster of 64
+pieces or more whose single card would miss its leaves' cross-section by more than 15% now gets
+up to three crossed cards, fitted together to the leaves' coverage. A ray leaving one of them
+passes the others, and is shadowed by the cluster's own leaves instead (`self_lit`).
+
+On `forest-aerial` at `pixels: 2`, FLIP falls from 0.0627 to 0.0557 from the air and from 0.0367
+to 0.0309 from low down, for 7% more memory, with render time unchanged
+(docs/research/learned-lod/stage8.md).
+
 ## Speed
 
 **Profiling.** A render of `forest-aerial` was profiled by sampling its threads' stacks under

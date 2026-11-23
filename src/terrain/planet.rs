@@ -167,6 +167,8 @@ const RELIEF_FREQUENCY: f64 = 12.;
 /// ... and of the mountain ridges: a base wavelength of about 12 km on an Earth-sized planet,
 /// roughly the spacing of major valleys in real ranges.
 const RIDGE_FREQUENCY: f64 = 530.;
+/// Depth of the continental shelves, metres.
+const SHELF_DEPTH: f64 = -120.;
 /// ... of plateaus: regions several hundred kilometres across ...
 const PLATEAU_FREQUENCY: f64 = 8.;
 /// ... and of granite plutons: bodies some tens of kilometres across.
@@ -196,14 +198,21 @@ impl Planet {
     /// The large-scale elevation from the crust, with the coast broken up below the tectonic
     /// grid's resolution, metres.
     fn crust_elevation(&self, crust: &Crust, d: &Vector3<f64>) -> f64 {
+        let m = crust.margin(d);
+        // Continental crust at the margin is thinned and flooded: the continental shelf, about
+        // 120 m deep, before the slope down to the ocean floor (blended over the crust's grid,
+        // the margin otherwise sloped straight from the continent into the abyss, and shelves
+        // covered a twentieth of what they do on the Earth).
         let e = crust.elevation(d);
+        let e = e + (e.max(SHELF_DEPTH) - e) * smoothstep(0.05, 0.3, m);
         // Bays, peninsulas and islands: relief at wavelengths from about the grid's cells down
         // to tens of kilometres, strongest near sea level.
         let coast = self.continents.fbm(d, COAST_FREQUENCY, 5);
-        let m = crust.margin(d);
         // Strongest where continent meets ocean; island arcs and hotspots are raised enough by
-        // themselves.
-        e + 1400. * coast * (4. * m * (1. - m)).min(1.)
+        // themselves. Gentler over the shelf itself, which is flat, with the coastline's detail
+        // at its landward edge.
+        let flat = 1. - 0.6 * (-((e - SHELF_DEPTH) / 100.).powi(2)).exp();
+        e + flat * 1400. * coast * (4. * m * (1. - m)).min(1.)
     }
 
     /// Elevation at the scale of regions (hundreds of kilometres), metres: the crust's, or the

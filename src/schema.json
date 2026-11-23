@@ -7541,6 +7541,12 @@
           "doc": "Steepest ground trees stand on, degrees."
         },
         {
+          "name": "where",
+          "kind": "json",
+          "default": null,
+          "doc": "A graph from 0 to 1 of where trees grow and how thickly, read on the ground (slope, altitude, aspect, noise, an expression of x, y and z; on a landscape its fields and biome); everywhere by default."
+        },
+        {
           "name": "favour",
           "kind": "object",
           "default": null,

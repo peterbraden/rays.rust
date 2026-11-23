@@ -94,6 +94,10 @@ Rays.rust is a raytracer written in Rust with the following features:
   features that only need showing to work go into `demo/scenes/stress-test.json` (plots of
   shapes, materials, lights, media, plants and camera effects in one garden; spectral, light
   BVH, motion blur, realistic lens, flare and adaptive sampling at once), not new scenes.
+  `demo/scenes/christmas-tree.json` (written by `scripts/make-christmas-tree.py`) is a second
+  stress test, of detail and lights at night: a decorated spruce (hundreds of bulb emitters on a
+  curve wire, fur tinsel, baubles, presents) in a snow-laden forest, with fog, snowfall as a medium
+  and as motion-blurred flakes; edit the script, not the JSON.
   Fixed scenes for measurements (`scripts/variance.sh`) are in demo/benchmarks/
 - Render speed over history: `scripts/benchmark.py` builds master commits in a scratch worktree
   (target/bench) and renders `demo/benchmarks/teapot-sky.json` (mesh, plane, skysphere; kept in

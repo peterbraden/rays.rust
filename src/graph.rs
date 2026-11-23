@@ -123,6 +123,9 @@ pub enum Field {
     /// and clay where its terminal lake comes and goes (`terrain::simulation`'s "Closed
     /// basins").
     Playa,
+    /// Glacial sediment, metres thick: till lodged beneath the ice and moraines heaped at its
+    /// margins (`terrain::glacier`'s "Debris"), part of `sediment`.
+    Till,
 }
 
 impl Field {
@@ -142,7 +145,8 @@ impl Field {
             "rock" => Field::Rock,
             "hardness" => Field::Hardness,
             "playa" => Field::Playa,
-            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, rock, hardness or playa", s)),
+            "till" => Field::Till,
+            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, rock, hardness, playa or till", s)),
         })
     }
 }

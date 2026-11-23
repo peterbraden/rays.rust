@@ -68,6 +68,7 @@ value otherwise; either moved first by a `breakup`; `default`, 0, on surfaces wi
 | `rock` | The rock exposed, by number: 0 sediment, 1 shale, 2 sandstone, 3 limestone, 4 quartzite, 5 schist, 6 gneiss, 7 granite, 8 basalt (docs/geology.md) |
 | `hardness` | How hard that rock is to rivers, from -1.4 (sediment) to 1.5 (basalt) |
 | `playa` | 0 to 1: the dry floor of a closed basin, where its terminal lake comes and goes (docs/geology.md) |
+| `till` | Glacial sediment, metres: till beneath the ice and moraines at its margins (part of `sediment`) |
 
 Each is kept at the simulation's cell corners and interpolated by Catmull-Rom splines, so
 masks follow the landscape without showing its grid (but `rock` and `hardness`: the bedrock's

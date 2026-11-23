@@ -28,6 +28,13 @@ pub const ALLUVIUM: f64 = 2.;
 pub const ALLUVIUM_COLOUR: [f64; 3] = [0.80, 0.74, 0.52];
 pub const LAVA_COLOUR: [f64; 3] = [0.16, 0.14, 0.14];
 pub const RIVER_COLOUR: [f64; 3] = [0.20, 0.40, 0.75];
+/// Till and moraines: glacial sediment, grey.
+pub const TILL_COLOUR: [f64; 3] = [0.72, 0.68, 0.76];
+
+/// Whether cell `i`'s sediment is mostly glacial: till and moraines.
+pub fn is_till(t: &Terrain, i: usize) -> bool {
+    t.till.get(i).is_some_and(|&till| till > ALLUVIUM && till >= 0.5 * t.sediment[i])
+}
 /// Terminal lakes, salty, shallow and green-blue; and the flat dry floors of closed basins.
 pub const SALT_LAKE_COLOUR: [f64; 3] = [0.30, 0.62, 0.66];
 pub const PLAYA_COLOUR: [f64; 3] = [0.93, 0.91, 0.86];
@@ -75,6 +82,9 @@ fn cell_colour(t: &Terrain, i: usize, sea: &[bool], level: f64) -> [f64; 3] {
     // Patches draw rivers as lines (`water_lines`).
     if is_river(t, i) && matches!(t.domain.layout, Layout::Sphere { .. }) {
         return RIVER_COLOUR;
+    }
+    if is_till(t, i) {
+        return mix(land_colour(t.bed[i]), TILL_COLOUR, 0.7);
     }
     if t.sediment[i] > ALLUVIUM {
         return mix(land_colour(t.bed[i]), ALLUVIUM_COLOUR, 0.6);

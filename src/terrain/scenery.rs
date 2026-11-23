@@ -212,6 +212,7 @@ const SEA_FLOOR: u8 = 1;
 const ALLUVIUM: u8 = 2;
 const LAVA: u8 = 3;
 const LAND: u8 = 4;
+const TILL: u8 = 5;
 
 /// One simulation, as drawn: its surface heights and what covers its ground.
 pub struct Layer {
@@ -236,6 +237,7 @@ impl Layer {
             if t.ice[i] >= ICE_FREE { ICE }
             else if t.bed[i] < 0. { SEA_FLOOR }
             else if t.lava[i] > 1. && t.sediment[i] < map::ALLUVIUM { LAVA }
+            else if map::is_till(&t, i) { TILL }
             else if t.sediment[i] > map::ALLUVIUM { ALLUVIUM }
             else { LAND }
         }).collect();
@@ -948,6 +950,14 @@ impl Ground {
         };
         // Alpine meadow from the treeline up.
         ground = mix(ground, colour(MEADOW), smoothstep(tree - 100., tree + 200., h));
+        if class == TILL {
+            // Till and moraines: unsorted rubble, boulders in a grey matrix of rock flour,
+            // thinly grown over where it is warm enough (moraines left by the last glaciers
+            // carry forest and pasture).
+            let rubble = colour(SCREE) * (0.75 + 0.5 * n(12., 0.95)) * (1. - 0.3 * smoothstep(0.6, 0.7, n(3., 0.15)));
+            let grown = if dry { 0.15 } else { 0.6 * (1. - smoothstep(tree - 200., tree + 100., h)) };
+            ground = mix(rubble, ground, grown * smoothstep(0.3, 0.6, n(200., 0.45)));
+        }
         if class == ALLUVIUM {
             // Valley floors: fields and meadows where it is wet enough, gravel where it is too
             // high or too dry for them.

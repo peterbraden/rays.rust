@@ -38,6 +38,8 @@ pub struct SimFields {
     /// Closed basins: playas (1 on their floors) and the depth of their terminal lakes, m.
     playa: Vec<f64>,
     salt_lake: Vec<f64>,
+    /// Glacial sediment, m.
+    till: Vec<f64>,
     /// The bedrock's structure (`Structure::to_array`) and exhumation.
     structure: [Vec<f64>; 10],
     exhumed: Vec<f64>,
@@ -103,6 +105,7 @@ impl SimFields {
             precipitation: average(&|c| t.precipitation[c]),
             playa: average(&|c| if basins.playa(t, c) { 1. } else { 0. }),
             salt_lake: average(&|c| if basins.salt_lake(c) { basins.water[c] } else { 0. }),
+            till: average(&|c| t.till.get(c).copied().unwrap_or(0.)),
             exhumed: average(&|c| t.exhumed[c]),
             column: t.planet.column.clone(),
         }
@@ -150,6 +153,7 @@ impl SimFields {
             Field::Hardness => -self.rock(domain, d, h).scores().0,
             Field::Precipitation => s(&self.precipitation).max(0.),
             Field::Playa => s(&self.playa).clamp(0., 1.),
+            Field::Till => s(&self.till).max(0.),
             Field::Temperature => return None,
         })
     }

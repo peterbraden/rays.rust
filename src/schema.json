@@ -2413,6 +2413,12 @@
           "doc": "Erodibility of volcanic rock by rivers relative to average bedrock."
         },
         {
+          "name": "eustasy",
+          "kind": "number",
+          "default": 120,
+          "doc": "How far sea level falls at the glacial maximum, m; 0 at time zero (an interglacial)."
+        },
+        {
           "name": "isostasy",
           "kind": "object",
           "default": null,

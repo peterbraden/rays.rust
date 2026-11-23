@@ -107,6 +107,11 @@ pub struct TerrainParams {
     /// Rain made by the terrain (`orographic`), which the rivers gather and the glaciers'
     /// snow follows; None for rain everywhere the climate's (or uniform without a climate).
     pub orographic: Option<crate::terrain::orographic::OrographicParams>,
+    /// How far sea level falls at the glacial cycle's maximum, metres: the water locked in the
+    /// ice sheets (about 120 m at the Last Glacial Maximum: Lambeck et al., PNAS 111, 2014).
+    /// Sea level follows the glacial cycle (`GlacierParams::period`), at 0 at time zero, an
+    /// interglacial like today (`Terrain::sea_level`).
+    pub eustasy: f64,
     /// Erodibility of sediment, relative to average bedrock.
     pub sediment_erodibility: f64,
     /// Erodibility of volcanic rock, relative to average bedrock.
@@ -131,6 +136,7 @@ impl Default for TerrainParams {
             climate: None,
             orographic: Some(crate::terrain::orographic::OrographicParams::default()),
             isostasy: Some(crate::terrain::isostasy::IsostasyParams::default()),
+            eustasy: 120.,
             sediment_erodibility: 3.,
             lava_erodibility: 0.3,
             sediment_glacial_erodibility: 3.,
@@ -308,32 +314,45 @@ impl Terrain {
         t
     }
 
+    /// Sea level at the present time, metres: 0 at time zero, falling by `eustasy` towards
+    /// the glacial cycle's maximum, as the snowline does (`GlacierParams::period`).
+    pub fn sea_level(&self) -> f64 {
+        let period = self.params.glacier.as_ref().map_or(GlacierParams::default().period, |g| g.period);
+        -self.params.eustasy * 0.5 * (1. - (TAU * self.time / period).cos())
+    }
+
     /// Cells that are base level: the sea, and a patch's edge. (A volcano that rises out of
-    /// the sea becomes land.) A pocket of the sea cut off from the rest (left behind by a
-    /// delta, say) of fewer than `SEA_POCKET` cells, not reaching the patch's edge, is a lake,
-    /// not the sea: rivers fill it and spill on (as base level its sediment piled up hundreds
-    /// of metres in it).
+    /// the sea becomes land.) The sea is the ground below sea level that reaches a patch's
+    /// edge, or a body of it holding some of the sea of time zero and at least `SEA_POCKET`
+    /// cells: so as sea level rises again after a glacial, the sea floods the valleys rivers
+    /// cut across the exposed shelf. A pocket cut off from the rest (left behind by a delta,
+    /// say) of fewer cells is a lake, not the sea: rivers fill it and spill on (as base level
+    /// its sediment piled up hundreds of metres in it); and so is ground below sea level
+    /// inland, an overdeepened glacial basin say, that the sea can't reach.
     pub fn outlets(&self) -> Vec<bool> {
         let n = self.domain.len();
-        let wet: Vec<bool> = (0..n).map(|i| self.sea[i] && self.bed[i] < 0.).collect();
+        let level = self.sea_level();
+        let wet: Vec<bool> = (0..n).map(|i| self.bed[i] < level).collect();
         let mut outlet: Vec<bool> = (0..n).map(|i| self.domain.boundary[i]).collect();
+        let sphere = matches!(self.domain.layout, Layout::Sphere { .. });
         let mut seen = vec![false; n];
         for start in 0..n {
             if !wet[start] || seen[start] { continue; }
             let mut body = vec![start];
             seen[start] = true;
             let mut k = 0;
-            let mut open = false;
+            let (mut open, mut sea) = (false, false);
             while k < body.len() {
                 let c = body[k];
                 k += 1;
                 open |= self.domain.boundary[c];
+                sea |= self.sea[c];
                 for l in self.domain.edges(c) {
                     if wet[l.to] && !seen[l.to] { seen[l.to] = true; body.push(l.to); }
                     open |= self.domain.boundary[l.to];
                 }
             }
-            if open || body.len() >= SEA_POCKET || matches!(self.domain.layout, Layout::Sphere { .. }) {
+            if open || (sea && (body.len() >= SEA_POCKET || sphere)) {
                 for c in body { outlet[c] = true; }
             }
         }
@@ -555,7 +574,8 @@ impl Terrain {
             let supply: Vec<f64> = (0..self.domain.len()).map(|i| if sea[i] { self.sediment_flux[i] } else { 0. }).collect();
             let before = self.bed.clone();
             // The patch's edge, below sea level, is the open sea beyond it.
-            let open: Vec<bool> = (0..self.domain.len()).map(|i| self.domain.boundary[i] && self.bed[i] < 0.).collect();
+            let level = self.sea_level();
+            let open: Vec<bool> = (0..self.domain.len()).map(|i| self.domain.boundary[i] && self.bed[i] < level).collect();
             // Each mouth's river comes in from the land cell bringing it the most sediment.
             let mut heading = vec![crate::na::Vector3::zeros(); self.domain.len()];
             let mut most = vec![0f64; self.domain.len()];
@@ -567,7 +587,7 @@ impl Terrain {
                 let t = (b - a) - b * b.dot(&(b - a));
                 if t.norm() > 0. { heading[r] = t.normalize(); }
             }
-            marine::deposit(&self.domain, &mut self.bed, &self.sediment, &sea, &open, &supply, &heading, m, dt);
+            marine::deposit(&self.domain, &mut self.bed, &self.sediment, &sea, &open, &supply, &heading, m, level, dt);
             self.record(&before);
         }
         self.slide(&fixed, LANDSLIDE_PASSES, 1);
@@ -1145,6 +1165,26 @@ mod tests {
         assert_eq!(course(1.), east);
         // Far lower (sixty times the slope, and deeper than the channel): it avulses north.
         assert_eq!(course(30.), north);
+    }
+
+    #[test]
+    fn test_sea_level_follows_the_ice_ages_and_floods_what_it_reaches() {
+        let mut t = small(1);
+        let period = t.params.glacier.as_ref().unwrap().period;
+        assert_eq!(t.sea_level(), 0.);
+        t.time = period / 2.;
+        assert!((t.sea_level() + 120.).abs() < 1e-9);
+        t.time = period;
+        assert!(t.sea_level().abs() < 1e-9);
+        // A valley cut below sea level from the patch's edge is flooded by the sea; a basin
+        // below it inland, which the sea can't reach, is a lake.
+        let n = 24;
+        for k in 0..t.domain.len() { t.bed[k] = 50.; }
+        for i in 0..8 { t.bed[10 * n + i] = -20.; }
+        for i in 14..17 { for j in 14..17 { t.bed[j * n + i] = -20.; } }
+        let outlets = t.outlets();
+        assert!(outlets[10 * n + 5], "the drowned valley isn't sea");
+        assert!(!outlets[15 * n + 15], "the inland basin is sea");
     }
 
     #[test]

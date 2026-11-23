@@ -68,7 +68,9 @@ impl Default for MarineParams {
 ///
 /// `heading` is the way each mouth's river enters it (a unit vector tangent to the sphere at
 /// the mouth; zero for none), along which its jet carries the sediment (`jet`).
-pub fn deposit(domain: &Domain, ground: &mut [f64], sediment: &[f64], sea: &[bool], open: &[bool], supply: &[f64], heading: &[crate::na::Vector3<f64>], p: &MarineParams, dt: f64) {
+///
+/// The sea stands at `sea_level` metres (see `Terrain::sea_level`).
+pub fn deposit(domain: &Domain, ground: &mut [f64], sediment: &[f64], sea: &[bool], open: &[bool], supply: &[f64], heading: &[crate::na::Vector3<f64>], p: &MarineParams, sea_level: f64, dt: f64) {
     let n = domain.len();
     let mut loose: Vec<f64> = sediment.to_vec();
     // Each river's sediment fills the sea floor up to sea level, from its mouth outwards, the
@@ -87,7 +89,7 @@ pub fn deposit(domain: &Domain, ground: &mut [f64], sediment: &[f64], sea: &[boo
             if left <= 0. { break; }
             if d > best[&c] { continue; }
             reached.push(c);
-            let room = (-ground[c]).max(0.) * domain.area[c];
+            let room = (sea_level - ground[c]).max(0.) * domain.area[c];
             let laid = room.min(left);
             if laid > 0. {
                 let h = laid / domain.area[c];
@@ -131,7 +133,7 @@ pub fn deposit(domain: &Domain, ground: &mut [f64], sediment: &[f64], sea: &[boo
     let steps = (dt / limit).ceil().max(1.) as usize;
     let step = dt / steps as f64;
     let k = |a: f64, b: f64| {
-        let depth = (-(0.5 * (a + b))).max(0.);
+        let depth = (sea_level - 0.5 * (a + b)).max(0.);
         p.diffusivity * (-depth / p.depth_scale).exp()
     };
     let mut flux = vec![0.; domain.link_count()];
@@ -184,7 +186,7 @@ mod tests {
         let mut sediment = vec![0.; d.len()];
         for _ in 0..100 {
             let start = ground.clone();
-            deposit(&d, &mut ground, &sediment, &sea, &vec![false; d.len()], &supply, &vec![crate::na::Vector3::zeros(); d.len()], &MarineParams::default(), 100.);
+            deposit(&d, &mut ground, &sediment, &sea, &vec![false; d.len()], &supply, &vec![crate::na::Vector3::zeros(); d.len()], &MarineParams::default(), 0., 100.);
             for i in 0..d.len() { sediment[i] += ground[i] - start[i]; }
         }
         let added: f64 = ground.iter().sum::<f64>() - before;
@@ -219,7 +221,7 @@ mod tests {
         let reach = |jet: f64| {
             let mut ground = vec![-20.; n];
             let p = MarineParams { jet, diffusivity: 0., ..MarineParams::default() };
-            deposit(&d, &mut ground, &vec![0.; n], &vec![true; n], &vec![false; n], &supply, &heading, &p, 100.);
+            deposit(&d, &mut ground, &vec![0.; n], &vec![true; n], &vec![false; n], &supply, &heading, &p, 0., 100.);
             let filled = |k: usize| ground[k] > -19.;
             let along = (2..40).take_while(|&i| filled(at(i, 20))).count();
             let across = (20..40).take_while(|&j| filled(at(2, j))).count();
@@ -246,7 +248,7 @@ mod tests {
         // 10^8 m³, five times what the inlet holds.
         supply[at(2, 10)] = 1e6;
         let before: f64 = ground.iter().sum();
-        deposit(&d, &mut ground, &vec![0.; n], &sea, &vec![false; n], &supply, &vec![crate::na::Vector3::zeros(); n], &MarineParams::default(), 100.);
+        deposit(&d, &mut ground, &vec![0.; n], &sea, &vec![false; n], &supply, &vec![crate::na::Vector3::zeros(); n], &MarineParams::default(), 0., 100.);
         let added = (ground.iter().sum::<f64>() - before) * 2.5e5;
         assert!((added - 1e8).abs() < 1e-6 * 1e8);
         assert!(ground[at(2, 10)] <= 1e-9, "the mouth piled up to {}", ground[at(2, 10)]);

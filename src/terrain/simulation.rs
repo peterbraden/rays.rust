@@ -593,7 +593,7 @@ impl Terrain {
                 let t = (b - a) - b * b.dot(&(b - a));
                 if t.norm() > 0. { heading[r] = t.normalize(); }
             }
-            marine::deposit(&self.domain, &mut self.bed, &self.sediment, &sea, &open, &supply, &heading, m, level, dt);
+            marine::deposit(&self.domain, &mut self.bed, &self.sediment, &sea, &open, &supply, &heading, m, level, self.wind, dt);
             self.record(&before);
         }
         self.slide(&fixed, LANDSLIDE_PASSES, 1);

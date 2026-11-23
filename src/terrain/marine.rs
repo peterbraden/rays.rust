@@ -33,6 +33,70 @@
 
 use crate::terrain::domain::Domain;
 
+/// The depth below which waves no longer move sand along the shore (the depth of closure), m.
+const CLOSURE_DEPTH: f64 = 15.;
+
+/// Carry loose sediment along the shore for `dt` years: longshore drift. Waves that reach the
+/// shore obliquely, at an angle α to its normal, drive a current along it that carries the sand
+/// they stir: Q = `longshore` sin 2α (the CERC formula's dependence on the angle: US Army Corps
+/// of Engineers, "Shore Protection Manual", 1984), along the shore in the direction the waves'
+/// travel has along it. Each sea cell shallower than the depth of closure (the surf zone, here
+/// 15 m) passes that much of its loose sediment to its neighbour furthest along the shore; where
+/// the coast turns away, it goes on into deeper water and builds out spits. The waves come
+/// with the prevailing wind, towards (`east`, `north`); the shore's normal is up the sea floor's
+/// slope.
+#[allow(clippy::too_many_arguments)]
+fn drift(domain: &Domain, ground: &mut [f64], loose: &mut [f64], sea: &[bool], p: &MarineParams, sea_level: f64, waves: (f64, f64), dt: f64) {
+    if p.longshore <= 0. || waves.0.hypot(waves.1) <= 0. { return; }
+    let n = domain.len();
+    let along = |from: usize, to: usize| {
+        let d = domain.dirs[from];
+        let v = domain.dirs[to] - d;
+        let t = v - d * d.dot(&v);
+        let size = t.norm();
+        if size > 0. { t / size } else { t }
+    };
+    let mut change = vec![0.; n];
+    for i in 0..n {
+        if !sea[i] || loose[i] <= 0. || sea_level - ground[i] > CLOSURE_DEPTH { continue; }
+        // The waves' direction in the cell's tangent plane.
+        let d = domain.dirs[i];
+        let (east, north) = match &domain.layout {
+            crate::terrain::domain::Layout::Patch { east, north, .. } => (*east, *north),
+            _ => {
+                let a = if d.y.abs() < 0.99 { crate::na::Vector3::y() } else { crate::na::Vector3::x() };
+                let east = a.cross(&d).normalize();
+                (east, d.cross(&east))
+            }
+        };
+        let w = east * waves.0 + north * waves.1;
+        let w = (w - d * d.dot(&w)).normalize();
+        // The shore's normal, landwards: up the floor's slope.
+        let edges = domain.edges(i);
+        let mut up = crate::na::Vector3::zeros();
+        for l in edges { up += along(i, l.to) * (ground[l.to] - ground[i]) / l.dist; }
+        if up.norm() <= 0. { continue; }
+        let normal = up.normalize();
+        let onshore = w.dot(&normal);
+        if onshore <= 0. { continue; }
+        let tangent = w - normal * onshore;
+        let sideways = tangent.norm();
+        if sideways <= 1e-9 { continue; }
+        let tangent = tangent / sideways;
+        let rate = p.longshore * 2. * sideways * onshore;
+        let Some(l) = edges.iter().filter(|l| sea[l.to]).max_by(|a, b| along(i, a.to).dot(&tangent).total_cmp(&along(i, b.to).dot(&tangent))) else { continue };
+        if along(i, l.to).dot(&tangent) <= 0.3 { continue; }
+        let volume = (rate * dt).min(loose[i] * domain.area[i]);
+        change[i] -= volume;
+        change[l.to] += volume;
+    }
+    for i in 0..n {
+        let h = change[i] / domain.area[i];
+        ground[i] += h;
+        loose[i] += h;
+    }
+}
+
 /// Cut back the coast for `dt` years: each land cell beside the `sea` (`fixed` cells don't
 /// change) retreats at `cliff_retreat` times its rock's `erodibility` times the share of its
 /// edge open to the sea, and is lowered by the volume that removes (the retreat times its
@@ -82,6 +146,9 @@ pub struct MarineParams {
     pub diffusivity: f64,
     /// Depth over which diffusivity falls by e, λ, metres.
     pub depth_scale: f64,
+    /// Sediment the waves carry along the shore, m³ a year, at the most oblique waves
+    /// (`drift`); 0 for none.
+    pub longshore: f64,
     /// How fast waves cut back cliffs of average bedrock, metres a year (scaled by the rock's
     /// erodibility, and by how much of the cell's edge faces the sea); 0 for none.
     pub cliff_retreat: f64,
@@ -93,7 +160,7 @@ pub struct MarineParams {
 
 impl Default for MarineParams {
     fn default() -> MarineParams {
-        MarineParams { diffusivity: 1000., depth_scale: 100., jet: 3., cliff_retreat: 0.05 }
+        MarineParams { diffusivity: 1000., depth_scale: 100., jet: 3., cliff_retreat: 0.05, longshore: 2e5 }
     }
 }
 
@@ -108,8 +175,11 @@ impl Default for MarineParams {
 /// `heading` is the way each mouth's river enters it (a unit vector tangent to the sphere at
 /// the mouth; zero for none), along which its jet carries the sediment (`jet`).
 ///
-/// The sea stands at `sea_level` metres (see `Terrain::sea_level`).
-pub fn deposit(domain: &Domain, ground: &mut [f64], sediment: &[f64], sea: &[bool], open: &[bool], supply: &[f64], heading: &[crate::na::Vector3<f64>], p: &MarineParams, sea_level: f64, dt: f64) {
+/// The sea stands at `sea_level` metres (see `Terrain::sea_level`), and the waves travel
+/// towards (`east`, `north`) (any length; zero for none), carrying sediment along the shore
+/// (`drift`).
+#[allow(clippy::too_many_arguments)]
+pub fn deposit(domain: &Domain, ground: &mut [f64], sediment: &[f64], sea: &[bool], open: &[bool], supply: &[f64], heading: &[crate::na::Vector3<f64>], p: &MarineParams, sea_level: f64, waves: (f64, f64), dt: f64) {
     let n = domain.len();
     let mut loose: Vec<f64> = sediment.to_vec();
     // Each river's sediment fills the sea floor up to sea level, from its mouth outwards, the
@@ -161,6 +231,7 @@ pub fn deposit(domain: &Domain, ground: &mut [f64], sediment: &[f64], sea: &[boo
             }
         }
     }
+    drift(domain, ground, &mut loose, sea, p, sea_level, waves, dt);
     if p.diffusivity <= 0. { return; }
 
     // Explicit steps, each moving no more than half a cell's excess.
@@ -225,7 +296,7 @@ mod tests {
         let mut sediment = vec![0.; d.len()];
         for _ in 0..100 {
             let start = ground.clone();
-            deposit(&d, &mut ground, &sediment, &sea, &vec![false; d.len()], &supply, &vec![crate::na::Vector3::zeros(); d.len()], &MarineParams::default(), 0., 100.);
+            deposit(&d, &mut ground, &sediment, &sea, &vec![false; d.len()], &supply, &vec![crate::na::Vector3::zeros(); d.len()], &MarineParams::default(), 0., (0., 0.), 100.);
             for i in 0..d.len() { sediment[i] += ground[i] - start[i]; }
         }
         let added: f64 = ground.iter().sum::<f64>() - before;
@@ -260,7 +331,7 @@ mod tests {
         let reach = |jet: f64| {
             let mut ground = vec![-20.; n];
             let p = MarineParams { jet, diffusivity: 0., ..MarineParams::default() };
-            deposit(&d, &mut ground, &vec![0.; n], &vec![true; n], &vec![false; n], &supply, &heading, &p, 0., 100.);
+            deposit(&d, &mut ground, &vec![0.; n], &vec![true; n], &vec![false; n], &supply, &heading, &p, 0., (0., 0.), 100.);
             let filled = |k: usize| ground[k] > -19.;
             let along = (2..40).take_while(|&i| filled(at(i, 20))).count();
             let across = (20..40).take_while(|&j| filled(at(2, j))).count();
@@ -270,6 +341,39 @@ mod tests {
         assert!(along > 2 * across, "along {} across {}", along, across);
         let (along, across) = reach(0.);
         assert!(along <= across + 1, "along {} across {}", along, across);
+    }
+
+    #[test]
+    fn test_waves_drift_sand_along_the_shore() {
+        // A straight shore running north-south, land to the east, the floor shelving westwards;
+        // a heap of sand in the surf zone. Waves coming in from the south-west carry it north.
+        let d = Domain::patch(0., 0., 30, 200., 6.371e6);
+        let n = d.len();
+        let sea: Vec<bool> = (0..n).map(|k| k % 30 < 20).collect();
+        let shelf: Vec<f64> = (0..n).map(|k| if sea[k] { -0.6 * (20 - k % 30) as f64 } else { 10. }).collect();
+        let mut ground = shelf.clone();
+        let heap = 15 * 30 + 18;
+        ground[heap] += 2.;
+        let mut sediment = vec![0.; n];
+        sediment[heap] = 2.;
+        let p = MarineParams { diffusivity: 0., longshore: 1e4, ..MarineParams::default() };
+        let total = |g: &[f64]| g.iter().zip(&shelf).map(|(a, b)| a - b).sum::<f64>();
+        for _ in 0..20 {
+            let start = ground.clone();
+            deposit(&d, &mut ground, &sediment, &sea, &vec![false; n], &vec![0.; n], &vec![crate::na::Vector3::zeros(); n], &p, 0., (1., 1.), 100.);
+            for k in 0..n { sediment[k] += ground[k] - start[k]; }
+        }
+        // It moved north (up the rows), and none was lost.
+        let centre: f64 = (0..n).map(|k| (k / 30) as f64 * (ground[k] - shelf[k])).sum::<f64>() / total(&ground);
+        assert!(centre > 16., "{}", centre);
+        assert!((total(&ground) - 2.).abs() < 1e-9);
+        // Waves straight on to the shore move nothing.
+        let mut still = shelf.clone();
+        still[heap] += 2.;
+        let mut heaped = vec![0.; n];
+        heaped[heap] = 2.;
+        deposit(&d, &mut still, &heaped, &sea, &vec![false; n], &vec![0.; n], &vec![crate::na::Vector3::zeros(); n], &p, 0., (1., 0.), 100.);
+        assert_eq!(still[heap], shelf[heap] + 2.);
     }
 
     #[test]
@@ -308,7 +412,7 @@ mod tests {
         // 10^8 m³, five times what the inlet holds.
         supply[at(2, 10)] = 1e6;
         let before: f64 = ground.iter().sum();
-        deposit(&d, &mut ground, &vec![0.; n], &sea, &vec![false; n], &supply, &vec![crate::na::Vector3::zeros(); n], &MarineParams::default(), 0., 100.);
+        deposit(&d, &mut ground, &vec![0.; n], &sea, &vec![false; n], &supply, &vec![crate::na::Vector3::zeros(); n], &MarineParams::default(), 0., (0., 0.), 100.);
         let added = (ground.iter().sum::<f64>() - before) * 2.5e5;
         assert!((added - 1e8).abs() < 1e-6 * 1e8);
         assert!(ground[at(2, 10)] <= 1e-9, "the mouth piled up to {}", ground[at(2, 10)]);

@@ -2617,6 +2617,12 @@
               "kind": "number",
               "default": 0.05,
               "doc": "How fast waves cut back cliffs of average bedrock, m/yr (soft rock faster, hard slower); 0 for none."
+            },
+            {
+              "name": "longshore",
+              "kind": "number",
+              "default": 200000,
+              "doc": "Sediment waves carry along the shore at the most oblique waves, m³/yr (spits, barriers); 0 for none."
             }
           ]
         },

@@ -57,7 +57,7 @@
 //!   `OrographicParams` (`wind_speed`, `fallout_time`, `scale_height`, `gain_length`,
 //!   `sea_recharge`, `saturation_recovery`, `reference`).
 //! - `channels`: `false` for no meandering, or overrides of `ChannelParams`; `marine`: `false`
-//!   for no deltas, or `{diffusivity, depth_scale, jet, cliff_retreat}`.
+//!   for no deltas, or `{diffusivity, depth_scale, jet, cliff_retreat, longshore}`.
 //! - `map`: also write a shaded relief map to this PNG path; `geology_map`: also write one
 //!   coloured by the rock exposed; `rain_map`: one coloured by the rain (for a full-scale
 //!   landscape, each of the finest patch).
@@ -464,6 +464,7 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
             if let Some(n) = v.get("depth_scale").and_then(|n| n.as_f64()) { x.depth_scale = n; }
             if let Some(n) = v.get("jet").and_then(|n| n.as_f64()) { x.jet = n.max(0.); }
             if let Some(n) = v.get("cliff_retreat").and_then(|n| n.as_f64()) { x.cliff_retreat = n.max(0.); }
+            if let Some(n) = v.get("longshore").and_then(|n| n.as_f64()) { x.longshore = n.max(0.); }
             Some(x)
         }
     };

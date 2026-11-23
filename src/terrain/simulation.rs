@@ -20,7 +20,7 @@
 //! 5. deltas: what rivers bring to the sea spreads over the sea floor (`marine`);
 //! 6. limestone dissolving (`dissolve`; its rain also sinks, to rise at springs, in routing),
 //!    landslides where slopes are steeper than their rock holds (`fluvial::landslide`), and
-//!    hillslope diffusion (`fluvial`), faster on weak rock and sediment;
+//!    hillslope diffusion (`fluvial`), faster on weak rock and sediment, and with the rain;
 //! 7. meandering rivers, a sub-grid model drawn over the terrain (`channel`), cutting back the
 //!    valley walls they press against (`cut_walls`);
 //! 8. the crust's isostatic response to what erosion, deposition and ice have changed of its
@@ -574,8 +574,12 @@ impl Terrain {
         self.dissolve(&fixed, dt);
 
         // Soil creeps faster on weak rock, which weathers faster, and on loose sediment: slopes
-        // on shale relax while hard beds hold cliffs.
-        let kappa: Vec<f64> = self.erodibility().iter().map(|k| self.params.fluvial.diffusivity * k).collect();
+        // on shale relax while hard beds hold cliffs. And with the rain: in a desert little soil
+        // forms and less of it creeps, so slopes are bare rock, weathering-limited, and cliffs
+        // keep their edges, retreating by falling rather than rounding off (the rain over the
+        // rivers' reference, from a tenth to twice).
+        let wet = self.rain_factor();
+        let kappa: Vec<f64> = self.erodibility().iter().zip(&wet).map(|(k, w)| self.params.fluvial.diffusivity * k * w.clamp(0.1, 2.)).collect();
         let before = self.bed.clone();
         diffuse_varying(&self.domain, &mut self.bed, &fixed, &kappa, dt);
         self.record(&before);

@@ -19,7 +19,8 @@
 //! - `time`: years of landscape evolution after the noise topography (default 0).
 //! - `domain`: `{"type": "patch", "cells", "spacing" (m), "lat", "lon"}`, where a patch without
 //!   `lat`/`lon` is placed on this seed's most mountainous spot (or, with `"near":
-//!   "volcanoes"`, its most volcanic mountains, or with `"near": "coast"`, a coast with
+//!   "volcanoes"`, its most volcanic mountains, with `"near": "plateau"`, a plateau of flat
+//!   strata in the subtropics (mesa country), or with `"near": "coast"`, a coast with
 //!   mountains behind it); or `{"type": "planet",
 //!   "cells"}`, a cubed sphere with `cells` x `cells` per face.
 //! - Ground cover: ice, rivers, sea floor, bare rock on steep slopes (coloured by the bedrock
@@ -33,7 +34,7 @@
 //!   the origin, ignoring the planet's curvature. A planet is drawn centred on `centre`
 //!   (default the origin), its sea level a sphere of radius `radius / scale`.
 //! - Processes: `radius` (m), `step` (years), `land_bias`, `mountain_height` (m),
-//!   `uplift_rate` (m/yr), `belt_frequency`; `fluvial`: `{k, m, n, diffusivity, deposition, lateral, avulsion}`;
+//!   `uplift_rate` (m/yr), `belt_frequency`, `plateau_uplift` (m/yr), `plateau_height` (m); `fluvial`: `{k, m, n, diffusivity, deposition, lateral, avulsion}`;
 //!   `glacier` and `volcanoes`: `false` to disable, or overrides of `GlacierParams` and
 //!   `VolcanoParams` by field name. Geology (`geology`, docs/geology.md): `"geology"`,
 //!   overrides of `GeologyParams` by field name (`strata_thickness`, `contrast`,
@@ -331,6 +332,8 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
     p.planet.mountain_height = number(o, "mountain_height", p.planet.mountain_height);
     p.planet.uplift_rate = number(o, "uplift_rate", p.planet.uplift_rate);
     p.planet.belt_frequency = number(o, "belt_frequency", p.planet.belt_frequency);
+    p.planet.plateau_uplift = number(o, "plateau_uplift", p.planet.plateau_uplift);
+    p.planet.plateau_height = number(o, "plateau_height", p.planet.plateau_height);
     p.step = number(o, "step", p.step);
     let f = &o["fluvial"];
     p.fluvial.k = number(f, "k", p.fluvial.k);
@@ -474,6 +477,7 @@ pub fn site_of(d: &Value) -> Site {
         (Some(lat), Some(lon), _) => Site::At { lat, lon },
         (_, _, Some("volcanoes")) => Site::Volcanoes,
         (_, _, Some("coast")) => Site::Coast,
+        (_, _, Some("plateau")) => Site::Plateau,
         (_, _, None | Some("mountains")) => Site::Mountains,
         (_, _, Some(x)) => panic!("Unknown terrain domain \"near\": {}", x),
     }

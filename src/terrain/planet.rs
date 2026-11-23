@@ -54,6 +54,11 @@ pub struct PlanetParams {
     pub belt_frequency: f64,
     /// The bedrock: its rocks, layers and folds.
     pub geology: GeologyParams,
+    /// Uplift of the plateaus, broad regions of continent away from the mountain belts raised
+    /// without folding (the Colorado Plateau, the Ozarks), metres per year (`plateau`).
+    pub plateau_uplift: f64,
+    /// How far the plateaus stand above the lowlands at time zero, metres.
+    pub plateau_height: f64,
     /// Plate tectonics, to place the continents, ocean basins, mountain belts and volcanoes;
     /// None for noise fields alone.
     pub tectonics: Option<TectonicsParams>,
@@ -69,6 +74,8 @@ impl Default for PlanetParams {
             uplift_rate: 1e-3,
             belt_frequency: 3.,
             geology: GeologyParams::default(),
+            plateau_uplift: 2e-4,
+            plateau_height: 800.,
             tectonics: None,
         }
     }
@@ -142,6 +149,7 @@ pub struct Planet {
     hotspots: Octaves,
     plutons: Octaves,
     plunges: Octaves,
+    plateaus: Octaves,
     /// The crust from plate tectonics, if simulated.
     pub crust: Option<Arc<Crust>>,
     /// The sedimentary column.
@@ -159,6 +167,8 @@ const RELIEF_FREQUENCY: f64 = 12.;
 /// ... and of the mountain ridges: a base wavelength of about 12 km on an Earth-sized planet,
 /// roughly the spacing of major valleys in real ranges.
 const RIDGE_FREQUENCY: f64 = 530.;
+/// ... of plateaus: regions several hundred kilometres across ...
+const PLATEAU_FREQUENCY: f64 = 8.;
 /// ... and of granite plutons: bodies some tens of kilometres across.
 const PLUTON_FREQUENCY: f64 = 160.;
 
@@ -170,7 +180,7 @@ impl Planet {
         Planet {
             params, continents: Octaves::new(seed, 1), belts: Octaves::new(seed, 2), relief: Octaves::new(seed, 3),
             folds: Octaves::new(seed, 4), provinces: Octaves::new(seed, 5), hotspots: Octaves::new(seed, 6),
-            plutons: Octaves::new(seed, 7), plunges: Octaves::new(seed, 8),
+            plutons: Octaves::new(seed, 7), plunges: Octaves::new(seed, 8), plateaus: Octaves::new(seed, 9),
             column,
             crust, trend: OnceLock::new(),
         }
@@ -294,13 +304,42 @@ impl Planet {
         arc.max(hotspot)
     }
 
-    /// Tectonic uplift rate, metres per year.
+    /// How much of a plateau `d` is on, 0 to 1: broad regions of continent away from the
+    /// mountain belts, raised as a whole without being folded, so their strata lie flat. Rivers
+    /// cut down through them into canyons, and their hard beds hold up the mesas and buttes
+    /// that the retreating scarps leave behind. (Unfolded continent elsewhere has no uplift, so
+    /// its flat beds are barely cut into.)
+    pub fn plateau(&self, d: &Vector3<f64>) -> f64 {
+        let p = &self.params;
+        if p.plateau_uplift == 0. && p.plateau_height == 0. { return 0.; }
+        let field = smoothstep(0.05, 0.3, self.plateaus.fbm(d, PLATEAU_FREQUENCY, 3));
+        field * smoothstep(0.05, 0.25, self.continent(d)) * (1. - smoothstep(0.05, 0.3, self.orogeny(d)))
+    }
+
+    /// Tectonic uplift rate, metres per year: the mountain belts', and the plateaus'.
     pub fn uplift(&self, d: &Vector3<f64>) -> f64 {
+        let plateau = self.params.plateau_uplift * self.plateau(d);
         if let Some(c) = &self.crust {
             // Only where the crust is being thickened now.
-            return self.params.uplift_rate * c.activity(d).clamp(0., 1.) * smoothstep(-0.1, 0.1, self.continent(d));
+            return self.params.uplift_rate * c.activity(d).clamp(0., 1.) * smoothstep(-0.1, 0.1, self.continent(d)) + plateau;
         }
-        self.params.uplift_rate * self.orogeny(d)
+        self.params.uplift_rate * self.orogeny(d) + plateau
+    }
+
+    /// As `most_mountainous`, but for a plateau of flat strata in the subtropics, where
+    /// deserts are, capped by a hard bed (sandstone, limestone, quartzite) over soft: mesa
+    /// country. (Soft rock on top, the canyons strip it back to benches on the hard bed below
+    /// rather than leaving mesas.)
+    pub fn most_plateau(&self, samples: usize) -> (f64, f64) {
+        self.best_site_in(samples, 15. ..35., |d| {
+            let plateau = self.plateau(d);
+            if plateau <= 0. { return -10.; }
+            let top = self.elevation(d, 5000.);
+            let hard = |z: f64| matches!(self.rock(d, z, 5000.), Rock::Sandstone | Rock::Limestone | Rock::Quartzite);
+            // A hard bed at the surface, over soft rock within a few hundred metres.
+            let cap = hard(top) && (1..=6).any(|k| !hard(top - 60. * k as f64));
+            2. * plateau + 0.1 * self.continent(d) + if cap { 1. } else { 0. }
+        })
     }
 
     /// Elevation above sea level at time zero, metres, with detail down to wavelength `finest`.
@@ -316,7 +355,7 @@ impl Planet {
             let crest = self.belt_folds(d, o, finest).shape;
             let fold = self.params.geology.fold_amplitude * crest;
             let mountains = self.params.mountain_height * o * (ridges * ridges - 0.2) * self.fold_emphasis(crest);
-            return base + hills + mountains + self.params.geology.fold_relief * fold;
+            return base + hills + mountains + self.params.geology.fold_relief * fold + self.params.plateau_height * self.plateau(d);
         }
         let c = self.continent(d);
         let base = if c >= 0. { 1500. * c } else { -4500. * (-6. * c).tanh() };
@@ -329,7 +368,7 @@ impl Planet {
         let crest = self.belt_folds(d, o, finest).shape;
         let fold = self.params.geology.fold_amplitude * crest;
         let mountains = self.params.mountain_height * o * (0.2 + ridges * ridges) * self.fold_emphasis(crest);
-        base + hills + mountains + self.params.geology.fold_relief * fold
+        base + hills + mountains + self.params.geology.fold_relief * fold + self.params.plateau_height * self.plateau(d)
     }
 
     /// How much the ridges are raised where the folds' shape is `crest`: the ranges stand on
@@ -375,6 +414,11 @@ impl Planet {
     }
 
     fn best_site(&self, samples: usize, score: impl Fn(&Vector3<f64>) -> f64) -> (f64, f64) {
+        self.best_site_in(samples, 30. ..55., score)
+    }
+
+    /// The best site by `score`, preferring latitudes (degrees, north or south) in `band`.
+    fn best_site_in(&self, samples: usize, band: std::ops::Range<f64>, score: impl Fn(&Vector3<f64>) -> f64) -> (f64, f64) {
         let golden = std::f64::consts::PI * (3. - 5f64.sqrt());
         let mut best = (f64::NEG_INFINITY, 0., 0.);
         for i in 0..samples {
@@ -382,7 +426,7 @@ impl Planet {
             let lon = (golden * i as f64).rem_euclid(std::f64::consts::TAU);
             let lat = y.asin();
             let d = Vector3::new(lat.cos() * lon.cos(), lat.sin(), -lat.cos() * lon.sin());
-            let mid = (30f64.to_radians() .. 55f64.to_radians()).contains(&lat.abs());
+            let mid = band.contains(&lat.abs().to_degrees());
             let score = score(&d) + if mid { 1. } else { 0. };
             if score > best.0 { best = (score, lat.to_degrees(), lon.to_degrees()); }
         }

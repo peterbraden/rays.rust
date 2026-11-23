@@ -147,6 +147,21 @@ Bare rock in the default ground cover takes the colour of the rock at the point'
 so beds show as bands across cliffs. In function graphs, `field` nodes can read `rock` (its
 number) and `hardness`; see [surface layers](surface-layers.md).
 
+## Plateaus and deserts
+
+Away from the mountain belts, broad regions of continent are raised as a whole without
+folding (`Planet::plateau`, `plateau_uplift` 0.2 mm/yr, standing `plateau_height` 800 m higher
+at time zero), so their strata lie flat; the Colorado Plateau's rivers cut down through them at
+0.1-0.5 mm/yr. In a desert, hillslopes creep slowly (creep scales with the rain, from a tenth
+to twice the rivers' reference), so the slopes are bare rock and cliffs keep their edges,
+retreating as the soft rock beneath them is cut away and they fail. A patch `"near":
+"plateau"` is centred on a plateau in the subtropics capped by a hard bed over soft: there,
+over a few million years, canyons cut through the caprock and widen, leaving flat-topped,
+caprock-covered tablelands between them. Isolated mesas and buttes need scarps to retreat
+further than that, over tens of millions of years (real scarps retreat 0.5-2 km a million
+years). A standalone patch's edges are held as base level while it rises, which cuts gullies
+all round its rim.
+
 ## Validation
 
 `terrain::simulation::tests::test_channels_and_slopes_are_steeper_on_hard_rock` (ignored; run

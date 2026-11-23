@@ -2188,7 +2188,7 @@
               "kind": "enum",
               "default": "mountains",
               "doc": "Patch without lat/lon: centre it on the most such place.",
-              "options": ["mountains", "volcanoes", "coast"]
+              "options": ["mountains", "volcanoes", "coast", "plateau"]
             }
           ]
         },
@@ -2260,6 +2260,18 @@
           "doc": "Peak tectonic uplift, m per year."
         },
         {"name": "belt_frequency", "kind": "number", "default": 3, "doc": "Mountain belts per planet radius."},
+        {
+          "name": "plateau_uplift",
+          "kind": "number",
+          "default": 0.0002,
+          "doc": "Uplift of plateaus of flat strata away from the mountain belts, m/yr (rivers cut canyons and mesas into them)."
+        },
+        {
+          "name": "plateau_height",
+          "kind": "number",
+          "default": 800,
+          "doc": "How far the plateaus stand above the lowlands at time zero, m."
+        },
         {
           "name": "tectonics",
           "kind": "object",

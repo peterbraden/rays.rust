@@ -767,7 +767,7 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
         relief: relief.clone(), frame: frame.clone(), noise: crate::noise::PerlinNoise::shuffled(seed.wrapping_add(0x5a7e5)),
     });
     let lookup = water.clone();
-    let surface = crate::terrain::rivers::WaterSurface { mesh, attenuation: Box::new(move |p| lookup.attenuation(p)) };
+    let surface = crate::terrain::rivers::WaterSurface { mesh, centre: frame.centre(), attenuation: Box::new(move |p| lookup.attenuation(p)) };
     Some(SceneObject { geometry: Box::new(surface), medium: Box::new(crate::material::texture::Solid { m: Box::new(ArcMaterial(water)) }) })
 }
 

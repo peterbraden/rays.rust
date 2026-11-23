@@ -202,13 +202,6 @@ impl RiverWater {
 impl MaterialModel for RiverWater {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let Some((node, along)) = self.flow(&intersection.point) else {
-            // A lake's sheet seen from below is only ever seen from the air beneath its rim,
-            // where the smoothed ground lies lower than the simulation's spill level: not water
-            // that is there. Pass through it.
-            if r.rd.dot(&intersection.normal) > 0. {
-                let ro = intersection.point + r.rd.normalize() * 2. * crate::material::functions::surface_offset(intersection, s);
-                return ScatteredRay { emit: Color::black(), attenuate: Color::white(), light_sampling: crate::material::model::LightSampling::None, ray: Some(Ray { ro, rd: r.rd }) };
-            }
             return self.water(&Node::still(), 0.).scatter(r, intersection, s);
         };
         let cover = whitewater(node.froude, 1.5 * node.depth / node.grain.max(1e-4));

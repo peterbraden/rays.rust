@@ -1066,10 +1066,28 @@ impl MaterialModel for Land {
 
 /// The landscape's materials: water in its rivers and lakes, land elsewhere (the ground cover,
 /// or the scene's own material).
+/// Water drawn on the ground (rivers too narrow for the mesh to carve, from afar; ox-bows):
+/// shaded as level water, its normal the local vertical rather than the ground's, so it
+/// mirrors what is across it as the water would. (On the ground's own slopes the reflections
+/// went into the hillside, and the water looked dark.)
+pub struct FlatWater {
+    pub water: PhysicalOcean,
+    pub centre: Vector3<f64>,
+}
+
+impl MaterialModel for FlatWater {
+    fn scatter(&self, r: &Ray, i: &Intersection, s: &Scene) -> ScatteredRay {
+        self.water.scatter(r, &Intersection { normal: (i.point - self.centre).normalize(), ..*i }, s)
+    }
+    fn sun_glint(&self, r: &Ray, i: &Intersection, s: &Scene) -> Option<Color> {
+        self.water.sun_glint(r, &Intersection { normal: (i.point - self.centre).normalize(), ..*i }, s)
+    }
+}
+
 pub struct LandscapeMedium {
     ground: Arc<Ground>,
     land: Box<dyn MaterialModel + Sync + Send>,
-    water: PhysicalOcean,
+    water: FlatWater,
     /// Rivers' beds, under water: sand, and gravel and coarser.
     beds: [Lambertian; 2],
 }
@@ -1086,7 +1104,7 @@ impl LandscapeMedium {
         LandscapeMedium {
             land: material.unwrap_or_else(|| Box::new(Land { ground: ground.clone() })),
             // Rivers are shallow and carry silt, sending back more green and brown than the sea.
-            water: PhysicalOcean { water: if std::env::var("RIVER_RED").is_ok() { Color::new(1., 0., 0.) } else { Color::new(0.01, 0.018, 0.018) }, roughness: 0.004, center: Some(centre), foam: None, absorption: None },
+            water: FlatWater { water: PhysicalOcean { water: Color::new(0.01, 0.018, 0.018), roughness: 0.004, center: Some(centre), foam: None, absorption: None }, centre },
             ground,
             beds: [Lambertian { albedo: crate::textures::ColorTexture::Constant(bed_albedo(SAND_ALBEDO)) }, Lambertian { albedo: crate::textures::ColorTexture::Constant(bed_albedo(GRAVEL_ALBEDO)) }],
         }

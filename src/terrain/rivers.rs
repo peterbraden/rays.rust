@@ -836,7 +836,7 @@ pub struct Rivers {
     pub lakes: Vec<Option<f64>>,
     /// Each course's nodes' lake levels.
     lake_nodes: Vec<Vec<Option<f64>>>,
-    /// The lake cells: centre (patch coordinates), half side and level.
+    /// The lake cells and the ring about them: centre (patch coordinates), half side and level.
     pub lake_cells: Vec<(Point, f64, f64)>,
 }
 
@@ -859,7 +859,18 @@ impl Rivers {
         let lakes = lakes_of(t);
         let lake_nodes = courses.iter().map(|c| c.nodes.iter().map(|n| lakes[point_cell(&t.domain, n.p)]).collect()).collect();
         let half = 0.5 * t.domain.min_spacing();
-        let lake_cells = (0..t.domain.len()).filter_map(|i| Some((cell_point(&t.domain, i), half, lakes[i]?))).collect();
+        // The lakes' cells and the ring of cells about them, at the lake's level: the drawn
+        // ground is smoothed between cells, so about a lake it can dip below the level, and
+        // water fills it there too (rays would otherwise pass under the edge of the water).
+        let mut level: BTreeMap<usize, f64> = BTreeMap::new();
+        for i in 0..t.domain.len() {
+            let Some(l) = lakes[i] else { continue };
+            for c in std::iter::once(i).chain(t.domain.links(i).iter().map(|k| k.to)) {
+                let e = level.entry(c).or_insert(f64::NEG_INFINITY);
+                *e = e.max(if lakes[c].is_some() { lakes[c].unwrap() } else { l });
+            }
+        }
+        let lake_cells = level.into_iter().map(|(i, l)| (cell_point(&t.domain, i), half, l)).collect();
         Rivers { skeleton: Skeleton::new(&courses), courses, carve: std::sync::OnceLock::new(), lakes, lake_nodes, lake_cells }
     }
 
@@ -902,6 +913,10 @@ impl Rivers {
 /// does (`Geometry::transmits`), so the beds beneath are lit through it.
 pub struct WaterSurface {
     pub mesh: crate::shapes::mesh::SmoothMesh,
+    /// The planet's centre: the surface's normals face away from it, whichever way its
+    /// triangles wind (the water material reads a normal facing down as light leaving the
+    /// water from below, which made lakes seen from their shores dark).
+    pub centre: Vector3<f64>,
     /// The water's attenuation per metre, per channel, at a point of the surface.
     pub attenuation: Attenuation,
 }
@@ -909,10 +924,19 @@ pub struct WaterSurface {
 /// The water's attenuation at a point (`WaterSurface`).
 pub type Attenuation = Box<dyn Fn(&Vector3<f64>) -> crate::color::Color + Send + Sync>;
 
+impl WaterSurface {
+    fn up(&self, hit: Option<crate::intersection::RawIntersection>) -> Option<crate::intersection::RawIntersection> {
+        hit.map(|mut h| {
+            if h.normal.dot(&(h.point - self.centre)) < 0. { h.normal = -h.normal; }
+            h
+        })
+    }
+}
+
 impl crate::shapes::geometry::Geometry for WaterSurface {
-    fn intersects(&self, r: &crate::ray::Ray) -> Option<crate::intersection::RawIntersection> { self.mesh.intersects(r) }
-    fn intersects_beyond(&self, r: &crate::ray::Ray, min: f64) -> Option<crate::intersection::RawIntersection> { self.mesh.intersects_beyond(r, min) }
-    fn intersects_range(&self, r: &crate::ray::Ray, min: f64, max: f64) -> Option<crate::intersection::RawIntersection> { self.mesh.intersects_range(r, min, max) }
+    fn intersects(&self, r: &crate::ray::Ray) -> Option<crate::intersection::RawIntersection> { self.up(self.mesh.intersects(r)) }
+    fn intersects_beyond(&self, r: &crate::ray::Ray, min: f64) -> Option<crate::intersection::RawIntersection> { self.up(self.mesh.intersects_beyond(r, min)) }
+    fn intersects_range(&self, r: &crate::ray::Ray, min: f64, max: f64) -> Option<crate::intersection::RawIntersection> { self.up(self.mesh.intersects_range(r, min, max)) }
     fn occludes(&self, r: &crate::ray::Ray, min: f64, max: f64) -> bool { self.mesh.occludes(r, min, max) }
     fn fast_intersects(&self, r: &crate::ray::Ray) -> bool { self.mesh.fast_intersects(r) }
     fn bounds(&self) -> crate::shapes::bbox::BBox { self.mesh.bounds() }
@@ -930,7 +954,7 @@ impl crate::shapes::geometry::Geometry for WaterSurface {
     /// blocked (what is under water is reached through the surface's own shading).
     fn transmittance_color(&self, r: &crate::ray::Ray, min: f64, max: f64) -> crate::color::Color {
         use crate::color::Color;
-        let Some(hit) = self.mesh.intersects_range(r, min, max) else { return Color::white() };
+        let Some(hit) = self.up(self.mesh.intersects_range(r, min, max)) else { return Color::white() };
         let rd = r.rd.normalize();
         let cos_air = rd.dot(&hit.normal);
         if cos_air <= 0. { return Color::black(); }

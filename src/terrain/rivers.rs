@@ -858,6 +858,11 @@ pub fn lakes_of(t: &Terrain) -> Vec<Option<f64>> {
 }
 
 impl Rivers {
+    /// How deep the lake's floor lies under its surface at direction `d` (`shelf_corners`).
+    pub fn shelf(&self, domain: &Domain, d: &Vector3<f64>) -> f64 {
+        crate::terrain::scenery::sample(domain, &self.shelf_corners, d).max(0.)
+    }
+
     pub fn new(t: &Terrain, h: &Hydraulics) -> Rivers {
         let courses = courses(t, h);
         let lakes = lakes_of(t);
@@ -871,7 +876,9 @@ impl Rivers {
         let mut level: BTreeMap<usize, f64> = BTreeMap::new();
         for i in 0..t.domain.len() {
             let Some(l) = lakes[i] else { continue };
-            for c in std::iter::once(i).chain(t.domain.links(i).iter().map(|k| k.to)) {
+            // The rim's cells, not the outlet's: below the level, water flows out there.
+            let rim = t.domain.links(i).iter().map(|k| k.to).filter(|&c| lakes[c].is_some() || t.bed[c] >= l - LAKE_DEPTH);
+            for c in std::iter::once(i).chain(rim) {
                 let e = level.entry(c).or_insert(f64::NEG_INFINITY);
                 *e = e.max(if lakes[c].is_some() { lakes[c].unwrap() } else { l });
             }
@@ -905,9 +912,15 @@ impl Rivers {
         let drawn: Vec<Vec<f64>> = sampled.iter().map(|c| c.iter().map(|x| x.1).collect()).collect();
         let lake: Vec<Vec<bool>> = self.lake_nodes.iter().map(|l| l.iter().map(|x| x.is_some()).collect()).collect();
         let mut lv = levels(&self.courses, &raw, &lake);
-        // Lakes stand at their spill levels.
+        // Lakes stand at their spill levels, and back water up the rivers flowing into them: a
+        // river runs no lower than the lake it feeds (else, from the deep bed of a glacial
+        // valley, it would run under the lake's surface).
         for (l, k) in lv.iter_mut().zip(&self.lake_nodes) {
             for (x, f) in l.iter_mut().zip(k) { if let Some(f) = f { *x = *f; } }
+            if let Some(first) = k.iter().position(|f| f.is_some()) {
+                let lake = k[first].unwrap();
+                for x in l[..first].iter_mut() { *x = x.max(lake); }
+            }
         }
         let mut kind: Vec<Vec<Kind>> = lake.iter().map(|l| l.iter().map(|&k| if k { Kind::Lake } else { Kind::River }).collect()).collect();
         let found = falls(&self.courses, &mut lv, &mut kind);

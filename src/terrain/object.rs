@@ -637,14 +637,42 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
         };
         let (mut vertices, mut tris) = carve.ribbon(keep);
         // Lakes: a flat square at its level over each of their cells where this layer is drawn.
-        for &(c, half, level) in &l.rivers.as_ref().unwrap().lake_cells {
+        let rivers = l.rivers.as_ref().unwrap();
+        for &(c, half, level) in &rivers.lake_cells {
             let d = patch_dir(&l.domain, c);
             if !relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l)) { continue; }
-            let h = half * 1.02;
-            let k = vertices.len();
-            for (x, z) in [(-h, -h), (h, -h), (h, h), (-h, h)] { vertices.push(([c[0] + x, c[1] + z], level)); }
-            tris.push([k, k + 1, k + 2]);
-            tris.push([k, k + 2, k + 3]);
+            // A lake's cells and its rim's, the water left out only about the river that
+            // leaves it.
+            let lake = rivers.lakes[crate::terrain::channel::point_cell(&l.domain, c)].is_some();
+            let n = 16;
+            let step = 2. * half / n as f64;
+            // Each piece's centre and corners must all be over ground the water would cover.
+            // A lake's own cells whole; its rim's only where the drawn ground (judged at full
+            // detail, with rivers' channels carved, as the mesh near the camera draws it) dips a
+            // few metres below the level: the smoothing's dips, which the water fills, not a river's
+            // gorge through the rim.
+            let under = |q: crate::terrain::channel::Point| {
+                if lake { return true; }
+                let m = patch_dir(&l.domain, q);
+                relief.height(&m, relief.slope(&m), 1.) >= level - 10.
+            };
+            let keep: Vec<bool> = (0..n * n).map(|k| {
+                let (x0, z0) = (c[0] - half + (k / n) as f64 * step, c[1] - half + (k % n) as f64 * step);
+                [[x0 + step / 2., z0 + step / 2.], [x0, z0], [x0 + step, z0], [x0, z0 + step], [x0 + step, z0 + step]].iter().all(|&q| under(q))
+            }).collect();
+            // A cell kept whole is one square.
+            let (n, step, keep) = if keep.iter().all(|&k| k) { (1, 2. * half, vec![true]) } else { (n, step, keep) };
+            for a in 0..n {
+                for b in 0..n {
+                    let (x0, z0) = (c[0] - half + a as f64 * step, c[1] - half + b as f64 * step);
+                    if !keep[a * n + b] { continue; }
+                    let e = if lake { 0.02 * half } else { 0.01 * step };
+                    let k = vertices.len();
+                    for (x, z) in [(x0 - e, z0 - e), (x0 + step + e, z0 - e), (x0 + step + e, z0 + step + e), (x0 - e, z0 + step + e)] { vertices.push(([x, z], level)); }
+                    tris.push([k, k + 1, k + 2]);
+                    tris.push([k, k + 2, k + 3]);
+                }
+            }
         }
         let base = positions.len();
         for (q, level) in vertices {

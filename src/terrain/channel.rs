@@ -328,6 +328,13 @@ impl Rivers {
     pub fn step(&mut self, domain: &Domain, seed: u64, time: f64, dt: f64, receiver: &[usize], area: &[f64], slope: &[f64], sediment: &[f64], wet: &[bool], ground: &[f64], p: &ChannelParams) -> Vec<Push> {
         if !matches!(domain.layout, Layout::Patch { .. }) { return vec![]; }
 
+        // A channel whose river has left its course (an avulsion, a lake filled, a bank cut
+        // through) is gone, and the reaches are found again now: kept until the next survey,
+        // it was drawn where the river had been as well as where it is, two rivers side by side.
+        let before = self.channels.len();
+        self.channels.retain(|c| c.path.windows(2).all(|w| receiver[w[0]] == w[1]));
+        if self.channels.len() < before { self.found = None; }
+
         if self.found.is_none_or(|f| time - f >= p.regrid) {
             self.found = Some(time);
             let old: BTreeMap<usize, Channel> = self.channels.drain(..).map(|c| (c.end, c)).collect();
@@ -511,6 +518,33 @@ mod tests {
         assert!(c.points.iter().all(|q| q[1].abs() < 100.));
         // It pressed against its valley's walls.
         assert!(pushed > 0.);
+    }
+
+    #[test]
+    fn test_a_channel_whose_river_has_moved_is_replaced() {
+        // A gentle valley floor draining east along row 8; a reach's channel follows it. Then
+        // the river is sent along row 9 instead: the old channel goes, a new one follows it.
+        let d = Domain::patch(0., 0., 40, 200., 6.371e6);
+        let n = d.len();
+        let at = |i: usize, j: usize| j * 40 + i;
+        let route = |row: usize| -> Vec<usize> {
+            (0..n).map(|k| {
+                let (i, j) = (k % 40, k / 40);
+                if j == row && i + 1 < 40 { at(i + 1, j) } else if j != row && i > 0 && i + 1 < 40 { at(i, if j < row { j + 1 } else { j - 1 }) } else { k }
+            }).collect()
+        };
+        let area: Vec<f64> = (0..n).map(|k| if (k % 40) > 2 { 2e8 } else { 1e6 }).collect();
+        let slope = vec![1e-4; n];
+        let ground = vec![10.; n];
+        let p = ChannelParams { regrid: 1e9, ..ChannelParams::default() };
+        let mut r = Rivers::default();
+        let first = route(8);
+        r.step(&d, 1, 0., 10., &first, &area, &slope, &vec![10.; n], &vec![false; n], &ground, &p);
+        assert!(!r.channels.is_empty() && r.channels.iter().any(|c| c.path.contains(&at(10, 8))));
+        let moved = route(9);
+        r.step(&d, 1, 10., 10., &moved, &area, &slope, &vec![10.; n], &vec![false; n], &ground, &p);
+        for c in &r.channels { assert!(c.path.windows(2).all(|w| moved[w[0]] == w[1]), "a channel left on the old course"); }
+        assert!(r.channels.iter().any(|c| c.path.contains(&at(10, 9))));
     }
 
     #[test]

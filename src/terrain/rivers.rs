@@ -836,6 +836,10 @@ pub struct Rivers {
     pub lakes: Vec<Option<f64>>,
     /// Each course's nodes' lake levels.
     lake_nodes: Vec<Vec<Option<f64>>>,
+    /// How deep the lakes are at the grid's corners, metres: each corner the mean of its cells'
+    /// water depths (0 for dry cells), so sampled smoothly the floor shelves from the shore
+    /// to the basin's depth (`shelf`).
+    pub shelf_corners: Vec<f64>,
     /// The lake cells and the ring about them: centre (patch coordinates), half side and level.
     pub lake_cells: Vec<(Point, f64, f64)>,
 }
@@ -857,6 +861,8 @@ impl Rivers {
     pub fn new(t: &Terrain, h: &Hydraulics) -> Rivers {
         let courses = courses(t, h);
         let lakes = lakes_of(t);
+        let depth: Vec<f64> = (0..t.domain.len()).map(|i| lakes[i].map_or(0., |l| (l - t.bed[i]).max(0.))).collect();
+        let shelf_corners = t.domain.corner_cells.iter().map(|cs| cs.iter().map(|&c| depth[c]).sum::<f64>() / cs.len() as f64).collect();
         let lake_nodes = courses.iter().map(|c| c.nodes.iter().map(|n| lakes[point_cell(&t.domain, n.p)]).collect()).collect();
         let half = 0.5 * t.domain.min_spacing();
         // The lakes' cells and the ring of cells about them, at the lake's level: the drawn
@@ -871,7 +877,7 @@ impl Rivers {
             }
         }
         let lake_cells = level.into_iter().map(|(i, l)| (cell_point(&t.domain, i), half, l)).collect();
-        Rivers { skeleton: Skeleton::new(&courses), courses, carve: std::sync::OnceLock::new(), lakes, lake_nodes, lake_cells }
+        Rivers { skeleton: Skeleton::new(&courses), courses, carve: std::sync::OnceLock::new(), lakes, lake_nodes, lake_cells, shelf_corners }
     }
 
     /// Level the courses over `ground` (patch point, spacing → height, metres), unless done.

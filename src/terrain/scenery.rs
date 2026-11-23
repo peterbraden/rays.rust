@@ -468,9 +468,11 @@ impl Relief {
         let g = self.uncarved(d, slope, local);
         let Some(l) = self.layers.iter().find(|l| l.contains(d)) else { return g };
         let Some((q, carve)) = l.carve(d) else { return g };
-        // A lake's floor lies under its water, wherever the smoothed ground would rise above.
-        let g = match l.rivers.as_ref().and_then(|r| r.lakes[point_cell(&l.domain, q)]) {
-            Some(level) => g.min(level - 0.5),
+        // A lake's floor lies under its water, shelving from the shore to the basin's depth,
+        // wherever the smoothed ground would rise above that (the drawn ground averages a
+        // lake's floor with its rim).
+        let g = match l.rivers.as_ref().and_then(|r| Some((r.lakes[point_cell(&l.domain, q)]?, r))) {
+            Some((level, r)) => g.min(level - 0.2 - sample(&l.domain, &r.shelf_corners, d).max(0.)),
             None => g,
         };
         carve.carved(q, g, local)

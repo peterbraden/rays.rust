@@ -52,8 +52,16 @@
 //! mountain valley its bumps are tens of metres high, and laid across a valley floor they would
 //! dam the river, which would then have to cut canyons through them. A river clears its own
 //! path, and the floor beside it, of relief at every scale it can reach: so each octave of the
-//! detail fades out towards the water's edge, within half its wavelength (at most `CLEAR`), and
-//! the river's line keeps the simulation's own, smooth surface (`Skeleton::from_water`).
+//! detail fades out towards the water's edge, within half its wavelength or the river's
+//! floodplain, a few widths (`cleared`), whichever is less, and the river's line keeps the
+//! simulation's own, smooth surface (`Skeleton::nearest`).
+//!
+//! And the drawn surface is a spline through the cells' corners, each the mean of the cells
+//! meeting there, which in a narrow valley lifts the floor towards the walls, by tens or
+//! hundreds of metres and unevenly along the river: the simulation's bed is where its rivers
+//! actually run. So within a cell of a river the drawn surface is blended down (or up) to the
+//! simulation's bed beneath the river (`Relief::base`), and valleys keep their V with the
+//! river at the bottom.
 //!
 //! ## The channel
 //!
@@ -95,6 +103,17 @@ pub struct Node {
     pub meanders: bool,
     /// The bed's median grain, metres.
     pub grain: f64,
+    /// Suspended sediment, g/m³ (`river_water`).
+    pub turbidity: f64,
+    /// The flow's Froude number.
+    pub froude: f64,
+}
+
+impl Node {
+    /// Still, clear water, for where no river is found.
+    pub fn still() -> Node {
+        Node { p: [0., 0.], half: 1., depth: 1., freeboard: 0., bed: 0., slope: 1e-5, meanders: false, grain: 0.01, turbidity: 0., froude: 0. }
+    }
 }
 
 /// A stretch of river between junctions, upstream to downstream.
@@ -123,6 +142,8 @@ fn chaikin(nodes: &[Node]) -> Vec<Node> {
         slope: a.slope + (b.slope - a.slope) * t,
         meanders: a.meanders || b.meanders,
         grain: a.grain + (b.grain - a.grain) * t,
+        turbidity: a.turbidity + (b.turbidity - a.turbidity) * t,
+        froude: a.froude + (b.froude - a.froude) * t,
     };
     let mut out = vec![nodes[0]];
     for (k, w) in nodes.windows(2).enumerate() {
@@ -152,6 +173,8 @@ fn densify(nodes: &[Node]) -> Vec<Node> {
                 slope: a.slope + (b.slope - a.slope) * t,
                 meanders: a.meanders && b.meanders,
                 grain: a.grain + (b.grain - a.grain) * t,
+                turbidity: a.turbidity + (b.turbidity - a.turbidity) * t,
+                froude: a.froude + (b.froude - a.froude) * t,
             });
         }
     }
@@ -218,7 +241,8 @@ pub fn courses(t: &Terrain, h: &Hydraulics) -> Vec<Course> {
     let outlets = t.outlets();
     let node_at = |i: usize, p: Point, meanders: bool| {
         let r = &h.reaches[i];
-        Node { p, half: r.water_width / 2., depth: r.depth, freeboard: (r.bankfull_depth - 1.5 * r.depth).max(0.), bed: t.bed[i], slope: r.slope, meanders, grain: r.grain }
+        Node { p, half: r.water_width / 2., depth: r.depth, freeboard: (r.bankfull_depth - 1.5 * r.depth).max(0.), bed: t.bed[i], slope: r.slope, meanders, grain: r.grain,
+            turbidity: crate::terrain::river_water::concentration(t.sediment_flux[i], h.mean[i]), froude: r.froude }
     };
     // Edges of the river network: a cell to its receiver, or a meandering channel's line.
     let channels = &t.rivers.channels;
@@ -437,6 +461,28 @@ impl Carve {
         best
     }
 
+    /// The flow at `q` if it is on a river's surface (as `ribbon` draws it): the node there,
+    /// interpolated, and the direction of flow (patch coordinates, unit).
+    pub fn water_at(&self, q: Point) -> Option<(Node, Point)> {
+        let mut best: Option<(f64, Node, Point)> = None;
+        for s in self.near(q) {
+            let (t, r) = nearest_on(s.a.node.p, s.b.node.p, q);
+            let (half, _, _) = s.at(t);
+            if r > half * (1. + TUCK.0) + TUCK.1 + 0.5 || best.as_ref().is_some_and(|b| b.0 <= r) { continue; }
+            let (a, b) = (&s.a.node, &s.b.node);
+            let l = |x: f64, y: f64| x + (y - x) * t;
+            let node = Node {
+                p: q, half, depth: l(a.depth, b.depth), freeboard: l(a.freeboard, b.freeboard), bed: l(a.bed, b.bed),
+                slope: l(a.slope, b.slope), meanders: a.meanders, grain: l(a.grain, b.grain),
+                turbidity: l(a.turbidity, b.turbidity), froude: l(a.froude, b.froude),
+            };
+            let (dx, dz) = (b.p[0] - a.p[0], b.p[1] - a.p[1]);
+            let len = dx.hypot(dz).max(1e-12);
+            best = Some((r, node, [dx / len, dz / len]));
+        }
+        best.map(|(_, n, d)| (n, d))
+    }
+
     /// The river node nearest `q`, not in a lake: its point, level and node.
     pub fn nearest(&self, q: Point) -> Option<(Point, f64, Node)> {
         self.courses.iter().flatten().filter(|v| !v.lake)
@@ -477,13 +523,19 @@ impl Carve {
 /// How far out to sample the banks of a river of half width `half`.
 pub fn bank_offset(half: f64) -> f64 { half * (1. + BANK_SAMPLE.0) + BANK_SAMPLE.1 }
 
-/// How far from a river its valley floor is cleared of the synthetic relief, metres, at most.
+/// How far from a river the skeleton looks, metres: at most a cell's width of the patches it
+/// is used on (valley floors are drawn at the simulation's beds over about a cell).
 pub const CLEAR: f64 = 1024.;
 const SKELETON_GRID: f64 = 256.;
 
+/// How far beyond its edge a river clears the synthetic relief, metres: its floodplain, a few
+/// widths, and at most half the relief's wavelength.
+pub fn cleared(half: f64) -> f64 { 8. * half + 30. }
+
 /// The courses' lines, coarsely, for the distance from the water (`Relief::detail`).
 pub struct Skeleton {
-    segments: Vec<(Point, Point, f64, f64)>,
+    /// Ends, half widths and the simulation's beds there.
+    segments: Vec<(Point, Point, f64, f64, f64, f64)>,
     grid: HashMap<(i64, i64), Vec<u32>>,
 }
 
@@ -495,13 +547,14 @@ impl Skeleton {
             let mut last = 0;
             for j in 1..c.nodes.len() {
                 if dist(c.nodes[last].p, c.nodes[j].p) >= 50. || j + 1 == c.nodes.len() {
-                    segments.push((c.nodes[last].p, c.nodes[j].p, c.nodes[last].half, c.nodes[j].half));
+                    let (a, b) = (&c.nodes[last], &c.nodes[j]);
+                    segments.push((a.p, b.p, a.half, b.half, a.bed, b.bed));
                     last = j;
                 }
             }
         }
         let mut grid: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
-        for (k, &(a, b, ha, hb)) in segments.iter().enumerate() {
+        for (k, &(a, b, ha, hb, _, _)) in segments.iter().enumerate() {
             let r = CLEAR + ha.max(hb);
             for gx in ((a[0].min(b[0]) - r) / SKELETON_GRID).floor() as i64..=((a[0].max(b[0]) + r) / SKELETON_GRID).floor() as i64 {
                 for gz in ((a[1].min(b[1]) - r) / SKELETON_GRID).floor() as i64..=((a[1].max(b[1]) + r) / SKELETON_GRID).floor() as i64 {
@@ -512,18 +565,32 @@ impl Skeleton {
         Skeleton { segments, grid }
     }
 
-    /// How far `q` is from the nearest water's edge, metres (0 in the water); infinite beyond
-    /// `CLEAR`.
-    pub fn from_water(&self, q: Point) -> f64 {
+    /// The river nearest `q` (within `CLEAR`): how far `q` is from its centreline and from its
+    /// water's edge (0 in the water), metres, its half width, and the simulation's bed there.
+    pub fn nearest(&self, q: Point) -> Option<Nearest> {
         let key = ((q[0] / SKELETON_GRID).floor() as i64, (q[1] / SKELETON_GRID).floor() as i64);
-        let mut best = f64::INFINITY;
+        let mut best: Option<Nearest> = None;
         for &k in self.grid.get(&key).into_iter().flatten() {
-            let (a, b, ha, hb) = self.segments[k as usize];
+            let (a, b, ha, hb, ba, bb) = self.segments[k as usize];
             let (t, r) = nearest_on(a, b, q);
-            best = best.min((r - (ha + (hb - ha) * t)).max(0.));
+            if r > CLEAR || best.is_some_and(|x| x.centre <= r) { continue; }
+            let half = ha + (hb - ha) * t;
+            best = Some(Nearest { centre: r, edge: (r - half).max(0.), half, bed: ba + (bb - ba) * t });
         }
-        if best > CLEAR { f64::INFINITY } else { best }
+        best
     }
+}
+
+/// The nearest river to a point (`Skeleton::nearest`).
+#[derive(Clone, Copy, Debug)]
+pub struct Nearest {
+    pub centre: f64,
+    pub edge: f64,
+    pub half: f64,
+    pub bed: f64,
+}
+
+impl Skeleton {
 }
 
 /// The rivers of a patch layer: their courses, and once its relief is known, their levels.
@@ -572,8 +639,8 @@ impl Rivers {
 /// does (`Geometry::transmits`), so the beds beneath are lit through it.
 pub struct WaterSurface {
     pub mesh: crate::shapes::mesh::SmoothMesh,
-    /// Absorption per metre, per channel.
-    pub absorption: crate::color::Color,
+    /// The water's attenuation per metre, per channel, at a point of the surface.
+    pub attenuation: Box<dyn Fn(&Vector3<f64>) -> crate::color::Color + Send + Sync>,
 }
 
 impl crate::shapes::geometry::Geometry for WaterSurface {
@@ -603,7 +670,7 @@ impl crate::shapes::geometry::Geometry for WaterSurface {
         if cos_air <= 0. { return Color::black(); }
         let depth = (hit.dist - min) * cos_air;
         let cos_water = (1. - (1. - cos_air * cos_air) / (crate::ocean::WATER_INDEX * crate::ocean::WATER_INDEX)).max(1e-3).sqrt();
-        let a = self.absorption.as_unbounded();
+        let a = (self.attenuation)(&hit.point).as_unbounded();
         Color { rgb: a.rgb.map(|k| (-k * depth / cos_water).exp()) } * (1. - crate::ocean::fresnel(cos_air))
     }
 }
@@ -631,7 +698,7 @@ pub fn patch_dir(domain: &Domain, p: Point) -> Vector3<f64> {
 mod tests {
     use super::*;
 
-    fn node(x: f64, z: f64) -> Node { Node { p: [x, z], half: 5., depth: 1., freeboard: 0.5, bed: 0., slope: 1e-3, meanders: false, grain: 0.01 } }
+    fn node(x: f64, z: f64) -> Node { Node { p: [x, z], half: 5., depth: 1., freeboard: 0.5, bed: 0., slope: 1e-3, meanders: false, grain: 0.01, turbidity: 0., froude: 0.3 } }
 
     #[test]
     fn test_bends_give_the_sinuosity_and_keep_the_ends() {

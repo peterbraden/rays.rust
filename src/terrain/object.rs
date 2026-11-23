@@ -568,7 +568,7 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     let start = web_time::Instant::now();
     if let Some(path) = o["planet_map"].as_str() { crate::terrain::map::write_planet_map(&planet, path, 2048); }
     let layers = Arc::new(built);
-    let relief = Relief::new(layers.clone(), &planet, radius, p.roughness, finest);
+    let relief = Arc::new(Relief::new(layers.clone(), &planet, radius, p.roughness, finest));
     let view = Viewpoint { location: SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.)) };
     let (foot, height) = frame.on_planet(&view.location);
     let ground = relief.height(&foot, relief.slope(&foot), 1.);
@@ -589,13 +589,13 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     };
     say(format!("Landscape: {} triangles in {:.1?}", geometry.primitives(), start.elapsed()));
     let _ = ground_for_water.clipmap.set(Clipmap::new(&relief, &frame, &view, &p));
-    let water = river_water(&relief, &frame, &view, &p);
+    let water = river_water(&relief, &frame, &view, &p, params.planet.seed);
     (SceneObject { geometry, medium: Box::new(LandscapeMedium::with_ground(ground, material)) }, water)
 }
 
 /// The rivers' water near the camera, where the mesh is fine enough to carve their channels
 /// (`terrain::rivers`): transparent, so their beds show through.
-fn river_water(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryParams) -> Option<SceneObject> {
+fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &SceneryParams, seed: u64) -> Option<SceneObject> {
     use crate::shapes::mesh::{IndexedMesh, SmoothMesh};
     use crate::terrain::rivers::patch_dir;
     let clipmap = Clipmap::new(relief, frame, view, p);
@@ -627,21 +627,29 @@ fn river_water(relief: &Relief, frame: &Frame, view: &Viewpoint, p: &SceneryPara
         Some(((at - view.location).norm(), at, node))
     }).min_by(|a, b| a.0.total_cmp(&b.0));
     if let Some((distance, at, n)) = near {
-        say(format!("Landscape: the nearest river, {:.0} m wide and {:.2} m deep, is {:.0} m away at [{:.0}, {:.1}, {:.0}]",
-            2. * n.half, 1.5 * n.depth, distance, at.x, at.y, at.z));
+        say(format!("Landscape: the nearest river, {:.0} m wide and {:.2} m deep (Froude {:.2}, {:.0} mg/L of silt, grains {:.1} mm), is {:.0} m away at [{:.0}, {:.1}, {:.0}]",
+            2. * n.half, 1.5 * n.depth, n.froude, n.turbidity, 1000. * n.grain, distance, at.x, at.y, at.z));
     }
     if triangles.is_empty() { return None; }
     say(format!("Landscape: rivers' water in {} triangles", triangles.len()));
     let mesh = SmoothMesh::from_indexed(&[IndexedMesh { positions, normals, triangles, texcoords: vec![] }]);
     // Clear water, a little more absorbing than the sea's (its colour from suspended sediment
     // is for step 3).
-    let absorption = crate::color::Color::new(0.45, 0.09, 0.07);
-    let water = crate::ocean::PhysicalOcean {
-        water: crate::color::Color::new(0.01, 0.018, 0.018), roughness: 0.004, center: Some(frame.centre()),
-        absorption: Some(absorption), foam: None,
-    };
-    let surface = crate::terrain::rivers::WaterSurface { mesh, absorption };
-    Some(SceneObject { geometry: Box::new(surface), medium: Box::new(crate::material::texture::Solid { m: Box::new(water) }) })
+    // Shaded by the flow under each point (`terrain::river_water`).
+    let water = Arc::new(crate::terrain::river_water::RiverWater {
+        relief: relief.clone(), frame: frame.clone(), noise: crate::noise::PerlinNoise::shuffled(seed.wrapping_add(0x5a7e5)),
+    });
+    let lookup = water.clone();
+    let surface = crate::terrain::rivers::WaterSurface { mesh, attenuation: Box::new(move |p| lookup.attenuation(p)) };
+    Some(SceneObject { geometry: Box::new(surface), medium: Box::new(crate::material::texture::Solid { m: Box::new(ArcMaterial(water)) }) })
+}
+
+/// A shared material.
+struct ArcMaterial<M>(Arc<M>);
+
+impl<M: MaterialModel + Sync + Send> MaterialModel for ArcMaterial<M> {
+    fn scatter(&self, r: &Ray, i: &crate::intersection::Intersection, s: &crate::scene::Scene) -> crate::material::model::ScatteredRay { self.0.scatter(r, i, s) }
+    fn sun_glint(&self, r: &Ray, i: &crate::intersection::Intersection, s: &crate::scene::Scene) -> Option<Color> { self.0.sun_glint(r, i, s) }
 }
 
 /// The ground about the camera displaced at render time (`shapes::displaced`), out to

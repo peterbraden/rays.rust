@@ -2135,8 +2135,8 @@ world to ship.
 
 ## 15. Water: rivers, waterfalls and coasts from hydraulics
 
-Status: steps 1 and 2 built (November 2026: `src/terrain/hydraulics.rs`, `src/terrain/rivers.rs`;
-see "Done" below); the rest is a plan. Goal: water on a landscape whose look follows from its physics.
+Status: steps 1 to 3 built (November 2026: `src/terrain/hydraulics.rs`, `rivers.rs`,
+`river_water.rs`; see "Done" below); the rest is a plan. Goal: water on a landscape whose look follows from its physics.
 How much water a river carries, how deep and fast it runs, whether it is glassy or white, where
 it falls and how the fall breaks into spray, how waves slow, turn, steepen and break on a
 coast: each from the quantities that decide it in hydraulics and coastal engineering, computed
@@ -2281,9 +2281,12 @@ transport amplitudes in position and wavevector, though for deep water).
    backwater and drawdown near controls (by the standard step; tests against the M1 and M2
    profiles), which falls (step 4) need at their lips; displaced landscapes (the displacement
    graph still roughens the carved bed).
-3. Surface character: roughness and advected ripples from the turbulence, whitewater where the
-   flow self-aerates (by Fr, slope and reach type), foam shading shared with the sea. A
-   `"river"` plot in the stress test; a mountain-to-lowland demo.
+3. Done (as below). Surface character: the water's colour and clarity from its suspended
+   sediment, roughness from the turbulence, whitewater where the flow is rapid or the bed's
+   stones reach the surface. Still to do: ripples advected by the flow and animated with
+   `time`; foam that is more than a threshold on noise (cascades are white sheets at 90%
+   cover, with no boulders or dark water between); stones emerging where the water is
+   shallower than its grains; a mountain-to-lowland demo.
 4. Waterfalls: knickpoints and hanging valleys found in the relief; brink hydraulics; the jet as
    sheet and spray medium (Mie droplets, rainbows); plunge pool and mist. Tests: brink depth,
    trajectory, continuity through the jet; jet spread against Ervine and Falvey's data. A
@@ -2336,6 +2339,20 @@ transport amplitudes in position and wavevector, though for deep water).
     trace's own offset far from the origin (1e-7 of the coordinates: over a millimetre at
     13 km), so they found the surface again and saw nothing beneath; now
     `functions::surface_offset`.
+- Step 3 (`terrain::river_water`): suspended sediment from the simulation's sediment flux over
+  the discharge; the water's reflectance 0.33 b_b / (a + b_b) and attenuation a + b from
+  mineral particles' mass-specific coefficients (b*_bp = 0.012 m²/g, Neukermans et al. 2012;
+  b*_p and a*_p from Babin et al., to check); roughness 0.004 + 1.5 S (a model choice);
+  whitewater from the Froude number and relative submergence (a model choice), in streaks along
+  the flow. `RiverWater` looks the flow up under each point (`Relief::river_at`); the surface
+  lets light down by the same attenuation.
+- Found in step 3: concentrations run from nothing (reaches the simulation deposits on: lake
+  flats, whose outflow is rightly clear) to tens of g/L, as the young landscapes (30 kyr) still
+  erode fast from their first relief; all the flux is taken as suspended. On steep ground,
+  cutting channels down to the simulation's bed made slot gorges with sheer walls: now the
+  drawn surface itself is blended to the simulation's bed within a cell of a river
+  (`Relief::base`), so valleys keep their V, and the relief is cleared only over the
+  floodplain (eight half widths and 30 m), not a kilometre.
 - Open: the simulation's width (c√A) is wide for the discharge on these mountain patches
   (42 m wide and 25 cm deep at the mean flow), so from above a river reads as pale sand under
   clear water. Width from discharge (w ∝ Q^0.5 with a sourced coefficient) and the water's
@@ -2398,6 +2415,12 @@ Bibliographic details checked by search, from abstracts or secondary sources unl
   (DOI unverified); Dean, J. Coastal Research 7(1), 1991; Komar and Inman, JGR 75(30), 1970,
   doi:10.1029/JC075i030p05914; Wright and Short, Marine Geology 56, 1984,
   doi:10.1016/0025-3227(84)90008-2.
+- River water's optics: Gordon, Brown, Jacobs, Applied Optics 14(2), 1975; Morel and Prieur,
+  Limnol. Oceanogr. 22(4), 1977; Neukermans et al., Limnol. Oceanogr. 57(1), 2012 (b*_bp of
+  mineral particles 0.012 m²/g, by search); Babin et al., Limnol. Oceanogr. 48(2), 2003; Babin
+  and Stramski, Limnol. Oceanogr. 49(3), 2004 (details from memory; to verify). Width from
+  discharge: Moody and Troutman, ESPL 27, 2002, doi:10.1002/esp.403 (found; its coefficients
+  not yet read).
 - Optics: Twomey, Bohren, Mergenthaler, Applied Optics 25(3), 1986, doi:10.1364/AO.25.000431;
   Lekner and Dorf, Applied Optics 27(7), 1988, doi:10.1364/AO.27.001278; Frouin, Schwindling,
   Deschamps, JGR 101(C6), 1996, doi:10.1029/96JC00629 (sea foam's reflectance).

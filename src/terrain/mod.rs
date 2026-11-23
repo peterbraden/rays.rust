@@ -20,3 +20,4 @@ pub mod scenery;
 pub mod fields;
 pub mod hydraulics;
 pub mod rivers;
+pub mod river_water;

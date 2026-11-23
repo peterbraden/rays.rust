@@ -386,6 +386,8 @@ pub struct Hydraulics {
     pub runoff: Vec<f64>,
     /// The flow through each cell, at the scene's `flow`.
     pub reaches: Vec<Reach>,
+    /// Mean discharge through each cell, m³/s.
+    pub mean: Vec<f64>,
 }
 
 /// Mean discharge (m³/s) through each cell, from each cell's runoff (mm/yr), accumulated down
@@ -426,7 +428,7 @@ impl Hydraulics {
             };
             reach(q[i], c * t.drainage[i].sqrt(), slope, t.sediment[i] < BARE, p)
         }).collect();
-        Hydraulics { runoff, reaches }
+        Hydraulics { runoff, reaches, mean: q }
     }
 
     /// As `new`, with the terrain's own climate model if it has one.

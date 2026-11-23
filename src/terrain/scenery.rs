@@ -374,6 +374,16 @@ impl Relief {
     /// The large-scale height at `d`, before synthetic detail: each layer blending into the
     /// next, coarser layers with the planet's own relief finer than their cells put back.
     pub fn base(&self, d: &Vector3<f64>) -> f64 {
+        let h = self.splined(d);
+        // Valley floors at the simulation's beds, where its rivers run (`terrain::rivers`).
+        let Some(l) = self.layers.iter().find(|l| l.contains(d)) else { return h };
+        let Some(n) = l.rivers.as_ref().zip(l.carve_point(d)).and_then(|(r, q)| r.skeleton.nearest(q)) else { return h };
+        let w = l.weight(d) * (1. - smoothstep(n.half, n.half + l.spacing, n.centre));
+        h + w * (n.bed - h)
+    }
+
+    /// The large-scale height from the layers' splines and the planet's relief.
+    fn splined(&self, d: &Vector3<f64>) -> f64 {
         let mut rest = 1.;
         let mut h = 0.;
         for l in self.layers.iter() {
@@ -417,10 +427,9 @@ impl Relief {
     /// mesh's spacing `local` there can carry.
     pub fn detail(&self, d: &Vector3<f64>, slope: f64, local: f64) -> f64 {
         let p = d * self.radius;
-        // Rivers clear their valley floors of relief at every scale (`terrain::rivers`).
-        let from_water = self.layers.iter().find(|l| l.contains(d))
-            .and_then(|l| Some(l.rivers.as_ref()?.skeleton.from_water(l.carve_point(d)?)))
-            .unwrap_or(f64::INFINITY);
+        // Rivers clear their floodplains of relief at every scale (`terrain::rivers`).
+        let river = self.layers.iter().find(|l| l.contains(d))
+            .and_then(|l| l.rivers.as_ref()?.skeleton.nearest(l.carve_point(d)?));
         let mut sum = 0.;
         let mut wavelength = LONGEST_DETAIL;
         let mut octave = 0.;
@@ -429,7 +438,7 @@ impl Relief {
             // cells its slopes are smoothed by its own diffusion.
             let resolved = smoothstep(4. * self.finest, 8. * self.finest, wavelength);
             let carried = 1. - smoothstep(wavelength / 4., wavelength / 2., local);
-            let cleared = if from_water.is_finite() { smoothstep(0., (wavelength / 2.).min(crate::terrain::rivers::CLEAR), from_water) } else { 1. };
+            let cleared = river.map_or(1., |n| smoothstep(0., (wavelength / 2.).min(crate::terrain::rivers::cleared(n.half)), n.edge));
             let w = (1. - resolved) * carried * cleared;
             if w > 0. {
                 // Warped ridged noise: sharp crests and spurs between gullies, with a little
@@ -456,6 +465,18 @@ impl Relief {
         match self.layers.iter().find(|l| l.contains(d)).and_then(|l| l.carve(d)) {
             Some((q, carve)) => carve.carved(q, g, local),
             None => g,
+        }
+    }
+
+    /// The river at direction `d`, if `d` is on a river's surface: the flow there, and its
+    /// direction (a unit vector in the planet's frame).
+    pub fn river_at(&self, d: &Vector3<f64>) -> Option<(crate::terrain::rivers::Node, Vector3<f64>)> {
+        let l = self.layers.iter().find(|l| l.contains(d))?;
+        let (q, carve) = l.carve(d)?;
+        let (node, along) = carve.water_at(q)?;
+        match &l.domain.layout {
+            Layout::Patch { east, north, .. } => Some((node, east * along[0] + north * along[1])),
+            Layout::Sphere { .. } => None,
         }
     }
 

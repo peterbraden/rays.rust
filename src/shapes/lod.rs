@@ -116,11 +116,14 @@ impl Constituent {
 pub struct Clusters {
     starts: Vec<u32>,
     items: Vec<Constituent>,
+    /// Each card's `self_lit`, in 255ths.
+    lit: Vec<u8>,
 }
 
 impl Clusters {
     /// A card's constituents, each a normal, area and face; returns its number.
-    fn push(&mut self, items: &[(Vector3<f64>, f64, u32)]) -> u32 {
+    fn push(&mut self, items: &[(Vector3<f64>, f64, u32)], lit: f64) -> u32 {
+        self.lit.push((lit.clamp(0., 1.) * 255.).round() as u8);
         if self.starts.is_empty() {
             self.starts.push(0);
         }
@@ -136,6 +139,12 @@ impl Clusters {
 
     pub fn len(&self) -> usize {
         self.starts.len().saturating_sub(1)
+    }
+
+    /// The fraction of light reaching the leaves card `c` is seen on that its own other leaves
+    /// let through (see `self_lit`).
+    pub fn lit(&self, c: u32) -> f64 {
+        self.lit[c as usize] as f64 / 255.
     }
 
     pub fn is_empty(&self) -> bool {
@@ -230,6 +239,12 @@ impl Card {
     /// second: most cards a ray is tested against are missed.
     #[inline]
     fn hit(&self, r: &Ray) -> Option<(f64, f64, f64)> {
+        self.crossing(r).filter(|h| h.0 > 0.)
+    }
+
+    /// Where the line of `r` crosses this card, if it does: as `hit`, but at any distance
+    /// along it, behind the ray's origin too.
+    fn crossing(&self, r: &Ray) -> Option<(f64, f64, f64)> {
         let (corner, u, v) = (self.corner(), self.u(), self.v());
         let p = r.rd.cross(&v);
         let det = u.dot(&p);
@@ -248,7 +263,7 @@ impl Card {
             return None;
         }
         let t = v.dot(&q) * inv;
-        (t > 0. && t.is_finite()).then_some((t, a, b))
+        t.is_finite().then_some((t, a, b))
     }
 
     pub fn bounds(&self) -> BBox {
@@ -324,10 +339,19 @@ impl Geometry for CardSet {
     }
 
     fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
-        !self.cards.is_empty() && self.bvh.any_hit(r, min, max, |i| self.cards[i].hit(r).is_some_and(|(t, _, _)| {
+        !self.cards.is_empty() && self.bvh.any_hit(r, min, max, |i| {
+            let card = &self.cards[i];
+            let Some((t, a, b)) = card.crossing(r) else { return false };
             let d = t * r.rd.norm();
+            // A ray leaving a card, from a hit on it (within a millimetre, or a thousandth of
+            // the card's size, about what a hit's ray is started off it by), is shadowed by
+            // the leaves of its own cluster the card can't show: stopped with the probability
+            // that they stop light.
+            if d.abs() < 0.01 && !card.is_triangle() && d.abs() <= (1e-3 * (card.u().norm() + card.v().norm())).max(1e-3) {
+                return hash01(r, a, b) >= self.clusters.lit(card.data);
+            }
             d >= min && d < max
-        }))
+        })
     }
 
     fn bounds(&self) -> BBox {
@@ -453,7 +477,7 @@ pub fn consolidate(triangles: &[Arc<Tagged<Triangle>>], size: f64) -> CardSet {
     /// What a cluster becomes: its pieces kept as triangles, or a card and its constituents.
     enum Made {
         Kept(Vec<Card>),
-        Card(Card, Vec<(Vector3<f64>, f64, u32)>),
+        Card(Card, Vec<(Vector3<f64>, f64, u32)>, f64),
         Nothing,
     }
     // Clusters are made independently, in parallel; each draws its representatives by its own
@@ -475,7 +499,10 @@ pub fn consolidate(triangles: &[Arc<Tagged<Triangle>>], size: f64) -> CardSet {
                     let t = &m.item;
                     (t.normal, 0.5 * (t.v1 - t.v0).cross(&(t.v2 - t.v0)).norm(), m.face)
                 }).collect();
-                Made::Card(Card { corner: single(&corner), u: single(&u), v: single(&v), data: 0 }, constituents(&all, g as u64))
+                let lit = if std::env::var("LOD_SELF_LIT").as_deref() == Ok("cluster") {
+                    self_lit(triangles, group)
+                } else { 1. };
+                Made::Card(Card { corner: single(&corner), u: single(&u), v: single(&v), data: 0 }, constituents(&all, g as u64), lit)
             },
             None => Made::Nothing,
         }
@@ -485,8 +512,8 @@ pub fn consolidate(triangles: &[Arc<Tagged<Triangle>>], size: f64) -> CardSet {
     for m in made {
         match m {
             Made::Kept(kept) => cards.extend(kept),
-            Made::Card(mut card, kept) => {
-                card.data = clusters.push(&kept);
+            Made::Card(mut card, kept, lit) => {
+                card.data = clusters.push(&kept, lit);
                 cards.push(card);
             },
             Made::Nothing => {},
@@ -495,6 +522,7 @@ pub fn consolidate(triangles: &[Arc<Tagged<Triangle>>], size: f64) -> CardSet {
     // Kept for the whole render, and grown by pushing: give back the slack.
     clusters.starts.shrink_to_fit();
     clusters.items.shrink_to_fit();
+    clusters.lit.shrink_to_fit();
     // A card is cheaper to test than a node to visit, and smaller: leaves of a few.
     let (bvh, cards) = Bvh::build_with_leaves(cards, Card::bounds, CARDS_PER_LEAF);
     CardSet { bvh, cards, clusters }
@@ -621,6 +649,112 @@ fn represent(set: &[(Vector3<f64>, f64, u32)], m: usize, seed: u64) -> Vec<(Vect
     }
     out.retain(|k| k.1 > 0.);
     out
+}
+
+/// The leaf's reflectance and transmittance `self_lit` assumes, for light scattered among a
+/// cluster's leaves: a green leaf's, in green (the forests' leaf material is chosen per scene).
+const LEAF_REFLECTANCE: f64 = 0.42;
+const LEAF_TRANSMITTANCE: f64 = 0.36;
+
+/// The most pieces `self_lit` measures a cluster with.
+const SELF_LIT_PIECES: usize = 2048;
+
+/// The fraction of the light from outside that reaches the viewer from the leaves of a cluster
+/// a ray from outside hits first, with the cluster's other leaves in the way, against without
+/// them: its self-shadowing, which a flat card can't do. Leaves inside a cluster shade each other
+/// more the larger it is; without it, light reaches a coarse tree's cards two or three times as
+/// often as its leaves (docs/research/learned-lod/stage7.md). Leaves pass on much of the light
+/// they stop (a green leaf reflects and transmits about four fifths), so what they scatter
+/// on to each other counts: measured by casting rays from directions over the sphere at the
+/// leaves, and from each leaf hit toward directions over the upper hemisphere (the sky and sun),
+/// with a short random walk among the cluster's leaves. Light that leaves the cluster isn't
+/// followed: cards scatter that between themselves. Applied to shadow rays leaving the card
+/// (`CardSet::occludes`); one number for all directions, so it keeps the mean, not the shadow's
+/// dependence on where the light is. Research, for now (`LOD_SELF_LIT=cluster`): it helps the
+/// coarse levels, but not yet the finest.
+fn self_lit(triangles: &[Arc<Tagged<Triangle>>], group: &[usize]) -> f64 {
+    // A large cluster is measured on an even sample of its pieces, each enlarged about its
+    // centre to keep their total area, which keeps what they stop about the same, at a bounded
+    // cost in time and memory.
+    let members: Vec<Arc<Tagged<Triangle>>> = if group.len() <= SELF_LIT_PIECES {
+        group.iter().map(|&i| triangles[i].clone()).collect()
+    } else {
+        let step = group.len() as f64 / SELF_LIT_PIECES as f64;
+        let grow = step.sqrt();
+        (0 .. SELF_LIT_PIECES).map(|k| {
+            let t = &triangles[group[(k as f64 * step) as usize]];
+            let c = (t.item.v0 + t.item.v1 + t.item.v2) / 3.;
+            let at = |v: Vector3<f64>| c + (v - c) * grow;
+            Arc::new(Tagged { item: Triangle::new(at(t.item.v0), at(t.item.v1), at(t.item.v2)), face: t.face })
+        }).collect()
+    };
+    let geometry = GeometrySet::new(&members);
+    let b = geometry.bounds();
+    let (centre, radius) = ((b.min.coords + b.max.coords) * 0.5, (b.max - b.min).norm() * 0.5);
+    if radius <= 0. {
+        return 1.;
+    }
+    let eps = 1e-6 * radius;
+    let golden = std::f64::consts::PI * (3. - 5f64.sqrt());
+    let fibonacci = |i: usize, count: usize, z0: f64| {
+        let z = 1. - (1. - z0) * (i as f64 + 0.5) / count as f64;
+        let r = (1. - z * z).max(0.).sqrt();
+        let phi = golden * i as f64;
+        Vector3::new(r * phi.cos(), z, r * phi.sin())
+    };
+    let lights: Vec<Vector3<f64>> = (0 .. 4).map(|i| fibonacci(i, 4, 0.)).collect();
+    let mut rng = crate::geometry::Pcg32::new(group[0] as u64, 0x5e1f);
+    // A leaf's response to light from `l`, seen from the side `nf` faces.
+    let response = |nf: &Vector3<f64>, l: &Vector3<f64>| {
+        let c = nf.dot(l);
+        if c > 0. { LEAF_REFLECTANCE * c } else { -LEAF_TRANSMITTANCE * c }
+    };
+    let (mut open, mut reached) = (0., 0.);
+    let views = 16;
+    for i in 0 .. views {
+        let d = -fibonacci(i, views, -1.);
+        let any = if d.x.abs() < 0.9 { Vector3::x() } else { Vector3::y() };
+        let e1 = d.cross(&any).normalize();
+        let e2 = d.cross(&e1);
+        // Rays spread over the disc the cluster's bounding sphere shows (a Fibonacci spiral).
+        for j in 0 .. 8 {
+            let r = radius * ((j as f64 + 0.5) / 8.).sqrt();
+            let phi = golden * (j + 3 * i) as f64;
+            let ray = Ray { ro: centre + (e1 * phi.cos() + e2 * phi.sin()) * r - d * (2. * radius), rd: d };
+            let Some(h) = geometry.intersects(&ray) else { continue };
+            let nf = if h.normal.dot(&d) < 0. { h.normal } else { -h.normal };
+            // Lights turned about the vertical per ray, so each sees more directions.
+            let turn = golden * (i * 8 + j) as f64;
+            for l in &lights {
+                let l = Vector3::new(l.x * turn.cos() - l.z * turn.sin(), l.y, l.x * turn.sin() + l.z * turn.cos());
+                let lit = |p: &Vector3<f64>| !geometry.occludes(&Ray { ro: p + l * eps, rd: l }, eps, f64::INFINITY);
+                // What reaches the viewer with the cluster's leaves in the way, light they
+                // scatter on included (a random walk among them, without what leaves the
+                // cluster: cards scatter that between themselves), against what would without
+                // them.
+                open += response(&nf, &l);
+                let mut got = if lit(&h.point) { response(&nf, &l) } else { 0. };
+                let (mut at, mut facing, mut weight) = (h.point, nf, 1.);
+                for _ in 0 .. 3 {
+                    let side = if rng.next_f64() < LEAF_REFLECTANCE / (LEAF_REFLECTANCE + LEAF_TRANSMITTANCE) { facing } else { -facing };
+                    let (u1, u2) = (rng.next_f64(), 2. * std::f64::consts::PI * rng.next_f64());
+                    let any = if side.x.abs() < 0.9 { Vector3::x() } else { Vector3::y() };
+                    let t1 = side.cross(&any).normalize();
+                    let t2 = side.cross(&t1);
+                    let w = (t1 * u2.cos() + t2 * u2.sin()) * u1.sqrt() + side * (1. - u1).sqrt();
+                    weight *= LEAF_REFLECTANCE + LEAF_TRANSMITTANCE;
+                    let Some(next) = geometry.intersects(&Ray { ro: at + w * eps, rd: w }) else { break };
+                    facing = if next.normal.dot(&w) < 0. { next.normal } else { -next.normal };
+                    at = next.point;
+                    if lit(&at) {
+                        got += weight * response(&facing, &l);
+                    }
+                }
+                reached += got;
+            }
+        }
+    }
+    if open <= 0. { 1. } else { (reached / open).min(1.) }
 }
 
 /// The clusters `consolidate` gathers the aggregate `triangles` into, as indices into it: split

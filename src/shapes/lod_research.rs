@@ -654,3 +654,136 @@ fn lod_transmittance() {
     std::fs::write(&out, csv).unwrap();
     println!("written to {out}");
 }
+
+/// Whole trees at each level, against their leaves (docs/research/learned-lod/coarse-bias.md):
+/// for parallel rays from views like `forest-aerial`'s, the fraction that hit the tree; of
+/// those, the fraction lit by the sun through the rest of the tree; and the mean response of
+/// what is hit. Unlike `lod_research`, this counts what clusters do to each other.
+#[test]
+#[ignore]
+fn lod_tree_levels() {
+    let species = ["quaking-aspen", "california-black-oak", "weeping-willow", "scots-pine", "norway-spruce", "hazel"];
+    let sun = Vector3::new(-0.5, 0.75, 0.6).normalize();
+    // Looking down 10°–40°, all round.
+    let views: Vec<Vector3<f64>> = (0 .. 12).map(|k| {
+        let phi = std::f64::consts::PI * k as f64 / 6.;
+        let down = (10. + 10. * (k % 4) as f64).to_radians();
+        Vector3::new(phi.cos() * down.cos(), -down.sin(), phi.sin() * down.cos())
+    }).collect();
+    println!("species level cards hit lit response hit*lit*resp (each / leaves)");
+    for name in species {
+        let p = tree::species(name).unwrap();
+        let mesh = tree::generate(&p, 1, Vector3::zeros());
+        let base = piece_size(&mesh.leaves);
+        let leaves = consolidate(&mesh.leaves, 0.);
+        let b = leaves.bounds();
+        let (centre, radius) = ((b.min.coords + b.max.coords) * 0.5, (b.max - b.min).norm() * 0.5);
+        let eps = 1e-6 * radius;
+        let measure = |g: &CardSet| {
+            let mut rng = Pcg32::new(3, 9);
+            let (mut rays, mut hits, mut lit, mut resp) = (0., 0., 0., 0.);
+            for d in &views {
+                let (e1, e2) = frame(d);
+                for _ in 0 .. 4000 {
+                    let (r1, r2) = (rng.next_f64(), rng.next_f64());
+                    let (x, y) = (radius * r1.sqrt() * (2. * std::f64::consts::PI * r2).cos(), radius * r1.sqrt() * (2. * std::f64::consts::PI * r2).sin());
+                    let ray = Ray { ro: centre + e1 * x + e2 * y - d * (3. * radius), rd: *d };
+                    rays += 1.;
+                    if let Some(h) = g.intersects(&ray) {
+                        hits += 1.;
+                        let shadow = Ray { ro: h.point + sun * eps, rd: sun };
+                        let l = !g.occludes(&shadow, eps, f64::INFINITY);
+                        let r = response(&h.normal, d, &sun);
+                        lit += l as u8 as f64;
+                        resp += r;
+                    }
+                }
+            }
+            (hits / rays, lit / hits, resp / hits)
+        };
+        let truth = measure(&leaves);
+        println!("{name:22} leaves {:>8}  hit {:.3} lit {:.3} resp {:.3}", leaves.cards().len(), truth.0, truth.1, truth.2);
+        for level in 2 ..= 9 {
+            let g = consolidate(&mesh.leaves, level_size(base, level));
+            let m = measure(&g);
+            println!("{name:22} L{level} {:>8}  hit {:.3} lit {:.3} resp {:.3} all {:.3}", g.cards().len(),
+                m.0 / truth.0, m.1 / truth.1, m.2 / truth.2, m.0 * m.1 * m.2 / (truth.0 * truth.1 * truth.2));
+        }
+    }
+}
+
+/// As `lod_tree_levels`, but the light each first hit sends back to the viewer, path traced
+/// with the summer leaf's reflectance and transmittance, sunlight only, so light scattered
+/// between leaves counts: whole trees at each level against their leaves, with the cards'
+/// self-shadowing (`self_lit`) off and on.
+#[test]
+#[ignore]
+fn lod_tree_scattering() {
+    let species: Vec<String> = std::env::var("LOD_SPECIES").map(|s| s.split(',').map(String::from).collect())
+        .unwrap_or_else(|_| ["quaking-aspen", "california-black-oak", "scots-pine", "norway-spruce"].map(String::from).to_vec());
+    let sun = Vector3::new(-0.5, 0.75, 0.6).normalize();
+    let views: Vec<Vector3<f64>> = (0 .. 12).map(|k| {
+        let phi = std::f64::consts::PI * k as f64 / 6.;
+        let down = (10. + 10. * (k % 4) as f64).to_radians();
+        Vector3::new(phi.cos() * down.cos(), -down.sin(), phi.sin() * down.cos())
+    }).collect();
+    for name in &species {
+        let p = tree::species(name).unwrap();
+        let mesh = tree::generate(&p, 1, Vector3::zeros());
+        let base = piece_size(&mesh.leaves);
+        let leaves = consolidate(&mesh.leaves, 0.);
+        let b = leaves.bounds();
+        let (centre, radius) = ((b.min.coords + b.max.coords) * 0.5, (b.max - b.min).norm() * 0.5);
+        let eps = 1e-6 * radius;
+        // Mean radiance back along each primary ray (0 for a miss), and the share from bounces.
+        let render = |g: &CardSet| {
+            let mut rng = Pcg32::new(5, 11);
+            let (mut sum, mut bounced, mut n) = (0., 0., 0.);
+            for d in &views {
+                let (e1, e2) = frame(d);
+                for _ in 0 .. 3000 {
+                    let (r1, r2) = (rng.next_f64(), rng.next_f64());
+                    let (x, y) = (radius * r1.sqrt() * (2. * std::f64::consts::PI * r2).cos(), radius * r1.sqrt() * (2. * std::f64::consts::PI * r2).sin());
+                    let mut ray = Ray { ro: centre + e1 * x + e2 * y - d * (3. * radius), rd: *d };
+                    n += 1.;
+                    let mut weight = 1.;
+                    for bounce in 0 .. 8 {
+                        let Some(h) = g.intersects(&ray) else { break };
+                        // The leaf's side facing where the ray came from.
+                        let nf = if h.normal.dot(&ray.rd) < 0. { h.normal } else { -h.normal };
+                        let cos = nf.dot(&sun);
+                        let f = if cos > 0. { RHO } else { TAU } / std::f64::consts::PI;
+                        let shadow = Ray { ro: h.point + sun * eps, rd: sun };
+                        if !g.occludes(&shadow, eps, f64::INFINITY) {
+                            let c = weight * f * cos.abs();
+                            sum += c;
+                            if bounce > 0 { bounced += c; }
+                        }
+                        // Continue: reflect with probability ρ/(ρ+τ), else transmit; weight ρ+τ.
+                        let side = if rng.next_f64() < RHO / (RHO + TAU) { nf } else { -nf };
+                        let (u1, u2) = (rng.next_f64(), rng.next_f64());
+                        let (t1, t2) = frame(&side);
+                        let r = u1.sqrt();
+                        let dir = (t1 * (r * (2. * std::f64::consts::PI * u2).cos()) + t2 * (r * (2. * std::f64::consts::PI * u2).sin()) + side * (1. - u1).sqrt()).normalize();
+                        weight *= RHO + TAU;
+                        ray = Ray { ro: h.point + dir * eps, rd: dir };
+                    }
+                }
+            }
+            (sum / n, bounced / sum.max(1e-12))
+        };
+        let truth = render(&leaves);
+        println!("{name:22} leaves: radiance {:.5} ({:.0}% from bounces)", truth.0, 100. * truth.1);
+        for level in [3, 4, 5, 6, 7] {
+            let mut line = format!("{name:22} L{level}:");
+            for setting in ["off", "cluster"] {
+                // A test run alone, by hand: nothing else reads the environment meanwhile.
+                unsafe { std::env::set_var("LOD_SELF_LIT", setting); }
+                let g = consolidate(&mesh.leaves, level_size(base, level));
+                let m = render(&g);
+                line += &format!("  {setting} {:.3} ({:.0}% bounced)", m.0 / truth.0, 100. * m.1);
+            }
+            println!("{line}");
+        }
+    }
+}

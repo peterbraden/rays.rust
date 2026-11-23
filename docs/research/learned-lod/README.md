@@ -359,6 +359,11 @@ branch's history (commits `ac51d87` to `f56d824`) and written up in their notes,
       the coverage fix, merged constituents, the speed work and crossed cards move the frontier;
       `pixels` slides along it; compact crossed cards and volumes don't help. Next: the coarse
       levels' brightening (+3% at p2 to +13% at p8).
+- [x] Why coarse levels are too bright ([stage7.md](stage7.md)): coarse cards are lit two to three
+      times as often as their leaves (no self-shadowing). A per-card lit fraction including
+      light scattered within the cluster cuts FLIP at `pixels` 4–8 by 8–10% and the drift by a
+      third (research option `LOD_SELF_LIT=cluster`); the rest is coverage from low angles.
+- [ ] Crossed cards at coarse levels only, for coverage from low angles.
 - [ ] The residual darkening from low down (−3% to −6% at mid range), common to cards and
       volumes; SGGX lobes and palettes.
 - [ ] Read what could not be fetched (see [log.md](log.md)).

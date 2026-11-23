@@ -104,3 +104,39 @@ What the two read support:
 - **Levels loaded when a ray first reaches a tree,** if scenes outgrow memory.
 - **The browser builder.** `assets::read` already serves files the page provides, so it could
   fetch cached levels instead of growing trees in WebAssembly.
+
+## Where a cached forest's render goes
+
+With the build down to seconds, the forest's cost is in the render. Measured on `forest-aerial`
+at `pixels: 2` by instruction counts (callgrind, 200 × 116 at 2 spp; run-to-run timings vary
+±6% on this machine):
+
+| | Share of all instructions |
+|---|---|
+| Searching the 243,000 placed trees (nearest hits / shadow rays) | 15.7% / 9.1% |
+| Searching and testing a tree's cards | 13.8% |
+| A tree's list of parts (bark, dead bark, leaf materials) | 3.8% |
+| Bark | 1.6% |
+
+Counted per nearest-hit search:
+- 32 nodes of the trees' BVH;
+- 2.6 trees entered;
+- 10 nodes inside each tree;
+- about 3 cards tested per card set searched.
+
+That is about what a well-built tree over 243,000 boxes should cost (its depth is about 18),
+so no structural waste is left.
+
+**Tighter boxes for placed trees** were tried, with an image the same to the bit. A placed tree's
+box now comes from its model's inner boxes, transformed (`Geometry::transformed_bounds`, passed
+through `PartOf` and `CardSet`, and from the items themselves for a set of a few). Before, it was
+the model's box turned, which for a tree turned 45° is half as wide again as its crown. That
+saves only 1.2% of instructions, 3.7% of the trees' search.
+
+**What's left is cost per node.** The nodes are 56 bytes in double precision, two children at a
+time, about 27 MB for the trees' BVH, more than fits in cache. Options:
+- **Nodes in single precision** (conservatively rounded, about 32 bytes);
+- **a four-wide BVH**, half the depth, four boxes tested together;
+- **one BVH per model** in place of the list of parts over their own BVHs.
+
+Each changes the BVH the whole renderer uses, or the forest's model structure.

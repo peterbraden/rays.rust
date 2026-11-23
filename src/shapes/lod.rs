@@ -389,6 +389,10 @@ impl Geometry for CardSet {
         self.bvh.bounds()
     }
 
+    fn transformed_bounds(&self, t: &crate::na::Affine3<f64>) -> BBox {
+        if self.cards.is_empty() { BBox::empty() } else { self.bvh.transformed_bounds(t) }
+    }
+
     fn primitives(&self) -> u64 {
         self.cards.len() as u64
     }

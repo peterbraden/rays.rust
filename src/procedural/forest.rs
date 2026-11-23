@@ -73,6 +73,10 @@ impl<T: Geometry> Geometry for PartOf<T> {
         self.item.bounds()
     }
 
+    fn transformed_bounds(&self, t: &crate::na::Affine3<f64>) -> BBox {
+        self.item.transformed_bounds(t)
+    }
+
     fn primitives(&self) -> u64 {
         self.item.primitives()
     }
@@ -191,18 +195,22 @@ impl Placed {
         })
     }
 
-    /// Its bounds, where `model` is its model.
+    /// Its bounds, where `model` is its model: the model's own transformed bounds, which a
+    /// model of parts in BVHs makes from their inner boxes (`Geometry::transformed_bounds`),
+    /// rather than its box turned, which for a tree turned 45° is half as wide again as its
+    /// crown. The trees' BVH is the forest's largest cost, and looser boxes are entered by
+    /// more rays.
     pub fn bounds(&self, model: &Model) -> BBox {
-        let b = model.bounds();
-        let mut out = BBox::empty();
-        for k in 0 .. 8 {
-            let corner = Vector3::new(
-                if k & 1 == 0 { b.min.x } else { b.max.x },
-                if k & 2 == 0 { b.min.y } else { b.max.y },
-                if k & 4 == 0 { b.min.z } else { b.max.z });
-            out = out.union_point(&self.world_point(&corner));
-        }
-        out
+        let (c, s) = self.turn();
+        let (k, sx) = (self.scale(), self.sx());
+        let at = self.at();
+        // As `world_point`: mirror, scale, turn about the vertical, then move.
+        let m = crate::na::Matrix4::new(
+            c * sx * k, 0., s * k, at.x,
+            0., k, 0., at.y,
+            -s * sx * k, 0., c * k, at.z,
+            0., 0., 0., 1.);
+        model.transformed_bounds(&crate::na::Affine3::from_matrix_unchecked(m))
     }
 }
 

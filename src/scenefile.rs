@@ -837,7 +837,8 @@ impl SceneFile {
                     if let Some((scatter, material)) = crate::terrain::object::boulders(&obj, &first) {
                         let mut with = materials.clone();
                         with.insert(crate::terrain::object::BOULDER_MATERIAL.into(), material);
-                        x.extend(SceneFile::parse_scatter(&scatter, &with, media, geometries, Some(&first)));
+                        // Placed on the ground diced coarsely (an eighth of a cell), keeping no tiles.
+                        x.extend(crate::shapes::displaced::coarsely(3, || SceneFile::parse_scatter(&scatter, &with, media, geometries, Some(&first))));
                     }
                 }
                 x

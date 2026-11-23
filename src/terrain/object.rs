@@ -803,6 +803,9 @@ fn procedural_displacement(o: &Value, height: f64, seed: u64) -> (Value, Option<
     // A power of two, so the nested grids' cells, each twice the last, lie exactly on each
     // other's.
     if o.get("displacement_spacing").is_none() { o["displacement_spacing"] = 2f64.powf((height / 100.).clamp(1. / 16., 2.).log2().round()).into(); }
+    // Quads two pixels across: the tiles a render dices are kept, and bounced light reaches
+    // nearly every cell near the camera.
+    if o.get("displacement_detail").is_none() { o["displacement_detail"] = serde_json::json!({"pixels": 2, "max_level": 7}); }
     (o, Some(graph))
 }
 

@@ -235,7 +235,15 @@ close-up scene keeps its camera on the ground however the simulation changes. Gi
 landscape a `"focus"`, so its patches don't move with the camera.
 `demo/scenes/landscape-closeup.json` stands 4 m up on a sandstone ridge of a desert fold belt
 with nothing placed by hand: a 150 m simulation under the camera, its own detail and its own
-boulders, a talus slope of sandstone blocks below the crest.
+boulders: jointed sandstone pavement up a slope strewn with blocks, and stepped ledges of the
+ridge beside the camera (960 x 540 at 32 samples: 4 min to build from a cached world, 27 to
+render). The landscape's own displacement dices quads two pixels across, at most seven levels
+down, unless the scene says otherwise: a render keeps every tile it dices, and bounced light
+reaches nearly every cell near the camera. Boulders are placed on the ground diced coarsely,
+to an eighth of a cell, in tiles dropped afterwards (`displaced::coarsely`): diced for the
+camera, the tile under each of thousands of candidates took gigabytes.
+
+![The close-up: nothing placed by hand](../demo/scenes/landscape-closeup.png)
 
 ## In the desert scenes
 

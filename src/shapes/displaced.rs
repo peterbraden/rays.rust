@@ -54,7 +54,8 @@ use crate::ray::Ray;
 use crate::shapes::bbox::BBox;
 use crate::shapes::geometry::Geometry;
 use std::cell::Cell;
-use std::sync::{Arc, OnceLock};
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, OnceLock};
 
 /// Threads for dicing large cells asked for from outside a thread pool, shared by every
 /// displaced terrain (one pool each would start a thread per core for each).
@@ -76,6 +77,31 @@ pub fn roughly<T>(f: impl FnOnce() -> T) -> T {
         fn drop(&mut self) { ROUGHLY.with(|r| r.set(self.0)); }
     }
     let _restore = Restore(ROUGHLY.with(|r| r.replace(true)));
+    f()
+}
+
+/// While nonzero, displaced terrains are diced no finer than this level less one, on the fly,
+/// keeping no tiles (`coarsely`).
+static COARSELY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The tiles diced coarsely while `coarsely` runs, by terrain and cell; dropped after.
+static COARSE_TILES: LazyLock<std::sync::Mutex<HashMap<(usize, usize), Arc<Tile>>>> = LazyLock::new(Default::default);
+
+/// Run `f` with displaced terrains diced no finer than `level` (cells split 2^level ways),
+/// each ray's cells diced afresh and not kept: for placing things on the ground while a scene
+/// is built (a landscape's own boulders), where the camera's detail isn't needed, and keeping
+/// the tile under every one of thousands of candidates, diced as finely as the camera wants
+/// the cells near it, took gigabytes. For every thread, so only while nothing renders.
+pub fn coarsely<T>(level: u32, f: impl FnOnce() -> T) -> T {
+    use std::sync::atomic::Ordering;
+    struct Restore(u32);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            COARSELY.store(self.0, Ordering::Relaxed);
+            if self.0 == 0 { COARSE_TILES.lock().unwrap().clear(); }
+        }
+    }
+    let _restore = Restore(COARSELY.swap(level + 1, Ordering::Relaxed));
     f()
 }
 
@@ -585,8 +611,12 @@ impl DisplacedTerrain {
     }
 
     fn dice(&self, k: usize, parallel: bool) -> Tile {
+        self.dice_at(k, self.levels[k] as u32, parallel)
+    }
+
+    /// Cell k diced to `level`.
+    fn dice_at(&self, k: usize, level: u32, parallel: bool) -> Tile {
         let (ix, iz) = ((k % self.grid.nx) as i64, (k / self.grid.nx) as i64);
-        let level = self.levels[k] as u32;
         let n = 1usize << level;
         let ni = n as i64;
         // With a ring of vertices outside the cell, for normals.
@@ -692,7 +722,20 @@ impl DisplacedTerrain {
         if ROUGHLY.with(Cell::get) {
             return self.intersect_base(r, k, t0, t1);
         }
-        let tile = self.tile(k);
+        let coarse = COARSELY.load(std::sync::atomic::Ordering::Relaxed);
+        let fresh: Arc<Tile>;
+        let tile = if coarse > 0 && (self.levels[k] as u32) >= coarse && self.tiles[k].get().is_none() {
+            let key = (self as *const DisplacedTerrain as usize, k);
+            let kept = COARSE_TILES.lock().unwrap().get(&key).cloned();
+            fresh = kept.unwrap_or_else(|| {
+                let t = Arc::new(self.dice_at(k, coarse - 1, false));
+                COARSE_TILES.lock().unwrap().insert(key, t.clone());
+                t
+            });
+            &*fresh
+        } else {
+            self.tile(k)
+        };
         let n = tile.n;
         let inv = Vector3::new(1. / r.rd.x, 1. / r.rd.y, 1. / r.rd.z);
         let mut best: Option<(f64, Vector3<f64>)> = None;

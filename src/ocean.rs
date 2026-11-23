@@ -1369,7 +1369,7 @@ impl Foam {
 }
 
 /// Water's refractive index.
-const WATER_INDEX: f64 = 1.333;
+pub const WATER_INDEX: f64 = 1.333;
 
 /// Fresnel reflectance of unpolarised light from air onto water, at incidence with cosine `cos_i`.
 pub fn fresnel(cos_i: f64) -> f64 {
@@ -1592,7 +1592,9 @@ impl MaterialModel for PhysicalOcean {
             let t = crate::material::functions::refract(d, m, 1. / WATER_INDEX)?.normalize();
             let a = a.as_unbounded();
             let reach = 7. / a.rgb.min().max(1e-3);
-            let down = Ray { ro: intersection.point - up * 1e-3, rd: t };
+            // Under the surface: as far below it as the trace lifted the hit above it (which far
+            // from the scene's origin is more than a millimetre).
+            let down = Ray { ro: intersection.point - up * crate::material::functions::surface_offset(intersection, s).max(1e-3), rd: t };
             let (object, hit) = s.objects.nearest_raw_intersection(&down, reach, 1e-4)?;
             if std::ptr::eq(object, intersection.object) { return None; }
             Some((down, Color { rgb: a.rgb.map(|k| (-k * hit.dist).exp()) }))

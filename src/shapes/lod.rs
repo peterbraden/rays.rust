@@ -521,6 +521,7 @@ impl Bytes {
     pub fn u16(&mut self, x: u16) { self.0.extend_from_slice(&x.to_le_bytes()) }
     pub fn u32(&mut self, x: u32) { self.0.extend_from_slice(&x.to_le_bytes()) }
     pub fn f32(&mut self, x: f32) { self.0.extend_from_slice(&x.to_le_bytes()) }
+    pub fn f64(&mut self, x: f64) { self.0.extend_from_slice(&x.to_le_bytes()) }
     pub fn vector(&mut self, v: &Vector3<f64>) {
         for x in v.iter() {
             self.0.extend_from_slice(&x.to_le_bytes());

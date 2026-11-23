@@ -43,10 +43,37 @@ once and read back.
 | **Cache full** | **37 s** | **313 MiB** | **281 MiB** | 27 s |
 
 - **Size.** The cache is 109 MB in 965 files, for 84 trees at the levels this view uses.
-- **The rest of a warm build** is placing the trees. Stack samples put 80% of it in Perlin noise:
+- **The rest of a warm build** was placing the trees. Stack samples put 80% of it in Perlin noise:
   the clearing and species fields evaluated for each candidate position (`place_favouring`).
-  That is the next target. Placement could be kept too, but its key would have to cover the
-  ground it stands on.
+
+## Placing the trees
+
+`forest-aerial` throws about 20 million candidate positions, 30 for each tree that could fit at
+the closest spacing. Most pass the cheap first check against neighbours, which uses the smallest
+radius any tree can have (about 1.4 m here). Each then evaluated 15 noise fields: the clearings'
+and one for each of 14 species. Two exact changes, both keeping the same 243,016 trees and a
+bit-identical image:
+
+- **The species' fields are skipped for a candidate in a clearing.** Clearings are never filled,
+  so the 22% of candidates landing in them paid for all 15 fields to the end, though the first
+  decides them. Warm build 46 → 22 s, back to back.
+- **The neighbour check scans only cells within reach of its circle,** on cells a quarter as
+  wide. It had scanned nine cells as wide as the largest pair of radii. 22 → 20 s.
+
+**Placements are kept too.** They are stored as `placements-<key>.bin`, keyed by the forest
+(without its `"lod"` and `"cache"`) and every geometry the scene defines, its variables
+substituted, since one of them is the ground. That key is conservative: any edit to a geometry
+places the trees again, but a camera or render setting doesn't. A heightmap image is named, not
+hashed, as for resumed renders. A forest in an ecosystem, or standing on a landscape, isn't kept.
+
+| `forest-aerial`, `pixels: 2` | Build |
+|---|---|
+| Before this work | 83 s |
+| No cache, faster placement | 65 s |
+| Levels and placements written | 27 s |
+| **Both read back** | **1.8 s** |
+
+The cache is 123 MB, 14 MB of it placements.
 
 ## From the literature
 

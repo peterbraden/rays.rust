@@ -9,7 +9,10 @@
 //! - `tree-<key>.bin`: what choosing a placement's level and making the tree's materials need
 //!   without its mesh: the size of its pieces (`lod::piece_size`), its bounds, each leaf's
 //!   state (its autumn colour), and its parts (bark, dead bark, the leaves of each material);
-//! - `tree-<key>-<part>-<level>.bin`: one part at one level (`lod::Detail::encode`).
+//! - `tree-<key>-<part>-<level>.bin`: one part at one level (`lod::Detail::encode`);
+//! - `placements-<key>.bin`: where a forest's trees stand (`forest::Placement`), keyed by the
+//!   forest and the scene's geometries (one is its ground); a heightmap read from an image is
+//!   named, not hashed, so after changing one, empty the cache.
 //!
 //! A tree's key is the FNV hash of everything that makes it (`world::key`): its parameters,
 //! its seed, its forest entry (which names its materials) and those materials as the scene
@@ -22,6 +25,7 @@
 //! Files are written whole and renamed into place, as `world` writes its stages, so runs may
 //! share a directory.
 use crate::material::leaf::LeafState;
+use crate::procedural::forest::Placement;
 use crate::na::Vector3;
 use crate::shapes::bbox::BBox;
 use crate::shapes::lod::{Bytes, Reader};
@@ -29,6 +33,9 @@ use std::path::PathBuf;
 
 /// Marks a tree's header, and its format.
 const HEADER: &[u8; 8] = b"RAYSTRE1";
+
+/// Marks a forest's placements, and their format: change the number when placement changes.
+const PLACEMENTS: &[u8; 8] = b"RAYSPLA1";
 
 /// What a tree's part is, to make its material without its mesh.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -52,7 +59,7 @@ pub struct Header {
 impl Header {
     fn encode(&self) -> Vec<u8> {
         let mut w = Bytes::new(HEADER);
-        w.vector(&Vector3::new(self.base, 0., 0.));
+        w.f64(self.base);
         w.vector(&self.bounds.min.coords);
         w.vector(&self.bounds.max.coords);
         w.u32(self.states.len() as u32);
@@ -76,7 +83,7 @@ impl Header {
         if r.take(HEADER.len())? != HEADER {
             return None;
         }
-        let base = r.vector()?.x;
+        let base = r.f64()?;
         let bounds = BBox::new(r.vector()?, r.vector()?);
         let states = (0 .. r.u32()?).map(|_| Some(LeafState { age: r.f32()?, exposure: r.f32()? })).collect::<Option<Vec<_>>>()?;
         let parts = (0 .. r.u32()?).map(|_| Some(match (r.u8()?, r.u32()?) {
@@ -117,6 +124,40 @@ impl TreeCache {
         self.write(&format!("tree-{key}-{part}-{level}.bin"), bytes);
     }
 
+    /// Where a forest's trees stand, kept under `key`, if kept.
+    pub fn placements(&self, key: &str) -> Option<Vec<Placement>> {
+        let bytes = self.read(&format!("placements-{key}.bin"))?;
+        let mut r = Reader { bytes: &bytes, at: 0 };
+        if r.take(PLACEMENTS.len())? != PLACEMENTS {
+            return None;
+        }
+        let placed = (0 .. r.u32()?).map(|_| Some(Placement {
+            species: r.u32()? as usize,
+            variant: r.u32()? as usize,
+            position: r.vector()?,
+            yaw: r.f64()?,
+            scale: r.f64()?,
+            mirror: r.u8()? != 0,
+            slope: r.f64()?,
+        })).collect::<Option<Vec<_>>>()?;
+        (r.at == bytes.len()).then_some(placed)
+    }
+
+    pub fn put_placements(&self, key: &str, placed: &[Placement]) {
+        let mut w = Bytes::new(PLACEMENTS);
+        w.u32(placed.len() as u32);
+        for p in placed {
+            w.u32(p.species as u32);
+            w.u32(p.variant as u32);
+            w.vector(&p.position);
+            w.f64(p.yaw);
+            w.f64(p.scale);
+            w.u8(p.mirror as u8);
+            w.f64(p.slope);
+        }
+        self.write(&format!("placements-{key}.bin"), &w.0);
+    }
+
     fn read(&self, file: &str) -> Option<Vec<u8>> {
         crate::assets::read(&self.dir.join(file).to_string_lossy()).ok()
     }
@@ -143,6 +184,20 @@ impl TreeCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_placements_read_back() {
+        let dir = std::env::temp_dir().join(format!("rays-tree-cache-test-{}", std::process::id()));
+        let cache = TreeCache::new(&dir);
+        let placed = vec![
+            Placement { species: 2, variant: 1, position: Vector3::new(1.5, -2.25, 3e3), yaw: 123.4, scale: 0.9, mirror: true, slope: 12.5 },
+            Placement { species: 0, variant: 0, position: Vector3::new(-0.1, 0.2, 0.3), yaw: 0., scale: 1.1, mirror: false, slope: 0. },
+        ];
+        cache.put_placements("k", &placed);
+        assert_eq!(cache.placements("k"), Some(placed));
+        assert_eq!(cache.placements("missing"), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn test_a_header_reads_back() {

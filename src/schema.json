@@ -7601,7 +7601,7 @@
           "name": "cache",
           "kind": "string",
           "default": null,
-          "doc": "A directory to keep each distinct tree's levels of detail in, read back instead of growing the tree again."
+          "doc": "A directory to keep each distinct tree's levels of detail, and where the trees stand, in, read back instead of growing and placing them again."
         },
         {
           "name": "autumn",

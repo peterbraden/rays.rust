@@ -204,6 +204,11 @@ impl MeshKey {
 }
 
 impl GeometryLibrary {
+    /// The geometries as the scene defines them (its variables substituted).
+    pub fn definitions(&self) -> &Map<String, Value> {
+        &self.defined
+    }
+
     pub fn new(defined: Map<String, Value>) -> GeometryLibrary {
         GeometryLibrary {
             defined,
@@ -1263,7 +1268,7 @@ impl SceneFile {
             (feature, SceneFile::parse_number(&f["strength"], 0.8).clamp(0., 1.))
         });
         // "where": a rule (a graph) for where trees grow and how thickly, read on the ground.
-        let placements = if feature.is_none() && rule.is_none() && room.is_none() {
+        let place = || if feature.is_none() && rule.is_none() && room.is_none() {
             forest::place(&layout, &species, seed, &refs)
         } else {
             forest::place_favouring(&layout, &species, seed, &refs, &|x, z| {
@@ -1272,6 +1277,29 @@ impl SceneFile {
                 if favoured <= 0. { return 0. }
                 favoured * rule.as_ref().map_or(1., |g| footing.rule(g, x, z))
             })
+        };
+        // With a `"cache"`, where the trees stand is kept beside their levels (`tree_cache`),
+        // keyed by the forest (but not its `"lod"`, which changes no placement) and every
+        // geometry the scene defines, since one is the ground. Not in an ecosystem, whose room
+        // depends on the populations before it, nor on a landscape.
+        let cache = o["cache"].as_str().filter(|_| room.is_none() && landscape.is_none())
+            .map(crate::procedural::tree_cache::TreeCache::new);
+        let placements = match cache {
+            Some(cache) => {
+                let mut forest = o.clone();
+                if let Some(f) = forest.as_object_mut() {
+                    f.remove("lod");
+                    f.remove("cache");
+                }
+                let key = crate::world::key(&["forest placements", &forest.to_string(),
+                    &Value::Object(geometries.definitions().clone()).to_string()]);
+                cache.placements(&key).unwrap_or_else(|| {
+                    let placed = place();
+                    cache.put_placements(&key, &placed);
+                    placed
+                })
+            },
+            None => place(),
         };
         let claims: Vec<(Vector3<f64>, f64)> = placements.iter()
             .map(|p| (p.position, 0.5 * layout.spacing * species[p.species].spacing * p.scale)).collect();

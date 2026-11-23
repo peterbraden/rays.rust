@@ -513,10 +513,21 @@ pub const LAKE: f64 = 5.;
 /// Which nodes of a course are in lakes: where filling it from its end to the spill levels
 /// (each node no lower than the one after it) would stand more than `LAKE` over `raw`.
 pub fn lakes(raw: &[f64]) -> Vec<bool> {
+    fills(raw).iter().zip(raw).map(|(f, r)| f - r > LAKE).collect()
+}
+
+/// The level water would fill a course to from its end: each node no lower than the one after
+/// it. In a lake, its spill level.
+pub fn fills(raw: &[f64]) -> Vec<f64> {
     let mut fill = raw.to_vec();
     for j in (0..fill.len().saturating_sub(1)).rev() { fill[j] = fill[j].max(fill[j + 1]); }
-    fill.iter().zip(raw).map(|(f, r)| f - r > LAKE).collect()
+    fill
 }
+
+/// How far a lake's surface reaches either side of the river through it, metres, at most: it
+/// is drawn flat at its spill level over that, and the ground higher than that hides it, so
+/// it fills its basin to the shore.
+pub const SHORE: f64 = 250.;
 
 /// Courses' levels: at each node the lowest of `raw` (the ground there and on its banks, less
 /// the freeboard), the level upstream, and what tributaries bring; except in lakes (`lake`),
@@ -566,8 +577,9 @@ impl Segment {
         (l(self.a.node.half, self.b.node.half), l(self.a.level, self.b.level), 1.5 * l(self.a.node.depth, self.b.node.depth))
     }
 
-    /// How far beyond its centreline the carving can reach.
+    /// How far beyond its centreline the carving can reach (or a lake's surface).
     fn reach(&self) -> f64 {
+        if self.a.kind == Kind::Lake || self.b.kind == Kind::Lake { return self.a.node.half.max(self.b.node.half) + SHORE; }
         let s = |v: &Vertex| v.node.half * (1. + BANK_SAMPLE.0) + BANK_SAMPLE.1 + (v.node.freeboard + v.cut + 2.) / BANK;
         s(&self.a).max(s(&self.b))
     }
@@ -625,11 +637,13 @@ impl Carve {
         self.grid.get(&key).into_iter().flatten().map(|&k| &self.segments[k as usize])
     }
 
-    /// Whether `q` is on a lake that a river passes through (at least `min_width` wide).
-    pub fn in_lake(&self, q: Point, min_width: f64) -> bool {
-        self.near_any(q).filter(|s| !s.river()).any(|s| {
+    /// The lake a river passes through at `q`, if any: its level, and how far its surface
+    /// reaches from the river's line.
+    pub fn in_lake(&self, q: Point) -> Option<(f64, f64)> {
+        self.near_any(q).filter(|s| s.a.kind == Kind::Lake && s.b.kind == Kind::Lake).find_map(|s| {
             let (t, r) = nearest_on(s.a.node.p, s.b.node.p, q);
-            r < s.at(t).0.max(min_width / 2.)
+            let (half, level, _) = s.at(t);
+            (r < half + SHORE).then_some((level, half + SHORE))
         })
     }
 
@@ -715,11 +729,13 @@ impl Carve {
         for c in &self.courses {
             let mut previous: Option<(usize, usize)> = None;
             for (j, v) in c.iter().enumerate() {
-                if v.kind != Kind::River || !keep(v.node.p, v.node.half) { previous = None; continue; }
+                // (Lakes are drawn by their cells, `Rivers::lake_cells`.)
+                let half = v.node.half;
+                if v.kind != Kind::River || !keep(v.node.p, half) { previous = None; continue; }
                 let (a, b) = (c[j.saturating_sub(1)].node.p, c[(j + 1).min(c.len() - 1)].node.p);
                 let (dx, dz) = (b[0] - a[0], b[1] - a[1]);
                 let len = dx.hypot(dz).max(1e-9);
-                let w = v.node.half * (1. + TUCK.0) + TUCK.1;
+                let w = half * (1. + TUCK.0) + TUCK.1;
                 let (nx, nz) = (-dz / len * w, dx / len * w);
                 let p = v.node.p;
                 let k = vertices.len();
@@ -816,12 +832,35 @@ pub struct Rivers {
     pub courses: Vec<Course>,
     pub skeleton: Skeleton,
     pub carve: std::sync::OnceLock<Carve>,
+    /// Each cell's lake level, if it is under a lake (`lakes_of`).
+    pub lakes: Vec<Option<f64>>,
+    /// Each course's nodes' lake levels.
+    lake_nodes: Vec<Vec<Option<f64>>>,
+    /// The lake cells: centre (patch coordinates), half side and level.
+    pub lake_cells: Vec<(Point, f64, f64)>,
+}
+
+/// Water this much deeper than the ground (metres) is a lake.
+pub const LAKE_DEPTH: f64 = 1.;
+
+/// The lakes of patch `t`: the simulation's ground filled to the levels its basins overflow
+/// at, by the flow routing's Priority-Flood over the whole grid (`flow::route`; Barnes et al.),
+/// so a lake spills where its rim is lowest in any direction, not only along its river. Each
+/// cell's lake level, where the water stands more than `LAKE_DEPTH` over it; none under ice.
+pub fn lakes_of(t: &Terrain) -> Vec<Option<f64>> {
+    let n = t.domain.len();
+    let f = crate::terrain::flow::route(&t.domain, &t.bed, &t.outlets(), &vec![1.; n]);
+    (0..n).map(|i| (f.filled[i] - t.bed[i] > LAKE_DEPTH && t.ice[i] < ICE_FREE && !t.sea[i]).then_some(f.filled[i])).collect()
 }
 
 impl Rivers {
     pub fn new(t: &Terrain, h: &Hydraulics) -> Rivers {
         let courses = courses(t, h);
-        Rivers { skeleton: Skeleton::new(&courses), courses, carve: std::sync::OnceLock::new() }
+        let lakes = lakes_of(t);
+        let lake_nodes = courses.iter().map(|c| c.nodes.iter().map(|n| lakes[point_cell(&t.domain, n.p)]).collect()).collect();
+        let half = 0.5 * t.domain.min_spacing();
+        let lake_cells = (0..t.domain.len()).filter_map(|i| Some((cell_point(&t.domain, i), half, lakes[i]?))).collect();
+        Rivers { skeleton: Skeleton::new(&courses), courses, carve: std::sync::OnceLock::new(), lakes, lake_nodes, lake_cells }
     }
 
     /// Level the courses over `ground` (patch point, spacing → height, metres), unless done.
@@ -847,8 +886,12 @@ impl Rivers {
         }).collect();
         let raw: Vec<Vec<f64>> = sampled.iter().map(|c| c.iter().map(|x| x.0).collect()).collect();
         let drawn: Vec<Vec<f64>> = sampled.iter().map(|c| c.iter().map(|x| x.1).collect()).collect();
-        let lake: Vec<Vec<bool>> = raw.iter().map(|r| lakes(r)).collect();
+        let lake: Vec<Vec<bool>> = self.lake_nodes.iter().map(|l| l.iter().map(|x| x.is_some()).collect()).collect();
         let mut lv = levels(&self.courses, &raw, &lake);
+        // Lakes stand at their spill levels.
+        for (l, k) in lv.iter_mut().zip(&self.lake_nodes) {
+            for (x, f) in l.iter_mut().zip(k) { if let Some(f) = f { *x = *f; } }
+        }
         let mut kind: Vec<Vec<Kind>> = lake.iter().map(|l| l.iter().map(|&k| if k { Kind::Lake } else { Kind::River }).collect()).collect();
         let found = falls(&self.courses, &mut lv, &mut kind);
         let _ = self.carve.set(Carve::new(&self.courses, &lv, &drawn, &kind, found));

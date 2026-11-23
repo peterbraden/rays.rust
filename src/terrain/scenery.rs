@@ -303,7 +303,11 @@ impl Layer {
             Some(carve) => match carve.level(q, self.min_river_width) {
                 Some((level, half, grain)) if h < level - 0.05 || surfaced(half) => if h < level + 0.05 { RiverAt::Bed(grain) } else { RiverAt::Land },
                 Some(_) => RiverAt::Water,
-                None => wet(carve.in_lake(q, self.min_river_width) || water.wet_oxbow(point_cell(&self.domain, q), q)),
+                None => match self.rivers.as_ref().and_then(|r| r.lakes[point_cell(&self.domain, q)]) {
+                    // Under a lake's own surface (`rivers::Rivers::lake_cells`), its bed.
+                    Some(level) if h < level + 0.05 => RiverAt::Bed(0.0005),
+                    _ => wet(water.wet_oxbow(point_cell(&self.domain, q), q)),
+                },
             },
             None => wet(water.wet(point_cell(&self.domain, q), q)),
         }
@@ -462,10 +466,14 @@ impl Relief {
     /// slope there.
     pub fn height(&self, d: &Vector3<f64>, slope: f64, local: f64) -> f64 {
         let g = self.uncarved(d, slope, local);
-        match self.layers.iter().find(|l| l.contains(d)).and_then(|l| l.carve(d)) {
-            Some((q, carve)) => carve.carved(q, g, local),
+        let Some(l) = self.layers.iter().find(|l| l.contains(d)) else { return g };
+        let Some((q, carve)) = l.carve(d) else { return g };
+        // A lake's floor lies under its water, wherever the smoothed ground would rise above.
+        let g = match l.rivers.as_ref().and_then(|r| r.lakes[point_cell(&l.domain, q)]) {
+            Some(level) => g.min(level - 0.5),
             None => g,
-        }
+        };
+        carve.carved(q, g, local)
     }
 
     /// The river at direction `d`, if `d` is on a river's surface: the flow there, and its
@@ -1078,7 +1086,7 @@ impl LandscapeMedium {
         LandscapeMedium {
             land: material.unwrap_or_else(|| Box::new(Land { ground: ground.clone() })),
             // Rivers are shallow and carry silt, sending back more green and brown than the sea.
-            water: PhysicalOcean { water: Color::new(0.01, 0.018, 0.018), roughness: 0.004, center: Some(centre), foam: None, absorption: None },
+            water: PhysicalOcean { water: if std::env::var("RIVER_RED").is_ok() { Color::new(1., 0., 0.) } else { Color::new(0.01, 0.018, 0.018) }, roughness: 0.004, center: Some(centre), foam: None, absorption: None },
             ground,
             beds: [Lambertian { albedo: crate::textures::ColorTexture::Constant(bed_albedo(SAND_ALBEDO)) }, Lambertian { albedo: crate::textures::ColorTexture::Constant(bed_albedo(GRAVEL_ALBEDO)) }],
         }
@@ -1284,3 +1292,4 @@ mod tests {
         }
     }
 }
+

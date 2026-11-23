@@ -32,14 +32,16 @@
 //! for mineral particles, which vary with their iron; to check). RGB is taken at 600, 550 and
 //! 450 nm.
 //!
-//! ## Roughness from turbulence
+//! ## Roughness from the flow
 //!
-//! The surface of a river is roughened by the turbulence the bed makes, whose velocity scale is
-//! the friction velocity u* = √(g R S). Its slopes are taken to grow with u*² / (g d) ≈ S, the
-//! ratio of the turbulence's energy to the depth's potential energy, which is just the slope:
-//! mean square slope 0.004 (a calm surface's, as the river had) plus 1.5 S, at most 0.25. A model
-//! choice, to measure against (eg. Horoshenkov et al.'s surface roughness of shallow turbulent
-//! flows); wind's ripples are left out.
+//! A river's surface is roughened by the waves its flow raises over the bed's irregularities,
+//! which steepen as the flow nears critical: a slow glide (Froude number 0.2) mirrors the
+//! banks, a riffle (0.8) sparkles. Mean square slope 0.0005 + 0.02 Fr² (at most 0.25; a model
+//! choice, to measure against eg. Horoshenkov et al.'s surface roughness of shallow turbulent
+//! flows); wind's ripples are left out. (Taking it from the slope instead, as at first, made
+//! even gentle rivers too rough to reflect anything.) Along a river the Froude number rises
+//! and falls through pools and riffles every six widths or so (`riffles`), so its surface
+//! alternates between glassy and broken.
 //!
 //! ## Whitewater
 //!
@@ -131,7 +133,16 @@ pub fn optics(c: f64) -> (Color, Color) {
 }
 
 /// The ripples' mean square slope for a reach of slope `s`.
-pub fn roughness(s: f64) -> f64 { (0.004 + 1.5 * s).min(0.25) }
+pub fn roughness(froude: f64) -> f64 { (0.0005 + 0.02 * froude * froude).min(0.25) }
+
+/// Pools and riffles alternate along a river every five to seven channel widths (Leopold,
+/// Wolman and Miller 1964 give about 5-7; Keller and Melhorn 1978 likewise; unverified): the
+/// local Froude number over the reach's, deeper and slower in the pools, shallower and faster
+/// over the riffles, at a point `along` metres down a river `width` wide (`wander`, a noise
+/// in -1 to 1, shifts the rhythm so it isn't regular).
+pub fn riffles(along: f64, width: f64, wander: f64) -> f64 {
+    1. + 0.6 * (std::f64::consts::TAU * along / (6. * width.max(1.)) + 2.5 * wander).sin()
+}
 
 /// The fraction of the surface white with foam, for Froude number `froude` and relative
 /// submergence `submergence` (depth over grain size).
@@ -152,13 +163,17 @@ impl RiverWater {
         optics(self.flow(p).map_or(0., |f| f.0.turbidity)).1
     }
 
-    /// The flow at scene point `p`, and its direction there (scene, unit).
+    /// The flow at scene point `p`, and its direction there (scene, unit); its Froude number
+    /// varying through pools and riffles.
     fn flow(&self, p: &Vector3<f64>) -> Option<(Node, Vector3<f64>)> {
         let (d, _) = self.frame.on_planet(p);
-        let (node, along) = self.relief.river_at(&d)?;
+        let (mut node, along) = self.relief.river_at(&d)?;
         // The flow's direction, from the patch's tangent plane into the scene.
-        let ahead = self.frame.to_scene(&(d + along / self.frame.radius).normalize(), 0.) - self.frame.to_scene(&d, 0.);
-        Some((node, ahead.normalize()))
+        let ahead = (self.frame.to_scene(&(d + along / self.frame.radius).normalize(), 0.) - self.frame.to_scene(&d, 0.)).normalize();
+        let width = 2. * node.half;
+        let wander = 2. * self.noise.noise(p.x / (20. * width), p.y / (20. * width), p.z / (20. * width)) - 1.;
+        node.froude *= riffles(p.dot(&ahead), width, wander);
+        Some((node, ahead))
     }
 
     /// The sea's water as it is here.
@@ -167,7 +182,7 @@ impl RiverWater {
         // Bubbles left by the foam pale the water and turn it green-blue.
         let bubbles = Color::new(0.01, 0.05, 0.06) * foam;
         PhysicalOcean {
-            water: body + bubbles, roughness: roughness(node.slope), center: Some(self.frame.centre()),
+            water: body + bubbles, roughness: roughness(node.froude), center: Some(self.frame.centre()),
             absorption: Some(attenuation), foam: None,
         }
     }
@@ -187,6 +202,13 @@ impl RiverWater {
 impl MaterialModel for RiverWater {
     fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
         let Some((node, along)) = self.flow(&intersection.point) else {
+            // A lake's sheet seen from below is only ever seen from the air beneath its rim,
+            // where the smoothed ground lies lower than the simulation's spill level: not water
+            // that is there. Pass through it.
+            if r.rd.dot(&intersection.normal) > 0. {
+                let ro = intersection.point + r.rd.normalize() * 2. * crate::material::functions::surface_offset(intersection, s);
+                return ScatteredRay { emit: Color::black(), attenuate: Color::white(), light_sampling: crate::material::model::LightSampling::None, ray: Some(Ray { ro, rd: r.rd }) };
+            }
             return self.water(&Node::still(), 0.).scatter(r, intersection, s);
         };
         let cover = whitewater(node.froude, 1.5 * node.depth / node.grain.max(1e-4));
@@ -312,6 +334,9 @@ mod tests {
         assert!(whitewater(2.5, 50.) > 0.8);
         let boulders = whitewater(0.7, 0.8);
         assert!(boulders > 0.5 && boulders <= 0.9, "{}", boulders);
-        assert!(roughness(0.0001) < 0.005 && roughness(0.05) > 0.05 && roughness(1.) == 0.25);
+        // A slow glide is nearly a mirror; a riffle near critical is rough.
+        assert!(roughness(0.2) < 0.002 && roughness(0.9) > 0.015 && roughness(10.) == 0.25);
+        let r: Vec<f64> = (0..60).map(|k| riffles(k as f64, 10., 0.)).collect();
+        assert!(r.iter().all(|&x| x > 0.3 && x < 1.7));
     }
 }

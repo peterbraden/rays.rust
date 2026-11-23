@@ -1580,7 +1580,16 @@ impl MaterialModel for PhysicalOcean {
             glitter = glitter + self.glint(&r.rd, intersection, s, light) * weight;
         }
         // Everything else reflected from a sampled ripple, weighted by Fresnel's equations.
-        let m = self.sample_ripple(&n);
+        // Only ripples facing the viewer are seen: at grazing angles half the slopes drawn face
+        // away, and counting them as black darkens calm water seen from its shore. So draw
+        // again until one faces the viewer (sampling the visible slopes, as Heitz's visible-
+        // normal sampling does exactly), falling back to the mean surface. Transparent water
+        // only; the GPU's kernel matches the opaque sea as it was.
+        let m = if self.absorption.is_some() {
+            (0..16).map(|_| self.sample_ripple(&n)).find(|m| m.dot(&v) > 0.).unwrap_or(n)
+        } else {
+            self.sample_ripple(&n)
+        };
         let d = r.rd.normalize();
         let reflected = d - m * 2. * m.dot(&d);
         // Seen at a grazing angle, a ripple can send its reflection down towards the water,

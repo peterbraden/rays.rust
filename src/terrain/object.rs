@@ -635,7 +635,17 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
             let (x, z) = frame.tangent(&d);
             finest && clipmap.local(x, z).is_some_and(|s| s < half)
         };
-        let (vertices, tris) = carve.ribbon(keep);
+        let (mut vertices, mut tris) = carve.ribbon(keep);
+        // Lakes: a flat square at its level over each of their cells where this layer is drawn.
+        for &(c, half, level) in &l.rivers.as_ref().unwrap().lake_cells {
+            let d = patch_dir(&l.domain, c);
+            if !relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l)) { continue; }
+            let h = half * 1.02;
+            let k = vertices.len();
+            for (x, z) in [(-h, -h), (h, -h), (h, h), (-h, h)] { vertices.push(([c[0] + x, c[1] + z], level)); }
+            tris.push([k, k + 1, k + 2]);
+            tris.push([k, k + 2, k + 3]);
+        }
         let base = positions.len();
         for (q, level) in vertices {
             let d = patch_dir(&l.domain, q);
@@ -674,6 +684,36 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
         }).next();
         Some(((at - view.location).norm(), at, node, seen))
     }).min_by(|a, b| a.0.total_cmp(&b.0));
+    // The nearest lake, and a place on its shore to look across it from: walking out from
+    // the lake's cell until the ground rises above the water, eyes 1.7 m above it there,
+    // looking back over the cell.
+    let lake = relief.layers.iter().filter_map(|l| {
+        let r = l.rivers.as_ref()?;
+        let (foot, _) = frame.on_planet(&view.location);
+        let q = crate::terrain::rivers::patch_point(&l.domain, &foot)?;
+        let ground = |q: crate::terrain::channel::Point| { let d = patch_dir(&l.domain, q); relief.height(&d, relief.slope(&d), 1.) };
+        r.lake_cells.iter().filter(|(c, _, _)| {
+            let d = patch_dir(&l.domain, *c);
+            relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l))
+        }).filter_map(|&(c, half, level)| {
+            let dist = (c[0] - q[0]).hypot(c[1] - q[1]);
+            // The shore: towards the camera first, then round.
+            let toward = (q[1] - c[1]).atan2(q[0] - c[0]);
+            (0..8).map(|k| toward + k as f64 * std::f64::consts::FRAC_PI_4).find_map(|a| {
+                let (dx, dz) = (a.cos(), a.sin());
+                (1..200).map(|i| i as f64 * 0.05 * half).find(|&r| ground([c[0] + dx * r, c[1] + dz * r]) > level + 0.5)
+                    .map(|r| {
+                        let shore = [c[0] + dx * (r + 2.), c[1] + dz * (r + 2.)];
+                        let eye = frame.to_scene(&patch_dir(&l.domain, shore), ground(shore) + 1.7);
+                        let across = [c[0] - dx * 4. * half, c[1] - dz * 4. * half];
+                        (dist, eye, frame.to_scene(&patch_dir(&l.domain, across), level))
+                    })
+            })
+        }).min_by(|a, b| a.0.total_cmp(&b.0))
+    }).min_by(|a, b| a.0.total_cmp(&b.0));
+    if let Some((distance, eye, at)) = lake {
+        say(format!("Landscape: the nearest lake is {:.0} m away; see it from [{:.0}, {:.1}, {:.0}] looking at [{:.0}, {:.1}, {:.0}]", distance, eye.x, eye.y, eye.z, at.x, at.y, at.z));
+    }
     // The waterfalls, the tallest and the nearest, to frame them; and a place to see the
     // tallest from: downstream and to one side, a little above the ground.
     // Each fall's height, discharge, lip, middle and viewpoint.

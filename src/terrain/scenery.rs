@@ -226,6 +226,9 @@ pub struct Layer {
     blend: f64,
     /// What the simulation left, for graphs' `field` nodes.
     fields: crate::terrain::fields::SimFields,
+    /// The prevailing wind, a unit vector in the patch's tangent plane at its centre, and the
+    /// direction across it there (None for no wind, or a whole planet): the dunes' trend.
+    wind: Option<(Vector3<f64>, Vector3<f64>)>,
 }
 
 impl Layer {
@@ -248,7 +251,15 @@ impl Layer {
             Layout::Patch { n, spacing, .. } => (spacing, (0.05 * n as f64 * spacing).max(3. * spacing)),
             Layout::Sphere { n } => (std::f64::consts::FRAC_PI_2 * t.domain.radius / n as f64, 0.),
         };
-        Layer { spacing, corners, class, water, blend, fields, domain: t.domain }
+        let norm = t.wind.0.hypot(t.wind.1);
+        let wind = match &t.domain.layout {
+            Layout::Patch { up, east, north, .. } if norm > 0. => {
+                let along = (east * t.wind.0 + north * t.wind.1) / norm;
+                Some((along, up.cross(&along)))
+            }
+            _ => None,
+        };
+        Layer { spacing, corners, class, water, blend, fields, wind, domain: t.domain }
     }
 
     /// Tangent coordinates of `d` on a patch, if it is on the patch's side of the planet.
@@ -394,10 +405,61 @@ impl Relief {
         sum * (0.05 + slope)
     }
 
+    /// The wind-blown sand at `d`, metres, blended between the layers as their surfaces are,
+    /// and the wind of the layer that counts most there.
+    fn sand(&self, d: &Vector3<f64>) -> (f64, Option<(Vector3<f64>, Vector3<f64>)>) {
+        let (mut rest, mut sand, mut wind, mut most) = (1., 0., None, 0.);
+        for l in self.layers.iter() {
+            let w = l.weight(d) * rest;
+            if w > 0. {
+                sand += w * l.fields.at(&l.domain, crate::graph::Field::Sand, d, 0.).unwrap_or(0.);
+                if w > most { most = w; wind = l.wind; }
+                rest -= w;
+            }
+            if rest <= 1e-12 { break; }
+        }
+        (sand, wind)
+    }
+
+    /// Dunes on the wind-blown sand at `d` (`terrain::aeolian`), metres, drawn where the mesh's
+    /// spacing `local` can carry them. Ridges across the prevailing wind, `DUNE_SPACING` apart:
+    /// a long windward slope rising to the crest, then the slip face down the lee at the
+    /// angle of repose's steepness over a short run; their height grows with the sand's depth,
+    /// up to a twelfth of their spacing (transverse dunes are 10-15 times as far apart as they
+    /// are high: Lancaster, "Geomorphology of Desert Dunes", 1995). Their crests wander, and
+    /// where the sand is thin they break into separate crescents, barchans, the more so the
+    /// thinner it is.
+    pub fn dunes(&self, d: &Vector3<f64>, local: f64) -> f64 {
+        const DUNE_SPACING: f64 = 400.;
+        let carried = 1. - smoothstep(DUNE_SPACING / 6., DUNE_SPACING / 3., local);
+        if carried <= 0. { return 0.; }
+        let (sand, wind) = self.sand(d);
+        let Some((downwind, side)) = wind else { return 0. };
+        if sand < 0.5 { return 0.; }
+        // Distances along and across the wind, in the patch's own frame.
+        let p = d * self.radius;
+        let (along, across) = (p.dot(&downwind), p.dot(&side));
+        // Noise along the crests, changing only slowly along the wind, so that each dune keeps
+        // its shape from its windward foot to its slip face.
+        let crests = |scale: f64, stretch: f64, o: f64| self.noise.noise(Vector3::new(across / (scale * DUNE_SPACING), along / (stretch * scale * DUNE_SPACING), o));
+        // Wandering crests.
+        let phase = along / DUNE_SPACING + 0.35 * crests(2.5, 4., 8.1);
+        let s = phase.rem_euclid(1.);
+        const SLIP: f64 = 0.15;
+        let profile = if s < 1. - SLIP { s / (1. - SLIP) } else { (1. - s) / SLIP } - 0.5;
+        // Thin sand breaks into crescents: the ridge only where the noise along it is high
+        // enough, more of it the deeper the sand.
+        let thin = 1. - smoothstep(2., 20., sand);
+        let along_crest = crests(1.2, 4., 1.9);
+        let present = smoothstep(thin * 0.5 - 0.15, thin * 0.5 + 0.15, along_crest + 0.25);
+        let height = (0.8 * sand).min(DUNE_SPACING / 12.);
+        carried * present * height * profile
+    }
+
     /// The surface's height at `d` with detail down to spacing `local`, given its large-scale
     /// slope there.
     pub fn height(&self, d: &Vector3<f64>, slope: f64, local: f64) -> f64 {
-        self.base(d) + self.detail(d, slope, local)
+        self.base(d) + self.detail(d, slope, local) + self.dunes(d, local)
     }
 
     /// The surface's normal at `d` (outwards, in planet coordinates), by finite differences
@@ -715,6 +777,9 @@ const BASALT: [f64; 3] = [0.06, 0.055, 0.05];
 /// still), and the clay pan where there is less salt.
 const SALT: [f64; 3] = [0.58, 0.57, 0.54];
 const CLAY_PAN: [f64; 3] = [0.36, 0.32, 0.27];
+/// Dune sand: quartz, pale where fresh, red where old (the Namib's, the Simpson's).
+const DUNE_SAND: [f64; 3] = [0.46, 0.37, 0.24];
+const RED_SAND: [f64; 3] = [0.45, 0.25, 0.12];
 
 fn colour(c: [f64; 3]) -> Color { Color::new(c[0], c[1], c[2]) }
 
@@ -979,6 +1044,15 @@ impl Ground {
                 ground = mix(ground, crust * crack * (0.92 + 0.16 * n(40., 0.35)), extent);
             }
         }
+        // Wind-blown sand, over all but steep rock (slip faces stand at about 33°), its colour
+        // varying between dune fields: redder where it is older and its grains are coated in
+        // iron oxide.
+        let sand = crate::graph::Fields::field(self, crate::graph::Field::Sand, p).unwrap_or(0.);
+        if sand > 0.5 {
+            let extent = smoothstep(0.5, 2.5, sand + 2. * (n(300., 0.85) - 0.5)) * smoothstep(0.75, 0.85, flat);
+            let dune = mix(colour(DUNE_SAND), colour(RED_SAND), smoothstep(0.3, 0.7, n(8000., 0.55)));
+            ground = mix(ground, dune * (0.9 + 0.2 * n(20., 0.15)), extent);
+        }
         // Beaches.
         ground = mix(ground, colour(SAND), 1. - smoothstep(2., 12., h + 8. * n(150., 0.4)));
         // Bare rock on steep slopes (about 40°), and scree and rock above the meadows.
@@ -1150,6 +1224,41 @@ mod tests {
         let coarse = Terrain::new(Domain::patch(lat + 0.01, lon, 16, 4000., params.planet.radius), params.clone());
         let globe = Terrain::new(Domain::sphere(16, params.planet.radius), params);
         (planet, Arc::new(vec![Layer::new(fine, 0.), Layer::new(coarse, 0.), Layer::new(globe, 0.)]), (lat, lon))
+    }
+
+    #[test]
+    fn test_dunes_face_their_slip_faces_downwind() {
+        // A patch covered in 30 m of sand under a wind towards the east: along the wind the
+        // dunes rise gently and drop steeply; without sand there are none.
+        let mut params = TerrainParams::default();
+        params.planet.radius = 6.36e6;
+        let planet = Planet::new(params.planet.clone());
+        let (lat, lon) = (20., 10.);
+        let mut t = Terrain::new(Domain::patch(lat, lon, 16, 1000., params.planet.radius), params.clone());
+        let n = t.domain.len();
+        t.sediment = vec![30.; n];
+        t.sand = vec![30.; n];
+        t.wind = (1., 0.);
+        let relief = Relief::new(Arc::new(vec![Layer::new(t, 0.)]), &planet, params.planet.radius, 0., 1000.);
+        let frame = Frame::new(lat, lon, params.planet.radius, 1.);
+        // Lines along the wind, some through dunes and some between crescents.
+        let mut lines = 0;
+        for z in 0..12 {
+            let profile: Vec<f64> = (0..4000).map(|k| relief.dunes(&frame.dir(-2000. + k as f64, -3000. + 500. * z as f64), 5.)).collect();
+            let (mut rise, mut drop) = (0f64, 0f64);
+            for w in profile.windows(2) {
+                rise = rise.max(w[1] - w[0]);
+                drop = drop.max(w[0] - w[1]);
+            }
+            let span = profile.iter().cloned().fold(f64::MIN, f64::max) - profile.iter().cloned().fold(f64::MAX, f64::min);
+            if span < 15. { continue; }
+            lines += 1;
+            assert!(drop > 3. * rise, "rise {} drop {} per metre", rise, drop);
+            assert!(drop < 1., "slip faces {} per metre", drop);
+        }
+        assert!(lines >= 6, "dunes on {} lines of 12", lines);
+        // Too coarse a mesh carries none.
+        assert_eq!(relief.dunes(&frame.dir(0., 0.), 500.), 0.);
     }
 
     #[test]

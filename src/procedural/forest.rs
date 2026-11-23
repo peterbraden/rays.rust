@@ -155,14 +155,14 @@ impl Placed {
     }
 
     /// A world vector in the model's frame: unturned, unscaled, unmirrored.
-    fn to_local(&self, v: &Vector3<f64>) -> Vector3<f64> {
+    fn local_vector(&self, v: &Vector3<f64>) -> Vector3<f64> {
         let (c, s) = self.turn();
         let (x, z) = (c * v.x - s * v.z, s * v.x + c * v.z);
         Vector3::new(self.sx() * x, v.y, z) / self.scale()
     }
 
     /// A point of the model's in the world.
-    fn to_world(&self, p: &Vector3<f64>) -> Vector3<f64> {
+    fn world_point(&self, p: &Vector3<f64>) -> Vector3<f64> {
         let (c, s) = self.turn();
         let k = self.scale();
         let (x, y, z) = (self.sx() * p.x * k, p.y * k, p.z * k);
@@ -177,7 +177,7 @@ impl Placed {
     }
 
     fn local_ray(&self, r: &Ray) -> Ray {
-        Ray { ro: self.to_local(&(r.ro - self.at())), rd: self.to_local(&r.rd) }
+        Ray { ro: self.local_vector(&(r.ro - self.at())), rd: self.local_vector(&r.rd) }
     }
 
     fn hit_range(&self, model: &Model, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
@@ -185,7 +185,7 @@ impl Placed {
         let k = self.scale();
         model.intersects_range(&self.local_ray(r), min / k, max / k).map(|h| RawIntersection {
             dist: h.dist * k,
-            point: self.to_world(&h.point),
+            point: self.world_point(&h.point),
             normal: self.normal_to_world(&h.normal),
             ..h
         })
@@ -200,7 +200,7 @@ impl Placed {
                 if k & 1 == 0 { b.min.x } else { b.max.x },
                 if k & 2 == 0 { b.min.y } else { b.max.y },
                 if k & 4 == 0 { b.min.z } else { b.max.z });
-            out = out.union_point(&self.to_world(&corner));
+            out = out.union_point(&self.world_point(&corner));
         }
         out
     }

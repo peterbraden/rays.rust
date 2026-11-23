@@ -33,6 +33,42 @@
 
 use crate::terrain::domain::Domain;
 
+/// Cut back the coast for `dt` years: each land cell beside the `sea` (`fixed` cells don't
+/// change) retreats at `cliff_retreat` times its rock's `erodibility` times the share of its
+/// edge open to the sea, and is lowered by the volume that removes (the retreat times its
+/// height above `sea_level` times the cell's width), never below sea level. The rock goes to
+/// the sea cells it faces, by edge, as sediment: what returns is the supply to add, m³/yr.
+///
+/// Waves break against the foot of a cliff and quarry and abrade it until the cliff above
+/// falls; the rate depends on the rock and on the waves (Sunamura, "Geomorphology of Rocky
+/// Coasts", Wiley, 1992: from metres a year in glacial till and chalk to millimetres in
+/// granite). Behind a retreating cliff is the shore platform it was cut back across, at about
+/// sea level.
+#[allow(clippy::too_many_arguments)]
+pub fn erode_coast(domain: &Domain, ground: &mut [f64], fixed: &[bool], sea: &[bool], erodibility: &[f64], p: &MarineParams, sea_level: f64, dt: f64) -> Vec<f64> {
+    let n = domain.len();
+    let mut supply = vec![0.; n];
+    if p.cliff_retreat <= 0. { return supply; }
+    for i in 0..n {
+        if fixed[i] || sea[i] { continue; }
+        let height = ground[i] - sea_level;
+        if height <= 0. { continue; }
+        let edges = domain.edges(i);
+        let facing: f64 = edges.iter().filter(|l| sea[l.to]).map(|l| l.width).sum();
+        if facing <= 0. { continue; }
+        let perimeter: f64 = edges.iter().map(|l| l.width).sum();
+        let retreat = p.cliff_retreat * erodibility[i] * (facing / perimeter) * dt;
+        // The volume of cliff the retreat takes, over the width that faces the sea.
+        let lowered = (retreat * height * facing / domain.area[i]).min(height);
+        ground[i] -= lowered;
+        let volume = lowered * domain.area[i];
+        for l in edges.iter().filter(|l| sea[l.to]) {
+            supply[l.to] += volume * l.width / facing / dt;
+        }
+    }
+    supply
+}
+
 /// A cell and its distance from a river's mouth, nearest first in a `BinaryHeap`.
 #[derive(PartialEq)]
 struct Near(f64, usize);
@@ -46,6 +82,9 @@ pub struct MarineParams {
     pub diffusivity: f64,
     /// Depth over which diffusivity falls by e, λ, metres.
     pub depth_scale: f64,
+    /// How fast waves cut back cliffs of average bedrock, metres a year (scaled by the rock's
+    /// erodibility, and by how much of the cell's edge faces the sea); 0 for none.
+    pub cliff_retreat: f64,
     /// How far rivers' jets carry their sediment straight on into the sea rather than to the
     /// sides: a sideways step costs 1 + jet times a step straight on as the delta fills (0 for
     /// round lobes, as waves spread them; higher for the fingers of river-dominated deltas).
@@ -54,7 +93,7 @@ pub struct MarineParams {
 
 impl Default for MarineParams {
     fn default() -> MarineParams {
-        MarineParams { diffusivity: 1000., depth_scale: 100., jet: 3. }
+        MarineParams { diffusivity: 1000., depth_scale: 100., jet: 3., cliff_retreat: 0.05 }
     }
 }
 
@@ -231,6 +270,27 @@ mod tests {
         assert!(along > 2 * across, "along {} across {}", along, across);
         let (along, across) = reach(0.);
         assert!(along <= across + 1, "along {} across {}", along, across);
+    }
+
+    #[test]
+    fn test_waves_cut_back_soft_cliffs_faster_than_hard() {
+        // A coast running north-south, land 30 m high to the east of sea: soft rock in the
+        // north half, hard in the south. The rock cut goes to the sea, as sediment.
+        let d = Domain::patch(0., 0., 20, 100., 6.371e6);
+        let n = d.len();
+        let sea: Vec<bool> = (0..n).map(|k| k % 20 < 10).collect();
+        let mut ground: Vec<f64> = (0..n).map(|k| if sea[k] { -10. } else { 30. }).collect();
+        let erodibility: Vec<f64> = (0..n).map(|k| if k / 20 < 10 { 0.3 } else { 3. }).collect();
+        let before = ground.clone();
+        let p = MarineParams { cliff_retreat: 0.05, ..MarineParams::default() };
+        let supply = erode_coast(&d, &mut ground, &vec![false; n], &sea, &erodibility, &p, 0., 100.);
+        let (hard, soft) = (5 * 20 + 10, 15 * 20 + 10);
+        assert!(before[soft] - ground[soft] > 5. * (before[hard] - ground[hard]) && ground[hard] < before[hard]);
+        // Only the cells facing the sea, and never below sea level.
+        assert_eq!(ground[5 * 20 + 11], before[5 * 20 + 11]);
+        assert!(ground.iter().zip(&sea).all(|(g, &s)| s || *g >= 0.));
+        let lost: f64 = (0..n).map(|k| (before[k] - ground[k]) * d.area[k]).sum();
+        assert!((lost - supply.iter().sum::<f64>() * 100.).abs() < 1e-6 * lost);
     }
 
     #[test]

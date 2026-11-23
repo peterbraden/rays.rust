@@ -568,13 +568,19 @@ impl Terrain {
         let before = self.bed.clone();
         self.sediment_flux = erode_and_deposit(&self.domain, &flow, &mut self.bed, &fixed, &erodibility, &lake, &source, &self.params.fluvial, dt);
         self.record(&before);
-        if let Some(m) = &self.params.marine {
+        if let Some(m) = self.params.marine.clone() {
+            let m = &m;
             // What the rivers bring to the sea builds deltas.
             let sea: Vec<bool> = (0..self.domain.len()).map(|i| fixed[i] && !self.domain.boundary[i]).collect();
-            let supply: Vec<f64> = (0..self.domain.len()).map(|i| if sea[i] { self.sediment_flux[i] } else { 0. }).collect();
+            // And the waves cut back the coast, the rock going to the sea beside it.
+            let level = self.sea_level();
+            let before = self.bed.clone();
+            let erodibility = self.erodibility();
+            let cliffs = marine::erode_coast(&self.domain, &mut self.bed, &fixed, &sea, &erodibility, m, level, dt);
+            self.record(&before);
+            let supply: Vec<f64> = (0..self.domain.len()).map(|i| if sea[i] { self.sediment_flux[i] + cliffs[i] } else { 0. }).collect();
             let before = self.bed.clone();
             // The patch's edge, below sea level, is the open sea beyond it.
-            let level = self.sea_level();
             let open: Vec<bool> = (0..self.domain.len()).map(|i| self.domain.boundary[i] && self.bed[i] < level).collect();
             // Each mouth's river comes in from the land cell bringing it the most sediment.
             let mut heading = vec![crate::na::Vector3::zeros(); self.domain.len()];

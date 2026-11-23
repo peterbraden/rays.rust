@@ -2611,6 +2611,12 @@
               "kind": "number",
               "default": 3,
               "doc": "How far rivers carry sediment straight on into the sea: 0 round lobes, higher the fingers of river-dominated deltas."
+            },
+            {
+              "name": "cliff_retreat",
+              "kind": "number",
+              "default": 0.05,
+              "doc": "How fast waves cut back cliffs of average bedrock, m/yr (soft rock faster, hard slower); 0 for none."
             }
           ]
         },

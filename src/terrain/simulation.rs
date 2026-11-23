@@ -1029,6 +1029,19 @@ pub struct Basins {
     pub count: usize,
 }
 
+/// Terminal lakes shallower than this, metres, count as dry playa.
+pub const SALT_LAKE_DEPTH: f64 = 0.5;
+
+impl Basins {
+    /// Whether cell `i` is under a closed basin's terminal lake.
+    pub fn salt_lake(&self, i: usize) -> bool { self.closed[i] && self.water[i] > SALT_LAKE_DEPTH }
+
+    /// Whether cell `i` of `t` is a playa: a closed basin's dry floor of lake beds.
+    pub fn playa(&self, t: &Terrain, i: usize) -> bool {
+        self.closed[i] && self.water[i] <= SALT_LAKE_DEPTH && t.sediment[i] > crate::terrain::map::ALLUVIUM && t.ice[i] < ICE_FREE
+    }
+}
+
 /// The evolving state of a `Terrain`, to save and restore: everything that changes with time
 /// (the domain, planet and vents are rebuilt from the parameters).
 #[derive(serde_derive::Serialize, serde_derive::Deserialize)]

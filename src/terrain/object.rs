@@ -195,7 +195,9 @@ const SEA_FLOOR: u8 = 2;
 const ROCK: u8 = 3;
 const LAVA: u8 = 4;
 const ALLUVIUM: u8 = 5;
-const BAND0: u8 = 6;
+const PLAYA: u8 = 6;
+const SALT_LAKE: u8 = 7;
+const BAND0: u8 = 8;
 const BAND_HEIGHT: f64 = 250.;
 const BANDS: usize = 20;
 /// Slope (rise over run) above which no soil holds and bare rock shows.
@@ -208,8 +210,11 @@ impl TerrainMedium {
         let slope2 = slope_squared(&t.domain, &t.bed);
         let water = map::water_lines(&t, min_river_width);
         let lines = water.is_some();
+        let basins = t.basins();
         let class = (0..t.domain.len()).map(|i| {
             if t.ice[i] >= ICE_FREE { ICE }
+            else if basins.salt_lake(i) { SALT_LAKE }
+            else if basins.playa(&t, i) { PLAYA }
             else if t.bed[i] < 0. { SEA_FLOOR }
             else if is_river(&t, i) && !lines { RIVER }
             else if slope2[i] > ROCK_SLOPE * ROCK_SLOPE { ROCK }
@@ -227,6 +232,8 @@ impl TerrainMedium {
             lambertian([0.38, 0.36, 0.34]),
             lambertian(map::LAVA_COLOUR),
             lambertian(map::ALLUVIUM_COLOUR),
+            lambertian([0.55, 0.54, 0.5]),
+            lambertian([0.1, 0.25, 0.27]),
         ];
         for b in 0..BANDS { materials.push(lambertian(land_colour((b as f64 + 0.5) * BAND_HEIGHT))); }
         for r in Rock::ALL { materials.push(lambertian(r.colour())); }

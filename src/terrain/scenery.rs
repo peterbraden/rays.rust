@@ -709,6 +709,10 @@ const FIELDS: [f64; 3] = [0.13, 0.13, 0.07];
 const GRAVEL: [f64; 3] = [0.24, 0.23, 0.21];
 const SAND: [f64; 3] = [0.32, 0.28, 0.21];
 const BASALT: [f64; 3] = [0.06, 0.055, 0.05];
+/// Playas: salt crust (halite and gypsum, about half the light; Bonneville's is brighter
+/// still), and the clay pan where there is less salt.
+const SALT: [f64; 3] = [0.58, 0.57, 0.54];
+const CLAY_PAN: [f64; 3] = [0.36, 0.32, 0.27];
 
 fn colour(c: [f64; 3]) -> Color { Color::new(c[0], c[1], c[2]) }
 
@@ -816,6 +820,19 @@ impl Ground {
     pub fn wet(&self, p: &Vector3<f64>) -> bool {
         let (d, _) = self.frame.on_planet(p);
         self.layer_at(&d).is_some_and(|l| l.wet(&d))
+    }
+
+    /// Whether scene point `p` is under a closed basin's terminal lake: brine, shallow over a
+    /// pale floor of salt and clay.
+    pub fn salt_lake(&self, p: &Vector3<f64>) -> bool {
+        let (d, _) = self.frame.on_planet(p);
+        self.layer_at(&d).is_some_and(|l| l.fields.salt_lake(&l.domain, &d) > crate::terrain::simulation::SALT_LAKE_DEPTH)
+    }
+
+    /// How much of the ground at `d`, `h` metres up, is a playa (`graph::Field::Playa`), from
+    /// the finest simulation there.
+    fn playa(&self, d: &Vector3<f64>, h: f64) -> f64 {
+        self.layer_at(d).and_then(|l| l.fields.at(&l.domain, crate::graph::Field::Playa, d, h)).unwrap_or(0.)
     }
 
     /// The climate at `d`, `h` metres up, its edges wandering with the weather from year to
@@ -938,6 +955,20 @@ impl Ground {
             let barren = if dry { 1. } else { smoothstep(tree, tree + 300., h) };
             ground = mix(fields, colour(GRAVEL), barren);
         }
+        // Playas: the flat floors of closed basins, white with salt where the water last
+        // evaporated, cracked into polygons a few metres across, darker and browner where the
+        // clay is damp or dust has blown over it.
+        let playa = self.playa(&d, h);
+        if playa > 0. {
+            let extent = smoothstep(0.35, 0.65, playa + 0.3 * (n(600., 0.25) - 0.5)) * smoothstep(0.96, 0.99, flat);
+            if extent > 0. {
+                let salt = smoothstep(0.35, 0.6, n(900., 0.75) + 0.3 * playa);
+                let crust = mix(colour(CLAY_PAN), colour(SALT), salt);
+                // Polygonal cracks: the ridges of a noise's cells, thin dark lines.
+                let crack = 1. - 0.35 * (1. - smoothstep(0.0, 0.025, (n(4., 0.15) - 0.5).abs()));
+                ground = mix(ground, crust * crack * (0.92 + 0.16 * n(40., 0.35)), extent);
+            }
+        }
         // Beaches.
         ground = mix(ground, colour(SAND), 1. - smoothstep(2., 12., h + 8. * n(150., 0.4)));
         // Bare rock on steep slopes (about 40°), and scree and rock above the meadows.
@@ -1027,6 +1058,8 @@ pub struct LandscapeMedium {
     ground: Arc<Ground>,
     land: Box<dyn MaterialModel + Sync + Send>,
     water: PhysicalOcean,
+    /// Terminal lakes: shallow brine over a pale floor, greener and brighter than rivers.
+    brine: PhysicalOcean,
 }
 
 impl LandscapeMedium {
@@ -1042,6 +1075,7 @@ impl LandscapeMedium {
             land: material.unwrap_or_else(|| Box::new(Land { ground: ground.clone() })),
             // Rivers are shallow and carry silt, sending back more green and brown than the sea.
             water: PhysicalOcean { water: Color::new(0.01, 0.018, 0.018), roughness: 0.004, center: Some(centre), foam: None, absorption: None },
+            brine: PhysicalOcean { water: Color::new(0.03, 0.07, 0.065), roughness: 0.003, center: Some(centre), foam: None, absorption: None },
             ground,
         }
     }
@@ -1049,7 +1083,9 @@ impl LandscapeMedium {
 
 impl Medium for LandscapeMedium {
     fn material_at(&self, pt: Vector3<f64>) -> &(dyn MaterialModel + Sync + Send) {
-        if self.ground.wet(&pt) { &self.water } else { &*self.land }
+        if self.ground.wet(&pt) { &self.water }
+        else if self.ground.salt_lake(&pt) { &self.brine }
+        else { &*self.land }
     }
 
     fn fields(&self) -> Option<&dyn crate::graph::Fields> { Some(&*self.ground) }

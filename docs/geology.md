@@ -171,7 +171,9 @@ A lake that would lose more than flows in never spills: its basin keeps its wate
 sediment, the rivers below it lose its catchment, and its water stands where evaporation
 balances the inflow, as a shallow salt lake or none at all, leaving a flat playa of lake beds
 (the module docs of `terrain::simulation`, "Closed basins"; `evaporation` scales it, 0 for
-none). Maps show salt lakes in green-blue and playas in white.
+none). Maps show salt lakes in green-blue and playas in white; rendered, playas are salt crust
+and clay pan cracked into polygons, and terminal lakes shallow brine, and graphs can read a
+`playa` field.
 
 ## Rifts: basin and range
 

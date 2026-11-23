@@ -119,6 +119,10 @@ pub enum Field {
     /// How hard the exposed rock is to rivers: its score from -1.5 (basalt, hardest) to 1.4
     /// (sediment) negated, so positive is harder (`Rock::scores`).
     Hardness,
+    /// How much of the ground is a playa, 0 to 1: the dry, flat floor of a closed basin, salt
+    /// and clay where its terminal lake comes and goes (`terrain::simulation`'s "Closed
+    /// basins").
+    Playa,
 }
 
 impl Field {
@@ -137,7 +141,8 @@ impl Field {
             "precipitation" => Field::Precipitation,
             "rock" => Field::Rock,
             "hardness" => Field::Hardness,
-            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, rock or hardness", s)),
+            "playa" => Field::Playa,
+            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, rock, hardness or playa", s)),
         })
     }
 }

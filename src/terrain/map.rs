@@ -92,10 +92,8 @@ pub fn write_map(t: &Terrain, path: &str, width: usize) {
     // Closed basins: their terminal lakes, and the playas of their flat floors of lake beds.
     let basins = t.basins();
     write_shaded(t, path, width, &|i| {
-        if basins.closed[i] && t.ice[i] < ICE_FREE {
-            if basins.water[i] > 0.5 { return SALT_LAKE_COLOUR; }
-            if t.sediment[i] > ALLUVIUM { return PLAYA_COLOUR; }
-        }
+        if basins.salt_lake(i) && t.ice[i] < ICE_FREE { return SALT_LAKE_COLOUR; }
+        if basins.playa(t, i) { return PLAYA_COLOUR; }
         cell_colour(t, i, &sea, level)
     });
 }

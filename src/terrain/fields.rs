@@ -35,6 +35,9 @@ pub struct SimFields {
     snowline: Vec<f64>,
     /// The simulation's rain, mm/yr.
     precipitation: Vec<f64>,
+    /// Closed basins: playas (1 on their floors) and the depth of their terminal lakes, m.
+    playa: Vec<f64>,
+    salt_lake: Vec<f64>,
     /// The bedrock's structure (`Structure::to_array`) and exhumation.
     structure: [Vec<f64>; 10],
     exhumed: Vec<f64>,
@@ -85,6 +88,7 @@ impl SimFields {
             d.corner_cells.iter().map(|cells| cells.iter().map(|&c| values(c)).sum::<f64>() / cells.len() as f64).collect()
         };
         let structure = std::array::from_fn(|k| average(&|c| t.structure[c].to_array()[k]));
+        let basins = t.basins();
         SimFields {
             sediment: corners(Field::Sediment),
             ice: corners(Field::Ice),
@@ -97,9 +101,17 @@ impl SimFields {
             snowline: corners(Field::Snowline),
             structure,
             precipitation: average(&|c| t.precipitation[c]),
+            playa: average(&|c| if basins.playa(t, c) { 1. } else { 0. }),
+            salt_lake: average(&|c| if basins.salt_lake(c) { basins.water[c] } else { 0. }),
             exhumed: average(&|c| t.exhumed[c]),
             column: t.planet.column.clone(),
         }
+    }
+
+    /// How deep a closed basin's terminal lake stands at direction `d`, metres (0 where there
+    /// is none): a salt lake where it is more than `simulation::SALT_LAKE_DEPTH`.
+    pub fn salt_lake(&self, domain: &Domain, d: &Vector3<f64>) -> f64 {
+        sample(domain, &self.salt_lake, d).max(0.)
     }
 
     /// The snowline at direction `d`, metres above sea level.
@@ -137,6 +149,7 @@ impl SimFields {
             Field::Rock => self.rock(domain, d, h).index() as f64,
             Field::Hardness => -self.rock(domain, d, h).scores().0,
             Field::Precipitation => s(&self.precipitation).max(0.),
+            Field::Playa => s(&self.playa).clamp(0., 1.),
             Field::Temperature => return None,
         })
     }

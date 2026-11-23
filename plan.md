@@ -2394,6 +2394,33 @@ Not done, and why:
   and after. The hang on CI (Mesa 26.0.8, LLVM 21, a Xeon Platinum 8573C, lavapipe at its
   native width) was in tests whose scenes have no media, whose kernels hardly grew; it is
   not reproduced here, and its cause is unknown.
+- A perf pass (CPU kernels, 160 x 100, 8 spp unless said; stage seconds summed over four
+  threads). Where the time is, by kind of scene:
+  - Plain geometry and sky (demo, teapot-sky): 0.2 s, shading most of it. Nothing large.
+  - The sea (ocean-1): the wave march, 1.4 of 1.8 stage-seconds.
+  - Clouds (benard-altocumulus, callgrind inside the batches): the density 82%, Perlin's
+    noise half of all of it, Worley's 6%; the shadow rays' walks (`media_transmittance`)
+    32% and the collisions the rest; bounds 7%. The cost is the number of densities asked
+    for, so tighter bounds (fewer null collisions) or fewer noise lookups a density are what
+    would move it. mammatus also spends 18% in the sky stage: the aerial haze before every
+    vertex, a 32-step integration each, the path tracer's too.
+  - Host-heavy (grass-meadow): 98% in the grass's own intersection, by three callers: the
+    intersection stage (40%), its material's shadow rays (33%) and `FlatScene::refine`
+    (24%), which repeated the search that had found the hit, the whole grid walk since the
+    grass took the trait's default ranged search. Fixed: a ranged search that walks only the
+    stretch asked for; 21-24 -> 15.7 s on the kernels, 13.7 -> 13.1 by `trace`, the same
+    picture. The kernels are still a fifth slower than `trace` there.
+  - Building: forest-dense took 821 s to build for a 2.6 s render, all of it the forests'
+    dart throwing (single-threaded, tens of millions of darts, each tested against the
+    trees about it by an index and `hypot`). Fixed: the cells hold the trees' positions,
+    the dart's own cell first, the distance squared with `hypot` only where they could
+    disagree; the same trees (`print_placement_fingerprints`): 85 s.
+  - On the GPU: shading was half as slow again from the Sobol' points' table (fixed,
+    9bdc7d9); the shader module's creation grew 0.7 -> 2 s with the WGSL (a module per
+    kernel would load only what a render compiles); the probes nearly double a cloud
+    scene's intersection, a loss at equal time on benard-altocumulus (FLIP 0.0488 at 64 spp
+    without, 0.0507 at 32 with, the same time) and a large gain on mammatus (0.0726 at 16
+    with, 0.0862 at 32 without).
 - Media through the host in the wavefront's rounds (the rest of step 3), and with them the
   thread-locals. Judged not worth doing as such: a scene with a medium the kernels lack is
   rendered a path at a time by the scene's own code under the same driver now, and the

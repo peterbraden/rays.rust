@@ -71,18 +71,34 @@
 //! in metres, 15% smoother: the constant is worth checking against Strickler's paper). The grain size is what the river can just move when full: gravel-bed
 //! rivers adjust so their bed is near the threshold of motion at bankfull flow, Shields's
 //! number τ* = ρ g H S / ((ρ_s - ρ) g D) near a constant there (Parker et al. 2007), so
-//! D = H S / (Δ τ*), Δ = 1.65 for quartz (`grain_size`). The bankfull depth H comes from the
-//! channel's width by Parker et al.'s ratio (their bankfull width and depth both grow as the
-//! same power of discharge, so B/H is a constant, about 12). Parker (1978) put the bankfull
+//! D = H S / (Δ τ*), Δ = 1.65 for quartz (`grain_size`). Parker (1978) put the bankfull
 //! Shields number at about 1.2 times the critical; observed ratios run from 1 to 2, and Li et
 //! al. (2015) find it rising with slope, so this is the rule's weakest constant. Grains are at
 //! most boulders. Sand-bed rivers (dune-ripple reaches, the gentlest) aren't threshold
 //! channels: their bed moves at most flows, so they are given sand rather than the rule's
 //! (much coarser) grain.
 //!
+//! ## The channel's shape: a parabola
+//!
+//! A channel isn't a rectangle: at low flow the water gathers in its middle. Its cross-section
+//! is taken as a parabola, its bankfull width B (the simulation's, c√A) and depth H, the bed
+//! at height H (2x/B)² across it. Filled to depth d at the centre, the water is
+//! T = B √(d/H) wide, its area A_x = (2/3) T d, its wetted perimeter about T + 8d²/(3T)
+//! (`parabola_discharge`). In a wide parabola Q ∝ A_x R_h^(2/3) ∝ d^(13/6), so as the flow
+//! rises at a place the depth grows as Q^0.46, the width as Q^0.23 and the speed as Q^0.31:
+//! close to the exponents Leopold and Maddock measured at gauging stations (f = 0.40,
+//! b = 0.26, m = 0.34), which a rectangle (width fixed, depth as Q^0.6) misses.
+//!
+//! The channel is full at its bankfull discharge, here `bankfull_ratio` times the mean flow,
+//! and H is the depth at which the parabola carries it (with the grain size, and so the
+//! roughness, found from H in turn: a few rounds settle both). The ratio is a model choice,
+//! 10 by default: bankfull is roughly the flood of every year or two, which is several times to
+//! tens of times the mean flow, more where snowmelt or storms make the floods, less where
+//! groundwater evens the flow (a source for typical values is still to find).
+//!
 //! ## What the flow is like
 //!
-//! The Froude number Fr = V / √(g d) compares the flow's speed with that of waves on it.
+//! The Froude number Fr = V / √(g A_x / T) compares the flow's speed with that of waves on it.
 //! Below 1 (subcritical, tranquil) waves travel upstream and the surface is smooth; above 1
 //! (supercritical, rapid) nothing reaches upstream, the surface stands in waves, and where it
 //! slows back below 1 it jumps. The friction velocity u* = √(g R_h S) scales the turbulence,
@@ -140,8 +156,6 @@ const DELTA: f64 = 1.65;
 /// Shields's number of the median grain at bankfull flow in gravel-bed rivers (Parker et al.
 /// 2007 find a narrow range about this).
 const BANKFULL_SHIELDS: f64 = 0.0489;
-/// Bankfull width over depth (Parker et al. 2007: B̂ = 4.63 Q̂^0.4, Ĥ = 0.382 Q̂^0.4).
-const WIDTH_TO_DEPTH: f64 = 4.63 / 0.382;
 /// The finest and coarsest median grain, metres: sand, and boulders.
 const SAND: f64 = 0.0005;
 const BOULDERS: f64 = 2.;
@@ -155,6 +169,8 @@ const SECONDS_PER_YEAR: f64 = 365.25 * 86400.;
 pub struct HydraulicParams {
     /// The discharge shown, as a multiple of the mean annual flow.
     pub flow: f64,
+    /// Bankfull discharge, as a multiple of the mean annual flow.
+    pub bankfull_ratio: f64,
     /// Fu's parameter w in Budyko's curve.
     pub budyko_w: f64,
     /// Without a climate model: the rain (mm/yr), and the annual mean temperature and the
@@ -166,7 +182,7 @@ pub struct HydraulicParams {
 
 impl Default for HydraulicParams {
     fn default() -> Self {
-        HydraulicParams { flow: 1., budyko_w: 2.6, precipitation: 1000., temperature: 10., season: 8. }
+        HydraulicParams { flow: 1., bankfull_ratio: 10., budyko_w: 2.6, precipitation: 1000., temperature: 10., season: 8. }
     }
 }
 
@@ -207,9 +223,12 @@ pub struct Reach {
     pub discharge: f64,
     /// The channel's width (bankfull), metres.
     pub width: f64,
-    /// The water's depth, metres.
+    /// The water's width, metres.
+    pub water_width: f64,
+    /// The water's mean depth (its area over its width), metres: two thirds of its depth at
+    /// the centre.
     pub depth: f64,
-    /// The channel's depth when full, metres: deeper water spills over its banks.
+    /// The channel's depth at its centre when full, metres: deeper water spills over its banks.
     pub bankfull_depth: f64,
     /// Mean velocity, m/s.
     pub speed: f64,
@@ -297,23 +316,66 @@ pub fn grain_size(bankfull_depth: f64, slope: f64) -> f64 {
     (bankfull_depth * slope / (DELTA * BANKFULL_SHIELDS)).clamp(SAND, BOULDERS)
 }
 
-/// The flow of `discharge` (m³/s) down a channel `width` wide on `slope`, its bed of sediment
-/// or (`bedrock`) bare rock.
-pub fn reach(discharge: f64, width: f64, slope: f64, bedrock: bool) -> Reach {
+/// Area, top width and wetted perimeter of water `d` deep at the centre of a parabolic channel
+/// `width` wide and `bankfull` deep.
+fn parabola(d: f64, width: f64, bankfull: f64) -> (f64, f64, f64) {
+    let top = width * (d / bankfull).sqrt();
+    (2. / 3. * top * d, top, top + 8. * d * d / (3. * top.max(1e-12)))
+}
+
+/// The discharge (m³/s) of uniform flow `d` deep at the centre of a parabolic channel.
+pub fn parabola_discharge(d: f64, width: f64, bankfull: f64, slope: f64, n: f64) -> f64 {
+    let (area, _, perimeter) = parabola(d, width, bankfull);
+    area * (area / perimeter).powf(2. / 3.) * slope.sqrt() / n
+}
+
+/// The depth at the centre (m) of discharge `q` in a parabolic channel.
+pub fn parabola_depth(q: f64, width: f64, bankfull: f64, slope: f64, n: f64) -> f64 {
+    if q <= 0. { return 0.; }
+    let (mut lo, mut hi) = (1e-6f64.ln(), 1e4f64.ln());
+    for _ in 0..80 {
+        let mid = 0.5 * (lo + hi);
+        if parabola_discharge(mid.exp(), width, bankfull, slope, n) < q { lo = mid } else { hi = mid }
+    }
+    (0.5 * (lo + hi)).exp()
+}
+
+/// The depth (m) of a parabolic channel `width` wide that carries `q` when full.
+pub fn full_depth(q: f64, width: f64, slope: f64, n: f64) -> f64 {
+    let (mut lo, mut hi) = (1e-6f64.ln(), 1e4f64.ln());
+    for _ in 0..80 {
+        let mid = 0.5 * (lo + hi);
+        let h = mid.exp();
+        if parabola_discharge(h, width, h, slope, n) < q { lo = mid } else { hi = mid }
+    }
+    (0.5 * (lo + hi)).exp()
+}
+
+/// The flow of mean discharge `mean` (m³/s), at `p`'s multiple of it, down a parabolic channel
+/// `width` wide on `slope`, its bed of sediment or (`bedrock`) bare rock.
+pub fn reach(mean: f64, width: f64, slope: f64, bedrock: bool, p: &HydraulicParams) -> Reach {
     let slope = slope.max(MIN_SLOPE);
     let width = width.max(1e-3);
-    let bankfull_depth = width / WIDTH_TO_DEPTH;
     let kind = if bedrock { ReachKind::Bedrock } else { ReachKind::by_slope(slope) };
-    let grain = if kind == ReachKind::DuneRipple { SAND } else { grain_size(bankfull_depth, slope) };
+    // The bankfull depth and the bed's grains, each depending on the other.
+    let bankfull_flow = (p.bankfull_ratio * mean).max(1e-9);
+    let mut bankfull_depth = width / 12.;
+    let mut grain = SAND;
+    for _ in 0..4 {
+        grain = if kind == ReachKind::DuneRipple { SAND } else { grain_size(bankfull_depth, slope) };
+        bankfull_depth = full_depth(bankfull_flow, width, slope, strickler(grain)).max(1e-3);
+    }
     let roughness = strickler(grain);
-    let depth = normal_depth(discharge, width, slope, roughness);
-    let speed = if depth > 0. { discharge / (width * depth) } else { 0. };
-    let radius = width * depth / (width + 2. * depth);
+    let discharge = p.flow * mean;
+    let centre = parabola_depth(discharge, width, bankfull_depth, slope, roughness);
+    let (area, water_width, perimeter) = parabola(centre, width, bankfull_depth);
+    let depth = if water_width > 0. { area / water_width } else { 0. };
+    let speed = if area > 0. { discharge / area } else { 0. };
     Reach {
-        discharge, width, depth, bankfull_depth, speed, slope, grain, roughness,
+        discharge, width, water_width, depth, bankfull_depth, speed, slope, grain, roughness,
         froude: if depth > 0. { speed / (G * depth).sqrt() } else { 0. },
-        shear_velocity: (G * radius * slope).sqrt(),
-        stream_power: RHO * G * discharge * slope / width,
+        shear_velocity: (G * area / perimeter.max(1e-12) * slope).sqrt(),
+        stream_power: RHO * G * discharge * slope / water_width.max(1e-3),
         kind,
     }
 }
@@ -362,7 +424,7 @@ impl Hydraulics {
                     || d.dirs[i].angle(&d.dirs[r]) * d.radius, |l| l.dist);
                 (t.bed[i] - t.bed[r]) / dist.max(1e-9)
             };
-            reach(p.flow * q[i], c * t.drainage[i].sqrt(), slope, t.sediment[i] < BARE)
+            reach(q[i], c * t.drainage[i].sqrt(), slope, t.sediment[i] < BARE, p)
         }).collect();
         Hydraulics { runoff, reaches }
     }
@@ -448,44 +510,65 @@ mod tests {
         assert!((per(300.) - 0.0095).abs() < 0.0002);
     }
 
+    /// The exponent of `f` against discharge, by least squares over `reaches`.
+    fn exponent(reaches: &[Reach], f: &dyn Fn(&Reach) -> f64) -> f64 {
+        let pts: Vec<(f64, f64)> = reaches.iter().map(|r| (r.discharge.ln(), f(r).ln())).collect();
+        let m = pts.len() as f64;
+        let (mx, my) = pts.iter().fold((0., 0.), |(a, b), (x, y)| (a + x / m, b + y / m));
+        let cov: f64 = pts.iter().map(|(x, y)| (x - mx) * (y - my)).sum();
+        let var: f64 = pts.iter().map(|(x, _)| (x - mx).powi(2)).sum();
+        cov / var
+    }
+
+    #[test]
+    fn test_at_a_station_hydraulic_geometry() {
+        // One channel, the flow rising from a tenth of its mean to bankfull: width, depth and
+        // speed grow about as Leopold and Maddock measured at gauging stations (0.26, 0.40,
+        // 0.34); the parabola's own exponents are 0.23, 0.46 and 0.31.
+        let reaches: Vec<Reach> = (0..30).map(|k| {
+            let p = HydraulicParams { flow: 0.1 * 100f64.powf(k as f64 / 29.), ..Default::default() };
+            reach(20., 40., 0.002, false, &p)
+        }).collect();
+        let (b, f, m) = (exponent(&reaches, &|r| r.water_width), exponent(&reaches, &|r| r.depth), exponent(&reaches, &|r| r.speed));
+        assert!((b - 0.23).abs() < 0.03 && (f - 0.46).abs() < 0.04 && (m - 0.31).abs() < 0.04, "{} {} {}", b, f, m);
+        assert!((b + f + m - 1.).abs() < 1e-6);
+        // At bankfull, the water fills the channel.
+        let full = reach(20., 40., 0.002, false, &HydraulicParams { flow: 10., ..Default::default() });
+        assert!((full.water_width - 40.).abs() < 0.1 && (1.5 * full.depth - full.bankfull_depth).abs() < 0.01, "{:?}", full);
+    }
+
     #[test]
     fn test_downstream_hydraulic_geometry() {
         // Down a river in steady state, slope falls as A^-0.45 (the concavity of stream power)
-        // and width grows as A^0.5; then depth and speed should grow with discharge roughly as
-        // Leopold and Maddock found, d ∝ Q^0.4 and V ∝ Q^0.1.
-        let fit = |f: &dyn Fn(&Reach) -> f64| {
-            let reaches: Vec<(f64, f64)> = (0..30).map(|k| {
-                let a = 1e7 * 10f64.powf(k as f64 / 10.);
-                let r = reach(1e-8 * a, 0.003 * a.sqrt(), 0.05 * (a / 1e7).powf(-0.45), false);
-                (r.discharge.ln(), f(&r).ln())
-            }).collect();
-            let m = reaches.len() as f64;
-            let (sx, sy) = reaches.iter().fold((0., 0.), |(a, b), (x, y)| (a + x, b + y));
-            let (mx, my) = (sx / m, sy / m);
-            let cov: f64 = reaches.iter().map(|(x, y)| (x - mx) * (y - my)).sum();
-            let var: f64 = reaches.iter().map(|(x, _)| (x - mx).powi(2)).sum();
-            cov / var
-        };
-        let f = fit(&|r| r.depth);
-        let m = fit(&|r| r.speed);
+        // and the channel widens as A^0.5; at the mean flow, depth and speed should then grow
+        // with discharge roughly as Leopold and Maddock found downstream, d ∝ Q^0.4, V ∝ Q^0.1.
+        let reaches: Vec<Reach> = (0..30).map(|k| {
+            let a = 1e7 * 10f64.powf(k as f64 / 10.);
+            reach(1e-8 * a, 0.003 * a.sqrt(), 0.05 * (a / 1e7).powf(-0.45), false, &HydraulicParams::default())
+        }).collect();
+        let f = exponent(&reaches, &|r| r.depth);
+        let m = exponent(&reaches, &|r| r.speed);
         assert!(f > 0.3 && f < 0.55, "depth exponent {}", f);
         assert!(m > -0.05 && m < 0.25, "speed exponent {}", m);
     }
 
     #[test]
     fn test_mountain_torrents_and_lowland_rivers() {
-        // A steep mountain stream is coarse-bedded, rough and near critical or rapid; a big
-        // lowland river is sandy, deep and tranquil.
-        let torrent = reach(2., 8., 0.08, false);
-        let lowland = reach(1500., 300., 1e-4, false);
-        assert_eq!(torrent.kind, ReachKind::Cascade);
+        // A steep mountain stream is coarse-bedded and shallow; a big lowland river is sandy,
+        // metres deep and tranquil; both fill part of their channels at the mean flow.
+        let p = HydraulicParams::default();
+        let torrent = reach(1., 30., 0.05, false, &p);
+        let lowland = reach(95., 300., 1e-4, false, &p);
+        assert_eq!(torrent.kind, ReachKind::StepPool);
         assert_eq!(lowland.kind, ReachKind::DuneRipple);
-        assert!(torrent.grain > 0.1 && lowland.grain < 0.01, "{} {}", torrent.grain, lowland.grain);
-        assert!(lowland.froude < 0.5, "{}", lowland.froude);
-        assert!(torrent.froude > lowland.froude);
-        assert!(torrent.depth < torrent.bankfull_depth * 2.);
-        assert!(lowland.depth > 1. && lowland.depth < 15., "{}", lowland.depth);
-        assert_eq!(reach(2., 8., 0.08, true).kind, ReachKind::Bedrock);
+        assert!(torrent.grain > 0.05 && lowland.grain < 0.01, "{} {}", torrent.grain, lowland.grain);
+        assert!(torrent.depth > 0.05 && torrent.depth < 0.5, "{:?}", torrent);
+        assert!(lowland.depth > 0.5 && lowland.depth < 5., "{:?}", lowland);
+        assert!(lowland.froude < 0.5 && torrent.froude > lowland.froude, "{} {}", lowland.froude, torrent.froude);
+        for r in [&torrent, &lowland] {
+            assert!(r.water_width < r.width && 1.5 * r.depth < r.bankfull_depth);
+        }
+        assert_eq!(reach(1., 30., 0.05, true, &p).kind, ReachKind::Bedrock);
     }
 
     #[test]

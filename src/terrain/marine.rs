@@ -27,6 +27,14 @@
 //!    limited to the sediment it holds (the rock of the initial sea floor stays put), with the
 //!    same conservative limiter as the ice (`glacier`).
 //!
+//! 3. waves cut back the coast, soft cliffs faster than hard, the rock joining the sediment
+//!    (`erode_coast`), and carry sand along the shore where they come in obliquely, building
+//!    spits where the coast turns away (`drift`).
+//!
+//! Sea level rises and falls with the ice ages, about 120 m (`Terrain::sea_level`), so the
+//! coast moves out across the shelf and back: rivers cut across the exposed shelf, deltas build
+//! at the lowstand shore, and are drowned as the sea returns.
+//!
 //! A sea cell built above sea level is land (`Terrain::outlets` counts only sea below sea
 //! level), so rivers then flow across the new delta plain to the next cell of sea, and the delta
 //! progrades. Sediment reaching a patch's edge still leaves the model.

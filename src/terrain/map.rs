@@ -60,10 +60,11 @@ pub fn land_colour(h: f64) -> [f64; 3] {
     stops[stops.len() - 1].1
 }
 
-/// The colour of cell `i`, before shading.
-fn cell_colour(t: &Terrain, i: usize) -> [f64; 3] {
-    if t.bed[i] < 0. {
-        return mix([0.15, 0.35, 0.55], [0.03, 0.08, 0.25], -t.bed[i] / 4000.);
+/// The colour of cell `i`, before shading; `sea` marks the sea, at `level` metres (the sea
+/// level of the terrain's time: `Terrain::outlets`, `sea_level`).
+fn cell_colour(t: &Terrain, i: usize, sea: &[bool], level: f64) -> [f64; 3] {
+    if sea[i] {
+        return mix([0.15, 0.35, 0.55], [0.03, 0.08, 0.25], (level - t.bed[i]) / 4000.);
     }
     if t.ice[i] >= ICE_FREE {
         return mix([0.80, 0.88, 0.95], [0.95, 0.97, 1.0], t.ice[i] / 300.);
@@ -84,7 +85,15 @@ fn cell_colour(t: &Terrain, i: usize) -> [f64; 3] {
 /// Write a shaded relief map of `t` to `path`, about `width` pixels wide (a patch is drawn at a
 /// whole number of pixels per cell).
 pub fn write_map(t: &Terrain, path: &str, width: usize) {
-    write_shaded(t, path, width, &|i| cell_colour(t, i));
+    let (sea, level) = sea(t);
+    write_shaded(t, path, width, &|i| cell_colour(t, i, &sea, level));
+}
+
+/// Where the sea is (`Terrain::outlets`, but not a patch's edge on land), and its level.
+fn sea(t: &Terrain) -> (Vec<bool>, f64) {
+    let level = t.sea_level();
+    let outlets = t.outlets();
+    ((0..t.domain.len()).map(|i| outlets[i] && t.bed[i] < level).collect(), level)
 }
 
 /// Write a geological map of the terrain to `path`, as `write_map` but coloured by the rock
@@ -111,6 +120,7 @@ pub fn write_rain_map(t: &Terrain, path: &str, width: usize) {
 }
 
 fn write_shaded(t: &Terrain, path: &str, width: usize, colour: &dyn Fn(usize) -> [f64; 3]) {
+    let (water, level) = sea(t);
     let (w, h, cells, spacing): (usize, usize, Vec<usize>, f64) = match &t.domain.layout {
         Layout::Patch { n, spacing, .. } => {
             let cells = (0..n * n).map(|p| {
@@ -141,7 +151,7 @@ fn write_shaded(t: &Terrain, path: &str, width: usize, colour: &dyn Fn(usize) ->
             let light = Vector3::new(-1., 1., 1.4).normalize();
             let shade = (0.35 + 0.75 * normal.dot(&light)).clamp(0., 1.3);
             let c = colour(cells[y * w + x]);
-            let shade = if t.bed[cells[y * w + x]] < 0. { 1. } else { shade };
+            let shade = if t.bed[cells[y * w + x]] < level && water[cells[y * w + x]] { 1. } else { shade };
             let px = |v: f64| ((v * shade).clamp(0., 1.) * 255.) as u8;
             img.put_pixel(x as u32, y as u32, image::Rgb([px(c[0]), px(c[1]), px(c[2])]));
         }

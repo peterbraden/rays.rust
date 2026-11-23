@@ -650,8 +650,29 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
         let (foot, _) = frame.on_planet(&view.location);
         let q = crate::terrain::rivers::patch_point(&l.domain, &foot)?;
         let (p, level, node) = carve.nearest(q)?;
+        // Only rivers drawn: where this layer is the finest.
+        let d = patch_dir(&l.domain, p);
+        if !relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l)) { return None; }
         let at = frame.to_scene(&patch_dir(&l.domain, p), level);
-        Some(((at - view.location).norm(), at, node))
+        // A place to see it from: on a bank a few metres from the water, eyes 1.7 m above the
+        // ground, looking along it 150 m, where the relief doesn't hide the water.
+        let (_, along) = carve.water_at(p)?;
+        let across = [-along[1], along[0]];
+        let ground = |q: crate::terrain::channel::Point| { let d = patch_dir(&l.domain, q); relief.height(&d, relief.slope(&d), 1.) };
+        let shift = |o: crate::terrain::channel::Point, a: f64, c: f64| [o[0] + along[0] * a + across[0] * c, o[1] + along[1] * a + across[1] * c];
+        let views = [(1., 1.), (-1., 1.), (1., -1.), (-1., -1.)].into_iter().flat_map(|(dir, side)| [4., 10., 25.].map(|off| (dir, side * (node.half + off))));
+        let seen = views.filter_map(|(dir, side)| {
+            let eye_q = shift(p, 0., side);
+            let eye = ground(eye_q) + 1.7;
+            let target = shift(p, 150. * dir, 0.);
+            let clear = (1..30).all(|k| {
+                let t = k as f64 / 30.;
+                let q = [eye_q[0] + (target[0] - eye_q[0]) * t, eye_q[1] + (target[1] - eye_q[1]) * t];
+                ground(q) + 0.3 < eye + (level - eye) * t
+            });
+            clear.then(|| (frame.to_scene(&patch_dir(&l.domain, eye_q), eye), frame.to_scene(&patch_dir(&l.domain, target), level)))
+        }).next();
+        Some(((at - view.location).norm(), at, node, seen))
     }).min_by(|a, b| a.0.total_cmp(&b.0));
     // The waterfalls, the tallest and the nearest, to frame them; and a place to see the
     // tallest from: downstream and to one side, a little above the ground.
@@ -689,9 +710,12 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
         say(format!("Landscape: {} waterfalls; the tallest falls {:.0} m ({:.1} m³/s) from {} (seen from {} looking at {}); the nearest, {:.0} m, is {:.0} m away at {} (seen from {} looking at {})",
             falls.len(), tallest.0, tallest.1, v(&tallest.2), v(&tallest.4), v(&tallest.3), nearest.0, (nearest.2 - view.location).norm(), v(&nearest.2), v(&nearest.4), v(&nearest.3)));
     }
-    if let Some((distance, at, n)) = near {
+    if let Some((distance, at, n, seen)) = near {
         say(format!("Landscape: the nearest river, {:.0} m wide and {:.2} m deep (Froude {:.2}, {:.0} mg/L of silt, grains {:.1} mm), is {:.0} m away at [{:.0}, {:.1}, {:.0}]",
             2. * n.half, 1.5 * n.depth, n.froude, n.turbidity, 1000. * n.grain, distance, at.x, at.y, at.z));
+        if let Some((from, to)) = seen {
+            say(format!("Landscape: see the river from [{:.0}, {:.1}, {:.0}] looking at [{:.0}, {:.1}, {:.0}]", from.x, from.y, from.z, to.x, to.y, to.z));
+        }
     }
     if triangles.is_empty() { return None; }
     say(format!("Landscape: rivers' water in {} triangles", triangles.len()));

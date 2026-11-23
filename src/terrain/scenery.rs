@@ -430,10 +430,14 @@ impl Relief {
     /// where the sand is thin they break into separate crescents, barchans, the more so the
     /// thinner it is.
     pub fn dunes(&self, d: &Vector3<f64>, local: f64) -> f64 {
+        let (sand, wind) = self.sand(d);
+        self.dunes_on(d, local, sand, wind)
+    }
+
+    fn dunes_on(&self, d: &Vector3<f64>, local: f64, sand: f64, wind: Option<(Vector3<f64>, Vector3<f64>)>) -> f64 {
         const DUNE_SPACING: f64 = 400.;
         let carried = 1. - smoothstep(DUNE_SPACING / 6., DUNE_SPACING / 3., local);
         if carried <= 0. { return 0.; }
-        let (sand, wind) = self.sand(d);
         let Some((downwind, side)) = wind else { return 0. };
         if sand < 0.5 { return 0.; }
         // Distances along and across the wind, in the patch's own frame.
@@ -443,23 +447,32 @@ impl Relief {
         // its shape from its windward foot to its slip face.
         let crests = |scale: f64, stretch: f64, o: f64| self.noise.noise(Vector3::new(across / (scale * DUNE_SPACING), along / (stretch * scale * DUNE_SPACING), o));
         // Wandering crests.
-        let phase = along / DUNE_SPACING + 0.35 * crests(2.5, 4., 8.1);
+        let phase = along / DUNE_SPACING + 0.5 * crests(2.5, 3., 8.1) + 0.2 * crests(0.8, 2., 4.6);
         let s = phase.rem_euclid(1.);
         const SLIP: f64 = 0.15;
         let profile = if s < 1. - SLIP { s / (1. - SLIP) } else { (1. - s) / SLIP } - 0.5;
-        // Thin sand breaks into crescents: the ridge only where the noise along it is high
-        // enough, more of it the deeper the sand.
-        let thin = 1. - smoothstep(2., 20., sand);
-        let along_crest = crests(1.2, 4., 1.9);
-        let present = smoothstep(thin * 0.5 - 0.15, thin * 0.5 + 0.15, along_crest + 0.25);
-        let height = (0.8 * sand).min(DUNE_SPACING / 12.);
-        carried * present * height * profile
+        // The sand gathers into dunes standing on the ground between them, rather than
+        // spreading as a thin sheet: they are 8 m high on thin sand, higher where there is
+        // more, up to a twelfth of their spacing, and cover as much of the ground as the
+        // sand's volume allows (a dune's profile holds half its height on average), the rest
+        // bare between barchans.
+        let height = (8. + 0.5 * sand).min(DUNE_SPACING / 12.);
+        let cover = (sand / (0.5 * height)).min(1.);
+        // Where along the crests the dunes stand: as much of them as `cover`.
+        let threshold = 0.6 - 1.2 * cover;
+        let present = if cover >= 1. { 1. } else { smoothstep(threshold - 0.1, threshold + 0.1, crests(1., 1.5, 1.9)) };
+        // The sand the dunes take is taken from the surface beneath them, which already
+        // stands on all of it.
+        carried * (present * height * (profile + 0.5) - sand.min(0.5 * height * cover))
     }
 
     /// The surface's height at `d` with detail down to spacing `local`, given its large-scale
     /// slope there.
     pub fn height(&self, d: &Vector3<f64>, slope: f64, local: f64) -> f64 {
-        self.base(d) + self.detail(d, slope, local) + self.dunes(d, local)
+        let (sand, wind) = self.sand(d);
+        // Drifting sand buries the ground's small relief.
+        let buried = 1. - 0.8 * smoothstep(0.5, 4., sand);
+        self.base(d) + buried * self.detail(d, slope, local) + self.dunes_on(d, local, sand, wind)
     }
 
     /// The surface's normal at `d` (outwards, in planet coordinates), by finite differences
@@ -1251,6 +1264,9 @@ mod tests {
                 drop = drop.max(w[0] - w[1]);
             }
             let span = profile.iter().cloned().fold(f64::MIN, f64::max) - profile.iter().cloned().fold(f64::MAX, f64::min);
+            // About one crest every 400 m.
+            let crests = profile.windows(3).filter(|w| w[1] > w[0] && w[1] >= w[2] && w[1] > 0.).count();
+            assert!((7..=14).contains(&crests), "{} crests in 4 km", crests);
             if span < 15. { continue; }
             lines += 1;
             assert!(drop > 3. * rise, "rise {} drop {} per metre", rise, drop);

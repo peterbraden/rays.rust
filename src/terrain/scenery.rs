@@ -303,7 +303,7 @@ impl Layer {
             Some(carve) => match carve.level(q, self.min_river_width) {
                 Some((level, half, grain)) if h < level - 0.05 || surfaced(half) => if h < level + 0.05 { RiverAt::Bed(grain) } else { RiverAt::Land },
                 Some(_) => RiverAt::Water,
-                None => wet(water.wet_oxbow(point_cell(&self.domain, q), q)),
+                None => wet(carve.in_lake(q, self.min_river_width) || water.wet_oxbow(point_cell(&self.domain, q), q)),
             },
             None => wet(water.wet(point_cell(&self.domain, q), q)),
         }

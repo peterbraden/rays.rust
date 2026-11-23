@@ -2135,8 +2135,8 @@ world to ship.
 
 ## 15. Water: rivers, waterfalls and coasts from hydraulics
 
-Status: steps 1 to 3 built (November 2026: `src/terrain/hydraulics.rs`, `rivers.rs`,
-`river_water.rs`; see "Done" below); the rest is a plan. Goal: water on a landscape whose look follows from its physics.
+Status: steps 1 to 3 built, step 4 in part (November 2026: `src/terrain/hydraulics.rs`,
+`rivers.rs`, `river_water.rs`; see "Done" below); the rest is a plan. Goal: water on a landscape whose look follows from its physics.
 How much water a river carries, how deep and fast it runs, whether it is glassy or white, where
 it falls and how the fall breaks into spray, how waves slow, turn, steepen and break on a
 coast: each from the quantities that decide it in hydraulics and coastal engineering, computed
@@ -2287,10 +2287,14 @@ transport amplitudes in position and wavevector, though for deep water).
    `time`; foam that is more than a threshold on noise (cascades are white sheets at 90%
    cover, with no boulders or dark water between); stones emerging where the water is
    shallower than its grains; a mountain-to-lowland demo.
-4. Waterfalls: knickpoints and hanging valleys found in the relief; brink hydraulics; the jet as
-   sheet and spray medium (Mie droplets, rainbows); plunge pool and mist. Tests: brink depth,
-   trajectory, continuity through the jet; jet spread against Ervine and Falvey's data. A
-   demo of a glacial trough with hanging-valley falls.
+4. In part (see Done). Waterfalls: knickpoints and hanging valleys found in the relief; brink
+   hydraulics; the jet as sheet and spray medium (Mie droplets, rainbows); plunge pool and
+   mist. Built: gradually varied flow (`Channel::profile`, M1/M2 by the direct step method),
+   the jet (`hydraulics::Jet`: critical and brink depth, ballistic, continuity, Horeni's
+   break-up length), falls at knickpoints and at confluences, their alcoves and curtains.
+   Still to do: falls in the finest patches (below), spray as a medium (Mie droplets, so
+   rainbows and the glory), mist over the pool, a textured curtain with ragged edges, the
+   alcove's walls joined cleanly to the banks, and drawdown at the lip (centimetres, unseen).
 5. A local shallow water solver about the camera (Kurganov-Petrova), its inflow from step 1,
    replacing step 3's one-dimensional velocity where it runs. Tests: the lake at rest stays at
    rest over uneven ground (well-balanced), Ritter's dam break, Bélanger's sequent depths for a
@@ -2353,6 +2357,25 @@ transport amplitudes in position and wavevector, though for deep water).
   drawn surface itself is blended to the simulation's bed within a cell of a river
   (`Relief::base`), so valleys keep their V, and the relief is cleared only over the
   floodplain (eight half widths and 30 m), not a kilometre.
+- Step 4 so far (`rivers::falls`, `knickpoints`; `river_water::FallingWater`, `Curtain`):
+  a run of river steeper than any alluvial channel holds (0.3, Montgomery and Buffington's
+  cascades) drops the excess over that slope at its head, a fall, and runs on below as a
+  cascade in a gorge that tapers out; a tributary arriving above the river it joins either runs
+  down to it as rapids (under 5 m) or falls from a lip on the bank. A fall is an alcove cut
+  below its lip to a pool, and a curtain along the jet's trajectory, white (aerated), whole to
+  its break-up length and thinning below it (each ray passes between the drops with the
+  chance it would; shadows likewise). The landscape reports its falls and finds a viewpoint
+  for the tallest and the nearest by testing the line of sight over the relief.
+- Found in step 4: confluence drops are absorbed before they arrive (both rivers' last points
+  are the junction's cell, so the tributary's level is already clamped to the ground there:
+  its step is spread over the last cell as a steep run); knickpoints catch them as runs.
+  But the finest patches' rivers (500 m cells) are graded: in three worlds tried (warm, cold
+  through a glacial cycle) none of their runs is steeper than 0.3, so their falls are only in
+  the coarser patches, whose rivers aren't drawn where a finer patch covers them. Falls are a
+  feature below the grid: caprock (hard strata over soft, which the planet's geology has),
+  fractured rock (Lamb and Dietrich 2009) and hanging valleys' sharp lips; that is the next
+  thing, so that falls appear where the rock makes them. Rendered with the threshold lowered
+  by hand, a fall drops cleanly from its lip into the head of its gorge.
 - Open: the simulation's width (c√A) is wide for the discharge on these mountain patches
   (42 m wide and 25 cm deep at the mean flow), so from above a river reads as pale sand under
   clear water. Width from discharge (w ∝ Q^0.5 with a sourced coefficient) and the water's
@@ -2394,7 +2417,8 @@ Bibliographic details checked by search, from abstracts or secondary sources unl
   doi:10.1111/j.1467-8659.2009.01363.x; Peytavie et al., "Procedural Riverscapes", CGF 38(7),
   2019, doi:10.1111/cgf.13814; Thürey et al., Pacific Graphics 2007, doi:10.1109/PG.2007.33
   (breaking waves on shallow water).
-- Falls and whitewater: Rouse, Civil Engineering 6(4), 1936 (0.715 y_c, via Rajaratnam
+- Falls and whitewater: Horeni 1956 (jet break-up length L_b ≈ 6 q^0.32, as cited in the
+  plunge-pool literature; unverified); Rouse, Civil Engineering 6(4), 1936 (0.715 y_c, via Rajaratnam
   1968); Ervine and Falvey, Proc. ICE 83(1), 1987, doi:10.1680/iicep.1987.353 (jet spread;
   break-up length unconfirmed); Chanson, "The Hydraulics of Open Channel Flow: An
   Introduction", 2nd ed., 2004; Scheingross and Lamb, JGR Earth Surface 122, 2017,

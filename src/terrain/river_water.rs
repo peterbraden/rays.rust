@@ -205,6 +205,78 @@ impl MaterialModel for RiverWater {
     }
 }
 
+/// How much of a falling jet's curtain is water, `z` metres below its lip, for a jet that
+/// breaks up after falling `breakup` metres: whole above that; below, drops spreading apart,
+/// thinning to a fifth over a few break-up lengths (a model choice standing in for the spray
+/// as a medium, the next step).
+pub fn curtain(z: f64, breakup: f64) -> f64 {
+    if z <= breakup { 1. } else { (-(z - breakup) / (2. * breakup + 5.)).exp().max(0.2) }
+}
+
+/// A waterfall's falling water: aerated, so white, streaked down its fall, and once broken up
+/// into drops, partly see-through (`curtain`). A ray that misses the drops passes on.
+pub struct FallingWater {
+    pub frame: Frame,
+    /// The lip's level and the jet's break-up length, metres.
+    pub top: f64,
+    pub breakup: f64,
+    pub noise: crate::noise::PerlinNoise,
+}
+
+impl FallingWater {
+    fn fallen(&self, p: &Vector3<f64>) -> f64 { self.top - self.frame.on_planet(p).1 }
+}
+
+impl MaterialModel for FallingWater {
+    fn scatter(&self, r: &Ray, intersection: &Intersection, s: &Scene) -> ScatteredRay {
+        let z = self.fallen(&intersection.point);
+        if rand() > curtain(z, self.breakup) {
+            // Between the drops: on, unchanged.
+            let ro = intersection.point + r.rd.normalize() * 2. * crate::material::functions::surface_offset(intersection, s);
+            return ScatteredRay { emit: Color::black(), attenuate: Color::white(), light_sampling: crate::material::model::LightSampling::None, ray: Some(Ray { ro, rd: r.rd }) };
+        }
+        // Streaks down the fall: the aerated water's albedo varies across it.
+        let p = intersection.point;
+        let streak = self.noise.fbm(p.x / 0.4, p.z / 0.4, z / 6., 3, 0.5, 2.);
+        let albedo = FOAM * (0.75 + 0.4 * streak).min(1.3);
+        let normal = if r.rd.dot(&intersection.normal) < 0. { intersection.normal } else { -intersection.normal };
+        let albedo = Color::new(albedo, albedo, albedo).as_reflectance();
+        crate::material::functions::scatter_bsdf(&crate::material::bsdf::LambertianBSDF { albedo, normal }, r, &p, s)
+    }
+}
+
+/// A waterfall's curtain as geometry: it lets light through where its water has broken into
+/// drops, as much as `curtain` says.
+pub struct Curtain {
+    pub mesh: crate::shapes::mesh::SmoothMesh,
+    pub frame: Frame,
+    pub top: f64,
+    pub breakup: f64,
+}
+
+impl crate::shapes::geometry::Geometry for Curtain {
+    fn intersects(&self, r: &Ray) -> Option<crate::intersection::RawIntersection> { self.mesh.intersects(r) }
+    fn intersects_beyond(&self, r: &Ray, min: f64) -> Option<crate::intersection::RawIntersection> { self.mesh.intersects_beyond(r, min) }
+    fn intersects_range(&self, r: &Ray, min: f64, max: f64) -> Option<crate::intersection::RawIntersection> { self.mesh.intersects_range(r, min, max) }
+    fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool { self.mesh.occludes(r, min, max) }
+    fn fast_intersects(&self, r: &Ray) -> bool { self.mesh.fast_intersects(r) }
+    fn bounds(&self) -> crate::shapes::bbox::BBox { self.mesh.bounds() }
+    fn primitives(&self) -> u64 { self.mesh.primitives() }
+    fn kind(&self) -> &'static str { "waterfall" }
+    fn transmits(&self) -> bool { true }
+
+    fn transmittance(&self, r: &Ray, min: f64, max: f64) -> f64 {
+        crate::color::luminance(&self.transmittance_color(r, min, max))
+    }
+
+    fn transmittance_color(&self, r: &Ray, min: f64, max: f64) -> Color {
+        match self.mesh.intersects_range(r, min, max) {
+            Some(hit) => Color::white() * (1. - curtain(self.top - self.frame.on_planet(&hit.point).1, self.breakup)),
+            None => Color::white(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +295,13 @@ mod tests {
         // Reflectance saturates towards 0.33 b_b / b_b's limit as the water thickens with silt.
         let (thick, _) = optics(5000.);
         assert!(thick.rgb.max() < 0.33 && thick.rgb.x > silty.rgb.x);
+    }
+
+    #[test]
+    fn test_a_curtain_is_whole_until_it_breaks_up() {
+        assert_eq!(curtain(3., 8.), 1.);
+        assert!(curtain(20., 8.) < 0.7 && curtain(20., 8.) > curtain(40., 8.));
+        assert_eq!(curtain(1000., 8.), 0.2);
     }
 
     #[test]

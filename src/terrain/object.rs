@@ -524,7 +524,7 @@ pub fn world_directory(o: &Value) -> Option<&std::path::Path> {
 ///   `terrain` (see `displaced_patch`), with `displacement_detail`, `vertical_displacement`
 ///   and so on as there; `displacement_reach` (m, default 1000) out from under the camera on
 ///   each side, on a heightfield of `displacement_spacing` (m, default 2).
-fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> (SceneObject, Option<SceneObject>) {
+fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> (SceneObject, Vec<SceneObject>) {
     let mut p = SceneryParams::default();
     p.resolution = SceneFile::parse_int(&o["resolution"], p.resolution).max(8);
     p.min_spacing = number(o, "min_spacing", p.min_spacing).max(1e-3);
@@ -590,11 +590,38 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     say(format!("Landscape: {} triangles in {:.1?}", geometry.primitives(), start.elapsed()));
     let _ = ground_for_water.clipmap.set(Clipmap::new(&relief, &frame, &view, &p));
     let water = river_water(&relief, &frame, &view, &p, params.planet.seed);
-    (SceneObject { geometry, medium: Box::new(LandscapeMedium::with_ground(ground, material)) }, water)
+    let falls = waterfalls(&relief, &frame, params.planet.seed);
+    (SceneObject { geometry, medium: Box::new(LandscapeMedium::with_ground(ground, material)) }, water.into_iter().chain(falls).collect())
 }
 
 /// The rivers' water near the camera, where the mesh is fine enough to carve their channels
 /// (`terrain::rivers`): transparent, so their beds show through.
+/// The waterfalls' jets (`terrain::rivers::Fall`), each a curtain of falling water.
+fn waterfalls(relief: &Relief, frame: &Frame, seed: u64) -> Vec<SceneObject> {
+    use crate::shapes::mesh::{IndexedMesh, SmoothMesh};
+    use crate::terrain::rivers::patch_dir;
+    let mut out = vec![];
+    for l in relief.layers.iter() {
+        let Some(carve) = l.rivers.as_ref().and_then(|r| r.carve.get()) else { continue };
+        for f in &carve.falls {
+            let d = patch_dir(&l.domain, f.node.p);
+            if !relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l)) { continue; }
+            let (vertices, triangles) = f.sheet(48, 8);
+            let positions: Vec<Vector3<f64>> = vertices.iter().map(|(q, h, _)| frame.to_scene(&patch_dir(&l.domain, *q), *h)).collect();
+            // Normals across the sheet: facing out along the jet, as a flat sheet's would.
+            let out_dir = frame.to_scene(&patch_dir(&l.domain, f.point(1., 0.)), f.top) - frame.to_scene(&d, f.top);
+            let normals = vec![out_dir.normalize(); positions.len()];
+            let mesh = SmoothMesh::from_indexed(&[IndexedMesh { positions, normals, triangles, texcoords: vec![] }]);
+            let material = crate::terrain::river_water::FallingWater {
+                frame: frame.clone(), top: f.top, breakup: f.jet.breakup, noise: crate::noise::PerlinNoise::shuffled(seed.wrapping_add(0xfa11)),
+            };
+            let geometry = crate::terrain::river_water::Curtain { mesh, frame: frame.clone(), top: f.top, breakup: f.jet.breakup };
+            out.push(SceneObject { geometry: Box::new(geometry), medium: Box::new(crate::material::texture::Solid { m: Box::new(material) }) });
+        }
+    }
+    out
+}
+
 fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &SceneryParams, seed: u64) -> Option<SceneObject> {
     use crate::shapes::mesh::{IndexedMesh, SmoothMesh};
     use crate::terrain::rivers::patch_dir;
@@ -626,6 +653,40 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
         let at = frame.to_scene(&patch_dir(&l.domain, p), level);
         Some(((at - view.location).norm(), at, node))
     }).min_by(|a, b| a.0.total_cmp(&b.0));
+    // The waterfalls, the tallest and the nearest, to frame them; and a place to see the
+    // tallest from: downstream and to one side, a little above the ground.
+    let falls: Vec<(f64, f64, Vector3<f64>, Vector3<f64>, Vector3<f64>)> = relief.layers.iter().filter_map(|l| Some((l, l.rivers.as_ref()?.carve.get()?)))
+        .flat_map(|(l, carve)| carve.falls.iter().filter(move |f| {
+            // Only where this layer is the finest: elsewhere a finer one's rivers are drawn.
+            let d = patch_dir(&l.domain, f.node.p);
+            relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l))
+        }).map(move |f| {
+            let h = f.top - f.foot;
+            let at = frame.to_scene(&patch_dir(&l.domain, f.node.p), f.top);
+            let middle = frame.to_scene(&patch_dir(&l.domain, f.point(f.jet.speed * f.jet.time_to(h / 2.), 0.)), f.top - h / 2.);
+            let (mx, mh) = (f.jet.speed * f.jet.time_to(h / 2.), f.top - h / 2.);
+            // A viewpoint that sees the fall's middle over the relief: downstream first, then
+            // round to either side, near then farther.
+            let ground = |q: crate::terrain::channel::Point| { let d = patch_dir(&l.domain, q); relief.height(&d, relief.slope(&d), 1.) };
+            let candidates = [3. * h + 60., 6. * h + 150.].into_iter().flat_map(|r| [0., 30., -30., 60., -60., 90., -90., 120., -120.].map(|deg: f64| (r, deg.to_radians())));
+            let from = candidates.filter_map(|(r, a)| {
+                let q = f.point(mx + r * a.cos(), r * a.sin());
+                let eye = ground(q) + 2.;
+                let clear = (1..40).all(|k| {
+                    let t = k as f64 / 40.;
+                    let p = f.point(mx + r * a.cos() * (1. - t), r * a.sin() * (1. - t));
+                    t > 0.9 || ground(p) + 1. < eye + (mh - eye) * t
+                });
+                clear.then(|| frame.to_scene(&patch_dir(&l.domain, q), eye))
+            }).next().unwrap_or(middle);
+            (h, f.node.discharge, at, middle, from)
+        })).collect();
+    if let Some(tallest) = falls.iter().max_by(|a, b| a.0.total_cmp(&b.0)) {
+        let nearest = falls.iter().min_by(|a, b| (a.2 - view.location).norm().total_cmp(&(b.2 - view.location).norm())).unwrap();
+        let v = |p: &Vector3<f64>| format!("[{:.0}, {:.1}, {:.0}]", p.x, p.y, p.z);
+        say(format!("Landscape: {} waterfalls; the tallest falls {:.0} m ({:.1} m³/s) from {} (seen from {} looking at {}); the nearest, {:.0} m, is {:.0} m away at {} (seen from {} looking at {})",
+            falls.len(), tallest.0, tallest.1, v(&tallest.2), v(&tallest.4), v(&tallest.3), nearest.0, (nearest.2 - view.location).norm(), v(&nearest.2), v(&nearest.4), v(&nearest.3)));
+    }
     if let Some((distance, at, n)) = near {
         say(format!("Landscape: the nearest river, {:.0} m wide and {:.2} m deep (Froude {:.2}, {:.0} mg/L of silt, grains {:.1} mm), is {:.0} m away at [{:.0}, {:.1}, {:.0}]",
             2. * n.half, 1.5 * n.depth, n.froude, n.turbidity, 1000. * n.grain, distance, at.x, at.y, at.z));

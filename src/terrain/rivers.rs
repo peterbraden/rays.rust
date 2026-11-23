@@ -107,12 +107,14 @@ pub struct Node {
     pub turbidity: f64,
     /// The flow's Froude number.
     pub froude: f64,
+    /// The flow shown, m³/s.
+    pub discharge: f64,
 }
 
 impl Node {
     /// Still, clear water, for where no river is found.
     pub fn still() -> Node {
-        Node { p: [0., 0.], half: 1., depth: 1., freeboard: 0., bed: 0., slope: 1e-5, meanders: false, grain: 0.01, turbidity: 0., froude: 0. }
+        Node { p: [0., 0.], half: 1., depth: 1., freeboard: 0., bed: 0., slope: 1e-5, meanders: false, grain: 0.01, turbidity: 0., froude: 0., discharge: 0. }
     }
 }
 
@@ -144,6 +146,7 @@ fn chaikin(nodes: &[Node]) -> Vec<Node> {
         grain: a.grain + (b.grain - a.grain) * t,
         turbidity: a.turbidity + (b.turbidity - a.turbidity) * t,
         froude: a.froude + (b.froude - a.froude) * t,
+        discharge: a.discharge + (b.discharge - a.discharge) * t,
     };
     let mut out = vec![nodes[0]];
     for (k, w) in nodes.windows(2).enumerate() {
@@ -175,6 +178,7 @@ fn densify(nodes: &[Node]) -> Vec<Node> {
                 grain: a.grain + (b.grain - a.grain) * t,
                 turbidity: a.turbidity + (b.turbidity - a.turbidity) * t,
                 froude: a.froude + (b.froude - a.froude) * t,
+                discharge: a.discharge + (b.discharge - a.discharge) * t,
             });
         }
     }
@@ -242,7 +246,7 @@ pub fn courses(t: &Terrain, h: &Hydraulics) -> Vec<Course> {
     let node_at = |i: usize, p: Point, meanders: bool| {
         let r = &h.reaches[i];
         Node { p, half: r.water_width / 2., depth: r.depth, freeboard: (r.bankfull_depth - 1.5 * r.depth).max(0.), bed: t.bed[i], slope: r.slope, meanders, grain: r.grain,
-            turbidity: crate::terrain::river_water::concentration(t.sediment_flux[i], h.mean[i]), froude: r.froude }
+            turbidity: crate::terrain::river_water::concentration(t.sediment_flux[i], h.mean[i]), froude: r.froude, discharge: r.discharge }
     };
     // Edges of the river network: a cell to its receiver, or a meandering channel's line.
     let channels = &t.rivers.channels;
@@ -304,9 +308,197 @@ pub fn courses(t: &Terrain, h: &Hydraulics) -> Vec<Course> {
     courses
 }
 
+/// Confluences where a tributary arrives higher than this (metres) above the river it joins
+/// fall to it; lower, they run down to it as rapids.
+pub const FALL: f64 = 5.;
+
+/// A waterfall: where a tributary leaves its channel above the river it joins.
+#[derive(Clone, Debug)]
+pub struct Fall {
+    /// The course, and the index of its node at the lip.
+    pub course: usize,
+    pub lip: usize,
+    /// The flow at the lip.
+    pub node: Node,
+    /// The direction it leaves in (patch coordinates, unit).
+    pub along: Point,
+    /// The water's levels at the lip and at the foot, metres.
+    pub top: f64,
+    pub foot: f64,
+    /// Where it lands: the point of the river it joins.
+    pub landing: Point,
+    /// The jet's hydraulics (`hydraulics::Jet`).
+    pub jet: crate::terrain::hydraulics::Jet,
+}
+
+/// How a fall's jet widens as it falls: its half width grows by this much a metre of fall (a
+/// model choice of the order of the spread Ervine and Falvey measured in turbulent jets).
+pub const SPREAD: f64 = 0.04;
+
+impl Fall {
+    /// The point `x` metres out from the lip along the jet and `y` across it (patch
+    /// coordinates).
+    pub fn point(&self, x: f64, y: f64) -> Point {
+        let (a, n) = (self.along, [-self.along[1], self.along[0]]);
+        [self.node.p[0] + a[0] * x + n[0] * y, self.node.p[1] + a[1] * x + n[1] * y]
+    }
+
+    /// The alcove the fall drops into, cut into the ground below its lip: past the lip, as far
+    /// as the river it lands in, widening from the stream's width, its floor the pool at the
+    /// foot. The surface there and its half width at `q`; None outside it.
+    pub fn alcove(&self, q: Point) -> Option<(f64, f64)> {
+        let d = [q[0] - self.node.p[0], q[1] - self.node.p[1]];
+        let x = d[0] * self.along[0] + d[1] * self.along[1];
+        let y = (d[1] * self.along[0] - d[0] * self.along[1]).abs();
+        let reach = dist(self.node.p, self.landing) + 2.;
+        let half = 1.5 * self.node.half + 2. + 0.3 * x.max(0.);
+        if x <= 0. || x > reach || y > half { return None; }
+        // A pool a little below the river it joins, under where the jet lands.
+        Some((self.foot - 0.5, half))
+    }
+
+    /// The jet as a curtain of triangles: rows down its trajectory from the lip to the foot,
+    /// widening as it falls; each vertex as (patch point, height, metres fallen).
+    pub fn sheet(&self, rows: usize, columns: usize) -> (Vec<(Point, f64, f64)>, Vec<[usize; 3]>) {
+        let height = self.top - self.foot;
+        let end = self.jet.time_to(height);
+        let mut vertices = vec![];
+        for r in 0..=rows {
+            // Finer near the lip, where the curve bends most.
+            let t = end * (r as f64 / rows as f64).powf(1.5);
+            let (x, z, _, _) = self.jet.at(t);
+            let half = self.jet.width / 2. + SPREAD * z;
+            for c in 0..=columns {
+                let y = half * (2. * c as f64 / columns as f64 - 1.);
+                vertices.push((self.point(x, y), self.top - z, z));
+            }
+        }
+        let mut triangles = vec![];
+        let w = columns + 1;
+        for r in 0..rows {
+            for c in 0..columns {
+                let (a, b) = (r * w + c, (r + 1) * w + c);
+                triangles.push([a, b, a + 1]);
+                triangles.push([a + 1, b, b + 1]);
+            }
+        }
+        (vertices, triangles)
+    }
+}
+
+/// Slopes steeper than this are bedrock steps: Montgomery and Buffington's steepest alluvial
+/// channels, cascades, reach about 0.3.
+pub const STEP: f64 = 0.3;
+/// Falls with less water than this (m³/s) aren't drawn.
+pub const TRICKLE: f64 = 0.1;
+
+/// The falls on course `k` (`c`, its `levels` and `kind`): each run of the river steeper than
+/// `STEP` drops what a cascade can't hold at its head, a fall of height Δ - `STEP` L for a run
+/// that drops Δ over L, and runs on below as a cascade at `STEP` to the run's foot, in a gorge
+/// that tapers out (the gorge a waterfall leaves as it retreats). Its levels are lowered to match. At the
+/// simulation's resolution a hanging valley's step is such a run over the tributary's last
+/// cell.
+fn knickpoints(k: usize, c: &Course, levels: &mut [f64], kind: &[Kind]) -> Vec<Fall> {
+    let n = c.nodes.len();
+    let mut along = vec![0.; n];
+    for i in 1..n { along[i] = along[i - 1] + dist(c.nodes[i - 1].p, c.nodes[i].p); }
+    let steeper: Vec<bool> = (0..n.saturating_sub(1)).map(|i| kind[i] == Kind::River && kind[i + 1] == Kind::River
+        && (levels[i] - levels[i + 1]) >= STEP * (along[i + 1] - along[i]).max(1e-9)).collect();
+    let steep = |i: usize| steeper[i];
+    let mut out = vec![];
+    let mut i = 0;
+    while i + 1 < n {
+        if !steep(i) { i += 1; continue; }
+        let start = i;
+        while i + 1 < n && steep(i) { i += 1; }
+        let (top, bottom) = (levels[start], levels[i]);
+        let length = along[i] - along[start];
+        let height = (top - bottom) - STEP * length;
+        let node = c.nodes[start];
+        if height >= FALL && start > 0 && node.discharge >= TRICKLE {
+            for j in start + 1..=i {
+                levels[j] = levels[j].min(top - height - STEP * (along[j] - along[start]));
+            }
+            let prev = c.nodes[start - 1].p;
+            let (dx, dz) = (node.p[0] - prev[0], node.p[1] - prev[1]);
+            let len = dx.hypot(dz).max(1e-9);
+            let jet = crate::terrain::hydraulics::Jet::new(node.discharge, 2. * node.half, height);
+            let out_to = jet.speed * jet.time_to(height) + 3. + node.half;
+            let landing = [node.p[0] + dx / len * out_to, node.p[1] + dz / len * out_to];
+            out.push(Fall { course: k, lip: start, node, along: [dx / len, dz / len], top, foot: top - height, landing, jet });
+        }
+    }
+    out
+}
+
+/// The waterfalls and rapids where courses join: each tributary that arrives above the level
+/// of the river it joins (`levels` takes the lower of the two from there on) either runs down
+/// to it over its last stretch (rapids, a drop under `FALL`) or leaves its channel at a lip on
+/// the main river's bank and falls (a hanging valley's waterfall). `levels` are ramped for the
+/// rapids; the stretch beyond a lip is marked `Falling`.
+pub fn falls(courses: &[Course], levels: &mut [Vec<f64>], kind: &mut [Vec<Kind>]) -> Vec<Fall> {
+    let start_of: HashMap<usize, usize> = courses.iter().enumerate().map(|(k, c)| (c.start, k)).collect();
+    let mut joined: HashMap<usize, (usize, usize)> = HashMap::new();
+    for (m, c) in courses.iter().enumerate() {
+        for &(cell, j) in &c.joins { joined.insert(cell, (m, j)); }
+    }
+    let mut out = vec![];
+    // Knickpoints: runs steeper than any alluvial channel keeps.
+    for (k, c) in courses.iter().enumerate() {
+        out.extend(knickpoints(k, c, &mut levels[k], &kind[k]));
+    }
+    for (k, c) in courses.iter().enumerate() {
+        let n = c.nodes.len();
+        if n < 2 || kind[k][n - 1] != Kind::River { continue; }
+        let Some((d, j)) = start_of.get(&c.end).map(|&d| (d, 0)).or_else(|| joined.get(&c.end).copied()) else { continue };
+        if d == k || kind[d][j] != Kind::River { continue; }
+        let (top, foot) = (levels[k][n - 1], levels[d][j]);
+        let drop = top - foot;
+        if drop <= 0.05 { continue; }
+        let landing = courses[d].nodes[j].p;
+        // How far back along the tributary each node is from its end.
+        let mut back = vec![0.; n];
+        for i in (0..n - 1).rev() { back[i] = back[i + 1] + dist(c.nodes[i].p, c.nodes[i + 1].p); }
+        if drop < FALL {
+            // Rapids: down to the main river's level over a stretch some times the drop.
+            let reach = (10. * drop).max(4. * c.nodes[n - 1].half).max(20.);
+            for i in 0..n {
+                if back[i] < reach { levels[k][i] = levels[k][i].min(foot + drop * back[i] / reach); }
+            }
+            continue;
+        }
+        // A fall: the lip stands on the main river's bank, a little back from its water.
+        let setback = courses[d].nodes[j].half + (0.05 * drop).clamp(2., 30.);
+        let Some(lip) = (0..n).rev().find(|&i| back[i] >= setback) else { continue };
+        // The lip and the stretch beyond it are river, not lake (whose levels mean nothing).
+        if kind[k][lip..].iter().any(|&x| x != Kind::River) || levels[k][lip] - foot < FALL { continue; }
+        for x in kind[k].iter_mut().skip(lip + 1) { *x = Kind::Falling; }
+        let node = c.nodes[lip];
+        let prev = c.nodes[lip.saturating_sub(1)].p;
+        let (dx, dz) = (node.p[0] - prev[0], node.p[1] - prev[1]);
+        let len = dx.hypot(dz).max(1e-9);
+        let top = levels[k][lip];
+        out.push(Fall {
+            course: k, lip, node, along: [dx / len, dz / len], top, foot, landing,
+            jet: crate::terrain::hydraulics::Jet::new(node.discharge, 2. * node.half, top - foot),
+        });
+    }
+    out
+}
+
 /// A river vertex with its level, and how far below the drawn ground that is; or in a lake.
 #[derive(Clone, Copy, Debug)]
-struct Vertex { node: Node, level: f64, cut: f64, lake: bool }
+struct Vertex { node: Node, level: f64, cut: f64, kind: Kind }
+
+/// What a stretch of a course is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    River,
+    /// In a basin the water would fill (`lakes`): drawn by the mask, not carved.
+    Lake,
+    /// Beyond a waterfall's lip (`falls`), where the water is in the air.
+    Falling,
+}
 
 /// The level at which water arrives at each junction cell, metres: the lowest of the courses
 /// ending there.
@@ -363,6 +555,8 @@ const BANK_SAMPLE: (f64, f64) = (0.15, 1.);
 struct Segment { a: Vertex, b: Vertex }
 
 impl Segment {
+    fn river(&self) -> bool { self.a.kind == Kind::River && self.b.kind == Kind::River }
+
     /// The river's half width, level and greatest depth at fraction `t` along.
     fn at(&self, t: f64) -> (f64, f64, f64) {
         let l = |x: f64, y: f64| x + (y - x) * t;
@@ -384,19 +578,21 @@ pub struct Carve {
     /// The grid's cell size, metres: about the segments' typical reach, so a wide river's
     /// segments don't each fill thousands of cells.
     cell: f64,
+    pub falls: Vec<Fall>,
 }
 
 impl Carve {
-    /// `levels`, the drawn `ground` and which are in lakes, at each course's nodes.
-    pub fn new(courses: &[Course], levels: &[Vec<f64>], ground: &[Vec<f64>], lake: &[Vec<bool>]) -> Carve {
-        let courses: Vec<Vec<Vertex>> = courses.iter().zip(levels).zip(ground).zip(lake)
+    /// `levels`, the drawn `ground` and what each stretch is (`kind`), at each course's nodes;
+    /// and the course's `falls`.
+    pub fn new(courses: &[Course], levels: &[Vec<f64>], ground: &[Vec<f64>], kind: &[Vec<Kind>], falls: Vec<Fall>) -> Carve {
+        let courses: Vec<Vec<Vertex>> = courses.iter().zip(levels).zip(ground).zip(kind)
             .map(|(((c, l), g), k)| c.nodes.iter().zip(l).zip(g).zip(k)
-                .map(|(((&node, &level), &g), &lake)| Vertex { node, level, cut: if lake { 0. } else { (g - level).max(0.) }, lake }).collect()).collect();
+                .map(|(((&node, &level), &g), &kind)| Vertex { node, level, cut: if kind == Kind::River { (g - level).max(0.) } else { 0. }, kind }).collect()).collect();
         // Lakes are drawn as before (the mask; step 8 of the plan), so neither carved nor
-        // given a surface.
+        // given a surface; nor is water in the air.
         let segments: Vec<Segment> = courses.iter()
-            .flat_map(|c| c.windows(2).filter(|w| !w[0].lake && !w[1].lake).map(|w| Segment { a: w[0], b: w[1] })).collect();
-        let mut reaches: Vec<f64> = segments.iter().map(|s| s.reach()).collect();
+            .flat_map(|c| c.windows(2).filter(|w| w[0].kind != Kind::Falling && w[1].kind != Kind::Falling).map(|w| Segment { a: w[0], b: w[1] })).collect();
+        let mut reaches: Vec<f64> = segments.iter().filter(|s| s.river()).map(|s| s.reach()).collect();
         reaches.sort_by(|a, b| a.total_cmp(b));
         let cell = reaches.get(reaches.len() / 2).map_or(32., |r| (2. * r).clamp(32., 1024.));
         let mut grid: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
@@ -413,12 +609,25 @@ impl Carve {
                 }
             }
         }
-        Carve { courses, segments, grid, cell }
+        Carve { courses, segments, grid, cell, falls }
     }
 
+    /// The river segments that may reach `q` (not lakes').
     fn near(&self, q: Point) -> impl Iterator<Item = &Segment> {
+        self.near_any(q).filter(|s| s.river())
+    }
+
+    fn near_any(&self, q: Point) -> impl Iterator<Item = &Segment> {
         let key = ((q[0] / self.cell).floor() as i64, (q[1] / self.cell).floor() as i64);
         self.grid.get(&key).into_iter().flatten().map(|&k| &self.segments[k as usize])
+    }
+
+    /// Whether `q` is on a lake that a river passes through (at least `min_width` wide).
+    pub fn in_lake(&self, q: Point, min_width: f64) -> bool {
+        self.near_any(q).filter(|s| !s.river()).any(|s| {
+            let (t, r) = nearest_on(s.a.node.p, s.b.node.p, q);
+            r < s.at(t).0.max(min_width / 2.)
+        })
     }
 
     /// The carved surface at `q`: the bed in the channel, the banks beside it; None away from
@@ -431,6 +640,9 @@ impl Carve {
             let (half, level, deepest) = s.at(t);
             let h = if r < half { level - deepest * (1. - (r / half).powi(2)) } else { level + (r - half) * BANK };
             if best.is_none_or(|(b, _)| h < b) { best = Some((h, half)); }
+        }
+        for f in &self.falls {
+            if let Some((h, half)) = f.alcove(q) && best.is_none_or(|(b, _)| h < b) { best = Some((h, half)); }
         }
         best
     }
@@ -475,6 +687,7 @@ impl Carve {
                 p: q, half, depth: l(a.depth, b.depth), freeboard: l(a.freeboard, b.freeboard), bed: l(a.bed, b.bed),
                 slope: l(a.slope, b.slope), meanders: a.meanders, grain: l(a.grain, b.grain),
                 turbidity: l(a.turbidity, b.turbidity), froude: l(a.froude, b.froude),
+                discharge: l(a.discharge, b.discharge),
             };
             let (dx, dz) = (b.p[0] - a.p[0], b.p[1] - a.p[1]);
             let len = dx.hypot(dz).max(1e-12);
@@ -485,7 +698,7 @@ impl Carve {
 
     /// The river node nearest `q`, not in a lake: its point, level and node.
     pub fn nearest(&self, q: Point) -> Option<(Point, f64, Node)> {
-        self.courses.iter().flatten().filter(|v| !v.lake)
+        self.courses.iter().flatten().filter(|v| v.kind == Kind::River)
             .min_by(|a, b| dist(a.node.p, q).total_cmp(&dist(b.node.p, q)))
             .map(|v| (v.node.p, v.level, v.node))
     }
@@ -499,7 +712,7 @@ impl Carve {
         for c in &self.courses {
             let mut previous: Option<(usize, usize)> = None;
             for (j, v) in c.iter().enumerate() {
-                if v.lake || !keep(v.node.p, v.node.half) { previous = None; continue; }
+                if v.kind != Kind::River || !keep(v.node.p, v.node.half) { previous = None; continue; }
                 let (a, b) = (c[j.saturating_sub(1)].node.p, c[(j + 1).min(c.len() - 1)].node.p);
                 let (dx, dz) = (b[0] - a[0], b[1] - a[1]);
                 let len = dx.hypot(dz).max(1e-9);
@@ -632,8 +845,10 @@ impl Rivers {
         let raw: Vec<Vec<f64>> = sampled.iter().map(|c| c.iter().map(|x| x.0).collect()).collect();
         let drawn: Vec<Vec<f64>> = sampled.iter().map(|c| c.iter().map(|x| x.1).collect()).collect();
         let lake: Vec<Vec<bool>> = raw.iter().map(|r| lakes(r)).collect();
-        let lv = levels(&self.courses, &raw, &lake);
-        let _ = self.carve.set(Carve::new(&self.courses, &lv, &drawn, &lake));
+        let mut lv = levels(&self.courses, &raw, &lake);
+        let mut kind: Vec<Vec<Kind>> = lake.iter().map(|l| l.iter().map(|&k| if k { Kind::Lake } else { Kind::River }).collect()).collect();
+        let found = falls(&self.courses, &mut lv, &mut kind);
+        let _ = self.carve.set(Carve::new(&self.courses, &lv, &drawn, &kind, found));
     }
 }
 
@@ -703,7 +918,7 @@ pub fn patch_dir(domain: &Domain, p: Point) -> Vector3<f64> {
 mod tests {
     use super::*;
 
-    fn node(x: f64, z: f64) -> Node { Node { p: [x, z], half: 5., depth: 1., freeboard: 0.5, bed: 0., slope: 1e-3, meanders: false, grain: 0.01, turbidity: 0., froude: 0.3 } }
+    fn node(x: f64, z: f64) -> Node { Node { p: [x, z], half: 5., depth: 1., freeboard: 0.5, bed: 0., slope: 1e-3, meanders: false, grain: 0.01, turbidity: 0., froude: 0.3, discharge: 1. } }
 
     #[test]
     fn test_bends_give_the_sinuosity_and_keep_the_ends() {
@@ -755,6 +970,66 @@ mod tests {
     }
 
     #[test]
+    fn test_hanging_valleys_fall_and_small_steps_run_down() {
+        // A tributary 100 m long joins, at cell 9, a river 5 m wide whose level is 30 m below
+        // its own; another arrives at cell 9 only 2 m above it.
+        let pts: Vec<(f64, f64)> = (0..=100).map(|x| (x as f64, 0.)).collect();
+        let high = course(1, 9, 1., &pts);
+        let low = course(2, 9, 1., &pts.iter().map(|&(x, z)| (x, z + 50.)).collect::<Vec<_>>());
+        let main = course(9, 20, 5., &[(100., 0.), (200., 0.)]);
+        let mut levels = vec![vec![130.; 101], vec![102.; 101], vec![100., 99.]];
+        let mut kind = vec![vec![Kind::River; 101], vec![Kind::River; 101], vec![Kind::River; 2]];
+        let f = falls(&[high, low, main], &mut levels, &mut kind);
+        assert_eq!(f.len(), 1);
+        let fall = &f[0];
+        assert_eq!(fall.course, 0);
+        assert!((fall.top - fall.foot - 30.).abs() < 1e-9);
+        // The lip is on the bank, beyond the main river's half width; past it the water is in
+        // the air.
+        assert!(100. - fall.node.p[0] >= 5. + 2. && 100. - fall.node.p[0] < 12.);
+        assert!(kind[0][fall.lip + 1..].iter().all(|&k| k == Kind::Falling) && kind[0][fall.lip] == Kind::River);
+        assert!(fall.jet.speed > 0. && fall.jet.height == 30.);
+        // Its curtain runs from the lip down to the foot, widening; the ground is cut away
+        // past the lip, not before it.
+        let (v, t) = fall.sheet(10, 2);
+        assert_eq!(t.len(), 10 * 2 * 2);
+        assert!((v[0].1 - fall.top).abs() < 1e-9 && (v[v.len() - 1].1 - fall.foot).abs() < 1e-9);
+        let width = |r: usize| dist(v[r * 3].0, v[r * 3 + 2].0);
+        assert!(width(10) > width(0) && (width(0) - fall.jet.width).abs() < 1e-9);
+        assert_eq!(fall.alcove(fall.point(0.5, 0.)).map(|a| a.0), Some(fall.foot - 0.5));
+        assert!(fall.alcove(fall.point(-0.5, 0.)).is_none());
+        // The rapids: down to the main river's level at the junction, never rising.
+        assert!((levels[1][100] - 100.).abs() < 1e-9);
+        assert!(levels[1].windows(2).all(|w| w[1] <= w[0]));
+        assert!(kind[1].iter().all(|&k| k == Kind::River));
+    }
+
+    #[test]
+    fn test_bedrock_steps_fall() {
+        // A river 1 km long, gentle, then dropping 60 m over 100 m, then gentle again.
+        let pts: Vec<(f64, f64)> = (0..=1000).map(|x| (x as f64, 0.)).collect();
+        let c = course(1, 2, 1., &pts);
+        let mut levels: Vec<f64> = (0..=1000).map(|x| {
+            let x = x as f64;
+            if x < 500. { 200. - 0.01 * x } else if x < 600. { 195. - 0.6 * (x - 500.) } else { 135. - 0.01 * (x - 600.) }
+        }).collect();
+        let kind = vec![Kind::River; 1001];
+        let f = knickpoints(0, &c, &mut levels, &kind);
+        assert_eq!(f.len(), 1);
+        let fall = &f[0];
+        assert_eq!(fall.lip, 500);
+        // It drops what a cascade can't hold over the run: 60 - 0.3 * 100 m.
+        assert!((fall.top - fall.foot - (60. - STEP * 100.)).abs() < 1e-6, "{}", fall.top - fall.foot);
+        // Below, the river runs on as a cascade to the run's foot, never rising.
+        assert!((levels[501] - (fall.foot - STEP)).abs() < 1e-6);
+        assert!((levels[600] - 135.).abs() < 1e-6);
+        assert!(levels.windows(2).all(|w| w[1] <= w[0] + 1e-12));
+        // A gentle river has none.
+        let mut gentle: Vec<f64> = (0..=1000).map(|x| 100. - 0.1 * x as f64).collect();
+        assert!(knickpoints(0, &c, &mut gentle, &kind).is_empty());
+    }
+
+    #[test]
     fn test_lakes_fill_depressions() {
         // A basin 20 m deep between two stretches of river; a 2 m dip is carved, not a lake.
         let raw = [110., 108., 90., 88., 95., 104., 103., 101., 103., 100.];
@@ -771,7 +1046,7 @@ mod tests {
     fn test_carved_channel() {
         // A straight river along x, level 100, 10 m wide, 1 m deep on average.
         let c = course(1, 2, 1., &[(0., 0.), (50., 0.), (100., 0.)]);
-        let carve = Carve::new(&[c], &[vec![100., 100., 100.]], &[vec![104., 104., 104.]], &[vec![false; 3]]);
+        let carve = Carve::new(&[c], &[vec![100., 100., 100.]], &[vec![104., 104., 104.]], &[vec![Kind::River; 3]], vec![]);
         let (centre, half) = carve.surface([50., 0.]).unwrap();
         assert_eq!(half, 5.);
         assert!((centre - 98.5).abs() < 1e-9, "{}", centre);
@@ -821,7 +1096,7 @@ mod tests {
         r.level(|q, _| crate::terrain::scenery::sample(&t.domain, &corners, &patch_dir(&t.domain, q)));
         let carve = r.carve.get().unwrap();
         for c in &carve.courses {
-            assert!(c.windows(2).all(|w| w[0].lake || w[1].lake || w[1].level <= w[0].level));
+            assert!(c.windows(2).all(|w| w[0].kind != Kind::River || w[1].kind != Kind::River || w[1].level <= w[0].level));
         }
     }
 }

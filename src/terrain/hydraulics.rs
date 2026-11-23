@@ -437,6 +437,60 @@ impl Channel {
     }
 }
 
+/// A waterfall's jet: water leaving a lip and falling freely.
+///
+/// At a free overfall the flow passes through critical depth a few depths back from the lip,
+/// y_c = (q² / g)^(1/3) for discharge q per unit width, and leaves the lip at the brink depth,
+/// about 0.715 y_c (Rouse 1936, as Rajaratnam and Muralidhar give it), at the speed continuity
+/// gives, V₀ = q / y_b. From there it is ballistic: x = V₀ t, z = g t² / 2 (drag is small until
+/// it breaks up), thinning as it speeds up, its thickness q / |V| by continuity. Turbulence
+/// roughens and spreads it, and after falling some distance it is no longer a sheet but drops
+/// and spray: the break-up length, here Horeni's L_b ≈ 6 q^0.32 m (q in m²/s; as cited in the
+/// plunge-pool literature, eg. Castillo et al.; to verify). A fall taller than that arrives as a
+/// column of spray, its drops slowed to their terminal speed (about 9 m/s for raindrop-sized
+/// drops) rather than at √(2gH).
+#[derive(Clone, Copy, Debug)]
+pub struct Jet {
+    /// Discharge per unit width, m²/s.
+    pub q: f64,
+    /// Width at the lip, metres.
+    pub width: f64,
+    /// Height of the fall, metres.
+    pub height: f64,
+    pub critical_depth: f64,
+    pub brink_depth: f64,
+    /// Speed at the lip, m/s.
+    pub speed: f64,
+    /// How far it falls before breaking up, metres.
+    pub breakup: f64,
+}
+
+/// Brink depth over critical depth at a free overfall (Rouse).
+pub const BRINK: f64 = 0.715;
+/// Terminal speed of falling drops, m/s.
+pub const TERMINAL: f64 = 9.;
+
+impl Jet {
+    pub fn new(discharge: f64, width: f64, height: f64) -> Jet {
+        let width = width.max(0.1);
+        let q = discharge.max(1e-6) / width;
+        let critical_depth = (q * q / G).cbrt();
+        let brink_depth = BRINK * critical_depth;
+        Jet { q, width, height, critical_depth, brink_depth, speed: q / brink_depth, breakup: (6. * q.powf(0.32)).min(height) }
+    }
+
+    /// Where the jet's centre is `t` seconds after the lip: how far out and how far down
+    /// (metres), its thickness (metres) and speed (m/s).
+    pub fn at(&self, t: f64) -> (f64, f64, f64, f64) {
+        let vz = G * t;
+        let speed = self.speed.hypot(vz);
+        (self.speed * t, 0.5 * G * t * t, self.q / speed, speed)
+    }
+
+    /// The time to fall `z` metres.
+    pub fn time_to(&self, z: f64) -> f64 { (2. * z.max(0.) / G).sqrt() }
+}
+
 /// The flow of mean discharge `mean` (m³/s), at `p`'s multiple of it, down a parabolic channel
 /// `width` wide on `slope`, its bed of sediment or (`bedrock`) bare rock.
 pub fn reach(mean: f64, width: f64, slope: f64, bedrock: bool, p: &HydraulicParams) -> Reach {
@@ -721,6 +775,25 @@ mod tests {
         // Steep channels have no subcritical profile.
         let steep = Channel { slope: 0.05, ..c };
         assert!(steep.profile(q, steep.critical(q), 1e4).is_empty());
+    }
+
+    #[test]
+    fn test_a_waterfalls_jet() {
+        // 20 m³/s over a 10 m lip, falling 100 m.
+        let j = Jet::new(20., 10., 100.);
+        assert!((j.critical_depth - (4f64 / G).cbrt()).abs() < 1e-12);
+        // Critical flow: the Froude number at critical depth is 1.
+        let vc = j.q / j.critical_depth;
+        assert!((vc / (G * j.critical_depth).sqrt() - 1.).abs() < 1e-9);
+        assert!(j.speed > vc && (j.speed * j.brink_depth - j.q).abs() < 1e-12);
+        // Ballistic, and continuous: thickness times speed is the discharge per width.
+        let t = j.time_to(30.);
+        let (x, z, h, v) = j.at(t);
+        assert!((z - 30.).abs() < 1e-9 && (x - j.speed * t).abs() < 1e-9);
+        assert!((h * v - j.q).abs() < 1e-12 && h < j.brink_depth);
+        // It breaks up after some metres, well before the foot of a tall fall.
+        assert!(j.breakup > 3. && j.breakup < 20., "{}", j.breakup);
+        assert_eq!(Jet::new(20., 10., 2.).breakup, 2.);
     }
 
 }

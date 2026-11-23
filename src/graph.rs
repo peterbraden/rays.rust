@@ -37,7 +37,8 @@
 //! - `field`: what the surface knows about itself, given by the object hit (`Fields`): for a
 //!   landscape, what its simulation left there (see `Field`: `sediment`, `ice`, `lava`, `flow`,
 //!   `wetness`, `convexity`, `elevation`, `snowline`, `treeline`, `temperature`,
-//!   `precipitation`), `default` (0) on surfaces without it. With `from` and `to`, smoothly from
+//!   `precipitation`, and the rivers' `discharge`, `water_depth`, `flow_speed`, `froude`),
+//!   `default` (0) on surfaces without it. With `from` and `to`, smoothly from
 //!   0 to 1 between them; without, the value itself; either way with `breakup` added first.
 //! - `strata`: ledges: beds `step` metres thick (default 1), each eroded back from the one
 //!   above it and ending in a riser `sharpness` of the way to vertical (default 0.8), as the
@@ -112,6 +113,15 @@ pub enum Field {
     Temperature,
     /// Precipitation, mm a year (from the climate model).
     Precipitation,
+    /// How much water a river near the point carries: log10 of its mean discharge, m³/s
+    /// (`terrain::hydraulics`: the climate's runoff gathered over the area draining there).
+    Discharge,
+    /// How deep that water runs, metres (Manning's normal depth).
+    WaterDepth,
+    /// How fast, m/s.
+    FlowSpeed,
+    /// Its Froude number: below 1 tranquil, above 1 rapid.
+    Froude,
 }
 
 impl Field {
@@ -128,7 +138,11 @@ impl Field {
             "treeline" => Field::Treeline,
             "temperature" => Field::Temperature,
             "precipitation" => Field::Precipitation,
-            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature or precipitation", s)),
+            "discharge" => Field::Discharge,
+            "water_depth" => Field::WaterDepth,
+            "flow_speed" => Field::FlowSpeed,
+            "froude" => Field::Froude,
+            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, discharge, water_depth, flow_speed or froude", s)),
         })
     }
 }

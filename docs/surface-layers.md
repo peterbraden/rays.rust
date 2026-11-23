@@ -65,6 +65,8 @@ value otherwise; either moved first by a `breakup`; `default`, 0, on surfaces wi
 | `elevation` | Metres above sea level, the planet's curvature and the scale taken out |
 | `snowline`, `treeline` | Metres above the snowline and treeline, from the climate model (or by latitude) |
 | `temperature`, `precipitation` | The climate's mean annual °C and mm a year (full scale only) |
+| `discharge` | log10 of the mean flow of the river there, m³/s: the climate's runoff (rain less evaporation, by Budyko's curve) gathered over the area draining through the point |
+| `water_depth`, `flow_speed`, `froude` | How deep (m) and fast (m/s) that river runs, by Manning's equation, and its Froude number (above 1: rapids) |
 
 Each is kept at the simulation's cell corners and interpolated by Catmull-Rom splines, so
 masks follow the landscape without showing its grid; at full scale the nested patches are

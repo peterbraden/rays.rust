@@ -2270,8 +2270,8 @@ transport amplitudes in position and wavevector, though for deep water).
 1. Done. River hydraulics: discharge from the climate's rain by Budyko's curve over the drainage
    area; depth and velocity by Manning with Strickler's roughness from a grain size by slope
    and sediment; Froude number, reach type (Montgomery and Buffington), stream power, per cell
-   (`Hydraulics::new`). Still to do: expose them as `graph::Field`s (`discharge`,
-   `water_depth`, `flow_speed`, `froude`), in the maps, and as a world stage.
+   (`Hydraulics::new`), and as `graph::Field`s (`discharge`, `water_depth`, `flow_speed`,
+   `froude`). Still to do: in the maps, and as a world stage.
    Tests: Manning's closed form for a wide channel, continuity, the downstream hydraulic-geometry
    exponents emerging near Leopold and Maddock's, Budyko's limits (energy- and water-limited).
 2. River surfaces: the water surface along each reach by the standard step from its control,

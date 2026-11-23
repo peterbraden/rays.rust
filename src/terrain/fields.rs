@@ -9,6 +9,7 @@
 use crate::graph::Field;
 use crate::na::Vector3;
 use crate::terrain::domain::Domain;
+use crate::terrain::hydraulics::{HydraulicParams, Hydraulics};
 use crate::terrain::glacier::{slope_squared, GlacierParams};
 use crate::terrain::scenery::sample;
 use crate::terrain::simulation::Terrain;
@@ -27,6 +28,11 @@ pub struct SimFields {
     wetness: Vec<f64>,
     convexity: Vec<f64>,
     snowline: Vec<f64>,
+    /// The rivers' hydraulics (`terrain::hydraulics`): log10 discharge, depth, speed, Froude.
+    discharge: Vec<f64>,
+    water_depth: Vec<f64>,
+    flow_speed: Vec<f64>,
+    froude: Vec<f64>,
     /// The least and most of `flow` and `wetness` at the corners, to which their splines'
     /// overshoot is clamped.
     flow_range: (f64, f64),
@@ -44,6 +50,7 @@ impl SimFields {
         let slope2 = slope_squared(d, &t.bed);
         let spacing = d.min_spacing();
         let glaciers = t.params.glacier.clone().unwrap_or_default();
+        let water = Hydraulics::of(t, &HydraulicParams::default());
         let cell = |i: usize, f: Field| -> f64 {
             match f {
                 Field::Sediment => t.sediment[i],
@@ -61,6 +68,10 @@ impl SimFields {
                     t.bed[i] - mean
                 },
                 Field::Snowline => snowline(t, &glaciers, i),
+                Field::Discharge => water.reaches[i].discharge.max(1e-6).log10(),
+                Field::WaterDepth => water.reaches[i].depth,
+                Field::FlowSpeed => water.reaches[i].speed,
+                Field::Froude => water.reaches[i].froude,
                 _ => 0.,
             }
         };
@@ -79,6 +90,10 @@ impl SimFields {
             wetness,
             convexity: corners(Field::Convexity),
             snowline: corners(Field::Snowline),
+            discharge: corners(Field::Discharge),
+            water_depth: corners(Field::WaterDepth),
+            flow_speed: corners(Field::FlowSpeed),
+            froude: corners(Field::Froude),
         }
     }
 
@@ -103,6 +118,10 @@ impl SimFields {
             Field::Elevation => h,
             Field::Snowline => h - s(&self.snowline),
             Field::Treeline => h - (s(&self.snowline) - TREELINE_BELOW_SNOWLINE),
+            Field::Discharge => s(&self.discharge),
+            Field::WaterDepth => s(&self.water_depth).max(0.),
+            Field::FlowSpeed => s(&self.flow_speed).max(0.),
+            Field::Froude => s(&self.froude).max(0.),
             Field::Temperature | Field::Precipitation => return None,
         })
     }
@@ -150,5 +169,11 @@ mod tests {
             assert!((f.at(&t.domain, Field::Snowline, d, 1000.).unwrap() - (1000. - line)).abs() < 1e-9);
         }
         assert_eq!(f.at(&t.domain, Field::Temperature, &t.domain.dirs[0], 0.), None);
+        // More water flows where more drains, and depths and speeds are never negative.
+        let discharge = |i: usize| f.at(&t.domain, Field::Discharge, &t.domain.dirs[i], 0.).unwrap();
+        assert!(discharge(wettest) > discharge(driest) + 1., "{} vs {}", discharge(wettest), discharge(driest));
+        for d in &t.domain.dirs {
+            for g in [Field::WaterDepth, Field::FlowSpeed, Field::Froude] { assert!(f.at(&t.domain, g, d, 0.).unwrap() >= 0.); }
+        }
     }
 }

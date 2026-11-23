@@ -540,7 +540,7 @@ fn evolve(o: &Value, mut t: Terrain, key: &str) -> Terrain {
     }
     let basins = t.basins();
     if basins.count > 0 {
-        let km2 = |f: &dyn Fn(usize) -> bool| (0..t.domain.len()).filter(|&i| f(i)).map(|i| t.domain.area[i]).sum::<f64>() / 1e6;
+        let km2 = |f: &dyn Fn(usize) -> bool| (0..t.domain.len()).filter(|&i| f(i)).map(|i| t.domain.area[i]).sum::<f64>() / 1e6 + 0.;
         println!("Terrain: {} closed basins, {:.0} km² of them under salt lakes", basins.count, km2(&|i| basins.water[i] > 0.5));
     }
     t

@@ -44,7 +44,8 @@ pub struct Params {
     pub air: UVec4,
     /// The media (`MEDIUM_*`): where their records begin in `tables`, and how many; and the
     /// bits of the mean square slope of the sea's glitter as media see it (the renderer's
-    /// `ocean::Sea`), 0 for no sea a glitter probe could find (`send_glitter_probe`).
+    /// `ocean::Sea`), 0 for no sea a glitter probe could find (`send_glitter_probe`); and
+    /// where the Sobol' points' direction numbers are (`sobol_directions`).
     pub media: UVec4,
     /// The render's origin in the world (the renderer's `kernels::origin`: at the camera).
     /// Every position here is relative to it: rays, primitives, boxes, lights, centres. So
@@ -392,14 +393,15 @@ fn rand(state: &mut u32) -> f32 {
 // documentation has the sources). A path's other numbers stay the hash's. ----
 
 /// The bits of an index.
-const SOBOL_BITS: usize = 32;
+pub const SOBOL_BITS: usize = 32;
 
 /// Direction numbers v_1 to v_32 of the first four dimensions, a dimension a component: the
 /// first's 2^-k; then, by Joe and Kuo's degree s, polynomial a and initial values m,
-/// (1, 0, [1]), (2, 1, [1, 3]) and (3, 1, [1, 3, 1]).
-const SOBOL_DIRECTIONS: [[u32; 4]; SOBOL_BITS] = sobol_directions();
-
-const fn sobol_directions() -> [[u32; 4]; SOBOL_BITS] {
+/// (1, 0, [1]), (2, 1, [1, 3]) and (3, 1, [1, 3, 1]). Laid out in `tables` by the host
+/// (`Params::media.w`, four a bit, as bits): a constant array indexed in a loop is copied
+/// into each call's local memory by the WGSL's translators, 512 bytes a decision, which made
+/// a path's shading half as slow again on the GPU.
+pub const fn sobol_directions() -> [[u32; 4]; SOBOL_BITS] {
     let mut v = [[0u32; 4]; SOBOL_BITS];
     v[0] = [0x8000_0000, 0x8000_0000, 0x8000_0000, 0x8000_0000];
     v[1] = [0x4000_0000, 0xc000_0000, 0xc000_0000, 0xc000_0000];
@@ -420,13 +422,13 @@ const fn sobol_directions() -> [[u32; 4]; SOBOL_BITS] {
 /// The `index`-th Sobol' point's first four coordinates, unscrambled: the XOR of each
 /// dimension's direction numbers for the set bits of `index`, as the renderer's
 /// `sobol::sobol` (whose tables are these by the byte).
-pub fn sobol4(index: u32) -> UVec4 {
+pub fn sobol4(tables: &[f32], directions: u32, index: u32) -> UVec4 {
     let mut x = UVec4::ZERO;
     let mut k = 0;
-    while k < SOBOL_BITS {
+    while k < SOBOL_BITS as u32 {
         if (index >> k) & 1 != 0 {
-            let v = SOBOL_DIRECTIONS[k];
-            x ^= UVec4::new(v[0], v[1], v[2], v[3]);
+            let v = directions + 4 * k;
+            x ^= UVec4::new(at(tables, v).to_bits(), at(tables, v + 1).to_bits(), at(tables, v + 2).to_bits(), at(tables, v + 3).to_bits());
         }
         k += 1;
     }
@@ -463,7 +465,7 @@ pub fn decide(s: &Scene, pixel: u32, sample: u32, depth: u32, which: u32, rng: &
         return Vec4::new(rand(rng), rand(rng), rand(rng), rand(rng));
     }
     let h = pcg(pcg(pixel ^ s.params.seed.x.wrapping_mul(0x9e3779b9)) ^ (depth * 3 + which + 1).wrapping_mul(0x85eb_ca6b));
-    let x = sobol4(owen_scramble(sample, h));
+    let x = sobol4(s.tables, s.params.media.w, owen_scramble(sample, h));
     let scrambled = UVec4::new(owen_scramble(x.x, pcg(h ^ 1)), owen_scramble(x.y, pcg(h ^ 2)), owen_scramble(x.z, pcg(h ^ 3)), owen_scramble(x.w, pcg(h ^ 4)));
     Vec4::new((scrambled.x >> 8) as f32, (scrambled.y >> 8) as f32, (scrambled.z >> 8) as f32, (scrambled.w >> 8) as f32) * (1.0 / 16777216.0)
 }

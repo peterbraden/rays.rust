@@ -485,6 +485,9 @@ impl Buffers {
 
         // Tables: emitters' primitives and their cumulative distribution, then the sky.
         let mut tables: Vec<f32> = Vec::new();
+        // The Sobol' points' direction numbers (`pathtrace::decide`), as bits.
+        let sobol_off = tables.len() as u32;
+        tables.extend(pathtrace::sobol_directions().iter().flatten().map(|&v| f32::from_bits(v)));
         let emitter_off = tables.len() as u32;
         tables.extend(flat.emitters.iter().map(|&p| f32::from_bits(p)));
         let cdf_off = tables.len() as u32;
@@ -600,7 +603,7 @@ impl Buffers {
             media: UVec4::new(media, flat.media.len() as u32, match (&s.sea, sea, kernels.iter().any(|k| k.is_some())) {
                 (Some(glitter), Some(_), true) => (glitter.roughness as f32).to_bits(),
                 _ => 0,
-            }, 0),
+            }, sobol_off),
             origin: v4(origin, 0.),
         };
         Ok(Buffers { params, prims: pathtrace::pack_prims(&prims), prim_records: prims, nodes, materials, lights, tables, hosts: hosts > 0, host_shapes, unported, origin: *origin })

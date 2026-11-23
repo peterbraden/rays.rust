@@ -882,9 +882,10 @@ pub mod tests {
     #[test]
     fn test_the_kernels_sobol_points_are_the_renderers() {
         let mut rng = crate::geometry::Pcg32::new(3, 5);
+        let directions: Vec<f32> = pathtrace::sobol_directions().iter().flatten().map(|&v| f32::from_bits(v)).collect();
         for i in 0..20_000u32 {
             let index = if i < 4096 { i } else { rng.next_u32() };
-            let x = pathtrace::sobol4(index);
+            let x = pathtrace::sobol4(&directions, 0, index);
             for (d, x) in [x.x, x.y, x.z, x.w].into_iter().enumerate() {
                 assert_eq!(x, crate::sobol::sobol(index, d), "point {} dimension {}", index, d);
             }

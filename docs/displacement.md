@@ -228,6 +228,15 @@ far it can change across it (`detail::local_bound`: smooth parts by their steepe
 stones' edges and ledges between beds by their whole height), five times faster again for a
 camera standing on a rocky slope.
 
+A camera with `"above_ground": true` stands and looks at heights above the landscape's ground:
+its `location`'s and `lookat`'s y are metres above the ground under each
+(`object::above_ground`, from the world and its surface before anything else is built), so a
+close-up scene keeps its camera on the ground however the simulation changes. Give the
+landscape a `"focus"`, so its patches don't move with the camera.
+`demo/scenes/landscape-closeup.json` stands 4 m up on a sandstone ridge of a desert fold belt
+with nothing placed by hand: a 150 m simulation under the camera, its own detail and its own
+boulders, a talus slope of sandstone blocks below the crest.
+
 ## In the desert scenes
 
 `desert-overlook.json` stands on slickrock seen from a couple of metres to a few hundred: its

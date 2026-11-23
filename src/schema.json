@@ -170,6 +170,12 @@
           "doc": "Field of view in radians: the image's height spans tan(angle) at unit distance. Required for perspective, and for orthographic without \"height\"."
         },
         {
+          "name": "above_ground",
+          "kind": "boolean",
+          "default": false,
+          "doc": "With a full-scale landscape: location's and lookat's y are heights above the ground under each (best with the landscape's focus given)."
+        },
+        {
           "name": "aperture",
           "kind": "number",
           "default": 0.2,

@@ -667,7 +667,39 @@ pub fn world_directory(o: &Value) -> Option<&std::path::Path> {
 ///   `terrain` (see `displaced_patch`), with `displacement_detail`, `vertical_displacement`
 ///   and so on as there; `displacement_reach` (m, default 1000) out from under the camera on
 ///   each side, on a heightfield of `displacement_spacing` (m, default 2).
-fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> SceneObject {
+/// Scene points `y` metres above the ground under each (`x`, `y`, `z`) of `points`, on the
+/// full-scale landscape `o` (a camera's `"above_ground"`, `SceneFile::from_scenefile`): its
+/// world is built (from its `cache`, if it has one and was built before; a landscape without a
+/// cache is simulated twice), and its surface with the planet's detail found under each point.
+/// None for a scaled landscape.
+pub fn above_ground(o: &Value, points: &[Vector3<f64>]) -> Option<Vec<Vector3<f64>>> {
+    if o.get("scale").is_some() { return None; }
+    let mut params = terrain_params(o);
+    if o.get("radius").is_none() { params.planet.radius = crate::planet::EARTH_RADIUS; }
+    let p = scenery_params(o);
+    let radius = params.planet.radius;
+    let planet_cells = match &o["planet"] { Value::Bool(false) => None, v => Some(SceneFile::parse_int(&v["cells"], 64).max(2)) };
+    let globe_spacing = planet_cells.map_or(f64::INFINITY, |n| std::f64::consts::FRAC_PI_2 * radius / n as f64);
+    let levels = levels(o, globe_spacing);
+    let finest = levels.first().map_or(number(&o["domain"], "spacing", 750.), |l| l.spacing);
+    let description = Description {
+        params, site: site_of(&o["domain"]), time: number(o, "time", 0.), planet_cells, levels,
+        focus: focus(o), exaggeration: p.exaggeration,
+    };
+    let world = world::build(&description, world_directory(o), &mut |e| { world::report(e); true }).unwrap_or_else(|e| panic!("{}", e));
+    let frame = world.frame.clone();
+    let World { planet, globe, patches, .. } = world;
+    let layers: Vec<Layer> = patches.into_iter().chain(globe).map(|t| Layer::new(t, p.min_river_width)).collect();
+    let relief = Relief::new(Arc::new(layers), &planet, radius, p.roughness, finest);
+    Some(points.iter().map(|q| {
+        let (d, _) = frame.on_planet(&Vector3::new(q.x, 0., q.z));
+        let h = relief.height(&d, relief.slope(&d), 1.);
+        frame.to_scene(&d, h + q.y)
+    }).collect())
+}
+
+/// The scenery's parameters from a landscape object.
+fn scenery_params(o: &Value) -> SceneryParams {
     let mut p = SceneryParams::default();
     p.resolution = SceneFile::parse_int(&o["resolution"], p.resolution).max(8);
     p.min_spacing = number(o, "min_spacing", p.min_spacing).max(1e-3);
@@ -677,6 +709,11 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     p.snowline = o["snowline"].as_f64();
     p.treeline = o["treeline"].as_f64();
     p.min_river_width = number(o, "min_river_width", p.min_river_width);
+    p
+}
+
+fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<dyn MaterialModel + Sync + Send>>) -> SceneObject {
+    let p = scenery_params(o);
     let radius = params.planet.radius;
     let time = number(o, "time", 0.);
     let planet_cells = match &o["planet"] { Value::Bool(false) => None, v => Some(SceneFile::parse_int(&v["cells"], 64).max(2)) };
@@ -836,7 +873,10 @@ pub fn boulders(o: &Value, landscape: &SceneObject) -> Option<(Value, Value)> {
             {"node": "multiply", "inputs": [
                 {"node": "slope", "from": 18, "to": 30},
                 {"node": "slope", "from": 48, "to": 38},
-                none_on("sediment", 6., 0.3)]},
+                none_on("sediment", 6., 0.3),
+                // In patches: a talus apron isn't all blocks.
+                {"node": "fractal", "scale": 30, "smallest": 5, "amplitude": 0.5},
+                1.2]},
             // Boulders on till, in patches.
             {"node": "multiply", "inputs": [
                 none_on("till", 1., 4.),
@@ -848,7 +888,7 @@ pub fn boulders(o: &Value, landscape: &SceneObject) -> Option<(Value, Value)> {
     let scatter = json!({
         "type": "scatter", "seed": seed.wrapping_add(17), "surface": "landscape",
         "area": {"min": [camera.x - reach, camera.z - reach], "max": [camera.x + reach, camera.z + reach]},
-        "spacing": 3, "density": density,
+        "spacing": 4, "density": density,
         "items": [{"boulder": {"angularity": angularity, "detail": 4}, "variants": 6, "size": [0.15, 1.8],
                    "sink": 0.2, "tilt": 15, "material": BOULDER_MATERIAL}]});
     let material = json!({"type": "rock", "preset": style, "seed": seed});

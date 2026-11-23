@@ -4361,6 +4361,17 @@ impl SceneFile {
     }
 
     pub fn from_scenefile(mut s: SceneFile) -> Scene {
+        // A camera `"above_ground"` stands, and looks, at heights above a landscape's ground.
+        if s.camera["above_ground"].as_bool() == Some(true)
+            && let Some(l) = s.objects.iter().find(|o| o["type"].as_str() == Some("landscape")) {
+            let at = |k: &str| SceneFile::parse_vec3_def(&s.camera, k, Vector3::zeros());
+            if let Some(p) = crate::terrain::object::above_ground(l, &[at("location"), at("lookat")]) {
+                let json = |v: &Vector3<f64>| serde_json::json!([v.x, v.y, v.z]);
+                println!("Camera: {:.1} m above the ground, at [{:.1}, {:.1}, {:.1}]", at("location").y, p[0].x, p[0].y, p[0].z);
+                s.camera["location"] = json(&p[0]);
+                s.camera["lookat"] = json(&p[1]);
+            }
+        }
         SceneFile::sky_follows_sun(&s.sun, &mut s.objects);
         SceneFile::lightning_follows_sun(&s.sun, &mut s.objects);
         let max_bounding = BBox::new( // TODO

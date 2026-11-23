@@ -655,7 +655,9 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
     }).min_by(|a, b| a.0.total_cmp(&b.0));
     // The waterfalls, the tallest and the nearest, to frame them; and a place to see the
     // tallest from: downstream and to one side, a little above the ground.
-    let falls: Vec<(f64, f64, Vector3<f64>, Vector3<f64>, Vector3<f64>)> = relief.layers.iter().filter_map(|l| Some((l, l.rivers.as_ref()?.carve.get()?)))
+    // Each fall's height, discharge, lip, middle and viewpoint.
+    type Seen = (f64, f64, Vector3<f64>, Vector3<f64>, Vector3<f64>);
+    let falls: Vec<Seen> = relief.layers.iter().filter_map(|l| Some((l, l.rivers.as_ref()?.carve.get()?)))
         .flat_map(|(l, carve)| carve.falls.iter().filter(move |f| {
             // Only where this layer is the finest: elsewhere a finer one's rivers are drawn.
             let d = patch_dir(&l.domain, f.node.p);

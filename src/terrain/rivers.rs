@@ -359,7 +359,7 @@ impl Fall {
 
     /// The jet as a curtain of triangles: rows down its trajectory from the lip to the foot,
     /// widening as it falls; each vertex as (patch point, height, metres fallen).
-    pub fn sheet(&self, rows: usize, columns: usize) -> (Vec<(Point, f64, f64)>, Vec<[usize; 3]>) {
+    pub fn sheet(&self, rows: usize, columns: usize) -> Sheet {
         let height = self.top - self.foot;
         let end = self.jet.time_to(height);
         let mut vertices = vec![];
@@ -430,6 +430,9 @@ fn knickpoints(k: usize, c: &Course, levels: &mut [f64], kind: &[Kind]) -> Vec<F
     }
     out
 }
+
+/// A fall's curtain: vertices (patch point, height, metres fallen) and triangles.
+pub type Sheet = (Vec<(Point, f64, f64)>, Vec<[usize; 3]>);
 
 /// The waterfalls and rapids where courses join: each tributary that arrives above the level
 /// of the river it joins (`levels` takes the lower of the two from there on) either runs down

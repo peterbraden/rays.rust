@@ -126,7 +126,7 @@ impl SimFields {
             Field::WaterDepth => s(&self.water_depth).max(0.),
             Field::FlowSpeed => s(&self.flow_speed).max(0.),
             Field::Froude => s(&self.froude).max(0.),
-            Field::Temperature | Field::Precipitation => return None,
+            Field::Temperature | Field::Precipitation | Field::River => return None,
         })
     }
 }

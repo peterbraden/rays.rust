@@ -37,7 +37,8 @@
 //! - `field`: what the surface knows about itself, given by the object hit (`Fields`): for a
 //!   landscape, what its simulation left there (see `Field`: `sediment`, `ice`, `lava`, `flow`,
 //!   `wetness`, `convexity`, `elevation`, `snowline`, `treeline`, `temperature`,
-//!   `precipitation`, and the rivers' `discharge`, `water_depth`, `flow_speed`, `froude`),
+//!   `precipitation`, and the rivers' `discharge`, `water_depth`, `flow_speed`, `froude`, and
+//!   `river`, the distance to the nearest river's water),
 //!   `default` (0) on surfaces without it. With `from` and `to`, smoothly from
 //!   0 to 1 between them; without, the value itself; either way with `breakup` added first.
 //! - `strata`: ledges: beds `step` metres thick (default 1), each eroded back from the one
@@ -122,6 +123,9 @@ pub enum Field {
     FlowSpeed,
     /// Its Froude number: below 1 tranquil, above 1 rapid.
     Froude,
+    /// How far the point is from the nearest river's water, metres (0 in it): the river
+    /// courses a full-scale landscape draws (`terrain::rivers`), to 1 km; beyond, 1 km.
+    River,
 }
 
 impl Field {
@@ -142,7 +146,8 @@ impl Field {
             "water_depth" => Field::WaterDepth,
             "flow_speed" => Field::FlowSpeed,
             "froude" => Field::Froude,
-            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, discharge, water_depth, flow_speed or froude", s)),
+            "river" => Field::River,
+            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, discharge, water_depth, flow_speed, froude or river", s)),
         })
     }
 }

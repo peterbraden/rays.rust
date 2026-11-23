@@ -1010,6 +1010,12 @@ impl crate::graph::Fields for Ground {
             Field::Elevation => return Some(h),
             Field::Snowline => return Some(h - self.snowline(&d)),
             Field::Treeline => return Some(h - self.treeline(&d)),
+            Field::River => {
+                let far = crate::terrain::rivers::CLEAR;
+                return Some(self.layer_at(&d)
+                    .and_then(|l| Some(l.rivers.as_ref()?.skeleton.nearest(l.carve_point(&d)?)?.edge))
+                    .map_or(far, |e| e.min(far)));
+            },
             Field::Temperature | Field::Precipitation => {
                 let local = self.climate.as_ref()?.local(&d, h);
                 return Some(if f == Field::Temperature { local.mean } else { local.precipitation });

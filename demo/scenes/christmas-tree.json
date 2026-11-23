@@ -1,7 +1,7 @@
 {
   "width": 960,
   "height": 600,
-  "supersamples": 128,
+  "supersamples": 512,
   "chunk_size": 32,
   "samples_per_chunk": 4,
   "max_depth": 6,
@@ -10,7 +10,7 @@
   "light_sampler": "bvh",
   "shutter": [0, 1],
   "filter": "mitchell",
-  "adaptive": {"threshold": 0.03, "min_samples": 32},
+  "adaptive": {"threshold": 0.012, "min_samples": 32},
   "output": {"exposure": 6.0, "tonemap": "filmic"},
   "background": [0.006, 0.007, 0.012],
   "camera": {"location": [0.35, 1.3, -5.6], "lookat": [0, 1.6, 0], "up": [0, 1, 0], "angle": 0.62, "aperture": 0.035},

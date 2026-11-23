@@ -291,7 +291,7 @@ for _ in range(1000):
 scene = {
     "width": WIDTH,
     "height": HEIGHT,
-    "supersamples": 128,
+    "supersamples": 512,
     "chunk_size": 32,
     "samples_per_chunk": 4,
     "max_depth": 6,
@@ -300,7 +300,7 @@ scene = {
     "light_sampler": "bvh",
     "shutter": [0, 1],
     "filter": "mitchell",
-    "adaptive": {"threshold": 0.03, "min_samples": 32},
+    "adaptive": {"threshold": 0.012, "min_samples": 32},
     "output": {"exposure": 6.0, "tonemap": "filmic"},
     "background": [0.006, 0.007, 0.012],
     "camera": camera,

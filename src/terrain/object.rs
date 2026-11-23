@@ -33,7 +33,7 @@
 //!   the origin, ignoring the planet's curvature. A planet is drawn centred on `centre`
 //!   (default the origin), its sea level a sphere of radius `radius / scale`.
 //! - Processes: `radius` (m), `step` (years), `land_bias`, `mountain_height` (m),
-//!   `uplift_rate` (m/yr), `belt_frequency`; `fluvial`: `{k, m, n, diffusivity, deposition, lateral}`;
+//!   `uplift_rate` (m/yr), `belt_frequency`; `fluvial`: `{k, m, n, diffusivity, deposition, lateral, avulsion}`;
 //!   `glacier` and `volcanoes`: `false` to disable, or overrides of `GlacierParams` and
 //!   `VolcanoParams` by field name. Geology (`geology`, docs/geology.md): `"geology"`,
 //!   overrides of `GeologyParams` by field name (`strata_thickness`, `contrast`,
@@ -339,6 +339,7 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
     p.fluvial.diffusivity = number(f, "diffusivity", p.fluvial.diffusivity);
     p.fluvial.deposition = number(f, "deposition", p.fluvial.deposition);
     p.fluvial.lateral = number(f, "lateral", p.fluvial.lateral);
+    p.fluvial.avulsion = number(f, "avulsion", p.fluvial.avulsion);
     p.planet.geology = geology_params(o);
     // Plate tectonics: on by default at full scale, `false` for noise alone, or overrides of
     // `TectonicsParams` by field name.

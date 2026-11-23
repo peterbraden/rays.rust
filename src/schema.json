@@ -2466,6 +2466,12 @@
               "kind": "number",
               "default": 0.5,
               "doc": "Lateral erosion of bends' outer banks relative to incision; 0: rivers only cut down."
+            },
+            {
+              "name": "avulsion",
+              "kind": "number",
+              "default": 5,
+              "doc": "Gradient advantage at which an alluvial channel leaves its raised course; 0: rivers take the steepest way every step."
             }
           ]
         },

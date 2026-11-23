@@ -120,6 +120,25 @@ pub fn route(domain: &Domain, surface: &[f64], outlet: &[bool], rain: &[f64]) ->
     Flow { receiver, receiver_dist, stack, area, filled }
 }
 
+/// Send cell `i`'s water to its neighbour `to` instead, `dist` metres away, which must stand
+/// lower on the filled surface (so the stack, ordered by it, stays valid). Call `accumulate`
+/// after redirecting.
+pub fn redirect(flow: &mut Flow, i: usize, to: usize, dist: f64) {
+    debug_assert!(flow.filled[to] < flow.filled[i]);
+    flow.receiver[i] = to;
+    flow.receiver_dist[i] = dist;
+}
+
+/// Work out the drainage area again after receivers have changed (`redirect`).
+pub fn accumulate(domain: &Domain, flow: &mut Flow, rain: &[f64]) {
+    let mut area: Vec<f64> = (0..domain.len()).map(|i| domain.area[i] * rain[i]).collect();
+    for &i in flow.stack.iter().rev() {
+        let r = flow.receiver[i];
+        if r != i { area[r] += area[i]; }
+    }
+    flow.area = area;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

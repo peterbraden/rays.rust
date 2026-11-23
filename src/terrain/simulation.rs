@@ -154,6 +154,15 @@ const LANDSLIDE_SCALING: f64 = 0.2;
 /// Slopes may exceed their limit by this, metres over a link, before they fail.
 const LANDSLIDE_TOLERANCE: f64 = 0.1;
 
+/// Sediment thicker than this (metres) is alluvium, over which channels keep their courses
+/// until they avulse...
+const ALLUVIAL: f64 = 2.;
+/// ... where they drain more than this, square metres (rain-weighted)...
+const AVULSION_AREA: f64 = 1e7;
+/// ... and are this wide per square root of their drainage, as `channel`'s rivers
+/// (`ChannelParams::width_coefficient`), and a twentieth of that deep.
+const CHANNEL_WIDTH: f64 = 0.003;
+
 /// Bodies of sea of fewer cells than this, cut off from the rest and from a patch's edge, are
 /// lakes (`Terrain::outlets`).
 const SEA_POCKET: usize = 64;
@@ -199,6 +208,9 @@ pub struct Terrain {
     pub shifted: (i64, i64),
     /// Detail of the folds down to this wavelength, metres.
     finest: f64,
+    /// Each channel's receiver at the last step (`u32::MAX` where there is none), which
+    /// alluvial channels keep until they avulse (`persist`).
+    channel: Vec<u32>,
     /// Rock meandering channels cut from their valley walls at the last step, joining each
     /// river cell's sediment at the next, m³/yr.
     banks: Vec<f64>,
@@ -280,7 +292,7 @@ impl Terrain {
         let wind = crate::terrain::climate::wind(&params.climate.clone().unwrap_or_default(), centre.y.clamp(-1., 1.).asin());
         let mut t = Terrain {
             precipitation: base_precipitation.clone(), base_precipitation, wind,
-            domain, params, planet, time: 0., ela, bed, uplift, structure, exhumed: vec![0.; n], rebound: vec![0.; n], ground0: vec![], belt_uplift, velocity, displacement: (0., 0.), shifted: (0, 0), finest, banks: vec![0.; n], latitude, sea, vents, rivers: Rivers::default(),
+            domain, params, planet, time: 0., ela, bed, uplift, structure, exhumed: vec![0.; n], rebound: vec![0.; n], ground0: vec![], belt_uplift, velocity, displacement: (0., 0.), shifted: (0, 0), finest, banks: vec![0.; n], channel: vec![], latitude, sea, vents, rivers: Rivers::default(),
             sediment: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
             ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
@@ -407,6 +419,7 @@ impl Terrain {
     fn route(&self) -> Flow {
         let rain = self.rain_factor();
         let mut flow = route(&self.domain, &self.surface(), &self.outlets(), &rain);
+        if self.persist(&mut flow) { crate::terrain::flow::accumulate(&self.domain, &mut flow, &rain); }
         let g = &self.params.planet.geology;
         if g.infiltration > 0. && g.karst_rate >= 0. {
             // Rain on exposed limestone sinks, follows the drainage underground, and comes up
@@ -437,6 +450,33 @@ impl Terrain {
             }
         }
         flow
+    }
+
+    /// Keep alluvial channels on their courses (see `fluvial`'s "Avulsion"): a cell with a
+    /// channel on sediment keeps last step's receiver (`channel`) while that is still lower on
+    /// the filled surface, unless the routing's own steepest way is `avulsion` times steeper and
+    /// the cell stands a channel's depth above it. Returns whether any receiver changed.
+    fn persist(&self, flow: &mut Flow) -> bool {
+        let ratio = self.params.fluvial.avulsion;
+        if ratio <= 0. || self.channel.len() != self.domain.len() { return false; }
+        let mut changed = false;
+        for i in 0..self.domain.len() {
+            let kept = self.channel[i] as usize;
+            let now = flow.receiver[i];
+            if kept == usize::MAX as u32 as usize || kept == now || now == i { continue; }
+            if self.sediment[i] < ALLUVIAL || self.drainage[i] < AVULSION_AREA || self.ice[i] >= ICE_FREE { continue; }
+            let Some(link) = self.domain.links(i).iter().find(|l| l.to == kept) else { continue };
+            if flow.filled[kept] >= flow.filled[i] { continue; }
+            let along = (flow.filled[i] - flow.filled[kept]) / link.dist;
+            let aside = (flow.filled[i] - flow.filled[now]) / flow.receiver_dist[i];
+            let depth = CHANNEL_WIDTH * self.drainage[i].sqrt() / 20.;
+            let breaks = aside > ratio * along && flow.filled[i] - flow.filled[now] > depth;
+            if !breaks {
+                crate::terrain::flow::redirect(flow, i, kept, link.dist);
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Lower exposed limestone by solution for `dt` years, in proportion to the rain; the rock
@@ -540,6 +580,8 @@ impl Terrain {
             self.cut_walls(&pushes, &fixed, dt);
         }
         self.receiver = flow.receiver.clone();
+        // The channels' courses, for them to keep next step (`persist`).
+        self.channel = (0..self.domain.len()).map(|i| if flow.area[i] >= AVULSION_AREA { flow.receiver[i] as u32 } else { u32::MAX }).collect();
         self.drainage = flow.area;
         self.compensate(&fixed, dt);
         self.time += dt;
@@ -757,6 +799,8 @@ pub struct Snapshot {
     ground0: Vec<f64>,
     #[serde(default)]
     banks: Vec<f64>,
+    #[serde(default)]
+    channel: Vec<u32>,
     channels: Vec<crate::terrain::channel::Channel>,
     oxbows: Vec<crate::terrain::channel::Oxbow>,
     rivers_found: Option<f64>,
@@ -780,7 +824,7 @@ impl Terrain {
             time: self.time, bed: self.bed.clone(), sediment: self.sediment.clone(), lava: self.lava.clone(),
             sediment_flux: self.sediment_flux.clone(), ice: self.ice.clone(), sea: self.sea.clone(),
             drainage: self.drainage.clone(), receiver: self.receiver.clone(), sliding: self.sliding.clone(), exhumed: self.exhumed.clone(), rebound: self.rebound.clone(),
-            displacement: self.displacement, shifted: self.shifted, ground0: self.ground0.clone(), banks: self.banks.clone(),
+            displacement: self.displacement, shifted: self.shifted, ground0: self.ground0.clone(), banks: self.banks.clone(), channel: self.channel.clone(),
             channels: self.rivers.channels.clone(), oxbows: self.rivers.oxbows.clone(), rivers_found: self.rivers.found,
         }
     }
@@ -804,6 +848,7 @@ impl Terrain {
         self.rebound = if s.rebound.len() == self.domain.len() { s.rebound } else { vec![0.; self.domain.len()] };
         if s.ground0.len() == self.domain.len() { self.ground0 = s.ground0; }
         self.banks = if s.banks.len() == self.domain.len() { s.banks } else { vec![0.; self.domain.len()] };
+        self.channel = s.channel;
         self.displacement = s.displacement;
         if s.shifted != self.shifted {
             self.shifted = s.shifted;
@@ -1058,6 +1103,33 @@ mod tests {
         }
         assert!(!t.rivers.channels.is_empty(), "no meandering rivers");
         assert!(cut > 0., "no valley wall was cut");
+    }
+
+    #[test]
+    fn test_alluvial_channels_keep_their_course_until_they_avulse() {
+        // A plain of sediment sloping gently east, with a channel at the middle cell flowing
+        // east; a neighbour to the north is the steepest way down.
+        let mut t = small(1);
+        let n = 24;
+        let (i, east, north) = (12 * n + 12, 12 * n + 13, 13 * n + 12);
+        for k in 0..t.domain.len() {
+            if t.domain.boundary[k] { continue; }
+            t.bed[k] = 100. - (k % n) as f64 * 0.5;
+            t.sediment[k] = 50.;
+        }
+        t.drainage[i] = 1e9;
+        t.channel = vec![u32::MAX; t.domain.len()];
+        t.channel[i] = east as u32;
+        // A trough running north from beside the channel to the patch's edge, `drop` below it
+        // at its head and falling on, so the way down is open.
+        let mut course = |drop: f64| {
+            for j in 13..n { t.bed[j * n + 12] = t.bed[i] - drop - (j - 13) as f64; }
+            t.route().receiver[i]
+        };
+        // A little lower to the north: the channel keeps its course east.
+        assert_eq!(course(1.), east);
+        // Far lower (sixty times the slope, and deeper than the channel): it avulses north.
+        assert_eq!(course(30.), north);
     }
 
     #[test]

@@ -92,9 +92,23 @@
 //! retreat times the bank's height times the cell's width), never below the channel, and that
 //! volume joins the river's sediment, so it is conserved. Straight reaches don't erode sideways.
 //!
-//! Not modelled: thresholds for incision; avulsion (rivers switching course across an
-//! aggrading plain, other than by the routing following the surface); levees and overbank
-//! deposition.
+//! ## Avulsion
+//!
+//! On an alluvial plain a river doesn't take the steepest way at every moment: it keeps its
+//! channel, which its own deposits raise, with its levees, above the plain around it, until in
+//! a flood it breaks out down the side of its ridge to a steeper course, an avulsion (Slingerland
+//! and Smith, "River avulsions and their deposits", Annual Review of Earth and Planetary
+//! Sciences 32, 2004). Repeated, it switches a delta's lobes and builds the fingers of
+//! river-dominated deltas, and spreads fans. Here (`Terrain`'s routing, with `avulsion`) a
+//! channel on sediment keeps last step's course while that is still downhill, unless a way
+//! down the side is `avulsion` (5) times steeper (the gradient advantage: avulsions happen at
+//! advantages of a few to tens) and the channel stands a channel's depth above it (the
+//! super-elevation that sets avulsions off, about a channel's depth: Mohrig, Heller, Paola and
+//! Lyons, GSA Bulletin 112, 2000).
+//!
+//! Not modelled: thresholds for incision; bifurcating distributaries (water divides only by
+//! avulsion, one course at a time); levees and overbank deposition as such (the channel's own
+//! deposition raises its cell).
 //!
 //! ## Hillslopes: linear diffusion
 //!
@@ -129,11 +143,15 @@ pub struct FluvialParams {
     pub deposition: f64,
     /// Lateral erosion at bends relative to vertical incision, λ (0: rivers only cut down).
     pub lateral: f64,
+    /// How much steeper a way down the side of an alluvial channel's ridge must be than its own
+    /// course for it to avulse there (the gradient advantage); 0 for no persistence, rivers
+    /// taking the steepest way every step.
+    pub avulsion: f64,
 }
 
 impl Default for FluvialParams {
     fn default() -> FluvialParams {
-        FluvialParams { k: 1e-5, m: 0.5, n: 1., diffusivity: 0.01, deposition: 1., lateral: 0.5 }
+        FluvialParams { k: 1e-5, m: 0.5, n: 1., diffusivity: 0.01, deposition: 1., lateral: 0.5, avulsion: 5. }
     }
 }
 

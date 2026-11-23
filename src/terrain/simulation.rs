@@ -126,6 +126,8 @@ pub struct TerrainParams {
     /// Rain made by the terrain (`orographic`), which the rivers gather and the glaciers'
     /// snow follows; None for rain everywhere the climate's (or uniform without a climate).
     pub orographic: Option<crate::terrain::orographic::OrographicParams>,
+    /// Sand blown by the wind where it is too dry for plants (`aeolian`); None for none.
+    pub aeolian: Option<crate::terrain::aeolian::AeolianParams>,
     /// How far sea level falls at the glacial cycle's maximum, metres: the water locked in the
     /// ice sheets (about 120 m at the Last Glacial Maximum: Lambeck et al., PNAS 111, 2014).
     /// Sea level follows the glacial cycle (`GlacierParams::period`), at 0 at time zero, an
@@ -157,6 +159,7 @@ impl Default for TerrainParams {
             channels: Some(ChannelParams::default()),
             climate: None,
             orographic: Some(crate::terrain::orographic::OrographicParams::default()),
+            aeolian: Some(crate::terrain::aeolian::AeolianParams::default()),
             isostasy: Some(crate::terrain::isostasy::IsostasyParams::default()),
             eustasy: 120.,
             evaporation: 1.,
@@ -212,6 +215,12 @@ pub struct Terrain {
     /// How much of the sediment is glacial, metres: till and moraines (`glacier`'s "Debris"),
     /// no more than the sediment.
     pub till: Vec<f64>,
+    /// How much of the sediment the wind laid down, metres: sand sheets and dune fields
+    /// (`aeolian`), no more than the sediment.
+    pub sand: Vec<f64>,
+    /// The sediment after the wind's last pass, metres: what has been laid since is fresh,
+    /// its sand loose (`aeolian`).
+    pub settled: Vec<f64>,
     /// Thickness of volcanic rock beneath the sediment, metres.
     pub lava: Vec<f64>,
     /// Sediment flux leaving each cell in rivers at the last step, m³/yr.
@@ -331,7 +340,7 @@ impl Terrain {
         let mut t = Terrain {
             precipitation: base_precipitation.clone(), base_precipitation, wind, temperature,
             domain, params, planet, time: 0., ela, bed, uplift, structure, exhumed: vec![0.; n], rebound: vec![0.; n], ground0: vec![], belt_uplift, velocity, displacement: (0., 0.), shifted: (0, 0), finest, banks: vec![0.; n], channel: vec![], latitude, sea, vents, rivers: Rivers::default(),
-            sediment: vec![0.; n], till: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
+            sediment: vec![0.; n], till: vec![0.; n], sand: vec![0.; n], settled: vec![], lava: vec![0.; n], sediment_flux: vec![0.; n],
             ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
         };
         // The noise topography may stand steeper than its rock can: it is cut down to what the
@@ -456,6 +465,7 @@ impl Terrain {
         }
         // Erosion takes the till with the rest of the sediment.
         for (t, s) in self.till.iter_mut().zip(&self.sediment) { *t = t.min(*s); }
+        for (t, s) in self.sand.iter_mut().zip(&self.sediment) { *t = t.min(*s); }
     }
 
     pub fn surface(&self) -> Vec<f64> {
@@ -808,6 +818,26 @@ impl Terrain {
         }
         self.slide(&fixed, LANDSLIDE_PASSES, 1);
         self.dissolve(&fixed, dt);
+        if let Some(a) = self.params.aeolian.clone() {
+            // The wind takes loose sediment where it is too dry for plants, and lays it down
+            // downwind as sand.
+            let n = self.domain.len();
+            let sink: Vec<bool> = (0..n).map(|i| fixed[i] || self.ice[i] >= ICE_FREE).collect();
+            // Loose: the wind's own sand, and the fine share of what was laid since its last pass.
+            let loose: Vec<f64> = (0..n).map(|i| {
+                let fresh = (self.sediment[i] - self.settled.get(i).copied().unwrap_or(self.sediment[i])).max(0.);
+                (self.sand[i] + a.sand_fraction.clamp(0., 1.) * fresh).min(self.sediment[i])
+            }).collect();
+            let change = crate::terrain::aeolian::blow(&self.domain, &self.surface(), &loose, &self.precipitation, &sink, self.wind, &a, dt);
+            let before = self.bed.clone();
+            for (b, c) in self.bed.iter_mut().zip(&change) { *b += c; }
+            self.record(&before);
+            for i in 0..n {
+                // What it took came from its own sand first.
+                self.sand[i] = (self.sand[i] + change[i]).max(0.).min(self.sediment[i]);
+            }
+            self.settled = self.sediment.clone();
+        }
 
         // Soil creeps faster on weak rock, which weathers faster, and on loose sediment: slopes
         // on shale relax while hard beds hold cliffs. And with the rain: in a desert little soil
@@ -913,7 +943,8 @@ impl Terrain {
             if fixed[k] { return k; }
             ((j - dy).clamp(0, n - 1) * n + (i - dx).clamp(0, n - 1)) as usize
         }).collect();
-        for f in [&mut self.bed, &mut self.sediment, &mut self.till, &mut self.lava, &mut self.ice, &mut self.exhumed, &mut self.rebound, &mut self.ground0, &mut self.sliding] {
+        for f in [&mut self.bed, &mut self.sediment, &mut self.till, &mut self.sand, &mut self.settled, &mut self.lava, &mut self.ice, &mut self.exhumed, &mut self.rebound, &mut self.ground0, &mut self.sliding] {
+            if f.len() != source.len() { continue; }
             let old = f.clone();
             for (k, &s) in source.iter().enumerate() { f[k] = old[s]; }
         }
@@ -1094,6 +1125,10 @@ pub struct Snapshot {
     channel: Vec<u32>,
     #[serde(default)]
     till: Vec<f64>,
+    #[serde(default)]
+    sand: Vec<f64>,
+    #[serde(default)]
+    settled: Vec<f64>,
     channels: Vec<crate::terrain::channel::Channel>,
     oxbows: Vec<crate::terrain::channel::Oxbow>,
     rivers_found: Option<f64>,
@@ -1117,7 +1152,7 @@ impl Terrain {
             time: self.time, bed: self.bed.clone(), sediment: self.sediment.clone(), lava: self.lava.clone(),
             sediment_flux: self.sediment_flux.clone(), ice: self.ice.clone(), sea: self.sea.clone(),
             drainage: self.drainage.clone(), receiver: self.receiver.clone(), sliding: self.sliding.clone(), exhumed: self.exhumed.clone(), rebound: self.rebound.clone(),
-            displacement: self.displacement, shifted: self.shifted, ground0: self.ground0.clone(), banks: self.banks.clone(), channel: self.channel.clone(), till: self.till.clone(),
+            displacement: self.displacement, shifted: self.shifted, ground0: self.ground0.clone(), banks: self.banks.clone(), channel: self.channel.clone(), till: self.till.clone(), sand: self.sand.clone(), settled: self.settled.clone(),
             channels: self.rivers.channels.clone(), oxbows: self.rivers.oxbows.clone(), rivers_found: self.rivers.found,
         }
     }
@@ -1143,6 +1178,8 @@ impl Terrain {
         self.banks = if s.banks.len() == self.domain.len() { s.banks } else { vec![0.; self.domain.len()] };
         self.channel = s.channel;
         self.till = if s.till.len() == self.domain.len() { s.till } else { vec![0.; self.domain.len()] };
+        self.sand = if s.sand.len() == self.domain.len() { s.sand } else { vec![0.; self.domain.len()] };
+        self.settled = s.settled;
         self.displacement = s.displacement;
         if s.shifted != self.shifted {
             self.shifted = s.shifted;

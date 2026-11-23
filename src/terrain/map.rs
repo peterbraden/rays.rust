@@ -31,6 +31,14 @@ pub const RIVER_COLOUR: [f64; 3] = [0.20, 0.40, 0.75];
 /// Till and moraines: glacial sediment, grey.
 pub const TILL_COLOUR: [f64; 3] = [0.72, 0.68, 0.76];
 
+/// Wind-blown sand: dune fields and sand sheets.
+pub const SAND_COLOUR: [f64; 3] = [0.92, 0.78, 0.50];
+
+/// Whether cell `i` is covered by wind-blown sand.
+pub fn is_sand(t: &Terrain, i: usize) -> bool {
+    t.sand.get(i).is_some_and(|&s| s > ALLUVIUM)
+}
+
 /// Whether cell `i`'s sediment is mostly glacial: till and moraines.
 pub fn is_till(t: &Terrain, i: usize) -> bool {
     t.till.get(i).is_some_and(|&till| till > ALLUVIUM && till >= 0.5 * t.sediment[i])
@@ -82,6 +90,9 @@ fn cell_colour(t: &Terrain, i: usize, sea: &[bool], level: f64) -> [f64; 3] {
     // Patches draw rivers as lines (`water_lines`).
     if is_river(t, i) && matches!(t.domain.layout, Layout::Sphere { .. }) {
         return RIVER_COLOUR;
+    }
+    if is_sand(t, i) {
+        return mix(land_colour(t.bed[i]), SAND_COLOUR, 0.8);
     }
     if is_till(t, i) {
         return mix(land_colour(t.bed[i]), TILL_COLOUR, 0.7);

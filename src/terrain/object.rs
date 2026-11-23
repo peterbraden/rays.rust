@@ -53,6 +53,9 @@
 //!   (`elastic_thickness`, `mantle_density`, `rock_density`, `ice_density`, `relaxation`).
 //! - `eustasy`: how far sea level falls at the glacial cycle's maximum, m (120; 0 for a
 //!   constant sea level): at time zero, an interglacial, it is 0.
+//! - `aeolian`: sand blown by the wind where it is too dry for plants (`terrain::aeolian`):
+//!   `false` for none, or overrides of `AeolianParams` (`flux`, `vegetation` as [bare, covered]
+//!   mm/yr, `exposure`, `deposition`, `sand_fraction`).
 //! - `evaporation`: open-water evaporation relative to what the climate's temperature gives
 //!   (1; 0 for none): lakes that would lose more than flows in never spill, and their basins
 //!   are closed (`terrain::simulation`'s "Closed basins"). Needs a climate.
@@ -435,6 +438,20 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
             Some(x)
         }
     };
+    p.aeolian = match &o["aeolian"] {
+        Value::Bool(false) => None,
+        v => {
+            let mut x = crate::terrain::aeolian::AeolianParams::default();
+            let fields: [(&str, &mut f64); 4] = [("flux", &mut x.flux), ("exposure", &mut x.exposure), ("deposition", &mut x.deposition), ("sand_fraction", &mut x.sand_fraction)];
+            for (k, f) in fields {
+                if let Some(n) = v.get(k).and_then(|n| n.as_f64()) { *f = n; }
+            }
+            if let Some([a, b]) = v.get("vegetation").and_then(|g| g.as_array()).and_then(|g| <[Value; 2]>::try_from(g.clone()).ok()) {
+                x.vegetation = (a.as_f64().unwrap_or(x.vegetation.0), b.as_f64().unwrap_or(x.vegetation.1));
+            }
+            Some(x)
+        }
+    };
     p.eustasy = number(o, "eustasy", p.eustasy);
     p.evaporation = number(o, "evaporation", p.evaporation).max(0.);
     p.sediment_erodibility = number(o, "sediment_erodibility", p.sediment_erodibility);
@@ -551,6 +568,13 @@ fn evolve(o: &Value, mut t: Terrain, key: &str) -> Terrain {
     let level = t.sea_level();
     if level.abs() > 1. {
         println!("Terrain: sea level is {:.0} m then (the glacial cycle's); the scene's sea should stand there", level);
+    }
+    // What the wind and the glaciers laid down.
+    for (name, layer) in [("wind-blown sand", &t.sand), ("glacial till", &t.till)] {
+        let thick = (0..t.domain.len()).filter(|&i| layer.get(i).is_some_and(|&x| x > map::ALLUVIUM));
+        let area: f64 = thick.clone().map(|i| t.domain.area[i]).sum::<f64>() / 1e6;
+        let deepest = layer.iter().cloned().fold(0., f64::max);
+        if deepest > 0.1 { println!("Terrain: {} {:.0} km² more than {} m deep, {:.1} m at most", name, area, map::ALLUVIUM, deepest); }
     }
     let basins = t.basins();
     if basins.count > 0 {

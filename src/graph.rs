@@ -126,6 +126,9 @@ pub enum Field {
     /// Glacial sediment, metres thick: till lodged beneath the ice and moraines heaped at its
     /// margins (`terrain::glacier`'s "Debris"), part of `sediment`.
     Till,
+    /// Wind-blown sand, metres thick: sand sheets and dune fields (`terrain::aeolian`), part
+    /// of `sediment`.
+    Sand,
 }
 
 impl Field {
@@ -146,7 +149,8 @@ impl Field {
             "hardness" => Field::Hardness,
             "playa" => Field::Playa,
             "till" => Field::Till,
-            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, rock, hardness, playa or till", s)),
+            "sand" => Field::Sand,
+            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, rock, hardness, playa, till or sand", s)),
         })
     }
 }

@@ -2456,6 +2456,19 @@
           ]
         },
         {
+          "name": "aeolian",
+          "kind": "object",
+          "default": null,
+          "doc": "Sand blown by the wind where it is too dry for plants, gathering in sand seas downwind; false for none.",
+          "fields": [
+            {"name": "flux", "kind": "number", "default": 20, "doc": "Sand the wind carries over bare level ground, m³ per metre across it per year."},
+            {"name": "vegetation", "kind": "vec2", "default": [100, 350], "doc": "Rain at which plants begin to hold the ground, and at which they hold it all, mm/yr."},
+            {"name": "exposure", "kind": "number", "default": 10, "doc": "How much more the wind carries for each unit of slope rising into it."},
+            {"name": "deposition", "kind": "number", "default": 0.5, "doc": "Share of the excess load laid down in each cell."},
+            {"name": "sand_fraction", "kind": "number", "default": 0.3, "doc": "Share of freshly laid sediment fine enough for the wind to carry; the rest stays as a gravel lag."}
+          ]
+        },
+        {
           "name": "sediment_glacial_erodibility",
           "kind": "number",
           "default": 3,

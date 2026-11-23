@@ -199,6 +199,25 @@ In a dry climate the basins are closed (above): their floors fill with the range
 and their lowest ground, against the fault where the hanging wall is tilted down, is a playa,
 as Death Valley's is against the Black Mountains.
 
+## Deposits: till, moraines and sand
+
+What erosion takes is laid down again somewhere, and the sediment remembers how. Glaciers
+carry half of what they quarry in and on their ice towards the margin, lodging some as till
+beneath the ice where it melts and dumping the rest at the margin, where it heaps into
+moraines at each stand of the ice through the glacial cycle (`glacier::carry_debris`; the
+module docs' "Debris"); the rest goes to the rivers in meltwater. `Terrain::till` keeps how
+much of each cell's sediment is glacial: maps draw it lilac-grey, the ground cover as grey
+rubble grown over below the treeline, and graphs read it as `till`.
+
+In deserts the wind takes the sand out of freshly laid alluvium, leaving its gravel as a lag
+that armours the ground (desert pavement), and carries it along the prevailing wind, dropping
+it where the wind slackens: in the lee of ranges and ridges, and where plants take hold
+(`terrain::aeolian`, `aeolian` in a scene; `Terrain::sand`, a `sand` field). At full scale
+the sand is drawn as dunes: ridges about 400 m apart across the wind, with gentle windward
+slopes and slip faces down their lee, breaking into barchans where the sand is thin
+(`Relief::dunes`). Real sand seas gather over hundreds of kilometres and millions of years,
+more than a patch covers; a patch's sand lies in sheets and ramps against the ranges.
+
 ## Validation
 
 `terrain::simulation::tests::test_channels_and_slopes_are_steeper_on_hard_rock` (ignored; run

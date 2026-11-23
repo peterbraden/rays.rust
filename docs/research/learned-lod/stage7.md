@@ -152,3 +152,53 @@ sunlit ground show through, and casts too small a shadow.
 **Next: crossed cards at the coarse levels only.** Crossed cards fix exactly this (stage 3), and
 at coarse levels a tree has so few cards that tripling them costs almost no memory. The memory
 that made crossed cards expensive at `pixels: 1` is at the fine levels, where one card does well.
+
+## Crossed cards at coarse levels: a negative result
+
+**What was tried.** Clusters of 512 pieces or more (about L5 and coarser) may get up to three
+crossed cards, fitted as in stage 3 (`crossed`; research option `LOD_CROSSED=<pieces>`).
+- A ray leaving a crossed cluster passes its sibling cards, in both `intersects` and
+  `occludes`.
+- The cluster's lit fraction stands in for what its leaves do to that ray.
+- The cluster a ray leaves is found by a short search of the cards about its origin
+  (`CardSet::leaving`), done only in card sets that have a crossed cluster.
+
+**Coverage was as hoped.** In `lod_tree_levels`, the coarse levels' hit ratios from shallow views
+came to about 1 (examples below are single cards → crossed):
+
+| Tree, level | Single card | Crossed |
+|---|---|---|
+| Aspen L7 | 0.80 | 0.99 |
+| Spruce L8 | 0.79 | 0.99 |
+| Hazel L7 | 0.83 | 1.04 |
+| Oak L7 | 0.91 | 1.07 |
+
+**But the renders are brighter, not darker** (with the scattering-aware lit fraction, from the
+air):
+
+| `pixels` | FLIP: single / crossed | Bias: single / crossed | Cards built |
+|---|---|---|---|
+| 1 | 0.0562 / 0.0577 | −1.4% / +1.3% | 2.57 M / 2.59 M |
+| 2 | 0.0651 / 0.0733 | +1.6% / +6.3% | 660 k / 687 k |
+| 4 | 0.0823 / 0.0887 | +5.6% / +9.4% | 145 k / 171 k |
+| 8 | 0.1063 / 0.1043 | +9.2% / +10.6% | 31 k / 51 k |
+
+Without the lit fraction, crossed cards are worse still: +18.8% and +21.8% at `pixels` 4 and 8.
+
+**Memory and time are unaffected**, as expected: 342–398 MiB, within a few MiB of single cards.
+
+**Reading it.** The path-traced harness predicted this. With crossed cards, the coarse trees
+send 1.1–1.5 times their leaves' light to the viewer (aspen L6 1.53, hazel L6 1.31), since more
+of the tree is hit and each hit is lit as often as before.
+
+So the remaining brightening is **in the trees' own radiance**, not in sunlit ground showing
+through:
+- **The scene is mostly conifers.** Scots pine, spruce and fir carry over half the weight.
+- **Their cards are too bright even as single cards.** They come to 1.07–1.24 of their leaves in
+  the path-traced harness, hit 5–10% more often than their needles from the views that matter.
+
+**What it points to.** Matching the light a tree sends back means matching coverage and the lit
+fraction as functions of direction, not on average over the hemisphere. A distant tree is seen
+near the horizon and lit from above, and one number per card can't hold both. Candidates:
+- weighting the coverage fit toward the directions distant trees are seen from;
+- making the lit fraction depend on the light's elevation (a few bytes per card).

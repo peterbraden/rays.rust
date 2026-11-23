@@ -242,6 +242,18 @@ impl Card {
         self.crossing(r).filter(|h| h.0 > 0.)
     }
 
+    /// Where on this card a ray starts, if it starts on it (as a ray from a hit on it does: within
+    /// a millimetre, or a thousandth of the card's size, about what such a ray is started off it
+    /// by); never for a kept triangle.
+    fn leaves(&self, r: &Ray) -> Option<(f64, f64)> {
+        if self.is_triangle() {
+            return None;
+        }
+        let (t, a, b) = self.crossing(r)?;
+        let d = (t * r.rd.norm()).abs();
+        (d < 0.01 && d <= (1e-3 * (self.u().norm() + self.v().norm())).max(1e-3)).then_some((a, b))
+    }
+
     /// Where the line of `r` crosses this card, if it does: as `hit`, but at any distance
     /// along it, behind the ray's origin too.
     fn crossing(&self, r: &Ray) -> Option<(f64, f64, f64)> {
@@ -283,9 +295,27 @@ pub struct CardSet {
     bvh: Bvh,
     cards: Vec<Card>,
     clusters: Clusters,
+    /// Whether any cluster has more than one card (`crossed`): then a ray leaving a cluster
+    /// is looked for first, to pass by its other cards.
+    crossed: bool,
 }
 
 impl CardSet {
+    /// The cluster a ray starts on one of the cards of, if it does (see `Card::leaves`), and
+    /// where on that card.
+    fn leaving(&self, r: &Ray) -> Option<(u32, f64, f64)> {
+        let mut found = None;
+        let reach = 0.01 / r.rd.norm();
+        self.bvh.any_hit(r, -reach, reach, |i| {
+            let card = &self.cards[i];
+            match card.leaves(r) {
+                Some((a, b)) => { found = Some((card.data, a, b)); true },
+                None => false,
+            }
+        });
+        found
+    }
+
     pub fn cards(&self) -> &[Card] {
         &self.cards
     }
@@ -323,7 +353,13 @@ impl Geometry for CardSet {
         // Search by distance alone, then choose the constituent of the nearest card only: many
         // cards may be hit on the way to it.
         let mut nearest = None;
+        // A ray leaving a crossed cluster passes its other cards: they stand for its leaves
+        // seen from outside, and what its leaves do to light leaving them is `Clusters::lit`.
+        let own = if self.crossed { self.leaving(r).map(|o| o.0) } else { None };
         self.bvh.nearest(r, min, max, |i, best| {
+            if own.is_some_and(|c| self.cards[i].data == c) {
+                return None;
+            }
             let hit = self.cards[i].hit(r)?;
             let dist = hit.0 * r.rd.norm();
             if dist < min || dist >= best {
@@ -339,20 +375,37 @@ impl Geometry for CardSet {
     }
 
     fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
-        !self.cards.is_empty() && self.bvh.any_hit(r, min, max, |i| {
+        if self.cards.is_empty() {
+            return false;
+        }
+        // A ray leaving a card, from a hit on it, is shadowed by the leaves of its own cluster
+        // the card can't show: stopped with the probability that they stop light (drawn by
+        // hashing the ray). It passes the cluster's other cards, if it has more than one.
+        if self.crossed {
+            let own = self.leaving(r);
+            if let Some((c, a, b)) = own && hash01(r, a, b) >= self.clusters.lit(c) {
+                return true;
+            }
+            let own = own.map(|o| o.0);
+            return self.bvh.any_hit(r, min, max, |i| {
+                let card = &self.cards[i];
+                !own.is_some_and(|c| card.data == c) && card.hit(r).is_some_and(|(t, _, _)| {
+                    let d = t * r.rd.norm();
+                    d >= min && d < max
+                })
+            });
+        }
+        self.bvh.any_hit(r, min, max, |i| {
             let card = &self.cards[i];
             let Some((t, a, b)) = card.crossing(r) else { return false };
             let d = t * r.rd.norm();
-            // A ray leaving a card, from a hit on it (within a millimetre, or a thousandth of
-            // the card's size, about what a hit's ray is started off it by), is shadowed by
-            // the leaves of its own cluster the card can't show: stopped with the probability
-            // that they stop light.
-            if d.abs() < 0.01 && !card.is_triangle() && d.abs() <= (1e-3 * (card.u().norm() + card.v().norm())).max(1e-3) {
+            if d.abs() < 0.01 && card.leaves(r).is_some() {
                 return hash01(r, a, b) >= self.clusters.lit(card.data);
             }
             d >= min && d < max
         })
     }
+
 
     fn bounds(&self) -> BBox {
         self.bvh.bounds()
@@ -477,7 +530,7 @@ pub fn consolidate(triangles: &[Arc<Tagged<Triangle>>], size: f64) -> CardSet {
     /// What a cluster becomes: its pieces kept as triangles, or a card and its constituents.
     enum Made {
         Kept(Vec<Card>),
-        Card(Card, Vec<(Vector3<f64>, f64, u32)>, f64),
+        Cards(Vec<Card>, Vec<(Vector3<f64>, f64, u32)>, f64),
         Nothing,
     }
     // Clusters are made independently, in parallel; each draws its representatives by its own
@@ -502,19 +555,24 @@ pub fn consolidate(triangles: &[Arc<Tagged<Triangle>>], size: f64) -> CardSet {
                 let lit = if std::env::var("LOD_SELF_LIT").as_deref() == Ok("cluster") {
                     self_lit(triangles, group)
                 } else { 1. };
-                Made::Card(Card { corner: single(&corner), u: single(&u), v: single(&v), data: 0 }, constituents(&all, g as u64), lit)
+                let planes = if members.len() >= crossed_from() { crossed(&members) } else { None }
+                    .unwrap_or_else(|| vec![(corner, u, v)]);
+                let planes = planes.iter().map(|(c, u, v)| Card { corner: single(c), u: single(u), v: single(v), data: 0 }).collect();
+                Made::Cards(planes, constituents(&all, g as u64), lit)
             },
             None => Made::Nothing,
         }
     }).collect();
     let mut clusters = Clusters::default();
     let mut cards: Vec<Card> = vec![];
+    let mut crossed = false;
     for m in made {
         match m {
             Made::Kept(kept) => cards.extend(kept),
-            Made::Card(mut card, kept, lit) => {
-                card.data = clusters.push(&kept, lit);
-                cards.push(card);
+            Made::Cards(planes, kept, lit) => {
+                let c = clusters.push(&kept, lit);
+                crossed |= planes.len() > 1;
+                cards.extend(planes.into_iter().map(|card| Card { data: c, ..card }));
             },
             Made::Nothing => {},
         }
@@ -525,7 +583,7 @@ pub fn consolidate(triangles: &[Arc<Tagged<Triangle>>], size: f64) -> CardSet {
     clusters.lit.shrink_to_fit();
     // A card is cheaper to test than a node to visit, and smaller: leaves of a few.
     let (bvh, cards) = Bvh::build_with_leaves(cards, Card::bounds, CARDS_PER_LEAF);
-    CardSet { bvh, cards, clusters }
+    CardSet { bvh, cards, clusters, crossed }
 }
 
 /// What a card keeps of the pieces `all` (normal, area, face) of its cluster. Pieces of one face
@@ -873,8 +931,24 @@ fn covered_area(members: &[&Tagged<Triangle>], d: &Vector3<f64>) -> f64 {
     rows[.. n].iter().map(|r| r.count_ones()).sum::<u32>() as f64 * cw * ch
 }
 
-/// The card for a cluster: its corner and edges (see the module's notes).
-fn card(members: &[&Tagged<Triangle>]) -> Option<(Vector3<f64>, Vector3<f64>, Vector3<f64>)> {
+/// A cluster's frame: the normal its leaves face most, the principal axes of their spread
+/// across it, and their extent along each.
+struct Frame {
+    normal: Vector3<f64>,
+    /// Any direction across the normal, for `coverage_directions`.
+    across: Vector3<f64>,
+    a1: Vector3<f64>,
+    a2: Vector3<f64>,
+    /// The middle of the leaves' extent across the normal, in the plane through their centre.
+    mid: Vector3<f64>,
+    w: f64,
+    h: f64,
+    /// Where the leaves reach along the normal, below and above `mid`.
+    below: f64,
+    above: f64,
+}
+
+fn frame(members: &[&Tagged<Triangle>]) -> Option<Frame> {
     let mut moment = Matrix3::zeros();
     let (mut centre, mut total) = (Vector3::zeros(), 0.);
     for m in members {
@@ -893,12 +967,6 @@ fn card(members: &[&Tagged<Triangle>]) -> Option<(Vector3<f64>, Vector3<f64>, Ve
     if normal.y < 0. {
         normal = -normal;
     }
-    // Projected area: what the leaves cover, looking along the normal.
-    let shown: f64 = members.iter().map(|m| {
-        let t = &m.item;
-        0.5 * (t.v1 - t.v0).cross(&(t.v2 - t.v0)).norm() * t.normal.dot(&normal).abs()
-    }).sum();
-
     // Axes in the plane: the principal axes of the vertices' spread over it.
     let any = if normal.x.abs() < 0.9 { Vector3::x() } else { Vector3::y() };
     let e1 = normal.cross(&any).normalize();
@@ -916,33 +984,152 @@ fn card(members: &[&Tagged<Triangle>]) -> Option<(Vector3<f64>, Vector3<f64>, Ve
     let angle = 0.5 * (2. * cxy).atan2(cxx - cyy);
     let (a1, a2) = (e1 * angle.cos() + e2 * angle.sin(), -e1 * angle.sin() + e2 * angle.cos());
     let (mut lo, mut hi) = ((f64::INFINITY, f64::INFINITY), (f64::NEG_INFINITY, f64::NEG_INFINITY));
+    let (mut below, mut above) = (0f64, 0f64);
     for m in members {
         for p in [m.item.v0, m.item.v1, m.item.v2] {
             let (x, y) = ((p - centre).dot(&a1), (p - centre).dot(&a2));
             lo = (lo.0.min(x), lo.1.min(y));
             hi = (hi.0.max(x), hi.1.max(y));
+            let z = (p - centre).dot(&normal);
+            below = below.min(z);
+            above = above.max(z);
         }
     }
     let (w, h) = (hi.0 - lo.0, hi.1 - lo.1);
-    let extent = w * h;
-    if extent <= 0. || shown <= 0. {
+    if w * h <= 0. {
         return None;
     }
+    let mid = centre + a1 * (0.5 * (lo.0 + hi.0)) + a2 * (0.5 * (lo.1 + hi.1));
+    Some(Frame { normal, across: e1, a1, a2, mid, w, h, below, above })
+}
+
+/// The card for a cluster: its corner and edges (see the module's notes).
+fn card(members: &[&Tagged<Triangle>]) -> Option<(Vector3<f64>, Vector3<f64>, Vector3<f64>)> {
+    let f = frame(members)?;
     // The area the leaves cover, measured by rasterising them seen along directions over the
     // hemisphere; the card is made as large as gives the same cross-section on average over
     // those directions (a flat card's shrinks as |n·d|). Pieces of a
     // cluster aren't scattered at random: a leaf's own triangles never overlap, and leaves on a
     // twig spread out, so a random-overlap estimate would undercount what they cover.
     let (mut leaves, mut flat) = (0., 0.);
-    for d in coverage_directions(&normal, &e1) {
+    for d in coverage_directions(&f.normal, &f.across) {
         leaves += covered_area(members, &d);
-        flat += normal.dot(&d).abs();
+        flat += f.normal.dot(&d).abs();
     }
-    let covered = leaves / flat;
-    let k = (covered / extent).sqrt();
-    let mid = centre + a1 * (0.5 * (lo.0 + hi.0)) + a2 * (0.5 * (lo.1 + hi.1));
-    let (u, v) = (a1 * (w * k), a2 * (h * k));
-    Some((mid - 0.5 * (u + v), u, v))
+    if leaves <= 0. {
+        return None;
+    }
+    let k = (leaves / flat / (f.w * f.h)).sqrt();
+    let (u, v) = (f.a1 * (f.w * k), f.a2 * (f.h * k));
+    Some((f.mid - 0.5 * (u + v), u, v))
+}
+
+/// A card's corner and its two edges.
+type Plane = (Vector3<f64>, Vector3<f64>, Vector3<f64>);
+
+/// The most a single card's cross-section may miss its leaves' over directions (relative
+/// root-mean-square) before `crossed` gives the cluster more.
+const CARD_TOLERANCE: f64 = 0.15;
+
+/// The fewest pieces a cluster has for `consolidate` to consider crossed cards for it:
+/// `$LOD_CROSSED` (research), or none.
+fn crossed_from() -> usize {
+    static FROM: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *FROM.get_or_init(|| std::env::var("LOD_CROSSED").ok().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX))
+}
+
+/// Up to three cards across a cluster's box, if one card alone would miss its leaves' cross
+/// section over directions by more than `CARD_TOLERANCE` (research stage 3, at the coarse levels
+/// in stage 8): one in the plane its leaves face most, one across each of its other axes, for a
+/// cluster whose leaves face every way, as a tree's crown does, which a single card seen near
+/// edge on would miss. Their sizes are fitted so that together they are hit as often as the
+/// leaves from every direction: the area the leaves cover (`covered_area`), against the cards'
+/// cross-sections `Σ C |e·d|` (a zonotope of three generators), by non-negative least squares,
+/// then refitted for what crossed cards hide of each other. `None` if one card does.
+fn crossed(members: &[&Tagged<Triangle>]) -> Option<Vec<Plane>> {
+    let f = frame(members)?;
+    let thick = f.above - f.below;
+    let side = f.mid + f.normal * (0.5 * (f.below + f.above));
+    let faces = [
+        (f.normal, f.a1 * f.w, f.a2 * f.h, f.mid),
+        (f.a1, f.a2 * f.h, f.normal * thick, side),
+        (f.a2, f.a1 * f.w, f.normal * thick, side),
+    ];
+    let dirs = coverage_directions(&f.normal, &f.across);
+    let target: Vec<f64> = dirs.iter().map(|d| covered_area(members, d)).collect();
+    let alone = nnls(&dirs.iter().map(|d| vec![f.normal.dot(d).abs()]).collect::<Vec<_>>(), &target)[0];
+    let miss = dirs.iter().zip(&target).map(|(d, t)| (alone * f.normal.dot(d).abs() - t).powi(2)).sum::<f64>();
+    if miss.sqrt() <= CARD_TOLERANCE * target.iter().map(|t| t * t).sum::<f64>().sqrt() {
+        return None;
+    }
+    let mut keep: Vec<usize> = (0 .. 3).filter(|&i| faces[i].1.cross(&faces[i].2).norm() > 0.).collect();
+    let mut areas = vec![0.; 3];
+    for _ in 0 .. 2 {
+        let rows: Vec<Vec<f64>> = dirs.iter().map(|d| keep.iter().map(|&i| faces[i].0.dot(d).abs()).collect()).collect();
+        areas = vec![0.; 3];
+        for (&i, a) in keep.iter().zip(nnls(&rows, &target)) {
+            areas[i] = a;
+        }
+        // Cards that cover little aren't worth their memory: refit without them.
+        let most = areas.iter().cloned().fold(0., f64::max);
+        keep.retain(|&i| areas[i] > 0.05 * most);
+    }
+    if keep.len() < 2 {
+        return None;
+    }
+    let make = |areas: &[f64]| -> Vec<Plane> {
+        keep.iter().map(|&i| {
+            let (_, u, v, at) = faces[i];
+            let k = (areas[i] / u.cross(&v).norm()).sqrt();
+            let (u, v) = (u * k, v * k);
+            (at - 0.5 * (u + v), u, v)
+        }).collect()
+    };
+    // Crossed cards overlap seen at a slant, so together they cover less than the sum of their
+    // cross-sections: measure what they do cover, as the leaves', and refit to make up for it.
+    for _ in 0 .. 3 {
+        let planes: Vec<Tagged<Triangle>> = make(&areas).into_iter().flat_map(|(c, u, v)| [
+            Tagged { item: Triangle::new(c, c + u, c + v), face: 0 },
+            Tagged { item: Triangle::new(c + u, c + u + v, c + v), face: 0 },
+        ]).collect();
+        let planes: Vec<&Tagged<Triangle>> = planes.iter().collect();
+        let rows: Vec<Vec<f64>> = dirs.iter().map(|d| keep.iter().map(|&i| faces[i].0.dot(d).abs()).collect()).collect();
+        let goal: Vec<f64> = dirs.iter().zip(&target).zip(&rows).map(|((d, t), row)| {
+            let sum: f64 = row.iter().zip(&keep).map(|(r, &i)| r * areas[i]).sum();
+            let union = covered_area(&planes, d);
+            if union > 0. { t * sum / union } else { *t }
+        }).collect();
+        for (&i, a) in keep.iter().zip(nnls(&rows, &goal)) {
+            areas[i] = a;
+        }
+    }
+    Some(make(&areas))
+}
+
+/// The `x ≥ 0` minimising `Σ_r (rows[r]·x - target[r])²`, by cyclic coordinate descent on the
+/// normal equations (convex, and only a few unknowns).
+fn nnls(rows: &[Vec<f64>], target: &[f64]) -> Vec<f64> {
+    let n = rows.first().map_or(0, Vec::len);
+    let mut gram = vec![0.; n * n];
+    let mut rhs = vec![0.; n];
+    for (row, t) in rows.iter().zip(target) {
+        for i in 0 .. n {
+            rhs[i] += row[i] * t;
+            for j in 0 .. n {
+                gram[i * n + j] += row[i] * row[j];
+            }
+        }
+    }
+    let mut x = vec![0.; n];
+    for _ in 0 .. 200 {
+        for j in 0 .. n {
+            if gram[j * n + j] > 0. {
+                let rest: f64 = (0 .. n).filter(|&i| i != j).map(|i| gram[j * n + i] * x[i]).sum();
+                x[j] = ((rhs[j] - rest) / gram[j * n + j]).max(0.);
+            }
+        }
+    }
+    x
 }
 
 #[cfg(test)]

@@ -363,7 +363,10 @@ branch's history (commits `ac51d87` to `f56d824`) and written up in their notes,
       times as often as their leaves (no self-shadowing). A per-card lit fraction including
       light scattered within the cluster cuts FLIP at `pixels` 4–8 by 8–10% and the drift by a
       third (research option `LOD_SELF_LIT=cluster`); the rest is coverage from low angles.
-- [ ] Crossed cards at coarse levels only, for coverage from low angles.
+- [x] Crossed cards at coarse levels only ([stage7.md](stage7.md#crossed-cards-at-coarse-levels-a-negative-result)):
+      coverage from shallow views comes right, but the image gets brighter (+9.4% at `pixels: 4`):
+      the remaining error is in the trees' own radiance, which depends on direction.
+- [ ] Coverage and lit fraction as functions of direction (view near the horizon, light above).
 - [ ] The residual darkening from low down (−3% to −6% at mid range), common to cards and
       volumes; SGGX lobes and palettes.
 - [ ] Read what could not be fetched (see [log.md](log.md)).

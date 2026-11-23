@@ -222,7 +222,11 @@ till hummocky with boulders, alluvium gently swaled, sand smooth, playas cracked
 smooth. Each cell of the displaced grids is bounded by the detail the fields there allow
 (`Graph::range_near`, `DisplacedTerrain::tighten`), so rays grazing sand or alluvium dice
 only the cells they touch: a camera standing in a desert basin rendered 13 times faster than
-with the detail's whole range.
+with the detail's whole range. On the smallest cells, where even the local range of rock's
+detail is tall beside the cell, a cell is bounded by the detail's value at its centre and how
+far it can change across it (`detail::local_bound`: smooth parts by their steepest gradient,
+stones' edges and ledges between beds by their whole height), five times faster again for a
+camera standing on a rocky slope.
 
 ## In the desert scenes
 

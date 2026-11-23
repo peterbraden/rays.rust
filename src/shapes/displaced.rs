@@ -499,7 +499,8 @@ impl DisplacedTerrain {
             }.with_fields(self.fields.as_deref());
             let (sx, sz) = g.smooth_slope_bounds(ix, iz);
             let steepest = sx.hypot(sz).atan().to_degrees() + 5.;
-            let r = self.graph.range_near(&c, steepest);
+            let (lo, hi) = g.smooth_range(ix, iz);
+            let r = self.graph.range_near(&c, steepest, 0.5 * g.cell, (lo - y, hi - y));
             let r = (r.0.max(self.range.0), r.1.min(self.range.1));
             cell_bound(&g, ix, iz, toward_zero(r), (0., 0.), &aside, self.vertical)
         }).collect();

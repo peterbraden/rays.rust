@@ -72,6 +72,90 @@ pub fn bound(c: &Context, slope: f64, amplitude: f64) -> f64 {
     amplitude.abs() * ((1. - k.ice) * h + k.ice * 0.4) * 1.25 + 0.02
 }
 
+/// The steepest a `fractal` of these parameters can be, metres of its value per metre: each
+/// octave's gradient noise is no steeper than `NOISE_GRADIENT` per lattice unit, so octave k,
+/// of weight r^k among the weights' sum and lacunarity 2, adds that times (2r)^k / scale.
+/// Ridged octaves square the noise, which at most doubles its steepness, and the weighting of
+/// each octave by the last at most doubles it again.
+fn steepest(style: FractalStyle, scale: f64, smallest: f64, roughness: f64) -> f64 {
+    const NOISE_GRADIENT: f64 = 3.;
+    let octaves = ((scale / smallest.max(1e-9)).log2().floor().max(0.) as i32 + 1).min(40);
+    let weights: f64 = (0..octaves).map(|k| roughness.powi(k)).sum();
+    let gradients: f64 = (0..octaves).map(|k| (2. * roughness).powi(k)).sum();
+    let style = match style { FractalStyle::Ridged => 4., _ => 1. };
+    style * NOISE_GRADIENT * gradients / weights / scale
+}
+
+/// Bounds on the ground's detail anywhere within `half` metres of `c` (a displaced cell's
+/// half-width), times `amplitude`, where the ground is no steeper than `slope` degrees and its
+/// base rises and falls by up to `heights` metres about `c` (for the beds it crosses): tighter
+/// than `bound`, for the smallest cells, where a ray grazing the ground would otherwise pass
+/// through hundreds of boxes as tall as granite's blocks.
+///
+/// The detail's value at `c`, plus how far it can change: its smooth parts by their steepest
+/// gradients (`steepest`) times the distance, which is widened to 2.5 cells to allow for
+/// detail filtered out where the cell is diced coarsely (its finest octaves fade to their mean
+/// below four times the filter); its parts that step (stones' edges; ledges and textures
+/// where the rock changes from bed to bed within the cell's heights) by their whole
+/// amplitudes. The weights of the kinds of ground are taken at their largest over slopes from
+/// level to `slope`.
+pub fn local_bound(c: &Context, slope: f64, half: f64, heights: (f64, f64), noise: &SeededNoise, seed: u32, amplitude: f64) -> (f64, f64) {
+    let Some(f) = c.fields else { return (0., 0.) };
+    let centre = ground(&Context { filter: 0., ..*c }, noise, seed, amplitude);
+    let (k0, k1) = (Kinds::at(c, f, 0.), Kinds::at(c, f, slope));
+    let most = |a: f64, b: f64| a.max(b);
+    let d = 2.5 * 2. * half;
+    let lip = |style: FractalStyle, scale: f64, smallest: f64, roughness: f64| steepest(style, scale, smallest, roughness) * d;
+    use FractalStyle::*;
+    // Glaciers.
+    let ice = most(k0.ice, k1.ice);
+    let mut change = ice * 0.4 * lip(Perlin, 30., 2., 0.5);
+    // Bare rock: does the rock change within the cell's heights?
+    let bare = most(k0.bare, k1.bare);
+    if bare > 0. {
+        let up = f.vertical(&c.p).map_or(crate::na::Vector3::y(), |(up, _)| up);
+        let rock_at = |dz: f64| f.field(Field::Rock, &(c.p + up * dz)).map_or(Rock::Sediment, |r| Rock::from_index(r.round() as usize));
+        let rock = rock_at(0.);
+        let changes = (0..=8).map(|k| heights.0 - 4. + (heights.1 - heights.0 + 8.) * k as f64 / 8.).any(|dz| rock_at(dz) != rock);
+        let steep = smoothstep(25., 50., slope);
+        let rock_change = if changes {
+            // A ledge's step and any rock's texture.
+            0.7 * 3. * steep + 2.2
+        } else {
+            // (Loose sediment has no beds to stand out.)
+            let hardness = if rock == Rock::Sediment { 0. } else { f.field(Field::Hardness, &c.p).unwrap_or(0.).abs().min(1.5) };
+            let texture = match rock {
+                Rock::Granite => 1.2 + 1.0 * lip(Billow, 18., 0.5, 0.5),
+                Rock::Gneiss => 0.8 * lip(Ridged, 5., 0.1, 0.55),
+                Rock::Schist => 0.6 * lip(Ridged, 3., 0.05, 0.6),
+                Rock::Sandstone | Rock::Quartzite => 0.5 + 0.3 * lip(Perlin, 6., 0.1, 0.5),
+                Rock::Limestone => 0.5 * lip(Ridged, 1.5, 0.03, 0.6) + 0.3,
+                Rock::Shale => 0.25 * lip(Perlin, 1., 0.03, 0.6),
+                Rock::Basalt => 0.4 + 0.3,
+                Rock::Sediment => 0.,
+            };
+            // The ledges' height changes only with the slope, which a cell's base hardly does.
+            0.7 * hardness * steep + texture
+        };
+        change += bare * rock_change;
+    }
+    let loose = 1. - k0.bare.min(k1.bare);
+    if loose > 0. {
+        let scree = most(k0.scree, k1.scree);
+        let glacial = most(k0.glacial, k1.glacial);
+        let alluvium = most(k0.alluvium, k1.alluvium);
+        let blown = most(k0.blown, k1.blown);
+        let pan = most(k0.pan, k1.pan);
+        change += loose * (scree * 0.5
+            + glacial * (1.5 * lip(Perlin, 25., 2., 0.5) + 0.9)
+            + alluvium * (0.3 * lip(Perlin, 30., 3., 0.5) + 0.04 * lip(Perlin, 0.4, 0.05, 0.6))
+            + blown * 0.15 * lip(Perlin, 12., 2., 0.4)
+            + pan * 0.05);
+    }
+    let change = amplitude.abs() * (1.25 * change.min(2. * REACH) + 0.02);
+    (centre - change, centre + change)
+}
+
 /// The ground's detail at `c` (see the module docs), metres outwards, times `amplitude`.
 /// `noise` and `seed` vary it. Without fields (not on a landscape), nothing.
 pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f64 {
@@ -107,7 +191,7 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
         let face = 0.4 + 0.6 * steep(20., 55.);
         // Ledges of hard beds, recesses of soft, on slopes: the rock is the one at each
         // point's height, so they follow the beds.
-        let ledges = 0.7 * hardness.clamp(-1.5, 1.5) * steep(25., 50.);
+        let ledges = if rock == Rock::Sediment { 0. } else { 0.7 * hardness.clamp(-1.5, 1.5) * steep(25., 50.) };
         let texture = match rock {
             // Rounded blocks and domes.
             Rock::Granite => 1.2 * stones(CellStyle::Stones, 4., 0x61) + 1.0 * fbm(FractalStyle::Billow, 18., 0.5, 0.5),
@@ -167,6 +251,7 @@ mod tests {
     use crate::na::Vector3;
 
     /// Fields the same everywhere.
+    #[derive(Debug)]
     struct Uniform { sediment: f64, rock: Rock, ice: f64, till: f64, sand: f64, playa: f64 }
 
     impl crate::graph::Fields for Uniform {
@@ -195,6 +280,41 @@ mod tests {
         }).collect();
         let mean = v.iter().sum::<f64>() / v.len() as f64;
         (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / v.len() as f64).sqrt()
+    }
+
+    #[test]
+    fn test_local_bounds_hold_the_detail() {
+        // For every kind of ground and rock, cells from 6 cm to 2 m across, the detail anywhere
+        // in the cell, at any filter its dicing uses, lies within the cell's bound.
+        let noise = SeededNoise::new(4);
+        let steep: Vector3<f64> = Vector3::new(0.6, 0.8, 0.).normalize();
+        let slope = steep.y.acos().to_degrees();
+        let mut grounds: Vec<Uniform> = Rock::ALL.iter().map(|&r| bare(r)).collect();
+        grounds.push(Uniform { sediment: 5., till: 5., ..bare(Rock::Sediment) });
+        grounds.push(Uniform { sediment: 5., sand: 5., ..bare(Rock::Sediment) });
+        grounds.push(Uniform { sediment: 5., playa: 1., ..bare(Rock::Sediment) });
+        grounds.push(Uniform { sediment: 5., ..bare(Rock::Sediment) });
+        grounds.push(Uniform { ice: 3., ..bare(Rock::Granite) });
+        let mut rng = crate::geometry::Pcg32::new(5, 1);
+        let mut worst: f64 = 0.;
+        for f in &grounds {
+            for &cell in &[0.0625, 0.25, 1., 2.] {
+                for _ in 0..20 {
+                    let centre = Vector3::new(rng.next_f64() * 100., rng.next_f64() * 10., rng.next_f64() * 100.);
+                    let c = Context::new(centre, steep, cell).with_fields(Some(f));
+                    let (lo, hi) = local_bound(&c, slope + 5., cell / 2., (-0.5, 0.5), &noise, 3, 1.);
+                    for _ in 0..40 {
+                        let p = centre + Vector3::new((rng.next_f64() - 0.5) * cell, 0., (rng.next_f64() - 0.5) * cell);
+                        let filter = cell * 0.5f64.powi((rng.next_f64() * 9.) as i32);
+                        let v = ground(&Context::new(p, steep, filter).with_fields(Some(f)), &noise, 3, 1.);
+                        assert!(v >= lo - 1e-9 && v <= hi + 1e-9, "{:?} cell {}: {} outside [{}, {}]", f.rock, cell, v, lo, hi);
+                    }
+                    if cell <= 0.0625 && f.sand > 0. { worst = worst.max(hi - lo); }
+                }
+            }
+        }
+        // And on sand, small cells' bounds are centimetres, not metres.
+        assert!(worst < 0.2, "{}", worst);
     }
 
     #[test]

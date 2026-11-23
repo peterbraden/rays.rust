@@ -35,3 +35,14 @@ They are what Terragen calls populations, and what a forest is for trees.
   not the copies: `alpine-closeup.json` strews thousands of boulders from five.
 
 Like a forest, a scatter doesn't draw the surface it stands on: that is an object of its own.
+
+## A landscape's own boulders
+
+A full-scale landscape that draws its own detail (see [displacement](displacement.md),
+"Procedural by default") also strews its own boulders about the camera, without a scatter in
+the scene (`terrain::object::boulders`; `"boulders": false` for none, `true` to have them with
+a displacement graph of the scene's own): fallen blocks on scree below steep ground, erratics in
+patches on till, none on sand, playas, alluvial flats or ice. They are the rock most often bare
+round the camera, in its `rock` material style and shape (granite rounded, sandstone and
+limestone blocky, shale and schist in slabs, basalt angular), out to 30 times the camera's
+height (60 to 300 m).

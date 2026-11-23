@@ -769,6 +769,93 @@ fn procedural_displacement(o: &Value, height: f64, seed: u64) -> (Value, Option<
     (o, Some(graph))
 }
 
+/// The name the landscape's own boulders' material is given (`boulders`).
+pub const BOULDER_MATERIAL: &str = "landscape boulders";
+
+/// The landscape's own boulders, when it draws its own detail (`procedural_displacement`):
+/// a `scatter` about the camera, and its rock material, unless the scene says `"boulders":
+/// false` (or gives a displacement graph of its own, unless `"boulders": true`). Like the
+/// detail they follow what the simulation left (`terrain::detail`):
+///
+/// - fallen blocks on scree, below the cliffs they came from: where the slope is moderate and
+///   sediment lies thinly over rock, thickest at the foot of steep ground;
+/// - erratics and boulder fields on till, in patches (moraines are strewn with boulders the ice
+///   carried, sorted by nothing);
+/// - none on sand, playas, alluvial flats or ice.
+///
+/// They are the rock most often bare about the camera (rays cast down onto the ground in a grid
+/// over the area), in its `rock` material style and shape: granite and gneiss rounded by
+/// weathering, sandstone, limestone and quartzite blocky along their joints and beds, shale and
+/// schist in slabs, basalt in angular columns. They reach as far as they show: 30 times the
+/// camera's height out, from 60 to 300 m.
+pub fn boulders(o: &Value, landscape: &SceneObject) -> Option<(Value, Value)> {
+    use crate::graph::Field;
+    use crate::terrain::geology::Rock;
+    if o.get("scale").is_some() { return None; }
+    let own = matches!(o.get("displacement"), None | Some(Value::Bool(true))) || o["displacement"].as_str() == Some("ground");
+    match o.get("boulders") {
+        Some(Value::Bool(false)) => return None,
+        Some(Value::Bool(true)) => {},
+        _ if !own => return None,
+        _ => {},
+    }
+    let camera = SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.));
+    let down = |x: f64, z: f64, from: f64| landscape.geometry.intersects(&Ray { ro: Vector3::new(x, from, z), rd: -Vector3::y() });
+    let ground = down(camera.x, camera.z, camera.y + 1e4)?;
+    let height = camera.y - ground.point.y;
+    if height > DISPLACEMENT_HEIGHT && o.get("boulders").is_none() { return None; }
+    let reach = (30. * height.abs()).clamp(60., 300.);
+    // The rock most often bare about the camera.
+    let fields = landscape.medium.fields()?;
+    let mut counts = [0usize; 9];
+    for j in 0..12 {
+        for i in 0..12 {
+            let (x, z) = (camera.x + (i as f64 / 11. - 0.5) * 2. * reach, camera.z + (j as f64 / 11. - 0.5) * 2. * reach);
+            if let Some(hit) = down(x, z, camera.y + 1e4)
+                && let Some(r) = fields.field(Field::Rock, &hit.point) {
+                counts[(r.round() as usize).min(8)] += 1;
+            }
+        }
+    }
+    let rock = (1..9).max_by_key(|&k| (counts[k], k)).filter(|&k| counts[k] > 0).map_or(Rock::Granite, Rock::from_index);
+    let (style, angularity) = match rock {
+        Rock::Granite | Rock::Gneiss => ("granite", 0.35),
+        Rock::Sandstone => ("sandstone", 0.75),
+        Rock::Limestone => ("limestone", 0.7),
+        Rock::Quartzite => ("quartzite", 0.8),
+        Rock::Shale | Rock::Schist => ("slate", 0.85),
+        Rock::Basalt => ("basalt", 0.9),
+        Rock::Sediment => ("granite", 0.5),
+    };
+    let seed = o["seed"].as_u64().unwrap_or(0);
+    use serde_json::json;
+    let none_on = |field: &str, from: f64, to: f64| json!({"node": "field", "field": field, "from": from, "to": to});
+    let density = json!({"node": "multiply", "inputs": [
+        {"node": "max", "inputs": [
+            // Fallen blocks on scree, thin sediment below steep ground.
+            {"node": "multiply", "inputs": [
+                {"node": "slope", "from": 18, "to": 30},
+                {"node": "slope", "from": 48, "to": 38},
+                none_on("sediment", 6., 0.3)]},
+            // Boulders on till, in patches.
+            {"node": "multiply", "inputs": [
+                none_on("till", 1., 4.),
+                {"node": "fractal", "scale": 60, "smallest": 10, "amplitude": 0.8},
+                3.]}]},
+        none_on("sand", 2., 0.5),
+        none_on("playa", 0.5, 0.1),
+        none_on("ice", 5., 1.)]});
+    let scatter = json!({
+        "type": "scatter", "seed": seed.wrapping_add(17), "surface": "landscape",
+        "area": {"min": [camera.x - reach, camera.z - reach], "max": [camera.x + reach, camera.z + reach]},
+        "spacing": 3, "density": density,
+        "items": [{"boulder": {"angularity": angularity, "detail": 4}, "variants": 6, "size": [0.15, 1.8],
+                   "sink": 0.2, "tilt": 15, "material": BOULDER_MATERIAL}]});
+    let material = json!({"type": "rock", "preset": style, "seed": seed});
+    say(format!("Landscape: its own boulders of {} within {:.0} m of the camera", style, reach));
+    Some((scatter, material))
+}
+
 /// Write the ground cover's albedo (`Ground::albedo`), seen from straight above, over `half`
 /// metres either side of the site, north up, `width` pixels square, display-encoded, to `path`:
 /// for checking what the ground cover makes of the simulations without rendering.

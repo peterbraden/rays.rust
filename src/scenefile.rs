@@ -830,9 +830,15 @@ impl SceneFile {
                 vec![Arc::new(SceneFile::parse_volume_over(&obj, geometries, fields))]
             } else if obj["type"] == "landscape" {
                 // Kept, as a surface for scatters after it.
-                let x: Vec<Arc<SceneObject>> = SceneFile::parse_object(obj, materials, media, geometries).into_iter().collect();
-                if let Some(first) = x.first() {
+                let mut x: Vec<Arc<SceneObject>> = SceneFile::parse_object(obj.clone(), materials, media, geometries).into_iter().collect();
+                if let Some(first) = x.first().cloned() {
                     landscape = Some(first.clone());
+                    // And the boulders it strews about the camera, if it draws its own detail.
+                    if let Some((scatter, material)) = crate::terrain::object::boulders(&obj, &first) {
+                        let mut with = materials.clone();
+                        with.insert(crate::terrain::object::BOULDER_MATERIAL.into(), material);
+                        x.extend(SceneFile::parse_scatter(&scatter, &with, media, geometries, Some(&first)));
+                    }
                 }
                 x
             } else if Some(i) == deck && !hills.is_empty() {

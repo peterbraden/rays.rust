@@ -650,11 +650,16 @@ impl Graph {
     /// Bounds on the graph's value near `c` (within a few metres), on ground no steeper than
     /// `slope` degrees: tighter than `range` where a node knows its local bounds (`ground`,
     /// from the fields there); `range` otherwise.
-    pub fn range_near(&self, c: &Context, slope: f64) -> (f64, f64) {
+    ///
+    /// For a cell `half` metres across either way whose base rises and falls by `heights` about
+    /// `c`, the `ground` node bounds itself by its value at `c` and how far it can change
+    /// (`terrain::detail::local_bound`) where that is tighter.
+    pub fn range_near(&self, c: &Context, slope: f64, half: f64, heights: (f64, f64)) -> (f64, f64) {
         match &self.root.op {
-            Op::Ground { amplitude, .. } => {
+            Op::Ground { noise, seed, amplitude } => {
                 let b = crate::terrain::detail::bound(c, slope, *amplitude).min(self.range.1);
-                (-b, b)
+                let (lo, hi) = crate::terrain::detail::local_bound(c, slope, half, heights, noise, *seed, *amplitude);
+                (lo.max(-b), hi.min(b))
             },
             _ => self.range,
         }

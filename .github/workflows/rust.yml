@@ -82,8 +82,12 @@ jobs:
       # Information only (the step above is the test): what the runner is, the tests that
       # fail on the one kind at the native width, as built and through the WGSL, and the
       # device against the shader run on the CPU for those tests' scenes with one thing taken
-      # out at a time (gpu::tests::measure_device_against_shader).
+      # out at a time (gpu::tests::measure_device_against_shader). Bounded, and not a failure
+      # if it runs out: once it hung for six hours (the job's limit) on a runner whose kind
+      # and cause aren't known, where every run before had taken minutes.
       if: always()
+      timeout-minutes: 20
+      continue-on-error: true
       run: |
         unset LP_NATIVE_VECTOR_WIDTH
         grep -m1 "model name" /proc/cpuinfo

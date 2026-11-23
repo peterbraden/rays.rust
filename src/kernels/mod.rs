@@ -111,6 +111,26 @@ pub(crate) fn media_records(tables: &mut Vec<f32>, media: &[crate::volume::FlatM
             tables.extend(record);
             (pathtrace::MEDIUM_BENARD, f32::from_bits(at), *radius as f32)
         },
+        FieldExport::Cirrus { record, radius } => {
+            let at = tables.len() as u32;
+            tables.extend(record);
+            (pathtrace::MEDIUM_CIRRUS, f32::from_bits(at), *radius as f32)
+        },
+        FieldExport::Rain { record, radius } => {
+            let at = tables.len() as u32;
+            tables.extend(record);
+            (pathtrace::MEDIUM_RAIN, f32::from_bits(at), *radius as f32)
+        },
+        FieldExport::Mammatus { record, radius } => {
+            let at = tables.len() as u32;
+            tables.extend(record);
+            (pathtrace::MEDIUM_MAMMATUS, f32::from_bits(at), *radius as f32)
+        },
+        FieldExport::Cumulonimbus { record, radius } => {
+            let at = tables.len() as u32;
+            tables.extend(record);
+            (pathtrace::MEDIUM_CUMULONIMBUS, f32::from_bits(at), *radius as f32)
+        },
     }).collect();
     let first = tables.len() as u32;
     for (m, (kind, density, radius)) in media.iter().zip(fields) {
@@ -130,6 +150,11 @@ pub(crate) fn media_records(tables: &mut Vec<f32>, media: &[crate::volume::FlatM
         tables.extend([scale, from, m.mean_cosine.0 as f32, m.mean_cosine.1 as f32]);
         let oz = m.oz.map_or([0.; 4], |o| [o.octaves as f32, o.a as f32, o.b as f32, o.c as f32]);
         tables.extend(oz);
+        tables.push(m.sun_probes as u32 as f32);
+    }
+    // (Every kind's loader reads from each record: `pathtrace::LAYER_HEADER_MOST`.)
+    if !media.is_empty() {
+        tables.extend(std::iter::repeat_n(0., pathtrace::LAYER_HEADER_MOST as usize));
     }
     first
 }
@@ -369,11 +394,9 @@ impl Buffers {
         let kernels = host_kernels(s, flat);
         let hosts = kernels.iter().filter(|k| k.is_none()).count() + host_shapes.len();
         if !flat.media.is_empty() {
-            // The host's materials would trace their own shadow rays through the media, with
-            // none of the path's state there; and a medium's vertex has no kernel for moonlight.
-            if hosts > 0 {
-                return Err(format!("participating media beside {} objects whose materials the renderer's own code shades", hosts));
-            }
+            // (The host's materials trace their own shadow rays through the media, by the
+            // scene's own code, with the path's state there: `host::volume_state`.) A medium's
+            // vertex has no kernel for moonlight.
             if s.moonlight.is_some() {
                 return Err("participating media lit by a moon".into());
             }
@@ -543,6 +566,10 @@ impl Buffers {
 
         let mut flags = 0u32;
         if aerial_off != pathtrace::NO_AIR { flags |= pathtrace::FLAG_AERIAL; }
+        // Crepuscular rays: the sun's shadows in the air the camera looks through.
+        if aerial_off != pathtrace::NO_AIR && s.sun.is_some() && s.atmosphere.as_ref().is_some_and(|a| a.crepuscular_rays) {
+            flags |= pathtrace::FLAG_CREPUSCULAR;
+        }
         if s.render.sample_lights { flags |= pathtrace::FLAG_SAMPLE_LIGHTS; }
         if s.environment.is_some() { flags |= pathtrace::FLAG_SAMPLE_ENV; }
         let (sun_dir, sun_irr) = match &s.sun {
@@ -569,7 +596,11 @@ impl Buffers {
             sun_irr,
             seed: UVec4::new(s.render.seed as u32, rr, 0, 1),
             air: UVec4::new(sky_off, aerial_off, sun_off, space_off),
-            media: UVec4::new(media, flat.media.len() as u32, 0, 0),
+            // (A glitter probe finds the sun's glitter on water the kernels shade: `host_kernels`.)
+            media: UVec4::new(media, flat.media.len() as u32, match (&s.sea, sea, kernels.iter().any(|k| k.is_some())) {
+                (Some(glitter), Some(_), true) => (glitter.roughness as f32).to_bits(),
+                _ => 0,
+            }, 0),
             origin: v4(origin, 0.),
         };
         Ok(Buffers { params, prims: pathtrace::pack_prims(&prims), prim_records: prims, nodes, materials, lights, tables, hosts: hosts > 0, host_shapes, unported, origin: *origin })

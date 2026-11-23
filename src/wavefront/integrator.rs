@@ -85,6 +85,8 @@ struct Path {
     directional: bool,
     hit: Option<Hit>,
     done: bool,
+    /// Its scatterings in media and the scale they left on densities (`HostVertex::volume`).
+    volume: (u32, f64),
 }
 
 impl Path {
@@ -126,6 +128,35 @@ impl pathtrace::HostShapes for Kernels<'_> {
     fn occluded(&self, ro: Vec3, rd: Vec3, tmax: f32) -> bool {
         let r = host_ray(ro, rd, &self.buffers.origin);
         self.buffers.host_shapes.iter().any(|&k| self.flat.shapes[k].0.geometry.occludes(&r, crate::wavefront::flat::MIN_SHAPE, tmax as f64))
+    }
+}
+
+/// The CPU's finder: the kernels' surfaces, the host's shapes by their own code, then the
+/// media as far as what those found.
+struct WithHost<'a, M: pathtrace::Media> {
+    kernels: &'a Kernels<'a>,
+    host_shapes: &'a [usize],
+    listed: usize,
+    media: std::marker::PhantomData<M>,
+}
+
+impl<M: pathtrace::Media> pathtrace::Finder for WithHost<'_, M> {
+    const MEDIA: bool = M::ON;
+
+    fn find(&self, scene: &pathtrace::Scene, p: &PathState) -> PathState {
+        let mut found = pathtrace::intersect_surface(scene, p);
+        if !self.host_shapes.is_empty() {
+            let r = host_ray(p.o.truncate(), p.d.truncate(), &self.kernels.buffers.origin);
+            let mut reach = if found.state.z == u32::MAX { f64::INFINITY } else { found.hit.x as f64 };
+            for &shape in self.host_shapes {
+                if let Some(x) = self.kernels.flat.shapes[shape].0.geometry.intersects_range(&r, crate::wavefront::flat::MIN_SHAPE, reach) {
+                    reach = x.dist;
+                    found.state.z = (self.listed + shape) as u32;
+                    found.hit = Vec4::new(x.dist as f32, 0., 0., 1.);
+                }
+            }
+        }
+        pathtrace::intersect_media::<M>(scene, &found)
     }
 }
 
@@ -218,27 +249,17 @@ impl<'a> Kernels<'a> {
         while !paths.is_empty() {
             stats.round(round, paths.len() as u64);
             round += 1;
-            // 1. Intersect: the kernels' surfaces, the host's shapes, then the media.
+            // 1. Intersect: the kernels' surfaces, the host's shapes, then the media; a
+            // path's own ray and those traced for it (`pathtrace::find_all`).
+            let finder = WithHost::<M> { kernels: self, host_shapes, listed, media: std::marker::PhantomData };
             for (_, p) in paths.iter_mut() {
-                let mut found = pathtrace::intersect_surface(&scene, p);
-                if !host_shapes.is_empty() {
-                    let r = host_ray(p.o.truncate(), p.d.truncate(), &self.buffers.origin);
-                    let mut reach = if found.state.z == u32::MAX { f64::INFINITY } else { found.hit.x as f64 };
-                    for &shape in host_shapes {
-                        if let Some(x) = flat.shapes[shape].0.geometry.intersects_range(&r, crate::wavefront::flat::MIN_SHAPE, reach) {
-                            reach = x.dist;
-                            found.state.z = (listed + shape) as u32;
-                            found.hit = Vec4::new(x.dist as f32, 0., 0., 1.);
-                        }
-                    }
-                }
-                *p = pathtrace::intersect_media::<M>(&scene, &found);
+                *p = pathtrace::find_all(&scene, p, &finder);
             }
             lap(&mut stats, Stage::Intersect, paths.len());
             // 2. Shade.
             queries.clear();
-            for (i, (_, p)) in paths.iter_mut().enumerate() {
-                let (next, q0, q1) = pathtrace::shade::<M>(&scene, p);
+            for (i, ((_, pixel, _), p)) in paths.iter_mut().enumerate() {
+                let (next, q0, q1) = pathtrace::shade::<M>(&scene, p, *pixel);
                 *p = next;
                 if q0.weight.truncate().length_squared() > 0. || q1.weight.truncate().length_squared() > 0. {
                     queries.push((i, q0, q1));
@@ -327,6 +348,10 @@ fn host_bounce(p: &mut Path, s: &Scene, o: &std::sync::Arc<crate::sceneobject::S
         p.beta = p.beta * w;
     }
     crate::material::ggx::set_scattered(p.scattered);
+    // Its shadow rays cross the media as the path's segments do (`Volume::segment_scale`), and
+    // leave a vertex (`trace::trace_sample`).
+    crate::volume::resume_path(p.volume.0, p.volume.1, p.scattered);
+    crate::volume::at_vertex();
     crate::geometry::begin_sampler(crate::sampler::SampleState::Sobol(p.sampler.clone()));
     let interaction = o.medium.material_at(hit.point).scatter(&p.ray, &shaded, s);
     if let Some(crate::sampler::SampleState::Sobol(sampler)) = crate::geometry::take_sampler() {
@@ -369,6 +394,9 @@ pub struct HostVertex {
     pub directional: bool,
     pub prev_pdf: f64,
     pub scattered: bool,
+    /// How many times the path has scattered in media, and the factor that left on their
+    /// densities for its segments (`volume::resume_path`); (0, 1) before any.
+    pub volume: (u32, f64),
     pub done: bool,
 }
 
@@ -387,12 +415,12 @@ pub fn host_vertex(s: &Scene, flat: &FlatScene, v: &mut HostVertex, hit: &Hit, s
     };
     let mut p = Path {
         pixel: 0, ray: v.ray, beta: v.beta, l: v.l, weight: 1., depth: v.depth, specular: v.specular, prev_pdf: v.prev_pdf, sampler,
-        scattered: v.scattered, lights_counted: v.lights_counted, directional: v.directional, hit: Some(*hit), done: false,
+        scattered: v.scattered, lights_counted: v.lights_counted, directional: v.directional, hit: Some(*hit), done: false, volume: v.volume,
     };
     host_bounce(&mut p, s, o, hit);
     *v = HostVertex {
         ray: p.ray, beta: p.beta, l: p.l, depth: p.depth, specular: p.specular, lights_counted: p.lights_counted, directional: p.directional, prev_pdf: p.prev_pdf,
-        scattered: p.scattered, done: p.done,
+        scattered: p.scattered, done: p.done, volume: p.volume,
     };
 }
 
@@ -681,6 +709,112 @@ pub mod tests {
         }
     }
 
+    /// Media beside vertices the host shades (a layered floor, a torus of its own code): the
+    /// host's shadow rays cross the medium by the scene's own code with the path's state
+    /// there (`kernels::host::volume_state`: truncated once the path has left a vertex, and as
+    /// its last scattering in the medium left it), so the picture is the path tracer's, with
+    /// delta-M truncation alone, with the similarity relations and with the Oz approximation.
+    #[test]
+    fn test_media_beside_host_vertices_agree_with_the_path_tracer() {
+        for density in [r#""density": 1.5"#, r#""density": 6, "similarity_after": 2"#, r#""density": 6, "oz": true"#] {
+            let s = SceneFile::from_string(format!(r#"{{
+                "width": 24, "height": 16, "background": [0.2, 0.25, 0.3], "max_depth": 24, "path_termination": "russian_roulette",
+                "sun": {{ "direction": [-1, 2, -1], "intensity": 2 }},
+                "lights": [ {{ "location": [1, 3, -1], "intensity": 4 }} ],
+                "camera": {{ "location": [0, 1.5, -5], "lookat": [0, 0.6, 0], "up": [0, 1, 0], "angle": 0.6 }},
+                "materials": {{
+                    "F": {{ "type": "coated_diffuse", "albedo": [0.6, 0.6, 0.6], "roughness": 0.3 }},
+                    "M": {{ "type": "lambertian", "albedo": [0.7, 0.5, 0.3] }},
+                    "E": {{ "type": "diffuse-light", "color": [1, 0.9, 0.8], "intensity": 8 }}
+                }},
+                "objects": [
+                    {{ "type": "quad", "points": [[-6, 0, -6], [-6, 0, 6], [6, 0, -6], [6, 0, 6]], "material": "F" }},
+                    {{ "type": "torus", "location": [1.5, 0.3, 0], "major": 0.5, "minor": 0.2, "material": "M" }},
+                    {{ "type": "sphere", "location": [-0.3, 1.6, -0.2], "radius": 0.25, "material": "M" }},
+                    {{ "type": "quad", "points": [[-0.5, 2.5, 0.5], [0.5, 2.5, 0.5], [-0.5, 2.5, 1.5], [0.5, 2.5, 1.5]], "material": "E" }},
+                    {{ "type": "volume", "min": [-1.2, 0.2, -0.8], "max": [0.8, 1.3, 0.8], {density}, "albedo": [0.9, 0.8, 0.7], "g": 0.8 }}
+                ]
+            }}"#, density = density));
+            let flat = FlatScene::build(&s).unwrap();
+            assert!(flat.media.len() == 1 && !flat.hosts.is_empty() && !flat.shapes.is_empty());
+            let n = 512;
+            let (_, _, stats) = Kernels::new(&s, &flat).unwrap().pass(0);
+            assert!(stats.stage(Stage::Host).items > 0);
+            let (w, h) = (s.image.width, s.image.height);
+            let (a, b) = (tiles(&mean_image(&s, n), w, h, 3, 2), tiles(&path_image(&s, n), w, h, 3, 2));
+            for t in 0..6 {
+                for ch in 0..3 {
+                    assert!((a[t][ch] - b[t][ch]).abs() < 0.05 * b[t][ch] + 1e-3, "{}: tile {} channel {}: wavefront {} vs path {}", density, t, ch, a[t][ch], b[t][ch]);
+                }
+            }
+        }
+    }
+
+    /// A cloud over a sea, lit from above by the sun and from below by its glitter: the
+    /// kernels' vertices in the cloud send sun probes and glitter probes
+    /// (`pathtrace::send_probe`, `send_glitter_probe`) as the path tracer's do, and share the
+    /// light with them, so the picture is the path tracer's, tile by tile; with the phase
+    /// function whole, and with the Oz approximation, under which only the glitter is probed.
+    #[test]
+    fn test_probes_agree_with_the_path_tracer() {
+        for scattering in [r#""density": 0.6"#, r#""density": 0.6, "oz": true"#] {
+            let s = SceneFile::from_string(format!(r#"{{
+                "width": 24, "height": 16, "background": [0.3, 0.4, 0.6], "max_depth": 24, "path_termination": "russian_roulette",
+                "sun": {{ "direction": [-0.4, 1, 0.6], "intensity": 3 }},
+                "camera": {{ "location": [0, 1.2, -14], "lookat": [0, 2.6, 0], "up": [0, 1, 0], "angle": 0.8 }},
+                "objects": [
+                    {{ "type": "ocean", "wind": [7, 2], "choppiness": 0, "whitecaps": 0, "planet_radius": 0, "detail_center": [0, -6], "detail_distance": 30 }},
+                    {{ "type": "volume", "min": [-9, 3, -6], "max": [9, 5, 8], {scattering}, "albedo": [0.95, 0.95, 0.95], "g": 0.85 }}
+                ]
+            }}"#, scattering = scattering));
+            let flat = FlatScene::build(&s).unwrap();
+            assert!(flat.media.len() == 1 && flat.media[0].sun_probes && s.sea.is_some());
+            let buffers = crate::kernels::Buffers::build(&s, &flat).unwrap();
+            assert!(f32::from_bits(buffers.params.media.z) > 0., "the kernels' water, for glitter probes to find");
+            let n = 768;
+            let (w, h) = (s.image.width, s.image.height);
+            let (a, b) = (tiles(&mean_image(&s, n), w, h, 3, 2), tiles(&path_image(&s, n), w, h, 3, 2));
+            for t in 0..6 {
+                for ch in 0..3 {
+                    assert!((a[t][ch] - b[t][ch]).abs() < 0.04 * b[t][ch] + 1e-3, "{}: tile {} channel {}: wavefront {} vs path {}", scattering, t, ch, a[t][ch], b[t][ch]);
+                }
+            }
+        }
+    }
+
+    /// Crepuscular rays (`pathtrace::crepuscular_samples`): under a slab that shadows the air, with
+    /// a gap the sun shines through, the sky and the haze before the ground lose what the
+    /// path tracer takes from them (`SkyMaterial::shadowed_loss`), tile by tile; and they lose
+    /// something, or this tests nothing.
+    #[test]
+    fn test_crepuscular_rays_agree_with_the_path_tracer() {
+        let scene = |rays: bool| SceneFile::from_string(format!(r#"{{
+            "width": 24, "height": 16, "max_depth": 3, "sun": {{ "intensity": 3 }},
+            "camera": {{ "location": [0, 300, -6000], "lookat": [0, 1500, 0], "up": [0, 1, 0], "angle": 0.9, "aperture": 0 }},
+            "materials": {{ "F": {{ "type": "lambertian", "albedo": [0.3, 0.3, 0.3] }} }},
+            "objects": [
+                {{ "type": "skysphere", "sun_direction": [0.3, 0.5, 1], "crepuscular_rays": {rays} }},
+                {{ "type": "quad", "points": [[-40000, 0, -40000], [-40000, 0, 40000], [40000, 0, -40000], [40000, 0, 40000]], "material": "F" }},
+                {{ "type": "box", "min": [-30000, 4000, -30000], "max": [-600, 4200, 30000], "material": "F" }},
+                {{ "type": "box", "min": [600, 4000, -30000], "max": [30000, 4200, 30000], "material": "F" }}
+            ]
+        }}"#, rays = rays));
+        let (s, plain) = (scene(true), scene(false));
+        assert!(s.sun.is_some() && s.atmosphere.as_ref().unwrap().crepuscular_rays);
+        let (w, h) = (s.image.width, s.image.height);
+        let n = 256;
+        let (a, b) = (tiles(&mean_image(&s, n), w, h, 3, 2), tiles(&path_image(&s, n), w, h, 3, 2));
+        let without = tiles(&mean_image(&plain, n), w, h, 3, 2);
+        let mut lost = 0.;
+        for t in 0..6 {
+            for ch in 0..3 {
+                assert!((a[t][ch] - b[t][ch]).abs() < 0.04 * b[t][ch] + 1e-4, "tile {} channel {}: wavefront {} vs path {}", t, ch, a[t][ch], b[t][ch]);
+            }
+            lost += (without[t][2] - a[t][2]) / without[t][2] / 6.;
+        }
+        assert!(lost > 0.03, "the shadowed air takes {} of the picture's blue", lost);
+    }
+
     /// Shapes that aren't primitives (a torus, a cone) are kept whole and intersected by their
     /// own code, among primitives, whether their materials are the stages' or their own; they
     /// shadow and are shadowed as the rest.
@@ -740,6 +874,78 @@ pub mod tests {
                 { "type": "quad", "points": [[-0.5, 2.5, 0.5], [0.5, 2.5, 0.5], [-0.5, 2.5, 1.5], [0.5, 2.5, 1.5]], "material": "E" }
             ]
         }"#.to_string())
+    }
+
+    /// The kernels' Sobol' points are the renderer's (`sobol`), computed without its tables;
+    /// and a pixel's samples of a decision are stratified: of 64, one in each 64th of each of
+    /// the first two coordinates, as a (0, 2)-sequence's are, however scrambled.
+    #[test]
+    fn test_the_kernels_sobol_points_are_the_renderers() {
+        let mut rng = crate::geometry::Pcg32::new(3, 5);
+        for i in 0..20_000u32 {
+            let index = if i < 4096 { i } else { rng.next_u32() };
+            let x = pathtrace::sobol4(index);
+            for (d, x) in [x.x, x.y, x.z, x.w].into_iter().enumerate() {
+                assert_eq!(x, crate::sobol::sobol(index, d), "point {} dimension {}", index, d);
+            }
+            let seed = rng.next_u32();
+            assert_eq!(pathtrace::owen_scramble(index, seed), crate::sobol::owen_scramble(index, seed));
+        }
+        let s = SceneFile::from_string(r#"{ "width": 4, "height": 4, "background": [0, 0, 0],
+            "camera": { "location": [0, 0, -5], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.6 },
+            "materials": { "F": { "type": "lambertian", "albedo": [0.6, 0.6, 0.6] } },
+            "objects": [ { "type": "sphere", "location": [0, 0, 5], "radius": 1, "material": "F" } ] }"#.to_string());
+        let flat = FlatScene::build(&s).unwrap();
+        let buffers = crate::kernels::Buffers::build(&s, &flat).unwrap();
+        let scene = buffers.scene(None);
+        for (pixel, depth, which) in [(0, 0, pathtrace::SOBOL_SCATTER), (7, 2, pathtrace::SOBOL_LIGHT), (11, 5, pathtrace::SOBOL_SKY)] {
+            let (mut xs, mut ys) = ([false; 64], [false; 64]);
+            for sample in 0..64 {
+                let u = pathtrace::decide(&scene, pixel, sample, depth, which, &mut 0);
+                assert!((0. ..1.).contains(&u.x) && (0. ..1.).contains(&u.y) && (0. ..1.).contains(&u.z) && (0. ..1.).contains(&u.w));
+                let (x, y) = ((u.x * 64.) as usize, (u.y * 64.) as usize);
+                assert!(!xs[x] && !ys[y], "pixel {} depth {}: two samples in a stratum", pixel, depth);
+                (xs[x], ys[y]) = (true, true);
+            }
+        }
+    }
+
+    /// A checkerboard's squares are where the world has them, not about the camera (whose
+    /// frame the kernels compute in): from a camera an odd number of squares from the origin,
+    /// each tile of the picture is the path tracer's.
+    #[test]
+    fn test_a_checkerboard_is_laid_out_in_the_world() {
+        let s = SceneFile::from_string(r#"{
+            "width": 24, "height": 16, "background": [0.5, 0.5, 0.5], "max_depth": 3,
+            "camera": { "location": [7, 9, -15], "lookat": [7, 0, -14.9], "up": [0, 0, 1], "angle": 0.5, "aperture": 0 },
+            "materials": {
+                "A": { "type": "lambertian", "albedo": [0.9, 0.9, 0.9] },
+                "B": { "type": "lambertian", "albedo": [0.05, 0.05, 0.05] }
+            },
+            "media": { "CHECKS": { "type": "checkered-y-plane", "m1": "A", "m2": "B", "xsize": 5, "zsize": 5 } },
+            "objects": [ { "type": "checkeredplane", "y": 0, "medium": "CHECKS" } ]
+        }"#.to_string());
+        let n = 256;
+        let kernels = mean_image(&s, n);
+        let (w, h) = (s.image.width, s.image.height);
+        let path: Vec<Color> = (0..w * h).map(|index| {
+            let (x, y) = (index % w, index / w);
+            let mut sum = Color::black();
+            for k in 0..n {
+                crate::geometry::seed_rand(7, (k * w * h + index) as u64);
+                let (u, v) = (crate::geometry::rand(), crate::geometry::rand());
+                let (ray, weight) = s.camera.get_ray_weighted(x as f64 / w as f64, y as f64 / h as f64, u / w as f64, v / h as f64).unwrap();
+                sum = sum + crate::trace::trace(&ray, 0, &s).1 * weight;
+            }
+            sum / n as f64
+        }).collect();
+        let (a, b) = (tiles(&kernels, w, h, 6, 4), tiles(&path, w, h, 6, 4));
+        // (The picture has both kinds of square, or it tests nothing.)
+        let brightness: Vec<f64> = b.iter().map(|t| t[0]).collect();
+        assert!(brightness.iter().cloned().fold(0., f64::max) > 3. * brightness.iter().cloned().fold(f64::INFINITY, f64::min), "{:?}", brightness);
+        for t in 0..a.len() {
+            assert!((a[t][0] - b[t][0]).abs() < 0.1 * b[t][0] + 1e-3, "tile {}: the kernels {} vs the path tracer {}", t, a[t][0], b[t][0]);
+        }
     }
 
     /// The wavefront integrator and the recursive tracer estimate the same image.

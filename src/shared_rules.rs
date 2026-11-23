@@ -117,7 +117,7 @@ mod tests {
     /// Functions only the renderer calls, on purpose: it works these out once for a medium's
     /// record, which the kernels read. Not known to compile for the GPU; a kernel that comes
     /// to call one takes it off this list.
-    const HOST_ONLY: [&str; 3] = ["forward_peak", "truncated_extinction", "truncated_albedo"];
+    const HOST_ONLY: [&str; 4] = ["forward_peak", "truncated_extinction", "truncated_albedo", "maturity"];
 
     #[test]
     fn test_shared_code_is_compiled_for_the_gpu() {

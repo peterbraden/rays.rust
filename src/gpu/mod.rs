@@ -1336,7 +1336,7 @@ mod tests {
                     slots += 1;
                     if p.state.y & pathtrace::PATH_ACTIVE != 0 {
                         live += 1;
-                        p = pathtrace::bounce(&shader, &p).0;
+                        p = pathtrace::bounce(&shader, &p, index as u32).0;
                     }
                 }
             }
@@ -1509,6 +1509,133 @@ mod tests {
         let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
         println!("on the device: within {:.1e} of the shader's functions on the CPU", worst);
         assert!(worst < 1e-3, "the device's density differs from the shader's on the CPU by {}", worst);
+    }
+
+    /// Cirrus likewise (`shared::cirrus`): the shader's density at f32 is the renderer's at
+    /// f64 but for the rounding, and the device computes what the shader's functions do here.
+    #[test]
+    fn test_cirrus_is_the_renderers_on_the_device() {
+        use crate::procedural::hogan_kew_cirrus::{CirrusField, CirrusGenus, HoganKewCirrus};
+        for genus in [CirrusGenus::Cirrus, CirrusGenus::Cirrocumulus] {
+            let mut layer = HoganKewCirrus::new(CirrusField { seed: 5, ..CirrusField::new(genus) });
+            (layer.time, layer.evolution_period) = (300., 4000.);
+            let record = layer.export();
+            let mut rng = crate::geometry::Pcg32::new(5, 0);
+            let mut next = move || rng.next_f64();
+            let n = 4096;
+            let (lo, hi) = (layer.base - 50., layer.top + 50.);
+            let points: Vec<Vec4> = (0..n).flat_map(|_| [Vec4::new(
+                (next() * 40000. - 20000.) as f32, (lo + next() * (hi - lo)) as f32, (next() * 40000. - 20000.) as f32, 0.), Vec4::ZERO]).collect();
+            let exact: Vec<f64> = points.chunks(2).map(|q| layer.fraction(&Vector3::new(q[0].x as f64, q[0].y as f64, q[0].z as f64))).collect();
+            let here: Vec<f32> = points.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], pathtrace::PROBE_CIRRUS)).collect();
+            let cloudy = exact.iter().filter(|e| **e > 0.).count();
+            let differences: Vec<f64> = here.iter().zip(&exact).map(|(f, e)| (*f as f64 - e).abs()).collect();
+            let (worst, mean) = (differences.iter().cloned().fold(0., f64::max), differences.iter().sum::<f64>() / n as f64);
+            println!("{} of {} points in cloud; f32 within {:.1e} of the renderer's f64 (mean {:.1e})", cloudy, n, worst, mean);
+            assert!(cloudy > n / 40, "{} of {} points in cloud", cloudy, n);
+            assert!(worst < 2e-2 && mean < 1e-4, "the shader's density differs from the renderer's by {} (mean {})", worst, mean);
+
+            let Some(on_device) = probe(&record, &points, pathtrace::PROBE_CIRRUS) else { return };
+            // (The flow's curl is a difference of noise a thousandth of a cell apart: what the
+            // device rounds otherwise there moves the ice's source by decimetres, and the
+            // density at a fibre's edge with it. So the mean, as against f64.)
+            let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
+            let mean = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).sum::<f32>() / n as f32;
+            println!("on the device: within {:.1e} of the shader's functions on the CPU (mean {:.1e})", worst, mean);
+            assert!(worst < 2e-2 && mean < 1e-4, "the device's density differs from the shader's on the CPU by {} (mean {})", worst, mean);
+        }
+    }
+
+    /// Precipitation likewise (`shared::rain`): rain, and snow melting to rain as it
+    /// evaporates.
+    #[test]
+    fn test_precipitation_is_the_renderers_on_the_device() {
+        use crate::procedural::precipitation::{Kind, Precipitation};
+        use crate::volume::DensityField;
+        for snow in [false, true] {
+            let mut layer = Precipitation::new(2000., 5);
+            if snow {
+                (layer.kind, layer.melting_level, layer.fall_depth, layer.base_variation, layer.shear) = (Kind::Snow, Some(900.), 2500., 200., 1.5);
+            }
+            let record = layer.export();
+            let peak = layer.peak_extinction();
+            let mut rng = crate::geometry::Pcg32::new(5, 0);
+            let mut next = move || rng.next_f64();
+            let n = 4096;
+            let points: Vec<Vec4> = (0..n).flat_map(|_| [Vec4::new(
+                (next() * 40000. - 20000.) as f32, (next() * 2100. - 50.) as f32, (next() * 40000. - 20000.) as f32, 0.), Vec4::ZERO]).collect();
+            let exact: Vec<f64> = points.chunks(2).map(|q| layer.density(&Vector3::new(q[0].x as f64, q[0].y as f64, q[0].z as f64)) / peak).collect();
+            let here: Vec<f32> = points.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], pathtrace::PROBE_RAIN)).collect();
+            let wet = exact.iter().filter(|e| **e > 0.).count();
+            let differences: Vec<f64> = here.iter().zip(&exact).map(|(f, e)| (*f as f64 - e).abs()).collect();
+            let (worst, mean) = (differences.iter().cloned().fold(0., f64::max), differences.iter().sum::<f64>() / n as f64);
+            println!("{} of {} points in it; f32 within {:.1e} of the renderer's f64 (mean {:.1e})", wet, n, worst, mean);
+            assert!(wet > n / 40, "{} of {} points in precipitation", wet, n);
+            assert!(worst < 2e-2 && mean < 1e-4, "the shader's density differs from the renderer's by {} (mean {})", worst, mean);
+
+            let Some(on_device) = probe(&record, &points, pathtrace::PROBE_RAIN) else { return };
+            let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
+            let mean = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).sum::<f32>() / n as f32;
+            println!("on the device: within {:.1e} of the shader's functions on the CPU (mean {:.1e})", worst, mean);
+            assert!(worst < 2e-2 && mean < 1e-4, "the device's density differs from the shader's on the CPU by {} (mean {})", worst, mean);
+        }
+    }
+
+    /// A cumulonimbus likewise (`shared::cumulonimbus`).
+    #[test]
+    fn test_cumulonimbus_is_the_renderers_on_the_device() {
+        use crate::procedural::cumulonimbus::Cumulonimbus;
+        let layer = Cumulonimbus::new(5);
+        let record = layer.export();
+        let mut rng = crate::geometry::Pcg32::new(5, 0);
+        let mut next = move || rng.next_f64();
+        let n = 8192;
+        // About the main tower and the anvil's near end.
+        let points: Vec<Vec4> = (0..n).flat_map(|_| [Vec4::new(
+            (next() * 16000. - 5000.) as f32, (layer.bottom() + next() * (layer.top() - layer.bottom())) as f32, (next() * 10000. - 5000.) as f32, 0.), Vec4::ZERO]).collect();
+        let exact: Vec<f64> = points.chunks(2).map(|q| layer.fraction(&Vector3::new(q[0].x as f64, q[0].y as f64, q[0].z as f64)).0).collect();
+        let here: Vec<f32> = points.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], pathtrace::PROBE_CUMULONIMBUS)).collect();
+        let cloudy = exact.iter().filter(|e| **e > 0.).count();
+        let differences: Vec<f64> = here.iter().zip(&exact).map(|(f, e)| (*f as f64 - e).abs()).collect();
+        let (worst, mean) = (differences.iter().cloned().fold(0., f64::max), differences.iter().sum::<f64>() / n as f64);
+        println!("{} of {} points in cloud; f32 within {:.1e} of the renderer's f64 (mean {:.1e})", cloudy, n, worst, mean);
+        assert!(cloudy > n / 40, "{} of {} points in cloud", cloudy, n);
+        assert!(worst < 5e-2 && mean < 2e-4, "the shader's density differs from the renderer's by {} (mean {})", worst, mean);
+
+        let Some(on_device) = probe(&record, &points, pathtrace::PROBE_CUMULONIMBUS) else { return };
+        let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
+        let mean = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).sum::<f32>() / n as f32;
+        println!("on the device: within {:.1e} of the shader's functions on the CPU (mean {:.1e})", worst, mean);
+        assert!(worst < 5e-2 && mean < 2e-4, "the device's density differs from the shader's on the CPU by {} (mean {})", worst, mean);
+    }
+
+    /// Mammatus likewise (`shared::mammatus`).
+    #[test]
+    fn test_mammatus_is_the_renderers_on_the_device() {
+        use crate::procedural::mammatus::Mammatus;
+        let mut layer = Mammatus::new(5);
+        (layer.base_variation, layer.sag, layer.base_softness, layer.top_variation) = (300., 400., 200., 150.);
+        let record = layer.export();
+        let mut rng = crate::geometry::Pcg32::new(5, 0);
+        let mut next = move || rng.next_f64();
+        let n = 4096;
+        let (lo, hi) = (layer.bottom() - 50., layer.base + 600.);
+        let points: Vec<Vec4> = (0..n).flat_map(|_| [Vec4::new(
+            (next() * 40000. - 35000.) as f32, (lo + next() * (hi - lo)) as f32, (next() * 40000. - 20000.) as f32, 0.), Vec4::ZERO]).collect();
+        let exact: Vec<f64> = points.chunks(2).map(|q| layer.fraction(&Vector3::new(q[0].x as f64, q[0].y as f64, q[0].z as f64))).collect();
+        let here: Vec<f32> = points.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], pathtrace::PROBE_MAMMATUS)).collect();
+        let cloudy = exact.iter().filter(|e| **e > 0.).count();
+        let differences: Vec<f64> = here.iter().zip(&exact).map(|(f, e)| (*f as f64 - e).abs()).collect();
+        let (worst, mean) = (differences.iter().cloned().fold(0., f64::max), differences.iter().sum::<f64>() / n as f64);
+        println!("{} of {} points in cloud; f32 within {:.1e} of the renderer's f64 (mean {:.1e})", cloudy, n, worst, mean);
+        assert!(cloudy > n / 40, "{} of {} points in cloud", cloudy, n);
+        assert!(worst < 5e-2 && mean < 2e-4, "the shader's density differs from the renderer's by {} (mean {})", worst, mean);
+
+        let Some(on_device) = probe(&record, &points, pathtrace::PROBE_MAMMATUS) else { return };
+        let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
+        let mean = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).sum::<f32>() / n as f32;
+        println!("on the device: within {:.1e} of the shader's functions on the CPU (mean {:.1e})", worst, mean);
+        assert!(worst < 5e-2 && mean < 2e-4, "the device's density differs from the shader's on the CPU by {} (mean {})", worst, mean);
     }
 
     /// Light through a cloud is one walk (`shared::media::ratio_track` over the shared

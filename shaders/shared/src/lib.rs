@@ -17,7 +17,7 @@
 //!   naga take (the renderer's CLAUDE.md lists what they don't).
 //!
 //! So far: Perlin's noise, the walks through a medium (`media`), phase functions (`phase`),
-//! the Nubis clouds' density (`clouds`), altocumulus's (`altocumulus`) and the pattern of the
+//! the Nubis clouds' density (`clouds`), altocumulus's (`altocumulus`), cirrus's (`cirrus`), precipitation's (`rain`), mammatus's (`mammatus`), cumulonimbus's (`cumulonimbus`) and the pattern of the
 //! sea's foam (`sea`).
 // No standard library and no allocator, on the CPU too: so `Box`, `Vec`, `String` and
 // `format!` aren't in scope for code here whichever machine it is first written and tested
@@ -28,10 +28,14 @@
 extern crate std;
 
 pub mod altocumulus;
+pub mod cirrus;
 pub mod clouds;
+pub mod cumulonimbus;
+pub mod mammatus;
 pub mod media;
 pub mod noise;
 pub mod phase;
+pub mod rain;
 pub mod sea;
 
 use core::ops::{Add, Div, Mul, Neg, Sub};
@@ -46,6 +50,8 @@ pub trait Real: Copy + PartialOrd + Add<Output = Self> + Sub<Output = Self> + Mu
     fn to_i32(self) -> i32;
     fn ln(self) -> Self;
     fn exp(self) -> Self;
+    /// `self` to the power `y`.
+    fn powf(self, y: Self) -> Self;
     fn sin(self) -> Self;
     fn cos(self) -> Self;
     fn atan2(self, x: Self) -> Self;
@@ -161,6 +167,13 @@ impl Real for f32 {
         f32::exp(self)
     }
     #[inline]
+    fn powf(self, y: f32) -> f32 {
+        #[cfg(target_arch = "spirv")]
+        return spirv_std::num_traits::Float::powf(self, y);
+        #[cfg(not(target_arch = "spirv"))]
+        f32::powf(self, y)
+    }
+    #[inline]
     fn sin(self) -> f32 {
         #[cfg(target_arch = "spirv")]
         return spirv_std::num_traits::Float::sin(self);
@@ -242,6 +255,8 @@ impl Real for f64 {
     fn ln(self) -> f64 { f64::ln(self) }
     #[inline]
     fn exp(self) -> f64 { f64::exp(self) }
+    #[inline]
+    fn powf(self, y: f64) -> f64 { f64::powf(self, y) }
     #[inline]
     fn sin(self) -> f64 { f64::sin(self) }
     #[inline]

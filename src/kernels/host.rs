@@ -76,6 +76,7 @@ pub fn shade(s: &Scene, flat: &FlatScene, origin: &Vector3<f64>, p: &PathState, 
         directional: p.state.y & PATH_DIRECTIONAL != 0,
         prev_pdf: p.d.w as f64,
         scattered: p.state.y & PATH_SCATTERED != 0,
+        volume: volume_state(flat, p.state.y),
         done: false,
     };
     let stream = crate::sobol::hash(s.render.seed ^ 0x686f_7374, ((pixel as u64) << 16) | depth as u64);
@@ -96,6 +97,25 @@ pub fn shade(s: &Scene, flat: &FlatScene, origin: &Vector3<f64>, p: &PathState, 
     next.d = f32s(&v.ray.rd).extend(v.prev_pdf as f32);
     next.beta = f32s(&v.beta.rgb).extend(v.depth as f32);
     let flag = |on: bool, bit: u32| if on { bit } else { 0 };
-    next.state.y = PATH_ACTIVE | flag(v.specular, PATH_SPECULAR) | flag(v.scattered, PATH_SCATTERED) | flag(v.lights_counted, PATH_LIGHTS_COUNTED) | flag(v.directional, PATH_DIRECTIONAL);
+    // (A surface leaves what the path has done in media as it was.)
+    next.state.y = (p.state.y & pathtrace::PATH_MEDIA) | PATH_ACTIVE | flag(v.specular, PATH_SPECULAR) | flag(v.scattered, PATH_SCATTERED) | flag(v.lights_counted, PATH_LIGHTS_COUNTED) | flag(v.directional, PATH_DIRECTIONAL);
     next
+}
+
+/// What a path with these flags has done in media, as the scene's own code keeps it
+/// (`volume::resume_path`): how many times it has scattered there, and the factor on every
+/// medium's density that the one it last scattered in set for its segments, as the kernels
+/// read it (`pathtrace::segment_scale`).
+fn volume_state(flat: &FlatScene, flags: u32) -> (u32, f64) {
+    let last = (flags >> pathtrace::PATH_MEDIUM_SHIFT) & 0xff;
+    if last == 0 {
+        return (0, 1.);
+    }
+    let scatterings = (flags >> pathtrace::PATH_SCATTERINGS_SHIFT) & 0xff;
+    let medium = &flat.media[last as usize - 1];
+    let scale = match medium.reduced {
+        Some((from, reduced)) if scatterings >= from => reduced,
+        _ => medium.scale,
+    };
+    (scatterings.max(1), scale)
 }

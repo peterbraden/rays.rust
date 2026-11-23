@@ -127,20 +127,32 @@ impl<F: Real, M: Medium<F>> Medium<F> for OnPlanet<'_, F, M> {
     /// The medium's local bound along the ray's direction in planet-local coordinates, its
     /// length converted back to the scene's, and trusted only `curved_step` at a time.
     fn majorant_from(&self, x: F, y: F, z: F, dx: F, dy: F, dz: F) -> (F, F) {
-        let q = planet_local(self.radius, x, y, z);
-        // The direction there by a difference, over a stride the float can resolve: a metre
-        // for f64; for f32, whose steps 50 km out are 4 mm, a metre's difference had its
-        // vertical part wrong by half a degree, so that a level ray's rise or fall, which the
-        // bounds below turn on, was noise (and the walk through a layer crawled: six times the
-        // steps of f64's).
-        let h = F::stride();
-        let ahead = planet_local(self.radius, x + dx * h, y + dy * h, z + dz * h);
-        let dq = ((ahead.0 - q.0) / h, (ahead.1 - q.1) / h, (ahead.2 - q.2) / h);
-        let speed = (dq.0 * dq.0 + dq.1 * dq.1 + dq.2 * dq.2).sqrt();
+        let (q, dq, speed) = planet_ray(self.radius, x, y, z, dx, dy, dz);
         if speed <= F::of(0) {
             return (self.medium.bound(), curved_step());
         }
-        let (majorant, length) = self.medium.majorant_from(q.0, q.1, q.2, dq.0 / speed, dq.1 / speed, dq.2 / speed);
+        let (majorant, length) = self.medium.majorant_from(q.0, q.1, q.2, dq.0, dq.1, dq.2);
         (majorant, (length / speed).min(curved_step()))
     }
+}
+
+/// A ray from (`x`, `y`, `z`) along (`dx`, `dy`, `dz`) in a planet's local coordinates
+/// (`planet_local`): where it is, the unit direction it goes in there, and how fast that
+/// coordinate moves along the scene's ray (0 if it can't be found), by which a length there
+/// is converted back.
+pub fn planet_ray<F: Real>(radius: F, x: F, y: F, z: F, dx: F, dy: F, dz: F) -> ((F, F, F), (F, F, F), F) {
+    let q = planet_local(radius, x, y, z);
+    // The direction there by a difference, over a stride the float can resolve: a metre
+    // for f64; for f32, whose steps 50 km out are 4 mm, a metre's difference had its
+    // vertical part wrong by half a degree, so that a level ray's rise or fall, which the
+    // bounds turn on, was noise (and the walk through a layer crawled: six times the
+    // steps of f64's).
+    let h = F::stride();
+    let ahead = planet_local(radius, x + dx * h, y + dy * h, z + dz * h);
+    let dq = ((ahead.0 - q.0) / h, (ahead.1 - q.1) / h, (ahead.2 - q.2) / h);
+    let speed = (dq.0 * dq.0 + dq.1 * dq.1 + dq.2 * dq.2).sqrt();
+    if speed <= F::of(0) {
+        return (q, dq, F::of(0));
+    }
+    (q, (dq.0 / speed, dq.1 / speed, dq.2 / speed), speed)
 }

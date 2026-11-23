@@ -85,6 +85,10 @@ impl DensityField for PlanetMapping {
         match self.field.export()? {
             FieldExport::Nubis { record, radius } if radius == 0. => Some(FieldExport::Nubis { record, radius: self.planet.radius }),
             FieldExport::Benard { record, radius } if radius == 0. => Some(FieldExport::Benard { record, radius: self.planet.radius }),
+            FieldExport::Cirrus { record, radius } if radius == 0. => Some(FieldExport::Cirrus { record, radius: self.planet.radius }),
+            FieldExport::Rain { record, radius } if radius == 0. => Some(FieldExport::Rain { record, radius: self.planet.radius }),
+            FieldExport::Mammatus { record, radius } if radius == 0. => Some(FieldExport::Mammatus { record, radius: self.planet.radius }),
+            FieldExport::Cumulonimbus { record, radius } if radius == 0. => Some(FieldExport::Cumulonimbus { record, radius: self.planet.radius }),
             _ => None,
         }
     }

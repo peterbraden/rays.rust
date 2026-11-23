@@ -2306,10 +2306,94 @@ Not done, and why:
   `scene::Integrator`, `"integrator": "auto"`. `--gpu` takes a software adapter too,
   `--wavefront` keeps to the CPU, `--path-tracer` is `trace`. A saved state is keyed by
   the integrator that rendered it.) What the kernels still lack that a picture shows, now
-  that they are what most scenes get: Sobol' points (they draw from a hash: more noise at
-  equal samples), the scene's `sampler` choice, sun and glitter probes (sunlit clouds are
-  noisier: benard-altocumulus FLIP 0.065 against 0.037 at 32 spp) and the light BVH.
-  Sobol' in the kernels is next.
+  that they are what most scenes get: the scene's `sampler` choice, sun and glitter probes
+  (sunlit clouds are noisier: benard-altocumulus FLIP 0.065 against 0.037 at 32 spp) and
+  the light BVH.
+- (Done since: Sobol' points. `pathtrace::decide`: a vertex's decisions, the next direction,
+  an area light's point, the sky's direction and the sun's disc, each take a group of four
+  Owen-scrambled Sobol' dimensions seeded by pixel, depth and decision (Burley's padding,
+  stateless: nothing to carry but the sample's number, in `state.w`), for a path's first six
+  vertices. Against a converged reference at 64 spp, 200 x 125, mean FLIP: demo 0.0189 ->
+  0.0158 (the path tracer with Sobol' points 0.0157, with independent numbers 0.0189),
+  teapot-sky 0.0242 -> 0.0162 (0.0159, 0.0242): the kernels' noise was the path tracer's
+  without its sampler, and is now the path tracer's. For about 4% of teapot-sky's time.
+  That measurement also found the kernels' checkerboards laid out about the camera.)
+- (Done since: cirrus. Hogan and Kew's density moved to `shared::cirrus`, the same bits in
+  the renderer at 120,000 points over three genera before the old copy went; the generating
+  field's two realisations mixed for the layer's time into one table of 1024 x 1024 floats.
+  hogan-kew-cirrus and sunset render through the kernels. Global cirrus (orbit, the
+  weather's) has a density of its own, a 3D field sampled on the sphere, and is still the
+  path tracer's; so are halos and diffraction, which ask each point's crystal size.)
+- (Done since: media beside the host's vertices. A material or shape of the scene's own
+  code traces its shadow rays through the scene's media by that code, which keeps a path's
+  state in thread-locals; the host now sets it from the path's flags (`volume::resume_path`).
+  desert-noon, desert-butte, desert-mesas, desert-overlook and forest-sunlit, Nubis clouds
+  over terrain, render through the kernels.)
+- (Done since: precipitation, in `shared::rain`, the same bits in the renderer for rain,
+  snow melting to rain, and hail. No scene is the kernels' for it alone: each that rains
+  also has crepuscular rays, a rainbow, the diffusion approximation or a cumulonimbus.)
+- (Done since: crepuscular rays, at the camera's vertex in `shade`: every piece of the
+  air's single scattering was in the bounce kernel already, for the haze's transmittance and
+  the sun's. crepuscular-rays and snow-showers render through the kernels (crepuscular-rays
+  at 16 spp against a 64 spp reference: FLIP 0.0547, the path tracer's own 0.0492). Comparing
+  them found `trace` clamping each sample at nothing after taking the shadowed air from it,
+  which left shadowed tiles 5% too bright; the clamp is gone. The cost: `occluded` and
+  `media_transmittance` are called from a second place, and rust-gpu inlines both, so the
+  WGSL grew from 4.7 to 6.4 MB. One call site again would mean the shadow sample waiting
+  for the vertex's light loop, which a ray that escapes never reaches.)
+- (Done since: mammatus, in `shared::mammatus`, the same bits in the renderer. Each kind of
+  cloud is compiled into a kernel wherever it walks media, and there are four such places
+  (the collision, the shadow rays of a vertex and of the crepuscular sample, the probe), so
+  the WGSL is 7.8 MB with six kinds: the walks want one call site a kernel.)
+- (Done since: cumulonimbus, in `shared::cumulonimbus`, the same bits in the renderer at
+  300,000 points. The WGSL is 9.5 MB.)
+- (Done since: the crepuscular samples' shadow rays moved from `shade` to `intersect`,
+  where they are two more turns of the loop that traces the path's own ray: one traversal
+  and one walk a kernel again. Measured first: of the 9.5 MB of WGSL the sample's own walk
+  through media was 2.1 MB and its any-hit traversal 0.4 MB. Now 7.2 MB; the GPU's picture of
+  crepuscular-rays is the CPU kernels', region by region to three places, and its noise is
+  as before (FLIP 0.0548 at 16 spp). What a kind of cloud costs is still its code at each
+  of the walks: the collision's, the shadow rays', the probe's.)
+- (Done since: sun probes. A medium's vertex sends one (`pathtrace::send_probe`) with the
+  path: it waits in the path's `hit`, and the next round's `intersect` traces it and the
+  shadow ray from the collision it meets as two more turns of its loop (`find_all`, which
+  the CPU runs with a finder that knows the host's shapes), so no kernel gained a traversal
+  or a walk: 7.5 MB of WGSL. benard-altocumulus at 32 spp against a 256 spp reference: FLIP
+  0.0618 without, 0.0581 with, the path tracer 0.0479; the mean unchanged (the kernels are
+  0.6% brighter than the path tracer there with or without, which is something else, not
+  found). The gain is less than the probes' share of the gap was taken to be. mammatus,
+  which looked the same case (0.0957 against 0.0690 at 16 spp), isn't: it has the Oz
+  approximation, whose sun no probe finds. Both scenes have a sea, and the kernels send no
+  glitter probes: the next suspect.)
+- (Done since: glitter probes, which were the cause: without their sea the two scenes'
+  noise is the path tracer's on the kernels (benard 0.0463 against 0.0458, mammatus 0.0338
+  against 0.0346). With them: mammatus at 16 spp FLIP 0.0957 -> 0.0721 (the path tracer
+  0.0690), benard-altocumulus at 32 spp 0.0581 -> 0.0509 (0.0479). mammatus then read 5%
+  redder on the kernels than by `trace`. Twelve seeds each didn't settle it (the means are
+  a few pixels' fireflies); the mean without each render's three brightest pixels did, to
+  half a percent a seed: probes on or off changed the kernels' by 4% and the path tracer's
+  by nothing. Counting what each tracer's probes found: sent and reaching the sea alike,
+  lit 4.4% of the kernels' and 3.4% of the path tracer's, whose probe took the glint at the
+  hit as found, on the surface, where an ordinary vertex is moved off it first: under a low
+  sun the shadow ray met the sea it left. `VolumeMaterial::glitter_probe` now offsets it,
+  and the two agree to 0.3%. A lesson for these comparisons: when two unbiased estimators
+  disagree, the newer one isn't the suspect by default.)
+- The shader's size, measured (WGSL, by kernel; a render compiles only the kernels its
+  scene needs, the `_media` ones only with media). Against 3dc74bb, before this section's
+  clouds and probes: bounce_paths_media 1339K -> 2946K, intersect_paths_media 583K -> 2287K,
+  intersect_paths 134K -> 463K, bounce_paths 636K -> 681K. Two changes: a kernel without
+  media holds no probe code (`Finder::MEDIA`), and the layers' bounds have one call site
+  (`shared::media::planet_ray`): intersect_paths 247K, the media kernels 2814K and 2176K,
+  the module 7.8 -> 7.4 MB. What the rest is: each kind of cloud 150K (Nubis, rain) to 500K
+  (cumulonimbus) a media kernel; Perlin's noise, inlined at each of some sixty call sites
+  in the densities, 1.1 MB of each; Worley's 0.1 MB. Taking the cube's eight corners in a
+  loop made each copy larger, not smaller. What would shrink it is fewer call sites: a
+  density's noise funnelled through one call in a loop over what it asks for; not done,
+  since what it buys isn't known: lavapipe here (Mesa 25.2.8, LLVM 20) compiles the plain
+  kernels in 0.4 s and the media kernels in 1.2-1.5 s at 128, 256 and 512 bits alike, before
+  and after. The hang on CI (Mesa 26.0.8, LLVM 21, a Xeon Platinum 8573C, lavapipe at its
+  native width) was in tests whose scenes have no media, whose kernels hardly grew; it is
+  not reproduced here, and its cause is unknown.
 - Media through the host in the wavefront's rounds (the rest of step 3), and with them the
   thread-locals. Judged not worth doing as such: a scene with a medium the kernels lack is
   rendered a path at a time by the scene's own code under the same driver now, and the

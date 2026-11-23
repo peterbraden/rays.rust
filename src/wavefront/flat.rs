@@ -8,7 +8,7 @@
 //! Shapes and materials describe themselves (`Geometry::flatten`, `MaterialModel::flat`), so
 //! the scene file is parsed, and transforms and instances applied, exactly as for the
 //! recursive tracer. The skysphere stays an object, evaluated for rays that escape. What can't
-//! be flattened (procedural shapes, CSG, media, crepuscular rays, spectral and motion-blurred
+//! be flattened (procedural shapes, CSG, media, spectral and motion-blurred
 //! renders) is reported, and the scene renders the usual way.
 //!
 //! A shape that isn't primitives (an ocean, a terrain, a combined shape: anything whose
@@ -269,9 +269,6 @@ impl FlatScene {
         }
         if s.render.motion {
             problems.push("motion blur".to_string());
-        }
-        if s.atmosphere.as_ref().is_some_and(|a| a.crepuscular_rays) {
-            problems.push("crepuscular rays".to_string());
         }
         let mut sky = None;
         let mut materials: Vec<FlatMaterial> = Vec::new();

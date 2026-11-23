@@ -1583,6 +1583,12 @@ impl MaterialModel for PhysicalOcean {
         let m = self.sample_ripple(&n);
         let d = r.rd.normalize();
         let reflected = d - m * 2. * m.dot(&d);
+        // Seen at a grazing angle, a ripple can send its reflection down towards the water,
+        // which reflects it again, upwards (Fresnel's reflectance there is near 1): take that
+        // second bounce off the mean surface rather than losing the light, which greys out
+        // a river's reflections seen from its bank. For transparent water only, which the GPU
+        // doesn't take (its kernel matches the opaque sea's shading as it was).
+        let reflected = if self.absorption.is_some() && reflected.dot(&up) <= 0. { reflected - up * 2. * reflected.dot(&up) } else { reflected };
         let reflects = reflected.dot(&up) > 0. && m.dot(&v) > 0.;
         let f = fresnel(m.dot(&v).max(0.));
         let mirror = Ray { ro: intersection.point + up * 1e-3, rd: reflected };

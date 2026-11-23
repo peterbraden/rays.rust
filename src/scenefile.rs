@@ -1870,6 +1870,26 @@ impl SceneFile {
             parts.push((Detail::Surface(mesh.dead_bark.clone()), o.get("dead_bark").map_or_else(bark, medium)));
         }
 
+        // How much light each leaf material scatters, for the light leaves pass on to each other
+        // inside a level of detail's clusters (as luminance; a leaf's healthy colour).
+        let luminance = |c: &Value| c.as_array().map_or(0., |c| {
+            let at = |i: usize| c.get(i).and_then(Value::as_f64).unwrap_or(0.);
+            0.2126 * at(0) + 0.7152 * at(1) + 0.0722 * at(2)
+        });
+        let leaf_albedo = |key: &Value| match materials.get(&SceneFile::parse_string(key)) {
+            Some(props) if props["type"] == "leaf" => {
+                let leaf = SceneFile::parse_leaf(props);
+                let lum = |c: &Color| 0.2126 * c.rgb.x + 0.7152 * c.rgb.y + 0.0722 * c.rgb.z;
+                lod::Albedo { reflectance: lum(&leaf.reflectance), transmittance: lum(&leaf.transmittance) }
+            },
+            Some(props) if props.get("albedo").is_some() => lod::Albedo { reflectance: luminance(&props["albedo"]), transmittance: 0. },
+            _ => lod::Albedo::GREEN_LEAF,
+        };
+        let leaf_albedos: Vec<lod::Albedo> = match o.get("leaves") {
+            None => vec![lod::Albedo { reflectance: 0.24, transmittance: 0. }],
+            Some(Value::Array(names)) => names.iter().map(leaf_albedo).collect(),
+            Some(name) => vec![leaf_albedo(name)],
+        };
         let leaf_media: Vec<Box<dyn Medium + Sync + Send>> = match o.get("leaves") {
             None => vec![default(Color::new(0.1, 0.3, 0.06))],
             Some(Value::Array(names)) if !names.is_empty() => names.iter().map(leaf_medium).collect(),
@@ -1883,9 +1903,9 @@ impl SceneFile {
             let k = ((rng.next_f64() * groups.len() as f64) as usize).min(groups.len() - 1);
             groups[k].extend_from_slice(leaf);
         }
-        for (triangles, medium) in groups.into_iter().zip(leaf_media) {
+        for ((triangles, medium), albedo) in groups.into_iter().zip(leaf_media).zip(leaf_albedos) {
             if !triangles.is_empty() {
-                parts.push((Detail::Aggregate(triangles), medium));
+                parts.push((Detail::Aggregate(triangles, albedo), medium));
             }
         }
         (parts, base, bounds)

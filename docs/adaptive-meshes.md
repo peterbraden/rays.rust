@@ -122,6 +122,30 @@ levels. Crossed cards fitted to the leaves' coverage make up the hits, but darke
 further: a ray leaving one of a cluster's cards meets its others, far more often than leaves
 shade one another.
 
+### Coarse levels: cards that shadow themselves
+
+A tree made of a few large cards was brighter the coarser it got: +3% at `"pixels": 2`, +8% at 4,
++13% at 8. Measured tree by tree, its cards were hit about as often as its leaves but lit two to
+three times as often. Leaves deep in a large cluster are shaded by its others, and a flat card
+can't be.
+
+So a card of a cluster of 2048 pieces or more carries a byte: the fraction of light its leaves
+let through to those a ray from outside sees. It is measured at build by casting rays at them,
+including light they scatter on to each other at the leaf material's own reflectance and
+transmittance. A shadow ray leaving the card is stopped with that probability (`self_lit`,
+`CardSet::occludes`). Smaller cards stay opaque to light from behind, as any surface is.
+
+| `"pixels"` | Mean FLIP before / after | Brightness before / after |
+|---|---|---|
+| 1 | 0.0543 / 0.0547 | −1.3% / −2.1% |
+| 2 | 0.0660 / 0.0627 | +2.9% / −0.6% |
+| 4 | 0.0896 / 0.0752 | +8.3% / +0.3% |
+| 8 | 0.1175 / 0.0937 | +13.0% / +1.6% |
+
+Memory is unchanged, and builds and renders are unchanged within run-to-run noise. The research
+behind it, and what didn't work (crossed cards at coarse levels, coverage fitted near the
+horizon), is in `docs/research/learned-lod/stage7.md`.
+
 ## Speed
 
 **Profiling.** A render of `forest-aerial` was profiled by sampling its threads' stacks under

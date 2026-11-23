@@ -366,7 +366,11 @@ branch's history (commits `ac51d87` to `f56d824`) and written up in their notes,
 - [x] Crossed cards at coarse levels only ([stage7.md](stage7.md#crossed-cards-at-coarse-levels-a-negative-result)):
       coverage from shallow views comes right, but the image gets brighter (+9.4% at `pixels: 4`):
       the remaining error is in the trees' own radiance, which depends on direction.
-- [ ] Coverage and lit fraction as functions of direction (view near the horizon, light above).
+- [x] Coverage fitted near the horizon (no change), then the fix
+      ([stage7.md](stage7.md#the-resolution-the-leaves-own-albedo-and-large-clusters-only)): large
+      clusters' cards shadowed by their leaves at the leaves' own albedo, now the default. FLIP
+      −16% at `pixels: 4` and −20% at 8, brightness within ±2% at every setting, no memory or
+      measurable speed cost.
 - [ ] The residual darkening from low down (−3% to −6% at mid range), common to cards and
       volumes; SGGX lobes and palettes.
 - [ ] Read what could not be fetched (see [log.md](log.md)).

@@ -714,8 +714,8 @@ fn lod_tree_levels() {
 
 /// As `lod_tree_levels`, but the light each first hit sends back to the viewer, path traced
 /// with the summer leaf's reflectance and transmittance, sunlight only, so light scattered
-/// between leaves counts: whole trees at each level against their leaves, with the cards'
-/// self-shadowing (`self_lit`) off and on.
+/// between leaves counts: whole trees at each level against their leaves (`LOD_SELF_LIT_FROM`
+/// sets which cards shadow themselves).
 #[test]
 #[ignore]
 fn lod_tree_scattering() {
@@ -776,13 +776,9 @@ fn lod_tree_scattering() {
         println!("{name:22} leaves: radiance {:.5} ({:.0}% from bounces)", truth.0, 100. * truth.1);
         for level in [3, 4, 5, 6, 7] {
             let mut line = format!("{name:22} L{level}:");
-            for setting in ["off", "cluster"] {
-                // A test run alone, by hand: nothing else reads the environment meanwhile.
-                unsafe { std::env::set_var("LOD_SELF_LIT", setting); }
-                let g = consolidate(&mesh.leaves, level_size(base, level));
-                let m = render(&g);
-                line += &format!("  {setting} {:.3} ({:.0}% bounced)", m.0 / truth.0, 100. * m.1);
-            }
+            let g = consolidate(&mesh.leaves, level_size(base, level));
+            let m = render(&g);
+            line += &format!("  {:.3} ({:.0}% bounced)", m.0 / truth.0, 100. * m.1);
             println!("{line}");
         }
     }

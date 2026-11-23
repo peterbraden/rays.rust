@@ -135,7 +135,8 @@ Costs:
   the card's intersection test;
 - the scattering is computed for one green leaf, not the scene's leaf material.
 
-It stays a research option behind `LOD_SELF_LIT=cluster` for now.
+It stayed a research option at this point; see [the resolution](#the-resolution-the-leaves-own-albedo-and-large-clusters-only)
+below.
 
 ## What's left: coverage from low angles
 
@@ -202,3 +203,100 @@ fraction as functions of direction, not on average over the hemisphere. A distan
 near the horizon and lit from above, and one number per card can't hold both. Candidates:
 - weighting the coverage fit toward the directions distant trees are seen from;
 - making the lit fraction depend on the light's elevation (a few bytes per card).
+
+## Coverage fitted near the horizon: no change
+
+Card sizes were fitted over a band of directions within 60° of the horizontal (in the tree's frame),
+where distant trees are seen from, instead of the hemisphere about each card's normal.
+
+**In `lod_tree_levels`.** The broadleaves' whole-tree hit ratios came right at every level: 0.95–1.01,
+against 0.80–0.94. Conifers stayed 4–9% over at L3–L5 whatever the band, so that excess isn't about
+direction.
+
+**In renders** it changed nothing that matters:
+
+| `pixels` | FLIP: hemisphere → band | Brightness: hemisphere → band |
+|---|---|---|
+| 1 | 0.0562 → 0.0580 | −1.4% → −2.0% |
+| 2 | 0.0651 → 0.0663 | +1.6% → +1.2% |
+| 4 | 0.0823 → 0.0837 | +5.6% → +5.4% |
+| 8 | 0.1063 → 0.1084 | +9.2% → +9.2% |
+
+The code was removed.
+
+## The resolution: the leaves' own albedo, and large clusters only
+
+### The scene's leaves are dark
+
+`self_lit` assumed a bright green leaf: reflectance 0.42 and transmittance 0.36. The scene's
+leaves, as luminance, are far darker:
+- needles reflect about 0.1 and transmit about 0.05;
+- broadleaves reflect about 0.15 and transmit about the same.
+
+So the scattering it credited was several times too much. That was also why the plain binary shadow
+(attempt 1) did best at the coarse settings.
+
+**The fix.** Each leaf material's reflectance and transmittance (luminance of its healthy colour) now
+reach `consolidate_with` through `Detail::Aggregate`'s `Albedo`. With every card shadowed:
+
+| `pixels` | FLIP: current → own albedo | Brightness: current → own albedo |
+|---|---|---|
+| 1 | 0.0543 → 0.0613 | −1.3% → −4.7% |
+| 2 | 0.0660 → 0.0653 | +2.9% → −3.4% |
+| 4 | 0.0896 → **0.0746** | +8.3% → **−1.0%** |
+| 8 | 0.1175 → **0.0934** | +13.0% → **+1.5%** |
+
+The coarse settings are fixed. The fine ones became too dark.
+
+### The cards had been shadowing themselves by accident
+
+A shadow ray from a card hit starts a hair off the card, along the chosen leaf's normal. When the light
+is behind the card, the ray crosses its own card just beyond its start and is blocked. So every card has
+been opaque to light from behind.
+
+Detecting a ray leaving its own card removed that. With no measured shadowing, the forest became
+brighter: +19% at `pixels: 8`, against the current +13%. For cards without a measured lit fraction, the
+old behaviour is now kept exactly: with shadowing off the image matches the current cards to the last
+digit (FLIP 0.1175, +13.0%).
+
+### Shadowing only large clusters
+
+For small clusters, the accidental back-face shadow serves better than the measured one, which
+over-darkens them. The likely cause is that neighbouring cards already cast much of a small cluster's
+shadow.
+
+**The gate.** Measured shadowing applies only to clusters of `SELF_LIT_FROM` pieces or more. From the
+air at 64 spp:
+
+| `pixels` | Current: FLIP / brightness | From 512: FLIP / brightness | **From 2048 (default)**: FLIP / brightness |
+|---|---|---|---|
+| 1 | 0.0543 / −1.3% | 0.0567 / −3.3% | 0.0547 / −2.1% |
+| 2 | 0.0660 / +2.9% | 0.0634 / −2.7% | **0.0627 / −0.6%** |
+| 4 | 0.0896 / +8.3% | 0.0744 / −0.9% | **0.0752 / +0.3%** |
+| 8 | 0.1175 / +13.0% | 0.0934 / +1.5% | **0.0937 / +1.6%** |
+
+From low down it is unchanged: FLIP 0.0297 against 0.0296 at `pixels: 1`, and 0.0367 against 0.0363
+at 2.
+
+**Cost.**
+- Memory is the same: a byte per card.
+- Builds change by −3 to +5 s.
+- Renders, timed back to back with the current binary, came out −6% at `pixels: 1` and +6% at 2, which
+  is within run-to-run noise.
+
+Earlier timings that looked 4–14% slower were the machine drifting between runs. Rerunning the current
+binary later gave 73 s at `pixels: 8`, not its first 76 s.
+
+**What it moves.**
+- **Accuracy.** FLIP drops 5% at `pixels: 2`, 16% at 4 and 20% at 8, and the brightness drift with
+  coarseness is gone: within ±2% from `pixels: 1` to 8.
+- **Frontier.** At the old `pixels: 4`'s memory (about 330 MiB), the error closes 61% of the gap to
+  the old `pixels: 2` (0.0752, between 0.0896 and 0.0660 at 390 MiB). The coarse settings become
+  usable.
+
+### Caveats
+
+- One scene and one sun, at 64 spp.
+- The 2048 gate was chosen from two candidates on this scene.
+- The albedo is a luminance, and the scattering is computed per card, not per colour channel.
+- Leaves' autumn colours aren't used; the albedo is each material's healthy colour.

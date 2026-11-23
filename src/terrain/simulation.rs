@@ -556,7 +556,18 @@ impl Terrain {
             let before = self.bed.clone();
             // The patch's edge, below sea level, is the open sea beyond it.
             let open: Vec<bool> = (0..self.domain.len()).map(|i| self.domain.boundary[i] && self.bed[i] < 0.).collect();
-            marine::deposit(&self.domain, &mut self.bed, &self.sediment, &sea, &open, &supply, m, dt);
+            // Each mouth's river comes in from the land cell bringing it the most sediment.
+            let mut heading = vec![crate::na::Vector3::zeros(); self.domain.len()];
+            let mut most = vec![0f64; self.domain.len()];
+            for i in 0..self.domain.len() {
+                let r = flow.receiver[i];
+                if r == i || sea[i] || !sea[r] || self.sediment_flux[i] <= most[r] { continue; }
+                most[r] = self.sediment_flux[i];
+                let (a, b) = (self.domain.dirs[i], self.domain.dirs[r]);
+                let t = (b - a) - b * b.dot(&(b - a));
+                if t.norm() > 0. { heading[r] = t.normalize(); }
+            }
+            marine::deposit(&self.domain, &mut self.bed, &self.sediment, &sea, &open, &supply, &heading, m, dt);
             self.record(&before);
         }
         self.slide(&fixed, LANDSLIDE_PASSES, 1);

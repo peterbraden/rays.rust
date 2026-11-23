@@ -19,7 +19,8 @@
 //! constant diffusivity per grain size, fit 300-500 m²/yr for silt on the Ogooué delta. Here:
 //!
 //! 1. the sediment flux each river brings to a sea cell fills the sea floor up to sea level,
-//!    from the mouth outwards, nearest cells first, so the delta's plain builds at sea level
+//!    from the mouth outwards, nearest cells first (nearer along the river's jet, straight on
+//!    into the sea, than to the sides: `jet`), so the delta's plain builds at sea level
 //!    and its front advances (`Near`); what reaches the open sea beyond (a patch's edge)
 //!    leaves, and a lagoon with no room left builds up evenly into a plain;
 //! 2. the sea floor diffuses between sea cells, but only sediment moves: each cell's outflow is
@@ -45,11 +46,15 @@ pub struct MarineParams {
     pub diffusivity: f64,
     /// Depth over which diffusivity falls by e, λ, metres.
     pub depth_scale: f64,
+    /// How far rivers' jets carry their sediment straight on into the sea rather than to the
+    /// sides: a sideways step costs 1 + jet times a step straight on as the delta fills (0 for
+    /// round lobes, as waves spread them; higher for the fingers of river-dominated deltas).
+    pub jet: f64,
 }
 
 impl Default for MarineParams {
     fn default() -> MarineParams {
-        MarineParams { diffusivity: 1000., depth_scale: 100. }
+        MarineParams { diffusivity: 1000., depth_scale: 100., jet: 3. }
     }
 }
 
@@ -60,7 +65,10 @@ impl Default for MarineParams {
 /// `open` marks the open sea beyond: cells (eg. at a patch's edge, below sea level) that
 /// sediment reaching leaves by.
 #[allow(clippy::too_many_arguments)]
-pub fn deposit(domain: &Domain, ground: &mut [f64], sediment: &[f64], sea: &[bool], open: &[bool], supply: &[f64], p: &MarineParams, dt: f64) {
+///
+/// `heading` is the way each mouth's river enters it (a unit vector tangent to the sphere at
+/// the mouth; zero for none), along which its jet carries the sediment (`jet`).
+pub fn deposit(domain: &Domain, ground: &mut [f64], sediment: &[f64], sea: &[bool], open: &[bool], supply: &[f64], heading: &[crate::na::Vector3<f64>], p: &MarineParams, dt: f64) {
     let n = domain.len();
     let mut loose: Vec<f64> = sediment.to_vec();
     // Each river's sediment fills the sea floor up to sea level, from its mouth outwards, the
@@ -91,7 +99,11 @@ pub fn deposit(domain: &Domain, ground: &mut [f64], sediment: &[f64], sea: &[boo
             if domain.edges(c).iter().any(|l| open[l.to]) { left = 0.; break; }
             for l in domain.edges(c) {
                 if !sea[l.to] { continue; }
-                let nd = d + l.dist;
+                // Straight on along the river's jet is cheapest, to the sides dearer, back
+                // dearer still.
+                let step = domain.dirs[l.to] - domain.dirs[c];
+                let ahead = if heading[mouth].norm_squared() > 0. && step.norm_squared() > 0. { heading[mouth].dot(&step.normalize()) } else { 1. };
+                let nd = d + l.dist * (1. + p.jet * (1. - ahead));
                 if best.get(&l.to).is_none_or(|&b| nd < b) {
                     best.insert(l.to, nd);
                     heap.push(Near(nd, l.to));
@@ -172,7 +184,7 @@ mod tests {
         let mut sediment = vec![0.; d.len()];
         for _ in 0..100 {
             let start = ground.clone();
-            deposit(&d, &mut ground, &sediment, &sea, &vec![false; d.len()], &supply, &MarineParams::default(), 100.);
+            deposit(&d, &mut ground, &sediment, &sea, &vec![false; d.len()], &supply, &vec![crate::na::Vector3::zeros(); d.len()], &MarineParams::default(), 100.);
             for i in 0..d.len() { sediment[i] += ground[i] - start[i]; }
         }
         let added: f64 = ground.iter().sum::<f64>() - before;
@@ -186,6 +198,37 @@ mod tests {
         assert!(sediment.iter().all(|&s| s >= -1e-9));
         // And none is built far above sea level.
         assert!(ground.iter().all(|&g| g < 1.), "{}", ground.iter().cloned().fold(f64::MIN, f64::max));
+    }
+
+    #[test]
+    fn test_a_rivers_jet_builds_its_delta_out_along_its_course() {
+        // A river entering a deep shelf heading east: with a jet, its deposit reaches further
+        // east than to the north or south; without, as far each way.
+        let d = Domain::patch(0., 0., 40, 500., 6.371e6);
+        let n = d.len();
+        let at = |i: usize, j: usize| j * 40 + i;
+        let mouth = at(2, 20);
+        let mut supply = vec![0.; n];
+        supply[mouth] = 1e6; // 10^8 m³: twenty cells 20 m deep
+        let east = {
+            let (dm, de) = (d.dirs[mouth], d.dirs[at(3, 20)]);
+            (de - dm).normalize()
+        };
+        let mut heading = vec![crate::na::Vector3::zeros(); n];
+        heading[mouth] = east;
+        let reach = |jet: f64| {
+            let mut ground = vec![-20.; n];
+            let p = MarineParams { jet, diffusivity: 0., ..MarineParams::default() };
+            deposit(&d, &mut ground, &vec![0.; n], &vec![true; n], &vec![false; n], &supply, &heading, &p, 100.);
+            let filled = |k: usize| ground[k] > -19.;
+            let along = (2..40).take_while(|&i| filled(at(i, 20))).count();
+            let across = (20..40).take_while(|&j| filled(at(2, j))).count();
+            (along, across)
+        };
+        let (along, across) = reach(3.);
+        assert!(along > 2 * across, "along {} across {}", along, across);
+        let (along, across) = reach(0.);
+        assert!(along <= across + 1, "along {} across {}", along, across);
     }
 
     #[test]
@@ -203,7 +246,7 @@ mod tests {
         // 10^8 m³, five times what the inlet holds.
         supply[at(2, 10)] = 1e6;
         let before: f64 = ground.iter().sum();
-        deposit(&d, &mut ground, &vec![0.; n], &sea, &vec![false; n], &supply, &MarineParams::default(), 100.);
+        deposit(&d, &mut ground, &vec![0.; n], &sea, &vec![false; n], &supply, &vec![crate::na::Vector3::zeros(); n], &MarineParams::default(), 100.);
         let added = (ground.iter().sum::<f64>() - before) * 2.5e5;
         assert!((added - 1e8).abs() < 1e-6 * 1e8);
         assert!(ground[at(2, 10)] <= 1e-9, "the mouth piled up to {}", ground[at(2, 10)]);

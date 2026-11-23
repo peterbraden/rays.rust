@@ -2587,6 +2587,12 @@
               "kind": "number",
               "default": 100,
               "doc": "Depth over which diffusivity falls by e, m."
+            },
+            {
+              "name": "jet",
+              "kind": "number",
+              "default": 3,
+              "doc": "How far rivers carry sediment straight on into the sea: 0 round lobes, higher the fingers of river-dominated deltas."
             }
           ]
         },

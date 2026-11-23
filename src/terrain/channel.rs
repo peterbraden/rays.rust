@@ -57,7 +57,8 @@
 //! The weighted integral over upstream curvature (here an exponential filter along the
 //! channel) makes bends grow and migrate downstream. The channel's two ends are held where the
 //! reach begins and ends; points that would move onto ground higher than the floodplain (valley
-//! walls) stay where they are, so the meander belt stays within the valley floor: the cells
+//! walls), or further than 25 widths from the reach (`BELT_WIDTHS`, the meander belt), stay
+//! where they are, so the meander belt stays within the valley floor: the cells
 //! reached from the reach without climbing more than two bank heights above the river.
 //!
 //! ## Cutoffs and ox-bow lakes
@@ -150,6 +151,11 @@ pub struct Oxbow {
     /// Remaining depth of water, metres.
     pub depth: f64,
 }
+
+/// The meander belt's half-width, in channel widths: meander wavelengths are 10-14 widths
+/// (Leopold and Wolman, "River meanders", GSA Bulletin 71, 1960), and belts a few wavelengths
+/// across.
+const BELT_WIDTHS: f64 = 25.;
 
 /// Where a meandering channel pressed against its valley's wall over a step: the wall's cell,
 /// the river's, and the area the bank would have swept, m².
@@ -358,27 +364,39 @@ impl Rivers {
 
         // The valley floor: cells reached from the reach's cells without climbing more than two
         // bank heights above the river cell they were reached from.
+        // ... no further than the meander belt's half-width from the reach (a few meander
+        // wavelengths across, as real belts are; once valley walls were cut back the belt was
+        // otherwise unbounded, and loops grew tens of kilometres long).
         let floodplain = |c: &Channel| {
             let bank = c.width / 20.;
+            let reach = BELT_WIDTHS * c.width;
+            let axis: Vec<Point> = c.path.iter().map(|&i| cell_point(domain, i)).collect();
+            let near = move |q: Point| axis.iter().any(|&a| dist(a, q) <= reach);
             let mut floor: BTreeSet<usize> = c.path.iter().copied().collect();
             let mut frontier: Vec<(usize, f64)> = c.path.iter().map(|&i| (i, ground[i])).collect();
             while let Some((i, level)) = frontier.pop() {
                 for l in domain.links(i) {
                     let j = l.to;
-                    if !floor.contains(&j) && !wet[j] && !domain.boundary[j] && ground[j] <= level + 2. * bank {
+                    if !floor.contains(&j) && !wet[j] && !domain.boundary[j] && ground[j] <= level + 2. * bank && near(cell_point(domain, j)) {
                         floor.insert(j);
                         frontier.push((j, level));
                     }
                 }
             }
-            move |q: Point| floor.contains(&point_cell(domain, q))
+            (move |q: Point| floor.contains(&point_cell(domain, q)), near)
         };
         let mut lakes = vec![];
         let mut walls: BTreeMap<(usize, usize), f64> = BTreeMap::new();
         for c in &mut self.channels {
-            let movable = floodplain(c);
+            let (movable, within) = floodplain(c);
+            // The rock cut from a wall goes to the river on the grid (the reach's nearest cell),
+            // which carries its discharge: given to whichever floodplain cell the bend was over,
+            // it piled up there, with too little water to carry it on.
+            let path: Vec<(usize, Point)> = c.path.iter().map(|&i| (i, cell_point(domain, i))).collect();
+            let river = |q: Point| path.iter().min_by(|a, b| dist(a.1, q).total_cmp(&dist(b.1, q))).map_or(point_cell(domain, q), |a| a.0);
             migrate(c, p, dt, &movable, &mut |from, to, area| {
-                *walls.entry((point_cell(domain, to), point_cell(domain, from))).or_insert(0.) += area;
+                // Only walls within the belt are cut; at its edge the channel just turns back.
+                if within(to) { *walls.entry((point_cell(domain, to), river(from))).or_insert(0.) += area; }
             });
             lakes.extend(cutoffs(c));
         }

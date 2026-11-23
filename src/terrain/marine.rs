@@ -18,7 +18,10 @@
 //! sediment transport and deposition", EPSL 524, 2019, doi:10.1016/j.epsl.2019.115728), with a
 //! constant diffusivity per grain size, fit 300-500 m²/yr for silt on the Ogooué delta. Here:
 //!
-//! 1. the sediment flux each river brings to a sea cell is laid there;
+//! 1. the sediment flux each river brings to a sea cell fills the sea floor up to sea level,
+//!    from the mouth outwards, nearest cells first, so the delta's plain builds at sea level
+//!    and its front advances (`Near`); what reaches the open sea beyond (a patch's edge)
+//!    leaves, and a lagoon with no room left builds up evenly into a plain;
 //! 2. the sea floor diffuses between sea cells, but only sediment moves: each cell's outflow is
 //!    limited to the sediment it holds (the rock of the initial sea floor stays put), with the
 //!    same conservative limiter as the ice (`glacier`).
@@ -28,6 +31,13 @@
 //! progrades. Sediment reaching a patch's edge still leaves the model.
 
 use crate::terrain::domain::Domain;
+
+/// A cell and its distance from a river's mouth, nearest first in a `BinaryHeap`.
+#[derive(PartialEq)]
+struct Near(f64, usize);
+impl Eq for Near {}
+impl PartialOrd for Near { fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(o)) } }
+impl Ord for Near { fn cmp(&self, o: &Self) -> std::cmp::Ordering { o.0.total_cmp(&self.0).then(o.1.cmp(&self.1)) } }
 
 #[derive(Clone, Debug)]
 pub struct MarineParams {
@@ -46,14 +56,56 @@ impl Default for MarineParams {
 /// Lay `supply` (m³/yr arriving in each cell) on the sea floor, and spread the sediment by
 /// depth-dependent diffusion among the `sea` cells, for `dt` years. `ground` is updated;
 /// `sediment` is the thickness of sediment there before the step (only sediment moves).
-pub fn deposit(domain: &Domain, ground: &mut [f64], sediment: &[f64], sea: &[bool], supply: &[f64], p: &MarineParams, dt: f64) {
+///
+/// `open` marks the open sea beyond: cells (eg. at a patch's edge, below sea level) that
+/// sediment reaching leaves by.
+#[allow(clippy::too_many_arguments)]
+pub fn deposit(domain: &Domain, ground: &mut [f64], sediment: &[f64], sea: &[bool], open: &[bool], supply: &[f64], p: &MarineParams, dt: f64) {
     let n = domain.len();
     let mut loose: Vec<f64> = sediment.to_vec();
-    for i in 0..n {
-        if sea[i] && supply[i] > 0. {
-            let h = supply[i] * dt / domain.area[i];
-            ground[i] += h;
-            loose[i] += h;
+    // Each river's sediment fills the sea floor up to sea level, from its mouth outwards, the
+    // nearest cells first: the delta's plain builds at sea level and its front advances.
+    // (Laid all at the mouth, it piled hundreds of metres above the sea where the mouth was a
+    // narrow inlet the spreading couldn't drain.)
+    for mouth in 0..n {
+        if !sea[mouth] || supply[mouth] <= 0. { continue; }
+        let mut left = supply[mouth] * dt;
+        let mut best: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+        let mut heap = std::collections::BinaryHeap::new();
+        heap.push(Near(0., mouth));
+        best.insert(mouth, 0.);
+        let mut reached = vec![];
+        while let Some(Near(d, c)) = heap.pop() {
+            if left <= 0. { break; }
+            if d > best[&c] { continue; }
+            reached.push(c);
+            let room = (-ground[c]).max(0.) * domain.area[c];
+            let laid = room.min(left);
+            if laid > 0. {
+                let h = laid / domain.area[c];
+                ground[c] += h;
+                loose[c] += h;
+                left -= laid;
+            }
+            // What reaches the open sea leaves.
+            if domain.edges(c).iter().any(|l| open[l.to]) { left = 0.; break; }
+            for l in domain.edges(c) {
+                if !sea[l.to] { continue; }
+                let nd = d + l.dist;
+                if best.get(&l.to).is_none_or(|&b| nd < b) {
+                    best.insert(l.to, nd);
+                    heap.push(Near(nd, l.to));
+                }
+            }
+        }
+        // A lagoon with no room left builds up evenly into a plain, rather than piling at the
+        // mouth (which stood hundreds of metres above the sea).
+        if left > 0. {
+            let area: f64 = reached.iter().map(|&c| domain.area[c]).sum();
+            for &c in &reached {
+                ground[c] += left / area;
+                loose[c] += left / area;
+            }
         }
     }
     if p.diffusivity <= 0. { return; }
@@ -120,7 +172,7 @@ mod tests {
         let mut sediment = vec![0.; d.len()];
         for _ in 0..100 {
             let start = ground.clone();
-            deposit(&d, &mut ground, &sediment, &sea, &supply, &MarineParams::default(), 100.);
+            deposit(&d, &mut ground, &sediment, &sea, &vec![false; d.len()], &supply, &MarineParams::default(), 100.);
             for i in 0..d.len() { sediment[i] += ground[i] - start[i]; }
         }
         let added: f64 = ground.iter().sum::<f64>() - before;
@@ -132,5 +184,29 @@ mod tests {
         assert!(ground[mouth] > -1., "{}", ground[mouth]);
         // Only sediment moves: no cell is lowered below where it started.
         assert!(sediment.iter().all(|&s| s >= -1e-9));
+        // And none is built far above sea level.
+        assert!(ground.iter().all(|&g| g < 1.), "{}", ground.iter().cloned().fold(f64::MIN, f64::max));
+    }
+
+    #[test]
+    fn test_a_narrow_inlet_fills_to_sea_level_and_passes_the_rest_on() {
+        // A river entering a one-cell-wide inlet that opens on to a bay: the inlet fills to sea
+        // level, and the rest goes on into the bay, rather than piling up at the mouth.
+        let d = Domain::patch(0., 0., 20, 500., 6.371e6);
+        let n = d.len();
+        let at = |i: usize, j: usize| j * 20 + i;
+        let mut sea = vec![false; n];
+        let mut ground = vec![50.; n];
+        for i in 2..10 { sea[at(i, 10)] = true; ground[at(i, 10)] = -10.; }
+        for j in 2..18 { for i in 10..18 { sea[at(i, j)] = true; ground[at(i, j)] = -30.; } }
+        let mut supply = vec![0.; n];
+        // 10^8 m³, five times what the inlet holds.
+        supply[at(2, 10)] = 1e6;
+        let before: f64 = ground.iter().sum();
+        deposit(&d, &mut ground, &vec![0.; n], &sea, &vec![false; n], &supply, &MarineParams::default(), 100.);
+        let added = (ground.iter().sum::<f64>() - before) * 2.5e5;
+        assert!((added - 1e8).abs() < 1e-6 * 1e8);
+        assert!(ground[at(2, 10)] <= 1e-9, "the mouth piled up to {}", ground[at(2, 10)]);
+        assert!(ground[at(10, 10)] > -30., "nothing reached the bay");
     }
 }

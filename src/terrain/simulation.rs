@@ -154,6 +154,10 @@ const LANDSLIDE_SCALING: f64 = 0.2;
 /// Slopes may exceed their limit by this, metres over a link, before they fail.
 const LANDSLIDE_TOLERANCE: f64 = 0.1;
 
+/// Bodies of sea of fewer cells than this, cut off from the rest and from a patch's edge, are
+/// lakes (`Terrain::outlets`).
+const SEA_POCKET: usize = 64;
+
 /// Ice thinner than this (metres) counts as ice-free ground.
 pub const ICE_FREE: f64 = 1.;
 
@@ -293,9 +297,35 @@ impl Terrain {
     }
 
     /// Cells that are base level: the sea, and a patch's edge. (A volcano that rises out of
-    /// the sea becomes land.)
+    /// the sea becomes land.) A pocket of the sea cut off from the rest (left behind by a
+    /// delta, say) of fewer than `SEA_POCKET` cells, not reaching the patch's edge, is a lake,
+    /// not the sea: rivers fill it and spill on (as base level its sediment piled up hundreds
+    /// of metres in it).
     pub fn outlets(&self) -> Vec<bool> {
-        (0..self.domain.len()).map(|i| self.domain.boundary[i] || (self.sea[i] && self.bed[i] < 0.)).collect()
+        let n = self.domain.len();
+        let wet: Vec<bool> = (0..n).map(|i| self.sea[i] && self.bed[i] < 0.).collect();
+        let mut outlet: Vec<bool> = (0..n).map(|i| self.domain.boundary[i]).collect();
+        let mut seen = vec![false; n];
+        for start in 0..n {
+            if !wet[start] || seen[start] { continue; }
+            let mut body = vec![start];
+            seen[start] = true;
+            let mut k = 0;
+            let mut open = false;
+            while k < body.len() {
+                let c = body[k];
+                k += 1;
+                open |= self.domain.boundary[c];
+                for l in self.domain.edges(c) {
+                    if wet[l.to] && !seen[l.to] { seen[l.to] = true; body.push(l.to); }
+                    open |= self.domain.boundary[l.to];
+                }
+            }
+            if open || body.len() >= SEA_POCKET || matches!(self.domain.layout, Layout::Sphere { .. }) {
+                for c in body { outlet[c] = true; }
+            }
+        }
+        outlet
     }
 
     /// Elevation of the top of the bedrock, beneath sediment and lava, metres.
@@ -484,7 +514,9 @@ impl Terrain {
             let sea: Vec<bool> = (0..self.domain.len()).map(|i| fixed[i] && !self.domain.boundary[i]).collect();
             let supply: Vec<f64> = (0..self.domain.len()).map(|i| if sea[i] { self.sediment_flux[i] } else { 0. }).collect();
             let before = self.bed.clone();
-            marine::deposit(&self.domain, &mut self.bed, &self.sediment, &sea, &supply, m, dt);
+            // The patch's edge, below sea level, is the open sea beyond it.
+            let open: Vec<bool> = (0..self.domain.len()).map(|i| self.domain.boundary[i] && self.bed[i] < 0.).collect();
+            marine::deposit(&self.domain, &mut self.bed, &self.sediment, &sea, &open, &supply, m, dt);
             self.record(&before);
         }
         self.slide(&fixed, LANDSLIDE_PASSES, 1);

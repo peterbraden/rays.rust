@@ -48,6 +48,25 @@
 //! than their synclines (`GeologyParams::fold_growth`). Slopes steeper than their rock holds
 //! fail in landslides (`slide`), but not under ice, which buttresses them; and at time zero the
 //! noise topography is first relaxed to what its rock holds.
+//!
+//! ## Closed basins
+//!
+//! Routing fills every depression to its spill point, as if each lake overflowed. In a dry
+//! climate many don't: what evaporates from the lake outweighs what flows in, and the basin is
+//! endorheic, its water and sediment never leaving (the Great Basin, the Dead Sea, Lake Eyre,
+//! the Aral and Caspian Seas; a fifth of the land drains nowhere). With a climate each lake
+//! keeps a water balance (`balance`). What flows in is the runoff of its catchment, the rain
+//! less what the land evaporates by Budyko's curve, R = P - E (1 - exp(-P / E)) ("Climate and
+//! Life", 1974; nearly all of the rain where it is wet and cold, a few per cent in hot
+//! deserts). What it loses is open-water evaporation less the rain on it, over its area when
+//! full. Evaporation follows temperature: 0.5 m/yr at 0 °C and 6 cm/yr more for each degree,
+//! so about 1.1 m/yr at 10 °C (the Great Salt Lake loses about 1.2) and 2 m/yr in a hot desert
+//! (2-3 m of pan evaporation; `evaporation` scales it). A lake that would lose more than comes
+//! in never spills: its catchment no longer feeds the river below, and its water stands where
+//! its evaporation balances the inflow, a terminal lake, often a shallow one in a wide flat
+//! basin, or none, a playa (`Terrain::basins`). Lakes that spill pass on what they don't
+//! evaporate. The basins' sediment stays in them (as in every lake, `fluvial`), building flat
+//! floors. Without a climate every lake spills.
 
 //! Everything is a deterministic function of the parameters (including the seed) and t, and
 //! the state at t2 is the state at t1 advanced by t2 - t1. So an animation renders successive
@@ -112,6 +131,9 @@ pub struct TerrainParams {
     /// Sea level follows the glacial cycle (`GlacierParams::period`), at 0 at time zero, an
     /// interglacial like today (`Terrain::sea_level`).
     pub eustasy: f64,
+    /// Open-water evaporation, relative to what the climate's temperature gives (see
+    /// "Closed basins" above); 0 for none, so every lake spills. Needs a climate.
+    pub evaporation: f64,
     /// Erodibility of sediment, relative to average bedrock.
     pub sediment_erodibility: f64,
     /// Erodibility of volcanic rock, relative to average bedrock.
@@ -137,6 +159,7 @@ impl Default for TerrainParams {
             orographic: Some(crate::terrain::orographic::OrographicParams::default()),
             isostasy: Some(crate::terrain::isostasy::IsostasyParams::default()),
             eustasy: 120.,
+            evaporation: 1.,
             sediment_erodibility: 3.,
             lava_erodibility: 0.3,
             sediment_glacial_erodibility: 3.,
@@ -251,6 +274,9 @@ pub struct Terrain {
     pub precipitation: Vec<f64>,
     /// The prevailing wind over the domain, (eastward, northward).
     pub wind: (f64, f64),
+    /// The climate's annual mean temperature at sea level at each cell, °C, if there is a
+    /// climate model.
+    pub temperature: Option<Vec<f64>>,
 }
 
 impl Terrain {
@@ -288,6 +314,7 @@ impl Terrain {
         let climate = params.climate.as_ref().map(|c| crate::terrain::climate::climate(c, &planet));
         let ela = climate.as_ref().map(|climate| domain.dirs.iter().map(|d| climate.local(d, 0.).snowline(0.)).collect());
         let reference = params.orographic.as_ref().map_or(crate::terrain::orographic::OrographicParams::default().reference, |o| o.reference);
+        let temperature = climate.as_ref().map(|c| domain.dirs.iter().map(|d| c.local(d, 0.).mean).collect());
         let base_precipitation: Vec<f64> = match &climate {
             Some(c) => domain.dirs.iter().map(|d| c.local(d, 0.).precipitation).collect(),
             None => vec![reference; n],
@@ -296,7 +323,7 @@ impl Terrain {
         let centre: crate::na::Vector3<f64> = domain.dirs.iter().sum::<crate::na::Vector3<f64>>().normalize();
         let wind = crate::terrain::climate::wind(&params.climate.clone().unwrap_or_default(), centre.y.clamp(-1., 1.).asin());
         let mut t = Terrain {
-            precipitation: base_precipitation.clone(), base_precipitation, wind,
+            precipitation: base_precipitation.clone(), base_precipitation, wind, temperature,
             domain, params, planet, time: 0., ela, bed, uplift, structure, exhumed: vec![0.; n], rebound: vec![0.; n], ground0: vec![], belt_uplift, velocity, displacement: (0., 0.), shifted: (0, 0), finest, banks: vec![0.; n], channel: vec![], latitude, sea, vents, rivers: Rivers::default(),
             sediment: vec![0.; n], lava: vec![0.; n], sediment_flux: vec![0.; n],
             ice: vec![0.; n], boundary_rate: vec![0.; n], drainage: vec![0.; n], receiver: (0..n).collect(), sliding: vec![0.; n], ice_steps: 0, ice_iterations: 0,
@@ -447,7 +474,8 @@ impl Terrain {
     fn route(&self) -> Flow {
         let rain = self.rain_factor();
         let mut flow = route(&self.domain, &self.surface(), &self.outlets(), &rain);
-        if self.persist(&mut flow) { crate::terrain::flow::accumulate(&self.domain, &mut flow, &rain); }
+        let persisted = self.persist(&mut flow);
+        if self.one_exit(&mut flow) || persisted { crate::terrain::flow::accumulate(&self.domain, &mut flow, &rain); }
         let g = &self.params.planet.geology;
         if g.infiltration > 0. && g.karst_rate >= 0. {
             // Rain on exposed limestone sinks, follows the drainage underground, and comes up
@@ -477,7 +505,172 @@ impl Terrain {
                 flow.area = surface;
             }
         }
+        self.balance(&mut flow);
         flow
+    }
+
+    /// Lake cells: where the filled surface stands over the surface, but not the sea.
+    fn lake_cells(&self, flow: &Flow) -> Vec<bool> {
+        let surface = self.surface();
+        let outlets = self.outlets();
+        (0..self.domain.len()).map(|i| !outlets[i] && flow.filled[i] - surface[i] > LAKE).collect()
+    }
+
+    /// Send all of each lake's water out at one cell. Where a lake could spill over several
+    /// cells of its rim at the same height, the routing sends each part of it out at the
+    /// nearest, as though they were separate lakes; instead the whole lake drains through its
+    /// cells towards the lowest of them on the filled surface (its spill point). Returns
+    /// whether any receiver changed.
+    fn one_exit(&self, flow: &mut Flow) -> bool {
+        let n = self.domain.len();
+        let lake = self.lake_cells(flow);
+        let mut component = vec![usize::MAX; n];
+        let mut changed = false;
+        for start in 0..n {
+            if !lake[start] || component[start] != usize::MAX { continue; }
+            // The lake: connected lake cells.
+            let mut cells = vec![start];
+            component[start] = start;
+            let mut k = 0;
+            while k < cells.len() {
+                let c = cells[k];
+                k += 1;
+                for l in self.domain.links(c) {
+                    if lake[l.to] && component[l.to] == usize::MAX { component[l.to] = start; cells.push(l.to); }
+                }
+            }
+            let mut exits: Vec<usize> = cells.iter().map(|&c| flow.receiver[c]).filter(|&r| !lake[r]).collect();
+            exits.sort_unstable();
+            exits.dedup();
+            if exits.len() < 2 { continue; }
+            let exit = *exits.iter().min_by(|&&a, &&b| flow.filled[a].total_cmp(&flow.filled[b]).then(a.cmp(&b))).unwrap();
+            // Out from the exit through the lake, each cell draining to the one it was reached from.
+            let mut reached = vec![false; cells.len()];
+            let index: std::collections::HashMap<usize, usize> = cells.iter().enumerate().map(|(k, &c)| (c, k)).collect();
+            let mut front = std::collections::VecDeque::new();
+            for l in self.domain.links(exit) {
+                if let Some(&k) = index.get(&l.to) {
+                    reached[k] = true;
+                    flow.receiver[l.to] = exit;
+                    flow.receiver_dist[l.to] = l.dist;
+                    front.push_back(l.to);
+                }
+            }
+            while let Some(c) = front.pop_front() {
+                for l in self.domain.links(c) {
+                    if let Some(&k) = index.get(&l.to) {
+                        if reached[k] { continue; }
+                        reached[k] = true;
+                        flow.receiver[l.to] = c;
+                        flow.receiver_dist[l.to] = l.dist;
+                        front.push_back(l.to);
+                    }
+                }
+            }
+            changed = true;
+        }
+        if changed { crate::terrain::flow::restack(flow); }
+        changed
+    }
+
+    /// Open-water evaporation at each cell, m/yr: 0.5 m/yr at 0 °C, 6 cm/yr more for each
+    /// degree warmer, at the cell's height (`evaporation` times that; none without a climate).
+    fn evaporation(&self) -> Vec<f64> {
+        let Some(t) = &self.temperature else { return vec![0.; self.domain.len()] };
+        let surface = self.surface();
+        let f = self.params.evaporation.max(0.);
+        (0..self.domain.len()).map(|i| {
+            let here = t[i] - crate::terrain::climate::LAPSE_RATE * surface[i].max(0.);
+            f * (0.5 + 0.06 * here.max(0.))
+        }).collect()
+    }
+
+    /// Each lake's water balance (the module docs' "Closed basins"): which lakes never fill to
+    /// their spill point, and how deep their water stands.
+    pub fn basins(&self) -> Basins {
+        let mut flow = self.route();
+        self.balance(&mut flow)
+    }
+
+    /// Weigh each lake's inflow against its evaporation. A lake is the cells where the
+    /// routing's filled surface stands above the surface, grouped by the cell it spills into,
+    /// as `fluvial` groups them. Below each lake `flow.area` is scaled by the share of the
+    /// water reaching it that flows on: none below a closed basin.
+    fn balance(&self, flow: &mut Flow) -> Basins {
+        let n = self.domain.len();
+        let mut basins = Basins { closed: vec![false; n], water: vec![0.; n], count: 0 };
+        if self.temperature.is_none() || self.params.evaporation <= 0. { return basins; }
+        let surface = self.surface();
+        let evaporation = self.evaporation();
+        let lake = self.lake_cells(flow);
+        // Lakes by the cell they spill into.
+        let mut exit = vec![usize::MAX; n];
+        let mut lakes: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
+        for &i in &flow.stack {
+            if !lake[i] { continue; }
+            let r = flow.receiver[i];
+            exit[i] = if r != i && lake[r] { exit[r] } else { r };
+            lakes.entry(exit[i]).or_default().push(i);
+        }
+        if lakes.is_empty() { return basins; }
+        // Runoff from land by Budyko's curve, R = P - E (1 - exp(-P / E)): nearly all of the
+        // rain where it is wet and cold, almost none where it is hot and dry. On a lake, the
+        // rain less what it evaporates. m³/yr.
+        let net: Vec<f64> = (0..n).map(|i| {
+            let p = self.precipitation[i].max(0.) / 1000.;
+            let e = evaporation[i];
+            let r = if lake[i] { p - e } else if e <= 0. { p } else { p - e * (1. - (-p / e).exp()) };
+            r * self.domain.area[i]
+        }).collect();
+        // Each cell's own contribution to the drainage as routed (karst springs included).
+        let mut area = flow.area.clone();
+        for i in 0..n {
+            let r = flow.receiver[i];
+            if r != i { area[r] -= flow.area[i]; }
+        }
+        let mut water = net.clone();
+        // What each lake passes to the cell it spills into: water and drainage.
+        let mut pending: std::collections::BTreeMap<usize, (f64, f64)> = Default::default();
+        for &i in flow.stack.iter().rev() {
+            if let Some((w, a)) = pending.remove(&i) {
+                // The water reaching the lake, net of what it evaporates over its area when
+                // full: if that is nothing, it never spills.
+                let cells = &lakes[&i];
+                let inflow: f64 = w - cells.iter().map(|&c| net[c]).sum::<f64>();
+                if w <= 0. {
+                    basins.count += 1;
+                    // Its water stands where what evaporates balances what comes in.
+                    let mut sorted = cells.clone();
+                    sorted.sort_by(|&a, &b| surface[a].total_cmp(&surface[b]).then(a.cmp(&b)));
+                    let mut level = surface[sorted[0]];
+                    let mut loss = 0.;
+                    for (k, &c) in sorted.iter().enumerate() {
+                        if loss >= inflow { break; }
+                        loss -= net[c];
+                        level = sorted.get(k + 1).map_or(flow.filled[c], |&d| surface[d]);
+                    }
+                    for &c in cells {
+                        basins.closed[c] = true;
+                        basins.water[c] = (level - surface[c]).max(0.);
+                    }
+                } else {
+                    water[i] += w;
+                    area[i] += a * (w / inflow.max(w)).min(1.);
+                }
+            }
+            let r = flow.receiver[i];
+            if r == i { continue; }
+            if lake[i] && !lake[r] {
+                let entry = pending.entry(r).or_insert((0., 0.));
+                entry.0 += water[i];
+                entry.1 += area[i];
+            } else {
+                water[r] += water[i];
+                area[r] += area[i];
+            }
+        }
+        flow.area = area;
+        basins
     }
 
     /// Keep alluvial channels on their courses (see `fluvial`'s "Avulsion"): a cell with a
@@ -820,6 +1013,17 @@ impl Terrain {
         self.sliding = mean_sliding;
         (0..n).map(|i| (start[i] - self.bed[i]).max(0.) * self.domain.area[i] / dt).collect()
     }
+}
+
+/// Each lake's water balance (`Terrain::basins`).
+pub struct Basins {
+    /// Cells in the depression of a closed basin, whose lake never spills.
+    pub closed: Vec<bool>,
+    /// Depth of the water standing in closed basins, metres: their terminal lakes. The rest
+    /// of a closed depression is dry: a playa where it is flat.
+    pub water: Vec<f64>,
+    /// How many closed basins there are.
+    pub count: usize,
 }
 
 /// The evolving state of a `Terrain`, to save and restore: everything that changes with time
@@ -1169,6 +1373,39 @@ mod tests {
         let outlets = t.outlets();
         assert!(outlets[10 * n + 5], "the drowned valley isn't sea");
         assert!(!outlets[15 * n + 15], "the inland basin is sea");
+    }
+
+    #[test]
+    fn test_lakes_in_hot_dry_basins_never_spill() {
+        // A bowl 4 km across in ground sloping away to the patch's edges, under the same rain,
+        // warm (it evaporates more than it gets: closed) and cold (it overflows).
+        let mut t = small(1);
+        let n = 24;
+        let len = t.domain.len();
+        for k in 0..len {
+            let r = (((k % n) as f64 - 11.5).powi(2) + ((k / n) as f64 - 11.5).powi(2)).sqrt();
+            t.bed[k] = if r <= 4. { 300. + 30. * r } else { 420. - 10. * (r - 4.) };
+        }
+        t.ice = vec![0.; len];
+        t.sediment = vec![0.; len];
+        t.precipitation = vec![600.; len];
+        let total = |t: &Terrain| -> f64 { let f = t.route(); (0..len).filter(|&i| f.receiver[i] == i).map(|i| f.area[i]).sum() };
+        t.temperature = Some(vec![-10.; len]);
+        let (wet, open) = (total(&t), t.basins());
+        t.temperature = Some(vec![30.; len]);
+        let (dry, closed) = (total(&t), t.basins());
+        assert_eq!(open.count, 0);
+        assert!(closed.count == 1 && closed.closed[12 * n + 12], "{} closed basins", closed.count);
+        // Its rain no longer reaches the edge: the bowl's 44 km² (its lake when full), at the
+        // rain's factor.
+        let bowl = 40e6 * 600. / t.params.orographic.as_ref().map_or(600., |o| o.reference);
+        assert!(dry < wet - bowl, "{} vs {}", dry, wet);
+        // With nothing flowing in but its own rain, its floor is dry: a playa.
+        assert!(closed.water.iter().all(|&w| w == 0.));
+        // Without evaporation, every lake spills.
+        t.params.evaporation = 0.;
+        assert_eq!(t.basins().count, 0);
+        assert!((total(&t) - wet).abs() < 1e-6 * wet);
     }
 
     #[test]

@@ -52,6 +52,9 @@
 //!   (`elastic_thickness`, `mantle_density`, `rock_density`, `ice_density`, `relaxation`).
 //! - `eustasy`: how far sea level falls at the glacial cycle's maximum, m (120; 0 for a
 //!   constant sea level): at time zero, an interglacial, it is 0.
+//! - `evaporation`: open-water evaporation relative to what the climate's temperature gives
+//!   (1; 0 for none): lakes that would lose more than flows in never spill, and their basins
+//!   are closed (`terrain::simulation`'s "Closed basins"). Needs a climate.
 //! - `orographic`: rain made by the terrain (`terrain::orographic`), which rivers gather and
 //!   glaciers' snow follows: `false` for the climate's rain everywhere, or overrides of
 //!   `OrographicParams` (`wind_speed`, `fallout_time`, `scale_height`, `gain_length`,
@@ -420,6 +423,7 @@ pub fn terrain_params(o: &Value) -> TerrainParams {
         }
     };
     p.eustasy = number(o, "eustasy", p.eustasy);
+    p.evaporation = number(o, "evaporation", p.evaporation).max(0.);
     p.sediment_erodibility = number(o, "sediment_erodibility", p.sediment_erodibility);
     p.lava_erodibility = number(o, "lava_erodibility", p.lava_erodibility);
     p.sediment_glacial_erodibility = number(o, "sediment_glacial_erodibility", p.sediment_glacial_erodibility);
@@ -533,6 +537,11 @@ fn evolve(o: &Value, mut t: Terrain, key: &str) -> Terrain {
     let level = t.sea_level();
     if level.abs() > 1. {
         println!("Terrain: sea level is {:.0} m then (the glacial cycle's); the scene's sea should stand there", level);
+    }
+    let basins = t.basins();
+    if basins.count > 0 {
+        let km2 = |f: &dyn Fn(usize) -> bool| (0..t.domain.len()).filter(|&i| f(i)).map(|i| t.domain.area[i]).sum::<f64>() / 1e6;
+        println!("Terrain: {} closed basins, {:.0} km² of them under salt lakes", basins.count, km2(&|i| basins.water[i] > 0.5));
     }
     t
 }

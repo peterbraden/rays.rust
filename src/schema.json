@@ -2419,6 +2419,12 @@
           "doc": "How far sea level falls at the glacial maximum, m; 0 at time zero (an interglacial)."
         },
         {
+          "name": "evaporation",
+          "kind": "number",
+          "default": 1,
+          "doc": "Open-water evaporation relative to what the climate's temperature gives; lakes losing more than flows in never spill (closed basins, playas). 0 for none."
+        },
+        {
           "name": "isostasy",
           "kind": "object",
           "default": null,

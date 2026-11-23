@@ -164,6 +164,15 @@ further than that, over tens of millions of years (real scarps retreat 0.5-2 km 
 years). A standalone patch's edges are held as base level while it rises, which cuts gullies
 all round its rim.
 
+Deserts' basins are often closed. With a climate, each lake keeps a water balance: the
+runoff of its catchment (rain less what the land evaporates, by Budyko's curve) against
+open-water evaporation (from 0.5 m/yr at 0 °C to 2 m/yr in a hot desert) less the rain on it.
+A lake that would lose more than flows in never spills: its basin keeps its water and its
+sediment, the rivers below it lose its catchment, and its water stands where evaporation
+balances the inflow, as a shallow salt lake or none at all, leaving a flat playa of lake beds
+(the module docs of `terrain::simulation`, "Closed basins"; `evaporation` scales it, 0 for
+none). Maps show salt lakes in green-blue and playas in white.
+
 ## Validation
 
 `terrain::simulation::tests::test_channels_and_slopes_are_steeper_on_hard_rock` (ignored; run

@@ -28,6 +28,9 @@ pub const ALLUVIUM: f64 = 2.;
 pub const ALLUVIUM_COLOUR: [f64; 3] = [0.80, 0.74, 0.52];
 pub const LAVA_COLOUR: [f64; 3] = [0.16, 0.14, 0.14];
 pub const RIVER_COLOUR: [f64; 3] = [0.20, 0.40, 0.75];
+/// Terminal lakes, salty, shallow and green-blue; and the flat dry floors of closed basins.
+pub const SALT_LAKE_COLOUR: [f64; 3] = [0.30, 0.62, 0.66];
+pub const PLAYA_COLOUR: [f64; 3] = [0.93, 0.91, 0.86];
 
 /// A patch's rivers and lakes as lines, at least `min_width` metres wide. None for a planet.
 pub fn water_lines(t: &Terrain, min_width: f64) -> Option<WaterLines> {
@@ -86,7 +89,15 @@ fn cell_colour(t: &Terrain, i: usize, sea: &[bool], level: f64) -> [f64; 3] {
 /// whole number of pixels per cell).
 pub fn write_map(t: &Terrain, path: &str, width: usize) {
     let (sea, level) = sea(t);
-    write_shaded(t, path, width, &|i| cell_colour(t, i, &sea, level));
+    // Closed basins: their terminal lakes, and the playas of their flat floors of lake beds.
+    let basins = t.basins();
+    write_shaded(t, path, width, &|i| {
+        if basins.closed[i] && t.ice[i] < ICE_FREE {
+            if basins.water[i] > 0.5 { return SALT_LAKE_COLOUR; }
+            if t.sediment[i] > ALLUVIUM { return PLAYA_COLOUR; }
+        }
+        cell_colour(t, i, &sea, level)
+    });
 }
 
 /// Where the sea is (`Terrain::outlets`, but not a patch's edge on land), and its level.

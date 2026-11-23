@@ -642,8 +642,11 @@ impl Rivers {
 pub struct WaterSurface {
     pub mesh: crate::shapes::mesh::SmoothMesh,
     /// The water's attenuation per metre, per channel, at a point of the surface.
-    pub attenuation: Box<dyn Fn(&Vector3<f64>) -> crate::color::Color + Send + Sync>,
+    pub attenuation: Attenuation,
 }
+
+/// The water's attenuation at a point (`WaterSurface`).
+pub type Attenuation = Box<dyn Fn(&Vector3<f64>) -> crate::color::Color + Send + Sync>;
 
 impl crate::shapes::geometry::Geometry for WaterSurface {
     fn intersects(&self, r: &crate::ray::Ray) -> Option<crate::intersection::RawIntersection> { self.mesh.intersects(r) }

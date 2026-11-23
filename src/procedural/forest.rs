@@ -373,10 +373,11 @@ pub fn place_favouring(layout: &ForestLayout, species: &[ForestSpecies], seed: u
     // Unfavoured places need up to twice the room (see `place_favouring`).
     let reach = species.iter().map(|s| 4. * radius(s, 1. + s.scale_v.abs())).fold(0., f64::max).max(1e-9);
     // The cells, over the area and one more each side, in an array: tens of millions of darts
-    // look up nine cells each. Cells wider than `reach` work as well, so a huge area with tiny
+    // look up the cells about them (`near`). Cells a quarter of `reach` across keep the cells
+    // looked at close to the circle that matters; any width works, so a huge area with tiny
     // spacing is kept to a few million.
     let (lo, hi) = (layout.min.inf(&layout.max), layout.min.sup(&layout.max));
-    let side = reach.max(((hi.x - lo.x) * (hi.y - lo.y) / 4e6).sqrt());
+    let side = (0.25 * reach).max(((hi.x - lo.x) * (hi.y - lo.y) / 4e6).sqrt());
     let (nx, nz) = (((hi.x - lo.x) / side).floor() as i64 + 3, ((hi.y - lo.y) / side).floor() as i64 + 3);
     let cell = |x: f64, z: f64| (((x - lo.x) / side).floor() as i64 + 1, ((z - lo.y) / side).floor() as i64 + 1);
     // Each cell holds its trees' x, z and radius together: the check below reads nothing else,
@@ -397,10 +398,14 @@ pub fn place_favouring(layout: &ForestLayout, species: &[ForestSpecies], seed: u
     };
     let start = surfaces.iter().map(top).fold(f64::NEG_INFINITY, f64::max);
 
-    // Whether a tree of radius `r` at (x, z) would stand too near one already in `grid`.
+    // Whether a tree of radius `r` at (x, z) would stand too near one already in `grid`: only
+    // the cells within `r` and the largest radius a tree can have of it, rather than all nine
+    // about its own, which for a small tree is several times the area.
+    let largest = 0.5 * reach;
     let near = |grid: &[Vec<[f64; 3]>], x: f64, z: f64, r: f64| {
-        let (cx, cz) = cell(x, z);
-        (cx - 1 ..= cx + 1).any(|i| (cz - 1 ..= cz + 1).any(|j| {
+        let far = r + largest;
+        let ((i0, j0), (i1, j1)) = (cell(x - far, z - far), cell(x + far, z + far));
+        (i0 ..= i1).any(|i| (j0 ..= j1).any(|j| {
             at((i, j)).is_some_and(|k| grid[k].iter().any(|&[qx, qz, qr]| {
                 let (dx, dz, apart) = (qx - x, qz - z, r + qr);
                 dx * dx + dz * dz < apart * apart
@@ -408,13 +413,20 @@ pub fn place_favouring(layout: &ForestLayout, species: &[ForestSpecies], seed: u
         }))
     };
     // The noise fields a dart needs, the clearings' and each species' stand: the costly part of
-    // a dart that isn't rejected outright.
+    // a dart that isn't rejected outright. A dart in a clearing needs only the first. Clearings
+    // are never filled, so darts keep landing in them, a share of all of them as large as the
+    // clearings' (a fifth, say) to the end, and each species' field is as costly as the
+    // clearings'.
     let fields = |x: f64, z: f64| -> (f64, Vec<f64>) {
+        let clearing = field(&noise, clearing_at, layout.patch_size, x, z);
+        if clearing < threshold {
+            return (clearing, vec![]);
+        }
         let weights = species.iter().zip(&stands).map(|(s, at)| {
             let stand = (field(&noise, *at, layout.patch_size, x, z) - 0.5) / 0.15;
             s.weight.max(0.) * (3. * layout.patchiness * stand).exp()
         }).collect();
-        (field(&noise, clearing_at, layout.patch_size, x, z), weights)
+        (clearing, weights)
     };
 
     // Darts are thrown in turn, each against the trees before it, so the forest is the same

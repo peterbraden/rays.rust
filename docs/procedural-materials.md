@@ -175,6 +175,45 @@ Seen from a kilometre, centimetre detail only sets a material's average, so it i
 ground (a figure on a path, a boulder in the foreground) that these show; from afar, it is the
 landscape's own layers and their masks that make it read.
 
+## Fitting presets to scans
+
+![Two fits](material-fit.png)
+
+*Top: `scree` fitted to ambientCG's Gravel043 (1.6 m of fine grit): it starts with too few,
+too large, too pale stones, and the fit takes it to the scan's grain size and tone (mean
+colour within 1/255; a slight olive cast left). Bottom: `granite_outcrop` fitted to Poly
+Haven's lichen_rock (2 m): the fit gets the darkness, but not the iron-red rock or the fine
+streaky lichen, which the preset's graph can't make: its stains vary over 15 m and its lichen
+comes in blotches. A fit tunes a preset's parameters; it can't change its structure.*
+
+`scripts/fit-material.py` tunes a preset's parameters to a scanned surface:
+
+1. `scripts/fetch-material-reference.py polyhaven:lichen_rock --preset granite_outcrop` fetches
+   a CC0 scan's albedo map and physical size from Poly Haven or ambientCG into
+   `references/materials/` (not committed), with a starting spec.
+2. The spec lists what to search: the library material's fields (`scale`, or a preset variable
+   by name) and places in the preset's JSON, numbers or colours (searched as a lightness and a
+   tint of limited `chroma`, as natural colours are mostly unsaturated). See the script's
+   documentation; `demo/material-fits/` has the two above.
+3. `scripts/fit-material.py demo/material-fits/gravel043.json -o fit` renders each candidate as
+   the scan was taken: straight down, orthographic, at the scan's size, under a uniform white
+   sky (so a lambertian surface renders as its albedo, checked exactly), at twice the
+   resolution and averaged down; through a library file read at run time, so nothing is
+   rebuilt. It compares them with the scan by their statistics rather than their pixels
+   (procedural noise never lines up with a photograph): a multi-scale sliced Wasserstein
+   distance between distributions of 5x5 patches (after Heitz et al., CVPR 2021, and Elnekave
+   and Weiss, ECCV 2022, on raw patches), plus colour distributions along opponent axes, which
+   the patches alone barely see (left to them, the optimiser traded grey stones for sub-pixel
+   confetti of saturated colours averaging grey). CMA-ES searches the parameters (the renderer
+   isn't differentiable). About a second a candidate; 30 generations take 15 to 25 minutes.
+4. It writes `fitted.json` (the fitted preset as a library file, ready for a scene's
+   `"library"`), `compare.png` and `log.csv`.
+
+The comparison sees albedo only, so it fits colour and pattern, not relief or gloss (the scans'
+normal and roughness maps could be compared the same way), and the plastic presets' coats add a
+little to their apparent albedo. Classifying whether a fit reads as the right material (a
+network trained on MINC, or CLIP) would need weights this environment can't download yet.
+
 ## Patterns and colour maps
 
 Any colour (a lambertian's or plastic's `albedo`, a mix's `amount`, a roughness) can be a

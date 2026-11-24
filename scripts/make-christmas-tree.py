@@ -3,7 +3,7 @@
 
 A stress test of many things at once: a spruce dressed with a few hundred fairy lights (small
 emitters chosen by the light BVH) on a wire of curves, tinsel garlands of fur, baubles of
-glass, metal and lacquer, glass icicles and a gold star; presents in checked paper under it;
+glass, metal and lacquer, glass icicles and a glowing star; presents in checked paper under it;
 a forest of snow-laden conifers, thinning in round a wide clearing; and fog thickening towards
 the ground, seen through a thin lens.
 
@@ -99,6 +99,8 @@ materials = {
     "WRAP_BLUE": {"type": "checker", "colors": [[0.05, 0.1, 0.4], [0.75, 0.75, 0.8]], "checks": 0.05},
     "WRAP_GOLD": {"type": "coated_conductor", "metal": "Au", "conductor_roughness": 0.3, "roughness": 0.05},
     "WRAP_WHITE": {"type": "coated_diffuse", "albedo": [0.75, 0.73, 0.7], "roughness": 0.15},
+    "WRAP_PURPLE": {"type": "checker", "colors": [[0.25, 0.05, 0.35], [0.7, 0.6, 0.2]], "checks": 0.06},
+    "WRAP_SILVER": {"type": "coated_conductor", "metal": "Ag", "conductor_roughness": 0.25, "roughness": 0.05},
     "RIBBON_RED": {"type": "plastic", "albedo": [0.5, 0.02, 0.03], "roughness": 0.25},
     "RIBBON_GOLD": {"type": "conductor", "metal": "Au", "roughness": 0.2},
     "RIBBON_SILVER": {"type": "conductor", "metal": "Ag", "roughness": 0.2},
@@ -260,27 +262,22 @@ for k in range(10):
     ang = k * math.pi / 5
     points.append([round(rad * math.sin(ang), 4), round(rad * math.cos(ang), 4)])
 points.append(points[0])
-star_y = TREE_H + 0.12
+# Raised on a spire over the topmost shoot.
+star_y = TREE_H + 0.38
 add({"type": "transform", "item": {"type": "prism", "height1": -0.015, "height2": 0.015, "points": points},
      "rotate": {"roll": -90}, "translate": [0, star_y, 0], "material": "STAR"})
 add(cylinder([0, TREE_H - 0.15, 0], [0, star_y - 0.1, 0], 0.008, "CAP"))
 
-# Presents under the tree, in paper and ribbon, a few with snow on their lids.
+# Presents under the tree, in paper and ribbon: a heap of them round the trunk, mostly on the
+# side facing the camera, a few smaller ones stacked on bigger ones.
 present_kinds = [("WRAP_RED", "RIBBON_GOLD"), ("WRAP_GREEN", "RIBBON_RED"), ("WRAP_BLUE", "RIBBON_SILVER"),
-                 ("WRAP_GOLD", "RIBBON_RED"), ("WRAP_WHITE", "RIBBON_GOLD")]
-presents = []
-while len(presents) < 9:
-    a = rng.uniform(-2.2, 2.2)  # mostly on the side facing the camera
-    d = rng.uniform(0.45, 1.25)
-    w, dp, ht = rng.uniform(0.18, 0.42), rng.uniform(0.18, 0.42), rng.uniform(0.12, 0.35)
-    c = [d * math.sin(a), 0, -d * math.cos(a)]
-    rad = 0.5 * math.hypot(w, dp)
-    if any(math.dist(c, q) < rad + s + 0.02 for q, s in presents):
-        continue
-    presents.append((c, rad))
-    paper, ribbon = present_kinds[len(presents) % len(present_kinds)]
-    yaw = round(rng.uniform(0, 90), 1)
-    sunk = -0.02
+                 ("WRAP_GOLD", "RIBBON_RED"), ("WRAP_WHITE", "RIBBON_GOLD"), ("WRAP_PURPLE", "RIBBON_GOLD"),
+                 ("WRAP_SILVER", "RIBBON_RED")]
+
+
+def add_present(c, base, w, dp, ht, yaw, paper, ribbon):
+    """A box of w by dp by ht standing at `base` height over c, turned by yaw about the
+    vertical, wrapped and tied with a bow."""
     rb = 0.018
     parts = [
         {"type": "box", "min": r3([-w / 2, 0, -dp / 2]), "max": r3([w / 2, ht, dp / 2]), "material": paper},
@@ -292,7 +289,30 @@ while len(presents) < 9:
          "translate": r3([-0.03, ht + 0.03, 0]), "material": ribbon},
     ]
     for part in parts:
-        add({"type": "transform", "item": part, "rotate": {"pitch": yaw}, "translate": r3([c[0], sunk, c[2]])})
+        add({"type": "transform", "item": part, "rotate": {"pitch": round(yaw, 1)}, "translate": r3([c[0], base, c[2]])})
+
+
+presents = []
+attempts = 0
+while len(presents) < 18 and attempts < 5000:
+    attempts += 1
+    a = rng.uniform(-2.4, 2.4)  # mostly on the side facing the camera
+    d = rng.uniform(0.35, 1.5)
+    w, dp, ht = rng.uniform(0.16, 0.45), rng.uniform(0.16, 0.45), rng.uniform(0.1, 0.38)
+    c = [d * math.sin(a), 0, -d * math.cos(a)]
+    rad = 0.5 * math.hypot(w, dp)
+    if any(math.dist(c, q) < rad + s + 0.02 for q, s in presents):
+        continue
+    presents.append((c, rad))
+    paper, ribbon = present_kinds[len(presents) % len(present_kinds)]
+    yaw = rng.uniform(0, 90)
+    # Sunk a little into the snow.
+    add_present(c, -0.02, w, dp, ht, yaw, paper, ribbon)
+    # Now and then a smaller one on top, turned its own way, clear of the bow.
+    if rng.random() < 0.3 and ht < 0.3:
+        k = rng.uniform(0.45, 0.7)
+        small = present_kinds[(len(presents) + 3) % len(present_kinds)]
+        add_present(c, -0.02 + ht + 0.004, w * k, dp * k, rng.uniform(0.08, 0.16), yaw + rng.uniform(15, 40), small[0], small[1])
 
 # Young spruces at the clearing's edge, framing the tree.
 for i, (x, z, h) in enumerate([(-3.4, -2.6, 1.6), (-6.5, 4.5, 2.4), (5.2, 1.5, 1.9), (7.5, 7.5, 3.0)]):

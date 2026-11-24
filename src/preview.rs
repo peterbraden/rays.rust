@@ -11,9 +11,8 @@
 //! layers can be rendered in any order, by any number of independent `Preview`s of the same
 //! scene, and add up to the image the command line gives. `web/` uses this for parallelism:
 //! each web worker has its own copy of the scene and renders different layers.
-use crate::camera::Camera;
-use crate::geometry::seed_rand;
 use crate::output::OutputOpts;
+use crate::raycaster::{Raycaster, Shading};
 use crate::rendercontext::render_pixel;
 use crate::scene::Scene;
 use crate::scenefile::SceneFile;
@@ -83,35 +82,20 @@ impl Preview {
         wanted().then_some(out)
     }
 
-    /// Render rows `y0 .. y1` of a draft image, `cols` by `rows` pixels whatever the scene's
-    /// own size, with `trace::draft`: one unbounced ray per pixel. `out` takes three `f32`s
-    /// per pixel. Fast enough to follow the camera while it is being dragged.
-    pub fn render_draft(&self, cols: usize, rows: usize, y0: usize, y1: usize, out: &mut [f32]) {
-        let (w, h) = (cols as f64, rows as f64);
-        for (row, y) in (y0 .. y1.min(rows)).enumerate() {
-            for x in 0 .. cols {
-                // The same numbers for a pixel every time, so a still camera gives a still image.
-                seed_rand(0, (y * cols + x) as u64);
-                let r = self.scene.camera.get_ray(x as f64 / w, (rows - 1 - y) as f64 / h, 0.5 / w, 0.5 / h);
-                let c = crate::trace::draft(&r, &self.scene).ignore_nan();
-                let i = (row * cols + x) * 3;
-                out[i] = c.rgb.x as f32;
-                out[i + 1] = c.rgb.y as f32;
-                out[i + 2] = c.rgb.z as f32;
-            }
-        }
+    /// Render rows `y0 .. y1` of a quick image from the realtime raycaster (`raycaster`),
+    /// `cols` by `rows` pixels whatever the scene's own size, three `f32`s a pixel into `out`.
+    pub fn raycast(&self, shading: Shading, cols: usize, rows: usize, y0: usize, y1: usize, out: &mut [f32]) {
+        Raycaster::new(shading).render_rows(&self.scene, cols, rows, y0, y1, out);
     }
 
     /// The object seen at image position (x, y), in pixels from the top left: its index in the
     /// scene file's `objects` list. None for the background, or an object with no entry of its
     /// own.
     pub fn pick(&self, x: f64, y: f64) -> Option<usize> {
-        let (w, h) = (self.width() as f64, self.height() as f64);
-        // The lens jitters ray origins; a fixed seed makes the same click pick the same thing.
-        seed_rand(0, 0);
-        let r = self.scene.camera.get_ray(x.floor() / w, (h - 1. - y.floor()) / h, 0.5 / w, 0.5 / h);
-        let hit = self.scene.objects.nearest_intersection(&r, f64::INFINITY, 0.)?;
-        self.scene.source_index(hit.object)
+        if x < 0. || y < 0. {
+            return None;
+        }
+        Raycaster::pick(&self.scene, x as usize, y as usize)
     }
 }
 
@@ -127,16 +111,16 @@ pub fn encode_rgba(sums: &[f32], samples: f64, opts: &OutputOpts, out: &mut [u8]
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::rendercontext::{RenderContext, render};
     use std::sync::Mutex;
 
     /// Previews share the objects kept between builds, so tests that build them take turns.
     static TURN: Mutex<()> = Mutex::new(());
-    fn turn() -> std::sync::MutexGuard<'static, ()> { TURN.lock().unwrap_or_else(|e| e.into_inner()) }
+    pub(crate) fn turn() -> std::sync::MutexGuard<'static, ()> { TURN.lock().unwrap_or_else(|e| e.into_inner()) }
 
-    const SCENE: &str = r#"{
+    pub(crate) const SCENE: &str = r#"{
         "width": 12, "height": 8, "chunk_size": 4, "supersamples": 3, "samples_per_chunk": 1,
         "seed": 7, "background": [0.3, 0.4, 0.5], "max_depth": 4,
         "camera": { "location": [0, 1, -5], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.5, "aperture": 0.1 },
@@ -215,22 +199,6 @@ mod tests {
         assert_eq!(p.pick(6., 7.), Some(1));
         p.set_camera(r#"{ "location": [0, 1, 5], "lookat": [0, 20, 5.1], "up": [0, 1, 0], "angle": 0.5 }"#);
         assert_eq!(p.pick(6., 3.), Some(0));
-    }
-
-    #[test]
-    fn test_draft_shows_the_scene_at_any_size() {
-        let _turn = turn();
-        let p = Preview::new(SCENE);
-        let (cols, rows) = (6, 4);
-        let mut out = vec![0f32; cols * rows * 3];
-        p.render_draft(cols, rows, 0, 2, &mut out[.. cols * 2 * 3]);
-        p.render_draft(cols, rows, 2, 4, &mut out[cols * 2 * 3 ..]);
-        let again = { let mut o = vec![0f32; cols * rows * 3]; p.render_draft(cols, rows, 0, rows, &mut o); o };
-        assert_eq!(out, again);
-        let px = |x: usize, y: usize| &out[(y * cols + x) * 3 .. (y * cols + x) * 3 + 3];
-        // Sky at the top, lit ground at the bottom, and they differ.
-        assert!(px(0, 0).iter().all(|v| *v > 0.) && px(0, 3).iter().all(|v| *v > 0.));
-        assert_ne!(px(0, 0), px(0, 3));
     }
 
     #[test]

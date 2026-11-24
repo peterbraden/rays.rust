@@ -24,8 +24,9 @@ own test page, which renders one scene: see `scripts/build-web.sh`.)
   sun or a sky to be seen (clouds) brings what the scene lacks.
 - The scene file as text in the sidebar's other tab, editable, kept in step both ways.
 - Preview: drag to orbit, shift-drag to pan, scroll to zoom, click an object to select it.
-  While the camera moves the preview shows quick drafts (one unbounced ray per pixel, at half
-  size); path tracing starts again when it stops.
+  While the camera moves the preview shows the realtime raycaster's frames (one unbounced
+  ray per pixel, at half size; `raycaster.js`, `src/raycaster.rs`); path tracing starts
+  again when it stops. `?shading=<name>` chooses how they are shaded (`Shading::NAMES`).
 - The preview keeps adding samples, up to 4096 per pixel from each worker's share.
 - Loads the repository's demo scenes. "Save scene" downloads the edited scene as JSON, which
   the command line renders unchanged; "Save image" downloads the preview as it stands, as PNG.
@@ -38,7 +39,7 @@ flattened for it: triangles, spheres, boxes, planes and the simpler materials (s
 `src/wavefront/flat.rs`). It runs in a worker of its own (`gpu-worker.js`), so making its copy
 of the scene doesn't hold the page up. The render workers and servers start on every scene as
 usual, so there is a picture meanwhile; when the GPU is ready they stop (the workers keep the
-scene, to answer clicks and draw drafts while the camera moves) and its pictures replace
+scene, to answer clicks and raycast while the camera moves) and its pictures replace
 theirs. Otherwise the status line says why not (no WebGPU; what couldn't be flattened) and
 the CPU carries on, as it does when "CPU" is chosen. The GPU's copy is remade for every edit
 and kept for a camera move (`Renderer::set_camera`), and render servers are not used while
@@ -92,6 +93,10 @@ integer, boolean, string, path, vec2, vec3, color, enum (with `options`), materi
 - `worker.js`: each web worker builds its own copy of the scene and renders different layers
   (one sample per pixel each), in bands of rows.
 - `app.js` adds the bands up, encodes them with the scene's `output` settings, and draws.
+- `raycaster.js` gathers the realtime raycaster's frames from the workers while the camera
+  moves (each worker raycasts its share of the rows, `Preview::raycast`) and scales them up
+  onto the preview. How a frame is shaded is `rays::raycaster::Shading`: a new view (normals,
+  depth...) is a variant there, and needs nothing new here.
 - A camera move replaces only the camera. Any other edit rebuilds the scene in every worker,
   but only what changed: built objects are kept and reused when their description, and the
   materials, media and geometries they refer to, are the same; so are the sky's tables.

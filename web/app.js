@@ -6,6 +6,7 @@
 // WebAssembly and run in web workers (see worker.js): each holds its own copy of the scene and
 // renders different layers, which are added up here and drawn as they arrive.
 import { instantiate } from './rays.js';
+import { Raycaster } from './raycaster.js';
 
 const $ = id => document.getElementById(id);
 const canvas = $('canvas');
@@ -100,13 +101,11 @@ const STRIDE = workerCount + MAX_SERVERS;
 const CLIENT = Math.random().toString(36).slice(2);   // tells this page's requests from another's
 let servers = [];               // { url, threads, slot, sceneJson, sceneId, abort }
 
-// While the camera is being moved, quick draft frames stand in for the path-traced image.
-const DRAFT_SCALE = 0.5;        // draft size, as a fraction of the preview's
+// While the camera is being moved, the realtime raycaster's frames stand in for the
+// path-traced image (raycaster.js). `?shading=` chooses how they are shaded.
+const raycaster = new Raycaster({ scale: 0.5, shading: new URLSearchParams(location.search).get('shading') ?? '' });
 let interacting = false;        // the camera is being moved
-let draft = null;               // the draft frame being gathered from the workers
-let draftQueued = false;        // the camera moved again while that one was being made
 let idleTimer = 0;
-const draftCanvas = document.createElement('canvas');
 let pickId = 0;
 const picks = new Map();
 
@@ -164,7 +163,7 @@ async function restartScene() {
     const mine = ++gen;
     gpu = null;
     showError(null);
-    interacting = false; draft = null; draftQueued = false;
+    interacting = false; raycaster.cancel();
     stats.built = 0; stats.buildMs = 0; stats.rendering = false;
     // A worker still building the scene this one replaces can't hear about it until it has
     // finished: a build is one long call. A worker that has been at it for a while is
@@ -200,7 +199,7 @@ async function restartScene() {
         return;
     }
     resetAccumulation();
-    // The workers build the scene whoever renders it (they answer clicks and draw drafts),
+    // The workers build the scene whoever renders it (they answer clicks and raycast while the camera moves),
     // and start rendering it at once; the GPU takes over if and when it is ready.
     for (const w of workers) {
         if (!w.building) { w.buildStart = performance.now(); }
@@ -244,7 +243,7 @@ let sceneFiles = [];     // the current scene's assets, by path, as fetched
 // the simpler materials: `rays::wavefront::flat`), the GPU path tracer renders the picture,
 // in a worker of its own (gpu-worker.js). The render workers and servers always start on a
 // scene, so there is a picture while the GPU's copy is made; when the GPU worker says it is
-// ready they stop (the workers keep the scene, for picking and drafts) and its pictures
+// ready they stop (the workers keep the scene, for picking and raycasting) and its pictures
 // replace theirs. If the GPU can't take the scene, or "CPU" is chosen, they simply carry on,
 // and the status line says why the GPU didn't.
 
@@ -309,59 +308,49 @@ function onGpuMessage({ data: m }) {
 
 const cameraIsPlain = () => doc.camera && typeof doc.camera === 'object' && !JSON.stringify(doc.camera).includes('"$');
 
-// The camera is being moved by hand: follow it with drafts until the move ends.
+// The camera is being moved by hand: follow it with the raycaster until the move ends.
 function moveCamera() {
     if (!cameraIsPlain() || stats.built < workers.length) { restartCamera(); return; }
     interacting = true;
     dirty = false;
-    requestDraft();
+    requestRaycast();
     // A drag ends when the pointer is released; the wheel and the keys, when they go quiet.
     clearTimeout(idleTimer);
     if (!drag) { idleTimer = setTimeout(endInteraction, 300); }
 }
 
-// Ask every worker for its part of a draft from the current camera. One at a time: a camera
-// move during a draft asks again when it is done, so drafts never queue up behind the pointer.
-function requestDraft() {
-    if (draft) { draftQueued = true; return; }
-    draftQueued = false;
+// A raycast frame from the current camera. While one is being made, this only asks for
+// another once it is done (see raycaster.js).
+function requestRaycast() {
+    if (raycaster.busy) { raycaster.queue(); return; }
     const mine = ++gen;
     gpu = null;
     gpuWorker?.postMessage({ type: 'stop' });
-    const cols = Math.max(8, Math.round(pw * DRAFT_SCALE)), rows = Math.max(8, Math.round(ph * DRAFT_SCALE));
-    draft = { gen: mine, cols, rows, values: new Float32Array(cols * rows * 3), got: 0 };
-    const json = JSON.stringify(doc.camera);
-    for (const w of workers) { w.postMessage({ type: 'draft', gen: mine, json, cols, rows }); }
+    raycaster.request(mine, workers, doc.camera, pw, ph);
 }
 
-function onDraft(m) {
-    if (!draft || m.gen !== draft.gen) { return; }
-    draft.values.set(m.values, m.y0 * draft.cols * 3);
-    draft.got += m.y1 - m.y0;
-    if (draft.got < draft.rows) { return; }
-    drawDraft(draft);
-    draft = null;
-    if (draftQueued) { requestDraft(); } else if (!interacting) { restartCamera(); }
+function onRaycast(m) {
+    const frame = raycaster.receive(m);
+    if (!frame) { return; }
+    drawRaycast(frame);
+    if (raycaster.takeQueued()) { requestRaycast(); } else if (!interacting) { restartCamera(); }
 }
 
-// Show a draft, scaled up to the preview. It also becomes the picture the path-traced rows
-// replace as they arrive.
-function drawDraft({ cols, rows, values }) {
+// Show a raycast frame, scaled up to the preview. It also becomes the picture the
+// path-traced rows replace as they arrive.
+function drawRaycast(frame) {
     if (!encoder) { return; }
     let rgba;
     try {
-        rgba = encoder.encode(values, 1, doc.output && typeof doc.output === 'object' ? doc.output : null);
+        rgba = encoder.encode(frame.values, 1, doc.output && typeof doc.output === 'object' ? doc.output : null);
     } catch (e) {
         encoder = null;
         instantiate().then(r => { encoder = r; });
         return;
     }
-    draftCanvas.width = cols; draftCanvas.height = rows;
-    draftCanvas.getContext('2d').putImageData(new ImageData(rgba, cols, rows), 0, 0);
-    ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(draftCanvas, 0, 0, pw, ph);
+    raycaster.draw(ctx, rgba, frame, pw, ph);
     image = ctx.getImageData(0, 0, pw, ph);
-    $('status').textContent = `${pw}×${ph} · moving (draft)`;
+    $('status').textContent = `${pw}×${ph} · moving (raycast)`;
 }
 
 // The move is over: path trace from where the camera now is.
@@ -369,7 +358,7 @@ function endInteraction() {
     clearTimeout(idleTimer);
     if (!interacting) { return; }
     interacting = false;
-    if (!draft) { restartCamera(); }
+    if (!raycaster.busy) { restartCamera(); }
 }
 
 let sceneTimer = 0;
@@ -476,8 +465,8 @@ function onWorkerMessage({ data: m, target }) {
         return;
     }
     if (m.gen !== gen) { return; }
-    if (m.type === 'draft') {
-        onDraft(m);
+    if (m.type === 'raycast') {
+        onRaycast(m);
     } else if (m.type === 'built') {
         stats.built += 1;
         stats.buildMs = Math.max(stats.buildMs, m.ms);
@@ -492,6 +481,8 @@ function onWorkerMessage({ data: m, target }) {
         dirty = true;
     } else if (m.type === 'error') {
         showError(m.message);
+        // A frame a worker couldn't make won't be finished: let the next move ask afresh.
+        if (raycaster.busy) { raycaster.cancel(); if (!interacting) { restartCamera(); } }
     }
 }
 
@@ -1376,6 +1367,6 @@ async function start() {
 }
 
 // For debugging and tests.
-window.rays = { get doc() { return doc; }, get gpu() { return gpu; }, get gpuWhyNot() { return gpuWhyNot; }, get servers() { return servers; }, get schema() { return schema; }, get interacting() { return interacting || Boolean(draft); }, get stats() { return stats; }, get rowSamples() { return rowSamples; }, select };
+window.rays = { get doc() { return doc; }, get gpu() { return gpu; }, get gpuWhyNot() { return gpuWhyNot; }, get servers() { return servers; }, get schema() { return schema; }, get interacting() { return interacting || raycaster.busy; }, get stats() { return stats; }, get rowSamples() { return rowSamples; }, select };
 
 start();

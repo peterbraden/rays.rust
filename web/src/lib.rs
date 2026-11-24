@@ -241,11 +241,17 @@ impl Preview {
     /// The rays cast by the last `render_rows`.
     pub fn rays_cast(&self) -> f64 { self.rays.get() }
 
-    /// Rows `y0 .. y1` of a quick draft image, `cols` by `rows` pixels: three floats per pixel.
-    pub fn render_draft(&self, cols: usize, rows: usize, y0: usize, y1: usize) -> Vec<f32> {
+    /// Rows `y0 .. y1` of a quick image from the realtime raycaster (`rays::raycaster`),
+    /// `cols` by `rows` pixels: three floats per pixel. `shading` names how it shades
+    /// (`Shading::NAMES`; empty for the default).
+    pub fn raycast(&self, shading: &str, cols: usize, rows: usize, y0: usize, y1: usize) -> Result<Vec<f32>, JsValue> {
+        use rays::raycaster::Shading;
+        let shading = if shading.is_empty() { Shading::default() } else {
+            Shading::parse(shading).ok_or_else(|| JsValue::from_str(&format!("no shading \"{}\" (there are: {})", shading, Shading::NAMES.join(", "))))?
+        };
         let mut out = vec![0f32; (y1 - y0) * cols * 3];
-        self.inner.render_draft(cols, rows, y0, y1, &mut out);
-        out
+        self.inner.raycast(shading, cols, rows, y0, y1, &mut out);
+        Ok(out)
     }
 
     /// The index in the scene file's `objects` of what is seen at pixel (x, y), or -1.

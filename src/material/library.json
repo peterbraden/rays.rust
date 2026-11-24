@@ -10441,5 +10441,1262 @@
       }
     ],
     "scale": 0.7854
+  },
+  "veined_basalt": {
+    "show": "landscape",
+    "doc": "Dark basalt in a cliff, near black, crazed by a fine network of pale mineral veins and split by horizontal fractures, with faint brown stains; modelled on Poly Haven's dark_rock.",
+    "variables": {
+      "veins": {
+        "node": "abs",
+        "input": {
+          "node": "warp",
+          "amount": 0.03,
+          "scale": 0.15,
+          "seed": 1002,
+          "octaves": 2,
+          "input": {
+            "node": "fractal",
+            "scale": 0.25,
+            "seed": 1001,
+            "smallest": 0.003,
+            "roughness": 0.55
+          }
+        }
+      },
+      "fractures": {
+        "node": "multiply",
+        "inputs": [
+          {
+            "node": "smoothstep",
+            "from": 0.012,
+            "to": 0.0,
+            "input": {
+              "node": "transform",
+              "scale": [
+                40,
+                1,
+                40
+              ],
+              "input": {
+                "node": "warp",
+                "amount": 0.005,
+                "scale": 0.5,
+                "seed": 1004,
+                "octaves": 2,
+                "input": {
+                  "node": "cells",
+                  "style": "edges",
+                  "scale": 0.25,
+                  "seed": 1003
+                }
+              }
+            }
+          },
+          {
+            "node": "smoothstep",
+            "from": -0.3,
+            "to": 0.1,
+            "input": {
+              "node": "fractal",
+              "scale": 0.8,
+              "seed": 1005
+            }
+          }
+        ]
+      },
+      "stain": {
+        "node": "smoothstep",
+        "from": 0.1,
+        "to": 0.5,
+        "input": {
+          "node": "fractal",
+          "scale": 0.6,
+          "seed": 1006,
+          "smallest": 0.01
+        }
+      },
+      "rock": [
+        0.045,
+        0.04,
+        0.035
+      ],
+      "rock2": [
+        0.07,
+        0.06,
+        0.05
+      ],
+      "vein": [
+        0.3,
+        0.28,
+        0.22
+      ],
+      "stain_colour": [
+        0.12,
+        0.08,
+        0.05
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "max",
+          "inputs": [
+            "$fractures",
+            {
+              "node": "smoothstep",
+              "from": 0.012,
+              "to": 0.0,
+              "input": "$veins"
+            }
+          ]
+        },
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": "$stain",
+              "color_map": [
+                [
+                  0,
+                  {
+                    "pattern": {
+                      "node": "fractal",
+                      "scale": 0.1,
+                      "seed": 1007,
+                      "smallest": 0.002
+                    },
+                    "color_map": [
+                      [
+                        -0.6,
+                        "$rock"
+                      ],
+                      [
+                        0.6,
+                        "$rock2"
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  1,
+                  "$stain_colour"
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            "$vein"
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                -0.003,
+                "$fractures"
+              ]
+            },
+            {
+              "node": "fractal",
+              "scale": 0.3,
+              "seed": 1008,
+              "style": "billow",
+              "smallest": 0.003,
+              "amplitude": 0.004
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "polyhaven:dark_rock",
+        "licence": "CC0",
+        "size": 2.42,
+        "view": "wall",
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "rock"
+              ],
+              [
+                "variables",
+                "rock2"
+              ],
+              [
+                "variables",
+                "stain_colour"
+              ]
+            ]
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "vein"
+              ]
+            ],
+            "chroma": 0.05
+          }
+        ]
+      }
+    ]
+  },
+  "weathered_grey_rock": {
+    "show": "landscape",
+    "doc": "Smooth weathered rock, grey-brown, broadly mottled, finely speckled with its grains, and pocked with small dark pits; modelled on Poly Haven's rock_01.",
+    "variables": {
+      "tone": {
+        "node": "add",
+        "inputs": [
+          {
+            "node": "fractal",
+            "scale": 1.2,
+            "seed": 1011,
+            "smallest": 0.02,
+            "roughness": 0.5
+          },
+          {
+            "node": "multiply",
+            "inputs": [
+              0.4,
+              {
+                "node": "fractal",
+                "scale": 0.15,
+                "seed": 1012,
+                "smallest": 0.005
+              }
+            ]
+          }
+        ]
+      },
+      "grain": {
+        "node": "cells",
+        "style": "id",
+        "scale": 0.003,
+        "seed": 1013
+      },
+      "pits": {
+        "node": "multiply",
+        "inputs": [
+          {
+            "node": "smoothstep",
+            "from": 0.12,
+            "to": 0.06,
+            "input": {
+              "node": "cells",
+              "style": "f1",
+              "scale": 0.02,
+              "seed": 1014
+            }
+          },
+          {
+            "node": "smoothstep",
+            "from": 0.0,
+            "to": 0.3,
+            "input": {
+              "node": "fractal",
+              "scale": 0.3,
+              "seed": 1015
+            }
+          }
+        ]
+      },
+      "rock": [
+        0.26,
+        0.24,
+        0.21
+      ],
+      "rock2": [
+        0.36,
+        0.34,
+        0.3
+      ],
+      "pit": [
+        0.12,
+        0.11,
+        0.1
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": "$pits",
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": {
+                "node": "add",
+                "inputs": [
+                  "$tone",
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.35,
+                      "$grain"
+                    ]
+                  }
+                ]
+              },
+              "color_map": [
+                [
+                  -0.7,
+                  "$rock"
+                ],
+                [
+                  0.7,
+                  "$rock2"
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            "$pit"
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                -0.002,
+                "$pits"
+              ]
+            },
+            {
+              "node": "fractal",
+              "scale": 0.5,
+              "seed": 1016,
+              "style": "billow",
+              "smallest": 0.002,
+              "amplitude": 0.004
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "polyhaven:rock_01",
+        "licence": "CC0",
+        "size": 1.5,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "rock"
+              ],
+              [
+                "variables",
+                "rock2"
+              ]
+            ]
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "pit"
+              ]
+            ],
+            "chroma": 0.04
+          }
+        ]
+      }
+    ]
+  },
+  "weathered_pink_granite": {
+    "show": "landscape",
+    "doc": "Coarse pink granite weathered rough: salmon feldspar in blotches among grey-brown quartz and dark mica, the whole dulled and crumbly; modelled on Poly Haven's rock_04.",
+    "variables": {
+      "blotch": {
+        "node": "warp",
+        "amount": 0.02,
+        "scale": 0.06,
+        "seed": 1022,
+        "octaves": 2,
+        "input": {
+          "node": "fractal",
+          "scale": 0.12,
+          "seed": 1021,
+          "smallest": 0.004,
+          "roughness": 0.6
+        }
+      },
+      "crystals": {
+        "node": "warp",
+        "amount": 0.003,
+        "scale": 0.01,
+        "seed": 1024,
+        "octaves": 2,
+        "input": {
+          "node": "cells",
+          "style": "id",
+          "scale": 0.008,
+          "seed": 1023
+        }
+      },
+      "pink": [
+        0.56,
+        0.38,
+        0.3
+      ],
+      "grey": [
+        0.35,
+        0.31,
+        0.26
+      ],
+      "dark": [
+        0.14,
+        0.12,
+        0.1
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "add",
+          "inputs": [
+            "$blotch",
+            {
+              "node": "multiply",
+              "inputs": [
+                0.5,
+                "$crystals"
+              ]
+            }
+          ]
+        },
+        "color_map": [
+          [
+            -0.45,
+            "$dark"
+          ],
+          [
+            -0.25,
+            "$grey"
+          ],
+          [
+            -0.05,
+            "$grey"
+          ],
+          [
+            0.2,
+            "$pink"
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "fractal",
+          "scale": 0.1,
+          "seed": 1025,
+          "style": "billow",
+          "smallest": 0.002,
+          "amplitude": 0.004
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "polyhaven:rock_04",
+        "licence": "CC0",
+        "size": 1.5,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "pink"
+              ],
+              [
+                "variables",
+                "grey"
+              ],
+              [
+                "variables",
+                "dark"
+              ]
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "caliche_ground": {
+    "show": "landscape",
+    "doc": "Dry gravelly brown soil broken by ragged patches of pale lime crust (caliche) where it shows through; modelled on Poly Haven's coral_gravel.",
+    "variables": {
+      "crust": {
+        "node": "warp",
+        "amount": 0.05,
+        "scale": 0.2,
+        "seed": 1032,
+        "octaves": 2,
+        "input": {
+          "node": "fractal",
+          "scale": 0.5,
+          "seed": 1031,
+          "smallest": 0.005,
+          "roughness": 0.65
+        }
+      },
+      "amount": 0.35,
+      "gravel": {
+        "node": "cells",
+        "style": "id",
+        "scale": 0.01,
+        "seed": 1033
+      },
+      "soil": [
+        0.3,
+        0.21,
+        0.13
+      ],
+      "soil2": [
+        0.4,
+        0.29,
+        0.19
+      ],
+      "lime": [
+        0.66,
+        0.58,
+        0.45
+      ],
+      "pebble": [
+        0.5,
+        0.44,
+        0.36
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "expr",
+          "expr": "c + 0.8 * a - 0.4",
+          "inputs": {
+            "c": "$crust",
+            "a": "$amount"
+          },
+          "range": [
+            -2,
+            2
+          ]
+        },
+        "color_map": [
+          [
+            0.0,
+            {
+              "pattern": "$gravel",
+              "color_map": [
+                [
+                  0,
+                  "$soil"
+                ],
+                [
+                  0.7,
+                  "$soil2"
+                ],
+                [
+                  0.92,
+                  "$pebble"
+                ]
+              ],
+              "interpolation": "step"
+            }
+          ],
+          [
+            0.06,
+            "$lime"
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.003,
+                {
+                  "node": "smoothstep",
+                  "from": 0.0,
+                  "to": 0.1,
+                  "input": "$crust"
+                }
+              ]
+            },
+            {
+              "node": "fractal",
+              "scale": 0.02,
+              "seed": 1034,
+              "style": "billow",
+              "smallest": 0.001,
+              "amplitude": 0.0008
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "polyhaven:coral_gravel",
+        "licence": "CC0",
+        "size": 2.0,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "soil"
+              ],
+              [
+                "variables",
+                "soil2"
+              ],
+              [
+                "variables",
+                "pebble"
+              ]
+            ]
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "lime"
+              ]
+            ],
+            "chroma": 0.05
+          },
+          {
+            "path": [
+              "variables",
+              "amount"
+            ],
+            "min": 0.2,
+            "max": 0.5
+          }
+        ]
+      }
+    ]
+  },
+  "leaf_litter_gravel": {
+    "show": "landscape",
+    "doc": "Dark grey gravel strewn with brown fallen leaves lying every which way; modelled on Poly Haven's leaf_scattered_gravel.",
+    "variables": {
+      "stones": {
+        "node": "warp",
+        "amount": 0.004,
+        "scale": 0.015,
+        "seed": 1042,
+        "octaves": 2,
+        "input": {
+          "node": "cells",
+          "style": "edges",
+          "scale": 0.02,
+          "seed": 1041
+        }
+      },
+      "stone_id": {
+        "node": "warp",
+        "amount": 0.004,
+        "scale": 0.015,
+        "seed": 1042,
+        "octaves": 2,
+        "input": {
+          "node": "cells",
+          "style": "id",
+          "scale": 0.02,
+          "seed": 1041
+        }
+      },
+      "leaves": {
+        "node": "max",
+        "inputs": [
+          {
+            "node": "transform",
+            "rotate": [
+              0,
+              0,
+              0
+            ],
+            "input": {
+              "node": "transform",
+              "scale": [
+                1,
+                1,
+                2.4
+              ],
+              "input": {
+                "node": "expr",
+                "expr": "select(i - 1 + s, 0, h)",
+                "inputs": {
+                  "i": {
+                    "node": "cells",
+                    "style": "id",
+                    "scale": 0.02,
+                    "seed": 1043
+                  },
+                  "s": "$share",
+                  "h": {
+                    "node": "cells",
+                    "style": "stones",
+                    "scale": 0.02,
+                    "seed": 1043
+                  }
+                },
+                "range": [
+                  0,
+                  1
+                ]
+              }
+            }
+          },
+          {
+            "node": "transform",
+            "rotate": [
+              0,
+              60,
+              0
+            ],
+            "input": {
+              "node": "transform",
+              "scale": [
+                1,
+                1,
+                2.4
+              ],
+              "input": {
+                "node": "expr",
+                "expr": "select(i - 1 + s, 0, h)",
+                "inputs": {
+                  "i": {
+                    "node": "cells",
+                    "style": "id",
+                    "scale": 0.02,
+                    "seed": 1044
+                  },
+                  "s": "$share",
+                  "h": {
+                    "node": "cells",
+                    "style": "stones",
+                    "scale": 0.02,
+                    "seed": 1044
+                  }
+                },
+                "range": [
+                  0,
+                  1
+                ]
+              }
+            }
+          },
+          {
+            "node": "transform",
+            "rotate": [
+              0,
+              120,
+              0
+            ],
+            "input": {
+              "node": "transform",
+              "scale": [
+                1,
+                1,
+                2.4
+              ],
+              "input": {
+                "node": "expr",
+                "expr": "select(i - 1 + s, 0, h)",
+                "inputs": {
+                  "i": {
+                    "node": "cells",
+                    "style": "id",
+                    "scale": 0.02,
+                    "seed": 1045
+                  },
+                  "s": "$share",
+                  "h": {
+                    "node": "cells",
+                    "style": "stones",
+                    "scale": 0.02,
+                    "seed": 1045
+                  }
+                },
+                "range": [
+                  0,
+                  1
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "share": 0.3,
+      "gravel": [
+        0.14,
+        0.14,
+        0.14
+      ],
+      "gravel2": [
+        0.24,
+        0.23,
+        0.22
+      ],
+      "gap": [
+        0.06,
+        0.05,
+        0.04
+      ],
+      "leaf": [
+        0.33,
+        0.17,
+        0.08
+      ],
+      "leaf2": [
+        0.42,
+        0.26,
+        0.14
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": "$leaves",
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": "$stones",
+              "color_map": [
+                [
+                  0,
+                  "$gap"
+                ],
+                [
+                  0.05,
+                  {
+                    "pattern": "$stone_id",
+                    "color_map": [
+                      [
+                        0,
+                        "$gravel"
+                      ],
+                      [
+                        1,
+                        "$gravel2"
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            0.15,
+            {
+              "pattern": {
+                "node": "fractal",
+                "scale": 0.02,
+                "seed": 1046
+              },
+              "color_map": [
+                [
+                  -0.5,
+                  "$leaf"
+                ],
+                [
+                  0.5,
+                  "$leaf2"
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.002,
+                "$leaves"
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.003,
+                {
+                  "node": "smoothstep",
+                  "from": 0,
+                  "to": 0.15,
+                  "input": "$stones"
+                }
+              ]
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "polyhaven:leaf_scattered_gravel",
+        "licence": "CC0",
+        "size": 1.8,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "gravel"
+              ],
+              [
+                "variables",
+                "gravel2"
+              ],
+              [
+                "variables",
+                "gap"
+              ]
+            ]
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "leaf"
+              ],
+              [
+                "variables",
+                "leaf2"
+              ]
+            ]
+          },
+          {
+            "path": [
+              "variables",
+              "share"
+            ],
+            "min": 0.2,
+            "max": 0.7
+          }
+        ]
+      }
+    ]
+  },
+  "stony_bank": {
+    "show": "landscape",
+    "doc": "A river bank of grey-beige silt and grit with small flat stones bedded in it, thickly in places; modelled on Poly Haven's river_small_rocks.",
+    "variables": {
+      "share": 0.35,
+      "patches": {
+        "node": "fractal",
+        "scale": 0.8,
+        "seed": 1051,
+        "smallest": 0.02
+      },
+      "big": {
+        "node": "expr",
+        "expr": "select(i - 1 + s, 0, h)",
+        "inputs": {
+          "i": {
+            "node": "cells",
+            "style": "id",
+            "scale": 0.06,
+            "seed": 1052
+          },
+          "s": {
+            "node": "expr",
+            "expr": "min(max(s + 0.4 * p, 0), 1)",
+            "inputs": {
+              "s": "$share",
+              "p": "$patches"
+            },
+            "range": [
+              0,
+              1
+            ]
+          },
+          "h": {
+            "node": "cells",
+            "style": "stones",
+            "scale": 0.06,
+            "seed": 1052
+          }
+        },
+        "range": [
+          0,
+          1
+        ]
+      },
+      "small": {
+        "node": "expr",
+        "expr": "select(i - 1 + s, 0, h)",
+        "inputs": {
+          "i": {
+            "node": "cells",
+            "style": "id",
+            "scale": 0.02,
+            "seed": 1053
+          },
+          "s": "$share",
+          "h": {
+            "node": "cells",
+            "style": "stones",
+            "scale": 0.02,
+            "seed": 1053
+          }
+        },
+        "range": [
+          0,
+          1
+        ]
+      },
+      "silt": [
+        0.32,
+        0.3,
+        0.26
+      ],
+      "silt2": [
+        0.4,
+        0.37,
+        0.32
+      ],
+      "stone": [
+        0.45,
+        0.43,
+        0.39
+      ],
+      "stone2": [
+        0.34,
+        0.33,
+        0.31
+      ]
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "max",
+          "inputs": [
+            "$big",
+            {
+              "node": "multiply",
+              "inputs": [
+                0.9,
+                "$small"
+              ]
+            }
+          ]
+        },
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": {
+                "node": "add",
+                "inputs": [
+                  "$patches",
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.4,
+                      {
+                        "node": "cells",
+                        "style": "id",
+                        "scale": 0.004,
+                        "seed": 1054
+                      }
+                    ]
+                  }
+                ]
+              },
+              "color_map": [
+                [
+                  -0.6,
+                  "$silt"
+                ],
+                [
+                  0.7,
+                  "$silt2"
+                ]
+              ]
+            }
+          ],
+          [
+            0.12,
+            {
+              "pattern": {
+                "node": "cells",
+                "style": "id",
+                "scale": 0.06,
+                "seed": 1052
+              },
+              "color_map": [
+                [
+                  0,
+                  "$stone2"
+                ],
+                [
+                  1,
+                  "$stone"
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.008,
+                "$big"
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.003,
+                "$small"
+              ]
+            },
+            {
+              "node": "fractal",
+              "scale": 0.02,
+              "seed": 1055,
+              "style": "billow",
+              "smallest": 0.001,
+              "amplitude": 0.0006
+            }
+          ]
+        },
+        "amount": 1
+      }
+    },
+    "references": [
+      {
+        "source": "polyhaven:river_small_rocks",
+        "licence": "CC0",
+        "size": 2.9,
+        "params": [
+          {
+            "field": "scale",
+            "min": 0.7,
+            "max": 1.4,
+            "log": true,
+            "default": 1
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "silt"
+              ],
+              [
+                "variables",
+                "silt2"
+              ]
+            ]
+          },
+          {
+            "kind": "colours",
+            "paths": [
+              [
+                "variables",
+                "stone"
+              ],
+              [
+                "variables",
+                "stone2"
+              ]
+            ],
+            "chroma": 0.05
+          },
+          {
+            "path": [
+              "variables",
+              "share"
+            ],
+            "min": 0.15,
+            "max": 0.6
+          }
+        ]
+      }
+    ]
   }
 }

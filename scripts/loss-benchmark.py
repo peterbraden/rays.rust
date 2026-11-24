@@ -30,6 +30,7 @@ import numpy as np
 from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.dont_write_bytecode = True  # importing fit-material.py would leave scripts/__pycache__
 spec = importlib.util.spec_from_file_location("fit", os.path.join(ROOT, "scripts", "fit-material.py"))
 fit = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fit)

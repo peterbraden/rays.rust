@@ -14,7 +14,13 @@
 //! place of the preset's own (`"roughness": 0.3` to dull a polished stone).
 //!
 //! A preset may define `variables` for itself, as a scene file does: a graph defined once and
-//! used by both its colours and its bump, so they line up. And `seed_direction`: the one
+//! used by both its colours and its bump, so they line up. They are also its parameters: a
+//! field of the same name replaces one (`"amount": 0.8` for more dust, `"color": [...]`).
+//!
+//! An overlay (dust, grime, moss, rain streaks...) lies over another material, given by
+//! `"over"` (a name or a definition), which the preset refers to as `"@over"`: weathering for
+//! anything. Presets may use other presets, `{"type": "library", ...}`, which take the outer
+//! one's scale and seed with them. And `seed_direction`: the one
 //! direction its seed may move it, where moving it any other way would change its kind (wood's
 //! rings are about an axis, which the seed must slide along, not away from).
 use serde_json::{Map, Value};
@@ -35,6 +41,11 @@ pub fn names() -> Vec<&'static str> {
     library().keys().map(|k| k.as_str()).collect()
 }
 
+/// Whether a preset is an overlay, lying over the material given as `"over"`.
+pub fn is_overlay(name: &str) -> bool {
+    library().get(name).and_then(|p| p.get("overlay")).and_then(Value::as_bool).unwrap_or(false)
+}
+
 /// A preset's one-line description.
 pub fn doc(name: &str) -> Option<&'static str> {
     library().get(name)?.get("doc")?.as_str()
@@ -48,7 +59,17 @@ pub fn expand(props: &Value) -> Result<Value, String> {
         .ok_or("a library material's scale must be a positive number")?;
     let seed = props.get("seed").map_or(Some(0), Value::as_u64).ok_or("a library material's seed is a whole number, at least 0")?;
     // The material, with the preset's own variables substituted.
-    let mut doc = serde_json::json!({ "variables": preset.get("variables").cloned().unwrap_or(Value::Null), "material": preset["material"].clone() });
+    let mut variables = match preset.get("variables") {
+        Some(Value::Object(m)) => m.clone(),
+        _ => Map::new(),
+    };
+    // Fields naming the preset's variables set them.
+    for (k, v) in props.as_object().into_iter().flatten() {
+        if variables.contains_key(k) && !RESERVED.contains(&k.as_str()) {
+            variables.insert(k.clone(), v.clone());
+        }
+    }
+    let mut doc = serde_json::json!({ "variables": Value::Object(variables.clone()), "material": preset["material"].clone() });
     doc = crate::scenefile::SceneFile::substitute_variables(doc).map_err(|e| format!("library material {}: {}", name, e))?;
     let mut material = doc["material"].take();
     let offset = if seed == 0 { [0.; 3] } else {
@@ -69,15 +90,34 @@ pub fn expand(props: &Value) -> Result<Value, String> {
     if scale != 1. || seed != 0 {
         place(&mut material, scale, offset);
     }
+    // What an overlay lies over.
+    let over = props.get("over");
+    put_over(&mut material, over).map_err(|e| format!("library material {}: {}", name, e))?;
     // Other fields override the preset's.
     if let (Value::Object(m), Value::Object(p)) = (&mut material, props) {
         for (k, v) in p {
-            if !["type", "name", "scale", "seed"].contains(&k.as_str()) {
+            if !RESERVED.contains(&k.as_str()) && !variables.contains_key(k) {
                 m.insert(k.clone(), v.clone());
             }
         }
     }
     Ok(material)
+}
+
+/// Fields of a library material that aren't the preset's own.
+const RESERVED: [&str; 5] = ["type", "name", "scale", "seed", "over"];
+
+/// `"@over"` replaced by what the overlay lies over.
+fn put_over(v: &mut Value, over: Option<&Value>) -> Result<(), String> {
+    match v {
+        Value::String(s) if s == "@over" => {
+            *v = over.cloned().ok_or("an overlay needs \"over\": the material it lies over")?;
+        },
+        Value::Object(m) => for (_, f) in m.iter_mut() { put_over(f, over)? },
+        Value::Array(a) => for f in a { put_over(f, over)? },
+        _ => {},
+    }
+    Ok(())
 }
 
 /// Every graph in a material definition (any object with a `"node"`) read at its point scaled
@@ -87,6 +127,19 @@ fn place(v: &mut Value, scale: f64, offset: [f64; 3]) {
         Value::Object(m) if m.contains_key("node") => {
             let graph = v.take();
             *v = serde_json::json!({ "node": "transform", "scale": scale, "translate": offset, "input": graph });
+        },
+        // Another preset: scaled and seeded with this one.
+        Value::Object(m) if m.get("type").and_then(Value::as_str) == Some("library") => {
+            let inner = m.get("scale").and_then(Value::as_f64).unwrap_or(1.);
+            m.insert("scale".into(), serde_json::json!(inner * scale));
+            let seed = m.get("seed").and_then(Value::as_u64).unwrap_or(0);
+            // A seed from the offset, so different outer seeds give different inner ones.
+            let outer = (offset[0].to_bits() ^ offset[1].to_bits().rotate_left(21) ^ offset[2].to_bits().rotate_left(42)) % 1_000_003;
+            m.insert("seed".into(), serde_json::json!(seed.wrapping_mul(31).wrapping_add(outer)));
+            // And what it lies over, if anything.
+            if let Some(over) = m.get_mut("over") {
+                place(over, scale, offset);
+            }
         },
         Value::Object(m) => {
             if let Some(n) = m.get_mut("normal").filter(|n| n.get("graph").is_some()) {
@@ -116,9 +169,9 @@ mod tests {
                     "shadow_bias": 0.0001, "background": [0.5, 0.5, 0.5], "max_depth": 2,
                     "camera": {{ "location": [0, 0, -3], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }},
                     "lights": [ {{ "location": [2, 5, -5], "intensity": 50 }} ],
-                    "materials": {{ "M": {{ "type": "library", "name": "{}", "scale": {}, "seed": {} }} }},
+                    "materials": {{ "M": {{ "type": "library", "name": "{}", "scale": {}, "seed": {}{} }} }},
                     "objects": [ {{ "type": "sphere", "location": [0, 0, 0], "radius": 1, "material": "M" }} ]
-                }}"#, name, scale, seed));
+                }}"#, name, scale, seed, if is_overlay(name) {{ r#", "over": {"type": "lambertian", "albedo": [0.5, 0.5, 0.5]}"# }} else {{ "" }}));
                 for k in 0 .. 20 {
                     let r = crate::ray::Ray { ro: crate::na::Vector3::new(-0.5 + k as f64 * 0.05, 0.3, -3.), rd: crate::na::Vector3::new(0., -0.1, 1.) };
                     let c = crate::trace::trace(&r, 0, &s).1;
@@ -136,5 +189,20 @@ mod tests {
         assert!(text.contains("\"transform\""), "{}", text);
         assert!(expand(&serde_json::json!({"type": "library", "name": "unobtainium"})).unwrap_err().contains("no library material"));
         assert!(expand(&serde_json::json!({"type": "library", "name": names()[0], "scale": 0})).is_err());
+    }
+
+    #[test]
+    fn test_overlays_and_parameters() {
+        let overlay = names().into_iter().find(|n| is_overlay(n)).expect("an overlay");
+        assert!(expand(&serde_json::json!({"type": "library", "name": overlay})).unwrap_err().contains("over"));
+        let base = serde_json::json!({"type": "lambertian", "albedo": [0.1, 0.2, 0.3]});
+        let m = expand(&serde_json::json!({"type": "library", "name": overlay, "over": base.clone(), "scale": 3})).unwrap();
+        // The base goes in as given, not scaled with the overlay.
+        assert!(m.to_string().contains(&base.to_string()), "{}", m);
+        // A variable set by a field of its name.
+        let preset = names().into_iter().find(|n| library()[*n].get("variables").is_some_and(|v| v.get("amount").is_some())).expect("a preset with an amount");
+        let over = if is_overlay(preset) { base } else { Value::Null };
+        let a = expand(&serde_json::json!({"type": "library", "name": preset, "over": over, "amount": 0.123456})).unwrap();
+        assert!(a.to_string().contains("0.123456") && a.get("amount").is_none(), "{}", a);
     }
 }

@@ -148,7 +148,49 @@
           "smallest": 0.002,
           "seed": 23
         }
-      }
+      },
+      "palette": [
+        [
+          0.0,
+          [
+            0.85,
+            0.84,
+            0.8
+          ]
+        ],
+        [
+          0.006,
+          [
+            0.55,
+            0.55,
+            0.53
+          ]
+        ],
+        [
+          0.018,
+          [
+            0.06,
+            0.06,
+            0.06
+          ]
+        ],
+        [
+          0.04,
+          [
+            0.03,
+            0.03,
+            0.032
+          ]
+        ],
+        [
+          1.0,
+          [
+            0.018,
+            0.018,
+            0.02
+          ]
+        ]
+      ]
     },
     "material": {
       "type": "plastic",
@@ -169,48 +211,7 @@
           ]
         },
         "interpolation": "smooth",
-        "color_map": [
-          [
-            0.0,
-            [
-              0.85,
-              0.84,
-              0.8
-            ]
-          ],
-          [
-            0.006,
-            [
-              0.55,
-              0.55,
-              0.53
-            ]
-          ],
-          [
-            0.018,
-            [
-              0.06,
-              0.06,
-              0.06
-            ]
-          ],
-          [
-            0.04,
-            [
-              0.03,
-              0.03,
-              0.032
-            ]
-          ],
-          [
-            1.0,
-            [
-              0.018,
-              0.018,
-              0.02
-            ]
-          ]
-        ]
+        "color_map": "$palette"
       }
     }
   },
@@ -348,7 +349,65 @@
         "style": "id",
         "scale": 0.004,
         "seed": 42
-      }
+      },
+      "palette": [
+        [
+          0.0,
+          [
+            0.03,
+            0.03,
+            0.03
+          ]
+        ],
+        [
+          0.12,
+          [
+            0.06,
+            0.055,
+            0.05
+          ]
+        ],
+        [
+          0.2,
+          [
+            0.32,
+            0.32,
+            0.33
+          ]
+        ],
+        [
+          0.35,
+          [
+            0.45,
+            0.45,
+            0.46
+          ]
+        ],
+        [
+          0.5,
+          [
+            0.62,
+            0.42,
+            0.37
+          ]
+        ],
+        [
+          0.7,
+          [
+            0.7,
+            0.5,
+            0.44
+          ]
+        ],
+        [
+          0.85,
+          [
+            0.76,
+            0.6,
+            0.55
+          ]
+        ]
+      ]
     },
     "material": {
       "type": "plastic",
@@ -357,64 +416,7 @@
       "albedo": {
         "pattern": "$crystals",
         "interpolation": "step",
-        "color_map": [
-          [
-            0.0,
-            [
-              0.03,
-              0.03,
-              0.03
-            ]
-          ],
-          [
-            0.12,
-            [
-              0.06,
-              0.055,
-              0.05
-            ]
-          ],
-          [
-            0.2,
-            [
-              0.32,
-              0.32,
-              0.33
-            ]
-          ],
-          [
-            0.35,
-            [
-              0.45,
-              0.45,
-              0.46
-            ]
-          ],
-          [
-            0.5,
-            [
-              0.62,
-              0.42,
-              0.37
-            ]
-          ],
-          [
-            0.7,
-            [
-              0.7,
-              0.5,
-              0.44
-            ]
-          ],
-          [
-            0.85,
-            [
-              0.76,
-              0.6,
-              0.55
-            ]
-          ]
-        ]
+        "color_map": "$palette"
       }
     }
   },
@@ -855,7 +857,46 @@
         "spread": 0.3,
         "plan": false,
         "seed": 84
-      }
+      },
+      "palette": [
+        [
+          0.0,
+          [
+            0.56,
+            0.4,
+            0.24
+          ]
+        ],
+        [
+          0.4,
+          [
+            0.5,
+            0.34,
+            0.19
+          ]
+        ],
+        [
+          0.75,
+          [
+            0.38,
+            0.24,
+            0.12
+          ]
+        ],
+        [
+          1.0,
+          [
+            0.31,
+            0.19,
+            0.09
+          ]
+        ]
+      ],
+      "pore_color": [
+        0.2,
+        0.12,
+        0.06
+      ]
     },
     "material": {
       "type": "plastic",
@@ -880,49 +921,12 @@
                   }
                 ]
               },
-              "color_map": [
-                [
-                  0.0,
-                  [
-                    0.56,
-                    0.4,
-                    0.24
-                  ]
-                ],
-                [
-                  0.4,
-                  [
-                    0.5,
-                    0.34,
-                    0.19
-                  ]
-                ],
-                [
-                  0.75,
-                  [
-                    0.38,
-                    0.24,
-                    0.12
-                  ]
-                ],
-                [
-                  1.0,
-                  [
-                    0.31,
-                    0.19,
-                    0.09
-                  ]
-                ]
-              ]
+              "color_map": "$palette"
             }
           ],
           [
             1.0,
-            [
-              0.2,
-              0.12,
-              0.06
-            ]
+            "$pore_color"
           ]
         ]
       },
@@ -2063,6 +2067,2362 @@
           ]
         },
         "amount": 1
+      }
+    }
+  },
+  "dust": {
+    "doc": "Overlay: a fine pale dust settled on whatever faces up, thickest in corners, over the material given as \"over\".",
+    "overlay": true,
+    "variables": {
+      "amount": 0.7,
+      "color": [
+        0.56,
+        0.52,
+        0.45
+      ],
+      "lie": {
+        "node": "multiply",
+        "inputs": [
+          "$amount",
+          {
+            "node": "slope",
+            "from": 55,
+            "to": 5,
+            "breakup": {
+              "node": "fractal",
+              "scale": 0.1,
+              "seed": 301,
+              "amplitude": 20
+            }
+          },
+          {
+            "node": "add",
+            "inputs": [
+              0.55,
+              {
+                "node": "multiply",
+                "inputs": [
+                  0.45,
+                  {
+                    "node": "smoothstep",
+                    "from": -0.3,
+                    "to": 0.4,
+                    "input": {
+                      "node": "fractal",
+                      "scale": 0.25,
+                      "seed": 302
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": "@over"
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": "$color"
+          },
+          "mask": "$lie"
+        }
+      ]
+    }
+  },
+  "grime": {
+    "doc": "Overlay: dark dirt gathered in crevices, corners and where objects meet (found by short rays, the occlusion node), in blotches.",
+    "overlay": true,
+    "variables": {
+      "amount": 0.85,
+      "color": [
+        0.07,
+        0.06,
+        0.045
+      ],
+      "reach": 0.15,
+      "where": {
+        "node": "multiply",
+        "inputs": [
+          "$amount",
+          {
+            "node": "add",
+            "inputs": [
+              {
+                "node": "smoothstep",
+                "from": 0.04,
+                "to": 0.4,
+                "input": {
+                  "node": "occlusion",
+                  "radius": "$reach",
+                  "rays": 6
+                }
+              },
+              {
+                "node": "multiply",
+                "inputs": [
+                  0.25,
+                  {
+                    "node": "smoothstep",
+                    "from": 0.2,
+                    "to": 0.6,
+                    "input": {
+                      "node": "fractal",
+                      "scale": 0.15,
+                      "seed": 311
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "node": "add",
+            "inputs": [
+              0.5,
+              {
+                "node": "multiply",
+                "inputs": [
+                  0.5,
+                  {
+                    "node": "smoothstep",
+                    "from": -0.4,
+                    "to": 0.3,
+                    "input": {
+                      "node": "fractal",
+                      "scale": 0.04,
+                      "seed": 312,
+                      "smallest": 0.001
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": "@over"
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": "$color"
+          },
+          "mask": {
+            "node": "clamp",
+            "min": 0,
+            "max": 1,
+            "input": "$where"
+          }
+        }
+      ]
+    }
+  },
+  "rain_streaks": {
+    "doc": "Overlay: dark streaks where rain has run down steep faces, washed from the edges above, longer than they are wide.",
+    "overlay": true,
+    "variables": {
+      "amount": 0.8,
+      "color": [
+        0.1,
+        0.095,
+        0.085
+      ],
+      "streaks": {
+        "node": "transform",
+        "scale": [
+          1,
+          14,
+          1
+        ],
+        "input": {
+          "node": "fractal",
+          "scale": 0.05,
+          "seed": 321,
+          "smallest": 0.002,
+          "roughness": 0.6
+        }
+      }
+    },
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": "@over"
+        },
+        {
+          "material": {
+            "type": "plastic",
+            "albedo": "$color",
+            "roughness": 0.35
+          },
+          "mask": {
+            "node": "multiply",
+            "inputs": [
+              "$amount",
+              {
+                "node": "slope",
+                "from": 45,
+                "to": 75
+              },
+              {
+                "node": "smoothstep",
+                "from": 0.05,
+                "to": 0.35,
+                "input": "$streaks"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "moss": {
+    "doc": "Overlay: cushions of moss on what faces up and in damp hollows, patchy, raised and soft-edged.",
+    "overlay": true,
+    "variables": {
+      "amount": 0.75,
+      "patches": {
+        "node": "add",
+        "inputs": [
+          {
+            "node": "fractal",
+            "scale": 0.12,
+            "seed": 331,
+            "smallest": 0.004,
+            "roughness": 0.6
+          },
+          {
+            "node": "multiply",
+            "inputs": [
+              0.4,
+              {
+                "node": "occlusion",
+                "radius": 0.1,
+                "rays": 4
+              }
+            ]
+          }
+        ]
+      },
+      "relief": {
+        "node": "fractal",
+        "scale": 0.004,
+        "seed": 333,
+        "style": "billow",
+        "smallest": 0.0004,
+        "amplitude": 0.0015
+      }
+    },
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": "@over"
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": {
+                "node": "fractal",
+                "scale": 0.01,
+                "seed": 332,
+                "smallest": 0.0005
+              },
+              "color_map": [
+                [
+                  -0.6,
+                  [
+                    0.07,
+                    0.11,
+                    0.02
+                  ]
+                ],
+                [
+                  0.0,
+                  [
+                    0.14,
+                    0.22,
+                    0.04
+                  ]
+                ],
+                [
+                  0.6,
+                  [
+                    0.28,
+                    0.34,
+                    0.08
+                  ]
+                ]
+              ]
+            },
+            "normal": {
+              "graph": "$relief",
+              "amount": 1
+            }
+          },
+          "mask": {
+            "node": "multiply",
+            "inputs": [
+              {
+                "node": "slope",
+                "from": 70,
+                "to": 25
+              },
+              {
+                "node": "expr",
+                "expr": "min(max((p - 0.45 + 0.6 * a) / 0.12, 0), 1)",
+                "inputs": {
+                  "p": "$patches",
+                  "a": "$amount"
+                },
+                "range": [
+                  0,
+                  1
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "lichen": {
+    "doc": "Overlay: crustose lichen, round patches with paler rims spreading over stone, more on faces turned up.",
+    "overlay": true,
+    "variables": {
+      "amount": 0.6,
+      "color": [
+        0.52,
+        0.55,
+        0.42
+      ],
+      "rim": [
+        0.72,
+        0.73,
+        0.62
+      ],
+      "patch": {
+        "node": "multiply",
+        "inputs": [
+          {
+            "node": "smoothstep",
+            "from": 0.55,
+            "to": 0.5,
+            "input": {
+              "node": "warp",
+              "amount": 0.006,
+              "scale": 0.02,
+              "seed": 341,
+              "input": {
+                "node": "cells",
+                "style": "f1",
+                "scale": 0.035,
+                "seed": 342
+              }
+            }
+          },
+          {
+            "node": "expr",
+            "expr": "select(i - 1 + a, 0, 1)",
+            "inputs": {
+              "i": {
+                "node": "cells",
+                "style": "id",
+                "scale": 0.035,
+                "seed": 342
+              },
+              "a": "$amount"
+            },
+            "range": [
+              0,
+              1
+            ]
+          }
+        ]
+      }
+    },
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": "@over"
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": {
+                "node": "warp",
+                "amount": 0.006,
+                "scale": 0.02,
+                "seed": 341,
+                "input": {
+                  "node": "cells",
+                  "style": "f1",
+                  "scale": 0.035,
+                  "seed": 342
+                }
+              },
+              "color_map": [
+                [
+                  0,
+                  "$color"
+                ],
+                [
+                  0.4,
+                  "$color"
+                ],
+                [
+                  0.52,
+                  "$rim"
+                ]
+              ]
+            },
+            "normal": {
+              "graph": {
+                "node": "multiply",
+                "inputs": [
+                  0.0002,
+                  {
+                    "node": "fractal",
+                    "scale": 0.003,
+                    "seed": 343,
+                    "style": "billow",
+                    "smallest": 0.0003
+                  }
+                ]
+              },
+              "amount": 1
+            }
+          },
+          "mask": {
+            "node": "multiply",
+            "inputs": [
+              "$patch",
+              {
+                "node": "slope",
+                "from": 120,
+                "to": 40
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "mud_splash": {
+    "doc": "Overlay: mud splashed up from the ground, thick at the foot and spattered above, up to \"height\" metres.",
+    "overlay": true,
+    "variables": {
+      "amount": 0.9,
+      "height": 0.25,
+      "color": [
+        0.22,
+        0.16,
+        0.1
+      ]
+    },
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": "@over"
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": {
+                "node": "fractal",
+                "scale": 0.01,
+                "seed": 352
+              },
+              "color_map": [
+                [
+                  -0.5,
+                  [
+                    0.16,
+                    0.11,
+                    0.07
+                  ]
+                ],
+                [
+                  0.5,
+                  "$color"
+                ]
+              ]
+            },
+            "normal": {
+              "graph": {
+                "node": "fractal",
+                "scale": 0.004,
+                "seed": 353,
+                "style": "billow",
+                "amplitude": 0.0003
+              },
+              "amount": 1
+            }
+          },
+          "mask": {
+            "node": "expr",
+            "expr": "min(max((a * (1 - t) + 0.6 * s - 0.25) / 0.08, 0), 1)",
+            "inputs": {
+              "a": "$amount",
+              "t": {
+                "node": "altitude",
+                "from": 0,
+                "to": "$height"
+              },
+              "s": {
+                "node": "fractal",
+                "scale": 0.006,
+                "seed": 351,
+                "smallest": 0.0005
+              }
+            },
+            "range": [
+              0,
+              1
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "worn_edges": {
+    "doc": "Overlay: paint (\"over\") worn through on convex edges and corners to what is under it (\"under\", bare steel by default), in chipped, ragged patches.",
+    "overlay": true,
+    "variables": {
+      "amount": 0.7,
+      "width": 0.06,
+      "under": {
+        "type": "conductor",
+        "reflectance": [
+          0.5,
+          0.5,
+          0.52
+        ],
+        "roughness": 0.3
+      }
+    },
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": "@over"
+        },
+        {
+          "material": "$under",
+          "mask": {
+            "node": "expr",
+            "expr": "min(max((e * (1 + a) + 0.4 * n - 0.2) / 0.1, 0), 1)",
+            "inputs": {
+              "e": {
+                "node": "occlusion",
+                "style": "edges",
+                "radius": "$width",
+                "rays": 8
+              },
+              "a": "$amount",
+              "n": {
+                "node": "fractal",
+                "scale": 0.01,
+                "seed": 361,
+                "smallest": 0.0005
+              }
+            },
+            "range": [
+              0,
+              1
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "grey_granite": {
+    "doc": "Grey granite, polished: white feldspar, glassy grey quartz and black biotite.",
+    "material": {
+      "type": "library",
+      "name": "granite",
+      "palette": [
+        [
+          0.0,
+          [
+            0.025,
+            0.025,
+            0.025
+          ]
+        ],
+        [
+          0.18,
+          [
+            0.05,
+            0.05,
+            0.05
+          ]
+        ],
+        [
+          0.25,
+          [
+            0.38,
+            0.38,
+            0.39
+          ]
+        ],
+        [
+          0.55,
+          [
+            0.5,
+            0.5,
+            0.5
+          ]
+        ],
+        [
+          0.6,
+          [
+            0.7,
+            0.69,
+            0.67
+          ]
+        ],
+        [
+          1.0,
+          [
+            0.78,
+            0.77,
+            0.75
+          ]
+        ]
+      ]
+    }
+  },
+  "weathered_granite": {
+    "doc": "Granite left outdoors: honed dull, its feldspar chalky, stained with iron, grimy in its hollows and patched with lichen.",
+    "material": {
+      "type": "library",
+      "name": "lichen",
+      "amount": 0.65,
+      "over": {
+        "type": "library",
+        "name": "grime",
+        "amount": 0.6,
+        "over": {
+          "type": "surface_layers",
+          "layers": [
+            {
+              "material": {
+                "type": "library",
+                "name": "granite",
+                "roughness": 0.55,
+                "palette": [
+                  [
+                    0.0,
+                    [
+                      0.04,
+                      0.04,
+                      0.035
+                    ]
+                  ],
+                  [
+                    0.15,
+                    [
+                      0.08,
+                      0.07,
+                      0.06
+                    ]
+                  ],
+                  [
+                    0.2,
+                    [
+                      0.36,
+                      0.35,
+                      0.33
+                    ]
+                  ],
+                  [
+                    0.45,
+                    [
+                      0.45,
+                      0.43,
+                      0.4
+                    ]
+                  ],
+                  [
+                    0.5,
+                    [
+                      0.62,
+                      0.52,
+                      0.45
+                    ]
+                  ],
+                  [
+                    0.75,
+                    [
+                      0.68,
+                      0.6,
+                      0.53
+                    ]
+                  ],
+                  [
+                    0.9,
+                    [
+                      0.74,
+                      0.68,
+                      0.62
+                    ]
+                  ]
+                ]
+              }
+            },
+            {
+              "material": {
+                "type": "lambertian",
+                "albedo": {
+                  "pattern": {
+                    "node": "fractal",
+                    "scale": 0.05,
+                    "seed": 371
+                  },
+                  "color_map": [
+                    [
+                      -0.5,
+                      [
+                        0.35,
+                        0.2,
+                        0.1
+                      ]
+                    ],
+                    [
+                      0.5,
+                      [
+                        0.5,
+                        0.32,
+                        0.18
+                      ]
+                    ]
+                  ]
+                }
+              },
+              "mask": {
+                "node": "smoothstep",
+                "from": 0.15,
+                "to": 0.45,
+                "input": {
+                  "node": "fractal",
+                  "scale": 0.3,
+                  "seed": 372,
+                  "smallest": 0.005,
+                  "roughness": 0.6
+                }
+              },
+              "coverage": 0.7
+            }
+          ]
+        }
+      }
+    }
+  },
+  "black_galaxy": {
+    "doc": "Black granite, polished, flecked with coppery bronzite crystals that glint as it turns.",
+    "variables": {
+      "flecks": {
+        "node": "cells",
+        "style": "id",
+        "scale": 0.003,
+        "seed": 381
+      }
+    },
+    "material": {
+      "type": "mix",
+      "materials": [
+        {
+          "type": "plastic",
+          "refractive_index": 1.56,
+          "roughness": 0.03,
+          "albedo": {
+            "pattern": {
+              "node": "cells",
+              "style": "id",
+              "scale": 0.002,
+              "seed": 382
+            },
+            "color_map": [
+              [
+                0,
+                [
+                  0.015,
+                  0.015,
+                  0.015
+                ]
+              ],
+              [
+                1,
+                [
+                  0.04,
+                  0.04,
+                  0.038
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "conductor",
+          "reflectance": [
+            0.75,
+            0.55,
+            0.35
+          ],
+          "roughness": 0.08
+        }
+      ],
+      "amount": {
+        "pattern": "$flecks",
+        "interpolation": "step",
+        "color_map": [
+          [
+            0,
+            0
+          ],
+          [
+            0.93,
+            1
+          ]
+        ]
+      }
+    }
+  },
+  "quartzite": {
+    "doc": "Quartzite, honed: a sugary white rock of fused quartz grains, faintly banded grey and rose, glittering slightly.",
+    "variables": {
+      "grains": {
+        "node": "cells",
+        "style": "id",
+        "scale": 0.0012,
+        "seed": 391
+      },
+      "bands": {
+        "node": "wave",
+        "shape": "sine",
+        "frequency": 9,
+        "input": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "gradient",
+              "direction": [
+                0.2,
+                1,
+                0.1
+              ]
+            },
+            {
+              "node": "fractal",
+              "scale": 0.3,
+              "seed": 392,
+              "amplitude": 0.08
+            }
+          ]
+        }
+      }
+    },
+    "material": {
+      "type": "plastic",
+      "refractive_index": 1.54,
+      "roughness": {
+        "pattern": "$grains",
+        "color_map": [
+          [
+            0,
+            0.12
+          ],
+          [
+            1,
+            0.35
+          ]
+        ]
+      },
+      "albedo": {
+        "pattern": "$bands",
+        "interpolation": "smooth",
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": "$grains",
+              "color_map": [
+                [
+                  0,
+                  [
+                    0.62,
+                    0.6,
+                    0.6
+                  ]
+                ],
+                [
+                  1,
+                  [
+                    0.78,
+                    0.77,
+                    0.76
+                  ]
+                ]
+              ]
+            }
+          ],
+          [
+            0.7,
+            {
+              "pattern": "$grains",
+              "color_map": [
+                [
+                  0,
+                  [
+                    0.74,
+                    0.72,
+                    0.7
+                  ]
+                ],
+                [
+                  1,
+                  [
+                    0.86,
+                    0.84,
+                    0.82
+                  ]
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            {
+              "pattern": "$grains",
+              "color_map": [
+                [
+                  0,
+                  [
+                    0.76,
+                    0.64,
+                    0.62
+                  ]
+                ],
+                [
+                  1,
+                  [
+                    0.85,
+                    0.75,
+                    0.72
+                  ]
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  },
+  "engineered_quartz": {
+    "doc": "Engineered quartz worktop: crushed quartz in white resin, polished, speckled grey with tiny mirror flecks.",
+    "variables": {
+      "chips": {
+        "node": "cells",
+        "style": "id",
+        "scale": 0.0015,
+        "seed": 401
+      }
+    },
+    "material": {
+      "type": "mix",
+      "materials": [
+        {
+          "type": "plastic",
+          "refractive_index": 1.55,
+          "roughness": 0.02,
+          "albedo": {
+            "pattern": "$chips",
+            "interpolation": "step",
+            "color_map": [
+              [
+                0,
+                [
+                  0.86,
+                  0.86,
+                  0.85
+                ]
+              ],
+              [
+                0.82,
+                [
+                  0.8,
+                  0.8,
+                  0.79
+                ]
+              ],
+              [
+                0.9,
+                [
+                  0.5,
+                  0.5,
+                  0.5
+                ]
+              ],
+              [
+                0.95,
+                [
+                  0.25,
+                  0.25,
+                  0.26
+                ]
+              ]
+            ]
+          }
+        },
+        {
+          "type": "conductor",
+          "reflectance": [
+            0.85,
+            0.85,
+            0.85
+          ],
+          "roughness": 0.02
+        }
+      ],
+      "amount": {
+        "pattern": "$chips",
+        "interpolation": "step",
+        "color_map": [
+          [
+            0,
+            0
+          ],
+          [
+            0.985,
+            1
+          ]
+        ]
+      }
+    }
+  },
+  "quartz_crystal": {
+    "doc": "Rock crystal: clear quartz (n = 1.544), clouded by milky veils of inclusions; \"tint\" makes smoky or rose quartz.",
+    "variables": {
+      "tint": [
+        0.97,
+        0.97,
+        0.97
+      ],
+      "veils": {
+        "node": "warp",
+        "amount": 0.01,
+        "scale": 0.05,
+        "seed": 411,
+        "input": {
+          "node": "fractal",
+          "scale": 0.06,
+          "seed": 412,
+          "style": "billow",
+          "smallest": 0.002
+        }
+      }
+    },
+    "material": {
+      "type": "mix",
+      "materials": [
+        {
+          "type": "dielectric",
+          "refractive_index": 1.544,
+          "attenuate": "$tint"
+        },
+        {
+          "type": "rough_dielectric",
+          "refractive_index": 1.544,
+          "roughness": 0.35,
+          "attenuate": "$tint"
+        }
+      ],
+      "amount": {
+        "pattern": "$veils",
+        "color_map": [
+          [
+            0.3,
+            0
+          ],
+          [
+            0.65,
+            0.9
+          ]
+        ]
+      }
+    }
+  },
+  "rose_quartz": {
+    "doc": "Rose quartz: quartz crystal tinted pink and mostly milky.",
+    "material": {
+      "type": "library",
+      "name": "quartz_crystal",
+      "tint": [
+        0.95,
+        0.72,
+        0.75
+      ]
+    }
+  },
+  "calacatta_marble": {
+    "doc": "Calacatta marble: warm white with bold, wide veins of grey and gold, polished.",
+    "variables": {
+      "veins": {
+        "node": "wave",
+        "shape": "scallop",
+        "input": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "gradient",
+              "direction": [
+                1,
+                0.5,
+                0.1
+              ],
+              "scale": 0.3
+            },
+            {
+              "node": "fractal",
+              "scale": 0.4,
+              "seed": 421,
+              "style": "billow",
+              "smallest": 0.003,
+              "roughness": 0.6,
+              "amplitude": 1.3
+            }
+          ]
+        }
+      },
+      "clouds": {
+        "node": "fractal",
+        "scale": 0.25,
+        "seed": 422,
+        "smallest": 0.003
+      }
+    },
+    "material": {
+      "type": "plastic",
+      "refractive_index": 1.57,
+      "roughness": 0.04,
+      "albedo": {
+        "pattern": "$veins",
+        "interpolation": "smooth",
+        "color_map": [
+          [
+            0,
+            [
+              0.28,
+              0.27,
+              0.25
+            ]
+          ],
+          [
+            0.06,
+            [
+              0.45,
+              0.42,
+              0.36
+            ]
+          ],
+          [
+            0.14,
+            [
+              0.62,
+              0.55,
+              0.42
+            ]
+          ],
+          [
+            0.24,
+            [
+              0.8,
+              0.78,
+              0.74
+            ]
+          ],
+          [
+            1,
+            {
+              "pattern": "$clouds",
+              "color_map": [
+                [
+                  -0.6,
+                  [
+                    0.83,
+                    0.82,
+                    0.79
+                  ]
+                ],
+                [
+                  0.6,
+                  [
+                    0.9,
+                    0.89,
+                    0.86
+                  ]
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    }
+  },
+  "verde_marble": {
+    "doc": "Verde Alpi: deep green serpentine marble netted with pale green and white veins, polished.",
+    "material": {
+      "type": "library",
+      "name": "nero_marquina",
+      "palette": [
+        [
+          0.0,
+          [
+            0.75,
+            0.8,
+            0.74
+          ]
+        ],
+        [
+          0.006,
+          [
+            0.35,
+            0.5,
+            0.4
+          ]
+        ],
+        [
+          0.02,
+          [
+            0.04,
+            0.1,
+            0.07
+          ]
+        ],
+        [
+          0.05,
+          [
+            0.02,
+            0.07,
+            0.05
+          ]
+        ],
+        [
+          1.0,
+          [
+            0.015,
+            0.05,
+            0.035
+          ]
+        ]
+      ]
+    }
+  },
+  "limestone": {
+    "doc": "Honed limestone: pale cream, faintly mottled, with scattered shell fragments and tiny pores.",
+    "variables": {
+      "shells": {
+        "node": "smoothstep",
+        "from": 0.06,
+        "to": 0.0,
+        "input": {
+          "node": "transform",
+          "scale": [
+            1,
+            0.3,
+            1
+          ],
+          "input": {
+            "node": "cells",
+            "style": "edges",
+            "scale": 0.008,
+            "seed": 431
+          }
+        }
+      },
+      "keep": {
+        "node": "smoothstep",
+        "from": 0.0,
+        "to": 0.3,
+        "input": {
+          "node": "fractal",
+          "scale": 0.05,
+          "seed": 432
+        }
+      },
+      "pores": {
+        "node": "smoothstep",
+        "from": 0.15,
+        "to": 0.05,
+        "input": {
+          "node": "cells",
+          "scale": 0.0015,
+          "seed": 433
+        }
+      }
+    },
+    "material": {
+      "type": "plastic",
+      "refractive_index": 1.55,
+      "roughness": 0.4,
+      "albedo": {
+        "pattern": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                "$shells",
+                "$keep"
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                -1,
+                "$pores"
+              ]
+            }
+          ]
+        },
+        "color_map": [
+          [
+            -1,
+            [
+              0.35,
+              0.32,
+              0.26
+            ]
+          ],
+          [
+            0,
+            {
+              "pattern": {
+                "node": "fractal",
+                "scale": 0.3,
+                "seed": 434,
+                "smallest": 0.003
+              },
+              "color_map": [
+                [
+                  -0.6,
+                  [
+                    0.68,
+                    0.63,
+                    0.52
+                  ]
+                ],
+                [
+                  0.6,
+                  [
+                    0.8,
+                    0.76,
+                    0.66
+                  ]
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            [
+              0.5,
+              0.46,
+              0.38
+            ]
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "multiply",
+          "inputs": [
+            -0.0002,
+            "$pores"
+          ]
+        },
+        "amount": 1
+      }
+    }
+  },
+  "basalt": {
+    "doc": "Basalt, sawn: fine-grained dark grey volcanic rock with gas bubbles (vesicles) frozen as round holes.",
+    "variables": {
+      "vesicles": {
+        "node": "multiply",
+        "inputs": [
+          {
+            "node": "smoothstep",
+            "from": 0.32,
+            "to": 0.2,
+            "input": {
+              "node": "cells",
+              "scale": 0.012,
+              "seed": 441
+            }
+          },
+          {
+            "node": "smoothstep",
+            "from": -0.1,
+            "to": 0.3,
+            "input": {
+              "node": "fractal",
+              "scale": 0.1,
+              "seed": 442
+            }
+          }
+        ]
+      }
+    },
+    "material": {
+      "type": "plastic",
+      "refractive_index": 1.55,
+      "roughness": 0.45,
+      "albedo": {
+        "pattern": "$vesicles",
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": {
+                "node": "cells",
+                "style": "id",
+                "scale": 0.0008,
+                "seed": 443
+              },
+              "color_map": [
+                [
+                  0,
+                  [
+                    0.06,
+                    0.06,
+                    0.06
+                  ]
+                ],
+                [
+                  1,
+                  [
+                    0.13,
+                    0.13,
+                    0.125
+                  ]
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            [
+              0.02,
+              0.02,
+              0.02
+            ]
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "multiply",
+          "inputs": [
+            -0.003,
+            "$vesicles"
+          ]
+        },
+        "amount": 1
+      }
+    }
+  },
+  "dried_mud": {
+    "doc": "Dried mud: a crust broken into polygons by shrinkage cracks, the plates curling up at their edges.",
+    "variables": {
+      "edges": {
+        "node": "warp",
+        "amount": 0.008,
+        "scale": 0.05,
+        "seed": 451,
+        "input": {
+          "node": "cells",
+          "style": "edges",
+          "scale": 0.06,
+          "seed": 452
+        }
+      }
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": "$edges",
+        "color_map": [
+          [
+            0,
+            [
+              0.06,
+              0.045,
+              0.03
+            ]
+          ],
+          [
+            0.03,
+            [
+              0.12,
+              0.09,
+              0.06
+            ]
+          ],
+          [
+            0.06,
+            {
+              "pattern": {
+                "node": "fractal",
+                "scale": 0.08,
+                "seed": 453,
+                "smallest": 0.002
+              },
+              "color_map": [
+                [
+                  -0.5,
+                  [
+                    0.4,
+                    0.32,
+                    0.23
+                  ]
+                ],
+                [
+                  0.5,
+                  [
+                    0.52,
+                    0.43,
+                    0.32
+                  ]
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.008,
+                {
+                  "node": "smoothstep",
+                  "from": 0.0,
+                  "to": 0.06,
+                  "input": "$edges"
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                -0.002,
+                "$edges"
+              ]
+            },
+            {
+              "node": "fractal",
+              "scale": 0.004,
+              "seed": 454,
+              "style": "billow",
+              "amplitude": 0.0002
+            }
+          ]
+        },
+        "amount": 1
+      }
+    }
+  },
+  "asphalt": {
+    "doc": "Asphalt road surface: black bitumen packed with grey and pale stones, worn smooth on top.",
+    "variables": {
+      "stones": {
+        "node": "cells",
+        "style": "id",
+        "scale": 0.006,
+        "seed": 461
+      },
+      "gaps": {
+        "node": "cells",
+        "style": "edges",
+        "scale": 0.006,
+        "seed": 461
+      }
+    },
+    "material": {
+      "type": "plastic",
+      "refractive_index": 1.5,
+      "roughness": 0.6,
+      "albedo": {
+        "pattern": "$gaps",
+        "color_map": [
+          [
+            0,
+            [
+              0.03,
+              0.03,
+              0.03
+            ]
+          ],
+          [
+            0.08,
+            [
+              0.04,
+              0.04,
+              0.04
+            ]
+          ],
+          [
+            0.14,
+            {
+              "pattern": "$stones",
+              "interpolation": "step",
+              "color_map": [
+                [
+                  0,
+                  [
+                    0.08,
+                    0.08,
+                    0.08
+                  ]
+                ],
+                [
+                  0.5,
+                  [
+                    0.16,
+                    0.16,
+                    0.155
+                  ]
+                ],
+                [
+                  0.85,
+                  [
+                    0.3,
+                    0.29,
+                    0.27
+                  ]
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "multiply",
+          "inputs": [
+            0.0015,
+            {
+              "node": "smoothstep",
+              "from": 0.05,
+              "to": 0.25,
+              "input": "$gaps"
+            }
+          ]
+        },
+        "amount": 1
+      }
+    }
+  },
+  "glazed_tiles": {
+    "doc": "Glazed ceramic tiles, 15 cm square, each fired a shade between \"color\" and \"color2\", in pale grout.",
+    "variables": {
+      "color": [
+        0.18,
+        0.36,
+        0.42
+      ],
+      "grout": {
+        "node": "brick",
+        "size": [
+          0.15,
+          0.15,
+          0.15
+        ],
+        "mortar": 0.004
+      },
+      "which": {
+        "node": "brick",
+        "style": "id",
+        "size": [
+          0.15,
+          0.15,
+          0.15
+        ],
+        "seed": 471
+      },
+      "color2": [
+        0.13,
+        0.28,
+        0.34
+      ]
+    },
+    "material": {
+      "type": "plastic",
+      "refractive_index": 1.52,
+      "roughness": 0.03,
+      "albedo": {
+        "pattern": "$grout",
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": "$which",
+              "color_map": [
+                [
+                  0,
+                  "$color2"
+                ],
+                [
+                  1,
+                  "$color"
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            [
+              0.62,
+              0.6,
+              0.56
+            ]
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                -0.002,
+                "$grout"
+              ]
+            },
+            {
+              "node": "fractal",
+              "scale": 0.05,
+              "seed": 472,
+              "amplitude": 0.00015
+            }
+          ]
+        },
+        "amount": 1
+      }
+    }
+  },
+  "plaster": {
+    "doc": "Hand-trowelled lime plaster: off-white, softly mottled, with the shallow sweeps of the trowel.",
+    "variables": {
+      "sweeps": {
+        "node": "transform",
+        "scale": [
+          3,
+          1,
+          3
+        ],
+        "input": {
+          "node": "fractal",
+          "scale": 0.08,
+          "seed": 481,
+          "style": "billow",
+          "smallest": 0.004,
+          "amplitude": 0.0006
+        }
+      }
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                500,
+                "$sweeps"
+              ]
+            },
+            {
+              "node": "fractal",
+              "scale": 0.2,
+              "seed": 482,
+              "smallest": 0.003
+            }
+          ]
+        },
+        "color_map": [
+          [
+            -0.5,
+            [
+              0.68,
+              0.66,
+              0.62
+            ]
+          ],
+          [
+            0.6,
+            [
+              0.8,
+              0.79,
+              0.75
+            ]
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            "$sweeps",
+            {
+              "node": "fractal",
+              "scale": 0.002,
+              "seed": 483,
+              "style": "billow",
+              "amplitude": 4e-05
+            }
+          ]
+        },
+        "amount": 1
+      }
+    }
+  },
+  "weathered_oak": {
+    "doc": "Oak left out for years: silvered grey, its soft earlywood worn back so the grain stands up, split by checks along it.",
+    "seed_direction": [
+      0,
+      1,
+      0
+    ],
+    "variables": {
+      "rings": {
+        "node": "wave",
+        "shape": "ramp",
+        "frequency": 300,
+        "input": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "rings",
+              "center": [
+                0.3,
+                0,
+                -0.45
+              ]
+            },
+            {
+              "node": "fractal",
+              "scale": 0.4,
+              "smallest": 0.01,
+              "amplitude": 0.004,
+              "seed": 81
+            },
+            {
+              "node": "transform",
+              "scale": [
+                1,
+                8,
+                1
+              ],
+              "input": {
+                "node": "fractal",
+                "scale": 0.05,
+                "smallest": 0.003,
+                "amplitude": 0.0015,
+                "seed": 82
+              }
+            }
+          ]
+        }
+      },
+      "checks": {
+        "node": "smoothstep",
+        "from": 0.04,
+        "to": 0.0,
+        "input": {
+          "node": "transform",
+          "scale": [
+            1,
+            25,
+            1
+          ],
+          "input": {
+            "node": "cells",
+            "style": "edges",
+            "scale": 0.01,
+            "seed": 491
+          }
+        }
+      }
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": "$checks",
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": {
+                "node": "add",
+                "inputs": [
+                  "$rings",
+                  {
+                    "node": "fractal",
+                    "scale": 0.1,
+                    "seed": 492,
+                    "amplitude": 0.3
+                  }
+                ]
+              },
+              "color_map": [
+                [
+                  -0.3,
+                  [
+                    0.28,
+                    0.26,
+                    0.23
+                  ]
+                ],
+                [
+                  0.4,
+                  [
+                    0.42,
+                    0.4,
+                    0.36
+                  ]
+                ],
+                [
+                  1.3,
+                  [
+                    0.55,
+                    0.53,
+                    0.49
+                  ]
+                ]
+              ]
+            }
+          ],
+          [
+            1,
+            [
+              0.05,
+              0.045,
+              0.04
+            ]
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.0004,
+                "$rings"
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                -0.002,
+                "$checks"
+              ]
+            }
+          ]
+        },
+        "amount": 1
+      }
+    }
+  },
+  "maple": {
+    "doc": "Curly maple, lacquered: pale creamy wood with faint rings and the rippling flame figure of wavy fibres.",
+    "seed_direction": [
+      0,
+      1,
+      0
+    ],
+    "variables": {
+      "rings": {
+        "node": "wave",
+        "shape": "ramp",
+        "frequency": 250,
+        "input": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "rings",
+              "center": [
+                0.3,
+                0,
+                -0.5
+              ]
+            },
+            {
+              "node": "fractal",
+              "scale": 0.4,
+              "seed": 501,
+              "smallest": 0.01,
+              "amplitude": 0.004
+            }
+          ]
+        }
+      },
+      "curl": {
+        "node": "phasor",
+        "wavelength": 0.008,
+        "direction": [
+          0,
+          1,
+          0
+        ],
+        "spread": 0.1,
+        "profile": "sine",
+        "seed": 502
+      }
+    },
+    "material": {
+      "type": "plastic",
+      "refractive_index": 1.5,
+      "roughness": 0.08,
+      "albedo": {
+        "pattern": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.2,
+                "$rings"
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.7,
+                "$curl"
+              ]
+            }
+          ]
+        },
+        "color_map": [
+          [
+            -0.7,
+            [
+              0.55,
+              0.4,
+              0.24
+            ]
+          ],
+          [
+            0.0,
+            [
+              0.72,
+              0.57,
+              0.38
+            ]
+          ],
+          [
+            0.8,
+            [
+              0.84,
+              0.71,
+              0.52
+            ]
+          ]
+        ]
+      }
+    }
+  },
+  "ebony": {
+    "doc": "Ebony, French polished: almost black, with faint brown streaks along the grain.",
+    "seed_direction": [
+      0,
+      1,
+      0
+    ],
+    "variables": {
+      "streaks": {
+        "node": "transform",
+        "scale": [
+          1,
+          30,
+          1
+        ],
+        "input": {
+          "node": "fractal",
+          "scale": 0.03,
+          "seed": 511,
+          "smallest": 0.001
+        }
+      }
+    },
+    "material": {
+      "type": "plastic",
+      "refractive_index": 1.5,
+      "roughness": 0.02,
+      "albedo": {
+        "pattern": "$streaks",
+        "color_map": [
+          [
+            -0.5,
+            [
+              0.012,
+              0.01,
+              0.009
+            ]
+          ],
+          [
+            0.2,
+            [
+              0.025,
+              0.02,
+              0.016
+            ]
+          ],
+          [
+            0.6,
+            [
+              0.08,
+              0.055,
+              0.035
+            ]
+          ]
+        ]
+      }
+    }
+  },
+  "aged_bronze": {
+    "doc": "Cast bronze aged outdoors: dark brown patina, blackest in its hollows, with bright metal rubbed through on the edges.",
+    "material": {
+      "type": "library",
+      "name": "worn_edges",
+      "amount": 0.4,
+      "width": 0.05,
+      "under": {
+        "type": "conductor",
+        "metal": "CuZn",
+        "roughness": 0.2
+      },
+      "over": {
+        "type": "mix",
+        "materials": [
+          {
+            "type": "conductor",
+            "metal": "Cu",
+            "roughness": 0.45
+          },
+          {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": {
+                "node": "add",
+                "inputs": [
+                  {
+                    "node": "occlusion",
+                    "radius": 0.05,
+                    "rays": 4
+                  },
+                  {
+                    "node": "fractal",
+                    "scale": 0.05,
+                    "seed": 521
+                  }
+                ]
+              },
+              "color_map": [
+                [
+                  -0.4,
+                  [
+                    0.2,
+                    0.12,
+                    0.06
+                  ]
+                ],
+                [
+                  0.4,
+                  [
+                    0.08,
+                    0.05,
+                    0.03
+                  ]
+                ],
+                [
+                  1,
+                  [
+                    0.02,
+                    0.015,
+                    0.01
+                  ]
+                ]
+              ]
+            }
+          }
+        ],
+        "amount": 0.8
+      }
+    }
+  },
+  "cast_iron": {
+    "doc": "Cast iron: dark grey and rough from the sand mould, with a little rust in its hollows.",
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": {
+            "type": "conductor",
+            "reflectance": [
+              0.33,
+              0.33,
+              0.34
+            ],
+            "roughness": 0.55,
+            "normal": {
+              "graph": {
+                "node": "fractal",
+                "scale": 0.002,
+                "seed": 531,
+                "style": "billow",
+                "smallest": 0.0002,
+                "amplitude": 8e-05
+              },
+              "amount": 1
+            }
+          }
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": [
+              0.25,
+              0.1,
+              0.04
+            ]
+          },
+          "mask": {
+            "node": "multiply",
+            "inputs": [
+              {
+                "node": "smoothstep",
+                "from": 0.1,
+                "to": 0.6,
+                "input": {
+                  "node": "occlusion",
+                  "radius": 0.04,
+                  "rays": 4
+                }
+              },
+              {
+                "node": "smoothstep",
+                "from": -0.2,
+                "to": 0.3,
+                "input": {
+                  "node": "fractal",
+                  "scale": 0.03,
+                  "seed": 532
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "chipped_paint": {
+    "doc": "Painted steel, chipped: \"color\" paint flaking off in ragged patches and on its edges, showing rust beneath.",
+    "variables": {
+      "color": [
+        0.08,
+        0.25,
+        0.15
+      ],
+      "chips": {
+        "node": "warp",
+        "amount": 0.01,
+        "scale": 0.03,
+        "seed": 541,
+        "input": {
+          "node": "fractal",
+          "scale": 0.08,
+          "seed": 542,
+          "smallest": 0.002,
+          "roughness": 0.65
+        }
+      }
+    },
+    "material": {
+      "type": "library",
+      "name": "worn_edges",
+      "amount": 0.6,
+      "under": {
+        "type": "library",
+        "name": "rusted_iron"
+      },
+      "over": {
+        "type": "surface_layers",
+        "layers": [
+          {
+            "material": {
+              "type": "plastic",
+              "albedo": "$color",
+              "roughness": 0.3,
+              "normal": {
+                "graph": {
+                  "node": "multiply",
+                  "inputs": [
+                    0.0003,
+                    {
+                      "node": "smoothstep",
+                      "from": 0.43,
+                      "to": 0.4,
+                      "input": "$chips"
+                    }
+                  ]
+                },
+                "amount": 1
+              }
+            }
+          },
+          {
+            "material": {
+              "type": "library",
+              "name": "rusted_iron"
+            },
+            "mask": {
+              "node": "smoothstep",
+              "from": 0.4,
+              "to": 0.43,
+              "input": "$chips"
+            }
+          }
+        ]
       }
     }
   }

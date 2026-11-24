@@ -63,15 +63,25 @@ impl LightBounds {
         // the estimate blow up.
         let d2 = to.norm_squared().max(radius * radius / 4.).max(f64::MIN_POSITIVE);
         let dist = to.norm();
-        // The angle between the cone's axis and the direction to the point.
+        // The angles as cosines and sines, combined by cos(x - y) = cos x cos y + sin x sin y
+        // rather than through acos and cos (pbrt's `LightBounds::Importance`): the light BVH
+        // asks this of two nodes at every level of every choice.
+        let sin_of = |cos: f64| (1. - cos * cos).max(0.).sqrt();
+        // The angle θ_w between the cone's axis and the direction to the point.
         let cos_w = if dist > 0. { self.w.dot(&(to / dist)) } else { 1. };
-        let cos_w = if self.two_sided { cos_w.abs() } else { cos_w };
-        let theta_w = cos_w.clamp(-1., 1.).acos();
-        // The angle the bounds subtend from the point (all directions from inside).
-        let theta_b = if dist <= radius { PI } else { (radius / dist).asin() };
-        let theta_o = self.cos_theta_o.clamp(-1., 1.).acos();
-        let theta = (theta_w - theta_o - theta_b).max(0.);
-        let cos = theta.cos();
+        let cos_w = if self.two_sided { cos_w.abs() } else { cos_w }.clamp(-1., 1.);
+        // The angle θ_b the bounds subtend from the point (all directions from inside).
+        let (cos_b, sin_b) = if dist <= radius { (-1., 0.) } else {
+            let sin_b = radius / dist;
+            ((1. - sin_b * sin_b).sqrt(), sin_b)
+        };
+        let cos_o = self.cos_theta_o.clamp(-1., 1.);
+        // cos max(0, θ_w - θ_o - θ_b): first θ_x = max(0, θ_w - θ_o), then less θ_b.
+        let (cos_x, sin_x) = if cos_w >= cos_o { (1., 0.) } else {
+            let c = cos_w * cos_o + sin_of(cos_w) * sin_of(cos_o);
+            (c, sin_of(c))
+        };
+        let cos = if cos_x >= cos_b { 1. } else { cos_x * cos_b + sin_x * sin_b };
         if cos <= self.cos_theta_e {
             return 0.;
         }
@@ -81,10 +91,10 @@ impl LightBounds {
             // within θ_b of the direction to their centre, α from the lobe's: at one end or the
             // other of [α - θ_b, α + θ_b], as it falls (or, backwards, rises) with the angle.
             Some(lobe) => {
-                let cos_a = if dist > 0. { -lobe.d.dot(&(to / dist)) } else { 1. };
-                let alpha = cos_a.clamp(-1., 1.).acos();
-                let near = (alpha - theta_b).max(0.).cos();
-                let far = (alpha + theta_b).min(PI).cos();
+                let cos_a = if dist > 0. { (-lobe.d.dot(&(to / dist))).clamp(-1., 1.) } else { 1. };
+                let sin_a = sin_of(cos_a);
+                let near = if cos_a >= cos_b { 1. } else { cos_a * cos_b + sin_a * sin_b };
+                let far = if cos_b <= -cos_a { -1. } else { cos_a * cos_b - sin_a * sin_b };
                 lobe.phase.eval(near).max(lobe.phase.eval(far))
             },
         };
@@ -320,6 +330,58 @@ mod tests {
         let with = |i| bvh.pmf_towards(&p, Some(&lobe), i);
         assert!(with(ahead) > 5. * with(behind), "{} vs {}", with(ahead), with(behind));
         assert!((bvh.pmf(&p, ahead) / bvh.pmf(&p, behind) - 1.).abs() < 0.5);
+    }
+
+    /// The importance by angles, as it was first written: what the cosines must agree with.
+    fn importance_by_angles(b: &LightBounds, p: &Vector3<f64>, lobe: Option<&Lobe>) -> f64 {
+        if b.phi <= 0. {
+            return 0.;
+        }
+        let centre = (b.bounds.min.coords + b.bounds.max.coords) / 2.;
+        let radius = (b.bounds.max - b.bounds.min).norm() / 2.;
+        let to = p - centre;
+        let d2 = to.norm_squared().max(radius * radius / 4.).max(f64::MIN_POSITIVE);
+        let dist = to.norm();
+        let cos_w = if dist > 0. { b.w.dot(&(to / dist)) } else { 1. };
+        let cos_w = if b.two_sided { cos_w.abs() } else { cos_w };
+        let theta_w = cos_w.clamp(-1., 1.).acos();
+        let theta_b = if dist <= radius { PI } else { (radius / dist).asin() };
+        let theta_o = b.cos_theta_o.clamp(-1., 1.).acos();
+        let cos = (theta_w - theta_o - theta_b).max(0.).cos();
+        if cos <= b.cos_theta_e {
+            return 0.;
+        }
+        let scattered = lobe.map_or(1., |lobe| {
+            let alpha = (if dist > 0. { -lobe.d.dot(&(to / dist)) } else { 1. }).clamp(-1., 1.).acos();
+            lobe.phase.eval((alpha - theta_b).max(0.).cos()).max(lobe.phase.eval((alpha + theta_b).min(PI).cos()))
+        });
+        b.phi * cos * scattered / d2
+    }
+
+    #[test]
+    fn test_importance_by_cosines_agrees_with_angles() {
+        seed_rand(3, 0);
+        let unit = |v: Vector3<f64>| v.normalize();
+        for _ in 0..20_000 {
+            let lo = Vector3::new(rand() * 4. - 2., rand() * 4. - 2., rand() * 4. - 2.);
+            let size = Vector3::new(rand(), rand(), rand()) * if rand() < 0.3 { 0. } else { 2. };
+            let b = LightBounds {
+                bounds: BBox::new(lo, lo + size),
+                phi: 1. + rand(),
+                w: unit(Vector3::new(rand() - 0.5, rand() - 0.5, rand() - 0.5)),
+                cos_theta_o: [1., -1., rand() * 2. - 1.][(rand() * 3.) as usize],
+                cos_theta_e: [0., rand()][(rand() * 2.) as usize],
+                two_sided: rand() < 0.3,
+            };
+            let p = Vector3::new(rand() * 8. - 4., rand() * 8. - 4., rand() * 8. - 4.);
+            let lobe = Lobe { d: unit(Vector3::new(rand() - 0.5, rand() - 0.5, rand() - 0.5)), phase: PhaseFunction::HenyeyGreenstein { g: rand() * 1.8 - 0.9 } };
+            for l in [None, Some(&lobe)] {
+                let (fast, slow) = (b.importance(&p, l), importance_by_angles(&b, &p, l));
+                // Equal but where a cone's edge grazes the cut-off of θ_e.
+                assert!((fast - slow).abs() <= 1e-6 * slow.max(fast) || (fast == 0.) != (slow == 0.) && (fast - slow).abs() < 1e-3 * slow.max(fast).max(1.),
+                    "{} vs {} for {:?} from {}", fast, slow, b, p);
+            }
+        }
     }
 
     #[test]

@@ -89,15 +89,16 @@ impl SceneGraph {
         }
         // Solid objects first: if one blocks the ray, the media needn't be tracked. (Most block
         // it or don't; transparent water lets some through, by colour.)
-        let (media, solid): (Vec<_>, Vec<_>) = self.infinite_items.iter().partition(|o| o.is_stochastic());
+        // (Two passes over the few unbounded items rather than partitioning them into vectors,
+        // which allocated on every shadow ray.)
         let mut t = Color::white();
-        for o in solid {
+        for o in self.infinite_items.iter().filter(|o| !o.is_stochastic()) {
             t = t * o.transmittance_color(r, min, max);
             if t.rgb.max() <= 0. {
                 return Color::black();
             }
         }
-        for o in media {
+        for o in self.infinite_items.iter().filter(|o| o.is_stochastic()) {
             t = t * o.transmittance_color(r, min, max);
             if t.rgb.max() <= 0. {
                 break;

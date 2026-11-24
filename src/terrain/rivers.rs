@@ -559,14 +559,15 @@ pub fn levels(courses: &[Course], raw: &[Vec<f64>], lake: &[Vec<bool>]) -> Vec<V
 /// Where the ground rises beside the water, its slope (rise over run).
 const BANK: f64 = 1.;
 /// The water's surface reaches this much beyond its edge, as a fraction of the half width and
-/// in metres, to tuck under the banks.
-const TUCK: (f64, f64) = (0.05, 0.3);
+/// in metres, to tuck under the banks: enough that its straight edges between nodes stay under
+/// the banks round a bend (the banks rise at 1:1 beyond the edge, so it is hidden there).
+const TUCK: (f64, f64) = (0.15, 2.);
 /// The banks are sampled this far out (fraction of the half width, and metres).
 const BANK_SAMPLE: (f64, f64) = (0.15, 1.);
 
 /// A segment of a levelled river.
 #[derive(Clone, Copy, Debug)]
-struct Segment { a: Vertex, b: Vertex }
+struct Segment { a: Vertex, b: Vertex, course: u32 }
 
 impl Segment {
     fn river(&self) -> bool { self.a.kind == Kind::River && self.b.kind == Kind::River }
@@ -606,7 +607,7 @@ impl Carve {
         // Lakes are drawn as before (the mask; step 8 of the plan), so neither carved nor
         // given a surface; nor is water in the air.
         let segments: Vec<Segment> = courses.iter()
-            .flat_map(|c| c.windows(2).filter(|w| w[0].kind != Kind::Falling && w[1].kind != Kind::Falling).map(|w| Segment { a: w[0], b: w[1] })).collect();
+            .enumerate().flat_map(|(k, c)| c.windows(2).filter(|w| w[0].kind != Kind::Falling && w[1].kind != Kind::Falling).map(move |w| Segment { a: w[0], b: w[1], course: k as u32 })).collect();
         let mut reaches: Vec<f64> = segments.iter().filter(|s| s.river()).map(|s| s.reach()).collect();
         reaches.sort_by(|a, b| a.total_cmp(b));
         let cell = reaches.get(reaches.len() / 2).map_or(32., |r| (2. * r).clamp(32., 1024.));
@@ -649,13 +650,26 @@ impl Carve {
 
     /// The carved surface at `q`: the bed in the channel, the banks beside it; None away from
     /// rivers. With it, the half width of the river nearest.
-    pub fn surface(&self, q: Point) -> Option<(f64, f64)> {
-        let mut best: Option<(f64, f64)> = None;
+    pub fn surface(&self, q: Point) -> Option<(f64, f64)> { self.surface_deeper(q, 0., 0.) }
+
+    /// As `surface`, the channel at least `least` metres deep at its centre and `widen` metres
+    /// wider each side, its bank's toe that far out.
+    fn surface_deeper(&self, q: Point, least: f64, widen: f64) -> Option<(f64, f64)> {
+        // Each course's channel from its segment nearest `q` (the lowest of every segment's
+        // would scallop the inside of each bend, one scallop a segment, which showed as a row
+        // of bank above the water); the lowest of the courses' (where they meet).
+        let mut nearest: BTreeMap<u32, (f64, f64, f64)> = BTreeMap::new();
         for s in self.near(q) {
             let (t, r) = nearest_on(s.a.node.p, s.b.node.p, q);
-            if r > s.reach() { continue; }
+            if r > s.reach() || nearest.get(&s.course).is_some_and(|n| n.0 <= r) { continue; }
             let (half, level, deepest) = s.at(t);
-            let h = if r < half { level - deepest * (1. - (r / half).powi(2)) } else { level + (r - half) * BANK };
+            let deepest = deepest.max(least);
+            let wide = half + widen.min(TUCK.0 * half + 0.5 * TUCK.1);
+            let h = if r < wide { level - deepest * (1. - (r / wide).powi(2)) } else { level + (r - wide) * BANK };
+            nearest.insert(s.course, (r, h, half));
+        }
+        let mut best: Option<(f64, f64)> = None;
+        for &(_, h, half) in nearest.values() {
             if best.is_none_or(|(b, _)| h < b) { best = Some((h, half)); }
         }
         for f in &self.falls {
@@ -668,9 +682,14 @@ impl Carve {
     /// `half`: all of it under half the half width, none from the whole.
     pub fn weight(half: f64, local: f64) -> f64 { 1. - smoothstep(0.5 * half, half, local) }
 
-    /// Ground `g` at `q`, carved as a mesh of spacing `local` draws it.
+    /// Ground `g` at `q`, carved as a mesh of spacing `local` draws it: the channel at least
+    /// half the spacing (and 0.3 m) deep, and its bank's toe a spacing out from the water's
+    /// edge (as far as the water's surface tucks under the bank), so the mesh's straight edges
+    /// between its vertices, spanning bed and bank, don't rise through a shallow river's water
+    /// (they showed as a row of bank above it, one a vertex; through silty water the bed isn't
+    /// seen anyway).
     pub fn carved(&self, q: Point, g: f64, local: f64) -> f64 {
-        match self.surface(q) {
+        match self.surface_deeper(q, 0.5 * local + 0.3, local) {
             Some((s, half)) if s < g => g - Carve::weight(half, local) * (g - s),
             _ => g,
         }

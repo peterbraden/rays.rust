@@ -520,6 +520,32 @@ pub fn reach(mean: f64, width: f64, slope: f64, bedrock: bool, p: &HydraulicPara
     }
 }
 
+/// The bankfull width (m) of a single-thread gravel-bed river carrying `bankfull` m³/s over
+/// a bed of median grain `grain` (m), by Parker et al.'s quasi-universal relation (2007):
+/// B̃ = 4.63 Q̂^0.0667, B̃ = g^(1/5) B / Q^(2/5), Q̂ = Q / (√(g D) D²). Fitted to gravel beds
+/// (D from about 2 mm up), so finer beds are taken as 2 mm. (Coefficients checked in Zolezzi et
+/// al. 2009 and secondary sources; the paper itself unread.)
+pub fn parker_width(bankfull: f64, grain: f64) -> f64 {
+    let d = grain.max(0.002);
+    let q = bankfull.max(1e-9);
+    let q_hat = q / ((G * d).sqrt() * d * d);
+    4.63 * q_hat.powf(0.0667) * q.powf(0.4) / G.powf(0.2)
+}
+
+/// A river's reach as it shapes its own channel: its bankfull width by Parker et al.'s relation
+/// (`parker_width`) for its bankfull flow and the grain its bed then has (each depending on
+/// the other, so iterated), and the rest as `reach` has it for that width.
+pub fn alluvial(mean: f64, slope: f64, bedrock: bool, p: &HydraulicParams) -> Reach {
+    let bankfull = p.bankfull_ratio * mean;
+    let mut width = parker_width(bankfull, 0.02);
+    let mut r = reach(mean, width, slope, bedrock, p);
+    for _ in 0..4 {
+        width = parker_width(bankfull, r.grain);
+        r = reach(mean, width, slope, bedrock, p);
+    }
+    r
+}
+
 /// A landscape's rivers: runoff and the flow at every cell.
 pub struct Hydraulics {
     /// Mean runoff from each cell, mm/yr.
@@ -558,7 +584,6 @@ impl Hydraulics {
             runoff(&local, t.latitude[i], p.budyko_w)
         }).collect();
         let q = discharge(&d.area, &runoff, &t.receiver, &t.drainage);
-        let c = t.params.channels.as_ref().map_or(ChannelParams::default().width_coefficient, |c| c.width_coefficient);
         let reaches = (0..n).map(|i| {
             let r = t.receiver[i];
             let slope = if r == i { MIN_SLOPE } else {
@@ -566,7 +591,7 @@ impl Hydraulics {
                     || d.dirs[i].angle(&d.dirs[r]) * d.radius, |l| l.dist);
                 (t.bed[i] - t.bed[r]) / dist.max(1e-9)
             };
-            reach(q[i], c * t.drainage[i].sqrt(), slope, t.sediment[i] < BARE, p)
+            alluvial(q[i], slope, t.sediment[i] < BARE, p)
         }).collect();
         Hydraulics { runoff, reaches, mean: q }
     }
@@ -692,6 +717,22 @@ mod tests {
         let m = exponent(&reaches, &|r| r.speed);
         assert!(f > 0.3 && f < 0.55, "depth exponent {}", f);
         assert!(m > -0.05 && m < 0.25, "speed exponent {}", m);
+    }
+
+    #[test]
+    fn test_rivers_are_as_wide_as_their_floods_and_beds_make_them() {
+        // Parker et al.'s relation by hand: 25 m³/s at bankfull over 18.7 mm gravel,
+        // Q̂ = 25 / (√(9.81 × 0.0187) × 0.0187²) = 1.67e5, B = 4.63 Q̂^0.0667 × 25^0.4 / 9.81^0.2.
+        assert!((parker_width(25., 0.0187) - 23.6).abs() < 0.3, "{}", parker_width(25., 0.0187));
+        // Over the same bed, width grows about as the square root of discharge (0.4 + 0.0667).
+        let ratio = parker_width(250., 0.02) / parker_width(25., 0.02);
+        assert!((ratio.log10() - 0.4667).abs() < 1e-3, "{}", ratio.log10());
+        // A mountain river of 2.5 m³/s, flooding to 25: a channel some 20-30 m wide, a few
+        // decimetres deep at its mean flow, and the width is the one its own grain gives.
+        let r = alluvial(2.5, 0.01, false, &HydraulicParams::default());
+        assert!(r.width > 15. && r.width < 35., "{:?}", r);
+        assert!(r.depth > 0.15 && r.depth < 0.6, "{:?}", r);
+        assert!((r.width - parker_width(25., r.grain)).abs() < 0.05 * r.width, "{:?}", r);
     }
 
     #[test]

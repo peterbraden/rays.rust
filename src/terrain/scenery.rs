@@ -336,6 +336,10 @@ impl Layer {
                 None => match self.rivers.as_ref().and_then(|r| r.basins.get()?.lake(q)) {
                     // Under a lake's surface (`terrain::basins`), its bed.
                     Some(level) if h < level + 0.05 => RiverAt::Bed(0.0005),
+                    // In a river's channel above its water, where the mesh draws the channel:
+                    // a bare bar.
+                    _ if carve.channel(q).is_some_and(|(_, half, _, out)| out < 0. && surfaced(half)) =>
+                        RiverAt::Bar(carve.channel(q).map_or(0.01, |c| c.2)),
                     _ => wet(water.wet_oxbow(point_cell(&self.domain, q), q)),
                 },
             },
@@ -364,6 +368,9 @@ pub enum RiverAt {
     Water,
     /// A river's bed, under its own surface; with the median grain, metres.
     Bed(f64),
+    /// A river's bed bare beside its water, in its channel below the bankfull level: the bars
+    /// floods scour too often for plants to hold; with the median grain, metres.
+    Bar(f64),
 }
 
 /// Heights of the landscape, from its layers and the planet's own topography.
@@ -1400,6 +1407,17 @@ impl crate::graph::Fields for Ground {
                     })
                     .map_or(far, |e| e.min(far)));
             },
+            Field::Channel => {
+                // Beyond the channel's rim near a river drawn at full scale; else from its water.
+                let far = crate::terrain::rivers::CLEAR;
+                return Some(self.layer_at(&d)
+                    .and_then(|l| {
+                        let q = l.carve_point(&d)?;
+                        let rivers = l.rivers.as_ref()?;
+                        rivers.carve.get().and_then(|c| c.channel(q)).map(|c| c.3.max(0.)).or_else(|| Some(rivers.skeleton.nearest(q)?.edge))
+                    })
+                    .map_or(far, |e| e.min(far)));
+            },
             Field::Grain => {
                 // Near a river drawn at full scale, its bed's; else the simulation's.
                 if let Some(g) = self.layer_at(&d).and_then(|l| l.rivers.as_ref()?.carve.get()?.nearest_bed(l.carve_point(&d)?)) {
@@ -1481,6 +1499,9 @@ pub struct LandscapeMedium {
     water: FlatWater,
     /// Rivers' beds, under water: sand, and gravel and coarser.
     beds: [Lambertian; 2],
+    /// Their bars, bare beside the water: sand, and gravel and coarser (the material
+    /// library's).
+    bars: [Box<dyn MaterialModel + Sync + Send>; 2],
     /// Terminal lakes: shallow brine over a pale floor, greener and brighter than rivers.
     brine: PhysicalOcean,
 }
@@ -1501,6 +1522,7 @@ impl LandscapeMedium {
             brine: PhysicalOcean { water: Color::new(0.03, 0.07, 0.065), roughness: 0.003, center: Some(centre), foam: None, absorption: None },
             ground,
             beds: [Lambertian { albedo: crate::textures::ColorTexture::Constant(bed_albedo(SAND_ALBEDO)) }, Lambertian { albedo: crate::textures::ColorTexture::Constant(bed_albedo(GRAVEL_ALBEDO)) }],
+            bars: ["beach_sand", "river_gravel"].map(|name| crate::scenefile::SceneFile::parse_material_definition(&serde_json::json!({"type": "library", "name": name}), name, &serde_json::Map::new())),
         }
     }
 }
@@ -1529,6 +1551,7 @@ impl Medium for LandscapeMedium {
         match self.ground.river_at(&pt) {
             RiverAt::Water => &self.water,
             RiverAt::Bed(grain) => &self.beds[(grain > 0.002) as usize],
+            RiverAt::Bar(grain) => &*self.bars[(grain > 0.002) as usize],
             RiverAt::Land if self.ground.salt_lake(&pt) => &self.brine,
             RiverAt::Land => &*self.land,
         }

@@ -69,6 +69,7 @@ value otherwise; either moved first by a `breakup`; `default`, 0, on surfaces wi
 | `water_depth`, `flow_speed`, `froude` | How deep (m) and fast (m/s) that river runs, by Manning's equation, and its Froude number (above 1: rapids) |
 | `grain` | The median grain of that river's bed, metres (sand to boulders, as the flow can move them); near a river drawn at full scale, that river's: for sizing the stones of its bed and banks |
 | `river` | Metres from the nearest river's water (0 in it), up to 1 km: for banks, riparian plants, and keeping trees, rocks and displacement out of rivers (full scale only) |
+| `channel` | Metres beyond the nearest river's channel (0 in it): the channel is as wide as the river in flood, its bed bare beside the water, where floods scour too often for plants (full scale only; far from rivers, as `river`) |
 | `rock` | The rock exposed, by number: 0 sediment, 1 shale, 2 sandstone, 3 limestone, 4 quartzite, 5 schist, 6 gneiss, 7 granite, 8 basalt (docs/geology.md) |
 | `hardness` | How hard that rock is to rivers, from -1.4 (sediment) to 1.5 (basalt) |
 | `playa` | 0 to 1: the dry floor of a closed basin, where its terminal lake comes and goes (docs/geology.md) |

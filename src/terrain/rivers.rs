@@ -596,6 +596,13 @@ impl Segment {
     /// How high the banks stand over the water at fraction `t` along: to the bankfull level.
     fn freeboard(&self, t: f64) -> f64 { self.a.node.freeboard + (self.b.node.freeboard - self.a.node.freeboard) * t }
 
+    /// How far from the centreline the channel's rim is at fraction `t` along, for a channel
+    /// meeting the water's edge `wide` out and `deepest` deep: the parabola through the edge,
+    /// as deep as the water plus the freeboard (`Carve::surface_deeper`).
+    fn rim(&self, t: f64, wide: f64, deepest: f64) -> f64 {
+        wide * ((deepest + self.freeboard(t)) / deepest.max(1e-6)).sqrt()
+    }
+
     /// How far beyond its centreline the carving can reach (or a lake's surface).
     fn reach(&self) -> f64 {
         if self.a.kind == Kind::Lake || self.b.kind == Kind::Lake { return self.a.node.half.max(self.b.node.half) + SHORE; }
@@ -668,6 +675,19 @@ impl Carve {
     /// drawn (bent into their meanders); None beyond the carving's reach.
     pub fn edge(&self, q: Point) -> Option<f64> { self.nearest_bed(q).map(|b| b.0) }
 
+    /// The river channel `q` is in or nearest: its level, half width (the water's), its bed's
+    /// median grain, and how far `q` is beyond its rim (negative inside the channel: its bed,
+    /// under the water or bare beside it), metres. None beyond the carving's reach.
+    pub fn channel(&self, q: Point) -> Option<(f64, f64, f64, f64)> {
+        self.near(q).filter_map(|s| {
+            let (t, r) = nearest_on(s.a.node.p, s.b.node.p, q);
+            if r > s.reach() { return None; }
+            let (half, level, deepest) = s.at(t);
+            let grain = s.a.node.grain + (s.b.node.grain - s.a.node.grain) * t;
+            Some((level, half, grain, r - s.rim(t, half, deepest)))
+        }).min_by(|a, b| a.3.total_cmp(&b.3))
+    }
+
     /// As `edge`, with the median grain of that river's bed there, metres.
     pub fn nearest_bed(&self, q: Point) -> Option<(f64, f64)> {
         self.near(q).filter_map(|s| {
@@ -699,7 +719,7 @@ impl Carve {
             // as the river in flood, its bed above the water bare beside it; the floodplain at
             // its rim, flat at the bankfull level; and the valley's side rising beyond it.
             let freeboard = s.freeboard(t);
-            let rim = wide * ((deepest + freeboard) / deepest).sqrt();
+            let rim = s.rim(t, wide, deepest);
             let plain = rim + FLOODPLAIN * 2. * half;
             let h = if r < rim { level - deepest + (deepest + freeboard) * (r / rim).powi(2) }
                 else { level + freeboard + (r - plain).max(0.) * VALLEY_SIDE };
@@ -1222,6 +1242,10 @@ mod tests {
         assert!((carve.edge([50., -8.]).unwrap() - 3.).abs() < 1e-9);
         assert_eq!(carve.edge([50., 200.]), None);
         assert_eq!(carve.nearest_bed([50., -8.]).map(|b| b.1), Some(0.01));
+        // The channel reaches past the water to its rim: in it (bare bed) half a metre beyond
+        // the water's edge, out of it a metre beyond the rim.
+        assert!(carve.channel([50., 5.5]).unwrap().3 < 0.);
+        assert!((carve.channel([50., rim + 1.]).unwrap().3 - 1.).abs() < 1e-9);
         // Ground above the water is cut down to the bed, but only where the mesh shows it.
         assert!((carve.carved([50., 0.], 104., 1.) - 98.5).abs() < 1e-9);
         assert_eq!(carve.carved([50., 0.], 104., 20.), 104.);

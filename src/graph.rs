@@ -51,8 +51,8 @@
 //! - `field`: what the surface knows about itself, given by the object hit (`Fields`): for a
 //!   landscape, what its simulation left there (see `Field`: `sediment`, `ice`, `lava`, `flow`,
 //!   `wetness`, `convexity`, `elevation`, `snowline`, `treeline`, `temperature`,
-//!   `precipitation`, and the rivers' `discharge`, `water_depth`, `flow_speed`, `froude`, `grain`, and
-//!   `river`, the distance to the nearest river's water),
+//!   `precipitation`, and the rivers' `discharge`, `water_depth`, `flow_speed`, `froude`, `grain`,
+//!   `river`, the distance to the nearest river's water, and `channel`, to its channel's rim),
 //!   `default` (0) on surfaces without it. With `from` and `to`, smoothly from
 //!   0 to 1 between them; without, the value itself; either way with `breakup` added first.
 //! - `strata`: ledges: beds `step` metres thick (default 1), each eroded back from the one
@@ -148,6 +148,11 @@ pub enum Field {
     /// How far the point is from the nearest river's water, metres (0 in it): the river
     /// courses a full-scale landscape draws (`terrain::rivers`), to 1 km; beyond, 1 km.
     River,
+    /// How far the point is beyond the nearest river's channel, metres (0 in it): the channel
+    /// is as wide as the river in flood, its bed bare beside the water at the mean flow, where
+    /// floods scour too often for plants to hold (`Carve::channel`); far from rivers, as
+    /// `river`.
+    Channel,
     /// The rock exposed (`terrain::geology::Rock`), by number: 0 sediment, 1 shale,
     /// 2 sandstone, 3 limestone, 4 quartzite, 5 schist, 6 gneiss, 7 granite, 8 basalt. The
     /// bedrock is that at the point's own height, so beds show as bands across slopes.
@@ -190,13 +195,14 @@ impl Field {
             "froude" => Field::Froude,
             "grain" => Field::Grain,
             "river" => Field::River,
+            "channel" => Field::Channel,
             "rock" => Field::Rock,
             "hardness" => Field::Hardness,
             "playa" => Field::Playa,
             "till" => Field::Till,
             "sand" => Field::Sand,
             "bedrock" => Field::Bedrock,
-            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, discharge, water_depth, flow_speed, froude, grain, river, rock, bedrock, hardness, playa, till or sand", s)),
+            _ => return Err(format!("unknown field \"{}\": sediment, ice, lava, flow, wetness, convexity, elevation, snowline, treeline, temperature, precipitation, discharge, water_depth, flow_speed, froude, grain, river, channel, rock, bedrock, hardness, playa, till or sand", s)),
         })
     }
 }

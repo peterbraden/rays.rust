@@ -218,11 +218,11 @@ comes in blotches. A fit tunes a preset's parameters; it can't change its struct
 
 ### Presets modelled on scans
 
-![Ten presets and their scans](material-fit-scans.png)
+![Sixteen presets and their scans](material-fit-scans.png)
 
-*Each: the scan, the preset as written, and fitted. All ten fits applied.*
+*Each: the scan, the preset as written, and fitted. Fifteen fits applied; leaf_litter_gravel's not.*
 
-Ten presets were written to imitate particular Poly Haven scans, each scan recorded in the
+Sixteen presets were written to imitate particular Poly Haven scans, each scan recorded in the
 preset's `references`:
 
 | Preset | Scan | |
@@ -237,6 +237,12 @@ preset's `references`:
 | `laterite` | red_laterite_soil_stones | Rust-red earth with sparse pale nodules |
 | `foliated_rock` | quarry_wall (a wall) | Dark wavy foliation along a `dip`, from phasor noise |
 | `shingle` | coast_sand_03 | Grey-beige gravel and sand in lighter and darker drifts |
+| `veined_basalt` | dark_rock (a wall) | Near-black rock, a network of pale veins, horizontal fractures |
+| `weathered_grey_rock` | rock_01 | Smooth grey-brown rock, mottled, speckled, a few pits |
+| `weathered_pink_granite` | rock_04 | Coarse granite weathered rough, salmon feldspar among grey-brown |
+| `caliche_ground` | coral_gravel | Brown gravelly soil with ragged patches of pale lime crust |
+| `stony_bank` | river_small_rocks | Grey-beige silt with small flat stones bedded in it |
+| `leaf_litter_gravel` | leaf_scattered_gravel | Dark gravel strewn with fallen leaves (fit not applied: the leaves are blobs, not leaf shapes, and the gravel reads blue beside them) |
 
 Cliffs are fitted as walls (`"view": "wall"`), so their beds and streaks run along y as on a
 landscape's cliffs.
@@ -247,7 +253,7 @@ preset's own `scale`, multiplied into whatever a scene asks for. Re-rendering an
 preset gives the recorded loss. Fits correct colour and size; where a preset still differs
 from its scan it is in structure, which is the author's to improve: the sandstone's partings
 are thinner and more regular than the scan's chunky blocks, the ironstone has less lichen,
-the foliation's streaks are crisper, and the trail's stones fewer and smaller.
+the foliation's streaks are crisper, the trail's stones fewer and smaller, the caliche's lime patches fewer, and the stony bank's stones fainter.
 
 What the first attempts taught, now built into `fit-material.py`:
 

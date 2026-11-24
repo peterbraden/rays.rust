@@ -10516,24 +10516,24 @@
         }
       },
       "rock": [
-        0.045,
-        0.04,
-        0.035
+        0.0111,
+        0.0092,
+        0.008
       ],
       "rock2": [
-        0.07,
-        0.06,
-        0.05
+        0.036,
+        0.0288,
+        0.0236
       ],
       "vein": [
-        0.3,
-        0.28,
-        0.22
+        0.1515,
+        0.1549,
+        0.1194
       ],
       "stain_colour": [
-        0.12,
-        0.08,
-        0.05
+        0.0789,
+        0.0495,
+        0.03
       ]
     },
     "material": {
@@ -10656,9 +10656,44 @@
             ],
             "chroma": 0.05
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.4308,
+            "fitted": 0.063767
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": true,
+          "values": {
+            "scale": 0.9051,
+            "variables.rock": [
+              0.0111,
+              0.0092,
+              0.008
+            ],
+            "variables.rock2": [
+              0.036,
+              0.0288,
+              0.0236
+            ],
+            "variables.stain_colour": [
+              0.0789,
+              0.0495,
+              0.03
+            ],
+            "variables.vein": [
+              0.1515,
+              0.1549,
+              0.1194
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.9051
   },
   "weathered_grey_rock": {
     "show": "landscape",
@@ -10721,19 +10756,19 @@
         ]
       },
       "rock": [
-        0.26,
-        0.24,
-        0.21
+        0.1629,
+        0.1276,
+        0.0999
       ],
       "rock2": [
-        0.36,
-        0.34,
-        0.3
+        0.1912,
+        0.153,
+        0.121
       ],
       "pit": [
-        0.12,
-        0.11,
-        0.1
+        0.0737,
+        0.07,
+        0.0642
       ]
     },
     "material": {
@@ -10835,9 +10870,39 @@
             ],
             "chroma": 0.04
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.557049,
+            "fitted": 0.001762
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": true,
+          "values": {
+            "scale": 0.951,
+            "variables.rock": [
+              0.1629,
+              0.1276,
+              0.0999
+            ],
+            "variables.rock2": [
+              0.1912,
+              0.153,
+              0.121
+            ],
+            "variables.pit": [
+              0.0737,
+              0.07,
+              0.0642
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.951
   },
   "weathered_pink_granite": {
     "show": "landscape",
@@ -10871,19 +10936,19 @@
         }
       },
       "pink": [
-        0.56,
-        0.38,
-        0.3
+        0.3058,
+        0.2043,
+        0.1299
       ],
       "grey": [
-        0.35,
-        0.31,
-        0.26
+        0.1887,
+        0.1623,
+        0.1131
       ],
       "dark": [
-        0.14,
-        0.12,
-        0.1
+        0.0649,
+        0.0541,
+        0.0373
       ]
     },
     "material": {
@@ -10963,9 +11028,39 @@
               ]
             ]
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.560127,
+            "fitted": 0.003289
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": true,
+          "values": {
+            "scale": 1.3523,
+            "variables.pink": [
+              0.3058,
+              0.2043,
+              0.1299
+            ],
+            "variables.grey": [
+              0.1887,
+              0.1623,
+              0.1131
+            ],
+            "variables.dark": [
+              0.0649,
+              0.0541,
+              0.0373
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.3523
   },
   "caliche_ground": {
     "show": "landscape",
@@ -10985,7 +11080,7 @@
           "roughness": 0.65
         }
       },
-      "amount": 0.35,
+      "amount": 0.2552,
       "gravel": {
         "node": "cells",
         "style": "id",
@@ -10993,24 +11088,24 @@
         "seed": 1033
       },
       "soil": [
-        0.3,
-        0.21,
-        0.13
+        0.232,
+        0.1346,
+        0.0753
       ],
       "soil2": [
-        0.4,
-        0.29,
-        0.19
+        0.3024,
+        0.1811,
+        0.1084
       ],
       "lime": [
-        0.66,
-        0.58,
-        0.45
+        0.7347,
+        0.5913,
+        0.4545
       ],
       "pebble": [
-        0.5,
-        0.44,
-        0.36
+        0.3768,
+        0.2691,
+        0.2086
       ]
     },
     "material": {
@@ -11123,7 +11218,11 @@
                 "lime"
               ]
             ],
-            "chroma": 0.05
+            "chroma": 0.05,
+            "gain": [
+              0.9,
+              1.3
+            ]
           },
           {
             "path": [
@@ -11133,9 +11232,45 @@
             "min": 0.2,
             "max": 0.5
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.214468,
+            "fitted": 0.003209
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": true,
+          "values": {
+            "scale": 1.2807,
+            "variables.soil": [
+              0.232,
+              0.1346,
+              0.0753
+            ],
+            "variables.soil2": [
+              0.3024,
+              0.1811,
+              0.1084
+            ],
+            "variables.pebble": [
+              0.3768,
+              0.2691,
+              0.2086
+            ],
+            "variables.lime": [
+              0.7347,
+              0.5913,
+              0.4545
+            ],
+            "variables.amount": 0.2552
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.2807
   },
   "leaf_litter_gravel": {
     "show": "landscape",
@@ -11427,7 +11562,8 @@
                 "variables",
                 "gap"
               ]
-            ]
+            ],
+            "chroma": 0.03
           },
           {
             "kind": "colours",
@@ -11450,7 +11586,47 @@
             "min": 0.2,
             "max": 0.7
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.742503,
+            "fitted": 0.090657
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": false,
+          "values": {
+            "scale": 1.2843,
+            "variables.gravel": [
+              0.072,
+              0.0694,
+              0.0733
+            ],
+            "variables.gravel2": [
+              0.1023,
+              0.0945,
+              0.0955
+            ],
+            "variables.gap": [
+              0.0552,
+              0.0443,
+              0.0377
+            ],
+            "variables.leaf": [
+              0.1767,
+              0.0806,
+              0.0354
+            ],
+            "variables.leaf2": [
+              0.2228,
+              0.122,
+              0.0627
+            ],
+            "variables.share": 0.2452
+          }
+        }
       }
     ]
   },
@@ -11458,7 +11634,7 @@
     "show": "landscape",
     "doc": "A river bank of grey-beige silt and grit with small flat stones bedded in it, thickly in places; modelled on Poly Haven's river_small_rocks.",
     "variables": {
-      "share": 0.35,
+      "share": 0.1512,
       "patches": {
         "node": "fractal",
         "scale": 0.8,
@@ -11523,24 +11699,24 @@
         ]
       },
       "silt": [
-        0.32,
-        0.3,
-        0.26
+        0.1785,
+        0.1452,
+        0.111
       ],
       "silt2": [
-        0.4,
-        0.37,
-        0.32
+        0.236,
+        0.1896,
+        0.1446
       ],
       "stone": [
-        0.45,
-        0.43,
-        0.39
+        0.2244,
+        0.2247,
+        0.2065
       ],
       "stone2": [
-        0.34,
-        0.33,
-        0.31
+        0.1701,
+        0.1731,
+        0.1647
       ]
     },
     "material": {
@@ -11695,8 +11871,44 @@
             "min": 0.15,
             "max": 0.6
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.761256,
+            "fitted": 0.029442
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": true,
+          "values": {
+            "scale": 0.9677,
+            "variables.silt": [
+              0.1785,
+              0.1452,
+              0.111
+            ],
+            "variables.silt2": [
+              0.236,
+              0.1896,
+              0.1446
+            ],
+            "variables.stone": [
+              0.2244,
+              0.2247,
+              0.2065
+            ],
+            "variables.stone2": [
+              0.1701,
+              0.1731,
+              0.1647
+            ],
+            "variables.share": 0.1512
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.9677
   }
 }

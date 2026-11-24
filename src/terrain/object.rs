@@ -641,8 +641,6 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
         for &(c, half, level) in &rivers.lake_cells {
             let d = patch_dir(&l.domain, c);
             if !relief.layers.iter().find(|m| m.contains(&d)).is_some_and(|m| std::ptr::eq(m, l)) { continue; }
-            // A lake's cells and its rim's, the water left out only about the river that
-            // leaves it.
             let lake = rivers.lakes[crate::terrain::channel::point_cell(&l.domain, c)].is_some();
             let n = 16;
             let step = 2. * half / n as f64;
@@ -651,8 +649,12 @@ fn river_water(relief: &Arc<Relief>, frame: &Frame, view: &Viewpoint, p: &Scener
             // detail, with rivers' channels carved, as the mesh near the camera draws it) dips a
             // few metres below the level: the smoothing's dips, which the water fills, not a river's
             // gorge through the rim.
+            // A lake's own cells whole. Its rim's too, the smoothed ground there dipping below
+            // the level towards the lake's floor, except about the river out of it: where a
+            // river runs well below the lake within 400 m and has cut the ground there well
+            // below the level, that's its gorge, not the lake.
             let under = |q: crate::terrain::channel::Point| {
-                if lake { return true; }
+                if lake || carve.level(q, 800.).is_none_or(|(river, _, _)| river >= level - 3.) { return true; }
                 let m = patch_dir(&l.domain, q);
                 relief.height(&m, relief.slope(&m), 1.) >= level - 10.
             };

@@ -864,11 +864,19 @@ impl Rivers {
     }
 
     pub fn new(t: &Terrain, h: &Hydraulics) -> Rivers {
-        let courses = courses(t, h);
+        let mut courses = courses(t, h);
         let lakes = lakes_of(t);
         let depth: Vec<f64> = (0..t.domain.len()).map(|i| lakes[i].map_or(0., |l| (l - t.bed[i]).max(0.))).collect();
         let shelf_corners = t.domain.corner_cells.iter().map(|cs| cs.iter().map(|&c| depth[c]).sum::<f64>() / cs.len() as f64).collect();
-        let lake_nodes = courses.iter().map(|c| c.nodes.iter().map(|n| lakes[point_cell(&t.domain, n.p)]).collect()).collect();
+        let lake_nodes: Vec<Vec<Option<f64>>> = courses.iter().map(|c| c.nodes.iter().map(|n| lakes[point_cell(&t.domain, n.p)]).collect()).collect();
+        // Where a river crosses a lake, its valley floor is the lake's surface, not the lake's
+        // deep floor: the drawn ground is blended towards a river's bed (`Relief::base`), and
+        // the lake's floor is deepened under its water anyway (`Relief::height`); blended to the
+        // floor, the ground beside a lake (outside its cells, with no water over it) fell into
+        // pits as deep as the lake.
+        for (c, k) in courses.iter_mut().zip(&lake_nodes) {
+            for (n, l) in c.nodes.iter_mut().zip(k) { if let Some(l) = l { n.bed = n.bed.max(*l); } }
+        }
         let half = 0.5 * t.domain.min_spacing();
         // The lakes' cells and the ring of cells about them, at the lake's level: the drawn
         // ground is smoothed between cells, so about a lake it can dip below the level, and

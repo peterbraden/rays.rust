@@ -218,9 +218,9 @@ comes in blotches. A fit tunes a preset's parameters; it can't change its struct
 
 ### Presets modelled on scans
 
-![Sixteen presets and their scans](material-fit-scans.png)
+![The first ten presets and their scans](material-fit-scans.png)
 
-*Each: the scan, the preset as written, and fitted. Fifteen fits applied; leaf_litter_gravel's not.*
+*Each: the scan, the preset as written, and fitted (the first ten; the six after them aren't pictured). Fifteen of the sixteen fits are applied; leaf_litter_gravel's isn't.*
 
 Sixteen presets were written to imitate particular Poly Haven scans, each scan recorded in the
 preset's `references`:

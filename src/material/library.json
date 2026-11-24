@@ -7958,53 +7958,53 @@
         [
           0,
           [
-            0.42,
-            0.21,
-            0.08
+            0.273,
+            0.1134,
+            0.0385
           ]
         ],
         [
           0.25,
           [
-            0.55,
-            0.32,
-            0.13
+            0.3055,
+            0.1479,
+            0.0548
           ]
         ],
         [
           0.5,
           [
-            0.6,
-            0.4,
-            0.18
+            0.3133,
+            0.1736,
+            0.0731
           ]
         ],
         [
           0.75,
           [
-            0.68,
-            0.48,
-            0.25
+            0.3338,
+            0.195,
+            0.0972
           ]
         ],
         [
           1,
           [
-            0.5,
-            0.28,
-            0.11
+            0.2921,
+            0.1361,
+            0.0484
           ]
         ]
       ],
       "parting_colour": [
-        0.28,
-        0.1,
-        0.04
+        0.2002,
+        0.0638,
+        0.0411
       ],
       "joint_colour": [
-        0.12,
-        0.06,
-        0.03
+        0.1124,
+        0.0515,
+        0.0365
       ]
     },
     "material": {
@@ -8176,9 +8176,59 @@
               ]
             ]
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 1.161891,
+            "fitted": 0.119916
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": true,
+          "values": {
+            "scale": 0.7059,
+            "variables.beds.0.1": [
+              0.273,
+              0.1134,
+              0.0385
+            ],
+            "variables.beds.1.1": [
+              0.3055,
+              0.1479,
+              0.0548
+            ],
+            "variables.beds.2.1": [
+              0.3133,
+              0.1736,
+              0.0731
+            ],
+            "variables.beds.3.1": [
+              0.3338,
+              0.195,
+              0.0972
+            ],
+            "variables.beds.4.1": [
+              0.2921,
+              0.1361,
+              0.0484
+            ],
+            "variables.parting_colour": [
+              0.2002,
+              0.0638,
+              0.0411
+            ],
+            "variables.joint_colour": [
+              0.1124,
+              0.0515,
+              0.0365
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7059
   },
   "pebble_bed": {
     "show": "landscape",
@@ -8714,26 +8764,26 @@
           "seed": 833
         }
       },
-      "cover": 0.5,
+      "cover": 0.31,
       "dark": [
-        0.06,
-        0.04,
-        0.03
+        0.0014,
+        0.0011,
+        0.0008
       ],
       "rust": [
-        0.32,
-        0.13,
-        0.06
+        0.1938,
+        0.0881,
+        0.0427
       ],
       "lichen": [
-        0.42,
-        0.46,
-        0.42
+        0.1975,
+        0.2748,
+        0.2652
       ],
       "lichen2": [
-        0.3,
-        0.33,
-        0.3
+        0.1154,
+        0.1613,
+        0.155
       ],
       "clumps": {
         "node": "warp",
@@ -8874,9 +8924,45 @@
             "min": 0.2,
             "max": 0.8
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.372898,
+            "fitted": 0.15637
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": true,
+          "values": {
+            "scale": 0.7304,
+            "variables.dark": [
+              0.0014,
+              0.0011,
+              0.0008
+            ],
+            "variables.rust": [
+              0.1938,
+              0.0881,
+              0.0427
+            ],
+            "variables.lichen": [
+              0.1975,
+              0.2748,
+              0.2652
+            ],
+            "variables.lichen2": [
+              0.1154,
+              0.1613,
+              0.155
+            ],
+            "variables.cover": 0.31
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7304
   },
   "mossy_slab": {
     "show": "landscape",
@@ -9217,26 +9303,26 @@
           }
         ]
       },
-      "amount": 0.45,
+      "amount": 0.538,
       "ochre": [
-        0.66,
-        0.43,
-        0.24
+        0.4147,
+        0.2449,
+        0.1262
       ],
       "tan": [
-        0.55,
-        0.33,
-        0.16
+        0.3459,
+        0.1887,
+        0.0827
       ],
       "varnish_colour": [
-        0.12,
-        0.08,
-        0.05
+        0.0809,
+        0.0488,
+        0.0285
       ],
       "crack": [
-        0.3,
-        0.12,
-        0.05
+        0.1916,
+        0.0697,
+        0.0248
       ]
     },
     "material": {
@@ -9354,15 +9440,51 @@
               ]
             ]
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.433355,
+            "fitted": 0.001423
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": true,
+          "values": {
+            "scale": 0.7001,
+            "variables.amount": 0.538,
+            "variables.ochre": [
+              0.4147,
+              0.2449,
+              0.1262
+            ],
+            "variables.tan": [
+              0.3459,
+              0.1887,
+              0.0827
+            ],
+            "variables.varnish_colour": [
+              0.0809,
+              0.0488,
+              0.0285
+            ],
+            "variables.crack": [
+              0.1916,
+              0.0697,
+              0.0248
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7001
   },
   "trail_dirt": {
     "show": "landscape",
     "doc": "A forest trail's compacted brown earth, fine grit and crumbs, with pale stones of mixed sizes scattered sparsely over it; modelled on Poly Haven's forest_ground_04.",
     "variables": {
-      "share": 0.15,
+      "share": 0.0503,
       "big": {
         "node": "expr",
         "expr": "select(i - 1 + s, 0, h)",
@@ -9370,14 +9492,14 @@
           "i": {
             "node": "cells",
             "style": "id",
-            "scale": 0.13,
+            "scale": 0.07,
             "seed": 901
           },
           "s": "$share",
           "h": {
             "node": "cells",
             "style": "stones",
-            "scale": 0.13,
+            "scale": 0.07,
             "seed": 901
           }
         },
@@ -9393,7 +9515,7 @@
           "i": {
             "node": "cells",
             "style": "id",
-            "scale": 0.045,
+            "scale": 0.025,
             "seed": 903
           },
           "s": {
@@ -9406,7 +9528,7 @@
           "h": {
             "node": "cells",
             "style": "stones",
-            "scale": 0.045,
+            "scale": 0.025,
             "seed": 903
           }
         },
@@ -9446,24 +9568,24 @@
         "seed": 906
       },
       "dirt": [
-        0.24,
-        0.19,
-        0.13
+        0.138,
+        0.0962,
+        0.0575
       ],
       "dirt2": [
-        0.34,
-        0.28,
-        0.19
+        0.1834,
+        0.1328,
+        0.0788
       ],
       "stone": [
-        0.46,
-        0.43,
-        0.38
+        0.2325,
+        0.2123,
+        0.1831
       ],
       "stone2": [
-        0.36,
-        0.33,
-        0.29
+        0.1876,
+        0.168,
+        0.1441
       ]
     },
     "material": {
@@ -9512,12 +9634,12 @@
             }
           ],
           [
-            0.08,
+            0.3,
             {
               "pattern": {
                 "node": "cells",
                 "style": "id",
-                "scale": 0.045,
+                "scale": 0.025,
                 "seed": 903
               },
               "color_map": [
@@ -9602,7 +9724,8 @@
                 "variables",
                 "stone2"
               ]
-            ]
+            ],
+            "chroma": 0.04
           },
           {
             "path": [
@@ -9612,15 +9735,51 @@
             "min": 0.05,
             "max": 0.35
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.644,
+            "fitted": 0.013116
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": true,
+          "values": {
+            "scale": 0.9371,
+            "variables.dirt": [
+              0.138,
+              0.0962,
+              0.0575
+            ],
+            "variables.dirt2": [
+              0.1834,
+              0.1328,
+              0.0788
+            ],
+            "variables.stone": [
+              0.2325,
+              0.2123,
+              0.1831
+            ],
+            "variables.stone2": [
+              0.1876,
+              0.168,
+              0.1441
+            ],
+            "variables.share": 0.0503
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.9371
   },
   "laterite": {
     "show": "landscape",
     "doc": "Laterite: the rust-red, iron-rich earth of the tropics, finely grained, with sparse pale and orange nodules; modelled on Poly Haven's red_laterite_soil_stones.",
     "variables": {
-      "share": 0.12,
+      "share": 0.1545,
       "nodules": {
         "node": "expr",
         "expr": "select(i - 1 + s, 0, h)",
@@ -9658,24 +9817,24 @@
         "seed": 913
       },
       "earth": [
-        0.27,
-        0.1,
-        0.05
+        0.1461,
+        0.049,
+        0.0277
       ],
       "earth2": [
-        0.36,
-        0.15,
-        0.08
+        0.1786,
+        0.0677,
+        0.0403
       ],
       "nodule": [
-        0.55,
-        0.36,
-        0.24
+        0.339,
+        0.1999,
+        0.1308
       ],
       "nodule2": [
-        0.48,
-        0.22,
-        0.1
+        0.2277,
+        0.0944,
+        0.0405
       ]
     },
     "material": {
@@ -9805,9 +9964,45 @@
             "min": 0.04,
             "max": 0.3
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.663396,
+            "fitted": 0.048322
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": true,
+          "values": {
+            "scale": 0.8513,
+            "variables.earth": [
+              0.1461,
+              0.049,
+              0.0277
+            ],
+            "variables.earth2": [
+              0.1786,
+              0.0677,
+              0.0403
+            ],
+            "variables.nodule": [
+              0.339,
+              0.1999,
+              0.1308
+            ],
+            "variables.nodule2": [
+              0.2277,
+              0.0944,
+              0.0405
+            ],
+            "variables.share": 0.1545
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.8513
   },
   "foliated_rock": {
     "show": "landscape",
@@ -9847,24 +10042,24 @@
         "roughness": 0.55
       },
       "rock": [
-        0.27,
-        0.22,
-        0.15
+        0.1473,
+        0.1133,
+        0.0746
       ],
       "rock2": [
-        0.35,
-        0.28,
-        0.18
+        0.1704,
+        0.1289,
+        0.0797
       ],
       "streak": [
-        0.11,
-        0.11,
-        0.1
+        0.0525,
+        0.0572,
+        0.0541
       ],
       "rust": [
-        0.35,
-        0.2,
-        0.1
+        0.1879,
+        0.102,
+        0.0479
       ]
     },
     "material": {
@@ -9984,9 +10179,44 @@
               ]
             ]
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.649952,
+            "fitted": 0.049067
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": true,
+          "values": {
+            "scale": 1.1873,
+            "variables.rock": [
+              0.1473,
+              0.1133,
+              0.0746
+            ],
+            "variables.rock2": [
+              0.1704,
+              0.1289,
+              0.0797
+            ],
+            "variables.rust": [
+              0.1879,
+              0.102,
+              0.0479
+            ],
+            "variables.streak": [
+              0.0525,
+              0.0572,
+              0.0541
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 1.1873
   },
   "shingle": {
     "show": "landscape",
@@ -10025,24 +10255,24 @@
         "smallest": 0.02
       },
       "light": [
-        0.55,
-        0.52,
-        0.45
+        0.3571,
+        0.3166,
+        0.2338
       ],
       "mid": [
-        0.44,
-        0.42,
-        0.37
+        0.2423,
+        0.2167,
+        0.1633
       ],
       "dark": [
-        0.3,
-        0.29,
-        0.27
+        0.0983,
+        0.0889,
+        0.0712
       ],
       "sand": [
-        0.47,
-        0.43,
-        0.35
+        0.2616,
+        0.2252,
+        0.1551
       ]
     },
     "material": {
@@ -10173,8 +10403,43 @@
               ]
             ]
           }
-        ]
+        ],
+        "fit": {
+          "loss": {
+            "start": 0.631842,
+            "fitted": 0.001076
+          },
+          "iterations": 20,
+          "resolution": 128,
+          "samples": 8,
+          "date": "2026-11-24",
+          "applied": true,
+          "values": {
+            "scale": 0.7854,
+            "variables.light": [
+              0.3571,
+              0.3166,
+              0.2338
+            ],
+            "variables.mid": [
+              0.2423,
+              0.2167,
+              0.1633
+            ],
+            "variables.dark": [
+              0.0983,
+              0.0889,
+              0.0712
+            ],
+            "variables.sand": [
+              0.2616,
+              0.2252,
+              0.1551
+            ]
+          }
+        }
       }
-    ]
+    ],
+    "scale": 0.7854
   }
 }

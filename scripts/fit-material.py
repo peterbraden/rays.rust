@@ -74,7 +74,9 @@ a gain on their lightness (`gain`, default 0.5 to 2), shifts of their tints alon
 blue-yellow (within `chroma`, default 0.12, of the author's), and a contrast about their mean
 lightness (`contrast`, default 0.5 to 2), keeping the colours' relations as their author gave
 them. (Gains on red, green and blue apiece let a group's hue wander anywhere: grey lichen
-turned blue, ochre turned pink.)
+turned blue, ochre turned pink.) Give colours that cover little of the surface a smaller
+`chroma`: their hue hardly moves the loss, so it drifts (trail_dirt's stones, a tenth of its
+area, turned mint green at 0.12).
 
     scripts/fit-material.py scree|spec.json [--iterations 30] [--resolution 160] [--samples 8] [--record] [-o out_dir]
 

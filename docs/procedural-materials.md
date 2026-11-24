@@ -218,27 +218,36 @@ comes in blotches. A fit tunes a preset's parameters; it can't change its struct
 
 ### Presets modelled on scans
 
-![Six presets and their scans](material-fit-scans.png)
+![Ten presets and their scans](material-fit-scans.png)
 
-*Each: the scan, the preset as written, and fitted. Three fits were applied; three were not.*
+*Each: the scan, the preset as written, and fitted. All ten fits applied.*
 
-Six presets were written to imitate particular Poly Haven scans, each scan recorded in the
-preset's `references`: `pebble_bed` (dry_river_pebbles: packed rounded pebbles, pale and
-dark), `angular_rubble` (gray_rocks), `mossy_slab` (mossy_rock: a mosaic of mosses and
-lichens over grey rock, with a few cracks), `ochre_crust` (rock_06: ochre rock, dark varnish,
-cracks), `lichened_ironstone` (lichen_rock, a cliff face: iron-dark rock streaked along its
-grain, lichen in drifts) and `bedded_sandstone` (cliff_side: beds broken into blocks by
-joints). The two cliffs are fitted as walls (`"view": "wall"`), so their beds and streaks run
-along y as on a landscape's cliffs.
+Ten presets were written to imitate particular Poly Haven scans, each scan recorded in the
+preset's `references`:
+
+| Preset | Scan | |
+|---|---|---|
+| `pebble_bed` | dry_river_pebbles | Packed rounded pebbles, pale and dark |
+| `angular_rubble` | gray_rocks | Packed angular grey stones, soil between |
+| `mossy_slab` | mossy_rock | A mosaic of mosses and lichens over grey rock, a few cracks |
+| `ochre_crust` | rock_06 | Ochre rock blotched with dark varnish, sharp cracks |
+| `lichened_ironstone` | lichen_rock (a wall) | Iron-dark rock streaked along its grain, lichen in clumps gathered in drifts |
+| `bedded_sandstone` | cliff_side (a wall) | Beds of random thickness, each its own tone, rust partings, joints ending at them |
+| `trail_dirt` | forest_ground_04 | Compacted brown earth with sparse pale stones |
+| `laterite` | red_laterite_soil_stones | Rust-red earth with sparse pale nodules |
+| `foliated_rock` | quarry_wall (a wall) | Dark wavy foliation along a `dip`, from phasor noise |
+| `shingle` | coast_sand_03 | Grey-beige gravel and sand in lighter and darker drifts |
+
+Cliffs are fitted as walls (`"view": "wall"`), so their beds and streaks run along y as on a
+landscape's cliffs.
 
 A fit is applied only once someone has looked at it: `scripts/apply-fit.py pebble_bed` copies
 the recorded values into the preset and marks them applied. A fitted size becomes the
 preset's own `scale`, multiplied into whatever a scene asks for. Re-rendering an applied
-preset gives the recorded loss exactly. The fits of pebbles, rubble and moss were applied;
-ochre_crust's overshot (too much varnish), lichened_ironstone's turned its lichen blue (one
-set of gains can't serve colours of different hues: the rock's and the lichen's should be
-fitted as separate groups), and bedded_sandstone's structure is wrong (its partings too
-regular, its blotches too dark), which no colour can fix.
+preset gives the recorded loss. Fits correct colour and size; where a preset still differs
+from its scan it is in structure, which is the author's to improve: the sandstone's partings
+are thinner and more regular than the scan's chunky blocks, the ironstone has less lichen,
+the foliation's streaks are crisper, and the trail's stones fewer and smaller.
 
 What the first attempts taught, now built into `fit-material.py`:
 
@@ -248,8 +257,12 @@ What the first attempts taught, now built into `fit-material.py`:
   near its author's and its tint close to theirs: a fit refines a preset's colours, it doesn't
   choose them.
 - A search's cost grows with its dimensions (CMA-ES wants of the order of a hundred
-  evaluations per dimension), so a preset's colours are best fitted as a group: four numbers,
-  red, green and blue gains and a contrast, for all of them, keeping their relations.
+  evaluations per dimension), so a preset's colours are best fitted as groups, each as one
+  colour is: a gain on lightness, two small tint shifts and a contrast, keeping the colours'
+  relations. Gains on red, green and blue apiece let a group's hue wander (grey lichen turned
+  blue, ochre pink); and colours of different hues (rock and lichen) belong in separate groups.
+- Colours that cover little of the surface hardly move the loss, so their tint drifts: give
+  them a smaller `chroma` (trail_dirt's stones, a tenth of its area, turned mint green).
 - The eye judges a surface's hue by its mean first; the patch distributions barely see a mean
   shifted from tan to pink. The mean colour is now compared besides, along the opponent axes.
 - Size is held near the author's (0.7 to 1.4 of it): left free, it ran to its bound.

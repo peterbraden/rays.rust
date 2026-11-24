@@ -2421,6 +2421,27 @@ Not done, and why:
     scene's intersection, a loss at equal time on benard-altocumulus (FLIP 0.0488 at 64 spp
     without, 0.0507 at 32 with, the same time) and a large gain on mammatus (0.0726 at 16
     with, 0.0862 at 32 without).
+- Majorant grids for the clouds (the perf pass's next step: the cost is the densities a walk
+  asks for, 95-100% of them in clear air). Each cloud's box gets a grid of up to two million
+  cells, 8 times wider than high, each the most density found at two lattices (the cells'
+  corners and the points between) within two cells, times 1.5, at least a quarter of the
+  medium's bound, and 1/64 of it where nothing is in reach. Sampled, not proven, so the
+  walks are made correct where it fails: weighted delta tracking (Kutz et al. 2017), signed
+  ratio-tracking estimates, and a path that meets an overshoot walks by the layers' proven
+  bounds from there on (unbiased: a walk may choose its majorant at each event from what came
+  before), so a miss is one weight of at most 8 on one path. What it took to get there, on
+  altocumulus-castellanus: one lattice spread a cell missed whole turrets (density 0.15 in a
+  cell bounded at 0.003), and weights renewed at each walk multiplied bounce by bounce inside
+  them, pixels of thousands. Kept by kind and checked: altocumulus's cells are finer than a
+  grid's lattice (its grids found cloud in empty cells at random points: 5-37 in two
+  million), so it has none and keeps `Benard::tops`; cirrus's own bounds are close (the grid
+  saved a tenth of the densities and took six times the steps: a third slower); a grid that
+  misses at a million random points isn't kept. Inside the grid the cell's bound alone is
+  used (taking the least with the layer's cost more than it saved). At 160 x 100, CPU
+  kernels: cumulonimbus 676 -> 10 densities a camera ray, about 30 -> 17 s at 32 spp;
+  mammatus about 30 -> 23 s; stratocumulus 16 -> 12 s; snow-showers' walks a tenth quicker,
+  its two grids' build (3 s) more than that at this size. Pictures within noise of
+  renders without (RMSE against an independent render without, the same as two without).
 - Media through the host in the wavefront's rounds (the rest of step 3), and with them the
   thread-locals. Judged not worth doing as such: a scene with a medium the kernels lack is
   rendered a path at a time by the scene's own code under the same driver now, and the

@@ -143,7 +143,7 @@ struct WithHost<'a, M: pathtrace::Media> {
 impl<M: pathtrace::Media> pathtrace::Finder for WithHost<'_, M> {
     const MEDIA: bool = M::ON;
 
-    fn find(&self, scene: &pathtrace::Scene, p: &PathState) -> PathState {
+    fn find(&self, scene: &pathtrace::Scene, p: &PathState) -> (PathState, f32) {
         let mut found = pathtrace::intersect_surface(scene, p);
         if !self.host_shapes.is_empty() {
             let r = host_ray(p.o.truncate(), p.d.truncate(), &self.kernels.buffers.origin);

@@ -1596,6 +1596,41 @@ mod tests {
         assert!(ratio.iter().all(|t| (0. ..=1.).contains(t)));
     }
 
+    /// Bounds that aren't bounds (a majorant grid sampled from the density can miss a wisp):
+    /// over a constant medium bounded at a third of its density, weighted delta tracking's
+    /// estimates (its weight where the light gets through, and where it collides before a
+    /// distance) and ratio tracking's transmittance still average to exp(-σL).
+    #[test]
+    fn test_walks_are_unbiased_where_a_bound_is_exceeded() {
+        struct Under(f64);
+        impl shared::media::Medium<f64> for Under {
+            fn density(&self, _x: f64, _y: f64, _z: f64) -> f64 { self.0 }
+            fn bound(&self) -> f64 { self.0 }
+            fn majorant_from(&self, _x: f64, _y: f64, _z: f64, _dx: f64, _dy: f64, _dz: f64) -> (f64, f64) { (self.0 / 3., f64::INFINITY) }
+        }
+        struct R(crate::geometry::Pcg32);
+        impl shared::Random<f64> for R { fn next(&mut self) -> f64 { self.0.next_f64() } }
+        let (sigma, length, half) = (0.8, 2., 1.);
+        let medium = Under(sigma);
+        let mut rng = R(crate::geometry::Pcg32::new(3, 1));
+        let n = 400_000;
+        let (mut escaped, mut before_half, mut through) = (0., 0., 0.);
+        for _ in 0..n {
+            let mut w = 1.;
+            match shared::media::delta_track_weighted(&medium, (0., 0., 0.), (1., 0., 0.), 0., length, 1., &mut rng, &mut w, &mut true) {
+                None => escaped += w,
+                Some(t) if t < half => before_half += w,
+                Some(_) => {},
+            }
+            through += shared::media::ratio_track(&medium, (0., 0., 0.), (1., 0., 0.), 0., length, 0., 1., 1., &mut rng).unwrap_or(0.);
+        }
+        let (escaped, before_half, through) = (escaped / n as f64, before_half / n as f64, through / n as f64);
+        let (t_all, t_half) = ((-sigma * length).exp(), (-sigma * half).exp());
+        assert!((escaped - t_all).abs() < 0.02, "escaped {} vs {}", escaped, t_all);
+        assert!((before_half - (1. - t_half)).abs() < 0.02, "collided before {} {} vs {}", half, before_half, 1. - t_half);
+        assert!((through - t_all).abs() < 0.01, "ratio tracking {} vs {}", through, t_all);
+    }
+
     #[test]
     fn test_ratio_tracking_respects_min_and_max() {
         seed_rand(8, 0);

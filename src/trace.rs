@@ -71,7 +71,9 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, prior: LightSampling) -> (u64, Col
         (Some(env), LightSampling::MIS { bsdf_pdf }) if reaches_sky => color * power_heuristic(bsdf_pdf, env.pdf(&r.rd.normalize())),
         _ => color,
     };
-    let color = Color { rgb: (color.rgb - shadowed.component_mul(&mis.rgb)).map(|v| v.max(0.)) };
+    // (Not clamped at nothing: a sample can be less, where its shadow sample stands for more
+    // light than this path found, and the mean is only right if it stays so.)
+    let color = Color { rgb: color.rgb - shadowed.component_mul(&mis.rgb) };
     match &s.sun {
         Some(sun) if reaches_sky => {
             let d = r.rd.normalize();

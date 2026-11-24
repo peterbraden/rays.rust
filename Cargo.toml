@@ -44,13 +44,18 @@ web-time = "1.1"
 # The GPU path tracer (`gpu`), built only with `--features gpu`.
 wgpu = { version = "30", optional = true }
 pollster = { version = "0.4", optional = true }
-bytemuck = { version = "1", features = ["derive"], optional = true }
-# The shader crate, also compiled for the CPU: its buffer layouts and its code, for tests.
-pathtrace = { path = "shaders/pathtrace", optional = true }
+# The kernel crate (`kernels`): the wavefront's intersection and shading, which the GPU runs
+# as a shader and the CPU as this build of it; its structs are the buffers' layouts.
+bytemuck = { version = "1", features = ["derive"] }
+pathtrace = { path = "shaders/pathtrace" }
 
 # Natively the shader goes in as SPIR-V; a browser takes its WGSL (src/gpu/pathtrace.wgsl).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 wgpu = { version = "30", optional = true, features = ["spirv"] }
+
+# The tests count the kernels' traversal work (`pathtrace::stats`); a render doesn't.
+[dev-dependencies]
+pathtrace = { path = "shaders/pathtrace", features = ["stats"] }
 
 [lib]
 name = "rays"
@@ -65,7 +70,7 @@ required-features = ["cli"]
 [features]
 default = ["cli"]
 cli = ["dep:clap", "dep:indicatif", "dep:console", "dep:nv-flip", "dep:libc", "dep:tiny_http"]
-gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:pathtrace"]
+gpu = ["dep:wgpu", "dep:pollster"]
 
 [profile.release]
 # Whole-program optimisation: inlining across crates (nalgebra, rustfft, rand) and modules.

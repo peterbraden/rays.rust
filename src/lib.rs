@@ -18,6 +18,7 @@ extern crate rustfft;
 
 pub mod assets;
 pub mod scheduler;
+mod shared_rules;
 pub mod world;
 pub mod schema;
 #[cfg(feature = "cli")]
@@ -74,6 +75,7 @@ pub mod light_bvh;
 pub mod wavefront;
 #[cfg(feature = "gpu")]
 pub mod gpu;
+pub mod kernels;
 pub mod shapes {
     pub mod transform;
     pub mod bbox;

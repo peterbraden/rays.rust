@@ -161,6 +161,32 @@ impl<F: Real> WeatherGrid<F> {
         Some((i, j, u - F::of(i as i32), v - F::of(j as i32)))
     }
 
+    /// The texel a ray at (x, z) moving along (dx, dz) is in, or entering: `locate`'s, but
+    /// for a point on a texel's edge (to what the float can tell, `Real::grain`, or a
+    /// millimetre), where it is
+    /// the one the ray is going into, whichever side of the edge rounding put the point.
+    /// None outside the map.
+    pub fn entering(&self, x: F, z: F, dx: F, dz: F) -> Option<(u32, u32)> {
+        match (self.entering_along((x - self.x) / self.texel, dx), self.entering_along((z - self.z) / self.texel, dz)) {
+            (Some(i), Some(j)) => Some((i, j)),
+            _ => None,
+        }
+    }
+
+    fn entering_along(&self, u: F, du: F) -> Option<u32> {
+        let (zero, one) = (F::of(0), F::of(1));
+        let floor = u.floor();
+        // (Or within a millimetre of it: where a step to the edge along a curved layer lands.)
+        let near = (u.abs().max(one) * F::grain()).max(F::ratio(1, 1000) / self.texel);
+        let mut i = floor.to_i32();
+        if u - floor <= near && du < zero {
+            i -= 1;
+        } else if floor + one - u <= near && du > zero {
+            i += 1;
+        }
+        if i < 0 || i >= self.n as i32 { None } else { Some(i as u32) }
+    }
+
     pub fn at<T: Tables<F>>(&self, tables: &T, x: F, z: F) -> F {
         match self.locate(x, z) {
             None => F::of(0),
@@ -215,12 +241,12 @@ impl<F: Real> NubisField<F> {
     /// edge, or to that height if the ray crosses it first.
     pub fn majorant_from<T: Tables<F>>(&self, tables: &T, x: F, y: F, z: F, dx: F, dy: F, dz: F) -> (F, F) {
         let map = &self.weather;
-        // Classify by a point a centimetre along the ray, so one on a texel's edge (or the
-        // clouds' top) counts as where it is entering.
+        // A point on a texel's edge counts as in the texel the ray is entering (and one at
+        // the clouds' top, by a point a centimetre along the ray, as where it is going).
         let near = F::ratio(1, 100);
-        let (ax, ay, az) = (x + dx * near, y + dy * near, z + dz * near);
-        let (i, j) = match map.locate(ax, az) {
-            Some((i, j, _, _)) => (i, j),
+        let ay = y + dy * near;
+        let (i, j) = match map.entering(x, z, dx, dz) {
+            Some(cell) => cell,
             None => return (self.max_density, F::far()),
         };
         let (x0, z0) = (map.x + F::of(i as i32) * map.texel, map.z + F::of(j as i32) * map.texel);

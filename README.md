@@ -95,6 +95,14 @@ After PBRT's chapter 5. The `"camera"` takes a `"type"`:
   as an eye's astigmatism does; `{"seidel": 0.2}` gives a lens's astigmatism, growing with the
   square of the distance from the centre.
 - `"orthographic"` and `"spherical"` (`"mapping": "equirectangular"` or `"equal_area"`).
+- `"isometric"`: an orthographic view of `"lookat"`, `"height"` tall, from `"azimuth"` degrees
+  round (default 45) and `"elevation"` degrees up (default 35.26°, at which the three axes are
+  drawn alike, 120° apart; 30 gives pixel art's 2:1 diamonds), `"distance"` back (default twice
+  the height); `"location"` isn't needed. Orthographic and isometric cameras take an `"aperture"`
+  (default 0) and `"focus_distance"` (default `lookat`) for a model's shallow depth of field:
+  blur grows as aperture × |depth − focus| / focus, so a camera further back needs a wider one;
+  or `"blur"` instead, the blur's radius per unit of depth from the focus, the same from any
+  distance (`"blur": 0.03`: a point 100 m off focus blurs over a disc 3 m in radius).
 - `"realistic"`: rays traced through a real lens (`"lens": "dgauss.50mm"`, `"wide.22mm"`,
   `"telephoto.250mm"`, `"fisheye.10mm"` or a pbrt `.dat` file), with `"f_number"`, `"blades"`
   and `"film_diagonal"`: depth of field, vignetting, distortion and aberrations come from the
@@ -143,8 +151,9 @@ alias nor blur:
 
 ## Wavefront rendering
 
-After PBRT's chapter 15, `"integrator": "wavefront"` (or `--wavefront`) renders with a
-wavefront path tracer: every path of a pass in a queue, advanced a stage at a time (camera
+After PBRT's chapter 15, scenes render with a wavefront path tracer where they can (on a
+GPU if the build has one, else on the CPU; `--path-tracer` or `"integrator": "path"` for
+the recursive path tracer, `--wavefront` to keep to the CPU): every path of a pass in a queue, advanced a stage at a time (camera
 rays, intersection, emission, shading sorted by material, shadow rays) over the scene
 flattened into arrays of triangles and spheres with a material table: the structure a GPU
 renderer needs. It covers spheres, triangles, meshes, boxes, quads, planes and their
@@ -155,7 +164,8 @@ tracer's (on `demo.json` at 512 samples, mean FLIP 0.0016 against seed-to-seed 0
 about 1.2 to 1.4 times its time on the CPU.
 
 The same flattened scene renders on a GPU, through wgpu (Metal, Vulkan or DirectX 12), with
-`--gpu` (or `"integrator": "gpu"`) in a build with the `gpu` feature:
+in a build with the `gpu` feature (`--gpu`, or `"integrator": "gpu"`, to use a software
+adapter too):
 
 ```
 cargo run --release --features gpu -- demo/scenes/spheres.json --gpu

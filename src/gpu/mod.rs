@@ -37,18 +37,6 @@ use rayon::prelude::*;
 use std::sync::Mutex;
 use wgpu::util::DeviceExt;
 
-/// The baked sky's resolution where the shader looks its light up in the map (a plain
-/// background), and how many texels a side a cell of its visibility
-/// (`environment::visibility`) covers, so that the visibility is at the CPU's resolution.
-const ENV_WIDTH: usize = 1024;
-const ENV_HEIGHT: usize = 512;
-const VISIBILITY_SCALE: usize = 8;
-/// Its resolution where the shader evaluates the sky or space for each ray, and the map only
-/// chooses directions to sample: the CPU's own (`environment`), a ray of visibility a texel.
-/// Each texel there is the sky's scattering integrated, which at the full resolution was most
-/// of setting the GPU up (1.1 s of 1.5 on four cores).
-const SAMPLING_WIDTH: usize = 128;
-const SAMPLING_HEIGHT: usize = 64;
 /// Passes between reading the accumulated image back.
 const PASSES_PER_READ: usize = 8;
 
@@ -77,198 +65,14 @@ struct Block {
     host_seconds: f64,
 }
 
-// The buffers' layouts are the shader crate's own (`shaders/pathtrace`), so the two can't drift.
-pub mod host;
+// The buffers' layouts are the shader crate's own (`shaders/pathtrace`), so the two can't
+// drift; the scene laid out in them is `kernels`'.
+pub use crate::kernels::{host, Buffers};
+#[allow(unused_imports)]
+use crate::kernels::{air_record, bvh_depth, c4, cdf, env_direction, gpu_nodes, media_records, space_record, v4};
 
 use pathtrace::{CameraRay as GpuRay, Light as GpuLight, Material as GpuMaterial, Node as GpuNode, Params, PathState, Prim as GpuPrim, SkyQuery};
 use pathtrace::glam::{UVec4, Vec4};
-
-fn v4(v: &Vector3<f64>, w: f32) -> Vec4 {
-    Vec4::new(v.x as f32, v.y as f32, v.z as f32, w)
-}
-
-fn c4(c: &Color) -> Vec4 {
-    Vec4::new(c.rgb.x as f32, c.rgb.y as f32, c.rgb.z as f32, 0.)
-}
-
-/// Flatten `m` into `out` (checkerboards' squares after it), returning its index.
-fn push_material(m: &FlatMaterial, out: &mut Vec<GpuMaterial>, kernels: &[Option<GpuMaterial>]) -> u32 {
-    let index = out.len() as u32;
-    let blank = GpuMaterial::zeroed();
-    out.push(blank);
-    let g = match m {
-        FlatMaterial::Diffuse { albedo } => GpuMaterial { kind: pathtrace::MAT_DIFFUSE, c0: c4(albedo), ..blank },
-        FlatMaterial::Plastic { albedo, refractive_index, roughness } =>
-            GpuMaterial { kind: pathtrace::MAT_PLASTIC, c0: c4(albedo), p: Vec4::new(*refractive_index as f32, *roughness as f32, 0., 0.), ..blank },
-        FlatMaterial::Dielectric { refractive_index, tint } =>
-            GpuMaterial { kind: pathtrace::MAT_DIELECTRIC, c0: c4(tint), p: Vec4::new(*refractive_index as f32, 0., 0., 0.), ..blank },
-        FlatMaterial::Conductor { optics, roughness } => {
-            let (eta, k) = optics.current();
-            GpuMaterial { kind: pathtrace::MAT_CONDUCTOR, c0: c4(&eta), c1: c4(&k), p: Vec4::new(0., *roughness as f32, 0., 0.), ..blank }
-        },
-        FlatMaterial::Emitter { radiance, two_sided } => GpuMaterial { kind: pathtrace::MAT_EMITTER, a: *two_sided as u32, c0: c4(radiance), ..blank },
-        FlatMaterial::Specular { albedo, roughness } => GpuMaterial { kind: pathtrace::MAT_METAL, c0: c4(albedo), p: Vec4::new(0., *roughness as f32, 0., 0.), ..blank },
-        FlatMaterial::Checker { m1, m2, xsize, zsize } => {
-            let a = push_material(m1, out, kernels);
-            let b = push_material(m2, out, kernels);
-            GpuMaterial { kind: pathtrace::MAT_CHECKER, a, b, p: Vec4::new(0., 0., *xsize as f32, *zsize as f32), ..blank }
-        },
-        // The kernels stop a path here for the host (`host`).
-        // unless they have a kernel of this material after all (`host_kernels`).
-        FlatMaterial::Host { object } => kernels[*object as usize].unwrap_or(GpuMaterial { kind: pathtrace::MAT_HOST, a: *object, ..blank }),
-    };
-    out[index as usize] = g;
-    index
-}
-
-/// A cumulative distribution over `f` (n + 1 values from 0 to 1), uniform if `f` sums to 0.
-fn cdf(f: &[f64]) -> Vec<f32> {
-    let total: f64 = f.iter().sum();
-    let mut out = Vec::with_capacity(f.len() + 1);
-    let mut acc = 0.;
-    out.push(0.);
-    for (i, v) in f.iter().enumerate() {
-        acc += if total > 0. { v / total } else { 1. / f.len() as f64 };
-        out.push(if i + 1 == f.len() { 1. } else { acc as f32 });
-    }
-    out
-}
-
-/// The direction through texel (x, y) of the baked sky's map, as the shader's `env_sample`.
-fn env_direction(x: usize, y: usize, width: usize, height: usize) -> Vector3<f64> {
-    use std::f64::consts::PI;
-    let u = (x as f64 + 0.5) / width as f64;
-    let v = (y as f64 + 0.5) / height as f64;
-    let (phi, theta) = ((u - 0.5) * 2. * PI, v * PI);
-    Vector3::new(theta.sin() * phi.cos(), theta.cos(), theta.sin() * phi.sin())
-}
-
-/// Append `air` (and its moonlit copy) to `tables` as the shader's record (`pathtrace::AIR_*`),
-/// returning where it starts.
-/// The media's records (`pathtrace::MEDIUM_SIZE` floats each, one after another), after the
-/// cloud layers' own that they point to: where the first begins.
-fn media_records(tables: &mut Vec<f32>, media: &[crate::volume::FlatMedium]) -> u32 {
-    use crate::material::phase::PhaseFunction;
-    use crate::volume::FieldExport;
-    let fields: Vec<(u32, f32, f32)> = media.iter().map(|m| match &m.field {
-        FieldExport::Constant(d) => (pathtrace::MEDIUM_CONSTANT, *d as f32, 0.),
-        FieldExport::Nubis { record, radius } => {
-            let at = tables.len() as u32;
-            tables.extend(record);
-            (pathtrace::MEDIUM_NUBIS, f32::from_bits(at), *radius as f32)
-        },
-    }).collect();
-    let first = tables.len() as u32;
-    for (m, (kind, density, radius)) in media.iter().zip(fields) {
-        let (lo, hi) = (m.bounds.min, m.bounds.max);
-        let phase = match m.phase {
-            PhaseFunction::HenyeyGreenstein { g } => [pathtrace::PHASE_HENYEY_GREENSTEIN as f32, g as f32, 0., 0., 0.],
-            PhaseFunction::HgDraine { g_hg, g_d, alpha, w_d } => [pathtrace::PHASE_DROPLETS as f32, g_hg as f32, g_d as f32, alpha as f32, w_d as f32],
-        };
-        tables.push(kind as f32);
-        tables.extend([lo.x as f32, lo.y as f32, lo.z as f32, hi.x as f32, hi.y as f32, hi.z as f32]);
-        tables.extend([density, radius, m.scale as f32, m.lower as f32]);
-        tables.extend(phase);
-        tables.extend([m.albedo.rgb.x as f32, m.albedo.rgb.y as f32, m.albedo.rgb.z as f32, m.peak as f32]);
-        // (Never, without the similarity relations: a path counts 255 scatterings at most.)
-        let (from, scale) = m.reduced.map_or((1e9, 1.), |(n, scale)| (n as f32, scale as f32));
-        tables.extend([scale, from, m.mean_cosine.0 as f32, m.mean_cosine.1 as f32]);
-    }
-    first
-}
-
-fn air_record(tables: &mut Vec<f32>, air: &crate::skysphere::AirExport) -> u32 {
-    use pathtrace::*;
-    let base = tables.len();
-    tables.resize(base + AIR_HEADER as usize, 0.);
-    let put = |tables: &mut Vec<f32>, i: u32, v: f64| tables[base + i as usize] = v as f32;
-    let put3 = |tables: &mut Vec<f32>, i: u32, v: &Vector3<f64>| (0..3).for_each(|k| tables[base + i as usize + k] = v[k] as f32);
-    let c = air.earth_centre;
-    put3(tables, AIR_CENTRE, &c);
-    put(tables, AIR_RADII, air.earth_radius);
-    put(tables, AIR_RADII + 1, air.atmosphere_radius);
-    // |c|² - r², in f64: the shader's `excess` adds the terms in p, which are small near the
-    // ground, to these.
-    put(tables, AIR_EXCESS, c.norm_squared() - air.earth_radius * air.earth_radius);
-    put(tables, AIR_EXCESS + 1, c.norm_squared() - air.atmosphere_radius * air.atmosphere_radius);
-    put3(tables, AIR_SUN, &air.sun_direction);
-    put(tables, AIR_HEIGHTS, air.rayleigh_thickness);
-    put(tables, AIR_HEIGHTS + 1, air.mie_thickness);
-    put(tables, AIR_BRIGHTNESS, air.brightness);
-    put3(tables, AIR_RAYLEIGH, &air.rayleigh);
-    put(tables, AIR_MIE, air.mie);
-    put(tables, AIR_MIE + 1, air.mie_anisotropy);
-    put3(tables, AIR_OZONE, &air.ozone);
-    for (i, h) in crate::skysphere::LUT_ALTITUDES.iter().enumerate() {
-        put(tables, AIR_LUT_ALTITUDES + i as u32, *h);
-    }
-    let offset = |tables: &mut Vec<f32>, i: u32, values: Option<Vec<f32>>| {
-        let at = match values {
-            Some(v) => { let at = tables.len() as u32; tables.extend(v); at },
-            None => NO_AIR,
-        };
-        tables[base + (AIR_TABLES + i) as usize] = f32::from_bits(at);
-    };
-    offset(tables, 0, Some(air.sun_table.iter().flat_map(|d| d.map(|x| x as f32)).collect()));
-    offset(tables, 1, air.multiple.as_ref().map(|m| m.iter().flat_map(|v| [v.x as f32, v.y as f32, v.z as f32]).collect()));
-    offset(tables, 2, air.lut.as_ref().map(|l| l.iter().flat_map(|(r, m, s)| [r, m, s]).flat_map(|v| [v.x as f32, v.y as f32, v.z as f32]).collect()));
-    let moon = air.moon.as_ref().map_or(NO_AIR, |m| air_record(tables, m));
-    tables[base + (AIR_TABLES + 3) as usize] = f32::from_bits(moon);
-    base as u32
-}
-
-/// Append `space` to `tables` as the shader's record (`pathtrace::SPACE_*`), returning where it
-/// starts: the frame and settings, the noise's tables, and each part's parameters (the stars
-/// as a catalogue, which the shader can't generate).
-fn space_record(tables: &mut Vec<f32>, space: &crate::procedural::space::Space) -> u32 {
-    use pathtrace::*;
-    let base = tables.len();
-    tables.resize(base + SPACE_HEADER as usize, 0.);
-    let f = &space.frame;
-    for (i, v) in [f.centre, f.pole, f.east].iter().flat_map(|v| v.iter()).enumerate() {
-        tables[base + SPACE_FRAME as usize + i] = *v as f32;
-    }
-    tables[base + SPACE_BRIGHTNESS as usize] = space.brightness as f32;
-    tables[base + SPACE_THRESHOLD as usize] = space.threshold as f32;
-    // Every field's noise is Perlin's, with the same table and rotation; only its offset differs.
-    let noise = crate::noise::SeededNoise::new(0);
-    for (i, v) in noise.rotation_rows().iter().enumerate() {
-        tables[base + SPACE_ROTATION as usize + i] = *v as f32;
-    }
-    let put = |tables: &mut Vec<f32>, i: u32, v: u32| tables[base + (SPACE_TABLES + i) as usize] = f32::from_bits(v);
-    let at = tables.len() as u32;
-    tables.extend(noise.permutation().iter().map(|p| *p as f32));
-    put(tables, 0, at);
-    let stars = match &space.stars {
-        Some(stars) => {
-            let (sigma, n, starts, list, flux) = stars.export(&space.frame);
-            let at = tables.len();
-            tables.resize(at + STARS_HEADER as usize, 0.);
-            tables[at] = sigma as f32;
-            tables[at + 1] = f32::from_bits(n as u32);
-            let offset = |tables: &mut Vec<f32>, i: usize, values: Vec<f32>| {
-                tables[at + i] = f32::from_bits(tables.len() as u32);
-                tables.extend(values);
-            };
-            offset(tables, 2, starts.iter().map(|s| f32::from_bits(*s)).collect());
-            offset(tables, 3, list.iter().flat_map(|s| s.map(|x| x as f32)).collect());
-            offset(tables, 4, flux);
-            at as u32
-        },
-        None => NO_AIR,
-    };
-    put(tables, 1, stars);
-    let record = |tables: &mut Vec<f32>, values: Vec<f64>| { let at = tables.len() as u32; tables.extend(values.iter().map(|v| *v as f32)); at };
-    let milky = space.milky_way.as_ref().map_or(NO_AIR, |m| record(tables, m.export()));
-    put(tables, 2, milky);
-    let nebulae = record(tables, space.nebulae.iter().flat_map(|n| n.export()).collect());
-    put(tables, 3, nebulae);
-    put(tables, 4, space.nebulae.len() as u32);
-    let galaxies = record(tables, space.galaxies.iter().flat_map(|g| g.export()).collect());
-    put(tables, 5, galaxies);
-    put(tables, 6, space.galaxies.len() as u32);
-    base as u32
-}
 
 /// The most kernels timed between reads of the image (`Timers`); the rest run untimed.
 const TIMED_KERNELS: usize = 1024;
@@ -349,6 +153,10 @@ pub struct GpuRenderer {
     /// What setting up took, part by part, in seconds: the render's start, which a short
     /// render is mostly made of (plan.md section 12).
     pub setup: Vec<(&'static str, f64)>,
+    /// The render's origin, which the scene's buffers are laid out about (`kernels::origin`):
+    /// the camera's, when the scene was uploaded. Rays from a camera since moved are still
+    /// given in this frame.
+    pub origin: Vector3<f64>,
 }
 
 /// What serves the host's queue (`host`; `GpuRenderer::serve_host`): the kernels that gather
@@ -369,300 +177,8 @@ struct HostQueue {
     guess: std::sync::atomic::AtomicUsize,
 }
 
-/// The depth of an exported BVH (`Bvh::export`), leaves included: one for a lone leaf. The
-/// shader's stack needs an entry for each level of interior nodes, which is one fewer.
-fn bvh_depth(nodes: &[(crate::shapes::bbox::BBox, u32, u32)]) -> usize {
-    if nodes.is_empty() {
-        return 0;
-    }
-    let mut deepest = 0;
-    let mut stack = vec![(0usize, 1usize)];
-    while let Some((i, d)) = stack.pop() {
-        deepest = deepest.max(d);
-        let (_, offset, count) = nodes[i];
-        if count == 0 {
-            stack.push((i + 1, d + 1));
-            stack.push((offset as usize, d + 1));
-        }
-    }
-    deepest
-}
-
-/// The BVH as the shader traverses it: its interior nodes alone, each with its two children's
-/// boxes (`pathtrace::Node`), the root first. A tree that is a single leaf gets a root with
-/// that leaf as its only child; no tree at all, a root no ray enters.
-fn gpu_nodes(exported: &[(crate::shapes::bbox::BBox, u32, u32)]) -> Result<Vec<GpuNode>, String> {
-    use pathtrace::glam::Vec3;
-    // Children that aren't there.
-    let none = pathtrace::NO_CHILD;
-    let empty = GpuNode { amin: Vec3::ZERO, a: none, amax: Vec3::ZERO, a_count: 0, bmin: Vec3::ZERO, b: none, bmax: Vec3::ZERO, b_count: 0 };
-    let corners = |b: &crate::shapes::bbox::BBox| (Vec3::new(b.min.x as f32, b.min.y as f32, b.min.z as f32), Vec3::new(b.max.x as f32, b.max.y as f32, b.max.z as f32));
-    let Some((root_bounds, root_offset, root_count)) = exported.first() else {
-        return Ok(vec![empty]);
-    };
-    if *root_count > 0 {
-        let (amin, amax) = corners(root_bounds);
-        return Ok(vec![GpuNode { amin, amax, a: *root_offset, a_count: *root_count, ..empty }]);
-    }
-    // Each interior node's index among the interior nodes, in the same (depth-first) order.
-    let mut index = vec![u32::MAX; exported.len()];
-    let mut interior = 0;
-    for (i, (_, _, count)) in exported.iter().enumerate() {
-        if *count == 0 {
-            index[i] = interior;
-            interior += 1;
-        }
-    }
-    // A child as a node holds it: (first item, count) for a leaf, (index, 0) otherwise.
-    let child = |i: usize| -> Result<(Vec3, Vec3, u32, u32), String> {
-        let (bounds, offset, count) = &exported[i];
-        let (min, max) = corners(bounds);
-        if *count > pathtrace::MAX_LEAF {
-            return Err(format!("a BVH leaf of {} primitives (the shader's hold {})", count, pathtrace::MAX_LEAF));
-        }
-        Ok(if *count > 0 { (min, max, *offset, *count) } else { (min, max, index[i], 0) })
-    };
-    let mut nodes = Vec::with_capacity(interior as usize);
-    for (i, (_, second, count)) in exported.iter().enumerate() {
-        if *count == 0 {
-            // An interior node's first child is the next node; its second, at `offset`.
-            let (amin, amax, a, a_count) = child(i + 1)?;
-            let (bmin, bmax, b, b_count) = child(*second as usize)?;
-            nodes.push(GpuNode { amin, a, amax, a_count, bmin, b, bmax, b_count });
-        }
-    }
-    Ok(nodes)
-}
-
 fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
     wgpu::BindGroupEntry { binding, resource: buffer.as_entire_binding() }
-}
-
-/// The shader's inputs, built on the CPU (`Buffers::build`).
-pub struct Buffers {
-    pub params: Params,
-    /// The primitives as the shader reads them (`pathtrace::pack_prims`), and as records.
-    pub prims: Vec<pathtrace::glam::Vec4>,
-    pub prim_records: Vec<GpuPrim>,
-    pub nodes: Vec<GpuNode>,
-    pub materials: Vec<GpuMaterial>,
-    pub lights: Vec<GpuLight>,
-    pub tables: Vec<f32>,
-    /// Whether any vertex is the host's to shade (`host`).
-    pub hosts: bool,
-}
-
-/// For each of the flat scene's host materials, the kernels' record of it if they have its
-/// code after all: a material that isn't data to the CPU's integrator, but is one the shader
-/// has been given. So far the sea's water (`pathtrace::MAT_WATER`), where no moon lights it
-/// (the kernel's glitter is the sun's alone).
-fn host_kernels(s: &Scene, flat: &FlatScene) -> Vec<Option<GpuMaterial>> {
-    flat.hosts.iter().map(|o| {
-        let (water, roughness, radius) = o.medium.material_at(Vector3::zeros()).water().filter(|_| s.moonlight.is_none())?;
-        Some(GpuMaterial { kind: pathtrace::MAT_WATER, c0: c4(&water), p: Vec4::new(radius as f32, roughness as f32, 0., 0.), ..GpuMaterial::zeroed() })
-    }).collect()
-}
-
-impl Buffers {
-    /// The flattened scene as the shader's buffers, or why it can't be.
-    pub fn build(s: &Scene, flat: &FlatScene) -> Result<Buffers, String> {
-        // A shape its own code intersects needs a kernel of its kind: there is one for the
-        // sea (`pathtrace::ocean_hit`), of which the kernels take one.
-        let unported: Vec<String> = flat.shapes.iter().enumerate()
-            .filter(|(k, (o, _))| o.geometry.ocean().is_none() || *k > 0)
-            .take(4).map(|(_, (o, _))| match s.source_index(o) {
-                Some(i) => format!("objects[{}] ({})", i, o.geometry.kind()),
-                None => o.geometry.kind().to_string(),
-            }).collect();
-        if !unported.is_empty() {
-            return Err(format!("shapes the kernels can't intersect yet: {}{}", unported.join(", "), if flat.shapes.len() > 4 { " ..." } else { "" }));
-        }
-        // A browser's passes are queued without waiting on the device, which serving the
-        // host's queue must (`host`).
-        let kernels = host_kernels(s, flat);
-        let hosts = kernels.iter().filter(|k| k.is_none()).count();
-        if cfg!(target_arch = "wasm32") && hosts > 0 {
-            return Err(format!("{} objects whose materials the renderer's own code shades, which the GPU's host can't yet do in a browser", hosts));
-        }
-        if !flat.media.is_empty() {
-            // The host's materials would trace their own shadow rays through the media, with
-            // none of the path's state there; and a medium's vertex has no kernel for moonlight.
-            if hosts > 0 {
-                return Err(format!("participating media beside {} objects whose materials the renderer's own code shades", hosts));
-            }
-            if s.moonlight.is_some() {
-                return Err("participating media lit by a moon".into());
-            }
-            if flat.light_bvh.is_some() {
-                return Err("participating media with a light BVH".into());
-            }
-            if flat.media.len() > pathtrace::MAX_MEDIA as usize {
-                return Err(format!("{} media (the kernels count to {})", flat.media.len(), pathtrace::MAX_MEDIA));
-            }
-        }
-        let mut lights = Vec::new();
-        for l in &s.lights {
-            let i = l.emission.srgb() * l.intensity;
-            let (kind, axis, start, end) = match &l.profile {
-                Profile::Isotropic => (0., Vector3::z(), 1., 1.),
-                Profile::Spot { axis, cos_falloff_start, cos_total } => (1., *axis, *cos_falloff_start, *cos_total),
-                _ => return Err("goniometric and projection lights".into()),
-            };
-            lights.push(GpuLight { pos: v4(&l.position, kind), intensity: c4(&i), axis: v4(&axis, start as f32), extra: Vec4::new(end as f32, 0., 0., 0.) });
-        }
-        if lights.is_empty() {
-            lights.push(GpuLight::zeroed());
-        }
-
-        // Primitives: the bounded ones in the BVH's order, then the planes.
-        let mut materials = Vec::new();
-        let material_index: Vec<u32> = flat.materials.iter().map(|m| push_material(m, &mut materials, &kernels)).collect();
-        // A buffer may not be empty (wgpu refuses to bind it): a scene of sky alone has none.
-        if materials.is_empty() {
-            materials.push(GpuMaterial::zeroed());
-        }
-        let to_gpu = |p: &Prim, m: u32, emitter: u32| -> GpuPrim {
-            let mut g = GpuPrim::zeroed();
-            g.info = UVec4::new(pathtrace::PRIM_TRIANGLE, material_index[m as usize], emitter, 0);
-            match p {
-                Prim::Triangle { v, n } => {
-                    g.v0 = v4(&v[0], 0.); g.v1 = v4(&v[1], 0.); g.v2 = v4(&v[2], 0.);
-                    if let Some(n) = n {
-                        g.n0 = v4(&n[0], 0.); g.n1 = v4(&n[1], 0.); g.n2 = v4(&n[2], 0.);
-                        g.info.w = 1;
-                    }
-                },
-                Prim::Sphere { center, radius } => { g.v0 = v4(center, *radius as f32); g.info.x = pathtrace::PRIM_SPHERE; },
-                Prim::Plane { y } => { g.v0 = Vec4::new(*y as f32, 0., 0., 0.); g.info.x = pathtrace::PRIM_PLANE; },
-            }
-            g
-        };
-        let mut prims: Vec<GpuPrim> = flat.prims.iter().enumerate().map(|(i, p)| {
-            to_gpu(p, flat.prim_material[i], flat.emitter_index[i].map_or(0, |e| e + 1))
-        }).collect();
-        prims.extend(flat.planes.iter().map(|(p, m)| to_gpu(p, *m, 0)));
-        // The sea, after the planes and tested as they are, outside the tree.
-        let ocean = flat.shapes.first().map(|(o, m)| (o.geometry.ocean().expect("the sea"), *m));
-        if let Some((_, m)) = ocean {
-            let mut g = GpuPrim::zeroed();
-            g.info = UVec4::new(pathtrace::PRIM_OCEAN, material_index[m as usize], 0, 0);
-            prims.push(g);
-        }
-        if prims.is_empty() {
-            prims.push(GpuPrim::zeroed());
-        }
-        // The shader's traversal stack holds at most one child per level of interior nodes.
-        let exported = flat.bvh.export();
-        let depth = bvh_depth(&exported);
-        if depth > pathtrace::STACK {
-            return Err(format!("a BVH {} levels deep (the shader's stack holds {})", depth, pathtrace::STACK));
-        }
-        if prims.len() > pathtrace::MAX_LEAF_ITEMS as usize {
-            return Err(format!("{} primitives (the shader's traversal counts to {})", prims.len(), pathtrace::MAX_LEAF_ITEMS));
-        }
-        // The packed buffer keeps a primitive's material and emitter as floats.
-        if prims.len().max(flat.materials.len()) >= pathtrace::MAX_PACKED_INDEX as usize {
-            return Err(format!("{} primitives or materials (the shader's buffers count to {})", prims.len().max(flat.materials.len()), pathtrace::MAX_PACKED_INDEX));
-        }
-        let nodes = gpu_nodes(&exported)?;
-
-        // Tables: emitters' primitives and their cumulative distribution, then the sky.
-        let mut tables: Vec<f32> = Vec::new();
-        let emitter_off = tables.len() as u32;
-        tables.extend(flat.emitters.iter().map(|&p| f32::from_bits(p)));
-        let cdf_off = tables.len() as u32;
-        let powers: Vec<f64> = (0..flat.emitters.len()).map(|e| flat.emitter_choice.probability(e)).collect();
-        tables.extend(cdf(&powers));
-        let env_off = tables.len() as u32;
-        // The sky as seen from the camera, as the CPU integrators see it from each ray's
-        // origin: exact for camera rays, near enough for paths that stay near the camera (from
-        // the world's origin, an orbiting camera saw the night side's ground-level sky).
-        let origin = crate::environment::viewpoint(s);
-        // The map's size: full where the shader reads the light from it, the CPU's where it
-        // only chooses directions (`SAMPLING_WIDTH`).
-        let per_ray = matches!(s.render.background, crate::scene::Background::Space(_))
-            || flat.sky.as_ref().is_some_and(|sky| sky.medium.material_at(Vector3::zeros()).air().is_some());
-        let (env_width, env_height, scale) = if per_ray { (SAMPLING_WIDTH, SAMPLING_HEIGHT, 1) } else { (ENV_WIDTH, ENV_HEIGHT, VISIBILITY_SCALE) };
-        let texels: Vec<Color> = (0..env_width * env_height).into_par_iter().map(|i| {
-            let d = env_direction(i % env_width, i / env_width, env_width, env_height);
-            crate::wavefront::integrator::sky_radiance(&Ray { ro: origin, rd: d }, s, flat)
-        }).collect();
-        for t in &texels {
-            tables.extend([t.rgb.x as f32, t.rgb.y as f32, t.rgb.z as f32]);
-        }
-        // Rows by brightness times sin θ (a row's share of the sphere) times how much of the
-        // sky the scene lets through from the camera, as the CPU's `Environment` (so no shadow
-        // rays are spent on the ground), then within each row. The visibility is found on a
-        // grid of `scale`² texels, the CPU's resolution, for a ray per cell.
-        let (vw, vh) = (env_width / scale, env_height / scale);
-        let visible: Vec<f64> = (0..vw * vh).into_par_iter().map(|i| {
-            let (x, y) = ((i % vw) * scale + scale / 2, (i / vw) * scale + scale / 2);
-            crate::environment::visibility(s, &origin, &env_direction(x, y, env_width, env_height))
-        }).collect();
-        let weight = |x: usize, y: usize| {
-            let theta = (y as f64 + 0.5) / env_height as f64 * std::f64::consts::PI;
-            let v = visible[(y / scale) * vw + x / scale];
-            crate::color::luminance(&texels[y * env_width + x]).max(0.) * theta.sin() * v + 1e-9
-        };
-        let rows: Vec<f64> = (0..env_height).map(|y| (0..env_width).map(|x| weight(x, y)).sum()).collect();
-        let marginal_off = tables.len() as u32;
-        tables.extend(cdf(&rows));
-        let conditional_off = tables.len() as u32;
-        for y in 0..env_height {
-            let row: Vec<f64> = (0..env_width).map(|x| weight(x, y)).collect();
-            tables.extend(cdf(&row));
-        }
-
-        // The sea's waves (`Ocean::export`); `dims.z` says where, plus one.
-        let ocean_off = ocean.map_or(0, |(sea, _)| {
-            let at = tables.len() as u32;
-            tables.extend(sea.export());
-            at + 1
-        });
-        let media = media_records(&mut tables, &flat.media);
-        // The air: the sky's (for escaping rays), the aerial perspective's, the sun's.
-        let sky_air = flat.sky.as_ref().and_then(|sky| sky.medium.material_at(Vector3::zeros()).air());
-        let sky_off = sky_air.map_or(pathtrace::NO_AIR, |a| air_record(&mut tables, &a));
-        let aerial_off = s.atmosphere.as_ref().map_or(pathtrace::NO_AIR, |a| air_record(&mut tables, &a.export()));
-        let sun_off = s.sun.as_ref().and_then(|sun| sun.atmosphere.as_ref()).map_or(pathtrace::NO_AIR, |a| air_record(&mut tables, &a.export()));
-        // Space, if it is the background.
-        let space_off = match &s.render.background {
-            crate::scene::Background::Space(space) => space_record(&mut tables, space),
-            _ => pathtrace::NO_AIR,
-        };
-
-        let mut flags = 0u32;
-        if aerial_off != pathtrace::NO_AIR { flags |= pathtrace::FLAG_AERIAL; }
-        if s.render.sample_lights { flags |= pathtrace::FLAG_SAMPLE_LIGHTS; }
-        if s.environment.is_some() { flags |= pathtrace::FLAG_SAMPLE_ENV; }
-        let (sun_dir, sun_irr) = match &s.sun {
-            Some(sun) => {
-                flags |= pathtrace::FLAG_SUN;
-                // Above the air: the shader reddens it at each point (`sun_transmittance`).
-                let e = sun.irradiance;
-                (v4(&sun.direction, sun.angular_radius.cos() as f32), Vec4::new(e.rgb.x as f32, e.rgb.y as f32, e.rgb.z as f32, sun.angular_radius as f32))
-            },
-            None => (Vec4::new(0., 1., 0., 1.), Vec4::ZERO),
-        };
-        let (rr, rr_min) = match s.render.path_termination {
-            PathTermination::RussianRoulette { min_depth } => (1, min_depth as f32),
-            _ => (0, 0.),
-        };
-        let params = Params {
-            dims: UVec4::new(s.image.width as u32, s.image.height as u32, ocean_off, s.render.max_depth as u32),
-            // (The sea is tested with the planes.)
-            counts: UVec4::new(flat.prims.len() as u32, (flat.planes.len() + flat.shapes.len()) as u32, flat.emitters.len() as u32, s.lights.len() as u32),
-            offs: UVec4::new(emitter_off, cdf_off, env_off, marginal_off),
-            offs2: UVec4::new(conditional_off, env_width as u32, env_height as u32, flags),
-            misc: Vec4::new(s.render.regularise as f32, s.black_threshold as f32, s.render.shadow_bias as f32, rr_min),
-            sun_dir,
-            sun_irr,
-            seed: UVec4::new(s.render.seed as u32, rr, 0, 1),
-            air: UVec4::new(sky_off, aerial_off, sun_off, space_off),
-            media: UVec4::new(media, flat.media.len() as u32, 0, 0),
-        };
-        Ok(Buffers { params, prims: pathtrace::pack_prims(&prims), prim_records: prims, nodes, materials, lights, tables, hosts: hosts > 0 })
-    }
 }
 
 /// A buffer mapping's completion as a future: wgpu calls back when it's done (natively, during
@@ -694,6 +210,23 @@ impl GpuRenderer {
         pollster::block_on(Self::create(s, flat))
     }
 
+    /// Whether there is a GPU worth choosing unasked, or why not: none at all, or a software
+    /// rasteriser (lavapipe, SwiftShader), for which the kernels are quicker compiled for the
+    /// CPU itself.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn hardware() -> Result<(), String> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        })).map_err(|e| format!("no GPU adapter ({})", e))?;
+        let info = adapter.get_info();
+        if info.device_type == wgpu::DeviceType::Cpu {
+            return Err(format!("{} is a software rasteriser", info.name));
+        }
+        Ok(())
+    }
+
     /// Upload the flattened scene, or say why the GPU can't render it. Async, for a browser,
     /// whose WebGPU can't be waited on.
     pub async fn create(s: &Scene, flat: &FlatScene) -> Result<GpuRenderer, String> {
@@ -704,7 +237,16 @@ impl GpuRenderer {
             setup.push((what, (now - clock).as_secs_f64()));
             clock = now;
         };
-        let Buffers { params, prims, nodes, materials, lights, tables, hosts: any_host, .. } = Buffers::build(s, flat)?;
+        let Buffers { params, prims, nodes, materials, lights, tables, hosts: any_host, unported, origin, .. } = Buffers::build(s, flat)?;
+        // A kernel can't stop for the host in the midst of a shadow ray.
+        if !unported.is_empty() {
+            return Err(format!("shapes the kernels can't intersect yet: {}{}", unported.iter().take(4).cloned().collect::<Vec<_>>().join(", "), if unported.len() > 4 { " ..." } else { "" }));
+        }
+        // A browser's passes are queued without waiting on the device, which serving the
+        // host's queue must (`host`).
+        if cfg!(target_arch = "wasm32") && any_host {
+            return Err("objects whose materials the renderer's own code shades, which the GPU's host can't yet do in a browser".into());
+        }
         lap(&mut setup, "the scene's buffers");
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -926,36 +468,7 @@ impl GpuRenderer {
         });
         Ok(GpuRenderer { device, queue, intersect_pipeline, bounce_pipeline, sky_pipeline, add_pipeline, start_pipeline, start_group, rays_buffer,
             round_groups, add_group, params, params_buffers,
-            queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, rounds_buffer, readback, host_queue, lanes: lanes as usize, block: Default::default(), adapter_name, timers, setup })
-    }
-
-    /// Camera rays for sample `k` of every pixel, as the wavefront integrator's.
-    pub fn camera_rays(s: &Scene, k: usize) -> Vec<GpuRay> {
-        Self::camera_rays_for(s, &vec![Some(k as u32); s.image.width * s.image.height])
-    }
-
-    /// The camera ray of each pixel's sample `samples[pixel]`; a dead ray (as one the lens
-    /// stops) for a pixel that takes none.
-    pub fn camera_rays_for(s: &Scene, samples: &[Option<u32>]) -> Vec<GpuRay> {
-        (0..s.image.width * s.image.height).into_par_iter().map(|index| match samples[index] {
-            Some(k) => Self::camera_ray(s, index, k as usize),
-            None => GpuRay::zeroed(),
-        }).collect()
-    }
-
-    /// Pixel `index`'s camera ray for its sample `k` (zero if the lens stops it).
-    fn camera_ray(s: &Scene, index: usize, k: usize) -> GpuRay {
-        let (w, h) = (s.image.width, s.image.height);
-        let (x, y) = (index % w, index / w);
-        let stream = k as u64 * (w * h) as u64 + index as u64;
-        crate::geometry::seed_rand(s.render.seed ^ 0x5bd1_e995, stream);
-        let mut sampler = crate::sobol::SampleState::new(crate::sobol::hash(s.render.seed, index as u64), k as u32);
-        let ((fx, wx), (fy, wy)) = (s.render.filter.sample_weighted(sampler.next()), s.render.filter.sample_weighted(sampler.next()));
-        match s.camera.get_ray_weighted(x as f64 / w as f64, y as f64 / h as f64, (0.5 + fx) / w as f64, (0.5 + fy) / h as f64) {
-            // d.w: the sample's number plus one, for `pathtrace::start_paths`.
-            Some((ray, weight)) => GpuRay { o: v4(&ray.ro, (weight * wx * wy) as f32), d: v4(&ray.rd.normalize(), (k + 1) as f32) },
-            None => GpuRay::zeroed(),
-        }
+            queue_buffer, dispatch_buffer, empty_header, paths_buffer, accum_buffer, rounds_buffer, readback, host_queue, lanes: lanes as usize, block: Default::default(), adapter_name, timers, setup, origin })
     }
 
     /// Zero the image accumulated on the GPU.
@@ -983,7 +496,7 @@ impl GpuRenderer {
     /// most `lanes` of them) at once, each in a lane of the wavefront (`pathtrace::slots`):
     /// the rounds of one sample, for all of them. Returns at once.
     pub fn dispatch_block(&mut self, s: &Scene, first: &[usize], count: &[usize]) {
-        let rays = Self::make_rays(s, first, count);
+        let rays = Self::make_rays(s, first, count, &self.origin);
         self.dispatch_rays(rays);
     }
 
@@ -1002,7 +515,7 @@ impl GpuRenderer {
     /// rounds, the paths waiting for the host are read back, shaded and queued again, until
     /// none waits; then the pass is added to the image. This waits on the device.
     pub async fn block_with_host(&mut self, s: &Scene, flat: &FlatScene, first: &[usize], count: &[usize]) -> Result<(), String> {
-        let rays = Self::make_rays(s, first, count);
+        let rays = Self::make_rays(s, first, count, &self.origin);
         self.block_with_host_rays(s, flat, first, rays).await
     }
 
@@ -1083,11 +596,12 @@ impl GpuRenderer {
         }
         host.guess.store((count + count / 4 + 64) as usize, Ordering::Relaxed);
         let began = web_time::Instant::now();
+        let origin = self.origin;
         let shaded: Vec<PathState> = paths.par_iter().map(|p| {
             // Its slot (`gather_host`) is its pixel's path in a lane, so that sample of the
             // pixel's.
             let (pixel, lane) = (p.state.w as usize % image, p.state.w as usize / image);
-            host::shade(s, flat, p, pixel as u32, (first[pixel] + lane) as u32)
+            host::shade(s, flat, &origin, p, pixel as u32, (first[pixel] + lane) as u32)
         }).collect();
         self.queue.write_buffer(&host.gathered, 0, bytemuck::cast_slice(&shaded));
         let seconds = began.elapsed().as_secs_f64();
@@ -1168,13 +682,13 @@ impl GpuRenderer {
     /// so 32 bytes a path cross to the GPU, not 96). A pixel that takes no sample in a lane has
     /// a dead ray there, so a path that adds nothing. Only the CPU's work: `render` makes the
     /// next block's while the GPU runs this one.
-    fn make_rays(s: &Scene, first: &[usize], count: &[usize]) -> BlockRays {
+    fn make_rays(s: &Scene, first: &[usize], count: &[usize], origin: &Vector3<f64>) -> BlockRays {
         let began = web_time::Instant::now();
         let image = s.image.width * s.image.height;
         let lanes = count.iter().copied().max().unwrap_or(0).max(1);
         let rays: Vec<GpuRay> = (0..image * lanes).into_par_iter().map(|j| {
             let (lane, i) = (j / image, j % image);
-            if lane < count[i] { Self::camera_ray(s, i, first[i] + lane) } else { GpuRay::zeroed() }
+            if lane < count[i] { crate::kernels::camera_ray(s, i, first[i] + lane, origin) } else { GpuRay::zeroed() }
         }).collect();
         let live = rays.par_iter().filter(|r| r.d.w >= 0.5).count() as u64;
         BlockRays { lanes, live, began, seconds: began.elapsed().as_secs_f64(), ahead: false, rays }
@@ -1387,7 +901,7 @@ impl GpuRenderer {
             }
             let rays = match ahead.take() {
                 Some((f, c, rays)) if f == first && c == count => BlockRays { ahead: true, ..rays },
-                _ => Self::make_rays(s, &first, &count),
+                _ => Self::make_rays(s, &first, &count, &self.origin),
             };
             self.clear();
             if self.host_queue.is_some() {
@@ -1400,7 +914,7 @@ impl GpuRenderer {
                 let next_count: Vec<usize> = next_first.iter().zip(&count)
                     .map(|(f, c)| if *c == 0 { 0 } else { target.saturating_sub(*f).min(lanes) }).collect();
                 if next_count.iter().any(|c| *c > 0) {
-                    let rays = Self::make_rays(s, &next_first, &next_count);
+                    let rays = Self::make_rays(s, &next_first, &next_count, &self.origin);
                     ahead = Some((next_first, next_count, rays));
                 }
             }
@@ -1510,8 +1024,8 @@ mod tests {
         for (name, sky) in skies {
             let s = scene(sky);
             let flat = FlatScene::build(&s).unwrap();
-            let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let b = Buffers::build_at(&s, &flat, &Vector3::zeros()).unwrap(); // (Probed at the world's own positions.)
+            let shader = b.scene(None);
             let (mut sky_err, mut seg_err, mut sun_err) = (0f64, 0f64, 0f64);
             for h in altitudes {
                 let o = Vector3::new(30., h, -20.);
@@ -1558,8 +1072,8 @@ mod tests {
         for name in ["demo/scenes/deep-space.json", "demo/scenes/night-orbit.json"] {
             let s = SceneFile::from_file(name, &crate::scenefile::Overrides { width: Some(64), height: Some(36), seed: None });
             let flat = FlatScene::build(&s).unwrap();
-            let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let b = Buffers::build_at(&s, &flat, &Vector3::zeros()).unwrap(); // (Probed at the world's own positions.)
+            let shader = b.scene(None);
             let crate::scene::Background::Space(space) = &s.render.background else { panic!("{} has no space", name) };
             if name.contains("deep-space") {
                 assert!(space.stars.is_some() && space.milky_way.is_some() && !space.nebulae.is_empty() && !space.galaxies.is_empty(),
@@ -1616,11 +1130,11 @@ mod tests {
         }"#.to_string());
         let flat = FlatScene::build(&s).unwrap();
         let b = Buffers::build(&s, &flat).unwrap();
-        let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+        let shader = b.scene(None);
         let passes = 16;
         let mut on_shader = Vector3::zeros();
         for k in 0..passes {
-            for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
+            for (index, ray) in crate::kernels::camera_rays(&s, k, &b.origin).iter().enumerate() {
                 if ray.d.w < 0.5 {
                     continue;
                 }
@@ -1703,12 +1217,12 @@ mod tests {
                 },
             };
             let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let shader = b.scene(None);
             let passes = 32;
             let mut cpu = Vector3::zeros();
             let mut cpu_rays = 0u64;
             for k in 0..passes {
-                for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
+                for (index, ray) in crate::kernels::camera_rays(&s, k, &b.origin).iter().enumerate() {
                     if ray.d.w < 0.5 {
                         continue;
                     }
@@ -1754,8 +1268,8 @@ mod tests {
                 "objects": [{}]
             }}"#, objects.join(",")));
             let flat = FlatScene::build(&s).unwrap();
-            let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let b = Buffers::build_at(&s, &flat, &Vector3::zeros()).unwrap(); // (Probed at the world's own positions.)
+            let shader = b.scene(None);
             let count = (b.params.counts.x + b.params.counts.y) as usize;
             assert_eq!(count, spheres + planes);
             // Every primitive on its own is a scene the traversal searches in full.
@@ -1773,7 +1287,7 @@ mod tests {
                 let (tmin, tmax) = match (next() * 3.) as u32 { 0 => (0., f32::MAX), 1 => (0., next() as f32 * 20.), _ => (next() as f32 * 20., f32::MAX) };
                 let mut expected = (tmax, u32::MAX);
                 for (i, (params, prim, nodes)) in alone.iter().enumerate() {
-                    let single = pathtrace::Scene { params, prims: prim, nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+                    let single = pathtrace::Scene { params, prims: prim, nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables, host: None };
                     let (t, hit) = pathtrace::nearest(&single, ro, rd, tmin, expected.0, false);
                     if hit != u32::MAX { expected = (t, i as u32); }
                 }
@@ -1800,11 +1314,11 @@ mod tests {
                 Err(e) => { println!("{:<16} not flattened: {}", name, e); continue; },
             };
             let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let shader = b.scene(None);
             pathtrace::stats::take();
             let mut total_rays = 0u64;
             for k in 0..2 {
-                for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
+                for (index, ray) in crate::kernels::camera_rays(&s, k, &b.origin).iter().enumerate() {
                     if ray.d.w < 0.5 { continue; }
                     let mut rng = pathtrace::path_seed(index as u32, k as u32, b.params.seed.x);
                     let mut rays = 0;
@@ -1816,13 +1330,13 @@ mod tests {
             // The queues' saving: of the invocations a pass would make with every pixel
             // dispatched every round, the share that had a live path to advance.
             let (mut live, mut slots) = (0u64, 0u64);
-            for (index, ray) in GpuRenderer::camera_rays(&s, 0).iter().enumerate() {
+            for (index, ray) in crate::kernels::camera_rays(&s, 0, &b.origin).iter().enumerate() {
                 let mut p = PathState::start(index as u32, 0, b.params.seed.x, ray);
                 for _ in 0..=b.params.dims.w {
                     slots += 1;
                     if p.state.y & pathtrace::PATH_ACTIVE != 0 {
                         live += 1;
-                        p = pathtrace::bounce(&shader, &p).0;
+                        p = pathtrace::bounce(&shader, &p, index as u32).0;
                     }
                 }
             }
@@ -1832,7 +1346,7 @@ mod tests {
             // thread) that is traversal, closest hits and shadow rays together.
             pathtrace::stats::time_traversal(true);
             let start = std::time::Instant::now();
-            for (index, ray) in GpuRenderer::camera_rays(&s, 0).iter().enumerate() {
+            for (index, ray) in crate::kernels::camera_rays(&s, 0, &b.origin).iter().enumerate() {
                 if ray.d.w < 0.5 { continue; }
                 let mut rng = pathtrace::path_seed(index as u32, 0, b.params.seed.x);
                 let mut rays = 0;
@@ -1951,7 +1465,7 @@ mod tests {
         let exact: Vec<f64> = points.chunks(2).map(|q| {
             layer.fraction_for_test(q[0].y as f64, q[0].w as f64, &Vector3::new(q[0].x as f64, q[0].y as f64, q[0].z as f64))
         }).collect();
-        let here: Vec<f32> = points.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], false)).collect();
+        let here: Vec<f32> = points.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], pathtrace::PROBE_DENSITY)).collect();
         let cloudy = exact.iter().filter(|e| **e > 0.).count();
         let worst = here.iter().zip(&exact).map(|(f, e)| (*f as f64 - e).abs()).fold(0., f64::max);
         println!("{} of {} points in cloud; f32 within {:.1e} of the renderer's f64", cloudy, n, worst);
@@ -1959,10 +1473,169 @@ mod tests {
         assert!(worst < 2e-3, "the shader's density differs from the renderer's by {}", worst);
 
         // On the device.
-        let Some(on_device) = probe(&record, &points, false) else { return };
+        let Some(on_device) = probe(&record, &points, pathtrace::PROBE_DENSITY) else { return };
         let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
         println!("on the device: within {:.1e} of the shader's functions on the CPU", worst);
         assert!(worst < 1e-4, "the device's density differs from the shader's on the CPU by {}", worst);
+    }
+
+    /// Altocumulus likewise (`shared::altocumulus`): through a layer with waves and turrets,
+    /// the shader's density is the renderer's to f32's precision, here and on the device.
+    #[test]
+    fn test_altocumulus_is_the_renderers_on_the_device() {
+        use crate::procedural::benard_altocumulus::BenardAltocumulus;
+        let mut layer = BenardAltocumulus::new(4000., 250., 5);
+        (layer.undulation, layer.castellanus, layer.turret_height, layer.anisotropy, layer.patchiness) = (0.3, 0.4, 3., 1.6, 0.);
+        layer.wind_direction = crate::na::Vector2::new(1., 0.3).normalize();
+        let record = layer.export();
+        let mut rng = crate::geometry::Pcg32::new(5, 0);
+        let mut next = move || rng.next_f64();
+        let n = 4096;
+        let (lo, hi) = (layer.bottom() - 50., layer.top() + 50.);
+        let points: Vec<Vec4> = (0..n).flat_map(|_| [Vec4::new(
+            (next() * 16000. - 8000.) as f32, (lo + next() * (hi - lo)) as f32, (next() * 16000. - 8000.) as f32, 0.), Vec4::ZERO]).collect();
+        let exact: Vec<f64> = points.chunks(2).map(|q| layer.fraction(&Vector3::new(q[0].x as f64, q[0].y as f64, q[0].z as f64))).collect();
+        let here: Vec<f32> = points.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], pathtrace::PROBE_ALTOCUMULUS)).collect();
+        let cloudy = exact.iter().filter(|e| **e > 0.).count();
+        // (Edges are steep: a point's density moves by what f32 moves the point, so the mean
+        // difference is the measure, with a looser bound on the worst.)
+        let differences: Vec<f64> = here.iter().zip(&exact).map(|(f, e)| (*f as f64 - e).abs()).collect();
+        let (worst, mean) = (differences.iter().cloned().fold(0., f64::max), differences.iter().sum::<f64>() / n as f64);
+        println!("{} of {} points in cloud; f32 within {:.1e} of the renderer's f64 (mean {:.1e})", cloudy, n, worst, mean);
+        assert!(cloudy > n / 40, "{} of {} points in cloud", cloudy, n);
+        assert!(worst < 2e-2 && mean < 1e-4, "the shader's density differs from the renderer's by {} (mean {})", worst, mean);
+
+        let Some(on_device) = probe(&record, &points, pathtrace::PROBE_ALTOCUMULUS) else { return };
+        let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
+        println!("on the device: within {:.1e} of the shader's functions on the CPU", worst);
+        assert!(worst < 1e-3, "the device's density differs from the shader's on the CPU by {}", worst);
+    }
+
+    /// Cirrus likewise (`shared::cirrus`): the shader's density at f32 is the renderer's at
+    /// f64 but for the rounding, and the device computes what the shader's functions do here.
+    #[test]
+    fn test_cirrus_is_the_renderers_on_the_device() {
+        use crate::procedural::hogan_kew_cirrus::{CirrusField, CirrusGenus, HoganKewCirrus};
+        for genus in [CirrusGenus::Cirrus, CirrusGenus::Cirrocumulus] {
+            let mut layer = HoganKewCirrus::new(CirrusField { seed: 5, ..CirrusField::new(genus) });
+            (layer.time, layer.evolution_period) = (300., 4000.);
+            let record = layer.export();
+            let mut rng = crate::geometry::Pcg32::new(5, 0);
+            let mut next = move || rng.next_f64();
+            let n = 4096;
+            let (lo, hi) = (layer.base - 50., layer.top + 50.);
+            let points: Vec<Vec4> = (0..n).flat_map(|_| [Vec4::new(
+                (next() * 40000. - 20000.) as f32, (lo + next() * (hi - lo)) as f32, (next() * 40000. - 20000.) as f32, 0.), Vec4::ZERO]).collect();
+            let exact: Vec<f64> = points.chunks(2).map(|q| layer.fraction(&Vector3::new(q[0].x as f64, q[0].y as f64, q[0].z as f64))).collect();
+            let here: Vec<f32> = points.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], pathtrace::PROBE_CIRRUS)).collect();
+            let cloudy = exact.iter().filter(|e| **e > 0.).count();
+            let differences: Vec<f64> = here.iter().zip(&exact).map(|(f, e)| (*f as f64 - e).abs()).collect();
+            let (worst, mean) = (differences.iter().cloned().fold(0., f64::max), differences.iter().sum::<f64>() / n as f64);
+            println!("{} of {} points in cloud; f32 within {:.1e} of the renderer's f64 (mean {:.1e})", cloudy, n, worst, mean);
+            assert!(cloudy > n / 40, "{} of {} points in cloud", cloudy, n);
+            assert!(worst < 2e-2 && mean < 1e-4, "the shader's density differs from the renderer's by {} (mean {})", worst, mean);
+
+            let Some(on_device) = probe(&record, &points, pathtrace::PROBE_CIRRUS) else { return };
+            // (The flow's curl is a difference of noise a thousandth of a cell apart: what the
+            // device rounds otherwise there moves the ice's source by decimetres, and the
+            // density at a fibre's edge with it. So the mean, as against f64.)
+            let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
+            let mean = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).sum::<f32>() / n as f32;
+            println!("on the device: within {:.1e} of the shader's functions on the CPU (mean {:.1e})", worst, mean);
+            assert!(worst < 2e-2 && mean < 1e-4, "the device's density differs from the shader's on the CPU by {} (mean {})", worst, mean);
+        }
+    }
+
+    /// Precipitation likewise (`shared::rain`): rain, and snow melting to rain as it
+    /// evaporates.
+    #[test]
+    fn test_precipitation_is_the_renderers_on_the_device() {
+        use crate::procedural::precipitation::{Kind, Precipitation};
+        use crate::volume::DensityField;
+        for snow in [false, true] {
+            let mut layer = Precipitation::new(2000., 5);
+            if snow {
+                (layer.kind, layer.melting_level, layer.fall_depth, layer.base_variation, layer.shear) = (Kind::Snow, Some(900.), 2500., 200., 1.5);
+            }
+            let record = layer.export();
+            let peak = layer.peak_extinction();
+            let mut rng = crate::geometry::Pcg32::new(5, 0);
+            let mut next = move || rng.next_f64();
+            let n = 4096;
+            let points: Vec<Vec4> = (0..n).flat_map(|_| [Vec4::new(
+                (next() * 40000. - 20000.) as f32, (next() * 2100. - 50.) as f32, (next() * 40000. - 20000.) as f32, 0.), Vec4::ZERO]).collect();
+            let exact: Vec<f64> = points.chunks(2).map(|q| layer.density(&Vector3::new(q[0].x as f64, q[0].y as f64, q[0].z as f64)) / peak).collect();
+            let here: Vec<f32> = points.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], pathtrace::PROBE_RAIN)).collect();
+            let wet = exact.iter().filter(|e| **e > 0.).count();
+            let differences: Vec<f64> = here.iter().zip(&exact).map(|(f, e)| (*f as f64 - e).abs()).collect();
+            let (worst, mean) = (differences.iter().cloned().fold(0., f64::max), differences.iter().sum::<f64>() / n as f64);
+            println!("{} of {} points in it; f32 within {:.1e} of the renderer's f64 (mean {:.1e})", wet, n, worst, mean);
+            assert!(wet > n / 40, "{} of {} points in precipitation", wet, n);
+            assert!(worst < 2e-2 && mean < 1e-4, "the shader's density differs from the renderer's by {} (mean {})", worst, mean);
+
+            let Some(on_device) = probe(&record, &points, pathtrace::PROBE_RAIN) else { return };
+            let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
+            let mean = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).sum::<f32>() / n as f32;
+            println!("on the device: within {:.1e} of the shader's functions on the CPU (mean {:.1e})", worst, mean);
+            assert!(worst < 2e-2 && mean < 1e-4, "the device's density differs from the shader's on the CPU by {} (mean {})", worst, mean);
+        }
+    }
+
+    /// A cumulonimbus likewise (`shared::cumulonimbus`).
+    #[test]
+    fn test_cumulonimbus_is_the_renderers_on_the_device() {
+        use crate::procedural::cumulonimbus::Cumulonimbus;
+        let layer = Cumulonimbus::new(5);
+        let record = layer.export();
+        let mut rng = crate::geometry::Pcg32::new(5, 0);
+        let mut next = move || rng.next_f64();
+        let n = 8192;
+        // About the main tower and the anvil's near end.
+        let points: Vec<Vec4> = (0..n).flat_map(|_| [Vec4::new(
+            (next() * 16000. - 5000.) as f32, (layer.bottom() + next() * (layer.top() - layer.bottom())) as f32, (next() * 10000. - 5000.) as f32, 0.), Vec4::ZERO]).collect();
+        let exact: Vec<f64> = points.chunks(2).map(|q| layer.fraction(&Vector3::new(q[0].x as f64, q[0].y as f64, q[0].z as f64)).0).collect();
+        let here: Vec<f32> = points.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], pathtrace::PROBE_CUMULONIMBUS)).collect();
+        let cloudy = exact.iter().filter(|e| **e > 0.).count();
+        let differences: Vec<f64> = here.iter().zip(&exact).map(|(f, e)| (*f as f64 - e).abs()).collect();
+        let (worst, mean) = (differences.iter().cloned().fold(0., f64::max), differences.iter().sum::<f64>() / n as f64);
+        println!("{} of {} points in cloud; f32 within {:.1e} of the renderer's f64 (mean {:.1e})", cloudy, n, worst, mean);
+        assert!(cloudy > n / 40, "{} of {} points in cloud", cloudy, n);
+        assert!(worst < 5e-2 && mean < 2e-4, "the shader's density differs from the renderer's by {} (mean {})", worst, mean);
+
+        let Some(on_device) = probe(&record, &points, pathtrace::PROBE_CUMULONIMBUS) else { return };
+        let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
+        let mean = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).sum::<f32>() / n as f32;
+        println!("on the device: within {:.1e} of the shader's functions on the CPU (mean {:.1e})", worst, mean);
+        assert!(worst < 5e-2 && mean < 2e-4, "the device's density differs from the shader's on the CPU by {} (mean {})", worst, mean);
+    }
+
+    /// Mammatus likewise (`shared::mammatus`).
+    #[test]
+    fn test_mammatus_is_the_renderers_on_the_device() {
+        use crate::procedural::mammatus::Mammatus;
+        let mut layer = Mammatus::new(5);
+        (layer.base_variation, layer.sag, layer.base_softness, layer.top_variation) = (300., 400., 200., 150.);
+        let record = layer.export();
+        let mut rng = crate::geometry::Pcg32::new(5, 0);
+        let mut next = move || rng.next_f64();
+        let n = 4096;
+        let (lo, hi) = (layer.bottom() - 50., layer.base + 600.);
+        let points: Vec<Vec4> = (0..n).flat_map(|_| [Vec4::new(
+            (next() * 40000. - 35000.) as f32, (lo + next() * (hi - lo)) as f32, (next() * 40000. - 20000.) as f32, 0.), Vec4::ZERO]).collect();
+        let exact: Vec<f64> = points.chunks(2).map(|q| layer.fraction(&Vector3::new(q[0].x as f64, q[0].y as f64, q[0].z as f64))).collect();
+        let here: Vec<f32> = points.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], pathtrace::PROBE_MAMMATUS)).collect();
+        let cloudy = exact.iter().filter(|e| **e > 0.).count();
+        let differences: Vec<f64> = here.iter().zip(&exact).map(|(f, e)| (*f as f64 - e).abs()).collect();
+        let (worst, mean) = (differences.iter().cloned().fold(0., f64::max), differences.iter().sum::<f64>() / n as f64);
+        println!("{} of {} points in cloud; f32 within {:.1e} of the renderer's f64 (mean {:.1e})", cloudy, n, worst, mean);
+        assert!(cloudy > n / 40, "{} of {} points in cloud", cloudy, n);
+        assert!(worst < 5e-2 && mean < 2e-4, "the shader's density differs from the renderer's by {} (mean {})", worst, mean);
+
+        let Some(on_device) = probe(&record, &points, pathtrace::PROBE_MAMMATUS) else { return };
+        let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
+        let mean = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).sum::<f32>() / n as f32;
+        println!("on the device: within {:.1e} of the shader's functions on the CPU (mean {:.1e})", worst, mean);
+        assert!(worst < 5e-2 && mean < 2e-4, "the device's density differs from the shader's on the CPU by {} (mean {})", worst, mean);
     }
 
     /// Light through a cloud is one walk (`shared::media::ratio_track` over the shared
@@ -1989,7 +1662,7 @@ mod tests {
             let d = Vector3::new(next() - 0.5, if up { 0.3 + next() } else { -0.3 - next() }, next() - 0.5).normalize();
             [o, Vec4::new(d.x as f32, d.y as f32, d.z as f32, 0.)]
         }).collect();
-        let here: Vec<f32> = rays.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], true)).collect();
+        let here: Vec<f32> = rays.chunks(2).enumerate().map(|(i, q)| pathtrace::probe(&record, 0, i as u32, q[0], q[1], pathtrace::PROBE_RAYS)).collect();
         // The renderer's, with as many estimates and more: its mean, to compare means with.
         let samples = 16 * pathtrace::PROBE_ESTIMATES as usize;
         crate::volume::begin_path();
@@ -2012,7 +1685,7 @@ mod tests {
         assert!((sum - sum_exact).abs() / (n as f64) < 0.01, "mean {} against {}", sum / n as f64, sum_exact / n as f64);
         assert!(worst < 0.2, "a ray's transmittance differs by {}", worst);
 
-        let Some(on_device) = probe(&record, &rays, true) else { return };
+        let Some(on_device) = probe(&record, &rays, pathtrace::PROBE_RAYS) else { return };
         let worst = here.iter().zip(&on_device).map(|(f, d)| (f - d).abs()).fold(0f32, f32::max);
         println!("on the device: within {:.1e} of the shader's function on the CPU", worst);
         assert!(worst < 2e-2, "the device's transmittance differs from the shader's on the CPU by {}", worst);
@@ -2020,7 +1693,7 @@ mod tests {
 
     /// `probe_clouds` run on the device over `points` (two vectors a probe: `pathtrace::probe`),
     /// for the cloud whose record is `record`; None without a device.
-    fn probe(record: &[f32], points: &[Vec4], rays: bool) -> Option<Vec<f32>> {
+    fn probe(record: &[f32], points: &[Vec4], what: u32) -> Option<Vec<f32>> {
         pollster::block_on(async {
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
             let adapter = match instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await {
@@ -2039,7 +1712,7 @@ mod tests {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pathtrace"), source });
             let mut params = Params::zeroed();
             params.counts.x = points.len() as u32 / 2;
-            params.counts.y = rays as u32;
+            params.counts.y = what;
             let buffer = |contents: &[u8], usage| device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents, usage });
             let uniform = buffer(bytemuck::bytes_of(&params), wgpu::BufferUsages::UNIFORM);
             let tables = buffer(bytemuck::cast_slice(record), wgpu::BufferUsages::STORAGE);
@@ -2086,15 +1759,17 @@ mod tests {
     fn test_the_sea_matches_the_renderer() {
         use crate::shapes::geometry::Geometry;
         use pathtrace::glam::Vec3;
-        for radius in ["0", "6360000"] {
+        // A plane and the planet, flat-crested and with choppy crests (a brisk wind's, so that
+        // they are sharp).
+        for (radius, choppiness) in [("0", 0), ("6360000", 0), ("0", 1), ("6360000", 1)] {
             let s = SceneFile::from_string(format!(r#"{{
                 "width": 4, "height": 4, "background": [0, 0, 0],
                 "camera": {{ "location": [0, 3, -12], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.7 }},
-                "objects": [ {{ "type": "ocean", "wind": [7, 2], "choppiness": 0, "whitecaps": 0, "planet_radius": {}, "detail_center": [0, -6], "detail_distance": 30 }} ]
-            }}"#, radius));
+                "objects": [ {{ "type": "ocean", "wind": [7, 2], "choppiness": {}, "whitecaps": 0, "planet_radius": {}, "detail_center": [0, -6], "detail_distance": 30 }} ]
+            }}"#, choppiness, radius));
             let flat = FlatScene::build(&s).unwrap();
             let b = Buffers::build(&s, &flat).unwrap();
-            let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+            let shader = b.scene(None);
             let sea = &flat.shapes[0].0;
             let mut rng = crate::geometry::Pcg32::new(5, 0);
             let mut next = move || rng.next_f64();
@@ -2103,8 +1778,11 @@ mod tests {
                 // From above the waves, down at the sea near and far.
                 let ro = Vector3::new(next() * 40. - 20., 0.6 + next() * 6., next() * 40. - 26.);
                 let rd = Vector3::new(next() - 0.5, -next() * 0.6 - 0.002, next() - 0.5).normalize();
-                let (ro32, rd32) = (Vec3::new(ro.x as f32, ro.y as f32, ro.z as f32), Vec3::new(rd.x as f32, rd.y as f32, rd.z as f32).normalize());
-                let ray = Ray { ro: Vector3::new(ro32.x as f64, ro32.y as f64, ro32.z as f64), rd: Vector3::new(rd32.x as f64, rd32.y as f64, rd32.z as f64).normalize() };
+                // The kernel's ray is in the render's frame, about the camera (`kernels::origin`);
+                // the renderer's, the same ray in the world's.
+                let local = ro - b.origin;
+                let (ro32, rd32) = (Vec3::new(local.x as f32, local.y as f32, local.z as f32), Vec3::new(rd.x as f32, rd.y as f32, rd.z as f32).normalize());
+                let ray = Ray { ro: Vector3::new(ro32.x as f64, ro32.y as f64, ro32.z as f64) + b.origin, rd: Vector3::new(rd32.x as f64, rd32.y as f64, rd32.z as f64).normalize() };
                 let cpu = sea.geometry.intersects(&ray);
                 let (t, prim) = pathtrace::nearest(&shader, ro32, rd32, 0., f32::MAX, false);
                 match (cpu, prim != u32::MAX) {
@@ -2121,7 +1799,7 @@ mod tests {
                     _ => one += 1,
                 }
             }
-            println!("radius {}: {} hits, {} disagree on hitting, mean |dt| {:.2e}, worst relative dt {:.2e}, worst normal {:.2e}", radius, both, one, sum_t / both as f64, worst_t, worst_n);
+            println!("radius {}, choppiness {}: {} hits, {} disagree on hitting, mean |dt| {:.2e}, worst relative dt {:.2e}, worst normal {:.2e}", radius, choppiness, both, one, sum_t / both as f64, worst_t, worst_n);
             assert!(both > 3000 && one * 200 < both, "{} of {} rays disagree on hitting the sea", one, both);
             assert!(worst_n < 2e-3, "normals differ by {}", worst_n);
         }
@@ -2134,17 +1812,20 @@ mod tests {
     #[test]
     fn test_intersects_the_sea() {
         use crate::wavefront::integrator::tests::{mean_image, tiles};
-        for radius in ["0", "6360000"] {
+        // Flat-crested without foam, then with choppy crests, and with more foam than this
+        // wind raises (whitecaps over a third of it), so that the foam counts.
+        for (radius, sea) in [("0", r#""choppiness": 0, "whitecaps": 0"#), ("6360000", r#""choppiness": 0, "whitecaps": 0"#),
+                              ("0", r#""whitecaps": 0.35"#), ("6360000", r#""choppiness": 1"#)] {
             let mut s = SceneFile::from_string(format!(r#"{{
                 "width": 24, "height": 16, "background": [0.3, 0.4, 0.6], "max_depth": 4, "path_termination": "russian_roulette",
                 "sun": {{ "direction": [-1, 1, 1], "intensity": 3 }},
                 "camera": {{ "location": [0, 3, -12], "lookat": [0, 0.5, 0], "up": [0, 1, 0], "angle": 0.7 }},
                 "materials": {{ "R": {{ "type": "lambertian", "albedo": [0.7, 0.2, 0.1] }} }},
                 "objects": [
-                    {{ "type": "ocean", "wind": [7, 2], "choppiness": 0, "whitecaps": 0, "planet_radius": {}, "detail_center": [0, -6], "detail_distance": 30 }},
+                    {{ "type": "ocean", "wind": [7, 2], {}, "planet_radius": {}, "detail_center": [0, -6], "detail_distance": 30 }},
                     {{ "type": "sphere", "location": [0, 0.6, 0], "radius": 1.5, "material": "R" }}
                 ]
-            }}"#, radius));
+            }}"#, sea, radius));
             s.render.supersamples = 128;
             let flat = FlatScene::build(&s).unwrap();
             assert_eq!(flat.shapes.len(), 1);
@@ -2159,16 +1840,15 @@ mod tests {
             let rc = Mutex::new(RenderContext::new(w, h, false, "test.png"));
             gpu.render(&s, &flat, &rc, |_| ());
             let rc = rc.into_inner().unwrap();
-            // Its water too is the kernels' (`pathtrace::MAT_WATER`): nothing waits for the host.
-            // (A flat-crested sea without foam, `"choppiness": 0, "whitecaps": 0`: the kernels
-            // have neither the choppy displacement nor the foam yet.)
+            // Its water too is the kernels' (`pathtrace::MAT_WATER`), foam and all: nothing
+            // waits for the host.
             assert_eq!(rc.schedule.stage(crate::scheduler::Stage::Host).items, 0);
             let on_gpu: Vec<Color> = (0..w * h).map(|i| rc.get_pixel(i % w, i / w)).collect();
             let cpu = mean_image(&s, 128);
             let (a, b) = (tiles(&on_gpu, w, h, 3, 2), tiles(&cpu, w, h, 3, 2));
             for t in 0..6 {
                 for ch in 0..3 {
-                    assert!((a[t][ch] - b[t][ch]).abs() < 0.06 * b[t][ch] + 2e-3, "radius {}, tile {} channel {}: GPU {} vs CPU {}", radius, t, ch, a[t][ch], b[t][ch]);
+                    assert!((a[t][ch] - b[t][ch]).abs() < 0.06 * b[t][ch] + 2e-3, "radius {}, {}: tile {} channel {}: GPU {} vs CPU {}", radius, sea, t, ch, a[t][ch], b[t][ch]);
                 }
             }
         }
@@ -2236,10 +1916,11 @@ mod tests {
 
     /// Participating media in the kernels (`pathtrace::media_collision`, the medium's vertex
     /// in `shade`, `media_transmittance`): the picture is the path tracer's, tile by tile,
-    /// with delta-M truncation and with the similarity relations too.
+    /// with delta-M truncation, with the similarity relations and with the Oz approximation's
+    /// sunlight too.
     #[test]
     fn test_media_are_the_path_tracers() {
-        for density in [r#""density": 1.5"#, r#""density": 6, "similarity_after": 2"#] {
+        for density in [r#""density": 1.5"#, r#""density": 6, "similarity_after": 2"#, r#""density": 6, "oz": true"#] {
             media_agree(density);
         }
     }
@@ -2251,7 +1932,6 @@ mod tests {
         let flat = FlatScene::build(&s).unwrap();
         assert_eq!(flat.media.len(), 1);
         assert!(flat.media[0].peak > 0. && flat.media[0].scale < 1.);
-        assert!(flat.needs_kernels().is_some());
         let mut gpu = match GpuRenderer::new(&s, &flat) {
             Ok(g) => g,
             Err(e) => {
@@ -2352,11 +2032,11 @@ mod tests {
                 let flat = FlatScene::build(&s).unwrap();
                 let mut gpu = GpuRenderer::new(&s, &flat).unwrap();
                 let b = Buffers::build(&s, &flat).unwrap();
-                let shader = pathtrace::Scene { params: &b.params, prims: &b.prims, nodes: &b.nodes, materials: &b.materials, lights: &b.lights, tables: &b.tables };
+                let shader = b.scene(None);
                 let (w, passes) = (s.image.width, 32);
                 let mut cpu = vec![0f64; w * s.image.height];
                 for k in 0..passes {
-                    for (index, ray) in GpuRenderer::camera_rays(&s, k).iter().enumerate() {
+                    for (index, ray) in crate::kernels::camera_rays(&s, k, &b.origin).iter().enumerate() {
                         if ray.d.w < 0.5 {
                             continue;
                         }
@@ -2418,6 +2098,41 @@ mod tests {
             let g: f64 = rows.clone().flat_map(|y| (0..w).map(move |x| (x, y))).map(|(x, y)| rc.get_pixel(x, y).rgb.mean()).sum();
             let c: f64 = rows.flat_map(|y| (0..w).map(move |x| (x, y))).map(|(x, y)| img[y * w + x].rgb.mean()).sum();
             eprintln!("rows from {}: GPU {:.4} CPU {:.4} ratio {:.4}", band * 3, g / (3 * w) as f64, c / (3 * w) as f64, g / c);
+        }
+    }
+
+    /// How far the kernels on the device are from the same kernels on the CPU, sample for
+    /// sample: each pixel's first sample, by both, and how many differ in their bits and by
+    /// how much. `RAYS_SCENE` names a scene; `--ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn measure_device_against_cpu() {
+        let scenes: Vec<String> = match std::env::var("RAYS_SCENE") {
+            Ok(f) => f.split(',').map(String::from).collect(),
+            Err(_) => vec!["demo/demo.json".into()],
+        };
+        for file in scenes {
+            let s = SceneFile::from_file(&file, &crate::scenefile::Overrides { width: Some(96), height: Some(60), seed: None });
+            let flat = FlatScene::build(&s).unwrap();
+            let kernels = crate::wavefront::integrator::Kernels::new(&s, &flat).unwrap();
+            let mut gpu = match GpuRenderer::new(&s, &flat) {
+                Ok(g) => g,
+                Err(e) => { println!("{}: not on the device ({})", file, e); continue; },
+            };
+            let (cpu, _, _) = kernels.pass(0);
+            let sums = gpu.run(&s, 0..1);
+            let n = cpu.len();
+            let (mut same, mut ulp, mut near, mut close, mut far, mut worst) = (0, 0, 0, 0, 0, 0f64);
+            for i in 0..n {
+                let c = [cpu[i].rgb.x as f32, cpu[i].rgb.y as f32, cpu[i].rgb.z as f32];
+                let g = [sums[i][0], sums[i][1], sums[i][2]];
+                let bits = (0..3).map(|k| (c[k].to_bits() as i64 - g[k].to_bits() as i64).abs()).max().unwrap();
+                let rel = (0..3).map(|k| ((c[k] - g[k]).abs() / c[k].abs().max(g[k].abs()).max(1e-6)) as f64).fold(0., f64::max);
+                worst = worst.max(rel);
+                if bits == 0 { same += 1 } else if bits <= 4 { ulp += 1 } else if rel < 1e-5 { near += 1 } else if rel < 1e-3 { close += 1 } else { far += 1 }
+            }
+            println!("{}: of {} pixels, {} the same bits, {} within 4 steps of a float, {} within 1e-5, {} within 1e-3, {} further (a different path); worst {:.1e}",
+                file, n, same, ulp, near, close, far, worst);
         }
     }
 
@@ -2492,7 +2207,7 @@ mod tests {
         gpu.render(&s, &flat, &rc, |_| ());
         let (gpu_image, gpu_rays) = { let rc = rc.lock().unwrap(); (rc.snapshot(), rc.rays_cast) };
         let rc = Mutex::new(RenderContext::new(24, 16, false, "test.png"));
-        crate::wavefront::integrator::render(&s, &flat, &rc, |_| ());
+        crate::rendercontext::render(&s, &rc, Some(&crate::wavefront::integrator::Kernels::new(&s, &flat).unwrap()), |_| None::<()>, |_| ());
         let (cpu_image, cpu_rays) = { let rc = rc.lock().unwrap(); (rc.snapshot(), rc.rays_cast) };
         // Russian roulette ends paths by different random numbers, so the counts differ a little.
         assert!((gpu_rays as f64 - cpu_rays as f64).abs() < 0.02 * cpu_rays as f64, "rays: GPU {} vs CPU {}", gpu_rays, cpu_rays);

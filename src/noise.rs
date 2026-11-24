@@ -133,17 +133,7 @@ fn floor(x: f64) -> f64 {
 /// Hash a cell (and seed) to a number in [0, 1]. Cells are numbered by their lowest corner,
 /// converted via i64 so negative cells wrap rather than saturating to 0.
 pub fn worley_hash(ix: u32, iy: u32, iz: u32, s: u32) -> f64 {
-    let mut h = (ix.wrapping_mul(73856093)) ^
-             (iy.wrapping_mul(19349663)) ^
-             (iz.wrapping_mul(83492791)) ^
-             s.wrapping_mul(0x9E37_79B9);
-    // Avalanche (murmur3 finaliser) so neighbouring cells are uncorrelated.
-    h ^= h >> 16;
-    h = h.wrapping_mul(0x85eb_ca6b);
-    h ^= h >> 13;
-    h = h.wrapping_mul(0xc2b2_ae35);
-    h ^= h >> 16;
-    h as f64 / u32::MAX as f64
+    shared::noise::cell_hash(ix, iy, iz, s)
 }
 
 /// Worley noise (cellular noise) generator

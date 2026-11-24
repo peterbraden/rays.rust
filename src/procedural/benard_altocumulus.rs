@@ -38,11 +38,12 @@
 
 use crate::na::{Vector2, Vector3};
 use std::sync::OnceLock;
-use crate::noise::{PerlinNoise, worley_hash};
-use crate::procedural::nubis_clouds::{lerp, remap, smoothstep, stretched, worley_fbm, WorleyTexture};
+use crate::noise::PerlinNoise;
+use crate::procedural::nubis_clouds::WorleyTexture;
 use crate::volume::DensityField;
 
 /// Rows of the hexagonal lattice are this far apart, for centres a unit apart.
+#[cfg(test)]
 const ROW: f64 = 0.866_025_403_784_438_6;
 
 pub struct BenardAltocumulus {
@@ -92,15 +93,57 @@ pub struct BenardAltocumulus {
     warp_noise: PerlinNoise,
     patch_noise: PerlinNoise,
     cells: OnceLock<WorleyTexture>,
+    /// Built on first use, from the layer as it then is.
+    tops: OnceLock<Tops>,
 }
 
-/// Where a point lies among the cells: `edge` from 0 at its cell's centre to 1 at its edge,
-/// `radial` its distance from the centre in half-spacings, and two numbers in [0, 1]
-/// particular to the cell.
-struct CellPoint {
-    edge: f64,
-    radial: f64,
-    hash: (f64, f64),
+/// How high cloud can be over each texel of a grid across the layer
+/// (`shared::altocumulus::Benard::tops`): what lets a walk through the layer skip its clear
+/// air, which is most of the slab it fills.
+struct Tops {
+    /// The grid's corner (x, z), its texel, and its texels a side.
+    origin: Vector2<f64>,
+    texel: f64,
+    n: usize,
+    /// A texel's top, or far below the layer where it holds no cloud.
+    tops: Vec<f32>,
+}
+
+/// A cloudlet is taken to reach at least this far towards its cell's edge when the map of
+/// tops is sampled (`Benard::column_top`): no smaller than the real one, and wide enough for
+/// the samples to find (a fifth of a cell across or more, the samples a sixteenth apart).
+const LEAST_REACH: f64 = 0.25;
+
+/// Samples of the layer's top along a side of each of the map's texels (and one more, on its
+/// far edge): a sixteenth of a cell apart.
+const SAMPLES: usize = 4;
+
+/// The layer's tables as its shared recipe reads them: the permutation of the noise that
+/// warps the lattice, then the patches', then the Worley texture of the detail.
+struct LayerTables<'a> {
+    layer: &'a BenardAltocumulus,
+    cells: &'a WorleyTexture,
+    /// The map of tops, after the Worley texture, for a bound (the density reads none).
+    tops: Option<&'a Tops>,
+}
+
+/// Where the map of tops begins, after the Worley texture.
+const TOPS_AT: u32 = WORLEY_AT + shared::clouds::WORLEY_N * shared::clouds::WORLEY_N * shared::clouds::WORLEY_N;
+
+const PATCH_AT: u32 = 512;
+const WORLEY_AT: u32 = 1024;
+
+impl shared::Tables<f64> for LayerTables<'_> {
+    fn value(&self, i: u32) -> f64 {
+        if i >= TOPS_AT {
+            return self.tops.map_or(0., |t| t.tops[(i - TOPS_AT) as usize] as f64);
+        }
+        self.cells.texels()[(i - WORLEY_AT) as usize] as f64
+    }
+
+    fn index(&self, i: u32) -> u32 {
+        if i < PATCH_AT { self.layer.warp_noise.permutation()[i as usize] as u32 } else { self.layer.patch_noise.permutation()[(i - PATCH_AT) as usize] as u32 }
+    }
 }
 
 impl BenardAltocumulus {
@@ -132,139 +175,133 @@ impl BenardAltocumulus {
             warp_noise: PerlinNoise::shuffled(seed.wrapping_mul(3).wrapping_add(1)),
             patch_noise: PerlinNoise::shuffled(seed.wrapping_mul(3).wrapping_add(2)),
             cells: OnceLock::new(),
+            tops: OnceLock::new(),
         }
+    }
+
+    /// The layer's recipe, as the shared code takes it (`shared::altocumulus::Benard`, where
+    /// the density is: the GPU's shader compiles the same functions at f32).
+    fn recipe(&self) -> shared::altocumulus::Benard<f64> {
+        shared::altocumulus::Benard {
+            base: self.base, thickness: self.thickness, max_density: self.max_density, cell_size: self.cell_size,
+            coverage: self.coverage, regularity: self.regularity, anisotropy: self.anisotropy,
+            wind: (self.wind_direction.x, self.wind_direction.y), undulation: self.undulation, wavelength: self.wavelength,
+            patchiness: self.patchiness, patch_size: self.patch_size, warp: self.warp, lumpiness: self.lumpiness,
+            detail_size: self.detail_size, erosion: self.erosion, center: (self.center.x, self.center.y),
+            extent: self.extent, fade: self.fade, castellanus: self.castellanus, turret_height: self.turret_height,
+            seed: self.seed, warp_perm: 0, patch_perm: PATCH_AT, worley: WORLEY_AT,
+            // (No map: the density doesn't read one.)
+            tops: shared::clouds::WeatherGrid { x: 0., z: 0., texel: 1., n: 0, corners: 0, maxima: TOPS_AT },
+        }
+    }
+
+    /// The recipe with its map of tops, for bounding the density (`majorant_from`).
+    fn bounded(&self) -> (shared::altocumulus::Benard<f64>, &Tops) {
+        let tops = self.tops();
+        let grid = shared::clouds::WeatherGrid { x: tops.origin.x, z: tops.origin.y, texel: tops.texel, n: tops.n as u32, corners: 0, maxima: TOPS_AT };
+        (shared::altocumulus::Benard { tops: grid, ..self.recipe() }, tops)
+    }
+
+    /// The map of how high cloud can be over each texel, a quarter of a cell across (or
+    /// coarser, to keep it to a thousand a side). Sampled, not derived: the layer's highest
+    /// (`Benard::column_top`) at 25 points of every texel, its edges included, for cloudlets
+    /// no smaller than the real ones and at least `LEAST_REACH` across; a texel's top is the
+    /// highest of its own samples and its neighbours', and a little over. So it bounds the
+    /// cloud wherever a cloudlet's outline wanders less than a texel between samples a
+    /// sixteenth of a cell apart, which the lumps of an outline do (they are a fifth of a cell
+    /// across at their finest); and the density falls to nothing at a cloudlet's edge
+    /// (as the square of the distance in), so what a sliver missed would hold is nothing too.
+    /// `test_the_map_of_tops_bounds_the_cloud` looks for cloud above it.
+    fn tops(&self) -> &Tops {
+        // (Apart from the render's threads, which wait on it: `geometry::build_apart`.)
+        self.tops.get_or_init(|| crate::geometry::build_apart(|| {
+            use rayon::prelude::*;
+            // Sampled at f32 from the layer's record, as a kernel reads it: the same functions,
+            // five times as fast as through this layer's own tables, and there are millions.
+            let record = self.record(None);
+            let recipe = pathtrace::load_benard(&record, 0);
+            let tables = pathtrace::FloatTables(&record);
+            let n = ((2. * self.extent / (self.cell_size / 4.)).ceil() as usize).clamp(1, 1024);
+            let texel = 2. * self.extent / n as f64;
+            // Coarser than half a cell, a texel nearly always holds some cloudlet: no map is
+            // worth its three seconds then (cells a hundred metres across over a hundred
+            // kilometres: cirrocumulus), and the walk takes the slab.
+            if texel > self.cell_size / 2. {
+                return Tops { origin: self.center - Vector2::new(self.extent, self.extent), texel, n: 0, tops: vec![] };
+            }
+            let origin = self.center - Vector2::new(self.extent, self.extent);
+            let none = f64::NEG_INFINITY;
+            // `SAMPLES` to a texel's side, its edges included.
+            let m = SAMPLES * n + 1;
+            let step = texel / SAMPLES as f64;
+            let samples: Vec<f64> = (0..m * m).into_par_iter().map(|k| {
+                let (x, z) = (origin.x + (k % m) as f64 * step, origin.y + (k / m) as f64 * step);
+                recipe.column_top(&tables, x as f32, z as f32, LEAST_REACH as f32).map_or(none, |top| top as f64)
+            }).collect();
+            let side = SAMPLES + 1;
+            let own: Vec<f64> = (0..n * n).map(|k| {
+                let (i, j) = (k % n, k / n);
+                (0..side * side).map(|c| samples[(SAMPLES * j + c / side) * m + SAMPLES * i + c % side]).fold(none, f64::max)
+            }).collect();
+            let pad = 0.1 * self.thickness;
+            let tops = (0..n * n).map(|k| {
+                let (i, j) = (k % n, k / n);
+                let mut top = none;
+                for jj in j.saturating_sub(1)..=(j + 1).min(n - 1) {
+                    for ii in i.saturating_sub(1)..=(i + 1).min(n - 1) {
+                        top = top.max(own[jj * n + ii]);
+                    }
+                }
+                if top == none { -1e30 } else { (top + pad) as f32 }
+            }).collect();
+            Tops { origin, texel, n, tops }
+        }))
     }
 
     /// The heights between which there can be cloud: bases are raised or lowered by up to a
     /// tenth of the thickness per cell, and by a third of it on the waves.
     pub fn bottom(&self) -> f64 {
-        self.base - self.thickness * (0.1 + 0.3 * self.undulation)
+        self.recipe().bottom()
     }
 
     pub fn top(&self) -> f64 {
-        let turrets = if self.castellanus > 0. { self.turret_height * 1.2 } else { 0. };
-        self.base + self.thickness * (1.5 + 0.3 * self.undulation).max(turrets + 0.5)
+        self.recipe().top()
     }
 
     fn detail(&self) -> &WorleyTexture {
         self.cells.get_or_init(|| WorleyTexture::new(self.seed.wrapping_add(7)))
     }
 
-    /// Along and across the wind, in metres.
-    fn wind_frame(&self, x: f64, z: f64) -> (f64, f64) {
-        let w = self.wind_direction;
-        (x * w.x + z * w.y, -x * w.y + z * w.x)
-    }
-
-    /// The cell around (`u`, `v`), in lattice units: centres a unit apart.
-    fn cell_at(&self, u: f64, v: f64) -> CellPoint {
-        let jitter = 0.5 * (1. - self.regularity.clamp(0., 1.));
-        let j0 = (v / ROW).round() as i64;
-        let (mut f1, mut f2, mut nearest) = (f64::MAX, f64::MAX, (0i64, 0i64));
-        for j in j0 - 2..=j0 + 2 {
-            let shift = if j.rem_euclid(2) == 1 { 0.5 } else { 0. };
-            let i0 = (u - shift).round() as i64;
-            for i in i0 - 2..=i0 + 2 {
-                let h = |k: u32| worley_hash(i as u32, j as u32, 0, self.seed.wrapping_add(k)) - 0.5;
-                let c = Vector2::new(i as f64 + shift + 2. * jitter * h(0), j as f64 * ROW + 2. * jitter * h(1));
-                let d = (c - Vector2::new(u, v)).norm_squared();
-                if d < f1 {
-                    f2 = f1;
-                    f1 = d;
-                    nearest = (i, j);
-                } else if d < f2 {
-                    f2 = d;
-                }
-            }
-        }
-        // Half the gap between the nearest two centres' distances is (nearly) the distance to
-        // the boundary between them: 0.5 at the middle of a regular cell.
-        let to_edge = (f2.sqrt() - f1.sqrt()) / 2.;
-        let (i, j) = nearest;
-        let h = |k: u32| worley_hash(i as u32, j as u32, 0, self.seed.wrapping_add(k));
-        CellPoint { edge: (1. - 2. * to_edge).clamp(0., 1.), radial: 2. * f1.sqrt(), hash: (h(2), h(3)) }
-    }
-
     /// Cloud density as a fraction of `max_density`, in [0, 1].
     pub fn fraction(&self, p: &Vector3<f64>) -> f64 {
-        if p.y < self.bottom() || p.y > self.top() {
-            return 0.;
+        self.recipe().fraction(&LayerTables { layer: self, cells: self.detail(), tops: None }, p.x, p.y, p.z)
+    }
+
+    /// The layer as data, for the GPU's shader (`pathtrace::load_benard`, which has the
+    /// layout): the recipe's numbers in their fields' order and the seed's bits, then the two
+    /// permutations, the Worley texture and the map of tops (whose grid follows the seed).
+    pub fn export(&self) -> Vec<f32> {
+        self.record(Some(self.tops()))
+    }
+
+    /// `export`, with the map of tops given, or without one (which is how the map itself is
+    /// sampled).
+    fn record(&self, tops: Option<&Tops>) -> Vec<f32> {
+        let r = self.recipe();
+        let mut out: Vec<f32> = [
+            r.base, r.thickness, r.max_density, r.cell_size, r.coverage, r.regularity, r.anisotropy, r.wind.0, r.wind.1,
+            r.undulation, r.wavelength, r.patchiness, r.patch_size, r.warp, r.lumpiness, r.detail_size, r.erosion,
+            r.center.0, r.center.1, r.extent, r.fade, r.castellanus, r.turret_height,
+        ].iter().map(|&v| v as f32).collect();
+        out.push(f32::from_bits(self.seed));
+        out.extend(tops.map_or([0.; 4], |t| [t.origin.x as f32, t.origin.y as f32, t.texel as f32, t.n as f32]));
+        out.extend(self.warp_noise.permutation().iter().map(|&p| p as f32));
+        out.extend(self.patch_noise.permutation().iter().map(|&p| p as f32));
+        out.extend(self.detail().texels());
+        if let Some(t) = tops {
+            out.extend(&t.tops);
         }
-        let from_centre = (Vector2::new(p.x, p.z) - self.center).abs().max() / self.extent;
-        let edge_fade = smoothstep(0., self.fade.max(1e-9), 1. - from_centre);
-        if edge_fade <= 0. {
-            return 0.;
-        }
-        // 4. Patches.
-        let patches = {
-            let n = stretched(self.patch_noise.fbm(p.x / self.patch_size, 0.5, p.z / self.patch_size, 3, 0.5, 2.));
-            lerp(1., smoothstep(0.3, 0.6, n), self.patchiness)
-        };
-        let strength = edge_fade * patches;
-        if strength <= 0. {
-            return 0.;
-        }
-        // 1. The cells, in the wind's frame, warped.
-        let (along, across) = self.wind_frame(p.x, p.z);
-        let (mut u, mut v) = (along / (self.cell_size * self.anisotropy), across / self.cell_size);
-        let warp = |s: f64| (self.warp_noise.fbm(u * 0.35, s, v * 0.35, 2, 0.5, 2.) - 0.5) * 2. * self.warp;
-        (u, v) = (u + warp(0.25), v + warp(0.75));
-        // 3. Waves across the wind, their crests wandering a little.
-        let wave = if self.undulation > 0. {
-            let wander = (self.warp_noise.fbm(along / self.wavelength * 0.3, 0.1, across / self.wavelength * 0.3, 2, 0.5, 2.) - 0.5) * 4.;
-            0.5 + 0.5 * (std::f64::consts::TAU * along / self.wavelength + wander).cos()
-        } else {
-            1.
-        };
-        let cell = self.cell_at(u, v);
-        // 2. This cell's cloudlet: its reach towards the edge, and how far out we are in it.
-        let reach = self.coverage * strength * lerp(1., wave, self.undulation) * (0.8 + 0.4 * cell.hash.0);
-        if reach <= 0. {
-            return 0.;
-        }
-        // Round, not the cell's polygon (which only keeps neighbours apart), with a lumpy
-        // outline.
-        let lumps = 1. + (self.warp_noise.fbm(u * 2.5, 0.6, v * 2.5, 2, 0.5, 2.) - 0.5) * 2. * self.lumpiness;
-        let t = lerp(cell.radial, cell.edge, 0.35) * lumps / reach;
-        if t >= 1. {
-            return 0.;
-        }
-        let offset = (cell.hash.1 - 0.5) * 0.2 + (wave - 0.5) * 0.6 * self.undulation;
-        let h = (p.y - self.base) / self.thickness - offset;
-        // A dome, smaller for smaller cloudlets and with turrets on top, over a base that sags
-        // towards the edge.
-        let turrets = worley_fbm(self.detail(), &(Vector3::new(p.x, self.base, p.z) / (2. * self.detail_size)));
-        let top = (1. - t * t).sqrt() * reach.min(1.).sqrt() * (0.6 + 0.8 * turrets);
-        let bottom = 0.15 * t * t;
-        let mut inside = (h - bottom).min(top - h);
-        // 6. A turret, on some cells: narrower than the cloudlet, rising from it with a round,
-        // billowing head.
-        let chosen = (cell.hash.0 * 7.31 + cell.hash.1 * 3.17).fract();
-        if chosen < self.castellanus {
-            let rise = self.turret_height * (0.5 + 0.5 * (chosen / self.castellanus.max(1e-9)));
-            let width = 0.65 * (0.85 + 0.3 * cell.hash.1);
-            let r = t / width;
-            if r < 1.4 {
-                // A stem rising to a broader, billowing head, with bulges up its flanks: a
-                // little cumulus on the layer. Billows a third of the turret across push its
-                // outline out and in; its top is rounded over the head.
-                let up = (h / rise).clamp(0., 1.);
-                let billows = worley_fbm(self.detail(), &(Vector3::new(p.x, p.y * 0.8, p.z) / (1.6 * self.detail_size)));
-                let bulges = (self.warp_noise.fbm(u * 3., p.y / (0.8 * self.thickness), v * 3., 2, 0.5, 2.) - 0.5) * 2.;
-                let profile = lerp(0.55, 1., smoothstep(0.3, 0.75, up)) * (1. - ((up - 0.75) / 0.25).max(0.).powi(2)).max(0.).sqrt();
-                let radius = profile * (1. + 0.25 * bulges) + 0.45 * (billows - 0.5);
-                let flank = (radius - r) * 2.;
-                inside = inside.max((h - bottom).min(rise * (0.85 + 0.3 * billows) - h).min(flank));
-            }
-        }
-        if inside <= 0. {
-            return 0.;
-        }
-        // Neighbours stay apart: the sinking air at the boundary is clear.
-        let body = smoothstep(0., 0.3, inside) * smoothstep(0., 0.4, 1. - t) * smoothstep(0., 0.2, 1. - cell.edge);
-        // 5. Erode the edges.
-        let d = worley_fbm(self.detail(), &(p / self.detail_size));
-        remap(body, (1. - d) * self.erosion, 1.)
+        out
     }
 }
 
@@ -279,15 +316,14 @@ impl DensityField for BenardAltocumulus {
 
     /// The layer is a slab: `max_density` within it, nothing above or below.
     fn majorant_from(&self, p: &Vector3<f64>, d: &Vector3<f64>) -> (f64, f64) {
-        let (lo, hi) = (self.bottom(), self.top());
-        let to = |y: f64| if d.y != 0. { (y - p.y) / d.y } else { f64::INFINITY };
-        if p.y < lo {
-            (0., if d.y > 0. { to(lo) } else { f64::INFINITY })
-        } else if p.y > hi {
-            (0., if d.y < 0. { to(hi) } else { f64::INFINITY })
-        } else {
-            (self.max_density, if d.y > 0. { to(hi) } else if d.y < 0. { to(lo) } else { f64::INFINITY })
-        }
+        let (recipe, tops) = self.bounded();
+        recipe.majorant_from(&LayerTables { layer: self, cells: self.detail(), tops: Some(tops) }, p.x, p.y, p.z, d.x, d.y, d.z)
+    }
+
+    /// As data, where nothing but the density is asked of it (a droplet size is, for
+    /// diffraction).
+    fn export(&self) -> Option<crate::volume::FieldExport> {
+        Some(crate::volume::FieldExport::Benard { record: BenardAltocumulus::export(self), radius: 0. })
     }
 
     fn particle_radius(&self, _p: &Vector3<f64>) -> Option<f64> {
@@ -342,6 +378,58 @@ mod tests {
         assert!(high > 10, "{}", high);
         let plain = layer();
         assert!((0..20000).all(|k| plain.density(&Vector3::new((k % 200) as f64 * 40. - 4000., plain.base + 2.5 * plain.thickness, (k / 200) as f64 * 80. - 4000.)) == 0.));
+    }
+
+    /// The map of tops (`BenardAltocumulus::tops`) is sampled, so it is tested: over layers
+    /// plain, waved, with turrets, sparse and regular, no point of two million in the slab
+    /// has cloud above its texel's top, or over a texel marked clear; and the map is worth
+    /// having, most of the slab lying above it.
+    #[test]
+    fn test_the_map_of_tops_bounds_the_cloud() {
+        let mut rng = Pcg32::new(21, 0);
+        for case in 0..5u64 {
+            let mut c = BenardAltocumulus::new(4000., 250., case + 2);
+            c.extent = 12_000.;
+            if case >= 1 { (c.undulation, c.anisotropy) = (0.8, 1.7); }
+            if case >= 2 { (c.castellanus, c.turret_height, c.wind_direction) = (0.4, 6., Vector2::new(1., 0.3).normalize()); }
+            if case == 3 { (c.regularity, c.coverage, c.cell_size) = (0.9, 0.7, 900.); }
+            if case == 4 { (c.coverage, c.patchiness, c.lumpiness, c.warp) = (0.45, 0.9, 1., 0.6); }
+            let tops = c.tops();
+            let (mut cloudy, mut above, mut clear) = (0, 0, 0);
+            let n = 2_000_000;
+            for _ in 0..n {
+                let p = Vector3::new(uniform(&mut rng, -12_000., 12_000.), uniform(&mut rng, c.bottom(), c.top()), uniform(&mut rng, -12_000., 12_000.));
+                let (i, j) = ((((p.x - tops.origin.x) / tops.texel) as usize).min(tops.n - 1), (((p.z - tops.origin.y) / tops.texel) as usize).min(tops.n - 1));
+                let top = tops.tops[j * tops.n + i] as f64;
+                if p.y > top { clear += 1; }
+                if c.fraction(&p) > 0. {
+                    cloudy += 1;
+                    if p.y > top { above += 1; }
+                }
+            }
+            println!("case {}: {} of {} points in cloud, {} above the map; {:.0}% of the slab is above it", case, cloudy, n, above, 100. * clear as f64 / n as f64);
+            assert!(cloudy > 500, "{} points in cloud", cloudy);
+            assert_eq!(above, 0, "case {}: cloud above the map of tops", case);
+            assert!(clear > n / 5, "case {}: only {} of {} points above the map", case, clear, n);
+        }
+    }
+
+    /// What the map of tops costs to build. `--ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn measure_the_map_of_tops() {
+        let c = BenardAltocumulus::new(4000., 200., 2);
+        let record = c.record(None);
+        let recipe = pathtrace::load_benard(&record, 0);
+        let tables = pathtrace::FloatTables(&record);
+        let mut rng = Pcg32::new(1, 0);
+        let points: Vec<(f32, f32)> = (0..1_000_000).map(|_| (uniform(&mut rng, -40000., 40000.) as f32, uniform(&mut rng, -40000., 40000.) as f32)).collect();
+        let start = std::time::Instant::now();
+        let found = points.iter().filter(|p| recipe.column_top(&tables, p.0, p.1, LEAST_REACH as f32).is_some()).count();
+        println!("a column's top: {:.0} ns a sample ({} of {} hold cloud)", start.elapsed().as_secs_f64() * 1e9 / points.len() as f64, found, points.len());
+        let start = std::time::Instant::now();
+        let tops = c.tops();
+        println!("the map, {} texels a side of {:.0} m: {:.2} s", tops.n, tops.texel, start.elapsed().as_secs_f64());
     }
 
     #[test]

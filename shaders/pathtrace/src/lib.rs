@@ -42,8 +42,18 @@ pub struct Params {
     /// Records of the air in `tables` (`AIR_*`), or `NO_AIR`: the sky's (for rays that escape),
     /// the aerial perspective's, the sun's (its reddening); and space's (`SPACE_*`).
     pub air: UVec4,
-    /// The media (`MEDIUM_*`): where their records begin in `tables`, and how many.
+    /// The media (`MEDIUM_*`): where their records begin in `tables`, and how many; and the
+    /// bits of the mean square slope of the sea's glitter as media see it (the renderer's
+    /// `ocean::Sea`), 0 for no sea a glitter probe could find (`send_glitter_probe`); and
+    /// where the Sobol' points' direction numbers are (`sobol_directions`).
     pub media: UVec4,
+    /// The render's origin in the world (the renderer's `kernels::origin`: at the camera).
+    /// Every position here is relative to it: rays, primitives, boxes, lights, centres. So
+    /// f32 holds what is near the camera finely wherever in the world that is, and what is
+    /// far to a constant fraction of its distance, which is a constant fraction of a pixel.
+    /// Only what is tabulated by where it is in the world (the waves' tiles, the foam's and
+    /// the clouds' noise) adds it back (`world`).
+    pub origin: Vec4,
 }
 
 #[derive(Copy, Clone)]
@@ -150,6 +160,8 @@ pub const FLAG_SAMPLE_LIGHTS: u32 = 1;
 pub const FLAG_SAMPLE_ENV: u32 = 2;
 pub const FLAG_SUN: u32 = 4;
 pub const FLAG_AERIAL: u32 = 8;
+/// The air along a camera ray is tested for shadow (`crepuscular_samples`): crepuscular rays.
+pub const FLAG_CREPUSCULAR: u32 = 16;
 /// `Prim::info.x`.
 pub const PRIM_TRIANGLE: u32 = 0;
 pub const PRIM_SPHERE: u32 = 1;
@@ -157,17 +169,45 @@ pub const PRIM_PLANE: u32 = 2;
 /// The sea (the renderer's `ocean::Ocean`; `ocean_hit`): one at most, after the planes, its
 /// record in `tables` at `Params::dims.z` - 1.
 pub const PRIM_OCEAN: u32 = 3;
+/// A shape the kernels have no test for, which keeps its place among the primitives: the
+/// host finds what a ray hits of it (the renderer's `wavefront::integrator`, between
+/// `intersect_surface` and `intersect_media`, and `HostShapes` for shadow rays), and shades
+/// it (`MAT_HOST`). Only where the host can be asked at each ray: on the CPU.
+pub const PRIM_HOST: u32 = 4;
 /// The sea's record: the planet's radius (0 for the plane y = 0), where its waves displace the
 /// surface (the centre's x and z, and how far from it), the waves' greatest height and slope,
 /// how many tiles of waves there are and how many of them displace (the rest only tilt the
-/// normal); then for each tile its size in metres, its texels a side, and where its texels
-/// (height, and the slopes along x and z) begin, from the record's start.
+/// normal), and the choppy map's λ (the renderer's `WaveField::lambda`; 0 for none); then for
+/// each tile (`OCEAN_TILE` numbers) its size in metres, its texels a side, where its texels
+/// (height, and the slopes along x and z) begin from the record's start, and where its choppy
+/// displacement's do (five numbers a texel, the renderer's `WaveTile::chop`; 0 for none).
 pub const OCEAN_RADIUS: u32 = 0;
 pub const OCEAN_CENTRE: u32 = 1;
 pub const OCEAN_DETAIL: u32 = 3;
 pub const OCEAN_MAX: u32 = 4;
 pub const OCEAN_TILES: u32 = 6;
-pub const OCEAN_HEADER: u32 = 8;
+pub const OCEAN_LAMBDA: u32 = 8;
+/// Where the sea's foam's record begins, from the sea's (as bits; 0 for none).
+pub const OCEAN_FOAM: u32 = 9;
+/// The planet's centre in the render's frame, and |c|² - r² for it, as the air's are
+/// (`excess`): filled in by whoever lays the record out (the renderer's `kernels`).
+pub const OCEAN_PLANET: u32 = 10;
+pub const OCEAN_EXCESS: u32 = 13;
+pub const OCEAN_HEADER: u32 = 14;
+pub const OCEAN_TILE: u32 = 4;
+/// The least Jacobian of the choppy map the slopes are sharpened by (the renderer's
+/// `ocean::MIN_JACOBIAN`).
+pub const OCEAN_MIN_JACOBIAN: f32 = 0.2;
+/// The foam's record (the renderer's `ocean::Foam::export`): its albedo, the wind's direction
+/// and speed, the spread of the lace's noise, and how many tiles; then for each tile its
+/// texels a side, its size in metres and where its texels (fresh foam, residual foam) begin
+/// from the record's start; then the noise's permutation (512 entries); then the texels.
+pub const FOAM_WIND: u32 = 3;
+pub const FOAM_TILES: u32 = 7;
+pub const FOAM_HEADER: u32 = 8;
+/// Residual foam's albedo, as a fraction of fresh foam's (the renderer's
+/// `ocean::RESIDUAL_FOAM`).
+pub const RESIDUAL_FOAM: f32 = 0.7;
 /// The most steps a ray is marched over the waves (`ocean_march`); the renderer's march has no
 /// limit, and takes far fewer.
 pub const OCEAN_STEPS: u32 = 1024;
@@ -182,8 +222,9 @@ pub const MAT_CHECKER: u32 = 6;
 /// A material the kernels have no code for: the host shades the vertex (`PATH_HOST`).
 pub const MAT_HOST: u32 = 7;
 /// The sea's material (the renderer's `ocean::PhysicalOcean`, opaque water): what the water
-/// body sends back (`c0`), the ripples' mean square slope (`p.y`), and the planet's radius
-/// for the local vertical (`p.x`; 0 for a flat sea).
+/// body sends back (`c0`), what bubbles under a breaking crest add to that (`c1`), the
+/// ripples' mean square slope (`p.y`), and the planet's radius for the local vertical (`p.x`;
+/// 0 for a flat sea). Its foam, if any, is with the sea's record (`OCEAN_FOAM`, `sea_foam`).
 pub const MAT_WATER: u32 = 8;
 /// No surface's: a vertex in a medium (`MEDIUM_HIT`), which scatters by its phase function.
 pub const MAT_MEDIUM: u32 = 9;
@@ -265,13 +306,28 @@ pub struct Scene<'a> {
     pub materials: &'a [Material],
     pub lights: &'a [Light],
     pub tables: &'a [f32],
+    /// On the CPU, the shapes the kernels have no test for (`PRIM_HOST`), for shadow rays.
+    #[cfg(not(target_arch = "spirv"))]
+    pub host: Option<&'a dyn HostShapes>,
+}
+
+/// The host's shapes (`PRIM_HOST`), as a shadow ray asks after them: whether any lies along
+/// the ray from `ro` in unit direction `rd` before `tmax`. A call to the host from the midst
+/// of a kernel, so the CPU's alone; a device that can't make it refuses such scenes.
+#[cfg(not(target_arch = "spirv"))]
+pub trait HostShapes: Sync {
+    fn occluded(&self, ro: Vec3, rd: Vec3, tmax: f32) -> bool;
 }
 
 /// How much work traversal does, counted on the CPU build only (the shader has nowhere to
 /// keep it): box tests and primitive tests since `stats::take` was last called on this thread.
 /// They are the same on the GPU, which runs this code; `gpu::tests::measure_traversal` reports
 /// them per ray.
-#[cfg(not(target_arch = "spirv"))]
+///
+/// Behind the `stats` feature, which the renderer's tests turn on: a render on the CPU runs
+/// this code too, and a counter in thread-local storage at every box was a tenth of its
+/// traversal.
+#[cfg(all(not(target_arch = "spirv"), feature = "stats"))]
 pub mod stats {
     use std::cell::Cell;
     thread_local! {
@@ -297,13 +353,13 @@ pub mod stats {
 
 #[inline(always)]
 fn count_box() {
-    #[cfg(not(target_arch = "spirv"))]
+    #[cfg(all(not(target_arch = "spirv"), feature = "stats"))]
     stats::BOXES.with(|c| c.set(c.get() + 1));
 }
 
 #[inline(always)]
 fn count_prim() {
-    #[cfg(not(target_arch = "spirv"))]
+    #[cfg(all(not(target_arch = "spirv"), feature = "stats"))]
     stats::PRIMS.with(|c| c.set(c.get() + 1));
 }
 
@@ -331,6 +387,87 @@ pub fn path_seed(index: u32, pass: u32, seed: u32) -> u32 {
 fn rand(state: &mut u32) -> f32 {
     *state = pcg(*state);
     (*state >> 8) as f32 * (1.0 / 16777216.0)
+}
+
+// ---- Sobol' points for a vertex's sampling decisions (the renderer's `sobol`: its
+// documentation has the sources). A path's other numbers stay the hash's. ----
+
+/// The bits of an index.
+pub const SOBOL_BITS: usize = 32;
+
+/// Direction numbers v_1 to v_32 of the first four dimensions, a dimension a component: the
+/// first's 2^-k; then, by Joe and Kuo's degree s, polynomial a and initial values m,
+/// (1, 0, [1]), (2, 1, [1, 3]) and (3, 1, [1, 3, 1]). Laid out in `tables` by the host
+/// (`Params::media.w`, four a bit, as bits): a constant array indexed in a loop is copied
+/// into each call's local memory by the WGSL's translators, 512 bytes a decision, which made
+/// a path's shading half as slow again on the GPU.
+pub const fn sobol_directions() -> [[u32; 4]; SOBOL_BITS] {
+    let mut v = [[0u32; 4]; SOBOL_BITS];
+    v[0] = [0x8000_0000, 0x8000_0000, 0x8000_0000, 0x8000_0000];
+    v[1] = [0x4000_0000, 0xc000_0000, 0xc000_0000, 0xc000_0000];
+    v[2] = [0x2000_0000, 0xa000_0000, 0x6000_0000, 0x2000_0000];
+    let mut k = 3;
+    while k < SOBOL_BITS {
+        v[k] = [
+            v[k - 1][0] >> 1,
+            v[k - 1][1] ^ (v[k - 1][1] >> 1),
+            v[k - 2][2] ^ (v[k - 2][2] >> 2) ^ v[k - 1][2],
+            v[k - 3][3] ^ (v[k - 3][3] >> 3) ^ v[k - 2][3],
+        ];
+        k += 1;
+    }
+    v
+}
+
+/// The `index`-th Sobol' point's first four coordinates, unscrambled: the XOR of each
+/// dimension's direction numbers for the set bits of `index`, as the renderer's
+/// `sobol::sobol` (whose tables are these by the byte).
+pub fn sobol4(tables: &[f32], directions: u32, index: u32) -> UVec4 {
+    let mut x = UVec4::ZERO;
+    let mut k = 0;
+    while k < SOBOL_BITS as u32 {
+        if (index >> k) & 1 != 0 {
+            let v = directions + 4 * k;
+            x ^= UVec4::new(at(tables, v).to_bits(), at(tables, v + 1).to_bits(), at(tables, v + 2).to_bits(), at(tables, v + 3).to_bits());
+        }
+        k += 1;
+    }
+    x
+}
+
+/// Nested uniform scrambling of `x` by `seed` (the renderer's `sobol::owen_scramble`).
+pub fn owen_scramble(x: u32, seed: u32) -> u32 {
+    let mut v = x.reverse_bits();
+    v ^= v.wrapping_mul(0x3d20adea);
+    v = v.wrapping_add(seed);
+    v = v.wrapping_mul((seed >> 16) | 1);
+    v ^= v.wrapping_mul(0x05526c56);
+    v ^= v.wrapping_mul(0x53a22864);
+    v.reverse_bits()
+}
+
+/// Vertices of a path whose decisions draw Sobol' points; deeper ones the hash's numbers, as
+/// the renderer's samples do beyond `sobol::DIMENSIONS`: there stratification gains little.
+pub const SOBOL_DEPTH: u32 = 6;
+/// A vertex's groups of four dimensions: the next direction (and which lobe), a point on an
+/// area light (and which light), and a direction to the sky with a point of the sun's disc.
+pub const SOBOL_SCATTER: u32 = 0;
+pub const SOBOL_LIGHT: u32 = 1;
+pub const SOBOL_SKY: u32 = 2;
+
+/// Four numbers in [0, 1) for a decision (`SOBOL_*`) at a path's vertex `depth`: for sample
+/// `sample` of a pixel, point `sample` of a four-dimensional Sobol' sequence, Owen-scrambled
+/// and shuffled by a seed of the pixel's and the decision's (Burley's padding, as the
+/// renderer's `sobol::sample`), so a pixel's samples are stratified in each decision and
+/// decisions are independent of each other. Deep in a path, the hash's numbers.
+pub fn decide(s: &Scene, pixel: u32, sample: u32, depth: u32, which: u32, rng: &mut u32) -> Vec4 {
+    if depth >= SOBOL_DEPTH {
+        return Vec4::new(rand(rng), rand(rng), rand(rng), rand(rng));
+    }
+    let h = pcg(pcg(pixel ^ s.params.seed.x.wrapping_mul(0x9e3779b9)) ^ (depth * 3 + which + 1).wrapping_mul(0x85eb_ca6b));
+    let x = sobol4(s.tables, s.params.media.w, owen_scramble(sample, h));
+    let scrambled = UVec4::new(owen_scramble(x.x, pcg(h ^ 1)), owen_scramble(x.y, pcg(h ^ 2)), owen_scramble(x.z, pcg(h ^ 3)), owen_scramble(x.w, pcg(h ^ 4)));
+    Vec4::new((scrambled.x >> 8) as f32, (scrambled.y >> 8) as f32, (scrambled.z >> 8) as f32, (scrambled.w >> 8) as f32) * (1.0 / 16777216.0)
 }
 
 fn fract(x: f32) -> f32 {
@@ -459,19 +596,23 @@ fn intersect_prim(s: &Scene, i: u32, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32) -
             return Vec4::ZERO;
         }
         Vec4::new(t, 0.0, 0.0, 1.0)
-    } else {
+    } else if kind == PRIM_OCEAN {
         // The sea, from where the ray's range begins (as `Geometry::intersects_beyond`).
         let t = tmin + ocean_hit(s, ro + rd * tmin, rd);
         if t <= tmin || t >= tmax {
             return Vec4::ZERO;
         }
         Vec4::new(t, 0.0, 0.0, 1.0)
+    } else {
+        // A shape the host intersects (`PRIM_HOST`): never by this.
+        Vec4::ZERO
     }
 }
 
 // ---- The sea: the renderer's `ocean::Ocean`, its shape. A sphere (the planet) or a plane,
 // displaced by waves near a centre and smooth beyond, with the waves' slopes in its normal
-// everywhere. The waves are tiles of heights and slopes in `tables`; a planet's distances are
+// everywhere; the waves' crests sharpened by the choppy displacement, which moves the
+// surface sideways: a point's height is its source's on the undisplaced grid (`wave_source`). The waves are tiles of heights and slopes in `tables`; a planet's distances are
 // kept in the forms `excess` and `sphere_roots` give, as the air's are. ----
 
 struct Ocean {
@@ -483,6 +624,12 @@ struct Ocean {
     max_slope: f32,
     tiles: u32,
     displaced: u32,
+    lambda: f32,
+    /// The planet's centre, and |c|² - r² (`excess`'s k for sea level).
+    planet: Vec3,
+    k: f32,
+    /// The render's origin in the world, along x and z: where the waves' tiles are laid.
+    shift: Vec2,
 }
 
 fn load_ocean(s: &Scene) -> Ocean {
@@ -496,59 +643,127 @@ fn load_ocean(s: &Scene) -> Ocean {
         max_slope: at(s.tables, base + OCEAN_MAX + 1),
         tiles: at(s.tables, base + OCEAN_TILES) as u32,
         displaced: at(s.tables, base + OCEAN_TILES + 1) as u32,
+        lambda: at(s.tables, base + OCEAN_LAMBDA),
+        planet: tv3(s, base + OCEAN_PLANET),
+        k: at(s.tables, base + OCEAN_EXCESS),
+        shift: Vec2::new(s.params.origin.x, s.params.origin.z),
     }
 }
 
-/// The planet's centre, for `excess` (whose k, |c|² - r², is 0 for it).
-fn ocean_centre(o: &Ocean) -> Vec3 {
-    Vec3::new(0.0, -o.radius, 0.0)
+/// Where (x, z) lies in a tile of `n` texels a side over `size` metres, which repeats: the
+/// four texels around it (at (0, 0), (1, 0), (0, 1) and (1, 1)) and how far it is between them.
+fn tile_cell(size: f32, n: f32, x: f32, z: f32) -> (UVec4, Vec2) {
+    let (u, v) = (x / size * n, z / size * n);
+    let (u0, v0) = (u.floor(), v.floor());
+    // (A tile is a power of two across, which the host sees to (`Ocean::export`): wrapped by
+    // a mask, where six remainders were six divisions a lookup, and a march makes hundreds.)
+    let n = n as i32;
+    let i0 = u0 as i32 & (n - 1);
+    let j0 = v0 as i32 & (n - 1);
+    let i1 = (i0 + 1) & (n - 1);
+    let j1 = (j0 + 1) & (n - 1);
+    (UVec4::new((j0 * n + i0) as u32, (j0 * n + i1) as u32, (j1 * n + i0) as u32, (j1 * n + i1) as u32), Vec2::new(u - u0, v - v0))
 }
 
 /// `WaveTile::at`: a tile's height and slopes at (x, z), bilinear, the tile repeating.
 fn wave_tile(s: &Scene, o: &Ocean, k: u32, x: f32, z: f32) -> Vec3 {
-    let record = o.base + OCEAN_HEADER + 3 * k;
-    let size = at(s.tables, record);
-    let n = at(s.tables, record + 1);
+    let record = o.base + OCEAN_HEADER + OCEAN_TILE * k;
     let texels = o.base + at(s.tables, record + 2).to_bits();
-    let (u, v) = (x / size * n, z / size * n);
-    let (u0, v0) = (u.floor(), v.floor());
-    let (fu, fv) = (u - u0, v - v0);
-    let n = n as i32;
-    let i0 = ((u0 as i32 % n) + n) % n;
-    let j0 = ((v0 as i32 % n) + n) % n;
-    let i1 = (i0 + 1) % n;
-    let j1 = (j0 + 1) % n;
-    let t00 = tv3(s, texels + 3 * (j0 * n + i0) as u32);
-    let t10 = tv3(s, texels + 3 * (j0 * n + i1) as u32);
-    let t01 = tv3(s, texels + 3 * (j1 * n + i0) as u32);
-    let t11 = tv3(s, texels + 3 * (j1 * n + i1) as u32);
-    (t00 * (1.0 - fu) + t10 * fu) * (1.0 - fv) + (t01 * (1.0 - fu) + t11 * fu) * fv
+    let (c, f) = tile_cell(at(s.tables, record), at(s.tables, record + 1), x, z);
+    let t00 = tv3(s, texels + 3 * c.x);
+    let t10 = tv3(s, texels + 3 * c.y);
+    let t01 = tv3(s, texels + 3 * c.z);
+    let t11 = tv3(s, texels + 3 * c.w);
+    (t00 * (1.0 - f.x) + t10 * f.x) * (1.0 - f.y) + (t01 * (1.0 - f.x) + t11 * f.x) * f.y
 }
 
-/// `WaveField::at`: the height of the tiles that displace, and the slopes of all.
-fn waves(s: &Scene, o: &Ocean, x: f32, z: f32) -> Vec3 {
-    let mut w = Vec3::ZERO;
+/// `WaveTile::chop_at`: a tile's choppy displacement (D_x, D_z) at (x, z) of the undisplaced
+/// grid, and its gradient (∂D_x/∂x, ∂D_z/∂z, ∂D_x/∂z).
+fn chop_tile(s: &Scene, o: &Ocean, k: u32, x: f32, z: f32) -> (Vec2, Vec3) {
+    let record = o.base + OCEAN_HEADER + OCEAN_TILE * k;
+    let texels = o.base + at(s.tables, record + 3).to_bits();
+    let (c, f) = tile_cell(at(s.tables, record), at(s.tables, record + 1), x, z);
+    let w = Vec4::new((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+    let (mut d, mut j) = (Vec2::ZERO, Vec3::ZERO);
+    let mut corner = 0;
+    while corner < 4 {
+        let (t, weight) = if corner == 0 { (c.x, w.x) } else if corner == 1 { (c.y, w.y) } else if corner == 2 { (c.z, w.z) } else { (c.w, w.w) };
+        let i = texels + 5 * t;
+        d += Vec2::new(at(s.tables, i), at(s.tables, i + 1)) * weight;
+        j += tv3(s, i + 2) * weight;
+        corner += 1;
+    }
+    (d, j)
+}
+
+/// `WaveField::source` and `squeeze`: where on the undisplaced grid the point now at (x, z)
+/// came from, the choppy map p + λD(p) inverted by three rounds of fixed-point iteration; and
+/// with `gradient`, the sum of the displacement's gradient there (a fourth round's reading).
+fn wave_source(s: &Scene, o: &Ocean, x: f32, z: f32, gradient: bool) -> (Vec2, Vec3) {
+    let here = Vec2::new(x, z);
+    let mut p = here;
+    let mut jacobian = Vec3::ZERO;
+    if o.lambda != 0.0 {
+        let rounds = if gradient { 4 } else { 3 };
+        let mut round = 0;
+        while round < rounds {
+            let (mut d, mut j) = (Vec2::ZERO, Vec3::ZERO);
+            let mut k = 0;
+            while k < o.displaced {
+                let (dk, jk) = chop_tile(s, o, k, p.x, p.y);
+                d += dk;
+                j += jk;
+                k += 1;
+            }
+            if round < 3 {
+                p = here - d * o.lambda;
+            } else {
+                jacobian = j;
+            }
+            round += 1;
+        }
+    }
+    (p, jacobian)
+}
+
+/// `WaveField::at`: the height of the tiles that displace, and the slopes of all; the choppy
+/// surface's, whose slopes (asked for with `slopes`; a march needs only heights) are the
+/// grid's through the inverse of the map's Jacobian.
+fn waves(s: &Scene, o: &Ocean, x: f32, z: f32, slopes: bool) -> Vec3 {
+    let (p, j) = wave_source(s, o, x, z, slopes);
+    let (mut w, mut ripples) = (Vec3::ZERO, Vec3::ZERO);
     let mut k = 0;
     while k < o.tiles {
-        let v = wave_tile(s, o, k, x, z);
-        w += if k < o.displaced { v } else { Vec3::new(0.0, v.y, v.z) };
+        let q = if k < o.displaced { p } else { Vec2::new(x, z) };
+        let v = wave_tile(s, o, k, q.x, q.y);
+        if k < o.displaced {
+            w += v;
+        } else {
+            ripples += Vec3::new(0.0, v.y, v.z);
+        }
         k += 1;
     }
-    w
+    if slopes && o.lambda != 0.0 {
+        // ∇_x h = M⁻¹ ∇_p h for the symmetric M = I + λ∇D.
+        let (a, d, b) = (1.0 + o.lambda * j.x, 1.0 + o.lambda * j.y, o.lambda * j.z);
+        let det = (a * d - b * b).max(OCEAN_MIN_JACOBIAN);
+        w = Vec3::new(w.x, (d * w.y - b * w.z) / det, (a * w.z - b * w.y) / det);
+    }
+    w + ripples
 }
 
 /// Height above the mean surface.
 fn ocean_altitude(o: &Ocean, p: Vec3) -> f32 {
     if o.radius > 0.0 {
-        let c = ocean_centre(o);
-        excess(p, c, 0.0) / ((p - c).length() + o.radius)
+        excess(p, o.planet, o.k) / ((p - o.planet).length() + o.radius)
     } else {
-        p.y
+        // (A flat sea's level is in its centre's y.)
+        p.y - o.planet.y
     }
 }
 
 fn ocean_up(o: &Ocean, p: Vec3) -> Vec3 {
-    if o.radius > 0.0 { (p - ocean_centre(o)).normalize() } else { Vec3::Y }
+    if o.radius > 0.0 { (p - o.planet).normalize() } else { Vec3::Y }
 }
 
 /// `Ocean::above`: height above the displaced surface.
@@ -559,19 +774,20 @@ fn ocean_above(s: &Scene, o: &Ocean, p: Vec3) -> f32 {
     if a <= 0.0 {
         return altitude;
     }
-    altitude - a * waves(s, o, p.x, p.z).x
+    altitude - a * waves(s, o, p.x + o.shift.x, p.z + o.shift.y, false).x
 }
 
 /// `Ocean::below`: the stretch of the ray below altitude `level` (z is 0 if there is none).
 fn ocean_below(o: &Ocean, ro: Vec3, rd: Vec3, level: f32) -> Vec3 {
     if o.radius > 0.0 {
-        // |c|² - (r + level)², with |c| = r.
-        let k = -(2.0 * o.radius * level + level * level);
-        return match sphere_roots(ro, rd, ocean_centre(o), k) {
+        // |c|² - (r + level)².
+        let k = o.k - (2.0 * o.radius * level + level * level);
+        return match sphere_roots(ro, rd, o.planet, k) {
             Some((a, b)) => Vec3::new(a, b, 1.0),
             None => Vec3::ZERO,
         };
     }
+    let level = level + o.planet.y;
     let t = (level - ro.y) / rd.y;
     if rd.y < 0.0 {
         Vec3::new(t, INF, 1.0)
@@ -601,37 +817,75 @@ fn ocean_detail_span(o: &Ocean, ro: Vec3, rd: Vec3) -> Vec3 {
 }
 
 /// `Ocean::march`: the first crossing of the displaced surface from t0 to t1, from above or
-/// below, stepping no further than the surface could come to meet the ray, then bisecting;
-/// negative if there is none.
+/// below, stepping no further than the surface could come to meet the ray, then placing the
+/// crossing between the step's ends; negative if there is none.
 fn ocean_march(s: &Scene, o: &Ocean, ro: Vec3, rd: Vec3, t0: f32, t1: f32) -> f32 {
     let fade_rate = 1.5 / (0.5 * o.detail) * o.max_height;
-    let mut t = t0 + 1e-4;
-    let start = ocean_above(s, o, ro + rd * t);
-    let side = if start < 0.0 { -1.0 } else { 1.0 };
-    let mut f = start.abs();
+    // One loop, and one place the surface is asked for (each is the choppy map inverted and
+    // the tiles read, and rust-gpu makes a copy of all that wherever it is called): `x` is
+    // where to ask next, first for the side the ray starts on, then a step at a time, and
+    // once a step has crossed, between the two sides of the crossing.
+    let mut x = t0 + 1e-4;
+    let (mut t, mut f, mut side) = (x, 0.0, 1.0);
+    // The crossing's bracket, and how many times it has been narrowed (0 while marching).
+    let (mut lo, mut flo, mut hi, mut fhi) = (0.0, 0.0, 0.0, 0.0);
+    let mut narrowed = 0;
+    let mut started = false;
     let mut steps = 0;
-    while t < t1 && steps < OCEAN_STEPS {
-        let up = ocean_up(o, ro + rd * t);
-        let along = rd.dot(up);
-        let descent = (-side * along).max(0.0);
-        let horizontal = (1.0 - along * along).max(0.0).sqrt();
-        let rate = descent + horizontal * (o.max_slope + fade_rate) + 1e-6;
-        let step = (f / rate).max(0.01).min(t1 - t + 0.01);
-        let next = t + step;
-        let g = side * ocean_above(s, o, ro + rd * next);
-        if g <= 0.0 {
-            let (mut lo, mut hi) = (t, next);
-            let mut k = 0;
-            while k < 20 {
-                let mid = 0.5 * (lo + hi);
-                if side * ocean_above(s, o, ro + rd * mid) > 0.0 { lo = mid } else { hi = mid }
-                k += 1;
+    while steps < OCEAN_STEPS {
+        let above = ocean_above(s, o, ro + rd * x);
+        if !started {
+            started = true;
+            side = if above < 0.0 { -1.0 } else { 1.0 };
+            f = above.abs();
+        } else if narrowed == 0 {
+            let g = side * above;
+            if g <= 0.0 {
+                // Crossed between t and x.
+                lo = t;
+                flo = f;
+                hi = x;
+                fhi = g;
+                narrowed = 1;
+            } else {
+                t = x;
+                f = g;
+                steps += 1;
             }
-            return hi;
+        } else {
+            // By false position, the end that stays put weighing half as much each time
+            // (the Illinois rule, so neither end can stall): the surface is nearly straight
+            // across one step, and four askings place the crossing as twenty halvings did.
+            let g = side * above;
+            if g > 0.0 {
+                lo = x;
+                flo = g;
+                fhi *= 0.5;
+            } else {
+                hi = x;
+                fhi = g;
+                flo *= 0.5;
+            }
+            narrowed += 1;
         }
-        t = next;
-        f = g;
-        steps += 1;
+        if narrowed == 0 {
+            if t >= t1 {
+                break;
+            }
+            let up = ocean_up(o, ro + rd * t);
+            let along = rd.dot(up);
+            let descent = (-side * along).max(0.0);
+            let horizontal = (1.0 - along * along).max(0.0).sqrt();
+            let rate = descent + horizontal * (o.max_slope + fade_rate) + 1e-6;
+            let step = (f / rate).max(0.01).min(t1 - t + 0.01);
+            x = t + step;
+        } else {
+            let span = flo - fhi;
+            x = if span > 0.0 { (lo + (hi - lo) * flo / span).clamp(lo, hi) } else { hi };
+            if narrowed > 4 {
+                return x;
+            }
+        }
     }
     -1.0
 }
@@ -675,6 +929,49 @@ fn ocean_hit(s: &Scene, ro: Vec3, rd: Vec3) -> f32 {
     }
 }
 
+/// The sea's foam at a point of it (the foam of `PhysicalOcean::scatter`): where foam covers
+/// the point (by one random number, over the fraction of it that foam covers), its albedo,
+/// with w 1; else in x how much the bubbles under a breaking crest pale the water, with w 0.
+fn sea_foam(s: &Scene, x: f32, z: f32, rng: &mut u32) -> Vec4 {
+    let o = load_ocean(s);
+    let (x, z) = (x + o.shift.x, z + o.shift.y);
+    let place = at(s.tables, o.base + OCEAN_FOAM).to_bits();
+    if place == 0 {
+        return Vec4::ZERO;
+    }
+    let base = o.base + place;
+    // `Foam::sample`: foam rides the water it formed in, on the undisplaced sea.
+    let (p, _) = wave_source(s, &o, x, z, false);
+    let tiles = at(s.tables, base + FOAM_TILES) as u32;
+    let (mut clear_fresh, mut clear_residual) = (1.0, 1.0);
+    let mut k = 0;
+    while k < tiles {
+        let record = base + FOAM_HEADER + 3 * k;
+        let texels = base + at(s.tables, record + 2).to_bits();
+        let (c, f) = tile_cell(at(s.tables, record + 1), at(s.tables, record), p.x, p.y);
+        let w = Vec4::new((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+        let fresh = at(s.tables, texels + 2 * c.x) * w.x + at(s.tables, texels + 2 * c.y) * w.y + at(s.tables, texels + 2 * c.z) * w.z + at(s.tables, texels + 2 * c.w) * w.w;
+        let residual = at(s.tables, texels + 2 * c.x + 1) * w.x + at(s.tables, texels + 2 * c.y + 1) * w.y + at(s.tables, texels + 2 * c.z + 1) * w.z + at(s.tables, texels + 2 * c.w + 1) * w.w;
+        clear_fresh *= 1.0 - fresh;
+        clear_residual *= 1.0 - residual;
+        k += 1;
+    }
+    let (fresh, residual) = (1.0 - clear_fresh, 1.0 - clear_residual);
+    let pattern = shared::sea::FoamPattern {
+        wind: (at(s.tables, base + FOAM_WIND), at(s.tables, base + FOAM_WIND + 1)), speed: at(s.tables, base + FOAM_WIND + 2),
+        lace_sd: at(s.tables, base + FOAM_WIND + 3), perm: base + FOAM_HEADER + 3 * tiles,
+    };
+    let tables = FloatTables(s.tables);
+    let solid = pattern.ragged(&tables, fresh, (p.x, p.y));
+    let lace = pattern.lace(&tables, residual, (p.x, p.y));
+    let covered = solid.max(lace);
+    if covered > 0.0 && rand(rng) < covered {
+        let thin = if solid >= lace { 1.0 } else { RESIDUAL_FOAM };
+        return (tv3(s, base) * thin).extend(1.0);
+    }
+    Vec4::new(fresh.max(0.5 * residual), 0.0, 0.0, 0.0)
+}
+
 /// `ocean_normal`, for the renderer's tests.
 #[cfg(not(target_arch = "spirv"))]
 pub fn sea_normal(s: &Scene, p: Vec3) -> Vec3 {
@@ -687,7 +984,7 @@ fn ocean_normal(s: &Scene, p: Vec3) -> Vec3 {
     let up = ocean_up(&o, p);
     let east = (Vec3::X - up * up.x).normalize();
     let north = east.cross(up);
-    let w = waves(s, &o, p.x, p.z);
+    let w = waves(s, &o, p.x + o.shift.x, p.z + o.shift.y, true);
     (up - east * w.y - north * w.z).normalize()
 }
 
@@ -711,6 +1008,9 @@ fn normals(s: &Scene, i: u32, ro: Vec3, rd: Vec3, h: Vec4) -> (Vec3, Vec3) {
     } else if kind == PRIM_OCEAN {
         let n = ocean_normal(s, ro + rd * h.x);
         (n, n)
+    } else if kind == PRIM_HOST {
+        // The host's to find, with the rest of its vertex.
+        (-rd, -rd)
     } else {
         // A plane faces each ray, as the renderer's `Plane`.
         let n = if rd.y > 0.0 { -Vec3::Y } else { Vec3::Y };
@@ -721,8 +1021,15 @@ fn normals(s: &Scene, i: u32, ro: Vec3, rd: Vec3, h: Vec4) -> (Vec3, Vec3) {
 /// The interval (near, far) narrowed by one axis's slab, entered and left at p and q (in
 /// either order); unchanged if either is NaN.
 fn slab(p: f32, q: f32, near: f32, far: f32) -> (f32, f32) {
+    // (By comparisons, not `min` and `max`: those allow for a NaN, at several instructions
+    // each on a CPU, and here there is none. They were a quarter of a mesh's traversal.)
     #[allow(clippy::eq_op)]
-    if p == p && q == q { (near.max(p.min(q)), far.min(p.max(q))) } else { (near, far) }
+    if p == p && q == q {
+        let (lo, hi) = if p < q { (p, q) } else { (q, p) };
+        (if lo > near { lo } else { near }, if hi < far { hi } else { far })
+    } else {
+        (near, far)
+    }
 }
 
 /// Where the ray enters the box, if it does before `tmax`; otherwise `INF`.
@@ -743,7 +1050,7 @@ fn box_entry(bmin: Vec3, bmax: Vec3, ro: Vec3, inv: Vec3, tmax: f32) -> f32 {
 /// primitive (`NONE` for none) and (t, b1, b2, 1) as `intersect_prim` gives them. Its normals
 /// are `normals`' to find, where it is shaded.
 fn trace(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: bool) -> (u32, Vec4) {
-    #[cfg(not(target_arch = "spirv"))]
+    #[cfg(all(not(target_arch = "spirv"), feature = "stats"))]
     if stats::TIMED.with(|t| t.get()) {
         let start = std::time::Instant::now();
         let found = traverse(s, ro, rd, tmin, tmax, any_hit);
@@ -837,6 +1144,12 @@ pub fn nearest(s: &Scene, ro: Vec3, rd: Vec3, tmin: f32, tmax: f32, any_hit: boo
 }
 
 fn occluded(s: &Scene, ro: Vec3, rd: Vec3, tmax: f32) -> bool {
+    #[cfg(not(target_arch = "spirv"))]
+    if let Some(host) = s.host {
+        if host.occluded(ro, rd, tmax) {
+            return true;
+        }
+    }
     trace(s, ro, rd, 0.0, tmax, true).0 != NONE
 }
 
@@ -894,7 +1207,17 @@ fn env_pdf(s: &Scene, d: Vec3) -> f32 {
     let v = d.y.clamp(-1.0, 1.0).acos() / PI;
     let x = ((u * w as f32) as u32).min(w - 1);
     let y = ((v * h as f32) as u32).min(h - 1);
-    let sin_theta = (v * PI).sin();
+    // sin θ from the direction itself, not back through the arccosine: a device's inverse
+    // trigonometry is its own (Mesa's is a polynomial good to a part in 10^5), and through
+    // this density it was in every pixel a sky lights. It still chooses the texel, which only
+    // a direction on a texel's edge can tell.
+    env_density(s, x, y, (1.0 - d.y * d.y).max(0.0).sqrt())
+}
+
+/// The density with which the sky's table gives a direction in its texel (x, y), sin θ from
+/// the zenith.
+fn env_density(s: &Scene, x: u32, y: u32, sin_theta: f32) -> f32 {
+    let (w, h) = (s.params.offs2.y, s.params.offs2.z);
     if sin_theta <= 0.0 {
         return 0.0;
     }
@@ -904,8 +1227,6 @@ fn env_pdf(s: &Scene, d: Vec3) -> f32 {
     let p_col = (at(s.tables, cond + x + 1) - at(s.tables, cond + x)) * w as f32;
     p_row * p_col / (2.0 * PI * PI * sin_theta)
 }
-
-/// A direction from the sky, in proportion to its brightness, and its density.
 fn env_sample(s: &Scene, u1: f32, u2: f32) -> Vec4 {
     let (w, h) = (s.params.offs2.y, s.params.offs2.z);
     // A texel by the distributions, then a point uniformly within it (from what is left of
@@ -923,7 +1244,8 @@ fn env_sample(s: &Scene, u1: f32, u2: f32) -> Vec4 {
     let phi = (u - 0.5) * 2.0 * PI;
     let theta = v * PI;
     let d = Vec3::new(theta.sin() * phi.cos(), theta.cos(), theta.sin() * phi.sin());
-    d.extend(env_pdf(s, d))
+    // (Its density by the texel it was drawn in, not found again from the direction.)
+    d.extend(env_density(s, x, y, (1.0 - d.y * d.y).max(0.0).sqrt()))
 }
 
 // ---- The atmosphere, per ray, as the renderer's `skysphere` (in f32). ----
@@ -950,6 +1272,11 @@ struct Air {
     multiple: u32,
     lut: u32,
     moon: u32,
+}
+
+/// Where a point of the render's frame is in the world's: for what is tabulated there.
+fn world(s: &Scene, p: Vec3) -> Vec3 {
+    p + s.params.origin.xyz()
 }
 
 fn tv3(s: &Scene, i: u32) -> Vec3 {
@@ -1165,7 +1492,17 @@ fn scattering(s: &Scene, a: &Air, o: Vec3, d: Vec3) -> (Vec3, Vec3, Vec3) {
 }
 
 /// One of `SkyViewLUT`'s slices, bilinear (`lookup_slice`).
-fn lut_slice(s: &Scene, a: &Air, slice: u32, d: Vec3) -> (Vec3, Vec3, Vec3) {
+fn lut_slice(s: &Scene, a: &Air, slice: u32, place: (UVec4, Vec4)) -> (Vec3, Vec3, Vec3) {
+    let base = a.lut + slice * LUT_WIDTH * LUT_HEIGHT * 9;
+    let (t, w) = (place.0 + UVec4::splat(base), place.1);
+    // Rayleigh, Mie and multiple scattering, each bilinear.
+    (lut_texels(s, t, w, 0), lut_texels(s, t, w, 3), lut_texels(s, t, w, 6))
+}
+
+/// Where a direction is in a slice of the table: its four texels, from the slice's start, and
+/// their weights. The same in every slice, so found once for the two a lookup reads (its
+/// arcsine and arctangent were a tenth of a simple scene's render when found for each).
+fn lut_place(d: Vec3) -> (UVec4, Vec4) {
     let l = d.y.clamp(0.0, 1.0).asin();
     let v = (l / (PI / 2.0)).sqrt() * (LUT_HEIGHT - 1) as f32;
     let u = fract(d.z.atan2(d.x) / (2.0 * PI)) * LUT_WIDTH as f32;
@@ -1173,14 +1510,10 @@ fn lut_slice(s: &Scene, a: &Air, slice: u32, d: Vec3) -> (Vec3, Vec3, Vec3) {
     let y0 = (v.floor() as u32).min(LUT_HEIGHT - 2);
     let (x1, y1) = ((x0 + 1) % LUT_WIDTH, y0 + 1);
     let (fx, fy) = (u - u.floor(), v - y0 as f32);
-    let base = a.lut + slice * LUT_WIDTH * LUT_HEIGHT * 9;
-    let t = UVec4::new(base + 9 * (y0 * LUT_WIDTH + x0), base + 9 * (y0 * LUT_WIDTH + x1), base + 9 * (y1 * LUT_WIDTH + x0), base + 9 * (y1 * LUT_WIDTH + x1));
-    let w = Vec4::new((1.0 - fx) * (1.0 - fy), fx * (1.0 - fy), (1.0 - fx) * fy, fx * fy);
-    // Rayleigh, Mie and multiple scattering, each bilinear.
-    (lut_texels(s, t, w, 0), lut_texels(s, t, w, 3), lut_texels(s, t, w, 6))
+    let t = UVec4::new(9 * (y0 * LUT_WIDTH + x0), 9 * (y0 * LUT_WIDTH + x1), 9 * (y1 * LUT_WIDTH + x0), 9 * (y1 * LUT_WIDTH + x1));
+    (t, Vec4::new((1.0 - fx) * (1.0 - fy), fx * (1.0 - fy), (1.0 - fx) * fy, fx * fy))
 }
 
-/// The four texels `t` (offsets) weighted by `w`, at `c` within each.
 fn lut_texels(s: &Scene, t: UVec4, w: Vec4, c: u32) -> Vec3 {
     tv3(s, t.x + c) * w.x + tv3(s, t.y + c) * w.y + tv3(s, t.z + c) * w.z + tv3(s, t.w + c) * w.w
 }
@@ -1204,8 +1537,9 @@ fn lut_lookup(s: &Scene, a: &Air, d: Vec3, altitude: f32) -> Option<(Vec3, Vec3,
     let i = i.clamp(1, LUT_SLICES - 1);
     let (h0, h1) = (lut_altitude(s, a, i - 1), lut_altitude(s, a, i));
     let f = (aa - h0) / (h1 - h0);
-    let (r0, m0, s0) = lut_slice(s, a, i - 1, d);
-    let (r1, m1, s1) = lut_slice(s, a, i, d);
+    let place = lut_place(d);
+    let (r0, m0, s0) = lut_slice(s, a, i - 1, place);
+    let (r1, m1, s1) = lut_slice(s, a, i, place);
     Some((r0 * (1.0 - f) + r1 * f, m0 * (1.0 - f) + m1 * f, s0 * (1.0 - f) + s1 * f))
 }
 
@@ -1970,7 +2304,9 @@ pub fn power_heuristic(p: f32, q: f32) -> f32 {
     if p2 + q2 == 0.0 { 0.0 } else { p2 / (p2 + q2) }
 }
 
-fn resolve_material(s: &Scene, m_in: u32, p: Vec3) -> u32 {
+fn resolve_material(s: &Scene, m_in: u32, at_point: Vec3) -> u32 {
+    // The squares are laid out in the world, not about the camera.
+    let p = world(s, at_point);
     let mut m = m_in;
     let mut k = 0;
     while k < 4 {
@@ -2149,8 +2485,9 @@ pub struct PathState {
     pub beta: Vec4,
     /// The light gathered so far, and the rays traced.
     pub l: Vec4,
-    /// The random numbers' state, `PATH_*` flags, and the primitive its ray hits (`NONE` for
-    /// none), once `intersect` has found it.
+    /// The random numbers' state, `PATH_*` flags, the primitive its ray hits (`NONE` for
+    /// none), once `intersect` has found it, and which of its pixel's samples the path is
+    /// (for `decide`; while it waits in the host's queue, its slot, `gather_host`).
     pub state: UVec4,
     /// That hit: its distance and barycentric coordinates (`intersect_prim`).
     pub hit: Vec4,
@@ -2175,6 +2512,12 @@ pub const PATH_LIGHTS_COUNTED: u32 = 32;
 /// `LightSampling::Directional`, as the sea's glitter): an area light the ray finds counts in
 /// full.
 pub const PATH_DIRECTIONAL: u32 = 64;
+/// The sunlight at the path's next vertex in a medium is shared with a sun probe
+/// (`send_probe`), and the sun's glitter on a sea it meets with a glitter probe
+/// (`send_glitter_probe`): that vertex takes the shares in the ray's `d.w` (`pack_shares`;
+/// it holds no density then: the last vertex was a medium's, whose lights are counted by
+/// sampling them).
+pub const PATH_SUN_SHARED: u32 = 128;
 /// From this bit of the flags up, eight bits: the medium the path last scattered in, plus one
 /// (0 before it has scattered in any), which sets how its segments cross every medium
 /// (`segment_scale`).
@@ -2184,6 +2527,9 @@ pub const PATH_MEDIUM_SHIFT: u32 = 8;
 pub const PATH_SCATTERINGS_SHIFT: u32 = 16;
 /// Both.
 pub const PATH_MEDIA: u32 = 0xffff << PATH_MEDIUM_SHIFT;
+/// A walk of the path's found a density over its majorant grid's bound: its walks take the
+/// media's proven bounds from here on (`shared::media::delta_track_weighted`).
+pub const PATH_PROVEN: u32 = 1 << 24;
 /// `PathState::state.z` of a path whose ray collides in a medium before it hits anything: this
 /// plus the medium's number (and `hit.x` how far along).
 pub const MEDIUM_HIT: u32 = 0xffff_ff00;
@@ -2199,7 +2545,7 @@ impl PathState {
         let d = if live { ray.d.truncate() } else { Vec3::ZERO };
         PathState {
             o: ray.o, d: d.extend(0.0), beta: Vec4::new(1.0, 1.0, 1.0, 0.0), l: Vec4::ZERO,
-            state: UVec4::new(path_seed(index, pass, seed), if live { PATH_ACTIVE | PATH_SPECULAR } else { PATH_ADDED }, 0, 0),
+            state: UVec4::new(path_seed(index, pass, seed), if live { PATH_ACTIVE | PATH_SPECULAR } else { PATH_ADDED }, 0, pass),
             hit: Vec4::ZERO,
         }
     }
@@ -2262,10 +2608,128 @@ fn aerial_transmittance(s: &Scene, o: Vec3, d: Vec3, distance: f32) -> Vec3 {
     transmittance(&a, depth)
 }
 
+/// Samples of the air's shadow per camera ray (the renderer's `trace::CREPUSCULAR_SAMPLES`).
+pub const CREPUSCULAR_SAMPLES: u32 = 2;
+
+/// Crepuscular rays (the renderer's `SkyMaterial::shadowed_loss`): the part of the sunlight
+/// scattered once towards the camera along its ray, as far as what the ray meets, that
+/// doesn't arrive because the air there is in shadow, behind clouds or below mountains. The
+/// sky's radiance and the aerial haze (`segment`) take the air to be lit everywhere; this is
+/// taken from them. Steps of the ray are chosen in proportion to the light each scatters and a
+/// point picked in each: for each of the two samples, that point (its w 1, or 0 for no
+/// sample) and the light to take from the path if the sun can't be seen from it
+/// (`shadow_ray`, `shadowed`). Asked of a path whose ray's hit has just been found
+/// (`intersect`), since the shadow rays are traced as its own was, by the same code; none
+/// but for a camera's ray in a scene with such rays.
+pub fn crepuscular_samples(s: &Scene, found: &PathState, rng: &mut u32) -> (Vec4, Vec3, Vec4, Vec3) {
+    let none = (Vec4::ZERO, Vec3::ZERO, Vec4::ZERO, Vec3::ZERO);
+    if found.beta.w != 0.0 || s.params.offs2.w & FLAG_CREPUSCULAR == 0 {
+        return none;
+    }
+    let (o, d) = (found.o.xyz(), found.d.xyz());
+    let distance = if found.state.z == NONE { INF } else { found.hit.x };
+    if distance <= AERIAL_FROM {
+        return none;
+    }
+    let a = load_air(s, s.params.air.y);
+    let (start, end) = match view_ray_span(&a, o, d) {
+        Some((start, end)) if start < distance => (start, end.min(distance)),
+        _ => return none,
+    };
+    let mu = d.dot(a.sun);
+    let (rayleigh, mie) = (rayleigh_phase(mu), mie_phase(mu, a.g));
+    let scale = a.brightness * SKY_CALIBRATION;
+    // Each step's light (`Air::single_scattering_steps`), twice over: for the total, then to
+    // find the steps the samples fall in.
+    let mut total = 0.0;
+    let (mut u0, mut u1) = (0.0, 0.0);
+    let (mut t0, mut t1) = (Vec4::ZERO, Vec4::ZERO);
+    let (mut c0, mut c1) = (Vec3::ZERO, Vec3::ZERO);
+    let mut pass = 0;
+    while pass < 2 {
+        let mut depth = Vec3::ZERO;
+        let mut k = 0;
+        while k < SKY_STEPS {
+            let (t, step) = span_sample(&a, o, d, start, end, SKY_STEPS, k);
+            let p = o + d * t;
+            let here = depths(&a, altitude(&a, p), step);
+            depth += here * 0.5;
+            let lit = transmittance(&a, depth + sun_depths_at(s, &a, p));
+            let c = lit * (a.rayleigh * (here.x * rayleigh) + Vec3::splat(a.mie * here.y * mie)) * scale;
+            depth += here * 0.5;
+            let w = c.x + c.y + c.z;
+            if pass == 0 {
+                total += w;
+            } else if w > 0.0 {
+                // (The first step that takes a sample's number below zero is its own.)
+                if u0 >= 0.0 {
+                    u0 -= w;
+                    if u0 < 0.0 {
+                        t0 = Vec4::new(t, step, w, 0.0);
+                        c0 = c;
+                    }
+                }
+                if u1 >= 0.0 {
+                    u1 -= w;
+                    if u1 < 0.0 {
+                        t1 = Vec4::new(t, step, w, 0.0);
+                        c1 = c;
+                    }
+                }
+            }
+            k += 1;
+        }
+        if total <= 0.0 {
+            return none;
+        }
+        u0 = rand(rng) * total;
+        u1 = rand(rng) * total;
+        pass += 1;
+    }
+    let beta = found.beta.xyz();
+    let share = total / CREPUSCULAR_SAMPLES as f32;
+    let (mut a0, mut a1) = (Vec4::ZERO, Vec4::ZERO);
+    if t0.z > 0.0 {
+        a0 = (o + d * (t0.x + (rand(rng) - 0.5) * t0.y)).extend(1.0);
+        c0 *= beta * (share / t0.z);
+    }
+    if t1.z > 0.0 {
+        a1 = (o + d * (t1.x + (rand(rng) - 0.5) * t1.y)).extend(1.0);
+        c1 *= beta * (share / t1.z);
+    }
+    (a0, c0, a1, c1)
+}
+
+/// The ray from a crepuscular sample's point towards the sun, as a path's (the camera path
+/// `found`, whose random numbers it draws on), to be traced as one (`intersect`).
+pub fn shadow_ray(s: &Scene, found: &PathState, from: Vec4) -> PathState {
+    let mut ray = *found;
+    ray.o = from.xyz().extend(found.o.w);
+    ray.d = s.params.sun_dir.xyz().extend(0.0);
+    ray.state.z = 0;
+    ray.hit = Vec4::ZERO;
+    ray
+}
+
+/// The camera path after a crepuscular sample's ray has been traced to `hit`: without the
+/// sample's light if anything was in the sun's way, a surface or a medium's collision (one
+/// estimate of what the medium lets through, times the walk's `weight`), and with the
+/// random numbers the ray drew.
+pub fn shadowed(found: &PathState, hit: &PathState, light: Vec3, weight: f32) -> PathState {
+    let mut after = *found;
+    after.state.x = hit.state.x;
+    after.l.w += 1.0;
+    // What gets through: none if anything collided, else the walk's weight (1 but where a
+    // density exceeded its bound).
+    let through = if hit.state.z != NONE { 0.0 } else { weight };
+    after.l -= (light * (1.0 - through)).extend(0.0);
+    after
+}
+
 /// The path with a new ray, still tracing.
 #[allow(clippy::too_many_arguments)]
 fn carry_on(p: &PathState, o: Vec3, d: Vec3, beta: Vec3, l: Vec3, rays: u32, rng: u32, flags: u32, prev_pdf: f32, depth: u32, q0: SkyQuery, q1: SkyQuery) -> (PathState, SkyQuery, SkyQuery) {
-    (PathState { o: o.extend(p.o.w), d: d.extend(prev_pdf), beta: beta.extend(depth as f32), l: l.extend(rays as f32), state: UVec4::new(rng, flags, 0, 0), hit: Vec4::ZERO }, q0, q1)
+    (PathState { o: o.extend(p.o.w), d: d.extend(prev_pdf), beta: beta.extend(depth as f32), l: l.extend(rays as f32), state: UVec4::new(rng, flags, 0, p.state.w), hit: Vec4::ZERO }, q0, q1)
 }
 
 /// The path, ended at this vertex (its sky queries still to be answered).
@@ -2277,8 +2741,8 @@ fn finish(p: &PathState, o: Vec3, d: Vec3, beta: Vec3, l: Vec3, rays: u32, rng: 
 /// One vertex of a path (`PathState`): trace its ray; at what it hits, haze, emission, direct
 /// light (asking the sky for its light sample), and the next ray, or the end. Returns the path
 /// and its two sky queries.
-pub fn bounce(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
-    shade::<WithMedia>(s, &intersect::<WithMedia>(s, p))
+pub fn bounce(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQuery, SkyQuery) {
+    shade::<WithMedia>(s, &intersect::<WithMedia>(s, p), pixel)
 }
 
 /// Whether a kernel has the media's code. A scene without media runs kernels compiled
@@ -2301,37 +2765,391 @@ impl Media for NoMedia {
     const ON: bool = false;
 }
 
+/// What finds the first thing along a ray, a path's own or one traced for it: the kernels'
+/// surfaces and media (`Kernel`), and on the CPU the host's shapes among them.
+pub trait Finder {
+    /// Whether the scene has media: only then does a path carry probes to trace.
+    const MEDIA: bool;
+
+    /// The ray (a path's `o`, `d`, flags and random numbers) with what it meets: `hit`, and
+    /// the primitive or the medium in `state.z`; and the media's walk's weight
+    /// (`intersect_media`).
+    fn find(&self, s: &Scene, ray: &PathState) -> (PathState, f32);
+}
+
+/// The kernels' own finder: their surfaces, then the media as far as those.
+pub struct Kernel<M: Media>(pub core::marker::PhantomData<M>);
+
+impl<M: Media> Finder for Kernel<M> {
+    const MEDIA: bool = M::ON;
+
+    #[inline]
+    fn find(&self, s: &Scene, ray: &PathState) -> (PathState, f32) {
+        intersect_media::<M>(s, &intersect_surface(s, ray))
+    }
+}
+
 /// The path with what its ray hits found (`PathState::hit`, and the primitive in `state.z`):
 /// the first of a bounce's two stages, and all of its closest-hit traversal.
 pub fn intersect<M: Media>(s: &Scene, p: &PathState) -> PathState {
+    find_all(s, p, &Kernel::<M>(core::marker::PhantomData))
+}
+
+/// `intersect`, by `finder`: the path's own ray, and the rays traced for it, each a turn of
+/// one loop, so that a kernel holds one traversal and one walk through the media. After the
+/// path's ray, for a camera's in a scene with crepuscular rays, its two shadow rays
+/// (`crepuscular_samples`); and for a path whose last vertex sent a sun probe (`send_probe`,
+/// waiting in `hit`), the probe, and from the collision it meets its shadow ray to the sun;
+/// and likewise its glitter probe (`send_glitter_probe`), and from the sea it meets.
+pub fn find_all<F: Finder>(s: &Scene, p: &PathState, finder: &F) -> PathState {
+    let (probe, glitter) = if F::MEDIA && p.state.y & PATH_SUN_SHARED != 0 { unpack_probes(p.hit, p.state.z) } else { (Vec4::ZERO, Vec4::ZERO) };
+    let mut own = *p;
+    own.hit = Vec4::ZERO;
+    own.state.z = 0;
+    let mut found = own;
+    let mut ray = own;
+    let (mut a0, mut c0, mut a1, mut c1) = (Vec4::ZERO, Vec3::ZERO, Vec4::ZERO, Vec3::ZERO);
+    let (mut probed, mut probe_from) = (Vec3::ZERO, Vec3::ZERO);
+    let mut job = 0;
+    // (Without media no probes: their turns, and their code, are left out.)
+    let jobs = if F::MEDIA { 7 } else { 3 };
+    while job < jobs {
+        if job == 1 || job == 2 {
+            let from = if job == 1 { a0 } else { a1 };
+            if from.w == 0.0 {
+                job += 1;
+                continue;
+            }
+            ray = shadow_ray(s, &found, from);
+        }
+        if F::MEDIA && (job == 3 || job == 5) {
+            let sent = if job == 3 { probe } else { glitter };
+            probed = Vec3::ZERO;
+            if sent.w <= 0.0 {
+                job += 2;
+                continue;
+            }
+            // (From the vertex, as the path's own ray, which was found the same way.)
+            ray = own;
+            ray.d = sent.xyz().extend(0.0);
+            ray.state.x = found.state.x;
+        }
+        if F::MEDIA && (job == 4 || job == 6) {
+            if probed.dot(probed) == 0.0 {
+                job += 1;
+                continue;
+            }
+            ray = shadow_ray(s, &ray, probe_from.extend(1.0));
+            ray.state.x = found.state.x;
+        }
+        let (hit, weight) = finder.find(s, &ray);
+        if job == 0 {
+            found = hit;
+            // (The weight of the walk to what it meets, on all the path gathers from here.)
+            found.beta = (found.beta.xyz() * weight).extend(found.beta.w);
+            let mut rng = found.state.x;
+            let samples = crepuscular_samples(s, &found, &mut rng);
+            found.state.x = rng;
+            a0 = samples.0;
+            c0 = samples.1;
+            a1 = samples.2;
+            c1 = samples.3;
+        } else if F::MEDIA && job == 3 {
+            found.state.x = hit.state.x;
+            found.l.w += 1.0;
+            if hit.state.z != NONE && hit.state.z >= MEDIUM_HIT {
+                let (light, x, flags) = probe_sunlight(s, &own, probe, &hit);
+                probed = light * weight;
+                probe_from = x;
+                // (Its shadow ray crosses the media as that vertex's would.)
+                ray.state.y = flags;
+            }
+        } else if F::MEDIA && job == 5 {
+            found.state.x = hit.state.x;
+            found.l.w += 1.0;
+            if hit.state.z != NONE && hit.state.z < MEDIUM_HIT {
+                let (light, x) = probe_glitter(s, &own, glitter, &hit);
+                probed = light * weight;
+                probe_from = x;
+            }
+        } else if F::MEDIA && (job == 4 || job == 6) {
+            found.state.x = hit.state.x;
+            found.l.w += 1.0;
+            if hit.state.z == NONE {
+                found.l += (probed * weight).extend(0.0);
+            }
+        } else {
+            found = shadowed(&found, &hit, if job == 1 { c0 } else { c1 }, weight);
+        }
+        job += 1;
+    }
+    found
+}
+
+/// The surface the path's ray hits, of those the kernels test.
+pub fn intersect_surface(s: &Scene, p: &PathState) -> PathState {
     let (prim, h) = trace(s, p.o.xyz(), p.d.xyz(), 0.0, INF, false);
     let mut found = *p;
     found.state.z = prim;
     found.hit = h;
+    found
+}
+
+/// The path's walk through the media as far as the surface `found` for it: a collision
+/// before the surface is the vertex instead.
+/// With the walk's weight: 1 unless a density exceeded its majorant grid's bound
+/// (`shared::media::delta_track_weighted`), the factor on what this ray brings back.
+pub fn intersect_media<M: Media>(s: &Scene, found: &PathState) -> (PathState, f32) {
+    let mut found = *found;
+    let mut weight = 1.0;
     if M::ON {
-        // A collision in a medium before the surface is the vertex instead.
-        let mut rng = p.state.x;
-        let reach = if prim == NONE { INF } else { h.x };
-        let (t, m) = media_collision(s, p.o.xyz(), p.d.xyz(), reach, p.state.y, &mut rng);
+        let mut rng = found.state.x;
+        let reach = if found.state.z == NONE { INF } else { found.hit.x };
+        let (t, m, w) = media_collision(s, found.o.xyz(), found.d.xyz(), reach, &mut found.state.y, &mut rng);
         found.state.x = rng;
+        weight = w;
         if m != NONE {
             found.state.z = MEDIUM_HIT + m;
             found.hit = Vec4::new(t, 0.0, 0.0, 0.0);
         }
     }
-    found
+    (found, weight)
+}
+
+/// How a path with these flags scatters at a vertex in the medium at `medium`: how many times
+/// it counts as having scattered in media, the fraction of the phase function's scattering
+/// taken as none (delta-M truncation; 1 for isotropic, by the similarity relations), and the
+/// albedo of what is left. All of the scattering if the camera sees the vertex directly
+/// (through mirrors and glass too), and without its forward peak once the path has scattered
+/// in a medium or left a surface.
+fn medium_vertex(s: &Scene, medium: u32, flags_p: u32) -> (u32, f32, Vec3) {
+    let mut scatterings = (flags_p >> PATH_SCATTERINGS_SHIFT) & 0xff;
+    if scatterings == 0 && flags_p & PATH_SCATTERED != 0 && at(s.tables, medium + MEDIUM_SCALE) != 1.0 {
+        scatterings = 1;
+    }
+    let mut peak = 0.0;
+    if scatterings >= 1 {
+        peak = at(s.tables, medium + MEDIUM_PEAK);
+    }
+    let a = medium + MEDIUM_ALBEDO;
+    let whole = Vec3::new(at(s.tables, a), at(s.tables, a + 1), at(s.tables, a + 2));
+    let mut albedo = whole * (1.0 - peak) / (Vec3::ONE - whole * peak);
+    if scatterings as f32 >= at(s.tables, medium + MEDIUM_REDUCED_FROM) {
+        let g = at(s.tables, medium + MEDIUM_MEAN_COSINE + scatterings.min(1));
+        albedo = albedo * (1.0 - g) / (Vec3::ONE - albedo * g);
+        peak = 1.0;
+    }
+    (scatterings, peak, albedo)
+}
+
+/// The path's flags once it has scattered at a vertex in medium number `m` that counted
+/// `scatterings` before it.
+fn scattered_in(flags_p: u32, m: u32, scatterings: u32) -> u32 {
+    (flags_p & !PATH_MEDIA) | ((m + 1) << PATH_MEDIUM_SHIFT) | ((scatterings + 1).min(255) << PATH_SCATTERINGS_SHIFT)
+}
+
+/// Sun probes (the renderer's `VolumeMaterial::sun_probe`, which has the account): the
+/// sunlight a path gathers at its next vertex in a cloud is the sun's times the phase function
+/// between the path's direction and the sun's, whose forward peak makes the fireflies of
+/// sunlit clouds. So it is estimated by two techniques, weighted by the balance heuristic: the
+/// path's continuation `wi`, drawn from this vertex's phase function about the ray `rd`, and a
+/// probe drawn from the same function about the sun, which meets the next vertex's peak. Both
+/// find that vertex by the same free flight. Returns the continuation's share of the sunlight
+/// at its next vertex, and the probe: its direction, and its estimate's weight against the
+/// path's throughput (the phase function towards it over the two densities' sum), 0 for none.
+fn send_probe(s: &Scene, medium: u32, peak: f32, rd: Vec3, wi: Vec3, rng: &mut u32) -> (f32, Vec4) {
+    let sun = s.params.sun_dir.xyz();
+    let ours = medium_phase(s.tables, medium, peak, rd.dot(wi));
+    let share = ours / (ours + medium_phase(s.tables, medium, peak, sun.dot(wi)));
+    let d = medium_scatter(s.tables, medium, peak, sun, rng);
+    let towards = medium_phase(s.tables, medium, peak, rd.dot(d));
+    let density = towards + medium_phase(s.tables, medium, peak, sun.dot(d));
+    (share, d.extend(if density > 0.0 { towards / density } else { 0.0 }))
+}
+
+/// Two shares in [0, 1] as one float that holds them to a part in 4095 each.
+fn pack_shares(a: f32, b: f32) -> f32 {
+    (a.clamp(0.0, 1.0) * 4095.0 + 0.5).floor() * 4096.0 + (b.clamp(0.0, 1.0) * 4095.0 + 0.5).floor()
+}
+
+fn unpack_shares(packed: f32) -> (f32, f32) {
+    let a = (packed / 4096.0).floor();
+    (a / 4095.0, (packed - a * 4096.0) / 4095.0)
+}
+
+/// A unit vector as two numbers (an octahedron unfolded: Meyer et al., "On Floating-Point
+/// Normal Vectors", EGSR 2010), and back.
+fn fold(v: Vec3) -> Vec2 {
+    let sum = v.x.abs() + v.y.abs() + v.z.abs();
+    if sum == 0.0 {
+        return Vec2::ZERO;
+    }
+    let n = v / sum;
+    if n.z >= 0.0 {
+        Vec2::new(n.x, n.y)
+    } else {
+        Vec2::new((1.0 - n.y.abs()) * if n.x >= 0.0 { 1.0 } else { -1.0 }, (1.0 - n.x.abs()) * if n.y >= 0.0 { 1.0 } else { -1.0 })
+    }
+}
+
+fn unfold(e: Vec2) -> Vec3 {
+    let z = 1.0 - e.x.abs() - e.y.abs();
+    let t = (-z).max(0.0);
+    Vec3::new(e.x - if e.x >= 0.0 { t } else { -t }, e.y - if e.y >= 0.0 { t } else { -t }, z).normalize()
+}
+
+/// The two probes a vertex sends, as a path carries them to the next round's `intersect`:
+/// their directions folded into `hit`, and their weights (in [0, 1]; 0 for no probe) to 16
+/// bits each in `state.z`, which a path between its rounds has no other use for.
+fn pack_probes(sun: Vec4, glitter: Vec4) -> (Vec4, u32) {
+    let (a, b) = (fold(sun.xyz()), fold(glitter.xyz()));
+    let bits = |w: f32| (w.clamp(0.0, 1.0) * 65535.0 + 0.5) as u32;
+    (Vec4::new(a.x, a.y, b.x, b.y), (bits(sun.w) << 16) | bits(glitter.w))
+}
+
+fn unpack_probes(hit: Vec4, weights: u32) -> (Vec4, Vec4) {
+    let (a, b) = ((weights >> 16) as f32 / 65535.0, (weights & 0xffff) as f32 / 65535.0);
+    (unfold(Vec2::new(hit.x, hit.y)).extend(a), unfold(Vec2::new(hit.z, hit.w)).extend(b))
+}
+
+/// The mean square slope of the sea's glitter as media see it (`Params::media`), or 0.
+fn sea_glitter(s: &Scene) -> f32 {
+    f32::from_bits(s.params.media.z)
+}
+
+/// The density, per steradian, of `glitter_towards`'s direction `d` from a point where up is
+/// `up` (the renderer's `ocean::Sea::glitter_pdf`): Beckmann's density of the facet that
+/// would reflect `d` into the sun's direction.
+fn glitter_pdf(roughness: f32, up: Vec3, sun: Vec3, d: Vec3) -> f32 {
+    if d.dot(up) >= 0.0 {
+        return 0.0;
+    }
+    let h = sun - d;
+    let norm = h.length();
+    if norm < 1e-12 {
+        return 0.0;
+    }
+    let m = h / norm;
+    let lm = sun.dot(m);
+    let c = up.dot(m);
+    if lm <= 0.0 || c <= 0.0 {
+        return 0.0;
+    }
+    let tan2 = (1.0 - c * c) / (c * c);
+    let facets = (-tan2 / roughness).exp() / (PI * roughness * (c * c) * (c * c));
+    facets * c / (4.0 * lm)
+}
+
+/// A direction towards the sea's glitter of the sun (`ocean::Sea::sample_glitter`): a facet
+/// normal from the slopes' distribution, and the direction it reflects into the sun's; zero
+/// if that wouldn't reach the sea.
+fn glitter_towards(roughness: f32, up: Vec3, sun: Vec3, u1: f32, u2: f32) -> Vec3 {
+    let r = (-roughness * (1.0 - u1).ln()).sqrt();
+    let phi = 2.0 * PI * u2;
+    let t = if up.x.abs() < 0.9 { Vec3::X } else { Vec3::Z };
+    let a = (t - up * up.dot(t)).normalize();
+    let b = up.cross(a);
+    let m = (up + a * (r * phi.cos()) + b * (r * phi.sin())).normalize();
+    let lm = sun.dot(m);
+    if lm <= 0.0 {
+        return Vec3::ZERO;
+    }
+    let d = sun - m * (2.0 * lm);
+    if d.dot(up) < 0.0 { d } else { Vec3::ZERO }
+}
+
+/// Glitter probes (the renderer's `VolumeMaterial::glitter_probe`): the sun's glitter on the
+/// sea lights the clouds above, their bases most, but a path scattering in a cloud finds it
+/// only by chance, rarely and brightly. As with `send_probe`: that light by the path's
+/// continuation `wi` and by a probe drawn towards the glitter. Returns the continuation's
+/// share of the glitter where it meets the sea next, and the probe (its weight 0 for none).
+fn send_glitter_probe(s: &Scene, medium: u32, peak: f32, point: Vec3, rd: Vec3, wi: Vec3, rng: &mut u32) -> (f32, Vec4) {
+    let roughness = sea_glitter(s);
+    let sun = s.params.sun_dir.xyz();
+    let up = ocean_up(&load_ocean(s), point);
+    if sun.dot(up) <= 0.0 {
+        return (1.0, Vec4::ZERO);
+    }
+    let ours = medium_phase(s.tables, medium, peak, rd.dot(wi));
+    let share = ours / (ours + glitter_pdf(roughness, up, sun, wi));
+    let d = glitter_towards(roughness, up, sun, rand(rng), rand(rng));
+    if d.dot(d) == 0.0 {
+        return (share, Vec4::ZERO);
+    }
+    let towards = medium_phase(s.tables, medium, peak, rd.dot(d));
+    let density = towards + glitter_pdf(roughness, up, sun, d);
+    (share, d.extend(if density > 0.0 { towards / density } else { 0.0 }))
+}
+
+/// What a glitter probe that met the sea (`hit`, traced along `d` from the path's vertex)
+/// would gather of the sun's glitter there (the renderer's `PhysicalOcean::glint`), before
+/// its shadow ray: the light, times the path's throughput and the probe's weight; and where
+/// its shadow ray starts. None from anything but the kernels' water.
+fn probe_glitter(s: &Scene, p: &PathState, d: Vec4, hit: &PathState) -> (Vec3, Vec3) {
+    let none = (Vec3::ZERO, Vec3::ZERO);
+    let (ro, rd) = (p.o.xyz(), d.xyz());
+    let x = ro + rd * hit.hit.x;
+    let mat = at(s.materials, resolve_material(s, whole_prim(s, hit.state.z).info.y, x));
+    if mat.kind != MAT_WATER {
+        return none;
+    }
+    let (g, n) = normals(s, hit.state.z, ro, rd, hit.hit);
+    let wo = -rd;
+    let up = if mat.p.x > 0.0 { ocean_up(&load_ocean(s), x) } else { Vec3::Y };
+    // Seen from beyond a wave's slope: the mean surface.
+    let n = if n.dot(wo) <= 0.0 { up } else { n };
+    let sun = s.params.sun_dir.xyz();
+    if sun.dot(up) <= 0.0 || n.dot(sun) <= 0.0 {
+        return none;
+    }
+    let h = (sun + wo).normalize();
+    let glint = water_fresnel(h.dot(wo)) * ripple_density(n, h, mat.p.y) / (4.0 * n.dot(wo));
+    if glint <= 1e-6 {
+        return none;
+    }
+    let mut light = s.params.sun_irr.xyz() * sun_transmittance(s, x) * glint;
+    if s.params.offs2.w & FLAG_AERIAL != 0 && hit.hit.x > AERIAL_FROM {
+        light *= aerial_transmittance(s, ro, rd, hit.hit.x);
+    }
+    let ng = if g.dot(wo) < 0.0 { -g } else { g };
+    (light * p.beta.xyz() * d.w, x + ng * offset_for(s, x))
+}
+
+/// What a probe that met a collision in a medium (`hit`, traced along `d` from the path's
+/// vertex) would gather of the sun there, before its shadow ray: the light, times the path's
+/// throughput and the probe's weight; the point; and the path's flags as that vertex's shadow
+/// rays cross the media. No light where the sun is counted otherwise (the Oz approximation).
+fn probe_sunlight(s: &Scene, p: &PathState, d: Vec4, hit: &PathState) -> (Vec3, Vec3, u32) {
+    let m = hit.state.z & 0xff;
+    let medium = s.params.media.x + m * MEDIUM_SIZE;
+    let x = p.o.xyz() + d.xyz() * hit.hit.x;
+    let (scatterings, peak, albedo) = medium_vertex(s, medium, p.state.y);
+    let flags = scattered_in(p.state.y, m, scatterings) | PATH_SCATTERED;
+    if at(s.tables, medium + MEDIUM_OZ) > 0.0 && scatterings > 0 {
+        return (Vec3::ZERO, x, flags);
+    }
+    let sun = s.params.sun_dir.xyz();
+    let mut light = albedo * medium_phase(s.tables, medium, peak, d.xyz().dot(sun)) * s.params.sun_irr.xyz() * sun_transmittance(s, x);
+    // Through the air on the way, as the continuation's would be.
+    if s.params.offs2.w & FLAG_AERIAL != 0 && hit.hit.x > AERIAL_FROM {
+        light *= aerial_transmittance(s, p.o.xyz(), d.xyz(), hit.hit.x);
+    }
+    (light * p.beta.xyz() * d.w, x, flags)
 }
 
 /// The second stage, at what `intersect` found: haze, emission, direct light (its shadow rays
 /// traced here, and the sky asked for its light sample), and the next ray, or the end.
-pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQuery) {
+pub fn shade<M: Media>(s: &Scene, p: &PathState, pixel: u32) -> (PathState, SkyQuery, SkyQuery) {
     let (ro, rd, prev_pdf) = (p.o.xyz(), p.d.xyz(), p.d.w);
     let mut beta = p.beta.xyz();
     let depth = p.beta.w as u32;
     let mut l = p.l.xyz();
     let mut rays = p.l.w as u32;
     let mut rng = p.state.x;
-    let flags_p = p.state.y;
+    // The share of the sun's light at this vertex that isn't a probe's (`send_probe`).
+    // and of its glitter on the sea that isn't a glitter probe's.
+    let (sun_share, glint_share) = if p.state.y & PATH_SUN_SHARED != 0 { unpack_shares(prev_pdf) } else { (1.0, 1.0) };
+    let flags_p = p.state.y & !PATH_SUN_SHARED;
     let specular = flags_p & PATH_SPECULAR != 0;
     let counted = flags_p & PATH_LIGHTS_COUNTED != 0;
     let (mut q0, mut q1) = (SkyQuery::NONE, SkyQuery::NONE);
@@ -2402,25 +3220,23 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
     // medium or left a surface (delta-M truncation), its albedo that of what is left.
     // And from as many scatterings as the similarity relations begin at, isotropically, with
     // the albedo they give (`peak` 1 then: none of the phase function's shape is left).
-    let mut scatterings = (flags_p >> PATH_SCATTERINGS_SHIFT) & 0xff;
-    let mut peak = 0.0;
-    let mut medium_albedo = Vec3::ZERO;
+    let (mut scatterings, mut peak, mut medium_albedo) = (0, 0.0, Vec3::ZERO);
     if M::ON && in_medium {
-        if scatterings == 0 && flags_p & PATH_SCATTERED != 0 && at(s.tables, medium + MEDIUM_SCALE) != 1.0 {
-            scatterings = 1;
-        }
-        if scatterings >= 1 {
-            peak = at(s.tables, medium + MEDIUM_PEAK);
-        }
-        let a = medium + MEDIUM_ALBEDO;
-        let whole = Vec3::new(at(s.tables, a), at(s.tables, a + 1), at(s.tables, a + 2));
-        medium_albedo = whole * (1.0 - peak) / (Vec3::ONE - whole * peak);
-        if scatterings as f32 >= at(s.tables, medium + MEDIUM_REDUCED_FROM) {
-            let g = at(s.tables, medium + MEDIUM_MEAN_COSINE + scatterings.min(1));
-            medium_albedo = medium_albedo * (1.0 - g) / (Vec3::ONE - medium_albedo * g);
-            peak = 1.0;
-        }
+        let v = medium_vertex(s, medium, flags_p);
+        scatterings = v.0;
+        peak = v.1;
+        medium_albedo = v.2;
     }
+    // The Oz approximation (the renderer's `VolumeMaterial::oz_sunlight`): at the path's first
+    // scattering in any medium the sun is a sum of octaves, each through thinner media by a
+    // broader phase function; at later ones it has been counted.
+    let oz = if M::ON && in_medium { at(s.tables, medium + MEDIUM_OZ) as u32 } else { 0 };
+    let sun_counted = oz > 0 && (flags_p >> PATH_SCATTERINGS_SHIFT) & 0xff > 0;
+    let oz_by = if oz > 0 {
+        Vec4::new(at(s.tables, medium + MEDIUM_OZ + 1), at(s.tables, medium + MEDIUM_OZ + 2), at(s.tables, medium + MEDIUM_OZ + 3), at(s.tables, medium + MEDIUM_MEAN_COSINE + 1))
+    } else {
+        Vec4::ONE
+    };
     let floor_alpha = if flags_p & PATH_SCATTERED != 0 { s.params.misc.x } else { 0.0 };
 
     // Delta bounces: mirrors, glass, smooth coats.
@@ -2433,13 +3249,31 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
     // surface lets in, the sun's glitter through the ripples, and one reflection from a
     // sampled ripple. Its lights are counted by sampling them alone (no sky sample: the
     // reflection finds the sky).
-    let water = mat.kind == MAT_WATER;
-    let water_up = if water && mat.p.x > 0.0 { (point + Vec3::new(0.0, mat.p.x, 0.0)).normalize() } else { Vec3::Y };
+    let mut water = mat.kind == MAT_WATER;
+    let water_up = if water && mat.p.x > 0.0 { ocean_up(&load_ocean(s), point) } else { Vec3::Y };
     // Seen from beyond a wave's slope: the mean surface.
     let water_n = if hit_ns.dot(wo) <= 0.0 { water_up } else { hit_ns };
+    // Whitecaps: foam over a fraction of the point, chosen at random, scattering diffusely
+    // about the mean surface, as any diffuse surface does; between the patches, bubbles under
+    // the surface pale the water.
+    let mut foamed = false;
+    let mut water_body = mat.c0.xyz();
+    if water {
+        let foam = sea_foam(s, point.x, point.z, &mut rng);
+        if foam.w > 0.0 {
+            water = false;
+            foamed = true;
+            lobe = Lobe::new(0, if water_up.dot(wo) > 0.0 { water_up } else { -water_up });
+            lobe.albedo = foam.xyz();
+        } else {
+            water_body += mat.c1.xyz() * foam.x;
+        }
+    }
     if water {
         lobe = Lobe::new(0, water_n);
-        lobe.albedo = mat.c0.xyz() * (1.0 - water_fresnel(water_n.dot(wo)));
+        lobe.albedo = water_body * (1.0 - water_fresnel(water_n.dot(wo)));
+    } else if foamed {
+        // (Its lobe is set.)
     } else if mat.kind == MAT_DIFFUSE {
         lobe.albedo = mat.c0.xyz();
     } else if mat.kind == MAT_PLASTIC {
@@ -2500,7 +3334,7 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
     let mut flags_p = (flags_p | PATH_SCATTERED) & !(PATH_SPECULAR | PATH_LIGHTS_COUNTED | PATH_DIRECTIONAL);
     if in_medium {
         // Light leaving this vertex, towards the lights and onwards, has scattered here.
-        flags_p = (flags_p & !PATH_MEDIA) | (((hit.prim & 0xff) + 1) << PATH_MEDIUM_SHIFT) | ((scatterings + 1).min(255) << PATH_SCATTERINGS_SHIFT);
+        flags_p = scattered_in(flags_p, hit.prim & 0xff, scatterings);
     }
     // A medium's lights, like the sea's, are counted by sampling them alone, and the sun as a
     // point; the sky is found by the path's next ray.
@@ -2526,19 +3360,23 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
             li = light.intensity.xyz() * spot(&light, -wi) / d2;
         } else if k == n_lights {
             // The sun: a point for lobes that can't resolve its disc, else its disc with MIS.
-            if flags & FLAG_SUN != 0 {
+            if flags & FLAG_SUN != 0 && !sun_counted {
                 let sd = s.params.sun_dir.xyz();
                 let solid_angle = sun_solid_angle(s);
                 if in_medium || lobe.pdf(wo, sd) * solid_angle < POINT_SUN {
                     wi = sd;
                     li = s.params.sun_irr.xyz() * sun_transmittance(s, above);
+                    if in_medium {
+                        li *= sun_share;
+                    }
                 } else {
                     // Uniformly in the cone, by 1 - cos θ (as `sun_angle`, without the
                     // rounding of cos θ near 1).
-                    let one_minus = rand(&mut rng) * solid_angle / (2.0 * PI);
+                    let u = decide(s, pixel, p.state.w, depth, SOBOL_SKY, &mut rng);
+                    let one_minus = u.z * solid_angle / (2.0 * PI);
                     let cos_t = 1.0 - one_minus;
                     let sin_t = (one_minus * (2.0 - one_minus)).max(0.0).sqrt();
-                    let phi = 2.0 * PI * rand(&mut rng);
+                    let phi = 2.0 * PI * u.w;
                     let (t, b) = basis(sd);
                     wi = t * (sin_t * phi.cos()) + b * (sin_t * phi.sin()) + sd * cos_t;
                     pdf = sun_disc_pdf(s, wi);
@@ -2550,10 +3388,11 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
         } else if k == n_lights + 1 {
             // One area light, by power.
             if flags & FLAG_SAMPLE_LIGHTS != 0 && n_emitters > 0 {
-                let e = search(s, s.params.offs.y, n_emitters, rand(&mut rng));
+                let u = decide(s, pixel, p.state.w, depth, SOBOL_LIGHT, &mut rng);
+                let e = search(s, s.params.offs.y, n_emitters, u.z);
                 let pmf = emitter_probability(s, e);
                 let pi = at(s.tables, s.params.offs.x + e).to_bits();
-                let (y, ny, light_pdf) = sample_light(s, pi, above, rand(&mut rng), rand(&mut rng));
+                let (y, ny, light_pdf) = sample_light(s, pi, above, u.x, u.y);
                 let to = y - above;
                 let d = to.length();
                 wi = to / d;
@@ -2565,7 +3404,8 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
             }
         } else if !exclusive && flags & FLAG_SAMPLE_ENV != 0 {
             // The sky, by its brightness: its light found by the `sky` kernel (`q1`).
-            let es = env_sample(s, rand(&mut rng), rand(&mut rng));
+            let u = decide(s, pixel, p.state.w, depth, SOBOL_SKY, &mut rng);
+            let es = env_sample(s, u.x, u.y);
             if es.w > 0.0 {
                 wi = es.xyz();
                 pdf = es.w;
@@ -2588,16 +3428,30 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
                     let h = (wi + wo).normalize();
                     let glint = water_fresnel(h.dot(wo)) * ripple_density(water_n, h, mat.p.y) / (4.0 * water_n.dot(wo));
                     if glint > 1e-6 {
-                        f += Vec3::splat(glint);
+                        f += Vec3::splat(glint * glint_share);
                     }
                 }
             }
             if f.dot(f) > 0.0 {
                 rays += 1;
                 if !occluded(s, above, wi, dist) {
-                    // Past the media in the way.
+                    // Past the media in the way; the sun, with Oz, an octave at a time.
                     if M::ON {
-                        w *= media_transmittance(s, above, wi, dist, flags_p, true, &mut rng);
+                        let octaves = if k == n_lights && oz > 0 { oz } else { 1 };
+                        let (mut thinned, mut share) = (1.0, 1.0);
+                        let mut g = oz_by.w;
+                        let mut sum = Vec3::ZERO;
+                        let mut octave = 0;
+                        while octave < octaves {
+                            let through = media_transmittance(s, above, wi, dist, flags_p, true, thinned, &mut rng);
+                            let fi = if octave == 0 { f } else { medium_albedo * shared::phase::henyey_greenstein(rd.dot(wi), g) };
+                            sum += fi * (share * through);
+                            thinned *= oz_by.x;
+                            share *= oz_by.y;
+                            g *= oz_by.z;
+                            octave += 1;
+                        }
+                        f = sum;
                     }
                     if k == n_lights + 2 {
                         q1 = SkyQuery::sky(above, wi, beta * f * w);
@@ -2620,6 +3474,30 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
             return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
         }
         beta *= medium_albedo;
+        // The next vertex's sunlight by the continuation and by a probe, where the phase
+        // function is peaked enough to need it (and the sun isn't counted by the Oz
+        // approximation's octaves, at the first vertex alone); and the sun's glitter on the
+        // sea, where there is one, likewise.
+        if flags & FLAG_SUN != 0 && at(s.tables, medium + MEDIUM_PROBES) > 0.0 {
+            let mean_cosine = if peak >= 1.0 { 0.0 } else { at(s.tables, medium + MEDIUM_MEAN_COSINE + if peak > 0.0 { 1 } else { 0 }) };
+            let (mut share, mut probe) = (1.0, Vec4::ZERO);
+            if oz == 0 && mean_cosine > 0.2 {
+                let sent = send_probe(s, medium, peak, rd, wi, &mut rng);
+                share = sent.0;
+                probe = sent.1;
+            }
+            let (mut glint_share, mut glitter) = (1.0, Vec4::ZERO);
+            if sea_glitter(s) > 0.0 {
+                let sent = send_glitter_probe(s, medium, peak, point, rd, wi, &mut rng);
+                glint_share = sent.0;
+                glitter = sent.1;
+            }
+            let (mut next, a, b) = carry_on(p, point, wi, beta, l, rays, rng, flags_p | PATH_LIGHTS_COUNTED | PATH_SUN_SHARED, pack_shares(share, glint_share), depth + 1, q0, q1);
+            let packed = pack_probes(probe, glitter);
+            next.hit = packed.0;
+            next.state.z = packed.1;
+            return (next, a, b);
+        }
         return carry_on(p, point, wi, beta, l, rays, rng, flags_p | PATH_LIGHTS_COUNTED, 0.0, depth + 1, q0, q1);
     }
     if water {
@@ -2645,7 +3523,8 @@ pub fn shade<M: Media>(s: &Scene, p: &PathState) -> (PathState, SkyQuery, SkyQue
         let from = point + ng * s.params.misc.z.max(reach) + water_up * reach.max(1e-3);
         return carry_on(p, from, reflected.normalize(), beta, l, rays, rng, flags_p | PATH_LIGHTS_COUNTED, 0.0, depth + 1, q0, q1);
     }
-    let wi = lobe.sample(wo, rand(&mut rng), rand(&mut rng), rand(&mut rng));
+    let u = decide(s, pixel, p.state.w, depth, SOBOL_SCATTER, &mut rng);
+    let wi = lobe.sample(wo, u.x, u.y, u.z);
     let (f, pdf) = lobe.eval_pdf(wo, wi);
     if wi.dot(wi) == 0.0 || pdf <= 0.0 {
         return finish(p, ro, rd, beta, l, rays, rng, flags_p, prev_pdf, depth, q0, q1);
@@ -2666,8 +3545,11 @@ pub fn radiance(s: &Scene, ro: Vec3, rd: Vec3, rng: &mut u32, rays: &mut u32) ->
     let ray = CameraRay { o: ro.extend(1.0), d: rd.normalize().extend(1.0) };
     let mut p = PathState::start(0, 0, 0, &ray);
     p.state.x = *rng;
+    // Its decisions' points (`decide`) scrambled by the generator's state, so that calls with
+    // one generator after another are independent samples.
+    let pixel = pcg(*rng ^ 0x5bd1_e995);
     loop {
-        let (next, q0, q1) = bounce(s, &p);
+        let (next, q0, q1) = bounce(s, &p, pixel);
         p = next;
         p.l += (sky_light(s, &q0) + sky_light(s, &q1)).extend(0.0);
         if p.state.y & PATH_ACTIVE == 0 {
@@ -2781,11 +3663,41 @@ pub fn nubis_transmittance(tables: &[f32], base: u32, ro: Vec3, rd: Vec3, tmin: 
 /// How many estimates of the transmittance `probe_clouds` averages for a ray.
 pub const PROBE_ESTIMATES: u32 = 64;
 
+/// What `probe` is asked for: a Nubis layer's density, light through it along rays, or a layer
+/// of altocumulus's density.
+pub const PROBE_DENSITY: u32 = 0;
+pub const PROBE_RAYS: u32 = 1;
+pub const PROBE_ALTOCUMULUS: u32 = 2;
+/// And of cirrus's.
+pub const PROBE_CIRRUS: u32 = 3;
+/// And of precipitation's, as a fraction of its greatest.
+pub const PROBE_RAIN: u32 = 4;
+/// And of mammatus's.
+pub const PROBE_MAMMATUS: u32 = 5;
+/// And of a cumulonimbus's.
+pub const PROBE_CUMULONIMBUS: u32 = 6;
+
 /// What `probe_clouds` computes for probe `i`: the density at a point (its w the weather),
-/// or, with `rays`, the mean of `PROBE_ESTIMATES` estimates of the transmittance along the ray
+/// or, with `PROBE_RAYS`, the mean of `PROBE_ESTIMATES` estimates of the transmittance along the ray
 /// from `a` (its w how far) in direction `b`, from the random numbers `pcg(i)` begins.
-pub fn probe(tables: &[f32], base: u32, i: u32, a: Vec4, b: Vec4, rays: bool) -> f32 {
-    if !rays {
+pub fn probe(tables: &[f32], base: u32, i: u32, a: Vec4, b: Vec4, what: u32) -> f32 {
+    if what == PROBE_ALTOCUMULUS {
+        return load_benard(tables, base).fraction(&FloatTables(tables), a.x, a.y, a.z);
+    }
+    if what == PROBE_CIRRUS {
+        return load_cirrus(tables, base).fraction(&FloatTables(tables), a.x, a.y, a.z);
+    }
+    if what == PROBE_CUMULONIMBUS {
+        return load_cumulonimbus(tables, base).fraction(&FloatTables(tables), a.x, a.y, a.z).0;
+    }
+    if what == PROBE_MAMMATUS {
+        return load_mammatus(tables, base).fraction(&FloatTables(tables), a.x, a.y, a.z);
+    }
+    if what == PROBE_RAIN {
+        let rain = load_rain(tables, base);
+        return rain.density(&FloatTables(tables), a.x, a.y, a.z) / rain.peak_extinction();
+    }
+    if what != PROBE_RAYS {
         return nubis_fraction(tables, base, a.xyz(), a.w);
     }
     let mut rng = pcg(i);
@@ -2800,8 +3712,8 @@ pub fn probe(tables: &[f32], base: u32, i: u32, a: Vec4, b: Vec4, rays: bool) ->
 
 /// The clouds on the device, for checking what the shared functions compute there against the
 /// renderer's (`probe`): `counts.x` probes of the layer whose record is at `offs.x`, two
-/// vectors each in `points`, the answer in the second's w; `counts.y` says whether they are
-/// rays. Not part of a render; the volume kernels will call these functions as this does.
+/// vectors each in `points`, the answer in the second's w; `counts.y` says what is asked
+/// (`PROBE_*`). Not part of a render; the volume kernels will call these functions as this does.
 #[cfg(target_arch = "spirv")]
 #[spirv(compute(threads(64)))]
 pub fn probe_clouds(
@@ -2815,7 +3727,7 @@ pub fn probe_clouds(
     }
     let i = gid.x as usize;
     let (a, b) = (points[2 * i], points[2 * i + 1]);
-    points[2 * i + 1].w = probe(tables, params.offs.x, gid.x, a, b, params.counts.y == 1);
+    points[2 * i + 1].w = probe(tables, params.offs.x, gid.x, a, b, params.counts.y);
 }
 
 // ---- Media in a render: a path's ray is tracked through each medium before the surface it
@@ -2827,7 +3739,7 @@ pub fn probe_clouds(
 
 /// A medium's record in `tables` (the renderer's `gpu::media_records`), `MEDIUM_SIZE` floats:
 /// its kind; its box (least corner, greatest); its extinction (`MEDIUM_CONSTANT`) or the bits
-/// of where its cloud layer's record is (`MEDIUM_NUBIS`); the radius of the planet it curves
+/// of where its cloud layer's record is (`MEDIUM_NUBIS`, `MEDIUM_BENARD`, `MEDIUM_CIRRUS`, `MEDIUM_RAIN`, `MEDIUM_MAMMATUS`, `MEDIUM_CUMULONIMBUS`); the radius of the planet it curves
 /// round, or 0 where it is flat; the factor on every medium's density for segments of a path
 /// that last scattered here, and on its own for one that has left a surface (delta-M
 /// truncation: the renderer's `Volume::truncated`); a lower bound on its extinction; its phase
@@ -2836,8 +3748,8 @@ pub fn probe_clouds(
 /// truncation takes as none; and for the similarity relations (the renderer's
 /// `ScatteringApproximation::similarity_after`), that factor on densities once a path has
 /// scattered as often as they begin at, that number, and the mean cosine of its scattering
-/// whole and truncated.
-pub const MEDIUM_SIZE: u32 = 24;
+/// whole and truncated; and the Oz approximation's octaves and factors (`MEDIUM_OZ`).
+pub const MEDIUM_SIZE: u32 = 30;
 pub const MEDIUM_BOX: u32 = 1;
 pub const MEDIUM_DENSITY: u32 = 7;
 pub const MEDIUM_RADIUS: u32 = 8;
@@ -2849,18 +3761,229 @@ pub const MEDIUM_PEAK: u32 = 19;
 pub const MEDIUM_REDUCED_SCALE: u32 = 20;
 pub const MEDIUM_REDUCED_FROM: u32 = 21;
 pub const MEDIUM_MEAN_COSINE: u32 = 22;
+/// The Oz approximation's octaves (0 without it), then its factors a octave on the extinction,
+/// the weight and the mean cosine (the renderer's `volume::Oz`).
+pub const MEDIUM_OZ: u32 = 24;
+/// Whether its vertices send sun probes (the renderer's `VolumeMaterial::sun_probes`).
+pub const MEDIUM_PROBES: u32 = 28;
+/// The bits of where its majorant grid's record is (`GRID_*`), 0 for none.
+pub const MEDIUM_GRID: u32 = 29;
+/// A majorant grid's record (the renderer's `kernels::majorant_grid`): its least corner in
+/// the world, a cell's size, the cells along each axis, then the cells x fastest, z slowest,
+/// each the most density found at a lattice of points in it, times a margin. Sampled, so not
+/// a proof of a bound: the walks stay unbiased where the density exceeds it
+/// (`shared::media::delta_track_weighted`, and ratio tracking's signed estimates).
+pub const GRID_LO: u32 = 0;
+pub const GRID_CELL: u32 = 3;
+pub const GRID_N: u32 = 6;
+pub const GRID_CELLS: u32 = 9;
 pub const MEDIUM_CONSTANT: u32 = 0;
 pub const MEDIUM_NUBIS: u32 = 1;
+pub const MEDIUM_BENARD: u32 = 2;
+pub const MEDIUM_CIRRUS: u32 = 3;
+pub const MEDIUM_RAIN: u32 = 4;
+pub const MEDIUM_MAMMATUS: u32 = 5;
+pub const MEDIUM_CUMULONIMBUS: u32 = 6;
 pub const PHASE_HENYEY_GREENSTEIN: u32 = 0;
 pub const PHASE_DROPLETS: u32 = 1;
+
+/// A layer of altocumulus's record in a table (`shared::altocumulus::Benard`; the renderer's
+/// `BenardAltocumulus::export`): its recipe's 23 numbers in their fields' order, and its seed's
+/// bits, and its map of column tops (`Benard::tops`: its corner's x and z, its texel and its
+/// texels a side, 0 for none); then the permutations of the lattice's warp and of the
+/// patches (512 entries each), the Worley texture, and the map's tops.
+pub const BENARD_HEADER: u32 = 28;
+
+/// The layer whose record begins at `base`.
+pub fn load_benard(tables: &[f32], base: u32) -> shared::altocumulus::Benard<f32> {
+    // (No closure over `tables`: one that holds a slice is a struct naga refuses.)
+    shared::altocumulus::Benard {
+        base: at(tables, base), thickness: at(tables, base + 1), max_density: at(tables, base + 2), cell_size: at(tables, base + 3), coverage: at(tables, base + 4), regularity: at(tables, base + 5), anisotropy: at(tables, base + 6),
+        wind: (at(tables, base + 7), at(tables, base + 8)), undulation: at(tables, base + 9), wavelength: at(tables, base + 10), patchiness: at(tables, base + 11), patch_size: at(tables, base + 12), warp: at(tables, base + 13),
+        lumpiness: at(tables, base + 14), detail_size: at(tables, base + 15), erosion: at(tables, base + 16), center: (at(tables, base + 17), at(tables, base + 18)), extent: at(tables, base + 19), fade: at(tables, base + 20),
+        castellanus: at(tables, base + 21), turret_height: at(tables, base + 22), seed: at(tables, base + 23).to_bits(),
+        warp_perm: base + BENARD_HEADER, patch_perm: base + BENARD_HEADER + NUBIS_PERMUTATION,
+        worley: base + BENARD_HEADER + 2 * NUBIS_PERMUTATION,
+        tops: shared::clouds::WeatherGrid {
+            x: at(tables, base + 24), z: at(tables, base + 25), texel: at(tables, base + 26), n: at(tables, base + 27) as u32,
+            corners: 0,
+            maxima: base + BENARD_HEADER + 2 * NUBIS_PERMUTATION + shared::clouds::WORLEY_N * shared::clouds::WORLEY_N * shared::clouds::WORLEY_N,
+        },
+    }
+}
+
+/// A layer of cirrus's record in a table (`shared::cirrus::Cirrus`; the renderer's
+/// `HoganKewCirrus::export`): its recipe's 29 numbers in their fields' order; then the
+/// permutations of the fibres' noise and of the flow's (512 entries each), and the generating
+/// field.
+pub const CIRRUS_HEADER: u32 = 29;
+
+/// The layer whose record begins at `base`.
+pub fn load_cirrus(tables: &[f32], base: u32) -> shared::cirrus::Cirrus<f32> {
+    shared::cirrus::Cirrus {
+        base: at(tables, base), top: at(tables, base + 1), max_density: at(tables, base + 2), generating_depth: at(tables, base + 3),
+        fall_depth: at(tables, base + 4), sublimation: at(tables, base + 5), wind: (at(tables, base + 6), at(tables, base + 7)),
+        shear: at(tables, base + 8), generating_wind: at(tables, base + 9), fall_speed: at(tables, base + 10),
+        fall_speed_spread: at(tables, base + 11), veer: at(tables, base + 12), edge: at(tables, base + 13),
+        flow_size: at(tables, base + 14), flow: at(tables, base + 15), fibre_width: at(tables, base + 16), fibres: at(tables, base + 17),
+        turbulence_size: at(tables, base + 18), turbulence: at(tables, base + 19), drift: at(tables, base + 20),
+        patchiness: at(tables, base + 21), patch_size: at(tables, base + 22), center: (at(tables, base + 23), at(tables, base + 24)),
+        extent: at(tables, base + 25), fade: at(tables, base + 26), texel: at(tables, base + 27), threshold: at(tables, base + 28),
+        detail_perm: base + CIRRUS_HEADER, curl_perm: base + CIRRUS_HEADER + NUBIS_PERMUTATION,
+        field: base + CIRRUS_HEADER + 2 * NUBIS_PERMUTATION,
+    }
+}
+
+/// Precipitation's record in a table (`shared::rain::Rain`; the renderer's
+/// `Precipitation::export`): its recipe's 21 numbers in their fields' order (what falls as a
+/// number, and whether it evaporates and melts as 0 or 1); then the permutations of the
+/// cells' noise and of the streaks' (512 entries each).
+pub const RAIN_HEADER: u32 = 21;
+
+/// The precipitation whose record begins at `base`.
+pub fn load_rain(tables: &[f32], base: u32) -> shared::rain::Rain<f32> {
+    shared::rain::Rain {
+        base: at(tables, base), ground: at(tables, base + 1), rain_rate: at(tables, base + 2), cell_size: at(tables, base + 3),
+        coverage: at(tables, base + 4), fall_depth: at(tables, base + 5), shear: at(tables, base + 6),
+        wind: (at(tables, base + 7), at(tables, base + 8)), streak_size: at(tables, base + 9), streakiness: at(tables, base + 10),
+        base_variation: at(tables, base + 11), center: (at(tables, base + 12), at(tables, base + 13)), radius: at(tables, base + 14),
+        fade: at(tables, base + 15), kind: at(tables, base + 16) as u32, hail_size: at(tables, base + 17),
+        melting_level: at(tables, base + 18), evaporates: at(tables, base + 19) > 0.5, melts: at(tables, base + 20) > 0.5,
+        cells: base + RAIN_HEADER, streaks: base + RAIN_HEADER + NUBIS_PERMUTATION,
+    }
+}
+
+/// Mammatus's record in a table (`shared::mammatus::Mammatus`; the renderer's
+/// `Mammatus::export`): its recipe's 29 numbers in their fields' order and its seed's bits;
+/// then the permutation of its noise (512 entries).
+pub const MAMMATUS_HEADER: u32 = 30;
+
+/// The mammatus whose record begins at `base`.
+pub fn load_mammatus(tables: &[f32], base: u32) -> shared::mammatus::Mammatus<f32> {
+    shared::mammatus::Mammatus {
+        base: at(tables, base), thickness: at(tables, base + 1), base_variation: at(tables, base + 2), base_size: at(tables, base + 3),
+        sag: at(tables, base + 4), sag_distance: at(tables, base + 5), base_softness: at(tables, base + 6),
+        top_variation: at(tables, base + 7), anvil_density: at(tables, base + 8), pouch_density: at(tables, base + 9),
+        pouch_size: at(tables, base + 10), pouch_depth: at(tables, base + 11), coverage: at(tables, base + 12),
+        regularity: at(tables, base + 13), clustering: at(tables, base + 14), cluster_size: at(tables, base + 15),
+        edge_sharpness: at(tables, base + 16), roughness: at(tables, base + 17), detail_size: at(tables, base + 18),
+        edge_direction: (at(tables, base + 19), at(tables, base + 20)), edge_distance: at(tables, base + 21),
+        edge_raggedness: at(tables, base + 22), edge_taper: at(tables, base + 23), center: (at(tables, base + 24), at(tables, base + 25)),
+        extent: at(tables, base + 26), fade: at(tables, base + 27), pouch_band: at(tables, base + 28),
+        seed: at(tables, base + 29).to_bits(), perm: base + MAMMATUS_HEADER,
+    }
+}
+
+/// A cumulonimbus's record in a table (`shared::cumulonimbus::Cumulonimbus`; the renderer's
+/// `Cumulonimbus::export`): its recipe's 19 numbers in their fields' order and how many
+/// towers it has; then the permutation of its noise (512 entries), the Worley texture of its
+/// billows, and its towers (`TOWER_SIZE` numbers each).
+pub const CUMULONIMBUS_HEADER: u32 = 20;
+
+/// The cumulonimbus whose record begins at `base`.
+pub fn load_cumulonimbus(tables: &[f32], base: u32) -> shared::cumulonimbus::Cumulonimbus<f32> {
+    let worley = base + CUMULONIMBUS_HEADER + NUBIS_PERMUTATION;
+    shared::cumulonimbus::Cumulonimbus {
+        base: at(tables, base), tropopause: at(tables, base + 1), radius: at(tables, base + 2), lean: at(tables, base + 3),
+        wind: (at(tables, base + 4), at(tables, base + 5)), upper_wind: at(tables, base + 6), outflow_speed: at(tables, base + 7),
+        anvil_thickness: at(tables, base + 8), glaciation: at(tables, base + 9), density: at(tables, base + 10),
+        ice_density: at(tables, base + 11), billowing: at(tables, base + 12), softness: at(tables, base + 13),
+        billow: at(tables, base + 14), anvil_length: at(tables, base + 15), anvil_back: at(tables, base + 16),
+        bottom: at(tables, base + 17), top: at(tables, base + 18), tower_count: at(tables, base + 19) as u32,
+        perm: base + CUMULONIMBUS_HEADER, worley,
+        towers: worley + shared::clouds::WORLEY_N * shared::clouds::WORLEY_N * shared::clouds::WORLEY_N,
+    }
+}
+
+/// The most any kind of layer's loader reads from where its record begins, before the tables
+/// it points to: a medium loads every kind's recipe from its own record when its layer is of
+/// another kind (`load_medium`, so that one struct holds them all for rust-gpu), so the
+/// tables run on this far past the last medium's (the renderer's `kernels::media_records`).
+pub const LAYER_HEADER_MOST: u32 = most(&[NUBIS_HEADER, BENARD_HEADER, CIRRUS_HEADER, RAIN_HEADER, MAMMATUS_HEADER, CUMULONIMBUS_HEADER]);
+
+const fn most(of: &[u32]) -> u32 {
+    let mut m = 0;
+    let mut i = 0;
+    while i < of.len() {
+        if of[i] > m {
+            m = of[i];
+        }
+        i += 1;
+    }
+    m
+}
 
 /// A medium as the shared walks take one.
 pub struct KernelMedium<'a> {
     pub tables: FloatTables<'a>,
     pub kind: u32,
+    /// Where its majorant grid is (`MEDIUM_GRID`), 0 for none.
+    pub grid: u32,
     pub sigma: f32,
     pub radius: f32,
-    pub field: shared::clouds::NubisField<f32>,
+    pub nubis: shared::clouds::NubisField<f32>,
+    pub benard: shared::altocumulus::Benard<f32>,
+    pub cirrus: shared::cirrus::Cirrus<f32>,
+    pub rain: shared::rain::Rain<f32>,
+    pub mammatus: shared::mammatus::Mammatus<f32>,
+    pub cumulonimbus: shared::cumulonimbus::Cumulonimbus<f32>,
+}
+
+/// A medium's cloud layer in its own flat coordinates, of whichever kind: so that what is
+/// around it (the planet's curve) is compiled once.
+struct KernelLayer<'a> {
+    tables: &'a FloatTables<'a>,
+    kind: u32,
+    nubis: &'a shared::clouds::NubisField<f32>,
+    benard: &'a shared::altocumulus::Benard<f32>,
+    cirrus: &'a shared::cirrus::Cirrus<f32>,
+    rain: &'a shared::rain::Rain<f32>,
+    mammatus: &'a shared::mammatus::Mammatus<f32>,
+    cumulonimbus: &'a shared::cumulonimbus::Cumulonimbus<f32>,
+}
+
+impl shared::media::Medium<f32> for KernelLayer<'_> {
+    fn density(&self, x: f32, y: f32, z: f32) -> f32 {
+        if self.kind == MEDIUM_BENARD {
+            self.benard.max_density * self.benard.fraction(self.tables, x, y, z)
+        } else if self.kind == MEDIUM_CIRRUS {
+            self.cirrus.max_density * self.cirrus.fraction(self.tables, x, y, z)
+        } else if self.kind == MEDIUM_RAIN {
+            self.rain.density(self.tables, x, y, z)
+        } else if self.kind == MEDIUM_MAMMATUS {
+            self.mammatus.density(self.tables, x, y, z)
+        } else if self.kind == MEDIUM_CUMULONIMBUS {
+            self.cumulonimbus.extinction(self.tables, x, y, z)
+        } else {
+            self.nubis.density(self.tables, x, y, z)
+        }
+    }
+
+    fn bound(&self) -> f32 {
+        if self.kind == MEDIUM_BENARD { self.benard.max_density } else if self.kind == MEDIUM_CIRRUS { self.cirrus.max_density } else if self.kind == MEDIUM_RAIN { self.rain.peak_extinction() } else if self.kind == MEDIUM_MAMMATUS { self.mammatus.bound() } else if self.kind == MEDIUM_CUMULONIMBUS { self.cumulonimbus.bound() } else { self.nubis.max_density }
+    }
+
+    fn majorant_from(&self, x: f32, y: f32, z: f32, dx: f32, dy: f32, dz: f32) -> (f32, f32) {
+        if self.kind == MEDIUM_BENARD {
+            self.benard.majorant_from(self.tables, x, y, z, dx, dy, dz)
+        } else if self.kind == MEDIUM_CIRRUS {
+            self.cirrus.majorant_from(y, dy)
+        } else if self.kind == MEDIUM_RAIN {
+            self.rain.majorant_from(y, dy)
+        } else if self.kind == MEDIUM_MAMMATUS {
+            self.mammatus.majorant_from(x, y, z, dx, dy, dz)
+        } else if self.kind == MEDIUM_CUMULONIMBUS {
+            self.cumulonimbus.majorant_from(y, dy)
+        } else {
+            self.nubis.majorant_from(self.tables, x, y, z, dx, dy, dz)
+        }
+    }
+}
+
+impl<'a> KernelMedium<'a> {
+    fn layer(&'a self) -> KernelLayer<'a> {
+        KernelLayer { tables: &self.tables, kind: self.kind, nubis: &self.nubis, benard: &self.benard, cirrus: &self.cirrus, rain: &self.rain, mammatus: &self.mammatus, cumulonimbus: &self.cumulonimbus }
+    }
 }
 
 impl shared::media::Medium<f32> for KernelMedium<'_> {
@@ -2869,34 +3992,72 @@ impl shared::media::Medium<f32> for KernelMedium<'_> {
             return self.sigma;
         }
         let q = if self.radius > 0.0 { shared::media::planet_local(self.radius, x, y, z) } else { (x, y, z) };
-        self.field.density(&self.tables, q.0, q.1, q.2)
+        self.layer().density(q.0, q.1, q.2)
     }
 
     fn bound(&self) -> f32 {
-        if self.kind == MEDIUM_CONSTANT { self.sigma } else { self.field.max_density }
+        if self.kind == MEDIUM_CONSTANT { self.sigma } else { self.layer().bound() }
     }
 
     fn majorant_from(&self, x: f32, y: f32, z: f32, dx: f32, dy: f32, dz: f32) -> (f32, f32) {
+        self.majorant_along(x, y, z, dx, dy, dz, true)
+    }
+
+    /// Its majorant grid's bound, which is sampled, where the point is in the grid; else, or
+    /// if not `sampled`, the layer's own.
+    fn majorant_along(&self, x: f32, y: f32, z: f32, dx: f32, dy: f32, dz: f32, sampled: bool) -> (f32, f32) {
         if self.kind == MEDIUM_CONSTANT {
             return (self.sigma, INF);
         }
-        let layer = shared::clouds::NubisMedium(&self.field, &self.tables);
-        if self.radius > 0.0 {
-            shared::media::OnPlanet { radius: self.radius, medium: &layer }.majorant_from(x, y, z, dx, dy, dz)
-        } else {
-            layer.majorant_from(x, y, z, dx, dy, dz)
+        if self.grid != 0 && sampled {
+            // The cell, to its far side. (Not the least of it and the layer's bound: the
+            // layer's costs more to find than its grid saves where cells are small.)
+            let g = self.grid;
+            let tables = self.tables.0;
+            let lo = Vec3::new(at(tables, g + GRID_LO), at(tables, g + GRID_LO + 1), at(tables, g + GRID_LO + 2));
+            let size = Vec3::new(at(tables, g + GRID_CELL), at(tables, g + GRID_CELL + 1), at(tables, g + GRID_CELL + 2));
+            let n = UVec3::new(at(tables, g + GRID_N).to_bits(), at(tables, g + GRID_N + 1).to_bits(), at(tables, g + GRID_N + 2).to_bits());
+            let f = (Vec3::new(x, y, z) - lo) / size;
+            if f.x >= 0.0 && f.y >= 0.0 && f.z >= 0.0 && f.x < n.x as f32 && f.y < n.y as f32 && f.z < n.z as f32 {
+                let c = UVec3::new(f.x as u32, f.y as u32, f.z as u32).min(n - UVec3::ONE);
+                let cell = at(tables, g + GRID_CELLS + (c.z * n.y + c.y) * n.x + c.x);
+                let exit = |f: f32, d: f32, size: f32| if d > 0.0 { (f.floor() + 1.0 - f) * size / d } else if d < 0.0 { (f - f.floor()) * size / -d } else { INF };
+                // (Past the cell's face by a hair, so the next step starts in the next cell.)
+                return (cell, exit(f.x, dx, size.x).min(exit(f.y, dy, size.y)).min(exit(f.z, dz, size.z)) * (1.0 + 1e-5) + 1e-4);
+            }
         }
+        let layer = self.layer();
+        // (Round the planet by a change of coordinates, `OnPlanet`'s, and flat without one:
+        // so that the layers' bounds, inlined at each call, are called from one place.)
+        let (mut q, mut dq, mut speed) = ((x, y, z), (dx, dy, dz), 1.0);
+        if self.radius > 0.0 {
+            let curved = shared::media::planet_ray(self.radius, x, y, z, dx, dy, dz);
+            if curved.2 <= 0.0 {
+                return (layer.bound(), shared::media::curved_step());
+            }
+            q = curved.0;
+            dq = curved.1;
+            speed = curved.2;
+        }
+        let (majorant, length) = layer.majorant_from(q.0, q.1, q.2, dq.0, dq.1, dq.2);
+        if self.radius > 0.0 { (majorant, (length / speed).min(shared::media::curved_step())) } else { (majorant, length) }
     }
 }
 
 /// The medium whose record begins at `base`.
 pub fn load_medium(tables: &[f32], base: u32) -> KernelMedium<'_> {
     let kind = at(tables, base) as u32;
-    // A constant medium has no layer: any record's numbers do, unread.
-    let layer = if kind == MEDIUM_NUBIS { at(tables, base + MEDIUM_DENSITY).to_bits() } else { base };
+    // A medium has one layer's record at most: the other kinds' are any record's numbers,
+    // unread.
+    let record = at(tables, base + MEDIUM_DENSITY).to_bits();
     KernelMedium {
-        tables: FloatTables(tables), kind, sigma: at(tables, base + MEDIUM_DENSITY),
-        radius: at(tables, base + MEDIUM_RADIUS), field: load_nubis(tables, layer),
+        tables: FloatTables(tables), kind, grid: at(tables, base + MEDIUM_GRID).to_bits(), sigma: at(tables, base + MEDIUM_DENSITY), radius: at(tables, base + MEDIUM_RADIUS),
+        nubis: load_nubis(tables, if kind == MEDIUM_NUBIS { record } else { base }),
+        benard: load_benard(tables, if kind == MEDIUM_BENARD { record } else { base }),
+        cirrus: load_cirrus(tables, if kind == MEDIUM_CIRRUS { record } else { base }),
+        rain: load_rain(tables, if kind == MEDIUM_RAIN { record } else { base }),
+        mammatus: load_mammatus(tables, if kind == MEDIUM_MAMMATUS { record } else { base }),
+        cumulonimbus: load_cumulonimbus(tables, if kind == MEDIUM_CUMULONIMBUS { record } else { base }),
     }
 }
 
@@ -2932,19 +4093,26 @@ fn segment_scale(s: &Scene, flags: u32, left: bool, base: u32) -> f32 {
 
 /// The first collision of the ray in any medium before `reach`: how far, and which medium
 /// (`NONE` if it gets through them all), by delta tracking.
-pub fn media_collision(s: &Scene, ro: Vec3, rd: Vec3, reach: f32, flags: u32, rng: &mut u32) -> (f32, u32) {
+pub fn media_collision(s: &Scene, ro: Vec3, rd: Vec3, reach: f32, flags: &mut u32, rng: &mut u32) -> (f32, u32, f32) {
     let mut best = reach;
     let mut which = NONE;
+    // (1 unless a density exceeded a majorant grid's bound: `delta_track_weighted`, after
+    // which the path's walks are by proven bounds, `PATH_PROVEN`.)
+    let mut weight = 1.0;
+    let mut sampled = *flags & PATH_PROVEN == 0;
+    let flags_in = *flags;
     let mut random = Hashed(*rng);
-    let left = flags & PATH_SCATTERED != 0;
+    let left = flags_in & PATH_SCATTERED != 0;
     let mut m = 0;
     while m < s.params.media.y {
         let base = s.params.media.x + m * MEDIUM_SIZE;
         let (near, far) = medium_span(s.tables, base, ro, rd, 0.0, best);
-        let scale = segment_scale(s, flags, left, base);
+        let scale = segment_scale(s, flags_in, left, base);
         if near < far && scale > 0.0 {
             let medium = load_medium(s.tables, base);
-            if let Some(t) = shared::media::delta_track(&medium, (ro.x, ro.y, ro.z), (rd.x, rd.y, rd.z), near, far, scale, &mut random) {
+            // (The density is tabulated by where it is in the world.)
+            let from = world(s, ro);
+            if let Some(t) = shared::media::delta_track_weighted(&medium, (from.x, from.y, from.z), (rd.x, rd.y, rd.z), near, far, scale, &mut random, &mut weight, &mut sampled) {
                 best = t;
                 which = m;
             }
@@ -2952,23 +4120,28 @@ pub fn media_collision(s: &Scene, ro: Vec3, rd: Vec3, reach: f32, flags: u32, rn
         m += 1;
     }
     *rng = random.0;
-    (best, which)
+    if !sampled {
+        *flags |= PATH_PROVEN;
+    }
+    (best, which, weight)
 }
 
 /// How much light gets through the media along the ray as far as `tmax`: one estimate, by
-/// residual ratio tracking, whose mean is exp(-optical depth).
-pub fn media_transmittance(s: &Scene, ro: Vec3, rd: Vec3, tmax: f32, flags: u32, left: bool, rng: &mut u32) -> f32 {
+/// residual ratio tracking, whose mean is exp(-optical depth). With every density times
+/// `thinned` besides (an octave of the Oz approximation).
+pub fn media_transmittance(s: &Scene, ro: Vec3, rd: Vec3, tmax: f32, flags: u32, left: bool, thinned: f32, rng: &mut u32) -> f32 {
     let mut through = 1.0;
     let mut random = Hashed(*rng);
     let mut m = 0;
     while m < s.params.media.y && through > 0.0 {
         let base = s.params.media.x + m * MEDIUM_SIZE;
         let (near, far) = medium_span(s.tables, base, ro, rd, 0.0, tmax);
-        let scale = segment_scale(s, flags, left, base);
+        let scale = segment_scale(s, flags, left, base) * thinned;
         if near < far && scale > 0.0 {
             let medium = load_medium(s.tables, base);
             let lower = at(s.tables, base + MEDIUM_LOWER);
-            through = match shared::media::ratio_track(&medium, (ro.x, ro.y, ro.z), (rd.x, rd.y, rd.z), near, far, lower, scale, through, &mut random) {
+            let from = world(s, ro);
+            through = match shared::media::ratio_track_from(&medium, (from.x, from.y, from.z), (rd.x, rd.y, rd.z), near, far, lower, scale, through, &mut random, flags & PATH_PROVEN == 0) {
                 Some(left) => left,
                 None => 0.0,
             };
@@ -3198,7 +4371,8 @@ pub fn scatter_host(
     }
     let mut p = gathered[i as usize];
     let slot = p.state.w;
-    p.state.w = 0;
+    // (Its sample's number is still in its slot.)
+    p.state.w = paths[slot as usize].state.w;
     paths[slot as usize] = p;
     if p.state.y & PATH_ACTIVE != 0 {
         queue::push(queue, slot, params);
@@ -3248,7 +4422,7 @@ pub fn bounce_paths(
     let index = pixel as usize;
     let p = paths[index];
     let s = Scene { params, prims, nodes, materials, lights, tables };
-    let (next, q0, q1) = shade::<NoMedia>(&s, &p);
+    let (next, q0, q1) = shade::<NoMedia>(&s, &p, pixel % (params.dims.x * params.dims.y));
     paths[index] = next;
     queries[2 * index] = q0;
     queries[2 * index + 1] = q1;
@@ -3305,7 +4479,7 @@ pub fn bounce_paths_media(
     let index = pixel as usize;
     let p = paths[index];
     let s = Scene { params, prims, nodes, materials, lights, tables };
-    let (next, q0, q1) = shade::<WithMedia>(&s, &p);
+    let (next, q0, q1) = shade::<WithMedia>(&s, &p, pixel % (params.dims.x * params.dims.y));
     paths[index] = next;
     queries[2 * index] = q0;
     queries[2 * index + 1] = q1;

@@ -93,6 +93,13 @@ integer, boolean, string, path, vec2, vec3, color, enum (with `options`), materi
 - `worker.js`: each web worker builds its own copy of the scene and renders different layers
   (one sample per pixel each), in bands of rows.
 - `app.js` adds the bands up, encodes them with the scene's `output` settings, and draws.
+- A full-scale `landscape` reads its world from its `cache` directory, as the command line
+  keeps it: the page asks the renderer for each world's manifest (`world_manifests`), fetches
+  it and the stage files it lists, and provides them with the scene's other files, so a
+  world rendered once on the command line builds in seconds here (terrain-alpine.json: 18 s,
+  rather than 376 s simulating it). The preview meshes landscapes at a `resolution` of 128
+  (`?landscape_resolution=`), a third of the build; the world doesn't depend on it. Build
+  progress is on the browser's console.
 - `raycaster.js` gathers the realtime raycaster's frames from the workers while the camera
   moves (each worker raycasts its share of the rows, `Preview::raycast`) and scales them up
   onto the preview. How a frame is shaded is `rays::raycaster::Shading`: a new view (normals,
@@ -105,6 +112,13 @@ integer, boolean, string, path, vec2, vec3, color, enum (with `options`), materi
   unless it is on its first build (which is mostly filling the caches the next would need).
 
 ## Known limits
+
+- A landscape whose world hasn't been built on the command line is simulated in every
+  worker, which takes minutes (the status line says so). Its world is keyed by the camera
+  when the landscape has no `focus`: an edit after moving the camera far rebuilds from the
+  new camera, and may find no world kept for it. The GitHub Pages site has no worlds.
+- The raycaster sees displaced terrain as its heightmap's cells, without the relief diced
+  finer, and the sky softened between every fourth pixel.
 
 - The preview is the CPU renderer, on one thread per worker: complete, but slow for heavy
   scenes (grass, clouds, large oceans). The GPU renders only scenes that flatten.

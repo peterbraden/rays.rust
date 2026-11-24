@@ -235,13 +235,25 @@ pub struct LakeWaves {
     fields: Vec<crate::ocean::WaveField>,
     /// For each layer of the relief, each lake's field.
     lakes: Vec<Vec<usize>>,
+    /// The wind, and the fields for rivers' fetches (`RIVER_FETCH`), each half power of two of
+    /// fetch from `RIVER_BINS.0`, made when first wanted.
+    wind: nalgebra::Vector2<f64>,
+    rivers: Vec<std::sync::OnceLock<crate::ocean::WaveField>>,
+    seed: u64,
 }
+
+/// The wind's fetch along a river, in its widths: the straight stretch it blows along before
+/// the river bends away, about half a meander's wavelength (11 widths; a model choice).
+const RIVER_FETCH: f64 = 5.;
+/// The rivers' fetches given fields: from 2^(RIVER_BINS.0 / 2) m (8 m), so many.
+const RIVER_BINS: (i32, usize) = (6, 16);
 
 impl LakeWaves {
     pub fn new(relief: &Relief, frame: &Frame, wind: [f64; 2], seed: u64) -> LakeWaves {
         let w = nalgebra::Vector2::new(wind[0], wind[1]);
+        let rivers = (0..RIVER_BINS.1).map(|_| std::sync::OnceLock::new()).collect();
         if w.norm() < 0.1 {
-            return LakeWaves { fields: vec![], lakes: vec![] };
+            return LakeWaves { fields: vec![], lakes: vec![], wind: w, rivers, seed };
         }
         let bin = |fetch: f64| (2. * fetch.max(1.).log2()).round() as i32;
         let mut bins: Vec<i32> = vec![];
@@ -258,7 +270,21 @@ impl LakeWaves {
         use rayon::prelude::*;
         let fields = bins.par_iter().map(|&f| crate::ocean::WaveField::lake(w, 2f64.powf(f as f64 / 2.), 0., seed.wrapping_add(f as u64))).collect();
         let lakes = lengths.into_iter().map(|l| l.into_iter().map(|f| bins.iter().position(|&b| b == f).unwrap()).collect()).collect();
-        LakeWaves { fields, lakes }
+        LakeWaves { fields, lakes, wind: w, rivers, seed }
+    }
+
+    /// The wind's waves' slopes (along scene x and z) at scene point `p` on a river `width`
+    /// metres wide, its fetch the river's (`RIVER_FETCH`).
+    pub fn river_slopes(&self, p: &Vector3<f64>, width: f64) -> Option<(f64, f64)> {
+        if self.wind.norm() < 0.1 { return None; }
+        let fetch = (RIVER_FETCH * width).max(10.);
+        let bin = ((2. * fetch.log2()).round() as i32 - RIVER_BINS.0).clamp(0, RIVER_BINS.1 as i32 - 1);
+        let field = self.rivers[bin as usize].get_or_init(|| {
+            let fetch = 2f64.powf((bin + RIVER_BINS.0) as f64 / 2.);
+            crate::ocean::WaveField::lake(self.wind, fetch, 0., self.seed.wrapping_add(0x5717 + bin as u64))
+        });
+        let w = field.at(p.x, p.z);
+        Some((w.y, w.z))
     }
 
     /// The waves' slopes (along scene x and z) at scene point `p` on a lake, if it is on one.
@@ -325,17 +351,21 @@ impl RiverWater {
         let p = intersection.point;
         let up = (p - self.frame.centre()).normalize();
         if r.rd.dot(&up) >= 0. { return *intersection; }
-        let n = if let Some((node, ahead, station)) = flow {
+        // The wind's waves: a lake's, or on a river the fetch along it.
+        let tx = (Vector3::x() - up * up.x).normalize();
+        let tz = (Vector3::z() - up * up.z).normalize();
+        let wind = self.waves.slopes(&self.relief, &self.frame, &p)
+            .or_else(|| flow.and_then(|(node, _, _)| self.waves.river_slopes(&p, 2. * node.half)));
+        let mut n = wind.map_or(up, |(sx, sz)| up - tx * sx - tz * sz);
+        // And on a river, the waves standing on its current.
+        if let Some((node, ahead, station)) = flow {
             let side = up.cross(ahead).normalize();
             let ahead = side.cross(&up);
             let (sa, sc) = self.currents.slopes(node, *station);
-            (up - ahead * sa - side * sc).normalize()
-        } else {
-            let Some((sx, sz)) = self.waves.slopes(&self.relief, &self.frame, &p) else { return *intersection };
-            let tx = (Vector3::x() - up * up.x).normalize();
-            let tz = (Vector3::z() - up * up.z).normalize();
-            (up - tx * sx - tz * sz).normalize()
-        };
+            n -= ahead * sa + side * sc;
+        }
+        if wind.is_none() && flow.is_none() { return *intersection; }
+        let n = n.normalize();
         if r.rd.dot(&n) >= 0. { return *intersection; }
         Intersection { normal: n, ..*intersection }
     }

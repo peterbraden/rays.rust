@@ -70,6 +70,7 @@ thread_local! {
 /// Start a new path: no volume scatterings yet, and densities as given.
 pub fn begin_path() {
     PATH.with(|p| p.set((0, 1.)));
+    EQUIANGULAR_RAY.with(|e| e.set(None));
     VERTICES.with(|v| v.set(0));
     DIFFUSED.with(|d| d.set(false));
     chromatic::begin_path();
@@ -353,6 +354,9 @@ pub struct Volume {
     /// truncated generation): light reaching a surface past a cloud's edge has been scattered
     /// by small angles as often as not, as it has on its way to a cloud's vertex. 1 by default.
     pub truncated: f64,
+    /// Whether the area and point lights' single scattering in it is estimated along each ray
+    /// by equi-angular sampling (`equiangular_inscattering`) rather than at its collisions.
+    pub equiangular: bool,
 }
 
 /// The stretches of a ray inside a volume: one for a box, any number for a shape.
@@ -373,12 +377,12 @@ impl Iterator for Spans {
 
 impl Volume {
     pub fn new(bounds: BBox, density: Arc<dyn DensityField>) -> Volume {
-        Volume { bounds, density, shape: None, chromatic: None, truncated: 1. }
+        Volume { bounds, density, shape: None, chromatic: None, truncated: 1., equiangular: false }
     }
 
     /// A medium filling the inside of a closed shape.
     pub fn in_shape(shape: Box<dyn Geometry + Sync + Send>, density: Arc<dyn DensityField>) -> Volume {
-        Volume { bounds: shape.bounds(), density, shape: Some(shape), chromatic: None, truncated: 1. }
+        Volume { bounds: shape.bounds(), density, shape: Some(shape), chromatic: None, truncated: 1., equiangular: false }
     }
 
     /// Where the ray from `ro` along the unit direction `d` is in the medium: (entry, exit)
@@ -647,6 +651,7 @@ impl Volume {
             (material.rainbow.is_some(), "rainbows"),
             (material.emission.is_some(), "it emits"),
             (a.diffusion.is_some(), "the diffusion approximation"),
+            (self.equiangular, "equi-angular sampling"),
         ];
         if let Some((_, why)) = unported.iter().find(|(is, _)| *is) {
             return Err(why.to_string());
@@ -1037,7 +1042,7 @@ impl VolumeMaterial {
     /// is the only way they reach a medium; area lights are sampled once, as at a surface.
     #[allow(clippy::too_many_arguments)]
     fn direct_lighting(&self, incoming: &Vector3<f64>, point: &Vector3<f64>, s: &Scene,
-                       phase: &VertexPhase, scatterings: u32, first: u32, sun_weight: f64) -> Color {
+                       phase: &VertexPhase, scatterings: u32, first: u32, sun_weight: f64, stretch: Option<Stretch>) -> Color {
         let p = |w: &Vector3<f64>| phase.eval(incoming.dot(w)).as_unbounded();
         // With diffusion, whether this is the path's first vertex in such a medium, where the
         // light diffused through it is counted (and only there).
@@ -1056,7 +1061,10 @@ impl VolumeMaterial {
             }
         };
         let mut direct = Color::black();
-        if diffusing != Some(false) {
+        if let (Some(stretch), None) = (stretch, diffusing) {
+            // On a stretch sampled equi-angularly too: weighted against those samples.
+            direct = direct + self.weighted_lights(point, s, &stretch, &through);
+        } else if diffusing != Some(false) {
             // With a light BVH, point lights are sampled with the area lights below.
             for light in s.lights.iter().filter(|_| s.sums_point_lights()) {
                 let to_light = light.position - point;
@@ -1383,7 +1391,10 @@ impl MaterialModel for VolumeMaterial {
         // Its share of the sunlight here, against a sun probe's that might have found this vertex
         // (none can, in a chromatic medium: `volume_sunlight`).
         let sun_weight = if self.extinction.is_none() { sun_weight_for(r) } else { 1. };
-        let mut emit = albedo * self.direct_lighting(&incoming, &i.point, s, &phase, scatterings, first, sun_weight);
+        // On a ray whose stretch through this medium was also sampled equi-angularly, where along
+        // it the collision is (`equiangular_inscattering`).
+        let stretch = i.object.geometry.medium().filter(|v| v.equiangular).and_then(|v| Stretch::of(v, r, i.dist));
+        let mut emit = albedo * self.direct_lighting(&incoming, &i.point, s, &phase, scatterings, first, sun_weight, stretch);
         // The next vertex's sunlight, by two techniques combined: along the continuation, and
         // by a probe towards the sun.
         let probe = s.sun.as_ref().map(|sun| sun.direction)
@@ -1437,6 +1448,9 @@ pub struct Scattering {
     pub extinction: Option<(Color, Color)>,
     /// Whether its vertices send sun probes (`VolumeMaterial::sun_probe`).
     pub sun_probes: bool,
+    /// Whether the lights' single scattering is sampled equi-angularly along rays
+    /// (`Volume::equiangular`); not for chromatic media or the diffusion approximation.
+    pub equiangular: bool,
 }
 
 pub fn create_volume(bounds: BBox, density: Arc<dyn DensityField>, s: Scattering) -> SceneObject {
@@ -1463,9 +1477,287 @@ pub fn create_medium(mut volume: Volume, s: Scattering) -> SceneObject {
         extinction, sun_probes: s.sun_probes, column: (volume.bounds.min.y, volume.bounds.max.y),
     };
     volume.truncated = material.density_scale(1);
+    volume.equiangular = s.equiangular && volume.chromatic.is_none() && material.approximation.diffusion.is_none();
     SceneObject {
         geometry: Box::new(volume),
         medium: Box::new(Solid { m: Box::new(material) }),
+    }
+}
+
+/// Equi-angular sampling (Christopher Kulla and Marcos Fajardo, "Importance Sampling
+/// Techniques for Path Tracing in Participating Media", Computer Graphics Forum 31(4), EGSR
+/// 2012), combined with the medium's own collisions by multiple importance sampling: the
+/// light of the scene's area and point lights scattered once towards the ray's origin by the
+/// media that ask for it (`Volume::equiangular`), along the ray up to `surface`.
+///
+/// Delta tracking finds a collision only on the rays that collide, at points spread as the
+/// medium's extinction spreads them: near a lamp, where its glow is brightest, few rays
+/// collide, and those that do gather a great deal. Equi-angular sampling picks a light, and a
+/// point along the ray's stretch through the medium with density proportional to
+/// 1 / (D² + (t - Δ)²), D being the light's distance from the ray and Δ how far along the ray
+/// its foot is: the falloff of the light's own irradiance, so points near the lamp are chosen
+/// most. Far from a lamp it does worse than the collisions, whose density follows the
+/// medium's; so both are kept, each weighted by the power heuristic against the other
+/// (`mis_weights`): the collisions' light samples (`VolumeMaterial::direct_lighting`) and
+/// these. The collisions' density, σ(t) T(t), has no closed form in a medium whose density
+/// varies, and the weights need only add to one at each point, so they use a stand-in that
+/// any point can evaluate (`distance_heuristic`).
+pub(crate) fn equiangular_inscattering(r: &Ray, surface: f64, s: &Scene) -> Color {
+    EQUIANGULAR_RAY.with(|e| e.set(Some((r.ro, r.rd, surface))));
+    let d = r.rd.normalize();
+    let mut total = Color::black();
+    for o in s.objects.infinite_items.iter() {
+        let Some(volume) = o.geometry.medium().filter(|v| v.equiangular) else { continue };
+        for (entry, exit) in volume.spans(&r.ro, &d) {
+            let (a, b) = (entry.max(0.), exit.min(surface));
+            if a < b {
+                total = total + volume.equiangular_span(o, &r.ro, &d, a, b, s);
+            }
+        }
+    }
+    total
+}
+
+thread_local! {
+    /// The last ray whose stretch through media was sampled equi-angularly
+    /// (`equiangular_inscattering`): origin, direction and the distance to the surface it
+    /// reaches. A collision reached by it weighs its light samples against that.
+    static EQUIANGULAR_RAY: Cell<Option<(Vector3<f64>, Vector3<f64>, f64)>> = const { Cell::new(None) };
+}
+
+/// Whether any medium in the scene is sampled equi-angularly.
+pub(crate) fn any_equiangular(s: &Scene) -> bool {
+    s.objects.infinite_items.iter().any(|o| o.geometry.medium().is_some_and(|v| v.equiangular))
+}
+
+/// The stretch of a ray through an equi-angularly sampled medium, and where along it a vertex
+/// is: the ray's origin and unit direction, the stretch [a, b], and t.
+#[derive(Clone, Copy)]
+pub(crate) struct Stretch {
+    o: Vector3<f64>,
+    d: Vector3<f64>,
+    a: f64,
+    b: f64,
+    t: f64,
+}
+
+impl Stretch {
+    /// The stretch that `r` crossed `volume` along to its collision `t` along it, if `r` was
+    /// sampled equi-angularly.
+    fn of(volume: &Volume, r: &Ray, t: f64) -> Option<Stretch> {
+        let (o, rd, surface) = EQUIANGULAR_RAY.with(|e| e.get())?;
+        if o != r.ro || rd != r.rd {
+            return None;
+        }
+        let d = rd.normalize();
+        volume.spans(&o, &d).map(|(entry, exit)| (entry.max(0.), exit.min(surface)))
+            .find(|(a, b)| *a <= t && t <= *b)
+            .map(|(a, b)| Stretch { o, d, a, b, t })
+    }
+
+    /// The middle of the stretch, from which equi-angular sampling chooses its light.
+    fn middle(&self) -> Vector3<f64> {
+        self.o + self.d * (0.5 * (self.a + self.b))
+    }
+}
+
+/// A light sampled in a medium: an area light's index, or a point light's, and whether point
+/// lights are summed (each always sampled) rather than chosen from the light BVH.
+#[derive(Clone, Copy)]
+enum LightRef {
+    Area(usize),
+    Point(usize, bool),
+}
+
+impl LightRef {
+    fn centre(&self, s: &Scene) -> Vector3<f64> {
+        match *self {
+            LightRef::Area(i) => {
+                let b = s.area_lights[i].geometry.bounds();
+                (b.min.coords + b.max.coords) / 2.
+            },
+            LightRef::Point(j, _) => s.lights[j].position,
+        }
+    }
+
+    /// The chance that this light is the one chosen to be sampled from `at`.
+    fn chosen_from(&self, s: &Scene, at: &Vector3<f64>) -> f64 {
+        match (*self, &s.light_bvh) {
+            (LightRef::Point(_, true), _) => 1.,
+            (LightRef::Area(i), Some(bvh)) => bvh.pmf(at, i),
+            (LightRef::Point(j, false), Some(bvh)) => bvh.pmf(at, s.bvh_area_lights() + j),
+            (LightRef::Area(i), None) => s.area_light_choice.probability(i),
+            (LightRef::Point(..), None) => 1.,
+        }
+    }
+}
+
+/// The density of equi-angular sampling at `t` in [a, b] about a light at `centre`, along the
+/// ray from `o` along the unit `d`; and of choosing that t from u, `equiangular_sample`.
+fn equiangular_geometry(o: &Vector3<f64>, d: &Vector3<f64>, centre: &Vector3<f64>) -> (f64, f64) {
+    let delta = (centre - o).dot(d);
+    (delta, (o + d * delta - centre).norm().max(1e-9))
+}
+
+fn equiangular_pdf(delta: f64, dist: f64, a: f64, b: f64, t: f64) -> f64 {
+    let (theta_a, theta_b) = (((a - delta) / dist).atan(), ((b - delta) / dist).atan());
+    dist / ((theta_b - theta_a) * (dist * dist + (t - delta) * (t - delta)))
+}
+
+/// A point at distance t in [a, b] along a ray, chosen with density proportional to
+/// 1 / (D² + (t - Δ)²) about a light whose foot on the ray is Δ along it, D from it; and that
+/// density.
+fn equiangular_sample(delta: f64, dist: f64, a: f64, b: f64, u: f64) -> (f64, f64) {
+    let (theta_a, theta_b) = (((a - delta) / dist).atan(), ((b - delta) / dist).atan());
+    let t = (delta + dist * (theta_a + u * (theta_b - theta_a)).tan()).clamp(a, b);
+    (t, equiangular_pdf(delta, dist, a, b, t))
+}
+
+/// The stand-in for the density of a collision at t along a stretch entered at a, where the
+/// medium's density is `sigma`: σ exp(-σ (t - a)), as in a medium as dense throughout. Only
+/// for the weights, which it needn't make exact.
+fn distance_heuristic(sigma: f64, a: f64, t: f64) -> f64 {
+    sigma * (-sigma * (t - a)).exp()
+}
+
+/// The power heuristic's weights for a light's sample at the stretch's point t, taken by
+/// a collision there (first) or by equi-angular sampling (second); `sigma` the medium's density
+/// at t, unscaled.
+fn mis_weights(s: &Scene, stretch: &Stretch, light: LightRef, sigma: f64) -> (f64, f64) {
+    let x = stretch.o + stretch.d * stretch.t;
+    let (delta, dist) = equiangular_geometry(&stretch.o, &stretch.d, &light.centre(s));
+    let along = light.chosen_from(s, &stretch.middle()) * equiangular_pdf(delta, dist, stretch.a, stretch.b, stretch.t);
+    let collided = light.chosen_from(s, &x) * distance_heuristic(sigma, stretch.a, stretch.t);
+    let (a2, c2) = (along * along, collided * collided);
+    if !(a2 + c2 > 0.) || !(a2 + c2).is_finite() {
+        return if collided > 0. { (1., 0.) } else { (0., 1.) };
+    }
+    (c2 / (a2 + c2), a2 / (a2 + c2))
+}
+
+impl Volume {
+    /// The lights' single scattering towards `o` from the stretch [a, b] of the ray from `o`
+    /// along the unit `d` in this medium, `object`'s geometry (`equiangular_inscattering`),
+    /// weighted against the collisions' own samples.
+    fn equiangular_span(&self, object: &SceneObject, o: &Vector3<f64>, d: &Vector3<f64>, a: f64, b: f64, s: &Scene) -> Color {
+        let Some(material) = object.medium.material_at(o + d * a).medium() else { return Color::black() };
+        // The lights, chosen as a collision's `direct_lighting` would: point lights summed (all
+        // of them, unless the light BVH holds them), and one area light, or one of the BVH's,
+        // chosen from the stretch's middle.
+        let middle = o + d * (0.5 * (a + b));
+        let summed = s.sums_point_lights();
+        let mut lights: Vec<(LightRef, f64)> = Vec::new();
+        if summed {
+            lights.extend((0..s.lights.len()).map(|j| (LightRef::Point(j, true), 1.)));
+        }
+        match &s.light_bvh {
+            Some(bvh) => if let Some((i, chosen)) = bvh.sample(&middle, rand()) {
+                let areas = s.bvh_area_lights();
+                lights.push((if i < areas { LightRef::Area(i) } else { LightRef::Point(i - areas, false) }, chosen));
+            },
+            None if s.render.sample_lights && !s.area_lights.is_empty() => {
+                let (_, _, i) = s.area_light_choice.sample(rand());
+                lights.push((LightRef::Area(i), s.area_light_choice.probability(i)));
+            },
+            None => (),
+        }
+        let mut total = Color::black();
+        for (light, chosen) in lights {
+            let (delta, dist) = equiangular_geometry(o, d, &light.centre(s));
+            let (t, pdf) = equiangular_sample(delta, dist, a, b, rand());
+            if !(pdf > 0. && pdf.is_finite()) {
+                continue;
+            }
+            let x = o + d * t;
+            let density = self.density.density(&x);
+            let sigma = density * self.segment_scale();
+            if sigma <= 0. {
+                continue;
+            }
+            let (_, weight) = mis_weights(s, &Stretch { o: *o, d: *d, a, b, t }, light, density);
+            if weight <= 0. {
+                continue;
+            }
+            // Back along the ray to where it started, through the media (no surface is nearer).
+            let back = s.objects.media_transmittance(&Ray { ro: *o, rd: *d }, t, 0.);
+            if back.rgb.max() <= 0. {
+                continue;
+            }
+            // A vertex at x, as the medium's collisions are (`VolumeMaterial::scatter`): of the
+            // path's generation, and its light reaching x through media scaled for a path that
+            // has scattered once more. The path itself goes on unchanged.
+            at_vertex();
+            let first = path_scatterings();
+            let scatterings = if first == 0 && material.reached_truncated() { 1 } else { first };
+            let phase = material.phase_at(&x, scatterings);
+            let albedo = material.albedo_at(scatterings).as_reflectance();
+            let saved = (path_scatterings(), path_density_scale());
+            set_path(scatterings + 1, material.density_scale(scatterings + 1));
+            let through = |ray: &Ray, length: f64| -> Color {
+                s.objects.transmittance(ray, length, f64::MIN_POSITIVE) * phase.eval(d.dot(&ray.rd)).as_unbounded()
+            };
+            let lit = match light {
+                LightRef::Area(i) => crate::material::functions::sample_area_light_from(&x, s, i, chosen, |_, _| Color::white(), &through),
+                LightRef::Point(j, _) => point_light(s, j, &x, &through) / chosen,
+            };
+            set_path(saved.0, saved.1);
+            specular_vertex();
+            total = total + back * albedo * lit * (sigma * weight / pdf);
+        }
+        total
+    }
+}
+
+/// Point light `j`'s light reaching `x`, through `through`.
+fn point_light(s: &Scene, j: usize, x: &Vector3<f64>, through: &dyn Fn(&Ray, f64) -> Color) -> Color {
+    let l = &s.lights[j];
+    let to_light = l.position - x;
+    let length = to_light.norm();
+    let w = to_light / length;
+    l.radiant_intensity(&-w) * through(&Ray { ro: *x, rd: w }, length) / (length * length)
+}
+
+impl VolumeMaterial {
+    /// The area and point lights at a collision `point` on a stretch sampled equi-angularly, as
+    /// `direct_lighting` samples them, each weighted against the equi-angular samples
+    /// (`mis_weights`).
+    fn weighted_lights(&self, point: &Vector3<f64>, s: &Scene, stretch: &Stretch, through: &dyn Fn(&Ray, f64) -> Color) -> Color {
+        // At the point on the ray itself, before any shadow bias, as the equi-angular samples'
+        // weights reckon it: the two weights must add to one.
+        let density = self.field.density(&(stretch.o + stretch.d * stretch.t));
+        let mut total = Color::black();
+        let summed = s.sums_point_lights();
+        if summed {
+            for j in 0..s.lights.len() {
+                let (weight, _) = mis_weights(s, stretch, LightRef::Point(j, true), density);
+                if weight > 0. {
+                    total = total + point_light(s, j, point, through) * weight;
+                }
+            }
+        }
+        let (light, chosen) = match &s.light_bvh {
+            Some(bvh) => match bvh.sample(point, rand()) {
+                Some((i, chosen)) => {
+                    let areas = s.bvh_area_lights();
+                    (if i < areas { LightRef::Area(i) } else { LightRef::Point(i - areas, false) }, chosen)
+                },
+                None => return total,
+            },
+            None if s.render.sample_lights && !s.area_lights.is_empty() => {
+                let (_, _, i) = s.area_light_choice.sample(rand());
+                (LightRef::Area(i), s.area_light_choice.probability(i))
+            },
+            None => return total,
+        };
+        let (weight, _) = mis_weights(s, stretch, light, density);
+        if weight <= 0. {
+            return total;
+        }
+        let lit = match light {
+            LightRef::Area(i) => crate::material::functions::sample_area_light_from(point, s, i, chosen, |_, _| Color::white(), through),
+            LightRef::Point(j, _) => point_light(s, j, point, through) / chosen,
+        };
+        total + lit * weight
     }
 }
 
@@ -1680,6 +1972,7 @@ mod tests {
             phase: PhaseFunction::HenyeyGreenstein { g: 0.8 },
             approximation: ScatteringApproximation { delta_m: true, ..ScatteringApproximation::default() },
             diffraction: None, halos: None, rainbow: None, emission: None, extinction: None, sun_probes: false,
+            equiangular: false,
         };
         let o = create_volume(unit_box(), Arc::new(ConstantDensity(2.)), scattering);
         let r = Ray { ro: Vector3::new(-1., 0.5, 0.5), rd: Vector3::new(1., 0., 0.) };

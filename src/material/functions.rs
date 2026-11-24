@@ -238,7 +238,7 @@ pub fn sample_lights_through(point: &Vector3<f64>, s: &Scene, response: impl Fn(
 }
 
 /// One sample of area light `i`, chosen with probability `chosen`.
-fn sample_area_light_from(point: &Vector3<f64>, s: &Scene, i: usize, chosen: f64, response: impl Fn(&Vector3<f64>, f64) -> Color,
+pub(crate) fn sample_area_light_from(point: &Vector3<f64>, s: &Scene, i: usize, chosen: f64, response: impl Fn(&Vector3<f64>, f64) -> Color,
                           transmit: &dyn Fn(&Ray, f64) -> Color) -> Color {
     let light = &s.area_lights[i];
     // A point on the light, with its density per solid angle (`Geometry::sample_from`: by area

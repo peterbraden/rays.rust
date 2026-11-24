@@ -2095,6 +2095,7 @@ impl SceneFile {
             emission: None,
             extinction: None,
             sun_probes: o["sun_probes"].as_bool().unwrap_or(crate::volume::SUN_PROBES),
+            equiangular: o["equiangular"].as_bool().unwrap_or(false),
         }
     }
 

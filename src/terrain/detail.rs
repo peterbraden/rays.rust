@@ -19,7 +19,8 @@
 //!   limestone fluted by solution (karren), shale finely crumbled, basalt in columns. Steeper
 //!   faces show more of it.
 //! - **Scree**, sediment on steep slopes below the cliffs: a slope of stones.
-//! - **Till and moraines**: hummocky ground scattered with boulders, unsorted.
+//! - **Till and moraines**: hummocky ground (its boulders are the landscape's own,
+//!   `object::boulders`).
 //! - **Alluvium** on gentle ground: low swales and bars, fine gravel.
 //! - **Sand**: smooth, drifted over the ground beneath (dunes are drawn larger, `scenery`).
 //! - **Playas**: flat lake beds, cracked into polygons.
@@ -128,7 +129,7 @@ pub fn local_bound(c: &Context, slope: f64, half: f64, heights: (f64, f64), nois
                 Rock::Granite => 1.2 + 1.0 * lip(Billow, 18., 0.5, 0.5),
                 Rock::Gneiss => 0.8 * lip(Ridged, 5., 0.1, 0.55),
                 Rock::Schist => 0.6 * lip(Ridged, 3., 0.05, 0.6),
-                Rock::Sandstone | Rock::Quartzite => 0.5 + 0.3 * lip(Perlin, 6., 0.1, 0.5),
+                Rock::Sandstone | Rock::Quartzite => 0.4 + 0.3 + 0.3 * lip(Perlin, 6., 0.1, 0.5),
                 Rock::Limestone => 0.5 * lip(Ridged, 1.5, 0.03, 0.6) + 0.3,
                 Rock::Shale => 0.25 * lip(Perlin, 1., 0.03, 0.6),
                 Rock::Basalt => 0.4 + 0.3,
@@ -147,7 +148,7 @@ pub fn local_bound(c: &Context, slope: f64, half: f64, heights: (f64, f64), nois
         let blown = most(k0.blown, k1.blown);
         let pan = most(k0.pan, k1.pan);
         change += loose * (scree * 0.12
-            + glacial * (1.5 * lip(Perlin, 25., 2., 0.5) + 0.9)
+            + glacial * 1.5 * lip(Perlin, 25., 2., 0.5)
             + alluvium * (0.3 * lip(Perlin, 30., 3., 0.5) + 0.04 * lip(Perlin, 0.4, 0.05, 0.6))
             + blown * 0.15 * lip(Perlin, 12., 2., 0.4)
             + pan * 0.05);
@@ -160,7 +161,6 @@ pub fn local_bound(c: &Context, slope: f64, half: f64, heights: (f64, f64), nois
 /// `noise` and `seed` vary it. Without fields (not on a landscape), nothing.
 pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f64 {
     let Some(f) = c.fields else { return 0. };
-    let field = |x: Field| f.field(x, &c.p).unwrap_or(0.);
     let slope = c.slope();
     let steep = |from: f64, to: f64| smoothstep(from, to, slope);
     // How much of each detail survives the filter: all of it for features four times the
@@ -186,12 +186,17 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
 
     if bare > 0. {
         let rock = f.field(Field::Rock, &c.p).map(|r| Rock::ALL[(r.round() as usize).min(Rock::ALL.len() - 1)]).unwrap_or(Rock::Sediment);
-        let hardness = field(Field::Hardness);
+        // The hardness averaged over a few metres of height, so a ledge ramps out over its
+        // bed's edge rather than stepping out of a steep face (pushed out along the face's
+        // normal by a sudden metre, the surface folds over itself in fins).
+        let up = f.vertical(&c.p).map_or(crate::na::Vector3::y(), |(up, _)| up);
+        let hardness = [-3., -1.5, 0., 1.5, 3.].iter()
+            .map(|&dz: &f64| f.field(Field::Hardness, &(c.p + up * dz)).unwrap_or(0.)).sum::<f64>() / 5.;
         // Faces show more of their rock than level ground does.
         let face = 0.4 + 0.6 * steep(20., 55.);
         // Ledges of hard beds, recesses of soft, on slopes: the rock is the one at each
         // point's height, so they follow the beds.
-        let ledges = if rock == Rock::Sediment { 0. } else { 0.7 * hardness.clamp(-1.5, 1.5) * steep(25., 50.) };
+        let ledges = if rock == Rock::Sediment { 0. } else { 0.4 * hardness.clamp(-1.5, 1.5) * steep(25., 50.) };
         let texture = match rock {
             // Rounded blocks and domes.
             // Domes, and corestones weathered out in places (tors), not everywhere.
@@ -205,7 +210,9 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
             // Blocks bounded by joints: the joints are grooves.
             Rock::Sandstone | Rock::Quartzite => {
                 let k = keep(0.5);
-                -0.5 * k * joints(c, noise, 3.) + 0.3 * fbm(FractalStyle::Perlin, 6., 0.1, 0.5)
+                let (groove, block) = joints(c, noise, 3.);
+                // Blocks between the joints stand a little proud of each other.
+                k * (-0.4 * groove + 0.3 * (block - 0.5)) + 0.3 * fbm(FractalStyle::Perlin, 6., 0.1, 0.5)
             }
             // Solution flutes and pits.
             // Solution flutes, and pans dissolved in patches.
@@ -231,9 +238,9 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
             s += scree * (0.08 * stones(CellStyle::Stones, 0.5, 0xa1) + 0.04 * stones(CellStyle::Stones, 0.2, 0xa3));
         }
         if glacial > 0. {
-            // Hummocks, and boulders in patches.
-            let boulders = smoothstep(0.1, 0.4, fbm(FractalStyle::Perlin, 40., 10., 0.5));
-            s += glacial * (1.5 * fbm(FractalStyle::Perlin, 25., 2., 0.5) + boulders * 0.9 * stones(CellStyle::Stones, 2., 0xb1));
+            // Hummocks. (Its boulders are real ones, the landscape's own, `object::boulders`:
+            // drawn in the ground they were smooth domes.)
+            s += glacial * 1.5 * fbm(FractalStyle::Perlin, 25., 2., 0.5);
         }
         if alluvium > 0. {
             s += alluvium * (0.3 * fbm(FractalStyle::Perlin, 30., 3., 0.5) + 0.04 * fbm(FractalStyle::Perlin, 0.4, 0.05, 0.6));
@@ -251,21 +258,27 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
     amplitude * ((1. - ice) * h.clamp(-REACH, REACH) + ice * glacier)
 }
 
-/// How deep in a joint `c` is, 0 to 1: two sets of nearly parallel vertical joints, at right
-/// angles to each other (as joints in bedded rock form, across the beds and each other), about
-/// `spacing` metres apart, the spacing and the joints' line wandering a little; each joint a
-/// groove a few centimetres wide where weathering has opened it.
-fn joints(c: &Context, noise: &SeededNoise, spacing: f64) -> f64 {
+/// How deep in a joint `c` is, 0 to 1, and a number from 0 to 1 for the block it is on: two
+/// sets of nearly parallel vertical joints, at right angles to each other (as joints in bedded
+/// rock form, across the beds and each other), about `spacing` metres apart, the spacing and
+/// the joints' line wandering a little; each joint a rounded groove a hand or two wide where
+/// weathering has opened it.
+fn joints(c: &Context, noise: &SeededNoise, spacing: f64) -> (f64, f64) {
     let p = c.p;
     // The sets' directions turn slowly across the country.
     let angle = 0.6 * noise.noise(p / 300. + crate::na::Vector3::new(4.1, 0.7, 2.3));
     let (a, b) = ((angle.cos(), angle.sin()), (-angle.sin(), angle.cos()));
-    let groove = |dir: (f64, f64), s: f64, o: f64| {
+    let across = |dir: (f64, f64), s: f64, o: f64| {
         let u = (p.x * dir.0 + p.z * dir.1) / s + 0.25 * noise.noise(p / (4. * s) + crate::na::Vector3::new(o, 1.3, 0.2));
         let d = (u - u.round()).abs() * s;
-        1. - smoothstep(0.02, 0.06, d)
+        (1. - smoothstep(0.03, 0.15, d), u.floor() as i64)
     };
-    groove(a, spacing, 7.7).max(groove(b, 1.6 * spacing, 3.1))
+    let ((g1, i), (g2, j)) = (across(a, spacing, 7.7), across(b, 1.6 * spacing, 3.1));
+    let mut h = (i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (j as u64).wrapping_mul(0xc2b2_ae3d_27d4_eb4f);
+    h ^= h >> 31;
+    h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    h ^= h >> 29;
+    (g1.max(g2), (h >> 11) as f64 / (1u64 << 53) as f64)
 }
 
 fn smoothstep(lo: f64, hi: f64, x: f64) -> f64 {

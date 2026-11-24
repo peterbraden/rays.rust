@@ -319,6 +319,12 @@ pub struct Relief {
 /// same everywhere.
 const LONGEST_DETAIL: f64 = 65536.;
 
+/// ... and the shortest, metres: below it the ground's own detail (`terrain::detail`), drawn
+/// from its geology, takes over. (The ridged noise down to the displaced patches' centimetre
+/// cells raised sharp ridges a metre high a few metres apart on steep faces, which the ground's
+/// detail then stood on as fins.)
+const RELIEF_FINEST: f64 = 12.;
+
 impl Relief {
     /// `finest`: the spacing below which detail is synthetic; layers coarser than it have the
     /// planet's own relief down to it put back.
@@ -381,7 +387,7 @@ impl Relief {
         let mut sum = 0.;
         let mut wavelength = LONGEST_DETAIL;
         let mut octave = 0.;
-        while wavelength >= local {
+        while wavelength >= local.max(RELIEF_FINEST) {
             // The simulation only resolves features several cells across: below about eight
             // cells its slopes are smoothed by its own diffusion.
             let resolved = smoothstep(4. * self.finest, 8. * self.finest, wavelength);

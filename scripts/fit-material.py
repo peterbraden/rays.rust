@@ -17,7 +17,7 @@ sliced Wasserstein loss for neural texture synthesis" (CVPR 2021), and Elnekave 
 patches rather than a network's features. The projections are fixed, and each render is
 deterministic, so the objective is too.
 
-Colour is compared besides, and more strictly: the patches' random projections mostly see
+The mean colour is compared besides, along the opponent axes, the hues weighed most (`mean_colour`). Colour is compared besides, and more strictly: the patches' random projections mostly see
 lightness, so an optimiser left to them alone will happily trade grey stones for sub-pixel
 confetti of saturated colours averaging grey. Each level's pixels are also compared as colour
 distributions along fixed opponent axes (lightness, red-green, blue-yellow) and random
@@ -59,9 +59,19 @@ compare.png. Or give a spec file instead of a preset's name:
 `field` is a field of the library material that uses the preset (its scale, or a variable
 of the preset by name); `path` a place in the preset's JSON, a number or (`"kind": "color"`)
 an [r, g, b]. Each is searched between `min` and `max`, on a log scale if `log`. A colour is
-searched as a lightness (the mean of its channels, `min` to `max`, default 0 to 1) and a tint:
-each channel within `chroma` (default 0.25) of the lightness, relatively, as natural materials
-are mostly low in saturation.
+searched as a lightness (the mean of its channels) and a tint along the opponent axes,
+red-green and blue-yellow, each within `chroma` (default 0.12, relative to the lightness) of
+the preset's own tint. Its lightness stays between `min` and `max`, by default half and 1.6
+times the preset's own. So a colour keeps the part its author gave it (the pale stones stay
+pale and cream): left freer, an optimiser swaps colours' roles and wanders into pink pebbles
+and green gaps that match the statistics with a picture that looks nothing like the scan. A
+fit refines a preset's colours; it doesn't choose them.
+
+Better still, as a search's cost grows with its dimensions (CMA-ES wants of the order of a
+hundred evaluations per dimension), a preset's colours can be fitted together:
+`{"kind": "colours", "paths": [...]}` searches four numbers for all of them, gains on red,
+green and blue (`gain`, default 0.5 to 2 each) and a contrast about their mean lightness
+(`contrast`, default 0.5 to 2), keeping the colours' relations as their author gave them.
 
     scripts/fit-material.py scree|spec.json [--iterations 30] [--resolution 160] [--samples 8] [--record] [-o out_dir]
 
@@ -141,8 +151,15 @@ class PatchLoss:
         idx = np.stack([img[ys + dy, xs + dx] for dy in range(p) for dx in range(p)], axis=1)
         return idx.reshape(n, -1)
 
+    def mean_colour(self, a, b):
+        """The difference of the two images' mean colours along the opponent axes, the hues
+        weighed most: the eye judges a surface's hue by its mean before anything else, and the
+        distributions above barely see a small shift of it (tan becomes pink at 0.03)."""
+        d = (a.reshape(-1, 3).mean(0) - b.reshape(-1, 3).mean(0)) @ OPPONENT
+        return float(np.sum(np.array([5., 30., 30.]) * d * d))
+
     def __call__(self, a, b):
-        total = 0.
+        total = self.levels * self.mean_colour(a, b)
         for k, (la, lb) in enumerate(zip(self.pyramid(a, self.levels), self.pyramid(b, self.levels))):
             rng = np.random.default_rng(self.rng_seed + k)
             pa, pb = self.patches(la, rng), self.patches(lb, rng)
@@ -174,29 +191,62 @@ class Problem:
         for p in spec["params"]:
             if p.get("kind") == "color":
                 self.slots += [(p, c) for c in range(3)]
+            elif p.get("kind") == "colours":
+                self.slots += [(p, ("group", c)) for c in range(4)]
             else:
                 self.slots.append((p, None))
 
+    def group_bounds(self, p, c):
+        lo, hi = p.get("gain", [0.5, 2.]) if c < 3 else p.get("contrast", [0.5, 2.])
+        return lo, hi
+
+    def group_value(self, p, c, u):
+        lo, hi = self.group_bounds(p, c)
+        u = min(max(u, 0.), 1.)
+        return math.exp(math.log(lo) + u * (math.log(hi) - math.log(lo)))
+
+    def apply_group(self, preset, p, values):
+        """Gains and contrast applied to every colour of the group, from the preset's own."""
+        gains, contrast = values[:3], values[3]
+        own = [get(self.preset, path) for path in p["paths"]]
+        mean = sum(sum(c) / 3. for c in own) / len(own)
+        for path, colour in zip(p["paths"], own):
+            light = sum(colour) / 3.
+            scale = (mean + contrast * (light - mean)) / light if light > 0 else 1.
+            put(preset, path, [round(max(v * g * scale, 0.), 4) for v, g in zip(colour, gains)])
+
     def bounds(self, p):
         if p.get("kind") == "color":
-            return (p.get("min", 0.), p.get("max", 1.))
+            # By default near the preset's own lightness, so the colour keeps its role.
+            own = sum(get(self.preset, p["path"])) / 3.
+            return (p.get("min", 0.5 * own), p.get("max", min(1., 1.6 * own + 0.02)))
         return (p["min"], p["max"])
 
     @staticmethod
-    def colour_to_unit(p, rgb, lo, hi):
-        """A colour as lightness and tint in the unit cube (`colour_from_unit` reversed)."""
+    def tints(rgb):
+        """A colour's lightness, and its tints along red-green and blue-yellow, relative to it."""
         light = sum(rgb) / 3.
-        chroma = p.get("chroma", 0.25)
-        tint = [((c / light - 1.) / chroma + 1.) / 2. if light > 0 else 0.5 for c in rgb[:2]]
-        return [(light - lo) / (hi - lo)] + tint
+        if light <= 0:
+            return 0., 0., 0.
+        t = [c / light - 1. for c in rgb]
+        return light, (t[0] - t[1]) / 2., (t[0] + t[1] - 2. * t[2]) / 3.
 
-    @staticmethod
-    def colour_from_unit(p, u, lo, hi):
+    def colour_to_unit(self, p, rgb, lo, hi):
+        """A colour as lightness and two tints in the unit cube (`colour_from_unit` reversed)."""
+        _, a0, b0 = self.tints(get(self.preset, p["path"]))
+        light, a, b = self.tints(rgb)
+        chroma = p.get("chroma", 0.12)
+        unit = lambda v, v0: ((v - v0) / chroma + 1.) / 2.
+        return [(light - lo) / max(hi - lo, 1e-9), unit(a, a0), unit(b, b0)]
+
+    def colour_from_unit(self, p, u, lo, hi):
+        """Lightness, then tints along red-green and blue-yellow about the preset's own (both
+        keeping the mean)."""
+        _, a0, b0 = self.tints(get(self.preset, p["path"]))
         light = lo + min(max(u[0], 0.), 1.) * (hi - lo)
-        chroma = p.get("chroma", 0.25)
-        r, g = [1. + chroma * (2. * min(max(t, 0.), 1.) - 1.) for t in u[1:]]
-        # Blue makes the mean the lightness.
-        return [light * r, light * g, max(light * (3. - r - g), 0.)]
+        chroma = p.get("chroma", 0.12)
+        a, b = [v0 + chroma * (2. * min(max(t, 0.), 1.) - 1.) for t, v0 in zip(u[1:], (a0, b0))]
+        return [max(light * (1. + a + 0.5 * b), 0.), max(light * (1. - a + 0.5 * b), 0.), max(light * (1. - b), 0.)]
 
     def to_unit(self, p, v):
         lo, hi = self.bounds(p)
@@ -214,6 +264,10 @@ class Problem:
     def start(self, usage):
         x = []
         for p, c in self.slots:
+            if isinstance(c, tuple):
+                lo, hi = self.group_bounds(p, c[1])
+                x.append((0. - math.log(lo)) / (math.log(hi) - math.log(lo)))
+                continue
             if "field" in p:
                 v = usage.get(p["field"], p.get("default", 1.))
             elif c is None:
@@ -236,6 +290,10 @@ class Problem:
         k = 0
         while k < len(self.slots):
             p, c = self.slots[k]
+            if isinstance(c, tuple):
+                self.apply_group(preset, p, [self.group_value(p, j, float(x[k + j])) for j in range(4)])
+                k += 4
+                continue
             if c is not None:
                 lo, hi = self.bounds(p)
                 put(preset, p["path"], [round(v, 4) for v in self.colour_from_unit(p, [float(u) for u in x[k:k + 3]], lo, hi)])
@@ -367,6 +425,10 @@ def main():
                 sys.exit("--record needs a preset's reference, not a spec file")
             values = {}
             for p in spec["params"]:
+                if p.get("kind") == "colours":
+                    for path in p["paths"]:
+                        values[".".join(map(str, path))] = get(fitted, path)
+                    continue
                 if "field" in p:
                     values[p["field"]] = round(fitted_usage[p["field"]], 4)
                 else:

@@ -26,8 +26,9 @@
 # target/render-all/<name>.log, and a line per scene, naming what rendered it, to
 # target/render-all/summary.txt.
 #
-# Each run is also a benchmark: a row per scene (times, integrator, rays, memory, the scene
-# file's hash and the picture's difference from HEAD's) is appended to
+# Each run is also a benchmark: a row per scene (times, integrator, rays, peak memory and
+# swapping by /usr/bin/time, the scene file's hash and the picture's difference from HEAD's)
+# is appended to
 # demo/benchmarks/render-all.csv (target/render-all/previews.csv with --samples), and the run
 # ends with a report comparing it with the previous one on this machine
 # (scripts/render-all-stats.py; `scripts/render-all-stats.py report` repeats it).
@@ -43,7 +44,7 @@ while [ $# -gt 0 ]; do
         --list) list=1 ;;
         --resume) resume=1 ;;
         --cpu) cpu=1 ;;
-        -h|--help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) echo "Unknown option $1" >&2; exit 1 ;;
         *) break ;;
     esac
@@ -85,6 +86,21 @@ record() {
         ${stats[@]+"${stats[@]}"} || echo "    (statistics not recorded)"
 }
 
+# Each render under /usr/bin/time, for its peak memory, page faults and CPU time.
+timer=()
+if [ -x /usr/bin/time ]; then
+    [ "$(uname)" = Darwin ] && timer=(/usr/bin/time -l) || timer=(/usr/bin/time -v)
+fi
+# Stopping the run stops the render too: it runs under time, so isn't the script's own child.
+child=""
+stop() {
+    if [ -n "$child" ]; then
+        pkill -TERM -P "$child" 2> /dev/null; kill -TERM "$child" 2> /dev/null
+    fi
+    echo "Stopped"; exit 143
+}
+trap stop TERM INT
+
 features=(); [ $cpu = 1 ] || features=(--features gpu)
 echo "Building..."
 cargo build --release --quiet "${features[@]}" 2> "$out/build.log" \
@@ -107,7 +123,12 @@ for scene in "${scenes[@]}"; do
     fi
     echo "[$done_count/$total] $(date '+%H:%M:%S') $name..."
     start=$(date +%s)
-    if ./target/release/rays "$scene" "${args[@]}" > "$out/$name.log" 2>&1; then
+    # The render's output to its log, time's report to <name>.time.
+    LOG="$out/$name.log" ${timer[@]+"${timer[@]}"} bash -c 'exec "$@" > "$LOG" 2>&1' _ \
+        ./target/release/rays "$scene" "${args[@]}" 2> "$out/$name.time" &
+    child=$!
+    wait "$child"; status=$?; child=""
+    if [ $status = 0 ]; then
         took=$(( $(date +%s) - start ))
         case "$(grep -m1 '^- Integrator: ' "$out/$name.log")" in
             *GPU*) by=gpu ;;

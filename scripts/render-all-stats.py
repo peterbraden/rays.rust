@@ -14,6 +14,11 @@ target/render-all/previews.csv (runs with --samples), with:
   wall_s               the whole process; build_s, render_s the renderer's own figures
   integrator           gpu, wavefront or path-tracer; note gives why the GPU was refused
   width, height, samples, rays, mrays_per_s, peak_build_mib, primitives
+  peak_rss_mib, peak_footprint_mib, major_faults, cpu_s, ram_gib
+                       the whole process's peak resident memory, and on macOS its peak
+                       footprint (with compressed and swapped pages), page faults that read
+                       from disk (swapping, mostly), user and system CPU seconds, and the
+                       machine's memory: from /usr/bin/time, in <scene>.time beside the log
   diff_mean, diff_rmse the new image against HEAD's, in 8-bit levels (needs Pillow and
                        numpy; blank otherwise). Sampling noise alone gives a few levels
 
@@ -40,7 +45,8 @@ PREVIEW_CSV = os.path.join(OUT, "previews.csv")
 FIELDS = [
     "run", "commit", "dirty", "cpu", "threads", "gpu", "preview_samples", "scene", "scene_hash",
     "status", "wall_s", "build_s", "render_s", "integrator", "width", "height", "samples",
-    "rays", "mrays_per_s", "peak_build_mib", "primitives", "diff_mean", "diff_rmse", "note",
+    "rays", "mrays_per_s", "peak_build_mib", "peak_rss_mib", "peak_footprint_mib", "major_faults",
+    "cpu_s", "ram_gib", "primitives", "diff_mean", "diff_rmse", "note",
 ]
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -123,6 +129,44 @@ def parse_log(path):
     return row
 
 
+def parse_time(path):
+    """What /usr/bin/time says of the render: `-l` on macOS, `-v` on Linux."""
+    try:
+        with open(path) as f:
+            text = f.read()
+    except OSError:
+        return {}
+    row = {}
+    mib = lambda n, scale: f"{int(n) * scale / 2**20:.0f}"
+    if m := re.search(r"(\d+)\s+maximum resident set size", text):
+        row["peak_rss_mib"] = mib(m.group(1), 1)
+    if m := re.search(r"(\d+)\s+peak memory footprint", text):
+        row["peak_footprint_mib"] = mib(m.group(1), 1)
+    if m := re.search(r"(\d+)\s+page faults", text):
+        row["major_faults"] = m.group(1)
+    if m := re.search(r"([0-9.]+) real\s+([0-9.]+) user\s+([0-9.]+) sys", text):
+        row["cpu_s"] = f"{float(m.group(2)) + float(m.group(3)):.1f}"
+    if m := re.search(r"Maximum resident set size \(kbytes\): (\d+)", text):
+        row["peak_rss_mib"] = mib(m.group(1), 1024)
+    if m := re.search(r"Major \(requiring I/O\) page faults: (\d+)", text):
+        row["major_faults"] = m.group(1)
+    user = re.search(r"User time \(seconds\): ([0-9.]+)", text)
+    system = re.search(r"System time \(seconds\): ([0-9.]+)", text)
+    if user and system:
+        row["cpu_s"] = f"{float(user.group(1)) + float(system.group(1)):.1f}"
+    return row
+
+
+def ram_gib():
+    try:
+        if sys.platform == "darwin":
+            out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True).stdout
+            return f"{int(out) / 2**30:.0f}"
+        return f"{os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') / 2**30:.0f}"
+    except (ValueError, OSError):
+        return ""
+
+
 def png_pixels(data):
     from PIL import Image
     import numpy as np
@@ -162,6 +206,17 @@ def read_rows(path):
 def append_row(path, row):
     new = not os.path.exists(path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    if not new:
+        with open(path, newline="") as f:
+            header = next(csv.reader(f), [])
+        if header != FIELDS:
+            # Columns were added: rewrite the earlier rows with them, blank.
+            rows = read_rows(path)
+            with open(path + ".tmp", "w", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=FIELDS, extrasaction="ignore")
+                w.writeheader()
+                w.writerows(rows)
+            os.replace(path + ".tmp", path)
     with open(path, "a", newline="") as f:
         w = csv.DictWriter(f, fieldnames=FIELDS, extrasaction="ignore")
         if new:
@@ -173,6 +228,8 @@ def make_row(run, commit, dirty, scene, status, wall, preview, log, image):
     parsed = parse_log(log)
     row = {k: "" for k in FIELDS}
     row.update(parsed)
+    row.update(parse_time(os.path.splitext(log)[0] + ".time"))
+    row["ram_gib"] = ram_gib()
     row.update({
         "run": run, "commit": commit, "dirty": dirty, "cpu": cpu_name(),
         "threads": os.cpu_count(), "preview_samples": preview or "",
@@ -273,6 +330,17 @@ def report(args):
     for r in this:
         if r["status"] != "ok":
             print(f"  Failed: {r['scene']}: {r['note']}")
+    peak = lambda r: num(r, "peak_footprint_mib") or num(r, "peak_rss_mib") or 0
+    measured = [r for r in ok if peak(r)]
+    if measured:
+        ram = (num(measured[0], "ram_gib") or 0) * 1024
+        print(f"\n  Most memory (peak footprint, or resident size; {ram / 1024:.0f} GiB here):")
+        for r in sorted(measured, key=lambda r: -peak(r))[:args.top]:
+            cpu = num(r, "cpu_s")
+            render = (num(r, "wall_s") or 0)
+            busy = f"{cpu / render:.1f} cores busy" if cpu and render else ""
+            flag = "  over RAM" if ram and peak(r) > ram else ""
+            print(f"    {r['scene']:<28} {peak(r) / 1024:>6.1f} GiB  {r['major_faults'] or '?':>9} faults  {busy}{flag}")
 
     if not prev:
         print("\nNo earlier run on this machine at these settings to compare with.")
@@ -305,6 +373,15 @@ def report(args):
             print(f"    {r['scene']:<28} {p['integrator']} -> {r['integrator']}")
     if changed:
         print(f"\n  Scene file changed, not compared: {', '.join(r['scene'] for r, _ in changed)}")
+    grew = []
+    for r, p in same:
+        a, b = peak(p), peak(r)
+        if a and b and max(a, b) >= 256 and abs(b / a - 1) >= args.threshold * 2:
+            grew.append((b / a, r, a, b))
+    if grew:
+        print(f"\n  Peak memory changed by {args.threshold * 2:.0%} or more:")
+        for ratio, r, a, b in sorted(grew, key=lambda m: m[0]):
+            print(f"    {r['scene']:<28} {a:>6.0f} -> {b:>6.0f} MiB  x{ratio:.2f}")
     newly_failed = [r["scene"] for r in this if r["status"] != "ok" and prev.get(r["scene"], {}).get("status") == "ok"]
     if newly_failed:
         print(f"\n  Failed this time only: {', '.join(newly_failed)}")

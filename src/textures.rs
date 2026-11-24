@@ -364,6 +364,80 @@ pub enum ColorTexture {
     Graph(std::sync::Arc<crate::graph::Graph>),
     Slope(SlopeTexture),
     Terrain(TerrainTexture),
+    Pattern(PatternTexture),
+}
+
+/// How a colour map blends between its entries.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Interpolation {
+    Linear,
+    /// Smoothstepped, so bands meet without a crease.
+    Smooth,
+    /// Each entry's colour up to the next: hard edges (still averaged over the footprint, by
+    /// the pattern's filtering, only where that blurs the pattern itself).
+    Step,
+}
+
+/// A pattern coloured by a map: POV-Ray's `pigment { pattern color_map { [v colour] ... } }`.
+/// The pattern is a function graph (`graph.rs`), evaluated where the surface was hit, with its
+/// detail filtered to the pixel's footprint (`graph::Context::at_hit_filtered`); its value
+/// picks a place among the map's entries, sorted by value, and the colour there is blended
+/// from the two entries about it. An entry may itself be any colour texture, a pattern too
+/// (POV-Ray's `pigment_map`): only the two entries about the value are evaluated.
+pub struct PatternTexture {
+    pub pattern: crate::graph::Graph,
+    pub map: Vec<(f64, ColorTexture)>,
+    pub interpolation: Interpolation,
+}
+
+impl PatternTexture {
+    /// The two entries about `v` and the blend between them.
+    fn place(&self, v: f64) -> (usize, usize, f64) {
+        let n = self.map.len();
+        let k = self.map.partition_point(|(at, _)| *at <= v);
+        if k == 0 {
+            return (0, 0, 0.);
+        }
+        if k == n {
+            return (n - 1, n - 1, 0.);
+        }
+        let (a, b) = (self.map[k - 1].0, self.map[k].0);
+        let t = if b > a { (v - a) / (b - a) } else { 1. };
+        let t = match self.interpolation {
+            Interpolation::Linear => t,
+            Interpolation::Smooth => t * t * (3. - 2. * t),
+            Interpolation::Step => 0.,
+        };
+        (k - 1, k, t)
+    }
+
+    pub fn eval(&self, i: &Intersection, s: &Scene) -> Color {
+        let v = self.pattern.eval(&crate::graph::Context::at_hit_filtered(i, s));
+        let (a, b, t) = self.place(v);
+        if t <= 0. || a == b {
+            self.map[a].1.eval(i, s)
+        } else if t >= 1. {
+            self.map[b].1.eval(i, s)
+        } else {
+            self.map[a].1.eval(i, s).blend(&self.map[b].1.eval(i, s), t)
+        }
+    }
+
+    /// The map's colour at a value, with its entries' mean colours.
+    pub fn at_value(&self, v: f64) -> Color {
+        let (a, b, t) = self.place(v);
+        self.map[a].1.average().blend(&self.map[b].1.average(), t)
+    }
+
+    fn average(&self) -> Color {
+        // The map's mean over the pattern's range, or its entries' if that is unbounded.
+        let (lo, hi) = self.pattern.range();
+        let (lo, hi) = if lo.is_finite() && hi.is_finite() && hi > lo { (lo, hi) } else {
+            (self.map[0].0, self.map[self.map.len() - 1].0)
+        };
+        let n = 32;
+        (0 .. n).map(|k| self.at_value(lo + (hi - lo) * (k as f64 + 0.5) / n as f64)).fold(Color::black(), |a, c| a + c) * (1. / n as f64)
+    }
 }
 
 /// Which feature of a `mesas` heightmap a `TerrainTexture` follows.
@@ -446,6 +520,7 @@ impl ColorTexture {
             },
             ColorTexture::Slope(t) => { let a = t.amount(&i.point, &i.normal); Color::new(a, a, a) },
             ColorTexture::Terrain(t) => { let a = t.amount(&i.point); Color::new(a, a, a) },
+            ColorTexture::Pattern(t) => t.eval(i, s),
         }
     }
 
@@ -461,6 +536,7 @@ impl ColorTexture {
                 Color::new(v, v, v)
             },
             ColorTexture::Slope(_) | ColorTexture::Terrain(_) => Color::new(0.5, 0.5, 0.5),
+            ColorTexture::Pattern(t) => t.average(),
         }
     }
 }
@@ -577,5 +653,27 @@ mod tests {
         assert!((img.levels[0].texels[0].rgb.x - 0.5).abs() < 0.005, "{:?}", img.levels[0].texels[0]);
         let raw = Image::load(p.to_str().unwrap(), Some(true)).unwrap();
         assert!((raw.levels[0].texels[0].rgb.x - 188. / 255.).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod pattern_tests {
+    use super::*;
+
+    #[test]
+    fn test_color_maps_blend_between_entries() {
+        let map = |interpolation| PatternTexture {
+            pattern: crate::graph::Graph::parse(&serde_json::json!({"node": "gradient"})).unwrap(),
+            map: vec![(0., Color::black().into()), (1., Color::white().into()), (2., Color::new(1., 0., 0.).into())],
+            interpolation,
+        };
+        let linear = map(Interpolation::Linear);
+        assert_eq!(linear.at_value(-5.), Color::black());
+        assert_eq!(linear.at_value(0.25), Color::new(0.25, 0.25, 0.25));
+        assert_eq!(linear.at_value(1.5), Color::new(1., 0.5, 0.5));
+        assert_eq!(linear.at_value(9.), Color::new(1., 0., 0.));
+        assert_eq!(map(Interpolation::Step).at_value(0.9), Color::black());
+        let smooth = map(Interpolation::Smooth).at_value(0.25).rgb.x;
+        assert!(smooth > 0. && smooth < 0.25);
     }
 }

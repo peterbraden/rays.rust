@@ -497,6 +497,26 @@ impl SceneFile {
     /// `textures::SlopeTexture`), or from the elevation (`{"height": [from, to], ...}`).
     pub fn parse_color_texture(v: &Value) -> crate::textures::ColorTexture {
         // A function graph's node (`graph.rs`): a grey level, eg. a mix's amount by slope.
+        // {"pattern": graph, "color_map": [[value, colour or texture], ...], "interpolation":
+        // "linear" | "smooth" | "step"}: a pattern coloured by a map (`textures::PatternTexture`).
+        if let Some(pattern) = v.get("pattern").filter(|p| !p.is_string()) {
+            use crate::textures::{Interpolation, PatternTexture};
+            let pattern = crate::graph::Graph::parse(pattern).unwrap_or_else(|e| panic!("texture pattern: {}", e));
+            let entries = v["color_map"].as_array().filter(|a| !a.is_empty())
+                .unwrap_or_else(|| panic!("a pattern texture needs a \"color_map\": [[value, colour], ...], got {}", v["color_map"]));
+            let mut map: Vec<(f64, crate::textures::ColorTexture)> = entries.iter().map(|e| match e.as_array() {
+                Some(pair) if pair.len() == 2 && pair[0].is_number() => (pair[0].as_f64().unwrap(), SceneFile::parse_color_texture(&pair[1])),
+                _ => panic!("a color_map entry is [value, colour], got {}", e),
+            }).collect();
+            map.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let interpolation = match v["interpolation"].as_str().unwrap_or("linear") {
+                "linear" => Interpolation::Linear,
+                "smooth" => Interpolation::Smooth,
+                "step" => Interpolation::Step,
+                s => panic!("a color_map's interpolation is linear, smooth or step, not \"{}\"", s),
+            };
+            return crate::textures::ColorTexture::Pattern(PatternTexture { pattern, map, interpolation });
+        }
         if v.get("node").is_some() {
             return crate::textures::ColorTexture::Graph(Arc::new(crate::graph::Graph::parse(v)
                 .unwrap_or_else(|e| panic!("texture graph: {}", e))));

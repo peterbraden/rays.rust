@@ -4639,6 +4639,25 @@ impl SceneFile {
     }
 
     pub fn from_scenefile(mut s: SceneFile) -> Scene {
+        // A camera `"feature"` looks at one of a landscape's features, from the best view the
+        // survey found of it (`terrain::features`).
+        if let Some(choice) = crate::terrain::features::Choice::parse(&s.camera["feature"])
+            && let Some(k) = s.objects.iter().position(|o| o["type"].as_str() == Some("landscape")) {
+            let mut l = s.objects[k].clone();
+            l["camera"] = s.camera.clone();
+            l["camera"]["image_width"] = serde_json::json!(SceneFile::parse_int(&s.width, 640));
+            l["camera"]["image_height"] = serde_json::json!(SceneFile::parse_int(&s.height, 480));
+            match crate::terrain::object::feature_camera(&l, &choice) {
+                Some((camera, focus, description)) => {
+                    println!("Camera: looking at the {}", description);
+                    println!("Camera: {}", camera);
+                    for (key, value) in camera.as_object().unwrap() { s.camera[key] = value.clone(); }
+                    // The landscape keeps its patches where the survey found the feature.
+                    if let Some(f) = focus { s.objects[k]["focus"] = serde_json::json!([f.x, f.y, f.z]); }
+                },
+                None => println!("Camera: the landscape has no feature {:?} to look at; the camera stays where it is", choice),
+            }
+        }
         // A camera `"above_ground"` stands, and looks, at heights above a landscape's ground.
         if s.camera["above_ground"].as_bool() == Some(true)
             && let Some(l) = s.objects.iter().find(|o| o["type"].as_str() == Some("landscape")) {

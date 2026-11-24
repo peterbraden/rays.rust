@@ -252,9 +252,9 @@ for i, (x, z, h) in enumerate([(-3.4, -2.6, 1.6), (-6.5, 4.5, 2.4), (5.2, 1.5, 1
 
 # The dark forest round the clearing, its trees laden with snow.
 add({"type": "forest", "seed": 12, "lod": {"pixels": 1},
-     "area": {"min": [-70, -30], "max": [70, 90]}, "spacing": 4.5, "clearings": 0.05,
+     "area": {"min": [-80, -30], "max": [80, 110]}, "spacing": 4.5, "clearings": 0.05,
      "patch_size": 30, "patchiness": 0.3, "variants": 8,
-     "where": "min(1, max(0, (sqrt(x * x + (z - 2) * (z - 2)) - 11) / 3)) * min(1, max(0, (sqrt(x * x + (z + 10) * (z + 10)) - 7) / 2))",
+     "where": "min(1, max(0, (sqrt(x * x + 0.6 * (z - 10) * (z - 10)) - 24) / 20)) * min(1, max(0, (sqrt(x * x + (z + 10) * (z + 10)) - 7) / 2))",
      "species": [
          {"species": "norway-spruce", "weight": 4, "spacing": 0.8, "bark": "SNOWY_BARK", "leaves": ["LADEN_NEEDLE_1", "LADEN_NEEDLE_2"]},
          {"species": "balsam-fir", "weight": 3, "spacing": 0.7, "bark": "SNOWY_BARK", "leaves": ["LADEN_NEEDLE_1", "LADEN_NEEDLE_2"]},

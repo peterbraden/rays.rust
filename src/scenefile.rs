@@ -5319,7 +5319,8 @@ mod tests {
     fn test_patterns_go_with_their_objects() {
         let s = minimal_scene(r#", "objects": [
             { "type": "sphere", "location": [0, 0, 0], "radius": 1 },
-            { "type": "sphere", "location": [0, 0, 0], "radius": 1, "transform": [{"rotate": [0, 0, 90]}, {"translate": [5, 0, 0]}] } ]"#);
+            { "type": "sphere", "location": [0, 0, 0], "radius": 1, "transform": [{"rotate": [0, 0, 90]}, {"translate": [5, 0, 0]}] },
+            { "type": "sphere", "location": [0, 0, 0], "radius": 0.5, "transform": [{"scale": 2}, {"rotate": [0, 0, 90]}, {"translate": [10, 0, 0]}] } ]"#);
         let t = SceneFile::parse_color_texture(&serde_json::json!({"pattern": {"node": "gradient", "direction": [1, 0, 0]},
             "color_map": [[-1, [0, 0, 0]], [1, [1, 1, 1]]]}));
         let hit = |x: f64| s.objects.nearest_intersection(&Ray { ro: Vector3::new(x, 0.3, -5.), rd: Vector3::z() }, f64::INFINITY, 0.).unwrap();
@@ -5328,6 +5329,9 @@ mod tests {
         let (ca, cb) = (t.eval(&a, &s), t.eval(&b, &s));
         assert!((ca.rgb.x - 0.5).abs() < 1e-9, "{:?}", ca);
         assert!((cb.rgb.x - 0.65).abs() < 1e-9, "{:?}", cb);
+        // Scaled, the pattern keeps its size: the same as the unscaled sphere's.
+        let cc = t.eval(&hit(10.), &s);
+        assert!((cc.rgb.x - 0.65).abs() < 1e-9, "{:?}", cc);
     }
 
     #[test]

@@ -6,7 +6,8 @@ from what we are assuming, and the questions that need answering before work sta
 Status: a working document. Sections 1 to 8 are the original workstreams, several since
 built (the wavefront integrator, flare, spectral rendering and more: `CLAUDE.md` lists what
 exists); sections 12 to 14 are current (the GPU path, the scheduler, the world from one
-seed), each saying what is done, with measurements, and what is next.
+seed), each saying what is done, with measurements, and what is next; section 16 is a review
+of the codebase (November 2026), its bugs and architecture, every item pending a decision.
 
 
 ## Process
@@ -2653,3 +2654,160 @@ paths that only it uses (step 5). What stays, on purpose: `MaterialModel`, `Geom
   frame comes first.
 - Whether `trace` is kept, frozen, as the tests' reference after step 5, or the references
   become stored images.
+
+
+## 16. Codebase review (November 2026)
+
+Status: **pending a decision, every item.** Nothing here is agreed or scheduled; each item
+waits for a decision to fix it, defer it or drop it. Found by reading the code (three
+reviewers over the render pipeline, scene input and the server, and the wavefront/GPU, plus
+`cargo clippy`), not by running anything; items marked *checked* were re-read against the
+code after the review. Line numbers are as of commit `c9f5369`.
+
+### Bugs
+
+Each: what is known, the failure, and a suggested fix. All pending a decision.
+
+1. **The `serve` server builds any web page's scene** (pending a decision; *checked*).
+   `Handler::respond` (`src/server.rs`) only decides whether CORS headers are added; the
+   request is handled whatever its `Origin`. A page on any site can send a "simple"
+   `text/plain` POST to `127.0.0.1:8787/api/scene` without a preflight, and building a scene
+   writes files (`"map"`, `"planet_map"`, `"climate_map"` write PNGs to any path; `"cache"`
+   creates directories and JSON anywhere) and reads any file (meshes, textures). No `Host`
+   check, so DNS rebinding makes such a page same-origin. The body has no size limit, and a
+   scene's `width` × `height` is allocated unchecked (an abort `catch_unwind` can't stop);
+   variables referring to variables (`substitute_variables`) expand exponentially.
+   Suggested: refuse API requests whose `Origin` isn't allowed, require `application/json`,
+   check `Host`, cap the body and the image size; and see architecture item 8.
+2. **One NaN sample discards a whole pass, and infinities are kept** (pending a decision;
+   *checked*). `RenderContext::set_pixel` zeroes a NaN channel of a pass's summed samples
+   (`Color::ignore_nan`) yet adds the full count: with 4 samples a pass, one NaN throws away
+   3 good ones, biasing pixels dark and shifting their colour; the sum of squares likewise, so
+   adaptive sampling stops early on those pixels. An infinite sample makes the pixel infinite
+   for good, saved into `.accum`. Suggested: filter each sample in `render_pixel` before
+   summing, and count only those kept.
+3. **Resuming with the Stratified or ZSobol' sampler changes the picture** (pending a
+   decision; *checked*). Both lay out their samples from `supersamples`
+   (`Stratified::new(.., supersamples)`, ZSobol's `planned`), which `render_key` leaves out:
+   `--samples 8` then `--samples 64` mixes two layouts, neither stratified nor what an
+   uninterrupted render gives. Suggested: lay out by a fixed count (or one recorded in the
+   `.accum`), or key the state on `supersamples` for these samplers.
+4. **`lookat` equal to `location` renders black silently** (pending a decision; *checked*).
+   `Frame::look_at` normalises a zero vector; the guard replaces only `camx`, so every ray is
+   NaN (and item 2 turns them black). Suggested: refuse it when the scene is read.
+5. **ZSobol' indices are cut to 32 bits** (pending a decision). `src/sampler.rs` casts the
+   sample index to `u32`; 1080p at 2048 spp or 4K at 512 spp need 33 bits, so pixels share
+   points (correlated error, not blue noise). pbrt uses 64-bit indices.
+6. **Resumes aren't bit-identical at counts that aren't whole passes** (pending a decision).
+   A pass's samples are summed before adding to the pixel, so stopping at 5 and going on to
+   32 groups the additions differently (and with adaptive sampling, the counts can differ).
+   `test_resumed_render_is_identical` uses `samples_per_chunk: 1`, which hides it.
+7. **The scaled landscape's terrain cache** (pending a decision; *checked*).
+   `Simulation::run_cached` (`src/terrain/simulation.rs`): no format version in the key (old
+   terrain reused after the erosion code changes); `DefaultHasher`, not stable across Rust
+   releases; written straight to its final name (a killed run leaves a truncated file, which
+   is recomputed); and any snapshot with `years <= time.round()` is restored, so a cached
+   t=3000 serves `"time": 2999.6`. `world.rs` handles all of these; suggested: use it.
+8. **`Store::write_json` can rename a truncated file into place** (pending a decision).
+   `src/world.rs`: the `BufWriter`'s flush happens on drop, which ignores errors; on a full
+   disk the truncated temp file is renamed over the real one and recorded as done.
+   Suggested: `into_inner()`/`flush()` and check before the rename.
+9. **`build.rs` doesn't rerun when the generated shader files are deleted** (pending a
+   decision; *checked*). The `rerun-if-changed` list omits `src/gpu/pathtrace.{spv,wgsl,
+   spv.sources}`, so after `git clean -fdx` a `--features gpu` build fails until a file
+   under `shaders/` changes. Also `scripts/shader-sources.sh` hashes only `*.rs` and
+   `Cargo.toml`.
+10. **Hashes that change between Rust versions** (pending a decision). The `.accum` key
+    (`render_key`) and item 7's cache key use `DefaultHasher`; a toolchain update silently
+    starts saved renders afresh.
+11. **Smaller** (each pending a decision):
+    - NFF: `p 1e10` reserves that capacity before reading a vertex, and aborts
+      (`src/nff.rs`, `count()`); bound it by the tokens left.
+    - A panic while building a scene drops every kept object (`KEPT_OBJECTS` is `take()`n in
+      `parse_objects_indexed` and put back only at the end), so each typo in the editor
+      forces a full rebuild.
+    - World pictures are drawn only `if !path.exists()`, straight to the final name, so one
+      interrupted mid-write is never redrawn (`world.rs`, `Builder::picture`).
+    - The GPU encodes `max_depth + 1` rounds per block whatever is alive; a large `max_depth`
+      makes the rounds and readback buffers exceed WebGPU's limits, unchecked before
+      `create_buffer`. No demo scene is affected.
+    - `--width 0` / `--height 0` reach NaN progress messages and a failed PNG write.
+    - `sample_area_light_with` (`material/functions.rs`) ignores the light BVH; dead now, but
+      wrong MIS weights for a future caller. Remove it or route it through
+      `sample_lights_with`.
+    - `src/gpu/mod.rs`'s module doc still says the GPU uses independent random numbers, not
+      Sobol' points.
+    - 57 clippy warnings, all style.
+
+Checked and sound: MIS weights, the light BVH's pmf against its sampling, the sun disc's
+pdf, Russian roulette and its agreement between `trace` and the kernels, the host/shader
+struct layouts, the GPU queues' capacity and 32-bit slot indexing, the static file handler's
+path traversal, the `.accum` write (temp file and rename), the `world.rs` stage keys, and
+`schema.json` against the parser's defaults.
+
+### Architecture
+
+Each: what is known, why it matters, and a suggestion. All pending a decision.
+
+1. **Path state in thread-locals** (pending a decision). About 12 `thread_local!`s carry a
+   path's state (`volume::PATH`, `VERTICES`, `DIFFUSED`, `NEXT_SUN_WEIGHT`,
+   `NEXT_GLINT_WEIGHT`, `chromatic::PENDING`, the sampler's state, wavelengths, time).
+   `NEXT_SUN_WEIGHT` passes a weight to the next vertex by matching the continuation ray
+   exactly, so code that rebuilds or nudges that ray loses it silently. It is what section
+   15's step 3 has to undo. Suggested: a `PathContext` passed through `scatter` and the
+   medium and shadow-ray calls, migrating one thread-local at a time with images unchanged;
+   and no new thread-locals meanwhile.
+2. **The core traits grow a getter per feature** (pending a decision). `Geometry` has 28
+   methods, many asking what kind of thing it is (`flatten`, `ocean`, `medium`,
+   `faces_are_primitives`, `kind`, `transmits`, `undisplaced`, `tangent`); `MaterialModel`
+   has 12 (`water`, `air`, `is_sky`, `flat`, `sun_glint`, `volume_sunlight`). Each feature
+   the kernels gain adds another `Option<&Concrete>` to a trait every shape or material
+   implements. Suggested: a lean core trait each, and one export trait returning an enum
+   (`Prims`, `Ocean`, `Medium`, `Host`), so the flattener's choice is one `match`.
+3. **`scenefile.rs` is the bottleneck** (pending a decision). 5,468 lines: every object
+   type, materials, media, variables, object reuse (`KEPT_OBJECTS`, a static), the sky
+   following the sun. Most features touch it, and errors are panics (the server reports them
+   through `catch_unwind`). Suggested: each type's parser beside its implementation behind a
+   registry, as `scenefile_shapes.rs` began; object reuse as a cache the preview and server
+   own; `Result` errors naming the JSON path.
+4. **`Scene` mixes description with derived data** (pending a decision). Objects, camera
+   and lights sit beside `area_light_choice`, `light_bvh`, `area_light_indices` (keyed by an
+   `Arc`'s address), `environment`, `sea` and the render options. Suggested: the scene apart
+   from a light-sampling set-up derived from it, with indices given when it is built.
+5. **Global caches keyed by strings** (pending a decision). The ocean, weather, climate,
+   tectonics, sky LUT and sky tables each keep a `static` map keyed by a formatted string:
+   never evicted (in `serve` and the browser, long-lived processes), keys built by hand
+   (bug 7). Suggested: one cache owned by the render context, keyed by a stable hash of the
+   parameter structs with a format version, bounded in size; `world.rs`'s store is most of it.
+6. **Two copies of light transport must agree** (pending a decision). Until section 15's
+   step 5, `trace` and the kernels must match on MIS, roulette and the sun disc; they do
+   today, kept by care and spot tests. Suggested: a standing test rendering the demo scenes
+   the kernels can lay out both ways at low spp and comparing them by FLIP.
+7. **CI gaps** (pending a decision). `cargo clippy -- -D errors` doesn't fail on warnings
+   (hence item 11's 57); the library is checked without `cli` but not for
+   `wasm32-unknown-unknown`; the GPU tests (`cargo test --release --features gpu gpu::` on
+   lavapipe) don't run. Suggested: `-D warnings` after a clean-up, the wasm target, and the
+   lavapipe tests.
+8. **No boundary on what building a scene may do** (pending a decision). Building a scene
+   can write files and read any path, and the server and the browser build scenes from
+   untrusted text. Suggested: a parse context with a restricted mode (no writes, no absolute
+   or parent paths) that `serve` and the page use; the root of bug 1.
+9. **Smaller** (each pending a decision): `material/legacy.rs` (Whitted) survives for tests'
+   `FlatColor` (move `FlatColor` out, or keep it as test support); `participatingmedia.rs`
+   (`Scene::air_medium`) and `volume.rs`/`volume/` look like two abstractions for media.
+
+### Suggested order, if taken up
+
+1. CI (architecture 7, 6): cheap, and guards the rest.
+2. The server and the parse boundary (bug 1, architecture 8), and sample filtering (bug 2).
+3. The remaining bugs, smallest first.
+4. `PathContext` (architecture 1), the precondition for section 15's step 3.
+5. The traits and the scene-file registry (architecture 2, 3), as files are touched.
+
+### Open decisions
+
+- Which of the above to take up, defer or drop.
+- Whether `serve` stays local-only (and is fixed as bug 1 says) or is meant to be reachable
+  from the deployed page, which needs the allowed origins decided.
+- Whether a resumed render must be bit-identical (bugs 3, 6) or only statistically the same;
+  the documentation promises the first.

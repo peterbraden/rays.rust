@@ -30,6 +30,7 @@ use std::cell::Cell;
 use crate::geometry::rand;
 use crate::intersection::{Intersection, RawIntersection};
 use crate::material::model::{MaterialModel, ScatteredRay};
+use crate::light_bvh::Lobe;
 use crate::material::phase::PhaseFunction;
 use crate::material::diffraction::DiffractionTable;
 use crate::material::ice_halos::{Crystals, HaloTable};
@@ -1063,7 +1064,7 @@ impl VolumeMaterial {
         let mut direct = Color::black();
         if let (Some(stretch), None) = (stretch, diffusing) {
             // On a stretch sampled equi-angularly too: weighted against those samples.
-            direct = direct + self.weighted_lights(point, s, &stretch, &through);
+            direct = direct + self.weighted_lights(point, s, &stretch, &phase.base, &through);
         } else if diffusing != Some(false) {
             // With a light BVH, point lights are sampled with the area lights below.
             for light in s.lights.iter().filter(|_| s.sums_point_lights()) {
@@ -1072,7 +1073,11 @@ impl VolumeMaterial {
                 let w = to_light / d;
                 direct = direct + light.radiant_intensity(&-w) * through(&Ray { ro: *point, rd: w }, d) / (d * d);
             }
-            direct = direct + crate::material::functions::sample_lights_through(point, s, |_, _| Color::white(), &through);
+            // The light BVH choosing by the phase function too (`light_bvh::Lobe`): unless the
+            // diffused light, scattered evenly, is most of it.
+            let lobe = Lobe { d: *incoming, phase: phase.base };
+            let lobe = diffusing.is_none().then_some(&lobe);
+            direct = direct + crate::material::functions::sample_lights_towards(point, s, lobe, |_, _| Color::white(), &through);
         }
         if let Some(sun) = &s.sun {
             // Halos, rainbows and diffraction colour the phase function in RGB.
@@ -1580,12 +1585,12 @@ impl LightRef {
         }
     }
 
-    /// The chance that this light is the one chosen to be sampled from `at`.
-    fn chosen_from(&self, s: &Scene, at: &Vector3<f64>) -> f64 {
+    /// The chance that this light is the one chosen to be sampled from `at`, for `lobe`.
+    fn chosen_from(&self, s: &Scene, at: &Vector3<f64>, lobe: &Lobe) -> f64 {
         match (*self, &s.light_bvh) {
             (LightRef::Point(_, true), _) => 1.,
-            (LightRef::Area(i), Some(bvh)) => bvh.pmf(at, i),
-            (LightRef::Point(j, false), Some(bvh)) => bvh.pmf(at, s.bvh_area_lights() + j),
+            (LightRef::Area(i), Some(bvh)) => bvh.pmf_towards(at, Some(lobe), i),
+            (LightRef::Point(j, false), Some(bvh)) => bvh.pmf_towards(at, Some(lobe), s.bvh_area_lights() + j),
             (LightRef::Area(i), None) => s.area_light_choice.probability(i),
             (LightRef::Point(..), None) => 1.,
         }
@@ -1622,12 +1627,13 @@ fn distance_heuristic(sigma: f64, a: f64, t: f64) -> f64 {
 
 /// The power heuristic's weights for a light's sample at the stretch's point t, taken by
 /// a collision there (first) or by equi-angular sampling (second); `sigma` the medium's density
-/// at t, unscaled.
-fn mis_weights(s: &Scene, stretch: &Stretch, light: LightRef, sigma: f64) -> (f64, f64) {
+/// at t, unscaled, and `phase` its phase function there, by which both choose their lights.
+fn mis_weights(s: &Scene, stretch: &Stretch, light: LightRef, sigma: f64, phase: &PhaseFunction) -> (f64, f64) {
     let x = stretch.o + stretch.d * stretch.t;
+    let lobe = Lobe { d: stretch.d, phase: *phase };
     let (delta, dist) = equiangular_geometry(&stretch.o, &stretch.d, &light.centre(s));
-    let along = light.chosen_from(s, &stretch.middle()) * equiangular_pdf(delta, dist, stretch.a, stretch.b, stretch.t);
-    let collided = light.chosen_from(s, &x) * distance_heuristic(sigma, stretch.a, stretch.t);
+    let along = light.chosen_from(s, &stretch.middle(), &lobe) * equiangular_pdf(delta, dist, stretch.a, stretch.b, stretch.t);
+    let collided = light.chosen_from(s, &x, &lobe) * distance_heuristic(sigma, stretch.a, stretch.t);
     let (a2, c2) = (along * along, collided * collided);
     if !(a2 + c2 > 0.) || !(a2 + c2).is_finite() {
         return if collided > 0. { (1., 0.) } else { (0., 1.) };
@@ -1645,13 +1651,20 @@ impl Volume {
         // of them, unless the light BVH holds them), and one area light, or one of the BVH's,
         // chosen from the stretch's middle.
         let middle = o + d * (0.5 * (a + b));
+        // The phase function of a vertex here, as below, by which the lights are chosen.
+        at_vertex();
+        let first = path_scatterings();
+        let scatterings = if first == 0 && material.reached_truncated() { 1 } else { first };
+        let base = material.phase_at(&middle, scatterings).base;
+        specular_vertex();
+        let lobe = Lobe { d: *d, phase: base };
         let summed = s.sums_point_lights();
         let mut lights: Vec<(LightRef, f64)> = Vec::new();
         if summed {
             lights.extend((0..s.lights.len()).map(|j| (LightRef::Point(j, true), 1.)));
         }
         match &s.light_bvh {
-            Some(bvh) => if let Some((i, chosen)) = bvh.sample(&middle, rand()) {
+            Some(bvh) => if let Some((i, chosen)) = bvh.sample_towards(&middle, Some(&lobe), rand()) {
                 let areas = s.bvh_area_lights();
                 lights.push((if i < areas { LightRef::Area(i) } else { LightRef::Point(i - areas, false) }, chosen));
             },
@@ -1674,7 +1687,7 @@ impl Volume {
             if sigma <= 0. {
                 continue;
             }
-            let (_, weight) = mis_weights(s, &Stretch { o: *o, d: *d, a, b, t }, light, density);
+            let (_, weight) = mis_weights(s, &Stretch { o: *o, d: *d, a, b, t }, light, density, &base);
             if weight <= 0. {
                 continue;
             }
@@ -1721,7 +1734,7 @@ impl VolumeMaterial {
     /// The area and point lights at a collision `point` on a stretch sampled equi-angularly, as
     /// `direct_lighting` samples them, each weighted against the equi-angular samples
     /// (`mis_weights`).
-    fn weighted_lights(&self, point: &Vector3<f64>, s: &Scene, stretch: &Stretch, through: &dyn Fn(&Ray, f64) -> Color) -> Color {
+    fn weighted_lights(&self, point: &Vector3<f64>, s: &Scene, stretch: &Stretch, phase: &PhaseFunction, through: &dyn Fn(&Ray, f64) -> Color) -> Color {
         // At the point on the ray itself, before any shadow bias, as the equi-angular samples'
         // weights reckon it: the two weights must add to one.
         let density = self.field.density(&(stretch.o + stretch.d * stretch.t));
@@ -1729,14 +1742,15 @@ impl VolumeMaterial {
         let summed = s.sums_point_lights();
         if summed {
             for j in 0..s.lights.len() {
-                let (weight, _) = mis_weights(s, stretch, LightRef::Point(j, true), density);
+                let (weight, _) = mis_weights(s, stretch, LightRef::Point(j, true), density, phase);
                 if weight > 0. {
                     total = total + point_light(s, j, point, through) * weight;
                 }
             }
         }
+        let lobe = Lobe { d: stretch.d, phase: *phase };
         let (light, chosen) = match &s.light_bvh {
-            Some(bvh) => match bvh.sample(point, rand()) {
+            Some(bvh) => match bvh.sample_towards(point, Some(&lobe), rand()) {
                 Some((i, chosen)) => {
                     let areas = s.bvh_area_lights();
                     (if i < areas { LightRef::Area(i) } else { LightRef::Point(i - areas, false) }, chosen)
@@ -1749,7 +1763,7 @@ impl VolumeMaterial {
             },
             None => return total,
         };
-        let (weight, _) = mis_weights(s, stretch, light, density);
+        let (weight, _) = mis_weights(s, stretch, light, density, phase);
         if weight <= 0. {
             return total;
         }

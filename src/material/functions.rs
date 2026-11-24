@@ -202,6 +202,13 @@ pub fn sample_lights_with(point: &Vector3<f64>, s: &Scene, response: impl Fn(&Ve
 /// approximation of light diffused through a cloud (`volume`'s `diffusion`).
 pub fn sample_lights_through(point: &Vector3<f64>, s: &Scene, response: impl Fn(&Vector3<f64>, f64) -> Color,
                              transmit: &dyn Fn(&Ray, f64) -> Color) -> Color {
+    sample_lights_towards(point, s, None, response, transmit)
+}
+
+/// As `sample_lights_through`, the light BVH choosing for a receiver in a medium that scatters
+/// by `lobe` (`LightBvh::sample_towards`).
+pub fn sample_lights_towards(point: &Vector3<f64>, s: &Scene, lobe: Option<&crate::light_bvh::Lobe>,
+                             response: impl Fn(&Vector3<f64>, f64) -> Color, transmit: &dyn Fn(&Ray, f64) -> Color) -> Color {
     let bvh = match &s.light_bvh {
         None => {
             if !s.render.sample_lights || s.area_lights.is_empty() {
@@ -212,7 +219,7 @@ pub fn sample_lights_through(point: &Vector3<f64>, s: &Scene, response: impl Fn(
         },
         Some(b) => b,
     };
-    let (i, chosen) = match bvh.sample(point, rand()) {
+    let (i, chosen) = match bvh.sample_towards(point, lobe, rand()) {
         Some(x) => x,
         None => return Color::black(),
     };

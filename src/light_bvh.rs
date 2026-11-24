@@ -15,7 +15,18 @@
 //!
 //! pbrt also uses the shading normal; ours doesn't, so that `pmf` can be evaluated where only
 //! the previous vertex's position is known (the trace, when a scattered ray hits a light).
+//!
+//! In a medium, the receiver's equivalent of the normal is its phase function, and a strongly
+//! forward-scattering one (fog's g of 0.75 favours some directions 343 times over others)
+//! matters more than the normal ever does: among a tree's hundreds of lamps, those behind a
+//! point of fog, whose light it scatters on towards the camera, deliver far more than those in
+//! front, and chosen as rarely as the others they are fireflies. So a medium's collisions choose
+//! towards a phase lobe (`Lobe`, `sample_towards`, `pmf_towards`): each node's importance also
+//! times the most the phase function gives over the directions to its bounds. Media's
+//! scattered rays skip the lights they hit (`LightSampling::Exclusive`), so only the sampling
+//! itself and its weights against equi-angular sampling need this pmf.
 
+use crate::material::phase::PhaseFunction;
 use crate::na::{Rotation3, Unit, Vector3};
 use crate::shapes::bbox::BBox;
 use std::f64::consts::PI;
@@ -40,8 +51,8 @@ impl LightBounds {
     }
 
     /// How much light these lights could deliver to `p`, up to a constant (pbrt's
-    /// `LightBounds::Importance`, without the receiver's normal).
-    pub fn importance(&self, p: &Vector3<f64>) -> f64 {
+    /// `LightBounds::Importance`, without the receiver's normal), scattered by `lobe` if given.
+    pub fn importance(&self, p: &Vector3<f64>, lobe: Option<&Lobe>) -> f64 {
         if self.phi <= 0. {
             return 0.;
         }
@@ -64,7 +75,20 @@ impl LightBounds {
         if cos <= self.cos_theta_e {
             return 0.;
         }
-        self.phi * cos / d2
+        let scattered = match lobe {
+            None => 1.,
+            // The phase function's most over the directions from p into the bounds, which lie
+            // within θ_b of the direction to their centre, α from the lobe's: at one end or the
+            // other of [α - θ_b, α + θ_b], as it falls (or, backwards, rises) with the angle.
+            Some(lobe) => {
+                let cos_a = if dist > 0. { -lobe.d.dot(&(to / dist)) } else { 1. };
+                let alpha = cos_a.clamp(-1., 1.).acos();
+                let near = (alpha - theta_b).max(0.).cos();
+                let far = (alpha + theta_b).min(PI).cos();
+                lobe.phase.eval(near).max(lobe.phase.eval(far))
+            },
+        };
+        self.phi * cos * scattered / d2
     }
 
     /// Bounds on both groups.
@@ -111,6 +135,14 @@ fn cone_union(a: (Vector3<f64>, f64), b: (Vector3<f64>, f64)) -> (Vector3<f64>, 
     let w = Rotation3::from_axis_angle(&Unit::new_normalize(axis), theta_r) * a.0;
     // A hair wider, against rounding in the rotation.
     (w, (theta_o + 1e-7).min(PI).cos())
+}
+
+/// A receiver in a medium, on a ray along `d` (unit): light arriving from direction w (unit,
+/// towards the light) is scattered back down the ray in proportion to `phase` at cos = d · w,
+/// as `VolumeMaterial::direct_lighting` evaluates it.
+pub struct Lobe {
+    pub d: Vector3<f64>,
+    pub phase: PhaseFunction,
 }
 
 #[derive(Clone, Debug)]
@@ -173,7 +205,12 @@ impl LightBvh {
 
     /// One light chosen for the point `p` with the random number `u`, and the probability of
     /// choosing it; None if no light can reach `p`.
-    pub fn sample(&self, p: &Vector3<f64>, mut u: f64) -> Option<(usize, f64)> {
+    pub fn sample(&self, p: &Vector3<f64>, u: f64) -> Option<(usize, f64)> {
+        self.sample_towards(p, None, u)
+    }
+
+    /// As `sample`, for a receiver in a medium scattering by `lobe`.
+    pub fn sample_towards(&self, p: &Vector3<f64>, lobe: Option<&Lobe>, mut u: f64) -> Option<(usize, f64)> {
         let mut node = 0;
         let mut pmf = 1.;
         loop {
@@ -182,8 +219,8 @@ impl LightBvh {
                 return Some((n.index, pmf));
             }
             let (c0, c1) = (node + 1, n.index);
-            let i0 = self.nodes[c0].bounds.importance(p);
-            let i1 = self.nodes[c1].bounds.importance(p);
+            let i0 = self.nodes[c0].bounds.importance(p, lobe);
+            let i1 = self.nodes[c1].bounds.importance(p, lobe);
             if i0 + i1 <= 0. {
                 return None;
             }
@@ -202,6 +239,11 @@ impl LightBvh {
 
     /// The probability that `sample` from `p` chooses light `light`.
     pub fn pmf(&self, p: &Vector3<f64>, light: usize) -> f64 {
+        self.pmf_towards(p, None, light)
+    }
+
+    /// The probability that `sample_towards` from `p` for `lobe` chooses light `light`.
+    pub fn pmf_towards(&self, p: &Vector3<f64>, lobe: Option<&Lobe>, light: usize) -> f64 {
         if self.nodes.is_empty() || light >= self.trails.len() {
             return 0.;
         }
@@ -215,8 +257,8 @@ impl LightBvh {
                 return if n.index == light { pmf } else { 0. };
             }
             let (c0, c1) = (node + 1, n.index);
-            let i0 = self.nodes[c0].bounds.importance(p);
-            let i1 = self.nodes[c1].bounds.importance(p);
+            let i0 = self.nodes[c0].bounds.importance(p, lobe);
+            let i1 = self.nodes[c1].bounds.importance(p, lobe);
             if i0 + i1 <= 0. {
                 return 0.;
             }
@@ -255,6 +297,29 @@ mod tests {
                 assert!((pmf - bvh.pmf(&p, i)).abs() < 1e-12);
             }
         }
+    }
+
+    #[test]
+    fn test_a_phase_lobe_favours_the_lights_it_scatters_on() {
+        // A point of fog in the middle of the grid, on a ray along +z from the camera: the
+        // lights beyond it, whose light it scatters forwards back down the ray to the camera,
+        // are chosen more than those before it; the pmf still matches sampling and sums to one.
+        let lights = grid_of_points(7);
+        let bvh = LightBvh::new(&lights);
+        let p = Vector3::new(3., 0.5, 3.);
+        let lobe = Lobe { d: Vector3::new(0., 0., 1.), phase: PhaseFunction::HenyeyGreenstein { g: 0.75 } };
+        let total: f64 = (0..lights.len()).map(|i| bvh.pmf_towards(&p, Some(&lobe), i)).sum();
+        assert!((total - 1.).abs() < 1e-9, "{}", total);
+        seed_rand(2, 0);
+        for _ in 0..200 {
+            let (i, pmf) = bvh.sample_towards(&p, Some(&lobe), rand()).unwrap();
+            assert!((pmf - bvh.pmf_towards(&p, Some(&lobe), i)).abs() < 1e-12);
+        }
+        // Lights 3 + 7 * 6 (straight ahead, 3 away) and 3 (straight behind), equally bright.
+        let (ahead, behind) = (3 + 7 * 6, 3);
+        let with = |i| bvh.pmf_towards(&p, Some(&lobe), i);
+        assert!(with(ahead) > 5. * with(behind), "{} vs {}", with(ahead), with(behind));
+        assert!((bvh.pmf(&p, ahead) / bvh.pmf(&p, behind) - 1.).abs() < 0.5);
     }
 
     #[test]

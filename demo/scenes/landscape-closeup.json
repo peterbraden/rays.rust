@@ -20,12 +20,6 @@
       "seed": 0,
       "time": 100000,
       "domain": { "near": "mountains", "cells": 128, "spacing": 150 },
-      "levels": [
-        { "cells": 128, "spacing": 150 },
-        { "cells": 128, "spacing": 750 },
-        { "cells": 128, "spacing": 3750 },
-        { "cells": 128, "spacing": 18750 }
-      ],
       "focus": [0, 0, 0],
       "cache": "demo/scenes/.landscape-cache"
     },

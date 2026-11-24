@@ -284,12 +284,15 @@ pub fn ground(c: &Context, noise: &SeededNoise, seed: u32, amplitude: f64) -> f6
     amplitude * ((1. - ice) * h.clamp(-REACH, REACH) + ice * glacier)
 }
 
-/// How deep in a joint `c` is, 0 to 1, and a number from 0 to 1 for the block it is on: two
+/// How deep in a joint `c` is, 0 to 1, and the height of the block it is on, 0 to 1 (meeting
+/// its neighbours' halfway at the joints between them): two
 /// sets of nearly parallel vertical joints, at right angles to each other (as joints in bedded
 /// rock form, across the beds and each other), about `spacing` metres apart, the spacing and
 /// the joints' line wandering a little; each joint a rounded groove a hand or two wide where
 /// weathering has opened it.
 fn joints(c: &Context, noise: &SeededNoise, spacing: f64) -> (f64, f64) {
+    // How wide a joint's groove is, metres, and how far each side of it the blocks meet.
+    const WIDTH: f64 = 0.15;
     let p = c.p;
     // The sets' directions turn slowly across the country.
     let angle = 0.6 * noise.noise(p / 300. + crate::na::Vector3::new(4.1, 0.7, 2.3));
@@ -305,14 +308,26 @@ fn joints(c: &Context, noise: &SeededNoise, spacing: f64) -> (f64, f64) {
         let present = ((k >> 11) as f64 / (1u64 << 53) as f64) > 0.3;
         let along = noise.noise(p / (0.5 * s) + crate::na::Vector3::new(o + 5.1, 2.7, 0.9));
         let open = if present { smoothstep(0., 0.3, along) } else { 0. };
-        (open * (1. - smoothstep(0.03, 0.15, d)), u.floor() as i64)
+        // The block this side of the joint, the one across it, and how near the joint is:
+        // at the joint the two meet halfway.
+        let i = u.floor() as i64;
+        let across = if u - u.floor() < 0.5 { i - 1 } else { i + 1 };
+        let meet = 0.5 * (1. - smoothstep(0., WIDTH, d));
+        (open * (1. - smoothstep(0.03, WIDTH, d)), i, across, meet)
     };
-    let ((g1, i), (g2, j)) = (across(a, spacing, 7.7), across(b, 1.6 * spacing, 3.1));
-    let mut h = (i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (j as u64).wrapping_mul(0xc2b2_ae3d_27d4_eb4f);
-    h ^= h >> 31;
-    h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    h ^= h >> 29;
-    (g1.max(g2), (h >> 11) as f64 / (1u64 << 53) as f64)
+    let ((g1, i, ni, wi), (g2, j, nj, wj)) = (across(a, spacing, 7.7), across(b, 1.6 * spacing, 3.1));
+    let height = |i: i64, j: i64| {
+        let mut h = (i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (j as u64).wrapping_mul(0xc2b2_ae3d_27d4_eb4f);
+        h ^= h >> 31;
+        h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        h ^= h >> 29;
+        (h >> 11) as f64 / (1u64 << 53) as f64
+    };
+    // Blended across both sets' joints, so the blocks' heights don't step: a step along a
+    // joint running across the displaced grid's cells is diced into a row of teeth.
+    let block = (1. - wi) * (1. - wj) * height(i, j) + wi * (1. - wj) * height(ni, j)
+        + (1. - wi) * wj * height(i, nj) + wi * wj * height(ni, nj);
+    (g1.max(g2), block)
 }
 
 fn smoothstep(lo: f64, hi: f64, x: f64) -> f64 {

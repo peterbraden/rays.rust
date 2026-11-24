@@ -247,11 +247,12 @@ its `location`'s and `lookat`'s y are metres above the ground under each
 (`object::above_ground`, from the world and its surface before anything else is built), so a
 close-up scene keeps its camera on the ground however the simulation changes. Give the
 landscape a `"focus"`, so its patches don't move with the camera.
-`demo/scenes/landscape-closeup.json` stands 4 m up on a sandstone ridge of a desert fold belt
-with nothing placed by hand: a 150 m simulation under the camera, its own detail and its own
-boulders: sandstone cut by two sets of joints into blocks standing at heights of their own,
-up the slope beyond and in slabs stepped along the joints beside the camera (960 x 540 at 32
-samples: 2 min to build from a cached world, about 35 to render). The landscape's own displacement dices quads two pixels across, at most seven levels
+`demo/scenes/landscape-closeup.json` stands 4 m up on a sandstone slope of a desert fold belt
+with nothing placed by hand: the world's close level under the camera (30 m cells inside its
+150 m patch, `world::close_level`), gullies below that (`Relief::gullies`), its own detail
+and its own boulders: sandstone in thin ledges along its beds, cut by joints that die out and
+open in stretches (960 x 540 at 32 samples: 3 min to build from a cached world, about 35 to
+render). The landscape's own displacement dices quads two pixels across, at most seven levels
 down, unless the scene says otherwise: a render keeps every tile it dices, and bounced light
 reaches nearly every cell near the camera. Boulders are placed on the ground diced coarsely,
 to an eighth of a cell, in tiles dropped afterwards (`displaced::coarsely`): diced for the

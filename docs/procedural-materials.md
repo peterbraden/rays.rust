@@ -30,6 +30,29 @@ replaces the preset's own (here a more polished travertine). Patterns are sized 
 Each preset is an ordinary material definition in
 [`src/material/library.json`](../src/material/library.json): copy one into a scene to change it.
 
+### Presets of your own
+
+A scene can bring its own presets with a top-level `"library"`, read when the scene is loaded:
+a file in the same form as `library.json`, an object of presets written in the scene, or a list
+of these (later ones over earlier). They come before the built-in presets, so one of the same
+name replaces it, and they can build on built-in ones:
+
+```json
+"library": ["materials/alpine.json", {
+  "red_granite": { "doc": "Granite with a red palette.",
+    "material": { "type": "library", "name": "granite",
+      "palette": [[0, [0.03, 0.02, 0.02]], [0.25, [0.5, 0.2, 0.15]], [1, [0.7, 0.3, 0.22]]] } } }],
+"materials": { "PLINTH": { "type": "library", "name": "red_granite", "scale": 2 } }
+```
+
+A preset is `{"doc", "variables", "material"}` (and optionally `overlay`, `seed_direction`,
+`show`): `variables` are graphs and values used in `material` as `"$name"`, and are also its
+parameters. The scene's own `variables` don't reach into a library; presets have their own.
+Files are found as a scene's other files are (`crate::assets`, so the browser builder can
+provide them). A resumed render hashes the library files' contents with the scene, so editing
+a preset starts it afresh. To tune a preset, put it in a file and render it with
+`scripts/material-gallery.py --library FILE --only NAME`: no rebuild is needed.
+
 | Preset | What it is, and what it's made of |
 |---|---|
 | `carrara_marble` | White marble with grey veins: Perlin's marble, a wave of a gradient bent by turbulence (\|sin\| for veins that are thin and sharp), over cloudy white. Polished. |
@@ -152,6 +175,103 @@ On a landscape, use them as the layers of its `surface_layers`, masked as before
 Seen from a kilometre, centimetre detail only sets a material's average, so it is close to the
 ground (a figure on a path, a boulder in the foreground) that these show; from afar, it is the
 landscape's own layers and their masks that make it read.
+
+## Fitting presets to scans
+
+![Two fits](material-fit.png)
+
+*Top: `scree` fitted to ambientCG's Gravel043 (1.6 m of fine grit): it starts with too few,
+too large, too pale stones, and the fit takes it to the scan's grain size and tone (mean
+colour within 1/255; a slight olive cast left). Bottom: `granite_outcrop` fitted to Poly
+Haven's lichen_rock (2 m): the fit gets the darkness, but not the iron-red rock or the fine
+streaky lichen, which the preset's graph can't make: its stains vary over 15 m and its lichen
+comes in blotches. A fit tunes a preset's parameters; it can't change its structure.*
+
+`scripts/fit-material.py` tunes a preset's parameters to a scanned surface:
+
+1. A preset's entry in `library.json` lists the scans it is compared with, in `references`:
+   each a CC0 scan's `source` (`polyhaven:lichen_rock`, `ambientcg:Gravel043`), its `size` in
+   metres, and `params`, what to search: the library material's fields (`scale`, or a preset
+   variable by name) and places in the preset's JSON, numbers or colours (searched as a
+   lightness and a tint of limited `chroma`, as natural colours are mostly unsaturated). See the
+   script's documentation; `scree` and `granite_outcrop` have the two above. The renderer
+   ignores everything in an entry but its `material`, `variables`, `seed_direction`, `scale` and
+   `overlay`, so tools may keep what they like there.
+2. `scripts/fetch-material-reference.py` fetches a scan's albedo map and size into
+   `references/materials/` (not committed); the fit does this itself when it needs to.
+3. `scripts/fit-material.py scree -o fit` (or `scree:1` for its second reference, or a spec
+   file of the same form) renders each candidate as
+   the scan was taken: straight down, orthographic, at the scan's size, under a uniform white
+   sky (so a lambertian surface renders as its albedo, checked exactly), at twice the
+   resolution and averaged down; through a library file read at run time, so nothing is
+   rebuilt. It compares them with the scan by their statistics rather than their pixels
+   (procedural noise never lines up with a photograph): a multi-scale sliced Wasserstein
+   distance between distributions of 5x5 patches (after Heitz et al., CVPR 2021, and Elnekave
+   and Weiss, ECCV 2022, on raw patches), plus colour distributions along opponent axes, which
+   the patches alone barely see (left to them, the optimiser traded grey stones for sub-pixel
+   confetti of saturated colours averaging grey). CMA-ES searches the parameters (the renderer
+   isn't differentiable). About a second a candidate; 30 generations take 15 to 25 minutes.
+4. It writes `fitted.json` (the fitted preset as a library file, ready for a scene's
+   `"library"`), `compare.png` and `log.csv`; with `--record`, it also writes the fit into the
+   reference's `fit` in `library.json`: the losses, the settings, and the fitted values by
+   parameter, with `"applied": false` until a person who has looked at the comparison copies
+   them into the preset.
+
+### Presets modelled on scans
+
+![Ten presets and their scans](material-fit-scans.png)
+
+*Each: the scan, the preset as written, and fitted. All ten fits applied.*
+
+Ten presets were written to imitate particular Poly Haven scans, each scan recorded in the
+preset's `references`:
+
+| Preset | Scan | |
+|---|---|---|
+| `pebble_bed` | dry_river_pebbles | Packed rounded pebbles, pale and dark |
+| `angular_rubble` | gray_rocks | Packed angular grey stones, soil between |
+| `mossy_slab` | mossy_rock | A mosaic of mosses and lichens over grey rock, a few cracks |
+| `ochre_crust` | rock_06 | Ochre rock blotched with dark varnish, sharp cracks |
+| `lichened_ironstone` | lichen_rock (a wall) | Iron-dark rock streaked along its grain, lichen in clumps gathered in drifts |
+| `bedded_sandstone` | cliff_side (a wall) | Beds of random thickness, each its own tone, rust partings, joints ending at them |
+| `trail_dirt` | forest_ground_04 | Compacted brown earth with sparse pale stones |
+| `laterite` | red_laterite_soil_stones | Rust-red earth with sparse pale nodules |
+| `foliated_rock` | quarry_wall (a wall) | Dark wavy foliation along a `dip`, from phasor noise |
+| `shingle` | coast_sand_03 | Grey-beige gravel and sand in lighter and darker drifts |
+
+Cliffs are fitted as walls (`"view": "wall"`), so their beds and streaks run along y as on a
+landscape's cliffs.
+
+A fit is applied only once someone has looked at it: `scripts/apply-fit.py pebble_bed` copies
+the recorded values into the preset and marks them applied. A fitted size becomes the
+preset's own `scale`, multiplied into whatever a scene asks for. Re-rendering an applied
+preset gives the recorded loss. Fits correct colour and size; where a preset still differs
+from its scan it is in structure, which is the author's to improve: the sandstone's partings
+are thinner and more regular than the scan's chunky blocks, the ironstone has less lichen,
+the foliation's streaks are crisper, and the trail's stones fewer and smaller.
+
+What the first attempts taught, now built into `fit-material.py`:
+
+- An optimiser left free with each colour swaps their roles (the pale pebbles become the dark
+  ones) and wanders into hues the scan hasn't got (green and pink pebbles), matching the
+  statistics with a picture that looks nothing like the scan. A colour's lightness is now held
+  near its author's and its tint close to theirs: a fit refines a preset's colours, it doesn't
+  choose them.
+- A search's cost grows with its dimensions (CMA-ES wants of the order of a hundred
+  evaluations per dimension), so a preset's colours are best fitted as groups, each as one
+  colour is: a gain on lightness, two small tint shifts and a contrast, keeping the colours'
+  relations. Gains on red, green and blue apiece let a group's hue wander (grey lichen turned
+  blue, ochre pink); and colours of different hues (rock and lichen) belong in separate groups.
+- Colours that cover little of the surface hardly move the loss, so their tint drifts: give
+  them a smaller `chroma` (trail_dirt's stones, a tenth of its area, turned mint green).
+- The eye judges a surface's hue by its mean first; the patch distributions barely see a mean
+  shifted from tan to pink. The mean colour is now compared besides, along the opponent axes.
+- Size is held near the author's (0.7 to 1.4 of it): left free, it ran to its bound.
+
+The comparison sees albedo only, so it fits colour and pattern, not relief or gloss (the scans'
+normal and roughness maps could be compared the same way), and the plastic presets' coats add a
+little to their apparent albedo. Classifying whether a fit reads as the right material (a
+network trained on MINC, or CLIP) would need weights this environment can't download yet.
 
 ## Patterns and colour maps
 

@@ -3585,7 +3585,8 @@ impl SceneFile {
         // {"type": "library", "name": ..., "scale", "seed"}: a ready-made material
         // (`material::library`).
         if props["type"].as_str() == Some("library") {
-            let expanded = crate::material::library::expand(props).unwrap_or_else(|e| panic!("material '{}': {}", name, e));
+            let scene = materials.get(crate::material::library::SCENE_PRESETS).and_then(Value::as_object);
+            let expanded = crate::material::library::expand_in(props, scene).unwrap_or_else(|e| panic!("material '{}': {}", name, e));
             return SceneFile::parse_material_definition(&expanded, name, materials);
         }
         let m = SceneFile::parse_unbumped_material(props, name, materials)
@@ -4985,8 +4986,19 @@ impl SceneFile {
     /// Build a scene from a scene file's JSON, applying command-line overrides first.
     pub fn from_value_overridden(doc: Value, o: &Overrides) -> Scene {
         let (width, height) = (o.width, o.height);
+        // The scene's own library presets (`material::library::load`), taken out before the
+        // scene's variables are substituted: presets have variables of their own.
+        let mut doc = doc;
+        let presets = doc.as_object_mut().and_then(|d| d.remove("library"));
         let mut doc = SceneFile::substitute_variables(doc)
             .unwrap_or_else(|e| panic!("Scene file: {}", e));
+        if let Some(spec) = presets {
+            let presets = crate::material::library::load(&spec).unwrap_or_else(|e| panic!("Scene file's library: {}", e));
+            if !doc["materials"].is_object() {
+                doc["materials"] = Value::Object(Map::new());
+            }
+            doc["materials"].as_object_mut().unwrap().insert(crate::material::library::SCENE_PRESETS.into(), Value::Object(presets));
+        }
         crate::weather::scene::choose_seeds(&mut doc);
         let mut scene: SceneFile = serde_json::from_value(doc).unwrap();
         if let Some(seed) = o.seed {
@@ -5566,6 +5578,25 @@ mod tests {
         assert_eq!((s.image.width, s.image.height), (40, 2));
         let s = minimal_scene_sized("", None, Some(30));
         assert_eq!((s.image.width, s.image.height), (4, 30));
+    }
+
+    #[test]
+    fn test_a_scene_brings_its_own_library() {
+        // A preset written in the scene, with variables of its own that the scene's mustn't
+        // touch, used by name, scaled, and as an overlay's base.
+        let s = minimal_scene(r#", "variables": { "dark": [0.1, 0.1, 0.1] },
+            "library": { "striped": { "doc": "d", "variables": { "bands": {"node": "wave", "input": {"node": "gradient"}} },
+                "material": { "type": "lambertian", "albedo": {"pattern": "$bands", "color_map": [[0, [0, 0, 0]], [1, [1, 1, 1]]]} } } },
+            "materials": { "S": { "type": "library", "name": "striped", "scale": 2 },
+                           "D": { "type": "library", "name": "dust", "over": { "type": "library", "name": "striped" } },
+                           "P": { "type": "lambertian", "albedo": "$dark" } },
+            "objects": [ { "type": "sphere", "location": [0, 0, 0], "radius": 1, "material": "S" },
+                         { "type": "sphere", "location": [3, 0, 0], "radius": 1, "material": "D" },
+                         { "type": "sphere", "location": [6, 0, 0], "radius": 1, "material": "P" } ]"#);
+        for x in [0., 3., 6.] {
+            let r = Ray { ro: Vector3::new(x + 0.1, 0.2, -5.), rd: Vector3::new(0., 0., 1.) };
+            assert!(crate::trace::trace(&r, 0, &s).1.rgb.iter().all(|v| v.is_finite()));
+        }
     }
 
     #[test]

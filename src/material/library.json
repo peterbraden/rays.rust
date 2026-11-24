@@ -2286,7 +2286,9 @@
           }
         }
       ]
-    }
+    },
+    "show": "landscape",
+    "over_for_landscape": "plain"
   },
   "moss": {
     "doc": "Overlay: cushions of moss on what faces up and in damp hollows, patchy, raised and soft-edged.",
@@ -2298,7 +2300,7 @@
         "inputs": [
           {
             "node": "fractal",
-            "scale": 0.12,
+            "scale": 0.6,
             "seed": 331,
             "smallest": 0.004,
             "roughness": 0.6
@@ -2306,7 +2308,7 @@
           {
             "node": "multiply",
             "inputs": [
-              0.4,
+              0.5,
               {
                 "node": "occlusion",
                 "radius": 0.1,
@@ -2383,7 +2385,7 @@
               },
               {
                 "node": "expr",
-                "expr": "min(max((p - 0.45 + 0.6 * a) / 0.12, 0), 1)",
+                "expr": "min(max((p - 0.45 + 0.6 * a) / 0.25, 0), 1)",
                 "inputs": {
                   "p": "$patches",
                   "a": "$amount"
@@ -2397,7 +2399,9 @@
           }
         }
       ]
-    }
+    },
+    "show": "landscape",
+    "over_for_landscape": "plain"
   },
   "lichen": {
     "doc": "Overlay: crustose lichen, round patches with paler rims spreading over stone, more on faces turned up.",
@@ -2521,7 +2525,9 @@
           }
         }
       ]
-    }
+    },
+    "show": "landscape",
+    "over_for_landscape": "plain"
   },
   "mud_splash": {
     "doc": "Overlay: mud splashed up from the ground, thick at the foot and spattered above, up to \"height\" metres.",
@@ -4425,5 +4431,2910 @@
         ]
       }
     }
+  },
+  "granite_outcrop": {
+    "show": "landscape",
+    "doc": "Weathered granite as it stands in mountains: grey crystalline rock, mottled and iron-stained, black water streaks down its steep faces, grey crusts and yellow-green map lichen on what faces up; relief from centimetres to metres.",
+    "variables": {
+      "relief": {
+        "node": "add",
+        "inputs": [
+          {
+            "node": "fractal",
+            "scale": 3,
+            "seed": 601,
+            "style": "billow",
+            "smallest": 0.004,
+            "amplitude": 0.05,
+            "roughness": 0.55
+          },
+          {
+            "node": "fractal",
+            "scale": 0.02,
+            "seed": 602,
+            "smallest": 0.002,
+            "amplitude": 0.0015
+          }
+        ]
+      },
+      "mottle": {
+        "node": "fractal",
+        "scale": 4,
+        "seed": 603,
+        "smallest": 0.01,
+        "roughness": 0.55
+      },
+      "crystals": {
+        "node": "warp",
+        "amount": 0.0015,
+        "scale": 0.006,
+        "seed": 605,
+        "octaves": 2,
+        "input": {
+          "node": "cells",
+          "style": "id",
+          "scale": 0.005,
+          "seed": 604
+        }
+      },
+      "stains": {
+        "node": "smoothstep",
+        "from": 0.15,
+        "to": 0.45,
+        "input": {
+          "node": "fractal",
+          "scale": 15,
+          "seed": 606,
+          "smallest": 0.1,
+          "roughness": 0.6
+        }
+      },
+      "streaks": {
+        "node": "multiply",
+        "inputs": [
+          {
+            "node": "slope",
+            "from": 45,
+            "to": 70,
+            "breakup": {
+              "node": "fractal",
+              "scale": 5,
+              "seed": 607,
+              "amplitude": 10
+            }
+          },
+          {
+            "node": "smoothstep",
+            "from": 0.05,
+            "to": 0.35,
+            "input": {
+              "node": "fractal",
+              "scale": 1.5,
+              "seed": 608,
+              "plan": true,
+              "smallest": 0.01,
+              "roughness": 0.6
+            }
+          }
+        ]
+      },
+      "grey_lichen": {
+        "node": "multiply",
+        "inputs": [
+          {
+            "node": "slope",
+            "from": 75,
+            "to": 45
+          },
+          {
+            "node": "smoothstep",
+            "from": 0.05,
+            "to": 0.12,
+            "input": {
+              "node": "add",
+              "inputs": [
+                {
+                  "node": "fractal",
+                  "scale": 2,
+                  "seed": 609,
+                  "smallest": 0.01
+                },
+                {
+                  "node": "multiply",
+                  "inputs": [
+                    0.5,
+                    {
+                      "node": "fractal",
+                      "scale": 0.1,
+                      "seed": 610,
+                      "smallest": 0.003
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "map_lichen": {
+        "node": "multiply",
+        "inputs": [
+          {
+            "node": "slope",
+            "from": 70,
+            "to": 35
+          },
+          {
+            "node": "smoothstep",
+            "from": 0.1,
+            "to": 0.3,
+            "input": {
+              "node": "fractal",
+              "scale": 4,
+              "seed": 611,
+              "smallest": 0.5
+            }
+          },
+          {
+            "node": "smoothstep",
+            "from": 0.5,
+            "to": 0.42,
+            "input": {
+              "node": "warp",
+              "amount": 0.03,
+              "scale": 0.08,
+              "seed": 613,
+              "octaves": 2,
+              "input": {
+                "node": "cells",
+                "style": "f1",
+                "scale": 0.1,
+                "seed": 612
+              }
+            }
+          }
+        ]
+      }
+    },
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": "$mottle",
+              "color_map": [
+                [
+                  -0.6,
+                  {
+                    "pattern": "$crystals",
+                    "color_map": [
+                      [
+                        0,
+                        [
+                          0.14,
+                          0.135,
+                          0.13
+                        ]
+                      ],
+                      [
+                        0.25,
+                        [
+                          0.26,
+                          0.255,
+                          0.25
+                        ]
+                      ],
+                      [
+                        0.6,
+                        [
+                          0.33,
+                          0.31,
+                          0.29
+                        ]
+                      ],
+                      [
+                        1,
+                        [
+                          0.4,
+                          0.37,
+                          0.34
+                        ]
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  0.6,
+                  {
+                    "pattern": "$crystals",
+                    "color_map": [
+                      [
+                        0,
+                        [
+                          0.17,
+                          0.165,
+                          0.16
+                        ]
+                      ],
+                      [
+                        0.25,
+                        [
+                          0.33,
+                          0.32,
+                          0.31
+                        ]
+                      ],
+                      [
+                        0.6,
+                        [
+                          0.42,
+                          0.4,
+                          0.37
+                        ]
+                      ],
+                      [
+                        1,
+                        [
+                          0.5,
+                          0.47,
+                          0.43
+                        ]
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            },
+            "normal": {
+              "graph": "$relief",
+              "amount": 1
+            }
+          }
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": {
+                "node": "fractal",
+                "scale": 2,
+                "seed": 614
+              },
+              "color_map": [
+                [
+                  -0.5,
+                  [
+                    0.3,
+                    0.2,
+                    0.12
+                  ]
+                ],
+                [
+                  0.5,
+                  [
+                    0.42,
+                    0.3,
+                    0.18
+                  ]
+                ]
+              ]
+            }
+          },
+          "mask": "$stains",
+          "coverage": 0.6
+        },
+        {
+          "material": {
+            "type": "plastic",
+            "albedo": [
+              0.035,
+              0.032,
+              0.03
+            ],
+            "roughness": 0.3
+          },
+          "mask": "$streaks"
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": {
+                "node": "fractal",
+                "scale": 0.05,
+                "seed": 615
+              },
+              "color_map": [
+                [
+                  -0.5,
+                  [
+                    0.38,
+                    0.39,
+                    0.36
+                  ]
+                ],
+                [
+                  0.5,
+                  [
+                    0.55,
+                    0.56,
+                    0.52
+                  ]
+                ]
+              ]
+            }
+          },
+          "mask": "$grey_lichen",
+          "coverage": 0.7
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": {
+                "node": "cells",
+                "style": "edges",
+                "scale": 0.004,
+                "seed": 616
+              },
+              "color_map": [
+                [
+                  0,
+                  [
+                    0.03,
+                    0.03,
+                    0.025
+                  ]
+                ],
+                [
+                  0.08,
+                  [
+                    0.03,
+                    0.03,
+                    0.025
+                  ]
+                ],
+                [
+                  0.14,
+                  [
+                    0.5,
+                    0.56,
+                    0.12
+                  ]
+                ],
+                [
+                  0.5,
+                  [
+                    0.6,
+                    0.66,
+                    0.18
+                  ]
+                ]
+              ]
+            }
+          },
+          "mask": "$map_lichen"
+        }
+      ]
+    }
+  },
+  "limestone_cliff": {
+    "show": "landscape",
+    "doc": "A limestone crag: pale grey, ochre where freshly broken, striped black by the cyanobacteria that grow where water runs down it, its steep faces fluted by solution (karren) and its tops pitted.",
+    "variables": {
+      "flutes": {
+        "node": "multiply",
+        "inputs": [
+          {
+            "node": "slope",
+            "from": 40,
+            "to": 65
+          },
+          {
+            "node": "fractal",
+            "scale": 0.25,
+            "seed": 621,
+            "style": "ridged",
+            "plan": true,
+            "smallest": 0.01,
+            "amplitude": 0.03
+          }
+        ]
+      },
+      "pits": {
+        "node": "multiply",
+        "inputs": [
+          {
+            "node": "slope",
+            "from": 40,
+            "to": 20
+          },
+          {
+            "node": "smoothstep",
+            "from": 0.22,
+            "to": 0.1,
+            "input": {
+              "node": "cells",
+              "scale": 0.05,
+              "seed": 622
+            }
+          },
+          {
+            "node": "smoothstep",
+            "from": 0.0,
+            "to": 0.3,
+            "input": {
+              "node": "fractal",
+              "scale": 1,
+              "seed": 631
+            }
+          }
+        ]
+      },
+      "relief": {
+        "node": "add",
+        "inputs": [
+          {
+            "node": "fractal",
+            "scale": 4,
+            "seed": 623,
+            "style": "billow",
+            "smallest": 0.005,
+            "amplitude": 0.06
+          },
+          {
+            "node": "fractal",
+            "scale": 0.03,
+            "seed": 624,
+            "smallest": 0.002,
+            "amplitude": 0.001
+          }
+        ]
+      },
+      "tone": {
+        "node": "fractal",
+        "scale": 6,
+        "seed": 625,
+        "smallest": 0.02,
+        "roughness": 0.6
+      },
+      "black": {
+        "node": "multiply",
+        "inputs": [
+          {
+            "node": "slope",
+            "from": 50,
+            "to": 75,
+            "breakup": {
+              "node": "fractal",
+              "scale": 5,
+              "seed": 626,
+              "amplitude": 10
+            }
+          },
+          {
+            "node": "smoothstep",
+            "from": -0.05,
+            "to": 0.3,
+            "input": {
+              "node": "fractal",
+              "scale": 2,
+              "seed": 627,
+              "plan": true,
+              "smallest": 0.02,
+              "roughness": 0.65
+            }
+          }
+        ]
+      },
+      "ochre": {
+        "node": "smoothstep",
+        "from": 0.25,
+        "to": 0.5,
+        "input": {
+          "node": "fractal",
+          "scale": 10,
+          "seed": 628,
+          "smallest": 0.1
+        }
+      }
+    },
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": "$tone",
+              "color_map": [
+                [
+                  -0.6,
+                  [
+                    0.36,
+                    0.36,
+                    0.34
+                  ]
+                ],
+                [
+                  0.0,
+                  [
+                    0.48,
+                    0.47,
+                    0.44
+                  ]
+                ],
+                [
+                  0.6,
+                  [
+                    0.58,
+                    0.57,
+                    0.53
+                  ]
+                ]
+              ]
+            },
+            "normal": {
+              "graph": {
+                "node": "add",
+                "inputs": [
+                  "$relief",
+                  "$flutes",
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      -0.01,
+                      "$pits"
+                    ]
+                  }
+                ]
+              },
+              "amount": 1
+            }
+          }
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": {
+                "node": "fractal",
+                "scale": 1,
+                "seed": 629
+              },
+              "color_map": [
+                [
+                  -0.5,
+                  [
+                    0.45,
+                    0.32,
+                    0.18
+                  ]
+                ],
+                [
+                  0.5,
+                  [
+                    0.58,
+                    0.44,
+                    0.27
+                  ]
+                ]
+              ]
+            }
+          },
+          "mask": "$ochre",
+          "coverage": 0.8
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": {
+                "node": "fractal",
+                "scale": 0.5,
+                "seed": 630
+              },
+              "color_map": [
+                [
+                  -0.5,
+                  [
+                    0.03,
+                    0.03,
+                    0.03
+                  ]
+                ],
+                [
+                  0.5,
+                  [
+                    0.09,
+                    0.085,
+                    0.08
+                  ]
+                ]
+              ]
+            }
+          },
+          "mask": "$black"
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": [
+              0.12,
+              0.11,
+              0.1
+            ]
+          },
+          "mask": "$pits"
+        }
+      ]
+    }
+  },
+  "gneiss": {
+    "show": "landscape",
+    "doc": "Gneiss: metamorphic rock in folded bands of pale quartz and feldspar and dark biotite, the dark bands weathered back.",
+    "variables": {
+      "bands": {
+        "node": "power",
+        "exponent": 1.5,
+        "input": {
+          "node": "wave",
+          "shape": "sine",
+          "frequency": 14,
+          "input": {
+            "node": "add",
+            "inputs": [
+              {
+                "node": "gradient",
+                "direction": [
+                  0.15,
+                  1,
+                  0.25
+                ]
+              },
+              {
+                "node": "warp",
+                "amount": 0.4,
+                "scale": 3,
+                "seed": 642,
+                "octaves": 2,
+                "input": {
+                  "node": "fractal",
+                  "scale": 1.5,
+                  "seed": 641,
+                  "amplitude": 0.15,
+                  "smallest": 0.02
+                }
+              }
+            ]
+          }
+        }
+      },
+      "grain": {
+        "node": "cells",
+        "style": "id",
+        "scale": 0.003,
+        "seed": 643
+      },
+      "relief": {
+        "node": "add",
+        "inputs": [
+          {
+            "node": "fractal",
+            "scale": 3,
+            "seed": 644,
+            "style": "billow",
+            "smallest": 0.005,
+            "amplitude": 0.04
+          },
+          {
+            "node": "fractal",
+            "scale": 0.02,
+            "seed": 645,
+            "smallest": 0.002,
+            "amplitude": 0.001
+          }
+        ]
+      },
+      "lenses": {
+        "node": "add",
+        "inputs": [
+          {
+            "node": "multiply",
+            "inputs": [
+              0.6,
+              "$bands"
+            ]
+          },
+          {
+            "node": "multiply",
+            "inputs": [
+              0.35,
+              {
+                "node": "fractal",
+                "scale": 0.6,
+                "seed": 646,
+                "smallest": 0.01
+              }
+            ]
+          },
+          0.2
+        ]
+      }
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": "$lenses",
+        "color_map": [
+          [
+            0.0,
+            {
+              "pattern": "$grain",
+              "color_map": [
+                [
+                  0,
+                  [
+                    0.09,
+                    0.085,
+                    0.08
+                  ]
+                ],
+                [
+                  1,
+                  [
+                    0.18,
+                    0.17,
+                    0.16
+                  ]
+                ]
+              ]
+            }
+          ],
+          [
+            0.4,
+            {
+              "pattern": "$grain",
+              "color_map": [
+                [
+                  0,
+                  [
+                    0.22,
+                    0.21,
+                    0.2
+                  ]
+                ],
+                [
+                  1,
+                  [
+                    0.34,
+                    0.31,
+                    0.29
+                  ]
+                ]
+              ]
+            }
+          ],
+          [
+            0.8,
+            {
+              "pattern": "$grain",
+              "color_map": [
+                [
+                  0,
+                  [
+                    0.32,
+                    0.3,
+                    0.28
+                  ]
+                ],
+                [
+                  1,
+                  [
+                    0.48,
+                    0.44,
+                    0.4
+                  ]
+                ]
+              ]
+            }
+          ]
+        ],
+        "interpolation": "smooth"
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            "$relief",
+            {
+              "node": "multiply",
+              "inputs": [
+                0.004,
+                "$bands"
+              ]
+            }
+          ]
+        },
+        "amount": 1
+      }
+    }
+  },
+  "schist": {
+    "show": "landscape",
+    "doc": "Mica schist: silvery grey-green rock of fine wavy foliation, glittering where its mica flakes catch the sun.",
+    "variables": {
+      "foliation": {
+        "node": "wave",
+        "shape": "sine",
+        "frequency": 40,
+        "input": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "gradient",
+              "direction": [
+                0.2,
+                1,
+                0.1
+              ]
+            },
+            {
+              "node": "warp",
+              "amount": 0.05,
+              "scale": 0.3,
+              "seed": 652,
+              "octaves": 2,
+              "input": {
+                "node": "fractal",
+                "scale": 0.5,
+                "seed": 651,
+                "amplitude": 0.02,
+                "smallest": 0.005
+              }
+            }
+          ]
+        }
+      },
+      "mica": {
+        "node": "cells",
+        "style": "id",
+        "scale": 0.0025,
+        "seed": 653
+      },
+      "relief": {
+        "node": "add",
+        "inputs": [
+          {
+            "node": "fractal",
+            "scale": 2,
+            "seed": 654,
+            "style": "billow",
+            "smallest": 0.004,
+            "amplitude": 0.03
+          },
+          {
+            "node": "fractal",
+            "scale": 0.05,
+            "seed": 655,
+            "smallest": 0.002,
+            "amplitude": 0.0008
+          }
+        ]
+      }
+    },
+    "material": {
+      "type": "plastic",
+      "refractive_index": 1.55,
+      "roughness": {
+        "pattern": "$mica",
+        "color_map": [
+          [
+            0,
+            0.6
+          ],
+          [
+            0.7,
+            0.55
+          ],
+          [
+            0.75,
+            0.12
+          ],
+          [
+            1,
+            0.12
+          ]
+        ],
+        "interpolation": "step"
+      },
+      "albedo": {
+        "pattern": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.35,
+                "$foliation"
+              ]
+            },
+            {
+              "node": "fractal",
+              "scale": 3,
+              "seed": 656,
+              "smallest": 0.02
+            }
+          ]
+        },
+        "color_map": [
+          [
+            -0.6,
+            [
+              0.15,
+              0.16,
+              0.14
+            ]
+          ],
+          [
+            0.2,
+            [
+              0.25,
+              0.26,
+              0.23
+            ]
+          ],
+          [
+            0.9,
+            [
+              0.34,
+              0.35,
+              0.32
+            ]
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            "$relief",
+            {
+              "node": "multiply",
+              "inputs": [
+                0.0006,
+                "$foliation"
+              ]
+            }
+          ]
+        },
+        "amount": 1
+      }
+    }
+  },
+  "scree": {
+    "show": "landscape",
+    "doc": "Scree: angular stones from fist-sized to a few centimetres, each its own shade, lying on each other with dark gaps between, older stones grown with lichen.",
+    "variables": {
+      "big": {
+        "node": "multiply",
+        "inputs": [
+          0.12,
+          {
+            "node": "smoothstep",
+            "from": 0.0,
+            "to": 0.22,
+            "input": {
+              "node": "warp",
+              "amount": 0.06999999999999999,
+              "scale": 0.24499999999999997,
+              "seed": 662,
+              "octaves": 2,
+              "input": {
+                "node": "cells",
+                "style": "edges",
+                "scale": 0.35,
+                "seed": 661
+              }
+            }
+          },
+          {
+            "node": "add",
+            "inputs": [
+              0.6,
+              {
+                "node": "multiply",
+                "inputs": [
+                  0.4,
+                  {
+                    "node": "warp",
+                    "amount": 0.06999999999999999,
+                    "scale": 0.24499999999999997,
+                    "seed": 662,
+                    "octaves": 2,
+                    "input": {
+                      "node": "cells",
+                      "style": "id",
+                      "scale": 0.35,
+                      "seed": 661
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "mid": {
+        "node": "multiply",
+        "inputs": [
+          0.04,
+          {
+            "node": "smoothstep",
+            "from": 0.0,
+            "to": 0.22,
+            "input": {
+              "node": "warp",
+              "amount": 0.022000000000000002,
+              "scale": 0.077,
+              "seed": 664,
+              "octaves": 2,
+              "input": {
+                "node": "cells",
+                "style": "edges",
+                "scale": 0.11,
+                "seed": 663
+              }
+            }
+          },
+          {
+            "node": "add",
+            "inputs": [
+              0.6,
+              {
+                "node": "multiply",
+                "inputs": [
+                  0.4,
+                  {
+                    "node": "warp",
+                    "amount": 0.022000000000000002,
+                    "scale": 0.077,
+                    "seed": 664,
+                    "octaves": 2,
+                    "input": {
+                      "node": "cells",
+                      "style": "id",
+                      "scale": 0.11,
+                      "seed": 663
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "small": {
+        "node": "multiply",
+        "inputs": [
+          0.012,
+          {
+            "node": "smoothstep",
+            "from": 0.0,
+            "to": 0.22,
+            "input": {
+              "node": "warp",
+              "amount": 0.007000000000000001,
+              "scale": 0.0245,
+              "seed": 666,
+              "octaves": 2,
+              "input": {
+                "node": "cells",
+                "style": "edges",
+                "scale": 0.035,
+                "seed": 665
+              }
+            }
+          },
+          {
+            "node": "add",
+            "inputs": [
+              0.6,
+              {
+                "node": "multiply",
+                "inputs": [
+                  0.4,
+                  {
+                    "node": "warp",
+                    "amount": 0.007000000000000001,
+                    "scale": 0.0245,
+                    "seed": 666,
+                    "octaves": 2,
+                    "input": {
+                      "node": "cells",
+                      "style": "id",
+                      "scale": 0.035,
+                      "seed": 665
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "id_big": {
+        "node": "warp",
+        "amount": 0.07,
+        "scale": 0.245,
+        "seed": 662,
+        "octaves": 2,
+        "input": {
+          "node": "cells",
+          "style": "id",
+          "scale": 0.35,
+          "seed": 661
+        }
+      },
+      "id_mid": {
+        "node": "warp",
+        "amount": 0.022,
+        "scale": 0.077,
+        "seed": 664,
+        "octaves": 2,
+        "input": {
+          "node": "cells",
+          "style": "id",
+          "scale": 0.11,
+          "seed": 663
+        }
+      },
+      "id_small": {
+        "node": "warp",
+        "amount": 0.007,
+        "scale": 0.0245,
+        "seed": 666,
+        "octaves": 2,
+        "input": {
+          "node": "cells",
+          "style": "id",
+          "scale": 0.035,
+          "seed": 665
+        }
+      },
+      "palette": [
+        [
+          0,
+          [
+            0.12,
+            0.115,
+            0.11
+          ]
+        ],
+        [
+          0.3,
+          [
+            0.2,
+            0.19,
+            0.18
+          ]
+        ],
+        [
+          0.6,
+          [
+            0.27,
+            0.26,
+            0.24
+          ]
+        ],
+        [
+          0.85,
+          [
+            0.33,
+            0.3,
+            0.27
+          ]
+        ],
+        [
+          1,
+          [
+            0.38,
+            0.34,
+            0.3
+          ]
+        ]
+      ],
+      "tone": {
+        "node": "fractal",
+        "scale": 25,
+        "seed": 667,
+        "smallest": 1
+      }
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "subtract",
+          "a": "$big",
+          "b": {
+            "node": "multiply",
+            "inputs": [
+              0.12,
+              {
+                "node": "smoothstep",
+                "from": 0,
+                "to": 0.04,
+                "input": {
+                  "node": "max",
+                  "inputs": [
+                    "$mid",
+                    "$small"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "color_map": [
+          [
+            0.0,
+            {
+              "pattern": {
+                "node": "subtract",
+                "a": "$mid",
+                "b": {
+                  "node": "multiply",
+                  "inputs": [
+                    0.04,
+                    {
+                      "node": "smoothstep",
+                      "from": 0,
+                      "to": 0.012,
+                      "input": "$small"
+                    }
+                  ]
+                }
+              },
+              "color_map": [
+                [
+                  0.0,
+                  {
+                    "pattern": "$small",
+                    "color_map": [
+                      [
+                        0,
+                        [
+                          0.05,
+                          0.048,
+                          0.045
+                        ]
+                      ],
+                      [
+                        0.004,
+                        {
+                          "pattern": "$id_small",
+                          "color_map": "$palette",
+                          "interpolation": "step"
+                        }
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  0.006,
+                  {
+                    "pattern": "$id_mid",
+                    "color_map": "$palette",
+                    "interpolation": "step"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            0.02,
+            {
+              "pattern": "$id_big",
+              "color_map": [
+                [
+                  0,
+                  [
+                    0.12,
+                    0.115,
+                    0.11
+                  ]
+                ],
+                [
+                  0.3,
+                  [
+                    0.2,
+                    0.19,
+                    0.18
+                  ]
+                ],
+                [
+                  0.6,
+                  [
+                    0.27,
+                    0.26,
+                    0.24
+                  ]
+                ],
+                [
+                  0.8,
+                  [
+                    0.3,
+                    0.31,
+                    0.24
+                  ]
+                ],
+                [
+                  1,
+                  [
+                    0.38,
+                    0.37,
+                    0.3
+                  ]
+                ]
+              ],
+              "interpolation": "step"
+            }
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "max",
+          "inputs": [
+            "$big",
+            "$mid",
+            "$small"
+          ]
+        },
+        "amount": 1
+      }
+    }
+  },
+  "river_gravel": {
+    "show": "landscape",
+    "doc": "River gravel: rounded pebbles of many rocks (grey, buff, red-brown, white quartz, black) on sand.",
+    "variables": {
+      "big": {
+        "node": "multiply",
+        "inputs": [
+          0.03,
+          {
+            "node": "cells",
+            "style": "stones",
+            "scale": 0.06,
+            "seed": 671
+          }
+        ]
+      },
+      "small": {
+        "node": "multiply",
+        "inputs": [
+          0.01,
+          {
+            "node": "cells",
+            "style": "stones",
+            "scale": 0.02,
+            "seed": 673
+          }
+        ]
+      },
+      "palette": [
+        [
+          0,
+          [
+            0.1,
+            0.1,
+            0.1
+          ]
+        ],
+        [
+          0.15,
+          [
+            0.3,
+            0.3,
+            0.29
+          ]
+        ],
+        [
+          0.4,
+          [
+            0.42,
+            0.38,
+            0.32
+          ]
+        ],
+        [
+          0.6,
+          [
+            0.38,
+            0.22,
+            0.15
+          ]
+        ],
+        [
+          0.75,
+          [
+            0.55,
+            0.53,
+            0.5
+          ]
+        ],
+        [
+          0.9,
+          [
+            0.7,
+            0.68,
+            0.64
+          ]
+        ],
+        [
+          1,
+          [
+            0.2,
+            0.22,
+            0.24
+          ]
+        ]
+      ]
+    },
+    "material": {
+      "type": "plastic",
+      "refractive_index": 1.5,
+      "roughness": 0.45,
+      "albedo": {
+        "pattern": "$big",
+        "color_map": [
+          [
+            0,
+            {
+              "pattern": "$small",
+              "color_map": [
+                [
+                  0,
+                  {
+                    "pattern": {
+                      "node": "fractal",
+                      "scale": 0.05,
+                      "seed": 675
+                    },
+                    "color_map": [
+                      [
+                        -0.5,
+                        [
+                          0.36,
+                          0.31,
+                          0.24
+                        ]
+                      ],
+                      [
+                        0.5,
+                        [
+                          0.45,
+                          0.4,
+                          0.31
+                        ]
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  0.001,
+                  {
+                    "pattern": {
+                      "node": "cells",
+                      "style": "id",
+                      "scale": 0.02,
+                      "seed": 673
+                    },
+                    "color_map": "$palette",
+                    "interpolation": "step"
+                  }
+                ]
+              ]
+            }
+          ],
+          [
+            0.002,
+            {
+              "pattern": {
+                "node": "cells",
+                "style": "id",
+                "scale": 0.06,
+                "seed": 671
+              },
+              "color_map": "$palette",
+              "interpolation": "step"
+            }
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "max",
+          "inputs": [
+            "$big",
+            "$small"
+          ]
+        },
+        "amount": 1
+      }
+    }
+  },
+  "dune_sand": {
+    "show": "landscape",
+    "doc": "Wind-blown sand: ripples ten centimetres apart across the \"wind\" direction, gentle upwind and steep downwind, darker heavy minerals in their troughs; smooth on slip faces steeper than the sand rests.",
+    "variables": {
+      "wind": [
+        1,
+        0,
+        0.3
+      ],
+      "ripples": {
+        "node": "multiply",
+        "inputs": [
+          {
+            "node": "slope",
+            "from": 30,
+            "to": 24
+          },
+          {
+            "node": "phasor",
+            "wavelength": 0.11,
+            "direction": "$wind",
+            "spread": 0.15,
+            "plan": true,
+            "profile": "saw",
+            "seed": 681
+          }
+        ]
+      },
+      "tone": {
+        "node": "fractal",
+        "scale": 20,
+        "seed": 682,
+        "smallest": 0.05
+      }
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.8,
+                "$ripples"
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.6,
+                "$tone"
+              ]
+            }
+          ]
+        },
+        "color_map": [
+          [
+            -1.2,
+            [
+              0.4,
+              0.3,
+              0.18
+            ]
+          ],
+          [
+            -0.3,
+            [
+              0.56,
+              0.44,
+              0.28
+            ]
+          ],
+          [
+            0.8,
+            [
+              0.68,
+              0.55,
+              0.38
+            ]
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.009,
+                "$ripples"
+              ]
+            },
+            {
+              "node": "fractal",
+              "scale": 0.003,
+              "seed": 683,
+              "style": "billow",
+              "amplitude": 0.0001
+            }
+          ]
+        },
+        "amount": 1
+      }
+    }
+  },
+  "beach_sand": {
+    "show": "landscape",
+    "doc": "A sandy beach: pale dry sand with shell fragments above, dark glossy wet sand with wave ripples below \"waterline\" metres (scene y).",
+    "variables": {
+      "waterline": 0.0,
+      "wind": [
+        0,
+        0,
+        1
+      ],
+      "shells": {
+        "node": "multiply",
+        "inputs": [
+          {
+            "node": "smoothstep",
+            "from": 0.04,
+            "to": 0.0,
+            "input": {
+              "node": "cells",
+              "style": "edges",
+              "scale": 0.008,
+              "seed": 691
+            }
+          },
+          {
+            "node": "smoothstep",
+            "from": 0.3,
+            "to": 0.5,
+            "input": {
+              "node": "fractal",
+              "scale": 0.2,
+              "seed": 692
+            }
+          }
+        ]
+      },
+      "dry": {
+        "node": "add",
+        "inputs": [
+          {
+            "node": "fractal",
+            "scale": 10,
+            "seed": 693,
+            "smallest": 0.05
+          },
+          {
+            "node": "multiply",
+            "inputs": [
+              0.3,
+              {
+                "node": "fractal",
+                "scale": 0.01,
+                "seed": 694
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": "$shells",
+              "color_map": [
+                [
+                  0,
+                  {
+                    "pattern": "$dry",
+                    "color_map": [
+                      [
+                        -0.6,
+                        [
+                          0.58,
+                          0.5,
+                          0.38
+                        ]
+                      ],
+                      [
+                        0.6,
+                        [
+                          0.72,
+                          0.65,
+                          0.52
+                        ]
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  1,
+                  [
+                    0.85,
+                    0.83,
+                    0.78
+                  ]
+                ]
+              ]
+            },
+            "normal": {
+              "graph": {
+                "node": "add",
+                "inputs": [
+                  {
+                    "node": "fractal",
+                    "scale": 0.5,
+                    "seed": 695,
+                    "amplitude": 0.01
+                  },
+                  {
+                    "node": "fractal",
+                    "scale": 0.003,
+                    "seed": 696,
+                    "style": "billow",
+                    "amplitude": 8e-05
+                  }
+                ]
+              },
+              "amount": 1
+            }
+          }
+        },
+        {
+          "material": {
+            "type": "plastic",
+            "roughness": 0.06,
+            "refractive_index": 1.33,
+            "albedo": {
+              "pattern": {
+                "node": "fractal",
+                "scale": 3,
+                "seed": 697
+              },
+              "color_map": [
+                [
+                  -0.5,
+                  [
+                    0.18,
+                    0.15,
+                    0.11
+                  ]
+                ],
+                [
+                  0.5,
+                  [
+                    0.27,
+                    0.23,
+                    0.17
+                  ]
+                ]
+              ]
+            },
+            "normal": {
+              "graph": {
+                "node": "multiply",
+                "inputs": [
+                  0.005,
+                  {
+                    "node": "phasor",
+                    "wavelength": 0.07,
+                    "direction": "$wind",
+                    "spread": 0.15,
+                    "plan": true,
+                    "profile": "sine",
+                    "seed": 698
+                  }
+                ]
+              },
+              "amount": 1
+            }
+          },
+          "mask": {
+            "node": "expr",
+            "expr": "min(max((w + 0.15 - h + 0.1 * n) / 0.3, 0), 1)",
+            "inputs": {
+              "w": "$waterline",
+              "h": {
+                "node": "expr",
+                "expr": "y"
+              },
+              "n": {
+                "node": "fractal",
+                "scale": 2,
+                "seed": 699
+              }
+            },
+            "range": [
+              0,
+              1
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "mudflat": {
+    "show": "landscape",
+    "doc": "A tidal mudflat or drying lake bed: dark, wet, glossy mud with water standing in its hollows, cracking where it has dried on the rises.",
+    "variables": {
+      "lie": {
+        "node": "fractal",
+        "scale": 3,
+        "seed": 701,
+        "smallest": 0.02,
+        "roughness": 0.55
+      },
+      "cracks": {
+        "node": "smoothstep",
+        "from": 0.03,
+        "to": 0.0,
+        "input": {
+          "node": "warp",
+          "amount": 0.015,
+          "scale": 0.05,
+          "seed": 703,
+          "octaves": 2,
+          "input": {
+            "node": "cells",
+            "style": "edges",
+            "scale": 0.08,
+            "seed": 702
+          }
+        }
+      }
+    },
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": {
+            "type": "plastic",
+            "roughness": 0.25,
+            "refractive_index": 1.33,
+            "albedo": {
+              "pattern": {
+                "node": "fractal",
+                "scale": 0.5,
+                "seed": 704
+              },
+              "color_map": [
+                [
+                  -0.5,
+                  [
+                    0.07,
+                    0.06,
+                    0.05
+                  ]
+                ],
+                [
+                  0.5,
+                  [
+                    0.12,
+                    0.1,
+                    0.08
+                  ]
+                ]
+              ]
+            },
+            "normal": {
+              "graph": {
+                "node": "add",
+                "inputs": [
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.02,
+                      "$lie"
+                    ]
+                  },
+                  {
+                    "node": "fractal",
+                    "scale": 0.01,
+                    "seed": 705,
+                    "style": "billow",
+                    "amplitude": 0.0005
+                  }
+                ]
+              },
+              "amount": 1
+            }
+          }
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": "$cracks",
+              "color_map": [
+                [
+                  0,
+                  {
+                    "pattern": {
+                      "node": "fractal",
+                      "scale": 0.3,
+                      "seed": 706
+                    },
+                    "color_map": [
+                      [
+                        -0.5,
+                        [
+                          0.22,
+                          0.19,
+                          0.15
+                        ]
+                      ],
+                      [
+                        0.5,
+                        [
+                          0.3,
+                          0.26,
+                          0.2
+                        ]
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  1,
+                  [
+                    0.04,
+                    0.035,
+                    0.03
+                  ]
+                ]
+              ]
+            },
+            "normal": {
+              "graph": {
+                "node": "multiply",
+                "inputs": [
+                  -0.003,
+                  "$cracks"
+                ]
+              },
+              "amount": 1
+            }
+          },
+          "mask": {
+            "node": "smoothstep",
+            "from": 0.2,
+            "to": 0.3,
+            "input": "$lie"
+          }
+        },
+        {
+          "material": {
+            "type": "plastic",
+            "albedo": [
+              0.02,
+              0.02,
+              0.02
+            ],
+            "roughness": 0.0,
+            "refractive_index": 1.33
+          },
+          "mask": {
+            "node": "smoothstep",
+            "from": -0.25,
+            "to": -0.3,
+            "input": "$lie"
+          }
+        }
+      ]
+    }
+  },
+  "oak_bark": {
+    "show": "bark",
+    "seed_direction": [
+      0,
+      1,
+      0
+    ],
+    "doc": "Old oak bark: thick grey-brown ridges split by deep vertical furrows and broken across, green with algae on the side turned from the sun (\"shade\", a direction).",
+    "variables": {
+      "shade": [
+        0,
+        0,
+        -1
+      ],
+      "ridges": {
+        "node": "warp",
+        "amount": 0.01,
+        "scale": 0.06,
+        "seed": 712,
+        "octaves": 2,
+        "input": {
+          "node": "transform",
+          "scale": [
+            1,
+            7,
+            1
+          ],
+          "input": {
+            "node": "fractal",
+            "scale": 0.05,
+            "seed": 711,
+            "style": "ridged",
+            "smallest": 0.002,
+            "roughness": 0.55
+          }
+        }
+      },
+      "breaks": {
+        "node": "smoothstep",
+        "from": 0.02,
+        "to": 0.0,
+        "input": {
+          "node": "transform",
+          "scale": [
+            1,
+            0.5,
+            1
+          ],
+          "input": {
+            "node": "cells",
+            "style": "edges",
+            "scale": 0.06,
+            "seed": 713
+          }
+        }
+      }
+    },
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": {
+                "node": "subtract",
+                "a": "$ridges",
+                "b": {
+                  "node": "multiply",
+                  "inputs": [
+                    0.4,
+                    "$breaks"
+                  ]
+                }
+              },
+              "color_map": [
+                [
+                  0.1,
+                  [
+                    0.05,
+                    0.04,
+                    0.035
+                  ]
+                ],
+                [
+                  0.45,
+                  [
+                    0.18,
+                    0.16,
+                    0.14
+                  ]
+                ],
+                [
+                  0.8,
+                  [
+                    0.33,
+                    0.31,
+                    0.28
+                  ]
+                ]
+              ]
+            },
+            "normal": {
+              "graph": {
+                "node": "subtract",
+                "a": {
+                  "node": "multiply",
+                  "inputs": [
+                    0.015,
+                    "$ridges"
+                  ]
+                },
+                "b": {
+                  "node": "multiply",
+                  "inputs": [
+                    0.005,
+                    "$breaks"
+                  ]
+                }
+              },
+              "amount": 1
+            }
+          }
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": {
+                "node": "fractal",
+                "scale": 0.1,
+                "seed": 714
+              },
+              "color_map": [
+                [
+                  -0.5,
+                  [
+                    0.1,
+                    0.13,
+                    0.06
+                  ]
+                ],
+                [
+                  0.5,
+                  [
+                    0.16,
+                    0.2,
+                    0.09
+                  ]
+                ]
+              ]
+            }
+          },
+          "mask": {
+            "node": "multiply",
+            "inputs": [
+              {
+                "node": "aspect",
+                "direction": "$shade",
+                "from": 0.2,
+                "to": 0.9
+              },
+              {
+                "node": "smoothstep",
+                "from": 0.55,
+                "to": 0.85,
+                "input": {
+                  "node": "add",
+                  "inputs": [
+                    "$ridges",
+                    {
+                      "node": "fractal",
+                      "scale": 0.3,
+                      "seed": 715
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "pine_bark": {
+    "show": "bark",
+    "seed_direction": [
+      0,
+      1,
+      0
+    ],
+    "doc": "Scots pine bark low on the trunk: thick grey-brown plates, flaking and reddish where fresh, between deep dark fissures.",
+    "variables": {
+      "plates": {
+        "node": "warp",
+        "amount": 0.012,
+        "scale": 0.05,
+        "seed": 722,
+        "octaves": 2,
+        "input": {
+          "node": "transform",
+          "scale": [
+            1,
+            3.5,
+            1
+          ],
+          "input": {
+            "node": "cells",
+            "style": "edges",
+            "scale": 0.045,
+            "seed": 721
+          }
+        }
+      },
+      "flakes": {
+        "node": "transform",
+        "scale": [
+          1,
+          0.6,
+          1
+        ],
+        "input": {
+          "node": "cells",
+          "style": "id",
+          "scale": 0.012,
+          "seed": 723
+        }
+      }
+    },
+    "material": {
+      "type": "lambertian",
+      "albedo": {
+        "pattern": "$plates",
+        "color_map": [
+          [
+            0,
+            [
+              0.025,
+              0.018,
+              0.014
+            ]
+          ],
+          [
+            0.06,
+            [
+              0.07,
+              0.045,
+              0.03
+            ]
+          ],
+          [
+            0.11,
+            {
+              "pattern": "$flakes",
+              "interpolation": "step",
+              "color_map": [
+                [
+                  0,
+                  [
+                    0.2,
+                    0.16,
+                    0.13
+                  ]
+                ],
+                [
+                  0.5,
+                  [
+                    0.26,
+                    0.21,
+                    0.17
+                  ]
+                ],
+                [
+                  0.8,
+                  [
+                    0.34,
+                    0.2,
+                    0.12
+                  ]
+                ],
+                [
+                  1,
+                  [
+                    0.4,
+                    0.23,
+                    0.13
+                  ]
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "normal": {
+        "graph": {
+          "node": "add",
+          "inputs": [
+            {
+              "node": "multiply",
+              "inputs": [
+                0.02,
+                {
+                  "node": "smoothstep",
+                  "from": 0,
+                  "to": 0.12,
+                  "input": "$plates"
+                }
+              ]
+            },
+            {
+              "node": "multiply",
+              "inputs": [
+                0.002,
+                {
+                  "node": "transform",
+                  "scale": [
+                    1,
+                    0.6,
+                    1
+                  ],
+                  "input": {
+                    "node": "cells",
+                    "style": "stones",
+                    "scale": 0.012,
+                    "seed": 723
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "amount": 1
+      }
+    }
+  },
+  "birch_bark": {
+    "show": "bark",
+    "seed_direction": [
+      0,
+      1,
+      0
+    ],
+    "doc": "Silver birch bark: chalky white with dark horizontal lenticels, peeling to orange in places, black and fissured near the ground (below \"rough_below\" metres, scene y).",
+    "variables": {
+      "rough_below": 0.8,
+      "lenticels": {
+        "node": "smoothstep",
+        "from": 0.45,
+        "to": 0.3,
+        "input": {
+          "node": "transform",
+          "scale": [
+            6,
+            0.25,
+            6
+          ],
+          "input": {
+            "node": "cells",
+            "style": "f1",
+            "scale": 0.02,
+            "seed": 731
+          }
+        }
+      },
+      "peel": {
+        "node": "smoothstep",
+        "from": 0.45,
+        "to": 0.5,
+        "input": {
+          "node": "transform",
+          "scale": [
+            1,
+            0.4,
+            1
+          ],
+          "input": {
+            "node": "fractal",
+            "scale": 0.15,
+            "seed": 732
+          }
+        }
+      },
+      "base": {
+        "node": "expr",
+        "expr": "min(max((r - y + 0.3 * n) / 0.3, 0), 1)",
+        "inputs": {
+          "r": "$rough_below",
+          "n": {
+            "node": "fractal",
+            "scale": 0.4,
+            "seed": 733
+          }
+        },
+        "range": [
+          0,
+          1
+        ]
+      }
+    },
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": "$lenticels",
+              "color_map": [
+                [
+                  0,
+                  {
+                    "pattern": {
+                      "node": "fractal",
+                      "scale": 0.2,
+                      "seed": 734
+                    },
+                    "color_map": [
+                      [
+                        -0.5,
+                        [
+                          0.6,
+                          0.59,
+                          0.56
+                        ]
+                      ],
+                      [
+                        0.5,
+                        [
+                          0.78,
+                          0.77,
+                          0.73
+                        ]
+                      ]
+                    ]
+                  }
+                ],
+                [
+                  1,
+                  [
+                    0.08,
+                    0.07,
+                    0.06
+                  ]
+                ]
+              ]
+            },
+            "normal": {
+              "graph": {
+                "node": "multiply",
+                "inputs": [
+                  -0.0008,
+                  "$lenticels"
+                ]
+              },
+              "amount": 1
+            }
+          }
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": [
+              0.62,
+              0.36,
+              0.2
+            ]
+          },
+          "mask": "$peel",
+          "coverage": 0.5
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": {
+                "node": "fractal",
+                "scale": 0.05,
+                "seed": 735
+              },
+              "color_map": [
+                [
+                  -0.5,
+                  [
+                    0.03,
+                    0.03,
+                    0.03
+                  ]
+                ],
+                [
+                  0.5,
+                  [
+                    0.12,
+                    0.11,
+                    0.1
+                  ]
+                ]
+              ]
+            },
+            "normal": {
+              "graph": {
+                "node": "multiply",
+                "inputs": [
+                  0.012,
+                  {
+                    "node": "warp",
+                    "amount": 0.01,
+                    "scale": 0.05,
+                    "seed": 737,
+                    "octaves": 2,
+                    "input": {
+                      "node": "transform",
+                      "scale": [
+                        1,
+                        4,
+                        1
+                      ],
+                      "input": {
+                        "node": "fractal",
+                        "scale": 0.04,
+                        "seed": 736,
+                        "style": "ridged"
+                      }
+                    }
+                  }
+                ]
+              },
+              "amount": 1
+            }
+          },
+          "mask": {
+            "node": "smoothstep",
+            "from": 0.4,
+            "to": 0.6,
+            "input": {
+              "node": "add",
+              "inputs": [
+                "$base",
+                {
+                  "node": "multiply",
+                  "inputs": [
+                    0.3,
+                    {
+                      "node": "transform",
+                      "scale": [
+                        1,
+                        3,
+                        1
+                      ],
+                      "input": {
+                        "node": "fractal",
+                        "scale": 0.08,
+                        "seed": 738
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "beech_bark": {
+    "show": "bark",
+    "seed_direction": [
+      0,
+      1,
+      0
+    ],
+    "doc": "Beech bark: smooth thin grey skin, softly mottled, with pale crusts of lichen and the odd ring of wrinkles.",
+    "variables": {
+      "mottle": {
+        "node": "fractal",
+        "scale": 0.3,
+        "seed": 741,
+        "smallest": 0.005,
+        "roughness": 0.6
+      }
+    },
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": {
+            "type": "plastic",
+            "roughness": 0.55,
+            "refractive_index": 1.5,
+            "albedo": {
+              "pattern": "$mottle",
+              "color_map": [
+                [
+                  -0.6,
+                  [
+                    0.22,
+                    0.22,
+                    0.21
+                  ]
+                ],
+                [
+                  0.0,
+                  [
+                    0.32,
+                    0.32,
+                    0.3
+                  ]
+                ],
+                [
+                  0.6,
+                  [
+                    0.42,
+                    0.42,
+                    0.4
+                  ]
+                ]
+              ]
+            },
+            "normal": {
+              "graph": {
+                "node": "add",
+                "inputs": [
+                  {
+                    "node": "fractal",
+                    "scale": 0.2,
+                    "seed": 742,
+                    "amplitude": 0.0015
+                  },
+                  {
+                    "node": "multiply",
+                    "inputs": [
+                      0.0006,
+                      {
+                        "node": "transform",
+                        "scale": [
+                          0.3,
+                          6,
+                          0.3
+                        ],
+                        "input": {
+                          "node": "fractal",
+                          "scale": 0.01,
+                          "seed": 743,
+                          "style": "ridged"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              "amount": 1
+            }
+          }
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": {
+                "node": "fractal",
+                "scale": 0.02,
+                "seed": 744
+              },
+              "color_map": [
+                [
+                  -0.5,
+                  [
+                    0.5,
+                    0.52,
+                    0.47
+                  ]
+                ],
+                [
+                  0.5,
+                  [
+                    0.62,
+                    0.63,
+                    0.58
+                  ]
+                ]
+              ]
+            }
+          },
+          "mask": {
+            "node": "smoothstep",
+            "from": 0.5,
+            "to": 0.4,
+            "input": {
+              "node": "warp",
+              "amount": 0.04,
+              "scale": 0.05,
+              "seed": 746,
+              "octaves": 3,
+              "input": {
+                "node": "cells",
+                "scale": 0.08,
+                "seed": 745
+              }
+            }
+          },
+          "coverage": 0.45
+        }
+      ]
+    }
+  },
+  "map_lichen": {
+    "show": "landscape",
+    "overlay": true,
+    "doc": "Overlay: map lichen (Rhizocarpon geographicum), the yellow-green crusts of mountain rock, in round colonies bordered black, broken into tiles by black cracks; on surfaces turned to the sky.",
+    "variables": {
+      "amount": 0.5,
+      "color": [
+        0.55,
+        0.62,
+        0.14
+      ],
+      "colonies": {
+        "node": "expr",
+        "expr": "min(max((0.15 + 0.4 * a + 0.2 * c - f) / 0.04, 0), 1)",
+        "inputs": {
+          "a": "$amount",
+          "c": {
+            "node": "fractal",
+            "scale": 1.5,
+            "seed": 751,
+            "smallest": 0.05
+          },
+          "f": {
+            "node": "warp",
+            "amount": 0.025,
+            "scale": 0.06,
+            "seed": 753,
+            "octaves": 2,
+            "input": {
+              "node": "cells",
+              "style": "f1",
+              "scale": 0.09,
+              "seed": 752
+            }
+          }
+        },
+        "range": [
+          0,
+          1
+        ]
+      }
+    },
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": "@over"
+        },
+        {
+          "material": {
+            "type": "lambertian",
+            "albedo": {
+              "pattern": {
+                "node": "cells",
+                "style": "edges",
+                "scale": 0.003,
+                "seed": 754
+              },
+              "color_map": [
+                [
+                  0,
+                  [
+                    0.02,
+                    0.02,
+                    0.02
+                  ]
+                ],
+                [
+                  0.07,
+                  [
+                    0.02,
+                    0.02,
+                    0.02
+                  ]
+                ],
+                [
+                  0.13,
+                  "$color"
+                ]
+              ]
+            },
+            "normal": {
+              "graph": {
+                "node": "multiply",
+                "inputs": [
+                  0.0003,
+                  {
+                    "node": "smoothstep",
+                    "from": 0.05,
+                    "to": 0.15,
+                    "input": {
+                      "node": "cells",
+                      "style": "edges",
+                      "scale": 0.003,
+                      "seed": 754
+                    }
+                  }
+                ]
+              },
+              "amount": 1
+            }
+          },
+          "mask": {
+            "node": "multiply",
+            "inputs": [
+              "$colonies",
+              {
+                "node": "slope",
+                "from": 80,
+                "to": 45
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "over_for_landscape": "plain"
+  },
+  "wet": {
+    "show": "landscape",
+    "overlay": true,
+    "doc": "Overlay: wet ground or rock, darker and glossy under a film of water: on a landscape where its wetness says (water gathers in hollows), elsewhere \"amount\" of it in patches.",
+    "variables": {
+      "amount": 0.4,
+      "where": {
+        "node": "max",
+        "inputs": [
+          {
+            "node": "field",
+            "field": "wetness",
+            "from": 9,
+            "to": 13,
+            "default": 0,
+            "breakup": {
+              "node": "fractal",
+              "scale": 20,
+              "seed": 761,
+              "amplitude": 1.5
+            }
+          },
+          {
+            "node": "expr",
+            "expr": "min(max((a - 0.5 + 0.6 * n) / 0.2, 0), 1)",
+            "inputs": {
+              "a": "$amount",
+              "n": {
+                "node": "fractal",
+                "scale": 3,
+                "seed": 762,
+                "smallest": 0.02
+              }
+            },
+            "range": [
+              0,
+              1
+            ]
+          }
+        ]
+      }
+    },
+    "material": {
+      "type": "surface_layers",
+      "layers": [
+        {
+          "material": "@over"
+        },
+        {
+          "material": {
+            "type": "plastic",
+            "albedo": [
+              0,
+              0,
+              0
+            ],
+            "roughness": 0.03,
+            "refractive_index": 1.33
+          },
+          "mask": {
+            "node": "multiply",
+            "inputs": [
+              0.65,
+              "$where"
+            ]
+          }
+        }
+      ]
+    },
+    "over_for_landscape": "plain"
   }
 }

@@ -184,10 +184,21 @@ impl Placed {
         Ray { ro: self.local_vector(&(r.ro - self.at())), rd: self.local_vector(&r.rd) }
     }
 
+    /// The vertex the rays now traced leave (`shapes::leaving`), in the model's frame.
+    fn local_vertex(&self) -> Option<crate::shapes::leaving::Leaving> {
+        let k = self.scale();
+        crate::shapes::leaving::current().map(|v| crate::shapes::leaving::Leaving {
+            point: self.local_vector(&(v.point - self.at())),
+            tolerance: v.tolerance / k,
+            reach: v.reach / k,
+        })
+    }
+
     fn hit_range(&self, model: &Model, r: &Ray, min: f64, max: f64) -> Option<RawIntersection> {
         // Distances along the ray shrink with the model, its scale being uniform.
         let k = self.scale();
-        model.intersects_range(&self.local_ray(r), min / k, max / k).map(|h| RawIntersection {
+        let local = self.local_ray(r);
+        crate::shapes::leaving::with(self.local_vertex(), || model.intersects_range(&local, min / k, max / k)).map(|h| RawIntersection {
             dist: h.dist * k,
             point: self.world_point(&h.point),
             normal: self.normal_to_world(&h.normal),
@@ -253,7 +264,8 @@ impl Geometry for Stand {
     fn occludes(&self, r: &Ray, min: f64, max: f64) -> bool {
         !self.trees.is_empty() && self.bvh.any_hit(r, min, max, |i| {
             let t = &self.trees[i];
-            self.models[t.model()].occludes(&t.local_ray(r), min / t.scale(), max / t.scale())
+            let local = t.local_ray(r);
+            crate::shapes::leaving::with(t.local_vertex(), || self.models[t.model()].occludes(&local, min / t.scale(), max / t.scale()))
         })
     }
 

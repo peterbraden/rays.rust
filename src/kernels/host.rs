@@ -80,7 +80,16 @@ pub fn shade(s: &Scene, flat: &FlatScene, origin: &Vector3<f64>, p: &PathState, 
         done: false,
     };
     let stream = crate::sobol::hash(s.render.seed ^ 0x686f_7374, ((pixel as u64) << 16) | depth as u64);
-    host_vertex(s, flat, &mut v, &hit, crate::sobol::SampleState::new(stream, sample));
+    // Its shadow rays, traced here by the scene's own code, leave this vertex
+    // (`shapes::leaving`), as does its next ray, traced in the next round (`HOST_VERTEX`).
+    // (Its rays start off it by the scene's shadow bias, or its rounding error if larger, as
+    // the path tracer's do: `wavefront::integrator::host_bounce`.)
+    let vertex = crate::shapes::leaving::Leaving {
+        point: hit.point,
+        tolerance: 1e-7 * (1. + hit.point.amax()),
+        reach: 10. * s.render.shadow_bias + 1e-5 * (1. + hit.point.amax() + hit.dist),
+    };
+    crate::shapes::leaving::with(Some(vertex), || host_vertex(s, flat, &mut v, &hit, crate::sobol::SampleState::new(stream, sample)));
     let f32s = |v: &Vector3<f64>| Vec3::new(v.x as f32, v.y as f32, v.z as f32);
     next.l += f32s(&v.l.rgb).extend(0.);
     if v.done {
@@ -94,12 +103,42 @@ pub fn shade(s: &Scene, flat: &FlatScene, origin: &Vector3<f64>, p: &PathState, 
     let from = v.ray.ro - origin;
     let from = from + side * (4e-6 * (1. + from.amax()));
     next.o = f32s(&from).extend(p.o.w);
+    // The vertex, for the next round to name to the scene's shapes its ray meets
+    // (`wavefront::integrator`'s batch reads it before `pathtrace::find_all`, which clears it).
+    // (Only where the host intersects shapes, which is on the CPU: the device's kernels read
+    // a path as they left it.)
+    if host_shapes(flat) {
+        next.hit = f32s(&(hit.point - origin)).extend(HOST_VERTEX);
+    }
     next.d = f32s(&v.ray.rd).extend(v.prev_pdf as f32);
     next.beta = f32s(&v.beta.rgb).extend(v.depth as f32);
     let flag = |on: bool, bit: u32| if on { bit } else { 0 };
     // (A surface leaves what the path has done in media as it was.)
     next.state.y = (p.state.y & (pathtrace::PATH_MEDIA | pathtrace::PATH_PROVEN)) | PATH_ACTIVE | flag(v.specular, PATH_SPECULAR) | flag(v.scattered, PATH_SCATTERED) | flag(v.lights_counted, PATH_LIGHTS_COUNTED) | flag(v.directional, PATH_DIRECTIONAL);
     next
+}
+
+/// `PathState::hit.w` of a path whose ray leaves a vertex the host shaded, its point (in the
+/// frame about the origin) in `hit.xyz`: until its next ray is intersected, a path's `hit` is
+/// otherwise unread (`shade` clears what would read it, and `pathtrace::find_all` clears it).
+pub const HOST_VERTEX: f32 = -2.0;
+
+/// Whether the host intersects some of the scene's shapes, as `Buffers::build_at` gives it
+/// those the kernels have no code for: all but one sea.
+fn host_shapes(flat: &FlatScene) -> bool {
+    let seas = flat.shapes.iter().filter(|(o, _)| o.geometry.ocean().is_some()).count().min(1);
+    flat.shapes.len() > seas
+}
+
+/// The vertex a path's ray leaves (`shapes::leaving`), if the host shaded it, from its state
+/// in the frame about `origin`: as exact as single precision there, and the ray as far off it
+/// as `shade` started it.
+pub fn leaving(p: &PathState, origin: &Vector3<f64>) -> Option<crate::shapes::leaving::Leaving> {
+    (p.hit.w == HOST_VERTEX).then(|| {
+        let at = Vector3::new(p.hit.x as f64, p.hit.y as f64, p.hit.z as f64);
+        let far = 1. + at.amax();
+        crate::shapes::leaving::Leaving { point: at + origin, tolerance: 2e-7 * far, reach: 0.01 + 3e-5 * far }
+    })
 }
 
 /// What a path with these flags has done in media, as the scene's own code keeps it

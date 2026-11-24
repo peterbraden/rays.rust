@@ -697,7 +697,9 @@ fn lod_tree_levels() {
                     if let Some(h) = g.intersects(&ray) {
                         hits += 1.;
                         let shadow = Ray { ro: h.point + sun * eps, rd: sun };
-                        let l = !g.occludes(&shadow, eps, f64::INFINITY);
+                        // (Leaving the card hit, as a renderer names it: `shapes::leaving`.)
+                        let at = Some(crate::shapes::leaving::Leaving { point: h.point, tolerance: 1e-7, reach: 10. * eps });
+                        let l = !crate::shapes::leaving::with(at, || g.occludes(&shadow, eps, f64::INFINITY));
                         let r = response(&h.normal, d, &sun);
                         lit += l as u8 as f64;
                         resp += r;
@@ -752,14 +754,17 @@ fn lod_tree_scattering() {
                     let mut ray = Ray { ro: centre + e1 * x + e2 * y - d * (3. * radius), rd: *d };
                     n += 1.;
                     let mut weight = 1.;
+                    // The vertex each ray leaves, as a renderer names it (`shapes::leaving`).
+                    let mut from = None;
                     for bounce in 0 .. 8 {
-                        let Some(h) = g.intersects(&ray) else { break };
+                        let Some(h) = crate::shapes::leaving::with(from, || g.intersects(&ray)) else { break };
+                        from = Some(crate::shapes::leaving::Leaving { point: h.point, tolerance: 1e-7, reach: 10. * eps });
                         // The leaf's side facing where the ray came from.
                         let nf = if h.normal.dot(&ray.rd) < 0. { h.normal } else { -h.normal };
                         let cos = nf.dot(&sun);
                         let f = if cos > 0. { RHO } else { TAU } / std::f64::consts::PI;
                         let shadow = Ray { ro: h.point + sun * eps, rd: sun };
-                        if !g.occludes(&shadow, eps, f64::INFINITY) {
+                        if !crate::shapes::leaving::with(from, || g.occludes(&shadow, eps, f64::INFINITY)) {
                             let c = weight * f * cos.abs();
                             sum += c;
                             if bounce > 0 { bounced += c; }

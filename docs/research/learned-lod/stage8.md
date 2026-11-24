@@ -64,3 +64,43 @@ side: one card passes the 15% test averaged over the hemisphere, but not from th
 
 **The cache.** A level's format is now `RAYSLOD2`, so cached single-card levels are made again.
 With the cache, renders stay bit-identical, and a warm build is 1.7 s.
+
+## Telling a ray that leaves a card, under any integrator
+
+**How a card recognised a leaving ray.** Crossed cards and self-shadowing depend on telling a ray
+that leaves a card from one that arrives at it. A card did that by the ray's origin: within 1 mm,
+or a thousandth of the card's size, of its own plane.
+
+**Why that broke.** After master's merge, forests render by default with the kernels on the CPU,
+which start a ray off a surface by 4 millionths of its distance from the camera: centimetres for
+these trees. So a ray leaving a crossed card wasn't recognised. It met the cluster's other cards,
+and lost most of its light to this scene's dark leaves:
+- at full detail the two integrators agreed within 0.2%;
+- under LOD the kernels were 0.8% darker, and 2–3% darker in the near half's median.
+
+**The fix: the integrators name the vertex** (`src/shapes/leaving.rs`):
+- **What is named:** its point, which lies on the surface. Each placed tree passes it on in its
+  model's frame (`forest::Placed`).
+- **Who names it:**
+  - the path tracer at each surface vertex (`trace::trace_intersection`);
+  - the kernels' host around each host vertex (`kernels::host::shade`), and around the path's
+    next ray. The vertex's point travels in the path's state until the next round
+    (`kernels::host::HOST_VERTEX`, read before `pathtrace::find_all`).
+- **How a card uses it:** its owner is the cluster whose card holds that point
+  (`CardSet::leaving`, `Card::holds`). The ray's origin only has to be within reach of the vertex.
+
+`forest-aerial`'s `aerial` suite case at `pixels: 2`, 480 × 280, 32 spp, against the path tracer's
+full detail:
+
+| | Path tracer | Kernels on the CPU |
+|---|---|---|
+| Crossed cards (default) | +2.6%, FLIP 0.0634 | +2.7%, FLIP 0.0631 |
+| Single cards only | −0.4%, FLIP 0.0665 | −0.1%, FLIP 0.0667 |
+
+The integrators now agree to the 0.1–0.25% they differ by at full detail.
+
+**Crossed cards are brighter than measured above.** The old test missed some rays leaving at
+grazing angles, even in the path tracer. Those rays met sibling cards and darkened the image.
+Recognising them properly makes crossed cards about +2.6% bright here, against −0.4% for single
+cards. Their FLIP is still lower (0.0634 against 0.0665), so they stay the default, but the
+figures in the tables above, and in the suite's first run, were helped by that accident.

@@ -127,7 +127,10 @@ fn host_ray(ro: Vec3, rd: Vec3, origin: &Vector3<f64>) -> Ray {
 impl pathtrace::HostShapes for Kernels<'_> {
     fn occluded(&self, ro: Vec3, rd: Vec3, tmax: f32) -> bool {
         let r = host_ray(ro, rd, &self.buffers.origin);
-        self.buffers.host_shapes.iter().any(|&k| self.flat.shapes[k].0.geometry.occludes(&r, crate::wavefront::flat::MIN_SHAPE, tmax as f64))
+        // (From a vertex the kernels shaded: none of the host's surfaces.)
+        crate::shapes::leaving::with(None, || {
+            self.buffers.host_shapes.iter().any(|&k| self.flat.shapes[k].0.geometry.occludes(&r, crate::wavefront::flat::MIN_SHAPE, tmax as f64))
+        })
     }
 }
 
@@ -252,8 +255,12 @@ impl<'a> Kernels<'a> {
             // 1. Intersect: the kernels' surfaces, the host's shapes, then the media; a
             // path's own ray and those traced for it (`pathtrace::find_all`).
             let finder = WithHost::<M> { kernels: self, host_shapes, listed, media: std::marker::PhantomData };
+            // (A path whose ray leaves a vertex the host shaded names it, for the scene's shapes
+            // its ray meets: `kernels::host::leaving`, `shapes::leaving`. The rays traced for
+            // it start elsewhere, which the shapes see.)
             for (_, p) in paths.iter_mut() {
-                *p = pathtrace::find_all(&scene, p, &finder);
+                let vertex = crate::kernels::host::leaving(p, &self.buffers.origin);
+                *p = crate::shapes::leaving::with(vertex, || pathtrace::find_all(&scene, p, &finder));
             }
             lap(&mut stats, Stage::Intersect, paths.len());
             // 2. Shade.

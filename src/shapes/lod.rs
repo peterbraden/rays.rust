@@ -256,16 +256,29 @@ impl Card {
         self.crossing(r).filter(|h| h.0 > 0.)
     }
 
-    /// Where on this card a ray starts, if it starts on it (as a ray from a hit on it does: within
-    /// a millimetre, or a thousandth of the card's size, about what such a ray is started off it
-    /// by); never for a kept triangle.
-    fn leaves(&self, r: &Ray) -> Option<(f64, f64)> {
+    /// Where on this card the point `p` lies, as its coordinates along `u` and `v`, if it lies
+    /// on it to within `tolerance`; never for a kept triangle.
+    fn holds(&self, p: &Vector3<f64>, tolerance: f64) -> Option<(f64, f64)> {
         if self.is_triangle() {
             return None;
         }
-        let (t, a, b) = self.crossing(r)?;
-        let d = (t * r.rd.norm()).abs();
-        (d < 0.01 && d <= (1e-3 * (self.u().norm() + self.v().norm())).max(1e-3)).then_some((a, b))
+        let (u, v) = (self.u(), self.v());
+        let n = u.cross(&v);
+        let area = n.norm();
+        if area <= 0. {
+            return None;
+        }
+        let o = p - self.corner();
+        if (o.dot(&n) / area).abs() > tolerance {
+            return None;
+        }
+        let (uu, vv, uv) = (u.norm_squared(), v.norm_squared(), u.dot(&v));
+        let (ou, ov) = (o.dot(&u), o.dot(&v));
+        let det = uu * vv - uv * uv;
+        let (a, b) = ((ou * vv - ov * uv) / det, (ov * uu - ou * uv) / det);
+        // (The point's tolerance, along each edge.)
+        let (ea, eb) = (tolerance / uu.sqrt(), tolerance / vv.sqrt());
+        ((-ea ..= 1. + ea).contains(&a) && (-eb ..= 1. + eb).contains(&b)).then_some((a, b))
     }
 
     /// Where the line of `r` crosses this card, if it does: as `hit`, but at any distance
@@ -312,17 +325,25 @@ pub struct CardSet {
     /// Whether any cluster has more than one card (`crossed`): then a ray leaving a cluster
     /// is looked for first, to pass by its other cards.
     crossed: bool,
+    /// Whether a ray leaving a card is treated as leaving its cluster: some cluster is crossed
+    /// or shadows itself (`Clusters::lit`). Otherwise a card is a surface like any other.
+    owned: bool,
 }
 
 impl CardSet {
-    /// The cluster a ray starts on one of the cards of, if it does (see `Card::leaves`), and
-    /// where on that card.
+    /// The cluster `r` leaves, if it leaves one of these cards: the cluster of the card the
+    /// vertex it leaves lies on (`shapes::leaving`, set by whatever shaded that vertex, in this
+    /// set's frame), and where on that card. Not from where the ray starts: integrators start
+    /// rays off a surface by different amounts, from a fraction of a millimetre to centimetres.
     fn leaving(&self, r: &Ray) -> Option<(u32, f64, f64)> {
+        let vertex = crate::shapes::leaving::current().filter(|v| v.of(r))?;
+        // The cards about the vertex, by a short ray through it (a box test is all it is for).
+        let probe = Ray { ro: vertex.point, rd: r.rd };
+        let reach = (1e3 * vertex.tolerance).max(1e-6) / r.rd.norm();
         let mut found = None;
-        let reach = 0.01 / r.rd.norm();
-        self.bvh.any_hit(r, -reach, reach, |i| {
+        self.bvh.any_hit(&probe, -reach, reach, |i| {
             let card = &self.cards[i];
-            match card.leaves(r) {
+            match card.holds(&vertex.point, vertex.tolerance) {
                 Some((a, b)) => { found = Some((card.data, a, b)); true },
                 None => false,
             }
@@ -394,31 +415,21 @@ impl Geometry for CardSet {
         }
         // A ray leaving a card, from a hit on it, is shadowed by the leaves of its own cluster
         // the card can't show: stopped with the probability that they stop light (drawn by
-        // hashing the ray). It passes the cluster's other cards, if it has more than one.
-        if self.crossed {
-            let own = self.leaving(r);
-            if let Some((c, a, b)) = own && hash01(r, a, b) >= self.clusters.lit(c) {
-                return true;
-            }
-            let own = own.map(|o| o.0);
-            return self.bvh.any_hit(r, min, max, |i| {
-                let card = &self.cards[i];
-                !own.is_some_and(|c| card.data == c) && card.hit(r).is_some_and(|(t, _, _)| {
-                    let d = t * r.rd.norm();
-                    d >= min && d < max
-                })
-            });
+        // hashing the ray). It passes the cluster's cards, crossed ones included. (A card of a
+        // cluster without its own shadowing, `lit` 1, and uncrossed, is a surface to a ray
+        // leaving it as to any other: opaque to light from behind it.)
+        let own = if self.owned { self.leaving(r) } else { None }
+            .filter(|&(c, _, _)| self.crossed || self.clusters.lit(c) < 1.);
+        if let Some((c, a, b)) = own && hash01(r, a, b) >= self.clusters.lit(c) {
+            return true;
         }
+        let own = own.map(|o| o.0);
         self.bvh.any_hit(r, min, max, |i| {
             let card = &self.cards[i];
-            let Some((t, a, b)) = card.crossing(r) else { return false };
-            let d = t * r.rd.norm();
-            // (A card without its own shadowing, `lit` 1, is a surface to a ray leaving it as
-            // to any other: opaque to light from behind it.)
-            if d.abs() < 0.01 && card.leaves(r).is_some() && self.clusters.lit(card.data) < 1. {
-                return hash01(r, a, b) >= self.clusters.lit(card.data);
-            }
-            d >= min && d < max
+            !own.is_some_and(|c| card.data == c) && card.hit(r).is_some_and(|(t, _, _)| {
+                let d = t * r.rd.norm();
+                d >= min && d < max
+            })
         })
     }
 
@@ -550,7 +561,8 @@ pub fn decode(bytes: &[u8]) -> Option<Arc<dyn Geometry + Sync + Send>> {
             let mut seen = std::collections::HashSet::new();
             let crossed = cards.iter().any(|c| !c.is_triangle() && !seen.insert(c.data));
             let (bvh, cards) = Bvh::build_with_leaves(cards, Card::bounds, CARDS_PER_LEAF);
-            Arc::new(CardSet { bvh, cards, clusters: Clusters { starts, items, lit }, crossed })
+            let owned = crossed || lit.iter().any(|&l| l < 255);
+            Arc::new(CardSet { bvh, cards, clusters: Clusters { starts, items, lit }, crossed, owned })
         },
         _ => return None,
     };
@@ -769,7 +781,8 @@ pub fn consolidate_with(triangles: &[Arc<Tagged<Triangle>>], size: f64, albedo: 
     clusters.lit.shrink_to_fit();
     // A card is cheaper to test than a node to visit, and smaller: leaves of a few.
     let (bvh, cards) = Bvh::build_with_leaves(cards, Card::bounds, CARDS_PER_LEAF);
-    CardSet { bvh, cards, clusters, crossed }
+    let owned = crossed || clusters.lit.iter().any(|&l| l < 255);
+    CardSet { bvh, cards, clusters, crossed, owned }
 }
 
 /// What a card keeps of the pieces `all` (normal, area, face) of its cluster. Pieces of one face
@@ -1608,12 +1621,30 @@ mod tests {
             assert!(crossed.ln().abs() < 0.5 * one.ln().abs() && (0.7 .. 1.4).contains(&crossed),
                 "{d:?}: crossed cards hit {crossed:.2} as often as the leaves, one card {one:.2}");
         }
-        // A ray leaving one of the cards, from a hit on it, passes the cluster's other cards.
-        let down = Ray { ro: Vector3::new(0.5, 5., 0.5), rd: -Vector3::y() };
-        if let Some(h) = set.intersects(&down) {
-            let on = Ray { ro: h.point, rd: Vector3::new(0.3, 0.1, 0.2).normalize() };
-            assert!(set.intersects_beyond(&on, 1e-9).is_none_or(|x| x.dist > 1e-3));
+        // A ray leaving one of the cards, from a hit on it, passes the cluster's other cards,
+        // however far off the card an integrator starts it: the path tracer's fraction of a
+        // millimetre, or the kernels' centimetres (`shapes::leaving`).
+        let (mut tried, mut siblings) = (0, 0);
+        let mut rng = Pcg32::new(4, 4);
+        for _ in 0 .. 400 {
+            let down = Ray { ro: Vector3::new(rng.next_f64(), 3., rng.next_f64()), rd: Vector3::new(rng.next_f64() - 0.5, -1., rng.next_f64() - 0.5) };
+            let Some(h) = set.intersects(&down) else { continue };
+            let vertex = crate::shapes::leaving::Leaving { point: h.point, tolerance: 1e-7, reach: 0.05 };
+            let towards = (Vector3::new(0.5, 0.5, 0.5) - h.point).normalize();
+            for offset in [1e-6, 1e-2] {
+                let r = Ray { ro: h.point + towards * offset, rd: towards };
+                let own = |x: &RawIntersection| (x.point - h.point).norm() < 1.5;
+                // Without the vertex named, rays towards the crown's middle meet its other cards.
+                siblings += set.intersects(&r).is_some_and(|x| own(&x)) as u32;
+                let passed = crate::shapes::leaving::with(Some(vertex), || set.leaving(&r).map(|o| o.0));
+                assert!(passed.is_some(), "a ray {offset} off its card wasn't seen to leave it");
+                let hit = crate::shapes::leaving::with(Some(vertex), || set.intersects_range(&r, 0., f64::INFINITY));
+                let card_hit = hit.and_then(|x| set.cards().iter().find(|c| c.holds(&x.point, 1e-6).is_some()).map(|c| c.data));
+                assert!(card_hit.is_none() || card_hit != passed, "a ray {offset} off its card met its cluster's other cards");
+                tried += 1;
+            }
         }
+        assert!(tried > 40 && siblings > 0, "{tried} rays tried, {siblings} met other cards unnamed");
     }
 
     #[test]

@@ -106,6 +106,7 @@ pub mod shapes {
     pub mod tessellated;
     pub mod text;
     pub mod lod;
+    pub mod leaving;
     pub mod displaced;
     pub mod group;
 }

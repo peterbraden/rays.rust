@@ -210,11 +210,48 @@ comes in blotches. A fit tunes a preset's parameters; it can't change its struct
    the patches alone barely see (left to them, the optimiser traded grey stones for sub-pixel
    confetti of saturated colours averaging grey). CMA-ES searches the parameters (the renderer
    isn't differentiable). About a second a candidate; 30 generations take 15 to 25 minutes.
+   (That was the first loss; the next section has what replaced it.)
 4. It writes `fitted.json` (the fitted preset as a library file, ready for a scene's
    `"library"`), `compare.png` and `log.csv`; with `--record`, it also writes the fit into the
    reference's `fit` in `library.json`: the losses, the settings, and the fitted values by
    parameter, with `"applied": false` until a person who has looked at the comparison copies
    them into the preset.
+
+### What the loss can see
+
+A fit finds whatever its loss can't see, so the loss is tested by itself:
+`scripts/loss-benchmark.py` compares crops of the scans whose right answer is known, without
+rendering. A quadrant of a scan is set against another quadrant rescaled (is the loss least at
+the right scale?), its phases randomised (the same sizes and colours, blobs for shapes),
+recoloured both ways by about a just noticeable difference (redder, yellower, lighter, more
+saturated, more contrast), its chroma moved to the wrong places (the same histograms), and
+every other scan coloured like it (does it know its own scan?). The first loss mostly saw mean
+colour:
+
+| at 128 pixels a quadrant | patch loss (first) | `ColourLoss` alone | `FitLoss` (colour and structure) |
+|---|---|---|---|
+| least at the right scale | 12% | | 59% |
+| shapes against blobs (log ratio) | 0.07 | | 0.11 (0.39 at 256 pixels) |
+| its own scan nearest | 35% | | 71% (82% at 256) |
+| contrast changed (log ratio) | 0.24 | 0.51 | |
+| colours in the wrong places | 0.06 | 0.45 | |
+| the five kinds of colour error alike (spread, smaller better) | 1.5 | 0.35 | |
+
+(A sum's log ratios are diluted by each part's floor, so colour is scored on the colour loss
+alone; colour parameters move only it, structure being compared on normalised lightness.)
+
+So fits now compare colour in Oklab (`ColourLoss`: the mean; the distribution about it with
+chroma counting as much as lightness; and each pixel's colour beside its neighbourhood's), and
+structure on normalised lightness (`StructureLoss`: an oriented log-Gabor bank's joint
+responses with the next scale's, after Portilla and Simoncelli, which tells shapes from blobs;
+and the radial power spectrum, which tells sizes), and see the scan twice: whole, and a
+quarter of it across at the same pixels against four of its tiles, as at 128 pixels across two
+metres a leaf is a pixel or two and no loss can see its shape. `--no-structure` and
+`--no-detail` go back to the first loss and the whole view alone.
+
+What the loss sees, a preset still has to be able to make: refitted with it, trail_dirt's scale
+ran to its smallest, the loss rightly missing the scan's fine grit everywhere and the preset
+having none to give it but by shrinking everything.
 
 ### Presets modelled on scans
 
@@ -369,6 +406,8 @@ scaled, so a library material keeps its size in metres on any object (`Geometry:
 - D. S. Ebert, F. K. Musgrave, D. Peachey, K. Perlin and S. Worley, "Texturing and Modeling: A Procedural Approach", 3rd ed., 2003.
 - A. A. Apodaca and L. Gritz, "Advanced RenderMan", 2000, chapter 11 (antialiasing procedural textures).
 - A. J. Liu, Z. Dong, M. Hašan and S. Marschner, "Simulating the structure and texture of solid wood", SIGGRAPH Asia 2016.
+- J. Portilla and E. P. Simoncelli, "A parametric texture model based on joint statistics of complex wavelet coefficients", IJCV 40(1), 2000.
+- B. Ottosson, "A perceptual color space for image processing" (Oklab), <https://bottosson.github.io/posts/oklab/>, 2020.
 - S. Glanville, "Texture bombing", GPU Gems, chapter 20, 2004.
 - J. F. Blinn, "Simulation of wrinkled surfaces", SIGGRAPH 1978.
 - I. Quilez, "Domain warping", <https://iquilezles.org/articles/warp/>.

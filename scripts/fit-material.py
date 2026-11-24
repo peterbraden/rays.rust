@@ -32,9 +32,16 @@ phase-randomised blobs, and was least at the right scale for an eighth of the sc
 structure is compared besides (`StructureLoss`, on lightness normalised to mean 0 and
 deviation 1): the joint distribution of an oriented filter bank's responses with the next
 level's (after Portilla and Simoncelli), which tells shapes from blobs, and the radially
-averaged power spectrum, which tells sizes, and so holds the scale. `FitLoss` is the two
-together, structure weighed to count about as much as colour between different scans;
-`--no-structure` leaves it out.
+averaged power spectrum, which tells sizes, and so holds the scale.
+
+Its colour term had blind spots too: a third less contrast, or the right colours in the wrong
+places (brown on the stones and grey on the leaves, every histogram the same), scored like a
+quadrant of the same scan. So colour is compared in Oklab (`ColourLoss`), where distances are
+about as different as they look: the mean colours, and the colours' distribution about their
+mean, each axis over the reference's deviation along it so chroma counts as much as lightness,
+jointly with each pixel's neighbourhood's colour, which sees where colours are. `FitLoss` is
+colour and structure together, each weighed to be about 1 between two different scans;
+`--no-structure` falls back to the patch loss alone, as fits before these were.
 
 And a fit sees the scan twice: whole, at --resolution pixels, and in detail, a quarter of it
 across at the same pixels (four times as fine), compared with four tiles of the scan, one in
@@ -140,6 +147,30 @@ DETAIL_TILES = [(0.125, 0.125, DETAIL), (0.625, 0.125, DETAIL), (0.125, 0.625, D
 def linear_to_srgb(c):
     c = np.clip(c, 0, None)
     return np.where(c <= 0.0031308, c * 12.92, 1.055 * c ** (1 / 2.4) - 0.055)
+
+
+def oklab(srgb):
+    """sRGB-encoded colours to Oklab (Ottosson, 2020): lightness L and the opponent axes a
+    (green-red) and b (blue-yellow), scaled so equal distances look about equally different;
+    0.02 is about as small a difference as one notices."""
+    lin = srgb_to_linear(np.clip(srgb, 0, 1))
+    lms = lin @ np.array([[0.4122214708, 0.5363325363, 0.0514459929],
+                          [0.2119034982, 0.6806995451, 0.1073969566],
+                          [0.0883024619, 0.2817188376, 0.6299787005]]).T
+    lms = np.cbrt(lms)
+    return lms @ np.array([[0.2104542553, 0.7936177850, -0.0040720468],
+                           [1.9779984951, -2.4285922050, 0.4505937099],
+                           [0.0259040371, 0.7827717662, -0.8086757660]]).T
+
+
+def from_oklab(lab):
+    lms = lab @ np.array([[1., 0.3963377774, 0.2158037573],
+                          [1., -0.1055613458, -0.0638541728],
+                          [1., -0.0894841775, -1.2914855480]]).T
+    lin = (lms ** 3) @ np.array([[4.0767416621, -3.3077115913, 0.2309699292],
+                                 [-1.2684380046, 2.6097574011, -0.3413193965],
+                                 [-0.0041960863, -0.7034186147, 1.7076147010]]).T
+    return linear_to_srgb(lin)
 
 
 # Opponent colour axes: lightness, red-green, blue-yellow.
@@ -323,16 +354,88 @@ class StructureLoss:
         return sum(self.weights[k] * v for k, v in self.parts_of(a, b).items())
 
 
-class FitLoss:
-    """What a fit minimises: colour (`PatchLoss`, which mostly sees colour) and structure
-    (`StructureLoss`, which sees none), the structure weighed to count about as much as
-    colour does between two different scans."""
+class ColourLoss:
+    """Colour compared in Oklab, where distances are about as different as they look, in
+    three parts, each of which the patch loss's colour term was nearly blind to one way
+    (scripts/loss-benchmark.py):
 
-    def __init__(self, structure=0.15, parts=("bank", "spectrum")):
-        self.colour, self.structure, self.weight = PatchLoss(), StructureLoss(parts), structure
+    - `mean`: the squared distance between the images' mean colours.
+    - `spread`: the colours' distribution about its mean, at each pyramid level: the sliced
+      Wasserstein distance between the centred colours, each axis over the reference's own
+      deviation along it, so a material's chroma counts as much as its lightness and a
+      contrast flattened or boosted shows (it didn't: a third less contrast scored as a
+      quadrant of the same scan).
+    - `binding`: which colours go where: each pixel's colour with its neighbourhood's (the
+      next pyramid level's, at the same place), centred and scaled as above, compared jointly.
+      Brown leaves on grey stones and grey leaves on brown stones have the same histograms;
+      a pixel's colour beside its surroundings' tells them apart.
+    """
+
+    WEIGHTS = {"mean": 50., "spread": 3., "binding": 1.}
+
+    def __init__(self, parts=("mean", "spread", "binding"), levels=4, samples=8192, projections=48, seed=5):
+        self.parts, self.levels, self.samples, self.seed = parts, levels, samples, seed
+        rng = np.random.default_rng(seed)
+        self.proj = {}
+        for name, d in (("spread", 3), ("binding", 6)):
+            p = rng.normal(size=(d, projections))
+            self.proj[name] = p / np.linalg.norm(p, axis=0)
+
+    def parts_of(self, a, b):
+        la, lb = oklab(a), oklab(b)
+        out = {}
+        if "mean" in self.parts:
+            out["mean"] = float(np.sum((la.reshape(-1, 3).mean(0) - lb.reshape(-1, 3).mean(0)) ** 2))
+        pa, pb = PatchLoss.pyramid(la, self.levels), PatchLoss.pyramid(lb, self.levels)
+        spread = binding = 0.
+        for k in range(self.levels):
+            x, y = pa[k], pb[k]
+            mx, my = x.reshape(-1, 3).mean(0), y.reshape(-1, 3).mean(0)
+            scale = x.reshape(-1, 3).std(0) + 0.02
+            rng = np.random.default_rng(self.seed + k)
+            fx, fy = ((x - mx) / scale).reshape(-1, 3), ((y - my) / scale).reshape(-1, 3)
+            n = min(self.samples, len(fx))
+            ix, iy = rng.permutation(len(fx))[:n], rng.permutation(len(fy))[:n]
+            if "spread" in self.parts:
+                spread += StructureLoss.swd(fx[ix], fy[iy], self.proj["spread"])
+            if "binding" in self.parts and k + 1 < self.levels:
+                def joint(img, m, f):
+                    c = np.repeat(np.repeat(img, 2, axis=0), 2, axis=1)
+                    h, w = (img.shape[0] * 2, img.shape[1] * 2)
+                    c = ((c - m) / scale).reshape(-1, 3)
+                    return np.concatenate([f.reshape(h, w, 3)[:h, :w].reshape(-1, 3), c], axis=1)
+                h2, w2 = pa[k + 1].shape[0] * 2, pa[k + 1].shape[1] * 2
+                gx = joint(pa[k + 1], mx, fx.reshape(x.shape)[:h2, :w2])
+                gy = joint(pb[k + 1], my, fy.reshape(y.shape)[:h2, :w2])
+                n = min(self.samples, len(gx))
+                binding += StructureLoss.swd(gx[rng.permutation(len(gx))[:n]], gy[rng.permutation(len(gy))[:n]],
+                                             self.proj["binding"])
+        if "spread" in self.parts:
+            out["spread"] = spread / self.levels
+        if "binding" in self.parts:
+            out["binding"] = binding / (self.levels - 1)
+        return out
 
     def __call__(self, a, b):
-        return self.colour(a, b) + self.weight * self.structure(a, b)
+        return sum(self.WEIGHTS[k] * v for k, v in self.parts_of(a, b).items())
+
+
+class FitLoss:
+    """What a fit minimises: colour (`ColourLoss`) and structure (`StructureLoss`), and
+    optionally the older `PatchLoss` (`patch`), each weighed to be about 1 between two
+    different scans (the median over the scans the presets name, a quadrant each at 128
+    pixels), so each counts about as much as the others."""
+
+    WEIGHTS = {"colour": 1., "structure": 0.5, "patch": 3.6}
+
+    def __init__(self, parts=("colour", "structure")):
+        self.losses = {k: {"colour": ColourLoss, "structure": StructureLoss, "patch": PatchLoss}[k]() for k in parts}
+
+    def parts_of(self, a, b):
+        return {k: self.WEIGHTS[k] * loss(a, b) for k, loss in self.losses.items()}
+
+    def __call__(self, a, b):
+        return sum(self.parts_of(a, b).values())
 
 
 def get(obj, path):

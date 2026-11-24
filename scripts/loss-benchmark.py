@@ -20,6 +20,20 @@ fetch-material-reference.py):
   share of scans whose own other quadrant is nearest (`identity`), and the mean log ratio of
   the nearest other scan's loss to the scan's own (`identity_margin`).
 
+- colour: a quadrant against another with its colours changed both ways by about a just
+  noticeable difference (Oklab's 0.02) and by twice that: redder or greener, yellower or bluer,
+  lighter or darker, more or less saturated, more or less contrast. The mean log ratio to the
+  scan's own (`colour_contrast`, larger is better), the share where twice the change scores
+  worse than once and once worse than none (`colour_monotone`), and the deviation of the log
+  ratios across the five kinds (`colour_spread`, smaller is better: each kind seen alike).
+- binding: a quadrant against another whose chroma is taken from elsewhere in it (rolled by
+  half the image): the same histograms of every colour, the colours in the wrong places
+  (`binding_contrast`, larger is better).
+
+A sum of losses scores lower on these log ratios than its parts do, as each part's floor (two
+quadrants of the same scan) dilutes the others' changes; it's the parts' scores that say what
+the loss can see (--loss ColourLoss:spread, StructureLoss:bank, ...).
+
 The quadrants are taken at the scale a fit renders at: a quarter of the scan, a scan's
 size / 2 across, at --resolution pixels.
 
@@ -128,6 +142,46 @@ def main():
         if args.verbose:
             print("%-26s scale %s  phase %.4f  own %.4f  nearest other %.4f" % (
                 asset, " ".join("%.4f" % rows[i][1][s] for s in factors), rows[i][2], own, min(others)))
+    # Colour: another quadrant with its colours changed by about a just noticeable difference
+    # (Oklab's 0.02), and by twice that, each way a fit's colours go wrong, both ways (the
+    # quadrants differ a little already, so one way alone can bring them closer). And with its
+    # chroma taken from elsewhere in it (rolled half the image), so every colour histogram is
+    # the same but brown is on the stones and grey on the leaves.
+    def perturb(img, kind, k):
+        lab = fit.oklab(img)
+        L, ab = lab[:, :, :1], lab[:, :, 1:]
+        if kind == "red":
+            ab = ab + np.array([0.02 * k, 0.])
+        elif kind == "yellow":
+            ab = ab + np.array([0., 0.02 * k])
+        elif kind == "lighter":
+            L = L * (1 + 0.05 * k)
+        elif kind == "chroma":
+            ab = ab * (1 - 0.3 * k)
+        elif kind == "contrast":
+            L = L.mean() + (L - L.mean()) * (1 - 0.15 * k)
+        elif kind == "binding":
+            ab = np.roll(ab, (ab.shape[0] // 2, ab.shape[1] // 2), axis=(0, 1))
+        return fit.from_oklab(np.concatenate([L, ab], axis=2))
+    kinds = ["red", "yellow", "lighter", "chroma", "contrast"]
+    colour_c, colour_mono, colour_spread, binding_c, by_kind = [], [], [], [], []
+    for asset, a_img, b in data:
+        own = loss(a_img, b[1.0])
+        ratios = []
+        for kind in kinds:
+            l1 = 0.5 * (loss(a_img, perturb(b[1.0], kind, 1)) + loss(a_img, perturb(b[1.0], kind, -1)))
+            l2 = 0.5 * (loss(a_img, perturb(b[1.0], kind, 2)) + loss(a_img, perturb(b[1.0], kind, -2)))
+            ratios.append(np.log(l1 / own))
+            colour_mono.append(own < l1 < l2)
+        colour_c.append(np.mean(ratios))
+        by_kind.append(ratios)
+        colour_spread.append(np.std(ratios))
+        binding_c.append(np.log(loss(a_img, perturb(b[1.0], "binding", 1)) / own))
+        if args.verbose:
+            print("%-26s colour %s  binding %.3f" % (asset, " ".join("%s %.2f" % kv for kv in zip(kinds, ratios)), binding_c[-1]))
+    print("%s: colour_contrast %.3f  colour_monotone %.2f  colour_spread %.3f  binding_contrast %.3f" % (
+        args.loss, np.mean(colour_c), np.mean(colour_mono), np.mean(colour_spread), np.mean(binding_c)))
+    print("    by kind (log ratio to the scan's own): " + "  ".join("%s %.2f" % kv for kv in zip(kinds, np.mean(by_kind, axis=0))))
     print("%s: scale_contrast %.3f  scale_minimum %.2f  structure_contrast %.3f  identity %.2f  identity_margin %.3f" % (
         args.loss, np.mean(scale_c), np.mean(scale_ok), np.mean(struct_c), np.mean(ident), np.mean(margin)))
 

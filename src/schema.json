@@ -181,6 +181,12 @@
           "doc": "Perspective, orthographic and isometric: lens radius in scene units, for depth of field; 0 for a pinhole. The orthographic cameras default to 0, and blur by aperture × |depth − focus| / focus, depth measured from the camera's plane."
         },
         {
+          "name": "unwrap",
+          "kind": "json",
+          "default": null,
+          "doc": "Isometric: true or {\"origin\": [lat, lon] of the scene's origin (default a landscape's site, or [0, 0]), \"center\": [lat, lon] of the image's centre (default the origin), \"radius\" (default the Earth's)}: the planet unwrapped onto an equirectangular map and seen isometrically, each ray carried to its own latitude and longitude, so the whole planet can be shown at once. Rays start \"distance\" (default 50 km) before sea level along them; height is in metres of the map (the whole planet is π × radius tall)."
+        },
+        {
           "name": "blur",
           "kind": "number",
           "default": null,

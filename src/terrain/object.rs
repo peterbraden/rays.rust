@@ -90,6 +90,7 @@ use crate::shapes::geometry::Geometry;
 use crate::shapes::mesh::vertex_normals;
 use crate::shapes::triangle::{SmoothTriangle, Triangle};
 use crate::terrain::domain::{Domain, Layout};
+use crate::terrain::features;
 use crate::terrain::geology::Rock;
 use crate::terrain::glacier::{slope_squared, GlacierParams};
 use crate::terrain::map::{self, is_river, land_colour, write_map};
@@ -610,6 +611,7 @@ pub fn create_terrain(o: &Value, materials: &serde_json::Map<String, Value>) -> 
         exaggeration: number(o, "exaggeration", 1.),
         centre: SceneFile::parse_vec3_def(o, "centre", Vector3::zeros()),
     };
+    if o.get("features").is_some_and(|v| !matches!(v, Value::Bool(false))) { report_features(o, &scaled_survey(&t, &place, lens(o))); }
     let geometry = mesh(&t, &place);
     SceneObject { geometry: Box::new(geometry), medium: Box::new(TerrainMedium::new(t, place, number(o, "min_river_width", 0.), ground_material(o, materials))) }
 }
@@ -687,6 +689,7 @@ pub fn above_ground(o: &Value, points: &[Vector3<f64>]) -> Option<Vec<Vector3<f6
         params, site: site_of(&o["domain"]), time: number(o, "time", 0.), planet_cells, levels,
         focus, exaggeration: p.exaggeration, close: close(o, true),
     };
+
     let world = world::build(&description, world_directory(o), &mut |e| { world::report(e); true }).unwrap_or_else(|e| panic!("{}", e));
     let frame = world.frame.clone();
     let World { planet, globe, patches, .. } = world;
@@ -698,6 +701,146 @@ pub fn above_ground(o: &Value, points: &[Vector3<f64>]) -> Option<Vec<Vector3<f6
         let h = relief.height(&d, &relief.slope(&d), 1.);
         frame.to_scene(&d, h + q.y)
     }).collect())
+}
+
+/// How many of each kind of feature are given views, and how many views of each are written.
+const SURVEYED_PER_KIND: usize = 4;
+const REPORTED_VIEWS: usize = 3;
+
+/// A landscape's features, found in its simulations, with views of them (`terrain::features`).
+pub struct Survey {
+    pub found: Vec<features::Found>,
+    /// A direction on the planet and a height (m) to the scene.
+    pub to_scene: Box<dyn Fn(&Vector3<f64>, f64) -> Vector3<f64>>,
+    /// Whether its cameras are given with heights above the ground (a full-scale landscape's).
+    pub above_ground: bool,
+    /// For a full-scale landscape whose scene gives no `"focus"`: the scene point its patches
+    /// were centred on for the survey, to keep them there when its camera moves to a view.
+    pub focus: Option<Vector3<f64>>,
+}
+
+impl Survey {
+    pub fn json(&self) -> Value { features::to_json(&self.found, &*self.to_scene, self.above_ground, REPORTED_VIEWS) }
+}
+
+/// The lens views are framed for: the landscape's camera's (passed in as `camera`).
+fn lens(o: &Value) -> features::Lens {
+    let c = &o["camera"];
+    let default = features::Lens::default();
+    let aspect = match (c["image_width"].as_f64(), c["image_height"].as_f64()) {
+        (Some(w), Some(h)) if h > 0. => w / h,
+        _ => default.aspect,
+    };
+    features::Lens { angle: c["angle"].as_f64().unwrap_or(default.angle), aspect }
+}
+
+/// The features of a full-scale landscape's patches (finest first, without a close level),
+/// each searched where it is the finest.
+fn features_of(patches: &[Terrain]) -> Vec<features::Feature> {
+    let radius = patches.first().map_or(1., |t| t.domain.radius);
+    let lists = (0..patches.len()).map(|k| {
+        let finer: Vec<&Terrain> = patches[..k].iter().collect();
+        features::find(&patches[k], &features::Mask::of(&patches[k], &finer))
+    }).collect();
+    features::merge(lists, radius)
+}
+
+/// Views of `found` over a full-scale landscape's `relief`, marched in steps of half its
+/// `finest` spacing.
+fn view_features(found: &[features::Feature], relief: &Relief, radius: f64, finest: f64, lens: features::Lens) -> Vec<features::Found> {
+    let height = |d: &Vector3<f64>| relief.base(d);
+    let viewer = features::Viewer {
+        surface: features::Surface { height: &height, radius, step: (finest / 2.).max(5.) },
+        lens, judge: &features::Heuristic,
+    };
+    features::survey(&viewer, found, SURVEYED_PER_KIND)
+}
+
+/// The features of a scaled landscape, and views of them over its mesh.
+fn scaled_survey(t: &Terrain, place: &Placement, lens: features::Lens) -> Survey {
+    let found = features::find(t, &features::Mask::of(t, &[]));
+    let corners = scenery::corner_heights(t);
+    let height = |d: &Vector3<f64>| scenery::sample(&t.domain, &corners, d);
+    let viewer = features::Viewer {
+        surface: features::Surface { height: &height, radius: t.domain.radius, step: t.domain.min_spacing() / 2. },
+        lens, judge: &features::Heuristic,
+    };
+    let found = features::survey(&viewer, &found, SURVEYED_PER_KIND);
+    let (layout, radius, place) = (t.domain.layout.clone(), t.domain.radius, place.clone());
+    let to_scene = move |d: &Vector3<f64>, h: f64| match &layout {
+        Layout::Patch { up, east, north, .. } => {
+            let (x, z) = Domain::tangent(*up, *east, *north, radius, d);
+            Vector3::new(x, h * place.exaggeration, -z) / place.scale + place.centre
+        }
+        Layout::Sphere { .. } => place.centre + d * (radius + h * place.exaggeration) / place.scale,
+    };
+    Survey { found, to_scene: Box::new(to_scene), above_ground: false, focus: None }
+}
+
+/// The landscape `o`'s features and views of them, built (from its `cache`, if it has one and
+/// was built before; otherwise simulated again) about its camera (passed in as `camera`), whose
+/// `angle` and image size frame the views.
+pub fn survey(o: &Value) -> Survey {
+    let mut params = terrain_params(o);
+    if o.get("scale").is_some() {
+        let place = Placement {
+            scale: number(o, "scale", 1000.),
+            exaggeration: number(o, "exaggeration", 1.),
+            centre: SceneFile::parse_vec3_def(o, "centre", Vector3::zeros()),
+        };
+        return scaled_survey(&evolved(o, params), &place, lens(o));
+    }
+    if o.get("radius").is_none() { params.planet.radius = crate::planet::EARTH_RADIUS; }
+    let p = scenery_params(o);
+    let radius = params.planet.radius;
+    let planet_cells = match &o["planet"] { Value::Bool(false) => None, v => Some(SceneFile::parse_int(&v["cells"], 64).max(2)) };
+    let globe_spacing = planet_cells.map_or(f64::INFINITY, |n| std::f64::consts::FRAC_PI_2 * radius / n as f64);
+    let levels = levels(o, globe_spacing);
+    // No close level: it would follow the camera, which is about to move.
+    let description = Description {
+        params, site: site_of(&o["domain"]), time: number(o, "time", 0.), planet_cells, levels,
+        focus: focus(o), exaggeration: p.exaggeration, close: None,
+    };
+    let world = world::build(&description, world_directory(o), &mut |e| { world::report(e); true }).unwrap_or_else(|e| panic!("{}", e));
+    let frame = world.frame.clone();
+    let finest_half = description.levels.first().map_or(0., |l| l.cells as f64 * l.spacing / 2.);
+    let focus = o.get("focus").is_none().then(|| frame.to_scene(&description.focus.centre(&frame, 0.5 * finest_half), 0.));
+    let finest = finest_spacing(o, &world.patches);
+    let found = features_of(&world.patches);
+    let World { planet, globe, patches, .. } = world;
+    let layers: Vec<Layer> = patches.into_iter().chain(globe).map(|t| Layer::new(t, p.min_river_width)).collect();
+    let relief = Relief::new(Arc::new(layers), &planet, radius, p.roughness, finest);
+    let found = view_features(&found, &relief, radius, finest, lens(o));
+    Survey { found, to_scene: Box::new(move |d, h| frame.to_scene(d, h)), above_ground: true, focus }
+}
+
+/// The landscape's `"features"`: `true` prints the best of each kind and how to see it, a file
+/// name (`.json`) writes them all, with their views as cameras, there too.
+fn report_features(o: &Value, survey: &Survey) {
+    let mut best: Vec<&features::Found> = vec![];
+    for f in &survey.found {
+        if !best.iter().any(|b| b.feature.kind == f.feature.kind) { best.push(f); }
+    }
+    say(format!("Landscape: {} features with views; the most salient of each kind:", survey.found.len()));
+    for f in best { say(format!("  {}", features::describe(f, &*survey.to_scene))); }
+    if let Some(path) = o["features"].as_str() {
+        let text = serde_json::to_string_pretty(&survey.json()).unwrap();
+        match std::fs::write(path, text) {
+            Ok(()) => say(format!("Landscape: features and views written to {}", path)),
+            Err(e) => say(format!("Landscape: couldn't write the features to {}: {}", path, e)),
+        }
+    }
+}
+
+/// A camera's `"feature"` (`features::Choice`) on the landscape `o` (with the scene's camera as
+/// `camera`): the camera's `location`, `lookat` (and `above_ground`) for the view chosen, the
+/// `focus` the landscape should keep its patches at (when it has none), and a description of
+/// what it sees. None if the landscape has no such feature, or no view of it.
+pub fn feature_camera(o: &Value, choice: &features::Choice) -> Option<(Value, Option<Vector3<f64>>, String)> {
+    let survey = survey(o);
+    let (found, shot) = choice.pick(&survey.found)?;
+    let camera = features::camera(shot, &*survey.to_scene, survey.above_ground);
+    Some((camera, survey.focus, features::describe(&features::Found { feature: found.feature.clone(), shots: vec![shot.clone()] }, &*survey.to_scene)))
 }
 
 /// The scenery's parameters from a landscape object.
@@ -780,6 +923,9 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
                 cells as f64 * spacing * spacing / 1e6, t.ice[i], at.x, at.y, at.z));
         }
     }
+    // Its features, found before the simulations are drawn (`terrain::features`).
+    let features = o.get("features").filter(|v| !matches!(v, Value::Bool(false)))
+        .map(|_| features_of(&world.patches[world.patches.len() - description.levels.len()..]));
     let World { planet, climate, globe, patches, .. } = world;
     let built: Vec<Layer> = patches.into_iter().chain(globe).map(|t| Layer::new(t, p.min_river_width)).collect();
 
@@ -787,6 +933,11 @@ fn full_scale_landscape(o: &Value, params: TerrainParams, material: Option<Box<d
     if let Some(path) = o["planet_map"].as_str() { crate::terrain::map::write_planet_map(&planet, path, 2048); }
     let layers = Arc::new(built);
     let relief = Relief::new(layers.clone(), &planet, radius, p.roughness, finest);
+    if let Some(features) = features {
+        let found = view_features(&features, &relief, radius, finest, lens(o));
+        let frame = frame.clone();
+        report_features(o, &Survey { found, to_scene: Box::new(move |d, h| frame.to_scene(d, h)), above_ground: true, focus: None });
+    }
     let view = Viewpoint { location: SceneFile::parse_vec3_def(&o["camera"], "location", Vector3::new(0., 2., 0.)) };
     let (foot, height) = frame.on_planet(&view.location);
     let ground = relief.height(&foot, &relief.slope(&foot), 1.);

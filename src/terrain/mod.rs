@@ -23,3 +23,4 @@ pub mod map;
 pub mod object;
 pub mod scenery;
 pub mod fields;
+pub mod features;

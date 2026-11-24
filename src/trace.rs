@@ -49,10 +49,10 @@ fn trace_from(r: &Ray, depth: u64, s: &Scene, prior: LightSampling) -> (u64, Col
         },
         _ => Vector3::zeros(),
     };
-    // The lights' glow in media sampled equi-angularly, along the camera's rays up to the
-    // surface each reaches, past any collision (`volume::equiangular_inscattering`): the glow
-    // the camera sees. Later rays leave it to their collisions.
-    let glow = if depth == 0 && crate::volume::any_equiangular(s) {
+    // The lights' glow in media sampled equi-angularly, along every ray of the path up to the
+    // surface it reaches, past any collision (`volume::equiangular_inscattering`): the glow
+    // the camera sees, and the glow seen in mirrors, through glass and lighting surfaces.
+    let glow = if crate::volume::any_equiangular(s) {
         let surface = match &closest {
             Some(x) if x.object.geometry.is_stochastic() => s.objects.nearest_surface(r, x.dist),
             Some(x) => x.dist,
@@ -468,6 +468,43 @@ mod tests {
             fog.geometry.medium().unwrap().flat(fog.medium.material_at(Vector3::zeros()).medium().unwrap()).is_ok()
         };
         assert!(flat(false) && !flat(true));
+    }
+
+    #[test]
+    fn test_equiangular_sampling_after_a_bounce() {
+        // The lamps' glow seen in a mirror and lighting a diffuse floor, through the fog: rays
+        // after the first are sampled equi-angularly too.
+        crate::geometry::seed_rand(12, 1);
+        let scene = |equiangular: bool, floor: &str| SceneFile::from_string(format!(r#"{{
+            "background": [0, 0, 0], "max_depth": 1, "light_sampler": "bvh",
+            "camera": {{ "location": [0, 0, -5], "lookat": [0, 0, 0], "up": [0, 1, 0], "angle": 0.5 }},
+            "materials": {{ "L": {{ "type": "diffuse-light", "color": [1, 0.6, 0.3], "intensity": 50 }},
+                           "F": {} }},
+            "lights": [ {{ "location": [0.4, -0.3, 1], "intensity": 0.5 }} ],
+            "objects": [
+                {{ "type": "volume", "min": [-3, -3, -3], "max": [3, 3, 3], "density": 0.3, "g": 0.7,
+                   "equiangular": {} }},
+                {{ "type": "plane", "y": -1, "material": "F" }},
+                {{ "type": "sphere", "location": [0.2, 0.15, 0], "radius": 0.02, "material": "L" }},
+                {{ "type": "sphere", "location": [-0.5, 0.1, 0.6], "radius": 0.03, "material": "L" }}
+            ]
+        }}"#, floor, equiangular));
+        // Down at the floor near the camera, which reflects the fog about the lamps.
+        let r = Ray { ro: Vector3::new(0., 0., -2.5), rd: Vector3::new(0.03, -1., 2.5).normalize() };
+        let stats = |s: &Scene, n: usize| {
+            let v: Vec<f64> = (0..n).map(|_| trace(&r, 0, s).1.rgb.x).collect();
+            let mean = v.iter().sum::<f64>() / n as f64;
+            (mean, (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64).sqrt())
+        };
+        for (floor, gain) in [
+            (r#"{ "type": "metal", "reflective": [0.9, 0.9, 0.9] }"#, 0.92),
+            (r#"{ "type": "lambertian", "albedo": [0.8, 0.8, 0.8] }"#, 0.8),
+        ] {
+            let (collisions, collisions_sd) = stats(&scene(false, floor), 200_000);
+            let (mis, mis_sd) = stats(&scene(true, floor), 200_000);
+            assert!((collisions - mis).abs() < 0.03 * collisions, "{}: collisions {} vs equi-angular {}", floor, collisions, mis);
+            assert!(mis_sd < gain * collisions_sd, "{}: sd {} vs {}", floor, mis_sd, collisions_sd);
+        }
     }
 
     #[test]
